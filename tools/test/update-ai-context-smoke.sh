@@ -76,23 +76,52 @@ test_skip_rebase_off_main() {
   pass "skips rebase when ~/.ai-workflows is not on main"
 }
 
-test_empty_claude_project_dir_skips_repo_local() {
+# Agent-neutral (e.g. Codex, which sets no CLAUDE_PROJECT_DIR): with the env
+# var absent, the hook resolves the project from its working directory (git
+# worktree root) and still refreshes the repo-local .ai-workflows.
+test_empty_claude_project_dir_resolves_from_cwd() {
   local home project out
   home="${TMPDIR_ROOT}/empty-proj-home"
   project="${TMPDIR_ROOT}/empty-proj-proj"
-  mkdir -p "$home" "$project"
-  init_repo "$home"
+  mkdir -p "$home"
+  init_repo "$project"
   mkdir -p "${home}/.ai-workflows"
   init_repo "${project}/.ai-workflows"
-  out=$(HOME="$home" CLAUDE_PROJECT_DIR="" bash "$HOOK")
-  echo "$out" | grep -q 'ai-workflows:' \
-    && fail "empty CLAUDE_PROJECT_DIR must not update repo-local: $out"
-  pass "empty CLAUDE_PROJECT_DIR does not fall back to repo-local"
+  out=$(cd "$project" && HOME="$home" CLAUDE_PROJECT_DIR="" bash "$HOOK")
+  echo "$out" | grep -q 'ai-workflows: up to date' \
+    || fail "empty CLAUDE_PROJECT_DIR should resolve project from cwd, got: $out"
+  pass "empty CLAUDE_PROJECT_DIR resolves the project from cwd (agent-neutral)"
+}
+
+# Claude behavior is preserved: when CLAUDE_PROJECT_DIR is set it wins over the
+# cwd fallback, so the hook operates on the Claude-declared project even when
+# invoked from an unrelated directory.
+test_claude_project_dir_takes_precedence_over_cwd() {
+  local home proj_a proj_b out
+  home="${TMPDIR_ROOT}/prec-home"
+  proj_a="${TMPDIR_ROOT}/prec-proj-a"
+  proj_b="${TMPDIR_ROOT}/prec-proj-b"
+  mkdir -p "$home"
+  init_repo "$proj_a"
+  init_repo "$proj_b"
+  mkdir -p "${home}/.ai-workflows"
+  init_repo "${proj_a}/.ai-workflows"
+  init_repo "${proj_b}/.ai-workflows"
+  # proj_b's .ai-workflows is off main; if cwd (proj_b) leaked through it would
+  # print the skip message instead of proj_a's "up to date".
+  "$REAL_GIT" -C "${proj_b}/.ai-workflows" checkout -q -b feat/not-main
+  out=$(cd "$proj_b" && HOME="$home" CLAUDE_PROJECT_DIR="$proj_a" bash "$HOOK")
+  echo "$out" | grep -q 'ai-workflows: up to date' \
+    || fail "CLAUDE_PROJECT_DIR should win over cwd, got: $out"
+  echo "$out" | grep -q 'feat/not-main' \
+    && fail "cwd leaked past CLAUDE_PROJECT_DIR: $out"
+  pass "CLAUDE_PROJECT_DIR takes precedence over cwd"
 }
 
 test_leftover_home_dir_does_not_rebase_enclosing_repo
 test_leftover_home_falls_back_to_repo_local
 test_skip_rebase_off_main
-test_empty_claude_project_dir_skips_repo_local
+test_empty_claude_project_dir_resolves_from_cwd
+test_claude_project_dir_takes_precedence_over_cwd
 
 echo "All update-ai-context smoke tests passed."

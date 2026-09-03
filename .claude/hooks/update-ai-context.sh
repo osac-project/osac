@@ -50,8 +50,13 @@ fetch_and_rebase() {
 home_wf="${HOME}/.ai-workflows"
 if is_git_work_tree_root "$home_wf"; then
   fetch_and_rebase "$home_wf" "ai-workflows"
-elif [[ -n "${CLAUDE_PROJECT_DIR:-}" ]]; then
-  proj_wf="${CLAUDE_PROJECT_DIR}/.ai-workflows"
+else
+  # Agent-neutral project resolution: Claude sets CLAUDE_PROJECT_DIR; Codex and
+  # other agents don't, so fall back to the git worktree root (hooks run from
+  # inside the repo) or the current directory. The is_git_work_tree_root guard
+  # below still requires an actual .ai-workflows checkout before touching it.
+  proj_dir="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+  proj_wf="${proj_dir}/.ai-workflows"
   if is_git_work_tree_root "$proj_wf"; then
     fetch_and_rebase "$proj_wf" "ai-workflows"
   fi

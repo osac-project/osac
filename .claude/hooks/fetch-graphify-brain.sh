@@ -21,8 +21,9 @@ trap 'exit 0' ERR
 # Anchor to the project root regardless of the caller's cwd, so the
 # settings.json hook command can stay a plain `bash .../fetch-graphify-brain.sh`
 # -- consistent with the existing update-ai-context.sh hook -- rather than
-# needing its own `cd` wrapper.
-PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+# needing its own `cd` wrapper. Agent-neutral: Claude sets CLAUDE_PROJECT_DIR;
+# Codex and other agents don't, so fall back to the git worktree root before pwd.
+PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 cd "${PROJECT_DIR}" || { echo "[graphify-brain] Could not cd to project dir ${PROJECT_DIR} -- skipping." >&2; exit 0; }
 
 REPO="osac-project/osac"

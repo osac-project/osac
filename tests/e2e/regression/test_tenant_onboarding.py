@@ -1,0 +1,555 @@
+from __future__ import annotations
+
+import json
+import logging
+import re
+import subprocess
+import textwrap
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from tests.e2e.core.grpc_client import PRIVATE_API, PUBLIC_API, GRPCClient
+from tests.e2e.core.keycloak import get_jwt
+from tests.e2e.core.keycloak_admin import (
+    get_admin_token,
+    keycloak_admin_request,
+    provision_organization_password_user,
+    wait_for_organization,
+)
+from tests.e2e.core.osac_cli import OsacCLI
+from tests.e2e.core.runner import poll_until, run, run_unchecked
+
+logger = logging.getLogger(__name__)
+
+_CREATED_ID = re.compile(r"identifier '([^']+)'")
+_TENANT_NAME = re.compile(r"^test-onboard-[0-9a-f]{8}$")
+_BREAK_GLASS_PASSWORD = re.compile(r"Password:\s+(\S+)")
+
+
+def _parse_created_id(stdout: str) -> str:
+    match = _CREATED_ID.search(stdout)
+    assert match is not None, f"Failed to parse identifier from CLI output: {stdout}"
+    return match.group(1)
+
+
+def _status(resp: dict[str, Any]) -> dict[str, Any]:
+    obj = resp.get("object")
+    if not isinstance(obj, dict):
+        return {}
+    status = obj.get("status")
+    return status if isinstance(status, dict) else {}
+
+
+def _status_value(resp: dict[str, Any], snake: str) -> str:
+    status = _status(resp)
+    camel = snake.split("_")
+    camel_name = camel[0] + "".join(part.title() for part in camel[1:])
+    value = status.get(snake, status.get(camel_name, ""))
+    return str(value) if value is not None else ""
+
+
+def _cli(resources: dict[str, str], identity: str, *args: str) -> str:
+    combined, rc = _cli_unchecked(resources, identity, *args)
+    assert rc == 0, f"osac {' '.join(args)} failed rc={rc}: {combined}"
+    return combined
+
+
+def _cli_unchecked(resources: dict[str, str], identity: str, *args: str) -> tuple[str, int]:
+    return run_unchecked(resources["cli_binary"], "--config", resources[f"{identity}_config_dir"], *args)
+
+
+def _password_login(resources: dict[str, str], identity: str, user: str, password: str) -> None:
+    run(
+        resources["cli_binary"],
+        "--config",
+        resources[f"{identity}_config_dir"],
+        "login",
+        "--address",
+        resources["public_address"],
+        "--insecure",
+        "--flow",
+        "password",
+        "--user",
+        user,
+        "--password",
+        password,
+    )
+
+
+def _whoami_roles(text: str) -> list[str]:
+    for line in text.splitlines():
+        if line.startswith("Roles:"):
+            return [role.strip() for role in line.split(":", 1)[1].split(",") if role.strip()]
+    return []
+
+
+def _whoami_tenant(text: str) -> str:
+    for line in text.splitlines():
+        if line.startswith("Tenant:"):
+            return line.split(":", 1)[1].strip()
+    return ""
+
+
+def _write_manifest(directory: str, filename: str, content: str) -> str:
+    path = Path(directory) / filename
+    path.write_text(content)
+    return str(path)
+
+
+def _is_transient_grpc(exc: subprocess.CalledProcessError) -> bool:
+    combined = (exc.stderr or "") + (exc.stdout or "")
+    return "Unavailable" in combined or "connection refused" in combined.lower()
+
+
+def _wait_private_status(
+    grpc: GRPCClient, *, service: str, resource_id: str, field: str, expected: str, description: str
+) -> dict[str, Any]:
+    def _current() -> dict[str, Any]:
+        try:
+            return grpc.call(service=service, data={"id": resource_id})
+        except subprocess.CalledProcessError as exc:
+            if _is_transient_grpc(exc):
+                return {}
+            raise
+
+    return poll_until(
+        fn=_current,
+        until=lambda resp: _status_value(resp, field) == expected,
+        retries=24,
+        delay=5,
+        description=description,
+    )
+
+
+def _user_listed(grpc: GRPCClient, *, username: str, tenant_name: str) -> bool:
+    filt = f"this.spec.username == {json.dumps(username)}"
+    try:
+        resp = grpc.call(service=f"{PRIVATE_API}.Users/List", data={"filter": filt})
+    except subprocess.CalledProcessError as exc:
+        if _is_transient_grpc(exc):
+            return False
+        raise
+    items = resp.get("items") or []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        spec = item.get("spec") if isinstance(item.get("spec"), dict) else {}
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        if spec.get("username") == username and metadata.get("tenant") == tenant_name:
+            return True
+    return False
+
+
+def _org_member_usernames(*, keycloak_url: str, admin_token: str, org_id: str) -> set[str]:
+    status, body = keycloak_admin_request(
+        keycloak_url=keycloak_url, admin_token=admin_token, method="GET", path=f"/organizations/{org_id}/members"
+    )
+    if status == 404:
+        return set()
+    if status != 200:
+        raise RuntimeError(f"Keycloak org members query failed: status={status} body={body.decode()}")
+    try:
+        members = json.loads(body)
+    except ValueError as exc:
+        raise RuntimeError(f"Keycloak org members query returned non-JSON: {body.decode()}") from exc
+    if not isinstance(members, list):
+        return set()
+    names: set[str] = set()
+    for member in members:
+        if isinstance(member, dict) and member.get("username"):
+            names.add(str(member["username"]))
+    return names
+
+
+def _namespace_json(name: str) -> dict[str, Any]:
+    raw, rc = run_unchecked("kubectl", "--as", "system:admin", "get", "ns", name, "-o", "json")
+    assert rc == 0, f"namespace {name} not found: {raw}"
+    data = json.loads(raw)
+    assert isinstance(data, dict)
+    return data
+
+
+def _private_absent(grpc: GRPCClient, *, service: str, resource_id: str) -> bool:
+    combined, rc = grpc.call_unchecked(service=service, data={"id": resource_id})
+    return rc != 0 and "NotFound" in combined
+
+
+def _private_delete(grpc: GRPCClient, *, service: str, resource_id: str) -> None:
+    combined, rc = grpc.call_unchecked(service=service, data={"id": resource_id})
+    assert rc == 0 or "NotFound" in combined, combined
+
+
+@pytest.mark.iam
+def test_tenant_onboarding_demo1_milestone_02(
+    onboarding_resources: dict[str, str],
+    private_cli: OsacCLI,
+    private_grpc: GRPCClient,
+    keycloak_url: str,
+    keycloak_admin_password: str,
+    keycloak_realm: str,
+    keycloak_client_id: str,
+    fulfillment_address: str,
+) -> None:
+    resources = onboarding_resources
+    tenant_name = resources["tenant_name"]
+    project_name = resources["project_name"]
+    alice = resources["alice_user"]
+    bob = resources["bob_user"]
+
+    assert _TENANT_NAME.fullmatch(tenant_name), tenant_name
+
+    # Flow 1: CPA creates tenant on the private API; break-glass password is only on create stdout.
+    tenant_yaml = _write_manifest(
+        private_cli.config_dir,
+        "tenant.yaml",
+        textwrap.dedent(
+            f"""\
+            "@type": type.googleapis.com/osac.private.v1.Tenant
+            metadata:
+              name: {tenant_name}
+            """
+        ),
+    )
+    create_out = private_cli._run("create", "-f", tenant_yaml)
+    tenant_id = _parse_created_id(create_out)
+    resources["tenant_id"] = tenant_id
+    password_match = _BREAK_GLASS_PASSWORD.search(create_out)
+    assert password_match, f"create stdout missing break-glass password: {create_out}"
+    break_glass_password = password_match.group(1)
+    assert "break-glass" in create_out.lower()
+
+    _wait_private_status(
+        private_grpc,
+        service=f"{PRIVATE_API}.Tenants/Get",
+        resource_id=tenant_id,
+        field="state",
+        expected="TENANT_STATE_SYNCED",
+        description=f"tenant {tenant_name} SYNCED",
+    )
+
+    # Flow 2: Get tenant has break_glass_user_id and must not echo the create password.
+    get_tenant = private_grpc.call(service=f"{PRIVATE_API}.Tenants/Get", data={"id": tenant_id})
+    bg_user_id = _status_value(get_tenant, "break_glass_user_id")
+    assert bg_user_id, f"break_glass_user_id missing after SYNCED: {get_tenant}"
+    get_blob = json.dumps(get_tenant)
+    assert break_glass_password not in get_blob
+    get_yaml = private_cli._run("get", "tenant", tenant_id, "-o", "yaml")
+    assert break_glass_password not in get_yaml
+
+    # Flow 3: Keycloak org enabled; tenant namespace Active with tenant-ref label.
+    admin_token = get_admin_token(keycloak_url=keycloak_url, username="admin", password=keycloak_admin_password)
+    org_id = wait_for_organization(
+        keycloak_url=keycloak_url, admin_token=admin_token, org_name=tenant_name, timeout_seconds=120
+    )
+    org_status, org_body = keycloak_admin_request(
+        keycloak_url=keycloak_url, admin_token=admin_token, method="GET", path=f"/organizations/{org_id}"
+    )
+    assert org_status == 200, org_body.decode()
+    org = json.loads(org_body)
+    assert org.get("enabled") is True, org
+
+    def _ns_active() -> str:
+        raw, rc = run_unchecked("kubectl", "--as", "system:admin", "get", "ns", tenant_name, "-o", "json")
+        if rc != 0:
+            return ""
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            return ""
+        status = data.get("status") if isinstance(data, dict) else {}
+        if not isinstance(status, dict):
+            return ""
+        return str(status.get("phase", ""))
+
+    poll_until(
+        fn=_ns_active,
+        until=lambda phase: phase == "Active",
+        retries=24,
+        delay=5,
+        description=f"namespace {tenant_name}",
+    )
+    ns = _namespace_json(tenant_name)
+    labels = ns.get("metadata", {}).get("labels", {}) if isinstance(ns.get("metadata"), dict) else {}
+    assert isinstance(labels, dict)
+    assert labels.get("osac.openshift.io/tenant-ref") == tenant_name, labels
+
+    # Flow 4: OIDC IdP reaches READY without an issuer-patch script.
+    idp_create = private_grpc.call(
+        service=f"{PRIVATE_API}.IdentityProviders/Create",
+        data={
+            "object": {
+                "metadata": {"name": resources["idp_name"], "tenant": tenant_name},
+                "spec": {
+                    "title": "Demo 1 OIDC",
+                    "enabled": True,
+                    "oidc": {
+                        "authorization_url": resources["authorization_url"],
+                        "token_url": resources["token_url"],
+                        "client_id": resources["client_id"],
+                        "client_secret": resources["client_secret"],
+                        "issuer": resources["issuer"],
+                    },
+                },
+            }
+        },
+    )
+    resources["idp_id"] = str(idp_create["object"]["id"])
+    _wait_private_status(
+        private_grpc,
+        service=f"{PRIVATE_API}.IdentityProviders/Get",
+        resource_id=resources["idp_id"],
+        field="phase",
+        expected="IDENTITY_PROVIDER_PHASE_READY",
+        description=f"identity provider {resources['idp_name']} READY",
+    )
+
+    # Clean hub: installer Keycloak only has tenant1/tenant2 users. Create Alice/Bob
+    # in the new org with passwords so osac login --flow password works. This is the
+    # same Keycloak-admin pattern as setup_organization_memberships, not a pre-baked
+    # mock OIDC. OSAC User CRs still JIT on the first public API call (OSAC-3068).
+    admin_token = get_admin_token(keycloak_url=keycloak_url, username="admin", password=keycloak_admin_password)
+    for username, password in ((alice, resources["alice_password"]), (bob, resources["bob_password"])):
+        provision_organization_password_user(
+            keycloak_url=keycloak_url,
+            admin_token=admin_token,
+            org_id=org_id,
+            org_name=tenant_name,
+            username=username,
+            password=password,
+        )
+
+    # Flow 5: Alice then Bob password-login; OSAC-3068 get projects before get users.
+    _password_login(resources, "alice", alice, resources["alice_password"])
+    _cli(resources, "alice", "get", "projects")
+    alice_whoami = _cli(resources, "alice", "whoami")
+    assert "tenant-admin" not in _whoami_roles(alice_whoami), alice_whoami
+
+    poll_until(
+        fn=lambda: _user_listed(private_grpc, username=alice, tenant_name=tenant_name),
+        until=lambda found: found is True,
+        retries=24,
+        delay=5,
+        description=f"OSAC user {alice}",
+    )
+    poll_until(
+        fn=lambda: (
+            alice
+            in _org_member_usernames(
+                keycloak_url=keycloak_url,
+                admin_token=get_admin_token(
+                    keycloak_url=keycloak_url, username="admin", password=keycloak_admin_password
+                ),
+                org_id=org_id,
+            )
+        ),
+        until=lambda found: found is True,
+        retries=24,
+        delay=5,
+        description=f"Keycloak org member {alice}",
+    )
+
+    _password_login(resources, "bob", bob, resources["bob_password"])
+    _cli(resources, "bob", "get", "projects")
+    bob_whoami = _cli(resources, "bob", "whoami")
+    assert "tenant-admin" not in _whoami_roles(bob_whoami), bob_whoami
+
+    poll_until(
+        fn=lambda: _user_listed(private_grpc, username=bob, tenant_name=tenant_name),
+        until=lambda found: found is True,
+        retries=24,
+        delay=5,
+        description=f"OSAC user {bob}",
+    )
+    poll_until(
+        fn=lambda: (
+            bob
+            in _org_member_usernames(
+                keycloak_url=keycloak_url,
+                admin_token=get_admin_token(
+                    keycloak_url=keycloak_url, username="admin", password=keycloak_admin_password
+                ),
+                org_id=org_id,
+            )
+        ),
+        until=lambda found: found is True,
+        retries=24,
+        delay=5,
+        description=f"Keycloak org member {bob}",
+    )
+
+    # Flow 6: CPA binds tenant-admin to Alice.
+    rb_create = private_grpc.call(
+        service=f"{PRIVATE_API}.RoleBindings/Create",
+        data={
+            "object": {
+                "metadata": {"name": resources["role_binding_name"], "tenant": tenant_name},
+                "spec": {"role": {"name": "tenant-admin"}, "users": [{"name": alice}]},
+            }
+        },
+    )
+    resources["role_binding_id"] = str(rb_create["object"]["id"])
+    _wait_private_status(
+        private_grpc,
+        service=f"{PRIVATE_API}.RoleBindings/Get",
+        resource_id=resources["role_binding_id"],
+        field="state",
+        expected="ROLE_BINDING_STATE_READY",
+        description=f"role binding {resources['role_binding_name']} READY",
+    )
+
+    # Flow 7: Alice re-logins so whoami picks up tenant-admin from a fresh JWT.
+    _password_login(resources, "alice", alice, resources["alice_password"])
+    alice_admin = _cli(resources, "alice", "whoami")
+    assert _whoami_tenant(alice_admin) == tenant_name, alice_admin
+    assert "tenant-admin" in _whoami_roles(alice_admin), alice_admin
+
+    # Flow 8: Alice creates a named project → ACTIVE.
+    project_yaml = _write_manifest(
+        resources["alice_config_dir"],
+        "project.yaml",
+        textwrap.dedent(
+            f"""\
+            "@type": type.googleapis.com/osac.public.v1.Project
+            metadata:
+              name: {project_name}
+            """
+        ),
+    )
+    project_out = _cli(resources, "alice", "create", "-f", project_yaml)
+    resources["project_id"] = _parse_created_id(project_out)
+    _wait_private_status(
+        private_grpc,
+        service=f"{PRIVATE_API}.Projects/Get",
+        resource_id=resources["project_id"],
+        field="state",
+        expected="PROJECT_STATE_ACTIVE",
+        description=f"project {project_name} ACTIVE",
+    )
+
+    # Flow 9: Alice grants Bob VIEWER on that project (public API, same helper as
+    # tests/e2e/projects). CLI `create -f` for ProjectMembership is not used: the
+    # object is scoped by the caller's project context, which the YAML path did
+    # not set reliably for a password-grant token.
+    alice_token = get_jwt(
+        keycloak_url=keycloak_url,
+        realm=keycloak_realm,
+        client_id=keycloak_client_id,
+        username=alice,
+        password=resources["alice_password"],
+    )
+    alice_grpc = GRPCClient(address=fulfillment_address, token=alice_token)
+    pm_create = alice_grpc.call(
+        service=f"{PUBLIC_API}.ProjectMemberships/Create",
+        data={
+            "object": {
+                "metadata": {"name": resources["membership_name"], "project": project_name},
+                "spec": {"role": "PROJECT_MEMBERSHIP_ROLE_VIEWER", "users": [{"name": bob}]},
+            }
+        },
+    )
+    resources["membership_id"] = str(pm_create["object"]["id"])
+    membership = _wait_private_status(
+        private_grpc,
+        service=f"{PRIVATE_API}.ProjectMemberships/Get",
+        resource_id=resources["membership_id"],
+        field="state",
+        expected="PROJECT_MEMBERSHIP_STATE_READY",
+        description=f"project membership {resources['membership_name']} READY",
+    )
+    members = membership.get("object", {}).get("spec", {}).get("users", [])
+    member_names = {user.get("name") for user in members if isinstance(user, dict)}
+    assert bob in member_names, membership
+
+    # Flow 10: Bob whoami still has no tenant-admin.
+    _password_login(resources, "bob", bob, resources["bob_password"])
+    bob_viewer = _cli(resources, "bob", "whoami")
+    assert "tenant-admin" not in _whoami_roles(bob_viewer), bob_viewer
+
+    # Flow 11: Bob can list the project but cannot delete it.
+    bob_projects = _cli(resources, "bob", "get", "projects", "-o", "json")
+    bob_items = json.loads(bob_projects)
+    if isinstance(bob_items, dict):
+        listed = bob_items.get("items") or [bob_items]
+    elif isinstance(bob_items, list):
+        listed = bob_items
+    else:
+        listed = []
+    assert any(
+        isinstance(item, dict)
+        and ((item.get("metadata") or {}).get("name") == project_name or item.get("id") == resources["project_id"])
+        for item in listed
+    ), bob_projects
+    denied_out, denied_rc = _cli_unchecked(resources, "bob", "delete", "project", resources["project_id"])
+    assert denied_rc != 0, f"Bob should be denied project delete, got: {denied_out}"
+    assert "denied" in denied_out.lower() or "permission" in denied_out.lower(), denied_out
+    still_active = private_grpc.call(service=f"{PRIVATE_API}.Projects/Get", data={"id": resources["project_id"]})
+    assert _status_value(still_active, "state") == "PROJECT_STATE_ACTIVE", still_active
+
+    # Flow 12: project delete vs membership (OSAC-4566 AC-13).
+    # This hub does not include the OSAC-3069 cascade. The ticket requires an
+    # explicit case — not a silent skip: try delete with membership present; if
+    # the project remains, delete membership then the project (demo workaround).
+    project_id = resources["project_id"]
+    membership_id = resources.get("membership_id", "")
+    delete_out, delete_rc = _cli_unchecked(resources, "alice", "delete", "project", project_id)
+    if delete_rc != 0:
+        logger.warning(
+            "Alice delete project with membership present failed rc=%s (expected without OSAC-3069): %s",
+            delete_rc,
+            delete_out,
+        )
+
+    cascade = False
+    try:
+        poll_until(
+            fn=lambda: _private_absent(private_grpc, service=f"{PRIVATE_API}.Projects/Get", resource_id=project_id),
+            until=lambda gone: gone is True,
+            retries=4,
+            delay=5,
+            description=f"project {project_name} gone (OSAC-3069 cascade)",
+        )
+        cascade = True
+        logger.info("OSAC-3069 cascade present on this hub; project %s already gone", project_name)
+    except TimeoutError:
+        leftover = private_grpc.call_unchecked(service=f"{PRIVATE_API}.Projects/Get", data={"id": project_id})
+        logger.warning(
+            "OSAC-3069 cascade not available on this hub; project still present with membership %s. last=%r",
+            membership_id,
+            leftover,
+        )
+
+    if membership_id and not _private_absent(
+        private_grpc, service=f"{PRIVATE_API}.ProjectMemberships/Get", resource_id=membership_id
+    ):
+        _private_delete(private_grpc, service=f"{PRIVATE_API}.ProjectMemberships/Delete", resource_id=membership_id)
+        resources["membership_id"] = ""
+
+    if _private_absent(private_grpc, service=f"{PRIVATE_API}.Projects/Get", resource_id=project_id):
+        resources["project_id"] = ""
+        logger.info("project %s gone after Flow 12 (cascade=%s)", project_name, cascade)
+    else:
+        combined, rc = _cli_unchecked(resources, "alice", "delete", "project", project_id)
+        if rc != 0:
+            combined, rc = private_grpc.call_unchecked(
+                service=f"{PRIVATE_API}.Projects/Delete", data={"id": project_id}
+            )
+        assert rc == 0 or "NotFound" in combined, f"explicit project delete after membership cleanup failed: {combined}"
+        try:
+            poll_until(
+                fn=lambda: _private_absent(private_grpc, service=f"{PRIVATE_API}.Projects/Get", resource_id=project_id),
+                until=lambda gone: gone is True,
+                retries=24,
+                delay=5,
+                description=f"project {project_name} gone after explicit membership cleanup",
+            )
+        except TimeoutError as exc:
+            leftover = private_grpc.call_unchecked(service=f"{PRIVATE_API}.Projects/Get", data={"id": project_id})
+            pytest.fail(
+                "Project remained after explicit ProjectMembership-then-project cleanup "
+                f"(OSAC-3069 workaround). last={leftover!r} timeout={exc}"
+            )
+        resources["project_id"] = ""
+
+    logger.info("Demo 1 onboarding complete for tenant %s (id %s)", tenant_name, tenant_id)

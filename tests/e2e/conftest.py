@@ -93,6 +93,7 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers", "serial: must run alone, not in parallel with other tests (e.g. exhausts a shared resource)"
     )
+    config.addinivalue_line("markers", "iam: hub identity and access management tests (tenant onboarding, IdP, RBAC)")
     worker_id = os.environ.get("PYTEST_XDIST_WORKER")
     if worker_id is not None:
         log_dir = Path(config.getini("log_file")).parent

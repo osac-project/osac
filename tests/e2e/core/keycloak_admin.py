@@ -106,8 +106,8 @@ def wait_for_organization(*, keycloak_url: str, admin_token: str, org_name: str,
     raise RuntimeError(f"Organization '{org_name}' not found in Keycloak after {timeout_seconds}s")
 
 
-def get_user_id(*, keycloak_url: str, admin_token: str, username: str) -> str:
-    """Get a user's ID by username."""
+def find_user_id(*, keycloak_url: str, admin_token: str, username: str) -> str | None:
+    """Return a user's ID by username, or None if the user does not exist."""
     query = urlencode({"username": username, "exact": "true"})
     status, body = keycloak_admin_request(
         keycloak_url=keycloak_url, admin_token=admin_token, method="GET", path=f"/users?{query}"
@@ -118,9 +118,105 @@ def get_user_id(*, keycloak_url: str, admin_token: str, username: str) -> str:
 
     users: list[dict[str, Any]] = json.loads(body)
     if len(users) == 0:
-        raise RuntimeError(f"User '{username}' not found in Keycloak")
+        return None
+    return str(users[0]["id"])
 
-    return users[0]["id"]
+
+def get_user_id(*, keycloak_url: str, admin_token: str, username: str) -> str:
+    """Get a user's ID by username."""
+    user_id = find_user_id(keycloak_url=keycloak_url, admin_token=admin_token, username=username)
+    if user_id is None:
+        raise RuntimeError(f"User '{username}' not found in Keycloak")
+    return user_id
+
+
+def ensure_realm_user(*, keycloak_url: str, admin_token: str, username: str, email: str) -> str:
+    """Create a realm user if missing and return the Keycloak user id."""
+    existing = find_user_id(keycloak_url=keycloak_url, admin_token=admin_token, username=username)
+    if existing is not None:
+        return existing
+
+    status, body = keycloak_admin_request(
+        keycloak_url=keycloak_url,
+        admin_token=admin_token,
+        method="POST",
+        path="/users",
+        data={
+            "username": username,
+            "enabled": True,
+            "email": email,
+            "emailVerified": True,
+            "firstName": "E2E",
+            "lastName": username,
+        },
+    )
+    if status not in (201, 204, 409):
+        raise RuntimeError(f"Failed to create user '{username}': status={status} body={body.decode()}")
+
+    user_id = find_user_id(keycloak_url=keycloak_url, admin_token=admin_token, username=username)
+    if user_id is None:
+        raise RuntimeError(f"Created user '{username}' but could not look up its id")
+    return user_id
+
+
+def set_user_password(*, keycloak_url: str, admin_token: str, user_id: str, password: str) -> None:
+    """Set a non-temporary password so ROPC login works on a clean hub."""
+    status, body = keycloak_admin_request(
+        keycloak_url=keycloak_url,
+        admin_token=admin_token,
+        method="PUT",
+        path=f"/users/{user_id}/reset-password",
+        data={"type": "password", "value": password, "temporary": False},
+    )
+    if status not in (200, 204):
+        raise RuntimeError(f"Failed to set password for user '{user_id}': status={status} body={body.decode()}")
+
+
+def delete_user_by_username(*, keycloak_url: str, admin_token: str, username: str) -> None:
+    """Delete a realm user if it exists. No-op when the user is already gone."""
+    user_id = find_user_id(keycloak_url=keycloak_url, admin_token=admin_token, username=username)
+    if user_id is None:
+        return
+    status, body = keycloak_admin_request(
+        keycloak_url=keycloak_url, admin_token=admin_token, method="DELETE", path=f"/users/{user_id}"
+    )
+    if status not in (200, 204, 404):
+        raise RuntimeError(f"Failed to delete user '{username}': status={status} body={body.decode()}")
+
+
+def provision_organization_password_user(
+    *, keycloak_url: str, admin_token: str, org_id: str, org_name: str, username: str, password: str
+) -> None:
+    """Create a Keycloak user with a password and add them to the tenant org.
+
+    Clean-hub stand-in for Demo 1 mock-OIDC JIT: installer realm.json only
+    ships tenant1/tenant2 users. The organization ``/members`` group is
+    required so the JWT includes the organization claim.
+    """
+    user_id = ensure_realm_user(
+        keycloak_url=keycloak_url, admin_token=admin_token, username=username, email=f"{username}@e2e.osac.test"
+    )
+    set_user_password(keycloak_url=keycloak_url, admin_token=admin_token, user_id=user_id, password=password)
+    add_user_to_organization(
+        keycloak_url=keycloak_url,
+        admin_token=admin_token,
+        org_id=org_id,
+        user_id=user_id,
+        username=username,
+        org_name=org_name,
+    )
+    group_id = ensure_organization_group(
+        keycloak_url=keycloak_url, admin_token=admin_token, org_id=org_id, org_name=org_name
+    )
+    add_user_to_organization_group(
+        keycloak_url=keycloak_url,
+        admin_token=admin_token,
+        org_id=org_id,
+        group_id=group_id,
+        user_id=user_id,
+        username=username,
+        org_name=org_name,
+    )
 
 
 def add_user_to_organization(

@@ -17,6 +17,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strconv"
+	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
 	grpccodes "google.golang.org/grpc/codes"
@@ -25,6 +27,7 @@ import (
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/events"
 )
 
@@ -41,11 +44,12 @@ var _ publicv1.AddOnOperatorsServer = (*AddOnOperatorsServer)(nil)
 type AddOnOperatorsServer struct {
 	publicv1.UnimplementedAddOnOperatorsServer
 
-	logger       *slog.Logger
-	tenancyLogic auth.TenancyLogic
-	delegate     privatev1.AddOnOperatorsServer
-	inMapper     *GenericMapper[*publicv1.AddOnOperator, *privatev1.AddOnOperator]
-	outMapper    *GenericMapper[*privatev1.AddOnOperator, *publicv1.AddOnOperator]
+	logger          *slog.Logger
+	tenancyLogic    auth.TenancyLogic
+	delegate        privatev1.AddOnOperatorsServer
+	filterValidator *dao.FilterTranslator
+	inMapper        *GenericMapper[*publicv1.AddOnOperator, *privatev1.AddOnOperator]
+	outMapper       *GenericMapper[*privatev1.AddOnOperator, *publicv1.AddOnOperator]
 }
 
 func NewAddOnOperatorsServer() *AddOnOperatorsServerBuilder {
@@ -101,6 +105,13 @@ func (b *AddOnOperatorsServerBuilder) Build() (result *AddOnOperatorsServer, err
 	if err != nil {
 		return
 	}
+	filterValidator, err := dao.NewFilterTranslator().
+		SetLogger(b.logger).
+		SetDescriptor((*publicv1.AddOnOperator)(nil).ProtoReflect().Descriptor()).
+		Build()
+	if err != nil {
+		return
+	}
 
 	delegate, err := NewPrivateAddOnOperatorsServer().
 		SetLogger(b.logger).
@@ -108,33 +119,46 @@ func (b *AddOnOperatorsServerBuilder) Build() (result *AddOnOperatorsServer, err
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
-		SetFilterDesc((*publicv1.AddOnOperator)(nil).ProtoReflect().Descriptor()).
+		SetFilterDesc((*privatev1.AddOnOperator)(nil).ProtoReflect().Descriptor()).
 		Build()
 	if err != nil {
 		return
 	}
 
 	result = &AddOnOperatorsServer{
-		logger:       b.logger,
-		tenancyLogic: b.tenancyLogic,
-		delegate:     delegate,
-		inMapper:     inMapper,
-		outMapper:    outMapper,
+		logger:          b.logger,
+		tenancyLogic:    b.tenancyLogic,
+		delegate:        delegate,
+		filterValidator: filterValidator,
+		inMapper:        inMapper,
+		outMapper:       outMapper,
 	}
 	return
 }
 
 func (s *AddOnOperatorsServer) List(ctx context.Context,
 	request *publicv1.AddOnOperatorsListRequest) (response *publicv1.AddOnOperatorsListResponse, err error) {
+	visibility, err := s.tenancyLogic.DetermineVisibility(ctx)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to determine visibility", slog.Any("error", err))
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to determine visibility")
+	}
+
 	privateRequest := &privatev1.AddOnOperatorsListRequest{}
 	privateRequest.SetOffset(request.GetOffset())
 	if request.HasLimit() {
 		privateRequest.SetLimit(request.GetLimit())
 	}
+	if request.GetFilter() != "" {
+		if _, err = s.filterValidator.Translate(ctx, request.GetFilter()); err != nil {
+			return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "invalid filter: %v", err)
+		}
+	}
 	composedFilter, err := s.addPublishedFilter(request.GetFilter())
 	if err != nil {
 		return nil, err
 	}
+	composedFilter = addTenantVisibilityFilter(composedFilter, visibility)
 	privateRequest.SetFilter(composedFilter)
 	privateRequest.SetOrder(request.GetOrder())
 
@@ -143,18 +167,9 @@ func (s *AddOnOperatorsServer) List(ctx context.Context,
 		return nil, err
 	}
 
-	visibility, err := s.tenancyLogic.DetermineVisibility(ctx)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to determine visibility", slog.Any("error", err))
-		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to determine visibility")
-	}
-
 	privateItems := privateResponse.GetItems()
 	publicItems := make([]*publicv1.AddOnOperator, 0, len(privateItems))
 	for _, privateItem := range privateItems {
-		if !s.isVisibleToTenant(privateItem, visibility) {
-			continue
-		}
 		publicItem := &publicv1.AddOnOperator{}
 		err = s.outMapper.Copy(ctx, privateItem, publicItem)
 		if err != nil {
@@ -164,18 +179,23 @@ func (s *AddOnOperatorsServer) List(ctx context.Context,
 		publicItems = append(publicItems, publicItem)
 	}
 
-	// Total is corrected for filtered operators only when this page provably holds the entire result
-	// set (offset 0, every row fetched) — otherwise the drop count outside this page is unknowable.
-	total := privateResponse.GetTotal()
-	if request.GetOffset() <= 0 && len(privateItems) == int(total) {
-		dropped := len(privateItems) - len(publicItems)
-		total -= int32(dropped) // #nosec G115 -- dropped <= len(privateItems) == total in this branch
-	}
 	response = &publicv1.AddOnOperatorsListResponse{}
 	response.SetSize(int32(len(publicItems))) // #nosec G115 -- bounded by page size
-	response.SetTotal(total)
+	response.SetTotal(privateResponse.GetTotal())
 	response.SetItems(publicItems)
 	return
+}
+
+func addTenantVisibilityFilter(filter string, visibility *auth.Visibility) string {
+	visibleTenants := visibility.VisibleTenants()
+	if visibleTenants == nil {
+		return filter
+	}
+	parts := []string{"!has(this.tenant)", `this.tenant == ""`}
+	for _, tenant := range visibleTenants {
+		parts = append(parts, "this.tenant == "+strconv.Quote(tenant))
+	}
+	return "(" + filter + ") && (" + strings.Join(parts, " || ") + ")"
 }
 
 func (s *AddOnOperatorsServer) Get(ctx context.Context,

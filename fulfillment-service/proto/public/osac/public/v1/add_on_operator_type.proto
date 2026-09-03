@@ -50,7 +50,7 @@ message AddOnOperator {
 
   // Whether this add-on operator is visible through the public API. Defaults to false; the Cloud Provider Admin
   // publishes operators explicitly after review.
-  bool published = 9;
+  optional bool published = 9;
 }
 
 // Standard reference to an AddOnOperator resource (used by ClusterCatalogItem and ClusterSpec).

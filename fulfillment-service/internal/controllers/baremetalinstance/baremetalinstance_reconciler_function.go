@@ -30,7 +30,6 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -802,10 +801,13 @@ func (t *task) ensureUserDataSecret(ctx context.Context, owner *bmfov1alpha1.Bar
 		},
 	}
 
-	err = t.hubClient.Create(ctx, secret)
-	if apierrors.IsAlreadyExists(err) {
+	_, err = controllerutil.CreateOrPatch(ctx, t.hubClient, secret, func() error {
+		if secret.StringData == nil {
+			secret.StringData = map[string]string{}
+		}
+		secret.StringData[userDataSecretKey] = userData
 		return nil
-	}
+	})
 	if err != nil {
 		return err
 	}

@@ -82,10 +82,16 @@ func validateUserDataSecret(
 			return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to resolve user_data_secret reference")
 		}
 	}
-	if value, ok := data[userDataSecretDataKey]; !ok || len(value) == 0 {
+	value, ok := data[userDataSecretDataKey]
+	if !ok || len(value) == 0 {
 		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"secret '%s' referenced by user_data_secret must contain a non-empty '%s' entry",
 			refKey(ref), userDataSecretDataKey)
+	}
+	if len(value) > bareMetalInstanceUserDataMaxBytes {
+		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"secret '%s' referenced by user_data_secret has a '%s' entry whose size %d exceeds the maximum of %d bytes",
+			refKey(ref), userDataSecretDataKey, len(value), bareMetalInstanceUserDataMaxBytes)
 	}
 
 	result := &privatev1.SecretLocalReference{}

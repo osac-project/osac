@@ -15,6 +15,7 @@ package servers
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
@@ -70,6 +71,16 @@ var _ = Describe("User data secret validation", func() {
 			privatev1.SecretLocalReference_builder{Id: secret.GetId()}.Build())
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
 		Expect(err.Error()).To(ContainSubstring("non-empty 'userdata' entry"))
+	})
+
+	It("rejects a Secret whose userdata entry exceeds 64 KiB", func() {
+		secret := createSecret(map[string][]byte{
+			userDataSecretDataKey: []byte(strings.Repeat("x", bareMetalInstanceUserDataMaxBytes+1)),
+		})
+		_, err := validateUserDataSecret(ctx, logger, secretsDao, nil,
+			privatev1.SecretLocalReference_builder{Id: secret.GetId()}.Build())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		Expect(err.Error()).To(ContainSubstring("exceeds the maximum"))
 	})
 
 	It("rejects a reference that specifies neither id nor name", func() {

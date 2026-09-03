@@ -436,6 +436,30 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
+		It("Accepts a user data Secret as the only authentication method", func() {
+			secret, err := server.secretsDao.Create().SetObject(privatev1.Secret_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   fmt.Sprintf("userdata-%s", uuid.NewString()[:8]),
+					Tenant: testTenant,
+				}.Build(),
+				Data: map[string][]byte{userDataSecretDataKey: []byte("#cloud-config")},
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						UserDataSecret: privatev1.SecretLocalReference_builder{Id: secret.GetObject().GetId()}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		})
+
 		It("Rejects create when neither ssh_public_key nor user_data is provided", func() {
 			_, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{

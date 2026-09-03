@@ -31,9 +31,9 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 
@@ -773,7 +773,6 @@ func (t *task) addExplicitFields(ctx context.Context, spec *osacv1alpha1.Compute
 // ensureUserDataSecret creates a Kubernetes Secret containing the cloud-init user data
 // provided via the fulfillment API. The Secret is owned by the ComputeInstance CR so that
 // Kubernetes garbage collection handles cleanup automatically on deletion.
-// The user data field is immutable, so the Secret is only created once.
 func (t *task) ensureUserDataSecret(ctx context.Context, owner *osacv1alpha1.ComputeInstance) error {
 	if t.userDataSecretName == "" {
 		return nil
@@ -804,10 +803,13 @@ func (t *task) ensureUserDataSecret(ctx context.Context, owner *osacv1alpha1.Com
 		},
 	}
 
-	err = t.hubClient.Create(ctx, secret)
-	if apierrors.IsAlreadyExists(err) {
+	_, err = controllerutil.CreateOrPatch(ctx, t.hubClient, secret, func() error {
+		if secret.StringData == nil {
+			secret.StringData = map[string]string{}
+		}
+		secret.StringData[userDataSecretKey] = userData
 		return nil
-	}
+	})
 	if err != nil {
 		return err
 	}

@@ -1320,11 +1320,11 @@ var _ = Describe("ensureUserDataSecret", func() {
 		Expect(t.ensureUserDataSecret(ctx, owner)).To(MatchError(ContainSubstring("missing non-empty data")))
 	})
 
-	It("should be idempotent when Secret already exists", func() {
-		existingSecret := &unstructured.Unstructured{}
-		existingSecret.SetGroupVersionKind(gvks.Secret)
-		existingSecret.SetNamespace(hubNamespace)
-		existingSecret.SetName(ciID + userDataSecretSuffix)
+	It("should update user data when Secret already exists", func() {
+		existingSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Namespace: hubNamespace, Name: ciID + userDataSecretSuffix},
+			StringData: map[string]string{userDataSecretKey: "old-data"},
+		}
 
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
@@ -1349,6 +1349,9 @@ var _ = Describe("ensureUserDataSecret", func() {
 
 		err := t.ensureUserDataSecret(ctx, owner)
 		Expect(err).ToNot(HaveOccurred())
+		secret := &corev1.Secret{}
+		Expect(fakeClient.Get(ctx, clnt.ObjectKey{Namespace: hubNamespace, Name: ciID + userDataSecretSuffix}, secret)).To(Succeed())
+		Expect(secret.StringData[userDataSecretKey]).To(Equal("some-data"))
 	})
 
 	It("should propagate error when Secret creation fails", func() {

@@ -1439,11 +1439,11 @@ var _ = Describe("ensureUserDataSecret", func() {
 		Expect(t.ensureUserDataSecret(ctx, owner)).To(MatchError(ContainSubstring("fetch failed")))
 	})
 
-	It("should be idempotent when Secret already exists", func() {
-		existingSecret := &unstructured.Unstructured{}
-		existingSecret.SetGroupVersionKind(gvks.Secret)
-		existingSecret.SetNamespace(hubNamespace)
-		existingSecret.SetName(bmiID + userDataSecretSuffix)
+	It("should update user data when Secret already exists", func() {
+		existingSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Namespace: hubNamespace, Name: bmiID + userDataSecretSuffix},
+			StringData: map[string]string{userDataSecretKey: "old-data"},
+		}
 
 		scheme := newFakeScheme()
 		fakeClient := fake.NewClientBuilder().
@@ -1466,6 +1466,9 @@ var _ = Describe("ensureUserDataSecret", func() {
 
 		err := t.ensureUserDataSecret(ctx, owner)
 		Expect(err).ToNot(HaveOccurred())
+		secret := &corev1.Secret{}
+		Expect(fakeClient.Get(ctx, clnt.ObjectKey{Namespace: hubNamespace, Name: bmiID + userDataSecretSuffix}, secret)).To(Succeed())
+		Expect(secret.StringData[userDataSecretKey]).To(Equal("some-data"))
 	})
 
 	It("should propagate error when Secret creation fails", func() {

@@ -353,11 +353,31 @@ var _ = Describe("Private add-on operators server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.New()[24:32]),
 					}.Build(),
 					Title:     "GPU Operator",
-					Published: true,
+					Published: new(true),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(response.GetObject().GetPublished()).To(BeTrue())
+		})
+
+		It("Explicit published=false is preserved when defaultPublished is true", func() {
+			server, err := NewPrivateAddOnOperatorsServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				SetDefaultPublished(true).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			response, err := server.Create(ctx, privatev1.AddOnOperatorsCreateRequest_builder{
+				Object: privatev1.AddOnOperator_builder{
+					Metadata:  privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.New()[24:32])}.Build(),
+					Title:     "Explicitly Unpublished",
+					Published: new(false),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetObject().GetPublished()).To(BeFalse())
 		})
 	})
 })

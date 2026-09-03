@@ -53,7 +53,7 @@ message AddOnOperator {
 
   // Whether this add-on operator is visible through the public API. Defaults to false; the Cloud Provider Admin
   // publishes operators explicitly after review.
-  bool published = 9;
+  optional bool published = 9;
 
   // Tenant scope for this add-on operator. An empty string means the operator is global and visible to all tenants. A
   // non-empty string scopes the operator to that specific tenant.

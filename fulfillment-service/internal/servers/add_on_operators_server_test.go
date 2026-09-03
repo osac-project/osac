@@ -89,7 +89,7 @@ var _ = Describe("Add-on operators server", func() {
 						Name: fmt.Sprintf("published-%s", uuid.New()[24:32]),
 					}.Build(),
 					Title:     "Published Operator",
-					Published: true,
+					Published: new(true),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -124,7 +124,7 @@ var _ = Describe("Add-on operators server", func() {
 						Name: fmt.Sprintf("published-%s", uuid.New()[24:32]),
 					}.Build(),
 					Title:     "Published Operator",
-					Published: true,
+					Published: new(true),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -164,7 +164,7 @@ var _ = Describe("Add-on operators server", func() {
 						Name: fmt.Sprintf("gpu-%s", uuid.New()[24:32]),
 					}.Build(),
 					Title:     "GPU Operator",
-					Published: true,
+					Published: new(true),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -228,7 +228,7 @@ var _ = Describe("Add-on operators server", func() {
 						Name: fmt.Sprintf("global-%s", uuid.New()[24:32]),
 					}.Build(),
 					Title:     "Global Operator",
-					Published: true,
+					Published: new(true),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -257,7 +257,7 @@ var _ = Describe("Add-on operators server", func() {
 						Name: fmt.Sprintf("scoped-%s", uuid.New()[24:32]),
 					}.Build(),
 					Title:     "Scoped Operator",
-					Published: true,
+					Published: new(true),
 					Tenant:    "tenant-a",
 				}.Build(),
 			}.Build())
@@ -287,7 +287,7 @@ var _ = Describe("Add-on operators server", func() {
 						Name: fmt.Sprintf("hidden-%s", uuid.New()[24:32]),
 					}.Build(),
 					Title:     "Hidden Operator",
-					Published: true,
+					Published: new(true),
 					Tenant:    "tenant-a",
 				}.Build(),
 			}.Build())
@@ -315,7 +315,7 @@ var _ = Describe("Add-on operators server", func() {
 						Name: fmt.Sprintf("scoped-%s", uuid.New()[24:32]),
 					}.Build(),
 					Title:     "Scoped Operator",
-					Published: true,
+					Published: new(true),
 					Tenant:    "tenant-a",
 				}.Build(),
 			}.Build())
@@ -344,7 +344,7 @@ var _ = Describe("Add-on operators server", func() {
 						Name: fmt.Sprintf("global-%s", uuid.New()[24:32]),
 					}.Build(),
 					Title:     "Visible Global",
-					Published: true,
+					Published: new(true),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -356,7 +356,7 @@ var _ = Describe("Add-on operators server", func() {
 						Name: fmt.Sprintf("hidden-%s", uuid.New()[24:32]),
 					}.Build(),
 					Title:     "Hidden Scoped",
-					Published: true,
+					Published: new(true),
 					Tenant:    "tenant-a",
 				}.Build(),
 			}.Build())
@@ -378,6 +378,37 @@ var _ = Describe("Add-on operators server", func() {
 			}
 		})
 
+		It("List applies pagination after tenant visibility filtering", func() {
+			_, err := privateServer.Create(ctx, privatev1.AddOnOperatorsCreateRequest_builder{
+				Object: privatev1.AddOnOperator_builder{
+					Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("hidden-first-%s", uuid.New()[24:32])}.Build(),
+					Title:    "Hidden First", Published: new(true), Tenant: "tenant-a",
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			_, err = privateServer.Create(ctx, privatev1.AddOnOperatorsCreateRequest_builder{
+				Object: privatev1.AddOnOperator_builder{
+					Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("visible-second-%s", uuid.New()[24:32])}.Build(),
+					Title:    "Visible Second", Published: new(true),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			publicServer, err := NewAddOnOperatorsServer().
+				SetLogger(logger).SetAttributionLogic(attribution).
+				SetTenancyLogic(makeTenancyForTenants("tenant-b")).Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			response, err := publicServer.List(ctx, publicv1.AddOnOperatorsListRequest_builder{
+				Filter: new("this.title == 'Visible Second'"),
+				Limit:  new(int32(1)),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetTotal()).To(Equal(int32(1)))
+			Expect(response.GetSize()).To(Equal(int32(1)))
+			Expect(response.GetItems()[0].GetTitle()).To(Equal("Visible Second"))
+		})
+
 		It("Get returns NotFound for tenant-scoped operator from non-matching tenant", func() {
 			createResponse, err := privateServer.Create(ctx, privatev1.AddOnOperatorsCreateRequest_builder{
 				Object: privatev1.AddOnOperator_builder{
@@ -385,7 +416,7 @@ var _ = Describe("Add-on operators server", func() {
 						Name: fmt.Sprintf("hidden-%s", uuid.New()[24:32]),
 					}.Build(),
 					Title:     "Hidden Operator",
-					Published: true,
+					Published: new(true),
 					Tenant:    "tenant-a",
 				}.Build(),
 			}.Build())

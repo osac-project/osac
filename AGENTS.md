@@ -145,6 +145,32 @@ E2E) lives in osac-ai-skills, not in this repo. After bootstrap, see
 **Recommended Skill Sequence**), or the
 [upstream README](https://github.com/osac-project/osac-ai-skills#recommended-skill-sequence).
 
+### Supported AI tools
+
+Claude Code, Cursor, Gemini CLI, and OpenAI Codex are all first-class here.
+Bootstrap's default fan-out (`tools/link-agent-skills.sh --all`) links skill
+discovery for each: `.claude/skills`, `.cursor/skills`, `.gemini/skills`, and
+`.agents/skills` (Codex) — all umbrellas over the same `skills/` tree. Pass a
+single tool flag (e.g. `--codex`) to link just one.
+
+**Codex** reads `AGENTS.md` natively (not `CLAUDE.md`), so conventions load
+without extra config. Codex-specific pieces:
+
+- `.codex/config.toml` — raises `project_doc_max_bytes` above Codex's 32 KiB
+  default so the root + component `AGENTS.md` load without truncation.
+- `.codex/hooks.json` — mirrors the Claude hooks (SessionStart context +
+  graphify-brain refresh; PreToolUse graphify nudge on Bash). **Codex requires
+  trusting repo hooks via `/hooks` before they run** — until then, sessions
+  start without the context refresh. The hook scripts are agent-neutral (they
+  resolve the project dir from the git root when `CLAUDE_PROJECT_DIR` is unset).
+- `.agents/skills` — Codex skill discovery (gitignored, materialized by the
+  fan-out).
+
+New to Codex here? See [`docs/codex-getting-started.md`](docs/codex-getting-started.md)
+(install, `/import` and what to review after, permissions — do **not** copy
+Claude's broad command allowlist — hook trust, MCP reconnect, workflow
+differences).
+
 ## Enhancement Proposals
 
 OSAC uses the flightctl PRD and design skills with project-level template

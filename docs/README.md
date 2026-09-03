@@ -12,6 +12,14 @@ they analyze. The other five `reference/*.md` siblings (`CONCERNS.md`,
 consumers and will be deleted (rather than relocated) as part of the
 companion `osac-workspace` cleanup PR referenced below.
 
+Also in this directory:
+
+- [codex-getting-started.md](codex-getting-started.md) — onboarding OpenAI
+  Codex against an OSAC checkout (install, `/import`, permissions, hook trust,
+  MCP, workflow differences). Cross-cutting dev content with no single-component
+  `AGENTS.md` home, so it lives here rather than in the cross-consumer
+  `osac-ai-skills` repo.
+
 `ARCHITECTURE.md` says "Cross-Component" and `CONVENTIONS.md` says
 "Cross-Repo Dependencies" — used interchangeably for this directory's
 scope (content spanning a component/repo boundary with no home in a

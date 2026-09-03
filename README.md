@@ -61,6 +61,10 @@ The Feature → PRD → Design → Jira sync → Implement → E2E sequence is d
 `.osac-ai-skills/README.md`). See [`AGENTS.md`](AGENTS.md)
 for bootstrap details and component conventions.
 
+Using OpenAI Codex? See [`docs/codex-getting-started.md`](docs/codex-getting-started.md)
+for Codex-specific onboarding (install, `/import`, permissions, trusting the
+repo's hooks, and skill discovery under `.agents/skills`).
+
 ## Distrobox (Linux/x86_64)
 
 Requires [podman](https://podman.io/) and [distrobox](https://distrobox.it/) on Linux. Image tool binaries are x86_64 only. From this repo root:

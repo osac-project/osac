@@ -21,9 +21,9 @@ on:
   workflow_dispatch:
     inputs:
       test-suite:
-        description: "Test suite (vmaas, caas, or empty for all)"
+        description: "Test suite (vmaas/sanity, vmaas/regression, vmaas/serial, or vmaas for all)"
         required: false
-        default: "vmaas"
+        default: "vmaas/sanity"
       test-filter:
         description: "pytest -k filter"
         required: false
@@ -208,16 +208,14 @@ jobs:
       id-token: write
     uses: osac-project/osac-test-infra/.github/workflows/e2e-vmaas-full-install.yml@main
     with:
-      # PR/merge_group: sanity. Schedule: serial. workflow_dispatch: honor
-      # input, else sanity. vmaas/serial is empty scaffolding today (no
-      # resource-contention justification like BMaaS's serial tier -- just
-      # reserving the shape); the reusable workflow's own fallback runs the
-      # full vmaas suite whenever a tier dir has no real tests yet.
+      # PR/merge_group: sanity (fast smoke). Schedule: full vmaas suite
+      # (sanity + regression + serial). workflow_dispatch: honor input,
+      # else sanity.
       test-suite: >-
         ${{
           inputs.test-suite != '' && inputs.test-suite ||
           (github.event_name == 'pull_request' || github.event_name == 'merge_group') && 'vmaas/sanity' ||
-          github.event_name == 'schedule' && 'vmaas/serial' ||
+          github.event_name == 'schedule' && 'vmaas' ||
           'vmaas/sanity'
         }}
       test-filter: ${{ inputs.test-filter || '' }}

@@ -758,6 +758,37 @@ var _ = Describe("Rego authorization interceptor", func() {
 		)
 
 		DescribeTable(
+			"Allows Keycloak users on the public Volumes API",
+			func(ctx context.Context, method string) {
+				token := createKeycloakUserToken("my-tenant", "my-user", nil)
+				ctx = ContextWithToken(ctx, token)
+				handled := false
+				_, err := interceptor.UnaryServer(
+					ctx,
+					nil,
+					&grpc.UnaryServerInfo{
+						FullMethod: method,
+					},
+					func(ctx context.Context, req any) (any, error) {
+						subject := SubjectFromContext(ctx)
+						Expect(subject.User).To(Equal("my-user"))
+						Expect(subject.Tenants.Finite()).To(BeTrue())
+						Expect(subject.Tenants.Inclusions()).To(ConsistOf("my-tenant"))
+						handled = true
+						return nil, nil
+					},
+				)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(handled).To(BeTrue())
+			},
+			Entry("List", "/osac.public.v1.Volumes/List"),
+			Entry("Get", "/osac.public.v1.Volumes/Get"),
+			Entry("Create", "/osac.public.v1.Volumes/Create"),
+			Entry("Update", "/osac.public.v1.Volumes/Update"),
+			Entry("Delete", "/osac.public.v1.Volumes/Delete"),
+		)
+
+		DescribeTable(
 			"Denies Keycloak users on the private Secrets API",
 			func(ctx context.Context, method string) {
 				token := createKeycloakUserToken("my-tenant", "my-user", nil)

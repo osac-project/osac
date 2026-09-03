@@ -366,7 +366,7 @@ var _ = Describe("Private compute instances server", func() {
 					DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
 					BootDisk: privatev1.ComputeInstanceDisk_builder{
 						SizeGib:     proto.Int32(10),
-						StorageTier: new("standard"),
+						StorageTier: privatev1.StorageTierReference_builder{Name: "standard"}.Build(),
 					}.Build(),
 					RunStrategy: privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
 				}.Build(),
@@ -418,55 +418,11 @@ var _ = Describe("Private compute instances server", func() {
 			Expect(object.GetStatus().GetState()).To(Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING))
 		})
 
-		It("Rejects nonexistent storage tier", func() {
-			createTemplate("general.small")
-
-			_, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
-				Object: privatev1.ComputeInstance_builder{
-					Spec: privatev1.ComputeInstanceSpec_builder{
-						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "general.small"}.Build(),
-						BootDisk: privatev1.ComputeInstanceDisk_builder{
-							SizeGib:     proto.Int32(20),
-							StorageTier: new("nonexistent"),
-						}.Build(),
-						NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
-							privatev1.ComputeNetworkAttachment_builder{
-								Subnet: privatev1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
-							}.Build(),
-						},
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).To(HaveOccurred())
-			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-			Expect(err.Error()).To(ContainSubstring(`storage tier 'nonexistent' does not exist`))
-		})
-
-		It("Rejects nonexistent storage tier on additional disk", func() {
-			createTemplate("general.small")
-
-			_, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
-				Object: privatev1.ComputeInstance_builder{
-					Spec: privatev1.ComputeInstanceSpec_builder{
-						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "general.small"}.Build(),
-						AdditionalDisks: []*privatev1.ComputeInstanceDisk{
-							privatev1.ComputeInstanceDisk_builder{
-								SizeGib:     proto.Int32(100),
-								StorageTier: new("nonexistent"),
-							}.Build(),
-						},
-						NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
-							privatev1.ComputeNetworkAttachment_builder{
-								Subnet: privatev1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
-							}.Build(),
-						},
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).To(HaveOccurred())
-			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-			Expect(err.Error()).To(ContainSubstring(`storage tier 'nonexistent' does not exist`))
-		})
+		// Storage tier reference validation is now handled by the reference validator
+		// interceptor at the gRPC layer (StorageTierReference is registered in
+		// reference_lookups.go). These unit tests exercise the server directly without the
+		// interceptor chain, so invalid reference names are accepted at this level.
+		// Integration tests verify that the interceptor rejects nonexistent storage tiers.
 
 		It("Creates object with additional disks", func() {
 			createTemplate("general.small")
@@ -481,7 +437,7 @@ var _ = Describe("Private compute instances server", func() {
 						AdditionalDisks: []*privatev1.ComputeInstanceDisk{
 							privatev1.ComputeInstanceDisk_builder{
 								SizeGib:     proto.Int32(100),
-								StorageTier: new("standard"),
+								StorageTier: privatev1.StorageTierReference_builder{Name: "standard"}.Build(),
 							}.Build(),
 						},
 						NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
@@ -498,7 +454,7 @@ var _ = Describe("Private compute instances server", func() {
 			Expect(object).ToNot(BeNil())
 			Expect(object.GetSpec().GetAdditionalDisks()).To(HaveLen(1))
 			Expect(object.GetSpec().GetAdditionalDisks()[0].GetSizeGib()).To(Equal(int32(100)))
-			Expect(object.GetSpec().GetAdditionalDisks()[0].GetStorageTier()).To(Equal("standard"))
+			Expect(object.GetSpec().GetAdditionalDisks()[0].GetStorageTier().GetName()).To(Equal("standard"))
 		})
 
 		It("List objects", func() {
@@ -1042,7 +998,7 @@ var _ = Describe("Private compute instances server", func() {
 			Expect(spec.GetRunStrategy()).To(Equal(privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS))
 			Expect(spec.GetDiskImage().GetId()).To(Equal("test-disk-image"))
 			Expect(spec.GetBootDisk().GetSizeGib()).To(Equal(int32(10)))
-			Expect(spec.GetBootDisk().GetStorageTier()).To(Equal("standard"))
+			Expect(spec.GetBootDisk().GetStorageTier().GetName()).To(Equal("standard"))
 			// Template reference should be preserved:
 			Expect(spec.GetTemplate().GetId()).To(Equal("defaults-template"))
 		})
@@ -1077,7 +1033,7 @@ var _ = Describe("Private compute instances server", func() {
 			Expect(spec.GetInstanceType().GetId()).To(Equal("standard-4-16"))
 			Expect(spec.GetDiskImage().GetId()).To(Equal("test-disk-image"))
 			Expect(spec.GetBootDisk().GetSizeGib()).To(Equal(int32(10)))
-			Expect(spec.GetBootDisk().GetStorageTier()).To(Equal("standard"))
+			Expect(spec.GetBootDisk().GetStorageTier().GetName()).To(Equal("standard"))
 		})
 
 		It("Rejects creation when the resolved boot disk storage tier is absent or empty", func() {
@@ -1111,7 +1067,7 @@ var _ = Describe("Private compute instances server", func() {
 				nil,
 				privatev1.ComputeInstanceDisk_builder{
 					SizeGib:     proto.Int32(20),
-					StorageTier: new(""),
+					StorageTier: privatev1.StorageTierReference_builder{Name: ""}.Build(),
 				}.Build(),
 			} {
 				name := fmt.Sprintf("test-%s", uuid.NewString()[:8])
@@ -1147,7 +1103,7 @@ var _ = Describe("Private compute instances server", func() {
 		It("Rejects creation when an additional disk storage tier is absent or empty", func() {
 			createTemplate("additional-tier-template")
 
-			for _, storageTier := range []*string{nil, new("")} {
+			for _, storageTier := range []*privatev1.StorageTierReference{nil, privatev1.StorageTierReference_builder{Name: ""}.Build()} {
 				name := fmt.Sprintf("test-%s", uuid.NewString()[:8])
 				additionalDisk := privatev1.ComputeInstanceDisk_builder{SizeGib: proto.Int32(50)}
 				if storageTier != nil {
@@ -1264,7 +1220,7 @@ var _ = Describe("Private compute instances server", func() {
 						DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
 						BootDisk: privatev1.ComputeInstanceDisk_builder{
 							SizeGib:     proto.Int32(20),
-							StorageTier: new("standard"),
+							StorageTier: privatev1.StorageTierReference_builder{Name: "standard"}.Build(),
 						}.Build(),
 						RunStrategy: privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
 						NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
@@ -1315,7 +1271,7 @@ var _ = Describe("Private compute instances server", func() {
 						DiskImage: &privatev1.DiskImageReference{Id: "test-disk-image"},
 						BootDisk: privatev1.ComputeInstanceDisk_builder{
 							SizeGib:     proto.Int32(20),
-							StorageTier: new("standard"),
+							StorageTier: privatev1.StorageTierReference_builder{Name: "standard"}.Build(),
 						}.Build(),
 						NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
 							privatev1.ComputeNetworkAttachment_builder{
@@ -1772,7 +1728,7 @@ var _ = Describe("Private compute instances server", func() {
 							DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
 							BootDisk: privatev1.ComputeInstanceDisk_builder{
 								SizeGib:     proto.Int32(10),
-								StorageTier: new("standard"),
+								StorageTier: privatev1.StorageTierReference_builder{Name: "standard"}.Build(),
 							}.Build(),
 							RunStrategy: privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
 						}.Build(),
@@ -1840,7 +1796,7 @@ var _ = Describe("Private compute instances server", func() {
 							DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
 							BootDisk: privatev1.ComputeInstanceDisk_builder{
 								SizeGib:     proto.Int32(10),
-								StorageTier: new("standard"),
+								StorageTier: privatev1.StorageTierReference_builder{Name: "standard"}.Build(),
 							}.Build(),
 							RunStrategy: privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
 						}.Build(),
@@ -1993,7 +1949,7 @@ var _ = Describe("Private compute instances server", func() {
 					DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
 					BootDisk: privatev1.ComputeInstanceDisk_builder{
 						SizeGib:     proto.Int32(10),
-						StorageTier: new("standard"),
+						StorageTier: privatev1.StorageTierReference_builder{Name: "standard"}.Build(),
 					}.Build(),
 					RunStrategy: privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
 				}.Build(),
@@ -2802,7 +2758,7 @@ var _ = Describe("Private compute instances server", func() {
 							Template: privatev1.ComputeInstanceTemplateReference_builder{Id: template.GetId()}.Build(),
 							BootDisk: privatev1.ComputeInstanceDisk_builder{
 								SizeGib:     proto.Int32(100),
-								StorageTier: new("tier1"),
+								StorageTier: privatev1.StorageTierReference_builder{Name: "tier1"}.Build(),
 							}.Build(),
 							NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
 								privatev1.ComputeNetworkAttachment_builder{
@@ -2824,7 +2780,7 @@ var _ = Describe("Private compute instances server", func() {
 						Spec: privatev1.ComputeInstanceSpec_builder{
 							BootDisk: privatev1.ComputeInstanceDisk_builder{
 								SizeGib:     proto.Int32(100),
-								StorageTier: new("tier2"),
+								StorageTier: privatev1.StorageTierReference_builder{Name: "tier2"}.Build(),
 							}.Build(),
 						}.Build(),
 					}.Build(),
@@ -2851,12 +2807,12 @@ var _ = Describe("Private compute instances server", func() {
 							Template: privatev1.ComputeInstanceTemplateReference_builder{Id: template.GetId()}.Build(),
 							BootDisk: privatev1.ComputeInstanceDisk_builder{
 								SizeGib:     proto.Int32(100),
-								StorageTier: new("tier1"),
+								StorageTier: privatev1.StorageTierReference_builder{Name: "tier1"}.Build(),
 							}.Build(),
 							AdditionalDisks: []*privatev1.ComputeInstanceDisk{
 								privatev1.ComputeInstanceDisk_builder{
 									SizeGib:     proto.Int32(200),
-									StorageTier: new("tier1"),
+									StorageTier: privatev1.StorageTierReference_builder{Name: "tier1"}.Build(),
 								}.Build(),
 							},
 							NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
@@ -2880,7 +2836,7 @@ var _ = Describe("Private compute instances server", func() {
 							AdditionalDisks: []*privatev1.ComputeInstanceDisk{
 								privatev1.ComputeInstanceDisk_builder{
 									SizeGib:     proto.Int32(200),
-									StorageTier: new("tier2"),
+									StorageTier: privatev1.StorageTierReference_builder{Name: "tier2"}.Build(),
 								}.Build(),
 							},
 						}.Build(),
@@ -2908,12 +2864,12 @@ var _ = Describe("Private compute instances server", func() {
 							Template: privatev1.ComputeInstanceTemplateReference_builder{Id: template.GetId()}.Build(),
 							BootDisk: privatev1.ComputeInstanceDisk_builder{
 								SizeGib:     proto.Int32(100),
-								StorageTier: new("tier1"),
+								StorageTier: privatev1.StorageTierReference_builder{Name: "tier1"}.Build(),
 							}.Build(),
 							AdditionalDisks: []*privatev1.ComputeInstanceDisk{
 								privatev1.ComputeInstanceDisk_builder{
 									SizeGib:     proto.Int32(200),
-									StorageTier: new("tier1"),
+									StorageTier: privatev1.StorageTierReference_builder{Name: "tier1"}.Build(),
 								}.Build(),
 							},
 							NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
@@ -2937,7 +2893,7 @@ var _ = Describe("Private compute instances server", func() {
 							AdditionalDisks: []*privatev1.ComputeInstanceDisk{
 								privatev1.ComputeInstanceDisk_builder{
 									SizeGib:     proto.Int32(300),
-									StorageTier: new("tier1"),
+									StorageTier: privatev1.StorageTierReference_builder{Name: "tier1"}.Build(),
 								}.Build(),
 							},
 						}.Build(),
@@ -3016,7 +2972,7 @@ var _ = Describe("Private compute instances server", func() {
 							DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
 							BootDisk: privatev1.ComputeInstanceDisk_builder{
 								SizeGib:     proto.Int32(20),
-								StorageTier: new("standard"),
+								StorageTier: privatev1.StorageTierReference_builder{Name: "standard"}.Build(),
 							}.Build(),
 							RunStrategy: privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
 							NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
@@ -3111,7 +3067,7 @@ var _ = Describe("Private compute instances server", func() {
 							DiskImage:    &privatev1.DiskImageReference{Id: diskImageKey},
 							BootDisk: privatev1.ComputeInstanceDisk_builder{
 								SizeGib:     proto.Int32(20),
-								StorageTier: new("standard"),
+								StorageTier: privatev1.StorageTierReference_builder{Name: "standard"}.Build(),
 							}.Build(),
 							RunStrategy: privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
 							NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
@@ -3211,7 +3167,7 @@ var _ = Describe("Private compute instances server", func() {
 							DiskImage:    &privatev1.DiskImageReference{Name: "di-by-name"},
 							BootDisk: privatev1.ComputeInstanceDisk_builder{
 								SizeGib:     proto.Int32(20),
-								StorageTier: new("standard"),
+								StorageTier: privatev1.StorageTierReference_builder{Name: "standard"}.Build(),
 							}.Build(),
 							RunStrategy: privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
 							NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
@@ -3287,7 +3243,7 @@ var _ = Describe("Private compute instances server", func() {
 						DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
 						BootDisk: privatev1.ComputeInstanceDisk_builder{
 							SizeGib:     proto.Int32(10),
-							StorageTier: new("standard"),
+							StorageTier: privatev1.StorageTierReference_builder{Name: "standard"}.Build(),
 						}.Build(),
 						RunStrategy: privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
 					}.Build(),

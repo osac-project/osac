@@ -88,7 +88,7 @@ message ComputeInstanceBootDiskFieldPolicies {
   option (cleanapi.message).private = true;
 
   Int32FieldPolicy size_gib = 1;
-  StringFieldPolicy storage_tier = 2;
+  StorageTierReferenceFieldPolicy storage_tier = 2;
 }
 
 // Reference to a ComputeInstanceCatalogItem resource.

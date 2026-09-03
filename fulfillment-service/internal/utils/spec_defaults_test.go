@@ -135,14 +135,14 @@ var _ = Describe("ApplySpecDefaults", func() {
 		defaults := privatev1.ComputeInstanceTemplateSpecDefaults_builder{
 			BootDisk: privatev1.ComputeInstanceDisk_builder{
 				SizeGib:     proto.Int32(20),
-				StorageTier: new("standard"),
+				StorageTier: privatev1.StorageTierReference_builder{Name: "standard"}.Build(),
 			}.Build(),
 		}.Build()
 
 		ApplySpecDefaults(spec, defaults)
 
 		Expect(spec.GetBootDisk().GetSizeGib()).To(Equal(int32(50)))
-		Expect(spec.GetBootDisk().GetStorageTier()).To(Equal("standard"))
+		Expect(spec.GetBootDisk().GetStorageTier().GetName()).To(Equal("standard"))
 	})
 
 	It("Does not override user-provided boot_disk storage_tier with template default", func() {
@@ -150,41 +150,41 @@ var _ = Describe("ApplySpecDefaults", func() {
 			Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
 			BootDisk: privatev1.ComputeInstanceDisk_builder{
 				SizeGib:     proto.Int32(50),
-				StorageTier: new("fast"),
+				StorageTier: privatev1.StorageTierReference_builder{Name: "fast"}.Build(),
 			}.Build(),
 		}.Build()
 
 		defaults := privatev1.ComputeInstanceTemplateSpecDefaults_builder{
 			BootDisk: privatev1.ComputeInstanceDisk_builder{
 				SizeGib:     proto.Int32(20),
-				StorageTier: new("standard"),
+				StorageTier: privatev1.StorageTierReference_builder{Name: "standard"}.Build(),
 			}.Build(),
 		}.Build()
 
 		ApplySpecDefaults(spec, defaults)
 
-		Expect(spec.GetBootDisk().GetStorageTier()).To(Equal("fast"))
+		Expect(spec.GetBootDisk().GetStorageTier().GetName()).To(Equal("fast"))
 	})
 
 	It("Merges default boot_disk size when user provides only storage_tier", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
 			Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
 			BootDisk: privatev1.ComputeInstanceDisk_builder{
-				StorageTier: new("fast"),
+				StorageTier: privatev1.StorageTierReference_builder{Name: "fast"}.Build(),
 			}.Build(),
 		}.Build()
 
 		defaults := privatev1.ComputeInstanceTemplateSpecDefaults_builder{
 			BootDisk: privatev1.ComputeInstanceDisk_builder{
 				SizeGib:     proto.Int32(20),
-				StorageTier: new("standard"),
+				StorageTier: privatev1.StorageTierReference_builder{Name: "standard"}.Build(),
 			}.Build(),
 		}.Build()
 
 		ApplySpecDefaults(spec, defaults)
 
 		Expect(spec.GetBootDisk().GetSizeGib()).To(Equal(int32(20)))
-		Expect(spec.GetBootDisk().GetStorageTier()).To(Equal("fast"))
+		Expect(spec.GetBootDisk().GetStorageTier().GetName()).To(Equal("fast"))
 	})
 
 	It("Clones entire boot_disk default including storage_tier when user provides no boot_disk", func() {
@@ -195,14 +195,14 @@ var _ = Describe("ApplySpecDefaults", func() {
 		defaults := privatev1.ComputeInstanceTemplateSpecDefaults_builder{
 			BootDisk: privatev1.ComputeInstanceDisk_builder{
 				SizeGib:     proto.Int32(20),
-				StorageTier: new("standard"),
+				StorageTier: privatev1.StorageTierReference_builder{Name: "standard"}.Build(),
 			}.Build(),
 		}.Build()
 
 		ApplySpecDefaults(spec, defaults)
 
 		Expect(spec.GetBootDisk().GetSizeGib()).To(Equal(int32(20)))
-		Expect(spec.GetBootDisk().GetStorageTier()).To(Equal("standard"))
+		Expect(spec.GetBootDisk().GetStorageTier().GetName()).To(Equal("standard"))
 	})
 
 	It("Applies instance_type default when user provides no compute fields", func() {
@@ -342,7 +342,7 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 			DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
 			BootDisk: privatev1.ComputeInstanceDisk_builder{
 				SizeGib:     proto.Int32(20),
-				StorageTier: new("standard"),
+				StorageTier: privatev1.StorageTierReference_builder{Name: "standard"}.Build(),
 			}.Build(),
 			RunStrategy: privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
 		}.Build()
@@ -357,7 +357,7 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 			DiskImage: &privatev1.DiskImageReference{Id: "test-disk-image"},
 			BootDisk: privatev1.ComputeInstanceDisk_builder{
 				SizeGib:     proto.Int32(20),
-				StorageTier: new("standard"),
+				StorageTier: privatev1.StorageTierReference_builder{Name: "standard"}.Build(),
 			}.Build(),
 			RunStrategy: privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
 		}.Build()
@@ -390,7 +390,7 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 			DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
 			BootDisk: privatev1.ComputeInstanceDisk_builder{
 				SizeGib:     proto.Int32(20),
-				StorageTier: new("standard"),
+				StorageTier: privatev1.StorageTierReference_builder{Name: "standard"}.Build(),
 			}.Build(),
 			RunStrategy: privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_UNSPECIFIED.Enum(),
 		}.Build()
@@ -410,7 +410,7 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 			DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
 			BootDisk: privatev1.ComputeInstanceDisk_builder{
 				SizeGib:     proto.Int32(0),
-				StorageTier: new("standard"),
+				StorageTier: privatev1.StorageTierReference_builder{Name: "standard"}.Build(),
 			}.Build(),
 			RunStrategy: privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
 		}.Build()
@@ -428,7 +428,7 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 			DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
 			BootDisk: privatev1.ComputeInstanceDisk_builder{
 				SizeGib:     proto.Int32(20),
-				StorageTier: new(""),
+				StorageTier: privatev1.StorageTierReference_builder{Name: ""}.Build(),
 			}.Build(),
 			RunStrategy: privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
 		}.Build()
@@ -463,16 +463,16 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 			DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
 			BootDisk: privatev1.ComputeInstanceDisk_builder{
 				SizeGib:     proto.Int32(20),
-				StorageTier: new("standard"),
+				StorageTier: privatev1.StorageTierReference_builder{Name: "standard"}.Build(),
 			}.Build(),
 			AdditionalDisks: []*privatev1.ComputeInstanceDisk{
 				privatev1.ComputeInstanceDisk_builder{
 					SizeGib:     proto.Int32(100),
-					StorageTier: new("standard"),
+					StorageTier: privatev1.StorageTierReference_builder{Name: "standard"}.Build(),
 				}.Build(),
 				privatev1.ComputeInstanceDisk_builder{
 					SizeGib:     proto.Int32(200),
-					StorageTier: new(""),
+					StorageTier: privatev1.StorageTierReference_builder{Name: ""}.Build(),
 				}.Build(),
 			},
 			RunStrategy: privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
@@ -491,12 +491,12 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 			DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
 			BootDisk: privatev1.ComputeInstanceDisk_builder{
 				SizeGib:     proto.Int32(20),
-				StorageTier: new("standard"),
+				StorageTier: privatev1.StorageTierReference_builder{Name: "standard"}.Build(),
 			}.Build(),
 			AdditionalDisks: []*privatev1.ComputeInstanceDisk{
 				privatev1.ComputeInstanceDisk_builder{
 					SizeGib:     proto.Int32(100),
-					StorageTier: new("standard"),
+					StorageTier: privatev1.StorageTierReference_builder{Name: "standard"}.Build(),
 				}.Build(),
 				privatev1.ComputeInstanceDisk_builder{
 					SizeGib: proto.Int32(200),
@@ -518,7 +518,7 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 			DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
 			BootDisk: privatev1.ComputeInstanceDisk_builder{
 				SizeGib:     proto.Int32(20),
-				StorageTier: new(" \t\n"),
+				StorageTier: privatev1.StorageTierReference_builder{Name: " \t\n"}.Build(),
 			}.Build(),
 			RunStrategy: privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
 		}.Build()

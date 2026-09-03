@@ -249,7 +249,7 @@ var _ = Describe("Compute instances server", func() {
 					DiskImage:    privatev1.DiskImageReference_builder{Id: "test-disk-image"}.Build(),
 					BootDisk: privatev1.ComputeInstanceDisk_builder{
 						SizeGib:     proto.Int32(10),
-						StorageTier: new("standard"),
+						StorageTier: privatev1.StorageTierReference_builder{Name: "standard"}.Build(),
 					}.Build(),
 					RunStrategy: privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
 				}.Build(),
@@ -473,7 +473,7 @@ var _ = Describe("Compute instances server", func() {
 						DiskImage:    publicv1.DiskImageReference_builder{Id: "test-disk-image"}.Build(),
 						BootDisk: publicv1.ComputeInstanceDisk_builder{
 							SizeGib:     proto.Int32(20),
-							StorageTier: new("standard"),
+							StorageTier: publicv1.StorageTierReference_builder{Name: "standard"}.Build(),
 						}.Build(),
 						NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
 							publicv1.ComputeNetworkAttachment_builder{

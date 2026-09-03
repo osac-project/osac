@@ -136,7 +136,8 @@ func validateDisk(disk *privatev1.ComputeInstanceDisk) error {
 	if disk.GetSizeGib() <= 0 {
 		return fmt.Errorf("size_gib must be greater than 0")
 	}
-	if !disk.HasStorageTier() || strings.TrimSpace(disk.GetStorageTier()) == "" {
+	tier := disk.GetStorageTier()
+	if tier == nil || (strings.TrimSpace(tier.GetId()) == "" && strings.TrimSpace(tier.GetName()) == "") {
 		return fmt.Errorf("storage_tier is required")
 	}
 	return nil

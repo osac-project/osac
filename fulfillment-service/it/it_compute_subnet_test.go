@@ -336,7 +336,7 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 					RunStrategy:  publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
 					BootDisk: publicv1.ComputeInstanceDisk_builder{
 						SizeGib:     proto.Int32(20),
-						StorageTier: &storageTierId,
+						StorageTier: publicv1.StorageTierReference_builder{Id: storageTierId}.Build(),
 					}.Build(),
 					DiskImage: &publicv1.DiskImageReference{Id: diskImageId},
 					NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
@@ -374,7 +374,7 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 					RunStrategy:  publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
 					BootDisk: publicv1.ComputeInstanceDisk_builder{
 						SizeGib:     proto.Int32(20),
-						StorageTier: &storageTierId,
+						StorageTier: publicv1.StorageTierReference_builder{Id: storageTierId}.Build(),
 					}.Build(),
 					DiskImage: &publicv1.DiskImageReference{Id: diskImageId},
 					NetworkAttachments: []*publicv1.ComputeNetworkAttachment{

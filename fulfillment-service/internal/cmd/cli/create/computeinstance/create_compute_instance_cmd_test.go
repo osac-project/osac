@@ -257,7 +257,7 @@ var _ = Describe("buildBootDisk", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(disk).NotTo(BeNil())
 		Expect(disk.GetSizeGib()).To(Equal(int32(100)))
-		Expect(disk.GetStorageTier()).To(Equal("premium"))
+		Expect(disk.GetStorageTier().GetName()).To(Equal("premium"))
 	})
 
 	It("should return disk with only size when storage tier is not set", func() {
@@ -295,7 +295,7 @@ var _ = Describe("--additional-disk flag parsing", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(disks).To(HaveLen(1))
 		Expect(disks[0].GetSizeGib()).To(Equal(int32(50)))
-		Expect(disks[0].GetStorageTier()).To(Equal("e2e-x"))
+		Expect(disks[0].GetStorageTier().GetName()).To(Equal("e2e-x"))
 	})
 
 	It("should parse multiple disks with different storage tiers", func() {
@@ -312,9 +312,9 @@ var _ = Describe("--additional-disk flag parsing", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(disks).To(HaveLen(2))
 		Expect(disks[0].GetSizeGib()).To(Equal(int32(50)))
-		Expect(disks[0].GetStorageTier()).To(Equal("fast"))
+		Expect(disks[0].GetStorageTier().GetName()).To(Equal("fast"))
 		Expect(disks[1].GetSizeGib()).To(Equal(int32(100)))
-		Expect(disks[1].GetStorageTier()).To(Equal("archive"))
+		Expect(disks[1].GetStorageTier().GetName()).To(Equal("archive"))
 	})
 
 	It("should reject a bare integer additional disk", func() {

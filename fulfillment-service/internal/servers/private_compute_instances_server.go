@@ -63,7 +63,6 @@ type PrivateComputeInstancesServer struct {
 	subnetsDao              *dao.GenericDAO[*privatev1.Subnet]
 	securityGroupsDao       *dao.GenericDAO[*privatev1.SecurityGroup]
 	instanceTypesDao        *dao.GenericDAO[*privatev1.InstanceType]
-	storageTiersDao         *dao.GenericDAO[*privatev1.StorageTier]
 	diskImagesDao           *dao.GenericDAO[*privatev1.DiskImage]
 	externalIPPoolDao       *dao.GenericDAO[*privatev1.ExternalIPPool]
 	externalIPDao           *dao.GenericDAO[*privatev1.ExternalIP]
@@ -169,16 +168,6 @@ func (b *PrivateComputeInstancesServerBuilder) Build() (result *PrivateComputeIn
 		return
 	}
 
-	// Create the StorageTiers DAO for storage tier validation:
-	storageTiersDao, err := dao.NewGenericDAO[*privatev1.StorageTier]().
-		SetLogger(b.logger).
-		SetTenancyLogic(b.tenancyLogic).
-		SetMetricsRegisterer(b.metricsRegisterer).
-		Build()
-	if err != nil {
-		return
-	}
-
 	// Create the DiskImages DAO for disk image validation:
 	diskImagesDao, err := dao.NewGenericDAO[*privatev1.DiskImage]().
 		SetLogger(b.logger).
@@ -241,7 +230,6 @@ func (b *PrivateComputeInstancesServerBuilder) Build() (result *PrivateComputeIn
 		subnetsDao:              subnetsDao,
 		securityGroupsDao:       securityGroupsDao,
 		instanceTypesDao:        instanceTypesDao,
-		storageTiersDao:         storageTiersDao,
 		diskImagesDao:           diskImagesDao,
 		externalIPPoolDao:       externalIPPoolDao,
 		externalIPDao:           externalIPDao,
@@ -359,11 +347,6 @@ func (s *PrivateComputeInstancesServer) Create(ctx context.Context,
 	// Apply the template's spec defaults and validate required fields, regardless
 	// of whether the template was referenced directly or resolved via a catalog item.
 	err = s.applySpecDefaults(spec, template)
-	if err != nil {
-		return
-	}
-
-	err = s.validateStorageTiers(ctx, spec)
 	if err != nil {
 		return
 	}
@@ -600,37 +583,6 @@ func (s *PrivateComputeInstancesServer) validateInstanceType(
 	return warnings, nil
 }
 
-// validateStorageTiers checks that all storage tiers referenced by boot and additional disks exist.
-func (s *PrivateComputeInstancesServer) validateStorageTiers(
-	ctx context.Context,
-	spec *privatev1.ComputeInstanceSpec,
-) error {
-	tiers := map[string]bool{}
-	if tier := spec.GetBootDisk().GetStorageTier(); tier != "" {
-		tiers[tier] = true
-	}
-	for _, disk := range spec.GetAdditionalDisks() {
-		if tier := disk.GetStorageTier(); tier != "" {
-			tiers[tier] = true
-		}
-	}
-	for name := range tiers {
-		_, err := s.storageTiersDao.Get().
-			SetId(name).
-			Do(ctx)
-		if err != nil {
-			var notFoundErr *dao.ErrNotFound
-			if errors.As(err, &notFoundErr) {
-				return grpcstatus.Errorf(grpccodes.InvalidArgument,
-					"storage tier '%s' does not exist", name)
-			}
-			return grpcstatus.Errorf(grpccodes.Internal,
-				"failed to retrieve storage tier '%s'", name)
-		}
-	}
-	return nil
-}
-
 // validateDiskImage resolves the disk_image reference via the shared
 // validateDiskImageState helper (catalog_item_validation.go), which performs the
 // id-or-name lookup and lifecycle validation shared with the Template and CatalogItem
@@ -864,11 +816,11 @@ func (s *PrivateComputeInstancesServer) validateDiskImmutability(
 			)
 		}
 
-		if existingBootDisk.GetStorageTier() != newBootDisk.GetStorageTier() {
+		if !storageTierRefsEqual(existingBootDisk.GetStorageTier(), newBootDisk.GetStorageTier()) {
 			return grpcstatus.Errorf(
 				grpccodes.InvalidArgument,
 				"cannot change spec.boot_disk.storage_tier from %q to %q: boot disk is immutable",
-				existingBootDisk.GetStorageTier(), newBootDisk.GetStorageTier(),
+				existingBootDisk.GetStorageTier().GetName(), newBootDisk.GetStorageTier().GetName(),
 			)
 		}
 	}
@@ -898,17 +850,26 @@ func (s *PrivateComputeInstancesServer) validateDiskImmutability(
 				)
 			}
 
-			if existingDisk.GetStorageTier() != newDisk.GetStorageTier() {
+			if !storageTierRefsEqual(existingDisk.GetStorageTier(), newDisk.GetStorageTier()) {
 				return grpcstatus.Errorf(
 					grpccodes.InvalidArgument,
 					"cannot change spec.additional_disks[%d].storage_tier from %q to %q: disk is immutable",
-					i, existingDisk.GetStorageTier(), newDisk.GetStorageTier(),
+					i, existingDisk.GetStorageTier().GetName(), newDisk.GetStorageTier().GetName(),
 				)
 			}
 		}
 	}
 
 	return nil
+}
+
+// storageTierRefsEqual compares two StorageTierReference values for equality.
+// If both have non-empty IDs, comparison is by ID. Otherwise falls back to name comparison.
+func storageTierRefsEqual(a, b *privatev1.StorageTierReference) bool {
+	if a.GetId() != "" && b.GetId() != "" {
+		return a.GetId() == b.GetId()
+	}
+	return a.GetName() == b.GetName()
 }
 
 func hasMaskPrefix(mask *fieldmaskpb.FieldMask, prefixes ...string) bool {

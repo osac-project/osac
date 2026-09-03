@@ -782,7 +782,9 @@ func (c *runnerContext) buildBootDisk() (*publicv1.ComputeInstanceDisk, error) {
 		SizeGib: proto.Int32(c.args.bootDiskSizeGiB),
 	}
 	if c.args.bootDiskStorageTier != "" {
-		builder.StorageTier = proto.String(c.args.bootDiskStorageTier)
+		builder.StorageTier = publicv1.StorageTierReference_builder{
+			Name: c.args.bootDiskStorageTier,
+		}.Build()
 	}
 	return builder.Build(), nil
 }
@@ -961,7 +963,9 @@ func parseAdditionalDisks(diskArgs []string) ([]*publicv1.ComputeInstanceDisk, e
 				disk.SizeGib = proto.Int32(int32(sizeGiB))
 				hasSize = true
 			case "storage-tier":
-				disk.StorageTier = proto.String(value)
+				disk.StorageTier = publicv1.StorageTierReference_builder{
+					Name: value,
+				}.Build()
 				storageTier = value
 			default:
 				return nil, fmt.Errorf("unknown --additional-disk key %q (expected 'size' or 'storage-tier')", key)

@@ -87,6 +87,21 @@ message EditableInstanceTypeReferenceField {
   InstanceTypeReference default_value = 1;
 }
 
+// Defines whether a StorageTier reference is locked or editable.
+message StorageTierReferenceFieldPolicy {
+  oneof behavior {
+    option (buf.validate.oneof).required = true;
+
+    StorageTierReference locked = 1;
+    EditableStorageTierReferenceField editable = 2;
+  }
+}
+
+// Configures an editable StorageTier reference.
+message EditableStorageTierReferenceField {
+  StorageTierReference default_value = 1;
+}
+
 // Defines whether a DiskImage reference is locked or editable.
 message DiskImageReferenceFieldPolicy {
   oneof behavior {

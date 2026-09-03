@@ -384,7 +384,13 @@ func (s *PrivateBareMetalInstancesServer) validateUserDataMutualExclusionForUpda
 	}
 	existingResponse, err := s.generic.dao.Get().SetId(request.GetObject().GetId()).Do(ctx)
 	if err != nil {
-		return err
+		var notFoundErr *dao.ErrNotFound
+		if errors.As(err, &notFoundErr) {
+			return grpcstatus.Errorf(grpccodes.NotFound, "bare metal instance '%s' not found",
+				request.GetObject().GetId())
+		}
+		s.logger.ErrorContext(ctx, "Failed to load bare metal instance for user data validation", "error", err)
+		return grpcstatus.Errorf(grpccodes.Internal, "failed to validate bare metal instance user data")
 	}
 	existingSpec := existingResponse.GetObject().GetSpec()
 	if settingRef && existingSpec.HasUserData() && !updateIncludesField(mask, "spec.user_data") {
@@ -968,7 +974,8 @@ func validateBareMetalUserDataImmutability(
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"cannot change spec.user_data: user_data is immutable after creation")
 	}
-	if updatingUserDataSecret && !proto.Equal(existingSpec.GetUserDataSecret(), newSpec.GetUserDataSecret()) &&
+	if updatingUserDataSecret && existingSpec.GetUserDataSecret() != nil &&
+		!proto.Equal(existingSpec.GetUserDataSecret(), newSpec.GetUserDataSecret()) &&
 		!isAtomicMigration {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"cannot change spec.user_data_secret: user_data_secret is immutable after creation")

@@ -145,7 +145,7 @@ message BareMetalInstanceSpec {
   // The Secret must contain a non-empty `userdata` entry. Mutually exclusive with `user_data`.
   // An existing inline value may be migrated by setting this field while clearing `user_data`
   // in the same update.
-  SecretLocalReference user_data_secret = 13;
+  SecretLocalReference user_data_secret = 13 [(google.api.field_behavior) = IMMUTABLE];
 }
 
 // The status contains the details of the bare metal instance provided by the system.

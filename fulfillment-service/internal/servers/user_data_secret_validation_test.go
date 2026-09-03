@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"go.uber.org/mock/gomock"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -91,6 +92,65 @@ var _ = Describe("User data secret validation", func() {
 			privatev1.SecretLocalReference_builder{Id: created.GetObject().GetId()}.Build())
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
 		Expect(err.Error()).To(ContainSubstring("shared secrets cannot be used"))
+	})
+
+	It("rejects a Secret owned by another tenant", func() {
+		const otherTenant = "other-userdata-tenant"
+		tenantsDao, err := dao.NewGenericDAO[*privatev1.Tenant]().
+			SetLogger(logger).
+			SetTenancyLogic(tenancy).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+		_, err = tenantsDao.Create().SetObject(privatev1.Tenant_builder{
+			Id: otherTenant,
+			Metadata: privatev1.Metadata_builder{
+				Name:   otherTenant,
+				Tenant: otherTenant,
+			}.Build(),
+		}.Build()).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+
+		created, err := secretsDao.Create().SetObject(privatev1.Secret_builder{
+			Metadata: privatev1.Metadata_builder{
+				Name:   fmt.Sprintf("other-userdata-%s", uuid.NewString()[:8]),
+				Tenant: otherTenant,
+			}.Build(),
+			Data: map[string][]byte{userDataSecretDataKey: []byte("#cloud-config")},
+		}.Build()).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+
+		restrictedTenancy := auth.NewMockTenancyLogic(ctrl)
+		restrictedVisibility, err := auth.NewVisibility().
+			AddVisibleTenants(auth.SharedTenant, testTenant).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+		restrictedTenancy.EXPECT().DetermineVisibility(gomock.Any()).
+			Return(restrictedVisibility, nil).AnyTimes()
+		restrictedSecretsDao, err := dao.NewGenericDAO[*privatev1.Secret]().
+			SetLogger(logger).
+			SetTenancyLogic(restrictedTenancy).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		_, err = validateUserDataSecret(ctx, logger, restrictedSecretsDao, nil,
+			privatev1.SecretLocalReference_builder{Id: created.GetObject().GetId()}.Build())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		Expect(err.Error()).To(ContainSubstring("there is no secret"))
+	})
+
+	It("returns Internal when a Vault-backed Secret can't be loaded without a store", func() {
+		updated, err := secretsDao.Create().SetObject(privatev1.Secret_builder{
+			Metadata: privatev1.Metadata_builder{
+				Name:   fmt.Sprintf("vault-userdata-%s", uuid.NewString()[:8]),
+				Tenant: testTenant,
+			}.Build(),
+			Backend: privatev1.SecretBackend_SECRET_BACKEND_VAULT,
+		}.Build()).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+
+		_, err = validateUserDataSecret(ctx, logger, secretsDao, nil,
+			privatev1.SecretLocalReference_builder{Id: updated.GetObject().GetId()}.Build())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.Internal))
 	})
 
 	It("rejects setting a Compute reference while inline user data remains", func() {
@@ -195,6 +255,29 @@ var _ = Describe("User data secret validation", func() {
 				}.Build(),
 			}.Build(),
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.user_data", "spec.user_data_secret"}},
+		}.Build()
+		Expect(server.validateUserDataMutualExclusionForUpdate(ctx, request)).To(Succeed())
+		Expect(server.validateImmutability(ctx, request)).To(Succeed())
+	})
+
+	It("allows a BareMetal Secret reference to be assigned when no user data exists", func() {
+		server, err := NewPrivateBareMetalInstancesServer().SetLogger(logger).
+			SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
+		Expect(err).ToNot(HaveOccurred())
+		created, err := server.generic.dao.Create().SetObject(privatev1.BareMetalInstance_builder{
+			Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("bmi-%s", uuid.NewString()[:8]), Tenant: testTenant}.Build(),
+			Spec:     privatev1.BareMetalInstanceSpec_builder{}.Build(),
+		}.Build()).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+
+		request := privatev1.BareMetalInstancesUpdateRequest_builder{
+			Object: privatev1.BareMetalInstance_builder{
+				Id: created.GetObject().GetId(),
+				Spec: privatev1.BareMetalInstanceSpec_builder{
+					UserDataSecret: privatev1.SecretLocalReference_builder{Id: "secret-id", Name: "secret-name"}.Build(),
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.user_data_secret"}},
 		}.Build()
 		Expect(server.validateUserDataMutualExclusionForUpdate(ctx, request)).To(Succeed())
 		Expect(server.validateImmutability(ctx, request)).To(Succeed())

@@ -70,8 +70,11 @@ func validateUserDataSecret(
 	}
 	secret := secretResponse.GetObject()
 	data := secret.GetData()
-	if len(data) == 0 && secretStore != nil &&
-		secret.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT {
+	if len(data) == 0 && secret.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT {
+		if secretStore == nil {
+			logger.ErrorContext(ctx, "Failed to load user_data_secret value: secret store isn't configured")
+			return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to resolve user_data_secret reference")
+		}
 		metadata := secret.GetMetadata()
 		data, err = secretStore.Fetch(ctx, metadata.GetTenant(), metadata.GetProject(), metadata.GetName())
 		if err != nil {

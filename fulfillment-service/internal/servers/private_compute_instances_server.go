@@ -501,7 +501,13 @@ func (s *PrivateComputeInstancesServer) validateUserDataMutualExclusionForUpdate
 	}
 	existingResponse, err := s.generic.dao.Get().SetId(request.GetObject().GetId()).Do(ctx)
 	if err != nil {
-		return err
+		var notFoundErr *dao.ErrNotFound
+		if errors.As(err, &notFoundErr) {
+			return grpcstatus.Errorf(grpccodes.NotFound, "compute instance '%s' not found",
+				request.GetObject().GetId())
+		}
+		s.logger.ErrorContext(ctx, "Failed to load compute instance for user data validation", "error", err)
+		return grpcstatus.Errorf(grpccodes.Internal, "failed to validate compute instance user data")
 	}
 	existingSpec := existingResponse.GetObject().GetSpec()
 	if settingRef && existingSpec.HasUserData() && !hasMaskPrefix(mask, "spec.user_data") {

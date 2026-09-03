@@ -28,6 +28,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/events"
 )
 
+// VolumesServerBuilder configures and constructs a VolumesServer. Use NewVolumesServer to create one.
 type VolumesServerBuilder struct {
 	logger            *slog.Logger
 	notifier          events.Notifier
@@ -39,6 +40,8 @@ type VolumesServerBuilder struct {
 
 var _ publicv1.VolumesServer = (*VolumesServer)(nil)
 
+// VolumesServer is the public-facing gRPC server for volumes. It delegates to the private server
+// and maps between public and private protobuf types, filtering out private-only fields.
 type VolumesServer struct {
 	publicv1.UnimplementedVolumesServer
 
@@ -48,6 +51,7 @@ type VolumesServer struct {
 	outMapper *GenericMapper[*privatev1.Volume, *publicv1.Volume]
 }
 
+// NewVolumesServer creates a new builder for the public volumes server.
 func NewVolumesServer() *VolumesServerBuilder {
 	return &VolumesServerBuilder{}
 }
@@ -89,6 +93,8 @@ func (b *VolumesServerBuilder) SetTierResolver(value TierResolverFunc) *VolumesS
 	return b
 }
 
+// Build constructs the VolumesServer from the configured parameters. Returns an error if any
+// mandatory parameter is missing.
 func (b *VolumesServerBuilder) Build() (result *VolumesServer, err error) {
 	// Check parameters:
 	if b.logger == nil {
@@ -144,6 +150,7 @@ func (b *VolumesServerBuilder) Build() (result *VolumesServer, err error) {
 	return
 }
 
+// List retrieves volumes visible to the current tenant, mapping results from private to public format.
 func (s *VolumesServer) List(ctx context.Context,
 	request *publicv1.VolumesListRequest) (response *publicv1.VolumesListResponse, err error) {
 	// Create private request with same parameters:
@@ -185,6 +192,7 @@ func (s *VolumesServer) List(ctx context.Context,
 	return
 }
 
+// Get retrieves a single volume by ID, mapping the result from private to public format.
 func (s *VolumesServer) Get(ctx context.Context,
 	request *publicv1.VolumesGetRequest) (response *publicv1.VolumesGetResponse, err error) {
 	// Create private request:
@@ -216,6 +224,7 @@ func (s *VolumesServer) Get(ctx context.Context,
 	return
 }
 
+// Create creates a new volume, mapping the request from public to private format and the response back.
 func (s *VolumesServer) Create(ctx context.Context,
 	request *publicv1.VolumesCreateRequest) (response *publicv1.VolumesCreateResponse, err error) {
 	// Map the public volume to private format:
@@ -264,6 +273,7 @@ func (s *VolumesServer) Create(ctx context.Context,
 	return
 }
 
+// Update modifies an existing volume, mapping between public and private formats and respecting field masks.
 func (s *VolumesServer) Update(ctx context.Context,
 	request *publicv1.VolumesUpdateRequest) (response *publicv1.VolumesUpdateResponse, err error) {
 	// Validate the request:
@@ -336,6 +346,7 @@ func (s *VolumesServer) Update(ctx context.Context,
 	return
 }
 
+// Delete removes a volume by ID, delegating to the private server.
 func (s *VolumesServer) Delete(ctx context.Context,
 	request *publicv1.VolumesDeleteRequest) (response *publicv1.VolumesDeleteResponse, err error) {
 	// Create private request:

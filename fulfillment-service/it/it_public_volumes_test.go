@@ -27,6 +27,10 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 )
 
+// testVolBackendPassword is a dummy credential for a StorageBackend that only ever exists for the
+// duration of a test and is never used to reach a real system.
+const testVolBackendPassword = "secret"
+
 var _ = Describe("Public volumes", func() {
 	var (
 		ctx             context.Context
@@ -53,7 +57,7 @@ var _ = Describe("Public volumes", func() {
 					Endpoint: "https://storage.example.com:8443",
 					Credentials: privatev1.StorageBackendCredentials_builder{
 						Username: "admin",
-						Password: "secret",
+						Password: testVolBackendPassword,
 					}.Build(),
 				}.Build(),
 			}.Build(),
@@ -61,9 +65,10 @@ var _ = Describe("Public volumes", func() {
 		Expect(err).ToNot(HaveOccurred())
 		backendID := backendResp.GetObject().GetId()
 		DeferCleanup(func() {
-			_, _ = backendsClient.Delete(ctx, privatev1.StorageBackendsDeleteRequest_builder{
+			_, err := backendsClient.Delete(ctx, privatev1.StorageBackendsDeleteRequest_builder{
 				Id: backendID,
 			}.Build())
+			Expect(err).ToNot(HaveOccurred())
 		})
 
 		tiersClient := privatev1.NewStorageTiersClient(tool.InternalView().AdminConn())
@@ -74,10 +79,10 @@ var _ = Describe("Public volumes", func() {
 					Name: storageTierName,
 				}.Build(),
 				Spec: privatev1.StorageTierSpec_builder{
-					Backends: []*privatev1.StorageTierBackendAssociation{
-						privatev1.StorageTierBackendAssociation_builder{
+					Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
+					Backends: []*privatev1.BackendAssociation{
+						privatev1.BackendAssociation_builder{
 							BackendId: backendID,
-							Protocol:  privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
 						}.Build(),
 					},
 				}.Build(),
@@ -86,9 +91,10 @@ var _ = Describe("Public volumes", func() {
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func() {
 			tiersClient := privatev1.NewStorageTiersClient(tool.InternalView().AdminConn())
-			_, _ = tiersClient.Delete(ctx, privatev1.StorageTiersDeleteRequest_builder{
+			_, err := tiersClient.Delete(ctx, privatev1.StorageTiersDeleteRequest_builder{
 				Id: storageTierName,
 			}.Build())
+			Expect(err).ToNot(HaveOccurred())
 		})
 	})
 
@@ -109,9 +115,15 @@ var _ = Describe("Public volumes", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func() {
-			_, _ = privateClient.Delete(ctx, privatev1.VolumesDeleteRequest_builder{
+			_, err := privateClient.Delete(ctx, privatev1.VolumesDeleteRequest_builder{
 				Id: response.GetObject().GetId(),
 			}.Build())
+			// Accept NotFound since the delete test may have already removed the volume.
+			if err != nil {
+				st, ok := grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(st.Code()).To(Equal(grpccodes.NotFound))
+			}
 		})
 		return response.GetObject()
 	}

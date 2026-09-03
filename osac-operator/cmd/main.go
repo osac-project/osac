@@ -206,6 +206,14 @@ func (f *controllerFlags) enableAllIfNoneSet() {
 	}
 }
 
+func (f *controllerFlags) validate() error {
+	if f.Cluster && !f.ComputeInstance && !f.BareMetalInstance {
+		return fmt.Errorf(
+			"CaaS (Cluster) requires at least one of VMaaS (ComputeInstance) or BMaaS (BareMetalInstance)")
+	}
+	return nil
+}
+
 // addSchemesForLocalControllers registers only the API schemes required by the enabled controllers.
 // Must be called before creating the manager.
 func addSchemesForLocalControllers(
@@ -1044,6 +1052,11 @@ func main() {
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
 	ctrlFlags.enableAllIfNoneSet()
+
+	if err := ctrlFlags.validate(); err != nil {
+		setupLog.Error(err, "invalid controller flag combination")
+		os.Exit(1)
+	}
 
 	if remoteClusterKubeconfig != "" && ctrlFlags.Cluster {
 		setupLog.Error(nil, "remote cluster kubeconfig option is not supported along with cluster controller")

@@ -1,5 +1,17 @@
 # Kind dev environment -- instance values for osac chart.
 
+# --- Service Enablement ---
+global:
+  services:
+    caas:
+      enabled: true
+    vmaas:
+      enabled: true
+    bmaas:
+      enabled: true
+    maas:
+      enabled: false
+
 # --- Operator ---
 operator:
   image:
@@ -18,11 +30,8 @@ operator:
     serverAddress: "fulfillment-internal-api:8001"
     tokenFile: "/var/run/secrets/kubernetes.io/serviceaccount/token"
   controllers:
-    clusterOrder: true
-    computeInstance: true
     tenant: true
     networking: true
-    bareMetalInstance: true
   certs:
     issuerRef:
       name: default-ca
@@ -118,9 +127,9 @@ aap:
     publishTemplates:
       enabled: false
 
-# --- Bare Metal Fulfillment (disabled) ---
+# --- Bare Metal Fulfillment (no Metal3 in Kind — deploy chart but 0 replicas) ---
 bmf:
-  enabled: false
+  replicaCount: 0
   secrets:
     inventoryConfig: osac-inventory-config-metal3-test
     managementConfig: osac-management-config-metal3-test

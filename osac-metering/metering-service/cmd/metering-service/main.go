@@ -56,10 +56,15 @@ type config struct {
 	dbURLFile              string
 	heartbeatInterval      time.Duration
 	reconciliationInterval time.Duration
+	enableCaaS             bool
+	enableVMaaS            bool
+	enableBMaaS            bool
+	enableMaaS             bool
 }
 
 func main() {
 	cfg := configFromEnv()
+	cfg.enableAllIfNoneSet()
 	if err := cfg.validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "configuration error: %v\n", err)
 		os.Exit(2)
@@ -91,6 +96,23 @@ func configFromEnv() *config {
 		dbURLFile:              envOrDefault("DB_URL_FILE", "/etc/metering/db"),
 		heartbeatInterval:      parseDurationOrDefault(os.Getenv("HEARTBEAT_INTERVAL"), 60*time.Second),
 		reconciliationInterval: parseDurationOrDefault(os.Getenv("RECONCILIATION_INTERVAL"), 60*time.Minute),
+		enableCaaS:             envBool("ENABLE_CAAS"),
+		enableVMaaS:            envBool("ENABLE_VMAAS"),
+		enableBMaaS:            envBool("ENABLE_BMAAS"),
+		enableMaaS:             envBool("ENABLE_MAAS"),
+	}
+}
+
+func envBool(key string) bool {
+	return strings.EqualFold(os.Getenv(key), "true")
+}
+
+func (c *config) enableAllIfNoneSet() {
+	if !c.enableCaaS && !c.enableVMaaS && !c.enableBMaaS && !c.enableMaaS {
+		c.enableCaaS = true
+		c.enableVMaaS = true
+		c.enableBMaaS = true
+		c.enableMaaS = true
 	}
 }
 
@@ -205,8 +227,21 @@ func run(ctx context.Context, logger logr.Logger, cfg *config) error {
 
 	publisher := kafkapub.NewPublisher(producer)
 
-	computeClient := privatev1.NewComputeInstancesClient(grpcConn)
-	clusterClient := privatev1.NewClustersClient(grpcConn)
+	logger.Info("service enablement",
+		"caas", cfg.enableCaaS,
+		"vmaas", cfg.enableVMaaS,
+		"bmaas", cfg.enableBMaaS,
+		"maas", cfg.enableMaaS,
+	)
+
+	var computeClient privatev1.ComputeInstancesClient
+	var clusterClient privatev1.ClustersClient
+	if cfg.enableVMaaS {
+		computeClient = privatev1.NewComputeInstancesClient(grpcConn)
+	}
+	if cfg.enableCaaS {
+		clusterClient = privatev1.NewClustersClient(grpcConn)
+	}
 	reconciler := reconciliation.NewReconciler(computeClient, clusterClient, store, publisher, logger, cfg.heartbeatInterval)
 
 	logger.Info("running startup reconciliation")
@@ -237,6 +272,7 @@ func run(ctx context.Context, logger logr.Logger, cfg *config) error {
 
 	eventsClient := privatev1.NewEventsClient(grpcConn)
 	consumer := watch.NewConsumer(eventsClient, publisher, store, logger)
+	consumer.Filter = watch.BuildFilter(cfg.enableVMaaS, cfg.enableCaaS)
 	err = consumer.Run(ctx)
 	runCancel()
 	wg.Wait()

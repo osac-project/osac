@@ -14,6 +14,22 @@ kafka:
   clusterNamespace: osac-kafka
   replicas: 3
 
+# --- Service Enablement ---
+# Controls which service tiers are active across all OSAC components.
+# When all are true (the default), OSAC operates as a full-stack cloud.
+# Disabling a tier stops its gRPC/REST endpoints, operator controllers,
+# and dependent infrastructure (e.g. BMF operator for BMaaS).
+global:
+  services:
+    caas:
+      enabled: true
+    vmaas:
+      enabled: true
+    bmaas:
+      enabled: true
+    maas:
+      enabled: true
+
 # --- Operator CRDs ---
 operatorCrds:
   install: true
@@ -43,11 +59,8 @@ operator:
     serverAddress: "fulfillment-internal-api:8001"
     tokenFile: "/var/run/secrets/kubernetes.io/serviceaccount/token"
   controllers:
-    clusterOrder: true
-    computeInstance: true
     tenant: true
     networking: true
-    bareMetalInstance: true
     storage: true
   configSecret:
     name: "osac-config"
@@ -252,7 +265,6 @@ bmfCrds: {}
 
 # --- Bare Metal Fulfillment Operator ---
 bmf:
-  enabled: true
   image:
     repository: ghcr.io/osac-project/bare-metal-fulfillment-operator
     tag: latest  # PLACEHOLDER -- overwritten at release time by publish-charts.yaml

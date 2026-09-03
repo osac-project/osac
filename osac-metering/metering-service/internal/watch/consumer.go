@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	cloudevents "github.com/cloudevents/sdk-go/v2"
@@ -42,8 +43,18 @@ const (
 	defaultInitialDelay   = 1 * time.Second
 	defaultMaxDelay       = 30 * time.Second
 	defaultHandlerRetries = 3
-	meteringFilter        = "has(event.compute_instance) || has(event.cluster)"
 )
+
+func BuildFilter(vmaas, caas bool) string {
+	var parts []string
+	if vmaas {
+		parts = append(parts, "has(event.compute_instance)")
+	}
+	if caas {
+		parts = append(parts, "has(event.cluster)")
+	}
+	return strings.Join(parts, " || ")
+}
 
 // Consumer connects to the fulfillment-service gRPC Watch stream, maps
 // incoming events to CloudEvents, and publishes them to Kafka. It
@@ -57,6 +68,7 @@ type Consumer struct {
 	InitialDelay   time.Duration
 	MaxDelay       time.Duration
 	HandlerRetries int
+	Filter         string
 }
 
 func NewConsumer(
@@ -73,6 +85,7 @@ func NewConsumer(
 		InitialDelay:   defaultInitialDelay,
 		MaxDelay:       defaultMaxDelay,
 		HandlerRetries: defaultHandlerRetries,
+		Filter:         BuildFilter(true, true),
 	}
 }
 
@@ -101,7 +114,7 @@ func (c *Consumer) Run(ctx context.Context) error {
 }
 
 func (c *Consumer) consumeStream(ctx context.Context) (int, error) {
-	filter := meteringFilter
+	filter := c.Filter
 	stream, err := c.client.Watch(ctx, &privatev1.EventsWatchRequest{
 		Filter: &filter,
 	})

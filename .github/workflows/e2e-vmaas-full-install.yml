@@ -186,7 +186,7 @@ jobs:
   #
   # bare-metal-fulfillment-operator's image override (bmf.image.repository)
   # is currently a no-op in this flow specifically: values/vmaas-ci/values.yaml
-  # sets bmf.enabled: false, so the chart isn't deployed here at all. Still
+  # sets global.services.bmaas.enabled: false, so the chart isn't deployed here at all. Still
   # built from source for consistency with the other 3 components (all 4
   # should build from the PR in every e2e flow, even where one isn't
   # currently deployed) -- revisit if vmaas ever needs BMF enabled.

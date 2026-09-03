@@ -99,15 +99,15 @@ spec:
               fieldRef:
                 fieldPath: metadata.namespace
           - name: OSAC_ENABLE_CLUSTER_CONTROLLER
-            value: {{ .Values.controllers.clusterOrder | quote }}
+            value: {{ include "osac-operator.controllerEnabled" (list . "clusterOrder" "caas") | quote }}
           - name: OSAC_ENABLE_COMPUTE_INSTANCE_CONTROLLER
-            value: {{ .Values.controllers.computeInstance | quote }}
+            value: {{ include "osac-operator.controllerEnabled" (list . "computeInstance" "vmaas") | quote }}
           - name: OSAC_ENABLE_TENANT_CONTROLLER
             value: {{ .Values.controllers.tenant | quote }}
           - name: OSAC_ENABLE_NETWORKING_CONTROLLER
             value: {{ .Values.controllers.networking | quote }}
           - name: OSAC_ENABLE_BAREMETAL_INSTANCE_CONTROLLER
-            value: {{ .Values.controllers.bareMetalInstance | quote }}
+            value: {{ include "osac-operator.controllerEnabled" (list . "bareMetalInstance" "bmaas") | quote }}
           - name: OSAC_ENABLE_STORAGE_CONTROLLER
             value: {{ .Values.controllers.storage | quote }}
           - name: OSAC_ENABLE_VOLUME_CONTROLLER

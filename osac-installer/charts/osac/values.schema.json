@@ -41,6 +41,62 @@
         }
       }
     },
+    "global": {
+      "type": "object",
+      "description": "Global values propagated to all subcharts via Helm's built-in global mechanism",
+      "properties": {
+        "services": {
+          "type": "object",
+          "description": "Service tier enablement flags. Controls which tiers are active across all OSAC components.",
+          "properties": {
+            "caas": {
+              "type": "object",
+              "description": "Container-as-a-Service (managed Kubernetes clusters)",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "description": "Enable CaaS tier (ClusterOrders, ClusterTemplates, ClusterCatalogItems, ClusterVersions)",
+                  "default": true
+                }
+              }
+            },
+            "vmaas": {
+              "type": "object",
+              "description": "Virtual-Machine-as-a-Service (KubeVirt compute instances)",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "description": "Enable VMaaS tier (ComputeInstances, DiskImages, InstanceTypes, Volumes, ConsoleSessions)",
+                  "default": true
+                }
+              }
+            },
+            "bmaas": {
+              "type": "object",
+              "description": "Bare-Metal-as-a-Service (bare metal host provisioning)",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "description": "Enable BMaaS tier (BareMetalInstances, BareMetalInstanceTypes)",
+                  "default": true
+                }
+              }
+            },
+            "maas": {
+              "type": "object",
+              "description": "Metal-as-a-Service (raw metal access)",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "description": "Enable MaaS tier",
+                  "default": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "operatorCrds": {
       "type": "object",
       "description": "OSAC Operator CRDs configuration",
@@ -169,18 +225,8 @@
         },
         "controllers": {
           "type": "object",
-          "description": "Enable or disable individual operator controllers",
+          "description": "Enable or disable shared-infrastructure operator controllers (service-tier controllers are driven by global.services.*)",
           "properties": {
-            "clusterOrder": {
-              "type": "boolean",
-              "description": "Enable ClusterOrder controller",
-              "default": true
-            },
-            "computeInstance": {
-              "type": "boolean",
-              "description": "Enable ComputeInstance controller",
-              "default": true
-            },
             "tenant": {
               "type": "boolean",
               "description": "Enable Tenant controller",
@@ -189,11 +235,6 @@
             "networking": {
               "type": "boolean",
               "description": "Enable networking controllers",
-              "default": true
-            },
-            "bareMetalInstance": {
-              "type": "boolean",
-              "description": "Enable BareMetalInstance controller",
               "default": true
             },
             "storage": {
@@ -1193,11 +1234,6 @@
       "type": "object",
       "description": "Bare Metal Fulfillment Operator configuration",
       "properties": {
-        "enabled": {
-          "type": "boolean",
-          "description": "Enable or disable the BMF operator subchart",
-          "default": true
-        },
         "image": {
           "type": "object",
           "properties": {
@@ -1225,8 +1261,8 @@
         },
         "replicaCount": {
           "type": "integer",
-          "description": "Number of operator replicas",
-          "minimum": 1,
+          "description": "Number of operator replicas (0 disables the pod without removing the subchart)",
+          "minimum": 0,
           "default": 1
         },
         "resources": {
@@ -1429,7 +1465,10 @@
       "default": [],
       "items": {
         "type": "object",
-        "required": ["name", "role"],
+        "required": [
+          "name",
+          "role"
+        ],
         "properties": {
           "name": {
             "type": "string",
@@ -1437,7 +1476,10 @@
           },
           "role": {
             "type": "string",
-            "enum": ["fabric", "k8s"],
+            "enum": [
+              "fabric",
+              "k8s"
+            ],
             "description": "Manager role: fabric or k8s"
           },
           "description": {
@@ -1504,15 +1546,27 @@
             "limits": {
               "type": "object",
               "properties": {
-                "cpu": { "type": "string", "description": "CPU limit" },
-                "memory": { "type": "string", "description": "Memory limit" }
+                "cpu": {
+                  "type": "string",
+                  "description": "CPU limit"
+                },
+                "memory": {
+                  "type": "string",
+                  "description": "Memory limit"
+                }
               }
             },
             "requests": {
               "type": "object",
               "properties": {
-                "cpu": { "type": "string", "description": "CPU request" },
-                "memory": { "type": "string", "description": "Memory request" }
+                "cpu": {
+                  "type": "string",
+                  "description": "CPU request"
+                },
+                "memory": {
+                  "type": "string",
+                  "description": "Memory request"
+                }
               }
             }
           }
@@ -1661,5 +1715,110 @@
       }
     }
   },
-  "required": []
+  "required": [],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "global": {
+            "properties": {
+              "services": {
+                "properties": {
+                  "caas": {
+                    "properties": {
+                      "enabled": {
+                        "const": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "anyOf": [
+          {
+            "properties": {
+              "global": {
+                "properties": {
+                  "services": {
+                    "properties": {
+                      "vmaas": {
+                        "properties": {
+                          "enabled": {
+                            "const": true
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "global": {
+                "properties": {
+                  "services": {
+                    "properties": {
+                      "bmaas": {
+                        "properties": {
+                          "enabled": {
+                            "const": true
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "global": {
+            "properties": {
+              "services": {
+                "properties": {
+                  "maas": {
+                    "properties": {
+                      "enabled": {
+                        "const": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "global": {
+            "properties": {
+              "services": {
+                "properties": {
+                  "caas": {
+                    "properties": {
+                      "enabled": {
+                        "const": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }

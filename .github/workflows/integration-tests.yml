@@ -327,10 +327,19 @@ jobs:
         CONTAINER_TOOL: docker
       run: make -C osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac
 
+    - name: Build fulfillment-service image from PR
+      env:
+        CONTAINER_TOOL: docker
+      run: |
+        docker build -t localhost/fulfillment-service:it -f fulfillment-service/Containerfile .
+        kind load docker-image localhost/fulfillment-service:it --name osac-dev
+
     - name: Deploy charts
       env:
         CONTAINER_TOOL: docker
-      run: make -C osac-installer install-osac PLATFORM=kind PROFILE=dev NS=osac
+      run: >-
+        make -C osac-installer install-osac PLATFORM=kind PROFILE=dev NS=osac
+        EXTRA_HELM_ARGS="--set service.images.service=localhost/fulfillment-service:it"
 
     - name: Collect diagnostic logs
       if: always()
@@ -382,4 +391,6 @@ jobs:
     - name: Test idempotency (helm upgrade with no changes)
       env:
         CONTAINER_TOOL: docker
-      run: make -C osac-installer install-osac PLATFORM=kind PROFILE=dev NS=osac
+      run: >-
+        make -C osac-installer install-osac PLATFORM=kind PROFILE=dev NS=osac
+        EXTRA_HELM_ARGS="--set service.images.service=localhost/fulfillment-service:it"

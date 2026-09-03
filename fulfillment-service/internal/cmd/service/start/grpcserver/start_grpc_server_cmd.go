@@ -56,6 +56,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/recovery"
 	"github.com/osac-project/osac/fulfillment-service/internal/references"
 	"github.com/osac-project/osac/fulfillment-service/internal/servers"
+	"github.com/osac-project/osac/fulfillment-service/internal/services"
 	shtdwn "github.com/osac-project/osac/fulfillment-service/internal/shutdown"
 	"github.com/osac-project/osac/fulfillment-service/internal/validation"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
@@ -189,6 +190,7 @@ func Cmd() *cobra.Command {
 	)
 	vault.AddBaseFlags(flags)
 	network.AddGrpcKeepaliveFlags(flags)
+	runner.args.services = services.RegisterFlags(flags)
 	return command
 }
 
@@ -208,16 +210,26 @@ type runnerContext struct {
 		tokenIssuer              string
 		emergencyServiceAccounts []string
 		vaultBase                vault.BaseConfig
+		services                 *services.Flags
 	}
 }
 
 // run runs the `start grpc-server` command.
 func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:gocyclo
+	// Apply service flag defaults and validate (before context creation to avoid cancel leak):
+	c.args.services.EnableAllIfNoneSet()
+	if err := c.args.services.Validate(); err != nil {
+		return fmt.Errorf("invalid service flags: %w", err)
+	}
+
 	// Get the context and create a cancellable version:
 	ctx, cancel := context.WithCancel(cmd.Context())
 
 	// Get the dependencies from the context:
 	c.logger = logging.LoggerFromContext(ctx)
+	c.logger.InfoContext(ctx, "Service enablement",
+		slog.Any("enabled", c.args.services.EnabledServices()),
+	)
 
 	// Configure the Kubernetes libraries to use the logger:
 	logrLogger := logr.FromSlogHandler(c.logger.Handler())
@@ -500,6 +512,14 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		return fmt.Errorf("failed to read gRPC keepalive configuration: %w", err)
 	}
 
+	// Create the disabled-service request counter and unknown service handler:
+	disabledServiceCounter := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "fulfillment_disabled_service_requests_total",
+		Help: "Total requests to disabled services.",
+	}, []string{"service"})
+	metricsRegisterer.MustRegister(disabledServiceCounter)
+	unknownHandler := NewUnknownServiceHandler(c.args.services, disabledServiceCounter)
+
 	// Create the gRPC server:
 	c.logger.InfoContext(ctx, "Creating gRPC server")
 	grpcServer := grpc.NewServer(
@@ -511,6 +531,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 			MinTime:             keepaliveConfig.MinTime,
 			PermitWithoutStream: true,
 		}),
+		grpc.UnknownServiceHandler(unknownHandler),
 		grpc.ChainUnaryInterceptor(
 			panicInterceptor.UnaryServer,
 			metricsInterceptor.UnaryServer,
@@ -680,6 +701,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		SecretStore:             secretStore,
 		TierResolver:            tierResolver,
 		PrivateUsersServer:      privateUsersServer,
+		Services:                c.args.services,
 	})
 	if err != nil {
 		return err
@@ -716,40 +738,42 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	// filterable-resource-exempt: singleton JWKS fetch, no List RPC or CEL filter field
 	publicv1.RegisterJsonWebKeySetServer(grpcServer, jsonWebKeySetServer)
 
-	// Build the console target resolver (lookup/policy only):
-	hubLookup := servers.NewPrivateServerHubLookup(privateHubsServer, privateSecretsServer)
-	consoleResolver, err := servers.NewConsoleTargetResolver().
-		SetLogger(c.logger).
-		SetComputeInstanceLookup(servers.NewPrivateServerCILookup(privateComputeInstancesServer)).
-		SetHubLookup(hubLookup).
-		SetHubClientFactory(servers.NewDefaultHubClientFactory(hubScheme)).
-		Build()
-	if err != nil {
-		return fmt.Errorf("failed to create console target resolver: %w", err)
-	}
+	if c.args.services.VMaaS {
+		// Build the console target resolver (lookup/policy only):
+		hubLookup := servers.NewPrivateServerHubLookup(privateHubsServer, privateSecretsServer)
+		consoleResolver, err := servers.NewConsoleTargetResolver().
+			SetLogger(c.logger).
+			SetComputeInstanceLookup(servers.NewPrivateServerCILookup(privateComputeInstancesServer)).
+			SetHubLookup(hubLookup).
+			SetHubClientFactory(servers.NewDefaultHubClientFactory(hubScheme)).
+			Build()
+		if err != nil {
+			return fmt.Errorf("failed to create console target resolver: %w", err)
+		}
 
-	// Build the console session service (orchestration):
-	sessionService, err := console.NewSessionService().
-		SetLogger(c.logger).
-		SetResolver(consoleResolver).
-		SetSealer(ticketSealer).
-		Build()
-	if err != nil {
-		return fmt.Errorf("failed to create console session service: %w", err)
-	}
+		// Build the console session service (orchestration):
+		sessionService, err := console.NewSessionService().
+			SetLogger(c.logger).
+			SetResolver(consoleResolver).
+			SetSealer(ticketSealer).
+			Build()
+		if err != nil {
+			return fmt.Errorf("failed to create console session service: %w", err)
+		}
 
-	// Create the console sessions server (thin adapter):
-	c.logger.InfoContext(ctx, "Creating console server")
-	consoleServer, err := servers.NewConsoleServer().
-		SetLogger(c.logger).
-		SetSessionService(sessionService).
-		Build()
-	if err != nil {
-		return fmt.Errorf("failed to create console server: %w", err)
+		// Create the console sessions server (thin adapter):
+		c.logger.InfoContext(ctx, "Creating console server")
+		consoleServer, err := servers.NewConsoleServer().
+			SetLogger(c.logger).
+			SetSessionService(sessionService).
+			Build()
+		if err != nil {
+			return fmt.Errorf("failed to create console server: %w", err)
+		}
+		// filterable-resource-exempt: session/action RPC, no List RPC or CEL filter field; also depends on
+		// privateHubsServer/privateComputeInstancesServer from RegisterResourceServers, so it must be built after
+		publicv1.RegisterConsoleSessionsServer(grpcServer, consoleServer)
 	}
-	// filterable-resource-exempt: session/action RPC, no List RPC or CEL filter field; also depends on
-	// privateHubsServer/privateComputeInstancesServer from RegisterResourceServers, so it must be built after
-	publicv1.RegisterConsoleSessionsServer(grpcServer, consoleServer)
 
 	// Create the events server:
 	c.logger.InfoContext(ctx, "Creating events server")

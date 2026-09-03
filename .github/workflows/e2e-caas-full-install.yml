@@ -191,7 +191,7 @@ jobs:
   #
   # bare-metal-fulfillment-operator's image override (bmf.image.repository)
   # is currently a no-op in this flow specifically: values/caas-ci/values.yaml
-  # sets bmf.enabled: false, so the chart isn't deployed here at all. Still
+  # sets global.services.bmaas.enabled: false, so the chart isn't deployed here at all. Still
   # built from source for consistency with the other components -- revisit
   # if caas ever needs BMF enabled.
   e2e-caas-full-install:

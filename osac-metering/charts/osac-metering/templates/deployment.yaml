@@ -130,6 +130,22 @@ spec:
               value: {{ include "osac-metering.kafkaSaslUsername" . | quote }}
             - name: KAFKA_SASL_PASSWORD_FILE
               value: /etc/kafka-secrets/password
+            {{- if include "osac-metering.serviceEnabled" (list . "caas") }}
+            - name: ENABLE_CAAS
+              value: "true"
+            {{- end }}
+            {{- if include "osac-metering.serviceEnabled" (list . "vmaas") }}
+            - name: ENABLE_VMAAS
+              value: "true"
+            {{- end }}
+            {{- if include "osac-metering.serviceEnabled" (list . "bmaas") }}
+            - name: ENABLE_BMAAS
+              value: "true"
+            {{- end }}
+            {{- if include "osac-metering.serviceEnabled" (list . "maas") }}
+            - name: ENABLE_MAAS
+              value: "true"
+            {{- end }}
           volumeMounts:
             - name: kafka-secrets
               mountPath: /etc/kafka-secrets

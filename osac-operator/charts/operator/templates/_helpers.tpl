@@ -68,3 +68,34 @@ Service account name
 {{- include "osac-operator.fullname" . }}
 {{- end }}
 {{- end }}
+
+{{/*
+Resolve a service-tier controller flag from global.services or a local override.
+Args: list of [context, controllerKey, serviceKey]
+  - controllerKey: key in .Values.controllers (e.g. "clusterOrder")
+  - serviceKey: key in .Values.global.services (e.g. "caas")
+If controllers.<controllerKey> is explicitly set, it wins.
+Otherwise, falls back to global.services.<serviceKey>.enabled (default true).
+*/}}
+{{- define "osac-operator.controllerEnabled" -}}
+{{- $ctx := index . 0 -}}
+{{- $ctrlKey := index . 1 -}}
+{{- $svcKey := index . 2 -}}
+{{- $ctrlVal := index $ctx.Values.controllers $ctrlKey -}}
+{{- if $ctrlVal | kindIs "invalid" | not -}}
+{{- $ctrlVal -}}
+{{- else -}}
+{{- $enabled := true -}}
+{{- if $ctx.Values.global -}}
+{{- if $ctx.Values.global.services -}}
+{{- $svc := index $ctx.Values.global.services $svcKey -}}
+{{- if $svc -}}
+{{- if hasKey $svc "enabled" -}}
+{{- $enabled = $svc.enabled -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $enabled -}}
+{{- end -}}
+{{- end }}

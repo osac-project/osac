@@ -25,11 +25,8 @@ fulfillment:
   tokenFile: ""
 
 controllers:
-  clusterOrder: true
-  computeInstance: true
   tenant: true
   networking: true
-  bareMetalInstance: true
   storage: true
   # The Volume controller provisions volumes via the vendor CSI controllers.
   # Safe to leave enabled even without a vendor backend: when vendorControllers

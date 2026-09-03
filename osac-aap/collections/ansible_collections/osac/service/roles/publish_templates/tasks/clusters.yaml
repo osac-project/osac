@@ -4,7 +4,13 @@
     validate_certs: "{{ publish_templates_validate_certs | default(true) | bool }}"
     headers:
       authorization: Bearer {{ osac_fulfillment_service_token }}
+    status_code: [200, 404]
   register: cluster_template_check
+
+- name: Skip cluster templates when service is disabled
+  ansible.builtin.debug:
+    msg: "CaaS service not available (HTTP 404) — skipping cluster template publishing"
+  when: cluster_template_check.status == 404
 
 - name: Create list of existing cluster template template ids    # noqa: jinja[invalid]
   ansible.builtin.set_fact:
@@ -12,14 +18,14 @@
       {{
       cluster_template_check | json_query("json.items[].id")
       }}
-  when: cluster_template_check is success and cluster_template_check.json.get('items', []) | length > 0
+  when: cluster_template_check.status != 404 and cluster_template_check is success and cluster_template_check.json.get('items', []) | length > 0
 
 - name: Update existing cluster template
   loop: "{{ osac_cluster_templates }}"
   loop_control:
     label: "{{ template.id }}"
     loop_var: template
-  when: cluster_template_ids is defined and template.id in cluster_template_ids
+  when: cluster_template_check.status != 404 and cluster_template_ids is defined and template.id in cluster_template_ids
   ansible.builtin.uri:
     url: "{{ publish_templates_cluster_api_endpoint }}/{{ template.id }}"
     validate_certs: "{{ publish_templates_validate_certs | default(true) | bool }}"
@@ -34,7 +40,7 @@
   loop_control:
     label: "{{ template.id }}"
     loop_var: template
-  when: cluster_template_ids is not defined or template.id not in cluster_template_ids
+  when: cluster_template_check.status != 404 and (cluster_template_ids is not defined or template.id not in cluster_template_ids)
   ansible.builtin.uri:
     url: "{{ publish_templates_cluster_api_endpoint }}"
     validate_certs: "{{ publish_templates_validate_certs | default(true) | bool }}"

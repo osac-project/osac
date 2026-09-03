@@ -1,5 +1,17 @@
 # CaaS CI environment -- instance values for osac chart.
 
+# --- Service Enablement ---
+global:
+  services:
+    caas:
+      enabled: true
+    vmaas:
+      enabled: false
+    bmaas:
+      enabled: true
+    maas:
+      enabled: false
+
 # --- Operator ---
 operator:
   image:
@@ -17,8 +29,6 @@ operator:
     serverAddress: "fulfillment-internal-api:8001"
     tokenFile: "/var/run/secrets/kubernetes.io/serviceaccount/token"
   controllers:
-    clusterOrder: true
-    computeInstance: false
     tenant: true
     networking: true
     storage: true
@@ -143,7 +153,6 @@ validation:
 
 # --- Bare Metal Fulfillment Operator ---
 bmf:
-  enabled: false
   image:
     repository: ghcr.io/osac-project/bare-metal-fulfillment-operator
     tag: latest

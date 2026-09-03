@@ -289,10 +289,18 @@ func (r *Reconciler) reconcileFulfillmentResources(ctx context.Context, fulfillm
 
 func (r *Reconciler) reconcileMissedDeletions(ctx context.Context, fulfillmentState map[string]fulfillmentResource, projMap map[string]projection.ResourceState, now time.Time) (int, error) {
 	corrections := 0
+	computeSkipLogged := false
 	clusterSkipLogged := false
 
 	for id, ps := range projMap {
 		if _, exists := fulfillmentState[id]; !exists {
+			if ps.ResourceType == events.ResourceTypeComputeInstance && r.computeClient == nil {
+				if !computeSkipLogged {
+					r.logger.Info("skipping compute_instance missed deletion checks, no compute client configured")
+					computeSkipLogged = true
+				}
+				continue
+			}
 			if ps.ResourceType == events.ResourceTypeClusterOrder && r.clusterClient == nil {
 				if !clusterSkipLogged {
 					r.logger.Info("skipping cluster_order missed deletion checks, no cluster client configured")
@@ -419,8 +427,10 @@ func isBillableForType(resourceType, state string) (bool, error) {
 func (r *Reconciler) loadFulfillmentState(ctx context.Context) (map[string]fulfillmentResource, error) {
 	result := make(map[string]fulfillmentResource)
 
-	if err := r.loadComputeInstances(ctx, result); err != nil {
-		return nil, err
+	if r.computeClient != nil {
+		if err := r.loadComputeInstances(ctx, result); err != nil {
+			return nil, err
+		}
 	}
 	if r.clusterClient != nil {
 		if err := r.loadClusters(ctx, result); err != nil {

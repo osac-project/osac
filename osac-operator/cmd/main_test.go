@@ -288,3 +288,50 @@ var _ = Describe("parseVendorControllers", func() {
 		Expect(err.Error()).To(ContainSubstring("backend and endpoint must not be empty"))
 	})
 })
+
+var _ = Describe("controllerFlags.validate", func() {
+	It("accepts all controllers enabled", func() {
+		f := &controllerFlags{
+			Tenant: true, Storage: true, Volume: true,
+			ComputeInstance: true, Cluster: true,
+			Networking: true, BareMetalInstance: true,
+		}
+		Expect(f.validate()).To(Succeed())
+	})
+
+	It("accepts CaaS with VMaaS", func() {
+		f := &controllerFlags{Cluster: true, ComputeInstance: true}
+		Expect(f.validate()).To(Succeed())
+	})
+
+	It("accepts CaaS with BMaaS", func() {
+		f := &controllerFlags{Cluster: true, BareMetalInstance: true}
+		Expect(f.validate()).To(Succeed())
+	})
+
+	It("accepts CaaS with both VMaaS and BMaaS", func() {
+		f := &controllerFlags{Cluster: true, ComputeInstance: true, BareMetalInstance: true}
+		Expect(f.validate()).To(Succeed())
+	})
+
+	It("rejects CaaS without VMaaS or BMaaS", func() {
+		f := &controllerFlags{Cluster: true, Tenant: true, Networking: true}
+		Expect(f.validate()).To(MatchError(ContainSubstring("ComputeInstance")))
+		Expect(f.validate()).To(MatchError(ContainSubstring("BareMetalInstance")))
+	})
+
+	It("accepts VMaaS without CaaS", func() {
+		f := &controllerFlags{ComputeInstance: true, Tenant: true}
+		Expect(f.validate()).To(Succeed())
+	})
+
+	It("accepts BMaaS without CaaS", func() {
+		f := &controllerFlags{BareMetalInstance: true, Tenant: true}
+		Expect(f.validate()).To(Succeed())
+	})
+
+	It("accepts no controllers enabled", func() {
+		f := &controllerFlags{}
+		Expect(f.validate()).To(Succeed())
+	})
+})

@@ -4,7 +4,13 @@
     validate_certs: "{{ publish_templates_validate_certs | default(true) | bool }}"
     headers:
       authorization: Bearer {{ osac_fulfillment_service_token }}
+    status_code: [200, 404]
   register: compute_instance_template_check
+
+- name: Skip ComputeInstance templates when service is disabled
+  ansible.builtin.debug:
+    msg: "VMaaS service not available (HTTP 404) — skipping compute instance template publishing"
+  when: compute_instance_template_check.status == 404
 
 - name: Create list of existing ComputeInstance template IDs
   ansible.builtin.set_fact:
@@ -12,14 +18,17 @@
       {{
       compute_instance_template_check | json_query("json.items[].id")
       }}
-  when: compute_instance_template_check is success and compute_instance_template_check.json.get('items', []) | length > 0
+  when: >-
+    compute_instance_template_check.status != 404
+    and compute_instance_template_check is success
+    and compute_instance_template_check.json.get('items', []) | length > 0
 
 - name: Update existing ComputeInstance template
   loop: "{{ osac_compute_instance_templates }}"
   loop_control:
     label: "{{ template.id }}"
     loop_var: template
-  when: compute_instance_template_ids is defined and template.id in compute_instance_template_ids
+  when: compute_instance_template_check.status != 404 and compute_instance_template_ids is defined and template.id in compute_instance_template_ids
   ansible.builtin.uri:
     url: "{{ publish_templates_compute_instance_api_endpoint }}/{{ template.id }}"
     validate_certs: "{{ publish_templates_validate_certs | default(true) | bool }}"
@@ -34,7 +43,7 @@
   loop_control:
     label: "{{ template.id }}"
     loop_var: template
-  when: compute_instance_template_ids is not defined or template.id not in compute_instance_template_ids
+  when: compute_instance_template_check.status != 404 and (compute_instance_template_ids is not defined or template.id not in compute_instance_template_ids)
   ansible.builtin.uri:
     url: "{{ publish_templates_compute_instance_api_endpoint }}"
     validate_certs: "{{ publish_templates_validate_certs | default(true) | bool }}"

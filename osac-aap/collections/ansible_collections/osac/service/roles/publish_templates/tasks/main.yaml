@@ -3,7 +3,7 @@
   ansible.builtin.include_tasks: clusters.yaml
 
 - name: Apply templates for compute instances
-  ansible.builtin.import_tasks: compute_instances.yaml
+  ansible.builtin.include_tasks: compute_instances.yaml
 
 - name: Apply templates for bare metal instances
-  ansible.builtin.import_tasks: bare_metal_instances.yaml
+  ansible.builtin.include_tasks: bare_metal_instances.yaml

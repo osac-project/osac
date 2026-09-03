@@ -40,8 +40,8 @@ become top-level slash commands such as `/implement`.
 `.agents/` is gitignored (generated output). If you ever see a real
 `.agents/skills` directory (leftover from an older bootstrap), the wrapper
 converts it into the symlink umbrella on the next run. OSAC owns this
-repo-local directory; install personal skills under `~/.agents/skills`, not
-inside the generated project umbrella.
+repo-local directory; install personal skills under `$CODEX_HOME/skills`
+(normally `~/.codex/skills`), not inside the generated project umbrella.
 
 ## Project config (`.codex/config.toml`)
 

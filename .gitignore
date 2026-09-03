@@ -27,6 +27,9 @@ osac-docs/
 .cursor/
 .gemini/
 
+# Per-worktree agent context (Jira summary written by osac-new-worktree).
+.ai-context/
+
 # Shared design/prd guidance (fan-out). No repo-local files in these trees —
 # ignore the directories so new shared names do not require a gitignore bump.
 .design/

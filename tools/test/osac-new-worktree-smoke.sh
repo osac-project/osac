@@ -112,8 +112,12 @@ EOF
     || fail "bootstrap was not invoked: $(cat "$log")"
   [[ -x "${dest}/tools/bootstrap.sh" ]] \
     || fail "dest should contain tools/bootstrap.sh"
-  grep -q 'redhat.atlassian.net/browse/OSAC-1234' "${dest}/.claude/CLAUDE.md" \
-    || fail "expected Jira context in ${dest}/.claude/CLAUDE.md"
+  grep -q 'redhat.atlassian.net/browse/OSAC-1234' "${dest}/.ai-context/jira.md" \
+    || fail "expected Jira context in ${dest}/.ai-context/jira.md"
+  if [[ -f "${dest}/.claude/CLAUDE.md" ]] \
+     && grep -q 'redhat.atlassian.net/browse/OSAC-1234' "${dest}/.claude/CLAUDE.md"; then
+    fail "Jira context must live in .ai-context/jira.md, not .claude/CLAUDE.md"
+  fi
   pass "worktree dest is osac-<basename> and runs tools/bootstrap.sh"
 }
 
@@ -246,7 +250,7 @@ EOF
   echo "$out" | grep -q "could not fetch Jira ticket" \
     && fail "skip path must not also warn about fetch: $out"
   [[ -f "$jira_log" ]] && fail "jira must not be invoked without timeout: $(cat "$jira_log")"
-  [[ -f "${dest}/.claude/CLAUDE.md" ]] \
+  [[ -f "${dest}/.ai-context/jira.md" ]] \
     && fail "skip path must not write Jira context"
   pass "missing timeout/gtimeout skips Jira fetch"
 }
@@ -289,8 +293,8 @@ EOF
     export OSAC_WORKTREE_PARENT="$parent"
     osac-new-worktree feat/OSAC-1234 >/dev/null
   )
-  grep -q 'gtimeout ticket' "${dest}/.claude/CLAUDE.md" \
-    || fail "expected gtimeout-backed Jira context in ${dest}/.claude/CLAUDE.md"
+  grep -q 'gtimeout ticket' "${dest}/.ai-context/jira.md" \
+    || fail "expected gtimeout-backed Jira context in ${dest}/.ai-context/jira.md"
   grep -q '^gtimeout 15 jira issue view OSAC-1234 --raw$' "$log" \
     || fail "expected Jira to run through gtimeout: $(cat "$log")"
   pass "gtimeout is used when timeout is missing"
@@ -332,11 +336,11 @@ EOF
     export OSAC_WORKTREE_PARENT="$parent"
     osac-new-worktree feat/OSAC-1234 >/dev/null
   )
-  grep -q 'dogfood## Injected' "${dest}/.claude/CLAUDE.md" \
-    || fail "expected stripped summary, got: $(cat "${dest}/.claude/CLAUDE.md")"
-  grep -q 'TaskBad' "${dest}/.claude/CLAUDE.md" \
-    || fail "expected stripped type, got: $(cat "${dest}/.claude/CLAUDE.md")"
-  grep -q '^## Injected' "${dest}/.claude/CLAUDE.md" \
+  grep -q 'dogfood## Injected' "${dest}/.ai-context/jira.md" \
+    || fail "expected stripped summary, got: $(cat "${dest}/.ai-context/jira.md")"
+  grep -q 'TaskBad' "${dest}/.ai-context/jira.md" \
+    || fail "expected stripped type, got: $(cat "${dest}/.ai-context/jira.md")"
+  grep -q '^## Injected' "${dest}/.ai-context/jira.md" \
     && fail "newline in summary must not become a markdown heading"
   pass "Jira summary and type strip CR/LF before append"
 }

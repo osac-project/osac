@@ -38,7 +38,9 @@ After clone, run `tools/bootstrap.sh` to vendor AI skills and workflows (see [AI
 
 ### Parallel worktrees
 
-Source [`tools/osac-helpers.sh`](tools/osac-helpers.sh) and run `osac-new-worktree <branch>` from this repo. It adds a sibling worktree (`../osac-<branch-basename>`), runs `tools/bootstrap.sh` there (extra args after the branch are forwarded, e.g. `--no-fork` or `--fork-name origin`), and appends Jira context to `.claude/CLAUDE.md` when the branch name contains `OSAC-NNNN`. Override the parent directory with `OSAC_WORKTREE_PARENT`. Clean up with `git worktree remove` on that path (default `../osac-<suffix>`; with `OSAC_WORKTREE_PARENT`, `$OSAC_WORKTREE_PARENT/osac-<suffix>`).
+Source [`tools/osac-helpers.sh`](tools/osac-helpers.sh) and run `osac-new-worktree <branch>` from this repo. It adds a sibling worktree (`../osac-<branch-basename>`), runs `tools/bootstrap.sh` there (extra args after the branch are forwarded, e.g. `--no-fork` or `--fork-name origin`), and writes Jira context to the agent-neutral `.ai-context/jira.md` when the branch name contains `OSAC-NNNN`. Override the parent directory with `OSAC_WORKTREE_PARENT`. Clean up with `git worktree remove` on that path (default `../osac-<suffix>`; with `OSAC_WORKTREE_PARENT`, `$OSAC_WORKTREE_PARENT/osac-<suffix>`).
+
+**Agents: if `.ai-context/jira.md` exists at the repo root, read it** — it holds the current worktree's Jira ticket (key, summary, type). This file is gitignored and shared across AI tools (Claude Code, Codex); it replaces the older practice of appending Jira context to `.claude/CLAUDE.md`.
 
 ## Components
 

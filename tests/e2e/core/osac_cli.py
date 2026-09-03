@@ -123,10 +123,16 @@ class OsacCLI:
                 if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
                     raise ValueError(f"additional_disks[{idx}]: 'size_gib' must be a positive integer, got {size!r}")
 
-                storage_tier = disk.get("storage_tier")
-                if not isinstance(storage_tier, str) or not storage_tier.strip():
+                storage_tier_raw = disk.get("storage_tier")
+                if isinstance(storage_tier_raw, dict):
+                    storage_tier = storage_tier_raw.get("name", "")
+                elif isinstance(storage_tier_raw, str):
+                    storage_tier = storage_tier_raw
+                else:
+                    storage_tier = ""
+                if not storage_tier.strip():
                     raise ValueError(
-                        f"additional_disks[{idx}]: 'storage_tier' must be a non-empty string, got {storage_tier!r}"
+                        f"additional_disks[{idx}]: 'storage_tier' must have a non-empty name, got {storage_tier_raw!r}"
                     )
 
                 # Build --additional-disk flag value: size=<GiB>,storage-tier=<name>

@@ -15,9 +15,12 @@ syntax = "proto3";
 
 package osac.private.v1;
 
+import "buf/validate/validate.proto";
 import "cleanapi/cleanapi.proto";
+import "google/api/field_behavior.proto";
 import "osac/private/v1/cluster_template_type.proto";
 import "osac/private/v1/field_definition_type.proto";
+import "osac/private/v1/field_policy_type.proto";
 import "osac/private/v1/metadata_type.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
@@ -39,7 +42,11 @@ message ClusterCatalogItem {
   string description = 4;
 
   // Reference to the underlying cluster template that this catalog item references.
-  ClusterTemplateReference template = 5;
+  ClusterTemplateReference template = 5 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE,
+    (buf.validate.field).required = true
+  ];
 
   // Whether this catalog item is published.
   bool published = 6;
@@ -51,8 +58,35 @@ message ClusterCatalogItem {
   // non-empty string scopes the item to that specific tenant.
   string tenant = 7 [(cleanapi.field).private = true];
 
-  // Definitions of the fields that users can or cannot set when creating a resource from this catalog item.
-  repeated FieldDefinition field_definitions = 8;
+  // Deprecated: definitions of the fields that users can or cannot set when creating a resource from this catalog item.
+  // Use `fields` and `template_parameters` instead.
+  repeated FieldDefinition field_definitions = 8 [deprecated = true];
+
+  // Policies that govern template parameters during resource creation.
+  map<string, TemplateParameterPolicy> template_parameters = 9 [(cleanapi.field).private = true];
+
+  // Policies that govern cluster fields during resource creation.
+  ClusterCatalogItemFields fields = 10 [(cleanapi.field).private = true];
+}
+
+// Groups the policies for governable cluster fields.
+message ClusterCatalogItemFields {
+  option (cleanapi.message).private = true;
+
+  ClusterVersionReferenceFieldPolicy version = 1;
+  StringFieldPolicy ssh_public_key = 2;
+  SecretReferenceFieldPolicy pull_secret_secret = 3;
+  ClusterNetworkFieldPolicies network = 4;
+  map<string, Int32FieldPolicy> node_sets = 5;
+  BoolFieldPolicy auto_external_ip_attachment = 6;
+}
+
+// Groups policies for governable cluster network fields.
+message ClusterNetworkFieldPolicies {
+  option (cleanapi.message).private = true;
+
+  StringFieldPolicy pod_cidr = 1;
+  StringFieldPolicy service_cidr = 2;
 }
 
 // Reference to a ClusterCatalogItem resource.

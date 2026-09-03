@@ -17,8 +17,19 @@ package osac.private.v1;
 
 import "buf/validate/validate.proto";
 import "cleanapi/cleanapi.proto";
+import "osac/private/v1/security_group_type.proto";
+import "osac/private/v1/subnet_type.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
+
+// Groups one subnet with security groups for that network attachment (multi-NIC VMs).
+message ComputeNetworkAttachment {
+  // Reference to the Subnet for this NIC; must be in READY state (same tenant and region rules as ComputeInstance).
+  SubnetLocalReference subnet = 1;
+
+  // References to SecurityGroups for this NIC; each must be READY and belong to the same VirtualNetwork as subnet.
+  repeated SecurityGroupLocalReference security_groups = 2;
+}
 
 // Contains the disk configuration for a compute instance.
 message ComputeInstanceDisk {

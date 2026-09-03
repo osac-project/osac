@@ -15,8 +15,11 @@ syntax = "proto3";
 
 package osac.private.v1;
 
+import "buf/validate/validate.proto";
 import "cleanapi/cleanapi.proto";
+import "google/api/field_behavior.proto";
 import "osac/private/v1/field_definition_type.proto";
+import "osac/private/v1/field_policy_type.proto";
 import "osac/private/v1/metadata_type.proto";
 import "osac/private/v1/baremetal_instance_template_type.proto";
 
@@ -39,7 +42,11 @@ message BareMetalInstanceCatalogItem {
   string description = 4;
 
   // Reference to the underlying bare metal instance template that this catalog item references.
-  BareMetalInstanceTemplateReference template = 5;
+  BareMetalInstanceTemplateReference template = 5 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE,
+    (buf.validate.field).required = true
+  ];
 
   // Whether this catalog item is published and visible to tenants.
   bool published = 6;
@@ -47,8 +54,27 @@ message BareMetalInstanceCatalogItem {
   // Tenant scope for this catalog item. An empty string means the item is global and visible to all tenants.
   string tenant = 7 [(cleanapi.field).private = true];
 
-  // Definitions of the fields that users can or cannot set when creating a resource from this catalog item.
-  repeated FieldDefinition field_definitions = 8;
+  // Deprecated: definitions of the fields that users can or cannot set when creating a resource from this catalog item.
+  // Use `fields` and `template_parameters` instead.
+  repeated FieldDefinition field_definitions = 8 [deprecated = true];
+
+  // Policies that govern template parameters during resource creation.
+  map<string, TemplateParameterPolicy> template_parameters = 9 [(cleanapi.field).private = true];
+
+  // Policies that govern bare metal instance fields during resource creation.
+  BareMetalInstanceCatalogItemFields fields = 10 [(cleanapi.field).private = true];
+}
+
+// Groups the policies for governable bare metal instance fields.
+message BareMetalInstanceCatalogItemFields {
+  option (cleanapi.message).private = true;
+
+  StringFieldPolicy ssh_public_key = 1;
+  StringFieldPolicy user_data = 2;
+  BareMetalInstanceRunStrategyFieldPolicy run_strategy = 3;
+  BareMetalInstanceImageFieldPolicy image = 4;
+  BareMetalNetworkAttachmentListFieldPolicy network_attachments = 5;
+  BoolFieldPolicy auto_external_ip_attachment = 6;
 }
 
 // Reference to a BareMetalInstanceCatalogItem resource.

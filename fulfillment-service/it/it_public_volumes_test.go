@@ -73,7 +73,7 @@ var _ = Describe("Public volumes", func() {
 
 		tiersClient := privatev1.NewStorageTiersClient(tool.InternalView().AdminConn())
 		storageTierName = fmt.Sprintf("it-pub-vol-tier-%s", uuid.New())
-		_, err = tiersClient.Create(ctx, privatev1.StorageTiersCreateRequest_builder{
+		tierResp, err := tiersClient.Create(ctx, privatev1.StorageTiersCreateRequest_builder{
 			Object: privatev1.StorageTier_builder{
 				Metadata: privatev1.Metadata_builder{
 					Name: storageTierName,
@@ -89,10 +89,11 @@ var _ = Describe("Public volumes", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
+		tierID := tierResp.GetObject().GetId()
 		DeferCleanup(func() {
 			tiersClient := privatev1.NewStorageTiersClient(tool.InternalView().AdminConn())
 			_, err := tiersClient.Delete(ctx, privatev1.StorageTiersDeleteRequest_builder{
-				Id: storageTierName,
+				Id: tierID,
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 		})

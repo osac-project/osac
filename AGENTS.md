@@ -294,3 +294,14 @@ Note the package name is `graphifyy` (double "y") — the CLI command itself is 
 Do **not** run `graphify hook install` or `graphify --watch` in this repo — those enable local-generation automation that rebuilds the graph from your own uncommitted local state, which would clobber the CI-fetched, org-wide graph with an incomplete single-machine view. Generation is centralized in CI by design.
 
 The graph reflects committed file content only — it helps code-structure questions (tracing symbols, cross-component changes), but it does not help questions about live GitHub state (branch protection rules, actual required checks, run/failure history, current merge-queue state). Verify those directly with `gh api`/`gh run`, not by reading workflow file content.
+
+### Consulting the graph
+
+These usage rules apply to any AI tool (Claude Code, Codex, Cursor, Gemini),
+not just Claude — the `graphify-out/` bundle is agent-neutral. Claude Code also
+carries them in `CLAUDE.md`'s `## graphify` section (kept there because
+`graphify claude install` manages it).
+
+- For codebase questions, first run `graphify query "<question>"` when `graphify-out/graph.json` exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than `GRAPH_REPORT.md` or raw grep output.
+- If `graphify-out/wiki/index.md` exists, use it for broad navigation instead of raw source browsing.
+- Read `graphify-out/GRAPH_REPORT.md` only for broad architecture review or when query/path/explain do not surface enough context.

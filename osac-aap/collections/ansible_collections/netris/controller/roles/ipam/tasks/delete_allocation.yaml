@@ -32,7 +32,7 @@
   when: _ipam_tree_resp.json is defined and _ipam_tree_resp.json is mapping
 
 - name: Delete IPAM allocation
-  when: _existing_ipam_alloc is defined and _existing_ipam_alloc is not none
+  when: _existing_ipam_alloc is defined and _existing_ipam_alloc is mapping
   ansible.builtin.uri:
     url: "{{ netris_controller_url }}/api/v2/ipam/allocation/{{ _existing_ipam_alloc.id }}"
     method: DELETE

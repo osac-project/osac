@@ -34,7 +34,7 @@
     body:
       id:
         - "{{ _existing_acl.id }}"
-    status_code: [200, 204]
+    status_code: [200, 204, 404]
     timeout: "{{ netris_timeout | default(30) }}"
     validate_certs: "{{ netris_validate_certs | default(true) }}"
   no_log: true

@@ -336,6 +336,48 @@ var _ = Describe("Add-on operators server", func() {
 			Expect(getResponse.GetObject().GetTitle()).To(Equal("Scoped Operator"))
 		})
 
+		It("List total excludes hidden tenant-scoped operators", func() {
+			// Create a global published operator:
+			_, err := privateServer.Create(ctx, privatev1.AddOnOperatorsCreateRequest_builder{
+				Object: privatev1.AddOnOperator_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("global-%s", uuid.New()[24:32]),
+					}.Build(),
+					Title:     "Visible Global",
+					Published: true,
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			// Create a tenant-scoped published operator hidden from the caller:
+			_, err = privateServer.Create(ctx, privatev1.AddOnOperatorsCreateRequest_builder{
+				Object: privatev1.AddOnOperator_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("hidden-%s", uuid.New()[24:32]),
+					}.Build(),
+					Title:     "Hidden Scoped",
+					Published: true,
+					Tenant:    "tenant-a",
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			otherTenancy := makeTenancyForTenants("tenant-b")
+			publicServer, err := NewAddOnOperatorsServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(otherTenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			response, err := publicServer.List(ctx, publicv1.AddOnOperatorsListRequest_builder{}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetTotal()).To(Equal(response.GetSize()))
+			for _, item := range response.GetItems() {
+				Expect(item.GetTitle()).ToNot(Equal("Hidden Scoped"))
+			}
+		})
+
 		It("Get returns NotFound for tenant-scoped operator from non-matching tenant", func() {
 			createResponse, err := privateServer.Create(ctx, privatev1.AddOnOperatorsCreateRequest_builder{
 				Object: privatev1.AddOnOperator_builder{

@@ -149,8 +149,9 @@ func (s *AddOnOperatorsServer) List(ctx context.Context,
 		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to determine visibility")
 	}
 
-	var publicItems []*publicv1.AddOnOperator
-	for _, privateItem := range privateResponse.GetItems() {
+	privateItems := privateResponse.GetItems()
+	publicItems := make([]*publicv1.AddOnOperator, 0, len(privateItems))
+	for _, privateItem := range privateItems {
 		if !s.isVisibleToTenant(privateItem, visibility) {
 			continue
 		}
@@ -163,9 +164,16 @@ func (s *AddOnOperatorsServer) List(ctx context.Context,
 		publicItems = append(publicItems, publicItem)
 	}
 
+	// Total is corrected for filtered operators only when this page provably holds the entire result
+	// set (offset 0, every row fetched) — otherwise the drop count outside this page is unknowable.
+	total := privateResponse.GetTotal()
+	if request.GetOffset() <= 0 && len(privateItems) == int(total) {
+		dropped := len(privateItems) - len(publicItems)
+		total -= int32(dropped) // #nosec G115 -- dropped <= len(privateItems) == total in this branch
+	}
 	response = &publicv1.AddOnOperatorsListResponse{}
 	response.SetSize(int32(len(publicItems))) // #nosec G115 -- bounded by page size
-	response.SetTotal(privateResponse.GetTotal())
+	response.SetTotal(total)
 	response.SetItems(publicItems)
 	return
 }

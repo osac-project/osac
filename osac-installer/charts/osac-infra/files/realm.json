@@ -795,13 +795,6 @@
     }
   ],
   "clientScopeMappings": {
-    "osac-csi-driver": [
-      {
-        "roles": [
-          "osac-csi-driver"
-        ]
-      }
-    ],
     "account": [
       {
         "client": "account-console",

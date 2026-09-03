@@ -2,8 +2,8 @@
 # Consumer wrapper: materialize OSAC skills from a vendored osac-ai-skills
 # clone, then exec that repo's fan-out with PROJECT_ROOT set to this repo.
 #
-# Usage: tools/link-agent-skills.sh [--claude] [--cursor] [--gemini] [--all]
-#          [--with-ai-workflows] [--verify]
+# Usage: tools/link-agent-skills.sh [--claude] [--cursor] [--gemini] [--codex]
+#          [--all] [--with-ai-workflows] [--verify]
 #
 # Vendor resolution:
 #   $OSAC_AI_SKILLS_VENDOR_DIR, if set (tools/bootstrap.sh sets this to the
@@ -24,14 +24,15 @@ REPO_ROOT="$(realpath "${SCRIPT_DIR}/..")"
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") [--claude] [--cursor] [--gemini] [--all] [--with-ai-workflows] [--verify]
+Usage: $(basename "$0") [--claude] [--cursor] [--gemini] [--codex] [--all] [--with-ai-workflows] [--verify]
 
   Consumer wrapper for osac-ai-skills fan-out. Materializes skills/ symlinks
   from the vendored clone, then runs that clone's tools/link-agent-skills.sh
   with PROJECT_ROOT=${REPO_ROOT}.
 
-  --claude / --cursor / --gemini / --all / --with-ai-workflows / --verify
+  --claude / --cursor / --gemini / --codex / --all / --with-ai-workflows / --verify
       Passed through to the vendored fan-out (see osac-ai-skills README).
+      --codex links .agents/skills -> ../skills for Codex skill discovery.
 EOF
 }
 
@@ -138,7 +139,7 @@ materialize_osac_skills() {
 # actually link. --verify with no --claude/--cursor/--gemini/--all is
 # read-only and must not delete anything.
 clear_legacy_real_umbrella_skill_dirs() {
-  local link_claude=false link_cursor=false link_gemini=false verify_only=false
+  local link_claude=false link_cursor=false link_gemini=false link_codex=false verify_only=false
   local arg agent_dir skills_path
   local -a dirs=()
 
@@ -147,10 +148,12 @@ clear_legacy_real_umbrella_skill_dirs() {
       --claude) link_claude=true ;;
       --cursor) link_cursor=true ;;
       --gemini) link_gemini=true ;;
+      --codex) link_codex=true ;;
       --all)
         link_claude=true
         link_cursor=true
         link_gemini=true
+        link_codex=true
         ;;
       --verify) verify_only=true ;;
     esac
@@ -159,15 +162,19 @@ clear_legacy_real_umbrella_skill_dirs() {
   if [[ "${verify_only}" == true \
      && "${link_claude}" == false \
      && "${link_cursor}" == false \
-     && "${link_gemini}" == false ]]; then
+     && "${link_gemini}" == false \
+     && "${link_codex}" == false ]]; then
     return 0
   fi
 
   [[ "${link_claude}" == true ]] && dirs+=("${REPO_ROOT}/.claude")
   [[ "${link_cursor}" == true ]] && dirs+=("${REPO_ROOT}/.cursor")
   [[ "${link_gemini}" == true ]] && dirs+=("${REPO_ROOT}/.gemini")
+  [[ "${link_codex}" == true ]] && dirs+=("${REPO_ROOT}/.agents")
 
-  for agent_dir in "${dirs[@]}"; do
+  # Guard the empty-array expansion under set -u: an invocation that selects no
+  # umbrella agent (e.g. only --with-ai-workflows) leaves dirs unset.
+  for agent_dir in "${dirs[@]+"${dirs[@]}"}"; do
     skills_path="${agent_dir}/skills"
     if [[ -e "${skills_path}" && ! -L "${skills_path}" ]]; then
       echo "Removing real ${skills_path} (legacy bootstrap leftover) so it can become a symlink umbrella" >&2

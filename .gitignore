@@ -26,6 +26,9 @@ osac-docs/
 .claude/hooks/README.md
 .cursor/
 .gemini/
+# Codex skill-discovery umbrella (.agents/skills -> ../skills), materialized by
+# tools/link-agent-skills.sh --codex; generated output, never committed.
+.agents/
 
 # Per-worktree agent context (Jira summary written by osac-new-worktree).
 .ai-context/

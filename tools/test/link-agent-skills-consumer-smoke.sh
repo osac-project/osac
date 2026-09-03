@@ -10,12 +10,16 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "${SCRIPT_DIR}/../.." && pwd)
 WRAPPER="${REPO_ROOT}/tools/link-agent-skills.sh"
 
+# Must be a superset of the vendored fan-out's OSAC_SKILLS array — the fan-out
+# runs run_verify after every link and verify_osac_skills requires each of its
+# skills to exist under skills/. Keep this in sync when osac-ai-skills adds a
+# skill (e.g. pre-pr-review) or the seeded vendor will fail verification.
 OSAC_SKILL_NAMES=(
   browser-demo-recording capture-tasks-from-meeting-notes create-pr
   design-review generate-status-report github-actions-workflows jira-task-management
   milestone-scope osac-cluster osac-demo-recording osac-feature osac-release
-  performance-review prd-review presentation quick-fix report-bug review-gate
-  security-review
+  performance-review prd-review pre-pr-review presentation quick-fix report-bug
+  review-gate security-review
 )
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -38,14 +42,15 @@ if [[ -n "${PROJECT_ROOT:-}" ]]; then
 else
   PROJECT_ROOT="$(realpath "$(dirname "${BASH_SOURCE[0]}")/..")"
 fi
-LINK_CLAUDE=false LINK_CURSOR=false LINK_GEMINI=false LINK_AI=false VERIFY=false
-if [[ $# -eq 0 ]]; then LINK_CLAUDE=true; LINK_CURSOR=true; LINK_GEMINI=true; fi
+LINK_CLAUDE=false LINK_CURSOR=false LINK_GEMINI=false LINK_CODEX=false LINK_AI=false VERIFY=false
+if [[ $# -eq 0 ]]; then LINK_CLAUDE=true; LINK_CURSOR=true; LINK_GEMINI=true; LINK_CODEX=true; fi
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --claude) LINK_CLAUDE=true ;;
     --cursor) LINK_CURSOR=true ;;
     --gemini) LINK_GEMINI=true ;;
-    --all) LINK_CLAUDE=true; LINK_CURSOR=true; LINK_GEMINI=true ;;
+    --codex) LINK_CODEX=true ;;
+    --all) LINK_CLAUDE=true; LINK_CURSOR=true; LINK_GEMINI=true; LINK_CODEX=true ;;
     --with-ai-workflows) LINK_AI=true ;;
     --verify) VERIFY=true ;;
     -h|--help) exit 0 ;;
@@ -102,6 +107,7 @@ fi
 [[ "${LINK_CLAUDE}" == true ]] && link_agent "${PROJECT_ROOT}/.claude" Claude
 [[ "${LINK_CURSOR}" == true ]] && link_agent "${PROJECT_ROOT}/.cursor" Cursor
 [[ "${LINK_GEMINI}" == true ]] && link_agent "${PROJECT_ROOT}/.gemini" Gemini
+[[ "${LINK_CODEX}" == true ]] && link_agent "${PROJECT_ROOT}/.agents" Codex
 # One shared rule is enough for the refuse-real-file contract on the stub.
 STUB_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if [[ "${LINK_CLAUDE}" == true && -f "${STUB_REPO}/.claude/rules/architecture-patterns.md" ]]; then
@@ -241,9 +247,11 @@ test_materialize_and_link() {
   [[ -L "${ws}/.claude/skills" ]] || fail ".claude/skills is not a symlink"
   [[ -L "${ws}/.cursor/skills" ]] || fail ".cursor/skills is not a symlink"
   [[ -L "${ws}/.gemini/skills" ]] || fail ".gemini/skills is not a symlink"
+  [[ -L "${ws}/.agents/skills" ]] || fail ".agents/skills is not a symlink"
   [[ -r "${ws}/.claude/skills/create-pr/SKILL.md" ]] || fail "cannot read create-pr via .claude/skills"
   [[ -r "${ws}/.cursor/skills/create-pr/SKILL.md" ]] || fail "cannot read create-pr via .cursor/skills"
   [[ -r "${ws}/.gemini/skills/create-pr/SKILL.md" ]] || fail "cannot read create-pr via .gemini/skills"
+  [[ -r "${ws}/.agents/skills/create-pr/SKILL.md" ]] || fail "cannot read create-pr via .agents/skills"
   [[ -L "${ws}/skills/bugfix" ]] || fail "expected skills/bugfix from --with-ai-workflows"
   pass "materialize + vendored fan-out links consumer tree"
 }
@@ -298,6 +306,23 @@ test_verify_shared_files_are_symlinks() {
     [[ -L "${ws}/${path}" ]] || fail "expected ${path} to be a symlink after clean fan-out"
   done
   pass "clean run + --verify reports shared rule/agent/hooks/context files as symlinks"
+}
+
+test_codex_links_agents_umbrella() {
+  local ws
+  ws=$(mktemp -d "${TMPDIR_ROOT}/codex.XXXXXX")
+  seed_vendor "$ws"
+  install_wrapper "$ws"
+
+  run_wrapper "$ws" --codex >/dev/null \
+    || fail "wrapper should forward --codex to the vendored fan-out"
+
+  [[ -L "${ws}/.agents/skills" ]] || fail ".agents/skills is not a symlink after --codex"
+  [[ -r "${ws}/.agents/skills/create-pr/SKILL.md" ]] \
+    || fail "cannot read create-pr via .agents/skills after --codex"
+  # Targeted --codex must not link the other agents' umbrellas.
+  [[ ! -e "${ws}/.claude/skills" ]] || fail "--codex must not link .claude/skills"
+  pass "forwards --codex to link .agents/skills -> ../skills (Codex discovery)"
 }
 
 test_refuse_real_skill_directory() {
@@ -355,9 +380,16 @@ test_prunes_after_vendor_switch() {
   [[ -L "${ws}/skills/create-pr" ]] || fail "expected create-pr link from project-local vendor"
 
   local home_vendor="${ws}/home/.osac-ai-skills"
-  mkdir -p "${home_vendor}/tools" "${home_vendor}/skills/create-pr"
+  mkdir -p "${home_vendor}/tools"
   cp "$VENDOR_FANOUT" "${home_vendor}/tools/link-agent-skills.sh"
   chmod +x "${home_vendor}/tools/link-agent-skills.sh"
+  # Seed the full skill set so the fan-out's post-link run_verify passes; mark
+  # create-pr distinctly so the assertion below can prove resolution switched.
+  local hv_name
+  for hv_name in "${OSAC_SKILL_NAMES[@]}"; do
+    mkdir -p "${home_vendor}/skills/${hv_name}"
+    echo "# stub ${hv_name}" >"${home_vendor}/skills/${hv_name}/SKILL.md"
+  done
   echo '# stub create-pr (home vendor)' >"${home_vendor}/skills/create-pr/SKILL.md"
   seed_shared_canonicals "$home_vendor"
 
@@ -415,10 +447,11 @@ test_promotes_legacy_real_umbrella_dirs() {
   install_wrapper "$ws"
 
   # origin/main install.sh shape: real directory, not a symlink.
-  mkdir -p "${ws}/.claude/skills" "${ws}/.cursor/skills" "${ws}/.gemini/skills"
+  mkdir -p "${ws}/.claude/skills" "${ws}/.cursor/skills" "${ws}/.gemini/skills" "${ws}/.agents/skills"
   echo "legacy workflow stand-in" >"${ws}/.claude/skills/bugfix"
   echo "legacy workflow stand-in" >"${ws}/.cursor/skills/bugfix"
   echo "legacy workflow stand-in" >"${ws}/.gemini/skills/bugfix"
+  echo "legacy workflow stand-in" >"${ws}/.agents/skills/bugfix"
 
   run_wrapper "$ws" --all >/dev/null \
     || fail "wrapper should convert origin/main real umbrella dirs, not refuse them"
@@ -426,8 +459,11 @@ test_promotes_legacy_real_umbrella_dirs() {
   [[ -L "${ws}/.claude/skills" ]] || fail ".claude/skills should be a symlink after conversion"
   [[ -L "${ws}/.cursor/skills" ]] || fail ".cursor/skills should be a symlink after conversion"
   [[ -L "${ws}/.gemini/skills" ]] || fail ".gemini/skills should be a symlink after conversion"
+  [[ -L "${ws}/.agents/skills" ]] || fail ".agents/skills should be a symlink after conversion"
   [[ -r "${ws}/.claude/skills/create-pr/SKILL.md" ]] \
     || fail "cannot read create-pr via converted .claude/skills umbrella"
+  [[ -r "${ws}/.agents/skills/create-pr/SKILL.md" ]] \
+    || fail "cannot read create-pr via converted .agents/skills umbrella"
   [[ -e "${ws}/.claude/skills/bugfix" ]] \
     && fail "legacy real-dir contents should not survive conversion to a symlink umbrella"
   pass "converts origin/main real .*/skills directories into symlink umbrellas"
@@ -465,10 +501,11 @@ test_targeted_run_preserves_unselected_legacy_umbrella_dirs() {
   seed_vendor "$ws"
   install_wrapper "$ws"
 
-  mkdir -p "${ws}/.claude/skills" "${ws}/.cursor/skills" "${ws}/.gemini/skills"
+  mkdir -p "${ws}/.claude/skills" "${ws}/.cursor/skills" "${ws}/.gemini/skills" "${ws}/.agents/skills"
   echo "legacy workflow stand-in" >"${ws}/.claude/skills/bugfix"
   echo "legacy workflow stand-in" >"${ws}/.cursor/skills/bugfix"
   echo "legacy workflow stand-in" >"${ws}/.gemini/skills/bugfix"
+  echo "legacy workflow stand-in" >"${ws}/.agents/skills/bugfix"
 
   run_wrapper "$ws" --cursor >/dev/null \
     || fail "targeted --cursor should convert the Cursor leftover umbrella"
@@ -478,8 +515,12 @@ test_targeted_run_preserves_unselected_legacy_umbrella_dirs() {
     || fail "--cursor must not convert real .claude/skills"
   [[ -d "${ws}/.gemini/skills" && ! -L "${ws}/.gemini/skills" ]] \
     || fail "--cursor must not convert real .gemini/skills"
+  [[ -d "${ws}/.agents/skills" && ! -L "${ws}/.agents/skills" ]] \
+    || fail "--cursor must not convert real .agents/skills"
   [[ -f "${ws}/.claude/skills/bugfix" ]] \
     || fail "--cursor must not delete leftover files in unselected umbrella dirs"
+  [[ -f "${ws}/.agents/skills/bugfix" ]] \
+    || fail "--cursor must not delete leftover files in unselected .agents umbrella dir"
   pass "targeted --cursor preserves unselected leftover real umbrella dirs"
 }
 
@@ -518,6 +559,7 @@ test_missing_vendor_fails
 test_prunes_after_vendor_switch
 test_vendor_override_env_var_is_authoritative
 test_materialize_and_link
+test_codex_links_agents_umbrella
 test_refuse_real_skill_directory
 test_prunes_removed_vendor_skill
 test_refuse_real_shared_rule_file

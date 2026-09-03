@@ -84,3 +84,9 @@ linters:
       - linters:
           - errcheck
         text: MarkDeprecated|MarkHidden
+      # field_definitions remains the served legacy Catalog Item contract until
+      # OSAC-4690 replaces its validation and resolution path.
+      - linters:
+          - staticcheck
+        path: internal/servers/
+        text: FieldDefinitions.*deprecated

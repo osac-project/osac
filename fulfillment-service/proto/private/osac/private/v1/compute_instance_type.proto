@@ -27,8 +27,6 @@ import "osac/private/v1/condition_status_type.proto";
 import "osac/private/v1/disk_image_type.proto";
 import "osac/private/v1/metadata_type.proto";
 import "osac/private/v1/instance_type_type.proto";
-import "osac/private/v1/security_group_type.proto";
-import "osac/private/v1/subnet_type.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
 
@@ -43,15 +41,6 @@ message ComputeInstance {
   Metadata metadata = 2;
   ComputeInstanceSpec spec = 3;
   ComputeInstanceStatus status = 4;
-}
-
-// Groups one subnet with security groups for that network attachment (multi-NIC VMs).
-message ComputeNetworkAttachment {
-  // Reference to the Subnet for this NIC; must be in READY state (same tenant and region rules as ComputeInstance).
-  SubnetLocalReference subnet = 1;
-
-  // References to SecurityGroups for this NIC; each must be READY and belong to the same VirtualNetwork as subnet.
-  repeated SecurityGroupLocalReference security_groups = 2;
 }
 
 // The spec contains the details of a compute instance as desired by the user.

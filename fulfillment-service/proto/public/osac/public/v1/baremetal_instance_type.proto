@@ -24,8 +24,6 @@ import "osac/public/v1/baremetal_instance_common_type.proto";
 import "osac/public/v1/baremetal_instance_template_type.proto";
 import "osac/public/v1/condition_status_type.proto";
 import "osac/public/v1/metadata_type.proto";
-import "osac/public/v1/security_group_type.proto";
-import "osac/public/v1/subnet_type.proto";
 
 // Contains the details of a bare metal instance.
 //
@@ -38,25 +36,6 @@ message BareMetalInstance {
   Metadata metadata = 2;
   BareMetalInstanceSpec spec = 3;
   BareMetalInstanceStatus status = 4;
-}
-
-// Network attachment for a bare metal instance NIC.
-// Groups a subnet with security groups and a physical interface binding.
-message BareMetalNetworkAttachment {
-  // Reference to the Subnet. Must reference a Subnet in READY state.
-  SubnetLocalReference subnet = 1 [(google.api.field_behavior) = IMMUTABLE];
-
-  // References to the SecurityGroups applied on this NIC.
-  // Each must be READY and belong to the same VirtualNetwork as the subnet.
-  repeated SecurityGroupLocalReference security_groups = 2;
-
-  // Physical interface name from the HostType's NetworkInterface list.
-  // When omitted on a single-attachment instance, the system selects the first fabric-role interface.
-  optional string interface = 3 [(google.api.field_behavior) = IMMUTABLE];
-
-  // Designates this attachment as the default gateway for multi-NIC instances.
-  // When omitted on a single-attachment instance, that attachment is implicitly primary.
-  optional bool primary = 4 [(google.api.field_behavior) = IMMUTABLE];
 }
 
 // The spec contains the details of a bare metal instance as desired by the user.
@@ -199,17 +178,6 @@ message BareMetalNICStatus {
 message BareMetalHardware {
   // Physical network interfaces reported by the inventory backend.
   repeated BareMetalNICStatus nics = 1;
-}
-
-// Run strategy for the bare metal instance.
-enum BareMetalInstanceRunStrategy {
-  BARE_METAL_INSTANCE_RUN_STRATEGY_UNSPECIFIED = 0;
-
-  // The instance is kept powered on.
-  BARE_METAL_INSTANCE_RUN_STRATEGY_ALWAYS = 1;
-
-  // The instance is powered off.
-  BARE_METAL_INSTANCE_RUN_STRATEGY_HALTED = 2;
 }
 
 // Represents the overall state of a bare metal instance.

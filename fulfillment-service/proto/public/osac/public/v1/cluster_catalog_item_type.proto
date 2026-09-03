@@ -15,6 +15,8 @@ syntax = "proto3";
 
 package osac.public.v1;
 
+import "buf/validate/validate.proto";
+import "google/api/field_behavior.proto";
 import "osac/public/v1/cluster_template_type.proto";
 import "osac/public/v1/field_definition_type.proto";
 import "osac/public/v1/metadata_type.proto";
@@ -36,15 +38,21 @@ message ClusterCatalogItem {
   string description = 4;
 
   // Reference to the underlying cluster template that this catalog item references.
-  ClusterTemplateReference template = 5;
+  ClusterTemplateReference template = 5 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE,
+    (buf.validate.field).required = true
+  ];
 
   // Whether this catalog item is published.
   bool published = 6;
 
   // Field 7 is omitted: `tenant` is an internal field managed by the server, not exposed through the public API.
 
-  // Definitions of the fields that users can or cannot set when creating a resource from this catalog item.
-  repeated FieldDefinition field_definitions = 8;
+  // Deprecated: definitions of the fields that users can or cannot set when creating a resource from this catalog item.
+  // Use `fields` and `template_parameters` instead.
+  repeated FieldDefinition field_definitions = 8 [deprecated = true];
+
 }
 
 // Reference to a ClusterCatalogItem resource.

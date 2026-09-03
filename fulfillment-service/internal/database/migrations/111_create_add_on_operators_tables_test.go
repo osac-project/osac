@@ -24,7 +24,7 @@ import (
 
 var _ = DescribeMigration("Create add-on operators tables", func() {
 	BeforeEach(func(ctx context.Context) {
-		err := tool.Migrate(ctx, 110)
+		err := tool.Migrate(ctx, 111)
 		Expect(err).ToNot(HaveOccurred())
 	})
 

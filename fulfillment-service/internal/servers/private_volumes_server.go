@@ -160,6 +160,9 @@ func (s *PrivateVolumesServer) Create(ctx context.Context,
 	if vol.GetStatus() == nil {
 		vol.SetStatus(&privatev1.VolumeStatus{})
 	}
+	// CSI callers may invoke Create with a status object, but vendor_context is
+	// populated only by the operator feedback path after vendor provisioning.
+	vol.GetStatus().SetVendorContext(nil)
 	vol.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_CREATING)
 	vol.GetStatus().SetBackend(resolved.Backend)
 	vol.GetStatus().SetProtocol(resolved.Protocol)

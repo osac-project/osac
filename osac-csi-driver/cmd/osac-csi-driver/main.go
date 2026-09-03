@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/osac-project/osac/osac-csi-driver/pkg/driver"
 	"github.com/osac-project/osac/osac-csi-driver/pkg/fulfillment"
@@ -199,13 +200,14 @@ func newClientCredentialsTokenSource(
 
 	tokenURL := buildTokenURL(issuerURL)
 
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{
+		MinVersion:         tls.VersionTLS12,
+		InsecureSkipVerify: insecureSkipVerify, //nolint:gosec // user-controlled flag
+	}
 	httpClient := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				MinVersion:         tls.VersionTLS12,
-				InsecureSkipVerify: insecureSkipVerify, //nolint:gosec // user-controlled flag
-			},
-		},
+		Transport: transport,
+		Timeout:   30 * time.Second,
 	}
 	ctx = context.WithValue(ctx, oauth2.HTTPClient, httpClient)
 

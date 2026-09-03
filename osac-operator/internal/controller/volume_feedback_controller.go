@@ -165,6 +165,8 @@ func syncVolumeVendorFields(ctx context.Context, obj *v1alpha1.Volume, remote *p
 	}
 	if len(obj.Status.VendorContext) > 0 {
 		remote.GetStatus().SetVendorContext(obj.Status.VendorContext)
+	} else {
+		remote.GetStatus().SetVendorContext(nil)
 	}
 	if obj.Status.Protocol != "" {
 		// Only sync a protocol the switch recognizes. An unrecognized CRD value

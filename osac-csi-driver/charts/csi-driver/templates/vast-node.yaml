@@ -61,12 +61,15 @@ spec:
             - name: host-root
               mountPath: /host
               mountPropagation: HostToContainer
+              readOnly: true
             # /host makes host paths readable for NVMe-TCP session discovery, but the
             # plugin operates on device special files (blockdev, mount) using their raw
             # host paths (e.g. /dev/nvme1n1), not /host-prefixed ones. Those device nodes
             # are created dynamically after connect, so the container's own /dev (baked
             # in at image build) never has them. Without this mount:
             # "blockdev: cannot open /dev/nvme1n1: No such file or directory".
+            # Intentionally not readOnly: the plugin must open and operate on block device
+            # nodes (read/write at the device layer); readOnly applies only to host-root above.
             - name: dev-dir
               mountPath: /dev
               mountPropagation: HostToContainer

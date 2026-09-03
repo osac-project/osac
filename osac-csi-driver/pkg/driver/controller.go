@@ -136,14 +136,13 @@ func (c *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 	// "subsystem" and "vip_pool_name"). Kubernetes caches this VolumeContext and replays it
 	// unchanged on ControllerPublishVolume/NodeStageVolume, which is how those calls learn the
 	// vendor parameters they need without this driver having to understand what they mean.
-	volumeContext := map[string]string{
-		"osac.backend":   vol.Backend,
-		"osac.volume-id": vol.VendorVolumeID,
-		"osac.protocol":  vol.Protocol,
-	}
+	volumeContext := make(map[string]string, len(vol.VendorContext)+3)
 	for k, v := range vol.VendorContext {
 		volumeContext[k] = v
 	}
+	volumeContext["osac.backend"] = vol.Backend
+	volumeContext["osac.volume-id"] = vol.VendorVolumeID
+	volumeContext["osac.protocol"] = vol.Protocol
 
 	return &csi.CreateVolumeResponse{
 		Volume: &csi.Volume{

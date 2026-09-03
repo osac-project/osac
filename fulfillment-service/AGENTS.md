@@ -155,6 +155,10 @@ running tests with specific options, or installing a tool), refer to [dev/README
 
 ## Architecture
 
+For deeper architectural rationale (why there's a single proto-as-domain-model, how the transaction
+interceptor enables atomic event notification, and a traced end-to-end `Create` flow), see
+[docs/CODEWALK.md](docs/CODEWALK.md).
+
 ### Code Organization
 
 - `cmd/fulfillment-service/` - Service binary entry point (calls `internal/cmd/service.Root()`)

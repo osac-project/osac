@@ -1,7 +1,10 @@
 # Fulfillment service
 
 This project contains the code for the fulfillment service. For instructions on how to install it
-in a production environment see the [installation guide](docs/INSTALL.md).
+in a production environment see the [installation guide](docs/INSTALL.md). For a guided walkthrough
+of how a request flows through the service — the shared data model, the transaction/event
+mechanism, and the end-to-end path from a `Create` call to a Kubernetes custom resource — see
+[docs/CODEWALK.md](docs/CODEWALK.md).
 
 The API is defined using protocol buffers in the [`proto`](proto) directory. An OpenAPI
 specification is generated automatically from those definitions and published as raw YAML at

@@ -74,7 +74,7 @@ link_agent() {
 }
 if [[ "${VERIFY}" == true ]]; then
   errors=0
-  for pair in ".claude:Claude" ".cursor:Cursor" ".gemini:Gemini"; do
+  for pair in ".claude:Claude" ".cursor:Cursor" ".gemini:Gemini" ".agents:Codex"; do
     dir="${PROJECT_ROOT}/${pair%%:*}"; label="${pair##*:}"
     if [[ ! -L "${dir}/skills" ]]; then
       echo "ERROR: ${label}: ${dir}/skills is not a symlink" >&2; errors=1; continue
@@ -321,7 +321,11 @@ test_codex_links_agents_umbrella() {
   [[ -r "${ws}/.agents/skills/create-pr/SKILL.md" ]] \
     || fail "cannot read create-pr via .agents/skills after --codex"
   # Targeted --codex must not link the other agents' umbrellas.
-  [[ ! -e "${ws}/.claude/skills" ]] || fail "--codex must not link .claude/skills"
+  local agent_dir
+  for agent_dir in .claude .cursor .gemini; do
+    [[ ! -e "${ws}/${agent_dir}/skills" && ! -L "${ws}/${agent_dir}/skills" ]] \
+      || fail "--codex must not link ${agent_dir}/skills"
+  done
   pass "forwards --codex to link .agents/skills -> ../skills (Codex discovery)"
 }
 

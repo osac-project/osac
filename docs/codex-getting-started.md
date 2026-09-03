@@ -33,17 +33,24 @@ Codex umbrella:
 tools/link-agent-skills.sh --codex
 ```
 
+In Codex, use `/skills` to browse discovered skills or type `$` followed by a
+skill name to invoke one directly (for example, `$implement`). Skills do not
+become top-level slash commands such as `/implement`.
+
 `.agents/` is gitignored (generated output). If you ever see a real
 `.agents/skills` directory (leftover from an older bootstrap), the wrapper
-converts it into the symlink umbrella on the next run.
+converts it into the symlink umbrella on the next run. OSAC owns this
+repo-local directory; install personal skills under `~/.agents/skills`, not
+inside the generated project umbrella.
 
 ## Project config (`.codex/config.toml`)
 
-The repo ships `.codex/config.toml` at the root. Codex walks from the `.git`
-root down to your CWD and honors project-level config. The one setting that
-matters here is a raised `project_doc_max_bytes` — the root `AGENTS.md` plus a
-component `AGENTS.md` can exceed Codex's 32 KiB default, which would otherwise
-truncate the conventions Codex loads. Leave it in place; don't lower it.
+The repo ships `.codex/config.toml` at the root. After you trust the project,
+Codex walks from the `.git` root down to your CWD and honors project-level
+config. The one setting that matters here is a raised `project_doc_max_bytes`
+— the root `AGENTS.md` plus a component `AGENTS.md` can exceed Codex's 32 KiB
+default, which would otherwise truncate the conventions Codex loads. Leave it
+in place; don't lower it.
 
 ## Importing your Claude Code setup (`/import`)
 
@@ -82,9 +89,11 @@ The repo ships `.codex/hooks.json`, which mirrors the Claude Code hooks:
 Codex requires you to trust repo hooks before they run — use `/hooks` in the
 Codex CLI to review and trust them. Until you do, sessions start without the
 context refresh and graph fetch (Codex falls back to normal cold exploration).
-For non-interactive/automation runs where you can't trust interactively, Codex
-offers a bypass flag (`--dangerously-bypass-hook-trust`); use it only in CI or
-trusted automation, never as a default.
+For non-interactive runs where you can't trust interactively, Codex offers a
+bypass flag (`--dangerously-bypass-hook-trust`). Use it only in protected,
+reviewed CI or other pre-vetted automation—never for untrusted pull-request
+code unless the workflow separately verifies the hook definition and every
+referenced script.
 
 The hook scripts are agent-neutral: they resolve the project directory from the
 git worktree root when Codex doesn't set `CLAUDE_PROJECT_DIR`, so the same
@@ -92,9 +101,10 @@ scripts serve both tools.
 
 ## Reconnecting authenticated services (MCP)
 
-MCP server definitions may carry over via `/import`, but their credentials do
-not. Re-authenticate each MCP server in Codex before use. Verify the servers
-you rely on are connected at the start of a session rather than mid-task.
+MCP server definitions may carry over via `/import`, but custom authentication
+may require you to sign in again. Verify the servers you rely on are connected
+at the start of a session rather than discovering missing authorization
+mid-task.
 
 ## Per-worktree Jira context (`.ai-context/jira.md`)
 

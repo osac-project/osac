@@ -13,15 +13,11 @@
 
 syntax = "proto3";
 
-package osac.private.v1;
+package osac.public.v1;
 
-import "cleanapi/cleanapi.proto";
 import "google/api/annotations.proto";
 import "google/protobuf/field_mask.proto";
-import "osac/private/v1/volume_type.proto";
-
-option (cleanapi.file).package = "osac.public.v1";
-option (cleanapi.file).http_route_prefix_map = "private:fulfillment";
+import "osac/public/v1/volume_type.proto";
 
 message VolumesListRequest {
   // Index of the first result. If not specified the default value will be zero.
@@ -108,25 +104,16 @@ message VolumesDeleteRequest {
 
 message VolumesDeleteResponse {}
 
-message VolumesSignalRequest {
-  option (cleanapi.message).private = true;
-  string id = 1;
-}
-
-message VolumesSignalResponse {
-  option (cleanapi.message).private = true;
-}
-
 service Volumes {
   // Retrieves the list of volumes.
   rpc List(VolumesListRequest) returns (VolumesListResponse) {
-    option (google.api.http) = {get: "/api/private/v1/volumes"};
+    option (google.api.http) = {get: "/api/fulfillment/v1/volumes"};
   }
 
   // Retrieves the details of one specific volume.
   rpc Get(VolumesGetRequest) returns (VolumesGetResponse) {
     option (google.api.http) = {
-      get: "/api/private/v1/volumes/{id}"
+      get: "/api/fulfillment/v1/volumes/{id}"
       response_body: "object"
     };
   }
@@ -134,7 +121,7 @@ service Volumes {
   // Creates a new volume.
   rpc Create(VolumesCreateRequest) returns (VolumesCreateResponse) {
     option (google.api.http) = {
-      post: "/api/private/v1/volumes"
+      post: "/api/fulfillment/v1/volumes"
       body: "object"
       response_body: "object"
     };
@@ -143,7 +130,7 @@ service Volumes {
   // Updates an existing volume.
   rpc Update(VolumesUpdateRequest) returns (VolumesUpdateResponse) {
     option (google.api.http) = {
-      patch: "/api/private/v1/volumes/{object.id}"
+      patch: "/api/fulfillment/v1/volumes/{object.id}"
       body: "object"
       response_body: "object"
     };
@@ -151,12 +138,6 @@ service Volumes {
 
   // Deletes a volume.
   rpc Delete(VolumesDeleteRequest) returns (VolumesDeleteResponse) {
-    option (google.api.http) = {delete: "/api/private/v1/volumes/{id}"};
-  }
-
-  // Signals the volume for re-reconciliation. Called by the operator feedback controller after
-  // Volume CR status changes on the hub.
-  rpc Signal(VolumesSignalRequest) returns (VolumesSignalResponse) {
-    option (cleanapi.method).private = true;
+    option (google.api.http) = {delete: "/api/fulfillment/v1/volumes/{id}"};
   }
 }

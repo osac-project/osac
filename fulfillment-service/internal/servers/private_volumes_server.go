@@ -22,6 +22,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
@@ -46,6 +47,7 @@ type PrivateVolumesServerBuilder struct {
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
 	tierResolver      TierResolverFunc
+	filterDesc        protoreflect.MessageDescriptor
 }
 
 var _ privatev1.VolumesServer = (*PrivateVolumesServer)(nil)
@@ -92,6 +94,14 @@ func (b *PrivateVolumesServerBuilder) SetTierResolver(value TierResolverFunc) *P
 	return b
 }
 
+// SetFilterDesc sets the protobuf message descriptor used to validate and translate CEL filter
+// expressions. When the public server wraps this private server, it passes the public Volume
+// descriptor so that filters are validated against public-facing field names.
+func (b *PrivateVolumesServerBuilder) SetFilterDesc(value protoreflect.MessageDescriptor) *PrivateVolumesServerBuilder {
+	b.filterDesc = value
+	return b
+}
+
 func (b *PrivateVolumesServerBuilder) Build() (result *PrivateVolumesServer, err error) {
 	if b.logger == nil {
 		err = errors.New("logger is mandatory")
@@ -106,14 +116,17 @@ func (b *PrivateVolumesServerBuilder) Build() (result *PrivateVolumesServer, err
 		return
 	}
 
-	generic, err := NewGenericServer[*privatev1.Volume]().
+	genericBuilder := NewGenericServer[*privatev1.Volume]().
 		SetLogger(b.logger).
 		SetService(privatev1.Volumes_ServiceDesc.ServiceName).
 		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
-		SetMetricsRegisterer(b.metricsRegisterer).
-		Build()
+		SetMetricsRegisterer(b.metricsRegisterer)
+	if b.filterDesc != nil {
+		genericBuilder.SetFilterDesc(b.filterDesc)
+	}
+	generic, err := genericBuilder.Build()
 	if err != nil {
 		return
 	}

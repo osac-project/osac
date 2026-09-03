@@ -168,6 +168,21 @@ var _ = Describe("Volumes server", func() {
 			Expect(response.GetTotal()).To(BeNumerically("==", count))
 		})
 
+		It("Forwards order parameter to private server without error", func() {
+			createVolumeViaPublic("vol-order-test")
+
+			// The order parameter should be accepted and forwarded to the private
+			// server without error. Note: the DAO currently always sorts by id
+			// (order translation is not yet implemented), so we only verify that
+			// the parameter is forwarded without causing an error — not that the
+			// actual sort changes. This matches the private server's behaviour.
+			response, err := server.List(ctx, publicv1.VolumesListRequest_builder{
+				Order: new("metadata.name asc"),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetSize()).To(BeNumerically(">=", 1))
+		})
+
 		It("Updates a volume through the public API", func() {
 			created := createVolumeViaPublic("pub-vol-update")
 

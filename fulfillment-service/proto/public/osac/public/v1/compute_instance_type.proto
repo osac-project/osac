@@ -162,7 +162,10 @@ message ComputeInstanceSpec {
 
   // Reference to a Secret containing user data for the compute instance.
   // The Secret must contain a non-empty `userdata` entry. Mutually exclusive with `user_data`.
-  SecretLocalReference user_data_secret = 20;
+  // Immutable after creation: an existing inline value may be migrated by setting this field
+  // while clearing `user_data` in the same update, but the reference itself cannot be changed
+  // afterwards.
+  SecretLocalReference user_data_secret = 20 [(google.api.field_behavior) = IMMUTABLE];
 }
 
 // The status contains the details of the compute instance provided by the system.

@@ -24,6 +24,7 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 )
 
@@ -68,6 +69,101 @@ var _ = Describe("User data secret validation", func() {
 			privatev1.SecretLocalReference_builder{Id: secret.GetId()}.Build())
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
 		Expect(err.Error()).To(ContainSubstring("non-empty 'userdata' entry"))
+	})
+
+	It("rejects a reference that specifies neither id nor name", func() {
+		_, err := validateUserDataSecret(ctx, logger, secretsDao, nil,
+			privatev1.SecretLocalReference_builder{}.Build())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		Expect(err.Error()).To(ContainSubstring("must specify id or name"))
+	})
+
+	It("rejects a shared-tenant secret", func() {
+		// The shared tenant is seeded by migrations, so the secret can reference it directly.
+		name := fmt.Sprintf("shared-userdata-%s", uuid.NewString()[:8])
+		created, err := secretsDao.Create().SetObject(privatev1.Secret_builder{
+			Metadata: privatev1.Metadata_builder{Name: name, Tenant: auth.SharedTenant}.Build(),
+			Data:     map[string][]byte{userDataSecretDataKey: []byte("#cloud-config")},
+		}.Build()).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+
+		_, err = validateUserDataSecret(ctx, logger, secretsDao, nil,
+			privatev1.SecretLocalReference_builder{Id: created.GetObject().GetId()}.Build())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		Expect(err.Error()).To(ContainSubstring("shared secrets cannot be used"))
+	})
+
+	It("rejects setting a Compute reference while inline user data remains", func() {
+		server, err := NewPrivateComputeInstancesServer().SetLogger(logger).
+			SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
+		Expect(err).ToNot(HaveOccurred())
+		created, err := server.generic.dao.Create().SetObject(privatev1.ComputeInstance_builder{
+			Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("ci-%s", uuid.NewString()[:8]), Tenant: testTenant}.Build(),
+			Spec:     privatev1.ComputeInstanceSpec_builder{UserData: new("inline")}.Build(),
+		}.Build()).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+
+		request := privatev1.ComputeInstancesUpdateRequest_builder{
+			Object: privatev1.ComputeInstance_builder{
+				Id: created.GetObject().GetId(),
+				Spec: privatev1.ComputeInstanceSpec_builder{
+					UserDataSecret: privatev1.SecretLocalReference_builder{Id: "secret-id", Name: "secret-name"}.Build(),
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.user_data_secret"}},
+		}.Build()
+		err = server.validateUserDataMutualExclusionForUpdate(ctx, request)
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		Expect(err.Error()).To(ContainSubstring("mutually exclusive"))
+	})
+
+	It("allows Compute inline user data to migrate atomically to a Secret reference", func() {
+		server, err := NewPrivateComputeInstancesServer().SetLogger(logger).
+			SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
+		Expect(err).ToNot(HaveOccurred())
+		created, err := server.generic.dao.Create().SetObject(privatev1.ComputeInstance_builder{
+			Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("ci-%s", uuid.NewString()[:8]), Tenant: testTenant}.Build(),
+			Spec:     privatev1.ComputeInstanceSpec_builder{UserData: new("inline")}.Build(),
+		}.Build()).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+
+		request := privatev1.ComputeInstancesUpdateRequest_builder{
+			Object: privatev1.ComputeInstance_builder{
+				Id: created.GetObject().GetId(),
+				Spec: privatev1.ComputeInstanceSpec_builder{
+					UserDataSecret: privatev1.SecretLocalReference_builder{Id: "secret-id", Name: "secret-name"}.Build(),
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.user_data", "spec.user_data_secret"}},
+		}.Build()
+		Expect(server.validateUserDataMutualExclusionForUpdate(ctx, request)).To(Succeed())
+		Expect(server.validateTemplateImmutability(ctx, request)).To(Succeed())
+	})
+
+	It("rejects changing an existing Compute Secret reference", func() {
+		server, err := NewPrivateComputeInstancesServer().SetLogger(logger).
+			SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
+		Expect(err).ToNot(HaveOccurred())
+		created, err := server.generic.dao.Create().SetObject(privatev1.ComputeInstance_builder{
+			Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("ci-%s", uuid.NewString()[:8]), Tenant: testTenant}.Build(),
+			Spec: privatev1.ComputeInstanceSpec_builder{
+				UserDataSecret: privatev1.SecretLocalReference_builder{Id: "secret-id", Name: "secret-name"}.Build(),
+			}.Build(),
+		}.Build()).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+
+		request := privatev1.ComputeInstancesUpdateRequest_builder{
+			Object: privatev1.ComputeInstance_builder{
+				Id: created.GetObject().GetId(),
+				Spec: privatev1.ComputeInstanceSpec_builder{
+					UserDataSecret: privatev1.SecretLocalReference_builder{Id: "other-id", Name: "other-name"}.Build(),
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.user_data_secret"}},
+		}.Build()
+		err = server.validateTemplateImmutability(ctx, request)
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		Expect(err.Error()).To(ContainSubstring("user_data_secret is immutable"))
 	})
 
 	It("rejects inline data and a reference together", func() {

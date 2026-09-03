@@ -851,7 +851,7 @@ func (s *PrivateBareMetalInstancesServer) validateAndApplyTemplateParameters(ctx
 
 // validateImmutability ensures template, catalog_item, ssh_public_key, user_data, template_parameters,
 // image, and auto_external_ip_attachment cannot be changed after creation.
-func (s *PrivateBareMetalInstancesServer) validateImmutability(ctx context.Context, //nolint:gocyclo
+func (s *PrivateBareMetalInstancesServer) validateImmutability(ctx context.Context,
 	request *privatev1.BareMetalInstancesUpdateRequest) error {
 	mask := request.GetUpdateMask()
 	updatingTemplate := updateIncludesField(mask, "spec.template")

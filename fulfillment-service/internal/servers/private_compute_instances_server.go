@@ -711,8 +711,9 @@ func (s *PrivateComputeInstancesServer) validateTemplateImmutability(ctx context
 	updatingInstanceType := hasMaskPrefix(updateMask, "spec.instance_type")
 	updatingDiskImage := hasMaskPrefix(updateMask, "spec.disk_image")
 	updatingAutoExternalIP := hasMaskPrefix(updateMask, "spec.auto_external_ip_attachment")
+	updatingUserDataSecret := hasMaskPrefix(updateMask, "spec.user_data_secret")
 
-	if !updatingTemplate && !updatingTemplateParams && !updatingCatalogItem && !updatingInstanceType && !updatingDiskImage && !updatingAutoExternalIP {
+	if !updatingTemplate && !updatingTemplateParams && !updatingCatalogItem && !updatingInstanceType && !updatingDiskImage && !updatingAutoExternalIP && !updatingUserDataSecret {
 		return nil
 	}
 
@@ -785,6 +786,16 @@ func (s *PrivateComputeInstancesServer) validateTemplateImmutability(ctx context
 	if updatingAutoExternalIP && existingSpec.GetAutoExternalIpAttachment() != newSpec.GetAutoExternalIpAttachment() {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"cannot change spec.auto_external_ip_attachment: auto_external_ip_attachment is immutable after creation")
+	}
+
+	// The user_data_secret reference is immutable once set. Setting it for the first time is
+	// allowed (including migrating from an inline user_data value), but it cannot be changed or
+	// cleared afterwards. Mutual exclusion with inline user_data is enforced separately in
+	// validateUserDataMutualExclusionForUpdate.
+	if updatingUserDataSecret && existingSpec.GetUserDataSecret() != nil &&
+		!proto.Equal(existingSpec.GetUserDataSecret(), newSpec.GetUserDataSecret()) {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"cannot change spec.user_data_secret: user_data_secret is immutable after creation")
 	}
 
 	return nil

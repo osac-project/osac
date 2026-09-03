@@ -149,7 +149,7 @@ func (s *PrivateAddOnOperatorsServer) Get(ctx context.Context,
 func (s *PrivateAddOnOperatorsServer) Create(ctx context.Context,
 	request *privatev1.AddOnOperatorsCreateRequest) (response *privatev1.AddOnOperatorsCreateResponse, err error) {
 	if object := request.GetObject(); object != nil {
-		if s.defaultPublished && !object.GetPublished() {
+		if s.defaultPublished && !object.HasPublished() {
 			object.SetPublished(true)
 		}
 		if err = validateOCPVersionRange(object.GetMinOcpVersion(), object.GetMaxOcpVersion()); err != nil {

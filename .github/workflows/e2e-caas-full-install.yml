@@ -21,9 +21,9 @@ on:
   workflow_dispatch:
     inputs:
       test-suite:
-        description: "Test suite (caas, or empty for all)"
+        description: "Suite relative to tests/e2e (caas/sanity, caas/regression, or caas for all). Default: caas/sanity"
         required: false
-        default: "caas"
+        default: "caas/sanity"
       test-filter:
         description: "pytest -k filter"
         required: false
@@ -208,16 +208,14 @@ jobs:
       id-token: write
     uses: osac-project/osac-test-infra/.github/workflows/e2e-caas-full-install.yml@main
     with:
-      # PR/merge_group: sanity. Schedule: serial. workflow_dispatch: honor
-      # input, else sanity. caas/serial is empty scaffolding today (no
-      # resource-contention justification like BMaaS's serial tier -- just
-      # reserving the shape); the reusable workflow's own fallback runs the
-      # full caas suite whenever a tier dir has no real tests yet.
+      # test-source=osac prefixes tests/e2e/. PR/merge_group: sanity.
+      # Schedule: regression. workflow_dispatch: honor input, else sanity
+      # (caas for the full suite).
       test-suite: >-
         ${{
           inputs.test-suite != '' && inputs.test-suite ||
           (github.event_name == 'pull_request' || github.event_name == 'merge_group') && 'caas/sanity' ||
-          github.event_name == 'schedule' && 'caas/serial' ||
+          github.event_name == 'schedule' && 'caas/regression' ||
           'caas/sanity'
         }}
       test-filter: ${{ inputs.test-filter || '' }}

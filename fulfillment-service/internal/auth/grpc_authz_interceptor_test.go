@@ -696,6 +696,27 @@ var _ = Describe("Rego authorization interceptor", func() {
 			),
 		)
 
+		It("Allows regular users to browse add-on operators", func(ctx context.Context) {
+			ctx = ContextWithToken(ctx, createKeycloakUserToken("my-tenant", "my-user", nil))
+			for _, method := range []string{
+				"/osac.public.v1.AddOnOperators/List",
+				"/osac.public.v1.AddOnOperators/Get",
+			} {
+				handled := false
+				_, err := interceptor.UnaryServer(
+					ctx,
+					nil,
+					&grpc.UnaryServerInfo{FullMethod: method},
+					func(ctx context.Context, req any) (any, error) {
+						handled = true
+						return nil, nil
+					},
+				)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(handled).To(BeTrue())
+			}
+		})
+
 		DescribeTable(
 			"Denies Keycloak users on the private API",
 			func(ctx context.Context, tenant, name string) {

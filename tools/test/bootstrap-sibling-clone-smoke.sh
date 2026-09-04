@@ -1152,6 +1152,7 @@ test_hook_install_falls_back_to_pre_commit_and_is_repeatable() {
   run_bootstrap "$root" "$home" "$bin" >/dev/null
   seed_pre_commit_config "${root}/enhancement-proposals"
   seed_pre_commit_config "${root}/osac-ui"
+  seed_pre_commit_config "${root}/osac-docs"
   : > "${home}/hooks.log"
 
   out=$(run_bootstrap "$root" "$home" "$bin" 2>&1) || fail "fallback hook bootstrap failed: $out"
@@ -1163,7 +1164,9 @@ test_hook_install_falls_back_to_pre_commit_and_is_repeatable() {
     || fail "enhancement-proposals pre-commit should run once per bootstrap: $(cat "$hook_log")"
   [[ "$(grep -Fc "upstream|${root}/osac-ui|install" "$hook_log")" -eq 2 ]] \
     || fail "configured osac-ui pre-commit should run once per bootstrap: $(cat "$hook_log")"
-  grep -q 'osac-ux\|osac-docs' "$hook_log" \
+  [[ "$(grep -Fc "upstream|${root}/osac-docs|install" "$hook_log")" -eq 2 ]] \
+    || fail "configured osac-docs pre-commit should run once per bootstrap: $(cat "$hook_log")"
+  grep -q 'osac-ux' "$hook_log" \
     && fail "config-less siblings must be skipped by fallback: $(cat "$hook_log")"
   pass "falls back to pre-commit and repeats installation safely"
 }

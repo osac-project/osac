@@ -29,6 +29,12 @@ operator:
   tenants:
   - name: shared
   - name: osac-e2e-ci
+  networkManagers:
+    fabricManagers:
+      netris:
+        enabled: true
+        description: "Netris SDN fabric manager"
+        capabilities: "ipv4"
 
 # --- Fulfillment Service ---
 service:
@@ -168,12 +174,6 @@ bmf:
 # --- Hub Access ---
 hubAccess:
   enabled: true
-
-networkManagers:
-  - name: netris
-    role: fabric
-    description: "Netris SDN fabric manager"
-    capabilities: "ipv4"
 
 # --- LVMS StorageBackend registration ---
 lvms:

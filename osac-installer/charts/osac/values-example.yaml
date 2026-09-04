@@ -391,21 +391,24 @@ clusterFulfillment:
   enabled: false
   config:
     # --- Network Backend ---
-    # Network implementation class (e.g., "netris", "esi").
+    # AAP cluster-fulfillment network backend (netris, agentless_net).
+    # Distinct from operator.networkManagers fabric/k8s manager names.
     NETWORK_CLASS: ""
-    # Ansible collection providing network-class-specific steps.
+    # Ansible collection providing network-backend-specific steps
+    # (netris.steps, ci.steps, agentless_net.steps).
     NETWORK_STEPS_COLLECTION: ""
 
     # --- DNS Backend ---
     # Fully-qualified Ansible role name of the DNS driver to use.
-    # Examples: "dns.route53.dns", "dns.cloudflare.dns"
-    # Default (when empty): "dns.route53.dns"
+    # Only dns.route53.dns is shipped today. Default (when empty): "dns.route53.dns"
     DNS_CLASS: ""
     # DNS zone to operate in (e.g., "example.com").
     # Default (when empty): value of EXTERNAL_ACCESS_BASE_DOMAIN.
     DNS_ZONE: ""
 
     # --- Netris Controller ---
+    # Must also be set on networkFulfillment (including NETRIS_PASSWORD);
+    # there is no shared Netris config block.
     NETRIS_CONTROLLER_URL: ""
     NETRIS_USERNAME: ""
     NETRIS_SITE_ID: ""

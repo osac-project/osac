@@ -54,6 +54,10 @@ operator:
     optional: true
   hubAccess:
     enabled: false
+  # Network manager ConfigMaps use the nested operator.networkManagers map
+  # (fabricManagers / k8sManagers). Defaults live in the osac-operator subchart;
+  # override operator.networkManagers here to enable netris/k8s_only or change
+  # capabilitiesSyncInterval.
 
 # --- Fulfillment Service ---
 service:
@@ -151,6 +155,8 @@ aap:
         NETWORK_STEPS_COLLECTION: ""
         DNS_CLASS: ""
         DNS_ZONE: ""
+        # Netris connection fields below must also be set on networkFulfillment
+        # (including NETRIS_PASSWORD); there is no shared Netris config block.
         NETRIS_CONTROLLER_URL: ""
         NETRIS_USERNAME: ""
         NETRIS_SITE_ID: ""
@@ -187,6 +193,7 @@ aap:
     networkFulfillment:
       enabled: false
       config:
+        # Duplicate of clusterFulfillment Netris connection fields — set both.
         NETRIS_CONTROLLER_URL: ""
         NETRIS_USERNAME: ""
         NETRIS_SITE_ID: ""
@@ -307,24 +314,6 @@ bmf:
 validation:
   enabled: true
 
-# --- Network Manager ConfigMaps ---
-# Each entry creates a ConfigMap for the osac-operator dispatcher to discover.
-# networkManagers:
-#   - name: netris
-#     role: fabric        # "fabric" or "k8s"
-#     description: "Netris SDN fabric manager"
-#     capabilities: "ipv4"
-#   - name: cudn_localnet
-#     role: k8s
-#     description: "CUDN LocalNet k8s manager"
-#     capabilities: "ipv4,ipv6,dualStack"
-networkManagers: []
-
-# --- MetalLB Address Pool ---
-metallb:
-  enabled: false
-  addressCIDR: "192.168.40.0/24"
-
 hubAccess:
   enabled: false
 
@@ -386,9 +375,12 @@ networkClass:
     egressRules:
     - protocol: PROTOCOL_ALL
       ipv4Cidr: "0.0.0.0/0"
+      # ipv6Cidr is optional and forwarded by the create-network-class hook.
+      # Netris fabric is IPv4-only; CUDN/k8s_only may set e.g. "::/0".
   # Example override (k8s-only profile — switches the default NetworkClass's
   # manager from cudn_net to k8s_only instead of adding a second NetworkClass,
   # since only one NetworkClass may exist per deployment):
+  # fabricManager must be empty when k8sManager is k8s_only.
   # title: "K8s-only networking"
   # fabricManager: ""
   # k8sManager: "k8s_only"

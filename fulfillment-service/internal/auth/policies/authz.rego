@@ -199,6 +199,8 @@ allow if {
 allow if {
   has_client_permissions
   grpc_method in {
+    "/osac.public.v1.AddOnOperators/Get",
+    "/osac.public.v1.AddOnOperators/List",
     "/osac.public.v1.BareMetalInstanceCatalogItems/Get",
     "/osac.public.v1.BareMetalInstanceCatalogItems/List",
     "/osac.public.v1.BareMetalInstanceTemplates/Get",

@@ -13,14 +13,12 @@ aap:
     redisMode: standalone
     routeTlsTerminationMechanism: Edge
     imagePullPolicy: IfNotPresent
-
 bootstrap:
   enabled: true
-  image: ghcr.io/osac-project/osac-aap:latest  # PLACEHOLDER -- overwritten at release time by publish-charts.yaml
+  image: ghcr.io/osac-project/osac-aap:sha-21c13fb # PLACEHOLDER -- overwritten at release time by publish-charts.yaml
   cliImage: quay.io/openshift/origin-cli:4.20.0
   backoffLimit: 15
   readinessConsecutiveSuccesses: 3
-
 configAsCode:
   manifestSecret: "config-as-code-manifest-ig"
   secret: "config-as-code-ig"
@@ -39,21 +37,16 @@ configAsCode:
   manifest:
     create: false
     data: {}
-
 importAgents:
   servers: []
-
 importBcmAgents:
   cert: ""
   key: ""
-
 serviceAccounts:
   osacSa: "osac-sa"
   templatePublisher: "template-publisher"
-
 apiToken:
   create: true
-
 instanceGroups:
   clusterFulfillment:
     enabled: false

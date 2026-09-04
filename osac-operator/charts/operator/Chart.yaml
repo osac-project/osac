@@ -2,4 +2,5 @@ apiVersion: v2
 name: osac-operator
 description: OSAC Operator - manages OSAC custom resources
 type: application
-version: 0.0.0
+version: 0.0.12-nightly.20260904.21c13fb.69.1
+appVersion: 0.0.12-nightly.20260904.21c13fb.69.1

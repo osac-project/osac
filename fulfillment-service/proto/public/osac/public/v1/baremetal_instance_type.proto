@@ -24,6 +24,7 @@ import "osac/public/v1/baremetal_instance_common_type.proto";
 import "osac/public/v1/baremetal_instance_template_type.proto";
 import "osac/public/v1/baremetal_instance_type_type.proto";
 import "osac/public/v1/condition_status_type.proto";
+import "osac/public/v1/disk_image_type.proto";
 import "osac/public/v1/metadata_type.proto";
 import "osac/public/v1/security_group_type.proto";
 import "osac/public/v1/subnet_type.proto";
@@ -156,6 +157,9 @@ message BareMetalInstanceSpec {
   // to the CRD's Selector.HostSelector for host selection. When omitted, host selection falls
   // back to the catalog item's template host_type.
   BareMetalInstanceTypeLocalReference instance_type = 11 [(google.api.field_behavior) = IMMUTABLE];
+
+  // Reference to a DiskImage resource. Immutable after creation.
+  DiskImageReference disk_image = 12 [(google.api.field_behavior) = IMMUTABLE];
 }
 
 // The status contains the details of the bare metal instance provided by the system.

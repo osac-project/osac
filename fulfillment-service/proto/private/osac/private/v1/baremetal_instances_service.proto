@@ -51,6 +51,9 @@ message BareMetalInstancesCreateRequest {
 
 message BareMetalInstancesCreateResponse {
   BareMetalInstance object = 1;
+
+  // Deprecation or validation warnings (e.g. deprecated disk_image).
+  repeated string warnings = 2;
 }
 
 message BareMetalInstancesUpdateRequest {

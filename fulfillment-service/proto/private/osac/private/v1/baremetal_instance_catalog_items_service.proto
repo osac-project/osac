@@ -51,6 +51,9 @@ message BareMetalInstanceCatalogItemsCreateRequest {
 
 message BareMetalInstanceCatalogItemsCreateResponse {
   BareMetalInstanceCatalogItem object = 1;
+
+  // Deprecation or validation warnings (e.g. deprecated disk_image in field_definitions).
+  repeated string warnings = 2;
 }
 
 message BareMetalInstanceCatalogItemsUpdateRequest {
@@ -65,6 +68,9 @@ message BareMetalInstanceCatalogItemsUpdateRequest {
 
 message BareMetalInstanceCatalogItemsUpdateResponse {
   BareMetalInstanceCatalogItem object = 1;
+
+  // Deprecation or validation warnings (e.g. deprecated disk_image in field_definitions).
+  repeated string warnings = 2;
 }
 
 message BareMetalInstanceCatalogItemsDeleteRequest {

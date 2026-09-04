@@ -509,5 +509,31 @@ for entry in "${SIBLINGS[@]}"; do
   ensure_sibling "${repo}" "${dir}"
 done
 
+PRE_COMMIT_INSTALLER=""
+if command -v rh-multi-pre-commit &>/dev/null; then
+  PRE_COMMIT_INSTALLER="rh-multi-pre-commit"
+elif command -v pre-commit &>/dev/null; then
+  PRE_COMMIT_INSTALLER="pre-commit"
+fi
+
+install_pre_commit_hooks() {
+  local dir="$1"
+  [[ -f "${dir}/.pre-commit-config.yaml" && -n "$PRE_COMMIT_INSTALLER" ]] || return 0
+  if [[ "$PRE_COMMIT_INSTALLER" == "rh-multi-pre-commit" ]]; then
+    rh-multi-pre-commit install --path "$dir"
+  else
+    (cd "$dir" && pre-commit install)
+  fi
+}
+
+install_pre_commit_hooks "$PROJECT_ROOT"
+for entry in "${SIBLINGS[@]}"; do
+  repo="${entry%%:*}"
+  dir="${entry#*:}"
+  if is_expected_sibling "${PROJECT_ROOT}/${dir}" "$repo"; then
+    install_pre_commit_hooks "${PROJECT_ROOT}/${dir}"
+  fi
+done
+
 echo ""
 echo "AI workflows and OSAC skills installed."

@@ -254,6 +254,7 @@ jobs:
       # is fork-originated and gets no OIDC/WIF access at all by GitHub
       # Actions policy. merge_group is excluded the same way (its
       # github.ref is the readonly-queue ref).
+      notify-on-failure: ${{ github.event_name == 'schedule' }}
       enable-ai-diagnostic: ${{ github.ref == 'refs/heads/main' }}
 
   # Skip this required check on unreadiness so it stays pending (not red).

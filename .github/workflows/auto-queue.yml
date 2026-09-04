@@ -1,6 +1,9 @@
 ---
 name: auto-queue
 
+# Prow labels still required (label-gate). Human GitHub "Request changes"
+# also blocks until that reviewer approves or an admin dismisses. Bot
+# Request changes (CodeRabbit, etc.) are dismissed and do not block.
 on:
   pull_request_target:
     types: [opened, reopened, ready_for_review, synchronize, labeled, unlabeled]
@@ -15,37 +18,56 @@ jobs:
   enable-auto-merge:
     if: github.repository == 'osac-project/osac' && (github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review')
     runs-on: ubuntu-latest
+    permissions: {}
     steps:
       - name: Remove lgtm on new push
         if: github.event.action == 'synchronize'
         env:
           GH_TOKEN: ${{ secrets.MERGE_QUEUE_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
         run: |
-          pr=${{ github.event.pull_request.number }}
-          if gh pr view "$pr" --repo "${{ github.repository }}" --json labels --jq '[.labels[].name]' | jq -e 'index("lgtm")' > /dev/null; then
-            echo "Removing lgtm label from PR #$pr after new push"
-            gh pr edit "$pr" --repo "${{ github.repository }}" --remove-label lgtm
+          if gh pr view "$PR" --repo "$REPO" --json labels --jq '[.labels[].name]' | jq -e 'index("lgtm")' > /dev/null; then
+            echo "Removing lgtm label from PR #$PR after new push"
+            gh pr edit "$PR" --repo "$REPO" --remove-label lgtm
           fi
 
-      - name: Dismiss changes-requested reviews
+      - name: Dismiss bot changes-requested reviews
         env:
           GH_TOKEN: ${{ secrets.MERGE_QUEUE_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
         run: |
-          pr=${{ github.event.pull_request.number }}
-          gh api "repos/${{ github.repository }}/pulls/$pr/reviews" --jq '.[] | select(.state == "CHANGES_REQUESTED") | .id' | while read -r review_id; do
-            echo "Dismissing review $review_id on PR #$pr"
-            gh api "repos/${{ github.repository }}/pulls/$pr/reviews/$review_id/dismissals" -X PUT -f message="Auto-dismissed: only Prow labels gate merging"
-          done
+          set -euo pipefail
+          if [[ -z "${GH_TOKEN:-}" ]]; then
+            echo "MERGE_QUEUE_TOKEN unavailable; skip bot review dismiss."
+            exit 0
+          fi
+          reviews=$(gh api --paginate --slurp "repos/${REPO}/pulls/${PR}/reviews" | jq 'add // []')
+          while read -r review_id; do
+            [[ -z "${review_id}" ]] && continue
+            echo "Dismissing bot review ${review_id} on PR #${PR}"
+            gh api "repos/${REPO}/pulls/${PR}/reviews/${review_id}/dismissals" \
+              -X PUT -f message="Auto-dismissed: bot Request changes do not block merge"
+          done < <(jq -r '
+            .[]
+            | select(.state == "CHANGES_REQUESTED")
+            | select(.user != null)
+            | select(((.user.login // "") | endswith("[bot]")) or ((.user.type // "") == "Bot"))
+            | .id
+          ' <<<"${reviews}")
 
       - name: Check repo collaborator
         id: org-check
         env:
           GH_TOKEN: ${{ secrets.MERGE_QUEUE_TOKEN }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+          REPO: ${{ github.repository }}
         run: |
-          author="${{ github.event.pull_request.user.login }}"
-          echo "author=$author"
-          echo "draft=${{ github.event.pull_request.draft }}"
-          if gh api "repos/${{ github.repository }}/collaborators/$author"; then
+          echo "author=$AUTHOR"
+          echo "draft=$DRAFT"
+          if gh api "repos/${REPO}/collaborators/${AUTHOR}"; then
             echo "org_member=true"
             echo "org_member=true" >> "$GITHUB_OUTPUT"
           else
@@ -53,12 +75,16 @@ jobs:
             echo "org_member=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Check blocking labels
+      - name: Check merge blockers
         if: steps.org-check.outputs.org_member == 'true'
         id: label-check
         env:
+          GH_TOKEN: ${{ secrets.MERGE_QUEUE_TOKEN }}
           LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
         run: |
+          set -euo pipefail
           echo "labels=$LABELS"
           blocked=false
           for label in "do-not-merge/hold" "do-not-merge/work-in-progress" "do-not-merge/invalid-owners-file" "needs-rebase"; do
@@ -67,6 +93,35 @@ jobs:
               blocked=true
             fi
           done
+
+          if [[ -z "${GH_TOKEN:-}" ]]; then
+            echo "MERGE_QUEUE_TOKEN unavailable; cannot evaluate human reviews. Treating as blocked."
+            blocked=true
+          else
+            reviews=$(gh api --paginate --slurp "repos/${REPO}/pulls/${PR}/reviews" | jq 'add // []')
+            set +e
+            jq -e '
+              [.[]
+                | select(.user != null)
+                | select(((.user.login // "") | endswith("[bot]")) | not)
+                | select((.user.type // "User") != "Bot")
+                | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED")
+              ]
+              | group_by(.user.login)
+              | map(max_by([(.submitted_at // ""), (.id // 0)]))
+              | map(select(.state == "CHANGES_REQUESTED"))
+              | length > 0
+            ' <<<"${reviews}" >/dev/null
+            rc=$?
+            set -e
+            if [[ ${rc} -eq 0 ]]; then
+              echo "Human CHANGES_REQUESTED still outstanding"
+              blocked=true
+            elif [[ ${rc} -ne 1 ]]; then
+              echo "Cannot evaluate human review state (jq rc=${rc}); treating as blocked."
+              blocked=true
+            fi
+          fi
           echo "blocked=$blocked"
           echo "blocked=$blocked" >> "$GITHUB_OUTPUT"
 
@@ -77,7 +132,9 @@ jobs:
           && steps.label-check.outputs.blocked == 'false'
         env:
           GH_TOKEN: ${{ secrets.MERGE_QUEUE_TOKEN }}
-        run: gh pr merge ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --auto --rebase
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: gh pr merge "$PR" --repo "$REPO" --auto --rebase
 
       - name: Disable auto-merge
         if: >-
@@ -85,19 +142,27 @@ jobs:
           && steps.label-check.outputs.blocked == 'true'
         env:
           GH_TOKEN: ${{ secrets.MERGE_QUEUE_TOKEN }}
-        run: gh pr merge ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --disable-auto
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: gh pr merge "$PR" --repo "$REPO" --disable-auto
 
   requeue-eligible-prs:
     if: github.repository == 'osac-project/osac' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
+    permissions: {}
     steps:
       - name: Re-enable auto-merge on eligible PRs
         env:
           GH_TOKEN: ${{ secrets.MERGE_QUEUE_TOKEN }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          if [[ -z "${GH_TOKEN:-}" ]]; then
+            echo "MERGE_QUEUE_TOKEN missing"
+            exit 1
+          fi
           echo "Scanning for eligible PRs without auto-merge..."
-          prs=$(gh pr list --repo "${{ github.repository }}" --state open --limit 200 --json number,isDraft,labels,autoMergeRequest --jq '
+          prs=$(gh pr list --repo "${REPO}" --state open --limit 200 --json number,isDraft,labels,autoMergeRequest --jq '
             [.[] | select(
               .isDraft == false
               and .autoMergeRequest == null
@@ -106,7 +171,44 @@ jobs:
             ) | .number]')
           echo "Eligible PRs: $prs"
           for pr in $(echo "$prs" | jq -r '.[]'); do
+            reviews=$(gh api --paginate --slurp "repos/${REPO}/pulls/${pr}/reviews" | jq 'add // []')
+            while read -r review_id; do
+              [[ -z "${review_id}" ]] && continue
+              echo "Dismissing bot review ${review_id} on PR #${pr}"
+              gh api "repos/${REPO}/pulls/${pr}/reviews/${review_id}/dismissals" \
+                -X PUT -f message="Auto-dismissed: bot Request changes do not block merge"
+            done < <(jq -r '
+              .[]
+              | select(.state == "CHANGES_REQUESTED")
+              | select(.user != null)
+              | select(((.user.login // "") | endswith("[bot]")) or ((.user.type // "") == "Bot"))
+              | .id
+            ' <<<"${reviews}")
+
+            set +e
+            jq -e '
+              [.[]
+                | select(.user != null)
+                | select(((.user.login // "") | endswith("[bot]")) | not)
+                | select((.user.type // "User") != "Bot")
+                | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED")
+              ]
+              | group_by(.user.login)
+              | map(max_by([(.submitted_at // ""), (.id // 0)]))
+              | map(select(.state == "CHANGES_REQUESTED"))
+              | length > 0
+            ' <<<"${reviews}" >/dev/null
+            rc=$?
+            set -e
+            if [[ ${rc} -eq 0 ]]; then
+              echo "Skipping PR #${pr}: human CHANGES_REQUESTED still outstanding"
+              continue
+            elif [[ ${rc} -ne 1 ]]; then
+              echo "Skipping PR #${pr}: cannot evaluate human review state (jq rc=${rc})"
+              continue
+            fi
+
             echo "Re-enabling auto-merge on PR #$pr"
-            gh pr merge "$pr" --repo "${{ github.repository }}" --auto --rebase
+            gh pr merge "$pr" --repo "${REPO}" --auto --rebase
           done
           echo "Scan complete."

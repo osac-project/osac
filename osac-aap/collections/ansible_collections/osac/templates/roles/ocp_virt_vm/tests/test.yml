@@ -49,6 +49,18 @@
 #
 #   Test 15 (No GPU -- no hostDevices in template spec):
 #     ansible-playbook ... -e test_create_no_gpu=true
+#
+#   Test 16 (Windows password extracted from user-data secret):
+#     ansible-playbook ... -e test_windows_password_from_userdata=true
+#
+#   Test 17 (Windows without password in user-data fails assertion):
+#     ansible-playbook ... -e test_windows_userdata_no_password_fails=true
+#
+#   Test 18 (Base64-encoded password in rendered Unattend.xml):
+#     ansible-playbook ... -e test_windows_unattend_password_encoded=true
+#
+#   Test 19 (Linux VM with user-data -- no password extraction):
+#     ansible-playbook ... -e test_linux_userdata_no_extraction=true
 
 # ──────────────────────────────────────────────────────────────
 # Test 1: Verify spec defaults are merged into a minimal fixture
@@ -818,3 +830,270 @@
             fail_msg: >-
               Expected no hostDevices when spec.gpu is absent, but found
               {{ vm_template_spec.domain.devices.hostDevices | default('(key not present)') }}
+
+# ──────────────────────────────────────────────────────────────
+# Test 16: Windows password extracted from #cloud-config user-data
+# Expected: The parsing logic correctly extracts the password key
+#           from base64-encoded #cloud-config user-data, and
+#           create_validate accepts the extracted password (>= 8 chars).
+# Note: k8s_info is not available in offline tests; we simulate the
+#       secret lookup result and verify the extraction/parsing logic,
+#       then run create_validate with the password pre-set and no
+#       userDataSecretRef to avoid the k8s_info call.
+# ──────────────────────────────────────────────────────────────
+- name: "Test ocp_virt_vm -- Windows password extracted from user-data secret"
+  hosts: localhost
+
+  collections:
+    - osac.templates
+
+  vars:
+    compute_instance_label: "osac.openshift.io/computeinstance"
+
+  tasks:
+    - when: test_windows_password_from_userdata | default(false) | bool
+      block:
+        - name: Load ocp_virt_vm role defaults (Windows profile maps)
+          ansible.builtin.include_vars:
+            file: "{{ playbook_dir }}/../defaults/main.yaml"
+
+        - name: Simulate user-data secret lookup result (bypass k8s_info)
+          ansible.builtin.set_fact:
+            _user_data_secret_result:
+              resources:
+                - data:
+                    userdata: "{{ ('#cloud-config\npassword: \"MySecureP@ss123!\"\n') | b64encode }}"
+
+        - name: Parse user-data and extract password (same logic as role)
+          ansible.builtin.set_fact:
+            vm_sysprep_admin_password: >-
+              {{ (_user_data_secret_result.resources[0].data.userdata
+                  | b64decode
+                  | regex_replace('^#cloud-config\n', '')
+                  | from_yaml).password }}
+
+        - name: Verify password was extracted from user-data
+          ansible.builtin.assert:
+            that:
+              - vm_sysprep_admin_password is defined
+              - vm_sysprep_admin_password == "MySecureP@ss123!"
+              - vm_sysprep_admin_password | length >= 8
+            fail_msg: >-
+              Expected vm_sysprep_admin_password='MySecureP@ss123!' from user-data,
+              got {{ vm_sysprep_admin_password | default('undefined') }}
+
+        - name: Load Windows fixture without userDataSecretRef for create_validate
+          ansible.builtin.set_fact:
+            compute_instance: "{{ lookup('file', 'fixtures/computeinstance-windows-with-image-test.yaml') | from_yaml }}"
+            guest_os_family: windows
+            default_spec: "{{ _guest_os_windows_default_spec }}"
+            default_arg_specs: "{{ _guest_os_windows_default_arg_specs }}"
+            template_parameters: {}
+            vm_enable_sysprep: true
+
+        - name: Set compute instance name
+          ansible.builtin.set_fact:
+            compute_instance_name: "{{ compute_instance.metadata.name }}"
+
+        - name: Run create_validate (should pass with pre-extracted password)
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: create_validate.yaml
+
+        - name: Verify password survived validation unchanged
+          ansible.builtin.assert:
+            that:
+              - vm_sysprep_admin_password == "MySecureP@ss123!"
+            fail_msg: >-
+              Expected vm_sysprep_admin_password='MySecureP@ss123!' after validation,
+              got {{ vm_sysprep_admin_password | default('undefined') }}
+
+# ──────────────────────────────────────────────────────────────
+# Test 17: Windows user-data without password field fails assertion
+# Expected: validation fails because password is empty (< 8 chars)
+# ──────────────────────────────────────────────────────────────
+- name: "Test ocp_virt_vm -- Windows user-data without password fails validation"
+  hosts: localhost
+
+  collections:
+    - osac.templates
+
+  vars:
+    compute_instance_label: "osac.openshift.io/computeinstance"
+
+  tasks:
+    - when: test_windows_userdata_no_password_fails | default(false) | bool
+      block:
+        - name: Load ocp_virt_vm role defaults (Windows profile maps)
+          ansible.builtin.include_vars:
+            file: "{{ playbook_dir }}/../defaults/main.yaml"
+
+        - name: Load Windows fixture without password (no userDataSecretRef to provide one)
+          ansible.builtin.set_fact:
+            compute_instance: "{{ lookup('file', 'fixtures/computeinstance-windows-with-image-test.yaml') | from_yaml }}"
+            guest_os_family: windows
+            default_spec: "{{ _guest_os_windows_default_spec }}"
+            default_arg_specs: "{{ _guest_os_windows_default_arg_specs }}"
+            template_parameters: {}
+            vm_enable_sysprep: true
+            vm_sysprep_admin_password: ""
+
+        - name: Set compute instance name
+          ansible.builtin.set_fact:
+            compute_instance_name: "{{ compute_instance.metadata.name }}"
+
+        - name: Run create_validate (expect failure -- empty password, no secret extraction in offline test)
+          block:
+            - name: Include create_validate
+              ansible.builtin.include_role:
+                name: osac.templates.ocp_virt_vm
+                tasks_from: create_validate.yaml
+          rescue:
+            - name: Capture error message
+              ansible.builtin.set_fact:
+                validation_error: "{{ ansible_failed_result.msg | default('') }}"
+                userdata_no_password_failed: true
+
+            - name: Verify failure was due to missing password
+              ansible.builtin.assert:
+                that:
+                  - "'vm_sysprep_admin_password' in validation_error"
+                fail_msg: "Validation failed for unexpected reason: {{ validation_error }}"
+
+        - name: Verify validation failed without password
+          ansible.builtin.assert:
+            that:
+              - userdata_no_password_failed | default(false)
+            fail_msg: >-
+              Expected create_validate to fail when vm_sysprep_admin_password
+              is empty and no user-data secret provides a password
+
+# ──────────────────────────────────────────────────────────────
+# Test 18: Password appears base64-encoded in rendered Unattend.xml
+# Expected: Rendered XML contains base64-encoded password with
+#           PlainText=false, not plain text
+# ──────────────────────────────────────────────────────────────
+- name: "Test ocp_virt_vm -- Unattend.xml contains base64-encoded password"
+  hosts: localhost
+
+  collections:
+    - osac.templates
+
+  vars:
+    compute_instance_label: "osac.openshift.io/computeinstance"
+
+  tasks:
+    - when: test_windows_unattend_password_encoded | default(false) | bool
+      block:
+        - name: Load ocp_virt_vm role defaults (Windows profile maps)
+          ansible.builtin.include_vars:
+            file: "{{ playbook_dir }}/../defaults/main.yaml"
+
+        - name: Set up variables for template rendering
+          ansible.builtin.set_fact:
+            vm_hostname: "test-win-encode"
+            vm_sysprep_admin_password: "MySecureP@ss123!"
+            vm_sysprep_autologon_enabled: true
+            vm_sysprep_input_locale: "en-US"
+            vm_sysprep_system_locale: "en-US"
+            vm_sysprep_ui_language: "en-US"
+            vm_sysprep_user_locale: "en-US"
+            vm_sysprep_timezone: "Eastern Standard Time"
+
+        - name: Render Unattend.xml template
+          ansible.builtin.set_fact:
+            rendered_unattend: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../templates/unattend.xml.j2') }}"
+
+        - name: Compute expected base64-encoded Password value
+          ansible.builtin.set_fact:
+            expected_password_b64: "{{ ('MySecureP@ss123!' ~ 'Password') | b64encode }}"
+            expected_admin_password_b64: "{{ ('MySecureP@ss123!' ~ 'AdministratorPassword') | b64encode }}"
+
+        - name: Verify Password element uses base64 encoding
+          ansible.builtin.assert:
+            that:
+              - expected_password_b64 in rendered_unattend
+              - "'<PlainText>false</PlainText>' in rendered_unattend"
+            fail_msg: >-
+              Expected base64-encoded Password '{{ expected_password_b64 }}'
+              with PlainText=false in Unattend.xml, got: {{ rendered_unattend }}
+
+        - name: Verify AdministratorPassword element uses base64 encoding
+          ansible.builtin.assert:
+            that:
+              - expected_admin_password_b64 in rendered_unattend
+            fail_msg: >-
+              Expected base64-encoded AdministratorPassword '{{ expected_admin_password_b64 }}'
+              in Unattend.xml, got: {{ rendered_unattend }}
+
+        - name: Verify plain text password does NOT appear in rendered XML
+          ansible.builtin.assert:
+            that:
+              - "'<PlainText>true</PlainText>' not in rendered_unattend"
+            fail_msg: >-
+              Unattend.xml should not contain PlainText=true after base64 encoding change
+
+# ──────────────────────────────────────────────────────────────
+# Test 19: Linux VM with user-data -- no password extraction
+# Expected: user-data secret extraction is skipped for Linux guests,
+#           vm_sysprep_admin_password remains at its default (empty)
+# ──────────────────────────────────────────────────────────────
+- name: "Test ocp_virt_vm -- Linux VM with user-data does not extract password"
+  hosts: localhost
+
+  collections:
+    - osac.templates
+
+  vars:
+    compute_instance_label: "osac.openshift.io/computeinstance"
+
+  tasks:
+    - when: test_linux_userdata_no_extraction | default(false) | bool
+      block:
+        - name: Load ocp_virt_vm role defaults
+          ansible.builtin.include_vars:
+            file: "{{ playbook_dir }}/../defaults/main.yaml"
+
+        - name: Read minimal ComputeInstance fixture (Linux with userDataSecretRef)
+          ansible.builtin.set_fact:
+            compute_instance:
+              apiVersion: osac.openshift.io/v1alpha1
+              kind: ComputeInstance
+              metadata:
+                name: test-linux-userdata
+                namespace: osac-system
+              spec:
+                templateID: osac.templates.ocp_virt_vm
+                cores: 2
+                memoryGiB: 2
+                networkAttachments:
+                  - subnetRef: test-subnet
+                userDataSecretRef:
+                  name: linux-cloud-init
+            guest_os_family: linux
+
+        - name: Set compute instance name
+          ansible.builtin.set_fact:
+            compute_instance_name: "{{ compute_instance.metadata.name }}"
+
+        - name: Run create_validate
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: create_validate.yaml
+
+        - name: Verify vm_user_data_secret_ref is set (user-data present)
+          ansible.builtin.assert:
+            that:
+              - vm_user_data_secret_ref is defined
+              - vm_user_data_secret_ref == "linux-cloud-init"
+            fail_msg: >-
+              Expected vm_user_data_secret_ref='linux-cloud-init',
+              got {{ vm_user_data_secret_ref | default('undefined') }}
+
+        - name: Verify password extraction was skipped (Linux)
+          ansible.builtin.assert:
+            that:
+              - vm_sysprep_admin_password == ""
+            fail_msg: >-
+              Expected vm_sysprep_admin_password to remain empty for Linux guest,
+              got {{ vm_sysprep_admin_password | default('undefined') }}

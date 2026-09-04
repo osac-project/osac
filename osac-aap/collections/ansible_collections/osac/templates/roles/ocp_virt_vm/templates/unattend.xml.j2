@@ -51,16 +51,16 @@
       </OOBE>
       <AutoLogon>
         <Password>
-          <Value>{{ vm_sysprep_admin_password | e }}</Value>
-          <PlainText>true</PlainText>
+          <Value>{{ (vm_sysprep_admin_password ~ 'Password') | b64encode }}</Value>
+          <PlainText>false</PlainText>
         </Password>
         <Enabled>{{ vm_sysprep_autologon_enabled | lower }}</Enabled>
         <Username>Administrator</Username>
       </AutoLogon>
       <UserAccounts>
         <AdministratorPassword>
-          <Value>{{ vm_sysprep_admin_password | e }}</Value>
-          <PlainText>true</PlainText>
+          <Value>{{ (vm_sysprep_admin_password ~ 'AdministratorPassword') | b64encode }}</Value>
+          <PlainText>false</PlainText>
         </AdministratorPassword>
       </UserAccounts>
       <RegisteredOrganization/>

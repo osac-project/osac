@@ -1,0 +1,20 @@
+---
+apiVersion: osac.openshift.io/v1alpha1
+kind: ComputeInstance
+metadata:
+  name: test-win-userdata
+  namespace: osac-system
+spec:
+  templateID: osac.templates.ocp_virt_vm
+  guestOSFamily: "windows"
+  cores: 4
+  memoryGiB: 8
+  networkAttachments:
+    - subnetRef: test-subnet
+  image:
+    sourceType: registry
+    sourceRef: "registry.example.com/osac/windows-golden:ltsc2022"
+  userDataSecretRef:
+    name: win-admin-creds
+status:
+  desiredConfigVersion: "1"

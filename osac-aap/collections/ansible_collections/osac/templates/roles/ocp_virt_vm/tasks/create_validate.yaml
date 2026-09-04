@@ -41,6 +41,30 @@
       from your own registry (for example a golden image built for your environment).
   when: guest_os_family == 'windows'
 
+- name: Read user-data secret and extract password (Windows)
+  when:
+    - guest_os_family == 'windows'
+    - vm_user_data_secret_ref | length > 0
+  block:
+    - name: Fetch user-data secret from CR namespace
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "{{ vm_user_data_secret_ref }}"
+        namespace: "{{ compute_instance.metadata.namespace }}"
+      register: _user_data_secret_result
+
+    - name: Parse user-data and extract password
+      ansible.builtin.set_fact:
+        vm_sysprep_admin_password: >-
+          {{ (_user_data_secret_result.resources[0].data.userdata
+              | b64decode
+              | regex_replace('^#cloud-config\n', '')
+              | from_yaml).password }}
+      when:
+        - _user_data_secret_result.resources | length > 0
+        - _user_data_secret_result.resources[0].data.userdata is defined
+
 - name: Require vm_sysprep_admin_password when sysprep is enabled (Windows)
   ansible.builtin.assert:
     that:

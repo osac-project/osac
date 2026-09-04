@@ -237,6 +237,7 @@ endif
 		-f $(INSTANCE_VALUES) $(INSTANCE_VALUES_EXTRA) \
 		--namespace $(NS) --create-namespace \
 		$(if $(DOMAIN),--set service.externalHostname=fulfillment-api-$(NS).$(DOMAIN) --set service.internalHostname=fulfillment-internal-api-$(NS).$(DOMAIN) --set global.clusterDomain=$(DOMAIN)) \
+		$(if $(filter caas-ci,$(PROFILE)),--set service.vault.endpoint=https://openbao.$(NS).svc.cluster.local:8200) \
 		$(EXTRA_HELM_ARGS) \
 		--wait --timeout 40m
 

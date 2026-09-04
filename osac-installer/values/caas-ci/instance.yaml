@@ -211,6 +211,8 @@ lvms:
 
 # --- Bundled OpenBao (Vault-compatible secret store) ---
 bundledVault:
+  enabled: true
+  devRootToken: "dev-root-token"
   # Override podSecurityContext for OpenShift restricted-v2 SCC: omit numeric
   # runAsUser/runAsGroup/fsGroup — the SCC allocates UIDs from the namespace UID
   # range and resolves the named user automatically. A non-nil value here fully

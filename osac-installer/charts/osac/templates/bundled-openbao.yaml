@@ -170,9 +170,6 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
-        runAsUser: 100
-        runAsGroup: 1000
-        fsGroup: 1000
       volumes:
       - name: server-cert
         secret:

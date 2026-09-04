@@ -236,7 +236,7 @@ endif
 	helm upgrade --install osac $(OSAC_CHART) \
 		-f $(INSTANCE_VALUES) $(INSTANCE_VALUES_EXTRA) \
 		--namespace $(NS) --create-namespace \
-		$(if $(DOMAIN),--set service.externalHostname=fulfillment-api-$(NS).$(DOMAIN) --set service.internalHostname=fulfillment-internal-api-$(NS).$(DOMAIN) --set service.auth.issuerUrl=https://keycloak-keycloak.$(DOMAIN)/realms/osac --set service.idp.url=https://keycloak-keycloak.$(DOMAIN)) \
+		$(if $(DOMAIN),--set service.externalHostname=fulfillment-api-$(NS).$(DOMAIN) --set service.internalHostname=fulfillment-internal-api-$(NS).$(DOMAIN) --set service.auth.issuerUrl=https://keycloak-keycloak.$(DOMAIN)/realms/osac --set service.idp.url=https://keycloak-keycloak.$(DOMAIN) --set service.vault.keycloakIssuerUrl=https://keycloak-keycloak.$(DOMAIN)/realms/osac) \
 		$(EXTRA_HELM_ARGS) \
 		--wait --timeout 40m
 

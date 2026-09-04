@@ -123,7 +123,7 @@ Phase 3: charts/osac/                   # OSAC platform (per-instance workload)
     osac-ui (conditional: ui.enabled)
       -- a real external chart, via an oci:// reference pinned to a
       released version in Chart.yaml
-  Templates: hub-access, hooks (create-hub, pre-install-validate,
+  Templates: hub-access, bundled-openbao (conditional: bundledVault.enabled), hooks (create-hub, pre-install-validate,
     publish-templates, seed-cluster-versions, register-local-storage)
   values.schema.json validates all configuration
 ```

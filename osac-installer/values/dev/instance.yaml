@@ -111,8 +111,8 @@ aap:
     clusterFulfillment:
       enabled: true
       config:
-        NETWORK_CLASS: "esi"
-        NETWORK_STEPS_COLLECTION: "osac.steps"
+        NETWORK_CLASS: ""  # ESI backend removed; set to netris or agentless_net if needed
+        NETWORK_STEPS_COLLECTION: ""  # osac.steps removed; set to netris.steps or agentless_net.steps if needed
         EXTERNAL_ACCESS_BASE_DOMAIN: "box.massopen.cloud"
         EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS: "box.massopen.cloud"
         EXTERNAL_ACCESS_API_INTERNAL_NETWORK: "hypershift"

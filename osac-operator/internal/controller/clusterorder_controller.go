@@ -339,6 +339,20 @@ func (r *ClusterOrderReconciler) handleUpdate(ctx context.Context, _ reconcile.R
 		return ctrl.Result{}, err
 	}
 
+	// Detect HC before provisioning so crash recovery can adopt an orphaned
+	// HostedCluster (job never flushed) instead of re-triggering AAP.
+	ns, err := r.findNamespace(ctx, instance)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	if hc, _ := r.findHostedCluster(ctx, instance, ns.GetName()); hc != nil {
+		if err := r.handleHostedCluster(ctx, instance, hc); err != nil {
+			return ctrl.Result{}, err
+		}
+		r.adoptOrphanedHostedCluster(ctx, instance)
+	}
+
 	// Handle provisioning via provider (hybrid approach: job tracking + HC watching)
 	provisionResult, err := r.handleProvisioning(ctx, instance)
 	if err != nil {
@@ -352,17 +366,6 @@ func (r *ClusterOrderReconciler) handleUpdate(ctx context.Context, _ reconcile.R
 	}
 	if agentResult.RequeueAfter > 0 {
 		return agentResult, nil
-	}
-
-	ns, err := r.findNamespace(ctx, instance)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-
-	if hc, _ := r.findHostedCluster(ctx, instance, ns.GetName()); hc != nil {
-		if err := r.handleHostedCluster(ctx, instance, hc); err != nil {
-			return ctrl.Result{}, err
-		}
 	}
 
 	// If provision job needs polling, requeue for status updates
@@ -389,6 +392,14 @@ func (r *ClusterOrderReconciler) handleHostedCluster(ctx context.Context, instan
 		if hostedClusterIsReady(hc) {
 			log.Info("hosted cluster is ready", "clusterorder", instance.GetName())
 			instance.SetStatusCondition(v1alpha1.ConditionClusterAvailable, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
+			// Crash recovery: when the latest provision job is an adopted orphan,
+			// EvaluateAction returns Skip and OnSuccess is never called. Set Ready
+			// here so the phase converges on every reconcile as the HC becomes healthy.
+			latestJob := provisioning.FindLatestJobByType(instance.Status.ProvisioningJobs, v1alpha1.JobTypeProvision)
+			if provisioning.HasJobID(latestJob) && latestJob.JobID == "adopted-orphan" {
+				instance.Status.Phase = v1alpha1.ClusterOrderPhaseReady
+				instance.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionFalse, "", v1alpha1.ReasonAsExpected)
+			}
 		}
 	}
 
@@ -693,6 +704,32 @@ func (r *ClusterOrderReconciler) provisioningCallbacks(instance *v1alpha1.Cluste
 			instance.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionFalse, "", v1alpha1.ReasonAsExpected)
 		},
 	}
+}
+
+// adoptOrphanedHostedCluster inserts a synthetic provision job when an HC exists
+// but no job is tracked — the operator crashed before statusFlush. This prevents
+// EvaluateAction from re-triggering a duplicate AAP job. Phase transitions are
+// handled by handleHostedCluster, which checks HC readiness on every reconcile.
+func (r *ClusterOrderReconciler) adoptOrphanedHostedCluster(ctx context.Context, instance *v1alpha1.ClusterOrder) {
+	log := ctrllog.FromContext(ctx)
+	latestJob := provisioning.FindLatestJobByType(instance.Status.ProvisioningJobs, v1alpha1.JobTypeProvision)
+	if provisioning.HasJobID(latestJob) {
+		return
+	}
+	log.Info("adopting orphaned HostedCluster — operator likely crashed before statusFlush",
+		"hostedCluster", instance.Status.ClusterReference.HostedClusterName)
+	instance.Status.ProvisioningJobs = provisioning.AppendJob(
+		instance.Status.ProvisioningJobs,
+		v1alpha1.JobStatus{
+			Type:          v1alpha1.JobTypeProvision,
+			JobID:         "adopted-orphan",
+			State:         v1alpha1.JobStateSucceeded,
+			Message:       "Adopted from orphaned HostedCluster (crash recovery)",
+			ConfigVersion: instance.Status.DesiredConfigVersion,
+			Timestamp:     metav1.NewTime(time.Now().UTC()),
+		},
+		r.MaxJobHistory,
+	)
 }
 
 func (r *ClusterOrderReconciler) handleProvisioning(ctx context.Context, instance *v1alpha1.ClusterOrder) (ctrl.Result, error) {

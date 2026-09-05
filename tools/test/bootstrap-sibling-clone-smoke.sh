@@ -214,6 +214,18 @@ run_bootstrap() {
     bash "${root}/tools/bootstrap.sh" --no-fork "$@"
 }
 
+run_bootstrap_isolated() {
+  local root="$1" home="$2" bin="$3"
+  shift 3
+  HOME="$home" PATH="$bin" \
+    OSAC_SMOKE_CLONE_LOG="${home}/clone.log" \
+    OSAC_SMOKE_GH_LOG="${home}/gh.log" \
+    OSAC_SMOKE_GIT_LOG="${home}/git.log" \
+    OSAC_SMOKE_HOOK_LOG="${home}/hooks.log" \
+    OSAC_SMOKE_HOOK_FAIL_MATCH="${OSAC_SMOKE_HOOK_FAIL_MATCH:-}" \
+    bash "${root}/tools/bootstrap.sh" --no-fork "$@"
+}
+
 run_bootstrap_fork() {
   local root="$1" home="$2" bin="$3"
   shift 3
@@ -1146,17 +1158,18 @@ test_hook_install_falls_back_to_pre_commit_and_is_repeatable() {
   local home root bin home_skills home_workflows repo_skills clone_log out hook_log
   prepare_fixture hooks-upstream
   root=$(realpath "$root")
+  add_isolated_bootstrap_commands "$bin"
   write_hook_installer_wrapper "${bin}/pre-commit" upstream
   seed_pre_commit_config "$root"
 
-  run_bootstrap "$root" "$home" "$bin" >/dev/null
+  run_bootstrap_isolated "$root" "$home" "$bin" >/dev/null
   seed_pre_commit_config "${root}/enhancement-proposals"
   seed_pre_commit_config "${root}/osac-ui"
   seed_pre_commit_config "${root}/osac-docs"
   : > "${home}/hooks.log"
 
-  out=$(run_bootstrap "$root" "$home" "$bin" 2>&1) || fail "fallback hook bootstrap failed: $out"
-  out=$(run_bootstrap "$root" "$home" "$bin" 2>&1) || fail "repeat hook bootstrap failed: $out"
+  out=$(run_bootstrap_isolated "$root" "$home" "$bin" 2>&1) || fail "fallback hook bootstrap failed: $out"
+  out=$(run_bootstrap_isolated "$root" "$home" "$bin" 2>&1) || fail "repeat hook bootstrap failed: $out"
   hook_log="${home}/hooks.log"
   [[ "$(grep -Fc "upstream|${root}|install" "$hook_log")" -eq 2 ]] \
     || fail "root pre-commit should run once per bootstrap: $(cat "$hook_log")"

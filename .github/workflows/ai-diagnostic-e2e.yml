@@ -40,4 +40,5 @@ jobs:
       id-token: write
     uses: osac-project/osac-test-infra/.github/workflows/ai-diagnostic-e2e.yml@main
     secrets:
-      AI_DIAGNOSTIC_TOKEN: ${{ secrets.AI_DIAGNOSTIC_TOKEN }}
+      OSAC_AI_APP_ID: ${{ secrets.OSAC_AI_APP_ID }}
+      OSAC_AI_APP_PRIVATE_KEY: ${{ secrets.OSAC_AI_APP_PRIVATE_KEY }}

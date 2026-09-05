@@ -160,6 +160,32 @@ EOF
   chmod +x "$dest"
 }
 
+write_hook_installer_wrapper() {
+  local dest="$1" kind="$2"
+  cat >"$dest" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s|%s|%s\n' '${kind}' "\$PWD" "\$*" >> "\$OSAC_SMOKE_HOOK_LOG"
+if [[ -n "\${OSAC_SMOKE_HOOK_FAIL_MATCH:-}" && "\$PWD \$*" == *"\$OSAC_SMOKE_HOOK_FAIL_MATCH"* ]]; then
+  exit 1
+fi
+EOF
+  chmod +x "$dest"
+}
+
+seed_pre_commit_config() {
+  local dir="$1"
+  printf 'repos: []\n' > "${dir}/.pre-commit-config.yaml"
+}
+
+add_isolated_bootstrap_commands() {
+  local bin="$1" command_path command_name
+  for command_name in bash basename chmod dirname mkdir readlink realpath rm; do
+    command_path=$(command -v "$command_name") || fail "missing required command: $command_name"
+    ln -sf "$command_path" "${bin}/${command_name}"
+  done
+}
+
 # Sets caller's home, root, bin, home_skills, home_workflows, repo_skills, clone_log.
 prepare_fixture() {
   home="${TMPDIR_ROOT}/home-$1"
@@ -183,6 +209,20 @@ run_bootstrap() {
     OSAC_SMOKE_CLONE_LOG="${home}/clone.log" \
     OSAC_SMOKE_GH_LOG="${home}/gh.log" \
     OSAC_SMOKE_GIT_LOG="${home}/git.log" \
+    OSAC_SMOKE_HOOK_LOG="${home}/hooks.log" \
+    OSAC_SMOKE_HOOK_FAIL_MATCH="${OSAC_SMOKE_HOOK_FAIL_MATCH:-}" \
+    bash "${root}/tools/bootstrap.sh" --no-fork "$@"
+}
+
+run_bootstrap_isolated() {
+  local root="$1" home="$2" bin="$3"
+  shift 3
+  HOME="$home" PATH="$bin" \
+    OSAC_SMOKE_CLONE_LOG="${home}/clone.log" \
+    OSAC_SMOKE_GH_LOG="${home}/gh.log" \
+    OSAC_SMOKE_GIT_LOG="${home}/git.log" \
+    OSAC_SMOKE_HOOK_LOG="${home}/hooks.log" \
+    OSAC_SMOKE_HOOK_FAIL_MATCH="${OSAC_SMOKE_HOOK_FAIL_MATCH:-}" \
     bash "${root}/tools/bootstrap.sh" --no-fork "$@"
 }
 
@@ -193,6 +233,8 @@ run_bootstrap_fork() {
     OSAC_SMOKE_CLONE_LOG="${home}/clone.log" \
     OSAC_SMOKE_GH_LOG="${home}/gh.log" \
     OSAC_SMOKE_GIT_LOG="${home}/git.log" \
+    OSAC_SMOKE_HOOK_LOG="${home}/hooks.log" \
+    OSAC_SMOKE_HOOK_FAIL_MATCH="${OSAC_SMOKE_HOOK_FAIL_MATCH:-}" \
     bash "${root}/tools/bootstrap.sh" "$@"
 }
 
@@ -338,9 +380,11 @@ test_rerun_updates_expected_clone() {
 test_skips_unrelated_existing_dir() {
   local home root bin home_skills home_workflows repo_skills clone_log out ux
   prepare_fixture skip
+  write_hook_installer_wrapper "${bin}/pre-commit" upstream
   ux="${root}/osac-ux"
   mkdir -p "$ux"
   echo leftover > "${ux}/not-the-repo"
+  seed_pre_commit_config "$ux"
 
   out=$(run_bootstrap "$root" "$home" "$bin" 2>&1) || fail "bootstrap failed: $out"
   grep -q leftover "${ux}/not-the-repo" || fail "unrelated osac-ux/ dir was overwritten"
@@ -351,6 +395,9 @@ test_skips_unrelated_existing_dir() {
     || fail "skip of osac-ux must still clone later siblings (osac-ui)"
   [[ -d "${root}/osac-docs/.git" ]] \
     || fail "skip of osac-ux must still clone later siblings (osac-docs)"
+  if [[ -f "${home}/hooks.log" ]] && grep -Fq "${ux}|install" "${home}/hooks.log"; then
+    fail "unrelated osac-ux must not receive hooks: $(cat "${home}/hooks.log")"
+  fi
   pass "skips an existing dir that is not the expected clone"
 }
 
@@ -1075,6 +1122,113 @@ test_home_git_subdir_ai_workflows_falls_back_to_repo_local() {
   pass "HOME git checkout with plain .ai-workflows subdir falls back to repo-local"
 }
 
+test_hook_install_prefers_rh_and_requires_config() {
+  local home root bin home_skills home_workflows repo_skills clone_log out hook_log
+  prepare_fixture hooks-rh
+  root=$(realpath "$root")
+  write_hook_installer_wrapper "${bin}/rh-multi-pre-commit" rh
+  write_hook_installer_wrapper "${bin}/pre-commit" upstream
+  seed_pre_commit_config "$root"
+
+  run_bootstrap "$root" "$home" "$bin" >/dev/null
+  seed_pre_commit_config "${root}/enhancement-proposals"
+  seed_pre_commit_config "${root}/osac-ux"
+  seed_pre_commit_config "$home_skills"
+  seed_pre_commit_config "$home_workflows"
+  : > "${home}/hooks.log"
+
+  out=$(run_bootstrap "$root" "$home" "$bin" 2>&1) || fail "hook bootstrap failed: $out"
+  hook_log="${home}/hooks.log"
+  grep -Fq "|install --path ${root}" "$hook_log" \
+    || fail "root rh hook install missing: $(cat "$hook_log")"
+  grep -Fq "|install --path ${root}/enhancement-proposals" "$hook_log" \
+    || fail "enhancement-proposals rh hook install missing: $(cat "$hook_log")"
+  grep -Fq "|install --path ${root}/osac-ux" "$hook_log" \
+    || fail "configured osac-ux rh hook install missing: $(cat "$hook_log")"
+  grep -q '^upstream|' "$hook_log" \
+    && fail "standard pre-commit must not run when rh installer exists: $(cat "$hook_log")"
+  grep -q 'osac-ui\|osac-docs' "$hook_log" \
+    && fail "config-less siblings must be skipped: $(cat "$hook_log")"
+  grep -q "${OSAC_AI_SKILLS_NAME}\|${AI_WORKFLOWS_NAME}" "$hook_log" \
+    && fail "vendor checkouts must not receive hooks: $(cat "$hook_log")"
+  pass "prefers rh installer and only processes configured non-vendor repos"
+}
+
+test_hook_install_falls_back_to_pre_commit_and_is_repeatable() {
+  local home root bin home_skills home_workflows repo_skills clone_log out hook_log
+  prepare_fixture hooks-upstream
+  root=$(realpath "$root")
+  add_isolated_bootstrap_commands "$bin"
+  write_hook_installer_wrapper "${bin}/pre-commit" upstream
+  seed_pre_commit_config "$root"
+
+  run_bootstrap_isolated "$root" "$home" "$bin" >/dev/null
+  seed_pre_commit_config "${root}/enhancement-proposals"
+  seed_pre_commit_config "${root}/osac-ui"
+  seed_pre_commit_config "${root}/osac-docs"
+  : > "${home}/hooks.log"
+
+  out=$(run_bootstrap_isolated "$root" "$home" "$bin" 2>&1) || fail "fallback hook bootstrap failed: $out"
+  out=$(run_bootstrap_isolated "$root" "$home" "$bin" 2>&1) || fail "repeat hook bootstrap failed: $out"
+  hook_log="${home}/hooks.log"
+  [[ "$(grep -Fc "upstream|${root}|install" "$hook_log")" -eq 2 ]] \
+    || fail "root pre-commit should run once per bootstrap: $(cat "$hook_log")"
+  [[ "$(grep -Fc "upstream|${root}/enhancement-proposals|install" "$hook_log")" -eq 2 ]] \
+    || fail "enhancement-proposals pre-commit should run once per bootstrap: $(cat "$hook_log")"
+  [[ "$(grep -Fc "upstream|${root}/osac-ui|install" "$hook_log")" -eq 2 ]] \
+    || fail "configured osac-ui pre-commit should run once per bootstrap: $(cat "$hook_log")"
+  [[ "$(grep -Fc "upstream|${root}/osac-docs|install" "$hook_log")" -eq 2 ]] \
+    || fail "configured osac-docs pre-commit should run once per bootstrap: $(cat "$hook_log")"
+  grep -q 'osac-ux' "$hook_log" \
+    && fail "config-less siblings must be skipped by fallback: $(cat "$hook_log")"
+  pass "falls back to pre-commit and repeats installation safely"
+}
+
+test_missing_hook_installers_warns_and_continues() {
+  local home root bin home_skills home_workflows repo_skills clone_log out
+  prepare_fixture hooks-missing
+  add_isolated_bootstrap_commands "$bin"
+  seed_pre_commit_config "$root"
+
+  out=$(HOME="$home" PATH="$bin" \
+    OSAC_SMOKE_CLONE_LOG="${home}/clone.log" \
+    OSAC_SMOKE_GH_LOG="${home}/gh.log" \
+    OSAC_SMOKE_GIT_LOG="${home}/git.log" \
+    OSAC_SMOKE_HOOK_LOG="${home}/hooks.log" \
+    bash "${root}/tools/bootstrap.sh" --no-fork 2>&1) \
+    || fail "bootstrap without hook installers failed: $out"
+  echo "$out" | grep -q 'pre-commit not found.*skipping hook installation' \
+    || fail "missing installer warning not found: $out"
+  echo "$out" | grep -q 'AI workflows and OSAC skills installed' \
+    || fail "bootstrap must complete without hook installers: $out"
+  pass "warns and continues when no hook installer exists"
+}
+
+test_hook_installer_failure_warns_and_continues() {
+  local home root bin home_skills home_workflows repo_skills clone_log out hook_log
+  prepare_fixture hooks-failure
+  root=$(realpath "$root")
+  write_hook_installer_wrapper "${bin}/pre-commit" upstream
+  seed_pre_commit_config "$root"
+
+  run_bootstrap "$root" "$home" "$bin" >/dev/null
+  seed_pre_commit_config "${root}/enhancement-proposals"
+  seed_pre_commit_config "${root}/osac-ui"
+  : > "${home}/hooks.log"
+
+  out=$(OSAC_SMOKE_HOOK_FAIL_MATCH=enhancement-proposals \
+    run_bootstrap "$root" "$home" "$bin" 2>&1) \
+    || fail "hook failure must not fail bootstrap: $out"
+  hook_log="${home}/hooks.log"
+  echo "$out" | grep -q 'enhancement-proposals.*failed to install hooks' \
+    || fail "repository-specific hook warning not found: $out"
+  grep -Fq "upstream|${root}/osac-ui|install" "$hook_log" \
+    || fail "hook installs after a failure must continue: $(cat "$hook_log")"
+  echo "$out" | grep -q 'AI workflows and OSAC skills installed' \
+    || fail "bootstrap must complete after hook failure: $out"
+  pass "warns and continues after a hook installer failure"
+}
+
 test_clones_all_four_into_project_root
 test_rerun_updates_expected_clone
 test_skips_unrelated_existing_dir
@@ -1111,5 +1265,9 @@ test_home_git_subdir_skills_falls_back_to_repo_local
 test_repo_local_leftover_ai_workflows_errors_without_updating
 test_repo_local_leftover_osac_ai_skills_errors_without_updating
 test_home_git_subdir_ai_workflows_falls_back_to_repo_local
+test_hook_install_prefers_rh_and_requires_config
+test_hook_install_falls_back_to_pre_commit_and_is_repeatable
+test_missing_hook_installers_warns_and_continues
+test_hook_installer_failure_warns_and_continues
 
 echo "All bootstrap sibling-clone smoke tests passed."

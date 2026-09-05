@@ -134,6 +134,23 @@ var _ = Describe("Encoder", func() {
 				},
 			),
 			Entry(
+				// jsoniter.Stream.WriteString writes bytes >= utf8.RuneSelf
+				// verbatim with no UTF-8 validation, unlike encoding/json or
+				// protojson -- a string already containing invalid UTF-8
+				// (built here the only way Go allows, since a string
+				// *literal* is compile-time UTF-8 checked) must still come
+				// out as valid, parseable JSON.
+				"String with invalid UTF-8 is sanitized",
+				Case{
+					Input: testsv1.Object_builder{
+						MyString: string([]byte{'a', 'b', 0xff, 'c', 'd'}),
+					}.Build(),
+					Expected: `{
+						"my_string": "ab` + "�" + `cd"
+					}`,
+				},
+			),
+			Entry(
 				"Nested string",
 				Case{
 					Input: testsv1.Object_builder{

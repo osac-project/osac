@@ -229,7 +229,7 @@ func (e *Encoder) marshalSingle(stream *jsoniter.Stream, value protoreflect.Valu
 		stream.WriteBool(value.Bool())
 		return stream.Error
 	case protoreflect.StringKind:
-		stream.WriteString(value.String())
+		stream.WriteString(sanitizeUTF8(value.String()))
 		return stream.Error
 	case protoreflect.Int32Kind,
 		protoreflect.Sint32Kind,
@@ -309,7 +309,7 @@ func (e *Encoder) marshalMap(stream *jsoniter.Stream, m protoreflect.Map,
 				return false
 			}
 		}
-		stream.WriteObjectField(key.String())
+		stream.WriteObjectField(sanitizeUTF8(key.String()))
 		if stream.Error != nil {
 			err = stream.Error
 			return false
@@ -335,4 +335,20 @@ func (e *Encoder) marshalWellKnown(stream *jsoniter.Stream, value proto.Message)
 	}
 	_, err = stream.Write(data)
 	return err
+}
+
+// sanitizeUTF8 makes s safe to pass to jsoniter's Stream.WriteString, which -- unlike
+// encoding/json or protojson -- writes bytes >= utf8.RuneSelf verbatim with no UTF-8
+// validation or escaping (see its "fast path, without utf8 and escape support" comment
+// upstream). Any Go string already containing invalid UTF-8 (from any source: a
+// hand-built string, a lossy earlier decode, external data our validation didn't catch)
+// gets stored byte-for-byte in the "data" JSON column that way, with nothing rejecting
+// it. protojson.Unmarshal reading it back tolerates it, but the *binary* protobuf
+// marshal used to send the object over gRPC does not validate UTF-8 on encode -- so the
+// bad bytes go out on the wire, and the receiving client's stricter binary unmarshal
+// (which does validate on decode) fails with "string field contains invalid UTF-8" on
+// every future read of that record, for every caller, until it's overwritten. Replacing
+// instead of rejecting keeps the rest of the value readable and the write from failing.
+func sanitizeUTF8(s string) string {
+	return strings.ToValidUTF8(s, "�")
 }

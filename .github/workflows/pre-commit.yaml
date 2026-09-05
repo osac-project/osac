@@ -5,7 +5,62 @@ on:
   merge_group:
 
 jobs:
+  # This repo's other two heavy CI workflows (unit-tests.yml,
+  # integration-tests.yml) compute this same key inside their existing
+  # `changes` job; pre-commit.yaml has no such job, so it gets its own tiny
+  # one instead of computing the key inline in `pre-commit` itself -- a
+  # job-level `concurrency:` block is evaluated before that job's own steps
+  # run, so it can only reference `needs.<other job>.outputs.*`, never a
+  # step output from within the same job.
+  #
+  # github.sha (the merge-preview commit) changes on every GitHub
+  # merge-queue rebase, so keying on it can never collapse a stale rerun
+  # from an earlier rebase of the same PR. github.ref_name is stable enough
+  # to extract from: for merge_group it's
+  # gh-readonly-queue/<base>/pr-<number>-<sha>, and the pr-<number> segment
+  # stays constant across rebases -- confirmed against this repo's own run
+  # history (gh api .../actions/runs?event=merge_group): PR #503 was
+  # requeued at .../pr-503-b2986acb...61 and .../pr-503-f05965f9...53
+  # sixteen minutes apart, PR #307 similarly at .../pr-307-18b1c7ed...58 and
+  # .../pr-307-0c86346b...c1 -- both pairs extract to the same "pr-<number>"
+  # despite the trailing sha differing every time.
+  compute-concurrency-key:
+    runs-on: ubuntu-latest
+    # No checkout, no API calls -- this job only derives a string from
+    # already-available event context, so it needs no token access at all.
+    permissions: {}
+    outputs:
+      key: ${{ steps.concurrency-key.outputs.key }}
+    steps:
+      - name: Compute stable per-PR concurrency key
+        id: concurrency-key
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REF_NAME: ${{ github.ref_name }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          if [[ "${EVENT_NAME}" == "pull_request" ]]; then
+            KEY="pr-${PR_NUMBER}"
+          elif [[ "${EVENT_NAME}" == "merge_group" ]]; then
+            # tail -1 takes the rightmost match, in case the base branch
+            # name itself happens to contain a pr-<digits> substring. The
+            # `|| true` plus empty-check fallback covers a ref that doesn't
+            # match this shape at all -- GitHub Actions runs `run:` steps
+            # with `set -eo pipefail`, so an unmatched grep would otherwise
+            # abort this step and skip every downstream test job via `needs`.
+            KEY=$(echo "${REF_NAME}" | grep -oE 'pr-[0-9]+' | tail -1 || true)
+            [[ -z "${KEY}" ]] && KEY="run-${RUN_ID}"
+          else
+            KEY="run-${RUN_ID}"
+          fi
+          echo "key=${KEY}" >> "$GITHUB_OUTPUT"
+
   pre-commit:
+    needs: compute-concurrency-key
+    concurrency:
+      group: pre-commit-${{ needs.compute-concurrency-key.outputs.key }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

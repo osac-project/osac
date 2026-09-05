@@ -17,10 +17,6 @@ on:
   # Invoked as a parallel "box" by nightly-build.yaml.
   workflow_call:
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 permissions:
   contents: read
 
@@ -36,6 +32,7 @@ jobs:
       # workflow_dispatch always run. Job-level `if:` skip reports success
       # so docs-only PRs (and merge groups) are not blocked.
       should-run: ${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group') || steps.filter.outputs.code == 'true' }}
+      concurrency-key: ${{ steps.concurrency-key.outputs.key }}
     steps:
       # dorny/paths-filter uses git diff on merge_group (not the PR Files API),
       # so the repo must be checked out with enough history for base..head.
@@ -62,6 +59,47 @@ jobs:
               - '!.design/**'
               - '!.skillsaw.yaml'
               - '!.pre-commit-config.yaml'
+      # A job-level `concurrency:` block can reference `needs.*.outputs.*`,
+      # unlike a workflow-level one (removed above), which is evaluated
+      # before any job runs and so cannot depend on a computed value -- this
+      # is why the key is computed here and consumed by each test job's own
+      # concurrency block below.
+      #
+      # github.sha (the merge-preview commit) changes on every GitHub
+      # merge-queue rebase, so keying on it -- as the removed workflow-level
+      # block did -- can never collapse a stale rerun from an earlier rebase
+      # of the same PR. github.ref_name is stable enough to extract from:
+      # for merge_group it's gh-readonly-queue/<base>/pr-<number>-<sha>, and
+      # the pr-<number> segment stays constant across rebases -- confirmed
+      # against this repo's own run history (gh api
+      # .../actions/runs?event=merge_group): PR #503 was requeued at
+      # .../pr-503-b2986acb...61 and .../pr-503-f05965f9...53 sixteen
+      # minutes apart, PR #307 similarly at .../pr-307-18b1c7ed...58 and
+      # .../pr-307-0c86346b...c1 -- both pairs extract to the same
+      # "pr-<number>" despite the trailing sha differing every time.
+      - name: Compute stable per-PR concurrency key
+        id: concurrency-key
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REF_NAME: ${{ github.ref_name }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          if [[ "${EVENT_NAME}" == "pull_request" ]]; then
+            KEY="pr-${PR_NUMBER}"
+          elif [[ "${EVENT_NAME}" == "merge_group" ]]; then
+            # tail -1 takes the rightmost match, in case the base branch
+            # name itself happens to contain a pr-<digits> substring. The
+            # `|| true` plus empty-check fallback covers a ref that doesn't
+            # match this shape at all -- GitHub Actions runs `run:` steps
+            # with `set -eo pipefail`, so an unmatched grep would otherwise
+            # abort this step and skip every downstream test job via `needs`.
+            KEY=$(echo "${REF_NAME}" | grep -oE 'pr-[0-9]+' | tail -1 || true)
+            [[ -z "${KEY}" ]] && KEY="run-${RUN_ID}"
+          else
+            KEY="run-${RUN_ID}"
+          fi
+          echo "key=${KEY}" >> "$GITHUB_OUTPUT"
 
   # fulfillment-service, osac-operator, and bare-metal-fulfillment-operator now
   # all follow the same Kind cluster + root Makefile step sequence (only the
@@ -74,6 +112,9 @@ jobs:
     name: Run integration test (fulfillment-service)
     needs: changes
     if: needs.changes.outputs.should-run == 'true'
+    concurrency:
+      group: integration-fulfillment-service-${{ needs.changes.outputs.concurrency-key }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
     runs-on: ubuntu-latest
     timeout-minutes: 75  # ginkgo --timeout 1h (Makefile) + ~15m for install/setup/log-collection
     steps:
@@ -128,6 +169,9 @@ jobs:
     name: Run integration test (osac-operator)
     needs: changes
     if: needs.changes.outputs.should-run == 'true'
+    concurrency:
+      group: integration-osac-operator-${{ needs.changes.outputs.concurrency-key }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45  # ginkgo --timeout 30m (Makefile) + ~15m for install/setup/log-collection
     steps:
@@ -179,6 +223,9 @@ jobs:
     name: Run integration test (bare-metal-fulfillment-operator)
     needs: changes
     if: needs.changes.outputs.should-run == 'true'
+    concurrency:
+      group: integration-bare-metal-fulfillment-operator-${{ needs.changes.outputs.concurrency-key }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45  # ginkgo --timeout 30m (Makefile) + ~15m for install/setup/log-collection
     steps:
@@ -236,6 +283,9 @@ jobs:
     name: Run integration test (osac-aap)
     needs: changes
     if: needs.changes.outputs.should-run == 'true'
+    concurrency:
+      group: integration-osac-aap-${{ needs.changes.outputs.concurrency-key }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -282,6 +332,9 @@ jobs:
     name: Run integration test (osac-installer)
     needs: changes
     if: needs.changes.outputs.should-run == 'true'
+    concurrency:
+      group: integration-osac-installer-${{ needs.changes.outputs.concurrency-key }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
     runs-on: ubuntu-latest
     steps:
     - name: Checkout repository

@@ -17,6 +17,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
+	"unicode"
 
 	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	"google.golang.org/grpc"
@@ -113,14 +116,14 @@ func newClusterOrderFeedbackBridge(hubClient clnt.Client, clustersClient private
 // newClusterOrderSyncUpdate returns a SyncUpdate function that captures hubClient
 // for HostedCluster URL lookups on the Ready phase.
 func newClusterOrderSyncUpdate(hubClient clnt.Client) func(context.Context, *ckv1alpha1.ClusterOrder, *privatev1.Cluster) error {
-	return func(ctx context.Context, obj *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) error {
-		syncClusterOrderConditions(ctx, obj, remote)
-		syncClusterOrderPhase(ctx, obj, remote)
-		if err := syncClusterOrderURLs(ctx, hubClient, obj, remote); err != nil {
+	return func(ctx context.Context, clusterOrder *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) error {
+		syncClusterOrderConditions(ctx, clusterOrder, remote)
+		syncClusterOrderPhase(ctx, clusterOrder, remote)
+		if err := syncClusterOrderURLs(ctx, hubClient, clusterOrder, remote); err != nil {
 			return err
 		}
-		syncClusterOrderNodeRequests(ctx, obj, remote)
-		syncClusterOrderVIPEndpoints(obj, remote)
+		syncClusterOrderNodeRequests(ctx, clusterOrder, remote)
+		syncClusterOrderVIPEndpoints(clusterOrder, remote)
 		return nil
 	}
 }
@@ -128,36 +131,172 @@ func newClusterOrderSyncUpdate(hubClient clnt.Client) func(context.Context, *ckv
 // syncClusterOrderVIPEndpoints copies MetalLB VIP addresses from ClusterOrder status
 // to the Cluster proto. The VIPs are written by the CaaS template and consumed by the
 // ExternalIPAttachment controller and the fulfillment-service API surface.
-func syncClusterOrderVIPEndpoints(obj *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) {
-	if obj.Status.ApiEndpoint != "" {
-		remote.GetStatus().SetApiEndpoint(obj.Status.ApiEndpoint)
+func syncClusterOrderVIPEndpoints(clusterOrder *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) {
+	if clusterOrder.Status.ApiEndpoint != "" {
+		remote.GetStatus().SetApiEndpoint(clusterOrder.Status.ApiEndpoint)
 	}
-	if obj.Status.IngressEndpoint != "" {
-		remote.GetStatus().SetIngressEndpoint(obj.Status.IngressEndpoint)
+	if clusterOrder.Status.IngressEndpoint != "" {
+		remote.GetStatus().SetIngressEndpoint(clusterOrder.Status.IngressEndpoint)
 	}
 }
 
-func syncClusterOrderDelete(ctx context.Context, obj *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) error {
-	syncClusterOrderConditions(ctx, obj, remote)
-	syncClusterOrderPhase(ctx, obj, remote)
-	syncClusterOrderNodeRequests(ctx, obj, remote)
+func syncClusterOrderDelete(ctx context.Context, clusterOrder *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) error {
+	syncClusterOrderConditions(ctx, clusterOrder, remote)
+	syncClusterOrderPhase(ctx, clusterOrder, remote)
+	syncClusterOrderNodeRequests(ctx, clusterOrder, remote)
 	remote.GetStatus().SetState(privatev1.ClusterState_CLUSTER_STATE_DELETING)
 	return nil
 }
 
-func syncClusterOrderConditions(ctx context.Context, obj *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) {
+// clusterOrderConditionMappings maps a ClusterOrder condition to the fulfillment
+// condition whose status it drives. Each fulfillment condition has exactly one source
+// condition, so the derived status never depends on the order of the conditions. The
+// fulfillment API has a single PROGRESSING condition, and only "Progressing" drives its
+// status (True while the cluster is still being installed, False once it is ready or has
+// failed); "ClusterAvailable" drives READY.
+//
+// The PROGRESSING condition's *reason* and *message* are refined separately, from the
+// furthest-advanced installation stage, by applyProgressingStageDetail below.
+var clusterOrderConditionMappings = map[string]privatev1.ClusterConditionType{
+	ckv1alpha1.ConditionProgressing:      privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_PROGRESSING,
+	ckv1alpha1.ConditionClusterAvailable: privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_READY,
+}
+
+// clusterOrderProvisioningStages are the ClusterOrder conditions that mark individual
+// installation steps, ordered from earliest to furthest-advanced. While the cluster is
+// still installing, they do not become their own fulfillment conditions; instead they
+// refine the single PROGRESSING condition's reason/message to the furthest step reached
+// (see applyProgressingStageDetail). Selecting the furthest stage from this fixed order,
+// rather than from the order the conditions happen to appear in the CR status, keeps the
+// result deterministic (order-independent).
+//
+// ControlPlaneAvailable also refines PROGRESSING today; in Epic 2 it additionally gains
+// its own orthogonal CONTROL_PLANE_AVAILABLE fulfillment condition. ClusterStorageReady
+// is written by the storage controller, which uses the typed
+// ClusterOrderConditionClusterStorageReady constant, so we key off that same constant to
+// avoid reader/writer drift.
+var clusterOrderProvisioningStages = []string{
+	ckv1alpha1.ConditionAccepted,
+	ckv1alpha1.ConditionControlPlaneCreated,
+	ckv1alpha1.ConditionControlPlaneAvailable,
+	string(ckv1alpha1.ClusterOrderConditionClusterStorageReady),
+}
+
+// clusterOrderUnsurfacedConditions are ClusterOrder conditions we know about but neither
+// copy to the fulfillment API nor use to refine PROGRESSING. They are listed so they are
+// not reported as unknown:
+//   - NamespaceCreated is internal bookkeeping with no tenant-facing meaning.
+//   - Deleting is reported through the DELETING state (see syncClusterOrderPhase and
+//     syncClusterOrderDelete), not as a condition.
+var clusterOrderUnsurfacedConditions = map[string]struct{}{
+	ckv1alpha1.ConditionNamespaceCreated: {},
+	ckv1alpha1.ConditionDeleting:         {},
+}
+
+func syncClusterOrderConditions(ctx context.Context, clusterOrder *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) {
 	log := ctrllog.FromContext(ctx)
-	for _, condition := range obj.Status.Conditions {
-		switch ckv1alpha1.ClusterOrderConditionType(condition.Type) {
-		case ckv1alpha1.ClusterOrderConditionAccepted,
-			ckv1alpha1.ClusterOrderConditionProgressing,
-			ckv1alpha1.ClusterOrderConditionControlPlaneAvailable,
-			ckv1alpha1.ClusterOrderConditionAvailable:
-			syncClusterConditionFromCR(remote, privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_PROGRESSING, condition)
-		default:
-			log.Info("Unknown condition, will ignore it", "condition", condition.Type)
+
+	for i := range clusterOrder.Status.Conditions {
+		condition := clusterOrder.Status.Conditions[i]
+		if protoType, ok := clusterOrderConditionMappings[condition.Type]; ok {
+			syncClusterConditionFromCR(remote, protoType, condition)
+			continue
+		}
+		if slices.Contains(clusterOrderProvisioningStages, condition.Type) {
+			// An installation-step condition: it refines PROGRESSING's reason/message
+			// (handled by applyProgressingStageDetail after this loop), not its own
+			// fulfillment condition.
+			continue
+		}
+		if _, ok := clusterOrderUnsurfacedConditions[condition.Type]; ok {
+			continue
+		}
+		// A condition we do not recognise: log it so a newly added ClusterOrder condition
+		// is noticed instead of being silently ignored.
+		log.Info("Unmapped ClusterOrder condition, will ignore it", "condition", condition.Type)
+	}
+
+	applyProgressingStageDetail(clusterOrder, remote)
+}
+
+// applyProgressingStageDetail refines the PROGRESSING condition's reason and message to
+// the furthest-advanced installation stage that has been reached, while leaving its
+// status untouched (the status is single-sourced from "Progressing" in the loop above).
+// The reason is the stage condition's name (e.g. "ControlPlaneCreated") and the message
+// is that name split into words (e.g. "Control Plane Created").
+//
+// This only applies while PROGRESSING is True (installation underway). Once the cluster
+// is ready or has failed, PROGRESSING is False and keeps the terminal reason/message that
+// "Progressing" itself carried, rather than a mid-installation stage.
+func applyProgressingStageDetail(clusterOrder *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) {
+	var progressing *privatev1.ClusterCondition
+	for _, current := range remote.Status.Conditions {
+		if current.Type == privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_PROGRESSING {
+			progressing = current
+			break
 		}
 	}
+	if progressing == nil || progressing.GetStatus() != privatev1.ConditionStatus_CONDITION_STATUS_TRUE {
+		return
+	}
+
+	trueConditions := trueConditionTypes(clusterOrder)
+	furthestStage := ""
+	for _, stage := range clusterOrderProvisioningStages {
+		if _, ok := trueConditions[stage]; ok {
+			furthestStage = stage
+		}
+	}
+	if furthestStage == "" {
+		return
+	}
+
+	progressing.SetReason(furthestStage)
+	progressing.SetMessage(humanizeConditionName(furthestStage))
+}
+
+// trueConditionTypes returns the set of ClusterOrder condition types whose status is
+// True.
+func trueConditionTypes(clusterOrder *ckv1alpha1.ClusterOrder) map[string]struct{} {
+	trueConditions := map[string]struct{}{}
+	for i := range clusterOrder.Status.Conditions {
+		condition := clusterOrder.Status.Conditions[i]
+		if condition.Status == metav1.ConditionTrue {
+			trueConditions[condition.Type] = struct{}{}
+		}
+	}
+	return trueConditions
+}
+
+// humanizeConditionName turns a PascalCase condition name into space-separated words for
+// a human-readable message, e.g. "ControlPlaneCreated" -> "Control Plane Created".
+// Multi-letter acronyms are kept intact, e.g. "CSIDriverReady" -> "CSI Driver Ready" and
+// "EnableTLS" -> "Enable TLS", so a space is only inserted at a genuine word boundary.
+//
+// Version-suffixed acronyms such as "IPv4"/"IPv6" are not handled: the trailing lowercase
+// of the suffix is indistinguishable from an acronym-to-word boundary with single-rune
+// lookahead, so "IPv4Ready" splits as "I Pv4 Ready". No ClusterOrder condition name uses
+// that form today; add explicit handling here if one is ever introduced.
+func humanizeConditionName(name string) string {
+	runes := []rune(name)
+	var builder strings.Builder
+	for index, runeValue := range runes {
+		if index > 0 && unicode.IsUpper(runeValue) {
+			previous := runes[index-1]
+			// A new word starts when an uppercase rune follows a lowercase rune or a
+			// digit (e.g. the "P" in "ControlPlane"), or when an uppercase rune ends a
+			// run of uppercase letters that begins the next word, i.e. the following
+			// rune is lowercase (e.g. the "D" in "CSIDriver"). Both checks leave a run
+			// of uppercase letters such as "CSI" or "TLS" unsplit.
+			startsWord := unicode.IsLower(previous) || unicode.IsDigit(previous)
+			endsAcronym := unicode.IsUpper(previous) && index+1 < len(runes) && unicode.IsLower(runes[index+1])
+			if startsWord || endsAcronym {
+				builder.WriteRune(' ')
+			}
+		}
+		builder.WriteRune(runeValue)
+	}
+	return builder.String()
 }
 
 func syncClusterConditionFromCR(remote *privatev1.Cluster, condType privatev1.ClusterConditionType, condition metav1.Condition) {
@@ -165,6 +304,7 @@ func syncClusterConditionFromCR(remote *privatev1.Cluster, condType privatev1.Cl
 	oldStatus := clusterCondition.GetStatus()
 	newStatus := mapClusterConditionStatus(condition.Status)
 	clusterCondition.SetStatus(newStatus)
+	clusterCondition.SetReason(condition.Reason)
 	clusterCondition.SetMessage(sanitizeFeedbackText(condition.Message))
 	if newStatus != oldStatus {
 		clusterCondition.SetLastTransitionTime(timestamppb.Now())
@@ -182,9 +322,9 @@ func mapClusterConditionStatus(status metav1.ConditionStatus) privatev1.Conditio
 	}
 }
 
-func syncClusterOrderPhase(ctx context.Context, obj *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) {
+func syncClusterOrderPhase(ctx context.Context, clusterOrder *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) {
 	log := ctrllog.FromContext(ctx)
-	switch obj.Status.Phase {
+	switch clusterOrder.Status.Phase {
 	case ckv1alpha1.ClusterOrderPhaseProgressing:
 		remote.GetStatus().SetState(privatev1.ClusterState_CLUSTER_STATE_PROGRESSING)
 	case ckv1alpha1.ClusterOrderPhaseFailed:
@@ -194,18 +334,18 @@ func syncClusterOrderPhase(ctx context.Context, obj *ckv1alpha1.ClusterOrder, re
 	case ckv1alpha1.ClusterOrderPhaseDeleting:
 		remote.GetStatus().SetState(privatev1.ClusterState_CLUSTER_STATE_DELETING)
 	default:
-		log.Info("Unknown phase, will ignore it", "phase", obj.Status.Phase)
+		log.Info("Unknown phase, will ignore it", "phase", clusterOrder.Status.Phase)
 	}
 }
 
 // syncClusterOrderURLs fetches the HostedCluster and populates API/console URLs
 // on the Ready phase. Only called on the update path.
-func syncClusterOrderURLs(ctx context.Context, hubClient clnt.Client, obj *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) error {
-	if obj.Status.Phase != ckv1alpha1.ClusterOrderPhaseReady {
+func syncClusterOrderURLs(ctx context.Context, hubClient clnt.Client, clusterOrder *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) error {
+	if clusterOrder.Status.Phase != ckv1alpha1.ClusterOrderPhaseReady {
 		return nil
 	}
 
-	hostedCluster, err := fetchHostedCluster(ctx, hubClient, obj)
+	hostedCluster, err := fetchHostedCluster(ctx, hubClient, clusterOrder)
 	if err != nil {
 		return err
 	}
@@ -223,10 +363,10 @@ func syncClusterOrderURLs(ctx context.Context, hubClient clnt.Client, obj *ckv1a
 	return nil
 }
 
-func syncClusterOrderNodeRequests(ctx context.Context, obj *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) {
+func syncClusterOrderNodeRequests(ctx context.Context, clusterOrder *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) {
 	log := ctrllog.FromContext(ctx)
-	for i := range len(obj.Status.NodeRequests) {
-		nodeRequest := &obj.Status.NodeRequests[i]
+	for i := range len(clusterOrder.Status.NodeRequests) {
+		nodeRequest := &clusterOrder.Status.NodeRequests[i]
 
 		var nodeSetID string
 		for candidateNodeSetID, candidateNodeSet := range remote.GetSpec().GetNodeSets() {
@@ -268,8 +408,8 @@ func syncClusterOrderNodeRequests(ctx context.Context, obj *ckv1alpha1.ClusterOr
 	}
 }
 
-func fetchHostedCluster(ctx context.Context, hubClient clnt.Client, obj *ckv1alpha1.ClusterOrder) (*hypershiftv1beta1.HostedCluster, error) {
-	hostedClusterRef := obj.Status.ClusterReference
+func fetchHostedCluster(ctx context.Context, hubClient clnt.Client, clusterOrder *ckv1alpha1.ClusterOrder) (*hypershiftv1beta1.HostedCluster, error) {
+	hostedClusterRef := clusterOrder.Status.ClusterReference
 	if hostedClusterRef == nil || hostedClusterRef.Namespace == "" || hostedClusterRef.HostedClusterName == "" {
 		return nil, nil
 	}

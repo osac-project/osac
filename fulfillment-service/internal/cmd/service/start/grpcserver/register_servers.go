@@ -86,6 +86,20 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	}
 	publicv1.RegisterClusterTemplatesServer(registrar, clusterTemplatesServer)
 
+	// Create the add-on operators server:
+	deps.Logger.InfoContext(ctx, "Creating add-on operators server")
+	addOnOperatorsServer, err := servers.NewAddOnOperatorsServer().
+		SetLogger(deps.Logger).
+		SetNotifier(deps.Notifier).
+		SetAttributionLogic(deps.PublicAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create add-on operators server: %w", err)
+	}
+	publicv1.RegisterAddOnOperatorsServer(registrar, addOnOperatorsServer)
+
 	// Create the cluster catalog items server:
 	deps.Logger.InfoContext(ctx, "Creating cluster catalog items server")
 	clusterCatalogItemsServer, err := servers.NewClusterCatalogItemsServer().
@@ -127,6 +141,20 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		return nil, fmt.Errorf("failed to create private cluster templates server: %w", err)
 	}
 	privatev1.RegisterClusterTemplatesServer(registrar, privateClusterTemplatesServer)
+
+	// Create the private add-on operators server:
+	deps.Logger.InfoContext(ctx, "Creating private add-on operators server")
+	privateAddOnOperatorsServer, err := servers.NewPrivateAddOnOperatorsServer().
+		SetLogger(deps.Logger).
+		SetNotifier(deps.Notifier).
+		SetAttributionLogic(deps.PrivateAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create private add-on operators server: %w", err)
+	}
+	privatev1.RegisterAddOnOperatorsServer(registrar, privateAddOnOperatorsServer)
 
 	// Create the private cluster catalog items server:
 	deps.Logger.InfoContext(ctx, "Creating private cluster catalog items server")

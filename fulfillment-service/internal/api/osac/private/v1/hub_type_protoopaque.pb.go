@@ -268,7 +268,7 @@ type HubSpec_builder struct {
 	// Reference to a Secret resource containing kubeconfig credentials.
 	//
 	// Mutually exclusive with `kubeconfig`. When set, the system resolves the referenced Secret and reads the
-	// `kubeconfig` data key. The referenced Secret must exist in the same tenant.
+	// `kubeconfig` data key. The referenced Secret must belong to the `shared` tenant.
 	KubeconfigSecret *SecretLocalReference
 }
 

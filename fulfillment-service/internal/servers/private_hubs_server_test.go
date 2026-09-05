@@ -340,6 +340,34 @@ var _ = Describe("Private hubs server", func() {
 				Expect(ref.GetName()).To(Equal("my-secret-name"))
 			})
 
+			It("Rejects a hub with a tenant-scoped kubeconfig_secret", func() {
+				_, err := secretsDao.Create().SetObject(privatev1.Secret_builder{
+					Id: "tenant-secret-id",
+					Metadata: privatev1.Metadata_builder{
+						Name:   "tenant-secret-name",
+						Tenant: testTenant,
+					}.Build(),
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+
+				_, err = server.Create(ctx, privatev1.HubsCreateRequest_builder{
+					Object: privatev1.Hub_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
+						Spec: privatev1.HubSpec_builder{
+							Namespace: "my_ns",
+							KubeconfigSecret: privatev1.SecretLocalReference_builder{
+								Id: "tenant-secret-id",
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("shared Secret"))
+			})
+
 			It("Rejects create when kubeconfig and kubeconfig_secret are both set", func() {
 				_, err := server.Create(ctx, privatev1.HubsCreateRequest_builder{
 					Object: privatev1.Hub_builder{

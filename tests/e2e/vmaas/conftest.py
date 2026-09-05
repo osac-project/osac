@@ -31,8 +31,12 @@ DEFAULT_DISK_IMAGE_SOURCE_REF: str = "quay.io/containerdisks/fedora:41"
 
 
 @pytest.fixture(scope="session")
-def k8s_virt_client(namespace: str) -> K8sClient:
-    vm_kubeconfig: str = os.environ["OSAC_VM_KUBECONFIG"]
+def vm_kubeconfig() -> str:
+    return os.environ["OSAC_VM_KUBECONFIG"]
+
+
+@pytest.fixture(scope="session")
+def k8s_virt_client(namespace: str, vm_kubeconfig: str) -> K8sClient:
     return K8sClient(namespace=namespace, kubeconfig=vm_kubeconfig)
 
 

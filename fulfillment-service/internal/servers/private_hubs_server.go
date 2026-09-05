@@ -287,6 +287,10 @@ func (s *PrivateHubsServer) validateKubeconfigSecret(ctx context.Context, spec *
 		s.logger.ErrorContext(ctx, "Failed to resolve kubeconfig_secret reference", "error", err)
 		return grpcstatus.Errorf(grpccodes.Internal, "failed to resolve kubeconfig_secret reference")
 	}
+	if resolved.Tenant != auth.SharedTenant {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"kubeconfig_secret must reference a shared Secret")
+	}
 	resolvedRef := &privatev1.SecretLocalReference{}
 	resolvedRef.SetId(resolved.ID)
 	resolvedRef.SetName(resolved.Name)

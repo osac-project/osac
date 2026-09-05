@@ -1337,6 +1337,35 @@ func (t *Tool) createHubNamespace(ctx context.Context) error {
 func (t *Tool) registerHub(ctx context.Context) error {
 	t.logger.DebugContext(ctx, "Registering hub")
 
+	// Create the hubs client:
+	hubsClient := privatev1.NewHubsClient(t.internalView.adminConn)
+
+	// Wait for the API to be ready:
+	var err error
+	for range 30 {
+		_, err = hubsClient.List(ctx, privatev1.HubsListRequest_builder{}.Build())
+		if err == nil {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("API not ready after waiting: %w", err)
+	}
+
+	// Keep repeated setup idempotent. The existing registration already has usable credentials.
+	_, err = hubsClient.Get(ctx, privatev1.HubsGetRequest_builder{Id: hubId}.Build())
+	if err == nil {
+		return nil
+	}
+	if grpcstatus.Code(err) != grpccodes.NotFound {
+		return fmt.Errorf("failed to check for existing hub: %w", err)
+	}
+
 	// Prepare the kubeconfig for the hub:
 	hubKcBytes, err := os.ReadFile(t.kcFile)
 	if err != nil {
@@ -1354,19 +1383,22 @@ func (t *Tool) registerHub(ctx context.Context) error {
 		return fmt.Errorf("failed to write hub Kc: %w", err)
 	}
 
-	// Create the hubs client:
-	hubsClient := privatev1.NewHubsClient(t.internalView.adminConn)
-
-	// Wait for the API to be ready:
-	for range 30 {
-		_, err = hubsClient.List(ctx, privatev1.HubsListRequest_builder{}.Build())
-		if err == nil {
-			break
-		}
-		time.Sleep(time.Second)
-	}
+	// Hub credentials are platform-scoped, shared Secrets. They are never exposed to tenant users;
+	// the hub client provider resolves them with its internal shared visibility.
+	secretsClient := privatev1.NewSecretsClient(t.internalView.adminConn)
+	secretResponse, err := secretsClient.Create(ctx, privatev1.SecretsCreateRequest_builder{
+		Object: privatev1.Secret_builder{
+			Metadata: privatev1.Metadata_builder{
+				Name:   fmt.Sprintf("local-hub-kubeconfig-%s", uuid.New()[24:32]),
+				Tenant: auth.SharedTenant,
+			}.Build(),
+			Data: map[string][]byte{
+				"kubeconfig": hubKcBytes,
+			},
+		}.Build(),
+	}.Build())
 	if err != nil {
-		return fmt.Errorf("API not ready after waiting: %w", err)
+		return fmt.Errorf("failed to create hub kubeconfig secret: %w", err)
 	}
 
 	// Create the hub:
@@ -1377,16 +1409,14 @@ func (t *Tool) registerHub(ctx context.Context) error {
 				Name: hubId,
 			}.Build(),
 			Spec: privatev1.HubSpec_builder{
-				Kubeconfig: hubKcBytes,
-				Namespace:  hubNamespace,
+				KubeconfigSecret: privatev1.SecretLocalReference_builder{
+					Id: secretResponse.GetObject().GetId(),
+				}.Build(),
+				Namespace: hubNamespace,
 			}.Build(),
 		}.Build(),
 	}.Build())
 	if err != nil {
-		status, ok := grpcstatus.FromError(err)
-		if ok && status.Code() == grpccodes.AlreadyExists {
-			return nil
-		}
 		return fmt.Errorf("failed to create hub: %w", err)
 	}
 	return nil

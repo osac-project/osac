@@ -15,7 +15,6 @@ package hub
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
@@ -85,10 +84,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("namespace name is required")
 	}
 	if c.kubeconfig == "" {
-		return fmt.Errorf("kubeconfig file is required")
-	}
-	if c.namespace == "" {
-		return fmt.Errorf("namespace name is required")
+		return fmt.Errorf("kubeconfig secret name is required")
 	}
 
 	// Create the gRPC connection from the configuration:
@@ -101,20 +97,8 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	// Create the client:
 	client := privatev1.NewHubsClient(conn)
 
-	// Read the kubeconfig file:
-	kubeconfig, err := os.ReadFile(c.kubeconfig)
-	if err != nil {
-		return fmt.Errorf("failed to read kubeconfig file '%s': %w", c.kubeconfig, err)
-	}
-
 	// Prepare the hub:
-	hub := privatev1.Hub_builder{
-		Id: c.id,
-		Spec: privatev1.HubSpec_builder{
-			Kubeconfig: kubeconfig,
-			Namespace:  c.namespace,
-		}.Build(),
-	}.Build()
+	hub := c.hub()
 
 	// Create the hub:
 	response, err := client.Create(ctx, privatev1.HubsCreateRequest_builder{
@@ -131,10 +115,29 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+func (c *runnerContext) hub() *privatev1.Hub {
+	return privatev1.Hub_builder{
+		Id: c.id,
+		Spec: privatev1.HubSpec_builder{
+			KubeconfigSecret: privatev1.SecretLocalReference_builder{
+				Name: c.kubeconfig,
+			}.Build(),
+			Namespace: c.namespace,
+		}.Build(),
+	}.Build()
+}
+
 const shortHelp = `Create a hub`
 
 const longHelp = `
 Create a hub.
+
+Create a Secret containing the kubeconfig, then reference it when creating the hub:
+
+{{ bt 3 }}shell
+{{ binary }} --tenant shared create secret --name hub-kubeconfig --from-file=kubeconfig=/path/to/kubeconfig
+{{ binary }} create hub --id my-hub --kubeconfig hub-kubeconfig --namespace osac
+{{ bt 3 }}
 `
 
 const idFlagHelp = `
@@ -142,8 +145,10 @@ _ID_ - Unique identifier of the hub.
 `
 
 const kubeconfigFlagHelp = `
-_FILE_ - Kubeconfig file containing the details to connect to the Kubernetes
-API.
+_NAME_ - Name of a Secret resource containing the kubeconfig in its
+{{ bt }}kubeconfig{{ bt }} data key. The Secret must belong to the
+{{ bt }}shared{{ bt }} tenant and can only be managed by a platform administrator.
+See also {{ bt }}osac create secret{{ bt }}.
 `
 
 const namespaceFlagHelp = `

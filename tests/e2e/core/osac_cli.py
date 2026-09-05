@@ -63,8 +63,11 @@ class OsacCLI:
         assert match is not None, f"Failed to parse UUID from CLI output: {stdout}"
         return match.group(1)
 
-    def create_hub(self, *, hub_id: str, kubeconfig: str) -> None:
-        self._run("create", "hub", "--id", hub_id, "--kubeconfig", kubeconfig, "--namespace", self.namespace)
+    def create_hub(self, *, hub_id: str, kubeconfig_secret: str) -> None:
+        self._run("create", "hub", "--id", hub_id, "--kubeconfig", kubeconfig_secret, "--namespace", self.namespace)
+
+    def delete_hub(self, *, hub_id: str) -> None:
+        self._run("delete", "hub", hub_id)
 
     def create_compute_instance(
         self,
@@ -238,6 +241,9 @@ class OsacCLI:
         for key, path in from_files.items():
             args.extend(["--from-file", f"{key}={path}"])
         self._run(*args)
+
+    def delete_secret(self, *, name: str) -> None:
+        self._run("delete", "secret", name)
 
     def get(self, resource: str, *, output: str | None = None) -> str:
         args: list[str] = ["get", resource]

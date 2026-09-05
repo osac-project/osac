@@ -404,7 +404,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		return nil, fmt.Errorf("failed to create secrets DAO for hub lookup: %w", err)
 	}
 
-	hubLookup := servers.NewHubLookupWithDAO(privateHubsServer, secretsDAO)
+	hubLookup := servers.NewHubLookupWithDAO(privateHubsServer, secretsDAO, deps.SecretStore)
 	hubClientFactory := servers.NewDefaultHubClientFactory(deps.HubScheme)
 	hubClientProvider, err := servers.NewHubClientProvider().
 		SetHubLookup(hubLookup).

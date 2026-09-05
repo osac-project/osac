@@ -613,10 +613,15 @@ EOF
 
 **Step 2: Register the Hub**
 ```bash
+# Store the kubeconfig in a platform-managed shared OSAC Secret
+./osac --tenant shared create secret \
+  --name production-hub-kubeconfig \
+  --from-file=kubeconfig=/tmp/hub-kubeconfig.yaml
+
 # Register hub with fulfillment service
 ./osac create hub \
   --id production-hub-01 \
-  --kubeconfig /tmp/hub-kubeconfig.yaml \
+  --kubeconfig production-hub-kubeconfig \
   --namespace osac
 
 # Verify hub registration
@@ -657,11 +662,8 @@ EOF
 
 **Update Hub Configuration:**
 ```bash
-# Update hub kubeconfig (if token expires)
-./osac edit hub production-hub-01 --kubeconfig /tmp/new-hub-kubeconfig.yaml
-
-# Update hub namespace
-./osac edit hub production-hub-01 --namespace new-namespace
+# Edit the hub, then update spec.kubeconfig_secret.name or spec.namespace
+./osac edit hub production-hub-01
 ```
 
 **Remove Hub:**
@@ -677,22 +679,30 @@ EOF
 
 **Scenario: Multiple Environment Hubs**
 ```bash
+# Store each hub kubeconfig in its own shared OSAC Secret
+./osac --tenant shared create secret --name dev-hub-kubeconfig \
+  --from-file=kubeconfig=/tmp/dev-hub-kubeconfig.yaml
+./osac --tenant shared create secret --name staging-hub-kubeconfig \
+  --from-file=kubeconfig=/tmp/staging-hub-kubeconfig.yaml
+./osac --tenant shared create secret --name prod-hub-kubeconfig \
+  --from-file=kubeconfig=/tmp/prod-hub-kubeconfig.yaml
+
 # Development hub
 ./osac create hub \
   --id dev-hub \
-  --kubeconfig /tmp/dev-hub-kubeconfig.yaml \
+  --kubeconfig dev-hub-kubeconfig \
   --namespace osac
 
 # Staging hub
 ./osac create hub \
   --id staging-hub \
-  --kubeconfig /tmp/staging-hub-kubeconfig.yaml \
+  --kubeconfig staging-hub-kubeconfig \
   --namespace osac
 
 # Production hub
 ./osac create hub \
   --id prod-hub \
-  --kubeconfig /tmp/prod-hub-kubeconfig.yaml \
+  --kubeconfig prod-hub-kubeconfig \
   --namespace osac
 
 # List all registered hubs
@@ -1570,8 +1580,12 @@ oc exec deployment/fulfillment-service -n fulfillment-system -c server -- lsof -
 
 **Hub Management:**
 ```bash
+# Store the kubeconfig before creating the hub
+./osac --tenant shared create secret --name KUBECONFIG_SECRET \
+  --from-file=kubeconfig=KUBECONFIG_FILE
+
 # Create hub
-./osac create hub --id HUB_ID --kubeconfig KUBECONFIG_FILE --namespace NAMESPACE
+./osac create hub --id HUB_ID --kubeconfig KUBECONFIG_SECRET --namespace NAMESPACE
 
 # List hubs
 ./osac get hubs [--output table|json|yaml] [--filter KEY=VALUE]
@@ -1582,8 +1596,8 @@ oc exec deployment/fulfillment-service -n fulfillment-system -c server -- lsof -
 # Describe hub (detailed info)
 ./osac describe hub HUB_ID
 
-# Update hub configuration
-./osac edit hub HUB_ID [--kubeconfig KUBECONFIG_FILE] [--namespace NAMESPACE]
+# Update hub configuration interactively
+./osac edit hub HUB_ID
 
 # Delete hub
 ./osac delete hub HUB_ID [--force]

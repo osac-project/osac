@@ -10,7 +10,7 @@ For general AAP configuration see [AAP Configuration](aap-configuration.md).
 
 | `NETWORK_CLASS` | `NETWORK_STEPS_COLLECTION` | Description |
 |-----------------|---------------------------|-------------|
-| `esi` (default) | `osac.steps` | ESI (Elastic System Infrastructure) |
+| `esi` (default) | `osac.steps` | ESI (Elastic Secure Infrastructure) |
 | `netris` | `netris.steps` | Netris controller API |
 
 ## Netris Configuration

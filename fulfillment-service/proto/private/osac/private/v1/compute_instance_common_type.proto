@@ -20,13 +20,19 @@ import "cleanapi/cleanapi.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
 
+// Reference to a StorageTier resource.
+message StorageTierReference {
+  string id = 1;
+  string name = 2;
+}
+
 // Contains the disk configuration for a compute instance.
 message ComputeInstanceDisk {
   // Disk size in GiB.
   optional int32 size_gib = 1 [(buf.validate.field).int32.gt = 0];
 
-  // Storage tier name (e.g., "standard", "fast", "archive").
-  optional string storage_tier = 2;
+  // Reference to the storage tier for this disk.
+  optional StorageTierReference storage_tier = 2;
 }
 
 // Run strategy for the compute instance.

@@ -750,7 +750,7 @@ func (t *task) addExplicitFields(ctx context.Context, spec *osacv1alpha1.Compute
 	if ciSpec.HasBootDisk() {
 		spec.BootDisk = osacv1alpha1.DiskSpec{
 			SizeGiB:     ciSpec.GetBootDisk().GetSizeGib(),
-			StorageTier: ciSpec.GetBootDisk().GetStorageTier(),
+			StorageTier: ciSpec.GetBootDisk().GetStorageTier().GetName(),
 		}
 	}
 	if len(ciSpec.GetAdditionalDisks()) > 0 {
@@ -758,7 +758,7 @@ func (t *task) addExplicitFields(ctx context.Context, spec *osacv1alpha1.Compute
 		for _, disk := range ciSpec.GetAdditionalDisks() {
 			disks = append(disks, osacv1alpha1.DiskSpec{
 				SizeGiB:     disk.GetSizeGib(),
-				StorageTier: disk.GetStorageTier(),
+				StorageTier: disk.GetStorageTier().GetName(),
 			})
 		}
 		spec.AdditionalDisks = disks

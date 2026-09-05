@@ -4,8 +4,8 @@ go 1.26.3
 
 require (
 	buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go v1.36.12-20260825204119-511051f7f437.1
-	github.com/container-storage-interface/spec v1.12.0
-	github.com/kubernetes-csi/csi-test/v5 v5.5.0
+	github.com/container-storage-interface/spec v1.13.0
+	github.com/kubernetes-csi/csi-test/v5 v5.6.0
 	golang.org/x/oauth2 v0.36.0
 	google.golang.org/genproto/googleapis/api v0.0.0-20260825221802-da73d73af1c5
 	google.golang.org/grpc v1.83.2

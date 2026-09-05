@@ -25,7 +25,7 @@
          | list | first | default(none) }}
 
 - name: Delete IPAM subnet
-  when: _existing_ipam_subnet is not none
+  when: _existing_ipam_subnet is defined and _existing_ipam_subnet is mapping
   ansible.builtin.uri:
     url: "{{ netris_controller_url }}/api/v2/ipam/subnet/{{ _existing_ipam_subnet.id }}"
     method: DELETE

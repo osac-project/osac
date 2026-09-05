@@ -45,14 +45,14 @@
 
 - name: Find ACL rule by name
   ansible.builtin.set_fact:
-    _existing_acl: "{{ (_acl_list_resp.json.data | default([])) | selectattr('name', 'equalto', acl_name) | list | first | default(none) }}"
+    _existing_acl_list: "{{ (_acl_list_resp.json.data | default([])) | selectattr('name', 'equalto', acl_name) | list }}"
   when: _acl_list_resp.json is mapping
 
 - name: Set ACL facts from existing rule (skip creation)
   ansible.builtin.set_fact:
-    acl_id: "{{ _existing_acl.id }}"
+    acl_id: "{{ _existing_acl_list[0].id }}"
     acl_already_existed: true
-  when: _existing_acl is defined and _existing_acl is not none
+  when: _existing_acl_list | default([]) | length > 0
 
 - name: Create ACL rule
   ansible.builtin.uri:
@@ -68,7 +68,7 @@
     timeout: "{{ netris_timeout | default(30) }}"
     validate_certs: "{{ netris_validate_certs | default(true) }}"
   register: _acl_create_resp
-  when: _existing_acl is not defined or _existing_acl is none
+  when: _existing_acl_list | default([]) | length == 0
   no_log: true
 
 - name: Display ACL creation error
@@ -86,7 +86,7 @@
     acl_id: "{{ _acl_create_resp.json.data.id | default(_acl_create_resp.json.data) }}"
     acl_already_existed: false
   when:
-    - _existing_acl is not defined or _existing_acl is none
+    - _existing_acl_list | default([]) | length == 0
     - _acl_create_resp is not skipped
     - _acl_create_resp is changed or (_acl_create_resp.status | default(0)) in [200, 201]
     - _acl_create_resp.json is mapping

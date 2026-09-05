@@ -60,6 +60,11 @@ func Root() (result *cobra.Command, err error) {
 		defaultCacheDir,
 		cacheFlagHelp,
 	)
+	flags.Bool(
+		help.NoColorFlag,
+		false,
+		help.NoColorFlagHelp,
+	)
 
 	// Add commands:
 	result.AddCommand(generate.Cmd())

@@ -266,6 +266,16 @@ def wait_for_external_ip_attachment_deletion(*, k8s: K8sClient, name: str) -> No
     )
 
 
+def wait_for_nat_gateway_cr(*, k8s: K8sClient, uuid: str) -> str:
+    return poll_until(
+        fn=lambda: k8s.get_nat_gateway_name(uuid=uuid, checked=False),
+        until=lambda v: v != "",
+        retries=30,
+        delay=2,
+        description=f"NATGateway CR for {uuid}",
+    )
+
+
 # NATGateway helpers
 
 

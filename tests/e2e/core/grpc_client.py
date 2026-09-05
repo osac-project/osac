@@ -41,20 +41,32 @@ class GRPCClient:
         return args
 
     def call(self, *, service: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
-        return json.loads(run(*self._build_args(service=service, data=data)))
+        try:
+            return json.loads(run(*self._build_args(service=service, data=data)))
+        except subprocess.CalledProcessError as exc:
+            # Redact the bearer token from the command so it is never logged.
+            exc.cmd = [
+                "Authorization: Bearer ***" if isinstance(v, str) and v.startswith("Authorization: Bearer ") else v
+                for v in (exc.cmd or [])
+            ]
+            raise
 
     def create_compute_instance(
         self,
         *,
         catalog_item: str,
-        subnet_ids: list[str],
+        subnet_ids: list[str] | None = None,
         name: str | None = None,
         boot_disk_storage_tier: str | None = None,
+        auto_external_ip_attachment: bool = False,
     ) -> str:
-        attachments = [{"subnet": {"id": sid}} for sid in subnet_ids]
-        spec: dict[str, Any] = {"catalog_item": {"id": catalog_item}, "network_attachments": attachments}
+        spec: dict[str, Any] = {"catalog_item": {"id": catalog_item}}
+        if subnet_ids is not None:
+            spec["network_attachments"] = [{"subnet": {"id": sid}} for sid in subnet_ids]
         if boot_disk_storage_tier is not None:
             spec["boot_disk"] = {"storage_tier": boot_disk_storage_tier}
+        if auto_external_ip_attachment:
+            spec["auto_external_ip_attachment"] = True
         obj: dict[str, Any] = {"spec": spec}
         if name is not None:
             obj["metadata"] = {"name": name}
@@ -94,6 +106,10 @@ class GRPCClient:
 
     # VirtualNetwork operations
 
+    def list_virtual_networks(self) -> list[dict[str, Any]]:
+        response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.VirtualNetworks/List")
+        return response.get("items", [])
+
     def create_virtual_network(self, *, name: str, ipv4_cidr: str) -> str:
         response: dict[str, Any] = self.call(
             service=f"{PUBLIC_API}.VirtualNetworks/Create",
@@ -112,6 +128,10 @@ class GRPCClient:
         self.call(service=f"{PUBLIC_API}.VirtualNetworks/Delete", data={"id": vn_id})
 
     # Subnet operations
+
+    def list_subnets(self) -> list[dict[str, Any]]:
+        response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.Subnets/List")
+        return response.get("items", [])
 
     def create_subnet(self, *, name: str, virtual_network: str, ipv4_cidr: str) -> str:
         response: dict[str, Any] = self.call(
@@ -148,6 +168,10 @@ class GRPCClient:
         return self.call(service=f"{PUBLIC_API}.Clusters/Get", data={"id": cluster_id})
 
     # SecurityGroup operations
+
+    def list_security_groups(self) -> list[dict[str, Any]]:
+        response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.SecurityGroups/List")
+        return response.get("items", [])
 
     def create_security_group(self, *, name: str, virtual_network: str) -> str:
         response: dict[str, Any] = self.call(
@@ -268,6 +292,10 @@ class GRPCClient:
 
     # ExternalIP operations (public API)
 
+    def list_external_ips(self) -> list[dict[str, Any]]:
+        response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.ExternalIPs/List")
+        return response.get("items", [])
+
     def create_external_ip(self, *, name: str, pool: str) -> str:
         response: dict[str, Any] = self.call(
             service=f"{PUBLIC_API}.ExternalIPs/Create",
@@ -286,6 +314,10 @@ class GRPCClient:
         self.call(service=f"{PUBLIC_API}.ExternalIPs/Delete", data={"id": external_ip_id})
 
     # ExternalIPAttachment operations (public API)
+
+    def list_external_ip_attachments(self) -> list[dict[str, Any]]:
+        response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.ExternalIPAttachments/List")
+        return response.get("items", [])
 
     def create_external_ip_attachment(self, *, name: str, external_ip: str, compute_instance: str) -> str:
         response: dict[str, Any] = self.call(
@@ -658,6 +690,13 @@ class GRPCClient:
         return response.get("items", [])
 
     # NATGateway operations (public API)
+
+    def list_nat_gateways(self) -> list[dict[str, Any]]:
+        response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.NATGateways/List")
+        return response.get("items", [])
+
+    def get_nat_gateway(self, *, nat_gateway_id: str) -> dict[str, Any]:
+        return self.call(service=f"{PUBLIC_API}.NATGateways/Get", data={"id": nat_gateway_id})
 
     def create_nat_gateway(self, *, name: str, virtual_network_name: str, external_ip_name: str) -> str:
         response: dict[str, Any] = self.call(

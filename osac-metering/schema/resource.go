@@ -13,4 +13,5 @@ package schema
 const (
 	ResourceTypeComputeInstance = "compute_instance"
 	ResourceTypeClusterOrder    = "cluster_order"
+	ResourceTypeMaaSInference   = "maas_inference"
 )

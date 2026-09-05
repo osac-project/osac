@@ -826,7 +826,7 @@ var _ = Describe("BCM Inventory Adapter", func() {
 			}
 
 			client := newTestClient()
-			host, err := client.FindFreeHost(ctx, map[string]string{"hostType": "h100"})
+			host, err := client.FindFreeHost(ctx, map[string]string{"resource_class": "h100"})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(host).NotTo(BeNil())
 			Expect(host.InventoryHostID).To(Equal("osac-baremetal/node001"))
@@ -846,7 +846,7 @@ var _ = Describe("BCM Inventory Adapter", func() {
 			}
 
 			client := newTestClient()
-			host, err := client.FindFreeHost(ctx, map[string]string{"hostType": "h100"})
+			host, err := client.FindFreeHost(ctx, map[string]string{"resource_class": "h100"})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(host).To(BeNil())
 		})
@@ -861,12 +861,12 @@ var _ = Describe("BCM Inventory Adapter", func() {
 			}
 
 			client := newTestClient()
-			host, err := client.FindFreeHost(ctx, map[string]string{"hostType": "h100"})
+			host, err := client.FindFreeHost(ctx, map[string]string{"resource_class": "h100"})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(host).To(BeNil())
 		})
 
-		It("should skip devices without resource_class", func() {
+		It("should skip devices whose extra_values lack the selector label", func() {
 			bcmDevices = func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				_, err := fmt.Fprint(w, `[
@@ -876,7 +876,7 @@ var _ = Describe("BCM Inventory Adapter", func() {
 			}
 
 			client := newTestClient()
-			host, err := client.FindFreeHost(ctx, map[string]string{"hostType": "h100"})
+			host, err := client.FindFreeHost(ctx, map[string]string{"resource_class": "h100"})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(host).To(BeNil())
 		})
@@ -891,12 +891,12 @@ var _ = Describe("BCM Inventory Adapter", func() {
 			}
 
 			client := newTestClient()
-			host, err := client.FindFreeHost(ctx, map[string]string{"hostType": "h100"})
+			host, err := client.FindFreeHost(ctx, map[string]string{"resource_class": "h100"})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(host).To(BeNil())
 		})
 
-		It("should filter by hostType from matchExpressions", func() {
+		It("should filter by an extra_values label (resource_class)", func() {
 			bcmDevices = func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				_, err := fmt.Fprint(w, `[
@@ -907,7 +907,7 @@ var _ = Describe("BCM Inventory Adapter", func() {
 			}
 
 			client := newTestClient()
-			host, err := client.FindFreeHost(ctx, map[string]string{"hostType": "h100"})
+			host, err := client.FindFreeHost(ctx, map[string]string{"resource_class": "h100"})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(host).NotTo(BeNil())
 			Expect(host.Name).To(Equal("node002"))
@@ -922,26 +922,27 @@ var _ = Describe("BCM Inventory Adapter", func() {
 			}
 
 			client := newTestClient()
-			host, err := client.FindFreeHost(ctx, map[string]string{"hostType": "h100"})
+			host, err := client.FindFreeHost(ctx, map[string]string{"resource_class": "h100"})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(host).To(BeNil())
 		})
 
-		It("should return any matching host when hostType is empty", func() {
-			bcmDevices = func(w http.ResponseWriter, _ *http.Request) {
-				w.Header().Set("Content-Type", "application/json")
-				_, err := fmt.Fprint(w, `[
-					{"baseType":"Device","childType":"LiteNode","uuid":"u1","hostname":"node001","mac":"aa:bb:cc:dd:ee:01","extra_values":{"resource_class":"h100"}}
-				]`)
-				Expect(err).NotTo(HaveOccurred())
-			}
+		DescribeTable("should reject invalid selectors without querying BCM",
+			func(selector map[string]string) {
+				bcmDevices = func(_ http.ResponseWriter, _ *http.Request) {
+					Fail("GetDevices should not be called for an invalid selector")
+				}
 
-			client := newTestClient()
-			host, err := client.FindFreeHost(ctx, map[string]string{})
-			Expect(err).NotTo(HaveOccurred())
-			Expect(host).NotTo(BeNil())
-			Expect(host.Name).To(Equal("node001"))
-		})
+				client := newTestClient()
+				host, err := client.FindFreeHost(ctx, selector)
+				Expect(err).To(HaveOccurred())
+				Expect(host).To(BeNil())
+			},
+			Entry("empty map", map[string]string{}),
+			Entry("empty key", map[string]string{"": "h100"}),
+			Entry("key with spaces", map[string]string{"resource class": "h100"}),
+			Entry("empty value", map[string]string{"resource_class": ""}),
+		)
 
 		It("should skip devices with missing MAC address", func() {
 			bcmDevices = func(w http.ResponseWriter, _ *http.Request) {
@@ -953,7 +954,7 @@ var _ = Describe("BCM Inventory Adapter", func() {
 			}
 
 			client := newTestClient()
-			host, err := client.FindFreeHost(ctx, map[string]string{"hostType": "h100"})
+			host, err := client.FindFreeHost(ctx, map[string]string{"resource_class": "h100"})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(host).To(BeNil())
 		})
@@ -968,7 +969,7 @@ var _ = Describe("BCM Inventory Adapter", func() {
 			}
 
 			client := newTestClient()
-			host, err := client.FindFreeHost(ctx, map[string]string{"hostType": "h100"})
+			host, err := client.FindFreeHost(ctx, map[string]string{"resource_class": "h100"})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(host).To(BeNil())
 		})
@@ -983,7 +984,7 @@ var _ = Describe("BCM Inventory Adapter", func() {
 			}
 
 			client := newTestClient()
-			host, err := client.FindFreeHost(ctx, map[string]string{"hostType": "h100"})
+			host, err := client.FindFreeHost(ctx, map[string]string{"resource_class": "h100"})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(host).To(BeNil())
 		})
@@ -998,18 +999,71 @@ var _ = Describe("BCM Inventory Adapter", func() {
 			}
 
 			client := newTestClient()
-			host, err := client.FindFreeHost(ctx, map[string]string{"hostType": "h100"})
+			host, err := client.FindFreeHost(ctx, map[string]string{"resource_class": "h100"})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(host).To(BeNil())
 		})
 
-		It("should return nil when managedBy does not match default", func() {
-			bcmDevices = func(_ http.ResponseWriter, _ *http.Request) {
-				Fail("GetDevices should not be called when managedBy filter excludes BCM")
+		It("should skip hosts whose managedBy differs from the requested owner", func() {
+			bcmDevices = func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				// Device defaults to managedBy=baremetal (no managedBy label).
+				_, err := fmt.Fprint(w, `[
+					{"baseType":"Device","childType":"LiteNode","uuid":"u1","hostname":"node001","mac":"aa:bb:cc:dd:ee:01","extra_values":{"resource_class":"h100"}}
+				]`)
+				Expect(err).NotTo(HaveOccurred())
 			}
 
 			client := newTestClient()
-			host, err := client.FindFreeHost(ctx, map[string]string{"managedBy": "other-manager"})
+			host, err := client.FindFreeHost(ctx, map[string]string{"resource_class": "h100", "managedBy": "other-manager"})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(host).To(BeNil())
+		})
+
+		It("should match a free host by an arbitrary extra_values label", func() {
+			bcmDevices = func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, err := fmt.Fprint(w, `[
+					{"baseType":"Device","childType":"LiteNode","uuid":"u1","hostname":"node001","mac":"aa:bb:cc:dd:ee:01","extra_values":{"gpu":"a100","datacenter":"west"}}
+				]`)
+				Expect(err).NotTo(HaveOccurred())
+			}
+
+			client := newTestClient()
+			host, err := client.FindFreeHost(ctx, map[string]string{"gpu": "a100"})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(host).NotTo(BeNil())
+			Expect(host.Name).To(Equal("node001"))
+		})
+
+		It("should require all selector labels to match (AND semantics)", func() {
+			bcmDevices = func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, err := fmt.Fprint(w, `[
+					{"baseType":"Device","childType":"LiteNode","uuid":"u1","hostname":"node001","mac":"aa:bb:cc:dd:ee:01","extra_values":{"gpu":"a100","datacenter":"east"}},
+					{"baseType":"Device","childType":"LiteNode","uuid":"u2","hostname":"node002","mac":"aa:bb:cc:dd:ee:02","extra_values":{"gpu":"a100","datacenter":"west"}}
+				]`)
+				Expect(err).NotTo(HaveOccurred())
+			}
+
+			client := newTestClient()
+			host, err := client.FindFreeHost(ctx, map[string]string{"gpu": "a100", "datacenter": "west"})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(host).NotTo(BeNil())
+			Expect(host.Name).To(Equal("node002"))
+		})
+
+		It("should not match OSAC-internal extra_values as selector labels", func() {
+			bcmDevices = func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, err := fmt.Fprint(w, `[
+					{"baseType":"Device","childType":"LiteNode","uuid":"u1","hostname":"node001","mac":"aa:bb:cc:dd:ee:01","extra_values":{"resource_class":"h100","osac_bmc_address":"redfish://bmc"}}
+				]`)
+				Expect(err).NotTo(HaveOccurred())
+			}
+
+			client := newTestClient()
+			host, err := client.FindFreeHost(ctx, map[string]string{"osac_bmc_address": "redfish://bmc"})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(host).To(BeNil())
 		})

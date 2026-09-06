@@ -382,9 +382,11 @@ func (r *ClusterOrderReconciler) handleHostedCluster(ctx context.Context, instan
 	instance.SetClusterReferenceHostedClusterName(name)
 	instance.SetStatusCondition(v1alpha1.ConditionControlPlaneCreated, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
 
-	subStage := deriveProvisioningSubStage(hc)
-	instance.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionTrue,
-		humanizeConditionName(subStage), subStage)
+	if instance.Status.Phase == v1alpha1.ClusterOrderPhaseProgressing {
+		subStage := deriveProvisioningSubStage(hc)
+		instance.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionTrue,
+			humanizeConditionName(subStage), subStage)
+	}
 
 	if hostedClusterControlPlaneIsAvailable(hc) {
 		log.Info("hosted control plane is available", "clusterorder", instance.GetName())

@@ -26,7 +26,7 @@ import "osac/private/v1/metadata_type.proto";
 option (cleanapi.file).package = "osac.public.v1";
 
 // A compute instance catalog item defines a curated infrastructure offering that references an underlying compute
-// instance template. Admins control which fields users can set, enforce defaults, and validate input via JSON Schema.
+// instance template. Admins control typed resource-field and template-parameter policies, including locked values and defaults.
 //
 // buf:lint:ignore OSAC_OBJECT_SHAPE
 message ComputeInstanceCatalogItem {
@@ -62,16 +62,14 @@ message ComputeInstanceCatalogItem {
   repeated FieldDefinition field_definitions = 8 [deprecated = true];
 
   // Policies that govern template parameters during resource creation.
-  map<string, TemplateParameterPolicy> template_parameters = 9 [(cleanapi.field).private = true];
+  map<string, TemplateParameterPolicy> template_parameters = 9;
 
   // Policies that govern compute instance fields during resource creation.
-  ComputeInstanceCatalogItemFields fields = 10 [(cleanapi.field).private = true];
+  ComputeInstanceCatalogItemFields fields = 10;
 }
 
 // Groups the policies for governable compute instance fields.
 message ComputeInstanceCatalogItemFields {
-  option (cleanapi.message).private = true;
-
   DiskImageReferenceFieldPolicy disk_image = 1;
   InstanceTypeReferenceFieldPolicy instance_type = 2;
   StringFieldPolicy ssh_public_key = 3;
@@ -85,8 +83,6 @@ message ComputeInstanceCatalogItemFields {
 
 // Groups policies for governable compute instance boot disk fields.
 message ComputeInstanceBootDiskFieldPolicies {
-  option (cleanapi.message).private = true;
-
   Int32FieldPolicy size_gib = 1;
   StorageTierReferenceFieldPolicy storage_tier = 2;
 }

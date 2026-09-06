@@ -27,8 +27,6 @@ import "osac/public/v1/condition_status_type.proto";
 import "osac/public/v1/metadata_type.proto";
 import "osac/public/v1/host_type_type.proto";
 import "osac/public/v1/secret_type.proto";
-import "osac/public/v1/security_group_type.proto";
-import "osac/public/v1/subnet_type.proto";
 
 // Contains the details of the cluster.
 //
@@ -364,25 +362,6 @@ enum ClusterConditionType {
 
   // Indicates that the cluster is degraded.
   CLUSTER_CONDITION_TYPE_DEGRADED = 4;
-}
-
-// Defines the network attachment for a cluster, connecting it to a tenant subnet with optional security groups.
-//
-// Unlike compute instances, which support multiple network attachments (one per virtual NIC), a cluster has a single
-// network attachment shared by all node sets. The fabric interface for each node set is resolved automatically by the
-// system from the node set's host type.
-message ClusterNetworkAttachment {
-  // Reference to the subnet to connect the cluster to.
-  //
-  // The subnet must be in `READY` state at creation time.
-  //
-  // This can't be modified after the cluster is created.
-  SubnetLocalReference subnet = 1;
-
-  // References to the security groups to apply to the cluster's network attachment.
-  //
-  // All security groups must belong to the same virtual network as the subnet.
-  repeated SecurityGroupLocalReference security_groups = 2;
 }
 
 // Defines a set of nodes that are part of the cluster, all of them of the same type of host.

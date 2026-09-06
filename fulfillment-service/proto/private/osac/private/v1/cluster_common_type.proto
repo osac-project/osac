@@ -15,7 +15,10 @@ syntax = "proto3";
 
 package osac.private.v1;
 
+import "buf/validate/validate.proto";
 import "cleanapi/cleanapi.proto";
+import "osac/private/v1/security_group_type.proto";
+import "osac/private/v1/subnet_type.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
 
@@ -30,4 +33,23 @@ message ClusterNetwork {
   //
   // Must be valid CIDR notation. If not provided, defaults to `172.30.0.0/16`.
   optional string service_cidr = 2;
+}
+
+// Defines the network attachment for a cluster, connecting it to a tenant subnet with optional security groups.
+//
+// Unlike compute instances, which support multiple network attachments (one per virtual NIC), a cluster has a single
+// network attachment shared by all node sets. The fabric interface for each node set is resolved automatically by the
+// system from the node set's host type.
+message ClusterNetworkAttachment {
+  // Reference to the subnet to connect the cluster to.
+  //
+  // The subnet must be in `READY` state at creation time.
+  //
+  // This can't be modified after the cluster is created.
+  SubnetLocalReference subnet = 1 [(buf.validate.field).required = true];
+
+  // References to the security groups to apply to the cluster's network attachment.
+  //
+  // All security groups must belong to the same virtual network as the subnet.
+  repeated SecurityGroupLocalReference security_groups = 2;
 }

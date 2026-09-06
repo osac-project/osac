@@ -26,7 +26,7 @@ import "osac/private/v1/metadata_type.proto";
 option (cleanapi.file).package = "osac.public.v1";
 
 // A cluster catalog item defines a curated infrastructure offering that references an underlying cluster template.
-// Admins control which fields users can set, enforce defaults, and validate input via JSON Schema.
+// Admins control typed resource-field and template-parameter policies, including locked values and defaults.
 //
 // buf:lint:ignore OSAC_OBJECT_SHAPE
 message ClusterCatalogItem {
@@ -63,28 +63,26 @@ message ClusterCatalogItem {
   repeated FieldDefinition field_definitions = 8 [deprecated = true];
 
   // Policies that govern template parameters during resource creation.
-  map<string, TemplateParameterPolicy> template_parameters = 9 [(cleanapi.field).private = true];
+  map<string, TemplateParameterPolicy> template_parameters = 9;
 
   // Policies that govern cluster fields during resource creation.
-  ClusterCatalogItemFields fields = 10 [(cleanapi.field).private = true];
+  ClusterCatalogItemFields fields = 10;
 }
 
 // Groups the policies for governable cluster fields.
 message ClusterCatalogItemFields {
-  option (cleanapi.message).private = true;
-
   ClusterVersionReferenceFieldPolicy version = 1;
   StringFieldPolicy ssh_public_key = 2;
   SecretReferenceFieldPolicy pull_secret_secret = 3;
   ClusterNetworkFieldPolicies network = 4;
   map<string, Int32FieldPolicy> node_sets = 5;
   BoolFieldPolicy auto_external_ip_attachment = 6;
+  // Policy for the cluster's subnet and security-group attachment.
+  ClusterNetworkAttachmentFieldPolicy network_attachment = 7;
 }
 
 // Groups policies for governable cluster network fields.
 message ClusterNetworkFieldPolicies {
-  option (cleanapi.message).private = true;
-
   StringFieldPolicy pod_cidr = 1;
   StringFieldPolicy service_cidr = 2;
 }

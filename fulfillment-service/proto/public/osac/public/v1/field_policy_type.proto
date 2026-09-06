@@ -13,21 +13,18 @@
 
 syntax = "proto3";
 
-package osac.private.v1;
+package osac.public.v1;
 
 import "buf/validate/validate.proto";
-import "cleanapi/cleanapi.proto";
 import "google/protobuf/any.proto";
-import "osac/private/v1/baremetal_instance_common_type.proto";
-import "osac/private/v1/baremetal_instance_type_type.proto";
-import "osac/private/v1/cluster_common_type.proto";
-import "osac/private/v1/cluster_version_type.proto";
-import "osac/private/v1/compute_instance_common_type.proto";
-import "osac/private/v1/disk_image_type.proto";
-import "osac/private/v1/instance_type_type.proto";
-import "osac/private/v1/secret_type.proto";
-
-option (cleanapi.file).package = "osac.public.v1";
+import "osac/public/v1/baremetal_instance_common_type.proto";
+import "osac/public/v1/baremetal_instance_type_type.proto";
+import "osac/public/v1/cluster_common_type.proto";
+import "osac/public/v1/cluster_version_type.proto";
+import "osac/public/v1/compute_instance_common_type.proto";
+import "osac/public/v1/disk_image_type.proto";
+import "osac/public/v1/instance_type_type.proto";
+import "osac/public/v1/secret_type.proto";
 
 // Defines whether a string field is locked or editable.
 message StringFieldPolicy {

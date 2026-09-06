@@ -19,10 +19,11 @@ import "buf/validate/validate.proto";
 import "google/api/field_behavior.proto";
 import "osac/public/v1/compute_instance_template_type.proto";
 import "osac/public/v1/field_definition_type.proto";
+import "osac/public/v1/field_policy_type.proto";
 import "osac/public/v1/metadata_type.proto";
 
 // A compute instance catalog item defines a curated infrastructure offering that references an underlying compute
-// instance template. Admins control which fields users can set, enforce defaults, and validate input via JSON Schema.
+// instance template. Admins control typed resource-field and template-parameter policies, including locked values and defaults.
 //
 // buf:lint:ignore OSAC_OBJECT_SHAPE
 message ComputeInstanceCatalogItem {
@@ -53,6 +54,30 @@ message ComputeInstanceCatalogItem {
   // Use `fields` and `template_parameters` instead.
   repeated FieldDefinition field_definitions = 8 [deprecated = true];
 
+  // Policies that govern template parameters during resource creation.
+  map<string, TemplateParameterPolicy> template_parameters = 9;
+
+  // Policies that govern compute instance fields during resource creation.
+  ComputeInstanceCatalogItemFields fields = 10;
+}
+
+// Groups the policies for governable compute instance fields.
+message ComputeInstanceCatalogItemFields {
+  DiskImageReferenceFieldPolicy disk_image = 1;
+  InstanceTypeReferenceFieldPolicy instance_type = 2;
+  StringFieldPolicy ssh_public_key = 3;
+  ComputeInstanceBootDiskFieldPolicies boot_disk = 4;
+  ComputeInstanceRunStrategyFieldPolicy run_strategy = 5;
+  StringFieldPolicy user_data = 6;
+  ComputeNetworkAttachmentListFieldPolicy network_attachments = 7;
+  BoolFieldPolicy auto_external_ip_attachment = 8;
+  ComputeInstanceDiskListFieldPolicy additional_disks = 9;
+}
+
+// Groups policies for governable compute instance boot disk fields.
+message ComputeInstanceBootDiskFieldPolicies {
+  Int32FieldPolicy size_gib = 1;
+  StorageTierReferenceFieldPolicy storage_tier = 2;
 }
 
 // Reference to a ComputeInstanceCatalogItem resource.

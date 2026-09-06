@@ -34,6 +34,14 @@ envoygateway:
 bundledPostgres:
   enabled: true
 
+# --- Bundled OpenBao ---
+# Single-pod ephemeral Vault-compatible secret store for testing. Dev mode --
+# data is lost on restart. Not for production.
+bundledVault:
+  enabled: true
+  devRootToken: "dev-root-token"
+  keycloakIssuerUrl: "https://keycloak.keycloak.svc.cluster.local:8443/realms/osac"
+
 # --- CA issuer ---
 caIssuer:
   enabled: true

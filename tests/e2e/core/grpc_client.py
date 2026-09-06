@@ -54,7 +54,7 @@ class GRPCClient:
         attachments = [{"subnet": {"id": sid}} for sid in subnet_ids]
         spec: dict[str, Any] = {"catalog_item": {"id": catalog_item}, "network_attachments": attachments}
         if boot_disk_storage_tier is not None:
-            spec["boot_disk"] = {"storage_tier": boot_disk_storage_tier}
+            spec["boot_disk"] = {"storage_tier": {"name": boot_disk_storage_tier}}
         obj: dict[str, Any] = {"spec": spec}
         if name is not None:
             obj["metadata"] = {"name": name}
@@ -614,7 +614,7 @@ class GRPCClient:
         if instance_type is not None:
             spec["instance_type"] = {"name": instance_type}
         if boot_disk_storage_tier is not None:
-            spec["boot_disk"] = {"storage_tier": boot_disk_storage_tier}
+            spec["boot_disk"] = {"storage_tier": {"name": boot_disk_storage_tier}}
         obj: dict[str, Any] = {"spec": spec}
         if name is not None:
             obj["metadata"] = {"name": name}

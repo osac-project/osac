@@ -81,7 +81,7 @@ def _ci_create_data(
                 "catalog_item": {"name": cat_item_name},
                 "instance_type": {"name": instance_type},
                 "disk_image": {"name": disk_image},
-                "boot_disk": {"storage_tier": storage_tier},
+                "boot_disk": {"storage_tier": {"name": storage_tier}},
                 "network_attachments": [
                     {"subnet": {"name": subnet_name}, "security_groups": [{"name": sg_name}]}
                 ],
@@ -212,7 +212,7 @@ class TestComputeReferences:
                             "catalog_item": {"name": cat_item_name},
                             "instance_type": {"name": ref_instance_type},
                             "disk_image": {"name": ref_disk_image},
-                            "boot_disk": {"storage_tier": default_storage_tier},
+                            "boot_disk": {"storage_tier": {"name": default_storage_tier}},
                             "network_attachments": [
                                 {
                                     "subnet": {"name": ref_subnet["name"]},

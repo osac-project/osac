@@ -110,8 +110,8 @@ def test_compute_instance_multiple_disks_different_tiers(
         network_attachments=[{"subnet": default_subnet}],
         boot_disk_storage_tier=fast_tier,
         additional_disks=[
-            {"size_gib": 1, "storage_tier": default_storage_tier},
-            {"size_gib": 2, "storage_tier": archive_tier},
+            {"size_gib": 1, "storage_tier": {"name": default_storage_tier}},
+            {"size_gib": 2, "storage_tier": {"name": archive_tier}},
         ],
     )
 
@@ -155,7 +155,7 @@ def test_compute_instance_nonexistent_tier_rejected(
                     "spec": {
                         "template": {"name": vm_template},
                         "instance_type": {"name": default_instance_type},
-                        "boot_disk": {"size_gib": 20, "storage_tier": nonexistent_tier},
+                        "boot_disk": {"size_gib": 20, "storage_tier": {"name": nonexistent_tier}},
                         "network_attachments": [{"subnet": {"id": default_subnet}}],
                         "disk_image": {"name": default_disk_image},
                         "run_strategy": "Always",
@@ -229,17 +229,17 @@ def test_compute_instance_tier_immutability(
             wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
 
 
-@pytest.mark.parametrize("storage_tier", [None, ""])
+@pytest.mark.parametrize("storage_tier", [None, {"name": ""}])
 def test_compute_instance_boot_disk_tier_required(
     private_grpc: GRPCClient,
     vm_template: str,
     default_subnet: str,
     default_instance_type: str,
     default_disk_image: str,
-    storage_tier: str | None,
+    storage_tier: dict[str, str] | None,
 ) -> None:
     """Verify that absent and empty boot disk tiers return INVALID_ARGUMENT."""
-    boot_disk = {"size_gib": 20}
+    boot_disk: dict[str, Any] = {"size_gib": 20}
     if storage_tier is not None:
         boot_disk["storage_tier"] = storage_tier
 
@@ -265,7 +265,7 @@ def test_compute_instance_boot_disk_tier_required(
     assert "storage_tier is required" in str(exc_info.value.stderr).lower()
 
 
-@pytest.mark.parametrize("storage_tier", [None, ""])
+@pytest.mark.parametrize("storage_tier", [None, {"name": ""}])
 def test_compute_instance_additional_disk_tier_required(
     private_grpc: GRPCClient,
     vm_template: str,
@@ -273,10 +273,10 @@ def test_compute_instance_additional_disk_tier_required(
     default_storage_tier: str,
     default_instance_type: str,
     default_disk_image: str,
-    storage_tier: str | None,
+    storage_tier: dict[str, str] | None,
 ) -> None:
     """Verify that absent and empty additional disk tiers return INVALID_ARGUMENT."""
-    additional_disk = {"size_gib": 50}
+    additional_disk: dict[str, Any] = {"size_gib": 50}
     if storage_tier is not None:
         additional_disk["storage_tier"] = storage_tier
 
@@ -289,7 +289,7 @@ def test_compute_instance_additional_disk_tier_required(
                     "spec": {
                         "template": {"name": vm_template},
                         "instance_type": {"name": default_instance_type},
-                        "boot_disk": {"size_gib": 20, "storage_tier": default_storage_tier},
+                        "boot_disk": {"size_gib": 20, "storage_tier": {"name": default_storage_tier}},
                         "additional_disks": [
                             additional_disk,
                         ],
@@ -443,7 +443,7 @@ def test_compute_instance_user_tier_overrides_catalog_item_default(
                     "spec": {
                         "catalog_item": {"id": catalog_item_id},
                         "instance_type": {"name": default_instance_type},
-                        "boot_disk": {"size_gib": 20, "storage_tier": fast_tier},  # Override
+                        "boot_disk": {"size_gib": 20, "storage_tier": {"name": fast_tier}},  # Override
                         "network_attachments": [{"subnet": {"id": default_subnet}}],
                         "disk_image": {"name": default_disk_image},
                         "run_strategy": "Always",
@@ -524,8 +524,8 @@ def test_compute_instance_explicit_additional_disks_without_catalog_item_default
                         "instance_type": {"name": default_instance_type},
                         "boot_disk": {"size_gib": 20},  # Uses CatalogItem default tier
                         "additional_disks": [
-                            {"size_gib": 5, "storage_tier": fast_tier},
-                            {"size_gib": 10, "storage_tier": archive_tier},
+                            {"size_gib": 5, "storage_tier": {"name": fast_tier}},
+                            {"size_gib": 10, "storage_tier": {"name": archive_tier}},
                         ],
                         "network_attachments": [{"subnet": {"id": default_subnet}}],
                         "disk_image": {"name": default_disk_image},
@@ -584,7 +584,7 @@ def test_compute_instance_additional_disks_from_catalog_item_default(
             "path": "additional_disks",
             "display_name": "Additional Disks",
             "editable": True,
-            "default": [{"size_gib": 10, "storage_tier": fast_tier}],
+            "default": [{"size_gib": 10, "storage_tier": {"name": fast_tier}}],
         },
         {"path": "boot_disk.size_gib", "display_name": "Boot Disk Size", "editable": True},
         {"path": "boot_disk.storage_tier", "display_name": "Boot Disk Storage Tier", "editable": True},
@@ -607,7 +607,7 @@ def test_compute_instance_additional_disks_from_catalog_item_default(
                     "spec": {
                         "catalog_item": {"id": catalog_item_id},
                         "instance_type": {"name": default_instance_type},
-                        "boot_disk": {"size_gib": 20, "storage_tier": default_storage_tier},
+                        "boot_disk": {"size_gib": 20, "storage_tier": {"name": default_storage_tier}},
                         # No additional_disks specified
                         "network_attachments": [{"subnet": {"id": default_subnet}}],
                         "disk_image": {"name": default_disk_image},
@@ -664,7 +664,7 @@ def test_compute_instance_user_additional_disks_override_catalog_item_default(
             "path": "additional_disks",
             "display_name": "Additional Disks",
             "editable": True,
-            "default": [{"size_gib": 10, "storage_tier": fast_tier}],
+            "default": [{"size_gib": 10, "storage_tier": {"name": fast_tier}}],
         },
         {"path": "boot_disk.size_gib", "display_name": "Boot Disk Size", "editable": True},
         {"path": "boot_disk.storage_tier", "display_name": "Boot Disk Storage Tier", "editable": True},
@@ -687,9 +687,9 @@ def test_compute_instance_user_additional_disks_override_catalog_item_default(
                     "spec": {
                         "catalog_item": {"id": catalog_item_id},
                         "instance_type": {"name": default_instance_type},
-                        "boot_disk": {"size_gib": 20, "storage_tier": default_storage_tier},
+                        "boot_disk": {"size_gib": 20, "storage_tier": {"name": default_storage_tier}},
                         "additional_disks": [  # Override
-                            {"size_gib": 10, "storage_tier": archive_tier}
+                            {"size_gib": 10, "storage_tier": {"name": archive_tier}}
                         ],
                         "network_attachments": [{"subnet": {"id": default_subnet}}],
                         "disk_image": {"name": default_disk_image},
@@ -748,7 +748,7 @@ def test_compute_instance_empty_additional_disks_opts_out_of_catalog_item_defaul
             "path": "additional_disks",
             "display_name": "Additional Disks",
             "editable": True,
-            "default": [{"size_gib": 10, "storage_tier": fast_tier}],
+            "default": [{"size_gib": 10, "storage_tier": {"name": fast_tier}}],
         },
         {"path": "boot_disk.size_gib", "display_name": "Boot Disk Size", "editable": True},
         {"path": "boot_disk.storage_tier", "display_name": "Boot Disk Storage Tier", "editable": True},
@@ -771,7 +771,7 @@ def test_compute_instance_empty_additional_disks_opts_out_of_catalog_item_defaul
                     "spec": {
                         "catalog_item": {"id": catalog_item_id},
                         "instance_type": {"name": default_instance_type},
-                        "boot_disk": {"size_gib": 20, "storage_tier": default_storage_tier},
+                        "boot_disk": {"size_gib": 20, "storage_tier": {"name": default_storage_tier}},
                         "additional_disks": [],  # Explicit empty array
                         "network_attachments": [{"subnet": {"id": default_subnet}}],
                         "disk_image": {"name": default_disk_image},

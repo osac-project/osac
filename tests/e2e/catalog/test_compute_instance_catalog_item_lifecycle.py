@@ -170,7 +170,7 @@ def test_create_compute_instance_with_unpublished_catalog_item_fails(
                 "object": {
                     "spec": {
                         "catalog_item": {"id": catalog_item_id},
-                        "boot_disk": {"storage_tier": default_storage_tier},
+                        "boot_disk": {"storage_tier": {"name": default_storage_tier}},
                         "network_attachments": [{"subnet": {"id": default_subnet_id}}],
                     }
                 }

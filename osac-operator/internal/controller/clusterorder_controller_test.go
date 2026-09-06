@@ -470,9 +470,9 @@ var _ = Describe("ClusterOrder Controller", func() {
 			hc := &hypershiftv1beta1.HostedCluster{
 				Status: hypershiftv1beta1.HostedClusterStatus{
 					Conditions: []metav1.Condition{
-						{Type: string(hypershiftv1beta1.HostedClusterAvailable), Status: metav1.ConditionTrue, LastTransitionTime: metav1.Now(), Reason: "Ready"},
-						{Type: string(hypershiftv1beta1.HostedClusterDegraded), Status: metav1.ConditionFalse, LastTransitionTime: metav1.Now(), Reason: "Ready"},
-						{Type: string(hypershiftv1beta1.ClusterVersionSucceeding), Status: metav1.ConditionTrue, LastTransitionTime: metav1.Now(), Reason: "Ready"},
+						{Type: string(hypershiftv1beta1.HostedClusterAvailable), Status: metav1.ConditionTrue, LastTransitionTime: metav1.NewTime(time.Now().UTC()), Reason: "Ready"},
+						{Type: string(hypershiftv1beta1.HostedClusterDegraded), Status: metav1.ConditionFalse, LastTransitionTime: metav1.NewTime(time.Now().UTC()), Reason: "Ready"},
+						{Type: string(hypershiftv1beta1.ClusterVersionSucceeding), Status: metav1.ConditionTrue, LastTransitionTime: metav1.NewTime(time.Now().UTC()), Reason: "Ready"},
 					},
 				},
 			}
@@ -501,8 +501,8 @@ var _ = Describe("ClusterOrder Controller", func() {
 			hc := &hypershiftv1beta1.HostedCluster{
 				Status: hypershiftv1beta1.HostedClusterStatus{
 					Conditions: []metav1.Condition{
-						{Type: string(hypershiftv1beta1.HostedClusterAvailable), Status: metav1.ConditionFalse, LastTransitionTime: metav1.Now(), Reason: "NotReady"},
-						{Type: string(hypershiftv1beta1.HostedClusterDegraded), Status: metav1.ConditionFalse, LastTransitionTime: metav1.Now(), Reason: "Ready"},
+						{Type: string(hypershiftv1beta1.HostedClusterAvailable), Status: metav1.ConditionFalse, LastTransitionTime: metav1.NewTime(time.Now().UTC()), Reason: "NotReady"},
+						{Type: string(hypershiftv1beta1.HostedClusterDegraded), Status: metav1.ConditionFalse, LastTransitionTime: metav1.NewTime(time.Now().UTC()), Reason: "Ready"},
 					},
 				},
 			}
@@ -554,8 +554,8 @@ var _ = Describe("ClusterOrder Controller", func() {
 			hc := &hypershiftv1beta1.HostedCluster{
 				Status: hypershiftv1beta1.HostedClusterStatus{
 					Conditions: []metav1.Condition{
-						{Type: string(hypershiftv1beta1.HostedClusterAvailable), Status: metav1.ConditionFalse, LastTransitionTime: metav1.Now(), Reason: "NotReady"},
-						{Type: string(hypershiftv1beta1.HostedClusterDegraded), Status: metav1.ConditionFalse, LastTransitionTime: metav1.Now(), Reason: "Ready"},
+						{Type: string(hypershiftv1beta1.HostedClusterAvailable), Status: metav1.ConditionFalse, LastTransitionTime: metav1.NewTime(time.Now().UTC()), Reason: "NotReady"},
+						{Type: string(hypershiftv1beta1.HostedClusterDegraded), Status: metav1.ConditionFalse, LastTransitionTime: metav1.NewTime(time.Now().UTC()), Reason: "Ready"},
 					},
 				},
 			}
@@ -584,9 +584,9 @@ var _ = Describe("ClusterOrder Controller", func() {
 			hc := &hypershiftv1beta1.HostedCluster{
 				Status: hypershiftv1beta1.HostedClusterStatus{
 					Conditions: []metav1.Condition{
-						{Type: string(hypershiftv1beta1.InfrastructureReady), Status: metav1.ConditionFalse, LastTransitionTime: metav1.Now(), Reason: "NotReady"},
-						{Type: string(hypershiftv1beta1.HostedClusterAvailable), Status: metav1.ConditionFalse, LastTransitionTime: metav1.Now(), Reason: "NotReady"},
-						{Type: string(hypershiftv1beta1.HostedClusterDegraded), Status: metav1.ConditionFalse, LastTransitionTime: metav1.Now(), Reason: "Ready"},
+						{Type: string(hypershiftv1beta1.InfrastructureReady), Status: metav1.ConditionFalse, LastTransitionTime: metav1.NewTime(time.Now().UTC()), Reason: "NotReady"},
+						{Type: string(hypershiftv1beta1.HostedClusterAvailable), Status: metav1.ConditionFalse, LastTransitionTime: metav1.NewTime(time.Now().UTC()), Reason: "NotReady"},
+						{Type: string(hypershiftv1beta1.HostedClusterDegraded), Status: metav1.ConditionFalse, LastTransitionTime: metav1.NewTime(time.Now().UTC()), Reason: "Ready"},
 					},
 				},
 			}
@@ -615,9 +615,9 @@ var _ = Describe("ClusterOrder Controller", func() {
 			hc := &hypershiftv1beta1.HostedCluster{
 				Status: hypershiftv1beta1.HostedClusterStatus{
 					Conditions: []metav1.Condition{
-						{Type: string(hypershiftv1beta1.InfrastructureReady), Status: metav1.ConditionTrue, LastTransitionTime: metav1.Now(), Reason: "Ready"},
-						{Type: string(hypershiftv1beta1.HostedClusterAvailable), Status: metav1.ConditionFalse, LastTransitionTime: metav1.Now(), Reason: "NotReady"},
-						{Type: string(hypershiftv1beta1.HostedClusterDegraded), Status: metav1.ConditionFalse, LastTransitionTime: metav1.Now(), Reason: "Ready"},
+						{Type: string(hypershiftv1beta1.InfrastructureReady), Status: metav1.ConditionTrue, LastTransitionTime: metav1.NewTime(time.Now().UTC()), Reason: "Ready"},
+						{Type: string(hypershiftv1beta1.HostedClusterAvailable), Status: metav1.ConditionFalse, LastTransitionTime: metav1.NewTime(time.Now().UTC()), Reason: "NotReady"},
+						{Type: string(hypershiftv1beta1.HostedClusterDegraded), Status: metav1.ConditionFalse, LastTransitionTime: metav1.NewTime(time.Now().UTC()), Reason: "Ready"},
 					},
 				},
 			}
@@ -646,10 +646,10 @@ var _ = Describe("ClusterOrder Controller", func() {
 			hc := &hypershiftv1beta1.HostedCluster{
 				Status: hypershiftv1beta1.HostedClusterStatus{
 					Conditions: []metav1.Condition{
-						{Type: string(hypershiftv1beta1.InfrastructureReady), Status: metav1.ConditionTrue, LastTransitionTime: metav1.Now(), Reason: "Ready"},
-						{Type: string(hypershiftv1beta1.KubeAPIServerAvailable), Status: metav1.ConditionTrue, LastTransitionTime: metav1.Now(), Reason: "Ready"},
-						{Type: string(hypershiftv1beta1.HostedClusterAvailable), Status: metav1.ConditionFalse, LastTransitionTime: metav1.Now(), Reason: "NotReady"},
-						{Type: string(hypershiftv1beta1.HostedClusterDegraded), Status: metav1.ConditionFalse, LastTransitionTime: metav1.Now(), Reason: "Ready"},
+						{Type: string(hypershiftv1beta1.InfrastructureReady), Status: metav1.ConditionTrue, LastTransitionTime: metav1.NewTime(time.Now().UTC()), Reason: "Ready"},
+						{Type: string(hypershiftv1beta1.KubeAPIServerAvailable), Status: metav1.ConditionTrue, LastTransitionTime: metav1.NewTime(time.Now().UTC()), Reason: "Ready"},
+						{Type: string(hypershiftv1beta1.HostedClusterAvailable), Status: metav1.ConditionFalse, LastTransitionTime: metav1.NewTime(time.Now().UTC()), Reason: "NotReady"},
+						{Type: string(hypershiftv1beta1.HostedClusterDegraded), Status: metav1.ConditionFalse, LastTransitionTime: metav1.NewTime(time.Now().UTC()), Reason: "Ready"},
 					},
 				},
 			}
@@ -678,10 +678,10 @@ var _ = Describe("ClusterOrder Controller", func() {
 			hc := &hypershiftv1beta1.HostedCluster{
 				Status: hypershiftv1beta1.HostedClusterStatus{
 					Conditions: []metav1.Condition{
-						{Type: string(hypershiftv1beta1.InfrastructureReady), Status: metav1.ConditionTrue, LastTransitionTime: metav1.Now(), Reason: "Ready"},
-						{Type: string(hypershiftv1beta1.KubeAPIServerAvailable), Status: metav1.ConditionTrue, LastTransitionTime: metav1.Now(), Reason: "Ready"},
-						{Type: string(hypershiftv1beta1.HostedClusterAvailable), Status: metav1.ConditionTrue, LastTransitionTime: metav1.Now(), Reason: "Ready"},
-						{Type: string(hypershiftv1beta1.HostedClusterDegraded), Status: metav1.ConditionFalse, LastTransitionTime: metav1.Now(), Reason: "Ready"},
+						{Type: string(hypershiftv1beta1.InfrastructureReady), Status: metav1.ConditionTrue, LastTransitionTime: metav1.NewTime(time.Now().UTC()), Reason: "Ready"},
+						{Type: string(hypershiftv1beta1.KubeAPIServerAvailable), Status: metav1.ConditionTrue, LastTransitionTime: metav1.NewTime(time.Now().UTC()), Reason: "Ready"},
+						{Type: string(hypershiftv1beta1.HostedClusterAvailable), Status: metav1.ConditionTrue, LastTransitionTime: metav1.NewTime(time.Now().UTC()), Reason: "Ready"},
+						{Type: string(hypershiftv1beta1.HostedClusterDegraded), Status: metav1.ConditionFalse, LastTransitionTime: metav1.NewTime(time.Now().UTC()), Reason: "Ready"},
 					},
 				},
 			}
@@ -710,11 +710,11 @@ var _ = Describe("ClusterOrder Controller", func() {
 			hc := &hypershiftv1beta1.HostedCluster{
 				Status: hypershiftv1beta1.HostedClusterStatus{
 					Conditions: []metav1.Condition{
-						{Type: string(hypershiftv1beta1.InfrastructureReady), Status: metav1.ConditionTrue, LastTransitionTime: metav1.Now(), Reason: "Ready"},
-						{Type: string(hypershiftv1beta1.KubeAPIServerAvailable), Status: metav1.ConditionTrue, LastTransitionTime: metav1.Now(), Reason: "Ready"},
-						{Type: string(hypershiftv1beta1.HostedClusterAvailable), Status: metav1.ConditionTrue, LastTransitionTime: metav1.Now(), Reason: "Ready"},
-						{Type: string(hypershiftv1beta1.HostedClusterDegraded), Status: metav1.ConditionFalse, LastTransitionTime: metav1.Now(), Reason: "Ready"},
-						{Type: string(hypershiftv1beta1.ClusterVersionSucceeding), Status: metav1.ConditionTrue, LastTransitionTime: metav1.Now(), Reason: "Ready"},
+						{Type: string(hypershiftv1beta1.InfrastructureReady), Status: metav1.ConditionTrue, LastTransitionTime: metav1.NewTime(time.Now().UTC()), Reason: "Ready"},
+						{Type: string(hypershiftv1beta1.KubeAPIServerAvailable), Status: metav1.ConditionTrue, LastTransitionTime: metav1.NewTime(time.Now().UTC()), Reason: "Ready"},
+						{Type: string(hypershiftv1beta1.HostedClusterAvailable), Status: metav1.ConditionTrue, LastTransitionTime: metav1.NewTime(time.Now().UTC()), Reason: "Ready"},
+						{Type: string(hypershiftv1beta1.HostedClusterDegraded), Status: metav1.ConditionFalse, LastTransitionTime: metav1.NewTime(time.Now().UTC()), Reason: "Ready"},
+						{Type: string(hypershiftv1beta1.ClusterVersionSucceeding), Status: metav1.ConditionTrue, LastTransitionTime: metav1.NewTime(time.Now().UTC()), Reason: "Ready"},
 					},
 				},
 			}
@@ -747,11 +747,11 @@ var _ = Describe("ClusterOrder Controller", func() {
 			hc := &hypershiftv1beta1.HostedCluster{
 				Status: hypershiftv1beta1.HostedClusterStatus{
 					Conditions: []metav1.Condition{
-						{Type: string(hypershiftv1beta1.InfrastructureReady), Status: metav1.ConditionTrue, LastTransitionTime: metav1.Now(), Reason: "Ready"},
-						{Type: string(hypershiftv1beta1.KubeAPIServerAvailable), Status: metav1.ConditionTrue, LastTransitionTime: metav1.Now(), Reason: "Ready"},
-						{Type: string(hypershiftv1beta1.HostedClusterAvailable), Status: metav1.ConditionTrue, LastTransitionTime: metav1.Now(), Reason: "Ready"},
-						{Type: string(hypershiftv1beta1.HostedClusterDegraded), Status: metav1.ConditionFalse, LastTransitionTime: metav1.Now(), Reason: "Ready"},
-						{Type: string(hypershiftv1beta1.ClusterVersionSucceeding), Status: metav1.ConditionTrue, LastTransitionTime: metav1.Now(), Reason: "Ready"},
+						{Type: string(hypershiftv1beta1.InfrastructureReady), Status: metav1.ConditionTrue, LastTransitionTime: metav1.NewTime(time.Now().UTC()), Reason: "Ready"},
+						{Type: string(hypershiftv1beta1.KubeAPIServerAvailable), Status: metav1.ConditionTrue, LastTransitionTime: metav1.NewTime(time.Now().UTC()), Reason: "Ready"},
+						{Type: string(hypershiftv1beta1.HostedClusterAvailable), Status: metav1.ConditionTrue, LastTransitionTime: metav1.NewTime(time.Now().UTC()), Reason: "Ready"},
+						{Type: string(hypershiftv1beta1.HostedClusterDegraded), Status: metav1.ConditionFalse, LastTransitionTime: metav1.NewTime(time.Now().UTC()), Reason: "Ready"},
+						{Type: string(hypershiftv1beta1.ClusterVersionSucceeding), Status: metav1.ConditionTrue, LastTransitionTime: metav1.NewTime(time.Now().UTC()), Reason: "Ready"},
 					},
 				},
 			}
@@ -926,7 +926,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 							Status:             metav1.ConditionTrue,
 							Reason:             v1alpha1.ReasonProgressing,
 							Message:            "provisioning in progress",
-							LastTransitionTime: metav1.Now(),
+							LastTransitionTime: metav1.NewTime(time.Now().UTC()),
 						},
 					},
 				},
@@ -972,7 +972,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 							Status:             metav1.ConditionFalse,
 							Reason:             v1alpha1.ReasonProvisioningFailed,
 							Message:            "previous failure",
-							LastTransitionTime: metav1.Now(),
+							LastTransitionTime: metav1.NewTime(time.Now().UTC()),
 						},
 					},
 				},

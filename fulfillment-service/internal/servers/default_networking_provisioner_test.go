@@ -20,6 +20,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 )
 
@@ -385,6 +386,85 @@ var _ = Describe("Default networking provisioner", func() {
 				Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(vnList.GetItems()).To(BeEmpty())
+		})
+	})
+
+	Context("when called with a reserved tenant", func() {
+		BeforeEach(func() {
+			createNetworkClass(privatev1.NetworkDefaults_builder{
+				VirtualNetworkIpv4Cidr: "10.0.0.0/16",
+				SubnetIpv4Cidr:         "10.0.1.0/24",
+			}.Build())
+		})
+
+		It("skips provisioning for the system tenant", func() {
+			err := provisioner.Provision(ctx, auth.SystemTenant)
+			Expect(err).ToNot(HaveOccurred())
+
+			vnList, err := provisioner.virtualNetworkDao.List().
+				SetFilter("this.metadata.tenant == 'system'").
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(vnList.GetItems()).To(BeEmpty())
+
+			subnetList, err := provisioner.subnetDao.List().
+				SetFilter("this.metadata.tenant == 'system'").
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(subnetList.GetItems()).To(BeEmpty())
+
+			sgList, err := provisioner.securityGroupDao.List().
+				SetFilter("this.metadata.tenant == 'system'").
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(sgList.GetItems()).To(BeEmpty())
+		})
+
+		It("skips provisioning for the shared tenant", func() {
+			err := provisioner.Provision(ctx, auth.SharedTenant)
+			Expect(err).ToNot(HaveOccurred())
+
+			vnList, err := provisioner.virtualNetworkDao.List().
+				SetFilter("this.metadata.tenant == 'shared'").
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(vnList.GetItems()).To(BeEmpty())
+
+			subnetList, err := provisioner.subnetDao.List().
+				SetFilter("this.metadata.tenant == 'shared'").
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(subnetList.GetItems()).To(BeEmpty())
+
+			sgList, err := provisioner.securityGroupDao.List().
+				SetFilter("this.metadata.tenant == 'shared'").
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(sgList.GetItems()).To(BeEmpty())
+		})
+
+		It("still provisions networking for regular tenants", func() {
+			createTenant("customer-tenant")
+			err := provisioner.Provision(ctx, "customer-tenant")
+			Expect(err).ToNot(HaveOccurred())
+
+			vnList, err := provisioner.virtualNetworkDao.List().
+				SetFilter("this.metadata.tenant == 'customer-tenant'").
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(vnList.GetItems()).To(HaveLen(1))
+
+			subnetList, err := provisioner.subnetDao.List().
+				SetFilter("this.metadata.tenant == 'customer-tenant'").
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(subnetList.GetItems()).To(HaveLen(1))
+
+			sgList, err := provisioner.securityGroupDao.List().
+				SetFilter("this.metadata.tenant == 'customer-tenant'").
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(sgList.GetItems()).To(HaveLen(1))
 		})
 	})
 

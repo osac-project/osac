@@ -239,6 +239,12 @@ func (b *DefaultNetworkingProvisionerBuilder) Build() (result *DefaultNetworking
 // transaction so a failure rolls back the entire set. The gRPC interceptor provides this when
 // called from an RPC handler.
 func (p *DefaultNetworkingProvisioner) Provision(ctx context.Context, tenantName string) error {
+	if tenantName == auth.SystemTenant || tenantName == auth.SharedTenant {
+		p.logger.InfoContext(ctx, "Skipping default networking for reserved tenant",
+			slog.String("tenant", tenantName))
+		return nil
+	}
+
 	nc, err := findDefaultNetworkClass(ctx, p.logger, p.networkClassDao)
 	if err != nil {
 		return fmt.Errorf("failed to find default NetworkClass: %w", err)

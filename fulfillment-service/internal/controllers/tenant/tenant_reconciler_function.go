@@ -743,11 +743,19 @@ const (
 )
 
 func (t *task) checkDefaultNetworkingReadiness(ctx context.Context) error {
+	tenantName := t.tenant.GetMetadata().GetName()
+	condType := privatev1.TenantConditionType_TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY
+
+	if tenantName == auth.SystemTenant || tenantName == auth.SharedTenant {
+		t.updateCondition(condType, privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+			"ReservedTenant", "Reserved tenants do not require default networking")
+		return nil
+	}
+
 	if t.r.virtualNetworksClient == nil {
 		return nil
 	}
-	tenantName := t.tenant.GetMetadata().GetName()
-	condType := privatev1.TenantConditionType_TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY
+
 	filter := fmt.Sprintf("%s && this.metadata.tenant == %q", defaultLabelFilter, tenantName)
 
 	var pending, failed []string

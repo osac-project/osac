@@ -2041,6 +2041,30 @@ var _ = Describe("Default networking readiness", func() {
 		Expect(err).ToNot(HaveOccurred())
 	})
 
+	DescribeTable("sets DefaultNetworkingReady=TRUE for reserved tenants even when VN client is nil",
+		func(tenantName string) {
+			nilVNReconciler := &function{
+				logger:     logger,
+				idpManager: reconciler.idpManager,
+				// virtualNetworksClient intentionally nil
+			}
+
+			tenant := newSyncedTenant(tenantName)
+			t := &task{r: nilVNReconciler, tenant: tenant}
+			t.setDefaults()
+			t.setConditionDefaults()
+			err := t.checkDefaultNetworkingReadiness(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			cond := findCondition(tenant)
+			Expect(cond).ToNot(BeNil())
+			Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+			Expect(cond.GetReason()).To(Equal("ReservedTenant"))
+		},
+		Entry("system tenant", auth.SystemTenant),
+		Entry("shared tenant", auth.SharedTenant),
+	)
+
 	It("initializes DefaultNetworkingReady condition as FALSE for deleted tenant", func() {
 		tenant := privatev1.Tenant_builder{
 			Id: "deleting-tenant",

@@ -97,7 +97,6 @@ service:
   log:
     level: debug
   vault:
-    endpoint: "https://openbao.osac.svc.cluster.local:8200"
     namespace: osac
     kvMountPath: secret
     lifecycleRole: lifecycle

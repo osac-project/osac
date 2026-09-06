@@ -382,6 +382,10 @@ func (r *ClusterOrderReconciler) handleHostedCluster(ctx context.Context, instan
 	instance.SetClusterReferenceHostedClusterName(name)
 	instance.SetStatusCondition(v1alpha1.ConditionControlPlaneCreated, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
 
+	subStage := deriveProvisioningSubStage(hc)
+	instance.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionTrue,
+		humanizeConditionName(subStage), subStage)
+
 	if hostedClusterControlPlaneIsAvailable(hc) {
 		log.Info("hosted control plane is available", "clusterorder", instance.GetName())
 		instance.SetStatusCondition(v1alpha1.ConditionControlPlaneAvailable, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
@@ -487,13 +491,27 @@ func (r *ClusterOrderReconciler) handleNodePool(ctx context.Context, instance *v
 }
 
 func hostedClusterControlPlaneIsAvailable(hc *hypershiftv1beta1.HostedCluster) bool {
-	return (meta.IsStatusConditionTrue(hc.Status.Conditions, "Available") &&
-		meta.IsStatusConditionFalse(hc.Status.Conditions, "Degraded"))
+	return (meta.IsStatusConditionTrue(hc.Status.Conditions, string(hypershiftv1beta1.HostedClusterAvailable)) &&
+		meta.IsStatusConditionFalse(hc.Status.Conditions, string(hypershiftv1beta1.HostedClusterDegraded)))
 }
 
 func hostedClusterIsReady(hc *hypershiftv1beta1.HostedCluster) bool {
-	return (meta.IsStatusConditionTrue(hc.Status.Conditions, "ClusterVersionSucceeding") &&
-		meta.IsStatusConditionFalse(hc.Status.Conditions, "Degraded"))
+	return (meta.IsStatusConditionTrue(hc.Status.Conditions, string(hypershiftv1beta1.ClusterVersionSucceeding)) &&
+		meta.IsStatusConditionFalse(hc.Status.Conditions, string(hypershiftv1beta1.HostedClusterDegraded)))
+}
+
+func deriveProvisioningSubStage(hc *hypershiftv1beta1.HostedCluster) string {
+	if len(hc.Status.Conditions) == 0 {
+		return v1alpha1.ReasonStageUnknown
+	}
+	if !meta.IsStatusConditionTrue(hc.Status.Conditions, string(hypershiftv1beta1.InfrastructureReady)) {
+		return v1alpha1.ReasonPreparingInfrastructure
+	}
+	if meta.IsStatusConditionTrue(hc.Status.Conditions, string(hypershiftv1beta1.KubeAPIServerAvailable)) &&
+		meta.IsStatusConditionTrue(hc.Status.Conditions, string(hypershiftv1beta1.HostedClusterAvailable)) {
+		return v1alpha1.ReasonWorkersJoining
+	}
+	return v1alpha1.ReasonControlPlaneStarting
 }
 
 func (r *ClusterOrderReconciler) findHostedCluster(ctx context.Context, instance *v1alpha1.ClusterOrder, nsName string) (*hypershiftv1beta1.HostedCluster, error) {

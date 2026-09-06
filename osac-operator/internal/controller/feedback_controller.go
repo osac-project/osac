@@ -25,6 +25,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -222,12 +223,14 @@ func syncClusterOrderConditions(ctx context.Context, clusterOrder *ckv1alpha1.Cl
 // applyProgressingStageDetail refines the PROGRESSING condition's reason and message to
 // the furthest-advanced installation stage that has been reached, while leaving its
 // status untouched (the status is single-sourced from "Progressing" in the loop above).
-// The reason is the stage condition's name (e.g. "ControlPlaneCreated") and the message
-// is that name split into words (e.g. "Control Plane Created").
-//
 // This only applies while PROGRESSING is True (installation underway). Once the cluster
 // is ready or has failed, PROGRESSING is False and keeps the terminal reason/message that
 // "Progressing" itself carried, rather than a mid-installation stage.
+//
+// The reason is read from the CR's Progressing condition (set by the resource controller
+// to a sub-stage like PreparingInfrastructure or WorkersJoining). When at least one
+// provisioning stage condition is True and the CR's Progressing reason is non-empty, that
+// reason and its humanized form are forwarded to the proto PROGRESSING condition.
 func applyProgressingStageDetail(clusterOrder *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) {
 	var progressing *privatev1.ClusterCondition
 	for _, current := range remote.Status.Conditions {
@@ -241,18 +244,21 @@ func applyProgressingStageDetail(clusterOrder *ckv1alpha1.ClusterOrder, remote *
 	}
 
 	trueConditions := trueConditionTypes(clusterOrder)
-	furthestStage := ""
+	hasStage := false
 	for _, stage := range clusterOrderProvisioningStages {
 		if _, ok := trueConditions[stage]; ok {
-			furthestStage = stage
+			hasStage = true
 		}
 	}
-	if furthestStage == "" {
+	if !hasStage {
 		return
 	}
 
-	progressing.SetReason(furthestStage)
-	progressing.SetMessage(humanizeConditionName(furthestStage))
+	crProgressing := apimeta.FindStatusCondition(clusterOrder.Status.Conditions, ckv1alpha1.ConditionProgressing)
+	if crProgressing != nil && crProgressing.Reason != "" {
+		progressing.SetReason(crProgressing.Reason)
+		progressing.SetMessage(humanizeConditionName(crProgressing.Reason))
+	}
 }
 
 // trueConditionTypes returns the set of ClusterOrder condition types whose status is

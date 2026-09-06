@@ -257,7 +257,11 @@ func applyProgressingStageDetail(clusterOrder *ckv1alpha1.ClusterOrder, remote *
 	crProgressing := apimeta.FindStatusCondition(clusterOrder.Status.Conditions, ckv1alpha1.ConditionProgressing)
 	if crProgressing != nil && crProgressing.Reason != "" {
 		progressing.SetReason(crProgressing.Reason)
-		progressing.SetMessage(humanizeConditionName(crProgressing.Reason))
+		message := crProgressing.Message
+		if message == "" {
+			message = humanizeConditionName(crProgressing.Reason)
+		}
+		progressing.SetMessage(message)
 	}
 }
 

@@ -26,7 +26,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
-	"k8s.io/apimachinery/pkg/api/meta"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/util/retry"
@@ -189,7 +189,7 @@ func (r *ClusterOrderReconciler) patchStatusWithRetry(ctx context.Context, key c
 		latest.Status.ApiEndpoint = computed.ApiEndpoint
 		latest.Status.IngressEndpoint = computed.IngressEndpoint
 		for _, c := range computed.Conditions {
-			meta.SetStatusCondition(&latest.Status.Conditions, c)
+			apimeta.SetStatusCondition(&latest.Status.Conditions, c)
 		}
 		return r.Status().Patch(ctx, latest, client.MergeFrom(base))
 	})
@@ -493,24 +493,28 @@ func (r *ClusterOrderReconciler) handleNodePool(ctx context.Context, instance *v
 }
 
 func hostedClusterControlPlaneIsAvailable(hc *hypershiftv1beta1.HostedCluster) bool {
-	return (meta.IsStatusConditionTrue(hc.Status.Conditions, string(hypershiftv1beta1.HostedClusterAvailable)) &&
-		meta.IsStatusConditionFalse(hc.Status.Conditions, string(hypershiftv1beta1.HostedClusterDegraded)))
+	return (apimeta.IsStatusConditionTrue(hc.Status.Conditions, string(hypershiftv1beta1.HostedClusterAvailable)) &&
+		apimeta.IsStatusConditionFalse(hc.Status.Conditions, string(hypershiftv1beta1.HostedClusterDegraded)))
 }
 
 func hostedClusterIsReady(hc *hypershiftv1beta1.HostedCluster) bool {
-	return (meta.IsStatusConditionTrue(hc.Status.Conditions, string(hypershiftv1beta1.ClusterVersionSucceeding)) &&
-		meta.IsStatusConditionFalse(hc.Status.Conditions, string(hypershiftv1beta1.HostedClusterDegraded)))
+	return (apimeta.IsStatusConditionTrue(hc.Status.Conditions, string(hypershiftv1beta1.ClusterVersionSucceeding)) &&
+		apimeta.IsStatusConditionFalse(hc.Status.Conditions, string(hypershiftv1beta1.HostedClusterDegraded)))
 }
 
+// deriveProvisioningSubStage returns a live sub-stage reason reflecting the current HC condition
+// snapshot. It is intentionally non-monotonic: if conditions transiently disappear the reason can
+// regress (e.g. WorkersJoining back to StageUnknown). The coarse stage conditions
+// (ControlPlaneCreated, ControlPlaneAvailable) remain sticky-True and provide monotonic progress.
 func deriveProvisioningSubStage(hc *hypershiftv1beta1.HostedCluster) string {
 	if len(hc.Status.Conditions) == 0 {
 		return v1alpha1.ReasonStageUnknown
 	}
-	if !meta.IsStatusConditionTrue(hc.Status.Conditions, string(hypershiftv1beta1.InfrastructureReady)) {
+	if !apimeta.IsStatusConditionTrue(hc.Status.Conditions, string(hypershiftv1beta1.InfrastructureReady)) {
 		return v1alpha1.ReasonPreparingInfrastructure
 	}
-	if meta.IsStatusConditionTrue(hc.Status.Conditions, string(hypershiftv1beta1.KubeAPIServerAvailable)) &&
-		meta.IsStatusConditionTrue(hc.Status.Conditions, string(hypershiftv1beta1.HostedClusterAvailable)) {
+	if apimeta.IsStatusConditionTrue(hc.Status.Conditions, string(hypershiftv1beta1.KubeAPIServerAvailable)) &&
+		apimeta.IsStatusConditionTrue(hc.Status.Conditions, string(hypershiftv1beta1.HostedClusterAvailable)) {
 		return v1alpha1.ReasonWorkersJoining
 	}
 	return v1alpha1.ReasonControlPlaneStarting
@@ -813,11 +817,11 @@ func (r *ClusterOrderReconciler) initializeStatusCondition(instance *v1alpha1.Cl
 	if instance.Status.Conditions == nil {
 		instance.Status.Conditions = []metav1.Condition{}
 	}
-	condition := meta.FindStatusCondition(instance.Status.Conditions, conditionType)
+	condition := apimeta.FindStatusCondition(instance.Status.Conditions, conditionType)
 	if condition != nil {
 		return
 	}
-	_ = meta.SetStatusCondition(
+	_ = apimeta.SetStatusCondition(
 		&instance.Status.Conditions,
 		metav1.Condition{
 			Type:   conditionType,

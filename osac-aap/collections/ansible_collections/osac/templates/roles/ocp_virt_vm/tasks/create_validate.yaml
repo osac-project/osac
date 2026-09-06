@@ -42,6 +42,7 @@
   when: guest_os_family == 'windows'
 
 - name: Read user-data secret and extract password (Windows)
+  no_log: true
   when:
     - guest_os_family == 'windows'
     - vm_user_data_secret_ref | length > 0
@@ -60,7 +61,7 @@
           {{ (_user_data_secret_result.resources[0].data.userdata
               | b64decode
               | regex_replace('^#cloud-config\n', '')
-              | from_yaml).password }}
+              | from_yaml).password | default('', true) }}
       when:
         - _user_data_secret_result.resources | length > 0
         - _user_data_secret_result.resources[0].data.userdata is defined

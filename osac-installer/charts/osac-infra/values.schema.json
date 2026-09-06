@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OSAC Infrastructure Helm Chart Values",
+  "description": "Configuration values for OSAC shared infrastructure (Phase 2)",
+  "type": "object",
+  "properties": {
+    "bundledVault": {
+      "type": "object",
+      "description": "Bundled OpenBao (Vault-compatible) secret store for dev/CI environments. When enabled, deploys a single-replica OpenBao instance in dev mode with emptyDir storage.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Deploy a bundled OpenBao instance. Enabled by default — set to false only when pointing at an external Vault/OpenBao instance.",
+          "default": true
+        },
+        "devRootToken": {
+          "type": "string",
+          "description": "Root token for OpenBao dev mode (required when enabled)",
+          "default": "dev-root-token"
+        },
+        "image": {
+          "type": "string",
+          "description": "OpenBao container image (must be 2.5+ for namespace support)",
+          "default": "ghcr.io/openbao/openbao:2.6.1"
+        },
+        "podSecurityContext": {
+          "type": "object",
+          "description": "Pod-level securityContext for the OpenBao deployment. Leave absent (nil) to use the template's built-in standard-Kubernetes defaults (runAsNonRoot: true, runAsUser: 100, runAsGroup: 1000, fsGroup: 1000). Any non-nil value here FULLY REPLACES the template default — partial overrides must include every key you want rendered. On OpenShift with restricted-v2 SCC, set to {runAsNonRoot: true} only.",
+          "properties": {
+            "runAsNonRoot": { "type": "boolean" },
+            "runAsUser": { "type": "integer" },
+            "runAsGroup": { "type": "integer" },
+            "fsGroup": { "type": "integer" }
+          }
+        },
+        "resources": {
+          "type": "object",
+          "description": "Container resource requests and limits",
+          "properties": {
+            "limits": {
+              "type": "object",
+              "properties": {
+                "cpu": { "type": "string", "description": "CPU limit" },
+                "memory": { "type": "string", "description": "Memory limit" }
+              }
+            },
+            "requests": {
+              "type": "object",
+              "properties": {
+                "cpu": { "type": "string", "description": "CPU request" },
+                "memory": { "type": "string", "description": "Memory request" }
+              }
+            }
+          }
+        },
+        "keycloakIssuerUrl": {
+          "type": "string",
+          "description": "Keycloak OIDC issuer URL for JWT auth bootstrap. On OpenShift this must be the external route URL (not the internal service URL) to avoid issuer mismatch. Leave empty to skip JWT bootstrap.",
+          "default": ""
+        },
+        "keycloakAudience": {
+          "type": "string",
+          "description": "Expected aud claim in JWT tokens",
+          "default": "osac-api"
+        },
+        "vaultNamespace": {
+          "type": "string",
+          "description": "OpenBao/Vault logical namespace (not Kubernetes namespace). The init script creates this as a child namespace inside the OpenBao server and configures JWT auth and policies within it.",
+          "default": "osac"
+        }
+      }
+    }
+  },
+  "required": []
+}

@@ -1,12 +1,9 @@
 fullnameOverride: "bmf-operator"
-
 image:
   repository: ghcr.io/osac-project/bare-metal-fulfillment-operator
-  tag: latest  # PLACEHOLDER -- overwritten at release time by publish-charts.yaml
+  tag: sha-3a511a6 # PLACEHOLDER -- overwritten at release time by publish-charts.yaml
   pullPolicy: Always
-
 replicaCount: 1
-
 resources:
   limits:
     cpu: 500m
@@ -14,27 +11,22 @@ resources:
   requests:
     cpu: 10m
     memory: 64Mi
-
 serviceAccount:
   create: true
   name: ""
-
 secrets:
   inventoryConfig: "osac-inventory-config"
   managementConfig: "osac-management-config"
   osClouds: "osac-os-clouds"
   bcmCerts: "osac-bcm-certs"
-
 configMaps:
   profiles: "osac-profiles"
-
 env:
   aapUrl: ""
   aapTokenSecretName: "osac-aap-api-token"
   aapTokenSecretKey: "token"
   aapInsecureSkipVerify: ""
   enableNetworkingProvisioning: "false"
-
 bcm:
   enabled: false
   url: ""
@@ -44,7 +36,6 @@ bcm:
   insecureSkipVerify: false
   hostClass: "bcm"
   bmhNamespace: ""
-
 metal3:
   enabled: false
   namespace: ""

@@ -4,7 +4,7 @@
 operator:
   image:
     repository: ghcr.io/osac-project/osac-operator
-    tag: latest
+    tag: sha-3a511a6
     pullPolicy: Always
   provisioning:
     provider: "aap"
@@ -26,16 +26,15 @@ operator:
   hubAccess:
     enabled: true
   tenants:
-  - name: shared
-  - name: osac-e2e-ci
-
+    - name: shared
+    - name: osac-e2e-ci
 # --- Fulfillment Service ---
 service:
-  externalHostname: ""  # set dynamically by make install-osac
-  internalHostname: ""  # set dynamically by make install-osac
+  externalHostname: "" # set dynamically by make install-osac
+  internalHostname: "" # set dynamically by make install-osac
   variant: openshift
   images:
-    service: ghcr.io/osac-project/fulfillment-service:main
+    service: ghcr.io/osac-project/fulfillment-service:sha-3a511a6
     envoy: ghcr.io/osac-project/envoy:v1.33.0
   certs:
     issuerRef:
@@ -48,48 +47,48 @@ service:
     # (see charts/osac/values.yaml) -- correct automatically once
     # install-osac sets --set global.clusterDomain=$(DOMAIN).
     emergencyServiceAccounts:
-    - admin
-    - osac-operator
-    - osac-operator-controller-manager
-    - template-publisher
-    - osac-metering
+      - admin
+      - osac-operator
+      - osac-operator-controller-manager
+      - template-publisher
+      - osac-metering
     controllerCredentials:
-    - secret:
-        name: fulfillment-controller-credentials
-        items:
-        - key: client-id
-          param: client-id
-        - key: client-secret
-          param: client-secret
+      - secret:
+          name: fulfillment-controller-credentials
+          items:
+            - key: client-id
+              param: client-id
+            - key: client-secret
+              param: client-secret
   idp:
     provider: keycloak
     # url defaults to a global.clusterDomain-backed external route URL (see
     # charts/osac/values.yaml) -- correct automatically once install-osac
     # sets --set global.clusterDomain=$(DOMAIN).
     credentials:
-    - secret:
-        name: fulfillment-controller-credentials
-        items:
-        - key: client-id
-          param: client-id
-        - key: client-secret
-          param: client-secret
+      - secret:
+          name: fulfillment-controller-credentials
+          items:
+            - key: client-id
+              param: client-id
+            - key: client-secret
+              param: client-secret
   database:
     connection:
-    - secret:
-        name: osac-db-config
-        items:
-        - key: url
-          param: url
-    - secret:
-        name: osac-db-client-cert
-        items:
-        - key: tls.crt
-          param: sslcert
-        - key: tls.key
-          param: sslkey
-        - key: ca.crt
-          param: sslrootcert
+      - secret:
+          name: osac-db-config
+          items:
+            - key: url
+              param: url
+      - secret:
+          name: osac-db-client-cert
+          items:
+            - key: tls.crt
+              param: sslcert
+            - key: tls.key
+              param: sslkey
+            - key: ca.crt
+              param: sslrootcert
   log:
     level: debug
   vault:
@@ -104,17 +103,16 @@ service:
     caBundle:
       configMap: ca-bundle
     credentials:
-    - secret:
-        name: fulfillment-controller-credentials
-        items:
-        - key: client-secret
-          param: client-secret
-
+      - secret:
+          name: fulfillment-controller-credentials
+          items:
+            - key: client-secret
+              param: client-secret
 # --- UI ---
 ui:
   enabled: true
   images:
-    ui: ghcr.io/osac-project/osac-ui:v0.0.5
+    ui: ghcr.io/osac-project/osac-ui:sha-d047c4a
   api:
     fulfillment:
       certs:
@@ -124,7 +122,6 @@ ui:
     certs:
       caBundle:
         configMap: ca-bundle
-
 # --- AAP ---
 aap:
   aap:
@@ -133,14 +130,14 @@ aap:
       name: "osac-aap"
   bootstrap:
     enabled: true
-    image: ghcr.io/osac-project/osac-aap:latest
+    image: ghcr.io/osac-project/osac-aap:sha-3a511a6
     backoffLimit: 15
   configAsCode:
     manifestSecret: "config-as-code-manifest-ig"
     secret: "config-as-code-ig"
-    eeImage: "ghcr.io/osac-project/osac-aap:latest"
+    eeImage: "ghcr.io/osac-project/osac-aap:sha-3a511a6"
     projectGitUri: "https://github.com/osac-project/osac"
-    projectGitBranch: "main"
+    projectGitBranch: "3a511a6e9f6f55b659cf8da55aa5ad8e6bbf734a"
   instanceGroups:
     clusterFulfillment:
       enabled: true
@@ -150,56 +147,50 @@ aap:
         HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: "SingleReplica"
     networkFulfillment:
       enabled: true
-
 # --- Validation ---
 validation:
   enabled: true
-
 # --- Bare Metal Fulfillment Operator ---
 bmf:
   enabled: true
   image:
     repository: ghcr.io/osac-project/bare-metal-fulfillment-operator
-    tag: latest
+    tag: sha-3a511a6
     pullPolicy: Always
   env:
     aapUrl: "http://osac-aap/api/controller"
     aapInsecureSkipVerify: "true"
-
 # --- Cluster Versions ---
 clusterVersions:
   enabled: true
   versions:
-  - version: "4.20.0"
-    image: "quay.io/openshift-release-dev/ocp-release:4.20.0-multi"
-  - version: "4.22.0"
-    image: "quay.io/openshift-release-dev/ocp-release:4.22.0-multi"
-    default: true
-
+    - version: "4.20.0"
+      image: "quay.io/openshift-release-dev/ocp-release:4.20.0-multi"
+    - version: "4.22.0"
+      image: "quay.io/openshift-release-dev/ocp-release:4.22.0-multi"
+      default: true
 # --- Hub Access ---
 hubAccess:
   enabled: true
-
 # --- Metering ---
 metering:
   enabled: true
   database:
     connection:
-    - secret:
-        name: osac-db-metering-config
-        items:
-        - key: url
-          param: url
-    - secret:
-        name: osac-db-metering-client-cert
-        items:
-        - key: tls.crt
-          param: sslcert
-        - key: tls.key
-          param: sslkey
-        - key: ca.crt
-          param: sslrootcert
-
+      - secret:
+          name: osac-db-metering-config
+          items:
+            - key: url
+              param: url
+      - secret:
+          name: osac-db-metering-client-cert
+          items:
+            - key: tls.crt
+              param: sslcert
+            - key: tls.key
+              param: sslkey
+            - key: ca.crt
+              param: sslrootcert
 # --- Bundled OpenBao (Vault-compatible secret store) ---
 bundledVault:
   # Override podSecurityContext for OpenShift restricted-v2 SCC: omit numeric

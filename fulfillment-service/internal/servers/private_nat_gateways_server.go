@@ -44,6 +44,7 @@ type PrivateNATGatewaysServer struct {
 	privatev1.UnimplementedNATGatewaysServer
 
 	logger             *slog.Logger
+	tenancyLogic       auth.TenancyLogic
 	generic            *GenericServer[*privatev1.NATGateway]
 	externalIPDao      *dao.GenericDAO[*privatev1.ExternalIP]
 	virtualNetworksDao *dao.GenericDAO[*privatev1.VirtualNetwork]
@@ -142,6 +143,7 @@ func (b *PrivateNATGatewaysServerBuilder) Build() (result *PrivateNATGatewaysSer
 
 	result = &PrivateNATGatewaysServer{
 		logger:             b.logger,
+		tenancyLogic:       b.tenancyLogic,
 		generic:            generic,
 		externalIPDao:      externalIPDao,
 		virtualNetworksDao: virtualNetworksDao,
@@ -167,6 +169,14 @@ func (s *PrivateNATGatewaysServer) Create(ctx context.Context,
 	natGateway := request.GetObject()
 
 	err = s.validateNATGateway(natGateway)
+	if err != nil {
+		return
+	}
+
+	// Cross-tenant validation: NATGateway must belong to the same tenant as its
+	// VirtualNetwork and ExternalIP. TotalVisibility on the private API bypasses
+	// DAO tenant filtering, so we must check explicitly.
+	err = s.validateCrossTenantReferences(ctx, natGateway)
 	if err != nil {
 		return
 	}
@@ -263,6 +273,46 @@ func (s *PrivateNATGatewaysServer) Signal(ctx context.Context,
 	request *privatev1.NATGatewaysSignalRequest) (response *privatev1.NATGatewaysSignalResponse, err error) {
 	err = s.generic.Signal(ctx, request, &response)
 	return
+}
+
+// validateCrossTenantReferences explicitly checks that the NATGateway's tenant matches
+// its parent VirtualNetwork and ExternalIP tenants. This is critical for the private API
+// where TotalVisibility bypasses DAO-level tenant filtering.
+func (s *PrivateNATGatewaysServer) validateCrossTenantReferences(ctx context.Context,
+	natGateway *privatev1.NATGateway) error {
+
+	// Only validate when an explicit tenant is set (private API path).
+	if natGateway.GetMetadata().GetTenant() == "" {
+		return nil
+	}
+
+	gwTenant := natGateway.GetMetadata().GetTenant()
+
+	// Validate VirtualNetwork tenant matches
+	vnKey := refKey(natGateway.GetSpec().GetVirtualNetwork())
+	if vnKey != "" {
+		vnResp, vnErr := s.virtualNetworksDao.Get().SetId(vnKey).Do(ctx)
+		if vnErr == nil {
+			if err := fetchAndValidateTenantMatch(gwTenant, vnResp.GetObject(), "VirtualNetwork", vnKey); err != nil {
+				return err
+			}
+		}
+		// NotFound will be caught by validateNetworkClassHasFabricManager
+	}
+
+	// Validate ExternalIP tenant matches
+	eipKey := refKey(natGateway.GetSpec().GetExternalIp())
+	if eipKey != "" {
+		eipResp, eipErr := s.externalIPDao.Get().SetId(eipKey).Do(ctx)
+		if eipErr == nil {
+			if err := fetchAndValidateTenantMatch(gwTenant, eipResp.GetObject(), "ExternalIP", eipKey); err != nil {
+				return err
+			}
+		}
+		// NotFound will be caught by validateExternalIPReference
+	}
+
+	return nil
 }
 
 func (s *PrivateNATGatewaysServer) validateNATGateway(natGateway *privatev1.NATGateway) error {

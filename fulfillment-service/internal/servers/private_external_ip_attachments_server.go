@@ -45,6 +45,7 @@ type PrivateExternalIPAttachmentsServer struct {
 	privatev1.UnimplementedExternalIPAttachmentsServer
 
 	logger                  *slog.Logger
+	tenancyLogic            auth.TenancyLogic
 	generic                 *GenericServer[*privatev1.ExternalIPAttachment]
 	externalIPDao           *dao.GenericDAO[*privatev1.ExternalIP]
 	computeInstanceDao      *dao.GenericDAO[*privatev1.ComputeInstance]
@@ -157,6 +158,7 @@ func (b *PrivateExternalIPAttachmentsServerBuilder) Build() (*PrivateExternalIPA
 
 	result := &PrivateExternalIPAttachmentsServer{
 		logger:                  b.logger,
+		tenancyLogic:            b.tenancyLogic,
 		generic:                 generic,
 		externalIPDao:           externalIPDao,
 		computeInstanceDao:      computeInstanceDao,
@@ -193,6 +195,14 @@ func (s *PrivateExternalIPAttachmentsServer) Create(ctx context.Context,
 	externalIPKey := refKey(externalIPRef)
 
 	err = s.validateExternalIPReference(ctx, externalIPKey)
+	if err != nil {
+		return
+	}
+
+	// Cross-tenant validation: ExternalIPAttachment must reference an ExternalIP and
+	// target resource from the same tenant. TotalVisibility on the private API bypasses
+	// DAO tenant filtering, so we must check explicitly.
+	err = s.validateCrossTenantReferences(ctx, attachment)
 	if err != nil {
 		return
 	}
@@ -296,6 +306,76 @@ func (s *PrivateExternalIPAttachmentsServer) Signal(ctx context.Context,
 	request *privatev1.ExternalIPAttachmentsSignalRequest) (response *privatev1.ExternalIPAttachmentsSignalResponse, err error) {
 	err = s.generic.Signal(ctx, request, &response)
 	return
+}
+
+// validateCrossTenantReferences explicitly checks that the ExternalIPAttachment's tenant
+// matches the tenants of its ExternalIP and target resource (ComputeInstance, Cluster, or
+// BareMetalInstance). This is critical for the private API where TotalVisibility bypasses
+// DAO-level tenant filtering.
+//
+// This check only runs when the attachment has an explicit metadata.tenant set. When the
+// tenant is empty, the DAO layer assigns the tenant based on the caller's visibility, and
+// the regular DAO-level tenant filtering ensures isolation.
+func (s *PrivateExternalIPAttachmentsServer) validateCrossTenantReferences(ctx context.Context,
+	attachment *privatev1.ExternalIPAttachment) error {
+
+	// Only validate when an explicit tenant is set (private API path).
+	// Public API callers don't set metadata.tenant — the DAO assigns it.
+	if attachment.GetMetadata().GetTenant() == "" {
+		return nil
+	}
+
+	attachmentTenant := attachment.GetMetadata().GetTenant()
+
+	spec := attachment.GetSpec()
+
+	// Validate ExternalIP tenant matches
+	eipKey := refKey(spec.GetExternalIp())
+	if eipKey != "" {
+		eipResp, eipErr := s.externalIPDao.Get().SetId(eipKey).Do(ctx)
+		if eipErr == nil {
+			if err := fetchAndValidateTenantMatch(attachmentTenant, eipResp.GetObject(), "ExternalIP", eipKey); err != nil {
+				return err
+			}
+		}
+		// NotFound will be caught by validateExternalIPReference
+	}
+
+	// Validate target resource tenant matches
+	switch {
+	case spec.HasComputeInstance():
+		ciKey := refKey(spec.GetComputeInstance())
+		if ciKey != "" {
+			ciResp, ciErr := s.computeInstanceDao.Get().SetId(ciKey).Do(ctx)
+			if ciErr == nil {
+				if err := fetchAndValidateTenantMatch(attachmentTenant, ciResp.GetObject(), "ComputeInstance", ciKey); err != nil {
+					return err
+				}
+			}
+		}
+	case spec.HasCluster():
+		clusterKey := refKey(spec.GetCluster())
+		if clusterKey != "" {
+			clusterResp, clusterErr := s.clusterDao.Get().SetId(clusterKey).Do(ctx)
+			if clusterErr == nil {
+				if err := fetchAndValidateTenantMatch(attachmentTenant, clusterResp.GetObject(), "Cluster", clusterKey); err != nil {
+					return err
+				}
+			}
+		}
+	case spec.HasBaremetalInstance():
+		bmiKey := refKey(spec.GetBaremetalInstance())
+		if bmiKey != "" {
+			bmiResp, bmiErr := s.bareMetalInstanceDao.Get().SetId(bmiKey).Do(ctx)
+			if bmiErr == nil {
+				if err := fetchAndValidateTenantMatch(attachmentTenant, bmiResp.GetObject(), "BareMetalInstance", bmiKey); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	return nil
 }
 
 func (s *PrivateExternalIPAttachmentsServer) validateExternalIPAttachment(

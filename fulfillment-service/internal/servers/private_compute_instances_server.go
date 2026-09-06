@@ -890,10 +890,8 @@ func hasMaskPrefix(mask *fieldmaskpb.FieldMask, prefixes ...string) bool {
 // belong to the same tenant as the ComputeInstance.
 //
 // This validation MUST run even during deletion to prevent cross-tenant updates.
-// The DAO Get() calls enforce tenant isolation via TenancyLogic - cross-tenant resources
-// are filtered out and appear as NotFound. During deletion, NotFound is allowed (resources
-// may have been deleted during cleanup). This ensures tenant boundaries are always enforced
-// while allowing graceful deletion.
+// It performs explicit metadata.tenant comparison that works correctly even when the
+// private API caller has TotalVisibility (which bypasses DAO-level tenant filtering).
 //
 // Implements requirement VAL-04 (tenant isolation).
 func (s *PrivateComputeInstancesServer) validateNetworkReferencesTenancy(
@@ -917,6 +915,15 @@ func (s *PrivateComputeInstancesServer) validateNetworkReferencesTenancy(
 		return nil
 	}
 
+	// Only validate when an explicit tenant is set (private API path).
+	// When the tenant is empty, the DAO layer assigns it and provides isolation.
+	if vm.GetMetadata().GetTenant() == "" {
+		return nil
+	}
+
+	// Resolve the ComputeInstance's own tenant for explicit comparison.
+	vmTenant := vm.GetMetadata().GetTenant()
+
 	for _, att := range attachments {
 		subnetRef := att.GetSubnet()
 		securityGroupRefs := att.GetSecurityGroups()
@@ -925,24 +932,25 @@ func (s *PrivateComputeInstancesServer) validateNetworkReferencesTenancy(
 		// ValidateNetworkAttachments ensures all attachments have non-empty subnet.
 		subnetIDStr := refKey(subnetRef)
 
-		// Validate tenant isolation for subnet.
-		// TenancyLogic in DAO filters out cross-tenant resources, making them appear as NotFound.
-		// We allow NotFound during deletion (resource may be deleted or cross-tenant).
-		// The key is that we ALWAYS call DAO Get() so tenant filtering happens.
-		_, getErr := s.subnetsDao.Get().SetId(subnetIDStr).Do(ctx)
+		// Validate tenant isolation for subnet via explicit metadata.tenant comparison.
+		// This works correctly even with TotalVisibility (private API callers).
+		subnetResp, getErr := s.subnetsDao.Get().SetId(subnetIDStr).Do(ctx)
 		if getErr != nil {
 			var notFoundErr *dao.ErrNotFound
 			if errors.As(getErr, &notFoundErr) {
-				// Resource doesn't exist OR belongs to different tenant (filtered by TenancyLogic).
-				// During deletion this is allowed. During creation/normal update this is caught
-				// by validateNetworkReferencesState.
+				// Resource doesn't exist. During deletion this is allowed.
+				// During creation/normal update this is caught by validateNetworkReferencesState.
 				continue
 			}
-			// Other error - propagate
 			s.logger.ErrorContext(ctx, "Failed to query Subnet for tenancy check",
 				slog.String("subnet_id", subnetIDStr),
 				slog.Any("error", getErr))
 			return grpcstatus.Errorf(grpccodes.Internal, "failed to validate subnet")
+		}
+
+		// Explicit cross-tenant check on subnet metadata
+		if err := fetchAndValidateTenantMatch(vmTenant, subnetResp.GetObject(), "Subnet", subnetIDStr); err != nil {
+			return err
 		}
 
 		// Validate tenant isolation for security groups.
@@ -951,20 +959,23 @@ func (s *PrivateComputeInstancesServer) validateNetworkReferencesTenancy(
 				continue
 			}
 			sgIDStr := refKey(sgRef)
-			_, getErr := s.securityGroupsDao.Get().SetId(sgIDStr).Do(ctx)
+			sgResp, getErr := s.securityGroupsDao.Get().SetId(sgIDStr).Do(ctx)
 			if getErr != nil {
 				var notFoundErr *dao.ErrNotFound
 				if errors.As(getErr, &notFoundErr) {
-					// Resource doesn't exist OR belongs to different tenant (filtered by TenancyLogic).
-					// During deletion this is allowed. During creation/normal update this is caught
-					// by validateNetworkReferencesState.
+					// Resource doesn't exist. During deletion this is allowed.
+					// During creation/normal update this is caught by validateNetworkReferencesState.
 					continue
 				}
-				// Other error - propagate
 				s.logger.ErrorContext(ctx, "Failed to query SecurityGroup for tenancy check",
 					slog.String("security_group_id", sgIDStr),
 					slog.Any("error", getErr))
 				return grpcstatus.Errorf(grpccodes.Internal, "failed to validate security group")
+			}
+
+			// Explicit cross-tenant check on security group metadata
+			if err := fetchAndValidateTenantMatch(vmTenant, sgResp.GetObject(), "SecurityGroup", sgIDStr); err != nil {
+				return err
 			}
 		}
 	}

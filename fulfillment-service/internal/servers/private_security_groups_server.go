@@ -44,6 +44,7 @@ type PrivateSecurityGroupsServer struct {
 	privatev1.UnimplementedSecurityGroupsServer
 
 	logger            *slog.Logger
+	tenancyLogic      auth.TenancyLogic
 	generic           *GenericServer[*privatev1.SecurityGroup]
 	virtualNetworkDao *dao.GenericDAO[*privatev1.VirtualNetwork]
 }
@@ -128,6 +129,7 @@ func (b *PrivateSecurityGroupsServerBuilder) Build() (result *PrivateSecurityGro
 	// Create and populate the object:
 	result = &PrivateSecurityGroupsServer{
 		logger:            b.logger,
+		tenancyLogic:      b.tenancyLogic,
 		generic:           generic,
 		virtualNetworkDao: virtualNetworkDao,
 	}
@@ -236,6 +238,15 @@ func (s *PrivateSecurityGroupsServer) validateSecurityGroup(ctx context.Context,
 	// Check immutable fields (only on Update)
 	if err := validateImmutableFieldsSecurityGroup(newSecurityGroup, existingSecurityGroup); err != nil {
 		return err
+	}
+
+	// Cross-tenant validation: the SecurityGroup must belong to the same tenant as its
+	// parent VirtualNetwork. The private API operates with TotalVisibility, so DAO-level
+	// tenant filtering is bypassed — we must check explicitly.
+	if existingSecurityGroup == nil {
+		if err := s.validateCrossTenantVirtualNetwork(ctx, newSecurityGroup); err != nil {
+			return err
+		}
 	}
 
 	// Validate parent VirtualNetwork
@@ -369,6 +380,38 @@ func validateSecurityRule(rule *privatev1.SecurityRule, ruleType string, index i
 	}
 
 	return nil
+}
+
+// validateCrossTenantVirtualNetwork explicitly checks that the SecurityGroup's tenant matches
+// its parent VirtualNetwork's tenant. This is critical for the private API where
+// TotalVisibility bypasses DAO-level tenant filtering.
+//
+// This check only runs when the security group has an explicit metadata.tenant set.
+func (s *PrivateSecurityGroupsServer) validateCrossTenantVirtualNetwork(ctx context.Context,
+	sg *privatev1.SecurityGroup) error {
+
+	// Only validate when an explicit tenant is set (private API path).
+	if sg.GetMetadata().GetTenant() == "" {
+		return nil
+	}
+
+	vnRef := sg.GetSpec().GetVirtualNetwork()
+	if vnRef == nil {
+		return nil // Caught later by validateVirtualNetworkReference
+	}
+
+	sgTenant := sg.GetMetadata().GetTenant()
+
+	vnKey := refKey(vnRef)
+	getResponse, err := s.virtualNetworkDao.Get().
+		SetId(vnKey).
+		Do(ctx)
+	if err != nil {
+		// NotFound will be caught by validateVirtualNetworkReference
+		return nil
+	}
+
+	return fetchAndValidateTenantMatch(sgTenant, getResponse.GetObject(), "VirtualNetwork", vnKey)
 }
 
 // validateImmutableFieldsSecurityGroup validates that immutable fields have not been changed.

@@ -46,6 +46,7 @@ type PrivateSubnetsServer struct {
 	privatev1.UnimplementedSubnetsServer
 
 	logger            *slog.Logger
+	tenancyLogic      auth.TenancyLogic
 	generic           *GenericServer[*privatev1.Subnet]
 	virtualNetworkDao *dao.GenericDAO[*privatev1.VirtualNetwork]
 }
@@ -126,6 +127,7 @@ func (b *PrivateSubnetsServerBuilder) Build() (result *PrivateSubnetsServer, err
 	// Create and populate the object:
 	result = &PrivateSubnetsServer{
 		logger:            b.logger,
+		tenancyLogic:      b.tenancyLogic,
 		generic:           generic,
 		virtualNetworkDao: virtualNetworkDao,
 	}
@@ -240,6 +242,15 @@ func (s *PrivateSubnetsServer) validateSubnet(ctx context.Context,
 		return err
 	}
 
+	// Cross-tenant validation: the Subnet must belong to the same tenant as its parent
+	// VirtualNetwork. The private API operates with TotalVisibility, so DAO-level tenant
+	// filtering is bypassed — we must check explicitly.
+	if existingSubnet == nil {
+		if err := s.validateCrossTenantVirtualNetwork(ctx, newSubnet); err != nil {
+			return err
+		}
+	}
+
 	// SUB-VAL-03: At least one CIDR must be provided
 	if spec.GetIpv4Cidr() == "" && spec.GetIpv6Cidr() == "" {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
@@ -264,6 +275,39 @@ func (s *PrivateSubnetsServer) validateSubnet(ctx context.Context,
 	}
 
 	return nil
+}
+
+// validateCrossTenantVirtualNetwork explicitly checks that the Subnet's tenant matches
+// its parent VirtualNetwork's tenant. This is critical for the private API where
+// TotalVisibility bypasses DAO-level tenant filtering.
+//
+// This check only runs when the subnet has an explicit metadata.tenant set. When the
+// tenant is empty, the DAO layer assigns the tenant based on the caller's visibility.
+func (s *PrivateSubnetsServer) validateCrossTenantVirtualNetwork(ctx context.Context,
+	subnet *privatev1.Subnet) error {
+
+	// Only validate when an explicit tenant is set (private API path).
+	if subnet.GetMetadata().GetTenant() == "" {
+		return nil
+	}
+
+	vnRef := subnet.GetSpec().GetVirtualNetwork()
+	if vnRef == nil {
+		return nil // Caught later by validateVirtualNetworkReference
+	}
+
+	subnetTenant := subnet.GetMetadata().GetTenant()
+
+	vnKey := refKey(vnRef)
+	getResponse, err := s.virtualNetworkDao.Get().
+		SetId(vnKey).
+		Do(ctx)
+	if err != nil {
+		// NotFound will be caught by validateVirtualNetworkReference
+		return nil
+	}
+
+	return fetchAndValidateTenantMatch(subnetTenant, getResponse.GetObject(), "VirtualNetwork", vnKey)
 }
 
 // validateCIDRSubset validates that subnetCIDR is a proper subset of parentCIDR.

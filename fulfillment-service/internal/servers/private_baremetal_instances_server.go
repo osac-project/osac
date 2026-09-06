@@ -283,6 +283,12 @@ func (s *PrivateBareMetalInstancesServer) Create(ctx context.Context,
 	if err = s.applyDefaultNetworkAttachments(ctx, request.GetObject()); err != nil {
 		return
 	}
+	// Cross-tenant validation: BareMetalInstance must reference subnets and security groups
+	// from the same tenant. TotalVisibility on the private API bypasses DAO tenant filtering,
+	// so we must check explicitly.
+	if err = s.validateCrossTenantNetworkReferences(ctx, request.GetObject()); err != nil {
+		return
+	}
 	if err = s.validateNetworkAttachments(ctx, request.GetObject()); err != nil {
 		return
 	}
@@ -878,6 +884,56 @@ func compareNetworkAttachmentsImmutability(existing, updated []*privatev1.BareMe
 				"cannot change network_attachments[%d].primary: primary is immutable after creation", i)
 		}
 	}
+	return nil
+}
+
+// validateCrossTenantNetworkReferences explicitly checks that the BareMetalInstance's tenant
+// matches the tenants of all referenced Subnets and SecurityGroups. This is critical for the
+// private API where TotalVisibility bypasses DAO-level tenant filtering.
+func (s *PrivateBareMetalInstancesServer) validateCrossTenantNetworkReferences(ctx context.Context,
+	bmi *privatev1.BareMetalInstance) error {
+	attachments := bmi.GetSpec().GetNetworkAttachments()
+	if len(attachments) == 0 {
+		return nil
+	}
+
+	// Only validate when an explicit tenant is set (private API path).
+	if bmi.GetMetadata().GetTenant() == "" {
+		return nil
+	}
+
+	bmiTenant := bmi.GetMetadata().GetTenant()
+
+	for _, att := range attachments {
+		// Validate subnet tenant
+		subnetKey := refKey(att.GetSubnet())
+		if subnetKey != "" {
+			subnetResp, subnetErr := s.subnetsDao.Get().SetId(subnetKey).Do(ctx)
+			if subnetErr == nil {
+				if err := fetchAndValidateTenantMatch(bmiTenant, subnetResp.GetObject(), "Subnet", subnetKey); err != nil {
+					return err
+				}
+			}
+			// NotFound will be caught by validateNetworkAttachments
+		}
+
+		// Validate security group tenants
+		for _, sgRef := range att.GetSecurityGroups() {
+			if sgRef == nil {
+				continue
+			}
+			sgKey := refKey(sgRef)
+			if sgKey != "" {
+				sgResp, sgErr := s.securityGroupsDao.Get().SetId(sgKey).Do(ctx)
+				if sgErr == nil {
+					if err := fetchAndValidateTenantMatch(bmiTenant, sgResp.GetObject(), "SecurityGroup", sgKey); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+
 	return nil
 }
 

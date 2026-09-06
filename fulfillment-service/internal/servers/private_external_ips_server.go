@@ -51,6 +51,7 @@ type PrivateExternalIPsServer struct {
 	privatev1.UnimplementedExternalIPsServer
 
 	logger            *slog.Logger
+	tenancyLogic      auth.TenancyLogic
 	generic           *GenericServer[*privatev1.ExternalIP]
 	externalIPPoolDao *dao.GenericDAO[*privatev1.ExternalIPPool]
 }
@@ -129,6 +130,7 @@ func (b *PrivateExternalIPsServerBuilder) Build() (result *PrivateExternalIPsSer
 
 	result = &PrivateExternalIPsServer{
 		logger:            b.logger,
+		tenancyLogic:      b.tenancyLogic,
 		generic:           generic,
 		externalIPPoolDao: externalIPPoolDao,
 	}
@@ -157,6 +159,15 @@ func (s *PrivateExternalIPsServer) Create(ctx context.Context,
 	}
 
 	poolKey := refKey(externalIP.GetSpec().GetPool())
+
+	// Cross-tenant validation: ExternalIP must reference a pool from the same tenant
+	// or the shared tenant. TotalVisibility on the private API bypasses DAO tenant
+	// filtering, so we must check explicitly.
+	err = s.validateCrossTenantPool(ctx, externalIP, poolKey)
+	if err != nil {
+		return
+	}
+
 	err = s.validatePoolReference(ctx, poolKey)
 	if err != nil {
 		return
@@ -271,6 +282,32 @@ func (s *PrivateExternalIPsServer) Signal(ctx context.Context,
 	request *privatev1.ExternalIPsSignalRequest) (response *privatev1.ExternalIPsSignalResponse, err error) {
 	err = s.generic.Signal(ctx, request, &response)
 	return
+}
+
+// validateCrossTenantPool explicitly checks that the ExternalIP's tenant matches
+// or shares a tenant with the referenced pool. ExternalIPPools may be in the shared
+// tenant, so we allow shared-tenant pools.
+func (s *PrivateExternalIPsServer) validateCrossTenantPool(ctx context.Context,
+	externalIP *privatev1.ExternalIP, poolKey string) error {
+
+	if poolKey == "" {
+		return nil
+	}
+
+	// Only validate when an explicit tenant is set (private API path).
+	if externalIP.GetMetadata().GetTenant() == "" {
+		return nil
+	}
+
+	eipTenant := externalIP.GetMetadata().GetTenant()
+
+	poolResp, poolErr := s.externalIPPoolDao.Get().SetId(poolKey).Do(ctx)
+	if poolErr != nil {
+		// NotFound will be caught by validatePoolReference
+		return nil
+	}
+
+	return fetchAndValidateTenantOrShared(eipTenant, poolResp.GetObject(), "ExternalIPPool", poolKey)
 }
 
 func (s *PrivateExternalIPsServer) validateExternalIP(ctx context.Context,

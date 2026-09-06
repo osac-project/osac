@@ -326,6 +326,13 @@ func (s *PrivateClustersServer) Create(ctx context.Context,
 		networkAttachmentErr = s.injectDefaultNetworkAttachment(ctx, request.GetObject())
 	}
 
+	// Cross-tenant validation: Cluster must reference subnets and security groups from
+	// the same tenant. TotalVisibility on the private API bypasses DAO tenant filtering,
+	// so we must check explicitly.
+	if networkAttachmentErr == nil && request.GetObject().GetSpec().GetNetworkAttachment() != nil {
+		networkAttachmentErr = s.validateCrossTenantNetworkAttachment(ctx, request.GetObject())
+	}
+
 	// Validate network attachment references (subnet READY, SGs same-VN):
 	if networkAttachmentErr == nil && request.GetObject().GetSpec().GetNetworkAttachment() != nil {
 		networkAttachmentErr = s.validateNetworkAttachmentState(ctx, request.GetObject())
@@ -1060,6 +1067,57 @@ func (s *PrivateClustersServer) injectDefaultNetworkAttachment(ctx context.Conte
 		attrs = append(attrs, slog.String("security_group_id", sg.GetId()))
 	}
 	s.logger.LogAttrs(ctx, slog.LevelInfo, "auto-injected default network attachment", attrs...)
+	return nil
+}
+
+// validateCrossTenantNetworkAttachment explicitly checks that the Cluster's tenant matches
+// the tenants of all referenced Subnets and SecurityGroups in its network attachment.
+// This is critical for the private API where TotalVisibility bypasses DAO-level tenant filtering.
+func (s *PrivateClustersServer) validateCrossTenantNetworkAttachment(ctx context.Context,
+	cluster *privatev1.Cluster) error {
+	if cluster == nil || cluster.GetSpec() == nil {
+		return nil
+	}
+	att := cluster.GetSpec().GetNetworkAttachment()
+	if att == nil {
+		return nil
+	}
+
+	// Only validate when an explicit tenant is set (private API path).
+	if cluster.GetMetadata().GetTenant() == "" {
+		return nil
+	}
+
+	clusterTenant := cluster.GetMetadata().GetTenant()
+
+	// Validate subnet tenant
+	subnetKey := refKey(att.GetSubnet())
+	if subnetKey != "" {
+		subnetResp, subnetErr := s.subnetsDao.Get().SetId(subnetKey).Do(ctx)
+		if subnetErr == nil {
+			if err := fetchAndValidateTenantMatch(clusterTenant, subnetResp.GetObject(), "Subnet", subnetKey); err != nil {
+				return err
+			}
+		}
+		// NotFound will be caught by validateNetworkAttachmentState
+	}
+
+	// Validate security group tenants
+	for _, sgRef := range att.GetSecurityGroups() {
+		if sgRef == nil {
+			continue
+		}
+		sgKey := refKey(sgRef)
+		if sgKey != "" {
+			sgResp, sgErr := s.securityGroupsDao.Get().SetId(sgKey).Do(ctx)
+			if sgErr == nil {
+				if err := fetchAndValidateTenantMatch(clusterTenant, sgResp.GetObject(), "SecurityGroup", sgKey); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
 	return nil
 }
 

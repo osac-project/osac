@@ -333,7 +333,7 @@ func (r *ClusterOrderReconciler) handleUpdate(ctx context.Context, _ reconcile.R
 		instance.Status.Phase = v1alpha1.ClusterOrderPhaseProgressing
 	}
 	if instance.Status.Phase == v1alpha1.ClusterOrderPhaseProgressing {
-		r.setProgressingStage(instance, v1alpha1.ReasonPreparingInfrastructure)
+		r.initializeProgressingStage(instance)
 	}
 
 	if controllerutil.AddFinalizer(instance, osacFinalizer) {
@@ -443,6 +443,13 @@ func (r *ClusterOrderReconciler) handleHostedCluster(ctx context.Context, instan
 func (r *ClusterOrderReconciler) setProgressingStage(instance *v1alpha1.ClusterOrder, stage string) {
 	instance.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionTrue,
 		humanizeConditionName(stage), stage)
+}
+
+func (r *ClusterOrderReconciler) initializeProgressingStage(instance *v1alpha1.ClusterOrder) {
+	progressing := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
+	if progressing == nil || progressing.Reason == "" || progressing.Reason == v1alpha1.ReasonProgressing {
+		r.setProgressingStage(instance, v1alpha1.ReasonPreparingInfrastructure)
+	}
 }
 
 func (r *ClusterOrderReconciler) withStallRequeue(instance *v1alpha1.ClusterOrder, result ctrl.Result) ctrl.Result {

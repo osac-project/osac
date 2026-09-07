@@ -21,6 +21,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 
@@ -104,6 +105,18 @@ var _ = Describe("ClusterOrder stall detection", func() {
 		progressing := findCondition(order, v1alpha1.ConditionProgressing)
 		Expect(progressing.Reason).To(Equal(v1alpha1.ReasonStalled))
 		Expect(progressing.Message).To(ContainSubstring("Control Plane Starting"))
+	})
+
+	It("preserves Stalled across a subsequent reconcile without stage advancement", func() {
+		order := newOrder(v1alpha1.ReasonPreparingInfrastructure, baseTime)
+		reconciler := newReconciler(baseTime.Add(preparingInfrastructureThreshold))
+
+		reconciler.detectProvisioningStall(order)
+		reconciler.initializeProgressingStage(order)
+
+		progressing := apimeta.FindStatusCondition(order.Status.Conditions, v1alpha1.ConditionProgressing)
+		Expect(progressing.Reason).To(Equal(v1alpha1.ReasonStalled))
+		Expect(progressing.Message).To(Equal("Stalled at Preparing Infrastructure"))
 	})
 
 	It("measures from the later stage rather than cumulative provisioning time", func() {

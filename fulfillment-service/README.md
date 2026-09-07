@@ -152,9 +152,10 @@ To run the the REST gateway use a command like this:
 
 You may need to adjust the commands to use your database details.
 
-To verify that the gRPC server is working use `grpcurl`. For example, to list the available gRPC services:
+To verify that the gRPC server is working use `grpcurl`. gRPC reflection requires an authenticated
+JWT, pass it with the `-H` flag after logging in. To list the available gRPC services:
 
-    $ grpcurl -plaintext localhost:8000 list
+    $ grpcurl -plaintext -H "Authorization: Bearer ${TOKEN}" localhost:8000 list
     osac.public.v1.ClusterOrders
     osac.public.v1.ClusterTemplates
     osac.public.v1.Clusters
@@ -164,13 +165,13 @@ To verify that the gRPC server is working use `grpcurl`. For example, to list th
 
 To list the methods available in a service, for example in the `ClusterTemplates` service:
 
-    $ grpcurl -plaintext localhost:8000 list osac.public.v1.ClusterTemplates
+    $ grpcurl -plaintext -H "Authorization: Bearer ${TOKEN}" localhost:8000 list osac.public.v1.ClusterTemplates
     osac.public.v1.ClusterTemplates.Get
     osac.public.v1.ClusterTemplates.List
 
 To invoke a method, for example the `List` method of the `ClusterTemplates` service:
 
-    $ grpcurl -plaintext localhost:8000 osac.public.v1.ClusterTemplates/List
+    $ grpcurl -plaintext -H "Authorization: Bearer ${TOKEN}" localhost:8000 osac.public.v1.ClusterTemplates/List
     {
       "size": 2,
       "total": 2,

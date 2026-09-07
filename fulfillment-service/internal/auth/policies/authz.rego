@@ -184,15 +184,27 @@ has_client_permissions if {
   is_tenant_idp_manager
 }
 
-# Allow metadata, reflection and health to everyone:
+# Check if the request has a validated identity (JWT user or service account):
+default is_authenticated = false
+is_authenticated if {
+  input.auth.identity.authnMethod == "jwt"
+}
+is_authenticated if {
+  input.auth.identity.authnMethod == "serviceaccount"
+}
+
+# Allow metadata and health to unauthenticated callers:
 allow if {
   startswith(grpc_method, "/metadata.")
 }
 allow if {
-  startswith(grpc_method, "/grpc.reflection.")
-}
-allow if {
   startswith(grpc_method, "/grpc.health.")
+}
+
+# gRPC reflection exposes the service catalog; require authentication.
+allow if {
+  is_authenticated
+  startswith(grpc_method, "/grpc.reflection.")
 }
 
 # Allow specific methods to clients (and tenant admins/IdP managers who inherit client permissions):

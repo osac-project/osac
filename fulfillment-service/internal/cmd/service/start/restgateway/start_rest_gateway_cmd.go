@@ -232,7 +232,6 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error {
 	var protocols http.Protocols
 	protocols.SetHTTP1(true)
 	protocols.SetHTTP2(true)
-	protocols.SetUnencryptedHTTP2(true)
 	http1Server := &http.Server{
 		Addr:              gwListener.Addr().String(),
 		Handler:           handler,

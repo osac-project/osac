@@ -219,6 +219,8 @@ static_resources:
             connection_keepalive:
               interval: 15s
               timeout: 10s
+          upgrade_configs:
+          - upgrade_type: websocket
           route_config:
             name: backend
             virtual_hosts:
@@ -237,6 +239,18 @@ static_resources:
                   allow_credentials: true
                   max_age: "86400"
               routes:
+
+              # This route is for the WebSocket console proxy. Console sessions are long-lived
+              # and require HTTP/1.1 for the WebSocket upgrade. This route must be matched
+              # before the rest-gateway route which catches all /api/... paths. The ticket
+              # travels in the Authorization header or console-ticket cookie.
+              - name: console-ws
+                match:
+                  path: /api/fulfillment/v1/console_sessions/connect
+                route:
+                  cluster: console-proxy-ws
+                  timeout: 0s
+                  idle_timeout: 1800s
 
               # JWKS endpoint for token verification. Public, unauthenticated.
               - name: jwks

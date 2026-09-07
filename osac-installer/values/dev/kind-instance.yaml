@@ -33,7 +33,7 @@ operator:
 service:
   variant: kind
   consoleProxy:
-    disabled: true
+    disabled: false
   externalHostname: fulfillment-api.osac.svc.cluster.local
   internalHostname: fulfillment-internal-api.osac.svc.cluster.local
   images:

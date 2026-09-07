@@ -965,3 +965,106 @@
               - "'unsupported protocol' not in (ansible_failed_result.msg | default('') | lower)"
             fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg | default('unknown') }}"
             success_msg: "Role correctly rejected the empty-string protocol at the dispatcher level, not the unsupported_protocol check"
+
+# ──────────────────────────────────────────────────────────────
+# Test 23: Integer-coerced credentials pass validation (OSAC-4254)
+# Expected: credential validation in read_credentials.yaml passes
+#   despite password, username, and endpoint being native integers.
+#   AWX round-trips extra_vars through YAML, coercing all-digit
+#   strings like "123456" to integers. Under ansible-core 2.20+
+#   (Jinja2 native mode), | length on an int raises TypeError.
+#   The | string filter added in OSAC-4254 prevents this.
+#   Role should pass validation and fail only at dispatch (no
+#   mock VMS server), proving credential checks are type-safe.
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- integer-coerced credentials pass validation (OSAC-4254)
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run integer-coerced credentials test
+      block:
+        - name: Attempt with all-numeric credential values (simulating AWX YAML round-trip coercion)
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: default
+                protocol: nfs
+                provider: vast
+                backend_id: be-int-test
+            storage_provider_backend_connections:
+              be-int-test:
+                endpoint: 10000
+                username: 12345
+                password: 123456
+            storage_provider_action: setup
+            tenant_name: "tenant-acme"
+            tenant_namespace: "osac-tenants"
+
+        - name: Validation passed (dispatch outcome is not under test)
+          ansible.builtin.debug:
+            msg: "Credential validation passed with integer-coerced values"
+
+      rescue:
+        - name: Verify failure is from dispatch (VMS API), not a type error on credential validation
+          ansible.builtin.assert:
+            that:
+              # TypeError from | length on an int would contain "has no len()"
+              - "'has no len' not in (ansible_failed_result.msg | default('') | lower)"
+              # Credential validation errors contain these specific phrases
+              - "'is missing one or more of' not in (ansible_failed_result.msg | default(''))"
+              - "'has no backend_id' not in (ansible_failed_result.msg | default(''))"
+            fail_msg: >-
+              Credential validation failed with integer-coerced values (OSAC-4254 regression):
+              {{ ansible_failed_result.msg | default('unknown error') }}
+            success_msg: "Credential validation passed with integer-coerced values -- dispatch failed as expected"
+
+# ──────────────────────────────────────────────────────────────
+# Test 24: Integer-coerced backend_id passes validation (OSAC-4254)
+# Expected: the backend_id presence check (| string | length == 0)
+#   handles a purely numeric backend_id without TypeError. YAML
+#   round-trip coercion can turn backend_id: "42" into backend_id: 42
+#   (native int). Without the | string guard, | length raises
+#   "object of type 'int' has no len()".
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- integer-coerced backend_id passes validation (OSAC-4254)
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run integer-coerced backend_id test
+      block:
+        - name: Attempt with a numeric backend_id (simulating YAML round-trip coercion)
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: default
+                protocol: nfs
+                provider: vast
+                backend_id: 42
+            storage_provider_backend_connections:
+              42:
+                endpoint: "vast.example.com"
+                username: "admin"
+                password: "mock-admin-password"
+            storage_provider_action: setup
+            tenant_name: "tenant-acme"
+            tenant_namespace: "osac-tenants"
+
+        - name: Validation passed (dispatch outcome is not under test)
+          ansible.builtin.debug:
+            msg: "Credential validation passed with integer backend_id"
+
+      rescue:
+        - name: Verify failure is from dispatch (VMS API), not a type error on backend_id check
+          ansible.builtin.assert:
+            that:
+              - "'has no len' not in (ansible_failed_result.msg | default('') | lower)"
+              - "'has no backend_id' not in (ansible_failed_result.msg | default(''))"
+              - "'is missing one or more of' not in (ansible_failed_result.msg | default(''))"
+            fail_msg: >-
+              Backend ID validation failed with integer-coerced value (OSAC-4254 regression):
+              {{ ansible_failed_result.msg | default('unknown error') }}
+            success_msg: "Backend ID validation passed with integer value -- dispatch failed as expected"

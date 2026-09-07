@@ -163,7 +163,6 @@ func NewClusterOrderReconciler(
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=networkclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=externalipattachments,verbs=get;list;watch;delete
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=externalips,verbs=get;list;watch;delete
-// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -194,8 +193,12 @@ func (r *ClusterOrderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	if err == nil {
-		if err := r.persistStatusAndRecordTransitionEvents(ctx, req.NamespacedName, instance, oldstatus); err != nil {
-			return res, err
+		r.recordTransitionEvents(instance, oldstatus)
+		if !equality.Semantic.DeepEqual(instance.Status, *oldstatus) {
+			log.Info("status requires update")
+			if err := r.patchStatusWithRetry(ctx, req.NamespacedName, instance.Status); err != nil {
+				return res, err
+			}
 		}
 	}
 
@@ -203,44 +206,17 @@ func (r *ClusterOrderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	return res, err
 }
 
-func (r *ClusterOrderReconciler) persistStatusAndRecordTransitionEvents(
-	ctx context.Context,
-	key client.ObjectKey,
-	instance *v1alpha1.ClusterOrder,
-	oldStatus *v1alpha1.ClusterOrderStatus,
-) error {
-	if !equality.Semantic.DeepEqual(instance.Status, *oldStatus) {
-		ctrllog.FromContext(ctx).Info("status requires update")
-		if err := r.patchStatusWithRetry(ctx, key, instance.Status); err != nil {
-			return err
-		}
-	}
-	r.recordTransitionEvents(instance, oldStatus)
-	return nil
-}
-
 const (
-	clusterOrderCreatedEventReason      = v1alpha1.ReasonCreated
-	clusterOrderCreatedEventAction      = "Created"
-	clusterOrderReadyEventReason        = v1alpha1.ReasonReady
-	clusterOrderReadyEventAction        = "Ready"
 	clusterOrderProvisioningEventAction = "Provisioning"
-	clusterOrderDeletingEventReason     = v1alpha1.ReasonDeleting
+	clusterOrderDeletingEventReason     = "Deleting"
 	clusterOrderDeletingEventAction     = "Deleting"
-	clusterOrderFailedEventAction       = "Failed"
 )
 
 var clusterOrderProvisioningEventReasons = map[string]struct{}{
 	v1alpha1.ReasonPreparingInfrastructure: {},
 	v1alpha1.ReasonControlPlaneStarting:    {},
 	v1alpha1.ReasonWorkersJoining:          {},
-	v1alpha1.ReasonStageUnknown:            {},
 	v1alpha1.ReasonStalled:                 {},
-}
-
-var clusterOrderWarningEventReasons = map[string]struct{}{
-	v1alpha1.ReasonStageUnknown: {},
-	v1alpha1.ReasonStalled:      {},
 }
 
 func (r *ClusterOrderReconciler) recordTransitionEvents(instance *v1alpha1.ClusterOrder,
@@ -251,47 +227,12 @@ func (r *ClusterOrderReconciler) recordTransitionEvents(instance *v1alpha1.Clust
 
 	oldProgressing := apimeta.FindStatusCondition(oldStatus.Conditions, v1alpha1.ConditionProgressing)
 	newProgressing := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
-	if oldStatus.Phase == "" && len(oldStatus.Conditions) == 0 &&
-		(instance.Status.Phase != "" || len(instance.Status.Conditions) > 0) {
-		r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, clusterOrderCreatedEventReason,
-			clusterOrderCreatedEventAction, "ClusterOrder created")
-	}
-
 	if newProgressing != nil && (oldProgressing == nil || oldProgressing.Reason != newProgressing.Reason) {
 		if _, shouldRecord := clusterOrderProvisioningEventReasons[newProgressing.Reason]; shouldRecord {
-			eventType := corev1.EventTypeNormal
-			if _, shouldWarn := clusterOrderWarningEventReasons[newProgressing.Reason]; shouldWarn {
-				eventType = corev1.EventTypeWarning
-			}
-			r.Recorder.Eventf(instance, nil, eventType, newProgressing.Reason,
+			r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, newProgressing.Reason,
 				clusterOrderProvisioningEventAction, "ClusterOrder entered provisioning stage %s",
 				humanizeConditionName(newProgressing.Reason))
 		}
-	}
-
-	if oldStatus.Phase != v1alpha1.ClusterOrderPhaseFailed &&
-		instance.Status.Phase == v1alpha1.ClusterOrderPhaseFailed {
-		reason := v1alpha1.ReasonFailed
-		message := "ClusterOrder provisioning failed"
-		if newProgressing != nil {
-			if newProgressing.Reason != "" {
-				reason = newProgressing.Reason
-			}
-			if newProgressing.Message != "" {
-				message = fmt.Sprintf("ClusterOrder provisioning failed: %s", newProgressing.Message)
-			}
-		}
-		r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, reason,
-			clusterOrderFailedEventAction, "%s", message)
-	}
-
-	oldReady := oldStatus.Phase == v1alpha1.ClusterOrderPhaseReady && oldProgressing != nil &&
-		oldProgressing.Status == metav1.ConditionFalse
-	newReady := instance.Status.Phase == v1alpha1.ClusterOrderPhaseReady && newProgressing != nil &&
-		newProgressing.Status == metav1.ConditionFalse
-	if newReady && !oldReady {
-		r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, clusterOrderReadyEventReason,
-			clusterOrderReadyEventAction, "ClusterOrder is ready")
 	}
 
 	if oldStatus.Phase != v1alpha1.ClusterOrderPhaseDeleting &&

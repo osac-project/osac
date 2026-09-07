@@ -1,0 +1,108 @@
+/*
+Copyright 2026.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package controller
+
+import (
+	"time"
+
+	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
+	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/events"
+
+	v1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
+)
+
+var _ = Describe("ClusterOrder transition events", func() {
+	newRecorder := func() *events.FakeRecorder {
+		return events.NewFakeRecorder(10)
+	}
+
+	statusWithProgressingReason := func(reason string) v1alpha1.ClusterOrderStatus {
+		return v1alpha1.ClusterOrderStatus{
+			Phase: v1alpha1.ClusterOrderPhaseProgressing,
+			Conditions: []metav1.Condition{
+				{
+					Type:               v1alpha1.ConditionProgressing,
+					Status:             metav1.ConditionTrue,
+					Reason:             reason,
+					LastTransitionTime: metav1.NewTime(time.Now().UTC()),
+				},
+			},
+		}
+	}
+
+	It("records a Normal event when the provisioning sub-stage changes", func() {
+		recorder := newRecorder()
+		reconciler := &ClusterOrderReconciler{Recorder: recorder}
+		instance := &v1alpha1.ClusterOrder{}
+		oldStatus := statusWithProgressingReason(v1alpha1.ReasonPreparingInfrastructure)
+		instance.Status = statusWithProgressingReason(v1alpha1.ReasonControlPlaneStarting)
+
+		reconciler.recordTransitionEvents(instance, &oldStatus)
+
+		Eventually(recorder.Events).Should(Receive(And(
+			ContainSubstring(corev1.EventTypeNormal),
+			ContainSubstring(v1alpha1.ReasonControlPlaneStarting),
+			ContainSubstring("entered provisioning stage"),
+		)))
+	})
+
+	It("does not record an event when the provisioning sub-stage is unchanged", func() {
+		recorder := newRecorder()
+		reconciler := &ClusterOrderReconciler{Recorder: recorder}
+		instance := &v1alpha1.ClusterOrder{}
+		oldStatus := statusWithProgressingReason(v1alpha1.ReasonWorkersJoining)
+		instance.Status = statusWithProgressingReason(v1alpha1.ReasonWorkersJoining)
+
+		reconciler.recordTransitionEvents(instance, &oldStatus)
+
+		Consistently(recorder.Events, 200*time.Millisecond).ShouldNot(Receive())
+	})
+
+	It("records a Normal event when provisioning becomes stalled", func() {
+		recorder := newRecorder()
+		reconciler := &ClusterOrderReconciler{Recorder: recorder}
+		instance := &v1alpha1.ClusterOrder{}
+		oldStatus := statusWithProgressingReason(v1alpha1.ReasonWorkersJoining)
+		instance.Status = statusWithProgressingReason(v1alpha1.ReasonStalled)
+
+		reconciler.recordTransitionEvents(instance, &oldStatus)
+
+		Eventually(recorder.Events).Should(Receive(And(
+			ContainSubstring(corev1.EventTypeNormal),
+			ContainSubstring(v1alpha1.ReasonStalled),
+		)))
+	})
+
+	It("records a Normal event when the ClusterOrder enters Deleting", func() {
+		recorder := newRecorder()
+		reconciler := &ClusterOrderReconciler{Recorder: recorder}
+		instance := &v1alpha1.ClusterOrder{}
+		oldStatus := statusWithProgressingReason(v1alpha1.ReasonWorkersJoining)
+		instance.Status = oldStatus
+		instance.Status.Phase = v1alpha1.ClusterOrderPhaseDeleting
+
+		reconciler.recordTransitionEvents(instance, &oldStatus)
+
+		Eventually(recorder.Events).Should(Receive(And(
+			ContainSubstring(corev1.EventTypeNormal),
+			ContainSubstring(string(v1alpha1.ClusterOrderPhaseDeleting)),
+		)))
+	})
+})

@@ -379,6 +379,7 @@ func setupClusterControllers(
 				provider, pollInterval, maxJobHistory,
 			)
 			reconciler.StallThresholds = clusterOrderStallThresholdsFromEnv()
+			reconciler.Recorder = localMgr.GetEventRecorder(controller.ClusterOrderControllerName)
 			return reconciler.SetupWithManager(mgr)
 		},
 	)

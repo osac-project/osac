@@ -29,6 +29,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -78,6 +79,7 @@ type ClusterOrderReconciler struct {
 	StatusPollInterval    time.Duration
 	MaxJobHistory         int
 	StallThresholds       ClusterOrderStallThresholds
+	Recorder              events.EventRecorder
 	now                   func() time.Time
 }
 
@@ -145,6 +147,7 @@ func NewClusterOrderReconciler(
 		StatusPollInterval:    statusPollInterval,
 		MaxJobHistory:         maxJobHistory,
 		StallThresholds:       DefaultClusterOrderStallThresholds(),
+		Recorder:              nil,
 		now:                   time.Now,
 	}
 }
@@ -190,6 +193,7 @@ func (r *ClusterOrderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	if err == nil {
+		r.recordTransitionEvents(instance, oldstatus)
 		if !equality.Semantic.DeepEqual(instance.Status, *oldstatus) {
 			log.Info("status requires update")
 			if err := r.patchStatusWithRetry(ctx, req.NamespacedName, instance.Status); err != nil {
@@ -200,6 +204,42 @@ func (r *ClusterOrderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	log.Info("end reconcile")
 	return res, err
+}
+
+const (
+	clusterOrderProvisioningEventAction = "Provisioning"
+	clusterOrderDeletingEventReason     = "Deleting"
+	clusterOrderDeletingEventAction     = "Deleting"
+)
+
+var clusterOrderProvisioningEventReasons = map[string]struct{}{
+	v1alpha1.ReasonPreparingInfrastructure: {},
+	v1alpha1.ReasonControlPlaneStarting:    {},
+	v1alpha1.ReasonWorkersJoining:          {},
+	v1alpha1.ReasonStalled:                 {},
+}
+
+func (r *ClusterOrderReconciler) recordTransitionEvents(instance *v1alpha1.ClusterOrder,
+	oldStatus *v1alpha1.ClusterOrderStatus) {
+	if r.Recorder == nil {
+		return
+	}
+
+	oldProgressing := apimeta.FindStatusCondition(oldStatus.Conditions, v1alpha1.ConditionProgressing)
+	newProgressing := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
+	if newProgressing != nil && (oldProgressing == nil || oldProgressing.Reason != newProgressing.Reason) {
+		if _, shouldRecord := clusterOrderProvisioningEventReasons[newProgressing.Reason]; shouldRecord {
+			r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, newProgressing.Reason,
+				clusterOrderProvisioningEventAction, "ClusterOrder entered provisioning stage %s",
+				humanizeConditionName(newProgressing.Reason))
+		}
+	}
+
+	if oldStatus.Phase != v1alpha1.ClusterOrderPhaseDeleting &&
+		instance.Status.Phase == v1alpha1.ClusterOrderPhaseDeleting {
+		r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, clusterOrderDeletingEventReason,
+			clusterOrderDeletingEventAction, "ClusterOrder entered deleting phase")
+	}
 }
 
 func (r *ClusterOrderReconciler) patchStatusWithRetry(ctx context.Context, key client.ObjectKey, computed v1alpha1.ClusterOrderStatus) error {

@@ -7,6 +7,7 @@ import (
 )
 
 const (
+	ClusterOrderControllerName          = "clusterorder-controller"
 	subjectKindServiceAccount    string = "ServiceAccount"
 	defaultServiceAccountName    string = "osac"
 	defaultHostedClusterName     string = "cluster"

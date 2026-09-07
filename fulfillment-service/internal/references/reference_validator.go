@@ -223,6 +223,15 @@ func (v *ReferenceValidator) walkMessage(ctx context.Context, msg protoreflect.M
 			return true
 		}
 
+		// Skip singular message fields that are not explicitly set. This ensures the
+		// interceptor does not reject nil reference fields that will be populated later
+		// by CatalogItem or template defaults in the server handler (e.g. storage_tier
+		// on ComputeInstanceDisk). The handler's own required-field validation catches
+		// any genuinely missing references after defaults are applied.
+		if !fd.IsList() && !fd.IsMap() && !msg.Has(fd) {
+			return true
+		}
+
 		fieldPath := append(append([]string{}, path...), string(fd.Name()))
 
 		if fd.IsMap() {

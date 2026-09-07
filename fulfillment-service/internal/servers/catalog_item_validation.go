@@ -218,6 +218,15 @@ func applyDefault(specMap map[string]any, path string, defaultVal *structpb.Valu
 			parsed = map[string]any{"name": s}
 		}
 	}
+	// storage_tier was converted from a plain string to a StorageTierReference message
+	// (OSAC-4694). CatalogItem field definitions created before the conversion may still
+	// store the default as a bare string. Convert it to the {"name": ...} object the proto
+	// StorageTierReference field expects, matching the disk_image fallback above.
+	if path == "boot_disk.storage_tier" || strings.HasSuffix(path, ".storage_tier") {
+		if s, ok := parsed.(string); ok {
+			parsed = map[string]any{"name": s}
+		}
+	}
 	maputil.SetNestedValue(specMap, path, parsed)
 	return nil
 }

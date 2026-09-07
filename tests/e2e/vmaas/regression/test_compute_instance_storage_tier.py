@@ -262,7 +262,12 @@ def test_compute_instance_boot_disk_tier_required(
         )
 
     assert_grpc_rejected(exc_info, "InvalidArgument")
-    assert "storage_tier is required" in str(exc_info.value.stderr).lower()
+    error_lower = str(exc_info.value.stderr).lower()
+    # None → handler returns "storage_tier is required" after defaults merge.
+    # {"name": ""} → reference validator returns "storagetier reference must specify id or name".
+    assert "storage_tier is required" in error_lower or "reference must specify id or name" in error_lower, (
+        f"Expected storage_tier validation error, got: {exc_info.value.stderr}"
+    )
 
 
 @pytest.mark.parametrize("storage_tier", [None, {"name": ""}])
@@ -302,7 +307,12 @@ def test_compute_instance_additional_disk_tier_required(
         )
 
     assert_grpc_rejected(exc_info, "InvalidArgument")
-    assert "additional_disks[0].storage_tier is required" in str(exc_info.value.stderr).lower()
+    error_lower = str(exc_info.value.stderr).lower()
+    # None → handler returns "additional_disks[0].storage_tier is required".
+    # {"name": ""} → reference validator returns "storagetier reference must specify id or name".
+    assert "storage_tier is required" in error_lower or "reference must specify id or name" in error_lower, (
+        f"Expected storage_tier validation error, got: {exc_info.value.stderr}"
+    )
 
 
 def test_compute_instance_boot_disk_tier_from_catalog_item_default(

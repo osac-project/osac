@@ -20,6 +20,12 @@ aap:
   statusPollInterval: "30s"
   templatePrefix: "osac"
 
+stall:
+  preparingInfrastructureThreshold: "15m"
+  controlPlaneStartingThreshold: "30m"
+  workersJoiningThreshold: "20m"
+  workersJoiningByHostType: {}
+
 fulfillment:
   serverAddress: ""
   tokenFile: ""

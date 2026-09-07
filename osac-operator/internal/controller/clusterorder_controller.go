@@ -77,6 +77,33 @@ type ClusterOrderReconciler struct {
 	ProvisioningProvider  provisioning.ProvisioningProvider
 	StatusPollInterval    time.Duration
 	MaxJobHistory         int
+	StallThresholds       ClusterOrderStallThresholds
+	now                   func() time.Time
+}
+
+const (
+	defaultPreparingInfrastructureStallThreshold = 15 * time.Minute
+	defaultControlPlaneStartingStallThreshold    = 30 * time.Minute
+	defaultWorkersJoiningStallThreshold          = 20 * time.Minute
+)
+
+// ClusterOrderStallThresholds configures the maximum time a ClusterOrder may spend
+// in each provisioning stage before it is reported as stalled.
+type ClusterOrderStallThresholds struct {
+	PreparingInfrastructure  time.Duration
+	ControlPlaneStarting     time.Duration
+	WorkersJoining           time.Duration
+	WorkersJoiningByHostType map[string]time.Duration
+}
+
+// DefaultClusterOrderStallThresholds returns the production-safe stall thresholds.
+func DefaultClusterOrderStallThresholds() ClusterOrderStallThresholds {
+	return ClusterOrderStallThresholds{
+		PreparingInfrastructure:  defaultPreparingInfrastructureStallThreshold,
+		ControlPlaneStarting:     defaultControlPlaneStartingStallThreshold,
+		WorkersJoining:           defaultWorkersJoiningStallThreshold,
+		WorkersJoiningByHostType: map[string]time.Duration{},
+	}
 }
 
 func NewClusterOrderReconciler(
@@ -117,6 +144,8 @@ func NewClusterOrderReconciler(
 		ProvisioningProvider:  provisioningProvider,
 		StatusPollInterval:    statusPollInterval,
 		MaxJobHistory:         maxJobHistory,
+		StallThresholds:       DefaultClusterOrderStallThresholds(),
+		now:                   time.Now,
 	}
 }
 
@@ -303,6 +332,9 @@ func (r *ClusterOrderReconciler) handleUpdate(ctx context.Context, _ reconcile.R
 	if instance.Status.Phase == "" {
 		instance.Status.Phase = v1alpha1.ClusterOrderPhaseProgressing
 	}
+	if instance.Status.Phase == v1alpha1.ClusterOrderPhaseProgressing {
+		r.setProgressingStage(instance, v1alpha1.ReasonPreparingInfrastructure)
+	}
 
 	if controllerutil.AddFinalizer(instance, osacFinalizer) {
 		if err := r.Update(ctx, instance); err != nil {
@@ -351,7 +383,7 @@ func (r *ClusterOrderReconciler) handleUpdate(ctx context.Context, _ reconcile.R
 		return ctrl.Result{}, err
 	}
 	if agentResult.RequeueAfter > 0 {
-		return agentResult, nil
+		return r.withStallRequeue(instance, agentResult), nil
 	}
 
 	ns, err := r.findNamespace(ctx, instance)
@@ -366,11 +398,7 @@ func (r *ClusterOrderReconciler) handleUpdate(ctx context.Context, _ reconcile.R
 	}
 
 	// If provision job needs polling, requeue for status updates
-	if provisionResult.RequeueAfter > 0 {
-		return provisionResult, nil
-	}
-
-	return ctrl.Result{}, nil
+	return r.withStallRequeue(instance, provisionResult), nil
 }
 
 func (r *ClusterOrderReconciler) handleHostedCluster(ctx context.Context, instance *v1alpha1.ClusterOrder,
@@ -384,8 +412,7 @@ func (r *ClusterOrderReconciler) handleHostedCluster(ctx context.Context, instan
 
 	if instance.Status.Phase == v1alpha1.ClusterOrderPhaseProgressing {
 		subStage := deriveProvisioningSubStage(hc)
-		instance.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionTrue,
-			humanizeConditionName(subStage), subStage)
+		r.setProgressingStage(instance, subStage)
 	}
 
 	if hostedClusterControlPlaneIsAvailable(hc) {
@@ -411,6 +438,110 @@ func (r *ClusterOrderReconciler) handleHostedCluster(ctx context.Context, instan
 		return err
 	}
 	return nil
+}
+
+func (r *ClusterOrderReconciler) setProgressingStage(instance *v1alpha1.ClusterOrder, stage string) {
+	instance.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionTrue,
+		humanizeConditionName(stage), stage)
+}
+
+func (r *ClusterOrderReconciler) withStallRequeue(instance *v1alpha1.ClusterOrder, result ctrl.Result) ctrl.Result {
+	stallResult := r.detectProvisioningStall(instance)
+	if stallResult.RequeueAfter > 0 &&
+		(result.RequeueAfter == 0 || stallResult.RequeueAfter < result.RequeueAfter) {
+		result.RequeueAfter = stallResult.RequeueAfter
+	}
+	return result
+}
+
+// detectProvisioningStall updates the Progressing condition once the current
+// provisioning stage exceeds its threshold and returns the precise next check time.
+func (r *ClusterOrderReconciler) detectProvisioningStall(instance *v1alpha1.ClusterOrder) ctrl.Result {
+	if instance.Status.Phase != v1alpha1.ClusterOrderPhaseProgressing {
+		return ctrl.Result{}
+	}
+
+	progressing := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
+	if progressing == nil || progressing.Status != metav1.ConditionTrue {
+		return ctrl.Result{}
+	}
+
+	stageStartedAt, threshold, found := r.provisioningStageTiming(instance, progressing.Reason)
+	if !found || stageStartedAt.IsZero() {
+		return ctrl.Result{}
+	}
+
+	now := time.Now()
+	if r.now != nil {
+		now = r.now()
+	}
+	elapsed := now.Sub(stageStartedAt)
+	if elapsed >= threshold {
+		instance.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionTrue,
+			fmt.Sprintf("Stalled at %s", humanizeConditionName(progressing.Reason)), v1alpha1.ReasonStalled)
+		return ctrl.Result{RequeueAfter: r.StatusPollInterval}
+	}
+
+	return ctrl.Result{RequeueAfter: threshold - elapsed}
+}
+
+func (r *ClusterOrderReconciler) provisioningStageTiming(instance *v1alpha1.ClusterOrder, stage string) (time.Time, time.Duration, bool) {
+	thresholds := r.StallThresholds
+	if thresholds.PreparingInfrastructure <= 0 {
+		thresholds.PreparingInfrastructure = defaultPreparingInfrastructureStallThreshold
+	}
+	if thresholds.ControlPlaneStarting <= 0 {
+		thresholds.ControlPlaneStarting = defaultControlPlaneStartingStallThreshold
+	}
+	if thresholds.WorkersJoining <= 0 {
+		thresholds.WorkersJoining = defaultWorkersJoiningStallThreshold
+	}
+
+	conditionType := ""
+	threshold := time.Duration(0)
+	switch stage {
+	case v1alpha1.ReasonPreparingInfrastructure:
+		conditionType = v1alpha1.ConditionAccepted
+		threshold = thresholds.PreparingInfrastructure
+	case v1alpha1.ReasonControlPlaneStarting:
+		conditionType = v1alpha1.ConditionControlPlaneCreated
+		threshold = thresholds.ControlPlaneStarting
+	case v1alpha1.ReasonWorkersJoining:
+		conditionType = v1alpha1.ConditionControlPlaneAvailable
+		threshold = thresholds.workersJoiningThreshold(instance.Spec.NodeRequests)
+	default:
+		return time.Time{}, 0, false
+	}
+
+	condition := apimeta.FindStatusCondition(instance.Status.Conditions, conditionType)
+	if condition == nil {
+		return time.Time{}, 0, false
+	}
+	return condition.LastTransitionTime.Time, threshold, true
+}
+
+func (thresholds ClusterOrderStallThresholds) workersJoiningThreshold(nodeRequests []v1alpha1.NodeRequest) time.Duration {
+	baseThreshold := thresholds.WorkersJoining
+	if baseThreshold <= 0 {
+		baseThreshold = defaultWorkersJoiningStallThreshold
+	}
+	if len(nodeRequests) == 0 {
+		return baseThreshold
+	}
+
+	// A cluster cannot finish joining until every node set does. Use the longest
+	// effective threshold among its requested host types.
+	threshold := time.Duration(0)
+	for _, nodeRequest := range nodeRequests {
+		effectiveThreshold := baseThreshold
+		if override, found := thresholds.WorkersJoiningByHostType[nodeRequest.ResourceClass]; found && override > 0 {
+			effectiveThreshold = override
+		}
+		if effectiveThreshold > threshold {
+			threshold = effectiveThreshold
+		}
+	}
+	return threshold
 }
 
 // reconcileVIPEndpoints copies VIP annotations written by the CaaS template

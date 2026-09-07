@@ -20,6 +20,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -105,8 +106,12 @@ const (
 	envAAPTemplatePrefix      = "OSAC_AAP_TEMPLATE_PREFIX"
 
 	// Cluster (ClusterOrder) AAP template overrides
-	envClusterAAPProvisionTemplate   = "OSAC_CLUSTER_AAP_PROVISION_TEMPLATE"
-	envClusterAAPDeprovisionTemplate = "OSAC_CLUSTER_AAP_DEPROVISION_TEMPLATE"
+	envClusterAAPProvisionTemplate                  = "OSAC_CLUSTER_AAP_PROVISION_TEMPLATE"
+	envClusterAAPDeprovisionTemplate                = "OSAC_CLUSTER_AAP_DEPROVISION_TEMPLATE"
+	envClusterPreparingInfrastructureStallThreshold = "OSAC_CLUSTER_PREPARING_INFRASTRUCTURE_STALL_THRESHOLD"
+	envClusterControlPlaneStartingStallThreshold    = "OSAC_CLUSTER_CONTROL_PLANE_STARTING_STALL_THRESHOLD"
+	envClusterWorkersJoiningStallThreshold          = "OSAC_CLUSTER_WORKERS_JOINING_STALL_THRESHOLD"
+	envClusterWorkersJoiningStallThresholdOverrides = "OSAC_CLUSTER_WORKERS_JOINING_STALL_THRESHOLD_OVERRIDES"
 
 	// Storage controller AAP template overrides
 	envStorageBackendProvisionTemplate   = "OSAC_STORAGE_BACKEND_AAP_PROVISION_TEMPLATE"
@@ -358,15 +363,57 @@ func setupClusterControllers(
 			).SetupWithManager(mgr)
 		},
 		func(provider provisioning.ProvisioningProvider, pollInterval time.Duration) error {
-			return controller.NewClusterOrderReconciler(
+			reconciler := controller.NewClusterOrderReconciler(
 				localMgr.GetClient(), localMgr.GetAPIReader(), localMgr.GetScheme(),
 				os.Getenv(envClusterOrderNamespace),
 				os.Getenv(envAgentNamespace),
 				os.Getenv(envNetworkingNamespace),
 				provider, pollInterval, maxJobHistory,
-			).SetupWithManager(mgr)
+			)
+			reconciler.StallThresholds = clusterOrderStallThresholdsFromEnv()
+			return reconciler.SetupWithManager(mgr)
 		},
 	)
+}
+
+func clusterOrderStallThresholdsFromEnv() controller.ClusterOrderStallThresholds {
+	thresholds := controller.DefaultClusterOrderStallThresholds()
+	thresholds.PreparingInfrastructure = helpers.GetEnvWithDefault(
+		envClusterPreparingInfrastructureStallThreshold,
+		thresholds.PreparingInfrastructure,
+		func(value time.Duration) bool { return value > 0 },
+	)
+	thresholds.ControlPlaneStarting = helpers.GetEnvWithDefault(
+		envClusterControlPlaneStartingStallThreshold,
+		thresholds.ControlPlaneStarting,
+		func(value time.Duration) bool { return value > 0 },
+	)
+	thresholds.WorkersJoining = helpers.GetEnvWithDefault(
+		envClusterWorkersJoiningStallThreshold,
+		thresholds.WorkersJoining,
+		func(value time.Duration) bool { return value > 0 },
+	)
+
+	rawOverrides := os.Getenv(envClusterWorkersJoiningStallThresholdOverrides)
+	if rawOverrides == "" {
+		return thresholds
+	}
+	var encodedOverrides map[string]string
+	if err := json.Unmarshal([]byte(rawOverrides), &encodedOverrides); err != nil {
+		setupLog.Error(err, "invalid worker-join stall threshold overrides; ignoring",
+			"envVar", envClusterWorkersJoiningStallThresholdOverrides)
+		return thresholds
+	}
+	for hostType, encodedDuration := range encodedOverrides {
+		duration, err := time.ParseDuration(encodedDuration)
+		if err != nil || duration <= 0 {
+			setupLog.Info("invalid worker-join stall threshold override; ignoring",
+				"hostType", hostType, "value", encodedDuration)
+			continue
+		}
+		thresholds.WorkersJoiningByHostType[hostType] = duration
+	}
+	return thresholds
 }
 
 // setupComputeInstanceControllers registers the ComputeInstance controller and, when grpcConn is set,

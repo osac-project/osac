@@ -52,6 +52,11 @@ operator:
     insecureSkipVerify: "true"
     statusPollInterval: "30s"
     templatePrefix: "osac"
+  stall:
+    preparingInfrastructureThreshold: "15m"
+    controlPlaneStartingThreshold: "30m"
+    workersJoiningThreshold: "20m"
+    workersJoiningByHostType: {}
   fulfillment:
     serverAddress: "fulfillment-internal-api:8001"
     tokenFile: "/var/run/secrets/kubernetes.io/serviceaccount/token"

@@ -62,6 +62,22 @@ spec:
           - name: OSAC_AAP_TEMPLATE_PREFIX
             value: {{ .Values.aap.templatePrefix | quote }}
           {{- end }}
+          {{- if .Values.stall.preparingInfrastructureThreshold }}
+          - name: OSAC_CLUSTER_PREPARING_INFRASTRUCTURE_STALL_THRESHOLD
+            value: {{ .Values.stall.preparingInfrastructureThreshold | quote }}
+          {{- end }}
+          {{- if .Values.stall.controlPlaneStartingThreshold }}
+          - name: OSAC_CLUSTER_CONTROL_PLANE_STARTING_STALL_THRESHOLD
+            value: {{ .Values.stall.controlPlaneStartingThreshold | quote }}
+          {{- end }}
+          {{- if .Values.stall.workersJoiningThreshold }}
+          - name: OSAC_CLUSTER_WORKERS_JOINING_STALL_THRESHOLD
+            value: {{ .Values.stall.workersJoiningThreshold | quote }}
+          {{- end }}
+          {{- if .Values.stall.workersJoiningByHostType }}
+          - name: OSAC_CLUSTER_WORKERS_JOINING_STALL_THRESHOLD_OVERRIDES
+            value: {{ .Values.stall.workersJoiningByHostType | toJson | quote }}
+          {{- end }}
           {{- if .Values.networkManagers.capabilitiesSyncInterval }}
           - name: OSAC_NETWORK_CLASS_SYNC_INTERVAL
             value: {{ .Values.networkManagers.capabilitiesSyncInterval | quote }}

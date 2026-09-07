@@ -67,7 +67,7 @@ var _ = Describe("Public volumes server", func() {
 		// internal fields are NOT exposed through the public API.
 		stubResolver := TierResolverFunc(func(_ context.Context, _ string) (*TierResolution, error) {
 			return &TierResolution{
-				BackendID: "internal-backend",
+				Backend: "internal-backend",
 				Protocol:  privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
 			}, nil
 		})

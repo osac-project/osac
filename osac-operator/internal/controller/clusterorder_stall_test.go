@@ -22,6 +22,7 @@ import (
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	v1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
@@ -126,6 +127,51 @@ var _ = Describe("ClusterOrder stall detection", func() {
 		Expect(findCondition(order, v1alpha1.ConditionProgressing).Reason).To(Equal(v1alpha1.ReasonStageUnknown))
 	})
 
+	It("uses default thresholds when no threshold configuration is supplied", func() {
+		order := newOrder(v1alpha1.ReasonPreparingInfrastructure, baseTime)
+		reconciler := newReconciler(baseTime.Add(10 * time.Minute))
+		reconciler.StallThresholds = ClusterOrderStallThresholds{}
+
+		result := reconciler.detectProvisioningStall(order)
+
+		Expect(result.RequeueAfter).To(Equal(5 * time.Minute))
+	})
+
+	It("does not start a timer until the current stage has a transition timestamp", func() {
+		order := newOrder(v1alpha1.ReasonPreparingInfrastructure, baseTime)
+		findCondition(order, v1alpha1.ConditionAccepted).LastTransitionTime = metav1.Time{}
+		reconciler := newReconciler(baseTime.Add(24 * time.Hour))
+
+		result := reconciler.detectProvisioningStall(order)
+
+		Expect(result.RequeueAfter).To(BeZero())
+		Expect(findCondition(order, v1alpha1.ConditionProgressing).Reason).
+			To(Equal(v1alpha1.ReasonPreparingInfrastructure))
+	})
+
+	It("does not run outside an active progressing state", func() {
+		order := newOrder(v1alpha1.ReasonPreparingInfrastructure, baseTime)
+		order.Status.Phase = v1alpha1.ClusterOrderPhaseReady
+		reconciler := newReconciler(baseTime.Add(24 * time.Hour))
+
+		result := reconciler.detectProvisioningStall(order)
+
+		Expect(result.RequeueAfter).To(BeZero())
+		Expect(findCondition(order, v1alpha1.ConditionProgressing).Reason).
+			To(Equal(v1alpha1.ReasonPreparingInfrastructure))
+	})
+
+	It("does not run when Progressing is absent or false", func() {
+		reconciler := newReconciler(baseTime.Add(24 * time.Hour))
+		absentOrder := newOrder(v1alpha1.ReasonPreparingInfrastructure, baseTime)
+		absentOrder.Status.Conditions = absentOrder.Status.Conditions[1:]
+		falseOrder := newOrder(v1alpha1.ReasonPreparingInfrastructure, baseTime)
+		findCondition(falseOrder, v1alpha1.ConditionProgressing).Status = metav1.ConditionFalse
+
+		Expect(reconciler.detectProvisioningStall(absentOrder).RequeueAfter).To(BeZero())
+		Expect(reconciler.detectProvisioningStall(falseOrder).RequeueAfter).To(BeZero())
+	})
+
 	It("self-clears Stalled when the control plane advances to workers joining", func() {
 		order := newOrder(v1alpha1.ReasonControlPlaneStarting, baseTime)
 		reconciler := newReconciler(baseTime.Add(controlPlaneStartingThreshold))
@@ -176,6 +222,58 @@ var _ = Describe("ClusterOrder stall detection", func() {
 		reconciler.detectProvisioningStall(order)
 
 		Expect(findCondition(order, v1alpha1.ConditionProgressing).Reason).To(Equal(v1alpha1.ReasonStalled))
+	})
+
+	It("keeps an earlier provisioning requeue over the stall timer", func() {
+		order := newOrder(v1alpha1.ReasonPreparingInfrastructure, baseTime)
+		reconciler := newReconciler(baseTime.Add(10 * time.Minute))
+
+		result := reconciler.withStallRequeue(order, ctrl.Result{RequeueAfter: time.Minute})
+
+		Expect(result.RequeueAfter).To(Equal(time.Minute))
+	})
+
+	It("uses the stall timer when it is earlier than the provisioning requeue", func() {
+		order := newOrder(v1alpha1.ReasonPreparingInfrastructure, baseTime)
+		reconciler := newReconciler(baseTime.Add(10 * time.Minute))
+
+		result := reconciler.withStallRequeue(order, ctrl.Result{RequeueAfter: 10 * time.Minute})
+
+		Expect(result.RequeueAfter).To(Equal(5 * time.Minute))
+	})
+
+	It("does not start a control-plane stall timer without its stage marker", func() {
+		order := newOrder(v1alpha1.ReasonPreparingInfrastructure, baseTime)
+		progressing := findCondition(order, v1alpha1.ConditionProgressing)
+		progressing.Reason = v1alpha1.ReasonControlPlaneStarting
+		progressing.Message = humanizeConditionName(v1alpha1.ReasonControlPlaneStarting)
+		reconciler := newReconciler(baseTime.Add(24 * time.Hour))
+
+		result := reconciler.detectProvisioningStall(order)
+
+		Expect(result.RequeueAfter).To(BeZero())
+		Expect(findCondition(order, v1alpha1.ConditionProgressing).Reason).
+			To(Equal(v1alpha1.ReasonControlPlaneStarting))
+	})
+
+	It("uses the base worker-join threshold when there are no node requests", func() {
+		thresholds := ClusterOrderStallThresholds{WorkersJoining: workersJoiningThreshold}
+
+		Expect(thresholds.workersJoiningThreshold(nil)).To(Equal(workersJoiningThreshold))
+	})
+
+	It("uses the base worker-join threshold without an override for the host type", func() {
+		thresholds := ClusterOrderStallThresholds{WorkersJoining: workersJoiningThreshold}
+
+		Expect(thresholds.workersJoiningThreshold([]v1alpha1.NodeRequest{{ResourceClass: "standard"}})).
+			To(Equal(workersJoiningThreshold))
+	})
+
+	It("uses the default worker-join threshold when no base value is configured", func() {
+		thresholds := ClusterOrderStallThresholds{}
+
+		Expect(thresholds.workersJoiningThreshold([]v1alpha1.NodeRequest{{ResourceClass: "standard"}})).
+			To(Equal(defaultWorkersJoiningStallThreshold))
 	})
 })
 

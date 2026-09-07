@@ -19,11 +19,14 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
+
+	"github.com/osac-project/osac/osac-operator/internal/controller"
 
 	"sigs.k8s.io/controller-runtime/pkg/cluster"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
@@ -82,6 +85,70 @@ var _ = Describe("ignoreCanceled", func() {
 	It("should preserve real errors", func() {
 		realErr := errors.New("connection refused")
 		Expect(ignoreCanceled(realErr)).To(Equal(realErr))
+	})
+})
+
+var _ = Describe("clusterOrderStallThresholdsFromEnv", func() {
+	stallThresholdEnvironmentVariables := []string{
+		envClusterPreparingInfrastructureStallThreshold,
+		envClusterControlPlaneStartingStallThreshold,
+		envClusterWorkersJoiningStallThreshold,
+		envClusterWorkersJoiningStallThresholdOverrides,
+	}
+
+	BeforeEach(func() {
+		type environmentValue struct {
+			value string
+			set   bool
+		}
+
+		originalValues := make(map[string]environmentValue, len(stallThresholdEnvironmentVariables))
+		for _, environmentVariable := range stallThresholdEnvironmentVariables {
+			value, set := os.LookupEnv(environmentVariable)
+			originalValues[environmentVariable] = environmentValue{value: value, set: set}
+			Expect(os.Unsetenv(environmentVariable)).To(Succeed())
+		}
+		DeferCleanup(func() {
+			for environmentVariable, originalValue := range originalValues {
+				if originalValue.set {
+					Expect(os.Setenv(environmentVariable, originalValue.value)).To(Succeed())
+					continue
+				}
+				Expect(os.Unsetenv(environmentVariable)).To(Succeed())
+			}
+		})
+	})
+
+	It("uses production defaults when thresholds are not configured", func() {
+		thresholds := clusterOrderStallThresholdsFromEnv()
+
+		Expect(thresholds).To(Equal(controller.DefaultClusterOrderStallThresholds()))
+	})
+
+	It("accepts configured thresholds and valid per-host-type worker overrides", func() {
+		Expect(os.Setenv(envClusterPreparingInfrastructureStallThreshold, "10m")).To(Succeed())
+		Expect(os.Setenv(envClusterControlPlaneStartingStallThreshold, "25m")).To(Succeed())
+		Expect(os.Setenv(envClusterWorkersJoiningStallThreshold, "15m")).To(Succeed())
+		Expect(os.Setenv(envClusterWorkersJoiningStallThresholdOverrides,
+			`{"fast":"5m","slow":"40m","invalid":"not-a-duration","zero":"0s"}`)).To(Succeed())
+
+		thresholds := clusterOrderStallThresholdsFromEnv()
+
+		Expect(thresholds.PreparingInfrastructure).To(Equal(10 * time.Minute))
+		Expect(thresholds.ControlPlaneStarting).To(Equal(25 * time.Minute))
+		Expect(thresholds.WorkersJoining).To(Equal(15 * time.Minute))
+		Expect(thresholds.WorkersJoiningByHostType).To(Equal(map[string]time.Duration{
+			"fast": 5 * time.Minute,
+			"slow": 40 * time.Minute,
+		}))
+	})
+
+	It("keeps defaults when the worker override configuration is malformed", func() {
+		Expect(os.Setenv(envClusterWorkersJoiningStallThresholdOverrides, "not-json")).To(Succeed())
+
+		thresholds := clusterOrderStallThresholdsFromEnv()
+
+		Expect(thresholds).To(Equal(controller.DefaultClusterOrderStallThresholds()))
 	})
 })
 

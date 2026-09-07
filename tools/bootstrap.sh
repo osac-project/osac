@@ -99,6 +99,30 @@ if [[ "${OSAC_ALLOW_NESTED_BOOTSTRAP:-}" != "1" ]] \
   fi
 fi
 
+# --- graphify (codebase knowledge graph CLI) ---
+# The pip package is "graphifyy" (double y); the CLI command is "graphify".
+# Used by the SessionStart hook (.claude/hooks/fetch-graphify-brain.sh) to
+# fetch and query the CI-published knowledge graph. Idempotent: skips if
+# graphify is already on PATH. Fail-open: a missing graphify never blocks
+# bootstrap — sessions will fall back to cold exploration.
+if command -v graphify &>/dev/null; then
+  echo "graphify already installed ($(graphify --version 2>/dev/null || echo 'unknown version'))."
+elif command -v uv &>/dev/null; then
+  echo "Installing graphify (uv tool install graphifyy)..."
+  if ! uv tool install graphifyy; then
+    echo "  Warning: graphify installation via uv failed. Install manually: uv tool install graphifyy" >&2
+  fi
+elif command -v pipx &>/dev/null; then
+  echo "Installing graphify (pipx install graphifyy)..."
+  if ! pipx install graphifyy; then
+    echo "  Warning: graphify installation via pipx failed. Install manually: pipx install graphifyy" >&2
+  fi
+else
+  echo "Warning: neither uv nor pipx found — cannot install graphify automatically." >&2
+  echo "  Install manually: uv tool install graphifyy (or: pipx install graphifyy)" >&2
+  echo "  The knowledge graph will be unavailable until graphify is installed." >&2
+fi
+
 if [[ "$NO_FORK" == false ]]; then
   if ! command -v gh &>/dev/null; then
     echo "ERROR: gh CLI is not installed." >&2

@@ -264,7 +264,7 @@ def test_compute_instance_boot_disk_tier_required(
         )
 
     assert_grpc_rejected(exc_info, "InvalidArgument")
-    assert "storage_tier is required" in str(exc_info.value.stderr).lower()
+    assert "storagetier reference must specify id or name" in str(exc_info.value.stderr).lower()
 
 
 @pytest.mark.parametrize("storage_tier", [None, {"name": ""}])
@@ -302,7 +302,7 @@ def test_compute_instance_additional_disk_tier_required(
         )
 
     assert_grpc_rejected(exc_info, "InvalidArgument")
-    assert "additional_disks[0].storage_tier is required" in str(exc_info.value.stderr).lower()
+    assert "storagetier reference must specify id or name" in str(exc_info.value.stderr).lower()
 
 
 def test_compute_instance_boot_disk_tier_from_catalog_item_default(

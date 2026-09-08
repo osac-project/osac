@@ -19,6 +19,8 @@ from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until
 
+pytestmark = pytest.mark.serial
+
 _AVAILABLE_BMH_STATES = {"available", "ready"}
 _NOT_FOUND_RE = re.compile(r"Code:\s*NotFound|baremetalinstance\b.*\bnot found", re.IGNORECASE)
 

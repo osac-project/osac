@@ -16,6 +16,8 @@ from tests.e2e.core.helpers import (
 )
 from tests.e2e.core.k8s_client import K8sClient
 
+pytestmark = pytest.mark.regression
+
 SOURCE_REF = "quay.io/containerdisks/fedora:41"
 
 

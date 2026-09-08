@@ -8,6 +8,8 @@ import pytest
 from tests.e2e.core.grpc_client import PUBLIC_API, GRPCClient
 from tests.e2e.core.helpers import assert_grpc_rejected
 
+pytestmark = pytest.mark.regression
+
 
 def _grpc_error_output(exc: subprocess.CalledProcessError) -> str:
     return (exc.stderr or "") + (exc.stdout or "")

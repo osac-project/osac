@@ -11,6 +11,8 @@ from tests.e2e.core.helpers import assert_grpc_rejected, wait_for_cr, wait_for_d
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 
+pytestmark = pytest.mark.regression
+
 
 def verify_datavolume_storage_classes(
     k8s_hub_client: K8sClient, k8s_virt_client: K8sClient, ci_name: str, cr: dict[str, Any]
@@ -290,9 +292,7 @@ def test_compute_instance_additional_disk_tier_required(
                         "template": {"name": vm_template},
                         "instance_type": {"name": default_instance_type},
                         "boot_disk": {"size_gib": 20, "storage_tier": {"name": default_storage_tier}},
-                        "additional_disks": [
-                            additional_disk,
-                        ],
+                        "additional_disks": [additional_disk],
                         "network_attachments": [{"subnet": {"id": default_subnet}}],
                         "disk_image": {"name": default_disk_image},
                         "run_strategy": "Always",

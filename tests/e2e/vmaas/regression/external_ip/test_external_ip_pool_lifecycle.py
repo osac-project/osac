@@ -19,6 +19,8 @@ from tests.e2e.core.helpers import (
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.runner import poll_until
 
+pytestmark = pytest.mark.regression
+
 
 class TestExternalIPPoolLifecycle:
     def test_attach_detach_reattach(

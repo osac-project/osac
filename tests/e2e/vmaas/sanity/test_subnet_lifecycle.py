@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from uuid import uuid4
 
+import pytest
+
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import (
     wait_for_subnet_cr,
@@ -13,6 +15,8 @@ from tests.e2e.core.helpers import (
 )
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.runner import poll_until
+
+pytestmark = pytest.mark.sanity
 
 
 def test_subnet_lifecycle(grpc: GRPCClient, k8s_hub_client: K8sClient) -> None:

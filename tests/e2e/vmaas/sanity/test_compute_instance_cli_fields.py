@@ -3,12 +3,16 @@ from __future__ import annotations
 import base64
 from typing import Any
 
+import pytest
+
 from tests.e2e.catalog.conftest import unique_name
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import wait_for_cr, wait_for_deletion, wait_for_provision, wait_for_running
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.vmaas.conftest import DEFAULT_IT_CORES, DEFAULT_IT_MEMORY_GIB
+
+pytestmark = pytest.mark.sanity
 
 TEST_BOOT_DISK_SIZE: int = 20
 TEST_RUN_STRATEGY: str = "Always"

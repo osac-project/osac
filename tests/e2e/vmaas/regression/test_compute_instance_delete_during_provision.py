@@ -12,6 +12,8 @@ from tests.e2e.core.metering import MeteringCollector
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until
 
+pytestmark = pytest.mark.regression
+
 TERMINAL_JOB_STATES: tuple[str, ...] = ("Canceled", "Failed", "Succeeded")
 
 

@@ -28,6 +28,10 @@ on:
         description: "pytest -k filter"
         required: false
         default: ""
+      test-marker:
+        description: "pytest -m marker expression (e.g. sanity, regression). Empty runs all."
+        required: false
+        default: ""
       test-infra-ref:
         description: "Branch/ref of osac-test-infra"
         required: false
@@ -219,6 +223,7 @@ jobs:
           'caas/sanity'
         }}
       test-filter: ${{ inputs.test-filter || '' }}
+      test-marker: ${{ inputs.test-marker || '' }}
       # osac-installer now lives as a subdirectory of this same monorepo checkout
       # (its Chart.yaml deps resolve fulfillment-service/osac-operator/osac-aap/BMF
       # as ../../../<name> siblings within it), so a PR touching those components

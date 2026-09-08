@@ -4,12 +4,16 @@ import json
 import subprocess
 from typing import Any
 
+import pytest
+
 from tests.e2e.catalog.conftest import unique_name
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import wait_for_cr, wait_for_deletion, wait_for_grpc_removal
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until
+
+pytestmark = pytest.mark.regression
 
 GPU_IT_CORES: int = 2
 GPU_IT_MEMORY_GIB: int = 4

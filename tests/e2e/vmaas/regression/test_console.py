@@ -28,6 +28,8 @@ from tests.e2e.core.helpers import (
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 
+pytestmark = pytest.mark.regression
+
 logger = logging.getLogger(__name__)
 
 CONSOLE_WS_PATH = "/api/fulfillment/v1/console_sessions/connect"

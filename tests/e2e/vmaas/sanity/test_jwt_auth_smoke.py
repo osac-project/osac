@@ -9,6 +9,8 @@ from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import run_unchecked
 
+pytestmark = pytest.mark.sanity
+
 CLIENT_LISTABLE_RESOURCES = [
     "computeinstancetemplates",
     "computeinstances",

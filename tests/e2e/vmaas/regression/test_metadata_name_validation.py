@@ -16,6 +16,8 @@ from tests.e2e.core.helpers import (
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.runner import poll_until
 
+pytestmark = pytest.mark.regression
+
 
 def _grpc_error_message(exc: subprocess.CalledProcessError) -> str:
     combined = (exc.stderr or "") + (exc.stdout or "")

@@ -15,6 +15,8 @@ from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.metering import MeteringCollector
 from tests.e2e.core.osac_cli import OsacCLI
 
+pytestmark = pytest.mark.regression
+
 
 @pytest.mark.metering
 def test_compute_instance_lifecycle(

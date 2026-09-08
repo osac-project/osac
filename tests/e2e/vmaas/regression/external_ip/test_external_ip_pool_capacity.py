@@ -11,6 +11,8 @@ from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.runner import poll_until
 from tests.e2e.vmaas.regression.external_ip.helpers import create_ip, delete_ip, pool_status
 
+pytestmark = pytest.mark.regression
+
 
 class TestPoolCapacity:
     """

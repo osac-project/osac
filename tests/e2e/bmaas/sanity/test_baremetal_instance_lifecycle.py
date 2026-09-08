@@ -19,6 +19,8 @@ from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until
 
+pytestmark = pytest.mark.sanity
+
 logger = logging.getLogger(__name__)
 
 _RESTART_IN_PROGRESS: str = "BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_IN_PROGRESS"

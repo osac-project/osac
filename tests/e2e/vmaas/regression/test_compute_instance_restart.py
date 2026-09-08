@@ -12,6 +12,8 @@ from tests.e2e.core.metering import MeteringCollector
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until
 
+pytestmark = pytest.mark.regression
+
 
 def _wait_for_new_vmi(k8s_virt: K8sClient, *, vmi_namespace: str, ci_name: str, original_ts: str) -> str:
     poll_until(

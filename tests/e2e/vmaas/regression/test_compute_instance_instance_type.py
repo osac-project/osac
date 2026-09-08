@@ -15,6 +15,8 @@ from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import run_unchecked
 
+pytestmark = pytest.mark.regression
+
 IT_CORES: int = 2
 IT_MEMORY_GIB: int = 4
 

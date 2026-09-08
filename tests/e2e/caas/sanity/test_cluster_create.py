@@ -22,6 +22,8 @@ from tests.e2e.core.metering import MeteringCollector
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import run
 
+pytestmark = pytest.mark.sanity
+
 
 @pytest.mark.metering
 def test_cluster_create(

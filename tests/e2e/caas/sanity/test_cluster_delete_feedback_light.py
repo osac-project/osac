@@ -4,6 +4,8 @@ import contextlib
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from tests.e2e.catalog.conftest import unique_name
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import (
@@ -16,6 +18,8 @@ from tests.e2e.core.helpers import (
 )
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
+
+pytestmark = pytest.mark.sanity
 
 
 def test_cluster_delete_reports_deleting_state_without_provisioning(

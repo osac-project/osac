@@ -4,8 +4,12 @@ import subprocess
 from typing import Any
 from uuid import uuid4
 
+import pytest
+
 from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
 from tests.e2e.core.osac_cli import OsacCLI
+
+pytestmark = pytest.mark.sanity
 
 TEST_CORES: int = 4
 TEST_MEMORY_GIB: int = 8

@@ -19,6 +19,8 @@ from tests.e2e.core.metering import MeteringCollector
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until
 
+pytestmark = pytest.mark.regression
+
 
 @pytest.mark.metering
 def test_compute_instance_stop_metering(

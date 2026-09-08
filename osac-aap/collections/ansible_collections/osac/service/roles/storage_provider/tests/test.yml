@@ -1068,3 +1068,95 @@
               Backend ID validation failed with integer-coerced value (OSAC-4254 regression):
               {{ ansible_failed_result.msg | default('unknown error') }}
             success_msg: "Backend ID validation passed with integer value -- dispatch failed as expected"
+
+# ──────────────────────────────────────────────────────────────
+# Test 25: Explicit YAML null credential values are rejected (OSAC-4956)
+# Expected: credential validation in read_credentials.yaml rejects
+#   explicit null values for endpoint, username, and password.
+#   `null | default('') | string` produces "None" (length 4), bypassing
+#   the original `| default('') | string | length == 0` guard.
+#   The `is none` guard added in OSAC-4956 prevents this.
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- explicit null credential values are rejected (OSAC-4956)
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run null credential values test
+      block:
+        - name: Attempt with explicit null credential values
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: default
+                protocol: nfs
+                provider: vast
+                backend_id: be-null-creds
+            storage_provider_backend_connections:
+              be-null-creds:
+                endpoint: null
+                username: null
+                password: null
+            storage_provider_action: setup
+            tenant_name: "tenant-null-creds"
+            tenant_namespace: "osac-tenants"
+
+        - name: Fail test if null credentials were not rejected
+          ansible.builtin.fail:
+            msg: "Null credential values should have been rejected by validation"
+
+      rescue:
+        - name: Verify failure is from credential validation, not a downstream error
+          ansible.builtin.assert:
+            that:
+              - "'is missing one or more of' in (ansible_failed_result.msg | default(''))"
+            fail_msg: >-
+              Null credential values were not caught by validation (OSAC-4956 regression):
+              {{ ansible_failed_result.msg | default('unknown error') }}
+            success_msg: "Null credential values correctly rejected by validation"
+
+# ──────────────────────────────────────────────────────────────
+# Test 26: Explicit YAML null backend_id is rejected (OSAC-4956)
+# Expected: the backend_id presence check rejects explicit null.
+#   `null | string` produces "None" (length 4), bypassing the original
+#   `| string | length == 0` guard. The `is none` guard prevents this.
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- explicit null backend_id is rejected (OSAC-4956)
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run null backend_id test
+      block:
+        - name: Attempt with explicit null backend_id
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: default
+                protocol: nfs
+                provider: vast
+                backend_id: null
+            storage_provider_backend_connections:
+              be-test:
+                endpoint: "vast.example.com"
+                username: "admin"
+                password: "mock-admin-password"
+            storage_provider_action: setup
+            tenant_name: "tenant-null-bid"
+            tenant_namespace: "osac-tenants"
+
+        - name: Fail test if null backend_id was not rejected
+          ansible.builtin.fail:
+            msg: "Null backend_id should have been rejected by validation"
+
+      rescue:
+        - name: Verify failure is from backend_id validation, not a downstream error
+          ansible.builtin.assert:
+            that:
+              - "'has no backend_id' in (ansible_failed_result.msg | default(''))"
+            fail_msg: >-
+              Null backend_id was not caught by validation (OSAC-4956 regression):
+              {{ ansible_failed_result.msg | default('unknown error') }}
+            success_msg: "Null backend_id correctly rejected by validation"

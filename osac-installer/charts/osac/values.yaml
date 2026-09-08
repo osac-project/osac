@@ -27,11 +27,6 @@ global:
       enabled: true
     maas:
       enabled: true
-
-cliImage: quay.io/openshift/origin-cli:4.20.0
-
-# User-facing networking facade (passed to all subcharts via global.*).
-global:
   fabricManager:
     netris:
       enabled: false
@@ -52,6 +47,8 @@ global:
     aap: false
     networkClass: false
     networkManagers: false
+
+cliImage: quay.io/openshift/origin-cli:4.20.0
 
 # Shared PostgreSQL host for the db-init hook.
 dbInit:

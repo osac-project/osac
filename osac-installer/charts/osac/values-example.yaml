@@ -391,7 +391,7 @@ publishTemplates:
 #       controllerUrl: "https://redhat-ctl.netris.io"
 #       credentials:
 #         username: "netris"
-#         password: "my-netris-password"
+#         password: "<netris-password>"
 #       siteId: "5"
 #       tenantId: "1"
 #       tenantName: "Admin"

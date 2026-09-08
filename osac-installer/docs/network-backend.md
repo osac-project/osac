@@ -15,9 +15,16 @@ group env vars, and the default NetworkClass from these settings.
 When `global.fabricManager.netris.enabled` is true, Helm automatically:
 
 - Enables `operator.networkManagers.fabricManagers.netris`
-- Sets `NETWORK_CLASS`, `NETWORK_STEPS_COLLECTION`, and `NETRIS_*` on both AAP
-  instance groups (no manual duplication)
+- Sets `NETWORK_CLASS`, `NETWORK_STEPS_COLLECTION`, and shared `NETRIS_*` fields on
+  both AAP instance groups when they are enabled (no manual duplication)
 - Points the default `networkClass` hook at `fabricManager: netris`
+
+The facade does **not** enable the AAP instance groups themselves. Set both
+`aap.instanceGroups.clusterFulfillment.enabled` and
+`aap.instanceGroups.networkFulfillment.enabled` to `true` for Netris-backed
+provisioning. Cluster fulfillment receives `NETWORK_CLASS` /
+`NETWORK_STEPS_COLLECTION` plus cluster-specific Netris fields; network
+fulfillment receives the shared Netris connection fields only.
 
 ### Netris example
 
@@ -29,10 +36,17 @@ global:
       controllerUrl: "https://redhat-ctl.netris.io"
       credentials:
         username: "netris"
-        password: "my-netris-password"
+        password: "<netris-password>"
       siteId: "5"
       tenantId: "1"
       tenantName: "Admin"
+
+aap:
+  instanceGroups:
+    clusterFulfillment:
+      enabled: true
+    networkFulfillment:
+      enabled: true
 ```
 
 When Netris is enabled, the schema requires `controllerUrl` (HTTPS), credentials,
@@ -63,7 +77,7 @@ values authoritative instead of the facade:
 
 | `NETWORK_CLASS` | `NETWORK_STEPS_COLLECTION` | Description |
 |-----------------|---------------------------|-------------|
-| (empty) | (empty) | No AAP network backend selected (use `agentless_net` or `netris` for fabric-backed provisioning) |
+| (empty) | (empty) | No AAP network backend selected (use `agentless_net` for agentless provisioning or `netris` for fabric-backed provisioning) |
 | `netris` | `netris.steps` | Netris controller API |
 | `agentless_net` | `agentless_net.steps` | Agentless network backend (no physical fabric) |
 
@@ -181,7 +195,7 @@ Create a separate secrets values file that is **not committed to git**
 # values/development-secrets.local.yaml
 clusterFulfillment:
   secret:
-    NETRIS_PASSWORD: "my-netris-password"
+    NETRIS_PASSWORD: "<netris-password>"
     AWS_ACCESS_KEY_ID: "AKIA..."
     AWS_SECRET_ACCESS_KEY: "..."
     SERVER_SSH_KEY: "<contents of ~/.ssh/id_rsa>"
@@ -189,7 +203,7 @@ clusterFulfillment:
 
 networkFulfillment:
   secret:
-    NETRIS_PASSWORD: "my-netris-password"
+    NETRIS_PASSWORD: "<netris-password>"
 ```
 
 Pass both files when deploying — Helm deep-merges them:

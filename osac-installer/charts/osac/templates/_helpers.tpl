@@ -216,8 +216,8 @@ facade vs low-level surface mismatches).
 {{- if ne $netSteps "agentless_net.steps" }}
   {{- fail (printf "NETWORK_CLASS=agentless_net requires NETWORK_STEPS_COLLECTION=agentless_net.steps (got %q)" $netSteps) }}
 {{- end }}
-{{- if and $k8sManager (ne $k8sManager "k8s_only") (ne $fabricManager "") }}
-  {{- fail "NETWORK_CLASS=agentless_net conflicts with a fabric-backed networkClass manager" }}
+{{- if ne $fabricManager "" }}
+  {{- fail "NETWORK_CLASS=agentless_net requires networkClass.fabricManager to be empty" }}
 {{- end }}
 {{- end }}
 {{- if and $networkClass.enabled $fabricManager -}}

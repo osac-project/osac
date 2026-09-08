@@ -14,6 +14,13 @@ global:
   fabricManager:
     netris:
       enabled: true
+      controllerUrl: "https://test-ctl.netris.io"
+      credentials:
+        username: "netris"
+        password: "test-password"
+      siteId: "1"
+      tenantId: "1"
+      tenantName: "Admin"
 
 # --- Operator ---
 operator:
@@ -160,6 +167,11 @@ aap:
     eeImage: "ghcr.io/osac-project/osac-aap:latest"
     projectGitUri: "https://github.com/osac-project/osac"
     projectGitBranch: "main"
+  instanceGroups:
+    clusterFulfillment:
+      enabled: true
+    networkFulfillment:
+      enabled: true
 
 # --- Validation ---
 validation:

@@ -12,11 +12,11 @@
 {{- if $netris.enabled -}}
 {{- $fabricManager = "netris" -}}
 {{- $k8sManager = "" -}}
-{{- if not $title }}{{- $title = "Netris Network Implementation" -}}{{- end }}
+{{- $title = "Netris Network Implementation" -}}
 {{- else if $agentless.enabled -}}
 {{- $fabricManager = "" -}}
 {{- $k8sManager = "k8s_only" -}}
-{{- if not $title }}{{- $title = "Agentless Network Implementation" -}}{{- end }}
+{{- $title = "Agentless Network Implementation" -}}
 {{- end }}
 {{- end }}
 {{- $egressRules := list -}}

@@ -105,6 +105,22 @@ var _ = Describe("ClusterOrder transition events", func() {
 		)))
 	})
 
+	It("records a Normal event when the provisioning stage becomes unknown", func() {
+		recorder := newRecorder()
+		reconciler := &ClusterOrderReconciler{Recorder: recorder}
+		instance := &v1alpha1.ClusterOrder{}
+		oldStatus := statusWithProgressingReason(v1alpha1.ReasonWorkersJoining)
+		instance.Status = statusWithProgressingReason(v1alpha1.ReasonStageUnknown)
+
+		reconciler.recordTransitionEvents(instance, &oldStatus)
+
+		Eventually(recorder.Events).Should(Receive(And(
+			ContainSubstring(corev1.EventTypeNormal),
+			ContainSubstring(v1alpha1.ReasonStageUnknown),
+			ContainSubstring("entered provisioning stage"),
+		)))
+	})
+
 	It("records a Normal event when the ClusterOrder enters Deleting", func() {
 		recorder := newRecorder()
 		reconciler := &ClusterOrderReconciler{Recorder: recorder}

@@ -19,8 +19,9 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
-	"testing"
 
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
 	grpcstatus "google.golang.org/grpc/status"
@@ -32,35 +33,36 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/references"
 )
 
-func TestRegisterReferenceLookups(t *testing.T) {
-	validator := newTestReferenceValidator(t)
+var _ = Describe("RegisterReferenceLookups", func() {
+	var validator *references.ReferenceValidator
 
-	t.Run("registers SecretLocalReference for private and public APIs", func(t *testing.T) {
+	BeforeEach(func() {
+		validator = newTestReferenceValidator()
+	})
+
+	It("registers SecretLocalReference for private and public APIs", func() {
 		for _, name := range []protoreflect.FullName{
 			"osac.private.v1.SecretLocalReference",
 			"osac.public.v1.SecretLocalReference",
 		} {
-			if !validator.HasLookup(name) {
-				t.Errorf("missing lookup for %s", name)
-			}
+			Expect(validator.HasLookup(name)).To(BeTrue(), "missing lookup for %s", name)
 		}
 	})
 
-	t.Run("registers every reference type used in Create or Update requests", func(t *testing.T) {
+	It("registers every reference type used in Create or Update requests", func() {
 		var missing []string
-		for _, name := range createOrUpdateReferenceTypes(t) {
+		for _, name := range createOrUpdateReferenceTypes() {
 			if !validator.HasLookup(name) {
 				missing = append(missing, string(name))
 			}
 		}
 		slices.Sort(missing)
-		if len(missing) > 0 {
-			t.Errorf("no lookup registered for Create/Update reference types:\n  %s",
-				strings.Join(missing, "\n  "))
-		}
+		Expect(missing).To(BeEmpty(),
+			"no lookup registered for Create/Update reference types:\n  %s",
+			strings.Join(missing, "\n  "))
 	})
 
-	t.Run("interceptor does not reject identity provider client_secret_secret as unregistered", func(t *testing.T) {
+	It("does not reject identity provider client_secret_secret as unregistered", func() {
 		request := privatev1.IdentityProvidersCreateRequest_builder{
 			Object: privatev1.IdentityProvider_builder{
 				Spec: privatev1.IdentityProviderSpec_builder{
@@ -79,35 +81,26 @@ func TestRegisterReferenceLookups(t *testing.T) {
 			&grpc.UnaryServerInfo{FullMethod: "/osac.private.v1.IdentityProviders/Create"},
 			func(context.Context, any) (any, error) { return "ok", nil },
 		)
-		if err == nil {
-			return
-		}
-		st, _ := grpcstatus.FromError(err)
-		if strings.Contains(st.Message(), "no lookup registered") {
-			t.Fatalf("SecretLocalReference is not registered with the interceptor: %v", err)
+		if err != nil {
+			st, _ := grpcstatus.FromError(err)
+			Expect(st.Message()).ToNot(ContainSubstring("no lookup registered"),
+				"SecretLocalReference is not registered with the interceptor: %v", err)
 		}
 	})
-}
+})
 
-func newTestReferenceValidator(t *testing.T) *references.ReferenceValidator {
-	t.Helper()
+func newTestReferenceValidator() *references.ReferenceValidator {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	tenancy, err := auth.NewGuestTenancyLogic().SetLogger(logger).Build()
-	if err != nil {
-		t.Fatalf("failed to create guest tenancy logic: %v", err)
-	}
+	Expect(err).ToNot(HaveOccurred())
 	validator, err := references.NewReferenceValidator().SetLogger(logger).Build()
-	if err != nil {
-		t.Fatalf("failed to create reference validator: %v", err)
-	}
-	if err := registerReferenceLookups(validator, logger, tenancy, prometheus.NewRegistry()); err != nil {
-		t.Fatalf("failed to register reference lookups: %v", err)
-	}
+	Expect(err).ToNot(HaveOccurred())
+	err = registerReferenceLookups(validator, logger, tenancy, prometheus.NewRegistry())
+	Expect(err).ToNot(HaveOccurred())
 	return validator
 }
 
-func createOrUpdateReferenceTypes(t *testing.T) []protoreflect.FullName {
-	t.Helper()
+func createOrUpdateReferenceTypes() []protoreflect.FullName {
 	seen := map[protoreflect.FullName]struct{}{}
 	refs := map[protoreflect.FullName]struct{}{}
 	protoregistry.GlobalFiles.RangeFiles(func(fd protoreflect.FileDescriptor) bool {

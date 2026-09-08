@@ -207,6 +207,10 @@ func (r *ClusterOrderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 }
 
 const (
+	clusterOrderCreatedEventReason      = v1alpha1.ReasonCreated
+	clusterOrderCreatedEventAction      = "Created"
+	clusterOrderReadyEventReason        = v1alpha1.ReasonReady
+	clusterOrderReadyEventAction        = "Ready"
 	clusterOrderProvisioningEventAction = "Provisioning"
 	clusterOrderDeletingEventReason     = "Deleting"
 	clusterOrderDeletingEventAction     = "Deleting"
@@ -227,12 +231,27 @@ func (r *ClusterOrderReconciler) recordTransitionEvents(instance *v1alpha1.Clust
 
 	oldProgressing := apimeta.FindStatusCondition(oldStatus.Conditions, v1alpha1.ConditionProgressing)
 	newProgressing := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
+	if oldStatus.Phase == "" && len(oldStatus.Conditions) == 0 &&
+		(instance.Status.Phase != "" || len(instance.Status.Conditions) > 0) {
+		r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, clusterOrderCreatedEventReason,
+			clusterOrderCreatedEventAction, "ClusterOrder created")
+	}
+
 	if newProgressing != nil && (oldProgressing == nil || oldProgressing.Reason != newProgressing.Reason) {
 		if _, shouldRecord := clusterOrderProvisioningEventReasons[newProgressing.Reason]; shouldRecord {
 			r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, newProgressing.Reason,
 				clusterOrderProvisioningEventAction, "ClusterOrder entered provisioning stage %s",
 				humanizeConditionName(newProgressing.Reason))
 		}
+	}
+
+	oldReady := oldStatus.Phase == v1alpha1.ClusterOrderPhaseReady && oldProgressing != nil &&
+		oldProgressing.Status == metav1.ConditionFalse
+	newReady := instance.Status.Phase == v1alpha1.ClusterOrderPhaseReady && newProgressing != nil &&
+		newProgressing.Status == metav1.ConditionFalse
+	if newReady && !oldReady {
+		r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, clusterOrderReadyEventReason,
+			clusterOrderReadyEventAction, "ClusterOrder is ready")
 	}
 
 	if oldStatus.Phase != v1alpha1.ClusterOrderPhaseDeleting &&

@@ -35,6 +35,7 @@ const (
 	ReasonInitialized      = "Initialized"
 	ReasonAsExpected       = "AsExpected"
 	ReasonCreated          = "Created"
+	ReasonReady            = "Ready"
 	ReasonProgressing      = "Progressing"
 	ReasonFailed           = "Failed"
 	ReasonDeleting         = "Deleting"

@@ -149,7 +149,10 @@ jobs:
       - name: Disable auto-merge
         if: >-
           steps.org-check.outputs.org_member == 'true'
-          && steps.label-check.outputs.blocked == 'true'
+          && (
+            steps.label-check.outputs.blocked == 'true' ||
+            steps.label-check.outputs.eligible == 'false'
+          )
         env:
           GH_TOKEN: ${{ secrets.MERGE_QUEUE_TOKEN }}
           PR: ${{ github.event.pull_request.number }}

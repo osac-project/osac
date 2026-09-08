@@ -63,7 +63,7 @@ The OSAC platform relies on five core components to deliver governed self-servic
 > * Red Hat OpenShift Advanced Cluster Management (RHACM)
 > * Red Hat OpenShift Virtualization (OCP-Virt) - **Optional**: Only required for VM as a Service (VMaaS) support
 > * Red Hat Ansible Automation Platform (AAP)
-> * A network backend for bare metal provisioning: either **ESI** (Elastic System Infrastructure) or **Netris** (see [Network Backend Configuration](#network-backend-configuration-caas))
+> * A network backend for bare metal provisioning: **Netris** or **agentless_net** (see [Network Backend Configuration](#network-backend-configuration-caas))
 
 **Configuration Manifests**
 
@@ -244,8 +244,10 @@ See [docs/aap-configuration.md](docs/aap-configuration.md) for details.
 
 #### Network Backend Configuration (CaaS)
 
-By default the network backend is **ESI**. To switch to **Netris**, set
-the Netris-specific values in your values file under `aap.instanceGroups.clusterFulfillment`.
+No network backend is selected by default. To use **Netris**, set
+`NETWORK_CLASS=netris` and the Netris-specific values in your values file under
+`aap.instanceGroups.clusterFulfillment` and `aap.instanceGroups.networkFulfillment`
+(both instance groups must carry identical Netris connection settings).
 
 See [docs/network-backend.md](docs/network-backend.md) for Netris-specific
 variables and the `NETRIS_RESOURCE_CLASS_MAP` format.

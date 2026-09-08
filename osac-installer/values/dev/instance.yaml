@@ -127,12 +127,7 @@ aap:
         HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: "HighlyAvailable"
     networkFulfillment:
       enabled: true
-      config:
-        NETRIS_CONTROLLER_URL: "https://redhat-ctl.netris.io"
-        NETRIS_USERNAME: "netris"
-        NETRIS_SITE_ID: "5"
-        NETRIS_TENANT_ID: "1"
-        NETRIS_TENANT_NAME: "Admin"
+      config: {}
 
 # --- Validation ---
 validation:

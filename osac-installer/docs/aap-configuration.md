@@ -19,8 +19,8 @@ file and they are applied during `make install-osac`.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NETWORK_CLASS` | `esi` | Network backend (`netris` or `esi`) |
-| `NETWORK_STEPS_COLLECTION` | `osac.steps` | Ansible collection for network steps |
+| `NETWORK_CLASS` | (empty) | AAP cluster-fulfillment network backend (`netris` or `agentless_net`) |
+| `NETWORK_STEPS_COLLECTION` | (empty) | Ansible collection for network steps (`netris.steps`, `ci.steps`, or `agentless_net.steps`) |
 | `EXTERNAL_ACCESS_BASE_DOMAIN` | `box.massopen.cloud` | Base domain for cluster DNS records |
 | `EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS` | `box.massopen.cloud` | Comma-separated list of allowed domains |
 | `EXTERNAL_ACCESS_API_INTERNAL_NETWORK` | `hypershift` | Internal network for API access |

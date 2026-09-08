@@ -302,8 +302,9 @@
             },
             "capabilitiesSyncInterval": {
               "type": "string",
-              "description": "How often the operator recomputes NetworkClass capabilities from manager ConfigMaps, in addition to reacting immediately to ConfigMap changes (Go duration, e.g. 5m)",
-              "default": "5m"
+              "description": "How often the operator recomputes NetworkClass capabilities from manager ConfigMaps, in addition to reacting immediately to ConfigMap changes (Go duration, e.g. 30s, 5m, 1h)",
+              "default": "5m",
+              "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$"
             },
             "fabricManagers": {
               "type": "object",
@@ -321,7 +322,8 @@
                   },
                   "capabilities": {
                     "type": "string",
-                    "description": "Comma-separated capability tokens advertised for this manager (e.g. ipv4, ipv4,ipv6,dualStack)"
+                    "description": "Comma-separated capability tokens advertised for this manager (ipv4, ipv6, dualStack, dpuSupport)",
+                    "pattern": "^(ipv4|ipv6|dualStack|dpuSupport)(,(ipv4|ipv6|dualStack|dpuSupport))*$"
                   }
                 }
               }
@@ -342,7 +344,8 @@
                   },
                   "capabilities": {
                     "type": "string",
-                    "description": "Comma-separated capability tokens advertised for this manager (e.g. ipv4,ipv6)"
+                    "description": "Comma-separated capability tokens advertised for this manager (ipv4, ipv6, dualStack, dpuSupport)",
+                    "pattern": "^(ipv4|ipv6|dualStack|dpuSupport)(,(ipv4|ipv6|dualStack|dpuSupport))*$"
                   }
                 }
               }
@@ -855,7 +858,7 @@
                     },
                     "NETRIS_CONTROLLER_URL": {
                       "type": "string",
-                      "pattern": "^$|^https?://[^/\\s:]+[^\\s]*$",
+                      "pattern": "^$|^https://[^/\\s:]+[^\\s]*$",
                       "description": "Netris controller API URL. Must be set identically on clusterFulfillment and networkFulfillment; there is no shared Netris config block."
                     },
                     "NETRIS_USERNAME": {
@@ -962,7 +965,7 @@
                     },
                     "BCM_API_URL": {
                       "type": "string",
-                      "pattern": "^$|^https?://[^/\\s]+",
+                      "pattern": "^$|^https?://[^/\\s:]+[^\\s]*$",
                       "description": "BCM head node API endpoint (e.g., https://bcm-head:8081)"
                     },
                     "BCM_VALIDATE_CERTS": {
@@ -1028,7 +1031,7 @@
                   "properties": {
                     "NETRIS_CONTROLLER_URL": {
                       "type": "string",
-                      "pattern": "^$|^https?://[^/\\s:]+[^\\s]*$",
+                      "pattern": "^$|^https://[^/\\s:]+[^\\s]*$",
                       "description": "Netris controller API URL. Must be set identically on clusterFulfillment and networkFulfillment; there is no shared Netris config block."
                     },
                     "NETRIS_USERNAME": {

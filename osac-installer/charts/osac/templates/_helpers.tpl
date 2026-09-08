@@ -92,3 +92,43 @@ Uses .Values.cliImage for the container image.
     capabilities:
       drop: ["ALL"]
 {{- end }}
+
+{{/*
+Fail helm template when networking values are inconsistent. Schema validates
+individual fields; this enforces cross-field invariants that JSON Schema
+cannot express (duplicated Netris config, inverted port ranges).
+*/}}
+{{- define "osac.validateValues" -}}
+{{- $cf := .Values.aap.instanceGroups.clusterFulfillment | default dict -}}
+{{- $nf := .Values.aap.instanceGroups.networkFulfillment | default dict -}}
+{{- $cfCfg := $cf.config | default dict -}}
+{{- $nfCfg := $nf.config | default dict -}}
+{{- $cfSec := $cf.secret | default dict -}}
+{{- $nfSec := $nf.secret | default dict -}}
+{{- $netrisConfigFields := list
+  "NETRIS_CONTROLLER_URL"
+  "NETRIS_USERNAME"
+  "NETRIS_SITE_ID"
+  "NETRIS_TENANT_ID"
+  "NETRIS_TENANT_NAME"
+-}}
+{{- range $netrisConfigFields }}
+  {{- $cfVal := index $cfCfg . | default "" | toString -}}
+  {{- $nfVal := index $nfCfg . | default "" | toString -}}
+  {{- if ne $cfVal $nfVal }}
+    {{- fail (printf "aap.instanceGroups.clusterFulfillment.config.%s and networkFulfillment.config.%s must match (cluster=%q network=%q)" . . $cfVal $nfVal) }}
+  {{- end }}
+{{- end }}
+{{- $cfPwd := $cfSec.NETRIS_PASSWORD | default "" | toString -}}
+{{- $nfPwd := $nfSec.NETRIS_PASSWORD | default "" | toString -}}
+{{- if ne $cfPwd $nfPwd }}
+  {{- fail "aap.instanceGroups.clusterFulfillment.secret.NETRIS_PASSWORD and networkFulfillment.secret.NETRIS_PASSWORD must match" }}
+{{- end }}
+{{- if .Values.networkClass.enabled }}
+  {{- range .Values.networkClass.defaults.egressRules | default list }}
+    {{- if and .portFrom .portTo (gt (int .portFrom) (int .portTo)) }}
+      {{- fail (printf "networkClass.defaults.egressRules: portFrom (%v) must be <= portTo (%v)" .portFrom .portTo) }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+{{- end -}}

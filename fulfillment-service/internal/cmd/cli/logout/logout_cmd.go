@@ -15,7 +15,6 @@ package logout
 
 import (
 	"context"
-	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
@@ -29,6 +28,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
+	"github.com/osac-project/osac/fulfillment-service/internal/network"
 	"github.com/osac-project/osac/fulfillment-service/internal/oauth"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 )
@@ -216,10 +216,8 @@ func (c *runnerContext) refreshForIdToken(ctx context.Context, client *http.Clie
 const httpRequestTimeout = 30 * time.Second
 
 func (c *runnerContext) httpClient(caPool *x509.CertPool, insecure bool) *http.Client {
-	tlsConfig := &tls.Config{
-		RootCAs:    caPool,
-		MinVersion: tls.VersionTLS13,
-	}
+	tlsConfig := network.NewClientTLSConfig()
+	tlsConfig.RootCAs = caPool
 	if insecure {
 		tlsConfig.InsecureSkipVerify = true
 	}

@@ -16,7 +16,6 @@ package apiclient
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"errors"
@@ -26,6 +25,7 @@ import (
 	"net/http"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/network"
 )
 
 // APIError represents an HTTP API error with status code and response body.
@@ -110,10 +110,9 @@ func (b *ClientBuilder) Build() (result *Client, err error) {
 	httpClient := b.httpClient
 	if httpClient == nil {
 		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.TLSClientConfig = network.NewClientTLSConfig()
 		if b.caPool != nil {
-			transport.TLSClientConfig = &tls.Config{
-				RootCAs: b.caPool,
-			}
+			transport.TLSClientConfig.RootCAs = b.caPool
 		}
 		httpClient = &http.Client{
 			Transport: transport,

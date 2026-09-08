@@ -17,7 +17,6 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/tls"
 	"crypto/x509"
 	"embed"
 	"encoding/base64"
@@ -442,10 +441,8 @@ func (b *TokenSourceBuilder) resolveDefaults() (cfg resolvedConfig, err error) {
 	// canceled (e.g. a bare context.Background()).
 	cfg.httpClient = b.httpClient
 	if cfg.httpClient == nil {
-		tlsConfig := &tls.Config{
-			RootCAs:    cfg.caPool,
-			MinVersion: tls.VersionTLS13,
-		}
+		tlsConfig := network.NewClientTLSConfig()
+		tlsConfig.RootCAs = cfg.caPool
 		if b.insecure {
 			tlsConfig.InsecureSkipVerify = true
 		}

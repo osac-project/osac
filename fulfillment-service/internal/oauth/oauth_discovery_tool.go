@@ -15,7 +15,6 @@ package oauth
 
 import (
 	"context"
-	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"errors"
@@ -122,9 +121,8 @@ func (b *DiscoveryToolBuilder) Build() (result *DiscoveryTool, err error) {
 	httpClient := &http.Client{
 		Timeout: 30 * time.Second,
 	}
-	tlsConfig := &tls.Config{
-		RootCAs: caPool,
-	}
+	tlsConfig := network.NewClientTLSConfig()
+	tlsConfig.RootCAs = caPool
 	if b.insecure {
 		tlsConfig.InsecureSkipVerify = true
 	}

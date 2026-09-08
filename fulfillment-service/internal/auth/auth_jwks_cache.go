@@ -16,7 +16,6 @@ package auth
 import (
 	"context"
 	"crypto/rsa"
-	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
@@ -37,6 +36,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 
 	kubefiles "github.com/osac-project/osac/fulfillment-service/internal/kubernetes/files"
+	"github.com/osac-project/osac/fulfillment-service/internal/network"
 )
 
 // JwksCache is a cache that knows how to discover and load JSON web key sets.
@@ -288,13 +288,13 @@ func (b *JwksCacheBuilder) Build() (result JwksCache, err error) {
 	}
 
 	// Create the HTTP client used to download JSON web key sets:
+	tlsConfig := network.NewClientTLSConfig()
+	tlsConfig.RootCAs = b.caPool
 	httpClient := &http.Client{
 		Transport: &http.Transport{
 			ResponseHeaderTimeout: 10 * time.Second,
 			TLSHandshakeTimeout:   10 * time.Second,
-			TLSClientConfig: &tls.Config{
-				RootCAs: b.caPool,
-			},
+			TLSClientConfig:       tlsConfig,
 		},
 	}
 

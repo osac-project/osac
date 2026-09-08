@@ -1,0 +1,33 @@
+---
+# Tiny native wrapper -- workflow_run only fires for runs that happened in
+# the repo that OWNS the listener file, so this has to live here even
+# though all the real logic lives in osac-test-infra's own copy of this
+# file, invoked via workflow_call. That indirection matters for two
+# reasons, both already established by ai-diagnostic-e2e.yml's identical
+# pattern: every real PR here is fork-originated, and a pull_request-
+# triggered job's own GITHUB_TOKEN is read-only (posting the comment could
+# never work directly from e2e-suite-selection-poc.yml's own job) and
+# Vertex AI's WIF trust only covers main-branch runs, never a fork PR's own
+# job. A workflow_call'd job inherits ITS CALLER's own token/context (this
+# wrapper's, i.e. osac's, native workflow_run-triggered one) regardless of
+# what originally triggered the upstream run -- see
+# osac-test-infra/.github/workflows/e2e-suite-selection-ai.yml's own header
+# for the rest of the reasoning.
+name: E2E Suite Selection AI Judgment
+
+on:
+  workflow_run:
+    workflows:
+      - E2E Suite Selection POC
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  judge:
+    uses: osac-project/osac-test-infra/.github/workflows/e2e-suite-selection-ai.yml@main
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+      actions: read

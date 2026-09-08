@@ -1,0 +1,159 @@
+---
+# POC (Phase 1 of diff-aware E2E suite selection, OSAC-4741): reports which
+# of the three E2E full-install suites (VMaaS/CaaS/BMaaS) this PR appears to
+# need, and at which tier (sanity/regression), WITHOUT gating anything --
+# purely informational, posted as a PR comment. No required check, no
+# effect on merge. This validates the selection logic (in particular,
+# whether feeding graphify's own query output to Gemini actually produces a
+# useful signal, which is unconfirmed) before Phase 2 wires it up for real.
+#
+# This file only ever prepares context and uploads it as an artifact -- it
+# NEVER posts the PR comment itself. Every real PR here is fork-originated,
+# and GitHub Actions gives a pull_request-triggered job from a fork a
+# read-only token unconditionally, regardless of any `permissions:` block
+# requesting write (same constraint ai-diagnostic-e2e.yml's own header
+# comment documents for Vertex AI auth) -- so posting/editing a PR comment
+# from here would silently fail for every real PR. osac-test-infra's
+# e2e-suite-selection-ai.yml listener (workflow_run-triggered, default-
+# branch YAML, a real write token) downloads this artifact and owns all
+# comment posting, whether or not it ends up needing Gemini at all.
+#
+# Two layers, both prepared here, judged there:
+# 1. A deterministic dorny/paths-filter pass (this file) that resolves the
+#    common, unambiguous cases outright (e.g. a bare-metal-fulfillment-
+#    operator/** change obviously means BMaaS) without ever needing Gemini.
+# 2. For anything left ambiguous (shared osac-operator/fulfillment-service
+#    code not clearly VMaaS- or CaaS-named, or YAML/JSON config files
+#    graphify can't model well), the listener makes a Gemini judgment call.
+name: E2E Suite Selection POC
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      # Booleans: true if ANY changed file matches that named filter's rules.
+      vmaas-clear: ${{ steps.filter.outputs.vmaas-clear }}
+      caas-clear: ${{ steps.filter.outputs.caas-clear }}
+      bmaas-clear: ${{ steps.filter.outputs.bmaas-clear }}
+      ambiguous-shared: ${{ steps.filter.outputs.ambiguous-shared }}
+      config-yaml-json: ${{ steps.filter.outputs.config-yaml-json }}
+      # JSON arrays of the actual matching paths, for the ambiguous buckets
+      # only -- the listener needs the real filenames, not just a boolean,
+      # to know what it's looking at (and to feed to graphify/Gemini).
+      ambiguous-shared-files: ${{ steps.filter.outputs.ambiguous-shared_files }}
+      config-yaml-json-files: ${{ steps.filter.outputs.config-yaml-json_files }}
+    steps:
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d  # v4.0.3
+        id: filter
+        with:
+          predicate-quantifier: 'every'
+          list-files: json
+          # Each of the three "-clear" filters is ONE brace-alternation
+          # pattern, not a flat list of separate alternatives -- with
+          # predicate-quantifier: 'every', multiple list ENTRIES all apply
+          # to the same candidate file as an AND (that's what lets
+          # ambiguous-shared/config-yaml-json below combine one broad match
+          # with several negations, exactly like this repo's own existing
+          # `code` filter in e2e-*-full-install.yml). Four disjoint full
+          # patterns as separate list entries would require a single file to
+          # satisfy ALL FOUR at once, which no real file ever does -- verified
+          # this distinction directly against real repo paths before landing
+          # this file (a flat-list version matched nothing at all).
+          filters: |
+            vmaas-clear:
+              - '{osac-operator/**/*computeinstance*,fulfillment-service/**/*compute_instance*,tests/e2e/vmaas/**,tests/e2e/references/**}'
+            caas-clear:
+              - '{osac-operator/**/*clusterorder*,fulfillment-service/**/*cluster*,tests/e2e/caas/**}'
+            bmaas-clear:
+              - '{bare-metal-fulfillment-operator/**,tests/e2e/bmaas/**}'
+            # osac-operator (all CRD controllers) and fulfillment-service
+            # (the gRPC/REST API) each back BOTH VMaaS and CaaS -- a change
+            # under either that ISN'T clearly computeinstance/cluster-named
+            # (per the *-clear filters above) can't be attributed by path
+            # alone. Confirmed on disk: osac-operator consistently names
+            # files computeinstance_*.go/clusterorder_*.go, but
+            # fulfillment-service's CaaS-facing files use a looser "cluster"
+            # substring (no "cluster_order"), so this bucket exists
+            # specifically to catch what the -clear filters miss, not as a
+            # rare edge case.
+            ambiguous-shared:
+              - '{osac-operator,fulfillment-service}/**'
+              - '!osac-operator/**/*computeinstance*'
+              - '!fulfillment-service/**/*compute_instance*'
+              - '!osac-operator/**/*clusterorder*'
+              - '!fulfillment-service/**/*cluster*'
+              - '!**/*.md'
+              - '!**/docs/**'
+            # graphify's own knowledge graph is built from source via
+            # tree-sitter and has known gaps modeling plain YAML/JSON config
+            # (per AGENTS.md's graphify section) -- these need a different
+            # fallback (a curated path table, or Gemini judging the diff
+            # alone) rather than a graphify-augmented judgment. Deliberately
+            # excludes tests/e2e/**'s own fixtures and the vmaas/caas/bmaas
+            # CRD manifests already caught by the *-clear filters above --
+            # this bucket is for config files NOT already resolved.
+            config-yaml-json:
+              - '{**/*.yaml,**/*.yml,**/*.json}'
+              - '!tests/e2e/**'
+              - '!osac-operator/**/*computeinstance*'
+              - '!osac-operator/**/*clusterorder*'
+              - '!fulfillment-service/**/*compute_instance*'
+              - '!fulfillment-service/**/*cluster*'
+              - '!bare-metal-fulfillment-operator/**'
+
+  # Always runs (whether or not anything is ambiguous) -- the listener needs
+  # this context either way, to build the reported decision even in the
+  # all-deterministic case. See the file header for why this can't just
+  # post the comment itself.
+  prepare-context:
+    name: Prepare context for suite-selection listener
+    needs: changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Build context payload
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          VMAAS_CLEAR: ${{ needs.changes.outputs.vmaas-clear }}
+          CAAS_CLEAR: ${{ needs.changes.outputs.caas-clear }}
+          BMAAS_CLEAR: ${{ needs.changes.outputs.bmaas-clear }}
+          AMBIGUOUS_FILES: ${{ needs.changes.outputs.ambiguous-shared-files }}
+          CONFIG_FILES: ${{ needs.changes.outputs.config-yaml-json-files }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/suite-selection-context"
+          jq -n \
+            --arg pr_number "${PR_NUMBER}" \
+            --arg head_sha "${HEAD_SHA}" \
+            --argjson vmaas_clear "${VMAAS_CLEAR:-false}" \
+            --argjson caas_clear "${CAAS_CLEAR:-false}" \
+            --argjson bmaas_clear "${BMAAS_CLEAR:-false}" \
+            --argjson ambiguous_files "${AMBIGUOUS_FILES:-[]}" \
+            --argjson config_files "${CONFIG_FILES:-[]}" \
+            '{
+              pr_number: ($pr_number | tonumber),
+              head_sha: $head_sha,
+              deterministic: {vmaas: $vmaas_clear, caas: $caas_clear, bmaas: $bmaas_clear},
+              ambiguous_files: $ambiguous_files,
+              config_files: $config_files
+            }' > "${RUNNER_TEMP}/suite-selection-context/context.json"
+          cat "${RUNNER_TEMP}/suite-selection-context/context.json"
+
+      - name: Upload context artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: suite-selection-context
+          path: ${{ runner.temp }}/suite-selection-context/context.json
+          retention-days: 1

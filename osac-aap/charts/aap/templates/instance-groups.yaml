@@ -6,6 +6,45 @@
 {{- if $ingressDomain }}
 {{- $baseDomain = printf "hosted.%s" ($ingressDomain | trimPrefix "apps.") }}
 {{- end }}
+{{- $globalFm := dict -}}
+{{- $globalKm := dict -}}
+{{- if .Values.global }}
+{{- $globalFm = .Values.global.fabricManager | default dict -}}
+{{- $globalKm = .Values.global.k8sManager | default dict -}}
+{{- end }}
+{{- $netris := $globalFm.netris | default dict -}}
+{{- $agentless := $globalKm.agentlessNet | default dict -}}
+{{- $netExpert := false -}}
+{{- if and .Values.global .Values.global.expertOverrides }}
+{{- $netExpert = .Values.global.expertOverrides.aap | default false -}}
+{{- end }}
+{{- $explicitCfg := .Values.instanceGroups.clusterFulfillment.config | default dict -}}
+{{- $explicitSec := .Values.instanceGroups.clusterFulfillment.secret | default dict -}}
+{{- $cfg := $explicitCfg -}}
+{{- $sec := $explicitSec -}}
+{{- if not $netExpert -}}
+{{- if $netris.enabled -}}
+{{- $creds := $netris.credentials | default dict -}}
+{{- $derived := dict
+  "NETWORK_CLASS" "netris"
+  "NETWORK_STEPS_COLLECTION" "netris.steps"
+  "NETRIS_CONTROLLER_URL" ($netris.controllerUrl | default "")
+  "NETRIS_USERNAME" ($creds.username | default "")
+  "NETRIS_SITE_ID" ($netris.siteId | default "" | toString)
+  "NETRIS_TENANT_ID" ($netris.tenantId | default "" | toString)
+  "NETRIS_TENANT_NAME" ($netris.tenantName | default "")
+  "NETRIS_MGMT_VPC_ID" ($netris.mgmtVpcId | default "" | toString)
+  "NETRIS_MGMT_VPC_NAME" ($netris.mgmtVpcName | default "")
+  "NETRIS_RESOURCE_CLASS_MAP" ($netris.resourceClassMap | default "")
+-}}
+{{- $cfg = merge $derived $explicitCfg -}}
+{{- if $creds.password }}
+{{- $sec = merge (dict "NETRIS_PASSWORD" $creds.password) $explicitSec -}}
+{{- end }}
+{{- else if $agentless.enabled -}}
+{{- $cfg = merge (dict "NETWORK_CLASS" "agentless_net" "NETWORK_STEPS_COLLECTION" "agentless_net.steps") $explicitCfg -}}
+{{- end }}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -15,12 +54,12 @@ metadata:
     {{- include "osac-aap.labels" . | nindent 4 }}
     osac.openshift.io/project: osac-aap
 data:
-  {{- range $key, $val := .Values.instanceGroups.clusterFulfillment.config }}
+  {{- range $key, $val := $cfg }}
   {{- if and $val (ne $key "HOSTED_CLUSTER_BASE_DOMAIN") }}
   {{ $key }}: {{ $val | quote }}
   {{- end }}
   {{- end }}
-  HOSTED_CLUSTER_BASE_DOMAIN: {{ .Values.instanceGroups.clusterFulfillment.config.HOSTED_CLUSTER_BASE_DOMAIN | default $baseDomain | quote }}
+  HOSTED_CLUSTER_BASE_DOMAIN: {{ index $cfg "HOSTED_CLUSTER_BASE_DOMAIN" | default $baseDomain | quote }}
 ---
 apiVersion: v1
 kind: Secret
@@ -32,7 +71,7 @@ metadata:
     osac.openshift.io/project: osac-aap
 type: Opaque
 data:
-  {{- range $key, $val := .Values.instanceGroups.clusterFulfillment.secret }}
+  {{- range $key, $val := $sec }}
   {{- if $val }}
   {{ $key }}: {{ $val | b64enc | quote }}
   {{- end }}
@@ -61,6 +100,35 @@ data: {}
 {{- end }}
 ---
 {{- if .Values.instanceGroups.networkFulfillment.enabled }}
+{{- $globalFm := dict -}}
+{{- if .Values.global }}
+{{- $globalFm = .Values.global.fabricManager | default dict -}}
+{{- end }}
+{{- $netris := $globalFm.netris | default dict -}}
+{{- $netExpert := false -}}
+{{- if and .Values.global .Values.global.expertOverrides }}
+{{- $netExpert = .Values.global.expertOverrides.aap | default false -}}
+{{- end }}
+{{- $explicitCfg := .Values.instanceGroups.networkFulfillment.config | default dict -}}
+{{- $explicitSec := .Values.instanceGroups.networkFulfillment.secret | default dict -}}
+{{- $cfg := $explicitCfg -}}
+{{- $sec := $explicitSec -}}
+{{- if not $netExpert -}}
+{{- if $netris.enabled -}}
+{{- $creds := $netris.credentials | default dict -}}
+{{- $derived := dict
+  "NETRIS_CONTROLLER_URL" ($netris.controllerUrl | default "")
+  "NETRIS_USERNAME" ($creds.username | default "")
+  "NETRIS_SITE_ID" ($netris.siteId | default "" | toString)
+  "NETRIS_TENANT_ID" ($netris.tenantId | default "" | toString)
+  "NETRIS_TENANT_NAME" ($netris.tenantName | default "")
+-}}
+{{- $cfg = merge $derived $explicitCfg -}}
+{{- if $creds.password }}
+{{- $sec = merge (dict "NETRIS_PASSWORD" $creds.password) $explicitSec -}}
+{{- end }}
+{{- end }}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -70,7 +138,7 @@ metadata:
     {{- include "osac-aap.labels" . | nindent 4 }}
     osac.openshift.io/project: osac-aap
 data:
-  {{- range $key, $val := .Values.instanceGroups.networkFulfillment.config }}
+  {{- range $key, $val := $cfg }}
   {{- if $val }}
   {{ $key }}: {{ $val | quote }}
   {{- end }}
@@ -86,7 +154,7 @@ metadata:
     osac.openshift.io/project: osac-aap
 type: Opaque
 data:
-  {{- range $key, $val := .Values.instanceGroups.networkFulfillment.secret }}
+  {{- range $key, $val := $sec }}
   {{- if $val }}
   {{ $key }}: {{ $val | b64enc | quote }}
   {{- end }}

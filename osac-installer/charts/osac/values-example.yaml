@@ -379,7 +379,25 @@ publishTemplates:
   fulfillmentServiceUri: "https://fulfillment-internal-api:8001"
 
 # ---------------------
-# Cluster Fulfillment Instance Group
+# Networking (user-facing facade)
+# ---------------------
+# Preferred API: global.fabricManager / global.k8sManager (see network-backend.md).
+# Low-level blocks below are expert overrides when global.expertOverrides.aap is true.
+#
+# global:
+#   fabricManager:
+#     netris:
+#       enabled: true
+#       controllerUrl: "https://redhat-ctl.netris.io"
+#       credentials:
+#         username: "netris"
+#         password: "my-netris-password"
+#       siteId: "5"
+#       tenantId: "1"
+#       tenantName: "Admin"
+
+# ---------------------
+# Cluster Fulfillment Instance Group (advanced / expert override)
 # ---------------------
 # ConfigMap and Secret for the AAP cluster-fulfillment instance group.
 # Carries network backend selection, Netris credentials, SSH config,

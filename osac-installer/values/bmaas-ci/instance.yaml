@@ -11,6 +11,9 @@ global:
       enabled: true
     maas:
       enabled: false
+  fabricManager:
+    netris:
+      enabled: true
 
 # --- Operator ---
 operator:
@@ -38,12 +41,6 @@ operator:
   tenants:
   - name: shared
   - name: osac-e2e-ci
-  networkManagers:
-    fabricManagers:
-      netris:
-        enabled: true
-        description: "Netris SDN fabric manager"
-        capabilities: "ipv4"
 
 # --- Fulfillment Service ---
 service:

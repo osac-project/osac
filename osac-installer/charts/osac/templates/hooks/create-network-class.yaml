@@ -1,4 +1,24 @@
 {{- if .Values.networkClass.enabled }}
+{{- $fm := .Values.global.fabricManager | default dict -}}
+{{- $km := .Values.global.k8sManager | default dict -}}
+{{- $expert := .Values.global.expertOverrides | default dict -}}
+{{- $netris := $fm.netris | default dict -}}
+{{- $agentless := $km.agentlessNet | default dict -}}
+{{- $fabricManager := .Values.networkClass.fabricManager | default "" -}}
+{{- $k8sManager := .Values.networkClass.k8sManager | default "" -}}
+{{- $title := .Values.networkClass.title -}}
+{{- $netExpertNetworkClass := $expert.networkClass | default false -}}
+{{- if not $netExpertNetworkClass -}}
+{{- if $netris.enabled -}}
+{{- $fabricManager = "netris" -}}
+{{- $k8sManager = "" -}}
+{{- if not $title }}{{- $title = "Netris Network Implementation" -}}{{- end }}
+{{- else if $agentless.enabled -}}
+{{- $fabricManager = "" -}}
+{{- $k8sManager = "k8s_only" -}}
+{{- if not $title }}{{- $title = "Agentless Network Implementation" -}}{{- end }}
+{{- end }}
+{{- end }}
 {{- $egressRules := list -}}
 {{- range .Values.networkClass.defaults.egressRules }}
 {{- $rule := dict "protocol" .protocol -}}
@@ -8,9 +28,9 @@
 {{- if .portTo }}{{ $_ := set $rule "port_to" .portTo }}{{ end -}}
 {{- $egressRules = append $egressRules $rule -}}
 {{- end }}
-{{- $identity := .Values.networkClass.fabricManager | default .Values.networkClass.k8sManager -}}
+{{- $identity := $fabricManager | default $k8sManager -}}
 {{- $body := dict
-      "title" (required "networkClass.title is required when networkClass.enabled is true" .Values.networkClass.title)
+      "title" (required "networkClass.title is required when networkClass.enabled is true" $title)
       "is_default" .Values.networkClass.isDefault
       "spec" (dict "defaults" (dict
         "virtual_network_ipv4_cidr" .Values.networkClass.defaults.virtualNetworkIPv4CIDR
@@ -20,8 +40,8 @@
       ))
     -}}
 {{- if .Values.networkClass.description }}{{ $_ := set $body "description" .Values.networkClass.description }}{{ end -}}
-{{- if .Values.networkClass.k8sManager }}{{ $_ := set $body "k8s_manager" .Values.networkClass.k8sManager }}{{ end -}}
-{{- if .Values.networkClass.fabricManager }}{{ $_ := set $body "fabric_manager" .Values.networkClass.fabricManager }}{{ end -}}
+{{- if $k8sManager }}{{ $_ := set $body "k8s_manager" $k8sManager }}{{ end -}}
+{{- if $fabricManager }}{{ $_ := set $body "fabric_manager" $fabricManager }}{{ end -}}
 apiVersion: batch/v1
 kind: Job
 metadata:

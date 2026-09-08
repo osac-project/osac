@@ -6,6 +6,18 @@ dict passed in). Two distinct keys can normalize to the same name (e.g.
 manager's ConfigMap with another's on apply. Kubernetes itself already rejects
 otherwise-invalid names at apply time, so that is not re-validated here.
 */}}
+{{/*
+Format network manager capabilities for the ConfigMap data field.
+Accepts either a string (legacy) or an array of capability tokens.
+*/}}
+{{- define "osac-operator.networkManagerCapabilities" -}}
+{{- if kindIs "slice" . -}}
+{{- join "," . -}}
+{{- else -}}
+{{- . -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "osac-operator.networkManagerConfigMapName" -}}
 {{- $name := printf "%s-%s" .prefix (.key | replace "_" "-") -}}
 {{- if hasKey .seen $name -}}
@@ -17,8 +29,24 @@ otherwise-invalid names at apply time, so that is not re-validated here.
 
 {{- if .Values.networkManagers.enabled }}
 {{- $seenConfigMapNames := dict }}
+{{- $globalFm := dict -}}
+{{- $globalKm := dict -}}
+{{- if .Values.global }}
+{{- $globalFm = .Values.global.fabricManager | default dict -}}
+{{- $globalKm = .Values.global.k8sManager | default dict -}}
+{{- end }}
+{{- $netris := $globalFm.netris | default dict -}}
+{{- $agentless := $globalKm.agentlessNet | default dict -}}
+{{- $netExpert := false -}}
+{{- if and .Values.global .Values.global.expertOverrides }}
+{{- $netExpert = .Values.global.expertOverrides.networkManagers | default false -}}
+{{- end }}
 {{- range $name, $mgr := .Values.networkManagers.fabricManagers }}
-{{- if $mgr.enabled }}
+{{- $mgrEnabled := $mgr.enabled -}}
+{{- if and (not $netExpert) $netris.enabled (eq $name "netris") }}
+{{- $mgrEnabled = true -}}
+{{- end }}
+{{- if $mgrEnabled }}
 {{- $cmName := include "osac-operator.networkManagerConfigMapName" (dict "prefix" "osac-network-fabric-manager" "key" $name "seen" $seenConfigMapNames) }}
 ---
 apiVersion: v1
@@ -34,11 +62,15 @@ data:
   {{- if $mgr.description }}
   description: {{ $mgr.description | quote }}
   {{- end }}
-  capabilities: {{ $mgr.capabilities | quote }}
+  capabilities: {{ include "osac-operator.networkManagerCapabilities" $mgr.capabilities | quote }}
 {{- end }}
 {{- end }}
 {{- range $name, $mgr := .Values.networkManagers.k8sManagers }}
-{{- if $mgr.enabled }}
+{{- $mgrEnabled := $mgr.enabled -}}
+{{- if and (not $netExpert) $agentless.enabled (eq $name "k8s_only") }}
+{{- $mgrEnabled = true -}}
+{{- end }}
+{{- if $mgrEnabled }}
 {{- $cmName := include "osac-operator.networkManagerConfigMapName" (dict "prefix" "osac-network-k8s-manager" "key" $name "seen" $seenConfigMapNames) }}
 ---
 apiVersion: v1
@@ -54,7 +86,7 @@ data:
   {{- if $mgr.description }}
   description: {{ $mgr.description | quote }}
   {{- end }}
-  capabilities: {{ $mgr.capabilities | quote }}
+  capabilities: {{ include "osac-operator.networkManagerCapabilities" $mgr.capabilities | quote }}
 {{- end }}
 {{- end }}
 {{- end }}

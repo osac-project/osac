@@ -302,9 +302,18 @@
             },
             "capabilitiesSyncInterval": {
               "type": "string",
-              "description": "How often the operator recomputes NetworkClass capabilities from manager ConfigMaps, in addition to reacting immediately to ConfigMap changes (Go duration, e.g. 30s, 5m, 1h)",
+              "description": "How often the operator recomputes NetworkClass capabilities from manager ConfigMaps, in addition to reacting immediately to ConfigMap changes. Common values: 30s, 1m, 5m, 15m, 30m, 1h (any valid Go duration is accepted).",
               "default": "5m",
-              "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$"
+              "enum": [
+                "30s",
+                "1m",
+                "5m",
+                "10m",
+                "15m",
+                "30m",
+                "1h",
+                "2h"
+              ]
             },
             "fabricManagers": {
               "type": "object",
@@ -321,9 +330,18 @@
                     "description": "Human-readable description stored on the ConfigMap"
                   },
                   "capabilities": {
-                    "type": "string",
-                    "description": "Comma-separated capability tokens advertised for this manager (ipv4, ipv6, dualStack, dpuSupport)",
-                    "pattern": "^(ipv4|ipv6|dualStack|dpuSupport)(,(ipv4|ipv6|dualStack|dpuSupport))*$"
+                    "type": "array",
+                    "description": "Capability tokens advertised for this manager",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "ipv4",
+                        "ipv6",
+                        "dualStack",
+                        "dpuSupport"
+                      ]
+                    },
+                    "uniqueItems": true
                   }
                 }
               }
@@ -343,9 +361,18 @@
                     "description": "Human-readable description stored on the ConfigMap"
                   },
                   "capabilities": {
-                    "type": "string",
-                    "description": "Comma-separated capability tokens advertised for this manager (ipv4, ipv6, dualStack, dpuSupport)",
-                    "pattern": "^(ipv4|ipv6|dualStack|dpuSupport)(,(ipv4|ipv6|dualStack|dpuSupport))*$"
+                    "type": "array",
+                    "description": "Capability tokens advertised for this manager",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "ipv4",
+                        "ipv6",
+                        "dualStack",
+                        "dpuSupport"
+                      ]
+                    },
+                    "uniqueItems": true
                   }
                 }
               }
@@ -1824,6 +1851,243 @@
               "fabricManager": {
                 "type": "string",
                 "maxLength": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    "global": {
+      "type": "object",
+      "description": "Values passed to all subcharts. Use global.fabricManager and global.k8sManager as the primary networking configuration API.",
+      "properties": {
+        "fabricManager": {
+          "$ref": "#/$defs/globalFabricManager"
+        },
+        "k8sManager": {
+          "$ref": "#/$defs/globalK8sManager"
+        },
+        "expertOverrides": {
+          "$ref": "#/$defs/globalExpertOverrides"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "fabricManager": {
+                "properties": {
+                  "netris": {
+                    "properties": {
+                      "enabled": {
+                        "const": true
+                      }
+                    },
+                    "required": [
+                      "enabled"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "k8sManager": {
+                "properties": {
+                  "agentlessNet": {
+                    "properties": {
+                      "enabled": {
+                        "const": false
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "k8sManager": {
+                "properties": {
+                  "agentlessNet": {
+                    "properties": {
+                      "enabled": {
+                        "const": true
+                      }
+                    },
+                    "required": [
+                      "enabled"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "fabricManager": {
+                "properties": {
+                  "netris": {
+                    "properties": {
+                      "enabled": {
+                        "const": false
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "globalFabricManager": {
+      "type": "object",
+      "description": "Fabric manager facade — enables operator ConfigMaps, AAP env vars, and default NetworkClass for each fabric backend",
+      "properties": {
+        "netris": {
+          "$ref": "#/$defs/netrisFabricManager"
+        }
+      }
+    },
+    "globalK8sManager": {
+      "type": "object",
+      "description": "K8s manager facade for agentless_net backend profile",
+      "properties": {
+        "agentlessNet": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable agentless_net AAP backend and k8s_only manager / NetworkClass profile",
+              "default": false
+            }
+          }
+        }
+      }
+    },
+    "globalExpertOverrides": {
+      "type": "object",
+      "description": "When true, the corresponding low-level values block is authoritative and the facade does not auto-fill that surface",
+      "properties": {
+        "aap": {
+          "type": "boolean",
+          "default": false
+        },
+        "networkClass": {
+          "type": "boolean",
+          "default": false
+        },
+        "networkManagers": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "netrisFabricManager": {
+      "type": "object",
+      "description": "Netris fabric — credentials, controller URL, and tenant metadata",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable Netris across operator managers, AAP env vars, and NetworkClass",
+          "default": false
+        },
+        "controllerUrl": {
+          "type": "string",
+          "description": "Netris controller API URL (HTTPS only)",
+          "pattern": "^$|^https://[^/\\\\s:]+[^\\\\s]*$"
+        },
+        "credentials": {
+          "type": "object",
+          "properties": {
+            "username": {
+              "type": "string",
+              "description": "Netris API username"
+            },
+            "password": {
+              "type": "string",
+              "description": "Netris API password (rendered to both AAP instance group secrets)"
+            }
+          }
+        },
+        "siteId": {
+          "type": "string",
+          "description": "Netris site ID"
+        },
+        "tenantId": {
+          "type": "string",
+          "description": "Netris tenant ID"
+        },
+        "tenantName": {
+          "type": "string",
+          "description": "Netris tenant name"
+        },
+        "mgmtVpcId": {
+          "type": "string",
+          "description": "Netris management VPC ID"
+        },
+        "mgmtVpcName": {
+          "type": "string",
+          "description": "Netris management VPC name"
+        },
+        "resourceClassMap": {
+          "type": "string",
+          "description": "JSON map of resource classes to Netris server cluster templates"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "enabled": {
+                "const": true
+              }
+            },
+            "required": [
+              "enabled"
+            ]
+          },
+          "then": {
+            "required": [
+              "controllerUrl",
+              "credentials",
+              "siteId",
+              "tenantId",
+              "tenantName"
+            ],
+            "properties": {
+              "controllerUrl": {
+                "minLength": 1,
+                "pattern": "^https://[^/\\\\s:]+[^\\\\s]*$"
+              },
+              "credentials": {
+                "required": [
+                  "username",
+                  "password"
+                ],
+                "properties": {
+                  "username": {
+                    "minLength": 1
+                  },
+                  "password": {
+                    "minLength": 1
+                  }
+                }
+              },
+              "siteId": {
+                "minLength": 1
+              },
+              "tenantId": {
+                "minLength": 1
+              },
+              "tenantName": {
+                "minLength": 1
               }
             }
           }

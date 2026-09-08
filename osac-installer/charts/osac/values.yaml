@@ -30,6 +30,29 @@ global:
 
 cliImage: quay.io/openshift/origin-cli:4.20.0
 
+# User-facing networking facade (passed to all subcharts via global.*).
+global:
+  fabricManager:
+    netris:
+      enabled: false
+      controllerUrl: ""
+      credentials:
+        username: ""
+        password: ""
+      siteId: ""
+      tenantId: ""
+      tenantName: ""
+      mgmtVpcId: ""
+      mgmtVpcName: ""
+      resourceClassMap: ""
+  k8sManager:
+    agentlessNet:
+      enabled: false
+  expertOverrides:
+    aap: false
+    networkClass: false
+    networkManagers: false
+
 # Shared PostgreSQL host for the db-init hook.
 dbInit:
   host: "postgres.osac-infra.svc.cluster.local"

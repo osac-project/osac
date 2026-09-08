@@ -6,6 +6,59 @@ the `NETWORK_CLASS` environment variable.
 
 For general AAP configuration see [AAP Configuration](aap-configuration.md).
 
+## User-Facing Networking Facade (preferred)
+
+Configure networking under `global.fabricManager` and `global.k8sManager` in your
+environment values file. Helm derives operator manager ConfigMaps, AAP instance
+group env vars, and the default NetworkClass from these settings.
+
+When `global.fabricManager.netris.enabled` is true, Helm automatically:
+
+- Enables `operator.networkManagers.fabricManagers.netris`
+- Sets `NETWORK_CLASS`, `NETWORK_STEPS_COLLECTION`, and `NETRIS_*` on both AAP
+  instance groups (no manual duplication)
+- Points the default `networkClass` hook at `fabricManager: netris`
+
+### Netris example
+
+```yaml
+global:
+  fabricManager:
+    netris:
+      enabled: true
+      controllerUrl: "https://redhat-ctl.netris.io"
+      credentials:
+        username: "netris"
+        password: "my-netris-password"
+      siteId: "5"
+      tenantId: "1"
+      tenantName: "Admin"
+```
+
+When Netris is enabled, the schema requires `controllerUrl` (HTTPS), credentials,
+`siteId`, `tenantId`, and `tenantName`.
+
+### Agentless example
+
+```yaml
+global:
+  k8sManager:
+    agentlessNet:
+      enabled: true
+```
+
+### Expert overrides
+
+Set `global.expertOverrides.aap`, `global.expertOverrides.networkClass`, or
+`global.expertOverrides.networkManagers` to keep the corresponding low-level
+values authoritative instead of the facade:
+
+| Override | Low-level block |
+|----------|-----------------|
+| `expertOverrides.aap` | `aap.instanceGroups.clusterFulfillment` / `networkFulfillment` |
+| `expertOverrides.networkClass` | `networkClass` |
+| `expertOverrides.networkManagers` | `operator.networkManagers` |
+
 ## Supported Backends
 
 | `NETWORK_CLASS` | `NETWORK_STEPS_COLLECTION` | Description |
@@ -14,9 +67,10 @@ For general AAP configuration see [AAP Configuration](aap-configuration.md).
 | `netris` | `netris.steps` | Netris controller API |
 | `agentless_net` | `agentless_net.steps` | Agentless network backend (no physical fabric) |
 
-## Netris Configuration
+## Netris Configuration (advanced / manual)
 
-When using `NETWORK_CLASS=netris`, the following additional variables must be set.
+When not using the facade, set variables on `aap.instanceGroups` directly. The
+facade is preferred — see above.
 
 ### ConfigMap Variables
 

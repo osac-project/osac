@@ -122,14 +122,24 @@ jobs:
               blocked=true
             fi
           fi
+          eligible=true
+          for label in lgtm approved jira/valid-reference; do
+            if ! echo "$LABELS" | jq -e "index(\"$label\")" > /dev/null; then
+              echo "Missing required merge label: $label"
+              eligible=false
+            fi
+          done
           echo "blocked=$blocked"
           echo "blocked=$blocked" >> "$GITHUB_OUTPUT"
+          echo "eligible=$eligible"
+          echo "eligible=$eligible" >> "$GITHUB_OUTPUT"
 
       - name: Enable auto-merge
         if: >-
           github.event.pull_request.draft == false
           && steps.org-check.outputs.org_member == 'true'
           && steps.label-check.outputs.blocked == 'false'
+          && steps.label-check.outputs.eligible == 'true'
         env:
           GH_TOKEN: ${{ secrets.MERGE_QUEUE_TOKEN }}
           PR: ${{ github.event.pull_request.number }}

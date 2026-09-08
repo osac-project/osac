@@ -274,7 +274,8 @@ jobs:
       enable-ai-diagnostic: ${{ github.ref == 'refs/heads/main' }}
 
   # Skip this required check on unreadiness so it stays pending (not red).
-  # Docs-only / non-PR / unlocked still report here.
+  # workflow_dispatch may green this gate on a PR SHA. Merge requires all
+  # three suite gates on HEAD; unlock accepts them when already success.
   e2e-caas-gate:
     if: >-
       always()

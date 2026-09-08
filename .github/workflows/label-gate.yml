@@ -13,10 +13,27 @@ on:
 jobs:
   check-labels:
     runs-on: ubuntu-latest
+    permissions:
+      checks: write
+      contents: read
+      pull-requests: read
     steps:
       - name: Auto-pass for merge queue
         if: github.event_name == 'merge_group'
         run: echo "Labels already validated on PR"
+      - name: Prepare e2e merge gates on unlock
+        if: >-
+          github.event_name == 'pull_request'
+          && github.event.action == 'labeled'
+          && contains(fromJSON('["lgtm","e2e-ready"]'), github.event.label.name)
+        uses: osac-project/osac-test-infra/.github/actions/invalidate-e2e-gates@main
+        with:
+          head-sha: ${{ github.event.pull_request.head.sha }}
+          reason: >-
+            ${{ format('{0} unlock - waiting for fresh full-install run',
+            github.event.label.name) }}
+          skip-if-all-green: "true"
+        continue-on-error: true
       - name: Check required Prow labels
         if: github.event_name == 'pull_request'
         env:

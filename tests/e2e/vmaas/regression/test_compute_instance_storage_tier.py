@@ -264,7 +264,12 @@ def test_compute_instance_boot_disk_tier_required(
         )
 
     assert_grpc_rejected(exc_info, "InvalidArgument")
-    assert "storage_tier is required" in str(exc_info.value.stderr).lower()
+    # Param-aware: None → "storage_tier is required" (validateDisk);
+    # {"name": ""} → "storagetier reference must specify id or name" (reference interceptor).
+    if storage_tier is None:
+        assert "storage_tier is required" in str(exc_info.value.stderr).lower()
+    else:
+        assert "storagetier reference must specify id or name" in str(exc_info.value.stderr).lower()
 
 
 @pytest.mark.parametrize("storage_tier", [None, {"name": ""}])
@@ -302,7 +307,12 @@ def test_compute_instance_additional_disk_tier_required(
         )
 
     assert_grpc_rejected(exc_info, "InvalidArgument")
-    assert "additional_disks[0].storage_tier is required" in str(exc_info.value.stderr).lower()
+    # Param-aware: None → "additional_disks[0].storage_tier is required" (validateDisk);
+    # {"name": ""} → "storagetier reference must specify id or name" (reference interceptor).
+    if storage_tier is None:
+        assert "additional_disks[0].storage_tier is required" in str(exc_info.value.stderr).lower()
+    else:
+        assert "storagetier reference must specify id or name" in str(exc_info.value.stderr).lower()
 
 
 def test_compute_instance_boot_disk_tier_from_catalog_item_default(
@@ -322,7 +332,7 @@ def test_compute_instance_boot_disk_tier_from_catalog_item_default(
             "path": "boot_disk.storage_tier",
             "display_name": "Boot Disk Storage Tier",
             "editable": True,
-            "default": default_storage_tier,
+            "default": {"name": default_storage_tier},
         },
         {"path": "boot_disk.size_gib", "display_name": "Boot Disk Size", "editable": True},
         {"path": "network_attachments", "display_name": "Network Attachments", "editable": True},
@@ -499,7 +509,7 @@ def test_compute_instance_explicit_additional_disks_without_catalog_item_default
             "path": "boot_disk.storage_tier",
             "display_name": "Boot Disk Storage Tier",
             "editable": True,
-            "default": default_storage_tier,
+            "default": {"name": default_storage_tier},
         },
         {"path": "boot_disk.size_gib", "display_name": "Boot Disk Size", "editable": True},
         {"path": "additional_disks", "display_name": "Additional Disks", "editable": True},
@@ -636,6 +646,77 @@ def test_compute_instance_additional_disks_from_catalog_item_default(
             #     ci_name=ci_name,
             #     cr=cr,
             # )
+        finally:
+            grpc.delete_compute_instance(ci_id=uuid)
+            wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
+    finally:
+        private_grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
+
+
+def test_compute_instance_additional_disks_from_catalog_item_array_default_legacy_string(
+    private_grpc: GRPCClient,
+    grpc: GRPCClient,
+    k8s_hub_client: K8sClient,
+    k8s_virt_client: K8sClient,
+    vm_template: str,
+    default_subnet: str,
+    default_storage_tier: str,
+    additional_storage_tiers: dict[str, dict[str, str]],
+    default_instance_type: str,
+    default_disk_image: str,
+) -> None:
+    """Verify bare-string storage_tier in additional_disks array defaults are normalized."""
+    fast_tier = additional_storage_tiers["fast"]["name"]
+
+    # Legacy bare-string default inside the array
+    field_defs = [
+        {
+            "path": "additional_disks",
+            "display_name": "Additional Disks",
+            "editable": True,
+            "default": [{"size_gib": 10, "storage_tier": fast_tier}],  # Bare string (legacy)
+        },
+        {"path": "boot_disk.size_gib", "display_name": "Boot Disk Size", "editable": True},
+        {"path": "boot_disk.storage_tier", "display_name": "Boot Disk Storage Tier", "editable": True},
+        {"path": "network_attachments", "display_name": "Network Attachments", "editable": True},
+        {"path": "disk_image", "display_name": "Disk Image", "editable": True},
+        {"path": "instance_type", "display_name": "Instance Type", "editable": True},
+        {"path": "run_strategy", "display_name": "Run Strategy", "editable": True},
+    ]
+    catalog_item_id = private_grpc.create_compute_instance_catalog_item(
+        name=unique_name("e2e-cat-legacy-str"), template=vm_template, published=True, field_definitions=field_defs
+    )
+
+    try:
+        # Create CI without additional_disks to exercise the array default normalization
+        ci_obj = grpc.call(
+            service="osac.public.v1.ComputeInstances/Create",
+            data={
+                "object": {
+                    "metadata": {"name": unique_name("e2e-ci-legacy-def")},
+                    "spec": {
+                        "catalog_item": {"id": catalog_item_id},
+                        "instance_type": {"name": default_instance_type},
+                        "boot_disk": {"size_gib": 20, "storage_tier": {"name": default_storage_tier}},
+                        # No additional_disks specified
+                        "network_attachments": [{"subnet": {"id": default_subnet}}],
+                        "disk_image": {"name": default_disk_image},
+                        "run_strategy": "Always",
+                    },
+                }
+            },
+        )
+        uuid = ci_obj["object"]["id"]
+
+        ci_name = None
+        try:
+            ci_name = wait_for_cr(k8s=k8s_hub_client, uuid=uuid)
+            wait_for_provision(k8s=k8s_hub_client, name=ci_name)
+
+            cr = k8s_hub_client.get_json(resource="computeinstance", name=ci_name)
+            assert len(cr["spec"]["additionalDisks"]) == 1
+            assert cr["spec"]["additionalDisks"][0]["sizeGiB"] == 10
+            assert cr["spec"]["additionalDisks"][0]["storageTier"] == fast_tier
         finally:
             grpc.delete_compute_instance(ci_id=uuid)
             wait_for_deletion(k8s=k8s_hub_client, name=ci_name)

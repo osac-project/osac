@@ -191,6 +191,29 @@ func validateCatalogItemAccess(item catalogItem, ref string) error {
 	return nil
 }
 
+// normalizeDiskField wraps bare-string disk field values (disk_image, storage_tier)
+// as typed reference objects for backward compatibility with legacy catalog item defaults.
+func normalizeDiskField(v any, fieldName string) any {
+	switch val := v.(type) {
+	case string:
+		return map[string]any{"name": val}
+	case map[string]any:
+		if fieldVal, ok := val[fieldName]; ok {
+			if s, ok := fieldVal.(string); ok {
+				val[fieldName] = map[string]any{"name": s}
+			}
+		}
+		return val
+	case []any:
+		for i, elem := range val {
+			val[i] = normalizeDiskField(elem, fieldName)
+		}
+		return val
+	default:
+		return v
+	}
+}
+
 func applyDefault(specMap map[string]any, path string, defaultVal *structpb.Value) error {
 	if defaultVal == nil {
 		return nil
@@ -208,15 +231,13 @@ func applyDefault(specMap map[string]any, path string, defaultVal *structpb.Valu
 	if strings.HasPrefix(path, "template_parameters.") {
 		parsed = wrapValueAsAny(parsed)
 	}
-	// The disk_image default is normally already a DiskImageReference object
-	// ({"id": ..., "name": ...}), normalized on catalog-item create/update (see
-	// validateFieldDefinitionsDiskImage), so its id resolves the ComputeInstance reference
-	// unambiguously. This wrap is a defensive fallback: a bare-string default is converted to the
-	// {"name": ...} object the proto DiskImageReference field expects.
-	if path == "disk_image" {
-		if s, ok := parsed.(string); ok {
-			parsed = map[string]any{"name": s}
-		}
+	// Backward compatibility: normalize bare-string disk_image and storage_tier defaults.
+	if path == "disk_image" || path == "boot_disk" || strings.HasPrefix(path, "additional_disks") {
+		parsed = normalizeDiskField(parsed, "disk_image")
+	}
+	if path == "boot_disk" || path == "boot_disk.storage_tier" ||
+		strings.HasPrefix(path, "additional_disks") {
+		parsed = normalizeDiskField(parsed, "storage_tier")
 	}
 	maputil.SetNestedValue(specMap, path, parsed)
 	return nil

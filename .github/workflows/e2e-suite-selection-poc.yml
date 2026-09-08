@@ -86,8 +86,23 @@ jobs:
             # substring (no "cluster_order"), so this bucket exists
             # specifically to catch what the -clear filters miss, not as a
             # rare edge case.
+            #
+            # tests/e2e/core/** (client/helper wrappers), tests/e2e/conftest.py
+            # (session fixtures), and tests/e2e/*.sh (run/setup scripts) are
+            # ALSO in this bucket, not just osac-operator/fulfillment-service --
+            # confirmed real via live production data: PR #688 changed 4
+            # tests/e2e/core/*.py files (grpc_client.py, helpers.py,
+            # k8s_client.py, osac_cli.py -- imported by every suite's test
+            # files per this repo's own AGENTS.md) plus tests/e2e/run-test.sh/
+            # setup-env.sh, and NONE of them matched any filter before this
+            # fix -- it only got a correct-looking verdict because that same
+            # PR also happened to touch a vmaas-specific test file. A PR
+            # touching ONLY shared test infra would previously have silently
+            # resolved every suite to "skip" with no AI judgment at all --
+            # exactly the "test that needed to run doesn't run" failure mode
+            # this whole feature exists to prevent.
             ambiguous-shared:
-              - '{osac-operator,fulfillment-service}/**'
+              - '{osac-operator/**,fulfillment-service/**,tests/e2e/core/**,tests/e2e/conftest.py,tests/e2e/*.sh}'
               - '!osac-operator/**/*computeinstance*'
               - '!fulfillment-service/**/*compute_instance*'
               - '!osac-operator/**/*clusterorder*'

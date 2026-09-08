@@ -106,9 +106,18 @@ spec:
                   defaults. The selected template may limit what node types you can request.
                 items:
                   properties:
+                    fabricInterface:
+                      description: |-
+                        FabricInterface is the host NIC name used for tenant network traffic.
+                        When set, IP discovery filters Agent inventory interfaces by this name,
+                        preventing the provisioning NIC address from being returned.
+                        Resolved from the host type's NetworkInterface list during template
+                        expansion; may also be set explicitly.
+                      type: string
                     numberOfNodes:
                       description: NumberOfNodes describes the number of nodes you
                         want of the given resource class
+                      minimum: 1
                       type: integer
                     resourceClass:
                       description: ResourceClass describes the type of node you are
@@ -316,9 +325,18 @@ spec:
                   with the ClusterOrder
                 items:
                   properties:
+                    fabricInterface:
+                      description: |-
+                        FabricInterface is the host NIC name used for tenant network traffic.
+                        When set, IP discovery filters Agent inventory interfaces by this name,
+                        preventing the provisioning NIC address from being returned.
+                        Resolved from the host type's NetworkInterface list during template
+                        expansion; may also be set explicitly.
+                      type: string
                     numberOfNodes:
                       description: NumberOfNodes describes the number of nodes you
                         want of the given resource class
+                      minimum: 1
                       type: integer
                     resourceClass:
                       description: ResourceClass describes the type of node you are

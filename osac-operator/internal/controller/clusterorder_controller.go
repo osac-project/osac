@@ -193,13 +193,13 @@ func (r *ClusterOrderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	if err == nil {
-		r.recordTransitionEvents(instance, oldstatus)
 		if !equality.Semantic.DeepEqual(instance.Status, *oldstatus) {
 			log.Info("status requires update")
 			if err := r.patchStatusWithRetry(ctx, req.NamespacedName, instance.Status); err != nil {
 				return res, err
 			}
 		}
+		r.recordTransitionEvents(instance, oldstatus)
 	}
 
 	log.Info("end reconcile")
@@ -220,6 +220,7 @@ var clusterOrderProvisioningEventReasons = map[string]struct{}{
 	v1alpha1.ReasonPreparingInfrastructure: {},
 	v1alpha1.ReasonControlPlaneStarting:    {},
 	v1alpha1.ReasonWorkersJoining:          {},
+	v1alpha1.ReasonStageUnknown:            {},
 	v1alpha1.ReasonStalled:                 {},
 }
 

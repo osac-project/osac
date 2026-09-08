@@ -27,7 +27,7 @@ const (
 	ConditionDeleting              = "Deleting"
 	ConditionCompleted             = "Completed"
 	ConditionAvailable             = "Available"
-	ConditionReady                 = "Ready"
+	ConditionReady = "Ready"
 )
 
 // Common reason constants

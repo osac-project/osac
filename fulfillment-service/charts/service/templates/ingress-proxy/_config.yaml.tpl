@@ -359,6 +359,11 @@ static_resources:
       typed_config:
         "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
         common_tls_context:
+          # Envoy clients default tls_maximum_protocol_version to TLSv1_2. The
+          # fulfillment backends require TLS 1.3, so raise both bounds explicitly.
+          tls_params:
+            tls_minimum_protocol_version: TLSv1_3
+            tls_maximum_protocol_version: TLSv1_3
           validation_context:
             trusted_ca:
               filename: /etc/envoy/tls/ca.crt
@@ -386,6 +391,9 @@ static_resources:
       typed_config:
         "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
         common_tls_context:
+          tls_params:
+            tls_minimum_protocol_version: TLSv1_3
+            tls_maximum_protocol_version: TLSv1_3
           validation_context:
             trusted_ca:
               filename: /etc/envoy/tls/ca.crt
@@ -411,6 +419,9 @@ static_resources:
       typed_config:
         "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
         common_tls_context:
+          tls_params:
+            tls_minimum_protocol_version: TLSv1_3
+            tls_maximum_protocol_version: TLSv1_3
           validation_context:
             trusted_ca:
               filename: /etc/envoy/tls/ca.crt
@@ -440,6 +451,9 @@ static_resources:
       typed_config:
         "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
         common_tls_context:
+          tls_params:
+            tls_minimum_protocol_version: TLSv1_3
+            tls_maximum_protocol_version: TLSv1_3
           validation_context:
             trusted_ca:
               filename: /etc/envoy/tls/ca.crt

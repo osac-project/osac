@@ -15,7 +15,6 @@ package console
 
 import (
 	"context"
-	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"fmt"
@@ -25,6 +24,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+
+	"github.com/osac-project/osac/fulfillment-service/internal/tlsconfig"
 )
 
 // KubeVirtBackendBuilder builds a KubeVirtBackend.
@@ -105,7 +106,7 @@ func (b *kubeVirtBackend) Connect(ctx context.Context, target Target) (io.ReadWr
 		}
 	}
 
-	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS13}
+	tlsConfig := tlsconfig.NewClientTLSConfig()
 	if b.caPool != nil {
 		tlsConfig.RootCAs = b.caPool
 	}

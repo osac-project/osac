@@ -193,17 +193,29 @@ func (r *ClusterOrderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	if err == nil {
-		if !equality.Semantic.DeepEqual(instance.Status, *oldstatus) {
-			log.Info("status requires update")
-			if err := r.patchStatusWithRetry(ctx, req.NamespacedName, instance.Status); err != nil {
-				return res, err
-			}
+		if err := r.persistStatusAndRecordTransitionEvents(ctx, req.NamespacedName, instance, oldstatus); err != nil {
+			return res, err
 		}
-		r.recordTransitionEvents(instance, oldstatus)
 	}
 
 	log.Info("end reconcile")
 	return res, err
+}
+
+func (r *ClusterOrderReconciler) persistStatusAndRecordTransitionEvents(
+	ctx context.Context,
+	key client.ObjectKey,
+	instance *v1alpha1.ClusterOrder,
+	oldStatus *v1alpha1.ClusterOrderStatus,
+) error {
+	if !equality.Semantic.DeepEqual(instance.Status, *oldStatus) {
+		ctrllog.FromContext(ctx).Info("status requires update")
+		if err := r.patchStatusWithRetry(ctx, key, instance.Status); err != nil {
+			return err
+		}
+	}
+	r.recordTransitionEvents(instance, oldStatus)
+	return nil
 }
 
 const (

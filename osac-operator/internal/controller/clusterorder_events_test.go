@@ -17,13 +17,17 @@ limitations under the License.
 package controller
 
 import (
+	"context"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/events"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
@@ -176,5 +180,35 @@ var _ = Describe("ClusterOrder transition events", func() {
 		reconciler.recordTransitionEvents(instance, &status)
 
 		Consistently(recorder.Events, 200*time.Millisecond).ShouldNot(Receive())
+	})
+
+	It("does not emit an event when status persistence fails", func() {
+		recorder := newRecorder()
+		scheme := runtime.NewScheme()
+		Expect(v1alpha1.AddToScheme(scheme)).To(Succeed())
+		reconciler := &ClusterOrderReconciler{
+			apiReader: fake.NewClientBuilder().WithScheme(scheme).Build(),
+			Recorder:  recorder,
+		}
+		instance := &v1alpha1.ClusterOrder{}
+		instance.Status = statusWithProgressingReason(v1alpha1.ReasonControlPlaneStarting)
+
+		err := reconciler.persistStatusAndRecordTransitionEvents(
+			context.Background(), client.ObjectKeyFromObject(instance), instance,
+			&v1alpha1.ClusterOrderStatus{},
+		)
+
+		Expect(err).To(HaveOccurred())
+		Consistently(recorder.Events, 200*time.Millisecond).ShouldNot(Receive())
+	})
+
+	It("does not panic when no event recorder is configured", func() {
+		reconciler := &ClusterOrderReconciler{}
+		instance := &v1alpha1.ClusterOrder{}
+		instance.Status = statusWithProgressingReason(v1alpha1.ReasonControlPlaneStarting)
+
+		Expect(func() {
+			reconciler.recordTransitionEvents(instance, &v1alpha1.ClusterOrderStatus{})
+		}).NotTo(Panic())
 	})
 })

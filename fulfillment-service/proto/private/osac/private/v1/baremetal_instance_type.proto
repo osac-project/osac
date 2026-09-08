@@ -166,6 +166,13 @@ message BareMetalInstanceStatus {
 
   // Identifier of the hub that was selected for this bare metal instance.
   string hub = 6 [(cleanapi.field).private = true];
+
+  // Records when the bare metal instance entered its current state, as reported by the
+  // provisioning backend. This is the authoritative timestamp of the state transition,
+  // suitable for billing interval calculations.
+  //
+  // This will be empty if no state transition has been reported yet.
+  optional google.protobuf.Timestamp state_transition_time = 7 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // Runtime networking state for a single bare metal network attachment.

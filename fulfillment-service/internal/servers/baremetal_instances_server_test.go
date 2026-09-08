@@ -216,6 +216,21 @@ var _ = Describe("Bare metal instances server", func() {
 			Expect(s.Code()).To(Equal(codes.InvalidArgument))
 		})
 
+		It("Rejects public updates to the state transition timestamp", func() {
+			for _, path := range []string{"status", "status.state_transition_time"} {
+				_, err := server.Update(ctx, publicv1.BareMetalInstancesUpdateRequest_builder{
+					Object: publicv1.BareMetalInstance_builder{
+						Id: "test-baremetal-instance",
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{path}},
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				s, ok := status.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(s.Code()).To(Equal(codes.InvalidArgument))
+			}
+		})
+
 		It("Rejects update that changes immutable catalog_item", func() {
 			createResponse, err := server.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 				Object: publicv1.BareMetalInstance_builder{

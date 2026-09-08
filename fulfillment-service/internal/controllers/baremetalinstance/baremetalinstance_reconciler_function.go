@@ -27,6 +27,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -219,7 +220,7 @@ func (t *task) setDefaults() {
 		t.bareMetalInstance.SetStatus(&privatev1.BareMetalInstanceStatus{})
 	}
 	if t.bareMetalInstance.GetStatus().GetState() == privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_UNSPECIFIED {
-		t.bareMetalInstance.GetStatus().SetState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_PROVISIONING)
+		t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_PROVISIONING, nil)
 	}
 	for value := range privatev1.BareMetalInstanceConditionType_name {
 		if value != 0 {
@@ -256,7 +257,7 @@ func (t *task) delete(ctx context.Context) (err error) {
 		return nil
 	}
 
-	t.bareMetalInstance.GetStatus().SetState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_DELETING)
+	t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_DELETING, nil)
 	t.updateCondition(
 		privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
 		privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "", "")
@@ -400,7 +401,7 @@ func (t *task) setFailed(err error) {
 	if !t.bareMetalInstance.HasStatus() {
 		t.bareMetalInstance.SetStatus(&privatev1.BareMetalInstanceStatus{})
 	}
-	t.bareMetalInstance.GetStatus().SetState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_FAILED)
+	t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_FAILED, nil)
 	t.updateCondition(
 		privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_CONFIGURATION_APPLIED,
 		privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
@@ -544,33 +545,49 @@ func (t *task) syncStatus(object *bmfov1alpha1.BareMetalInstance) {
 func (t *task) syncState(object *bmfov1alpha1.BareMetalInstance, powerSynced *metav1.Condition) {
 	switch object.Status.Phase {
 	case bmfov1alpha1.BareMetalInstancePhaseFailed:
-		t.bareMetalInstance.GetStatus().SetState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_FAILED)
+		t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_FAILED, nil)
 		return
 	case bmfov1alpha1.BareMetalInstancePhaseDeleting:
-		t.bareMetalInstance.GetStatus().SetState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_DELETING)
+		t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_DELETING, nil)
 		return
 	}
 
 	if powerSynced == nil {
-		t.bareMetalInstance.GetStatus().SetState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_PROVISIONING)
+		t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_PROVISIONING, nil)
 		return
 	}
 
 	switch {
 	case powerSynced.Status == metav1.ConditionTrue && powerSynced.Reason == bmfov1alpha1.HostConditionReasonPowerOn:
-		t.bareMetalInstance.GetStatus().SetState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING)
+		t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING, &powerSynced.LastTransitionTime)
 	case powerSynced.Status == metav1.ConditionTrue && powerSynced.Reason == bmfov1alpha1.HostConditionReasonPowerOff:
-		t.bareMetalInstance.GetStatus().SetState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_STOPPED)
+		t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_STOPPED, &powerSynced.LastTransitionTime)
 	case powerSynced.Status == metav1.ConditionFalse && powerSynced.Reason == bmfov1alpha1.HostConditionReasonProgressing:
 		if object.Spec.RunStrategy == bmfov1alpha1.RunStrategyHalted {
-			t.bareMetalInstance.GetStatus().SetState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_STOPPING)
+			t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_STOPPING, &powerSynced.LastTransitionTime)
 		} else {
-			t.bareMetalInstance.GetStatus().SetState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_STARTING)
+			t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_STARTING, &powerSynced.LastTransitionTime)
 		}
 	case powerSynced.Status == metav1.ConditionFalse:
-		t.bareMetalInstance.GetStatus().SetState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_FAILED)
+		t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_FAILED, &powerSynced.LastTransitionTime)
 	default:
-		t.bareMetalInstance.GetStatus().SetState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_PROVISIONING)
+		t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_PROVISIONING, &powerSynced.LastTransitionTime)
+	}
+}
+
+func (t *task) setState(state privatev1.BareMetalInstanceState, transitionTime *metav1.Time) {
+	if !t.bareMetalInstance.HasStatus() {
+		t.bareMetalInstance.SetStatus(&privatev1.BareMetalInstanceStatus{})
+	}
+	status := t.bareMetalInstance.GetStatus()
+	if status.GetState() == state {
+		return
+	}
+	status.SetState(state)
+	if transitionTime != nil && !transitionTime.IsZero() {
+		status.SetStateTransitionTime(timestamppb.New(transitionTime.Time))
+	} else {
+		status.SetStateTransitionTime(timestamppb.Now())
 	}
 }
 

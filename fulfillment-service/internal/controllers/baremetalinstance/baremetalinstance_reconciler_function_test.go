@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -25,6 +26,7 @@ import (
 	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -1561,6 +1563,80 @@ var _ = Describe("syncStatus", func() {
 		t.syncStatus(object)
 		Expect(t.bareMetalInstance.GetStatus().GetState()).To(
 			Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING))
+	})
+
+	It("should set state_transition_time when the state changes", func() {
+		t := newTask(0)
+		object := &bmfov1alpha1.BareMetalInstance{
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				Phase: bmfov1alpha1.BareMetalInstancePhaseReady,
+				Conditions: []metav1.Condition{
+					{
+						Type:   string(bmfov1alpha1.HostConditionPowerSynced),
+						Status: metav1.ConditionTrue,
+						Reason: bmfov1alpha1.HostConditionReasonPowerOn,
+					},
+				},
+			},
+		}
+
+		t.syncStatus(object)
+
+		Expect(t.bareMetalInstance.GetStatus().GetStateTransitionTime()).ToNot(BeNil())
+		Expect(t.bareMetalInstance.GetStatus().GetStateTransitionTime().AsTime()).To(
+			BeTemporally("~", time.Now(), time.Second))
+	})
+
+	It("should use the backend transition time when it is available", func() {
+		transitionTime := time.Date(2026, time.January, 15, 12, 30, 45, 0, time.UTC)
+		t := newTask(0)
+		object := &bmfov1alpha1.BareMetalInstance{
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				Phase: bmfov1alpha1.BareMetalInstancePhaseReady,
+				Conditions: []metav1.Condition{
+					{
+						Type:               string(bmfov1alpha1.HostConditionPowerSynced),
+						Status:             metav1.ConditionTrue,
+						Reason:             bmfov1alpha1.HostConditionReasonPowerOn,
+						LastTransitionTime: metav1.NewTime(transitionTime),
+					},
+				},
+			},
+		}
+
+		t.syncStatus(object)
+
+		Expect(t.bareMetalInstance.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(transitionTime))
+	})
+
+	It("should preserve state_transition_time when the state is unchanged", func() {
+		transitionTime := timestamppb.New(time.Unix(123, 456))
+		t := &task{
+			r: &function{logger: logger},
+			bareMetalInstance: privatev1.BareMetalInstance_builder{
+				Id: "bmi-sync-test",
+				Status: privatev1.BareMetalInstanceStatus_builder{
+					State:               privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING,
+					StateTransitionTime: transitionTime,
+				}.Build(),
+			}.Build(),
+		}
+		object := &bmfov1alpha1.BareMetalInstance{
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				Phase: bmfov1alpha1.BareMetalInstancePhaseReady,
+				Conditions: []metav1.Condition{
+					{
+						Type:   string(bmfov1alpha1.HostConditionPowerSynced),
+						Status: metav1.ConditionTrue,
+						Reason: bmfov1alpha1.HostConditionReasonPowerOn,
+					},
+				},
+			},
+		}
+
+		t.syncStatus(object)
+
+		Expect(t.bareMetalInstance.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(transitionTime.AsTime()))
 	})
 
 	It("should map Ready phase with PowerOff condition to STOPPED state", func() {

@@ -95,6 +95,7 @@ func (b *BareMetalInstancesServerBuilder) Build() (result *BareMetalInstancesSer
 	inMapper, err := NewGenericMapper[*publicv1.BareMetalInstance, *privatev1.BareMetalInstance]().
 		SetLogger(b.logger).
 		SetStrict(true).
+		AddIgnoredFields("osac.public.v1.BareMetalInstanceStatus.state_transition_time").
 		Build()
 	if err != nil {
 		return
@@ -233,6 +234,12 @@ func (s *BareMetalInstancesServer) Update(ctx context.Context,
 	if id == "" {
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object identifier is mandatory")
 		return
+	}
+	for _, path := range request.GetUpdateMask().GetPaths() {
+		if path == "status" || path == "status.state_transition_time" {
+			err = grpcstatus.Errorf(grpccodes.InvalidArgument, "status.state_transition_time is output-only")
+			return
+		}
 	}
 
 	// When there's a field mask, copy to a new private object and let the generic server handle the

@@ -15,7 +15,6 @@ package network
 
 import (
 	"context"
-	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"fmt"
@@ -36,6 +35,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 	"github.com/osac-project/osac/fulfillment-service/internal/metrics"
+	"github.com/osac-project/osac/fulfillment-service/internal/tlsconfig"
 )
 
 // GrpcClientBuilder contains the data and logic needed to create a gRPC client. Don't create instances of this object
@@ -306,7 +306,7 @@ func (b *GrpcClientBuilder) Build() (result *grpc.ClientConn, err error) {
 	if b.plaintext {
 		transportCredentials = insecure.NewCredentials()
 	} else {
-		tlsConfig := &tls.Config{}
+		tlsConfig := tlsconfig.NewClientTLSConfig()
 		if b.insecure {
 			tlsConfig.InsecureSkipVerify = true
 		}

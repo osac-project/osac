@@ -63,6 +63,21 @@ var _ = Describe("ClusterOrder transition events", func() {
 		)))
 	})
 
+	It("records a Normal event when a ClusterOrder is first created", func() {
+		recorder := newRecorder()
+		reconciler := &ClusterOrderReconciler{Recorder: recorder}
+		instance := &v1alpha1.ClusterOrder{}
+		instance.Status = statusWithProgressingReason(v1alpha1.ReasonPreparingInfrastructure)
+
+		reconciler.recordTransitionEvents(instance, &v1alpha1.ClusterOrderStatus{})
+
+		Eventually(recorder.Events).Should(Receive(And(
+			ContainSubstring(corev1.EventTypeNormal),
+			ContainSubstring(v1alpha1.ReasonCreated),
+			ContainSubstring("ClusterOrder created"),
+		)))
+	})
+
 	It("does not record an event when the provisioning sub-stage is unchanged", func() {
 		recorder := newRecorder()
 		reconciler := &ClusterOrderReconciler{Recorder: recorder}
@@ -104,5 +119,46 @@ var _ = Describe("ClusterOrder transition events", func() {
 			ContainSubstring(corev1.EventTypeNormal),
 			ContainSubstring(string(v1alpha1.ClusterOrderPhaseDeleting)),
 		)))
+	})
+
+	It("records a Normal event when a ClusterOrder becomes Ready", func() {
+		recorder := newRecorder()
+		reconciler := &ClusterOrderReconciler{Recorder: recorder}
+		instance := &v1alpha1.ClusterOrder{}
+		oldStatus := statusWithProgressingReason(v1alpha1.ReasonWorkersJoining)
+		instance.Status = v1alpha1.ClusterOrderStatus{
+			Phase: v1alpha1.ClusterOrderPhaseReady,
+			Conditions: []metav1.Condition{{
+				Type:               v1alpha1.ConditionProgressing,
+				Status:             metav1.ConditionFalse,
+				Reason:             v1alpha1.ReasonAsExpected,
+				LastTransitionTime: metav1.Now(),
+			}},
+		}
+
+		reconciler.recordTransitionEvents(instance, &oldStatus)
+
+		Eventually(recorder.Events).Should(Receive(And(
+			ContainSubstring(corev1.EventTypeNormal),
+			ContainSubstring(v1alpha1.ReasonReady),
+			ContainSubstring("ClusterOrder is ready"),
+		)))
+	})
+
+	It("does not duplicate the Ready event", func() {
+		recorder := newRecorder()
+		reconciler := &ClusterOrderReconciler{Recorder: recorder}
+		status := v1alpha1.ClusterOrderStatus{
+			Phase: v1alpha1.ClusterOrderPhaseReady,
+			Conditions: []metav1.Condition{{
+				Type:   v1alpha1.ConditionProgressing,
+				Status: metav1.ConditionFalse,
+			}},
+		}
+		instance := &v1alpha1.ClusterOrder{Status: status}
+
+		reconciler.recordTransitionEvents(instance, &status)
+
+		Consistently(recorder.Events, 200*time.Millisecond).ShouldNot(Receive())
 	})
 })

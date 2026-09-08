@@ -25,6 +25,7 @@ columns:
 
 - header: ARCHITECTURE
   value: this.spec.architecture
+  type: osac.public.v1.Architecture
 
 - header: LIFECYCLE
   value: this.spec.lifecycle

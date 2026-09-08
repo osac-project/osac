@@ -47,9 +47,18 @@ jobs:
       bmaas-clear: ${{ steps.filter.outputs.bmaas-clear }}
       ambiguous-shared: ${{ steps.filter.outputs.ambiguous-shared }}
       config-yaml-json: ${{ steps.filter.outputs.config-yaml-json }}
-      # JSON arrays of the actual matching paths, for the ambiguous buckets
-      # only -- the listener needs the real filenames, not just a boolean,
-      # to know what it's looking at (and to feed to graphify/Gemini).
+      # JSON arrays of the actual matching paths for EVERY bucket, not just
+      # the ambiguous ones -- Gemini's own judgment step now gets shown
+      # which specific files earned each deterministic "clear" verdict
+      # (not just a bare boolean), so it can independently sanity-check
+      # those classifications against the file's own content, instead of
+      # only reasoning about the pre-filtered ambiguous/config lists. This
+      # is exactly what would have let it catch the references/ directory
+      # misclassification (PR #805) on its own, without needing a human to
+      # spot and patch the filter first.
+      vmaas-clear-files: ${{ steps.filter.outputs.vmaas-clear_files }}
+      caas-clear-files: ${{ steps.filter.outputs.caas-clear_files }}
+      bmaas-clear-files: ${{ steps.filter.outputs.bmaas-clear_files }}
       ambiguous-shared-files: ${{ steps.filter.outputs.ambiguous-shared_files }}
       config-yaml-json-files: ${{ steps.filter.outputs.config-yaml-json_files }}
     steps:
@@ -70,12 +79,31 @@ jobs:
           # this distinction directly against real repo paths before landing
           # this file (a flat-list version matched nothing at all).
           filters: |
+            # tests/e2e/references/** is NOT exclusively a VMaaS directory --
+            # confirmed on disk: 4 of its 5 test files (compute/iam/
+            # ip_management/networking references) genuinely are VMaaS-only,
+            # but test_cluster_baremetal_references.py's own class/test names
+            # (TestClusterBareMetalReferences, test_cluster_provisioning_
+            # chain_by_name, test_baremetal_instance_chain_by_name) say
+            # plainly it's CaaS+BMaaS content, not VMaaS at all. Confirmed
+            # live: PR #805 touched exactly this file, and because the old
+            # blanket tests/e2e/references/** match only ever set
+            # vmaas-clear, CaaS/BMaaS got zero deterministic signal from it --
+            # a change to that file's ACTUAL CaaS/BMaaS test logic would have
+            # had no path-based signal at all, leaving it entirely up to
+            # Gemini (or, if nothing else in the same PR triggered AI, a
+            # silent "skip" with no judgment whatsoever). This is exactly the
+            # "test that needed to run doesn't run" failure mode the whole
+            # feature exists to prevent -- unlike the ambiguous-shared cases
+            # elsewhere in this file, this one doesn't need an LLM's opinion
+            # at all: the file's own name is unambiguous.
             vmaas-clear:
               - '{osac-operator/**/*computeinstance*,fulfillment-service/**/*compute_instance*,tests/e2e/vmaas/**,tests/e2e/references/**}'
+              - '!tests/e2e/references/test_cluster_baremetal_references.py'
             caas-clear:
-              - '{osac-operator/**/*clusterorder*,fulfillment-service/**/*cluster*,tests/e2e/caas/**}'
+              - '{osac-operator/**/*clusterorder*,fulfillment-service/**/*cluster*,tests/e2e/caas/**,tests/e2e/references/test_cluster_baremetal_references.py}'
             bmaas-clear:
-              - '{bare-metal-fulfillment-operator/**,tests/e2e/bmaas/**}'
+              - '{bare-metal-fulfillment-operator/**,tests/e2e/bmaas/**,tests/e2e/references/test_cluster_baremetal_references.py}'
             # osac-operator (all CRD controllers) and fulfillment-service
             # (the gRPC/REST API) each back BOTH VMaaS and CaaS -- a change
             # under either that ISN'T clearly computeinstance/cluster-named
@@ -144,6 +172,9 @@ jobs:
           VMAAS_CLEAR: ${{ needs.changes.outputs.vmaas-clear }}
           CAAS_CLEAR: ${{ needs.changes.outputs.caas-clear }}
           BMAAS_CLEAR: ${{ needs.changes.outputs.bmaas-clear }}
+          VMAAS_CLEAR_FILES: ${{ needs.changes.outputs.vmaas-clear-files }}
+          CAAS_CLEAR_FILES: ${{ needs.changes.outputs.caas-clear-files }}
+          BMAAS_CLEAR_FILES: ${{ needs.changes.outputs.bmaas-clear-files }}
           AMBIGUOUS_FILES: ${{ needs.changes.outputs.ambiguous-shared-files }}
           CONFIG_FILES: ${{ needs.changes.outputs.config-yaml-json-files }}
         run: |
@@ -155,12 +186,16 @@ jobs:
             --argjson vmaas_clear "${VMAAS_CLEAR:-false}" \
             --argjson caas_clear "${CAAS_CLEAR:-false}" \
             --argjson bmaas_clear "${BMAAS_CLEAR:-false}" \
+            --argjson vmaas_clear_files "${VMAAS_CLEAR_FILES:-[]}" \
+            --argjson caas_clear_files "${CAAS_CLEAR_FILES:-[]}" \
+            --argjson bmaas_clear_files "${BMAAS_CLEAR_FILES:-[]}" \
             --argjson ambiguous_files "${AMBIGUOUS_FILES:-[]}" \
             --argjson config_files "${CONFIG_FILES:-[]}" \
             '{
               pr_number: ($pr_number | tonumber),
               head_sha: $head_sha,
               deterministic: {vmaas: $vmaas_clear, caas: $caas_clear, bmaas: $bmaas_clear},
+              deterministic_files: {vmaas: $vmaas_clear_files, caas: $caas_clear_files, bmaas: $bmaas_clear_files},
               ambiguous_files: $ambiguous_files,
               config_files: $config_files
             }' > "${RUNNER_TEMP}/suite-selection-context/context.json"

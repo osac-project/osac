@@ -1,5 +1,10 @@
 # .github/ Agent Context
 
+This area is part of the OSAC monorepo, not an isolated project. Its workflow
+and automation changes may affect other components. Apply the repository-wide
+rules in [`../AGENTS.md`](../AGENTS.md), consider downstream effects, and
+follow the instructions for every affected component.
+
 ## E2E readiness gate (OSAC-3370)
 
 Full-install e2e (`e2e-vmaas-full-install`, `e2e-bmaas-full-install`, `e2e-caas-full-install`) does **not** auto-spend runners on every PR push. Cheap `e2e-readiness` job waits (`ready=false`) until unlocked; required `e2e-*-gate` stays **pending** (not failed). Docs-only PRs skip readiness and the gate reports success.
@@ -16,3 +21,10 @@ Cheap checks stay ungated. Schedules / `workflow_dispatch` / `merge_group` skip 
 Path filter skips docs / unit-test-only PRs (`!**/tests/**` and friends). `tests/e2e/**` is the full-install suite and **must** still set `should-run` (`e2e-suite` filter). Do not fold `tests/e2e` back into the ignore list.
 
 Details + smoke checklist: [`.github/e2e-readiness.md`](e2e-readiness.md).
+
+## Release safety
+
+Nightly builds use provisional `sha-*` image tags while all build, unit,
+integration, security, and E2E gates run. Promote images to release-looking
+nightly tags only after every required gate passes; failed runs must not publish
+release-looking tags.

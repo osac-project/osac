@@ -1,7 +1,7 @@
 # Fulfillment service
 
 This project contains the code for the fulfillment service. For instructions on how to install it
-in a production environment see the [installation guide](docs/INSTALL.md). For a guided walkthrough
+in a deployed environment see the [installation guide](docs/INSTALL.md). For a guided walkthrough
 of how a request flows through the service — the shared data model, the transaction/event
 mechanism, and the end-to-end path from a `Create` call to a Kubernetes custom resource — see
 [docs/CODEWALK.md](docs/CODEWALK.md).
@@ -40,19 +40,20 @@ The API is defined using protocol buffers in the [`proto`](proto) directory.
 
 ### Editing Proto Files
 
-**IMPORTANT**: Only edit proto files in `proto/private/`. The `proto/public/` directory contains generated files and must never be edited manually.
+**IMPORTANT**: Edit service definitions in `proto/private/` and test-only definitions in `proto/tests/`. The `proto/public/` directory contains generated files and must never be edited manually.
 
-After making changes to `.proto` files in `proto/private/`, you must regenerate the public protos and Go code:
+For changes under `proto/private/`, from `fulfillment-service/` run:
 
 ```bash
-# From the fulfillment-service/ directory:
-$ uv run dev.py build protos
+uv run dev.py build protos
+uv run dev.py lint proto
+buf generate
 ```
 
-This command performs three steps:
-1. **Generates the public API from the private API**
-2. Lints the proto files
-3. Generates Go code from the proto definitions
+`build protos` generates public protos; `buf generate` generates Go code. For
+test-only changes under `proto/tests/`, run `uv run dev.py lint proto` and
+`buf generate`, then commit the test proto source and generated `internal/api/`
+changes; do not generate or require changes under `proto/public/`.
 
 ### Generated Code
 
@@ -60,20 +61,28 @@ The following directories contain generated code and must never be edited manual
 - `proto/public/` - Public API proto files (generated from `proto/private/`)
 - `internal/api/` - Generated Go code (generated from all proto files)
 
-**Important**: You must commit **all three** changes when modifying protos:
+For changes under `proto/private/`, commit these fulfillment-service changes:
 1. Your edits to `.proto` files in `proto/private/`
 2. The generated public protos in `proto/public/`
 3. The generated Go code in `internal/api/`
 
-A CI check (`check-generated-code.yaml`) runs on every PR to verify that the generated code is up to date. If the check fails, it means you forgot to regenerate or commit the generated code.
-
-### Incremental Builds
-
-For incremental builds (skipping public proto generation, only regenerating Go code):
+Also regenerate and commit generated Go code in the downstream components:
 
 ```bash
-$ buf generate
+(cd ../osac-operator && buf generate)
+(cd ../osac-metering/metering-service && buf generate)
 ```
+
+For volume and storage proto changes, also run:
+
+```bash
+(cd ../osac-csi-driver && buf generate)
+```
+
+For test-only changes under `proto/tests/`, commit the test proto source and
+generated `internal/api/` changes; `proto/public/` is not required.
+
+A CI check (`check-generated-code.yaml`) runs on every PR to verify that the generated code is up to date. If the check fails, it means you forgot to regenerate or commit the generated code.
 
 See [docs/CLEANAPI.md](docs/CLEANAPI.md) for a complete guide on using cleanapi annotations, best practices, and common workflows. See [AGENTS.md](AGENTS.md) for build commands and development workflow.
 

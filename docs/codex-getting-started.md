@@ -6,9 +6,10 @@ checkout: install, importing your Claude Code setup, permissions, trusting the
 repo's hooks, reconnecting authenticated services, and the workflow
 differences worth knowing.
 
-Codex reads `AGENTS.md` natively, so the project's conventions, component map,
-and graphify rules load without extra configuration. Start there — this guide
-only covers Codex-specific setup.
+Codex reads `AGENTS.md` natively, so the project's conventions and component
+map load without extra configuration. Start there — this guide only covers
+Codex-specific setup. Graphify is optional; when `graphify-out/graph.json`
+exists, follow the root `AGENTS.md` guidance for code-structure discovery.
 
 ## Prerequisites
 
@@ -18,9 +19,9 @@ only covers Codex-specific setup.
 - The Codex CLI installed and authenticated with your OpenAI account.
 - The same local toolchain the other tools expect (Go, Node.js, buf, kubectl,
   kind, `jira` CLI, `gh` CLI, `jq`).
-- Optional but recommended: `graphify` installed (`uv tool install graphifyy`
-  or `pipx install graphifyy`) so the knowledge-graph hooks do something. See
-  AGENTS.md's "Knowledge Graph (graphify brain)" section.
+- Optional: `graphify` installed (`uv tool install graphifyy` or
+  `pipx install graphifyy`) for code-structure discovery when
+  `graphify-out/graph.json` exists.
 
 ## Skill discovery (`.agents/skills`)
 
@@ -48,10 +49,9 @@ install personal skills under `$CODEX_HOME/skills` (normally
 
 The repo ships `.codex/config.toml` at the root. After you trust the project,
 Codex walks from the `.git` root down to your CWD and honors project-level
-config. The one setting that matters here is a raised `project_doc_max_bytes`
-— the root `AGENTS.md` plus a component `AGENTS.md` can exceed Codex's 32 KiB
-default, which would otherwise truncate the conventions Codex loads. Leave it
-in place; don't lower it.
+config. The one setting that matters here is `project_doc_max_bytes`, which is kept at
+32 KiB. The current compact root plus component instruction files fit within
+that default; keep the setting aligned with the compact instruction design.
 
 ## Importing your Claude Code setup (`/import`)
 

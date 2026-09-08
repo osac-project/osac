@@ -1,14 +1,12 @@
 # Architecture — Cross-Component
 
-This is a hand-trimmed excerpt covering only cross-component concerns that
-span multiple `osac/` components (`fulfillment-service`, `osac-operator`,
-`bare-metal-fulfillment-operator`) and have no equivalent in any single
-component's own `AGENTS.md`. See [README.md](README.md) for provenance and
-maintenance notes. Component-specific architecture (code organization,
-layers, patterns internal to one component) is authoritative in that
-component's own `AGENTS.md` — see `fulfillment-service/AGENTS.md`'s
-`## Architecture` section and `osac-operator/AGENTS.md`'s `## Architecture`
-section.
+This document covers only cross-component concerns that span multiple OSAC
+components and have no equivalent in one component's instructions. Component
+`AGENTS.md` files own component-scoped agent rules and invariants and route
+readers to the referenced README and documentation for architecture, setup,
+and detailed conventions. Root `AGENTS.md` and this directory own
+cross-component flow and dependency guidance. See [README.md](README.md) for
+this directory's scope and maintenance notes.
 
 ## Data Flow
 
@@ -98,7 +96,7 @@ CR independently, is what actually drives provisioning:
 **Operator Controllers (osac-operator):**
 - Location: `osac-operator/internal/controller/`
 - Pattern: Most resource types have a primary controller and a feedback controller, both built on a shared generic `feedback.Bridge[T,R]` abstraction. Most feedback controllers get their own dedicated, per-resource-named file (e.g., `computeinstance_controller.go` + `computeinstance_feedback_controller.go`). `ClusterOrder` also has both — its feedback controller (type `FeedbackReconciler`, registered as `clusterorder-feedback`, sends the real gRPC `Signal` RPC to fulfillment-service) predates that per-resource naming convention and lives in the generically-named `feedback_controller.go` instead of a `clusterorder_feedback_controller.go` file; `clusterorder_controller.go`'s own `Status().Patch` call is a separate, in-cluster Kubernetes status write, not the feedback signal. Notable exceptions to the pairing itself, verified directly against every `Named(...)` controller registration in the package (not necessarily exhaustive if new controllers are added later): BaremetalInstance has a feedback controller only (no primary controller file in this package); Storage, Tenant, and NetworkClassCapabilities each have a standalone primary controller with no feedback pair.
-- See `osac-operator/AGENTS.md`'s "Resources Managed" and "Dual-Controller Pattern" sections for the per-resource-type controller list and behavior.
+- See `osac-operator/README.md` and `osac-operator/AGENTS.md` for current controller behavior and exceptions.
 - Triggers: Resource created/updated in Kubernetes or fulfillment service
 - Responsibilities: Reconcile spec vs status, trigger provisioning providers, send feedback signals
 
@@ -110,7 +108,7 @@ CR independently, is what actually drives provisioning:
 **Console Proxy (Operator):**
 - Location: `osac-operator/cmd/console-proxy/main.go`
 - Triggers: Deployed as a Kubernetes aggregated API server alongside the operator
-- Responsibilities: Proxies KubeVirt VM console/VNC access; see `osac-operator/AGENTS.md`'s "Console Proxy" section for implementation details (auth, discovery, subresource routing, TLS config)
+- Responsibilities: Proxies KubeVirt VM console/VNC access; see `osac-operator/README.md` and `fulfillment-service/docs/VM_CONSOLE.md` for implementation details.
 
 **bare-metal-fulfillment-operator:**
 - Location: `bare-metal-fulfillment-operator/`
@@ -135,7 +133,7 @@ CR independently, is what actually drives provisioning:
 
 **Logging:** `fulfillment-service` uses `slog` (Go's structured logging), with each layer logging context (request ID, resource ID, tenant ID) and configuration via CLI flags (`--log-level`, `--log-format`); the Kubernetes operators (`osac-operator`, `bare-metal-fulfillment-operator`) and `osac-metering` use `zap` via controller-runtime's/`logr`'s logging interface instead
 
-**Validation:** Protocol Buffer field presence/constraints at message definition; server-side validation before storage (see `fulfillment-service/AGENTS.md`'s Database Layer section for CEL-based query filtering)
+**Validation:** Protocol Buffer field presence/constraints at message definition; server-side validation before storage (see `fulfillment-service/docs/API.md` for API validation and `fulfillment-service/docs/FILTER.md` for CEL filtering).
 
 **Authentication:** JWT token extraction from gRPC metadata; OAuth2 token file reading for service-to-service auth; token verification delegated to Keycloak
 

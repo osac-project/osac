@@ -6,8 +6,14 @@ This document provides practical workflows for using the `cleanapi` proto plugin
 
 **What to edit**: Only `proto/private/` and `proto/tests/`
 **Never edit**: `proto/public/` (fully generated)
-**Regenerate with**: `uv run dev.py build protos` (from `fulfillment-service/`)
-**Commit**: All three - private protos, public protos, and generated Go code
+**`proto/private/` regeneration**: `uv run dev.py build protos`, `uv run dev.py lint proto`, and `buf generate`
+**`proto/tests/` regeneration**: `uv run dev.py lint proto` and `buf generate`
+**`proto/private/` commit**: Private protos, public protos, and generated Go code
+**`proto/tests/` commit**: Test protos and generated `internal/api/`; no public protos
+**Downstream generated code**: For changes under `proto/private/`, run
+`buf generate` and commit resulting changes in `osac-operator/` and
+`osac-metering/metering-service/`, and, for volume and storage proto changes,
+in `osac-csi-driver/`.
 
 ### Directory Structure
 
@@ -120,8 +126,9 @@ message ComputeInstance {
 }
 ```
 
-5. Run `uv run dev.py build protos` from `fulfillment-service/`
-6. Commit all three changes: private proto, public proto, and generated Go code
+5. Run `uv run dev.py build protos` from `fulfillment-service/` to regenerate public protos
+6. Run `uv run dev.py lint proto` and `buf generate` to lint and generate Go code
+7. Commit the private proto, generated public proto, and generated Go code
 
 ### Adding a New Public Field
 
@@ -143,8 +150,9 @@ message ComputeInstance {
 }
 ```
 
-5. Run `uv run dev.py build protos` from `fulfillment-service/`
-6. Commit all changes
+5. Run `uv run dev.py build protos`, `uv run dev.py lint proto`, and
+   `buf generate` from `fulfillment-service/`
+6. Commit the private proto, generated public proto, and generated Go code
 
 ### Converting a Public Field to Private
 
@@ -158,7 +166,8 @@ This is a **breaking change** for the public API and should be avoided. If you m
 
 1. Create or edit the proto file in `proto/private/osac/private/v1/`
 2. Add `option (cleanapi.message).private = true;` inside the message definition
-3. Run `uv run dev.py build protos`
+3. Run `uv run dev.py build protos`, `uv run dev.py lint proto`, and
+   `buf generate`
 4. Verify the message does not appear in `proto/public/`
 
 ### Adding a Private-Only RPC Method
@@ -168,7 +177,8 @@ Use this for controller-only methods (e.g., the `Signal` RPC):
 1. Add the method to `proto/private/osac/private/v1/<resource>s_service.proto`
 2. Mark method with `option (cleanapi.method).private = true`
 3. Mark request and response messages with `option (cleanapi.message).private = true`
-4. Run `uv run dev.py build protos`
+4. Run `uv run dev.py build protos`, `uv run dev.py lint proto`, and
+   `buf generate`
 5. Verify the method does not appear in the public service
 
 ### Creating a Private-Only Proto File
@@ -178,7 +188,8 @@ Use this when an entire resource should never be public (e.g., `volume_type.prot
 1. Create the file in `proto/private/osac/private/v1/<resource>_type.proto`
 2. Add `option (cleanapi.file).private = true;` at the top after the package declaration
 3. Define your messages, enums, and services normally
-4. Run `uv run dev.py build protos`
+4. Run `uv run dev.py build protos`, `uv run dev.py lint proto`, and
+   `buf generate`
 5. Verify the file does not appear in `proto/public/`
 
 ### Setting Up HTTP Route Prefix Mapping
@@ -190,7 +201,8 @@ For service files that need routes rewritten (`/api/private/v1/` → `/api/fulfi
    option (cleanapi.file).package = "osac.public.v1";
    option (cleanapi.file).http_route_prefix_map = "private:fulfillment";
    ```
-2. Run `uv run dev.py build protos`
+2. Run `uv run dev.py build protos`, `uv run dev.py lint proto`, and
+   `buf generate`
 3. Verify routes are rewritten in `proto/public/<resource>s_service.proto`
 
 ## Workflow Summary
@@ -201,14 +213,16 @@ For service files that need routes rewritten (`/api/private/v1/` → `/api/fulfi
 # 1. Edit files in proto/private/
 vim proto/private/osac/private/v1/clusters_type.proto
 
-# 2. From fulfillment-service/, regenerate everything
+# 2. From fulfillment-service/, regenerate public protos
 uv run dev.py build protos
+uv run dev.py lint proto
+buf generate
 
 # 3. Review the changes
 git diff proto/public/
 git diff internal/api/
 
-# 4. Commit all three changes
+# 4. Commit the private proto, generated public proto, and generated Go code
 git add proto/private/ proto/public/ internal/api/
 git commit -s -m "OSAC-XXXX: Add internal_node_id field to Cluster"
 ```
@@ -251,12 +265,17 @@ You forgot to commit the generated public protos or Go code:
 ```bash
 cd fulfillment-service
 uv run dev.py build protos
+uv run dev.py lint proto
+buf generate
 git add proto/public/ internal/api/
 cd ../osac-operator
 buf generate && make lint
 git add internal/api
 cd ../osac-metering/metering-service
 make generate lint
+git add internal/api
+cd ../../osac-csi-driver
+buf generate && make lint
 git add internal/api
 ```
 

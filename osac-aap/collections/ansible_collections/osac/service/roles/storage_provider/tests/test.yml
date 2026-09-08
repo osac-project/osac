@@ -1070,21 +1070,21 @@
             success_msg: "Backend ID validation passed with integer value -- dispatch failed as expected"
 
 # ──────────────────────────────────────────────────────────────
-# Test 25: Explicit YAML null credential values are rejected (OSAC-4956)
+# Test 25: Explicit YAML null endpoint is rejected (OSAC-4956)
 # Expected: credential validation in read_credentials.yaml rejects
-#   explicit null values for endpoint, username, and password.
+#   an explicit null endpoint while username and password are valid.
 #   `null | default('') | string` produces "None" (length 4), bypassing
 #   the original `| default('') | string | length == 0` guard.
 #   The `is none` guard added in OSAC-4956 prevents this.
 # ──────────────────────────────────────────────────────────────
-- name: Test storage_provider -- explicit null credential values are rejected (OSAC-4956)
+- name: Test storage_provider -- explicit null endpoint is rejected (OSAC-4956)
   hosts: localhost
   gather_facts: false
 
   tasks:
-    - name: Run null credential values test
+    - name: Run null endpoint test
       block:
-        - name: Attempt with explicit null credential values
+        - name: Attempt with explicit null endpoint (username and password valid)
           ansible.builtin.include_role:
             name: osac.service.storage_provider
           vars:
@@ -1092,19 +1092,19 @@
               - name: default
                 protocol: nfs
                 provider: vast
-                backend_id: be-null-creds
+                backend_id: be-null-ep
             storage_provider_backend_connections:
-              be-null-creds:
+              be-null-ep:
                 endpoint: null
-                username: null
-                password: null
+                username: "admin"
+                password: "not-a-real-credential"
             storage_provider_action: setup
-            tenant_name: "tenant-null-creds"
+            tenant_name: "tenant-null-ep"
             tenant_namespace: "osac-tenants"
 
-        - name: Fail test if null credentials were not rejected
+        - name: Fail test if null endpoint was not rejected
           ansible.builtin.fail:
-            msg: "Null credential values should have been rejected by validation"
+            msg: "Null endpoint should have been rejected by validation"
 
       rescue:
         - name: Verify failure is from credential validation, not a downstream error
@@ -1112,15 +1112,105 @@
             that:
               - "'is missing one or more of' in (ansible_failed_result.msg | default(''))"
             fail_msg: >-
-              Null credential values were not caught by validation (OSAC-4956 regression):
+              Null endpoint was not caught by validation (OSAC-4956 regression):
               {{ ansible_failed_result.msg | default('unknown error') }}
-            success_msg: "Null credential values correctly rejected by validation"
+            success_msg: "Null endpoint correctly rejected by validation"
 
 # ──────────────────────────────────────────────────────────────
-# Test 26: Explicit YAML null backend_id is rejected (OSAC-4956)
+# Test 26: Explicit YAML null username is rejected (OSAC-4956)
+# Expected: credential validation rejects a null username while
+#   endpoint and password are valid.
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- explicit null username is rejected (OSAC-4956)
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run null username test
+      block:
+        - name: Attempt with explicit null username (endpoint and password valid)
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: default
+                protocol: nfs
+                provider: vast
+                backend_id: be-null-user
+            storage_provider_backend_connections:
+              be-null-user:
+                endpoint: "vast.example.com"
+                username: null
+                password: "not-a-real-credential"
+            storage_provider_action: setup
+            tenant_name: "tenant-null-user"
+            tenant_namespace: "osac-tenants"
+
+        - name: Fail test if null username was not rejected
+          ansible.builtin.fail:
+            msg: "Null username should have been rejected by validation"
+
+      rescue:
+        - name: Verify failure is from credential validation, not a downstream error
+          ansible.builtin.assert:
+            that:
+              - "'is missing one or more of' in (ansible_failed_result.msg | default(''))"
+            fail_msg: >-
+              Null username was not caught by validation (OSAC-4956 regression):
+              {{ ansible_failed_result.msg | default('unknown error') }}
+            success_msg: "Null username correctly rejected by validation"
+
+# ──────────────────────────────────────────────────────────────
+# Test 27: Explicit YAML null password is rejected (OSAC-4956)
+# Expected: credential validation rejects a null password while
+#   endpoint and username are valid.
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- explicit null password is rejected (OSAC-4956)
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run null password test
+      block:
+        - name: Attempt with explicit null password (endpoint and username valid)
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: default
+                protocol: nfs
+                provider: vast
+                backend_id: be-null-pw
+            storage_provider_backend_connections:
+              be-null-pw:
+                endpoint: "vast.example.com"
+                username: "admin"
+                password: null
+            storage_provider_action: setup
+            tenant_name: "tenant-null-pw"
+            tenant_namespace: "osac-tenants"
+
+        - name: Fail test if null password was not rejected
+          ansible.builtin.fail:
+            msg: "Null password should have been rejected by validation"
+
+      rescue:
+        - name: Verify failure is from credential validation, not a downstream error
+          ansible.builtin.assert:
+            that:
+              - "'is missing one or more of' in (ansible_failed_result.msg | default(''))"
+            fail_msg: >-
+              Null password was not caught by validation (OSAC-4956 regression):
+              {{ ansible_failed_result.msg | default('unknown error') }}
+            success_msg: "Null password correctly rejected by validation"
+
+# ──────────────────────────────────────────────────────────────
+# Test 28: Explicit YAML null backend_id is rejected (OSAC-4956)
 # Expected: the backend_id presence check rejects explicit null.
 #   `null | string` produces "None" (length 4), bypassing the original
 #   `| string | length == 0` guard. The `is none` guard prevents this.
+#   Connection details use nulls because validation rejects the null
+#   backend_id before inspecting connection fields.
 # ──────────────────────────────────────────────────────────────
 - name: Test storage_provider -- explicit null backend_id is rejected (OSAC-4956)
   hosts: localhost
@@ -1139,10 +1229,10 @@
                 provider: vast
                 backend_id: null
             storage_provider_backend_connections:
-              be-test:
-                endpoint: "vast.example.com"
-                username: "admin"
-                password: "mock-admin-password"
+              placeholder:
+                endpoint: null
+                username: null
+                password: null
             storage_provider_action: setup
             tenant_name: "tenant-null-bid"
             tenant_namespace: "osac-tenants"

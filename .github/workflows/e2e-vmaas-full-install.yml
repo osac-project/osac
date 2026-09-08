@@ -222,7 +222,11 @@ jobs:
           'vmaas/sanity'
         }}
       test-filter: ${{ inputs.test-filter || '' }}
-      test-marker: ${{ inputs.test-marker || '' }}
+      # The references module contains CaaS and BMaaS tests too. Those
+      # services are disabled in the VMaaS profile, so exclude tests marked
+      # with either dependency unless an explicit workflow-dispatch marker is
+      # supplied.
+      test-marker: ${{ inputs.test-marker || 'not requires_caas and not requires_bmaas' }}
       # osac-installer now lives as a subdirectory of this same monorepo checkout
       # (its Chart.yaml deps resolve fulfillment-service/osac-operator/osac-aap/BMF
       # as ../../../<name> siblings within it), so a PR touching those components

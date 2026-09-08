@@ -82,6 +82,8 @@ def pytest_configure(config: pytest.Config) -> None:
     e2e.log artifact.
     """
     config.addinivalue_line("markers", "metering: test verifies metering events via the test adapter HTTP API")
+    config.addinivalue_line("markers", "requires_caas: test requires the CaaS service to be enabled")
+    config.addinivalue_line("markers", "requires_bmaas: test requires the BMaaS service to be enabled")
     config.addinivalue_line("markers", "sanity: fast, low-risk smoke test suitable for every PR")
     config.addinivalue_line("markers", "regression: broader/slower coverage, run on a schedule or on demand")
     config.addinivalue_line("markers", "serial: must run alone, not in parallel with other tests (e.g. exhausts a shared resource)")

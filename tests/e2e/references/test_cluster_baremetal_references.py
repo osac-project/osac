@@ -105,6 +105,7 @@ def bmi_template(private_grpc: GRPCClient) -> str:
 class TestClusterBareMetalReferences:
     """OSAC-3110: Cluster and bare metal resource reference tests."""
 
+    @pytest.mark.requires_caas
     def test_cluster_provisioning_chain_by_name(
         self, private_grpc: GRPCClient, grpc: GRPCClient, cli: OsacCLI, cluster_template: str, cluster_version: str
     ):
@@ -138,6 +139,7 @@ class TestClusterBareMetalReferences:
             except subprocess.CalledProcessError:
                 logger.warning("Failed to cleanup cluster catalog item %s", cat_id)
 
+    @pytest.mark.requires_bmaas
     def test_baremetal_instance_chain_by_name(self, private_grpc: GRPCClient, grpc: GRPCClient, bmi_template: str):
         tag = uuid4().hex[:8]
         cat_name = f"ref-bmi-cat-{tag}"
@@ -179,6 +181,7 @@ class TestClusterBareMetalReferences:
             except subprocess.CalledProcessError:
                 logger.warning("Failed to cleanup BMI catalog item %s", cat_id)
 
+    @pytest.mark.requires_caas
     def test_cross_tenant_cluster_template_reference(
         self,
         private_grpc: GRPCClient,
@@ -212,6 +215,7 @@ class TestClusterBareMetalReferences:
             except subprocess.CalledProcessError:
                 logger.warning("Failed to cleanup cross-tenant catalog item %s", cat_id)
 
+    @pytest.mark.requires_caas
     def test_invalid_cluster_template_name_returns_error(self, private_grpc: GRPCClient):
         tag = uuid4().hex[:8]
         with pytest.raises(subprocess.CalledProcessError) as exc_info:

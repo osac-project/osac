@@ -1,0 +1,80 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "google/api/annotations.proto";
+import "google/protobuf/field_mask.proto";
+import "cleanapi/cleanapi.proto";
+import "osac/private/v1/fabric_domain_type.proto";
+
+option (cleanapi.file).package = "osac.public.v1";
+option (cleanapi.file).http_route_prefix_map = "private:fulfillment";
+
+message FabricDomainsListRequest {
+  optional int32 offset = 1;
+  optional int32 limit = 2;
+  optional string filter = 3;
+  optional string order = 4;
+}
+
+message FabricDomainsListResponse {
+  int32 size = 1;
+  int32 total = 2;
+  repeated FabricDomain items = 3;
+}
+
+message FabricDomainsGetRequest { string id = 1; }
+message FabricDomainsGetResponse { FabricDomain object = 1; }
+message FabricDomainsCreateRequest { FabricDomain object = 1; }
+message FabricDomainsCreateResponse { FabricDomain object = 1; }
+
+message FabricDomainsUpdateRequest {
+  FabricDomain object = 1;
+  google.protobuf.FieldMask update_mask = 2;
+  bool lock = 3;
+}
+
+message FabricDomainsUpdateResponse { FabricDomain object = 1; }
+message FabricDomainsDeleteRequest { string id = 1; }
+message FabricDomainsDeleteResponse {}
+message FabricDomainsSignalRequest {
+  option (cleanapi.message).private = true;
+  string id = 1;
+}
+message FabricDomainsSignalResponse {
+  option (cleanapi.message).private = true;
+}
+
+service FabricDomains {
+  rpc List(FabricDomainsListRequest) returns (FabricDomainsListResponse) {
+    option (google.api.http) = {get: "/api/private/v1/fabric_domains"};
+  }
+  rpc Get(FabricDomainsGetRequest) returns (FabricDomainsGetResponse) {
+    option (google.api.http) = {get: "/api/private/v1/fabric_domains/{id}" response_body: "object"};
+  }
+  rpc Create(FabricDomainsCreateRequest) returns (FabricDomainsCreateResponse) {
+    option (google.api.http) = {post: "/api/private/v1/fabric_domains" body: "object" response_body: "object"};
+  }
+  rpc Update(FabricDomainsUpdateRequest) returns (FabricDomainsUpdateResponse) {
+    option (google.api.http) = {patch: "/api/private/v1/fabric_domains/{object.id}" body: "object" response_body: "object"};
+  }
+  rpc Delete(FabricDomainsDeleteRequest) returns (FabricDomainsDeleteResponse) {
+    option (google.api.http) = {delete: "/api/private/v1/fabric_domains/{id}"};
+  }
+  rpc Signal(FabricDomainsSignalRequest) returns (FabricDomainsSignalResponse) {
+    option (cleanapi.method).private = true;
+  }
+}

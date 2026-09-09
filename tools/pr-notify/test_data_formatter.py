@@ -55,6 +55,20 @@ class TestDashboardData(unittest.TestCase):
         self.assertEqual(data["summary"]["ci_failing"], 0)
         self.assertEqual(data["repos"], [])
 
+    def test_repos_outside_dashboard_config_are_excluded(self):
+        data = format_dashboard_data(
+            [
+                _make_classified(repo="osac-project/osac"),
+                _make_classified(
+                    repo="osac-project/osac-ui", status=PRStatus.CI_FAILING
+                ),
+            ],
+            ["osac-project/osac"],
+        )
+
+        self.assertEqual([repo["name"] for repo in data["repos"]], ["osac-project/osac"])
+        self.assertEqual(data["summary"]["ci_failing"], 0)
+
     def test_summary_counts(self):
         prs = [
             _make_classified(status=PRStatus.NEEDS_REVIEW),

@@ -20,6 +20,7 @@ concurrency:
 jobs:
   deploy-site:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     environment:
       name: github-pages
     permissions:
@@ -60,9 +61,12 @@ jobs:
             echo "::endgroup::"
           done
 
+      - name: Install presentation dependencies
+        run: npm ci --prefix presentations
+
       - name: Build presentations
         run: |
-          npx @marp-team/marp-cli@4.4.0 --html --allow-local-files \
+          presentations/node_modules/.bin/marp --html --allow-local-files \
             --theme-set presentations/themes/redhat.css \
             --input-dir presentations/ \
             --output presentations/

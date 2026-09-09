@@ -1,7 +1,7 @@
 title = "OSAC PR Dashboard"
 description = "Live view of open pull requests across all OSAC component repos, updated every 30 minutes."
 
-# Repos to monitor (used by generate.py and notify.py)
+# Repos to monitor (used by dashboard data generators)
 repos = [
     "osac-project/osac",
     "osac-project/osac-ui",
@@ -9,11 +9,7 @@ repos = [
     "osac-project/enhancement-proposals",
 ]
 
-# Slack settings (used by notify.py only)
-slack_channel = "C08ESMFV85Q"
-slack_creds_dir = "~/.config/slack/"
-
-# Dashboard settings (used by generate.py for output path, notify.py for data URL)
+# Dashboard settings (data_path controls generated dashboard output)
 [dashboard]
 repo = "osac-project/osac"
 branch = "main"

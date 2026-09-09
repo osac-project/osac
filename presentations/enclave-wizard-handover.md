@@ -70,10 +70,7 @@ Web-based tool for managing Enclave deployment configurations
 
 ```go
 type ClusterConfig struct {
-    ProxyURL *string `json:"proxyURL,omitempty"
-                      yaml:"proxyURL,omitempty"
-                      doc:"HTTP proxy URL"
-                      pattern:"^https?://"`
+    ProxyURL *string `json:"proxyURL,omitempty" yaml:"proxyURL,omitempty" doc:"HTTP proxy URL" pattern:"^https?://"`
 }
 ```
 
@@ -128,10 +125,7 @@ type ClusterConfig struct {
 ```go
 type ClusterConfig struct {
     // ... existing fields ...
-    ProxyURL *string `json:"proxyURL,omitempty"
-                      yaml:"proxyURL,omitempty"
-                      doc:"HTTP proxy URL for outbound traffic"
-                      pattern:"^https?://"`
+    ProxyURL *string `json:"proxyURL,omitempty" yaml:"proxyURL,omitempty" doc:"HTTP proxy URL for outbound traffic" pattern:"^https?://"`
 }
 ```
 

@@ -29,6 +29,7 @@ def main() -> int:
         return 1
 
     dashboards = []
+    slugs = set()
     for path in configs:
         with open(path, "rb") as f:
             data = tomllib.load(f)
@@ -39,6 +40,10 @@ def main() -> int:
         if not slug:
             print(f"Skipping {path}: cannot derive slug from data_path '{data_path}'", file=sys.stderr)
             continue
+        if slug in slugs:
+            print(f"Duplicate dashboard slug '{slug}' from {path}", file=sys.stderr)
+            return 1
+        slugs.add(slug)
 
         dashboards.append({
             "title": data.get("title") or DEFAULT_TITLE,

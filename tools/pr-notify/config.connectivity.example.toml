@@ -20,10 +20,6 @@ filter_authors = [
     "ybettan",
 ]
 
-# Slack settings (used by notify.py only)
-# slack_channel = "<SLACK_CHANNEL_ID>"
-# slack_creds_dir = "~/.config/slack/"
-
 [dashboard]
 repo = "osac-project/osac"
 branch = "main"

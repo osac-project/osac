@@ -22,11 +22,7 @@ filter_authors = [
     "zszabo-rh",
 ]
 
-# Slack settings (used by notify.py only)
-slack_channel = "C0B6USDQ85S"
-slack_creds_dir = "~/.config/slack/"
-
-# Dashboard settings
+# Dashboard settings (data_path controls generated dashboard output)
 [dashboard]
 repo = "osac-project/osac"
 branch = "main"

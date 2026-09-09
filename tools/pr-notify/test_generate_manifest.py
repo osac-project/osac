@@ -1,9 +1,10 @@
 import json
 import os
+import sys
 import tempfile
 import unittest
 
-from generate_manifest import slug_from_data_path
+from generate_manifest import main, slug_from_data_path
 from models import DEFAULT_TITLE
 
 
@@ -84,6 +85,34 @@ class TestManifestGeneration(unittest.TestCase):
             with open(output) as f:
                 data = json.load(f)
             self.assertEqual(data[0]["title"], DEFAULT_TITLE)
+
+    def test_duplicate_slugs_fail_without_writing_manifest(self):
+        config = (
+            "repos = []\n"
+            "[dashboard]\n"
+            'repo = "test/repo"\n'
+            'branch = "main"\n'
+            'base_url = "https://example.com"\n'
+            'data_path = "docs/test-dashboard/data.json"\n'
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for name in ("config.example.toml", "config.storage.example.toml"):
+                with open(os.path.join(tmpdir, name), "w") as config_file:
+                    config_file.write(config)
+
+            output = os.path.join(tmpdir, "dashboards.json")
+            original_dir = os.getcwd()
+            original_argv = sys.argv
+            try:
+                os.chdir(tmpdir)
+                sys.argv = ["generate_manifest.py", "--output", output]
+                result = main()
+            finally:
+                os.chdir(original_dir)
+                sys.argv = original_argv
+
+            self.assertEqual(result, 1)
+            self.assertFalse(os.path.exists(output))
 
 
 if __name__ == "__main__":

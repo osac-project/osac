@@ -32,7 +32,6 @@
 - name: Uninstall OSAC CSI driver Helm release from guest cluster
   kubernetes.core.helm:
     kubeconfig: "{{ _remote_kubeconfig }}"
-    validate_certs: "{{ not (_remote_kubeconfig_insecure | default(false)) }}"
     release_name: "{{ osac_csi_driver_helm_release }}"
     release_namespace: "{{ osac_csi_driver_namespace }}"
     state: absent

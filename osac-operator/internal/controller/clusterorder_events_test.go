@@ -94,7 +94,7 @@ var _ = Describe("ClusterOrder transition events", func() {
 		Consistently(recorder.Events, 200*time.Millisecond).ShouldNot(Receive())
 	})
 
-	It("records a Normal event when provisioning becomes stalled", func() {
+	It("records a Warning event when provisioning becomes stalled", func() {
 		recorder := newRecorder()
 		reconciler := &ClusterOrderReconciler{Recorder: recorder}
 		instance := &v1alpha1.ClusterOrder{}
@@ -104,12 +104,12 @@ var _ = Describe("ClusterOrder transition events", func() {
 		reconciler.recordTransitionEvents(instance, &oldStatus)
 
 		Eventually(recorder.Events).Should(Receive(And(
-			ContainSubstring(corev1.EventTypeNormal),
+			ContainSubstring(corev1.EventTypeWarning),
 			ContainSubstring(v1alpha1.ReasonStalled),
 		)))
 	})
 
-	It("records a Normal event when the provisioning stage becomes unknown", func() {
+	It("records a Warning event when the provisioning stage becomes unknown", func() {
 		recorder := newRecorder()
 		reconciler := &ClusterOrderReconciler{Recorder: recorder}
 		instance := &v1alpha1.ClusterOrder{}
@@ -119,7 +119,7 @@ var _ = Describe("ClusterOrder transition events", func() {
 		reconciler.recordTransitionEvents(instance, &oldStatus)
 
 		Eventually(recorder.Events).Should(Receive(And(
-			ContainSubstring(corev1.EventTypeNormal),
+			ContainSubstring(corev1.EventTypeWarning),
 			ContainSubstring(v1alpha1.ReasonStageUnknown),
 			ContainSubstring("entered provisioning stage"),
 		)))
@@ -138,6 +138,24 @@ var _ = Describe("ClusterOrder transition events", func() {
 		Eventually(recorder.Events).Should(Receive(And(
 			ContainSubstring(corev1.EventTypeNormal),
 			ContainSubstring(string(v1alpha1.ClusterOrderPhaseDeleting)),
+		)))
+	})
+
+	It("records a Warning event when a ClusterOrder enters Failed", func() {
+		recorder := newRecorder()
+		reconciler := &ClusterOrderReconciler{Recorder: recorder}
+		instance := &v1alpha1.ClusterOrder{}
+		oldStatus := statusWithProgressingReason(v1alpha1.ReasonWorkersJoining)
+		instance.Status = statusWithProgressingReason(v1alpha1.ReasonProvisioningFailed)
+		instance.Status.Phase = v1alpha1.ClusterOrderPhaseFailed
+		instance.Status.Conditions[0].Message = "No agents available"
+
+		reconciler.recordTransitionEvents(instance, &oldStatus)
+
+		Eventually(recorder.Events).Should(Receive(And(
+			ContainSubstring(corev1.EventTypeWarning),
+			ContainSubstring(v1alpha1.ReasonProvisioningFailed),
+			ContainSubstring("ClusterOrder provisioning failed"),
 		)))
 	})
 

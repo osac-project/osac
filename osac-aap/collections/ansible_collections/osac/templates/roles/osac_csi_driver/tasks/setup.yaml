@@ -1,0 +1,10 @@
+---
+# OSAC CSI driver setup: no hub-side backend resources to create.
+# The tenant-scoped CSI service identity (client-id/client-secret) is provisioned
+# by OSAC-4197 during tenant onboarding and consumed during ensure_storage_class.
+# This task file is intentionally a no-op so the dispatcher contract is satisfied.
+- name: OSAC CSI driver setup is a no-op (handled by OSAC-4197)
+  ansible.builtin.debug:
+    msg: >-
+      osac_csi_driver setup: tenant-scoped CSI credentials are created by OSAC-4197.
+      No hub-side setup is required here.

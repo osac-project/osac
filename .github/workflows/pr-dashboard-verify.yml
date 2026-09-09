@@ -54,5 +54,16 @@ jobs:
             --input-dir presentations/ \
             --output presentations/
 
+      - name: Validate publication inputs
+        run: |
+          python3 tools/generate-site-index.py presentations "$RUNNER_TEMP/index.html"
+          (
+            cd tools/pr-notify
+            for config in config*.example.toml; do
+              python3 generate.py --config "$config" --output /dev/null --print-data-path >/dev/null
+            done
+            python3 generate_manifest.py --output "$RUNNER_TEMP/dashboards.json"
+          )
+
       - name: Test dashboard link safety
         run: node tools/test_pr_dashboard.js

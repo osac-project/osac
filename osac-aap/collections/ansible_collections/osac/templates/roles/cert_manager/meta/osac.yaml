@@ -1,0 +1,17 @@
+---
+name: cert-manager
+title: cert-manager Operator
+description: >
+  Installs the cert-manager Operator for certificate management.
+
+template_type: addon_operator
+
+min_ocp_version: "4.14.0"
+max_ocp_version: ""
+exclusions: []
+dependencies: []
+
+package_name: cert-manager
+channel: stable
+catalog_source: community-operators
+catalog_source_namespace: openshift-marketplace

@@ -259,6 +259,7 @@ class TestMetadataTemplateTypes:
             ("cudn_net", TemplateTypeEnum.network),
             ("bm_host_agent_provisioning", TemplateTypeEnum.bare_metal_instance),
             ("vast_storage", TemplateTypeEnum.storage_provider),
+            ("cert_manager", TemplateTypeEnum.addon_operator),
         ],
     )
     def test_template_type_parsed_correctly(
@@ -271,6 +272,14 @@ class TestMetadataTemplateTypes:
         metadata = _load_metadata(roles_dir, "ocp_virt_vm")
         assert metadata.spec_defaults is not None
         assert metadata.spec_defaults["boot_disk"] is not None
+
+    def test_addon_operator_has_role_local_olm_metadata(self, roles_dir):
+        metadata = _load_metadata(roles_dir, "cert_manager")
+
+        assert metadata.package_name == "cert-manager"
+        assert metadata.channel == "stable"
+        assert metadata.catalog_source == "community-operators"
+        assert metadata.catalog_source_namespace == "openshift-marketplace"
 
     def test_cluster_pull_secret_reference_serialization(self):
         defaults = ClusterTemplateSpecDefaults.model_validate(

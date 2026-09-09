@@ -4,9 +4,8 @@
 
 csi_driver_install_chart_registry: "oci://ghcr.io/osac-project/charts"
 
-# PLACEHOLDER -- no osac-csi-driver/vX.Y.Z release tag has been cut yet, so no
-# real chart version exists. Override once one is published.
-csi_driver_install_chart_version: "0.0.0"
+# The osac-csi-driver/v0.0.1 release publishes this chart to GHCR.
+csi_driver_install_chart_version: "0.0.1"
 
 csi_driver_install_namespace: "osac-csi"
 csi_driver_install_backends_namespace: "osac-csi-backends"

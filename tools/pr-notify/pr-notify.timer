@@ -1,0 +1,10 @@
+[Unit]
+Description=OSAC PR Slack Notifier - Sun-Fri mornings
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 09:00:00 UTC
+OnCalendar=Sun *-*-* 09:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

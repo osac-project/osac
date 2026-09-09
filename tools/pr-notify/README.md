@@ -146,6 +146,7 @@ The Action runs automatically via `.github/workflows/pr-dashboard.yml`:
 Install as a user service for daily Slack summaries.
 
 **Note:** `pr-notify.service` assumes the repo is cloned at `~/work/src/github/osac`. Edit paths if your checkout is elsewhere.
+Before enabling the timer, create and configure the gitignored `config.toml` as described above. The service reads that one notification configuration; it does not run dashboard-only example configurations.
 
 ```bash
 cp pr-notify.service pr-notify.timer ~/.config/systemd/user/

@@ -1,5 +1,5 @@
 # NOTE: Paths below assume the repo is cloned at ~/work/src/github/osac.
-# Edit ExecStart and WorkingDirectory to match your local checkout.
+# Edit WorkingDirectory to match your local checkout.
 
 [Unit]
 Description=OSAC PR Slack Notifier - post dashboard summary to Slack
@@ -8,7 +8,7 @@ After=network.target
 [Service]
 Type=oneshot
 TimeoutStartSec=120
-ExecStart=/bin/bash -c 'rc=0; for c in config*.example.toml; do python3 notify.py --config "$c" || rc=1; done; exit $rc'
+ExecStart=/usr/bin/python3 notify.py --config config.toml
 WorkingDirectory=%h/work/src/github/osac/tools/pr-notify
 Environment=PATH=/usr/local/bin:/usr/bin:/bin:%h/.local/bin
 

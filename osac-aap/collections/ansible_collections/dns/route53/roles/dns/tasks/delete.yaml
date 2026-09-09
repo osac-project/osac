@@ -9,3 +9,8 @@
     access_key: "{{ lookup('env', 'AWS_ACCESS_KEY_ID') | trim }}"
     secret_key: "{{ lookup('env', 'AWS_SECRET_ACCESS_KEY') | trim }}"
   no_log: true
+  register: dns_delete_result
+  failed_when:
+    - dns_delete_result is failed
+    - >-
+      'was not found' not in (dns_delete_result.msg | default(''))

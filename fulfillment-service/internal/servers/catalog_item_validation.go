@@ -14,14 +14,11 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	grpccodes "google.golang.org/grpc/codes"
@@ -30,8 +27,6 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 
-	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/maputil"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -43,21 +38,6 @@ type catalogItem interface {
 	GetPublished() bool
 	GetFieldDefinitions() []*privatev1.FieldDefinition
 	GetMetadata() *privatev1.Metadata
-}
-
-// resourceRef is the common interface for typed resource reference messages.
-type resourceRef interface {
-	GetId() string
-	GetName() string
-}
-
-// refKey extracts a display/lookup key from a typed resource reference.
-// Returns the id if set, otherwise the name.
-func refKey(ref resourceRef) string {
-	if id := ref.GetId(); id != "" {
-		return id
-	}
-	return ref.GetName()
 }
 
 // validateFieldDefinitions checks that field definitions are well-formed:
@@ -352,206 +332,4 @@ func isPathCovered(path string, allowedPaths map[string]bool) bool {
 		}
 	}
 	return false
-}
-
-// validateInstanceTypeState looks up an instance type by name and validates its state.
-// Returns warnings for DEPRECATED types, error for OBSOLETE or not-found types.
-// The source parameter provides context for error messages (e.g., " in spec_defaults", " in field_definitions").
-// Pass an empty string for source when validating directly on a ComputeInstance.
-func validateInstanceTypeState(
-	ctx context.Context,
-	instanceTypesDao *dao.GenericDAO[*privatev1.InstanceType],
-	instanceTypeName string,
-	source string,
-) ([]string, error) {
-	getResponse, err := instanceTypesDao.Get().
-		SetId(instanceTypeName).
-		Do(ctx)
-	if err != nil {
-		var notFoundErr *dao.ErrNotFound
-		if errors.As(err, &notFoundErr) {
-			return nil, grpcstatus.Errorf(grpccodes.NotFound,
-				"instance type '%s'%s not found", instanceTypeName, source)
-		}
-		return nil, grpcstatus.Errorf(grpccodes.Internal,
-			"failed to retrieve instance type '%s'", instanceTypeName)
-	}
-
-	it := getResponse.GetObject()
-	state := it.GetSpec().GetState()
-	var warnings []string
-
-	switch state {
-	case privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_OBSOLETE:
-		return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition,
-			"instance type '%s'%s is obsolete and cannot be used",
-			instanceTypeName, source)
-	case privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_DEPRECATED:
-		warning := fmt.Sprintf("Instance type '%s'%s is deprecated", instanceTypeName, source)
-		dep := it.GetSpec().GetDeprecation()
-		if dep != nil {
-			if dep.GetObsolescenceTimestamp() != nil {
-				warning += fmt.Sprintf(" and will become obsolete on %s",
-					dep.GetObsolescenceTimestamp().AsTime().Format(time.RFC3339))
-			}
-			if dep.GetReplacement() != nil {
-				warning += fmt.Sprintf(". Consider using '%s' instead", refKey(dep.GetReplacement()))
-			}
-		}
-		warnings = append(warnings, warning)
-	}
-
-	return warnings, nil
-}
-
-// validateDiskImageState looks up a DiskImage by id or name through the tenant-filtered DAO and
-// validates its lifecycle. It returns the resolved DiskImage (callers such as the ComputeInstance
-// handler backfill id/name onto the stored reference), a warning for DEPRECATED images, an error
-// for OBSOLETE or not-found images, and (nil, nil, nil) when key is empty. source adds context to
-// error messages (e.g. " in field_definitions"); pass "" when validating directly on a
-// ComputeInstance. Shared by the ComputeInstance, ComputeInstanceTemplate, and CatalogItem servers,
-// mirroring validateInstanceTypeState.
-//
-// Names are unique only per tenant, so a lookup by name may match several rows (a shared image plus
-// same-name tenant images). preferredTenant breaks the tie: the preferred-tenant image wins, then
-// the shared image, otherwise the ambiguity is an InvalidArgument. Callers pass their default tenant
-// (own tenant for a tenant-scoped caller, shared for an admin; see
-// auth.TenancyLogic.DetermineDefaultTenant). A key that is an id matches at most one row, so callers
-// that always pass an id (ComputeInstance, ComputeInstanceTemplate) can pass an empty preferredTenant.
-//
-// Error codes follow the instance_type / ComputeInstance handlers: NotFound for missing,
-// FailedPrecondition for OBSOLETE, a warning for DEPRECATED. A cross-tenant reference resolves to
-// zero rows under the DAO's tenancy filter and collapses into the not-found case, avoiding any leak
-// of cross-tenant existence.
-func validateDiskImageState(
-	ctx context.Context,
-	diskImagesDao *dao.GenericDAO[*privatev1.DiskImage],
-	key string,
-	preferredTenant string,
-	source string,
-) (*privatev1.DiskImage, []string, error) {
-	if key == "" {
-		return nil, nil, nil
-	}
-
-	diskImage, err := getDiskImage(ctx, diskImagesDao, key, preferredTenant, source)
-	if err != nil {
-		return nil, nil, err
-	}
-	warnings, err := validateDiskImageLifecycle(diskImage, key, source)
-	if err != nil {
-		return nil, nil, err
-	}
-	return diskImage, warnings, nil
-}
-
-func getDiskImage(
-	ctx context.Context,
-	diskImagesDao *dao.GenericDAO[*privatev1.DiskImage],
-	key string,
-	preferredTenant string,
-	source string,
-) (*privatev1.DiskImage, error) {
-	if key == "" {
-		return nil, nil
-	}
-
-	response, err := diskImagesDao.List().
-		SetFilter(fmt.Sprintf("this.id == %[1]s || this.metadata.name == %[1]s", strconv.Quote(key))).
-		SetLimit(1).
-		Do(ctx)
-	if err != nil {
-		var deniedErr *dao.ErrDenied
-		if errors.As(err, &deniedErr) {
-			return nil, grpcstatus.Errorf(grpccodes.PermissionDenied, "%s", deniedErr.Reason)
-		}
-		return nil, grpcstatus.Errorf(grpccodes.Internal,
-			"failed to retrieve disk image '%s'", key)
-	}
-
-	var diskImage *privatev1.DiskImage
-	switch response.GetTotal() {
-	case 0:
-		return nil, grpcstatus.Errorf(grpccodes.NotFound,
-			"disk image '%s'%s not found", key, source)
-	case 1:
-		diskImage = response.GetItems()[0]
-	default:
-		// The name resolved to multiple disk images; break the tie by tenant precedence.
-		diskImage, err = resolvePreferredDiskImage(ctx, diskImagesDao, key, preferredTenant, source)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return diskImage, nil
-}
-
-func validateDiskImageLifecycle(
-	diskImage *privatev1.DiskImage,
-	key string,
-	source string,
-) ([]string, error) {
-	lifecycle := diskImage.GetSpec().GetLifecycle()
-	var warnings []string
-
-	switch lifecycle {
-	case privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_OBSOLETE:
-		return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition,
-			"disk image '%s'%s is obsolete and cannot be used", key, source)
-	case privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_DEPRECATED:
-		warning := fmt.Sprintf("Disk image '%s'%s is deprecated", key, source)
-		dep := diskImage.GetSpec().GetDeprecation()
-		if dep != nil && dep.GetObsolescenceTimestamp() != nil {
-			warning += fmt.Sprintf(" and will become obsolete on %s",
-				dep.GetObsolescenceTimestamp().AsTime().Format(time.RFC3339))
-		}
-		warnings = append(warnings, warning)
-	}
-
-	return warnings, nil
-}
-
-// resolvePreferredDiskImage breaks a disk-image name collision deterministically. Names are unique
-// only per tenant, so a shared image and one or more same-name tenant images can coexist. The image
-// owned by preferredTenant wins; failing that, the shared image; failing that, the collision is a
-// genuine ambiguity (e.g. a provider admin naming a name held by several tenants but by no shared
-// image) and is reported as InvalidArgument. Each candidate is fetched with an explicit tenant
-// filter (on top of the DAO's own tenancy filter) so the choice is exact regardless of how many
-// tenants share the name. An empty preferredTenant yields no candidate tenants and falls straight
-// through to the ambiguity error.
-func resolvePreferredDiskImage(
-	ctx context.Context,
-	diskImagesDao *dao.GenericDAO[*privatev1.DiskImage],
-	name string,
-	preferredTenant string,
-	source string,
-) (*privatev1.DiskImage, error) {
-	tenants := make([]string, 0, 2)
-	for _, tenant := range []string{preferredTenant, auth.SharedTenant} {
-		if tenant != "" && !slices.Contains(tenants, tenant) {
-			tenants = append(tenants, tenant)
-		}
-	}
-
-	for _, tenant := range tenants {
-		response, err := diskImagesDao.List().
-			SetFilter(fmt.Sprintf("this.metadata.name == %s && this.metadata.tenant == %s",
-				strconv.Quote(name), strconv.Quote(tenant))).
-			SetLimit(1).
-			Do(ctx)
-		if err != nil {
-			var deniedErr *dao.ErrDenied
-			if errors.As(err, &deniedErr) {
-				return nil, grpcstatus.Errorf(grpccodes.PermissionDenied, "%s", deniedErr.Reason)
-			}
-			return nil, grpcstatus.Errorf(grpccodes.Internal,
-				"failed to retrieve disk image '%s'", name)
-		}
-		if response.GetTotal() >= 1 {
-			return response.GetItems()[0], nil
-		}
-	}
-
-	return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
-		"there are multiple disk images with identifier or name '%s'%s", name, source)
 }

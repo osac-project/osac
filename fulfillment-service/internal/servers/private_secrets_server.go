@@ -22,6 +22,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
@@ -275,7 +276,7 @@ func (s *PrivateSecretsServer) Update(ctx context.Context,
 		return
 	}
 
-	err = s.validateSecretUpdate(ctx, request.GetObject(), existingSecret)
+	err = s.validateSecretUpdate(ctx, request.GetObject(), request.GetUpdateMask(), existingSecret)
 	if err != nil {
 		return
 	}
@@ -411,6 +412,9 @@ func (s *PrivateSecretsServer) validateSecretCreate(secret *privatev1.Secret) er
 	if secret.GetMetadata() == nil || secret.GetMetadata().GetName() == "" {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'metadata.name' is required")
 	}
+	if secret.GetType() == privatev1.SecretType_SECRET_TYPE_UNSPECIFIED {
+		secret.SetType(privatev1.SecretType_SECRET_TYPE_OPAQUE)
+	}
 
 	switch secret.GetBackend() {
 	case privatev1.SecretBackend_SECRET_BACKEND_HUB:
@@ -418,10 +422,7 @@ func (s *PrivateSecretsServer) validateSecretCreate(secret *privatev1.Secret) er
 			return err
 		}
 	default:
-		if len(secret.GetData()) == 0 {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"field 'data' is required")
-		}
+		return validateSecretData(secret.GetType(), secret.GetData())
 	}
 
 	return nil
@@ -446,17 +447,55 @@ func (s *PrivateSecretsServer) validateHubSecretCreate(secret *privatev1.Secret)
 }
 
 func (s *PrivateSecretsServer) validateSecretUpdate(_ context.Context,
-	newSecret *privatev1.Secret, existingSecret *privatev1.Secret) error {
+	newSecret *privatev1.Secret, updateMask *fieldmaskpb.FieldMask, existingSecret *privatev1.Secret) error {
 	if newSecret.GetBackend() != privatev1.SecretBackend_SECRET_BACKEND_UNSPECIFIED &&
 		newSecret.GetBackend() != existingSecret.GetBackend() {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"field 'backend' is immutable and cannot be changed from '%s' to '%s'",
 			existingSecret.GetBackend(), newSecret.GetBackend())
 	}
-	if existingSecret.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_HUB &&
-		len(newSecret.GetData()) > 0 {
+	typeUpdated := updateMask == nil || len(updateMask.GetPaths()) == 0 ||
+		updateIncludesField(updateMask, "type")
+	if typeUpdated && newSecret.GetType() != existingSecret.GetType() {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'type' is immutable and cannot be changed from '%s' to '%s'",
+			existingSecret.GetType(), newSecret.GetType())
+	}
+
+	dataUpdated := updateMask == nil || len(updateMask.GetPaths()) == 0 ||
+		updateIncludesField(updateMask, "data")
+	if !dataUpdated {
+		return nil
+	}
+	if existingSecret.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_HUB && len(newSecret.GetData()) > 0 {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"field 'data' must be empty when backend is HUB")
+	}
+	if existingSecret.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_HUB {
+		return nil
+	}
+	return validateSecretData(existingSecret.GetType(), newSecret.GetData())
+}
+
+func validateSecretData(secretType privatev1.SecretType, data map[string][]byte) error {
+	key := ""
+	switch secretType {
+	case privatev1.SecretType_SECRET_TYPE_OPAQUE, privatev1.SecretType_SECRET_TYPE_UNSPECIFIED:
+		return nil
+	case privatev1.SecretType_SECRET_TYPE_PULL_SECRET:
+		key = ".dockerconfigjson"
+	case privatev1.SecretType_SECRET_TYPE_KUBECONFIG:
+		key = "kubeconfig"
+	case privatev1.SecretType_SECRET_TYPE_USER_DATA:
+		key = "userdata"
+	case privatev1.SecretType_SECRET_TYPE_VALUE:
+		key = "value"
+	default:
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'type' has unknown value %d", secretType)
+	}
+	if len(data[key]) == 0 {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"secret type %s requires a non-empty data[%q] entry", secretType, key)
 	}
 	return nil
 }

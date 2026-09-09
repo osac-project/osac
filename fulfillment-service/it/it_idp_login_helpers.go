@@ -666,7 +666,7 @@ func (t *Tool) SimulateOIDCLogin(ctx context.Context, idpAlias, username, passwo
 		}
 		req, err := http.NewRequestWithContext(ctx, next.method, next.rawURL, bodyReader)
 		if err != nil {
-			return "", fmt.Errorf("hop %d: failed to build request to %s: %w", i, next.rawURL, err)
+			return "", fmt.Errorf("hop %d: failed to build request to %s: %w", i, sanitizeURL(next.rawURL), err)
 		}
 		if next.form != nil {
 			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -675,13 +675,14 @@ func (t *Tool) SimulateOIDCLogin(ctx context.Context, idpAlias, username, passwo
 		resp, err := httpClient.Do(req)
 		if err != nil {
 			return "", fmt.Errorf("hop %d: request to %s failed: %w\nchain:\n%s",
-				i, next.rawURL, err, strings.Join(redirectLog, "\n"))
+				i, sanitizeURL(next.rawURL), err, strings.Join(redirectLog, "\n"))
 		}
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
 		resp.Body.Close()
 
+		// Log scheme+host+path only — query params may contain OAuth codes/state.
 		redirectLog = append(redirectLog, fmt.Sprintf("hop %d: %s %s → HTTP %d",
-			i, next.method, next.rawURL, resp.StatusCode))
+			i, next.method, sanitizeURL(next.rawURL), resp.StatusCode))
 
 		switch resp.StatusCode {
 		case http.StatusFound, http.StatusSeeOther, http.StatusMovedPermanently,
@@ -694,7 +695,8 @@ func (t *Tool) SimulateOIDCLogin(ctx context.Context, idpAlias, username, passwo
 			// Resolve relative Location URLs against the current request URL.
 			locURL, resolveErr := req.URL.Parse(location)
 			if resolveErr != nil {
-				return "", fmt.Errorf("hop %d: invalid Location %q: %w", i, location, resolveErr)
+				return "", fmt.Errorf("hop %d: invalid Location (sanitized: %s): %w",
+					i, sanitizeURL(location), resolveErr)
 			}
 			location = locURL.String()
 
@@ -702,7 +704,8 @@ func (t *Tool) SimulateOIDCLogin(ctx context.Context, idpAlias, username, passwo
 				// KC redirected to the callback — extract the authorization code.
 				parsed, parseErr := url.Parse(location)
 				if parseErr != nil {
-					return "", fmt.Errorf("hop %d: invalid callback URL %q: %w", i, location, parseErr)
+					return "", fmt.Errorf("hop %d: invalid callback URL (sanitized: %s): %w",
+						i, sanitizeURL(location), parseErr)
 				}
 				if kcErr := parsed.Query().Get("error"); kcErr != "" {
 					return "", fmt.Errorf("KC error at callback: %s — %s",
@@ -710,7 +713,8 @@ func (t *Tool) SimulateOIDCLogin(ctx context.Context, idpAlias, username, passwo
 				}
 				kcCode := parsed.Query().Get("code")
 				if kcCode == "" {
-					return "", fmt.Errorf("hop %d: callback URL has no code: %s", i, location)
+					return "", fmt.Errorf("hop %d: callback URL missing 'code' param (sanitized: %s)",
+						i, sanitizeURL(location))
 				}
 				return t.exchangeKCCode(ctx, httpClient, kcCode, callbackBase, codeVerifier)
 			}
@@ -730,7 +734,9 @@ func (t *Tool) SimulateOIDCLogin(ctx context.Context, idpAlias, username, passwo
 			// Resolve the form action URL relative to the current request URL.
 			actionURL, resolveErr := req.URL.Parse(formAction)
 			if resolveErr != nil {
-				return "", fmt.Errorf("hop %d: invalid form action %q: %w", i, formAction, resolveErr)
+				// formAction comes from page HTML (no OAuth params); safe to include sanitized.
+				return "", fmt.Errorf("hop %d: invalid form action (sanitized: %s): %w",
+					i, sanitizeURL(formAction), resolveErr)
 			}
 			next = hop{
 				method: http.MethodPost,
@@ -744,11 +750,23 @@ func (t *Tool) SimulateOIDCLogin(ctx context.Context, idpAlias, username, passwo
 
 		default:
 			return "", fmt.Errorf("hop %d: unexpected HTTP %d at %s\nchain:\n%s\nbody (first 500 chars): %.500s",
-				i, resp.StatusCode, next.rawURL, strings.Join(redirectLog, "\n"), string(respBody))
+				i, resp.StatusCode, sanitizeURL(next.rawURL), strings.Join(redirectLog, "\n"), string(respBody))
 		}
 	}
 
 	return "", fmt.Errorf("OIDC redirect chain exceeded maximum hops\nchain:\n%s", strings.Join(redirectLog, "\n"))
+}
+
+// sanitizeURL returns scheme+host+path of u with all query parameters stripped.
+// Used in error messages to avoid leaking OAuth codes, state, and code_verifier values.
+func sanitizeURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "[unparseable URL]"
+	}
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String()
 }
 
 // exchangeKCCode exchanges a KC authorization code for a JWT access token.

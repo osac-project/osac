@@ -213,8 +213,10 @@ var _ = Describe("Identity provider login flow", func() {
 						AuthorizationUrl: "https://oidc.example.com/authorize",
 						TokenUrl:         "https://oidc.example.com/token",
 						ClientId:         "intruder",
-						ClientSecret:     "secret",
-						Issuer:           "https://oidc.example.com",
+						// Use a random value — this IdP is never registered/reachable;
+						// we only need any non-empty string to pass API validation.
+						ClientSecret: uuid.New(),
+						Issuer:       "https://oidc.example.com",
 					}.Build(),
 				}.Build(),
 			}.Build(),

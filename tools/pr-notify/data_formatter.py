@@ -25,6 +25,11 @@ def format_dashboard_data(
     Returns:
         Dict with keys: title, generated_at, summary, repos, ci_health.
     """
+    configured_repos = set(repos)
+    classified_prs = [
+        classified_pr for classified_pr in classified_prs
+        if classified_pr.pr.repo in configured_repos
+    ]
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     reviewable = [

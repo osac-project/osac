@@ -1,4 +1,5 @@
 import os
+import re
 import tomllib
 
 from models import Config, DashboardConfig
@@ -25,11 +26,18 @@ def load_config(path: str) -> Config:
     except tomllib.TOMLDecodeError as e:
         raise SystemExit(f"Failed to parse TOML config '{path}': {e}")
 
-    if "repos" not in data:
-        raise SystemExit(f"Missing required field 'repos' in config '{path}'")
-
-    raw_creds_dir = data.get("slack_creds_dir")
-    slack_creds_dir = os.path.expanduser(raw_creds_dir) if raw_creds_dir else None
+    raw_repos = data.get("repos")
+    if not isinstance(raw_repos, list) or not raw_repos:
+        raise SystemExit(
+            f"Field 'repos' must be a non-empty array in config '{path}'"
+        )
+    for repo in raw_repos:
+        if not isinstance(repo, str) or not re.fullmatch(
+            r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+", repo
+        ):
+            raise SystemExit(
+                f"Invalid repository '{repo}' in config '{path}'; expected 'owner/name'"
+            )
 
     dashboard = None
     if "dashboard" in data:
@@ -63,9 +71,7 @@ def load_config(path: str) -> Config:
         filter_authors = raw_authors
 
     return Config(
-        repos=data["repos"],
-        slack_channel=data.get("slack_channel"),
-        slack_creds_dir=slack_creds_dir,
+        repos=raw_repos,
         dashboard=dashboard,
         filter_authors=filter_authors,
         title=data.get("title"),

@@ -78,8 +78,8 @@ jobs:
         run: |
           mkdir -p _site/presentations
           cp index.html _site/
-          for dashboard_dir in docs/*dashboard*/; do
-            [ -d "$dashboard_dir" ] || continue
+          for dashboard_dir in docs/*/; do
+            [ -f "$dashboard_dir/data.json" ] || continue
             cp -r "$dashboard_dir" "_site/$(basename "$dashboard_dir")"
           done
           (

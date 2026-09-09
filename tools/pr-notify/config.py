@@ -4,6 +4,8 @@ import tomllib
 
 from models import Config, DashboardConfig
 
+_DASHBOARD_DATA_PATH_PATTERN = re.compile(r"docs/[A-Za-z0-9._-]+/data\.json")
+
 
 def load_config(path: str) -> Config:
     """Load and validate a TOML configuration file.
@@ -51,11 +53,18 @@ def load_config(path: str) -> Config:
                 raise SystemExit(
                     f"Missing required field 'dashboard.{f}' in config '{path}'"
                 )
+        data_path = d.get("data_path", "docs/pr-dashboard/data.json")
+        if not isinstance(data_path, str) or not _DASHBOARD_DATA_PATH_PATTERN.fullmatch(
+            data_path
+        ):
+            raise SystemExit(
+                f"Field 'dashboard.data_path' must use 'docs/<dashboard>/data.json' in config '{path}'"
+            )
         dashboard = DashboardConfig(
             repo=d["repo"],
             branch=d["branch"],
             base_url=d["base_url"],
-            data_path=d.get("data_path", "docs/pr-dashboard/data.json"),
+            data_path=data_path,
         )
 
     raw_authors = data.get("filter_authors")

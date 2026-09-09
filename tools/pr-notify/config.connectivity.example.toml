@@ -1,0 +1,31 @@
+# Connectivity & Fabric WG PR Dashboard configuration
+# Shows only PRs authored by C&F WG members across OSAC repos.
+
+title = "Connectivity & Fabric WG PR Dashboard"
+description = "Open PRs from Connectivity & Fabric working group members across OSAC repos."
+
+repos = [
+    "osac-project/osac",
+    "osac-project/osac-ui",
+    "osac-project/osac-test-infra",
+    "osac-project/enhancement-proposals",
+]
+
+filter_authors = [
+    "bkopilov",
+    "danmanor",
+    "ori-amizur",
+    "SiddarthR56",
+    "vladikr",
+    "ybettan",
+]
+
+# Slack settings (used by notify.py only)
+# slack_channel = "<SLACK_CHANNEL_ID>"
+# slack_creds_dir = "~/.config/slack/"
+
+[dashboard]
+repo = "osac-project/osac"
+branch = "main"
+base_url = "https://osac-project.github.io/osac/connectivity-pr-dashboard"
+data_path = "docs/connectivity-pr-dashboard/data.json"

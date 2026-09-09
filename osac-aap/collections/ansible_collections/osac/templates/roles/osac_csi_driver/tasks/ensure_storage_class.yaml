@@ -113,10 +113,9 @@
     - name: Deploy OSAC CSI driver via Helm on guest cluster
       kubernetes.core.helm:
         kubeconfig: "{{ _remote_kubeconfig }}"
-        validate_certs: "{{ not (_remote_kubeconfig_insecure | default(false)) }}"
         release_name: "{{ osac_csi_driver_helm_release }}"
         chart_ref: "{{ osac_csi_driver_chart_ref }}"
-        chart_version: "{{ osac_csi_driver_chart_version | default(omit) }}"
+        chart_version: "{{ osac_csi_driver_chart_version }}"
         release_namespace: "{{ osac_csi_driver_namespace }}"
         create_namespace: false
         wait: true
@@ -135,6 +134,8 @@
               tls:
                 insecureSkipVerify: "{{ osac_csi_driver_fulfillment_tls_insecure | bool }}"
 
+    # The csi-driver chart's fullname template produces "<release>-controller" when the
+    # release name ("csi-driver") already contains the chart name ("csi-driver").
     - name: Wait for OSAC CSI controller Deployment to be available
       kubernetes.core.k8s_info:
         api_version: apps/v1

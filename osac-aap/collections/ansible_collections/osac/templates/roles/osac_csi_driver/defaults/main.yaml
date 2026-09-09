@@ -6,15 +6,19 @@ osac_csi_driver_namespace: osac-csi
 # CSI driver name registered with Kubernetes (must match provisioner in StorageClasses).
 osac_csi_driver_name: csi.osac.openshift.io
 
-# OCI ref of the csi-driver Helm chart.  Overridden in production by the installer's
-# published chart reference.
-osac_csi_driver_chart_ref: ghcr.io/osac-project/charts/csi-driver
+# OCI registry path for the csi-driver Helm chart.  Matches csi_driver_install_chart_registry
+# used by osac.service.csi_driver_install (OSAC-3290) for consistency.
+osac_csi_driver_chart_ref: oci://ghcr.io/osac-project/charts/csi-driver
 
-# Chart version to deploy. Set to a pinned version in production.
-osac_csi_driver_chart_version: ""
+# Chart version to deploy.  Pinned to the same version as csi_driver_install_chart_version
+# in osac.service.csi_driver_install so hub and tenant clusters run identical binaries.
+osac_csi_driver_chart_version: "0.0.1"
 
-# Name of the Helm release on the tenant cluster.
-osac_csi_driver_helm_release: osac-csi-driver
+# Helm release name on the tenant cluster.  Matches the hub-side release name used by
+# osac.service.csi_driver_install so tooling, dashboards, and runbooks use a consistent name.
+# The csi-driver chart's fullname template produces "<release>-controller" for the Deployment
+# when the release name already contains the chart name ("csi-driver" ⊆ "csi-driver").
+osac_csi_driver_helm_release: csi-driver
 
 # Hub Secret name prefix written by OSAC-4197 for the tenant CSI service identity.
 # Full name: <prefix><tenant_name>

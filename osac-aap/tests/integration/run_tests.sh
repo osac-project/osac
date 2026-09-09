@@ -19,6 +19,15 @@ export POD_UID="00000000-0000-0000-0000-000000000000"
 export ANSIBLE_INVENTORY_UNPARSED_WARNING=False
 export ANSIBLE_LOCALHOST_WARNING=False
 
+# Run Ansible and its Kubernetes modules from the uv-managed project environment
+# rather than the system interpreter discovered by local-connection hosts.
+ANSIBLE_PYTHON_INTERPRETER="$(uv run python -c 'import sys; print(sys.executable)')"
+run_ansible_playbook() {
+  uv run ansible-playbook \
+    -e "ansible_python_interpreter=${ANSIBLE_PYTHON_INTERPRETER}" \
+    "$@"
+}
+
 FAILED=()
 PASSED=()
 
@@ -62,7 +71,7 @@ for workflow in "${WORKFLOWS[@]}"; do
 
   # Baseline test
   echo "  [1/2] Running baseline test..."
-  if ansible-playbook "targets/${workflow}/tasks/baseline.yml" -e "@common_vars.yml" -v; then
+  if run_ansible_playbook "targets/${workflow}/tasks/baseline.yml" -e "@common_vars.yml" -v; then
     echo "  ✓ Baseline passed"
     PASSED+=("$workflow:baseline")
   else
@@ -76,7 +85,7 @@ for workflow in "${WORKFLOWS[@]}"; do
     # Clear override log
     > /tmp/osac_test_overrides.log
 
-    if ansible-playbook "targets/${workflow}/tasks/overrides.yml" -e "@common_vars.yml" -v; then
+    if run_ansible_playbook "targets/${workflow}/tasks/overrides.yml" -e "@common_vars.yml" -v; then
       # Verify override log has entries
       if [ -s /tmp/osac_test_overrides.log ]; then
         echo "  ✓ Override test passed"
@@ -119,7 +128,7 @@ for role in "${ROLE_TESTS[@]}"; do
   echo "Testing role: $role"
   echo "----------------------------------------"
 
-  if ansible-playbook "targets/${role}/tasks/baseline.yml" -e "@common_vars.yml" -v; then
+  if run_ansible_playbook "targets/${role}/tasks/baseline.yml" -e "@common_vars.yml" -v; then
     echo "  ✓ Passed"
     PASSED+=("$role:baseline")
   else
@@ -137,7 +146,7 @@ for entry in "${ROLE_SCENARIO_TESTS[@]}"; do
   echo "Testing role: $role ($scenario)"
   echo "----------------------------------------"
 
-  if ansible-playbook "targets/${role}/tasks/${scenario}.yml" -e "@common_vars.yml" -v; then
+  if run_ansible_playbook "targets/${role}/tasks/${scenario}.yml" -e "@common_vars.yml" -v; then
     echo "  ✓ Passed"
     PASSED+=("$role:$scenario")
   else
@@ -163,7 +172,7 @@ echo ""
 # everything after it.
 STORAGE_PROVIDER_UNIT_TEST="${SCRIPT_DIR}/../../collections/ansible_collections/osac/service/roles/storage_provider/tests/test.yml"
 
-if ansible-playbook "${STORAGE_PROVIDER_UNIT_TEST}" -v -e storage_provider_csi_backends_enabled=false; then
+if run_ansible_playbook "${STORAGE_PROVIDER_UNIT_TEST}" -v -e storage_provider_csi_backends_enabled=false; then
   echo "  ✓ storage_provider unit tests (part 1) passed"
   PASSED+=("storage_provider_unit_tests:part1")
 else
@@ -172,7 +181,7 @@ else
 fi
 
 part2_log="${SCRIPT_DIR}/.storage_provider_unit_part2.log"
-if ansible-playbook --start-at-task "Attempt with invalid action 'destroy' (expected to fail)" \
+if run_ansible_playbook --start-at-task "Attempt with invalid action 'destroy' (expected to fail)" \
   "${STORAGE_PROVIDER_UNIT_TEST}" -v -e storage_provider_csi_backends_enabled=false > "${part2_log}" 2>&1 \
   && grep -q 'ok=[1-9]' "${part2_log}"; then
   echo "  ✓ storage_provider unit tests (part 2) passed"
@@ -213,7 +222,7 @@ if [ "${STORAGE_TESTS_ENABLED:-}" = "true" ]; then
   for storage_test in "${STORAGE_TESTS[@]}"; do
     echo "  Running: $storage_test"
     log_file="/tmp/osac_storage_test_${storage_test}.log"
-    if ansible-playbook "targets/${storage_test}/tasks/main.yml" -e "@common_vars.yml" -v > "${log_file}" 2>&1; then
+    if run_ansible_playbook "targets/${storage_test}/tasks/main.yml" -e "@common_vars.yml" -v > "${log_file}" 2>&1; then
       echo "  ✓ ${storage_test} passed"
       PASSED+=("$storage_test:baseline")
     else

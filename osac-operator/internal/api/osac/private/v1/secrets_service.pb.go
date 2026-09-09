@@ -50,10 +50,9 @@ type SecretsListRequest struct {
 	//
 	// The value of this parameter is a [CEL](https://cel.dev) expression used to select which objects to return. The
 	// built-in `this` variable refers to the object being tested and `now` refers to the current date and time. If the
-	// expression evaluates to `true` the object is included in the results. For example, to retrieve all secrets with
-	// a Vault backend:
+	// expression evaluates to `true` the object is included in the results. For example, to retrieve all pull secrets:
 	//
-	//	this.backend == SECRET_BACKEND_VAULT
+	//	this.type == SECRET_TYPE_PULL_SECRET
 	//
 	// If this isn't provided, or if the value is empty, then all the secrets that the user has permission to see will be
 	// returned. Not all CEL constructs are currently supported for implementation reasons; see the filter documentation
@@ -199,10 +198,9 @@ type SecretsListRequest_builder struct {
 	//
 	// The value of this parameter is a [CEL](https://cel.dev) expression used to select which objects to return. The
 	// built-in `this` variable refers to the object being tested and `now` refers to the current date and time. If the
-	// expression evaluates to `true` the object is included in the results. For example, to retrieve all secrets with
-	// a Vault backend:
+	// expression evaluates to `true` the object is included in the results. For example, to retrieve all pull secrets:
 	//
-	//	this.backend == SECRET_BACKEND_VAULT
+	//	this.type == SECRET_TYPE_PULL_SECRET
 	//
 	// If this isn't provided, or if the value is empty, then all the secrets that the user has permission to see will be
 	// returned. Not all CEL constructs are currently supported for implementation reasons; see the filter documentation

@@ -95,6 +95,13 @@ endif
 # chowns /dev/kvm), so it goes through the cross-platform wrapper; plain dev uses
 # bare kind (unchanged integration-test path).
 KIND_RUNTIME := scripts/dev-full/kind-runtime.sh
+KIND_ARM64_CLI_IMAGE := quay.io/openshift/origin-cli:4.20.0
+
+# quay.io/openshift/origin-cli:4.20.0 has no arm64 manifest. On Apple Silicon,
+# build a compatible local image with the same tag so every chart can continue
+# using the shared cliImage value without platform-specific values files.
+HOST_IS_MAC_ARM := $(shell if [ "$$(uname -s)" = "Darwin" ] && { [ "$$(uname -m)" = "arm64" ] || [ "$$(sysctl -in hw.optional.arm64 2>/dev/null)" = "1" ]; }; then echo true; fi)
+KIND_ARM64_CLI_IMAGE_SCRIPT := scripts/dev-full/build-arm64-cli-image.sh
 
 # Container tool and Kind cluster config.
 CONTAINER_TOOL ?= $(or $(shell command -v podman 2>/dev/null),$(shell command -v docker 2>/dev/null),$(error neither podman nor docker found in PATH))
@@ -138,6 +145,9 @@ ifeq ($(PLATFORM),kind)
 ifeq ($(PROFILE),dev-full)
 	@$(KIND_RUNTIME) check
 	@$(KIND_RUNTIME) create-cluster $(KIND_CLUSTER_NAME) $(KIND_CONFIG) $(KIND_KUBECONFIG)
+ifeq ($(HOST_IS_MAC_ARM),true)
+	@$(KIND_ARM64_CLI_IMAGE_SCRIPT) $(KIND_CLUSTER_NAME) $(KIND_ARM64_CLI_IMAGE)
+endif
 else
 	@if kind get clusters | grep -q "^$(KIND_CLUSTER_NAME)$$"; then \
 		echo "Kind cluster '$(KIND_CLUSTER_NAME)' already exists"; \

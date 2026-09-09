@@ -198,6 +198,11 @@ so networking resources reconcile to READY without a real fabric (kind has none)
   `kind`, `helm`, `kubectl`, `jq`, `curl`, `openssl`, `python3` on `PATH`
 - Override runtime detection with `KIND_EXPERIMENTAL_PROVIDER=docker|podman`
 
+On an Apple Silicon Mac, the install target automatically builds an arm64
+replacement for `quay.io/openshift/origin-cli:4.20.0` with Docker and loads it
+into the kind cluster before installing Helm charts. Docker Desktop must be
+running; no manual image setup is required.
+
 **Endpoints** (via the kind port mappings; every `*.localhost` name resolves to
 127.0.0.1 automatically, so no `/etc/hosts` editing is needed):
 

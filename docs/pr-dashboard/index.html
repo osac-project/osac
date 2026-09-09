@@ -87,6 +87,23 @@ function esc(s) {
   return d.innerHTML;
 }
 
+function safeHttpsUrl(value) {
+  if (typeof value !== "string") return "";
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" ? url.href : "";
+  } catch (_) {
+    return "";
+  }
+}
+
+function externalLink(url, label) {
+  const safeUrl = safeHttpsUrl(url);
+  return safeUrl
+    ? '<a href="' + esc(safeUrl) + '">' + esc(label) + "</a>"
+    : esc(label);
+}
+
 function badge(status) {
   const color = STATUS_COLORS[status] || "#6a6e73";
   const label = STATUS_LABELS[status] || status;
@@ -99,9 +116,7 @@ function checkRunRows(checks) {
   }
   return checks.map(function(cr) {
     const style = CONCLUSION_STYLES[cr.conclusion] || PENDING_STYLE;
-    const name = cr.details_url
-      ? '<a href="' + esc(cr.details_url) + '">' + esc(cr.name) + "</a>"
-      : esc(cr.name);
+    const name = externalLink(cr.details_url, cr.name);
     return "<tr><td>" + name + '</td><td style="color:' + style[0] + ';font-weight:600">' + style[1] + "</td></tr>";
   }).join("\n");
 }
@@ -176,15 +191,15 @@ function renderRepo(repo) {
     var checksHtml = checkRunRows(pr.check_runs);
     return "<tr>" +
       "<td>" + badge(pr.status) + "</td>" +
-      '<td><a href="' + esc(pr.url) + '">' + esc(pr.title) + "</a></td>" +
-      '<td><a href="https://github.com/' + esc(pr.author) + '">' + esc(pr.author) + "</a></td>" +
+      "<td>" + externalLink(pr.url, pr.title) + "</td>" +
+      "<td>" + externalLink("https://github.com/" + pr.author, pr.author) + "</td>" +
       '<td class="' + ageClass + '">' + pr.age_days + "d</td>" +
       '<td><details><summary>checks</summary><table class="checks">' + checksHtml + "</table></details></td>" +
       "</tr>";
   });
 
   return "<section>" +
-    '<h2><a href="' + esc(repo.pulls_url) + '">' + esc(repo.name) + "</a> (" + repo.prs.length + ")</h2>" +
+    "<h2>" + externalLink(repo.pulls_url, repo.name) + " (" + repo.prs.length + ")</h2>" +
     '<table class="pr-table">' +
     "<thead><tr><th>Status</th><th>Title</th><th>Author</th><th>Age</th><th>CI</th></tr></thead>" +
     "<tbody>" + rows.join("") + "</tbody>" +

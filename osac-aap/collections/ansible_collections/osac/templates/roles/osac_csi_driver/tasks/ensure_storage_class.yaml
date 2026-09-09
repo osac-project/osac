@@ -1,0 +1,196 @@
+---
+# OSAC CSI driver ensure_storage_class:
+#   1. Read tenant-scoped OAuth2 credentials from hub Secret (OSAC-4197).
+#   2. Deploy the OSAC CSI driver + NodePlugin to the tenant cluster via Helm.
+#   3. Propagate the OAuth2 credential Secret to the tenant cluster.
+#   4. Create per-tier opaque StorageClasses with provisioner csi.osac.openshift.io.
+#
+# This task file MUST only be called via _dispatch_provider.yaml when a CaaS
+# admin_kubeconfig is present (_remote_kubeconfig defined).  It raises an explicit
+# error when called in a hub-cluster (VMaaS) context because the OSAC CSI driver
+# belongs on tenant clusters only — hub-side provisioning uses vendor-specific roles.
+#
+# Idempotent: Helm upgrade --install is a no-op when the release is unchanged;
+# existing StorageClasses and the credential Secret are left untouched.
+
+- name: Assert _provider_tiers is defined and non-empty
+  ansible.builtin.assert:
+    that:
+      - _provider_tiers is defined
+      - _provider_tiers | length > 0
+    fail_msg: _provider_tiers must be provided by the service role dispatcher.
+
+- name: Fail when called without a guest-cluster kubeconfig (hub path unsupported)
+  ansible.builtin.fail:
+    msg: >-
+      osac_csi_driver ensure_storage_class requires a guest-cluster admin_kubeconfig
+      (_remote_kubeconfig must be set).  The OSAC CSI meta-driver is only deployed to
+      CaaS tenant clusters, not to the hub cluster.  Remove 'osac_csi_driver' from the
+      storage tiers for this Tenant if VMaaS-only storage is intended.
+  when: _remote_kubeconfig is not defined or _remote_kubeconfig | length == 0
+
+- name: Build expected StorageClass entries
+  ansible.builtin.set_fact:
+    _osac_csi_expected_sc_entries: >-
+      {% set entries = [] -%}
+      {% for tier in _provider_tiers -%}
+      {% set _ = entries.append({'name': 'osac-' ~ tenant_name ~ '-' ~ tier.name, 'tier': tier.name, 'protocol': tier.protocol}) -%}
+      {% endfor -%}
+      {{ entries }}
+    _osac_csi_expected_sc_names: >-
+      {% set names = [] -%}
+      {% for tier in _provider_tiers -%}
+      {% set _ = names.append('osac-' ~ tenant_name ~ '-' ~ tier.name) -%}
+      {% endfor -%}
+      {{ names }}
+
+- name: Check existing tenant StorageClasses on guest cluster
+  kubernetes.core.k8s_info:
+    api_version: storage.k8s.io/v1
+    kind: StorageClass
+    label_selectors:
+      - "osac.openshift.io/tenant={{ tenant_name }}"
+      - "osac.openshift.io/managed-by=osac-csi-driver"
+  register: _osac_csi_sc_check
+
+- name: Determine if all StorageClasses already exist
+  ansible.builtin.set_fact:
+    _osac_csi_all_sc_exist: >-
+      {{ (_osac_csi_expected_sc_names | difference(
+            _osac_csi_sc_check.resources | map(attribute='metadata.name') | list
+          ) | length) == 0 }}
+
+- name: Set StorageClass names output and skip provisioning when all SCs exist
+  when: _osac_csi_all_sc_exist | bool
+  block:
+    - name: Set StorageClass names output (short-circuit)
+      ansible.builtin.set_fact:
+        storage_provider_storage_class_names: "{{ _osac_csi_expected_sc_entries }}"
+
+    - name: Log short-circuit
+      ansible.builtin.debug:
+        msg: >-
+          All {{ _osac_csi_expected_sc_names | length }} OSAC CSI StorageClasses already
+          exist on guest cluster — skipping provisioning.
+
+# --- Full provisioning path ---
+- name: Provision OSAC CSI driver and StorageClasses on guest cluster
+  when: not (_osac_csi_all_sc_exist | bool)
+  block:
+    - name: Read tenant-scoped CSI credentials from hub Secret
+      ansible.builtin.include_tasks: read_hub_credentials.yaml
+
+    - name: Ensure OSAC CSI driver namespace exists on guest cluster
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ osac_csi_driver_namespace }}"
+            labels:
+              pod-security.kubernetes.io/enforce: privileged
+              pod-security.kubernetes.io/warn: privileged
+
+    - name: Create tenant CSI credential Secret on guest cluster
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "{{ osac_csi_driver_credentials_secret_name }}"
+            namespace: "{{ osac_csi_driver_namespace }}"
+            labels:
+              app.kubernetes.io/managed-by: osac-aap
+              osac.openshift.io/tenant: "{{ tenant_name }}"
+          type: Opaque
+          stringData:
+            client-id: "{{ _osac_csi_client_id }}"
+            client-secret: "{{ _osac_csi_client_secret }}"
+      no_log: true
+
+    - name: Deploy OSAC CSI driver via Helm on guest cluster
+      kubernetes.core.helm:
+        kubeconfig: "{{ _remote_kubeconfig }}"
+        validate_certs: "{{ not (_remote_kubeconfig_insecure | default(false)) }}"
+        release_name: "{{ osac_csi_driver_helm_release }}"
+        chart_ref: "{{ osac_csi_driver_chart_ref }}"
+        chart_version: "{{ osac_csi_driver_chart_version | default(omit) }}"
+        release_namespace: "{{ osac_csi_driver_namespace }}"
+        create_namespace: false
+        wait: true
+        wait_timeout: 5m
+        values:
+          driverName: "{{ osac_csi_driver_name }}"
+          namespace: "{{ osac_csi_driver_namespace }}"
+          controller:
+            fulfillment:
+              endpoint: "{{ _osac_csi_fulfillment_endpoint }}"
+              issuerUrl: "{{ _osac_csi_issuer_url }}"
+              credentials:
+                secretName: "{{ osac_csi_driver_credentials_secret_name }}"
+                clientIdKey: client-id
+                clientSecretKey: client-secret
+              tls:
+                insecureSkipVerify: "{{ osac_csi_driver_fulfillment_tls_insecure | bool }}"
+
+    - name: Wait for OSAC CSI controller Deployment to be available
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: "{{ osac_csi_driver_helm_release }}-controller"
+        namespace: "{{ osac_csi_driver_namespace }}"
+      register: _osac_csi_controller_status
+      until:
+        - _osac_csi_controller_status.resources | length > 0
+        - (_osac_csi_controller_status.resources[0].status.availableReplicas | default(0) | int) >= 1
+      retries: 30
+      delay: 20
+
+    - name: Create per-tier OSAC CSI StorageClasses on guest cluster
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: "{{ item.name }}"
+            labels:
+              app.kubernetes.io/managed-by: osac-aap
+              osac.openshift.io/managed-by: osac-csi-driver
+              osac.openshift.io/tenant: "{{ tenant_name }}"
+              osac.openshift.io/storage-tier: "{{ item.tier }}"
+              osac.openshift.io/storage-protocol: "{{ item.protocol }}"
+          provisioner: "{{ osac_csi_driver_name }}"
+          parameters:
+            csi.storage.k8s.io/provisioner-secret-name: "{{ osac_csi_driver_credentials_secret_name }}"
+            csi.storage.k8s.io/provisioner-secret-namespace: "{{ osac_csi_driver_namespace }}"
+            csi.storage.k8s.io/controller-publish-secret-name: "{{ osac_csi_driver_credentials_secret_name }}"
+            csi.storage.k8s.io/controller-publish-secret-namespace: "{{ osac_csi_driver_namespace }}"
+            csi.storage.k8s.io/node-publish-secret-name: "{{ osac_csi_driver_credentials_secret_name }}"
+            csi.storage.k8s.io/node-publish-secret-namespace: "{{ osac_csi_driver_namespace }}"
+            csi.storage.k8s.io/controller-expand-secret-name: "{{ osac_csi_driver_credentials_secret_name }}"
+            csi.storage.k8s.io/controller-expand-secret-namespace: "{{ osac_csi_driver_namespace }}"
+            osac.openshift.io/tenant: "{{ tenant_name }}"
+            osac.openshift.io/storage-tier: "{{ item.tier }}"
+          reclaimPolicy: "{{ osac_csi_driver_reclaim_policy }}"
+          volumeBindingMode: "{{ osac_csi_driver_volume_binding_mode }}"
+          allowVolumeExpansion: true
+      loop: "{{ _osac_csi_expected_sc_entries }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Set StorageClass names output
+      ansible.builtin.set_fact:
+        storage_provider_storage_class_names: "{{ _osac_csi_expected_sc_entries }}"
+
+  always:
+    - name: Clear tenant CSI credential facts from play scope
+      ansible.builtin.set_fact:
+        _osac_csi_client_id: ""
+        _osac_csi_client_secret: ""
+        _osac_csi_issuer_url: ""
+        _osac_csi_fulfillment_endpoint: ""
+        _osac_csi_hub_secret: {}
+      no_log: true

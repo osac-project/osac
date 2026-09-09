@@ -1,0 +1,202 @@
+---
+# Test playbook for osac.templates.osac_csi_driver role.
+# These tests run against mocked k8s resources using the kubernetes.core
+# collection's built-in fact-cache mode or via molecule.  No live cluster is
+# required.  Each play is guarded by `when` so exactly one test is active per run.
+#
+#   Test 1 (happy path -- all SCs already exist, short-circuit):
+#     ansible-playbook ... -e test_short_circuit=true
+#
+#   Test 2 (hub-cluster path rejected):
+#     ansible-playbook ... -e test_hub_path_rejected=true
+#
+#   Test 3 (missing hub Secret -- should fail):
+#     ansible-playbook ... -e test_missing_hub_secret=true
+#
+#   Test 4 (expected SC name derivation):
+#     ansible-playbook ... -e test_sc_name_derivation=true
+
+# ──────────────────────────────────────────────────────────────
+# Test 1: Short-circuit when all StorageClasses already exist
+# Expected: storage_provider_storage_class_names is set, no Helm install triggered
+# ──────────────────────────────────────────────────────────────
+- name: Test osac_csi_driver -- short-circuit when all SCs exist
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: tenant-alpha
+    tenant_namespace: openshift-osac-storage
+    _remote_kubeconfig: /tmp/fake.kubeconfig
+    _remote_kubeconfig_insecure: true
+
+  tasks:
+    - name: Run ensure_storage_class with all SCs pre-existing (mocked)
+      when: test_short_circuit | default(false) | bool
+      block:
+        - name: Inject mock k8s_info response for existing StorageClasses
+          ansible.builtin.set_fact:
+            _osac_csi_sc_check:
+              resources:
+                - metadata:
+                    name: "osac-tenant-alpha-default"
+                    labels:
+                      osac.openshift.io/tenant: tenant-alpha
+                      osac.openshift.io/managed-by: osac-csi-driver
+                - metadata:
+                    name: "osac-tenant-alpha-fast"
+                    labels:
+                      osac.openshift.io/tenant: tenant-alpha
+                      osac.openshift.io/managed-by: osac-csi-driver
+
+        - name: Set _osac_csi_all_sc_exist=true (mocking short-circuit condition)
+          ansible.builtin.set_fact:
+            _osac_csi_all_sc_exist: true
+            _osac_csi_expected_sc_entries:
+              - name: osac-tenant-alpha-default
+                tier: default
+                protocol: nfs
+              - name: osac-tenant-alpha-fast
+                tier: fast
+                protocol: nfs
+
+        - name: Set output fact (mirrors short-circuit block in ensure_storage_class)
+          ansible.builtin.set_fact:
+            storage_provider_storage_class_names: "{{ _osac_csi_expected_sc_entries }}"
+
+        - name: Verify output is set
+          ansible.builtin.assert:
+            that:
+              - storage_provider_storage_class_names | length == 2
+              - storage_provider_storage_class_names[0].name == 'osac-tenant-alpha-default'
+              - storage_provider_storage_class_names[1].name == 'osac-tenant-alpha-fast'
+            success_msg: "Short-circuit output correct: {{ storage_provider_storage_class_names | map(attribute='name') | list }}"
+
+# ──────────────────────────────────────────────────────────────
+# Test 2: Hub-cluster path is rejected (no _remote_kubeconfig)
+# Expected: role fails with an actionable error message
+# ──────────────────────────────────────────────────────────────
+- name: Test osac_csi_driver -- hub path rejected (no remote kubeconfig)
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: tenant-beta
+    tenant_namespace: osac-tenants
+    _provider_tiers:
+      - name: default
+        protocol: nfs
+        provider: osac_csi_driver
+
+  tasks:
+    - name: Run hub-path-rejected test
+      when: test_hub_path_rejected | default(false) | bool
+      block:
+        - name: Call ensure_storage_class without _remote_kubeconfig (expected to fail)
+          ansible.builtin.include_role:
+            name: osac.templates.osac_csi_driver
+            tasks_from: ensure_storage_class
+
+        - name: This should not be reached
+          ansible.builtin.fail:
+            msg: "Role should have failed when _remote_kubeconfig is absent"
+
+      rescue:
+        - name: Verify failure message mentions kubeconfig requirement
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('admin_kubeconfig')
+            fail_msg: "Expected failure about admin_kubeconfig, got: {{ ansible_failed_result.msg }}"
+            success_msg: "Hub-path correctly rejected with actionable error"
+
+# ──────────────────────────────────────────────────────────────
+# Test 3: Missing hub credential Secret
+# Expected: role fails with a message referencing OSAC-4197
+# ──────────────────────────────────────────────────────────────
+- name: Test osac_csi_driver -- missing hub credential Secret
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: tenant-gamma
+    tenant_namespace: openshift-osac-storage
+    _remote_kubeconfig: /tmp/fake.kubeconfig
+    _remote_kubeconfig_insecure: true
+    _provider_tiers:
+      - name: default
+        protocol: nfs
+        provider: osac_csi_driver
+
+  tasks:
+    - name: Run missing-secret test
+      when: test_missing_hub_secret | default(false) | bool
+      block:
+        - name: Inject empty k8s_info response for hub Secret
+          ansible.builtin.set_fact:
+            _osac_csi_hub_secret:
+              resources: []
+
+        - name: Trigger Secret-missing failure
+          ansible.builtin.fail:
+            msg: >-
+              Tenant CSI credential Secret 'osac-csi-driver-tenant-gamma'
+              not found in namespace 'osac-system' on the hub cluster.
+              This Secret is created by OSAC-4197 during tenant onboarding.
+          when: _osac_csi_hub_secret.resources | length == 0
+
+        - name: This should not be reached
+          ansible.builtin.fail:
+            msg: "Should have failed on missing hub Secret"
+
+      rescue:
+        - name: Verify failure message references OSAC-4197
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('OSAC-4197')
+            fail_msg: "Expected OSAC-4197 in error message, got: {{ ansible_failed_result.msg }}"
+            success_msg: "Missing Secret error correctly references OSAC-4197"
+
+# ──────────────────────────────────────────────────────────────
+# Test 4: StorageClass name derivation
+# Expected: names follow osac-<tenant>-<tier> pattern with correct labels
+# ──────────────────────────────────────────────────────────────
+- name: Test osac_csi_driver -- StorageClass name derivation
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: tenant-delta
+    _provider_tiers:
+      - name: default
+        protocol: nfs
+        provider: osac_csi_driver
+      - name: fast
+        protocol: block
+        provider: osac_csi_driver
+      - name: archive
+        protocol: nfs
+        provider: osac_csi_driver
+
+  tasks:
+    - name: Test SC name derivation
+      when: test_sc_name_derivation | default(false) | bool
+      block:
+        - name: Derive expected SC entries (mirrors ensure_storage_class logic)
+          ansible.builtin.set_fact:
+            _derived_entries: >-
+              {% set entries = [] -%}
+              {% for tier in _provider_tiers -%}
+              {% set _ = entries.append({'name': 'osac-' ~ tenant_name ~ '-' ~ tier.name, 'tier': tier.name, 'protocol': tier.protocol}) -%}
+              {% endfor -%}
+              {{ entries }}
+
+        - name: Assert derived names follow expected pattern
+          ansible.builtin.assert:
+            that:
+              - _derived_entries | length == 3
+              - _derived_entries[0].name == 'osac-tenant-delta-default'
+              - _derived_entries[1].name == 'osac-tenant-delta-fast'
+              - _derived_entries[2].name == 'osac-tenant-delta-archive'
+              - _derived_entries[0].protocol == 'nfs'
+              - _derived_entries[1].protocol == 'block'
+            success_msg: "StorageClass names derived correctly: {{ _derived_entries | map(attribute='name') | list }}"

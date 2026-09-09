@@ -520,6 +520,34 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	}
 	privatev1.RegisterNetworkClassesServer(registrar, privateNetworkClassesServer)
 
+	// Create the fabric domains server:
+	deps.Logger.InfoContext(ctx, "Creating fabric domains server")
+	fabricDomainsServer, err := servers.NewFabricDomainsServer().
+		SetLogger(deps.Logger).
+		SetNotifier(deps.Notifier).
+		SetAttributionLogic(deps.PublicAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create fabric domains server: %w", err)
+	}
+	publicv1.RegisterFabricDomainsServer(registrar, fabricDomainsServer)
+
+	// Create the private fabric domains server:
+	deps.Logger.InfoContext(ctx, "Creating private fabric domains server")
+	privateFabricDomainsServer, err := servers.NewPrivateFabricDomainsServer().
+		SetLogger(deps.Logger).
+		SetNotifier(deps.Notifier).
+		SetAttributionLogic(deps.PrivateAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create private fabric domains server: %w", err)
+	}
+	privatev1.RegisterFabricDomainsServer(registrar, privateFabricDomainsServer)
+
 	// VMaaS: instance types
 	if deps.Services.VMaaS {
 		deps.Logger.InfoContext(ctx, "Creating instance types server")

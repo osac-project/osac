@@ -7,6 +7,10 @@ argument_specs:
       osac_compute_instance_templates:
         type: list
         description: ComputeInstance templates
+      osac_addon_operator_templates:
+        type: list
+        description: AddOnOperator templates
+        default: []
       osac_fulfillment_service_uri:
         type: str
         required: true
@@ -21,3 +25,7 @@ argument_specs:
         type: str
         description: API endpoint for ComputeInstance templates
         default: "{{ osac_fulfillment_service_uri }}/api/private/v1/compute_instance_templates"
+      publish_templates_addon_operator_api_endpoint:
+        type: str
+        description: API endpoint for AddOnOperator templates
+        default: "{{ osac_fulfillment_service_uri }}/api/private/v1/add_on_operators"

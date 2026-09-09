@@ -29,6 +29,7 @@ import (
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/events"
 )
 
@@ -49,6 +50,7 @@ type PrivateAddOnOperatorsServer struct {
 	logger           *slog.Logger
 	defaultPublished bool
 	generic          *GenericServer[*privatev1.AddOnOperator]
+	tenantsDAO       *dao.GenericDAO[*privatev1.Tenant]
 }
 
 func NewPrivateAddOnOperatorsServer() *PrivateAddOnOperatorsServerBuilder {
@@ -125,11 +127,21 @@ func (b *PrivateAddOnOperatorsServerBuilder) Build() (result *PrivateAddOnOperat
 	if err != nil {
 		return
 	}
+	tenantsDAO, err := dao.NewGenericDAO[*privatev1.Tenant]().
+		SetLogger(b.logger).
+		SetTableName("tenants").
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
 
 	result = &PrivateAddOnOperatorsServer{
 		logger:           b.logger,
 		defaultPublished: defaultPublished,
 		generic:          generic,
+		tenantsDAO:       tenantsDAO,
 	}
 	return
 }
@@ -149,6 +161,9 @@ func (s *PrivateAddOnOperatorsServer) Get(ctx context.Context,
 func (s *PrivateAddOnOperatorsServer) Create(ctx context.Context,
 	request *privatev1.AddOnOperatorsCreateRequest) (response *privatev1.AddOnOperatorsCreateResponse, err error) {
 	if object := request.GetObject(); object != nil {
+		if err = s.validateScopeTenant(ctx, object.GetTenant()); err != nil {
+			return
+		}
 		if s.defaultPublished && !object.HasPublished() {
 			object.SetPublished(true)
 		}
@@ -163,6 +178,11 @@ func (s *PrivateAddOnOperatorsServer) Create(ctx context.Context,
 func (s *PrivateAddOnOperatorsServer) Update(ctx context.Context,
 	request *privatev1.AddOnOperatorsUpdateRequest) (response *privatev1.AddOnOperatorsUpdateResponse, err error) {
 	if object := request.GetObject(); object != nil {
+		if updateIncludesField(request.GetUpdateMask(), "tenant") {
+			if err = s.validateScopeTenant(ctx, object.GetTenant()); err != nil {
+				return
+			}
+		}
 		if updateIncludesField(request.GetUpdateMask(), "min_ocp_version", "max_ocp_version") {
 			minVersion := object.GetMinOcpVersion()
 			maxVersion := object.GetMaxOcpVersion()
@@ -227,6 +247,26 @@ func validateOCPVersionRange(minVersion, maxVersion string) error {
 	if min != nil && max != nil && min.GreaterThan(max) {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"min_ocp_version '%s' must be <= max_ocp_version '%s'", minVersion, maxVersion)
+	}
+	return nil
+}
+
+func (s *PrivateAddOnOperatorsServer) validateScopeTenant(ctx context.Context, tenant string) error {
+	if tenant == "" {
+		return nil
+	}
+
+	response, err := s.tenantsDAO.List().
+		SetFilter(fmt.Sprintf("this.metadata.name == %s && !has(this.metadata.deletion_timestamp)", strconv.Quote(tenant))).
+		SetLimit(1).
+		Do(ctx)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to validate add-on operator scope tenant", slog.Any("error", err))
+		return grpcstatus.Errorf(grpccodes.Internal, "failed to validate add-on operator scope tenant")
+	}
+	if response.GetTotal() == 0 {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'tenant' references unknown or deleted tenant '%s'", tenant)
 	}
 	return nil
 }

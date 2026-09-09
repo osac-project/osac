@@ -187,6 +187,7 @@ var _ = Describe("Add-on operators server", func() {
 
 		BeforeEach(func() {
 			var err error
+			createTenant("tenant-a")
 			privateServer, err = NewPrivateAddOnOperatorsServer().
 				SetLogger(logger).
 				SetAttributionLogic(attribution).

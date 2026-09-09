@@ -34,6 +34,7 @@ def test_cluster_create_with_version(
     version = private_grpc.ensure_cluster_version(version="4.20.0-e2e", image=TEST_RELEASE_IMAGE)
 
     uuid: str | None = None
+    co_name: str | None = None
     try:
         name = unique_name("e2e-cluster-version")
         uuid = cli.create_cluster(
@@ -78,6 +79,10 @@ def test_cluster_create_with_version(
         if uuid is not None:
             with contextlib.suppress(subprocess.SubprocessError):
                 cli.delete_cluster(uuid=uuid)
+        if co_name is not None:
+            with contextlib.suppress(TimeoutError):
+                wait_for_cluster_deletion(k8s=k8s_hub_client, name=co_name)
+        if uuid is not None:
             with contextlib.suppress(TimeoutError):
                 wait_for_cluster_grpc_removal(grpc=grpc, uuid=uuid)
         private_grpc.call_unchecked(service="osac.private.v1.ClusterVersions/Delete", data={"id": version["id"]})

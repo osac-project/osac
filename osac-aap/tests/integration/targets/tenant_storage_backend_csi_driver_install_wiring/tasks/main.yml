@@ -86,15 +86,13 @@
             be-test:
               endpoint: "127.0.0.1:18443"
               username: "admin"
-              password: "mock-admin-password"
+              password: "{{ lookup('env', 'OSAC_TEST_VAST_PASSWORD') }}"
         csi_driver_install_override:
           name: osac.test_overrides.csi_driver_install_hooks
           tasks_from: install.yaml
-        # This test's own storage_provider dispatch (storage_provider_action: setup) is
-        # real, unstubbed -- it's the one action that invokes ensure_csi_backends.yaml,
-        # which would otherwise attempt a real Helm install against the not-yet-published
-        # osac-csi-driver chart. This test only stubs csi_driver_install (above), not
-        # storage_provider, so this must be suppressed independently.
+        # The umbrella installer owns csi-backends under OSAC-4252. This wiring test
+        # stubs csi_driver_install and verifies the playbook mapping only; suppressing
+        # the legacy AAP csi-backends path keeps the test aligned with production.
         storage_provider_csi_backends_enabled: false
 
 - name: Run tenant storage backend playbook with csi_driver_install stubbed

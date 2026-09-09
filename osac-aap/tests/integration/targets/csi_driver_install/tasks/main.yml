@@ -10,28 +10,18 @@
 # release from an earlier dispatch.
 #
 # Requires: kind cluster (provided by setup_test_env.sh) and the local TLS OCI registry
-# setup_test_env.sh stands up under STORAGE_TESTS_ENABLED (packages and pushes the real
-# osac-csi-driver/charts/{csi-driver,csi-backends} charts at versions 0.1.0/0.1.1 -- see
-# that script's "local TLS OCI registry" section; only the csi-driver chart pushed there
-# is actually consumed here (this file only installs/verifies csi-driver) -- the
-# csi-backends push is unused by any current test, since storage_provider_ensure_csi_backends's
-# own test suite uses a local filesystem chart path (OSAC_CSI_BACKENDS_CHART_REF) instead,
-# per that suite's own file-level comment. No osac-csi-driver/vX.Y.Z release tag
-# has been cut yet at oci://ghcr.io/osac-project/charts (OSAC-3290 Risk Assessment item 1),
-# so csi_driver_install_chart_registry is overridden below (once, in the Setup play; the
-# fact persists across every later play/scenario in this file targeting the same host) to
-# CSI_DRIVER_INSTALL_TEST_REGISTRY, falling back to the real registry only if that env var
-# is unset (e.g. running this file directly without setup_test_env.sh). Runs unconditionally
-# alongside the rest of STORAGE_TESTS in run_tests.sh -- no separate gate needed now that
-# the local registry above removes the dependency on a real published chart tag.
+# setup_test_env.sh stands up under STORAGE_TESTS_ENABLED. The registry packages the
+# csi-driver chart at versions 0.1.0/0.1.1 for deterministic upgrade coverage; the
+# umbrella-owned csi-backends release is represented by the Service fixtures below.
+# The published osac-csi-driver/v0.0.1 release is used when the local registry is
+# unavailable (for example, when running this file directly without setup_test_env.sh).
+# The chart-registry override is set once in the Setup play and persists across later
+# plays targeting the same host. Runs unconditionally alongside STORAGE_TESTS.
 #
-# Does NOT require the mock VMS server: this role never talks to a vendor's
-# control plane at all (VAST or otherwise) -- it only reads live Service
-# objects' ports (Setup's fixtures below) to build DNS-based vendorSockets
-# strings for the csi-driver chart. Vendor connectivity, including VAST's VMS
-# host, is entirely ensure_csi_backends.yaml's concern now.
-
-# ── Setup: clean slate ──
+# Does NOT require the mock VMS server: this role never talks to a vendor's control
+# plane at all -- it only reads live Service objects' ports (fixtures below) to build
+# DNS-based vendorSockets strings for the csi-driver chart. Vendor controller Services
+# are owned and deployed by the umbrella installer under OSAC-4252.
 - name: "CSI Driver Install - Setup (clean slate)"
   hosts: localhost
   gather_facts: false
@@ -536,10 +526,9 @@
 
 # ── Test 5: A dispatched, chart-supported vendor with no live controller
 # Service on the hub -- fail-fast before the block (before any lock/Helm
-# call), proving a missing Service (ensure_csi_backends.yaml hasn't run for
-# this vendor yet) never disturbs an already-installed release from an
-# earlier dispatch. trident is used here because it's chart-supported but
-# Setup only creates Service fixtures for vast/pure ──
+# call), proving a missing umbrella-owned Service never disturbs an already-installed
+# release from an earlier dispatch. trident is used here because it's chart-supported
+# but Setup only creates Service fixtures for vast/pure ──
 - name: "CSI Driver Install - Dispatched vendor's controller Service is missing (should fail, existing release survives)"
   hosts: localhost
   gather_facts: false
@@ -592,8 +581,8 @@
           later dispatch's missing-Service failure intact: {{ _driver_release_after_missing_service.status }}
         success_msg: "Pre-existing csi-driver release survived the missing-Service failure untouched"
 
-# Test 6's multi-backend_id ambiguous-dispatch validation lives in the
-# storage_provider_ensure_csi_backends target.
+# Test 6's multi-backend_id validation belongs to the umbrella-owned csi-backends
+# deployment and is intentionally not part of this csi-driver role test.
 # ── Test 7: The install lock is already held by a DIFFERENT dispatch --
 # acquisition must fail (after exhausting its retry budget) without ever
 # releasing or overwriting the other holder's lock. This is the scenario the

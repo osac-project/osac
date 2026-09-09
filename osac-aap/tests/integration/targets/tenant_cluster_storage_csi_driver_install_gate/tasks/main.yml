@@ -107,7 +107,7 @@
             vip_pool_name: "osac-test-pool"
             vast_endpoint: "127.0.0.1:18443"
             tenant_manager_username: "osac-test-tcs-tenant"
-            tenant_manager_password: "test-csi-password"
+            tenant_manager_password: "{{ lookup('env', 'OSAC_TEST_TENANT_PASSWORD') }}"
             view_policy_name: "osac-test-tcs-tenant-nfs"
 
     - name: Clear override log
@@ -140,7 +140,7 @@
             be-tcs-tenant:
               endpoint: "127.0.0.1:18443"
               username: "admin"
-              password: "mock-admin-password"
+              password: "{{ lookup('env', 'OSAC_TEST_VAST_PASSWORD') }}"
         # Bypasses vast_storage's OpenShift Infrastructure-object discovery -- see the
         # file-level comment above.
         _cluster_name: "test-cluster"
@@ -290,7 +290,7 @@
             vip_pool_name: "osac-test-pool"
             vast_endpoint: "127.0.0.1:18443"
             tenant_manager_username: "osac-test-tcs-clusterorder"
-            tenant_manager_password: "test-csi-password"
+            tenant_manager_password: "{{ lookup('env', 'OSAC_TEST_TENANT_PASSWORD') }}"
             view_policy_name: "osac-test-tcs-clusterorder-nfs"
 
     - name: Clear override log
@@ -325,7 +325,7 @@
             be-tcs-clusterorder:
               endpoint: "127.0.0.1:18443"
               username: "admin"
-              password: "mock-admin-password"
+              password: "{{ lookup('env', 'OSAC_TEST_VAST_PASSWORD') }}"
           # Points the "guest" cluster back at this same test cluster: osac.service.storage_provider's
           # _dispatch_provider.yaml applies _remote_kubeconfig via a module_defaults block covering
           # EVERY kubernetes.core.k8s*/k8s_info call in the whole provider dispatch (not just the one

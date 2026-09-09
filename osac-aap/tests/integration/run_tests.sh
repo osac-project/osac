@@ -102,12 +102,11 @@ echo ""
 # Create a real pod for lease ownerReference tests (prevents K8s GC).
 # Scoped to role and storage tests -- workflow tests use the placeholder UID
 # so leases get GC'd between baseline and override runs. Kept alive through
-# the STORAGE_TESTS loop below (storage_provider_ensure_csi_backends and
-# csi_driver_install each have their own lock-contention scenario that also
-# needs a live owner pod matching POD_NAME/POD_UID) -- deleting it right
-# after the role-tests loops orphans any Lease those later tests create,
-# and Kubernetes garbage-collects an orphaned Lease almost immediately,
-# which silently defeats the whole point of those scenarios.
+# the STORAGE_TESTS loop below because csi_driver_install has a lock-contention
+# scenario that needs a live owner pod matching POD_NAME/POD_UID.
+# Deleting it right after the role-tests loop would orphan a Lease those later tests
+# create, and Kubernetes would garbage-collect it almost immediately, which silently
+# defeats the whole point of the lock-contention scenario.
 echo "Creating test-runner pod for lease role tests..."
 kubectl run lease-test-pod --image=registry.k8s.io/pause:3.9 --restart=Never -n osac-system 2>/dev/null || true
 kubectl wait --for=condition=Ready pod/lease-test-pod -n osac-system --timeout=60s 2>/dev/null || true
@@ -211,13 +210,6 @@ if [ "${STORAGE_TESTS_ENABLED:-}" = "true" ]; then
     "storage_provider_ensure_sc"
     "storage_provider_onboarding"
     "storage_provider_setup_rollback"
-    # ensure_csi_backends.yaml's own role-level test (sole owner of the csi-backends
-    # release as of OSAC-3290) -- verified before the csi_driver_install* entries
-    # below, which depend on the vendor controller Service it creates. Uses the same
-    # OSAC_CSI_BACKENDS_CHART_REF local-filesystem chart path storage_provider_setup
-    # above already relies on -- no OCI registry needed, unlike csi_driver_install's
-    # own role-level test further down.
-    "storage_provider_ensure_csi_backends"
     # Playbook-level wiring tests for osac.service.csi_driver_install (stub the
     # real Helm install via csi_driver_install_override, run the real
     # storage_provider dispatch after it) -- share this gate/mock server since

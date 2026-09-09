@@ -420,6 +420,7 @@ class AddOnOperatorTemplate(BaseTemplate):
     template_type: Literal[TemplateTypeEnum.addon_operator] = pydantic.Field(
         default=TemplateTypeEnum.addon_operator, exclude=True
     )
+    title: str = pydantic.Field(..., min_length=1)
     parameters: list[TemplateParameter] = pydantic.Field(default_factory=list, exclude=True)
     min_ocp_version: str = ""
     max_ocp_version: str = ""

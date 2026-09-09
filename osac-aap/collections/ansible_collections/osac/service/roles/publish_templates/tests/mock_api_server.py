@@ -81,10 +81,13 @@ class MockHandler(BaseHTTPRequestHandler):
         known_collection = path in POPULATED_RESPONSES
         known_member = _is_member_path(path)
         if not known_collection and not known_member:
+            CALL_LOG[-1]["status"] = 404
             self._respond(404, {"error": "not found"})
         elif known_member:
+            CALL_LOG[-1]["status"] = 404
             self._respond(404, {"error": "not found"})
         elif SCENARIO == "disabled":
+            CALL_LOG[-1]["status"] = 404
             self._respond(404, {"error": "service disabled"})
         elif SCENARIO == "empty":
             self._respond(200, {"items": []})
@@ -124,6 +127,7 @@ class MockHandler(BaseHTTPRequestHandler):
         CALL_LOG.append({
             "method": "PATCH",
             "path": path,
+            "request_uri": self.path,
             "authorization": self.headers.get("Authorization"),
             "body": json.loads(body) if body else None,
         })

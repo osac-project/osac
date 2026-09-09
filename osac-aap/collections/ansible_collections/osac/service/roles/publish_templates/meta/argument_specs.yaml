@@ -29,3 +29,7 @@ argument_specs:
         type: str
         description: API endpoint for AddOnOperator templates
         default: "{{ osac_fulfillment_service_uri }}/api/private/v1/add_on_operators"
+      publish_templates_addon_operator_update_mask:
+        type: str
+        description: Managed fields used when updating AddOnOperator templates
+        default: "metadata.name,title,description,min_ocp_version,max_ocp_version,exclusions,dependencies"

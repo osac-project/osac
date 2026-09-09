@@ -451,6 +451,10 @@ class TestAddOnOperatorTemplate:
         with pytest.raises(pydantic.ValidationError, match="must not be blank"):
             _make_addon_operator_template(**{field: " "})
 
+    def test_blank_title_is_rejected(self):
+        with pytest.raises(pydantic.ValidationError):
+            _make_addon_operator_template(title="")
+
     @pytest.mark.parametrize("field", ["exclusions", "dependencies"])
     def test_blank_operator_reference_is_rejected(self, field):
         with pytest.raises(pydantic.ValidationError, match="must not be blank"):

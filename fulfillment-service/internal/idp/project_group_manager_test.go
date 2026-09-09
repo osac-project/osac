@@ -146,6 +146,27 @@ var _ = Describe("ProjectGroupManager", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
+		It("should return nil when organization is not found (org-level not-found)", func() {
+			// Simulates the error chain when a Keycloak organization is missing:
+			// GetTenant() returns: organization "<name>" not found
+			// getGroupIDByPath() wraps it: failed to get organization: organization "<name>" not found
+			mockClient.EXPECT().
+				GetGroupIDByPath(gomock.Any(), "test-org", "/test-project").
+				Return("", errors.New(`failed to get organization: organization "test-org" not found`))
+
+			err := manager.DeleteProjectGroups(ctx, "test-org", "test-project")
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("should return nil when organization is not found during default project deletion", func() {
+			mockClient.EXPECT().
+				GetGroupIDByPath(gomock.Any(), "test-org", "/system:viewers").
+				Return("", errors.New(`failed to get organization: organization "test-org" not found`))
+
+			err := manager.DeleteProjectGroups(ctx, "test-org", "")
+			Expect(err).ToNot(HaveOccurred())
+		})
+
 		It("should return nil when default project groups are not found", func() {
 			mockClient.EXPECT().
 				GetGroupIDByPath(gomock.Any(), "test-org", "/system:viewers").
@@ -156,6 +177,47 @@ var _ = Describe("ProjectGroupManager", func() {
 
 			err := manager.DeleteProjectGroups(ctx, "test-org", "")
 			Expect(err).ToNot(HaveOccurred())
+		})
+	})
+
+	Describe("isGroupNotFoundError", func() {
+		It("should return false for nil error", func() {
+			Expect(isGroupNotFoundError(nil)).To(BeFalse())
+		})
+
+		It("should match 'organization group not found' errors", func() {
+			err := errors.New("organization group not found: /test-project")
+			Expect(isGroupNotFoundError(err)).To(BeTrue())
+		})
+
+		It("should match 'not found among children' errors", func() {
+			err := errors.New(`group "system:viewers" not found among children of parent ""`)
+			Expect(isGroupNotFoundError(err)).To(BeTrue())
+		})
+
+		It("should match 'failed to find group segment' errors", func() {
+			err := errors.New(`failed to find group segment 0 'system:viewers' (parent: ): group "system:viewers" not found among children of parent ""`)
+			Expect(isGroupNotFoundError(err)).To(BeTrue())
+		})
+
+		It("should match org-level 'organization not found' errors", func() {
+			err := errors.New(`failed to get organization: organization "test-org" not found`)
+			Expect(isGroupNotFoundError(err)).To(BeTrue())
+		})
+
+		It("should not match unrelated errors", func() {
+			err := errors.New("network error: connection timeout")
+			Expect(isGroupNotFoundError(err)).To(BeFalse())
+		})
+
+		It("should not match generic not-found errors without organization context", func() {
+			err := errors.New("user not found")
+			Expect(isGroupNotFoundError(err)).To(BeFalse())
+		})
+
+		It("should not match organization errors that are not not-found", func() {
+			err := errors.New("failed to get organization: connection refused")
+			Expect(isGroupNotFoundError(err)).To(BeFalse())
 		})
 	})
 

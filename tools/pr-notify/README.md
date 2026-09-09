@@ -55,6 +55,16 @@ python generate.py --config config.toml --output ../../docs/pr-dashboard/data.js
 
 Add `--dry-run` to print JSON to stdout without writing.
 
+### generate_all.py (workflow data collection)
+
+Fetches the union of repositories from every dashboard configuration once, then
+writes a separate `data.json` for each dashboard. The GitHub Pages workflow
+uses this command to avoid repeated GitHub API requests.
+
+```bash
+python generate_all.py --output-root ../..
+```
+
 ### notify.py (Slack notification)
 
 Reads `data.json` from GitHub Pages and posts a compact summary to Slack. Used by the systemd timer.

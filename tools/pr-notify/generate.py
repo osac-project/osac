@@ -27,6 +27,30 @@ def setup_logging() -> None:
     logging.getLogger(__name__).info("Log file: %s", log_file)
 
 
+def build_dashboard_data(prs, config) -> dict:
+    """Classify a snapshot and format it for one dashboard configuration."""
+    logger = logging.getLogger(__name__)
+    classified = classify_prs(prs)
+    logger.info("Classified %d PRs", len(classified))
+
+    if config.filter_authors:
+        allowed = {author.lower() for author in config.filter_authors}
+        classified = [
+            classified_pr
+            for classified_pr in classified
+            if classified_pr.pr.author.lower() in allowed
+        ]
+        logger.info(
+            "Filtered to %d PRs by %d team members",
+            len(classified),
+            len(allowed),
+        )
+
+    return format_dashboard_data(
+        classified, config.repos, title=config.title or DEFAULT_TITLE
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Fetch open PRs, classify, and write dashboard data.json"
@@ -61,21 +85,7 @@ def main() -> int:
         prs = fetch_open_prs(config.repos)
         logger.info("Fetched %d open PRs across %d repos", len(prs), len(config.repos))
 
-        classified = classify_prs(prs)
-        logger.info("Classified %d PRs", len(classified))
-
-        if config.filter_authors:
-            allowed = {a.lower() for a in config.filter_authors}
-            classified = [cpr for cpr in classified if cpr.pr.author.lower() in allowed]
-            logger.info(
-                "Filtered to %d PRs by %d team members",
-                len(classified),
-                len(allowed),
-            )
-
-        data = format_dashboard_data(
-            classified, config.repos, title=config.title or DEFAULT_TITLE
-        )
+        data = build_dashboard_data(prs, config)
         data_json = json.dumps(data, indent=2)
         logger.info("Generated dashboard data (%d chars)", len(data_json))
 

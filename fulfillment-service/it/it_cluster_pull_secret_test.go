@@ -60,6 +60,7 @@ var _ = Describe("Cluster pull_secret_secret", Label("secrets", "cluster"), func
 		name = fmt.Sprintf("pull-secret-%s", uuid.New()[24:32])
 		response, err := secretsClient.Create(ctx, publicv1.SecretsCreateRequest_builder{
 			Object: publicv1.Secret_builder{
+				Type: publicv1.SecretType_SECRET_TYPE_PULL_SECRET,
 				Metadata: publicv1.Metadata_builder{
 					Name: name,
 				}.Build(),

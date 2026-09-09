@@ -38,7 +38,6 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/events"
-	"github.com/osac-project/osac/fulfillment-service/internal/references"
 	"github.com/osac-project/osac/fulfillment-service/internal/utils"
 )
 
@@ -605,22 +604,10 @@ func (s *PrivateClustersServer) validatePullSecretSecret(
 	if ref == nil {
 		return nil
 	}
-	if ref.GetId() == "" && ref.GetName() == "" {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument, "pull_secret_secret must specify id or name")
-	}
-	resolved, err := references.NewDAOLookupFunc(s.secretsDao)(ctx, "", "", ref.GetId(), ref.GetName())
+	resolved, err := resolveSecretReferenceOfType(ctx, s.logger, s.secretsDao, ref,
+		"pull_secret_secret", privatev1.SecretType_SECRET_TYPE_PULL_SECRET)
 	if err != nil {
-		var deniedErr *dao.ErrDenied
-		if errors.As(err, &deniedErr) {
-			return grpcstatus.Errorf(grpccodes.PermissionDenied, "%s", deniedErr.Reason)
-		}
-		var nf interface{ IsNotFound() bool }
-		if errors.As(err, &nf) && nf.IsNotFound() {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"there is no secret with identifier or name '%s'", refKey(ref))
-		}
-		s.logger.ErrorContext(ctx, "Failed to resolve pull_secret_secret reference", "error", err)
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to resolve pull_secret_secret reference")
+		return err
 	}
 	if resolved.Tenant == auth.SharedTenant && !allowShared {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,

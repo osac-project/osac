@@ -586,6 +586,7 @@ var _ = Describe("Identity provider client_secret_secret", func() {
 		name = fmt.Sprintf("idp-client-secret-%s", uuid.New()[24:32])
 		response, err := secretsClient.Create(ctx, privatev1.SecretsCreateRequest_builder{
 			Object: privatev1.Secret_builder{
+				Type: privatev1.SecretType_SECRET_TYPE_VALUE,
 				Metadata: privatev1.Metadata_builder{
 					Name:   name,
 					Tenant: tenantName,

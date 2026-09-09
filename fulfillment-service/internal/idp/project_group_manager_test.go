@@ -16,6 +16,7 @@ package idp
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -84,7 +85,7 @@ var _ = Describe("ProjectGroupManager", func() {
 		It("should return nil when parent group is not found", func() {
 			mockClient.EXPECT().
 				GetGroupIDByPath(gomock.Any(), "test-org", "/test-project").
-				Return("", errors.New("organization group not found: /test-project"))
+				Return("", &ErrNotFound{Kind: "group", Name: "test-project"})
 
 			err := manager.DeleteProjectGroups(ctx, "test-org", "test-project")
 			Expect(err).ToNot(HaveOccurred())
@@ -147,12 +148,9 @@ var _ = Describe("ProjectGroupManager", func() {
 		})
 
 		It("should return nil when organization is not found (org-level not-found)", func() {
-			// Simulates the error chain when a Keycloak organization is missing:
-			// GetTenant() returns: organization "<name>" not found
-			// getGroupIDByPath() wraps it: failed to get organization: organization "<name>" not found
 			mockClient.EXPECT().
 				GetGroupIDByPath(gomock.Any(), "test-org", "/test-project").
-				Return("", errors.New(`failed to get organization: organization "test-org" not found`))
+				Return("", fmt.Errorf("failed to get organization: %w", &ErrNotFound{Kind: "organization", Name: "test-org"}))
 
 			err := manager.DeleteProjectGroups(ctx, "test-org", "test-project")
 			Expect(err).ToNot(HaveOccurred())
@@ -161,7 +159,7 @@ var _ = Describe("ProjectGroupManager", func() {
 		It("should return nil when organization is not found during default project deletion", func() {
 			mockClient.EXPECT().
 				GetGroupIDByPath(gomock.Any(), "test-org", "/system:viewers").
-				Return("", errors.New(`failed to get organization: organization "test-org" not found`))
+				Return("", fmt.Errorf("failed to get organization: %w", &ErrNotFound{Kind: "organization", Name: "test-org"}))
 
 			err := manager.DeleteProjectGroups(ctx, "test-org", "")
 			Expect(err).ToNot(HaveOccurred())
@@ -170,10 +168,10 @@ var _ = Describe("ProjectGroupManager", func() {
 		It("should return nil when default project groups are not found", func() {
 			mockClient.EXPECT().
 				GetGroupIDByPath(gomock.Any(), "test-org", "/system:viewers").
-				Return("", errors.New(`failed to find group segment 0 'system:viewers' (parent: ): group "system:viewers" not found among children of parent ""`))
+				Return("", fmt.Errorf("failed to find group segment: %w", &ErrNotFound{Kind: "group", Name: "system:viewers"}))
 			mockClient.EXPECT().
 				GetGroupIDByPath(gomock.Any(), "test-org", "/system:managers").
-				Return("", errors.New(`failed to find group segment 0 'system:managers' (parent: ): group "system:managers" not found among children of parent ""`))
+				Return("", fmt.Errorf("failed to find group segment: %w", &ErrNotFound{Kind: "group", Name: "system:managers"}))
 
 			err := manager.DeleteProjectGroups(ctx, "test-org", "")
 			Expect(err).ToNot(HaveOccurred())
@@ -185,23 +183,24 @@ var _ = Describe("ProjectGroupManager", func() {
 			Expect(isGroupNotFoundError(nil)).To(BeFalse())
 		})
 
-		It("should match 'organization group not found' errors", func() {
-			err := errors.New("organization group not found: /test-project")
+		It("should match a direct ErrNotFound for a group", func() {
+			err := &ErrNotFound{Kind: "group", Name: "test-project"}
 			Expect(isGroupNotFoundError(err)).To(BeTrue())
 		})
 
-		It("should match 'not found among children' errors", func() {
-			err := errors.New(`group "system:viewers" not found among children of parent ""`)
+		It("should match a direct ErrNotFound for an organization", func() {
+			err := &ErrNotFound{Kind: "organization", Name: "test-org"}
 			Expect(isGroupNotFoundError(err)).To(BeTrue())
 		})
 
-		It("should match 'failed to find group segment' errors", func() {
-			err := errors.New(`failed to find group segment 0 'system:viewers' (parent: ): group "system:viewers" not found among children of parent ""`)
+		It("should match a wrapped ErrNotFound", func() {
+			err := fmt.Errorf("failed to get organization: %w", &ErrNotFound{Kind: "organization", Name: "test-org"})
 			Expect(isGroupNotFoundError(err)).To(BeTrue())
 		})
 
-		It("should match org-level 'organization not found' errors", func() {
-			err := errors.New(`failed to get organization: organization "test-org" not found`)
+		It("should match a deeply wrapped ErrNotFound", func() {
+			inner := fmt.Errorf("lookup failed: %w", &ErrNotFound{Kind: "group", Name: "system:viewers"})
+			err := fmt.Errorf("failed to find group segment: %w", inner)
 			Expect(isGroupNotFoundError(err)).To(BeTrue())
 		})
 
@@ -210,13 +209,8 @@ var _ = Describe("ProjectGroupManager", func() {
 			Expect(isGroupNotFoundError(err)).To(BeFalse())
 		})
 
-		It("should not match generic not-found errors without organization context", func() {
-			err := errors.New("user not found")
-			Expect(isGroupNotFoundError(err)).To(BeFalse())
-		})
-
-		It("should not match organization errors that are not not-found", func() {
-			err := errors.New("failed to get organization: connection refused")
+		It("should not match non-ErrNotFound wrapped errors", func() {
+			err := fmt.Errorf("failed to get organization: %w", errors.New("connection refused"))
 			Expect(isGroupNotFoundError(err)).To(BeFalse())
 		})
 	})

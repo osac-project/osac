@@ -36,9 +36,9 @@ def test_cluster_provisioning_events(
         cluster_order_name = wait_for_cluster_order_cr(k8s=k8s_hub_client, uuid=uuid)
         wait_for_cluster_progressing(k8s=k8s_hub_client, name=cluster_order_name)
         expected_messages = {
-            "PreparingInfrastructure": "Preparing infrastructure",
-            "ControlPlaneStarting": "Control plane starting",
-            "WorkersJoining": "Workers joining",
+            "PreparingInfrastructure": "Preparing Infrastructure",
+            "ControlPlaneStarting": "Control Plane Starting",
+            "WorkersJoining": "Workers Joining",
         }
         expected_reasons = {"PreparingInfrastructure", "ControlPlaneStarting"}
         if k8s_hub_client.get_cluster_order_spec(name=cluster_order_name).get("nodeSets"):

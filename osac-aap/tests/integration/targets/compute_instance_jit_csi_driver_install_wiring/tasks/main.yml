@@ -132,7 +132,7 @@
             vip_pool_name: "osac-test-pool"
             vast_endpoint: "127.0.0.1:18443"
             tenant_manager_username: "osac-test-ci-jit-wiring"
-            tenant_manager_password: "test-csi-password"
+            tenant_manager_password: "{{ lookup('env', 'OSAC_TEST_TENANT_PASSWORD') }}"
             view_policy_name: "osac-test-ci-jit-wiring-nfs"
 
     - name: Clear override log
@@ -177,7 +177,7 @@
             be-jit:
               endpoint: "127.0.0.1:18443"
               username: "admin"
-              password: "mock-admin-password"
+              password: "{{ lookup('env', 'OSAC_TEST_VAST_PASSWORD') }}"
         tenant_target_namespace: "ci-jit-wiring-work"
         # Bypasses vast_storage's OpenShift Infrastructure-object discovery -- see the
         # file-level comment above.

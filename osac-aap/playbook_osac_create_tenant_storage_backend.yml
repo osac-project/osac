@@ -54,10 +54,9 @@
         storage_provider_backend_connections: "{{ osac_job_vars.storage_backend_connections | default({}) }}"
         storage_provider_block_encryption_passphrase: "{{ osac_job_vars.resource.spec.blockEncryptionPassphrase | default('') }}"
 
-    # Depends on storage_provider's dispatch above having already created each
-    # dispatched vendor's controller Service via ensure_csi_backends.yaml --
-    # csi_driver_install's own pre-block fail-fast rejects the dispatch
-    # otherwise.
+    # The umbrella installer owns the shared csi-backends controller Services under
+    # OSAC-4252. AAP's csi_driver_install role consumes those Services and fails fast
+    # if the umbrella has not provisioned the requested vendor yet.
     - name: Install OSAC CSI driver (once per dispatch, regardless of provider count)
       ansible.builtin.include_role:
         name: "{{ (csi_driver_install_override | default(csi_driver_install_default)).name }}"

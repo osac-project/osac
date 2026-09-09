@@ -31,7 +31,6 @@
                 protocol: nfs
                 provider: vast
             storage_provider_action: setup
-            storage_provider_csi_backends_enabled: false
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
 
@@ -156,7 +155,6 @@
                 protocol: ftp
                 provider: vast
             storage_provider_action: setup
-            storage_provider_csi_backends_enabled: false
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
 
@@ -207,7 +205,6 @@
                 protocol: nfs
                 provider: netapp
             storage_provider_action: setup
-            storage_provider_csi_backends_enabled: false
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
 
@@ -487,7 +484,6 @@
                     max_reads_bw_mbps: 100
                     max_writes_bw_mbps: 100
             storage_provider_action: setup
-            storage_provider_csi_backends_enabled: false
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
 
@@ -536,7 +532,6 @@
                 provider: vast
                 qos_policy: "Invalid Policy!"
             storage_provider_action: setup
-            storage_provider_csi_backends_enabled: false
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
 
@@ -598,7 +593,6 @@
                 username: admin
                 password: mock-backend-password
             storage_provider_action: setup
-            storage_provider_csi_backends_enabled: false
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
 
@@ -659,7 +653,6 @@
                 backend_id: be-999
             storage_provider_backend_connections: {}
             storage_provider_action: setup
-            storage_provider_csi_backends_enabled: false
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
 
@@ -722,7 +715,6 @@
                 username: admin
                 password: ""
             storage_provider_action: setup
-            storage_provider_csi_backends_enabled: false
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
 
@@ -785,7 +777,6 @@
                 provider: vast
                 backend_id: be-001
             storage_provider_action: setup
-            storage_provider_csi_backends_enabled: false
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
 
@@ -844,7 +835,6 @@
                 protocol: nfs
                 provider: vast
             storage_provider_action: setup
-            storage_provider_csi_backends_enabled: false
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
 

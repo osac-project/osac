@@ -34,6 +34,8 @@ def ref_eip_pool_id(private_grpc: GRPCClient, ref_eip_pool: str) -> str:
 class TestIPManagementReferences:
     """OSAC-3105: IP management resource reference tests."""
 
+    @pytest.mark.requires_bmaas
+    @pytest.mark.requires_vmaas
     def test_external_ip_from_pool_by_name(self, grpc: GRPCClient, ref_eip_pool: str, ref_eip_pool_id: str):
         tag = uuid4().hex[:8]
         eip_name = f"ref-eip-{tag}"
@@ -50,6 +52,8 @@ class TestIPManagementReferences:
         finally:
             grpc.delete_external_ip(external_ip_id=eip_id)
 
+    @pytest.mark.requires_bmaas
+    @pytest.mark.requires_vmaas
     def test_nat_gateway_by_name(
         self, grpc: GRPCClient, ref_virtual_network: dict[str, str], ref_eip_pool: str, ref_test_run_id: str
     ):
@@ -86,6 +90,7 @@ class TestIPManagementReferences:
                     logger.warning("Failed to cleanup NATGateway %s", nat_id)
             grpc.delete_external_ip(external_ip_id=eip_id)
 
+    @pytest.mark.requires_vmaas
     def test_invalid_attachment_target_returns_field_path(self, grpc: GRPCClient, ref_eip_pool: str):
         tag = uuid4().hex[:8]
         eip_name = f"ref-att-eip-{tag}"
@@ -110,6 +115,8 @@ class TestIPManagementReferences:
         finally:
             grpc.delete_external_ip(external_ip_id=eip_id)
 
+    @pytest.mark.requires_bmaas
+    @pytest.mark.requires_vmaas
     def test_cross_tenant_pool_reference(self, jwt_grpc_tenant1: GRPCClient, ref_eip_pool: str, ref_eip_pool_id: str):
         tag = uuid4().hex[:8]
         eip_name = f"ref-xt-eip-{tag}"

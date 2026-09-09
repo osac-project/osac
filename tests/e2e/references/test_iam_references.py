@@ -33,6 +33,7 @@ def _skip_if_users_not_found(exc: subprocess.CalledProcessError) -> None:
         pytest.skip("Test users not registered in OSAC; Keycloak user sync may be pending")
 
 
+@pytest.mark.reference_common
 class TestIAMReferences:
     """OSAC-3114: IAM resource reference tests."""
 

@@ -1,0 +1,97 @@
+name: Publish PR dashboard
+
+on:
+  schedule:
+    - cron: "*/30 6-19 * * 0-5"
+  push:
+    branches: [main]
+    paths:
+      - "presentations/**"
+      - "docs/pr-dashboard/**"
+      - "tools/generate-site-index.py"
+      - "tools/pr-notify/**"
+      - ".github/workflows/pr-dashboard.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: pr-dashboard-pages
+  cancel-in-progress: false
+
+jobs:
+  deploy-site:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+    permissions:
+      contents: read # Checks out the site sources without repository write access.
+      pages: write # Uploads and deploys the GitHub Pages artifact.
+      id-token: write # Authenticates the Pages deployment using GitHub OIDC.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+
+      - name: Generate all dashboards
+        working-directory: tools/pr-notify
+        env:
+          GH_TOKEN: ${{ secrets.OSAC_BOT_PAT }}
+        run: |
+          template_dir="../../docs/pr-dashboard"
+          for config in config*.example.toml; do
+            [ -f "$config" ] || continue
+            data_path=$(python3 generate.py --config "$config" --output /dev/null --print-data-path)
+            output="../../${data_path}"
+            outdir=$(dirname "$output")
+            mkdir -p "$outdir"
+            if [ "$(realpath "$outdir")" != "$(realpath "$template_dir")" ]; then
+              cp "$template_dir/index.html" "$outdir/"
+              cp "$template_dir/.nojekyll" "$outdir/" 2>/dev/null || true
+            fi
+            echo "::group::$config -> $data_path"
+            python3 generate.py --config "$config" --output "$output"
+            echo "::endgroup::"
+          done
+
+      - name: Build presentations
+        run: |
+          npx @marp-team/marp-cli@4.4.0 --html --allow-local-files \
+            --theme-set presentations/themes/redhat.css \
+            --input-dir presentations/ \
+            --output presentations/
+
+      - name: Generate site index
+        run: python3 tools/generate-site-index.py presentations index.html
+
+      - name: Assemble site
+        run: |
+          mkdir -p _site/presentations
+          cp index.html _site/
+          for dashboard_dir in docs/*dashboard*/; do
+            [ -d "$dashboard_dir" ] || continue
+            cp -r "$dashboard_dir" "_site/$(basename "$dashboard_dir")"
+          done
+          (
+            cd tools/pr-notify
+            python3 generate_manifest.py --output ../../_site/dashboards.json
+          )
+          cp presentations/*.html _site/presentations/
+          if [ -d presentations/assets ]; then
+            cp -r presentations/assets _site/presentations/
+          fi
+          if [ -d presentations/themes ]; then
+            cp -r presentations/themes _site/presentations/
+          fi
+
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: _site
+
+      - uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0

@@ -1,0 +1,85 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "google/protobuf/timestamp.proto";
+import "cleanapi/cleanapi.proto";
+import "google/api/field_behavior.proto";
+import "osac/private/v1/condition_status_type.proto";
+import "osac/private/v1/metadata_type.proto";
+
+option (cleanapi.file).package = "osac.public.v1";
+
+// Represents an east-west fabric isolation domain.
+message FabricDomain {
+  string id = 1;
+  Metadata metadata = 2;
+  FabricDomainSpec spec = 3;
+  FabricDomainStatus status = 4;
+}
+
+message FabricDomainSpec {
+  // Fabric type. This field is immutable after creation.
+  FabricDomainType type = 1 [(google.api.field_behavior) = IMMUTABLE];
+
+  // Hostnames of servers that belong to the domain.
+  repeated string servers = 2;
+
+  // Virtual networks associated with the domain. Phase 1 requires exactly one.
+  repeated string virtual_networks = 3 [(google.api.field_behavior) = IMMUTABLE];
+}
+
+message FabricDomainStatus {
+  repeated FabricDomainCondition conditions = 1;
+  string backend_id = 2;
+  string vpc_id = 3;
+  repeated FabricDomainMemberStatus members = 4;
+}
+
+message FabricDomainMemberStatus {
+  string server = 1;
+  FabricDomainMemberState state = 2;
+  string message = 3;
+}
+
+message FabricDomainCondition {
+  FabricDomainConditionType type = 1;
+  ConditionStatus status = 2;
+  google.protobuf.Timestamp last_transition_time = 3;
+  optional string reason = 4;
+  optional string message = 5;
+}
+
+enum FabricDomainType {
+  FABRIC_DOMAIN_TYPE_UNSPECIFIED = 0;
+  FABRIC_DOMAIN_TYPE_ETHERNET_EW = 1;
+  FABRIC_DOMAIN_TYPE_INFINIBAND_EW = 2;
+  FABRIC_DOMAIN_TYPE_NVLINK = 3;
+}
+
+enum FabricDomainMemberState {
+  FABRIC_DOMAIN_MEMBER_STATE_UNSPECIFIED = 0;
+  FABRIC_DOMAIN_MEMBER_STATE_PENDING = 1;
+  FABRIC_DOMAIN_MEMBER_STATE_ACTIVE = 2;
+  FABRIC_DOMAIN_MEMBER_STATE_FAILED = 3;
+}
+
+enum FabricDomainConditionType {
+  FABRIC_DOMAIN_CONDITION_TYPE_UNSPECIFIED = 0;
+  FABRIC_DOMAIN_CONDITION_TYPE_PROGRESSING = 1;
+  FABRIC_DOMAIN_CONDITION_TYPE_READY = 2;
+  FABRIC_DOMAIN_CONDITION_TYPE_FAILED = 3;
+}

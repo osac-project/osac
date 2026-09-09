@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
@@ -28,6 +29,7 @@ import (
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
@@ -204,11 +206,22 @@ var _ = Describe("ClusterOrder transition events", func() {
 		recorder := newRecorder()
 		scheme := runtime.NewScheme()
 		Expect(v1alpha1.AddToScheme(scheme)).To(Succeed())
+		instance := &v1alpha1.ClusterOrder{
+			ObjectMeta: metav1.ObjectMeta{Name: "order", Namespace: "default"},
+		}
+		reader := fake.NewClientBuilder().WithScheme(scheme).WithObjects(instance.DeepCopy()).Build()
+		patchErr := errors.New("status patch failed")
 		reconciler := &ClusterOrderReconciler{
-			apiReader: fake.NewClientBuilder().WithScheme(scheme).Build(),
+			Client: interceptor.NewClient(reader, interceptor.Funcs{
+				SubResourcePatch: func(_ context.Context, _ client.Client, subResourceName string,
+					_ client.Object, _ client.Patch, _ ...client.SubResourcePatchOption) error {
+					Expect(subResourceName).To(Equal("status"))
+					return patchErr
+				},
+			}),
+			apiReader: reader,
 			Recorder:  recorder,
 		}
-		instance := &v1alpha1.ClusterOrder{}
 		instance.Status = statusWithProgressingReason(v1alpha1.ReasonControlPlaneStarting)
 
 		err := reconciler.persistStatusAndRecordTransitionEvents(
@@ -216,7 +229,7 @@ var _ = Describe("ClusterOrder transition events", func() {
 			&v1alpha1.ClusterOrderStatus{},
 		)
 
-		Expect(err).To(HaveOccurred())
+		Expect(err).To(MatchError(patchErr))
 		Consistently(recorder.Events, 200*time.Millisecond).ShouldNot(Receive())
 	})
 

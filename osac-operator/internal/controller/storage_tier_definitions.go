@@ -150,11 +150,11 @@ func resolveTierDefinitions(
 }
 
 // resolveBackendPassword returns the storage backend password used for AAP provisioning,
-// preferring the inline credentials value and otherwise fetching data["password"] from
+// preferring the inline credentials value and otherwise fetching data["value"] from
 // the referenced Secret via the Secrets API. A backend with neither an inline password
 // nor a password_secret reference yields an empty password with no error (backends that
 // legitimately need no credential are unaffected). When password_secret is set the secret
-// must resolve to a non-empty data["password"]; any failure is returned so the caller can
+// must resolve to a non-empty data["value"]; any failure is returned so the caller can
 // skip that backend rather than silently provision with an empty password. The returned
 // error carries only the secret id and reason — never the secret value.
 func resolveBackendPassword(
@@ -182,9 +182,13 @@ func resolveBackendPassword(
 	if err != nil {
 		return "", fmt.Errorf("get password secret %q: %w", id, err)
 	}
-	value, ok := resp.GetObject().GetData()["password"]
+	if secretType := resp.GetObject().GetType(); secretType != privatev1.SecretType_SECRET_TYPE_VALUE {
+		return "", fmt.Errorf("secret %q has type %q, expected %q", id, secretType,
+			privatev1.SecretType_SECRET_TYPE_VALUE)
+	}
+	value, ok := resp.GetObject().GetData()["value"]
 	if !ok || len(value) == 0 {
-		return "", fmt.Errorf("secret %q is missing data[%q]", id, "password")
+		return "", fmt.Errorf("secret %q is missing data[%q]", id, "value")
 	}
 	return string(value), nil
 }

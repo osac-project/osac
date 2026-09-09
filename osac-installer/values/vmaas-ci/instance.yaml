@@ -11,16 +11,14 @@ global:
       enabled: false
     maas:
       enabled: false
-
 # --- CSI Driver ---
 csiDriver:
   enabled: true
-
 # --- Operator ---
 operator:
   image:
     repository: ghcr.io/osac-project/osac-operator
-    tag: latest
+    tag: sha-cf8208d
     pullPolicy: Always
   provisioning:
     provider: "aap"
@@ -39,8 +37,8 @@ operator:
   hubAccess:
     enabled: true
   tenants:
-  - name: shared
-  - name: osac-e2e-ci
+    - name: shared
+    - name: osac-e2e-ci
   # VMaaS has no physical fabric. Register k8s_only so the dispatcher can
   # stamp ExternalIP/VN/SG onto the composite role (CUDN + NetworkPolicy +
   # MetalLB L2) instead of fabricManager cudn_net, which cannot provision
@@ -50,14 +48,13 @@ operator:
       k8s_only:
         enabled: true
         capabilities: "ipv4,ipv6,dualStack"
-
 # --- Fulfillment Service ---
 service:
-  externalHostname: ""  # Set dynamically by make install-osac
-  internalHostname: ""  # Set dynamically by make install-osac
+  externalHostname: "" # Set dynamically by make install-osac
+  internalHostname: "" # Set dynamically by make install-osac
   variant: openshift
   images:
-    service: ghcr.io/osac-project/fulfillment-service:main
+    service: ghcr.io/osac-project/fulfillment-service:sha-cf8208d
     envoy: ghcr.io/osac-project/envoy:v1.33.0
   certs:
     issuerRef:
@@ -70,48 +67,48 @@ service:
     # (see charts/osac/values.yaml) -- correct automatically once
     # install-osac sets --set global.clusterDomain=$(DOMAIN).
     emergencyServiceAccounts:
-    - admin
-    - osac-operator
-    - osac-operator-controller-manager
-    - template-publisher
-    - osac-metering
+      - admin
+      - osac-operator
+      - osac-operator-controller-manager
+      - template-publisher
+      - osac-metering
     controllerCredentials:
-    - secret:
-        name: fulfillment-controller-credentials
-        items:
-        - key: client-id
-          param: client-id
-        - key: client-secret
-          param: client-secret
+      - secret:
+          name: fulfillment-controller-credentials
+          items:
+            - key: client-id
+              param: client-id
+            - key: client-secret
+              param: client-secret
   idp:
     provider: keycloak
     # url defaults to a global.clusterDomain-backed external route URL (see
     # charts/osac/values.yaml) -- correct automatically once install-osac
     # sets --set global.clusterDomain=$(DOMAIN).
     credentials:
-    - secret:
-        name: fulfillment-controller-credentials
-        items:
-        - key: client-id
-          param: client-id
-        - key: client-secret
-          param: client-secret
+      - secret:
+          name: fulfillment-controller-credentials
+          items:
+            - key: client-id
+              param: client-id
+            - key: client-secret
+              param: client-secret
   database:
     connection:
-    - secret:
-        name: osac-db-config
-        items:
-        - key: url
-          param: url
-    - secret:
-        name: osac-db-client-cert
-        items:
-        - key: tls.crt
-          param: sslcert
-        - key: tls.key
-          param: sslkey
-        - key: ca.crt
-          param: sslrootcert
+      - secret:
+          name: osac-db-config
+          items:
+            - key: url
+              param: url
+      - secret:
+          name: osac-db-client-cert
+          items:
+            - key: tls.crt
+              param: sslcert
+            - key: tls.key
+              param: sslkey
+            - key: ca.crt
+              param: sslrootcert
   log:
     level: debug
   vault:
@@ -126,17 +123,16 @@ service:
     caBundle:
       configMap: ca-bundle
     credentials:
-    - secret:
-        name: fulfillment-controller-credentials
-        items:
-        - key: client-secret
-          param: client-secret
-
+      - secret:
+          name: fulfillment-controller-credentials
+          items:
+            - key: client-secret
+              param: client-secret
 # --- UI ---
 ui:
   enabled: true
   images:
-    ui: ghcr.io/osac-project/osac-ui:v0.0.5
+    ui: ghcr.io/osac-project/osac-ui:sha-086e49b
   api:
     fulfillment:
       certs:
@@ -146,7 +142,6 @@ ui:
     certs:
       caBundle:
         configMap: ca-bundle
-
 # --- AAP ---
 aap:
   aap:
@@ -155,7 +150,7 @@ aap:
       name: "osac-aap"
   bootstrap:
     enabled: true
-    image: ghcr.io/osac-project/osac-aap:latest
+    image: ghcr.io/osac-project/osac-aap:sha-cf8208d
     backoffLimit: 15
   configAsCode:
     manifestSecret: "config-as-code-manifest-ig"
@@ -166,21 +161,18 @@ aap:
     # the same base value here. Extending that override to cover eeImage
     # too is tracked separately (OSAC-3545), since it lives in
     # osac-test-infra, not this repo.
-    eeImage: "ghcr.io/osac-project/osac-aap:latest"
+    eeImage: "ghcr.io/osac-project/osac-aap:sha-cf8208d"
     projectGitUri: "https://github.com/osac-project/osac"
-    projectGitBranch: "main"
+    projectGitBranch: "cf8208d189fc17fc36aa8c5c6feecd8d79a44f93"
   instanceGroups:
     storageFulfillment:
       enabled: true
-
 # --- Validation ---
 validation:
   enabled: true
-
 # --- Hub Access ---
 hubAccess:
   enabled: true
-
 # --- Metering ---
 metering:
   enabled: true
@@ -192,39 +184,37 @@ metering:
     enabled: true
     image:
       repository: ghcr.io/osac-project/metering-echo-adapter
-      tag: latest
+      tag: sha-cf8208d
       pullPolicy: Always
   m360Adapter:
     enabled: false
     image:
       repository: ghcr.io/osac-project/metering-m360-adapter
-      tag: latest
+      tag: sha-cf8208d
       pullPolicy: Always
     m360:
-      apiUrl: "api-url"          # Set to your Monetize360 Usage API endpoint
-      apiKeySecret: "m360-api-key"  # K8s Secret with key "api-key" — create before deploying
+      apiUrl: "api-url" # Set to your Monetize360 Usage API endpoint
+      apiKeySecret: "m360-api-key" # K8s Secret with key "api-key" — create before deploying
       apiVersion: "v1"
   database:
     connection:
-    - secret:
-        name: osac-db-metering-config
-        items:
-        - key: url
-          param: url
-    - secret:
-        name: osac-db-metering-client-cert
-        items:
-        - key: tls.crt
-          param: sslcert
-        - key: tls.key
-          param: sslkey
-        - key: ca.crt
-          param: sslrootcert
-
+      - secret:
+          name: osac-db-metering-config
+          items:
+            - key: url
+              param: url
+      - secret:
+          name: osac-db-metering-client-cert
+          items:
+            - key: tls.crt
+              param: sslcert
+            - key: tls.key
+              param: sslkey
+            - key: ca.crt
+              param: sslrootcert
 # --- LVMS StorageBackend registration ---
 lvms:
   enabled: true
-
 # Default NetworkClass for VMaaS-without-fabric (create-network-class hook).
 # Must clear fabricManager — chart defaults leave cudn_net, and Helm merge
 # would stamp both managers
@@ -232,12 +222,10 @@ networkClass:
   enabled: true
   title: "K8s-only networking"
   description: >-
-    VMaaS overlay without a physical fabric. VirtualNetwork/Subnet use CUDN,
-    SecurityGroup uses NetworkPolicy, ExternalIP uses MetalLB L2.
+    VMaaS overlay without a physical fabric. VirtualNetwork/Subnet use CUDN, SecurityGroup uses NetworkPolicy, ExternalIP uses MetalLB L2.
   fabricManager: ""
   k8sManager: "k8s_only"
   isDefault: true
-
 # --- Bundled OpenBao (Vault-compatible secret store) ---
 bundledVault:
   # Override podSecurityContext for OpenShift restricted-v2 SCC: omit numeric

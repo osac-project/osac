@@ -230,9 +230,10 @@ jobs:
           'caas/sanity'
         }}
       test-filter: ${{ inputs.test-filter || '' }}
-      # Run CaaS-specific and common reference tests. Networking references
-      # remain opt-in because they validate shared APIs, not the CaaS flow.
-      test-marker: ${{ inputs.test-marker || 'requires_caas or reference_common' }}
+      # Run the selected CaaS tier, CaaS-specific references, and common
+      # references. Networking references remain opt-in because they validate
+      # shared APIs, not the CaaS flow.
+      test-marker: ${{ inputs.test-marker || 'sanity or regression or requires_caas or reference_common' }}
       # osac-installer now lives as a subdirectory of this same monorepo checkout
       # (its Chart.yaml deps resolve fulfillment-service/osac-operator/osac-aap/BMF
       # as ../../../<name> siblings within it), so a PR touching those components

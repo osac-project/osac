@@ -61,14 +61,21 @@ func Cmd() *cobra.Command {
 		nil,
 		labelFlagHelp,
 	)
+	flags.StringVar(
+		&runner.args.secretType,
+		"type",
+		"opaque",
+		typeFlagHelp,
+	)
 	return result
 }
 
 type runnerContext struct {
 	args struct {
-		name     string
-		fromFile []string
-		labels   []string
+		name       string
+		fromFile   []string
+		labels     []string
+		secretType string
 	}
 	logger   *slog.Logger
 	console  *terminal.Console
@@ -100,6 +107,11 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	secretType, err := parseSecretType(c.args.secretType)
+	if err != nil {
+		return err
+	}
+
 	conn, err := c.settings.Connect(ctx, cmd.Flags())
 	if err != nil {
 		return fmt.Errorf("failed to create gRPC connection: %w", err)
@@ -115,6 +127,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 			Labels: labels,
 		}.Build(),
 		Data: data,
+		Type: secretType,
 	}.Build()
 
 	response, err := client.Create(ctx, publicv1.SecretsCreateRequest_builder{Object: secret}.Build())
@@ -126,6 +139,26 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		response.GetObject().GetMetadata().GetName(), response.GetObject().GetId())
 
 	return nil
+}
+
+func parseSecretType(value string) (publicv1.SecretType, error) {
+	switch value {
+	case "opaque":
+		return publicv1.SecretType_SECRET_TYPE_OPAQUE, nil
+	case "pull-secret":
+		return publicv1.SecretType_SECRET_TYPE_PULL_SECRET, nil
+	case "kubeconfig":
+		return publicv1.SecretType_SECRET_TYPE_KUBECONFIG, nil
+	case "user-data":
+		return publicv1.SecretType_SECRET_TYPE_USER_DATA, nil
+	case "value":
+		return publicv1.SecretType_SECRET_TYPE_VALUE, nil
+	default:
+		return publicv1.SecretType_SECRET_TYPE_UNSPECIFIED, fmt.Errorf(
+			"invalid secret type %q: must be one of opaque, pull-secret, kubeconfig, user-data, or value",
+			value,
+		)
+	}
 }
 
 // parseFromFileSpec parses a single --from-file flag value into a key and path.
@@ -249,6 +282,13 @@ To create a secret with labels:
 {{ bt 3 }}shell
 {{ binary }} create secret --name my-secret --from-file=data.txt --label=env=prod --label=team=backend
 {{ bt 3 }}
+
+To create a pull secret:
+
+{{ bt 3 }}shell
+{{ binary }} create secret --name registry-credentials --type=pull-secret \
+  --from-file=.dockerconfigjson=/path/to/pull-secret.json
+{{ bt 3 }}
 `
 
 const nameFlagHelp = `
@@ -263,4 +303,9 @@ input (an explicit key is required for stdin). Can be specified multiple times.
 
 const labelFlagHelp = `
 _KEY=VALUE_ - Label to set on the secret. Can be specified multiple times.
+`
+
+const typeFlagHelp = `
+_TYPE_ - Secret type. One of {{ bt }}opaque{{ bt }}, {{ bt }}pull-secret{{ bt }},
+{{ bt }}kubeconfig{{ bt }}, {{ bt }}user-data{{ bt }}, or {{ bt }}value{{ bt }}.
 `

@@ -525,6 +525,10 @@ jobs:
     uses: osac-project/osac-test-infra/.github/workflows/e2e-vmaas-full-install.yml@main
     with:
       test-suite: vmaas
+      # The references module contains CaaS and BMaaS tests too. Those
+      # services are disabled in the VMaaS profile, so exclude tests marked
+      # with either dependency. Matches osac-project/osac#805.
+      test-marker: 'not requires_caas and not requires_bmaas'
       installer-repo: ${{ github.repository }}
       installer-ref: ${{ needs.prepare.outputs.temp-branch }}
       test-infra-repository: osac-project/osac-test-infra

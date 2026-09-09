@@ -311,6 +311,24 @@ def wait_for_cluster_progressing(*, k8s: K8sClient, name: str) -> None:
     )
 
 
+def wait_for_cluster_order_event_reasons(*, k8s: K8sClient, name: str, reasons: set[str]) -> dict[str, dict[str, Any]]:
+    observed_events: dict[str, dict[str, Any]] = {}
+
+    def _observed_events() -> dict[str, dict[str, Any]]:
+        observed_events.update(
+            {event["reason"]: event for event in k8s.get_cluster_order_events(name=name) if event.get("reason")}
+        )
+        return observed_events
+
+    return poll_until(
+        fn=_observed_events,
+        until=lambda observed: reasons.issubset(observed),
+        retries=480,
+        delay=15,
+        description=f"{name} ClusterOrder provisioning events",
+    )
+
+
 def wait_for_cluster_ready(*, k8s: K8sClient, name: str) -> None:
     # Must stay safely above osac-aap's own wait_for_clusteroperators_retries
     # budget (60 min) plus earlier steps in the same AAP job (create hosted

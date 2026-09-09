@@ -347,6 +347,22 @@ class K8sClient:
                 return cond.get("status", "")
         return ""
 
+    def get_cluster_order_events(self, *, name: str, checked: bool = True) -> list[dict[str, Any]]:
+        output, rc = self._get(
+            "get",
+            "events",
+            "-n",
+            self.namespace,
+            "--field-selector",
+            f"involvedObject.kind=ClusterOrder,involvedObject.name={name}",
+            "-o",
+            "json",
+            checked=checked,
+        )
+        if rc != 0:
+            return []
+        return json.loads(output).get("items", [])
+
     def get_cluster_order_finalizers(self, *, name: str, checked: bool = True) -> list[str]:
         output, rc = self._get("get", "clusterorder", name, "-n", self.namespace, "-o", "json", checked=checked)
         if rc != 0:

@@ -139,7 +139,8 @@ var _ = Describe("ClusterOrder transition events", func() {
 
 		Eventually(recorder.Events).Should(Receive(And(
 			ContainSubstring(corev1.EventTypeNormal),
-			ContainSubstring(string(v1alpha1.ClusterOrderPhaseDeleting)),
+			ContainSubstring(v1alpha1.ReasonDeleting),
+			ContainSubstring("ClusterOrder entered deleting phase"),
 		)))
 	})
 
@@ -157,6 +158,23 @@ var _ = Describe("ClusterOrder transition events", func() {
 		Eventually(recorder.Events).Should(Receive(And(
 			ContainSubstring(corev1.EventTypeWarning),
 			ContainSubstring(v1alpha1.ReasonProvisioningFailed),
+			ContainSubstring("ClusterOrder provisioning failed"),
+		)))
+	})
+
+	It("uses the fallback details when a Failed transition has no Progressing condition", func() {
+		recorder := newRecorder()
+		reconciler := &ClusterOrderReconciler{Recorder: recorder}
+		instance := &v1alpha1.ClusterOrder{Status: v1alpha1.ClusterOrderStatus{
+			Phase: v1alpha1.ClusterOrderPhaseFailed,
+		}}
+		oldStatus := statusWithProgressingReason(v1alpha1.ReasonWorkersJoining)
+
+		reconciler.recordTransitionEvents(instance, &oldStatus)
+
+		Eventually(recorder.Events).Should(Receive(And(
+			ContainSubstring(corev1.EventTypeWarning),
+			ContainSubstring(v1alpha1.ReasonFailed),
 			ContainSubstring("ClusterOrder provisioning failed"),
 		)))
 	})
@@ -183,6 +201,36 @@ var _ = Describe("ClusterOrder transition events", func() {
 			ContainSubstring(v1alpha1.ReasonReady),
 			ContainSubstring("ClusterOrder is ready"),
 		)))
+	})
+
+	It("does not record Ready when the phase is Ready but Progressing is not False", func() {
+		recorder := newRecorder()
+		reconciler := &ClusterOrderReconciler{Recorder: recorder}
+		instance := &v1alpha1.ClusterOrder{Status: v1alpha1.ClusterOrderStatus{
+			Phase: v1alpha1.ClusterOrderPhaseReady,
+			Conditions: []metav1.Condition{{
+				Type:   v1alpha1.ConditionProgressing,
+				Status: metav1.ConditionTrue,
+			}},
+		}}
+
+		oldStatus := statusWithProgressingReason(v1alpha1.ReasonWorkersJoining)
+		reconciler.recordTransitionEvents(instance, &oldStatus)
+
+		Consistently(recorder.Events, 200*time.Millisecond).ShouldNot(Receive())
+	})
+
+	It("does not record Ready when the phase is Ready without a Progressing condition", func() {
+		recorder := newRecorder()
+		reconciler := &ClusterOrderReconciler{Recorder: recorder}
+		instance := &v1alpha1.ClusterOrder{Status: v1alpha1.ClusterOrderStatus{
+			Phase: v1alpha1.ClusterOrderPhaseReady,
+		}}
+
+		oldStatus := statusWithProgressingReason(v1alpha1.ReasonWorkersJoining)
+		reconciler.recordTransitionEvents(instance, &oldStatus)
+
+		Consistently(recorder.Events, 200*time.Millisecond).ShouldNot(Receive())
 	})
 
 	It("does not duplicate the Ready event", func() {

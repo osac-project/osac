@@ -235,11 +235,15 @@ func (t *task) syncToIDP(ctx context.Context) error {
 		t.tenant.GetStatus().SetBreakGlassUserId(credentials.UserID)
 	}
 
-	// Ensure the Vault namespace exists before attempting to persist the break-glass secret.
-	// The secret will be stored in Vault under the tenant's namespace, so the namespace
-	// must be provisioned first.
+	// Vault namespace provisioning is best-effort during initial sync: if it fails
+	// the tenant still reaches SYNCED so the UI is not stuck at UNSPECIFIED.
+	// The SYNCED-path reconcile retries ensureVaultNamespace on every pass.
 	if err := t.ensureVaultNamespace(ctx); err != nil {
-		return err
+		t.r.logger.WarnContext(ctx, "Vault namespace provisioning failed during initial sync; tenant will still be marked SYNCED",
+			slog.String("tenant_id", t.tenant.GetId()),
+			slog.String("tenant_name", t.tenant.GetMetadata().GetName()),
+			slog.Any("error", err),
+		)
 	}
 
 	if err := t.persistBreakGlassSecret(ctx); err != nil {

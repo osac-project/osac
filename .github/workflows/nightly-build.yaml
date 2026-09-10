@@ -841,14 +841,18 @@ jobs:
         source osac-installer/scripts/nightly-charts.sh
 
         CHART_YAML="osac-installer/charts/osac/Chart.yaml"
+        SKIPPED_DEPS_FILE="skipped-umbrella-dependencies.txt"
+        : > "${SKIPPED_DEPS_FILE}"
 
         # Every mono-repo-resident sub-chart with a resolved version was
         # already packaged and pushed to GHCR above ("Package and push
         # sub-charts") -- point the umbrella at those real published
         # artifacts instead of the committed file:// dev paths. A component
         # with no resolved version this run has nothing published to point
-        # at, so it stays on file:// (see rewrite_umbrella_mono_repo_dependencies).
-        rewrite_umbrella_mono_repo_dependencies "${CHART_YAML}" "${OCI_REPO}" "${COMPONENT_VERSIONS}"
+        # at, so it stays on file:// (see rewrite_umbrella_mono_repo_dependencies)
+        # -- recorded to SKIPPED_DEPS_FILE so it's surfaced below and in the
+        # Slack summary, not just a raw log warning nobody reads on a green run.
+        rewrite_umbrella_mono_repo_dependencies "${CHART_YAML}" "${OCI_REPO}" "${COMPONENT_VERSIONS}" "${SKIPPED_DEPS_FILE}"
 
         if [[ -f osac-ui-nightly-version.txt ]]; then
           UI_SUB_VERSION=$(<osac-ui-nightly-version.txt)
@@ -857,6 +861,18 @@ jobs:
 
         rm -f osac-installer/charts/osac/Chart.lock
         helm dependency build osac-installer/charts/osac/
+
+        if [[ -s "${SKIPPED_DEPS_FILE}" ]]; then
+          {
+            echo "### :warning: Umbrella dependencies still on \`file://\` this run"
+            echo
+            echo "No resolved release tag yet for these components -- stayed on their committed dev path instead of a published OCI version:"
+            echo
+            while IFS= read -r line; do
+              echo "- ${line}"
+            done < "${SKIPPED_DEPS_FILE}"
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi
 
     - name: Lint chart
       working-directory: osac-installer
@@ -938,6 +954,7 @@ jobs:
           osac-installer/osac-${{ steps.version.outputs.version }}.tgz
           images.txt
           chart-sources.txt
+          skipped-umbrella-dependencies.txt
         retention-days: 14
 
   # -------------------------------------------------------------------
@@ -1035,6 +1052,7 @@ jobs:
         WORKFLOW_URL="${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}"
         SUMMARY_TEXT=$(build_slack_charts_published_summary nightly-artifacts/chart-sources.txt "${REPO_OWNER}")
         IMAGES_TEXT=$(build_slack_images_published_summary nightly-artifacts/images.txt)
+        SKIPPED_DEPS_TEXT=$(build_slack_skipped_umbrella_dependencies_summary nightly-artifacts/skipped-umbrella-dependencies.txt)
 
         # Only ever true on a manual workflow_dispatch run (see the e2e
         # jobs' own `if:` guards) -- never silent: a release that skipped
@@ -1049,6 +1067,7 @@ jobs:
           --arg header "${HEADER_TEXT}" \
           --arg summary "${SUMMARY_TEXT}" \
           --arg images "${IMAGES_TEXT}" \
+          --arg skipped_deps "${SKIPPED_DEPS_TEXT}" \
           --arg workflow_url "${WORKFLOW_URL}" \
           '{
             "blocks": (
@@ -1065,6 +1084,11 @@ jobs:
               # Slack rejects a section with empty text -- omit it entirely
               # rather than send one if images.txt was somehow unavailable.
               + (if $images != "" then [{"type": "section", "text": {"type": "mrkdwn", "text": $images}}] else [] end)
+              # Same omit-if-empty rule -- empty is the expected common case
+              # (every mono-repo component already has a release tag most
+              # nights), only non-empty when rewrite_umbrella_mono_repo_dependencies
+              # actually skipped something this run.
+              + (if $skipped_deps != "" then [{"type": "section", "text": {"type": "mrkdwn", "text": $skipped_deps}}] else [] end)
               + [
                 {
                   "type": "actions",

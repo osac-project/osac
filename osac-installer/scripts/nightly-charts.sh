@@ -593,7 +593,7 @@ rewrite_umbrella_osac_ui_dependency() {
     rewrite_umbrella_dependency "${chart_yaml}" osac-ui "${ui_version}" "${oci_repo}"
 }
 
-# Usage: rewrite_umbrella_mono_repo_dependencies <chart_yaml> <oci_repo> <component_versions_json>
+# Usage: rewrite_umbrella_mono_repo_dependencies <chart_yaml> <oci_repo> <component_versions_json> [skipped_file]
 # Rewrite every mono-repo-resident umbrella dependency (everything but
 # osac-ui -- see MONO_REPO_UMBRELLA_DEPENDENCIES) from its committed file://
 # path to a pinned oci:// reference, for every dependency whose owning
@@ -603,9 +603,15 @@ rewrite_umbrella_osac_ui_dependency() {
 # resolved version is left on its committed file:// path -- mirrors how the
 # nightly build already skips packaging/publishing that component's
 # sub-chart entirely when it has no release tag yet, so there is nothing to
-# point the umbrella at.
+# point the umbrella at. That's an expected, non-error state (e.g. a
+# brand-new component with no release cut yet), so it's still a ::warning::
+# here, not a failure -- but a raw log warning is easy to miss on an
+# otherwise-green nightly run, so also record it (one "<dep_name> (<component>:
+# no resolved version this run)" line per skip) to skipped_file when given,
+# so a caller can surface it somewhere a human actually looks (see
+# build_slack_skipped_umbrella_dependencies_summary).
 rewrite_umbrella_mono_repo_dependencies() {
-    local chart_yaml="$1" oci_repo="$2" component_versions_json="$3"
+    local chart_yaml="$1" oci_repo="$2" component_versions_json="$3" skipped_file="${4:-}"
     local entry dep_name component version
 
     for entry in "${MONO_REPO_UMBRELLA_DEPENDENCIES[@]}"; do
@@ -614,6 +620,9 @@ rewrite_umbrella_mono_repo_dependencies() {
         version=$(jq -r --arg k "${component}" '.[$k] // empty' <<<"${component_versions_json}")
         if [[ -z "${version}" ]]; then
             echo "::warning::Skipping OCI rewrite for ${dep_name} — no resolved version for ${component} this run (stays on its committed file:// path)" >&2
+            if [[ -n "${skipped_file}" ]]; then
+                printf '%s (%s: no resolved version this run)\n' "${dep_name}" "${component}" >> "${skipped_file}"
+            fi
             continue
         fi
         rewrite_umbrella_dependency "${chart_yaml}" "${dep_name}" "${version}" "${oci_repo}"
@@ -726,6 +735,28 @@ build_slack_images_published_summary() {
     fi
 
     printf '*Images published:*\n```\n%s\n```' "${content}"
+}
+
+# Usage: build_slack_skipped_umbrella_dependencies_summary <skipped_file>
+# Surface any umbrella dependency that stayed on its committed file:// path
+# this run (no resolved release tag yet for its owning component -- see
+# rewrite_umbrella_mono_repo_dependencies) in the same Slack message every
+# other nightly success is already posted to, since nothing about a green
+# nightly run otherwise prompts anyone to go looking for this in the raw
+# job logs. Unlike build_slack_images_published_summary, a missing or empty
+# skipped_file is the expected common case (every mono-repo component
+# already has a release tag most nights) -- not a warning, just an empty
+# string so the caller omits this Slack block entirely.
+build_slack_skipped_umbrella_dependencies_summary() {
+    local skipped_file="$1"
+    local content
+
+    if [[ ! -s "${skipped_file}" ]]; then
+        return 0
+    fi
+
+    content=$(<"${skipped_file}")
+    printf ':warning: *Umbrella dependencies still on `file://` this run (no release tag yet):*\n```\n%s\n```' "${content}"
 }
 
 # Usage: build_slack_charts_published_summary <manifest_file> <repo_owner>

@@ -96,6 +96,46 @@ jobs:
         echo "Umbrella (and osac-operator/fulfillment-service/osac-aap/bare-metal-fulfillment-operator): ${version}"
         echo "osac-ui: ${ui_ver}"
 
+    - name: Verify mono-repo chart dependencies are published
+      env:
+        VERSION: ${{ steps.versions.outputs.version }}
+      run: |
+        set -euo pipefail
+        source osac-installer/scripts/nightly-charts.sh
+
+        # osac-operator(-crds), fulfillment-service, osac-aap,
+        # bare-metal-fulfillment-operator(-crds), osac-metering, and
+        # csi-driver/csi-backends are mono-repo-resident and share this
+        # release's single VERSION (see the "Component versions" table in
+        # the release-notes step below) -- but nothing before this step
+        # ever confirmed publish-charts.yaml actually published each of
+        # them at that version yet. Fail loudly here rather than let the
+        # rewrite below silently pin a version that isn't in GHCR.
+        check_umbrella_mono_repo_charts_published "${VERSION}" "${{ github.repository_owner }}"
+
+    - name: Rewrite mono-repo chart dependencies to published OCI versions
+      env:
+        VERSION: ${{ steps.versions.outputs.version }}
+      run: |
+        set -euo pipefail
+        source osac-installer/scripts/nightly-charts.sh
+
+        OCI_REPO="oci://${{ env.REGISTRY }}/${{ env.CHARTS_REPO }}"
+        COMPONENT_VERSIONS=$(jq -n --arg v "${VERSION}" '{
+          "osac-operator": $v,
+          "fulfillment-service": $v,
+          "osac-aap": $v,
+          "bare-metal-fulfillment-operator": $v,
+          "osac-metering": $v,
+          "osac-csi-driver": $v
+        }')
+
+        rewrite_umbrella_mono_repo_dependencies \
+          osac-installer/charts/osac/Chart.yaml "${OCI_REPO}" "${COMPONENT_VERSIONS}"
+
+        echo "--- Updated Chart.yaml (mono-repo dependencies) ---"
+        cat osac-installer/charts/osac/Chart.yaml
+
     - name: Rewrite osac-ui dependency to the requested OCI version
       env:
         UI_VER: ${{ steps.versions.outputs.ui_ver }}
@@ -103,19 +143,16 @@ jobs:
         cd osac-installer/charts/osac
         OCI_REPO="oci://${{ env.REGISTRY }}/${{ env.CHARTS_REPO }}"
 
-        # osac-operator(-crds), fulfillment-service, osac-aap,
-        # bare-metal-fulfillment-operator(-crds), and csi-driver/csi-backends
-        # stay on their committed file:// dependencies -- they're
-        # mono-repo-resident (or a submodule checked out alongside this
-        # chart), so `helm dependency build` resolves them straight from
-        # this checkout with no rewrite needed. Only osac-ui is a real
-        # external OCI chart dependency this workflow re-pins per release.
+        # osac-ui is the one umbrella dependency with its own independent
+        # release cadence (see the ui_version workflow input above) -- every
+        # other dependency was already re-pinned to its published OCI
+        # version by the "Rewrite mono-repo chart dependencies" step above.
         yq -i "
           (.dependencies[] | select(.name == \"osac-ui\")) .repository = \"${OCI_REPO}\" |
           (.dependencies[] | select(.name == \"osac-ui\")) .version = \"${UI_VER}\"
         " Chart.yaml
 
-        # Remove stale Chart.lock so helm pulls the newly-pinned osac-ui version
+        # Remove stale Chart.lock so helm pulls every newly-pinned dependency version
         rm -f Chart.lock
 
         echo "--- Updated Chart.yaml ---"

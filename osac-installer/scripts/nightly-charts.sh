@@ -22,6 +22,24 @@ readonly NIGHTLY_CHART_SLACK_ORDER=(
     osac
 )
 
+# Every umbrella dependency other than osac-ui, mapped "<Chart.yaml
+# dependency name>:<owning component>" -- the owning component is what
+# COMPONENT_VERSIONS (nightly-build.yaml's per-release-cut version map) is
+# keyed by. osac-operator-crds/bare-metal-fulfillment-operator-crds/
+# csi-backends share their owning component's version with their non-crds
+# sibling chart; they have no independent release cadence of their own.
+readonly MONO_REPO_UMBRELLA_DEPENDENCIES=(
+    "osac-operator-crds:osac-operator"
+    "osac-operator:osac-operator"
+    "fulfillment-service:fulfillment-service"
+    "osac-aap:osac-aap"
+    "bare-metal-fulfillment-operator-crds:bare-metal-fulfillment-operator"
+    "bare-metal-fulfillment-operator:bare-metal-fulfillment-operator"
+    "osac-metering:osac-metering"
+    "csi-driver:osac-csi-driver"
+    "csi-backends:osac-csi-driver"
+)
+
 # CI overlay values files with their own separate floating image tag
 # overrides for mono-repo components (operator/aap/bmf/metering/csiDriver),
 # on top of the umbrella chart's own values.yaml. Not every file overrides
@@ -98,6 +116,74 @@ check_osac_ui_image() {
     fi
 
     echo "${sha}"
+}
+
+# Usage: check_chart_published <chart_name> <version> [repo_owner]
+# Verify oci://ghcr.io/<repo_owner>/charts/<chart_name>:<version> exists.
+# Same anonymous-GHCR-token-then-manifest-HEAD-check technique as
+# check_osac_ui_image above, applied to a chart OCI artifact (helm push)
+# rather than a container image -- GHCR serves both under the same
+# manifests API, just under the "charts/<name>" package path helm push uses.
+check_chart_published() {
+    local chart_name="$1" version="$2" repo_owner="${3:-osac-project}"
+    local token safe_name safe_version
+
+    if [[ ! "${chart_name}" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+        safe_name=$(_gha_sanitize_for_message "${chart_name}")
+        echo "::error::Invalid chart name '${safe_name}' — must match [a-zA-Z0-9._-]+" >&2
+        return 1
+    fi
+    if [[ ! "${version}" =~ ^[a-zA-Z0-9._+-]+$ ]]; then
+        safe_version=$(_gha_sanitize_for_message "${version}")
+        echo "::error::Invalid version '${safe_version}' for chart ${chart_name}" >&2
+        return 1
+    fi
+
+    safe_name=$(_gha_sanitize_for_message "${chart_name}")
+    if ! token=$(http_json "Could not obtain GHCR token to verify chart ${safe_name}:${version}" 3 5 '.token' \
+        "https://ghcr.io/token?scope=repository:${repo_owner}/charts/${chart_name}:pull"); then
+        echo "::error::Could not obtain GHCR token to verify chart ${safe_name}:${version}" >&2
+        return 1
+    fi
+    if [[ -z "${token}" || "${token}" == "null" ]]; then
+        echo "::error::GHCR token is empty or null for chart ${safe_name}:${version}" >&2
+        return 1
+    fi
+
+    if ! http_retry "Chart ${safe_name}:${version} not found in GHCR" 3 5 \
+        -s -o /dev/null \
+        -H "Authorization: Bearer ${token}" \
+        -H "Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json" \
+        "https://ghcr.io/v2/${repo_owner}/charts/${chart_name}/manifests/${version}"; then
+        echo "::error::Chart ${safe_name}:${version} not found in GHCR — has publish-charts.yaml published it yet for this release?" >&2
+        return 1
+    fi
+}
+
+# Usage: check_umbrella_mono_repo_charts_published <version> [repo_owner]
+# Verify every mono-repo-resident umbrella dependency (see
+# MONO_REPO_UMBRELLA_DEPENDENCIES) is already published to GHCR at
+# <version> -- one shared version across all of them per release cut (see
+# publish-osac-installer-chart.yaml's "Component versions" release-notes
+# table). Closes the ordering gap between publish-charts.yaml's per-component
+# publishes and the umbrella publish, which has no explicit dependency on
+# them completing first: checks every dependency (not just the first
+# failure) so a caller sees the full list of what's missing at once, and
+# fails loudly rather than letting the umbrella rewrite proceed and silently
+# ship a stale file:// path for whatever isn't published yet.
+check_umbrella_mono_repo_charts_published() {
+    local version="$1" repo_owner="${2:-osac-project}"
+    local entry dep_name failed=0
+
+    for entry in "${MONO_REPO_UMBRELLA_DEPENDENCIES[@]}"; do
+        dep_name="${entry%%:*}"
+        check_chart_published "${dep_name}" "${version}" "${repo_owner}" || failed=1
+    done
+
+    if (( failed )); then
+        echo "::error::One or more mono-repo-resident chart dependencies are not yet published at version ${version} — aborting rather than shipping a file:// dependency path in the published umbrella chart" >&2
+        return 1
+    fi
 }
 
 # Usage: retag_component_image <image_repo> <source_short_sha> <target_version>
@@ -483,33 +569,55 @@ _build_slack_charts_table() {
     printf '%s' "${table}"
 }
 
-# Usage: rewrite_umbrella_osac_ui_dependency <chart_yaml> <ui_version> <oci_repo>
+# Usage: rewrite_umbrella_dependency <chart_yaml> <dep_name> <version> <oci_repo>
 # yamllint is not performed on Chart.yaml. Hence, use of yq is safe here.
-rewrite_umbrella_osac_ui_dependency() {
-    local chart_yaml="$1" ui_version="$2" oci_repo="$3"
+rewrite_umbrella_dependency() {
+    local chart_yaml="$1" dep_name="$2" version="$3" oci_repo="$4"
     local safe_chart_yaml
     if [[ ! -f "${chart_yaml}" ]]; then
         safe_chart_yaml=$(_gha_sanitize_for_message "${chart_yaml}")
         echo "::error::Chart manifest not found: ${safe_chart_yaml}" >&2
         return 1
     fi
-    UI_VERSION="${ui_version}" yq -i \
-        '(.dependencies[] | select(.name == "osac-ui")).version = strenv(UI_VERSION)' \
+    DEP_NAME="${dep_name}" DEP_VERSION="${version}" yq -i \
+        '(.dependencies[] | select(.name == strenv(DEP_NAME))).version = strenv(DEP_VERSION)' \
         "${chart_yaml}"
-    UI_REPO="${oci_repo}" yq -i \
-        '(.dependencies[] | select(.name == "osac-ui")).repository = strenv(UI_REPO)' \
+    DEP_NAME="${dep_name}" DEP_REPO="${oci_repo}" yq -i \
+        '(.dependencies[] | select(.name == strenv(DEP_NAME))).repository = strenv(DEP_REPO)' \
         "${chart_yaml}"
 }
 
-# Usage: rewrite_umbrella_osac_ui_dependency_and_rebuild <chart_yaml> <ui_version> <oci_repo>
-rewrite_umbrella_osac_ui_dependency_and_rebuild() {
+# Usage: rewrite_umbrella_osac_ui_dependency <chart_yaml> <ui_version> <oci_repo>
+rewrite_umbrella_osac_ui_dependency() {
     local chart_yaml="$1" ui_version="$2" oci_repo="$3"
-    local chart_dir
-    chart_dir=$(dirname "${chart_yaml}")
+    rewrite_umbrella_dependency "${chart_yaml}" osac-ui "${ui_version}" "${oci_repo}"
+}
 
-    rewrite_umbrella_osac_ui_dependency "${chart_yaml}" "${ui_version}" "${oci_repo}"
-    rm -f "${chart_dir}/Chart.lock"
-    helm dependency build "${chart_dir}/"
+# Usage: rewrite_umbrella_mono_repo_dependencies <chart_yaml> <oci_repo> <component_versions_json>
+# Rewrite every mono-repo-resident umbrella dependency (everything but
+# osac-ui -- see MONO_REPO_UMBRELLA_DEPENDENCIES) from its committed file://
+# path to a pinned oci:// reference, for every dependency whose owning
+# component has a resolved version in component_versions_json (a JSON map
+# of component name -> version, same shape as nightly-build.yaml's
+# COMPONENT_VERSIONS output). A dependency whose owning component has no
+# resolved version is left on its committed file:// path -- mirrors how the
+# nightly build already skips packaging/publishing that component's
+# sub-chart entirely when it has no release tag yet, so there is nothing to
+# point the umbrella at.
+rewrite_umbrella_mono_repo_dependencies() {
+    local chart_yaml="$1" oci_repo="$2" component_versions_json="$3"
+    local entry dep_name component version
+
+    for entry in "${MONO_REPO_UMBRELLA_DEPENDENCIES[@]}"; do
+        dep_name="${entry%%:*}"
+        component="${entry#*:}"
+        version=$(jq -r --arg k "${component}" '.[$k] // empty' <<<"${component_versions_json}")
+        if [[ -z "${version}" ]]; then
+            echo "::warning::Skipping OCI rewrite for ${dep_name} — no resolved version for ${component} this run (stays on its committed file:// path)" >&2
+            continue
+        fi
+        rewrite_umbrella_dependency "${chart_yaml}" "${dep_name}" "${version}" "${oci_repo}"
+    done
 }
 
 # Usage: stamp_osac_ui_chart <chart_dir> <sub_version> <image_ref>

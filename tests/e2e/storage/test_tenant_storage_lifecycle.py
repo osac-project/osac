@@ -9,53 +9,72 @@ reachable (real VAST or mock VMS server).
 
 from __future__ import annotations
 
-import textwrap
+import logging
 from uuid import uuid4
 
 from tests.e2e.core.helpers import wait_for_tenant_condition, wait_for_tenant_cr, wait_for_tenant_deletion
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.runner import poll_until
+from tests.e2e.storage.conftest import NAMESPACE_MANIFEST, TENANT_MANIFEST
 
-_NAMESPACE_MANIFEST = textwrap.dedent("""\
-    apiVersion: v1
-    kind: Namespace
-    metadata:
-      name: {name}
-""")
-
-_TENANT_MANIFEST = textwrap.dedent("""\
-    apiVersion: osac.openshift.io/v1alpha1
-    kind: Tenant
-    metadata:
-      name: {name}
-      namespace: {namespace}
-    spec: {{}}
-""")
+logger = logging.getLogger(__name__)
 
 
 def test_tenant_storage_lifecycle(k8s_hub_client: K8sClient, storage_config_namespace: str) -> None:
+    """Verify the full tenant storage onboarding and teardown lifecycle.
+
+    Creates a Tenant, waits for storage provisioning stages (StorageBackendReady
+    and ClusterStorageReady), validates storage classes and hub secrets, then
+    verifies ordered teardown including tenant secret cleanup.
+    """
     tenant_name: str = f"test-storage-{uuid4().hex[:8]}"
     namespace: str = k8s_hub_client.namespace
 
-    k8s_hub_client.apply(manifest=_NAMESPACE_MANIFEST.format(name=tenant_name))
-    k8s_hub_client.apply(manifest=_TENANT_MANIFEST.format(name=tenant_name, namespace=namespace))
+    k8s_hub_client.apply(manifest=NAMESPACE_MANIFEST.format(name=tenant_name))
+    k8s_hub_client.apply(manifest=TENANT_MANIFEST.format(name=tenant_name, namespace=namespace))
 
     try:
         _verify_provisioning(
             k8s=k8s_hub_client, tenant_name=tenant_name, storage_config_namespace=storage_config_namespace
         )
     finally:
-        _trigger_teardown(k8s=k8s_hub_client, tenant_name=tenant_name)
-        _verify_teardown(k8s=k8s_hub_client, tenant_name=tenant_name)
+        # Each teardown step is wrapped individually so that a failure in one
+        # step does not prevent subsequent cleanup from running.  Assertion
+        # errors from verification are collected and re-raised after all
+        # cleanup completes so they can fail the test.
+        teardown_assertion_error: AssertionError | None = None
+
+        try:
+            _trigger_teardown(k8s=k8s_hub_client, tenant_name=tenant_name)
+        except Exception:
+            logger.warning("Tenant teardown trigger failed for %s", tenant_name, exc_info=True)
+
+        try:
+            _verify_teardown(
+                k8s=k8s_hub_client, tenant_name=tenant_name, storage_config_namespace=storage_config_namespace
+            )
+        except AssertionError as exc:
+            teardown_assertion_error = exc
+        except Exception:
+            logger.warning("Tenant teardown verification failed for %s", tenant_name, exc_info=True)
+
+        try:
+            k8s_hub_client.delete(resource="namespace", name=tenant_name, wait=False)
+        except Exception:
+            logger.warning("Namespace cleanup failed for %s", tenant_name, exc_info=True)
+
+        if teardown_assertion_error is not None:
+            raise teardown_assertion_error
 
 
 def _verify_provisioning(*, k8s: K8sClient, tenant_name: str, storage_config_namespace: str) -> None:
+    """Verify storage provisioning stages: finalizer, backend ready, and storage classes."""
     # --- Tenant CR exists (we created it directly) ---
     wait_for_tenant_cr(k8s=k8s, name=tenant_name)
 
     # --- Storage finalizer set (requires Phase=Ready first, then storage controller reconcile) ---
     poll_until(
-        fn=lambda: "osac.openshift.io/storage" in k8s.get_tenant_finalizers(name=tenant_name),
+        fn=lambda: "osac.openshift.io/storage" in k8s.get_tenant_finalizers(name=tenant_name, checked=False),
         until=lambda v: v is True,
         retries=30,
         delay=2,
@@ -96,14 +115,20 @@ def _verify_provisioning(*, k8s: K8sClient, tenant_name: str, storage_config_nam
 
 
 def _trigger_teardown(*, k8s: K8sClient, tenant_name: str) -> None:
+    """Initiate tenant deletion to trigger storage teardown."""
     k8s.delete(resource="tenant", name=tenant_name, wait=False)
 
 
-def _verify_teardown(*, k8s: K8sClient, tenant_name: str) -> None:
+def _verify_teardown(*, k8s: K8sClient, tenant_name: str, storage_config_namespace: str) -> None:
+    """Verify tenant deletion and confirm tenant-scoped secrets are cleaned up."""
     # --- Tenant CR fully deleted (storage finalizer released = all cleanup done) ---
     wait_for_tenant_deletion(k8s=k8s, name=tenant_name)
 
     # Finalizer removal confirms deprovision jobs succeeded (SCs + Secrets cleaned up by AAP).
 
-    # --- Clean up tenant namespace ---
-    k8s.delete(resource="namespace", name=tenant_name, wait=False)
+    # --- Verify tenant-scoped secrets removed from storage config namespace ---
+    remaining_secrets: int = k8s.count_secrets_by_tenant(tenant_name=tenant_name, namespace=storage_config_namespace)
+    assert remaining_secrets == 0, (
+        f"Expected tenant-scoped secrets removed after teardown, "
+        f"but found {remaining_secrets} in {storage_config_namespace}"
+    )

@@ -206,15 +206,21 @@ func (r *SecurityGroupReconciler) handleUpdate(ctx context.Context, sg *v1alpha1
 			return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 		}
 	} else {
-		log.Info("parent VirtualNetwork not found, using legacy implementation strategy", "uuid", sg.Spec.VirtualNetwork)
+		log.Info("parent VirtualNetwork not found, no NetworkClass available", "uuid", sg.Spec.VirtualNetwork)
 	}
 
-	// resolveImplementationStrategy returns "" when the dispatcher path isn't available
-	// (resolver nil, networkClassID empty, or no manager configured). SecurityGroup
-	// has no resource-level fallback strategy — it exclusively uses the dispatcher.
+	// Resolve implementation strategy exclusively from the dispatcher.
+	// When no manager is configured the controller blocks with
+	// ReasonNoManagerConfigured instead of silently proceeding with an empty strategy.
 	implementationStrategy, err := resolveImplementationStrategy(ctx, r.Resolver, "SecurityGroup", networkClassID, "")
 	if err != nil {
 		return ctrl.Result{}, err
+	}
+	if implementationStrategy == "" {
+		msg := fmt.Sprintf("NetworkClass %q has no fabric_manager or k8s_manager configured for SecurityGroup", networkClassID)
+		setReadyConditionBlocked(&sg.Status.Conditions, v1alpha1.ReasonNoManagerConfigured, msg)
+		log.Info("implementation strategy not set, requeueing", "securityGroup", sg.Name)
+		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
 
 	// Add implementation-strategy annotation if not present or different

@@ -451,7 +451,7 @@ class AddOnOperatorTemplate(BaseTemplate):
                 name = None
             if not isinstance(name, str) or not name.strip():
                 raise ValueError("operator reference names must not be blank")
-            references.append({"name": name})
+            references.append({"name": name.strip()})
         return references
 
     @pydantic.field_validator(
@@ -474,6 +474,20 @@ class AddOnOperatorTemplate(BaseTemplate):
             if minimum > maximum:
                 raise ValueError("inverted OpenShift version range")
 
+        return self
+
+    @pydantic.model_validator(mode="after")
+    def validate_references(self) -> Self:
+        operator_names = {
+            self.name,
+            self.name.replace("_", "-"),
+            f"{self.collection}.{self.name}",
+        }
+        if self.metadata_name:
+            operator_names.add(self.metadata_name)
+        references = self.exclusions + self.dependencies
+        if any(reference.name in operator_names for reference in references):
+            raise ValueError("operator references must not reference the operator itself")
         return self
 
 

@@ -3,6 +3,7 @@ set -e
 
 # Set KUBECONFIG to dedicated file for kind cluster
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export ANSIBLE_CONFIG="${SCRIPT_DIR}/ansible.cfg"
 export KUBECONFIG="${SCRIPT_DIR}/kubeconfig-osac-test"
 export K8S_AUTH_KUBECONFIG="${KUBECONFIG}"
 echo "Using kubeconfig: ${KUBECONFIG}"
@@ -155,6 +156,30 @@ for entry in "${ROLE_SCENARIO_TESTS[@]}"; do
   fi
 
   echo ""
+done
+
+echo "=== Running Config-as-Code Role Tests ==="
+echo ""
+
+ENUMERATE_TEMPLATES_TEST="${SCRIPT_DIR}/../../collections/ansible_collections/osac/service/roles/enumerate_templates/tests/test.yml"
+PUBLISH_TEMPLATES_TEST="${SCRIPT_DIR}/../../collections/ansible_collections/osac/service/roles/publish_templates/tests/test.yml"
+
+for scenario in test_discover_all test_nonexistent_collection test_invalid_collection_name test_mixed_collections; do
+  echo "Testing enumerate_templates: ${scenario}"
+  if run_ansible_playbook "${ENUMERATE_TEMPLATES_TEST}" -e "${scenario}=true"; then
+    PASSED+=("enumerate_templates:${scenario}")
+  else
+    FAILED+=("enumerate_templates:${scenario}")
+  fi
+done
+
+for scenario in test_empty test_populated test_populated_paginated test_pagination_stall test_pagination_failure test_no_items_key test_disabled test_not_found; do
+  echo "Testing publish_templates: ${scenario}"
+  if run_ansible_playbook "${PUBLISH_TEMPLATES_TEST}" -e "${scenario}=true"; then
+    PASSED+=("publish_templates:${scenario}")
+  else
+    FAILED+=("publish_templates:${scenario}")
+  fi
 done
 
 # Clean up lease test pod

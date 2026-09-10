@@ -461,6 +461,20 @@ class TestAddOnOperatorTemplate:
             _make_addon_operator_template(**{field: [" "]})
 
     @pytest.mark.parametrize("field", ["exclusions", "dependencies"])
+    @pytest.mark.parametrize(
+        "reference",
+        [
+            "cert_manager",
+            " cert_manager ",
+            "cert-manager",
+            "osac.templates.cert_manager",
+        ],
+    )
+    def test_self_reference_is_rejected(self, field, reference):
+        with pytest.raises(pydantic.ValidationError, match="must not reference"):
+            _make_addon_operator_template(**{field: [reference]})
+
+    @pytest.mark.parametrize("field", ["exclusions", "dependencies"])
     def test_operator_references_must_be_lists(self, field):
         with pytest.raises(pydantic.ValidationError, match="must be a list"):
             _make_addon_operator_template(**{field: "dependency_operator"})

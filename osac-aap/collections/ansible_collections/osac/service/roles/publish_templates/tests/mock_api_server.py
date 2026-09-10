@@ -13,11 +13,16 @@ Scenarios:
     populated - Endpoints return items with size field present
     no_items_key - Response is {} (edge case: no items key at all)
     disabled - All known endpoints return 404
+    not_found - All known endpoints return 404
+    paginated - AddOnOperators are returned across short pages
+    pagination_stall - The first AddOnOperator page reports no progress
+    pagination_failure - A later AddOnOperator page returns 503
 """
 
 import json
 import sys
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from urllib.parse import parse_qs, urlsplit
 
 SCENARIO = "empty"
 # Track API calls for test verification
@@ -86,13 +91,68 @@ class MockHandler(BaseHTTPRequestHandler):
         elif known_member:
             CALL_LOG[-1]["status"] = 404
             self._respond(404, {"error": "not found"})
-        elif SCENARIO == "disabled":
-            CALL_LOG[-1]["status"] = 404
-            self._respond(404, {"error": "service disabled"})
+        elif SCENARIO in ["disabled", "not_found"]:
+            if path == "/api/private/v1/add_on_operators":
+                status = 503 if SCENARIO == "disabled" else 404
+                CALL_LOG[-1]["status"] = status
+                self._respond(status, {"error": "service disabled"})
+            else:
+                CALL_LOG[-1]["status"] = 404
+                self._respond(404, {"error": "service disabled"})
         elif SCENARIO == "empty":
             self._respond(200, {"items": []})
         elif SCENARIO == "no_items_key":
             self._respond(200, {})
+        elif SCENARIO == "paginated" and path == "/api/private/v1/add_on_operators":
+            offset = int(parse_qs(urlsplit(self.path).query).get("offset", ["0"])[0])
+            if offset == 0:
+                self._respond(
+                    200,
+                    {
+                        "size": 1,
+                        "total": 3,
+                        "items": [{"id": "page-one", "title": "Page One"}],
+                    },
+                )
+            elif offset == 1:
+                self._respond(
+                    200,
+                    {
+                        "size": 2,
+                        "total": 3,
+                        "items": [
+                            {"id": "existing-addon-operator", "title": "Test AddOnOperator"},
+                            {"id": "page-three", "title": "Page Three"},
+                        ],
+                    },
+                )
+            else:
+                self._respond(404, {"error": "unexpected page offset"})
+        elif SCENARIO == "pagination_stall" and path == "/api/private/v1/add_on_operators":
+            self._respond(
+                200,
+                {"size": 0, "total": 3, "items": []},
+            )
+        elif SCENARIO == "pagination_failure" and path == "/api/private/v1/add_on_operators":
+            offset = int(parse_qs(urlsplit(self.path).query).get("offset", ["0"])[0])
+            if offset == 0:
+                self._respond(
+                    200,
+                    {
+                        "size": 1,
+                        "total": 3,
+                        "items": [{"id": "page-one", "title": "Page One"}],
+                    },
+                )
+            else:
+                CALL_LOG[-1]["status"] = 503
+                self._respond(503, {"error": "page unavailable"})
+        elif SCENARIO == "paginated":
+            for endpoint, data in POPULATED_RESPONSES.items():
+                if path == endpoint:
+                    self._respond(200, data)
+                    return
+            self._respond(200, {"items": []})
         elif SCENARIO == "populated":
             for endpoint, data in POPULATED_RESPONSES.items():
                 if path == endpoint:

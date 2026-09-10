@@ -1,0 +1,34 @@
+- name: Get next page of existing AddOnOperators
+  ansible.builtin.uri:
+    url: "{{ publish_templates_addon_operator_api_endpoint }}?limit=100&offset={{ addon_operator_next_offset }}"
+    validate_certs: "{{ publish_templates_validate_certs | default(true) | bool }}"
+    headers:
+      authorization: Bearer {{ osac_fulfillment_service_token }}
+    status_code: [200, 404, 503]
+  register: addon_operator_page
+
+- name: Accumulate AddOnOperator IDs from page
+  ansible.builtin.set_fact:
+    addon_operator_ids: >-
+      {{ addon_operator_ids
+         + (addon_operator_page.json.get('items', []) | map(attribute='id') | list) }}
+    addon_operator_next_offset: >-
+      {{ addon_operator_next_offset
+         + (addon_operator_page.json.get('size', addon_operator_page.json.get('items', []) | length) | int) }}
+    addon_operator_pagination_ok: >-
+      {{ addon_operator_pagination_ok
+         and (addon_operator_page.json.get('size', addon_operator_page.json.get('items', []) | length) | int) > 0 }}
+  when: addon_operator_page.status == 200
+
+- name: Stop AddOnOperator publishing when a page fails
+  ansible.builtin.set_fact:
+    addon_operator_pagination_ok: false
+  when: addon_operator_page.status in [404, 503]
+
+- name: Continue fetching AddOnOperator pages
+  ansible.builtin.include_tasks: paginate_addon_operators.yaml
+  when:
+    - addon_operator_page.status == 200
+    - addon_operator_pagination_ok | default(false) | bool
+    - addon_operator_next_offset < addon_operator_total
+    - addon_operator_page.json.get('size', addon_operator_page.json.get('items', []) | length) | int > 0

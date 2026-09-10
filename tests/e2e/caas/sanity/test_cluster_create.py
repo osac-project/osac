@@ -9,13 +9,13 @@ import pytest
 from tests.e2e.catalog.conftest import unique_name
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import (
-    assert_cluster_order_events,
+    assert_cluster_order_deleting_event,
+    assert_cluster_order_lifecycle_events,
     wait_for_cluster_deleting,
     wait_for_cluster_deletion,
     wait_for_cluster_grpc_deleting_or_archived,
     wait_for_cluster_grpc_removal,
     wait_for_cluster_order_cr,
-    wait_for_cluster_order_event_reasons,
     wait_for_cluster_progressing,
     wait_for_cluster_ready,
 )
@@ -59,21 +59,7 @@ def test_cluster_create(
 
         wait_for_cluster_ready(k8s=k8s_hub_client, name=co_name)
 
-        expected_events = {
-            "Created": ("Normal", "Created", "ClusterOrder created"),
-            "PreparingInfrastructure": ("Normal", "Provisioning", "Preparing Infrastructure"),
-            "ControlPlaneStarting": ("Normal", "Provisioning", "Control Plane Starting"),
-            "Ready": ("Normal", "Ready", "ClusterOrder is ready"),
-        }
-        expected_reasons = set(expected_events)
-        if k8s_hub_client.get_cluster_order_spec(name=co_name).get("nodeSets"):
-            expected_events["WorkersJoining"] = ("Normal", "Provisioning", "Workers Joining")
-            expected_reasons.add("WorkersJoining")
-
-        events = wait_for_cluster_order_event_reasons(
-            k8s=k8s_hub_client, name=co_name, reasons=expected_reasons
-        )
-        assert_cluster_order_events(events=events, expected=expected_events)
+        assert_cluster_order_lifecycle_events(k8s=k8s_hub_client, name=co_name)
 
         # Verify version resolved and propagated end-to-end:
         # fulfillment-service default resolution -> ClusterOrder releaseImage -> HostedCluster image
@@ -154,13 +140,7 @@ def test_cluster_create(
         metering.expect("osac.resource.deleted.v1", resource_id=uuid)
 
         wait_for_cluster_deleting(k8s=k8s_hub_client, name=co_name)
-        deleting_events = wait_for_cluster_order_event_reasons(
-            k8s=k8s_hub_client, name=co_name, reasons={"Deleting"}
-        )
-        assert_cluster_order_events(
-            events=deleting_events,
-            expected={"Deleting": ("Normal", "Deleting", "ClusterOrder entered deleting phase")},
-        )
+        assert_cluster_order_deleting_event(k8s=k8s_hub_client, name=co_name)
         wait_for_cluster_grpc_deleting_or_archived(grpc=grpc, uuid=uuid)
 
         wait_for_cluster_deletion(k8s=k8s_hub_client, name=co_name)

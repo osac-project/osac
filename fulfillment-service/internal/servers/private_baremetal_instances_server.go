@@ -863,13 +863,14 @@ func (s *PrivateBareMetalInstancesServer) validateAndApplyTemplateParameters(ctx
 	return nil
 }
 
-// validateImmutability ensures template, catalog_item, ssh_public_key, user_data, template_parameters,
-// and auto_external_ip_attachment cannot be changed after creation.
+// validateImmutability ensures template, catalog_item, disk_image, ssh_public_key, user_data,
+// template_parameters, and auto_external_ip_attachment cannot be changed after creation.
 func (s *PrivateBareMetalInstancesServer) validateImmutability(ctx context.Context,
 	request *privatev1.BareMetalInstancesUpdateRequest) error {
 	mask := request.GetUpdateMask()
 	updatingTemplate := updateIncludesField(mask, "spec.template")
 	updatingCatalogItem := updateIncludesField(mask, "spec.catalog_item")
+	updatingDiskImage := updateIncludesField(mask, "spec.disk_image")
 	updatingSshKey := updateIncludesField(mask, "spec.ssh_public_key")
 	updatingUserData := updateIncludesField(mask, "spec.user_data")
 	updatingUserDataSecret := updateIncludesField(mask, "spec.user_data_secret")
@@ -918,6 +919,12 @@ func (s *PrivateBareMetalInstancesServer) validateImmutability(ctx context.Conte
 			refKey(existingSpec.GetCatalogItem()), refKey(newSpec.GetCatalogItem()))
 	}
 
+	if updatingDiskImage && !proto.Equal(existingSpec.GetDiskImage(), newSpec.GetDiskImage()) {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"cannot change spec.disk_image from '%s' to '%s': disk image is immutable",
+			refKey(existingSpec.GetDiskImage()), refKey(newSpec.GetDiskImage()))
+	}
+
 	if updatingSshKey && existingSpec.GetSshPublicKey() != newSpec.GetSshPublicKey() {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"cannot change spec.ssh_public_key: ssh_public_key is immutable after creation")
@@ -956,6 +963,7 @@ func (s *PrivateBareMetalInstancesServer) validateImmutability(ctx context.Conte
 func bareMetalUpdateRequiresSpec(mask *fieldmaskpb.FieldMask) bool {
 	return updateIncludesField(mask, "spec.template") ||
 		updateIncludesField(mask, "spec.catalog_item") ||
+		updateIncludesField(mask, "spec.disk_image") ||
 		updateIncludesField(mask, "spec.ssh_public_key") ||
 		updateIncludesField(mask, "spec.user_data") ||
 		updateIncludesField(mask, "spec.user_data_secret") ||

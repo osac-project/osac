@@ -617,6 +617,73 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(status.Message()).To(ContainSubstring("template is immutable"))
 		})
 
+		It("Rejects PATCH that changes disk_image", func() {
+			createDiskImage("replacement-disk-image", privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE, testTenant)
+
+			createResponse, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "test-baremetal-instance",
+					}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-disk-image"}.Build(),
+						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						SshPublicKey: new(testSSHPublicKey),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = server.Update(ctx, privatev1.BareMetalInstancesUpdateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Id: createResponse.GetObject().GetId(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						DiskImage: privatev1.DiskImageReference_builder{Id: "replacement-disk-image"}.Build(),
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{
+					Paths: []string{"spec.disk_image"},
+				},
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(ContainSubstring("disk image is immutable"))
+		})
+
+		It("Rejects PATCH that changes disk_image metadata", func() {
+			createResponse, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{Name: "test-baremetal-instance"}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						SshPublicKey: new(testSSHPublicKey),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = server.Update(ctx, privatev1.BareMetalInstancesUpdateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Id: createResponse.GetObject().GetId(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						DiskImage: privatev1.DiskImageReference_builder{
+							Id:   "default-bmi-disk-image",
+							Name: "altered-disk-image-name",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.disk_image"}},
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(ContainSubstring("disk image is immutable"))
+		})
+
 		It("Rejects PATCH that changes ssh_public_key", func() {
 			createResponse, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{

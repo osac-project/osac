@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -610,9 +611,11 @@ var _ = Describe("getKubeObject", func() {
 		Expect(obj.GetName()).To(Equal("externalippool-one"))
 	})
 
-	It("should return ErrDuplicateExternalIPPool when multiple objects match", func() {
+	It("should prune duplicates and return oldest when multiple objects match", func() {
 		cr1 := newExternalIPPoolCR(poolID, hubNamespace, "externalippool-dup-1", nil)
+		cr1.CreationTimestamp = metav1.Now()
 		cr2 := newExternalIPPoolCR(poolID, hubNamespace, "externalippool-dup-2", nil)
+		cr2.CreationTimestamp = metav1.NewTime(metav1.Now().Add(-1 * time.Hour))
 		scheme := newSchemeWithExternalIPPoolList()
 		fakeClient := fake.NewClientBuilder().
 			WithScheme(scheme).
@@ -620,16 +623,17 @@ var _ = Describe("getKubeObject", func() {
 			Build()
 
 		t := &task{
+			r:              &function{logger: logger},
 			externalIPPool: privatev1.ExternalIPPool_builder{Id: poolID}.Build(),
 			hubClient:      fakeClient,
 			hubNamespace:   hubNamespace,
 		}
 
 		obj, err := t.getKubeObject(ctx)
-		Expect(err).To(HaveOccurred())
-		Expect(errors.Is(err, errDuplicateExternalIPPool)).To(BeTrue())
-		Expect(err.Error()).To(ContainSubstring("2"))
-		Expect(obj).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(obj).ToNot(BeNil())
+		// The oldest CR (cr2) should be kept.
+		Expect(obj.GetName()).To(Equal("externalippool-dup-2"))
 	})
 
 	It("should propagate List error", func() {

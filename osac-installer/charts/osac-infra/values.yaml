@@ -27,7 +27,7 @@ envoygateway:
 keycloak:
   enabled: true
   realmOverwrite: true
-  hostname: "keycloak.keycloak.svc.cluster.local"
+  hostname: ""
   adminUsername: admin
   adminPassword: admin
   defaultUserPassword: foobar

@@ -445,7 +445,13 @@ spec:
         - name: KC_HTTPS_CERTIFICATE_KEY_FILE
           value: "/secrets/tls/tls.key"
         - name: KC_HOSTNAME
+          {{- if .Values.keycloak.hostname }}
           value: {{ .Values.keycloak.hostname | quote }}
+          {{- else if .Values.keycloak.route.hostname }}
+          value: {{ printf "https://%s" .Values.keycloak.route.hostname | quote }}
+          {{- else }}
+          value: "keycloak.keycloak.svc.cluster.local"
+          {{- end }}
         - name: KC_DB
           value: "postgres"
         - name: KC_DB_URL

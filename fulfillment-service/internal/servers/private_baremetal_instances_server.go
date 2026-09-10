@@ -769,6 +769,12 @@ func (s *PrivateBareMetalInstancesServer) validateAndTransformCatalogItem(ctx co
 		return err
 	}
 
+	// Apply typed networking policies from the catalog item's fields. These are authoritative
+	// over the deprecated field_definitions representation for networking.
+	if err := applyBareMetalInstanceTypedNetworkingPolicies(bmi.GetSpec(), item.GetFields()); err != nil {
+		return err
+	}
+
 	return s.validateAndApplyTemplateParameters(ctx, bmi, refKey(bmi.GetSpec().GetTemplate()))
 }
 

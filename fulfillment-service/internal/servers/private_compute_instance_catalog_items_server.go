@@ -170,6 +170,9 @@ func (s *PrivateComputeInstanceCatalogItemsServer) Create(ctx context.Context,
 			return
 		}
 		warnings = append(warnings, diskImageWarnings...)
+		if err = validateComputeInstanceCatalogItemNetworkingPolicies(request.GetObject().GetFields()); err != nil {
+			return
+		}
 	}
 	err = s.generic.Create(ctx, request, &response)
 	if err != nil {
@@ -198,6 +201,9 @@ func (s *PrivateComputeInstanceCatalogItemsServer) Update(ctx context.Context,
 			return
 		}
 		warnings = append(warnings, diskImageWarnings...)
+		if err = validateComputeInstanceCatalogItemNetworkingPolicies(request.GetObject().GetFields()); err != nil {
+			return
+		}
 	}
 	err = s.generic.Update(ctx, request, &response)
 	if err != nil {

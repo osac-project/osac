@@ -148,6 +148,9 @@ func (s *PrivateClusterCatalogItemsServer) Create(ctx context.Context,
 		if err = s.validateFieldDefinitionsVersion(ctx, object.GetFieldDefinitions()); err != nil {
 			return
 		}
+		if err = validateClusterCatalogItemNetworkingPolicies(object.GetFields()); err != nil {
+			return
+		}
 	}
 	err = s.generic.Create(ctx, request, &response)
 	return
@@ -161,6 +164,11 @@ func (s *PrivateClusterCatalogItemsServer) Update(ctx context.Context,
 				return
 			}
 			if err = s.validateFieldDefinitionsVersion(ctx, object.GetFieldDefinitions()); err != nil {
+				return
+			}
+		}
+		if updateIncludesField(request.GetUpdateMask(), "fields") {
+			if err = validateClusterCatalogItemNetworkingPolicies(object.GetFields()); err != nil {
 				return
 			}
 		}

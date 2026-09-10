@@ -1227,7 +1227,13 @@ func (s *PrivateComputeInstancesServer) validateAndTransformCatalogItem(
 	}
 	ci.GetSpec().SetTemplate(templateRef)
 
-	return applyFieldDefinitions(ci.GetSpec(), catalogItem.GetFieldDefinitions())
+	if err := applyFieldDefinitions(ci.GetSpec(), catalogItem.GetFieldDefinitions()); err != nil {
+		return err
+	}
+
+	// Apply typed networking policies from the catalog item's fields. These are authoritative
+	// over the deprecated field_definitions representation for networking.
+	return applyComputeInstanceTypedNetworkingPolicies(ci.GetSpec(), catalogItem.GetFields())
 }
 
 func (s *PrivateComputeInstancesServer) lookupCatalogItem(ctx context.Context,

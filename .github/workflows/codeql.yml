@@ -23,6 +23,8 @@ jobs:
         include:
           - language: go
             build-mode: manual
+          - language: javascript-typescript
+            build-mode: none
           - language: python
             build-mode: none
 

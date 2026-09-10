@@ -66,6 +66,25 @@ class TestLoadConfig(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "docs/<dashboard>/data.json"):
                 load_config(str(path))
 
+    def test_rejects_dot_segments_in_dashboard_data_path(self):
+        for data_path in ("docs/./data.json", "docs/../data.json"):
+            with self.subTest(data_path=data_path):
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    path = Path(tmpdir) / "config.toml"
+                    path.write_text(
+                        "repos = ['osac-project/osac']\n"
+                        "[dashboard]\n"
+                        "repo = 'osac-project/osac'\n"
+                        "branch = 'main'\n"
+                        "base_url = 'https://example.test/team'\n"
+                        f"data_path = '{data_path}'\n"
+                    )
+
+                    with self.assertRaisesRegex(
+                        SystemExit, "docs/<dashboard>/data.json"
+                    ):
+                        load_config(str(path))
+
 
 if __name__ == "__main__":
     unittest.main()

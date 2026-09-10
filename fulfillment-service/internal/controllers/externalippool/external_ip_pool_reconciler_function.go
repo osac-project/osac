@@ -43,10 +43,9 @@ const (
 )
 
 var (
-	errUnsupportedIPFamily     = errors.New("unsupported or unspecified IP family")
-	errInvalidTenantCount      = errors.New("external IP pool must have a tenant assigned")
-	errDuplicateExternalIPPool = errors.New("expected at most one external IP pool with identifier")
-	errNoHubsFound             = errors.New("no available hubs found")
+	errUnsupportedIPFamily = errors.New("unsupported or unspecified IP family")
+	errInvalidTenantCount  = errors.New("external IP pool must have a tenant assigned")
+	errNoHubsFound         = errors.New("no available hubs found")
 
 	// Build() errors:
 	errNoLogger     = errors.New("logger is mandatory")
@@ -355,7 +354,16 @@ func (t *task) getKubeObject(ctx context.Context) (*osacv1alpha1.ExternalIPPool,
 	items := list.Items
 	count := len(items)
 	if count > 1 {
-		return nil, fmt.Errorf("%w: found %d", errDuplicateExternalIPPool, count)
+		// OSAC-4208: prune duplicate CRs instead of erroring.
+		slices.SortFunc(items, func(a, b osacv1alpha1.ExternalIPPool) int {
+			return a.CreationTimestamp.Time.Compare(b.CreationTimestamp.Time)
+		})
+		extras := make([]clnt.Object, count-1)
+		for i := 1; i < count; i++ {
+			extras[i-1] = &items[i]
+		}
+		controllers.PruneDuplicateCRs(ctx, t.r.logger, t.hubClient, extras,
+			"external IP pool", t.externalIPPool.GetId())
 	}
 	var result *osacv1alpha1.ExternalIPPool
 	if count > 0 {

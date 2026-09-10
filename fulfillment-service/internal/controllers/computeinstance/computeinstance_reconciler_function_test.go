@@ -811,11 +811,12 @@ var _ = Describe("getSubnetCR", func() {
 		Expect(result).To(BeNil())
 	})
 
-	It("should return error when multiple Subnet CRs match", func() {
+	It("should prune duplicates and return oldest when multiple Subnet CRs match", func() {
 		subnetCR1 := &osacv1alpha1.Subnet{
 			ObjectMeta: metav1.ObjectMeta{
-				Namespace: hubNamespace,
-				Name:      "subnet-1",
+				Namespace:         hubNamespace,
+				Name:              "subnet-1",
+				CreationTimestamp: metav1.Now(),
 				Labels: map[string]string{
 					labels.SubnetUuid: subnetID,
 				},
@@ -824,8 +825,9 @@ var _ = Describe("getSubnetCR", func() {
 
 		subnetCR2 := &osacv1alpha1.Subnet{
 			ObjectMeta: metav1.ObjectMeta{
-				Namespace: hubNamespace,
-				Name:      "subnet-2",
+				Namespace:         hubNamespace,
+				Name:              "subnet-2",
+				CreationTimestamp: metav1.NewTime(metav1.Now().Add(-1 * time.Hour)),
 				Labels: map[string]string{
 					labels.SubnetUuid: subnetID,
 				},
@@ -848,9 +850,10 @@ var _ = Describe("getSubnetCR", func() {
 		}
 
 		result, err := t.getSubnetCR(ctx, subnetID)
-		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("expected at most one subnet"))
-		Expect(result).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result).ToNot(BeNil())
+		// The oldest CR (subnetCR2) should be kept.
+		Expect(result.GetName()).To(Equal("subnet-2"))
 	})
 })
 

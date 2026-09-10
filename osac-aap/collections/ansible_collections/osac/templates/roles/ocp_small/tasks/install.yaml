@@ -41,7 +41,7 @@
       ocp_release_image: "{{ ocp_release_image }}"
       pull_secret: "{{ cluster_settings_pull_secret }}"
       ssh_public_key: "{{ cluster_settings_ssh_public_key }}"
-    hosted_cluster_node_requests: "{{ cluster_order.spec.nodeRequests | unique(attribute='resourceClass') }}"
+    hosted_cluster_node_requests: "{{ cluster_order.spec.nodeRequests }}"
     hosted_cluster_state: present
 
 - name: Step - Create cluster infrastructure
@@ -52,7 +52,7 @@
     cluster_infra_state: present
     cluster_infra_name: "{{ cluster_order.metadata.name }}"
     cluster_infra_namespace: "{{ cluster_working_namespace }}"
-    cluster_infra_node_requests: "{{ cluster_order.spec.nodeRequests | unique(attribute='resourceClass') }}"
+    cluster_infra_node_requests: "{{ cluster_order.spec.nodeRequests }}"
 
 - name: Step - Configure port forwarding
   ansible.builtin.include_role:
@@ -78,7 +78,7 @@
     tasks_from: "{{ (install_step_wait_for_nodes_override | default(install_step_wait_for_nodes_default)).tasks_from }}"
   vars:
     wait_for_kubeconfig: "{{ admin_kubeconfig }}"
-    wait_for_nodes_expected_count: "{{ cluster_order.spec.nodeRequests | unique(attribute='resourceClass') | map(attribute='numberOfNodes') | map('int') | sum }}"
+    wait_for_nodes_expected_count: "{{ cluster_order.spec.nodeRequests | map(attribute='numberOfNodes') | map('int') | sum }}"
 
 - name: Step - Wait for cluster operators
   ansible.builtin.include_role:

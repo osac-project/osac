@@ -38,7 +38,7 @@
       ocp_release_image: "{{ ocp_release_image }}"
       pull_secret: "{{ template_parameters.pull_secret }}"
       ssh_public_key: "{{ template_parameters.ssh_public_key }}"
-    hosted_cluster_node_requests: "{{ cluster_order.spec.nodeRequests | unique(attribute='resourceClass') }}"
+    hosted_cluster_node_requests: "{{ cluster_order.spec.nodeRequests }}"
     hosted_cluster_state: present
     hosted_cluster_infrastructure_availability_policy: "{{ lookup('env', 'HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY', default='SingleReplica') }}"
 
@@ -50,7 +50,7 @@
     cluster_infra_state: present
     cluster_infra_name: "{{ cluster_order.metadata.name }}"
     cluster_infra_namespace: "{{ cluster_working_namespace }}"
-    cluster_infra_node_requests: "{{ cluster_order.spec.nodeRequests | unique(attribute='resourceClass') }}"
+    cluster_infra_node_requests: "{{ cluster_order.spec.nodeRequests }}"
 
 - name: Step - Configure port forwarding
   ansible.builtin.include_role:

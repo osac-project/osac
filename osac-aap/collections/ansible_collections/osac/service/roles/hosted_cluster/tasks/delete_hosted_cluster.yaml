@@ -31,16 +31,23 @@
     namespace: "{{ hosted_cluster_namespace }}"
     name: "{{ hosted_cluster_name }}"
 
+- name: Retrieve NodePools for the cluster
+  kubernetes.core.k8s_info:
+    api_version: hypershift.openshift.io/v1beta1
+    kind: NodePool
+    namespace: "{{ hosted_cluster_namespace }}"
+  register: hosted_cluster_nodepools_to_delete
+
 - name: Delete NodePool resources
   kubernetes.core.k8s:
     state: absent
     api_version: hypershift.openshift.io/v1beta1
     kind: NodePool
     namespace: "{{ hosted_cluster_namespace }}"
-    name: "nodepool-{{ hosted_cluster_name }}-{{ item.resourceClass }}"
-  loop: "{{ hosted_cluster_node_requests }}"
+    name: "{{ item.metadata.name }}"
+  loop: "{{ hosted_cluster_nodepools_to_delete.resources | selectattr('metadata.name', 'match', '^nodepool-' + hosted_cluster_name + '-') | list }}"
   loop_control:
-    label: "Delete NodePool nodepool-{{ hosted_cluster_name }}-{{ item.resourceClass }}"
+    label: "Delete NodePool {{ item.metadata.name }}"
 
 # Wait for the HostedCluster to delete before we proceed; this ensures that we
 # don't prematurely destroy infrastructure resources required for the clean

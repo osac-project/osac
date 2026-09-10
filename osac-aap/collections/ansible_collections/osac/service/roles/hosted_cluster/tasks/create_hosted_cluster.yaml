@@ -121,7 +121,7 @@
         'apiVersion': 'hypershift.openshift.io/v1beta1',
         'kind': 'NodePool',
         'metadata': {
-          'name': nodepool_prefix + '-' + item.resourceClass,
+          'name': nodepool_prefix + '-' + item.resourceClass + '-' + _nodepool_idx | string,
           'namespace': hosted_cluster_namespace,
           'labels': {agent_resource_class_label: item.resourceClass} | combine(hosted_cluster_default_cluster_order_label)
         },
@@ -146,6 +146,8 @@
         }
       }] }}
   loop: "{{ hosted_cluster_node_requests }}"
+  loop_control:
+    index_var: _nodepool_idx
 
 - name: Hook - Modify NodePool definitions
   ansible.builtin.include_role:
@@ -174,22 +176,19 @@
         namespace: "{{ hosted_cluster_namespace }}"
       register: hosted_cluster_nodepools
 
-    - name: Determine which resource classes are no longer needed
+    - name: Collect names of nodepools whose resource class is no longer requested
       ansible.builtin.set_fact:
-        hosted_cluster_removed_resource_classes: "{{ hosted_cluster_removed_resource_classes | default([]) + [item.metadata.labels[agent_resource_class_label]] }}"
+        hosted_cluster_removed_nodepools: "{{ hosted_cluster_removed_nodepools | default([]) + [item.metadata.name] }}"
       with_items: "{{ hosted_cluster_nodepools.resources }}"
       when:
+        - item.metadata.name is match(nodepool_prefix + '-')
         - item.metadata.labels is defined
         - agent_resource_class_label in item.metadata.labels
         - item.metadata.labels[agent_resource_class_label] not in hosted_cluster_requested_resource_classes
 
-    - name: Set nodepools to be removed
-      ansible.builtin.set_fact:
-        hosted_cluster_removed_nodepools: "{{ hosted_cluster_removed_resource_classes | default([]) | map('regex_replace', '^', nodepool_prefix + '-') }}"
-
-    - name: Display resource classes to be removed
+    - name: Display nodepools to be removed
       ansible.builtin.debug:
-        msg: "The following NodePools are no longer needed and will be removed: {{ hosted_cluster_removed_nodepools }}"
+        msg: "The following NodePools are no longer needed and will be removed: {{ hosted_cluster_removed_nodepools | default([]) }}"
 
     - name: Delete NodePool resources
       kubernetes.core.k8s:
@@ -198,6 +197,6 @@
         kind: NodePool
         namespace: "{{ hosted_cluster_namespace }}"
         name: "{{ item }}"
-      loop: "{{ hosted_cluster_removed_nodepools }}"
+      loop: "{{ hosted_cluster_removed_nodepools | default([]) }}"
       loop_control:
         label: "Delete NodePool {{ item }}"

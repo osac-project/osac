@@ -75,6 +75,25 @@ var _ = Describe("Cluster pull_secret_secret", Label("secrets", "cluster"), func
 		return id, name
 	}
 
+	// createOpaqueSecret creates a valid secret which cannot be used as a cluster pull secret.
+	createOpaqueSecret := func(ctx context.Context) (id, name string) {
+		name = fmt.Sprintf("opaque-secret-%s", uuid.New()[24:32])
+		response, err := secretsClient.Create(ctx, publicv1.SecretsCreateRequest_builder{
+			Object: publicv1.Secret_builder{
+				Type: publicv1.SecretType_SECRET_TYPE_OPAQUE,
+				Metadata: publicv1.Metadata_builder{
+					Name: name,
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		id = response.GetObject().GetId()
+		DeferCleanup(func(ctx context.Context) {
+			_, _ = secretsClient.Delete(ctx, publicv1.SecretsDeleteRequest_builder{Id: id}.Build())
+		})
+		return id, name
+	}
+
 	// createTemplate creates a cluster template with a single required node set. When defaults is
 	// non-nil it is attached as the template's spec_defaults.
 	createTemplate := func(ctx context.Context, defaults *privatev1.ClusterTemplateSpecDefaults) string {
@@ -236,13 +255,13 @@ var _ = Describe("Cluster pull_secret_secret", Label("secrets", "cluster"), func
 		Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 	})
 
-	It("Reports SecretResolutionFailed and creates no ClusterOrder when the secret lacks .dockerconfigjson", func() {
-		// The secret exists (so create-time existence validation passes) but has the wrong shape,
-		// so the reconciler fails to resolve it.
-		secretId, _ := createSecret(ctx, map[string][]byte{"wrong-key": []byte("nope")})
+	It("Rejects pull_secret_secret with an incompatible secret type", func() {
+		// Typed-secret validation prevents malformed pull secrets from being created. Use a
+		// valid opaque secret to exercise the cluster API's reference type validation.
+		secretId, _ := createOpaqueSecret(ctx)
 		templateId := createTemplate(ctx, nil)
 
-		response, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
+		_, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
 				Metadata: publicv1.Metadata_builder{
 					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
@@ -256,48 +275,12 @@ var _ = Describe("Cluster pull_secret_secret", Label("secrets", "cluster"), func
 				}.Build(),
 			}.Build(),
 		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		clusterId := response.GetObject().GetId()
-		DeferCleanup(func(ctx context.Context) {
-			_, _ = clustersClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{Id: clusterId}.Build())
-		})
-
-		// The cluster should report the resolution failure on its PROGRESSING condition.
-		Eventually(
-			func(g Gomega) {
-				getResponse, err := clustersClient.Get(ctx, publicv1.ClustersGetRequest_builder{
-					Id: clusterId,
-				}.Build())
-				g.Expect(err).ToNot(HaveOccurred())
-				var progressing *publicv1.ClusterCondition
-				for _, condition := range getResponse.GetObject().GetStatus().GetConditions() {
-					if condition.GetType() == publicv1.ClusterConditionType_CLUSTER_CONDITION_TYPE_PROGRESSING {
-						progressing = condition
-						break
-					}
-				}
-				g.Expect(progressing).ToNot(BeNil())
-				g.Expect(progressing.GetStatus()).To(Equal(publicv1.ConditionStatus_CONDITION_STATUS_FALSE))
-				g.Expect(progressing.GetReason()).To(Equal("SecretResolutionFailed"))
-			},
-			time.Minute,
-			time.Second,
-		).Should(Succeed())
-
-		// No ClusterOrder should be created while the pull secret cannot be resolved.
-		kubeClient := tool.KubeClient()
-		Consistently(
-			func(g Gomega) {
-				clusterOrderList := &osacv1alpha1.ClusterOrderList{}
-				err := kubeClient.List(ctx, clusterOrderList, crclient.MatchingLabels{
-					labels.ClusterOrderUuid: clusterId,
-				})
-				g.Expect(err).ToNot(HaveOccurred())
-				g.Expect(clusterOrderList.Items).To(BeEmpty())
-			},
-			10*time.Second,
-			time.Second,
-		).Should(Succeed())
+		Expect(err).To(HaveOccurred())
+		status, ok := grpcstatus.FromError(err)
+		Expect(ok).To(BeTrue())
+		Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+		Expect(status.Message()).To(ContainSubstring("SECRET_TYPE_OPAQUE"))
+		Expect(status.Message()).To(ContainSubstring("SECRET_TYPE_PULL_SECRET"))
 	})
 
 	It("Propagates a template default pull_secret_secret into the ClusterOrder", func() {

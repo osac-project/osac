@@ -241,6 +241,9 @@ func (t *task) syncToIDP(ctx context.Context) error {
 	if err := t.ensureVaultNamespace(ctx); err != nil {
 		return err
 	}
+	if t.tenant.GetStatus().GetState() == privatev1.TenantState_TENANT_STATE_FAILED {
+		return nil
+	}
 
 	if err := t.persistBreakGlassSecret(ctx); err != nil {
 		t.r.logger.ErrorContext(ctx, "Failed to persist break-glass credentials secret",
@@ -697,7 +700,11 @@ func (t *task) ensureVaultNamespace(ctx context.Context) error {
 			slog.String("tenant_name", tenantName),
 			slog.Any("error", err),
 		)
-		return fmt.Errorf("failed to provision vault namespace: %w", err)
+		t.updateCondition(condType, privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+			"ProvisionFailed", fmt.Sprintf("Failed to provision vault namespace: %v", err))
+		t.tenant.GetStatus().SetState(privatev1.TenantState_TENANT_STATE_FAILED)
+		t.tenant.GetStatus().SetMessage(fmt.Sprintf("Vault namespace provisioning failed: %v", err))
+		return nil
 	}
 
 	t.updateCondition(condType, privatev1.ConditionStatus_CONDITION_STATUS_TRUE,

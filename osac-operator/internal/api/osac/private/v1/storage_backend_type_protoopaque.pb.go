@@ -431,8 +431,7 @@ type StorageBackendCredentials_builder struct {
 	// Reference to a Secret resource containing the storage management API password.
 	//
 	// Mutually exclusive with `password`. When set, the system resolves the referenced Secret to obtain the
-	// password value. The referenced Secret must exist in the same tenant. The secret must have type `VALUE` and its
-	// data must contain a `value` entry.
+	// password value. The referenced Secret must exist in the same tenant. The secret must be of type `VALUE`.
 	PasswordSecret *SecretLocalReference
 }
 

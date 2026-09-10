@@ -51,7 +51,7 @@ const (
 	SecretType_SECRET_TYPE_USER_DATA SecretType = 3
 	// An opaque secret with no required data keys.
 	SecretType_SECRET_TYPE_OPAQUE SecretType = 4
-	// A single scalar value. Requires a `value` data key.
+	// Represents a single value of any kind. Requires a `value` data key.
 	SecretType_SECRET_TYPE_VALUE SecretType = 5
 )
 
@@ -148,8 +148,7 @@ func (x SecretBackend) Number() protoreflect.EnumNumber {
 // Represents a secret containing typed or opaque key-value data.
 //
 // Secrets store sensitive information such as TLS certificates, pull secrets, and credentials. Each secret holds a map
-// of named binary values. Typed secrets require a particular key to be present, but do not validate the content of the
-// value. Opaque secrets have no required keys.
+// of named binary values.
 //
 // Secrets are scoped to a tenant and can be referenced by other resources that require sensitive configuration data.
 //
@@ -284,9 +283,7 @@ type Secret_builder struct {
 	Backend SecretBackend
 	// Backend-specific location metadata used to resolve the secret in the external system.
 	Coordinates map[string]string
-	// Type of data stored in the secret. Opaque secrets have no required data keys. Pull secrets require a
-	// `.dockerconfigjson` key, kubeconfig secrets require a `kubeconfig` key, user data secrets require a `userdata` key,
-	// and value secrets require a `value` key. Secret contents are not parsed or otherwise validated.
+	// Type of data stored in the secret.
 	Type SecretType
 }
 

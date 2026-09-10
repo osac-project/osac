@@ -14,6 +14,7 @@ from tests.e2e.core.helpers import (
     wait_for_cluster_grpc_deleting_or_archived,
     wait_for_cluster_grpc_removal,
     wait_for_cluster_order_cr,
+    wait_for_cluster_order_event_reasons,
     wait_for_cluster_progressing,
     wait_for_cluster_ready,
 )
@@ -56,6 +57,29 @@ def test_cluster_create(
         metering.verify()
 
         wait_for_cluster_ready(k8s=k8s_hub_client, name=co_name)
+
+        expected_messages = {
+            "Created": "ClusterOrder created",
+            "PreparingInfrastructure": "Preparing Infrastructure",
+            "ControlPlaneStarting": "Control Plane Starting",
+            "Ready": "ClusterOrder is ready",
+        }
+        expected_reasons = {"Created", "PreparingInfrastructure", "ControlPlaneStarting", "Ready"}
+        if k8s_hub_client.get_cluster_order_spec(name=co_name).get("nodeSets"):
+            expected_messages["WorkersJoining"] = "Workers Joining"
+            expected_reasons.add("WorkersJoining")
+
+        events = wait_for_cluster_order_event_reasons(
+            k8s=k8s_hub_client, name=co_name, reasons=expected_reasons
+        )
+        for reason in expected_reasons:
+            event = events[reason]
+            assert event.get("type") == "Normal", f"Expected Normal event for {reason}: {event}"
+            expected_action = "Provisioning" if reason not in {"Created", "Ready"} else reason
+            assert event.get("action") == expected_action, f"Expected {expected_action} action for {reason}: {event}"
+            assert expected_messages[reason] in event.get("message", ""), (
+                f"Expected stage message for {reason}: {event}"
+            )
 
         # Verify version resolved and propagated end-to-end:
         # fulfillment-service default resolution -> ClusterOrder releaseImage -> HostedCluster image
@@ -136,6 +160,15 @@ def test_cluster_create(
         metering.expect("osac.resource.deleted.v1", resource_id=uuid)
 
         wait_for_cluster_deleting(k8s=k8s_hub_client, name=co_name)
+        deleting_events = wait_for_cluster_order_event_reasons(
+            k8s=k8s_hub_client, name=co_name, reasons={"Deleting"}
+        )
+        deleting_event = deleting_events["Deleting"]
+        assert deleting_event.get("type") == "Normal", f"Expected Normal event for Deleting: {deleting_event}"
+        assert deleting_event.get("action") == "Deleting", f"Expected Deleting action: {deleting_event}"
+        assert "ClusterOrder entered deleting phase" in deleting_event.get("message", ""), (
+            f"Expected deleting message: {deleting_event}"
+        )
         wait_for_cluster_grpc_deleting_or_archived(grpc=grpc, uuid=uuid)
 
         wait_for_cluster_deletion(k8s=k8s_hub_client, name=co_name)

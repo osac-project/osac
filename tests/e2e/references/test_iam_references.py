@@ -14,6 +14,8 @@ from tests.e2e.core.osac_cli import OsacCLI
 
 logger = logging.getLogger(__name__)
 
+pytestmark = pytest.mark.requires_iam
+
 TENANT_ADMIN_USER = "tenant1_admin"
 TENANT_USER = "tenant1_user"
 TENANT_ADMIN_ROLE = "tenant-admin"

@@ -16,6 +16,8 @@ from tests.e2e.core.runner import env
 
 logger = logging.getLogger(__name__)
 
+pytestmark = [pytest.mark.requires_caas, pytest.mark.requires_bmaas]
+
 _ENV_SKIP_PATTERNS = [re.compile(r"no host type"), re.compile(r"no instance type")]
 _FABRIC_MANAGER_SKIP_PATTERN = re.compile(r"require a fabric manager")
 

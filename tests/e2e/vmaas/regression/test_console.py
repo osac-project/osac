@@ -210,7 +210,8 @@ class _GrpcSession:
         self._proc.stdin = None  # prevent communicate() from flushing closed stdin
         with contextlib.suppress(OSError):
             self._proc.kill()
-        self._proc.communicate()
+        self._reader.join(timeout=5)
+        self._proc.wait()
 
 
 def _grpc_stream(address: str, ticket: str) -> tuple[str, str, int]:

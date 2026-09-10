@@ -36,17 +36,8 @@ def _delete_instance_type_safe(private_grpc: GRPCClient, name: str) -> None:
 
 
 def _get_vm_host_devices(k8s_virt: K8sClient, *, name: str, vm_namespace: str) -> list[dict[str, Any]]:
-    output, rc = k8s_virt._get(
-        "get",
-        "virtualmachine",
-        name,
-        "-n",
-        vm_namespace,
-        "-o",
-        "jsonpath={.spec.template.spec.domain.devices.hostDevices}",
-        checked=False,
-    )
-    if rc != 0 or not output.strip():
+    output = k8s_virt.get_vm_host_devices(name=name, vm_namespace=vm_namespace)
+    if not output.strip():
         return []
     return json.loads(output)
 

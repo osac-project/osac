@@ -105,13 +105,16 @@ def small_pool(make_pool: Callable[..., tuple[str, str]]) -> tuple[str, str]:
 
 
 @pytest.fixture(scope="class")
-def created_ips(grpc: GRPCClient) -> Generator[list[tuple[str, str]], None, None]:
+def created_ips(grpc: GRPCClient, k8s_hub_client: K8sClient) -> Generator[list[tuple[str, str]], None, None]:
     """Track IPs across chained tests; clean up any survivors on teardown."""
     ips: list[tuple[str, str]] = []
     yield ips
-    for ip_id, _ in reversed(ips):
+    for ip_id, ip_cr_name in reversed(ips):
+        if not k8s_hub_client.is_present(resource="externalip", name=ip_cr_name):
+            continue
         try:
             grpc.delete_external_ip(external_ip_id=ip_id)
+            wait_for_external_ip_deletion(k8s=k8s_hub_client, name=ip_cr_name)
         except subprocess.CalledProcessError:
             logger.warning("ExternalIP %s teardown failed, may need manual cleanup", ip_id)
 

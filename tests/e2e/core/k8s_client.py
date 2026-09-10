@@ -197,6 +197,19 @@ class K8sClient:
             *self._base(), "get", "virtualmachine", name, "-n", vm_namespace, "-o", "jsonpath={.spec.runStrategy}"
         )
 
+    def get_vm_host_devices(self, *, name: str, vm_namespace: str) -> str:
+        output, rc = self._get(
+            "get",
+            "virtualmachine",
+            name,
+            "-n",
+            vm_namespace,
+            "-o",
+            "jsonpath={.spec.template.spec.domain.devices.hostDevices}",
+            checked=False,
+        )
+        return output if rc == 0 else ""
+
     # Storage tier resolution
 
     def get_storage_class_for_tier(self, *, tier_name: str) -> str:

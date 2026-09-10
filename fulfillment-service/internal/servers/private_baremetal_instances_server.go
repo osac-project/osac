@@ -298,6 +298,9 @@ func (s *PrivateBareMetalInstancesServer) Create(ctx context.Context,
 			return
 		}
 	}
+	if err = s.resolveAndValidateHostType(ctx, request.GetObject()); err != nil {
+		return
+	}
 	if err = s.validateSpec(request.GetObject()); err != nil {
 		return
 	}
@@ -853,6 +856,57 @@ func (s *PrivateBareMetalInstancesServer) validateAndApplyTemplateParameters(ctx
 	)
 	bmi.GetSpec().SetTemplateParameters(actualParams)
 
+	return nil
+}
+
+// resolveAndValidateHostType validates the HostType prerequisite before BareMetalInstance
+// persistence. It resolves the template from spec.template, reads its host_type field, and
+// ensures the referenced HostType exists and is readable.
+//
+// Precedence: the template's host_type field is the authoritative source for HostType
+// resolution. When spec.instance_type is also present, it provides supplementary host
+// selection via the BareMetalInstanceType's host_label_selector but does not replace the
+// HostType requirement. When the template has no host_type, this prerequisite does not
+// apply and the check is skipped.
+func (s *PrivateBareMetalInstancesServer) resolveAndValidateHostType(
+	ctx context.Context, bmi *privatev1.BareMetalInstance) error {
+	templateID := refKey(bmi.GetSpec().GetTemplate())
+	if templateID == "" {
+		return nil
+	}
+	tmplResp, err := s.templatesDao.Get().SetId(templateID).Do(ctx)
+	if err != nil {
+		var notFoundErr *dao.ErrNotFound
+		if errors.As(err, &notFoundErr) {
+			// Template not found in DB; no host_type to validate.
+			return nil
+		}
+		s.logger.ErrorContext(ctx, "Failed to lookup template for host type validation",
+			slog.String("template_id", templateID), slog.Any("error", err))
+		return grpcstatus.Errorf(grpccodes.Internal, "failed to validate host type prerequisite")
+	}
+	hostTypeID := tmplResp.GetObject().GetHostType()
+	if hostTypeID == "" {
+		// Template has no host_type; prerequisite does not apply.
+		return nil
+	}
+	_, err = s.hostTypesDao.Get().SetId(hostTypeID).Do(ctx)
+	if err != nil {
+		var notFoundErr *dao.ErrNotFound
+		if errors.As(err, &notFoundErr) {
+			return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+				"host type '%s' referenced by template '%s' not found; "+
+					"a valid host type is required to create a bare metal instance",
+				hostTypeID, templateID)
+		}
+		s.logger.ErrorContext(ctx, "Failed to read host type for prerequisite validation",
+			slog.String("host_type_id", hostTypeID),
+			slog.String("template_id", templateID),
+			slog.Any("error", err))
+		return grpcstatus.Errorf(grpccodes.Internal,
+			"failed to read host type '%s' referenced by template '%s'",
+			hostTypeID, templateID)
+	}
 	return nil
 }
 

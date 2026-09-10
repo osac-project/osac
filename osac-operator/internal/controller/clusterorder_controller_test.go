@@ -29,6 +29,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -387,12 +388,14 @@ var _ = Describe("ClusterOrder Controller", func() {
 
 			key := types.NamespacedName{Name: instanceName, Namespace: "default"}
 
+			recorder := events.NewFakeRecorder(10)
 			controllerReconciler := &ClusterOrderReconciler{
 				Client:               k8sClient,
 				apiReader:            k8sClient,
 				Scheme:               k8sClient.Scheme(),
 				ProvisioningProvider: noopProvisioningProvider{},
 				MaxJobHistory:        provisioning.DefaultMaxJobHistory,
+				Recorder:             recorder,
 			}
 
 			Expect(k8sClient.Delete(ctx, instance)).To(Succeed())
@@ -405,6 +408,12 @@ var _ = Describe("ClusterOrder Controller", func() {
 			Eventually(func() bool {
 				return errors.IsNotFound(k8sClient.Get(ctx, key, &v1alpha1.ClusterOrder{}))
 			}, 5*time.Second, 100*time.Millisecond).Should(BeTrue())
+
+			Eventually(recorder.Events).Should(Receive(And(
+				ContainSubstring(corev1.EventTypeNormal),
+				ContainSubstring("DeprovisioningSkipped"),
+				ContainSubstring("no HostedCluster was created"),
+			)))
 		})
 
 		It("should skip deprovisioning and remove finalizer when HostedClusterName is empty", func() {

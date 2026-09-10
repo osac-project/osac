@@ -228,6 +228,8 @@ const (
 	clusterOrderDeletingEventReason     = v1alpha1.ReasonDeleting
 	clusterOrderDeletingEventAction     = "Deleting"
 	clusterOrderFailedEventAction       = "Failed"
+
+	clusterOrderDeprovisioningSkippedEventReason = "DeprovisioningSkipped"
 )
 
 var clusterOrderProvisioningEventReasons = map[string]struct{}{
@@ -820,6 +822,11 @@ func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ reconcile.R
 	if instance.Status.ClusterReference == nil ||
 		instance.Status.ClusterReference.HostedClusterName == "" {
 		log.Info("skipping deprovisioning: no HostedCluster was created")
+		if r.Recorder != nil {
+			r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal,
+				clusterOrderDeprovisioningSkippedEventReason, clusterOrderDeletingEventAction,
+				"Skipping deprovisioning: no HostedCluster was created")
+		}
 	} else {
 		// Handle deprovisioning via provider
 		// Waits for provision job termination and polls deprovision job if needed

@@ -136,6 +136,83 @@ var _ = Describe("Private bare metal instances server", func() {
 				}.Build(),
 			).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
+
+			// Create default subnet and security group for network attachment defaults.
+			ncDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			fabricMgr := "test-fabric"
+			ncResp, err := ncDao.Create().SetObject(privatev1.NetworkClass_builder{
+				FabricManager: &fabricMgr,
+				Metadata: privatev1.Metadata_builder{
+					Tenant: testTenant,
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			vnDao, err := dao.NewGenericDAO[*privatev1.VirtualNetwork]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			vnResp, err := vnDao.Create().SetObject(privatev1.VirtualNetwork_builder{
+				Metadata: privatev1.Metadata_builder{
+					Tenant: testTenant,
+					Labels: map[string]string{
+						"osac.openshift.io/default": "true",
+					},
+				}.Build(),
+				Spec: privatev1.VirtualNetworkSpec_builder{
+					NetworkClass: privatev1.NetworkClassReference_builder{Id: ncResp.GetObject().GetId()}.Build(),
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			subnetDao, err := dao.NewGenericDAO[*privatev1.Subnet]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			ipv4Cidr := "10.0.1.0/24"
+			_, err = subnetDao.Create().SetObject(privatev1.Subnet_builder{
+				Metadata: privatev1.Metadata_builder{
+					Tenant: testTenant,
+					Labels: map[string]string{
+						"osac.openshift.io/default": "true",
+					},
+				}.Build(),
+				Spec: privatev1.SubnetSpec_builder{
+					Ipv4Cidr:       &ipv4Cidr,
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnResp.GetObject().GetId()}.Build(),
+				}.Build(),
+				Status: privatev1.SubnetStatus_builder{
+					State: privatev1.SubnetState_SUBNET_STATE_READY,
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			sgDao, err := dao.NewGenericDAO[*privatev1.SecurityGroup]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = sgDao.Create().SetObject(privatev1.SecurityGroup_builder{
+				Metadata: privatev1.Metadata_builder{
+					Tenant: testTenant,
+					Labels: map[string]string{
+						"osac.openshift.io/default": "true",
+					},
+				}.Build(),
+				Spec: privatev1.SecurityGroupSpec_builder{
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnResp.GetObject().GetId()}.Build(),
+				}.Build(),
+				Status: privatev1.SecurityGroupStatus_builder{
+					State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
 		})
 
 		createTemplate := func(id string, params []*privatev1.BareMetalInstanceTemplateParameterDefinition) {
@@ -1822,7 +1899,8 @@ var _ = Describe("Private bare metal instances server", func() {
 						SshPublicKey: new(testSSHPublicKey),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
-								Subnet: privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
+								Subnet:         privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build()},
 							}.Build(),
 						},
 					}.Build(),
@@ -1842,8 +1920,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						SshPublicKey: new(testSSHPublicKey),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
-								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
-								Interface: strPtr("data-0"),
+								Subnet:         privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build()},
+								Interface:      strPtr("data-0"),
 							}.Build(),
 						},
 					}.Build(),
@@ -1863,13 +1942,15 @@ var _ = Describe("Private bare metal instances server", func() {
 						SshPublicKey: new(testSSHPublicKey),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
-								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
-								Interface: strPtr("data-0"),
-								Primary:   boolPtr(true),
+								Subnet:         privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build()},
+								Interface:      strPtr("data-0"),
+								Primary:        boolPtr(true),
 							}.Build(),
 							privatev1.BareMetalNetworkAttachment_builder{
-								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID2}.Build(),
-								Interface: strPtr("data-1"),
+								Subnet:         privatev1.SubnetLocalReference_builder{Id: subnetID2}.Build(),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build()},
+								Interface:      strPtr("data-1"),
 							}.Build(),
 						},
 					}.Build(),
@@ -1889,8 +1970,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						SshPublicKey: new(testSSHPublicKey),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
-								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
-								Interface: strPtr("nonexistent-port"),
+								Subnet:         privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build()},
+								Interface:      strPtr("nonexistent-port"),
 							}.Build(),
 						},
 					}.Build(),
@@ -1915,13 +1997,15 @@ var _ = Describe("Private bare metal instances server", func() {
 						SshPublicKey: new(testSSHPublicKey),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
-								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
-								Interface: strPtr("data-0"),
-								Primary:   boolPtr(true),
+								Subnet:         privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build()},
+								Interface:      strPtr("data-0"),
+								Primary:        boolPtr(true),
 							}.Build(),
 							privatev1.BareMetalNetworkAttachment_builder{
-								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID2}.Build(),
-								Interface: strPtr("data-0"),
+								Subnet:         privatev1.SubnetLocalReference_builder{Id: subnetID2}.Build(),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build()},
+								Interface:      strPtr("data-0"),
 							}.Build(),
 						},
 					}.Build(),
@@ -1946,8 +2030,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						SshPublicKey: new(testSSHPublicKey),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
-								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
-								Interface: strPtr("bmc-0"),
+								Subnet:         privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build()},
+								Interface:      strPtr("bmc-0"),
 							}.Build(),
 						},
 					}.Build(),
@@ -1972,11 +2057,13 @@ var _ = Describe("Private bare metal instances server", func() {
 						SshPublicKey: new(testSSHPublicKey),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
-								Subnet:  privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
-								Primary: boolPtr(true),
+								Subnet:         privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build()},
+								Primary:        boolPtr(true),
 							}.Build(),
 							privatev1.BareMetalNetworkAttachment_builder{
-								Subnet: privatev1.SubnetLocalReference_builder{Id: subnetID2}.Build(),
+								Subnet:         privatev1.SubnetLocalReference_builder{Id: subnetID2}.Build(),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build()},
 							}.Build(),
 						},
 					}.Build(),
@@ -1999,10 +2086,10 @@ var _ = Describe("Private bare metal instances server", func() {
 						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithHT}.Build(),
 						SshPublicKey: new(testSSHPublicKey),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
-							privatev1.BareMetalNetworkAttachment_builder{Subnet: privatev1.SubnetLocalReference_builder{Id: "s1"}.Build(), Interface: strPtr("data-0"), Primary: boolPtr(true)}.Build(),
-							privatev1.BareMetalNetworkAttachment_builder{Subnet: privatev1.SubnetLocalReference_builder{Id: "s2"}.Build(), Interface: strPtr("data-1")}.Build(),
-							privatev1.BareMetalNetworkAttachment_builder{Subnet: privatev1.SubnetLocalReference_builder{Id: "s3"}.Build(), Interface: strPtr("mgmt-0")}.Build(),
-							privatev1.BareMetalNetworkAttachment_builder{Subnet: privatev1.SubnetLocalReference_builder{Id: "s4"}.Build(), Interface: strPtr("extra")}.Build(),
+							privatev1.BareMetalNetworkAttachment_builder{Subnet: privatev1.SubnetLocalReference_builder{Id: "s1"}.Build(), SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build()}, Interface: strPtr("data-0"), Primary: boolPtr(true)}.Build(),
+							privatev1.BareMetalNetworkAttachment_builder{Subnet: privatev1.SubnetLocalReference_builder{Id: "s2"}.Build(), SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build()}, Interface: strPtr("data-1")}.Build(),
+							privatev1.BareMetalNetworkAttachment_builder{Subnet: privatev1.SubnetLocalReference_builder{Id: "s3"}.Build(), SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build()}, Interface: strPtr("mgmt-0")}.Build(),
+							privatev1.BareMetalNetworkAttachment_builder{Subnet: privatev1.SubnetLocalReference_builder{Id: "s4"}.Build(), SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build()}, Interface: strPtr("extra")}.Build(),
 						},
 					}.Build(),
 				}.Build(),
@@ -2025,12 +2112,14 @@ var _ = Describe("Private bare metal instances server", func() {
 						SshPublicKey: new(testSSHPublicKey),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
-								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
-								Interface: strPtr("data-0"),
+								Subnet:         privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build()},
+								Interface:      strPtr("data-0"),
 							}.Build(),
 							privatev1.BareMetalNetworkAttachment_builder{
-								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID2}.Build(),
-								Interface: strPtr("data-1"),
+								Subnet:         privatev1.SubnetLocalReference_builder{Id: subnetID2}.Build(),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build()},
+								Interface:      strPtr("data-1"),
 							}.Build(),
 						},
 					}.Build(),
@@ -2054,14 +2143,16 @@ var _ = Describe("Private bare metal instances server", func() {
 						SshPublicKey: new(testSSHPublicKey),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
-								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
-								Interface: strPtr("data-0"),
-								Primary:   boolPtr(true),
+								Subnet:         privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build()},
+								Interface:      strPtr("data-0"),
+								Primary:        boolPtr(true),
 							}.Build(),
 							privatev1.BareMetalNetworkAttachment_builder{
-								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID2}.Build(),
-								Interface: strPtr("data-1"),
-								Primary:   boolPtr(true),
+								Subnet:         privatev1.SubnetLocalReference_builder{Id: subnetID2}.Build(),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build()},
+								Interface:      strPtr("data-1"),
+								Primary:        boolPtr(true),
 							}.Build(),
 						},
 					}.Build(),
@@ -2085,8 +2176,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						SshPublicKey: new(testSSHPublicKey),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
-								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
-								Interface: strPtr("any-interface-name"),
+								Subnet:         privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build()},
+								Interface:      strPtr("any-interface-name"),
 							}.Build(),
 						},
 					}.Build(),
@@ -2106,13 +2198,15 @@ var _ = Describe("Private bare metal instances server", func() {
 						SshPublicKey: new(testSSHPublicKey),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
-								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
-								Interface: strPtr("nic-0"),
-								Primary:   boolPtr(true),
+								Subnet:         privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build()},
+								Interface:      strPtr("nic-0"),
+								Primary:        boolPtr(true),
 							}.Build(),
 							privatev1.BareMetalNetworkAttachment_builder{
-								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID2}.Build(),
-								Interface: strPtr("nic-0"),
+								Subnet:         privatev1.SubnetLocalReference_builder{Id: subnetID2}.Build(),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build()},
+								Interface:      strPtr("nic-0"),
 							}.Build(),
 						},
 					}.Build(),
@@ -2125,7 +2219,7 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(status.Message()).To(ContainSubstring("duplicate interface"))
 		})
 
-		It("Accepts no network attachments", func() {
+		It("Rejects BMI without network_attachments when defaults are missing", func() {
 			_, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -2137,7 +2231,11 @@ var _ = Describe("Private bare metal instances server", func() {
 					}.Build(),
 				}.Build(),
 			}.Build())
-			Expect(err).ToNot(HaveOccurred())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+			Expect(status.Message()).To(ContainSubstring("default"))
 		})
 
 		It("Accepts update that changes only security_groups", func() {
@@ -2195,8 +2293,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						SshPublicKey: new(testSSHPublicKey),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
-								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
-								Interface: strPtr("data-0"),
+								Subnet:         privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build()},
+								Interface:      strPtr("data-0"),
 							}.Build(),
 						},
 					}.Build(),
@@ -2233,8 +2332,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						SshPublicKey: new(testSSHPublicKey),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
-								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
-								Interface: strPtr("data-0"),
+								Subnet:         privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build()},
+								Interface:      strPtr("data-0"),
 							}.Build(),
 						},
 					}.Build(),
@@ -2248,8 +2348,8 @@ var _ = Describe("Private bare metal instances server", func() {
 					Id: id,
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
-							privatev1.BareMetalNetworkAttachment_builder{Subnet: privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(), Interface: strPtr("data-0")}.Build(),
-							privatev1.BareMetalNetworkAttachment_builder{Subnet: privatev1.SubnetLocalReference_builder{Id: subnetID2}.Build(), Interface: strPtr("data-1")}.Build(),
+							privatev1.BareMetalNetworkAttachment_builder{Subnet: privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(), SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build()}, Interface: strPtr("data-0")}.Build(),
+							privatev1.BareMetalNetworkAttachment_builder{Subnet: privatev1.SubnetLocalReference_builder{Id: subnetID2}.Build(), SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build()}, Interface: strPtr("data-1")}.Build(),
 						},
 					}.Build(),
 				}.Build(),
@@ -2275,8 +2375,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						SshPublicKey: new(testSSHPublicKey),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
-								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
-								Interface: strPtr("data-0"),
+								Subnet:         privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build()},
+								Interface:      strPtr("data-0"),
 							}.Build(),
 						},
 					}.Build(),
@@ -2291,8 +2392,9 @@ var _ = Describe("Private bare metal instances server", func() {
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
-								Subnet:    privatev1.SubnetLocalReference_builder{Id: "different-subnet"}.Build(),
-								Interface: strPtr("data-0"),
+								Subnet:         privatev1.SubnetLocalReference_builder{Id: "different-subnet"}.Build(),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build()},
+								Interface:      strPtr("data-0"),
 							}.Build(),
 						},
 					}.Build(),
@@ -2319,8 +2421,9 @@ var _ = Describe("Private bare metal instances server", func() {
 						SshPublicKey: new(testSSHPublicKey),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
-								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
-								Interface: strPtr("data-0"),
+								Subnet:         privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build()},
+								Interface:      strPtr("data-0"),
 							}.Build(),
 						},
 					}.Build(),
@@ -2335,8 +2438,9 @@ var _ = Describe("Private bare metal instances server", func() {
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
-								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
-								Interface: strPtr("data-1"),
+								Subnet:         privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build()},
+								Interface:      strPtr("data-1"),
 							}.Build(),
 						},
 					}.Build(),
@@ -2363,13 +2467,15 @@ var _ = Describe("Private bare metal instances server", func() {
 						SshPublicKey: new(testSSHPublicKey),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
-								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
-								Interface: strPtr("data-0"),
-								Primary:   boolPtr(true),
+								Subnet:         privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
+								Interface:      strPtr("data-0"),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build()},
+								Primary:        boolPtr(true),
 							}.Build(),
 							privatev1.BareMetalNetworkAttachment_builder{
-								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID2}.Build(),
-								Interface: strPtr("data-1"),
+								Subnet:         privatev1.SubnetLocalReference_builder{Id: subnetID2}.Build(),
+								Interface:      strPtr("data-1"),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build()},
 							}.Build(),
 						},
 					}.Build(),
@@ -2384,13 +2490,15 @@ var _ = Describe("Private bare metal instances server", func() {
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
-								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
-								Interface: strPtr("data-0"),
+								Subnet:         privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
+								Interface:      strPtr("data-0"),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build()},
 							}.Build(),
 							privatev1.BareMetalNetworkAttachment_builder{
-								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID2}.Build(),
-								Interface: strPtr("data-1"),
-								Primary:   boolPtr(true),
+								Subnet:         privatev1.SubnetLocalReference_builder{Id: subnetID2}.Build(),
+								Interface:      strPtr("data-1"),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build()},
+								Primary:        boolPtr(true),
 							}.Build(),
 						},
 					}.Build(),
@@ -2404,6 +2512,78 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 			Expect(status.Message()).To(ContainSubstring("primary is immutable"))
+		})
+
+		It("Rejects explicit attachment with missing subnet", func() {
+			_, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithHT}.Build(),
+						SshPublicKey: new(testSSHPublicKey),
+						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
+							privatev1.BareMetalNetworkAttachment_builder{
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build()},
+								Interface:      strPtr("data-0"),
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(ContainSubstring("subnet is required"))
+		})
+
+		It("Rejects explicit attachment with empty security groups", func() {
+			_, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithHT}.Build(),
+						SshPublicKey: new(testSSHPublicKey),
+						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
+							privatev1.BareMetalNetworkAttachment_builder{
+								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
+								Interface: strPtr("data-0"),
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(ContainSubstring("security group"))
+		})
+
+		It("Accepts explicit attachment with subnet and security groups", func() {
+			_, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithHT}.Build(),
+						SshPublicKey: new(testSSHPublicKey),
+						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
+							privatev1.BareMetalNetworkAttachment_builder{
+								Subnet:         privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build()},
+								Interface:      strPtr("data-0"),
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
 		})
 	})
 
@@ -2675,7 +2855,8 @@ var _ = Describe("Private bare metal instances server", func() {
 						SshPublicKey: new(testSSHPublicKey),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
-								Subnet: privatev1.SubnetLocalReference_builder{Id: subnetID}.Build(),
+								Subnet:         privatev1.SubnetLocalReference_builder{Id: subnetID}.Build(),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build()},
 							}.Build(),
 						},
 					}.Build(),
@@ -2698,7 +2879,8 @@ var _ = Describe("Private bare metal instances server", func() {
 						SshPublicKey: new(testSSHPublicKey),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
-								Subnet: privatev1.SubnetLocalReference_builder{Id: subnetID}.Build(),
+								Subnet:         privatev1.SubnetLocalReference_builder{Id: subnetID}.Build(),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build()},
 							}.Build(),
 						},
 					}.Build(),
@@ -2965,7 +3147,8 @@ var _ = Describe("Private bare metal instances server", func() {
 						SshPublicKey: new(testSSHPublicKey),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
-								Subnet: privatev1.SubnetLocalReference_builder{Id: customSubnetID}.Build(),
+								Subnet:         privatev1.SubnetLocalReference_builder{Id: customSubnetID}.Build(),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build()},
 							}.Build(),
 						},
 					}.Build(),
@@ -2998,7 +3181,7 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(attachments[0].GetInterface()).To(BeEmpty())
 		})
 
-		It("Skips defaults when no default subnet exists", func() {
+		It("Rejects creation when no default subnet exists", func() {
 			// Delete the default SG first (migration 103 blocks subnet deletion while SGs
 			// reference the same VN), then delete the default subnet.
 			sgDao, sgErr := dao.NewGenericDAO[*privatev1.SecurityGroup]().
@@ -3017,7 +3200,7 @@ var _ = Describe("Private bare metal instances server", func() {
 			_, sdErr = subnetDao.Delete().SetId(defaultSubnet.GetId()).Do(ctx)
 			Expect(sdErr).ToNot(HaveOccurred())
 
-			response, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+			_, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
@@ -3028,12 +3211,15 @@ var _ = Describe("Private bare metal instances server", func() {
 					}.Build(),
 				}.Build(),
 			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Expect(response.GetObject().GetSpec().GetNetworkAttachments()).To(BeEmpty())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+			Expect(status.Message()).To(ContainSubstring("default subnet"))
 		})
 
-		It("Skips defaults when no default security group exists", func() {
-			// Delete the default security group — Create should succeed with no network_attachments.
+		It("Rejects creation when no default security group exists", func() {
+			// Delete the default security group — Create should now fail with FailedPrecondition.
 			sgDao, sgErr := dao.NewGenericDAO[*privatev1.SecurityGroup]().
 				SetLogger(logger).
 				SetTenancyLogic(tenancy).
@@ -3042,7 +3228,7 @@ var _ = Describe("Private bare metal instances server", func() {
 			_, sgErr = sgDao.Delete().SetId(defaultSG.GetId()).Do(ctx)
 			Expect(sgErr).ToNot(HaveOccurred())
 
-			response, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+			_, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
@@ -3053,8 +3239,11 @@ var _ = Describe("Private bare metal instances server", func() {
 					}.Build(),
 				}.Build(),
 			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Expect(response.GetObject().GetSpec().GetNetworkAttachments()).To(BeEmpty())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+			Expect(status.Message()).To(ContainSubstring("default security group"))
 		})
 
 		It("Fails when HostType has no fabric interface", func() {

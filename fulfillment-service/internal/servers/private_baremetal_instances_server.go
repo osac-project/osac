@@ -603,7 +603,8 @@ func (s *PrivateBareMetalInstancesServer) applyDefaultNetworkAttachments(
 		return err
 	}
 	if subnet == nil {
-		return nil
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"tenant '%s' has no default subnet; cannot create bare metal instance without network_attachments", tenantName)
 	}
 
 	sg, err := s.findDefaultSecurityGroup(ctx, tenantName)
@@ -611,7 +612,8 @@ func (s *PrivateBareMetalInstancesServer) applyDefaultNetworkAttachments(
 		return err
 	}
 	if sg == nil {
-		return nil
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"tenant '%s' has no default security group; cannot create bare metal instance without network_attachments", tenantName)
 	}
 
 	ifaceName, err := s.resolveDefaultInterface(ctx, bmi)
@@ -1014,6 +1016,18 @@ func (s *PrivateBareMetalInstancesServer) validateNetworkAttachments(ctx context
 	attachments := bmi.GetSpec().GetNetworkAttachments()
 	if len(attachments) == 0 {
 		return nil
+	}
+
+	// Validate that each attachment has a subnet and at least one security group.
+	for i, a := range attachments {
+		if a.GetSubnet() == nil || refKey(a.GetSubnet()) == "" {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"network_attachments[%d]: subnet is required", i)
+		}
+		if len(a.GetSecurityGroups()) == 0 {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"network_attachments[%d]: security_groups must contain at least one security group", i)
+		}
 	}
 
 	// Structural validation: duplicates and multi-NIC interface requirement.

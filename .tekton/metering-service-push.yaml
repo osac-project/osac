@@ -24,9 +24,9 @@ spec:
   - name: output-image
     value: quay.io/redhat-user-workloads/osac-tenant/metering-service:{{revision}}
   - name: dockerfile
-    value: osac-metering/metering-service/Containerfile
+    value: metering-service/Containerfile
   - name: path-context
-    value: .
+    value: osac-metering
   pipelineSpec:
     description: |
       This pipeline is ideal for building container images from a Containerfile while maintaining trust after pipeline customization.

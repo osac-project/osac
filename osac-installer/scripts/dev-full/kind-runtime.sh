@@ -26,10 +26,10 @@ set -euo pipefail
 ROOTFUL_SOCKET="${ROOTFUL_SOCKET:-/run/podman/podman.sock}"
 
 # Auto-detect container runtime (prefer Docker on Mac, podman elsewhere).
-if [[ "$(uname -s)" == "Darwin" ]] && command -v docker >/dev/null 2>&1; then
-  KIND_PROVIDER="${KIND_EXPERIMENTAL_PROVIDER:-docker}"
-else
+if [[ "$(uname -s)" == "Darwin" ]] && command -v podman >/dev/null 2>&1; then
   KIND_PROVIDER="${KIND_EXPERIMENTAL_PROVIDER:-podman}"
+else
+  KIND_PROVIDER="${KIND_EXPERIMENTAL_PROVIDER:-docker}"
 fi
 
 # Detect distrobox: podman is a host-exec wrapper, sudo can't reach it.

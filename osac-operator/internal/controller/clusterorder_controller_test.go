@@ -979,6 +979,14 @@ var _ = Describe("ClusterOrder Controller", func() {
 			instance := &v1alpha1.ClusterOrder{
 				Status: v1alpha1.ClusterOrderStatus{
 					Phase: v1alpha1.ClusterOrderPhaseProgressing,
+					ProvisioningJobs: []v1alpha1.JobStatus{
+						{
+							JobID:     "job-1",
+							Type:      v1alpha1.JobTypeProvision,
+							State:     v1alpha1.JobStateSucceeded,
+							Timestamp: metav1.NewTime(time.Now().UTC()),
+						},
+					},
 					Conditions: []metav1.Condition{
 						{
 							Type:               v1alpha1.ConditionProgressing,
@@ -1001,6 +1009,34 @@ var _ = Describe("ClusterOrder Controller", func() {
 			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
 			Expect(cond.Reason).To(Equal(v1alpha1.ReasonProgressing))
 			Expect(cond.Message).To(Equal("provisioning in progress"))
+		})
+
+		It("should set Phase=Failed when provision job fails with no successful predecessor even if HostedCluster exists (crash recovery)", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Status: v1alpha1.ClusterOrderStatus{
+					Phase: v1alpha1.ClusterOrderPhaseProgressing,
+					ProvisioningJobs: []v1alpha1.JobStatus{
+						{
+							JobID:     "job-2",
+							Type:      v1alpha1.JobTypeProvision,
+							State:     v1alpha1.JobStateFailed,
+							Message:   "lease conflict with orphaned job",
+							Timestamp: metav1.NewTime(time.Now().UTC()),
+						},
+					},
+				},
+			}
+			instance.SetClusterReferenceHostedClusterName("my-cluster")
+
+			callbacks := (&ClusterOrderReconciler{}).provisioningCallbacks(instance)
+			callbacks.OnFailed("lease conflict with orphaned job")
+
+			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseFailed))
+			cond := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal(v1alpha1.ReasonProvisioningFailed))
+			Expect(cond.Message).To(ContainSubstring("lease conflict"))
 		})
 
 		It("should set Phase=Ready and Progressing=False on OnSuccess", func() {

@@ -368,6 +368,133 @@ var _ = Describe("ClusterOrder Controller", func() {
 		})
 	})
 
+	Context("handleDelete skips deprovisioning when no HostedCluster exists", func() {
+		ctx := context.Background()
+
+		It("should skip deprovisioning and remove finalizer when ClusterReference is nil", func() {
+			instanceName := "test-delete-no-hc-nil"
+			instance := &v1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       instanceName,
+					Namespace:  "default",
+					Finalizers: []string{osacFinalizer},
+				},
+				Spec: v1alpha1.ClusterOrderSpec{
+					TemplateID: "test",
+				},
+			}
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+
+			key := types.NamespacedName{Name: instanceName, Namespace: "default"}
+
+			controllerReconciler := &ClusterOrderReconciler{
+				Client:               k8sClient,
+				apiReader:            k8sClient,
+				Scheme:               k8sClient.Scheme(),
+				ProvisioningProvider: noopProvisioningProvider{},
+				MaxJobHistory:        provisioning.DefaultMaxJobHistory,
+			}
+
+			Expect(k8sClient.Delete(ctx, instance)).To(Succeed())
+
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: key,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			Eventually(func() bool {
+				return errors.IsNotFound(k8sClient.Get(ctx, key, &v1alpha1.ClusterOrder{}))
+			}, 5*time.Second, 100*time.Millisecond).Should(BeTrue())
+		})
+
+		It("should skip deprovisioning and remove finalizer when HostedClusterName is empty", func() {
+			instanceName := "test-delete-no-hc-empty"
+			instance := &v1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       instanceName,
+					Namespace:  "default",
+					Finalizers: []string{osacFinalizer},
+				},
+				Spec: v1alpha1.ClusterOrderSpec{
+					TemplateID: "test",
+				},
+			}
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+
+			key := types.NamespacedName{Name: instanceName, Namespace: "default"}
+			// Set the ClusterReference with an empty HostedClusterName via status update
+			Expect(k8sClient.Get(ctx, key, instance)).To(Succeed())
+			instance.Status.ClusterReference = &v1alpha1.ClusterOrderClusterReferenceType{
+				Namespace: "some-ns",
+			}
+			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+
+			controllerReconciler := &ClusterOrderReconciler{
+				Client:               k8sClient,
+				apiReader:            k8sClient,
+				Scheme:               k8sClient.Scheme(),
+				ProvisioningProvider: noopProvisioningProvider{},
+				MaxJobHistory:        provisioning.DefaultMaxJobHistory,
+			}
+
+			Expect(k8sClient.Delete(ctx, instance)).To(Succeed())
+
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: key,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			Eventually(func() bool {
+				return errors.IsNotFound(k8sClient.Get(ctx, key, &v1alpha1.ClusterOrder{}))
+			}, 5*time.Second, 100*time.Millisecond).Should(BeTrue())
+		})
+
+		It("should proceed with deprovisioning when HostedClusterName is set", func() {
+			instanceName := "test-delete-with-hc"
+			instance := &v1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       instanceName,
+					Namespace:  "default",
+					Finalizers: []string{osacFinalizer},
+				},
+				Spec: v1alpha1.ClusterOrderSpec{
+					TemplateID: "test",
+				},
+			}
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+
+			key := types.NamespacedName{Name: instanceName, Namespace: "default"}
+			// Set the ClusterReference with a HostedClusterName via status update
+			Expect(k8sClient.Get(ctx, key, instance)).To(Succeed())
+			instance.Status.ClusterReference = &v1alpha1.ClusterOrderClusterReferenceType{
+				HostedClusterName: "my-hosted-cluster",
+			}
+			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+
+			controllerReconciler := &ClusterOrderReconciler{
+				Client:               k8sClient,
+				apiReader:            k8sClient,
+				Scheme:               k8sClient.Scheme(),
+				ProvisioningProvider: noopProvisioningProvider{},
+				MaxJobHistory:        provisioning.DefaultMaxJobHistory,
+			}
+
+			Expect(k8sClient.Delete(ctx, instance)).To(Succeed())
+
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: key,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// The noopProvisioningProvider returns a successful deprovision result,
+			// so the reconcile should proceed to namespace cleanup/finalizer removal.
+			// The object should be deleted since there is no matching namespace.
+			Eventually(func() bool {
+				return errors.IsNotFound(k8sClient.Get(ctx, key, &v1alpha1.ClusterOrder{}))
+			}, 5*time.Second, 100*time.Millisecond).Should(BeTrue())
+		})
+	})
+
 	Context("handleDesiredConfigVersion", func() {
 		It("should produce consistent hash for same spec", func() {
 			reconciler := &ClusterOrderReconciler{}

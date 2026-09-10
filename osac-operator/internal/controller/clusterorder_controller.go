@@ -814,15 +814,23 @@ func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ reconcile.R
 		return ctrl.Result{}, err
 	}
 
-	// Handle deprovisioning via provider
-	// Waits for provision job termination and polls deprovision job if needed
-	deprovisionResult, err := r.handleDeprovisioning(ctx, instance)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	// If deprovision job is still running, requeue and wait
-	if deprovisionResult.RequeueAfter > 0 {
-		return deprovisionResult, nil
+	// Skip deprovisioning when provision never created a HostedCluster.
+	// There is nothing to deprovision, so launching deprovision AAP jobs
+	// would fail repeatedly and block deletion indefinitely.
+	if instance.Status.ClusterReference == nil ||
+		instance.Status.ClusterReference.HostedClusterName == "" {
+		log.Info("skipping deprovisioning: no HostedCluster was created")
+	} else {
+		// Handle deprovisioning via provider
+		// Waits for provision job termination and polls deprovision job if needed
+		deprovisionResult, err := r.handleDeprovisioning(ctx, instance)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		// If deprovision job is still running, requeue and wait
+		if deprovisionResult.RequeueAfter > 0 {
+			return deprovisionResult, nil
+		}
 	}
 
 	ns, err := r.findNamespace(ctx, instance)

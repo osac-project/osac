@@ -28,11 +28,38 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 )
 
+// createIdPClientSecret creates a short-lived OSAC Secret containing the given plain-text
+// client secret value (keyed as "value") and returns a SecretLocalReference pointing to it.
+// The secret is registered for cleanup via DeferCleanup. Used in BeforeEach to satisfy the
+// ClientSecretSecret field introduced in OSAC-4754.
+func createIdPClientSecret(
+	ctx context.Context,
+	sc privatev1.SecretsClient,
+	tenantName, plainSecret string,
+) *privatev1.SecretLocalReference {
+	resp, err := sc.Create(ctx, privatev1.SecretsCreateRequest_builder{
+		Object: privatev1.Secret_builder{
+			Metadata: privatev1.Metadata_builder{
+				Name:   fmt.Sprintf("idp-cs-%s", uuid.New()),
+				Tenant: tenantName,
+			}.Build(),
+			Data: map[string][]byte{"value": []byte(plainSecret)},
+		}.Build(),
+	}.Build())
+	Expect(err).ToNot(HaveOccurred(), "create client-secret Secret for IdP login test")
+	secretID := resp.GetObject().GetId()
+	DeferCleanup(func() {
+		_, _ = sc.Delete(ctx, privatev1.SecretsDeleteRequest_builder{Id: secretID}.Build())
+	})
+	return privatev1.SecretLocalReference_builder{Id: secretID}.Build()
+}
+
 var _ = Describe("Identity provider login flow", func() {
 	var (
 		ctx           context.Context
 		client        privatev1.IdentityProvidersClient
 		tenantsClient privatev1.TenantsClient
+		secretsClient privatev1.SecretsClient
 		extRealm      *ExtRealmState
 		tenantName    string
 		tenantID      string
@@ -44,6 +71,7 @@ var _ = Describe("Identity provider login flow", func() {
 		ctx = context.Background()
 		client = privatev1.NewIdentityProvidersClient(tool.InternalView().AdminConn())
 		tenantsClient = privatev1.NewTenantsClient(tool.InternalView().AdminConn())
+		secretsClient = privatev1.NewSecretsClient(tool.InternalView().AdminConn())
 
 		// Create a fresh OSAC tenant for each test.
 		tenantName = fmt.Sprintf("idp-login-%s", uuid.New())
@@ -93,8 +121,12 @@ var _ = Describe("Identity provider login flow", func() {
 						AuthorizationUrl: extRealm.AuthorizationURL(),
 						TokenUrl:         extRealm.TokenURL(),
 						ClientId:         extRealm.ClientID(),
-						ClientSecret:     extRealm.ClientSecret(),
-						Issuer:           extRealm.IssuerURL(),
+						// client_secret is now a SecretLocalReference (OSAC-4754).
+						// Create an OSAC Secret with the ext-realm client secret value.
+						ClientSecretSecret: createIdPClientSecret(
+							ctx, secretsClient, tenantName, extRealm.ClientSecret(),
+						),
+						Issuer: extRealm.IssuerURL(),
 					}.Build(),
 				}.Build(),
 			}.Build(),
@@ -213,10 +245,14 @@ var _ = Describe("Identity provider login flow", func() {
 						AuthorizationUrl: "https://oidc.example.com/authorize",
 						TokenUrl:         "https://oidc.example.com/token",
 						ClientId:         "intruder",
-						// Use a random value — this IdP is never registered/reachable;
-						// we only need any non-empty string to pass API validation.
-						ClientSecret: uuid.New(),
-						Issuer:       "https://oidc.example.com",
+						// This IdP is never registered/reachable; we only need a
+						// structurally valid SecretLocalReference to pass schema
+						// validation. The request is expected to be denied before
+						// the secret is ever resolved.
+						ClientSecretSecret: publicv1.SecretLocalReference_builder{
+							Name: "dummy-secret",
+						}.Build(),
+						Issuer: "https://oidc.example.com",
 					}.Build(),
 				}.Build(),
 			}.Build(),

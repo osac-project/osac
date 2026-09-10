@@ -9,6 +9,7 @@ import pytest
 from tests.e2e.catalog.conftest import unique_name
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import (
+    assert_cluster_order_events,
     wait_for_cluster_deleting,
     wait_for_cluster_deletion,
     wait_for_cluster_grpc_deleting_or_archived,
@@ -58,28 +59,21 @@ def test_cluster_create(
 
         wait_for_cluster_ready(k8s=k8s_hub_client, name=co_name)
 
-        expected_messages = {
-            "Created": "ClusterOrder created",
-            "PreparingInfrastructure": "Preparing Infrastructure",
-            "ControlPlaneStarting": "Control Plane Starting",
-            "Ready": "ClusterOrder is ready",
+        expected_events = {
+            "Created": ("Normal", "Created", "ClusterOrder created"),
+            "PreparingInfrastructure": ("Normal", "Provisioning", "Preparing Infrastructure"),
+            "ControlPlaneStarting": ("Normal", "Provisioning", "Control Plane Starting"),
+            "Ready": ("Normal", "Ready", "ClusterOrder is ready"),
         }
-        expected_reasons = {"Created", "PreparingInfrastructure", "ControlPlaneStarting", "Ready"}
+        expected_reasons = set(expected_events)
         if k8s_hub_client.get_cluster_order_spec(name=co_name).get("nodeSets"):
-            expected_messages["WorkersJoining"] = "Workers Joining"
+            expected_events["WorkersJoining"] = ("Normal", "Provisioning", "Workers Joining")
             expected_reasons.add("WorkersJoining")
 
         events = wait_for_cluster_order_event_reasons(
             k8s=k8s_hub_client, name=co_name, reasons=expected_reasons
         )
-        for reason in expected_reasons:
-            event = events[reason]
-            assert event.get("type") == "Normal", f"Expected Normal event for {reason}: {event}"
-            expected_action = "Provisioning" if reason not in {"Created", "Ready"} else reason
-            assert event.get("action") == expected_action, f"Expected {expected_action} action for {reason}: {event}"
-            assert expected_messages[reason] in event.get("message", ""), (
-                f"Expected stage message for {reason}: {event}"
-            )
+        assert_cluster_order_events(events=events, expected=expected_events)
 
         # Verify version resolved and propagated end-to-end:
         # fulfillment-service default resolution -> ClusterOrder releaseImage -> HostedCluster image
@@ -163,11 +157,9 @@ def test_cluster_create(
         deleting_events = wait_for_cluster_order_event_reasons(
             k8s=k8s_hub_client, name=co_name, reasons={"Deleting"}
         )
-        deleting_event = deleting_events["Deleting"]
-        assert deleting_event.get("type") == "Normal", f"Expected Normal event for Deleting: {deleting_event}"
-        assert deleting_event.get("action") == "Deleting", f"Expected Deleting action: {deleting_event}"
-        assert "ClusterOrder entered deleting phase" in deleting_event.get("message", ""), (
-            f"Expected deleting message: {deleting_event}"
+        assert_cluster_order_events(
+            events=deleting_events,
+            expected={"Deleting": ("Normal", "Deleting", "ClusterOrder entered deleting phase")},
         )
         wait_for_cluster_grpc_deleting_or_archived(grpc=grpc, uuid=uuid)
 

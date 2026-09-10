@@ -20,8 +20,8 @@ import textwrap
 from pathlib import Path
 from uuid import uuid4
 
-from tests.e2e.catalog.conftest import unique_name
 from tests.e2e.core.helpers import (
+    unique_name,
     wait_for_cluster_deletion,
     wait_for_cluster_order_condition,
     wait_for_cluster_order_cr,

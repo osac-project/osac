@@ -329,6 +329,16 @@ def wait_for_cluster_order_event_reasons(*, k8s: K8sClient, name: str, reasons: 
     )
 
 
+def assert_cluster_order_events(
+    *, events: dict[str, dict[str, Any]], expected: dict[str, tuple[str, str, str]]
+) -> None:
+    for reason, (event_type, action, message) in expected.items():
+        event = events[reason]
+        assert event.get("type") == event_type, f"Expected {event_type} event for {reason}: {event}"
+        assert event.get("action") == action, f"Expected {action} action for {reason}: {event}"
+        assert message in event.get("message", ""), f"Expected message for {reason}: {event}"
+
+
 def wait_for_cluster_ready(*, k8s: K8sClient, name: str) -> None:
     # Must stay safely above osac-aap's own wait_for_clusteroperators_retries
     # budget (60 min) plus earlier steps in the same AAP job (create hosted

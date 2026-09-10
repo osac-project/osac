@@ -186,7 +186,7 @@ jobs:
       run: |
         set -euo pipefail
         # Mirrors helm-lint.yaml's own two loops (ci/*-values.yaml need no
-        # extra overrides, they're self-contained; values/*/values.yaml
+        # extra overrides, they're self-contained; values/*/instance.yaml
         # leave hostnames blank for a real cluster to fill in) -- this step
         # is checking the just-rewritten Chart.yaml/values.yaml render
         # cleanly across every overlay this chart actually ships, not just
@@ -196,8 +196,14 @@ jobs:
           helm lint charts/osac/ --values "$f"
           helm template osac charts/osac/ --values "$f" > /dev/null
         done
-        for f in values/*/values.yaml; do
-          echo "--- helm lint/template with $(dirname "$f" | xargs basename) ---"
+        # Per-environment overlays under values/*/ mix instance.yaml (this
+        # chart) with infra.yaml (osac-deps/osac-infra, a different chart --
+        # not packaged/validated here). Only pick up instance.yaml, and only
+        # where present -- not every profile directory has one.
+        for d in values/*/; do
+          f="${d}instance.yaml"
+          [ -f "$f" ] || continue
+          echo "--- helm lint/template with $(basename "$d") ---"
           helm lint charts/osac/ --values "$f" \
             --set service.externalHostname=fulfillment-api.example.com \
             --set service.internalHostname=fulfillment-internal-api.example.com

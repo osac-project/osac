@@ -27,9 +27,9 @@ spec:
   - name: image-expires-after
     value: 5d
   - name: dockerfile
-    value: osac-metering/adapters/Containerfile.m360-adapter
+    value: adapters/Containerfile.m360-adapter
   - name: path-context
-    value: .
+    value: osac-metering
   pipelineSpec:
     description: |
       This pipeline is ideal for building container images from a Containerfile while maintaining trust after pipeline customization.

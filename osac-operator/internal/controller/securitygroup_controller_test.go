@@ -120,7 +120,7 @@ var _ = Describe("SecurityGroupReconciler", func() {
 		// Create fake client with fixtures
 		fakeClient = fake.NewClientBuilder().
 			WithScheme(testScheme).
-			WithObjects(vnet, sg, readySubnet).
+			WithObjects(vnet, sg, readySubnet, newFabricManagerConfigMap("fm-cudn", "test-namespace", "cudn-net")).
 			WithStatusSubresource(&osacv1alpha1.SecurityGroup{}, &osacv1alpha1.Subnet{}).
 			Build()
 
@@ -133,6 +133,14 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			name: "mock-aap",
 		}
 
+		// Wire up a resolver so the dispatcher returns a valid implementation strategy
+		// for the parent VirtualNetwork's NetworkClass ("cudn-net").
+		disc, discErr := networkmanager.NewDiscovery(fakeClient, "test-namespace")
+		Expect(discErr).NotTo(HaveOccurred())
+		resolver := dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+			[]*privatev1.NetworkClass{{Id: "cudn-net", FabricManager: ptr.To("cudn-net")}}, &[]*privatev1.NetworkClass{},
+		)), disc)
+
 		// Create reconciler
 		reconciler = &SecurityGroupReconciler{
 			Client:                     fakeClient,
@@ -143,6 +151,7 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			StatusPollInterval:         1 * time.Second,
 			MaxJobHistory:              10,
 			NetworkProvisioningEnabled: true,
+			Resolver:                   resolver,
 		}
 	})
 
@@ -249,40 +258,34 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			Expect(provisionCalled).To(BeTrue())
 		})
 
-		It("should not stamp annotation when no resolver is configured", func() {
+		It("should block with ReasonNoManagerConfigured when no resolver is configured", func() {
+			// Without a resolver the implementation strategy is "", and the controller
+			// blocks rather than silently proceeding with an empty strategy.
+			reconciler.Resolver = nil
+
 			key := types.NamespacedName{Name: sg.Name, Namespace: sg.Namespace}
 
-			mockProvider.triggerProvisionFunc = func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
-				return &provisioning.ProvisionResult{
-					JobID:        "job-123",
-					InitialState: osacv1alpha1.JobStatePending,
-					Message:      "Job triggered",
-				}, nil
-			}
-
-			// Reconcile twice (first adds finalizer, second attempts annotation and provisions)
-			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			// Pass 1: adds finalizer, resolves parent VNet, resolves strategy to "" and blocks.
+			result, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
-			_, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
-			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
 
-			// Fetch updated SecurityGroup
 			updated := &osacv1alpha1.SecurityGroup{}
 			Expect(fakeClient.Get(ctx, key, updated)).To(Succeed())
-
-			// With no resolver configured, the resolved strategy is "" and no annotation
-			// update occurs (the existing value "" matches the resolved value "").
-			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal(""))
+			cond := apimeta.FindStatusCondition(updated.Status.Conditions, osacv1alpha1.ConditionReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal(osacv1alpha1.ReasonNoManagerConfigured))
 		})
 
 		It("should not update when annotation already matches implementation strategy", func() {
-			// Create SecurityGroup with annotation already set (no resolver, so "" is the resolved value)
+			// Create SecurityGroup with annotation already set to the dispatcher-resolved value.
 			sgWithAnnotation := &osacv1alpha1.SecurityGroup{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "sg-with-annotation",
 					Namespace: "test-namespace",
 					Annotations: map[string]string{
-						osacImplementationStrategyAnnotation: "",
+						osacImplementationStrategyAnnotation: "cudn-net",
 					},
 				},
 				Spec: osacv1alpha1.SecurityGroupSpec{
@@ -312,7 +315,7 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			Expect(fakeClient.Get(ctx, key, updated)).To(Succeed())
 
 			// Verify annotation still matches (no duplicate Update calls)
-			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal(""))
+			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("cudn-net"))
 		})
 
 		It("should update annotation when it differs from the resolved strategy", func() {
@@ -341,7 +344,7 @@ var _ = Describe("SecurityGroupReconciler", func() {
 				}, nil
 			}
 
-			// Reconcile twice
+			// Reconcile twice (first sets annotation to "cudn-net", second triggers provisioning)
 			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 			_, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
@@ -351,8 +354,8 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			updated := &osacv1alpha1.SecurityGroup{}
 			Expect(fakeClient.Get(ctx, key, updated)).To(Succeed())
 
-			// With no resolver configured, annotation is updated to "" (dispatcher must be configured)
-			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal(""))
+			// Annotation is updated to the dispatcher-resolved value
+			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("cudn-net"))
 		})
 
 		It("should trigger provision job when no job exists", func() {
@@ -865,7 +868,7 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("netris"))
 		})
 
-		It("falls back to the default strategy when fabricManager is not set", func() {
+		It("blocks with ReasonNoManagerConfigured when fabricManager is not set", func() {
 			disc, err := networkmanager.NewDiscovery(fakeClient, "test-namespace")
 			Expect(err).NotTo(HaveOccurred())
 			reconciler.Resolver = dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
@@ -876,17 +879,17 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			Expect(fakeClient.Update(ctx, vnet)).To(Succeed())
 
 			key := types.NamespacedName{Name: sg.Name, Namespace: sg.Namespace}
-			mockProvider.triggerProvisionFunc = func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
-				return &provisioning.ProvisionResult{JobID: "job-legacy", InitialState: osacv1alpha1.JobStatePending}, nil
-			}
 
-			_, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			result, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
 
 			updated := &osacv1alpha1.SecurityGroup{}
 			Expect(fakeClient.Get(ctx, key, updated)).To(Succeed())
-			// With no resolver configured, annotation is "" (dispatcher must be configured)
-			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal(""))
+			cond := apimeta.FindStatusCondition(updated.Status.Conditions, osacv1alpha1.ConditionReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal(osacv1alpha1.ReasonNoManagerConfigured))
 		})
 
 		It("returns a reconcile error when the NetworkClass references an unregistered manager", func() {
@@ -907,7 +910,7 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			Expect(err).To(HaveOccurred())
 		})
 
-		It("falls back to legacy strategy when the parent VirtualNetwork cannot be found", func() {
+		It("blocks with ReasonNoManagerConfigured when the parent VirtualNetwork cannot be found", func() {
 			disc, err := networkmanager.NewDiscovery(fakeClient, "test-namespace")
 			Expect(err).NotTo(HaveOccurred())
 			reconciler.Resolver = dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
@@ -923,19 +926,18 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			Expect(fakeClient.Create(ctx, orphanSG)).To(Succeed())
 
 			key := types.NamespacedName{Name: orphanSG.Name, Namespace: orphanSG.Namespace}
-			mockProvider.triggerProvisionFunc = func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
-				return &provisioning.ProvisionResult{JobID: "job-orphan", InitialState: osacv1alpha1.JobStatePending}, nil
-			}
 
-			_, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			// Parent VN not found -> networkClassID is empty -> strategy is "" -> blocks
+			result, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
-			_, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
-			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
 
 			updated := &osacv1alpha1.SecurityGroup{}
 			Expect(fakeClient.Get(ctx, key, updated)).To(Succeed())
-			// Parent VirtualNetwork not found, so networkClassID is empty -> annotation is ""
-			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal(""))
+			cond := apimeta.FindStatusCondition(updated.Status.Conditions, osacv1alpha1.ConditionReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal(osacv1alpha1.ReasonNoManagerConfigured))
 		})
 
 		It("returns an error when multiple VirtualNetworks share the parent uuid label", func() {

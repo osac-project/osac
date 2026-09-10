@@ -48,9 +48,10 @@ const (
 // ExternalIPPoolReconciler reconciles ExternalIPPool CRs created by the fulfillment-service.
 //
 // A ExternalIPPool defines a range of external IP addresses (CIDRs) that can be allocated
-// as individual ExternalIP resources. Implementation strategy is resolved from the default
-// NetworkClass via the dispatcher; pool spec.implementationStrategy is a backward-compat
-// fallback (along with defaultExternalIPPoolImplementationStrategy).
+// as individual ExternalIP resources. Implementation strategy is resolved exclusively
+// from the default NetworkClass via the dispatcher. When no manager is configured the
+// controller blocks with ReasonNoManagerConfigured rather than falling back to a
+// hardcoded default.
 //
 // The controller adds a finalizer, triggers AAP provisioning/deprovisioning jobs via
 // the shared provisioning lifecycle, and transitions phases:
@@ -186,17 +187,23 @@ func (r *ExternalIPPoolReconciler) handleUpdate(ctx context.Context, pool *v1alp
 		return ctrl.Result{}, nil
 	}
 
-	// Resolve implementation strategy from the default NetworkClass via the
-	// dispatcher. pool spec.implementationStrategy is only used as a fallback
-	// when the dispatcher path is not active.
+	// Resolve implementation strategy exclusively from the default NetworkClass
+	// via the dispatcher. When no manager is configured the controller blocks
+	// with ReasonNoManagerConfigured instead of falling back to a spec field.
 	networkClassID, err := lookupDefaultNetworkClassID(ctx, r.networkClassesClient)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	implementationStrategy, err := resolveImplementationStrategy(
-		ctx, r.Resolver, "ExternalIPPool", networkClassID, pool.Spec.ImplementationStrategy)
+		ctx, r.Resolver, "ExternalIPPool", networkClassID, "")
 	if err != nil {
 		return ctrl.Result{}, err
+	}
+	if implementationStrategy == "" {
+		msg := fmt.Sprintf("no fabric_manager or k8s_manager configured for ExternalIPPool (default NetworkClass %q)", networkClassID)
+		setReadyConditionBlocked(&pool.Status.Conditions, v1alpha1.ReasonNoManagerConfigured, msg)
+		log.Info("implementation strategy not set, requeueing", "externalIPPool", pool.Name)
+		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
 
 	// Stamp the implementation-strategy annotation so AAP playbooks can read it

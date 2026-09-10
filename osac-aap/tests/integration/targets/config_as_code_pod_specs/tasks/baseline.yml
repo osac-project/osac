@@ -51,6 +51,65 @@
           - "_pod_spec is search('storage-operations-ig')"
         fail_msg: Expected storage-operations-ig references in pod spec
 
+- name: Cluster-fulfillment pod spec has agentless-nmstate-ssh volume
+  hosts: localhost
+  gather_facts: false
+  vars:
+    aap_prefix: osac
+    aap_organization_name: Default
+    aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    aap_ee_image_pull: always
+    osac_import_bcm_agents_enabled: false
+    _vars_path: >-
+      {{ playbook_dir }}/../../../../../collections/ansible_collections/osac/config_as_code/roles/aap/vars/controller.yml
+
+  tasks:
+    - name: Load controller variables
+      ansible.builtin.include_vars:
+        file: "{{ _vars_path }}"
+
+    - name: Find cluster-fulfillment-ig instance group
+      ansible.builtin.set_fact:
+        _cf_ig: >-
+          {{ controller_instance_groups
+             | selectattr('name', 'search', 'cluster-fulfillment-ig')
+             | first }}
+
+    - name: Parse cluster-fulfillment pod spec
+      ansible.builtin.set_fact:
+        _cf_pod: "{{ _cf_ig.pod_spec_override | from_yaml }}"
+
+    - name: Assert agentless-nmstate-ssh volumeMount exists
+      ansible.builtin.assert:
+        that:
+          - _cf_pod.spec.containers[0].volumeMounts
+            | selectattr('name', 'equalto', 'agentless-nmstate-ssh')
+            | list | length == 1
+          - (_cf_pod.spec.containers[0].volumeMounts
+            | selectattr('name', 'equalto', 'agentless-nmstate-ssh')
+            | first).mountPath == '/tmp/.ssh'
+          - (_cf_pod.spec.containers[0].volumeMounts
+            | selectattr('name', 'equalto', 'agentless-nmstate-ssh')
+            | first).readOnly | bool
+        fail_msg: Expected agentless-nmstate-ssh volumeMount at /tmp/.ssh
+
+    - name: Assert agentless-nmstate-ssh volume exists with optional secret
+      ansible.builtin.assert:
+        that:
+          - _cf_pod.spec.volumes
+            | selectattr('name', 'equalto', 'agentless-nmstate-ssh')
+            | list | length == 1
+          - (_cf_pod.spec.volumes
+            | selectattr('name', 'equalto', 'agentless-nmstate-ssh')
+            | first).secret.secretName == 'agentless-nmstate-ssh'
+          - (_cf_pod.spec.volumes
+            | selectattr('name', 'equalto', 'agentless-nmstate-ssh')
+            | first).secret.optional | bool
+          - (_cf_pod.spec.volumes
+            | selectattr('name', 'equalto', 'agentless-nmstate-ssh')
+            | first).secret.defaultMode == 288
+        fail_msg: Expected optional agentless-nmstate-ssh secret volume with defaultMode 288
+
 - name: Compute-instance pod spec with remote kubeconfig
   hosts: localhost
   gather_facts: false

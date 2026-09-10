@@ -705,6 +705,9 @@ controller_instance_groups: # noqa: var-naming[no-role-prefix]
               - name: agentless-net-inventory
                 mountPath: /var/config/agentless-net
                 readOnly: true
+              - name: agentless-nmstate-ssh
+                mountPath: /tmp/.ssh
+                readOnly: true
               - name: bcm-certs
                 mountPath: /var/secrets/bcm-certs
                 readOnly: true
@@ -763,6 +766,11 @@ controller_instance_groups: # noqa: var-naming[no-role-prefix]
           configMap:
             name: agentless-net-inventory
             optional: true
+        - name: agentless-nmstate-ssh
+          secret:
+            secretName: agentless-nmstate-ssh
+            optional: true
+            defaultMode: 288
   # For config-as-code job template, we expect the configuration and the
   # credentials to be passed in (prefix)-config-as-code-ig secret
   - name: "{{ aap_prefix }}-config-as-code-ig"

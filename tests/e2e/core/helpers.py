@@ -4,6 +4,7 @@ import re
 import subprocess
 import time
 from typing import Any
+from uuid import uuid4
 
 import pytest
 
@@ -14,6 +15,16 @@ from tests.e2e.core.runner import poll_until, run_unchecked
 _POOL_READY_STATE = "EXTERNAL_IP_POOL_STATE_READY"
 _BMI_RUNNING_RETRIES = 180
 _BMI_RUNNING_DELAY = 10
+
+
+def unique_name(prefix: str) -> str:
+    return f"{prefix}-{uuid4().hex[:8]}"
+
+
+def grpc_error_message(exc: subprocess.CalledProcessError) -> str:
+    combined = (exc.stderr or "") + (exc.stdout or "")
+    match = re.search(r"Message:\s*(.+)", combined)
+    return match.group(1).strip() if match else ""
 
 
 def assert_grpc_rejected(exc_info: pytest.ExceptionInfo[subprocess.CalledProcessError], code: str) -> None:

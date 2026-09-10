@@ -429,6 +429,7 @@ networkClass:
   k8sManager: ""
   fabricManager: "cudn_net"
   isDefault: true
+  vipPrefixLength:
   defaults:
     # Tenant-onboarding defaults: without these, this being the default NetworkClass
     # does not auto-create a VirtualNetwork/Subnet/SecurityGroup for new tenants, and

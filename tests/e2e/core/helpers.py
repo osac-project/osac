@@ -442,7 +442,7 @@ def _force_cleanup_machine_preterminate_hooks(*, k8s: K8sClient, name: str) -> N
 def wait_for_cluster_deleting(*, k8s: K8sClient, name: str) -> None:
     poll_until(
         fn=lambda: k8s.get_cluster_order_phase(name=name, checked=False),
-        until=lambda v: v == "Deleting",
+        until=lambda v: v == "Deleting" or v == "",
         retries=30,
         delay=5,
         description=f"{name} ClusterOrder Deleting phase",

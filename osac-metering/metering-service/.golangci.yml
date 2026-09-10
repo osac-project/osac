@@ -15,6 +15,14 @@ linters:
       rules:
         - name: exported
           disabled: true
+  exclusions:
+    rules:
+      # host_type on ClusterNodeSet is deprecated in favour of baremetal_instance_type
+      # (OSAC-5117) but the metering event emitter still references it during the
+      # migration period.
+      - linters:
+          - staticcheck
+        text: HostType.*deprecated
 formatters:
   enable:
     - goimports

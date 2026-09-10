@@ -51,6 +51,46 @@ class TestLoadConfig(unittest.TestCase):
 
         self.assertEqual(config.dashboard.data_path, "docs/team/data.json")
 
+    def test_rejects_invalid_dashboard_metadata_types_and_urls(self):
+        invalid_configs = (
+            (
+                "repo = 123\n"
+                "branch = 'main'\n"
+                "base_url = 'https://example.test/team'\n",
+                "dashboard.repo",
+            ),
+            (
+                "repo = 'osac-project/osac'\n"
+                "branch = 1\n"
+                "base_url = 'https://example.test/team'\n",
+                "dashboard.branch",
+            ),
+            (
+                "repo = 'osac-project/osac'\n"
+                "branch = 'main'\n"
+                'base_url = ["https://example.test/team"]\n',
+                "dashboard.base_url",
+            ),
+            (
+                "repo = 'osac-project/osac'\n"
+                "branch = 'main'\n"
+                'base_url = "http://example.test/team"\n',
+                "dashboard.base_url",
+            ),
+        )
+        for dashboard_config, error_field in invalid_configs:
+            with self.subTest(dashboard_config=dashboard_config):
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    path = Path(tmpdir) / "config.toml"
+                    path.write_text(
+                        "repos = ['osac-project/osac']\n"
+                        "[dashboard]\n"
+                        + dashboard_config
+                    )
+
+                    with self.assertRaisesRegex(SystemExit, error_field):
+                        load_config(str(path))
+
     def test_rejects_dashboard_data_path_outside_published_dashboard_directory(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "config.toml"

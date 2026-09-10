@@ -8,7 +8,8 @@ metadata:
     pipelinesascode.tekton.dev/cancel-in-progress: "false"
     pipelinesascode.tekton.dev/max-keep-runs: "3"
     pipelinesascode.tekton.dev/on-cel-expression: event == "push" && target_branch
-      == "main"
+      == "main" && ( "osac-metering/metering-service/***".pathChanged() || "osac-metering/schema/***".pathChanged() || ".tekton/metering-service-push.yaml".pathChanged()
+      )
   labels:
     appstudio.openshift.io/application: osac
     appstudio.openshift.io/component: metering-service

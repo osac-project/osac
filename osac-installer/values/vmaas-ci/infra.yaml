@@ -34,5 +34,5 @@ kafka:
 bundledPostgres:
   enabled: true
   database:
-    name: service
-    user: service
+    name: osac_service
+    user: osac_service

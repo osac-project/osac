@@ -66,8 +66,12 @@ class TestLoadConfig(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "docs/<dashboard>/data.json"):
                 load_config(str(path))
 
-    def test_rejects_dot_segments_in_dashboard_data_path(self):
-        for data_path in ("docs/./data.json", "docs/../data.json"):
+    def test_rejects_dot_prefixed_dashboard_data_path(self):
+        for data_path in (
+            "docs/./data.json",
+            "docs/../data.json",
+            "docs/.hidden/data.json",
+        ):
             with self.subTest(data_path=data_path):
                 with tempfile.TemporaryDirectory() as tmpdir:
                     path = Path(tmpdir) / "config.toml"

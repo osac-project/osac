@@ -5,7 +5,7 @@ import tomllib
 from models import Config, DashboardConfig
 
 _DASHBOARD_DATA_PATH_PATTERN = re.compile(
-    r"docs/(?!\.{1,2}/)[A-Za-z0-9._-]+/data\.json"
+    r"docs/(?!\.)[A-Za-z0-9._-]+/data\.json"
 )
 
 

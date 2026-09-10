@@ -3,8 +3,18 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 
 const html = fs.readFileSync("docs/pr-dashboard/index.html", "utf8");
-const script = html
-  .match(/<script>([\s\S]*?)<\/script>/)[1]
+function extractInlineScript(documentHtml) {
+  const match = documentHtml.match(/<script>([\s\S]*?)<\/script>/i);
+  assert.ok(match, "Dashboard HTML must contain an inline script");
+  return match[1];
+}
+
+assert.equal(
+  extractInlineScript("<SCRIPT>const uppercaseTag = true;</SCRIPT>"),
+  "const uppercaseTag = true;",
+);
+
+const script = extractInlineScript(html)
   .replace(/\nfetch\("data\.json"\)[\s\S]*$/, "");
 
 function escapeHtml(value) {

@@ -163,6 +163,10 @@ image-build: ## Build container image with manager and console-proxy.
 image-push: ## Push container image.
 	$(CONTAINER_TOOL) push ${IMG}
 
+.PHONY: kind-load-image
+kind-load-image: ## Load the built image into the dev-full Kind cluster.
+	$(call kind-load-image,$(IMG))
+
 .PHONY: image-run
 image-run: ## Run container image locally.
 	$(CONTAINER_TOOL) run --rm --userns keep-id --name osac-controller \
@@ -238,6 +242,7 @@ CONTROLLER_TOOLS_VERSION ?= v0.20.0
 ENVTEST_VERSION ?= release-0.19
 
 include $(shell git rev-parse --show-toplevel)/tools/golangci-lint.mk
+include $(shell git rev-parse --show-toplevel)/osac-installer/scripts/dev-full/kind-load-image.mk
 
 .PHONY: controller-gen
 controller-gen: $(CONTROLLER_GEN) ## Download controller-gen locally if necessary.

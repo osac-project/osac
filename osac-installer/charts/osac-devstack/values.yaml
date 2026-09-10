@@ -45,7 +45,7 @@ ui:
   image:
     repository: ghcr.io/osac-project/osac-ui
     tag: latest  # DEV_FLOATING -- intentionally unpinned for local dev
-    pullPolicy: Always
+    pullPolicy: IfNotPresent
   replicas: 1
   resources:
     requests: {cpu: 100m, memory: 128Mi}

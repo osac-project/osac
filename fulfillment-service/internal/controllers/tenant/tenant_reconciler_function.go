@@ -198,6 +198,9 @@ func (t *task) update(ctx context.Context) error {
 		if err := t.ensureVaultNamespace(ctx); err != nil {
 			return err
 		}
+		if t.tenant.GetStatus().GetState() == privatev1.TenantState_TENANT_STATE_FAILED {
+			return nil
+		}
 		return t.checkDefaultNetworkingReadiness(ctx)
 	}
 

@@ -208,6 +208,13 @@ func (s *PrivateExternalIPAttachmentsServer) Create(ctx context.Context,
 		return
 	}
 
+	if attachment.GetMetadata() == nil || attachment.GetMetadata().GetName() == "" {
+		if attachment.GetMetadata() == nil {
+			attachment.SetMetadata(&privatev1.Metadata{})
+		}
+		attachment.GetMetadata().SetName(generateResourceName("ext-ip-att"))
+	}
+
 	if attachment.GetStatus() == nil {
 		attachment.SetStatus(privatev1.ExternalIPAttachmentStatus_builder{
 			State: privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_PENDING,

@@ -262,6 +262,15 @@ stamp_component_image_refs() {
             IMAGE_REF="ghcr.io/osac-project/osac-aap:${tag_value}" \
                 yq -i '.bootstrap.image = strenv(IMAGE_REF)' "osac-aap/charts/aap/values.yaml"
             stamp_umbrella_nested_field "${umbrella_values}" aap bootstrap image "ghcr.io/osac-project/osac-aap:${tag_value}"
+            # configAsCode.eeImage is the execution-environment image AAP's
+            # config-as-code sync uses (osac-aap/charts/aap/templates/config-as-code-secret.yaml)
+            # -- the same osac-aap image as bootstrap.image above, just a
+            # separate values.yaml field. publish-osac-installer-chart.yaml
+            # already stamps this; nightly never did, leaving it at its
+            # committed "" placeholder in every published chart until now.
+            IMAGE_REF="ghcr.io/osac-project/osac-aap:${tag_value}" \
+                yq -i '.configAsCode.eeImage = strenv(IMAGE_REF)' "osac-aap/charts/aap/values.yaml"
+            stamp_umbrella_nested_field "${umbrella_values}" aap configAsCode eeImage "ghcr.io/osac-project/osac-aap:${tag_value}"
             ;;
         osac-metering)
             TAG_VALUE="${tag_value}" yq -i '.image.tag = strenv(TAG_VALUE)' "osac-metering/charts/osac-metering/values.yaml"

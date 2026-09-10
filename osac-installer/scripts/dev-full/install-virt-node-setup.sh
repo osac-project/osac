@@ -13,6 +13,14 @@ set -euo pipefail
 CLUSTER_NAME="${1:-osac-dev}"
 BRIDGE_CNI_VERSION="${2:-v1.6.2}"
 
+ARCH=$(uname -m)
+case "$ARCH" in
+    x86_64)  ARCH="amd64" ;;
+    aarch64) ARCH="arm64" ;;
+    arm64)   ARCH="arm64" ;;   # macOS Apple Silicon reports "arm64"
+    *)       echo "Unsupported architecture: $ARCH"; exit 1 ;;
+esac
+
 log() { echo "[+] $*"; }
 die() { echo "[!] $*" >&2; exit 1; }
 
@@ -42,7 +50,7 @@ NODE_NAME="${CLUSTER_NAME}-control-plane"
 
 log "Installing bridge CNI plugin into ${NODE_NAME}..."
 $RUNTIME exec "${NODE_NAME}" bash -c \
-  "curl -sL https://github.com/containernetworking/plugins/releases/download/${BRIDGE_CNI_VERSION}/cni-plugins-linux-amd64-${BRIDGE_CNI_VERSION}.tgz | tar -C /opt/cni/bin -xz" \
+  "curl -sL https://github.com/containernetworking/plugins/releases/download/${BRIDGE_CNI_VERSION}/cni-plugins-linux-${ARCH}-${BRIDGE_CNI_VERSION}.tgz | tar -C /opt/cni/bin -xz" \
   || die "Failed to install bridge CNI plugin"
 
 log "Bridge CNI plugin installed successfully"

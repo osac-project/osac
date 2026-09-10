@@ -13,6 +13,14 @@ source "${SCRIPT_DIR}/kind-runtime.sh"
 CLUSTER_NAME="${1:-${KIND_CLUSTER_NAME:-osac-dev}}"
 BRIDGE_CNI_VERSION="${BRIDGE_CNI_VERSION:-v1.6.2}"
 
+ARCH=$(uname -m)
+case "$ARCH" in
+    x86_64)  ARCH="amd64" ;;
+    aarch64) ARCH="arm64" ;;
+    arm64)   ARCH="arm64" ;;   # macOS Apple Silicon reports "arm64"
+    *)       echo "Unsupported architecture: $ARCH"; exit 1 ;;
+esac
+
 install_multus() {
   log "Installing Multus CNI..."
   kubectl apply -f https://raw.githubusercontent.com/k8snetworkplumbingwg/multus-cni/master/deployments/multus-daemonset.yml 2>&1 | tail -3
@@ -21,7 +29,7 @@ install_multus() {
   log "Installing bridge CNI plugin into the kind node..."
   local node_name="${CLUSTER_NAME}-control-plane"
   container_cmd exec "${node_name}" bash -c \
-    "curl -sL https://github.com/containernetworking/plugins/releases/download/${BRIDGE_CNI_VERSION}/cni-plugins-linux-amd64-${BRIDGE_CNI_VERSION}.tgz | tar -C /opt/cni/bin -xz"
+    "curl -sL https://github.com/containernetworking/plugins/releases/download/${BRIDGE_CNI_VERSION}/cni-plugins-linux-${ARCH}-${BRIDGE_CNI_VERSION}.tgz | tar -C /opt/cni/bin -xz"
   log "Multus installed"
 }
 

@@ -11,6 +11,7 @@
 #   make install-osac    PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci  NS=osac
 #   make uninstall-osac  PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci  NS=osac
 #   make uninstall-infra PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci  NS=osac
+#   make kind-load-images  PLATFORM=kind PROFILE=dev-full NS=osac
 #   make test            PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci  NS=osac  SUITE=all|fulfillment|operator|bmf
 #
 # PROFILE=dev-full (kind only) is a superset of dev: it runs the same chart-based
@@ -33,7 +34,7 @@ FULFILLMENT_GINKGO_ARGS ?=
 # -- Fail-fast parameter validation ------------------------------------
 # Guards fire at parse time, gated by MAKECMDGOALS so `make help` works.
 
-ALL_TARGETS := install uninstall install-infra uninstall-infra install-osac uninstall-osac install-devstack test
+ALL_TARGETS := install uninstall install-infra uninstall-infra install-osac uninstall-osac install-devstack kind-load-images test
 
 ifneq ($(filter $(ALL_TARGETS),$(MAKECMDGOALS)),)
 ifndef PLATFORM
@@ -138,6 +139,15 @@ endif
 # it empty and helm/kubectl would fall back to localhost:8080. `$(or ...)` skips empty.
 export KUBECONFIG := $(or $(KUBECONFIG),$(KIND_KUBECONFIG))
 
+# UI has no component Makefile, so the installer keeps its local image reference.
+KIND_UI_IMAGE := ghcr.io/osac-project/osac-ui:latest
+KIND_LOAD_IMAGE_SCRIPT ?= $(abspath scripts/dev-full/kind-load-image.sh)
+define kind-load-ui-image
+	NS="$(NS)" \
+	KIND_CLUSTER_NAME="$(KIND_CLUSTER_NAME)" KUBECONFIG="$(KUBECONFIG)" \
+	CONTAINER_TOOL="$(CONTAINER_TOOL)" "$(KIND_LOAD_IMAGE_SCRIPT)" "$(1)"
+endef
+
 define kind-load-image
 	@if [ "$(KIND_RUNTIME_REQUIRED)" = "true" ]; then \
 		tmpfile=$$(mktemp /tmp/kind-image-XXXXXX.tar); \
@@ -168,6 +178,17 @@ endef
 help: ## Display this help
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-30s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
 
+##@ Entity: Local Kind Images
+
+.PHONY: kind-load-images
+kind-load-images: ## Load previously built dev-full images into Kind (PLATFORM=kind PROFILE=dev-full NS= required)
+	@if [ "$(PLATFORM)/$(PROFILE)" != "kind/dev-full" ]; then \
+		echo "ERROR: kind-load-images requires PLATFORM=kind PROFILE=dev-full" >&2; exit 1; \
+	fi
+	$(MAKE) -C ../fulfillment-service kind-load-image NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
+	$(MAKE) -C ../osac-operator kind-load-image NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
+	$(MAKE) -C ../osac-csi-driver kind-load-image NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
+	$(call kind-load-ui-image,$(KIND_UI_IMAGE))
 ##@ Entity: Infra
 
 .PHONY: install-infra

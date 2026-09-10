@@ -9,7 +9,8 @@ metadata:
     pipelinesascode.tekton.dev/cancel-in-progress: "true"
     pipelinesascode.tekton.dev/max-keep-runs: "3"
     pipelinesascode.tekton.dev/on-cel-expression: event == "pull_request" && target_branch
-      == "main"
+      == "main" && ( "osac-metering/adapters/***".pathChanged() || "osac-metering/schema/***".pathChanged() || ".tekton/metering-echo-adapter-pull-request.yaml".pathChanged()
+      )
   labels:
     appstudio.openshift.io/application: osac
     appstudio.openshift.io/component: metering-echo-adapter

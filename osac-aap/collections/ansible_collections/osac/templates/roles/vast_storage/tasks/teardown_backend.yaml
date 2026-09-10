@@ -112,10 +112,24 @@
     - name: Delete per-tenant VMS manager
       ansible.builtin.include_tasks: delete_tenant_manager.yaml
 
-    # ── Local provider: delete before tenant for clean lifecycle ──
-    # The LP must be deleted after the manager (which uses it) but before
-    # the tenant (which references it). This avoids needing force_remove
-    # on tenant deletion.
+    # ── Tenant: delete before local provider ──
+    # VAST rejects local-provider deletion while a tenant still references
+    # it (409 conflict_error).  Delete the tenant first with force_remove
+    # so VAST can clean up empty subdirectories, then delete the
+    # now-unreferenced local provider.
+
+    - name: Delete VAST tenant (retry for async view cleanup)
+      vastdata.vms.tenants:
+        vms: "{{ _vast_vms_conn }}"
+        name: "{{ tenant_name }}"
+        state: absent
+        force_remove: true
+      register: _vast_teardown_tenant_result
+      retries: 3
+      delay: 10
+      until: _vast_teardown_tenant_result is not failed
+      ignore_errors: true  # noqa: ignore-errors
+      no_log: true
 
     - name: Delete local provider
       when:
@@ -183,18 +197,6 @@
                  if (_vast_teardown_lp_result is defined and _vast_teardown_lp_result is not failed)
                  else ('not found — skipping' if (_vast_teardown_local_provider_id | default('') | length == 0) else 'failed (ignored)') }}
 
-    - name: Delete VAST tenant (retry for async view cleanup)
-      vastdata.vms.tenants:
-        vms: "{{ _vast_vms_conn }}"
-        name: "{{ tenant_name }}"
-        state: absent
-      register: _vast_teardown_tenant_result
-      retries: 3
-      delay: 10
-      until: _vast_teardown_tenant_result is not failed
-      ignore_errors: true  # noqa: ignore-errors
-      no_log: true
-
     - name: Set VAST cleanup success flag
       ansible.builtin.set_fact:
         _vast_teardown_clean: >-
@@ -255,3 +257,10 @@
       Manager: {{ 'ok' if not (_vast_manager_delete_failed | default(false)) else 'failed' }},
       Local provider: {{ 'ok' if not (_vast_teardown_lp_result.failed | default(false)) else 'failed' }}.
       Hub Secret: {{ 'deleted' if (_vast_teardown_clean | default(false) | bool) else 'preserved' }}.
+
+- name: Fail play when backend cleanup did not fully succeed
+  ansible.builtin.fail:
+    msg: >-
+      Backend teardown for tenant '{{ tenant_name }}' did not fully succeed —
+      one or more VAST resources could not be deleted. Re-run teardown to retry.
+  when: not (_vast_teardown_clean | default(false) | bool)

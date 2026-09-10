@@ -330,6 +330,15 @@ func (s *PrivateBareMetalInstancesServer) Create(ctx context.Context,
 	if request.GetObject().GetSpec().GetAutoExternalIpAttachment() {
 		err = s.autoProvisionExternalIP(ctx, response.GetObject())
 		if err != nil {
+			bmiID := response.GetObject().GetId()
+			s.logger.ErrorContext(ctx, "Auto-EIP provisioning failed, rolling back BMI",
+				slog.String("bmi_id", bmiID), slog.Any("error", err))
+			deleteReq := privatev1.BareMetalInstancesDeleteRequest_builder{Id: bmiID}.Build()
+			var deleteResp *privatev1.BareMetalInstancesDeleteResponse
+			if deleteErr := s.generic.Delete(ctx, deleteReq, &deleteResp); deleteErr != nil {
+				s.logger.ErrorContext(ctx, "Failed to roll back BMI after auto-EIP failure",
+					slog.String("bmi_id", bmiID), slog.Any("delete_error", deleteErr))
+			}
 			return
 		}
 	}
@@ -1256,9 +1265,11 @@ func (s *PrivateBareMetalInstancesServer) autoProvisionExternalIP(
 		return fmt.Errorf("auto_external_ip_attachment: failed to create ExternalIP: %w", err)
 	}
 	eipID := eipResp.GetObject().GetId()
+	poolID := pool.GetId()
 
-	err = UpdatePoolCapacity(ctx, s.externalIPPoolDao, pool.GetId(), 1)
+	err = UpdatePoolCapacity(ctx, s.externalIPPoolDao, poolID, 1)
 	if err != nil {
+		s.rollbackExternalIP(ctx, eipID)
 		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "auto_external_ip_attachment: %s", err)
 	}
 
@@ -1286,11 +1297,16 @@ func (s *PrivateBareMetalInstancesServer) autoProvisionExternalIP(
 
 	attResp, err := s.externalIPAttachmentDao.Create().SetObject(attachment).Do(ctx)
 	if err != nil {
+		s.rollbackPoolCapacity(ctx, poolID)
+		s.rollbackExternalIP(ctx, eipID)
 		return fmt.Errorf("auto_external_ip_attachment: failed to create ExternalIPAttachment: %w", err)
 	}
 
 	err = s.updateExternalIPAttachedFlag(ctx, eipID, true)
 	if err != nil {
+		s.rollbackExternalIPAttachment(ctx, attResp.GetObject().GetId())
+		s.rollbackPoolCapacity(ctx, poolID)
+		s.rollbackExternalIP(ctx, eipID)
 		return fmt.Errorf("auto_external_ip_attachment: %w", err)
 	}
 
@@ -1313,6 +1329,27 @@ func (s *PrivateBareMetalInstancesServer) autoProvisionExternalIP(
 	}
 
 	return nil
+}
+
+func (s *PrivateBareMetalInstancesServer) rollbackExternalIP(ctx context.Context, eipID string) {
+	if _, err := s.externalIPDao.Delete().SetId(eipID).Do(ctx); err != nil {
+		s.logger.ErrorContext(ctx, "Rollback: failed to delete ExternalIP",
+			slog.String("eip_id", eipID), slog.Any("error", err))
+	}
+}
+
+func (s *PrivateBareMetalInstancesServer) rollbackExternalIPAttachment(ctx context.Context, attachmentID string) {
+	if _, err := s.externalIPAttachmentDao.Delete().SetId(attachmentID).Do(ctx); err != nil {
+		s.logger.ErrorContext(ctx, "Rollback: failed to delete ExternalIPAttachment",
+			slog.String("attachment_id", attachmentID), slog.Any("error", err))
+	}
+}
+
+func (s *PrivateBareMetalInstancesServer) rollbackPoolCapacity(ctx context.Context, poolID string) {
+	if err := UpdatePoolCapacity(ctx, s.externalIPPoolDao, poolID, -1); err != nil {
+		s.logger.ErrorContext(ctx, "Rollback: failed to revert pool capacity",
+			slog.String("pool_id", poolID), slog.Any("error", err))
+	}
 }
 
 func (s *PrivateBareMetalInstancesServer) updateExternalIPAttachedFlag(ctx context.Context, externalIPID string, attached bool) error {

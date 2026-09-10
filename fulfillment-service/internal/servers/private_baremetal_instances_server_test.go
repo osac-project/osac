@@ -3125,6 +3125,222 @@ var _ = Describe("Private bare metal instances server", func() {
 	})
 })
 
+var _ = Describe("BareMetalInstance auto-EIP atomic provisioning", func() {
+	var (
+		server              *PrivateBareMetalInstancesServer
+		catalogServer       *PrivateBareMetalInstanceCatalogItemsServer
+		externalIPPoolDao   *dao.GenericDAO[*privatev1.ExternalIPPool]
+		externalIPDao       *dao.GenericDAO[*privatev1.ExternalIP]
+		externalIPAttDao    *dao.GenericDAO[*privatev1.ExternalIPAttachment]
+		catalogItemID       string
+	)
+
+	BeforeEach(func() {
+		var err error
+
+		catalogServer, err = NewPrivateBareMetalInstanceCatalogItemsServer().
+			SetLogger(logger).
+			SetAttributionLogic(attribution).
+			SetTenancyLogic(tenancy).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		server, err = NewPrivateBareMetalInstancesServer().
+			SetLogger(logger).
+			SetAttributionLogic(attribution).
+			SetTenancyLogic(tenancy).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		externalIPPoolDao, err = dao.NewGenericDAO[*privatev1.ExternalIPPool]().
+			SetLogger(logger).SetTenancyLogic(tenancy).Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		externalIPDao, err = dao.NewGenericDAO[*privatev1.ExternalIP]().
+			SetLogger(logger).SetTenancyLogic(tenancy).Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		externalIPAttDao, err = dao.NewGenericDAO[*privatev1.ExternalIPAttachment]().
+			SetLogger(logger).SetTenancyLogic(tenancy).Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		catalogResp, err := catalogServer.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
+			Object: privatev1.BareMetalInstanceCatalogItem_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+				}.Build(),
+				Title:     "Auto-EIP test catalog item",
+				Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "test-template"}.Build(),
+				Published: true,
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		catalogItemID = catalogResp.GetObject().GetId()
+	})
+
+	createPool := func(available int64) string {
+		resp, err := externalIPPoolDao.Create().SetObject(
+			privatev1.ExternalIPPool_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("pool-%s", uuid.NewString()[:8]), Tenant: auth.SharedTenant,
+				}.Build(),
+				Status: privatev1.ExternalIPPoolStatus_builder{
+					State: privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY, Available: available,
+				}.Build(),
+			}.Build(),
+		).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		return resp.GetObject().GetId()
+	}
+
+	createBMIRequest := func() *privatev1.BareMetalInstancesCreateRequest {
+		return privatev1.BareMetalInstancesCreateRequest_builder{
+			Object: privatev1.BareMetalInstance_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+				}.Build(),
+				Spec: privatev1.BareMetalInstanceSpec_builder{
+					CatalogItem:              privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+					SshPublicKey:             new(testSSHPublicKey),
+					AutoExternalIpAttachment: proto.Bool(true),
+				}.Build(),
+			}.Build(),
+		}.Build()
+	}
+
+	It("rolls back BMI when no pool has capacity", func() {
+		createPool(0)
+
+		_, err := server.Create(ctx, createBMIRequest())
+		Expect(err).To(HaveOccurred())
+		status, ok := grpcstatus.FromError(err)
+		Expect(ok).To(BeTrue())
+		Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+
+		bmiList, err := server.List(ctx, privatev1.BareMetalInstancesListRequest_builder{}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(bmiList.GetItems()).To(BeEmpty())
+	})
+
+	It("rolls back BMI when no pool exists", func() {
+		_, err := server.Create(ctx, createBMIRequest())
+		Expect(err).To(HaveOccurred())
+		status, ok := grpcstatus.FromError(err)
+		Expect(ok).To(BeTrue())
+		Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+
+		bmiList, err := server.List(ctx, privatev1.BareMetalInstancesListRequest_builder{}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(bmiList.GetItems()).To(BeEmpty())
+	})
+
+	It("leaves no leaked ExternalIP or capacity change on pool exhaustion", func() {
+		poolID := createPool(0)
+
+		_, err := server.Create(ctx, createBMIRequest())
+		Expect(err).To(HaveOccurred())
+
+		eipList, err := externalIPDao.List().Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(eipList.GetItems()).To(BeEmpty())
+
+		attList, err := externalIPAttDao.List().Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(attList.GetItems()).To(BeEmpty())
+
+		poolResp, err := externalIPPoolDao.Get().SetId(poolID).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(poolResp.GetObject().GetStatus().GetAvailable()).To(Equal(int64(0)))
+		Expect(poolResp.GetObject().GetStatus().GetAllocated()).To(Equal(int64(0)))
+	})
+
+	It("successful create produces expected Pending resources and metadata", func() {
+		poolID := createPool(10)
+
+		response, err := server.Create(ctx, createBMIRequest())
+		Expect(err).ToNot(HaveOccurred())
+		bmiID := response.GetObject().GetId()
+		Expect(response.GetObject().GetSpec().GetAutoExternalIpAttachment()).To(BeTrue())
+
+		eipList, err := externalIPDao.List().
+			SetFilter(fmt.Sprintf("this.metadata.labels['%s'] == '%s'", autoCreatedForLabel, bmiID)).
+			Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(eipList.GetItems()).To(HaveLen(1))
+		eip := eipList.GetItems()[0]
+		Expect(eip.GetMetadata().GetLabels()[autoCreatedLabel]).To(Equal("true"))
+		Expect(eip.GetMetadata().GetAnnotations()[ownerReferenceAnnotation]).To(Equal(bmiID))
+		Expect(eip.GetStatus().GetState()).To(Equal(privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING))
+		Expect(eip.GetStatus().GetAttached()).To(BeTrue())
+
+		attList, err := externalIPAttDao.List().
+			SetFilter(fmt.Sprintf("this.metadata.labels['%s'] == '%s'", autoCreatedForLabel, bmiID)).
+			Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(attList.GetItems()).To(HaveLen(1))
+		att := attList.GetItems()[0]
+		Expect(att.GetMetadata().GetLabels()[autoCreatedLabel]).To(Equal("true"))
+		Expect(att.GetMetadata().GetAnnotations()[ownerReferenceAnnotation]).To(Equal(bmiID))
+		Expect(att.GetSpec().GetBaremetalInstance().GetId()).To(Equal(bmiID))
+		Expect(att.GetSpec().GetExternalIp().GetId()).To(Equal(eip.GetId()))
+		Expect(att.GetStatus().GetState()).To(Equal(privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_PENDING))
+
+		poolResp, err := externalIPPoolDao.Get().SetId(poolID).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(poolResp.GetObject().GetStatus().GetAvailable()).To(Equal(int64(9)))
+		Expect(poolResp.GetObject().GetStatus().GetAllocated()).To(Equal(int64(1)))
+	})
+
+	It("cascade-deletes auto-created resources and restores pool capacity on BMI delete", func() {
+		poolID := createPool(10)
+
+		response, err := server.Create(ctx, createBMIRequest())
+		Expect(err).ToNot(HaveOccurred())
+		bmiID := response.GetObject().GetId()
+
+		_, err = server.Delete(ctx, privatev1.BareMetalInstancesDeleteRequest_builder{
+			Id: bmiID,
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		eipList, err := externalIPDao.List().Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(eipList.GetItems()).To(BeEmpty())
+
+		attList, err := externalIPAttDao.List().Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(attList.GetItems()).To(BeEmpty())
+
+		poolResp, err := externalIPPoolDao.Get().SetId(poolID).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(poolResp.GetObject().GetStatus().GetAvailable()).To(Equal(int64(10)))
+		Expect(poolResp.GetObject().GetStatus().GetAllocated()).To(Equal(int64(0)))
+	})
+
+	It("concurrent allocations do not over-allocate a pool", func() {
+		poolID := createPool(1)
+
+		resp1, err1 := server.Create(ctx, createBMIRequest())
+		resp2, err2 := server.Create(ctx, createBMIRequest())
+
+		successes := 0
+		if err1 == nil {
+			successes++
+			Expect(resp1.GetObject().GetId()).ToNot(BeEmpty())
+		}
+		if err2 == nil {
+			successes++
+			Expect(resp2.GetObject().GetId()).ToNot(BeEmpty())
+		}
+		Expect(successes).To(Equal(1))
+
+		poolResp, err := externalIPPoolDao.Get().SetId(poolID).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(poolResp.GetObject().GetStatus().GetAvailable()).To(Equal(int64(0)))
+		Expect(poolResp.GetObject().GetStatus().GetAllocated()).To(Equal(int64(1)))
+	})
+})
+
 var _ = Describe("BareMetalInstance ExternalIP referential integrity", func() {
 	var (
 		externalIPPoolDao       *dao.GenericDAO[*privatev1.ExternalIPPool]

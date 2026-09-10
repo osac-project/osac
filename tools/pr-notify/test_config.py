@@ -77,6 +77,18 @@ class TestLoadConfig(unittest.TestCase):
                 'base_url = "http://example.test/team"\n',
                 "dashboard.base_url",
             ),
+            (
+                "repo = 'osac-project/osac'\n"
+                "branch = 'main'\n"
+                'base_url = "https://example.test:bad"\n',
+                "dashboard.base_url",
+            ),
+            (
+                "repo = 'osac-project/osac'\n"
+                "branch = 'main'\n"
+                'base_url = "https://example.test:70000"\n',
+                "dashboard.base_url",
+            ),
         )
         for dashboard_config, error_field in invalid_configs:
             with self.subTest(dashboard_config=dashboard_config):

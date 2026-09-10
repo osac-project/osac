@@ -70,6 +70,8 @@ def load_config(path: str) -> Config:
         base_url = d["base_url"]
         try:
             parsed_base_url = urlparse(base_url) if isinstance(base_url, str) else None
+            if parsed_base_url is not None:
+                parsed_base_url.port
         except ValueError:
             parsed_base_url = None
         if (

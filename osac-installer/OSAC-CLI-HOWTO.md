@@ -1685,6 +1685,11 @@ oc exec deployment/fulfillment-service -n fulfillment-system -c server -- lsof -
 --timeout duration       Request timeout [default: 30s]
 ```
 
+**Display Options:**
+```bash
+--no-color               Disable colored output (can also be set with NO_COLOR env var)
+```
+
 ### 4. Exit Codes
 
 | Code | Description |

@@ -36,6 +36,7 @@ import (
 var templatesFS embed.FS
 
 // Setup configures the given command and all its subcommands to render their help output as styled Markdown.
+// The root command must have a persistent boolean flag named NoColorFlag registered before calling Setup.
 func Setup(cmd *cobra.Command) {
 	// Create a silent logger for the templating engine, as help rendering happens before the persistent pre-run
 	// hook sets up a proper logger, so we discard log output here.
@@ -75,15 +76,25 @@ func Setup(cmd *cobra.Command) {
 		width = min(width, maxReadableWidth)
 
 		// Select the style based on terminal capabilities. Use colored styles only when the output is
-		// a terminal and the NO_COLOR environment variable is not set (https://no-color.org/).
-		_, noColor := os.LookupEnv("NO_COLOR")
+		// a terminal, the NO_COLOR environment variable is not set (https://no-color.org/), and the
+		// --no-color flag is not set.
+		_, noColorEnv := os.LookupEnv("NO_COLOR")
+		noColorFlagValue, err := c.Root().PersistentFlags().GetBool(NoColorFlag)
+		if err != nil {
+			c.PrintErrln("Error reading --"+NoColorFlag+" flag:", err)
+		}
+		noColor := noColorEnv || noColorFlagValue
+		useColor := isTTY && !noColor
 		var style ansi.StyleConfig
-		if isTTY && !noColor {
+		if useColor {
 			if lipgloss.HasDarkBackground(os.Stdin, os.Stdout) {
 				style = styles.DarkStyleConfig
 			} else {
 				style = styles.LightStyleConfig
 			}
+			// Use the terminal's default foreground instead of Glamour's hardcoded
+			// grey (color 252/234) which is hard to read on many terminal themes.
+			style.Document.Color = nil
 		} else {
 			style = styles.NoTTYStyleConfig
 		}
@@ -130,6 +141,7 @@ func Setup(cmd *cobra.Command) {
 			c.Print(buffer.String())
 			return
 		}
+
 		_, err = lipgloss.Fprint(out, text)
 		if err != nil {
 			c.PrintErrln("Error writing help output:", err)
@@ -149,6 +161,17 @@ func flagsFunc(fs *pflag.FlagSet) []*pflag.Flag {
 	})
 	return result
 }
+
+const (
+	// NoColorFlag is the name of the persistent boolean flag that disables colored output.
+	NoColorFlag = "no-color"
+
+	// NoColorFlagHelp is the Markdown-formatted help text for the --no-color flag.
+	NoColorFlagHelp = `
+_[BOOLEAN]_ - Disable colored output. Can also be set with the {{ bt }}NO_COLOR{{ bt }}
+environment variable.
+`
+)
 
 const (
 	privateAPIAnnotationKey   = "api"

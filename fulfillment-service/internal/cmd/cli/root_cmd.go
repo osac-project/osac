@@ -94,6 +94,11 @@ func Root() (result *cobra.Command, err error) {
 		"",
 		tenantFlagHelp,
 	)
+	flags.Bool(
+		help.NoColorFlag,
+		false,
+		help.NoColorFlagHelp,
+	)
 
 	// Add commands:
 	result.AddCommand(annotate.Cmd())

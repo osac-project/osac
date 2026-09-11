@@ -44,11 +44,13 @@ var _ = Describe("VolumeReconciler", func() {
 		testCtx = context.TODO()
 		mockProv = NewMockVendorProvisioner()
 		reconciler = &VolumeReconciler{
-			Client:            k8sClient,
-			Scheme:            k8sClient.Scheme(),
-			mgr:               testMcManager,
-			VolumeNamespace:   "default",
-			VendorProvisioner: mockProv,
+			Client:          k8sClient,
+			Scheme:          k8sClient.Scheme(),
+			mgr:             testMcManager,
+			VolumeNamespace: "default",
+			VendorProvisioners: VendorProvisionerRegistry{
+				"vast-primary": mockProv,
+			},
 		}
 
 		vol = &osacv1alpha1.Volume{
@@ -70,6 +72,7 @@ var _ = Describe("VolumeReconciler", func() {
 		fresh := &osacv1alpha1.Volume{}
 		ExpectWithOffset(1, k8sClient.Get(testCtx, types.NamespacedName{Name: v.Name, Namespace: v.Namespace}, fresh)).To(Succeed())
 		fresh.Status.Backend = "vast-primary"
+		fresh.Status.Provider = "vast-primary"
 		fresh.Status.Protocol = osacv1alpha1.VolumeProtocolBlock
 		ExpectWithOffset(1, k8sClient.Status().Update(testCtx, fresh)).To(Succeed())
 	}
@@ -322,7 +325,7 @@ var _ = Describe("VolumeReconciler", func() {
 
 		// Simulate a misconfigured restart: provisioner is gone but the volume
 		// was already provisioned on the array.
-		reconciler.VendorProvisioner = nil
+		reconciler.VendorProvisioners = nil
 
 		Expect(k8sClient.Delete(testCtx, vol)).To(Succeed())
 
@@ -346,11 +349,15 @@ var _ = Describe("VolumeReconciler", func() {
 		// mis-maps any of these would silently provision on the wrong
 		// backend/tenant, so assert every field the controller populates.
 		vol.Annotations = map[string]string{osacTenantKey: "acme"}
+		vol.Spec.Topology = &osacv1alpha1.VolumeTopology{
+			Segments: map[string]string{"osac.io/node": "worker-1"},
+		}
 		Expect(k8sClient.Create(testCtx, vol)).To(Succeed())
 
 		// Stamp the backend/protocol that fulfillment-service resolves before
 		// the operator provisions.
 		vol.Status.Backend = "vast-primary"
+		vol.Status.Provider = "vast-primary"
 		vol.Status.Protocol = osacv1alpha1.VolumeProtocolBlock
 		Expect(k8sClient.Status().Update(testCtx, vol)).To(Succeed())
 
@@ -364,12 +371,14 @@ var _ = Describe("VolumeReconciler", func() {
 		Expect(mockProv.CreateCallCount()).To(BeNumerically(">=", 1))
 		req := mockProv.LastCreateReq
 		Expect(req.Name).To(Equal("test-vol"))
+		Expect(req.Provider).To(Equal("vast-primary"))
 		Expect(req.Backend).To(Equal("vast-primary"))
 		Expect(req.Tenant).To(Equal("acme"))
 		Expect(req.Tier).To(Equal("gold"))
 		Expect(req.SizeGiB).To(Equal(int64(100)))
 		Expect(req.AccessMode).To(Equal(osacv1alpha1.VolumeAccessModeReadWriteOnce))
 		Expect(req.Protocol).To(Equal(osacv1alpha1.VolumeProtocolBlock))
+		Expect(req.Topology.Segments).To(Equal(map[string]string{"osac.io/node": "worker-1"}))
 	})
 
 	It("should pass tenant, backend, and vendor volume ID through to the vendor delete request", func() {
@@ -403,15 +412,74 @@ var _ = Describe("VolumeReconciler", func() {
 		Expect(mockProv.DeleteCallCount()).To(BeNumerically(">=", 1))
 		req := mockProv.LastDeleteReq
 		Expect(req.Tenant).To(Equal("acme"))
+		Expect(req.Provider).To(Equal(provisioned.Status.Provider))
 		Expect(req.Backend).To(Equal(provisioned.Status.Backend))
 		Expect(req.VendorVolumeID).To(Equal(provisioned.Status.VendorVolumeID))
+	})
+
+	It("dispatches by provider and does not call another registered provider", func() {
+		otherProv := NewMockVendorProvisioner()
+		reconciler.VendorProvisioners = VendorProvisionerRegistry{
+			"vast-primary": mockProv,
+			"other":        otherProv,
+		}
+		vol.Spec.Topology = &osacv1alpha1.VolumeTopology{
+			Segments: map[string]string{"osac.io/node": "worker-2"},
+		}
+		Expect(k8sClient.Create(testCtx, vol)).To(Succeed())
+
+		stamped := &osacv1alpha1.Volume{}
+		Expect(k8sClient.Get(testCtx, types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace}, stamped)).To(Succeed())
+		stamped.Status.Provider = "other"
+		stamped.Status.Backend = "other-backend"
+		stamped.Status.Protocol = osacv1alpha1.VolumeProtocolBlock
+		Expect(k8sClient.Status().Update(testCtx, stamped)).To(Succeed())
+
+		_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{
+			Request: reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace},
+			},
+		})
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(otherProv.CreateCallCount()).To(Equal(int64(1)))
+		Expect(mockProv.CreateCallCount()).To(Equal(int64(0)))
+		Expect(otherProv.LastCreateReq.Provider).To(Equal("other"))
+		Expect(otherProv.LastCreateReq.Backend).To(Equal("other-backend"))
+		Expect(otherProv.LastCreateReq.Topology.Segments).To(Equal(map[string]string{"osac.io/node": "worker-2"}))
+	})
+
+	It("fails clearly when the resolved provider is not registered", func() {
+		Expect(k8sClient.Create(testCtx, vol)).To(Succeed())
+		stampBackendProtocol(vol)
+
+		stamped := &osacv1alpha1.Volume{}
+		Expect(k8sClient.Get(testCtx, types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace}, stamped)).To(Succeed())
+		stamped.Status.Provider = "netapp"
+		Expect(k8sClient.Status().Update(testCtx, stamped)).To(Succeed())
+
+		_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{
+			Request: reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace},
+			},
+		})
+		Expect(err).ToNot(HaveOccurred())
+
+		updated := &osacv1alpha1.Volume{}
+		Expect(k8sClient.Get(testCtx, types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace}, updated)).To(Succeed())
+		Expect(updated.Status.Phase).To(Equal(osacv1alpha1.VolumePhaseFailed))
+		condition := apimeta.FindStatusCondition(updated.Status.Conditions, string(osacv1alpha1.VolumeConditionVendorProvisioned))
+		Expect(condition).ToNot(BeNil())
+		Expect(condition.Reason).To(Equal("ProviderNotImplemented"))
+		Expect(condition.Message).To(ContainSubstring(`provider "netapp" is not implemented`))
+		Expect(mockProv.CreateCallCount()).To(Equal(int64(0)))
 	})
 
 	It("should stay in Progressing (not crash) when no VendorProvisioner is configured", func() {
 		// Most setups (LVMS/dev) run with no vendor backend configured. The
 		// controller must not dereference a nil provisioner; it leaves the volume
 		// in Progressing and does not error, so the operator stays healthy.
-		reconciler.VendorProvisioner = nil
+		reconciler.VendorProvisioners = nil
 
 		Expect(k8sClient.Create(testCtx, vol)).To(Succeed())
 		stampBackendProtocol(vol)
@@ -435,7 +503,7 @@ var _ = Describe("VolumeReconciler", func() {
 		// A volume that never provisioned has no VendorVolumeID, so deletion must
 		// remove the finalizer without needing a provisioner — nothing leaks on
 		// the array because nothing was created.
-		reconciler.VendorProvisioner = nil
+		reconciler.VendorProvisioners = nil
 
 		Expect(k8sClient.Create(testCtx, vol)).To(Succeed())
 		stampBackendProtocol(vol)

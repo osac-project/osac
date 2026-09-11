@@ -758,7 +758,7 @@ var _ = Describe("Rego authorization interceptor", func() {
 		)
 
 		DescribeTable(
-			"Allows Keycloak users on the public read-only Volumes API",
+			"Allows Keycloak users on the public Volumes API",
 			func(ctx context.Context, method string) {
 				token := createKeycloakUserToken("my-tenant", "my-user", nil)
 				ctx = ContextWithToken(ctx, token)
@@ -783,33 +783,8 @@ var _ = Describe("Rego authorization interceptor", func() {
 			},
 			Entry("List", "/osac.public.v1.Volumes/List"),
 			Entry("Get", "/osac.public.v1.Volumes/Get"),
-		)
-
-		DescribeTable(
-			"Denies Keycloak users on public Volume mutations (read-only public API)",
-			func(ctx context.Context, method string) {
-				token := createKeycloakUserToken("my-tenant", "my-user", nil)
-				ctx = ContextWithToken(ctx, token)
-				handled := false
-				_, err := interceptor.UnaryServer(
-					ctx,
-					nil,
-					&grpc.UnaryServerInfo{
-						FullMethod: method,
-					},
-					func(ctx context.Context, req any) (any, error) {
-						handled = true
-						return nil, nil
-					},
-				)
-				Expect(err).To(HaveOccurred())
-				status, ok := grpcstatus.FromError(err)
-				Expect(ok).To(BeTrue())
-				Expect(status.Code()).To(Equal(grpccodes.PermissionDenied))
-				Expect(handled).To(BeFalse())
-			},
-			// These public methods do not exist; they must never be allowed even if added.
 			Entry("Create", "/osac.public.v1.Volumes/Create"),
+			Entry("Update", "/osac.public.v1.Volumes/Update"),
 			Entry("Delete", "/osac.public.v1.Volumes/Delete"),
 		)
 

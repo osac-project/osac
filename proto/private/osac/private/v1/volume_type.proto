@@ -135,4 +135,8 @@ message VolumeStatus {
   // forwarded unchanged by osac-csi-driver to the vendor CSI controller's ControllerPublishVolume.
   // Visible only through the private API.
   map<string, string> vendor_context = 7 [(cleanapi.field).private = true];
+
+  // Provider selected by StorageTier resolution. This is the provider key used by the operator
+  // to select a VendorProvisioner implementation.
+  string provider = 8 [(cleanapi.field).private = true];
 }

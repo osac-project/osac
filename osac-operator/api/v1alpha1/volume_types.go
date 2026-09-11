@@ -112,6 +112,11 @@ type VolumeStatus struct {
 	// +kubebuilder:validation:Optional
 	Backend string `json:"backend,omitempty"`
 
+	// Provider identifies the registered VendorProvisioner implementation selected for this volume.
+	// Resolved during tier resolution at creation time.
+	// +kubebuilder:validation:Optional
+	Provider string `json:"provider,omitempty"`
+
 	// Protocol is the storage protocol used for this volume.
 	// Resolved during tier resolution at creation time.
 	// +kubebuilder:validation:Optional

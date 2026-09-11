@@ -964,6 +964,7 @@ var _ = Describe("create status population", func() {
 				State:    privatev1.VolumeState_VOLUME_STATE_CREATING,
 				Hub:      "hub-1",
 				Backend:  "vast",
+				Provider: "vast",
 				Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
 			}.Build(),
 		}.Build()
@@ -978,6 +979,7 @@ var _ = Describe("create status population", func() {
 		Expect(f.run(ctx, volume)).To(Succeed())
 		Expect(capturedStatus).ToNot(BeNil())
 		Expect(capturedStatus.Status.Backend).To(Equal("vast"))
+		Expect(capturedStatus.Status.Provider).To(Equal("vast"))
 		Expect(capturedStatus.Status.Protocol).To(Equal(osacv1alpha1.VolumeProtocolBlock))
 	})
 
@@ -1041,6 +1043,7 @@ var _ = Describe("create status population", func() {
 				State:    privatev1.VolumeState_VOLUME_STATE_CREATING,
 				Hub:      "hub-1",
 				Backend:  "vast",
+				Provider: "vast",
 				Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
 			}.Build(),
 		}.Build()
@@ -1056,6 +1059,7 @@ var _ = Describe("create status population", func() {
 		Expect(conflictCount).To(Equal(3))
 		Expect(capturedStatus).ToNot(BeNil())
 		Expect(capturedStatus.Status.Backend).To(Equal("vast"))
+		Expect(capturedStatus.Status.Provider).To(Equal("vast"))
 		Expect(capturedStatus.Status.Protocol).To(Equal(osacv1alpha1.VolumeProtocolBlock))
 	})
 
@@ -1126,6 +1130,7 @@ var _ = Describe("create status population", func() {
 				State:    privatev1.VolumeState_VOLUME_STATE_CREATING,
 				Hub:      "hub-1",
 				Backend:  "vast",
+				Provider: "vast",
 				Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
 			}.Build(),
 		}.Build()
@@ -1140,6 +1145,7 @@ var _ = Describe("create status population", func() {
 		Expect(f.run(ctx, volume)).To(Succeed())
 		Expect(capturedStatus).ToNot(BeNil())
 		Expect(capturedStatus.Status.Backend).To(Equal("vast"))
+		Expect(capturedStatus.Status.Provider).To(Equal("vast"))
 		Expect(capturedStatus.Status.Protocol).To(Equal(osacv1alpha1.VolumeProtocolBlock))
 	})
 

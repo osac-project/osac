@@ -1015,6 +1015,7 @@ func newDAOTierResolver(
 
 		return &servers.TierResolution{
 			Backend:  backend.GetSpec().GetProvider(),
+			Provider: backend.GetSpec().GetProvider(),
 			Protocol: tier.GetSpec().GetProtocol(),
 		}, nil
 	}

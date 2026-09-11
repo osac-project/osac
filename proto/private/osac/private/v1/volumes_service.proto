@@ -20,12 +20,9 @@ import "google/api/annotations.proto";
 import "google/protobuf/field_mask.proto";
 import "osac/private/v1/volume_type.proto";
 
-option (cleanapi.file).private = true;
-
-// Generate a public API from this service. Only the read-only List and Get RPCs (and their
-// request/response messages) are exposed publicly; the mutating RPCs and the Signal RPC are marked
-// private below. This is the first phase of the public Volume API (OSAC-4542); public volume
-// lifecycle operations will be added under separate tickets.
+// Generate a public API from this service. List, Get, Create, Update, and Delete RPCs (and their
+// request/response messages) are exposed publicly; the Signal RPC is private. OSAC-4542 delivered
+// the read-only Get/List phase; OSAC-2685 adds Create, Update, and Delete.
 option (cleanapi.file).package = "osac.public.v1";
 option (cleanapi.file).http_route_prefix_map = "private:fulfillment";
 
@@ -87,17 +84,14 @@ message VolumesGetResponse {
 }
 
 message VolumesCreateRequest {
-  option (cleanapi.message).private = true;
   Volume object = 1;
 }
 
 message VolumesCreateResponse {
-  option (cleanapi.message).private = true;
   Volume object = 1;
 }
 
 message VolumesUpdateRequest {
-  option (cleanapi.message).private = true;
   Volume object = 1;
   google.protobuf.FieldMask update_mask = 2;
 
@@ -108,17 +102,14 @@ message VolumesUpdateRequest {
 }
 
 message VolumesUpdateResponse {
-  option (cleanapi.message).private = true;
   Volume object = 1;
 }
 
 message VolumesDeleteRequest {
-  option (cleanapi.message).private = true;
   string id = 1;
 }
 
 message VolumesDeleteResponse {
-  option (cleanapi.message).private = true;
 }
 
 message VolumesSignalRequest {
@@ -146,7 +137,6 @@ service Volumes {
 
   // Creates a new volume.
   rpc Create(VolumesCreateRequest) returns (VolumesCreateResponse) {
-    option (cleanapi.method).private = true;
     option (google.api.http) = {
       post: "/api/private/v1/volumes"
       body: "object"
@@ -156,7 +146,6 @@ service Volumes {
 
   // Updates an existing volume.
   rpc Update(VolumesUpdateRequest) returns (VolumesUpdateResponse) {
-    option (cleanapi.method).private = true;
     option (google.api.http) = {
       patch: "/api/private/v1/volumes/{object.id}"
       body: "object"
@@ -166,7 +155,6 @@ service Volumes {
 
   // Deletes a volume.
   rpc Delete(VolumesDeleteRequest) returns (VolumesDeleteResponse) {
-    option (cleanapi.method).private = true;
     option (google.api.http) = {delete: "/api/private/v1/volumes/{id}"};
   }
 

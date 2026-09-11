@@ -79,20 +79,26 @@ message AddOnOperatorsGetResponse {
 }
 
 message AddOnOperatorsCreateRequest {
+  option (cleanapi.message).private = true;
   AddOnOperator object = 1;
 }
 
 message AddOnOperatorsCreateResponse {
+  option (cleanapi.message).private = true;
   AddOnOperator object = 1;
 }
 
 message AddOnOperatorsDeleteRequest {
+  option (cleanapi.message).private = true;
   string id = 1;
 }
 
-message AddOnOperatorsDeleteResponse {}
+message AddOnOperatorsDeleteResponse {
+  option (cleanapi.message).private = true;
+}
 
 message AddOnOperatorsUpdateRequest {
+  option (cleanapi.message).private = true;
   AddOnOperator object = 1;
   google.protobuf.FieldMask update_mask = 2;
 
@@ -103,6 +109,7 @@ message AddOnOperatorsUpdateRequest {
 }
 
 message AddOnOperatorsUpdateResponse {
+  option (cleanapi.message).private = true;
   AddOnOperator object = 1;
 }
 

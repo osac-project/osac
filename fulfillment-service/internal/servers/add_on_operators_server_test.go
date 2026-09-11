@@ -382,15 +382,17 @@ var _ = Describe("Add-on operators server", func() {
 		It("List applies pagination after tenant visibility filtering", func() {
 			_, err := privateServer.Create(ctx, privatev1.AddOnOperatorsCreateRequest_builder{
 				Object: privatev1.AddOnOperator_builder{
+					Id:       "a-hidden",
 					Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("hidden-first-%s", uuid.New()[24:32])}.Build(),
-					Title:    "Hidden First", Published: new(true), Tenant: "tenant-a",
+					Title:    "Paginated Operator", Published: new(true), Tenant: "tenant-a",
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			_, err = privateServer.Create(ctx, privatev1.AddOnOperatorsCreateRequest_builder{
 				Object: privatev1.AddOnOperator_builder{
+					Id:       "b-visible",
 					Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("visible-second-%s", uuid.New()[24:32])}.Build(),
-					Title:    "Visible Second", Published: new(true),
+					Title:    "Paginated Operator", Published: new(true),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -401,13 +403,12 @@ var _ = Describe("Add-on operators server", func() {
 			Expect(err).ToNot(HaveOccurred())
 
 			response, err := publicServer.List(ctx, publicv1.AddOnOperatorsListRequest_builder{
-				Filter: new("this.title == 'Visible Second'"),
-				Limit:  new(int32(1)),
+				Limit: new(int32(1)),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(response.GetTotal()).To(Equal(int32(1)))
 			Expect(response.GetSize()).To(Equal(int32(1)))
-			Expect(response.GetItems()[0].GetTitle()).To(Equal("Visible Second"))
+			Expect(response.GetItems()[0].GetId()).To(Equal("b-visible"))
 		})
 
 		It("Get returns NotFound for tenant-scoped operator from non-matching tenant", func() {

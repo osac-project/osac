@@ -50,6 +50,15 @@ image, so pin both rather than accepting any workflow or any tag in this repo:
 | metering-echo-adapter                       | `osac-project/metering-echo-adapter`   | `build-metering-echo-adapter-image.yaml`    | `osac-metering`                    |
 | osac-csi-driver                             | `osac-project/osac-csi-driver`         | `publish-csi-driver-image.yaml`             | `osac-csi-driver`                  |
 
+`nightly-build.yaml` independently rebuilds and republishes every image above
+on its own schedule (`schedule`/`workflow_dispatch`, always off `main`), so
+`nightly-build.yaml@refs/heads/main` is also a valid signer identity for any
+image in this table — not just the workflow listed. Which identity you
+actually see on a given digest depends on which workflow signed it first: if
+a night's rebuild is byte-identical to that day's regular build, the digest
+already carries the regular workflow's signature and nightly never re-signs
+it; a rebuild that differs gets its own `nightly-build.yaml` signature.
+
 Verify an image, substituting the workflow file and tag prefix from the table above:
 
 ```bash
@@ -78,6 +87,14 @@ which only ever runs via `workflow_run` off the repository's default branch
 originating image build. `publish-osac-installer-chart.yaml` (the umbrella
 chart) is `workflow_dispatch`-only and normally also runs from `main`, but can
 be dispatched against one of the umbrella chart's own `osac/v*` tags.
+
+`nightly-build.yaml` also independently packages and republishes every chart
+above (including the umbrella chart) as part of its nightly run, off `main`.
+The same rule as images applies: `nightly-build.yaml@refs/heads/main` is a
+valid alternate identity for any chart here, but you'll only see it on a
+digest whose nightly rebuild actually differed from the existing published
+chart — byte-identical rebuilds keep the earlier workflow's signature rather
+than being re-signed.
 
 `helm pull`/`helm push` print the artifact's digest directly, so no extra
 tooling is needed to resolve it:

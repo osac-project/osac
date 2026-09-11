@@ -107,6 +107,22 @@ var _ = Describe("Private add-on operators server", func() {
 			Expect(response.GetObject().GetMaxOcpVersion()).To(Equal("4.17.0"))
 		})
 
+		It("Accepts OCP shorthand versions", func() {
+			response, err := server.Create(ctx, privatev1.AddOnOperatorsCreateRequest_builder{
+				Object: privatev1.AddOnOperator_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.New()[24:32]),
+					}.Build(),
+					Title:         "GPU Operator",
+					MinOcpVersion: "4.17",
+					MaxOcpVersion: "4.18",
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetObject().GetMinOcpVersion()).To(Equal("4.17"))
+			Expect(response.GetObject().GetMaxOcpVersion()).To(Equal("4.18"))
+		})
+
 		It("Rejects inverted version range", func() {
 			_, err := server.Create(ctx, privatev1.AddOnOperatorsCreateRequest_builder{
 				Object: privatev1.AddOnOperator_builder{

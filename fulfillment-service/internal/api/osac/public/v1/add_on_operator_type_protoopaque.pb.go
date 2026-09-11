@@ -219,9 +219,11 @@ type AddOnOperator_builder struct {
 	Title string
 	// Human friendly long description of the add-on operator, using Markdown format.
 	Description string
-	// Minimum supported OpenShift version (inclusive semver). Empty means no minimum.
+	// Minimum supported OpenShift version (inclusive SemVer-compatible version). Shorthand such as "4.17" is accepted
+	// and interpreted as "4.17.0". Empty means no minimum.
 	MinOcpVersion string
-	// Maximum supported OpenShift version (inclusive semver). Empty means no maximum.
+	// Maximum supported OpenShift version (inclusive SemVer-compatible version). Shorthand such as "4.17" is accepted
+	// and interpreted as "4.17.0". Empty means no maximum.
 	MaxOcpVersion string
 	// Other add-on operators that are mutually exclusive with this one. Bidirectional: if A excludes B, ordering a
 	// cluster with both A and B is rejected at order time.

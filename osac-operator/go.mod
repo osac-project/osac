@@ -3,7 +3,6 @@ module github.com/osac-project/osac/osac-operator
 go 1.26.3
 
 require (
-	buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go v1.36.12-20260825204119-511051f7f437.1
 	github.com/coder/websocket v1.8.15
 	github.com/container-storage-interface/spec v1.12.0
 	github.com/go-logr/logr v1.4.4
@@ -12,11 +11,11 @@ require (
 	github.com/openshift/hypershift/api v0.0.0-20250331235933-616a2fae81ae
 	github.com/osac-project/osac/bare-metal-fulfillment-operator v0.0.0-00010101000000-000000000000
 	github.com/osac-project/osac/osac-operator/api v0.0.7
+	github.com/osac-project/osac/proto v0.0.0-00010101000000-000000000000
 	github.com/ovn-org/ovn-kubernetes/go-controller v0.0.0-20251211123925-6d83b2b6e183
 	github.com/stoewer/go-strcase v1.3.1
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/sync v0.22.0
-	google.golang.org/genproto/googleapis/api v0.0.0-20260825221802-da73d73af1c5
 	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
@@ -31,6 +30,7 @@ require (
 )
 
 require (
+	buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go v1.36.12-20260825204119-511051f7f437.1 // indirect
 	cel.dev/expr v0.25.3 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
 	github.com/Masterminds/semver/v3 v3.5.0 // indirect
@@ -82,6 +82,7 @@ require (
 	github.com/prometheus/procfs v0.21.1 // indirect
 	github.com/spf13/cobra v1.10.2 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
+	github.com/stretchr/objx v0.5.3 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0 // indirect
@@ -105,6 +106,7 @@ require (
 	golang.org/x/time v0.15.0 // indirect
 	golang.org/x/tools v0.49.0 // indirect
 	gomodules.xyz/jsonpatch/v2 v2.4.0 // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20260825221802-da73d73af1c5 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260825221802-da73d73af1c5 // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.13.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
@@ -125,4 +127,5 @@ require (
 replace (
 	github.com/osac-project/osac/bare-metal-fulfillment-operator => ../bare-metal-fulfillment-operator
 	github.com/osac-project/osac/osac-operator/api => ./api
+	github.com/osac-project/osac/proto => ../proto
 )

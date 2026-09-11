@@ -13,10 +13,10 @@ language governing permissions and limitations under the License.
 
 package computeinstance
 
-//go:generate mockgen -source=../../api/osac/private/v1/compute_instances_service_grpc.pb.go -destination=compute_instances_client_mock.go -package=computeinstance ComputeInstancesClient
-//go:generate mockgen -source=../../api/osac/private/v1/instance_types_service_grpc.pb.go -destination=instance_types_client_mock.go -package=computeinstance InstanceTypesClient
-//go:generate mockgen -source=../../api/osac/private/v1/disk_images_service_grpc.pb.go -destination=disk_images_client_mock.go -package=computeinstance DiskImagesClient
-//go:generate mockgen -source=../../api/osac/private/v1/secrets_service_grpc.pb.go -destination=secrets_client_mock.go -package=computeinstance SecretsClient
+//go:generate mockgen -destination=compute_instances_client_mock.go -package=computeinstance github.com/osac-project/osac/proto/gen/osac/private/v1 ComputeInstancesClient
+//go:generate mockgen -destination=instance_types_client_mock.go -package=computeinstance github.com/osac-project/osac/proto/gen/osac/private/v1 InstanceTypesClient
+//go:generate mockgen -destination=disk_images_client_mock.go -package=computeinstance github.com/osac-project/osac/proto/gen/osac/private/v1 DiskImagesClient
+//go:generate mockgen -destination=secrets_client_mock.go -package=computeinstance github.com/osac-project/osac/proto/gen/osac/private/v1 SecretsClient
 
 import (
 	"context"
@@ -26,7 +26,6 @@ import (
 	"math/rand/v2"
 	"slices"
 
-	"github.com/osac-project/osac/fulfillment-service/internal/computeinstancespec"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -35,15 +34,17 @@ import (
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/computeinstancespec"
+
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/annotations"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
 	"github.com/osac-project/osac/fulfillment-service/internal/masks"
 	"github.com/osac-project/osac/fulfillment-service/internal/utils"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 // objectPrefix is the prefix that will be used in the `generateName` field of the resources created in the hub.

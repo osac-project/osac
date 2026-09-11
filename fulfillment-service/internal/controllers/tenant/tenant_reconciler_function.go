@@ -11,12 +11,12 @@ Unless required by applicable law or agreed to in writing, software distributed 
 language governing permissions and limitations under the License.
 */
 
-//go:generate mockgen -source=../../api/osac/private/v1/projects_service_grpc.pb.go -destination=projects_client_mock.go -package=tenant ProjectsClient
-//go:generate mockgen -source=../../api/osac/private/v1/virtual_networks_service_grpc.pb.go -destination=virtual_networks_client_mock.go -package=tenant VirtualNetworksClient
-//go:generate mockgen -source=../../api/osac/private/v1/subnets_service_grpc.pb.go -destination=subnets_client_mock.go -package=tenant SubnetsClient
-//go:generate mockgen -source=../../api/osac/private/v1/security_groups_service_grpc.pb.go -destination=security_groups_client_mock.go -package=tenant SecurityGroupsClient
-//go:generate mockgen -source=../../api/osac/private/v1/nat_gateways_service_grpc.pb.go -destination=nat_gateways_client_mock.go -package=tenant NATGatewaysClient
-//go:generate mockgen -source=../../api/osac/private/v1/network_classes_service_grpc.pb.go -destination=network_classes_client_mock.go -package=tenant NetworkClassesClient
+//go:generate mockgen -destination=projects_client_mock.go -package=tenant github.com/osac-project/osac/proto/gen/osac/private/v1 ProjectsClient
+//go:generate mockgen -destination=virtual_networks_client_mock.go -package=tenant github.com/osac-project/osac/proto/gen/osac/private/v1 VirtualNetworksClient
+//go:generate mockgen -destination=subnets_client_mock.go -package=tenant github.com/osac-project/osac/proto/gen/osac/private/v1 SubnetsClient
+//go:generate mockgen -destination=security_groups_client_mock.go -package=tenant github.com/osac-project/osac/proto/gen/osac/private/v1 SecurityGroupsClient
+//go:generate mockgen -destination=nat_gateways_client_mock.go -package=tenant github.com/osac-project/osac/proto/gen/osac/private/v1 NATGatewaysClient
+//go:generate mockgen -destination=network_classes_client_mock.go -package=tenant github.com/osac-project/osac/proto/gen/osac/private/v1 NetworkClassesClient
 
 package tenant
 
@@ -35,12 +35,12 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/idp"
 	"github.com/osac-project/osac/fulfillment-service/internal/masks"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 // FunctionBuilder contains the data needed to build instances of the reconciler function.

@@ -17,8 +17,8 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/fieldutil"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 var _ = Describe("Create diskimage flag registration", func() {

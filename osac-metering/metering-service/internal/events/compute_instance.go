@@ -4,7 +4,7 @@ import (
 	"strings"
 	"time"
 
-	privatev1 "github.com/osac-project/osac-metering/internal/api/osac/private/v1"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 const ComputeInstanceStatePrefix = "COMPUTE_INSTANCE_STATE_"

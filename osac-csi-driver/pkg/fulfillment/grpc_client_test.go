@@ -9,7 +9,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	privatev1 "github.com/osac-project/osac/osac-csi-driver/internal/api/osac/private/v1"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 // fakeVolumesClient is a test double for the generated privatev1.VolumesClient.

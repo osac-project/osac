@@ -20,10 +20,11 @@ import (
 	"log/slog"
 	"time"
 
-	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	"google.golang.org/grpc"
+
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
-	"google.golang.org/grpc"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 // Options configures a console connection session.

@@ -14,10 +14,10 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 
-	privatev1 "github.com/osac-project/osac-metering/internal/api/osac/private/v1"
 	"github.com/osac-project/osac-metering/internal/events"
 	"github.com/osac-project/osac-metering/internal/projection"
 	"github.com/osac-project/osac-metering/internal/reconciliation"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 type mockComputeClient struct {

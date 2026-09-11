@@ -13,7 +13,7 @@ language governing permissions and limitations under the License.
 
 package subnet
 
-//go:generate mockgen -source=../../api/osac/private/v1/subnets_service_grpc.pb.go -destination=subnets_client_mock.go -package=subnet SubnetsClient
+//go:generate mockgen -destination=subnets_client_mock.go -package=subnet github.com/osac-project/osac/proto/gen/osac/private/v1 SubnetsClient
 
 import (
 	"context"
@@ -30,12 +30,12 @@ import (
 
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/annotations"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
 	"github.com/osac-project/osac/fulfillment-service/internal/masks"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 // objectPrefix is the prefix that will be used in the `generateName` field of the resources created in the hub.

@@ -24,9 +24,9 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/proto"
 
-	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/packages"
 	"github.com/osac-project/osac/fulfillment-service/internal/testing"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 type testTenantKey struct{}

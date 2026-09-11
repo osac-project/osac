@@ -10,9 +10,10 @@ import (
 	"strconv"
 	"syscall"
 
-	"github.com/osac-project/osac/osac-operator/internal/consoleproxy"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/osac-project/osac/osac-operator/internal/consoleproxy"
 )
 
 const (

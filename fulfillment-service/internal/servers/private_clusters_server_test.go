@@ -27,10 +27,10 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/structpb"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 func seedClusterVersion(ctx context.Context, cv *privatev1.ClusterVersion) {

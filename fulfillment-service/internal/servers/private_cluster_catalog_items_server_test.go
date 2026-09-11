@@ -25,9 +25,9 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 var _ = Describe("Private cluster catalog items server", func() {

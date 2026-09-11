@@ -23,12 +23,12 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
-	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/collections"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 var _ = Describe("Virtual networks server", func() {

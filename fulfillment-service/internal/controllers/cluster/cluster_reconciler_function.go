@@ -13,9 +13,9 @@ language governing permissions and limitations under the License.
 
 package cluster
 
-//go:generate mockgen -source=../../api/osac/private/v1/clusters_service_grpc.pb.go -destination=clusters_client_mock.go -package=cluster ClustersClient
-//go:generate mockgen -source=../../api/osac/private/v1/cluster_versions_service_grpc.pb.go -destination=cluster_versions_client_mock.go -package=cluster ClusterVersionsClient
-//go:generate mockgen -source=../../api/osac/private/v1/secrets_service_grpc.pb.go -destination=secrets_client_mock.go -package=cluster SecretsClient
+//go:generate mockgen -destination=clusters_client_mock.go -package=cluster github.com/osac-project/osac/proto/gen/osac/private/v1 ClustersClient
+//go:generate mockgen -destination=cluster_versions_client_mock.go -package=cluster github.com/osac-project/osac/proto/gen/osac/private/v1 ClusterVersionsClient
+//go:generate mockgen -destination=secrets_client_mock.go -package=cluster github.com/osac-project/osac/proto/gen/osac/private/v1 SecretsClient
 
 import (
 	"context"
@@ -38,7 +38,6 @@ import (
 
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/annotations"
@@ -46,6 +45,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
 	"github.com/osac-project/osac/fulfillment-service/internal/masks"
 	"github.com/osac-project/osac/fulfillment-service/internal/utils"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 // objectPrefix is the prefix that will be used in the `generateName` field of the resources created in the hub.

@@ -26,9 +26,6 @@ import (
 	. "github.com/onsi/gomega"
 
 	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
-	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
-	privatev1 "github.com/osac-project/osac/osac-operator/internal/api/osac/private/v1"
-	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -41,6 +38,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
+
+	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 // mockStorageBackendsClient is a test double for StorageBackendsClient.

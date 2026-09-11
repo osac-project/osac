@@ -19,11 +19,12 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
-	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 var _ = Describe("Generic mapper", func() {

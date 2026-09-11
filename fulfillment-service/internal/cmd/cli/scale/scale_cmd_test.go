@@ -27,8 +27,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
-	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 var _ = Describe("Scale command registration", func() {

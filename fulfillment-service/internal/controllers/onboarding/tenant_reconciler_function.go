@@ -14,8 +14,8 @@ language governing permissions and limitations under the License.
 // Package onboarding reconciles Tenant objects into Tenant CRDs on all hub clusters.
 package onboarding
 
-//go:generate mockgen -source=../../api/osac/private/v1/tenants_service_grpc.pb.go -destination=tenants_client_mock.go -package=onboarding TenantsClient
-//go:generate mockgen -source=../../api/osac/private/v1/projects_service_grpc.pb.go -destination=projects_client_mock.go -package=onboarding ProjectsClient
+//go:generate mockgen -destination=tenants_client_mock.go -package=onboarding github.com/osac-project/osac/proto/gen/osac/private/v1 TenantsClient
+//go:generate mockgen -destination=projects_client_mock.go -package=onboarding github.com/osac-project/osac/proto/gen/osac/private/v1 ProjectsClient
 
 import (
 	"context"
@@ -34,11 +34,11 @@ import (
 
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
 	"github.com/osac-project/osac/fulfillment-service/internal/masks"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 type FunctionBuilder struct {

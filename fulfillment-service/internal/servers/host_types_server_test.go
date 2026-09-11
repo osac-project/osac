@@ -21,8 +21,8 @@ import (
 	. "github.com/onsi/gomega"
 	"google.golang.org/protobuf/proto"
 
-	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 var _ = Describe("Host types server", func() {

@@ -19,9 +19,9 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 var _ = Describe("Default networking provisioner", func() {

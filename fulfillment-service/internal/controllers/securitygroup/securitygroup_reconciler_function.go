@@ -13,7 +13,7 @@ language governing permissions and limitations under the License.
 
 package securitygroup
 
-//go:generate mockgen -source=../../api/osac/private/v1/security_groups_service_grpc.pb.go -destination=security_groups_client_mock.go -package=securitygroup SecurityGroupsClient
+//go:generate mockgen -destination=security_groups_client_mock.go -package=securitygroup github.com/osac-project/osac/proto/gen/osac/private/v1 SecurityGroupsClient
 
 import (
 	"context"
@@ -31,12 +31,12 @@ import (
 
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/annotations"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
 	"github.com/osac-project/osac/fulfillment-service/internal/masks"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 // objectPrefix is the prefix that will be used in the `generateName` field of the resources created in the hub.

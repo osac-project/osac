@@ -35,11 +35,12 @@ import (
 	k8stypes "k8s.io/apimachinery/pkg/types"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 
+	"google.golang.org/grpc"
+
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/network"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	"github.com/osac-project/osac/fulfillment-service/internal/version"
-	"google.golang.org/grpc"
 )
 
 // ExtRealmState holds a temporary Keycloak realm that acts as the external OIDC Identity

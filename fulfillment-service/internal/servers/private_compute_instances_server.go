@@ -32,13 +32,13 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/computeinstancespec"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	"github.com/osac-project/osac/fulfillment-service/internal/utils"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 type PrivateComputeInstancesServerBuilder struct {

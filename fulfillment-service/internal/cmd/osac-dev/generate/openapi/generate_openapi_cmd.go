@@ -168,13 +168,16 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	}
 	defer os.RemoveAll(c.tmpDir)
 
-	// Generate the OpenAPI artifacts for the public and private modules:
-	publicModuleDir := filepath.Join(c.projectDir, "proto", "public")
+	// Generate the OpenAPI artifacts for the public and private modules.
+	// Proto sources moved to the top-level proto/ module, a sibling
+	// of the project directory (which is still fulfillment-service).
+	protoDir := filepath.Join(c.projectDir, "..", "proto")
+	publicModuleDir := filepath.Join(protoDir, "public")
 	err = c.generateModule(ctx, publicModuleDir)
 	if err != nil {
 		return err
 	}
-	privateModuleDir := filepath.Join(c.projectDir, "proto", "private")
+	privateModuleDir := filepath.Join(protoDir, "private")
 	err = c.generateModule(ctx, privateModuleDir)
 	if err != nil {
 		return err
@@ -205,7 +208,10 @@ func (c *runnerContext) generateModule(ctx context.Context, moduleDir string) er
 			"override": []any{
 				map[string]any{
 					"file_option": "go_package_prefix",
-					"value":       "github.com/osac-project/osac/fulfillment-service/internal/api",
+					// Matches the shared proto module's prefix. Only
+					// affects Go package hints in this throwaway config; the
+					// OpenAPI output itself is language-agnostic.
+					"value": "github.com/osac-project/osac/proto/gen",
 				},
 			},
 		},

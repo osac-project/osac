@@ -21,10 +21,10 @@ import (
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
 
-	testsv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/tests/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	. "github.com/osac-project/osac/fulfillment-service/internal/testing"
+	testsv1 "github.com/osac-project/osac/proto/gen/osac/tests/v1"
 )
 
 var _ = Describe("Metrics", func() {

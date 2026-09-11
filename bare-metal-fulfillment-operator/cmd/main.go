@@ -43,6 +43,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	metal3api "github.com/metal3-io/baremetal-operator/apis/metal3.io/v1alpha1"
+
 	osacv1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/baremetalhost"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/bcmclient"

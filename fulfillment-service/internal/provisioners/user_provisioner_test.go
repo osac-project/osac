@@ -25,10 +25,10 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 func TestUserProvisioner(t *testing.T) {
@@ -43,6 +43,26 @@ var (
 	usersServer *MockUsersServer
 	prov        *UserProvisioner
 )
+
+// usersServerAdapter satisfies privatev1.UsersServer's unexported
+// mustEmbedUnimplementedUsersServer method, which mockgen's reflect mode
+// can't generate for a type outside the proto package. Only the methods
+// UserProvisioner actually calls are forwarded to the mock; the rest fall
+// back to UnimplementedUsersServer's stubs.
+type usersServerAdapter struct {
+	privatev1.UnimplementedUsersServer
+	mock *MockUsersServer
+}
+
+func (a usersServerAdapter) List(ctx context.Context,
+	req *privatev1.UsersListRequest) (*privatev1.UsersListResponse, error) {
+	return a.mock.List(ctx, req)
+}
+
+func (a usersServerAdapter) Create(ctx context.Context,
+	req *privatev1.UsersCreateRequest) (*privatev1.UsersCreateResponse, error) {
+	return a.mock.Create(ctx, req)
+}
 
 var _ = BeforeSuite(func() {
 	var err error
@@ -77,7 +97,7 @@ var _ = BeforeEach(func() {
 	// Create provisioner:
 	prov, err = NewUserProvisioner().
 		SetLogger(logger).
-		SetUsersServer(usersServer).
+		SetUsersServer(usersServerAdapter{mock: usersServer}).
 		Build()
 	Expect(err).ToNot(HaveOccurred())
 })
@@ -96,7 +116,7 @@ var _ = Describe("UserProvisioner", func() {
 		It("Builds successfully with all required parameters", func() {
 			p, err := NewUserProvisioner().
 				SetLogger(logger).
-				SetUsersServer(usersServer).
+				SetUsersServer(usersServerAdapter{mock: usersServer}).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 			Expect(p).ToNot(BeNil())

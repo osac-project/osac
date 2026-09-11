@@ -17,8 +17,9 @@ import (
 	"fmt"
 	"os"
 
-	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"gopkg.in/yaml.v3"
+
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 // ComputeInstanceScenario represents test data for compute instances and templates

@@ -22,9 +22,9 @@ import (
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc"
 
-	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/exit"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 // mockClusterVersionsClient is a minimal mock that intercepts List calls.

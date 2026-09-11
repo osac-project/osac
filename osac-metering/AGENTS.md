@@ -34,7 +34,7 @@ respective areas.
 
 ## Generated files
 
-- After changing private fulfillment protos consumed by `metering-service`, run `make generate` from `metering-service/` and commit the resulting `internal/api/` changes; never edit generated client code manually.
+- Fulfillment proto types are the shared top-level `proto/` module, imported as `github.com/osac-project/osac/proto/gen/...`. `metering-service/` no longer generates its own copy; `make generate` there just delegates to `make -C ../../proto generate`. Commit the regenerated `proto/gen/` (see `proto/AGENTS.md`); never edit generated code manually.
 - Use `go mod tidy` for dependency updates in the affected module.
 
 ## Validation

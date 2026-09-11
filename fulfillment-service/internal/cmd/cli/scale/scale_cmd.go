@@ -22,16 +22,16 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
-	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/lookup"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 //go:embed templates
 var templatesFS embed.FS
 
-//go:generate mockgen -source=../../../api/osac/public/v1/clusters_service_grpc.pb.go -destination=clusters_client_mock.go -package=scale ClustersClient
+//go:generate mockgen -destination=clusters_client_mock.go -package=scale github.com/osac-project/osac/proto/gen/osac/public/v1 ClustersClient
 
 func Cmd() *cobra.Command {
 	result := &cobra.Command{

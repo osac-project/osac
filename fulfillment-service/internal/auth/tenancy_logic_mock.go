@@ -13,8 +13,9 @@ import (
 	context "context"
 	reflect "reflect"
 
-	collections "github.com/osac-project/osac/fulfillment-service/internal/collections"
 	gomock "go.uber.org/mock/gomock"
+
+	collections "github.com/osac-project/osac/fulfillment-service/internal/collections"
 )
 
 // MockTenancyLogic is a mock of TenancyLogic interface.

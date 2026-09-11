@@ -19,8 +19,8 @@ import (
 	"log/slog"
 	"sort"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 // findDefaultSubnet returns the newest READY subnet labeled as a tenant default

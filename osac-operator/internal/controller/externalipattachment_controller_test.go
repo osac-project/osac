@@ -37,8 +37,8 @@ import (
 
 	bmfov1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
-	privatev1 "github.com/osac-project/osac/osac-operator/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 var _ = Describe("ExternalIPAttachmentReconciler", func() {

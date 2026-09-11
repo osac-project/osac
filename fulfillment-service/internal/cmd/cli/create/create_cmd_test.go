@@ -20,8 +20,6 @@ import (
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
-	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/baremetalinstancecatalogitem"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/baremetalinstancetype"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/cluster"
@@ -34,6 +32,8 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/securitygroup"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/subnet"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/virtualnetwork"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 var _ = Describe("Create command", func() {

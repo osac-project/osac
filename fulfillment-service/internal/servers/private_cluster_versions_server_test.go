@@ -27,8 +27,8 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 var _ = Describe("Private cluster versions server", func() {

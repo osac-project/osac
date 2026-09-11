@@ -23,9 +23,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/logging"
-	"github.com/osac-project/osac/fulfillment-service/internal/metrics"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spf13/pflag"
 	"google.golang.org/grpc"
@@ -35,6 +32,10 @@ import (
 	experiementalcredentials "google.golang.org/grpc/experimental/credentials"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/status"
+
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/logging"
+	"github.com/osac-project/osac/fulfillment-service/internal/metrics"
 )
 
 // GrpcClientBuilder contains the data and logic needed to create a gRPC client. Don't create instances of this object

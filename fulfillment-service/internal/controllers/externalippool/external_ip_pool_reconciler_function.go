@@ -13,7 +13,7 @@ language governing permissions and limitations under the License.
 
 package externalippool
 
-//go:generate mockgen -source=../../api/osac/private/v1/external_ip_pools_service_grpc.pb.go -destination=external_ip_pools_client_mock.go -package=externalippool ExternalIPPoolsClient
+//go:generate mockgen -destination=external_ip_pools_client_mock.go -package=externalippool github.com/osac-project/osac/proto/gen/osac/private/v1 ExternalIPPoolsClient
 
 import (
 	"context"
@@ -30,12 +30,12 @@ import (
 
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/annotations"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
 	"github.com/osac-project/osac/fulfillment-service/internal/masks"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 const (

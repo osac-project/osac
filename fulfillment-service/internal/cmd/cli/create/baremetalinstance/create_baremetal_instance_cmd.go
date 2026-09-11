@@ -21,13 +21,13 @@ import (
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
 
-	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/fieldutil"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/netutil"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/lookup"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 var runStrategyMap = map[string]publicv1.BareMetalInstanceRunStrategy{

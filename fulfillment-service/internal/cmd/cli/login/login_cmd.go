@@ -30,7 +30,6 @@ import (
 	"google.golang.org/grpc"
 	healthv1 "google.golang.org/grpc/health/grpc_health_v1"
 
-	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/exit"
@@ -38,6 +37,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/network"
 	"github.com/osac-project/osac/fulfillment-service/internal/oauth"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 //go:embed templates

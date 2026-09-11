@@ -28,11 +28,11 @@ import (
 
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/console"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 // lookupResult contains the database-sourced state needed to resolve a console target.

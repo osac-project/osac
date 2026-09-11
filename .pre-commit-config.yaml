@@ -49,11 +49,11 @@ repos:
     language: system
     files: ^fulfillment-service/.*\.go$
     entry: bash -c "cd fulfillment-service && uv run dev.py lint go"
-  - id: fulfillment-service-buf-lint
+  - id: proto-buf-lint
     pass_filenames: false
-    name: fulfillment-service buf-lint
+    name: proto buf-lint
     language: system
-    files: ^fulfillment-service/.*\.proto$
+    files: ^proto/.*\.proto$
     entry: bash -c "cd fulfillment-service && uv run dev.py lint proto"
   - id: osac-operator-golangci-lint
     pass_filenames: false

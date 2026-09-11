@@ -32,7 +32,6 @@ import (
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/collections"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
@@ -40,6 +39,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/masks"
 	"github.com/osac-project/osac/fulfillment-service/internal/util"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 // GenericServerBuilder contains the data and logic needed to create new generic servers.

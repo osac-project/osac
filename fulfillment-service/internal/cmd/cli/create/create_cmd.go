@@ -28,7 +28,6 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 	"gopkg.in/yaml.v3"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/baremetalinstance"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/baremetalinstancecatalogitem"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/baremetalinstancetype"
@@ -54,6 +53,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 func Cmd() *cobra.Command {

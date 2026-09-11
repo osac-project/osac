@@ -33,9 +33,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 
-	privatev1 "github.com/osac-project/osac/osac-operator/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/osac-operator/pkg/dispatcher"
 	"github.com/osac-project/osac/osac-operator/pkg/networkmanager"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 // NetworkClassCapabilitiesReconciler computes NetworkClass.capabilities as the

@@ -31,12 +31,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
 	"github.com/osac-project/osac/fulfillment-service/internal/masks"
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 // fakeHubsClient implements the HubsClient interface for testing selectHub.

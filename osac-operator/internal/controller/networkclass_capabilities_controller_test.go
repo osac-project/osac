@@ -27,10 +27,10 @@ import (
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 
-	privatev1 "github.com/osac-project/osac/osac-operator/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/osac-operator/internal/dispatcheradapter"
 	"github.com/osac-project/osac/osac-operator/pkg/dispatcher"
 	"github.com/osac-project/osac/osac-operator/pkg/networkmanager"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 var _ = Describe("computeCapabilities", func() {

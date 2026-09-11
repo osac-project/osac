@@ -43,7 +43,7 @@ runs:
           {"repo":$repo,"ref":$ref,"containerfile":"fulfillment-service/Containerfile","context":".","imageKey":"service.images.service"},
           {"repo":$repo,"ref":$ref,"containerfile":"osac-operator/Containerfile","context":".","imageKey":"operator.image.repository"},
           {"repo":$repo,"ref":$ref,"containerfile":"bare-metal-fulfillment-operator/Containerfile","context":".","imageKey":"bmf.image.repository"},
-          {"repo":$repo,"ref":$ref,"containerfile":"osac-metering/metering-service/Containerfile","imageKey":"metering.image.repository"}
+          {"repo":$repo,"ref":$ref,"containerfile":"osac-metering/metering-service/Containerfile","context":".","imageKey":"metering.image.repository"}
         ]')
 
         # osac-aap's execution-environment is built twice (aap.bootstrap.image

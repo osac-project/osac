@@ -43,7 +43,6 @@ import (
 	"google.golang.org/protobuf/reflect/protoregistry"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
@@ -54,6 +53,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/servers"
 	"github.com/osac-project/osac/fulfillment-service/internal/services"
 	itesting "github.com/osac-project/osac/fulfillment-service/internal/testing"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 func TestRegisterServers(t *testing.T) {

@@ -24,11 +24,12 @@ import (
 	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/idp"
 	"github.com/osac-project/osac/fulfillment-service/internal/masks"
-	"google.golang.org/protobuf/types/known/timestamppb"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 var logger = slog.Default()

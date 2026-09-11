@@ -38,8 +38,6 @@ import (
 	"k8s.io/klog/v2"
 	crlog "sigs.k8s.io/controller-runtime/pkg/log"
 
-	_ "github.com/osac-project/osac/fulfillment-service/internal/api/cleanapi"
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/baremetalinstance"
@@ -70,6 +68,8 @@ import (
 	shtdwn "github.com/osac-project/osac/fulfillment-service/internal/shutdown"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 	"github.com/osac-project/osac/fulfillment-service/internal/version"
+	_ "github.com/osac-project/osac/proto/gen/cleanapi"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 // Cmd creates and returns the `start controllers` command.

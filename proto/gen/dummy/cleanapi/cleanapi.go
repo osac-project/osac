@@ -1,0 +1,22 @@
+/*
+Copyright (c) 2026 Red Hat Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the
+License. You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific
+language governing permissions and limitations under the License.
+*/
+
+// This package and this file only exist because there is no way to tell the protobuf Go code generator that we are not
+// generating code for the 'cleanapi' module. We only import that module to use its annotations, but the Go code generator
+// will anyhow include an import statement for the package. So keep this, even if it is empty.
+//
+// This is the single shared copy of the former per-module
+// internal/dummy/cleanapi/ stubs. buf.gen.yaml routes the cleanapi module's
+// go_package_prefix here (github.com/osac-project/osac/proto/gen/dummy).
+
+package cleanapi

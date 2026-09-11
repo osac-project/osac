@@ -25,15 +25,17 @@ test:
 lint: golangci-lint
 	$(GOLANGCI_LINT) run ./...
 
+# Proto codegen is no longer per-module. Regenerate the shared
+# tree once from the repo-root proto/ module: `make -C ../../proto generate`.
 generate:
-	buf generate
+	$(MAKE) -C ../../proto generate
 
-# Context is `..` (osac-metering/), not `.` -- the Containerfile also
-# COPYs the sibling schema/ directory, which only exists one level up
-# from metering-service/ (matches build-metering-service-image.yaml's
-# `context: osac-metering`, `file: osac-metering/metering-service/Containerfile`).
+# Context is the repo root (`../..`), not osac-metering/ -- the Containerfile
+# COPYs the sibling schema/ directory AND the top-level proto/ module (the
+# latter reachable only from the repo root). Matches
+# build-metering-service-image.yaml's `context: .`.
 image-build:
-	$(CONTAINER_TOOL) build -t $(IMG) -f Containerfile ..
+	$(CONTAINER_TOOL) build -t $(IMG) -f Containerfile ../..
 
 image-push:
 	$(CONTAINER_TOOL) push $(IMG)

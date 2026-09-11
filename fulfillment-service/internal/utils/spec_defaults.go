@@ -22,7 +22,7 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 // ApplySpecDefaults applies default values from a template's spec_defaults to a compute instance spec.

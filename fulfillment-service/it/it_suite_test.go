@@ -27,8 +27,8 @@ import (
 	"k8s.io/klog/v2"
 	crlog "sigs.k8s.io/controller-runtime/pkg/log"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 // Config contains configuration options for the integration tests.

@@ -7,8 +7,8 @@ import (
 
 	cloudevents "github.com/cloudevents/sdk-go/v2"
 
-	privatev1 "github.com/osac-project/osac-metering/internal/api/osac/private/v1"
 	"github.com/osac-project/osac-metering/schema"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 var ErrDataQuality = errors.New("data quality")

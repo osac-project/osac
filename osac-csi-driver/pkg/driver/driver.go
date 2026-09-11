@@ -11,10 +11,11 @@ import (
 	"syscall"
 
 	csi "github.com/container-storage-interface/spec/lib/go/csi"
-	"github.com/osac-project/osac/osac-csi-driver/pkg/fulfillment"
-	"github.com/osac-project/osac/osac-csi-driver/pkg/proxy"
 	"google.golang.org/grpc"
 	"k8s.io/klog/v2"
+
+	"github.com/osac-project/osac/osac-csi-driver/pkg/fulfillment"
+	"github.com/osac-project/osac/osac-csi-driver/pkg/proxy"
 )
 
 // Driver is the OSAC CSI meta-driver that proxies CSI calls to vendor CSI drivers.

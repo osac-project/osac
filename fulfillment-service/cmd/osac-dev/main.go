@@ -19,7 +19,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/osac-project/osac/fulfillment-service/internal/cmd/osac-dev"
+	osacdev "github.com/osac-project/osac/fulfillment-service/internal/cmd/osac-dev"
 	"github.com/osac-project/osac/fulfillment-service/internal/exit"
 )
 

@@ -35,7 +35,10 @@ jobs:
         setup_only: true
         token: ${{ secrets.BUF_TOKEN }}
         version: 1.71.0
-    - working-directory: fulfillment-service
+    # Buf config lives in the top-level proto/ module now. The
+    # fulfillment-service/v* tag still drives the release; the buf.yaml module
+    # names (buf.build/osac-project/{public,private}-api) are unchanged.
+    - working-directory: proto
       run: |
         # Strip this component's tag prefix (see the `tags:` trigger above) so the
         # label reads as a plain version, not the full scoped git tag.

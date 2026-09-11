@@ -9,4 +9,5 @@ use (
 	./osac-metering/schema
 	./osac-operator
 	./osac-operator/api
+	./proto
 )

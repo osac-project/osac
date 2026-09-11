@@ -18,8 +18,8 @@ import (
 	"fmt"
 	"sort"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 // SelectExternalIPPool selects the best ExternalIPPool for allocation.

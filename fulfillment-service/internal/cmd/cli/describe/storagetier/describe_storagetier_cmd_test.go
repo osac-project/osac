@@ -19,7 +19,7 @@ import (
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
 
-	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 func formatStorageTier(st *publicv1.StorageTier) string {

@@ -25,8 +25,8 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
-	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 // testPassword is a fixture credential; the test* prefix marks it as non-production.

@@ -21,7 +21,7 @@ import (
 	. "github.com/onsi/gomega"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
-	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 var _ = Describe("Compute instance templates server", func() {

@@ -29,8 +29,8 @@ import (
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
-	privatev1 "github.com/osac-project/osac/osac-operator/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 // tierListLimit is a generous upper bound on the number of storage tiers fetched in a

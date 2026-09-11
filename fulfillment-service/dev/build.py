@@ -94,11 +94,12 @@ def _sync_cleanapi_version() -> None:
     Always runs `buf dep update` to sync buf.lock, regardless of whether YAML files changed.
     """
     cleanapi_version = f"v{tools.PROTOC_GEN_CLEANAPI.version}"
-    project_dir = dirs.project()
+    # Buf config now lives in the top-level proto/ module, not here.
+    proto_dir = dirs.proto()
 
     files_to_update = [
-        project_dir / "buf.yaml",
-        project_dir / "buf.gen.yaml",
+        proto_dir / "buf.yaml",
+        proto_dir / "buf.gen.yaml",
     ]
 
     # Pattern to match cleanapi version in YAML files
@@ -119,7 +120,7 @@ def _sync_cleanapi_version() -> None:
 
     # Always run buf dep update to ensure buf.lock is in sync
     # This handles fresh checkouts and failed prior updates
-    commands.run(args=["buf", "dep", "update"], cwd=project_dir, check=True)
+    commands.run(args=["buf", "dep", "update"], cwd=proto_dir, check=True)
 
 
 @build.command()
@@ -167,8 +168,13 @@ def protos() -> None:
 
     logging.info("Generating public proto from private proto")
 
+    # Proto sources + buf config now live in the top-level proto/
+    # module. All paths below are relative to it, and every subprocess runs
+    # with cwd=proto_dir (commands.run otherwise defaults cwd to this project).
+    proto_dir = dirs.proto()
+
     # Export buf dependencies to a local directory for protoc to use
-    deps_dir = dirs.project() / ".buf" / "deps"
+    deps_dir = proto_dir / ".buf" / "deps"
     deps_dir.mkdir(parents=True, exist_ok=True)
 
     # Export each dependency
@@ -182,18 +188,17 @@ def protos() -> None:
         dep_path = deps_dir / dep_name
         if not dep_path.exists():
             logging.info(f"Exporting {dep}")
-            commands.run(args=["buf", "export", dep, "--output", str(dep_path)], check=True)
+            commands.run(args=["buf", "export", dep, "--output", str(dep_path)], cwd=proto_dir, check=True)
 
     # Get all private proto files (use absolute paths then convert to relative)
-    project_dir = dirs.project()
-    proto_pattern = project_dir / "proto" / "private" / "osac" / "private" / "v1" / "*.proto"
+    proto_pattern = proto_dir / "private" / "osac" / "private" / "v1" / "*.proto"
     proto_files_abs = glob.glob(str(proto_pattern))
     if not proto_files_abs:
         logging.error("No proto files found in proto/private/osac/private/v1/")
         sys.exit(1)
 
     # Convert to relative paths for protoc
-    proto_files = [str(pathlib.Path(f).relative_to(project_dir)) for f in proto_files_abs]
+    proto_files = [str(pathlib.Path(f).relative_to(proto_dir)) for f in proto_files_abs]
 
     # Set up environment with plugin in PATH
     bin_dir = dirs.bin()
@@ -202,20 +207,21 @@ def protos() -> None:
 
     # Call protoc with the cleanapi plugin
     # Include buf dependencies and proto/ (for cleanapi) in proto_path
-    # Use proto/private as the main source, not proto/ to avoid duplicate imports
+    # Use private/ as the main source, not the module root, to avoid duplicate imports
     commands.run(
         args=[
             "protoc",
-            "--proto_path=proto/private",
-            "--proto_path=proto",  # for cleanapi/cleanapi.proto
+            "--proto_path=private",
+            "--proto_path=.",  # for cleanapi/cleanapi.proto
             "--proto_path=.buf/deps/protovalidate",
             "--proto_path=.buf/deps/googleapis",
             "--proto_path=.buf/deps/grpc-gateway",
             "--proto_path=.buf/deps/cleanapi",
             f"--plugin=protoc-gen-cleanapi={bin_dir}/protoc-gen-cleanapi",
-            "--cleanapi_out=proto/public",
-            "--cleanapi_opt=proto_root=proto/private",  # Where to find original files
+            "--cleanapi_out=public",
+            "--cleanapi_opt=proto_root=private",  # Where to find original files
         ] + proto_files,
+        cwd=proto_dir,
         env=env,
         check=True,
     )

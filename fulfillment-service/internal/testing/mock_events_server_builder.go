@@ -16,7 +16,7 @@ package testing
 import (
 	"time"
 
-	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 // MockEventsServerBuilder builds a mock events server with configurable scenarios

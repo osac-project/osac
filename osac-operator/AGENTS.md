@@ -29,15 +29,15 @@ respective areas.
 - When changing shared controller behavior, inspect every controller using the same lifecycle.
 - `pkg/provisioning`, `pkg/aap`, and `pkg/dispatcher` have external consumers, including the bare-metal fulfillment operator; interface changes are cross-component changes.
 - When debugging operators, check for stale `vendor/` dependencies and cached images before rebuilding.
-- Keep generated fulfillment clients compatible with the private API inputs in `buf.gen.yaml`; regenerate when those inputs change.
+- The fulfillment proto types are the shared top-level `proto/` module, imported as `github.com/osac-project/osac/proto/gen/...`. This component no longer generates its own copy.
 - Never put credentials in logs, samples, or manifests.
 
 ## Generated files
 
 - After changing `api/v1alpha1/*_types.go`, run `make manifests generate`.
 - Then run `make helm-crds` to synchronize `config/crd/` with `charts/operator-crds/`; use `make check-helm-crds` to verify the result.
-- After changing private fulfillment protos consumed by this component, run `buf generate` from `osac-operator/` and commit the resulting `internal/api/` changes.
-- Never hand-edit `config/crd/`, `zz_generated.deepcopy.go`, `internal/api/`, or `go.sum`; run `go mod tidy` for module changes.
+- Fulfillment proto changes are regenerated once in the shared module: `make -C ../proto generate` (see `proto/AGENTS.md`). Do not regenerate anything proto-related from `osac-operator/`.
+- Never hand-edit `config/crd/`, `zz_generated.deepcopy.go`, or `go.sum`; run `go mod tidy` for module changes.
 
 ## Validation
 

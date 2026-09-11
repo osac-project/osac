@@ -67,7 +67,11 @@ def proto() -> None:
     )
 
     logging.info("Running Protobuf linter")
+    # Buf.yaml lives in the top-level proto/ module now. The plugin
+    # is still built into fulfillment-service/bin/ above and referenced from
+    # proto/buf.yaml by relative path.
     commands.run(
         args=["buf", "lint"],
+        cwd=dirs.proto(),
         check=True,
     )

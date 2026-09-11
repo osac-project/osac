@@ -22,16 +22,17 @@ import (
 	"time"
 
 	"github.com/muesli/cancelreader"
-	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	"github.com/spf13/cobra"
+	"golang.org/x/term"
+	"google.golang.org/grpc"
+
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/console/connect"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/exit"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
-	"github.com/spf13/cobra"
-	"golang.org/x/term"
-	"google.golang.org/grpc"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 // Cmd returns the `console serial` command.

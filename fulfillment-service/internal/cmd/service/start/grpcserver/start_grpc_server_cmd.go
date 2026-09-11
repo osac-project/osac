@@ -40,9 +40,6 @@ import (
 	"k8s.io/klog/v2"
 	crlog "sigs.k8s.io/controller-runtime/pkg/log"
 
-	_ "github.com/osac-project/osac/fulfillment-service/internal/api/cleanapi"
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
-	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth/jwe"
 	"github.com/osac-project/osac/fulfillment-service/internal/console"
@@ -60,6 +57,9 @@ import (
 	shtdwn "github.com/osac-project/osac/fulfillment-service/internal/shutdown"
 	"github.com/osac-project/osac/fulfillment-service/internal/validation"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
+	_ "github.com/osac-project/osac/proto/gen/cleanapi"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 // userIDResolver implements auth.UserIDResolver by querying the users DAO.

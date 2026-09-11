@@ -33,7 +33,6 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
-	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/fieldutil"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/netutil"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
@@ -41,6 +40,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 //go:embed templates

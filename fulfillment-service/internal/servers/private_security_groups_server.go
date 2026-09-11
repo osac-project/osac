@@ -23,10 +23,10 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/events"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 type PrivateSecurityGroupsServerBuilder struct {

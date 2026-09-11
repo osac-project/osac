@@ -26,10 +26,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	privatev1 "github.com/osac-project/osac/osac-operator/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/osac-operator/internal/dispatcheradapter"
 	"github.com/osac-project/osac/osac-operator/pkg/dispatcher"
 	"github.com/osac-project/osac/osac-operator/pkg/networkmanager"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 // stubNetworkClassesClient is a minimal test double for privatev1.NetworkClassesClient

@@ -27,8 +27,8 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
-	testsv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/tests/v1"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	testsv1 "github.com/osac-project/osac/proto/gen/osac/tests/v1"
 )
 
 var _ = Describe("Reference validator", func() {

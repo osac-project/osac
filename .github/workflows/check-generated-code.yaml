@@ -1,10 +1,9 @@
 name: Check generated code
 
 on:
-# No paths: required names "Check generated code (fulfillment-service)",
-# "(osac-operator)", and "(osac-metering/metering-service)" must report on
-# every PR. Skip is on job steps (dorny + should-run). A trigger path filter
-# leaves those names pending forever on PRs that only touch other components.
+# No paths filter: the required check name "Check generated code (proto)" must
+# report on every PR. Skip is on job steps (dorny + should-run); a trigger path
+# filter would leave the name pending forever on PRs that don't touch proto/.
   pull_request:
     branches:
       - main
@@ -21,7 +20,7 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
-      changes: ${{ steps.filter.outputs.changes || '[]' }}
+      proto: ${{ steps.filter.outputs.proto }}
     steps:
       # dorny/paths-filter uses git diff on merge_group (not the PR Files API),
       # so the repo must be checked out with enough history for base..head.
@@ -34,57 +33,31 @@ jobs:
         if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
         id: filter
         with:
-          predicate-quantifier: 'every'
           filters: |
-            fulfillment-service:
-              - 'fulfillment-service/**'
-              - '!fulfillment-service/OWNERS'
-              - '!fulfillment-service/LICENSE'
-              - '!fulfillment-service/**/*.md'
-              - '!fulfillment-service/docs/**'
-              - '!fulfillment-service/.claude/**'
-            osac-operator:
-              # buf.gen.yaml reads ../fulfillment-service/proto/private
-              - '{osac-operator,fulfillment-service/proto/private}/**'
-              - '!osac-operator/OWNERS'
-              - '!osac-operator/LICENSE'
-              - '!osac-operator/**/*.md'
-              - '!osac-operator/docs/**'
-              - '!osac-operator/.claude/**'
-              - 'fulfillment-service/proto/private/**'
-            osac-metering/metering-service:
-              - '{osac-metering/metering-service,fulfillment-service/proto/private}/**'
-              - '!osac-metering/metering-service/OWNERS'
-              - '!osac-metering/metering-service/LICENSE'
-              - '!osac-metering/metering-service/**/*.md'
-              - '!osac-metering/metering-service/docs/**'
-              - '!osac-metering/metering-service/.claude/**'
-              - 'fulfillment-service/proto/private/**'
+            proto:
+              # One shared proto module. Anything touching proto
+              # sources/config, or the fulfillment-service dev.py toolchain that
+              # regenerates proto/public/, can change the committed output.
+              - 'proto/**'
+              - 'fulfillment-service/dev/**'
+              - 'fulfillment-service/dev.py'
+              - 'fulfillment-service/cmd/buf-plugin-osac-lint/**'
 
   check-generated-code:
-    name: Check generated code (${{ matrix.component }})
+    name: Check generated code (proto)
     needs: changes
     # Run even if `changes` failed: a skipped job reports success, which would
-    # let required checks pass without buf generate. Fail in the first step.
+    # let the required check pass without buf generate. Fail in the first step.
     if: ${{ always() }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        # Fixed list so all required names always exist. Skip is on steps
-        # (`matrix` is not valid in a job-level `if:`).
-        component:
-          - fulfillment-service
-          - osac-operator
-          - osac-metering/metering-service
     steps:
     - name: Fail if path filter failed
       if: needs.changes.result != 'success'
       run: exit 1
     - id: should-run
-      if: needs.changes.result == 'success' && contains(fromJSON(needs.changes.outputs.changes), matrix.component)
+      if: needs.changes.result == 'success' && needs.changes.outputs.proto == 'true'
       run: echo "run=true" >> "$GITHUB_OUTPUT"
     - if: steps.should-run.outputs.run
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -95,35 +68,29 @@ jobs:
       with:
         version: '1.50.0'
         setup_only: true
-    - if: steps.should-run.outputs.run && matrix.component == 'fulfillment-service'
+    - if: steps.should-run.outputs.run
       name: Install uv
       uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
       with:
         enable-cache: auto
         version: "latest-known"
-    - if: steps.should-run.outputs.run && matrix.component == 'fulfillment-service'
+    - if: steps.should-run.outputs.run
       name: Install protoc
       run: |
-        # Install protoc for the public proto generation step
+        # protoc is needed for the private -> public cleanapi generation step
         sudo apt-get update -qq
         sudo apt-get install -qq -y protobuf-compiler
-    - if: steps.should-run.outputs.run && matrix.component == 'fulfillment-service'
-      name: Generate public protos from private
-      working-directory: fulfillment-service
-      run: uv run dev.py build protos
     - if: steps.should-run.outputs.run
-      name: Generate Go code from protos
-      working-directory: ${{ matrix.component }}
-      run: buf generate
+      name: Regenerate the shared proto module
+      working-directory: proto
+      # `make generate` = `dev.py build protos` (private -> public) + `buf generate`
+      # (the single Go tree under proto/gen/ that every module imports).
+      run: make generate
     - if: steps.should-run.outputs.run
       name: Check for uncommitted changes
-      working-directory: ${{ matrix.component }}
       run: |
-        if ! git diff --exit-code -- . || [ -n "$(git ls-files --others --exclude-standard -- .)" ]; then
-          if [ "${{ matrix.component }}" = "fulfillment-service" ]; then
-            echo "::error::Generated code is out of date. Run 'uv run dev.py build protos && buf generate' in fulfillment-service/ and commit the changes."
-          else
-            echo "::error::Generated code is out of date. Run 'buf generate' in ${{ matrix.component }}/ and commit the changes."
-          fi
+        if ! git diff --exit-code -- proto/ || [ -n "$(git ls-files --others --exclude-standard -- proto/)" ]; then
+          echo "::error::Generated proto code is out of date. Run 'make generate' in proto/ and commit proto/public/ + proto/gen/."
+          git status --porcelain -- proto/
           exit 1
         fi

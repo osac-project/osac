@@ -19,12 +19,13 @@ import (
 	"log"
 	"net"
 
-	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
-	"github.com/osac-project/osac/fulfillment-service/internal/testing"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
+
+	"github.com/osac-project/osac/fulfillment-service/internal/testing"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 const (

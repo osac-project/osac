@@ -23,7 +23,7 @@ import (
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc"
 
-	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 // Server is a gRPC server used only for tests.

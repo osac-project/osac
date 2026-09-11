@@ -16,6 +16,7 @@ import (
 	cloudevents "github.com/cloudevents/sdk-go/v2"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+
 	"github.com/osac-project/osac-metering/adapters"
 )
 

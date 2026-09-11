@@ -16,9 +16,10 @@ package version
 import (
 	"log/slog"
 
+	"github.com/spf13/cobra"
+
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 	"github.com/osac-project/osac/fulfillment-service/internal/version"
-	"github.com/spf13/cobra"
 )
 
 // Cmd creates and returns the `version` command.

@@ -21,8 +21,9 @@ import (
 	"io"
 	"sync"
 
-	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"google.golang.org/grpc"
+
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 // ProxyOptions configures the bidirectional I/O bridge between a local

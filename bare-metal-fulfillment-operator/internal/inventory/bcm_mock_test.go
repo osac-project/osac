@@ -14,10 +14,11 @@ import (
 	json "encoding/json"
 	reflect "reflect"
 
-	baremetalhost "github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/baremetalhost"
-	bcmclient "github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/bcmclient"
 	gomock "go.uber.org/mock/gomock"
 	certwatcher "sigs.k8s.io/controller-runtime/pkg/certwatcher"
+
+	baremetalhost "github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/baremetalhost"
+	bcmclient "github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/bcmclient"
 )
 
 // MockBCMAPI is a mock of BCMAPI interface.

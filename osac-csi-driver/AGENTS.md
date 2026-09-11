@@ -31,9 +31,9 @@ respective areas.
 
 ## Generated files
 
-- `buf.gen.yaml` generates the committed fulfillment Volume API clients under `internal/api/` from `../fulfillment-service/proto/private/`.
-- After changing consumed volume/storage protos, run `buf generate` from `osac-csi-driver/` and commit the generated `internal/api/` changes.
-- Never edit `internal/api/` manually. Keep dependency changes in `go.mod`/`go.sum` synchronized through `go mod tidy`.
+- The fulfillment Volume API types are the shared top-level `proto/` module, imported as `github.com/osac-project/osac/proto/gen/osac/private/v1`. This component no longer generates its own copy (the whole private API is generated once in `proto/gen/`; Go only compiles the volume/storage packages this driver imports).
+- Proto changes are regenerated once in the shared module: `make -C ../proto generate` (see `proto/AGENTS.md`). Do not regenerate anything from `osac-csi-driver/`.
+- Keep dependency changes in `go.mod`/`go.sum` synchronized through `go mod tidy`.
 
 ## Validation
 

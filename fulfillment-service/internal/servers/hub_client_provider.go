@@ -26,9 +26,9 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 //go:generate mockgen -destination=hub_lookup_mock.go -package=servers . HubLookup

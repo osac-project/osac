@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/go-logr/stdr"
+
 	"github.com/osac-project/osac-metering/adapters"
 	"github.com/osac-project/osac-metering/adapters/envutil"
 )

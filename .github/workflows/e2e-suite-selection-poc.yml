@@ -99,13 +99,19 @@ jobs:
             # feature exists to prevent -- unlike the ambiguous-shared cases
             # elsewhere in this file, this one doesn't need an LLM's opinion
             # at all: the file's own name is unambiguous.
+            # proto/**/*<name>* entries: the proto contract moved
+            # from fulfillment-service/proto/ to the top-level proto/ module,
+            # so compute_instance_*.proto / cluster*.proto / baremetal_instance_
+            # *.proto now live at proto/private/osac/private/v1/ -- keep them
+            # attributed to the same suite the old fulfillment-service/**/*...*
+            # patterns caught.
             vmaas-clear:
-              - '{osac-operator/**/*computeinstance*,fulfillment-service/**/*compute_instance*,tests/e2e/vmaas/**,tests/e2e/references/**}'
+              - '{osac-operator/**/*computeinstance*,fulfillment-service/**/*compute_instance*,proto/**/*compute_instance*,tests/e2e/vmaas/**,tests/e2e/references/**}'
               - '!tests/e2e/references/test_cluster_baremetal_references.py'
             caas-clear:
-              - '{osac-operator/**/*clusterorder*,fulfillment-service/**/*cluster*,tests/e2e/caas/**,tests/e2e/references/test_cluster_baremetal_references.py}'
+              - '{osac-operator/**/*clusterorder*,fulfillment-service/**/*cluster*,proto/**/*cluster*,tests/e2e/caas/**,tests/e2e/references/test_cluster_baremetal_references.py}'
             bmaas-clear:
-              - '{bare-metal-fulfillment-operator/**,tests/e2e/bmaas/**,tests/e2e/references/test_cluster_baremetal_references.py}'
+              - '{bare-metal-fulfillment-operator/**,proto/**/*baremetal_instance*,tests/e2e/bmaas/**,tests/e2e/references/test_cluster_baremetal_references.py}'
             # osac-operator (all CRD controllers) and fulfillment-service
             # (the gRPC/REST API) each back BOTH VMaaS and CaaS -- a change
             # under either that ISN'T clearly computeinstance/cluster-named
@@ -131,12 +137,23 @@ jobs:
             # resolved every suite to "skip" with no AI judgment at all --
             # exactly the "test that needed to run doesn't run" failure mode
             # this whole feature exists to prevent.
+            # proto/**: a shared-API proto change not clearly named
+            # for one suite (subnets, storage, events, network_class, ...)
+            # affects both VMaaS and CaaS -- same "can't attribute by path
+            # alone" bucket as shared osac-operator/fulfillment-service code.
+            # proto/gen/** is generated Go, not a source signal, so it's
+            # excluded; the compute_instance/cluster-named protos are already
+            # resolved by the *-clear filters above.
             ambiguous-shared:
-              - '{osac-operator/**,fulfillment-service/**,tests/e2e/core/**,tests/e2e/conftest.py,tests/e2e/*.sh}'
+              - '{osac-operator/**,fulfillment-service/**,proto/**,tests/e2e/core/**,tests/e2e/conftest.py,tests/e2e/*.sh}'
               - '!osac-operator/**/*computeinstance*'
               - '!fulfillment-service/**/*compute_instance*'
+              - '!proto/**/*compute_instance*'
               - '!osac-operator/**/*clusterorder*'
               - '!fulfillment-service/**/*cluster*'
+              - '!proto/**/*cluster*'
+              - '!proto/**/*baremetal_instance*'
+              - '!proto/gen/**'
               - '!**/*.md'
               - '!**/docs/**'
             # graphify's own knowledge graph is built from source via
@@ -178,7 +195,7 @@ jobs:
             # NetworkClass files are how the platform represents which
             # network backend (Netris vs. others) a tenant/subnet uses.
             netris-relevant:
-              - '{osac-aap/collections/ansible_collections/netris/**,osac-aap/collections/ansible_collections/agentless_net/**,tests/e2e/bmaas/regression/networking/**,fulfillment-service/**/*network_class*}'
+              - '{osac-aap/collections/ansible_collections/netris/**,osac-aap/collections/ansible_collections/agentless_net/**,tests/e2e/bmaas/regression/networking/**,fulfillment-service/**/*network_class*,proto/**/*network_class*}'
 
   # Always runs (whether or not anything is ambiguous) -- the listener needs
   # this context either way, to build the reported decision even in the

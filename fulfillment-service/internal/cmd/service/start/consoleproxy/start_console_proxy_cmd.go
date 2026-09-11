@@ -38,8 +38,8 @@ import (
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/reflection"
 
-	_ "github.com/osac-project/osac/fulfillment-service/internal/api/cleanapi"
-	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	_ "github.com/osac-project/osac/proto/gen/cleanapi"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth/jwe"
 	"github.com/osac-project/osac/fulfillment-service/internal/console"

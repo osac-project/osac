@@ -35,11 +35,6 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/onsi/gomega/ghttp"
-	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/jq"
-	"github.com/osac-project/osac/fulfillment-service/internal/network"
-	"github.com/osac-project/osac/fulfillment-service/internal/oauth"
-	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	"google.golang.org/grpc"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
@@ -54,11 +49,17 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/jq"
+	"github.com/osac-project/osac/fulfillment-service/internal/network"
+	"github.com/osac-project/osac/fulfillment-service/internal/oauth"
+	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
+
 	bmfov1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
-	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/version"
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 var ServiceAccountTenants = map[string]string{

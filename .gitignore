@@ -102,6 +102,10 @@ Thumbs.db
 .artifacts/
 __pycache__
 
+# proto (shared proto sources + generated Go)
+/proto/.buf
+/proto/bin
+
 # fulfillment-service
 /fulfillment-service/bin
 /fulfillment-service/dev.yaml

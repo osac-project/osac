@@ -16,7 +16,7 @@ package utils
 import (
 	"google.golang.org/protobuf/proto"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 // ApplyClusterSpecDefaults applies default values from a template's spec_defaults to a cluster spec.

@@ -40,47 +40,31 @@ The API is defined using protocol buffers in the [`proto`](proto) directory.
 
 ### Editing Proto Files
 
-**IMPORTANT**: Edit service definitions in `proto/private/` and test-only definitions in `proto/tests/`. The `proto/public/` directory contains generated files and must never be edited manually.
+**IMPORTANT**: The proto contract lives in the **top-level `proto/` module**
+, not here. Edit service definitions in `proto/private/` and
+test-only definitions in `proto/tests/`. `proto/public/` and `proto/gen/` are
+generated and must never be edited manually.
 
-For changes under `proto/private/`, from `fulfillment-service/` run:
+For any proto change, regenerate ONCE from `proto/`:
 
 ```bash
-uv run dev.py build protos
-uv run dev.py lint proto
-buf generate
+make -C ../proto generate   # dev.py build protos (public) + buf generate (Go)
+make -C ../proto lint       # buf lint
 ```
-
-`build protos` generates public protos; `buf generate` generates Go code. For
-test-only changes under `proto/tests/`, run `uv run dev.py lint proto` and
-`buf generate`, then commit the test proto source and generated `internal/api/`
-changes; do not generate or require changes under `proto/public/`.
 
 ### Generated Code
 
-The following directories contain generated code and must never be edited manually:
-- `proto/public/` - Public API proto files (generated from `proto/private/`)
-- `internal/api/` - Generated Go code (generated from all proto files)
+The single generated Go tree at `proto/gen/` is imported by every module as
+`github.com/osac-project/osac/proto/gen/...` — there are no more per-component
+`internal/api/` copies. Commit, for a proto change:
 
-For changes under `proto/private/`, commit these fulfillment-service changes:
-1. Your edits to `.proto` files in `proto/private/`
-2. The generated public protos in `proto/public/`
-3. The generated Go code in `internal/api/`
+1. Your edits to `.proto` files in `proto/private/` (or `proto/tests/`)
+2. The regenerated `proto/public/` (not needed for test-only changes)
+3. The regenerated `proto/gen/`
 
-Also regenerate and commit generated Go code in the downstream components:
-
-```bash
-(cd ../osac-operator && buf generate)
-(cd ../osac-metering/metering-service && buf generate)
-```
-
-For volume and storage proto changes, also run:
-
-```bash
-(cd ../osac-csi-driver && buf generate)
-```
-
-For test-only changes under `proto/tests/`, commit the test proto source and
-generated `internal/api/` changes; `proto/public/` is not required.
+CI (`Check generated code (proto)`) fails the PR if `proto/gen/` or
+`proto/public/` is stale. Run `go generate ./...` here afterward if a proto
+change altered a mocked gRPC interface, and `go mod tidy` after module changes.
 
 A CI check (`check-generated-code.yaml`) runs on every PR to verify that the generated code is up to date. If the check fails, it means you forgot to regenerate or commit the generated code.
 

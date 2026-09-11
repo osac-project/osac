@@ -26,7 +26,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 const (
@@ -38,8 +38,8 @@ const (
 // depend on this interface to allow mocking in unit tests.
 //
 //go:generate mockgen -destination=hub_cache_mock.go -package=controllers . HubCache
-//go:generate mockgen -source=../api/osac/private/v1/hubs_service_grpc.pb.go -destination=hubs_client_mock.go -package=controllers HubsClient
-//go:generate mockgen -source=../api/osac/private/v1/secrets_service_grpc.pb.go -destination=secrets_client_mock.go -package=controllers SecretsClient
+//go:generate mockgen -destination=hubs_client_mock.go -package=controllers github.com/osac-project/osac/proto/gen/osac/private/v1 HubsClient
+//go:generate mockgen -destination=secrets_client_mock.go -package=controllers github.com/osac-project/osac/proto/gen/osac/private/v1 SecretsClient
 type HubCache interface {
 	Get(ctx context.Context, id string) (*HubEntry, error)
 }

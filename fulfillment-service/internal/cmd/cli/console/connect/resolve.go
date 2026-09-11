@@ -20,8 +20,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 
-	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/lookup"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 // ResolveInstance resolves a name or ID to a compute instance ID.

@@ -22,9 +22,9 @@ import (
 	"k8s.io/client-go/rest"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 // stubHubClientProvider is a test double for HubClientProvider that returns a fixed client.

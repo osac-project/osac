@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+
 	"github.com/osac-project/osac-metering/adapters"
 )
 

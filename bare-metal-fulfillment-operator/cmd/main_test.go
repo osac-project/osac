@@ -24,12 +24,13 @@ import (
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 
 	metal3api "github.com/metal3-io/baremetal-operator/apis/metal3.io/v1alpha1"
-	osacv1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
-	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/inventory"
-	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/management"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+
+	osacv1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/inventory"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/management"
 )
 
 func TestMain(t *testing.T) {

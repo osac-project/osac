@@ -13,9 +13,10 @@ import (
 	context "context"
 	reflect "reflect"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	gomock "go.uber.org/mock/gomock"
 	grpc "google.golang.org/grpc"
+
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 // MockExternalIPPoolsClient is a mock of ExternalIPPoolsClient interface.

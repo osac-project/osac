@@ -18,6 +18,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2/dsl/table"
 	. "github.com/onsi/gomega"
+
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 )
 

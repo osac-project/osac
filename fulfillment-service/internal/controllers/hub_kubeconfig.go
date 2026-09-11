@@ -17,7 +17,7 @@ import (
 	"context"
 	"fmt"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 // HubKubeconfigSecretKey is the Secret data key that holds a kubeconfig document.

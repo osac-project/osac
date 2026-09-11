@@ -22,8 +22,6 @@ import (
 	"google.golang.org/grpc"
 	"k8s.io/apimachinery/pkg/runtime"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
-	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
@@ -31,6 +29,8 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/servers"
 	"github.com/osac-project/osac/fulfillment-service/internal/services"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 // ResourceServerDeps bundles the dependencies needed to construct every filterable resource's public/private

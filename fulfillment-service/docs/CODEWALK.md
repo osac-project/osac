@@ -14,9 +14,9 @@ line numbers in the linked files may have moved.
 Most services keep three separate representations of an entity: a wire DTO, an in-memory domain
 object, and a persistence model, with mapping code between them. This codebase does not do that.
 
-[`internal/api/osac/private/v1.BareMetalInstance`](https://github.com/osac-project/osac/blob/main/fulfillment-service/internal/api/osac/private/v1/baremetal_instance_type.pb.go)
+[`proto/gen/osac/private/v1.BareMetalInstance`](https://github.com/osac-project/osac/blob/main/proto/gen/osac/private/v1/baremetal_instance_type.pb.go)
 (generated from
-[`proto/private/osac/private/v1/baremetal_instance_type.proto`](https://github.com/osac-project/osac/blob/main/fulfillment-service/proto/private/osac/private/v1/baremetal_instance_type.proto))
+[`proto/private/osac/private/v1/baremetal_instance_type.proto`](https://github.com/osac-project/osac/blob/main/proto/private/osac/private/v1/baremetal_instance_type.proto))
 is simultaneously:
 
 - the **wire format** for the private gRPC API (`BareMetalInstancesCreateRequest.object`),
@@ -127,7 +127,7 @@ relist will eventually re-deliver the same state. Here it means the interesting 
 grpc client
   │  Create(BareMetalInstancesCreateRequest)
   ▼
-publicv1.RegisterBareMetalInstancesServer (generated ServiceDesc, internal/api/osac/public/v1)
+publicv1.RegisterBareMetalInstancesServer (generated ServiceDesc, proto/gen/osac/public/v1)
   │  routes "/osac.public.v1.BareMetalInstances/Create" to the registered BareMetalInstancesServer
   ▼
 servers.BareMetalInstancesServer.Create (internal/servers/baremetal_instances_server.go)
@@ -180,7 +180,7 @@ BareMetalInstancesClient.Update (another gRPC round-trip) to persist the synced 
 
 File references for the diagram above:
 
-- [`internal/api/osac/public/v1`](https://github.com/osac-project/osac/blob/main/fulfillment-service/internal/api/osac/public/v1) (generated `ServiceDesc`)
+- [`proto/gen/osac/public/v1`](https://github.com/osac-project/osac/blob/main/proto/gen/osac/public/v1) (generated `ServiceDesc`)
 - [`internal/servers/baremetal_instances_server.go`](https://github.com/osac-project/osac/blob/main/fulfillment-service/internal/servers/baremetal_instances_server.go)
 - [`internal/servers/private_baremetal_instances_server.go`](https://github.com/osac-project/osac/blob/main/fulfillment-service/internal/servers/private_baremetal_instances_server.go)
 - [`internal/servers/generic_server.go`](https://github.com/osac-project/osac/blob/main/fulfillment-service/internal/servers/generic_server.go)
@@ -237,7 +237,7 @@ set hub/create CR → status catches up to the CR → no more diff).
 ### Hub selection
 
 A "hub" is a target Kubernetes cluster the CR gets created on (see `Hub`/`HubSpec` in
-[`proto/private/osac/private/v1/hub_type.proto`](https://github.com/osac-project/osac/blob/main/fulfillment-service/proto/private/osac/private/v1/hub_type.proto));
+[`proto/private/osac/private/v1/hub_type.proto`](https://github.com/osac-project/osac/blob/main/proto/private/osac/private/v1/hub_type.proto));
 OSAC supports multiple hubs for workload placement. `task.selectHub`
 ([`internal/controllers/baremetalinstance/baremetalinstance_reconciler_function.go`](https://github.com/osac-project/osac/blob/main/fulfillment-service/internal/controllers/baremetalinstance/baremetalinstance_reconciler_function.go))
 implements the selection:

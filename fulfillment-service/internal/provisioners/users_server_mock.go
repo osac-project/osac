@@ -13,4 +13,4 @@ language governing permissions and limitations under the License.
 
 package provisioners
 
-//go:generate mockgen -source=../api/osac/private/v1/users_service_grpc.pb.go -destination=users_server_mock_generated.go -package=provisioners UsersServer
+//go:generate mockgen -destination=users_server_mock_generated.go -package=provisioners github.com/osac-project/osac/proto/gen/osac/private/v1 UsersServer

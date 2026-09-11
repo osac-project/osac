@@ -24,11 +24,11 @@ import (
 	"go.uber.org/mock/gomock"
 	grpcmetadata "google.golang.org/grpc/metadata"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 func TestServers(t *testing.T) {

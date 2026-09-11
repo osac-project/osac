@@ -31,3 +31,20 @@ def bin() -> pathlib.Path:
     Returns the bin directory of the project, where the generated binaries will be placed.
     """
     return project() / "bin"
+
+
+@functools.cache
+def repo_root() -> pathlib.Path:
+    """
+    Returns the repository root (one level above this project).
+    """
+    return project().parent
+
+
+@functools.cache
+def proto() -> pathlib.Path:
+    """
+    Returns the top-level proto/ module directory: shared proto
+    sources + the single generated Go tree every module imports.
+    """
+    return repo_root() / "proto"

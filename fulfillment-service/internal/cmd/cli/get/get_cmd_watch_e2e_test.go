@@ -22,11 +22,11 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/packages"
 	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 	"github.com/osac-project/osac/fulfillment-service/internal/testing"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 var _ = Describe("Watch e2e", func() {

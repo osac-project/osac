@@ -21,11 +21,11 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 
-	privatev1 "github.com/osac-project/osac-metering/internal/api/osac/private/v1"
 	"github.com/osac-project/osac-metering/internal/events"
 	kafkapub "github.com/osac-project/osac-metering/internal/kafka"
 	"github.com/osac-project/osac-metering/internal/projection"
 	"github.com/osac-project/osac-metering/schema"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 var (

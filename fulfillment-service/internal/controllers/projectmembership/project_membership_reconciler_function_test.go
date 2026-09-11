@@ -25,9 +25,9 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/idp"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 // userRefs creates a slice of UserReference messages from the given names.

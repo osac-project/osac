@@ -13,12 +13,13 @@ API. Do not use "resource" for this purpose.
 
 ## Public and private APIs
 
-The API has two variants:
+The proto contract lives in the **top-level `proto/` module**, not
+under `fulfillment-service/`. The API has two variants:
 
 - `proto/private/osac/private/v1/` contains the **private API** (editable source of truth), reserved for system administrators and controllers. This is the full API with all implementation details.
 - `proto/public/osac/public/v1/` contains the **public API** (generated, never edit manually), intended for regular users. This is automatically generated from the private API.
 
-**IMPORTANT**: Only edit files in `proto/private/`. The `proto/public/` directory is fully generated and will be overwritten.
+**IMPORTANT**: Only edit files in `proto/private/`. `proto/public/` and `proto/gen/` are fully generated and will be overwritten (`make -C proto generate`).
 
 ### How Public is Generated from Private
 

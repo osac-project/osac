@@ -11,9 +11,9 @@ Unless required by applicable law or agreed to in writing, software distributed 
 language governing permissions and limitations under the License.
 */
 
-//go:generate mockgen -source=../../api/osac/private/v1/project_memberships_service_grpc.pb.go -destination=project_memberships_client_mock.go -package=projectmembership ProjectMembershipsClient
-//go:generate mockgen -source=../../api/osac/private/v1/projects_service_grpc.pb.go -destination=projects_client_mock.go -package=projectmembership ProjectsClient
-//go:generate mockgen -source=../../api/osac/private/v1/users_service_grpc.pb.go -destination=users_client_mock.go -package=projectmembership UsersClient
+//go:generate mockgen -destination=project_memberships_client_mock.go -package=projectmembership github.com/osac-project/osac/proto/gen/osac/private/v1 ProjectMembershipsClient
+//go:generate mockgen -destination=projects_client_mock.go -package=projectmembership github.com/osac-project/osac/proto/gen/osac/private/v1 ProjectsClient
+//go:generate mockgen -destination=users_client_mock.go -package=projectmembership github.com/osac-project/osac/proto/gen/osac/private/v1 UsersClient
 
 package projectmembership
 
@@ -30,11 +30,11 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/idp"
 	"github.com/osac-project/osac/fulfillment-service/internal/masks"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 // FunctionBuilder contains the data needed to build instances of the reconciler function.

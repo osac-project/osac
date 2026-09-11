@@ -72,7 +72,6 @@ for gate in "${GATES[@]}"; do
         ((.external_id // "") | startswith($prefix))
         or ((.details_url // "") | test("^https://github.com/[^/]+/[^/]+/runs/[0-9]+$"))
       )
-      and not ((.details_url // "") | test("/actions/runs/[0-9]+/job/"))
     ) | .id] | .[]
   ' <<<"${check_runs}")
 done

@@ -108,6 +108,9 @@ message NetworkClassSpec {
     gte: 1,
     lte: 128
   }];
+
+  // Backend configuration for east-west fabric domains.
+  EastWestConfig east_west_config = 4;
 }
 
 // Default networking configuration used during tenant onboarding.
@@ -195,6 +198,35 @@ message NetworkClassCapabilities {
 
   // Whether this network class supports DPU (Data Processing Unit) offloading.
   bool dpu_support = 4;
+
+  // Whether this network class supports Ethernet east-west fabric domains.
+  bool supports_east_west_ethernet = 5;
+
+  // Whether this network class supports InfiniBand east-west fabric domains.
+  bool supports_east_west_infiniband = 6;
+
+  // Whether this network class supports NVLink fabric domains.
+  bool supports_nvlink = 7;
+}
+
+message EastWestConfig {
+  EthernetEastWestConfig ethernet_ew = 1;
+  InfiniBandEastWestConfig infiniband_ew = 2;
+  NVLinkEastWestConfig nvlink = 3;
+}
+
+message EthernetEastWestConfig {
+  string template_id = 1;
+}
+
+message InfiniBandEastWestConfig {
+  string mode = 1;
+  string pkey_policy = 2;
+}
+
+message NVLinkEastWestConfig {
+  string backend = 1;
+  string endpoint = 2;
 }
 
 // Represents the current operational state of a NetworkClass.

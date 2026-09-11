@@ -45,7 +45,6 @@ type AddOnOperatorsServer struct {
 	logger          *slog.Logger
 	delegate        privatev1.AddOnOperatorsServer
 	filterValidator *dao.FilterTranslator
-	inMapper        *GenericMapper[*publicv1.AddOnOperator, *privatev1.AddOnOperator]
 	outMapper       *GenericMapper[*privatev1.AddOnOperator, *publicv1.AddOnOperator]
 }
 
@@ -88,13 +87,6 @@ func (b *AddOnOperatorsServerBuilder) Build() (result *AddOnOperatorsServer, err
 		return
 	}
 
-	inMapper, err := NewGenericMapper[*publicv1.AddOnOperator, *privatev1.AddOnOperator]().
-		SetLogger(b.logger).
-		SetStrict(true).
-		Build()
-	if err != nil {
-		return
-	}
 	outMapper, err := NewGenericMapper[*privatev1.AddOnOperator, *publicv1.AddOnOperator]().
 		SetLogger(b.logger).
 		SetStrict(false).
@@ -126,7 +118,6 @@ func (b *AddOnOperatorsServerBuilder) Build() (result *AddOnOperatorsServer, err
 		logger:          b.logger,
 		delegate:        delegate,
 		filterValidator: filterValidator,
-		inMapper:        inMapper,
 		outMapper:       outMapper,
 	}
 	return

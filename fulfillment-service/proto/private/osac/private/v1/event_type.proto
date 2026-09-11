@@ -16,6 +16,7 @@ syntax = "proto3";
 package osac.private.v1;
 
 import "cleanapi/cleanapi.proto";
+import "osac/private/v1/add_on_operator_type.proto";
 import "osac/private/v1/baremetal_instance_catalog_item_type.proto";
 import "osac/private/v1/baremetal_instance_template_type.proto";
 import "osac/private/v1/baremetal_instance_type.proto";
@@ -95,6 +96,7 @@ message Event {
     NATGateway nat_gateway = 33 [(cleanapi.field).private = true];
     StorageTier storage_tier = 34 [(cleanapi.field).private = true];
     Volume volume = 35 [(cleanapi.field).private = true];
+    AddOnOperator add_on_operator = 36 [(cleanapi.field).private = true];
   }
 }
 

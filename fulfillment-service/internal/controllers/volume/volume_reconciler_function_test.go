@@ -84,6 +84,34 @@ func newTaskForDelete(volumeID, hubID string, hubCache controllers.HubCache) *ta
 }
 
 var _ = Describe("buildSpec", func() {
+	It("maps CSI topology segments", func() {
+		t := &task{
+			volume: privatev1.Volume_builder{
+				Id: "vol-buildspec-topology",
+				Spec: privatev1.VolumeSpec_builder{
+					StorageTier: "gold",
+					SizeGib:     100,
+					AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+					Topology: privatev1.VolumeTopology_builder{
+						Segments: map[string]string{
+							"osac.io/node":                "worker-1",
+							"topology.kubernetes.io/zone": "zone-a",
+						},
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}
+
+		spec := t.buildSpec()
+
+		Expect(spec.Topology).To(Equal(&osacv1alpha1.VolumeTopology{
+			Segments: map[string]string{
+				"osac.io/node":                "worker-1",
+				"topology.kubernetes.io/zone": "zone-a",
+			},
+		}))
+	})
+
 	It("maps all spec fields including access mode enum", func() {
 		t := &task{
 			volume: privatev1.Volume_builder{

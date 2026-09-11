@@ -100,6 +100,17 @@ spec:
                 x-kubernetes-validations:
                 - message: storageTier is immutable
                   rule: self == oldSelf
+              topology:
+                description: Topology contains optional CSI-style placement segments.
+                properties:
+                  segments:
+                    additionalProperties:
+                      type: string
+                    type: object
+                type: object
+                x-kubernetes-validations:
+                - message: topology is immutable
+                  rule: self == oldSelf
             required:
             - accessMode
             - sizeGiB
@@ -193,6 +204,11 @@ spec:
                   - NFS
                 description: |-
                   Protocol is the storage protocol used for this volume.
+                  Resolved during tier resolution at creation time.
+                type: string
+              provider:
+                description: |-
+                  Provider identifies the registered VendorProvisioner implementation selected for this volume.
                   Resolved during tier resolution at creation time.
                 type: string
               vendorContext:

@@ -1,0 +1,43 @@
+---
+name: Complete stale e2e gate checks
+
+# Manual cleanup when invalidate-e2e-gates left in_progress orphans after native
+# e2e-*-gate jobs already passed. Does not re-run e2e.
+on:
+  workflow_dispatch:
+    inputs:
+      head_sha:
+        description: PR head commit SHA (40 characters)
+        required: true
+        type: string
+      pr_number:
+        description: Optional PR number (logged only)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  complete-stale-gates:
+    if: github.repository == 'osac-project/osac'
+    runs-on: ubuntu-latest
+    permissions:
+      checks: write
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - name: Complete stale in_progress e2e gate checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${PR_NUMBER}" ]]; then
+            echo "Cleaning stale e2e gates for PR #${PR_NUMBER} at ${HEAD_SHA:0:7}"
+          else
+            echo "Cleaning stale e2e gates at ${HEAD_SHA:0:7}"
+          fi
+          bash .github/scripts/complete-stale-e2e-gate-checks.sh

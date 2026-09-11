@@ -5,6 +5,8 @@
 set -euo pipefail
 
 readonly GATES=(e2e-vmaas-gate e2e-bmaas-gate e2e-caas-gate)
+# Matches external_id set by invalidate-e2e-gates when present on newer checks.
+readonly INVALIDATE_EXTERNAL_ID_PREFIX="osac-invalidate-e2e-gate"
 
 if [[ -z "${HEAD_SHA:-}" || -z "${REPO:-}" ]]; then
   echo "HEAD_SHA and REPO are required" >&2
@@ -14,7 +16,7 @@ fi
 tmpdir=$(mktemp -d)
 page=1
 while true; do
-  resp=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs?per_page=100&page=${page}")
+  resp=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs?per_page=100&page=${page}&filter=all")
   jq -c '.check_runs' <<<"${resp}" > "${tmpdir}/page-${page}.json"
   count=$(jq '.check_runs | length' <<<"${resp}")
   if [[ "${count}" -lt 100 ]]; then
@@ -31,12 +33,15 @@ summary="Manual cleanup of stale invalidate-e2e-gates check; gate already succes
 failed=0
 
 for gate in "${GATES[@]}"; do
-  latest=$(jq -r --arg g "${gate}" '
-    [.[] | select(.name == $g)]
-    | sort_by(.started_at) | last | .conclusion // "missing"
-  ' <<<"${check_runs}")
-  if [[ "${latest}" != "success" ]]; then
-    echo "Skipping ${gate}: latest conclusion is ${latest}"
+  if ! jq -e --arg g "${gate}" '
+    [.[] | select(
+      .name == $g
+      and .status == "completed"
+      and .conclusion == "success"
+      and ((.details_url // "") | test("/actions/runs/[0-9]+/job/"))
+    )] | length > 0
+  ' <<<"${check_runs}" >/dev/null; then
+    echo "Skipping ${gate}: no native gate job success on this SHA"
     continue
   fi
   while IFS= read -r id; do
@@ -59,8 +64,16 @@ for gate in "${GATES[@]}"; do
       echo "Failed to complete ${gate} check ${id}" >&2
       failed=1
     fi
-  done < <(jq -r --arg g "${gate}" '
-    [.[] | select(.name == $g and .status == "in_progress") | .id] | .[]
+  done < <(jq -r --arg g "${gate}" --arg prefix "${INVALIDATE_EXTERNAL_ID_PREFIX}" '
+    [.[] | select(
+      .name == $g
+      and .status == "in_progress"
+      and (
+        ((.external_id // "") | startswith($prefix))
+        or ((.details_url // "") | test("^https://github.com/[^/]+/[^/]+/runs/[0-9]+$"))
+      )
+      and not ((.details_url // "") | test("/actions/runs/[0-9]+/job/"))
+    ) | .id] | .[]
   ' <<<"${check_runs}")
 done
 

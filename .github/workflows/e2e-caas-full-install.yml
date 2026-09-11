@@ -303,8 +303,10 @@ jobs:
             echo "e2e passed"
           fi
 
-  # Latest check named e2e-caas-gate after the skipped gate job. Forks may
-  # lack checks:write; unreported check is still Expected/Waiting.
+  # Latest check named e2e-caas-gate after the skipped gate job. Bind the
+  # pending check to this workflow's check suite so PR UI does not group it
+  # under unrelated pull_request_target workflows. Forks may lack checks:write;
+  # unreported check is still Expected/Waiting.
   e2e-caas-pending:
     if: >-
       always()
@@ -322,6 +324,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CHECK_SUITE_ID: ${{ github.check_suite_id }}
           CHECK_NAME: e2e-caas-gate
           DETAILS_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           REASON: ${{ needs.e2e-readiness.outputs.reason }}
@@ -334,6 +337,7 @@ jobs:
           payload=$(jq -n \
             --arg name "${CHECK_NAME}" \
             --arg sha "${HEAD_SHA}" \
+            --argjson check_suite_id "${CHECK_SUITE_ID}" \
             --arg started "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg title "${title}" \
             --arg details "${DETAILS_URL}" \
@@ -341,6 +345,7 @@ jobs:
             '{
               name: $name,
               head_sha: $sha,
+              check_suite_id: $check_suite_id,
               status: "in_progress",
               details_url: $details,
               started_at: $started,

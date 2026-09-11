@@ -84,14 +84,14 @@ type VastVendorProvisioner struct {
 	// configNamespace is where the hub "vast-tenant-config-<tenant>" Secrets
 	// live (OSAC_STORAGE_CONFIG_NAMESPACE).
 	configNamespace string
-	// endpoints maps a StorageBackend name to its vendor CSI controller gRPC
+	// endpoints maps a provider routing key to its vendor CSI controller gRPC
 	// endpoint (e.g. "vast" -> "vast-csi-controller.osac-csi-backends.svc:50051").
 	endpoints map[string]string
 	dial      vendorDialer
 }
 
 // NewVastVendorProvisioner constructs a VastVendorProvisioner and fails fast on
-// invalid configuration: at least one backend->endpoint mapping is required so
+// invalid configuration: at least one provider->endpoint mapping is required so
 // the operator errors loudly at startup rather than running degraded and
 // leaving volumes stuck in Progressing.
 func NewVastVendorProvisioner(reader client.Reader, configNamespace string, endpoints map[string]string) (*VastVendorProvisioner, error) {

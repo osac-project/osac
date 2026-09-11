@@ -28,6 +28,7 @@ import (
 
 	"github.com/osac-project/osac/osac-operator/internal/controller"
 
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/cluster"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 	"sigs.k8s.io/multicluster-runtime/pkg/multicluster"
@@ -353,6 +354,31 @@ var _ = Describe("parseVendorControllers", func() {
 		_, err := parseVendorControllers("vast=")
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("backend and endpoint must not be empty"))
+	})
+})
+
+var _ = Describe("newVendorProvisionerRegistry", func() {
+	It("registers VAST only for the vast provider", func() {
+		registry, err := newVendorProvisionerRegistry(
+			fake.NewClientBuilder().Build(),
+			"osac-system",
+			map[string]string{"vast": "vast.svc:50051", "netapp": "netapp.svc:50052"},
+		)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(registry).To(HaveLen(1))
+		Expect(registry["vast"]).To(BeAssignableToTypeOf(&controller.VastVendorProvisioner{}))
+		_, registered := registry["netapp"]
+		Expect(registered).To(BeFalse())
+	})
+
+	It("leaves future provider keys unregistered", func() {
+		registry, err := newVendorProvisionerRegistry(
+			fake.NewClientBuilder().Build(),
+			"osac-system",
+			map[string]string{"netapp": "netapp.svc:50052"},
+		)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(registry).To(BeEmpty())
 	})
 })
 

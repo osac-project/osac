@@ -51,13 +51,17 @@ image, so pin both rather than accepting any workflow or any tag in this repo:
 | osac-csi-driver                             | `osac-project/osac-csi-driver`         | `publish-csi-driver-image.yaml`             | `osac-csi-driver`                  |
 
 `nightly-build.yaml` independently rebuilds and republishes every image above
-on its own schedule (`schedule`/`workflow_dispatch`, always off `main`), so
+on its own schedule (`schedule` or a manual `workflow_dispatch`), so
 `nightly-build.yaml@refs/heads/main` is also a valid signer identity for any
-image in this table — not just the workflow listed. Which identity you
-actually see on a given digest depends on which workflow signed it first: if
-a night's rebuild is byte-identical to that day's regular build, the digest
-already carries the regular workflow's signature and nightly never re-signs
-it; a rebuild that differs gets its own `nightly-build.yaml` signature.
+image in this table — not just the workflow listed. Signing isn't skipped for
+an already-signed digest: nightly signs whatever digest each run pushes, even
+when a rebuild is byte-identical to an already-published one, so that digest
+ends up with more than one valid signature from different identities rather
+than only the newest. `workflow_dispatch` has no restriction to `main` — it
+checks out `github.sha` for whichever ref is selected when the run is
+dispatched, so a manual run against a non-`main` ref signs under that ref's
+identity instead; match the regex to the ref actually used if you dispatched
+it yourself.
 
 Verify an image, substituting the workflow file and tag prefix from the table above:
 
@@ -89,12 +93,13 @@ chart) is `workflow_dispatch`-only and normally also runs from `main`, but can
 be dispatched against one of the umbrella chart's own `osac/v*` tags.
 
 `nightly-build.yaml` also independently packages and republishes every chart
-above (including the umbrella chart) as part of its nightly run, off `main`.
-The same rule as images applies: `nightly-build.yaml@refs/heads/main` is a
-valid alternate identity for any chart here, but you'll only see it on a
-digest whose nightly rebuild actually differed from the existing published
-chart — byte-identical rebuilds keep the earlier workflow's signature rather
-than being re-signed.
+above (including the umbrella chart) as part of its nightly run. The same
+rule as images applies: `nightly-build.yaml@refs/heads/main` is a valid
+alternate identity for any chart here, and it signs every chart it packages
+each run regardless of whether that run's digest is byte-identical to an
+already-published one — so a chart digest can legitimately carry signatures
+from more than one identity, not just the most recent signer. The same
+`workflow_dispatch`-ref caveat from the image section applies here too.
 
 `helm pull`/`helm push` print the artifact's digest directly, so no extra
 tooling is needed to resolve it:
@@ -104,7 +109,7 @@ helm pull oci://ghcr.io/osac-project/charts/<chart-name> --version <version>
 # Digest: sha256:<digest>
 
 cosign verify \
-  --certificate-identity-regexp '^https://github\.com/osac-project/osac/\.github/workflows/publish-charts\.yaml@refs/heads/main$' \
+  --certificate-identity-regexp '^https://github\.com/osac-project/osac/\.github/workflows/(publish-charts|nightly-build)\.yaml@refs/heads/main$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   ghcr.io/osac-project/charts/<chart-name>@sha256:<digest>
 ```
@@ -113,7 +118,7 @@ For the umbrella chart, accept either ref:
 
 ```bash
 cosign verify \
-  --certificate-identity-regexp '^https://github\.com/osac-project/osac/\.github/workflows/publish-osac-installer-chart\.yaml@refs/(heads/main|tags/osac/.+)$' \
+  --certificate-identity-regexp '^https://github\.com/osac-project/osac/\.github/workflows/(publish-osac-installer-chart\.yaml@refs/(heads/main|tags/osac/.+)|nightly-build\.yaml@refs/heads/main)$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   ghcr.io/osac-project/charts/osac@sha256:<digest>
 ```

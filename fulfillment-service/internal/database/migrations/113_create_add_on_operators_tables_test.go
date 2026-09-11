@@ -67,44 +67,27 @@ var _ = DescribeMigration("Create add-on operators tables", func() {
 		Expect(count).To(Equal(1))
 	})
 
-	It("Enforces unique name per visibility scope for active records", func(ctx context.Context) {
+	It("Enforces unique name within the shared tenant", func(ctx context.Context) {
 		_, err := conn.Exec(ctx, `
 			insert into add_on_operators (id, name, tenant, data)
 			values ($1, $2, $3, $4)`,
-			"ao-1", "gpu-operator", "shared", `{"tenant":"tenant-a"}`,
+			"ao-1", "gpu-operator", "shared", `{}`,
 		)
 		Expect(err).ToNot(HaveOccurred())
 
 		_, err = conn.Exec(ctx, `
 			insert into add_on_operators (id, name, tenant, data)
 			values ($1, $2, $3, $4)`,
-			"ao-2", "gpu-operator", "shared", `{"tenant":"tenant-a"}`,
+			"ao-2", "gpu-operator", "shared", `{}`,
 		)
 		Expect(err).To(HaveOccurred())
 	})
 
-	It("Allows the same name in different visibility scopes", func(ctx context.Context) {
-		var err error
-		_, err = conn.Exec(ctx, `
-			insert into add_on_operators (id, name, tenant, data)
-			values ($1, $2, $3, $4)`,
-			"ao-a", "gpu-operator", "shared", `{"tenant":"tenant-a"}`,
-		)
-		Expect(err).ToNot(HaveOccurred())
-
-		_, err = conn.Exec(ctx, `
-			insert into add_on_operators (id, name, tenant, data)
-			values ($1, $2, $3, $4)`,
-			"ao-b", "gpu-operator", "shared", `{"tenant":"tenant-b"}`,
-		)
-		Expect(err).ToNot(HaveOccurred())
-	})
-
-	It("Allows name reuse after soft-delete", func(ctx context.Context) {
+	It("Keeps name reserved while soft-deleted", func(ctx context.Context) {
 		_, err := conn.Exec(ctx, `
 			insert into add_on_operators (id, name, tenant, data)
 			values ($1, $2, $3, $4)`,
-			"ao-old", "gpu-operator", "shared", `{"tenant":"tenant-a"}`,
+			"ao-old", "gpu-operator", "shared", `{}`,
 		)
 		Expect(err).ToNot(HaveOccurred())
 
@@ -117,9 +100,9 @@ var _ = DescribeMigration("Create add-on operators tables", func() {
 		_, err = conn.Exec(ctx, `
 			insert into add_on_operators (id, name, tenant, data)
 			values ($1, $2, $3, $4)`,
-			"ao-new", "gpu-operator", "shared", `{"tenant":"tenant-a"}`,
+			"ao-new", "gpu-operator", "shared", `{}`,
 		)
-		Expect(err).ToNot(HaveOccurred())
+		Expect(err).To(HaveOccurred())
 	})
 
 	It("Rejects invalid tenant reference", func(ctx context.Context) {

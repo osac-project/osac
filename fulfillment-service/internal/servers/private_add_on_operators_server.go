@@ -29,7 +29,6 @@ import (
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/events"
 )
 
@@ -50,7 +49,6 @@ type PrivateAddOnOperatorsServer struct {
 	logger           *slog.Logger
 	defaultPublished bool
 	generic          *GenericServer[*privatev1.AddOnOperator]
-	tenantsDAO       *dao.GenericDAO[*privatev1.Tenant]
 }
 
 func NewPrivateAddOnOperatorsServer() *PrivateAddOnOperatorsServerBuilder {
@@ -127,21 +125,10 @@ func (b *PrivateAddOnOperatorsServerBuilder) Build() (result *PrivateAddOnOperat
 	if err != nil {
 		return
 	}
-	tenantsDAO, err := dao.NewGenericDAO[*privatev1.Tenant]().
-		SetLogger(b.logger).
-		SetTableName("tenants").
-		SetTenancyLogic(b.tenancyLogic).
-		SetMetricsRegisterer(b.metricsRegisterer).
-		Build()
-	if err != nil {
-		return
-	}
-
 	result = &PrivateAddOnOperatorsServer{
 		logger:           b.logger,
 		defaultPublished: defaultPublished,
 		generic:          generic,
-		tenantsDAO:       tenantsDAO,
 	}
 	return
 }
@@ -161,7 +148,7 @@ func (s *PrivateAddOnOperatorsServer) Get(ctx context.Context,
 func (s *PrivateAddOnOperatorsServer) Create(ctx context.Context,
 	request *privatev1.AddOnOperatorsCreateRequest) (response *privatev1.AddOnOperatorsCreateResponse, err error) {
 	if object := request.GetObject(); object != nil {
-		if err = s.validateScopeTenant(ctx, object.GetTenant()); err != nil {
+		if err = ensureSharedOwnership(object); err != nil {
 			return
 		}
 		if s.defaultPublished && !object.HasPublished() {
@@ -178,8 +165,8 @@ func (s *PrivateAddOnOperatorsServer) Create(ctx context.Context,
 func (s *PrivateAddOnOperatorsServer) Update(ctx context.Context,
 	request *privatev1.AddOnOperatorsUpdateRequest) (response *privatev1.AddOnOperatorsUpdateResponse, err error) {
 	if object := request.GetObject(); object != nil {
-		if updateIncludesField(request.GetUpdateMask(), "tenant") {
-			if err = s.validateScopeTenant(ctx, object.GetTenant()); err != nil {
+		if updateIncludesField(request.GetUpdateMask(), "metadata.tenant") {
+			if err = validateSharedOwnership(object); err != nil {
 				return
 			}
 		}
@@ -251,22 +238,23 @@ func validateOCPVersionRange(minVersion, maxVersion string) error {
 	return nil
 }
 
-func (s *PrivateAddOnOperatorsServer) validateScopeTenant(ctx context.Context, tenant string) error {
-	if tenant == "" {
+func ensureSharedOwnership(object *privatev1.AddOnOperator) error {
+	metadata := object.GetMetadata()
+	if metadata == nil {
 		return nil
 	}
-
-	response, err := s.tenantsDAO.List().
-		SetFilter(fmt.Sprintf("this.metadata.name == %s && !has(this.metadata.deletion_timestamp)", strconv.Quote(tenant))).
-		SetLimit(1).
-		Do(ctx)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to validate add-on operator scope tenant", slog.Any("error", err))
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to validate add-on operator scope tenant")
+	if metadata.GetTenant() == "" {
+		metadata.SetTenant(auth.SharedTenant)
+		return nil
 	}
-	if response.GetTotal() == 0 {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"field 'tenant' references unknown or deleted tenant '%s'", tenant)
+	return validateSharedOwnership(object)
+}
+
+func validateSharedOwnership(object *privatev1.AddOnOperator) error {
+	metadata := object.GetMetadata()
+	if metadata != nil && metadata.GetTenant() != "" && metadata.GetTenant() != auth.SharedTenant {
+		return grpcstatus.Errorf(grpccodes.PermissionDenied,
+			"add-on operators must be owned by the '%s' tenant", auth.SharedTenant)
 	}
 	return nil
 }

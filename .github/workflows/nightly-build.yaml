@@ -328,6 +328,10 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # cosign's keyless image signing below -- safe directly on this job,
+      # no pull_request exposure: nightly-build.yaml only ever runs on
+      # schedule/workflow_dispatch.
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -399,6 +403,14 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
+    - name: Install skopeo
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq skopeo
+
+    - name: Install cosign
+      uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
+
     # osac-aap's execution-environment-build target shells out to `uv`
     # (ansible-builder is invoked via `uv tool run`) -- not present on
     # ubuntu-latest by default. Mirrors execution-environment.yml's own setup.
@@ -440,6 +452,7 @@ jobs:
     # real, release-looking nightly version tag never appears in GHCR for a
     # build that never actually shipped.
     - name: Build and push image
+      id: build
       if: steps.resolve.outputs.skip != 'true'
       env:
         VERSION: ${{ steps.resolve.outputs.version }}
@@ -454,6 +467,18 @@ jobs:
         fi
         make -C "${{ matrix.dir }}" "${{ matrix.target }}" "${BUILD_ARGS[@]}"
         make -C "${{ matrix.dir }}" "${{ matrix.push_target }}" "${BUILD_ARGS[@]}"
+        echo "image-ref=${IMG_REF}" >> "$GITHUB_OUTPUT"
+
+    # make image-push (plain `podman push`) doesn't report a digest, so
+    # resolve what's actually in the registry via skopeo -- inspecting the
+    # local image instead could sign a different digest than what a
+    # consumer actually pulls (e.g. under multi-arch/manifest-list builds).
+    - name: Sign image with cosign
+      if: steps.resolve.outputs.skip != 'true'
+      run: |
+        set -euo pipefail
+        digest=$(skopeo inspect "docker://${{ steps.build.outputs.image-ref }}" | jq -r '.Digest')
+        cosign sign --yes "${{ matrix.image }}@${digest}"
 
   # -------------------------------------------------------------------
   # Job 3: Code quality — unit tests, integration tests, and CodeQL SAST

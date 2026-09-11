@@ -129,6 +129,34 @@ if needed. Images pushed to `quay.io/redhat-user-workloads/osac-tenant/...` via
 Konflux are signed separately by Konflux's own Enterprise Contract pipeline;
 see that pipeline's documentation for verifying those instead.
 
+## Verifying binary signatures
+
+The `osac` CLI and `fulfillment-service` binaries are released to GitHub
+Releases by `publish-binaries.yaml`, triggered on `fulfillment-service/vX.Y.Z`
+tags. Each release binary is signed the same keyless way as the images and
+charts above; goreleaser's `signs` step produces a detached signature
+(`<binary>.sig`) and Fulcio certificate (`<binary>.pem`) alongside every
+binary in the release.
+
+Download a binary with its signature and certificate, then verify:
+
+```bash
+gh release download fulfillment-service/<version> \
+  --repo osac-project/osac \
+  --pattern 'osac_<os>_<arch>*'
+
+cosign verify-blob \
+  --certificate osac_<os>_<arch>.pem \
+  --signature osac_<os>_<arch>.sig \
+  --certificate-identity-regexp '^https://github\.com/osac-project/osac/\.github/workflows/publish-binaries\.yaml@refs/tags/fulfillment-service/.+$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  osac_<os>_<arch>
+```
+
+Substitute `fulfillment-service` for `osac` to verify that binary instead —
+both are built and signed from the same release. `<os>`/`<arch>` match the
+asset names on the release page (e.g. `osac_Linux_x86_64`).
+
 ## Local development with go.work
 
 The root [`go.work`](go.work) file wires all Go modules in the mono-repo —

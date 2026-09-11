@@ -54,6 +54,23 @@ archives:
     {{- if eq .Arch "amd64" }}x86_64
     {{- else }}{{ .Arch }}{{ end }}
 
+# Keyless cosign signing of every release binary, same Fulcio/Rekor OIDC flow
+# already used for container images and Helm charts (see the repo README) --
+# no private key material here either. Produces a detached signature
+# (<artifact>.sig) and Fulcio certificate (<artifact>.pem) per binary,
+# which goreleaser uploads to the GitHub release alongside it.
+signs:
+- cmd: cosign
+  certificate: '${artifact}.pem'
+  args:
+    - sign-blob
+    - "--output-certificate=${certificate}"
+    - "--output-signature=${signature}"
+    - "${artifact}"
+    - --yes
+  artifacts: all
+  output: true
+
 changelog:
   sort: asc
   filters:

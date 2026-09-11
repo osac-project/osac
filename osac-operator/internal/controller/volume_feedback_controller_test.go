@@ -171,6 +171,7 @@ var _ = Describe("VolumeFeedbackController", func() {
 			cr := newVolumeFeedbackCR(volName, volNamespace, volID, v1alpha1.VolumePhaseReady, nil)
 			cr.Status.VendorVolumeID = "netapp-vol-42"
 			cr.Status.Backend = "netapp-cluster-1"
+			cr.Status.Provider = "netapp"
 			cr.Status.Protocol = v1alpha1.VolumeProtocolNFS
 			Expect(fakeK8s.Create(ctx, cr)).To(Succeed())
 
@@ -183,6 +184,7 @@ var _ = Describe("VolumeFeedbackController", func() {
 			updated := mockServer.updates[0]
 			Expect(updated.GetStatus().GetVendorVolumeId()).To(Equal("netapp-vol-42"))
 			Expect(updated.GetStatus().GetBackend()).To(Equal("netapp-cluster-1"))
+			Expect(updated.GetStatus().GetProvider()).To(Equal("netapp"))
 			Expect(updated.GetStatus().GetProtocol()).To(Equal(privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS))
 		})
 

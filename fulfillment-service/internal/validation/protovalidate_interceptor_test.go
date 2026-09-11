@@ -117,6 +117,32 @@ var _ = Describe("Protovalidate interceptor", func() {
 			Expect(status.Message()).To(ContainSubstring("validation failed"))
 		})
 
+		It("Rejects an unknown ExternalIPAttachment endpoint enum value", func() {
+			invalidSpec := publicv1.ExternalIPAttachmentSpec_builder{
+				ExternalIp:     &publicv1.ExternalIPLocalReference{Id: "external-ip-1"},
+				Cluster:        &publicv1.ClusterLocalReference{Id: "cluster-1"},
+				TargetEndpoint: publicv1.ExternalIPAttachmentEndpoint(99),
+			}.Build()
+
+			mockHandler := func(ctx context.Context, req any) (any, error) {
+				Fail("Handler should not be called for an unknown endpoint")
+				return nil, nil
+			}
+
+			response, err := interceptor.UnaryServer(
+				context.Background(),
+				invalidSpec,
+				&grpc.UnaryServerInfo{FullMethod: "/test.Service/Method"},
+				mockHandler,
+			)
+
+			Expect(err).To(HaveOccurred())
+			Expect(response).To(BeNil())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+		})
+
 		It("Rejects requests with invalid name pattern (uppercase)", func() {
 			// Create Metadata with uppercase letters (invalid):
 			invalidMetadata := &publicv1.Metadata{

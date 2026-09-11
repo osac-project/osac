@@ -173,6 +173,10 @@ func (r *ExternalIPAttachmentReconciler) Reconcile(ctx context.Context, req mcre
 	}
 
 	if !equality.Semantic.DeepEqual(attachment.Status, *oldstatus) {
+		if oldstatus.Phase != attachment.Status.Phase {
+			now := metav1.Now()
+			attachment.Status.StateTransitionTime = &now
+		}
 		log.Info("status requires update", "phase", attachment.Status.Phase)
 		if updateErr := r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(attachment), attachment.Status); updateErr != nil {
 			return res, updateErr

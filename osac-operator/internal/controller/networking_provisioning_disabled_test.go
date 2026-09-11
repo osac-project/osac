@@ -423,6 +423,13 @@ var _ = Describe("Networking provisioning disabled", func() {
 			Expect(updated.Status.Phase).To(Equal(osacv1alpha1.ExternalIPPhaseReady))
 			Expect(updated.Status.State).To(Equal(osacv1alpha1.ExternalIPStateAllocated))
 			Expect(updated.Status.Address).To(Equal("0.0.0.0"))
+			Expect(updated.Status.StateTransitionTime).NotTo(BeNil())
+			allocationTransitionTime := updated.Status.StateTransitionTime.DeepCopy()
+
+			_, err = r.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(fakeClient.Get(ctx, key, updated)).To(Succeed())
+			Expect(updated.Status.StateTransitionTime).To(Equal(allocationTransitionTime))
 			Expect(provisionCalled).To(BeFalse())
 		})
 	})

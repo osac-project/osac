@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "osac-metering.deploymentIdentityName" . }}
+  labels:
+    {{- include "osac-metering.labels" . | nindent 4 }}
+    app.kubernetes.io/component: metering
+  annotations:
+    helm.sh/resource-policy: keep
+data:
+  deploymentId: {{ include "osac-metering.deploymentId" . | quote }}

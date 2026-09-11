@@ -112,6 +112,8 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
+            - name: METERING_DEPLOYMENT_ID
+              value: {{ include "osac-metering.deploymentId" . | quote }}
             - name: FULFILLMENT_SERVER_ADDRESS
               value: {{ ((.Values.fulfillment).address) | default (printf "fulfillment-internal-api.%s.svc.cluster.local:8001" .Release.Namespace) | quote }}
             - name: TLS_CA_CERT

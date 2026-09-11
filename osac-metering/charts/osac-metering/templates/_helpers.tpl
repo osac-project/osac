@@ -15,6 +15,24 @@
 {{- end }}
 {{- end -}}
 
+{{- define "osac-metering.deploymentIdentityName" -}}
+{{- printf "%s-metering-deployment-identity" .Release.Name | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{- define "osac-metering.deploymentId" -}}
+{{- $configured := default .Release.Name .Values.deploymentId -}}
+{{- $identity := lookup "v1" "ConfigMap" .Release.Namespace (include "osac-metering.deploymentIdentityName" .) -}}
+{{- if $identity -}}
+{{- $stored := required "metering deployment identity ConfigMap is missing deploymentId" (index $identity.data "deploymentId") -}}
+{{- if ne $configured $stored -}}
+{{- fail (printf "metering.deploymentId cannot change from %q to %q" $stored $configured) -}}
+{{- end -}}
+{{- $stored -}}
+{{- else -}}
+{{- $configured -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "osac-metering.labels" -}}
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
 app.kubernetes.io/name: {{ include "osac-metering.name" . }}

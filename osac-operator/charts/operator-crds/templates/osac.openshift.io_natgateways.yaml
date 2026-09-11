@@ -211,6 +211,11 @@ spec:
                   - type
                   type: object
                 type: array
+              stateTransitionTime:
+                description: StateTransitionTime records when the NATGateway entered
+                  its current state.
+                format: date-time
+                type: string
             type: object
         required:
         - spec

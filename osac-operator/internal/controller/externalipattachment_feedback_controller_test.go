@@ -21,6 +21,7 @@ import (
 	"errors"
 	"net"
 	"sync"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -29,6 +30,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -153,6 +155,7 @@ var _ = Describe("ExternalIPAttachmentFeedbackController", func() {
 		})
 
 		It("should sync Phase=Ready to state=READY and set parent ExternalIP attached=true", func() {
+			transitionTime := metav1.NewTime(time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC))
 			attachment := &privatev1.ExternalIPAttachment{
 				Id: attachmentID,
 				Metadata: &privatev1.Metadata{
@@ -188,7 +191,8 @@ var _ = Describe("ExternalIPAttachmentFeedbackController", func() {
 					ExternalIP: "some-externalip",
 				},
 				Status: v1alpha1.ExternalIPAttachmentStatus{
-					Phase: v1alpha1.ExternalIPAttachmentPhaseReady,
+					Phase:               v1alpha1.ExternalIPAttachmentPhaseReady,
+					StateTransitionTime: &transitionTime,
 				},
 			}
 			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
@@ -206,6 +210,13 @@ var _ = Describe("ExternalIPAttachmentFeedbackController", func() {
 
 			Expect(mockExternalIPsServer2.updates).To(HaveLen(1))
 			Expect(mockExternalIPsServer2.updates[0].GetStatus().GetAttached()).To(BeTrue())
+			Expect(mockExternalIPsServer2.updates[0].GetStatus().GetAttachmentTransitionTime().AsTime()).To(Equal(transitionTime.Time))
+
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: attachmentName, Namespace: attachmentNamespace},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockExternalIPsServer2.updates).To(HaveLen(1))
 		})
 
 		It("should sync Phase=Failed to state=FAILED", func() {
@@ -270,10 +281,12 @@ var _ = Describe("ExternalIPAttachmentFeedbackController", func() {
 				Metadata: &privatev1.Metadata{
 					Name: "parent-externalip",
 				},
-				Spec:   &privatev1.ExternalIPSpec{},
-				Status: &privatev1.ExternalIPStatus{},
+				Spec: &privatev1.ExternalIPSpec{},
+				Status: privatev1.ExternalIPStatus_builder{
+					Attached:                 true,
+					AttachmentTransitionTime: timestamppb.New(time.Date(2026, 9, 9, 11, 0, 0, 0, time.UTC)),
+				}.Build(),
 			}
-			parentExternalIP.GetStatus().SetAttached(true)
 			mockExternalIPsServer2.addExternalIP(parentExternalIP)
 
 			cr := &v1alpha1.ExternalIPAttachment{
@@ -308,6 +321,13 @@ var _ = Describe("ExternalIPAttachmentFeedbackController", func() {
 
 			Expect(mockExternalIPsServer2.updates).To(HaveLen(1))
 			Expect(mockExternalIPsServer2.updates[0].GetStatus().GetAttached()).To(BeFalse())
+			Expect(mockExternalIPsServer2.updates[0].GetStatus().GetAttachmentTransitionTime()).To(BeNil())
+
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: attachmentName, Namespace: attachmentNamespace},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockExternalIPsServer2.updates).To(HaveLen(1))
 		})
 
 		It("should sync state=FAILED during deletion when phase is Failed", func() {

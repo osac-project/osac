@@ -103,6 +103,10 @@ type ExternalIPAttachmentStatus struct {
 	// Conditions holds an array of metav1.Condition that describe the state of the ExternalIPAttachment
 	// +kubebuilder:validation:Optional
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,1,rep,name=conditions"`
+
+	// StateTransitionTime records when the attachment entered its current state.
+	// +kubebuilder:validation:Optional
+	StateTransitionTime *metav1.Time `json:"stateTransitionTime,omitempty"`
 }
 
 // +kubebuilder:object:root=true

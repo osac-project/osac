@@ -21,6 +21,9 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
@@ -116,7 +119,7 @@ func newExternalIPAttachmentSyncUpdate(eipClient privatev1.ExternalIPsClient) fu
 		syncExternalIPAttachmentAddress(ctx, eipClient, remote)
 
 		if obj.Status.Phase == v1alpha1.ExternalIPAttachmentPhaseReady {
-			if err := syncAttachedOnParentExternalIP(ctx, eipClient, remote, true); err != nil {
+			if err := syncAttachedOnParentExternalIP(ctx, eipClient, remote, true, obj.Status.StateTransitionTime); err != nil {
 				ctrllog.FromContext(ctx).Error(err, "Failed to set attached on parent ExternalIP, will retry")
 				return err
 			}
@@ -138,8 +141,8 @@ func syncExternalIPAttachmentDelete(_ context.Context, obj *v1alpha1.ExternalIPA
 // the attached flag on the parent ExternalIP after the attachment's DELETING
 // state is persisted.
 func newExternalIPAttachmentPostSaveOnDelete(eipClient privatev1.ExternalIPsClient) func(context.Context, *v1alpha1.ExternalIPAttachment, *privatev1.ExternalIPAttachment) error {
-	return func(ctx context.Context, _ *v1alpha1.ExternalIPAttachment, remote *privatev1.ExternalIPAttachment) error {
-		if err := syncAttachedOnParentExternalIP(ctx, eipClient, remote, false); err != nil {
+	return func(ctx context.Context, obj *v1alpha1.ExternalIPAttachment, remote *privatev1.ExternalIPAttachment) error {
+		if err := syncAttachedOnParentExternalIP(ctx, eipClient, remote, false, obj.Status.StateTransitionTime); err != nil {
 			ctrllog.FromContext(ctx).Error(err, "Failed to clear attached on parent ExternalIP, will retry")
 			return err
 		}
@@ -182,7 +185,13 @@ func syncExternalIPAttachmentAddress(ctx context.Context, eipClient privatev1.Ex
 	}
 }
 
-func syncAttachedOnParentExternalIP(ctx context.Context, eipClient privatev1.ExternalIPsClient, remote *privatev1.ExternalIPAttachment, attached bool) error {
+func syncAttachedOnParentExternalIP(
+	ctx context.Context,
+	eipClient privatev1.ExternalIPsClient,
+	remote *privatev1.ExternalIPAttachment,
+	attached bool,
+	transitionTime *metav1.Time,
+) error {
 	externalIPRef := remote.GetSpec().GetExternalIp()
 	if externalIPRef.GetId() == "" {
 		return nil
@@ -207,11 +216,21 @@ func syncAttachedOnParentExternalIP(ctx context.Context, eipClient privatev1.Ext
 		externalIP.SetStatus(&privatev1.ExternalIPStatus{})
 	}
 
-	if externalIP.GetStatus().GetAttached() == attached {
+	attachmentTransitionTime := (*timestamppb.Timestamp)(nil)
+	if transitionTime != nil {
+		attachmentTransitionTime = timestamppb.New(transitionTime.Time)
+	}
+	if externalIP.GetStatus().GetAttached() == attached &&
+		proto.Equal(externalIP.GetStatus().GetAttachmentTransitionTime(), attachmentTransitionTime) {
 		return nil
 	}
 
 	externalIP.GetStatus().SetAttached(attached)
+	if attachmentTransitionTime != nil {
+		externalIP.GetStatus().SetAttachmentTransitionTime(attachmentTransitionTime)
+	} else {
+		externalIP.GetStatus().ClearAttachmentTransitionTime()
+	}
 	_, err = eipClient.Update(ctx, privatev1.ExternalIPsUpdateRequest_builder{
 		Object: externalIP,
 	}.Build())

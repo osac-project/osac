@@ -17,8 +17,10 @@ package osac.private.v1;
 
 import "cleanapi/cleanapi.proto";
 import "google/api/field_behavior.proto";
+import "google/protobuf/timestamp.proto";
 import "osac/private/v1/metadata_type.proto";
 import "osac/private/v1/external_ip_pool_type.proto";
+import "osac/private/v1/external_ip_attribution_type.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
 
@@ -101,6 +103,24 @@ message ExternalIPStatus {
   // Set by the fulfillment-service controller when reconciling the external IP to a Kubernetes CR
   // on the target hub cluster. Used for tracking which cluster the IP resources reside on.
   string hub = 6 [(cleanapi.field).private = true, (google.api.field_behavior) = OUTPUT_ONLY];
+
+  // Fulfillment-owned attribution for the settled ExternalIPAttachment, if any.
+  ExternalIPAttribution attribution = 7 [
+    (cleanapi.field).private = true,
+    (google.api.field_behavior) = OUTPUT_ONLY
+  ];
+
+  // Authoritative time at which the ExternalIP attachment entered its current state.
+  google.protobuf.Timestamp attachment_transition_time = 8 [
+    (cleanapi.field).private = true,
+    (google.api.field_behavior) = OUTPUT_ONLY
+  ];
+
+  // Authoritative time at which the ExternalIP entered its current state.
+  google.protobuf.Timestamp state_transition_time = 9 [
+    (cleanapi.field).private = true,
+    (google.api.field_behavior) = OUTPUT_ONLY
+  ];
 }
 
 // Lifecycle states for ExternalIP resources.

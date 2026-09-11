@@ -15,6 +15,7 @@ syntax = "proto3";
 
 package osac.private.v1;
 
+import "buf/validate/validate.proto";
 import "cleanapi/cleanapi.proto";
 import "google/api/field_behavior.proto";
 import "osac/private/v1/metadata_type.proto";
@@ -22,6 +23,7 @@ import "osac/private/v1/baremetal_instance_type.proto";
 import "osac/private/v1/cluster_type.proto";
 import "osac/private/v1/compute_instance_type.proto";
 import "osac/private/v1/external_ip_type.proto";
+import "osac/private/v1/external_ip_attribution_type.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
 
@@ -61,6 +63,12 @@ message ExternalIPAttachment {
 // existing ExternalIP in ALLOCATED state. The target must reference a valid resource that
 // supports external IP attachment.
 message ExternalIPAttachmentSpec {
+  option (buf.validate.message).cel = {
+    id: "external_ip_attachment_endpoint"
+    message: "endpoint is required only for cluster targets"
+    expression: "has(this.cluster) ? (this.target_endpoint == 1 || this.target_endpoint == 2) : this.target_endpoint == 0"
+  };
+
   // ExternalIP reference to attach. Required and immutable after creation.
   //
   // Must reference an existing ExternalIP in ALLOCATED state that is not already
@@ -73,6 +81,8 @@ message ExternalIPAttachmentSpec {
   // Target resource to attach the external IP to. Exactly one target field must be set.
   // Required and immutable after creation.
   oneof target {
+    option (buf.validate.oneof).required = true;
+
     // ComputeInstance reference to attach this external IP to.
     //
     // Must reference an existing ComputeInstance in RUNNING state. Only one
@@ -99,29 +109,9 @@ message ExternalIPAttachmentSpec {
   // Specifies whether the external IP should be routed to the cluster's API server endpoint
   // or its ingress endpoint. Ignored for non-cluster targets. Immutable after creation.
   ExternalIPAttachmentEndpoint target_endpoint = 5 [
-    (google.api.field_behavior) = IMMUTABLE
+    (google.api.field_behavior) = IMMUTABLE,
+    (buf.validate.field).enum.defined_only = true
   ];
-}
-
-// Endpoint type for cluster-targeted ExternalIPAttachments.
-//
-// When attaching an external IP to a cluster, this enum specifies which cluster endpoint
-// receives the DNAT rule.
-enum ExternalIPAttachmentEndpoint {
-  // Endpoint is unknown or has not been specified.
-  EXTERNAL_IP_ATTACHMENT_ENDPOINT_UNSPECIFIED = 0;
-
-  // The cluster's API server endpoint.
-  //
-  // The external IP will be routed to the cluster's Kubernetes API server VIP, making the
-  // cluster API reachable from outside the VirtualNetwork.
-  EXTERNAL_IP_ATTACHMENT_ENDPOINT_API = 1;
-
-  // The cluster's ingress endpoint.
-  //
-  // The external IP will be routed to the cluster's ingress controller VIP, making
-  // applications hosted on the cluster reachable from outside the VirtualNetwork.
-  EXTERNAL_IP_ATTACHMENT_ENDPOINT_INGRESS = 2;
 }
 
 // Represents the current operational state of an ExternalIPAttachment.

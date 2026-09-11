@@ -551,6 +551,30 @@ var _ = Describe("Private external IP attachments server", func() {
 			Expect(err.Error()).To(ContainSubstring("target_endpoint"))
 			Expect(err.Error()).To(ContainSubstring("UNSPECIFIED for non-cluster"))
 		})
+
+		It("Rejects Create when cluster target has an unknown target_endpoint", func() {
+			eip := createExternalIPInState(ctx, externalIPDao, sharedPool.GetId(),
+				privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED, false)
+			cluster := createClusterInState(ctx, clusterDao)
+
+			_, err := server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
+				Object: privatev1.ExternalIPAttachment_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Spec: privatev1.ExternalIPAttachmentSpec_builder{
+						ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+						Cluster:        privatev1.ClusterLocalReference_builder{Id: cluster.GetId()}.Build(),
+						TargetEndpoint: privatev1.ExternalIPAttachmentEndpoint(99),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(err.Error()).To(ContainSubstring("must be API or INGRESS"))
+		})
 	})
 
 	Describe("ExternalIP reference validation", func() {

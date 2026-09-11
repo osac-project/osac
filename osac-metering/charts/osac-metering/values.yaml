@@ -3,6 +3,12 @@ image:
   tag: latest  # PLACEHOLDER -- overwritten at release time by publish-charts.yaml
   pullPolicy: Always
 
+# Stable OSAC installation identity used by metering dimensions. Empty uses the
+# Helm release name; set an explicit namespace-qualified value when releases
+# share billing data. The first value is persisted and later changes fail Helm
+# upgrades to prevent identity splits.
+deploymentId: ""
+
 # Fulfillment address is auto-derived from release namespace.
 # Override fulfillment.address for cross-namespace/cross-cluster (OSAC-3537).
 

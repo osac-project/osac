@@ -53,6 +53,11 @@ type PrivateExternalIPAttachmentsServer struct {
 	externalIPAttachmentDao *dao.GenericDAO[*privatev1.ExternalIPAttachment]
 }
 
+var validExternalIPAttachmentClusterEndpoints = map[privatev1.ExternalIPAttachmentEndpoint]struct{}{
+	privatev1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_API:     {},
+	privatev1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_INGRESS: {},
+}
+
 func NewPrivateExternalIPAttachmentsServer() *PrivateExternalIPAttachmentsServerBuilder {
 	return &PrivateExternalIPAttachmentsServerBuilder{}
 }
@@ -335,6 +340,10 @@ func (s *PrivateExternalIPAttachmentsServer) validateExternalIPAttachment(
 		if spec.GetTargetEndpoint() == privatev1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_UNSPECIFIED {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"field 'spec.target_endpoint' is required when target is cluster")
+		}
+		if _, ok := validExternalIPAttachmentClusterEndpoints[spec.GetTargetEndpoint()]; !ok {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"field 'spec.target_endpoint' must be API or INGRESS when target is cluster")
 		}
 	} else {
 		if spec.GetTargetEndpoint() != privatev1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_UNSPECIFIED {

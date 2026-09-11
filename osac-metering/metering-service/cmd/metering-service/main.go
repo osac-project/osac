@@ -54,6 +54,7 @@ type config struct {
 	healthAddr             string
 	kafka                  kafkapub.ConnectionConfig
 	dbURLFile              string
+	deploymentID           string
 	heartbeatInterval      time.Duration
 	reconciliationInterval time.Duration
 	enableCaaS             bool
@@ -94,6 +95,7 @@ func configFromEnv() *config {
 			SASLPassFile: os.Getenv("KAFKA_SASL_PASSWORD_FILE"),
 		},
 		dbURLFile:              envOrDefault("DB_URL_FILE", "/etc/metering/db"),
+		deploymentID:           os.Getenv("METERING_DEPLOYMENT_ID"),
 		heartbeatInterval:      parseDurationOrDefault(os.Getenv("HEARTBEAT_INTERVAL"), 60*time.Second),
 		reconciliationInterval: parseDurationOrDefault(os.Getenv("RECONCILIATION_INTERVAL"), 60*time.Minute),
 		enableCaaS:             envBool("ENABLE_CAAS"),
@@ -138,6 +140,9 @@ func (c *config) validate() error {
 	}
 	if c.dbURLFile == "" {
 		return fmt.Errorf("DB_URL_FILE is required")
+	}
+	if c.deploymentID == "" {
+		return fmt.Errorf("METERING_DEPLOYMENT_ID is required")
 	}
 	return nil
 }

@@ -248,6 +248,11 @@ spec:
                   - type
                   type: object
                 type: array
+              stateTransitionTime:
+                description: StateTransitionTime records when the attachment entered
+                  its current state.
+                format: date-time
+                type: string
             type: object
         required:
         - spec

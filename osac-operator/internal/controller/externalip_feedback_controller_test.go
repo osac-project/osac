@@ -21,6 +21,7 @@ import (
 	"errors"
 	"net"
 	"sync"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -29,6 +30,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -152,6 +154,7 @@ var _ = Describe("ExternalIPFeedbackController", func() {
 		})
 
 		It("should sync State=Allocated to database state=ALLOCATED", func() {
+			transitionTime := metav1.NewTime(time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC))
 			publicIP := &privatev1.ExternalIP{
 				Id: publicIPID,
 				Metadata: &privatev1.Metadata{
@@ -178,8 +181,9 @@ var _ = Describe("ExternalIPFeedbackController", func() {
 					Pool: testPool,
 				},
 				Status: v1alpha1.ExternalIPStatus{
-					Phase: v1alpha1.ExternalIPPhaseReady,
-					State: v1alpha1.ExternalIPStateAllocated,
+					Phase:               v1alpha1.ExternalIPPhaseReady,
+					State:               v1alpha1.ExternalIPStateAllocated,
+					StateTransitionTime: &transitionTime,
 				},
 			}
 			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
@@ -194,6 +198,7 @@ var _ = Describe("ExternalIPFeedbackController", func() {
 
 			Expect(mockServer.updates).To(HaveLen(1))
 			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED))
+			Expect(mockServer.updates[0].GetStatus().GetStateTransitionTime().AsTime()).To(Equal(transitionTime.Time))
 
 			updated := &v1alpha1.ExternalIP{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: publicIPName, Namespace: publicIPNamespace}, updated)).To(Succeed())
@@ -471,6 +476,7 @@ var _ = Describe("ExternalIPFeedbackController", func() {
 		})
 
 		It("should remove feedback finalizer and signal when it is the last finalizer", func() {
+			transitionTime := metav1.NewTime(time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC))
 			publicIP := &privatev1.ExternalIP{
 				Id: publicIPID,
 				Metadata: &privatev1.Metadata{
@@ -498,7 +504,9 @@ var _ = Describe("ExternalIPFeedbackController", func() {
 					Pool: testPool,
 				},
 				Status: v1alpha1.ExternalIPStatus{
-					Phase: v1alpha1.ExternalIPPhaseDeleting,
+					Phase:               v1alpha1.ExternalIPPhaseDeleting,
+					State:               v1alpha1.ExternalIPStateAllocated,
+					StateTransitionTime: &transitionTime,
 				},
 			}
 			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
@@ -515,6 +523,7 @@ var _ = Describe("ExternalIPFeedbackController", func() {
 
 			Expect(mockServer.updates).To(HaveLen(1))
 			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.ExternalIPState_EXTERNAL_IP_STATE_DELETING))
+			Expect(mockServer.updates[0].GetStatus().GetStateTransitionTime().AsTime()).To(Equal(transitionTime.Time))
 
 			Expect(mockServer.signals).To(HaveLen(1))
 			Expect(mockServer.signals[0]).To(Equal(publicIPID))
@@ -522,6 +531,55 @@ var _ = Describe("ExternalIPFeedbackController", func() {
 			updated := &v1alpha1.ExternalIP{}
 			err = k8sClient.Get(ctx, types.NamespacedName{Name: publicIPName, Namespace: publicIPNamespace}, updated)
 			Expect(err).To(HaveOccurred())
+		})
+
+		It("should clear stale transition timestamps and remain idempotent", func() {
+			staleTime := timestamppb.New(time.Date(2026, 9, 9, 11, 0, 0, 0, time.UTC))
+			publicIP := &privatev1.ExternalIP{
+				Id: publicIPID,
+				Metadata: &privatev1.Metadata{
+					Name: publicIPName,
+				},
+				Spec: &privatev1.ExternalIPSpec{
+					Pool: testPoolRef,
+				},
+				Status: privatev1.ExternalIPStatus_builder{
+					State:                    privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED,
+					StateTransitionTime:      staleTime,
+					AttachmentTransitionTime: staleTime,
+				}.Build(),
+			}
+			mockServer.addExternalIP(publicIP)
+
+			cr := &v1alpha1.ExternalIP{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      publicIPName,
+					Namespace: publicIPNamespace,
+					Labels: map[string]string{
+						osacExternalIPIDLabel: publicIPID,
+					},
+				},
+				Spec: v1alpha1.ExternalIPSpec{Pool: testPool},
+				Status: v1alpha1.ExternalIPStatus{
+					Phase: v1alpha1.ExternalIPPhaseReady,
+					State: v1alpha1.ExternalIPStateAllocated,
+				},
+			}
+			Expect(k8sClient.Create(ctx, cr)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: publicIPName, Namespace: publicIPNamespace},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockServer.updates).To(HaveLen(1))
+			Expect(mockServer.updates[0].GetStatus().GetStateTransitionTime()).To(BeNil())
+			Expect(mockServer.updates[0].GetStatus().GetAttachmentTransitionTime()).To(BeNil())
+
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: publicIPName, Namespace: publicIPNamespace},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockServer.updates).To(HaveLen(1))
 		})
 
 		It("should remove feedback finalizer when externalip record is NotFound during deletion", func() {

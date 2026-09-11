@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/equality"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -127,6 +128,10 @@ func (r *NATGatewayReconciler) Reconcile(ctx context.Context, req mcreconcile.Re
 	}
 
 	if !equality.Semantic.DeepEqual(natgw.Status, *oldstatus) {
+		if oldstatus.Phase != natgw.Status.Phase {
+			now := metav1.Now()
+			natgw.Status.StateTransitionTime = &now
+		}
 		log.Info("status requires update")
 		if err := r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(natgw), natgw.Status); err != nil {
 			return res, err

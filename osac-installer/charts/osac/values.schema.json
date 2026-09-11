@@ -1170,6 +1170,10 @@
           "description": "Deploy the OSAC Metering Service (opt-in)",
           "default": false
         },
+        "deploymentId": {
+          "type": "string",
+          "description": "Stable OSAC installation identity used by metering dimensions; empty uses the Helm release name; changes after installation are rejected"
+        },
         "image": {
           "type": "object",
           "properties": {

@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
@@ -103,16 +104,26 @@ func (r *NATGatewayFeedbackReconciler) Reconcile(ctx context.Context, request ct
 
 func syncNATGatewayUpdate(ctx context.Context, obj *v1alpha1.NATGateway, remote *privatev1.NATGateway) error {
 	syncNATGatewayPhase(ctx, obj, remote)
+	syncNATGatewayTransitionTime(obj, remote)
 	return nil
 }
 
 func syncNATGatewayDelete(_ context.Context, obj *v1alpha1.NATGateway, remote *privatev1.NATGateway) error {
+	syncNATGatewayTransitionTime(obj, remote)
 	if obj.Status.Phase == v1alpha1.NATGatewayPhaseFailed {
 		remote.GetStatus().SetState(privatev1.NATGatewayState_NAT_GATEWAY_STATE_FAILED)
 		return nil
 	}
 	remote.GetStatus().SetState(privatev1.NATGatewayState_NAT_GATEWAY_STATE_DELETING)
 	return nil
+}
+
+func syncNATGatewayTransitionTime(obj *v1alpha1.NATGateway, remote *privatev1.NATGateway) {
+	if obj.Status.StateTransitionTime != nil {
+		remote.GetStatus().SetStateTransitionTime(timestamppb.New(obj.Status.StateTransitionTime.Time))
+	} else {
+		remote.GetStatus().ClearStateTransitionTime()
+	}
 }
 
 func syncNATGatewayPhase(ctx context.Context, obj *v1alpha1.NATGateway, remote *privatev1.NATGateway) {

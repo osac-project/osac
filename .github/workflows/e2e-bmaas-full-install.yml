@@ -286,10 +286,10 @@ jobs:
             echo "e2e passed"
           fi
 
-  # Latest check named e2e-bmaas-gate after the skipped gate job. Bind the
-  # pending check to this workflow's check suite so PR UI does not group it
-  # under unrelated pull_request_target workflows. Forks may lack checks:write;
-  # unreported check is still Expected/Waiting.
+  # Latest check named e2e-bmaas-gate after the skipped gate job. Resolve this
+  # workflow run's check_suite_id and attach the pending check so PR UI does not
+  # group it under unrelated pull_request_target workflows. Forks may lack
+  # checks:write; unreported check is still Expected/Waiting.
   e2e-bmaas-pending:
     if: >-
       always()
@@ -307,7 +307,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          CHECK_SUITE_ID: ${{ github.check_suite_id }}
+          RUN_ID: ${{ github.run_id }}
           CHECK_NAME: e2e-bmaas-gate
           DETAILS_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           REASON: ${{ needs.e2e-readiness.outputs.reason }}
@@ -317,10 +317,12 @@ jobs:
           summary=$(printf '%s\n\n%s\n\n%s' "${title}" \
             "Need coderabbitai[bot] APPROVED on this HEAD, lgtm, or /e2e-ready." \
             "See .github/e2e-readiness.md")
+          check_suite_id=$(gh api "repos/${REPO}/actions/runs/${RUN_ID}" \
+            --jq '.check_suite_id // empty' 2>/dev/null || true)
           payload=$(jq -n \
             --arg name "${CHECK_NAME}" \
             --arg sha "${HEAD_SHA}" \
-            --argjson check_suite_id "${CHECK_SUITE_ID}" \
+            --arg check_suite_id "${check_suite_id}" \
             --arg started "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg title "${title}" \
             --arg details "${DETAILS_URL}" \
@@ -328,7 +330,6 @@ jobs:
             '{
               name: $name,
               head_sha: $sha,
-              check_suite_id: $check_suite_id,
               status: "in_progress",
               details_url: $details,
               started_at: $started,
@@ -336,7 +337,11 @@ jobs:
                 title: $title,
                 summary: $summary
               }
-            }')
+            }
+            | if ($check_suite_id | length) > 0
+              then . + {check_suite_id: ($check_suite_id | tonumber)}
+              else .
+              end')
           if ! gh api "repos/${REPO}/check-runs" --input - <<<"${payload}"; then
             echo "Could not post in_progress check ${CHECK_NAME} (fork PRs may lack checks:write)."
             echo "Required check stays unreported until unlock rerun."

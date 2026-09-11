@@ -55,9 +55,6 @@ message AddOnOperator {
   // publishes operators explicitly after review.
   optional bool published = 9;
 
-  // Tenant scope for this add-on operator. An empty string means the operator is global and visible to all tenants. A
-  // non-empty string scopes the operator to that specific tenant.
-  string tenant = 10 [(cleanapi.field).private = true];
 }
 
 // Standard reference to an AddOnOperator resource (used by ClusterCatalogItem and ClusterSpec).

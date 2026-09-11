@@ -27,6 +27,3 @@ columns:
 
 - header: PUBLISHED
   value: "this.published? 'true': 'false'"
-
-- header: TENANT
-  value: "has(this.tenant) && this.tenant != ''? this.tenant: '-'"

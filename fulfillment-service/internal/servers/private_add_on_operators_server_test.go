@@ -23,7 +23,7 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/osac/fulfillment-service/internal/database"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 )
 
@@ -87,6 +87,7 @@ var _ = Describe("Private add-on operators server", func() {
 			Expect(object).ToNot(BeNil())
 			Expect(object.GetId()).ToNot(BeEmpty())
 			Expect(object.GetTitle()).To(Equal("GPU Operator"))
+			Expect(object.GetMetadata().GetTenant()).To(Equal(auth.SharedTenant))
 			Expect(object.GetPublished()).To(BeFalse())
 		})
 
@@ -172,63 +173,20 @@ var _ = Describe("Private add-on operators server", func() {
 			Expect(response.GetObject().GetMaxOcpVersion()).To(BeEmpty())
 		})
 
-		It("Rejects an unknown scope tenant", func() {
+		It("Rejects non-shared metadata ownership", func() {
 			_, err := server.Create(ctx, privatev1.AddOnOperatorsCreateRequest_builder{
 				Object: privatev1.AddOnOperator_builder{
 					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.New()[24:32]),
+						Name:   fmt.Sprintf("test-%s", uuid.New()[24:32]),
+						Tenant: "tenant-a",
 					}.Build(),
-					Title:  "GPU Operator",
-					Tenant: "missing-tenant",
+					Title: "GPU Operator",
 				}.Build(),
 			}.Build())
 			Expect(err).To(HaveOccurred())
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(ContainSubstring("unknown or deleted tenant"))
-		})
-
-		It("Accepts an active scope tenant", func() {
-			tenantName := fmt.Sprintf("scope-%s", uuid.New()[24:32])
-			createTenant(tenantName)
-
-			response, err := server.Create(ctx, privatev1.AddOnOperatorsCreateRequest_builder{
-				Object: privatev1.AddOnOperator_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.New()[24:32]),
-					}.Build(),
-					Title:  "GPU Operator",
-					Tenant: tenantName,
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Expect(response.GetObject().GetTenant()).To(Equal(tenantName))
-		})
-
-		It("Rejects a deleted scope tenant", func() {
-			tenantName := fmt.Sprintf("deleted-scope-%s", uuid.New()[24:32])
-			createTenant(tenantName)
-
-			tx, err := database.TxFromContext(ctx)
-			Expect(err).ToNot(HaveOccurred())
-			_, err = tx.Exec(ctx, "update tenants set deletion_timestamp = now() where id = $1", tenantName)
-			Expect(err).ToNot(HaveOccurred())
-
-			_, err = server.Create(ctx, privatev1.AddOnOperatorsCreateRequest_builder{
-				Object: privatev1.AddOnOperator_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.New()[24:32]),
-					}.Build(),
-					Title:  "GPU Operator",
-					Tenant: tenantName,
-				}.Build(),
-			}.Build())
-			Expect(err).To(HaveOccurred())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(ContainSubstring("unknown or deleted tenant"))
+			Expect(status.Code()).To(Equal(grpccodes.PermissionDenied))
 		})
 
 		It("List objects", func() {
@@ -318,31 +276,6 @@ var _ = Describe("Private add-on operators server", func() {
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-		})
-
-		It("Rejects an update to an unknown scope tenant", func() {
-			createResponse, err := server.Create(ctx, privatev1.AddOnOperatorsCreateRequest_builder{
-				Object: privatev1.AddOnOperator_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.New()[24:32]),
-					}.Build(),
-					Title: "GPU Operator",
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-
-			_, err = server.Update(ctx, privatev1.AddOnOperatorsUpdateRequest_builder{
-				Object: privatev1.AddOnOperator_builder{
-					Id:     createResponse.GetObject().GetId(),
-					Tenant: "missing-tenant",
-				}.Build(),
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"tenant"}},
-			}.Build())
-			Expect(err).To(HaveOccurred())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(ContainSubstring("unknown or deleted tenant"))
 		})
 
 		It("Delete object", func() {

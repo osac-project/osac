@@ -12,8 +12,7 @@
 --
 
 -- Create tables for AddOnOperator resources.
--- AddOnOperator is tenant-scoped: operators can be globally visible (tenant='shared') or scoped to a
--- specific tenant.
+-- AddOnOperator is platform-scoped and owned by the shared tenant.
 
 create table add_on_operators (
   id text not null primary key,
@@ -49,12 +48,10 @@ create index add_on_operators_by_creator on add_on_operators (creator);
 create index add_on_operators_by_tenant on add_on_operators (tenant);
 create index add_on_operators_by_label on add_on_operators using gin (labels);
 
--- Name uniqueness per visibility scope, active records only. The SQL tenant column is the ownership tenant;
--- the AddOnOperator tenant scope is stored in the JSON data column.
-create unique index add_on_operators_unique_name_per_scope
-  on add_on_operators (name, coalesce(data->>'tenant', ''))
-  where deletion_timestamp = 'epoch'
-    and name != '';
+-- Names are unique within the metadata tenant and project. The private server
+-- restricts AddOnOperator ownership to the shared tenant.
+create unique index add_on_operators_unique_name
+  on add_on_operators (tenant, project, name);
 
 -- Tenant foreign key referencing the tenants table.
 alter table add_on_operators

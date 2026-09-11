@@ -17,8 +17,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"strconv"
-	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
 	grpccodes "google.golang.org/grpc/codes"
@@ -45,7 +43,6 @@ type AddOnOperatorsServer struct {
 	publicv1.UnimplementedAddOnOperatorsServer
 
 	logger          *slog.Logger
-	tenancyLogic    auth.TenancyLogic
 	delegate        privatev1.AddOnOperatorsServer
 	filterValidator *dao.FilterTranslator
 	inMapper        *GenericMapper[*publicv1.AddOnOperator, *privatev1.AddOnOperator]
@@ -127,7 +124,6 @@ func (b *AddOnOperatorsServerBuilder) Build() (result *AddOnOperatorsServer, err
 
 	result = &AddOnOperatorsServer{
 		logger:          b.logger,
-		tenancyLogic:    b.tenancyLogic,
 		delegate:        delegate,
 		filterValidator: filterValidator,
 		inMapper:        inMapper,
@@ -138,12 +134,6 @@ func (b *AddOnOperatorsServerBuilder) Build() (result *AddOnOperatorsServer, err
 
 func (s *AddOnOperatorsServer) List(ctx context.Context,
 	request *publicv1.AddOnOperatorsListRequest) (response *publicv1.AddOnOperatorsListResponse, err error) {
-	visibility, err := s.tenancyLogic.DetermineVisibility(ctx)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to determine visibility", slog.Any("error", err))
-		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to determine visibility")
-	}
-
 	privateRequest := &privatev1.AddOnOperatorsListRequest{}
 	privateRequest.SetOffset(request.GetOffset())
 	if request.HasLimit() {
@@ -158,7 +148,6 @@ func (s *AddOnOperatorsServer) List(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	composedFilter = addTenantVisibilityFilter(composedFilter, visibility)
 	privateRequest.SetFilter(composedFilter)
 	privateRequest.SetOrder(request.GetOrder())
 
@@ -186,18 +175,6 @@ func (s *AddOnOperatorsServer) List(ctx context.Context,
 	return
 }
 
-func addTenantVisibilityFilter(filter string, visibility *auth.Visibility) string {
-	visibleTenants := visibility.VisibleTenants()
-	if visibleTenants == nil {
-		return filter
-	}
-	parts := []string{"!has(this.tenant)", `this.tenant == ""`}
-	for _, tenant := range visibleTenants {
-		parts = append(parts, "this.tenant == "+strconv.Quote(tenant))
-	}
-	return "(" + filter + ") && (" + strings.Join(parts, " || ") + ")"
-}
-
 func (s *AddOnOperatorsServer) Get(ctx context.Context,
 	request *publicv1.AddOnOperatorsGetRequest) (response *publicv1.AddOnOperatorsGetResponse, err error) {
 	privateRequest := &privatev1.AddOnOperatorsGetRequest{}
@@ -213,15 +190,6 @@ func (s *AddOnOperatorsServer) Get(ctx context.Context,
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "add-on operator not found")
 	}
 
-	visibility, err := s.tenancyLogic.DetermineVisibility(ctx)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to determine visibility", slog.Any("error", err))
-		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to determine visibility")
-	}
-	if !s.isVisibleToTenant(object, visibility) {
-		return nil, grpcstatus.Errorf(grpccodes.NotFound, "add-on operator not found")
-	}
-
 	publicOperator := &publicv1.AddOnOperator{}
 	err = s.outMapper.Copy(ctx, object, publicOperator)
 	if err != nil {
@@ -232,14 +200,6 @@ func (s *AddOnOperatorsServer) Get(ctx context.Context,
 	response = &publicv1.AddOnOperatorsGetResponse{}
 	response.SetObject(publicOperator)
 	return
-}
-
-// isVisibleToTenant reports whether an add-on operator is visible given the caller's tenant
-// visibility. Global operators (tenant=="") are visible to all; tenant-scoped operators are visible
-// only when the caller can see that tenant.
-func (s *AddOnOperatorsServer) isVisibleToTenant(object *privatev1.AddOnOperator, visibility *auth.Visibility) bool {
-	scopeTenant := object.GetTenant()
-	return scopeTenant == "" || visibility.IsTenantVisible(scopeTenant)
 }
 
 func (s *AddOnOperatorsServer) addPublishedFilter(filter string) (string, error) {

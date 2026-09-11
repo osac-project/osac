@@ -75,10 +75,30 @@ message ClusterCatalogItemFields {
   StringFieldPolicy ssh_public_key = 2;
   SecretReferenceFieldPolicy pull_secret_secret = 3;
   ClusterNetworkFieldPolicies network = 4;
-  map<string, Int32FieldPolicy> node_sets = 5;
+  ClusterNodeSetMapPolicy node_sets = 5;
   BoolFieldPolicy auto_external_ip_attachment = 6;
   // Policy for the cluster's subnet and security-group attachment.
   ClusterNetworkAttachmentFieldPolicy network_attachment = 7;
+}
+
+// Defines whether the complete cluster node-set map is locked or editable.
+message ClusterNodeSetMapPolicy {
+  oneof behavior {
+    option (buf.validate.oneof).required = true;
+
+    ClusterNodeSetMap locked = 1;
+    EditableClusterNodeSetMap editable = 2;
+  }
+}
+
+// Wraps the cluster node-set map for use in a field policy.
+message ClusterNodeSetMap {
+  map<string, ClusterTemplateNodeSet> items = 1;
+}
+
+// Configures an editable cluster node-set map.
+message EditableClusterNodeSetMap {
+  ClusterNodeSetMap default_value = 1;
 }
 
 // Groups policies for governable cluster network fields.

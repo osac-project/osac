@@ -142,3 +142,26 @@ jobs:
       with:
         workdir: fulfillment-service
         args: build --snapshot --clean
+
+  # Single required check aggregating the 3 jobs above, so PRs see one
+  # "check-pull-request" line instead of 3. `skipped` counts as pass, same
+  # as a real success -- only an actual failure or cancellation fails this
+  # job. Mirrors the e2e-*-gate jobs' pattern in
+  # e2e-vmaas-full-install.yml et al.
+  check-pull-request:
+    if: always()
+    needs: [changes, check-python-code, check-go-code, build-binaries]
+    runs-on: ubuntu-latest
+    steps:
+      - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: |
+          echo "Upstream job results:"
+          echo "  changes: ${{ needs.changes.result }}"
+          echo "  check-python-code: ${{ needs.check-python-code.result }}"
+          echo "  check-go-code: ${{ needs.check-go-code.result }}"
+          echo "  build-binaries: ${{ needs.build-binaries.result }}"
+          echo ""
+          echo "One or more upstream jobs failed or were cancelled."
+          exit 1
+      - if: ${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+        run: echo "All checks passed (or were skipped)."

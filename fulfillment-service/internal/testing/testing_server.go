@@ -24,6 +24,7 @@ import (
 	"google.golang.org/grpc"
 
 	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/network"
 )
 
 // Server is a gRPC server used only for tests.
@@ -49,11 +50,7 @@ func NewServer(opts ...grpc.ServerOption) *Server {
 func NewTLSServer() *Server {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	Expect(err).ToNot(HaveOccurred())
-	tlsListener := tls.NewListener(listener, &tls.Config{
-		Certificates: []tls.Certificate{
-			LocalhostCertificate(),
-		},
-	})
+	tlsListener := tls.NewListener(listener, network.NewServerTLSConfig(LocalhostCertificate(), nil))
 	server := grpc.NewServer()
 	return &Server{
 		listener: tlsListener,

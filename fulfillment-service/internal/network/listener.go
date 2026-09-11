@@ -200,12 +200,7 @@ func (b *ListenerBuilder) Build() (result net.Listener, err error) {
 		return
 	}
 	if tlsCrt.Certificate != nil {
-		listener = tls.NewListener(listener, &tls.Config{
-			Certificates: []tls.Certificate{
-				tlsCrt,
-			},
-			NextProtos: slices.Clone(b.tlsProtocols),
-		})
+		listener = tls.NewListener(listener, NewServerTLSConfig(tlsCrt, slices.Clone(b.tlsProtocols)))
 	}
 
 	// Return the listener:

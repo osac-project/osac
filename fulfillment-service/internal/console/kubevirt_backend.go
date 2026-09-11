@@ -25,6 +25,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+
+	"github.com/osac-project/osac/fulfillment-service/internal/network"
 )
 
 // KubeVirtBackendBuilder builds a KubeVirtBackend.
@@ -105,7 +107,7 @@ func (b *kubeVirtBackend) Connect(ctx context.Context, target Target) (io.ReadWr
 		}
 	}
 
-	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS13}
+	tlsConfig := network.NewClientTLSConfig()
 	if b.caPool != nil {
 		tlsConfig.RootCAs = b.caPool
 	}

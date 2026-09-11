@@ -15,7 +15,6 @@ package consoleproxy
 
 import (
 	"context"
-	"crypto/tls"
 	"crypto/x509"
 	"fmt"
 	"log/slog"
@@ -442,13 +441,12 @@ func (c *runnerContext) createJWKSCache(ctx context.Context, jwksURL string, caP
 		jwk.WithHttprcResourceOption(httprc.WithMinInterval(time.Minute)),
 	}
 	if caPool != nil {
+		tlsConfig := network.NewClientTLSConfig()
+		tlsConfig.RootCAs = caPool
 		registerOpts = append(registerOpts, jwk.WithHTTPClient(
 			jwk.WrapHTTPClientDefaults(&http.Client{
 				Transport: &http.Transport{
-					TLSClientConfig: &tls.Config{
-						RootCAs:    caPool,
-						MinVersion: tls.VersionTLS13,
-					},
+					TLSClientConfig: tlsConfig,
 				},
 			}),
 		))

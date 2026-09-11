@@ -305,7 +305,7 @@ func (b *GrpcClientBuilder) Build() (result *grpc.ClientConn, err error) {
 	if b.plaintext {
 		transportCredentials = insecure.NewCredentials()
 	} else {
-		tlsConfig := &tls.Config{}
+		tlsConfig := NewClientTLSConfig()
 		if b.insecure {
 			tlsConfig.InsecureSkipVerify = true
 		}

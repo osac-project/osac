@@ -16,7 +16,6 @@ package vault
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"errors"
@@ -24,6 +23,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/osac-project/osac/fulfillment-service/internal/network"
 )
 
 const (
@@ -33,22 +34,20 @@ const (
 )
 
 func newHTTPClient(caPool *x509.CertPool) (*http.Client, error) {
-	client := &http.Client{
-		Timeout: 30 * time.Second,
+	transport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return nil, errors.New("unexpected default transport type")
 	}
+	cloned := transport.Clone()
+	tlsConfig := network.NewClientTLSConfig()
 	if caPool != nil {
-		transport, ok := http.DefaultTransport.(*http.Transport)
-		if !ok {
-			return nil, errors.New("unexpected default transport type")
-		}
-		cloned := transport.Clone()
-		if cloned.TLSClientConfig == nil {
-			cloned.TLSClientConfig = &tls.Config{}
-		}
-		cloned.TLSClientConfig.RootCAs = caPool
-		client.Transport = cloned
+		tlsConfig.RootCAs = caPool
 	}
-	return client, nil
+	cloned.TLSClientConfig = tlsConfig
+	return &http.Client{
+		Timeout:   30 * time.Second,
+		Transport: cloned,
+	}, nil
 }
 
 type vaultLoginResponse struct {

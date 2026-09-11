@@ -407,10 +407,20 @@ func (t *task) setFailed(err error) {
 // buildSpec maps the proto VolumeSpec to the osac-operator CRD VolumeSpec.
 // Access mode is converted from the proto enum to the CRD typed string.
 func (t *task) buildSpec() osacv1alpha1.VolumeSpec {
+	var topology *osacv1alpha1.VolumeTopology
+	if source := t.volume.GetSpec().GetTopology(); source != nil {
+		segments := make(map[string]string, len(source.GetSegments()))
+		for key, value := range source.GetSegments() {
+			segments[key] = value
+		}
+		topology = &osacv1alpha1.VolumeTopology{Segments: segments}
+	}
+
 	return osacv1alpha1.VolumeSpec{
 		StorageTier: t.volume.GetSpec().GetStorageTier(),
 		SizeGiB:     t.volume.GetSpec().GetSizeGib(),
 		AccessMode:  protoAccessModeToCRD(t.volume.GetSpec().GetAccessMode()),
+		Topology:    topology,
 	}
 }
 

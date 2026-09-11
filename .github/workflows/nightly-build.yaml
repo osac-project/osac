@@ -619,6 +619,10 @@ jobs:
       contents: read
       # Push/pull chart OCI artifacts to GHCR
       packages: write
+      # cosign's keyless chart signing (see push_and_sign_chart in
+      # nightly-charts.sh) -- safe directly on this job, no pull_request
+      # exposure: nightly-build.yaml only ever runs on schedule/workflow_dispatch.
+      id-token: write
     outputs:
       version: ${{ steps.version.outputs.version }}
       base-version: ${{ steps.version.outputs.base-version }}
@@ -648,6 +652,9 @@ jobs:
       uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
       with:
         version: v3.21.4
+
+    - name: Install cosign
+      uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
 
     - name: Set up chart-testing
       uses: helm/chart-testing-action@6ec842c01de15ebb84c8627d2744a0c2f2755c9f  # v2.8.0
@@ -809,7 +816,7 @@ jobs:
 
           echo "Packaging ${CHART_NAME} ${SUB_VERSION}..."
           helm package "${CHART_DIR}" --destination ./packaged-charts
-          helm push "./packaged-charts/${CHART_NAME}-${SUB_VERSION}.tgz" "oci://${REGISTRY}/${CHARTS_REPO}"
+          push_and_sign_chart "./packaged-charts/${CHART_NAME}-${SUB_VERSION}.tgz" "${CHART_NAME}" "${REGISTRY}/${CHARTS_REPO}"
           append_chart_source chart-sources.txt "${CHART_NAME}" "${SUB_VERSION}"
         done
 
@@ -825,7 +832,7 @@ jobs:
           UI_IMAGE_REF="ghcr.io/osac-project/osac-ui:${UI_SUB_VERSION}"
           stamp_osac_ui_chart "${UI_CHART_DIR}" "${UI_SUB_VERSION}" "${UI_IMAGE_REF}"
           helm package "${UI_CHART_DIR}" --destination ./packaged-charts
-          helm push "./packaged-charts/${UI_CHART_NAME}-${UI_SUB_VERSION}.tgz" "oci://${REGISTRY}/${CHARTS_REPO}"
+          push_and_sign_chart "./packaged-charts/${UI_CHART_NAME}-${UI_SUB_VERSION}.tgz" "${UI_CHART_NAME}" "${REGISTRY}/${CHARTS_REPO}"
           append_chart_source chart-sources.txt "${UI_CHART_NAME}" "${UI_SUB_VERSION}" "${{ needs.prepare.outputs.ui-short-sha }}" "${{ needs.prepare.outputs.ui-sha }}"
           echo "${UI_SUB_VERSION}" > osac-ui-nightly-version.txt
         else
@@ -887,13 +894,14 @@ jobs:
           --version "${VERSION}" \
           --app-version "${VERSION}"
 
-    - name: Push umbrella chart to GHCR
+    - name: Push and sign umbrella chart
       working-directory: osac-installer
       env:
         VERSION: ${{ steps.version.outputs.version }}
-        OCI_REPO: oci://${{ env.REGISTRY }}/${{ env.CHARTS_REPO }}
       run: |
-        helm push "osac-${VERSION}.tgz" "${OCI_REPO}"
+        set -euo pipefail
+        source ./scripts/nightly-charts.sh
+        push_and_sign_chart "osac-${VERSION}.tgz" "osac" "${REGISTRY}/${CHARTS_REPO}"
 
     - name: Verify umbrella chart publication
       working-directory: osac-installer

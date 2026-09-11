@@ -328,6 +328,29 @@ read_validated_chart_name() {
     echo "${chart_name}"
 }
 
+# Usage: push_and_sign_chart <chart_tgz_path> <chart_name> <oci_repo>
+# Pushes a packaged chart to <oci_repo> (no oci:// prefix) and signs the
+# resulting OCI artifact keylessly with cosign, using the calling workflow's
+# GitHub Actions OIDC identity (Fulcio/Rekor). Requires cosign already
+# installed on PATH and the calling job to grant permissions: id-token: write.
+# Digest is parsed straight from `helm push`'s own stdout ("Digest:
+# sha256:...") -- skopeo/crane-style inspection doesn't support Helm's OCI
+# artifact media type, so there's no simpler way to resolve it.
+push_and_sign_chart() {
+    local chart_tgz="$1" chart_name="$2" oci_repo="$3"
+    local output digest
+
+    output=$(helm push "${chart_tgz}" "oci://${oci_repo}" 2>&1)
+    echo "${output}"
+    digest=$(grep -oE '^Digest: sha256:[0-9a-f]+' <<<"${output}" | cut -d' ' -f2)
+    if [[ -z "${digest}" ]]; then
+        echo "::error::Could not parse digest from helm push output for ${chart_name}" >&2
+        return 1
+    fi
+
+    cosign sign --yes "${oci_repo}/${chart_name}@${digest}"
+}
+
 # Usage: compute_nightly_chart_version <base_tag> <nightly_suffix>
 compute_nightly_chart_version() {
     local base_tag="$1" nightly_suffix="$2"

@@ -752,7 +752,8 @@ var _ = Describe("Storage Controller", func() {
 					Expect(in.GetId()).To(Equal("secret-1"))
 					return privatev1.SecretsGetResponse_builder{
 						Object: privatev1.Secret_builder{
-							Data: map[string][]byte{"password": []byte(testSecretPassword)},
+							Type: privatev1.SecretType_SECRET_TYPE_VALUE,
+							Data: map[string][]byte{"value": []byte(testSecretPassword)},
 						}.Build(),
 					}.Build(), nil
 				},
@@ -769,7 +770,7 @@ var _ = Describe("Storage Controller", func() {
 			}))
 		})
 
-		It("should skip a backend whose password_secret is missing data[\"password\"], not provision an empty password", func() {
+		It("should skip a backend whose password_secret is missing data[\"value\"], not provision an empty password", func() {
 			tiersClient := &mockStorageTiersLister{
 				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
 					return privatev1.StorageTiersListResponse_builder{
@@ -785,7 +786,10 @@ var _ = Describe("Storage Controller", func() {
 			secretsClient := &mockSecretsClient{
 				getFunc: func(context.Context, *privatev1.SecretsGetRequest, ...grpc.CallOption) (*privatev1.SecretsGetResponse, error) {
 					return privatev1.SecretsGetResponse_builder{
-						Object: privatev1.Secret_builder{Data: map[string][]byte{}}.Build(),
+						Object: privatev1.Secret_builder{
+							Type: privatev1.SecretType_SECRET_TYPE_VALUE,
+							Data: map[string][]byte{},
+						}.Build(),
 					}.Build(), nil
 				},
 			}

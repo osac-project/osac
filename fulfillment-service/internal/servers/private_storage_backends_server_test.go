@@ -588,7 +588,8 @@ var _ = Describe("Password secret reference", func() {
 		Expect(err).ToNot(HaveOccurred())
 
 		_, err = secretsDao.Create().SetObject(privatev1.Secret_builder{
-			Id: "my-secret-id",
+			Id:   "my-secret-id",
+			Type: privatev1.SecretType_SECRET_TYPE_VALUE,
 			Metadata: privatev1.Metadata_builder{
 				Name:   "my-secret-name",
 				Tenant: auth.SharedTenant,

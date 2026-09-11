@@ -319,6 +319,7 @@ func (t *task) persistBreakGlassSecret(ctx context.Context) error {
 				Name:   breakGlassSecretName,
 				Tenant: tenantName,
 			}.Build(),
+			Type: privatev1.SecretType_SECRET_TYPE_OPAQUE,
 			Data: map[string][]byte{
 				"username": []byte(creds.GetUsername()),
 				"password": []byte(creds.GetPassword()),

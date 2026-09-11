@@ -28,7 +28,6 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/events"
-	"github.com/osac-project/osac/fulfillment-service/internal/references"
 )
 
 type PrivateHubsServerBuilder struct {
@@ -270,22 +269,10 @@ func (s *PrivateHubsServer) validateKubeconfigSecret(ctx context.Context, spec *
 	if ref == nil {
 		return nil
 	}
-	if ref.GetId() == "" && ref.GetName() == "" {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument, "kubeconfig_secret must specify id or name")
-	}
-	resolved, err := references.NewDAOLookupFunc(s.secretsDao)(ctx, "", "", ref.GetId(), ref.GetName())
+	resolved, err := resolveSecretReferenceOfType(ctx, s.logger, s.secretsDao, ref,
+		"kubeconfig_secret", privatev1.SecretType_SECRET_TYPE_KUBECONFIG)
 	if err != nil {
-		var deniedErr *dao.ErrDenied
-		if errors.As(err, &deniedErr) {
-			return grpcstatus.Errorf(grpccodes.PermissionDenied, "%s", deniedErr.Reason)
-		}
-		var nf interface{ IsNotFound() bool }
-		if errors.As(err, &nf) && nf.IsNotFound() {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"there is no secret with identifier or name '%s'", refKey(ref))
-		}
-		s.logger.ErrorContext(ctx, "Failed to resolve kubeconfig_secret reference", "error", err)
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to resolve kubeconfig_secret reference")
+		return err
 	}
 	resolvedRef := &privatev1.SecretLocalReference{}
 	resolvedRef.SetId(resolved.ID)

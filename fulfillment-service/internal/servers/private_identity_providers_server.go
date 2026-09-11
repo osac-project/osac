@@ -27,7 +27,6 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/events"
-	"github.com/osac-project/osac/fulfillment-service/internal/references"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 )
 
@@ -193,11 +192,6 @@ func (s *PrivateIdentityProvidersServer) Signal(ctx context.Context,
 	return
 }
 
-const (
-	// secretValueKey is the key in a Secret's data map that holds the client secret value.
-	secretValueKey = "value"
-)
-
 func oidcFrom(idp *privatev1.IdentityProvider) *privatev1.OidcConfig {
 	if idp == nil {
 		return nil
@@ -218,53 +212,14 @@ func (s *PrivateIdentityProvidersServer) validateClientSecretSecret(
 	if ref.GetId() == "" && ref.GetName() == "" {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "client_secret_secret must specify id or name")
 	}
-	resolved, err := references.NewDAOLookupFunc(s.secretsDao)(ctx, "", "", ref.GetId(), ref.GetName())
+	resolved, err := resolveSecretReferenceOfType(ctx, s.logger, s.secretsDao, ref,
+		"client_secret_secret", privatev1.SecretType_SECRET_TYPE_VALUE)
 	if err != nil {
-		var deniedErr *dao.ErrDenied
-		if errors.As(err, &deniedErr) {
-			return grpcstatus.Errorf(grpccodes.PermissionDenied, "%s", deniedErr.Reason)
-		}
-		var nf interface{ IsNotFound() bool }
-		if errors.As(err, &nf) && nf.IsNotFound() {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"there is no secret with identifier or name '%s'", refKey(ref))
-		}
-		s.logger.ErrorContext(ctx, "Failed to resolve client_secret_secret reference", "error", err)
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to resolve client_secret_secret reference")
+		return err
 	}
 	if resolved.Tenant == auth.SharedTenant {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"shared secrets cannot be used as identity provider client_secret_secret references")
-	}
-	// Load the resolved Secret and ensure it carries a non-empty data["value"] entry, as required
-	// by the reconciler that consumes it. Rejecting here surfaces the problem as an INVALID_ARGUMENT
-	// at write time instead of a silent reconcile failure later.
-	secretResp, err := s.secretsDao.Get().SetId(resolved.ID).Do(ctx)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to load client_secret_secret reference", "error", err)
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to resolve client_secret_secret reference")
-	}
-	secret := secretResp.GetObject()
-	data := secret.GetData()
-	// Vault-backed secrets do not carry their data in the database column: the Secrets server nulls
-	// it after writing to Vault. Hydrate the value from the store so this create/update-time check
-	// reads the same value the reconciler later resolves via the Secrets API. Secrets that keep
-	// their data in the database column (non-Vault backends, tests) are validated directly.
-	if len(data) == 0 && s.secretStore != nil &&
-		secret.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT {
-		metadata := secret.GetMetadata()
-		fetched, fetchErr := s.secretStore.Fetch(ctx,
-			metadata.GetTenant(), metadata.GetProject(), metadata.GetName())
-		if fetchErr != nil {
-			s.logger.ErrorContext(ctx, "Failed to load client_secret_secret value from store", "error", fetchErr)
-			return grpcstatus.Errorf(grpccodes.Internal, "failed to resolve client_secret_secret reference")
-		}
-		data = fetched
-	}
-	if value, ok := data[secretValueKey]; !ok || len(value) == 0 {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"secret '%s' referenced by client_secret_secret must contain a non-empty '%s' entry",
-			refKey(ref), secretValueKey)
 	}
 	resolvedRef := &privatev1.SecretLocalReference{}
 	resolvedRef.SetId(resolved.ID)

@@ -20,7 +20,29 @@ import (
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/ginkgo/v2/dsl/table"
 	. "github.com/onsi/gomega"
+
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 )
+
+var _ = Describe("parseSecretType", func() {
+	DescribeTable("valid types",
+		func(value string, expected publicv1.SecretType) {
+			actual, err := parseSecretType(value)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(actual).To(Equal(expected))
+		},
+		Entry("opaque", "opaque", publicv1.SecretType_SECRET_TYPE_OPAQUE),
+		Entry("pull secret", "pull-secret", publicv1.SecretType_SECRET_TYPE_PULL_SECRET),
+		Entry("kubeconfig", "kubeconfig", publicv1.SecretType_SECRET_TYPE_KUBECONFIG),
+		Entry("user data", "user-data", publicv1.SecretType_SECRET_TYPE_USER_DATA),
+		Entry("value", "value", publicv1.SecretType_SECRET_TYPE_VALUE),
+	)
+
+	It("rejects an unknown type", func() {
+		_, err := parseSecretType("tls")
+		Expect(err).To(MatchError(ContainSubstring("invalid secret type")))
+	})
+})
 
 var _ = Describe("parseFromFileSpec", func() {
 	DescribeTable("valid cases",
@@ -231,6 +253,13 @@ var _ = Describe("Command registration", func() {
 		cmd := Cmd()
 		flag := cmd.Flags().Lookup("label")
 		Expect(flag).NotTo(BeNil())
+	})
+
+	It("should register the --type flag with the opaque default", func() {
+		cmd := Cmd()
+		flag := cmd.Flags().Lookup("type")
+		Expect(flag).NotTo(BeNil())
+		Expect(flag.DefValue).To(Equal("opaque"))
 	})
 
 	It("should have the protobuf alias", func() {

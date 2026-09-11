@@ -3045,7 +3045,8 @@ var _ = Describe("Private clusters server", func() {
 				Expect(err).ToNot(HaveOccurred())
 
 				_, err = secretsDao.Create().SetObject(privatev1.Secret_builder{
-					Id: "my-secret-id",
+					Id:   "my-secret-id",
+					Type: privatev1.SecretType_SECRET_TYPE_PULL_SECRET,
 					Metadata: privatev1.Metadata_builder{
 						Name:   "my-secret-name",
 						Tenant: testTenant,
@@ -3054,7 +3055,8 @@ var _ = Describe("Private clusters server", func() {
 				Expect(err).ToNot(HaveOccurred())
 
 				_, err = secretsDao.Create().SetObject(privatev1.Secret_builder{
-					Id: "override-secret-id",
+					Id:   "override-secret-id",
+					Type: privatev1.SecretType_SECRET_TYPE_PULL_SECRET,
 					Metadata: privatev1.Metadata_builder{
 						Name:   "override-secret-name",
 						Tenant: testTenant,
@@ -3138,7 +3140,8 @@ var _ = Describe("Private clusters server", func() {
 
 			It("Rejects a directly supplied shared pull_secret_secret reference", func() {
 				_, err := secretsDao.Create().SetObject(privatev1.Secret_builder{
-					Id: "shared-secret-direct-id",
+					Id:   "shared-secret-direct-id",
+					Type: privatev1.SecretType_SECRET_TYPE_PULL_SECRET,
 					Metadata: privatev1.Metadata_builder{
 						Name:   "shared-secret-direct",
 						Tenant: auth.SharedTenant,
@@ -3256,7 +3259,8 @@ var _ = Describe("Private clusters server", func() {
 
 			It("inherits a canonical shared pull Secret when a tenant Secret has the same name", func() {
 				_, err := secretsDao.Create().SetObject(privatev1.Secret_builder{
-					Id: "shared-pull-secret-id",
+					Id:   "shared-pull-secret-id",
+					Type: privatev1.SecretType_SECRET_TYPE_PULL_SECRET,
 					Metadata: privatev1.Metadata_builder{
 						Name:   "my-secret-name",
 						Tenant: auth.SharedTenant,

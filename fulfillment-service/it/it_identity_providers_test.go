@@ -586,11 +586,32 @@ var _ = Describe("Identity provider client_secret_secret", func() {
 		name = fmt.Sprintf("idp-client-secret-%s", uuid.New()[24:32])
 		response, err := secretsClient.Create(ctx, privatev1.SecretsCreateRequest_builder{
 			Object: privatev1.Secret_builder{
+				Type: privatev1.SecretType_SECRET_TYPE_VALUE,
 				Metadata: privatev1.Metadata_builder{
 					Name:   name,
 					Tenant: tenantName,
 				}.Build(),
 				Data: data,
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		id = response.GetObject().GetId()
+		DeferCleanup(func() {
+			_, _ = secretsClient.Delete(ctx, privatev1.SecretsDeleteRequest_builder{Id: id}.Build())
+		})
+		return id, name
+	}
+
+	// createOpaqueSecret creates a valid secret which cannot be used as an OIDC client secret.
+	createOpaqueSecret := func(ctx context.Context) (id, name string) {
+		name = fmt.Sprintf("idp-opaque-secret-%s", uuid.New()[24:32])
+		response, err := secretsClient.Create(ctx, privatev1.SecretsCreateRequest_builder{
+			Object: privatev1.Secret_builder{
+				Type: privatev1.SecretType_SECRET_TYPE_OPAQUE,
+				Metadata: privatev1.Metadata_builder{
+					Name:   name,
+					Tenant: tenantName,
+				}.Build(),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
@@ -683,9 +704,10 @@ var _ = Describe("Identity provider client_secret_secret", func() {
 		Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 	})
 
-	It("Rejects a client_secret_secret whose secret lacks a non-empty value", func() {
-		// The secret exists but has no "value" data entry, which the create-time validation rejects.
-		secretId, _ := createClientSecret(ctx, map[string][]byte{"wrong-key": []byte("nope")})
+	It("Rejects a client_secret_secret with an incompatible secret type", func() {
+		// Typed-secret validation prevents malformed value secrets from being created. Use a
+		// valid opaque secret to exercise the consumer's type validation instead.
+		secretId, _ := createOpaqueSecret(ctx)
 
 		idpName := fmt.Sprintf("test-novalue-%s", uuid.New())
 		_, err := client.Create(ctx, privatev1.IdentityProvidersCreateRequest_builder{
@@ -711,6 +733,8 @@ var _ = Describe("Identity provider client_secret_secret", func() {
 		status, ok := grpcstatus.FromError(err)
 		Expect(ok).To(BeTrue())
 		Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+		Expect(status.Message()).To(ContainSubstring("SECRET_TYPE_OPAQUE"))
+		Expect(status.Message()).To(ContainSubstring("SECRET_TYPE_VALUE"))
 	})
 
 	It("Updates client_secret_secret to another Vault-backed secret", func() {

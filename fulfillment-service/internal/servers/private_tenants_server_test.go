@@ -643,7 +643,8 @@ var _ = Describe("Break-glass credentials secret reference", func() {
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 		_, err = secretsDao.Create().SetObject(privatev1.Secret_builder{
-			Id: "existing-bg-secret",
+			Id:   "existing-bg-secret",
+			Type: privatev1.SecretType_SECRET_TYPE_OPAQUE,
 			Metadata: privatev1.Metadata_builder{
 				Name:   "existing-bg",
 				Tenant: testTenant,
@@ -690,7 +691,8 @@ var _ = Describe("Break-glass credentials secret reference", func() {
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 		_, err = secretsDao.Create().SetObject(privatev1.Secret_builder{
-			Id: "tenant-bg-secret",
+			Id:   "tenant-bg-secret",
+			Type: privatev1.SecretType_SECRET_TYPE_OPAQUE,
 			Metadata: privatev1.Metadata_builder{
 				Name:   breakGlassCredentialsSecretName,
 				Tenant: "secret-blocked-tenant",
@@ -746,7 +748,8 @@ var _ = Describe("Break-glass credentials secret reference", func() {
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 		_, err = secretsDao.Create().SetObject(privatev1.Secret_builder{
-			Id: "predeleted-bg-secret",
+			Id:   "predeleted-bg-secret",
+			Type: privatev1.SecretType_SECRET_TYPE_OPAQUE,
 			Metadata: privatev1.Metadata_builder{
 				Name:   breakGlassCredentialsSecretName,
 				Tenant: "predeleted-secret-tenant",
@@ -799,7 +802,8 @@ var _ = Describe("Break-glass credentials secret reference", func() {
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 		_, err = secretsDao.Create().SetObject(privatev1.Secret_builder{
-			Id: "stale-bg-secret",
+			Id:   "stale-bg-secret",
+			Type: privatev1.SecretType_SECRET_TYPE_OPAQUE,
 			Metadata: privatev1.Metadata_builder{
 				Name:   breakGlassCredentialsSecretName,
 				Tenant: "stale-ref-tenant",

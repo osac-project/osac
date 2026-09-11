@@ -209,7 +209,7 @@ func (s *PrivateAddOnOperatorsServer) Signal(ctx context.Context,
 	return
 }
 
-// validateOCPVersionRange validates that non-empty version strings are valid semver and that
+// validateOCPVersionRange validates that non-empty version strings are valid SemVer-compatible values and that
 // min is not greater than max when both are provided.
 func validateOCPVersionRange(minVersion, maxVersion string) error {
 	var min, max *semver.Version

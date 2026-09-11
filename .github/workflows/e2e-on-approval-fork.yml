@@ -19,6 +19,7 @@ jobs:
   replay:
     permissions:
       actions: write
+      checks: write
       contents: read
       issues: read
       pull-requests: write

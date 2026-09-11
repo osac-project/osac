@@ -161,6 +161,10 @@ var _ = Describe("ProjectGroupManager", func() {
 				GetGroupIDByPath(gomock.Any(), "test-org", "/system:viewers").
 				Return("", fmt.Errorf("failed to get organization: %w", &ErrNotFound{Kind: "organization", Name: "test-org"}))
 
+			mockClient.EXPECT().
+				GetGroupIDByPath(gomock.Any(), "test-org", "/system:managers").
+				Return("", fmt.Errorf("failed to get organization: %w", &ErrNotFound{Kind: "organization", Name: "test-org"}))
+
 			err := manager.DeleteProjectGroups(ctx, "test-org", "")
 			Expect(err).ToNot(HaveOccurred())
 		})

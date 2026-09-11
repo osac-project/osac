@@ -989,35 +989,34 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	}
 	privatev1.RegisterProjectsServer(registrar, privateProjectsServer)
 
-	// VMaaS: volumes
-	if deps.Services.VMaaS {
-		deps.Logger.InfoContext(ctx, "Creating volumes server")
-		volumesServer, err := servers.NewVolumesServer().
-			SetLogger(deps.Logger).
-			SetNotifier(deps.Notifier).
-			SetAttributionLogic(deps.PublicAttributionLogic).
-			SetTenancyLogic(deps.TenancyLogic).
-			SetMetricsRegisterer(deps.MetricsRegisterer).
-			Build()
-		if err != nil {
-			return nil, fmt.Errorf("failed to create volumes server: %w", err)
-		}
-		publicv1.RegisterVolumesServer(registrar, volumesServer)
-
-		deps.Logger.InfoContext(ctx, "Creating private volumes server")
-		privateVolumesServer, err := servers.NewPrivateVolumesServer().
-			SetLogger(deps.Logger).
-			SetNotifier(deps.Notifier).
-			SetAttributionLogic(deps.PrivateAttributionLogic).
-			SetTenancyLogic(deps.TenancyLogic).
-			SetMetricsRegisterer(deps.MetricsRegisterer).
-			SetTierResolver(deps.TierResolver).
-			Build()
-		if err != nil {
-			return nil, fmt.Errorf("failed to create private volumes server: %w", err)
-		}
-		privatev1.RegisterVolumesServer(registrar, privateVolumesServer)
+	// Create the volumes server:
+	deps.Logger.InfoContext(ctx, "Creating volumes server")
+	volumesServer, err := servers.NewVolumesServer().
+		SetLogger(deps.Logger).
+		SetNotifier(deps.Notifier).
+		SetAttributionLogic(deps.PublicAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create volumes server: %w", err)
 	}
+	publicv1.RegisterVolumesServer(registrar, volumesServer)
+
+	// Create the private volumes server:
+	deps.Logger.InfoContext(ctx, "Creating private volumes server")
+	privateVolumesServer, err := servers.NewPrivateVolumesServer().
+		SetLogger(deps.Logger).
+		SetNotifier(deps.Notifier).
+		SetAttributionLogic(deps.PrivateAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		SetTierResolver(deps.TierResolver).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create private volumes server: %w", err)
+	}
+	privatev1.RegisterVolumesServer(registrar, privateVolumesServer)
 
 	// Create the public users server:
 	deps.Logger.InfoContext(ctx, "Creating public users server")

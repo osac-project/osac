@@ -49,7 +49,6 @@ var disabledServicePrefixes = map[string][]string{
 		"/osac.private.v1.ComputeInstances/",
 		"/osac.private.v1.DiskImages/",
 		"/osac.private.v1.InstanceTypes/",
-		"/osac.private.v1.Volumes/",
 	},
 	"BMaaS": {
 		"/osac.public.v1.BareMetalInstanceTemplates/",

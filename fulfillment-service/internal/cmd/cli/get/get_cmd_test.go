@@ -15,6 +15,7 @@ package get
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
@@ -23,7 +24,9 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/exit"
 	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
+	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 )
 
 var _ = Describe("Get command", func() {
@@ -112,6 +115,58 @@ var _ = Describe("Get command", func() {
 
 			_, err := runner.fetchObjects(ctx, []string{"my-cluster"})
 			Expect(err).To(HaveOccurred())
+		})
+	})
+
+	Describe("render with no matching objects", func() {
+		var console *terminal.Console
+
+		BeforeEach(func() {
+			var err error
+			console, err = terminal.NewConsole().
+				SetLogger(logger).
+				SetStdout(GinkgoWriter).
+				SetStderr(GinkgoWriter).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			err = console.AddTemplates(templatesFS, "templates")
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("renderTable returns exit.Error when no objects match", func() {
+			runner := &runnerContext{
+				logger:  logger,
+				console: console,
+			}
+			err := runner.renderTable(ctx, []proto.Message{})
+			Expect(err).To(HaveOccurred())
+			var exitErr exit.Error
+			Expect(errors.As(err, &exitErr)).To(BeTrue())
+			Expect(exitErr.Code()).To(Equal(1))
+		})
+
+		It("renderJson returns exit.Error when no objects match", func() {
+			runner := &runnerContext{
+				logger:  logger,
+				console: console,
+			}
+			err := runner.renderJson(ctx, []proto.Message{})
+			Expect(err).To(HaveOccurred())
+			var exitErr exit.Error
+			Expect(errors.As(err, &exitErr)).To(BeTrue())
+			Expect(exitErr.Code()).To(Equal(1))
+		})
+
+		It("renderYaml returns exit.Error when no objects match", func() {
+			runner := &runnerContext{
+				logger:  logger,
+				console: console,
+			}
+			err := runner.renderYaml(ctx, []proto.Message{})
+			Expect(err).To(HaveOccurred())
+			var exitErr exit.Error
+			Expect(errors.As(err, &exitErr)).To(BeTrue())
+			Expect(exitErr.Code()).To(Equal(1))
 		})
 	})
 })

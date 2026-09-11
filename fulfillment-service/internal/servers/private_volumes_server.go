@@ -260,6 +260,17 @@ func applyVolumeUpdate(base, update *privatev1.Volume, mask *fieldmaskpb.FieldMa
 			base.GetSpec().SetSizeGib(update.GetSpec().GetSizeGib())
 		case "spec.access_mode":
 			base.GetSpec().SetAccessMode(update.GetSpec().GetAccessMode())
+		case "spec.topology":
+			if topology := update.GetSpec().GetTopology(); topology != nil {
+				base.GetSpec().SetTopology(proto.Clone(topology).(*privatev1.VolumeTopology))
+			} else {
+				base.GetSpec().SetTopology(nil)
+			}
+		case "spec.topology.segments":
+			if base.GetSpec().GetTopology() == nil {
+				base.GetSpec().SetTopology(&privatev1.VolumeTopology{})
+			}
+			base.GetSpec().GetTopology().SetSegments(update.GetSpec().GetTopology().GetSegments())
 		default:
 			// Unknown paths are handled by the generic update layer.
 		}
@@ -281,6 +292,10 @@ func validateVolumeImmutability(merged, existing *privatev1.Volume) error {
 	if merged.GetSpec().GetAccessMode() != existing.GetSpec().GetAccessMode() {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"field 'spec.access_mode' is immutable and cannot be changed after creation")
+	}
+	if !proto.Equal(merged.GetSpec().GetTopology(), existing.GetSpec().GetTopology()) {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'spec.topology' is immutable and cannot be changed after creation")
 	}
 	return nil
 }

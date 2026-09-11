@@ -128,4 +128,8 @@ message VolumeStatus {
   // the osac-operator from the same parameters it used for the vendor CreateVolume call, and
   // forwarded unchanged by osac-csi-driver to the vendor CSI controller's ControllerPublishVolume.
   map<string, string> vendor_context = 7;
+
+  // Provider selected by StorageTier resolution. This is the provider key used by the operator
+  // to select a VendorProvisioner implementation.
+  string provider = 8;
 }

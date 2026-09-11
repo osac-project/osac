@@ -33,7 +33,7 @@ import (
 // VolumeFeedbackReconciler syncs Volume CR status from the hub cluster back
 // to the fulfillment-service via the private Volumes gRPC API. It maps CRD
 // phases to proto states and copies vendor-assigned fields (vendorVolumeID,
-// backend, protocol) so the fulfillment-service inventory stays current.
+// backend, provider, protocol) so the fulfillment-service inventory stays current.
 type VolumeFeedbackReconciler struct {
 	bridge          *feedback.Bridge[*v1alpha1.Volume, *privatev1.Volume]
 	volumeNamespace string
@@ -162,6 +162,9 @@ func syncVolumeVendorFields(ctx context.Context, obj *v1alpha1.Volume, remote *p
 	}
 	if obj.Status.Backend != "" {
 		remote.GetStatus().SetBackend(obj.Status.Backend)
+	}
+	if obj.Status.Provider != "" {
+		remote.GetStatus().SetProvider(obj.Status.Provider)
 	}
 	if len(obj.Status.VendorContext) > 0 {
 		remote.GetStatus().SetVendorContext(obj.Status.VendorContext)

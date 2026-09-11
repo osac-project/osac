@@ -90,6 +90,7 @@ var _ = Describe("Private volumes server", func() {
 				SetTierResolver(func(_ context.Context, _ string) (*TierResolution, error) {
 					return &TierResolution{
 						Backend:  "test-backend",
+						Provider: "test-provider",
 						Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
 					}, nil
 				}).
@@ -158,6 +159,7 @@ var _ = Describe("Private volumes server", func() {
 				privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE))
 			Expect(created.GetStatus().GetState()).To(Equal(
 				privatev1.VolumeState_VOLUME_STATE_CREATING))
+			Expect(created.GetStatus().GetProvider()).To(Equal("test-provider"))
 
 			getResponse, err := server.Get(ctx, privatev1.VolumesGetRequest_builder{
 				Id: created.GetId(),
@@ -166,6 +168,26 @@ var _ = Describe("Private volumes server", func() {
 			obj := getResponse.GetObject()
 			Expect(obj.GetId()).To(Equal(created.GetId()))
 			Expect(obj.GetSpec().GetStorageTier()).To(Equal("gold"))
+		})
+
+		It("stamps the resolved provider over caller-provided status", func() {
+			response, err := server.Create(ctx, privatev1.VolumesCreateRequest_builder{
+				Object: privatev1.Volume_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "provider-stamped-volume",
+					}.Build(),
+					Spec: privatev1.VolumeSpec_builder{
+						StorageTier: "gold",
+						SizeGib:     100,
+						AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+					}.Build(),
+					Status: privatev1.VolumeStatus_builder{
+						Provider: "caller-provider",
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetObject().GetStatus().GetProvider()).To(Equal("test-provider"))
 		})
 
 		It("Creates a standalone volume", func() {

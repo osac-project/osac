@@ -154,6 +154,8 @@ func (p *VastVendorProvisioner) CreateVolume(ctx context.Context, req VendorCrea
 	// create it.
 	subsystem := fmt.Sprintf("view-%s-%s-%s", req.Tenant, creds.uidHash, req.Tier)
 
+	// Topology is not forwarded to AccessibilityRequirements because VAST is
+	// network-attached storage; node-local placement is only relevant for LVMS.
 	csiReq := &csi.CreateVolumeRequest{
 		Name:               req.Name,
 		CapacityRange:      &csi.CapacityRange{RequiredBytes: req.SizeGiB * bytesPerGiB},

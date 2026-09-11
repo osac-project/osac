@@ -659,15 +659,26 @@ func setupVolumeControllers(mgr mcmanager.Manager, grpcConn *grpc.ClientConn) er
 }
 
 // newVendorProvisionerRegistry constructs the provider implementations known
-// to this operator. Endpoint entries for providers without an implementation
-// are intentionally ignored; registering them with VAST would route another
-// provider's request through VAST credentials and CSI parameters.
+// to this operator. Every configured endpoint key is seeded as a nil entry so
+// that Lookup returns ProviderNotImplementedError for unsupported providers
+// instead of treating the registry as empty (which leaves volumes stuck in
+// Progressing). Supported providers then overwrite their nil entry with a real
+// provisioner.
 func newVendorProvisionerRegistry(
 	reader client.Reader,
 	configNamespace string,
 	endpoints map[string]string,
 ) (controller.VendorProvisionerRegistry, error) {
 	registry := make(controller.VendorProvisionerRegistry)
+
+	// Seed every configured provider as a nil entry so that Lookup returns
+	// ProviderNotImplementedError for unsupported providers instead of
+	// silently treating the registry as empty (→ VolumePhaseFailed, not
+	// Progressing).
+	for key := range endpoints {
+		registry[key] = nil
+	}
+
 	vastEndpoint, ok := endpoints["vast"]
 	if !ok {
 		return registry, nil

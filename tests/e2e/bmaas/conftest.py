@@ -40,7 +40,23 @@ def ssh_public_key() -> Generator[str, None, None]:
 
 
 @pytest.fixture(scope="session")
-def catalog_item(private_grpc: GRPCClient, bmi_template: str, test_run_id: str) -> Generator[str, None, None]:
+def bmi_disk_image(grpc: GRPCClient, test_run_id: str) -> Generator[str, None, None]:
+    """Create a default DiskImage for BMaaS E2E tests and clean it up afterward."""
+    di_name = f"e2e-bmi-di-{test_run_id}"
+    di_id = grpc.create_disk_image(name=di_name, source_ref="oci://quay.io/osac-project/fedora-cloud-bmi:44")
+
+    yield di_name
+
+    try:
+        grpc.delete_disk_image(disk_image_id=di_id)
+    except Exception as e:
+        print(f"WARNING: Failed to delete disk image {di_id}: {e}")
+
+
+@pytest.fixture(scope="session")
+def catalog_item(
+    private_grpc: GRPCClient, bmi_template: str, test_run_id: str, bmi_disk_image: str
+) -> Generator[str, None, None]:
     name = f"e2e-bmaas-{test_run_id}"
     print(f"\nCreating BareMetalInstanceCatalogItem: {name}")
     item_id: str = private_grpc.create_baremetal_instance_catalog_item(
@@ -48,7 +64,10 @@ def catalog_item(private_grpc: GRPCClient, bmi_template: str, test_run_id: str) 
         title=f"E2E BMaaS Test ({test_run_id})",
         description="Temporary catalog item for BMaaS E2E tests",
         template=bmi_template,
-        field_definitions=[{"path": "ssh_public_key", "display_name": "SSH Public Key", "editable": True}],
+        field_definitions=[
+            {"path": "ssh_public_key", "display_name": "SSH Public Key", "editable": True},
+            {"path": "disk_image", "display_name": "Disk Image", "editable": False, "default": bmi_disk_image},
+        ],
     )
     print(f"CatalogItem created: {item_id}")
 

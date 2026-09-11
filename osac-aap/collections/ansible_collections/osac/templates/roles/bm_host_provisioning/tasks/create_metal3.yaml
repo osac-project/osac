@@ -1,9 +1,4 @@
 ---
-- name: Apply image defaults to template parameters
-  ansible.builtin.set_fact:
-    template_params: "{{ {'imageURL': bm_host_metal3_default_image_url}
-                        | combine(template_params) }}"
-
 - name: Parse externalHostID into namespace and name
   ansible.builtin.set_fact:
     bmh_namespace: "{{ bare_metal_instance.spec.externalHostID.split('/')[0] }}"

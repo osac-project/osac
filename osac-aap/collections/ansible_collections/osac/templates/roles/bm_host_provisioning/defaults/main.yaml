@@ -1,3 +1,2 @@
 ---
-bm_host_metal3_default_image_url: "oci://quay.io/osac-project/fedora-cloud-bmi:44"
 bm_host_openstack_external_network: "external"

@@ -153,6 +153,7 @@ var _ = Describe("buildDisabledServiceMap", func() {
 		for _, prefixes := range disabledServicePrefixes {
 			totalPrefixes += len(prefixes)
 		}
+		totalPrefixes += len(diskImageServicePrefixes)
 		Expect(m).To(HaveLen(totalPrefixes))
 	})
 
@@ -162,5 +163,24 @@ var _ = Describe("buildDisabledServiceMap", func() {
 			Expect(m[prefix]).To(Equal("VMaaS"))
 		}
 		Expect(m).To(HaveLen(len(disabledServicePrefixes["VMaaS"])))
+	})
+
+	It("keeps DiskImages enabled when either VMaaS or BMaaS is enabled", func() {
+		for _, flags := range []*services.Flags{
+			{CaaS: false, VMaaS: true, BMaaS: false, MaaS: false},
+			{CaaS: false, VMaaS: false, BMaaS: true, MaaS: false},
+		} {
+			m := buildDisabledServiceMap(flags)
+			for _, prefix := range diskImageServicePrefixes {
+				Expect(m).ToNot(HaveKey(prefix))
+			}
+		}
+	})
+
+	It("disables DiskImages only when both VMaaS and BMaaS are disabled", func() {
+		m := buildDisabledServiceMap(&services.Flags{CaaS: true, VMaaS: false, BMaaS: false, MaaS: false})
+		for _, prefix := range diskImageServicePrefixes {
+			Expect(m).To(HaveKeyWithValue(prefix, "DiskImages"))
+		}
 	})
 })

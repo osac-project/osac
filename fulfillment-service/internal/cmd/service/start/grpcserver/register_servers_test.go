@@ -601,6 +601,14 @@ var _ = Describe("Conditional service registration", func() {
 		}
 	})
 
+	It("registers DiskImages when only BMaaS is enabled", func() {
+		info, _, err := registerWithFlags(&services.Flags{CaaS: false, VMaaS: false, BMaaS: true, MaaS: false})
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(info).To(HaveKey("osac.public.v1.DiskImages"))
+		Expect(info).To(HaveKey("osac.private.v1.DiskImages"))
+	})
+
 	It("always registers shared infrastructure regardless of flags", func() {
 		info, _, err := registerWithFlags(&services.Flags{CaaS: false, VMaaS: false, BMaaS: false, MaaS: false})
 		Expect(err).ToNot(HaveOccurred())

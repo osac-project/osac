@@ -41,15 +41,6 @@ message BareMetalNetworkAttachment {
   optional bool primary = 4 [(google.api.field_behavior) = IMMUTABLE];
 }
 
-// Contains the image configuration for a bare metal instance.
-message BareMetalInstanceImage {
-  // Image source type (e.g. "registry").
-  string source_type = 1;
-
-  // Image reference (e.g. OCI image URL).
-  string source_ref = 2;
-}
-
 // Run strategy for the bare metal instance.
 enum BareMetalInstanceRunStrategy {
   BARE_METAL_INSTANCE_RUN_STRATEGY_UNSPECIFIED = 0;

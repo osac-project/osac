@@ -112,8 +112,9 @@ message BareMetalInstanceSpec {
   // These parameters can't be modified after the bare metal instance is created.
   map<string, google.protobuf.Any> template_parameters = 6 [(google.api.field_behavior) = IMMUTABLE];
 
-  // OS base image configuration.
-  optional BareMetalInstanceImage image = 7 [(google.api.field_behavior) = IMMUTABLE];
+  // Reserved field numbers for removed fields (do not reuse).
+  reserved 7;
+  reserved "image";
 
   // Network attachments for the bare metal instance. One entry per physical NIC.
   // The list structure is immutable after creation (entries cannot be added or removed),

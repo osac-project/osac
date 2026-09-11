@@ -17,7 +17,6 @@ package osac.public.v1;
 
 import "buf/validate/validate.proto";
 import "google/protobuf/any.proto";
-import "osac/public/v1/baremetal_instance_common_type.proto";
 import "osac/public/v1/metadata_type.proto";
 
 // A bare metal instance template defines a hardware profile (host type, OS image, network configuration)
@@ -102,8 +101,9 @@ message BareMetalInstanceTemplateParameterDefinition {
 
 // Default values for bare metal instance spec fields.
 message BareMetalInstanceTemplateSpecDefaults {
-  // Default OS base image used when the tenant does not specify one.
-  optional BareMetalInstanceImage image = 1;
+  // Reserved field numbers for removed fields (do not reuse).
+  reserved 1;
+  reserved "image";
 }
 
 // Reference to a BareMetalInstanceTemplate resource.

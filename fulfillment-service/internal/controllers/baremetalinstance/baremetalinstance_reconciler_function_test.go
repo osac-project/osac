@@ -479,24 +479,35 @@ var _ = Describe("mutateBMI", func() {
 		Expect(err.Error()).To(ContainSubstring("missing-catalog"))
 	})
 
-	It("should include imageURL in templateParameters when image is set", func() {
+	It("should include imageURL in templateParameters when disk_image is set", func() {
 		catalogItemsClient := defaultFakeCatalogItemsClient()
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+		diskImagesClient := NewMockDiskImagesClient(ctrl)
+		diskImagesClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(privatev1.DiskImagesGetResponse_builder{
+				Object: privatev1.DiskImage_builder{
+					Id: "disk-image-1",
+					Spec: privatev1.DiskImageSpec_builder{
+						SourceRef: "quay.io/org/rhel9:latest",
+					}.Build(),
+				}.Build(),
+			}.Build(), nil)
 
 		t := &task{
 			r: &function{
 				logger:                              logger,
 				bareMetalInstanceCatalogItemsClient: catalogItemsClient,
 				bareMetalInstanceTypesClient:        defaultFakeBareMetalInstanceTypesClient(),
+				diskImagesClient:                    diskImagesClient,
 			},
 			bareMetalInstance: privatev1.BareMetalInstance_builder{
 				Id: "bmi-test",
 				Spec: privatev1.BareMetalInstanceSpec_builder{
 					CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: "catalog-1"}.Build(),
 					InstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Id: "default-type"}.Build(),
-					Image: privatev1.BareMetalInstanceImage_builder{
-						SourceType: "registry",
-						SourceRef:  "quay.io/org/rhel9:latest",
-					}.Build(),
+					DiskImage:    privatev1.DiskImageReference_builder{Id: "disk-image-1"}.Build(),
 				}.Build(),
 			}.Build(),
 		}
@@ -508,6 +519,79 @@ var _ = Describe("mutateBMI", func() {
 		var params map[string]string
 		Expect(json.Unmarshal([]byte(obj.Spec.TemplateParameters), &params)).To(Succeed())
 		Expect(params["imageURL"]).To(Equal("quay.io/org/rhel9:latest"))
+	})
+
+	It("should return a wrapped error when disk_image resolution fails", func() {
+		catalogItemsClient := defaultFakeCatalogItemsClient()
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+		diskImagesClient := NewMockDiskImagesClient(ctrl)
+		diskImagesClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(nil, errors.New("disk image not found"))
+
+		t := &task{
+			r: &function{
+				logger:                              logger,
+				bareMetalInstanceCatalogItemsClient: catalogItemsClient,
+				bareMetalInstanceTypesClient:        defaultFakeBareMetalInstanceTypesClient(),
+				diskImagesClient:                    diskImagesClient,
+			},
+			bareMetalInstance: privatev1.BareMetalInstance_builder{
+				Id: "bmi-test",
+				Spec: privatev1.BareMetalInstanceSpec_builder{
+					CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: "catalog-1"}.Build(),
+					InstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Id: "default-type"}.Build(),
+					DiskImage:    privatev1.DiskImageReference_builder{Id: "missing-disk-image"}.Build(),
+				}.Build(),
+			}.Build(),
+		}
+
+		var obj bmfov1alpha1.BareMetalInstance
+		err := t.mutateBMI(ctx, &obj)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("failed to resolve disk image"))
+		Expect(err.Error()).To(ContainSubstring("missing-disk-image"))
+	})
+
+	It("should produce identical templateParameters across repeated reconciliations (idempotency)", func() {
+		catalogItemsClient := defaultFakeCatalogItemsClient()
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+		diskImagesClient := NewMockDiskImagesClient(ctrl)
+		diskImagesClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(privatev1.DiskImagesGetResponse_builder{
+				Object: privatev1.DiskImage_builder{
+					Id: "disk-image-1",
+					Spec: privatev1.DiskImageSpec_builder{
+						SourceRef: "quay.io/org/rhel9:latest",
+					}.Build(),
+				}.Build(),
+			}.Build(), nil).
+			Times(2)
+
+		t := &task{
+			r: &function{
+				logger:                              logger,
+				bareMetalInstanceCatalogItemsClient: catalogItemsClient,
+				bareMetalInstanceTypesClient:        defaultFakeBareMetalInstanceTypesClient(),
+				diskImagesClient:                    diskImagesClient,
+			},
+			bareMetalInstance: privatev1.BareMetalInstance_builder{
+				Id: "bmi-test",
+				Spec: privatev1.BareMetalInstanceSpec_builder{
+					CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: "catalog-1"}.Build(),
+					InstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Id: "default-type"}.Build(),
+					DiskImage:    privatev1.DiskImageReference_builder{Id: "disk-image-1"}.Build(),
+				}.Build(),
+			}.Build(),
+		}
+
+		var first, second bmfov1alpha1.BareMetalInstance
+		Expect(t.mutateBMI(ctx, &first)).To(Succeed())
+		Expect(t.mutateBMI(ctx, &second)).To(Succeed())
+		Expect(second.Spec.TemplateParameters).To(Equal(first.Spec.TemplateParameters))
 	})
 
 	It("should not include imageURL in templateParameters when image is not set", func() {
@@ -540,6 +624,19 @@ var _ = Describe("mutateBMI", func() {
 
 	It("should let system imageURL override user-provided template_parameters value", func() {
 		catalogItemsClient := defaultFakeCatalogItemsClient()
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+		diskImagesClient := NewMockDiskImagesClient(ctrl)
+		diskImagesClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(privatev1.DiskImagesGetResponse_builder{
+				Object: privatev1.DiskImage_builder{
+					Id: "disk-image-1",
+					Spec: privatev1.DiskImageSpec_builder{
+						SourceRef: "quay.io/org/rhel9:latest",
+					}.Build(),
+				}.Build(),
+			}.Build(), nil)
 
 		userImageParam, err := anypb.New(wrapperspb.String("user-provided-image"))
 		Expect(err).ToNot(HaveOccurred())
@@ -549,6 +646,7 @@ var _ = Describe("mutateBMI", func() {
 				logger:                              logger,
 				bareMetalInstanceCatalogItemsClient: catalogItemsClient,
 				bareMetalInstanceTypesClient:        defaultFakeBareMetalInstanceTypesClient(),
+				diskImagesClient:                    diskImagesClient,
 			},
 			bareMetalInstance: privatev1.BareMetalInstance_builder{
 				Id: "bmi-test",
@@ -556,10 +654,7 @@ var _ = Describe("mutateBMI", func() {
 					CatalogItem:        privatev1.BareMetalInstanceCatalogItemReference_builder{Id: "catalog-1"}.Build(),
 					InstanceType:       privatev1.BareMetalInstanceTypeLocalReference_builder{Id: "default-type"}.Build(),
 					TemplateParameters: map[string]*anypb.Any{"imageURL": userImageParam},
-					Image: privatev1.BareMetalInstanceImage_builder{
-						SourceType: "registry",
-						SourceRef:  "quay.io/org/rhel9:latest",
-					}.Build(),
+					DiskImage:          privatev1.DiskImageReference_builder{Id: "disk-image-1"}.Build(),
 				}.Build(),
 			}.Build(),
 		}
@@ -574,8 +669,21 @@ var _ = Describe("mutateBMI", func() {
 			"system imageURL must override user-provided template_parameters value")
 	})
 
-	It("should let system imageSourceType override user-provided template_parameters value", func() {
+	It("should never include imageSourceType in templateParameters when disk_image is set", func() {
 		catalogItemsClient := defaultFakeCatalogItemsClient()
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+		diskImagesClient := NewMockDiskImagesClient(ctrl)
+		diskImagesClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(privatev1.DiskImagesGetResponse_builder{
+				Object: privatev1.DiskImage_builder{
+					Id: "disk-image-1",
+					Spec: privatev1.DiskImageSpec_builder{
+						SourceRef: "quay.io/org/rhel9:latest",
+					}.Build(),
+				}.Build(),
+			}.Build(), nil)
 
 		userSourceTypeParam, err := anypb.New(wrapperspb.String("user-provided-type"))
 		Expect(err).ToNot(HaveOccurred())
@@ -585,17 +693,15 @@ var _ = Describe("mutateBMI", func() {
 				logger:                              logger,
 				bareMetalInstanceCatalogItemsClient: catalogItemsClient,
 				bareMetalInstanceTypesClient:        defaultFakeBareMetalInstanceTypesClient(),
+				diskImagesClient:                    diskImagesClient,
 			},
 			bareMetalInstance: privatev1.BareMetalInstance_builder{
 				Id: "bmi-test",
 				Spec: privatev1.BareMetalInstanceSpec_builder{
 					CatalogItem:        &privatev1.BareMetalInstanceCatalogItemReference{Id: "catalog-1"},
 					TemplateParameters: map[string]*anypb.Any{"imageSourceType": userSourceTypeParam},
-					Image: privatev1.BareMetalInstanceImage_builder{
-						SourceType: "oci",
-						SourceRef:  "quay.io/org/rhel9:latest",
-					}.Build(),
-					InstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Id: "default-type"}.Build(),
+					DiskImage:          privatev1.DiskImageReference_builder{Id: "disk-image-1"}.Build(),
+					InstanceType:       privatev1.BareMetalInstanceTypeLocalReference_builder{Id: "default-type"}.Build(),
 				}.Build(),
 			}.Build(),
 		}
@@ -606,28 +712,39 @@ var _ = Describe("mutateBMI", func() {
 
 		var params map[string]any
 		Expect(json.Unmarshal([]byte(obj.Spec.TemplateParameters), &params)).To(Succeed())
-		Expect(params["imageSourceType"]).To(Equal("oci"),
-			"system imageSourceType must override user-provided template_parameters value")
+		Expect(params["imageSourceType"]).To(Equal("user-provided-type"),
+			"the reconciler never touches imageSourceType; only user-provided template_parameters can set it")
 	})
 
 	It("should include imageURL alongside sshPublicKey in templateParameters", func() {
 		catalogItemsClient := defaultFakeCatalogItemsClient()
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+		diskImagesClient := NewMockDiskImagesClient(ctrl)
+		diskImagesClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(privatev1.DiskImagesGetResponse_builder{
+				Object: privatev1.DiskImage_builder{
+					Id: "disk-image-1",
+					Spec: privatev1.DiskImageSpec_builder{
+						SourceRef: "quay.io/org/fedora:latest",
+					}.Build(),
+				}.Build(),
+			}.Build(), nil)
 
 		t := &task{
 			r: &function{
 				logger:                              logger,
 				bareMetalInstanceCatalogItemsClient: catalogItemsClient,
 				bareMetalInstanceTypesClient:        defaultFakeBareMetalInstanceTypesClient(),
+				diskImagesClient:                    diskImagesClient,
 			},
 			bareMetalInstance: privatev1.BareMetalInstance_builder{
 				Id: "bmi-test",
 				Spec: privatev1.BareMetalInstanceSpec_builder{
 					CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: "catalog-1"}.Build(),
 					SshPublicKey: new("ssh-ed25519 AAAA... test@example.com"),
-					Image: privatev1.BareMetalInstanceImage_builder{
-						SourceType: "registry",
-						SourceRef:  "quay.io/org/fedora:latest",
-					}.Build(),
+					DiskImage:    privatev1.DiskImageReference_builder{Id: "disk-image-1"}.Build(),
 					InstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Id: "default-type"}.Build(),
 				}.Build(),
 			}.Build(),
@@ -800,23 +917,35 @@ var _ = Describe("mutateBMI", func() {
 		Expect(obj.Spec.NetworkAttachments[0].Primary).To(BeFalse())
 	})
 
-	It("should not include imageSourceType when source_type is empty", func() {
+	It("should not include imageSourceType when disk_image is set and no user override is provided", func() {
 		catalogItemsClient := defaultFakeCatalogItemsClient()
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+		diskImagesClient := NewMockDiskImagesClient(ctrl)
+		diskImagesClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(privatev1.DiskImagesGetResponse_builder{
+				Object: privatev1.DiskImage_builder{
+					Id: "disk-image-1",
+					Spec: privatev1.DiskImageSpec_builder{
+						SourceRef: "quay.io/org/rhel9:latest",
+					}.Build(),
+				}.Build(),
+			}.Build(), nil)
 
 		t := &task{
 			r: &function{
 				logger:                              logger,
 				bareMetalInstanceCatalogItemsClient: catalogItemsClient,
 				bareMetalInstanceTypesClient:        defaultFakeBareMetalInstanceTypesClient(),
+				diskImagesClient:                    diskImagesClient,
 			},
 			bareMetalInstance: privatev1.BareMetalInstance_builder{
 				Id: "bmi-test",
 				Spec: privatev1.BareMetalInstanceSpec_builder{
 					CatalogItem:  &privatev1.BareMetalInstanceCatalogItemReference{Id: "catalog-1"},
 					InstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Id: "default-type"}.Build(),
-					Image: privatev1.BareMetalInstanceImage_builder{
-						SourceRef: "quay.io/org/rhel9:latest",
-					}.Build(),
+					DiskImage:    privatev1.DiskImageReference_builder{Id: "disk-image-1"}.Build(),
 				}.Build(),
 			}.Build(),
 		}
@@ -829,42 +958,6 @@ var _ = Describe("mutateBMI", func() {
 		Expect(json.Unmarshal([]byte(obj.Spec.TemplateParameters), &params)).To(Succeed())
 		Expect(params).To(HaveKey("imageURL"))
 		Expect(params).ToNot(HaveKey("imageSourceType"))
-	})
-
-	It("should strip user-provided imageSourceType when image has empty source_type", func() {
-		catalogItemsClient := defaultFakeCatalogItemsClient()
-
-		userSourceTypeParam, err := anypb.New(wrapperspb.String("user-injected-type"))
-		Expect(err).ToNot(HaveOccurred())
-
-		t := &task{
-			r: &function{
-				logger:                              logger,
-				bareMetalInstanceCatalogItemsClient: catalogItemsClient,
-				bareMetalInstanceTypesClient:        defaultFakeBareMetalInstanceTypesClient(),
-			},
-			bareMetalInstance: privatev1.BareMetalInstance_builder{
-				Id: "bmi-test",
-				Spec: privatev1.BareMetalInstanceSpec_builder{
-					CatalogItem:        &privatev1.BareMetalInstanceCatalogItemReference{Id: "catalog-1"},
-					TemplateParameters: map[string]*anypb.Any{"imageSourceType": userSourceTypeParam},
-					Image: privatev1.BareMetalInstanceImage_builder{
-						SourceRef: "oci://registry.example.com/rhel9:latest",
-					}.Build(),
-					InstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Id: "default-type"}.Build(),
-				}.Build(),
-			}.Build(),
-		}
-
-		var obj bmfov1alpha1.BareMetalInstance
-		err = t.mutateBMI(ctx, &obj)
-		Expect(err).ToNot(HaveOccurred())
-
-		var params map[string]any
-		Expect(json.Unmarshal([]byte(obj.Spec.TemplateParameters), &params)).To(Succeed())
-		Expect(params).To(HaveKey("imageURL"))
-		Expect(params).ToNot(HaveKey("imageSourceType"),
-			"user-provided imageSourceType must be stripped when spec image has no source_type")
 	})
 
 	It("should resolve instance_type and map host_label_selector to Selector.HostSelector", func() {

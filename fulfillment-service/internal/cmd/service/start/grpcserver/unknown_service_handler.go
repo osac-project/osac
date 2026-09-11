@@ -41,13 +41,11 @@ var disabledServicePrefixes = map[string][]string{
 		"/osac.public.v1.ComputeInstanceTemplates/",
 		"/osac.public.v1.ComputeInstanceCatalogItems/",
 		"/osac.public.v1.ComputeInstances/",
-		"/osac.public.v1.DiskImages/",
 		"/osac.public.v1.ConsoleSessions/",
 		"/osac.public.v1.InstanceTypes/",
 		"/osac.private.v1.ComputeInstanceTemplates/",
 		"/osac.private.v1.ComputeInstanceCatalogItems/",
 		"/osac.private.v1.ComputeInstances/",
-		"/osac.private.v1.DiskImages/",
 		"/osac.private.v1.InstanceTypes/",
 	},
 	"BMaaS": {
@@ -60,6 +58,13 @@ var disabledServicePrefixes = map[string][]string{
 		"/osac.private.v1.BareMetalInstances/",
 		"/osac.private.v1.BareMetalInstanceTypes/",
 	},
+}
+
+// diskImageServicePrefixes contains the services shared by VMaaS and BMaaS. They are disabled only when neither
+// workload service is enabled.
+var diskImageServicePrefixes = []string{
+	"/osac.public.v1.DiskImages/",
+	"/osac.private.v1.DiskImages/",
 }
 
 // buildDisabledServiceMap builds a map from gRPC method prefix to the service group name
@@ -76,6 +81,11 @@ func buildDisabledServiceMap(svcFlags *services.Flags) map[string]string {
 			for _, prefix := range prefixes {
 				disabled[prefix] = group
 			}
+		}
+	}
+	if !svcFlags.VMaaS && !svcFlags.BMaaS {
+		for _, prefix := range diskImageServicePrefixes {
+			disabled[prefix] = "DiskImages"
 		}
 	}
 	return disabled

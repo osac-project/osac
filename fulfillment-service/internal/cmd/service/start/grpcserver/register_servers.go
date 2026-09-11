@@ -218,7 +218,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	}
 	privatev1.RegisterHostTypesServer(registrar, privateHostTypesServer)
 
-	// VMaaS: compute instance templates, compute instances, disk images
+	// VMaaS: compute instance templates and compute instances.
 	var privateComputeInstancesServer privatev1.ComputeInstancesServer
 	if deps.Services.VMaaS {
 		deps.Logger.InfoContext(ctx, "Creating compute instance templates server")
@@ -274,7 +274,10 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 			return nil, fmt.Errorf("failed to create private compute instances server: %w", err)
 		}
 		privatev1.RegisterComputeInstancesServer(registrar, privateComputeInstancesServer)
+	}
 
+	// Disk images are required by both VMaaS and BMaaS workflows.
+	if deps.Services.VMaaS || deps.Services.BMaaS {
 		deps.Logger.InfoContext(ctx, "Creating disk images server")
 		diskImagesServer, err := servers.NewDiskImagesServer().
 			SetLogger(deps.Logger).

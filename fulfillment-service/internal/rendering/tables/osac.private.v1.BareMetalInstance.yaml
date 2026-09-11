@@ -23,8 +23,8 @@ columns:
   value: this.spec.catalog_item.id
   type: osac.private.v1.BareMetalInstanceCatalogItem
 
-- header: IMAGE
-  value: "has(this.spec.image) && has(this.spec.image.source_ref)? this.spec.image.source_ref: '-'"
+- header: DISK IMAGE
+  value: "has(this.spec.disk_image) ? this.spec.disk_image.name : '-'"
 
 - header: STATE
   value: this.status.state

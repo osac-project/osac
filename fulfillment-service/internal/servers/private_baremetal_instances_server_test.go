@@ -274,6 +274,47 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(response.GetObject().GetSpec().GetTemplate().GetId()).To(Equal("test-template"))
 		})
 
+		It("Resolves a name-only disk_image reference and persists its canonical id", func() {
+			templateID := fmt.Sprintf("disk-image-template-%s", uuid.NewString()[:8])
+			createTemplate(templateID, nil)
+			createAvailableDiskImageInTenant("bmi-disk-image-id", "bmi-disk-image", testTenant)
+
+			response, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.NewString()[:8])}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						Template:     privatev1.BareMetalInstanceTemplateReference_builder{Id: templateID}.Build(),
+						DiskImage:    &privatev1.DiskImageReference{Name: "bmi-disk-image"},
+						SshPublicKey: new(testSSHPublicKey),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetObject().GetSpec().GetDiskImage().GetId()).To(Equal("bmi-disk-image-id"))
+			Expect(response.GetObject().GetSpec().GetDiskImage().GetName()).To(Equal("bmi-disk-image"))
+			Expect(response.GetObject().GetSpec().GetDiskImage().GetShared()).To(BeFalse())
+		})
+
+		It("Rejects an unknown disk_image reference before creating the BMI", func() {
+			templateID := fmt.Sprintf("missing-disk-image-template-%s", uuid.NewString()[:8])
+			createTemplate(templateID, nil)
+
+			response, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.NewString()[:8])}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						Template:     privatev1.BareMetalInstanceTemplateReference_builder{Id: templateID}.Build(),
+						DiskImage:    &privatev1.DiskImageReference{Name: "missing-bmi-disk-image"},
+						SshPublicKey: new(testSSHPublicKey),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(response).To(BeNil())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.NotFound))
+		})
+
 		It("Rejects unpublished catalog item", func() {
 			unpubResp, err := catalogServer.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
@@ -630,337 +671,6 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 			Expect(status.Message()).To(ContainSubstring("user_data is immutable"))
-		})
-
-		It("Rejects PATCH that changes image", func() {
-			createResponse, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
-				Object: privatev1.BareMetalInstance_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: "test-baremetal-instance",
-					}.Build(),
-					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						InstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Id: "default-type"}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
-						Image: privatev1.BareMetalInstanceImage_builder{
-							SourceType: "registry",
-							SourceRef:  "quay.io/test:latest",
-						}.Build(),
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			object := createResponse.GetObject()
-
-			_, err = server.Update(ctx, privatev1.BareMetalInstancesUpdateRequest_builder{
-				Object: privatev1.BareMetalInstance_builder{
-					Id: object.GetId(),
-					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						Image: privatev1.BareMetalInstanceImage_builder{
-							SourceType: "registry",
-							SourceRef:  "quay.io/other:latest",
-						}.Build(),
-					}.Build(),
-				}.Build(),
-				UpdateMask: &fieldmaskpb.FieldMask{
-					Paths: []string{"spec.image"},
-				},
-			}.Build())
-			Expect(err).To(HaveOccurred())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(ContainSubstring("image is immutable"))
-		})
-
-		It("Creates object with image and persists it", func() {
-			createResponse, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
-				Object: privatev1.BareMetalInstance_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
-					}.Build(),
-					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						InstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Id: "default-type"}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
-						Image: privatev1.BareMetalInstanceImage_builder{
-							SourceType: "registry",
-							SourceRef:  "quay.io/test:latest",
-						}.Build(),
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			object := createResponse.GetObject()
-			Expect(object.GetSpec().GetImage().GetSourceType()).To(Equal("registry"))
-			Expect(object.GetSpec().GetImage().GetSourceRef()).To(Equal("quay.io/test:latest"))
-
-			getResponse, err := server.Get(ctx, privatev1.BareMetalInstancesGetRequest_builder{
-				Id: object.GetId(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			fetched := getResponse.GetObject()
-			Expect(fetched.GetSpec().GetImage().GetSourceType()).To(Equal("registry"))
-			Expect(fetched.GetSpec().GetImage().GetSourceRef()).To(Equal("quay.io/test:latest"))
-		})
-
-		It("Rejects image with missing source_type", func() {
-			_, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
-				Object: privatev1.BareMetalInstance_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
-					}.Build(),
-					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
-						Image: privatev1.BareMetalInstanceImage_builder{
-							SourceRef: "quay.io/test:latest",
-						}.Build(),
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).To(HaveOccurred())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(ContainSubstring("image.source_type"))
-		})
-
-		It("Rejects image with missing source_ref", func() {
-			_, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
-				Object: privatev1.BareMetalInstance_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
-					}.Build(),
-					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
-						Image: privatev1.BareMetalInstanceImage_builder{
-							SourceType: "registry",
-						}.Build(),
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).To(HaveOccurred())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(ContainSubstring("image.source_ref"))
-		})
-
-		It("Applies image defaults from template spec_defaults", func() {
-			templatesDao, err := dao.NewGenericDAO[*privatev1.BareMetalInstanceTemplate]().
-				SetLogger(logger).
-				SetTenancyLogic(tenancy).
-				Build()
-			Expect(err).ToNot(HaveOccurred())
-
-			template := privatev1.BareMetalInstanceTemplate_builder{
-				Id:          "image-default-template",
-				Title:       "Template with image default",
-				Description: "Has default image in spec_defaults",
-				Metadata: privatev1.Metadata_builder{
-					Name:   "image-default-template",
-					Tenant: testTenant,
-				}.Build(),
-				SpecDefaults: privatev1.BareMetalInstanceTemplateSpecDefaults_builder{
-					Image: privatev1.BareMetalInstanceImage_builder{
-						SourceType: "registry",
-						SourceRef:  "quay.io/default:latest",
-					}.Build(),
-				}.Build(),
-			}.Build()
-
-			_, err = templatesDao.Create().SetObject(template).Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-
-			catResp, err := catalogServer.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
-				Object: privatev1.BareMetalInstanceCatalogItem_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
-					}.Build(),
-					Title:     "Catalog with image default",
-					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "image-default-template"}.Build(),
-					Published: true,
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			catID := catResp.GetObject().GetId()
-
-			createResponse, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
-				Object: privatev1.BareMetalInstance_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
-					}.Build(),
-					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catID}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			spec := createResponse.GetObject().GetSpec()
-			Expect(spec.GetImage().GetSourceType()).To(Equal("registry"))
-			Expect(spec.GetImage().GetSourceRef()).To(Equal("quay.io/default:latest"))
-		})
-
-		It("User-provided image overrides template default", func() {
-			templatesDao, err := dao.NewGenericDAO[*privatev1.BareMetalInstanceTemplate]().
-				SetLogger(logger).
-				SetTenancyLogic(tenancy).
-				Build()
-			Expect(err).ToNot(HaveOccurred())
-
-			template := privatev1.BareMetalInstanceTemplate_builder{
-				Id:          "image-override-template",
-				Title:       "Template with image default",
-				Description: "Has default image in spec_defaults",
-				Metadata: privatev1.Metadata_builder{
-					Name:   "image-override-template",
-					Tenant: testTenant,
-				}.Build(),
-				SpecDefaults: privatev1.BareMetalInstanceTemplateSpecDefaults_builder{
-					Image: privatev1.BareMetalInstanceImage_builder{
-						SourceType: "registry",
-						SourceRef:  "quay.io/default:latest",
-					}.Build(),
-				}.Build(),
-			}.Build()
-
-			_, err = templatesDao.Create().SetObject(template).Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-
-			catResp, err := catalogServer.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
-				Object: privatev1.BareMetalInstanceCatalogItem_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
-					}.Build(),
-					Title:     "Catalog with image default override",
-					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "image-override-template"}.Build(),
-					Published: true,
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			catID := catResp.GetObject().GetId()
-
-			createResponse, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
-				Object: privatev1.BareMetalInstance_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
-					}.Build(),
-					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catID}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
-						Image: privatev1.BareMetalInstanceImage_builder{
-							SourceType: "registry",
-							SourceRef:  "quay.io/user-chosen:v2",
-						}.Build(),
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			spec := createResponse.GetObject().GetSpec()
-			Expect(spec.GetImage().GetSourceType()).To(Equal("registry"))
-			Expect(spec.GetImage().GetSourceRef()).To(Equal("quay.io/user-chosen:v2"))
-		})
-
-		It("Merges user-provided source_type with template default source_ref", func() {
-			templatesDao, err := dao.NewGenericDAO[*privatev1.BareMetalInstanceTemplate]().
-				SetLogger(logger).
-				SetTenancyLogic(tenancy).
-				Build()
-			Expect(err).ToNot(HaveOccurred())
-
-			template := privatev1.BareMetalInstanceTemplate_builder{
-				Id:          "image-partial-merge-template",
-				Title:       "Template with image default",
-				Description: "Has default image in spec_defaults",
-				Metadata: privatev1.Metadata_builder{
-					Name:   "image-partial-merge-template",
-					Tenant: testTenant,
-				}.Build(),
-				SpecDefaults: privatev1.BareMetalInstanceTemplateSpecDefaults_builder{
-					Image: privatev1.BareMetalInstanceImage_builder{
-						SourceType: "registry",
-						SourceRef:  "quay.io/default:latest",
-					}.Build(),
-				}.Build(),
-			}.Build()
-
-			_, err = templatesDao.Create().SetObject(template).Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-
-			catResp, err := catalogServer.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
-				Object: privatev1.BareMetalInstanceCatalogItem_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
-					}.Build(),
-					Title:     "Catalog with partial merge",
-					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "image-partial-merge-template"}.Build(),
-					Published: true,
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			catID := catResp.GetObject().GetId()
-
-			createResponse, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
-				Object: privatev1.BareMetalInstance_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
-					}.Build(),
-					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catID}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
-						Image: privatev1.BareMetalInstanceImage_builder{
-							SourceType: "custom-source",
-						}.Build(),
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			spec := createResponse.GetObject().GetSpec()
-			Expect(spec.GetImage().GetSourceType()).To(Equal("custom-source"))
-			Expect(spec.GetImage().GetSourceRef()).To(Equal("quay.io/default:latest"))
-		})
-
-		It("Allows PATCH with same image value", func() {
-			createResponse, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
-				Object: privatev1.BareMetalInstance_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: "test-baremetal-instance",
-					}.Build(),
-					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						InstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Id: "default-type"}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
-						Image: privatev1.BareMetalInstanceImage_builder{
-							SourceType: "registry",
-							SourceRef:  "quay.io/test:latest",
-						}.Build(),
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			object := createResponse.GetObject()
-
-			_, err = server.Update(ctx, privatev1.BareMetalInstancesUpdateRequest_builder{
-				Object: privatev1.BareMetalInstance_builder{
-					Id: object.GetId(),
-					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						InstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Id: "default-type"}.Build(),
-						Image: privatev1.BareMetalInstanceImage_builder{
-							SourceType: "registry",
-							SourceRef:  "quay.io/test:latest",
-						}.Build(),
-					}.Build(),
-				}.Build(),
-				UpdateMask: &fieldmaskpb.FieldMask{
-					Paths: []string{"spec.image"},
-				},
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
 		})
 
 		It("Allows PATCH that does not touch immutable fields", func() {

@@ -64,7 +64,9 @@ message BareMetalInstanceCatalogItemFields {
   StringFieldPolicy ssh_public_key = 1;
   StringFieldPolicy user_data = 2;
   BareMetalInstanceRunStrategyFieldPolicy run_strategy = 3;
-  BareMetalInstanceImageFieldPolicy image = 4;
+  // Reserved field numbers for removed fields (do not reuse).
+  reserved 4;
+  reserved "image";
   BareMetalNetworkAttachmentListFieldPolicy network_attachments = 5;
   BoolFieldPolicy auto_external_ip_attachment = 6;
   // Policy for the bare metal instance type selected for host placement.

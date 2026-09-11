@@ -46,6 +46,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		bareMetalInstanceTemplatesClient    privatev1.BareMetalInstanceTemplatesClient
 		bareMetalInstanceCatalogItemsClient privatev1.BareMetalInstanceCatalogItemsClient
 		bareMetalInstanceTypesClient        privatev1.BareMetalInstanceTypesClient
+		diskImagesClient                    privatev1.DiskImagesClient
 		templateId                          string
 		catalogItemId                       string
 		instanceTypeId                      string
@@ -58,6 +59,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		bareMetalInstanceTemplatesClient = privatev1.NewBareMetalInstanceTemplatesClient(tool.InternalView().AdminConn())
 		bareMetalInstanceCatalogItemsClient = privatev1.NewBareMetalInstanceCatalogItemsClient(tool.InternalView().AdminConn())
 		bareMetalInstanceTypesClient = privatev1.NewBareMetalInstanceTypesClient(tool.InternalView().AdminConn())
+		diskImagesClient = privatev1.NewDiskImagesClient(tool.InternalView().AdminConn())
 
 		// Create BareMetalInstanceTemplate with an explicit ID that matches the BMFO CRD
 		// validation pattern (^[a-zA-Z_][a-zA-Z0-9._]*$). Auto-generated UUIDs start with
@@ -336,7 +338,31 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
 	})
 
-	It("Creates BareMetalInstance with image and persists it", func(ctx context.Context) {
+	It("Creates BareMetalInstance with disk_image and persists it", func(ctx context.Context) {
+		diResp, err := diskImagesClient.Create(ctx, privatev1.DiskImagesCreateRequest_builder{
+			Object: privatev1.DiskImage_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("test-di-%s", uuid.New()[24:32]),
+				}.Build(),
+				Spec: privatev1.DiskImageSpec_builder{
+					SourceType:    privatev1.SourceType_SOURCE_TYPE_REGISTRY,
+					SourceRef:     "quay.io/test/rhel9:latest",
+					GuestOsFamily: privatev1.GuestOSFamily_GUEST_OS_FAMILY_LINUX,
+					Architecture: []privatev1.Architecture{
+						privatev1.Architecture_ARCHITECTURE_AMD64,
+					},
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		diskImageId := diResp.GetObject().GetId()
+		DeferCleanup(func(ctx context.Context) {
+			_, err := diskImagesClient.Delete(ctx, privatev1.DiskImagesDeleteRequest_builder{
+				Id: diskImageId,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		})
+
 		createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
 				Metadata: publicv1.Metadata_builder{
@@ -346,10 +372,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					InstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: instanceTypeId}.Build(),
 					SshPublicKey: new(bmiTestSSHPublicKey),
-					Image: publicv1.BareMetalInstanceImage_builder{
-						SourceType: "registry",
-						SourceRef:  "quay.io/test/rhel9:latest",
-					}.Build(),
+					DiskImage:    publicv1.DiskImageReference_builder{Id: diskImageId}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -375,10 +398,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 			Id: bareMetalInstanceId,
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		image := getResp.GetObject().GetSpec().GetImage()
-		Expect(image).ToNot(BeNil())
-		Expect(image.GetSourceType()).To(Equal("registry"))
-		Expect(image.GetSourceRef()).To(Equal("quay.io/test/rhel9:latest"))
+		Expect(getResp.GetObject().GetSpec().GetDiskImage().GetId()).To(Equal(diskImageId))
 
 		// Wait for the controller to reconcile (state moves from UNSPECIFIED)
 		kubeClient := tool.KubeClient()
@@ -426,7 +446,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 			"BMFO CR TemplateID should match the materialized template")
 	})
 
-	It("Creates BareMetalInstance without image when no template default", func(ctx context.Context) {
+	It("Creates BareMetalInstance without disk_image when none is provided", func(ctx context.Context) {
 		createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
 				Metadata: publicv1.Metadata_builder{
@@ -461,299 +481,8 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 			Id: bareMetalInstanceId,
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		Expect(getResp.GetObject().GetSpec().HasImage()).To(BeFalse(),
-			"BareMetalInstance created without image should have no image set")
-	})
-
-	It("Applies template spec_defaults image when user omits image", func(ctx context.Context) {
-		imageTemplateResp, err := bareMetalInstanceTemplatesClient.Create(ctx,
-			privatev1.BareMetalInstanceTemplatesCreateRequest_builder{
-				Object: privatev1.BareMetalInstanceTemplate_builder{
-					Id:          fmt.Sprintf("test_image_default_%s", strings.ReplaceAll(uuid.New(), "-", "_")),
-					Title:       "Template with image default",
-					Description: "Template that provides a default image via spec_defaults.",
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-template-%s", uuid.New()[24:32]),
-					}.Build(),
-					SpecDefaults: privatev1.BareMetalInstanceTemplateSpecDefaults_builder{
-						Image: privatev1.BareMetalInstanceImage_builder{
-							SourceType: "registry",
-							SourceRef:  "quay.io/default/os:latest",
-						}.Build(),
-					}.Build(),
-				}.Build(),
-			}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		imageTemplateId := imageTemplateResp.GetObject().GetId()
-		DeferCleanup(func(ctx context.Context) {
-			_, err := bareMetalInstanceTemplatesClient.Delete(ctx, privatev1.BareMetalInstanceTemplatesDeleteRequest_builder{
-				Id: imageTemplateId,
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-		})
-
-		imageCatalogResp, err := bareMetalInstanceCatalogItemsClient.Create(ctx,
-			privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
-				Object: privatev1.BareMetalInstanceCatalogItem_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-catalog-item-%s", uuid.New()[24:32]),
-					}.Build(),
-					Title:     "Catalog item with image default template",
-					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: imageTemplateId}.Build(),
-					Published: true,
-				}.Build(),
-			}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		imageCatalogItemId := imageCatalogResp.GetObject().GetId()
-		DeferCleanup(func(ctx context.Context) {
-			_, err := bareMetalInstanceCatalogItemsClient.Delete(ctx,
-				privatev1.BareMetalInstanceCatalogItemsDeleteRequest_builder{
-					Id: imageCatalogItemId,
-				}.Build())
-			Expect(err).ToNot(HaveOccurred())
-		})
-
-		createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
-			Object: publicv1.BareMetalInstance_builder{
-				Metadata: publicv1.Metadata_builder{
-					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
-				}.Build(),
-				Spec: publicv1.BareMetalInstanceSpec_builder{
-					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: imageCatalogItemId}.Build(),
-					InstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: instanceTypeId}.Build(),
-					SshPublicKey: new(bmiTestSSHPublicKey),
-				}.Build(),
-			}.Build(),
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		bareMetalInstanceId := createResp.GetObject().GetId()
-		DeferCleanup(func(ctx context.Context) {
-			_, err := privateBareMetalInstancesClient.Delete(ctx, privatev1.BareMetalInstancesDeleteRequest_builder{
-				Id: bareMetalInstanceId,
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Eventually(func(g Gomega) {
-				_, err := privateBareMetalInstancesClient.Get(ctx, privatev1.BareMetalInstancesGetRequest_builder{
-					Id: bareMetalInstanceId,
-				}.Build())
-				g.Expect(err).To(HaveOccurred())
-				status, ok := grpcstatus.FromError(err)
-				g.Expect(ok).To(BeTrue())
-				g.Expect(status.Code()).To(Equal(grpccodes.NotFound))
-			}, 2*time.Minute, time.Second).Should(Succeed())
-		})
-
-		getResp, err := bareMetalInstancesClient.Get(ctx, publicv1.BareMetalInstancesGetRequest_builder{
-			Id: bareMetalInstanceId,
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		image := getResp.GetObject().GetSpec().GetImage()
-		Expect(image).ToNot(BeNil())
-		Expect(image.GetSourceType()).To(Equal("registry"),
-			"Template default source_type should be applied")
-		Expect(image.GetSourceRef()).To(Equal("quay.io/default/os:latest"),
-			"Template default source_ref should be applied")
-	})
-
-	It("User-provided image overrides template spec_defaults image", func(ctx context.Context) {
-		imageTemplateResp, err := bareMetalInstanceTemplatesClient.Create(ctx,
-			privatev1.BareMetalInstanceTemplatesCreateRequest_builder{
-				Object: privatev1.BareMetalInstanceTemplate_builder{
-					Id:          fmt.Sprintf("test_image_override_%s", strings.ReplaceAll(uuid.New(), "-", "_")),
-					Title:       "Template with overridable image default",
-					Description: "Template whose image default should be overridden by user.",
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-template-%s", uuid.New()[24:32]),
-					}.Build(),
-					SpecDefaults: privatev1.BareMetalInstanceTemplateSpecDefaults_builder{
-						Image: privatev1.BareMetalInstanceImage_builder{
-							SourceType: "registry",
-							SourceRef:  "quay.io/default/os:latest",
-						}.Build(),
-					}.Build(),
-				}.Build(),
-			}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		imageTemplateId := imageTemplateResp.GetObject().GetId()
-		DeferCleanup(func(ctx context.Context) {
-			_, err := bareMetalInstanceTemplatesClient.Delete(ctx, privatev1.BareMetalInstanceTemplatesDeleteRequest_builder{
-				Id: imageTemplateId,
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-		})
-
-		imageCatalogResp, err := bareMetalInstanceCatalogItemsClient.Create(ctx,
-			privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
-				Object: privatev1.BareMetalInstanceCatalogItem_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-catalog-item-%s", uuid.New()[24:32]),
-					}.Build(),
-					Title:     "Catalog item for image override test",
-					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: imageTemplateId}.Build(),
-					Published: true,
-				}.Build(),
-			}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		imageCatalogItemId := imageCatalogResp.GetObject().GetId()
-		DeferCleanup(func(ctx context.Context) {
-			_, err := bareMetalInstanceCatalogItemsClient.Delete(ctx,
-				privatev1.BareMetalInstanceCatalogItemsDeleteRequest_builder{
-					Id: imageCatalogItemId,
-				}.Build())
-			Expect(err).ToNot(HaveOccurred())
-		})
-
-		createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
-			Object: publicv1.BareMetalInstance_builder{
-				Metadata: publicv1.Metadata_builder{
-					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
-				}.Build(),
-				Spec: publicv1.BareMetalInstanceSpec_builder{
-					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: imageCatalogItemId}.Build(),
-					InstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: instanceTypeId}.Build(),
-					SshPublicKey: new(bmiTestSSHPublicKey),
-					Image: publicv1.BareMetalInstanceImage_builder{
-						SourceType: "registry",
-						SourceRef:  "quay.io/user/custom:v2",
-					}.Build(),
-				}.Build(),
-			}.Build(),
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		bareMetalInstanceId := createResp.GetObject().GetId()
-		DeferCleanup(func(ctx context.Context) {
-			_, err := privateBareMetalInstancesClient.Delete(ctx, privatev1.BareMetalInstancesDeleteRequest_builder{
-				Id: bareMetalInstanceId,
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Eventually(func(g Gomega) {
-				_, err := privateBareMetalInstancesClient.Get(ctx, privatev1.BareMetalInstancesGetRequest_builder{
-					Id: bareMetalInstanceId,
-				}.Build())
-				g.Expect(err).To(HaveOccurred())
-				status, ok := grpcstatus.FromError(err)
-				g.Expect(ok).To(BeTrue())
-				g.Expect(status.Code()).To(Equal(grpccodes.NotFound))
-			}, 2*time.Minute, time.Second).Should(Succeed())
-		})
-
-		getResp, err := bareMetalInstancesClient.Get(ctx, publicv1.BareMetalInstancesGetRequest_builder{
-			Id: bareMetalInstanceId,
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		image := getResp.GetObject().GetSpec().GetImage()
-		Expect(image).ToNot(BeNil())
-		Expect(image.GetSourceType()).To(Equal("registry"))
-		Expect(image.GetSourceRef()).To(Equal("quay.io/user/custom:v2"),
-			"User-provided image should override template default")
-	})
-
-	It("Rejects image with missing source_type", func(ctx context.Context) {
-		_, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
-			Object: publicv1.BareMetalInstance_builder{
-				Metadata: publicv1.Metadata_builder{
-					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
-				}.Build(),
-				Spec: publicv1.BareMetalInstanceSpec_builder{
-					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
-					InstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: instanceTypeId}.Build(),
-					SshPublicKey: new(bmiTestSSHPublicKey),
-					Image: publicv1.BareMetalInstanceImage_builder{
-						SourceRef: "quay.io/test:latest",
-					}.Build(),
-				}.Build(),
-			}.Build(),
-		}.Build())
-		Expect(err).To(HaveOccurred())
-		status, ok := grpcstatus.FromError(err)
-		Expect(ok).To(BeTrue())
-		Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-		Expect(status.Message()).To(ContainSubstring("image.source_type"))
-	})
-
-	It("Rejects image with missing source_ref", func(ctx context.Context) {
-		_, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
-			Object: publicv1.BareMetalInstance_builder{
-				Metadata: publicv1.Metadata_builder{
-					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
-				}.Build(),
-				Spec: publicv1.BareMetalInstanceSpec_builder{
-					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
-					InstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: instanceTypeId}.Build(),
-					SshPublicKey: new(bmiTestSSHPublicKey),
-					Image: publicv1.BareMetalInstanceImage_builder{
-						SourceType: "registry",
-					}.Build(),
-				}.Build(),
-			}.Build(),
-		}.Build())
-		Expect(err).To(HaveOccurred())
-		status, ok := grpcstatus.FromError(err)
-		Expect(ok).To(BeTrue())
-		Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-		Expect(status.Message()).To(ContainSubstring("image.source_ref"))
-	})
-
-	It("Rejects update that changes image", func(ctx context.Context) {
-		createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
-			Object: publicv1.BareMetalInstance_builder{
-				Metadata: publicv1.Metadata_builder{
-					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
-				}.Build(),
-				Spec: publicv1.BareMetalInstanceSpec_builder{
-					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
-					InstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: instanceTypeId}.Build(),
-					SshPublicKey: new(bmiTestSSHPublicKey),
-					Image: publicv1.BareMetalInstanceImage_builder{
-						SourceType: "registry",
-						SourceRef:  "quay.io/test:latest",
-					}.Build(),
-				}.Build(),
-			}.Build(),
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		bareMetalInstanceId := createResp.GetObject().GetId()
-		name := createResp.GetObject().GetMetadata().GetName()
-		DeferCleanup(func(ctx context.Context) {
-			_, err := privateBareMetalInstancesClient.Delete(ctx, privatev1.BareMetalInstancesDeleteRequest_builder{
-				Id: bareMetalInstanceId,
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Eventually(func(g Gomega) {
-				_, err := privateBareMetalInstancesClient.Get(ctx, privatev1.BareMetalInstancesGetRequest_builder{
-					Id: bareMetalInstanceId,
-				}.Build())
-				g.Expect(err).To(HaveOccurred())
-				status, ok := grpcstatus.FromError(err)
-				g.Expect(ok).To(BeTrue())
-				g.Expect(status.Code()).To(Equal(grpccodes.NotFound))
-			}, 2*time.Minute, time.Second).Should(Succeed())
-		})
-
-		_, err = privateBareMetalInstancesClient.Update(ctx, privatev1.BareMetalInstancesUpdateRequest_builder{
-			Object: privatev1.BareMetalInstance_builder{
-				Id: bareMetalInstanceId,
-				Metadata: privatev1.Metadata_builder{
-					Name: name,
-				}.Build(),
-				Spec: privatev1.BareMetalInstanceSpec_builder{
-					CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
-					InstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Id: instanceTypeId}.Build(),
-					Image: privatev1.BareMetalInstanceImage_builder{
-						SourceType: "registry",
-						SourceRef:  "quay.io/other:latest",
-					}.Build(),
-				}.Build(),
-			}.Build(),
-			UpdateMask: &fieldmaskpb.FieldMask{
-				Paths: []string{"spec.image"},
-			},
-		}.Build())
-		Expect(err).To(HaveOccurred())
-		status, ok := grpcstatus.FromError(err)
-		Expect(ok).To(BeTrue())
-		Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-		Expect(status.Message()).To(ContainSubstring("image is immutable"))
+		Expect(getResp.GetObject().GetSpec().HasDiskImage()).To(BeFalse(),
+			"BareMetalInstance created without disk_image should have no disk_image set")
 	})
 
 	It("Propagates restart_trigger to BMFO CR spec", func(ctx context.Context) {
@@ -1050,6 +779,30 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		})
 
 		It("Creates BareMetalInstance with direct template and verifies BMFO CR", func(ctx context.Context) {
+			diResp, err := diskImagesClient.Create(ctx, privatev1.DiskImagesCreateRequest_builder{
+				Object: privatev1.DiskImage_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-di-%s", uuid.New()[24:32]),
+					}.Build(),
+					Spec: privatev1.DiskImageSpec_builder{
+						SourceType:    privatev1.SourceType_SOURCE_TYPE_REGISTRY,
+						SourceRef:     "quay.io/test/rhel9:latest",
+						GuestOsFamily: privatev1.GuestOSFamily_GUEST_OS_FAMILY_LINUX,
+						Architecture: []privatev1.Architecture{
+							privatev1.Architecture_ARCHITECTURE_AMD64,
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			diskImageId := diResp.GetObject().GetId()
+			DeferCleanup(func(ctx context.Context) {
+				_, err := diskImagesClient.Delete(ctx, privatev1.DiskImagesDeleteRequest_builder{
+					Id: diskImageId,
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+			})
+
 			createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 				Object: publicv1.BareMetalInstance_builder{
 					Metadata: publicv1.Metadata_builder{
@@ -1059,10 +812,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 						Template:     publicv1.BareMetalInstanceTemplateReference_builder{Id: directTemplateId}.Build(),
 						InstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: instanceTypeId}.Build(),
 						SshPublicKey: new(bmiTestSSHPublicKey),
-						Image: publicv1.BareMetalInstanceImage_builder{
-							SourceType: "registry",
-							SourceRef:  "quay.io/test/rhel9:latest",
-						}.Build(),
+						DiskImage:    publicv1.DiskImageReference_builder{Id: diskImageId}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())

@@ -78,18 +78,6 @@ func Cmd() *cobra.Command {
 		"",
 		runStrategyFlagHelp,
 	)
-	flags.StringVar(
-		&runner.args.imageSourceRef,
-		"image",
-		"",
-		imageFlagHelp,
-	)
-	flags.StringVar(
-		&runner.args.imageSourceType,
-		"image-source-type",
-		"registry",
-		imageSourceTypeFlagHelp,
-	)
 	flags.BoolVar(
 		&runner.args.externalIPAttachment,
 		"external-ip-attachment",
@@ -124,8 +112,6 @@ type runnerContext struct {
 		sshKey               string
 		userData             string
 		runStrategy          string
-		imageSourceRef       string
-		imageSourceType      string
 		externalIPAttachment bool
 	}
 	logger *slog.Logger
@@ -173,12 +159,6 @@ func (c *runnerContext) run(cmd *cobra.Command, _ []string) error {
 	if c.args.userData != "" {
 		userData := c.args.userData
 		spec.UserData = &userData
-	}
-	if c.args.imageSourceRef != "" {
-		spec.Image = publicv1.BareMetalInstanceImage_builder{
-			SourceType: c.args.imageSourceType,
-			SourceRef:  c.args.imageSourceRef,
-		}.Build()
 	}
 	if c.args.runStrategy != "" {
 		rs, err := fieldutil.ParseEnum(c.args.runStrategy, runStrategyMap, "run-strategy")
@@ -247,14 +227,6 @@ const runStrategyFlagHelp = `
 _STRATEGY_ - Run strategy controlling the power state. Valid values are
 {{ bt }}Always{{ bt }} (keep powered on) and {{ bt }}Halted{{ bt }}
 (power off).
-`
-
-const imageFlagHelp = `
-_URL_ - Image reference, for example an OCI image URL.
-`
-
-const imageSourceTypeFlagHelp = `
-_TYPE_ - Image source type.
 `
 
 const externalIPAttachmentFlagHelp = `

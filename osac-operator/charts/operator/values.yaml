@@ -41,7 +41,7 @@ controllers:
   volume: true
   networkingProvisioning: true
 
-# vendorControllers maps StorageBackend names to their vendor CSI controller
+# vendorControllers maps provider identifiers to their vendor CSI controller
 # gRPC endpoints, rendered into OSAC_VENDOR_CONTROLLERS for the Volume
 # controller. Optional: leave empty on setups with no vendor storage backend
 # (e.g. LVMS/dev) — provisioning is disabled until a backend is configured.

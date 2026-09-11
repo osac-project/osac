@@ -87,6 +87,12 @@ message Volume {
   VolumeStatus status = 4;
 }
 
+// CSI-style topology segments that constrain where a volume may be
+// provisioned. Providers interpret only the segments they support.
+message VolumeTopology {
+  map<string, string> segments = 1;
+}
+
 // Defines the desired configuration for a Volume. All fields are immutable after creation.
 message VolumeSpec {
   // Name of the StorageTier that determines which backend and protocol serve this volume.
@@ -97,6 +103,9 @@ message VolumeSpec {
 
   // Kubernetes access mode for the volume.
   VolumeAccessMode access_mode = 3 [(buf.validate.field).enum.defined_only = true];
+
+  // Optional CSI-style topology segments supplied by the volume requester.
+  VolumeTopology topology = 4;
 }
 
 // Represents the current operational state of a Volume.
@@ -128,4 +137,8 @@ message VolumeStatus {
   // the osac-operator from the same parameters it used for the vendor CreateVolume call, and
   // forwarded unchanged by osac-csi-driver to the vendor CSI controller's ControllerPublishVolume.
   map<string, string> vendor_context = 7;
+
+  // Provider selected by StorageTier resolution. This is the provider key used by the operator
+  // to select a VendorProvisioner implementation.
+  string provider = 8;
 }

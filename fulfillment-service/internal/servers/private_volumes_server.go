@@ -30,7 +30,7 @@ import (
 )
 
 // TierResolution holds the result of resolving a StorageTier name to a
-// concrete backend and protocol. Backend is the StorageBackend's provider
+// concrete backend, provider, and protocol. Backend is the StorageBackend's provider
 // (e.g. "vast"), matching Volume.status.backend's documented contract and the
 // vendor routing keys ("vast", "pure", "ontap", ...) that osac-csi-driver's
 // Helm-templated --vendor-controllers/--vendor-sockets maps use -- those maps
@@ -38,6 +38,7 @@ import (
 // doesn't exist yet when the chart values are authored.
 type TierResolution struct {
 	Backend  string
+	Provider string
 	Protocol privatev1.StorageProtocol
 }
 
@@ -165,6 +166,11 @@ func (s *PrivateVolumesServer) Create(ctx context.Context,
 	vol.GetStatus().SetVendorContext(nil)
 	vol.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_CREATING)
 	vol.GetStatus().SetBackend(resolved.Backend)
+	provider := resolved.Provider
+	if provider == "" {
+		provider = resolved.Backend
+	}
+	vol.GetStatus().SetProvider(provider)
 	vol.GetStatus().SetProtocol(resolved.Protocol)
 
 	vol.SetId("")
@@ -254,6 +260,17 @@ func applyVolumeUpdate(base, update *privatev1.Volume, mask *fieldmaskpb.FieldMa
 			base.GetSpec().SetSizeGib(update.GetSpec().GetSizeGib())
 		case "spec.access_mode":
 			base.GetSpec().SetAccessMode(update.GetSpec().GetAccessMode())
+		case "spec.topology":
+			if topology := update.GetSpec().GetTopology(); topology != nil {
+				base.GetSpec().SetTopology(proto.Clone(topology).(*privatev1.VolumeTopology))
+			} else {
+				base.GetSpec().SetTopology(nil)
+			}
+		case "spec.topology.segments":
+			if base.GetSpec().GetTopology() == nil {
+				base.GetSpec().SetTopology(&privatev1.VolumeTopology{})
+			}
+			base.GetSpec().GetTopology().SetSegments(update.GetSpec().GetTopology().GetSegments())
 		default:
 			// Unknown paths are handled by the generic update layer.
 		}
@@ -275,6 +292,10 @@ func validateVolumeImmutability(merged, existing *privatev1.Volume) error {
 	if merged.GetSpec().GetAccessMode() != existing.GetSpec().GetAccessMode() {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"field 'spec.access_mode' is immutable and cannot be changed after creation")
+	}
+	if !proto.Equal(merged.GetSpec().GetTopology(), existing.GetSpec().GetTopology()) {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'spec.topology' is immutable and cannot be changed after creation")
 	}
 	return nil
 }

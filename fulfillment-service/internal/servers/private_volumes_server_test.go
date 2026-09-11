@@ -90,6 +90,7 @@ var _ = Describe("Private volumes server", func() {
 				SetTierResolver(func(_ context.Context, _ string) (*TierResolution, error) {
 					return &TierResolution{
 						Backend:  "test-backend",
+						Provider: "test-provider",
 						Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
 					}, nil
 				}).
@@ -158,6 +159,7 @@ var _ = Describe("Private volumes server", func() {
 				privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE))
 			Expect(created.GetStatus().GetState()).To(Equal(
 				privatev1.VolumeState_VOLUME_STATE_CREATING))
+			Expect(created.GetStatus().GetProvider()).To(Equal("test-provider"))
 
 			getResponse, err := server.Get(ctx, privatev1.VolumesGetRequest_builder{
 				Id: created.GetId(),
@@ -168,6 +170,26 @@ var _ = Describe("Private volumes server", func() {
 			Expect(obj.GetSpec().GetStorageTier()).To(Equal("gold"))
 		})
 
+		It("stamps the resolved provider over caller-provided status", func() {
+			response, err := server.Create(ctx, privatev1.VolumesCreateRequest_builder{
+				Object: privatev1.Volume_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "provider-stamped-volume",
+					}.Build(),
+					Spec: privatev1.VolumeSpec_builder{
+						StorageTier: "gold",
+						SizeGib:     100,
+						AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+					}.Build(),
+					Status: privatev1.VolumeStatus_builder{
+						Provider: "caller-provider",
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetObject().GetStatus().GetProvider()).To(Equal("test-provider"))
+		})
+
 		It("Creates a standalone volume", func() {
 			created := createStandaloneVolume()
 
@@ -176,6 +198,32 @@ var _ = Describe("Private volumes server", func() {
 			Expect(created.GetSpec().GetSizeGib()).To(Equal(int64(50)))
 			Expect(created.GetStatus().GetState()).To(Equal(
 				privatev1.VolumeState_VOLUME_STATE_CREATING))
+		})
+
+		It("preserves requested topology segments", func() {
+			response, err := server.Create(ctx, privatev1.VolumesCreateRequest_builder{
+				Object: privatev1.Volume_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "topology-volume",
+					}.Build(),
+					Spec: privatev1.VolumeSpec_builder{
+						StorageTier: "gold",
+						SizeGib:     100,
+						AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+						Topology: privatev1.VolumeTopology_builder{
+							Segments: map[string]string{
+								"osac.io/node":                "worker-1",
+								"topology.kubernetes.io/zone": "zone-a",
+							},
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetObject().GetSpec().GetTopology().GetSegments()).To(Equal(map[string]string{
+				"osac.io/node":                "worker-1",
+				"topology.kubernetes.io/zone": "zone-a",
+			}))
 		})
 
 		It("List volumes", func() {
@@ -496,6 +544,45 @@ var _ = Describe("Private volumes server", func() {
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 				Expect(getResponse.GetObject().GetSpec().GetSizeGib()).To(Equal(int64(100)))
+			})
+
+			It("Rejects update that changes topology", func() {
+				response, err := server.Create(ctx, privatev1.VolumesCreateRequest_builder{
+					Object: privatev1.Volume_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: "immutable-topology-volume",
+						}.Build(),
+						Spec: privatev1.VolumeSpec_builder{
+							StorageTier: "gold",
+							SizeGib:     100,
+							AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+							Topology: privatev1.VolumeTopology_builder{
+								Segments: map[string]string{"osac.io/node": "worker-1"},
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+
+				_, err = server.Update(ctx, privatev1.VolumesUpdateRequest_builder{
+					Object: privatev1.Volume_builder{
+						Id: response.GetObject().GetId(),
+						Spec: privatev1.VolumeSpec_builder{
+							StorageTier: "gold",
+							SizeGib:     100,
+							AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+							Topology: privatev1.VolumeTopology_builder{
+								Segments: map[string]string{"osac.io/node": "worker-2"},
+							}.Build(),
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.topology"}},
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				st, ok := status.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(st.Code()).To(Equal(codes.InvalidArgument))
+				Expect(st.Message()).To(ContainSubstring("topology"))
 			})
 
 			It("Rejects update that changes access_mode", func() {

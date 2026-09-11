@@ -20,6 +20,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// VolumeTopology carries CSI-style placement segments for a volume request.
+type VolumeTopology struct {
+	Segments map[string]string `json:"segments,omitempty"`
+}
+
 // VolumeSpec defines the desired state of Volume.
 type VolumeSpec struct {
 	// StorageTier is the name of the StorageTier that determines which backend
@@ -41,6 +46,11 @@ type VolumeSpec struct {
 	// +kubebuilder:validation:Enum=ReadWriteOnce;ReadOnlyMany;ReadWriteMany;ReadWriteOncePod
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="accessMode is immutable"
 	AccessMode VolumeAccessMode `json:"accessMode"`
+
+	// Topology contains optional CSI-style placement segments.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="topology is immutable"
+	Topology *VolumeTopology `json:"topology,omitempty"`
 }
 
 // VolumeAccessMode defines valid Kubernetes PersistentVolume access modes.
@@ -111,6 +121,11 @@ type VolumeStatus struct {
 	// Resolved during tier resolution at creation time.
 	// +kubebuilder:validation:Optional
 	Backend string `json:"backend,omitempty"`
+
+	// Provider identifies the registered VendorProvisioner implementation selected for this volume.
+	// Resolved during tier resolution at creation time.
+	// +kubebuilder:validation:Optional
+	Provider string `json:"provider,omitempty"`
 
 	// Protocol is the storage protocol used for this volume.
 	// Resolved during tier resolution at creation time.

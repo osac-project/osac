@@ -46,7 +46,6 @@ var _ privatev1.AddOnOperatorsServer = (*PrivateAddOnOperatorsServer)(nil)
 
 type PrivateAddOnOperatorsServer struct {
 	privatev1.UnimplementedAddOnOperatorsServer
-	logger           *slog.Logger
 	defaultPublished bool
 	generic          *GenericServer[*privatev1.AddOnOperator]
 }
@@ -126,7 +125,6 @@ func (b *PrivateAddOnOperatorsServerBuilder) Build() (result *PrivateAddOnOperat
 		return
 	}
 	result = &PrivateAddOnOperatorsServer{
-		logger:           b.logger,
 		defaultPublished: defaultPublished,
 		generic:          generic,
 	}

@@ -105,6 +105,7 @@ Thumbs.db
 # Local dev artifacts
 .artifacts
 .artifacts/
+.worktrees/
 __pycache__
 
 # proto (shared proto sources + generated Go)

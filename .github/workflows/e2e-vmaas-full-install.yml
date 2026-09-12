@@ -302,6 +302,27 @@ jobs:
             echo "e2e passed"
           fi
 
+  e2e-vmaas-complete-stale-gates:
+    if: >-
+      always()
+      && github.event_name == 'pull_request'
+      && needs.changes.outputs.should-run == 'true'
+      && needs.e2e-readiness.result == 'success'
+      && needs.e2e-readiness.outputs.ready == 'true'
+      && !contains(needs.e2e-vmaas-gate.result, 'failure')
+      && !contains(needs.e2e-vmaas-gate.result, 'cancelled')
+    needs: [changes, e2e-readiness, e2e-vmaas-full-install, e2e-vmaas-gate]
+    runs-on: ubuntu-latest
+    permissions:
+      checks: write
+      contents: read
+    steps:
+      - name: Complete stale in_progress gate checks
+        uses: osac-project/osac-test-infra/.github/actions/complete-stale-e2e-gates@main
+        with:
+          head-sha: ${{ github.event.pull_request.head.sha }}
+          gate-name: e2e-vmaas-gate
+
   # Latest check named e2e-vmaas-gate after the skipped gate job. Resolve this
   # workflow run's check_suite_id and attach the pending check so PR UI does not
   # group it under unrelated pull_request_target workflows. Forks may lack

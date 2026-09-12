@@ -1,8 +1,9 @@
 ---
 name: Complete stale e2e gate checks
 
-# Manual cleanup when invalidate-e2e-gates left in_progress orphans after native
-# e2e-*-gate jobs already passed. Does not re-run e2e.
+# Manual cleanup for mislabeled unlock API checks and other in_progress orphans on
+# HEAD_SHA. Does not re-run e2e. Uses repo-local script so ops can run before or
+# without waiting on osac-test-infra action updates.
 on:
   workflow_dispatch:
     inputs:
@@ -11,9 +12,17 @@ on:
         required: true
         type: string
       pr_number:
-        description: Optional PR number (logged only)
+        description: Optional PR number (removes stale e2e-ready when set)
         required: false
         type: string
+      mode:
+        description: complete = success after native gate; dismiss = cancel unlock orphans
+        required: false
+        default: complete
+        type: choice
+        options:
+          - complete
+          - dismiss
 
 permissions:
   contents: read
@@ -25,19 +34,32 @@ jobs:
     permissions:
       checks: write
       contents: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-      - name: Complete stale in_progress e2e gate checks
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts/complete-stale-e2e-gate-checks.sh
+      - name: Complete or dismiss stale e2e gate checks
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           HEAD_SHA: ${{ inputs.head_sha }}
           PR_NUMBER: ${{ inputs.pr_number }}
+          MODE: ${{ inputs.mode }}
+        run: bash .github/scripts/complete-stale-e2e-gate-checks.sh
+      - name: Remove stale e2e-ready label
+        if: inputs.pr_number != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr_number }}
         run: |
           set -euo pipefail
-          if [[ -n "${PR_NUMBER}" ]]; then
-            echo "Cleaning stale e2e gates for PR #${PR_NUMBER} at ${HEAD_SHA:0:7}"
+          if gh pr view "${PR_NUMBER}" -R "${REPO}" --json labels --jq '[.labels[].name]' \
+            | jq -e 'index("e2e-ready")' >/dev/null; then
+            gh pr edit "${PR_NUMBER}" -R "${REPO}" --remove-label "e2e-ready"
+            echo "Removed e2e-ready from PR #${PR_NUMBER}"
           else
-            echo "Cleaning stale e2e gates at ${HEAD_SHA:0:7}"
+            echo "PR #${PR_NUMBER} has no e2e-ready label"
           fi
-          bash .github/scripts/complete-stale-e2e-gate-checks.sh

@@ -1,0 +1,48 @@
+---
+# Cancel stale full-install runs on every synchronize. pull_request_target uses
+# default-branch workflow YAML and base-repo GITHUB_TOKEN (required to cancel
+# runs). Runs outside full-install concurrency so cleanup still runs when new
+# caller runs queue behind gh run rerun.
+name: Cancel stale e2e runs on push
+on:
+  pull_request_target:
+    types: [synchronize]
+    branches: [main]
+  workflow_call: {}
+
+jobs:
+  cancel-stale-e2e:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: cancel-stale-e2e-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts/cancel-stale-e2e-runs.sh
+      - name: Cancel full-install runs on obsolete SHAs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: bash .github/scripts/cancel-stale-e2e-runs.sh
+
+  dismiss-unlock-orphan-gates:
+    runs-on: ubuntu-latest
+    permissions:
+      checks: write
+      contents: read
+    steps:
+      - name: Dismiss unlock orphan gate checks
+        uses: osac-project/osac-test-infra/.github/actions/complete-stale-e2e-gates@main
+        with:
+          head-sha: ${{ github.event.pull_request.head.sha }}
+          after-native-success: false
+          github-token: ${{ secrets.MERGE_QUEUE_TOKEN }}

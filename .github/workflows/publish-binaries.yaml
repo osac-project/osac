@@ -40,6 +40,12 @@ jobs:
         working-directory: fulfillment-service
     - name: Install cosign
       uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
+      with:
+        # Pinned explicitly (rather than relying on the installer action's
+        # own default) because goreleaser.yaml's `signs:` config depends on
+        # v3's --bundle-based sign-blob output -- an installer default that
+        # silently moved to a pre-v3 cosign would break that config.
+        cosign-release: 'v3.0.6'
     - name: Compute release version
       # Strip this component's tag prefix (see the `tags:` trigger above) --
       # goreleaser expects a bare vX.Y.Z, not the scoped git tag.

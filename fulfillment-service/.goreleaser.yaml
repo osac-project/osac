@@ -56,16 +56,18 @@ archives:
 
 # Keyless cosign signing of every release binary, same Fulcio/Rekor OIDC flow
 # already used for container images and Helm charts (see the repo README) --
-# no private key material here either. Produces a detached signature
-# (<artifact>.sig) and Fulcio certificate (<artifact>.pem) per binary,
+# no private key material here either. cosign v3 (installed by the pinned
+# cosign-installer in publish-binaries.yaml) requires --bundle for sign-blob;
+# the old --output-certificate/--output-signature pair is legacy v2 output
+# and doesn't satisfy that requirement on its own. Produces a single
+# <artifact>.sigstore.json bundle per binary (cert + signature together),
 # which goreleaser uploads to the GitHub release alongside it.
 signs:
 - cmd: cosign
-  certificate: '${artifact}.pem'
+  signature: "${artifact}.sigstore.json"
   args:
     - sign-blob
-    - "--output-certificate=${certificate}"
-    - "--output-signature=${signature}"
+    - "--bundle=${signature}"
     - "${artifact}"
     - --yes
   artifacts: all

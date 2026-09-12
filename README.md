@@ -134,11 +134,11 @@ see that pipeline's documentation for verifying those instead.
 The `osac` CLI and `fulfillment-service` binaries are released to GitHub
 Releases by `publish-binaries.yaml`, triggered on `fulfillment-service/vX.Y.Z`
 tags. Each release binary is signed the same keyless way as the images and
-charts above; goreleaser's `signs` step produces a detached signature
-(`<binary>.sig`) and Fulcio certificate (`<binary>.pem`) alongside every
-binary in the release.
+charts above; goreleaser's `signs` step produces a single Sigstore bundle
+(`<binary>.sigstore.json`, containing both the certificate and signature)
+alongside every binary in the release.
 
-Download a binary with its signature and certificate, then verify:
+Download a binary with its bundle, then verify:
 
 ```bash
 gh release download fulfillment-service/<version> \
@@ -146,8 +146,7 @@ gh release download fulfillment-service/<version> \
   --pattern 'osac_<os>_<arch>*'
 
 cosign verify-blob \
-  --certificate osac_<os>_<arch>.pem \
-  --signature osac_<os>_<arch>.sig \
+  --bundle osac_<os>_<arch>.sigstore.json \
   --certificate-identity-regexp '^https://github\.com/osac-project/osac/\.github/workflows/publish-binaries\.yaml@refs/tags/fulfillment-service/.+$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   osac_<os>_<arch>

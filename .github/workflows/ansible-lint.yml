@@ -68,7 +68,7 @@ jobs:
           persist-credentials: false
       - name: Install uv
         if: steps.should-run.outputs.run
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7.6.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
       - name: Set up Python
         if: steps.should-run.outputs.run
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0

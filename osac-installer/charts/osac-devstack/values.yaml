@@ -4,7 +4,7 @@ kindClusterName: osac-dev
 # Multi-arch CLI image for hook Jobs (supports amd64, arm64, etc.).
 # The upstream quay.io/openshift/origin-cli:4.20.0 only supports amd64, blocking Mac ARM users.
 # Build the custom multi-arch image with: make -C charts/osac-devstack build-cli-tools
-cliImage: quay.io/openshift/origin-cli:4.20.0  # TODO: Replace with ghcr.io/osac-project/cli-tools:latest after first build
+cliImage: quay.io/openshift/origin-cli:5.1.0  # TODO: Replace with ghcr.io/osac-project/cli-tools:latest after first build
 
 # --- KubeVirt/CDI/Multus ---
 virt:

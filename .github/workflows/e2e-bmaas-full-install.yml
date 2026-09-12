@@ -299,7 +299,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       checks: write
-      contents: read
     steps:
       - name: Complete stale in_progress gate checks
         uses: osac-project/osac-test-infra/.github/actions/complete-stale-e2e-gates@main

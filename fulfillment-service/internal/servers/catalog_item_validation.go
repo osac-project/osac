@@ -698,9 +698,11 @@ func applyBareMetalInstanceTypedNetworkingPolicies(
 	return nil
 }
 
-// validateNetworkAttachmentSubnets validates that all network attachments in a policy reference
-// a subnet (when non-nil). This is a structural validation for catalog item create/update.
-func validateNetworkAttachmentSubnets[T interface{ GetSubnet() *privatev1.SubnetLocalReference }](attachments []T, fieldName string) error {
+type hasSubnetRef interface {
+	GetSubnet() *privatev1.SubnetLocalReference
+}
+
+func validateNetworkAttachmentSubnets[T hasSubnetRef](attachments []T, fieldName string) error {
 	for i, att := range attachments {
 		subnet := att.GetSubnet()
 		if subnet == nil || refKey(subnet) == "" {

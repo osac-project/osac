@@ -1,17 +1,28 @@
 ---
-# Cancel stale full-install runs on every synchronize. pull_request_target uses
-# default-branch workflow YAML and base-repo GITHUB_TOKEN (required to cancel
-# runs). Runs outside full-install concurrency so cleanup still runs when new
-# caller runs queue behind gh run rerun.
+# Cancel stale full-install runs on every synchronize, and clean up leftover
+# e2e-*-gate placeholder checks -- both directions. pull_request_target and
+# workflow_run both use default-branch workflow YAML and base-repo
+# GITHUB_TOKEN/secrets (required to cancel runs and patch checks): GitHub
+# always issues a read-only token for plain `pull_request` runs triggered by
+# a fork PR, and nearly every real contributor PR here is fork-originated, so
+# anything needing actions:write or checks:write has to live outside the
+# full-install workflows themselves rather than as an in-workflow job.
 name: Cancel stale e2e runs on push
 on:
   pull_request_target:
     types: [synchronize]
     branches: [main]
   workflow_call: {}
+  workflow_run:
+    workflows:
+      - "E2E VMaaS Full Install"
+      - "E2E BMaaS Full Install"
+      - "E2E CaaS Full Install"
+    types: [completed]
 
 jobs:
   cancel-stale-e2e:
+    if: github.event_name != 'workflow_run'
     runs-on: ubuntu-latest
     concurrency:
       group: cancel-stale-e2e-${{ github.event.pull_request.number }}
@@ -35,6 +46,7 @@ jobs:
         run: bash .github/scripts/cancel-stale-e2e-runs.sh
 
   dismiss-unlock-orphan-gates:
+    if: github.event_name != 'workflow_run'
     runs-on: ubuntu-latest
     permissions:
       checks: write
@@ -44,4 +56,46 @@ jobs:
         with:
           head-sha: ${{ github.event.pull_request.head.sha }}
           after-native-success: false
+          github-token: ${{ secrets.MERGE_QUEUE_TOKEN }}
+
+  # The in-workflow e2e-*-complete-stale-gates jobs (inside each
+  # e2e-*-full-install.yml, added by OSAC-1735's stale-gate fix) run under
+  # plain `pull_request`, so their checks:write PATCH 403s on every fork PR
+  # (caught as non-fatal, so the job reports success while completing
+  # nothing) -- confirmed directly in a fork PR's job log:
+  #   gh: Resource not accessible by integration (HTTP 403)
+  #   Could not complete stale e2e-*-gate check ... (checks:write
+  #   unavailable; non-fatal).
+  # workflow_run runs with base-repo permissions regardless of where the
+  # triggering run came from, so this actually works for fork PRs. Safe
+  # alongside the in-workflow jobs: complete-stale-e2e-gates is idempotent
+  # (completes orphans, or finds none and no-ops), so this is a harmless
+  # no-op on same-repo PRs where the in-workflow job already succeeded.
+  complete-stale-gates-after-full-install:
+    if: >-
+      github.event_name == 'workflow_run'
+      && github.event.workflow_run.event == 'pull_request'
+      && github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      checks: write
+    steps:
+      - name: Resolve gate name for this suite
+        id: gate
+        run: |
+          case "${{ github.event.workflow_run.name }}" in
+            "E2E VMaaS Full Install") echo "name=e2e-vmaas-gate" >> "$GITHUB_OUTPUT" ;;
+            "E2E BMaaS Full Install") echo "name=e2e-bmaas-gate" >> "$GITHUB_OUTPUT" ;;
+            "E2E CaaS Full Install") echo "name=e2e-caas-gate" >> "$GITHUB_OUTPUT" ;;
+            *)
+              echo "::error::Unknown workflow_run name: ${{ github.event.workflow_run.name }}"
+              exit 1
+              ;;
+          esac
+      - name: Complete stale in_progress gate checks
+        uses: osac-project/osac-test-infra/.github/actions/complete-stale-e2e-gates@main
+        with:
+          head-sha: ${{ github.event.workflow_run.head_sha }}
+          gate-name: ${{ steps.gate.outputs.name }}
+          after-native-success: "true"
           github-token: ${{ secrets.MERGE_QUEUE_TOKEN }}

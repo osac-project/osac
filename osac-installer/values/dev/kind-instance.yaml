@@ -165,10 +165,6 @@ storageFulfillment:
 ui:
   enabled: false
 
-# --- MetalLB (disabled) ---
-metallb:
-  enabled: false
-
 # --- CAPI Provider (disabled) ---
 capiProvider:
   enabled: false

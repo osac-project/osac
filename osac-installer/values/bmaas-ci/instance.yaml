@@ -11,6 +11,16 @@ global:
       enabled: true
     maas:
       enabled: false
+  fabricManager:
+    netris:
+      enabled: true
+      controllerUrl: "https://test-ctl.netris.io"
+      credentials:
+        username: "netris"
+        password: "test-password"
+      siteId: "1"
+      tenantId: "1"
+      tenantName: "Admin"
 
 # --- Operator ---
 operator:
@@ -157,6 +167,11 @@ aap:
     eeImage: "ghcr.io/osac-project/osac-aap:latest"
     projectGitUri: "https://github.com/osac-project/osac"
     projectGitBranch: "main"
+  instanceGroups:
+    clusterFulfillment:
+      enabled: true
+    networkFulfillment:
+      enabled: true
 
 # --- Validation ---
 validation:
@@ -180,12 +195,6 @@ bmf:
 # --- Hub Access ---
 hubAccess:
   enabled: true
-
-networkManagers:
-  - name: netris
-    role: fabric
-    description: "Netris SDN fabric manager"
-    capabilities: "ipv4"
 
 # --- LVMS StorageBackend registration ---
 lvms:

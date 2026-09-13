@@ -197,15 +197,20 @@ var _ = Describe("Public volumes server", func() {
 			Expect(err).To(HaveOccurred())
 		})
 
-		// TC-MAP3: List forwards order parameter.
-		It("Forwards order parameter to private server without error", func() {
+		// TC-MAP3: List forwards order parameter to the private delegate.
+		It("Forwards order parameter to private server", func() {
 			createVolumeViaPrivate("vol-order-test")
+
+			// Wrap the delegate with a spy that captures the order value.
+			spy := &volumesListSpy{delegate: publicServer.delegate}
+			publicServer.delegate = spy
 
 			response, err := publicServer.List(ctx, publicv1.VolumesListRequest_builder{
 				Order: new("metadata.name asc"),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(response.GetSize()).To(BeNumerically(">=", 1))
+			Expect(spy.lastOrder).To(Equal("metadata.name asc"))
 		})
 	})
 
@@ -578,3 +583,36 @@ var _ = Describe("Public volumes server", func() {
 		})
 	})
 })
+
+// volumesListSpy wraps a privatev1.VolumesServer and captures the order value
+// passed to List. All other methods delegate unchanged.
+type volumesListSpy struct {
+	privatev1.VolumesServer
+	delegate  privatev1.VolumesServer
+	lastOrder string
+}
+
+func (s *volumesListSpy) List(ctx context.Context, req *privatev1.VolumesListRequest) (*privatev1.VolumesListResponse, error) {
+	s.lastOrder = req.GetOrder()
+	return s.delegate.List(ctx, req)
+}
+
+func (s *volumesListSpy) Get(ctx context.Context, req *privatev1.VolumesGetRequest) (*privatev1.VolumesGetResponse, error) {
+	return s.delegate.Get(ctx, req)
+}
+
+func (s *volumesListSpy) Create(ctx context.Context, req *privatev1.VolumesCreateRequest) (*privatev1.VolumesCreateResponse, error) {
+	return s.delegate.Create(ctx, req)
+}
+
+func (s *volumesListSpy) Update(ctx context.Context, req *privatev1.VolumesUpdateRequest) (*privatev1.VolumesUpdateResponse, error) {
+	return s.delegate.Update(ctx, req)
+}
+
+func (s *volumesListSpy) Delete(ctx context.Context, req *privatev1.VolumesDeleteRequest) (*privatev1.VolumesDeleteResponse, error) {
+	return s.delegate.Delete(ctx, req)
+}
+
+func (s *volumesListSpy) Signal(ctx context.Context, req *privatev1.VolumesSignalRequest) (*privatev1.VolumesSignalResponse, error) {
+	return s.delegate.Signal(ctx, req)
+}

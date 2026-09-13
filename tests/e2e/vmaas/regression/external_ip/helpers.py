@@ -32,12 +32,12 @@ def allocate_worker_subnet(prefix: int = 24) -> ipaddress.IPv4Network:
     worker_id = os.environ.get("PYTEST_XDIST_WORKER", "gw0")
     worker_num = int(worker_id.replace("gw", "")) if worker_id.startswith("gw") else 0
 
-    # Use a sequential counter within this worker's address space
-    if not hasattr(allocate_worker_subnet, "_counter"):
-        allocate_worker_subnet._counter = 0
+    # Use per-prefix counters to avoid wasting slots when interleaving /24 and /30 allocations
+    if not hasattr(allocate_worker_subnet, "_counters"):
+        allocate_worker_subnet._counters = {}
 
-    counter = allocate_worker_subnet._counter
-    allocate_worker_subnet._counter += 1
+    counter = allocate_worker_subnet._counters.get(prefix, 0)
+    allocate_worker_subnet._counters[prefix] = counter + 1
 
     if prefix == 24:
         # /24 blocks use the lower half of 172.27.0.0/16 (172.27.0.0 - 172.27.127.255)
@@ -46,9 +46,9 @@ def allocate_worker_subnet(prefix: int = 24) -> ipaddress.IPv4Network:
         # Worker 1: 172.27.32.0/24, 172.27.33.0/24, ..., 172.27.63.0/24
         # Worker 2: 172.27.64.0/24, 172.27.65.0/24, ..., 172.27.95.0/24
         # Worker 3: 172.27.96.0/24, 172.27.97.0/24, ..., 172.27.127.0/24
-        third_octet = worker_num * 32 + counter
-        if third_octet > 127:
+        if counter >= 32:
             raise RuntimeError(f"Worker {worker_id} exhausted /24 address space (counter={counter})")
+        third_octet = worker_num * 32 + counter
         cidr = f"172.27.{third_octet}.0/24"
     elif prefix == 30:
         # /30 blocks use the upper half of 172.27.0.0/16 (172.27.128.0 - 172.27.255.255)

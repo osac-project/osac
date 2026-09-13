@@ -9,6 +9,8 @@ import pytest
 from tests.e2e.catalog.conftest import unique_name
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import (
+    assert_cluster_order_deleting_event,
+    assert_cluster_order_lifecycle_events,
     wait_for_cluster_deleting,
     wait_for_cluster_deletion,
     wait_for_cluster_grpc_deleting_or_archived,
@@ -56,6 +58,8 @@ def test_cluster_create(
         metering.verify()
 
         wait_for_cluster_ready(k8s=k8s_hub_client, name=co_name)
+
+        assert_cluster_order_lifecycle_events(k8s=k8s_hub_client, name=co_name)
 
         # Verify version resolved and propagated end-to-end:
         # fulfillment-service default resolution -> ClusterOrder releaseImage -> HostedCluster image
@@ -136,6 +140,7 @@ def test_cluster_create(
         metering.expect("osac.resource.deleted.v1", resource_id=uuid)
 
         wait_for_cluster_deleting(k8s=k8s_hub_client, name=co_name)
+        assert_cluster_order_deleting_event(k8s=k8s_hub_client, name=co_name)
         wait_for_cluster_grpc_deleting_or_archived(grpc=grpc, uuid=uuid)
 
         wait_for_cluster_deletion(k8s=k8s_hub_client, name=co_name)

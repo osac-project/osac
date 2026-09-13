@@ -311,6 +311,58 @@ def wait_for_cluster_progressing(*, k8s: K8sClient, name: str) -> None:
     )
 
 
+def wait_for_cluster_order_event_reasons(*, k8s: K8sClient, name: str, reasons: set[str]) -> dict[str, dict[str, Any]]:
+    observed_events: dict[str, dict[str, Any]] = {}
+
+    def _observed_events() -> dict[str, dict[str, Any]]:
+        observed_events.update(
+            {event["reason"]: event for event in k8s.get_cluster_order_events(name=name) if event.get("reason")}
+        )
+        return observed_events
+
+    return poll_until(
+        fn=_observed_events,
+        until=lambda observed: reasons.issubset(observed),
+        retries=480,
+        delay=15,
+        description=f"{name} ClusterOrder provisioning events",
+    )
+
+
+def assert_cluster_order_events(
+    *, events: dict[str, dict[str, Any]], expected: dict[str, tuple[str, str, str]]
+) -> None:
+    for reason, (event_type, action, message) in expected.items():
+        event = events[reason]
+        assert event.get("type") == event_type, f"Expected {event_type} event for {reason}: {event}"
+        assert event.get("action") == action, f"Expected {action} action for {reason}: {event}"
+        assert message in event.get("message", ""), f"Expected message for {reason}: {event}"
+
+
+def assert_cluster_order_lifecycle_events(*, k8s: K8sClient, name: str) -> None:
+    expected_events = {
+        "Created": ("Normal", "Created", "ClusterOrder created"),
+        "PreparingInfrastructure": ("Normal", "Provisioning", "Preparing Infrastructure"),
+        "ControlPlaneStarting": ("Normal", "Provisioning", "Control Plane Starting"),
+        "Ready": ("Normal", "Ready", "ClusterOrder is ready"),
+    }
+    expected_reasons = set(expected_events)
+    if k8s.get_cluster_order_spec(name=name).get("nodeSets"):
+        expected_events["WorkersJoining"] = ("Normal", "Provisioning", "Workers Joining")
+        expected_reasons.add("WorkersJoining")
+
+    events = wait_for_cluster_order_event_reasons(k8s=k8s, name=name, reasons=expected_reasons)
+    assert_cluster_order_events(events=events, expected=expected_events)
+
+
+def assert_cluster_order_deleting_event(*, k8s: K8sClient, name: str) -> None:
+    events = wait_for_cluster_order_event_reasons(k8s=k8s, name=name, reasons={"Deleting"})
+    assert_cluster_order_events(
+        events=events,
+        expected={"Deleting": ("Normal", "Deleting", "ClusterOrder entered deleting phase")},
+    )
+
+
 def wait_for_cluster_ready(*, k8s: K8sClient, name: str) -> None:
     # Must stay safely above osac-aap's own wait_for_clusteroperators_retries
     # budget (60 min) plus earlier steps in the same AAP job (create hosted

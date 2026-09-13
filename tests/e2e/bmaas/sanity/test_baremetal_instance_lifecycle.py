@@ -180,7 +180,7 @@ def test_baremetal_instance_lifecycle(
                 if bmh_name:
                     wait_for_bmh_available(k8s=k8s_hub_client, name=bmh_name, bmh_namespace=bmh_ns)
             except Exception:
-                pass
+                logger.exception("Failed to clean up BMI %s during error handling", bmi_id)
         raise
 
 

@@ -296,6 +296,9 @@ class TestBmaasNetworking:
         bmi1 = self.state["bmi1"]
         bmi3 = self.state["bmi3"]
 
+        # Verify SSH transport is healthy so a connection failure cannot masquerade as "no connectivity".
+        bmi_ssh.ssh_bmi(bmi1["ssh_host"], "true")
+
         assert not bmi_ssh.arping(bmi1["ssh_host"], bmi3["ip"]), (
             f"arping from BMI1 ({bmi1['ip']}, subnet A) to BMI3 ({bmi3['ip']}, subnet B) "
             f"succeeded unexpectedly — different subnets should be different broadcast domains"
@@ -304,6 +307,9 @@ class TestBmaasNetworking:
     def test_10_tenant_isolation(self, mgmt_cluster_ip: str) -> None:
         _require(self.state, "bmi1")
         bmi1 = self.state["bmi1"]
+
+        # Verify SSH transport is healthy so a connection failure cannot masquerade as "no connectivity".
+        bmi_ssh.ssh_bmi(bmi1["ssh_host"], "true")
 
         assert not bmi_ssh.ping(bmi1["ssh_host"], mgmt_cluster_ip), (
             f"ping from BMI1 ({bmi1['ip']}) to management cluster ({mgmt_cluster_ip}) "
@@ -345,7 +351,7 @@ class TestBmaasNetworking:
         def _try_ssh_eip() -> str:
             try:
                 return bmi_ssh.ssh_via_external_ip(ext_addr, timeout=10)
-            except subprocess.CalledProcessError:
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
                 return ""
 
         poll_until(

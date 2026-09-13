@@ -42,4 +42,17 @@ jobs:
       run: |
         # Strip this component's tag prefix (see the `tags:` trigger above) so the
         # label reads as a plain version, not the full scoped git tag.
-        buf push --label "${GITHUB_REF_NAME#fulfillment-service/}"
+        LABEL="${GITHUB_REF_NAME#fulfillment-service/}"
+
+        # --create provisions a module on first push and is a no-op once it
+        # exists (buf.build/osac-project/tests was never provisioned, so
+        # every push has been failing with "repository ... was not found"
+        # since at least fulfillment-service/v0.0.95). A single workspace-wide
+        # `buf push --create` can't express per-module visibility though --
+        # --create-visibility is one flag applied to every module created in
+        # that call -- so push each module separately with its intended
+        # visibility rather than relying on the shared default for the
+        # externally-consumed public module.
+        buf push public --create --create-visibility public --label "${LABEL}"
+        buf push private --create --create-visibility private --label "${LABEL}"
+        buf push tests --create --create-visibility private --label "${LABEL}"

@@ -43,14 +43,10 @@ spec:
             echo "Looking up ${TEMPLATE_NAME} job template..."
             JT_RESPONSE=$(curl -sf -H "Authorization: Bearer ${AAP_TOKEN}" \
               "${AAP_URL}/api/controller/v2/job_templates/?name=${TEMPLATE_NAME}")
-            JT_ID=$(echo "${JT_RESPONSE}" | python3 -c "
-            import sys, json
-            data = json.load(sys.stdin)
-            if data['count'] == 0:
-                print('ERROR: ${TEMPLATE_NAME} not found in AAP', file=sys.stderr)
-                sys.exit(1)
-            print(data['results'][0]['id'])
-            ")
+            JT_ID=$(echo "${JT_RESPONSE}" | jq -e -r --arg name "${TEMPLATE_NAME}" '
+              if .count == 0 then "ERROR: \($name) not found in AAP\n" | halt_error(1)
+              else .results[0].id
+              end')
             echo "Job template ID: ${JT_ID}"
 
             echo "Launching ${TEMPLATE_NAME}..."
@@ -58,7 +54,7 @@ spec:
               -H "Authorization: Bearer ${AAP_TOKEN}" \
               -H "Content-Type: application/json" \
               "${AAP_URL}/api/controller/v2/job_templates/${JT_ID}/launch/")
-            JOB_ID=$(echo "${LAUNCH_RESPONSE}" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+            JOB_ID=$(echo "${LAUNCH_RESPONSE}" | jq -e -r '.id')
             [[ -n "${JOB_ID}" ]] || { echo "ERROR: Failed to launch publish-templates job"; exit 1; }
             echo "Job ${JOB_ID} launched, polling for completion..."
 
@@ -73,7 +69,7 @@ spec:
                 sleep 10
                 continue
               fi
-              STATUS=$(python3 -c "import sys,json; print(json.load(sys.stdin)['status'])" < /tmp/poll-response.json)
+              STATUS=$(jq -e -r '.status' /tmp/poll-response.json)
               echo "  Poll ${i}: status=${STATUS}"
               case "${STATUS}" in
                 successful)

@@ -2485,6 +2485,38 @@ var _ = Describe("Vault namespace provisioning", func() {
 		Expect(cond).ToNot(BeNil())
 		Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
 	})
+
+	It("reaches SYNCED even when vault provisioning fails during initial sync", func() {
+		reconciler := &function{
+			logger:         logger,
+			idpManager:     idpManager,
+			vaultLifecycle: mockVaultClient,
+		}
+
+		tenant := privatev1.Tenant_builder{
+			Id: "org-vault-fail-sync",
+			Metadata: privatev1.Metadata_builder{
+				Name:       "vault-fail-sync-org",
+				Finalizers: []string{finalizers.Controller},
+				Tenant:     "tenant-1",
+			}.Build(),
+			Status: privatev1.TenantStatus_builder{
+				IdpTenantName:    "vault-fail-sync-org",
+				BreakGlassUserId: "user-existing",
+			}.Build(),
+		}.Build()
+
+		mockVaultClient.EXPECT().
+			EnsureTenantNamespace(gomock.Any(), "vault-fail-sync-org").
+			Return(fmt.Errorf("lookup openbao.osac.svc.cluster.local: no such host"))
+
+		t := &task{r: reconciler, tenant: tenant}
+		err := t.update(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(tenant.GetStatus().GetState()).To(Equal(privatev1.TenantState_TENANT_STATE_SYNCED))
+		cond := findCondition(tenant)
+		Expect(cond).To(BeNil())
+	})
 })
 
 var _ = Describe("Vault namespace cleanup during deletion", func() {

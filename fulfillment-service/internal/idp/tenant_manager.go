@@ -15,13 +15,13 @@ package idp
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/big"
 	"slices"
 	"time"
+
+	"github.com/osac-project/osac/fulfillment-service/internal/password"
 )
 
 // TenantManager handles the lifecycle of tenants in Keycloak.
@@ -276,10 +276,10 @@ func (m *TenantManager) createBreakGlassAccount(ctx context.Context, config *Ten
 	if email == "" {
 		email = fmt.Sprintf("break-glass@%s.osac.local", config.Name)
 	}
-	password := config.BreakGlassPassword
-	if password == "" {
+	pw := config.BreakGlassPassword
+	if pw == "" {
 		var err error
-		password, err = generatePassword()
+		pw, err = password.Generate()
 		if err != nil {
 			return nil, fmt.Errorf("failed to generate break-glass password: %w", err)
 		}
@@ -295,7 +295,7 @@ func (m *TenantManager) createBreakGlassAccount(ctx context.Context, config *Ten
 		Credentials: []*Credential{
 			{
 				Type:      "password",
-				Value:     password,
+				Value:     pw,
 				Temporary: true, // User must change password on first login
 			},
 		},
@@ -310,7 +310,7 @@ func (m *TenantManager) createBreakGlassAccount(ctx context.Context, config *Ten
 		UserID:   createdUser.ID,
 		Username: username,
 		Email:    email,
-		Password: password,
+		Password: pw,
 	}
 
 	m.logger.InfoContext(ctx, "Break-glass account created for tenant",
@@ -356,18 +356,4 @@ func (m *TenantManager) DeleteTenant(ctx context.Context, tenantName string) err
 		slog.String("tenant", tenantName),
 	)
 	return nil
-}
-
-func generatePassword() (string, error) {
-	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%"
-	const length = 24
-	b := make([]byte, length)
-	for i := range b {
-		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
-		if err != nil {
-			return "", err
-		}
-		b[i] = charset[n.Int64()]
-	}
-	return string(b), nil
 }

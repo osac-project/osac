@@ -1059,6 +1059,16 @@ func (in *SecurityGroupStatus) DeepCopyInto(out *SecurityGroupStatus) {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
+	if in.AttachedSubnetRefs != nil {
+		in, out := &in.AttachedSubnetRefs, &out.AttachedSubnetRefs
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
+	if in.AttachedSubnetCIDRs != nil {
+		in, out := &in.AttachedSubnetCIDRs, &out.AttachedSubnetCIDRs
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
 		*out = make([]v1.Condition, len(*in))

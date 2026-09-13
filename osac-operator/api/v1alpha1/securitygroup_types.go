@@ -125,6 +125,16 @@ type SecurityGroupStatus struct {
 	// +kubebuilder:validation:Type=string
 	BackendSecurityGroupID string `json:"backendSecurityGroupId,omitempty"`
 
+	// AttachedSubnetRefs lists Subnet CR names where a workload network attachment
+	// references this SecurityGroup. Operator-computed; used to scope Netris ACL fan-out.
+	// +kubebuilder:validation:Optional
+	AttachedSubnetRefs []string `json:"attachedSubnetRefs,omitempty"`
+
+	// AttachedSubnetCIDRs lists IPv4 CIDRs for AttachedSubnetRefs in the same order.
+	// Consumed by the Netris Ansible role when creating ACL rules.
+	// +kubebuilder:validation:Optional
+	AttachedSubnetCIDRs []string `json:"attachedSubnetCIDRs,omitempty"`
+
 	// Conditions holds an array of metav1.Condition that describe the state of the SecurityGroup
 	// +kubebuilder:validation:Optional
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,1,rep,name=conditions"`

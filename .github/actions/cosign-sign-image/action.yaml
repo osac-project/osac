@@ -18,6 +18,29 @@ runs:
   steps:
     - name: Install cosign
       uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
+    - name: Check for an existing signature from this exact workflow+ref
+      # Avoids unbounded Fulcio cert + Rekor log growth when a calling
+      # workflow (nightly-build.yaml in particular) re-publishes a
+      # byte-identical digest run after run -- re-signing an unchanged
+      # digest under the SAME identity adds nothing verifiable that isn't
+      # already there. This only skips when *this* workflow+ref already
+      # signed *this exact* digest; a different workflow/ref signing the
+      # same digest is untouched, so multiple valid identities on one
+      # digest (the documented, intentional behavior) still works. Fails
+      # open toward signing: any verify error (including "not signed yet"
+      # and transient network errors) falls through to the sign step below.
+      id: check
+      shell: bash
+      run: |
+        if cosign verify \
+            --certificate-identity "https://github.com/${{ github.workflow_ref }}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "${{ inputs.image }}" >/dev/null 2>&1; then
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "signed=false" >> "$GITHUB_OUTPUT"
+        fi
     - name: Sign image
+      if: steps.check.outputs.signed != 'true'
       shell: bash
       run: cosign sign --yes "${{ inputs.image }}"

@@ -319,6 +319,22 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1
 	// re-fetching.
 	ctx, tierDefinitions := resolveAndInjectTierContext(ctx, r.TiersClient, r.BackendsClient, r.SecretsClient, "tenant", tenantName)
 
+	// Handle individual ClusterOrder deletions while the Tenant is still
+	// alive. When a ClusterOrder is deleted, mapClusterOrderToTenant
+	// triggers Tenant reconciliation, and we clean up cluster-side storage
+	// for that specific cluster here.
+	//
+	// This runs BEFORE Stage 1 so that early returns from backend readiness
+	// or StorageClass resolution cannot prevent CaaS cluster cleanup.
+	// When the HostedControlPlane is already gone (kubeconfig==nil), there
+	// is nothing to deprovision on the cluster side and the finalizer can
+	// be removed immediately. When no ClusterStorageProvider is configured,
+	// the finalizer is also removed without attempting AAP cleanup (OSAC-4340).
+	caasDelResult, caasDelErr := r.handleCaaSDelete(ctx, instance, false)
+	if caasDelErr != nil || caasDelResult.RequeueAfter > 0 {
+		return caasDelResult, caasDelErr
+	}
+
 	// Stage 1: check hub Secret and route provisioning based on backend registration.
 	// stop is always true when err is non-nil (handleBackendReadiness invariant).
 	hubSecretReady, stageResult, stop, err := r.handleBackendReadiness(ctx, instance, tenantName)
@@ -444,15 +460,6 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1
 		caasResult, caasErr := r.handleCaaSUpdate(ctx, instance)
 		if caasErr != nil || caasResult.RequeueAfter > 0 {
 			return caasResult, caasErr
-		}
-
-		// Handle individual ClusterOrder deletions while the Tenant is still
-		// alive. When a ClusterOrder is deleted, mapClusterOrderToTenant
-		// triggers Tenant reconciliation, and we clean up cluster-side storage
-		// for that specific cluster here.
-		caasDelResult, caasDelErr := r.handleCaaSDelete(ctx, instance, false)
-		if caasDelErr != nil || caasDelResult.RequeueAfter > 0 {
-			return caasDelResult, caasDelErr
 		}
 	}
 
@@ -656,11 +663,13 @@ func (r *StorageReconciler) handleDelete(ctx context.Context, instance *v1alpha1
 	// The ClusterOrders themselves are not being deleted (they have no
 	// OwnerReference to the Tenant), but the storage backend is about to be
 	// torn down so cluster-side resources must be removed first.
-	if r.ClusterStorageProvider != nil {
-		caasResult, caasErr := r.handleCaaSDelete(ctx, instance, true)
-		if caasErr != nil || caasResult.RequeueAfter > 0 {
-			return caasResult, caasErr
-		}
+	//
+	// This runs independently of ClusterStorageProvider: when the
+	// HostedControlPlane is already gone the finalizer is removed without
+	// triggering AAP deprovisioning (OSAC-4340).
+	caasResult, caasErr := r.handleCaaSDelete(ctx, instance, true)
+	if caasErr != nil || caasResult.RequeueAfter > 0 {
+		return caasResult, caasErr
 	}
 
 	// Stage 1: class cleanup
@@ -818,6 +827,12 @@ func (r *StorageReconciler) handleCaaSDelete(ctx context.Context, instance *v1al
 				"clusterOrder", co.Name, "tenant", tenantName)
 			r.Recorder.Eventf(co, nil, corev1.EventTypeWarning, "KubeConfigNotAvailable", "Teardown",
 				"HostedControlPlane not found during storage teardown, skipping cleanup")
+		} else if r.ClusterStorageProvider == nil {
+			// Cluster still exists but no storage provider is configured, so
+			// we cannot run an AAP deprovisioning job. Remove the finalizer
+			// without attempting cleanup (OSAC-4340).
+			log.Info("no cluster storage provider configured, skipping CaaS cluster-side cleanup",
+				"clusterOrder", co.Name, "tenant", tenantName)
 		} else {
 			provCtx := provisioning.WithAdminKubeconfig(ctx, string(kubeconfig))
 
@@ -1135,6 +1150,8 @@ func (r *StorageReconciler) SetupWithManager(mgr mcmanager.Manager) error {
 		Watches(
 			&v1alpha1.ClusterOrder{},
 			mchandler.EnqueueRequestsFromMapFunc(r.mapClusterOrderToTenant),
+			mcbuilder.WithEngageWithLocalCluster(true),
+			mcbuilder.WithEngageWithProviderClusters(false),
 		).
 		Watches(
 			&storagev1.StorageClass{},

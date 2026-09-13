@@ -1,32 +1,10 @@
 from __future__ import annotations
 
 import os
-import shlex
-from collections.abc import Iterator
 
 import pytest
 
-from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import env
-
-
-# TODO(OSAC-1060): Remove this override once the osac-operator storage controller
-# handles CaaS cluster deletion independently of tenant-level storage provisioning.
-# With JWT auth the cluster lands in tenant1, which triggers cluster storage provisioning
-# via AAP. When that job fails (no storage backends configured), the cluster-storage
-# finalizer blocks ClusterOrder deletion indefinitely. Using SA auth places the cluster
-# in the shared tenant, which the storage controller skips.
-@pytest.fixture(scope="session")
-def cli(namespace: str, fulfillment_address: str, service_account: str) -> Iterator[OsacCLI]:
-    """Session-scoped osac CLI authenticated with a service-account token."""
-    instance = OsacCLI(
-        binary=env("OSAC_CLI_PATH", "osac"),
-        address=f"https://{fulfillment_address.rsplit(':', 1)[0]}",
-        token_script=f"oc create token -n {shlex.quote(namespace)} {shlex.quote(service_account)} --as system:admin",
-        namespace=namespace,
-    )
-    yield instance
-    instance.close()
 
 
 @pytest.fixture(scope="session")

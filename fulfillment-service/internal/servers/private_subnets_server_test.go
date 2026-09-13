@@ -1484,6 +1484,7 @@ var _ = Describe("Private subnets server", func() {
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
+				stateBeforeDelete := createResponse.GetObject().GetStatus().GetState()
 
 				_, err = server.Delete(ctx, privatev1.SubnetsDeleteRequest_builder{
 					Id: createResponse.GetObject().GetId(),
@@ -1494,6 +1495,49 @@ var _ = Describe("Private subnets server", func() {
 				Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
 				Expect(err.Error()).To(ContainSubstring("default"))
 				Expect(err.Error()).To(ContainSubstring("system-managed"))
+
+				getResponse, err := server.Get(ctx, privatev1.SubnetsGetRequest_builder{
+					Id: createResponse.GetObject().GetId(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(getResponse.GetObject().GetMetadata().GetDeletionTimestamp()).To(BeNil())
+				Expect(getResponse.GetObject().GetStatus().GetState()).To(Equal(stateBeforeDelete))
+			})
+
+			It("blocks deletion after an update omits the default label", func() {
+				vn := createVirtualNetwork(ctx, "10.20.0.0/16", "")
+				createResp, err := server.Create(ctx, privatev1.SubnetsCreateRequest_builder{
+					Object: privatev1.Subnet_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name:   "default-subnet-update",
+							Tenant: testTenant,
+							Labels: map[string]string{"osac.openshift.io/default": "true"},
+						}.Build(),
+						Spec: privatev1.SubnetSpec_builder{
+							Ipv4Cidr:       new("10.20.1.0/24"),
+							VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vn.GetId()}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+
+				object := createResp.GetObject()
+				object.GetMetadata().SetLabels(map[string]string{"env": "test"})
+				_, err = server.Update(ctx, privatev1.SubnetsUpdateRequest_builder{Object: object}.Build())
+				Expect(err).To(HaveOccurred())
+				status, ok := grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+
+				_, err = server.Delete(ctx, privatev1.SubnetsDeleteRequest_builder{Id: object.GetId()}.Build())
+				Expect(err).To(HaveOccurred())
+				status, ok = grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+
+				getResp, err := server.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: object.GetId()}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(getResp.GetObject().GetMetadata().GetLabels()).To(HaveKeyWithValue("osac.openshift.io/default", "true"))
 			})
 		})
 	})

@@ -173,6 +173,14 @@ func (s *PrivateVirtualNetworksServer) Update(ctx context.Context,
 	}
 
 	existingVN := getResponse.GetObject()
+	if err = validateDefaultLabelUpdate(
+		existingVN.GetMetadata().GetLabels(),
+		request.GetObject().GetMetadata().GetLabels(),
+		request.GetUpdateMask(),
+		"virtual network",
+	); err != nil {
+		return
+	}
 
 	// Validate with existing object context:
 	err = s.validateVirtualNetwork(ctx, request.GetObject(), existingVN)

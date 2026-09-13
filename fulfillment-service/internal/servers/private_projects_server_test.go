@@ -378,6 +378,18 @@ var _ = Describe("Private projects server", func() {
 				Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(vnList.GetItems()).To(BeEmpty())
+
+			subnetList, err := provisioner.subnetDao.List().
+				SetFilter("this.metadata.tenant == 'my-tenant'").
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(subnetList.GetItems()).To(BeEmpty())
+
+			sgList, err := provisioner.securityGroupDao.List().
+				SetFilter("this.metadata.tenant == 'my-tenant'").
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(sgList.GetItems()).To(BeEmpty())
 		})
 
 		It("still deletes the root project when there is no default networking to deprovision", func() {

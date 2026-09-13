@@ -140,6 +140,44 @@ var _ = Describe("Public external IPs server", func() {
 			Expect(getResp.GetObject().GetId()).To(Equal(createResp.GetObject().GetId()))
 		})
 
+		It("creates with auto-generated name when metadata is nil", func() {
+			poolID := getPoolID()
+			createResp, err := publicServer.Create(ctx, publicv1.ExternalIPsCreateRequest_builder{
+				Object: publicv1.ExternalIP_builder{
+					Spec: publicv1.ExternalIPSpec_builder{Pool: publicv1.ExternalIPPoolReference_builder{Id: poolID}.Build()}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(createResp.GetObject().GetId()).ToNot(BeEmpty())
+			Expect(createResp.GetObject().GetMetadata().GetName()).To(HavePrefix("ext-ip-"))
+			Expect(createResp.GetObject().GetMetadata().GetName()).To(HaveLen(15))
+		})
+
+		It("creates with auto-generated name when metadata name is empty", func() {
+			poolID := getPoolID()
+			createResp, err := publicServer.Create(ctx, publicv1.ExternalIPsCreateRequest_builder{
+				Object: publicv1.ExternalIP_builder{
+					Metadata: publicv1.Metadata_builder{Tenant: testTenant}.Build(),
+					Spec:     publicv1.ExternalIPSpec_builder{Pool: publicv1.ExternalIPPoolReference_builder{Id: poolID}.Build()}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(createResp.GetObject().GetId()).ToNot(BeEmpty())
+			Expect(createResp.GetObject().GetMetadata().GetName()).To(HavePrefix("ext-ip-"))
+		})
+
+		It("preserves explicit name when provided", func() {
+			poolID := getPoolID()
+			createResp, err := publicServer.Create(ctx, publicv1.ExternalIPsCreateRequest_builder{
+				Object: publicv1.ExternalIP_builder{
+					Metadata: publicv1.Metadata_builder{Name: "my-custom-eip", Tenant: testTenant}.Build(),
+					Spec:     publicv1.ExternalIPSpec_builder{Pool: publicv1.ExternalIPPoolReference_builder{Id: poolID}.Build()}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(createResp.GetObject().GetMetadata().GetName()).To(Equal("my-custom-eip"))
+		})
+
 		It("lists ExternalIPs", func() {
 			poolID := getPoolID()
 			for range 3 {

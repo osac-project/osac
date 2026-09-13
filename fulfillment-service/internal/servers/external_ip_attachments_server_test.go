@@ -170,6 +170,48 @@ var _ = Describe("External IP attachments server", func() {
 			Expect(object.GetSpec().GetComputeInstance().GetId()).ToNot(BeEmpty())
 		})
 
+		It("Creates with auto-generated name when metadata is nil", func() {
+			eip := createExternalIPInState(ctx, externalIPDao, sharedPoolID,
+				privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED, false)
+			ci := createComputeInstanceInState(ctx, computeInstanceDao,
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING)
+
+			response, err := externalIPAttachmentsServer.Create(ctx,
+				publicv1.ExternalIPAttachmentsCreateRequest_builder{
+					Object: publicv1.ExternalIPAttachment_builder{
+						Spec: publicv1.ExternalIPAttachmentSpec_builder{
+							ExternalIp:      publicv1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+							ComputeInstance: publicv1.ComputeInstanceLocalReference_builder{Id: ci.GetId()}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetObject().GetMetadata().GetName()).To(HavePrefix("ext-ip-att-"))
+			Expect(response.GetObject().GetMetadata().GetName()).To(HaveLen(19))
+		})
+
+		It("Preserves explicit name when provided", func() {
+			eip := createExternalIPInState(ctx, externalIPDao, sharedPoolID,
+				privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED, false)
+			ci := createComputeInstanceInState(ctx, computeInstanceDao,
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING)
+
+			response, err := externalIPAttachmentsServer.Create(ctx,
+				publicv1.ExternalIPAttachmentsCreateRequest_builder{
+					Object: publicv1.ExternalIPAttachment_builder{
+						Metadata: publicv1.Metadata_builder{
+							Name: "my-custom-att",
+						}.Build(),
+						Spec: publicv1.ExternalIPAttachmentSpec_builder{
+							ExternalIp:      publicv1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+							ComputeInstance: publicv1.ComputeInstanceLocalReference_builder{Id: ci.GetId()}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetObject().GetMetadata().GetName()).To(Equal("my-custom-att"))
+		})
+
 		It("Creates and gets object with Cluster target", func() {
 			eip := createExternalIPInState(ctx, externalIPDao, sharedPoolID,
 				privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED, false)

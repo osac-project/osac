@@ -162,6 +162,13 @@ func (s *PrivateExternalIPsServer) Create(ctx context.Context,
 		return
 	}
 
+	if externalIP.GetMetadata() == nil || externalIP.GetMetadata().GetName() == "" {
+		if externalIP.GetMetadata() == nil {
+			externalIP.SetMetadata(&privatev1.Metadata{})
+		}
+		externalIP.GetMetadata().SetName(generateResourceName("ext-ip"))
+	}
+
 	if externalIP.GetStatus() == nil {
 		externalIP.SetStatus(privatev1.ExternalIPStatus_builder{
 			State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING,

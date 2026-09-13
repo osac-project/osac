@@ -1,5 +1,8 @@
 {{- if .Values.instanceGroups.clusterFulfillment.enabled }}
-{{- $ingress := lookup "config.openshift.io/v1" "Ingress" "" "cluster" }}
+{{- $ingress := dict }}
+{{- if .Capabilities.APIVersions.Has "config.openshift.io/v1/Ingress" }}
+{{- $ingress = lookup "config.openshift.io/v1" "Ingress" "" "cluster" }}
+{{- end }}
 {{- $ingressDomain := "" }}
 {{- if $ingress }}{{- $ingressDomain = $ingress.spec.domain | default "" }}{{- end }}
 {{- $baseDomain := "" }}

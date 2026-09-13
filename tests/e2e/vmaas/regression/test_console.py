@@ -16,10 +16,10 @@ from typing import Any
 import pytest
 import websocket
 
-from tests.e2e.catalog.conftest import unique_name
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import (
     assert_grpc_rejected,
+    unique_name,
     wait_for_cr,
     wait_for_deletion,
     wait_for_provision,

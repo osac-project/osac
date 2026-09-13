@@ -4,12 +4,19 @@ import re
 import subprocess
 import time
 from typing import Any
+from uuid import uuid4
 
 import pytest
 
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.runner import poll_until, run_unchecked
+
+
+def unique_name(prefix: str) -> str:
+    """Generate a unique resource name with a random suffix."""
+    return f"{prefix}-{uuid4().hex[:8]}"
+
 
 _POOL_READY_STATE = "EXTERNAL_IP_POOL_STATE_READY"
 _BMI_RUNNING_RETRIES = 180

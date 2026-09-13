@@ -665,6 +665,25 @@ var _ = Describe("Private instance types server", func() {
 					originalDep.GetDeprecationTimestamp())).To(BeTrue())
 			})
 
+			It("UNSPECIFIED state preserves existing state", func() {
+				object := createWithState("unspecified-guard",
+					privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_DEPRECATED)
+
+				// Update with UNSPECIFIED state — should preserve DEPRECATED:
+				updateResponse, err := server.Update(ctx, privatev1.InstanceTypesUpdateRequest_builder{
+					Object: privatev1.InstanceType_builder{
+						Id: object.GetId(),
+						Spec: privatev1.InstanceTypeSpec_builder{
+							State: privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_UNSPECIFIED,
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.state"}},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(updateResponse.GetObject().GetSpec().GetState()).To(Equal(
+					privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_DEPRECATED))
+			})
+
 			It("Re-entry updates timestamp", func() {
 				// D-05: Re-entering a state updates the corresponding timestamp to now.
 				object := createWithState("re-entry-timestamp",
@@ -703,6 +722,59 @@ var _ = Describe("Private instance types server", func() {
 				Expect(t2).ToNot(BeNil())
 				Expect(proto.Equal(t1, t2)).To(BeFalse())
 			})
+		})
+
+		It("No-mask update preserves metadata", func() {
+			// Regression: a full-object update (no field mask) with partial client
+			// metadata must not lose labels, annotations, or creator fields.
+			createResponse, err := server.Create(ctx, privatev1.InstanceTypesCreateRequest_builder{
+				Object: privatev1.InstanceType_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "nomask-metadata-test",
+						Labels: map[string]string{
+							"env": "test",
+						},
+						Annotations: map[string]string{
+							"note": "important",
+						},
+					}.Build(),
+					Spec: privatev1.InstanceTypeSpec_builder{
+						Cores:       4,
+						MemoryGib:   16,
+						Description: "No-mask metadata test.",
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			object := createResponse.GetObject()
+			Expect(object.GetMetadata().GetLabels()).To(HaveKeyWithValue("env", "test"))
+			Expect(object.GetMetadata().GetAnnotations()).To(HaveKeyWithValue("note", "important"))
+
+			// Update description without a mask (full-object update), sending only
+			// partial metadata (no labels or annotations):
+			updateResponse, err := server.Update(ctx, privatev1.InstanceTypesUpdateRequest_builder{
+				Object: privatev1.InstanceType_builder{
+					Id: object.GetId(),
+					Metadata: privatev1.Metadata_builder{
+						Name: "nomask-metadata-test",
+					}.Build(),
+					Spec: privatev1.InstanceTypeSpec_builder{
+						Cores:       4,
+						MemoryGib:   16,
+						Description: "Updated description.",
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			// Verify metadata survived:
+			updated := updateResponse.GetObject()
+			Expect(updated.GetMetadata().GetName()).To(Equal("nomask-metadata-test"))
+			Expect(updated.GetSpec().GetDescription()).To(Equal("Updated description."))
+			// Labels and annotations must come from the DB-backed merged object,
+			// not from the client's partial request:
+			Expect(updated.GetMetadata().GetLabels()).To(HaveKeyWithValue("env", "test"))
+			Expect(updated.GetMetadata().GetAnnotations()).To(HaveKeyWithValue("note", "important"))
 		})
 
 		// Immutability tests (TEST-02)

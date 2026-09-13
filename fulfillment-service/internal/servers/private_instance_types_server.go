@@ -202,8 +202,13 @@ func (s *PrivateInstanceTypesServer) Update(ctx context.Context,
 		mask.Paths = append(mask.Paths, "spec.deprecation")
 	}
 
-	// Set the merged spec back into the request for the generic update:
-	request.GetObject().SetSpec(merged.GetSpec())
+	// SetObject(merged) instead of SetSpec(merged.GetSpec()): GenericServer's no-mask
+	// path does tmpObject = requestObject, so the request needs complete metadata from
+	// the DB clone — SetSpec would leave metadata empty, triggering check_immutable_columns.
+	// Restore the client's original version so optimistic locking still works.
+	clientVersion := request.GetObject().GetMetadata().GetVersion()
+	request.SetObject(merged)
+	request.GetObject().GetMetadata().SetVersion(clientVersion)
 
 	err = s.generic.Update(ctx, request, &response)
 	return
@@ -304,6 +309,12 @@ func validateInstanceTypeImmutability(merged, existing *privatev1.InstanceType) 
 func handleInstanceTypeStateTransition(existing, merged *privatev1.InstanceType) bool {
 	oldState := existing.GetSpec().GetState()
 	newState := merged.GetSpec().GetState()
+
+	// Guard: UNSPECIFIED means the client did not set a state; preserve the existing one.
+	if newState == privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_UNSPECIFIED {
+		merged.GetSpec().SetState(oldState)
+		return false
+	}
 
 	// D-02: Same-state update is a no-op for timestamps.
 	if oldState == newState {

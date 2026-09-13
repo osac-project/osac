@@ -10,6 +10,8 @@
 # controller itself stays enabled (kind-instance.yaml: operator.controllers.networking=true)
 # so it still runs and marks resources Ready.
 operator:
+  image:
+    pullPolicy: IfNotPresent
   controllers:
     networkingProvisioning: false
     storage: true
@@ -25,6 +27,8 @@ operator:
 # local PVs) which doesn't require external storage array controllers.
 csiDriver:
   enabled: true
+  image:
+    pullPolicy: IfNotPresent
 
 # csiBackends chart is deployed (same condition as csiDriver), but all vendor
 # backends are disabled. To enable a backend for testing, set csiBackends.<vendor>.enabled: true
@@ -45,6 +49,8 @@ csiBackends: {}
 # left as-is — only in-cluster controllers use it, never the browser.
 service:
   externalHostname: fulfillment-api.osac.localhost
+  images:
+    pullPolicy: IfNotPresent
   auth:
     issuerUrl: https://keycloak.osac.localhost:8443/realms/osac
   idp:

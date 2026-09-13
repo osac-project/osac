@@ -164,24 +164,33 @@ func mapCIConditionStatus(status metav1.ConditionStatus) privatev1.ConditionStat
 }
 
 func syncCIPhase(ctx context.Context, obj *ckv1alpha1.ComputeInstance, remote *privatev1.ComputeInstance) {
+	oldState := remote.GetStatus().GetState()
+	var newState privatev1.ComputeInstanceState
+
 	switch obj.Status.Phase {
 	case ckv1alpha1.ComputeInstancePhaseStarting:
-		remote.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING)
+		newState = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING
 	case ckv1alpha1.ComputeInstancePhaseFailed:
-		remote.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED)
+		newState = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED
 	case ckv1alpha1.ComputeInstancePhaseRunning:
-		remote.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING)
+		newState = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING
 	case ckv1alpha1.ComputeInstancePhaseDeleting:
-		remote.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING)
+		newState = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING
 	case ckv1alpha1.ComputeInstancePhaseStopping:
-		remote.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPING)
+		newState = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPING
 	case ckv1alpha1.ComputeInstancePhaseStopped:
-		remote.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPED)
+		newState = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPED
 	case ckv1alpha1.ComputeInstancePhasePaused:
-		remote.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_PAUSED)
+		newState = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_PAUSED
 	default:
 		log := ctrllog.FromContext(ctx)
 		log.Info("Unknown phase, will ignore it", "phase", obj.Status.Phase)
+		return
+	}
+
+	remote.GetStatus().SetState(newState)
+	if newState != oldState {
+		remote.GetStatus().SetStateTransitionTime(timestamppb.Now())
 	}
 }
 

@@ -412,6 +412,21 @@
         fail_msg: "No local provider DELETE call found — orphaned provider not cleaned up"
         success_msg: "Local provider deleted by ID from hub Secret"
 
+    - name: Assert tenant DELETE precedes local provider DELETE (correct ordering)
+      vars:
+        _delete_paths: "{{ _call_log | selectattr('method', 'equalto', 'DELETE') | map(attribute='path') | list }}"
+        _tenant_del_paths: "{{ _delete_paths | select('search', 'tenants/') | list }}"
+        _lp_del_paths: "{{ _delete_paths | select('search', 'localproviders/') | list }}"
+      ansible.builtin.assert:
+        that:
+          - _tenant_del_paths | length > 0
+          - _lp_del_paths | length > 0
+          - _delete_paths.index(_tenant_del_paths[0]) < _delete_paths.index(_lp_del_paths[0])
+        fail_msg: >-
+          Tenant must be deleted before local provider (OSAC-4854).
+          DELETE call order: {{ _delete_paths }}
+        success_msg: "Correct order: tenant deleted before local provider"
+
 # ── Cleanup: Best-effort removal of any remaining resources ──
 - name: "Storage Provider Teardown - Final cleanup"
   hosts: localhost

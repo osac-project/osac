@@ -25,6 +25,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
@@ -558,10 +559,20 @@ func (p *DefaultNetworkingProvisioner) updateExternalIPAttachedFlag(ctx context.
 // nil immediately.
 //
 // This bypasses the "default resources are system-managed" protection enforced by
-// validateNotDefault() in the private servers' Delete() handlers, because it operates on the DAOs
-// directly rather than going through those handlers — it is the system removing what it itself
-// created, not a user request going through the normal API path.
+// validateNotDefault() in the private servers' Delete() handlers and the database-level
+// check_not_default_networking trigger, because it operates on the DAOs directly rather
+// than going through those handlers — it is the system removing what it itself created,
+// not a user request going through the normal API path. The database trigger is bypassed
+// by setting the transaction-local GUC osac.deprovision_in_progress = 'true'.
 func (p *DefaultNetworkingProvisioner) Deprovision(ctx context.Context, tenantName string) error {
+	tx, err := database.TxFromContext(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get transaction: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `SET LOCAL "osac.deprovision_in_progress" = 'true'`); err != nil {
+		return fmt.Errorf("failed to set deprovision bypass flag: %w", err)
+	}
+
 	vn, err := p.findDefaultVirtualNetwork(ctx, tenantName)
 	if err != nil {
 		return fmt.Errorf("failed to find default VirtualNetwork: %w", err)

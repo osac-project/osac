@@ -71,7 +71,7 @@ native_gate_conclusion() {
       .name == $g
       and ((.details_url // "") | test("/actions/runs/[0-9]+/job/"))
     )]
-    | sort_by(.created_at)
+    | sort_by(.started_at)
     | last) as $last
     | if $last == null then "missing"
       elif $last.status != "completed" then "pending"

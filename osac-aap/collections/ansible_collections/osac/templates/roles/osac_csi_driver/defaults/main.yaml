@@ -1,0 +1,43 @@
+---
+# Namespace created on the tenant cluster for the OSAC CSI driver workloads.
+# Must match the csi-driver Helm chart's .Values.namespace default.
+osac_csi_driver_namespace: osac-csi
+
+# CSI driver name registered with Kubernetes (must match provisioner in StorageClasses).
+osac_csi_driver_name: csi.osac.openshift.io
+
+# OCI registry path for the csi-driver Helm chart.  Matches csi_driver_install_chart_registry
+# used by osac.service.csi_driver_install (OSAC-3290) for consistency.
+osac_csi_driver_chart_ref: oci://ghcr.io/osac-project/charts/csi-driver
+
+# Chart version to deploy.  Pinned to the same version as csi_driver_install_chart_version
+# in osac.service.csi_driver_install so hub and tenant clusters run identical binaries.
+osac_csi_driver_chart_version: "0.0.1"
+
+# Helm release name on the tenant cluster.  Matches the hub-side release name used by
+# osac.service.csi_driver_install so tooling, dashboards, and runbooks use a consistent name.
+# The csi-driver chart's fullname template produces "<release>-controller" for the Deployment
+# when the release name already contains the chart name ("csi-driver" ⊆ "csi-driver").
+osac_csi_driver_helm_release: csi-driver
+
+# Hub Secret name prefix written by OSAC-4197 for the tenant CSI service identity.
+# Full name: <prefix><tenant_name>
+osac_csi_driver_hub_secret_prefix: "osac-csi-driver-"
+
+# Hub namespace where the OSAC-4197 credential Secret is stored.
+osac_csi_driver_hub_secret_namespace: >-
+  {{ lookup('env', 'OSAC_STORAGE_CONFIG_NAMESPACE')
+     | default(lookup('file', '/var/run/secrets/kubernetes.io/serviceaccount/namespace', errors='ignore'), true) }}
+
+# Name of the Kubernetes Secret created on the tenant cluster holding OAuth2 credentials.
+osac_csi_driver_credentials_secret_name: osac-csi-driver-credentials
+
+# TLS: set true to skip TLS verification when the fulfillment-service endpoint uses a
+# self-signed certificate.  Should be false in production.
+osac_csi_driver_fulfillment_tls_insecure: false
+
+# StorageClass reclaim policy.
+osac_csi_driver_reclaim_policy: Delete
+
+# StorageClass volumeBindingMode. WaitForFirstConsumer is safe for all opaque tiers.
+osac_csi_driver_volume_binding_mode: WaitForFirstConsumer

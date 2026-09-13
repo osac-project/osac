@@ -1,0 +1,61 @@
+---
+# OSAC CSI driver teardown_cluster_storage:
+#   1. Delete per-tenant StorageClasses (provisioner csi.osac.openshift.io).
+#   2. Uninstall the OSAC CSI Helm release from the tenant cluster.
+#   3. Delete the tenant credential Secret from the tenant cluster.
+#   4. Delete the OSAC CSI driver namespace.
+#
+# Best-effort: individual failures are logged and do not block subsequent steps,
+# consistent with the CaaS teardown pattern in storage_controller.go.
+# Called only when _remote_kubeconfig is defined (CaaS path).
+
+- name: Assert _provider_tiers is defined and non-empty
+  ansible.builtin.assert:
+    that:
+      - _provider_tiers is defined
+      - _provider_tiers | length > 0
+    fail_msg: _provider_tiers must be provided by the service role dispatcher.
+
+- name: Delete per-tenant OSAC CSI StorageClasses on guest cluster
+  kubernetes.core.k8s:
+    state: absent
+    definition:
+      apiVersion: storage.k8s.io/v1
+      kind: StorageClass
+      metadata:
+        name: "osac-{{ tenant_name }}-{{ item.name }}"
+  loop: "{{ _provider_tiers }}"
+  loop_control:
+    label: "osac-{{ tenant_name }}-{{ item.name }}"
+  ignore_errors: true  # noqa: ignore-errors
+
+- name: Uninstall OSAC CSI driver Helm release from guest cluster
+  kubernetes.core.helm:
+    kubeconfig: "{{ _remote_kubeconfig }}"
+    release_name: "{{ osac_csi_driver_helm_release }}"
+    release_namespace: "{{ osac_csi_driver_namespace }}"
+    state: absent
+    wait: true
+    wait_timeout: 3m
+  ignore_errors: true  # noqa: ignore-errors
+
+- name: Delete tenant credential Secret from guest cluster
+  kubernetes.core.k8s:
+    state: absent
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: "{{ osac_csi_driver_credentials_secret_name }}"
+        namespace: "{{ osac_csi_driver_namespace }}"
+  ignore_errors: true  # noqa: ignore-errors
+
+- name: Delete OSAC CSI driver namespace from guest cluster
+  kubernetes.core.k8s:
+    state: absent
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ osac_csi_driver_namespace }}"
+  ignore_errors: true  # noqa: ignore-errors

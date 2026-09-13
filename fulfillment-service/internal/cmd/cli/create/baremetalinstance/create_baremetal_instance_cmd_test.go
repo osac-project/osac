@@ -133,6 +133,23 @@ var _ = Describe("applyNetworkingFlags", func() {
 })
 
 var _ = Describe("Create baremetalinstance flag registration", func() {
+	It("should register --disk-image flag", func() {
+		cmd := Cmd()
+		cmd.SetOut(GinkgoWriter)
+		cmd.SetErr(GinkgoWriter)
+
+		flag := cmd.Flags().Lookup("disk-image")
+		Expect(flag).NotTo(BeNil())
+		Expect(flag.Usage).To(ContainSubstring("DiskImage"))
+		Expect(cmd.ParseFlags([]string{"--disk-image", "rhel-9"})).To(Succeed())
+	})
+
+	It("should not register legacy image flags", func() {
+		cmd := Cmd()
+		Expect(cmd.Flags().Lookup("image")).To(BeNil())
+		Expect(cmd.Flags().Lookup("image-source-type")).To(BeNil())
+	})
+
 	It("should register --network-attachment flag", func() {
 		cmd := Cmd()
 		cmd.SetOut(GinkgoWriter)
@@ -140,6 +157,25 @@ var _ = Describe("Create baremetalinstance flag registration", func() {
 		flag := cmd.Flags().Lookup("network-attachment")
 		Expect(flag).NotTo(BeNil())
 		Expect(flag.Usage).To(ContainSubstring("network attachment"))
+	})
+})
+
+var _ = Describe("buildSpec", func() {
+	It("should set disk_image from the disk-image flag", func() {
+		c := &runnerContext{}
+		c.args.diskImage = "rhel-9"
+
+		spec, err := c.buildSpec("catalog-item-id", false)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(spec.GetDiskImage().GetName()).To(Equal("rhel-9"))
+	})
+
+	It("should leave disk_image unset when the disk-image flag is empty", func() {
+		c := &runnerContext{}
+
+		spec, err := c.buildSpec("catalog-item-id", false)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(spec.HasDiskImage()).To(BeFalse())
 	})
 })
 

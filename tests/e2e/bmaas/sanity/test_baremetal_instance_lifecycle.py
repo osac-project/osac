@@ -89,12 +89,15 @@ def test_baremetal_instance_lifecycle(
     grpc: GRPCClient,
     k8s_hub_client: K8sClient,
     catalog_item: str,
+    disk_image: str,
     bmh_namespace: str,
     test_run_id: str,
     ssh_public_key: str,
 ) -> None:
     name = f"e2e-bmi-{test_run_id}"
-    bmi_id: str = cli.create_baremetal_instance(name=name, catalog_item=catalog_item, ssh_key=ssh_public_key)
+    bmi_id: str = cli.create_baremetal_instance(
+        name=name, catalog_item=catalog_item, ssh_key=ssh_public_key, disk_image=disk_image
+    )
     bmh_ns = ""
     bmh_name = ""
 
@@ -189,12 +192,15 @@ def test_baremetal_instance_restart(
     grpc: GRPCClient,
     k8s_hub_client: K8sClient,
     catalog_item: str,
+    disk_image: str,
     bmh_namespace: str,
     test_run_id: str,
     ssh_public_key: str,
 ) -> None:
     name: str = f"e2e-bmi-restart-{test_run_id}"
-    bmi_id: str = cli.create_baremetal_instance(name=name, catalog_item=catalog_item, ssh_key=ssh_public_key)
+    bmi_id: str = cli.create_baremetal_instance(
+        name=name, catalog_item=catalog_item, ssh_key=ssh_public_key, disk_image=disk_image
+    )
 
     try:
         assert bmi_id in grpc.list_baremetal_instance_ids()

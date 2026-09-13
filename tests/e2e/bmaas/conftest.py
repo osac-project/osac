@@ -11,6 +11,8 @@ import pytest
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.runner import env
 
+DISK_IMAGE_SOURCE_REF = "quay.io/containerdisks/fedora:41"
+
 
 @pytest.fixture(scope="session")
 def bmi_template() -> str:
@@ -40,7 +42,22 @@ def ssh_public_key() -> Generator[str, None, None]:
 
 
 @pytest.fixture(scope="session")
-def catalog_item(private_grpc: GRPCClient, bmi_template: str, test_run_id: str) -> Generator[str, None, None]:
+def disk_image(grpc: GRPCClient, test_run_id: str) -> Generator[str, None, None]:
+    name = f"e2e-bmaas-di-{test_run_id}"
+    image_id = grpc.create_disk_image(
+        name=name,
+        source_ref=DISK_IMAGE_SOURCE_REF,
+        guest_os_family="GUEST_OS_FAMILY_LINUX",
+        architecture=["ARCHITECTURE_AMD64"],
+    )
+    yield name
+    grpc.delete_disk_image(disk_image_id=image_id)
+
+
+@pytest.fixture(scope="session")
+def catalog_item(
+    private_grpc: GRPCClient, bmi_template: str, test_run_id: str, disk_image: str
+) -> Generator[str, None, None]:
     name = f"e2e-bmaas-{test_run_id}"
     print(f"\nCreating BareMetalInstanceCatalogItem: {name}")
     item_id: str = private_grpc.create_baremetal_instance_catalog_item(
@@ -48,7 +65,10 @@ def catalog_item(private_grpc: GRPCClient, bmi_template: str, test_run_id: str) 
         title=f"E2E BMaaS Test ({test_run_id})",
         description="Temporary catalog item for BMaaS E2E tests",
         template=bmi_template,
-        field_definitions=[{"path": "ssh_public_key", "display_name": "SSH Public Key", "editable": True}],
+        field_definitions=[
+            {"path": "ssh_public_key", "display_name": "SSH Public Key", "editable": True},
+            {"path": "disk_image", "display_name": "Disk Image", "editable": True},
+        ],
     )
     print(f"CatalogItem created: {item_id}")
 

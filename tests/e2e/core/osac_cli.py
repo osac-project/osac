@@ -285,6 +285,7 @@ class OsacCLI:
         name: str,
         catalog_item: str,
         ssh_key: str | None = None,
+        disk_image: str | None = None,
         user_data: str | None = None,
         network_attachments: list[str] | None = None,
         external_ip_attachment: bool = False,
@@ -292,6 +293,8 @@ class OsacCLI:
         args: list[str] = ["create", "baremetalinstance", "--name", name, "--catalog-item", catalog_item]
         if ssh_key is not None:
             args.extend(["--ssh-key", ssh_key])
+        if disk_image is not None:
+            args.extend(["--disk-image", disk_image])
         if user_data is not None:
             args.extend(["--user-data", user_data])
         if external_ip_attachment:

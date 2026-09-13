@@ -641,34 +641,20 @@ func (s *PrivateComputeInstancesServer) validateInstanceType(
 ) ([]string, error) {
 	spec := ci.GetSpec()
 	instanceTypeRef := spec.GetInstanceType()
-	var warnings []string
-	var instanceTypeName string
-
-	if instanceTypeRef != nil {
-		instanceTypeName = refKey(instanceTypeRef)
+	if instanceTypeRef == nil {
+		return nil, nil
 	}
 
+	instanceTypeName := refKey(instanceTypeRef)
 	if instanceTypeName == "" {
-		// instance_type not on the spec directly. If a template is referenced
-		// (e.g. via catalog item), check whether its spec_defaults provide one.
-		if templateRef := spec.GetTemplate(); templateRef != nil {
-			template, fetchErr := s.fetchTemplate(ctx, refKey(templateRef))
-			if fetchErr == nil && template.GetSpecDefaults().HasInstanceType() {
-				instanceTypeName = refKey(template.GetSpecDefaults().GetInstanceType())
-			}
-		}
-	}
-
-	if instanceTypeName == "" {
-		return warnings, nil
+		return nil, nil
 	}
 
 	// Look up the instance type and validate its state.
-	stateWarnings, err := validateInstanceTypeState(ctx, s.instanceTypesDao, instanceTypeName, "")
+	warnings, err := validateInstanceTypeState(ctx, s.instanceTypesDao, instanceTypeName, "")
 	if err != nil {
 		return nil, err
 	}
-	warnings = append(warnings, stateWarnings...)
 
 	return warnings, nil
 }

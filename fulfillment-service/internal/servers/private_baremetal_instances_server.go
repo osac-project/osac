@@ -70,6 +70,7 @@ type PrivateBareMetalInstancesServer struct {
 	externalIPAttachmentDao *dao.GenericDAO[*privatev1.ExternalIPAttachment]
 	secretsDao              *dao.GenericDAO[*privatev1.Secret]
 	secretStore             vault.SecretStore
+	lifecycle               *externalIPLifecycle
 }
 
 func NewPrivateBareMetalInstancesServer() *PrivateBareMetalInstancesServerBuilder {
@@ -190,29 +191,32 @@ func (b *PrivateBareMetalInstancesServerBuilder) Build() (result *PrivateBareMet
 		return
 	}
 
-	externalIPPoolDao, err := dao.NewGenericDAO[*privatev1.ExternalIPPool]().
+	externalIPPoolDaoBuilder := dao.NewGenericDAO[*privatev1.ExternalIPPool]().
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
-		SetMetricsRegisterer(b.metricsRegisterer).
-		Build()
+		SetMetricsRegisterer(b.metricsRegisterer)
+	addDAOEventCallback(externalIPPoolDaoBuilder, b.notifier)
+	externalIPPoolDao, err := externalIPPoolDaoBuilder.Build()
 	if err != nil {
 		return
 	}
 
-	externalIPDao, err := dao.NewGenericDAO[*privatev1.ExternalIP]().
+	externalIPDaoBuilder := dao.NewGenericDAO[*privatev1.ExternalIP]().
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
-		SetMetricsRegisterer(b.metricsRegisterer).
-		Build()
+		SetMetricsRegisterer(b.metricsRegisterer)
+	addDAOEventCallback(externalIPDaoBuilder, b.notifier)
+	externalIPDao, err := externalIPDaoBuilder.Build()
 	if err != nil {
 		return
 	}
 
-	externalIPAttachmentDao, err := dao.NewGenericDAO[*privatev1.ExternalIPAttachment]().
+	externalIPAttachmentDaoBuilder := dao.NewGenericDAO[*privatev1.ExternalIPAttachment]().
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
-		SetMetricsRegisterer(b.metricsRegisterer).
-		Build()
+		SetMetricsRegisterer(b.metricsRegisterer)
+	addDAOEventCallback(externalIPAttachmentDaoBuilder, b.notifier)
+	externalIPAttachmentDao, err := externalIPAttachmentDaoBuilder.Build()
 	if err != nil {
 		return
 	}
@@ -257,6 +261,16 @@ func (b *PrivateBareMetalInstancesServerBuilder) Build() (result *PrivateBareMet
 		secretsDao:              secretsDao,
 		secretStore:             b.secretStore,
 	}
+	result.lifecycle = newExternalIPLifecycle(
+		externalIPDao,
+		externalIPAttachmentDao,
+		nil,
+		externalIPPoolDao,
+		nil,
+		nil,
+		generic.dao,
+		nil,
+	)
 	return
 }
 
@@ -460,63 +474,15 @@ func (s *PrivateBareMetalInstancesServer) autoCleanupExternalIP(ctx context.Cont
 		s.logger.InfoContext(ctx, "Auto-EIP cleanup: deleting attachment",
 			slog.String("attachment_id", attachmentID), slog.String("eip_id", eipID))
 
-		_, err = s.externalIPAttachmentDao.Delete().SetId(attachmentID).Do(ctx)
-		if err != nil {
-			return fmt.Errorf("auto_external_ip_attachment cleanup: failed to delete attachment %s: %w", attachmentID, err)
-		}
-
-		if s.notifier != nil {
-			attResp, getErr := s.externalIPAttachmentDao.Get().SetId(attachmentID).Do(ctx)
-			if getErr == nil {
-				attEvent := privatev1.Event_builder{
-					Type:                 privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
-					ExternalIpAttachment: attResp.GetObject(),
-				}.Build()
-				if notifyErr := s.notifier.Notify(ctx, attEvent); notifyErr != nil {
-					s.logger.WarnContext(ctx, "Failed to notify ExternalIPAttachment deletion", "error", notifyErr)
-				}
-			}
-		}
-
 		if eipID != "" {
-			err = s.updateExternalIPAttachedFlag(ctx, eipID, false)
-			if err != nil {
-				return fmt.Errorf("auto_external_ip_attachment cleanup: %w", err)
-			}
-
-			eipResp, getErr := s.externalIPDao.Get().SetId(eipID).Do(ctx)
-			if getErr != nil {
-				return fmt.Errorf("auto_external_ip_attachment cleanup: failed to get ExternalIP: %w", getErr)
-			}
-			poolRef := eipResp.GetObject().GetSpec().GetPool()
-
-			_, err = s.externalIPDao.Delete().SetId(eipID).Do(ctx)
-			if err != nil {
-				return fmt.Errorf("auto_external_ip_attachment cleanup: failed to delete ExternalIP %s: %w", eipID, err)
-			}
-
-			if s.notifier != nil {
-				updatedEIP, getErr := s.externalIPDao.Get().SetId(eipID).Do(ctx)
-				if getErr == nil {
-					eipEvent := privatev1.Event_builder{
-						Type:       privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
-						ExternalIp: updatedEIP.GetObject(),
-					}.Build()
-					if notifyErr := s.notifier.Notify(ctx, eipEvent); notifyErr != nil {
-						s.logger.WarnContext(ctx, "Failed to notify ExternalIP deletion", "error", notifyErr)
-					}
-				}
-			}
-
+			err = s.lifecycle.deleteAttachmentAndExternalIP(ctx, attachmentID, eipID)
 			s.logger.InfoContext(ctx, "Auto-EIP cleanup: deleted attachment and EIP",
 				slog.String("attachment_id", attachmentID), slog.String("eip_id", eipID))
-
-			if poolRef != nil {
-				err = UpdatePoolCapacity(ctx, s.externalIPPoolDao, refKey(poolRef), -1)
-				if err != nil {
-					return fmt.Errorf("auto_external_ip_attachment cleanup: %w", err)
-				}
-			}
+		} else {
+			err = s.lifecycle.deleteAttachment(ctx, attachmentID)
+		}
+		if err != nil {
+			return fmt.Errorf("auto_external_ip_attachment cleanup: %w", err)
 		}
 	}
 
@@ -1257,6 +1223,11 @@ func (s *PrivateBareMetalInstancesServer) autoProvisionExternalIP(
 	}
 	eipID := eipResp.GetObject().GetId()
 
+	err = s.lifecycle.lockNewBareMetalAttachmentReferences(ctx, eipID, bmiID)
+	if err != nil {
+		return fmt.Errorf("auto_external_ip_attachment: failed to lock attachment references: %w", err)
+	}
+
 	err = UpdatePoolCapacity(ctx, s.externalIPPoolDao, pool.GetId(), 1)
 	if err != nil {
 		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "auto_external_ip_attachment: %s", err)
@@ -1284,52 +1255,10 @@ func (s *PrivateBareMetalInstancesServer) autoProvisionExternalIP(
 		}.Build(),
 	}.Build()
 
-	attResp, err := s.externalIPAttachmentDao.Create().SetObject(attachment).Do(ctx)
+	_, err = s.externalIPAttachmentDao.Create().SetObject(attachment).Do(ctx)
 	if err != nil {
 		return fmt.Errorf("auto_external_ip_attachment: failed to create ExternalIPAttachment: %w", err)
 	}
 
-	err = s.updateExternalIPAttachedFlag(ctx, eipID, true)
-	if err != nil {
-		return fmt.Errorf("auto_external_ip_attachment: %w", err)
-	}
-
-	if s.notifier != nil {
-		eipEvent := privatev1.Event_builder{
-			Type:       privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
-			ExternalIp: eipResp.GetObject(),
-		}.Build()
-		if notifyErr := s.notifier.Notify(ctx, eipEvent); notifyErr != nil {
-			s.logger.WarnContext(ctx, "Failed to notify ExternalIP creation", "error", notifyErr)
-		}
-
-		attEvent := privatev1.Event_builder{
-			Type:                 privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
-			ExternalIpAttachment: attResp.GetObject(),
-		}.Build()
-		if notifyErr := s.notifier.Notify(ctx, attEvent); notifyErr != nil {
-			s.logger.WarnContext(ctx, "Failed to notify ExternalIPAttachment creation", "error", notifyErr)
-		}
-	}
-
-	return nil
-}
-
-func (s *PrivateBareMetalInstancesServer) updateExternalIPAttachedFlag(ctx context.Context, externalIPID string, attached bool) error {
-	getResponse, err := s.externalIPDao.Get().
-		SetId(externalIPID).
-		SetLock(true).
-		Do(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get ExternalIP for attached flag update: %w", err)
-	}
-
-	eip := getResponse.GetObject()
-	eip.GetStatus().SetAttached(attached)
-
-	_, err = s.externalIPDao.Update().SetObject(eip).Do(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to update ExternalIP attached flag: %w", err)
-	}
 	return nil
 }

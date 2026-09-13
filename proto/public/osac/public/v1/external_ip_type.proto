@@ -92,6 +92,7 @@ message ExternalIPStatus {
   // Set to false when the ExternalIPAttachment is deleted. An ExternalIP with attached = true
   // cannot be deleted; the ExternalIPAttachment must be deleted first.
   bool attached = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
+
 }
 
 // Lifecycle states for ExternalIP resources.

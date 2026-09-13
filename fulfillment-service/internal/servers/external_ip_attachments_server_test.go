@@ -19,6 +19,8 @@ import (
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
@@ -161,6 +163,27 @@ var _ = Describe("External IP attachments server", func() {
 			Expect(response).ToNot(BeNil())
 			return response.GetObject()
 		}
+
+		It("rejects caller-supplied output status on Create", func() {
+			eip := createExternalIPInState(ctx, externalIPDao, sharedPoolID,
+				privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED, false)
+			ci := createComputeInstanceInState(ctx, computeInstanceDao,
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING)
+			_, err := externalIPAttachmentsServer.Create(ctx, publicv1.ExternalIPAttachmentsCreateRequest_builder{
+				Object: publicv1.ExternalIPAttachment_builder{
+					Metadata: publicv1.Metadata_builder{Name: "output-on-create"}.Build(),
+					Spec: publicv1.ExternalIPAttachmentSpec_builder{
+						ExternalIp:      publicv1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+						ComputeInstance: publicv1.ComputeInstanceLocalReference_builder{Id: ci.GetId()}.Build(),
+					}.Build(),
+					Status: publicv1.ExternalIPAttachmentStatus_builder{
+						State:             publicv1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_READY,
+						ExternalIpAddress: "198.51.100.13",
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(codes.InvalidArgument))
+		})
 
 		It("Creates object with ComputeInstance target", func() {
 			object := createAttachment()
@@ -342,7 +365,7 @@ var _ = Describe("External IP attachments server", func() {
 			Expect(err.Error()).To(ContainSubstring("object is mandatory"))
 		})
 
-		It("Propagates immutable field rejection from private server", func() {
+		It("rejects public lifecycle updates to spec fields", func() {
 			created := createAttachment()
 
 			_, err := externalIPAttachmentsServer.Update(ctx,
@@ -353,9 +376,29 @@ var _ = Describe("External IP attachments server", func() {
 							ExternalIp: publicv1.ExternalIPLocalReference_builder{Id: "different-ip-id"}.Build(),
 						}.Build(),
 					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.external_ip"}},
 				}.Build())
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("immutable"))
+			Expect(err.Error()).To(ContainSubstring("public lifecycle updates may only name metadata fields"))
+		})
+
+		It("rejects output-only status updates with nil and explicit masks", func() {
+			created := createAttachment()
+
+			_, err := externalIPAttachmentsServer.Update(ctx,
+				publicv1.ExternalIPAttachmentsUpdateRequest_builder{
+					Object: created,
+				}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(codes.InvalidArgument))
+
+			_, err = externalIPAttachmentsServer.Update(ctx,
+				publicv1.ExternalIPAttachmentsUpdateRequest_builder{
+					Object: publicv1.ExternalIPAttachment_builder{Id: created.GetId()}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{
+						Paths: []string{"status.state"},
+					},
+				}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(codes.InvalidArgument))
 		})
 
 		It("Delete object", func() {

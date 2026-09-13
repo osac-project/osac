@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
@@ -66,7 +67,8 @@ func NewVirtualNetworkFeedbackReconciler(hubClient clnt.Client, grpcConn *grpc.C
 		},
 		Save: func(ctx context.Context, remote *privatev1.VirtualNetwork) error {
 			_, err := vnClient.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
-				Object: remote,
+				Object:     remote,
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{feedbackStatusStatePath}},
 			}.Build())
 			return err
 		},

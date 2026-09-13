@@ -94,6 +94,16 @@ type ExternalIPStatus struct {
 	// Attached indicates whether a ExternalIPAttachment has successfully attached this IP to a target.
 	// +kubebuilder:validation:Optional
 	Attached bool `json:"attached,omitempty"`
+
+	// StateTransitionTime records when the ExternalIP entered its current state.
+	// It is authoritative for lifecycle consumers and is populated by the operator.
+	// +kubebuilder:validation:Optional
+	StateTransitionTime *metav1.Time `json:"stateTransitionTime,omitempty"`
+
+	// AttachmentTransitionTime records when the settled ExternalIP attachment changed.
+	// It is authoritative for lifecycle consumers and is populated by attachment feedback.
+	// +kubebuilder:validation:Optional
+	AttachmentTransitionTime *metav1.Time `json:"attachmentTransitionTime,omitempty"`
 }
 
 // +kubebuilder:object:root=true

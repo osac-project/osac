@@ -82,9 +82,7 @@ def _ci_create_data(
                 "instance_type": {"name": instance_type},
                 "disk_image": {"name": disk_image},
                 "boot_disk": {"storage_tier": {"name": storage_tier}},
-                "network_attachments": [
-                    {"subnet": {"name": subnet_name}, "security_groups": [{"name": sg_name}]}
-                ],
+                "network_attachments": [{"subnet": {"name": subnet_name}, "security_groups": [{"name": sg_name}]}],
             },
         }
     }

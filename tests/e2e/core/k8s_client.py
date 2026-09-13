@@ -287,6 +287,20 @@ class K8sClient:
         )
         return output if rc == 0 else ""
 
+    def get_nat_gateway_name(self, *, uuid: str, checked: bool = True) -> str:
+        output, rc = self._get(
+            "get",
+            "natgateway",
+            "-n",
+            self.namespace,
+            "-l",
+            f"osac.openshift.io/natgateway-uuid={uuid}",
+            "-o",
+            "jsonpath={.items[0].metadata.name}",
+            checked=checked,
+        )
+        return output if rc == 0 else ""
+
     # ClusterOrder queries
 
     def get_cluster_order_name(self, *, uuid: str, checked: bool = True) -> str:

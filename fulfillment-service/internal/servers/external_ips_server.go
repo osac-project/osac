@@ -198,6 +198,9 @@ func (s *ExternalIPsServer) Create(ctx context.Context,
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object is mandatory")
 		return
 	}
+	if err = rejectOutputStatusOnCreate(publicExternalIP.HasStatus()); err != nil {
+		return
+	}
 	privateExternalIP := &privatev1.ExternalIP{}
 	err = s.inMapper.Copy(ctx, publicExternalIP, privateExternalIP)
 	if err != nil {
@@ -240,6 +243,9 @@ func (s *ExternalIPsServer) Update(ctx context.Context,
 	publicExternalIP := request.GetObject()
 	if publicExternalIP == nil {
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object is mandatory")
+		return
+	}
+	if err = validatePublicMetadataUpdateMask(request.GetUpdateMask()); err != nil {
 		return
 	}
 	privateExternalIP := &privatev1.ExternalIP{}

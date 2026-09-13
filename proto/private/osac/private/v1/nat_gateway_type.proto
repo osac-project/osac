@@ -17,6 +17,7 @@ package osac.private.v1;
 
 import "cleanapi/cleanapi.proto";
 import "google/api/field_behavior.proto";
+import "google/protobuf/timestamp.proto";
 import "osac/private/v1/metadata_type.proto";
 import "osac/private/v1/external_ip_type.proto";
 import "osac/private/v1/virtual_network_type.proto";
@@ -99,6 +100,12 @@ message NATGatewayStatus {
   // Set by the fulfillment-service controller when reconciling the NAT gateway to a Kubernetes CR
   // on the target hub cluster. Used for tracking which cluster the networking resources reside on.
   string hub = 3 [(cleanapi.field).private = true, (google.api.field_behavior) = OUTPUT_ONLY];
+
+  // Time at which the NAT gateway entered its current state, as reported by the operator.
+  optional google.protobuf.Timestamp state_transition_time = 4 [
+    (cleanapi.field).private = true,
+    (google.api.field_behavior) = OUTPUT_ONLY
+  ];
 }
 
 // Lifecycle states for NATGateway resources.

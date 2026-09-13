@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
@@ -75,6 +76,9 @@ func NewVolumeFeedbackReconciler(hubClient clnt.Client, grpcConn *grpc.ClientCon
 		Save: func(ctx context.Context, remote *privatev1.Volume) error {
 			_, err := volClient.Update(ctx, privatev1.VolumesUpdateRequest_builder{
 				Object: remote,
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+					"status.state", "status.vendor_volume_id", "status.backend", "status.vendor_context", "status.protocol",
+				}},
 			}.Build())
 			return err
 		},

@@ -93,7 +93,7 @@ const (
 	// "vast=vast-csi-controller.osac-csi-backends.svc:50051").
 	envVendorControllers = "OSAC_VENDOR_CONTROLLERS"
 	// defaultStorageConfigNamespace mirrors the osac-aap/storage controller
-	// default used when OSAC_STORAGE_CONFIG_NAMESPACE is unset.
+	// default used when OSAC_STORAGE_CONFIG_NAMESPACE is unset
 	defaultStorageConfigNamespace = "osac-system"
 
 	// AAP configuration

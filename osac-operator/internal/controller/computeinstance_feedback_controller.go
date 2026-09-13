@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -93,6 +94,9 @@ func newComputeInstanceFeedbackBridge(hubClient clnt.Client, ciClient privatev1.
 		Save: func(ctx context.Context, remote *privatev1.ComputeInstance) error {
 			_, err := ciClient.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
 				Object: remote,
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+					"status.conditions", feedbackStatusStatePath, "status.external_ip_address", "status.internal_ip_address", "status.last_restarted_at",
+				}},
 			}.Build())
 			return err
 		},

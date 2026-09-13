@@ -19,6 +19,9 @@ import (
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
@@ -181,7 +184,8 @@ var _ = Describe("Public external IPs server", func() {
 			object := getResp.GetObject()
 			object.GetStatus().SetState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED)
 			_, err = privateServer.Update(ctx, privatev1.ExternalIPsUpdateRequest_builder{
-				Object: object,
+				Object:     object,
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 
@@ -189,6 +193,52 @@ var _ = Describe("Public external IPs server", func() {
 				Id: createResp.GetObject().GetId(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("rejects caller-supplied output status on Create", func() {
+			_, err := publicServer.Create(ctx, publicv1.ExternalIPsCreateRequest_builder{
+				Object: publicv1.ExternalIP_builder{
+					Metadata: publicv1.Metadata_builder{Name: "output-on-create", Tenant: testTenant}.Build(),
+					Spec:     publicv1.ExternalIPSpec_builder{Pool: publicv1.ExternalIPPoolReference_builder{Id: getPoolID()}.Build()}.Build(),
+					Status: publicv1.ExternalIPStatus_builder{
+						Attached: true,
+						Address:  "198.51.100.12",
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(codes.InvalidArgument))
+		})
+
+		It("rejects output-only status updates with nil and explicit masks", func() {
+			poolID := getPoolID()
+			createResp, err := publicServer.Create(ctx, publicv1.ExternalIPsCreateRequest_builder{
+				Object: publicv1.ExternalIP_builder{
+					Metadata: publicv1.Metadata_builder{Name: "test-eip", Tenant: testTenant}.Build(),
+					Spec:     publicv1.ExternalIPSpec_builder{Pool: publicv1.ExternalIPPoolReference_builder{Id: poolID}.Build()}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = publicServer.Update(ctx, publicv1.ExternalIPsUpdateRequest_builder{
+				Object: createResp.GetObject(),
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(codes.InvalidArgument))
+
+			_, err = publicServer.Update(ctx, publicv1.ExternalIPsUpdateRequest_builder{
+				Object: publicv1.ExternalIP_builder{Id: createResp.GetObject().GetId()}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{
+					Paths: []string{"status.state"},
+				},
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(codes.InvalidArgument))
+
+			_, err = publicServer.Update(ctx, publicv1.ExternalIPsUpdateRequest_builder{
+				Object: publicv1.ExternalIP_builder{Id: createResp.GetObject().GetId()}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{
+					Paths: []string{"status.hub"},
+				},
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(codes.InvalidArgument))
 		})
 	})
 })

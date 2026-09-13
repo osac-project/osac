@@ -198,6 +198,9 @@ func (s *NATGatewaysServer) Create(ctx context.Context,
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object is mandatory")
 		return
 	}
+	if err = rejectOutputStatusOnCreate(publicNATGateway.HasStatus()); err != nil {
+		return
+	}
 	privateNATGateway := &privatev1.NATGateway{}
 	err = s.inMapper.Copy(ctx, publicNATGateway, privateNATGateway)
 	if err != nil {
@@ -240,6 +243,9 @@ func (s *NATGatewaysServer) Update(ctx context.Context,
 	publicNATGateway := request.GetObject()
 	if publicNATGateway == nil {
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object is mandatory")
+		return
+	}
+	if err = validatePublicMetadataUpdateMask(request.GetUpdateMask()); err != nil {
 		return
 	}
 	privateNATGateway := &privatev1.NATGateway{}

@@ -88,7 +88,10 @@ func (r *DeleteRequest[O]) do(ctx context.Context) (response *DeleteResponse, er
 		&buffer,
 		`
 		update %s set
-			deletion_timestamp = now()
+			deletion_timestamp = case
+				when deletion_timestamp = 'epoch' then now()
+				else deletion_timestamp
+			end
 		where
 			%s
 		returning

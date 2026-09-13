@@ -307,7 +307,7 @@ var _ = Describe("Default networking provisioner", func() {
 			Expect(eip.GetMetadata().GetLabels()).To(HaveKeyWithValue("osac.openshift.io/default", "true"))
 			Expect(eip.GetSpec().GetPool().GetId()).To(Equal(pool.GetId()))
 			Expect(eip.GetStatus().GetState()).To(Equal(privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING))
-			Expect(eip.GetStatus().GetAttached()).To(BeTrue())
+			Expect(eip.GetStatus().GetAttached()).To(BeFalse())
 
 			ngList, err := provisioner.natGatewayDao.List().
 				SetFilter("this.metadata.tenant == 'nat-tenant'").

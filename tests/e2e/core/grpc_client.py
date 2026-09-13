@@ -278,6 +278,9 @@ class GRPCClient:
     def get_external_ip(self, *, external_ip_id: str) -> dict[str, Any]:
         return self.call(service=f"{PUBLIC_API}.ExternalIPs/Get", data={"id": external_ip_id})
 
+    def get_private_external_ip(self, *, external_ip_id: str) -> dict[str, Any]:
+        return self.call(service=f"{PRIVATE_API}.ExternalIPs/Get", data={"id": external_ip_id})
+
     def list_external_ip_ids(self) -> list[str]:
         response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.ExternalIPs/List")
         return [item["id"] for item in response.get("items", [])]

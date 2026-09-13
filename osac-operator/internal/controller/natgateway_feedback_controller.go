@@ -19,6 +19,8 @@ import (
 	"fmt"
 
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
@@ -68,6 +70,9 @@ func NewNATGatewayFeedbackReconciler(hubClient clnt.Client, grpcConn *grpc.Clien
 		Save: func(ctx context.Context, remote *privatev1.NATGateway) error {
 			_, err := ngClient.Update(ctx, privatev1.NATGatewaysUpdateRequest_builder{
 				Object: remote,
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+					feedbackStatusStatePath, feedbackStatusMessagePath, "status.hub", feedbackStatusStateTransitionTimePath,
+				}},
 			}.Build())
 			return err
 		},
@@ -107,12 +112,21 @@ func syncNATGatewayUpdate(ctx context.Context, obj *v1alpha1.NATGateway, remote 
 }
 
 func syncNATGatewayDelete(_ context.Context, obj *v1alpha1.NATGateway, remote *privatev1.NATGateway) error {
+	syncNATGatewayStateTransitionTime(obj, remote)
 	if obj.Status.Phase == v1alpha1.NATGatewayPhaseFailed {
 		remote.GetStatus().SetState(privatev1.NATGatewayState_NAT_GATEWAY_STATE_FAILED)
 		return nil
 	}
 	remote.GetStatus().SetState(privatev1.NATGatewayState_NAT_GATEWAY_STATE_DELETING)
 	return nil
+}
+
+func syncNATGatewayStateTransitionTime(obj *v1alpha1.NATGateway, remote *privatev1.NATGateway) {
+	if obj.Status.StateTransitionTime == nil {
+		remote.GetStatus().ClearStateTransitionTime()
+		return
+	}
+	remote.GetStatus().SetStateTransitionTime(timestamppb.New(obj.Status.StateTransitionTime.Time))
 }
 
 func syncNATGatewayPhase(ctx context.Context, obj *v1alpha1.NATGateway, remote *privatev1.NATGateway) {
@@ -129,4 +143,6 @@ func syncNATGatewayPhase(ctx context.Context, obj *v1alpha1.NATGateway, remote *
 		log := ctrllog.FromContext(ctx)
 		log.Info("Unknown phase, will ignore it", "phase", obj.Status.Phase)
 	}
+
+	syncNATGatewayStateTransitionTime(obj, remote)
 }

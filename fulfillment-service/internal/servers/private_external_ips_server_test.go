@@ -23,6 +23,7 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
@@ -168,6 +169,22 @@ var _ = Describe("Private external IPs server", func() {
 				Equal(privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING))
 		})
 
+		It("rejects caller-supplied output status on Create", func() {
+			_, err := externalIPsServer.Create(ctx, privatev1.ExternalIPsCreateRequest_builder{
+				Object: privatev1.ExternalIP_builder{
+					Metadata: privatev1.Metadata_builder{Name: "output-on-create", Tenant: testTenant}.Build(),
+					Spec:     privatev1.ExternalIPSpec_builder{Pool: privatev1.ExternalIPPoolReference_builder{Id: poolID}.Build()}.Build(),
+					Status: privatev1.ExternalIPStatus_builder{
+						Attached: true,
+						Address:  "198.51.100.10",
+						Pool:     poolID,
+						Hub:      "hub-1",
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		})
+
 		It("retrieves ExternalIP by ID", func() {
 			createResponse, err := externalIPsServer.Create(ctx, privatev1.ExternalIPsCreateRequest_builder{
 				Object: privatev1.ExternalIP_builder{
@@ -217,7 +234,8 @@ var _ = Describe("Private external IPs server", func() {
 
 			object.GetStatus().SetState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED)
 			updateResponse, err := externalIPsServer.Update(ctx, privatev1.ExternalIPsUpdateRequest_builder{
-				Object: object,
+				Object:     object,
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			object = updateResponse.GetObject()
@@ -367,7 +385,8 @@ var _ = Describe("Private external IPs server", func() {
 
 			object.GetStatus().SetState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED)
 			_, err = externalIPsServer.Update(ctx, privatev1.ExternalIPsUpdateRequest_builder{
-				Object: object,
+				Object:     object,
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 
@@ -397,6 +416,14 @@ var _ = Describe("Private external IPs server", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
+		It("rejects an update without an explicit mask", func() {
+			object := createExternalIPInState(externalIPsServer, privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED)
+			_, err := externalIPsServer.Update(ctx, privatev1.ExternalIPsUpdateRequest_builder{
+				Object: object,
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		})
+
 		setStateOnObject := func(object *privatev1.ExternalIP, state privatev1.ExternalIPState) {
 			if object.GetStatus() == nil {
 				object.SetStatus(privatev1.ExternalIPStatus_builder{State: state}.Build())
@@ -408,7 +435,8 @@ var _ = Describe("Private external IPs server", func() {
 		transitionTo := func(object *privatev1.ExternalIP, state privatev1.ExternalIPState) *privatev1.ExternalIP {
 			setStateOnObject(object, state)
 			resp, err := externalIPsServer.Update(ctx, privatev1.ExternalIPsUpdateRequest_builder{
-				Object: object,
+				Object:     object,
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			return resp.GetObject()
@@ -448,7 +476,8 @@ var _ = Describe("Private external IPs server", func() {
 			object := createExternalIPInState(externalIPsServer, privatev1.ExternalIPState_EXTERNAL_IP_STATE_FAILED)
 			setStateOnObject(object, privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING)
 			_, err := externalIPsServer.Update(ctx, privatev1.ExternalIPsUpdateRequest_builder{
-				Object: object,
+				Object:     object,
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
 			}.Build())
 			Expect(err).To(HaveOccurred())
 			status, ok := grpcstatus.FromError(err)
@@ -457,16 +486,24 @@ var _ = Describe("Private external IPs server", func() {
 			Expect(err.Error()).To(ContainSubstring("invalid state transition"))
 		})
 
-		It("rejects PENDING to DELETING transition", func() {
+		It("accepts PENDING to DELETING transition", func() {
 			object := createExternalIPInState(externalIPsServer, privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING)
 			setStateOnObject(object, privatev1.ExternalIPState_EXTERNAL_IP_STATE_DELETING)
 			_, err := externalIPsServer.Update(ctx, privatev1.ExternalIPsUpdateRequest_builder{
-				Object: object,
+				Object:     object,
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
 			}.Build())
-			Expect(err).To(HaveOccurred())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("accepts FAILED to DELETING transition", func() {
+			object := createExternalIPInState(externalIPsServer, privatev1.ExternalIPState_EXTERNAL_IP_STATE_FAILED)
+			setStateOnObject(object, privatev1.ExternalIPState_EXTERNAL_IP_STATE_DELETING)
+			_, err := externalIPsServer.Update(ctx, privatev1.ExternalIPsUpdateRequest_builder{
+				Object:     object,
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
 		})
 
 		It("skips state validation when UpdateMask excludes status.state", func() {
@@ -481,6 +518,49 @@ var _ = Describe("Private external IPs server", func() {
 			}.Build())
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("immutable"))
+		})
+
+		It("allows trusted lifecycle updates to status.hub", func() {
+			object := createExternalIPInState(externalIPsServer, privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED)
+			object.GetStatus().SetHub("hub-1")
+			response, err := externalIPsServer.Update(ctx, privatev1.ExternalIPsUpdateRequest_builder{
+				Object: object,
+				UpdateMask: &fieldmaskpb.FieldMask{
+					Paths: []string{"status.hub"},
+				},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetObject().GetStatus().GetHub()).To(Equal("hub-1"))
+		})
+
+		DescribeTable("rejects output-only status fields in an update mask",
+			func(path string) {
+				object := createExternalIPInState(externalIPsServer, privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED)
+				_, err := externalIPsServer.Update(ctx, privatev1.ExternalIPsUpdateRequest_builder{
+					Object: object,
+					UpdateMask: &fieldmaskpb.FieldMask{
+						Paths: []string{path},
+					},
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				status, ok := grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			},
+			Entry("attribution", "status.attribution"),
+			Entry("attached", "status.attached"),
+			Entry("pool", "status.pool"),
+			Entry("attachment transition time", "status.attachment_transition_time"),
+		)
+
+		It("allows an explicit authoritative state transition time", func() {
+			object := createExternalIPInState(externalIPsServer, privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED)
+			object.GetStatus().SetStateTransitionTime(timestamppb.Now())
+			_, err := externalIPsServer.Update(ctx, privatev1.ExternalIPsUpdateRequest_builder{
+				Object:     object,
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state_transition_time"}},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
 		})
 	})
 
@@ -505,16 +585,44 @@ var _ = Describe("Private external IPs server", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		It("rejects Delete when state is PENDING", func() {
+		It("allows Delete when state is PENDING", func() {
 			object := createExternalIPInState(externalIPsServer, privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING)
 			_, err := externalIPsServer.Delete(ctx, privatev1.ExternalIPsDeleteRequest_builder{
 				Id: object.GetId(),
 			}.Build())
-			Expect(err).To(HaveOccurred())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
-			Expect(err.Error()).To(ContainSubstring("must be in ALLOCATED state"))
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("allows Delete when state is FAILED", func() {
+			object := createExternalIPInState(externalIPsServer, privatev1.ExternalIPState_EXTERNAL_IP_STATE_FAILED)
+			_, err := externalIPsServer.Delete(ctx, privatev1.ExternalIPsDeleteRequest_builder{
+				Id: object.GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("preserves the deletion boundary and releases capacity once", func() {
+			object := createExternalIPInState(externalIPsServer, privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING)
+			object.GetMetadata().SetFinalizers([]string{"cleanup"})
+			_, err := externalIPDao.Update().SetObject(object).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = externalIPsServer.Delete(ctx, privatev1.ExternalIPsDeleteRequest_builder{Id: object.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			first, err := externalIPDao.Get().SetId(object.GetId()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			firstDeletion := first.GetObject().GetMetadata().GetDeletionTimestamp()
+			Expect(firstDeletion).ToNot(BeNil())
+
+			_, err = externalIPsServer.Delete(ctx, privatev1.ExternalIPsDeleteRequest_builder{Id: object.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			second, err := externalIPDao.Get().SetId(object.GetId()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(proto.Equal(firstDeletion, second.GetObject().GetMetadata().GetDeletionTimestamp())).To(BeTrue())
+			pool, err := externalIPPoolDao.Get().SetId(object.GetSpec().GetPool().GetId()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(pool.GetObject().GetStatus().GetAllocated()).To(Equal(int64(0)))
+			Expect(pool.GetObject().GetStatus().GetAvailable()).To(Equal(int64(100)))
 		})
 
 		It("blocks deletion of default-labeled ExternalIP", func() {
@@ -570,7 +678,8 @@ var _ = Describe("Private external IPs server", func() {
 
 			object.GetSpec().SetPool(privatev1.ExternalIPPoolReference_builder{Id: poolB}.Build())
 			_, err = externalIPsServer.Update(ctx, privatev1.ExternalIPsUpdateRequest_builder{
-				Object: object,
+				Object:     object,
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.pool"}},
 			}.Build())
 			Expect(err).To(HaveOccurred())
 			status, ok := grpcstatus.FromError(err)

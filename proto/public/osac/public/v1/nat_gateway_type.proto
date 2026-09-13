@@ -90,6 +90,7 @@ message NATGatewayStatus {
   // For PENDING state, may contain progress information like "Configuring SNAT rule".
   // For FAILED state, contains the error details. Typically empty for READY state.
   optional string message = 2 [(google.api.field_behavior) = OUTPUT_ONLY];
+
 }
 
 // Lifecycle states for NATGateway resources.

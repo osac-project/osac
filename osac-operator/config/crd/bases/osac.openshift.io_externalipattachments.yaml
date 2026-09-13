@@ -248,6 +248,12 @@ spec:
                   - type
                   type: object
                 type: array
+              stateTransitionTime:
+                description: |-
+                  StateTransitionTime records when the ExternalIPAttachment entered its current state.
+                  It is authoritative for lifecycle consumers and is populated by the operator.
+                format: date-time
+                type: string
             type: object
         required:
         - spec

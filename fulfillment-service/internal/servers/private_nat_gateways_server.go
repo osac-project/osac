@@ -48,6 +48,7 @@ type PrivateNATGatewaysServer struct {
 	externalIPDao      *dao.GenericDAO[*privatev1.ExternalIP]
 	virtualNetworksDao *dao.GenericDAO[*privatev1.VirtualNetwork]
 	networkClassesDao  *dao.GenericDAO[*privatev1.NetworkClass]
+	lifecycle          *externalIPLifecycle
 }
 
 func NewPrivateNATGatewaysServer() *PrivateNATGatewaysServerBuilder {
@@ -117,6 +118,14 @@ func (b *PrivateNATGatewaysServerBuilder) Build() (result *PrivateNATGatewaysSer
 	if err != nil {
 		return
 	}
+	externalIPAttachmentDao, err := dao.NewGenericDAO[*privatev1.ExternalIPAttachment]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
 
 	networkClassesDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
 		SetLogger(b.logger).
@@ -147,6 +156,16 @@ func (b *PrivateNATGatewaysServerBuilder) Build() (result *PrivateNATGatewaysSer
 		virtualNetworksDao: virtualNetworksDao,
 		networkClassesDao:  networkClassesDao,
 	}
+	result.lifecycle = newExternalIPLifecycle(
+		externalIPDao,
+		externalIPAttachmentDao,
+		generic.dao,
+		nil,
+		nil,
+		nil,
+		nil,
+		virtualNetworksDao,
+	)
 	return
 }
 
@@ -165,6 +184,9 @@ func (s *PrivateNATGatewaysServer) Get(ctx context.Context,
 func (s *PrivateNATGatewaysServer) Create(ctx context.Context,
 	request *privatev1.NATGatewaysCreateRequest) (response *privatev1.NATGatewaysCreateResponse, err error) {
 	natGateway := request.GetObject()
+	if err = rejectOutputStatusOnCreate(natGateway != nil && natGateway.HasStatus()); err != nil {
+		return
+	}
 
 	err = s.validateNATGateway(natGateway)
 	if err != nil {
@@ -196,7 +218,6 @@ func (s *PrivateNATGatewaysServer) Create(ctx context.Context,
 		return
 	}
 
-	err = s.updateExternalIPAttachedFlag(ctx, externalIPKey, true)
 	return
 }
 
@@ -209,15 +230,18 @@ func (s *PrivateNATGatewaysServer) Update(ctx context.Context,
 	}
 
 	mask := request.GetUpdateMask()
+	if err = validatePrivateLifecycleUpdateMask(mask,
+		[]string{"status.state", "status.message", "status.hub", "status.state_transition_time"},
+		nil); err != nil {
+		return
+	}
+	_, existingGateway, lockErr := s.lifecycle.lockNATGateway(ctx, id)
+	if lockErr != nil {
+		err = translateLifecycleError(lockErr)
+		return
+	}
 	if updateIncludesField(mask, "spec.virtual_network", "spec.external_ip") {
-		getRequest := &privatev1.NATGatewaysGetRequest{}
-		getRequest.SetId(id)
-		var getResponse *privatev1.NATGatewaysGetResponse
-		err = s.generic.Get(ctx, getRequest, &getResponse)
-		if err != nil {
-			return
-		}
-		err = validateImmutableFieldsNATGateway(request.GetObject(), getResponse.GetObject())
+		err = validateImmutableFieldsNATGateway(request.GetObject(), existingGateway)
 		if err != nil {
 			return
 		}
@@ -235,26 +259,20 @@ func (s *PrivateNATGatewaysServer) Delete(ctx context.Context,
 		return
 	}
 
-	getRequest := &privatev1.NATGatewaysGetRequest{}
-	getRequest.SetId(id)
-	var getResponse *privatev1.NATGatewaysGetResponse
-	err = s.generic.Get(ctx, getRequest, &getResponse)
+	getResponse, err := s.lifecycle.natGatewayDao.Get().SetId(id).SetLock(true).Do(ctx)
 	if err != nil {
 		return
 	}
 	if err = validateNotDefault(getResponse.GetObject().GetMetadata().GetLabels(), "NAT gateway"); err != nil {
 		return
 	}
-
-	externalIPRef := getResponse.GetObject().GetSpec().GetExternalIp()
-
-	err = s.generic.Delete(ctx, request, &response)
-	if err != nil {
+	if getResponse.GetObject().GetMetadata().GetDeletionTimestamp() != nil {
+		response = &privatev1.NATGatewaysDeleteResponse{}
 		return
 	}
-
-	if externalIPRef != nil {
-		err = s.updateExternalIPAttachedFlag(ctx, refKey(externalIPRef), false)
+	err = translateLifecycleError(s.lifecycle.deleteNATGateway(ctx, id))
+	if err == nil {
+		response = &privatev1.NATGatewaysDeleteResponse{}
 	}
 	return
 }
@@ -329,10 +347,8 @@ func (s *PrivateNATGatewaysServer) validateExternalIPReference(
 			"ExternalIP '%s' is not in ALLOCATED state (current state: %s)",
 			externalIPID, externalIP.GetStatus().GetState().String())
 	}
-
-	if externalIP.GetStatus().GetAttached() {
-		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
-			"ExternalIP '%s' is already attached", externalIPID)
+	if err := s.lifecycle.ensureExternalIPAvailable(ctx, externalIPID); err != nil {
+		return err
 	}
 
 	return nil
@@ -378,36 +394,6 @@ func (s *PrivateNATGatewaysServer) validateNetworkClassHasFabricManager(
 		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
 			"VirtualNetwork '%s' uses NetworkClass '%s' which has no 'fabric_manager'; NAT gateways require a fabric manager",
 			virtualNetworkID, networkClassID)
-	}
-
-	return nil
-}
-
-func (s *PrivateNATGatewaysServer) updateExternalIPAttachedFlag(
-	ctx context.Context, externalIPID string, attached bool) error {
-	getResponse, err := s.externalIPDao.Get().
-		SetId(externalIPID).
-		SetLock(true).
-		Do(ctx)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to get ExternalIP for attached flag update",
-			slog.String("external_ip_id", externalIPID),
-			slog.Any("error", err))
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to update ExternalIP attached status")
-	}
-
-	externalIP := getResponse.GetObject()
-	externalIP.GetStatus().SetAttached(attached)
-
-	_, err = s.externalIPDao.Update().
-		SetObject(externalIP).
-		Do(ctx)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to update ExternalIP attached flag",
-			slog.String("external_ip_id", externalIPID),
-			slog.Bool("attached", attached),
-			slog.Any("error", err))
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to update ExternalIP attached status")
 	}
 
 	return nil

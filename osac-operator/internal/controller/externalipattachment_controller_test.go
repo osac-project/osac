@@ -457,6 +457,7 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 			updatedPIP := &osacv1alpha1.ExternalIP{}
 			Expect(fakeClient.Get(testCtx, client.ObjectKeyFromObject(publicIP), updatedPIP)).To(Succeed())
 			Expect(updatedPIP.Status.Attached).To(BeTrue())
+			Expect(updatedPIP.Status.AttachmentTransitionTime).NotTo(BeNil())
 		})
 
 		It("should set ComputeInstance.status.externalIPAddress on provision success", func() {
@@ -690,7 +691,6 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 			fakeClient = buildClient(attachment, publicIP, pool, ci)
 			setupReconciler(fakeClient)
 
-			// Set attached=true on ExternalIP
 			pip := &osacv1alpha1.ExternalIP{}
 			Expect(fakeClient.Get(testCtx, client.ObjectKeyFromObject(publicIP), pip)).To(Succeed())
 			pip.Status.Attached = true
@@ -716,6 +716,7 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 			updatedPIP := &osacv1alpha1.ExternalIP{}
 			Expect(fakeClient.Get(testCtx, client.ObjectKeyFromObject(publicIP), updatedPIP)).To(Succeed())
 			Expect(updatedPIP.Status.Attached).To(BeFalse())
+			Expect(updatedPIP.Status.AttachmentTransitionTime).NotTo(BeNil())
 		})
 
 		It("should block deletion when deprovision fails with BlockDeletionOnFailure", func() {
@@ -1290,6 +1291,7 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 			updatedPIP := &osacv1alpha1.ExternalIP{}
 			Expect(fakeClient.Get(testCtx, client.ObjectKeyFromObject(publicIP), updatedPIP)).To(Succeed())
 			Expect(updatedPIP.Status.Attached).To(BeTrue())
+			Expect(updatedPIP.Status.AttachmentTransitionTime).NotTo(BeNil())
 		})
 
 		It("should clear ExternalIP.status.attached on deprovision with cluster target", func() {
@@ -1321,6 +1323,7 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 			updatedPIP := &osacv1alpha1.ExternalIP{}
 			Expect(fakeClient.Get(testCtx, client.ObjectKeyFromObject(publicIP), updatedPIP)).To(Succeed())
 			Expect(updatedPIP.Status.Attached).To(BeFalse())
+			Expect(updatedPIP.Status.AttachmentTransitionTime).NotTo(BeNil())
 		})
 	})
 

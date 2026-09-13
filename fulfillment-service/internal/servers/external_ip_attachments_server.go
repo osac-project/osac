@@ -197,6 +197,9 @@ func (s *ExternalIPAttachmentsServer) Create(ctx context.Context,
 	if publicAttachment == nil {
 		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "object is mandatory")
 	}
+	if err := rejectOutputStatusOnCreate(publicAttachment.HasStatus()); err != nil {
+		return nil, err
+	}
 	privateAttachment := &privatev1.ExternalIPAttachment{}
 	err := s.inMapper.Copy(ctx, publicAttachment, privateAttachment)
 	if err != nil {
@@ -237,6 +240,9 @@ func (s *ExternalIPAttachmentsServer) Update(ctx context.Context,
 	publicAttachment := request.GetObject()
 	if publicAttachment == nil {
 		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "object is mandatory")
+	}
+	if err := validatePublicMetadataUpdateMask(request.GetUpdateMask()); err != nil {
+		return nil, err
 	}
 	privateAttachment := &privatev1.ExternalIPAttachment{}
 	err := s.inMapper.Copy(ctx, publicAttachment, privateAttachment)

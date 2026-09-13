@@ -21,7 +21,9 @@ _FABRIC_MANAGER_SKIP_PATTERN = re.compile(r"require a fabric manager")
 
 # A BareMetalInstance requires at least one authentication method (ssh_public_key or
 # user_data) at create time, otherwise the resulting host would be inaccessible.
-_TEST_SSH_PUBLIC_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG8K1ZuSC7tmzxD5LJJXwkCfStVEjzXWYCFhJaLBxWAn test@example.com"
+_TEST_SSH_PUBLIC_KEY = (
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG8K1ZuSC7tmzxD5LJJXwkCfStVEjzXWYCFhJaLBxWAn test@example.com"
+)
 
 
 def _create_cluster_or_skip(cli: OsacCLI, *, catalog_item: str, name: str, version: str) -> str:

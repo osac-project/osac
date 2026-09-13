@@ -81,6 +81,12 @@ spec:
                 description: Attached indicates whether a ExternalIPAttachment has
                   successfully attached this IP to a target.
                 type: boolean
+              attachmentTransitionTime:
+                description: |-
+                  AttachmentTransitionTime records when the settled ExternalIP attachment changed.
+                  It is authoritative for lifecycle consumers and is populated by attachment feedback.
+                format: date-time
+                type: string
               conditions:
                 description: Conditions holds an array of metav1.Condition that describe
                   the state of the ExternalIP
@@ -220,6 +226,12 @@ spec:
                 - Pending
                 - Allocated
                 - Failed
+                type: string
+              stateTransitionTime:
+                description: |-
+                  StateTransitionTime records when the ExternalIP entered its current state.
+                  It is authoritative for lifecycle consumers and is populated by the operator.
+                format: date-time
                 type: string
             type: object
         required:

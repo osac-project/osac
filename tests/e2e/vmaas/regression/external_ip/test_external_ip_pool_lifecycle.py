@@ -47,10 +47,22 @@ class TestExternalIPPoolLifecycle:
         att_cr_name: str = wait_for_external_ip_attachment_cr(k8s=k8s_hub_client, uuid=att_id)
         wait_for_external_ip_attachment_ready(k8s=k8s_hub_client, name=att_cr_name)
 
+        private_ip_obj = poll_until(
+            fn=lambda: private_grpc.get_private_external_ip(external_ip_id=ip_id)["object"],
+            until=lambda item: (
+                item["status"].get("attribution", {}).get("computeInstance", {}).get("id") == ci1_uuid
+                and bool(item["status"].get("attachmentTransitionTime"))
+            ),
+            retries=30,
+            delay=5,
+            description="ExternalIP attribution settlement",
+        )
         ip_obj = grpc.get_external_ip(external_ip_id=ip_id)
         assert ip_obj["object"]["status"].get("attached") is True
         attached_ip_address: str = ip_obj["object"]["status"]["address"]
         assert attached_ip_address, "ExternalIP should have an allocated address"
+        assert private_ip_obj["status"]["attribution"]["computeInstance"]["id"] == ci1_uuid
+        assert private_ip_obj["status"].get("attachmentTransitionTime")
 
         # --- Detach (delete attachment) ---
         grpc.delete_external_ip_attachment(attachment_id=att_id)
@@ -70,6 +82,17 @@ class TestExternalIPPoolLifecycle:
         )
         att2_cr_name: str = wait_for_external_ip_attachment_cr(k8s=k8s_hub_client, uuid=att2_id)
         wait_for_external_ip_attachment_ready(k8s=k8s_hub_client, name=att2_cr_name)
+        second_private_ip = poll_until(
+            fn=lambda: private_grpc.get_private_external_ip(external_ip_id=ip_id)["object"],
+            until=lambda item: (
+                item["status"].get("attribution", {}).get("computeInstance", {}).get("id") == ci2_uuid
+                and bool(item["status"].get("attachmentTransitionTime"))
+            ),
+            retries=30,
+            delay=5,
+            description="reattached ExternalIP attribution settlement",
+        )
+        assert second_private_ip["status"]["attribution"]["computeInstance"]["id"] == ci2_uuid
 
         ip_obj = grpc.get_external_ip(external_ip_id=ip_id)
         assert ip_obj["object"]["status"]["address"] == attached_ip_address, (
@@ -106,6 +129,7 @@ class TestExternalIPPoolLifecycle:
         external_ip: tuple[str, str],
         make_compute_instances: Callable[..., tuple[tuple[str, str], ...]],
         grpc: GRPCClient,
+        private_grpc: GRPCClient,
         k8s_hub_client: K8sClient,
     ) -> None:
         _pool_id, _pool_cr_name = external_ip_pool
@@ -136,12 +160,28 @@ class TestExternalIPPoolLifecycle:
         )
         att_cr_name: str = wait_for_external_ip_attachment_cr(k8s=k8s_hub_client, uuid=att_id)
         wait_for_external_ip_attachment_ready(k8s=k8s_hub_client, name=att_cr_name)
+        poll_until(
+            fn=lambda: private_grpc.get_private_external_ip(external_ip_id=ip_id)["object"],
+            until=lambda item: (
+                bool(item["status"].get("attribution")) and bool(item["status"].get("attachmentTransitionTime"))
+            ),
+            retries=30,
+            delay=5,
+            description="duplicate-attachment ExternalIP settlement",
+        )
 
         with pytest.raises(subprocess.CalledProcessError) as exc_info:
             grpc.create_external_ip_attachment(
                 name=f"test-att-{uuid4().hex[:8]}", external_ip=ip_id, compute_instance=ci1_uuid
             )
-        assert_grpc_rejected(exc_info, "FailedPrecondition")
+        assert_grpc_rejected(exc_info, "AlreadyExists")
+
+        with pytest.raises(subprocess.CalledProcessError) as exc_info:
+            grpc.call(
+                service="osac.public.v1.ExternalIPs/Update",
+                data={"object": {"id": ip_id, "status": {"attached": False}}},
+            )
+        assert_grpc_rejected(exc_info, "InvalidArgument")
 
         grpc.delete_external_ip_attachment(attachment_id=att_id)
         wait_for_external_ip_attachment_deletion(k8s=k8s_hub_client, name=att_cr_name)

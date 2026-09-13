@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	ctrl "sigs.k8s.io/controller-runtime"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
@@ -67,7 +68,8 @@ func NewSubnetFeedbackReconciler(hubClient clnt.Client, grpcConn *grpc.ClientCon
 		},
 		Save: func(ctx context.Context, remote *privatev1.Subnet) error {
 			_, err := subnetsClient.Update(ctx, privatev1.SubnetsUpdateRequest_builder{
-				Object: remote,
+				Object:     remote,
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{feedbackStatusStatePath, feedbackStatusMessagePath}},
 			}.Build())
 			return err
 		},

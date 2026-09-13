@@ -233,12 +233,12 @@ var _ = Describe("NATGateway lifecycle", func() {
 		Expect(ng.GetSpec().GetExternalIp().GetId()).To(Equal(externalIPId))
 		Expect(ng.GetStatus().GetState()).To(Equal(publicv1.NATGatewayState_NAT_GATEWAY_STATE_PENDING))
 
-		// Verify ExternalIP attached flag is set
+		// NATGateway does not populate ExternalIPAttachment output fields.
 		ipResp, err := privateExternalIPsClient.Get(ctx, privatev1.ExternalIPsGetRequest_builder{
 			Id: externalIPId,
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		Expect(ipResp.GetObject().GetStatus().GetAttached()).To(BeTrue())
+		Expect(ipResp.GetObject().GetStatus().GetAttached()).To(BeFalse())
 
 		// Get
 		getResponse, err := natGatewaysClient.Get(ctx, publicv1.NATGatewaysGetRequest_builder{
@@ -525,7 +525,7 @@ var _ = Describe("NATGateway lifecycle", func() {
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
 	})
 
-	It("Deleting NATGateway resets ExternalIP attached flag", func() {
+	It("Deleting NATGateway leaves ExternalIP attachment output unset", func() {
 		ngId := fmt.Sprintf("test-ng-%s", uuid.New())
 		_, err := natGatewaysClient.Create(ctx, publicv1.NATGatewaysCreateRequest_builder{
 			Object: publicv1.NATGateway_builder{
@@ -545,7 +545,7 @@ var _ = Describe("NATGateway lifecycle", func() {
 			Id: externalIPId,
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		Expect(ipResp.GetObject().GetStatus().GetAttached()).To(BeTrue())
+		Expect(ipResp.GetObject().GetStatus().GetAttached()).To(BeFalse())
 
 		_, err = natGatewaysClient.Delete(ctx, publicv1.NATGatewaysDeleteRequest_builder{
 			Id: ngId,

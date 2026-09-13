@@ -3376,7 +3376,7 @@ var _ = Describe("Private compute instances server", func() {
 			eip := eipList.GetItems()[0]
 			Expect(eip.GetMetadata().GetLabels()[autoCreatedLabel]).To(Equal("true"))
 			Expect(eip.GetSpec().GetPool().GetId()).To(Equal("pool-1"))
-			Expect(eip.GetStatus().GetAttached()).To(BeTrue())
+			Expect(eip.GetStatus().GetAttached()).To(BeFalse())
 
 			// Verify ExternalIPAttachment was created
 			eiaList, err := externalIPAttachmentDao.List().

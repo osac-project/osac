@@ -171,13 +171,13 @@ func (r *NATGatewayReconciler) handleUpdate(ctx context.Context, natgw *v1alpha1
 
 	// Set phase to Progressing only on first reconcile (empty phase).
 	if natgw.Status.Phase == "" {
-		natgw.Status.Phase = v1alpha1.NATGatewayPhaseProgressing
+		setNATGatewayPhase(&natgw.Status, v1alpha1.NATGatewayPhaseProgressing)
 	}
 
 	// When networking provisioning is disabled, skip AAP job dispatch and set Ready
 	// immediately.
 	if !r.NetworkProvisioningEnabled {
-		natgw.Status.Phase = v1alpha1.NATGatewayPhaseReady
+		setNATGatewayPhase(&natgw.Status, v1alpha1.NATGatewayPhaseReady)
 		setReadyConditionTrue(&natgw.Status.Conditions)
 		return ctrl.Result{}, nil
 	}
@@ -278,7 +278,7 @@ func (r *NATGatewayReconciler) handleUpdate(ctx context.Context, natgw *v1alpha1
 	// after a previous success. Don't override Failed during backoff.
 	if natgw.Status.Phase == "" || (natgw.Status.Phase == v1alpha1.NATGatewayPhaseReady &&
 		!provisioning.IsConfigApplied(&natgw.Status.ProvisioningJobs, natgw.Status.DesiredConfigVersion)) {
-		natgw.Status.Phase = v1alpha1.NATGatewayPhaseProgressing
+		setNATGatewayPhase(&natgw.Status, v1alpha1.NATGatewayPhaseProgressing)
 	}
 
 	return r.handleProvisioning(ctx, natgw)
@@ -288,7 +288,7 @@ func (r *NATGatewayReconciler) handleDelete(ctx context.Context, natgw *v1alpha1
 	log := ctrllog.FromContext(ctx)
 	log.Info("deleting NATGateway")
 
-	natgw.Status.Phase = v1alpha1.NATGatewayPhaseDeleting
+	setNATGatewayPhase(&natgw.Status, v1alpha1.NATGatewayPhaseDeleting)
 
 	if !controllerutil.ContainsFinalizer(natgw, osacNATGatewayFinalizer) {
 		return ctrl.Result{}, nil
@@ -327,11 +327,11 @@ func (r *NATGatewayReconciler) handleProvisioning(ctx context.Context, natgw *v1
 		r.MaxJobHistory, r.StatusPollInterval,
 		&provisioning.PollCallbacks{
 			OnFailed: func(message string) {
-				natgw.Status.Phase = v1alpha1.NATGatewayPhaseFailed
+				setNATGatewayPhase(&natgw.Status, v1alpha1.NATGatewayPhaseFailed)
 				setReadyConditionFailed(&natgw.Status.Conditions, message)
 			},
 			OnSuccess: func(_ provisioning.ProvisionStatus) {
-				natgw.Status.Phase = v1alpha1.NATGatewayPhaseReady
+				setNATGatewayPhase(&natgw.Status, v1alpha1.NATGatewayPhaseReady)
 				setReadyConditionTrue(&natgw.Status.Conditions)
 			},
 		},

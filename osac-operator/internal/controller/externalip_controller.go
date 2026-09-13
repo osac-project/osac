@@ -195,14 +195,14 @@ func (r *ExternalIPReconciler) handleUpdate(ctx context.Context, externalIP *v1a
 
 	if externalIP.Status.Phase == "" {
 		externalIP.Status.Phase = v1alpha1.ExternalIPPhaseProgressing
-		externalIP.Status.State = v1alpha1.ExternalIPStatePending
+		setExternalIPState(&externalIP.Status, v1alpha1.ExternalIPStatePending)
 	}
 
 	// When networking provisioning is disabled, skip AAP job dispatch and set Ready
 	// immediately with a placeholder address. The placeholder ensures
 	// ExternalIPAttachment's address check doesn't block.
 	if !r.NetworkProvisioningEnabled {
-		externalIP.Status.State = v1alpha1.ExternalIPStateAllocated
+		setExternalIPState(&externalIP.Status, v1alpha1.ExternalIPStateAllocated)
 		externalIP.Status.Address = "0.0.0.0"
 		externalIP.Status.Phase = v1alpha1.ExternalIPPhaseReady
 		setReadyConditionTrue(&externalIP.Status.Conditions)
@@ -289,7 +289,7 @@ func (r *ExternalIPReconciler) handleUpdate(ctx context.Context, externalIP *v1a
 		!provisioning.IsConfigApplied(&externalIP.Status.ProvisioningJobs, externalIP.Status.DesiredConfigVersion)) {
 		externalIP.Status.Phase = v1alpha1.ExternalIPPhaseProgressing
 		if externalIP.Status.State == "" {
-			externalIP.Status.State = v1alpha1.ExternalIPStatePending
+			setExternalIPState(&externalIP.Status, v1alpha1.ExternalIPStatePending)
 		}
 	}
 
@@ -355,7 +355,7 @@ func (r *ExternalIPReconciler) handleDelete(ctx context.Context, externalIP *v1a
 	log := ctrllog.FromContext(ctx)
 	log.Info("deleting external IP")
 
-	externalIP.Status.Phase = v1alpha1.ExternalIPPhaseDeleting
+	setExternalIPDeleting(&externalIP.Status)
 
 	if !controllerutil.ContainsFinalizer(externalIP, osacExternalIPFinalizer) {
 		return ctrl.Result{}, nil
@@ -424,11 +424,11 @@ func (r *ExternalIPReconciler) handleProvisioning(ctx context.Context, externalI
 		&provisioning.PollCallbacks{
 			OnFailed: func(message string) {
 				externalIP.Status.Phase = v1alpha1.ExternalIPPhaseFailed
-				externalIP.Status.State = v1alpha1.ExternalIPStateFailed
+				setExternalIPState(&externalIP.Status, v1alpha1.ExternalIPStateFailed)
 				setReadyConditionFailed(&externalIP.Status.Conditions, message)
 			},
 			OnSuccess: func(_ provisioning.ProvisionStatus) {
-				externalIP.Status.State = v1alpha1.ExternalIPStateAllocated
+				setExternalIPState(&externalIP.Status, v1alpha1.ExternalIPStateAllocated)
 				if externalIP.Status.Address == "" {
 					if addr, ok := externalIP.Annotations[osacExternalIPAllocatedAddressAnnotation]; ok && addr != "" {
 						externalIP.Status.Address = addr

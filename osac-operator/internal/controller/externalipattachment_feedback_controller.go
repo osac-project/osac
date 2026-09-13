@@ -21,6 +21,9 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
@@ -73,6 +76,9 @@ func NewExternalIPAttachmentFeedbackReconciler(hubClient clnt.Client, grpcConn *
 		Save: func(ctx context.Context, remote *privatev1.ExternalIPAttachment) error {
 			_, err := attachClient.Update(ctx, privatev1.ExternalIPAttachmentsUpdateRequest_builder{
 				Object: remote,
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+					feedbackStatusStatePath, "status.external_ip_address", feedbackStatusMessagePath, feedbackStatusStateTransitionTimePath,
+				}},
 			}.Build())
 			return err
 		},
@@ -82,10 +88,9 @@ func NewExternalIPAttachmentFeedbackReconciler(hubClient clnt.Client, grpcConn *
 			}.Build())
 			return err
 		},
-		SyncUpdate:       newExternalIPAttachmentSyncUpdate(eipClient),
-		SyncDelete:       syncExternalIPAttachmentDelete,
-		PostSaveOnDelete: newExternalIPAttachmentPostSaveOnDelete(eipClient),
-		IsNotFound:       func(err error) bool { return errors.Is(err, ErrExternalIPAttachmentNotFound) },
+		SyncUpdate: newExternalIPAttachmentSyncUpdate(eipClient, hubClient),
+		SyncDelete: newExternalIPAttachmentSyncDelete(hubClient),
+		IsNotFound: func(err error) bool { return errors.Is(err, ErrExternalIPAttachmentNotFound) },
 	}
 	return r
 }
@@ -108,24 +113,37 @@ func (r *ExternalIPAttachmentFeedbackReconciler) Reconcile(ctx context.Context, 
 }
 
 // newExternalIPAttachmentSyncUpdate returns a SyncUpdate that captures eipClient
-// for setting attached=true on the parent ExternalIP when Ready, and for syncing
-// the parent's address to the attachment.
-func newExternalIPAttachmentSyncUpdate(eipClient privatev1.ExternalIPsClient) func(context.Context, *v1alpha1.ExternalIPAttachment, *privatev1.ExternalIPAttachment) error {
+// for syncing the parent's address to the attachment.
+func newExternalIPAttachmentSyncUpdate(eipClient privatev1.ExternalIPsClient, hubClient clnt.Client) func(context.Context, *v1alpha1.ExternalIPAttachment, *privatev1.ExternalIPAttachment) error {
 	return func(ctx context.Context, obj *v1alpha1.ExternalIPAttachment, remote *privatev1.ExternalIPAttachment) error {
 		syncExternalIPAttachmentState(ctx, obj, remote)
 		syncExternalIPAttachmentAddress(ctx, eipClient, remote)
-
-		if obj.Status.Phase == v1alpha1.ExternalIPAttachmentPhaseReady {
-			if err := syncAttachedOnParentExternalIP(ctx, eipClient, remote, true); err != nil {
-				ctrllog.FromContext(ctx).Error(err, "Failed to set attached on parent ExternalIP, will retry")
-				return err
-			}
+		transition := obj.Status.StateTransitionTime
+		var transitionTime *timestamppb.Timestamp
+		if transition != nil {
+			transitionTime = timestamppb.New(transition.Time)
 		}
-		return nil
+		return syncExternalIPAttachmentParentCRD(ctx, hubClient, obj.Namespace, remote.GetSpec().GetExternalIp().GetId(),
+			obj.Status.Phase == v1alpha1.ExternalIPAttachmentPhaseReady, transitionTime)
+	}
+}
+
+func newExternalIPAttachmentSyncDelete(hubClient clnt.Client) func(context.Context, *v1alpha1.ExternalIPAttachment, *privatev1.ExternalIPAttachment) error {
+	return func(ctx context.Context, obj *v1alpha1.ExternalIPAttachment, remote *privatev1.ExternalIPAttachment) error {
+		if err := syncExternalIPAttachmentDelete(ctx, obj, remote); err != nil {
+			return err
+		}
+		transition := obj.Status.StateTransitionTime
+		var transitionTime *timestamppb.Timestamp
+		if transition != nil {
+			transitionTime = timestamppb.New(transition.Time)
+		}
+		return syncExternalIPAttachmentParentCRD(ctx, hubClient, obj.Namespace, remote.GetSpec().GetExternalIp().GetId(), false, transitionTime)
 	}
 }
 
 func syncExternalIPAttachmentDelete(_ context.Context, obj *v1alpha1.ExternalIPAttachment, remote *privatev1.ExternalIPAttachment) error {
+	syncExternalIPAttachmentStateTransitionTime(obj, remote)
 	if obj.Status.Phase == v1alpha1.ExternalIPAttachmentPhaseFailed {
 		remote.GetStatus().SetState(privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_FAILED)
 		return nil
@@ -134,17 +152,12 @@ func syncExternalIPAttachmentDelete(_ context.Context, obj *v1alpha1.ExternalIPA
 	return nil
 }
 
-// newExternalIPAttachmentPostSaveOnDelete returns a PostSaveOnDelete that clears
-// the attached flag on the parent ExternalIP after the attachment's DELETING
-// state is persisted.
-func newExternalIPAttachmentPostSaveOnDelete(eipClient privatev1.ExternalIPsClient) func(context.Context, *v1alpha1.ExternalIPAttachment, *privatev1.ExternalIPAttachment) error {
-	return func(ctx context.Context, _ *v1alpha1.ExternalIPAttachment, remote *privatev1.ExternalIPAttachment) error {
-		if err := syncAttachedOnParentExternalIP(ctx, eipClient, remote, false); err != nil {
-			ctrllog.FromContext(ctx).Error(err, "Failed to clear attached on parent ExternalIP, will retry")
-			return err
-		}
-		return nil
+func syncExternalIPAttachmentStateTransitionTime(obj *v1alpha1.ExternalIPAttachment, remote *privatev1.ExternalIPAttachment) {
+	if obj.Status.StateTransitionTime == nil {
+		remote.GetStatus().ClearStateTransitionTime()
+		return
 	}
+	remote.GetStatus().SetStateTransitionTime(timestamppb.New(obj.Status.StateTransitionTime.Time))
 }
 
 func syncExternalIPAttachmentState(ctx context.Context, obj *v1alpha1.ExternalIPAttachment, remote *privatev1.ExternalIPAttachment) {
@@ -159,6 +172,8 @@ func syncExternalIPAttachmentState(ctx context.Context, obj *v1alpha1.ExternalIP
 		log := ctrllog.FromContext(ctx)
 		log.Info("Unknown phase, will ignore it", "phase", obj.Status.Phase)
 	}
+
+	syncExternalIPAttachmentStateTransitionTime(obj, remote)
 }
 
 func syncExternalIPAttachmentAddress(ctx context.Context, eipClient privatev1.ExternalIPsClient, remote *privatev1.ExternalIPAttachment) {
@@ -182,38 +197,44 @@ func syncExternalIPAttachmentAddress(ctx context.Context, eipClient privatev1.Ex
 	}
 }
 
-func syncAttachedOnParentExternalIP(ctx context.Context, eipClient privatev1.ExternalIPsClient, remote *privatev1.ExternalIPAttachment, attached bool) error {
-	externalIPRef := remote.GetSpec().GetExternalIp()
-	if externalIPRef.GetId() == "" {
+func syncExternalIPAttachmentParentCRD(
+	ctx context.Context,
+	hubClient clnt.Client,
+	namespace string,
+	externalIPID string,
+	attached bool,
+	transitionTime *timestamppb.Timestamp,
+) error {
+	if externalIPID == "" {
 		return nil
 	}
-
-	response, err := eipClient.Get(ctx, privatev1.ExternalIPsGetRequest_builder{
-		Id: externalIPRef.GetId(),
-	}.Build())
-	if err != nil {
-		if status.Code(err) == codes.NotFound {
-			ctrllog.FromContext(ctx).Info("Parent ExternalIP not found, skipping attached sync", "externalIPID", externalIPRef.GetId())
-			return nil
-		}
+	list := &v1alpha1.ExternalIPList{}
+	if err := hubClient.List(ctx, list, clnt.InNamespace(namespace), clnt.MatchingLabels{osacExternalIPIDLabel: externalIPID}); err != nil {
 		return err
 	}
-
-	externalIP := response.GetObject()
-	if externalIP == nil {
-		return fmt.Errorf("parent ExternalIP %s: response contained nil object", externalIPRef.GetId())
-	}
-	if !externalIP.HasStatus() {
-		externalIP.SetStatus(&privatev1.ExternalIPStatus{})
-	}
-
-	if externalIP.GetStatus().GetAttached() == attached {
+	if len(list.Items) == 0 && !attached {
 		return nil
 	}
+	if len(list.Items) != 1 {
+		return fmt.Errorf("expected one ExternalIP CR for ID %s in namespace %s, found %d", externalIPID, namespace, len(list.Items))
+	}
+	parent := &list.Items[0]
+	var desiredTransition *metav1.Time
+	if transitionTime != nil {
+		time := metav1.NewTime(transitionTime.AsTime())
+		desiredTransition = &time
+	}
+	if parent.Status.Attached == attached && externalIPCRDTimeEqual(parent.Status.AttachmentTransitionTime, desiredTransition) {
+		return nil
+	}
+	parent.Status.Attached = attached
+	parent.Status.AttachmentTransitionTime = desiredTransition
+	return hubClient.Status().Update(ctx, parent)
+}
 
-	externalIP.GetStatus().SetAttached(attached)
-	_, err = eipClient.Update(ctx, privatev1.ExternalIPsUpdateRequest_builder{
-		Object: externalIP,
-	}.Build())
-	return err
+func externalIPCRDTimeEqual(left, right *metav1.Time) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Time.Equal(right.Time)
 }

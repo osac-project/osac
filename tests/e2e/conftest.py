@@ -86,7 +86,9 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "requires_bmaas: test requires the BMaaS service to be enabled")
     config.addinivalue_line("markers", "sanity: fast, low-risk smoke test suitable for every PR")
     config.addinivalue_line("markers", "regression: broader/slower coverage, run on a schedule or on demand")
-    config.addinivalue_line("markers", "serial: must run alone, not in parallel with other tests (e.g. exhausts a shared resource)")
+    config.addinivalue_line(
+        "markers", "serial: must run alone, not in parallel with other tests (e.g. exhausts a shared resource)"
+    )
     worker_id = os.environ.get("PYTEST_XDIST_WORKER")
     if worker_id is not None:
         log_dir = Path(config.getini("log_file")).parent
@@ -288,7 +290,7 @@ def ensure_k8s_only_network_class(private_grpc: GRPCClient, k8s_hub_client: K8sC
 @pytest.fixture(scope="session")
 def cli(
     namespace: str, fulfillment_address: str, keycloak_url: str, jwt_username: str, jwt_password: str
-) -> Iterator[OsacCLI]:  # noqa: E501
+) -> Iterator[OsacCLI]:
     instance = OsacCLI(
         binary=env("OSAC_CLI_PATH", "osac"),
         address=f"https://{fulfillment_address.rsplit(':', 1)[0]}",

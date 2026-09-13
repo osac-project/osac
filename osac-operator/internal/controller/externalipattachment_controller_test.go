@@ -76,6 +76,7 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 	)
 
 	buildClient := func(objs ...client.Object) client.Client {
+		objs = append(objs, newFabricManagerConfigMap("fm-default", testNetworkingNamespace, "netris"))
 		return fake.NewClientBuilder().
 			WithScheme(testScheme).
 			WithObjects(objs...).
@@ -173,6 +174,11 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 			MaxJobHistory:              10,
 			NetworkProvisioningEnabled: true,
 		}
+		reconciler.Resolver, reconciler.networkClassesClient = wireExternalIPDispatcher(
+			c, testNetworkingNamespace, []*privatev1.NetworkClass{{
+				Id: "nc-default", FabricManager: ptr.To("netris"), IsDefault: ptr.To(true),
+			}},
+		)
 	}
 
 	reconcileOnce := func() (ctrl.Result, error) {
@@ -301,13 +307,13 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 
 			updated := &osacv1alpha1.ExternalIPAttachment{}
 			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
-			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("metallb-l2"))
+			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("netris"))
 			Expect(updated.Annotations[osacExternalIPPoolNameAnnotation]).To(Equal("test-pool"))
 			Expect(updated.Annotations[osacExternalIPNameAnnotation]).To(Equal(testExternalIPName))
 			Expect(updated.Annotations[osacExternalIPTargetNamespaceAnnotation]).To(Equal(testVMNamespace))
 		})
 
-		It("should use default implementation strategy when pool has none", func() {
+		It("should resolve strategy when the pool strategy is empty", func() {
 			pool.Spec.ImplementationStrategy = ""
 			fakeClient = buildClient(attachment, publicIP, pool, ci)
 			setupReconciler(fakeClient)
@@ -325,8 +331,7 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 
 			updated := &osacv1alpha1.ExternalIPAttachment{}
 			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
-			// Pool has no spec.implementationStrategy and no resolver is configured, so annotation is ""
-			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal(""))
+			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("netris"))
 		})
 	})
 
@@ -334,7 +339,6 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 		It("uses the resolved fabric manager name from the default NetworkClass", func() {
 			fakeClient = buildClient(attachment, publicIP, pool, ci)
 			setupReconciler(fakeClient)
-			Expect(fakeClient.Create(testCtx, newFabricManagerConfigMap("fm-netris", testNetworkingNamespace, "netris"))).To(Succeed())
 			resolver, ncClient := wireExternalIPDispatcher(fakeClient, testNetworkingNamespace, []*privatev1.NetworkClass{{
 				Id: "nc-dispatch", FabricManager: ptr.To("netris"), IsDefault: ptr.To(true),
 			}})
@@ -371,7 +375,7 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("k8s_only"))
 		})
 
-		It("falls back to the parent pool spec when the NetworkClass has no managers", func() {
+		It("blocks when the NetworkClass has no managers", func() {
 			fakeClient = buildClient(attachment, publicIP, pool, ci)
 			setupReconciler(fakeClient)
 			resolver, ncClient := wireExternalIPDispatcher(fakeClient, testNetworkingNamespace, []*privatev1.NetworkClass{{
@@ -380,14 +384,17 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 			reconciler.Resolver = resolver
 			reconciler.networkClassesClient = ncClient
 
-			_, err := reconcileOnce()
-			Expect(err).NotTo(HaveOccurred())
-			_, err = reconcileOnce()
-			Expect(err).NotTo(HaveOccurred())
+			result, err := reconcileOnce()
+			Expect(err).To(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeZero())
 
 			updated := &osacv1alpha1.ExternalIPAttachment{}
 			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
-			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("metallb-l2"))
+			condition := apimeta.FindStatusCondition(updated.Status.Conditions, osacv1alpha1.ConditionReady)
+			Expect(condition).NotTo(BeNil())
+			Expect(condition.Status).To(Equal(metav1.ConditionFalse))
+			Expect(condition.Reason).To(Equal(osacv1alpha1.ReasonNoManagerConfigured))
+			Expect(updated.Annotations).NotTo(HaveKey(osacImplementationStrategyAnnotation))
 		})
 
 		It("returns a reconcile error when the NetworkClass references an unregistered manager", func() {
@@ -1037,7 +1044,7 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 			updated := &osacv1alpha1.ExternalIPAttachment{}
 			Expect(fakeClient.Get(testCtx, clusterKey, updated)).To(Succeed())
 			Expect(updated.Annotations[osacExternalIPTargetIPAnnotation]).To(Equal(testAPIEndpoint))
-			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("metallb-l2"))
+			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("netris"))
 		})
 
 		It("should set target-ip annotation with resolved ingress endpoint", func() {

@@ -50,8 +50,7 @@ const (
 //
 // Each ExternalIP belongs to a parent ExternalIPPool (referenced by UUID in spec.pool).
 // The controller adds a finalizer, resolves the implementation strategy from the
-// default NetworkClass via the dispatcher (falling back to the parent pool's spec
-// and defaultExternalIPPoolImplementationStrategy), then delegates to the shared
+// default NetworkClass via the dispatcher, then delegates to the shared
 // provisioning lifecycle to trigger AAP jobs for allocation and deallocation.
 //
 // Attach/detach is handled by the ExternalIPAttachment controller.
@@ -69,7 +68,7 @@ type ExternalIPReconciler struct {
 	targetCluster        mc.ClusterName
 	// Resolver resolves a NetworkClass to its registered managers. Nil when the
 	// two-manager model isn't configured (no gRPC connection / networking namespace),
-	// in which case the controller always uses the legacy implementation-strategy path.
+	// in which case the controller blocks provisioning until dispatch is available.
 	Resolver *dispatcher.Resolver
 	// networkClassesClient lists NetworkClasses to find the default/singleton used
 	// as the dispatcher input. Nil when gRPC is not configured.
@@ -227,17 +226,23 @@ func (r *ExternalIPReconciler) handleUpdate(ctx context.Context, externalIP *v1a
 	pool := &poolList.Items[0]
 	log.Info("resolved parent ExternalIPPool", "poolName", pool.Name, "poolUUID", externalIP.Spec.Pool)
 
-	// Resolve implementation strategy from the default NetworkClass via the
-	// dispatcher. The parent pool's spec.implementationStrategy is only used as a
-	// fallback when the dispatcher path is not active.
+	// Resolve implementation strategy from the default NetworkClass via the dispatcher.
 	networkClassID, err := lookupDefaultNetworkClassID(ctx, r.networkClassesClient)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	implementationStrategy, err := resolveImplementationStrategy(
-		ctx, r.Resolver, "ExternalIP", networkClassID, pool.Spec.ImplementationStrategy)
+		ctx, r.Resolver, "ExternalIP", networkClassID)
 	if err != nil {
 		return ctrl.Result{}, err
+	}
+	if implementationStrategy == "" {
+		setReadyConditionBlocked(&externalIP.Status.Conditions, v1alpha1.ReasonNoManagerConfigured,
+			conditionMessageNoManagerConfigured)
+		log.Info("implementation strategy not resolved", "externalIP", externalIP.Name)
+		return ctrl.Result{}, fmt.Errorf(
+			"cannot reconcile ExternalIP %q: no fabric manager is configured for NetworkClass %q",
+			externalIP.Name, networkClassID)
 	}
 
 	if externalIP.Annotations == nil {

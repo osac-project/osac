@@ -71,7 +71,7 @@ type ExternalIPAttachmentReconciler struct {
 	targetCluster              mc.ClusterName
 	// Resolver resolves a NetworkClass to its registered managers. Nil when the
 	// two-manager model isn't configured (no gRPC connection / networking namespace),
-	// in which case the controller always uses the legacy implementation-strategy path.
+	// in which case the controller blocks provisioning until dispatch is available.
 	Resolver *dispatcher.Resolver
 	// networkClassesClient lists NetworkClasses to find the default/singleton used
 	// as the dispatcher input. Nil when gRPC is not configured.
@@ -266,9 +266,17 @@ func (r *ExternalIPAttachmentReconciler) handleUpdate(ctx context.Context, attac
 		return ctrl.Result{}, err
 	}
 	implementationStrategy, err := resolveImplementationStrategy(
-		ctx, r.Resolver, "ExternalIPAttachment", networkClassID, pool.Spec.ImplementationStrategy)
+		ctx, r.Resolver, "ExternalIPAttachment", networkClassID)
 	if err != nil {
 		return ctrl.Result{}, err
+	}
+	if implementationStrategy == "" {
+		setReadyConditionBlocked(&attachment.Status.Conditions, v1alpha1.ReasonNoManagerConfigured,
+			conditionMessageNoManagerConfigured)
+		log.Info("implementation strategy not resolved", "externalIPAttachment", attachment.Name)
+		return ctrl.Result{}, fmt.Errorf(
+			"cannot reconcile ExternalIPAttachment %q: no fabric manager is configured for NetworkClass %q",
+			attachment.Name, networkClassID)
 	}
 
 	// BMI DNAT precondition: wait for primary IP to be discovered

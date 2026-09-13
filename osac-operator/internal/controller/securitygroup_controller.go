@@ -56,7 +56,7 @@ type SecurityGroupReconciler struct {
 	targetCluster        mc.ClusterName
 	// Resolver resolves a NetworkClass to its registered managers. Nil when the
 	// two-manager model isn't configured (no gRPC connection / networking namespace),
-	// in which case the controller always uses the legacy implementation-strategy path.
+	// in which case the controller blocks provisioning until dispatch is available.
 	Resolver *dispatcher.Resolver
 	// NetworkProvisioningEnabled controls whether the controller dispatches AAP
 	// provisioning jobs. When false, resources are set to Ready immediately.
@@ -206,15 +206,21 @@ func (r *SecurityGroupReconciler) handleUpdate(ctx context.Context, sg *v1alpha1
 			return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 		}
 	} else {
-		log.Info("parent VirtualNetwork not found, using legacy implementation strategy", "uuid", sg.Spec.VirtualNetwork)
+		log.Info("parent VirtualNetwork not found", "uuid", sg.Spec.VirtualNetwork)
+		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
 
-	// resolveImplementationStrategy returns "" when the dispatcher path isn't available
-	// (resolver nil, networkClassID empty, or no manager configured). SecurityGroup
-	// has no resource-level fallback strategy — it exclusively uses the dispatcher.
-	implementationStrategy, err := resolveImplementationStrategy(ctx, r.Resolver, "SecurityGroup", networkClassID, "")
+	implementationStrategy, err := resolveImplementationStrategy(ctx, r.Resolver, "SecurityGroup", networkClassID)
 	if err != nil {
 		return ctrl.Result{}, err
+	}
+	if implementationStrategy == "" {
+		setReadyConditionBlocked(&sg.Status.Conditions, v1alpha1.ReasonNoManagerConfigured,
+			conditionMessageNoManagerConfigured)
+		log.Info("implementation strategy not resolved", "securityGroup", sg.Name)
+		return ctrl.Result{}, fmt.Errorf(
+			"cannot reconcile SecurityGroup %q: no fabric manager is configured for NetworkClass %q",
+			sg.Name, networkClassID)
 	}
 
 	// Add implementation-strategy annotation if not present or different

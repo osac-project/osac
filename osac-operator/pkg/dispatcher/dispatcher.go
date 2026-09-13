@@ -75,12 +75,13 @@ func (d *Dispatcher) Dispatch(
 			switch {
 			case resolved.FabricManager != nil:
 				addTarget(DispatchTarget{Role: ManagerRoleFabric, Manager: *resolved.FabricManager})
-			case cfg.K8sFallback && resolved.K8sManager != nil:
+			case cfg.K8sFallback && cfg.K8sFallbackManager != "" && resolved.K8sManager != nil &&
+				resolved.K8sManager.Name == cfg.K8sFallbackManager:
 				addTarget(DispatchTarget{Role: ManagerRoleK8s, Manager: *resolved.K8sManager})
 			default:
 				return nil, fmt.Errorf(
-					"no manager available for %s: NetworkClass has neither a fabricManager nor a usable k8sManager fallback",
-					kind)
+					"no manager available for %s: NetworkClass has no usable manager for the required role: %w",
+					kind, ErrRequiredManagerUnavailable)
 			}
 		case ManagerRoleK8s:
 			if resolved.K8sManager != nil {

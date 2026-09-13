@@ -17,6 +17,22 @@ type ConnectionConfig struct {
 	SASLPassFile string
 }
 
+func NewConsumerGroup(cfg ConnectionConfig, groupID string) (sarama.ConsumerGroup, error) {
+	brokers := SplitAndTrim(cfg.Brokers, ",")
+	sc := sarama.NewConfig()
+	sc.Version = sarama.V3_9_0_0
+	sc.Consumer.Group.Rebalance.GroupStrategies = []sarama.BalanceStrategy{sarama.NewBalanceStrategyRoundRobin()}
+	sc.Consumer.Offsets.Initial = sarama.OffsetOldest
+	sc.Consumer.Offsets.AutoCommit.Enable = false
+	if err := ConfigureTLS(sc, cfg.TLSCACert); err != nil {
+		return nil, err
+	}
+	if err := ConfigureSASL(sc, cfg.SASLUser, cfg.SASLPassFile); err != nil {
+		return nil, err
+	}
+	return sarama.NewConsumerGroup(brokers, groupID, sc)
+}
+
 func NewSyncProducer(cfg ConnectionConfig) (sarama.SyncProducer, error) {
 	brokers := SplitAndTrim(cfg.Brokers, ",")
 	sc := NewProducerConfig()

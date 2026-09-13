@@ -1,6 +1,7 @@
 {{- /* Strimzi KafkaUser — creates SCRAM-SHA-512 credentials and a Secret
      with the same name as the user. The metering service mounts this Secret
-     for Kafka authentication. ACLs grant producer-only access. */}}
+     for Kafka authentication. ACLs grant producer access to all metering
+     topics and consumer access to the inference raw topic. */}}
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaUser
 metadata:
@@ -21,6 +22,20 @@ spec:
         operations:
           - Write
           - Describe
+        host: "*"
+      - resource:
+          type: topic
+          name: osac.metering.inference.raw
+          patternType: literal
+        operations:
+          - Read
+        host: "*"
+      - resource:
+          type: group
+          name: osac-metering-maas-consumer
+          patternType: literal
+        operations:
+          - Read
         host: "*"
       - resource:
           type: cluster

@@ -637,6 +637,10 @@
        | selectattr('status', 'equalto', 'True')
        | list | length == 0)
 
+- name: Configure OSAC inference metering
+  ansible.builtin.include_tasks: configure_metering.yaml
+  when: ocp_4_20_ai_maas_enable_metering | bool
+
 - name: Report MaaS configuration complete
   ansible.builtin.debug:
     msg:

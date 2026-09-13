@@ -770,16 +770,14 @@ func (c *runnerContext) buildSpec(templateID string,
 }
 
 // buildBootDisk returns a boot disk from CLI flags, or nil if neither size nor storage tier was set.
-// A size-only boot disk is allowed because the server may resolve its tier from a catalog item or template.
+// Either field alone is allowed because the server may resolve the missing field from a catalog item or template.
 func (c *runnerContext) buildBootDisk() (*publicv1.ComputeInstanceDisk, error) {
 	if c.args.bootDiskSizeGiB <= 0 && c.args.bootDiskStorageTier == "" {
 		return nil, nil
 	}
-	if c.args.bootDiskSizeGiB <= 0 {
-		return nil, fmt.Errorf("--boot-disk-size is required when --boot-disk-storage-tier is set")
-	}
-	builder := publicv1.ComputeInstanceDisk_builder{
-		SizeGib: proto.Int32(c.args.bootDiskSizeGiB),
+	builder := publicv1.ComputeInstanceDisk_builder{}
+	if c.args.bootDiskSizeGiB > 0 {
+		builder.SizeGib = proto.Int32(c.args.bootDiskSizeGiB)
 	}
 	if c.args.bootDiskStorageTier != "" {
 		builder.StorageTier = publicv1.StorageTierReference_builder{

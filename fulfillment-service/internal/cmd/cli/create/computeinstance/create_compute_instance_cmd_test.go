@@ -241,12 +241,14 @@ var _ = Describe("buildBootDisk", func() {
 		Expect(disk).To(BeNil())
 	})
 
-	It("should return error when storage tier is set without size", func() {
+	It("should return disk with only storage tier when size is not set", func() {
 		c := &runnerContext{}
 		c.args.bootDiskStorageTier = "premium"
-		_, err := c.buildBootDisk()
-		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("--boot-disk-size is required"))
+		disk, err := c.buildBootDisk()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(disk).NotTo(BeNil())
+		Expect(disk.GetStorageTier().GetName()).To(Equal("premium"))
+		Expect(disk.HasSizeGib()).To(BeFalse())
 	})
 
 	It("should return disk with both fields when both are set", func() {

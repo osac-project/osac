@@ -137,13 +137,8 @@ func (m *ProjectGroupManager) deleteGroupByPath(ctx context.Context, tenant, gro
 }
 
 func isGroupNotFoundError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "organization group not found") ||
-		strings.Contains(msg, "not found among children") ||
-		strings.Contains(msg, "failed to find group segment")
+	var notFoundErr *ErrNotFound
+	return errors.As(err, &notFoundErr)
 }
 
 // getGroupIDByPath is a helper to get the group ID from a group path.

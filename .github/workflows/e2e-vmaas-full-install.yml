@@ -217,7 +217,9 @@ jobs:
       # declared job permissions against what the caller grants regardless
       # of runtime reachability, so it must still be granted here.
       id-token: write
-    uses: osac-project/osac-test-infra/.github/workflows/e2e-vmaas-full-install.yml@main
+    # Temporary dependency for OSAC-4678: use the test-infra branch that adds
+    # the enablement test phases. Switch back to @main after that change merges.
+    uses: htayrie-rh/osac-test-infra/.github/workflows/e2e-vmaas-full-install.yml@OSAC-4678-enablement-test-infra
     with:
       # PR/merge_group and schedule: full vmaas suite (sanity + regression +
       # serial). workflow_dispatch: honor the selected input, else sanity.
@@ -234,6 +236,10 @@ jobs:
       # with either dependency unless an explicit workflow-dispatch marker is
       # supplied.
       test-marker: ${{ inputs.test-marker || 'not requires_caas and not requires_bmaas' }}
+      # Keep CaaS enabled while BMaaS/MaaS stay disabled. The enablement
+      # phases then check that state, upgrade BMaaS, and check the result.
+      enablement-tests: true
+      enable-caas: true
       # osac-installer now lives as a subdirectory of this same monorepo checkout
       # (its Chart.yaml deps resolve fulfillment-service/osac-operator/osac-aap/BMF
       # as ../../../<name> siblings within it), so a PR touching those components
@@ -253,8 +259,11 @@ jobs:
       fork-pr-author: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.user.login || '' }}
       pr-number: ${{ github.event.pull_request.number }}
       # Checkout osac-test-infra for tests/Containerfile (not the caller repo)
-      test-infra-repository: osac-project/osac-test-infra
-      test-infra-ref: ${{ inputs.test-infra-ref || 'main' }}
+      # Temporary pre-merge checkout of the matching test-infra PR branch.
+      # Switch both values back to osac-project/osac-test-infra@${{ inputs.test-infra-ref || 'main' }}
+      # after that PR merges.
+      test-infra-repository: htayrie-rh/osac-test-infra
+      test-infra-ref: OSAC-4678-enablement-test-infra
       test-repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
       test-ref: ${{ github.event.pull_request.head.sha || github.sha }}
       notify-on-failure: ${{ github.event_name == 'schedule' }}

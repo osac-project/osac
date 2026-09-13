@@ -26,6 +26,10 @@ caIssuer:
   enabled: true
 keycloak:
   enabled: true
+  # Seed known passwords for the realm's built-in test users -- the e2e
+  # suite logs in as these accounts by password.
+  devFixtures:
+    enabled: true
 kafka:
   enabled: true
 

@@ -35,12 +35,11 @@ def default_storage_tier() -> str:
     return env("OSAC_STORAGE_TIER", "local")
 
 
-def _bmaas_requires_serial_xdist(args: list[str]) -> bool:
-    """True when CLI targets BMaaS serial or the full e2e/bmaas suite.
+def _requires_serial_xdist(args: list[str]) -> bool:
+    """True when CLI targets a suite that must run sequentially.
 
-    Inventory exhaust lives in ``tests/e2e/bmaas/serial`` and must run ``-n 0``.
-    Sanity and regression stay on pyproject ``-n 4``. Broader invocations like
-    ``pytest tests/`` are not detected.
+    BMaaS serial/full and enablement suites require ``-n 0``.
+    Broader invocations like ``pytest tests/`` are not detected.
     """
     normalized = [str(a).replace("\\", "/").rstrip("/") for a in args]
     if not normalized:
@@ -51,6 +50,8 @@ def _bmaas_requires_serial_xdist(args: list[str]) -> bool:
         or a.endswith("tests/e2e/bmaas")
         or a.endswith("/e2e/bmaas")
         or a == "e2e/bmaas"
+        or a.endswith("e2e/enablement")
+        or "/e2e/enablement/" in (a + "/")
         for a in normalized
     )
 
@@ -64,7 +65,7 @@ def pytest_cmdline_main(config: pytest.Config) -> None:
     has already populated ``config.option.tx``. Must return None (cmdline_main
     is firstresult).
     """
-    if not _bmaas_requires_serial_xdist(list(config.args or [])):
+    if not _requires_serial_xdist(list(config.args or [])):
         return None
     config.option.numprocesses = 0
     if hasattr(config.option, "dist"):

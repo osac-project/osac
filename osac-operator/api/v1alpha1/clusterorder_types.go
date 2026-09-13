@@ -111,7 +111,15 @@ type NodeRequest struct {
 	ResourceClass string `json:"resourceClass"`
 	// NumberOfNodes describes the number of nodes you want of the given resource class
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Minimum=1
 	NumberOfNodes int `json:"numberOfNodes"`
+	// FabricInterface is the host NIC name used for tenant network traffic.
+	// When set, IP discovery filters Agent inventory interfaces by this name,
+	// preventing the provisioning NIC address from being returned.
+	// Resolved from the host type's NetworkInterface list during template
+	// expansion; may also be set explicitly.
+	// +kubebuilder:validation:Optional
+	FabricInterface string `json:"fabricInterface,omitempty"`
 }
 
 // ClusterOrderPhaseType is a valid value for .status.phase

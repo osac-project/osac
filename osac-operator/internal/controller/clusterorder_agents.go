@@ -60,6 +60,20 @@ func (r *ClusterOrderReconciler) reconcileAgentSelection(
 
 	// Check if agents are already selected
 	if len(instance.Status.NodeSets) > 0 {
+		// Backfill FabricInterface from spec into existing NodeSetStatus
+		// entries that don't have it yet (e.g. created before the field
+		// was added to NodeRequest).
+		for i := range instance.Status.NodeSets {
+			if instance.Status.NodeSets[i].FabricInterface != "" {
+				continue
+			}
+			for _, nr := range instance.Spec.NodeRequests {
+				if nr.ResourceClass == instance.Status.NodeSets[i].Name && nr.FabricInterface != "" {
+					instance.Status.NodeSets[i].FabricInterface = nr.FabricInterface
+					break
+				}
+			}
+		}
 		return ctrl.Result{}, nil
 	}
 
@@ -102,8 +116,9 @@ func (r *ClusterOrderReconciler) reconcileAgentSelection(
 		}
 
 		nodeSets = append(nodeSets, v1alpha1.NodeSetStatus{
-			Name:   nodeReq.ResourceClass,
-			Agents: agentStatuses,
+			Name:            nodeReq.ResourceClass,
+			FabricInterface: nodeReq.FabricInterface,
+			Agents:          agentStatuses,
 		})
 	}
 

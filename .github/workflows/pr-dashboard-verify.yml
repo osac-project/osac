@@ -1,0 +1,69 @@
+name: Test PR dashboard
+
+on:
+  pull_request:
+    paths:
+      - "docs/pr-dashboard/**"
+      - "presentations/**"
+      - "tools/generate-site-index.py"
+      - "tools/pr-notify/**"
+      - "tools/test_generate_site_index.py"
+      - "tools/test_pr_dashboard.js"
+      - ".github/workflows/pr-dashboard-verify.yml"
+      - ".github/workflows/pr-dashboard.yml"
+  merge_group:
+
+concurrency:
+  group: pr-dashboard-test-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  test-dashboard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read # Checks out the dashboard test and static site source.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Test dashboard data provider
+        run: python3 -m unittest discover -s tools/pr-notify -p 'test_*.py'
+
+      - name: Test site index generator
+        run: python3 tools/test_generate_site_index.py
+
+      - name: Install presentation dependencies
+        run: npm ci --prefix presentations
+
+      - name: Render presentations
+        run: |
+          presentations/node_modules/.bin/marp --html --allow-local-files \
+            --theme-set presentations/themes/redhat.css \
+            --input-dir presentations/ \
+            --output presentations/
+
+      - name: Validate publication inputs
+        run: |
+          python3 tools/generate-site-index.py presentations "$RUNNER_TEMP/index.html"
+          (
+            cd tools/pr-notify
+            for config in config*.example.toml; do
+              python3 generate.py --config "$config" --output /dev/null --print-data-path >/dev/null
+            done
+            python3 generate_manifest.py --output "$RUNNER_TEMP/dashboards.json"
+          )
+
+      - name: Test dashboard link safety
+        run: node tools/test_pr_dashboard.js

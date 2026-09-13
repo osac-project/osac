@@ -28,19 +28,20 @@ import (
 func Cmd() *cobra.Command {
 	runner := &runnerContext{}
 	result := &cobra.Command{
-		Use:     "hub",
-		Aliases: []string{string(proto.MessageName((*privatev1.Hub)(nil)))},
-		Short:   shortHelp,
-		Long:    longHelp,
-		Args:    cobra.NoArgs,
-		RunE:    runner.run,
+		Use:                   "hub",
+		Aliases:               []string{string(proto.MessageName((*privatev1.Hub)(nil)))},
+		Short:                 shortHelp,
+		Long:                  longHelp,
+		DisableFlagsInUseLine: true,
+		Args:                  cobra.NoArgs,
+		RunE:                  runner.run,
 	}
 	flags := result.Flags()
 	flags.StringVar(
-		&runner.id,
-		"id",
+		&runner.name,
+		"name",
 		"",
-		idFlagHelp,
+		nameFlagHelp,
 	)
 	flags.StringVar(
 		&runner.kubeconfig,
@@ -59,7 +60,7 @@ func Cmd() *cobra.Command {
 
 type runnerContext struct {
 	console    *terminal.Console
-	id         string
+	name       string
 	kubeconfig string
 	namespace  string
 }
@@ -78,11 +79,8 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	}
 
 	// Check the parameters:
-	if c.id == "" {
-		return fmt.Errorf("identifier is required")
-	}
-	if c.namespace == "" {
-		return fmt.Errorf("namespace name is required")
+	if c.name == "" {
+		return fmt.Errorf("name is required")
 	}
 	if c.kubeconfig == "" {
 		return fmt.Errorf("kubeconfig file is required")
@@ -109,7 +107,9 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 
 	// Prepare the hub:
 	hub := privatev1.Hub_builder{
-		Id: c.id,
+		Metadata: privatev1.Metadata_builder{
+			Name: c.name,
+		}.Build(),
 		Spec: privatev1.HubSpec_builder{
 			Kubeconfig: kubeconfig,
 			Namespace:  c.namespace,
@@ -135,10 +135,21 @@ const shortHelp = `Create a hub`
 
 const longHelp = `
 Create a hub.
+
+A hub represents a Kubernetes cluster that hosts cluster orders. Hubs are managed
+by Cloud Provider Admins via the private API.
+
+To create a hub:
+
+{{ bt 3 }}shell
+{{ binary }} create hub --name my-hub \
+  --kubeconfig /path/to/kubeconfig \
+  --namespace osac-orders
+{{ bt 3 }}
 `
 
-const idFlagHelp = `
-_ID_ - Unique identifier of the hub.
+const nameFlagHelp = `
+_NAME_ - Name of the hub. Must be a unique, human-readable identifier.
 `
 
 const kubeconfigFlagHelp = `

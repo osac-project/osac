@@ -37,8 +37,27 @@ jobs:
       - name: Check required Prow labels
         if: github.event_name == 'pull_request'
         env:
-          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          # Fetch live labels rather than trusting github.event.pull_request.labels:
+          # Prow-style bots apply lgtm/approved/jira-valid-reference as separate
+          # `labeled` events in quick succession, so each event's own payload only
+          # has whatever labels existed at that exact instant -- not the final set.
+          # That's why this check would fail on the first one or two labels and
+          # only pass on the last: reading live state instead means every run sees
+          # the same (already-complete, by the time it executes) label set.
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
+          for i in 1 2 3; do
+            LABELS=$(gh pr view "${PR_NUMBER}" --repo "${REPO}" --json labels --jq '[.labels[].name]') && break
+            if [ "$i" -lt 3 ]; then
+              echo "::warning::gh pr view attempt $i/3 failed, retrying in 3s..."
+              sleep 3
+            else
+              echo "::error::gh pr view failed after 3 attempts"
+              exit 1
+            fi
+          done
           missing=()
           for label in lgtm approved jira/valid-reference; do
             if ! echo "$LABELS" | jq -e "index(\"$label\")" > /dev/null 2>&1; then

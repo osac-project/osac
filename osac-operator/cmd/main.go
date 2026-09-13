@@ -65,6 +65,7 @@ import (
 	"github.com/osac-project/osac/osac-operator/internal/controller"
 	"github.com/osac-project/osac/osac-operator/internal/dispatcheradapter"
 	"github.com/osac-project/osac/osac-operator/internal/migrations"
+	osacwebhook "github.com/osac-project/osac/osac-operator/internal/webhook"
 	"github.com/osac-project/osac/osac-operator/pkg/aap"
 	"github.com/osac-project/osac/osac-operator/pkg/dispatcher"
 	"github.com/osac-project/osac/osac-operator/pkg/networkmanager"
@@ -1239,6 +1240,12 @@ func main() {
 	}
 
 	// +kubebuilder:scaffold:builder
+
+	// Register validating webhooks.
+	mgr.GetLocalManager().GetWebhookServer().Register(
+		osacwebhook.ClusterOrderValidatingWebhookPath,
+		osacwebhook.NewClusterOrderValidatingWebhook(),
+	)
 
 	// Register data migrations as a leader-election runnable.
 	// Migrations run once after this instance becomes leader.

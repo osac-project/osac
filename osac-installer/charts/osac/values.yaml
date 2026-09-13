@@ -126,14 +126,13 @@ service:
     headers: false
     bodies: false
   vault:
-    # Vault API endpoint. tpl is applied at render time, so
-    # {{ .Release.Namespace }} expands to the actual install namespace --
-    # correct by default for the in-cluster bundled OpenBao service on any
-    # namespace. Leave empty to disable Vault integration entirely (no
-    # --vault-endpoint flag is passed to the controller when endpoint is
-    # empty, even if credentials are configured). Override with a real
-    # external Vault URL when not using the bundled OpenBao.
-    endpoint: "https://openbao.{{ .Release.Namespace }}.svc.cluster.local:8200"
+    # Vault API endpoint. Points to the osac-infra namespace by default,
+    # where bundled OpenBao is deployed after OSAC-4916. Leave empty to
+    # disable Vault integration entirely (no --vault-endpoint flag is
+    # passed to the controller when endpoint is empty, even if credentials
+    # are configured). Override with an external Vault URL when not using
+    # the bundled OpenBao.
+    endpoint: "https://openbao.osac-infra.svc.cluster.local:8200"
     namespace: osac
     kvMountPath: secret
     lifecycleRole: ""
@@ -372,26 +371,6 @@ metallb:
 
 hubAccess:
   enabled: false
-
-bundledVault:
-  enabled: true
-  devRootToken: "dev-root-token"
-  image: "ghcr.io/openbao/openbao:2.6.2"
-  # podSecurityContext: {}
-  # Leave absent (nil) to use the template's built-in standard-Kubernetes defaults
-  # (runAsNonRoot: true, runAsUser: 100, runAsGroup: 1000, fsGroup: 1000).
-  # On OpenShift with restricted-v2 SCC, set this to just {runAsNonRoot: true}
-  # in the profile's instance.yaml — the SCC allocates UIDs from the namespace
-  # UID range and resolves the named user automatically. Any non-nil value here
-  # FULLY REPLACES the template default (no Helm key-merge), so partial overrides
-  # must include every key you want rendered.
-  resources:
-    limits:
-      cpu: 500m
-      memory: 512Mi
-    requests:
-      cpu: 100m
-      memory: 256Mi
 
 clusterVersions:
   enabled: false

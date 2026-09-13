@@ -96,6 +96,40 @@ bundledPostgres:
       cpu: 50m
       memory: 128Mi
 
+# --- Bundled OpenBao (dev/CI only) ---
+# Single-pod ephemeral Vault-compatible secret store. Dev mode -- data is
+# lost on restart. Not for production.
+bundledVault:
+  enabled: true
+  devRootToken: "dev-root-token"
+  image: "ghcr.io/openbao/openbao:2.6.2"
+  # podSecurityContext: {}
+  # Leave absent (nil) to use the template's built-in standard-Kubernetes defaults
+  # (runAsNonRoot: true, runAsUser: 100, runAsGroup: 1000, fsGroup: 1000).
+  # On OpenShift with restricted-v2 SCC, set this to just {runAsNonRoot: true}
+  # in the profile's infra.yaml — the SCC allocates UIDs from the namespace
+  # UID range and resolves the named user automatically. Any non-nil value here
+  # FULLY REPLACES the template default (no Helm key-merge), so partial overrides
+  # must include every key you want rendered.
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+  # --- Bootstrap configuration ---
+  # keycloakIssuerUrl: Keycloak OIDC issuer URL for JWT auth bootstrap. On
+  # OpenShift this must be the external route URL (not the internal service URL)
+  # to avoid OIDC discovery issuer mismatch. Leave empty to skip JWT bootstrap.
+  keycloakIssuerUrl: ""
+  # keycloakAudience: expected "aud" claim in JWT tokens.
+  keycloakAudience: "osac-api"
+  # vaultNamespace: OpenBao/Vault logical namespace (NOT Kubernetes namespace).
+  # The init script creates this as a child namespace inside the OpenBao server
+  # and configures JWT auth and policies within it.
+  vaultNamespace: "osac"
+
 # --- TLS certificate configuration for shared infrastructure ---
 certs:
   issuerRef:

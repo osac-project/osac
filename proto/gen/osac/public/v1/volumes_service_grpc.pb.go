@@ -32,8 +32,11 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Volumes_List_FullMethodName = "/osac.public.v1.Volumes/List"
-	Volumes_Get_FullMethodName  = "/osac.public.v1.Volumes/Get"
+	Volumes_List_FullMethodName   = "/osac.public.v1.Volumes/List"
+	Volumes_Get_FullMethodName    = "/osac.public.v1.Volumes/Get"
+	Volumes_Create_FullMethodName = "/osac.public.v1.Volumes/Create"
+	Volumes_Update_FullMethodName = "/osac.public.v1.Volumes/Update"
+	Volumes_Delete_FullMethodName = "/osac.public.v1.Volumes/Delete"
 )
 
 // VolumesClient is the client API for Volumes service.
@@ -44,6 +47,12 @@ type VolumesClient interface {
 	List(ctx context.Context, in *VolumesListRequest, opts ...grpc.CallOption) (*VolumesListResponse, error)
 	// Retrieves the details of one specific volume.
 	Get(ctx context.Context, in *VolumesGetRequest, opts ...grpc.CallOption) (*VolumesGetResponse, error)
+	// Creates a new volume.
+	Create(ctx context.Context, in *VolumesCreateRequest, opts ...grpc.CallOption) (*VolumesCreateResponse, error)
+	// Updates an existing volume.
+	Update(ctx context.Context, in *VolumesUpdateRequest, opts ...grpc.CallOption) (*VolumesUpdateResponse, error)
+	// Deletes a volume.
+	Delete(ctx context.Context, in *VolumesDeleteRequest, opts ...grpc.CallOption) (*VolumesDeleteResponse, error)
 }
 
 type volumesClient struct {
@@ -74,6 +83,36 @@ func (c *volumesClient) Get(ctx context.Context, in *VolumesGetRequest, opts ...
 	return out, nil
 }
 
+func (c *volumesClient) Create(ctx context.Context, in *VolumesCreateRequest, opts ...grpc.CallOption) (*VolumesCreateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(VolumesCreateResponse)
+	err := c.cc.Invoke(ctx, Volumes_Create_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *volumesClient) Update(ctx context.Context, in *VolumesUpdateRequest, opts ...grpc.CallOption) (*VolumesUpdateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(VolumesUpdateResponse)
+	err := c.cc.Invoke(ctx, Volumes_Update_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *volumesClient) Delete(ctx context.Context, in *VolumesDeleteRequest, opts ...grpc.CallOption) (*VolumesDeleteResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(VolumesDeleteResponse)
+	err := c.cc.Invoke(ctx, Volumes_Delete_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // VolumesServer is the server API for Volumes service.
 // All implementations must embed UnimplementedVolumesServer
 // for forward compatibility.
@@ -82,6 +121,12 @@ type VolumesServer interface {
 	List(context.Context, *VolumesListRequest) (*VolumesListResponse, error)
 	// Retrieves the details of one specific volume.
 	Get(context.Context, *VolumesGetRequest) (*VolumesGetResponse, error)
+	// Creates a new volume.
+	Create(context.Context, *VolumesCreateRequest) (*VolumesCreateResponse, error)
+	// Updates an existing volume.
+	Update(context.Context, *VolumesUpdateRequest) (*VolumesUpdateResponse, error)
+	// Deletes a volume.
+	Delete(context.Context, *VolumesDeleteRequest) (*VolumesDeleteResponse, error)
 	mustEmbedUnimplementedVolumesServer()
 }
 
@@ -97,6 +142,15 @@ func (UnimplementedVolumesServer) List(context.Context, *VolumesListRequest) (*V
 }
 func (UnimplementedVolumesServer) Get(context.Context, *VolumesGetRequest) (*VolumesGetResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Get not implemented")
+}
+func (UnimplementedVolumesServer) Create(context.Context, *VolumesCreateRequest) (*VolumesCreateResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Create not implemented")
+}
+func (UnimplementedVolumesServer) Update(context.Context, *VolumesUpdateRequest) (*VolumesUpdateResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Update not implemented")
+}
+func (UnimplementedVolumesServer) Delete(context.Context, *VolumesDeleteRequest) (*VolumesDeleteResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
 }
 func (UnimplementedVolumesServer) mustEmbedUnimplementedVolumesServer() {}
 func (UnimplementedVolumesServer) testEmbeddedByValue()                 {}
@@ -155,6 +209,60 @@ func _Volumes_Get_Handler(srv interface{}, ctx context.Context, dec func(interfa
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Volumes_Create_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(VolumesCreateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VolumesServer).Create(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Volumes_Create_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VolumesServer).Create(ctx, req.(*VolumesCreateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Volumes_Update_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(VolumesUpdateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VolumesServer).Update(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Volumes_Update_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VolumesServer).Update(ctx, req.(*VolumesUpdateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Volumes_Delete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(VolumesDeleteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VolumesServer).Delete(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Volumes_Delete_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VolumesServer).Delete(ctx, req.(*VolumesDeleteRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Volumes_ServiceDesc is the grpc.ServiceDesc for Volumes service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -169,6 +277,18 @@ var Volumes_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Get",
 			Handler:    _Volumes_Get_Handler,
+		},
+		{
+			MethodName: "Create",
+			Handler:    _Volumes_Create_Handler,
+		},
+		{
+			MethodName: "Update",
+			Handler:    _Volumes_Update_Handler,
+		},
+		{
+			MethodName: "Delete",
+			Handler:    _Volumes_Delete_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

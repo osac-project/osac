@@ -284,8 +284,11 @@ allow if {
     "/osac.public.v1.Secrets/Get",
     "/osac.public.v1.Secrets/List",
     "/osac.public.v1.Secrets/Update",
+    "/osac.public.v1.Volumes/Create",
+    "/osac.public.v1.Volumes/Delete",
     "/osac.public.v1.Volumes/Get",
     "/osac.public.v1.Volumes/List",
+    "/osac.public.v1.Volumes/Update",
   }
 }
 

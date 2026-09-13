@@ -997,6 +997,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		SetAttributionLogic(deps.PublicAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
+		SetTierResolver(deps.TierResolver).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create volumes server: %w", err)

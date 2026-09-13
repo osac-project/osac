@@ -1,0 +1,76 @@
+---
+# Stop e2e work the moment a PR closes -- merged or not -- instead of letting
+# in-flight full-install runs finish for no reason, or leaving invalidate-time
+# in_progress gate checks (see e2e-on-label's invalidate-e2e-gates) sitting
+# unresolved forever once nothing will ever complete them. pull_request_target
+# uses the base-branch workflow YAML and base-repo GITHUB_TOKEN (required to
+# cancel runs and patch checks on fork PRs).
+name: Cancel e2e on PR close
+on:
+  pull_request_target:
+    types: [closed]
+    branches: [main]
+
+jobs:
+  # Re-check live PR state before cleanup runs: pull_request_target's event
+  # payload reflects state at trigger time, and a queued/delayed run could
+  # fire after the PR was reopened -- cancelling e2e work or dismissing gate
+  # checks a reopened PR still needs. Cheap guard, no side effects of its own.
+  guard:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      still-closed: ${{ steps.check.outputs.still-closed }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          state=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.state')
+          if [[ "${state}" == "closed" ]]; then
+            echo "still-closed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "PR #${PR_NUMBER} is ${state}, not closed anymore; skipping cleanup."
+            echo "still-closed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  cancel-in-flight-runs:
+    needs: guard
+    if: needs.guard.outputs.still-closed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts/cancel-stale-e2e-runs.sh
+      - name: Cancel all in-flight full-install runs for this PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          CANCEL_ALL: "true"
+        run: bash .github/scripts/cancel-stale-e2e-runs.sh
+
+  dismiss-orphan-gates:
+    needs: guard
+    if: needs.guard.outputs.still-closed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      checks: write
+    steps:
+      - name: Dismiss any remaining in_progress gate checks
+        uses: osac-project/osac-test-infra/.github/actions/complete-stale-e2e-gates@main
+        with:
+          head-sha: ${{ github.event.pull_request.head.sha }}
+          after-native-success: false
+          github-token: ${{ secrets.MERGE_QUEUE_TOKEN }}

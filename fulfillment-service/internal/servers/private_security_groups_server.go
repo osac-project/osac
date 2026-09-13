@@ -44,6 +44,7 @@ type PrivateSecurityGroupsServer struct {
 	privatev1.UnimplementedSecurityGroupsServer
 
 	logger            *slog.Logger
+	tenancyLogic      auth.TenancyLogic
 	generic           *GenericServer[*privatev1.SecurityGroup]
 	virtualNetworkDao *dao.GenericDAO[*privatev1.VirtualNetwork]
 }
@@ -128,6 +129,7 @@ func (b *PrivateSecurityGroupsServerBuilder) Build() (result *PrivateSecurityGro
 	// Create and populate the object:
 	result = &PrivateSecurityGroupsServer{
 		logger:            b.logger,
+		tenancyLogic:      b.tenancyLogic,
 		generic:           generic,
 		virtualNetworkDao: virtualNetworkDao,
 	}
@@ -241,7 +243,7 @@ func (s *PrivateSecurityGroupsServer) validateSecurityGroup(ctx context.Context,
 	// Validate parent VirtualNetwork
 	// Only validate on Create or if virtual_network changed (though it shouldn't on Update)
 	if existingSecurityGroup == nil || refKey(spec.GetVirtualNetwork()) != refKey(existingSecurityGroup.GetSpec().GetVirtualNetwork()) {
-		if err := s.validateVirtualNetworkReference(ctx, spec); err != nil {
+		if err := s.validateVirtualNetworkReference(ctx, newSecurityGroup); err != nil {
 			return err
 		}
 	}
@@ -256,7 +258,8 @@ func (s *PrivateSecurityGroupsServer) validateSecurityGroup(ctx context.Context,
 
 // validateVirtualNetworkReference validates that the referenced VirtualNetwork exists and is in READY state.
 func (s *PrivateSecurityGroupsServer) validateVirtualNetworkReference(ctx context.Context,
-	spec *privatev1.SecurityGroupSpec) error {
+	securityGroup *privatev1.SecurityGroup) error {
+	spec := securityGroup.GetSpec()
 
 	virtualNetworkRef := spec.GetVirtualNetwork()
 	if virtualNetworkRef == nil {
@@ -281,6 +284,13 @@ func (s *PrivateSecurityGroupsServer) validateVirtualNetworkReference(ctx contex
 	}
 
 	virtualNetwork := getResponse.GetObject()
+	securityGroupTenant, err := resolveObjectTenant(ctx, securityGroup.GetMetadata(), s.tenancyLogic)
+	if err != nil {
+		return err
+	}
+	if err := validateTenantMatch(securityGroupTenant, virtualNetwork, "VirtualNetwork", virtualNetworkKey); err != nil {
+		return err
+	}
 
 	// Check parent VirtualNetwork is READY
 	if virtualNetwork.GetStatus().GetState() != privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY {

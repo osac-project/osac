@@ -44,6 +44,7 @@ type PrivateNATGatewaysServer struct {
 	privatev1.UnimplementedNATGatewaysServer
 
 	logger             *slog.Logger
+	tenancyLogic       auth.TenancyLogic
 	generic            *GenericServer[*privatev1.NATGateway]
 	externalIPDao      *dao.GenericDAO[*privatev1.ExternalIP]
 	virtualNetworksDao *dao.GenericDAO[*privatev1.VirtualNetwork]
@@ -142,6 +143,7 @@ func (b *PrivateNATGatewaysServerBuilder) Build() (result *PrivateNATGatewaysSer
 
 	result = &PrivateNATGatewaysServer{
 		logger:             b.logger,
+		tenancyLogic:       b.tenancyLogic,
 		generic:            generic,
 		externalIPDao:      externalIPDao,
 		virtualNetworksDao: virtualNetworksDao,
@@ -170,7 +172,25 @@ func (s *PrivateNATGatewaysServer) Create(ctx context.Context,
 	if err != nil {
 		return
 	}
-
+	natTenant, tenantErr := resolveObjectTenant(ctx, natGateway.GetMetadata(), s.tenancyLogic)
+	if tenantErr != nil {
+		err = tenantErr
+		return
+	}
+	virtualNetworkKey := refKey(natGateway.GetSpec().GetVirtualNetwork())
+	virtualNetworkResponse, getErr := s.virtualNetworksDao.Get().SetId(virtualNetworkKey).Do(ctx)
+	if getErr != nil {
+		var notFoundErr *dao.ErrNotFound
+		if errors.As(getErr, &notFoundErr) {
+			err = grpcstatus.Errorf(grpccodes.InvalidArgument, "virtual network '%s' does not exist", virtualNetworkKey)
+		} else {
+			err = getErr
+		}
+		return
+	}
+	if err = validateTenantMatch(natTenant, virtualNetworkResponse.GetObject(), "VirtualNetwork", virtualNetworkKey); err != nil {
+		return
+	}
 	err = s.validateNetworkClassHasFabricManager(ctx, refKey(natGateway.GetSpec().GetVirtualNetwork()))
 	if err != nil {
 		return
@@ -178,8 +198,12 @@ func (s *PrivateNATGatewaysServer) Create(ctx context.Context,
 
 	externalIPKey := refKey(natGateway.GetSpec().GetExternalIp())
 
-	err = s.validateExternalIPReference(ctx, externalIPKey)
+	var externalIP *privatev1.ExternalIP
+	externalIP, err = s.validateExternalIPReference(ctx, externalIPKey)
 	if err != nil {
+		return
+	}
+	if err = validateTenantMatch(natTenant, externalIP, "ExternalIP", externalIPKey); err != nil {
 		return
 	}
 
@@ -305,7 +329,7 @@ func validateImmutableFieldsNATGateway(
 }
 
 func (s *PrivateNATGatewaysServer) validateExternalIPReference(
-	ctx context.Context, externalIPID string) error {
+	ctx context.Context, externalIPID string) (*privatev1.ExternalIP, error) {
 	getResponse, err := s.externalIPDao.Get().
 		SetId(externalIPID).
 		SetLock(true).
@@ -313,29 +337,29 @@ func (s *PrivateNATGatewaysServer) validateExternalIPReference(
 	if err != nil {
 		var notFoundErr *dao.ErrNotFound
 		if errors.As(err, &notFoundErr) {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"ExternalIP '%s' does not exist", externalIPID)
 		}
 		s.logger.ErrorContext(ctx, "Failed to query ExternalIP",
 			slog.String("external_ip_id", externalIPID),
 			slog.Any("error", err))
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to validate external_ip")
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to validate external_ip")
 	}
 
 	externalIP := getResponse.GetObject()
 
 	if externalIP.GetStatus().GetState() != privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED {
-		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+		return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition,
 			"ExternalIP '%s' is not in ALLOCATED state (current state: %s)",
 			externalIPID, externalIP.GetStatus().GetState().String())
 	}
 
 	if externalIP.GetStatus().GetAttached() {
-		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+		return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition,
 			"ExternalIP '%s' is already attached", externalIPID)
 	}
 
-	return nil
+	return externalIP, nil
 }
 
 // validateNetworkClassHasFabricManager resolves the VirtualNetwork referenced by virtualNetworkID to its

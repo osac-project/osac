@@ -18,3 +18,30 @@ create_issues:
         repos:
             - osac-project/osac
             - fullsend-ai/fullsend
+
+# OSAC-specific configuration
+# Always include these files in review context
+context_files:
+    # fullsend review guidance
+    - .fullsend/README.md
+    - .fullsend/REVIEW_GUIDE.md
+    - .fullsend/COMPONENT_MAP.md
+
+    # Root-level architecture docs
+    - AGENTS.md
+    - CLAUDE.md
+    - docs/ARCHITECTURE.md
+    - docs/CONVENTIONS.md
+    - fulfillment-service/docs/AUTH.md
+    - .claude/rules/architecture-patterns.md
+    - .claude/rules/networking-design-alignment.md
+    - .claude/rules/request-path-tracing.md
+
+    # Component-specific docs (read only for components touched by PR)
+    - bare-metal-fulfillment-operator/AGENTS.md
+    - fulfillment-service/AGENTS.md
+    - osac-aap/AGENTS.md
+    - osac-csi-driver/AGENTS.md
+    - osac-installer/AGENTS.md
+    - osac-operator/AGENTS.md
+    - osac-metering/AGENTS.md

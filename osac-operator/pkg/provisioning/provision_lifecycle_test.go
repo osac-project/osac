@@ -153,6 +153,122 @@ var _ = ginkgo.Describe("EvaluateAction", func() {
 	)
 })
 
+var _ = ginkgo.Describe("Orphan adoption in RunProvisioningLifecycle", func() {
+	noAPIServerJob := func() bool { return false }
+
+	ginkgo.It("adopts an orphaned resource instead of triggering a new provision job", func() {
+		triggerCalled := false
+		provider := &mockProvider{
+			triggerProvisionFunc: func(_ context.Context, _ client.Object) (*ProvisionResult, error) {
+				triggerCalled = true
+				return &ProvisionResult{JobID: "should-not-trigger"}, nil
+			},
+		}
+		resource := &v1alpha1.ComputeInstance{}
+		jobs := []v1alpha1.JobStatus{}
+		provState := &State{
+			Jobs:                 &jobs,
+			DesiredConfigVersion: "v1",
+			ResourceExists:       func() bool { return true },
+		}
+
+		flushed := false
+		statusFlush := func() error { flushed = true; return nil }
+
+		result, err := RunProvisioningLifecycle(ctx, provider, resource, provState,
+			5, 30*time.Second, nil, noAPIServerJob, statusFlush)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(triggerCalled).To(BeFalse(), "provider should not be called when resource already exists")
+		Expect(flushed).To(BeTrue(), "statusFlush should fire to persist the adoption record")
+		Expect(result).To(Equal(ctrl.Result{}), "no requeue needed after adoption")
+		Expect(*provState.Jobs).To(HaveLen(1))
+
+		adoptedJob := FindLatestJobByType(*provState.Jobs, v1alpha1.JobTypeProvision)
+		Expect(adoptedJob).NotTo(BeNil())
+		Expect(adoptedJob.JobID).To(Equal("adopted-orphan"))
+		Expect(adoptedJob.State).To(Equal(v1alpha1.JobStateSucceeded))
+		Expect(adoptedJob.ConfigVersion).To(Equal("v1"))
+		Expect(adoptedJob.Message).To(ContainSubstring("crash recovery"))
+	})
+
+	ginkgo.It("triggers normally when ResourceExists is nil (backward compatible)", func() {
+		provider := &mockProvider{}
+		resource := &v1alpha1.ComputeInstance{}
+		jobs := []v1alpha1.JobStatus{}
+		provState := &State{
+			Jobs:                 &jobs,
+			DesiredConfigVersion: "v1",
+			ResourceExists:       nil,
+		}
+
+		result, err := RunProvisioningLifecycle(ctx, provider, resource, provState,
+			5, 30*time.Second, nil, noAPIServerJob, nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(Equal(30 * time.Second))
+		Expect(*provState.Jobs).To(HaveLen(1))
+		Expect((*provState.Jobs)[0].JobID).To(Equal("mock-job"))
+	})
+
+	ginkgo.It("triggers normally when ResourceExists returns false", func() {
+		provider := &mockProvider{}
+		resource := &v1alpha1.ComputeInstance{}
+		jobs := []v1alpha1.JobStatus{}
+		provState := &State{
+			Jobs:                 &jobs,
+			DesiredConfigVersion: "v1",
+			ResourceExists:       func() bool { return false },
+		}
+
+		result, err := RunProvisioningLifecycle(ctx, provider, resource, provState,
+			5, 30*time.Second, nil, noAPIServerJob, nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(Equal(30 * time.Second))
+		Expect(*provState.Jobs).To(HaveLen(1))
+		Expect((*provState.Jobs)[0].JobID).To(Equal("mock-job"))
+	})
+
+	ginkgo.It("does not adopt when a tracked job already exists (config version change triggers re-provision)", func() {
+		provider := &mockProvider{}
+		resource := &v1alpha1.ComputeInstance{}
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "old-job", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateSucceeded,
+				ConfigVersion: "v1", Timestamp: metav1.NewTime(time.Now())},
+		}
+		provState := &State{
+			Jobs:                 &jobs,
+			DesiredConfigVersion: "v2",
+			ResourceExists:       func() bool { return true },
+		}
+
+		result, err := RunProvisioningLifecycle(ctx, provider, resource, provState,
+			5, 30*time.Second, nil, noAPIServerJob, nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(Equal(30 * time.Second))
+		// A new job should be triggered (config version changed), not adopted
+		newJob := FindLatestJobByType(*provState.Jobs, v1alpha1.JobTypeProvision)
+		Expect(newJob.JobID).To(Equal("mock-job"))
+	})
+
+	ginkgo.It("skips on next reconcile after adopting an orphan", func() {
+		resource := &v1alpha1.ComputeInstance{}
+		// Simulate post-adoption state: adopted-orphan job exists with matching config version
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "adopted-orphan", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateSucceeded,
+				ConfigVersion: "v1", Timestamp: metav1.NewTime(time.Now())},
+		}
+		provState := &State{
+			Jobs:                 &jobs,
+			DesiredConfigVersion: "v1",
+			ResourceExists:       func() bool { return true },
+		}
+
+		result, err := RunProvisioningLifecycle(ctx, &mockProvider{}, resource, provState,
+			5, 30*time.Second, nil, noAPIServerJob, nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(Equal(ctrl.Result{}), "should Skip with no requeue")
+	})
+})
+
 var _ = ginkgo.Describe("RunProvisioningLifecycle", func() {
 	noAPIServerJob := func() bool { return false }
 
@@ -609,6 +725,53 @@ var _ = ginkgo.Describe("RunMultiTargetProvisioningLifecycle", func() {
 		backfilled := FindLatestJobByTypeAndTarget(*provState.Jobs, v1alpha1.JobTypeProvision, "fabric")
 		Expect(backfilled).NotTo(BeNil())
 		Expect(backfilled.JobID).To(Equal("legacy-1"))
+	})
+
+	ginkgo.It("adopts an orphaned resource for one target while triggering normally for another (OSAC-4517)", func() {
+		fabricTriggerCalled := false
+		fabricProvider := &mockProvider{
+			triggerProvisionFunc: func(_ context.Context, _ client.Object) (*ProvisionResult, error) {
+				fabricTriggerCalled = true
+				return &ProvisionResult{JobID: "should-not-trigger"}, nil
+			},
+		}
+		k8sTriggerCalled := false
+		k8sProvider := &mockProvider{
+			triggerProvisionFunc: func(_ context.Context, _ client.Object) (*ProvisionResult, error) {
+				k8sTriggerCalled = true
+				return &ProvisionResult{JobID: "k8s-job"}, nil
+			},
+		}
+		resource := &v1alpha1.Subnet{}
+		jobs := []v1alpha1.JobStatus{}
+		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
+
+		flushCount := 0
+		statusFlush := func() error { flushCount++; return nil }
+
+		targets := []JobTarget{
+			{Name: "fabric", Provider: fabricProvider, CheckAPIServer: noAPIServerJob,
+				ResourceExists: func() bool { return true }},
+			{Name: "k8s", Provider: k8sProvider, CheckAPIServer: noAPIServerJob,
+				ResourceExists: func() bool { return false }},
+		}
+
+		result, err := RunMultiTargetProvisioningLifecycle(ctx, targets, resource, provState, 5, 30*time.Second, statusFlush)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fabricTriggerCalled).To(BeFalse(), "fabric resource exists — should adopt, not trigger")
+		Expect(k8sTriggerCalled).To(BeTrue(), "k8s resource does not exist — should trigger normally")
+		Expect(flushCount).To(Equal(1), "statusFlush should fire exactly once (adoption + trigger)")
+		Expect(result.RequeueAfter).To(Equal(30 * time.Second))
+
+		fabricJob := FindLatestJobByTypeAndTarget(*provState.Jobs, v1alpha1.JobTypeProvision, "fabric")
+		Expect(fabricJob).NotTo(BeNil())
+		Expect(fabricJob.JobID).To(Equal("adopted-orphan"))
+		Expect(fabricJob.State).To(Equal(v1alpha1.JobStateSucceeded))
+		Expect(fabricJob.Target).To(Equal("fabric"))
+
+		k8sJob := FindLatestJobByTypeAndTarget(*provState.Jobs, v1alpha1.JobTypeProvision, "k8s")
+		Expect(k8sJob).NotTo(BeNil())
+		Expect(k8sJob.JobID).To(Equal("k8s-job"))
 	})
 })
 

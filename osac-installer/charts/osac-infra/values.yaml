@@ -86,8 +86,8 @@ kafka:
 bundledPostgres:
   enabled: false
   database:
-    name: service
-    user: service
+    name: osac_service
+    user: osac_service
   resources:
     limits:
       cpu: 500m

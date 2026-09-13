@@ -62,6 +62,11 @@ echo "Waiting for pods to terminate..."
 kubectl wait --for=delete pod --all -n kubevirt --timeout=60s 2>/dev/null || echo "Some kubevirt pods still terminating"
 kubectl wait --for=delete pod --all -n cdi --timeout=60s 2>/dev/null || echo "Some cdi pods still terminating"
 
+# Scaled-to-0 deployments leave these APIServices registered but unreachable, which
+# breaks cluster-wide discovery and can wedge any later namespace delete forever.
+echo "Removing stale KubeVirt/CDI APIServices to keep namespace discovery healthy..."
+kubectl delete apiservice v1.subresources.kubevirt.io v1alpha3.subresources.kubevirt.io v1beta1.upload.cdi.kubevirt.io --ignore-not-found 2>/dev/null || echo "Could not remove one or more stale APIServices"
+
 echo "KubeVirt and CDI deployments scaled down. CRs and CRDs remain available for testing."
 
 echo "Installing OLM CRDs..."
@@ -163,20 +168,114 @@ CSIEOF
   # Create storage test namespace and ConfigMap
   kubectl create namespace test-tenant-ns || true
 
-  # Write VAST env vars to file for run_tests.sh (Make runs each recipe line in a separate shell)
-  # VAST_ENDPOINT/VAST_USERNAME/VAST_PASSWORD/STORAGE_TIERS are no longer read by any
-  # playbook or role (OSAC-1992 moved credential/tier input to
-  # storage_provider_backend_connections/storage_provider_tiers extra_vars, set directly
-  # by each test target) -- only VIP pool and TLS settings remain relevant here.
-  # Resolve the csi-backends chart path from the repo root — integration tests
-  # run playbooks from test subdirectories, not the top-level osac-aap/ dir,
-  # so the playbook_dir-based default doesn't resolve correctly.
-  REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-  cat > "${SCRIPT_DIR}/.storage_env" <<ENVEOF
+# Write storage-test environment values for run_tests.sh (Make runs each recipe line
+# in a separate shell). Test credentials are generated per setup run so integration
+# fixtures retain placeholder-password behavior without committing credential-shaped
+# literals to task files.
+OSAC_TEST_VAST_PASSWORD="$(openssl rand -hex 16)"
+OSAC_TEST_TENANT_PASSWORD="$(openssl rand -hex 16)"
+OSAC_TEST_OAUTH_CLIENT_ID="osac-test-$(openssl rand -hex 8)"
+OSAC_TEST_OAUTH_CLIENT_SECRET="$(openssl rand -hex 16)"
+OSAC_TEST_ENCRYPTION_PASSPHRASE="$(openssl rand -hex 16)"
+OSAC_TEST_API_TOKEN="$(openssl rand -hex 24)"
+cat > "${SCRIPT_DIR}/.storage_env" <<ENVEOF
 export VAST_VIP_POOL_SUPERNET="10.0.0.0/24"
 export VAST_VALIDATE_CERTS="false"
-export OSAC_CSI_BACKENDS_CHART_REF="${REPO_ROOT}/../osac-csi-driver/charts/csi-backends"
+export OSAC_TEST_VAST_PASSWORD="${OSAC_TEST_VAST_PASSWORD}"
+export OSAC_TEST_TENANT_PASSWORD="${OSAC_TEST_TENANT_PASSWORD}"
+export OSAC_TEST_OAUTH_CLIENT_ID="${OSAC_TEST_OAUTH_CLIENT_ID}"
+export OSAC_TEST_OAUTH_CLIENT_SECRET="${OSAC_TEST_OAUTH_CLIENT_SECRET}"
+export OSAC_TEST_ENCRYPTION_PASSPHRASE="${OSAC_TEST_ENCRYPTION_PASSPHRASE}"
+export OSAC_TEST_API_TOKEN="${OSAC_TEST_API_TOKEN}"
 ENVEOF
-fi
 
+  # Set up a local, TLS-trusted OCI registry hosting the csi-driver chart at two
+  # test versions. This keeps role-level tests deterministic and independent of
+  # the umbrella-owned csi-backends release.
+  # Plain HTTP is not viable: the vendored kubernetes.core.helm module (pinned 5.2.0)
+  # has no plain_http or insecure-skip-tls-verify parameter at all, and Helm's own OCI
+  # client special-cases localhost/127.0.0.1 to force plain HTTP regardless of TLS config.
+  # localtest.me resolves to 127.0.0.1 without /etc/hosts changes.
+  echo "Setting up local TLS OCI registry for csi_driver_install tests..."
+
+  CSI_DRIVER_TEST_REGISTRY_HOST="localtest.me"
+  CSI_DRIVER_TEST_REGISTRY_PORT="5500"
+  CSI_DRIVER_TEST_REGISTRY_REPO="oci://${CSI_DRIVER_TEST_REGISTRY_HOST}:${CSI_DRIVER_TEST_REGISTRY_PORT}/csi-driver-test"
+  # Prefer the same container tool kind itself would use (KIND_EXPERIMENTAL_PROVIDER),
+  # falling back to whichever of docker/podman is actually installed.
+  if [ -n "${KIND_EXPERIMENTAL_PROVIDER:-}" ]; then
+    CSI_DRIVER_TEST_CONTAINER_TOOL="${KIND_EXPERIMENTAL_PROVIDER}"
+  elif command -v docker > /dev/null 2>&1; then
+    CSI_DRIVER_TEST_CONTAINER_TOOL="docker"
+  else
+    CSI_DRIVER_TEST_CONTAINER_TOOL="podman"
+  fi
+
+  # This whole section is best-effort: it must never abort the rest of setup. The
+  # playbook wiring tests do not need the registry because they stub the Helm install.
+  # Only Debian/Ubuntu's system trust store is supported today, matching CI. If setup
+  # is skipped, the role-level test uses the published osac-csi-driver/v0.0.1 chart.
+  if [ -d /usr/local/share/ca-certificates ]; then
+    echo "Generating a local CA and server certificate for ${CSI_DRIVER_TEST_REGISTRY_HOST}..."
+    openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+      -keyout "${SCRIPT_DIR}/certs/registry-ca.key" \
+      -out "${SCRIPT_DIR}/certs/registry-ca.pem" \
+      -subj "/CN=osac-test-registry-ca" 2>/dev/null
+
+    openssl req -newkey rsa:2048 -nodes \
+      -keyout "${SCRIPT_DIR}/certs/registry.key" \
+      -out "${SCRIPT_DIR}/certs/registry.csr" \
+      -subj "/CN=${CSI_DRIVER_TEST_REGISTRY_HOST}" 2>/dev/null
+
+    echo "subjectAltName=DNS:${CSI_DRIVER_TEST_REGISTRY_HOST}" > "${SCRIPT_DIR}/certs/registry.ext"
+
+    openssl x509 -req -in "${SCRIPT_DIR}/certs/registry.csr" \
+      -CA "${SCRIPT_DIR}/certs/registry-ca.pem" -CAkey "${SCRIPT_DIR}/certs/registry-ca.key" \
+      -CAcreateserial -out "${SCRIPT_DIR}/certs/registry.pem" \
+      -days 1 -extfile "${SCRIPT_DIR}/certs/registry.ext" 2>/dev/null
+
+    echo "Installing the local CA into the system trust store..."
+    sudo cp "${SCRIPT_DIR}/certs/registry-ca.pem" /usr/local/share/ca-certificates/osac-test-registry-ca.crt
+    sudo update-ca-certificates > /dev/null
+
+    echo "Starting local OCI registry (TLS) on port ${CSI_DRIVER_TEST_REGISTRY_PORT}..."
+    "${CSI_DRIVER_TEST_CONTAINER_TOOL}" rm -f osac-test-csi-registry > /dev/null 2>&1 || true
+    "${CSI_DRIVER_TEST_CONTAINER_TOOL}" run -d --name osac-test-csi-registry \
+      -p "${CSI_DRIVER_TEST_REGISTRY_PORT}:5000" \
+      -v "${SCRIPT_DIR}/certs:/certs:ro" \
+      -e REGISTRY_HTTP_TLS_CERTIFICATE=/certs/registry.pem \
+      -e REGISTRY_HTTP_TLS_KEY=/certs/registry.key \
+      registry:2 > /dev/null
+
+    echo "Waiting for local OCI registry to be ready..."
+    for i in $(seq 1 10); do
+      if curl -sf "https://${CSI_DRIVER_TEST_REGISTRY_HOST}:${CSI_DRIVER_TEST_REGISTRY_PORT}/v2/" > /dev/null 2>&1; then
+        echo "Local OCI registry ready on ${CSI_DRIVER_TEST_REGISTRY_HOST}:${CSI_DRIVER_TEST_REGISTRY_PORT}"
+        break
+      fi
+      sleep 1
+    done
+
+    echo "Packaging and pushing the csi-driver chart at versions 0.1.0 and 0.1.1..."
+    CSI_DRIVER_CHARTS_DIR="${REPO_ROOT}/osac-csi-driver/charts"
+    CSI_DRIVER_CHART_PKG_DIR="${SCRIPT_DIR}/.csi_driver_chart_pkgs"
+    rm -rf "${CSI_DRIVER_CHART_PKG_DIR}"
+    mkdir -p "${CSI_DRIVER_CHART_PKG_DIR}"
+
+    for version in 0.1.0 0.1.1; do
+      helm package "${CSI_DRIVER_CHARTS_DIR}/csi-driver" --version "${version}" --app-version "${version}" \
+        -d "${CSI_DRIVER_CHART_PKG_DIR}"
+      helm push "${CSI_DRIVER_CHART_PKG_DIR}/csi-driver-${version}.tgz" "${CSI_DRIVER_TEST_REGISTRY_REPO}"
+    done
+
+    # Append to the same env file consumed by run_tests.sh (Make runs each recipe line in
+    # a separate shell) so the csi_driver_install role-level test uses this deterministic
+    # local chart instead of depending on GHCR network access.
+    cat >> "${SCRIPT_DIR}/.storage_env" <<ENVEOF
+export CSI_DRIVER_INSTALL_TEST_REGISTRY="${CSI_DRIVER_TEST_REGISTRY_REPO}"
+ENVEOF
+  else
+    echo "No supported CA trust store found (expected /usr/local/share/ca-certificates on Debian/Ubuntu, which is what CI runs on) -- skipping local OCI registry setup. csi_driver_install's role-level test will use the published GHCR chart if accessible; every other STORAGE_TESTS_ENABLED test is unaffected."
+  fi
+fi
 echo "=== Test environment ready ==="

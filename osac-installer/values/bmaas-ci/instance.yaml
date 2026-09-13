@@ -11,12 +11,11 @@ global:
       enabled: true
     maas:
       enabled: false
-
 # --- Operator ---
 operator:
   image:
     repository: ghcr.io/osac-project/osac-operator
-    tag: latest
+    tag: sha-24b969e
     pullPolicy: Always
   provisioning:
     provider: "aap"
@@ -36,16 +35,15 @@ operator:
   hubAccess:
     enabled: true
   tenants:
-  - name: shared
-  - name: osac-e2e-ci
-
+    - name: shared
+    - name: osac-e2e-ci
 # --- Fulfillment Service ---
 service:
-  externalHostname: ""  # Set dynamically by make install-osac
-  internalHostname: ""  # Set dynamically by make install-osac
+  externalHostname: "" # Set dynamically by make install-osac
+  internalHostname: "" # Set dynamically by make install-osac
   variant: openshift
   images:
-    service: ghcr.io/osac-project/fulfillment-service:main
+    service: ghcr.io/osac-project/fulfillment-service:sha-24b969e
     envoy: ghcr.io/osac-project/envoy:v1.33.0
   certs:
     issuerRef:
@@ -58,48 +56,48 @@ service:
     # (see charts/osac/values.yaml) -- correct automatically once
     # install-osac sets --set global.clusterDomain=$(DOMAIN).
     emergencyServiceAccounts:
-    - admin
-    - osac-operator
-    - osac-operator-controller-manager
-    - template-publisher
-    - osac-metering
+      - admin
+      - osac-operator
+      - osac-operator-controller-manager
+      - template-publisher
+      - osac-metering
     controllerCredentials:
-    - secret:
-        name: fulfillment-controller-credentials
-        items:
-        - key: client-id
-          param: client-id
-        - key: client-secret
-          param: client-secret
+      - secret:
+          name: fulfillment-controller-credentials
+          items:
+            - key: client-id
+              param: client-id
+            - key: client-secret
+              param: client-secret
   idp:
     provider: keycloak
     # url defaults to a global.clusterDomain-backed external route URL (see
     # charts/osac/values.yaml) -- correct automatically once install-osac
     # sets --set global.clusterDomain=$(DOMAIN).
     credentials:
-    - secret:
-        name: fulfillment-controller-credentials
-        items:
-        - key: client-id
-          param: client-id
-        - key: client-secret
-          param: client-secret
+      - secret:
+          name: fulfillment-controller-credentials
+          items:
+            - key: client-id
+              param: client-id
+            - key: client-secret
+              param: client-secret
   database:
     connection:
-    - secret:
-        name: osac-db-config
-        items:
-        - key: url
-          param: url
-    - secret:
-        name: osac-db-client-cert
-        items:
-        - key: tls.crt
-          param: sslcert
-        - key: tls.key
-          param: sslkey
-        - key: ca.crt
-          param: sslrootcert
+      - secret:
+          name: osac-db-config
+          items:
+            - key: url
+              param: url
+      - secret:
+          name: osac-db-client-cert
+          items:
+            - key: tls.crt
+              param: sslcert
+            - key: tls.key
+              param: sslkey
+            - key: ca.crt
+              param: sslrootcert
   log:
     level: debug
   vault:
@@ -114,17 +112,16 @@ service:
     caBundle:
       configMap: ca-bundle
     credentials:
-    - secret:
-        name: fulfillment-controller-credentials
-        items:
-        - key: client-secret
-          param: client-secret
-
+      - secret:
+          name: fulfillment-controller-credentials
+          items:
+            - key: client-secret
+              param: client-secret
 # --- UI ---
 ui:
   enabled: true
   images:
-    ui: ghcr.io/osac-project/osac-ui:v0.0.5
+    ui: ghcr.io/osac-project/osac-ui:sha-7c90b73
   api:
     fulfillment:
       certs:
@@ -134,7 +131,6 @@ ui:
     certs:
       caBundle:
         configMap: ca-bundle
-
 # --- AAP ---
 aap:
   aap:
@@ -143,7 +139,7 @@ aap:
       name: "osac-aap"
   bootstrap:
     enabled: true
-    image: ghcr.io/osac-project/osac-aap:latest
+    image: ghcr.io/osac-project/osac-aap:sha-24b969e
     backoffLimit: 15
   configAsCode:
     manifestSecret: "config-as-code-manifest-ig"
@@ -154,19 +150,17 @@ aap:
     # the same base value here. Extending that override to cover eeImage
     # too is tracked separately (OSAC-3545), since it lives in
     # osac-test-infra, not this repo.
-    eeImage: "ghcr.io/osac-project/osac-aap:latest"
+    eeImage: "ghcr.io/osac-project/osac-aap:sha-24b969e"
     projectGitUri: "https://github.com/osac-project/osac"
-    projectGitBranch: "main"
-
+    projectGitBranch: "24b969ea7fe6a4f47254626c7e9aa084bb367d1e"
 # --- Validation ---
 validation:
   enabled: true
-
 # --- Bare Metal Fulfillment Operator ---
 bmf:
   image:
     repository: ghcr.io/osac-project/bare-metal-fulfillment-operator
-    tag: latest
+    tag: sha-24b969e
     pullPolicy: Always
   env:
     aapUrl: "http://osac-aap/api/controller"
@@ -176,26 +170,21 @@ bmf:
     enabled: true
     namespace: host-inventory
     hostClass: metal3
-
 # --- Hub Access ---
 hubAccess:
   enabled: true
-
 networkManagers:
   - name: netris
     role: fabric
     description: "Netris SDN fabric manager"
     capabilities: "ipv4"
-
 # --- LVMS StorageBackend registration ---
 lvms:
   enabled: true
-
 # Bundled PostgreSQL: single-pod ephemeral database for testing.
 # Uses fsync=off — data is lost on restart. Not for production.
 bundledPostgres:
   enabled: true
-
 # --- Bundled OpenBao (Vault-compatible secret store) ---
 bundledVault:
   # Override podSecurityContext for OpenShift restricted-v2 SCC: omit numeric

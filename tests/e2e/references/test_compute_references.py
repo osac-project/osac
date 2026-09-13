@@ -21,6 +21,8 @@ from tests.e2e.core.runner import env
 
 logger = logging.getLogger(__name__)
 
+pytestmark = pytest.mark.requires_vmaas
+
 
 @pytest.fixture(scope="module")
 def compute_template() -> str:

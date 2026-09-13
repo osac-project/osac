@@ -208,15 +208,25 @@ func (s *PrivateNATGatewaysServer) Update(ctx context.Context,
 		return
 	}
 
+	getRequest := &privatev1.NATGatewaysGetRequest{}
+	getRequest.SetId(id)
+	var getResponse *privatev1.NATGatewaysGetResponse
+	err = s.generic.Get(ctx, getRequest, &getResponse)
+	if err != nil {
+		return
+	}
+
+	if err = validateDefaultLabelUpdate(
+		getResponse.GetObject().GetMetadata().GetLabels(),
+		request.GetObject().GetMetadata().GetLabels(),
+		request.GetUpdateMask(),
+		"NAT gateway",
+	); err != nil {
+		return
+	}
+
 	mask := request.GetUpdateMask()
 	if updateIncludesField(mask, "spec.virtual_network", "spec.external_ip") {
-		getRequest := &privatev1.NATGatewaysGetRequest{}
-		getRequest.SetId(id)
-		var getResponse *privatev1.NATGatewaysGetResponse
-		err = s.generic.Get(ctx, getRequest, &getResponse)
-		if err != nil {
-			return
-		}
 		err = validateImmutableFieldsNATGateway(request.GetObject(), getResponse.GetObject())
 		if err != nil {
 			return

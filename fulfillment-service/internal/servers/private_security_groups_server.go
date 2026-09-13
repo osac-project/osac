@@ -187,6 +187,14 @@ func (s *PrivateSecurityGroupsServer) Update(ctx context.Context,
 	}
 
 	existingSecurityGroup := getResponse.GetObject()
+	if err = validateDefaultLabelUpdate(
+		existingSecurityGroup.GetMetadata().GetLabels(),
+		request.GetObject().GetMetadata().GetLabels(),
+		request.GetUpdateMask(),
+		"security group",
+	); err != nil {
+		return
+	}
 
 	// Validate with existing object context:
 	err = s.validateSecurityGroup(ctx, request.GetObject(), existingSecurityGroup)

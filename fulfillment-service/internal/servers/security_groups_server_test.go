@@ -511,6 +511,45 @@ var _ = Describe("SecurityGroups server", func() {
 			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
 			Expect(err.Error()).To(ContainSubstring("default"))
 			Expect(err.Error()).To(ContainSubstring("system-managed"))
+
+			getResponse, err := server.Get(ctx, publicv1.SecurityGroupsGetRequest_builder{
+				Id: createResponse.GetObject().GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(getResponse.GetObject().GetMetadata().GetDeletionTimestamp()).To(BeNil())
+		})
+
+		It("blocks deletion after an update omits the default label", func() {
+			createResp, err := server.Create(ctx, publicv1.SecurityGroupsCreateRequest_builder{
+				Object: publicv1.SecurityGroup_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name:   "default-security-group-update",
+						Labels: map[string]string{"osac.openshift.io/default": "true"},
+					}.Build(),
+					Spec: publicv1.SecurityGroupSpec_builder{
+						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			object := createResp.GetObject()
+			object.GetMetadata().SetLabels(map[string]string{"env": "test"})
+			_, err = server.Update(ctx, publicv1.SecurityGroupsUpdateRequest_builder{Object: object}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+
+			_, err = server.Delete(ctx, publicv1.SecurityGroupsDeleteRequest_builder{Id: object.GetId()}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok = grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+
+			getResponse, err := server.Get(ctx, publicv1.SecurityGroupsGetRequest_builder{Id: object.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(getResponse.GetObject().GetMetadata().GetLabels()).To(HaveKeyWithValue("osac.openshift.io/default", "true"))
 		})
 	})
 })

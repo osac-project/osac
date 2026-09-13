@@ -23,6 +23,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
@@ -40,6 +41,21 @@ func validateNotDefault(labels map[string]string, resourceType string) error {
 			"cannot delete default %s: default networking resources are system-managed", resourceType)
 	}
 	return nil
+}
+
+func validateDefaultLabelUpdate(
+	existingLabels, updatedLabels map[string]string,
+	updateMask *fieldmaskpb.FieldMask,
+	resourceType string,
+) error {
+	if existingLabels[defaultLabel] != "true" || !updateIncludesField(updateMask, "metadata.labels") {
+		return nil
+	}
+	if updatedLabels[defaultLabel] == "true" {
+		return nil
+	}
+	return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+		"cannot modify default %s: default networking resources are system-managed", resourceType)
 }
 
 type DefaultNetworkingProvisionerBuilder struct {

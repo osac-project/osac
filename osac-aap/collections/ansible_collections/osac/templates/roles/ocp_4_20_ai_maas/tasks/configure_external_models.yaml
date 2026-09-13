@@ -16,7 +16,7 @@
 
 - name: Clean up leftover external subscriptions
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: absent
     api_version: maas.opendatahub.io/v1alpha1
     kind: MaaSSubscription
@@ -30,7 +30,7 @@
 
 - name: Clean up leftover external auth policies
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: absent
     api_version: maas.opendatahub.io/v1alpha1
     kind: MaaSAuthPolicy
@@ -44,7 +44,7 @@
 
 - name: Clean up leftover external model refs
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: absent
     api_version: maas.opendatahub.io/v1alpha1
     kind: MaaSModelRef
@@ -58,7 +58,7 @@
 
 - name: Clean up leftover external models
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: absent
     api_version: maas.opendatahub.io/v1alpha1
     kind: ExternalModel
@@ -72,7 +72,7 @@
 
 - name: Clean up leftover Kuadrant AuthPolicies
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: absent
     api_version: kuadrant.io/v1
     kind: AuthPolicy
@@ -86,7 +86,7 @@
 
 - name: Clean up leftover Kuadrant TRLPs
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: absent
     api_version: kuadrant.io/v1alpha1
     kind: TokenRateLimitPolicy
@@ -107,7 +107,7 @@
 
 - name: Apply proxy infrastructure
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     definition: "{{ item }}"
   loop: >-
@@ -123,7 +123,7 @@
 
 - name: Wait for proxy Deployments ready
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: apps/v1
     kind: Deployment
     namespace: "{{ ocp_4_20_ai_maas_proxy_namespace }}"
@@ -144,7 +144,7 @@
 
 - name: Apply ExternalModel resources
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     definition: "{{ item }}"
   loop: >-
@@ -163,7 +163,7 @@
 
 - name: Wait for external MaaSModelRef Ready
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: maas.opendatahub.io/v1alpha1
     kind: MaaSModelRef
     name: "{{ item.name }}"
@@ -185,7 +185,7 @@
 
 - name: Wait for external subscriptions Active
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: maas.opendatahub.io/v1alpha1
     kind: MaaSSubscription
     name: "{{ item.name }}-sub"
@@ -204,7 +204,7 @@
 
 - name: Wait for external TokenRateLimitPolicy enforcement
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: kuadrant.io/v1alpha1
     kind: TokenRateLimitPolicy
     namespace: "{{ ocp_4_20_ai_maas_external_model_namespace }}"

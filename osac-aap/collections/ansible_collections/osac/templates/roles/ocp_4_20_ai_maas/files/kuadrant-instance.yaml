@@ -3,6 +3,9 @@ kind: Namespace
 metadata:
   name: kuadrant-system
 ---
+# Pre-create with OpenShift service CA annotation — the Authorino operator
+# creates this service without it, so authorino-server-cert would never be
+# injected. Kuadrant requires the secret before reporting Ready.
 apiVersion: v1
 kind: Service
 metadata:
@@ -30,20 +33,3 @@ metadata:
 spec:
   observability:
     enable: true
----
-apiVersion: operator.authorino.kuadrant.io/v1beta1
-kind: Authorino
-metadata:
-  name: authorino
-  namespace: kuadrant-system
-spec:
-  clusterWide: true
-  replicas: 1
-  listener:
-    tls:
-      enabled: true
-      certSecretRef:
-        name: authorino-server-cert
-  oidcServer:
-    tls:
-      enabled: false

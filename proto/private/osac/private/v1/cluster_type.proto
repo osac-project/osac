@@ -26,6 +26,7 @@ import "osac/private/v1/cluster_template_type.proto";
 import "osac/private/v1/cluster_version_type.proto";
 import "osac/private/v1/condition_status_type.proto";
 import "osac/private/v1/metadata_type.proto";
+import "osac/private/v1/baremetal_instance_type_type.proto";
 import "osac/private/v1/host_type_type.proto";
 import "osac/private/v1/secret_type.proto";
 
@@ -372,40 +373,28 @@ enum ClusterConditionType {
 
 // Defines a set of nodes that are part of the cluster, all of them of the same type of host.
 message ClusterNodeSet {
-  // Identifier of the type of hosts that are part of the set.
-  //
-  // The details of the host type can be obtained using the `List` and `Get` method of the `HostTypes` service. For
-  // example, to get the details of the `acme_1tb` host type using the HTTP+JSON version of the API:
-  //
-  // ```http
-  // GET /api/fulfillment/v1/host_types/acme_1tb
-  // ```
-  //
-  // Which will return something like this:
-  //
-  // ```json
-  // {
-  //   "id": "acme_1tb",
-  //   "title": "ACME server with 1 TiB of RAM and no GPU",
-  //   "description": "ACME server model XYZ with 1 TiB of RAM, 2 Xeon 6 CPUS and no GPU."
-  // }
-  // ```
-  //
-  // This will be set by the system when the cluster is initially created, according to the template selected by the
-  // user.
-  //
-  // The user will not have permission to change this field.
-  HostTypeReference host_type = 1;
+  // Deprecated: use baremetal_instance_type instead. Retained for backward compatibility
+  // with existing persisted data. New clusters should reference a BareMetalInstanceType.
+  HostTypeReference host_type = 1 [deprecated = true];
 
   // Number of nodes of the set.
   optional int32 size = 2 [(buf.validate.field).int32.gt = 0];
 
-  // Name of the network interface on the HostType used for tenant fabric traffic.
+  // Name of the network port used for tenant fabric traffic.
   //
-  // System-populated during cluster creation by selecting the first interface with
-  // role "fabric" from the HostType's interfaces list. Not user-settable.
-  // Empty when the cluster has no network_attachment.
+  // System-populated during cluster creation by selecting the first network port with
+  // role "fabric" from the BareMetalInstanceType's hardware_spec.network_ports list.
+  // Not user-settable. Empty when the cluster has no network_attachment.
   string fabric_interface = 3 [(cleanapi.field).private = true];
+
+  // Reference to the BareMetalInstanceType that defines the hardware for nodes in this set.
+  //
+  // The details of the instance type can be obtained using the `List` and `Get` methods of the
+  // `BareMetalInstanceTypes` service. This replaces the deprecated `host_type` field.
+  //
+  // Set by the system when the cluster is initially created, according to the template selected
+  // by the user. The user will not have permission to change this field.
+  BareMetalInstanceTypeLocalReference baremetal_instance_type = 4;
 }
 
 // Local reference to a Cluster resource.

@@ -166,6 +166,79 @@ var _ = Describe("Private clusters server", func() {
 				Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 
+			// Create the bare metal instance types DAO:
+			bmitDao, err := dao.NewGenericDAO[*privatev1.BareMetalInstanceType]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			// Create bare metal instance types with network ports:
+			_, err = bmitDao.Create().
+				SetObject(
+					privatev1.BareMetalInstanceType_builder{
+						Id: "bmit-fabric-id",
+						Metadata: privatev1.Metadata_builder{
+							Name:   "bmit-fabric-name",
+							Tenant: testTenant,
+						}.Build(),
+						Spec: privatev1.BareMetalInstanceTypeSpec_builder{
+							Hardware: privatev1.BareMetalHardwareSpec_builder{
+								Cpu: privatev1.BareMetalCPUSpec_builder{
+									Cores: 32, Architecture: "x86_64", ThreadsPerCore: 2,
+								}.Build(),
+								Memory: privatev1.BareMetalMemorySpec_builder{TotalGb: 128}.Build(),
+								NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
+									privatev1.BareMetalNetworkPortSpec_builder{
+										Name: "mgmt-0", Role: "management", Type: "Ethernet", Speed: "1Gbps",
+									}.Build(),
+									privatev1.BareMetalNetworkPortSpec_builder{
+										Name: "data-0", Role: "fabric", Type: "Ethernet", Speed: "100Gbps",
+									}.Build(),
+									privatev1.BareMetalNetworkPortSpec_builder{
+										Name: "data-1", Role: "fabric", Type: "Ethernet", Speed: "100Gbps",
+									}.Build(),
+								},
+							}.Build(),
+							HostLabelSelector: privatev1.BareMetalLabelSelector_builder{
+								MatchLabels: map[string]string{"profile": "fabric"},
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			// Create a BMIT with no fabric port:
+			_, err = bmitDao.Create().
+				SetObject(
+					privatev1.BareMetalInstanceType_builder{
+						Id: "bmit-no-fabric-id",
+						Metadata: privatev1.Metadata_builder{
+							Name:   "bmit-no-fabric-name",
+							Tenant: testTenant,
+						}.Build(),
+						Spec: privatev1.BareMetalInstanceTypeSpec_builder{
+							Hardware: privatev1.BareMetalHardwareSpec_builder{
+								Cpu: privatev1.BareMetalCPUSpec_builder{
+									Cores: 16, Architecture: "x86_64", ThreadsPerCore: 2,
+								}.Build(),
+								Memory: privatev1.BareMetalMemorySpec_builder{TotalGb: 64}.Build(),
+								NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
+									privatev1.BareMetalNetworkPortSpec_builder{
+										Name: "mgmt-0", Role: "management", Type: "Ethernet", Speed: "1Gbps",
+									}.Build(),
+								},
+							}.Build(),
+							HostLabelSelector: privatev1.BareMetalLabelSelector_builder{
+								MatchLabels: map[string]string{"profile": "no-fabric"},
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
 			// Create a usable template:
 			_, err = templatesDao.Create().
 				SetObject(
@@ -3381,6 +3454,120 @@ var _ = Describe("Private clusters server", func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(response.GetObject().GetSpec().GetPullSecretSecret().GetId()).To(Equal("override-secret-id"))
 				Expect(response.GetObject().GetSpec().GetPullSecretSecret().GetName()).To(Equal("override-secret-name"))
+			})
+		})
+
+		Describe("Fabric interface resolution from BareMetalInstanceType", func() {
+			It("Populates fabric_interface from the first fabric port", func() {
+				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{Name: "fabric-happy"}.Build(),
+						Spec: privatev1.ClusterSpec_builder{
+							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+							NodeSets: map[string]*privatev1.ClusterNodeSet{
+								"compute": privatev1.ClusterNodeSet_builder{
+									BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{
+										Id: "bmit-fabric-id",
+									}.Build(),
+									Size: proto.Int32(3),
+								}.Build(),
+							},
+							NetworkAttachment: privatev1.ClusterNetworkAttachment_builder{
+								Subnet:         privatev1.SubnetLocalReference_builder{Id: "subnet-1"}.Build(),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "default-sg"}.Build()},
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response).ToNot(BeNil())
+				nodeSet := response.GetObject().GetSpec().GetNodeSets()["compute"]
+				Expect(nodeSet).ToNot(BeNil())
+				// The first port with role=fabric is "data-0"
+				Expect(nodeSet.GetFabricInterface()).To(Equal("data-0"))
+			})
+
+			It("Returns FailedPrecondition when BMIT has no fabric port", func() {
+				_, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{Name: "fabric-missing"}.Build(),
+						Spec: privatev1.ClusterSpec_builder{
+							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+							NodeSets: map[string]*privatev1.ClusterNodeSet{
+								"compute": privatev1.ClusterNodeSet_builder{
+									BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{
+										Id: "bmit-no-fabric-id",
+									}.Build(),
+									Size: proto.Int32(3),
+								}.Build(),
+							},
+							NetworkAttachment: privatev1.ClusterNetworkAttachment_builder{
+								Subnet:         privatev1.SubnetLocalReference_builder{Id: "subnet-1"}.Build(),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "default-sg"}.Build()},
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				st, ok := grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(st.Code()).To(Equal(grpccodes.FailedPrecondition))
+				Expect(st.Message()).To(ContainSubstring("no network port with role 'fabric'"))
+			})
+
+			It("Skips fabric resolution when cluster has no network attachment", func() {
+				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{Name: "fabric-no-net"}.Build(),
+						Spec: privatev1.ClusterSpec_builder{
+							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+							NodeSets: map[string]*privatev1.ClusterNodeSet{
+								"compute": privatev1.ClusterNodeSet_builder{
+									BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{
+										Id: "bmit-no-fabric-id",
+									}.Build(),
+									Size: proto.Int32(3),
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response).ToNot(BeNil())
+				nodeSet := response.GetObject().GetSpec().GetNodeSets()["compute"]
+				Expect(nodeSet).ToNot(BeNil())
+				// Without network_attachment, fabric_interface should be empty
+				Expect(nodeSet.GetFabricInterface()).To(BeEmpty())
+			})
+
+			It("Selects the first fabric port when multiple exist", func() {
+				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{Name: "fabric-multi"}.Build(),
+						Spec: privatev1.ClusterSpec_builder{
+							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+							NodeSets: map[string]*privatev1.ClusterNodeSet{
+								"compute": privatev1.ClusterNodeSet_builder{
+									BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{
+										Id: "bmit-fabric-id",
+									}.Build(),
+									Size: proto.Int32(3),
+								}.Build(),
+							},
+							NetworkAttachment: privatev1.ClusterNetworkAttachment_builder{
+								Subnet:         privatev1.SubnetLocalReference_builder{Id: "subnet-1"}.Build(),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "default-sg"}.Build()},
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response).ToNot(BeNil())
+				nodeSet := response.GetObject().GetSpec().GetNodeSets()["compute"]
+				Expect(nodeSet).ToNot(BeNil())
+				// bmit-fabric-id has mgmt-0 (management), data-0 (fabric), data-1 (fabric)
+				// The first fabric port should be selected: "data-0"
+				Expect(nodeSet.GetFabricInterface()).To(Equal("data-0"))
 			})
 		})
 	})

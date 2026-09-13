@@ -434,9 +434,20 @@ func (r *SubnetReconciler) deprovisionStaleK8sTarget(ctx context.Context, subnet
 
 	_, done, err := provisioning.RunMultiTargetDeprovisioningLifecycle(ctx,
 		[]provisioning.DeprovisionTarget{
-			{Name: string(dispatcher.ManagerRoleK8s), Provider: newDispatchTargetProvider(r.ProvisioningProvider, existingK8sStrategy)},
+			{
+				Name:     string(dispatcher.ManagerRoleK8s),
+				Provider: newDispatchTargetProvider(r.ProvisioningProvider, existingK8sStrategy),
+				CheckAPIServer: func() bool {
+					return provisioning.CheckAPIServerForNonTerminalDeprovisionJobAndTarget(
+						ctx, r.APIReader, client.ObjectKeyFromObject(subnet), &v1alpha1.Subnet{}, subnetProvisioningJobsExtractor, string(dispatcher.ManagerRoleK8s))
+				},
+			},
 		},
-		subnet, &subnet.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval)
+		subnet, &subnet.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval,
+		func() error {
+			return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(subnet), subnet.Status)
+		},
+	)
 	if err != nil {
 		return nil, fmt.Errorf("deprovisioning stale k8s target for subnet %s/%s: %w", subnet.Namespace, subnet.Name, err)
 	}
@@ -723,23 +734,41 @@ func (r *SubnetReconciler) handleDeprovisioning(ctx context.Context, subnet *v1a
 	fabricStrategy := subnet.Annotations[osacImplementationStrategyAnnotation]
 	if fabricStrategy == "" {
 		result, done, err := provisioning.RunDeprovisioningLifecycle(ctx, r.ProvisioningProvider, subnet,
-			&subnet.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval)
+			&subnet.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval,
+			func() bool {
+				return provisioning.CheckAPIServerForNonTerminalDeprovisionJob(ctx, r.APIReader, client.ObjectKeyFromObject(subnet), &v1alpha1.Subnet{}, subnetProvisioningJobsExtractor)
+			},
+			func() error {
+				return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(subnet), subnet.Status)
+			},
+		)
 		if err != nil || !done {
 			return result, err
 		}
 		return ctrl.Result{}, nil
 	}
 
+	checkAPIServerFor := func(targetName string) func() bool {
+		return func() bool {
+			return provisioning.CheckAPIServerForNonTerminalDeprovisionJobAndTarget(
+				ctx, r.APIReader, client.ObjectKeyFromObject(subnet), &v1alpha1.Subnet{}, subnetProvisioningJobsExtractor, targetName)
+		}
+	}
+
 	targets := []provisioning.DeprovisionTarget{
 		// AbsorbsLegacyHistory: true — see the matching comment in handleProvisioning.
-		{Name: string(dispatcher.ManagerRoleFabric), Provider: newDispatchTargetProvider(r.ProvisioningProvider, fabricStrategy), AbsorbsLegacyHistory: true},
+		{Name: string(dispatcher.ManagerRoleFabric), Provider: newDispatchTargetProvider(r.ProvisioningProvider, fabricStrategy), CheckAPIServer: checkAPIServerFor(string(dispatcher.ManagerRoleFabric)), AbsorbsLegacyHistory: true},
 	}
 	if k8sStrategy := subnet.Annotations[osacK8sImplementationStrategyAnnotation]; k8sStrategy != "" {
-		targets = append(targets, provisioning.DeprovisionTarget{Name: string(dispatcher.ManagerRoleK8s), Provider: newDispatchTargetProvider(r.ProvisioningProvider, k8sStrategy)})
+		targets = append(targets, provisioning.DeprovisionTarget{Name: string(dispatcher.ManagerRoleK8s), Provider: newDispatchTargetProvider(r.ProvisioningProvider, k8sStrategy), CheckAPIServer: checkAPIServerFor(string(dispatcher.ManagerRoleK8s))})
 	}
 
 	result, done, err := provisioning.RunMultiTargetDeprovisioningLifecycle(ctx, targets, subnet,
-		&subnet.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval)
+		&subnet.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval,
+		func() error {
+			return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(subnet), subnet.Status)
+		},
+	)
 	if err != nil || !done {
 		return result, err
 	}

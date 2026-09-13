@@ -908,8 +908,9 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 }
 
 // anonymousMethodsRegex is regular expression for the methods that are considered public, including the capabilities,
-// JWKS, reflection, and health methods. These will skip authentication and authorization.
-const anonymousMethodsRegex = `^/(osac\.public\.v1\.(Capabilities/|JsonWebKeySet/)|grpc\.(reflection|health)\.).*$`
+// JWKS, and health methods. These will skip authentication and authorization. gRPC reflection requires a valid JWT
+// and is authorized separately in authz.rego.
+const anonymousMethodsRegex = `^/(osac\.public\.v1\.(Capabilities/|JsonWebKeySet/)|grpc\.health\.).*$`
 
 const shortHelp = `Starts the gRPC server`
 

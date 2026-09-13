@@ -164,7 +164,7 @@ func (s *grpcAuthnStream) SetTrailer(md metadata.MD) {
 // context. Anonymous methods skip authentication entirely, regardless of whether an authorization header is present.
 // This matches the behavior of the previous external auth interceptor and is required because some clients (e.g.
 // grpcurl) send non-JWT bearer tokens (such as JWE console tickets) on all requests, including anonymous methods
-// like reflection.
+// like health checks.
 func (i *GrpcAuthnInterceptor) authenticate(ctx context.Context, method string) (result context.Context, err error) {
 	if i.isAnonymous(method) {
 		result = ctx

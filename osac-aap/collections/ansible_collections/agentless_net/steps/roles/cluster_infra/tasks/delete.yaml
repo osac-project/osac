@@ -11,7 +11,7 @@
     ansible_host: "{{ item.value.ansible_host }}"
     ansible_user: "{{ item.value.ansible_user }}"
     ansible_password: "{{ item.value.ansible_password | default(omit) }}"
-    ansible_ssh_common_args: "{{ item.value.ansible_ssh_common_args | default(_agentless_net_inventory.all.vars.ansible_ssh_common_args | default(omit)) }}"
+    ansible_ssh_common_args: "{{ item.value.ansible_ssh_common_args | default(_agentless_net_inventory.all.vars.ansible_ssh_common_args | default('-o StrictHostKeyChecking=accept-new')) }}"
   loop: "{{ _agentless_net_inventory.all.children.net_nodes.hosts | dict2items }}"
   loop_control:
     label: "{{ item.key }}"
@@ -25,7 +25,7 @@
     ansible_password: "{{ item.value.ansible_password | default(omit) }}"
     ansible_become_password: "{{ item.value.ansible_become_password | default(omit) }}"
     ansible_network_os: "{{ item.value.ansible_network_os | default(omit) }}"
-    ansible_ssh_common_args: "{{ item.value.ansible_ssh_common_args | default(_agentless_net_inventory.all.vars.ansible_ssh_common_args | default(omit)) }}"
+    ansible_ssh_common_args: "{{ item.value.ansible_ssh_common_args | default(_agentless_net_inventory.all.vars.ansible_ssh_common_args | default('-o StrictHostKeyChecking=accept-new')) }}"
     access_ports: "{{ item.value.access_ports | default({}) }}"
   loop: "{{ _agentless_net_inventory.all.children.switches.hosts | dict2items }}"
   loop_control:

@@ -115,8 +115,12 @@ func syncComputeInstanceUpdate(ctx context.Context, obj *ckv1alpha1.ComputeInsta
 	return nil
 }
 
-func syncComputeInstanceDelete(ctx context.Context, obj *ckv1alpha1.ComputeInstance, remote *privatev1.ComputeInstance) error {
-	return syncComputeInstanceUpdate(ctx, obj, remote)
+func syncComputeInstanceDelete(_ context.Context, obj *ckv1alpha1.ComputeInstance, remote *privatev1.ComputeInstance) error {
+	syncCIConditions(obj, remote)
+	syncCIIPAddresses(obj, remote)
+	syncCILastRestartedAt(obj, remote)
+	remote.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING)
+	return nil
 }
 
 func syncCIConditions(obj *ckv1alpha1.ComputeInstance, remote *privatev1.ComputeInstance) {

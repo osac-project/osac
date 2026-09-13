@@ -32,6 +32,20 @@ respective areas.
 - New billing integrations implement `ProviderAdapter` and use the shared runner lifecycle.
 - Keep Kafka credentials and API keys out of logs, fixtures, examples, and manifests.
 
+## Integration Testing
+
+See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#osac-metering).
+
+| Touched area | Required validation | Command / follow-up |
+|---|---|---|
+| Event schema or transition mapping | Unit across affected modules | `make test` |
+| Projection/database code | Component integration (database) | `make test` |
+| Kafka producer/consumer, CloudEvents transport, offsets, retries, or DLQ | Component integration | Required suite is currently unavailable; track [OSAC-4846](https://redhat.atlassian.net/browse/OSAC-4846) |
+| Fulfillment Watch or gRPC event ingestion | Contract or component integration | Required suite is currently unavailable; track the relevant [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) task |
+| Provider adapters | Unit plus component/E2E coverage for the provider boundary | `make test` and the qualifying provider suite |
+
+Do not set `SKIP_DB_TESTS` when validating projection/database behavior.
+
 ## Generated files
 
 - Fulfillment proto types are the shared top-level `proto/` module, imported as `github.com/osac-project/osac/proto/gen/...`. `metering-service/` no longer generates its own copy; `make generate` there just delegates to `make -C ../../proto generate`. Commit the regenerated `proto/gen/` (see `proto/AGENTS.md`); never edit generated code manually.

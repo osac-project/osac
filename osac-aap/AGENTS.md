@@ -37,6 +37,20 @@ respective areas.
 - Use the shared remote-kubeconfig service role for remote workflows and preserve the required empty primary-network label syntax.
 - Never expose credentials in tasks, logs, fixtures, examples, or generated artifacts.
 
+## Integration Testing
+
+See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#osac-aap).
+
+| Touched area | Required validation | Command / follow-up |
+|---|---|---|
+| Filters, variable transforms, and isolated plugin logic | Unit | `uv run pytest tests/unit` |
+| Ansible roles, workflow tasks, hooks, leases, finalizers, or Kubernetes resources | Component integration | `make test` or the focused target command |
+| Execution-environment definition or dependency inputs | Build/package validation plus applicable integration tests | `make execution-environment-build`, then `make test` |
+| AAP, OpenStack, KubeVirt/RHACM, or provider provisioning | Contract or real-provider integration | Use the qualifying [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) suite |
+| Storage-provider behavior | Component integration (focused) plus real-provider coverage when required | `STORAGE_TESTS_ENABLED=true make test` (or the relevant storage target and provider suite) |
+
+Storage integration requires `STORAGE_TESTS_ENABLED=true`; image builds are separate build/package validation.
+
 ## Generated and vendored files
 
 - There is no source-code generator for roles. Do not hand-edit third-party content under `vendor/`.

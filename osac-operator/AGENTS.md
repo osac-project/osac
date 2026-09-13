@@ -39,6 +39,20 @@ respective areas.
 - Fulfillment proto changes are regenerated once in the shared module: `make -C ../proto generate` (see `proto/AGENTS.md`). Do not regenerate anything proto-related from `osac-operator/`.
 - Never hand-edit `config/crd/`, `zz_generated.deepcopy.go`, or `go.sum`; run `go mod tidy` for module changes.
 
+## Integration Testing
+
+See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#osac-operator).
+
+| Touched area | Required validation | Command / follow-up |
+|---|---|---|
+| Pure helpers, validation, or state calculations | Unit | `make test` |
+| Controller reconciliation, finalizers, status, or CRD interactions | Envtest | `make test` |
+| Controller deployment, watches, RBAC, console proxy, networking, or Helm wiring | Component integration | Deploy current image/manifests, then `make integration-tests`; [installer alternative](../docs/INTEGRATION-TESTING.md#osac-operator) |
+| AAP, dispatcher, provisioning-provider, KubeVirt, or fulfillment boundary | Contract or E2E | Relevant contract/E2E command |
+| Generated CRDs or manifests | Envtest plus applicable Kind suite | `make manifests generate helm-crds check-helm-crds`, then the required test command |
+
+Envtest runs via `make test`; Kind tests require the current operator deployment.
+
 ## Validation
 
 From `osac-operator/`:

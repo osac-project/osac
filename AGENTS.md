@@ -79,3 +79,10 @@ forks writable repositories using authenticated `gh`; use
 - After `tools/bootstrap.sh` creates sibling checkouts, read their local instructions when working there: `osac-ui/AGENTS.md`, `enhancement-proposals/AGENTS.md`, and `osac-docs/AGENTS.md`.
 - These checkouts are separate Git repositories; never include their changes in a mono-repo PR.
 - Never assume remote names. Use `~/.osac-ai-skills/tools/resolve-remotes.sh` or `.osac-ai-skills/tools/resolve-remotes.sh`; if neither exists, run `tools/bootstrap.sh`.
+
+## Integration testing policy
+
+Use the affected component's touched-area map and the relevant section of
+[Integration testing](docs/INTEGRATION-TESTING.md) for tiers, commands, and
+coverage boundaries. Keep both current when suites change, and link missing
+coverage to its owning follow-up ticket using the Jira URL.

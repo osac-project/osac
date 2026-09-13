@@ -33,6 +33,20 @@ respective areas.
 - Never hand-edit `config/crd/` or `zz_generated.deepcopy.go`.
 - After dependency changes, run `go mod tidy` and commit the resulting `go.mod` and `go.sum` changes.
 
+## Integration Testing
+
+See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#bare-metal-fulfillment-operator).
+
+| Touched area | Required validation | Command / follow-up |
+|---|---|---|
+| Pure inventory, selection, validation, or client logic | Unit | `make test` |
+| Reconciliation, finalizers, allocation, or status transitions | Envtest | `make test` |
+| Controller deployment, CRDs, pool flows, or Kubernetes wiring | Component integration | Deploy current image/manifests, then `make integration-tests`; [installer alternative](../docs/INTEGRATION-TESTING.md#bare-metal-fulfillment-operator) |
+| Metal3, BCM, Ironic, BMC, power, or hardware semantics | Contract or real-provider integration | Follow the owning [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) task |
+| Generated CRDs or Helm CRDs | Envtest plus Kind | `make manifests generate helm-crds check-helm-crds`, then the required test command |
+
+Kind tests require the current operator deployment and simulate provider transitions.
+
 ## Validation
 
 From `bare-metal-fulfillment-operator/`:

@@ -151,6 +151,10 @@ aap:
     networkFulfillment:
       enabled: true
 
+# --- NetworkClass ---
+networkClass:
+  vipPrefixLength: 28
+
 # --- Validation ---
 validation:
   enabled: true

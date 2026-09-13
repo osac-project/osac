@@ -1681,6 +1681,12 @@
           "description": "Mark this as the default NetworkClass used when a VirtualNetwork doesn't specify one",
           "default": true
         },
+        "vipPrefixLength": {
+          "type": "integer",
+          "description": "VIP prefix length for MetalLB IPAddressPool CIDR computation on CaaS clusters. Only needed when this NetworkClass backs CaaS deployments. Maps to NetworkClassSpec.vip_prefix_length (valid range 1-128).",
+          "minimum": 1,
+          "maximum": 128
+        },
         "defaults": {
           "type": "object",
           "description": "Tenant-onboarding defaults. Required for this NetworkClass to auto-create a default VirtualNetwork/Subnet/SecurityGroup for new tenants.",

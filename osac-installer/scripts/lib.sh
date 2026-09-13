@@ -174,6 +174,22 @@ resolve_release_tag() {
     echo "${tag}"
 }
 
+# Validate a plain semver.org version string (no leading 'v'). Full
+# semver.org grammar adapted to POSIX ERE for bash's =~: rejects
+# leading-zero numeric identifiers (e.g. "01.2.3", "1.2.3-01") and
+# malformed dot-separated prerelease/build identifiers that a more
+# permissive [a-zA-Z0-9.]+ charset would let through. Same grammar as
+# publish-osac-installer-chart.yaml's own inline SEMVER_RE (left as-is
+# there for now -- see OSAC-5183); shared here so nightly-build.yaml's new
+# release-mode `release_version` input doesn't grow a second hand-copied
+# regex to drift out of sync with, the exact class of bug OSAC-5178 fixed.
+# Usage: validate_semver <version>
+validate_semver() {
+    local version="$1"
+    local semver_re='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*)(\.(0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*))*)?(\+[0-9a-zA-Z-]+(\.[0-9a-zA-Z-]+)*)?$'
+    [[ "${version}" =~ ${semver_re} ]]
+}
+
 # Resolve the nearest real (non-nightly) bare vX.Y.Z release tag reachable from an
 # external repo path (e.g. osac-ui, which tags v0.0.5 rather than osac-ui/v0.0.5).
 # Pre-release-only tags (e.g. v0.0.1-rc1) are ignored; repos with no stable tag fail loud.

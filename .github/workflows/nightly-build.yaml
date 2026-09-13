@@ -1,5 +1,10 @@
 name: Nightly Build
 
+# Distinguishes a release-mode dispatch (release_version set) from an
+# ordinary nightly run in the Actions run list -- see the concurrency
+# group below for why release_version also needs its own group.
+run-name: ${{ github.event.inputs.release_version && format('Release {0}', github.event.inputs.release_version) || 'Nightly Build' }}
+
 on:
   schedule:
     # Run nightly at 03:00 UTC
@@ -15,9 +20,38 @@ on:
         type: boolean
         default: false
         required: false
+      release_version:
+        description: >-
+          Release mode: a real, human-chosen umbrella chart version (e.g.
+          0.1.0, no leading 'v') to publish as osac/v<version>, replacing
+          the auto-generated nightly.<date>.<sha>.<run>.<attempt> suffix.
+          Leave empty for a normal nightly run. Dispatch this workflow
+          from the exact branch or tag you want to release using GitHub's
+          own "Use workflow from" ref selector above -- there is no
+          separate ref/commit input; this workflow already builds
+          whatever ref it's dispatched against.
+        type: string
+        required: false
+      force_shared_component_version:
+        description: >-
+          Release mode only (requires release_version to be set): force
+          this same version onto every mono-repo component's chart and
+          image tags too, instead of each resolving its own latest
+          release tag independently. Leave false (the default) to keep
+          nightly's normal independent-per-component versioning even
+          during a release run.
+        type: boolean
+        default: false
+        required: false
 
 concurrency:
-  group: nightly-build
+  # Release-mode runs get their own group, keyed off the chosen version,
+  # so a real release dispatch is never silently cancelled mid-flight by
+  # the next scheduled 03:00 UTC nightly cron (or vice versa) -- the two
+  # would otherwise share "nightly-build" with cancel-in-progress: true.
+  # Two release dispatches for the *same* version still serialize/cancel
+  # each other sensibly, same as nightly always has for itself.
+  group: ${{ github.event.inputs.release_version && format('nightly-build-release-{0}', github.event.inputs.release_version) || 'nightly-build' }}
   cancel-in-progress: true
 
 permissions: {}
@@ -116,9 +150,29 @@ jobs:
       id: versions
       env:
         UI_SHA: ${{ steps.ui.outputs.sha }}
+        RELEASE_VERSION: ${{ github.event.inputs.release_version }}
+        FORCE_SHARED_VERSION: ${{ github.event.inputs.force_shared_component_version }}
       run: |
         set -euo pipefail
         source osac-installer/scripts/nightly-charts.sh
+
+        # Release mode: a human-chosen version replaces the auto-generated
+        # nightly suffix below for the umbrella chart itself (see publish's
+        # "Generate release/nightly version" step) and, only if
+        # force_shared_component_version is also set, for every mono-repo
+        # component's chart/image version too (COMPONENT_VERSIONS below).
+        # Neither changes nightly's own default independent-per-component
+        # resolution; this still runs through every existing build/unit/
+        # integration/security/e2e gate before publish promotes anything,
+        # same as any other nightly run (see AGENTS.md's "Release safety").
+        if [[ -n "${RELEASE_VERSION}" ]] && ! validate_semver "${RELEASE_VERSION}"; then
+          echo "::error::Invalid semver for release_version: ${RELEASE_VERSION}" >&2
+          exit 1
+        fi
+        if [[ "${FORCE_SHARED_VERSION}" == "true" && -z "${RELEASE_VERSION}" ]]; then
+          echo "::error::force_shared_component_version requires release_version to be set" >&2
+          exit 1
+        fi
 
         DATE=$(date -u +%Y%m%d)
         SHORT_SHA=$(git rev-parse --short=7 HEAD)
@@ -139,6 +193,18 @@ jobs:
         )
         json="{}"
         for COMPONENT in "${COMPONENTS[@]}"; do
+          if [[ "${FORCE_SHARED_VERSION}" == "true" ]]; then
+            # No per-component release tag needed or created -- nightly
+            # already builds/packages/pushes every component's chart and
+            # image itself every run (unlike the old
+            # publish-osac-installer-chart.yaml, which assumed 6 separate
+            # pre-pushed <component>/vX.Y.Z tags). This just stamps the
+            # human-chosen version directly instead of resolving one.
+            SUB_VERSION="${RELEASE_VERSION}"
+            json=$(jq -c --arg k "${COMPONENT}" --arg v "${SUB_VERSION}" '. + {($k): $v}' <<<"${json}")
+            echo "${COMPONENT}: ${SUB_VERSION} (forced shared release version)"
+            continue
+          fi
           if ! BASE_TAG=$(resolve_release_tag . "${COMPONENT}"); then
             safe_component=$(_gha_sanitize_for_message "${COMPONENT}")
             echo "::warning::No ${safe_component}/vX.Y.Z release tag found yet -- ${safe_component} will be skipped this run"
@@ -151,7 +217,10 @@ jobs:
         done
         echo "component-versions=${json}" >> "$GITHUB_OUTPUT"
 
-        # osac-ui uses bare vX.Y.Z tags on the external repo, not <component>/vX.Y.Z.
+        # osac-ui uses bare vX.Y.Z tags on the external repo, not
+        # <component>/vX.Y.Z, and keeps its own independent release cadence
+        # regardless of release mode -- neither release_version nor
+        # force_shared_component_version apply to it (see OSAC-5178).
         if UI_BASE_TAG=$(resolve_bare_release_tag_at osac-ui "${UI_SHA}"); then
           UI_SUB_VERSION=$(compute_nightly_chart_version "${UI_BASE_TAG}" "${NIGHTLY_SUFFIX}")
           echo "ui-sub-version=${UI_SUB_VERSION}" >> "$GITHUB_OUTPUT"
@@ -690,28 +759,38 @@ jobs:
         GHCR_USER: ${{ github.actor }}
       run: printf '%s' "${GHCR_TOKEN}" | helm registry login "${{ env.REGISTRY }}" -u "${GHCR_USER}" --password-stdin
 
-    - name: Generate nightly version
+    - name: Generate release/nightly version
       id: version
       working-directory: osac-installer
       env:
         NIGHTLY_SUFFIX: ${{ needs.prepare.outputs.nightly-suffix }}
+        RELEASE_VERSION: ${{ github.event.inputs.release_version }}
       run: |
         set -euo pipefail
         source ./scripts/lib.sh
 
-        # Use the umbrella chart's own latest real release tag (not the
-        # Chart.yaml placeholder, which is never bumped) so the nightly
-        # version reflects where this build actually sits relative to
-        # real releases. Reuse prepare's NIGHTLY_SUFFIX (not a freshly
-        # computed one) so every artifact from this run shares the same
-        # date/sha/run/attempt suffix.
-        BASE_TAG=$(resolve_release_tag . osac)
-        BASE_VERSION="${BASE_TAG#osac/v}"
-        VERSION="${BASE_VERSION}-${NIGHTLY_SUFFIX}"
+        if [[ -n "${RELEASE_VERSION}" ]]; then
+          # Release mode: the human-chosen version, verbatim, no nightly
+          # suffix -- already validated in prepare's "Resolve nightly
+          # versions" step. This is what makes `osac/v<VERSION>` below a
+          # real, clean release tag instead of always being nightly-suffixed.
+          VERSION="${RELEASE_VERSION}"
+          BASE_VERSION="${RELEASE_VERSION}"
+        else
+          # Use the umbrella chart's own latest real release tag (not the
+          # Chart.yaml placeholder, which is never bumped) so the nightly
+          # version reflects where this build actually sits relative to
+          # real releases. Reuse prepare's NIGHTLY_SUFFIX (not a freshly
+          # computed one) so every artifact from this run shares the same
+          # date/sha/run/attempt suffix.
+          BASE_TAG=$(resolve_release_tag . osac)
+          BASE_VERSION="${BASE_TAG#osac/v}"
+          VERSION="${BASE_VERSION}-${NIGHTLY_SUFFIX}"
+        fi
 
         echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
         echo "base-version=${BASE_VERSION}" >> "$GITHUB_OUTPUT"
-        echo "Nightly version: ${VERSION} (base: ${BASE_VERSION})"
+        echo "Version: ${VERSION} (base: ${BASE_VERSION})"
 
     - name: Install skopeo
       run: |
@@ -1029,6 +1108,7 @@ jobs:
     - name: Create nightly tag
       env:
         SKIP_E2E: ${{ github.event.inputs.skip_e2e }}
+        RELEASE_VERSION: ${{ github.event.inputs.release_version }}
       run: |
         set -euo pipefail
         source osac-installer/scripts/nightly-charts.sh
@@ -1037,6 +1117,7 @@ jobs:
         TAG="osac/v${VERSION}"
         COMMIT_SHA=$(git rev-parse HEAD)
         TAG_MESSAGE="Nightly build ${VERSION}"
+        [[ -n "${RELEASE_VERSION}" ]] && TAG_MESSAGE="Release ${VERSION}"
         # Only ever true on a manual workflow_dispatch run (see the e2e
         # jobs' own `if:` guards) -- keep this visible in the tag's own
         # history, not just the transient Slack message below.
@@ -1078,6 +1159,7 @@ jobs:
         REPO_OWNER: ${{ github.repository_owner }}
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         SKIP_E2E: ${{ github.event.inputs.skip_e2e }}
+        RELEASE_VERSION: ${{ github.event.inputs.release_version }}
       run: |
         set -euo pipefail
         source osac-installer/scripts/nightly-charts.sh
@@ -1087,13 +1169,16 @@ jobs:
         IMAGES_TEXT=$(build_slack_images_published_summary nightly-artifacts/images.txt)
         SKIPPED_DEPS_TEXT=$(build_slack_skipped_umbrella_dependencies_summary nightly-artifacts/skipped-umbrella-dependencies.txt)
 
+        RUN_KIND="Nightly Build"
+        [[ -n "${RELEASE_VERSION}" ]] && RUN_KIND="Release"
+
         # Only ever true on a manual workflow_dispatch run (see the e2e
         # jobs' own `if:` guards) -- never silent: a release that skipped
         # e2e must be obvious in the same place every other nightly
         # success is announced, not just in the tag message/run log.
-        HEADER_TEXT=":white_check_mark: Nightly Build ${VERSION} - Published"
+        HEADER_TEXT=":white_check_mark: ${RUN_KIND} ${VERSION} - Published"
         if [[ "${SKIP_E2E}" == "true" ]]; then
-          HEADER_TEXT=":warning: Nightly Build ${VERSION} - Published (e2e SKIPPED)"
+          HEADER_TEXT=":warning: ${RUN_KIND} ${VERSION} - Published (e2e SKIPPED)"
         fi
 
         jq -n \
@@ -1168,18 +1253,26 @@ jobs:
         REPOSITORY: ${{ github.repository }}
         RUN_ID: ${{ github.run_id }}
         REF_NAME: ${{ github.ref_name }}
+        RELEASE_VERSION: ${{ github.event.inputs.release_version }}
       run: |
         set -euo pipefail
         WORKFLOW_URL="${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}"
 
+        HEADER_TEXT=":x: Nightly Build Failed"
+        # A failed release attempt is at least as consequential as a failed
+        # nightly -- don't let it blend into the routine nightly-failure
+        # noise.
+        [[ -n "${RELEASE_VERSION}" ]] && HEADER_TEXT=":x: Release ${RELEASE_VERSION} Failed"
+
         jq -n \
+          --arg header "${HEADER_TEXT}" \
           --arg branch "${REF_NAME}" \
           --arg workflow_url "${WORKFLOW_URL}" \
           '{
             "blocks": [
               {
                 "type": "header",
-                "text": {"type": "plain_text", "text": ":x: Nightly Build Failed"}
+                "text": {"type": "plain_text", "text": $header}
               },
               {
                 "type": "section",

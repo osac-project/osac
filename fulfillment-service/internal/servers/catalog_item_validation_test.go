@@ -457,6 +457,394 @@ var _ = Describe("applyFieldDefinitions rejects unlisted fields", func() {
 	})
 })
 
+var _ = Describe("resolveAutoExternalIpPolicy", func() {
+	It("returns user value when policy is nil", func() {
+		result, err := resolveAutoExternalIpPolicy(true, true, nil)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result).To(BeTrue())
+	})
+
+	It("returns false when policy is nil and user provides no value", func() {
+		result, err := resolveAutoExternalIpPolicy(false, false, nil)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result).To(BeFalse())
+	})
+
+	It("applies locked value when user provides no value", func() {
+		policy := privatev1.BoolFieldPolicy_builder{Locked: proto.Bool(true)}.Build()
+		result, err := resolveAutoExternalIpPolicy(false, false, policy)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result).To(BeTrue())
+	})
+
+	It("accepts user value matching locked value", func() {
+		policy := privatev1.BoolFieldPolicy_builder{Locked: proto.Bool(true)}.Build()
+		result, err := resolveAutoExternalIpPolicy(true, true, policy)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result).To(BeTrue())
+	})
+
+	It("rejects user value conflicting with locked value", func() {
+		policy := privatev1.BoolFieldPolicy_builder{Locked: proto.Bool(false)}.Build()
+		_, err := resolveAutoExternalIpPolicy(true, true, policy)
+		Expect(err).To(HaveOccurred())
+		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+		Expect(err.Error()).To(ContainSubstring("locked"))
+	})
+
+	It("accepts user value when editable", func() {
+		policy := privatev1.BoolFieldPolicy_builder{
+			Editable: privatev1.EditableBoolField_builder{DefaultValue: proto.Bool(false)}.Build(),
+		}.Build()
+		result, err := resolveAutoExternalIpPolicy(true, true, policy)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result).To(BeTrue())
+	})
+
+	It("applies editable default when user provides no value", func() {
+		policy := privatev1.BoolFieldPolicy_builder{
+			Editable: privatev1.EditableBoolField_builder{DefaultValue: proto.Bool(true)}.Build(),
+		}.Build()
+		result, err := resolveAutoExternalIpPolicy(false, false, policy)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result).To(BeTrue())
+	})
+
+	It("returns false when editable with no default and no user value", func() {
+		policy := privatev1.BoolFieldPolicy_builder{
+			Editable: privatev1.EditableBoolField_builder{}.Build(),
+		}.Build()
+		result, err := resolveAutoExternalIpPolicy(false, false, policy)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result).To(BeFalse())
+	})
+})
+
+var _ = Describe("resolveComputeNetworkAttachmentsPolicy", func() {
+	It("leaves user attachments unchanged when policy is nil", func() {
+		att := privatev1.ComputeNetworkAttachment_builder{
+			Subnet: privatev1.SubnetLocalReference_builder{Id: "user-subnet"}.Build(),
+		}.Build()
+		spec := privatev1.ComputeInstanceSpec_builder{
+			NetworkAttachments: []*privatev1.ComputeNetworkAttachment{att},
+		}.Build()
+		err := resolveComputeNetworkAttachmentsPolicy(spec, nil)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(spec.GetNetworkAttachments()).To(HaveLen(1))
+		Expect(spec.GetNetworkAttachments()[0].GetSubnet().GetId()).To(Equal("user-subnet"))
+	})
+
+	It("applies locked attachments when user provides none", func() {
+		lockedAtt := privatev1.ComputeNetworkAttachment_builder{
+			Subnet: privatev1.SubnetLocalReference_builder{Id: "locked-subnet"}.Build(),
+		}.Build()
+		policy := privatev1.ComputeNetworkAttachmentListFieldPolicy_builder{
+			Locked: privatev1.ComputeNetworkAttachmentList_builder{
+				Items: []*privatev1.ComputeNetworkAttachment{lockedAtt},
+			}.Build(),
+		}.Build()
+		spec := privatev1.ComputeInstanceSpec_builder{}.Build()
+		err := resolveComputeNetworkAttachmentsPolicy(spec, policy)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(spec.GetNetworkAttachments()).To(HaveLen(1))
+		Expect(spec.GetNetworkAttachments()[0].GetSubnet().GetId()).To(Equal("locked-subnet"))
+	})
+
+	It("rejects user attachments when locked", func() {
+		userAtt := privatev1.ComputeNetworkAttachment_builder{
+			Subnet: privatev1.SubnetLocalReference_builder{Id: "user-subnet"}.Build(),
+		}.Build()
+		lockedAtt := privatev1.ComputeNetworkAttachment_builder{
+			Subnet: privatev1.SubnetLocalReference_builder{Id: "locked-subnet"}.Build(),
+		}.Build()
+		policy := privatev1.ComputeNetworkAttachmentListFieldPolicy_builder{
+			Locked: privatev1.ComputeNetworkAttachmentList_builder{
+				Items: []*privatev1.ComputeNetworkAttachment{lockedAtt},
+			}.Build(),
+		}.Build()
+		spec := privatev1.ComputeInstanceSpec_builder{
+			NetworkAttachments: []*privatev1.ComputeNetworkAttachment{userAtt},
+		}.Build()
+		err := resolveComputeNetworkAttachmentsPolicy(spec, policy)
+		Expect(err).To(HaveOccurred())
+		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+		Expect(err.Error()).To(ContainSubstring("locked"))
+	})
+
+	It("accepts user attachments when editable", func() {
+		userAtt := privatev1.ComputeNetworkAttachment_builder{
+			Subnet: privatev1.SubnetLocalReference_builder{Id: "user-subnet"}.Build(),
+		}.Build()
+		policy := privatev1.ComputeNetworkAttachmentListFieldPolicy_builder{
+			Editable: privatev1.EditableComputeNetworkAttachmentList_builder{}.Build(),
+		}.Build()
+		spec := privatev1.ComputeInstanceSpec_builder{
+			NetworkAttachments: []*privatev1.ComputeNetworkAttachment{userAtt},
+		}.Build()
+		err := resolveComputeNetworkAttachmentsPolicy(spec, policy)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(spec.GetNetworkAttachments()).To(HaveLen(1))
+		Expect(spec.GetNetworkAttachments()[0].GetSubnet().GetId()).To(Equal("user-subnet"))
+	})
+
+	It("applies editable default when user provides no attachments", func() {
+		defaultAtt := privatev1.ComputeNetworkAttachment_builder{
+			Subnet: privatev1.SubnetLocalReference_builder{Id: "default-subnet"}.Build(),
+		}.Build()
+		policy := privatev1.ComputeNetworkAttachmentListFieldPolicy_builder{
+			Editable: privatev1.EditableComputeNetworkAttachmentList_builder{
+				DefaultValue: privatev1.ComputeNetworkAttachmentList_builder{
+					Items: []*privatev1.ComputeNetworkAttachment{defaultAtt},
+				}.Build(),
+			}.Build(),
+		}.Build()
+		spec := privatev1.ComputeInstanceSpec_builder{}.Build()
+		err := resolveComputeNetworkAttachmentsPolicy(spec, policy)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(spec.GetNetworkAttachments()).To(HaveLen(1))
+		Expect(spec.GetNetworkAttachments()[0].GetSubnet().GetId()).To(Equal("default-subnet"))
+	})
+})
+
+var _ = Describe("resolveClusterNetworkAttachmentPolicy", func() {
+	It("leaves user attachment unchanged when policy is nil", func() {
+		att := privatev1.ClusterNetworkAttachment_builder{
+			Subnet: privatev1.SubnetLocalReference_builder{Id: "user-subnet"}.Build(),
+		}.Build()
+		spec := privatev1.ClusterSpec_builder{NetworkAttachment: att}.Build()
+		err := resolveClusterNetworkAttachmentPolicy(spec, nil)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(spec.GetNetworkAttachment().GetSubnet().GetId()).To(Equal("user-subnet"))
+	})
+
+	It("applies locked attachment when user provides none", func() {
+		lockedAtt := privatev1.ClusterNetworkAttachment_builder{
+			Subnet: privatev1.SubnetLocalReference_builder{Id: "locked-subnet"}.Build(),
+		}.Build()
+		policy := privatev1.ClusterNetworkAttachmentFieldPolicy_builder{
+			Locked: lockedAtt,
+		}.Build()
+		spec := privatev1.ClusterSpec_builder{}.Build()
+		err := resolveClusterNetworkAttachmentPolicy(spec, policy)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(spec.GetNetworkAttachment().GetSubnet().GetId()).To(Equal("locked-subnet"))
+	})
+
+	It("rejects user attachment when locked", func() {
+		userAtt := privatev1.ClusterNetworkAttachment_builder{
+			Subnet: privatev1.SubnetLocalReference_builder{Id: "user-subnet"}.Build(),
+		}.Build()
+		lockedAtt := privatev1.ClusterNetworkAttachment_builder{
+			Subnet: privatev1.SubnetLocalReference_builder{Id: "locked-subnet"}.Build(),
+		}.Build()
+		policy := privatev1.ClusterNetworkAttachmentFieldPolicy_builder{
+			Locked: lockedAtt,
+		}.Build()
+		spec := privatev1.ClusterSpec_builder{NetworkAttachment: userAtt}.Build()
+		err := resolveClusterNetworkAttachmentPolicy(spec, policy)
+		Expect(err).To(HaveOccurred())
+		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+		Expect(err.Error()).To(ContainSubstring("locked"))
+	})
+
+	It("applies editable default when user provides no attachment", func() {
+		defaultAtt := privatev1.ClusterNetworkAttachment_builder{
+			Subnet: privatev1.SubnetLocalReference_builder{Id: "default-subnet"}.Build(),
+		}.Build()
+		policy := privatev1.ClusterNetworkAttachmentFieldPolicy_builder{
+			Editable: privatev1.EditableClusterNetworkAttachmentField_builder{
+				DefaultValue: defaultAtt,
+			}.Build(),
+		}.Build()
+		spec := privatev1.ClusterSpec_builder{}.Build()
+		err := resolveClusterNetworkAttachmentPolicy(spec, policy)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(spec.GetNetworkAttachment().GetSubnet().GetId()).To(Equal("default-subnet"))
+	})
+})
+
+var _ = Describe("resolveBareMetalNetworkAttachmentsPolicy", func() {
+	It("applies locked attachments when user provides none", func() {
+		lockedAtt := privatev1.BareMetalNetworkAttachment_builder{
+			Subnet: privatev1.SubnetLocalReference_builder{Id: "locked-subnet"}.Build(),
+		}.Build()
+		policy := privatev1.BareMetalNetworkAttachmentListFieldPolicy_builder{
+			Locked: privatev1.BareMetalNetworkAttachmentList_builder{
+				Items: []*privatev1.BareMetalNetworkAttachment{lockedAtt},
+			}.Build(),
+		}.Build()
+		spec := privatev1.BareMetalInstanceSpec_builder{}.Build()
+		err := resolveBareMetalNetworkAttachmentsPolicy(spec, policy)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(spec.GetNetworkAttachments()).To(HaveLen(1))
+		Expect(spec.GetNetworkAttachments()[0].GetSubnet().GetId()).To(Equal("locked-subnet"))
+	})
+
+	It("rejects user attachments when locked", func() {
+		userAtt := privatev1.BareMetalNetworkAttachment_builder{
+			Subnet: privatev1.SubnetLocalReference_builder{Id: "user-subnet"}.Build(),
+		}.Build()
+		lockedAtt := privatev1.BareMetalNetworkAttachment_builder{
+			Subnet: privatev1.SubnetLocalReference_builder{Id: "locked-subnet"}.Build(),
+		}.Build()
+		policy := privatev1.BareMetalNetworkAttachmentListFieldPolicy_builder{
+			Locked: privatev1.BareMetalNetworkAttachmentList_builder{
+				Items: []*privatev1.BareMetalNetworkAttachment{lockedAtt},
+			}.Build(),
+		}.Build()
+		spec := privatev1.BareMetalInstanceSpec_builder{
+			NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{userAtt},
+		}.Build()
+		err := resolveBareMetalNetworkAttachmentsPolicy(spec, policy)
+		Expect(err).To(HaveOccurred())
+		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+		Expect(err.Error()).To(ContainSubstring("locked"))
+	})
+
+	It("applies editable default when user provides no attachments", func() {
+		defaultAtt := privatev1.BareMetalNetworkAttachment_builder{
+			Subnet: privatev1.SubnetLocalReference_builder{Id: "default-subnet"}.Build(),
+		}.Build()
+		policy := privatev1.BareMetalNetworkAttachmentListFieldPolicy_builder{
+			Editable: privatev1.EditableBareMetalNetworkAttachmentList_builder{
+				DefaultValue: privatev1.BareMetalNetworkAttachmentList_builder{
+					Items: []*privatev1.BareMetalNetworkAttachment{defaultAtt},
+				}.Build(),
+			}.Build(),
+		}.Build()
+		spec := privatev1.BareMetalInstanceSpec_builder{}.Build()
+		err := resolveBareMetalNetworkAttachmentsPolicy(spec, policy)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(spec.GetNetworkAttachments()).To(HaveLen(1))
+		Expect(spec.GetNetworkAttachments()[0].GetSubnet().GetId()).To(Equal("default-subnet"))
+	})
+})
+
+var _ = Describe("applyComputeInstanceTypedNetworkingPolicies", func() {
+	It("does nothing when fields is nil", func() {
+		spec := privatev1.ComputeInstanceSpec_builder{}.Build()
+		err := applyComputeInstanceTypedNetworkingPolicies(spec, nil)
+		Expect(err).ToNot(HaveOccurred())
+	})
+
+	It("resolves locked auto_external_ip and locked network_attachments together", func() {
+		lockedAtt := privatev1.ComputeNetworkAttachment_builder{
+			Subnet: privatev1.SubnetLocalReference_builder{Id: "locked-subnet"}.Build(),
+		}.Build()
+		fields := privatev1.ComputeInstanceCatalogItemFields_builder{
+			NetworkAttachments: privatev1.ComputeNetworkAttachmentListFieldPolicy_builder{
+				Locked: privatev1.ComputeNetworkAttachmentList_builder{
+					Items: []*privatev1.ComputeNetworkAttachment{lockedAtt},
+				}.Build(),
+			}.Build(),
+			AutoExternalIpAttachment: privatev1.BoolFieldPolicy_builder{
+				Locked: proto.Bool(true),
+			}.Build(),
+		}.Build()
+		spec := privatev1.ComputeInstanceSpec_builder{}.Build()
+		err := applyComputeInstanceTypedNetworkingPolicies(spec, fields)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(spec.GetNetworkAttachments()).To(HaveLen(1))
+		Expect(spec.GetNetworkAttachments()[0].GetSubnet().GetId()).To(Equal("locked-subnet"))
+		Expect(spec.GetAutoExternalIpAttachment()).To(BeTrue())
+	})
+
+	It("rejects user override of locked auto_external_ip", func() {
+		fields := privatev1.ComputeInstanceCatalogItemFields_builder{
+			AutoExternalIpAttachment: privatev1.BoolFieldPolicy_builder{
+				Locked: proto.Bool(false),
+			}.Build(),
+		}.Build()
+		spec := privatev1.ComputeInstanceSpec_builder{
+			AutoExternalIpAttachment: proto.Bool(true),
+		}.Build()
+		err := applyComputeInstanceTypedNetworkingPolicies(spec, fields)
+		Expect(err).To(HaveOccurred())
+		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+		Expect(err.Error()).To(ContainSubstring("locked"))
+	})
+})
+
+var _ = Describe("catalog item networking policy validation", func() {
+	It("validates compute instance catalog item with valid locked network_attachments", func() {
+		fields := privatev1.ComputeInstanceCatalogItemFields_builder{
+			NetworkAttachments: privatev1.ComputeNetworkAttachmentListFieldPolicy_builder{
+				Locked: privatev1.ComputeNetworkAttachmentList_builder{
+					Items: []*privatev1.ComputeNetworkAttachment{
+						privatev1.ComputeNetworkAttachment_builder{
+							Subnet: privatev1.SubnetLocalReference_builder{Id: "subnet-1"}.Build(),
+						}.Build(),
+					},
+				}.Build(),
+			}.Build(),
+		}.Build()
+		err := validateComputeInstanceCatalogItemNetworkingPolicies(fields)
+		Expect(err).ToNot(HaveOccurred())
+	})
+
+	It("rejects compute instance catalog item with missing subnet in locked network_attachments", func() {
+		fields := privatev1.ComputeInstanceCatalogItemFields_builder{
+			NetworkAttachments: privatev1.ComputeNetworkAttachmentListFieldPolicy_builder{
+				Locked: privatev1.ComputeNetworkAttachmentList_builder{
+					Items: []*privatev1.ComputeNetworkAttachment{
+						privatev1.ComputeNetworkAttachment_builder{}.Build(),
+					},
+				}.Build(),
+			}.Build(),
+		}.Build()
+		err := validateComputeInstanceCatalogItemNetworkingPolicies(fields)
+		Expect(err).To(HaveOccurred())
+		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+		Expect(err.Error()).To(ContainSubstring("subnet"))
+	})
+
+	It("validates cluster catalog item with valid locked network_attachment", func() {
+		fields := privatev1.ClusterCatalogItemFields_builder{
+			NetworkAttachment: privatev1.ClusterNetworkAttachmentFieldPolicy_builder{
+				Locked: privatev1.ClusterNetworkAttachment_builder{
+					Subnet: privatev1.SubnetLocalReference_builder{Id: "subnet-1"}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build()
+		err := validateClusterCatalogItemNetworkingPolicies(fields)
+		Expect(err).ToNot(HaveOccurred())
+	})
+
+	It("rejects cluster catalog item with missing subnet in locked network_attachment", func() {
+		fields := privatev1.ClusterCatalogItemFields_builder{
+			NetworkAttachment: privatev1.ClusterNetworkAttachmentFieldPolicy_builder{
+				Locked: privatev1.ClusterNetworkAttachment_builder{}.Build(),
+			}.Build(),
+		}.Build()
+		err := validateClusterCatalogItemNetworkingPolicies(fields)
+		Expect(err).To(HaveOccurred())
+		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+		Expect(err.Error()).To(ContainSubstring("subnet"))
+	})
+
+	It("validates bare metal instance catalog item with valid locked network_attachments", func() {
+		fields := privatev1.BareMetalInstanceCatalogItemFields_builder{
+			NetworkAttachments: privatev1.BareMetalNetworkAttachmentListFieldPolicy_builder{
+				Locked: privatev1.BareMetalNetworkAttachmentList_builder{
+					Items: []*privatev1.BareMetalNetworkAttachment{
+						privatev1.BareMetalNetworkAttachment_builder{
+							Subnet: privatev1.SubnetLocalReference_builder{Id: "subnet-1"}.Build(),
+						}.Build(),
+					},
+				}.Build(),
+			}.Build(),
+		}.Build()
+		err := validateBareMetalInstanceCatalogItemNetworkingPolicies(fields)
+		Expect(err).ToNot(HaveOccurred())
+	})
+
+	It("accepts nil fields for all catalog item types", func() {
+		Expect(validateComputeInstanceCatalogItemNetworkingPolicies(nil)).To(Succeed())
+		Expect(validateClusterCatalogItemNetworkingPolicies(nil)).To(Succeed())
+		Expect(validateBareMetalInstanceCatalogItemNetworkingPolicies(nil)).To(Succeed())
+	})
+})
+
 var _ = Describe("addPublishedFilter", func() {
 	var server *ClusterCatalogItemsServer
 

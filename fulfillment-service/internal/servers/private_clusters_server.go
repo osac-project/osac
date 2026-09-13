@@ -1561,6 +1561,12 @@ func (s *PrivateClustersServer) validateAndTransformCatalogItem(ctx context.Cont
 		return err
 	}
 
+	// Apply typed networking policies from the catalog item's fields. These are authoritative
+	// over the deprecated field_definitions representation for networking.
+	if err := applyClusterTypedNetworkingPolicies(cluster.GetSpec(), catalogItem.GetFields()); err != nil {
+		return err
+	}
+
 	// Look up the template to apply spec defaults, node sets, and parameter validation:
 	templateRefStr := refKey(templateRef)
 	template, err := s.lookupTemplate(ctx, templateRefStr)

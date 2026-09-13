@@ -322,25 +322,6 @@ func (s *PrivateComputeInstancesServer) injectDefaultNetworkAttachments(ctx cont
 func (s *PrivateComputeInstancesServer) Create(ctx context.Context,
 	request *privatev1.ComputeInstancesCreateRequest) (response *privatev1.ComputeInstancesCreateResponse, err error) {
 	spec := request.GetObject().GetSpec()
-	// Auto-inject default network attachments if none provided:
-	if len(request.GetObject().GetSpec().GetNetworkAttachments()) == 0 {
-		err = s.injectDefaultNetworkAttachments(ctx, request.GetObject())
-		if err != nil {
-			return
-		}
-	}
-
-	// Validate tenant isolation for network references:
-	err = s.validateNetworkReferencesTenancy(ctx, request.GetObject())
-	if err != nil {
-		return
-	}
-
-	// Validate network references state (exists, READY):
-	err = s.validateNetworkReferencesState(ctx, request.GetObject())
-	if err != nil {
-		return
-	}
 
 	// Dispatch between catalog item and template paths:
 	catalogItemRef := spec.GetCatalogItem()
@@ -360,6 +341,28 @@ func (s *PrivateComputeInstancesServer) Create(ctx context.Context,
 	} else {
 		template, err = s.fetchAndValidateTemplate(ctx, request.GetObject())
 	}
+	if err != nil {
+		return
+	}
+
+	// Auto-inject default network attachments if none provided.
+	// Runs after catalog item processing so that typed networking policies
+	// (locked/defaulted network_attachments) are already resolved.
+	if len(request.GetObject().GetSpec().GetNetworkAttachments()) == 0 {
+		err = s.injectDefaultNetworkAttachments(ctx, request.GetObject())
+		if err != nil {
+			return
+		}
+	}
+
+	// Validate tenant isolation for network references:
+	err = s.validateNetworkReferencesTenancy(ctx, request.GetObject())
+	if err != nil {
+		return
+	}
+
+	// Validate network references state (exists, READY):
+	err = s.validateNetworkReferencesState(ctx, request.GetObject())
 	if err != nil {
 		return
 	}
@@ -1227,7 +1230,13 @@ func (s *PrivateComputeInstancesServer) validateAndTransformCatalogItem(
 	}
 	ci.GetSpec().SetTemplate(templateRef)
 
-	return applyFieldDefinitions(ci.GetSpec(), catalogItem.GetFieldDefinitions())
+	if err := applyFieldDefinitions(ci.GetSpec(), catalogItem.GetFieldDefinitions()); err != nil {
+		return err
+	}
+
+	// Apply typed networking policies from the catalog item's fields. These are authoritative
+	// over the deprecated field_definitions representation for networking.
+	return applyComputeInstanceTypedNetworkingPolicies(ci.GetSpec(), catalogItem.GetFields())
 }
 
 func (s *PrivateComputeInstancesServer) lookupCatalogItem(ctx context.Context,

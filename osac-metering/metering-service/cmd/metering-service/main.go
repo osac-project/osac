@@ -236,13 +236,18 @@ func run(ctx context.Context, logger logr.Logger, cfg *config) error {
 
 	var computeClient privatev1.ComputeInstancesClient
 	var clusterClient privatev1.ClustersClient
+	var bareMetalClient privatev1.BareMetalInstancesClient
 	if cfg.enableVMaaS {
 		computeClient = privatev1.NewComputeInstancesClient(grpcConn)
 	}
 	if cfg.enableCaaS {
 		clusterClient = privatev1.NewClustersClient(grpcConn)
 	}
-	reconciler := reconciliation.NewReconciler(computeClient, clusterClient, store, publisher, logger, cfg.heartbeatInterval)
+	if cfg.enableBMaaS {
+		bareMetalClient = privatev1.NewBareMetalInstancesClient(grpcConn)
+	}
+	replaySource := reconciliation.NewUnavailableBMaaSReplaySource()
+	reconciler := reconciliation.NewReconciler(computeClient, clusterClient, bareMetalClient, replaySource, store, publisher, logger, cfg.heartbeatInterval)
 
 	logger.Info("running startup reconciliation")
 	if err := reconciler.Reconcile(ctx); err != nil {

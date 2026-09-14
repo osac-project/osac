@@ -347,7 +347,7 @@ def assert_cluster_order_lifecycle_events(*, k8s: K8sClient, name: str) -> None:
         "Ready": ("Normal", "Ready", "ClusterOrder is ready"),
     }
     expected_reasons = set(expected_events)
-    if k8s.get_cluster_order_spec(name=name).get("nodeSets"):
+    if k8s.get_cluster_order_status(name=name).get("nodeSets"):
         expected_events["WorkersJoining"] = ("Normal", "Provisioning", "Workers Joining")
         expected_reasons.add("WorkersJoining")
 

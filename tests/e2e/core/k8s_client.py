@@ -364,6 +364,10 @@ class K8sClient:
         output = self.get_jsonpath(resource="clusterorder", name=name, jsonpath="{.spec}")
         return json.loads(output) if output else {}
 
+    def get_cluster_order_status(self, *, name: str) -> dict[str, Any]:
+        output = self.get_jsonpath(resource="clusterorder", name=name, jsonpath="{.status}")
+        return json.loads(output) if output else {}
+
     def get_cluster_order_condition_status(self, *, name: str, condition_type: str, checked: bool = True) -> str:
         output, rc = self._get("get", "clusterorder", name, "-n", self.namespace, "-o", "json", checked=checked)
         if rc != 0:

@@ -215,7 +215,9 @@ endif
 .PHONY: uninstall-infra
 uninstall-infra: ## Uninstall infrastructure (PLATFORM= PROFILE= NS= required)
 ifeq ($(PLATFORM),kind)
-ifeq ($(PROFILE),dev-full)
+ifeq ($(HOST_IS_MAC_ARM),true)
+	@$(KIND_RUNTIME) delete-cluster $(KIND_CLUSTER_NAME)
+else ifeq ($(PROFILE),dev-full)
 	@$(KIND_RUNTIME) delete-cluster $(KIND_CLUSTER_NAME)
 else
 	helm uninstall osac-infra --namespace osac-infra --ignore-not-found

@@ -73,7 +73,10 @@ type FulfillmentClient interface {
 // for ClusterOrder resources, implementing timeout detection, escalating backoff,
 // BMI replacement, and terminal failure handling.
 type BareMetalWorkerReconciler struct {
-	BMIProvider       BMIProvider
+	// BMIProvider handles BareMetalInstance lifecycle operations.
+	BMIProvider BMIProvider
+
+	// FulfillmentClient communicates worker status to the fulfillment gRPC service.
 	FulfillmentClient FulfillmentClient
 
 	// AgentRegistrationTimeout is the maximum time to wait for an agent to register.
@@ -156,6 +159,12 @@ func (r *BareMetalWorkerReconciler) ReconcileWorkers(
 	var nextRequeue time.Duration
 	allTerminal := true
 	hasFailures := false
+	// hadTransientError tracks whether ANY transient gRPC error occurred
+	// during the entire reconciliation loop. The FulfillmentServiceUnavailable
+	// condition is only cleared after the loop completes with zero transient
+	// errors, preventing a single successful worker from prematurely
+	// clearing a condition that still applies to another worker.
+	hadTransientError := false
 
 	for i := range instance.Status.Workers {
 		worker := &instance.Status.Workers[i]
@@ -172,6 +181,7 @@ func (r *BareMetalWorkerReconciler) ReconcileWorkers(
 			if IsTransientGRPCError(err) {
 				log.Info("transient gRPC error checking BMI readiness, setting FulfillmentServiceUnavailable",
 					"worker", worker.BMIName)
+				hadTransientError = true
 				instance.SetStatusCondition(
 					v1alpha1.ConditionFulfillmentServiceUnavailable,
 					metav1.ConditionTrue,
@@ -190,8 +200,6 @@ func (r *BareMetalWorkerReconciler) ReconcileWorkers(
 
 		if ready {
 			allTerminal = false
-			// Clear fulfillment service unavailable if it was set
-			instance.RemoveStatusCondition(v1alpha1.ConditionFulfillmentServiceUnavailable)
 			continue
 		}
 
@@ -212,6 +220,7 @@ func (r *BareMetalWorkerReconciler) ReconcileWorkers(
 			if IsTransientGRPCError(err) {
 				log.Info("transient gRPC error checking agent registration, setting FulfillmentServiceUnavailable",
 					"worker", worker.BMIName)
+				hadTransientError = true
 				instance.SetStatusCondition(
 					v1alpha1.ConditionFulfillmentServiceUnavailable,
 					metav1.ConditionTrue,
@@ -234,10 +243,13 @@ func (r *BareMetalWorkerReconciler) ReconcileWorkers(
 				log.Info("agent registration timeout, triggering BMI replacement",
 					"worker", worker.BMIName, "timeout", r.AgentRegistrationTimeout)
 
-				result, err := r.replaceBMI(ctx, instance, worker, v1alpha1.ReasonAgentRegistrationTimeout,
+				result, transientErr, err := r.replaceBMI(ctx, instance, worker, v1alpha1.ReasonAgentRegistrationTimeout,
 					fmt.Sprintf("Agent failed to register within %s", r.AgentRegistrationTimeout))
 				if err != nil {
 					return ctrl.Result{}, err
+				}
+				if transientErr {
+					hadTransientError = true
 				}
 				if result.RequeueAfter > 0 && (nextRequeue == 0 || result.RequeueAfter < nextRequeue) {
 					nextRequeue = result.RequeueAfter
@@ -272,16 +284,30 @@ func (r *BareMetalWorkerReconciler) ReconcileWorkers(
 			if IsTransientGRPCError(err) {
 				log.Info("transient gRPC error reporting worker status",
 					"clusterOrder", instance.Name)
+				hadTransientError = true
 				instance.SetStatusCondition(
 					v1alpha1.ConditionFulfillmentServiceUnavailable,
 					metav1.ConditionTrue,
 					sanitizeFeedbackText(fmt.Sprintf("Transient gRPC error: %v", err)),
 					v1alpha1.ReasonGRPCUnavailable,
 				)
+				// Ensure the controller requeues to retry the report even when
+				// all workers are already ready (nextRequeue would be zero).
+				if nextRequeue == 0 || provisioning.BackoffBaseDelay < nextRequeue {
+					nextRequeue = provisioning.BackoffBaseDelay
+				}
 			} else {
 				return ctrl.Result{}, fmt.Errorf("reporting worker status: %w", err)
 			}
 		}
+	}
+
+	// Clear FulfillmentServiceUnavailable only after the entire reconciliation
+	// loop (including the fulfillment report) completed with zero transient
+	// gRPC errors. This prevents a single successful worker from prematurely
+	// clearing a condition that still applies to other workers.
+	if !hadTransientError {
+		instance.RemoveStatusCondition(v1alpha1.ConditionFulfillmentServiceUnavailable)
 	}
 
 	// Set terminal condition if all workers have exhausted retries
@@ -304,13 +330,16 @@ func (r *BareMetalWorkerReconciler) ReconcileWorkers(
 }
 
 // replaceBMI deletes the current BMI and creates a replacement, updating the
-// worker status with backoff timing and failure information.
+// worker status with backoff timing and failure information. The returned
+// hadTransientErr flag indicates whether a transient gRPC error occurred
+// during the replacement, so the caller can avoid clearing the
+// FulfillmentServiceUnavailable condition prematurely.
 func (r *BareMetalWorkerReconciler) replaceBMI(
 	ctx context.Context,
 	instance *v1alpha1.ClusterOrder,
 	worker *v1alpha1.WorkerStatus,
 	reason, message string,
-) (ctrl.Result, error) {
+) (result ctrl.Result, hadTransientErr bool, err error) {
 	log := ctrllog.FromContext(ctx)
 
 	// Capture the old BMI name before any mutation so log entries and
@@ -327,46 +356,40 @@ func (r *BareMetalWorkerReconciler) replaceBMI(
 				sanitizeFeedbackText(fmt.Sprintf("Transient gRPC error: %v", err)),
 				v1alpha1.ReasonGRPCUnavailable,
 			)
-			return ctrl.Result{RequeueAfter: provisioning.BackoffBaseDelay}, nil
+			return ctrl.Result{RequeueAfter: provisioning.BackoffBaseDelay}, true, nil
 		}
-		return ctrl.Result{}, fmt.Errorf("deleting BMI %s/%s: %w", worker.BMINamespace, worker.BMIName, err)
+		return ctrl.Result{}, false, fmt.Errorf("deleting BMI %s/%s: %w", worker.BMINamespace, worker.BMIName, err)
 	}
 
-	// Increment attempt count
-	worker.AttemptCount++
+	// Compute new attempt count without mutating the worker yet, so that
+	// a transient CreateBMI failure does not persist stale retry state.
+	newAttemptCount := worker.AttemptCount + 1
 
 	// Check if max retries exhausted after increment
-	if worker.AttemptCount >= r.MaxRetries {
+	if newAttemptCount >= r.MaxRetries {
 		now := r.now()
 		failTime := metav1.NewTime(now)
+		worker.AttemptCount = newAttemptCount
 		worker.LastFailureReason = reason
 		worker.LastFailureTime = &failTime
 
 		instance.SetStatusCondition(
 			v1alpha1.ConditionWorkerProvisioningFailed,
 			metav1.ConditionTrue,
-			fmt.Sprintf("Worker %s: %s (attempt %d/%d)", oldBMIName, message, worker.AttemptCount, r.MaxRetries),
+			fmt.Sprintf("Worker %s: %s (attempt %d/%d)", oldBMIName, message, newAttemptCount, r.MaxRetries),
 			reason,
 		)
 		log.Info("worker max retries exhausted",
 			"worker", oldBMIName,
-			"attempts", worker.AttemptCount,
+			"attempts", newAttemptCount,
 			"maxRetries", r.MaxRetries,
 		)
-		return ctrl.Result{}, nil
+		return ctrl.Result{}, false, nil
 	}
 
-	// Compute backoff delay
-	backoff := ComputeWorkerBackoff(worker.AttemptCount)
-	now := r.now()
-	nextRetry := metav1.NewTime(now.Add(backoff))
-	failTime := metav1.NewTime(now)
-
-	worker.NextRetryTime = &nextRetry
-	worker.LastFailureReason = reason
-	worker.LastFailureTime = &failTime
-
-	// Create replacement BMI
+	// Create replacement BMI before mutating retry state, so that a
+	// transient CreateBMI failure does not leave stale AttemptCount,
+	// NextRetryTime, or LastFailureReason in the worker status.
 	workerIndex := r.findWorkerIndex(instance, worker)
 	newName, newNamespace, err := r.BMIProvider.CreateBMI(ctx, instance, workerIndex)
 	if err != nil {
@@ -379,11 +402,21 @@ func (r *BareMetalWorkerReconciler) replaceBMI(
 				sanitizeFeedbackText(fmt.Sprintf("Transient gRPC error: %v", err)),
 				v1alpha1.ReasonGRPCUnavailable,
 			)
-			return ctrl.Result{RequeueAfter: provisioning.BackoffBaseDelay}, nil
+			return ctrl.Result{RequeueAfter: provisioning.BackoffBaseDelay}, true, nil
 		}
-		return ctrl.Result{}, fmt.Errorf("creating replacement BMI: %w", err)
+		return ctrl.Result{}, false, fmt.Errorf("creating replacement BMI: %w", err)
 	}
 
+	// Full delete+create succeeded — now commit the retry-state mutations.
+	backoff := ComputeWorkerBackoff(newAttemptCount)
+	now := r.now()
+	nextRetry := metav1.NewTime(now.Add(backoff))
+	failTime := metav1.NewTime(now)
+
+	worker.AttemptCount = newAttemptCount
+	worker.NextRetryTime = &nextRetry
+	worker.LastFailureReason = reason
+	worker.LastFailureTime = &failTime
 	worker.BMIName = newName
 	worker.BMINamespace = newNamespace
 
@@ -391,18 +424,18 @@ func (r *BareMetalWorkerReconciler) replaceBMI(
 		v1alpha1.ConditionWorkerProvisioningFailed,
 		metav1.ConditionTrue,
 		fmt.Sprintf("Replaced %s with %s (attempt %d/%d, next retry after %s): %s",
-			oldBMIName, newName, worker.AttemptCount, r.MaxRetries, backoff, message),
+			oldBMIName, newName, newAttemptCount, r.MaxRetries, backoff, message),
 		v1alpha1.ReasonBMIReplacementTriggered,
 	)
 
 	log.Info("BMI replacement triggered",
 		"oldBMI", oldBMIName,
 		"newBMI", newName,
-		"attempt", worker.AttemptCount,
+		"attempt", newAttemptCount,
 		"backoff", backoff,
 	)
 
-	return ctrl.Result{RequeueAfter: backoff}, nil
+	return ctrl.Result{RequeueAfter: backoff}, false, nil
 }
 
 // getBMICreationTime returns the effective creation time of a worker's BMI

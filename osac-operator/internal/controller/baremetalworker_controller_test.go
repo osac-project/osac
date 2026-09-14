@@ -49,6 +49,16 @@ type mockBMIProvider struct {
 	createdNames   []string
 	deletedNames   []string
 	nextCreateName string
+
+	// Per-call overrides: when set, IsBMIReady returns the next entry
+	// (popped from the front) instead of the default isReady/readyErr.
+	readyResults []readyResult
+}
+
+// readyResult holds per-call return values for IsBMIReady.
+type readyResult struct {
+	ready bool
+	err   error
 }
 
 func (m *mockBMIProvider) CreateBMI(_ context.Context, _ *v1alpha1.ClusterOrder, _ int) (string, string, error) {
@@ -77,6 +87,11 @@ func (m *mockBMIProvider) GetBMIRegistrationTime(_ context.Context, _, _ string)
 
 func (m *mockBMIProvider) IsBMIReady(_ context.Context, _, _ string) (bool, error) {
 	m.readyCalls++
+	if len(m.readyResults) > 0 {
+		r := m.readyResults[0]
+		m.readyResults = m.readyResults[1:]
+		return r.ready, r.err
+	}
 	return m.isReady, m.readyErr
 }
 
@@ -434,15 +449,19 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 					{BMIName: "worker-1", BMINamespace: "osac-baremetalinstance"},
 				})
 
-				_, err := reconciler.ReconcileWorkers(ctx, instance)
+				result, err := reconciler.ReconcileWorkers(ctx, instance)
 				Expect(err).NotTo(HaveOccurred())
 
 				cond := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionFulfillmentServiceUnavailable)
 				Expect(cond).NotTo(BeNil())
 				Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+
+				// Fix 1: Even when all workers are ready (nextRequeue would
+				// be zero), a transient report failure must schedule a retry.
+				Expect(result.RequeueAfter).To(Equal(provisioning.BackoffBaseDelay))
 			})
 
-			It("should clear FulfillmentServiceUnavailable when workers are ready", func() {
+			It("should clear FulfillmentServiceUnavailable when all workers are ready and no transient errors", func() {
 				bmiProvider.isReady = true
 				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
 					{BMIName: "worker-1", BMINamespace: "osac-baremetalinstance"},
@@ -460,6 +479,51 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 
 				cond := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionFulfillmentServiceUnavailable)
 				Expect(cond).To(BeNil())
+			})
+
+			It("should NOT clear FulfillmentServiceUnavailable when one worker has transient error and another is ready", func() {
+				// Fix 3: worker-0 has a transient error, worker-1 is ready.
+				// The condition must NOT be cleared because worker-0's error
+				// is still unresolved.
+				bmiProvider.readyResults = []readyResult{
+					{ready: false, err: status.Error(codes.Unavailable, "service unavailable")},
+					{ready: true, err: nil},
+				}
+				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
+					{BMIName: "worker-0", BMINamespace: "osac-baremetalinstance"},
+					{BMIName: "worker-1", BMINamespace: "osac-baremetalinstance"},
+				})
+
+				_, err := reconciler.ReconcileWorkers(ctx, instance)
+				Expect(err).NotTo(HaveOccurred())
+
+				// The condition must still be set because worker-0 had a transient error
+				cond := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionFulfillmentServiceUnavailable)
+				Expect(cond).NotTo(BeNil(), "FulfillmentServiceUnavailable should not be cleared when any worker had a transient error")
+				Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+			})
+
+			It("should NOT clear FulfillmentServiceUnavailable when fulfillment report has transient error", func() {
+				// Fix 3: All workers are ready but the fulfillment report fails
+				// transiently — condition must remain set.
+				bmiProvider.isReady = true
+				fulfillmentClient.reportErr = status.Error(codes.Unavailable, "service unavailable")
+				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
+					{BMIName: "worker-1", BMINamespace: "osac-baremetalinstance"},
+				})
+				// Pre-set the condition to verify it is NOT cleared
+				instance.SetStatusCondition(
+					v1alpha1.ConditionFulfillmentServiceUnavailable,
+					metav1.ConditionTrue,
+					"previous error",
+					v1alpha1.ReasonGRPCUnavailable,
+				)
+
+				_, err := reconciler.ReconcileWorkers(ctx, instance)
+				Expect(err).NotTo(HaveOccurred())
+
+				cond := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionFulfillmentServiceUnavailable)
+				Expect(cond).NotTo(BeNil(), "FulfillmentServiceUnavailable should not be cleared on transient report error")
 			})
 		})
 
@@ -604,7 +668,7 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 				Expect(instance.Status.Workers[0].AttemptCount).To(Equal(0))
 			})
 
-			It("should handle transient gRPC error during BMI creation", func() {
+			It("should handle transient gRPC error during BMI creation without stale retry state", func() {
 				bmiProvider.createErr = status.Error(codes.Aborted, "aborted")
 
 				failTime := metav1.NewTime(now.Add(-35 * time.Minute))
@@ -623,6 +687,79 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 
 				cond := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionFulfillmentServiceUnavailable)
 				Expect(cond).NotTo(BeNil())
+
+				// Fix 2: When CreateBMI fails transiently after DeleteBMI
+				// succeeds, retry state must NOT be persisted. AttemptCount,
+				// NextRetryTime, and LastFailureReason must remain unchanged.
+				worker := instance.Status.Workers[0]
+				Expect(worker.AttemptCount).To(Equal(0), "AttemptCount should not be incremented on transient CreateBMI failure")
+				Expect(worker.NextRetryTime).To(BeNil(), "NextRetryTime should not be set on transient CreateBMI failure")
+				Expect(worker.LastFailureReason).To(BeEmpty(), "LastFailureReason should not be set on transient CreateBMI failure")
+			})
+		})
+
+		Context("stale retry state prevention", func() {
+			It("should not mutate retry state when CreateBMI fails transiently with prior attempts", func() {
+				// Fix 2: Simulate a worker at attempt 2 whose old BMI timed out.
+				// DeleteBMI succeeds but CreateBMI fails transiently. The worker
+				// status must still show attemptCount=2 (not 3), and the original
+				// NextRetryTime and LastFailureReason must be preserved.
+				bmiProvider.isReady = false
+				bmiProvider.regTime = time.Time{}
+				bmiProvider.createErr = status.Error(codes.Unavailable, "service unavailable")
+
+				oldRetry := metav1.NewTime(now.Add(-35 * time.Minute))
+				oldFailTime := metav1.NewTime(now.Add(-36 * time.Minute))
+				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
+					{
+						BMIName:           "worker-1",
+						BMINamespace:      "osac-baremetalinstance",
+						AttemptCount:      2,
+						NextRetryTime:     &oldRetry,
+						LastFailureTime:   &oldFailTime,
+						LastFailureReason: "PreviousReason",
+					},
+				})
+
+				result, err := reconciler.ReconcileWorkers(ctx, instance)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result.RequeueAfter).To(Equal(provisioning.BackoffBaseDelay))
+
+				worker := instance.Status.Workers[0]
+				Expect(worker.AttemptCount).To(Equal(2), "AttemptCount must not change on transient CreateBMI failure")
+				Expect(worker.LastFailureReason).To(Equal("PreviousReason"), "LastFailureReason must not change")
+				Expect(worker.NextRetryTime.Time).To(Equal(oldRetry.Time), "NextRetryTime must not change")
+			})
+
+			It("should correctly update retry state when full replacement succeeds", func() {
+				// Positive case: Both delete and create succeed, so retry state
+				// must be updated to reflect the successful replacement.
+				bmiProvider.isReady = false
+				bmiProvider.regTime = time.Time{}
+				bmiProvider.nextCreateName = "new-bmi"
+
+				oldRetry := metav1.NewTime(now.Add(-35 * time.Minute))
+				oldFailTime := metav1.NewTime(now.Add(-36 * time.Minute))
+				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
+					{
+						BMIName:           "worker-1",
+						BMINamespace:      "osac-baremetalinstance",
+						AttemptCount:      1,
+						NextRetryTime:     &oldRetry,
+						LastFailureTime:   &oldFailTime,
+						LastFailureReason: "PreviousReason",
+					},
+				})
+
+				_, err := reconciler.ReconcileWorkers(ctx, instance)
+				Expect(err).NotTo(HaveOccurred())
+
+				worker := instance.Status.Workers[0]
+				Expect(worker.AttemptCount).To(Equal(2), "AttemptCount must increment on successful replacement")
+				Expect(worker.BMIName).To(Equal("new-bmi"))
+				Expect(worker.LastFailureReason).To(Equal(v1alpha1.ReasonAgentRegistrationTimeout))
+				Expect(worker.NextRetryTime).NotTo(BeNil())
+				Expect(worker.NextRetryTime.Time).To(BeTemporally(">", now))
 			})
 		})
 

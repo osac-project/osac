@@ -145,6 +145,8 @@ jobs:
       with:
         working-directory: fulfillment-service
     - working-directory: fulfillment-service
+      env:
+        GODEBUG: http2client=0
       run: |
         ginkgo run --timeout 1h -r internal
 
@@ -164,6 +166,8 @@ jobs:
       with:
         working-directory: osac-metering/metering-service
     - working-directory: osac-metering/metering-service
+      env:
+        GODEBUG: http2client=0
       run: |
         ginkgo run -r internal
 
@@ -183,6 +187,8 @@ jobs:
       with:
         working-directory: osac-metering/adapters
     - working-directory: osac-metering/adapters
+      env:
+        GODEBUG: http2client=0
       run: |
         ginkgo run -r .
 
@@ -202,6 +208,8 @@ jobs:
       with:
         working-directory: osac-metering/schema
     - working-directory: osac-metering/schema
+      env:
+        GODEBUG: http2client=0
       run: |
         ginkgo run -r .
 

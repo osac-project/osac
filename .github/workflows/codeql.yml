@@ -64,6 +64,8 @@ jobs:
       # the setup-go step above) avoids that.
       - if: matrix.language == 'go'
         name: Build Go modules
+        env:
+          GODEBUG: http2client=0
         run: |
           set -e
           (cd fulfillment-service && go build ./...)

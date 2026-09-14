@@ -78,5 +78,7 @@ jobs:
         working-directory: fulfillment-service
     - if: steps.should-run.outputs.run
       working-directory: fulfillment-service
+      env:
+        GODEBUG: http2client=0
       run: |
         go test -run 'TestKeychainAvailable|TestSettingsSave_FallsBackToFileWithNoKeychain' -v ./internal/config/...

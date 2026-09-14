@@ -22,9 +22,10 @@ import (
 
 // resourceTypeEndpoints maps OSAC resource types to M360 API endpoints.
 var resourceTypeEndpoints = map[string]string{
-	schema.ResourceTypeComputeInstance: "/vmaas/event",
-	schema.ResourceTypeClusterOrder:    "/caas/event",
-	"maas_inference":                   "/maas/event",
+	schema.ResourceTypeComputeInstance:   "/vmaas/event",
+	schema.ResourceTypeClusterOrder:      "/caas/event",
+	schema.ResourceTypeBareMetalInstance: "/bmaas/event",
+	"maas_inference":                     "/maas/event",
 }
 
 // spaceString is the M360 convention for non-applicable fields.

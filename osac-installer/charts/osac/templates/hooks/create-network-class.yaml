@@ -108,7 +108,7 @@ spec:
               -X "${METHOD}" "${URL}" \
               -H "Authorization: Bearer ${AUTH_TOKEN}" \
               -H "Content-Type: application/json" \
-              --data-binary {{ $body | toJson | quote }})
+              --data-binary "${NETWORK_CLASS_BODY}")
 
             case "${CODE}" in
               2??)
@@ -130,6 +130,8 @@ spec:
         env:
         - name: HOME
           value: /tmp
+        - name: NETWORK_CLASS_BODY
+          value: {{ $body | toJson | quote }}
         - name: NC_IDENTITY
           value: {{ required "networkClass.fabricManager or networkClass.k8sManager is required when networkClass.enabled is true" $identity | quote }}
         volumeMounts:

@@ -377,16 +377,7 @@
               "type": "string",
               "description": "How often the operator recomputes NetworkClass capabilities from manager ConfigMaps, in addition to reacting immediately to ConfigMap changes. Common values: 30s, 1m, 5m, 15m, 30m, 1h (any valid Go duration is accepted).",
               "default": "5m",
-              "enum": [
-                "30s",
-                "1m",
-                "5m",
-                "10m",
-                "15m",
-                "30m",
-                "1h",
-                "2h"
-              ]
+              "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$"
             },
             "fabricManagers": {
               "type": "object",
@@ -958,7 +949,7 @@
                     },
                     "NETRIS_CONTROLLER_URL": {
                       "type": "string",
-                      "pattern": "^$|^https://[^/\\s:]+[^\\s]*$",
+                      "pattern": "^$|^https://[^/\\s:]+(:[0-9]+)?(/[^\\s]*)?$",
                       "description": "Netris controller API URL. Must be set identically on clusterFulfillment and networkFulfillment; there is no shared Netris config block."
                     },
                     "NETRIS_USERNAME": {
@@ -1131,7 +1122,7 @@
                   "properties": {
                     "NETRIS_CONTROLLER_URL": {
                       "type": "string",
-                      "pattern": "^$|^https://[^/\\s:]+[^\\s]*$",
+                      "pattern": "^$|^https://[^/\\s:]+(:[0-9]+)?(/[^\\s]*)?$",
                       "description": "Netris controller API URL. Must be set identically on clusterFulfillment and networkFulfillment; there is no shared Netris config block."
                     },
                     "NETRIS_USERNAME": {
@@ -1993,7 +1984,7 @@
                 "properties": {
                   "controllerUrl": {
                     "minLength": 1,
-                    "pattern": "^https://[^/\\s:]+[^\\s]*$"
+                    "pattern": "^https://[^/\\s:]+(:[0-9]+)?(/[^\\s]*)?$"
                   },
                   "credentials": {
                     "required": [
@@ -2032,7 +2023,7 @@
         "controllerUrl": {
           "type": "string",
           "description": "Netris controller API URL (HTTPS only).",
-          "pattern": "^$|^https://[^/\\s:]+[^\\s]*$"
+          "pattern": "^$|^https://[^/\\s:]+(:[0-9]+)?(/[^\\s]*)?$"
         },
         "credentials": {
           "type": "object",
@@ -2160,53 +2151,6 @@
         {
           "if": {
             "properties": {
-              "enabled": {
-                "const": true
-              }
-            },
-            "required": [
-              "enabled"
-            ]
-          },
-          "then": {
-            "properties": {
-              "title": {
-                "type": "string",
-                "minLength": 1
-              }
-            },
-            "required": [
-              "title"
-            ],
-            "anyOf": [
-              {
-                "properties": {
-                  "k8sManager": {
-                    "type": "string",
-                    "minLength": 1
-                  }
-                },
-                "required": [
-                  "k8sManager"
-                ]
-              },
-              {
-                "properties": {
-                  "fabricManager": {
-                    "type": "string",
-                    "minLength": 1
-                  }
-                },
-                "required": [
-                  "fabricManager"
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "if": {
-            "properties": {
               "k8sManager": {
                 "const": "k8s_only"
               }
@@ -2281,7 +2225,7 @@
         "controllerUrl": {
           "type": "string",
           "description": "Netris controller API URL (HTTPS only)",
-          "pattern": "^$|^https://[^/\\s:]+[^\\s]*$"
+          "pattern": "^$|^https://[^/\\s:]+(:[0-9]+)?(/[^\\s]*)?$"
         },
         "credentials": {
           "type": "object",
@@ -2344,7 +2288,7 @@
             "properties": {
               "controllerUrl": {
                 "minLength": 1,
-                "pattern": "^https://[^/\\s:]+[^\\s]*$"
+                "pattern": "^https://[^/\\s:]+(:[0-9]+)?(/[^\\s]*)?$"
               },
               "credentials": {
                 "required": [

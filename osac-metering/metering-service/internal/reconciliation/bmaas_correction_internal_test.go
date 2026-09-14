@@ -116,3 +116,33 @@ func TestBuildBMaaSCorrectionEventsClonesMeterDimensions(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildBMaaSCorrectionEventsDistinctTransitionsGetDistinctIDs(t *testing.T) {
+	allocationSince := time.Date(2026, 9, 14, 10, 0, 0, 0, time.UTC)
+	consumptionSince := time.Date(2026, 9, 14, 11, 0, 0, 0, time.UTC)
+	firstTransition := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
+	secondTransition := firstTransition.Add(2 * time.Hour)
+	intervals := events.BMaaSMeterIntervals{AllocationSince: &allocationSince, ConsumptionSince: &consumptionSince}
+	dims := map[string]any{"bm_instance_type": "bm.large"}
+
+	first, err := buildBMaaSCorrectionEvents(
+		"bmi-1", "tenant-1", "project-1", StateDrift, "STOPPED", "RUNNING", dims,
+		intervals, events.BMaaSEffectSkip, events.BMaaSEffectStart, true, true, firstTransition,
+	)
+	if err != nil {
+		t.Fatalf("build first BMaaS correction: %v", err)
+	}
+	second, err := buildBMaaSCorrectionEvents(
+		"bmi-1", "tenant-1", "project-1", StateDrift, "STOPPED", "RUNNING", dims,
+		intervals, events.BMaaSEffectSkip, events.BMaaSEffectStart, true, true, secondTransition,
+	)
+	if err != nil {
+		t.Fatalf("build second BMaaS correction: %v", err)
+	}
+	if len(first) != 1 || len(second) != 1 {
+		t.Fatalf("expected one consumption correction per transition, got %d and %d", len(first), len(second))
+	}
+	if first[0].ID() == second[0].ID() {
+		t.Errorf("distinct authoritative transitions reused correction ID %q", first[0].ID())
+	}
+}

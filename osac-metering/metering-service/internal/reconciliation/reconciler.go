@@ -43,6 +43,11 @@ var (
 		Help: "Corrections emitted by reconciliation",
 	}, []string{"reason", "resource_type"})
 
+	bmaasReconciliationHolds = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "osac_metering_bmaas_reconciliation_holds_total",
+		Help: "BMaaS reconciliation passes held by reason",
+	}, []string{"reason"})
+
 	reconLastCompleted = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "osac_metering_reconciliation_last_completed_at",
 		Help: "Unix timestamp of last completed reconciliation",
@@ -143,6 +148,9 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 	start := time.Now()
 	now := start.UTC()
 	r.logger.Info("starting reconciliation")
+	r.bmaasHolds = make(map[string]struct{})
+	r.bmaasHoldMetrics = make(map[string]struct{})
+	r.bmaasSkipped = make(map[string]struct{})
 
 	fulfillmentState, err := r.loadFulfillmentState(ctx)
 	if err != nil {
@@ -159,7 +167,6 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 	}
 
 	corrections := 0
-	r.bmaasHolds = make(map[string]struct{})
 
 	n, err := r.reconcileFulfillmentResources(ctx, fulfillmentState, projMap, now)
 	corrections += n
@@ -217,21 +224,24 @@ func (r *Reconciler) publishBMaaSCorrections(
 	allocationEffect, consumptionEffect string,
 	allocationEverStarted, consumptionEverStarted bool,
 	transitionTime time.Time,
-) error {
+) (bool, error) {
 	ces, err := buildBMaaSCorrectionEvents(
 		id, tenantID, projectID, reason, projectionState, sourceState, dims, intervals,
 		allocationEffect, consumptionEffect, allocationEverStarted, consumptionEverStarted, transitionTime,
 	)
 	if err != nil {
-		return fmt.Errorf("building %s events for %s: %w", reason, id, err)
+		return false, fmt.Errorf("building %s events for %s: %w", reason, id, err)
 	}
 	for _, ce := range ces {
 		if err := r.publisher.Publish(ctx, ce); err != nil {
-			return fmt.Errorf("publishing %s for %s: %w", reason, id, err)
+			return false, fmt.Errorf("publishing %s for %s: %w", reason, id, err)
 		}
 	}
+	if len(ces) == 0 {
+		return false, nil
+	}
 	reconCorrections.WithLabelValues(string(reason), events.ResourceTypeBareMetalInstance).Inc()
-	return nil
+	return true, nil
 }
 
 func (r *Reconciler) reconcileFulfillmentResources(ctx context.Context, fulfillmentState map[string]fulfillmentResource, projMap map[string]projection.ResourceState, now time.Time) (int, error) {
@@ -382,8 +392,8 @@ func (r *Reconciler) reconcileFulfillmentResources(ctx context.Context, fulfillm
 
 func (r *Reconciler) reconcileBareMetalFulfillmentResource(ctx context.Context, id string, fs fulfillmentResource, ps projection.ResourceState, exists bool) (int, error) {
 	if fs.transitionTime == nil {
-		r.holdBMaaS(id)
-		r.logger.V(1).Info("holding bare metal instance reconciliation without source transition timestamp", "resource_id", id)
+		r.holdBMaaS(id, "missing_transition_time")
+		r.logger.Info("holding bare metal instance reconciliation without source transition timestamp", "resource_id", id)
 		return 0, nil
 	}
 	transitionTime := fs.transitionTime.UTC()
@@ -466,18 +476,23 @@ func (r *Reconciler) reconcileBareMetalFulfillmentResource(ctx context.Context, 
 	dimensionDrift := false
 	allocationEffect, err := events.ResolveAllocationTransition(ps.CurrentState, fs.state)
 	if err != nil {
-		r.holdBMaaS(id)
-		r.logger.V(1).Info("holding bare metal instance reconciliation with an unobserved state transition", "resource_id", id, "error", err)
+		r.holdBMaaS(id, "unobserved_transition")
+		r.logger.Info("holding bare metal instance reconciliation with an unobserved state transition", "resource_id", id, "error", err)
 		return 0, nil
 	}
 	consumptionEffect, err := events.ResolveConsumptionTransition(ps.CurrentState, fs.state)
 	if err != nil {
-		r.holdBMaaS(id)
-		r.logger.V(1).Info("holding bare metal instance reconciliation with an unobserved state transition", "resource_id", id, "error", err)
+		r.holdBMaaS(id, "unobserved_transition")
+		r.logger.Info("holding bare metal instance reconciliation with an unobserved state transition", "resource_id", id, "error", err)
 		return 0, nil
 	}
 	if ps.CurrentState == fs.state {
 		if events.DimensionsEqual(ps.BillingDimensions, fs.billingDimensions) {
+			return 0, nil
+		}
+		if bmaasInstanceTypeDrift(ps.BillingDimensions, fs.billingDimensions) {
+			r.holdBMaaS(id, "immutable_instance_type")
+			r.logger.Info("holding bare metal instance reconciliation with immutable instance type drift", "resource_id", id)
 			return 0, nil
 		}
 		reason = BillingDimensionsDrift
@@ -493,7 +508,11 @@ func (r *Reconciler) reconcileBareMetalFulfillmentResource(ctx context.Context, 
 		return 0, nil
 	}
 	if dimensionDrift {
-		allocationEffect = bmaasActiveCorrectionEffect(intervals.AllocationSince != nil)
+		// Catalog metadata may change while the immutable instance type and
+		// lifecycle state remain stable. Update the projection without inventing
+		// a lifecycle event or reopening an already active meter interval.
+		allocationEffect = events.BMaaSEffectSkip
+		consumptionEffect = events.BMaaSEffectSkip
 	}
 	if bmaasHasClosure(allocationEffect, consumptionEffect) {
 		directSnapshotClosure := ps.CurrentState == "RUNNING" && fs.version == ps.FulfillmentVersion+1 &&
@@ -529,7 +548,14 @@ func (r *Reconciler) reconcileBareMetalFulfillmentResource(ctx context.Context, 
 		}
 		return 0, fmt.Errorf("upserting %s for %s: %w", reason, id, err)
 	}
-	return 1, nil
+	return boolToInt(published), nil
+}
+
+func boolToInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func bmaasIntervals(state projection.ResourceState) events.BMaaSMeterIntervals {
@@ -848,6 +874,10 @@ func (r *Reconciler) reconcileMissedDeletions(ctx context.Context, fulfillmentSt
 				continue
 			}
 			if ps.ResourceType == events.ResourceTypeBareMetalInstance {
+				if _, skipped := r.bmaasSkipped[id]; skipped {
+					r.logger.Info("holding bare metal instance missed deletion after source row was skipped", "resource_id", id)
+					continue
+				}
 				if r.bareMetalClient == nil {
 					if !bmaasSkipLogged {
 						r.logger.Info("skipping bare_metal_instance missed deletion checks, no BMI client configured")
@@ -912,12 +942,16 @@ func (r *Reconciler) reconcileStaleHeartbeats(ctx context.Context, fulfillmentSt
 	for i := range freshProjection {
 		ps := &freshProjection[i]
 		if ps.ResourceType == events.ResourceTypeBareMetalInstance {
+			if r.bareMetalClient == nil {
+				r.logger.V(1).Info("skipping stale bare metal instance heartbeat, no bare metal client configured", "resource_id", ps.ResourceID)
+				continue
+			}
 			if _, present := fulfillmentState[ps.ResourceID]; !present {
-				r.logger.V(1).Info("holding stale bare metal instance heartbeat until meter-specific reconciliation is available", "resource_id", ps.ResourceID)
+				r.logger.Info("holding stale bare metal instance heartbeat until meter-specific reconciliation is available", "resource_id", ps.ResourceID)
 				continue
 			}
 			if _, held := r.bmaasHolds[ps.ResourceID]; held {
-				r.logger.V(1).Info("holding stale bare metal instance heartbeat while BMaaS reconciliation is held", "resource_id", ps.ResourceID)
+				r.logger.Info("holding stale bare metal instance heartbeat while BMaaS reconciliation is held", "resource_id", ps.ResourceID)
 				continue
 			}
 		}
@@ -1163,7 +1197,11 @@ func (r *Reconciler) loadBareMetalInstances(ctx context.Context, result map[stri
 			}
 			dimensions, err := events.BareMetalInstanceBillingDimensions(bmi)
 			if err != nil {
-				bmaasReconciliationHolds.WithLabelValues("missing_instance_type").Inc()
+				if r.bmaasSkipped == nil {
+					r.bmaasSkipped = make(map[string]struct{})
+				}
+				r.bmaasSkipped[bmi.GetId()] = struct{}{}
+				r.holdBMaaS(bmi.GetId(), "missing_instance_type")
 				r.logger.Error(err, "skipping bare metal instance with invalid billing dimensions", "resource_id", bmi.GetId())
 				continue
 			}

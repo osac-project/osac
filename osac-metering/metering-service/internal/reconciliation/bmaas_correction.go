@@ -30,7 +30,7 @@ func buildBMaaSCorrectionEvents(
 	allocationEverStarted, consumptionEverStarted bool,
 	transitionTime time.Time,
 ) ([]cloudevents.Event, error) {
-	fingerprint, err := bmaasCorrectionFingerprint(billingDimensions, intervals)
+	fingerprint, err := bmaasCorrectionFingerprint(billingDimensions, intervals, transitionTime)
 	if err != nil {
 		return nil, fmt.Errorf("building BMaaS correction identity: %w", err)
 	}
@@ -83,7 +83,7 @@ func bmaasAffectedInterval(request events.BMaaSEventBuildRequest, intervals even
 	}
 }
 
-func bmaasCorrectionFingerprint(billingDimensions map[string]any, intervals events.BMaaSMeterIntervals) (string, error) {
+func bmaasCorrectionFingerprint(billingDimensions map[string]any, intervals events.BMaaSMeterIntervals, transitionTime time.Time) (string, error) {
 	canonicalDimensions, err := canonicalCorrectionDimensions(events.ResourceTypeBareMetalInstance, billingDimensions)
 	if err != nil {
 		return "", err
@@ -94,12 +94,14 @@ func bmaasCorrectionFingerprint(billingDimensions map[string]any, intervals even
 			AllocationSince  *time.Time `json:"allocation_since,omitempty"`
 			ConsumptionSince *time.Time `json:"consumption_since,omitempty"`
 		} `json:"intervals"`
+		TransitionTime time.Time `json:"transition_time"`
 	}{
 		Dims: canonicalDimensions,
 		Intervals: struct {
 			AllocationSince  *time.Time `json:"allocation_since,omitempty"`
 			ConsumptionSince *time.Time `json:"consumption_since,omitempty"`
 		}{intervals.AllocationSince, intervals.ConsumptionSince},
+		TransitionTime: transitionTime,
 	})
 	if err != nil {
 		return "", fmt.Errorf("marshalling canonical correction content: %w", err)

@@ -108,6 +108,7 @@
             memoryGiB: 4
             bootDisk:
               sizeGiB: 20
+              storageTier: local
             image:
               sourceType: registry
               sourceRef: "quay.io/containerdisks/fedora:latest"
@@ -160,6 +161,7 @@
               memoryGiB: 4
               bootDisk:
                 sizeGiB: 20
+                storageTier: local
               image:
                 sourceType: registry
                 sourceRef: "quay.io/containerdisks/fedora:latest"
@@ -309,6 +311,7 @@
             memoryGiB: 4
             bootDisk:
               sizeGiB: 20
+              storageTier: requested-tier
             image:
               sourceType: registry
               sourceRef: "quay.io/containerdisks/fedora:latest"
@@ -339,6 +342,7 @@
               memoryGiB: 4
               bootDisk:
                 sizeGiB: 20
+                storageTier: requested-tier
               image:
                 sourceType: registry
                 sourceRef: "quay.io/containerdisks/fedora:latest"

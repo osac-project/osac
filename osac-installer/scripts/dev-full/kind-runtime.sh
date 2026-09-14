@@ -104,8 +104,8 @@ container_build_file() {
 
   if [[ "$KIND_PROVIDER" == "podman" && "$(uname -s)" == "Darwin" ]]; then
     # Podman Desktop runs builds in a remote Linux VM. Stream the Containerfile
-    # to that VM instead of asking its host-filesystem bridge for a build context.
-    podman machine ssh -- podman build "$@" - < "${containerfile}"
+    # there and use a remote context; this image has no COPY/ADD instructions.
+    podman machine ssh -- podman build "$@" -f - /tmp < "${containerfile}"
   else
     container_cmd build "$@" -f "${containerfile}" "$(dirname "${containerfile}")"
   fi

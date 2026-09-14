@@ -1,9 +1,15 @@
 # ARM64 replacement for quay.io/openshift/origin-cli:4.20.0, which has no
-# ARM64 manifest. Keep this as a regular build context rather than piping a
-# Containerfile on stdin: Podman Desktop builds through a remote service and
-# needs a filesystem-backed context.
-FROM registry.fedoraproject.org/fedora:latest
+# ARM64 manifest. The Containerfile is streamed into Podman Machine because
+# Podman Desktop's host-filesystem bridge cannot reliably provide build context.
+FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
 
-RUN dnf install -y tar gzip jq curl openssl python3 && \
+RUN microdnf install -y tar gzip jq openssl python3 shadow-utils && \
     curl -L https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/openshift-client-linux-arm64.tar.gz | tar -xz -C /usr/local/bin/ oc kubectl && \
-    chmod +x /usr/local/bin/oc /usr/local/bin/kubectl
+    chmod +x /usr/local/bin/oc /usr/local/bin/kubectl && \
+    microdnf clean all && \
+    rm -rf /var/cache/dnf
+
+RUN useradd --create-home --uid 1001 --shell /sbin/nologin osac
+
+ENV HOME=/home/osac
+USER 1001

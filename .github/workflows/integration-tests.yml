@@ -389,7 +389,7 @@ jobs:
       env:
         CONTAINER_TOOL: docker
       run: |
-        docker build -t localhost/fulfillment-service:it -f fulfillment-service/Containerfile .
+        docker build --build-arg GODEBUG=http2client=0 -t localhost/fulfillment-service:it -f fulfillment-service/Containerfile .
         kind load docker-image localhost/fulfillment-service:it --name osac-dev
 
     - name: Deploy charts

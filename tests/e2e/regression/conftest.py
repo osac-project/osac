@@ -29,7 +29,6 @@ _PLACEHOLDER_OIDC = {
     "authorization_url": "https://oidc.example.com/authorize",
     "token_url": "https://oidc.example.com/token",
     "client_id": "e2e-onboarding",
-    "client_secret": "e2e-onboarding-secret",
 }
 
 
@@ -45,9 +44,32 @@ def _delete_private(grpc: GRPCClient, *, service: str, resource_id: str, label: 
             logger.warning("%s %s teardown delete failed: %s", label, resource_id, combined.strip())
 
 
+def _wait_private_absent(
+    grpc: GRPCClient, *, service: str, resource_id: str, label: str, retries: int = 12, delay: int = 2
+) -> None:
+    """Wait until a private-API Get returns NotFound so tenant delete is not raced."""
+
+    def _gone() -> bool:
+        combined, rc = grpc.call_unchecked(service=service, data={"id": resource_id})
+        return rc != 0 and "NotFound" in combined
+
+    try:
+        poll_until(
+            fn=_gone,
+            until=lambda gone: gone is True,
+            retries=retries,
+            delay=delay,
+            description=f"{label} {resource_id} gone",
+        )
+    except TimeoutError:
+        logger.warning("%s %s still present before tenant delete", label, resource_id)
+
+
 def _namespace_absent(name: str) -> bool:
-    _, rc = run_unchecked("kubectl", "--as", "system:admin", "get", "ns", name)
-    return rc != 0
+    combined, rc = run_unchecked("kubectl", "--as", "system:admin", "get", "ns", name)
+    if rc == 0:
+        return False
+    return "NotFound" in combined
 
 
 def _organization_absent(*, keycloak_url: str, admin_token: str, org_name: str) -> bool:
@@ -113,33 +135,24 @@ def onboarding_resources(
         yield resources
     finally:
         logger.info("teardown tenant %s", tenant_name)
-        if resources.get("membership_id"):
-            _delete_private(
+        for service, key, label in (
+            (f"{PRIVATE_API}.ProjectMemberships/Delete", "membership_id", "ProjectMembership"),
+            (f"{PRIVATE_API}.Projects/Delete", "project_id", "Project"),
+            (f"{PRIVATE_API}.RoleBindings/Delete", "role_binding_id", "RoleBinding"),
+            (f"{PRIVATE_API}.IdentityProviders/Delete", "idp_id", "IdentityProvider"),
+        ):
+            resource_id = resources.get(key, "")
+            if not resource_id:
+                continue
+            _delete_private(private_grpc, service=service, resource_id=resource_id, label=label)
+            get_service = service.rsplit("/", 1)[0] + "/Get"
+            _wait_private_absent(
                 private_grpc,
-                service=f"{PRIVATE_API}.ProjectMemberships/Delete",
-                resource_id=resources["membership_id"],
-                label="ProjectMembership",
-            )
-        if resources.get("project_id"):
-            _delete_private(
-                private_grpc,
-                service=f"{PRIVATE_API}.Projects/Delete",
-                resource_id=resources["project_id"],
-                label="Project",
-            )
-        if resources.get("role_binding_id"):
-            _delete_private(
-                private_grpc,
-                service=f"{PRIVATE_API}.RoleBindings/Delete",
-                resource_id=resources["role_binding_id"],
-                label="RoleBinding",
-            )
-        if resources.get("idp_id"):
-            _delete_private(
-                private_grpc,
-                service=f"{PRIVATE_API}.IdentityProviders/Delete",
-                resource_id=resources["idp_id"],
-                label="IdentityProvider",
+                service=get_service,
+                resource_id=resource_id,
+                label=label,
+                retries=24 if key == "project_id" else 12,
+                delay=5 if key == "project_id" else 2,
             )
         try:
             admin_token = get_admin_token(keycloak_url=keycloak_url, username="admin", password=keycloak_admin_password)

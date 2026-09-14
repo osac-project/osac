@@ -202,12 +202,7 @@ so networking resources reconcile to READY without a real fabric (kind has none)
 On an Apple Silicon Mac, either Kind profile automatically builds an arm64
 replacement for `quay.io/openshift/origin-cli:4.20.0` with the selected
 container runtime and loads it into the kind cluster before installing Helm
-charts. No manual image setup is required. To use Podman Desktop explicitly:
-
-```bash
-CONTAINER_TOOL=podman KIND_EXPERIMENTAL_PROVIDER=podman \
-  make install PLATFORM=kind PROFILE=dev NS=osac
-```
+charts. No manual image setup is required.
 
 **Endpoints** (via the kind port mappings; every `*.localhost` name resolves to
 127.0.0.1 automatically, so no `/etc/hosts` editing is needed):

@@ -1,0 +1,36 @@
+---
+# workflow_run only fires for runs that happened in the repo that OWNS the
+# listener file, so this repo needs its own trigger -- but the actual logic
+# (resolving the PR, posting the "⏳ Running" placeholder) lives exactly
+# once in osac-test-infra's own copy of this same-named workflow, invoked
+# here via workflow_call rather than duplicated script-for-script. See that
+# file's header comment for the full explanation, including why no `with:`
+# inputs are needed here at all (github.event/github.repository inside the
+# called workflow reflect this repo's own triggering event, same mechanism
+# ai-diagnostic-e2e.yml's own identical wrapper already relies on).
+#
+# MERGE-ORDER DEPENDENCY: osac-test-infra's e2e-reserve-comment-on-start.yml
+# must declare `workflow_call` in its own `on:` on main BEFORE this file
+# merges -- `uses:` below is pinned to @main, and GitHub validates a called
+# reusable workflow's trigger declaration at run time.
+name: Reserve E2E comment slot on start
+
+on:
+  workflow_run:  # zizmor: ignore[dangerous-triggers] -- delegates entirely to a trusted, pinned reusable workflow; no fork code touched here either.
+    workflows:
+      - E2E CaaS Full Install
+      - E2E BMaaS Full Install
+      - E2E VMaaS Full Install
+    types: [requested]
+
+permissions: {}
+
+jobs:
+  reserve:
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: osac-project/osac-test-infra/.github/workflows/e2e-reserve-comment-on-start.yml@main
+    secrets:
+      OSAC_AI_APP_ID: ${{ secrets.OSAC_AI_APP_ID }}
+      OSAC_AI_APP_PRIVATE_KEY: ${{ secrets.OSAC_AI_APP_PRIVATE_KEY }}

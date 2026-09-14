@@ -11,9 +11,10 @@ global:
       enabled: true
     maas:
       enabled: false
-  fabricManager:
+  networking:
+    provider: netris
+    overlay: none
     netris:
-      enabled: true
       controllerUrl: "https://test-ctl.netris.io"
       credentials:
         username: "netris"

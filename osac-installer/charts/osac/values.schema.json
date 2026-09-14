@@ -6,7 +6,7 @@
   "properties": {
     "global": {
       "type": "object",
-      "description": "Values propagated unchanged into every subchart, shared between the umbrella chart's own templates and its subcharts. Use global.fabricManager and global.k8sManager as the primary networking configuration API.",
+      "description": "Values propagated unchanged into every subchart, shared between the umbrella chart's own templates and its subcharts. Use global.networking as the primary networking configuration API.",
       "properties": {
         "clusterDomain": {
           "type": "string",
@@ -61,6 +61,9 @@
               }
             }
           }
+        },
+        "networking": {
+          "$ref": "#/$defs/globalNetworking"
         },
         "fabricManager": {
           "$ref": "#/$defs/globalFabricManager"
@@ -320,11 +323,6 @@
             "networking": {
               "type": "boolean",
               "description": "Enable networking controllers",
-              "default": true
-            },
-            "networkingProvisioning": {
-              "type": "boolean",
-              "description": "Dispatch AAP jobs to provision networking resources. Set false for Kind dev (no fabric): controllers reconcile VirtualNetwork/Subnet/SecurityGroup to READY without provisioning.",
               "default": true
             },
             "storage": {
@@ -1934,6 +1932,300 @@
     }
   },
   "$defs": {
+    "globalNetworking": {
+      "type": "object",
+      "description": "High-level networking profile shared by the umbrella, operator, and AAP charts.",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "description": "Networking provider. Helm currently supports cudn, netris, and none with k8s_only overlay.",
+          "enum": [
+            "netris",
+            "vlan",
+            "cudn",
+            "none"
+          ],
+          "default": "cudn"
+        },
+        "overlay": {
+          "type": "string",
+          "description": "Kubernetes networking overlay. Unsupported provider/overlay combinations fail during Helm rendering.",
+          "enum": [
+            "none",
+            "cudn_evpn",
+            "k8s_only",
+            "cudn_localnet"
+          ],
+          "default": "none"
+        },
+        "netris": {
+          "$ref": "#/$defs/networkingNetris"
+        },
+        "networkClass": {
+          "$ref": "#/$defs/networkingNetworkClass"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "provider": {
+                "const": "netris"
+              }
+            },
+            "required": [
+              "provider"
+            ]
+          },
+          "then": {
+            "required": [
+              "netris"
+            ],
+            "properties": {
+              "netris": {
+                "required": [
+                  "controllerUrl",
+                  "credentials",
+                  "siteId",
+                  "tenantId",
+                  "tenantName"
+                ],
+                "properties": {
+                  "controllerUrl": {
+                    "minLength": 1,
+                    "pattern": "^https://[^/\\s:]+[^\\s]*$"
+                  },
+                  "credentials": {
+                    "required": [
+                      "username",
+                      "password"
+                    ],
+                    "properties": {
+                      "username": {
+                        "minLength": 1
+                      },
+                      "password": {
+                        "minLength": 1
+                      }
+                    }
+                  },
+                  "siteId": {
+                    "minLength": 1
+                  },
+                  "tenantId": {
+                    "minLength": 1
+                  },
+                  "tenantName": {
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "networkingNetris": {
+      "type": "object",
+      "description": "Netris provider configuration.",
+      "properties": {
+        "controllerUrl": {
+          "type": "string",
+          "description": "Netris controller API URL (HTTPS only).",
+          "pattern": "^$|^https://[^/\\s:]+[^\\s]*$"
+        },
+        "credentials": {
+          "type": "object",
+          "properties": {
+            "username": {
+              "type": "string"
+            },
+            "password": {
+              "type": "string"
+            }
+          }
+        },
+        "siteId": {
+          "type": "string"
+        },
+        "tenantId": {
+          "type": "string"
+        },
+        "tenantName": {
+          "type": "string"
+        },
+        "mgmtVpcId": {
+          "type": "string"
+        },
+        "mgmtVpcName": {
+          "type": "string"
+        },
+        "resourceClassMap": {
+          "type": "string"
+        }
+      }
+    },
+    "networkingNetworkClass": {
+      "type": "object",
+      "description": "Optional NetworkClass override. Empty or partial values are merged with the provider-specific default generated by Helm. Explicit values take precedence.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Human-friendly short title. If omitted, Helm generates one from provider and overlay."
+        },
+        "description": {
+          "type": "string"
+        },
+        "fabricManager": {
+          "type": "string",
+          "description": "Fabric manager override. If omitted, Helm derives it from provider and overlay."
+        },
+        "k8sManager": {
+          "type": "string",
+          "description": "Kubernetes manager override. If omitted, Helm derives it from provider and overlay."
+        },
+        "isDefault": {
+          "type": "boolean",
+          "default": true
+        },
+        "defaults": {
+          "type": "object",
+          "properties": {
+            "virtualNetworkIPv4CIDR": {
+              "type": "string",
+              "description": "IPv4 CIDR for the auto-created tenant VirtualNetwork.",
+              "pattern": "^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)/(3[0-2]|[12]?[0-9])$"
+            },
+            "subnetIPv4CIDR": {
+              "type": "string",
+              "description": "IPv4 CIDR for the auto-created tenant Subnet.",
+              "pattern": "^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)/(3[0-2]|[12]?[0-9])$"
+            },
+            "enableNatGateway": {
+              "type": "boolean",
+              "description": "Auto-create a NATGateway for the tenant's default VirtualNetwork."
+            },
+            "egressRules": {
+              "type": "array",
+              "description": "Default egress rules for the auto-created tenant SecurityGroup.",
+              "items": {
+                "type": "object",
+                "required": [
+                  "protocol"
+                ],
+                "properties": {
+                  "protocol": {
+                    "type": "string",
+                    "enum": [
+                      "PROTOCOL_TCP",
+                      "PROTOCOL_UDP",
+                      "PROTOCOL_ICMP",
+                      "PROTOCOL_ALL"
+                    ]
+                  },
+                  "ipv4Cidr": {
+                    "type": "string",
+                    "description": "IPv4 CIDR for this rule.",
+                    "pattern": "^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)/(3[0-2]|[12]?[0-9])$"
+                  },
+                  "ipv6Cidr": {
+                    "type": "string",
+                    "description": "Optional IPv6 CIDR for this rule. Netris fabric is IPv4-only; CUDN/k8s_only may use IPv6.",
+                    "pattern": "^$|^[0-9a-fA-F:]+/(12[0-8]|1[01][0-9]|[1-9]?[0-9])$"
+                  },
+                  "portFrom": {
+                    "type": "integer",
+                    "description": "Starting port (TCP/UDP only).",
+                    "minimum": 1,
+                    "maximum": 65535
+                  },
+                  "portTo": {
+                    "type": "integer",
+                    "description": "Ending port (TCP/UDP only).",
+                    "minimum": 1,
+                    "maximum": 65535
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "enabled": {
+                "const": true
+              }
+            },
+            "required": [
+              "enabled"
+            ]
+          },
+          "then": {
+            "properties": {
+              "title": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "anyOf": [
+              {
+                "properties": {
+                  "k8sManager": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "k8sManager"
+                ]
+              },
+              {
+                "properties": {
+                  "fabricManager": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "fabricManager"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "k8sManager": {
+                "const": "k8s_only"
+              }
+            },
+            "required": [
+              "k8sManager"
+            ]
+          },
+          "then": {
+            "properties": {
+              "fabricManager": {
+                "type": "string",
+                "maxLength": 0
+              }
+            }
+          }
+        }
+      ]
+    },
     "globalFabricManager": {
       "type": "object",
       "description": "Fabric manager facade — enables operator ConfigMaps, AAP env vars, and default NetworkClass for each fabric backend",

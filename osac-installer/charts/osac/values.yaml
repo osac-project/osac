@@ -27,6 +27,30 @@ global:
       enabled: true
     maas:
       enabled: true
+  # Primary networking configuration shared with the operator and AAP
+  # subcharts. The selected provider/overlay pair is translated into the
+  # existing manager names and AAP settings by Helm.
+  networking:
+    # Current supported profiles are cudn + none, netris + none, and
+    # none + k8s_only. Other enum values are reserved for future providers.
+    provider: cudn
+    overlay: none
+    netris:
+      controllerUrl: ""
+      credentials:
+        username: ""
+        password: ""
+      siteId: ""
+      tenantId: ""
+      tenantName: ""
+      mgmtVpcId: ""
+      mgmtVpcName: ""
+      resourceClassMap: ""
+    # An empty block causes Helm to generate the default NetworkClass from
+    # provider and overlay. Explicit fields override generated values.
+    networkClass: {}
+  # Legacy low-level facade retained for expert compatibility. New deployments
+  # should use global.networking above.
   fabricManager:
     netris:
       enabled: false
@@ -97,6 +121,9 @@ operator:
   controllers:
     tenant: true
     networking: true
+    # Enable AAP provisioning for VirtualNetwork, Subnet, SecurityGroup, and
+    # NATGateway resources. Set false for local environments without a fabric.
+    networkingProvisioning: true
     storage: true
   configSecret:
     name: "osac-config"
@@ -421,6 +448,8 @@ lvms:
   enabled: false
 
 networkClass:
+  # Legacy expert override. Normal deployments should leave this block untouched
+  # and configure global.networking.networkClass instead.
   # Create a NetworkClass in the fulfillment service after install. At least one of
   # k8sManager/fabricManager must be set when enabled — the corresponding manager
   # must already be registered via operator.networkManagers (see that chart's values).

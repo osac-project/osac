@@ -100,11 +100,11 @@ cannot express (duplicated Netris config, inverted port ranges, networking
 facade vs low-level surface mismatches).
 */}}
 {{- define "osac.validateValues" -}}
-{{- $fm := .Values.global.fabricManager | default dict -}}
-{{- $km := .Values.global.k8sManager | default dict -}}
+{{- $networking := include "osac.networking.effective" . | fromYaml -}}
 {{- $expert := .Values.global.expertOverrides | default dict -}}
-{{- $netris := $fm.netris | default dict -}}
-{{- $agentless := $km.agentlessNet | default dict -}}
+{{- $netris := $networking.netris | default dict -}}
+{{- $netrisEnabled := eq $networking.provider "netris" -}}
+{{- $agentlessEnabled := and (eq $networking.provider "none") (eq $networking.overlay "k8s_only") -}}
 {{- $netExpertAap := $expert.aap | default false -}}
 {{- $netExpertNetworkClass := $expert.networkClass | default false -}}
 {{- $netExpertNetworkManagers := $expert.networkManagers | default false -}}
@@ -115,7 +115,7 @@ facade vs low-level surface mismatches).
 {{- $cfSec := $cf.secret | default dict -}}
 {{- $nfSec := $nf.secret | default dict -}}
 {{- if not $netExpertAap -}}
-{{- if $netris.enabled -}}
+{{- if $netrisEnabled -}}
 {{- $creds := $netris.credentials | default dict -}}
 {{- $derived := dict
   "NETWORK_CLASS" "netris"
@@ -142,13 +142,10 @@ facade vs low-level surface mismatches).
 {{- $cfSec = merge (dict "NETRIS_PASSWORD" $creds.password) $cfSec -}}
 {{- $nfSec = merge (dict "NETRIS_PASSWORD" $creds.password) $nfSec -}}
 {{- end }}
-{{- else if $agentless.enabled -}}
+{{- else if $agentlessEnabled -}}
 {{- $derived := dict "NETWORK_CLASS" "agentless_net" "NETWORK_STEPS_COLLECTION" "agentless_net.steps" -}}
 {{- $cfCfg = merge $derived $cfCfg -}}
 {{- end }}
-{{- end }}
-{{- if and $netris.enabled $agentless.enabled }}
-  {{- fail "global.fabricManager.netris.enabled and global.k8sManager.agentlessNet.enabled cannot both be true" }}
 {{- end }}
 {{- $netrisConfigFields := list
   "NETRIS_CONTROLLER_URL"
@@ -169,18 +166,12 @@ facade vs low-level surface mismatches).
 {{- if ne $cfPwd $nfPwd }}
   {{- fail "aap.instanceGroups.clusterFulfillment.secret.NETRIS_PASSWORD and networkFulfillment.secret.NETRIS_PASSWORD must match" }}
 {{- end }}
-{{- $networkClass := .Values.networkClass | default dict -}}
+{{- $networkClass := $networking.networkClass | default dict -}}
+{{- if $netExpertNetworkClass -}}
+{{- $networkClass = .Values.networkClass | default dict -}}
+{{- end }}
 {{- $fabricManager := $networkClass.fabricManager | default "" -}}
 {{- $k8sManager := $networkClass.k8sManager | default "" -}}
-{{- if not $netExpertNetworkClass -}}
-{{- if $netris.enabled -}}
-{{- $fabricManager = "netris" -}}
-{{- $k8sManager = "" -}}
-{{- else if $agentless.enabled -}}
-{{- $fabricManager = "" -}}
-{{- $k8sManager = "k8s_only" -}}
-{{- end }}
-{{- end }}
 {{- if $networkClass.enabled -}}
   {{- range $networkClass.defaults.egressRules | default list }}
     {{- if and .portFrom .portTo (gt (int .portFrom) (int .portTo)) }}
@@ -189,8 +180,12 @@ facade vs low-level surface mismatches).
   {{- end }}
 {{- end }}
 {{- $nm := .Values.operator.networkManagers | default dict -}}
+{{- $networkManagersEnabled := $nm.enabled | default false -}}
 {{- $fabricManagers := $nm.fabricManagers | default dict -}}
 {{- $k8sManagers := $nm.k8sManagers | default dict -}}
+{{- if and (not $netExpertNetworkManagers) (or $netrisEnabled $agentlessEnabled) (not $networkManagersEnabled) }}
+  {{- fail "global.networking requires operator.networkManagers.enabled=true" }}
+{{- end }}
 {{- $netClass := index $cfCfg "NETWORK_CLASS" | default "" | toString -}}
 {{- $netSteps := index $cfCfg "NETWORK_STEPS_COLLECTION" | default "" | toString -}}
 {{- if eq $netClass "netris" -}}
@@ -198,12 +193,12 @@ facade vs low-level surface mismatches).
   {{- fail (printf "NETWORK_CLASS=netris requires NETWORK_STEPS_COLLECTION=netris.steps (got %q)" $netSteps) }}
 {{- end }}
 {{- $netrisMgr := index $fabricManagers "netris" | default dict -}}
-{{- $netrisEnabled := $netrisMgr.enabled | default false -}}
-{{- if and (not $netExpertNetworkManagers) $netris.enabled }}
-{{- $netrisEnabled = true -}}
+{{- $netrisRegistered := $netrisMgr.enabled | default false -}}
+{{- if and (not $netExpertNetworkManagers) $netrisEnabled }}
+{{- $netrisRegistered = true -}}
 {{- end }}
-{{- if not $netrisEnabled }}
-  {{- fail "NETWORK_CLASS=netris requires operator.networkManagers.fabricManagers.netris.enabled=true (or global.fabricManager.netris.enabled=true)" }}
+{{- if not $netrisRegistered }}
+  {{- fail "NETWORK_CLASS=netris requires operator.networkManagers.fabricManagers.netris.enabled=true" }}
 {{- end }}
 {{- if eq (index $cfCfg "NETRIS_CONTROLLER_URL" | default "" | toString) "" }}
   {{- fail "NETWORK_CLASS=netris requires NETRIS_CONTROLLER_URL on clusterFulfillment" }}
@@ -223,7 +218,7 @@ facade vs low-level surface mismatches).
 {{- if and $networkClass.enabled $fabricManager -}}
 {{- $mgr := index $fabricManagers $fabricManager | default dict -}}
 {{- $mgrEnabled := $mgr.enabled | default false -}}
-{{- if and (not $netExpertNetworkManagers) $netris.enabled (eq $fabricManager "netris") }}
+{{- if and (not $netExpertNetworkManagers) $netrisEnabled (eq $fabricManager "netris") }}
 {{- $mgrEnabled = true -}}
 {{- end }}
 {{- if not $mgrEnabled }}
@@ -233,7 +228,7 @@ facade vs low-level surface mismatches).
 {{- if and $networkClass.enabled $k8sManager -}}
 {{- $mgr := index $k8sManagers $k8sManager | default dict -}}
 {{- $mgrEnabled := $mgr.enabled | default false -}}
-{{- if and (not $netExpertNetworkManagers) $agentless.enabled (eq $k8sManager "k8s_only") }}
+{{- if and (not $netExpertNetworkManagers) $agentlessEnabled (eq $k8sManager "k8s_only") }}
 {{- $mgrEnabled = true -}}
 {{- end }}
 {{- if not $mgrEnabled }}

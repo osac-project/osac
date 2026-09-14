@@ -16,6 +16,26 @@
 #
 # =============================================================================
 
+global:
+  networking:
+    # Supported profiles today: cudn + none, netris + none, and
+    # none + k8s_only. Unsupported provider/overlay pairs fail during render.
+    provider: cudn
+    overlay: none
+    netris:
+      controllerUrl: ""
+      credentials:
+        username: ""
+        password: ""
+      siteId: ""
+      tenantId: ""
+      tenantName: ""
+      mgmtVpcId: ""
+      mgmtVpcName: ""
+      resourceClassMap: ""
+    # Empty means Helm generates the provider-specific default NetworkClass.
+    networkClass: {}
+
 # ---------------------
 # Operator CRDs
 # ---------------------
@@ -381,13 +401,14 @@ publishTemplates:
 # ---------------------
 # Networking (user-facing facade)
 # ---------------------
-# Preferred API: global.fabricManager / global.k8sManager (see network-backend.md).
+# Preferred API: global.networking (see network-backend.md).
 # Low-level blocks below are expert overrides when global.expertOverrides.aap is true.
 #
 # global:
-#   fabricManager:
+#   networking:
+#     provider: netris
+#     overlay: none
 #     netris:
-#       enabled: true
 #       controllerUrl: "https://redhat-ctl.netris.io"
 #       credentials:
 #         username: "netris"

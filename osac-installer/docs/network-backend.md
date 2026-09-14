@@ -8,16 +8,16 @@ For general AAP configuration see [AAP Configuration](aap-configuration.md).
 
 ## User-Facing Networking Facade (preferred)
 
-Configure networking under `global.fabricManager` and `global.k8sManager` in your
-environment values file. Helm derives operator manager ConfigMaps, AAP instance
-group env vars, and the default NetworkClass from these settings.
+Configure networking under `global.networking` in your environment values file.
+Helm derives operator manager ConfigMaps, AAP instance group environment
+variables, and the default NetworkClass from this single block.
 
-When `global.fabricManager.netris.enabled` is true, Helm automatically:
+When `global.networking.provider` is `netris`, Helm automatically:
 
 - Enables `operator.networkManagers.fabricManagers.netris`
 - Sets `NETWORK_CLASS`, `NETWORK_STEPS_COLLECTION`, and shared `NETRIS_*` fields on
   both AAP instance groups when they are enabled (no manual duplication)
-- Points the default `networkClass` hook at `fabricManager: netris`
+- Points the generated NetworkClass at `fabricManager: netris`
 
 The facade does **not** enable the AAP instance groups themselves. Set both
 `aap.instanceGroups.clusterFulfillment.enabled` and
@@ -30,9 +30,10 @@ fulfillment receives the shared Netris connection fields only.
 
 ```yaml
 global:
-  fabricManager:
+  networking:
+    provider: netris
+    overlay: none
     netris:
-      enabled: true
       controllerUrl: "https://redhat-ctl.netris.io"
       credentials:
         username: "netris"
@@ -49,17 +50,30 @@ aap:
       enabled: true
 ```
 
-When Netris is enabled, the schema requires `controllerUrl` (HTTPS), credentials,
+When Netris is selected, the schema requires `controllerUrl` (HTTPS), credentials,
 `siteId`, `tenantId`, and `tenantName`.
 
 ### Agentless example
 
 ```yaml
 global:
-  k8sManager:
-    agentlessNet:
-      enabled: true
+  networking:
+    provider: none
+    overlay: k8s_only
 ```
+
+## Supported networking profiles
+
+The Helm facade currently supports these provider/overlay pairs:
+
+| Provider | Overlay | Derived manager/backend |
+|----------|---------|-------------------------|
+| `cudn` | `none` | `fabricManager: cudn_net`; no provider-specific AAP backend |
+| `netris` | `none` | `fabricManager: netris`; `netris.steps` |
+| `none` | `k8s_only` | `k8sManager: k8s_only`; `agentless_net.steps` |
+
+The `vlan` provider and the `cudn_evpn` and `cudn_localnet` overlays are reserved for future
+implementations and currently fail Helm rendering when selected.
 
 ### Expert overrides
 
@@ -70,7 +84,7 @@ values authoritative instead of the facade:
 | Override | Low-level block |
 |----------|-----------------|
 | `expertOverrides.aap` | `aap.instanceGroups.clusterFulfillment` / `networkFulfillment` |
-| `expertOverrides.networkClass` | `networkClass` |
+| `expertOverrides.networkClass` | legacy top-level `networkClass` |
 | `expertOverrides.networkManagers` | `operator.networkManagers` |
 
 ## Supported Backends
@@ -83,8 +97,8 @@ values authoritative instead of the facade:
 
 ## Netris Configuration (advanced / manual)
 
-When not using the facade, set variables on `aap.instanceGroups` directly. The
-facade is preferred — see above.
+When not using the facade, set variables on `aap.instanceGroups` directly and
+set `global.expertOverrides.aap: true`. The facade is preferred — see above.
 
 ### ConfigMap Variables
 

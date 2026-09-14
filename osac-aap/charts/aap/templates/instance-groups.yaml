@@ -6,14 +6,15 @@
 {{- if $ingressDomain }}
 {{- $baseDomain = printf "hosted.%s" ($ingressDomain | trimPrefix "apps.") }}
 {{- end }}
-{{- $globalFm := dict -}}
-{{- $globalKm := dict -}}
+{{- $globalNetworking := dict -}}
 {{- if .Values.global }}
-{{- $globalFm = .Values.global.fabricManager | default dict -}}
-{{- $globalKm = .Values.global.k8sManager | default dict -}}
+{{- $globalNetworking = .Values.global.networking | default dict -}}
 {{- end }}
-{{- $netris := $globalFm.netris | default dict -}}
-{{- $agentless := $globalKm.agentlessNet | default dict -}}
+{{- $provider := $globalNetworking.provider | default "cudn" -}}
+{{- $overlay := $globalNetworking.overlay | default "none" -}}
+{{- $netris := $globalNetworking.netris | default dict -}}
+{{- $netrisEnabled := eq $provider "netris" -}}
+{{- $agentlessEnabled := and (eq $provider "none") (eq $overlay "k8s_only") -}}
 {{- $netExpert := false -}}
 {{- if and .Values.global .Values.global.expertOverrides }}
 {{- $netExpert = .Values.global.expertOverrides.aap | default false -}}
@@ -23,7 +24,7 @@
 {{- $cfg := $explicitCfg -}}
 {{- $sec := $explicitSec -}}
 {{- if not $netExpert -}}
-{{- if $netris.enabled -}}
+{{- if $netrisEnabled -}}
 {{- $creds := $netris.credentials | default dict -}}
 {{- $derived := dict
   "NETWORK_CLASS" "netris"
@@ -41,7 +42,7 @@
 {{- if $creds.password }}
 {{- $sec = merge (dict "NETRIS_PASSWORD" $creds.password) $explicitSec -}}
 {{- end }}
-{{- else if $agentless.enabled -}}
+{{- else if $agentlessEnabled -}}
 {{- $cfg = merge (dict "NETWORK_CLASS" "agentless_net" "NETWORK_STEPS_COLLECTION" "agentless_net.steps") $explicitCfg -}}
 {{- end }}
 {{- end }}
@@ -100,11 +101,13 @@ data: {}
 {{- end }}
 ---
 {{- if .Values.instanceGroups.networkFulfillment.enabled }}
-{{- $globalFm := dict -}}
+{{- $globalNetworking := dict -}}
 {{- if .Values.global }}
-{{- $globalFm = .Values.global.fabricManager | default dict -}}
+{{- $globalNetworking = .Values.global.networking | default dict -}}
 {{- end }}
-{{- $netris := $globalFm.netris | default dict -}}
+{{- $provider := $globalNetworking.provider | default "cudn" -}}
+{{- $netris := $globalNetworking.netris | default dict -}}
+{{- $netrisEnabled := eq $provider "netris" -}}
 {{- $netExpert := false -}}
 {{- if and .Values.global .Values.global.expertOverrides }}
 {{- $netExpert = .Values.global.expertOverrides.aap | default false -}}
@@ -114,7 +117,7 @@ data: {}
 {{- $cfg := $explicitCfg -}}
 {{- $sec := $explicitSec -}}
 {{- if not $netExpert -}}
-{{- if $netris.enabled -}}
+{{- if $netrisEnabled -}}
 {{- $creds := $netris.credentials | default dict -}}
 {{- $derived := dict
   "NETRIS_CONTROLLER_URL" ($netris.controllerUrl | default "")

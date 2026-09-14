@@ -94,6 +94,32 @@ Uses .Values.cliImage for the container image.
 {{- end }}
 
 {{/*
+The umbrella chart validates the values before rendering the AAP subchart.
+Keep this chart-local adapter because Helm subcharts cannot call templates
+defined by their parent chart; the AAP chart has the corresponding helper for
+its two instance-group manifests.
+*/}}
+{{- define "osac.netrisConfig" -}}
+{{- $netris := .netris | default dict -}}
+{{- $creds := $netris.credentials | default dict -}}
+{{- $derived := dict
+  "NETRIS_CONTROLLER_URL" ($netris.controllerUrl | default "")
+  "NETRIS_USERNAME" ($creds.username | default "")
+  "NETRIS_SITE_ID" ($netris.siteId | default "" | toString)
+  "NETRIS_TENANT_ID" ($netris.tenantId | default "" | toString)
+  "NETRIS_TENANT_NAME" ($netris.tenantName | default "")
+-}}
+{{- if .cluster -}}
+{{- $_ := set $derived "NETWORK_CLASS" "netris" -}}
+{{- $_ := set $derived "NETWORK_STEPS_COLLECTION" "netris.steps" -}}
+{{- $_ := set $derived "NETRIS_MGMT_VPC_ID" ($netris.mgmtVpcId | default "" | toString) -}}
+{{- $_ := set $derived "NETRIS_MGMT_VPC_NAME" ($netris.mgmtVpcName | default "") -}}
+{{- $_ := set $derived "NETRIS_RESOURCE_CLASS_MAP" ($netris.resourceClassMap | default "") -}}
+{{- end -}}
+{{- $derived | toYaml -}}
+{{- end }}
+
+{{/*
 Fail helm template when networking values are inconsistent. Schema validates
 individual fields; this enforces cross-field invariants that JSON Schema
 cannot express (duplicated Netris config, inverted port ranges, networking
@@ -117,26 +143,9 @@ facade vs low-level surface mismatches).
 {{- if not $netExpertAap -}}
 {{- if $netrisEnabled -}}
 {{- $creds := $netris.credentials | default dict -}}
-{{- $derived := dict
-  "NETWORK_CLASS" "netris"
-  "NETWORK_STEPS_COLLECTION" "netris.steps"
-  "NETRIS_CONTROLLER_URL" ($netris.controllerUrl | default "")
-  "NETRIS_USERNAME" ($creds.username | default "")
-  "NETRIS_SITE_ID" ($netris.siteId | default "" | toString)
-  "NETRIS_TENANT_ID" ($netris.tenantId | default "" | toString)
-  "NETRIS_TENANT_NAME" ($netris.tenantName | default "")
-  "NETRIS_MGMT_VPC_ID" ($netris.mgmtVpcId | default "" | toString)
-  "NETRIS_MGMT_VPC_NAME" ($netris.mgmtVpcName | default "")
-  "NETRIS_RESOURCE_CLASS_MAP" ($netris.resourceClassMap | default "")
--}}
+{{- $derived := include "osac.netrisConfig" (dict "netris" $netris "cluster" true) | fromYaml -}}
 {{- $cfCfg = merge $derived $cfCfg -}}
-{{- $nfDerived := dict
-  "NETRIS_CONTROLLER_URL" ($netris.controllerUrl | default "")
-  "NETRIS_USERNAME" ($creds.username | default "")
-  "NETRIS_SITE_ID" ($netris.siteId | default "" | toString)
-  "NETRIS_TENANT_ID" ($netris.tenantId | default "" | toString)
-  "NETRIS_TENANT_NAME" ($netris.tenantName | default "")
--}}
+{{- $nfDerived := include "osac.netrisConfig" (dict "netris" $netris "cluster" false) | fromYaml -}}
 {{- $nfCfg = merge $nfDerived $nfCfg -}}
 {{- if $creds.password }}
 {{- $cfSec = merge (dict "NETRIS_PASSWORD" $creds.password) $cfSec -}}
@@ -158,7 +167,7 @@ facade vs low-level surface mismatches).
   {{- $cfVal := index $cfCfg . | default "" | toString -}}
   {{- $nfVal := index $nfCfg . | default "" | toString -}}
   {{- if ne $cfVal $nfVal }}
-    {{- fail (printf "aap.instanceGroups.clusterFulfillment.config.%s and networkFulfillment.config.%s must match (cluster=%q network=%q)" . . $cfVal $nfVal) }}
+    {{- fail (printf "aap.instanceGroups.clusterFulfillment.config.%s and networkFulfillment.config.%s must match" . .) }}
   {{- end }}
 {{- end }}
 {{- $cfPwd := $cfSec.NETRIS_PASSWORD | default "" | toString -}}

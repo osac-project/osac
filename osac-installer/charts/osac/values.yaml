@@ -39,7 +39,6 @@ global:
       controllerUrl: ""
       credentials:
         username: ""
-        password: ""
       siteId: ""
       tenantId: ""
       tenantName: ""

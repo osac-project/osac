@@ -39,6 +39,9 @@ spec:
             optional: true
         - secretRef:
             name: network-fulfillment-ig
+        - secretRef:
+            name: netris-credentials
+            optional: true
       env:
         - name: POD_NAMESPACE
           valueFrom:

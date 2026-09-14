@@ -26,18 +26,7 @@
 {{- if not $netExpert -}}
 {{- if $netrisEnabled -}}
 {{- $creds := $netris.credentials | default dict -}}
-{{- $derived := dict
-  "NETWORK_CLASS" "netris"
-  "NETWORK_STEPS_COLLECTION" "netris.steps"
-  "NETRIS_CONTROLLER_URL" ($netris.controllerUrl | default "")
-  "NETRIS_USERNAME" ($creds.username | default "")
-  "NETRIS_SITE_ID" ($netris.siteId | default "" | toString)
-  "NETRIS_TENANT_ID" ($netris.tenantId | default "" | toString)
-  "NETRIS_TENANT_NAME" ($netris.tenantName | default "")
-  "NETRIS_MGMT_VPC_ID" ($netris.mgmtVpcId | default "" | toString)
-  "NETRIS_MGMT_VPC_NAME" ($netris.mgmtVpcName | default "")
-  "NETRIS_RESOURCE_CLASS_MAP" ($netris.resourceClassMap | default "")
--}}
+{{- $derived := include "osac-aap.netrisConfig" (dict "netris" $netris "cluster" true) | fromYaml -}}
 {{- $cfg = merge $derived $explicitCfg -}}
 {{- if $creds.password }}
 {{- $sec = merge (dict "NETRIS_PASSWORD" $creds.password) $explicitSec -}}
@@ -119,13 +108,7 @@ data: {}
 {{- if not $netExpert -}}
 {{- if $netrisEnabled -}}
 {{- $creds := $netris.credentials | default dict -}}
-{{- $derived := dict
-  "NETRIS_CONTROLLER_URL" ($netris.controllerUrl | default "")
-  "NETRIS_USERNAME" ($creds.username | default "")
-  "NETRIS_SITE_ID" ($netris.siteId | default "" | toString)
-  "NETRIS_TENANT_ID" ($netris.tenantId | default "" | toString)
-  "NETRIS_TENANT_NAME" ($netris.tenantName | default "")
--}}
+{{- $derived := include "osac-aap.netrisConfig" (dict "netris" $netris "cluster" false) | fromYaml -}}
 {{- $cfg = merge $derived $explicitCfg -}}
 {{- if $creds.password }}
 {{- $sec = merge (dict "NETRIS_PASSWORD" $creds.password) $explicitSec -}}

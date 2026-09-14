@@ -838,27 +838,29 @@
                 "config": {
                   "type": "object",
                   "description": "Environment variables for the cluster-fulfillment instance group",
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/aapNetrisConfig"
+                    }
+                  ],
                   "properties": {
                     "NETWORK_CLASS": {
                       "type": "string",
-                      "description": "AAP cluster-fulfillment network backend. The new global.networking facade derives netris or agentless_net; esi remains available for legacy direct AAP configuration. NICo is selected with NETWORK_STEPS_COLLECTION=nico.steps.",
+                      "description": "AAP cluster-fulfillment network backend derived by the global.networking facade or set directly for advanced configuration.",
                       "enum": [
                         "",
-                        "esi",
                         "netris",
                         "agentless_net"
                       ]
                     },
                     "NETWORK_STEPS_COLLECTION": {
                       "type": "string",
-                      "description": "Ansible collection providing network-backend-specific steps. Legacy direct AAP configuration may use osac.steps or nico.steps.",
+                      "description": "Ansible collection providing network-backend-specific steps.",
                       "enum": [
                         "",
-                        "osac.steps",
                         "netris.steps",
                         "ci.steps",
-                        "agentless_net.steps",
-                        "nico.steps"
+                        "agentless_net.steps"
                       ]
                     },
                     "DNS_CLASS": {
@@ -872,27 +874,6 @@
                     "DNS_ZONE": {
                       "type": "string",
                       "description": "DNS zone to operate in (defaults to EXTERNAL_ACCESS_BASE_DOMAIN)"
-                    },
-                    "NETRIS_CONTROLLER_URL": {
-                      "type": "string",
-                      "pattern": "^$|^https://[^/\\s:]+(:[0-9]+)?(/[^\\s]*)?$",
-                      "description": "Netris controller API URL. Must be set identically on clusterFulfillment and networkFulfillment; there is no shared Netris config block."
-                    },
-                    "NETRIS_USERNAME": {
-                      "type": "string",
-                      "description": "Netris controller username. Must be set identically on clusterFulfillment and networkFulfillment; there is no shared Netris config block."
-                    },
-                    "NETRIS_SITE_ID": {
-                      "type": "string",
-                      "description": "Netris site ID. Must be set identically on clusterFulfillment and networkFulfillment; there is no shared Netris config block."
-                    },
-                    "NETRIS_TENANT_ID": {
-                      "type": "string",
-                      "description": "Netris tenant ID. Must be set identically on clusterFulfillment and networkFulfillment; there is no shared Netris config block."
-                    },
-                    "NETRIS_TENANT_NAME": {
-                      "type": "string",
-                      "description": "Netris tenant name. Must be set identically on clusterFulfillment and networkFulfillment; there is no shared Netris config block."
                     },
                     "NETRIS_MGMT_VPC_ID": {
                       "type": "string",
@@ -1045,29 +1026,11 @@
                 "config": {
                   "type": "object",
                   "description": "Environment variables for the network-fulfillment instance group",
-                  "properties": {
-                    "NETRIS_CONTROLLER_URL": {
-                      "type": "string",
-                      "pattern": "^$|^https://[^/\\s:]+(:[0-9]+)?(/[^\\s]*)?$",
-                      "description": "Netris controller API URL. Must be set identically on clusterFulfillment and networkFulfillment; there is no shared Netris config block."
-                    },
-                    "NETRIS_USERNAME": {
-                      "type": "string",
-                      "description": "Netris controller username. Must be set identically on clusterFulfillment and networkFulfillment; there is no shared Netris config block."
-                    },
-                    "NETRIS_SITE_ID": {
-                      "type": "string",
-                      "description": "Netris site ID. Must be set identically on clusterFulfillment and networkFulfillment; there is no shared Netris config block."
-                    },
-                    "NETRIS_TENANT_ID": {
-                      "type": "string",
-                      "description": "Netris tenant ID. Must be set identically on clusterFulfillment and networkFulfillment; there is no shared Netris config block."
-                    },
-                    "NETRIS_TENANT_NAME": {
-                      "type": "string",
-                      "description": "Netris tenant name. Must be set identically on clusterFulfillment and networkFulfillment; there is no shared Netris config block."
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/aapNetrisConfig"
                     }
-                  }
+                  ]
                 },
                 "secret": {
                   "type": "object",
@@ -1914,8 +1877,19 @@
                   },
                   "credentials": {
                     "required": [
-                      "username",
-                      "password"
+                      "username"
+                    ],
+                    "anyOf": [
+                      {
+                        "required": [
+                          "password"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "passwordSecretRef"
+                        ]
+                      }
                     ],
                     "properties": {
                       "username": {
@@ -1923,6 +1897,20 @@
                       },
                       "password": {
                         "minLength": 1
+                      },
+                      "passwordSecretRef": {
+                        "required": [
+                          "name",
+                          "key"
+                        ],
+                        "properties": {
+                          "name": {
+                            "const": "netris-credentials"
+                          },
+                          "key": {
+                            "const": "NETRIS_PASSWORD"
+                          }
+                        }
                       }
                     }
                   },
@@ -1959,6 +1947,20 @@
             },
             "password": {
               "type": "string"
+            },
+            "passwordSecretRef": {
+              "type": "object",
+              "description": "External Kubernetes Secret containing NETRIS_PASSWORD.",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "const": "netris-credentials"
+                },
+                "key": {
+                  "type": "string",
+                  "const": "NETRIS_PASSWORD"
+                }
+              }
             }
           }
         },
@@ -2095,6 +2097,32 @@
           }
         }
       ]
+    },
+    "aapNetrisConfig": {
+      "type": "object",
+      "properties": {
+        "NETRIS_CONTROLLER_URL": {
+          "type": "string",
+          "pattern": "^$|^https://[^/\\s:]+(:[0-9]+)?(/[^\\s]*)?$",
+          "description": "Netris controller API URL. Must match between AAP instance groups."
+        },
+        "NETRIS_USERNAME": {
+          "type": "string",
+          "description": "Netris controller username. Must match between AAP instance groups."
+        },
+        "NETRIS_SITE_ID": {
+          "type": "string",
+          "description": "Netris site ID. Must match between AAP instance groups."
+        },
+        "NETRIS_TENANT_ID": {
+          "type": "string",
+          "description": "Netris tenant ID. Must match between AAP instance groups."
+        },
+        "NETRIS_TENANT_NAME": {
+          "type": "string",
+          "description": "Netris tenant name. Must match between AAP instance groups."
+        }
+      }
     },
     "globalExpertOverrides": {
       "type": "object",

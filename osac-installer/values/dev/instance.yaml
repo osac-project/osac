@@ -7,11 +7,6 @@ global:
       enabled: true
     vmaas:
       enabled: true
-  # This development profile exercises the legacy ESI AAP backend directly.
-  # It is intentionally outside the global.networking facade, which does not
-  # derive ESI credentials or manager registrations.
-  expertOverrides:
-    aap: true
 
 # --- Operator ---
 operator:
@@ -122,8 +117,8 @@ aap:
     clusterFulfillment:
       enabled: true
       config:
-        NETWORK_CLASS: "esi"
-        NETWORK_STEPS_COLLECTION: "osac.steps"
+        NETWORK_CLASS: ""
+        NETWORK_STEPS_COLLECTION: ""
         EXTERNAL_ACCESS_BASE_DOMAIN: "box.massopen.cloud"
         EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS: "box.massopen.cloud"
         EXTERNAL_ACCESS_API_INTERNAL_NETWORK: "hypershift"

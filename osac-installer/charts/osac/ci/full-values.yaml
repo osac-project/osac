@@ -120,7 +120,6 @@ clusterFulfillment:
     BCM_VALIDATE_CERTS: "false"
     BCM_DISABLE_BMC_CERT_VERIFICATION: "true"
   secret:
-    NETRIS_PASSWORD: "test-password"
 
 networkFulfillment:
   enabled: true
@@ -131,4 +130,3 @@ networkFulfillment:
     NETRIS_TENANT_ID: "1"
     NETRIS_TENANT_NAME: "Admin"
   secret:
-    NETRIS_PASSWORD: "test-password"

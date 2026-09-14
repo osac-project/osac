@@ -37,7 +37,9 @@ global:
       controllerUrl: "https://redhat-ctl.netris.io"
       credentials:
         username: "netris"
-        password: "<netris-password>"
+        passwordSecretRef:
+          name: netris-credentials
+          key: NETRIS_PASSWORD
       siteId: "5"
       tenantId: "1"
       tenantName: "Admin"
@@ -51,7 +53,8 @@ aap:
 ```
 
 When Netris is selected, the schema requires `controllerUrl` (HTTPS), credentials,
-`siteId`, `tenantId`, and `tenantName`.
+`siteId`, `tenantId`, and `tenantName`. Credentials may contain either a direct
+password or the external `netris-credentials` Secret reference shown above.
 
 ### Agentless example
 
@@ -87,30 +90,6 @@ values authoritative instead of the facade:
 | `expertOverrides.networkClass` | legacy top-level `networkClass` |
 | `expertOverrides.networkManagers` | `operator.networkManagers` |
 
-ESI and NICo remain available for existing direct AAP configurations. Configure
-them on `aap.instanceGroups.clusterFulfillment.config` and set
-`global.expertOverrides.aap: true` so the networking facade does not replace
-the explicit values. They are not supported as `global.networking.provider`
-values because Helm does not currently derive their credentials, manager
-registrations, or NetworkClass from that facade. ESI uses
-`NETWORK_CLASS=esi` with `NETWORK_STEPS_COLLECTION=osac.steps`; NICo is selected
-by `NETWORK_STEPS_COLLECTION=nico.steps` and does not require a `NETWORK_CLASS`
-value of `nico`.
-
-```yaml
-global:
-  expertOverrides:
-    aap: true
-
-aap:
-  instanceGroups:
-    clusterFulfillment:
-      enabled: true
-      config:
-        NETWORK_CLASS: "esi"
-        NETWORK_STEPS_COLLECTION: "osac.steps"
-```
-
 ## Supported Backends
 
 | `NETWORK_CLASS` | `NETWORK_STEPS_COLLECTION` | Description |
@@ -118,8 +97,6 @@ aap:
 | (empty) | (empty) | No AAP network backend selected (use `agentless_net` for agentless provisioning or `netris` for fabric-backed provisioning) |
 | `netris` | `netris.steps` | Netris controller API |
 | `agentless_net` | `agentless_net.steps` | Agentless network backend (no physical fabric) |
-| `esi` | `osac.steps` | Legacy direct AAP backend; configure with `global.expertOverrides.aap` |
-| (empty) | `nico.steps` | Legacy NICo direct AAP backend; configure with `global.expertOverrides.aap` |
 
 ## Netris Configuration (advanced / manual)
 

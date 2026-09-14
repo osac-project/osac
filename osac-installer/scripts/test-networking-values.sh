@@ -7,6 +7,7 @@ CHART_DIR=$(cd -- "${SCRIPT_DIR}/../charts/osac" && pwd)
 HELM_BIN=${HELM_BIN:-helm}
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "${TMP_DIR}"' EXIT
+TEST_NETRIS_PASSWORD=${TEST_NETRIS_PASSWORD:-ci-validation-$(date +%s%N)}
 
 COMMON_ARGS=(
   template osac "${CHART_DIR}"
@@ -62,7 +63,22 @@ render_success \
   --set global.networking.overlay=none \
   --set-string global.networking.netris.controllerUrl=https://netris.example.com \
   --set-string global.networking.netris.credentials.username=test-user \
-  --set-string global.networking.netris.credentials.password=test-password \
+  --set-string global.networking.netris.credentials.password="${TEST_NETRIS_PASSWORD}" \
+  --set-string global.networking.netris.siteId=1 \
+  --set-string global.networking.netris.tenantId=1 \
+  --set-string global.networking.netris.tenantName=test
+
+# An externally managed Secret is an alternative to putting the password in
+# Helm values. The chart must render the corresponding optional Secret mount.
+render_success \
+  netris-external-secret \
+  'fabric_manager\":\"netris' \
+  --set global.networking.provider=netris \
+  --set global.networking.overlay=none \
+  --set-string global.networking.netris.controllerUrl=https://netris.example.com \
+  --set-string global.networking.netris.credentials.username=test-user \
+  --set-string global.networking.netris.credentials.passwordSecretRef.name=netris-credentials \
+  --set-string global.networking.netris.credentials.passwordSecretRef.key=NETRIS_PASSWORD \
   --set-string global.networking.netris.siteId=1 \
   --set-string global.networking.netris.tenantId=1 \
   --set-string global.networking.netris.tenantName=test
@@ -74,23 +90,6 @@ render_success \
   --set global.networking.provider=cudn \
   --set global.networking.overlay=none \
   --set-string global.networking.networkClass.title=Custom\ network
-
-# Legacy ESI and NICo backends remain valid when configured directly on the
-# AAP instance group rather than through the high-level networking facade.
-render_success \
-  legacy-esi \
-  'NETWORK_CLASS: "esi"' \
-  --set global.expertOverrides.aap=true \
-  --set aap.instanceGroups.clusterFulfillment.enabled=true \
-  --set-string aap.instanceGroups.clusterFulfillment.config.NETWORK_CLASS=esi \
-  --set-string aap.instanceGroups.clusterFulfillment.config.NETWORK_STEPS_COLLECTION=osac.steps
-
-render_success \
-  legacy-nico \
-  'NETWORK_STEPS_COLLECTION: "nico.steps"' \
-  --set global.expertOverrides.aap=true \
-  --set aap.instanceGroups.clusterFulfillment.enabled=true \
-  --set-string aap.instanceGroups.clusterFulfillment.config.NETWORK_STEPS_COLLECTION=nico.steps
 
 # Required provider details and unsupported provider/overlay combinations must
 # fail before Helm produces installable manifests.
@@ -112,11 +111,22 @@ render_failure \
   --set global.networking.provider=esi
 
 render_failure \
-  legacy-nico-network-class \
+  legacy-network-class \
   --set global.expertOverrides.aap=true \
   --set aap.instanceGroups.clusterFulfillment.enabled=true \
-  --set-string aap.instanceGroups.clusterFulfillment.config.NETWORK_CLASS=nico \
+  --set-string aap.instanceGroups.clusterFulfillment.config.NETWORK_CLASS=esi
+
+render_failure \
+  legacy-network-steps-collection \
+  --set global.expertOverrides.aap=true \
+  --set aap.instanceGroups.clusterFulfillment.enabled=true \
   --set-string aap.instanceGroups.clusterFulfillment.config.NETWORK_STEPS_COLLECTION=nico.steps
+
+render_failure \
+  k8s-only-with-fabric-manager \
+  --set global.networking.provider=none \
+  --set global.networking.overlay=k8s_only \
+  --set global.networking.networkClass.fabricManager=netris
 
 render_failure \
   cudn-evpn-not-implemented \

@@ -26,7 +26,9 @@ global:
       controllerUrl: ""
       credentials:
         username: ""
-        password: ""
+        passwordSecretRef:
+          name: netris-credentials
+          key: NETRIS_PASSWORD
       siteId: ""
       tenantId: ""
       tenantName: ""
@@ -412,7 +414,9 @@ publishTemplates:
 #       controllerUrl: "https://redhat-ctl.netris.io"
 #       credentials:
 #         username: "netris"
-#         password: "<netris-password>"
+#         passwordSecretRef:
+#           name: netris-credentials
+#           key: NETRIS_PASSWORD
 #       siteId: "5"
 #       tenantId: "1"
 #       tenantName: "Admin"
@@ -430,12 +434,11 @@ clusterFulfillment:
   enabled: false
   config:
     # --- Network Backend ---
-    # AAP cluster-fulfillment network backend (netris, agentless_net, or the
-    # legacy direct-AAP backend esi). NICo is selected with nico.steps below.
+    # AAP cluster-fulfillment network backend (netris or agentless_net).
     # Distinct from operator.networkManagers fabric/k8s manager names.
     NETWORK_CLASS: ""
     # Ansible collection providing network-backend-specific steps
-    # (netris.steps, ci.steps, agentless_net.steps, osac.steps, nico.steps).
+    # (netris.steps, ci.steps, agentless_net.steps).
     NETWORK_STEPS_COLLECTION: ""
 
     # --- DNS Backend ---

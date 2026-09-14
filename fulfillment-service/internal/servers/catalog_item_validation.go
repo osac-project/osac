@@ -430,8 +430,26 @@ func validateDiskImageState(
 	preferredTenant string,
 	source string,
 ) (*privatev1.DiskImage, []string, error) {
+	diskImage, err := getDiskImage(ctx, diskImagesDao, key, preferredTenant, source)
+	if err != nil {
+		return nil, nil, err
+	}
+	warnings, err := validateDiskImageLifecycle(diskImage, key, source)
+	if err != nil {
+		return nil, nil, err
+	}
+	return diskImage, warnings, nil
+}
+
+func getDiskImage(
+	ctx context.Context,
+	diskImagesDao *dao.GenericDAO[*privatev1.DiskImage],
+	key string,
+	preferredTenant string,
+	source string,
+) (*privatev1.DiskImage, error) {
 	if key == "" {
-		return nil, nil, nil
+		return nil, nil
 	}
 
 	response, err := diskImagesDao.List().
@@ -441,16 +459,16 @@ func validateDiskImageState(
 	if err != nil {
 		var deniedErr *dao.ErrDenied
 		if errors.As(err, &deniedErr) {
-			return nil, nil, grpcstatus.Errorf(grpccodes.PermissionDenied, "%s", deniedErr.Reason)
+			return nil, grpcstatus.Errorf(grpccodes.PermissionDenied, "%s", deniedErr.Reason)
 		}
-		return nil, nil, grpcstatus.Errorf(grpccodes.Internal,
+		return nil, grpcstatus.Errorf(grpccodes.Internal,
 			"failed to retrieve disk image '%s'", key)
 	}
 
 	var diskImage *privatev1.DiskImage
 	switch response.GetTotal() {
 	case 0:
-		return nil, nil, grpcstatus.Errorf(grpccodes.NotFound,
+		return nil, grpcstatus.Errorf(grpccodes.NotFound,
 			"disk image '%s'%s not found", key, source)
 	case 1:
 		diskImage = response.GetItems()[0]
@@ -458,16 +476,23 @@ func validateDiskImageState(
 		// The name resolved to multiple disk images; break the tie by tenant precedence.
 		diskImage, err = resolvePreferredDiskImage(ctx, diskImagesDao, key, preferredTenant, source)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 	}
+	return diskImage, nil
+}
 
+func validateDiskImageLifecycle(
+	diskImage *privatev1.DiskImage,
+	key string,
+	source string,
+) ([]string, error) {
 	lifecycle := diskImage.GetSpec().GetLifecycle()
 	var warnings []string
 
 	switch lifecycle {
 	case privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_OBSOLETE:
-		return nil, nil, grpcstatus.Errorf(grpccodes.FailedPrecondition,
+		return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition,
 			"disk image '%s'%s is obsolete and cannot be used", key, source)
 	case privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_DEPRECATED:
 		warning := fmt.Sprintf("Disk image '%s'%s is deprecated", key, source)
@@ -479,7 +504,7 @@ func validateDiskImageState(
 		warnings = append(warnings, warning)
 	}
 
-	return diskImage, warnings, nil
+	return warnings, nil
 }
 
 // resolvePreferredDiskImage breaks a disk-image name collision deterministically. Names are unique

@@ -323,9 +323,6 @@ func (s *PrivateBareMetalInstancesServer) Create(ctx context.Context,
 			return
 		}
 	}
-	if err = s.validateDiskImage(ctx, request.GetObject()); err != nil {
-		return
-	}
 	if err = s.validateSpec(request.GetObject()); err != nil {
 		return
 	}
@@ -350,6 +347,11 @@ func (s *PrivateBareMetalInstancesServer) Create(ctx context.Context,
 	if err = s.validateNetworkAttachmentsRequireFabricManager(ctx, request.GetObject()); err != nil {
 		return
 	}
+	var warnings []string
+	warnings, err = s.validateDiskImage(ctx, request.GetObject())
+	if err != nil {
+		return
+	}
 	err = s.generic.Create(ctx, request, &response)
 	if err != nil {
 		return
@@ -361,40 +363,76 @@ func (s *PrivateBareMetalInstancesServer) Create(ctx context.Context,
 			return
 		}
 	}
+	if len(warnings) > 0 {
+		response.SetWarnings(warnings)
+	}
 	return
 }
 
-// validateDiskImage resolves the disk_image reference after catalog or template defaults
-// have been applied. The DAO enforces tenant visibility, while the preferred tenant makes
-// same-name tenant and shared images resolve deterministically for the caller.
 func (s *PrivateBareMetalInstancesServer) validateDiskImage(
 	ctx context.Context,
 	bmi *privatev1.BareMetalInstance,
-) error {
+) ([]string, error) {
 	diskImageRef := bmi.GetSpec().GetDiskImage()
-	if diskImageRef == nil {
-		return nil
-	}
-
 	key := refKey(diskImageRef)
 	if key == "" {
-		return nil
+		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "disk_image is mandatory")
 	}
 
 	preferredTenant, err := s.tenancyLogic.DetermineDefaultTenant(ctx)
 	if err != nil {
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to determine tenant: %v", err)
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to determine tenant: %v", err)
 	}
 
-	diskImage, _, err := validateDiskImageState(ctx, s.diskImagesDao, key, preferredTenant, "")
+	diskImage, warnings, err := validateLockedDiskImageState(ctx, s.diskImagesDao, key, preferredTenant, "")
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	diskImageRef.Id = diskImage.GetId()
 	diskImageRef.Name = diskImage.GetMetadata().GetName()
 	diskImageRef.Shared = diskImage.GetMetadata().GetTenant() == auth.SharedTenant
-	return nil
+	return warnings, nil
+}
+
+func validateLockedDiskImageState(
+	ctx context.Context,
+	diskImagesDao *dao.GenericDAO[*privatev1.DiskImage],
+	key string,
+	preferredTenant string,
+	source string,
+) (*privatev1.DiskImage, []string, error) {
+	diskImage, err := getDiskImage(ctx, diskImagesDao, key, preferredTenant, source)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	lockedResponse, err := diskImagesDao.Get().
+		SetId(diskImage.GetId()).
+		SetLock(true).
+		Do(ctx)
+	if err != nil {
+		var notFoundErr *dao.ErrNotFound
+		if errors.As(err, &notFoundErr) {
+			return nil, nil, grpcstatus.Errorf(grpccodes.NotFound, "disk image '%s'%s not found", key, source)
+		}
+		var deniedErr *dao.ErrDenied
+		if errors.As(err, &deniedErr) {
+			return nil, nil, grpcstatus.Errorf(grpccodes.PermissionDenied, "%s", deniedErr.Reason)
+		}
+		var deadlockErr *dao.ErrDeadlock
+		if errors.As(err, &deadlockErr) {
+			return nil, nil, grpcstatus.Errorf(grpccodes.Aborted, "concurrent modification detected, please retry")
+		}
+		return nil, nil, grpcstatus.Errorf(grpccodes.Internal, "failed to retrieve disk image '%s'", key)
+	}
+
+	lockedDiskImage := lockedResponse.GetObject()
+	warnings, err := validateDiskImageLifecycle(lockedDiskImage, key, source)
+	if err != nil {
+		return nil, nil, err
+	}
+	return lockedDiskImage, warnings, nil
 }
 
 func (s *PrivateBareMetalInstancesServer) Update(ctx context.Context,

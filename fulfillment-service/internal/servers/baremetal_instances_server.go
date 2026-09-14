@@ -228,6 +228,7 @@ func (s *BareMetalInstancesServer) Create(ctx context.Context,
 
 	response = &publicv1.BareMetalInstancesCreateResponse{}
 	response.SetObject(createdPublicBMI)
+	response.SetWarnings(privateResponse.GetWarnings())
 	return
 }
 

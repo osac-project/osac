@@ -193,15 +193,21 @@ so networking resources reconcile to READY without a real fabric (kind has none)
   - **Linux host** — rootful podman (invoked via `sudo`) or Docker
   - **Linux + Distrobox** — the rootful podman host socket (`/run/podman/podman.sock`);
     install the drop-in at `scripts/dev-full/manifests/podman-socket-rootful.conf`
-  - **macOS** — Docker Desktop (auto-detected)
+  - **macOS** — Docker Desktop or Podman Desktop. For Podman, start its machine and
+    verify `podman info` succeeds before installing.
 - **`/dev/kvm`** present (Linux), **`fs.inotify.max_user_instances >= 256`**, and
   `kind`, `helm`, `kubectl`, `jq`, `curl`, `openssl`, `python3` on `PATH`
 - Override runtime detection with `KIND_EXPERIMENTAL_PROVIDER=docker|podman`
 
-On an Apple Silicon Mac, the install target automatically builds an arm64
-replacement for `quay.io/openshift/origin-cli:4.20.0` with Docker and loads it
-into the kind cluster before installing Helm charts. Docker Desktop must be
-running; no manual image setup is required.
+On an Apple Silicon Mac, either Kind profile automatically builds an arm64
+replacement for `quay.io/openshift/origin-cli:4.20.0` with the selected
+container runtime and loads it into the kind cluster before installing Helm
+charts. No manual image setup is required. To use Podman Desktop explicitly:
+
+```bash
+CONTAINER_TOOL=podman KIND_EXPERIMENTAL_PROVIDER=podman \
+  make install PLATFORM=kind PROFILE=dev NS=osac
+```
 
 **Endpoints** (via the kind port mappings; every `*.localhost` name resolves to
 127.0.0.1 automatically, so no `/etc/hosts` editing is needed):

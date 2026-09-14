@@ -128,6 +128,23 @@ func ResolveConsumptionTransition(from, to string) (string, error) {
 	return effects.consumption, nil
 }
 
+// BMaaSEffectEventType converts a meter transition effect into its lifecycle
+// event type. The everStarted flag distinguishes a first allocation from a
+// later reactivation, including when the transition table calls the effect a
+// resume.
+func BMaaSEffectEventType(effect string, everStarted bool) string {
+	switch effect {
+	case BMaaSEffectStart:
+		return ResolveLifecycleStartEvent(everStarted)
+	case BMaaSEffectResume:
+		return ResolveLifecycleStartEvent(everStarted)
+	case BMaaSEffectSuspend:
+		return EventSuspended
+	default:
+		return ""
+	}
+}
+
 type BMaaSMeterIntervals struct {
 	AllocationSince  *time.Time
 	ConsumptionSince *time.Time
@@ -161,7 +178,7 @@ func DecomposeBMIEvents(
 			return
 		}
 		var duration *float64
-		if since != nil {
+		if since != nil && (eventType == EventSuspended || eventType == EventHeartbeat) {
 			seconds := transitionTime.Sub(*since).Seconds()
 			duration = &seconds
 		}

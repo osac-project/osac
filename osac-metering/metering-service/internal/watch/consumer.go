@@ -546,8 +546,8 @@ func (c *Consumer) buildBareMetalLifecycleEvents(
 		func(request events.BMaaSEventBuildRequest) (cloudevents.Event, error) {
 			return buildBareMetalEvent(mapper, previousState, transitionTime, request)
 		},
-		mapBMaaSEffectToEvent(allocationEffect, allocationEverStarted),
-		mapBMaaSEffectToEvent(consumptionEffect, consumptionEverStarted),
+		events.BMaaSEffectEventType(allocationEffect, allocationEverStarted),
+		events.BMaaSEffectEventType(consumptionEffect, consumptionEverStarted),
 	)
 }
 
@@ -566,19 +566,6 @@ func buildBareMetalEvent(
 		request.DurationSeconds,
 		transitionTime,
 	)
-}
-
-func mapBMaaSEffectToEvent(effect string, everStarted bool) string {
-	switch effect {
-	case events.BMaaSEffectStart:
-		return events.ResolveLifecycleStartEvent(everStarted)
-	case events.BMaaSEffectResume:
-		return events.ResolveLifecycleStartEvent(everStarted)
-	case events.BMaaSEffectSuspend:
-		return events.EventSuspended
-	default:
-		return ""
-	}
 }
 
 func (c *Consumer) buildBareMetalProjectionState(

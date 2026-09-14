@@ -482,28 +482,23 @@ func (r *Reconciler) reconcileBareMetalFulfillmentResource(ctx context.Context, 
 
 	intervals := bmaasIntervals(ps)
 	if events.IsAllocationBillableState(fs.state) && intervals.AllocationSince == nil {
-		resolved, ok, resolveErr := r.resolveBMaaSAllocationBoundary(ctx, id, fs.version, intervals)
-		if resolveErr != nil {
-			return 0, resolveErr
-		}
-		if !ok {
-			return 0, nil
-		}
-		intervals = resolved
+		r.holdBMaaS(id, "incomplete_history")
+		r.logger.Info("holding bare metal instance reconciliation without an allocation boundary", "resource_id", id)
+		return 0, nil
 	}
 	if dimensionDrift {
 		allocationEffect = bmaasActiveCorrectionEffect(intervals.AllocationSince != nil)
 	}
 	if bmaasHasClosure(allocationEffect, consumptionEffect) {
 		directSnapshotClosure := ps.CurrentState == "RUNNING" && fs.version == ps.FulfillmentVersion+1 &&
-			(fs.state == "STOPPING" || fs.state == "FAILED" || fs.state == "DELETING")
+			(fs.state == "STARTING" || fs.state == "STOPPING" || fs.state == "FAILED" || fs.state == "DELETING")
 		if directSnapshotClosure {
 			if !bmaasClosureIntervalsComplete(intervals, allocationEffect, consumptionEffect) {
 				r.holdBMaaS(id, "incomplete_closure_intervals")
 				return 0, nil
 			}
 		} else {
-			resolvedIntervals, boundaryTime, ok, resolveErr := r.resolveBMaaSClosure(ctx, id, fs.version, intervals, allocationEffect, consumptionEffect)
+			resolvedIntervals, boundaryTime, ok, resolveErr := r.resolveBMaaSClosure(ctx, id, fs.version, fs.state, intervals, allocationEffect, consumptionEffect)
 			if resolveErr != nil {
 				return 0, resolveErr
 			}
@@ -514,9 +509,10 @@ func (r *Reconciler) reconcileBareMetalFulfillmentResource(ctx context.Context, 
 			transitionTime = boundaryTime
 		}
 	}
-	if err := r.publishBMaaSCorrections(ctx, id, fs.tenantID, fs.projectID, reason, ps.CurrentState, fs.state,
+	published, err := r.publishBMaaSCorrections(ctx, id, fs.tenantID, fs.projectID, reason, ps.CurrentState, fs.state,
 		fs.billingDimensions, intervals, allocationEffect, consumptionEffect,
-		ps.ComponentEverStarted[events.BMaaSMeterAllocation], ps.ComponentEverStarted[events.BMaaSMeterConsumption], transitionTime); err != nil {
+		ps.ComponentEverStarted[events.BMaaSMeterAllocation], ps.ComponentEverStarted[events.BMaaSMeterConsumption], transitionTime)
+	if err != nil {
 		return 0, err
 	}
 	state := reconciledBMaaSState(id, ps, fs, intervals, allocationEffect, consumptionEffect, transitionTime)
@@ -549,7 +545,7 @@ func bmaasClosureIntervalsComplete(intervals events.BMaaSMeterIntervals, allocat
 	return consumptionEffect != events.BMaaSEffectSuspend || intervals.ConsumptionSince != nil
 }
 
-func (r *Reconciler) resolveBMaaSClosure(ctx context.Context, id string, sourceVersion int32, intervals events.BMaaSMeterIntervals, allocationEffect, consumptionEffect string) (events.BMaaSMeterIntervals, time.Time, bool, error) {
+func (r *Reconciler) resolveBMaaSClosure(ctx context.Context, id string, sourceVersion int32, boundaryState string, intervals events.BMaaSMeterIntervals, allocationEffect, consumptionEffect string) (events.BMaaSMeterIntervals, time.Time, bool, error) {
 	records, err := r.replay(ctx, id, sourceVersion-1, sourceVersion)
 	if err != nil {
 		if !errors.Is(err, ErrBMaaSReplayUnavailable) {
@@ -559,7 +555,7 @@ func (r *Reconciler) resolveBMaaSClosure(ctx context.Context, id string, sourceV
 		r.logger.Info("holding bare metal instance closure while history is unavailable", "resource_id", id, "error", err)
 		return events.BMaaSMeterIntervals{}, time.Time{}, false, nil
 	}
-	boundaryTime, ok := replayBoundary(records)
+	boundaryTime, ok := replayStateBoundary(records, boundaryState)
 	if !ok {
 		r.holdBMaaS(id, "missing_replay_boundary")
 		r.logger.Info("holding bare metal instance closure without authoritative boundary", "resource_id", id)
@@ -652,11 +648,22 @@ func (r *Reconciler) replayBMaaSGap(ctx context.Context, id string, existing pro
 		return 0, nil
 	}
 	expectedVersion := existing.FulfillmentVersion + 1
+	sawStopping := existing.CurrentState != "RUNNING" || target.state != "STOPPED"
 	for _, record := range records {
 		if record.State == "" || record.TransitionTime.IsZero() || record.Version != expectedVersion || record.EventType == privatev1.EventType_EVENT_TYPE_OBJECT_DELETED {
 			r.holdBMaaS(id, "non_contiguous_replay")
 			r.logger.Info("holding bare metal instance reconciliation with non-contiguous replay", "resource_id", id)
 			return 0, nil
+		}
+		if existing.CurrentState == "RUNNING" && target.state == "STOPPED" {
+			if record.State == "STOPPING" {
+				sawStopping = true
+			}
+			if record.State == "STOPPED" && !sawStopping {
+				r.holdBMaaS(id, "incomplete_history")
+				r.logger.Info("holding bare metal instance reconciliation without STOPPING boundary", "resource_id", id)
+				return 0, nil
+			}
 		}
 		expectedVersion++
 	}
@@ -728,7 +735,7 @@ func (r *Reconciler) applyBMaaSTransition(ctx context.Context, id string, ps pro
 		return 0, ps, nil
 	}
 	if resolveClosure && bmaasHasClosure(allocationEffect, consumptionEffect) {
-		resolvedIntervals, boundaryTime, ok, resolveErr := r.resolveBMaaSClosure(ctx, id, fs.version, intervals, allocationEffect, consumptionEffect)
+		resolvedIntervals, boundaryTime, ok, resolveErr := r.resolveBMaaSClosure(ctx, id, fs.version, fs.state, intervals, allocationEffect, consumptionEffect)
 		if resolveErr != nil {
 			return 0, ps, resolveErr
 		}
@@ -754,14 +761,13 @@ func (r *Reconciler) applyBMaaSTransition(ctx context.Context, id string, ps pro
 	return boolToInt(published), state, nil
 }
 
-func replayBoundary(records []BMaaSReplayRecord) (time.Time, bool) {
-	var boundaryTime time.Time
+func replayStateBoundary(records []BMaaSReplayRecord, state string) (time.Time, bool) {
 	for _, record := range records {
-		if !record.TransitionTime.IsZero() {
-			boundaryTime = record.TransitionTime.UTC()
+		if record.EventType == privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED && record.State == state && !record.TransitionTime.IsZero() {
+			return record.TransitionTime.UTC(), true
 		}
 	}
-	return boundaryTime, !boundaryTime.IsZero()
+	return time.Time{}, false
 }
 
 func reconciledBMaaSState(resourceID string, existing projection.ResourceState, fs fulfillmentResource, intervals events.BMaaSMeterIntervals, allocationEffect, consumptionEffect string, transitionTime time.Time) projection.ResourceState {

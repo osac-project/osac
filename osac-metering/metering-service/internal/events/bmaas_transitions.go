@@ -50,76 +50,73 @@ type bmaasTransitionKey struct {
 	to   string
 }
 
-var acceptedBMaaSTransitions = map[bmaasTransitionKey]struct{}{
-	{"", bmaasStateProvisioning}: {}, {"", bmaasStateRunning}: {}, {"", bmaasStateStopped}: {},
-	{"", bmaasStateStarting}: {}, {"", bmaasStateStopping}: {}, {"", bmaasStateFailed}: {},
-	{"", bmaasStateDeleting}: {}, {"", bmaasStateUnspecified}: {},
-	{bmaasStateProvisioning, bmaasStateProvisioning}: {}, {bmaasStateProvisioning, bmaasStateRunning}: {},
-	{bmaasStateProvisioning, bmaasStateStopped}: {}, {bmaasStateProvisioning, bmaasStateStarting}: {},
-	{bmaasStateProvisioning, bmaasStateStopping}: {}, {bmaasStateProvisioning, bmaasStateFailed}: {},
-	{bmaasStateProvisioning, bmaasStateDeleting}: {},
-	{bmaasStateRunning, bmaasStateRunning}:       {}, {bmaasStateRunning, bmaasStateStopped}: {},
-	{bmaasStateRunning, bmaasStateStarting}: {}, {bmaasStateRunning, bmaasStateStopping}: {},
-	{bmaasStateRunning, bmaasStateFailed}: {}, {bmaasStateRunning, bmaasStateDeleting}: {},
-	{bmaasStateStopped, bmaasStateStopped}: {}, {bmaasStateStopped, bmaasStateRunning}: {},
-	{bmaasStateStopped, bmaasStateStarting}: {}, {bmaasStateStopped, bmaasStateFailed}: {},
+type bmaasTransitionEffects struct {
+	allocation  string
+	consumption string
+}
+
+var bmaasTransitions = map[bmaasTransitionKey]bmaasTransitionEffects{
+	{"", bmaasStateProvisioning}: {}, {"", bmaasStateRunning}: {allocation: BMaaSEffectStart, consumption: BMaaSEffectStart},
+	{"", bmaasStateStopped}: {allocation: BMaaSEffectStart}, {"", bmaasStateStarting}: {allocation: BMaaSEffectStart},
+	{"", bmaasStateStopping}: {allocation: BMaaSEffectStart}, {"", bmaasStateFailed}: {},
+	{"", bmaasStateDeleting}: {allocation: BMaaSEffectStart}, {"", bmaasStateUnspecified}: {},
+	{bmaasStateProvisioning, bmaasStateProvisioning}: {},
+	{bmaasStateProvisioning, bmaasStateRunning}:      {allocation: BMaaSEffectStart, consumption: BMaaSEffectStart},
+	{bmaasStateProvisioning, bmaasStateStopped}:      {allocation: BMaaSEffectStart},
+	{bmaasStateProvisioning, bmaasStateStarting}:     {allocation: BMaaSEffectStart},
+	{bmaasStateProvisioning, bmaasStateStopping}:     {allocation: BMaaSEffectStart},
+	{bmaasStateProvisioning, bmaasStateFailed}:       {}, {bmaasStateProvisioning, bmaasStateDeleting}: {},
+	{bmaasStateRunning, bmaasStateRunning}:  {},
+	{bmaasStateRunning, bmaasStateStopped}:  {consumption: BMaaSEffectSuspend},
+	{bmaasStateRunning, bmaasStateStarting}: {consumption: BMaaSEffectSuspend},
+	{bmaasStateRunning, bmaasStateStopping}: {consumption: BMaaSEffectSuspend},
+	{bmaasStateRunning, bmaasStateFailed}:   {allocation: BMaaSEffectSuspend, consumption: BMaaSEffectSuspend},
+	{bmaasStateRunning, bmaasStateDeleting}: {consumption: BMaaSEffectSuspend},
+	{bmaasStateStopped, bmaasStateStopped}:  {},
+	{bmaasStateStopped, bmaasStateRunning}:  {consumption: BMaaSEffectStart},
+	{bmaasStateStopped, bmaasStateStarting}: {}, {bmaasStateStopped, bmaasStateFailed}: {allocation: BMaaSEffectSuspend},
 	{bmaasStateStopped, bmaasStateDeleting}:  {},
-	{bmaasStateStarting, bmaasStateStarting}: {}, {bmaasStateStarting, bmaasStateRunning}: {},
-	{bmaasStateStarting, bmaasStateStopped}: {}, {bmaasStateStarting, bmaasStateFailed}: {},
+	{bmaasStateStarting, bmaasStateStarting}: {},
+	{bmaasStateStarting, bmaasStateRunning}:  {consumption: BMaaSEffectStart},
+	{bmaasStateStarting, bmaasStateStopped}:  {}, {bmaasStateStarting, bmaasStateFailed}: {allocation: BMaaSEffectSuspend},
 	{bmaasStateStarting, bmaasStateDeleting}: {},
-	{bmaasStateStopping, bmaasStateStopping}: {}, {bmaasStateStopping, bmaasStateStopped}: {},
-	{bmaasStateStopping, bmaasStateRunning}: {}, {bmaasStateStopping, bmaasStateFailed}: {},
-	{bmaasStateStopping, bmaasStateDeleting}: {},
-	{bmaasStateFailed, bmaasStateFailed}:     {}, {bmaasStateFailed, bmaasStateRunning}: {},
+	{bmaasStateStopping, bmaasStateStopping}: {},
+	{bmaasStateStopping, bmaasStateStopped}:  {}, {bmaasStateStopping, bmaasStateRunning}: {consumption: BMaaSEffectStart},
+	{bmaasStateStopping, bmaasStateFailed}: {allocation: BMaaSEffectSuspend}, {bmaasStateStopping, bmaasStateDeleting}: {},
+	{bmaasStateFailed, bmaasStateFailed}:   {},
+	{bmaasStateFailed, bmaasStateRunning}:  {allocation: BMaaSEffectResume, consumption: BMaaSEffectStart},
 	{bmaasStateFailed, bmaasStateDeleting}: {}, {bmaasStateDeleting, bmaasStateDeleting}: {},
 }
 
-var allocationTransitions = map[bmaasTransitionKey]string{
-	{"", bmaasStateRunning}: BMaaSEffectStart, {"", bmaasStateStopped}: BMaaSEffectStart,
-	{"", bmaasStateStarting}: BMaaSEffectStart, {"", bmaasStateStopping}: BMaaSEffectStart,
-	{"", bmaasStateDeleting}:                     BMaaSEffectStart,
-	{bmaasStateProvisioning, bmaasStateRunning}:  BMaaSEffectStart,
-	{bmaasStateProvisioning, bmaasStateStopped}:  BMaaSEffectStart,
-	{bmaasStateProvisioning, bmaasStateStarting}: BMaaSEffectStart,
-	{bmaasStateProvisioning, bmaasStateStopping}: BMaaSEffectStart,
-	{bmaasStateRunning, bmaasStateFailed}:        BMaaSEffectSuspend,
-	{bmaasStateStopped, bmaasStateFailed}:        BMaaSEffectSuspend,
-	{bmaasStateStarting, bmaasStateFailed}:       BMaaSEffectSuspend,
-	{bmaasStateStopping, bmaasStateFailed}:       BMaaSEffectSuspend,
-	{bmaasStateFailed, bmaasStateRunning}:        BMaaSEffectResume,
-}
-
-var consumptionTransitions = map[bmaasTransitionKey]string{
-	{"", bmaasStateRunning}:                     BMaaSEffectStart,
-	{bmaasStateProvisioning, bmaasStateRunning}: BMaaSEffectStart,
-	{bmaasStateRunning, bmaasStateStopped}:      BMaaSEffectSuspend,
-	{bmaasStateRunning, bmaasStateStarting}:     BMaaSEffectSuspend,
-	{bmaasStateRunning, bmaasStateStopping}:     BMaaSEffectSuspend,
-	{bmaasStateRunning, bmaasStateFailed}:       BMaaSEffectSuspend,
-	{bmaasStateRunning, bmaasStateDeleting}:     BMaaSEffectSuspend,
-	{bmaasStateStopped, bmaasStateRunning}:      BMaaSEffectStart,
-	{bmaasStateStarting, bmaasStateRunning}:     BMaaSEffectStart,
-	{bmaasStateStopping, bmaasStateRunning}:     BMaaSEffectStart,
-	{bmaasStateFailed, bmaasStateRunning}:       BMaaSEffectStart,
-}
-
-func resolveBMaaSTransition(table map[bmaasTransitionKey]string, from, to string) (string, error) {
+func resolveBMaaSTransition(from, to string) (bmaasTransitionEffects, error) {
 	key := bmaasTransitionKey{from: from, to: to}
-	if _, ok := acceptedBMaaSTransitions[key]; !ok {
-		return "", fmt.Errorf("%w: %s -> %s", ErrInvalidBMaaSTransition, from, to)
+	effects, ok := bmaasTransitions[key]
+	if !ok {
+		return bmaasTransitionEffects{}, fmt.Errorf("%w: %s -> %s", ErrInvalidBMaaSTransition, from, to)
 	}
-	if effect, ok := table[key]; ok {
-		return effect, nil
-	}
-	return BMaaSEffectSkip, nil
+	return effects, nil
 }
 
 func ResolveAllocationTransition(from, to string) (string, error) {
-	return resolveBMaaSTransition(allocationTransitions, from, to)
+	effects, err := resolveBMaaSTransition(from, to)
+	if err != nil {
+		return "", err
+	}
+	if effects.allocation == "" {
+		return BMaaSEffectSkip, err
+	}
+	return effects.allocation, nil
 }
 
 func ResolveConsumptionTransition(from, to string) (string, error) {
-	return resolveBMaaSTransition(consumptionTransitions, from, to)
+	effects, err := resolveBMaaSTransition(from, to)
+	if err != nil {
+		return "", err
+	}
+	if effects.consumption == "" {
+		return BMaaSEffectSkip, err
+	}
+	return effects.consumption, nil
 }
 
 type BMaaSMeterIntervals struct {

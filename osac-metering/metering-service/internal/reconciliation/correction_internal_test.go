@@ -10,6 +10,7 @@ in compliance with the License. You may obtain a copy of the License at
 package reconciliation
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -78,6 +79,40 @@ func TestBuildSyntheticHeartbeatsStableIDAcrossRetryOfSameGap(t *testing.T) {
 	}
 	if first[0].ID() != second[0].ID() {
 		t.Errorf("expected the same CloudEvent ID for two attempts at closing the same unresolved gap (LastHeartbeatAt unchanged), got %q and %q", first[0].ID(), second[0].ID())
+	}
+}
+
+func TestBuildSyntheticHeartbeatsBMaaSUsesIndependentMeters(t *testing.T) {
+	allocationSince := time.Date(2026, 1, 1, 11, 0, 0, 0, time.UTC)
+	consumptionSince := time.Date(2026, 1, 1, 11, 30, 0, 0, time.UTC)
+	ps := projection.ResourceState{
+		ResourceID:    "bmi-1",
+		ResourceType:  events.ResourceTypeBareMetalInstance,
+		CurrentState:  "RUNNING",
+		BillableSince: &allocationSince,
+		ComponentBillableSince: map[string]time.Time{
+			events.BMaaSMeterConsumption: consumptionSince,
+		},
+		BillingDimensions: map[string]any{"bm_instance_type": "gpu-large"},
+	}
+
+	got, err := buildSyntheticHeartbeats(ps, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected allocation and consumption heartbeats, got %d", len(got))
+	}
+
+	for i, meterType := range []string{events.BMaaSMeterAllocation, events.BMaaSMeterConsumption} {
+		var data map[string]any
+		if err := json.Unmarshal(got[i].Data(), &data); err != nil {
+			t.Fatalf("heartbeat %d data: %v", i, err)
+		}
+		dims := data["billing_dimensions"].(map[string]any)
+		if dims["meter_type"] != meterType {
+			t.Errorf("heartbeat %d meter_type = %v, want %q", i, dims["meter_type"], meterType)
+		}
 	}
 }
 

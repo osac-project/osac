@@ -17,6 +17,8 @@ from tests.e2e.core.k8s_client import K8sClient
 
 logger = logging.getLogger(__name__)
 
+pytestmark = pytest.mark.requires_vmaas
+
 
 class TestNetworkingReferences:
     """OSAC-3095: Networking resource reference tests."""

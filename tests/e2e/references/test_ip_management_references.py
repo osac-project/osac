@@ -12,6 +12,8 @@ from tests.e2e.core.helpers import assert_grpc_field_violation
 
 logger = logging.getLogger(__name__)
 
+pytestmark = pytest.mark.requires_vmaas
+
 
 @pytest.fixture(scope="module")
 def ref_eip_pool(private_grpc: GRPCClient) -> str:

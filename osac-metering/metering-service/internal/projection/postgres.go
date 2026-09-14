@@ -57,11 +57,6 @@ func (s *PostgresStore) Upsert(ctx context.Context, state ResourceState) error {
 	if err != nil {
 		return fmt.Errorf("marshaling component billable since: %w", err)
 	}
-	componentEverStarted, err := json.Marshal(state.ComponentEverStarted)
-	if err != nil {
-		return fmt.Errorf("marshaling component ever started: %w", err)
-	}
-
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning transaction: %w", err)
@@ -69,12 +64,13 @@ func (s *PostgresStore) Upsert(ctx context.Context, state ResourceState) error {
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	var storedVersion *int32
+	var storedComponentEverStarted []byte
 	err = tx.QueryRow(ctx, `
-		SELECT fulfillment_version
+		SELECT fulfillment_version, component_ever_started
 		FROM metering_resource_state
 		WHERE resource_id = $1
 		FOR UPDATE`,
-		state.ResourceID).Scan(&storedVersion)
+		state.ResourceID).Scan(&storedVersion, &storedComponentEverStarted)
 
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("locking resource state %s: %w", state.ResourceID, err)
@@ -85,6 +81,28 @@ func (s *PostgresStore) Upsert(ctx context.Context, state ResourceState) error {
 	// silently dropped — the projection write is idempotent for the same version.
 	if storedVersion != nil && *storedVersion > state.FulfillmentVersion {
 		return ErrStaleVersion
+	}
+
+	mergedComponentEverStarted := make(map[string]bool, len(state.ComponentEverStarted))
+	for component, started := range state.ComponentEverStarted {
+		mergedComponentEverStarted[component] = started
+	}
+	if storedVersion != nil && len(storedComponentEverStarted) > 0 {
+		var stored map[string]bool
+		if err := json.Unmarshal(storedComponentEverStarted, &stored); err != nil {
+			return fmt.Errorf("unmarshaling stored component ever started: %w", err)
+		}
+		for component, started := range stored {
+			if started {
+				mergedComponentEverStarted[component] = true
+			} else if _, exists := mergedComponentEverStarted[component]; !exists {
+				mergedComponentEverStarted[component] = false
+			}
+		}
+	}
+	componentEverStarted, err := json.Marshal(mergedComponentEverStarted)
+	if err != nil {
+		return fmt.Errorf("marshaling component ever started: %w", err)
 	}
 
 	_, err = tx.Exec(ctx, `

@@ -424,16 +424,6 @@ func (c *Consumer) handleBareMetalEvent(
 		consumptionEffect,
 	)
 
-	if event.GetType() == privatev1.EventType_EVENT_TYPE_OBJECT_CREATED {
-		created, err := events.MapWatchEvent(event, mapper, &events.StateContext{}, dims)
-		if err != nil {
-			return err
-		}
-		return c.publishAndUpsert(ctx, func() error {
-			return c.publishWithRetry(ctx, created)
-		}, projectionState, resourceID)
-	}
-
 	lifecycleEvents, err := c.buildBareMetalLifecycleEvents(
 		mapper,
 		existing,
@@ -445,6 +435,24 @@ func (c *Consumer) handleBareMetalEvent(
 	)
 	if err != nil {
 		return err
+	}
+
+	if event.GetType() == privatev1.EventType_EVENT_TYPE_OBJECT_CREATED {
+		created, err := events.MapWatchEvent(event, mapper, &events.StateContext{}, dims)
+		if err != nil {
+			return err
+		}
+		return c.publishAndUpsert(ctx, func() error {
+			if err := c.publishWithRetry(ctx, created); err != nil {
+				return err
+			}
+			for i := range lifecycleEvents {
+				if err := c.publishWithRetry(ctx, &lifecycleEvents[i]); err != nil {
+					return err
+				}
+			}
+			return nil
+		}, projectionState, resourceID)
 	}
 
 	return c.publishAndUpsert(ctx, func() error {
@@ -596,12 +604,13 @@ func (c *Consumer) buildBareMetalProjectionState(
 		state.EverBillable = existing.EverBillable
 	}
 
-	if events.IsAllocationBillableState(state.CurrentState) {
+	switch allocationEffect {
+	case events.BMaaSEffectStart, events.BMaaSEffectResume:
 		if state.BillableSince == nil {
 			now := transitionTime.UTC()
 			state.BillableSince = &now
 		}
-	} else {
+	case events.BMaaSEffectSuspend:
 		state.BillableSince = nil
 	}
 	if allocationEffect == events.BMaaSEffectStart || allocationEffect == events.BMaaSEffectResume {

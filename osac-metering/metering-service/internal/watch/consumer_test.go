@@ -1884,26 +1884,34 @@ var _ = Describe("Consumer", func() {
 			Expect(store.states).ToNot(HaveKey("cl-del"))
 		})
 
-		It("maps a BareMetalInstance Watch payload into the standard CloudEvent", func() {
+		It("publishes created.v1 and seeds a billable projection for a RUNNING BMaaS object", func() {
 			bmi := makeBareMetalInstance("bmi-1", "tenant-1")
 			event := &privatev1.Event{
 				Id:      "evt-bmi-created",
 				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
 				Payload: &privatev1.Event_BareMetalInstance{BareMetalInstance: bmi},
 			}
+			runCtx, runCancel := context.WithTimeout(ctx, 100*time.Millisecond)
+			defer runCancel()
 			client.results = []mockStreamResult{{stream: &mockWatchStream{
+				ctx:       runCtx,
 				responses: []*privatev1.EventsWatchResponse{makeResponse(event)},
 			}}}
 
-			pub := &mockPublisher{published: make([]cloudevents.Event, 0, 1), cancelFunc: cancel}
-			consumer := newConsumer(pub)
+			pub := &mockPublisher{published: make([]cloudevents.Event, 0, 3), cancelFunc: runCancel}
+			store := newMockStore()
+			consumer := newConsumerWithStore(pub, store)
 
-			Expect(consumer.Run(ctx)).To(Succeed())
+			Expect(consumer.Run(runCtx)).To(Succeed())
 
 			pub.mu.Lock()
-			defer pub.mu.Unlock()
-			Expect(pub.published).To(HaveLen(1))
+			Expect(pub.published).To(HaveLen(3))
+			Expect(pub.published[0].Type()).To(Equal(events.EventCreated))
 			Expect(pub.published[0].Extensions()["osacresourcetype"]).To(Equal(events.ResourceTypeBareMetalInstance))
+			Expect(pub.published[1].ID()).To(Equal("evt-bmi-created/allocation"))
+			Expect(pub.published[1].Type()).To(Equal(events.EventStarted))
+			Expect(pub.published[2].ID()).To(Equal("evt-bmi-created/consumption"))
+			Expect(pub.published[2].Type()).To(Equal(events.EventStarted))
 
 			var data map[string]any
 			Expect(json.Unmarshal(pub.published[0].Data(), &data)).To(Succeed())
@@ -1915,6 +1923,15 @@ var _ = Describe("Consumer", func() {
 				"bm_instance_type": "bmi-type-gpu-large",
 				"catalog_item":     "catalog-item-1",
 			}))
+			pub.mu.Unlock()
+
+			store.mu.Lock()
+			defer store.mu.Unlock()
+			state, ok := store.states["bmi-1"]
+			Expect(ok).To(BeTrue())
+			Expect(state.CurrentState).To(Equal("RUNNING"))
+			Expect(state.IsBillable).To(BeTrue())
+			Expect(state.BillableSince).ToNot(BeNil())
 		})
 
 		It("skips a BMaaS deletion with a missing event timestamp without disrupting later Watch events", func() {
@@ -2098,6 +2115,56 @@ var _ = Describe("Consumer", func() {
 			store.mu.Lock()
 			defer store.mu.Unlock()
 			Expect(store.states["bmi-invalid-transition"].CurrentState).To(Equal("STOPPING"))
+		})
+
+		It("does not open an allocation interval for FAILED to DELETING skip", func() {
+			store := newMockStore()
+			failedAt := time.Date(2026, 9, 14, 11, 0, 0, 0, time.UTC)
+			store.states["bmi-failed-deleting"] = projection.ResourceState{
+				ResourceID:         "bmi-failed-deleting",
+				ResourceType:       events.ResourceTypeBareMetalInstance,
+				TenantID:           "tenant-1",
+				CurrentState:       "FAILED",
+				TransitionTime:     failedAt,
+				FulfillmentVersion: 1,
+				BillingDimensions: map[string]any{
+					"bm_instance_type": "bmi-type-gpu-large",
+					"catalog_item":     "catalog-item-1",
+				},
+			}
+
+			bmi := makeBareMetalInstance("bmi-failed-deleting", "tenant-1")
+			bmi.Metadata.Version = 2
+			deletingAt := failedAt.Add(time.Hour)
+			bmi.Status.State = privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_DELETING
+			bmi.Status.StateTransitionTime = timestamppb.New(deletingAt)
+			event := &privatev1.Event{
+				Id:      "evt-bmi-failed-deleting",
+				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+				Payload: &privatev1.Event_BareMetalInstance{BareMetalInstance: bmi},
+			}
+			client.results = []mockStreamResult{{stream: &mockWatchStream{
+				ctx:       ctx,
+				responses: []*privatev1.EventsWatchResponse{makeResponse(event)},
+			}}}
+
+			pub := &mockPublisher{}
+			consumer := newConsumerWithStore(pub, store)
+			done := make(chan error, 1)
+			go func() { done <- consumer.Run(ctx) }()
+			time.Sleep(50 * time.Millisecond)
+			cancel()
+			Eventually(done, time.Second).Should(Receive(BeNil()))
+
+			pub.mu.Lock()
+			Expect(pub.published).To(BeEmpty())
+			pub.mu.Unlock()
+			store.mu.Lock()
+			updated := store.states["bmi-failed-deleting"]
+			Expect(updated.CurrentState).To(Equal("DELETING"))
+			Expect(updated.IsBillable).To(BeFalse())
+			Expect(updated.BillableSince).To(BeNil())
+			store.mu.Unlock()
 		})
 
 		It("emits independent allocation and consumption events when BMaaS enters RUNNING", func() {

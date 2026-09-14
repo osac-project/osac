@@ -42,6 +42,11 @@ type Generator struct {
 	publisher kafkapub.EventPublisher
 	logger    logr.Logger
 	interval  time.Duration
+	presence  *BMaaSPresence
+}
+
+func (g *Generator) SetBMaaSPresence(presence *BMaaSPresence) {
+	g.presence = presence
 }
 
 func NewGenerator(
@@ -82,6 +87,7 @@ func (g *Generator) tick(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("querying billable resources: %w", err)
 	}
+	billable = g.filterBillable(billable)
 
 	g.updateGauges(billable)
 
@@ -117,6 +123,21 @@ func (g *Generator) tick(ctx context.Context) error {
 
 	g.logger.Info("heartbeat tick completed", "published", len(publishedIDs), "total", len(billable))
 	return nil
+}
+
+func (g *Generator) filterBillable(billable []projection.ResourceState) []projection.ResourceState {
+	if g.presence == nil {
+		return billable
+	}
+	filtered := make([]projection.ResourceState, 0, len(billable))
+	for _, state := range billable {
+		if state.ResourceType == events.ResourceTypeBareMetalInstance && !g.presence.Contains(state.ResourceID) {
+			g.logger.Info("skipping heartbeat for BMaaS projection absent from fulfillment snapshot", "resource_id", state.ResourceID)
+			continue
+		}
+		filtered = append(filtered, state)
+	}
+	return filtered
 }
 
 // publishResourceHeartbeats publishes every event in one resource's N+1

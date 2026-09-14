@@ -106,6 +106,12 @@ type Reconciler struct {
 	heartbeatInterval time.Duration
 	bmaasHolds        map[string]struct{}
 	bmaasHoldMetrics  map[string]struct{}
+	bmaasSkipped      map[string]struct{}
+	bmaasPresence     *heartbeat.BMaaSPresence
+}
+
+func (r *Reconciler) SetBMaaSPresence(presence *heartbeat.BMaaSPresence) {
+	r.bmaasPresence = presence
 }
 
 func NewReconciler(
@@ -1125,6 +1131,7 @@ func (r *Reconciler) loadClusters(ctx context.Context, result map[string]fulfill
 
 func (r *Reconciler) loadBareMetalInstances(ctx context.Context, result map[string]fulfillmentResource) error {
 	var offset int32
+	var listedIDs []string
 	for {
 		limit := int32(defaultPageSize)
 		resp, err := r.bareMetalClient.List(ctx, &privatev1.BareMetalInstancesListRequest{
@@ -1169,12 +1176,16 @@ func (r *Reconciler) loadBareMetalInstances(ctx context.Context, result map[stri
 				billingDimensions: dimensions,
 				transitionTime:    transitionTime,
 			}
+			listedIDs = append(listedIDs, bmi.GetId())
 		}
 
 		if len(items) < defaultPageSize {
 			break
 		}
 		offset += int32(len(items))
+	}
+	if r.bmaasPresence != nil {
+		r.bmaasPresence.Replace(listedIDs)
 	}
 	return nil
 }

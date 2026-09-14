@@ -247,7 +247,9 @@ func run(ctx context.Context, logger logr.Logger, cfg *config) error {
 		bareMetalClient = privatev1.NewBareMetalInstancesClient(grpcConn)
 	}
 	replaySource := reconciliation.NewUnavailableBMaaSReplaySource()
+	bmaasPresence := heartbeat.NewBMaaSPresence()
 	reconciler := reconciliation.NewReconciler(computeClient, clusterClient, bareMetalClient, replaySource, store, publisher, logger, cfg.heartbeatInterval)
+	reconciler.SetBMaaSPresence(bmaasPresence)
 
 	logger.Info("running startup reconciliation")
 	if err := reconciler.Reconcile(ctx); err != nil {
@@ -260,6 +262,7 @@ func run(ctx context.Context, logger logr.Logger, cfg *config) error {
 	logger.Info("service ready")
 
 	hbGen := heartbeat.NewGenerator(store, publisher, logger, cfg.heartbeatInterval)
+	hbGen.SetBMaaSPresence(bmaasPresence)
 
 	var wg sync.WaitGroup
 

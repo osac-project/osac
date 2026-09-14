@@ -15,6 +15,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/osac-project/osac-metering/internal/events"
+	"github.com/osac-project/osac-metering/internal/heartbeat"
 	"github.com/osac-project/osac-metering/internal/projection"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -1913,6 +1914,39 @@ var _ = Describe("Reconciler", func() {
 			store.mu.Lock()
 			defer store.mu.Unlock()
 			Expect(store.states).ToNot(HaveKey("bmi-new"), "BMaaS must not persist guessed billable intervals")
+		})
+		It("holds a projected BMaaS instance skipped for invalid dimensions", func() {
+			deletionTime := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
+			invalid := makeBMI("bmi-invalid-dimensions", "tenant-1", privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING, 7, timestamppb.New(deletionTime))
+			invalid.Spec.InstanceType = nil
+			client := &mockBareMetalInstancesClient{items: []*privatev1.BareMetalInstance{invalid}}
+			store := newMockStore()
+			allocationSince := deletionTime.Add(-2 * time.Hour)
+			consumptionSince := deletionTime.Add(-time.Hour)
+			store.states[invalid.GetId()] = projection.ResourceState{
+				ResourceID:         invalid.GetId(),
+				ResourceType:       events.ResourceTypeBareMetalInstance,
+				CurrentState:       "RUNNING",
+				IsBillable:         true,
+				BillableSince:      &allocationSince,
+				FulfillmentVersion: 7,
+				ComponentBillableSince: map[string]time.Time{
+					events.BMaaSMeterConsumption: consumptionSince,
+				},
+				BillingDimensions: map[string]any{"bm_instance_type": "bm.large"},
+			}
+			resolver := &fakeBMaaSReplaySource{records: []BMaaSReplayRecord{
+				deletedReplayRecord(invalid.GetId(), "tenant-1", "project-1", 7, "event-delete", deletionTime, map[string]any{"bm_instance_type": "bm.large"}),
+			}}
+			pub := &mockPublisher{}
+			recon := NewReconciler(nil, nil, client, resolver, store, pub, logr.Discard(), time.Minute)
+			presence := heartbeat.NewBMaaSPresence()
+			recon.SetBMaaSPresence(presence)
+
+			Expect(recon.Reconcile(ctx)).To(Succeed())
+			Expect(pub.published).To(BeEmpty())
+			Expect(store.states).To(HaveKey(invalid.GetId()))
+			Expect(presence.Contains(invalid.GetId())).To(BeFalse())
 		})
 
 		It("closes active BMaaS meters and removes a projection missing from fulfillment", func() {

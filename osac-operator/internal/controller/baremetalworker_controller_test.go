@@ -650,5 +650,70 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 				Expect(err).NotTo(HaveOccurred())
 			})
 		})
+
+		Context("booting workers requeue", func() {
+			It("should requeue for registered but not ready workers", func() {
+				bmiProvider.isReady = false
+				bmiProvider.regTime = now.Add(-5 * time.Minute) // agent registered 5 minutes ago
+				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
+					{BMIName: "worker-1", BMINamespace: "osac-baremetalinstance"},
+				})
+
+				result, err := reconciler.ReconcileWorkers(ctx, instance)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result.RequeueAfter).To(Equal(1 * time.Minute))
+				Expect(bmiProvider.deleteCalls).To(Equal(0))
+				Expect(bmiProvider.createCalls).To(Equal(0))
+			})
+		})
+
+		Context("initial workers without timestamps", func() {
+			It("should requeue when no creation timestamp is available", func() {
+				bmiProvider.isReady = false
+				bmiProvider.regTime = time.Time{} // agent not registered
+				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
+					{
+						BMIName:      "worker-1",
+						BMINamespace: "osac-baremetalinstance",
+						AttemptCount: 0,
+						// No LastFailureTime or NextRetryTime set
+					},
+				})
+
+				result, err := reconciler.ReconcileWorkers(ctx, instance)
+				Expect(err).NotTo(HaveOccurred())
+				// Should requeue with booting interval since no timestamp is available
+				Expect(result.RequeueAfter).To(Equal(1 * time.Minute))
+				// Should NOT trigger BMI replacement
+				Expect(bmiProvider.deleteCalls).To(Equal(0))
+				Expect(bmiProvider.createCalls).To(Equal(0))
+			})
+		})
+
+		Context("BMI replacement condition messages", func() {
+			It("should show old BMI name in replacement condition message", func() {
+				bmiProvider.isReady = false
+				bmiProvider.regTime = time.Time{}
+				bmiProvider.nextCreateName = "new-bmi"
+
+				failTime := metav1.NewTime(now.Add(-35 * time.Minute))
+				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
+					{
+						BMIName:         "old-bmi",
+						BMINamespace:    "osac-baremetalinstance",
+						AttemptCount:    0,
+						LastFailureTime: &failTime,
+					},
+				})
+
+				_, err := reconciler.ReconcileWorkers(ctx, instance)
+				Expect(err).NotTo(HaveOccurred())
+
+				cond := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionWorkerProvisioningFailed)
+				Expect(cond).NotTo(BeNil())
+				Expect(cond.Message).To(ContainSubstring("old-bmi"))
+				Expect(cond.Message).To(ContainSubstring("new-bmi"))
+			})
+		})
 	})
 })

@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"go.uber.org/mock/gomock"
 
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
@@ -1644,6 +1645,288 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 			Expect(status.Message()).To(ContainSubstring("does not reference a template"))
+		})
+	})
+
+	Describe("HostType prerequisite validation", func() {
+		var (
+			server        *PrivateBareMetalInstancesServer
+			catalogServer *PrivateBareMetalInstanceCatalogItemsServer
+		)
+
+		BeforeEach(func() {
+			var err error
+
+			catalogServer, err = NewPrivateBareMetalInstanceCatalogItemsServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			server, err = NewPrivateBareMetalInstancesServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		createHostType := func(id string) {
+			hostTypesDao, err := dao.NewGenericDAO[*privatev1.HostType]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = hostTypesDao.Create().SetObject(privatev1.HostType_builder{
+				Id:    id,
+				Title: "Test Host Type",
+				Metadata: privatev1.Metadata_builder{
+					Tenant: testTenant,
+					Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+				}.Build(),
+				Interfaces: []*privatev1.NetworkInterface{
+					privatev1.NetworkInterface_builder{Name: "data-0", Role: "fabric"}.Build(),
+				},
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+		}
+
+		createTemplateWithHostType := func(templateID, hostTypeID string) {
+			templatesDao, err := dao.NewGenericDAO[*privatev1.BareMetalInstanceTemplate]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = templatesDao.Create().SetObject(privatev1.BareMetalInstanceTemplate_builder{
+				Id:       templateID,
+				Title:    "Template with HostType",
+				HostType: hostTypeID,
+				Metadata: privatev1.Metadata_builder{
+					Tenant: testTenant,
+					Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+		}
+
+		createTemplateWithoutHostType := func(templateID string) {
+			templatesDao, err := dao.NewGenericDAO[*privatev1.BareMetalInstanceTemplate]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = templatesDao.Create().SetObject(privatev1.BareMetalInstanceTemplate_builder{
+				Id:    templateID,
+				Title: "Template without HostType",
+				Metadata: privatev1.Metadata_builder{
+					Tenant: testTenant,
+					Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+		}
+
+		createCatalogItemForTemplate := func(templateID string) string {
+			catResp, err := catalogServer.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
+				Object: privatev1.BareMetalInstanceCatalogItem_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Title:     "Catalog item for HostType test",
+					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: templateID}.Build(),
+					Published: true,
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			return catResp.GetObject().GetId()
+		}
+
+		It("Accepts catalog-item path when template host_type references a valid HostType", func() {
+			createHostType("ht-valid")
+			createTemplateWithHostType("tmpl-ht-valid", "ht-valid")
+			catID := createCatalogItemForTemplate("tmpl-ht-valid")
+
+			response, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catID}.Build(),
+						SshPublicKey: new(testSSHPublicKey),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetObject().GetId()).ToNot(BeEmpty())
+		})
+
+		It("Rejects catalog-item path when template host_type references a non-existent HostType", func() {
+			createTemplateWithHostType("tmpl-ht-missing", "nonexistent-host-type")
+			catID := createCatalogItemForTemplate("tmpl-ht-missing")
+
+			_, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catID}.Build(),
+						SshPublicKey: new(testSSHPublicKey),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+			Expect(status.Message()).To(ContainSubstring("nonexistent-host-type"))
+			Expect(status.Message()).To(ContainSubstring("not found"))
+		})
+
+		It("Accepts direct-template path when template host_type references a valid HostType", func() {
+			createHostType("ht-direct-valid")
+			createTemplateWithHostType("tmpl-direct-valid", "ht-direct-valid")
+
+			response, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						Template:     privatev1.BareMetalInstanceTemplateReference_builder{Id: "tmpl-direct-valid"}.Build(),
+						SshPublicKey: new(testSSHPublicKey),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetObject().GetId()).ToNot(BeEmpty())
+		})
+
+		It("Rejects direct-template path when template host_type references a non-existent HostType", func() {
+			createTemplateWithHostType("tmpl-direct-missing", "missing-host-type")
+
+			_, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						Template:     privatev1.BareMetalInstanceTemplateReference_builder{Id: "tmpl-direct-missing"}.Build(),
+						SshPublicKey: new(testSSHPublicKey),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+			Expect(status.Message()).To(ContainSubstring("missing-host-type"))
+			Expect(status.Message()).To(ContainSubstring("not found"))
+		})
+
+		It("Accepts create when template has no host_type", func() {
+			createTemplateWithoutHostType("tmpl-no-ht")
+			catID := createCatalogItemForTemplate("tmpl-no-ht")
+
+			response, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catID}.Build(),
+						SshPublicKey: new(testSSHPublicKey),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetObject().GetId()).ToNot(BeEmpty())
+		})
+
+		It("Rejects catalog-item path with non-existent HostType even when instance_type is set", func() {
+			createTemplateWithHostType("tmpl-ht-with-it", "nonexistent-host-type-with-it")
+			catID := createCatalogItemForTemplate("tmpl-ht-with-it")
+
+			_, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catID}.Build(),
+						InstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Id: "some-instance-type"}.Build(),
+						SshPublicKey: new(testSSHPublicKey),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+			Expect(status.Message()).To(ContainSubstring("nonexistent-host-type-with-it"))
+			Expect(status.Message()).To(ContainSubstring("not found"))
+		})
+
+		It("Accepts direct-template path when template has no host_type", func() {
+			createTemplateWithoutHostType("tmpl-direct-no-ht")
+
+			response, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						Template:     privatev1.BareMetalInstanceTemplateReference_builder{Id: "tmpl-direct-no-ht"}.Build(),
+						SshPublicKey: new(testSSHPublicKey),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetObject().GetId()).ToNot(BeEmpty())
+		})
+
+		It("Returns Internal when HostType lookup fails with a non-NotFound error", func() {
+			// Create a template with a host_type so the code path reaches
+			// the hostTypesDao.Get() call inside resolveAndValidateHostType.
+			createTemplateWithHostType("tmpl-ht-unreadable", "ht-unreadable-target")
+
+			// Build a HostType DAO whose tenancy logic always returns an error,
+			// simulating a database-level failure that is not a NotFound error.
+			brokenTenancy := auth.NewMockTenancyLogic(ctrl)
+			brokenTenancy.EXPECT().DetermineVisibility(gomock.Any()).
+				Return((*auth.Visibility)(nil), fmt.Errorf("simulated database read error")).
+				AnyTimes()
+			brokenDao, err := dao.NewGenericDAO[*privatev1.HostType]().
+				SetLogger(logger).
+				SetTenancyLogic(brokenTenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			// Swap the server's hostTypesDao with the broken one so that only
+			// the HostType lookup fails; other DAOs remain functional.
+			original := server.hostTypesDao
+			server.hostTypesDao = brokenDao
+			defer func() { server.hostTypesDao = original }()
+
+			_, err = server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						Template:     privatev1.BareMetalInstanceTemplateReference_builder{Id: "tmpl-ht-unreadable"}.Build(),
+						SshPublicKey: new(testSSHPublicKey),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.Internal))
+			Expect(status.Message()).To(ContainSubstring("failed to read host type"))
+			Expect(status.Message()).To(ContainSubstring("ht-unreadable-target"))
 		})
 	})
 

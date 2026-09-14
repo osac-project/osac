@@ -44,7 +44,7 @@ pure:
   enabled: false
   image:
     repository: docker.io/portworx/px-pure-csi-driver
-    tag: "26.2.1"
+    tag: "26.2.2"
   service:
     port: 50051
   config:

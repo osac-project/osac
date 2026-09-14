@@ -358,27 +358,29 @@ var _ = Describe("parseVendorControllers", func() {
 })
 
 var _ = Describe("newVendorProvisionerRegistry", func() {
-	It("registers VAST only for the vast provider", func() {
+	It("registers VAST and marks unsupported providers as unimplemented", func() {
 		registry, err := newVendorProvisionerRegistry(
 			fake.NewClientBuilder().Build(),
 			"osac-system",
 			map[string]string{"vast": "vast.svc:50051", "netapp": "netapp.svc:50052"},
 		)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(registry).To(HaveLen(1))
+		Expect(registry).To(HaveLen(2))
 		Expect(registry["vast"]).To(BeAssignableToTypeOf(&controller.VastVendorProvisioner{}))
 		_, registered := registry["netapp"]
-		Expect(registered).To(BeFalse())
+		Expect(registered).To(BeTrue())
+		Expect(registry["netapp"]).To(BeNil())
 	})
 
-	It("leaves future provider keys unregistered", func() {
+	It("marks future provider keys as unimplemented", func() {
 		registry, err := newVendorProvisionerRegistry(
 			fake.NewClientBuilder().Build(),
 			"osac-system",
 			map[string]string{"netapp": "netapp.svc:50052"},
 		)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(registry).To(BeEmpty())
+		Expect(registry).To(HaveLen(1))
+		Expect(registry["netapp"]).To(BeNil())
 	})
 })
 

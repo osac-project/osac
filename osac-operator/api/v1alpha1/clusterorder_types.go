@@ -170,6 +170,42 @@ type ClusterOrderClusterReferenceType struct {
 	RoleBindingName    string `json:"roleBindingName"`
 }
 
+// WorkerStatus tracks the provisioning state of a single bare-metal worker
+// within a ClusterOrder, enabling failure handling and retry logic.
+type WorkerStatus struct {
+	// BMIName is the name of the BareMetalInstance CR for this worker.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	BMIName string `json:"bmiName"`
+
+	// BMINamespace is the namespace of the BareMetalInstance CR.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	BMINamespace string `json:"bmiNamespace"`
+
+	// AttemptCount tracks how many provisioning attempts have been made
+	// for this worker slot. Transient gRPC errors do not increment this counter.
+	// +kubebuilder:validation:Optional
+	AttemptCount int `json:"attemptCount,omitempty"`
+
+	// NextRetryTime is the earliest time at which the next retry may be attempted,
+	// computed from the escalating backoff schedule.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:Format=date-time
+	NextRetryTime *metav1.Time `json:"nextRetryTime,omitempty"`
+
+	// LastFailureReason is a machine-readable reason for the most recent failure.
+	// +kubebuilder:validation:Optional
+	LastFailureReason string `json:"lastFailureReason,omitempty"`
+
+	// LastFailureTime is the timestamp of the most recent failure.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:Format=date-time
+	LastFailureTime *metav1.Time `json:"lastFailureTime,omitempty"`
+}
+
 // ClusterOrderStatus defines the observed state of ClusterOrder
 type ClusterOrderStatus struct {
 	// Phase provides a single-value overview of the state of the ClusterOrder
@@ -220,6 +256,13 @@ type ClusterOrderStatus struct {
 	// +listType=map
 	// +listMapKey=name
 	NodeSets []NodeSetStatus `json:"nodeSets,omitempty"`
+
+	// Workers tracks per-worker provisioning state for failure handling and retry.
+	// Each entry corresponds to a bare-metal worker slot in the cluster.
+	// +kubebuilder:validation:Optional
+	// +listType=map
+	// +listMapKey=bmiName
+	Workers []WorkerStatus `json:"workers,omitempty"`
 }
 
 // NodeSetStatus holds networking status for a single node set.

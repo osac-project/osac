@@ -318,6 +318,7 @@ func (r *ClusterOrderReconciler) patchStatusWithRetry(ctx context.Context, key c
 		latest.Status.DesiredConfigVersion = computed.DesiredConfigVersion
 		latest.Status.ApiEndpoint = computed.ApiEndpoint
 		latest.Status.IngressEndpoint = computed.IngressEndpoint
+		latest.Status.Workers = computed.Workers
 		for _, c := range computed.Conditions {
 			apimeta.SetStatusCondition(&latest.Status.Conditions, c)
 		}

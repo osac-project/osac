@@ -162,12 +162,19 @@ func buildBMaaSHeartbeatEvents(state *projection.ResourceState, baseID string, n
 	}
 
 	intervals := events.BMaaSMeterIntervals{AllocationSince: state.BillableSince}
+	allocationType := ""
+	if state.BillableSince != nil {
+		allocationType = events.EventHeartbeat
+	}
 	consumptionType := ""
 	if events.IsConsumptionBillableState(state.CurrentState) {
 		if since, ok := state.ComponentBillableSince[events.BMaaSMeterConsumption]; ok {
 			intervals.ConsumptionSince = &since
+			consumptionType = events.EventHeartbeat
 		}
-		consumptionType = events.EventHeartbeat
+	}
+	if allocationType == "" && consumptionType == "" {
+		return nil, nil
 	}
 
 	return events.DecomposeBMIEvents(
@@ -178,7 +185,7 @@ func buildBMaaSHeartbeatEvents(state *projection.ResourceState, baseID string, n
 		func(request events.BMaaSEventBuildRequest) (cloudevents.Event, error) {
 			return buildHeartbeatEvent(state, request.EventID, request.BillingDims, now, source, request.DurationSeconds)
 		},
-		events.EventHeartbeat,
+		allocationType,
 		consumptionType,
 	)
 }

@@ -67,7 +67,7 @@ func (m *bareMetalInstanceMapper) CurrentState() string {
 }
 
 func (m *bareMetalInstanceMapper) IsBillable() bool {
-	return m.CurrentState() == BareMetalInstanceStateRunning
+	return IsAllocationBillableState(m.CurrentState())
 }
 
 func (m *bareMetalInstanceMapper) BillingDimensionsMap() (map[string]any, error) {

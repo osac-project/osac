@@ -291,6 +291,7 @@ func (r *Reconciler) reconcileMissedDeletions(ctx context.Context, fulfillmentSt
 	corrections := 0
 	computeSkipLogged := false
 	clusterSkipLogged := false
+	bmaasSkipLogged := false
 
 	for id, ps := range projMap {
 		if _, exists := fulfillmentState[id]; !exists {
@@ -305,6 +306,13 @@ func (r *Reconciler) reconcileMissedDeletions(ctx context.Context, fulfillmentSt
 				if !clusterSkipLogged {
 					r.logger.Info("skipping cluster_order missed deletion checks, no cluster client configured")
 					clusterSkipLogged = true
+				}
+				continue
+			}
+			if ps.ResourceType == events.ResourceTypeBareMetalInstance {
+				if !bmaasSkipLogged {
+					r.logger.Info("skipping bare_metal_instance missed deletion checks, no BMI client configured")
+					bmaasSkipLogged = true
 				}
 				continue
 			}

@@ -155,6 +155,12 @@ func (c *Consumer) handleEvent(ctx context.Context, event *privatev1.Event) erro
 	version := mapper.FulfillmentVersion()
 	dims, err := mapper.BillingDimensionsMap()
 	if err != nil {
+		if errors.Is(err, events.ErrDataQuality) {
+			eventsSkipped.WithLabelValues("data_quality").Inc()
+			c.logger.Info("skipping event with invalid billing dimensions",
+				"event_id", event.GetId(), "resource_id", resourceID, "error", err)
+			return nil
+		}
 		return fmt.Errorf("extracting billing dimensions for %s: %w", resourceID, err)
 	}
 
@@ -171,9 +177,15 @@ func (c *Consumer) handleEvent(ctx context.Context, event *privatev1.Event) erro
 				"event_id", event.GetId(), "resource_id", resourceID)
 			return nil
 		}
-		if errors.Is(err, events.ErrDataQuality) && existing != nil && existing.CurrentState == currentState {
+		if errors.Is(err, events.ErrDataQuality) && event.GetType() == privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED && existing != nil && existing.CurrentState == currentState {
 			c.logger.V(1).Info("skipping metadata-only update with no state change",
 				"event_id", event.GetId(), "resource_id", resourceID, "state", currentState)
+			return nil
+		}
+		if errors.Is(err, events.ErrDataQuality) && event.GetType() == privatev1.EventType_EVENT_TYPE_OBJECT_DELETED {
+			eventsSkipped.WithLabelValues("missing_event_timestamp").Inc()
+			c.logger.Info("skipping deleted event with missing timestamp",
+				"event_id", event.GetId(), "resource_id", resourceID)
 			return nil
 		}
 		return err
@@ -381,10 +393,24 @@ func (c *Consumer) handleBareMetalEvent(
 
 	allocationEffect, err := events.ResolveAllocationTransition(previousState, mapper.CurrentState())
 	if err != nil {
+		if errors.Is(err, events.ErrInvalidBMaaSTransition) {
+			eventsSkipped.WithLabelValues("invalid_bmaas_transition").Inc()
+			c.logger.Info("skipping invalid BMaaS state transition",
+				"event_id", event.GetId(), "resource_id", resourceID,
+				"previous_state", previousState, "current_state", mapper.CurrentState())
+			return nil
+		}
 		return err
 	}
 	consumptionEffect, err := events.ResolveConsumptionTransition(previousState, mapper.CurrentState())
 	if err != nil {
+		if errors.Is(err, events.ErrInvalidBMaaSTransition) {
+			eventsSkipped.WithLabelValues("invalid_bmaas_transition").Inc()
+			c.logger.Info("skipping invalid BMaaS state transition",
+				"event_id", event.GetId(), "resource_id", resourceID,
+				"previous_state", previousState, "current_state", mapper.CurrentState())
+			return nil
+		}
 		return err
 	}
 
@@ -539,7 +565,7 @@ func mapBMaaSEffectToEvent(effect string, everStarted bool) string {
 	case events.BMaaSEffectStart:
 		return events.ResolveLifecycleStartEvent(everStarted)
 	case events.BMaaSEffectResume:
-		return events.EventResumed
+		return events.ResolveLifecycleStartEvent(everStarted)
 	case events.BMaaSEffectSuspend:
 		return events.EventSuspended
 	default:

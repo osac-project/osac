@@ -187,15 +187,14 @@ var _ = Describe("BuildResourceEvents", func() {
 		Expect(result[0].ID()).To(Equal("evt-ci-1"))
 	})
 
-	It("returns a single event for bare_metal_instance", func() {
-		result, err := events.BuildResourceEvents(
+	It("rejects generic decomposition for bare_metal_instance", func() {
+		_, err := events.BuildResourceEvents(
 			events.ResourceTypeBareMetalInstance,
 			map[string]any{"bm_instance_type": "bm-large"},
 			"evt-bmi-1", simpleBuildFn,
 		)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(result).To(HaveLen(1))
-		Expect(result[0].ID()).To(Equal("evt-bmi-1"))
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("unsupported resource type for generic event decomposition"))
 	})
 
 	It("decomposes cluster_order into per-component events", func() {

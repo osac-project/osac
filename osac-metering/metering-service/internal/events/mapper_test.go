@@ -1050,6 +1050,28 @@ var _ = Describe("BMaaS mapping", func() {
 		Expect(err).NotTo(HaveOccurred())
 	})
 
+	DescribeTable("uses allocation billability for BMaaS states",
+		func(state privatev1.BareMetalInstanceState, billable bool) {
+			bmi := makeBareMetalInstance()
+			bmi.Status.State = state
+			mapper, err := events.MapperForEvent(&privatev1.Event{
+				Id:      "evt-bmi-billability",
+				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+				Payload: &privatev1.Event_BareMetalInstance{BareMetalInstance: bmi},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mapper.IsBillable()).To(Equal(billable))
+		},
+		Entry("RUNNING", privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING, true),
+		Entry("STOPPED", privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_STOPPED, true),
+		Entry("STARTING", privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_STARTING, true),
+		Entry("STOPPING", privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_STOPPING, true),
+		Entry("DELETING", privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_DELETING, true),
+		Entry("PROVISIONING", privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_PROVISIONING, false),
+		Entry("FAILED", privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_FAILED, false),
+		Entry("UNSPECIFIED", privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_UNSPECIFIED, false),
+	)
+
 	It("returns zero values for an instance with optional fields absent", func() {
 		mapper, err := events.MapperForEvent(&privatev1.Event{
 			Id:      "evt-bmi-empty",

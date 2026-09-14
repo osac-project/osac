@@ -1039,9 +1039,14 @@ var _ = Describe("BMaaS mapping", func() {
 		_, err = mapper.CloudEventType(privatev1.EventType(9999), "")
 		Expect(errors.Is(err, events.ErrUnsupportedEvent)).To(BeTrue())
 
-		_, err = mapper.TransitionTime(privatev1.EventType_EVENT_TYPE_OBJECT_DELETED)
+		_, err = mapper.TransitionTime(&privatev1.Event{
+			Type:      privatev1.EventType_EVENT_TYPE_OBJECT_DELETED,
+			Timestamp: timestamppb.Now(),
+		})
 		Expect(err).NotTo(HaveOccurred())
-		_, err = mapper.TransitionTime(privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED)
+		_, err = mapper.TransitionTime(&privatev1.Event{
+			Type: privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+		})
 		Expect(err).NotTo(HaveOccurred())
 	})
 

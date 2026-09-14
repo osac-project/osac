@@ -846,7 +846,7 @@
                   "properties": {
                     "NETWORK_CLASS": {
                       "type": "string",
-                      "description": "AAP cluster-fulfillment network backend derived by the global.networking facade or set directly for advanced configuration.",
+                      "description": "AAP cluster-fulfillment network backend derived by the global.networking facade or set directly for advanced configuration. ESI (esi) and NICo (nico.steps) are retained temporarily for expert-override backward compatibility.",
                       "enum": [
                         "",
                         "netris",

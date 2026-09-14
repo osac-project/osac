@@ -30,6 +30,22 @@ const (
 	ConditionReady                 = "Ready"
 )
 
+// Worker failure condition constants
+const (
+	// ConditionWorkerProvisioningFailed indicates that provisioning of one or more
+	// bare-metal workers has failed and a replacement attempt is in progress.
+	ConditionWorkerProvisioningFailed = "WorkerProvisioningFailed"
+
+	// ConditionWorkersFailed indicates that worker provisioning has exhausted all
+	// retry attempts and the cluster cannot reach a healthy worker state.
+	ConditionWorkersFailed = "WorkersFailed"
+
+	// ConditionFulfillmentServiceUnavailable indicates that a transient gRPC error
+	// prevented communication with the fulfillment service. These errors do not
+	// count toward the maximum retry budget.
+	ConditionFulfillmentServiceUnavailable = "FulfillmentServiceUnavailable"
+)
+
 // Common reason constants
 const (
 	ReasonInitialized      = "Initialized"
@@ -54,4 +70,21 @@ const (
 	ReasonWorkersJoining          = "WorkersJoining"
 	ReasonStageUnknown            = "StageUnknown"
 	ReasonStalled                 = "Stalled"
+)
+
+// Worker failure reason constants
+const (
+	// ReasonAgentRegistrationTimeout indicates that the agent failed to register
+	// within the allowed timeout window (default 30 minutes).
+	ReasonAgentRegistrationTimeout = "AgentRegistrationTimeout"
+
+	// ReasonMaxRetriesExhausted indicates that all retry attempts have been used.
+	ReasonMaxRetriesExhausted = "MaxRetriesExhausted"
+
+	// ReasonBMIReplacementTriggered indicates that a replacement BMI has been created
+	// after a worker provisioning failure.
+	ReasonBMIReplacementTriggered = "BMIReplacementTriggered"
+
+	// ReasonGRPCUnavailable indicates a transient gRPC service error.
+	ReasonGRPCUnavailable = "GRPCUnavailable"
 )

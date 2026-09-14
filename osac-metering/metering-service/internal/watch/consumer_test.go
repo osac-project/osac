@@ -182,6 +182,29 @@ func makeComputeInstance(id, tenant string) *privatev1.ComputeInstance {
 	}
 }
 
+func makeBareMetalInstance(id, tenant string) *privatev1.BareMetalInstance {
+	return &privatev1.BareMetalInstance{
+		Id: id,
+		Metadata: &privatev1.Metadata{
+			Tenant:            tenant,
+			Project:           "project-alpha",
+			Version:           1,
+			CreationTimestamp: timestamppb.Now(),
+		},
+		Spec: &privatev1.BareMetalInstanceSpec{
+			CatalogItem: &privatev1.BareMetalInstanceCatalogItemReference{Name: "catalog-item-1"},
+			InstanceType: &privatev1.BareMetalInstanceTypeLocalReference{
+				Id:   "bmi-type-gpu-large",
+				Name: "GPU large",
+			},
+		},
+		Status: &privatev1.BareMetalInstanceStatus{
+			State:               privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING,
+			StateTransitionTime: timestamppb.Now(),
+		},
+	}
+}
+
 func makeEvent(id string, eventType privatev1.EventType) *privatev1.Event {
 	return &privatev1.Event{
 		Id:      id,
@@ -1859,6 +1882,69 @@ var _ = Describe("Consumer", func() {
 			store.mu.Lock()
 			defer store.mu.Unlock()
 			Expect(store.states).ToNot(HaveKey("cl-del"))
+		})
+
+		It("maps a BareMetalInstance Watch payload into the standard CloudEvent", func() {
+			bmi := makeBareMetalInstance("bmi-1", "tenant-1")
+			event := &privatev1.Event{
+				Id:      "evt-bmi-created",
+				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+				Payload: &privatev1.Event_BareMetalInstance{BareMetalInstance: bmi},
+			}
+			client.results = []mockStreamResult{{stream: &mockWatchStream{
+				responses: []*privatev1.EventsWatchResponse{makeResponse(event)},
+			}}}
+
+			pub := &mockPublisher{published: make([]cloudevents.Event, 0, 1), cancelFunc: cancel}
+			consumer := newConsumer(pub)
+
+			Expect(consumer.Run(ctx)).To(Succeed())
+
+			pub.mu.Lock()
+			defer pub.mu.Unlock()
+			Expect(pub.published).To(HaveLen(1))
+			Expect(pub.published[0].Extensions()["osacresourcetype"]).To(Equal(events.ResourceTypeBareMetalInstance))
+
+			var data map[string]any
+			Expect(json.Unmarshal(pub.published[0].Data(), &data)).To(Succeed())
+			Expect(data["resource_id"]).To(Equal("bmi-1"))
+			Expect(data["tenant_id"]).To(Equal("tenant-1"))
+			Expect(data["project_id"]).To(Equal("project-alpha"))
+			Expect(data["current_state"]).To(Equal("RUNNING"))
+			Expect(data["billing_dimensions"]).To(Equal(map[string]any{
+				"bm_instance_type": "bmi-type-gpu-large",
+				"catalog_item":     "catalog-item-1",
+			}))
+		})
+
+		It("does not publish or advance projection when BMaaS dimensions are missing", func() {
+			bmi := makeBareMetalInstance("bmi-invalid", "tenant-1")
+			bmi.Spec.InstanceType.Id = ""
+			event := &privatev1.Event{
+				Id:      "evt-bmi-invalid",
+				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+				Payload: &privatev1.Event_BareMetalInstance{BareMetalInstance: bmi},
+			}
+			client.results = []mockStreamResult{{stream: &mockWatchStream{
+				ctx:       ctx,
+				responses: []*privatev1.EventsWatchResponse{makeResponse(event)},
+			}}}
+			store := newMockStore()
+			pub := &mockPublisher{}
+			consumer := newConsumerWithStore(pub, store)
+
+			done := make(chan error, 1)
+			go func() { done <- consumer.Run(ctx) }()
+			time.Sleep(50 * time.Millisecond)
+			cancel()
+			Eventually(done, time.Second).Should(Receive(BeNil()))
+
+			pub.mu.Lock()
+			Expect(pub.published).To(BeEmpty())
+			pub.mu.Unlock()
+			store.mu.Lock()
+			Expect(store.states).To(BeEmpty())
+			store.mu.Unlock()
 		})
 	})
 })

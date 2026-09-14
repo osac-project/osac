@@ -140,8 +140,8 @@ func (m *computeInstanceMapper) IsBillable() bool {
 	return false
 }
 
-func (m *computeInstanceMapper) BillingDimensionsMap() map[string]any {
-	return ComputeInstanceBillingDimensions(m.ci)
+func (m *computeInstanceMapper) BillingDimensionsMap() (map[string]any, error) {
+	return ComputeInstanceBillingDimensions(m.ci), nil
 }
 
 func ComputeInstanceBillingDimensions(ci *privatev1.ComputeInstance) map[string]any {

@@ -150,7 +150,10 @@ func (c *Consumer) handleEvent(ctx context.Context, event *privatev1.Event) erro
 	currentState := mapper.CurrentState()
 	isBillable := mapper.IsBillable()
 	version := mapper.FulfillmentVersion()
-	dims := mapper.BillingDimensionsMap()
+	dims, err := mapper.BillingDimensionsMap()
+	if err != nil {
+		return fmt.Errorf("extracting billing dimensions for %s: %w", resourceID, err)
+	}
 
 	existing, err := c.store.Get(ctx, resourceID)
 	if err != nil {
@@ -332,7 +335,11 @@ func (c *Consumer) publishLifecycleEvents(ctx context.Context, baseCE *cloudeven
 		return c.publishWithRetry(ctx, baseCE)
 	}
 
-	decomposed, err := events.BuildResourceEvents(mapper.ResourceType(), mapper.BillingDimensionsMap(), eventID, func(dims map[string]any, compEventID string) (cloudevents.Event, error) {
+	dims, err := mapper.BillingDimensionsMap()
+	if err != nil {
+		return err
+	}
+	decomposed, err := events.BuildResourceEvents(mapper.ResourceType(), dims, eventID, func(dims map[string]any, compEventID string) (cloudevents.Event, error) {
 		return c.buildComponentEvent(baseCE, compEventID, dims)
 	})
 	if err != nil {

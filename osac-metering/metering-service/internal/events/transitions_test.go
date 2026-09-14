@@ -187,6 +187,17 @@ var _ = Describe("BuildResourceEvents", func() {
 		Expect(result[0].ID()).To(Equal("evt-ci-1"))
 	})
 
+	It("returns a single event for bare_metal_instance", func() {
+		result, err := events.BuildResourceEvents(
+			events.ResourceTypeBareMetalInstance,
+			map[string]any{"bm_instance_type": "bm-large"},
+			"evt-bmi-1", simpleBuildFn,
+		)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(HaveLen(1))
+		Expect(result[0].ID()).To(Equal("evt-bmi-1"))
+	})
+
 	It("decomposes cluster_order into per-component events", func() {
 		dims := map[string]any{
 			"cluster_template": "ocp-ci-small",

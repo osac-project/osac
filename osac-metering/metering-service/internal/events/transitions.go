@@ -52,8 +52,9 @@ const eventBillableStart = "internal.billable-boundary-crossed"
 // Resource type constants — re-exported from the shared schema module for
 // convenience within this package.
 const (
-	ResourceTypeComputeInstance = schema.ResourceTypeComputeInstance
-	ResourceTypeClusterOrder    = schema.ResourceTypeClusterOrder
+	ResourceTypeComputeInstance   = schema.ResourceTypeComputeInstance
+	ResourceTypeClusterOrder      = schema.ResourceTypeClusterOrder
+	ResourceTypeBareMetalInstance = schema.ResourceTypeBareMetalInstance
 )
 
 // StateEmpty is the empty previous state for initial transitions.
@@ -150,8 +151,9 @@ func singleEvent(dims map[string]any, baseID string, buildFn EventBuilder) ([]cl
 }
 
 var resourceDecomposers = map[string]EventDecomposer{
-	ResourceTypeComputeInstance: singleEvent,
-	ResourceTypeClusterOrder:    DecomposeClusterEvents,
+	ResourceTypeComputeInstance:   singleEvent,
+	ResourceTypeClusterOrder:      DecomposeClusterEvents,
+	ResourceTypeBareMetalInstance: singleEvent,
 }
 
 // BuildResourceEvents dispatches event building to the correct decomposer

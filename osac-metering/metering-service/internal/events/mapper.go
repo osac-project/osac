@@ -25,7 +25,7 @@ type ResourceMapper interface {
 	CurrentState() string
 	FulfillmentVersion() int32
 	IsBillable() bool
-	BillingDimensionsMap() map[string]any
+	BillingDimensionsMap() (map[string]any, error)
 	TransitionTime(event *privatev1.Event) (time.Time, error)
 	CloudEventType(eventType privatev1.EventType, previousState string) (string, error)
 }
@@ -113,6 +113,9 @@ func mapperForEvent(event *privatev1.Event) (ResourceMapper, error) {
 	}
 	if cl := event.GetCluster(); cl != nil {
 		return &clusterMapper{cl: cl}, nil
+	}
+	if bmi := event.GetBareMetalInstance(); bmi != nil {
+		return &bareMetalInstanceMapper{instance: bmi}, nil
 	}
 	return nil, fmt.Errorf("unsupported event payload type for event %s", event.GetId())
 }

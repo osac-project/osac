@@ -21,7 +21,8 @@ hosted_cluster_base_domain: "{{ lookup('env', 'HOSTED_CLUSTER_BASE_DOMAIN', defa
 hosted_cluster_controller_availability_policy: "{{ lookup('env', 'HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY', default='HighlyAvailable') }}"
 hosted_cluster_infrastructure_availability_policy: "{{ lookup('env', 'HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY', default='HighlyAvailable') }}"
 
-# Network class to use (netris/esi)
+# Network class to use (netris, agentless_net, or esi). NICo is selected with
+# NETWORK_STEPS_COLLECTION=nico.steps.
 network_class: "{{ lookup('env', 'NETWORK_CLASS', default='esi') }}"
 
 # Ansible collection that provides the network-class-specific steps

@@ -14,8 +14,9 @@ data:
   HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: "HighlyAvailable"
 
   # -- Network class --
-  # Which network backend to use (netris / esi). Templates like
-  # ocp_hosted_netris override this automatically.
+  # Which network class to use (netris / esi). NICo is selected with
+  # NETWORK_STEPS_COLLECTION=nico.steps. Templates like ocp_hosted_netris
+  # override this automatically.
   NETWORK_CLASS: "esi"
   NETWORK_STEPS_COLLECTION: "osac.steps"
 

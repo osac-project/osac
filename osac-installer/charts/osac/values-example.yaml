@@ -430,11 +430,12 @@ clusterFulfillment:
   enabled: false
   config:
     # --- Network Backend ---
-    # AAP cluster-fulfillment network backend (netris, agentless_net).
+    # AAP cluster-fulfillment network backend (netris, agentless_net, or the
+    # legacy direct-AAP backend esi). NICo is selected with nico.steps below.
     # Distinct from operator.networkManagers fabric/k8s manager names.
     NETWORK_CLASS: ""
     # Ansible collection providing network-backend-specific steps
-    # (netris.steps, ci.steps, agentless_net.steps).
+    # (netris.steps, ci.steps, agentless_net.steps, osac.steps, nico.steps).
     NETWORK_STEPS_COLLECTION: ""
 
     # --- DNS Backend ---

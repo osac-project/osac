@@ -65,88 +65,11 @@
         "networking": {
           "$ref": "#/$defs/globalNetworking"
         },
-        "fabricManager": {
-          "$ref": "#/$defs/globalFabricManager"
-        },
-        "k8sManager": {
-          "$ref": "#/$defs/globalK8sManager"
-        },
         "expertOverrides": {
           "$ref": "#/$defs/globalExpertOverrides"
         }
       },
-      "allOf": [
-        {
-          "if": {
-            "properties": {
-              "fabricManager": {
-                "properties": {
-                  "netris": {
-                    "properties": {
-                      "enabled": {
-                        "const": true
-                      }
-                    },
-                    "required": [
-                      "enabled"
-                    ]
-                  }
-                }
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "k8sManager": {
-                "properties": {
-                  "agentlessNet": {
-                    "properties": {
-                      "enabled": {
-                        "const": false
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "k8sManager": {
-                "properties": {
-                  "agentlessNet": {
-                    "properties": {
-                      "enabled": {
-                        "const": true
-                      }
-                    },
-                    "required": [
-                      "enabled"
-                    ]
-                  }
-                }
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "fabricManager": {
-                "properties": {
-                  "netris": {
-                    "properties": {
-                      "enabled": {
-                        "const": false
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      ]
+      "additionalProperties": false
     },
     "cliImage": {
       "type": "string",
@@ -918,21 +841,24 @@
                   "properties": {
                     "NETWORK_CLASS": {
                       "type": "string",
-                      "description": "AAP cluster-fulfillment network backend (playbook selector: netris, agentless_net). Distinct from operator.networkManagers fabric/k8s manager names (netris, cudn_net, k8s_only).",
+                      "description": "AAP cluster-fulfillment network backend. The new global.networking facade derives netris or agentless_net; esi remains available for legacy direct AAP configuration. NICo is selected with NETWORK_STEPS_COLLECTION=nico.steps.",
                       "enum": [
                         "",
+                        "esi",
                         "netris",
                         "agentless_net"
                       ]
                     },
                     "NETWORK_STEPS_COLLECTION": {
                       "type": "string",
-                      "description": "Ansible collection providing network-backend-specific steps (netris.steps, ci.steps, agentless_net.steps)",
+                      "description": "Ansible collection providing network-backend-specific steps. Legacy direct AAP configuration may use osac.steps or nico.steps.",
                       "enum": [
                         "",
+                        "osac.steps",
                         "netris.steps",
                         "ci.steps",
-                        "agentless_net.steps"
+                        "agentless_net.steps",
+                        "nico.steps"
                       ]
                     },
                     "DNS_CLASS": {
@@ -2170,31 +2096,6 @@
         }
       ]
     },
-    "globalFabricManager": {
-      "type": "object",
-      "description": "Fabric manager facade — enables operator ConfigMaps, AAP env vars, and default NetworkClass for each fabric backend",
-      "properties": {
-        "netris": {
-          "$ref": "#/$defs/netrisFabricManager"
-        }
-      }
-    },
-    "globalK8sManager": {
-      "type": "object",
-      "description": "K8s manager facade for agentless_net backend profile",
-      "properties": {
-        "agentlessNet": {
-          "type": "object",
-          "properties": {
-            "enabled": {
-              "type": "boolean",
-              "description": "Enable agentless_net AAP backend and k8s_only manager / NetworkClass profile",
-              "default": false
-            }
-          }
-        }
-      }
-    },
     "globalExpertOverrides": {
       "type": "object",
       "description": "When true, the corresponding low-level values block is authoritative and the facade does not auto-fill that surface",
@@ -2212,111 +2113,6 @@
           "default": false
         }
       }
-    },
-    "netrisFabricManager": {
-      "type": "object",
-      "description": "Netris fabric — credentials, controller URL, and tenant metadata",
-      "properties": {
-        "enabled": {
-          "type": "boolean",
-          "description": "Enable Netris across operator managers, AAP env vars, and NetworkClass",
-          "default": false
-        },
-        "controllerUrl": {
-          "type": "string",
-          "description": "Netris controller API URL (HTTPS only)",
-          "pattern": "^$|^https://[^/\\s:]+(:[0-9]+)?(/[^\\s]*)?$"
-        },
-        "credentials": {
-          "type": "object",
-          "properties": {
-            "username": {
-              "type": "string",
-              "description": "Netris API username"
-            },
-            "password": {
-              "type": "string",
-              "description": "Netris API password (rendered to both AAP instance group secrets)"
-            }
-          }
-        },
-        "siteId": {
-          "type": "string",
-          "description": "Netris site ID"
-        },
-        "tenantId": {
-          "type": "string",
-          "description": "Netris tenant ID"
-        },
-        "tenantName": {
-          "type": "string",
-          "description": "Netris tenant name"
-        },
-        "mgmtVpcId": {
-          "type": "string",
-          "description": "Netris management VPC ID"
-        },
-        "mgmtVpcName": {
-          "type": "string",
-          "description": "Netris management VPC name"
-        },
-        "resourceClassMap": {
-          "type": "string",
-          "description": "JSON map of resource classes to Netris server cluster templates"
-        }
-      },
-      "allOf": [
-        {
-          "if": {
-            "properties": {
-              "enabled": {
-                "const": true
-              }
-            },
-            "required": [
-              "enabled"
-            ]
-          },
-          "then": {
-            "required": [
-              "controllerUrl",
-              "credentials",
-              "siteId",
-              "tenantId",
-              "tenantName"
-            ],
-            "properties": {
-              "controllerUrl": {
-                "minLength": 1,
-                "pattern": "^https://[^/\\s:]+(:[0-9]+)?(/[^\\s]*)?$"
-              },
-              "credentials": {
-                "required": [
-                  "username",
-                  "password"
-                ],
-                "properties": {
-                  "username": {
-                    "minLength": 1
-                  },
-                  "password": {
-                    "minLength": 1
-                  }
-                }
-              },
-              "siteId": {
-                "minLength": 1
-              },
-              "tenantId": {
-                "minLength": 1
-              },
-              "tenantName": {
-                "minLength": 1
-              }
-            }
-          }
-        }
-      ]
     }
   },
   "required": [],

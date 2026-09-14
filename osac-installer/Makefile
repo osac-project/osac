@@ -328,7 +328,7 @@ helm-template: ## Dry-run render all templates
 	helm template osac $(OSAC_CHART)
 
 .PHONY: helm-validate
-helm-validate: helm-lint ## Validate all charts (lint + template)
+helm-validate: helm-lint helm-networking-test ## Validate all charts (lint + template)
 	@for d in values/*/; do \
 		infra="$${d}infra.yaml"; \
 		[ -f "$$infra" ] && echo "Validating $$infra..." && \
@@ -339,3 +339,7 @@ helm-validate: helm-lint ## Validate all charts (lint + template)
 	helm template osac-infra $(INFRA_CHART) --values values/dev/kind-infra.yaml
 	./scripts/validate-keycloak-credentials.sh
 	@echo "Validation passed."
+
+.PHONY: helm-networking-test
+helm-networking-test: helm-deps ## Test networking provider/overlay validation and derivation
+	./scripts/test-networking-values.sh

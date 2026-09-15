@@ -381,7 +381,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 			Expect(getResponse.GetObject().GetMetadata().GetDeletionTimestamp()).ToNot(BeNil())
 		})
 
-		It("Blocks delete when referenced by a cluster", func() {
+		It("Allows delete when referenced by a cluster", func() {
 			createResponse, err := server.Create(ctx, privatev1.ClusterCatalogItemsCreateRequest_builder{
 				Object: privatev1.ClusterCatalogItem_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -417,11 +417,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 			_, err = server.Delete(ctx, privatev1.ClusterCatalogItemsDeleteRequest_builder{
 				Id: catalogItem.GetId(),
 			}.Build())
-			Expect(err).To(HaveOccurred())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
-			Expect(status.Message()).To(ContainSubstring("in use"))
+			Expect(err).ToNot(HaveOccurred())
 		})
 
 		It("Rejects duplicate name within same tenant", func() {

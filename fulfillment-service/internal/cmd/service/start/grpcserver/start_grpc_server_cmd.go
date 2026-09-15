@@ -51,7 +51,6 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/network"
 	"github.com/osac-project/osac/fulfillment-service/internal/provisioners"
 	"github.com/osac-project/osac/fulfillment-service/internal/recovery"
-	"github.com/osac-project/osac/fulfillment-service/internal/references"
 	"github.com/osac-project/osac/fulfillment-service/internal/servers"
 	"github.com/osac-project/osac/fulfillment-service/internal/services"
 	shtdwn "github.com/osac-project/osac/fulfillment-service/internal/shutdown"
@@ -452,19 +451,9 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 
 	// Prepare the reference validation interceptor:
 	c.logger.InfoContext(ctx, "Creating reference validation interceptor")
-	referenceValidator, err := references.NewReferenceValidator().
-		SetLogger(c.logger).
-		SetMetricsRegisterer(metricsRegisterer).
-		Build()
+	referenceValidator, err := newReferenceValidator(c.logger, tenancyLogic, metricsRegisterer)
 	if err != nil {
-		return fmt.Errorf("failed to create reference validation interceptor: %w", err)
-	}
-
-	// Register reference lookup functions for all resource types:
-	c.logger.InfoContext(ctx, "Registering reference lookup functions")
-	err = registerReferenceLookups(referenceValidator, c.logger, tenancyLogic, metricsRegisterer)
-	if err != nil {
-		return fmt.Errorf("failed to register reference lookups: %w", err)
+		return err
 	}
 
 	// Prepare the transactions manager:
@@ -1025,3 +1014,26 @@ _NAMES_ - Comma-separated list of Kubernetes service account names that are allo
 administrator permissions. These are intended only for emergency situations, for example when the regular authentication
 mechanisms are not working. The service accounts are expected to be in the namespace where the service is deployed.
 `
+
+func catalogProvenanceUpdateMethods() []string {
+	return []string{
+		publicv1.ComputeInstances_Update_FullMethodName,
+		privatev1.ComputeInstances_Update_FullMethodName,
+	}
+}
+
+func catalogAuthoringMethods() []string {
+	return []string{
+		publicv1.ComputeInstanceCatalogItems_Create_FullMethodName,
+		privatev1.ComputeInstanceCatalogItems_Create_FullMethodName,
+		publicv1.ComputeInstanceCatalogItems_Update_FullMethodName,
+		privatev1.ComputeInstanceCatalogItems_Update_FullMethodName,
+	}
+}
+
+func catalogCreationSourceMethods() []string {
+	return []string{
+		publicv1.ComputeInstances_Create_FullMethodName,
+		privatev1.ComputeInstances_Create_FullMethodName,
+	}
+}

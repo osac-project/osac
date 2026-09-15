@@ -25,6 +25,7 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/maputil"
@@ -332,4 +333,46 @@ func isPathCovered(path string, allowedPaths map[string]bool) bool {
 		}
 	}
 	return false
+}
+
+// validateCatalogItemForCreation checks that a catalog item is published and not deleted.
+// Tenant visibility is enforced by the GenericDAO's tenancy logic at the query level.
+func validateCatalogItemForCreation(item catalogItem, ref string) error {
+	if item.GetMetadata().HasDeletionTimestamp() {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"catalog item '%s' has been deleted", ref)
+	}
+	if !item.GetPublished() {
+		return grpcstatus.Errorf(grpccodes.NotFound,
+			"catalog item '%s' is not published", ref)
+	}
+	return nil
+}
+
+// preserveCatalogItemProvenance validates an Update against stored provenance without reading the catalog.
+// ID-only input is accepted; supplied identity or scope must agree. The returned clone preserves
+// the original canonical reference even after catalog deletion. An explicit clear is rejected.
+func preserveCatalogItemProvenance[T interface {
+	fullResourceReference
+	proto.Message
+}](current, candidate T, mask *fieldmaskpb.FieldMask) (T, error) {
+	if proto.Equal(current, candidate) || (mask == nil && !candidate.ProtoReflect().IsValid()) {
+		return cloneMessage(current), nil
+	}
+	if !current.ProtoReflect().IsValid() || !candidate.ProtoReflect().IsValid() ||
+		candidate.GetId() != current.GetId() ||
+		(candidate.GetName() != "" && candidate.GetName() != current.GetName()) ||
+		(candidate.GetProject() != "" && candidate.GetProject() != current.GetProject()) ||
+		(candidate.GetShared() && !current.GetShared()) {
+		return candidate, grpcstatus.Errorf(grpccodes.InvalidArgument, "cannot change spec.catalog_item from '%s' to '%s': catalog item is immutable", refKey(current), refKey(candidate))
+	}
+	// A false shared flag has no protobuf presence; a mask targeting that flag makes it explicit.
+	for _, path := range mask.GetPaths() {
+		if (path == "spec.catalog_item.shared" && candidate.GetShared() != current.GetShared()) ||
+			(path == "spec.catalog_item.project" && candidate.GetProject() != current.GetProject()) ||
+			(path == "spec.catalog_item.name" && candidate.GetName() != current.GetName()) {
+			return candidate, grpcstatus.Errorf(grpccodes.InvalidArgument, "cannot change spec.catalog_item from '%s' to '%s': catalog item is immutable", refKey(current), refKey(candidate))
+		}
+	}
+	return cloneMessage(current), nil
 }

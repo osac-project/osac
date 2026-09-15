@@ -326,3 +326,19 @@ func registerReferenceLookups(
 
 	return nil
 }
+
+// newReferenceValidator builds the production interceptor with handler-owned paths excluded.
+// All remaining references retain their existing DAO lookups; callers provide tenancy and metrics dependencies.
+func newReferenceValidator(logger *slog.Logger, tenancy auth.TenancyLogic, registerer prometheus.Registerer) (*references.ReferenceValidator, error) {
+	validator, err := references.NewReferenceValidator().SetLogger(logger).SetMetricsRegisterer(registerer).
+		SetExcludedReferencePaths(catalogProvenanceUpdateMethods(), "object.spec.catalog_item").
+		SetExcludedReferencePaths(catalogAuthoringMethods(), "object.template", "object.fields").
+		SetExcludedReferencePaths(catalogCreationSourceMethods(), "object.spec.catalog_item", "object.spec.template").Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create reference validator: %w", err)
+	}
+	if err := registerReferenceLookups(validator, logger, tenancy, registerer); err != nil {
+		return nil, err
+	}
+	return validator, nil
+}

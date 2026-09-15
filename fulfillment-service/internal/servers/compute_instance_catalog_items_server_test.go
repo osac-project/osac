@@ -23,10 +23,12 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
 var _ = Describe("Compute instance catalog items server", func() {
@@ -72,6 +74,8 @@ var _ = Describe("Compute instance catalog items server", func() {
 				SetTenancyLogic(tenancy).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
+			Expect(seedComputeCatalogItemTemplate(ctx, testTenant, "", "my-ci-template-id")).To(Succeed())
+			Expect(seedComputeCatalogItemTemplate(ctx, auth.SharedTenant, "", "my-ci-shared-template-id")).To(Succeed())
 		})
 
 		It("Creates object", func() {
@@ -94,6 +98,89 @@ var _ = Describe("Compute instance catalog items server", func() {
 			Expect(object.GetTitle()).To(Equal("My CI catalog item"))
 			Expect(object.GetTemplate().GetId()).To(Equal("my-ci-template-id"))
 			Expect(object.GetPublished()).To(BeTrue())
+		})
+		It("Updates object through the public API", func() {
+			createResponse, err := server.Create(ctx, publicv1.ComputeInstanceCatalogItemsCreateRequest_builder{
+				Object: publicv1.ComputeInstanceCatalogItem_builder{
+					Metadata:  publicv1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.NewString()[:8])}.Build(),
+					Title:     "Original title",
+					Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+					Published: true,
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			updateResponse, err := server.Update(ctx, publicv1.ComputeInstanceCatalogItemsUpdateRequest_builder{
+				Object: publicv1.ComputeInstanceCatalogItem_builder{
+					Id:    createResponse.GetObject().GetId(),
+					Title: "Updated title",
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"title"}},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updateResponse.GetObject().GetTitle()).To(Equal("Updated title"))
+			Expect(updateResponse.GetObject().GetTemplate().GetId()).To(Equal("my-ci-template-id"))
+		})
+
+		It("does not persist an invalid public update", func() {
+			createResponse, err := server.Create(ctx, publicv1.ComputeInstanceCatalogItemsCreateRequest_builder{
+				Object: publicv1.ComputeInstanceCatalogItem_builder{
+					Metadata:  publicv1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.NewString()[:8])}.Build(),
+					Title:     "Original title",
+					Published: true,
+					Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = server.Update(ctx, publicv1.ComputeInstanceCatalogItemsUpdateRequest_builder{
+				Object: publicv1.ComputeInstanceCatalogItem_builder{
+					Id: createResponse.GetObject().GetId(),
+					Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
+						SshPublicKey: publicv1.StringFieldPolicy_builder{}.Build(),
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"fields"}},
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := status.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(codes.InvalidArgument))
+
+			getResponse, err := server.Get(ctx, publicv1.ComputeInstanceCatalogItemsGetRequest_builder{Id: createResponse.GetObject().GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(getResponse.GetObject().GetTitle()).To(Equal("Original title"))
+			Expect(getResponse.GetObject().GetFields()).To(BeNil())
+		})
+
+		It("rejects changing the template through the public API", func() {
+			createResponse, err := server.Create(ctx, publicv1.ComputeInstanceCatalogItemsCreateRequest_builder{
+				Object: publicv1.ComputeInstanceCatalogItem_builder{
+					Metadata:  publicv1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.NewString()[:8])}.Build(),
+					Title:     "Original title",
+					Published: true,
+					Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = server.Update(ctx, publicv1.ComputeInstanceCatalogItemsUpdateRequest_builder{
+				Object: publicv1.ComputeInstanceCatalogItem_builder{
+					Id: createResponse.GetObject().GetId(),
+					Template: publicv1.ComputeInstanceTemplateReference_builder{
+						Id:     "my-ci-shared-template-id",
+						Shared: true,
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := status.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(codes.InvalidArgument))
+
+			getResponse, err := server.Get(ctx, publicv1.ComputeInstanceCatalogItemsGetRequest_builder{Id: createResponse.GetObject().GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(getResponse.GetObject().GetTemplate().GetId()).To(Equal("my-ci-template-id"))
 		})
 
 		It("List objects", func() {
@@ -169,7 +256,7 @@ var _ = Describe("Compute instance catalog items server", func() {
 			}
 		})
 
-		It("List excludes unpublished objects", func() {
+		It("Lists drafts and published items with optional published filter", func() {
 			_, err := server.Create(ctx, publicv1.ComputeInstanceCatalogItemsCreateRequest_builder{
 				Object: publicv1.ComputeInstanceCatalogItem_builder{
 					Metadata: publicv1.Metadata_builder{
@@ -196,11 +283,14 @@ var _ = Describe("Compute instance catalog items server", func() {
 
 			response, err := server.List(ctx, publicv1.ComputeInstanceCatalogItemsListRequest_builder{}.Build())
 			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetItems()).To(HaveLen(2))
+			response, err = server.List(ctx, publicv1.ComputeInstanceCatalogItemsListRequest_builder{Filter: new("this.published")}.Build())
+			Expect(err).ToNot(HaveOccurred())
 			Expect(response.GetItems()).To(HaveLen(1))
-			Expect(response.GetItems()[0].GetTitle()).To(Equal("Published item"))
+			Expect(response.GetItems()[0].GetPublished()).To(BeTrue())
 		})
 
-		It("List with user filter excludes unpublished objects", func() {
+		It("Lists drafts and published items filtered by ID", func() {
 			publishedResponse, err := server.Create(ctx, publicv1.ComputeInstanceCatalogItemsCreateRequest_builder{
 				Object: publicv1.ComputeInstanceCatalogItem_builder{
 					Metadata: publicv1.Metadata_builder{
@@ -243,11 +333,10 @@ var _ = Describe("Compute instance catalog items server", func() {
 				Filter: new(fmt.Sprintf("this.id == %q || this.id == %q", targetID, unpublishedID)),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			Expect(response.GetItems()).To(HaveLen(1))
-			Expect(response.GetItems()[0].GetId()).To(Equal(targetID))
+			Expect(response.GetItems()).To(HaveLen(2))
 		})
 
-		It("Get returns unpublished item when caller has a referencing compute instance", func() {
+		It("Reads unpublished object within normal visibility", func() {
 			createResponse, err := server.Create(ctx, publicv1.ComputeInstanceCatalogItemsCreateRequest_builder{
 				Object: publicv1.ComputeInstanceCatalogItem_builder{
 					Metadata: publicv1.Metadata_builder{
@@ -281,14 +370,13 @@ var _ = Describe("Compute instance catalog items server", func() {
 			).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 
-			getResponse, err := server.Get(ctx, publicv1.ComputeInstanceCatalogItemsGetRequest_builder{
+			_, err = server.Get(ctx, publicv1.ComputeInstanceCatalogItemsGetRequest_builder{
 				Id: catalogItemID,
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			Expect(getResponse.GetObject().GetTitle()).To(Equal("Unpublished item"))
 		})
 
-		It("Get returns not found for unpublished object", func() {
+		It("Reads unpublished object without a compute instance reference", func() {
 			createResponse, err := server.Create(ctx, publicv1.ComputeInstanceCatalogItemsCreateRequest_builder{
 				Object: publicv1.ComputeInstanceCatalogItem_builder{
 					Metadata: publicv1.Metadata_builder{
@@ -304,8 +392,7 @@ var _ = Describe("Compute instance catalog items server", func() {
 			_, err = server.Get(ctx, publicv1.ComputeInstanceCatalogItemsGetRequest_builder{
 				Id: createResponse.GetObject().GetId(),
 			}.Build())
-			Expect(err).To(HaveOccurred())
-			Expect(status.Code(err)).To(Equal(codes.NotFound))
+			Expect(err).ToNot(HaveOccurred())
 		})
 
 		It("Get object", func() {
@@ -401,5 +488,56 @@ var _ = Describe("Compute instance catalog items server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(getResponse.GetObject().GetMetadata().GetDeletionTimestamp()).ToNot(BeNil())
 		})
+	})
+})
+
+var _ = Describe("Catalog publication and references", func() {
+	It("ComputeInstance: unpublishes unusable offerings and validates republishing", func() {
+		Expect(seedComputeCatalogItemTemplate(ctx, auth.SharedTenant, "", "template-id")).To(Succeed())
+		Expect(seedComputeCatalogItemTemplate(ctx, testTenant, "", "own-template-id")).To(Succeed())
+		dependencyDAO, err := dao.NewGenericDAO[*privatev1.DiskImage]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+		Expect(err).ToNot(HaveOccurred())
+		dependencyResponse, err := dependencyDAO.Create().SetObject(privatev1.DiskImage_builder{
+			Metadata: privatev1.Metadata_builder{Name: "dependency", Tenant: auth.SharedTenant}.Build(), Spec: privatev1.DiskImageSpec_builder{Lifecycle: privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE}.Build(),
+		}.Build()).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		dependency := dependencyResponse.GetObject()
+		server, err := NewComputeInstanceCatalogItemsServer().SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
+		Expect(err).ToNot(HaveOccurred())
+		request := publicv1.ComputeInstanceCatalogItemsCreateRequest_builder{Object: publicv1.ComputeInstanceCatalogItem_builder{
+			Metadata: publicv1.Metadata_builder{Name: "offering"}.Build(), Title: "Offering", Published: true,
+			Template: publicv1.ComputeInstanceTemplateReference_builder{Name: "my-ci-template", Shared: true}.Build(),
+			Fields:   publicv1.ComputeInstanceCatalogItemFields_builder{DiskImage: publicv1.DiskImageReferenceFieldPolicy_builder{Locked: publicv1.DiskImageReference_builder{Id: dependency.GetId()}.Build()}.Build()}.Build(),
+		}.Build()}.Build()
+		original := proto.Clone(request)
+		result, err := server.Create(ctx, request)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(proto.Equal(request, original)).To(BeTrue())
+		item := result.GetObject()
+		Expect(item.GetTemplate().GetId()).To(Equal("template-id"))
+		dependency.GetSpec().SetLifecycle(privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_OBSOLETE)
+		_, err = dependencyDAO.Update().SetObject(dependency).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		update := func(object *publicv1.ComputeInstanceCatalogItem, paths ...string) error {
+			request := publicv1.ComputeInstanceCatalogItemsUpdateRequest_builder{Object: object, UpdateMask: &fieldmaskpb.FieldMask{Paths: paths}}.Build()
+			_, err := server.Update(ctx, request)
+			return err
+		}
+		mixed := proto.Clone(item).(*publicv1.ComputeInstanceCatalogItem)
+		mixed.SetPublished(false)
+		mixed.GetFields().GetDiskImage().SetLocked(publicv1.DiskImageReference_builder{Id: "missing"}.Build())
+		Expect(update(mixed, "published", "fields")).ToNot(Succeed())
+		item.SetPublished(false)
+		// References outside the mask must not affect the merged candidate.
+		partial := publicv1.ComputeInstanceCatalogItem_builder{Id: item.GetId(), Published: false, Template: publicv1.ComputeInstanceTemplateReference_builder{Id: "missing"}.Build()}.Build()
+		Expect(update(partial, "published")).To(Succeed())
+		item.SetTitle("Edited draft")
+		Expect(update(item, "title")).To(Succeed())
+		item.SetPublished(true)
+		Expect(status.Code(update(item, "published"))).To(Equal(codes.FailedPrecondition))
+		item.SetPublished(false)
+		Expect(status.Code(update(item, "published", "fields"))).To(Equal(codes.OK))
+		item.GetFields().GetDiskImage().SetLocked(publicv1.DiskImageReference_builder{Id: "missing"}.Build())
+		Expect(update(item, "published", "fields")).ToNot(Succeed())
 	})
 })

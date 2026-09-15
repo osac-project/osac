@@ -15,6 +15,9 @@ package servers
 
 import (
 	"fmt"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -164,7 +167,7 @@ var _ = Describe("Compute instances server", func() {
 					Id: "standard",
 					Metadata: privatev1.Metadata_builder{
 						Name:   "standard",
-						Tenant: testTenant,
+						Tenant: "shared",
 					}.Build(),
 					Spec: privatev1.StorageTierSpec_builder{
 						Description: "Standard storage tier",
@@ -645,4 +648,40 @@ var _ = Describe("Compute instances server", func() {
 			Expect(spec.GetBootDisk().GetSizeGib()).To(Equal(int32(10)))
 		})
 	})
+})
+
+var _ = Describe("Catalog publication and references", func() {
+	It("resolves same-name catalog creation sources in the requested tenant", func() {
+		Expect(seedComputeCatalogItemTemplate(ctx, auth.SharedTenant, "", "source-template")).To(Succeed())
+		catalogs, err := NewPrivateComputeInstanceCatalogItemsServer().SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
+		Expect(err).ToNot(HaveOccurred())
+		for _, tenant := range []string{testTenant, auth.SharedTenant} {
+			_, err = catalogs.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{Object: privatev1.ComputeInstanceCatalogItem_builder{
+				Metadata: privatev1.Metadata_builder{Name: "same-name", Tenant: tenant}.Build(), Title: "Offering", Published: tenant == auth.SharedTenant,
+				Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "source-template"}.Build(),
+			}.Build()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		}
+		server, err := NewComputeInstancesServer().SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
+		Expect(err).ToNot(HaveOccurred())
+		for _, shared := range []bool{true, false} {
+			request := publicv1.ComputeInstancesCreateRequest_builder{Object: publicv1.ComputeInstance_builder{
+				Metadata: publicv1.Metadata_builder{Name: "vm"}.Build(), Spec: publicv1.ComputeInstanceSpec_builder{
+					CatalogItem: publicv1.ComputeInstanceCatalogItemReference_builder{Name: "same-name", Shared: shared}.Build(),
+				}.Build(),
+			}.Build()}.Build()
+			original := proto.Clone(request)
+			_, err = server.Create(ctx, request)
+			if shared {
+				// Correct shared source reaches ordinary required-field validation.
+				Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+				Expect(status.Convert(err).Message()).To(ContainSubstring("instance_type"))
+			} else {
+				Expect(status.Code(err)).To(Equal(codes.NotFound))
+				Expect(status.Convert(err).Message()).To(ContainSubstring("not published"))
+			}
+			Expect(proto.Equal(request, original)).To(BeTrue())
+		}
+	})
+
 })

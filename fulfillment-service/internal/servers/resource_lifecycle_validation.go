@@ -27,3 +27,33 @@ func validateResourceNotDeleted(kind, identifier, source string, metadata *priva
 	}
 	return nil
 }
+
+// validateResolvedStorageTier checks deletion and readiness of a resolved tier without choosing a backend.
+func validateResolvedStorageTier(tier *privatev1.StorageTier, source string) error {
+	if err := validateResourceNotDeleted("storage tier", tier.GetId(), source, tier.GetMetadata()); err != nil {
+		return err
+	}
+	if tier.GetStatus().GetState() != privatev1.StorageTierState_STORAGE_TIER_STATE_ACTIVE {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "storage tier '%s'%s is not active", tier.GetId(), source)
+	}
+	return nil
+}
+
+// validateResolvedSubnetReady checks readiness after reference resolution.
+func validateResolvedSubnetReady(subnet *privatev1.Subnet, identifier, source string) error {
+	if subnet.GetStatus().GetState() != privatev1.SubnetState_SUBNET_STATE_READY {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "subnet '%s'%s is not in READY state", identifier, source)
+	}
+	return nil
+}
+
+// validateResolvedSecurityGroup checks readiness and membership in the attachment's virtual network.
+func validateResolvedSecurityGroup(group *privatev1.SecurityGroup, identifier, source, virtualNetworkID string) error {
+	if group.GetStatus().GetState() != privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "security group '%s'%s is not in READY state", identifier, source)
+	}
+	if virtualNetworkID != "" && virtualNetworkID != refKey(group.GetSpec().GetVirtualNetwork()) {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "security group '%s'%s belongs to a different virtual network", identifier, source)
+	}
+	return nil
+}

@@ -16,18 +16,19 @@ package servers
 import (
 	"context"
 	"errors"
+	"google.golang.org/protobuf/proto"
 	"log/slog"
+	"maps"
 
 	"github.com/prometheus/client_golang/prometheus"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/structpb"
-
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/events"
+	"github.com/osac-project/osac/fulfillment-service/internal/utils"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -44,11 +45,13 @@ var _ privatev1.ComputeInstanceCatalogItemsServer = (*PrivateComputeInstanceCata
 
 type PrivateComputeInstanceCatalogItemsServer struct {
 	privatev1.UnimplementedComputeInstanceCatalogItemsServer
-	logger           *slog.Logger
-	generic          *GenericServer[*privatev1.ComputeInstanceCatalogItem]
-	instanceTypesDao *dao.GenericDAO[*privatev1.InstanceType]
-	diskImagesDao    *dao.GenericDAO[*privatev1.DiskImage]
-	tenancyLogic     auth.TenancyLogic
+	generic           *GenericServer[*privatev1.ComputeInstanceCatalogItem]
+	templatesDao      *dao.GenericDAO[*privatev1.ComputeInstanceTemplate]
+	instanceTypesDao  *dao.GenericDAO[*privatev1.InstanceType]
+	diskImagesDao     *dao.GenericDAO[*privatev1.DiskImage]
+	storageTiersDao   *dao.GenericDAO[*privatev1.StorageTier]
+	subnetsDao        *dao.GenericDAO[*privatev1.Subnet]
+	securityGroupsDao *dao.GenericDAO[*privatev1.SecurityGroup]
 }
 
 func NewPrivateComputeInstanceCatalogItemsServer() *PrivateComputeInstanceCatalogItemsServerBuilder {
@@ -81,8 +84,8 @@ func (b *PrivateComputeInstanceCatalogItemsServerBuilder) SetMetricsRegisterer(v
 	return b
 }
 
-// SetFilterDesc sets the protobuf message descriptor used to validate and translate CEL filter
-// expressions. This is optional. When unset, the descriptor of this server's own private message type is used.
+// SetFilterDesc sets the protobuf descriptor used to validate public CEL filters. When omitted, the private Catalog
+// Item descriptor is used.
 func (b *PrivateComputeInstanceCatalogItemsServerBuilder) SetFilterDesc(value protoreflect.MessageDescriptor) *PrivateComputeInstanceCatalogItemsServerBuilder {
 	b.filterDesc = value
 	return b
@@ -97,7 +100,15 @@ func (b *PrivateComputeInstanceCatalogItemsServerBuilder) Build() (result *Priva
 		err = errors.New("tenancy logic is mandatory")
 		return
 	}
-	// Create the InstanceTypes DAO for field_definitions instance type validation:
+	templatesDao, err := dao.NewGenericDAO[*privatev1.ComputeInstanceTemplate]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
 	instanceTypesDao, err := dao.NewGenericDAO[*privatev1.InstanceType]().
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
@@ -107,8 +118,34 @@ func (b *PrivateComputeInstanceCatalogItemsServerBuilder) Build() (result *Priva
 		return
 	}
 
-	// Create the DiskImages DAO for field_definitions disk image validation:
 	diskImagesDao, err := dao.NewGenericDAO[*privatev1.DiskImage]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
+	storageTiersDao, err := dao.NewGenericDAO[*privatev1.StorageTier]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
+	subnetsDao, err := dao.NewGenericDAO[*privatev1.Subnet]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
+	securityGroupsDao, err := dao.NewGenericDAO[*privatev1.SecurityGroup]().
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
@@ -132,11 +169,13 @@ func (b *PrivateComputeInstanceCatalogItemsServerBuilder) Build() (result *Priva
 	}
 
 	result = &PrivateComputeInstanceCatalogItemsServer{
-		logger:           b.logger,
-		generic:          generic,
-		instanceTypesDao: instanceTypesDao,
-		diskImagesDao:    diskImagesDao,
-		tenancyLogic:     b.tenancyLogic,
+		generic:           generic,
+		templatesDao:      templatesDao,
+		instanceTypesDao:  instanceTypesDao,
+		diskImagesDao:     diskImagesDao,
+		storageTiersDao:   storageTiersDao,
+		subnetsDao:        subnetsDao,
+		securityGroupsDao: securityGroupsDao,
 	}
 	return
 }
@@ -156,26 +195,12 @@ func (s *PrivateComputeInstanceCatalogItemsServer) Get(ctx context.Context,
 func (s *PrivateComputeInstanceCatalogItemsServer) Create(ctx context.Context,
 	request *privatev1.ComputeInstanceCatalogItemsCreateRequest) (response *privatev1.ComputeInstanceCatalogItemsCreateResponse, err error) {
 	var warnings []string
-	if request.GetObject() != nil {
-		if err = validateFieldDefinitions(request.GetObject().GetFieldDefinitions()); err != nil {
-			return
-		}
-		warnings, err = s.validateFieldDefinitionsInstanceType(ctx, request.GetObject().GetFieldDefinitions())
-		if err != nil {
-			return
-		}
-		var diskImageWarnings []string
-		diskImageWarnings, err = s.validateFieldDefinitionsDiskImage(ctx, request.GetObject().GetFieldDefinitions())
-		if err != nil {
-			return
-		}
-		warnings = append(warnings, diskImageWarnings...)
-	}
-	err = s.generic.Create(ctx, request, &response)
-	if err != nil {
-		return
-	}
-	if len(warnings) > 0 && response != nil {
+	err = s.generic.CreateWithCandidatePreparation(ctx, request, &response, func(ctx context.Context, current, candidate *privatev1.ComputeInstanceCatalogItem) error {
+		var err error
+		warnings, err = s.prepareCatalogItemCandidate(ctx, current, candidate)
+		return err
+	})
+	if err == nil {
 		response.SetWarnings(warnings)
 	}
 	return
@@ -184,29 +209,76 @@ func (s *PrivateComputeInstanceCatalogItemsServer) Create(ctx context.Context,
 func (s *PrivateComputeInstanceCatalogItemsServer) Update(ctx context.Context,
 	request *privatev1.ComputeInstanceCatalogItemsUpdateRequest) (response *privatev1.ComputeInstanceCatalogItemsUpdateResponse, err error) {
 	var warnings []string
-	if request.GetObject() != nil {
-		if err = validateFieldDefinitions(request.GetObject().GetFieldDefinitions()); err != nil {
-			return
-		}
-		warnings, err = s.validateFieldDefinitionsInstanceType(ctx, request.GetObject().GetFieldDefinitions())
-		if err != nil {
-			return
-		}
-		var diskImageWarnings []string
-		diskImageWarnings, err = s.validateFieldDefinitionsDiskImage(ctx, request.GetObject().GetFieldDefinitions())
-		if err != nil {
-			return
-		}
-		warnings = append(warnings, diskImageWarnings...)
-	}
-	err = s.generic.Update(ctx, request, &response)
-	if err != nil {
-		return
-	}
-	if len(warnings) > 0 && response != nil {
+	err = s.generic.UpdateWithCandidatePreparation(ctx, request, &response, func(ctx context.Context, current, candidate *privatev1.ComputeInstanceCatalogItem) error {
+		var err error
+		warnings, err = s.prepareCatalogItemCandidate(ctx, current, candidate)
+		return err
+	})
+	if err == nil {
 		response.SetWarnings(warnings)
 	}
 	return
+}
+
+// prepareCatalogItemCandidate validates and canonicalizes a detached catalog after ownership preparation
+// or PATCH merging. It returns validation errors and any supported lifecycle warnings.
+func (s *PrivateComputeInstanceCatalogItemsServer) prepareCatalogItemCandidate(
+	ctx context.Context, current *privatev1.ComputeInstanceCatalogItem, candidate *privatev1.ComputeInstanceCatalogItem,
+) ([]string, error) {
+	if candidate == nil {
+		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "catalog item is mandatory")
+	}
+	if current != nil {
+		publishing := !current.GetPublished() && candidate.GetPublished()
+		configurationChanged := current.GetMetadata().GetTenant() != candidate.GetMetadata().GetTenant() ||
+			current.GetMetadata().GetProject() != candidate.GetMetadata().GetProject() ||
+			!proto.Equal(current.GetTemplate(), candidate.GetTemplate()) ||
+			!proto.Equal(current.GetFields(), candidate.GetFields()) ||
+			!maps.EqualFunc(current.GetTemplateParameters(), candidate.GetTemplateParameters(), func(a, b *privatev1.TemplateParameterPolicy) bool { return proto.Equal(a, b) })
+		// Unpublishing and descriptive edits must work even when dependencies are no longer usable.
+		if !publishing && !configurationChanged {
+			return nil, nil
+		}
+	}
+	if err := s.validateAndCanonicalizeTemplate(ctx, current, candidate); err != nil {
+		return nil, err
+	}
+	return validateAndCanonicalizeComputeInstanceCatalogItemPolicies(
+		ctx, candidate, s.instanceTypesDao, s.diskImagesDao, s.storageTiersDao, s.subnetsDao, s.securityGroupsDao,
+	)
+}
+
+// validateAndCanonicalizeTemplate resolves the candidate Template under catalog ownership, enforces immutable identity, and validates parameter policies.
+func (s *PrivateComputeInstanceCatalogItemsServer) validateAndCanonicalizeTemplate(
+	ctx context.Context, current *privatev1.ComputeInstanceCatalogItem, candidate *privatev1.ComputeInstanceCatalogItem,
+) error {
+	ref := candidate.GetTemplate()
+	if ref == nil || (ref.GetId() == "" && ref.GetName() == "") {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'template' must specify id or name")
+	}
+	resolved, err := resolveFullResourceReference(ctx, s.templatesDao, catalogItemScope(candidate), ref,
+		"compute instance template", " in template", grpccodes.InvalidArgument)
+	if err != nil {
+		return err
+	}
+	if err := validateResourceNotDeleted("compute instance template", refKey(ref), " in template", resolved.GetMetadata()); err != nil {
+		return err
+	}
+	if current != nil {
+		currentRef := current.GetTemplate()
+		if currentRef == nil || currentRef.GetId() == "" {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument, "existing catalog item has no valid template reference")
+		}
+		if currentRef.GetId() != resolved.GetId() {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"cannot change template from '%s' to '%s': template is immutable", currentRef.GetName(), resolved.GetMetadata().GetName())
+		}
+	}
+	if err := validateCatalogItemTemplateParameterPolicies(utils.ComputeInstanceTemplateAdapter{ComputeInstanceTemplate: resolved}, candidate.GetTemplateParameters()); err != nil {
+		return err
+	}
+	candidate.SetTemplate(canonicalComputeInstanceTemplateReference(resolved))
+	return nil
 }
 
 func (s *PrivateComputeInstanceCatalogItemsServer) Delete(ctx context.Context,
@@ -219,117 +291,4 @@ func (s *PrivateComputeInstanceCatalogItemsServer) Signal(ctx context.Context,
 	request *privatev1.ComputeInstanceCatalogItemsSignalRequest) (response *privatev1.ComputeInstanceCatalogItemsSignalResponse, err error) {
 	err = s.generic.Signal(ctx, request, &response)
 	return
-}
-
-// validateFieldDefinitionsInstanceType validates instance_type constraints in field_definitions.
-// Rejects OBSOLETE instance types, warns on DEPRECATED.
-func (s *PrivateComputeInstanceCatalogItemsServer) validateFieldDefinitionsInstanceType(
-	ctx context.Context,
-	fieldDefinitions []*privatev1.FieldDefinition,
-) ([]string, error) {
-	// Scan field_definitions to extract the spec.instance_type default value.
-	var instanceTypeName string
-	for _, fd := range fieldDefinitions {
-		if fd.GetPath() == "spec.instance_type" {
-			defaultValue := fd.GetDefault()
-			if defaultValue != nil {
-				instanceTypeName = defaultValue.GetStringValue()
-			}
-			break
-		}
-	}
-
-	if instanceTypeName == "" {
-		return nil, nil
-	}
-
-	// Look up the instance type and validate its state.
-	return validateInstanceTypeState(ctx, s.instanceTypesDao, instanceTypeName, " in field_definitions")
-}
-
-// validateFieldDefinitionsDiskImage validates the disk_image constraint in field_definitions and
-// normalizes the stored default to an id-keyed DiskImageReference object.
-//
-// The path is the prefix-less, spec-relative "disk_image" — the convention the apply mechanism
-// (applyDefault) and the UI use, and the one the deletion-protection trigger matches. The default
-// is accepted as a bare name string (the shape clients and the UI send),
-// a {"name": ...} object, or an already-normalized {"id": ..., "name": ...} object, and is rewritten
-// in place to {"id": <resolved>, "name": <resolved>} so the persisted default matches the id-based
-// trigger and is unambiguous under name collisions.
-//
-// Rejects OBSOLETE (and not-found) disk images, warns on DEPRECATED. Tenant visibility is
-// enforced by the DiskImages DAO's tenancy filter (a cross-tenant reference resolves to
-// not-found), mirroring how validateFieldDefinitionsInstanceType relies on the DAO.
-func (s *PrivateComputeInstanceCatalogItemsServer) validateFieldDefinitionsDiskImage(
-	ctx context.Context,
-	fieldDefinitions []*privatev1.FieldDefinition,
-) ([]string, error) {
-	// Scan field_definitions for the disk_image default. It is a name string (as clients and the
-	// UI send it), a {"name": ...} object, or an already-normalized {"id": ..., "name": ...} object.
-	var diskImageFd *privatev1.FieldDefinition
-	var diskImageKey string
-	for _, fd := range fieldDefinitions {
-		if fd.GetPath() == "disk_image" {
-			diskImageFd = fd
-			diskImageKey = diskImageDefaultKey(fd.GetDefault())
-			break
-		}
-	}
-
-	if diskImageKey == "" {
-		return nil, nil
-	}
-
-	// Resolve with the caller's tenant precedence so a name shared between a tenant image and the
-	// shared image resolves deterministically (see validateDiskImageState). DetermineDefaultTenant
-	// returns the caller's own tenant for a tenant-scoped subject and the shared tenant for an admin.
-	preferredTenant, err := s.tenancyLogic.DetermineDefaultTenant(ctx)
-	if err != nil {
-		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to determine tenant: %v", err)
-	}
-
-	// Look up the disk image and validate its state.
-	diskImage, warnings, err := validateDiskImageState(ctx, s.diskImagesDao, diskImageKey, preferredTenant, " in field_definitions")
-	if err != nil {
-		return nil, err
-	}
-
-	// Persist the resolved reference by id (with the name for readability): the deletion-protection
-	// trigger matches on id, and a name alone cannot distinguish a shared image from a same-name
-	// tenant image. Storing the id also binds the default to the exact image resolved here, so
-	// consuming tenants don't re-resolve the name.
-	if diskImage != nil {
-		diskImageFd.SetDefault(structpb.NewStructValue(&structpb.Struct{
-			Fields: map[string]*structpb.Value{
-				"id":   structpb.NewStringValue(diskImage.GetId()),
-				"name": structpb.NewStringValue(diskImage.GetMetadata().GetName()),
-			},
-		}))
-	}
-
-	return warnings, nil
-}
-
-// diskImageDefaultKey extracts the disk image lookup key from a field definition default, which may
-// be a bare name string (client/UI input), a {"name": ...} reference object, or a normalized
-// {"id": ..., "name": ...} reference object (the persisted form). The id is preferred when present
-// so re-validating an already-resolved default takes the unambiguous by-id path.
-func diskImageDefaultKey(v *structpb.Value) string {
-	if v == nil {
-		return ""
-	}
-	if s := v.GetStringValue(); s != "" {
-		return s
-	}
-	if st := v.GetStructValue(); st != nil {
-		if idVal, ok := st.GetFields()["id"]; ok {
-			if id := idVal.GetStringValue(); id != "" {
-				return id
-			}
-		}
-		if nameVal, ok := st.GetFields()["name"]; ok {
-			return nameVal.GetStringValue()
-		}
-	}
-	return ""
 }

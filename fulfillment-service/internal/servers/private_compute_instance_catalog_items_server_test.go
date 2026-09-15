@@ -14,6 +14,7 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -23,7 +24,6 @@ import (
 	"go.uber.org/mock/gomock"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
-	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	grpccodes "google.golang.org/grpc/codes"
@@ -31,6 +31,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/collections"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -77,6 +78,57 @@ var _ = Describe("Private compute instance catalog items server", func() {
 
 	})
 
+	Describe("Dependency locking", func() {
+		It("holds the Template lock until authoring commits, then prevents deletion", func() {
+			// Separate committed setup lets a second transaction observe the dependency lock.
+			db, err := server.NewInstance().Build()
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(db.Close)
+			pool, err := db.Pool(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(pool.Close)
+			transactions, err := database.NewTxManager().SetLogger(logger).SetPool(pool).Build()
+			Expect(err).NotTo(HaveOccurred())
+			background := context.Background()
+			err = transactions.Run(background, func(setup context.Context) error {
+				tx, err := database.TxFromContext(setup)
+				if err != nil {
+					return err
+				}
+				_, err = tx.Exec(setup, "insert into tenants (id, name, tenant, data) values ($1, $1, $1, '{}')", testTenant)
+				if err != nil {
+					return err
+				}
+				return seedComputeCatalogItemTemplate(setup, testTenant, "", "locked-template")
+			})
+			Expect(err).NotTo(HaveOccurred())
+			items, err := NewPrivateComputeInstanceCatalogItemsServer().SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
+			Expect(err).NotTo(HaveOccurred())
+			err = transactions.Run(background, func(authoring context.Context) {
+				_, err := items.Create(authoring, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
+					Object: privatev1.ComputeInstanceCatalogItem_builder{
+						Metadata: privatev1.Metadata_builder{Name: "locked-item"}.Build(),
+						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "locked-template"}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).NotTo(HaveOccurred())
+				var unlocked int
+				err = pool.QueryRow(background, `select count(*) from
+	    (select id from compute_instance_templates where id = 'locked-template' for update skip locked) available`).Scan(&unlocked)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(unlocked).To(BeZero(), "the dependency must remain locked until authoring commits")
+			})
+			Expect(err).NotTo(HaveOccurred())
+			templates, err := NewPrivateComputeInstanceTemplatesServer().SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
+			Expect(err).NotTo(HaveOccurred())
+			err = transactions.Run(background, func(deletion context.Context) error {
+				_, err := templates.Delete(deletion, privatev1.ComputeInstanceTemplatesDeleteRequest_builder{Id: "locked-template"}.Build())
+				return err
+			})
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+		})
+	})
+
 	Describe("Behaviour", func() {
 		var server *PrivateComputeInstanceCatalogItemsServer
 
@@ -90,19 +142,21 @@ var _ = Describe("Private compute instance catalog items server", func() {
 				SetTenancyLogic(tenancy).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
+			Expect(seedComputeCatalogItemTemplate(ctx, testTenant, "", "my-ci-template-id")).To(Succeed())
+			Expect(seedComputeCatalogItemTemplate(ctx, auth.SharedTenant, "", "my-ci-shared-template-id")).To(Succeed())
 		})
 
 		It("Creates object", func() {
 			response, err := server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.ComputeInstanceCatalogItem_builder{
 					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						Tenant: testTenant,
 					}.Build(),
 					Title:       "My CI catalog item",
 					Description: "My description.",
-					Template:    privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+					Template:    privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-shared-template-id"}.Build(),
 					Published:   true,
-					Tenant:      "my-tenant",
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -111,9 +165,27 @@ var _ = Describe("Private compute instance catalog items server", func() {
 			Expect(object).ToNot(BeNil())
 			Expect(object.GetId()).ToNot(BeEmpty())
 			Expect(object.GetTitle()).To(Equal("My CI catalog item"))
-			Expect(object.GetTemplate().GetId()).To(Equal("my-ci-template-id"))
+			Expect(object.GetTemplate().GetId()).To(Equal("my-ci-shared-template-id"))
+			Expect(object.GetTemplate().GetShared()).To(BeTrue())
 			Expect(object.GetPublished()).To(BeTrue())
-			Expect(object.GetTenant()).To(Equal("my-tenant"))
+			Expect(object.GetMetadata().GetTenant()).To(Equal(testTenant))
+		})
+
+		It("Rejects a template reference whose ID and name disagree", func() {
+			_, err := server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
+				Object: privatev1.ComputeInstanceCatalogItem_builder{
+					Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.NewString()[:8])}.Build(),
+					Title:    "Mismatched template reference",
+					Template: privatev1.ComputeInstanceTemplateReference_builder{
+						Id: "my-ci-shared-template-id", Name: "different-template-name",
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(ContainSubstring("id and name do not refer to the same resource"))
 		})
 
 		It("List objects", func() {
@@ -264,6 +336,32 @@ var _ = Describe("Private compute instance catalog items server", func() {
 			Expect(getResponse.GetObject().GetDescription()).To(Equal("Updated description."))
 		})
 
+		It("rejects changing the template on update", func() {
+			createResponse, err := server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
+				Object: privatev1.ComputeInstanceCatalogItem_builder{
+					Metadata: privatev1.Metadata_builder{Name: "test-ci-catalog-template-immutable"}.Build(),
+					Title:    "Catalog item",
+					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = server.Update(ctx, privatev1.ComputeInstanceCatalogItemsUpdateRequest_builder{
+				Object: privatev1.ComputeInstanceCatalogItem_builder{
+					Id:       createResponse.GetObject().GetId(),
+					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-shared-template-id"}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+
+			getResponse, err := server.Get(ctx, privatev1.ComputeInstanceCatalogItemsGetRequest_builder{Id: createResponse.GetObject().GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(getResponse.GetObject().GetTemplate().GetId()).To(Equal("my-ci-template-id"))
+		})
+
 		It("Update published using field mask", func() {
 			createResponse, err := server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.ComputeInstanceCatalogItem_builder{
@@ -303,7 +401,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 			Expect(getResponse.GetObject().GetPublished()).To(BeTrue())
 		})
 
-		It("Creates object with field definitions and round-trips them", func() {
+		It("Creates object with typed fields and round-trips them", func() {
 			response, err := server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.ComputeInstanceCatalogItem_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -311,20 +409,13 @@ var _ = Describe("Private compute instance catalog items server", func() {
 					}.Build(),
 					Title:    "CI catalog item with fields",
 					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
-					FieldDefinitions: []*privatev1.FieldDefinition{
-						privatev1.FieldDefinition_builder{
-							Path:             "spec.ssh_public_key",
-							DisplayName:      "SSH Key",
-							Editable:         true,
-							ValidationSchema: `{"type":"string","minLength":1}`,
-						}.Build(),
-						privatev1.FieldDefinition_builder{
-							Path:        "spec.run_strategy",
-							DisplayName: "Run Strategy",
-							Editable:    false,
-							Default:     structpb.NewNumberValue(16),
-						}.Build(),
-					},
+					Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
+						SshPublicKey: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build(),
+						RunStrategy: privatev1.ComputeInstanceRunStrategyFieldPolicy_builder{Locked: func() *privatev1.ComputeInstanceRunStrategy {
+							v := privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS
+							return &v
+						}()}.Build(),
+					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -341,20 +432,8 @@ var _ = Describe("Private compute instance catalog items server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			fetched := getResponse.GetObject()
-			Expect(fetched.GetFieldDefinitions()).To(HaveLen(2))
-
-			fd0 := fetched.GetFieldDefinitions()[0]
-			Expect(fd0.GetPath()).To(Equal("spec.ssh_public_key"))
-			Expect(fd0.GetDisplayName()).To(Equal("SSH Key"))
-			Expect(fd0.GetEditable()).To(BeTrue())
-			Expect(fd0.GetValidationSchema()).To(Equal(`{"type":"string","minLength":1}`))
-
-			fd1 := fetched.GetFieldDefinitions()[1]
-			Expect(fd1.GetPath()).To(Equal("spec.run_strategy"))
-			Expect(fd1.GetDisplayName()).To(Equal("Run Strategy"))
-			Expect(fd1.GetEditable()).To(BeFalse())
-			Expect(fd1.GetDefault()).ToNot(BeNil())
-			Expect(fd1.GetDefault().GetNumberValue()).To(Equal(16.0))
+			Expect(fetched.GetFields().GetSshPublicKey().GetEditable()).ToNot(BeNil())
+			Expect(fetched.GetFields().GetRunStrategy().GetLocked()).To(Equal(privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS))
 		})
 
 		It("Delete object", func() {
@@ -392,6 +471,9 @@ var _ = Describe("Private compute instance catalog items server", func() {
 					Title:     "Referenced CI catalog item",
 					Template:  privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 					Published: true,
+					Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
+						SshPublicKey: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build(),
+					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -470,13 +552,13 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Tenant: "shared",
 					}.Build(),
 					Title:    "CI catalog item for shared tenant",
-					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-shared-template-id"}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		It("Rejects non-editable field definition without default value", func() {
+		It("Rejects non-editable field policy without default value", func() {
 			_, err := server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.ComputeInstanceCatalogItem_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -484,12 +566,9 @@ var _ = Describe("Private compute instance catalog items server", func() {
 					}.Build(),
 					Title:    "Bad CI catalog item",
 					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
-					FieldDefinitions: []*privatev1.FieldDefinition{
-						privatev1.FieldDefinition_builder{
-							Path:     "spec.ssh_public_key",
-							Editable: false,
-						}.Build(),
-					},
+					Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
+						SshPublicKey: privatev1.StringFieldPolicy_builder{}.Build(),
+					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).To(HaveOccurred())
@@ -497,10 +576,10 @@ var _ = Describe("Private compute instance catalog items server", func() {
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 			Expect(status.Message()).To(ContainSubstring("ssh_public_key"))
-			Expect(status.Message()).To(ContainSubstring("default value"))
+			Expect(status.Message()).To(ContainSubstring("no behavior"))
 		})
 
-		It("Accepts non-editable field definition with default value", func() {
+		It("Accepts non-editable field policy with default value", func() {
 			response, err := server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.ComputeInstanceCatalogItem_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -508,13 +587,9 @@ var _ = Describe("Private compute instance catalog items server", func() {
 					}.Build(),
 					Title:    "Good CI catalog item",
 					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
-					FieldDefinitions: []*privatev1.FieldDefinition{
-						privatev1.FieldDefinition_builder{
-							Path:     "spec.ssh_public_key",
-							Editable: false,
-							Default:  structpb.NewStringValue("my-secret"),
-						}.Build(),
-					},
+					Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
+						SshPublicKey: privatev1.StringFieldPolicy_builder{Locked: proto.String(testSSHPublicKey)}.Build(),
+					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -528,7 +603,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 			})
 		})
 
-		It("Accepts editable field definition without default value", func() {
+		It("Accepts editable field policy without default value", func() {
 			response, err := server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.ComputeInstanceCatalogItem_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -536,92 +611,9 @@ var _ = Describe("Private compute instance catalog items server", func() {
 					}.Build(),
 					Title:    "Editable no default",
 					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
-					FieldDefinitions: []*privatev1.FieldDefinition{
-						privatev1.FieldDefinition_builder{
-							Path:     "spec.ssh_public_key",
-							Editable: true,
-						}.Build(),
-					},
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			object := response.GetObject()
-			Expect(object).ToNot(BeNil())
-			DeferCleanup(func() {
-				_, err := server.Delete(ctx, privatev1.ComputeInstanceCatalogItemsDeleteRequest_builder{
-					Id: object.GetId(),
-				}.Build())
-				Expect(err).ToNot(HaveOccurred())
-			})
-		})
-
-		It("Rejects non-editable field definition without default when not first in list", func() {
-			_, err := server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
-				Object: privatev1.ComputeInstanceCatalogItem_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
+						SshPublicKey: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build(),
 					}.Build(),
-					Title:    "Bad catalog item",
-					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
-					FieldDefinitions: []*privatev1.FieldDefinition{
-						privatev1.FieldDefinition_builder{
-							Path:     "spec.cores",
-							Editable: true,
-						}.Build(),
-						privatev1.FieldDefinition_builder{
-							Path:     "spec.memory_gib",
-							Editable: false,
-						}.Build(),
-					},
-				}.Build(),
-			}.Build())
-			Expect(err).To(HaveOccurred())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(ContainSubstring("memory_gib"))
-		})
-
-		It("Rejects field definition with invalid validation_schema JSON", func() {
-			_, err := server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
-				Object: privatev1.ComputeInstanceCatalogItem_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
-					}.Build(),
-					Title:    "Bad schema catalog item",
-					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
-					FieldDefinitions: []*privatev1.FieldDefinition{
-						privatev1.FieldDefinition_builder{
-							Path:             "spec.cores",
-							Editable:         true,
-							ValidationSchema: "{not valid json}",
-						}.Build(),
-					},
-				}.Build(),
-			}.Build())
-			Expect(err).To(HaveOccurred())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(ContainSubstring("cores"))
-			Expect(status.Message()).To(ContainSubstring("invalid validation_schema"))
-		})
-
-		It("Accepts field definition with valid validation_schema JSON", func() {
-			response, err := server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
-				Object: privatev1.ComputeInstanceCatalogItem_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
-					}.Build(),
-					Title:    "Valid schema catalog item",
-					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
-					FieldDefinitions: []*privatev1.FieldDefinition{
-						privatev1.FieldDefinition_builder{
-							Path:             "spec.cores",
-							Editable:         true,
-							ValidationSchema: `{"type":"number","minimum":1}`,
-						}.Build(),
-					},
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -657,67 +649,23 @@ var _ = Describe("Private compute instance catalog items server", func() {
 			_, err = server.Update(ctx, privatev1.ComputeInstanceCatalogItemsUpdateRequest_builder{
 				Object: privatev1.ComputeInstanceCatalogItem_builder{
 					Id: id,
-					FieldDefinitions: []*privatev1.FieldDefinition{
-						privatev1.FieldDefinition_builder{
-							Path:     "spec.cores",
-							Editable: false,
-						}.Build(),
-					},
-				}.Build(),
-				UpdateMask: &fieldmaskpb.FieldMask{
-					Paths: []string{"field_definitions"},
-				},
-			}.Build())
-			Expect(err).To(HaveOccurred())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(ContainSubstring("cores"))
-			Expect(status.Message()).To(ContainSubstring("default value"))
-		})
-
-		It("Rejects update that introduces invalid validation_schema", func() {
-			createResponse, err := server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
-				Object: privatev1.ComputeInstanceCatalogItem_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: "test-ci-catalog-badschema",
+					Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
+						SshPublicKey: privatev1.StringFieldPolicy_builder{}.Build(),
 					}.Build(),
-					Title:    "Valid catalog item",
-					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			id := createResponse.GetObject().GetId()
-			DeferCleanup(func() {
-				_, err := server.Delete(ctx, privatev1.ComputeInstanceCatalogItemsDeleteRequest_builder{
-					Id: id,
-				}.Build())
-				Expect(err).ToNot(HaveOccurred())
-			})
-
-			_, err = server.Update(ctx, privatev1.ComputeInstanceCatalogItemsUpdateRequest_builder{
-				Object: privatev1.ComputeInstanceCatalogItem_builder{
-					Id: id,
-					FieldDefinitions: []*privatev1.FieldDefinition{
-						privatev1.FieldDefinition_builder{
-							Path:             "spec.cores",
-							Editable:         true,
-							ValidationSchema: "{bad json}",
-						}.Build(),
-					},
 				}.Build(),
 				UpdateMask: &fieldmaskpb.FieldMask{
-					Paths: []string{"field_definitions"},
+					Paths: []string{"fields"},
 				},
 			}.Build())
 			Expect(err).To(HaveOccurred())
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(ContainSubstring("invalid validation_schema"))
+			Expect(status.Message()).To(ContainSubstring("ssh_public_key"))
+			Expect(status.Message()).To(ContainSubstring("oneof"))
 		})
 
-		It("Accepts update with valid field definitions", func() {
+		It("Accepts update with valid typed policies", func() {
 			createResponse, err := server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.ComputeInstanceCatalogItem_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -739,28 +687,20 @@ var _ = Describe("Private compute instance catalog items server", func() {
 			updateResponse, err := server.Update(ctx, privatev1.ComputeInstanceCatalogItemsUpdateRequest_builder{
 				Object: privatev1.ComputeInstanceCatalogItem_builder{
 					Id: id,
-					FieldDefinitions: []*privatev1.FieldDefinition{
-						privatev1.FieldDefinition_builder{
-							Path:     "spec.cores",
-							Editable: false,
-							Default:  structpb.NewNumberValue(4),
-						}.Build(),
-						privatev1.FieldDefinition_builder{
-							Path:             "spec.memory_gib",
-							Editable:         true,
-							ValidationSchema: `{"type":"number"}`,
-						}.Build(),
-					},
+					Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
+						SshPublicKey: privatev1.StringFieldPolicy_builder{Locked: proto.String(testSSHPublicKey)}.Build(),
+						UserData:     privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build(),
+					}.Build(),
 				}.Build(),
 				UpdateMask: &fieldmaskpb.FieldMask{
-					Paths: []string{"field_definitions"},
+					Paths: []string{"fields"},
 				},
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			Expect(updateResponse.GetObject().GetFieldDefinitions()).To(HaveLen(2))
+			Expect(updateResponse.GetObject().GetFields()).ToNot(BeNil())
 		})
 
-		Describe("Instance type validation in field_definitions", func() {
+		Describe("Instance type validation in fields", func() {
 			var itServer *PrivateInstanceTypesServer
 
 			// createInstanceTypeWithState creates an instance type and transitions it to the
@@ -809,7 +749,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 				Expect(err).ToNot(HaveOccurred())
 			})
 
-			It("Returns warning when field_definitions default references a DEPRECATED instance type on Create", func() {
+			It("Returns warning when fields default references a DEPRECATED instance type on Create", func() {
 				createInstanceTypeWithState("deprecated-type",
 					privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_DEPRECATED)
 
@@ -820,13 +760,9 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						}.Build(),
 						Title:    "Catalog item with deprecated default",
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
-						FieldDefinitions: []*privatev1.FieldDefinition{
-							privatev1.FieldDefinition_builder{
-								Path:     "spec.instance_type",
-								Editable: true,
-								Default:  structpb.NewStringValue("deprecated-type"),
-							}.Build(),
-						},
+						Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
+							InstanceType: privatev1.InstanceTypeReferenceFieldPolicy_builder{Editable: privatev1.EditableInstanceTypeReferenceField_builder{DefaultValue: privatev1.InstanceTypeReference_builder{Name: "deprecated-type"}.Build()}.Build()}.Build(),
+						}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -834,8 +770,8 @@ var _ = Describe("Private compute instance catalog items server", func() {
 				Expect(response.GetWarnings()[0]).To(ContainSubstring("deprecated"))
 			})
 
-			It("Returns warning when field_definitions default references a DEPRECATED instance type on Update", func() {
-				// Create a catalog item without field_definitions first.
+			It("Returns warning when fields default references a DEPRECATED instance type on Update", func() {
+				// Create a catalog item without fields first.
 				createResponse, err := server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
 					Object: privatev1.ComputeInstanceCatalogItem_builder{
 						Metadata: privatev1.Metadata_builder{
@@ -857,20 +793,16 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 						Title:    "Catalog item to update",
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
-						FieldDefinitions: []*privatev1.FieldDefinition{
-							privatev1.FieldDefinition_builder{
-								Path:     "spec.instance_type",
-								Editable: true,
-								Default:  structpb.NewStringValue("deprecated-type-upd"),
-							}.Build(),
-						},
+						Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
+							InstanceType: privatev1.InstanceTypeReferenceFieldPolicy_builder{Editable: privatev1.EditableInstanceTypeReferenceField_builder{DefaultValue: privatev1.InstanceTypeReference_builder{Name: "deprecated-type-upd"}.Build()}.Build()}.Build(),
+						}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 				Expect(updateResponse.GetWarnings()).To(HaveLen(1))
 			})
 
-			It("Rejects Create when field_definitions default references an OBSOLETE instance type", func() {
+			It("Rejects Create when fields default references an OBSOLETE instance type", func() {
 				createInstanceTypeWithState("obsolete-type",
 					privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_OBSOLETE)
 
@@ -881,13 +813,9 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						}.Build(),
 						Title:    "Catalog item with obsolete default",
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
-						FieldDefinitions: []*privatev1.FieldDefinition{
-							privatev1.FieldDefinition_builder{
-								Path:     "spec.instance_type",
-								Editable: true,
-								Default:  structpb.NewStringValue("obsolete-type"),
-							}.Build(),
-						},
+						Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
+							InstanceType: privatev1.InstanceTypeReferenceFieldPolicy_builder{Editable: privatev1.EditableInstanceTypeReferenceField_builder{DefaultValue: privatev1.InstanceTypeReference_builder{Name: "obsolete-type"}.Build()}.Build()}.Build(),
+						}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).To(HaveOccurred())
@@ -897,7 +825,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 				Expect(status.Message()).To(ContainSubstring("obsolete"))
 			})
 
-			It("Rejects Update when field_definitions default references an OBSOLETE instance type", func() {
+			It("Rejects Update when fields default references an OBSOLETE instance type", func() {
 				// Create a catalog item first.
 				createResponse, err := server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
 					Object: privatev1.ComputeInstanceCatalogItem_builder{
@@ -919,13 +847,9 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Id:       catalogItemId,
 						Title:    "Catalog item for obsolete update",
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
-						FieldDefinitions: []*privatev1.FieldDefinition{
-							privatev1.FieldDefinition_builder{
-								Path:     "spec.instance_type",
-								Editable: true,
-								Default:  structpb.NewStringValue("obsolete-type-upd"),
-							}.Build(),
-						},
+						Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
+							InstanceType: privatev1.InstanceTypeReferenceFieldPolicy_builder{Editable: privatev1.EditableInstanceTypeReferenceField_builder{DefaultValue: privatev1.InstanceTypeReference_builder{Name: "obsolete-type-upd"}.Build()}.Build()}.Build(),
+						}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).To(HaveOccurred())
@@ -934,7 +858,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 				Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
 			})
 
-			It("Returns no warnings when field_definitions default references an ACTIVE instance type", func() {
+			It("Returns no warnings when fields default references an ACTIVE instance type", func() {
 				createInstanceTypeWithState("active-type",
 					privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_ACTIVE)
 
@@ -945,20 +869,16 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						}.Build(),
 						Title:    "Catalog item with active default",
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
-						FieldDefinitions: []*privatev1.FieldDefinition{
-							privatev1.FieldDefinition_builder{
-								Path:     "spec.instance_type",
-								Editable: true,
-								Default:  structpb.NewStringValue("active-type"),
-							}.Build(),
-						},
+						Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
+							InstanceType: privatev1.InstanceTypeReferenceFieldPolicy_builder{Editable: privatev1.EditableInstanceTypeReferenceField_builder{DefaultValue: privatev1.InstanceTypeReference_builder{Name: "active-type"}.Build()}.Build()}.Build(),
+						}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 				Expect(response.GetWarnings()).To(BeEmpty())
 			})
 
-			It("Rejects Create when field_definitions default references a non-existent instance type", func() {
+			It("Rejects Create when fields default references a non-existent instance type", func() {
 				_, err := server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
 					Object: privatev1.ComputeInstanceCatalogItem_builder{
 						Metadata: privatev1.Metadata_builder{
@@ -966,13 +886,9 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						}.Build(),
 						Title:    "Catalog item with missing type",
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
-						FieldDefinitions: []*privatev1.FieldDefinition{
-							privatev1.FieldDefinition_builder{
-								Path:     "spec.instance_type",
-								Editable: true,
-								Default:  structpb.NewStringValue("non-existent-type"),
-							}.Build(),
-						},
+						Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
+							InstanceType: privatev1.InstanceTypeReferenceFieldPolicy_builder{Editable: privatev1.EditableInstanceTypeReferenceField_builder{DefaultValue: privatev1.InstanceTypeReference_builder{Name: "non-existent-type"}.Build()}.Build()}.Build(),
+						}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).To(HaveOccurred())
@@ -981,7 +897,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 				Expect(status.Code()).To(Equal(grpccodes.NotFound))
 			})
 
-			It("Skips validation when field_definitions has no spec.instance_type path", func() {
+			It("Skips validation when fields has no spec.instance_type path", func() {
 				response, err := server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
 					Object: privatev1.ComputeInstanceCatalogItem_builder{
 						Metadata: privatev1.Metadata_builder{
@@ -989,12 +905,9 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						}.Build(),
 						Title:    "Catalog item without instance type field",
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
-						FieldDefinitions: []*privatev1.FieldDefinition{
-							privatev1.FieldDefinition_builder{
-								Path:     "spec.ssh_public_key",
-								Editable: true,
-							}.Build(),
-						},
+						Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
+							SshPublicKey: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build(),
+						}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -1003,8 +916,8 @@ var _ = Describe("Private compute instance catalog items server", func() {
 
 		})
 
-		Describe("Disk image validation in field_definitions", func() {
-			It("Returns warning when field_definitions default references a DEPRECATED disk image on Create", func() {
+		Describe("Disk image validation in fields", func() {
+			It("Returns warning when fields default references a DEPRECATED disk image on Create", func() {
 				createDiskImageWithLifecycle("deprecated-di",
 					privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_DEPRECATED,
 					privatev1.DiskImageDeprecation_builder{
@@ -1019,13 +932,9 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						}.Build(),
 						Title:    "Catalog item with deprecated disk image default",
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
-						FieldDefinitions: []*privatev1.FieldDefinition{
-							privatev1.FieldDefinition_builder{
-								Path:     "disk_image",
-								Editable: true,
-								Default:  structpb.NewStringValue("deprecated-di"),
-							}.Build(),
-						},
+						Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
+							DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{Editable: privatev1.EditableDiskImageReferenceField_builder{DefaultValue: privatev1.DiskImageReference_builder{Name: "deprecated-di"}.Build()}.Build()}.Build(),
+						}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -1034,8 +943,8 @@ var _ = Describe("Private compute instance catalog items server", func() {
 				Expect(response.GetWarnings()[0]).To(ContainSubstring("2027"))
 			})
 
-			It("Returns warning when field_definitions default references a DEPRECATED disk image on Update", func() {
-				// Create a catalog item without field_definitions first.
+			It("Returns warning when fields default references a DEPRECATED disk image on Update", func() {
+				// Create a catalog item without fields first.
 				createResponse, err := server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
 					Object: privatev1.ComputeInstanceCatalogItem_builder{
 						Metadata: privatev1.Metadata_builder{
@@ -1058,13 +967,9 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 						Title:    "Catalog item to update",
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
-						FieldDefinitions: []*privatev1.FieldDefinition{
-							privatev1.FieldDefinition_builder{
-								Path:     "disk_image",
-								Editable: true,
-								Default:  structpb.NewStringValue("deprecated-di-upd"),
-							}.Build(),
-						},
+						Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
+							DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{Editable: privatev1.EditableDiskImageReferenceField_builder{DefaultValue: privatev1.DiskImageReference_builder{Name: "deprecated-di-upd"}.Build()}.Build()}.Build(),
+						}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -1072,7 +977,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 				Expect(updateResponse.GetWarnings()[0]).To(ContainSubstring("deprecated"))
 			})
 
-			It("Rejects Create when field_definitions default references an OBSOLETE disk image", func() {
+			It("Rejects Create when fields default references an OBSOLETE disk image", func() {
 				createDiskImageWithLifecycle("obsolete-di",
 					privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_OBSOLETE, nil)
 
@@ -1083,13 +988,9 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						}.Build(),
 						Title:    "Catalog item with obsolete disk image default",
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
-						FieldDefinitions: []*privatev1.FieldDefinition{
-							privatev1.FieldDefinition_builder{
-								Path:     "disk_image",
-								Editable: true,
-								Default:  structpb.NewStringValue("obsolete-di"),
-							}.Build(),
-						},
+						Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
+							DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{Editable: privatev1.EditableDiskImageReferenceField_builder{DefaultValue: privatev1.DiskImageReference_builder{Name: "obsolete-di"}.Build()}.Build()}.Build(),
+						}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).To(HaveOccurred())
@@ -1099,7 +1000,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 				Expect(status.Message()).To(ContainSubstring("obsolete"))
 			})
 
-			It("Rejects Update when field_definitions default references an OBSOLETE disk image", func() {
+			It("Rejects Update when fields default references an OBSOLETE disk image", func() {
 				// Create a catalog item first.
 				createResponse, err := server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
 					Object: privatev1.ComputeInstanceCatalogItem_builder{
@@ -1121,13 +1022,9 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Id:       catalogItemId,
 						Title:    "Catalog item for obsolete disk image update",
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
-						FieldDefinitions: []*privatev1.FieldDefinition{
-							privatev1.FieldDefinition_builder{
-								Path:     "disk_image",
-								Editable: true,
-								Default:  structpb.NewStringValue("obsolete-di-upd"),
-							}.Build(),
-						},
+						Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
+							DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{Editable: privatev1.EditableDiskImageReferenceField_builder{DefaultValue: privatev1.DiskImageReference_builder{Name: "obsolete-di-upd"}.Build()}.Build()}.Build(),
+						}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).To(HaveOccurred())
@@ -1136,7 +1033,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 				Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
 			})
 
-			It("Returns no warnings when field_definitions default references an AVAILABLE disk image", func() {
+			It("Returns no warnings when fields default references an AVAILABLE disk image", func() {
 				createDiskImageWithLifecycle("available-di",
 					privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE, nil)
 
@@ -1147,13 +1044,9 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						}.Build(),
 						Title:    "Catalog item with available disk image default",
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
-						FieldDefinitions: []*privatev1.FieldDefinition{
-							privatev1.FieldDefinition_builder{
-								Path:     "disk_image",
-								Editable: true,
-								Default:  structpb.NewStringValue("available-di"),
-							}.Build(),
-						},
+						Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
+							DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{Editable: privatev1.EditableDiskImageReferenceField_builder{DefaultValue: privatev1.DiskImageReference_builder{Name: "available-di"}.Build()}.Build()}.Build(),
+						}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -1163,21 +1056,13 @@ var _ = Describe("Private compute instance catalog items server", func() {
 				// reference object so the deletion-protection trigger (migration 101) matches on the
 				// resolved id. A bare string was sent; validation resolves it and rewrites it in place
 				// before persist. createDiskImageWithLifecycle sets Id == Name, so both are "available-di".
-				var diskImageFd *privatev1.FieldDefinition
-				for _, fd := range response.GetObject().GetFieldDefinitions() {
-					if fd.GetPath() == "disk_image" {
-						diskImageFd = fd
-						break
-					}
-				}
-				Expect(diskImageFd).ToNot(BeNil())
-				normalized := diskImageFd.GetDefault().GetStructValue()
+				normalized := response.GetObject().GetFields().GetDiskImage().GetEditable().GetDefaultValue()
 				Expect(normalized).ToNot(BeNil())
-				Expect(normalized.GetFields()["id"].GetStringValue()).To(Equal("available-di"))
-				Expect(normalized.GetFields()["name"].GetStringValue()).To(Equal("available-di"))
+				Expect(normalized.GetId()).To(Equal("available-di"))
+				Expect(normalized.GetName()).To(Equal("available-di"))
 			})
 
-			It("Rejects Create when field_definitions default references a non-existent disk image", func() {
+			It("Rejects Create when fields default references a non-existent disk image", func() {
 				_, err := server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
 					Object: privatev1.ComputeInstanceCatalogItem_builder{
 						Metadata: privatev1.Metadata_builder{
@@ -1185,13 +1070,9 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						}.Build(),
 						Title:    "Catalog item with missing disk image",
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
-						FieldDefinitions: []*privatev1.FieldDefinition{
-							privatev1.FieldDefinition_builder{
-								Path:     "disk_image",
-								Editable: true,
-								Default:  structpb.NewStringValue("nonexistent-di"),
-							}.Build(),
-						},
+						Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
+							DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{Editable: privatev1.EditableDiskImageReferenceField_builder{DefaultValue: privatev1.DiskImageReference_builder{Name: "nonexistent-di"}.Build()}.Build()}.Build(),
+						}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).To(HaveOccurred())
@@ -1200,7 +1081,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 				Expect(status.Code()).To(Equal(grpccodes.NotFound))
 			})
 
-			It("Rejects Create with NotFound when field_definitions default references a disk image in another tenant", func() {
+			It("Rejects Create with NotFound when fields default references a disk image in another tenant", func() {
 				// The generic List DAO now wraps the caller's CEL filter in parentheses
 				// (OSAC-4127), so a top-level OR ("this.id == k || this.metadata.name == k")
 				// stays scoped under the tenancy clause and a cross-tenant disk image cannot
@@ -1246,20 +1127,20 @@ var _ = Describe("Private compute instance catalog items server", func() {
 				).Do(ctx)
 				Expect(err).ToNot(HaveOccurred())
 
-				// Build a catalog server whose caller can only see shared + "my-tenant", so the
+				// Build a catalog server whose caller can only see shared + the test tenant, so the
 				// DAO's tenancy filter hides the "other-tenant" disk image (collapsing to
 				// zero rows -> NotFound, without leaking cross-tenant existence).
 				restrictedTenancy := auth.NewMockTenancyLogic(ctrl)
 				restrictedVisibility, err := auth.NewVisibility().
-					AddVisibleTenants(auth.SharedTenant, "my-tenant").
+					AddVisibleTenants(auth.SharedTenant, testTenant).
 					Build()
 				Expect(err).ToNot(HaveOccurred())
 				restrictedTenancy.EXPECT().DetermineVisibility(gomock.Any()).
 					Return(restrictedVisibility, nil).AnyTimes()
 				restrictedTenancy.EXPECT().DetermineAssignableTenants(gomock.Any()).
-					Return(collections.NewSet("my-tenant"), nil).AnyTimes()
+					Return(collections.NewSet(testTenant), nil).AnyTimes()
 				restrictedTenancy.EXPECT().DetermineDefaultTenant(gomock.Any()).
-					Return("my-tenant", nil).AnyTimes()
+					Return(testTenant, nil).AnyTimes()
 
 				restrictedServer, err := NewPrivateComputeInstanceCatalogItemsServer().
 					SetLogger(logger).
@@ -1275,13 +1156,9 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						}.Build(),
 						Title:    "Catalog item referencing a cross-tenant disk image",
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
-						FieldDefinitions: []*privatev1.FieldDefinition{
-							privatev1.FieldDefinition_builder{
-								Path:     "disk_image",
-								Editable: true,
-								Default:  structpb.NewStringValue("other-tenant-di"),
-							}.Build(),
-						},
+						Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
+							DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{Editable: privatev1.EditableDiskImageReferenceField_builder{DefaultValue: privatev1.DiskImageReference_builder{Name: "other-tenant-di"}.Build()}.Build()}.Build(),
+						}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).To(HaveOccurred())
@@ -1291,18 +1168,15 @@ var _ = Describe("Private compute instance catalog items server", func() {
 			})
 
 			Context("disk_image name-collision precedence", func() {
-				// Disk image names are unique only per (name, tenant), so a shared image and one or
-				// more same-name tenant images can coexist. validateDiskImageState must break the tie
-				// deterministically: the caller's own tenant wins, then the shared tenant, otherwise
-				// the reference is a genuine ambiguity (InvalidArgument). These tests drive the server
-				// directly (the interceptor that id-pins typed refs is not in the unit chain), so the
-				// by-name resolution path is exercised as a real DB lookup.
+				// Preserve the established DiskImage precedence for an unqualified name: the
+				// Catalog Item's tenant wins, followed by shared, otherwise the name is ambiguous.
 
 				// buildCatalogServer wires a catalog server whose caller has the given default tenant
 				// and can see the shared tenant plus the listed extra tenants.
 				buildCatalogServer := func(defaultTenant string, extraVisible ...string) *PrivateComputeInstanceCatalogItemsServer {
 					visibility, err := auth.NewVisibility().
 						AddVisibleTenant(auth.SharedTenant).
+						AddVisibleTenant(defaultTenant).
 						AddVisibleTenants(extraVisible...).
 						Build()
 					Expect(err).ToNot(HaveOccurred())
@@ -1324,18 +1198,13 @@ var _ = Describe("Private compute instance catalog items server", func() {
 
 				// storedDiskImageDefault pulls the normalized disk_image field default off a created
 				// catalog item so its resolved id/name can be asserted.
-				storedDiskImageDefault := func(item *privatev1.ComputeInstanceCatalogItem) *structpb.Struct {
-					for _, fd := range item.GetFieldDefinitions() {
-						if fd.GetPath() == "disk_image" {
-							return fd.GetDefault().GetStructValue()
-						}
-					}
-					return nil
+				storedDiskImageDefault := func(item *privatev1.ComputeInstanceCatalogItem) *privatev1.DiskImageReference {
+					return item.GetFields().GetDiskImage().GetEditable().GetDefaultValue()
 				}
 
 				createCatalogItem := func(
 					s *PrivateComputeInstanceCatalogItemsServer,
-					def *structpb.Value,
+					def *privatev1.DiskImageReference,
 				) (*privatev1.ComputeInstanceCatalogItemsCreateResponse, error) {
 					return s.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
 						Object: privatev1.ComputeInstanceCatalogItem_builder{
@@ -1343,14 +1212,10 @@ var _ = Describe("Private compute instance catalog items server", func() {
 								Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 							}.Build(),
 							Title:    "Catalog item for disk image precedence",
-							Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
-							FieldDefinitions: []*privatev1.FieldDefinition{
-								privatev1.FieldDefinition_builder{
-									Path:     "disk_image",
-									Editable: true,
-									Default:  def,
-								}.Build(),
-							},
+							Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-shared-template-id"}.Build(),
+							Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
+								DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{Editable: privatev1.EditableDiskImageReferenceField_builder{DefaultValue: def}.Build()}.Build(),
+							}.Build(),
 						}.Build(),
 					}.Build())
 				}
@@ -1361,43 +1226,39 @@ var _ = Describe("Private compute instance catalog items server", func() {
 					createAvailableDiskImageInTenant("di-fedora-tenant", "fedora", "my-tenant")
 
 					s := buildCatalogServer("my-tenant", "my-tenant")
-					resp, err := createCatalogItem(s, structpb.NewStringValue("fedora"))
+					resp, err := createCatalogItem(s, privatev1.DiskImageReference_builder{Name: "fedora"}.Build())
 					Expect(err).ToNot(HaveOccurred())
 					Expect(resp.GetWarnings()).To(BeEmpty())
 
 					def := storedDiskImageDefault(resp.GetObject())
 					Expect(def).ToNot(BeNil())
-					Expect(def.GetFields()["id"].GetStringValue()).To(Equal("di-fedora-tenant"))
-					Expect(def.GetFields()["name"].GetStringValue()).To(Equal("fedora"))
+					Expect(def.GetId()).To(Equal("di-fedora-tenant"))
+					Expect(def.GetName()).To(Equal("fedora"))
 				})
 
-				It("Falls back to the shared disk image when the caller's tenant has no same-name image", func() {
+				It("Falls back to the shared disk image when the Catalog Item tenant has no match", func() {
 					createTenant("my-tenant")
 					createTenant("other-tenant")
 					createAvailableDiskImageInTenant("di-ubuntu-shared", "ubuntu", auth.SharedTenant)
 					createAvailableDiskImageInTenant("di-ubuntu-other", "ubuntu", "other-tenant")
 
-					// The caller sees shared + other-tenant (so the name resolves to >1 row) but its own
-					// default tenant "my-tenant" owns no "ubuntu": the shared image must win the tie.
 					s := buildCatalogServer("my-tenant", "my-tenant", "other-tenant")
-					resp, err := createCatalogItem(s, structpb.NewStringValue("ubuntu"))
+					resp, err := createCatalogItem(s, privatev1.DiskImageReference_builder{Name: "ubuntu"}.Build())
 					Expect(err).ToNot(HaveOccurred())
 
 					def := storedDiskImageDefault(resp.GetObject())
 					Expect(def).ToNot(BeNil())
-					Expect(def.GetFields()["id"].GetStringValue()).To(Equal("di-ubuntu-shared"))
+					Expect(def.GetId()).To(Equal("di-ubuntu-shared"))
 				})
 
-				It("Rejects an ambiguous name with InvalidArgument when multiple tenant images share it and none is shared", func() {
+				It("Rejects an ambiguous name when neither the Catalog Item tenant nor shared owns it", func() {
 					createTenant("tenant-a")
 					createTenant("tenant-b")
 					createAvailableDiskImageInTenant("di-fedora-a", "fedora", "tenant-a")
 					createAvailableDiskImageInTenant("di-fedora-b", "fedora", "tenant-b")
 
-					// A provider admin: default tenant is shared, but no shared "fedora" exists and two
-					// tenants own one — an irreducible ambiguity, which must be a deterministic error.
 					s := buildCatalogServer(testTenant, "tenant-a", "tenant-b")
-					_, err := createCatalogItem(s, structpb.NewStringValue("fedora"))
+					_, err := createCatalogItem(s, privatev1.DiskImageReference_builder{Name: "fedora"}.Build())
 					Expect(err).To(HaveOccurred())
 					status, ok := grpcstatus.FromError(err)
 					Expect(ok).To(BeTrue())
@@ -1412,17 +1273,14 @@ var _ = Describe("Private compute instance catalog items server", func() {
 					// The default pins the shared image by id even though the name "fedora" collides
 					// with the caller's own-tenant image: the by-id path must win, unambiguously.
 					s := buildCatalogServer("my-tenant", "my-tenant")
-					def := structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
-						"id":   structpb.NewStringValue("di-fedora-shared"),
-						"name": structpb.NewStringValue("fedora"),
-					}})
+					def := privatev1.DiskImageReference_builder{Id: "di-fedora-shared", Name: "fedora"}.Build()
 					resp, err := createCatalogItem(s, def)
 					Expect(err).ToNot(HaveOccurred())
 
 					stored := storedDiskImageDefault(resp.GetObject())
 					Expect(stored).ToNot(BeNil())
-					Expect(stored.GetFields()["id"].GetStringValue()).To(Equal("di-fedora-shared"))
-					Expect(stored.GetFields()["name"].GetStringValue()).To(Equal("fedora"))
+					Expect(stored.GetId()).To(Equal("di-fedora-shared"))
+					Expect(stored.GetName()).To(Equal("fedora"))
 				})
 
 				It("Is idempotent when re-validating an already-id-normalized default", func() {
@@ -1433,21 +1291,18 @@ var _ = Describe("Private compute instance catalog items server", func() {
 					// migration 101 backfills). diskImageDefaultKey takes the by-id path, so it resolves
 					// to the same image and re-stores the same id-form default.
 					s := buildCatalogServer(testTenant)
-					def := structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
-						"id":   structpb.NewStringValue("stable-di"),
-						"name": structpb.NewStringValue("stable-di"),
-					}})
+					def := privatev1.DiskImageReference_builder{Id: "stable-di", Name: "stable-di"}.Build()
 					resp, err := createCatalogItem(s, def)
 					Expect(err).ToNot(HaveOccurred())
 
 					stored := storedDiskImageDefault(resp.GetObject())
 					Expect(stored).ToNot(BeNil())
-					Expect(stored.GetFields()["id"].GetStringValue()).To(Equal("stable-di"))
-					Expect(stored.GetFields()["name"].GetStringValue()).To(Equal("stable-di"))
+					Expect(stored.GetId()).To(Equal("stable-di"))
+					Expect(stored.GetName()).To(Equal("stable-di"))
 				})
 			})
 
-			It("Skips validation when field_definitions has no disk_image path", func() {
+			It("Skips validation when fields has no disk_image path", func() {
 				response, err := server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
 					Object: privatev1.ComputeInstanceCatalogItem_builder{
 						Metadata: privatev1.Metadata_builder{
@@ -1455,12 +1310,9 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						}.Build(),
 						Title:    "Catalog item without disk image field",
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
-						FieldDefinitions: []*privatev1.FieldDefinition{
-							privatev1.FieldDefinition_builder{
-								Path:     "spec.ssh_public_key",
-								Editable: true,
-							}.Build(),
-						},
+						Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
+							SshPublicKey: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build(),
+						}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -1468,5 +1320,90 @@ var _ = Describe("Private compute instance catalog items server", func() {
 			})
 
 		})
+	})
+})
+
+var _ = Describe("Catalog publication and references", func() {
+	It("rejects cross-tenant full dependencies even for an author with total visibility", func() {
+		Expect(seedComputeCatalogItemTemplate(ctx, testTenant, "", "tenant-template")).To(Succeed())
+		server, err := NewPrivateComputeInstanceCatalogItemsServer().SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
+		Expect(err).ToNot(HaveOccurred())
+		_, err = server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{Object: privatev1.ComputeInstanceCatalogItem_builder{
+			Metadata: privatev1.Metadata_builder{Name: "shared-offering", Tenant: auth.SharedTenant}.Build(), Title: "Shared",
+			Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "tenant-template"}.Build(),
+		}.Build()}.Build())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+	})
+})
+
+var _ = Describe("Compute Instance Catalog Item policy application", func() {
+	It("applies every Compute policy and deep-clones nested values", func() {
+		diskImage := privatev1.DiskImageReference_builder{Id: "image-id", Name: "image"}.Build()
+		instanceType := privatev1.InstanceTypeReference_builder{Id: "type-id", Name: "type"}.Build()
+		storageTier := privatev1.StorageTierReference_builder{Id: "tier-id", Name: "tier"}.Build()
+		computeAttachment := privatev1.ComputeNetworkAttachment_builder{
+			Subnet:         policyTestSubnet("subnet"),
+			SecurityGroups: []*privatev1.SecurityGroupLocalReference{policyTestSecurityGroup("security-group")},
+		}.Build()
+		additionalDisk := privatev1.ComputeInstanceDisk_builder{
+			SizeGib:     policyTestInt32(20),
+			StorageTier: storageTier,
+		}.Build()
+		sshKey := "ssh-ed25519 catalog"
+		userData := "user-data"
+		runStrategy := privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS
+		autoExternalIP := false
+		bootSize := int32(30)
+
+		fields := privatev1.ComputeInstanceCatalogItemFields_builder{
+			DiskImage:    privatev1.DiskImageReferenceFieldPolicy_builder{Locked: diskImage}.Build(),
+			InstanceType: privatev1.InstanceTypeReferenceFieldPolicy_builder{Locked: instanceType}.Build(),
+			SshPublicKey: privatev1.StringFieldPolicy_builder{Locked: &sshKey}.Build(),
+			BootDisk: privatev1.ComputeInstanceBootDiskFieldPolicies_builder{
+				SizeGib:     privatev1.Int32FieldPolicy_builder{Locked: &bootSize}.Build(),
+				StorageTier: privatev1.StorageTierReferenceFieldPolicy_builder{Locked: storageTier}.Build(),
+			}.Build(),
+			RunStrategy: privatev1.ComputeInstanceRunStrategyFieldPolicy_builder{Locked: &runStrategy}.Build(),
+			UserData:    privatev1.StringFieldPolicy_builder{Locked: &userData}.Build(),
+			NetworkAttachments: privatev1.ComputeNetworkAttachmentListFieldPolicy_builder{
+				Locked: privatev1.ComputeNetworkAttachmentList_builder{
+					Items: []*privatev1.ComputeNetworkAttachment{computeAttachment},
+				}.Build(),
+			}.Build(),
+			AutoExternalIpAttachment: privatev1.BoolFieldPolicy_builder{Locked: &autoExternalIP}.Build(),
+			AdditionalDisks: privatev1.ComputeInstanceDiskListFieldPolicy_builder{
+				Locked: privatev1.ComputeInstanceDiskList_builder{
+					Items: []*privatev1.ComputeInstanceDisk{nil, additionalDisk},
+				}.Build(),
+			}.Build(),
+		}.Build()
+		item := privatev1.ComputeInstanceCatalogItem_builder{Fields: fields}.Build()
+		spec := &privatev1.ComputeInstanceSpec{}
+
+		Expect(applyComputeInstanceCatalogItemPolicies(spec, item.GetFields())).To(Succeed())
+		Expect(spec.GetDiskImage()).NotTo(BeIdenticalTo(diskImage))
+		Expect(spec.GetDiskImage().GetId()).To(Equal("image-id"))
+		Expect(spec.GetInstanceType().GetName()).To(Equal("type"))
+		Expect(spec.GetSshPublicKey()).To(Equal(sshKey))
+		Expect(spec.GetBootDisk().GetSizeGib()).To(Equal(bootSize))
+		Expect(spec.GetBootDisk().GetStorageTier()).NotTo(BeIdenticalTo(storageTier))
+		Expect(spec.GetRunStrategy()).To(Equal(runStrategy))
+		Expect(spec.GetUserData()).To(Equal(userData))
+		Expect(spec.GetAutoExternalIpAttachment()).To(BeFalse())
+		Expect(spec.GetNetworkAttachments()).To(HaveLen(1))
+		Expect(spec.GetAdditionalDisks()).To(HaveLen(2))
+		Expect(spec.GetAdditionalDisks()[0]).To(BeNil())
+		Expect(spec.GetAdditionalDisks()[1]).NotTo(BeIdenticalTo(additionalDisk))
+
+		spec.GetDiskImage().SetName("changed")
+		spec.GetBootDisk().GetStorageTier().SetName("changed")
+		spec.GetNetworkAttachments()[0].GetSubnet().SetName("changed")
+		spec.GetNetworkAttachments()[0].GetSecurityGroups()[0].SetName("changed")
+		spec.GetAdditionalDisks()[1].GetStorageTier().SetName("changed")
+		Expect(diskImage.GetName()).To(Equal("image"))
+		Expect(storageTier.GetName()).To(Equal("tier"))
+		Expect(computeAttachment.GetSubnet().GetName()).To(Equal("subnet"))
+		Expect(computeAttachment.GetSecurityGroups()[0].GetName()).To(Equal("security-group"))
+		Expect(additionalDisk.GetStorageTier().GetName()).To(Equal("tier"))
 	})
 })

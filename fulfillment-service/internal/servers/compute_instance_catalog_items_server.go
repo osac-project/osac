@@ -23,7 +23,6 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -42,11 +41,10 @@ var _ publicv1.ComputeInstanceCatalogItemsServer = (*ComputeInstanceCatalogItems
 type ComputeInstanceCatalogItemsServer struct {
 	publicv1.UnimplementedComputeInstanceCatalogItemsServer
 
-	logger           *slog.Logger
-	referenceChecker catalogItemReferenceChecker
-	delegate         privatev1.ComputeInstanceCatalogItemsServer
-	inMapper         *GenericMapper[*publicv1.ComputeInstanceCatalogItem, *privatev1.ComputeInstanceCatalogItem]
-	outMapper        *GenericMapper[*privatev1.ComputeInstanceCatalogItem, *publicv1.ComputeInstanceCatalogItem]
+	logger    *slog.Logger
+	delegate  privatev1.ComputeInstanceCatalogItemsServer
+	inMapper  *GenericMapper[*publicv1.ComputeInstanceCatalogItem, *privatev1.ComputeInstanceCatalogItem]
+	outMapper *GenericMapper[*privatev1.ComputeInstanceCatalogItem, *publicv1.ComputeInstanceCatalogItem]
 }
 
 func NewComputeInstanceCatalogItemsServer() *ComputeInstanceCatalogItemsServerBuilder {
@@ -103,16 +101,6 @@ func (b *ComputeInstanceCatalogItemsServerBuilder) Build() (result *ComputeInsta
 		return
 	}
 
-	computeInstancesDao, err := dao.NewGenericDAO[*privatev1.ComputeInstance]().
-		SetLogger(b.logger).
-		SetTenancyLogic(b.tenancyLogic).
-		SetMetricsRegisterer(b.metricsRegisterer).
-		Build()
-	if err != nil {
-		return
-	}
-	referenceChecker := &daoReferenceChecker[*privatev1.ComputeInstance]{resourceDao: computeInstancesDao}
-
 	delegate, err := NewPrivateComputeInstanceCatalogItemsServer().
 		SetLogger(b.logger).
 		SetNotifier(b.notifier).
@@ -126,11 +114,10 @@ func (b *ComputeInstanceCatalogItemsServerBuilder) Build() (result *ComputeInsta
 	}
 
 	result = &ComputeInstanceCatalogItemsServer{
-		logger:           b.logger,
-		referenceChecker: referenceChecker,
-		delegate:         delegate,
-		inMapper:         inMapper,
-		outMapper:        outMapper,
+		logger:    b.logger,
+		delegate:  delegate,
+		inMapper:  inMapper,
+		outMapper: outMapper,
 	}
 	return
 }
@@ -142,11 +129,7 @@ func (s *ComputeInstanceCatalogItemsServer) List(ctx context.Context,
 	if request.HasLimit() {
 		privateRequest.SetLimit(request.GetLimit())
 	}
-	composedFilter, err := s.addPublishedFilter(request.GetFilter())
-	if err != nil {
-		return nil, err
-	}
-	privateRequest.SetFilter(composedFilter)
+	privateRequest.SetFilter(request.GetFilter())
 	privateRequest.SetOrder(request.GetOrder())
 
 	privateResponse, err := s.delegate.List(ctx, privateRequest)
@@ -181,16 +164,6 @@ func (s *ComputeInstanceCatalogItemsServer) Get(ctx context.Context,
 	privateResponse, err := s.delegate.Get(ctx, privateRequest)
 	if err != nil {
 		return nil, err
-	}
-
-	if !privateResponse.GetObject().GetPublished() {
-		hasRef, refErr := s.referenceChecker.hasReference(ctx, request.GetId())
-		if refErr != nil {
-			return nil, refErr
-		}
-		if !hasRef {
-			return nil, grpcstatus.Errorf(grpccodes.NotFound, "catalog item not found")
-		}
 	}
 
 	publicCatalogItem := &publicv1.ComputeInstanceCatalogItem{}
@@ -254,23 +227,16 @@ func (s *ComputeInstanceCatalogItemsServer) Update(ctx context.Context,
 		return
 	}
 
-	getRequest := &privatev1.ComputeInstanceCatalogItemsGetRequest{}
-	getRequest.SetId(id)
-	getResponse, err := s.delegate.Get(ctx, getRequest)
-	if err != nil {
-		return nil, err
-	}
-	existingPrivateCatalogItem := getResponse.GetObject()
-
-	err = s.inMapper.Copy(ctx, publicCatalogItem, existingPrivateCatalogItem)
+	privateCatalogItem := &privatev1.ComputeInstanceCatalogItem{}
+	err = s.inMapper.Copy(ctx, publicCatalogItem, privateCatalogItem)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to map public compute instance catalog item to private", slog.Any("error", err))
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process compute instance catalog item")
-		return
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process compute instance catalog item")
 	}
 
 	privateRequest := &privatev1.ComputeInstanceCatalogItemsUpdateRequest{}
-	privateRequest.SetObject(existingPrivateCatalogItem)
+	privateRequest.SetObject(privateCatalogItem)
+	privateRequest.SetUpdateMask(request.GetUpdateMask())
 	privateRequest.SetLock(request.GetLock())
 	privateResponse, err := s.delegate.Update(ctx, privateRequest)
 	if err != nil {
@@ -289,16 +255,6 @@ func (s *ComputeInstanceCatalogItemsServer) Update(ctx context.Context,
 	response.SetObject(updatedPublicCatalogItem)
 	response.SetWarnings(privateResponse.GetWarnings())
 	return
-}
-
-func (s *ComputeInstanceCatalogItemsServer) addPublishedFilter(filter string) (string, error) {
-	if filter == "" {
-		return "this.published", nil
-	}
-	if err := validateCELSyntax(filter); err != nil {
-		return "", grpcstatus.Errorf(grpccodes.InvalidArgument, "invalid filter: %v", err)
-	}
-	return "(" + filter + ") && this.published", nil
 }
 
 func (s *ComputeInstanceCatalogItemsServer) Delete(ctx context.Context,

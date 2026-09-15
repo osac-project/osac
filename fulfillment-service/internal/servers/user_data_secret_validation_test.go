@@ -23,6 +23,7 @@ import (
 	"go.uber.org/mock/gomock"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
@@ -183,7 +184,9 @@ var _ = Describe("User data secret validation", func() {
 			}.Build(),
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.user_data_secret"}},
 		}.Build()
-		err = server.validateUserDataMutualExclusionForUpdate(ctx, request)
+		mergedSpec := proto.Clone(created.GetObject().GetSpec()).(*privatev1.ComputeInstanceSpec)
+		mergedSpec.SetUserDataSecret(request.GetObject().GetSpec().GetUserDataSecret())
+		err = server.validateAndResolveUserDataSecret(ctx, mergedSpec, false)
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
 		Expect(err.Error()).To(ContainSubstring("mutually exclusive"))
 	})
@@ -207,8 +210,13 @@ var _ = Describe("User data secret validation", func() {
 			}.Build(),
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.user_data", "spec.user_data_secret"}},
 		}.Build()
-		Expect(server.validateUserDataMutualExclusionForUpdate(ctx, request)).To(Succeed())
-		Expect(server.validateTemplateImmutability(ctx, request)).To(Succeed())
+		Expect(server.validateAndResolveUserDataSecret(ctx, request.GetObject().GetSpec(), false)).To(Succeed())
+		candidate := proto.Clone(created.GetObject()).(*privatev1.ComputeInstance)
+		candidate.GetSpec().ClearUserData()
+		candidate.GetSpec().SetUserDataSecret(request.GetObject().GetSpec().GetUserDataSecret())
+		Expect(validateComputeInstanceImmutability(
+			created.GetObject(), candidate, request.GetUpdateMask(),
+		)).To(Succeed())
 	})
 
 	It("rejects changing an existing Compute Secret reference", func() {
@@ -232,7 +240,9 @@ var _ = Describe("User data secret validation", func() {
 			}.Build(),
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.user_data_secret"}},
 		}.Build()
-		err = server.validateTemplateImmutability(ctx, request)
+		candidate := proto.Clone(created.GetObject()).(*privatev1.ComputeInstance)
+		candidate.GetSpec().SetUserDataSecret(request.GetObject().GetSpec().GetUserDataSecret())
+		err = validateComputeInstanceImmutability(created.GetObject(), candidate, request.GetUpdateMask())
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
 		Expect(err.Error()).To(ContainSubstring("user_data_secret is immutable"))
 	})
@@ -241,10 +251,10 @@ var _ = Describe("User data secret validation", func() {
 		computeServer, err := NewPrivateComputeInstancesServer().SetLogger(logger).
 			SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
 		Expect(err).ToNot(HaveOccurred())
-		err = computeServer.validateUserDataMutualExclusion(privatev1.ComputeInstanceSpec_builder{
+		err = computeServer.validateAndResolveUserDataSecret(ctx, privatev1.ComputeInstanceSpec_builder{
 			UserData:       new("inline"),
 			UserDataSecret: privatev1.SecretLocalReference_builder{Id: "secret"}.Build(),
-		}.Build())
+		}.Build(), false)
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
 	})
 

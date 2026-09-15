@@ -106,6 +106,40 @@ func resolveDiskImage(
 	return diskImage, nil
 }
 
+// resolveDiskImageReference resolves and locks a DiskImage dependency without changing its reference.
+// An unqualified name prefers the owning tenant, then shared images; explicit selectors use the
+// selected scope and IDs use caller-visible objects. Ownership is checked, but lifecycle validation
+// is left to the caller. The context must contain the request transaction.
+func resolveDiskImageReference(ctx context.Context, resourceDao *dao.GenericDAO[*privatev1.DiskImage], scope referenceScope, ref *privatev1.DiskImageReference, source string) (*privatev1.DiskImage, error) {
+	var err error
+	var resolved *privatev1.DiskImage
+	if ref.GetId() == "" && ref.GetName() != "" && !ref.GetShared() && ref.GetProject() == "" {
+		resolved, err = resolveDiskImage(
+			ctx, resourceDao, ref.GetName(), scope.tenant, source,
+		)
+		if err != nil {
+			return nil, err
+		}
+		resolved, err = getLockedResource(ctx, resourceDao, resolved.GetId())
+		if err != nil {
+			return nil, resourceLookupError(
+				err, "disk image", ref.GetName(), source, grpccodes.NotFound,
+			)
+		}
+	} else {
+		resolved, err = resolveFullResourceReference(
+			ctx, resourceDao, scope, ref, "disk image", source, grpccodes.NotFound,
+		)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := validateDependencyOwnerScope(scope, resolved.GetMetadata(), "disk image", source); err != nil {
+		return nil, err
+	}
+	return resolved, nil
+}
+
 // validateResolvedDiskImage validates lifecycle state and returns any deprecation warning for an existing image.
 func validateResolvedDiskImage(diskImage *privatev1.DiskImage, key, source string) ([]string, error) {
 	if err := validateResourceNotDeleted("disk image", key, source, diskImage.GetMetadata()); err != nil {

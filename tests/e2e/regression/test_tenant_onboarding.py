@@ -446,9 +446,7 @@ def test_tenant_onboarding_demo1_milestone_02(
     project_id = resources["project_id"]
     membership_id = resources.get("membership_id", "")
     delete_out, delete_rc = _cli_unchecked(resources, "alice", "delete", "project", project_id)
-    assert delete_rc == 0 or "NotFound" in delete_out, (
-        f"Alice delete project with membership present failed rc={delete_rc}: {delete_out}"
-    )
+    assert delete_rc == 0, f"Alice delete project with membership present failed rc={delete_rc}: {delete_out}"
 
     try:
         poll_until(

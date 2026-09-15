@@ -46,8 +46,11 @@ def _delete_private(grpc: GRPCClient, *, service: str, resource_id: str, label: 
 
 def _wait_private_absent(
     grpc: GRPCClient, *, service: str, resource_id: str, label: str, retries: int = 12, delay: int = 2
-) -> None:
-    """Wait until a private-API Get returns NotFound so tenant delete is not raced."""
+) -> bool:
+    """Wait until a private-API Get returns NotFound so tenant delete is not raced.
+
+    Returns False on timeout so the fixture can finish remaining cleanup, then fail.
+    """
 
     def _gone() -> bool:
         combined, rc = grpc.call_unchecked(service=service, data={"id": resource_id})
@@ -63,6 +66,8 @@ def _wait_private_absent(
         )
     except TimeoutError:
         logger.warning("%s %s still present before tenant delete", label, resource_id)
+        return False
+    return True
 
 
 def _namespace_absent(name: str) -> bool:
@@ -135,6 +140,7 @@ def onboarding_resources(
         yield resources
     finally:
         logger.info("teardown tenant %s", tenant_name)
+        leftover_private: list[str] = []
         for service, key, label in (
             (f"{PRIVATE_API}.ProjectMemberships/Delete", "membership_id", "ProjectMembership"),
             (f"{PRIVATE_API}.Projects/Delete", "project_id", "Project"),
@@ -146,14 +152,15 @@ def onboarding_resources(
                 continue
             _delete_private(private_grpc, service=service, resource_id=resource_id, label=label)
             get_service = service.rsplit("/", 1)[0] + "/Get"
-            _wait_private_absent(
+            if not _wait_private_absent(
                 private_grpc,
                 service=get_service,
                 resource_id=resource_id,
                 label=label,
                 retries=24 if key == "project_id" else 12,
                 delay=5 if key == "project_id" else 2,
-            )
+            ):
+                leftover_private.append(f"{label} {resource_id}")
         try:
             admin_token = get_admin_token(keycloak_url=keycloak_url, username="admin", password=keycloak_admin_password)
             for username in (resources["alice_user"], resources["bob_user"]):
@@ -205,3 +212,5 @@ def onboarding_resources(
 
         shutil.rmtree(alice_config_dir, ignore_errors=True)
         shutil.rmtree(bob_config_dir, ignore_errors=True)
+        if leftover_private:
+            pytest.fail("Private-API dependents still present after teardown: " + ", ".join(leftover_private))

@@ -368,13 +368,7 @@ def assert_cluster_order_deleting_event(*, k8s: K8sClient, name: str) -> None:
 def wait_for_cluster_ready(*, k8s: K8sClient, name: str) -> None:
     # Available=True is the single completion signal for a fully provisioned
     # ClusterOrder. It is mapped to the fulfillment API's READY condition.
-    poll_until(
-        fn=lambda: k8s.get_cluster_order_condition_status(name=name, condition_type="Available", checked=False),
-        until=lambda v: v == "True",
-        retries=480,
-        delay=15,
-        description=f"{name} ClusterOrder Available",
-    )
+    wait_for_cluster_order_condition(k8s=k8s, name=name, condition_type="Available")
 
 
 def wait_for_cluster_deletion(*, k8s: K8sClient, name: str) -> None:

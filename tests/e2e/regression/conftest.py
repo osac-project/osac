@@ -53,6 +53,7 @@ def _wait_private_absent(
     """
 
     def _gone() -> bool:
+        """Return True when Get for this id reports NotFound."""
         combined, rc = grpc.call_unchecked(service=service, data={"id": resource_id})
         return rc != 0 and "NotFound" in combined
 
@@ -71,6 +72,7 @@ def _wait_private_absent(
 
 
 def _namespace_absent(name: str) -> bool:
+    """Return True when kubectl reports the tenant namespace is NotFound."""
     combined, rc = run_unchecked("kubectl", "--as", "system:admin", "get", "ns", name)
     if rc == 0:
         return False
@@ -78,6 +80,7 @@ def _namespace_absent(name: str) -> bool:
 
 
 def _organization_absent(*, keycloak_url: str, admin_token: str, org_name: str) -> bool:
+    """Return True when Keycloak lists no organization with this exact name."""
     query = urlencode({"exact": "true", "search": org_name})
     status, body = keycloak_admin_request(
         keycloak_url=keycloak_url, admin_token=admin_token, method="GET", path=f"/organizations?{query}"
@@ -100,6 +103,7 @@ def onboarding_resources(
     keycloak_url: str,
     keycloak_admin_password: str,
     fulfillment_address: str,
+    jwt_password: str,
 ) -> Generator[dict[str, str], None, None]:
     """Unique tenant/project names plus teardown of Demo 1 onboarding resources.
 
@@ -111,7 +115,6 @@ def onboarding_resources(
     tag = uuid4().hex[:8]
     tenant_name = f"test-onboard-{tag}"
     project_name = f"onboard-{tag}"
-    password = env("OSAC_JWT_PASSWORD", "foobar")
     alice_config_dir = tempfile.mkdtemp(prefix="osac-config-alice-")
     bob_config_dir = tempfile.mkdtemp(prefix="osac-config-bob-")
     resources: dict[str, str] = {
@@ -126,8 +129,8 @@ def onboarding_resources(
         "bob_config_dir": bob_config_dir,
         "alice_user": f"alice-{tag}",
         "bob_user": f"bob-{tag}",
-        "alice_password": password,
-        "bob_password": password,
+        "alice_password": jwt_password,
+        "bob_password": jwt_password,
         "tenant_id": "",
         "idp_id": "",
         "role_binding_id": "",

@@ -28,15 +28,23 @@ pytestmark = pytest.mark.regression
 _CREATED_ID = re.compile(r"identifier '([^']+)'")
 _TENANT_NAME = re.compile(r"^test-onboard-[0-9a-f]{8}$")
 _BREAK_GLASS_PASSWORD = re.compile(r"Password:\s+(\S+)")
+_SECRET_VALUE = re.compile(r"(?i)((?:password|token|secret|authorization|bearer)[:\s=]+)\S+")
+
+
+def _redact_secrets(text: str) -> str:
+    """Strip credential values from CLI/API text used in assertions and logs."""
+    return _SECRET_VALUE.sub(r"\1[REDACTED]", text)
 
 
 def _parse_created_id(stdout: str) -> str:
+    """Return the resource id from an `osac create` success line."""
     match = _CREATED_ID.search(stdout)
-    assert match is not None, f"Failed to parse identifier from CLI output: {stdout}"
+    assert match is not None, "Failed to parse identifier from CLI create output"
     return match.group(1)
 
 
 def _status(resp: dict[str, Any]) -> dict[str, Any]:
+    """Return the `status` object from a private-API Get/List envelope."""
     obj = resp.get("object")
     if not isinstance(obj, dict):
         return {}
@@ -45,6 +53,7 @@ def _status(resp: dict[str, Any]) -> dict[str, Any]:
 
 
 def _status_value(resp: dict[str, Any], snake: str) -> str:
+    """Read a status field, accepting snake_case or camelCase proto JSON keys."""
     status = _status(resp)
     camel = snake.split("_")
     camel_name = camel[0] + "".join(part.title() for part in camel[1:])
@@ -53,16 +62,19 @@ def _status_value(resp: dict[str, Any], snake: str) -> str:
 
 
 def _cli(resources: dict[str, str], identity: str, *args: str) -> str:
+    """Run an osac command as Alice or Bob and require a zero exit code."""
     combined, rc = _cli_unchecked(resources, identity, *args)
-    assert rc == 0, f"osac {' '.join(args)} failed rc={rc}: {combined}"
+    assert rc == 0, f"osac {' '.join(args)} failed rc={rc}: {_redact_secrets(combined)}"
     return combined
 
 
 def _cli_unchecked(resources: dict[str, str], identity: str, *args: str) -> tuple[str, int]:
+    """Run an osac command as Alice or Bob without requiring success."""
     return run_unchecked(resources["cli_binary"], "--config", resources[f"{identity}_config_dir"], *args)
 
 
 def _password_login(resources: dict[str, str], identity: str, user: str, password: str) -> None:
+    """Log in on the public fulfillment address with the password grant."""
     run(
         resources["cli_binary"],
         "--config",
@@ -81,6 +93,7 @@ def _password_login(resources: dict[str, str], identity: str, user: str, passwor
 
 
 def _whoami_roles(text: str) -> list[str]:
+    """Parse the Roles: line from `osac whoami` output."""
     for line in text.splitlines():
         if line.startswith("Roles:"):
             return [role.strip() for role in line.split(":", 1)[1].split(",") if role.strip()]
@@ -88,6 +101,7 @@ def _whoami_roles(text: str) -> list[str]:
 
 
 def _whoami_tenant(text: str) -> str:
+    """Parse the Tenant: line from `osac whoami` output."""
     for line in text.splitlines():
         if line.startswith("Tenant:"):
             return line.split(":", 1)[1].strip()
@@ -107,12 +121,14 @@ def _assert_whoami(text: str, *, user: str, tenant_name: str, tenant_admin: bool
 
 
 def _write_manifest(directory: str, filename: str, content: str) -> str:
+    """Write a YAML/JSON manifest into an isolated CLI config directory."""
     path = Path(directory) / filename
     path.write_text(content)
     return str(path)
 
 
 def _is_transient_grpc(exc: subprocess.CalledProcessError) -> bool:
+    """Return True when a grpcurl failure looks like a transient transport error."""
     combined = (exc.stderr or "") + (exc.stdout or "")
     return "Unavailable" in combined or "connection refused" in combined.lower()
 
@@ -120,7 +136,10 @@ def _is_transient_grpc(exc: subprocess.CalledProcessError) -> bool:
 def _wait_private_status(
     grpc: GRPCClient, *, service: str, resource_id: str, field: str, expected: str, description: str
 ) -> dict[str, Any]:
+    """Poll private Get until a status field matches, retrying Unavailable."""
+
     def _current() -> dict[str, Any]:
+        """Fetch the resource, treating transport errors as not-yet-ready."""
         try:
             return grpc.call(service=service, data={"id": resource_id})
         except subprocess.CalledProcessError as exc:
@@ -138,6 +157,7 @@ def _wait_private_status(
 
 
 def _user_listed(grpc: GRPCClient, *, username: str, tenant_name: str) -> bool:
+    """Return True when Users/List includes this username on the story tenant."""
     filt = f"this.spec.username == {json.dumps(username)}"
     try:
         resp = grpc.call(service=f"{PRIVATE_API}.Users/List", data={"filter": filt})
@@ -157,6 +177,7 @@ def _user_listed(grpc: GRPCClient, *, username: str, tenant_name: str) -> bool:
 
 
 def _namespace_json(name: str) -> dict[str, Any]:
+    """Return the Kubernetes Namespace object as JSON."""
     raw, rc = run_unchecked("kubectl", "--as", "system:admin", "get", "ns", name, "-o", "json")
     assert rc == 0, f"namespace {name} not found: {raw}"
     data = json.loads(raw)
@@ -165,6 +186,7 @@ def _namespace_json(name: str) -> dict[str, Any]:
 
 
 def _private_absent(grpc: GRPCClient, *, service: str, resource_id: str) -> bool:
+    """Return True when private Get reports NotFound."""
     combined, rc = grpc.call_unchecked(service=service, data={"id": resource_id})
     return rc != 0 and "NotFound" in combined
 
@@ -180,6 +202,7 @@ def test_tenant_onboarding_demo1_milestone_02(
     keycloak_client_id: str,
     fulfillment_address: str,
 ) -> None:
+    """Demo 1 tenant onboarding: create, IdP users, RBAC, project, cascade delete."""
     resources = onboarding_resources
     tenant_name = resources["tenant_name"]
     project_name = resources["project_name"]
@@ -204,7 +227,7 @@ def test_tenant_onboarding_demo1_milestone_02(
     tenant_id = _parse_created_id(create_out)
     resources["tenant_id"] = tenant_id
     password_match = _BREAK_GLASS_PASSWORD.search(create_out)
-    assert password_match, f"create stdout missing break-glass password: {create_out}"
+    assert password_match, "create stdout missing break-glass password"
     break_glass_password = password_match.group(1)
     assert "break-glass" in create_out.lower()
 
@@ -220,7 +243,7 @@ def test_tenant_onboarding_demo1_milestone_02(
     # Flow 2: Get tenant has break_glass_user_id and must not echo the create password.
     get_tenant = private_grpc.call(service=f"{PRIVATE_API}.Tenants/Get", data={"id": tenant_id})
     bg_user_id = _status_value(get_tenant, "break_glass_user_id")
-    assert bg_user_id, f"break_glass_user_id missing after SYNCED: {get_tenant}"
+    assert bg_user_id, "break_glass_user_id missing after SYNCED"
     get_blob = json.dumps(get_tenant)
     get_leaked = break_glass_password in get_blob
     assert not get_leaked, "Tenants/Get echoed break-glass password"
@@ -241,6 +264,7 @@ def test_tenant_onboarding_demo1_milestone_02(
     assert org.get("enabled") is True, org
 
     def _ns_active() -> str:
+        """Return the tenant namespace phase, or empty if it is not ready yet."""
         raw, rc = run_unchecked("kubectl", "--as", "system:admin", "get", "ns", tenant_name, "-o", "json")
         if rc != 0:
             return ""
@@ -436,8 +460,8 @@ def test_tenant_onboarding_demo1_milestone_02(
         for item in listed
     ), bob_projects
     denied_out, denied_rc = _cli_unchecked(resources, "bob", "delete", "project", resources["project_id"])
-    assert denied_rc != 0, f"Bob should be denied project delete, got: {denied_out}"
-    assert "denied" in denied_out.lower() or "permission" in denied_out.lower(), denied_out
+    assert denied_rc != 0, f"Bob should be denied project delete, rc={denied_rc}"
+    assert "denied" in denied_out.lower() or "permission" in denied_out.lower(), _redact_secrets(denied_out)
     still_active = private_grpc.call(service=f"{PRIVATE_API}.Projects/Get", data={"id": resources["project_id"]})
     assert _status_value(still_active, "state") == "PROJECT_STATE_ACTIVE", still_active
 
@@ -446,7 +470,9 @@ def test_tenant_onboarding_demo1_milestone_02(
     project_id = resources["project_id"]
     membership_id = resources.get("membership_id", "")
     delete_out, delete_rc = _cli_unchecked(resources, "alice", "delete", "project", project_id)
-    assert delete_rc == 0, f"Alice delete project with membership present failed rc={delete_rc}: {delete_out}"
+    assert delete_rc == 0, (
+        f"Alice delete project with membership present failed rc={delete_rc}: {_redact_secrets(delete_out)}"
+    )
 
     try:
         poll_until(

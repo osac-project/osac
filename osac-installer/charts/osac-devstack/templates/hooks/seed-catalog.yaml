@@ -44,7 +44,7 @@ spec:
       - name: seed-catalog
         image: {{ .Values.cliImage }}
         command: ["/bin/bash", "/scripts/seed-catalog-simple.sh"]
-        args: ["{{ .Values.osacNamespace }}"]
+        args: ["{{ .Values.catalog.internalApiService }}", "{{ .Values.catalog.internalApiPort }}"]
         env:
         - name: NS
           value: {{ .Values.osacNamespace | quote }}

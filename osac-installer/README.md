@@ -18,6 +18,7 @@ For detailed architecture, workflows, and design documentation, please refer to 
 [OSAC documentation repository](https://github.com/osac-project/docs).
 
 The OSAC platform provides:
+
 - **Self-service provisioning** for clusters and virtual machines through a governed API
 - **Template-based automation** using Red Hat Ansible Automation Platform
 - **Multi-hub support** allowing multiple infrastructure hubs to be managed by a single fulfillment service
@@ -60,10 +61,11 @@ The OSAC platform relies on five core components to deliver governed self-servic
 
 > **System Requirements** This solution requires the following platforms to be installed
 > and operational:
-> * Red Hat OpenShift Advanced Cluster Management (RHACM)
-> * Red Hat OpenShift Virtualization (OCP-Virt) - **Optional**: Only required for VM as a Service (VMaaS) support
-> * Red Hat Ansible Automation Platform (AAP)
-> * A network backend for bare metal provisioning: either **ESI** (Elastic System Infrastructure) or **Netris** (see [Network Backend Configuration](#network-backend-configuration-caas))
+>
+> - Red Hat OpenShift Advanced Cluster Management (RHACM)
+> - Red Hat OpenShift Virtualization (OCP-Virt) - **Optional**: Only required for VM as a Service (VMaaS) support
+> - Red Hat Ansible Automation Platform (AAP)
+> - A network backend for bare metal provisioning: either **ESI** (Elastic System Infrastructure) or **Netris** (see [Network Backend Configuration](#network-backend-configuration-caas))
 
 **Configuration Manifests**
 
@@ -75,11 +77,10 @@ target Hub cluster.
 > files modify cluster-wide settings. Please coordinate with the appropriate cluster
 > administrators before proceeding.
 
-
 ### Prerequisites Summary
 
 | **Category** | **Requirement** | **Notes / Details** |
-|---------------|-----------------|----------------------|
+| --------------- | ----------------- | ---------------------- |
 | **Platform** | Red Hat OpenShift Container Platform (OCP) 4.17 or later | Must have cluster admin access to the hub cluster. |
 | **Operators** | Red Hat Advanced Cluster Management (RHACM) 2.18+<br>Red Hat OpenShift Virtualization (OCP-Virt) 4.17+<br>Red Hat Ansible Automation Platform (AAP) 2.5+ | These must be installed and running prior to OSAC installation. |
 | **CLI Tools** | `oc` (OpenShift CLI) v4.17+<br>`helm` v3.x<br>`git` | Ensure all CLIs are available in your `PATH`. |
@@ -90,7 +91,6 @@ target Hub cluster.
 | **Permissions** | Cluster-admin access to deploy operators and create CRDs | Limited access users can only deploy into namespaces configured by the admin. |
 | **License Files** | `license.zip` (AAP subscription) | Must be placed in your values directory (e.g., `values/<env>/license.zip`). |
 | **Internet Access** | Outbound access to GitHub and `ghcr.io` (for fetching chart dependencies, OCI charts, and releases) | Required during installation and updates. |
-
 
 ## Installation
 
@@ -145,7 +145,7 @@ make install-osac  PLATFORM=openshift PROFILE=<profile> NS=<namespace>   # OSAC 
 ```
 
 | Variable | Description |
-|----------|-------------|
+| ---------- | ------------- |
 | `PLATFORM` | `kind` or `openshift` (required) |
 | `PROFILE` | `dev`, `dev-full`, `vmaas-ci`, `bmaas-ci`, `caas-ci`, or `full-ci` (required; `dev-full` is kind only) |
 | `NS` | Target namespace (required) |
@@ -162,6 +162,39 @@ the end-to-end "create a VM from the UI" experience:
 ```bash
 make install PLATFORM=kind PROFILE=dev-full NS=osac
 ```
+
+To use source-built images, use the existing component build targets and then
+load the resulting image tags into Kind. Use the same `CONTAINER_TOOL` value for
+building and loading; the image names must remain registry-qualified so they
+match the dev-full Helm values:
+
+```bash
+make install-infra PLATFORM=kind PROFILE=dev-full NS=osac
+
+export CONTAINER_TOOL=podman  # Use docker consistently instead if preferred.
+make -C ../fulfillment-service image-build \
+  IMG=ghcr.io/osac-project/fulfillment-service:latest \
+  CONTAINER_TOOL="$CONTAINER_TOOL"
+make -C ../osac-operator image-build \
+  IMG=ghcr.io/osac-project/osac-operator:latest \
+  CONTAINER_TOOL="$CONTAINER_TOOL"
+make -C ../osac-csi-driver image-build \
+  IMG=ghcr.io/osac-project/osac-csi-driver:latest \
+  CONTAINER_TOOL="$CONTAINER_TOOL"
+"$CONTAINER_TOOL" build -t ghcr.io/osac-project/osac-ui:latest \
+  -f ../../osac-ui/Containerfile ../../osac-ui
+
+make kind-load-images PLATFORM=kind PROFILE=dev-full NS=osac \
+  CONTAINER_TOOL="$CONTAINER_TOOL"
+make install-osac PLATFORM=kind PROFILE=dev-full NS=osac
+make install-devstack PLATFORM=kind PROFILE=dev-full NS=osac
+```
+
+`kind-load-images` only loads already-built images; it does not rebuild them.
+After changing source code, rerun the relevant component `image-build` target
+and then `kind-load-images`. Loaded images are restarted only for workloads that
+use one of the local image references. Each Go component also exposes a
+single-image `kind-load-image` target when loading only that component is useful.
 
 On top of `dev`, `dev-full` adds (via `scripts/dev-full/`, orchestrated by the
 `install-devstack` target):
@@ -195,13 +228,19 @@ so networking resources reconcile to READY without a real fabric (kind has none)
     install the drop-in at `scripts/dev-full/manifests/podman-socket-rootful.conf`
   - **macOS** — Docker Desktop (auto-detected)
 - **`/dev/kvm`** present (Linux), **`fs.inotify.max_user_instances >= 256`**, and
-  `kind`, `helm`, `kubectl`, `jq`, `curl`, `openssl`, `python3` on `PATH`
+  `kind`, `helm`, `kubectl`, `jq`, `curl`, `openssl`, and `python3` on `PATH`
 - Override runtime detection with `KIND_EXPERIMENTAL_PROVIDER=docker|podman`
 
 On an Apple Silicon Mac, the install target automatically builds an arm64
 replacement for `quay.io/openshift/origin-cli:4.20.0` with Docker and loads it
 into the kind cluster before installing Helm charts. Docker Desktop must be
 running; no manual image setup is required.
+
+`dev-full` uses the normal `ghcr.io/osac-project/...:latest` image references, so
+the rendered deployment does not need a development-only registry name. The
+profile uses `IfNotPresent`: Kubernetes uses an image loaded in the node and does
+not pull it again, while still allowing a partial deployment to pull an image
+that has not been built locally.
 
 **Endpoints** (via the kind port mappings; every `*.localhost` name resolves to
 127.0.0.1 automatically, so no `/etc/hosts` editing is needed):
@@ -300,6 +339,7 @@ make uninstall
 make install       PLATFORM=... PROFILE=... NS=...  # Full install (infra + osac)
 make install-infra PLATFORM=... PROFILE=... NS=...  # Infrastructure only
 make install-osac  PLATFORM=... PROFILE=... NS=...  # OSAC application only
+make kind-load-images PLATFORM=kind PROFILE=dev-full NS=... # Load existing images
 make uninstall     PLATFORM=... PROFILE=... NS=...  # Full uninstall
 make test          PLATFORM=... PROFILE=... NS=... SUITE=...  # Integration tests
 make helm-lint                                       # Lint all charts
@@ -383,7 +423,7 @@ After deployment, you can access the AAP web interface to monitor jobs and manag
 ### Get the AAP URL
 
 ```bash
-$ oc get route -n <project-name> | grep osac-aap
+oc get route -n <project-name> | grep osac-aap
 ```
 
 > **Note:** The main AAP URL will be something like: `https://osac-aap-<project-name>.apps.your-cluster.com`
@@ -423,6 +463,7 @@ $ EXTRA_SERVICES=true INSTALLER_NAMESPACE=<project-name> ./scripts/teardown.sh
 ```
 
 The script removes resources in reverse order:
+
 1. OSAC CRs (while operator is running for finalizer processing)
 2. Helm release and project namespace
 3. Keycloak
@@ -437,9 +478,10 @@ The script removes resources in reverse order:
 > **Warning:** This removes **all** prerequisite operators and their namespaces. If other
 > workloads on the cluster depend on these operators (e.g., cert-manager, MetalLB), do not
 > run this script. Instead, manually uninstall:
+>
 > ```bash
-> $ helm uninstall osac -n <project-name>
-> $ oc delete namespace <project-name>
+> helm uninstall osac -n <project-name>
+> oc delete namespace <project-name>
 > ```
 
 ## Troubleshooting
@@ -479,6 +521,7 @@ $ oc get events -n <project-name> --sort-by=.metadata.creationTimestamp
 ## Support
 
 For issues and questions:
+
 - Check the troubleshooting section above
 - Review component logs for error messages
 - Verify prerequisites are properly installed

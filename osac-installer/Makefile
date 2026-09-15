@@ -11,6 +11,7 @@
 #   make install-osac    PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci  NS=osac
 #   make uninstall-osac  PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci  NS=osac
 #   make uninstall-infra PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci  NS=osac
+#   make kind-load-images  PLATFORM=kind PROFILE=dev-full NS=osac
 #   make test            PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci  NS=osac  SUITE=all|fulfillment|operator|bmf
 #
 # PROFILE=dev-full (kind only) is a superset of dev: it runs the same chart-based
@@ -32,7 +33,7 @@ EXTRA_HELM_ARGS ?=
 # -- Fail-fast parameter validation ------------------------------------
 # Guards fire at parse time, gated by MAKECMDGOALS so `make help` works.
 
-ALL_TARGETS := install uninstall install-infra uninstall-infra install-osac uninstall-osac install-devstack test
+ALL_TARGETS := install uninstall install-infra uninstall-infra install-osac uninstall-osac install-devstack kind-load-images test
 
 ifneq ($(filter $(ALL_TARGETS),$(MAKECMDGOALS)),)
 ifndef PLATFORM
@@ -120,15 +121,25 @@ endif
 # it empty and helm/kubectl would fall back to localhost:8080. `$(or ...)` skips empty.
 export KUBECONFIG := $(or $(KUBECONFIG),$(KIND_KUBECONFIG))
 
-define kind-load-image
-	@if [ "$$(basename $(CONTAINER_TOOL))" = "podman" ]; then \
-		tmpfile=$$(mktemp /tmp/kind-image-XXXXXX.tar); \
-		$(CONTAINER_TOOL) save $(1) -o "$$tmpfile"; \
-		kind load image-archive "$$tmpfile" --name $(KIND_CLUSTER_NAME); \
-		rm -f "$$tmpfile"; \
-	else \
-		kind load docker-image $(1) --name $(KIND_CLUSTER_NAME); \
-	fi
+# These names deliberately match the image URLs rendered by the dev-full values.
+KIND_FULFILLMENT_IMAGE := ghcr.io/osac-project/fulfillment-service:latest
+KIND_OPERATOR_IMAGE := ghcr.io/osac-project/osac-operator:latest
+KIND_CSI_IMAGE := ghcr.io/osac-project/osac-csi-driver:latest
+KIND_UI_IMAGE := ghcr.io/osac-project/osac-ui:latest
+
+include scripts/dev-full/kind-load-image.mk
+
+# Integration-test image loading also supports PROFILE=dev. Keep this helper
+# separate from the dev-full component targets, which use kind-load-image.sh.
+KIND_COMMAND := kind
+ifeq ($(PLATFORM)/$(PROFILE),kind/dev-full)
+KIND_COMMAND := $(KIND_RUNTIME)
+endif
+define kind-load-test-image
+	@tmpfile=$$(mktemp /tmp/kind-image-XXXXXX.tar); \
+	trap 'rm -f "$$tmpfile"' EXIT; \
+	$(CONTAINER_TOOL) save $(1) > "$$tmpfile"; \
+	$(KIND_COMMAND) load image-archive "$$tmpfile" --name "$(KIND_CLUSTER_NAME)"
 endef
 
 # -- Help --------------------------------------------------------------
@@ -137,6 +148,17 @@ endef
 help: ## Display this help
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-30s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
 
+##@ Entity: Local Kind Images
+
+.PHONY: kind-load-images
+kind-load-images: ## Load previously built dev-full images into Kind (PLATFORM=kind PROFILE=dev-full NS= required)
+	@if [ "$(PLATFORM)/$(PROFILE)" != "kind/dev-full" ]; then \
+		echo "ERROR: kind-load-images requires PLATFORM=kind PROFILE=dev-full" >&2; exit 1; \
+	fi
+	$(MAKE) -C ../fulfillment-service kind-load-image PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
+	$(MAKE) -C ../osac-operator kind-load-image PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
+	$(MAKE) -C ../osac-csi-driver kind-load-image PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
+	$(call kind-load-image,$(KIND_UI_IMAGE))
 ##@ Entity: Infra
 
 .PHONY: install-infra
@@ -293,7 +315,7 @@ ifeq ($(SUITE),all)
 endif
 ifeq ($(SUITE),fulfillment)
 	$(CONTAINER_TOOL) build -t localhost/fulfillment-service:it -f ../fulfillment-service/Containerfile ..
-	$(call kind-load-image,localhost/fulfillment-service:it)
+	$(call kind-load-test-image,localhost/fulfillment-service:it)
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
 		EXTRA_HELM_ARGS="--set service.images.service=localhost/fulfillment-service:it --set operator.enabled=false --set networkClass.enabled=false"
 	@for f in ../fulfillment-service/it/crds/*.yaml; do kubectl apply --server-side --force-conflicts -f "$$f"; done
@@ -301,14 +323,14 @@ ifeq ($(SUITE),fulfillment)
 endif
 ifeq ($(SUITE),operator)
 	$(CONTAINER_TOOL) build -t localhost/osac-operator:it -f ../osac-operator/Containerfile ..
-	$(call kind-load-image,localhost/osac-operator:it)
+	$(call kind-load-test-image,localhost/osac-operator:it)
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
 		EXTRA_HELM_ARGS="--set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set service.enabled=false --set hubAccess.enabled=false --set validation.enabled=false --set networkClass.enabled=false"
 	cd ../osac-operator && ginkgo run --timeout 30m -v test/integration
 endif
 ifeq ($(SUITE),bmf)
 	$(CONTAINER_TOOL) build -t localhost/bmf-operator:it -f ../bare-metal-fulfillment-operator/Containerfile ..
-	$(call kind-load-image,localhost/bmf-operator:it)
+	$(call kind-load-test-image,localhost/bmf-operator:it)
 	kubectl apply --server-side --force-conflicts -f ../bare-metal-fulfillment-operator/test/crds/
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
 		EXTRA_HELM_ARGS="--set global.services.bmaas.enabled=true --set bmf.replicaCount=1 --set bmf.image.repository=localhost/bmf-operator --set bmf.image.tag=it --set bmf.image.pullPolicy=Never --set operator.enabled=false --set service.enabled=false --set hubAccess.enabled=false --set validation.enabled=false --set networkClass.enabled=false"

@@ -81,6 +81,11 @@ type ClusterOrderReconciler struct {
 	StallThresholds       ClusterOrderStallThresholds
 	Recorder              events.EventRecorder
 	now                   func() time.Time
+
+	// WorkerReconciler handles bare-metal worker failure detection,
+	// BMI replacement with escalating backoff, and terminal failure
+	// conditions. Nil when bare-metal worker handling is not enabled.
+	WorkerReconciler *BareMetalWorkerReconciler
 }
 
 const (
@@ -316,6 +321,7 @@ func (r *ClusterOrderReconciler) patchStatusWithRetry(ctx context.Context, key c
 		latest.Status.DesiredConfigVersion = computed.DesiredConfigVersion
 		latest.Status.ApiEndpoint = computed.ApiEndpoint
 		latest.Status.IngressEndpoint = computed.IngressEndpoint
+		latest.Status.Workers = computed.Workers
 		for _, c := range computed.Conditions {
 			apimeta.SetStatusCondition(&latest.Status.Conditions, c)
 		}
@@ -493,6 +499,20 @@ func (r *ClusterOrderReconciler) handleUpdate(ctx context.Context, _ reconcile.R
 	if hc, _ := r.findHostedCluster(ctx, instance, ns.GetName()); hc != nil {
 		if err := r.handleHostedCluster(ctx, instance, hc); err != nil {
 			return ctrl.Result{}, err
+		}
+	}
+
+	// Reconcile bare-metal worker failures (timeout detection, BMI replacement,
+	// terminal condition) when the worker reconciler is configured.
+	if r.WorkerReconciler != nil && len(instance.Status.Workers) > 0 {
+		workerResult, err := r.WorkerReconciler.ReconcileWorkers(ctx, instance)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if workerResult.RequeueAfter > 0 {
+			if provisionResult.RequeueAfter == 0 || workerResult.RequeueAfter < provisionResult.RequeueAfter {
+				provisionResult = workerResult
+			}
 		}
 	}
 

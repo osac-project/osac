@@ -380,6 +380,7 @@ func setupClusterControllers(
 			)
 			reconciler.StallThresholds = clusterOrderStallThresholdsFromEnv()
 			reconciler.Recorder = localMgr.GetEventRecorder(controller.ClusterOrderControllerName)
+			reconciler.WorkerReconciler = controller.NewBareMetalWorkerReconciler(nil, nil)
 			return reconciler.SetupWithManager(mgr)
 		},
 	)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import subprocess
 
@@ -20,6 +21,8 @@ from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until
 
 pytestmark = pytest.mark.serial
+
+logger = logging.getLogger(__name__)
 
 _AVAILABLE_BMH_STATES = {"available", "ready"}
 _NOT_FOUND_RE = re.compile(r"Code:\s*NotFound|baremetalinstance\b.*\bnot found", re.IGNORECASE)
@@ -136,5 +139,14 @@ def test_baremetal_instance_inventory_exhausted(
 
         wait_for_bmi_running_after_recovery(grpc=grpc, bmi_id=overflow_id)
     finally:
+        cleanup_errors: list[Exception] = []
         for bmi_id in reversed(bmi_ids):
-            _cleanup_bmi(cli=cli, grpc=grpc, k8s=k8s_hub_client, bmi_id=bmi_id)
+            try:
+                _cleanup_bmi(cli=cli, grpc=grpc, k8s=k8s_hub_client, bmi_id=bmi_id)
+            except Exception as exc:
+                logger.exception("Failed to clean up BMI %s", bmi_id)
+                cleanup_errors.append(exc)
+        if cleanup_errors:
+            raise RuntimeError(
+                f"{len(cleanup_errors)} BMI cleanup failure(s); see log for details"
+            ) from cleanup_errors[0]

@@ -347,10 +347,23 @@ read_validated_chart_name() {
 # artifact media type, so there's no simpler way to resolve it.
 push_and_sign_chart() {
     local chart_tgz="$1" chart_name="$2" oci_repo="$3"
-    local output digest
+    local output digest status=0
 
-    output=$(helm push "${chart_tgz}" "oci://${oci_repo}" 2>&1)
+    # `local output=$(...)` (or a bare assignment) as a simple command makes
+    # its exit status the exit status of the command substitution -- under
+    # set -e that aborts the function right here on a failed push, before
+    # the "echo output" below ever runs, silently discarding the one place
+    # helm's real error text lives (confirmed live: a real push failure
+    # produced zero diagnostic output, just "Process completed with exit
+    # code 1"). Capture the exit status explicitly instead so the output is
+    # always printed, success or failure.
+    output=$(helm push "${chart_tgz}" "oci://${oci_repo}" 2>&1) || status=$?
     echo "${output}"
+    if [[ "${status}" -ne 0 ]]; then
+        echo "::error::helm push failed for ${chart_name} (exit ${status}) -- see output above" >&2
+        return "${status}"
+    fi
+
     digest=$(grep -oE '^Digest: sha256:[0-9a-f]+' <<<"${output}" | cut -d' ' -f2)
     if [[ -z "${digest}" ]]; then
         echo "::error::Could not parse digest from helm push output for ${chart_name}" >&2

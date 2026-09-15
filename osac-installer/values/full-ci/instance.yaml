@@ -134,6 +134,10 @@ ui:
       caBundle:
         configMap: ca-bundle
 
+# --- NetworkClass ---
+networkClass:
+  vipPrefixLength: 28
+
 # --- AAP ---
 aap:
   aap:

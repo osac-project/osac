@@ -22,6 +22,8 @@ import (
 
 // VolumeTopology carries CSI-style placement segments for a volume request.
 type VolumeTopology struct {
+	// Segments is a CSI-style topology map (e.g. {"osac.io/node": "worker-1"}).
+	// Keys mirror CSI topology keys; values are scheduler-resolved.
 	Segments map[string]string `json:"segments,omitempty"`
 }
 
@@ -47,7 +49,14 @@ type VolumeSpec struct {
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="accessMode is immutable"
 	AccessMode VolumeAccessMode `json:"accessMode"`
 
-	// Topology contains optional CSI-style placement segments.
+	// Topology carries CSI-style placement constraints for this volume.
+	// For node-local backends (e.g. LVMS), the "osac.io/node" segment
+	// pins the volume to the scheduler-selected node; the ComputeInstance
+	// using this volume is then node-pinned. For network backends,
+	// topology may carry zone/region segments or be empty.
+	// The target CSI driver must support WaitForFirstConsumer and
+	// advertise VOLUME_ACCESSIBILITY_CONSTRAINTS for topology to take
+	// effect. Immutable after creation.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="topology is immutable"
 	Topology *VolumeTopology `json:"topology,omitempty"`

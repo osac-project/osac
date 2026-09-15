@@ -18,7 +18,6 @@ package securitygroup
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"math/rand/v2"
 	"slices"
@@ -321,11 +320,16 @@ func (t *task) getKubeObject(ctx context.Context) (result *osacv1alpha1.Security
 	items := list.Items
 	count := len(items)
 	if count > 1 {
-		err = fmt.Errorf(
-			"expected at most one security group with identifier '%s' but found %d",
-			t.securityGroup.GetId(), count,
-		)
-		return
+		// OSAC-4208: prune duplicate CRs instead of erroring.
+		slices.SortFunc(items, func(a, b osacv1alpha1.SecurityGroup) int {
+			return a.CreationTimestamp.Time.Compare(b.CreationTimestamp.Time)
+		})
+		extras := make([]clnt.Object, count-1)
+		for i := 1; i < count; i++ {
+			extras[i-1] = &items[i]
+		}
+		controllers.PruneDuplicateCRs(ctx, t.r.logger, t.hubClient, extras,
+			"security group", t.securityGroup.GetId())
 	}
 	if count > 0 {
 		result = &items[0]

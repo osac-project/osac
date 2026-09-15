@@ -434,11 +434,16 @@ func (t *task) getKubeObject(ctx context.Context) (result *osacv1alpha1.ComputeI
 	items := list.Items
 	count := len(items)
 	if count > 1 {
-		err = fmt.Errorf(
-			"expected at most one compute instance with identifier '%s' but found %d",
-			t.computeInstance.GetId(), count,
-		)
-		return
+		// OSAC-4208: prune duplicate CRs instead of erroring.
+		slices.SortFunc(items, func(a, b osacv1alpha1.ComputeInstance) int {
+			return a.CreationTimestamp.Time.Compare(b.CreationTimestamp.Time)
+		})
+		extras := make([]clnt.Object, count-1)
+		for i := 1; i < count; i++ {
+			extras[i-1] = &items[i]
+		}
+		controllers.PruneDuplicateCRs(ctx, t.r.logger, t.hubClient, extras,
+			"compute instance", t.computeInstance.GetId())
 	}
 	if count > 0 {
 		result = &items[0]
@@ -447,7 +452,8 @@ func (t *task) getKubeObject(ctx context.Context) (result *osacv1alpha1.ComputeI
 }
 
 // getSubnetCR looks up a Subnet CR in the hub cluster by its fulfillment UUID label.
-// Returns the Subnet CR if exactly one is found, nil if none found, or an error if multiple found.
+// Returns the Subnet CR if exactly one is found, nil if none found. If multiple CRs
+// match, the oldest is returned and extras are pruned (OSAC-4208).
 func (t *task) getSubnetCR(ctx context.Context, subnetID string) (*osacv1alpha1.Subnet, error) {
 	list := &osacv1alpha1.SubnetList{}
 	err := t.hubClient.List(
@@ -463,10 +469,16 @@ func (t *task) getSubnetCR(ctx context.Context, subnetID string) (*osacv1alpha1.
 	items := list.Items
 	count := len(items)
 	if count > 1 {
-		return nil, fmt.Errorf(
-			"expected at most one subnet with identifier '%s' but found %d",
-			subnetID, count,
-		)
+		// OSAC-4208: prune duplicate CRs instead of erroring.
+		slices.SortFunc(items, func(a, b osacv1alpha1.Subnet) int {
+			return a.CreationTimestamp.Time.Compare(b.CreationTimestamp.Time)
+		})
+		extras := make([]clnt.Object, count-1)
+		for i := 1; i < count; i++ {
+			extras[i-1] = &items[i]
+		}
+		controllers.PruneDuplicateCRs(ctx, t.r.logger, t.hubClient, extras,
+			"subnet", subnetID)
 	}
 	if count == 0 {
 		return nil, nil
@@ -475,6 +487,7 @@ func (t *task) getSubnetCR(ctx context.Context, subnetID string) (*osacv1alpha1.
 }
 
 // getSecurityGroupCR looks up a SecurityGroup CR in the hub cluster by its fulfillment UUID label.
+// If multiple CRs match, the oldest is returned and extras are pruned (OSAC-4208).
 func (t *task) getSecurityGroupCR(ctx context.Context, securityGroupID string) (*osacv1alpha1.SecurityGroup, error) {
 	list := &osacv1alpha1.SecurityGroupList{}
 	err := t.hubClient.List(
@@ -490,10 +503,16 @@ func (t *task) getSecurityGroupCR(ctx context.Context, securityGroupID string) (
 	items := list.Items
 	count := len(items)
 	if count > 1 {
-		return nil, fmt.Errorf(
-			"expected at most one security group with identifier '%s' but found %d",
-			securityGroupID, count,
-		)
+		// OSAC-4208: prune duplicate CRs instead of erroring.
+		slices.SortFunc(items, func(a, b osacv1alpha1.SecurityGroup) int {
+			return a.CreationTimestamp.Time.Compare(b.CreationTimestamp.Time)
+		})
+		extras := make([]clnt.Object, count-1)
+		for i := 1; i < count; i++ {
+			extras[i-1] = &items[i]
+		}
+		controllers.PruneDuplicateCRs(ctx, t.r.logger, t.hubClient, extras,
+			"security group", securityGroupID)
 	}
 	if count == 0 {
 		return nil, nil

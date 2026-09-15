@@ -1,6 +1,13 @@
+- name: Build AddOnOperator lookup filter
+  ansible.builtin.set_fact:
+    addon_operator_filter: >-
+      {%- for template in osac_addon_operator_templates -%}
+      {{ 'this.id == ' ~ (template.id | to_json) }}{{ ' || ' if not loop.last else '' }}
+      {%- endfor -%}
+
 - name: Get first page of existing AddOnOperators
   ansible.builtin.uri:
-    url: "{{ publish_templates_addon_operator_api_endpoint }}?limit=100&offset=0"
+    url: "{{ publish_templates_addon_operator_api_endpoint }}?filter={{ addon_operator_filter | urlencode }}&limit=100&offset=0"
     validate_certs: "{{ publish_templates_validate_certs | default(true) | bool }}"
     headers:
       authorization: Bearer {{ osac_fulfillment_service_token }}

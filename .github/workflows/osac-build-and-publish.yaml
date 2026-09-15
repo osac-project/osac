@@ -1,0 +1,1572 @@
+name: OSAC Build and Publish
+
+# The actual build/test/publish/tag pipeline for OSAC, shared by both
+# nightly-build.yaml (schedule + ad-hoc manual runs) and osac-release.yaml
+# (deliberate, human-triggered releases) via workflow_call -- one
+# implementation, two callers, so "how nightly builds a component" and "how
+# a release builds a component" can never drift apart (see OSAC-5178, which
+# had to fix the same regression in two hand-copied places, and OSAC-5183,
+# whose release mode inherited nightly's "always rebuild everyone from HEAD"
+# behavior by being bolted onto the same job body instead of being split out
+# like this). See OSAC-5337 for the full design.
+#
+# Exactly two things differ by `mode`, everything else is identical:
+#   1. how a component's target version is computed (nightly: always a
+#      fresh, guaranteed-unique nightly-suffixed value; release: an
+#      explicit component_versions override, or else the latest already-
+#      released tag)
+#      2. whether a successfully built component earns a permanent git tag
+#      (release, only when it needed building) or stays throwaway (nightly,
+#      always)
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: "nightly | release"
+        type: string
+        required: true
+      release_version:
+        description: >-
+          Required when mode=release: a real, human-chosen umbrella chart
+          version (e.g. 0.1.0, no leading 'v') to publish as
+          osac/v<version>. Ignored in nightly mode.
+        type: string
+        required: false
+      component_versions:
+        description: >-
+          Release mode only: optional per-component version overrides, as
+          comma-separated component=version pairs (e.g.
+          "osac-operator=0.0.13,fulfillment-service=0.0.99"). A named
+          component whose requested version doesn't already exist as a real
+          <component>/vX.Y.Z tag gets built fresh from this ref, run through
+          the full test gate, and -- only on success -- tagged and published
+          at that version. Any component not named here defaults to pinning
+          its current latest real release, unchanged, with no rebuild.
+          Ignored in nightly mode.
+        type: string
+        required: false
+        default: ''
+      skip_e2e:
+        description: >-
+          Skip e2e validation (vmaas/caas/bmaas) and publish anyway if
+          unit/integration/security tests pass.
+        type: boolean
+        default: false
+        required: false
+
+permissions: {}
+
+env:
+  REGISTRY: ghcr.io
+  CHARTS_REPO: ${{ github.repository_owner }}/charts
+  VALUES_FILE: osac-installer/values/dev/instance.yaml
+
+jobs:
+  # -------------------------------------------------------------------
+  # Job 1: Prepare — resolve every component's target version upfront
+  # (mode-dependent: see the module header above), decide which
+  # components actually need building this run, stamp every
+  # Chart.yaml/values.yaml/CI-overlay reference accordingly, and push a
+  # temp branch. Nothing is built yet here; this just decides *what*
+  # every chart and image reference should say before the parallel build
+  # phase produces the images to match (for whichever components need
+  # one at all).
+  # -------------------------------------------------------------------
+  prepare:
+    name: Prepare build state
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      temp-branch: ${{ steps.push.outputs.branch }}
+      ui-sha: ${{ steps.ui.outputs.sha }}
+      ui-short-sha: ${{ steps.ui.outputs.short-sha }}
+      ui-sub-version: ${{ steps.versions.outputs.ui-sub-version }}
+      ui-needs-build: ${{ steps.versions.outputs.ui-needs-build }}
+      nightly-suffix: ${{ steps.versions.outputs.nightly-suffix }}
+      component-versions: ${{ steps.versions.outputs.component-versions }}
+      components-needing-build: ${{ steps.versions.outputs.components-needing-build }}
+      components-to-tag: ${{ steps.versions.outputs.components-to-tag }}
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      with:
+        ref: ${{ github.sha }}
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    # cancel-in-progress can skip cleanup on superseded runs; prune orphaned nightly/* branches.
+    - name: Prune stale nightly temp branches
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        source osac-installer/scripts/nightly-charts.sh
+        CUTOFF=$(date -u -d '7 days ago' +%Y%m%d)
+        while read -r ref; do
+          [[ -z "${ref}" ]] && continue
+          branch="${ref#refs/heads/}"
+          branch_date="${branch#nightly/}"
+          branch_date="${branch_date%%-*}"
+          [[ "${branch_date}" =~ ^[0-9]{8}$ ]] || continue
+          if (( branch_date < CUTOFF )); then
+            safe_branch=$(_gha_sanitize_for_message "${branch}")
+            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/${branch}" \
+              || echo "::warning::Could not delete stale nightly branch ${safe_branch}"
+          fi
+        done < <(gh api --paginate "repos/${GITHUB_REPOSITORY}/git/matching-refs/heads/nightly/" --jq '.[].ref')
+
+    # Resolve osac-ui@main HEAD once, but only accept it when ghcr.io/.../osac-ui:sha-<7>
+    # already exists (check_osac_ui_image) -- osac-ui is a separate repo we
+    # don't build here, so we can only gate on an image it already published.
+    - name: Resolve and gate osac-ui SHA
+      id: ui
+      run: |
+        set -euo pipefail
+        source osac-installer/scripts/nightly-charts.sh
+
+        UI_SHA=$(check_osac_ui_image osac-ui)
+        UI_SHORT_SHA="${UI_SHA:0:7}"
+
+        mkdir -p osac-installer/pinned
+        printf '%s\n' "${UI_SHA}" > osac-installer/pinned/osac-ui.commit
+
+        echo "sha=${UI_SHA}" >> "$GITHUB_OUTPUT"
+        echo "short-sha=${UI_SHORT_SHA}" >> "$GITHUB_OUTPUT"
+        echo "Pinned osac-ui ${UI_SHORT_SHA}"
+
+    # Needed only for resolve_bare_release_tag_at's `git describe` below --
+    # a local checkout of the pinned commit, not the file content (that's
+    # separately checked out again in publish, which packages its chart).
+    - name: Checkout osac-ui at pinned SHA
+      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      with:
+        repository: osac-project/osac-ui
+        ref: ${{ steps.ui.outputs.sha }}
+        path: osac-ui
+        fetch-depth: 0
+        persist-credentials: false
+
+    # Resolve every mono-repo component's target version (and osac-ui's) up
+    # front, before anything is stamped or built. component-versions is a
+    # JSON map so the build matrix (a separate job) can look up its own
+    # component's version without re-deriving it independently.
+    # components-needing-build/components-to-tag are JSON arrays: the only
+    # two mode-dependent decisions in this whole pipeline (see module header).
+    - name: Resolve component versions
+      id: versions
+      env:
+        UI_SHA: ${{ steps.ui.outputs.sha }}
+        MODE: ${{ inputs.mode }}
+        RELEASE_VERSION: ${{ inputs.release_version }}
+        COMPONENT_VERSIONS_OVERRIDE: ${{ inputs.component_versions }}
+      run: |
+        set -euo pipefail
+        source osac-installer/scripts/lib.sh
+        source osac-installer/scripts/nightly-charts.sh
+
+        declare -a COMPONENTS=(
+          osac-operator
+          fulfillment-service
+          osac-aap
+          bare-metal-fulfillment-operator
+          osac-metering
+          osac-csi-driver
+        )
+
+        if [[ "${MODE}" == "release" ]]; then
+          if [[ -z "${RELEASE_VERSION}" ]]; then
+            echo "::error::release_version is required when mode=release" >&2
+            exit 1
+          fi
+          if ! validate_semver "${RELEASE_VERSION}"; then
+            echo "::error::Invalid semver for release_version: ${RELEASE_VERSION}" >&2
+            exit 1
+          fi
+          if real_tag_exists osac "${RELEASE_VERSION}"; then
+            echo "::error::osac/v${RELEASE_VERSION} already exists -- refusing to re-release an already-published version" >&2
+            exit 1
+          fi
+        elif [[ -n "${COMPONENT_VERSIONS_OVERRIDE}" ]]; then
+          echo "::error::component_versions is only meaningful when mode=release" >&2
+          exit 1
+        fi
+
+        # Parse the optional "component=version,component=version" override
+        # list (release mode only) into an associative array -- a named
+        # component with a version that doesn't already exist gets a real
+        # build+tag this run; everything else defaults to pinning its
+        # current latest release, unchanged (OSAC-5337: no separate
+        # "bump this component first" step needed).
+        declare -A OVERRIDES=()
+        if [[ -n "${COMPONENT_VERSIONS_OVERRIDE}" ]]; then
+          IFS=',' read -ra PAIRS <<< "${COMPONENT_VERSIONS_OVERRIDE}"
+          for PAIR in "${PAIRS[@]}"; do
+            PAIR="${PAIR// /}"
+            [[ -z "${PAIR}" ]] && continue
+            COMP="${PAIR%%=*}"
+            VER="${PAIR#*=}"
+            if [[ "${COMP}" == "${PAIR}" || -z "${VER}" ]]; then
+              echo "::error::Malformed component_versions entry '${PAIR}' -- expected component=version" >&2
+              exit 1
+            fi
+            KNOWN=false
+            for CANDIDATE in "${COMPONENTS[@]}"; do
+              [[ "${CANDIDATE}" == "${COMP}" ]] && KNOWN=true && break
+            done
+            if [[ "${KNOWN}" != "true" ]]; then
+              safe_comp=$(_gha_sanitize_for_message "${COMP}")
+              echo "::error::Unknown component '${safe_comp}' in component_versions -- must be one of: ${COMPONENTS[*]}" >&2
+              exit 1
+            fi
+            if ! validate_semver "${VER}"; then
+              safe_comp=$(_gha_sanitize_for_message "${COMP}")
+              echo "::error::Invalid semver '${VER}' for component_versions entry '${safe_comp}'" >&2
+              exit 1
+            fi
+            OVERRIDES["${COMP}"]="${VER}"
+          done
+        fi
+
+        DATE=$(date -u +%Y%m%d)
+        SHORT_SHA=$(git rev-parse --short=7 HEAD)
+        # GITHUB_RUN_NUMBER/GITHUB_RUN_ATTEMPT keep a "Re-run failed jobs" of
+        # the same run from colliding with a version it already tried
+        # (RUN_ID/RUN_NUMBER stay constant across a re-run; only
+        # RUN_ATTEMPT increments).
+        NIGHTLY_SUFFIX="nightly.${DATE}.${SHORT_SHA}.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+        echo "nightly-suffix=${NIGHTLY_SUFFIX}" >> "$GITHUB_OUTPUT"
+
+        versions_json="{}"
+        build_json="[]"
+        tag_json="[]"
+        for COMPONENT in "${COMPONENTS[@]}"; do
+          # Check for an explicit override *before* requiring an existing
+          # tag: this is the one path that can bootstrap a component's
+          # very first release (resolve_release_tag has nothing to find
+          # yet, but an override says exactly what version to build). Only
+          # possible in release mode -- OVERRIDES is always empty in
+          # nightly mode (component_versions is rejected outside release
+          # mode above), and nightly always needs a real prior tag to
+          # compute its own suffix from, so it still falls through to the
+          # resolve_release_tag branch below unconditionally.
+          if [[ "${MODE}" == "release" && -n "${OVERRIDES[${COMPONENT}]+x}" ]]; then
+            TARGET_VERSION="${OVERRIDES[${COMPONENT}]}"
+            if real_tag_exists "${COMPONENT}" "${TARGET_VERSION}"; then
+              NEEDS_BUILD=false
+              WILL_TAG=false
+              echo "${COMPONENT}: ${TARGET_VERSION} already released -- pinning, no rebuild"
+            else
+              NEEDS_BUILD=true
+              WILL_TAG=true
+              echo "${COMPONENT}: ${TARGET_VERSION} requested and not yet released -- will build and tag"
+            fi
+          else
+            if ! BASE_TAG=$(resolve_release_tag . "${COMPONENT}"); then
+              safe_component=$(_gha_sanitize_for_message "${COMPONENT}")
+              echo "::warning::No ${safe_component}/vX.Y.Z release tag found yet -- ${safe_component} will be skipped this run"
+              continue
+            fi
+            LATEST_BASE="${BASE_TAG#"${COMPONENT}"/v}"
+
+            if [[ "${MODE}" == "nightly" ]]; then
+              # Always a fresh build from HEAD -- never promoted to a
+              # permanent tag (see publish/tag-and-notify below).
+              TARGET_VERSION="${LATEST_BASE}-${NIGHTLY_SUFFIX}"
+              NEEDS_BUILD=true
+              WILL_TAG=false
+              echo "${COMPONENT}: ${TARGET_VERSION} (nightly build, from tag ${BASE_TAG})"
+            else
+              # Default: pin to whatever's already the latest real release --
+              # this is the common case for every component not being bumped
+              # in this release.
+              TARGET_VERSION="${LATEST_BASE}"
+              NEEDS_BUILD=false
+              WILL_TAG=false
+              echo "${COMPONENT}: ${TARGET_VERSION} (pinned, latest existing release)"
+            fi
+          fi
+
+          versions_json=$(jq -c --arg k "${COMPONENT}" --arg v "${TARGET_VERSION}" '. + {($k): $v}' <<<"${versions_json}")
+          [[ "${NEEDS_BUILD}" == "true" ]] && build_json=$(jq -c --arg v "${COMPONENT}" '. + [$v]' <<<"${build_json}")
+          [[ "${WILL_TAG}" == "true" ]] && tag_json=$(jq -c --arg v "${COMPONENT}" '. + [$v]' <<<"${tag_json}")
+        done
+        echo "component-versions=${versions_json}" >> "$GITHUB_OUTPUT"
+        echo "components-needing-build=${build_json}" >> "$GITHUB_OUTPUT"
+        echo "components-to-tag=${tag_json}" >> "$GITHUB_OUTPUT"
+
+        # osac-ui keeps its own independent release cadence regardless of
+        # mode -- neither release_version nor component_versions apply to
+        # it (see OSAC-5178): it has its own separate repo and release
+        # process, and this pipeline never builds it from source anyway
+        # (only its already-published sha-<short> image, gated above).
+        # Nightly always gives it a fresh nightly-suffixed chart/image
+        # promotion; release mode always pins its latest real tag.
+        if UI_BASE_TAG=$(resolve_bare_release_tag_at osac-ui "${UI_SHA}"); then
+          UI_BASE_VERSION="${UI_BASE_TAG#v}"
+          if [[ "${MODE}" == "nightly" ]]; then
+            UI_SUB_VERSION=$(compute_nightly_chart_version "${UI_BASE_TAG}" "${NIGHTLY_SUFFIX}")
+            UI_NEEDS_BUILD=true
+          else
+            UI_SUB_VERSION="${UI_BASE_VERSION}"
+            UI_NEEDS_BUILD=false
+          fi
+          echo "ui-sub-version=${UI_SUB_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "ui-needs-build=${UI_NEEDS_BUILD}" >> "$GITHUB_OUTPUT"
+          echo "osac-ui: ${UI_SUB_VERSION} (from tag ${UI_BASE_TAG})"
+        else
+          echo "::warning title=osac-ui::No vX.Y.Z release tag found for osac-ui -- its own sub-chart won't be stamped/published this run"
+        fi
+
+    # Stamp every sub-chart's Chart.yaml, the umbrella's own values.yaml, and
+    # the 4 CI overlay files -- all of it now, before the temp branch is
+    # pushed, so both the parallel build phase and the e2e jobs operate on
+    # consistent references.
+    #
+    # For a component that needs building this run, image-reference fields
+    # are stamped to a *provisional* sha-<short> tag here, not the final
+    # version -- the build phase (needs: prepare) pushes each fresh image
+    # under exactly that sha tag, so e2e installs something that actually
+    # exists. Nothing gets the final version tag until publish promotes it
+    # (skopeo retag, no rebuild) after every test box has passed.
+    #
+    # For a component that's pinned this run (release mode, no rebuild
+    # needed), there's nothing to promote later -- image references and
+    # CI-overlay fields are stamped directly to its already-published final
+    # version right here, and its own sub-chart Chart.yaml is left
+    # untouched (publish never repackages it; the umbrella's chart
+    # dependency instead pulls the already-published OCI artifact directly,
+    # same mechanism OSAC-5178 already uses).
+    - name: Stamp charts and values
+      env:
+        COMPONENT_VERSIONS: ${{ steps.versions.outputs.component-versions }}
+        COMPONENTS_NEEDING_BUILD: ${{ steps.versions.outputs.components-needing-build }}
+        UI_SHORT_SHA: ${{ steps.ui.outputs.short-sha }}
+        UI_SUB_VERSION: ${{ steps.versions.outputs.ui-sub-version }}
+        UI_NEEDS_BUILD: ${{ steps.versions.outputs.ui-needs-build }}
+      run: |
+        set -euo pipefail
+        source osac-installer/scripts/nightly-charts.sh
+
+        UMBRELLA_VALUES="osac-installer/charts/osac/values.yaml"
+        MAIN_SHORT_SHA=$(git rev-parse --short=7 HEAD)
+        PROVISIONAL_TAG="sha-${MAIN_SHORT_SHA}"
+
+        declare -A SUB_CHARTS=(
+          ["osac-operator"]="osac-operator/charts/operator osac-operator/charts/operator-crds"
+          ["fulfillment-service"]="fulfillment-service/charts/service"
+          ["osac-aap"]="osac-aap/charts/aap"
+          ["bare-metal-fulfillment-operator"]="bare-metal-fulfillment-operator/charts/operator bare-metal-fulfillment-operator/charts/operator-crds"
+          ["osac-metering"]="osac-metering/charts/osac-metering"
+          ["osac-csi-driver"]="osac-csi-driver/charts/csi-driver osac-csi-driver/charts/csi-backends"
+        )
+
+        for COMPONENT in $(printf '%s\n' "${!SUB_CHARTS[@]}" | sort); do
+          SUB_VERSION=$(jq -r --arg k "${COMPONENT}" '.[$k] // empty' <<<"${COMPONENT_VERSIONS}")
+          if [[ -z "${SUB_VERSION}" ]]; then
+            safe_component=$(_gha_sanitize_for_message "${COMPONENT}")
+            echo "::warning::Skipping ${safe_component} sub-charts — no resolved version"
+            continue
+          fi
+          NEEDS_BUILD=$(jq -r --arg c "${COMPONENT}" 'any(.[]; . == $c)' <<<"${COMPONENTS_NEEDING_BUILD}")
+
+          if [[ "${NEEDS_BUILD}" == "true" ]]; then
+            echo "Stamping ${COMPONENT} Chart.yaml to version ${SUB_VERSION} (image tag stays provisional: ${PROVISIONAL_TAG})..."
+            # Intentional word splitting: each SUB_CHARTS value lists multiple chart paths.
+            for CHART_DIR in ${SUB_CHARTS[$COMPONENT]}; do
+              SUB_VERSION="${SUB_VERSION}" yq -i '.version = strenv(SUB_VERSION)' "${CHART_DIR}/Chart.yaml"
+              SUB_VERSION="${SUB_VERSION}" yq -i '.appVersion = strenv(SUB_VERSION)' "${CHART_DIR}/Chart.yaml"
+            done
+            stamp_component_image_refs "${COMPONENT}" "${UMBRELLA_VALUES}" "${PROVISIONAL_TAG}"
+          else
+            echo "Pinning ${COMPONENT} to already-published ${SUB_VERSION} — no local chart stamping, no build"
+            stamp_component_image_refs "${COMPONENT}" "${UMBRELLA_VALUES}" "${SUB_VERSION}"
+          fi
+        done
+
+        # osac-ui: stamp only the umbrella's own ui.images.ui field here, to
+        # whatever image reference is actually correct for this run -- the
+        # sha-<short> image its own CI already published (needs building
+        # this run) or its already-published final version (pinned). Its
+        # own sub-chart Chart.yaml/values.yaml are stamped and packaged
+        # later in the publish job only when it needs building.
+        if [[ -n "${UI_SHORT_SHA}" ]]; then
+          if [[ "${UI_NEEDS_BUILD}" == "true" ]]; then
+            stamp_umbrella_nested_field "${UMBRELLA_VALUES}" ui images ui "ghcr.io/osac-project/osac-ui:sha-${UI_SHORT_SHA}"
+          else
+            stamp_umbrella_nested_field "${UMBRELLA_VALUES}" ui images ui "ghcr.io/osac-project/osac-ui:${UI_SUB_VERSION}"
+          fi
+        fi
+
+        # AAP's config-as-code sync pulls osac-aap's own Ansible automation
+        # (provisioning/restart/hardware-inventory playbooks, etc.) from
+        # aap.configAsCode.projectGitBranch/projectGitUri -- a floating git
+        # ref, same class of bug as a floating image tag, just pointing E2E's
+        # AAP jobs at whatever's on main instead of the exact commit under
+        # test. Pin it to this run's own commit unconditionally (independent
+        # of osac-aap's own build/pin status above, which only gates image
+        # rebuilding) -- this is about e2e testing this run's automation,
+        # not image provenance.
+        stamp_umbrella_nested_field "${UMBRELLA_VALUES}" aap configAsCode projectGitBranch "${GITHUB_SHA}"
+        stamp_umbrella_nested_field "${UMBRELLA_VALUES}" aap configAsCode projectGitUri "https://github.com/${GITHUB_REPOSITORY}"
+
+        # The 4 CI overlay values files (osac-installer/values/*/instance.yaml)
+        # have their own separate floating image tag overrides on top of the
+        # umbrella chart's own values.yaml, and the e2e jobs below install using
+        # one of them. Each field must point at whatever image reference
+        # actually exists for that component this run: the provisional
+        # sha-<short> tag if it's being built, or its already-published
+        # final version if it's pinned (there is no sha-<short> build for a
+        # pinned component this run). These overlays only ever exist on the
+        # ephemeral nightly/* temp branch and are never packaged into a
+        # published chart artifact (nothing reads them again after e2e
+        # finishes).
+        needs_build_for() {
+          jq -r --arg c "$1" 'any(.[]; . == $c)' <<<"${COMPONENTS_NEEDING_BUILD}"
+        }
+        ref_for() {
+          local image="$1" component="$2" needs_build="$3" final_version="$4"
+          if [[ "${needs_build}" == "true" ]]; then
+            echo "${image}:${PROVISIONAL_TAG}"
+          else
+            echo "${image}:${final_version}"
+          fi
+        }
+
+        OPERATOR_VER=$(jq -r '.["osac-operator"] // empty' <<<"${COMPONENT_VERSIONS}")
+        FULFILLMENT_VER=$(jq -r '.["fulfillment-service"] // empty' <<<"${COMPONENT_VERSIONS}")
+        AAP_VER=$(jq -r '.["osac-aap"] // empty' <<<"${COMPONENT_VERSIONS}")
+        BMF_VER=$(jq -r '.["bare-metal-fulfillment-operator"] // empty' <<<"${COMPONENT_VERSIONS}")
+        METERING_VER=$(jq -r '.["osac-metering"] // empty' <<<"${COMPONENT_VERSIONS}")
+        CSI_VER=$(jq -r '.["osac-csi-driver"] // empty' <<<"${COMPONENT_VERSIONS}")
+
+        for overlay in "${NIGHTLY_CI_OVERLAY_VALUES[@]}"; do
+          [[ -f "${overlay}" ]] || continue
+          if [[ -n "${OPERATOR_VER}" ]]; then
+            NB=$(needs_build_for osac-operator)
+            if [[ "${NB}" == "true" ]]; then
+              stamp_ci_overlay_if_present "${overlay}" '.operator.image.tag' "${PROVISIONAL_TAG}"
+            else
+              stamp_ci_overlay_if_present "${overlay}" '.operator.image.tag' "${OPERATOR_VER}"
+            fi
+          fi
+          if [[ -n "${FULFILLMENT_VER}" ]]; then
+            NB=$(needs_build_for fulfillment-service)
+            stamp_ci_overlay_if_present "${overlay}" '.service.images.service' "$(ref_for ghcr.io/osac-project/fulfillment-service fulfillment-service "${NB}" "${FULFILLMENT_VER}")"
+          fi
+          if [[ -n "${AAP_VER}" ]]; then
+            NB=$(needs_build_for osac-aap)
+            stamp_ci_overlay_if_present "${overlay}" '.aap.bootstrap.image' "$(ref_for ghcr.io/osac-project/osac-aap osac-aap "${NB}" "${AAP_VER}")"
+            stamp_ci_overlay_if_present "${overlay}" '.aap.configAsCode.eeImage' "$(ref_for ghcr.io/osac-project/osac-aap osac-aap "${NB}" "${AAP_VER}")"
+          fi
+          stamp_ci_overlay_if_present "${overlay}" '.aap.configAsCode.projectGitBranch' "${GITHUB_SHA}"
+          stamp_ci_overlay_if_present "${overlay}" '.aap.configAsCode.projectGitUri' "https://github.com/${GITHUB_REPOSITORY}"
+          if [[ -n "${BMF_VER}" ]]; then
+            NB=$(needs_build_for bare-metal-fulfillment-operator)
+            if [[ "${NB}" == "true" ]]; then
+              stamp_ci_overlay_if_present "${overlay}" '.bmf.image.tag' "${PROVISIONAL_TAG}"
+            else
+              stamp_ci_overlay_if_present "${overlay}" '.bmf.image.tag' "${BMF_VER}"
+            fi
+          fi
+          if [[ -n "${METERING_VER}" ]]; then
+            NB=$(needs_build_for osac-metering)
+            [[ "${NB}" == "true" ]] && METERING_TAG="${PROVISIONAL_TAG}" || METERING_TAG="${METERING_VER}"
+            stamp_ci_overlay_if_present "${overlay}" '.metering.image.tag' "${METERING_TAG}"
+            stamp_ci_overlay_if_present "${overlay}" '.metering.echoAdapter.image.tag' "${METERING_TAG}"
+            stamp_ci_overlay_if_present "${overlay}" '.metering.m360Adapter.image.tag' "${METERING_TAG}"
+          fi
+          if [[ -n "${CSI_VER}" ]]; then
+            NB=$(needs_build_for osac-csi-driver)
+            if [[ "${NB}" == "true" ]]; then
+              stamp_ci_overlay_if_present "${overlay}" '.csiDriver.image.tag' "${PROVISIONAL_TAG}"
+            else
+              stamp_ci_overlay_if_present "${overlay}" '.csiDriver.image.tag' "${CSI_VER}"
+            fi
+          fi
+          if [[ -n "${UI_SHORT_SHA}" ]]; then
+            if [[ "${UI_NEEDS_BUILD}" == "true" ]]; then
+              stamp_ci_overlay_if_present "${overlay}" '.ui.images.ui' "ghcr.io/osac-project/osac-ui:sha-${UI_SHORT_SHA}"
+            else
+              stamp_ci_overlay_if_present "${overlay}" '.ui.images.ui' "ghcr.io/osac-project/osac-ui:${UI_SUB_VERSION}"
+            fi
+          fi
+          echo "Stamped ${overlay} (fields present in that file only)"
+        done
+
+    - name: Push temporary branch
+      id: push
+      run: |
+        set -euo pipefail
+        # osac-ui was checked out earlier (own nested .git) purely for git
+        # describe in "Resolve component versions" -- it is not part of this
+        # repo's tree and must not be staged as an embedded repository.
+        rm -rf osac-ui
+
+        DATE=$(date -u +%Y%m%d)
+        SHORT_SHA=$(git rev-parse --short=7 HEAD)
+        BRANCH="nightly/${DATE}-${SHORT_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git checkout -b "${BRANCH}"
+        git add -A
+        if git diff --cached --quiet; then
+          echo "::error::No stamping changes staged — refusing to push empty temp branch"
+          exit 1
+        fi
+        git commit -m "build: stamp chart versions and image tags for this run"
+
+        git push origin "${BRANCH}"
+
+        echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
+        echo "Pushed temp branch: ${BRANCH}"
+
+  # -------------------------------------------------------------------
+  # Job 2: Build — one fresh image per component that actually needs
+  # building this run (see prepare's components-needing-build), each
+  # pushed under the provisional sha-<short> tag prepare already stamped
+  # into charts/values (NOT the final version -- see publish, which
+  # promotes to that only after every test box passes). A component this
+  # run is pinning (release mode, already released) is skipped entirely
+  # here -- there is nothing to build.
+  #
+  # Reuses each component's own `make -C <dir> image-build`/`image-push`
+  # target (the same targets a human runs locally) rather than
+  # duplicating build-step logic here or in each component's own
+  # per-push build workflow.
+  #
+  # osac-ui has no entry here: it's an external repo we don't build, and
+  # its sha-<short> image already exists (published by its own CI,
+  # gated on by prepare's check_osac_ui_image) -- nothing to do until
+  # publish retags it (nightly mode) or references it directly (release,
+  # pinned).
+  # -------------------------------------------------------------------
+  build:
+    name: Build ${{ matrix.name }}
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+      # cosign's keyless image signing below -- safe directly on this job,
+      # this workflow is only ever invoked via workflow_call from
+      # nightly-build.yaml/osac-release.yaml, both schedule/workflow_dispatch
+      # only, never pull_request.
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: osac-operator
+            component: osac-operator
+            dir: osac-operator
+            target: image-build
+            push_target: image-push
+            image: ghcr.io/osac-project/osac-operator
+          - name: bare-metal-fulfillment-operator
+            component: bare-metal-fulfillment-operator
+            dir: bare-metal-fulfillment-operator
+            target: image-build
+            push_target: image-push
+            image: ghcr.io/osac-project/bare-metal-fulfillment-operator
+          - name: fulfillment-service
+            component: fulfillment-service
+            dir: fulfillment-service
+            target: image-build
+            push_target: image-push
+            image: ghcr.io/osac-project/fulfillment-service
+            version_arg: true
+          - name: osac-aap
+            component: osac-aap
+            dir: osac-aap
+            target: execution-environment-build
+            push_target: execution-environment-push
+            image: ghcr.io/osac-project/osac-aap
+          - name: osac-metering-service
+            component: osac-metering
+            dir: osac-metering/metering-service
+            target: image-build
+            push_target: image-push
+            image: ghcr.io/osac-project/metering-service
+          - name: osac-metering-m360-adapter
+            component: osac-metering
+            dir: osac-metering/adapters
+            target: image-build-m360-adapter
+            push_target: image-push-m360-adapter
+            image: ghcr.io/osac-project/metering-m360-adapter
+            image_var: IMG_M360_ADAPTER
+          - name: osac-metering-echo-adapter
+            component: osac-metering
+            dir: osac-metering/adapters
+            target: image-build-echo-adapter
+            push_target: image-push-echo-adapter
+            image: ghcr.io/osac-project/metering-echo-adapter
+            image_var: IMG_ECHO_ADAPTER
+          - name: osac-csi-driver
+            component: osac-csi-driver
+            dir: osac-csi-driver
+            target: image-build
+            push_target: image-push
+            image: ghcr.io/osac-project/osac-csi-driver
+            version_arg: true
+    steps:
+    - name: Checkout temporary branch
+      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      with:
+        ref: ${{ needs.prepare.outputs.temp-branch }}
+        fetch-depth: 0
+        persist-credentials: false
+
+    - name: Log in to GHCR
+      uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0  # v4.4.0
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Install skopeo
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq skopeo
+
+    - name: Install cosign
+      uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
+
+    # osac-aap's execution-environment-build target shells out to `uv`
+    # (ansible-builder is invoked via `uv tool run`) -- not present on
+    # ubuntu-latest by default. Mirrors execution-environment.yml's own setup.
+    - name: Install uv
+      if: matrix.name == 'osac-aap'
+      uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7.6.0
+
+    - name: Set up Python
+      if: matrix.name == 'osac-aap'
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+      with:
+        python-version-file: osac-aap/pyproject.toml
+
+    # Skip entirely if this component has no resolved version at all (no
+    # release tag exists yet), or if it does but this run is pinning it
+    # (release mode, already released, no rebuild needed -- see prepare's
+    # components-needing-build). The resolved version is passed to the
+    # build itself (VERSION=) for components that bake it into the
+    # binary's own self-reported version, even though the *registry tag*
+    # it's pushed under is the sha below.
+    - name: Resolve component version
+      id: resolve
+      env:
+        COMPONENT_VERSIONS: ${{ needs.prepare.outputs.component-versions }}
+        COMPONENTS_NEEDING_BUILD: ${{ needs.prepare.outputs.components-needing-build }}
+      run: |
+        set -euo pipefail
+        VERSION=$(jq -r --arg k "${{ matrix.component }}" '.[$k] // empty' <<<"${COMPONENT_VERSIONS}")
+        if [[ -z "${VERSION}" ]]; then
+          echo "::notice::No resolved version for ${{ matrix.component }} -- skipping build"
+          echo "skip=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        NEEDS_BUILD=$(jq -r --arg c "${{ matrix.component }}" 'any(.[]; . == $c)' <<<"${COMPONENTS_NEEDING_BUILD}")
+        if [[ "${NEEDS_BUILD}" != "true" ]]; then
+          echo "::notice::${{ matrix.component }} is pinned to its already-published ${VERSION} this run -- skipping build"
+          echo "skip=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        echo "skip=false" >> "$GITHUB_OUTPUT"
+        echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+    # Pushed under the provisional sha-<short> tag, matching what prepare
+    # already stamped into charts/values for e2e to install -- NOT the final
+    # version. publish promotes (skopeo retag, no rebuild) this exact
+    # digest to the final version only after every test box has passed, so a
+    # real, release-looking version tag never appears in GHCR for a
+    # build that never actually shipped.
+    - name: Build and push image
+      id: build
+      if: steps.resolve.outputs.skip != 'true'
+      env:
+        VERSION: ${{ steps.resolve.outputs.version }}
+        IMAGE_VAR: ${{ matrix.image_var || 'IMG' }}
+      run: |
+        set -euo pipefail
+        TAG="sha-${GITHUB_SHA:0:7}"
+        IMG_REF="${{ matrix.image }}:${TAG}"
+        BUILD_ARGS=("${IMAGE_VAR}=${IMG_REF}")
+        if [[ "${{ matrix.version_arg }}" == "true" ]]; then
+          BUILD_ARGS+=("VERSION=${VERSION}")
+        fi
+        make -C "${{ matrix.dir }}" "${{ matrix.target }}" "${BUILD_ARGS[@]}"
+        make -C "${{ matrix.dir }}" "${{ matrix.push_target }}" "${BUILD_ARGS[@]}"
+        echo "image-ref=${IMG_REF}" >> "$GITHUB_OUTPUT"
+
+    # make image-push (plain `podman push`) doesn't report a digest, so
+    # resolve what's actually in the registry via skopeo -- inspecting the
+    # local image instead could sign a different digest than what a
+    # consumer actually pulls (e.g. under multi-arch/manifest-list builds).
+    - name: Sign image with cosign
+      if: steps.resolve.outputs.skip != 'true'
+      run: |
+        set -euo pipefail
+        digest=$(skopeo inspect "docker://${{ steps.build.outputs.image-ref }}" | jq -r '.Digest')
+        cosign sign --yes "${{ matrix.image }}@${digest}"
+
+  # -------------------------------------------------------------------
+  # Job 3: Code quality — unit tests, integration tests, and CodeQL SAST
+  # as three independent parallel boxes. These test source code directly
+  # (github.sha), not the temp branch's stamped charts/images, so they
+  # have no dependency on `prepare`/`build` and start immediately alongside
+  # them. Each `uses:` a local reusable workflow that already exists and
+  # runs standalone on pull_request/schedule -- reused here rather than
+  # duplicated, same reasoning as `build` reusing each component's own
+  # Makefile targets instead of inlining build steps. Unconditional in
+  # both modes -- a release doesn't skip any safety check nightly enforces.
+  # -------------------------------------------------------------------
+  unit-tests:
+    name: Unit tests
+    # pull-requests: read matches what unit-tests.yml's own `changes` job
+    # declares (for dorny/paths-filter) -- unused on a workflow_call trigger
+    # (that step's own `if:` only matches pull_request/merge_group), but
+    # GitHub statically validates a called local reusable workflow's job
+    # permissions against the caller's grant regardless of runtime `if:`
+    # guards, so it still must be granted here or the whole run fails to
+    # start.
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/unit-tests.yml
+
+  integration-tests:
+    name: Integration tests
+    # See unit-tests' comment above -- same reason.
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/integration-tests.yml
+
+  security-tests:
+    name: Security tests (CodeQL)
+    permissions:
+      security-events: write
+      packages: read
+      actions: read
+      contents: read
+    uses: ./.github/workflows/codeql.yml
+
+  # -------------------------------------------------------------------
+  # Job 4: E2E validation — vmaas, caas, and bmaas full-install suites as
+  # three independent parallel boxes, each testing the temp branch (not
+  # github.sha). All three depend on `build` too, not just `prepare`:
+  # none may install against images that don't exist yet or a floating
+  # :latest. This still runs against the *whole* resolved combination
+  # (pinned components included, via the temp branch's stamped values),
+  # not just the components that got freshly built this run -- the
+  # combination itself can be new even when nothing individual changed.
+  #
+  # Skippable via the skip_e2e input -- both callers pass this through
+  # from their own workflow_dispatch input; the nightly scheduled trigger
+  # never sets it, so the cron can never skip e2e. `publish` below
+  # tolerates these being skipped as well as succeeded; unit/integration/
+  # security tests are NOT skippable by this input.
+  # -------------------------------------------------------------------
+  e2e-vmaas-test:
+    name: E2E validation (vmaas)
+    needs: [prepare, build]
+    if: inputs.skip_e2e != true
+    permissions:
+      contents: read
+      # Required by e2e-vmaas-full-install.yml@main's "e2e" job when
+      # enable-ai-diagnostic is true (now always the case here, see below)
+      # -- GitHub statically validates a called reusable workflow's
+      # declared job permissions against what the caller grants regardless
+      # of runtime reachability, so it must still be granted here.
+      id-token: write
+    uses: osac-project/osac-test-infra/.github/workflows/e2e-vmaas-full-install.yml@main
+    with:
+      test-suite: vmaas
+      # The references module contains CaaS and BMaaS tests too. Those
+      # services are disabled in the VMaaS profile, so exclude tests marked
+      # with either dependency. Matches osac-project/osac#805.
+      test-marker: 'not requires_caas and not requires_bmaas'
+      installer-repo: ${{ github.repository }}
+      installer-ref: ${{ needs.prepare.outputs.temp-branch }}
+      test-infra-repository: osac-project/osac-test-infra
+      test-infra-ref: main
+      test-ref: ${{ needs.prepare.outputs.temp-branch }}
+      # This pipeline only runs via schedule/workflow_dispatch against
+      # main, same safe WIF context as the regular e2e-*-full-install.yml
+      # callers' own enable-ai-diagnostic gating -- see that input's
+      # description in osac-test-infra for the full reasoning. Without
+      # this, a failed e2e run only gets a generic failure Slack ping (see
+      # notify-failure below) with no diagnosis; workflow_run-based Phase 2
+      # doesn't cover this pipeline either, since it tracks a top-level
+      # caller workflow's own name, not this reusable workflow.
+      enable-ai-diagnostic: ${{ github.ref == 'refs/heads/main' }}
+
+  e2e-caas-test:
+    name: E2E validation (caas)
+    needs: [prepare, build]
+    if: inputs.skip_e2e != true
+    permissions:
+      contents: read
+      # See e2e-vmaas-test's identical grant above for why this is needed.
+      id-token: write
+    uses: osac-project/osac-test-infra/.github/workflows/e2e-caas-full-install.yml@main
+    with:
+      test-suite: caas
+      installer-repo: ${{ github.repository }}
+      installer-ref: ${{ needs.prepare.outputs.temp-branch }}
+      test-infra-repository: osac-project/osac-test-infra
+      test-infra-ref: main
+      test-ref: ${{ needs.prepare.outputs.temp-branch }}
+      # See e2e-vmaas-test's identical input above for why this is set.
+      enable-ai-diagnostic: ${{ github.ref == 'refs/heads/main' }}
+
+  e2e-bmaas-test:
+    name: E2E validation (bmaas)
+    needs: [prepare, build]
+    if: inputs.skip_e2e != true
+    permissions:
+      contents: read
+      # See e2e-vmaas-test's identical grant above for why this is needed.
+      id-token: write
+    uses: osac-project/osac-test-infra/.github/workflows/e2e-bmaas-full-install.yml@main
+    with:
+      test-suite: bmaas
+      test-filter: 'not TestBmaasNetworking'
+      installer-repo: ${{ github.repository }}
+      installer-ref: ${{ needs.prepare.outputs.temp-branch }}
+      test-infra-repository: osac-project/osac-test-infra
+      test-infra-ref: main
+      test-ref: ${{ needs.prepare.outputs.temp-branch }}
+      # See e2e-vmaas-test's identical input above for why this is set.
+      enable-ai-diagnostic: ${{ github.ref == 'refs/heads/main' }}
+
+  # -------------------------------------------------------------------
+  # Job 5: Publish — promote every freshly-built image from its
+  # provisional sha-<short> tag to its final version (skopeo retag, no
+  # rebuild), package and push every sub-chart that needed building,
+  # then package and push the umbrella (only if build and every test box
+  # passed). A component that's pinned this run is untouched here -- its
+  # image/chart already exist at the final version prepare stamped
+  # directly; the umbrella's chart dependency pulls that already-
+  # published artifact the same way OSAC-5178 always resolves any
+  # mono-repo dependency (see "Build umbrella chart dependencies" below).
+  #
+  # `if:` (not just `needs:`) because a skipped job is not a `success()`
+  # by GitHub's default job-gating -- explicitly tolerating
+  # skipped alongside success only for the three e2e jobs (which can only
+  # be skipped via the skip_e2e input, see Job 4 above) keeps unit/
+  # integration/security tests hard-required in every case, on both modes.
+  # -------------------------------------------------------------------
+  publish:
+    name: Publish chart
+    needs: [prepare, build, unit-tests, integration-tests, security-tests, e2e-vmaas-test, e2e-caas-test, e2e-bmaas-test]
+    if: |
+      always() &&
+      needs.prepare.result == 'success' &&
+      needs.build.result == 'success' &&
+      needs.unit-tests.result == 'success' &&
+      needs.integration-tests.result == 'success' &&
+      needs.security-tests.result == 'success' &&
+      contains(fromJSON('["success", "skipped"]'), needs.e2e-vmaas-test.result) &&
+      contains(fromJSON('["success", "skipped"]'), needs.e2e-caas-test.result) &&
+      contains(fromJSON('["success", "skipped"]'), needs.e2e-bmaas-test.result)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      # Push/pull chart OCI artifacts to GHCR
+      packages: write
+      # cosign's keyless chart signing (see push_and_sign_chart in
+      # nightly-charts.sh) -- safe directly on this job, same reasoning as
+      # build's identical grant above.
+      id-token: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      base-version: ${{ steps.version.outputs.base-version }}
+
+    steps:
+    - name: Checkout temporary branch
+      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      with:
+        ref: ${{ needs.prepare.outputs.temp-branch }}
+        fetch-depth: 0
+        persist-credentials: false
+
+    # osac-ui is an external repo (not in the osac mono-repo). The prepare job
+    # resolves one gated SHA per run (ls-remote main + GHCR sha-<7> manifest check)
+    # and records it in osac-installer/pinned/osac-ui.commit on the temp branch.
+    # Publish reuses that exact commit — do not checkout ref: main here.
+    - name: Checkout osac-ui at pinned SHA
+      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      with:
+        repository: osac-project/osac-ui
+        ref: ${{ needs.prepare.outputs.ui-sha }}
+        path: osac-ui
+        fetch-depth: 0
+        persist-credentials: false
+
+    - name: Set up Helm
+      uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+      with:
+        version: v3.21.4
+
+    - name: Install cosign
+      uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
+
+    - name: Set up chart-testing
+      uses: helm/chart-testing-action@6ec842c01de15ebb84c8627d2744a0c2f2755c9f  # v2.8.0
+
+    - name: Log in to GHCR
+      env:
+        GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GHCR_USER: ${{ github.actor }}
+      run: printf '%s' "${GHCR_TOKEN}" | helm registry login "${{ env.REGISTRY }}" -u "${GHCR_USER}" --password-stdin
+
+    - name: Generate release/nightly version
+      id: version
+      working-directory: osac-installer
+      env:
+        NIGHTLY_SUFFIX: ${{ needs.prepare.outputs.nightly-suffix }}
+        MODE: ${{ inputs.mode }}
+        RELEASE_VERSION: ${{ inputs.release_version }}
+      run: |
+        set -euo pipefail
+        source ./scripts/lib.sh
+
+        if [[ "${MODE}" == "release" ]]; then
+          # The human-chosen version, verbatim, no nightly suffix --
+          # already validated in prepare's "Resolve component versions"
+          # step. This is what makes `osac/v<VERSION>` below a real, clean
+          # release tag.
+          VERSION="${RELEASE_VERSION}"
+          BASE_VERSION="${RELEASE_VERSION}"
+        else
+          # Use the umbrella chart's own latest real release tag (not the
+          # Chart.yaml placeholder, which is never bumped) so the nightly
+          # version reflects where this build actually sits relative to
+          # real releases. Reuse prepare's NIGHTLY_SUFFIX (not a freshly
+          # computed one) so every artifact from this run shares the same
+          # date/sha/run/attempt suffix.
+          BASE_TAG=$(resolve_release_tag . osac)
+          BASE_VERSION="${BASE_TAG#osac/v}"
+          VERSION="${BASE_VERSION}-${NIGHTLY_SUFFIX}"
+        fi
+
+        echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+        echo "base-version=${BASE_VERSION}" >> "$GITHUB_OUTPUT"
+        echo "Version: ${VERSION} (base: ${BASE_VERSION})"
+
+    - name: Install skopeo
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq skopeo
+
+    # Separate from "Log in to GHCR" above -- that one writes Helm's own OCI
+    # credential store (~/.config/helm/registry/config.json), which skopeo's
+    # docker:// transport does not read. skopeo needs a real `docker login`.
+    - name: Log in to GHCR for skopeo
+      uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0  # v4.4.0
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    # Promote every image that was actually built this run from its
+    # provisional sha-<short> tag to its final version (skopeo retag, no
+    # rebuild) -- gated on every test box having already passed, since
+    # publish needs: those jobs. A component pinned this run is skipped
+    # here entirely: it already exists at its final version, nothing to
+    # promote, and prepare already stamped values.yaml to reference it
+    # directly.
+    - name: Promote freshly-built images to their final version
+      env:
+        COMPONENT_VERSIONS: ${{ needs.prepare.outputs.component-versions }}
+        COMPONENTS_NEEDING_BUILD: ${{ needs.prepare.outputs.components-needing-build }}
+        UI_SHORT_SHA: ${{ needs.prepare.outputs.ui-short-sha }}
+        UI_SUB_VERSION: ${{ needs.prepare.outputs.ui-sub-version }}
+        UI_NEEDS_BUILD: ${{ needs.prepare.outputs.ui-needs-build }}
+      run: |
+        set -euo pipefail
+        source osac-installer/scripts/nightly-charts.sh
+
+        UMBRELLA_VALUES="osac-installer/charts/osac/values.yaml"
+        MAIN_SHORT_SHA="${GITHUB_SHA:0:7}"
+
+        for COMPONENT in osac-operator fulfillment-service osac-aap bare-metal-fulfillment-operator osac-metering osac-csi-driver; do
+          SUB_VERSION=$(jq -r --arg k "${COMPONENT}" '.[$k] // empty' <<<"${COMPONENT_VERSIONS}")
+          if [[ -z "${SUB_VERSION}" ]]; then
+            safe_component=$(_gha_sanitize_for_message "${COMPONENT}")
+            echo "::warning::Skipping ${safe_component} image promotion — no resolved version"
+            continue
+          fi
+          NEEDS_BUILD=$(jq -r --arg c "${COMPONENT}" 'any(.[]; . == $c)' <<<"${COMPONENTS_NEEDING_BUILD}")
+          if [[ "${NEEDS_BUILD}" != "true" ]]; then
+            echo "${COMPONENT} is pinned to already-published ${SUB_VERSION} — no promotion needed"
+            continue
+          fi
+
+          # osac-metering fans out to 3 independently-built images; every
+          # other component builds exactly one. Mirrors build's own matrix.
+          case "${COMPONENT}" in
+            osac-operator) IMAGES=(ghcr.io/osac-project/osac-operator) ;;
+            fulfillment-service) IMAGES=(ghcr.io/osac-project/fulfillment-service) ;;
+            osac-aap) IMAGES=(ghcr.io/osac-project/osac-aap) ;;
+            bare-metal-fulfillment-operator) IMAGES=(ghcr.io/osac-project/bare-metal-fulfillment-operator) ;;
+            osac-metering) IMAGES=(ghcr.io/osac-project/metering-service ghcr.io/osac-project/metering-m360-adapter ghcr.io/osac-project/metering-echo-adapter) ;;
+            osac-csi-driver) IMAGES=(ghcr.io/osac-project/osac-csi-driver) ;;
+          esac
+
+          echo "Promoting ${COMPONENT} image(s) sha-${MAIN_SHORT_SHA} -> ${SUB_VERSION}..."
+          for IMAGE_REPO in "${IMAGES[@]}"; do
+            retag_component_image "${IMAGE_REPO}" "${MAIN_SHORT_SHA}" "${SUB_VERSION}"
+          done
+
+          stamp_component_image_refs "${COMPONENT}" "${UMBRELLA_VALUES}" "${SUB_VERSION}"
+        done
+
+        # osac-ui: only promote when it needed building this run (nightly,
+        # always). When pinned (release mode), it's already at its final
+        # version and the umbrella's ui.images.ui was already stamped
+        # correctly by prepare -- nothing to do here.
+        if [[ "${UI_NEEDS_BUILD}" == "true" && -n "${UI_SUB_VERSION}" ]]; then
+          echo "Promoting osac-ui image sha-${UI_SHORT_SHA} -> ${UI_SUB_VERSION}..."
+          retag_component_image "ghcr.io/osac-project/osac-ui" "${UI_SHORT_SHA}" "${UI_SUB_VERSION}"
+          stamp_umbrella_nested_field "${UMBRELLA_VALUES}" ui images ui "ghcr.io/osac-project/osac-ui:${UI_SUB_VERSION}"
+        fi
+
+        # dev/instance.yaml is the one CI overlay that ISN'T dead after e2e:
+        # "Generate images.txt" below renders the umbrella chart with it as
+        # an extra --values file (needed to fill in fields with no
+        # defaults), which means whatever it says for the fields it
+        # overrides wins over the umbrella's own (just-promoted) values.
+        # Re-stamp every field to its real final value regardless of
+        # whether that component needed building or was pinned -- prepare
+        # only ever stamped a freshly-built component's fields with the
+        # provisional sha tag, so without this re-stamp images.txt would
+        # report stale provisional tags for those even though the packaged
+        # chart itself is correctly pinned to the final version. Pinned
+        # components were already stamped correctly by prepare, so
+        # re-stamping them here to the same value is a harmless no-op.
+        DEV_OVERLAY="osac-installer/values/dev/instance.yaml"
+        OPERATOR_VER=$(jq -r '.["osac-operator"] // empty' <<<"${COMPONENT_VERSIONS}")
+        FULFILLMENT_VER=$(jq -r '.["fulfillment-service"] // empty' <<<"${COMPONENT_VERSIONS}")
+        AAP_VER=$(jq -r '.["osac-aap"] // empty' <<<"${COMPONENT_VERSIONS}")
+        [[ -n "${OPERATOR_VER}" ]] && stamp_ci_overlay_if_present "${DEV_OVERLAY}" '.operator.image.tag' "${OPERATOR_VER}"
+        [[ -n "${FULFILLMENT_VER}" ]] && stamp_ci_overlay_if_present "${DEV_OVERLAY}" '.service.images.service' "ghcr.io/osac-project/fulfillment-service:${FULFILLMENT_VER}"
+        [[ -n "${AAP_VER}" ]] && stamp_ci_overlay_if_present "${DEV_OVERLAY}" '.aap.bootstrap.image' "ghcr.io/osac-project/osac-aap:${AAP_VER}"
+        if [[ -n "${UI_SUB_VERSION}" ]]; then
+          stamp_ci_overlay_if_present "${DEV_OVERLAY}" '.ui.images.ui' "ghcr.io/osac-project/osac-ui:${UI_SUB_VERSION}"
+        fi
+
+    - name: Package and push sub-charts
+      env:
+        COMPONENTS_NEEDING_BUILD: ${{ needs.prepare.outputs.components-needing-build }}
+      run: |
+        set -euo pipefail
+        # Repo root (not osac-installer/) — sub-charts live under component directories.
+        source osac-installer/scripts/nightly-charts.sh
+
+        mkdir -p ./packaged-charts
+        : > chart-sources.txt
+
+        # A pinned component's chart is already published at its resolved
+        # version -- nothing to package/push here; the umbrella's chart
+        # dependency pulls that existing artifact directly below ("Build
+        # umbrella chart dependencies"). Repackaging it from this local
+        # checkout would be wrong regardless (this HEAD checkout may not
+        # match what was actually published at that historical tag) as
+        # well as redundant.
+        declare -A CHART_TO_COMPONENT=(
+          ["osac-operator/charts/operator"]="osac-operator"
+          ["osac-operator/charts/operator-crds"]="osac-operator"
+          ["fulfillment-service/charts/service"]="fulfillment-service"
+          ["osac-aap/charts/aap"]="osac-aap"
+          ["bare-metal-fulfillment-operator/charts/operator"]="bare-metal-fulfillment-operator"
+          ["bare-metal-fulfillment-operator/charts/operator-crds"]="bare-metal-fulfillment-operator"
+          ["osac-metering/charts/osac-metering"]="osac-metering"
+          ["osac-csi-driver/charts/csi-driver"]="osac-csi-driver"
+          ["osac-csi-driver/charts/csi-backends"]="osac-csi-driver"
+        )
+
+        for CHART_DIR in "${!CHART_TO_COMPONENT[@]}"; do
+          COMPONENT="${CHART_TO_COMPONENT[$CHART_DIR]}"
+          NEEDS_BUILD=$(jq -r --arg c "${COMPONENT}" 'any(.[]; . == $c)' <<<"${COMPONENTS_NEEDING_BUILD}")
+          if [[ "${NEEDS_BUILD}" != "true" ]]; then
+            echo "Skipping ${CHART_DIR} — ${COMPONENT} is pinned to its already-published chart this run"
+            continue
+          fi
+
+          CHART_NAME=$(read_validated_chart_name "${CHART_DIR}")
+          SUB_VERSION=$(yq -r '.version' "${CHART_DIR}/Chart.yaml")
+          if [[ -z "${SUB_VERSION}" || "${SUB_VERSION}" == "0.0.0" ]]; then
+            safe_chart=$(_gha_sanitize_for_message "${CHART_NAME}")
+            echo "::warning::Skipping ${safe_chart} — not stamped this run (no release tag yet)"
+            continue
+          fi
+
+          echo "Packaging ${CHART_NAME} ${SUB_VERSION}..."
+          helm package "${CHART_DIR}" --destination ./packaged-charts
+          push_and_sign_chart "./packaged-charts/${CHART_NAME}-${SUB_VERSION}.tgz" "${CHART_NAME}" "${REGISTRY}/${CHARTS_REPO}"
+          append_chart_source chart-sources.txt "${CHART_NAME}" "${SUB_VERSION}"
+        done
+
+        # osac-ui: only package/push its sub-chart when it needed building
+        # this run (nightly, always). When pinned (release mode), its
+        # already-published chart is pulled directly by the umbrella's
+        # dependency resolution below, same as every other pinned component.
+        UI_SUB_VERSION="${{ needs.prepare.outputs.ui-sub-version }}"
+        UI_NEEDS_BUILD="${{ needs.prepare.outputs.ui-needs-build }}"
+        if [[ "${UI_NEEDS_BUILD}" == "true" && -n "${UI_SUB_VERSION}" ]]; then
+          UI_CHART_DIR="osac-ui/charts/ui"
+          UI_CHART_NAME=$(read_validated_chart_name "${UI_CHART_DIR}")
+          UI_IMAGE_REF="ghcr.io/osac-project/osac-ui:${UI_SUB_VERSION}"
+          stamp_osac_ui_chart "${UI_CHART_DIR}" "${UI_SUB_VERSION}" "${UI_IMAGE_REF}"
+          helm package "${UI_CHART_DIR}" --destination ./packaged-charts
+          push_and_sign_chart "./packaged-charts/${UI_CHART_NAME}-${UI_SUB_VERSION}.tgz" "${UI_CHART_NAME}" "${REGISTRY}/${CHARTS_REPO}"
+          append_chart_source chart-sources.txt "${UI_CHART_NAME}" "${UI_SUB_VERSION}" "${{ needs.prepare.outputs.ui-short-sha }}" "${{ needs.prepare.outputs.ui-sha }}"
+          echo "${UI_SUB_VERSION}" > osac-ui-nightly-version.txt
+        elif [[ -n "${UI_SUB_VERSION}" ]]; then
+          echo "osac-ui is pinned to its already-published ${UI_SUB_VERSION} this run — no sub-chart packaging needed"
+        else
+          echo "::warning title=osac-ui::No resolved osac-ui version — skipping sub-chart packaging"
+        fi
+
+    - name: Build umbrella chart dependencies
+      env:
+        OCI_REPO: oci://${{ env.REGISTRY }}/${{ env.CHARTS_REPO }}
+        COMPONENT_VERSIONS: ${{ needs.prepare.outputs.component-versions }}
+      run: |
+        set -euo pipefail
+        source osac-installer/scripts/nightly-charts.sh
+
+        CHART_YAML="osac-installer/charts/osac/Chart.yaml"
+        SKIPPED_DEPS_FILE="skipped-umbrella-dependencies.txt"
+        : > "${SKIPPED_DEPS_FILE}"
+
+        # Every mono-repo-resident sub-chart with a resolved version is
+        # published to GHCR by this point in time -- either just now
+        # ("Package and push sub-charts" above, for a component that
+        # needed building) or already, from a previous release (a pinned
+        # component). Either way, point the umbrella at that real published
+        # artifact instead of the committed file:// dev paths. A component
+        # with no resolved version this run has nothing published to point
+        # at, so it stays on file:// (see rewrite_umbrella_mono_repo_dependencies)
+        # -- recorded to SKIPPED_DEPS_FILE so it's surfaced below and in the
+        # Slack summary, not just a raw log warning nobody reads on a green run.
+        rewrite_umbrella_mono_repo_dependencies "${CHART_YAML}" "${OCI_REPO}" "${COMPONENT_VERSIONS}" "${SKIPPED_DEPS_FILE}"
+
+        UI_SUB_VERSION="${{ needs.prepare.outputs.ui-sub-version }}"
+        if [[ -n "${UI_SUB_VERSION}" ]]; then
+          rewrite_umbrella_osac_ui_dependency "${CHART_YAML}" "${UI_SUB_VERSION}" "${OCI_REPO}"
+        fi
+
+        rm -f osac-installer/charts/osac/Chart.lock
+        helm dependency build osac-installer/charts/osac/
+
+        if [[ -s "${SKIPPED_DEPS_FILE}" ]]; then
+          {
+            echo "### :warning: Umbrella dependencies still on \`file://\` this run"
+            echo
+            echo "No resolved release tag yet for these components -- stayed on their committed dev path instead of a published OCI version:"
+            echo
+            while IFS= read -r line; do
+              echo "- ${line}"
+            done < "${SKIPPED_DEPS_FILE}"
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+    - name: Lint chart
+      working-directory: osac-installer
+      run: ct lint --all --config ct.yaml
+
+    - name: Package umbrella chart
+      working-directory: osac-installer
+      env:
+        VERSION: ${{ steps.version.outputs.version }}
+      run: |
+        helm package charts/osac/ \
+          --version "${VERSION}" \
+          --app-version "${VERSION}"
+
+    - name: Push and sign umbrella chart
+      working-directory: osac-installer
+      env:
+        VERSION: ${{ steps.version.outputs.version }}
+      run: |
+        set -euo pipefail
+        source ./scripts/nightly-charts.sh
+        push_and_sign_chart "osac-${VERSION}.tgz" "osac" "${REGISTRY}/${CHARTS_REPO}"
+
+    - name: Verify umbrella chart publication
+      working-directory: osac-installer
+      env:
+        VERSION: ${{ steps.version.outputs.version }}
+        OCI_REPO: oci://${{ env.REGISTRY }}/${{ env.CHARTS_REPO }}
+      run: |
+        echo "Verifying umbrella chart was published successfully..."
+        helm show chart "${OCI_REPO}/osac" --version "${VERSION}"
+
+    - name: Record umbrella chart in manifest
+      env:
+        VERSION: ${{ steps.version.outputs.version }}
+      run: |
+        set -euo pipefail
+        source osac-installer/scripts/nightly-charts.sh
+        append_chart_source chart-sources.txt osac "${VERSION}"
+
+    - name: Generate images.txt
+      env:
+        VERSION: ${{ steps.version.outputs.version }}
+        BASE_VERSION: ${{ steps.version.outputs.base-version }}
+        UI_SHORT_SHA: ${{ needs.prepare.outputs.ui-short-sha }}
+      run: |
+        set -euo pipefail
+        # grep's own no-match exit code (1) must not poison the pipeline under
+        # pipefail -- that would abort the script right here instead of
+        # reaching the test -s check below, which is the actual diagnostic
+        # for "nothing extracted". helm template's real failures still
+        # propagate normally: they fail before grep ever runs.
+        helm template osac "osac-installer/osac-${VERSION}.tgz" \
+          --values "${VALUES_FILE}" \
+          --set service.externalHostname=placeholder.example.com \
+          --set service.internalHostname=placeholder-internal.example.com \
+        | (grep -oP 'image:\s*\K\S+' || true) \
+        | tr -d '"' \
+        | sort -u \
+        > images.txt
+
+        if ! test -s images.txt; then
+          echo "ERROR: images.txt is empty — helm template or image extraction failed"
+          exit 1
+        fi
+
+        echo "" >> images.txt
+        echo "# Chart source & version" >> images.txt
+        echo "# osac: source=v${BASE_VERSION} (${GITHUB_SHA:0:7}), chart=oci://${REGISTRY}/${CHARTS_REPO}/osac:${VERSION}" >> images.txt
+        echo "# osac-ui: source=sha-${UI_SHORT_SHA}, chart=oci://${REGISTRY}/${CHARTS_REPO}/osac-ui (see chart-sources.txt)" >> images.txt
+
+        echo "--- images.txt ---"
+        cat images.txt
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+      with:
+        name: nightly-${{ steps.version.outputs.version }}
+        path: |
+          osac-installer/osac-${{ steps.version.outputs.version }}.tgz
+          images.txt
+          chart-sources.txt
+          skipped-umbrella-dependencies.txt
+        retention-days: 14
+
+  # -------------------------------------------------------------------
+  # Job 6: Tag and notify — record success on temp branch + Slack.
+  # Creates the umbrella's osac/v<version> git tag at the temp branch
+  # commit (same pin E2E tested and publish packaged), plus a real,
+  # permanent <component>/vX.Y.Z git tag for every component this run
+  # actually built-and-tested-for-real (release mode only -- see
+  # prepare's components-to-tag). Both only ever happen after publish has
+  # already succeeded, which itself required the whole test gate to pass
+  # -- so tagging is atomic with the rest of this pipeline: nothing gets
+  # a permanent tag unless everything requested this run passed together.
+  # Download chart-sources.txt artifact; post Slack summary with
+  # published chart OCI links.
+  # -------------------------------------------------------------------
+  tag-and-notify:
+    name: Tag and notify
+    needs: [prepare, publish]
+    runs-on: osac-ci
+    timeout-minutes: 15
+    # Bare success() checks the WHOLE transitive dependency graph, not just
+    # this job's direct needs -- confirmed live: with skip_e2e=true, the
+    # three e2e-*-test jobs (skipped, further back in the graph) cascaded
+    # a skip forward onto this job even though publish (its actual direct
+    # dependency) succeeded. Same subtlety cleanup's own comment below
+    # already documents. Check only this job's real dependencies instead.
+    if: always() && needs.prepare.result == 'success' && needs.publish.result == 'success'
+    permissions:
+      # Create the umbrella/component git tags
+      contents: write
+      # Look up the package version URL for the Slack notification
+      packages: read
+      # Download chart-sources.txt from the publish job
+      actions: read
+    env:
+      VERSION: ${{ needs.publish.outputs.version }}
+      MODE: ${{ inputs.mode }}
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      with:
+        ref: ${{ needs.prepare.outputs.temp-branch }}
+        fetch-depth: 0
+        # persist-credentials left enabled (default): this job pushes git tags.
+
+    - name: Create umbrella tag
+      env:
+        SKIP_E2E: ${{ inputs.skip_e2e }}
+      run: |
+        set -euo pipefail
+        source osac-installer/scripts/nightly-charts.sh
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        TAG="osac/v${VERSION}"
+        COMMIT_SHA=$(git rev-parse HEAD)
+        TAG_MESSAGE="Nightly build ${VERSION}"
+        [[ "${MODE}" == "release" ]] && TAG_MESSAGE="Release ${VERSION}"
+        # Only ever true on a manual workflow_dispatch run (see the e2e
+        # jobs' own `if:` guards) -- keep this visible in the tag's own
+        # history, not just the transient Slack message below.
+        [[ "${SKIP_E2E}" == "true" ]] && TAG_MESSAGE="${TAG_MESSAGE} (e2e skipped: manual workflow_dispatch run)"
+
+        if git fetch origin "refs/tags/${TAG}:refs/tags/${TAG}" 2>/dev/null; then
+          EXISTING_SHA=$(git rev-parse "${TAG}^{commit}")
+          if [[ "${EXISTING_SHA}" == "${COMMIT_SHA}" ]]; then
+            echo "Tag ${TAG} already exists at ${COMMIT_SHA}; skipping create/push"
+            exit 0
+          fi
+          safe_tag=$(_gha_sanitize_for_message "${TAG}")
+          safe_existing=$(_gha_sanitize_for_message "${EXISTING_SHA}")
+          safe_commit=$(_gha_sanitize_for_message "${COMMIT_SHA}")
+          echo "::error::Tag ${safe_tag} already exists at ${safe_existing}, expected ${safe_commit}; refusing to move tag"
+          exit 1
+        fi
+
+        git tag "${TAG}" -m "${TAG_MESSAGE}"
+        git push origin "${TAG}"
+        echo "Tagged: ${TAG}"
+
+    # Real, permanent per-component tags -- only in release mode, only for
+    # components that actually needed a real build this run (prepare's
+    # components-to-tag; empty in nightly mode and in a release that isn't
+    # bumping anything). This only runs after the umbrella tag above and
+    # after publish has already succeeded (this job needs: publish), so a
+    # component only ever gets a permanent tag once the whole combination
+    # it's part of has passed every test box -- atomic with the rest of
+    # this pipeline, not a partial/independent promotion (OSAC-5337).
+    - name: Create per-component release tags
+      if: inputs.mode == 'release'
+      env:
+        COMPONENT_VERSIONS: ${{ needs.prepare.outputs.component-versions }}
+        COMPONENTS_TO_TAG: ${{ needs.prepare.outputs.components-to-tag }}
+      run: |
+        set -euo pipefail
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+
+        for COMPONENT in $(jq -r '.[]' <<<"${COMPONENTS_TO_TAG}"); do
+          VERSION=$(jq -r --arg k "${COMPONENT}" '.[$k]' <<<"${COMPONENT_VERSIONS}")
+          TAG="${COMPONENT}/v${VERSION}"
+          COMMIT_SHA=$(git rev-parse HEAD)
+
+          if git fetch origin "refs/tags/${TAG}:refs/tags/${TAG}" 2>/dev/null; then
+            EXISTING_SHA=$(git rev-parse "${TAG}^{commit}")
+            if [[ "${EXISTING_SHA}" == "${COMMIT_SHA}" ]]; then
+              echo "Tag ${TAG} already exists at ${COMMIT_SHA}; skipping create/push"
+              continue
+            fi
+            safe_tag=$(_gha_sanitize_for_message "${TAG}")
+            echo "::error::Tag ${safe_tag} already exists at a different commit; refusing to move tag" >&2
+            exit 1
+          fi
+
+          git tag "${TAG}" -m "Release ${VERSION}"
+          git push origin "${TAG}"
+          echo "Tagged: ${TAG}"
+        done
+
+    - name: Download chart manifest
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+      with:
+        name: nightly-${{ env.VERSION }}
+        path: nightly-artifacts
+
+    - name: Retrieve Slack webhook from Vault
+      id: vault
+      uses: ./.github/actions/vault-slack-webhook
+
+    - name: Notify Slack on success
+      env:
+        SLACK_WEBHOOK_URL: ${{ steps.vault.outputs.webhook-url }}
+        SERVER_URL: ${{ github.server_url }}
+        REPOSITORY: ${{ github.repository }}
+        RUN_ID: ${{ github.run_id }}
+        REPO_OWNER: ${{ github.repository_owner }}
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        SKIP_E2E: ${{ inputs.skip_e2e }}
+      run: |
+        set -euo pipefail
+        source osac-installer/scripts/nightly-charts.sh
+
+        WORKFLOW_URL="${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}"
+        SUMMARY_TEXT=$(build_slack_charts_published_summary nightly-artifacts/chart-sources.txt "${REPO_OWNER}")
+        IMAGES_TEXT=$(build_slack_images_published_summary nightly-artifacts/images.txt)
+        SKIPPED_DEPS_TEXT=$(build_slack_skipped_umbrella_dependencies_summary nightly-artifacts/skipped-umbrella-dependencies.txt)
+
+        RUN_KIND="Nightly Build"
+        [[ "${MODE}" == "release" ]] && RUN_KIND="Release"
+
+        # Only ever true on a manual workflow_dispatch run (see the e2e
+        # jobs' own `if:` guards) -- never silent: a release that skipped
+        # e2e must be obvious in the same place every other success is
+        # announced, not just in the tag message/run log.
+        HEADER_TEXT=":white_check_mark: ${RUN_KIND} ${VERSION} - Published"
+        if [[ "${SKIP_E2E}" == "true" ]]; then
+          HEADER_TEXT=":warning: ${RUN_KIND} ${VERSION} - Published (e2e SKIPPED)"
+        fi
+
+        jq -n \
+          --arg header "${HEADER_TEXT}" \
+          --arg summary "${SUMMARY_TEXT}" \
+          --arg images "${IMAGES_TEXT}" \
+          --arg skipped_deps "${SKIPPED_DEPS_TEXT}" \
+          --arg workflow_url "${WORKFLOW_URL}" \
+          '{
+            "blocks": (
+              [
+                {
+                  "type": "header",
+                  "text": {"type": "plain_text", "text": $header}
+                },
+                {
+                  "type": "section",
+                  "text": {"type": "mrkdwn", "text": $summary}
+                }
+              ]
+              # Slack rejects a section with empty text -- omit it entirely
+              # rather than send one if images.txt was somehow unavailable.
+              + (if $images != "" then [{"type": "section", "text": {"type": "mrkdwn", "text": $images}}] else [] end)
+              # Same omit-if-empty rule -- empty is the expected common case
+              # (every mono-repo component already has a release tag most
+              # nights), only non-empty when rewrite_umbrella_mono_repo_dependencies
+              # actually skipped something this run.
+              + (if $skipped_deps != "" then [{"type": "section", "text": {"type": "mrkdwn", "text": $skipped_deps}}] else [] end)
+              + [
+                {
+                  "type": "actions",
+                  "elements": [
+                    {"type": "button", "text": {"type": "plain_text", "text": "View Run"}, "url": $workflow_url}
+                  ]
+                }
+              ]
+            )
+          }' > /tmp/slack-payload.json
+
+        curl -sf --max-time 15 -X POST "${SLACK_WEBHOOK_URL}" \
+          -H "Content-Type: application/json" \
+          -d @/tmp/slack-payload.json
+
+  # -------------------------------------------------------------------
+  # Job 7: Notify on failure
+  # -------------------------------------------------------------------
+  notify-failure:
+    name: Notify failure
+    needs: [prepare, build, unit-tests, integration-tests, security-tests, e2e-vmaas-test, e2e-caas-test, e2e-bmaas-test, publish, tag-and-notify]
+    runs-on: osac-ci
+    timeout-minutes: 10
+    if: failure()
+    permissions:
+      # Only needed for the checkout step below (resolves the local
+      # vault-slack-webhook composite action) -- least privilege.
+      contents: read
+
+    steps:
+    - name: Checkout repository
+      # Only needed to resolve the local ./.github/actions/vault-slack-webhook
+      # composite action -- no chart/script content is used in this job.
+      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+
+    - name: Retrieve Slack webhook from Vault
+      id: vault
+      uses: ./.github/actions/vault-slack-webhook
+
+    - name: Notify Slack on failure
+      env:
+        SLACK_WEBHOOK_URL: ${{ steps.vault.outputs.webhook-url }}
+        SERVER_URL: ${{ github.server_url }}
+        REPOSITORY: ${{ github.repository }}
+        RUN_ID: ${{ github.run_id }}
+        REF_NAME: ${{ github.ref_name }}
+        MODE: ${{ inputs.mode }}
+        RELEASE_VERSION: ${{ inputs.release_version }}
+      run: |
+        set -euo pipefail
+        WORKFLOW_URL="${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}"
+
+        HEADER_TEXT=":x: Nightly Build Failed"
+        # A failed release attempt is at least as consequential as a failed
+        # nightly -- don't let it blend into the routine nightly-failure
+        # noise.
+        [[ "${MODE}" == "release" ]] && HEADER_TEXT=":x: Release ${RELEASE_VERSION} Failed"
+
+        jq -n \
+          --arg header "${HEADER_TEXT}" \
+          --arg branch "${REF_NAME}" \
+          --arg workflow_url "${WORKFLOW_URL}" \
+          '{
+            "blocks": [
+              {
+                "type": "header",
+                "text": {"type": "plain_text", "text": $header}
+              },
+              {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": ("*Branch:* `" + $branch + "`\nPlease investigate the failure.")}
+              },
+              {
+                "type": "actions",
+                "elements": [
+                  {"type": "button", "text": {"type": "plain_text", "text": "View Run"}, "url": $workflow_url}
+                ]
+              }
+            ]
+          }' > /tmp/slack-payload.json
+
+        curl -sf --max-time 15 -X POST "${SLACK_WEBHOOK_URL}" \
+          -H "Content-Type: application/json" \
+          -d @/tmp/slack-payload.json
+
+  # -------------------------------------------------------------------
+  # Job 8: Cleanup — delete temp branch, success only. Deleting unconditionally
+  # (the previous `if: always()`) broke GitHub's "Re-run failed jobs": a retry
+  # reuses `prepare`'s cached temp-branch output from the original attempt,
+  # but that branch was already gone -- this job had deleted it the moment
+  # the first attempt reached ANY terminal state, including failure. Branches
+  # from failed runs are now left for cleanup-nightly-branches.yaml's 7-day
+  # TTL sweep instead, so a failed run can still be retried.
+  # -------------------------------------------------------------------
+  cleanup:
+    name: Cleanup temp branch
+    needs: [prepare, build, unit-tests, integration-tests, security-tests, e2e-vmaas-test, e2e-caas-test, e2e-bmaas-test, publish, tag-and-notify, notify-failure]
+    runs-on: ubuntu-latest
+    # notify-failure is routinely skipped whenever nothing fails, and GitHub
+    # skip-cascades a job whose needs include a skipped job regardless of a
+    # custom `if:` unless the expression includes always() -- so always() is
+    # required here even though this job only wants to act on real success.
+    # tag-and-notify succeeding is sufficient proof the whole pipeline (build,
+    # every test box, publish) already succeeded, since it's gated on that.
+    if: always() && needs.tag-and-notify.result == 'success'
+    permissions:
+      contents: write
+    env:
+      NIGHTLY_BRANCH: ${{ needs.prepare.outputs.temp-branch }}
+
+    steps:
+    - name: Delete temporary branch
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        if [[ -z "${NIGHTLY_BRANCH}" ]]; then
+          echo "::notice::No temp branch to delete (prepare may not have pushed one)"
+          exit 0
+        fi
+        if gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/${NIGHTLY_BRANCH}"; then
+          echo "::notice::Deleted temp branch ${NIGHTLY_BRANCH}"
+        else
+          echo "::warning::Could not delete temp branch ${NIGHTLY_BRANCH}"
+        fi

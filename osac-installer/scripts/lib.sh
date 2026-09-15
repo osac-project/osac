@@ -194,6 +194,16 @@ validate_semver() {
     [[ "${#version}" -le 128 ]] && [[ "${version}" =~ ${semver_re} ]]
 }
 
+# True if <prefix>/v<version> already exists as a tag reachable from this
+# checkout. Used by release mode to decide whether an explicitly-requested
+# component_versions entry needs a real build (doesn't exist yet) or can
+# just be pinned like any other already-released version (OSAC-5337).
+# Usage: real_tag_exists <prefix> <version>
+real_tag_exists() {
+    local prefix="$1" version="$2"
+    git rev-parse -q --verify "refs/tags/${prefix}/v${version}^{commit}" >/dev/null 2>&1
+}
+
 # Resolve the nearest real (non-nightly) bare vX.Y.Z release tag reachable from an
 # external repo path (e.g. osac-ui, which tags v0.0.5 rather than osac-ui/v0.0.5).
 # Pre-release-only tags (e.g. v0.0.1-rc1) are ignored; repos with no stable tag fail loud.

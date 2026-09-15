@@ -1,0 +1,75 @@
+name: OSAC Release
+
+# Distinguishes a release dispatch in the Actions run list -- see the
+# concurrency group below for why it needs its own group, separate from
+# nightly-build.yaml's.
+run-name: Release ${{ github.event.inputs.release_version }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: >-
+          A real, human-chosen umbrella chart version (e.g. 0.1.0, no
+          leading 'v') to publish as osac/v<version>. Dispatch this
+          workflow from the exact branch or tag you want to release using
+          GitHub's own "Use workflow from" ref selector above -- there is
+          no separate ref/commit input; this workflow already builds
+          whatever ref it's dispatched against.
+        type: string
+        required: true
+      component_versions:
+        description: >-
+          Optional: bump one or more components as part of this release,
+          as comma-separated component=version pairs (e.g.
+          "osac-operator=0.0.13,fulfillment-service=0.0.99"). A named
+          component whose requested version doesn't already exist gets
+          built fresh, tested, and (only on success) tagged and published
+          at that version. Leave empty to release with every component
+          pinned to its current latest release, unchanged -- this is the
+          common case.
+        type: string
+        required: false
+      skip_e2e:
+        description: >-
+          Skip e2e validation (vmaas/caas/bmaas) and publish anyway if
+          unit/integration/security tests pass.
+        type: boolean
+        default: false
+        required: false
+
+concurrency:
+  # Keyed off the chosen version so two different, unrelated releases can
+  # publish concurrently -- a second dispatch of the *same* version queues
+  # behind the first rather than being rejected outright (GitHub Actions
+  # concurrency groups only support queue or cancel-in-progress, not a
+  # third "reject" option). If the first dispatch already published
+  # osac/v<version> by the time the queued one starts, osac-build-and-
+  # publish.yaml's "Resolve component versions" step explicitly rejects it
+  # (real_tag_exists osac "${RELEASE_VERSION}") rather than silently
+  # republishing.
+  group: osac-release-${{ github.event.inputs.release_version }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  # The actual build/test/publish/tag pipeline lives in
+  # osac-build-and-publish.yaml, shared with nightly-build.yaml -- see that
+  # file's module header and OSAC-5337 for why. This workflow only owns the
+  # release-specific trigger (a deliberate, human-chosen dispatch).
+  release:
+    name: Release
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      pull-requests: read
+      security-events: write
+      actions: read
+    uses: ./.github/workflows/osac-build-and-publish.yaml
+    with:
+      mode: release
+      release_version: ${{ github.event.inputs.release_version }}
+      component_versions: ${{ github.event.inputs.component_versions }}
+      skip_e2e: ${{ github.event.inputs.skip_e2e == 'true' }}

@@ -4,7 +4,7 @@
 # KubeVirt (installed by the dev-full profile) needs *rootful* podman on Linux —
 # rootless user namespaces deny virt-handler the chown of /dev/kvm. This script
 # encapsulates the runtime detection the old kind-dev/setup.sh did:
-#   - macOS  : Docker Desktop (auto-detected)
+#   - macOS  : Docker Desktop or Podman Desktop (auto-detected)
 #   - Linux host     : rootful podman via sudo
 #   - Linux Distrobox: rootful podman via the host socket (/run/podman/podman.sock)
 #   - Override: KIND_EXPERIMENTAL_PROVIDER=docker|podman
@@ -16,6 +16,7 @@
 #       kind-runtime.sh create-cluster <name> <config> <kubeconfig>
 #       kind-runtime.sh delete-cluster <name>
 #       kind-runtime.sh container <args...>     # run the container tool
+#       kind-runtime.sh container-build-file <Containerfile> <args...>
 #       kind-runtime.sh <kind args...>          # run kind
 #
 # All diagnostics go to stderr so stdout stays clean for `kind get ...` parsing.
@@ -25,7 +26,7 @@ set -euo pipefail
 # ── Configuration ────────────────────────────────────────────────────────────
 ROOTFUL_SOCKET="${ROOTFUL_SOCKET:-/run/podman/podman.sock}"
 
-# Auto-detect container runtime (prefer Docker on Mac, podman elsewhere).
+# Auto-detect container runtime (prefer Podman on macOS when available, Docker otherwise).
 if [[ "$(uname -s)" == "Darwin" ]] && command -v podman >/dev/null 2>&1; then
   KIND_PROVIDER="${KIND_EXPERIMENTAL_PROVIDER:-podman}"
 else
@@ -65,7 +66,7 @@ detect_podman_mode() {
 }
 
 kind_cmd() {
-  if [[ "$KIND_PROVIDER" == "docker" ]]; then
+  if [[ "$KIND_PROVIDER" == "docker" || "$(uname -s)" == "Darwin" ]]; then
     KIND_EXPERIMENTAL_PROVIDER="${KIND_PROVIDER}" kind "$@"
   elif [[ "$IN_DISTROBOX" == "true" ]]; then
     if [[ "${PODMAN_ROOTFUL:-0}" == "1" ]]; then
@@ -86,10 +87,27 @@ kind_cmd() {
 container_cmd() {
   if [[ "$KIND_PROVIDER" == "docker" ]]; then
     docker "$@"
+  elif [[ "$(uname -s)" == "Darwin" ]]; then
+    # Podman Desktop exposes the machine connection to the invoking user.
+    # sudo would select root's connection instead and cannot reach that socket.
+    podman "$@"
   elif [[ "$IN_DISTROBOX" == "true" ]]; then
     podman "$@"   # the distrobox wrapper honours PODMAN_ROOTFUL / CONTAINER_HOST
   else
     sudo podman "$@"
+  fi
+}
+
+container_build_file() {
+  local containerfile="$1"
+  shift
+
+  if [[ "$KIND_PROVIDER" == "podman" && "$(uname -s)" == "Darwin" ]]; then
+    # Podman Desktop runs builds in a remote Linux VM. Stream the Containerfile
+    # there and use a remote context; this image has no COPY/ADD instructions.
+    podman machine ssh -- podman build "$@" -f - /tmp < "${containerfile}"
+  else
+    container_cmd build "$@" -f "${containerfile}" "$(dirname "${containerfile}")"
   fi
 }
 
@@ -219,8 +237,9 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     check)          check_prerequisites ;;
     create-cluster) shift; create_cluster "$@" ;;
     delete-cluster) shift; delete_cluster "$@" ;;
-    container)      shift; container_cmd "$@" ;;
-    "")             err "usage: kind-runtime.sh {check|create-cluster|delete-cluster|container|<kind args>}"; exit 2 ;;
+    container)            shift; container_cmd "$@" ;;
+    container-build-file) shift; container_build_file "$@" ;;
+    "")                   err "usage: kind-runtime.sh {check|create-cluster|delete-cluster|container|container-build-file|<kind args>}"; exit 2 ;;
     *)              kind_cmd "$@" ;;
   esac
 fi

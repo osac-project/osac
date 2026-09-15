@@ -64,10 +64,10 @@ def catalog_item(
         title=f"E2E BMaaS Test ({test_run_id})",
         description="Temporary catalog item for BMaaS E2E tests",
         template=bmi_template,
-        field_definitions=[
-            {"path": "ssh_public_key", "display_name": "SSH Public Key", "editable": True},
-            {"path": "disk_image", "display_name": "Disk Image", "editable": True},
-        ],
+        fields={
+            "ssh_public_key": {"editable": {}},
+            "disk_image": {"editable": {"default_value": {"name": bmi_disk_image, "shared": True}}},
+        },
     )
     print(f"CatalogItem created: {item_id}")
 

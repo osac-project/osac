@@ -45,15 +45,15 @@ def test_catalog_item_crud(grpc: GRPCClient, cluster_template: str) -> None:
             grpc.delete_cluster_catalog_item(catalog_item_id=catalog_item_id)
 
 
-def test_unpublished_catalog_item_not_visible_in_public_api(grpc: GRPCClient, cluster_template: str) -> None:
+def test_unpublished_catalog_item_readable_in_public_api(grpc: GRPCClient, cluster_template: str) -> None:
     name = unique_name("e2e-unpub")
     catalog_item_id = grpc.create_cluster_catalog_item(name=name, template=cluster_template, published=False)
     try:
-        assert catalog_item_id not in grpc.list_cluster_catalog_item_ids()
+        assert catalog_item_id in grpc.list_cluster_catalog_item_ids()
+        assert catalog_item_id not in grpc.list_cluster_catalog_item_ids(published_only=True)
 
         output, rc = grpc.call_unchecked(service="osac.public.v1.ClusterCatalogItems/Get", data={"id": catalog_item_id})
-        assert rc != 0, f"Expected Get to fail for unpublished item, got: {output}"
-        assert "not published" in output.lower() or "not found" in output.lower()
+        assert rc == 0, f"Expected Get to read unpublished item, got: {output}"
     finally:
         grpc.delete_cluster_catalog_item(catalog_item_id=catalog_item_id)
 
@@ -66,77 +66,45 @@ def test_catalog_item_unpublish_transition(grpc: GRPCClient, cluster_template: s
 
         grpc.update_cluster_catalog_item(catalog_item_id=catalog_item_id, published=False)
 
-        assert catalog_item_id not in grpc.list_cluster_catalog_item_ids()
+        assert catalog_item_id in grpc.list_cluster_catalog_item_ids()
+        assert catalog_item_id not in grpc.list_cluster_catalog_item_ids(published_only=True)
 
         output, rc = grpc.call_unchecked(service="osac.public.v1.ClusterCatalogItems/Get", data={"id": catalog_item_id})
-        assert rc != 0, f"Expected Get to fail after unpublishing, got: {output}"
+        assert rc == 0, f"Expected Get to read item after unpublishing, got: {output}"
     finally:
         grpc.delete_cluster_catalog_item(catalog_item_id=catalog_item_id)
 
 
-def test_catalog_item_field_definitions(grpc: GRPCClient, cluster_template: str) -> None:
-    field_defs = [
-        {"path": "spec.network.pod_cidr", "display_name": "Pod CIDR", "editable": True, "default": "10.128.0.0/14"},
-        {
-            "path": "spec.network.service_cidr",
-            "display_name": "Service CIDR",
-            "editable": False,
-            "default": "172.30.0.0/16",
-        },
-    ]
-    name = unique_name("e2e-fd")
+def test_catalog_item_fields(grpc: GRPCClient, cluster_template: str) -> None:
+    fields = {
+        "network": {
+            "pod_cidr": {"editable": {"default_value": "10.128.0.0/14"}},
+            "service_cidr": {"locked": "172.30.0.0/16"},
+        }
+    }
     catalog_item_id = grpc.create_cluster_catalog_item(
-        name=name, template=cluster_template, published=True, field_definitions=field_defs
+        name=unique_name("e2e-policy"), template=cluster_template, fields=fields
     )
     try:
-        item = grpc.get_cluster_catalog_item(catalog_item_id=catalog_item_id)
-        returned_fds = item["object"].get("fieldDefinitions", [])
-        assert len(returned_fds) == 2
+        item = grpc.get_cluster_catalog_item(catalog_item_id=catalog_item_id)["object"]
+        network = item["fields"]["network"]
+        assert network["podCidr"]["editable"]["defaultValue"] == "10.128.0.0/14"
+        assert network["serviceCidr"] == {"locked": "172.30.0.0/16"}
 
-        pod_fd = next(fd for fd in returned_fds if fd["path"] == "spec.network.pod_cidr")
-        assert pod_fd["displayName"] == "Pod CIDR"
-        assert pod_fd["editable"] is True
+        grpc.update_cluster_catalog_item(
+            catalog_item_id=catalog_item_id,
+            fields={"network": {"pod_cidr": {"editable": {}}, "service_cidr": {"locked": "172.31.0.0/16"}}},
+        )
+        item = grpc.get_cluster_catalog_item(catalog_item_id=catalog_item_id)["object"]
+        network = item["fields"]["network"]
+        assert network["podCidr"] == {"editable": {}}
+        assert network["serviceCidr"] == {"locked": "172.31.0.0/16"}
 
-        # editable=false is omitted by protobuf (default value), so we only check displayName
-        svc_fd = next(fd for fd in returned_fds if fd["path"] == "spec.network.service_cidr")
-        assert svc_fd["displayName"] == "Service CIDR"
-
-        updated_fds = [
-            {
-                "path": "spec.network.pod_cidr",
-                "display_name": "Pod Network CIDR",
-                "editable": True,
-                "default": "10.128.0.0/14",
-            },
-            {
-                "path": "spec.network.service_cidr",
-                "display_name": "Service CIDR",
-                "editable": False,
-                "default": "172.30.0.0/16",
-            },
-        ]
-        grpc.update_cluster_catalog_item(catalog_item_id=catalog_item_id, field_definitions=updated_fds)
-
-        item = grpc.get_cluster_catalog_item(catalog_item_id=catalog_item_id)
-        returned_fds = item["object"].get("fieldDefinitions", [])
-        assert len(returned_fds) == 2
-        pod_fd = next(fd for fd in returned_fds if fd["path"] == "spec.network.pod_cidr")
-        assert pod_fd["displayName"] == "Pod Network CIDR"
-
-        reduced_fds = [
-            {
-                "path": "spec.network.pod_cidr",
-                "display_name": "Pod Network CIDR",
-                "editable": True,
-                "default": "10.128.0.0/14",
-            }
-        ]
-        grpc.update_cluster_catalog_item(catalog_item_id=catalog_item_id, field_definitions=reduced_fds)
-
-        item = grpc.get_cluster_catalog_item(catalog_item_id=catalog_item_id)
-        returned_fds = item["object"].get("fieldDefinitions", [])
-        assert len(returned_fds) == 1
-        assert returned_fds[0]["path"] == "spec.network.pod_cidr"
+        grpc.update_cluster_catalog_item(
+            catalog_item_id=catalog_item_id, fields={"network": {"pod_cidr": {"editable": {}}}}
+        )
+        item = grpc.get_cluster_catalog_item(catalog_item_id=catalog_item_id)["object"]
+        assert item["fields"]["network"] == {"podCidr": {"editable": {}}}
     finally:
         grpc.delete_cluster_catalog_item(catalog_item_id=catalog_item_id)
 
@@ -180,10 +148,11 @@ def test_create_cluster_with_unpublished_catalog_item_fails(grpc: GRPCClient, cl
         grpc.delete_cluster_catalog_item(catalog_item_id=catalog_item_id)
 
 
-def test_delete_catalog_item_blocked_when_referenced(grpc: GRPCClient, cli: OsacCLI, cluster_template: str) -> None:
+def test_cluster_survives_catalog_item_deletion(grpc: GRPCClient, cli: OsacCLI, cluster_template: str) -> None:
     name = unique_name("e2e-ref")
     catalog_item_id = grpc.create_cluster_catalog_item(name=name, template=cluster_template, published=True)
     cluster_id = ""
+    catalog_deleted = False
     try:
         cluster_name = unique_name("e2e-cluster")
         cluster_id = cli.create_cluster_with_catalog_item(catalog_item=catalog_item_id, name=cluster_name)
@@ -191,8 +160,11 @@ def test_delete_catalog_item_blocked_when_referenced(grpc: GRPCClient, cli: Osac
         output, rc = grpc.call_unchecked(
             service="osac.private.v1.ClusterCatalogItems/Delete", data={"id": catalog_item_id}
         )
-        assert rc != 0, f"Expected catalog item delete to be blocked, got: {output}"
-        assert "referenc" in output.lower() or "in use" in output.lower() or "failed precondition" in output.lower()
+        assert rc == 0, f"Expected catalog item deletion to succeed, got: {output}"
+        catalog_deleted = True
+        persisted = grpc.call(service="osac.public.v1.Clusters/Get", data={"id": cluster_id})["object"]
+        assert persisted["spec"]["catalogItem"]["id"] == catalog_item_id
+        assert persisted["spec"]["template"]["id"], "Materialized Template must survive catalog deletion"
     finally:
         if cluster_id:
             cli.delete_cluster(uuid=cluster_id)
@@ -203,13 +175,14 @@ def test_delete_catalog_item_blocked_when_referenced(grpc: GRPCClient, cli: Osac
                 delay=5,
                 description=f"Cluster {cluster_id} removal from API",
             )
-        grpc.delete_cluster_catalog_item(catalog_item_id=catalog_item_id)
+        if not catalog_deleted:
+            grpc.delete_cluster_catalog_item(catalog_item_id=catalog_item_id)
 
 
 def test_create_cluster_with_catalog_item_version(
     grpc: GRPCClient, private_grpc: GRPCClient, cli: OsacCLI, k8s_hub_client: K8sClient, cluster_template: str
 ) -> None:
-    """Verify the catalog-item version resolution path: a field_definition
+    """Verify the catalog-item version resolution path: a field policy
     default for version overrides the template's own spec_defaults.version."""
     version = private_grpc.ensure_cluster_version(version="4.20.0-e2e-catalog-item", image=TEST_RELEASE_IMAGE)
 
@@ -218,9 +191,7 @@ def test_create_cluster_with_catalog_item_version(
         name=name,
         template=cluster_template,
         published=True,
-        field_definitions=[
-            {"path": "version", "display_name": "Version", "editable": True, "default": version["name"]}
-        ],
+        fields={"version": {"editable": {"default_value": {"name": version["name"]}}}},
     )
     cluster_id = ""
     try:

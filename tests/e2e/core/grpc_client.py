@@ -327,7 +327,7 @@ class GRPCClient:
     # ClusterCatalogItem operations
 
     def create_cluster_catalog_item(
-        self, *, name: str, template: str, published: bool = True, field_definitions: list[dict[str, Any]] | None = None
+        self, *, name: str, template: str, published: bool = True, fields: dict[str, Any] | None = None
     ) -> str:
         obj: dict[str, Any] = {
             "metadata": {"name": name},
@@ -335,16 +335,19 @@ class GRPCClient:
             "template": {"name": template},
             "published": published,
         }
-        if field_definitions is not None:
-            obj["field_definitions"] = field_definitions
+        if fields is not None:
+            obj["fields"] = fields
         response: dict[str, Any] = self.call(service=f"{PRIVATE_API}.ClusterCatalogItems/Create", data={"object": obj})
         return response["object"]["id"]
 
     def get_cluster_catalog_item(self, *, catalog_item_id: str) -> dict[str, Any]:
         return self.call(service=f"{PUBLIC_API}.ClusterCatalogItems/Get", data={"id": catalog_item_id})
 
-    def list_cluster_catalog_item_ids(self) -> list[str]:
-        response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.ClusterCatalogItems/List")
+    def list_cluster_catalog_item_ids(self, *, published_only: bool = False) -> list[str]:
+        response: dict[str, Any] = self.call(
+            service=f"{PUBLIC_API}.ClusterCatalogItems/List",
+            data={"filter": "this.published"} if published_only else {},
+        )
         return [item["id"] for item in response.get("items", [])]
 
     def update_cluster_catalog_item(self, *, catalog_item_id: str, **fields: Any) -> dict[str, Any]:  # noqa: ANN401
@@ -360,7 +363,7 @@ class GRPCClient:
     # ComputeInstanceCatalogItem operations
 
     def create_compute_instance_catalog_item(
-        self, *, name: str, template: str, published: bool = True, field_definitions: list[dict[str, Any]] | None = None
+        self, *, name: str, template: str, published: bool = True, fields: dict[str, Any] | None = None
     ) -> str:
         obj: dict[str, Any] = {
             "metadata": {"name": name},
@@ -368,8 +371,8 @@ class GRPCClient:
             "template": {"name": template},
             "published": published,
         }
-        if field_definitions is not None:
-            obj["field_definitions"] = field_definitions
+        if fields is not None:
+            obj["fields"] = fields
         response: dict[str, Any] = self.call(
             service=f"{PRIVATE_API}.ComputeInstanceCatalogItems/Create", data={"object": obj}
         )
@@ -378,8 +381,11 @@ class GRPCClient:
     def get_compute_instance_catalog_item(self, *, catalog_item_id: str) -> dict[str, Any]:
         return self.call(service=f"{PUBLIC_API}.ComputeInstanceCatalogItems/Get", data={"id": catalog_item_id})
 
-    def list_compute_instance_catalog_item_ids(self) -> list[str]:
-        response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.ComputeInstanceCatalogItems/List")
+    def list_compute_instance_catalog_item_ids(self, *, published_only: bool = False) -> list[str]:
+        response: dict[str, Any] = self.call(
+            service=f"{PUBLIC_API}.ComputeInstanceCatalogItems/List",
+            data={"filter": "this.published"} if published_only else {},
+        )
         return [item["id"] for item in response.get("items", [])]
 
     def update_compute_instance_catalog_item(self, *, catalog_item_id: str, **fields: Any) -> dict[str, Any]:  # noqa: ANN401
@@ -523,13 +529,7 @@ class GRPCClient:
     # BareMetalInstanceCatalogItem operations (private API for admin setup)
 
     def create_baremetal_instance_catalog_item(
-        self,
-        *,
-        name: str,
-        title: str,
-        description: str,
-        template: str,
-        field_definitions: list[dict[str, Any]] | None = None,
+        self, *, name: str, title: str, description: str, template: str, fields: dict[str, Any] | None = None
     ) -> str:
         """Create a published BareMetalInstanceCatalogItem.
 
@@ -543,8 +543,8 @@ class GRPCClient:
             "template": {"name": template},
             "published": True,
         }
-        if field_definitions is not None:
-            obj["field_definitions"] = field_definitions
+        if fields is not None:
+            obj["fields"] = fields
         response: dict[str, Any] = self.call(
             service=f"{PRIVATE_API}.BareMetalInstanceCatalogItems/Create", data={"object": obj}
         )

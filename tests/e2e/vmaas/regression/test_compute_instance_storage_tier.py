@@ -326,22 +326,19 @@ def test_compute_instance_boot_disk_tier_from_catalog_item_default(
     default_instance_type: str,
     default_disk_image: str,
 ) -> None:
-    """Verify that boot disk tier is resolved from CatalogItem FieldDefinition default."""
-    field_defs = [
-        {
-            "path": "boot_disk.storage_tier",
-            "display_name": "Boot Disk Storage Tier",
-            "editable": True,
-            "default": {"name": default_storage_tier},
+    """Verify that boot disk tier is resolved from CatalogItem typed policy default."""
+    fields = {
+        "boot_disk": {
+            "storage_tier": {"editable": {"default_value": {"name": default_storage_tier}}},
+            "size_gib": {"editable": {}},
         },
-        {"path": "boot_disk.size_gib", "display_name": "Boot Disk Size", "editable": True},
-        {"path": "network_attachments", "display_name": "Network Attachments", "editable": True},
-        {"path": "disk_image", "display_name": "Disk Image", "editable": True},
-        {"path": "instance_type", "display_name": "Instance Type", "editable": True},
-        {"path": "run_strategy", "display_name": "Run Strategy", "editable": True},
-    ]
+        "network_attachments": {"editable": {}},
+        "disk_image": {"editable": {}},
+        "instance_type": {"editable": {}},
+        "run_strategy": {"editable": {}},
+    }
     catalog_item_id = private_grpc.create_compute_instance_catalog_item(
-        name=unique_name("e2e-cat-tier"), template=vm_template, published=True, field_definitions=field_defs
+        name=unique_name("e2e-cat-tier"), template=vm_template, published=True, fields=fields
     )
 
     try:
@@ -426,21 +423,18 @@ def test_compute_instance_user_tier_overrides_catalog_item_default(
     """Verify that user-provided tier overrides CatalogItem default."""
     fast_tier = additional_storage_tiers["fast"]["name"]
 
-    field_defs = [
-        {
-            "path": "boot_disk.storage_tier",
-            "display_name": "Boot Disk Storage Tier",
-            "editable": True,
-            "default": default_storage_tier,
+    fields = {
+        "boot_disk": {
+            "storage_tier": {"editable": {"default_value": {"name": default_storage_tier}}},
+            "size_gib": {"editable": {}},
         },
-        {"path": "boot_disk.size_gib", "display_name": "Boot Disk Size", "editable": True},
-        {"path": "network_attachments", "display_name": "Network Attachments", "editable": True},
-        {"path": "disk_image", "display_name": "Disk Image", "editable": True},
-        {"path": "instance_type", "display_name": "Instance Type", "editable": True},
-        {"path": "run_strategy", "display_name": "Run Strategy", "editable": True},
-    ]
+        "network_attachments": {"editable": {}},
+        "disk_image": {"editable": {}},
+        "instance_type": {"editable": {}},
+        "run_strategy": {"editable": {}},
+    }
     catalog_item_id = private_grpc.create_compute_instance_catalog_item(
-        name=unique_name("e2e-cat-override"), template=vm_template, published=True, field_definitions=field_defs
+        name=unique_name("e2e-cat-override"), template=vm_template, published=True, fields=fields
     )
 
     try:
@@ -504,22 +498,19 @@ def test_compute_instance_explicit_additional_disks_without_catalog_item_default
     archive_tier = additional_storage_tiers["archive"]["name"]
 
     # CatalogItem with boot_disk.storage_tier default ONLY (no additional_disks default)
-    field_defs = [
-        {
-            "path": "boot_disk.storage_tier",
-            "display_name": "Boot Disk Storage Tier",
-            "editable": True,
-            "default": {"name": default_storage_tier},
+    fields = {
+        "boot_disk": {
+            "storage_tier": {"editable": {"default_value": {"name": default_storage_tier}}},
+            "size_gib": {"editable": {}},
         },
-        {"path": "boot_disk.size_gib", "display_name": "Boot Disk Size", "editable": True},
-        {"path": "additional_disks", "display_name": "Additional Disks", "editable": True},
-        {"path": "network_attachments", "display_name": "Network Attachments", "editable": True},
-        {"path": "disk_image", "display_name": "Disk Image", "editable": True},
-        {"path": "instance_type", "display_name": "Instance Type", "editable": True},
-        {"path": "run_strategy", "display_name": "Run Strategy", "editable": True},
-    ]
+        "additional_disks": {"editable": {}},
+        "network_attachments": {"editable": {}},
+        "disk_image": {"editable": {}},
+        "instance_type": {"editable": {}},
+        "run_strategy": {"editable": {}},
+    }
     catalog_item_id = private_grpc.create_compute_instance_catalog_item(
-        name=unique_name("e2e-cat-no-add-def"), template=vm_template, published=True, field_definitions=field_defs
+        name=unique_name("e2e-cat-no-add-def"), template=vm_template, published=True, fields=fields
     )
 
     try:
@@ -586,25 +577,21 @@ def test_compute_instance_additional_disks_from_catalog_item_default(
     default_instance_type: str,
     default_disk_image: str,
 ) -> None:
-    """Verify that additional disks are defaulted from CatalogItem FieldDefinition."""
+    """Verify that additional disks are defaulted from CatalogItem typed policy."""
     fast_tier = additional_storage_tiers["fast"]["name"]
 
-    field_defs = [
-        {
-            "path": "additional_disks",
-            "display_name": "Additional Disks",
-            "editable": True,
-            "default": [{"size_gib": 10, "storage_tier": {"name": fast_tier}}],
+    fields = {
+        "additional_disks": {
+            "editable": {"default_value": {"items": [{"size_gib": 10, "storage_tier": {"name": fast_tier}}]}}
         },
-        {"path": "boot_disk.size_gib", "display_name": "Boot Disk Size", "editable": True},
-        {"path": "boot_disk.storage_tier", "display_name": "Boot Disk Storage Tier", "editable": True},
-        {"path": "network_attachments", "display_name": "Network Attachments", "editable": True},
-        {"path": "disk_image", "display_name": "Disk Image", "editable": True},
-        {"path": "instance_type", "display_name": "Instance Type", "editable": True},
-        {"path": "run_strategy", "display_name": "Run Strategy", "editable": True},
-    ]
+        "boot_disk": {"size_gib": {"editable": {}}, "storage_tier": {"editable": {}}},
+        "network_attachments": {"editable": {}},
+        "disk_image": {"editable": {}},
+        "instance_type": {"editable": {}},
+        "run_strategy": {"editable": {}},
+    }
     catalog_item_id = private_grpc.create_compute_instance_catalog_item(
-        name=unique_name("e2e-cat-add-disks"), template=vm_template, published=True, field_definitions=field_defs
+        name=unique_name("e2e-cat-add-disks"), template=vm_template, published=True, fields=fields
     )
 
     try:
@@ -653,7 +640,7 @@ def test_compute_instance_additional_disks_from_catalog_item_default(
         private_grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
 
 
-def test_compute_instance_additional_disks_from_catalog_item_array_default_legacy_string(
+def test_compute_instance_additional_disks_from_catalog_item_typed_name_default(
     private_grpc: GRPCClient,
     grpc: GRPCClient,
     k8s_hub_client: K8sClient,
@@ -665,26 +652,22 @@ def test_compute_instance_additional_disks_from_catalog_item_array_default_legac
     default_instance_type: str,
     default_disk_image: str,
 ) -> None:
-    """Verify bare-string storage_tier in additional_disks array defaults are normalized."""
+    """Verify name references in typed additional-disk defaults are resolved."""
     fast_tier = additional_storage_tiers["fast"]["name"]
 
-    # Legacy bare-string default inside the array
-    field_defs = [
-        {
-            "path": "additional_disks",
-            "display_name": "Additional Disks",
-            "editable": True,
-            "default": [{"size_gib": 10, "storage_tier": fast_tier}],  # Bare string (legacy)
+    # Typed StorageTier name reference inside the disk list
+    fields = {
+        "additional_disks": {
+            "editable": {"default_value": {"items": [{"size_gib": 10, "storage_tier": {"name": fast_tier}}]}}
         },
-        {"path": "boot_disk.size_gib", "display_name": "Boot Disk Size", "editable": True},
-        {"path": "boot_disk.storage_tier", "display_name": "Boot Disk Storage Tier", "editable": True},
-        {"path": "network_attachments", "display_name": "Network Attachments", "editable": True},
-        {"path": "disk_image", "display_name": "Disk Image", "editable": True},
-        {"path": "instance_type", "display_name": "Instance Type", "editable": True},
-        {"path": "run_strategy", "display_name": "Run Strategy", "editable": True},
-    ]
+        "boot_disk": {"size_gib": {"editable": {}}, "storage_tier": {"editable": {}}},
+        "network_attachments": {"editable": {}},
+        "disk_image": {"editable": {}},
+        "instance_type": {"editable": {}},
+        "run_strategy": {"editable": {}},
+    }
     catalog_item_id = private_grpc.create_compute_instance_catalog_item(
-        name=unique_name("e2e-cat-legacy-str"), template=vm_template, published=True, field_definitions=field_defs
+        name=unique_name("e2e-cat-typed-name"), template=vm_template, published=True, fields=fields
     )
 
     try:
@@ -740,22 +723,18 @@ def test_compute_instance_user_additional_disks_override_catalog_item_default(
     fast_tier = additional_storage_tiers["fast"]["name"]
     archive_tier = additional_storage_tiers["archive"]["name"]
 
-    field_defs = [
-        {
-            "path": "additional_disks",
-            "display_name": "Additional Disks",
-            "editable": True,
-            "default": [{"size_gib": 10, "storage_tier": {"name": fast_tier}}],
+    fields = {
+        "additional_disks": {
+            "editable": {"default_value": {"items": [{"size_gib": 10, "storage_tier": {"name": fast_tier}}]}}
         },
-        {"path": "boot_disk.size_gib", "display_name": "Boot Disk Size", "editable": True},
-        {"path": "boot_disk.storage_tier", "display_name": "Boot Disk Storage Tier", "editable": True},
-        {"path": "network_attachments", "display_name": "Network Attachments", "editable": True},
-        {"path": "disk_image", "display_name": "Disk Image", "editable": True},
-        {"path": "instance_type", "display_name": "Instance Type", "editable": True},
-        {"path": "run_strategy", "display_name": "Run Strategy", "editable": True},
-    ]
+        "boot_disk": {"size_gib": {"editable": {}}, "storage_tier": {"editable": {}}},
+        "network_attachments": {"editable": {}},
+        "disk_image": {"editable": {}},
+        "instance_type": {"editable": {}},
+        "run_strategy": {"editable": {}},
+    }
     catalog_item_id = private_grpc.create_compute_instance_catalog_item(
-        name=unique_name("e2e-cat-add-override"), template=vm_template, published=True, field_definitions=field_defs
+        name=unique_name("e2e-cat-add-override"), template=vm_template, published=True, fields=fields
     )
 
     try:
@@ -806,10 +785,7 @@ def test_compute_instance_user_additional_disks_override_catalog_item_default(
         private_grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
 
 
-@pytest.mark.skip(
-    reason="OSAC-4356: empty additional_disks: [] does not opt out of the CatalogItem default (backend gap)"
-)
-def test_compute_instance_empty_additional_disks_opts_out_of_catalog_item_default(
+def test_compute_instance_empty_additional_disks_uses_catalog_item_default(
     private_grpc: GRPCClient,
     grpc: GRPCClient,
     k8s_hub_client: K8sClient,
@@ -821,29 +797,25 @@ def test_compute_instance_empty_additional_disks_opts_out_of_catalog_item_defaul
     default_instance_type: str,
     default_disk_image: str,
 ) -> None:
-    """Verify that empty additional disks array opts out of CatalogItem default."""
+    """Verify that an explicit empty additional-disks list uses the Catalog Item default."""
     fast_tier = additional_storage_tiers["fast"]["name"]
 
-    field_defs = [
-        {
-            "path": "additional_disks",
-            "display_name": "Additional Disks",
-            "editable": True,
-            "default": [{"size_gib": 10, "storage_tier": {"name": fast_tier}}],
+    fields = {
+        "additional_disks": {
+            "editable": {"default_value": {"items": [{"size_gib": 10, "storage_tier": {"name": fast_tier}}]}}
         },
-        {"path": "boot_disk.size_gib", "display_name": "Boot Disk Size", "editable": True},
-        {"path": "boot_disk.storage_tier", "display_name": "Boot Disk Storage Tier", "editable": True},
-        {"path": "network_attachments", "display_name": "Network Attachments", "editable": True},
-        {"path": "disk_image", "display_name": "Disk Image", "editable": True},
-        {"path": "instance_type", "display_name": "Instance Type", "editable": True},
-        {"path": "run_strategy", "display_name": "Run Strategy", "editable": True},
-    ]
+        "boot_disk": {"size_gib": {"editable": {}}, "storage_tier": {"editable": {}}},
+        "network_attachments": {"editable": {}},
+        "disk_image": {"editable": {}},
+        "instance_type": {"editable": {}},
+        "run_strategy": {"editable": {}},
+    }
     catalog_item_id = private_grpc.create_compute_instance_catalog_item(
-        name=unique_name("e2e-cat-add-empty"), template=vm_template, published=True, field_definitions=field_defs
+        name=unique_name("e2e-cat-add-empty"), template=vm_template, published=True, fields=fields
     )
 
     try:
-        # Create CI with explicit empty additional_disks array
+        # Repeated fields have no wire presence, so an explicit empty list is treated as unset.
         ci_obj = grpc.call(
             service="osac.public.v1.ComputeInstances/Create",
             data={
@@ -868,9 +840,11 @@ def test_compute_instance_empty_additional_disks_opts_out_of_catalog_item_defaul
             ci_name = wait_for_cr(k8s=k8s_hub_client, uuid=uuid)
             wait_for_provision(k8s=k8s_hub_client, name=ci_name)
 
-            # Verify no additional disks were created
+            # Verify the Catalog Item default was materialized.
             cr = k8s_hub_client.get_json(resource="computeinstance", name=ci_name)
-            assert len(cr["spec"].get("additionalDisks", [])) == 0
+            assert len(cr["spec"]["additionalDisks"]) == 1
+            assert cr["spec"]["additionalDisks"][0]["sizeGiB"] == 10
+            assert cr["spec"]["additionalDisks"][0]["storageTier"] == fast_tier
 
             # E2E: Verify DataVolume StorageClass (commented out until osac PR #257)
             # verify_datavolume_storage_classes(

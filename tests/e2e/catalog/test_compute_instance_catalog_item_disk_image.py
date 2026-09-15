@@ -14,7 +14,7 @@ SOURCE_REF = "quay.io/containerdisks/fedora:41"
 def test_catalog_item_disk_image_default_applied(
     grpc: GRPCClient, compute_instance_template: str, default_subnet_id: str, default_storage_tier: str
 ) -> None:
-    """AC-2 / TC-FR9-01: CatalogItem disk_image field_definition default is applied to the ComputeInstance."""
+    """AC-2 / TC-FR9-01: CatalogItem disk_image field policy default is applied to the ComputeInstance."""
     di_id: str | None = None
     catalog_item_id: str | None = None
     ci_id: str | None = None
@@ -23,23 +23,10 @@ def test_catalog_item_disk_image_default_applied(
         di_name = unique_name("e2e-cidi-di")
         di_id = grpc.create_disk_image(name=di_name, source_ref=SOURCE_REF)
 
-        # The default references the DiskImage by NAME; the apply path is the prefix-less
-        # "disk_image", which the server interprets as a DiskImage name.
-        # network_attachments must also be declared: with field_definitions present, the server
-        # (applyFieldDefinitions) allowlists only catalog_item, template, and the declared fd
-        # paths, then rejects any other spec leaf. The CI-create below sends network_attachments
-        # (the subnet) and boot_disk.storage_tier, so both must be declared or the create is
-        # rejected InvalidArgument.
-        field_defs = [
-            {"path": "disk_image", "display_name": "Disk Image", "editable": True, "default": di_name},
-            {"path": "network_attachments", "display_name": "Network", "editable": True},
-            {"path": "boot_disk.storage_tier", "display_name": "Boot Disk Storage Tier", "editable": True},
-        ]
+        # Name-based references are resolved when the catalog is authored.
+        fields = {"disk_image": {"editable": {"default_value": {"name": di_name}}}}
         catalog_item_id = grpc.create_compute_instance_catalog_item(
-            name=unique_name("e2e-cidi-cat"),
-            template=compute_instance_template,
-            published=True,
-            field_definitions=field_defs,
+            name=unique_name("e2e-cidi-cat"), template=compute_instance_template, published=True, fields=fields
         )
 
         # disk_image is deliberately omitted — it must be inherited from the catalog default.
@@ -66,7 +53,7 @@ def test_catalog_item_disk_image_default_applied(
 
 
 def test_disk_image_deletion_protection_catalog_item(grpc: GRPCClient, compute_instance_template: str) -> None:
-    """AC-4 / TC-FR12-03: Cannot delete a DiskImage referenced by a CatalogItem field_definition."""
+    """AC-4 / TC-FR12-03: Cannot delete a DiskImage referenced by a CatalogItem field policy."""
     di_id: str | None = None
     catalog_item_id: str | None = None
 
@@ -74,14 +61,10 @@ def test_disk_image_deletion_protection_catalog_item(grpc: GRPCClient, compute_i
         di_name = unique_name("e2e-cidi-di")
         di_id = grpc.create_disk_image(name=di_name, source_ref=SOURCE_REF)
 
-        # Same field_definition shape as the default-application test: prefix-less
-        # "disk_image" + DiskImage name.
-        field_defs = [{"path": "disk_image", "display_name": "Disk Image", "editable": True, "default": di_name}]
+        # The typed policy keeps the resolved DiskImage protected from deletion.
+        fields = {"disk_image": {"editable": {"default_value": {"name": di_name}}}}
         catalog_item_id = grpc.create_compute_instance_catalog_item(
-            name=unique_name("e2e-cidi-cat"),
-            template=compute_instance_template,
-            published=True,
-            field_definitions=field_defs,
+            name=unique_name("e2e-cidi-cat"), template=compute_instance_template, published=True, fields=fields
         )
 
         # Deletion is blocked while the catalog item references the disk image.

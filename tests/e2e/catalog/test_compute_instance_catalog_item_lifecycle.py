@@ -40,7 +40,7 @@ def test_compute_instance_catalog_item_crud(grpc: GRPCClient, compute_instance_t
             grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
 
 
-def test_unpublished_compute_instance_catalog_item_not_visible_in_public_api(
+def test_unpublished_compute_instance_catalog_item_readable_in_public_api(
     grpc: GRPCClient, compute_instance_template: str
 ) -> None:
     name = unique_name("e2e-ci-unpub")
@@ -48,13 +48,13 @@ def test_unpublished_compute_instance_catalog_item_not_visible_in_public_api(
         name=name, template=compute_instance_template, published=False
     )
     try:
-        assert catalog_item_id not in grpc.list_compute_instance_catalog_item_ids()
+        assert catalog_item_id in grpc.list_compute_instance_catalog_item_ids()
+        assert catalog_item_id not in grpc.list_compute_instance_catalog_item_ids(published_only=True)
 
         output, rc = grpc.call_unchecked(
             service="osac.public.v1.ComputeInstanceCatalogItems/Get", data={"id": catalog_item_id}
         )
-        assert rc != 0, f"Expected Get to fail for unpublished item, got: {output}"
-        assert "not published" in output.lower() or "not found" in output.lower()
+        assert rc == 0, f"Expected Get to read unpublished item, got: {output}"
     finally:
         grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
 
@@ -69,55 +69,35 @@ def test_compute_instance_catalog_item_unpublish_transition(grpc: GRPCClient, co
 
         grpc.update_compute_instance_catalog_item(catalog_item_id=catalog_item_id, published=False)
 
-        assert catalog_item_id not in grpc.list_compute_instance_catalog_item_ids()
+        assert catalog_item_id in grpc.list_compute_instance_catalog_item_ids()
+        assert catalog_item_id not in grpc.list_compute_instance_catalog_item_ids(published_only=True)
 
         output, rc = grpc.call_unchecked(
             service="osac.public.v1.ComputeInstanceCatalogItems/Get", data={"id": catalog_item_id}
         )
-        assert rc != 0, f"Expected Get to fail after unpublishing, got: {output}"
+        assert rc == 0, f"Expected Get to read item after unpublishing, got: {output}"
     finally:
         grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
 
 
-def test_compute_instance_catalog_item_field_definitions(grpc: GRPCClient, compute_instance_template: str) -> None:
-    field_defs = [
-        {"path": "spec.instance_type", "display_name": "Instance Type", "editable": True, "default": "standard-2x4"}
-    ]
-    name = unique_name("e2e-ci-fd")
+def test_compute_instance_catalog_item_fields(grpc: GRPCClient, compute_instance_template: str) -> None:
+    fields = {"ssh_public_key": {"editable": {"default_value": "initial-key"}}}
     catalog_item_id = grpc.create_compute_instance_catalog_item(
-        name=name, template=compute_instance_template, published=True, field_definitions=field_defs
+        name=unique_name("e2e-ci-policy"), template=compute_instance_template, fields=fields
     )
     try:
-        item = grpc.get_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
-        returned_fds = item["object"].get("fieldDefinitions", [])
-        assert len(returned_fds) == 1
+        item = grpc.get_compute_instance_catalog_item(catalog_item_id=catalog_item_id)["object"]
+        assert item["fields"]["sshPublicKey"]["editable"]["defaultValue"] == "initial-key"
 
-        it_fd = next(fd for fd in returned_fds if fd["path"] == "spec.instance_type")
-        assert it_fd["displayName"] == "Instance Type"
-        assert it_fd["editable"] is True
+        grpc.update_compute_instance_catalog_item(
+            catalog_item_id=catalog_item_id, fields={"ssh_public_key": {"locked": "locked-key"}}
+        )
+        item = grpc.get_compute_instance_catalog_item(catalog_item_id=catalog_item_id)["object"]
+        assert item["fields"]["sshPublicKey"] == {"locked": "locked-key"}
 
-        updated_fds = [
-            {"path": "spec.instance_type", "display_name": "VM Size", "editable": True, "default": "standard-2x4"}
-        ]
-        grpc.update_compute_instance_catalog_item(catalog_item_id=catalog_item_id, field_definitions=updated_fds)
-
-        item = grpc.get_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
-        returned_fds = item["object"].get("fieldDefinitions", [])
-        assert len(returned_fds) == 1
-        it_fd = next(fd for fd in returned_fds if fd["path"] == "spec.instance_type")
-        assert it_fd["displayName"] == "VM Size"
-
-        updated_fds_v2 = [
-            {"path": "spec.instance_type", "display_name": "VM Size", "editable": False, "default": "standard-4x8"}
-        ]
-        grpc.update_compute_instance_catalog_item(catalog_item_id=catalog_item_id, field_definitions=updated_fds_v2)
-
-        item = grpc.get_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
-        returned_fds = item["object"].get("fieldDefinitions", [])
-        assert len(returned_fds) == 1
-        it_fd = next(fd for fd in returned_fds if fd["path"] == "spec.instance_type")
-        assert it_fd["displayName"] == "VM Size"
-        assert it_fd.get("editable", False) is False
+        grpc.update_compute_instance_catalog_item(catalog_item_id=catalog_item_id, fields={})
+        item = grpc.get_compute_instance_catalog_item(catalog_item_id=catalog_item_id)["object"]
+        assert not item.get("fields")
     finally:
         grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
 
@@ -182,7 +162,7 @@ def test_create_compute_instance_with_unpublished_catalog_item_fails(
         grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
 
 
-def test_delete_compute_instance_catalog_item_blocked_when_referenced(
+def test_compute_instance_survives_catalog_item_deletion(
     grpc: GRPCClient, compute_instance_template: str, default_subnet_id: str, default_storage_tier: str
 ) -> None:
     name = unique_name("e2e-ci-ref")
@@ -190,6 +170,7 @@ def test_delete_compute_instance_catalog_item_blocked_when_referenced(
         name=name, template=compute_instance_template, published=True
     )
     ci_id = ""
+    catalog_deleted = False
     try:
         ci_name = unique_name("e2e-ci")
         ci_id = grpc.create_compute_instance(
@@ -202,8 +183,11 @@ def test_delete_compute_instance_catalog_item_blocked_when_referenced(
         output, rc = grpc.call_unchecked(
             service="osac.private.v1.ComputeInstanceCatalogItems/Delete", data={"id": catalog_item_id}
         )
-        assert rc != 0, f"Expected catalog item delete to be blocked, got: {output}"
-        assert "referenc" in output.lower() or "in use" in output.lower() or "failed precondition" in output.lower()
+        assert rc == 0, f"Expected catalog item deletion to succeed, got: {output}"
+        catalog_deleted = True
+        persisted = grpc.call(service="osac.public.v1.ComputeInstances/Get", data={"id": ci_id})["object"]
+        assert persisted["spec"]["catalogItem"]["id"] == catalog_item_id
+        assert persisted["spec"]["template"]["id"], "Materialized Template must survive catalog deletion"
     finally:
         if ci_id:
             grpc.delete_compute_instance(ci_id=ci_id)
@@ -214,4 +198,5 @@ def test_delete_compute_instance_catalog_item_blocked_when_referenced(
                 delay=5,
                 description=f"ComputeInstance {ci_id} removal from API",
             )
-        grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
+        if not catalog_deleted:
+            grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_item_id)

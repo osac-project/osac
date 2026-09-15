@@ -43,6 +43,9 @@ var _ = Describe("DiskImage lifecycle", func() {
 		instanceTypesClient            privatev1.InstanceTypesClient
 		storageTiersClient             privatev1.StorageTiersClient
 		storageBackendsClient          privatev1.StorageBackendsClient
+		networkClassesClient           privatev1.NetworkClassesClient
+		virtualNetworksClient          privatev1.VirtualNetworksClient
+		subnetsClient                  privatev1.SubnetsClient
 
 		storageBackendId          string
 		storageTierId             string
@@ -50,6 +53,9 @@ var _ = Describe("DiskImage lifecycle", func() {
 		computeInstanceTemplateId string
 		diskImageId               string
 		computeInstanceId         string
+		networkClassId            string
+		virtualNetworkId          string
+		subnetId                  string
 	)
 
 	BeforeEach(func() {
@@ -63,6 +69,9 @@ var _ = Describe("DiskImage lifecycle", func() {
 		instanceTypesClient = privatev1.NewInstanceTypesClient(tool.InternalView().AdminConn())
 		storageTiersClient = privatev1.NewStorageTiersClient(tool.InternalView().AdminConn())
 		storageBackendsClient = privatev1.NewStorageBackendsClient(tool.InternalView().AdminConn())
+		networkClassesClient = privatev1.NewNetworkClassesClient(tool.InternalView().AdminConn())
+		virtualNetworksClient = privatev1.NewVirtualNetworksClient(tool.InternalView().AdminConn())
+		subnetsClient = privatev1.NewSubnetsClient(tool.InternalView().AdminConn())
 
 		// Create StorageBackend
 		sbResp, err := storageBackendsClient.Create(ctx, privatev1.StorageBackendsCreateRequest_builder{
@@ -132,6 +141,107 @@ var _ = Describe("DiskImage lifecycle", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
+
+		// Create NetworkClass — required for VirtualNetwork/Subnet chain so the
+		// ComputeInstance has a valid network attachment (the server rejects
+		// creation when no default subnet exists and no attachments are provided).
+		ncResp, err := networkClassesClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
+			Object: privatev1.NetworkClass_builder{
+				Metadata:      privatev1.Metadata_builder{Name: fmt.Sprintf("di-nc-%s", uuid.New())}.Build(),
+				Title:         "Test Network Class",
+				FabricManager: new("netris"),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		networkClassId = ncResp.GetObject().GetId()
+
+		// Create VirtualNetwork
+		virtualNetworkId = fmt.Sprintf("test-vnet-%s", uuid.New())
+		_, err = virtualNetworksClient.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
+			Object: privatev1.VirtualNetwork_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   fmt.Sprintf("test-vnet-%s", uuid.New()[24:32]),
+					Tenant: usersGroup,
+				}.Build(),
+				Id: virtualNetworkId,
+				Spec: privatev1.VirtualNetworkSpec_builder{
+					NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClassId}.Build(),
+					Region:       "us-east-1",
+					Ipv4Cidr:     new("10.200.0.0/16"),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		// Wait for the VN reconciler to finish initial processing before
+		// overriding state.
+		Eventually(func(g Gomega) {
+			resp, err := virtualNetworksClient.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{
+				Id: virtualNetworkId,
+			}.Build())
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(resp.GetObject().GetStatus().GetState()).To(
+				Equal(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING))
+		}, time.Minute, time.Second).Should(Succeed())
+
+		// Set VirtualNetwork to READY state via private Update API.
+		// In IT environment there is no osac-operator/feedback controller to reconcile state.
+		vnGetResp, err := virtualNetworksClient.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{
+			Id: virtualNetworkId,
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		vn := vnGetResp.GetObject()
+		vn.SetStatus(privatev1.VirtualNetworkStatus_builder{
+			State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
+		}.Build())
+		_, err = virtualNetworksClient.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
+			Object:     vn,
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		// Create Subnet
+		subnetId = fmt.Sprintf("test-subnet-%s", uuid.New())
+		_, err = subnetsClient.Create(ctx, privatev1.SubnetsCreateRequest_builder{
+			Object: privatev1.Subnet_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   fmt.Sprintf("test-subnet-%s", uuid.New()[24:32]),
+					Tenant: usersGroup,
+				}.Build(),
+				Id: subnetId,
+				Spec: privatev1.SubnetSpec_builder{
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetworkId}.Build(),
+					Ipv4Cidr:       new("10.200.1.0/24"),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		// Wait for the subnet reconciler to finish initial processing before
+		// overriding state.
+		Eventually(func(g Gomega) {
+			resp, err := subnetsClient.Get(ctx, privatev1.SubnetsGetRequest_builder{
+				Id: subnetId,
+			}.Build())
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(resp.GetObject().GetStatus().GetState()).To(
+				Equal(privatev1.SubnetState_SUBNET_STATE_PENDING))
+		}, time.Minute, time.Second).Should(Succeed())
+
+		// Set Subnet to READY state via private Update API.
+		subGetResp, err := subnetsClient.Get(ctx, privatev1.SubnetsGetRequest_builder{
+			Id: subnetId,
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		sub := subGetResp.GetObject()
+		sub.SetStatus(privatev1.SubnetStatus_builder{
+			State: privatev1.SubnetState_SUBNET_STATE_READY,
+		}.Build())
+		_, err = subnetsClient.Update(ctx, privatev1.SubnetsUpdateRequest_builder{
+			Object:     sub,
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
 	})
 
 	AfterEach(func() {
@@ -153,6 +263,30 @@ var _ = Describe("DiskImage lifecycle", func() {
 				GinkgoT().Logf("cleanup: failed to delete DiskImage %s: %v", diskImageId, err)
 			}
 			diskImageId = ""
+		}
+		if subnetId != "" {
+			if _, err := subnetsClient.Delete(cleanupCtx, privatev1.SubnetsDeleteRequest_builder{
+				Id: subnetId,
+			}.Build()); err != nil {
+				GinkgoT().Logf("cleanup: failed to delete Subnet %s: %v", subnetId, err)
+			}
+			subnetId = ""
+		}
+		if virtualNetworkId != "" {
+			if _, err := virtualNetworksClient.Delete(cleanupCtx, privatev1.VirtualNetworksDeleteRequest_builder{
+				Id: virtualNetworkId,
+			}.Build()); err != nil {
+				GinkgoT().Logf("cleanup: failed to delete VirtualNetwork %s: %v", virtualNetworkId, err)
+			}
+			virtualNetworkId = ""
+		}
+		if networkClassId != "" {
+			if _, err := networkClassesClient.Delete(cleanupCtx, privatev1.NetworkClassesDeleteRequest_builder{
+				Id: networkClassId,
+			}.Build()); err != nil {
+				GinkgoT().Logf("cleanup: failed to delete NetworkClass %s: %v", networkClassId, err)
+			}
+			networkClassId = ""
 		}
 		if computeInstanceTemplateId != "" {
 			if _, err := computeInstanceTemplatesClient.Delete(cleanupCtx, privatev1.ComputeInstanceTemplatesDeleteRequest_builder{
@@ -246,6 +380,11 @@ var _ = Describe("DiskImage lifecycle", func() {
 						StorageTier: publicv1.StorageTierReference_builder{Id: storageTierId}.Build(),
 					}.Build(),
 					DiskImage: publicv1.DiskImageReference_builder{Id: diskImageId}.Build(),
+					NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
+						publicv1.ComputeNetworkAttachment_builder{
+							Subnet: publicv1.SubnetLocalReference_builder{Id: subnetId}.Build(),
+						}.Build(),
+					},
 				}.Build(),
 			}.Build(),
 		}.Build())

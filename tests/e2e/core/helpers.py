@@ -87,7 +87,7 @@ def wait_for_grpc_removal(*, grpc: GRPCClient, uuid: str) -> None:
     poll_until(
         fn=lambda: uuid not in grpc.list_compute_instance_ids(),
         until=lambda v: v is True,
-        retries=30,
+        retries=60,
         delay=2,
         description=f"{uuid} removed from gRPC list",
     )

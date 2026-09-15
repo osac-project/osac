@@ -1,0 +1,18 @@
+- name: Read AddOnOperator page metadata
+  ansible.builtin.set_fact:
+    addon_operator_page_ids: "{{ addon_operator_page.json.get('items', []) | map(attribute='id') | list }}"
+    addon_operator_page_size: "{{ addon_operator_page.json.get('size', addon_operator_page.json.get('items', []) | length) | int }}"
+    addon_operator_page_total: "{{ addon_operator_page.json.get('total', addon_operator_page.json.get('items', []) | length) | int }}"
+
+- name: Accumulate AddOnOperator page IDs
+  ansible.builtin.set_fact:
+    addon_operator_id_set: >-
+      {{ addon_operator_id_set | default({})
+         | combine(dict(addon_operator_page_ids | zip(addon_operator_page_ids))) }}
+    addon_operator_total: "{{ addon_operator_total | default(addon_operator_page_total) }}"
+    addon_operator_next_offset: >-
+      {{ (addon_operator_next_offset | default(0) | int) + addon_operator_page_size }}
+    addon_operator_pagination_ok: >-
+      {{ (addon_operator_pagination_ok | default(true) | bool)
+         and (((addon_operator_next_offset | default(0) | int) == 0 and addon_operator_page_total == 0)
+              or addon_operator_page_size > 0) }}

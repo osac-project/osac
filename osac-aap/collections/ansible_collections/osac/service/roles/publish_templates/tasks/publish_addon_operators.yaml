@@ -20,18 +20,13 @@
     msg: "CaaS service not available (HTTP 404/503) - skipping AddOnOperator publishing"
   when: addon_operator_check.status in [404, 503]
 
-- name: Initialize existing AddOnOperator IDs and pagination
+- name: Use first AddOnOperator page for accumulation
   ansible.builtin.set_fact:
-    addon_operator_id_set: >-
-      {{ dict(
-           (addon_operator_check.json.get('items', []) | map(attribute='id') | list)
-           | zip(addon_operator_check.json.get('items', []) | map(attribute='id') | list)
-         ) }}
-    addon_operator_total: "{{ addon_operator_check.json.get('total', addon_operator_check.json.get('items', []) | length) | int }}"
-    addon_operator_next_offset: "{{ addon_operator_check.json.get('size', addon_operator_check.json.get('items', []) | length) | int }}"
-    addon_operator_pagination_ok: >-
-      {{ (addon_operator_check.json.get('total', addon_operator_check.json.get('items', []) | length) | int) == 0
-         or (addon_operator_check.json.get('size', addon_operator_check.json.get('items', []) | length) | int) > 0 }}
+    addon_operator_page: "{{ addon_operator_check }}"
+  when: addon_operator_check.status not in [404, 503]
+
+- name: Accumulate first AddOnOperator page
+  ansible.builtin.include_tasks: accumulate_addon_operator_page.yaml
   when: addon_operator_check.status not in [404, 503]
 
 - name: Fetch remaining AddOnOperator pages

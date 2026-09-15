@@ -980,7 +980,7 @@ func (s *PrivateClustersServer) injectDefaultNetworkAttachment(ctx context.Conte
 	}
 
 	spec := cluster.GetSpec()
-	subnet, err := findDefaultSubnet(ctx, s.logger, s.subnetsDao, tenant)
+	subnet, err := findDefaultSubnet(ctx, s.logger, s.subnetsDao, tenant, cluster.GetMetadata().GetProject())
 	if err != nil {
 		s.logger.ErrorContext(ctx, "failed to look up default subnet", slog.Any("error", err))
 		return grpcstatus.Errorf(grpccodes.Internal, "failed to look up default subnet")
@@ -994,7 +994,7 @@ func (s *PrivateClustersServer) injectDefaultNetworkAttachment(ctx context.Conte
 	}.Build()
 
 	virtualNetworkID := refKey(subnet.GetSpec().GetVirtualNetwork())
-	sg, err := findDefaultSecurityGroup(ctx, s.logger, s.securityGroupsDao, virtualNetworkID, tenant)
+	sg, err := findDefaultSecurityGroup(ctx, s.logger, s.securityGroupsDao, virtualNetworkID, tenant, cluster.GetMetadata().GetProject())
 	if err != nil {
 		s.logger.ErrorContext(ctx, "failed to look up default security group", slog.Any("error", err))
 		return grpcstatus.Errorf(grpccodes.Internal, "failed to look up default security group")

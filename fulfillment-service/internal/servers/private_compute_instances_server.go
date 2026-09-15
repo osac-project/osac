@@ -297,7 +297,7 @@ func (s *PrivateComputeInstancesServer) injectDefaultNetworkAttachments(ctx cont
 	}
 
 	spec := vm.GetSpec()
-	subnet, err := findDefaultSubnet(ctx, s.logger, s.subnetsDao, tenant)
+	subnet, err := findDefaultSubnet(ctx, s.logger, s.subnetsDao, tenant, vm.GetMetadata().GetProject())
 	if err != nil {
 		return grpcstatus.Errorf(grpccodes.Internal, "failed to look up default subnet: %v", err)
 	}
@@ -311,7 +311,7 @@ func (s *PrivateComputeInstancesServer) injectDefaultNetworkAttachments(ctx cont
 	}.Build()
 
 	virtualNetworkID := refKey(subnet.GetSpec().GetVirtualNetwork())
-	sg, err := findDefaultSecurityGroup(ctx, s.logger, s.securityGroupsDao, virtualNetworkID, tenant)
+	sg, err := findDefaultSecurityGroup(ctx, s.logger, s.securityGroupsDao, virtualNetworkID, tenant, vm.GetMetadata().GetProject())
 	if err != nil {
 		return grpcstatus.Errorf(grpccodes.Internal, "failed to look up default security group: %v", err)
 	}

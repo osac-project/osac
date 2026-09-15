@@ -14,6 +14,7 @@ language governing permissions and limitations under the License.
 package utils
 
 import (
+	"google.golang.org/protobuf/proto"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
@@ -701,4 +702,34 @@ func (m *mockParameter) GetType() string {
 
 func (m *mockParameter) GetDefault() *anypb.Any {
 	return m.defaultValue
+}
+
+func TestApplyTemplateParameterDefaultsAndValidate(t *testing.T) {
+	value, err := anypb.New(wrapperspb.Bool(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := ComputeInstanceTemplateAdapter{ComputeInstanceTemplate: privatev1.ComputeInstanceTemplate_builder{
+		Parameters: []*privatev1.ComputeInstanceTemplateParameterDefinition{
+			privatev1.ComputeInstanceTemplateParameterDefinition_builder{Name: "enabled", Required: true, Type: value.GetTypeUrl(), Default: value}.Build(),
+		},
+	}.Build()}
+	resolved, err := ApplyTemplateParameterDefaultsAndValidate(template, nil)
+	if err != nil || !proto.Equal(resolved["enabled"], value) {
+		t.Fatalf("required parameter was not satisfied by its Template default: %v", err)
+	}
+	for _, supplied := range []map[string]*anypb.Any{
+		{"unknown": value},
+		{"enabled": nil},
+		{"enabled": {TypeUrl: value.GetTypeUrl(), Value: []byte{0xff}}},
+		{"enabled": {TypeUrl: "type.googleapis.com/google.protobuf.StringValue"}},
+	} {
+		if _, err := ApplyTemplateParameterDefaultsAndValidate(template, supplied); err == nil {
+			t.Fatalf("invalid input was accepted: %v", supplied)
+		}
+	}
+	resolved["enabled"].Value = []byte{0xff}
+	if proto.Equal(resolved["enabled"], value) {
+		t.Fatal("resolved parameter aliases the Template default")
+	}
 }

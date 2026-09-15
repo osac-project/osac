@@ -28,7 +28,7 @@ import (
 
 // validateInstanceTypeState looks up an instance type by name and validates its state.
 // Returns warnings for DEPRECATED types, error for OBSOLETE or not-found types.
-// The source parameter provides context for error messages (e.g., " in spec_defaults", " in field_definitions").
+// The source parameter provides context for error messages (e.g., " in spec_defaults", " in fields.instance_type").
 // Pass an empty string for source when validating directly on a ComputeInstance.
 func validateInstanceTypeState(
 	ctx context.Context,
@@ -49,7 +49,14 @@ func validateInstanceTypeState(
 			"failed to retrieve instance type '%s'", instanceTypeName)
 	}
 
-	it := getResponse.GetObject()
+	return validateResolvedInstanceType(getResponse.GetObject(), instanceTypeName, source)
+}
+
+// validateResolvedInstanceType validates lifecycle state and returns any deprecation warning for an existing type.
+func validateResolvedInstanceType(it *privatev1.InstanceType, instanceTypeName, source string) ([]string, error) {
+	if err := validateResourceNotDeleted("instance type", instanceTypeName, source, it.GetMetadata()); err != nil {
+		return nil, err
+	}
 	state := it.GetSpec().GetState()
 	var warnings []string
 

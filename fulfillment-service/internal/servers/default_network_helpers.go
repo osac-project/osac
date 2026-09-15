@@ -24,17 +24,18 @@ import (
 )
 
 // findDefaultSubnet returns the newest READY subnet labeled as a tenant default
-// with an IPv4 CIDR, scoped to the given tenant. Returns nil if none found.
+// with an IPv4 CIDR, scoped to the given tenant and project. Returns nil if none found.
 func findDefaultSubnet(
 	ctx context.Context,
 	logger *slog.Logger,
 	subnetsDao *dao.GenericDAO[*privatev1.Subnet],
-	tenant string,
+	tenant, project string,
 ) (*privatev1.Subnet, error) {
 	filter := fmt.Sprintf(
 		"this.metadata.labels[\"%s\"] == \"true\" && has(this.spec.ipv4_cidr) && this.metadata.tenant == \"%s\"",
 		defaultLabel, tenant,
 	)
+	filter += fmt.Sprintf(" && this.metadata.project == %q", project)
 	listResponse, err := subnetsDao.List().
 		SetFilter(filter).
 		Do(ctx)
@@ -69,18 +70,19 @@ func findDefaultSubnet(
 
 // findDefaultSecurityGroup returns the newest READY security group labeled as a
 // tenant default that belongs to the given virtual network, scoped to the given
-// tenant. Returns nil if none found.
+// tenant and project. Returns nil if none found.
 func findDefaultSecurityGroup(
 	ctx context.Context,
 	logger *slog.Logger,
 	securityGroupsDao *dao.GenericDAO[*privatev1.SecurityGroup],
 	virtualNetworkID string,
-	tenant string,
+	tenant, project string,
 ) (*privatev1.SecurityGroup, error) {
 	filter := fmt.Sprintf(
 		"this.metadata.labels[\"%s\"] == \"true\" && this.metadata.tenant == \"%s\"",
 		defaultLabel, tenant,
 	)
+	filter += fmt.Sprintf(" && this.metadata.project == %q", project)
 	listResponse, err := securityGroupsDao.List().
 		SetFilter(filter).
 		Do(ctx)

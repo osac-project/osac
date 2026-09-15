@@ -82,6 +82,54 @@ var _ = Describe("Reference validator", func() {
 		})
 	})
 
+	It("skips only configured reference paths for configured methods", func() {
+		updateMethod := "/osac.private.v1.ComputeInstances/Update"
+		v, err := NewReferenceValidator().SetLogger(logger).
+			SetExcludedReferencePaths([]string{updateMethod}, "object.spec.target").
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+		targetLookups := 0
+		v.Register("osac.tests.v1.TestTargetReference", func(ctx context.Context, tenant, project, id, name string) (*ResolvedRef, error) {
+			targetLookups++
+			Expect(tenant).To(Equal("tenant-a"))
+			return nil, &errRefNotFound{identifier: name}
+		})
+		localLookups := 0
+		v.Register("osac.tests.v1.TestTargetLocalReference", func(ctx context.Context, tenant, project, id, name string) (*ResolvedRef, error) {
+			localLookups++
+			return &ResolvedRef{ID: "local-id", Name: name}, nil
+		})
+		request := testsv1.UpdateTestResourceWithRefsRequest_builder{Object: testsv1.TestResourceWithRefs_builder{
+			Metadata: testsv1.Metadata_builder{Tenant: "tenant-a"}.Build(),
+			Spec: testsv1.TestRefSpec_builder{
+				Target:      testsv1.TestTargetReference_builder{Name: "excluded"}.Build(),
+				LocalTarget: testsv1.TestTargetLocalReference_builder{Name: "validated"}.Build(),
+			}.Build(),
+		}.Build()}.Build()
+		called := false
+		handler := func(ctx context.Context, request any) (any, error) { called = true; return nil, nil }
+		_, err = v.UnaryServer(context.Background(), request, &grpc.UnaryServerInfo{FullMethod: updateMethod}, handler)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(called).To(BeTrue())
+		Expect(targetLookups).To(BeZero())
+		Expect(localLookups).To(Equal(1))
+
+		called = false
+		_, err = v.UnaryServer(context.Background(), request,
+			&grpc.UnaryServerInfo{FullMethod: "/osac.private.v1.OtherResources/Update"}, handler)
+		Expect(err).To(HaveOccurred())
+		Expect(called).To(BeFalse())
+		Expect(targetLookups).To(Equal(1))
+		Expect(localLookups).To(Equal(2))
+
+		_, err = v.UnaryServer(context.Background(), request,
+			&grpc.UnaryServerInfo{FullMethod: "/osac.private.v1.ComputeInstances/Create"}, handler)
+		Expect(err).To(HaveOccurred())
+		Expect(called).To(BeFalse())
+		Expect(targetLookups).To(Equal(2))
+		Expect(localLookups).To(Equal(3))
+	})
+
 	Describe("Method filtering", func() {
 		BeforeEach(func() {
 			var err error

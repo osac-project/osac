@@ -482,6 +482,335 @@ func validateDiskImageState(
 	return diskImage, warnings, nil
 }
 
+// resolveAutoExternalIpPolicy resolves a typed BoolFieldPolicy for auto_external_ip_attachment
+// against a resource spec value. When locked, any user-supplied value is rejected and the locked
+// value is returned. When editable, a user-supplied value is accepted; otherwise the default
+// is returned. When the policy is nil (absent), the user-supplied value is returned unchanged.
+func resolveAutoExternalIpPolicy(hasUserValue bool, userValue bool, policy *privatev1.BoolFieldPolicy) (bool, error) {
+	if policy == nil || !policy.HasBehavior() {
+		return userValue, nil
+	}
+	if policy.HasLocked() {
+		if hasUserValue && userValue != policy.GetLocked() {
+			return false, grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"fields.auto_external_ip_attachment is locked and cannot be overridden")
+		}
+		return policy.GetLocked(), nil
+	}
+	// editable
+	if hasUserValue {
+		return userValue, nil
+	}
+	editable := policy.GetEditable()
+	if editable != nil && editable.HasDefaultValue() {
+		return editable.GetDefaultValue(), nil
+	}
+	return false, nil
+}
+
+// resolveComputeNetworkAttachmentsPolicy resolves a typed ComputeNetworkAttachmentListFieldPolicy
+// against the user-supplied network attachments on a ComputeInstance spec. When locked, any
+// user-supplied value is rejected and the locked list is applied. When editable, a user-supplied
+// value is accepted; otherwise the default list is applied. When the policy is nil (absent),
+// the user-supplied value is left unchanged.
+func resolveComputeNetworkAttachmentsPolicy(
+	spec *privatev1.ComputeInstanceSpec,
+	policy *privatev1.ComputeNetworkAttachmentListFieldPolicy,
+) error {
+	if policy == nil || !policy.HasBehavior() {
+		return nil
+	}
+	userAttachments := spec.GetNetworkAttachments()
+	if policy.HasLocked() {
+		if len(userAttachments) > 0 {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"fields.network_attachments is locked and cannot be overridden")
+		}
+		locked := policy.GetLocked()
+		if locked != nil {
+			spec.SetNetworkAttachments(locked.GetItems())
+		}
+		return nil
+	}
+	// editable
+	if len(userAttachments) > 0 {
+		return nil
+	}
+	editable := policy.GetEditable()
+	if editable != nil && editable.GetDefaultValue() != nil {
+		spec.SetNetworkAttachments(editable.GetDefaultValue().GetItems())
+	}
+	return nil
+}
+
+// resolveClusterNetworkAttachmentPolicy resolves a typed ClusterNetworkAttachmentFieldPolicy
+// against the user-supplied network attachment on a Cluster spec. When locked, any user-supplied
+// value is rejected and the locked attachment is applied. When editable, a user-supplied value
+// is accepted; otherwise the default is applied. When the policy is nil (absent), the
+// user-supplied value is left unchanged.
+func resolveClusterNetworkAttachmentPolicy(
+	spec *privatev1.ClusterSpec,
+	policy *privatev1.ClusterNetworkAttachmentFieldPolicy,
+) error {
+	if policy == nil || !policy.HasBehavior() {
+		return nil
+	}
+	userAttachment := spec.GetNetworkAttachment()
+	if policy.HasLocked() {
+		if userAttachment != nil {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"fields.network_attachment is locked and cannot be overridden")
+		}
+		spec.SetNetworkAttachment(policy.GetLocked())
+		return nil
+	}
+	// editable
+	if userAttachment != nil {
+		return nil
+	}
+	editable := policy.GetEditable()
+	if editable != nil && editable.GetDefaultValue() != nil {
+		spec.SetNetworkAttachment(editable.GetDefaultValue())
+	}
+	return nil
+}
+
+// resolveBareMetalNetworkAttachmentsPolicy resolves a typed BareMetalNetworkAttachmentListFieldPolicy
+// against the user-supplied network attachments on a BareMetalInstance spec. When locked, any
+// user-supplied value is rejected and the locked list is applied. When editable, a user-supplied
+// value is accepted; otherwise the default list is applied. When the policy is nil (absent),
+// the user-supplied value is left unchanged.
+func resolveBareMetalNetworkAttachmentsPolicy(
+	spec *privatev1.BareMetalInstanceSpec,
+	policy *privatev1.BareMetalNetworkAttachmentListFieldPolicy,
+) error {
+	if policy == nil || !policy.HasBehavior() {
+		return nil
+	}
+	userAttachments := spec.GetNetworkAttachments()
+	if policy.HasLocked() {
+		if len(userAttachments) > 0 {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"fields.network_attachments is locked and cannot be overridden")
+		}
+		locked := policy.GetLocked()
+		if locked != nil {
+			spec.SetNetworkAttachments(locked.GetItems())
+		}
+		return nil
+	}
+	// editable
+	if len(userAttachments) > 0 {
+		return nil
+	}
+	editable := policy.GetEditable()
+	if editable != nil && editable.GetDefaultValue() != nil {
+		spec.SetNetworkAttachments(editable.GetDefaultValue().GetItems())
+	}
+	return nil
+}
+
+// applyComputeInstanceTypedNetworkingPolicies resolves typed networking policies from a catalog
+// item's fields onto a ComputeInstance spec. This is called after applyFieldDefinitions so that
+// typed policies are authoritative over the deprecated field_definitions representation.
+func applyComputeInstanceTypedNetworkingPolicies(
+	spec *privatev1.ComputeInstanceSpec,
+	fields *privatev1.ComputeInstanceCatalogItemFields,
+) error {
+	if fields == nil {
+		return nil
+	}
+
+	if err := resolveComputeNetworkAttachmentsPolicy(spec, fields.GetNetworkAttachments()); err != nil {
+		return err
+	}
+
+	resolved, err := resolveAutoExternalIpPolicy(
+		spec.HasAutoExternalIpAttachment(),
+		spec.GetAutoExternalIpAttachment(),
+		fields.GetAutoExternalIpAttachment(),
+	)
+	if err != nil {
+		return err
+	}
+	if fields.GetAutoExternalIpAttachment() != nil && fields.GetAutoExternalIpAttachment().HasBehavior() {
+		spec.SetAutoExternalIpAttachment(resolved)
+	}
+
+	return nil
+}
+
+// applyClusterTypedNetworkingPolicies resolves typed networking policies from a catalog
+// item's fields onto a Cluster spec.
+func applyClusterTypedNetworkingPolicies(
+	spec *privatev1.ClusterSpec,
+	fields *privatev1.ClusterCatalogItemFields,
+) error {
+	if fields == nil {
+		return nil
+	}
+
+	if err := resolveClusterNetworkAttachmentPolicy(spec, fields.GetNetworkAttachment()); err != nil {
+		return err
+	}
+
+	resolved, err := resolveAutoExternalIpPolicy(
+		spec.HasAutoExternalIpAttachment(),
+		spec.GetAutoExternalIpAttachment(),
+		fields.GetAutoExternalIpAttachment(),
+	)
+	if err != nil {
+		return err
+	}
+	if fields.GetAutoExternalIpAttachment() != nil && fields.GetAutoExternalIpAttachment().HasBehavior() {
+		spec.SetAutoExternalIpAttachment(resolved)
+	}
+
+	return nil
+}
+
+// applyBareMetalInstanceTypedNetworkingPolicies resolves typed networking policies from a catalog
+// item's fields onto a BareMetalInstance spec.
+func applyBareMetalInstanceTypedNetworkingPolicies(
+	spec *privatev1.BareMetalInstanceSpec,
+	fields *privatev1.BareMetalInstanceCatalogItemFields,
+) error {
+	if fields == nil {
+		return nil
+	}
+
+	if err := resolveBareMetalNetworkAttachmentsPolicy(spec, fields.GetNetworkAttachments()); err != nil {
+		return err
+	}
+
+	resolved, err := resolveAutoExternalIpPolicy(
+		spec.HasAutoExternalIpAttachment(),
+		spec.GetAutoExternalIpAttachment(),
+		fields.GetAutoExternalIpAttachment(),
+	)
+	if err != nil {
+		return err
+	}
+	if fields.GetAutoExternalIpAttachment() != nil && fields.GetAutoExternalIpAttachment().HasBehavior() {
+		spec.SetAutoExternalIpAttachment(resolved)
+	}
+
+	return nil
+}
+
+type hasSubnetRef interface {
+	GetSubnet() *privatev1.SubnetLocalReference
+}
+
+func validateNetworkAttachmentSubnets[T hasSubnetRef](attachments []T, fieldName string) error {
+	for i, att := range attachments {
+		subnet := att.GetSubnet()
+		if subnet == nil || refKey(subnet) == "" {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"fields.%s: attachment[%d] must reference a subnet", fieldName, i)
+		}
+	}
+	return nil
+}
+
+// validateComputeNetworkAttachmentListPolicy validates a ComputeNetworkAttachmentListFieldPolicy
+// on a catalog item. Ensures locked/default values contain valid subnet references.
+func validateComputeNetworkAttachmentListPolicy(policy *privatev1.ComputeNetworkAttachmentListFieldPolicy) error {
+	if policy == nil || !policy.HasBehavior() {
+		return nil
+	}
+	if policy.HasLocked() {
+		locked := policy.GetLocked()
+		if locked != nil {
+			return validateNetworkAttachmentSubnets(locked.GetItems(), "network_attachments")
+		}
+	}
+	if policy.HasEditable() {
+		editable := policy.GetEditable()
+		if editable != nil && editable.GetDefaultValue() != nil {
+			return validateNetworkAttachmentSubnets(editable.GetDefaultValue().GetItems(), "network_attachments")
+		}
+	}
+	return nil
+}
+
+// validateClusterNetworkAttachmentPolicy validates a ClusterNetworkAttachmentFieldPolicy
+// on a catalog item. Ensures locked/default values contain valid subnet references.
+func validateClusterNetworkAttachmentPolicy(policy *privatev1.ClusterNetworkAttachmentFieldPolicy) error {
+	if policy == nil || !policy.HasBehavior() {
+		return nil
+	}
+	if policy.HasLocked() {
+		locked := policy.GetLocked()
+		if locked != nil {
+			subnet := locked.GetSubnet()
+			if subnet == nil || refKey(subnet) == "" {
+				return grpcstatus.Errorf(grpccodes.InvalidArgument,
+					"fields.network_attachment: locked value must reference a subnet")
+			}
+		}
+	}
+	if policy.HasEditable() {
+		editable := policy.GetEditable()
+		if editable != nil && editable.GetDefaultValue() != nil {
+			subnet := editable.GetDefaultValue().GetSubnet()
+			if subnet == nil || refKey(subnet) == "" {
+				return grpcstatus.Errorf(grpccodes.InvalidArgument,
+					"fields.network_attachment: default value must reference a subnet")
+			}
+		}
+	}
+	return nil
+}
+
+// validateBareMetalNetworkAttachmentListPolicy validates a BareMetalNetworkAttachmentListFieldPolicy
+// on a catalog item. Ensures locked/default values contain valid subnet references.
+func validateBareMetalNetworkAttachmentListPolicy(policy *privatev1.BareMetalNetworkAttachmentListFieldPolicy) error {
+	if policy == nil || !policy.HasBehavior() {
+		return nil
+	}
+	if policy.HasLocked() {
+		locked := policy.GetLocked()
+		if locked != nil {
+			return validateNetworkAttachmentSubnets(locked.GetItems(), "network_attachments")
+		}
+	}
+	if policy.HasEditable() {
+		editable := policy.GetEditable()
+		if editable != nil && editable.GetDefaultValue() != nil {
+			return validateNetworkAttachmentSubnets(editable.GetDefaultValue().GetItems(), "network_attachments")
+		}
+	}
+	return nil
+}
+
+// validateComputeInstanceCatalogItemNetworkingPolicies validates the typed networking policies
+// on a ComputeInstanceCatalogItem during create or update.
+func validateComputeInstanceCatalogItemNetworkingPolicies(fields *privatev1.ComputeInstanceCatalogItemFields) error {
+	if fields == nil {
+		return nil
+	}
+	return validateComputeNetworkAttachmentListPolicy(fields.GetNetworkAttachments())
+}
+
+// validateClusterCatalogItemNetworkingPolicies validates the typed networking policies
+// on a ClusterCatalogItem during create or update.
+func validateClusterCatalogItemNetworkingPolicies(fields *privatev1.ClusterCatalogItemFields) error {
+	if fields == nil {
+		return nil
+	}
+	return validateClusterNetworkAttachmentPolicy(fields.GetNetworkAttachment())
+}
+
+// validateBareMetalInstanceCatalogItemNetworkingPolicies validates the typed networking policies
+// on a BareMetalInstanceCatalogItem during create or update.
+func validateBareMetalInstanceCatalogItemNetworkingPolicies(fields *privatev1.BareMetalInstanceCatalogItemFields) error {
+	if fields == nil {
+		return nil
+	}
+	return validateBareMetalNetworkAttachmentListPolicy(fields.GetNetworkAttachments())
+}
+
 // resolvePreferredDiskImage breaks a disk-image name collision deterministically. Names are unique
 // only per tenant, so a shared image and one or more same-name tenant images can coexist. The image
 // owned by preferredTenant wins; failing that, the shared image; failing that, the collision is a

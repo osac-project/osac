@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import logging
 import subprocess
 from collections.abc import Generator
@@ -304,3 +305,59 @@ class TestComputeReferences:
                 private_grpc.delete_instance_type(name=active_name)
             except subprocess.CalledProcessError:
                 logger.warning("Failed to cleanup active instance type %s", active_name)
+
+    def test_compute_instance_user_data_secret_by_name(
+        self,
+        grpc: GRPCClient,
+        k8s_hub_client: K8sClient,
+        ref_subnet: dict[str, str],
+        ref_security_group: dict[str, str],
+        ref_ci_catalog_item: str,
+        ref_instance_type: str,
+        ref_disk_image: str,
+        default_storage_tier: str,
+    ):
+        tag = uuid4().hex[:8]
+        secret_name = f"ref-user-data-{tag}"
+        secret_response: dict[str, Any] = grpc.call(
+            service=f"{PUBLIC_API}.Secrets/Create",
+            data={
+                "object": {
+                    "metadata": {"name": secret_name},
+                    "data": {"userdata": base64.b64encode(b"#cloud-config\n").decode()},
+                }
+            },
+        )
+        secret_id = secret_response["object"]["id"]
+        ci_id: str | None = None
+
+        try:
+            cat_item = grpc.get_compute_instance_catalog_item(catalog_item_id=ref_ci_catalog_item)
+            data = _ci_create_data(
+                f"ref-ci-secret-{tag}",
+                cat_item["object"]["metadata"]["name"],
+                ref_subnet["name"],
+                ref_security_group["name"],
+                ref_instance_type,
+                ref_disk_image,
+                default_storage_tier,
+            )
+            data["object"]["spec"]["user_data_secret"] = {"name": secret_name}
+
+            response: dict[str, Any] = grpc.call(service=f"{PUBLIC_API}.ComputeInstances/Create", data=data)
+            ci_id = response["object"]["id"]
+            secret_ref = response["object"]["spec"].get(
+                "user_data_secret", response["object"]["spec"].get("userDataSecret", {})
+            )
+            assert secret_ref.get("name") == secret_name
+            assert secret_ref.get("id") == secret_id
+        finally:
+            if ci_id:
+                try:
+                    grpc.delete_compute_instance(ci_id=ci_id)
+                except subprocess.CalledProcessError:
+                    logger.warning("Failed to cleanup compute instance %s", ci_id)
+            try:
+                grpc.call(service=f"{PUBLIC_API}.Secrets/Delete", data={"id": secret_id})
+            except subprocess.CalledProcessError:
+                logger.warning("Failed to cleanup secret %s", secret_id)

@@ -55,6 +55,17 @@ func ValidateTemplateParameters(
 		}
 	}
 	if len(invalidParameterNames) > 0 {
+		sort.Strings(invalidParameterNames)
+		for i, invalidParameterName := range invalidParameterNames {
+			invalidParameterNames[i] = fmt.Sprintf("'%s'", invalidParameterName)
+		}
+		if len(templateParameters) == 0 {
+			return grpcstatus.Errorf(
+				grpccodes.InvalidArgument,
+				"template '%s' does not accept any template parameters",
+				templateID,
+			)
+		}
 		templateParameterNames := make([]string, len(templateParameters))
 		for i, templateParameter := range templateParameters {
 			templateParameterNames[i] = templateParameter.GetName()
@@ -62,10 +73,6 @@ func ValidateTemplateParameters(
 		sort.Strings(templateParameterNames)
 		for i, templateParameterName := range templateParameterNames {
 			templateParameterNames[i] = fmt.Sprintf("'%s'", templateParameterName)
-		}
-		sort.Strings(invalidParameterNames)
-		for i, invalidParameterName := range invalidParameterNames {
-			invalidParameterNames[i] = fmt.Sprintf("'%s'", invalidParameterName)
 		}
 		if len(invalidParameterNames) == 1 {
 			return grpcstatus.Errorf(

@@ -178,6 +178,28 @@ var _ = Describe("ValidateTemplateParameters", func() {
 			err = ValidateTemplateParameters(template, params)
 			Expect(err).To(HaveOccurred())
 			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+			Expect(err.Error()).To(ContainSubstring(
+				"template 'empty-template' does not accept any template parameters",
+			))
+		})
+
+		It("should return clear error for multiple provided parameters on empty template", func() {
+			stringValue1 := wrapperspb.String("value1")
+			anyValue1, err := anypb.New(stringValue1)
+			Expect(err).ToNot(HaveOccurred())
+			params["param1"] = anyValue1
+
+			stringValue2 := wrapperspb.String("value2")
+			anyValue2, err := anypb.New(stringValue2)
+			Expect(err).ToNot(HaveOccurred())
+			params["param2"] = anyValue2
+
+			err = ValidateTemplateParameters(template, params)
+			Expect(err).To(HaveOccurred())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+			Expect(err.Error()).To(ContainSubstring(
+				"template 'empty-template' does not accept any template parameters",
+			))
 		})
 
 		It("should pass validation with no parameters", func() {

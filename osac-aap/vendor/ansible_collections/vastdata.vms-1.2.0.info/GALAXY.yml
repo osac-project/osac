@@ -5,4 +5,4 @@ namespace: vastdata
 server: https://galaxy.ansible.com/api/
 signatures: []
 version: 1.2.0
-version_url: /api/v3/plugin/ansible/content/published/collections/index/vastdata/vms/versions/1.2.0/
+version_url: /api/content/published/v3/plugin/ansible/content/published/collections/index/vastdata/vms/versions/1.2.0/

@@ -549,6 +549,7 @@ func (r *ClusterOrderReconciler) handleHostedCluster(ctx context.Context, instan
 	hc *hypershiftv1beta1.HostedCluster) error {
 
 	log := ctrllog.FromContext(ctx)
+	controlPlaneWasAvailable := instance.IsStatusConditionTrue(v1alpha1.ConditionControlPlaneAvailable)
 
 	name := hc.GetName()
 	instance.SetClusterReferenceHostedClusterName(name)
@@ -584,8 +585,8 @@ func (r *ClusterOrderReconciler) handleHostedCluster(ctx context.Context, instan
 	// A successful provisioning job only means that the infrastructure request
 	// was accepted. Derive terminal readiness from the live HostedCluster and
 	// NodePool observations in this reconcile.
-	finalizeReadyIfProvisioned(log, instance, hc, nodePools.Items)
-	r.reconcileClusterOrderReadiness(instance, hc)
+	finalizeReadyIfProvisioned(log, instance, hc, nodePools.Items, controlPlaneWasAvailable)
+	r.reconcileClusterOrderReadiness(instance, hc, controlPlaneWasAvailable)
 	return nil
 }
 
@@ -633,6 +634,7 @@ func bareMetalWorkersReady(instance *v1alpha1.ClusterOrder) bool {
 func (r *ClusterOrderReconciler) reconcileClusterOrderReadiness(
 	instance *v1alpha1.ClusterOrder,
 	hostedCluster *hypershiftv1beta1.HostedCluster,
+	controlPlaneWasAvailable bool,
 ) {
 	if hostedCluster == nil {
 		return
@@ -644,6 +646,10 @@ func (r *ClusterOrderReconciler) reconcileClusterOrderReadiness(
 	if !hostedClusterControlPlaneIsAvailable(hostedCluster) || !hostedClusterIsReady(hostedCluster) {
 		instance.Status.Phase = v1alpha1.ClusterOrderPhaseProgressing
 		r.setProgressingStage(instance, deriveProvisioningSubStage(hostedCluster))
+		return
+	}
+	if !controlPlaneWasAvailable {
+		instance.Status.Phase = v1alpha1.ClusterOrderPhaseProgressing
 		return
 	}
 
@@ -866,6 +872,9 @@ func hostedClusterAndNodePoolsAreReady(instance *v1alpha1.ClusterOrder, hc *hype
 		!hostedClusterIsReady(hc) {
 		return false
 	}
+	if len(instance.Spec.NodeRequests) == 0 && len(nodePools) == 0 {
+		return true
+	}
 	return nodePoolsMatchRequests(instance.Spec.NodeRequests, nodePools)
 }
 
@@ -954,8 +963,8 @@ func provisioningJobSucceeded(instance *v1alpha1.ClusterOrder) bool {
 }
 
 func finalizeReadyIfProvisioned(log logr.Logger, instance *v1alpha1.ClusterOrder, hc *hypershiftv1beta1.HostedCluster,
-	nodePools []hypershiftv1beta1.NodePool) bool {
-	if !provisioningJobSucceeded(instance) {
+	nodePools []hypershiftv1beta1.NodePool, controlPlaneWasAvailable bool) bool {
+	if !controlPlaneWasAvailable || !provisioningJobSucceeded(instance) {
 		return false
 	}
 	if nodeRequestsContainDuplicateNodeSets(instance.Spec.NodeRequests) {

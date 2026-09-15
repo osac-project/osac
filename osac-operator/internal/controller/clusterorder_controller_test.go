@@ -641,7 +641,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 
 		ctx := context.Background()
 
-		It("should set Phase to Ready when HostedCluster is ready", func() {
+		It("should keep Phase progressing on the first HostedCluster-ready observation", func() {
 			instance := &v1alpha1.ClusterOrder{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-hc-no-phase",
@@ -664,7 +664,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 			err := reconciler.handleHostedCluster(ctx, instance, hc)
 			Expect(err).NotTo(HaveOccurred())
 
-			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseReady))
+			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseProgressing))
 
 			Expect(instance.IsStatusConditionTrue(v1alpha1.ConditionControlPlaneAvailable)).To(BeTrue())
 			Expect(instance.IsStatusConditionTrue(v1alpha1.ConditionClusterAvailable)).To(BeTrue())
@@ -696,7 +696,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 			}}}
 			nodePools := []hypershiftv1beta1.NodePool{readyClusterOrderNodePool("worker", 1)}
 
-			Expect(finalizeReadyIfProvisioned(logr.Discard(), instance, hc, nodePools)).To(BeTrue())
+			Expect(finalizeReadyIfProvisioned(logr.Discard(), instance, hc, nodePools, true)).To(BeTrue())
 			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseReady))
 			progressing := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
 			Expect(progressing).NotTo(BeNil())
@@ -711,7 +711,11 @@ var _ = Describe("ClusterOrder Controller", func() {
 			instance := &v1alpha1.ClusterOrder{
 				ObjectMeta: metav1.ObjectMeta{Name: "test-hc-finalize-ready", Namespace: "default"},
 				Status: v1alpha1.ClusterOrderStatus{
-					Phase:          v1alpha1.ClusterOrderPhaseProgressing,
+					Phase: v1alpha1.ClusterOrderPhaseProgressing,
+					Conditions: []metav1.Condition{{
+						Type:   v1alpha1.ConditionControlPlaneAvailable,
+						Status: metav1.ConditionTrue,
+					}},
 					DesiredWorkers: p32(1),
 					CurrentWorkers: p32(1),
 					ReadyWorkers:   p32(1),

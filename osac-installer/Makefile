@@ -126,10 +126,10 @@ define kind-load-image
 	@if [ "$$(basename $(CONTAINER_TOOL))" = "podman" ]; then \
 		tmpfile=$$(mktemp /tmp/kind-image-XXXXXX.tar); \
 		$(CONTAINER_TOOL) save $(1) -o "$$tmpfile"; \
-		kind load image-archive "$$tmpfile" --name $(KIND_CLUSTER_NAME); \
+		$(KIND_RUNTIME) load image-archive "$$tmpfile" --name $(KIND_CLUSTER_NAME); \
 		rm -f "$$tmpfile"; \
 	else \
-		kind load docker-image $(1) --name $(KIND_CLUSTER_NAME); \
+		$(KIND_RUNTIME) load docker-image $(1) --name $(KIND_CLUSTER_NAME); \
 	fi
 endef
 

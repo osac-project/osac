@@ -243,6 +243,19 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 			Expect(result.RequeueAfter).To(BeZero())
 		})
 
+		It("should return early without panic when BMIProvider is nil", func() {
+			reconciler.BMIProvider = nil
+			instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
+				{BMIName: "worker-1", BMINamespace: "osac-baremetalinstance"},
+			})
+
+			result, err := reconciler.ReconcileWorkers(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeZero())
+			// No provider calls should have been made
+			Expect(fulfillmentClient.reportCalls).To(Equal(0))
+		})
+
 		It("should skip ready workers", func() {
 			bmiProvider.isReady = true
 			instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{

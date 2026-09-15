@@ -177,7 +177,6 @@ var _ = Describe("Rego authorization interceptor", func() {
 			interceptor, err = NewGrpcAuthzInterceptor().
 				SetLogger(logger).
 				AddAnonymousMethodRegex(`^/grpc\.health\.v1\.Health/.*$`).
-				AddAnonymousMethodRegex(`^/grpc\.reflection\.v1\.ServerReflection/.*$`).
 				AddAnonymousMethodRegex(`^/osac\.public\.v1\.Capabilities/.*$`).
 				AddEmergencyServiceAccounts(
 					"admin",
@@ -208,7 +207,36 @@ var _ = Describe("Rego authorization interceptor", func() {
 			Expect(handled).To(BeTrue())
 		})
 
-		It("Allows guest on the reflection API", func(ctx context.Context) {
+		It("Denies guest on the reflection API", func(ctx context.Context) {
+			handled := false
+			_, err := interceptor.UnaryServer(
+				ctx,
+				nil,
+				&grpc.UnaryServerInfo{
+					FullMethod: "/grpc.reflection.v1.ServerReflection/ServerReflectionInfo",
+				},
+				func(ctx context.Context, req any) (any, error) {
+					handled = true
+					return nil, nil
+				},
+			)
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.Unauthenticated))
+			Expect(status.Message()).To(Equal(
+				"method '/grpc.reflection.v1.ServerReflection/ServerReflectionInfo' requires authentication",
+			))
+			Expect(handled).To(BeFalse())
+		})
+
+		It("Allows authenticated client on the reflection API", func(ctx context.Context) {
+			token := createKeycloakUserToken("my-tenant", "my-user", jwt.MapClaims{
+				"realm_access": map[string]any{
+					"roles": []any{},
+				},
+			})
+			ctx = ContextWithToken(ctx, token)
 			handled := false
 			_, err := interceptor.UnaryServer(
 				ctx,
@@ -218,7 +246,36 @@ var _ = Describe("Rego authorization interceptor", func() {
 				},
 				func(ctx context.Context, req any) (any, error) {
 					subject := SubjectFromContext(ctx)
-					Expect(subject).To(Equal(Guest))
+					Expect(subject.User).To(Equal("my-user"))
+					Expect(subject.Tenants.Finite()).To(BeTrue())
+					Expect(subject.Tenants.Inclusions()).To(ConsistOf("my-tenant"))
+					handled = true
+					return nil, nil
+				},
+			)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(handled).To(BeTrue())
+		})
+
+		It("Allows admin on the reflection API", func(ctx context.Context) {
+			token := createKeycloakUserToken("", "my-user", jwt.MapClaims{
+				"organization": nil,
+				"groups": []any{
+					"admins",
+				},
+			})
+			ctx = ContextWithToken(ctx, token)
+			handled := false
+			_, err := interceptor.UnaryServer(
+				ctx,
+				nil,
+				&grpc.UnaryServerInfo{
+					FullMethod: "/grpc.reflection.v1.ServerReflection/ServerReflectionInfo",
+				},
+				func(ctx context.Context, req any) (any, error) {
+					subject := SubjectFromContext(ctx)
+					Expect(subject.User).To(Equal("my-user"))
+					Expect(subject.Tenants.Universal()).To(BeTrue())
 					handled = true
 					return nil, nil
 				},

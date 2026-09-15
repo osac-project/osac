@@ -148,9 +148,18 @@ To run the the REST gateway use a command like this:
 
 You may need to adjust the commands to use your database details.
 
-To verify that the gRPC server is working use `grpcurl`. For example, to list the available gRPC services:
+To verify that the gRPC server is working use `grpcurl`. gRPC reflection requires an authenticated
+JWT; pass it with the `-H` flag after logging in.
 
-    $ grpcurl -plaintext localhost:8000 list
+The local examples below use `-plaintext` because the `start grpc-server` command above listens on
+loopback without TLS. **Use `-plaintext` only for loopback local development** (for example
+`localhost` or `127.0.0.1`). Do not use `-plaintext` with non-loopback endpoints.
+
+**Local development (loopback, no TLS):**
+
+To list the available gRPC services:
+
+    $ grpcurl -plaintext -H "Authorization: Bearer ${TOKEN}" localhost:8000 list
     osac.public.v1.ClusterOrders
     osac.public.v1.ClusterTemplates
     osac.public.v1.Clusters
@@ -160,13 +169,13 @@ To verify that the gRPC server is working use `grpcurl`. For example, to list th
 
 To list the methods available in a service, for example in the `ClusterTemplates` service:
 
-    $ grpcurl -plaintext localhost:8000 list osac.public.v1.ClusterTemplates
+    $ grpcurl -plaintext -H "Authorization: Bearer ${TOKEN}" localhost:8000 list osac.public.v1.ClusterTemplates
     osac.public.v1.ClusterTemplates.Get
     osac.public.v1.ClusterTemplates.List
 
 To invoke a method, for example the `List` method of the `ClusterTemplates` service:
 
-    $ grpcurl -plaintext localhost:8000 osac.public.v1.ClusterTemplates/List
+    $ grpcurl -plaintext -H "Authorization: Bearer ${TOKEN}" localhost:8000 osac.public.v1.ClusterTemplates/List
     {
       "size": 2,
       "total": 2,
@@ -183,6 +192,17 @@ To invoke a method, for example the `List` method of the `ClusterTemplates` serv
         }
       ]
     }
+
+**Remote endpoints (TLS):**
+
+Omit `-plaintext` and pass a trusted CA bundle with `-cacert` (for example `bundle.pem` from the
+installation CA ConfigMap; see [INSTALL.md](docs/INSTALL.md)):
+
+    $ grpcurl -cacert bundle.pem -H "Authorization: Bearer ${TOKEN}" fulfillment-api.example.com:443 list
+
+    $ grpcurl -cacert bundle.pem -H "Authorization: Bearer ${TOKEN}" fulfillment-api.example.com:443 list osac.public.v1.ClusterTemplates
+
+    $ grpcurl -cacert bundle.pem -H "Authorization: Bearer ${TOKEN}" fulfillment-api.example.com:443 osac.public.v1.ClusterTemplates/List
 
 To verify that the REST gateway is working use `curl`. For example, to get the list of templates:
 

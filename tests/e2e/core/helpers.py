@@ -311,18 +311,64 @@ def wait_for_cluster_progressing(*, k8s: K8sClient, name: str) -> None:
     )
 
 
-def wait_for_cluster_ready(*, k8s: K8sClient, name: str) -> None:
-    # Must stay safely above osac-aap's own wait_for_clusteroperators_retries
-    # budget (60 min) plus earlier steps in the same AAP job (create hosted
-    # cluster, retrieve kubeconfig, etc.), or this times out first with a
-    # less useful error while the ClusterOrder is still legitimately Progressing.
-    poll_until(
-        fn=lambda: k8s.get_cluster_order_phase(name=name, checked=False),
-        until=lambda v: v == "Ready",
+def wait_for_cluster_order_event_reasons(
+    *, k8s: K8sClient, name: str, reasons: set[str], stop_reasons: set[str] | None = None
+) -> dict[str, dict[str, Any]]:
+    observed_events: dict[str, dict[str, Any]] = {}
+
+    def _observed_events() -> dict[str, dict[str, Any]]:
+        observed_events.update(
+            {event["reason"]: event for event in k8s.get_cluster_order_events(name=name) if event.get("reason")}
+        )
+        return observed_events
+
+    stop_reasons = stop_reasons or set()
+    return poll_until(
+        fn=_observed_events,
+        until=lambda observed: reasons.issubset(observed) or bool(stop_reasons & observed.keys()),
         retries=480,
         delay=15,
-        description=f"{name} ClusterOrder Ready",
+        description=f"{name} ClusterOrder provisioning events",
     )
+
+
+def assert_cluster_order_events(
+    *, events: dict[str, dict[str, Any]], expected: dict[str, tuple[str, str, str]]
+) -> None:
+    missing = set(expected) - set(events)
+    assert not missing, f"Missing ClusterOrder lifecycle events: {sorted(missing)}; observed: {sorted(events)}"
+    for reason, (event_type, action, message) in expected.items():
+        event = events[reason]
+        assert event.get("type") == event_type, f"Expected {event_type} event for {reason}: {event}"
+        assert event.get("action") == action, f"Expected {action} action for {reason}: {event}"
+        assert message in event.get("message", ""), f"Expected message for {reason}: {event}"
+
+
+def assert_cluster_order_lifecycle_events(*, k8s: K8sClient, name: str) -> None:
+    expected_events = {
+        "Created": ("Normal", "Created", "ClusterOrder created"),
+        "PreparingInfrastructure": ("Normal", "Provisioning", "Preparing Infrastructure"),
+        "ControlPlaneStarting": ("Normal", "Provisioning", "Control Plane Starting"),
+        "Ready": ("Normal", "Ready", "ClusterOrder is ready"),
+    }
+    if k8s.get_cluster_order_status(name=name).get("nodeSets"):
+        expected_events["WorkersJoining"] = ("Normal", "Provisioning", "Workers Joining")
+
+    events = {event["reason"]: event for event in k8s.get_cluster_order_events(name=name) if event.get("reason")}
+    assert_cluster_order_events(events=events, expected=expected_events)
+
+
+def assert_cluster_order_deleting_event(*, k8s: K8sClient, name: str) -> None:
+    events = wait_for_cluster_order_event_reasons(k8s=k8s, name=name, reasons={"Deleting"})
+    assert_cluster_order_events(
+        events=events, expected={"Deleting": ("Normal", "Deleting", "ClusterOrder entered deleting phase")}
+    )
+
+
+def wait_for_cluster_ready(*, k8s: K8sClient, name: str) -> None:
+    # Available=True is the single completion signal for a fully provisioned
+    # ClusterOrder. It is mapped to the fulfillment API's READY condition.
+    wait_for_cluster_order_condition(k8s=k8s, name=name, condition_type="Available")
 
 
 def wait_for_cluster_deletion(*, k8s: K8sClient, name: str) -> None:

@@ -123,7 +123,7 @@
         - _vast_teardown_auth is not failed
       block:
         - name: Resolve local provider ID (from hub Secret or by name lookup)
-          when: _vast_teardown_local_provider_id | default('') | length == 0
+          when: _vast_teardown_local_provider_id | default('') | string | length == 0
           block:
             - name: Look up local provider by naming convention
               ansible.builtin.uri:
@@ -155,11 +155,11 @@
             - name: Set local provider ID from lookup
               ansible.builtin.set_fact:
                 _vast_teardown_local_provider_id: >-
-                  {{ (_vast_teardown_lp_lookup.json[0].id | default(''))
-                     if (_vast_teardown_lp_lookup.json | default([]) | length > 0)
-                     else ((_vast_teardown_lp_legacy.json[0].id | default(''))
-                           if (_vast_teardown_lp_legacy is defined and _vast_teardown_lp_legacy.json | default([]) | length > 0)
-                           else '') }}
+                  {{ ((_vast_teardown_lp_lookup.json[0].id | default(''))
+                      if (_vast_teardown_lp_lookup.json | default([]) | length > 0)
+                      else ((_vast_teardown_lp_legacy.json[0].id | default(''))
+                            if (_vast_teardown_lp_legacy is defined and _vast_teardown_lp_legacy.json | default([]) | length > 0)
+                            else '')) | string }}
 
         - name: Delete local provider by ID
           when: _vast_teardown_local_provider_id | default('') | string | length > 0
@@ -181,7 +181,7 @@
               Local provider deletion:
               {{ 'deleted (id: ' ~ _vast_teardown_local_provider_id ~ ')'
                  if (_vast_teardown_lp_result is defined and _vast_teardown_lp_result is not failed)
-                 else ('not found — skipping' if (_vast_teardown_local_provider_id | default('') | length == 0) else 'failed (ignored)') }}
+                 else ('not found — skipping' if (_vast_teardown_local_provider_id | default('') | string | length == 0) else 'failed (ignored)') }}
 
     - name: Delete VAST tenant (retry for async view cleanup)
       vastdata.vms.tenants:

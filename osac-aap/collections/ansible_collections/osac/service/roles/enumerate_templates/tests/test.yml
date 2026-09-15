@@ -88,6 +88,20 @@
         success_msg: "Found {{ osac_compute_instance_templates | length }} compute instance template(s)"
       when: test_discover_all | default(false) | bool
 
+    - name: Verify add-on operator templates discovered
+      ansible.builtin.assert:
+        that:
+          - osac_addon_operator_templates is defined
+          - osac_addon_operator_templates | length >= 1
+          - osac_addon_operator_templates | map(attribute='id') | list is superset(['osac.templates.cert_manager'])
+          - osac_addon_operator_templates[0].min_ocp_version is defined
+          - osac_addon_operator_templates[0].dependencies is defined
+        fail_msg: >-
+          Expected the cert_manager AddOnOperator template.
+          Got: {{ osac_addon_operator_templates | default([]) | map(attribute='id') | list }}
+        success_msg: "Found {{ osac_addon_operator_templates | length }} add-on operator template(s)"
+      when: test_discover_all | default(false) | bool
+
 # ──────────────────────────────────────────────────────────────
 # Test 2: Nonexistent collection -- should return empty lists
 # Expected: role succeeds, all lists are empty
@@ -112,6 +126,8 @@
           - osac_cluster_templates | length == 0
           - osac_compute_instance_templates is defined
           - osac_compute_instance_templates | length == 0
+          - osac_addon_operator_templates is defined
+          - osac_addon_operator_templates | length == 0
         fail_msg: >-
           Expected empty lists for nonexistent collection.
           Clusters: {{ osac_cluster_templates | default([]) | length }},
@@ -143,6 +159,8 @@
           - osac_cluster_templates | length == 0
           - osac_compute_instance_templates is defined
           - osac_compute_instance_templates | length == 0
+          - osac_addon_operator_templates is defined
+          - osac_addon_operator_templates | length == 0
         fail_msg: "Expected empty lists for invalid collection name"
         success_msg: "Invalid collection name handled gracefully"
       when: test_invalid_collection_name | default(false) | bool
@@ -173,6 +191,8 @@
           - osac_cluster_templates | length >= 2
           - osac_compute_instance_templates is defined
           - osac_compute_instance_templates | length >= 1
+          - osac_addon_operator_templates is defined
+          - osac_addon_operator_templates | length >= 1
         fail_msg: >-
           Expected templates from osac.templates despite invalid entries.
           Clusters: {{ osac_cluster_templates | default([]) | length }},

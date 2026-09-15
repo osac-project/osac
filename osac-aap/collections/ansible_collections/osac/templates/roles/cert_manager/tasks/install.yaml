@@ -1,0 +1,32 @@
+---
+- name: Load AddOnOperator metadata
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/meta/osac.yaml"
+    name: addon_operator_metadata
+
+- name: Ensure openshift-operators namespace exists
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig | default(omit) }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: openshift-operators
+
+- name: Create cert-manager Subscription
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig | default(omit) }}"
+    state: present
+    definition:
+      apiVersion: operators.coreos.com/v1alpha1
+      kind: Subscription
+      metadata:
+        name: "{{ addon_operator_metadata.package_name }}"
+        namespace: openshift-operators
+      spec:
+        channel: "{{ addon_operator_metadata.channel }}"
+        installPlanApproval: Automatic
+        name: "{{ addon_operator_metadata.package_name }}"
+        source: "{{ addon_operator_metadata.catalog_source }}"
+        sourceNamespace: "{{ addon_operator_metadata.catalog_source_namespace }}"

@@ -1,30 +1,8 @@
 ---
-- name: Ensure openshift-operators namespace exists
-  kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig | default(omit) }}"
-    state: present
-    definition:
-      apiVersion: v1
-      kind: Namespace
-      metadata:
-        name: openshift-operators
-
-- name: Create cert-manager subscription
-  kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig | default(omit) }}"
-    state: present
-    definition:
-      apiVersion: operators.coreos.com/v1alpha1
-      kind: Subscription
-      metadata:
-        name: cert-manager
-        namespace: openshift-operators
-      spec:
-        channel: stable
-        installPlanApproval: Automatic
-        name: cert-manager
-        source: community-operators
-        sourceNamespace: openshift-marketplace
+- name: Install cert-manager operator
+  ansible.builtin.include_role:
+    name: osac.templates.cert_manager
+    tasks_from: install
 
 - name: Create production issuer
   kubernetes.core.k8s:

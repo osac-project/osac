@@ -1,0 +1,8 @@
+- name: Skip AddOnOperator publishing when no templates were discovered
+  ansible.builtin.debug:
+    msg: "No AddOnOperator templates discovered; skipping AddOnOperator publishing"
+  when: osac_addon_operator_templates | default([]) | length == 0
+
+- name: Apply discovered AddOnOperator templates
+  ansible.builtin.include_tasks: publish_addon_operators.yaml
+  when: osac_addon_operator_templates | default([]) | length > 0

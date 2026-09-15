@@ -9,3 +9,7 @@
 - name: Enumerate BareMetalInstance templates
   ansible.builtin.set_fact:
     osac_bare_metal_instance_templates: "{{ osac_template_collections | osac.service.find_bare_metal_instance_template_roles }}"
+
+- name: Enumerate AddOnOperator templates
+  ansible.builtin.set_fact:
+    osac_addon_operator_templates: "{{ osac_template_collections | osac.service.find_addon_operator_template_roles }}"

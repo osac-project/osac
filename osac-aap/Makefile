@@ -4,6 +4,7 @@
 .PHONY: test lint execution-environment-build execution-environment-push
 
 test:
+	uv run pytest tests/unit
 	@echo "=== Setting up test environment ==="
 	cd tests/integration && ./setup_test_env.sh
 	@echo ""

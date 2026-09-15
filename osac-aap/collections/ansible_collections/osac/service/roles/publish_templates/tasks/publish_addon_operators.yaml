@@ -1,0 +1,50 @@
+- name: Build AddOnOperator lookup filter
+  ansible.builtin.set_fact:
+    addon_operator_filter: >-
+      {%- for template in osac_addon_operator_templates -%}
+      {{ 'this.id == ' ~ (template.id | to_json) }}{{ ' || ' if not loop.last else '' }}
+      {%- endfor -%}
+
+- name: Set first AddOnOperator page offset
+  ansible.builtin.set_fact:
+    addon_operator_page_offset: 0
+
+- name: Fetch first AddOnOperator page
+  ansible.builtin.include_tasks: fetch_addon_operator_page.yaml
+
+- name: Store first AddOnOperator page result
+  ansible.builtin.set_fact:
+    addon_operator_check:
+      status: "{{ addon_operator_page.status }}"
+      json: "{{ addon_operator_page.json | default({}) }}"
+
+- name: Skip AddOnOperators when service is disabled
+  ansible.builtin.debug:
+    msg: "CaaS service not available (HTTP 404/503) - skipping AddOnOperator publishing"
+  when: addon_operator_check.status in [404, 503]
+
+- name: Use first AddOnOperator page for accumulation
+  ansible.builtin.set_fact:
+    addon_operator_page: "{{ addon_operator_check }}"
+  when: addon_operator_check.status not in [404, 503]
+
+- name: Accumulate first AddOnOperator page
+  ansible.builtin.include_tasks: accumulate_addon_operator_page.yaml
+  when: addon_operator_check.status not in [404, 503]
+
+- name: Fetch remaining AddOnOperator pages
+  ansible.builtin.include_tasks: paginate_addon_operators.yaml
+  when: addon_operator_check.status not in [404, 503] and addon_operator_next_offset < addon_operator_total
+
+- name: Publish AddOnOperator records
+  ansible.builtin.include_tasks: publish_template_items.yaml
+  vars:
+    publish_template_items: "{{ osac_addon_operator_templates | default([]) }}"
+    publish_template_existing_ids: "{{ addon_operator_id_set | default({}) }}"
+    publish_template_api_endpoint: "{{ publish_templates_addon_operator_api_endpoint }}"
+    publish_template_update_suffix: "?update_mask={{ publish_templates_addon_operator_update_mask }}"
+    publish_template_resource_name: AddOnOperator
+    publish_template_no_log: true
+  when:
+    - addon_operator_check.status not in [404, 503]
+    - addon_operator_pagination_ok | default(false) | bool

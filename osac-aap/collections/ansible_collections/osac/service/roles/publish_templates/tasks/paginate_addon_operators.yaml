@@ -1,0 +1,22 @@
+- name: Set next AddOnOperator page offset
+  ansible.builtin.set_fact:
+    addon_operator_page_offset: "{{ addon_operator_next_offset }}"
+
+- name: Fetch next AddOnOperator page
+  ansible.builtin.include_tasks: fetch_addon_operator_page.yaml
+
+- name: Accumulate AddOnOperator page
+  ansible.builtin.include_tasks: accumulate_addon_operator_page.yaml
+  when: addon_operator_page.status == 200
+
+- name: Stop AddOnOperator publishing when a page fails
+  ansible.builtin.set_fact:
+    addon_operator_pagination_ok: false
+  when: addon_operator_page.status in [404, 503]
+
+- name: Continue fetching AddOnOperator pages
+  ansible.builtin.include_tasks: paginate_addon_operators.yaml
+  when:
+    - addon_operator_page.status == 200
+    - addon_operator_pagination_ok | default(false) | bool
+    - addon_operator_next_offset < addon_operator_total

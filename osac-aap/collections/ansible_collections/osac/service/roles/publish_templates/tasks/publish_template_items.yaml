@@ -1,0 +1,31 @@
+- name: Update existing {{ publish_template_resource_name }}
+  loop: "{{ publish_template_items }}"
+  loop_control:
+    label: "{{ template.id }}"
+    loop_var: template
+  when: template.id in publish_template_existing_ids
+  ansible.builtin.uri:
+    url: "{{ publish_template_api_endpoint }}/{{ template.id }}{{ publish_template_update_suffix | default('') }}"
+    validate_certs: "{{ publish_templates_validate_certs | default(true) | bool }}"
+    method: PATCH
+    headers:
+      authorization: Bearer {{ osac_fulfillment_service_token }}
+    body_format: json
+    body: "{{ template }}"
+  no_log: "{{ publish_template_no_log | default(false) | bool }}"
+
+- name: Create new {{ publish_template_resource_name }}
+  loop: "{{ publish_template_items }}"
+  loop_control:
+    label: "{{ template.id }}"
+    loop_var: template
+  when: template.id not in publish_template_existing_ids
+  ansible.builtin.uri:
+    url: "{{ publish_template_api_endpoint }}"
+    validate_certs: "{{ publish_templates_validate_certs | default(true) | bool }}"
+    method: POST
+    headers:
+      authorization: Bearer {{ osac_fulfillment_service_token }}
+    body_format: json
+    body: "{{ template }}"
+  no_log: "{{ publish_template_no_log | default(false) | bool }}"

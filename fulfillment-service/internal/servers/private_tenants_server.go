@@ -15,11 +15,9 @@ package servers
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/big"
 	"strconv"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -32,6 +30,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/events"
+	"github.com/osac-project/osac/fulfillment-service/internal/password"
 	"github.com/osac-project/osac/fulfillment-service/internal/references"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -217,7 +216,7 @@ func (s *PrivateTenantsServer) Create(ctx context.Context,
 	// Only generate break-glass credentials when the caller did NOT supply a secret reference.
 	// When a reference is provided the reconciler reads the password from the Secret directly.
 	if object.GetSpec().GetBreakGlassCredentialsSecret() == nil {
-		password, genErr := generatePassword()
+		pw, genErr := password.Generate()
 		if genErr != nil {
 			err = grpcstatus.Errorf(grpccodes.Internal, "failed to generate break-glass password: %v", genErr)
 			return
@@ -227,7 +226,7 @@ func (s *PrivateTenantsServer) Create(ctx context.Context,
 		}
 		creds := privatev1.BreakGlassCredentials_builder{
 			Username: fmt.Sprintf("%s-osac-break-glass", name),
-			Password: password,
+			Password: pw,
 		}.Build()
 		object.GetStatus().SetBreakGlassCredentials(creds)
 	}
@@ -298,20 +297,6 @@ func (s *PrivateTenantsServer) Signal(ctx context.Context,
 	request *privatev1.TenantsSignalRequest) (response *privatev1.TenantsSignalResponse, err error) {
 	err = s.generic.Signal(ctx, request, &response)
 	return
-}
-
-func generatePassword() (string, error) {
-	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%"
-	const length = 24
-	b := make([]byte, length)
-	for i := range b {
-		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
-		if err != nil {
-			return "", err
-		}
-		b[i] = charset[n.Int64()]
-	}
-	return string(b), nil
 }
 
 func stripBreakGlassCredentials(tenant *privatev1.Tenant) {

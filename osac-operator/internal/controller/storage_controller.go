@@ -822,7 +822,18 @@ func (r *StorageReconciler) handleCaaSDelete(ctx context.Context, instance *v1al
 			provCtx := provisioning.WithAdminKubeconfig(ctx, string(kubeconfig))
 
 			result, done, err := provisioning.RunDeprovisioningLifecycle(provCtx, r.ClusterStorageProvider, co,
-				&co.Status.ClusterStorageJobs, r.MaxJobHistory, r.StatusPollInterval)
+				&co.Status.ClusterStorageJobs, r.MaxJobHistory, r.StatusPollInterval,
+				func() bool {
+					return provisioning.CheckAPIServerForNonTerminalDeprovisionJob(ctx, r.Client,
+						client.ObjectKeyFromObject(co), &v1alpha1.ClusterOrder{},
+						func(obj client.Object) []v1alpha1.JobStatus {
+							return obj.(*v1alpha1.ClusterOrder).Status.ClusterStorageJobs
+						})
+				},
+				func() error {
+					return r.patchClusterOrderStorageStatus(ctx, client.ObjectKeyFromObject(co), co.Status)
+				},
+			)
 			if err != nil {
 				if updateErr := r.patchClusterOrderStorageStatus(ctx, client.ObjectKeyFromObject(co), co.Status); updateErr != nil {
 					log.Error(updateErr, "failed to update ClusterOrder status after teardown error", "clusterOrder", co.Name)
@@ -869,7 +880,18 @@ func (r *StorageReconciler) handleClusterStorageDeprovisioning(ctx context.Conte
 	}
 
 	result, done, err := provisioning.RunDeprovisioningLifecycle(ctx, r.ClusterStorageProvider, instance,
-		&instance.Status.ClusterStorageJobs, r.MaxJobHistory, r.StatusPollInterval)
+		&instance.Status.ClusterStorageJobs, r.MaxJobHistory, r.StatusPollInterval,
+		func() bool {
+			return provisioning.CheckAPIServerForNonTerminalDeprovisionJob(ctx, r.Client,
+				client.ObjectKeyFromObject(instance), &v1alpha1.Tenant{},
+				func(obj client.Object) []v1alpha1.JobStatus {
+					return obj.(*v1alpha1.Tenant).Status.ClusterStorageJobs
+				})
+		},
+		func() error {
+			return r.patchTenantStorageStatus(ctx, client.ObjectKeyFromObject(instance), instance.Status)
+		},
+	)
 	if err != nil || !done {
 		return result, err
 	}
@@ -902,7 +924,18 @@ func (r *StorageReconciler) handleBackendDeprovisioning(ctx context.Context, ins
 	}
 
 	result, done, err := provisioning.RunDeprovisioningLifecycle(ctx, r.BackendProvider, instance,
-		&instance.Status.StorageBackendJobs, r.MaxJobHistory, r.StatusPollInterval)
+		&instance.Status.StorageBackendJobs, r.MaxJobHistory, r.StatusPollInterval,
+		func() bool {
+			return provisioning.CheckAPIServerForNonTerminalDeprovisionJob(ctx, r.Client,
+				client.ObjectKeyFromObject(instance), &v1alpha1.Tenant{},
+				func(obj client.Object) []v1alpha1.JobStatus {
+					return obj.(*v1alpha1.Tenant).Status.StorageBackendJobs
+				})
+		},
+		func() error {
+			return r.patchTenantStorageStatus(ctx, client.ObjectKeyFromObject(instance), instance.Status)
+		},
+	)
 	if err != nil || !done {
 		return result, err
 	}

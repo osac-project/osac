@@ -167,6 +167,18 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkingDeletion(
 		ctx, r.NetworkingProvider, bareMetalInstance,
 		&bareMetalInstance.Status.NetworkingJobs,
 		provisioning.DefaultMaxJobHistory, r.ProvisionPollIntervalDuration,
+		func() bool {
+			return provisioning.CheckAPIServerForNonTerminalDeprovisionJob(
+				ctx, r.apiReaderOrClient(), client.ObjectKeyFromObject(bareMetalInstance),
+				&v1alpha1.BareMetalInstance{},
+				func(obj client.Object) []opv1alpha1.JobStatus {
+					return obj.(*v1alpha1.BareMetalInstance).Status.NetworkingJobs
+				},
+			)
+		},
+		func() error {
+			return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(bareMetalInstance), bareMetalInstance.Status)
+		},
 	)
 	// Persist NetworkingJobs changes made by RunDeprovisioningLifecycle.
 	// The CRD has a status subresource, so r.Update does not write status fields.

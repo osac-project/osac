@@ -23,21 +23,28 @@ from tests.e2e.core.runner import env
 logger = logging.getLogger(__name__)
 
 
-def unique_name(prefix: str) -> str:
-    return f"{prefix}-{uuid4().hex[:8]}"
-
-
 @pytest.fixture(scope="session")
 def cluster_template() -> str:
+    """Return the cluster template name from the environment."""
     return env("OSAC_CLUSTER_TEMPLATE", "ocp-small")
 
 
 @pytest.fixture(scope="session")
 def compute_instance_template() -> str:
+    """Return the compute instance template name from the environment."""
     return env("OSAC_VM_TEMPLATE", "ocp-virt-vm")
 
 
+def _sanitize_grpc_output(output: str, max_length: int = 200) -> str:
+    """Truncate gRPC output to avoid leaking sensitive data in logs."""
+    stripped = output.strip()
+    if len(stripped) <= max_length:
+        return stripped
+    return stripped[:max_length] + "... [truncated]"
+
+
 def _delete_subnet_teardown(grpc: GRPCClient, k8s: K8sClient, *, subnet_id: str, subnet_cr_name: str) -> None:
+    """Delete a subnet and wait for the CR to be removed."""
     try:
         grpc.delete_subnet(subnet_id=subnet_id)
     except subprocess.CalledProcessError as exc:
@@ -45,13 +52,14 @@ def _delete_subnet_teardown(grpc: GRPCClient, k8s: K8sClient, *, subnet_id: str,
         if re.search(r"Code:\s*NotFound", combined):
             logger.warning("Subnet %s already deleted via API", subnet_id)
         else:
-            logger.warning("Subnet %s teardown delete failed: %s", subnet_id, combined.strip())
+            logger.warning("Subnet %s teardown delete failed: %s", subnet_id, _sanitize_grpc_output(combined))
             return
     if k8s.is_present(resource="subnet", name=subnet_cr_name):
         wait_for_subnet_deletion(k8s=k8s, name=subnet_cr_name)
 
 
 def _delete_virtual_network_teardown(grpc: GRPCClient, k8s: K8sClient, *, vn_id: str, vn_cr_name: str) -> None:
+    """Delete a virtual network and wait for the CR to be removed."""
     try:
         grpc.delete_virtual_network(vn_id=vn_id)
     except subprocess.CalledProcessError as exc:
@@ -59,7 +67,7 @@ def _delete_virtual_network_teardown(grpc: GRPCClient, k8s: K8sClient, *, vn_id:
         if re.search(r"Code:\s*NotFound", combined):
             logger.warning("VirtualNetwork %s already deleted via API", vn_id)
         else:
-            logger.warning("VirtualNetwork %s teardown delete failed: %s", vn_id, combined.strip())
+            logger.warning("VirtualNetwork %s teardown delete failed: %s", vn_id, _sanitize_grpc_output(combined))
             return
     if k8s.is_present(resource="virtualnetwork", name=vn_cr_name):
         wait_for_virtual_network_deletion(k8s=k8s, name=vn_cr_name)
@@ -85,18 +93,19 @@ def catalog_networking(grpc: GRPCClient, k8s_hub_client: K8sClient) -> Generator
 
         yield {"virtual_network_id": vn_id, "subnet_id": subnet_id}
     except Exception:
-        # If setup fails, cleanup any resources that were created
         logger.warning("Setup failed, cleaning up partial catalog networking resources: %s", tag)
         if subnet_id:
             try:
                 grpc.delete_subnet(subnet_id=subnet_id)
             except Exception as e:
-                logger.warning("Failed to cleanup subnet %s: %s", subnet_id, type(e).__name__)
+                logger.warning("Failed to cleanup subnet %s: %s", subnet_id, str(e))
+            subnet_id = None
         if vn_id:
             try:
                 grpc.delete_virtual_network(vn_id=vn_id)
             except Exception as e:
-                logger.warning("Failed to cleanup virtual network %s: %s", vn_id, type(e).__name__)
+                logger.warning("Failed to cleanup virtual network %s: %s", vn_id, str(e))
+            vn_id = None
         raise
     finally:
         # Normal cleanup runs regardless of setup success/failure
@@ -108,4 +117,5 @@ def catalog_networking(grpc: GRPCClient, k8s_hub_client: K8sClient) -> Generator
 
 @pytest.fixture(scope="module")
 def default_subnet_id(catalog_networking: dict[str, str]) -> str:
+    """Return the subnet ID from the catalog networking fixture."""
     return catalog_networking["subnet_id"]

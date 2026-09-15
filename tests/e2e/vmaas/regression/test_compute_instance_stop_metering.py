@@ -5,9 +5,9 @@ from datetime import UTC, datetime
 
 import pytest
 
-from tests.e2e.catalog.conftest import unique_name
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import (
+    unique_name,
     wait_for_cr,
     wait_for_deletion,
     wait_for_grpc_removal,

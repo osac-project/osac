@@ -90,6 +90,11 @@ type BareMetalWorkerReconciler struct {
 }
 
 // NewBareMetalWorkerReconciler creates a reconciler with production defaults.
+// Both bmiProvider and fulfillmentClient may be nil: when nil, ReconcileWorkers
+// returns early without processing workers. This allows the reconciler to be
+// wired at startup before concrete provider implementations are available,
+// deferring activation until the bare-metal provisioning feature is fully
+// integrated.
 func NewBareMetalWorkerReconciler(
 	bmiProvider BMIProvider,
 	fulfillmentClient FulfillmentClient,
@@ -173,6 +178,16 @@ func (r *BareMetalWorkerReconciler) ReconcileWorkers(
 	log := ctrllog.FromContext(ctx)
 
 	if len(instance.Status.Workers) == 0 {
+		return ctrl.Result{}, nil
+	}
+
+	// Guard against nil providers. The reconciler may be wired with nil
+	// BMIProvider and FulfillmentClient at startup when concrete
+	// implementations are not yet available. Return early to avoid a
+	// nil-pointer panic; the feature activates once real providers are
+	// injected.
+	if r.BMIProvider == nil {
+		log.Info("BMIProvider is nil, skipping worker reconciliation (feature not yet active)")
 		return ctrl.Result{}, nil
 	}
 

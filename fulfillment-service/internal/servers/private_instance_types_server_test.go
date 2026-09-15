@@ -848,6 +848,118 @@ var _ = Describe("Private instance types server", func() {
 			})
 		})
 
+		Describe("No-mask update", func() {
+			It("Update without UpdateMask succeeds with sparse metadata", func() {
+				createRequest := privatev1.InstanceTypesCreateRequest_builder{
+					Object: privatev1.InstanceType_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name:   "no-mask-test",
+							Labels: map[string]string{"env": "prod", "team": "infra"},
+						}.Build(),
+						Spec: privatev1.InstanceTypeSpec_builder{
+							Cores:       4,
+							MemoryGib:   8,
+							Description: "original",
+						}.Build(),
+					}.Build(),
+				}.Build()
+				createResponse, err := server.Create(ctx, createRequest)
+				Expect(err).NotTo(HaveOccurred())
+
+				// Update with NO mask — client sends only the ID and
+				// the spec change, minimal metadata (no labels, no name)
+				updateRequest := privatev1.InstanceTypesUpdateRequest_builder{
+					Object: privatev1.InstanceType_builder{
+						Id: createResponse.GetObject().GetId(),
+						Spec: privatev1.InstanceTypeSpec_builder{
+							Cores:       4, // same immutables
+							MemoryGib:   8,
+							Description: "updated",
+						}.Build(),
+						// Metadata intentionally sparse — no name, no labels
+					}.Build(),
+					// UpdateMask intentionally nil
+				}.Build()
+				_, err = server.Update(ctx, updateRequest)
+				Expect(err).NotTo(HaveOccurred()) // TODAY: this FAILS
+
+				// Verify metadata survived
+				getRequest := privatev1.InstanceTypesGetRequest_builder{
+					Id: createResponse.GetObject().GetId(),
+				}.Build()
+				getResponse, err := server.Get(ctx, getRequest)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(getResponse.GetObject().GetMetadata().GetName()).To(Equal("no-mask-test"))
+				Expect(getResponse.GetObject().GetMetadata().GetLabels()).To(Equal(
+					map[string]string{"env": "prod", "team": "infra"},
+				))
+				Expect(getResponse.GetObject().GetSpec().GetDescription()).To(Equal("updated"))
+			})
+
+			It("Update without UpdateMask preserves all mutable metadata when client omits them", func() {
+				// Create with ALL vulnerable metadata fields populated
+				createRequest := privatev1.InstanceTypesCreateRequest_builder{
+					Object: privatev1.InstanceType_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name:        "metadata-wipe-test",
+							Labels:      map[string]string{"env": "prod", "team": "infra"},
+							Annotations: map[string]string{"note": "important", "owner": "test"},
+							Finalizers:  []string{"test-finalizer-1", "test-finalizer-2"},
+						}.Build(),
+						Spec: privatev1.InstanceTypeSpec_builder{
+							Cores:       2,
+							MemoryGib:   4,
+							Description: "original",
+						}.Build(),
+					}.Build(),
+				}.Build()
+				createResponse, err := server.Create(ctx, createRequest)
+				Expect(err).NotTo(HaveOccurred())
+
+				// Update with NO mask — include correct immutables + name,
+				// but OMIT all vulnerable metadata fields
+				updateRequest := privatev1.InstanceTypesUpdateRequest_builder{
+					Object: privatev1.InstanceType_builder{
+						Id: createResponse.GetObject().GetId(),
+						Metadata: privatev1.Metadata_builder{
+							Name: "metadata-wipe-test", // same name (immutable)
+							// Labels:      OMITTED
+							// Annotations: OMITTED
+							// Finalizers:  OMITTED
+							// Project:     OMITTED
+						}.Build(),
+						Spec: privatev1.InstanceTypeSpec_builder{
+							Cores:       2,
+							MemoryGib:   4,
+							Description: "updated",
+						}.Build(),
+					}.Build(),
+				}.Build()
+				_, err = server.Update(ctx, updateRequest)
+				Expect(err).NotTo(HaveOccurred())
+
+				// Verify ALL vulnerable metadata fields survived
+				getRequest := privatev1.InstanceTypesGetRequest_builder{
+					Id: createResponse.GetObject().GetId(),
+				}.Build()
+				getResponse, err := server.Get(ctx, getRequest)
+				Expect(err).NotTo(HaveOccurred())
+
+				metadata := getResponse.GetObject().GetMetadata()
+				Expect(metadata.GetLabels()).To(Equal(
+					map[string]string{"env": "prod", "team": "infra"},
+				))
+				Expect(metadata.GetAnnotations()).To(Equal(
+					map[string]string{"note": "important", "owner": "test"},
+				))
+				Expect(metadata.GetFinalizers()).To(Equal(
+					[]string{"test-finalizer-1", "test-finalizer-2"},
+				))
+				// Also verify spec fields survived
+				Expect(getResponse.GetObject().GetSpec().GetDescription()).To(Equal("updated"))
+			})
+		})
+
 		// Deletion protection tests (TEST-02)
 		Describe("Deletion protection", func() {
 			It("Blocks delete when referenced by compute instance", func() {

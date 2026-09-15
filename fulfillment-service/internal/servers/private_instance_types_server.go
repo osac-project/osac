@@ -202,8 +202,10 @@ func (s *PrivateInstanceTypesServer) Update(ctx context.Context,
 		mask.Paths = append(mask.Paths, "spec.deprecation")
 	}
 
-	// Set the merged spec back into the request for the generic update:
-	request.GetObject().SetSpec(merged.GetSpec())
+	// set merged object back into request for the generic update
+	clientVersion := request.GetObject().GetMetadata().GetVersion()
+	request.SetObject(merged)
+	request.GetObject().GetMetadata().SetVersion(clientVersion)
 
 	err = s.generic.Update(ctx, request, &response)
 	return

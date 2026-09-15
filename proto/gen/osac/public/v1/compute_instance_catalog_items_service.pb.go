@@ -469,7 +469,7 @@ func (b0 ComputeInstanceCatalogItemsCreateRequest_builder) Build() *ComputeInsta
 type ComputeInstanceCatalogItemsCreateResponse struct {
 	state  protoimpl.MessageState      `protogen:"hybrid.v1"`
 	Object *ComputeInstanceCatalogItem `protobuf:"bytes,1,opt,name=object,proto3" json:"object,omitempty"`
-	// Deprecation or validation warnings (e.g. deprecated instance type in field_definitions).
+	// Deprecation or validation warnings for typed catalog policies.
 	Warnings      []string `protobuf:"bytes,2,rep,name=warnings,proto3" json:"warnings,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -537,7 +537,7 @@ type ComputeInstanceCatalogItemsCreateResponse_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
 	Object *ComputeInstanceCatalogItem
-	// Deprecation or validation warnings (e.g. deprecated instance type in field_definitions).
+	// Deprecation or validation warnings for typed catalog policies.
 	Warnings []string
 }
 
@@ -666,7 +666,7 @@ func (b0 ComputeInstanceCatalogItemsUpdateRequest_builder) Build() *ComputeInsta
 type ComputeInstanceCatalogItemsUpdateResponse struct {
 	state  protoimpl.MessageState      `protogen:"hybrid.v1"`
 	Object *ComputeInstanceCatalogItem `protobuf:"bytes,1,opt,name=object,proto3" json:"object,omitempty"`
-	// Deprecation or validation warnings (e.g. deprecated instance type in field_definitions).
+	// Deprecation or validation warnings for typed catalog policies.
 	Warnings      []string `protobuf:"bytes,2,rep,name=warnings,proto3" json:"warnings,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -734,7 +734,7 @@ type ComputeInstanceCatalogItemsUpdateResponse_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
 	Object *ComputeInstanceCatalogItem
-	// Deprecation or validation warnings (e.g. deprecated instance type in field_definitions).
+	// Deprecation or validation warnings for typed catalog policies.
 	Warnings []string
 }
 

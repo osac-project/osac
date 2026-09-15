@@ -26,4 +26,4 @@ columns:
   value: "this.published? 'true': 'false'"
 
 - header: TENANT
-  value: "this.tenant != ''? this.tenant: '-'"
+  value: "this.metadata.tenant != ''? this.metadata.tenant: '-'"

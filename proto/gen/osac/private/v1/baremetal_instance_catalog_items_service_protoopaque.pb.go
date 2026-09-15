@@ -560,7 +560,7 @@ type BareMetalInstanceCatalogItemsCreateResponse_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
 	Object *BareMetalInstanceCatalogItem
-	// Deprecation or validation warnings (e.g. deprecated disk_image in field_definitions).
+	// Deprecation or validation warnings for typed catalog policies.
 	Warnings []string
 }
 
@@ -753,7 +753,7 @@ type BareMetalInstanceCatalogItemsUpdateResponse_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
 	Object *BareMetalInstanceCatalogItem
-	// Deprecation or validation warnings (e.g. deprecated disk_image in field_definitions).
+	// Deprecation or validation warnings for typed catalog policies.
 	Warnings []string
 }
 

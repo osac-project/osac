@@ -562,7 +562,7 @@ type ComputeInstanceCatalogItemsCreateResponse_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
 	Object *ComputeInstanceCatalogItem
-	// Deprecation or validation warnings (e.g. deprecated instance type in field_definitions).
+	// Deprecation or validation warnings for typed catalog policies.
 	Warnings []string
 }
 
@@ -755,7 +755,7 @@ type ComputeInstanceCatalogItemsUpdateResponse_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
 	Object *ComputeInstanceCatalogItem
-	// Deprecation or validation warnings (e.g. deprecated instance type in field_definitions).
+	// Deprecation or validation warnings for typed catalog policies.
 	Warnings []string
 }
 

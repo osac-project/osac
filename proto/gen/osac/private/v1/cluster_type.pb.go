@@ -420,15 +420,15 @@ type ClusterSpec struct {
 	// The version is resolved with the following precedence:
 	//
 	//  1. Explicit `spec.version` provided by the user.
-	//  2. Template `spec_defaults.version` (template path) or catalog item field definition default (catalog-item path).
+	//  2. Template `spec_defaults.version` (template path) or catalog item policy default (catalog-item path).
 	//  3. System default (`is_default = true`).
 	//
 	// The referenced ClusterVersion must exist, be enabled, and not be in `OBSOLETE` state.
 	Version *ClusterVersionReference `protobuf:"bytes,6,opt,name=version,proto3" json:"version,omitempty"`
 	// Cluster networking configuration.
 	Network *ClusterNetwork `protobuf:"bytes,7,opt,name=network,proto3,oneof" json:"network,omitempty"`
-	// Reference to a cluster catalog item. Mutually exclusive with template during the migration period.
-	// When set, the server fetches the catalog item and applies its field definitions.
+	// Reference to a cluster catalog item. Mutually exclusive with template on Create; retained as immutable provenance afterward.
+	// When set, the server fetches the catalog item and applies its typed field policies.
 	CatalogItem *ClusterCatalogItemReference `protobuf:"bytes,8,opt,name=catalog_item,json=catalogItem,proto3" json:"catalog_item,omitempty"`
 	// Network attachment connecting this cluster to a tenant subnet.
 	//
@@ -792,15 +792,15 @@ type ClusterSpec_builder struct {
 	// The version is resolved with the following precedence:
 	//
 	//  1. Explicit `spec.version` provided by the user.
-	//  2. Template `spec_defaults.version` (template path) or catalog item field definition default (catalog-item path).
+	//  2. Template `spec_defaults.version` (template path) or catalog item policy default (catalog-item path).
 	//  3. System default (`is_default = true`).
 	//
 	// The referenced ClusterVersion must exist, be enabled, and not be in `OBSOLETE` state.
 	Version *ClusterVersionReference
 	// Cluster networking configuration.
 	Network *ClusterNetwork
-	// Reference to a cluster catalog item. Mutually exclusive with template during the migration period.
-	// When set, the server fetches the catalog item and applies its field definitions.
+	// Reference to a cluster catalog item. Mutually exclusive with template on Create; retained as immutable provenance afterward.
+	// When set, the server fetches the catalog item and applies its typed field policies.
 	CatalogItem *ClusterCatalogItemReference
 	// Network attachment connecting this cluster to a tenant subnet.
 	//

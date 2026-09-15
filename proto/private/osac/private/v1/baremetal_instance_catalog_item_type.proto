@@ -18,7 +18,6 @@ package osac.private.v1;
 import "buf/validate/validate.proto";
 import "cleanapi/cleanapi.proto";
 import "google/api/field_behavior.proto";
-import "osac/private/v1/field_definition_type.proto";
 import "osac/private/v1/field_policy_type.proto";
 import "osac/private/v1/metadata_type.proto";
 import "osac/private/v1/baremetal_instance_template_type.proto";
@@ -48,15 +47,11 @@ message BareMetalInstanceCatalogItem {
     (buf.validate.field).required = true
   ];
 
-  // Whether this catalog item is published and visible to tenants.
+  // Whether this catalog item is available for provisioning. Drafts retain ordinary tenant/project visibility.
   bool published = 6;
 
-  // Tenant scope for this catalog item. An empty string means the item is global and visible to all tenants.
-  string tenant = 7 [(cleanapi.field).private = true];
-
-  // Deprecated: definitions of the fields that users can or cannot set when creating a resource from this catalog item.
-  // Use `fields` and `template_parameters` instead.
-  repeated FieldDefinition field_definitions = 8 [deprecated = true];
+  reserved 7, 8;
+  reserved "tenant", "field_definitions";
 
   // Policies that govern template parameters during resource creation.
   map<string, TemplateParameterPolicy> template_parameters = 9;

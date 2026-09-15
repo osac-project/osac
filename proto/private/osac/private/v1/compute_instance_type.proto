@@ -141,8 +141,8 @@ message ComputeInstanceSpec {
   // Network attachments: one entry per NIC.
   repeated ComputeNetworkAttachment network_attachments = 14;
 
-  // Reference to a compute instance catalog item. Mutually exclusive with template during the migration period.
-  // When set, the server fetches the catalog item and applies its field definitions.
+  // Reference to a compute instance catalog item. Mutually exclusive with template on Create; retained as immutable provenance afterward.
+  // When set, the server fetches the catalog item and applies its typed field policies.
   ComputeInstanceCatalogItemReference catalog_item = 15;
 
   // Reserved field numbers for removed fields (do not reuse).

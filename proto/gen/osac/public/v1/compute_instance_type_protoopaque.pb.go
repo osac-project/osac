@@ -776,8 +776,8 @@ type ComputeInstanceSpec_builder struct {
 	UserData *string
 	// Network attachments: one entry per NIC.
 	NetworkAttachments []*ComputeNetworkAttachment
-	// Reference to a compute instance catalog item. Mutually exclusive with template during the migration period.
-	// When set, the server fetches the catalog item and applies its field definitions.
+	// Reference to a compute instance catalog item. Mutually exclusive with template on Create; retained as immutable provenance afterward.
+	// When set, the server fetches the catalog item and applies its typed field policies.
 	CatalogItem *ComputeInstanceCatalogItemReference
 	// Reference to an instance type. Specifies the compute configuration (cores, memory)
 	// for this instance. The API validates that the instance type exists and is not OBSOLETE;

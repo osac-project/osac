@@ -52,7 +52,7 @@ message BareMetalInstanceCatalogItemsCreateRequest {
 message BareMetalInstanceCatalogItemsCreateResponse {
   BareMetalInstanceCatalogItem object = 1;
 
-  // Deprecation or validation warnings (e.g. deprecated disk_image in field_definitions).
+  // Deprecation or validation warnings for typed catalog policies.
   repeated string warnings = 2;
 }
 
@@ -69,7 +69,7 @@ message BareMetalInstanceCatalogItemsUpdateRequest {
 message BareMetalInstanceCatalogItemsUpdateResponse {
   BareMetalInstanceCatalogItem object = 1;
 
-  // Deprecation or validation warnings (e.g. deprecated disk_image in field_definitions).
+  // Deprecation or validation warnings for typed catalog policies.
   repeated string warnings = 2;
 }
 

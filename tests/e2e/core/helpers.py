@@ -311,7 +311,13 @@ def wait_for_cluster_progressing(*, k8s: K8sClient, name: str) -> None:
     )
 
 
-def wait_for_cluster_order_event_reasons(*, k8s: K8sClient, name: str, reasons: set[str]) -> dict[str, dict[str, Any]]:
+def wait_for_cluster_order_event_reasons(
+    *,
+    k8s: K8sClient,
+    name: str,
+    reasons: set[str],
+    stop_reasons: set[str] | None = None,
+) -> dict[str, dict[str, Any]]:
     observed_events: dict[str, dict[str, Any]] = {}
 
     def _observed_events() -> dict[str, dict[str, Any]]:
@@ -320,9 +326,10 @@ def wait_for_cluster_order_event_reasons(*, k8s: K8sClient, name: str, reasons: 
         )
         return observed_events
 
+    stop_reasons = stop_reasons or set()
     return poll_until(
         fn=_observed_events,
-        until=lambda observed: reasons.issubset(observed),
+        until=lambda observed: reasons.issubset(observed) or bool(stop_reasons & observed.keys()),
         retries=480,
         delay=15,
         description=f"{name} ClusterOrder provisioning events",
@@ -332,6 +339,8 @@ def wait_for_cluster_order_event_reasons(*, k8s: K8sClient, name: str, reasons: 
 def assert_cluster_order_events(
     *, events: dict[str, dict[str, Any]], expected: dict[str, tuple[str, str, str]]
 ) -> None:
+    missing = set(expected) - set(events)
+    assert not missing, f"Missing ClusterOrder lifecycle events: {sorted(missing)}; observed: {sorted(events)}"
     for reason, (event_type, action, message) in expected.items():
         event = events[reason]
         assert event.get("type") == event_type, f"Expected {event_type} event for {reason}: {event}"
@@ -351,7 +360,12 @@ def assert_cluster_order_lifecycle_events(*, k8s: K8sClient, name: str) -> None:
         expected_events["WorkersJoining"] = ("Normal", "Provisioning", "Workers Joining")
         expected_reasons.add("WorkersJoining")
 
-    events = wait_for_cluster_order_event_reasons(k8s=k8s, name=name, reasons=expected_reasons)
+    events = wait_for_cluster_order_event_reasons(
+        k8s=k8s,
+        name=name,
+        reasons=expected_reasons,
+        stop_reasons={"Ready"},
+    )
     assert_cluster_order_events(events=events, expected=expected_events)
 
 

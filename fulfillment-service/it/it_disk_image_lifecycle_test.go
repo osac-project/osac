@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
@@ -29,6 +30,10 @@ import (
 )
 
 var _ = Describe("DiskImage lifecycle", func() {
+	// testCredential is a dummy credential used only for the fake StorageBackend
+	// created within this suite; it never authenticates against a real service.
+	const testCredential = "test-credential" //nolint:goconst // test-only dummy credential for fake provider
+
 	var (
 		ctx context.Context
 
@@ -48,7 +53,9 @@ var _ = Describe("DiskImage lifecycle", func() {
 	)
 
 	BeforeEach(func() {
-		ctx = context.Background()
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.Background(), 3*time.Minute)
+		DeferCleanup(cancel)
 
 		diskImagesClient = privatev1.NewDiskImagesClient(tool.InternalView().AdminConn())
 		computeInstancesClient = publicv1.NewComputeInstancesClient(tool.ExternalView().UserConn())
@@ -69,7 +76,7 @@ var _ = Describe("DiskImage lifecycle", func() {
 					Endpoint:    "https://test-backend.example.com",
 					Credentials: privatev1.StorageBackendCredentials_builder{
 						Username: "test-user",
-						Password: "test-credential", //nolint:goconst // test-only dummy credential for fake provider
+						Password: testCredential,
 					}.Build(),
 				}.Build(),
 			}.Build(),
@@ -128,40 +135,55 @@ var _ = Describe("DiskImage lifecycle", func() {
 	})
 
 	AfterEach(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cleanupCancel()
+
 		if computeInstanceId != "" {
-			_, _ = computeInstancesClient.Delete(ctx, publicv1.ComputeInstancesDeleteRequest_builder{
+			if _, err := computeInstancesClient.Delete(cleanupCtx, publicv1.ComputeInstancesDeleteRequest_builder{
 				Id: computeInstanceId,
-			}.Build())
+			}.Build()); err != nil {
+				GinkgoT().Logf("cleanup: failed to delete ComputeInstance %s: %v", computeInstanceId, err)
+			}
 			computeInstanceId = ""
 		}
 		if diskImageId != "" {
-			_, _ = diskImagesClient.Delete(ctx, privatev1.DiskImagesDeleteRequest_builder{
+			if _, err := diskImagesClient.Delete(cleanupCtx, privatev1.DiskImagesDeleteRequest_builder{
 				Id: diskImageId,
-			}.Build())
+			}.Build()); err != nil {
+				GinkgoT().Logf("cleanup: failed to delete DiskImage %s: %v", diskImageId, err)
+			}
 			diskImageId = ""
 		}
 		if computeInstanceTemplateId != "" {
-			_, _ = computeInstanceTemplatesClient.Delete(ctx, privatev1.ComputeInstanceTemplatesDeleteRequest_builder{
+			if _, err := computeInstanceTemplatesClient.Delete(cleanupCtx, privatev1.ComputeInstanceTemplatesDeleteRequest_builder{
 				Id: computeInstanceTemplateId,
-			}.Build())
+			}.Build()); err != nil {
+				GinkgoT().Logf("cleanup: failed to delete ComputeInstanceTemplate %s: %v", computeInstanceTemplateId, err)
+			}
 			computeInstanceTemplateId = ""
 		}
 		if instanceTypeId != "" {
-			_, _ = instanceTypesClient.Delete(ctx, privatev1.InstanceTypesDeleteRequest_builder{
+			if _, err := instanceTypesClient.Delete(cleanupCtx, privatev1.InstanceTypesDeleteRequest_builder{
 				Id: instanceTypeId,
-			}.Build())
+			}.Build()); err != nil {
+				GinkgoT().Logf("cleanup: failed to delete InstanceType %s: %v", instanceTypeId, err)
+			}
 			instanceTypeId = ""
 		}
 		if storageTierId != "" {
-			_, _ = storageTiersClient.Delete(ctx, privatev1.StorageTiersDeleteRequest_builder{
+			if _, err := storageTiersClient.Delete(cleanupCtx, privatev1.StorageTiersDeleteRequest_builder{
 				Id: storageTierId,
-			}.Build())
+			}.Build()); err != nil {
+				GinkgoT().Logf("cleanup: failed to delete StorageTier %s: %v", storageTierId, err)
+			}
 			storageTierId = ""
 		}
 		if storageBackendId != "" {
-			_, _ = storageBackendsClient.Delete(ctx, privatev1.StorageBackendsDeleteRequest_builder{
+			if _, err := storageBackendsClient.Delete(cleanupCtx, privatev1.StorageBackendsDeleteRequest_builder{
 				Id: storageBackendId,
-			}.Build())
+			}.Build()); err != nil {
+				GinkgoT().Logf("cleanup: failed to delete StorageBackend %s: %v", storageBackendId, err)
+			}
 			storageBackendId = ""
 		}
 	})

@@ -180,6 +180,16 @@ var _ = Describe("Listener", func() {
 			Expect(err).To(Or(Not(HaveOccurred()), Equal(io.EOF)))
 		}
 
+		// serveExpectHandshakeError is like serve but expects the TLS handshake to fail on Read, for example when
+		// the client negotiates a version below MinTLSVersion.
+		serveExpectHandshakeError := func(listener net.Listener) {
+			conn, err := listener.Accept()
+			Expect(err).ToNot(HaveOccurred())
+			defer conn.Close()
+			_, err = conn.Read([]byte{})
+			Expect(err).To(HaveOccurred())
+		}
+
 		// check opens a connection to the given listener and verifies that it uses the given certificate.
 		check := func(listener net.Listener, crt []byte) {
 			cas := x509.NewCertPool()
@@ -229,6 +239,44 @@ var _ = Describe("Listener", func() {
 
 			// Check the certificate:
 			check(listener, crtRaw)
+		})
+
+		It("Rejects TLS 1.2 clients", func() {
+			listener, err := NewListener().
+				SetLogger(logger).
+				SetAddress("127.0.0.1:0").
+				SetTLSCrt(crtFile).
+				SetTLSKey(keyFile).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			defer func() {
+				err := listener.Close()
+				Expect(err).ToNot(HaveOccurred())
+			}()
+
+			go func() {
+				defer GinkgoRecover()
+				serveExpectHandshakeError(listener)
+			}()
+
+			cas := x509.NewCertPool()
+			ok := cas.AppendCertsFromPEM(crtPEM)
+			Expect(ok).To(BeTrue())
+			dialer := tls.Dialer{
+				Config: &tls.Config{
+					RootCAs:    cas,
+					MaxVersion: tls.VersionTLS12,
+				},
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+			defer cancel()
+			addr := listener.Addr()
+			conn, err := dialer.DialContext(ctx, addr.Network(), addr.String())
+			if conn != nil {
+				closeErr := conn.Close()
+				Expect(closeErr).ToNot(HaveOccurred())
+			}
+			Expect(err).To(HaveOccurred())
 		})
 
 		It("Supports TLS flags", func() {

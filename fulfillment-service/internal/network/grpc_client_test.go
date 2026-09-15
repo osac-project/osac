@@ -32,6 +32,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/testing"
+	"github.com/osac-project/osac/fulfillment-service/internal/tlsconfig"
 )
 
 var _ = Describe("gRPC client", func() {
@@ -113,11 +114,7 @@ var _ = Describe("gRPC client", func() {
 		// Create a test gRPC server with TLS and a random port
 		tcpListener, err := net.Listen("tcp", "127.0.0.1:0")
 		Expect(err).ToNot(HaveOccurred())
-		tlsListener := tls.NewListener(tcpListener, &tls.Config{
-			Certificates: []tls.Certificate{
-				testing.LocalhostCertificate(),
-			},
-		})
+		tlsListener := tls.NewListener(tcpListener, tlsconfig.NewServerTLSConfig(testing.LocalhostCertificate(), nil))
 
 		// Create and start the gRPC server with health service:
 		server := grpc.NewServer()
@@ -342,11 +339,7 @@ var _ = Describe("gRPC client", func() {
 		// Create a TLS listener:
 		tcpListener, err := net.Listen("tcp", "127.0.0.1:0")
 		Expect(err).ToNot(HaveOccurred())
-		tlsListener := tls.NewListener(tcpListener, &tls.Config{
-			Certificates: []tls.Certificate{
-				testing.LocalhostCertificate(),
-			},
-		})
+		tlsListener := tls.NewListener(tcpListener, tlsconfig.NewServerTLSConfig(testing.LocalhostCertificate(), nil))
 
 		// Track call count and return the unauthenticated status code only on the first call:
 		var calls atomic.Int32
@@ -407,11 +400,7 @@ var _ = Describe("gRPC client", func() {
 		// Create a TLS listener:
 		tcpListener, err := net.Listen("tcp", "127.0.0.1:0")
 		Expect(err).ToNot(HaveOccurred())
-		tlsListener := tls.NewListener(tcpListener, &tls.Config{
-			Certificates: []tls.Certificate{
-				testing.LocalhostCertificate(),
-			},
-		})
+		tlsListener := tls.NewListener(tcpListener, tlsconfig.NewServerTLSConfig(testing.LocalhostCertificate(), nil))
 
 		// Always return the unauthenticated status code:
 		var calls atomic.Int32
@@ -469,11 +458,7 @@ var _ = Describe("gRPC client", func() {
 		// Create a TLS listener:
 		tcpListener, err := net.Listen("tcp", "127.0.0.1:0")
 		Expect(err).ToNot(HaveOccurred())
-		tlsListener := tls.NewListener(tcpListener, &tls.Config{
-			Certificates: []tls.Certificate{
-				testing.LocalhostCertificate(),
-			},
-		})
+		tlsListener := tls.NewListener(tcpListener, tlsconfig.NewServerTLSConfig(testing.LocalhostCertificate(), nil))
 
 		// Always return the permission denied status code:
 		var calls atomic.Int32

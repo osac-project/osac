@@ -53,6 +53,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/jq"
 	"github.com/osac-project/osac/fulfillment-service/internal/network"
 	"github.com/osac-project/osac/fulfillment-service/internal/oauth"
+	"github.com/osac-project/osac/fulfillment-service/internal/tlsconfig"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 
 	bmfov1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
@@ -1164,12 +1165,11 @@ func (t *Tool) KeycloakAdminRequest(ctx context.Context, method, path string, in
 		err = fmt.Errorf("failed to create Keycloak admin token source: %w", err)
 		return
 	}
+	tlsConfig := tlsconfig.NewClientTLSConfig()
+	tlsConfig.RootCAs = t.caPool
 	httpClient := &http.Client{
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				RootCAs:    t.caPool,
-				MinVersion: tls.VersionTLS12,
-			},
+			TLSClientConfig: tlsConfig,
 		},
 	}
 	var body io.Reader
@@ -1309,10 +1309,10 @@ func (t *Tool) makeGrpcConn(addr string, tokenSource auth.TokenSource) (result *
 // makeHttpClient creates an HTTP client that automatically adds the scheme, host and token to the request. Users of the
 // client only need to provide the URL path, and other headers as needed.
 func (t *Tool) makeHttpClient(addr string, tokenSource auth.TokenSource) *http.Client {
+	tlsConfig := tlsconfig.NewClientTLSConfig()
+	tlsConfig.RootCAs = t.caPool
 	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{
-			RootCAs: t.caPool,
-		},
+		TLSClientConfig: tlsConfig,
 	}
 	tripper := ghttp.RoundTripperFunc(
 		func(request *http.Request) (response *http.Response, err error) {

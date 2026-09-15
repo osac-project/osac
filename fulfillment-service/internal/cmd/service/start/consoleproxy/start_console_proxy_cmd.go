@@ -15,7 +15,6 @@ package consoleproxy
 
 import (
 	"context"
-	"crypto/tls"
 	"crypto/x509"
 	"fmt"
 	"log/slog"
@@ -49,6 +48,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/recovery"
 	"github.com/osac-project/osac/fulfillment-service/internal/servers"
 	shtdwn "github.com/osac-project/osac/fulfillment-service/internal/shutdown"
+	"github.com/osac-project/osac/fulfillment-service/internal/tlsconfig"
 )
 
 // Cmd creates and returns the `start console-proxy` command.
@@ -441,18 +441,15 @@ func (c *runnerContext) createJWKSCache(ctx context.Context, jwksURL string, caP
 		jwk.WithWaitReady(false),
 		jwk.WithHttprcResourceOption(httprc.WithMinInterval(time.Minute)),
 	}
-	if caPool != nil {
-		registerOpts = append(registerOpts, jwk.WithHTTPClient(
-			jwk.WrapHTTPClientDefaults(&http.Client{
-				Transport: &http.Transport{
-					TLSClientConfig: &tls.Config{
-						RootCAs:    caPool,
-						MinVersion: tls.VersionTLS13,
-					},
-				},
-			}),
-		))
-	}
+	tlsConfig := tlsconfig.NewClientTLSConfig()
+	tlsConfig.RootCAs = caPool
+	registerOpts = append(registerOpts, jwk.WithHTTPClient(
+		jwk.WrapHTTPClientDefaults(&http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: tlsConfig,
+			},
+		}),
+	))
 	if err := cache.Register(ctx, jwksURL, registerOpts...); err != nil {
 		return nil, fmt.Errorf("failed to register JWKS URL: %w", err)
 	}

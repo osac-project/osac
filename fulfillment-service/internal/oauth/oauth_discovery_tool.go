@@ -15,7 +15,6 @@ package oauth
 
 import (
 	"context"
-	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"errors"
@@ -27,6 +26,7 @@ import (
 	"time"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/network"
+	"github.com/osac-project/osac/fulfillment-service/internal/tlsconfig"
 )
 
 // ServerMetadata represents the authorization server metadata structure as defined in RFC 8414 for OAuth 2.0 or in the
@@ -122,9 +122,8 @@ func (b *DiscoveryToolBuilder) Build() (result *DiscoveryTool, err error) {
 	httpClient := &http.Client{
 		Timeout: 30 * time.Second,
 	}
-	tlsConfig := &tls.Config{
-		RootCAs: caPool,
-	}
+	tlsConfig := tlsconfig.NewClientTLSConfig()
+	tlsConfig.RootCAs = caPool
 	if b.insecure {
 		tlsConfig.InsecureSkipVerify = true
 	}

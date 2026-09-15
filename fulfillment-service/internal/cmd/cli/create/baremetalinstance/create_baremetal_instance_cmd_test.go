@@ -158,6 +158,36 @@ var _ = Describe("Create baremetalinstance flag registration", func() {
 		Expect(flag).NotTo(BeNil())
 		Expect(flag.Usage).To(ContainSubstring("network attachment"))
 	})
+
+	It("should register --user-data-secret flag", func() {
+		cmd := Cmd()
+		flag := cmd.Flags().Lookup("user-data-secret")
+		Expect(flag).NotTo(BeNil())
+		Expect(flag.Usage).To(ContainSubstring("Secret resource"))
+	})
+
+	It("should reject user data and a user data secret together", func() {
+		cmd := Cmd()
+		cmd.SetOut(GinkgoWriter)
+		cmd.SetErr(GinkgoWriter)
+		cmd.SetArgs([]string{"--catalog-item", "cat-001", "--user-data", "data", "--user-data-secret", "cloud-init"})
+		err := cmd.Execute()
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("user-data"))
+		Expect(err.Error()).To(ContainSubstring("user-data-secret"))
+	})
+})
+
+var _ = Describe("applyUserDataFlags", func() {
+	It("should set a secret reference", func() {
+		c := &runnerContext{}
+		c.args.userDataSecret = "cloud-init"
+		spec := publicv1.BareMetalInstanceSpec_builder{}
+
+		c.applyUserDataFlags(&spec)
+
+		Expect(spec.Build().GetUserDataSecret().GetName()).To(Equal("cloud-init"))
+	})
 })
 
 var _ = Describe("buildSpec", func() {

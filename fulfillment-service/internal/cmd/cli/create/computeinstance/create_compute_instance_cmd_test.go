@@ -102,6 +102,15 @@ var _ = Describe("buildSpec", func() {
 
 		Expect(spec.HasDiskImage()).To(BeFalse())
 	})
+
+	It("should set user_data_secret when user-data-secret is provided", func() {
+		c := &runnerContext{}
+		c.args.userDataSecret = "cloud-init"
+		spec, err := c.buildSpec("tmpl", nil)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(spec.GetUserDataSecret().GetName()).To(Equal("cloud-init"))
+	})
 })
 
 var _ = Describe("buildSpecFromCatalogItem", func() {
@@ -160,6 +169,15 @@ var _ = Describe("buildSpecFromCatalogItem", func() {
 
 		Expect(spec.HasDiskImage()).To(BeFalse())
 	})
+
+	It("should set user_data_secret when user-data-secret is provided", func() {
+		c := &runnerContext{}
+		c.args.userDataSecret = "cloud-init"
+		spec, err := c.buildSpecFromCatalogItem("cat-006")
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(spec.GetUserDataSecret().GetName()).To(Equal("cloud-init"))
+	})
 })
 
 var _ = Describe("Create computeinstance flag registration", func() {
@@ -208,6 +226,17 @@ var _ = Describe("Create computeinstance flag registration", func() {
 })
 
 var _ = Describe("Create computeinstance flag validation", func() {
+	It("should reject user data and a user data secret together", func() {
+		cmd := Cmd()
+		cmd.SetOut(GinkgoWriter)
+		cmd.SetErr(GinkgoWriter)
+		cmd.SetArgs([]string{"--template", "tpl-001", "--user-data", "data", "--user-data-secret", "cloud-init"})
+		err := cmd.Execute()
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("user-data"))
+		Expect(err.Error()).To(ContainSubstring("user-data-secret"))
+	})
+
 	It("should return error when both --catalog-item and --template are set", func() {
 		cmd := Cmd()
 		cmd.SetOut(GinkgoWriter)

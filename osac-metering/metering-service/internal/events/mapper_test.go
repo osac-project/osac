@@ -20,7 +20,11 @@ func mapEvent(event *privatev1.Event, stateCtx *events.StateContext) (*cloudeven
 	if err != nil {
 		return nil, err
 	}
-	return events.MapWatchEvent(event, mapper, stateCtx, mapper.BillingDimensionsMap())
+	billingDims, err := mapper.BillingDimensionsMap()
+	if err != nil {
+		return nil, err
+	}
+	return events.MapWatchEvent(event, mapper, stateCtx, billingDims)
 }
 
 var _ = Describe("MapWatchEvent", func() {
@@ -957,4 +961,179 @@ var _ = Describe("VMaaS transition table completeness", func() {
 			}
 		}
 	})
+})
+
+func makeBareMetalInstance() *privatev1.BareMetalInstance {
+	return &privatev1.BareMetalInstance{
+		Id: "bmi-abc-123",
+		Metadata: &privatev1.Metadata{
+			Tenant:            "tenant-1",
+			Project:           "project-alpha",
+			Version:           7,
+			CreationTimestamp: timestamppb.Now(),
+		},
+		Spec: &privatev1.BareMetalInstanceSpec{
+			CatalogItem: &privatev1.BareMetalInstanceCatalogItemReference{
+				Name: "catalog-item-1",
+			},
+			InstanceType: &privatev1.BareMetalInstanceTypeLocalReference{
+				Id:   "bmi-type-gpu-large",
+				Name: "GPU large",
+			},
+		},
+		Status: &privatev1.BareMetalInstanceStatus{
+			State:               privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING,
+			StateTransitionTime: timestamppb.Now(),
+		},
+	}
+}
+
+var _ = Describe("BMaaS mapping", func() {
+	It("dispatches BareMetalInstance events and extracts stable dimensions", func() {
+		bmi := makeBareMetalInstance()
+		event := &privatev1.Event{
+			Id:      "evt-bmi-created",
+			Type:    privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+			Payload: &privatev1.Event_BareMetalInstance{BareMetalInstance: bmi},
+		}
+
+		mapper, err := events.MapperForEvent(event)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(mapper.ResourceType()).To(Equal(events.ResourceTypeBareMetalInstance))
+		Expect(mapper.ResourceID()).To(Equal("bmi-abc-123"))
+		Expect(mapper.TenantID()).To(Equal("tenant-1"))
+		Expect(*mapper.ProjectID()).To(Equal("project-alpha"))
+		Expect(*mapper.CatalogItemID()).To(Equal("catalog-item-1"))
+		Expect(mapper.CurrentState()).To(Equal("RUNNING"))
+		Expect(mapper.FulfillmentVersion()).To(Equal(int32(7)))
+
+		dims, err := mapper.BillingDimensionsMap()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(dims).To(Equal(map[string]any{
+			"bm_instance_type": "bmi-type-gpu-large",
+			"catalog_item":     "catalog-item-1",
+		}))
+	})
+
+	It("maps optional fields and lifecycle event types through the mapper contract", func() {
+		bmi := makeBareMetalInstance()
+		bmi.Spec.Template = &privatev1.BareMetalInstanceTemplateReference{Name: "template-1"}
+		bmi.Metadata.DeletionTimestamp = timestamppb.Now()
+		mapper, err := events.MapperForEvent(&privatev1.Event{
+			Id:      "evt-bmi-lifecycle",
+			Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+			Payload: &privatev1.Event_BareMetalInstance{BareMetalInstance: bmi},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(*mapper.TemplateID()).To(Equal("template-1"))
+		Expect(mapper.IsBillable()).To(BeTrue())
+
+		for _, eventType := range []privatev1.EventType{
+			privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+			privatev1.EventType_EVENT_TYPE_OBJECT_DELETED,
+			privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+		} {
+			_, err := mapper.CloudEventType(eventType, "")
+			Expect(err).NotTo(HaveOccurred())
+		}
+		_, err = mapper.CloudEventType(privatev1.EventType(9999), "")
+		Expect(errors.Is(err, events.ErrUnsupportedEvent)).To(BeTrue())
+
+		_, err = mapper.TransitionTime(&privatev1.Event{
+			Type:      privatev1.EventType_EVENT_TYPE_OBJECT_DELETED,
+			Timestamp: timestamppb.Now(),
+		})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = mapper.TransitionTime(&privatev1.Event{
+			Type: privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+		})
+		Expect(err).NotTo(HaveOccurred())
+	})
+
+	DescribeTable("uses allocation billability for BMaaS states",
+		func(state privatev1.BareMetalInstanceState, billable bool) {
+			bmi := makeBareMetalInstance()
+			bmi.Status.State = state
+			mapper, err := events.MapperForEvent(&privatev1.Event{
+				Id:      "evt-bmi-billability",
+				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+				Payload: &privatev1.Event_BareMetalInstance{BareMetalInstance: bmi},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mapper.IsBillable()).To(Equal(billable))
+		},
+		Entry("RUNNING", privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING, true),
+		Entry("STOPPED", privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_STOPPED, true),
+		Entry("STARTING", privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_STARTING, true),
+		Entry("STOPPING", privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_STOPPING, true),
+		Entry("DELETING", privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_DELETING, true),
+		Entry("PROVISIONING", privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_PROVISIONING, false),
+		Entry("FAILED", privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_FAILED, false),
+		Entry("UNSPECIFIED", privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_UNSPECIFIED, false),
+	)
+
+	It("returns zero values for an instance with optional fields absent", func() {
+		mapper, err := events.MapperForEvent(&privatev1.Event{
+			Id:      "evt-bmi-empty",
+			Type:    privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+			Payload: &privatev1.Event_BareMetalInstance{BareMetalInstance: &privatev1.BareMetalInstance{Id: "bmi-empty"}},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(mapper.FulfillmentVersion()).To(Equal(int32(0)))
+		Expect(mapper.TenantID()).To(BeEmpty())
+		Expect(mapper.ProjectID()).To(BeNil())
+		Expect(mapper.CatalogItemID()).To(BeNil())
+		Expect(mapper.TemplateID()).To(BeNil())
+		Expect(mapper.CurrentState()).To(Equal("UNSPECIFIED"))
+		Expect(mapper.IsBillable()).To(BeFalse())
+	})
+
+	It("builds a standard CloudEvent for a valid BareMetalInstance create", func() {
+		event := &privatev1.Event{
+			Id:      "evt-bmi-created",
+			Type:    privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+			Payload: &privatev1.Event_BareMetalInstance{BareMetalInstance: makeBareMetalInstance()},
+		}
+
+		ce, err := mapEvent(event, &events.StateContext{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ce.Type()).To(Equal(events.EventCreated))
+		Expect(ce.Extensions()["osacresourcetype"]).To(Equal(events.ResourceTypeBareMetalInstance))
+
+		var data map[string]any
+		Expect(json.Unmarshal(ce.Data(), &data)).To(Succeed())
+		Expect(data["resource_id"]).To(Equal("bmi-abc-123"))
+		Expect(data["tenant_id"]).To(Equal("tenant-1"))
+		Expect(data["project_id"]).To(Equal("project-alpha"))
+		Expect(data["current_state"]).To(Equal("RUNNING"))
+		Expect(data["catalog_item_id"]).To(Equal("catalog-item-1"))
+		Expect(data["billing_dimensions"]).To(Equal(map[string]any{
+			"bm_instance_type": "bmi-type-gpu-large",
+			"catalog_item":     "catalog-item-1",
+		}))
+	})
+
+	DescribeTable("rejects an unresolvable instance type dimension",
+		func(bmi *privatev1.BareMetalInstance) {
+			dims, err := events.BareMetalInstanceBillingDimensions(bmi)
+			Expect(dims).To(BeNil())
+			Expect(err).To(HaveOccurred())
+			Expect(errors.Is(err, events.ErrDataQuality)).To(BeTrue())
+		},
+		Entry("missing spec", func() *privatev1.BareMetalInstance {
+			bmi := makeBareMetalInstance()
+			bmi.Spec = nil
+			return bmi
+		}()),
+		Entry("missing instance type reference", func() *privatev1.BareMetalInstance {
+			bmi := makeBareMetalInstance()
+			bmi.Spec.InstanceType = nil
+			return bmi
+		}()),
+		Entry("empty instance type ID", func() *privatev1.BareMetalInstance {
+			bmi := makeBareMetalInstance()
+			bmi.Spec.InstanceType.Id = ""
+			return bmi
+		}()),
+	)
 })

@@ -45,13 +45,16 @@ const (
 	defaultHandlerRetries = 3
 )
 
-func BuildFilter(vmaas, caas bool) string {
+func BuildFilter(vmaas, caas, bmaas bool) string {
 	var parts []string
 	if vmaas {
 		parts = append(parts, "has(event.compute_instance)")
 	}
 	if caas {
 		parts = append(parts, "has(event.cluster)")
+	}
+	if bmaas {
+		parts = append(parts, "has(event.bare_metal_instance)")
 	}
 	return strings.Join(parts, " || ")
 }
@@ -85,7 +88,7 @@ func NewConsumer(
 		InitialDelay:   defaultInitialDelay,
 		MaxDelay:       defaultMaxDelay,
 		HandlerRetries: defaultHandlerRetries,
-		Filter:         BuildFilter(true, true),
+		Filter:         BuildFilter(true, true, true),
 	}
 }
 
@@ -150,7 +153,16 @@ func (c *Consumer) handleEvent(ctx context.Context, event *privatev1.Event) erro
 	currentState := mapper.CurrentState()
 	isBillable := mapper.IsBillable()
 	version := mapper.FulfillmentVersion()
-	dims := mapper.BillingDimensionsMap()
+	dims, err := mapper.BillingDimensionsMap()
+	if err != nil {
+		if errors.Is(err, events.ErrDataQuality) {
+			eventsSkipped.WithLabelValues("data_quality").Inc()
+			c.logger.Info("skipping event with invalid billing dimensions",
+				"event_id", event.GetId(), "resource_id", resourceID, "error", err)
+			return nil
+		}
+		return fmt.Errorf("extracting billing dimensions for %s: %w", resourceID, err)
+	}
 
 	existing, err := c.store.Get(ctx, resourceID)
 	if err != nil {
@@ -165,9 +177,15 @@ func (c *Consumer) handleEvent(ctx context.Context, event *privatev1.Event) erro
 				"event_id", event.GetId(), "resource_id", resourceID)
 			return nil
 		}
-		if errors.Is(err, events.ErrDataQuality) && existing != nil && existing.CurrentState == currentState {
+		if errors.Is(err, events.ErrDataQuality) && event.GetType() == privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED && existing != nil && existing.CurrentState == currentState {
 			c.logger.V(1).Info("skipping metadata-only update with no state change",
 				"event_id", event.GetId(), "resource_id", resourceID, "state", currentState)
+			return nil
+		}
+		if errors.Is(err, events.ErrDataQuality) && event.GetType() == privatev1.EventType_EVENT_TYPE_OBJECT_DELETED {
+			eventsSkipped.WithLabelValues("missing_event_timestamp").Inc()
+			c.logger.Info("skipping deleted event with missing timestamp",
+				"event_id", event.GetId(), "resource_id", resourceID)
 			return nil
 		}
 		return err
@@ -182,6 +200,10 @@ func (c *Consumer) handleEvent(ctx context.Context, event *privatev1.Event) erro
 
 	if c.shouldSkipUpdate(ctx, event, existing, currentState, dims, version, transitionTime, resourceID) {
 		return nil
+	}
+
+	if mapper.ResourceType() == events.ResourceTypeBareMetalInstance {
+		return c.handleBareMetalEvent(ctx, event, mapper, existing, version, transitionTime, dims)
 	}
 
 	stateCtx := c.buildStateContext(existing, isBillable, transitionTime, dims)
@@ -332,7 +354,11 @@ func (c *Consumer) publishLifecycleEvents(ctx context.Context, baseCE *cloudeven
 		return c.publishWithRetry(ctx, baseCE)
 	}
 
-	decomposed, err := events.BuildResourceEvents(mapper.ResourceType(), mapper.BillingDimensionsMap(), eventID, func(dims map[string]any, compEventID string) (cloudevents.Event, error) {
+	dims, err := mapper.BillingDimensionsMap()
+	if err != nil {
+		return err
+	}
+	decomposed, err := events.BuildResourceEvents(mapper.ResourceType(), dims, eventID, func(dims map[string]any, compEventID string) (cloudevents.Event, error) {
 		return c.buildComponentEvent(baseCE, compEventID, dims)
 	})
 	if err != nil {
@@ -344,6 +370,304 @@ func (c *Consumer) publishLifecycleEvents(ctx context.Context, baseCE *cloudeven
 		}
 	}
 	return nil
+}
+
+func (c *Consumer) handleBareMetalEvent(
+	ctx context.Context,
+	event *privatev1.Event,
+	mapper events.ResourceMapper,
+	existing *projection.ResourceState,
+	version int32,
+	transitionTime time.Time,
+	dims map[string]any,
+) error {
+	resourceID := mapper.ResourceID()
+	previousState := ""
+	if existing != nil {
+		previousState = existing.CurrentState
+	}
+
+	if event.GetType() == privatev1.EventType_EVENT_TYPE_OBJECT_DELETED {
+		return c.handleBareMetalDeletion(ctx, event, mapper, existing, dims, transitionTime)
+	}
+
+	allocationEffect, err := events.ResolveAllocationTransition(previousState, mapper.CurrentState())
+	if err != nil {
+		if errors.Is(err, events.ErrInvalidBMaaSTransition) {
+			eventsSkipped.WithLabelValues("invalid_bmaas_transition").Inc()
+			c.logger.Info("skipping invalid BMaaS state transition",
+				"event_id", event.GetId(), "resource_id", resourceID,
+				"previous_state", previousState, "current_state", mapper.CurrentState())
+			return nil
+		}
+		return err
+	}
+	consumptionEffect, err := events.ResolveConsumptionTransition(previousState, mapper.CurrentState())
+	if err != nil {
+		if errors.Is(err, events.ErrInvalidBMaaSTransition) {
+			eventsSkipped.WithLabelValues("invalid_bmaas_transition").Inc()
+			c.logger.Info("skipping invalid BMaaS state transition",
+				"event_id", event.GetId(), "resource_id", resourceID,
+				"previous_state", previousState, "current_state", mapper.CurrentState())
+			return nil
+		}
+		return err
+	}
+
+	projectionState := c.buildBareMetalProjectionState(
+		mapper,
+		existing,
+		transitionTime,
+		version,
+		dims,
+		allocationEffect,
+		consumptionEffect,
+	)
+
+	lifecycleEvents, err := c.buildBareMetalLifecycleEvents(
+		mapper,
+		existing,
+		event.GetId(),
+		transitionTime,
+		dims,
+		allocationEffect,
+		consumptionEffect,
+	)
+	if err != nil {
+		return err
+	}
+
+	if event.GetType() == privatev1.EventType_EVENT_TYPE_OBJECT_CREATED {
+		created, err := events.MapWatchEvent(event, mapper, &events.StateContext{}, dims)
+		if err != nil {
+			return err
+		}
+		return c.publishAndUpsert(ctx, func() error {
+			if err := c.publishWithRetry(ctx, created); err != nil {
+				return err
+			}
+			for i := range lifecycleEvents {
+				if err := c.publishWithRetry(ctx, &lifecycleEvents[i]); err != nil {
+					return err
+				}
+			}
+			return nil
+		}, projectionState, resourceID)
+	}
+
+	return c.publishAndUpsert(ctx, func() error {
+		for i := range lifecycleEvents {
+			if err := c.publishWithRetry(ctx, &lifecycleEvents[i]); err != nil {
+				return err
+			}
+		}
+		return nil
+	}, projectionState, resourceID)
+}
+
+func (c *Consumer) handleBareMetalDeletion(
+	ctx context.Context,
+	event *privatev1.Event,
+	mapper events.ResourceMapper,
+	existing *projection.ResourceState,
+	dims map[string]any,
+	transitionTime time.Time,
+) error {
+	previousState := ""
+	if existing != nil {
+		previousState = existing.CurrentState
+	}
+	closureEvents, err := c.buildBareMetalLifecycleEvents(
+		mapper,
+		existing,
+		event.GetId(),
+		transitionTime,
+		dims,
+		events.BMaaSEffectSuspend,
+		events.BMaaSEffectSuspend,
+	)
+	if err != nil {
+		return err
+	}
+
+	audit, err := events.MapWatchEvent(
+		event,
+		mapper,
+		&events.StateContext{PreviousState: previousState},
+		dims,
+	)
+	if err != nil {
+		return err
+	}
+	for i := range closureEvents {
+		if err := c.publishWithRetry(ctx, &closureEvents[i]); err != nil {
+			return err
+		}
+	}
+	if err := c.publishWithRetry(ctx, audit); err != nil {
+		return err
+	}
+	if existing != nil {
+		if err := c.store.Delete(ctx, mapper.ResourceID()); err != nil {
+			return fmt.Errorf("deleting projection for %s: %w", mapper.ResourceID(), err)
+		}
+	}
+	return nil
+}
+
+func (c *Consumer) buildBareMetalLifecycleEvents(
+	mapper events.ResourceMapper,
+	existing *projection.ResourceState,
+	eventID string,
+	transitionTime time.Time,
+	dims map[string]any,
+	allocationEffect string,
+	consumptionEffect string,
+) ([]cloudevents.Event, error) {
+	previousState := ""
+	intervals := events.BMaaSMeterIntervals{}
+	allocationEverStarted := false
+	consumptionEverStarted := false
+	if existing != nil {
+		previousState = existing.CurrentState
+		intervals.AllocationSince = existing.BillableSince
+		if since, ok := existing.ComponentBillableSince[events.BMaaSMeterConsumption]; ok {
+			intervals.ConsumptionSince = &since
+		}
+		allocationEverStarted = existing.ComponentEverStarted[events.BMaaSMeterAllocation]
+		consumptionEverStarted = existing.ComponentEverStarted[events.BMaaSMeterConsumption]
+	}
+
+	return events.DecomposeBMIEvents(
+		dims,
+		eventID,
+		transitionTime,
+		intervals,
+		func(request events.BMaaSEventBuildRequest) (cloudevents.Event, error) {
+			return buildBareMetalEvent(mapper, previousState, transitionTime, request)
+		},
+		mapBMaaSEffectToEvent(allocationEffect, allocationEverStarted),
+		mapBMaaSEffectToEvent(consumptionEffect, consumptionEverStarted),
+	)
+}
+
+func buildBareMetalEvent(
+	mapper events.ResourceMapper,
+	previousState string,
+	transitionTime time.Time,
+	request events.BMaaSEventBuildRequest,
+) (cloudevents.Event, error) {
+	return events.BuildLifecycleEvent(
+		request.EventID,
+		request.EventType,
+		mapper,
+		request.BillingDims,
+		previousState,
+		request.DurationSeconds,
+		transitionTime,
+	)
+}
+
+func mapBMaaSEffectToEvent(effect string, everStarted bool) string {
+	switch effect {
+	case events.BMaaSEffectStart:
+		return events.ResolveLifecycleStartEvent(everStarted)
+	case events.BMaaSEffectResume:
+		return events.ResolveLifecycleStartEvent(everStarted)
+	case events.BMaaSEffectSuspend:
+		return events.EventSuspended
+	default:
+		return ""
+	}
+}
+
+func (c *Consumer) buildBareMetalProjectionState(
+	mapper events.ResourceMapper,
+	existing *projection.ResourceState,
+	transitionTime time.Time,
+	version int32,
+	dims map[string]any,
+	allocationEffect string,
+	consumptionEffect string,
+) projection.ResourceState {
+	state := c.newProjectionState(mapper, existing, transitionTime, version, mapper.CurrentState(), dims)
+	state.ComponentBillableSince = map[string]time.Time{}
+	state.ComponentEverStarted = map[string]bool{}
+	if existing != nil {
+		state.BillableSince = cloneTimePointer(existing.BillableSince)
+		for key, since := range existing.ComponentBillableSince {
+			state.ComponentBillableSince[key] = since
+		}
+		for key, started := range existing.ComponentEverStarted {
+			state.ComponentEverStarted[key] = started
+		}
+		state.EverBillable = existing.EverBillable
+	}
+
+	switch allocationEffect {
+	case events.BMaaSEffectStart, events.BMaaSEffectResume:
+		if state.BillableSince == nil {
+			now := transitionTime.UTC()
+			state.BillableSince = &now
+		}
+	case events.BMaaSEffectSuspend:
+		state.BillableSince = nil
+	}
+	if allocationEffect == events.BMaaSEffectStart || allocationEffect == events.BMaaSEffectResume {
+		state.ComponentEverStarted[events.BMaaSMeterAllocation] = true
+	}
+
+	if events.IsConsumptionBillableState(state.CurrentState) {
+		if _, ok := state.ComponentBillableSince[events.BMaaSMeterConsumption]; !ok {
+			now := transitionTime.UTC()
+			state.ComponentBillableSince[events.BMaaSMeterConsumption] = now
+		}
+	} else {
+		delete(state.ComponentBillableSince, events.BMaaSMeterConsumption)
+	}
+	if consumptionEffect == events.BMaaSEffectStart || consumptionEffect == events.BMaaSEffectResume {
+		state.ComponentEverStarted[events.BMaaSMeterConsumption] = true
+	}
+
+	state.IsBillable = state.BillableSince != nil
+	state.EverBillable = state.EverBillable || state.IsBillable
+	return state
+}
+
+func (c *Consumer) newProjectionState(
+	mapper events.ResourceMapper,
+	existing *projection.ResourceState,
+	transitionTime time.Time,
+	version int32,
+	currentState string,
+	dims map[string]any,
+) projection.ResourceState {
+	state := projection.ResourceState{
+		ResourceID:         mapper.ResourceID(),
+		ResourceType:       mapper.ResourceType(),
+		TenantID:           mapper.TenantID(),
+		CurrentState:       currentState,
+		TransitionTime:     transitionTime.UTC(),
+		FulfillmentVersion: version,
+		BillingDimensions:  dims,
+	}
+	if project := mapper.ProjectID(); project != nil {
+		state.ProjectID = *project
+	}
+	if existing != nil {
+		state.PreviousState = existing.CurrentState
+		state.LastHeartbeatAt = existing.LastHeartbeatAt
+		state.EverBillable = existing.EverBillable
+	}
+	return state
+}
+
+func cloneTimePointer(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 func (c *Consumer) handleScalingEvent(ctx context.Context, event *privatev1.Event, mapper events.ResourceMapper, existing *projection.ResourceState, transitionTime time.Time, version int32, currentState string, isBillable bool, dims map[string]any) error {
@@ -429,23 +753,15 @@ func (c *Consumer) buildComponentEvent(baseCE *cloudevents.Event, eventID string
 }
 
 func (c *Consumer) buildScalingEvent(eventID string, mapper events.ResourceMapper, dims map[string]any, stateCtx *events.StateContext, transitionTime time.Time) (cloudevents.Event, error) {
-	ce := cloudevents.NewEvent()
-	ce.SetID(eventID)
-	ce.SetSource("osac-metering")
-	ce.SetType(events.EventUpdated)
-	ce.SetTime(transitionTime)
-
-	projectID := ""
-	if p := mapper.ProjectID(); p != nil {
-		projectID = *p
-	}
-	events.SetOSACExtensions(&ce, mapper.ResourceID(), mapper.ResourceType(), mapper.TenantID(), projectID)
-
-	data := events.BuildLifecycleData(mapper, dims, stateCtx.PreviousState, stateCtx.DurationSeconds, transitionTime)
-	if err := ce.SetData(cloudevents.ApplicationJSON, data); err != nil {
-		return ce, fmt.Errorf("setting scaling event data: %w", err)
-	}
-	return ce, nil
+	return events.BuildLifecycleEvent(
+		eventID,
+		events.EventUpdated,
+		mapper,
+		dims,
+		stateCtx.PreviousState,
+		stateCtx.DurationSeconds,
+		transitionTime,
+	)
 }
 func (c *Consumer) shouldSkipUpdate(ctx context.Context, event *privatev1.Event, existing *projection.ResourceState, currentState string, dims map[string]any, version int32, transitionTime time.Time, resourceID string) bool {
 	if event.GetType() != privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED || existing == nil {
@@ -473,24 +789,9 @@ func (c *Consumer) shouldSkipUpdate(ctx context.Context, event *privatev1.Event,
 
 func (c *Consumer) buildProjectionState(mapper events.ResourceMapper, existing *projection.ResourceState, transitionTime time.Time, version int32, currentState string, isBillable bool, dims map[string]any) projection.ResourceState {
 	tt := transitionTime.UTC()
-	projState := projection.ResourceState{
-		ResourceID:         mapper.ResourceID(),
-		ResourceType:       mapper.ResourceType(),
-		TenantID:           mapper.TenantID(),
-		CurrentState:       currentState,
-		IsBillable:         isBillable,
-		EverBillable:       isBillable || (existing != nil && existing.EverBillable),
-		TransitionTime:     tt,
-		FulfillmentVersion: version,
-		BillingDimensions:  dims,
-	}
-	if p := mapper.ProjectID(); p != nil {
-		projState.ProjectID = *p
-	}
-	if existing != nil {
-		projState.PreviousState = existing.CurrentState
-		projState.LastHeartbeatAt = existing.LastHeartbeatAt
-	}
+	projState := c.newProjectionState(mapper, existing, transitionTime, version, currentState, dims)
+	projState.IsBillable = isBillable
+	projState.EverBillable = isBillable || projState.EverBillable
 	if isBillable {
 		if existing == nil || !existing.IsBillable || !events.DimensionsEqual(existing.BillingDimensions, dims) {
 			projState.BillableSince = &tt

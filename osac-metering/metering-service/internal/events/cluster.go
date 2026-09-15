@@ -93,8 +93,8 @@ func (m *clusterMapper) IsBillable() bool {
 	return IsClusterBillableState(m.CurrentState())
 }
 
-func (m *clusterMapper) BillingDimensionsMap() map[string]any {
-	return ClusterBillingDimensions(m.cl)
+func (m *clusterMapper) BillingDimensionsMap() (map[string]any, error) {
+	return ClusterBillingDimensions(m.cl), nil
 }
 
 // CaaS cluster state machine. Both PROGRESSING and READY are billable.

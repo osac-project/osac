@@ -237,6 +237,32 @@ var _ = Describe("Reconciler", func() {
 			Expect(store.states).ToNot(HaveKey("vm-gone"))
 		})
 
+		It("does not delete BMaaS projections without a BMI List client", func() {
+			store := newMockStore()
+			now := time.Now().UTC().Truncate(time.Microsecond)
+			store.states["bmi-preserved"] = projection.ResourceState{
+				ResourceID:        "bmi-preserved",
+				ResourceType:      events.ResourceTypeBareMetalInstance,
+				TenantID:          "tenant-1",
+				CurrentState:      "RUNNING",
+				IsBillable:        true,
+				BillableSince:     &now,
+				LastHeartbeatAt:   &now,
+				BillingDimensions: map[string]any{"bm_instance_type": "bmi-type-gpu-large"},
+			}
+			pub := &mockPublisher{}
+			recon := reconciliation.NewReconciler(nil, nil, store, pub, logr.Discard(), 60*time.Second)
+
+			Expect(recon.Reconcile(ctx)).To(Succeed())
+
+			pub.mu.Lock()
+			defer pub.mu.Unlock()
+			Expect(pub.published).To(BeEmpty())
+			store.mu.Lock()
+			defer store.mu.Unlock()
+			Expect(store.states).To(HaveKey("bmi-preserved"))
+		})
+
 		It("detects state_drift when states differ", func() {
 			client := &mockComputeClient{
 				items: []*privatev1.ComputeInstance{

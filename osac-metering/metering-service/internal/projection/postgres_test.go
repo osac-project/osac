@@ -171,6 +171,44 @@ var _ = Describe("PostgresStore", func() {
 		})
 	})
 
+	It("round-trips independent meter first-use state", func() {
+		ctx := context.Background()
+		state := makeState("bmi-meter-state", 1)
+		allocationSince := state.TransitionTime.Add(-time.Hour)
+		state.ComponentBillableSince = map[string]time.Time{"consumption": state.TransitionTime.Add(-30 * time.Minute)}
+		state.ComponentEverStarted = map[string]bool{"allocation": true, "consumption": true}
+		state.BillableSince = &allocationSince
+
+		Expect(store.Upsert(ctx, state)).To(Succeed())
+
+		got, err := store.Get(ctx, state.ResourceID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(got.ComponentBillableSince).To(Equal(state.ComponentBillableSince))
+		Expect(got.ComponentEverStarted).To(Equal(state.ComponentEverStarted))
+	})
+
+	It("preserves component ever-started flags when a newer upsert omits one", func() {
+		ctx := context.Background()
+		state := makeState("bmi-ever-started-merge", 1)
+		state.ComponentEverStarted = map[string]bool{
+			"allocation": true,
+		}
+		Expect(store.Upsert(ctx, state)).To(Succeed())
+
+		state.FulfillmentVersion = 2
+		state.ComponentEverStarted = map[string]bool{
+			"consumption": true,
+		}
+		Expect(store.Upsert(ctx, state)).To(Succeed())
+
+		got, err := store.Get(ctx, state.ResourceID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(got.ComponentEverStarted).To(Equal(map[string]bool{
+			"allocation":  true,
+			"consumption": true,
+		}))
+	})
+
 	Describe("Stale version rejection", func() {
 		It("Allows idempotent upsert with same version", func() {
 			ctx := context.Background()

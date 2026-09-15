@@ -285,7 +285,12 @@ func applyVolumeUpdate(base, update *privatev1.Volume, mask *fieldmaskpb.FieldMa
 			if base.GetSpec().GetTopology() == nil {
 				base.GetSpec().SetTopology(&privatev1.VolumeTopology{})
 			}
-			base.GetSpec().GetTopology().SetSegments(update.GetSpec().GetTopology().GetSegments())
+			src := update.GetSpec().GetTopology().GetSegments()
+			dst := make(map[string]string, len(src))
+			for k, v := range src {
+				dst[k] = v
+			}
+			base.GetSpec().GetTopology().SetSegments(dst)
 		default:
 			// Unknown paths are handled by the generic update layer.
 		}

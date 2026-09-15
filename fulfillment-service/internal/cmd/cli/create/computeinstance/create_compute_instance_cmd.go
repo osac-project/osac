@@ -776,6 +776,9 @@ func (c *runnerContext) buildBootDisk() (*publicv1.ComputeInstanceDisk, error) {
 		return nil, nil
 	}
 	builder := publicv1.ComputeInstanceDisk_builder{}
+	if c.args.bootDiskSizeGiB < 0 {
+		return nil, fmt.Errorf("--boot-disk-size must be greater than zero")
+	}
 	if c.args.bootDiskSizeGiB > 0 {
 		builder.SizeGib = proto.Int32(c.args.bootDiskSizeGiB)
 	}

@@ -13,13 +13,24 @@ language governing permissions and limitations under the License.
 
 package servers
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/google/uuid"
+)
 
 // toDNSLabel converts a string to DNS-label format by replacing underscores with hyphens.
 // Used to derive metadata.name from domain-specific identifiers for catalog resources
 // that historically didn't set metadata.name (NetworkClass, Templates, HostType).
 func toDNSLabel(s string) string {
 	return strings.ReplaceAll(s, "_", "-")
+}
+
+// generateResourceName creates a DNS-1123 compliant name with the given prefix
+// and a random 8-character UUID suffix, e.g. "ext-ip-a1b2c3d4".
+func generateResourceName(prefix string) string {
+	return fmt.Sprintf("%s-%s", prefix, uuid.NewString()[:8])
 }
 
 // templateNameFromID extracts the role name from a template's deterministic ID

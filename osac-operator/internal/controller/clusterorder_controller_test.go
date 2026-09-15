@@ -503,20 +503,30 @@ var _ = Describe("ClusterOrder Controller", func() {
 				Expect(hostedClusterAndNodePoolsAreReady(&v1alpha1.ClusterOrder{}, hc, nodePools)).To(Equal(expected))
 			},
 			Entry("HostedCluster only", []hypershiftv1beta1.NodePool{}, true),
-			Entry("all requested NodePools have AllMachinesReady", []hypershiftv1beta1.NodePool{
+			Entry("all requested NodePools are ready", []hypershiftv1beta1.NodePool{
 				{Status: hypershiftv1beta1.NodePoolStatus{Conditions: []hypershiftv1beta1.NodePoolCondition{
 					{Type: hypershiftv1beta1.NodePoolAllMachinesReadyConditionType, Status: corev1.ConditionTrue},
+					{Type: hypershiftv1beta1.NodePoolReadyConditionType, Status: corev1.ConditionTrue},
 				}}},
 				{Status: hypershiftv1beta1.NodePoolStatus{Conditions: []hypershiftv1beta1.NodePoolCondition{
 					{Type: hypershiftv1beta1.NodePoolAllMachinesReadyConditionType, Status: corev1.ConditionTrue},
+					{Type: hypershiftv1beta1.NodePoolReadyConditionType, Status: corev1.ConditionTrue},
 				}}},
 			}, true),
+			Entry("machines are ready but worker Nodes are not ready", []hypershiftv1beta1.NodePool{
+				{Status: hypershiftv1beta1.NodePoolStatus{Conditions: []hypershiftv1beta1.NodePoolCondition{
+					{Type: hypershiftv1beta1.NodePoolAllMachinesReadyConditionType, Status: corev1.ConditionTrue},
+					{Type: hypershiftv1beta1.NodePoolReadyConditionType, Status: corev1.ConditionFalse},
+				}}},
+			}, false),
 			Entry("one NodePool is still joining", []hypershiftv1beta1.NodePool{
 				{Status: hypershiftv1beta1.NodePoolStatus{Conditions: []hypershiftv1beta1.NodePoolCondition{
 					{Type: hypershiftv1beta1.NodePoolAllMachinesReadyConditionType, Status: corev1.ConditionTrue},
+					{Type: hypershiftv1beta1.NodePoolReadyConditionType, Status: corev1.ConditionTrue},
 				}}},
 				{Status: hypershiftv1beta1.NodePoolStatus{Conditions: []hypershiftv1beta1.NodePoolCondition{
 					{Type: hypershiftv1beta1.NodePoolAllMachinesReadyConditionType, Status: corev1.ConditionFalse},
+					{Type: hypershiftv1beta1.NodePoolReadyConditionType, Status: corev1.ConditionFalse},
 				}}},
 			}, false),
 		)

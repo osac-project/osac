@@ -759,20 +759,25 @@ func hostedClusterAndNodePoolsAreReady(instance *v1alpha1.ClusterOrder, hc *hype
 	}
 
 	for i := range nodePools {
-		if !nodePoolAllMachinesReady(&nodePools[i]) {
+		if !nodePoolIsReady(&nodePools[i]) {
 			return false
 		}
 	}
 	return true
 }
 
-func nodePoolAllMachinesReady(nodePool *hypershiftv1beta1.NodePool) bool {
+func nodePoolIsReady(nodePool *hypershiftv1beta1.NodePool) bool {
+	allMachinesReady := false
+	poolReady := false
 	for _, condition := range nodePool.Status.Conditions {
-		if condition.Type == hypershiftv1beta1.NodePoolAllMachinesReadyConditionType {
-			return condition.Status == corev1.ConditionTrue
+		switch condition.Type {
+		case hypershiftv1beta1.NodePoolAllMachinesReadyConditionType:
+			allMachinesReady = condition.Status == corev1.ConditionTrue
+		case hypershiftv1beta1.NodePoolReadyConditionType:
+			poolReady = condition.Status == corev1.ConditionTrue
 		}
 	}
-	return false
+	return allMachinesReady && poolReady
 }
 
 func provisioningJobSucceeded(instance *v1alpha1.ClusterOrder) bool {

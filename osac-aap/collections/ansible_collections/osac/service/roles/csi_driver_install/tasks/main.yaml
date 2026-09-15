@@ -129,7 +129,7 @@
           {% if _csi_driver_install_precheck_status is not none -%}
           {% set _s = _csi_driver_install_precheck_status -%}
           {% set _ctrl = {} -%}
-          {% for _pair in (_s['values'].controller.vendorSockets | default('', true) | trim).split(',') if _pair | trim | length > 0 -%}
+          {% for _pair in (_s['values'].controller.vendorControllers | default(_s['values'].controller.vendorSockets | default('', true), true) | trim).split(',') if _pair | trim | length > 0 -%}
           {% set _kv = _pair.split('=', 1) -%}
           {% set _ = _ctrl.update({_kv[0]: _kv[1]}) -%}
           {% endfor -%}
@@ -252,10 +252,11 @@
     # release dict has a real key literally named "values", which collides
     # with Python dict's own .values() method — attribute access would
     # silently return the bound method instead of the chart values.
-    - name: Extract previously-deployed controller/node vendorSockets strings (empty string if unset)
+    - name: Extract previously-deployed controller/node vendor endpoints strings (empty string if unset)
       ansible.builtin.set_fact:
         _csi_driver_install_prior_controller_sockets_raw: >-
-          {{ (_csi_driver_install_prior_driver_status['values'].controller.vendorSockets | default('', true) | trim)
+          {{ ((_csi_driver_install_prior_driver_status['values'].controller.vendorControllers | default('', true))
+              or (_csi_driver_install_prior_driver_status['values'].controller.vendorSockets | default('', true)) | trim)
              if (_csi_driver_install_prior_driver_status is not none) else '' }}
         _csi_driver_install_prior_node_sockets_raw: >-
           {{ (_csi_driver_install_prior_driver_status['values'].node.vendorSockets | default('', true) | trim)
@@ -333,7 +334,7 @@
         _csi_driver_install_driver_values:
           namespace: "{{ csi_driver_install_namespace }}"
           controller:
-            vendorSockets: "{{ _csi_driver_install_controller_vendor_sockets }}"
+            vendorControllers: "{{ _csi_driver_install_controller_vendor_sockets }}"
           node:
             vendorSockets: "{{ _csi_driver_install_node_vendor_sockets }}"
           vendors: "{{ _csi_driver_install_vendors_enabled }}"

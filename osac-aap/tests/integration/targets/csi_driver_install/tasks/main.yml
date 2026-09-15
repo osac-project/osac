@@ -305,7 +305,7 @@
           - _driver_release_info.status['values'].vendors.vast.enabled | bool
           - >-
             ('vast=vast-csi-controller.osac-csi-backends.svc.cluster.local:' ~ (_vast_service_fixture.resources[0].spec.ports[0].port | string))
-            in _driver_release_info.status['values'].controller.vendorSockets
+            in (_driver_release_info.status['values'].controller.vendorControllers | default(_driver_release_info.status['values'].controller.vendorSockets | default('')))
           # Test 1 dispatches only vast, so node.vendorSockets is exactly the chart-default socketPath + '/csi.sock'.
           - _driver_release_info.status['values'].node.vendorSockets == 'vast=/var/lib/kubelet/plugins/csi.vast.vastdata.com/csi.sock'
         fail_msg: "csi-driver release values did not reflect the dispatched vast vendor: {{ _driver_release_info.status['values'] }}"
@@ -366,8 +366,12 @@
         that:
           - _driver_release_after_pure.status['values'].vendors.vast.enabled | bool
           - _driver_release_after_pure.status['values'].vendors.pure.enabled | bool
-          - "'vast=' in _driver_release_after_pure.status['values'].controller.vendorSockets"
-          - "'pure=' in _driver_release_after_pure.status['values'].controller.vendorSockets"
+          - >-
+            ('vast=' in (_driver_release_after_pure.status['values'].controller.vendorControllers | default(''))) or
+            ('vast=' in (_driver_release_after_pure.status['values'].controller.vendorSockets | default('')))
+          - >-
+            ('pure=' in (_driver_release_after_pure.status['values'].controller.vendorControllers | default(''))) or
+            ('pure=' in (_driver_release_after_pure.status['values'].controller.vendorSockets | default('')))
           - "'vast=/var/lib/kubelet/plugins/csi.vast.vastdata.com/csi.sock' in _driver_release_after_pure.status['values'].node.vendorSockets"
           - "'pure=/var/lib/kubelet/plugins/csi.pure.purestorage.com/csi.sock' in _driver_release_after_pure.status['values'].node.vendorSockets"
         fail_msg: >-
@@ -444,10 +448,10 @@
       ansible.builtin.assert:
         that:
           - "'lvms' not in _driver_release_after_mixed_dispatch.status['values'].vendors"
-          - "'lvms=' not in _driver_release_after_mixed_dispatch.status['values'].controller.vendorSockets"
+          - "'lvms=' not in (_driver_release_after_mixed_dispatch.status['values'].controller.vendorControllers | default(''))"
           - "'lvms=' not in _driver_release_after_mixed_dispatch.status['values'].node.vendorSockets"
           - _driver_release_after_mixed_dispatch.status['values'].vendors.vast.enabled | bool
-          - "'vast=' in _driver_release_after_mixed_dispatch.status['values'].controller.vendorSockets"
+          - "'vast=' in (_driver_release_after_mixed_dispatch.status['values'].controller.vendorControllers | default(''))"
           - "'vast=/var/lib/kubelet/plugins/csi.vast.vastdata.com/csi.sock' in _driver_release_after_mixed_dispatch.status['values'].node.vendorSockets"
         fail_msg: >-
           Dispatching an unsupported provider (lvms) alongside a supported one (vast) must warn

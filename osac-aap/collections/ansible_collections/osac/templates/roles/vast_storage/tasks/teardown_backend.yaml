@@ -200,7 +200,8 @@
     - name: Set VAST cleanup success flag
       ansible.builtin.set_fact:
         _vast_teardown_clean: >-
-          {{ not (_vast_cleanup_results | default({}) | dict2items | selectattr('value.failed', 'defined') | selectattr('value.failed') | list | length > 0)
+          {{ not (_vast_teardown_auth.failed | default(false))
+             and not (_vast_cleanup_results | default({}) | dict2items | selectattr('value.failed', 'defined') | selectattr('value.failed') | list | length > 0)
              and not (_vast_teardown_tenant_result.failed | default(false))
              and not (_vast_manager_delete_failed | default(false))
              and not (_vast_teardown_lp_result.failed | default(false)) }}

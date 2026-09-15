@@ -20,6 +20,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// VolumeTopology carries CSI-style placement segments for a volume request.
+type VolumeTopology struct {
+	// Segments is a CSI-style topology map (e.g. {"osac.io/node": "worker-1"}).
+	// Keys mirror CSI topology keys; values are scheduler-resolved.
+	Segments map[string]string `json:"segments,omitempty"`
+}
+
 // VolumeSpec defines the desired state of Volume.
 type VolumeSpec struct {
 	// StorageTier is the name of the StorageTier that determines which backend
@@ -41,6 +48,18 @@ type VolumeSpec struct {
 	// +kubebuilder:validation:Enum=ReadWriteOnce;ReadOnlyMany;ReadWriteMany;ReadWriteOncePod
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="accessMode is immutable"
 	AccessMode VolumeAccessMode `json:"accessMode"`
+
+	// Topology carries CSI-style placement constraints for this volume.
+	// For node-local backends (e.g. LVMS), the "osac.io/node" segment
+	// pins the volume to the scheduler-selected node; the ComputeInstance
+	// using this volume is then node-pinned. For network backends,
+	// topology may carry zone/region segments or be empty.
+	// The target CSI driver must support WaitForFirstConsumer and
+	// advertise VOLUME_ACCESSIBILITY_CONSTRAINTS for topology to take
+	// effect. Immutable after creation.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="topology is immutable"
+	Topology *VolumeTopology `json:"topology,omitempty"`
 }
 
 // VolumeAccessMode defines valid Kubernetes PersistentVolume access modes.
@@ -111,6 +130,11 @@ type VolumeStatus struct {
 	// Resolved during tier resolution at creation time.
 	// +kubebuilder:validation:Optional
 	Backend string `json:"backend,omitempty"`
+
+	// Provider identifies the registered VendorProvisioner implementation selected for this volume.
+	// Resolved during tier resolution at creation time.
+	// +kubebuilder:validation:Optional
+	Provider string `json:"provider,omitempty"`
 
 	// Protocol is the storage protocol used for this volume.
 	// Resolved during tier resolution at creation time.

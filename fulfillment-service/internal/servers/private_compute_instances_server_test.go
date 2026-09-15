@@ -2423,7 +2423,7 @@ var _ = Describe("Private compute instances server", func() {
 		})
 
 		Context("Update validation with deletion", func() {
-			It("Should skip state validation when isBeingDeleted=true", func() {
+			It("uses persisted deletion state when validating network updates", func() {
 				// Create with a READY subnet
 				subnet := createTestSubnet(ctx, virtualNetwork.GetId(), privatev1.SubnetState_SUBNET_STATE_READY)
 				sg := createTestSecurityGroup(ctx, virtualNetwork.GetId(), privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY)
@@ -2457,12 +2457,12 @@ var _ = Describe("Private compute instances server", func() {
 				_, err = subnetDAO.Update().SetObject(subnet).Do(ctx)
 				Expect(err).ToNot(HaveOccurred())
 
-				// Mark the ComputeInstance as being deleted
+				// Supplying a timestamp must not mark the stored ComputeInstance as deleting.
 				deletionTime := timestamppb.Now()
 				created.GetMetadata().SetDeletionTimestamp(deletionTime)
 
 				// Try to update security groups while subnet is PENDING
-				// Should succeed because isBeingDeleted=true skips state validation
+				// A live object must still pass readiness validation.
 				created.GetSpec().SetNetworkAttachments([]*privatev1.ComputeNetworkAttachment{
 					privatev1.ComputeNetworkAttachment_builder{
 						Subnet:         privatev1.SubnetLocalReference_builder{Id: subnet.GetId()}.Build(),
@@ -2473,9 +2473,35 @@ var _ = Describe("Private compute instances server", func() {
 				updateRequest.SetObject(created)
 				updateRequest.SetUpdateMask(&fieldmaskpb.FieldMask{Paths: []string{"spec.network_attachments"}})
 
-				response, err := server.Update(ctx, updateRequest)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(response).ToNot(BeNil())
+				// An unmasked timestamp must not bypass validation of an active instance.
+				_, err = server.Update(ctx, updateRequest)
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+				updateRequest.SetUpdateMask(&fieldmaskpb.FieldMask{Paths: []string{
+					"spec.network_attachments", "metadata.deletion_timestamp",
+				}})
+				_, err = server.Update(ctx, updateRequest)
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+				stored, err := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: created.GetId()}.Build())
+				Expect(err).NotTo(HaveOccurred())
+				Expect(stored.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeFalse())
+				Expect(stored.GetObject().GetSpec().GetNetworkAttachments()[0].GetSecurityGroups()).To(HaveLen(1))
+
+				// Only Delete may establish the exemption; a finalizer keeps the object available.
+				_, err = server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+					Object:     privatev1.ComputeInstance_builder{Id: created.GetId(), Metadata: privatev1.Metadata_builder{Finalizers: []string{"test"}}.Build()}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.finalizers"}},
+				}.Build())
+				Expect(err).NotTo(HaveOccurred())
+				_, err = server.Delete(ctx, privatev1.ComputeInstancesDeleteRequest_builder{Id: created.GetId()}.Build())
+				Expect(err).NotTo(HaveOccurred())
+				updateRequest.SetUpdateMask(&fieldmaskpb.FieldMask{Paths: []string{"spec.network_attachments"}})
+				_, err = server.Update(ctx, updateRequest)
+				Expect(err).NotTo(HaveOccurred())
+				stored, err = server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: created.GetId()}.Build())
+				Expect(err).NotTo(HaveOccurred())
+				Expect(stored.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeTrue())
+				Expect(stored.GetObject().GetSpec().GetNetworkAttachments()[0].GetSecurityGroups()).To(BeEmpty())
+
 			})
 		})
 

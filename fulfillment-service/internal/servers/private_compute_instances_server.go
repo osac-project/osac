@@ -437,7 +437,11 @@ func (s *PrivateComputeInstancesServer) Update(ctx context.Context,
 	// Only validate fields affected by the update mask. With a field mask the object
 	// is sparse so validating fields absent from it would fail incorrectly.
 	mask := request.GetUpdateMask()
-	isBeingDeleted := request.GetObject().GetMetadata().GetDeletionTimestamp() != nil
+	currentResponse, getErr := s.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: request.GetObject().GetId()}.Build())
+	if getErr != nil {
+		return nil, getErr
+	}
+	isBeingDeleted := currentResponse.GetObject().GetMetadata().HasDeletionTimestamp()
 	if err = s.validateUserDataMutualExclusionForUpdate(ctx, request); err != nil {
 		return
 	}

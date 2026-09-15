@@ -319,7 +319,7 @@ var _ = Describe("Clusters server", func() {
 			Expect(gpuNodeSet.GetSize()).To(BeNumerically("==", 1))
 		})
 
-		It("Rejects node set that isn't in the template", func() {
+		It("Accepts an additional node set with a valid host type", func() {
 			response, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
 				Object: publicv1.Cluster_builder{
 					Metadata: publicv1.Metadata_builder{
@@ -336,15 +336,11 @@ var _ = Describe("Clusters server", func() {
 					}.Build(),
 				}.Build(),
 			}.Build())
-			Expect(err).To(HaveOccurred())
-			Expect(response).To(BeNil())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(Equal(
-				"node set 'junk' doesn't exist, valid values for template 'my_template' are " +
-					"'compute' and 'gpu'",
-			))
+			Expect(err).ToNot(HaveOccurred())
+			nodeSets := response.GetObject().GetSpec().GetNodeSets()
+			Expect(nodeSets).To(HaveLen(1))
+			Expect(nodeSets["junk"].GetHostType().GetId()).To(Equal("acme_1tib"))
+			Expect(nodeSets["junk"].GetSize()).To(Equal(int32(1000)))
 		})
 
 		It("Rejects node set with host type that isn't in the template", func() {
@@ -481,7 +477,7 @@ var _ = Describe("Clusters server", func() {
 			Expect(gpuNodeSet.GetSize()).To(BeNumerically("==", 10))
 		})
 
-		It("Merges explicit size for one node set with size for another node set from the template", func() {
+		It("Uses a supplied node-set map without adding omitted Template entries", func() {
 			response, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
 				Object: publicv1.Cluster_builder{
 					Metadata: publicv1.Metadata_builder{
@@ -503,9 +499,7 @@ var _ = Describe("Clusters server", func() {
 			Expect(nodeSets).To(HaveKey("compute"))
 			computeNodeSet := nodeSets["compute"]
 			Expect(computeNodeSet.GetSize()).To(BeNumerically("==", 30))
-			Expect(nodeSets).To(HaveKey("gpu"))
-			gpuNodeSet := nodeSets["gpu"]
-			Expect(gpuNodeSet.GetSize()).To(BeNumerically("==", 1))
+			Expect(nodeSets).To(HaveLen(1))
 		})
 
 		It("Rejects template that has been deleted", func() {

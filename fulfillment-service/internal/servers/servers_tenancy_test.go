@@ -570,7 +570,7 @@ var _ = Describe("Tenancy logic", func() {
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
-		// Create the template using the DAO:
+		// Use a shared Template so dependency scope is valid and creation reaches the nonexistent-tenant check.
 		templatesDao, err := dao.NewGenericDAO[*privatev1.ClusterTemplate]().
 			SetLogger(logger).
 			SetTenancyLogic(tenancy).
@@ -584,7 +584,7 @@ var _ = Describe("Tenancy logic", func() {
 					Description: "My template",
 					Metadata: privatev1.Metadata_builder{
 						Name:   "test-template",
-						Tenant: "my-tenant",
+						Tenant: auth.SharedTenant,
 					}.Build(),
 				}.Build(),
 			).

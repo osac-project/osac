@@ -456,37 +456,3 @@ var _ = Describe("applyFieldDefinitions rejects unlisted fields", func() {
 		Expect(err.Error()).To(ContainSubstring("not allowed"))
 	})
 })
-
-var _ = Describe("addPublishedFilter", func() {
-	var server *ClusterCatalogItemsServer
-
-	BeforeEach(func() {
-		server = &ClusterCatalogItemsServer{}
-	})
-
-	DescribeTable("composes filter correctly",
-		func(input string, expected string) {
-			result, err := server.addPublishedFilter(input)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(result).To(Equal(expected))
-		},
-		Entry("empty filter", "", "this.published"),
-		Entry("simple filter", "this.id == '123'", "(this.id == '123') && this.published"),
-		Entry("compound filter", "this.title == 'a' && this.template == 'b'",
-			"(this.title == 'a' && this.template == 'b') && this.published"),
-		Entry("valid filter with OR is safely composed", "true || true",
-			"(true || true) && this.published"),
-	)
-
-	DescribeTable("rejects malformed filters",
-		func(input string) {
-			_, err := server.addPublishedFilter(input)
-			Expect(err).To(HaveOccurred())
-			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
-		},
-		Entry("unbalanced parens to bypass published", `true) || (true`),
-		Entry("unbalanced closing paren", `true)`),
-		Entry("unbalanced opening paren", `(true`),
-	)
-
-})

@@ -20,11 +20,11 @@ import (
 	. "github.com/onsi/gomega"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
-	"google.golang.org/protobuf/types/known/structpb"
 
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -84,6 +84,8 @@ var _ = Describe("Private cluster catalog items server", func() {
 				SetAttributionLogic(attribution).
 				SetTenancyLogic(tenancy).
 				Build()
+			Expect(seedClusterCatalogItemTemplate(ctx, testTenant, "", "my-template-id")).To(Succeed())
+			Expect(seedClusterCatalogItemTemplate(ctx, auth.SharedTenant, "", "my-shared-template-id")).To(Succeed())
 			Expect(err).ToNot(HaveOccurred())
 		})
 
@@ -91,13 +93,13 @@ var _ = Describe("Private cluster catalog items server", func() {
 			response, err := server.Create(ctx, privatev1.ClusterCatalogItemsCreateRequest_builder{
 				Object: privatev1.ClusterCatalogItem_builder{
 					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.New()[24:32]),
+						Name:   fmt.Sprintf("test-%s", uuid.New()[24:32]),
+						Tenant: testTenant,
 					}.Build(),
 					Title:       "My cluster catalog item",
 					Description: "My description.",
-					Template:    privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+					Template:    privatev1.ClusterTemplateReference_builder{Id: "my-shared-template-id"}.Build(),
 					Published:   true,
-					Tenant:      "my-tenant",
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -106,9 +108,10 @@ var _ = Describe("Private cluster catalog items server", func() {
 			Expect(object).ToNot(BeNil())
 			Expect(object.GetId()).ToNot(BeEmpty())
 			Expect(object.GetTitle()).To(Equal("My cluster catalog item"))
-			Expect(object.GetTemplate().GetId()).To(Equal("my-template-id"))
+			Expect(object.GetTemplate().GetId()).To(Equal("my-shared-template-id"))
+			Expect(object.GetTemplate().GetShared()).To(BeTrue())
 			Expect(object.GetPublished()).To(BeTrue())
-			Expect(object.GetTenant()).To(Equal("my-tenant"))
+			Expect(object.GetMetadata().GetTenant()).To(Equal(testTenant))
 		})
 
 		It("List objects", func() {
@@ -261,6 +264,32 @@ var _ = Describe("Private cluster catalog items server", func() {
 			Expect(getResponse.GetObject().GetDescription()).To(Equal("Updated description."))
 		})
 
+		It("rejects changing the template on update", func() {
+			createResponse, err := server.Create(ctx, privatev1.ClusterCatalogItemsCreateRequest_builder{
+				Object: privatev1.ClusterCatalogItem_builder{
+					Metadata: privatev1.Metadata_builder{Name: "test-cluster-catalog-template-immutable"}.Build(),
+					Title:    "Catalog item",
+					Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = server.Update(ctx, privatev1.ClusterCatalogItemsUpdateRequest_builder{
+				Object: privatev1.ClusterCatalogItem_builder{
+					Id:       createResponse.GetObject().GetId(),
+					Template: privatev1.ClusterTemplateReference_builder{Id: "my-shared-template-id"}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+
+			getResponse, err := server.Get(ctx, privatev1.ClusterCatalogItemsGetRequest_builder{Id: createResponse.GetObject().GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(getResponse.GetObject().GetTemplate().GetId()).To(Equal("my-template-id"))
+		})
+
 		It("Update published using field mask", func() {
 			createResponse, err := server.Create(ctx, privatev1.ClusterCatalogItemsCreateRequest_builder{
 				Object: privatev1.ClusterCatalogItem_builder{
@@ -301,7 +330,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 			Expect(getResponse.GetObject().GetPublished()).To(BeTrue())
 		})
 
-		It("Creates object with field definitions and round-trips them", func() {
+		It("Creates object with typed fields and round-trips them", func() {
 			response, err := server.Create(ctx, privatev1.ClusterCatalogItemsCreateRequest_builder{
 				Object: privatev1.ClusterCatalogItem_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -309,20 +338,11 @@ var _ = Describe("Private cluster catalog items server", func() {
 					}.Build(),
 					Title:    "Catalog item with fields",
 					Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
-					FieldDefinitions: []*privatev1.FieldDefinition{
-						privatev1.FieldDefinition_builder{
-							Path:             "spec.network.pod_cidr",
-							DisplayName:      "Pod CIDR",
-							Editable:         true,
-							ValidationSchema: `{"type":"string","pattern":"^[0-9./]+$"}`,
+					Fields: privatev1.ClusterCatalogItemFields_builder{
+						Network: privatev1.ClusterNetworkFieldPolicies_builder{
+							PodCidr: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build(),
 						}.Build(),
-						privatev1.FieldDefinition_builder{
-							Path:        "spec.node_sets.workers.size",
-							DisplayName: "Worker count",
-							Editable:    false,
-							Default:     structpb.NewNumberValue(3),
-						}.Build(),
-					},
+					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -339,20 +359,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			fetched := getResponse.GetObject()
-			Expect(fetched.GetFieldDefinitions()).To(HaveLen(2))
-
-			fd0 := fetched.GetFieldDefinitions()[0]
-			Expect(fd0.GetPath()).To(Equal("spec.network.pod_cidr"))
-			Expect(fd0.GetDisplayName()).To(Equal("Pod CIDR"))
-			Expect(fd0.GetEditable()).To(BeTrue())
-			Expect(fd0.GetValidationSchema()).To(Equal(`{"type":"string","pattern":"^[0-9./]+$"}`))
-
-			fd1 := fetched.GetFieldDefinitions()[1]
-			Expect(fd1.GetPath()).To(Equal("spec.node_sets.workers.size"))
-			Expect(fd1.GetDisplayName()).To(Equal("Worker count"))
-			Expect(fd1.GetEditable()).To(BeFalse())
-			Expect(fd1.GetDefault()).ToNot(BeNil())
-			Expect(fd1.GetDefault().GetNumberValue()).To(Equal(3.0))
+			Expect(fetched.GetFields().GetNetwork().GetPodCidr().GetEditable()).ToNot(BeNil())
 		})
 
 		It("Delete object", func() {
@@ -468,7 +475,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 						Tenant: "shared",
 					}.Build(),
 					Title:    "Catalog item for shared tenant",
-					Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+					Template: privatev1.ClusterTemplateReference_builder{Id: "my-shared-template-id"}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -511,7 +518,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 			Expect(err.Error()).To(ContainSubstring("immutable"))
 		})
 
-		It("Rejects non-editable field definition without default value", func() {
+		It("Rejects non-editable field policy without default value", func() {
 			_, err := server.Create(ctx, privatev1.ClusterCatalogItemsCreateRequest_builder{
 				Object: privatev1.ClusterCatalogItem_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -519,12 +526,9 @@ var _ = Describe("Private cluster catalog items server", func() {
 					}.Build(),
 					Title:    "Bad catalog item",
 					Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
-					FieldDefinitions: []*privatev1.FieldDefinition{
-						privatev1.FieldDefinition_builder{
-							Path:     "spec.ssh_public_key",
-							Editable: false,
-						}.Build(),
-					},
+					Fields: privatev1.ClusterCatalogItemFields_builder{
+						SshPublicKey: privatev1.StringFieldPolicy_builder{}.Build(),
+					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).To(HaveOccurred())
@@ -532,10 +536,10 @@ var _ = Describe("Private cluster catalog items server", func() {
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 			Expect(status.Message()).To(ContainSubstring("ssh_public_key"))
-			Expect(status.Message()).To(ContainSubstring("default value"))
+			Expect(status.Message()).To(ContainSubstring("no behavior"))
 		})
 
-		It("Accepts non-editable field definition with default value", func() {
+		It("Accepts non-editable field policy with default value", func() {
 			response, err := server.Create(ctx, privatev1.ClusterCatalogItemsCreateRequest_builder{
 				Object: privatev1.ClusterCatalogItem_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -543,13 +547,9 @@ var _ = Describe("Private cluster catalog items server", func() {
 					}.Build(),
 					Title:    "Good catalog item",
 					Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
-					FieldDefinitions: []*privatev1.FieldDefinition{
-						privatev1.FieldDefinition_builder{
-							Path:     "spec.ssh_public_key",
-							Editable: false,
-							Default:  structpb.NewStringValue("my-secret"),
-						}.Build(),
-					},
+					Fields: privatev1.ClusterCatalogItemFields_builder{
+						SshPublicKey: privatev1.StringFieldPolicy_builder{Locked: proto.String(testSSHPublicKey)}.Build(),
+					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -563,7 +563,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 			})
 		})
 
-		It("Accepts editable field definition without default value", func() {
+		It("Accepts editable field policy without default value", func() {
 			response, err := server.Create(ctx, privatev1.ClusterCatalogItemsCreateRequest_builder{
 				Object: privatev1.ClusterCatalogItem_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -571,92 +571,9 @@ var _ = Describe("Private cluster catalog items server", func() {
 					}.Build(),
 					Title:    "Editable no default",
 					Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
-					FieldDefinitions: []*privatev1.FieldDefinition{
-						privatev1.FieldDefinition_builder{
-							Path:     "spec.ssh_public_key",
-							Editable: true,
-						}.Build(),
-					},
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			object := response.GetObject()
-			Expect(object).ToNot(BeNil())
-			DeferCleanup(func() {
-				_, err := server.Delete(ctx, privatev1.ClusterCatalogItemsDeleteRequest_builder{
-					Id: object.GetId(),
-				}.Build())
-				Expect(err).ToNot(HaveOccurred())
-			})
-		})
-
-		It("Rejects non-editable field definition without default when not first in list", func() {
-			_, err := server.Create(ctx, privatev1.ClusterCatalogItemsCreateRequest_builder{
-				Object: privatev1.ClusterCatalogItem_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.New()[24:32]),
+					Fields: privatev1.ClusterCatalogItemFields_builder{
+						SshPublicKey: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build(),
 					}.Build(),
-					Title:    "Bad catalog item",
-					Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
-					FieldDefinitions: []*privatev1.FieldDefinition{
-						privatev1.FieldDefinition_builder{
-							Path:     "spec.ssh_public_key",
-							Editable: true,
-						}.Build(),
-						privatev1.FieldDefinition_builder{
-							Path:     "spec.ssh_public_key",
-							Editable: false,
-						}.Build(),
-					},
-				}.Build(),
-			}.Build())
-			Expect(err).To(HaveOccurred())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(ContainSubstring("ssh_public_key"))
-		})
-
-		It("Rejects field definition with invalid validation_schema JSON", func() {
-			_, err := server.Create(ctx, privatev1.ClusterCatalogItemsCreateRequest_builder{
-				Object: privatev1.ClusterCatalogItem_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.New()[24:32]),
-					}.Build(),
-					Title:    "Bad schema catalog item",
-					Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
-					FieldDefinitions: []*privatev1.FieldDefinition{
-						privatev1.FieldDefinition_builder{
-							Path:             "spec.network.pod_cidr",
-							Editable:         true,
-							ValidationSchema: "{not valid json}",
-						}.Build(),
-					},
-				}.Build(),
-			}.Build())
-			Expect(err).To(HaveOccurred())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(ContainSubstring("pod_cidr"))
-			Expect(status.Message()).To(ContainSubstring("invalid validation_schema"))
-		})
-
-		It("Accepts field definition with valid validation_schema JSON", func() {
-			response, err := server.Create(ctx, privatev1.ClusterCatalogItemsCreateRequest_builder{
-				Object: privatev1.ClusterCatalogItem_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.New()[24:32]),
-					}.Build(),
-					Title:    "Valid schema catalog item",
-					Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
-					FieldDefinitions: []*privatev1.FieldDefinition{
-						privatev1.FieldDefinition_builder{
-							Path:             "spec.network.pod_cidr",
-							Editable:         true,
-							ValidationSchema: `{"type":"string","pattern":"^[0-9./]+$"}`,
-						}.Build(),
-					},
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -694,15 +611,12 @@ var _ = Describe("Private cluster catalog items server", func() {
 				Object: privatev1.ClusterCatalogItem_builder{
 					Id:       id,
 					Metadata: privatev1.Metadata_builder{Name: name}.Build(),
-					FieldDefinitions: []*privatev1.FieldDefinition{
-						privatev1.FieldDefinition_builder{
-							Path:     "spec.ssh_public_key",
-							Editable: false,
-						}.Build(),
-					},
+					Fields: privatev1.ClusterCatalogItemFields_builder{
+						SshPublicKey: privatev1.StringFieldPolicy_builder{}.Build(),
+					}.Build(),
 				}.Build(),
 				UpdateMask: &fieldmaskpb.FieldMask{
-					Paths: []string{"field_definitions"},
+					Paths: []string{"fields"},
 				},
 			}.Build())
 			Expect(err).To(HaveOccurred())
@@ -710,53 +624,10 @@ var _ = Describe("Private cluster catalog items server", func() {
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 			Expect(status.Message()).To(ContainSubstring("ssh_public_key"))
-			Expect(status.Message()).To(ContainSubstring("default value"))
+			Expect(status.Message()).To(ContainSubstring("oneof"))
 		})
 
-		It("Rejects update that introduces invalid validation_schema", func() {
-			createResponse, err := server.Create(ctx, privatev1.ClusterCatalogItemsCreateRequest_builder{
-				Object: privatev1.ClusterCatalogItem_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: "test-cluster-catalog-badschema",
-					}.Build(),
-					Title:    "Valid catalog item",
-					Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			id := createResponse.GetObject().GetId()
-			name := createResponse.GetObject().GetMetadata().GetName()
-			DeferCleanup(func() {
-				_, err := server.Delete(ctx, privatev1.ClusterCatalogItemsDeleteRequest_builder{
-					Id: id,
-				}.Build())
-				Expect(err).ToNot(HaveOccurred())
-			})
-
-			_, err = server.Update(ctx, privatev1.ClusterCatalogItemsUpdateRequest_builder{
-				Object: privatev1.ClusterCatalogItem_builder{
-					Id:       id,
-					Metadata: privatev1.Metadata_builder{Name: name}.Build(),
-					FieldDefinitions: []*privatev1.FieldDefinition{
-						privatev1.FieldDefinition_builder{
-							Path:             "spec.network.pod_cidr",
-							Editable:         true,
-							ValidationSchema: "{bad json}",
-						}.Build(),
-					},
-				}.Build(),
-				UpdateMask: &fieldmaskpb.FieldMask{
-					Paths: []string{"field_definitions"},
-				},
-			}.Build())
-			Expect(err).To(HaveOccurred())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(ContainSubstring("invalid validation_schema"))
-		})
-
-		It("Accepts update with valid field definitions", func() {
+		It("Accepts update with valid typed policies", func() {
 			createResponse, err := server.Create(ctx, privatev1.ClusterCatalogItemsCreateRequest_builder{
 				Object: privatev1.ClusterCatalogItem_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -780,28 +651,22 @@ var _ = Describe("Private cluster catalog items server", func() {
 				Object: privatev1.ClusterCatalogItem_builder{
 					Id:       id,
 					Metadata: privatev1.Metadata_builder{Name: name}.Build(),
-					FieldDefinitions: []*privatev1.FieldDefinition{
-						privatev1.FieldDefinition_builder{
-							Path:     "spec.ssh_public_key",
-							Editable: false,
-							Default:  structpb.NewStringValue("locked-secret"),
+					Fields: privatev1.ClusterCatalogItemFields_builder{
+						SshPublicKey: privatev1.StringFieldPolicy_builder{Locked: proto.String(testSSHPublicKey)}.Build(),
+						Network: privatev1.ClusterNetworkFieldPolicies_builder{
+							PodCidr: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build(),
 						}.Build(),
-						privatev1.FieldDefinition_builder{
-							Path:             "spec.network.pod_cidr",
-							Editable:         true,
-							ValidationSchema: `{"type":"string"}`,
-						}.Build(),
-					},
+					}.Build(),
 				}.Build(),
 				UpdateMask: &fieldmaskpb.FieldMask{
-					Paths: []string{"field_definitions"},
+					Paths: []string{"fields"},
 				},
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			Expect(updateResponse.GetObject().GetFieldDefinitions()).To(HaveLen(2))
+			Expect(updateResponse.GetObject().GetFields()).ToNot(BeNil())
 		})
 
-		Describe("ClusterVersion validation on field_definitions", func() {
+		Describe("ClusterVersion validation on fields", func() {
 			var validatedServer *PrivateClusterCatalogItemsServer
 
 			BeforeEach(func() {
@@ -814,7 +679,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 				Expect(err).ToNot(HaveOccurred())
 			})
 
-			It("Rejects create with non-existent version default in field_definitions", func() {
+			It("Rejects create with non-existent version default in fields", func() {
 				_, err := validatedServer.Create(ctx, privatev1.ClusterCatalogItemsCreateRequest_builder{
 					Object: privatev1.ClusterCatalogItem_builder{
 						Metadata: privatev1.Metadata_builder{
@@ -822,23 +687,19 @@ var _ = Describe("Private cluster catalog items server", func() {
 						}.Build(),
 						Title:    "Bad version catalog item",
 						Template: &privatev1.ClusterTemplateReference{Id: "my-template-id"},
-						FieldDefinitions: []*privatev1.FieldDefinition{
-							privatev1.FieldDefinition_builder{
-								Path:     "version",
-								Editable: true,
-								Default:  structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{"name": structpb.NewStringValue("does-not-exist")}}),
-							}.Build(),
-						},
+						Fields: privatev1.ClusterCatalogItemFields_builder{
+							Version: privatev1.ClusterVersionReferenceFieldPolicy_builder{Editable: privatev1.EditableClusterVersionReferenceField_builder{DefaultValue: privatev1.ClusterVersionReference_builder{Name: "does-not-exist"}.Build()}.Build()}.Build(),
+						}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).To(HaveOccurred())
 				status, ok := grpcstatus.FromError(err)
 				Expect(ok).To(BeTrue())
 				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-				Expect(status.Message()).To(ContainSubstring("cluster version 'does-not-exist' not found"))
+				Expect(status.Message()).To(ContainSubstring("cluster version 'does-not-exist' in fields.version not found"))
 			})
 
-			It("Rejects create with obsolete version default in field_definitions", func() {
+			It("Rejects create with obsolete version default in fields", func() {
 				// Seed an obsolete ClusterVersion:
 				cvDao, err := dao.NewGenericDAO[*privatev1.ClusterVersion]().
 					SetLogger(logger).
@@ -869,13 +730,9 @@ var _ = Describe("Private cluster catalog items server", func() {
 						}.Build(),
 						Title:    "Obsolete version catalog item",
 						Template: &privatev1.ClusterTemplateReference{Id: "my-template-id"},
-						FieldDefinitions: []*privatev1.FieldDefinition{
-							privatev1.FieldDefinition_builder{
-								Path:     "version",
-								Editable: true,
-								Default:  structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{"name": structpb.NewStringValue("4-16-0-obsolete")}}),
-							}.Build(),
-						},
+						Fields: privatev1.ClusterCatalogItemFields_builder{
+							Version: privatev1.ClusterVersionReferenceFieldPolicy_builder{Editable: privatev1.EditableClusterVersionReferenceField_builder{DefaultValue: privatev1.ClusterVersionReference_builder{Name: "4-16-0-obsolete"}.Build()}.Build()}.Build(),
+						}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).To(HaveOccurred())
@@ -885,7 +742,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 				Expect(status.Message()).To(ContainSubstring("is obsolete"))
 			})
 
-			It("Rejects update with non-existent version default in field_definitions", func() {
+			It("Rejects update with non-existent version default in fields", func() {
 				createResponse, err := validatedServer.Create(ctx, privatev1.ClusterCatalogItemsCreateRequest_builder{
 					Object: privatev1.ClusterCatalogItem_builder{
 						Metadata: privatev1.Metadata_builder{
@@ -903,20 +760,16 @@ var _ = Describe("Private cluster catalog items server", func() {
 						Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 						Title:    "Catalog item for update test",
 						Template: &privatev1.ClusterTemplateReference{Id: "my-template-id"},
-						FieldDefinitions: []*privatev1.FieldDefinition{
-							privatev1.FieldDefinition_builder{
-								Path:     "version",
-								Editable: true,
-								Default:  structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{"name": structpb.NewStringValue("does-not-exist")}}),
-							}.Build(),
-						},
+						Fields: privatev1.ClusterCatalogItemFields_builder{
+							Version: privatev1.ClusterVersionReferenceFieldPolicy_builder{Editable: privatev1.EditableClusterVersionReferenceField_builder{DefaultValue: privatev1.ClusterVersionReference_builder{Name: "does-not-exist"}.Build()}.Build()}.Build(),
+						}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).To(HaveOccurred())
 				status, ok := grpcstatus.FromError(err)
 				Expect(ok).To(BeTrue())
 				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-				Expect(status.Message()).To(ContainSubstring("cluster version 'does-not-exist' not found"))
+				Expect(status.Message()).To(ContainSubstring("cluster version 'does-not-exist' in fields.version not found"))
 			})
 		})
 
@@ -924,23 +777,70 @@ var _ = Describe("Private cluster catalog items server", func() {
 			_, err := server.Create(ctx, privatev1.ClusterCatalogItemsCreateRequest_builder{
 				Object: privatev1.ClusterCatalogItem_builder{
 					Metadata: privatev1.Metadata_builder{}.Build(),
-					Title:    "First unnamed item",
-					Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-
-			_, err = server.Create(ctx, privatev1.ClusterCatalogItemsCreateRequest_builder{
-				Object: privatev1.ClusterCatalogItem_builder{
-					Metadata: privatev1.Metadata_builder{}.Build(),
-					Title:    "Second unnamed item",
+					Title:    "Unnamed item",
 					Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).To(HaveOccurred())
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.AlreadyExists))
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(ContainSubstring("metadata.name"))
 		})
+	})
+})
+
+var _ = Describe("Cluster Catalog Item policy application", func() {
+	It("applies every Cluster policy and keeps node sets atomic", func() {
+		version := privatev1.ClusterVersionReference_builder{Id: "version-id", Name: "version"}.Build()
+		pullSecret := privatev1.SecretLocalReference_builder{Id: "secret-id", Name: "pull-secret"}.Build()
+		clusterAttachment := privatev1.ClusterNetworkAttachment_builder{
+			Subnet:         policyTestSubnet("cluster-subnet"),
+			SecurityGroups: []*privatev1.SecurityGroupLocalReference{policyTestSecurityGroup("cluster-security-group")},
+		}.Build()
+		workerSize := int32(3)
+		nodeMap := privatev1.ClusterNodeSetMap_builder{
+			Items: map[string]*privatev1.ClusterTemplateNodeSet{
+				"workers": privatev1.ClusterTemplateNodeSet_builder{Size: workerSize}.Build(),
+				"empty":   nil,
+			},
+		}.Build()
+		sshKey := "ssh-ed25519 cluster"
+		podCIDR := "10.0.0.0/16"
+		serviceCIDR := "172.30.0.0/16"
+		autoExternalIP := false
+
+		fields := privatev1.ClusterCatalogItemFields_builder{
+			Version:                  privatev1.ClusterVersionReferenceFieldPolicy_builder{Locked: version}.Build(),
+			SshPublicKey:             privatev1.StringFieldPolicy_builder{Locked: &sshKey}.Build(),
+			PullSecretSecret:         privatev1.SecretReferenceFieldPolicy_builder{Locked: pullSecret}.Build(),
+			Network:                  privatev1.ClusterNetworkFieldPolicies_builder{PodCidr: privatev1.StringFieldPolicy_builder{Locked: &podCIDR}.Build(), ServiceCidr: privatev1.StringFieldPolicy_builder{Locked: &serviceCIDR}.Build()}.Build(),
+			NodeSets:                 privatev1.ClusterNodeSetMapPolicy_builder{Locked: nodeMap}.Build(),
+			AutoExternalIpAttachment: privatev1.BoolFieldPolicy_builder{Locked: &autoExternalIP}.Build(),
+			NetworkAttachment:        privatev1.ClusterNetworkAttachmentFieldPolicy_builder{Locked: clusterAttachment}.Build(),
+		}.Build()
+		item := privatev1.ClusterCatalogItem_builder{Fields: fields}.Build()
+		spec := &privatev1.ClusterSpec{}
+
+		Expect(applyClusterCatalogItemPolicies(spec, item.GetFields())).To(Succeed())
+		Expect(spec.GetVersion()).NotTo(BeIdenticalTo(version))
+		Expect(spec.GetVersion().GetName()).To(Equal("version"))
+		Expect(spec.GetSshPublicKey()).To(Equal(sshKey))
+		Expect(spec.GetPullSecretSecret().GetName()).To(Equal("pull-secret"))
+		Expect(spec.GetNetwork().GetPodCidr()).To(Equal(podCIDR))
+		Expect(spec.GetNetwork().GetServiceCidr()).To(Equal(serviceCIDR))
+		Expect(spec.GetAutoExternalIpAttachment()).To(BeFalse())
+		Expect(spec.GetNetworkAttachment()).NotTo(BeIdenticalTo(clusterAttachment))
+		Expect(spec.GetNodeSets()).To(HaveLen(2))
+		Expect(spec.GetNodeSets()["workers"].GetSize()).To(Equal(workerSize))
+		Expect(spec.GetNodeSets()["empty"]).To(BeNil())
+		Expect(spec.GetNodeSets()["workers"].GetHostType()).To(BeNil())
+
+		spec.GetVersion().SetName("changed")
+		spec.GetNetworkAttachment().GetSubnet().SetName("changed")
+		spec.GetNodeSets()["workers"].SetSize(5)
+		Expect(version.GetName()).To(Equal("version"))
+		Expect(clusterAttachment.GetSubnet().GetName()).To(Equal("cluster-subnet"))
+		Expect(nodeMap.GetItems()["workers"].GetSize()).To(Equal(workerSize))
 	})
 })

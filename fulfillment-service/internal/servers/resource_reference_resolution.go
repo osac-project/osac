@@ -301,6 +301,17 @@ func canonicalComputeInstanceTemplateReference(resolved *privatev1.ComputeInstan
 	}.Build()
 }
 
+// canonicalClusterTemplateReference builds a new canonical reference from a resolved object's stored identity.
+// It performs no lookup or validation and does not mutate the object.
+func canonicalClusterTemplateReference(resolved *privatev1.ClusterTemplate) *privatev1.ClusterTemplateReference {
+	return privatev1.ClusterTemplateReference_builder{
+		Id:      resolved.GetId(),
+		Name:    resolved.GetMetadata().GetName(),
+		Project: resolved.GetMetadata().GetProject(),
+		Shared:  resolved.GetMetadata().GetTenant() == auth.SharedTenant,
+	}.Build()
+}
+
 // canonicalInstanceTypeReference builds a new canonical reference from a resolved object's stored identity.
 // It performs no lookup or validation and does not mutate the object.
 func canonicalInstanceTypeReference(resolved *privatev1.InstanceType) *privatev1.InstanceTypeReference {
@@ -327,6 +338,12 @@ func canonicalDiskImageReference(resolved *privatev1.DiskImage) *privatev1.DiskI
 // It performs no lookup or validation and does not mutate the object.
 func canonicalStorageTierReference(resolved *privatev1.StorageTier) *privatev1.StorageTierReference {
 	return privatev1.StorageTierReference_builder{Id: resolved.GetId(), Name: resolved.GetMetadata().GetName()}.Build()
+}
+
+// canonicalSecretLocalReference builds a new canonical reference from a resolved object's stored identity.
+// It performs no lookup or validation and does not mutate the object.
+func canonicalSecretLocalReference(resolved *privatev1.Secret) *privatev1.SecretLocalReference {
+	return privatev1.SecretLocalReference_builder{Id: resolved.GetId(), Name: resolved.GetMetadata().GetName()}.Build()
 }
 
 // canonicalSubnetLocalReference builds a new canonical reference from a resolved object's stored identity.

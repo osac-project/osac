@@ -192,6 +192,37 @@ func validateCatalogItemStringPolicy(policy *privatev1.StringFieldPolicy, field 
 	return nil
 }
 
+// canonicalizeCatalogItemCIDRPolicy validates and replaces locked/default IPv4 CIDRs with their canonical form.
+// It mutates the detached policy and returns a field-qualified error for invalid CIDRs.
+func canonicalizeCatalogItemCIDRPolicy(policy *privatev1.StringFieldPolicy, field string) error {
+	state, err := decodeStringPolicy(policy)
+	if err != nil {
+		return catalogItemPolicyError(field, err.Error())
+	}
+	canonicalize := func(value string) (string, error) {
+		canonical, parseErr := parseAndValidateCIDR(value, cidrIPv4)
+		if parseErr != nil {
+			return "", parseErr
+		}
+		return canonical, nil
+	}
+	if state.hasLocked {
+		canonical, canonicalErr := canonicalize(state.lockedValue)
+		if canonicalErr != nil {
+			return catalogItemPolicyError(field, canonicalErr.Error())
+		}
+		policy.SetLocked(canonical)
+	}
+	if state.hasDefault {
+		canonical, canonicalErr := canonicalize(state.defaultValue)
+		if canonicalErr != nil {
+			return catalogItemPolicyError(field, canonicalErr.Error())
+		}
+		policy.GetEditable().SetDefaultValue(canonical)
+	}
+	return nil
+}
+
 // validateCatalogItemInt32Policy checks the selected locked/default integer with validate, preserving explicit zero presence.
 // It returns a field-qualified error without changing the policy.
 func validateCatalogItemInt32Policy(policy *privatev1.Int32FieldPolicy, field string, validate func(int32) error) error {

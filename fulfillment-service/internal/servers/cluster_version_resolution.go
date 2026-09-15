@@ -22,6 +22,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -53,20 +54,18 @@ func lookupClusterVersionByName(
 	return response.GetItems()[0], nil
 }
 
-// validateClusterVersionUsability validates that a ClusterVersion is usable for cluster creation.
-// Returns an error if the version is disabled, deleted, or in OBSOLETE state.
-func validateClusterVersionUsability(cv *privatev1.ClusterVersion, versionName string) error {
-	if cv.GetMetadata().HasDeletionTimestamp() {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"cluster version '%s' has been deleted", versionName)
+// validateResolvedClusterVersion validates that a resolved ClusterVersion can be used.
+func validateResolvedClusterVersion(cv *privatev1.ClusterVersion, identifier, source string) error {
+	if err := validateResourceNotDeleted("cluster version", identifier, source, cv.GetMetadata()); err != nil {
+		return err
 	}
 	if cv.GetSpec().HasEnabled() && !cv.GetSpec().GetEnabled() {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"cluster version '%s' is disabled", versionName)
+			"cluster version '%s'%s is disabled", identifier, source)
 	}
 	if cv.GetSpec().GetState() == privatev1.ClusterVersionState_CLUSTER_VERSION_STATE_OBSOLETE {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"cluster version '%s' is obsolete and cannot be used", versionName)
+			"cluster version '%s'%s is obsolete and cannot be used", identifier, source)
 	}
 	return nil
 }
@@ -82,7 +81,7 @@ func lookupAndValidateClusterVersion(
 	if err != nil {
 		return err
 	}
-	return validateClusterVersionUsability(cv, versionName)
+	return validateResolvedClusterVersion(cv, versionName, "")
 }
 
 // buildClusterVersionReference creates a ClusterVersionReference from a ClusterVersion.
@@ -90,6 +89,8 @@ func buildClusterVersionReference(cv *privatev1.ClusterVersion) *privatev1.Clust
 	ref := &privatev1.ClusterVersionReference{}
 	ref.SetId(cv.GetId())
 	ref.SetName(cv.GetMetadata().GetName())
+	ref.SetShared(cv.GetMetadata().GetTenant() == auth.SharedTenant)
+	ref.SetProject(cv.GetMetadata().GetProject())
 	return ref
 }
 
@@ -122,7 +123,7 @@ func resolveDefaultClusterVersion(
 	}
 	cv := response.GetItems()[0]
 	versionName := cv.GetMetadata().GetName()
-	if err := validateClusterVersionUsability(cv, versionName); err != nil {
+	if err := validateResolvedClusterVersion(cv, versionName, ""); err != nil {
 		return nil, err
 	}
 	return buildClusterVersionReference(cv), nil

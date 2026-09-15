@@ -23,7 +23,6 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -42,11 +41,10 @@ var _ publicv1.ClusterCatalogItemsServer = (*ClusterCatalogItemsServer)(nil)
 type ClusterCatalogItemsServer struct {
 	publicv1.UnimplementedClusterCatalogItemsServer
 
-	logger           *slog.Logger
-	referenceChecker catalogItemReferenceChecker
-	delegate         privatev1.ClusterCatalogItemsServer
-	inMapper         *GenericMapper[*publicv1.ClusterCatalogItem, *privatev1.ClusterCatalogItem]
-	outMapper        *GenericMapper[*privatev1.ClusterCatalogItem, *publicv1.ClusterCatalogItem]
+	logger    *slog.Logger
+	delegate  privatev1.ClusterCatalogItemsServer
+	inMapper  *GenericMapper[*publicv1.ClusterCatalogItem, *privatev1.ClusterCatalogItem]
+	outMapper *GenericMapper[*privatev1.ClusterCatalogItem, *publicv1.ClusterCatalogItem]
 }
 
 func NewClusterCatalogItemsServer() *ClusterCatalogItemsServerBuilder {
@@ -103,16 +101,6 @@ func (b *ClusterCatalogItemsServerBuilder) Build() (result *ClusterCatalogItemsS
 		return
 	}
 
-	clustersDao, err := dao.NewGenericDAO[*privatev1.Cluster]().
-		SetLogger(b.logger).
-		SetTenancyLogic(b.tenancyLogic).
-		SetMetricsRegisterer(b.metricsRegisterer).
-		Build()
-	if err != nil {
-		return
-	}
-	referenceChecker := &daoReferenceChecker[*privatev1.Cluster]{resourceDao: clustersDao}
-
 	delegate, err := NewPrivateClusterCatalogItemsServer().
 		SetLogger(b.logger).
 		SetNotifier(b.notifier).
@@ -126,11 +114,10 @@ func (b *ClusterCatalogItemsServerBuilder) Build() (result *ClusterCatalogItemsS
 	}
 
 	result = &ClusterCatalogItemsServer{
-		logger:           b.logger,
-		referenceChecker: referenceChecker,
-		delegate:         delegate,
-		inMapper:         inMapper,
-		outMapper:        outMapper,
+		logger:    b.logger,
+		delegate:  delegate,
+		inMapper:  inMapper,
+		outMapper: outMapper,
 	}
 	return
 }
@@ -142,11 +129,7 @@ func (s *ClusterCatalogItemsServer) List(ctx context.Context,
 	if request.HasLimit() {
 		privateRequest.SetLimit(request.GetLimit())
 	}
-	composedFilter, err := s.addPublishedFilter(request.GetFilter())
-	if err != nil {
-		return nil, err
-	}
-	privateRequest.SetFilter(composedFilter)
+	privateRequest.SetFilter(request.GetFilter())
 	privateRequest.SetOrder(request.GetOrder())
 
 	privateResponse, err := s.delegate.List(ctx, privateRequest)
@@ -181,16 +164,6 @@ func (s *ClusterCatalogItemsServer) Get(ctx context.Context,
 	privateResponse, err := s.delegate.Get(ctx, privateRequest)
 	if err != nil {
 		return nil, err
-	}
-
-	if !privateResponse.GetObject().GetPublished() {
-		hasRef, refErr := s.referenceChecker.hasReference(ctx, request.GetId())
-		if refErr != nil {
-			return nil, refErr
-		}
-		if !hasRef {
-			return nil, grpcstatus.Errorf(grpccodes.NotFound, "catalog item not found")
-		}
 	}
 
 	publicCatalogItem := &publicv1.ClusterCatalogItem{}
@@ -253,23 +226,16 @@ func (s *ClusterCatalogItemsServer) Update(ctx context.Context,
 		return
 	}
 
-	getRequest := &privatev1.ClusterCatalogItemsGetRequest{}
-	getRequest.SetId(id)
-	getResponse, err := s.delegate.Get(ctx, getRequest)
-	if err != nil {
-		return nil, err
-	}
-	existingPrivateCatalogItem := getResponse.GetObject()
-
-	err = s.inMapper.Copy(ctx, publicCatalogItem, existingPrivateCatalogItem)
+	privateCatalogItem := &privatev1.ClusterCatalogItem{}
+	err = s.inMapper.Copy(ctx, publicCatalogItem, privateCatalogItem)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to map public cluster catalog item to private", slog.Any("error", err))
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process cluster catalog item")
-		return
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process cluster catalog item")
 	}
 
 	privateRequest := &privatev1.ClusterCatalogItemsUpdateRequest{}
-	privateRequest.SetObject(existingPrivateCatalogItem)
+	privateRequest.SetObject(privateCatalogItem)
+	privateRequest.SetUpdateMask(request.GetUpdateMask())
 	privateRequest.SetLock(request.GetLock())
 	privateResponse, err := s.delegate.Update(ctx, privateRequest)
 	if err != nil {
@@ -287,16 +253,6 @@ func (s *ClusterCatalogItemsServer) Update(ctx context.Context,
 	response = &publicv1.ClusterCatalogItemsUpdateResponse{}
 	response.SetObject(updatedPublicCatalogItem)
 	return
-}
-
-func (s *ClusterCatalogItemsServer) addPublishedFilter(filter string) (string, error) {
-	if filter == "" {
-		return "this.published", nil
-	}
-	if err := validateCELSyntax(filter); err != nil {
-		return "", grpcstatus.Errorf(grpccodes.InvalidArgument, "invalid filter: %v", err)
-	}
-	return "(" + filter + ") && this.published", nil
 }
 
 func (s *ClusterCatalogItemsServer) Delete(ctx context.Context,

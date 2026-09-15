@@ -27,5 +27,5 @@ collections:
     version: 2.2.2
   - name: ansible_network.network_runner
     type: git
-    source: https://github.com/ybettan/network-runner
-    version: 04fe0eaefb4fdbc36ed716adabfefec26c6a7495
+    source: https://github.com/ybettan/network-runner,04fe0eaefb4fdbc36ed716adabfefec26c6a7495
+    version: 0.3.9

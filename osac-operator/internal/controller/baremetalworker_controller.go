@@ -140,6 +140,27 @@ func ComputeWorkerBackoff(attemptCount int) time.Duration {
 	return delay
 }
 
+// workerReconcileResult captures the outcome of reconciling a single worker.
+type workerReconcileResult struct {
+	// requeueAfter is the minimum requeue delay requested for this worker.
+	requeueAfter time.Duration
+	// exhausted is true when the worker has reached the maximum retry count.
+	exhausted bool
+	// hadTransientError is true when a transient gRPC error was encountered.
+	hadTransientError bool
+}
+
+// minDuration returns the smaller of two durations, treating zero as "not set".
+func minDuration(current, candidate time.Duration) time.Duration {
+	if candidate == 0 {
+		return current
+	}
+	if current == 0 || candidate < current {
+		return candidate
+	}
+	return current
+}
+
 // ReconcileWorkers is the main entry point for worker failure handling.
 // It inspects each worker in the ClusterOrder status and takes appropriate action:
 // - Detects agent registration timeouts
@@ -168,114 +189,19 @@ func (r *BareMetalWorkerReconciler) ReconcileWorkers(
 
 	for i := range instance.Status.Workers {
 		worker := &instance.Status.Workers[i]
-
-		// Check if max retries exhausted
-		if worker.AttemptCount >= r.MaxRetries {
+		result, err := r.reconcileWorker(ctx, instance, worker, now)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if result.exhausted {
 			hasFailures = true
-			continue
-		}
-
-		// Check if worker is ready
-		ready, err := r.BMIProvider.IsBMIReady(ctx, worker.BMIName, worker.BMINamespace)
-		if err != nil {
-			if IsTransientGRPCError(err) {
-				log.Info("transient gRPC error checking BMI readiness, setting FulfillmentServiceUnavailable",
-					"worker", worker.BMIName)
-				hadTransientError = true
-				instance.SetStatusCondition(
-					v1alpha1.ConditionFulfillmentServiceUnavailable,
-					metav1.ConditionTrue,
-					sanitizeFeedbackText(fmt.Sprintf("Transient gRPC error: %v", err)),
-					v1alpha1.ReasonGRPCUnavailable,
-				)
-				if nextRequeue == 0 || provisioning.BackoffBaseDelay < nextRequeue {
-					nextRequeue = provisioning.BackoffBaseDelay
-				}
-				allTerminal = false
-				continue
-			}
-			return ctrl.Result{}, fmt.Errorf("checking BMI readiness for %s/%s: %w",
-				worker.BMINamespace, worker.BMIName, err)
-		}
-
-		if ready {
+		} else {
 			allTerminal = false
-			continue
 		}
-
-		allTerminal = false
-
-		// Check backoff window
-		if worker.NextRetryTime != nil && now.Before(worker.NextRetryTime.Time) {
-			remaining := worker.NextRetryTime.Time.Sub(now)
-			if nextRequeue == 0 || remaining < nextRequeue {
-				nextRequeue = remaining
-			}
-			continue
+		if result.hadTransientError {
+			hadTransientError = true
 		}
-
-		// Check agent registration timeout
-		regTime, err := r.BMIProvider.GetBMIRegistrationTime(ctx, worker.BMIName, worker.BMINamespace)
-		if err != nil {
-			if IsTransientGRPCError(err) {
-				log.Info("transient gRPC error checking agent registration, setting FulfillmentServiceUnavailable",
-					"worker", worker.BMIName)
-				hadTransientError = true
-				instance.SetStatusCondition(
-					v1alpha1.ConditionFulfillmentServiceUnavailable,
-					metav1.ConditionTrue,
-					sanitizeFeedbackText(fmt.Sprintf("Transient gRPC error: %v", err)),
-					v1alpha1.ReasonGRPCUnavailable,
-				)
-				if nextRequeue == 0 || provisioning.BackoffBaseDelay < nextRequeue {
-					nextRequeue = provisioning.BackoffBaseDelay
-				}
-				continue
-			}
-			return ctrl.Result{}, fmt.Errorf("checking agent registration for %s/%s: %w",
-				worker.BMINamespace, worker.BMIName, err)
-		}
-
-		if regTime.IsZero() {
-			// Agent not yet registered; check if BMI creation exceeded timeout
-			bmiCreationTime, hasCreationTime := r.getBMICreationTime(worker)
-			if hasCreationTime && now.Sub(bmiCreationTime) >= r.AgentRegistrationTimeout {
-				log.Info("agent registration timeout, triggering BMI replacement",
-					"worker", worker.BMIName, "timeout", r.AgentRegistrationTimeout)
-
-				result, transientErr, err := r.replaceBMI(ctx, instance, worker, v1alpha1.ReasonAgentRegistrationTimeout,
-					fmt.Sprintf("Agent failed to register within %s", r.AgentRegistrationTimeout))
-				if err != nil {
-					return ctrl.Result{}, err
-				}
-				if transientErr {
-					hadTransientError = true
-				}
-				if result.RequeueAfter > 0 && (nextRequeue == 0 || result.RequeueAfter < nextRequeue) {
-					nextRequeue = result.RequeueAfter
-				}
-				continue
-			}
-
-			// Still waiting for agent registration
-			if hasCreationTime {
-				remaining := r.AgentRegistrationTimeout - now.Sub(bmiCreationTime)
-				if remaining > 0 && (nextRequeue == 0 || remaining < nextRequeue) {
-					nextRequeue = remaining
-				}
-			} else {
-				// No creation timestamp yet; requeue to check again shortly.
-				if nextRequeue == 0 || bootingWorkerRequeueInterval < nextRequeue {
-					nextRequeue = bootingWorkerRequeueInterval
-				}
-			}
-			continue
-		}
-
-		// Agent is registered but BMI is not yet ready — poll periodically.
-		if nextRequeue == 0 || bootingWorkerRequeueInterval < nextRequeue {
-			nextRequeue = bootingWorkerRequeueInterval
-		}
+		nextRequeue = minDuration(nextRequeue, result.requeueAfter)
 	}
 
 	// Report worker status to fulfillment service
@@ -285,17 +211,10 @@ func (r *BareMetalWorkerReconciler) ReconcileWorkers(
 				log.Info("transient gRPC error reporting worker status",
 					"clusterOrder", instance.Name)
 				hadTransientError = true
-				instance.SetStatusCondition(
-					v1alpha1.ConditionFulfillmentServiceUnavailable,
-					metav1.ConditionTrue,
-					sanitizeFeedbackText(fmt.Sprintf("Transient gRPC error: %v", err)),
-					v1alpha1.ReasonGRPCUnavailable,
-				)
+				r.setTransientGRPCCondition(instance, err)
 				// Ensure the controller requeues to retry the report even when
 				// all workers are already ready (nextRequeue would be zero).
-				if nextRequeue == 0 || provisioning.BackoffBaseDelay < nextRequeue {
-					nextRequeue = provisioning.BackoffBaseDelay
-				}
+				nextRequeue = minDuration(nextRequeue, provisioning.BackoffBaseDelay)
 			} else {
 				return ctrl.Result{}, fmt.Errorf("reporting worker status: %w", err)
 			}
@@ -327,6 +246,115 @@ func (r *BareMetalWorkerReconciler) ReconcileWorkers(
 		return ctrl.Result{RequeueAfter: nextRequeue}, nil
 	}
 	return ctrl.Result{}, nil
+}
+
+// reconcileWorker processes a single worker entry and returns the reconciliation
+// outcome. Extracting per-worker logic keeps ReconcileWorkers below the
+// cyclomatic-complexity threshold.
+func (r *BareMetalWorkerReconciler) reconcileWorker(
+	ctx context.Context, instance *v1alpha1.ClusterOrder, worker *v1alpha1.WorkerStatus, now time.Time,
+) (workerReconcileResult, error) {
+	log := ctrllog.FromContext(ctx)
+
+	// Check if max retries exhausted
+	if worker.AttemptCount >= r.MaxRetries {
+		return workerReconcileResult{exhausted: true}, nil
+	}
+
+	// Check if worker is ready
+	ready, err := r.BMIProvider.IsBMIReady(ctx, worker.BMIName, worker.BMINamespace)
+	if err != nil {
+		if IsTransientGRPCError(err) {
+			log.Info("transient gRPC error checking BMI readiness, setting FulfillmentServiceUnavailable",
+				"worker", worker.BMIName)
+			r.setTransientGRPCCondition(instance, err)
+			return workerReconcileResult{
+				requeueAfter:      provisioning.BackoffBaseDelay,
+				hadTransientError: true,
+			}, nil
+		}
+		return workerReconcileResult{}, fmt.Errorf("checking BMI readiness for %s/%s: %w",
+			worker.BMINamespace, worker.BMIName, err)
+	}
+
+	if ready {
+		return workerReconcileResult{}, nil
+	}
+
+	// Check backoff window
+	if worker.NextRetryTime != nil && now.Before(worker.NextRetryTime.Time) {
+		remaining := worker.NextRetryTime.Time.Sub(now)
+		return workerReconcileResult{requeueAfter: remaining}, nil
+	}
+
+	// Check agent registration timeout
+	regTime, err := r.BMIProvider.GetBMIRegistrationTime(ctx, worker.BMIName, worker.BMINamespace)
+	if err != nil {
+		if IsTransientGRPCError(err) {
+			log.Info("transient gRPC error checking agent registration, setting FulfillmentServiceUnavailable",
+				"worker", worker.BMIName)
+			r.setTransientGRPCCondition(instance, err)
+			return workerReconcileResult{
+				requeueAfter:      provisioning.BackoffBaseDelay,
+				hadTransientError: true,
+			}, nil
+		}
+		return workerReconcileResult{}, fmt.Errorf("checking agent registration for %s/%s: %w",
+			worker.BMINamespace, worker.BMIName, err)
+	}
+
+	if regTime.IsZero() {
+		return r.handleUnregisteredAgent(ctx, instance, worker, now)
+	}
+
+	// Agent is registered but BMI is not yet ready — poll periodically.
+	return workerReconcileResult{requeueAfter: bootingWorkerRequeueInterval}, nil
+}
+
+// handleUnregisteredAgent handles the case where a worker's agent has not yet
+// registered, checking for timeout and triggering BMI replacement if needed.
+func (r *BareMetalWorkerReconciler) handleUnregisteredAgent(
+	ctx context.Context, instance *v1alpha1.ClusterOrder, worker *v1alpha1.WorkerStatus, now time.Time,
+) (workerReconcileResult, error) {
+	log := ctrllog.FromContext(ctx)
+
+	bmiCreationTime, hasCreationTime := r.getBMICreationTime(worker)
+	if hasCreationTime && now.Sub(bmiCreationTime) >= r.AgentRegistrationTimeout {
+		log.Info("agent registration timeout, triggering BMI replacement",
+			"worker", worker.BMIName, "timeout", r.AgentRegistrationTimeout)
+
+		result, transientErr, err := r.replaceBMI(ctx, instance, worker, v1alpha1.ReasonAgentRegistrationTimeout,
+			fmt.Sprintf("Agent failed to register within %s", r.AgentRegistrationTimeout))
+		if err != nil {
+			return workerReconcileResult{}, err
+		}
+		return workerReconcileResult{
+			requeueAfter:      result.RequeueAfter,
+			hadTransientError: transientErr,
+		}, nil
+	}
+
+	// Still waiting for agent registration
+	if hasCreationTime {
+		remaining := r.AgentRegistrationTimeout - now.Sub(bmiCreationTime)
+		if remaining > 0 {
+			return workerReconcileResult{requeueAfter: remaining}, nil
+		}
+	}
+
+	// No creation timestamp yet; requeue to check again shortly.
+	return workerReconcileResult{requeueAfter: bootingWorkerRequeueInterval}, nil
+}
+
+// setTransientGRPCCondition sets the FulfillmentServiceUnavailable condition
+// with a sanitized error message.
+func (r *BareMetalWorkerReconciler) setTransientGRPCCondition(instance *v1alpha1.ClusterOrder, err error) {
+	instance.SetStatusCondition(
+		v1alpha1.ConditionFulfillmentServiceUnavailable,
+		metav1.ConditionTrue,
+		sanitizeFeedbackText(fmt.Sprintf("Transient gRPC error: %v", err)),
+		v1alpha1.ReasonGRPCUnavailable,
+	)
 }
 
 // replaceBMI deletes the current BMI and creates a replacement, updating the

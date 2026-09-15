@@ -372,48 +372,6 @@ class AddOnOperatorLocalReference(Base):
     name: str
 
 
-def _ocp_version_key(
-    value: str,
-) -> tuple[tuple[int, int, int], tuple[int, tuple[tuple[int, int | str], ...]]]:
-    match = re.fullmatch(
-        r"(?P<core>[0-9]+(?:\.[0-9]+){0,2})"
-        r"(?:-(?P<prerelease>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?"
-        r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?",
-        value,
-    )
-    if match is None:
-        raise ValueError(f"Invalid OpenShift version: {value}")
-
-    core_text = match.group("core").split(".")
-    if any(len(part) > 1 and part.startswith("0") for part in core_text):
-        raise ValueError(f"Invalid OpenShift version: {value}")
-    core_parts = [int(part) for part in core_text]
-    core = tuple(core_parts + [0] * (3 - len(core_parts)))
-    prerelease_text = match.group("prerelease")
-    if prerelease_text is None:
-        prerelease = (1, ())
-    else:
-        identifiers = prerelease_text.split(".")
-        if any(
-            identifier.isascii()
-            and identifier.isdigit()
-            and len(identifier) > 1
-            and identifier.startswith("0")
-            for identifier in identifiers
-        ):
-            raise ValueError(f"Invalid OpenShift version: {value}")
-        prerelease = (
-            0,
-            tuple(
-                (0, int(identifier))
-                if identifier.isascii() and identifier.isdigit()
-                else (1, identifier)
-                for identifier in identifiers
-            ),
-        )
-    return core, prerelease
-
-
 class AddOnOperatorTemplate(BaseTemplate):
     """Template for an OLM add-on operator."""
 
@@ -465,16 +423,6 @@ class AddOnOperatorTemplate(BaseTemplate):
         if not value.strip():
             raise ValueError("OLM metadata values must not be blank")
         return value
-
-    @pydantic.model_validator(mode="after")
-    def validate_version_range(self) -> Self:
-        minimum = _ocp_version_key(self.min_ocp_version) if self.min_ocp_version else None
-        maximum = _ocp_version_key(self.max_ocp_version) if self.max_ocp_version else None
-        if minimum is not None and maximum is not None:
-            if minimum > maximum:
-                raise ValueError("inverted OpenShift version range")
-
-        return self
 
     @pydantic.model_validator(mode="after")
     def validate_references(self) -> Self:

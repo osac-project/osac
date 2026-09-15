@@ -482,50 +482,14 @@ class TestAddOnOperatorTemplate:
         with pytest.raises(pydantic.ValidationError, match="must be a list"):
             _make_addon_operator_template(**{field: None})
 
-    def test_equivalent_version_component_lengths_are_allowed(self):
+    def test_version_bounds_are_passed_through_to_api(self):
         template = _make_addon_operator_template(
-            min_ocp_version="4.10",
-            max_ocp_version="4.10.0",
+            min_ocp_version="not-a-version",
+            max_ocp_version="4.14.0-rc.01",
         )
 
-        assert template.min_ocp_version == "4.10"
-        assert template.max_ocp_version == "4.10.0"
-
-    @pytest.mark.parametrize("field", ["min_ocp_version", "max_ocp_version"])
-    def test_malformed_version_bound_is_rejected(self, field):
-        with pytest.raises(pydantic.ValidationError, match="Invalid OpenShift version"):
-            _make_addon_operator_template(**{field: "not-a-version"})
-
-    def test_inverted_prerelease_version_range_is_rejected(self):
-        with pytest.raises(pydantic.ValidationError, match="inverted"):
-            _make_addon_operator_template(
-                min_ocp_version="4.15.0",
-                max_ocp_version="4.15.0-rc.1",
-            )
-
-    def test_prerelease_version_before_stable_version_is_allowed(self):
-        template = _make_addon_operator_template(
-            min_ocp_version="4.15.0-rc.1",
-            max_ocp_version="4.15.0",
-        )
-
-        assert template.min_ocp_version == "4.15.0-rc.1"
-
-    @pytest.mark.parametrize("field", ["min_ocp_version", "max_ocp_version"])
-    def test_leading_zero_version_bound_is_rejected(self, field):
-        with pytest.raises(pydantic.ValidationError, match="Invalid OpenShift version"):
-            _make_addon_operator_template(**{field: "04.15.0"})
-
-    def test_leading_zero_prerelease_identifier_is_rejected(self):
-        with pytest.raises(pydantic.ValidationError, match="Invalid OpenShift version"):
-            _make_addon_operator_template(max_ocp_version="4.15.0-rc.01")
-
-    def test_inverted_version_range_is_rejected(self):
-        with pytest.raises(pydantic.ValidationError, match="inverted"):
-            _make_addon_operator_template(
-                min_ocp_version="4.16.0",
-                max_ocp_version="4.14.0",
-            )
+        assert template.min_ocp_version == "not-a-version"
+        assert template.max_ocp_version == "4.14.0-rc.01"
 
 
 # ---------------------------------------------------------------------------

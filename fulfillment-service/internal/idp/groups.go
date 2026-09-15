@@ -254,7 +254,7 @@ func (c *Client) getGroupIDByName(ctx context.Context, orgID, parentID, name str
 		}
 	}
 
-	return "", fmt.Errorf("group %q not found among children of parent %q", name, parentID)
+	return "", &ErrNotFound{Kind: "group", Name: name}
 }
 
 // groupNode represents a group in the hierarchy for recursive traversal

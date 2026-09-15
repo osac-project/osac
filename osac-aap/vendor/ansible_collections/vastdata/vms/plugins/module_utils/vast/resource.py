@@ -81,7 +81,7 @@ class BaseResource:
         self.client.debug = conn.debug
 
         # Validate product version
-        ensure_supported_version(module, self.client, min_version=(5, 3, 0), max_version=(5, 5, 0))
+        ensure_supported_version(module, self.client, min_version=(5, 4, 0), max_version=(5, 5, 0))
 
         # Get schema overrides for this resource
         self.overrides = get_overrides(self.resource_name)

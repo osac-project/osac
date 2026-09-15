@@ -250,6 +250,73 @@ var _ = Describe("ClusterOrder transition events", func() {
 		Consistently(recorder.Events, 200*time.Millisecond).ShouldNot(Receive())
 	})
 
+	It("records the Ready event after HostedCluster becomes available and workers join", func() {
+		recorder := newRecorder()
+		reconciler := &ClusterOrderReconciler{Recorder: recorder}
+		instance := &v1alpha1.ClusterOrder{}
+
+		oldStatus := statusWithProgressingReason(v1alpha1.ReasonPreparingInfrastructure)
+		instance.Status = statusWithProgressingReason(v1alpha1.ReasonControlPlaneStarting)
+		reconciler.recordTransitionEvents(instance, &oldStatus)
+		Eventually(recorder.Events).Should(Receive(ContainSubstring(v1alpha1.ReasonControlPlaneStarting)))
+
+		oldStatus = instance.Status
+		instance.Status = statusWithProgressingReason(v1alpha1.ReasonWorkersJoining)
+		reconciler.recordTransitionEvents(instance, &oldStatus)
+		Eventually(recorder.Events).Should(Receive(ContainSubstring(v1alpha1.ReasonWorkersJoining)))
+
+		oldStatus = instance.Status
+		instance.Status = v1alpha1.ClusterOrderStatus{
+			Phase: v1alpha1.ClusterOrderPhaseReady,
+			Conditions: []metav1.Condition{{
+				Type:   v1alpha1.ConditionProgressing,
+				Status: metav1.ConditionFalse,
+				Reason: v1alpha1.ReasonAsExpected,
+			}},
+		}
+		reconciler.recordTransitionEvents(instance, &oldStatus)
+		Eventually(recorder.Events).Should(Receive(And(
+			ContainSubstring(corev1.EventTypeNormal),
+			ContainSubstring(v1alpha1.ReasonReady),
+		)))
+		Consistently(recorder.Events, 200*time.Millisecond).ShouldNot(Receive())
+	})
+
+	It("persists the terminal transition before recording the Ready event", func() {
+		scheme := runtime.NewScheme()
+		Expect(v1alpha1.AddToScheme(scheme)).To(Succeed())
+		oldStatus := statusWithProgressingReason(v1alpha1.ReasonWorkersJoining)
+		instance := &v1alpha1.ClusterOrder{
+			ObjectMeta: metav1.ObjectMeta{Name: "order", Namespace: "default"},
+			Status:     oldStatus,
+		}
+		fakeClient := fake.NewClientBuilder().WithScheme(scheme).
+			WithStatusSubresource(instance).
+			WithObjects(instance.DeepCopy()).Build()
+		recorder := newRecorder()
+		reconciler := &ClusterOrderReconciler{Client: fakeClient, apiReader: fakeClient, Recorder: recorder}
+
+		instance.Status = v1alpha1.ClusterOrderStatus{
+			Phase: v1alpha1.ClusterOrderPhaseReady,
+			Conditions: []metav1.Condition{{
+				Type:   v1alpha1.ConditionProgressing,
+				Status: metav1.ConditionFalse,
+				Reason: v1alpha1.ReasonAsExpected,
+			}},
+		}
+		Expect(reconciler.persistStatusAndRecordTransitionEvents(
+			context.Background(), client.ObjectKeyFromObject(instance), instance, &oldStatus,
+		)).To(Succeed())
+
+		stored := &v1alpha1.ClusterOrder{}
+		Expect(fakeClient.Get(context.Background(), client.ObjectKeyFromObject(instance), stored)).To(Succeed())
+		Expect(stored.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseReady))
+		Expect(recorder.Events).To(Receive(And(
+			ContainSubstring(corev1.EventTypeNormal),
+			ContainSubstring(v1alpha1.ReasonReady),
+		)))
+	})
+
 	It("does not emit an event when status persistence fails", func() {
 		recorder := newRecorder()
 		scheme := runtime.NewScheme()

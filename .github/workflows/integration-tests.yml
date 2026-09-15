@@ -131,6 +131,8 @@ jobs:
     - name: Install Helm
       uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
     - name: Install ginkgo
+      env:
+        GODEBUG: http2client=0
       run: go install github.com/onsi/ginkgo/v2/ginkgo@v2.32.0  # keep in sync with go.mod's github.com/onsi/ginkgo/v2 version
     - name: Install infrastructure on Kind
       env:
@@ -194,6 +196,8 @@ jobs:
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
 
       - name: Install ginkgo
+        env:
+          GODEBUG: http2client=0
         run: go install github.com/onsi/ginkgo/v2/ginkgo@v2.32.0  # keep in sync with go.mod's github.com/onsi/ginkgo/v2 version
 
       - name: Install infrastructure on Kind
@@ -248,6 +252,8 @@ jobs:
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
 
       - name: Install ginkgo
+        env:
+          GODEBUG: http2client=0
         run: go install github.com/onsi/ginkgo/v2/ginkgo@v2.32.0  # keep in sync with go.mod's github.com/onsi/ginkgo/v2 version
 
       - name: Install infrastructure on Kind
@@ -384,7 +390,7 @@ jobs:
       env:
         CONTAINER_TOOL: docker
       run: |
-        docker build -t localhost/fulfillment-service:it -f fulfillment-service/Containerfile .
+        docker build --build-arg GODEBUG=http2client=0 -t localhost/fulfillment-service:it -f fulfillment-service/Containerfile .
         kind load docker-image localhost/fulfillment-service:it --name osac-dev
 
     - name: Deploy charts

@@ -5,15 +5,16 @@
       {{ 'this.id == ' ~ (template.id | to_json) }}{{ ' || ' if not loop.last else '' }}
       {%- endfor -%}
 
-- name: Get first page of existing AddOnOperators
-  ansible.builtin.uri:
-    url: "{{ publish_templates_addon_operator_api_endpoint }}?filter={{ addon_operator_filter | urlencode }}&limit=100&offset=0"
-    validate_certs: "{{ publish_templates_validate_certs | default(true) | bool }}"
-    headers:
-      authorization: Bearer {{ osac_fulfillment_service_token }}
-    status_code: [200, 404, 503]
-  register: addon_operator_check
-  no_log: true
+- name: Set first AddOnOperator page offset
+  ansible.builtin.set_fact:
+    addon_operator_page_offset: 0
+
+- name: Fetch first AddOnOperator page
+  ansible.builtin.include_tasks: fetch_addon_operator_page.yaml
+
+- name: Store first AddOnOperator page result
+  ansible.builtin.set_fact:
+    addon_operator_check: "{{ addon_operator_page }}"
 
 - name: Skip AddOnOperators when service is disabled
   ansible.builtin.debug:

@@ -1,12 +1,9 @@
-- name: Get next page of existing AddOnOperators
-  ansible.builtin.uri:
-    url: "{{ publish_templates_addon_operator_api_endpoint }}?filter={{ addon_operator_filter | urlencode }}&limit=100&offset={{ addon_operator_next_offset }}"
-    validate_certs: "{{ publish_templates_validate_certs | default(true) | bool }}"
-    headers:
-      authorization: Bearer {{ osac_fulfillment_service_token }}
-    status_code: [200, 404, 503]
-  register: addon_operator_page
-  no_log: true
+- name: Set next AddOnOperator page offset
+  ansible.builtin.set_fact:
+    addon_operator_page_offset: "{{ addon_operator_next_offset }}"
+
+- name: Fetch next AddOnOperator page
+  ansible.builtin.include_tasks: fetch_addon_operator_page.yaml
 
 - name: Accumulate AddOnOperator page
   ansible.builtin.include_tasks: accumulate_addon_operator_page.yaml

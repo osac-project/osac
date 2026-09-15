@@ -342,7 +342,13 @@ func (r *BareMetalWorkerReconciler) handleUnregisteredAgent(
 		}
 	}
 
-	// No creation timestamp yet; requeue to check again shortly.
+	// No creation timestamp yet; record the current time as the attempt
+	// start so that subsequent reconciliations can evaluate the agent
+	// registration timeout instead of polling indefinitely.
+	attemptStart := metav1.NewTime(now)
+	worker.AttemptStartTime = &attemptStart
+	log.Info("recorded attempt start time for worker without timing metadata",
+		"worker", worker.BMIName)
 	return workerReconcileResult{requeueAfter: bootingWorkerRequeueInterval}, nil
 }
 
@@ -447,6 +453,7 @@ func (r *BareMetalWorkerReconciler) replaceBMI(
 	worker.LastFailureTime = &failTime
 	worker.BMIName = newName
 	worker.BMINamespace = newNamespace
+	worker.AttemptStartTime = nil // NextRetryTime is now the timeout anchor
 
 	instance.SetStatusCondition(
 		v1alpha1.ConditionWorkerProvisioningFailed,
@@ -470,9 +477,10 @@ func (r *BareMetalWorkerReconciler) replaceBMI(
 // and a boolean indicating whether a creation timestamp is available.
 // When the worker has a NextRetryTime (set during a replacement), that value
 // is used as the effective creation time. Otherwise, LastFailureTime is used.
-// If neither timestamp is set (initial attempt with no failure history), the
-// second return value is false so the caller can distinguish "no timestamp yet"
-// from "timed out" and avoid a false-positive timeout on the first invocation.
+// As a final fallback, AttemptStartTime (recorded when the worker is first
+// observed without any other timestamp) is used. If none of the three
+// timestamps are set, the second return value is false so the caller can
+// record an AttemptStartTime and requeue.
 func (r *BareMetalWorkerReconciler) getBMICreationTime(worker *v1alpha1.WorkerStatus) (time.Time, bool) {
 	if worker.NextRetryTime != nil {
 		return worker.NextRetryTime.Time, true
@@ -480,9 +488,12 @@ func (r *BareMetalWorkerReconciler) getBMICreationTime(worker *v1alpha1.WorkerSt
 	if worker.LastFailureTime != nil {
 		return worker.LastFailureTime.Time, true
 	}
+	if worker.AttemptStartTime != nil {
+		return worker.AttemptStartTime.Time, true
+	}
 	// No creation timestamp available — the BMI was just created and has no
 	// prior failure history. Return zero time with false to signal that the
-	// caller should not evaluate a timeout yet.
+	// caller should record an AttemptStartTime.
 	return time.Time{}, false
 }
 

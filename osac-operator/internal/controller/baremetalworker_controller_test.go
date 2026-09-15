@@ -805,7 +805,7 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 		})
 
 		Context("initial workers without timestamps", func() {
-			It("should requeue when no creation timestamp is available", func() {
+			It("should record AttemptStartTime and requeue when no timestamp is available", func() {
 				bmiProvider.isReady = false
 				bmiProvider.regTime = time.Time{} // agent not registered
 				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
@@ -813,17 +813,83 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 						BMIName:      "worker-1",
 						BMINamespace: "osac-baremetalinstance",
 						AttemptCount: 0,
-						// No LastFailureTime or NextRetryTime set
+						// No LastFailureTime, NextRetryTime, or AttemptStartTime set
 					},
 				})
 
 				result, err := reconciler.ReconcileWorkers(ctx, instance)
 				Expect(err).NotTo(HaveOccurred())
-				// Should requeue with booting interval since no timestamp is available
+				// Should requeue with booting interval since no timestamp was available
 				Expect(result.RequeueAfter).To(Equal(1 * time.Minute))
 				// Should NOT trigger BMI replacement
 				Expect(bmiProvider.deleteCalls).To(Equal(0))
 				Expect(bmiProvider.createCalls).To(Equal(0))
+				// Should record AttemptStartTime for subsequent timeout evaluation
+				Expect(instance.Status.Workers[0].AttemptStartTime).NotTo(BeNil(),
+					"AttemptStartTime must be set on first observation")
+				Expect(instance.Status.Workers[0].AttemptStartTime.Time).To(
+					BeTemporally("==", now),
+					"AttemptStartTime should equal the current reconciliation time")
+			})
+
+			It("should use AttemptStartTime for timeout on subsequent reconciliation", func() {
+				bmiProvider.isReady = false
+				bmiProvider.regTime = time.Time{} // agent not registered
+
+				// Simulate a worker that had AttemptStartTime set 15 minutes ago
+				// (within the 30-minute timeout).
+				attemptStart := metav1.NewTime(now.Add(-15 * time.Minute))
+				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
+					{
+						BMIName:          "worker-1",
+						BMINamespace:     "osac-baremetalinstance",
+						AttemptCount:     0,
+						AttemptStartTime: &attemptStart,
+					},
+				})
+
+				result, err := reconciler.ReconcileWorkers(ctx, instance)
+				Expect(err).NotTo(HaveOccurred())
+				// Should requeue to check again near the timeout
+				Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+				Expect(result.RequeueAfter).To(BeNumerically("<=", 15*time.Minute))
+				// Should NOT trigger BMI replacement yet
+				Expect(bmiProvider.deleteCalls).To(Equal(0))
+				Expect(bmiProvider.createCalls).To(Equal(0))
+			})
+
+			It("should trigger timeout after 30 minutes from AttemptStartTime", func() {
+				bmiProvider.isReady = false
+				bmiProvider.regTime = time.Time{} // agent not registered
+				bmiProvider.nextCreateName = "replacement-bmi"
+
+				// Simulate a worker with AttemptStartTime set 31 minutes ago
+				// (exceeds 30-minute timeout).
+				attemptStart := metav1.NewTime(now.Add(-31 * time.Minute))
+				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
+					{
+						BMIName:          "worker-1",
+						BMINamespace:     "osac-baremetalinstance",
+						AttemptCount:     0,
+						AttemptStartTime: &attemptStart,
+					},
+				})
+
+				result, err := reconciler.ReconcileWorkers(ctx, instance)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+				// Should trigger BMI replacement
+				Expect(bmiProvider.deleteCalls).To(Equal(1))
+				Expect(bmiProvider.createCalls).To(Equal(1))
+				Expect(instance.Status.Workers[0].AttemptCount).To(Equal(1))
+				Expect(instance.Status.Workers[0].LastFailureReason).To(
+					Equal(v1alpha1.ReasonAgentRegistrationTimeout))
+				// AttemptStartTime should be cleared after replacement
+				// (NextRetryTime is the new timeout anchor)
+				Expect(instance.Status.Workers[0].AttemptStartTime).To(BeNil(),
+					"AttemptStartTime should be cleared after BMI replacement")
+				Expect(instance.Status.Workers[0].NextRetryTime).NotTo(BeNil(),
+					"NextRetryTime should be set after replacement")
 			})
 		})
 

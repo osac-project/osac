@@ -90,3 +90,9 @@ linters:
           - staticcheck
         path: internal/servers/
         text: FieldDefinitions.*deprecated
+      # host_type on ClusterNodeSet is deprecated in favour of baremetal_instance_type
+      # (OSAC-5117) but the BMaaS path, template merge, controllers, and existing
+      # tests still reference it during the migration period.
+      - linters:
+          - staticcheck
+        text: HostType.*deprecated

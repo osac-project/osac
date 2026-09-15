@@ -195,9 +195,12 @@ var _ = BeforeSuite(func() {
 
 	// Start a real gRPC server, with the same transaction interceptor production uses, and register every
 	// filterable resource through the exact same function production calls:
+	referenceValidator, err := newReferenceValidator(logger, tenancy, metricsRegisterer)
+	Expect(err).ToNot(HaveOccurred())
 	server := itesting.NewServer(grpc.ChainUnaryInterceptor(
 		panicInterceptor.UnaryServer,
 		txInterceptor.UnaryServer,
+		referenceValidator.UnaryServer,
 	))
 	DeferCleanup(server.Stop)
 	_, err = RegisterResourceServers(ctx, server.Registrar(), ResourceServerDeps{

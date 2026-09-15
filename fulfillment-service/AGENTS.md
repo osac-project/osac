@@ -54,6 +54,19 @@ ginkgo run -r internal             # Unit tests; excludes it/
 ginkgo run internal/servers        # Focused package tests
 ```
 
-For integration tests, use the installer-owned target with an available Kind
-cluster: `make -C ../osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment`.
-See `README.md` for required host entries and deployment setup.
+Use the installer target for integration tests. See `README.md` for prerequisites and host entries.
+
+```bash
+make -C ../osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment
+```
+
+This builds, loads, and deploys the current service image; it reuses existing infrastructure.
+To prevent leftover resources, database records, or configuration from affecting results,
+recreate `osac-dev` when a clean environment is needed:
+
+Collect useful diagnostics before deleting a cluster.
+
+```bash
+kind delete cluster --name osac-dev
+make -C ../osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac
+```

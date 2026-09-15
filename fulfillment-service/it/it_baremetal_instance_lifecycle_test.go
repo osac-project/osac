@@ -108,7 +108,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		// Create BareMetalInstanceCatalogItem (must be published for public API access)
+		// Create a published Catalog Item for provisioning; drafts remain readable.
 		catalogResp, err := bareMetalInstanceCatalogItemsClient.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 			Object: privatev1.BareMetalInstanceCatalogItem_builder{
 				Metadata: privatev1.Metadata_builder{
@@ -132,7 +132,8 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		instanceTypeResp, err := bareMetalInstanceTypesClient.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
 			Object: privatev1.BareMetalInstanceType_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name: fmt.Sprintf("test-instance-type-%s", uuid.New()[24:32]),
+					Name:   fmt.Sprintf("test-instance-type-%s", uuid.New()[24:32]),
+					Tenant: usersGroup,
 				}.Build(),
 				Spec: privatev1.BareMetalInstanceTypeSpec_builder{
 					Hardware: privatev1.BareMetalHardwareSpec_builder{
@@ -253,7 +254,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		Expect(err).To(HaveOccurred())
 		status, ok := grpcstatus.FromError(err)
 		Expect(ok).To(BeTrue())
-		Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+		Expect(status.Code()).To(Equal(grpccodes.NotFound))
 	})
 
 	It("Rejects Create with network_attachments when the Subnet's NetworkClass has no fabric_manager", func(ctx context.Context) {
@@ -350,6 +351,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 
 		_, err = bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					InstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: instanceTypeId}.Build(),
@@ -694,10 +698,8 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		Expect(status.Message()).To(ContainSubstring("template is immutable"))
 	})
 
-	It("Resolves catalog item by name and materializes spec.template", func(ctx context.Context) {
-		// Create a catalog item with a known name to test the reference validator interceptor's
-		// name→id resolution. The server handler uses Get().SetId() and relies on the interceptor
-		// to back-fill the id before the handler runs.
+	It("Resolves a shared catalog item by name and persists its materialized Template", func(ctx context.Context) {
+		// Provider-created catalog items default to shared; name lookup must select that scope.
 		catName := fmt.Sprintf("test-named-cat-%s", uuid.New()[24:32])
 		catResp, err := bareMetalInstanceCatalogItemsClient.Create(ctx,
 			privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
@@ -715,7 +717,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		// Reference the catalog item by Name (not Id) — this exercises the reference validator interceptor.
+		// The handler resolves the shared name and persists the canonical reference.
 		createResp, err := bareMetalInstancesClient.Create(ctx,
 			publicv1.BareMetalInstancesCreateRequest_builder{
 				Object: publicv1.BareMetalInstance_builder{
@@ -724,7 +726,8 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 					}.Build(),
 					Spec: publicv1.BareMetalInstanceSpec_builder{
 						CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{
-							Name: catName,
+							Name:   catName,
+							Shared: true,
 						}.Build(),
 						SshPublicKey: new(bmiTestSSHPublicKey),
 						DiskImage:    publicv1.DiskImageReference_builder{Id: defaultDiskImageId}.Build(),
@@ -747,13 +750,16 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 			}, 2*time.Minute, time.Second).Should(Succeed())
 		})
 
-		object := createResp.GetObject()
-		// The reference validator interceptor should have back-filled the id from the name.
+		getResp, err := bareMetalInstancesClient.Get(ctx,
+			publicv1.BareMetalInstancesGetRequest_builder{Id: bareMetalInstanceId}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		object := getResp.GetObject()
 		Expect(object.GetSpec().GetCatalogItem().GetId()).To(Equal(namedCatId),
-			"reference validator should back-fill id from name")
+			"persisted catalog item reference should contain the resolved ID")
 		Expect(object.GetSpec().GetCatalogItem().GetName()).To(Equal(catName),
-			"reference validator should preserve the name")
-		// Template should be materialized by the server handler using the resolved UUID.
+			"persisted catalog item reference should preserve the name")
+		Expect(object.GetSpec().GetCatalogItem().GetShared()).To(BeTrue(),
+			"persisted catalog item reference should preserve shared scope")
 		Expect(object.GetSpec().GetTemplate()).ToNot(BeNil(),
 			"spec.template should be materialized when catalog item is referenced by name")
 		Expect(object.GetSpec().GetTemplate().GetId()).To(Equal(templateId),
@@ -891,8 +897,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		})
 
 		It("Rejects direct template that does not exist", func(ctx context.Context) {
-			// The protovalidate reference validation interceptor runs before the server handler
-			// and returns InvalidArgument (not NotFound) when a referenced object is not found.
+			// Creation-source lookup belongs to the handler and reports missing Templates as NotFound.
 			_, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 				Object: publicv1.BareMetalInstance_builder{
 					Metadata: publicv1.Metadata_builder{
@@ -906,7 +911,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 			Expect(err).To(HaveOccurred())
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Code()).To(Equal(grpccodes.NotFound))
 			Expect(status.Message()).To(ContainSubstring("not found"))
 		})
 	})

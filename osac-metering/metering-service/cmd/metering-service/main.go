@@ -236,13 +236,20 @@ func run(ctx context.Context, logger logr.Logger, cfg *config) error {
 
 	var computeClient privatev1.ComputeInstancesClient
 	var clusterClient privatev1.ClustersClient
+	var bareMetalClient privatev1.BareMetalInstancesClient
 	if cfg.enableVMaaS {
 		computeClient = privatev1.NewComputeInstancesClient(grpcConn)
 	}
 	if cfg.enableCaaS {
 		clusterClient = privatev1.NewClustersClient(grpcConn)
 	}
-	reconciler := reconciliation.NewReconciler(computeClient, clusterClient, store, publisher, logger, cfg.heartbeatInterval)
+	if cfg.enableBMaaS {
+		bareMetalClient = privatev1.NewBareMetalInstancesClient(grpcConn)
+	}
+	replaySource := reconciliation.NewUnavailableBMaaSReplaySource()
+	bmaasPresence := heartbeat.NewBMaaSPresence()
+	reconciler := reconciliation.NewReconciler(computeClient, clusterClient, bareMetalClient, replaySource, store, publisher, logger, cfg.heartbeatInterval)
+	reconciler.SetBMaaSPresence(bmaasPresence)
 
 	logger.Info("running startup reconciliation")
 	if err := reconciler.Reconcile(ctx); err != nil {
@@ -255,6 +262,7 @@ func run(ctx context.Context, logger logr.Logger, cfg *config) error {
 	logger.Info("service ready")
 
 	hbGen := heartbeat.NewGenerator(store, publisher, logger, cfg.heartbeatInterval)
+	hbGen.SetBMaaSPresence(bmaasPresence)
 
 	var wg sync.WaitGroup
 
@@ -272,7 +280,7 @@ func run(ctx context.Context, logger logr.Logger, cfg *config) error {
 
 	eventsClient := privatev1.NewEventsClient(grpcConn)
 	consumer := watch.NewConsumer(eventsClient, publisher, store, logger)
-	consumer.Filter = watch.BuildFilter(cfg.enableVMaaS, cfg.enableCaaS)
+	consumer.Filter = watch.BuildFilter(cfg.enableVMaaS, cfg.enableCaaS, cfg.enableBMaaS)
 	err = consumer.Run(ctx)
 	runCancel()
 	wg.Wait()

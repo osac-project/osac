@@ -241,8 +241,14 @@ func (r *StorageReconciler) patchClusterOrderStorageStatus(ctx context.Context, 
 //   - result: ctrl.Result to return when stop is true
 //   - stop: when true, the caller should return (result, err) immediately
 //   - error: any unexpected failure
-func (r *StorageReconciler) handleBackendReadiness(ctx context.Context, instance *v1alpha1.Tenant, tenantName string) (hubSecretReady bool, result ctrl.Result, stop bool, err error) {
-	hubSecretReady, err = r.hubSecretExists(ctx, tenantName, "")
+//
+// tierDefinitions carries the resolved tier catalog from the Tier API. When
+// non-empty, the check requires hub Secrets for ALL dispatched providers (one
+// per unique TierDefinition.Provider) before declaring StorageBackendReady.
+// When nil or empty (no Tier API configured), it falls back to checking for
+// any hub Secret regardless of provider — preserving backward compatibility.
+func (r *StorageReconciler) handleBackendReadiness(ctx context.Context, instance *v1alpha1.Tenant, tenantName string, tierDefinitions []provisioning.TierDefinition) (hubSecretReady bool, result ctrl.Result, stop bool, err error) {
+	hubSecretReady, err = r.allProviderHubSecretsExist(ctx, tenantName, tierDefinitions)
 	if err != nil {
 		return false, ctrl.Result{}, true, err
 	}
@@ -321,7 +327,7 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1
 
 	// Stage 1: check hub Secret and route provisioning based on backend registration.
 	// stop is always true when err is non-nil (handleBackendReadiness invariant).
-	hubSecretReady, stageResult, stop, err := r.handleBackendReadiness(ctx, instance, tenantName)
+	hubSecretReady, stageResult, stop, err := r.handleBackendReadiness(ctx, instance, tenantName, tierDefinitions)
 	if stop {
 		return stageResult, err
 	}
@@ -378,6 +384,24 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1
 			condMsg = condMsg + "; " + strings.Join(scResult.duplicateMessages, "; ")
 		}
 		condMsg = r.appendMissingTierWarnings(instance, tierDefinitions, scResult.resolved, scResult.ambiguousTiers, condMsg)
+
+		// When tier definitions are available and some tiers are still
+		// missing their StorageClass, keep ClusterStorageReady=False and
+		// enter the retry path so provisioning is reattempted for the
+		// missing tier(s) instead of permanently abandoning them.
+		missing := missingTierNames(tierDefinitions, scResult.resolved, scResult.ambiguousTiers)
+		if len(missing) > 0 && len(tierDefinitions) > 0 {
+			instance.SetStatusCondition(v1alpha1.TenantConditionClusterStorageReady,
+				metav1.ConditionFalse,
+				v1alpha1.TenantReasonNotFound,
+				condMsg)
+			instance.Status.StorageClasses = scResult.resolved
+			instance.Status.ClusterStorage = []v1alpha1.ClusterStorageStatus{
+				{ClusterName: clusterName, Ready: false, Reason: v1alpha1.TenantReasonNotFound},
+			}
+			return r.handleClusterStorageProvisioning(ctx, instance, hubSecretReady)
+		}
+
 		instance.SetStatusCondition(v1alpha1.TenantConditionClusterStorageReady,
 			metav1.ConditionTrue,
 			v1alpha1.TenantReasonFound,
@@ -910,6 +934,45 @@ func (r *StorageReconciler) handleBackendDeprovisioning(ctx context.Context, ins
 }
 
 // --- Helpers ---
+
+// uniqueProviders extracts the sorted, deduplicated provider names from tier
+// definitions. An empty or nil input returns an empty slice (no providers known).
+func uniqueProviders(tierDefinitions []provisioning.TierDefinition) []string {
+	seen := make(map[string]struct{})
+	var providers []string
+	for _, td := range tierDefinitions {
+		if td.Provider != "" {
+			if _, ok := seen[td.Provider]; !ok {
+				seen[td.Provider] = struct{}{}
+				providers = append(providers, td.Provider)
+			}
+		}
+	}
+	sort.Strings(providers)
+	return providers
+}
+
+// allProviderHubSecretsExist checks whether hub Secrets exist for every unique
+// provider in tierDefinitions. When tierDefinitions is nil or empty, or when no
+// provider names can be extracted, it falls back to checking for any hub Secret
+// regardless of provider — preserving backward compatibility with environments
+// that run without a Tier API connection.
+func (r *StorageReconciler) allProviderHubSecretsExist(ctx context.Context, tenantName string, tierDefinitions []provisioning.TierDefinition) (bool, error) {
+	providers := uniqueProviders(tierDefinitions)
+	if len(providers) == 0 {
+		return r.hubSecretExists(ctx, tenantName, "")
+	}
+	for _, provider := range providers {
+		exists, err := r.hubSecretExists(ctx, tenantName, provider)
+		if err != nil {
+			return false, err
+		}
+		if !exists {
+			return false, nil
+		}
+	}
+	return true, nil
+}
 
 func (r *StorageReconciler) hubSecretExists(ctx context.Context, tenantName string, provider string) (bool, error) {
 	labels := map[string]string{osacTenantKey: tenantName}

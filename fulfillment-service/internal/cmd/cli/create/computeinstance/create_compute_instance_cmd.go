@@ -145,6 +145,12 @@ func Cmd() *cobra.Command {
 		"",
 		userDataFlagHelp,
 	)
+	flags.StringVar(
+		&runner.args.userDataSecret,
+		"user-data-secret",
+		"",
+		userDataSecretFlagHelp,
+	)
 	flags.StringArrayVar(
 		&runner.args.networkAttachments,
 		"network-attachment",
@@ -165,6 +171,7 @@ func Cmd() *cobra.Command {
 	)
 
 	result.MarkFlagsMutuallyExclusive("catalog-item", "template")
+	result.MarkFlagsMutuallyExclusive("user-data", "user-data-secret")
 	result.MarkFlagsOneRequired("catalog-item", "template")
 	return result
 }
@@ -185,6 +192,7 @@ type runnerContext struct {
 		additionalDisks         []string
 		runStrategy             string
 		userData                string
+		userDataSecret          string
 		networkAttachments      []string
 		externalIPAttachment    bool
 	}
@@ -763,6 +771,9 @@ func (c *runnerContext) buildSpec(templateID string,
 	if c.args.userData != "" {
 		spec.UserData = proto.String(c.args.userData)
 	}
+	if c.args.userDataSecret != "" {
+		spec.UserDataSecret = publicv1.SecretLocalReference_builder{Name: c.args.userDataSecret}.Build()
+	}
 	if err := c.applyNetworkingFlags(&spec); err != nil {
 		return nil, err
 	}
@@ -908,6 +919,9 @@ func (c *runnerContext) buildSpecFromCatalogItem(catalogItemID string) (*publicv
 	}
 	if c.args.userData != "" {
 		spec.UserData = proto.String(c.args.userData)
+	}
+	if c.args.userDataSecret != "" {
+		spec.UserDataSecret = publicv1.SecretLocalReference_builder{Name: c.args.userDataSecret}.Build()
 	}
 	if err := c.applyNetworkingFlags(&spec); err != nil {
 		return nil, err
@@ -1107,6 +1121,13 @@ _STRATEGY_ - Run strategy, for example {{ bt }}Always{{ bt }} or
 const userDataFlagHelp = `
 _DATA_ - User data for the compute instance, for example cloud-init or
 ignition configuration.
+`
+
+const userDataSecretFlagHelp = `
+_NAME_ - Name of a Secret resource containing user data for the compute
+instance. The secret must exist in the same tenant. See also
+{{ bt }}osac create secret{{ bt }}. Mutually exclusive with
+{{ bt }}--user-data{{ bt }}.
 `
 
 const networkAttachmentFlagHelp = `

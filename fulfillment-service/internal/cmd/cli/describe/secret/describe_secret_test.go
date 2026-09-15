@@ -38,10 +38,20 @@ var _ = Describe("Describe Secret", func() {
 
 			output := formatSecret(s)
 			Expect(output).To(MatchRegexp(`Name:\s+-`))
+			Expect(output).To(MatchRegexp(`Type:\s+Unspecified`))
 			Expect(output).To(MatchRegexp(`Project:\s+-`))
 			Expect(output).To(MatchRegexp(`Created:\s+-`))
 			Expect(output).To(ContainSubstring("Labels:  (none)"))
 			Expect(output).To(ContainSubstring("Data:  (none)"))
+		})
+
+		It("should display the secret type", func() {
+			s := publicv1.Secret_builder{
+				Id:   "sec-typed",
+				Type: publicv1.SecretType_SECRET_TYPE_KUBECONFIG,
+			}.Build()
+
+			Expect(formatSecret(s)).To(MatchRegexp(`Type:\s+Kubeconfig`))
 		})
 
 		It("should display all metadata fields when set", func() {

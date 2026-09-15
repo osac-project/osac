@@ -1807,6 +1807,7 @@ var _ = Describe("ensureClusterSecrets", func() {
 				Expect(secret.GetMetadata().GetLabels()).To(
 					HaveKeyWithValue(labels.SecretType, "cluster-kubeconfig"))
 				Expect(secret.GetBackend()).To(Equal(privatev1.SecretBackend_SECRET_BACKEND_HUB))
+				Expect(secret.GetType()).To(Equal(privatev1.SecretType_SECRET_TYPE_KUBECONFIG))
 				Expect(secret.GetCoordinates()).To(HaveKeyWithValue("hub_id", hubID))
 				Expect(secret.GetCoordinates()).To(HaveKeyWithValue("namespace", hcNamespace))
 				Expect(secret.GetCoordinates()).To(HaveKeyWithValue("secret_name", "my-kubeconfig-secret"))
@@ -1825,6 +1826,7 @@ var _ = Describe("ensureClusterSecrets", func() {
 				Expect(secret.GetMetadata().GetName()).To(Equal(clusterName + "-password"))
 				Expect(secret.GetMetadata().GetLabels()).To(
 					HaveKeyWithValue(labels.SecretType, "cluster-password"))
+				Expect(secret.GetType()).To(Equal(privatev1.SecretType_SECRET_TYPE_OPAQUE))
 				Expect(secret.GetCoordinates()).To(HaveKeyWithValue("secret_name", "my-password-secret"))
 				Expect(secret.GetCoordinates()).To(HaveKeyWithValue("key", "password"))
 				return &privatev1.SecretsCreateResponse{

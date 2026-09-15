@@ -816,6 +816,7 @@ var _ = Describe("Break-glass credentials secret resolution", func() {
 				secret := req.GetObject()
 				Expect(secret.GetMetadata().GetName()).To(Equal("break-glass-credentials"))
 				Expect(secret.GetMetadata().GetTenant()).To(Equal("test-org"))
+				Expect(secret.GetType()).To(Equal(privatev1.SecretType_SECRET_TYPE_OPAQUE))
 				Expect(secret.GetData()).To(HaveKeyWithValue("password", []byte(testPreGeneratedPassword)))
 				secret.SetId("created-secret-id")
 				return privatev1.SecretsCreateResponse_builder{Object: secret}.Build(), nil

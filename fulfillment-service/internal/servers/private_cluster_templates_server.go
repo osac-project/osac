@@ -43,6 +43,7 @@ type PrivateClusterTemplatesServer struct {
 	privatev1.UnimplementedClusterTemplatesServer
 	logger             *slog.Logger
 	clusterVersionsDao *dao.GenericDAO[*privatev1.ClusterVersion]
+	secretsDao         *dao.GenericDAO[*privatev1.Secret]
 	generic            *GenericServer[*privatev1.ClusterTemplate]
 }
 
@@ -106,6 +107,15 @@ func (b *PrivateClusterTemplatesServerBuilder) Build() (result *PrivateClusterTe
 		return
 	}
 
+	secretsDao, err := dao.NewGenericDAO[*privatev1.Secret]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
 	// Create the generic server:
 	generic, err := NewGenericServer[*privatev1.ClusterTemplate]().
 		SetLogger(b.logger).
@@ -125,6 +135,7 @@ func (b *PrivateClusterTemplatesServerBuilder) Build() (result *PrivateClusterTe
 	result = &PrivateClusterTemplatesServer{
 		logger:             b.logger,
 		clusterVersionsDao: clusterVersionsDao,
+		secretsDao:         secretsDao,
 		generic:            generic,
 	}
 	return
@@ -148,6 +159,9 @@ func (s *PrivateClusterTemplatesServer) Create(ctx context.Context,
 		if err = s.validateSpecDefaultsVersion(ctx, object); err != nil {
 			return
 		}
+		if err = s.validateSpecDefaultsPullSecret(ctx, object); err != nil {
+			return
+		}
 		if object.GetMetadata().GetName() == "" && object.GetId() != "" {
 			if object.GetMetadata() == nil {
 				object.SetMetadata(&privatev1.Metadata{})
@@ -166,10 +180,31 @@ func (s *PrivateClusterTemplatesServer) Update(ctx context.Context,
 			if err = s.validateSpecDefaultsVersion(ctx, object); err != nil {
 				return
 			}
+			if err = s.validateSpecDefaultsPullSecret(ctx, object); err != nil {
+				return
+			}
 		}
 	}
 	err = s.generic.Update(ctx, request, &response)
 	return
+}
+
+func (s *PrivateClusterTemplatesServer) validateSpecDefaultsPullSecret(
+	ctx context.Context, template *privatev1.ClusterTemplate) error {
+	ref := template.GetSpecDefaults().GetPullSecretSecret()
+	if ref == nil {
+		return nil
+	}
+	resolved, err := resolveSecretReferenceOfType(ctx, s.logger, s.secretsDao, ref,
+		"spec_defaults.pull_secret_secret", privatev1.SecretType_SECRET_TYPE_PULL_SECRET)
+	if err != nil {
+		return err
+	}
+	resolvedRef := &privatev1.SecretLocalReference{}
+	resolvedRef.SetId(resolved.ID)
+	resolvedRef.SetName(resolved.Name)
+	template.GetSpecDefaults().SetPullSecretSecret(resolvedRef)
+	return nil
 }
 
 func (s *PrivateClusterTemplatesServer) validateSpecDefaultsVersion(

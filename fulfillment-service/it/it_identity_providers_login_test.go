@@ -39,6 +39,9 @@ func createIdPClientSecret(
 ) *privatev1.SecretLocalReference {
 	resp, err := sc.Create(ctx, privatev1.SecretsCreateRequest_builder{
 		Object: privatev1.Secret_builder{
+			// client_secret_secret accepts value secrets only. Without an explicit
+			// type, the Secrets API normalizes this fixture to opaque.
+			Type: privatev1.SecretType_SECRET_TYPE_VALUE,
 			Metadata: privatev1.Metadata_builder{
 				Name:   fmt.Sprintf("idp-cs-%s", uuid.New()),
 				Tenant: tenantName,

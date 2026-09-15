@@ -456,6 +456,10 @@ func (s *PrivateTenantsServer) validateBreakGlassCredentialsSecret(ctx context.C
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"shared secrets cannot be used as break_glass_credentials_secret references")
 	}
+	if err := validateResolvedSecretType(ctx, s.logger, s.secretsDao, ref, resolved,
+		"break_glass_credentials_secret", privatev1.SecretType_SECRET_TYPE_OPAQUE); err != nil {
+		return err
+	}
 	resolvedRef := &privatev1.SecretLocalReference{}
 	resolvedRef.SetId(resolved.ID)
 	resolvedRef.SetName(resolved.Name)

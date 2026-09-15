@@ -114,6 +114,7 @@ func RenderSecret(w io.Writer, secret *publicv1.Secret) {
 
 	fmt.Fprintf(writer, "ID:\t%s\n", secret.GetId())
 	fmt.Fprintf(writer, "Name:\t%s\n", name)
+	fmt.Fprintf(writer, "Type:\t%s\n", formatSecretType(secret.GetType()))
 	fmt.Fprintf(writer, "Project:\t%s\n", project)
 	fmt.Fprintf(writer, "Created:\t%s\n", created)
 	writer.Flush()
@@ -150,6 +151,23 @@ func RenderSecret(w io.Writer, secret *publicv1.Secret) {
 		}
 	} else {
 		fmt.Fprintln(w, "Data:  (none)")
+	}
+}
+
+func formatSecretType(value publicv1.SecretType) string {
+	switch value {
+	case publicv1.SecretType_SECRET_TYPE_PULL_SECRET:
+		return "Pull Secret"
+	case publicv1.SecretType_SECRET_TYPE_KUBECONFIG:
+		return "Kubeconfig"
+	case publicv1.SecretType_SECRET_TYPE_USER_DATA:
+		return "User Data"
+	case publicv1.SecretType_SECRET_TYPE_OPAQUE:
+		return "Opaque"
+	case publicv1.SecretType_SECRET_TYPE_VALUE:
+		return "Value"
+	default:
+		return "Unspecified"
 	}
 }
 

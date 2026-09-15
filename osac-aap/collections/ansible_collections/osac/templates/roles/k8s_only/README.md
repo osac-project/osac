@@ -22,6 +22,19 @@ it composes the existing, independently-tested k8s-native roles:
 - **SecurityGroup** → `network_policy` (Kubernetes NetworkPolicy)
 - **ExternalIPPool / ExternalIP / ExternalIPAttachment** → `metallb_l2` (MetalLB L2 advertisement)
 
+## Dispatcher contract
+
+`k8s_only` is an explicit Kubernetes-only profile, not a substitute for a
+unified fabric manager. The operator dispatcher permits the Kubernetes fallback
+for VirtualNetwork, Subnet, SecurityGroup, and ExternalIP-family resources only
+when the NetworkClass selects the manager named `k8s_only`. Other Kubernetes
+managers are overlay bridges and still require a `fabricManager` for those
+resources.
+
+As a result, this profile provides Kubernetes-native behavior for VMaaS
+deployments without a physical fabric; it does not provide fabric-wide ACLs,
+IPAM, DNAT/SNAT, or bare-metal networking semantics.
+
 ## Task Files
 
 Every task file is a single `ansible.builtin.include_role` delegation — no logic of

@@ -38,41 +38,15 @@
   ansible.builtin.include_tasks: paginate_addon_operators.yaml
   when: addon_operator_check.status not in [404, 503] and addon_operator_next_offset < addon_operator_total
 
-- name: Update existing AddOnOperator
-  loop: "{{ osac_addon_operator_templates | default([]) }}"
-  loop_control:
-    label: "{{ template.id }}"
-    loop_var: template
+- name: Publish AddOnOperator records
+  ansible.builtin.include_tasks: publish_template_items.yaml
+  vars:
+    publish_template_items: "{{ osac_addon_operator_templates | default([]) }}"
+    publish_template_existing_ids: "{{ addon_operator_id_set | default({}) }}"
+    publish_template_api_endpoint: "{{ publish_templates_addon_operator_api_endpoint }}"
+    publish_template_update_suffix: "?update_mask={{ publish_templates_addon_operator_update_mask }}"
+    publish_template_resource_name: AddOnOperator
+    publish_template_no_log: true
   when:
     - addon_operator_check.status not in [404, 503]
     - addon_operator_pagination_ok | default(false) | bool
-    - addon_operator_id_set is defined
-    - template.id in addon_operator_id_set
-  ansible.builtin.uri:
-    url: "{{ publish_templates_addon_operator_api_endpoint }}/{{ template.id }}?update_mask={{ publish_templates_addon_operator_update_mask }}"
-    validate_certs: "{{ publish_templates_validate_certs | default(true) | bool }}"
-    method: PATCH
-    headers:
-      authorization: Bearer {{ osac_fulfillment_service_token }}
-    body_format: json
-    body: "{{ template }}"
-  no_log: true
-
-- name: Create new AddOnOperator
-  loop: "{{ osac_addon_operator_templates | default([]) }}"
-  loop_control:
-    label: "{{ template.id }}"
-    loop_var: template
-  when:
-    - addon_operator_check.status not in [404, 503]
-    - addon_operator_pagination_ok | default(false) | bool
-    - addon_operator_id_set is not defined or template.id not in addon_operator_id_set
-  ansible.builtin.uri:
-    url: "{{ publish_templates_addon_operator_api_endpoint }}"
-    validate_certs: "{{ publish_templates_validate_certs | default(true) | bool }}"
-    method: POST
-    headers:
-      authorization: Bearer {{ osac_fulfillment_service_token }}
-    body_format: json
-    body: "{{ template }}"
-  no_log: true

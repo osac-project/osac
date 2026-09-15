@@ -21,6 +21,28 @@ from tests.e2e.core.runner import env, poll_until, run_unchecked
 logger = logging.getLogger(__name__)
 
 _NOT_FOUND = re.compile(r"Code:\s*NotFound")
+_SECRET_VALUE = re.compile(r"(?i)((?:password|token|secret|authorization:\s*bearer|authorization|bearer)[:\s=]+)\S+")
+
+
+def _redact_secrets(text: str) -> str:
+    """Strip credential values from CLI/API text used in logs."""
+    return _SECRET_VALUE.sub(r"\1[REDACTED]", text)
+
+
+def _safe_exception(exc: BaseException) -> str:
+    """Summarize an exception for logs without argv, tokens, or a traceback.
+
+    ``subprocess.CalledProcessError`` from Keycloak curl calls embeds the full
+    command, including ``Authorization: Bearer`` and ``password=`` arguments.
+    """
+    if isinstance(exc, subprocess.CalledProcessError):
+        output = ((exc.stderr or "") + "\n" + (exc.stdout or "")).strip()
+        summary = f"{type(exc).__name__} rc={exc.returncode}"
+        if output:
+            return f"{summary}: {_redact_secrets(output)}"
+        return summary
+    return type(exc).__name__
+
 
 # Placeholder OIDC config for IdentityProviders/Create. IT tests reach READY with
 # these URLs; a live mock IdP is not part of a clean hub install.
@@ -41,7 +63,7 @@ def _delete_private(grpc: GRPCClient, *, service: str, resource_id: str, label: 
         if _NOT_FOUND.search(combined):
             logger.warning("%s %s already deleted via API", label, resource_id)
         else:
-            logger.warning("%s %s teardown delete failed: %s", label, resource_id, combined.strip())
+            logger.warning("%s %s teardown delete failed: %s", label, resource_id, _redact_secrets(combined.strip()))
 
 
 def _wait_private_absent(
@@ -169,10 +191,10 @@ def onboarding_resources(
             for username in (resources["alice_user"], resources["bob_user"]):
                 try:
                     delete_user_by_username(keycloak_url=keycloak_url, admin_token=admin_token, username=username)
-                except Exception:
-                    logger.warning("Keycloak user %s teardown failed", username, exc_info=True)
-        except Exception:
-            logger.warning("Keycloak user teardown skipped", exc_info=True)
+                except Exception as exc:
+                    logger.warning("Keycloak user %s teardown failed: %s", username, _safe_exception(exc))
+        except Exception as exc:
+            logger.warning("Keycloak user teardown skipped: %s", _safe_exception(exc))
         if resources.get("tenant_id"):
             _delete_private(
                 private_grpc,
@@ -208,9 +230,11 @@ def onboarding_resources(
                     delay=5,
                     description=f"Keycloak organization {tenant_name} gone",
                 )
-            except Exception:
+            except Exception as exc:
                 logger.warning(
-                    "Keycloak organization %s still present after tenant deletion", tenant_name, exc_info=True
+                    "Keycloak organization %s still present after tenant deletion: %s",
+                    tenant_name,
+                    _safe_exception(exc),
                 )
 
         shutil.rmtree(alice_config_dir, ignore_errors=True)

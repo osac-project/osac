@@ -52,7 +52,7 @@ operator:
   enabled: true
   image:
     repository: ghcr.io/osac-project/osac-operator
-    tag: latest  # PLACEHOLDER -- overwritten at release time by publish-charts.yaml
+    tag: sha-81f9083
     pullPolicy: Always
   replicaCount: 1
   resources:
@@ -95,7 +95,7 @@ service:
   # [REQUIRED] Hostname for the internal API Route (e.g. fulfillment-internal-api-osac.apps.mycluster.example.com)
   internalHostname: ""
   images:
-    service: ghcr.io/osac-project/fulfillment-service:latest  # PLACEHOLDER -- overwritten at release time by publish-charts.yaml
+    service: ghcr.io/osac-project/fulfillment-service:sha-81f9083
     envoy: ghcr.io/osac-project/envoy:v1.33.0
   certs:
     issuerRef:
@@ -171,7 +171,7 @@ aap:
       imagePullPolicy: IfNotPresent
   bootstrap:
     enabled: true
-    image: ghcr.io/osac-project/osac-aap:latest  # PLACEHOLDER -- overwritten at release time by publish-charts.yaml
+    image: ghcr.io/osac-project/osac-aap:sha-81f9083
     backoffLimit: 15
     readinessConsecutiveSuccesses: 3
     gateway:
@@ -181,9 +181,9 @@ aap:
   configAsCode:
     manifestSecret: "config-as-code-manifest-ig"
     secret: "config-as-code-ig"
-    eeImage: ""
-    projectGitUri: ""
-    projectGitBranch: ""
+    eeImage: ghcr.io/osac-project/osac-aap:sha-81f9083
+    projectGitUri: https://github.com/osac-project/osac
+    projectGitBranch: 81f9083858290d1646d26ce577a84c66c31d7f8d
     importAgentsEnabled: false
     importBcmAgentsEnabled: false
   importAgents:
@@ -274,14 +274,14 @@ ui:
   log:
     level: info
   images:
-    ui: ghcr.io/osac-project/osac-ui:latest  # PLACEHOLDER -- overwritten at release time by publish-charts.yaml
+    ui: ghcr.io/osac-project/osac-ui:sha-e50a6d4
 
 # --- Metering ---
 metering:
   enabled: false
   image:
     repository: ghcr.io/osac-project/metering-service
-    tag: latest  # PLACEHOLDER -- overwritten at release time by publish-charts.yaml
+    tag: sha-81f9083
     pullPolicy: Always
 
 # --- CSI Driver ---
@@ -289,7 +289,7 @@ csiDriver:
   enabled: false
   image:
     repository: ghcr.io/osac-project/osac-csi-driver
-    tag: latest  # PLACEHOLDER -- overwritten at release time by publish-charts.yaml
+    tag: sha-81f9083
     pullPolicy: Always
 
 # --- CSI Backends ---
@@ -302,7 +302,7 @@ bmfCrds: {}
 bmf:
   image:
     repository: ghcr.io/osac-project/bare-metal-fulfillment-operator
-    tag: latest  # PLACEHOLDER -- overwritten at release time by publish-charts.yaml
+    tag: sha-81f9083
     pullPolicy: Always
   replicaCount: 1
   resources:

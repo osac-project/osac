@@ -141,6 +141,16 @@ ocp_4_20_ai_maas_tiers:
 # Monitoring
 ocp_4_20_ai_maas_monitoring_retention: 24h
 
+# Metering (OSAC inference metering via Kafka)
+# Override all credential defaults before production use.
+ocp_4_20_ai_maas_enable_metering: false
+ocp_4_20_ai_maas_metering_ipp_image: "quay.io/rh-ee-ovishlit/ai-gateway-payload-processing:latest"
+ocp_4_20_ai_maas_metering_kafka_brokers: ""
+ocp_4_20_ai_maas_metering_kafka_topic: "osac.metering.inference.raw"
+ocp_4_20_ai_maas_metering_kafka_tls_ca: ""
+ocp_4_20_ai_maas_metering_kafka_sasl_user: ""
+ocp_4_20_ai_maas_metering_kafka_sasl_password: ""
+
 # --- Timeouts ---
 
 ocp_4_20_ai_maas_operator_retries: 50

@@ -46,13 +46,14 @@ type EventPublisher interface {
 }
 
 const (
-	TopicLifecycle   = "osac.metering.lifecycle"
-	TopicHeartbeat   = "osac.metering.heartbeat"
-	TopicCorrections = "osac.metering.corrections"
-	TopicInference   = "osac.metering.inference"
+	TopicLifecycle    = "osac.metering.lifecycle"
+	TopicHeartbeat    = "osac.metering.heartbeat"
+	TopicCorrections  = "osac.metering.corrections"
+	TopicInference    = "osac.metering.inference"
+	TopicInferenceRaw = "osac.metering.inference.raw"
 )
 
-var Topics = []string{TopicLifecycle, TopicHeartbeat, TopicCorrections}
+var Topics = []string{TopicLifecycle, TopicHeartbeat, TopicCorrections, TopicInference, TopicInferenceRaw}
 
 var topicRoutes = map[string]string{
 	"osac.resource.created.v1":    TopicLifecycle,

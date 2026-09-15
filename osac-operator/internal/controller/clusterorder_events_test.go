@@ -250,7 +250,7 @@ var _ = Describe("ClusterOrder transition events", func() {
 		Consistently(recorder.Events, 200*time.Millisecond).ShouldNot(Receive())
 	})
 
-	It("records the final Ready event separately after the worker stage", func() {
+	It("records the Ready event after HostedCluster becomes available and workers join", func() {
 		recorder := newRecorder()
 		reconciler := &ClusterOrderReconciler{Recorder: recorder}
 		instance := &v1alpha1.ClusterOrder{}

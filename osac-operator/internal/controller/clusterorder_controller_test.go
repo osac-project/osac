@@ -488,7 +488,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 		})
 
 		DescribeTable("should require worker readiness before finalizing the order",
-			func(nodePools []hypershiftv1beta1.NodePool, expected bool) {
+			func(requests []v1alpha1.NodeRequest, nodePools []hypershiftv1beta1.NodePool, expected bool) {
 				hc := &hypershiftv1beta1.HostedCluster{
 					Status: hypershiftv1beta1.HostedClusterStatus{
 						Conditions: []metav1.Condition{
@@ -500,10 +500,12 @@ var _ = Describe("ClusterOrder Controller", func() {
 					},
 				}
 
-				Expect(hostedClusterAndNodePoolsAreReady(&v1alpha1.ClusterOrder{}, hc, nodePools)).To(Equal(expected))
+				instance := &v1alpha1.ClusterOrder{Spec: v1alpha1.ClusterOrderSpec{NodeRequests: requests}}
+				Expect(hostedClusterAndNodePoolsAreReady(instance, hc, nodePools)).To(Equal(expected))
 			},
-			Entry("HostedCluster only", []hypershiftv1beta1.NodePool{}, true),
-			Entry("all requested NodePools are ready", []hypershiftv1beta1.NodePool{
+			Entry("HostedCluster only", nil, []hypershiftv1beta1.NodePool{}, true),
+			Entry("requested workers with no NodePools", []v1alpha1.NodeRequest{{ResourceClass: "worker", NumberOfNodes: 1}}, []hypershiftv1beta1.NodePool{}, false),
+			Entry("all requested NodePools are ready", []v1alpha1.NodeRequest{{ResourceClass: "worker", NumberOfNodes: 1}}, []hypershiftv1beta1.NodePool{
 				{Status: hypershiftv1beta1.NodePoolStatus{Conditions: []hypershiftv1beta1.NodePoolCondition{
 					{Type: hypershiftv1beta1.NodePoolAllMachinesReadyConditionType, Status: corev1.ConditionTrue},
 					{Type: hypershiftv1beta1.NodePoolReadyConditionType, Status: corev1.ConditionTrue},
@@ -513,13 +515,13 @@ var _ = Describe("ClusterOrder Controller", func() {
 					{Type: hypershiftv1beta1.NodePoolReadyConditionType, Status: corev1.ConditionTrue},
 				}}},
 			}, true),
-			Entry("machines are ready but worker Nodes are not ready", []hypershiftv1beta1.NodePool{
+			Entry("machines are ready but worker Nodes are not ready", []v1alpha1.NodeRequest{{ResourceClass: "worker", NumberOfNodes: 1}}, []hypershiftv1beta1.NodePool{
 				{Status: hypershiftv1beta1.NodePoolStatus{Conditions: []hypershiftv1beta1.NodePoolCondition{
 					{Type: hypershiftv1beta1.NodePoolAllMachinesReadyConditionType, Status: corev1.ConditionTrue},
 					{Type: hypershiftv1beta1.NodePoolReadyConditionType, Status: corev1.ConditionFalse},
 				}}},
 			}, false),
-			Entry("one NodePool is still joining", []hypershiftv1beta1.NodePool{
+			Entry("one NodePool is still joining", []v1alpha1.NodeRequest{{ResourceClass: "worker", NumberOfNodes: 1}}, []hypershiftv1beta1.NodePool{
 				{Status: hypershiftv1beta1.NodePoolStatus{Conditions: []hypershiftv1beta1.NodePoolCondition{
 					{Type: hypershiftv1beta1.NodePoolAllMachinesReadyConditionType, Status: corev1.ConditionTrue},
 					{Type: hypershiftv1beta1.NodePoolReadyConditionType, Status: corev1.ConditionTrue},
@@ -540,6 +542,9 @@ var _ = Describe("ClusterOrder Controller", func() {
 						State: v1alpha1.JobStateSucceeded,
 					}},
 				},
+				Spec: v1alpha1.ClusterOrderSpec{
+					NodeRequests: []v1alpha1.NodeRequest{{ResourceClass: "worker", NumberOfNodes: 1}},
+				},
 			}
 			instance.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionTrue, "Workers Joining", v1alpha1.ReasonWorkersJoining)
 
@@ -554,7 +559,11 @@ var _ = Describe("ClusterOrder Controller", func() {
 				},
 			}
 
-			Expect(finalizeReadyIfProvisioned(instance, hc, nil, true)).To(BeTrue())
+			nodePools := []hypershiftv1beta1.NodePool{{Status: hypershiftv1beta1.NodePoolStatus{Conditions: []hypershiftv1beta1.NodePoolCondition{
+				{Type: hypershiftv1beta1.NodePoolAllMachinesReadyConditionType, Status: corev1.ConditionTrue},
+				{Type: hypershiftv1beta1.NodePoolReadyConditionType, Status: corev1.ConditionTrue},
+			}}}}
+			Expect(finalizeReadyIfProvisioned(instance, hc, nodePools, true)).To(BeTrue())
 			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseReady))
 			progressing := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
 			Expect(progressing.Status).To(Equal(metav1.ConditionFalse))

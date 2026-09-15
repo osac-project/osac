@@ -27,6 +27,8 @@ import (
 	"slices"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	corev1 "k8s.io/api/core/v1"
@@ -143,7 +145,26 @@ func (b *FunctionBuilder) Build() (result controllers.ReconcilerFunction[*privat
 	return
 }
 
+// run retries conflicts from a fresh object so finalizer lists and status never overwrite newer state.
 func (r *function) run(ctx context.Context, computeInstance *privatev1.ComputeInstance) error {
+	for attempt := 0; attempt < 3; attempt++ {
+		err := r.reconcile(ctx, computeInstance)
+		if status.Code(err) != codes.Aborted || attempt == 2 {
+			return err
+		}
+		response, err := r.computeInstancesClient.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: computeInstance.GetId()}.Build())
+		if status.Code(err) == codes.NotFound {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		computeInstance = response.GetObject()
+	}
+	return nil
+}
+
+func (r *function) reconcile(ctx context.Context, computeInstance *privatev1.ComputeInstance) error {
 	oldComputeInstance := proto.Clone(computeInstance).(*privatev1.ComputeInstance)
 	t := task{
 		r:               r,
@@ -168,9 +189,13 @@ func (r *function) run(ctx context.Context, computeInstance *privatev1.ComputeIn
 		_, updateErr = r.computeInstancesClient.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
 			Object:     computeInstance,
 			UpdateMask: updateMask,
+			Lock:       true,
 		}.Build())
 	}
 
+	if status.Code(updateErr) == codes.Aborted {
+		return updateErr
+	}
 	if reconcileErr != nil {
 		if updateErr != nil {
 			r.logger.WarnContext(ctx, "Failed to persist status after reconciliation error",

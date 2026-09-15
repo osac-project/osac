@@ -688,4 +688,91 @@ var _ = Describe("Private external IPs server", func() {
 			Expect(err.Error()).To(ContainSubstring("spec.pool' is immutable"))
 		})
 	})
+
+	Describe("Tenant isolation", func() {
+		var externalIPsServer *PrivateExternalIPsServer
+
+		createPoolWithTenant := func(tenant string) string {
+			resp, err := externalIPPoolDao.Create().SetObject(
+				privatev1.ExternalIPPool_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:   fmt.Sprintf("pool-%s", tenant),
+						Tenant: tenant,
+					}.Build(),
+					Spec: privatev1.ExternalIPPoolSpec_builder{
+						Cidrs: []string{"10.0.0.0/24"},
+					}.Build(),
+					Status: privatev1.ExternalIPPoolStatus_builder{
+						State:     privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY,
+						Total:     100,
+						Allocated: 0,
+						Available: 100,
+					}.Build(),
+				}.Build(),
+			).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			return resp.GetObject().GetId()
+		}
+
+		BeforeEach(func() {
+			var err error
+			tenantsDao, err := dao.NewGenericDAO[*privatev1.Tenant]().
+				SetLogger(logger).
+				SetTableName("tenants").
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = tenantsDao.Create().
+				SetObject(privatev1.Tenant_builder{
+					Id: "tenant-b",
+					Metadata: privatev1.Metadata_builder{
+						Name:   "tenant-b",
+						Tenant: "tenant-b",
+					}.Build(),
+				}.Build()).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			externalIPsServer, err = NewPrivateExternalIPsServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("accepts ExternalIP referencing a shared ExternalIPPool", func() {
+			poolID := createReadyExternalIPPool(ctx, "shared-pool", 100, 0)
+			_, err := externalIPsServer.Create(ctx, privatev1.ExternalIPsCreateRequest_builder{
+				Object: privatev1.ExternalIP_builder{
+					Metadata: privatev1.Metadata_builder{Name: "shared-pool-eip", Tenant: testTenant}.Build(),
+					Spec:     privatev1.ExternalIPSpec_builder{Pool: privatev1.ExternalIPPoolReference_builder{Id: poolID}.Build()}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("accepts ExternalIP referencing a same-tenant ExternalIPPool", func() {
+			poolID := createPoolWithTenant(testTenant)
+			_, err := externalIPsServer.Create(ctx, privatev1.ExternalIPsCreateRequest_builder{
+				Object: privatev1.ExternalIP_builder{
+					Metadata: privatev1.Metadata_builder{Name: "same-tenant-pool-eip", Tenant: testTenant}.Build(),
+					Spec:     privatev1.ExternalIPSpec_builder{Pool: privatev1.ExternalIPPoolReference_builder{Id: poolID}.Build()}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("rejects ExternalIP referencing an unrelated-tenant ExternalIPPool", func() {
+			poolID := createPoolWithTenant("tenant-b")
+			_, err := externalIPsServer.Create(ctx, privatev1.ExternalIPsCreateRequest_builder{
+				Object: privatev1.ExternalIP_builder{
+					Metadata: privatev1.Metadata_builder{Name: "cross-tenant-pool-eip", Tenant: testTenant}.Build(),
+					Spec:     privatev1.ExternalIPSpec_builder{Pool: privatev1.ExternalIPPoolReference_builder{Id: poolID}.Build()}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err).To(MatchError(ContainSubstring("belongs to tenant")))
+		})
+	})
 })

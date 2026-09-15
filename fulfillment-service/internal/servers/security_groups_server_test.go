@@ -513,4 +513,31 @@ var _ = Describe("SecurityGroups server", func() {
 			Expect(err.Error()).To(ContainSubstring("system-managed"))
 		})
 	})
+
+	Describe("Tenant isolation", func() {
+		var privateServer *PrivateSecurityGroupsServer
+
+		BeforeEach(func() {
+			var err error
+			privateServer, err = NewPrivateSecurityGroupsServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("rejects security group with different tenant than parent VirtualNetwork", func() {
+			securityGroup := privatev1.SecurityGroup_builder{
+				Metadata: privatev1.Metadata_builder{Tenant: "different-tenant"}.Build(),
+				Spec: privatev1.SecurityGroupSpec_builder{
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
+				}.Build(),
+			}.Build()
+
+			err := privateServer.validateSecurityGroup(ctx, securityGroup, nil)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err).To(MatchError(ContainSubstring("belongs to tenant")))
+		})
+	})
 })

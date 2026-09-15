@@ -1,0 +1,204 @@
+/* @theme redhat */
+
+@import 'default';
+@import 'https://fonts.googleapis.com/css2?family=Red+Hat+Display:wght@400;500;700;900&family=Red+Hat+Text:wght@400;500;700&family=Red+Hat+Mono:wght@400;700&display=swap';
+
+:root {
+  --rh-red: #ee0000;
+  --rh-red-dark: #a60000;
+  --rh-red-light: #fef0f0;
+  --rh-black: #151515;
+  --rh-white: #ffffff;
+  --rh-gray-10: #f2f2f2;
+  --rh-gray-20: #e0e0e0;
+  --rh-gray-50: #707070;
+  --rh-gray-60: #4d4d4d;
+  --rh-gray-70: #383838;
+  --rh-teal-50: #37a3a3;
+  --rh-purple-50: #5e40be;
+  --rh-orange-40: #f5921b;
+  --rh-blue-50: #0066cc;
+}
+
+section {
+  font-family: 'Red Hat Display', sans-serif;
+  background-color: var(--rh-white);
+  color: var(--rh-black);
+  padding: 30px 60px;
+  line-height: 1.35;
+  font-size: 28px;
+  letter-spacing: 1px;
+  justify-content: flex-start;
+}
+
+h1, h2, h3, h4 {
+  font-family: 'Red Hat Display', sans-serif;
+  color: var(--rh-black);
+  letter-spacing: 1px;
+}
+
+h1 {
+  font-weight: 700;
+  font-size: 2.2em;
+}
+
+h2 {
+  font-weight: 700;
+  font-size: 1.6em;
+  border-bottom: 3px solid var(--rh-red);
+  padding-bottom: 6px;
+  margin-bottom: 16px;
+  margin-top: 10px;
+}
+
+h3 {
+  font-weight: 500;
+  font-size: 1.2em;
+  color: var(--rh-gray-60);
+}
+
+code {
+  font-family: 'Red Hat Mono', monospace;
+  background-color: var(--rh-gray-10);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 0.85em;
+}
+
+a {
+  color: var(--rh-blue-50);
+  text-decoration: none;
+}
+
+strong {
+  color: var(--rh-red-dark);
+}
+
+table {
+  font-size: 0.65em;
+  width: 100%;
+  border-collapse: collapse;
+}
+
+table th {
+  background-color: var(--rh-black);
+  color: var(--rh-white);
+  font-family: 'Red Hat Display', sans-serif;
+  font-weight: 500;
+  padding: 8px 12px;
+  text-align: left;
+}
+
+table td {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--rh-gray-20);
+}
+
+table tr:nth-child(even) {
+  background-color: var(--rh-gray-10);
+}
+
+ul, ol {
+  margin-left: 0;
+  padding-left: 1.2em;
+}
+
+li {
+  margin-bottom: 4px;
+}
+
+/* Title slide */
+section.title {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  background-color: var(--rh-black);
+  color: var(--rh-white);
+}
+
+section.title h1 {
+  color: var(--rh-white);
+  font-size: 2.6em;
+  font-weight: 900;
+  margin-bottom: 0;
+}
+
+section.title h3 {
+  color: var(--rh-gray-20);
+  font-weight: 400;
+  margin-top: 8px;
+}
+
+section.title::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 6px;
+  background-color: var(--rh-red);
+}
+
+/* Section divider */
+section.divider {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  background-color: var(--rh-red);
+  color: var(--rh-white);
+}
+
+section.divider h1 {
+  color: var(--rh-white);
+  font-size: 2.4em;
+  font-weight: 900;
+}
+
+section.divider h3 {
+  color: rgba(255, 255, 255, 0.85);
+  font-weight: 400;
+}
+
+section.divider::after {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+/* Dark slides */
+section.dark {
+  background-color: var(--rh-black);
+  color: var(--rh-white);
+}
+
+section.dark h1, section.dark h2 {
+  color: var(--rh-white);
+}
+
+section.dark h2 {
+  border-bottom-color: var(--rh-red);
+}
+
+section.dark strong {
+  color: var(--rh-red);
+}
+
+section.dark {
+  justify-content: center;
+}
+
+/* Footnote / small text */
+section footer {
+  font-size: 0.6em;
+  color: var(--rh-gray-50);
+  position: absolute;
+  bottom: 30px;
+  left: 60px;
+}
+
+/* Page numbers */
+section::after {
+  font-family: 'Red Hat Display', sans-serif;
+  font-size: 0.6em;
+  color: var(--rh-gray-50);
+}

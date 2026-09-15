@@ -61,6 +61,118 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		bareMetalInstanceTypesClient = privatev1.NewBareMetalInstanceTypesClient(tool.InternalView().AdminConn())
 		diskImagesClient = privatev1.NewDiskImagesClient(tool.InternalView().AdminConn())
 
+		// Create default network resources so BMI creation without explicit
+		// network_attachments can apply tenant defaults (OSAC-4948).
+		networkClassesClient := privatev1.NewNetworkClassesClient(tool.InternalView().AdminConn())
+		virtualNetworksClient := privatev1.NewVirtualNetworksClient(tool.InternalView().AdminConn())
+		subnetsClient := privatev1.NewSubnetsClient(tool.InternalView().AdminConn())
+		securityGroupsClient := privatev1.NewSecurityGroupsClient(tool.InternalView().AdminConn())
+
+		ncResp, err := networkClassesClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
+			Object: privatev1.NetworkClass_builder{
+				Title:         "BMI Test Default Network Class",
+				FabricManager: new("test-fabric"),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		networkClassId := ncResp.GetObject().GetId()
+		DeferCleanup(func(ctx context.Context) {
+			_, _ = networkClassesClient.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{
+				Id: networkClassId,
+			}.Build())
+		})
+
+		vnResp, err := virtualNetworksClient.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
+			Object: privatev1.VirtualNetwork_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   fmt.Sprintf("test-default-vn-%s", uuid.New()[24:32]),
+					Tenant: usersGroup,
+					Labels: map[string]string{
+						"osac.openshift.io/default": "true",
+					},
+				}.Build(),
+				Spec: privatev1.VirtualNetworkSpec_builder{
+					NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClassId}.Build(),
+					Region:       "us-east-1",
+					Ipv4Cidr:     new("10.200.0.0/16"),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		virtualNetworkId := vnResp.GetObject().GetId()
+		DeferCleanup(func(ctx context.Context) {
+			_, _ = virtualNetworksClient.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{
+				Id: virtualNetworkId,
+			}.Build())
+		})
+
+		Eventually(func(g Gomega) {
+			resp, err := virtualNetworksClient.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{
+				Id: virtualNetworkId,
+			}.Build())
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(resp.GetObject().GetStatus().GetState()).To(
+				Equal(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING))
+		}, time.Minute, time.Second).Should(Succeed())
+
+		vnGet, err := virtualNetworksClient.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{
+			Id: virtualNetworkId,
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		vnObj := vnGet.GetObject()
+		vnObj.SetStatus(privatev1.VirtualNetworkStatus_builder{
+			State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
+		}.Build())
+		_, err = virtualNetworksClient.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
+			Object:     vnObj,
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		subnetResp, err := subnetsClient.Create(ctx, privatev1.SubnetsCreateRequest_builder{
+			Object: privatev1.Subnet_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   fmt.Sprintf("test-default-subnet-%s", uuid.New()[24:32]),
+					Tenant: usersGroup,
+					Labels: map[string]string{
+						"osac.openshift.io/default": "true",
+					},
+				}.Build(),
+				Spec: privatev1.SubnetSpec_builder{
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetworkId}.Build(),
+					Ipv4Cidr:       new("10.200.0.0/20"),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		defaultSubnetId := subnetResp.GetObject().GetId()
+		DeferCleanup(func(ctx context.Context) {
+			_, _ = subnetsClient.Delete(ctx, privatev1.SubnetsDeleteRequest_builder{
+				Id: defaultSubnetId,
+			}.Build())
+		})
+
+		sgResp, err := securityGroupsClient.Create(ctx, privatev1.SecurityGroupsCreateRequest_builder{
+			Object: privatev1.SecurityGroup_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   fmt.Sprintf("test-default-sg-%s", uuid.New()[24:32]),
+					Tenant: usersGroup,
+					Labels: map[string]string{
+						"osac.openshift.io/default": "true",
+					},
+				}.Build(),
+				Spec: privatev1.SecurityGroupSpec_builder{
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetworkId}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func(ctx context.Context) {
+			_, _ = securityGroupsClient.Delete(ctx, privatev1.SecurityGroupsDeleteRequest_builder{
+				Id: sgResp.GetObject().GetId(),
+			}.Build())
+		})
+
 		// Create BareMetalInstanceTemplate with an explicit ID that matches the BMFO CRD
 		// validation pattern (^[a-zA-Z_][a-zA-Z0-9._]*$). Auto-generated UUIDs start with
 		// a digit and are rejected by the CRD when the controller creates the CR.
@@ -232,6 +344,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		networkClassesClient := privatev1.NewNetworkClassesClient(tool.InternalView().AdminConn())
 		virtualNetworksClient := privatev1.NewVirtualNetworksClient(tool.InternalView().AdminConn())
 		subnetsClient := privatev1.NewSubnetsClient(tool.InternalView().AdminConn())
+		securityGroupsClient := privatev1.NewSecurityGroupsClient(tool.InternalView().AdminConn())
 		// Create a k8s-only NetworkClass (no fabric_manager):
 		ncResp, err := networkClassesClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 			Object: privatev1.NetworkClass_builder{
@@ -320,6 +433,26 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
+		sgResp, err := securityGroupsClient.Create(ctx, privatev1.SecurityGroupsCreateRequest_builder{
+			Object: privatev1.SecurityGroup_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   fmt.Sprintf("test-sg-%s", uuid.New()[24:32]),
+					Tenant: usersGroup,
+				}.Build(),
+				Spec: privatev1.SecurityGroupSpec_builder{
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetworkId}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		securityGroupId := sgResp.GetObject().GetId()
+		DeferCleanup(func(ctx context.Context) {
+			_, err := securityGroupsClient.Delete(ctx, privatev1.SecurityGroupsDeleteRequest_builder{
+				Id: securityGroupId,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		})
+
 		_, err = bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
 				Spec: publicv1.BareMetalInstanceSpec_builder{
@@ -329,6 +462,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 					NetworkAttachments: []*publicv1.BareMetalNetworkAttachment{
 						publicv1.BareMetalNetworkAttachment_builder{
 							Subnet: publicv1.SubnetLocalReference_builder{Id: subnetId}.Build(),
+							SecurityGroups: []*publicv1.SecurityGroupLocalReference{
+								publicv1.SecurityGroupLocalReference_builder{Id: securityGroupId}.Build(),
+							},
 						}.Build(),
 					},
 				}.Build(),

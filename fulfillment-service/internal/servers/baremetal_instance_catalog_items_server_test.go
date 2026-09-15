@@ -22,6 +22,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
@@ -306,6 +307,83 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			catalogItemID := createResponse.GetObject().GetId()
+
+			// Create default subnet and security group for network attachment defaults.
+			ncDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			fabricMgr := "test-fabric"
+			ncResp, err := ncDao.Create().SetObject(privatev1.NetworkClass_builder{
+				FabricManager: &fabricMgr,
+				Metadata: privatev1.Metadata_builder{
+					Tenant: testTenant,
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			vnDao, err := dao.NewGenericDAO[*privatev1.VirtualNetwork]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			vnResp, err := vnDao.Create().SetObject(privatev1.VirtualNetwork_builder{
+				Metadata: privatev1.Metadata_builder{
+					Tenant: testTenant,
+					Labels: map[string]string{
+						"osac.openshift.io/default": "true",
+					},
+				}.Build(),
+				Spec: privatev1.VirtualNetworkSpec_builder{
+					NetworkClass: privatev1.NetworkClassReference_builder{Id: ncResp.GetObject().GetId()}.Build(),
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			subnetDao, err := dao.NewGenericDAO[*privatev1.Subnet]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			ipv4Cidr := "10.0.1.0/24"
+			_, err = subnetDao.Create().SetObject(privatev1.Subnet_builder{
+				Metadata: privatev1.Metadata_builder{
+					Tenant: testTenant,
+					Labels: map[string]string{
+						"osac.openshift.io/default": "true",
+					},
+				}.Build(),
+				Spec: privatev1.SubnetSpec_builder{
+					Ipv4Cidr:       &ipv4Cidr,
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnResp.GetObject().GetId()}.Build(),
+				}.Build(),
+				Status: privatev1.SubnetStatus_builder{
+					State: privatev1.SubnetState_SUBNET_STATE_READY,
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			sgDao, err := dao.NewGenericDAO[*privatev1.SecurityGroup]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = sgDao.Create().SetObject(privatev1.SecurityGroup_builder{
+				Metadata: privatev1.Metadata_builder{
+					Tenant: testTenant,
+					Labels: map[string]string{
+						"osac.openshift.io/default": "true",
+					},
+				}.Build(),
+				Spec: privatev1.SecurityGroupSpec_builder{
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnResp.GetObject().GetId()}.Build(),
+				}.Build(),
+				Status: privatev1.SecurityGroupStatus_builder{
+					State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
 
 			instancesServer, err := NewPrivateBareMetalInstancesServer().
 				SetLogger(logger).

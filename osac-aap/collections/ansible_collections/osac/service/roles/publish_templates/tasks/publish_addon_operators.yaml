@@ -14,7 +14,9 @@
 
 - name: Store first AddOnOperator page result
   ansible.builtin.set_fact:
-    addon_operator_check: "{{ addon_operator_page }}"
+    addon_operator_check:
+      status: "{{ addon_operator_page.status }}"
+      json: "{{ addon_operator_page.json | default({}) }}"
 
 - name: Skip AddOnOperators when service is disabled
   ansible.builtin.debug:

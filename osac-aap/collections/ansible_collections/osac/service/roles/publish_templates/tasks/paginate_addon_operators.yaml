@@ -20,4 +20,3 @@
     - addon_operator_page.status == 200
     - addon_operator_pagination_ok | default(false) | bool
     - addon_operator_next_offset < addon_operator_total
-    - addon_operator_page.json.get('size', addon_operator_page.json.get('items', []) | length) | int > 0

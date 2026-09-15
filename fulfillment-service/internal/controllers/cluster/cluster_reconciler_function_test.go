@@ -161,6 +161,63 @@ var _ = Describe("update tenant annotation", func() {
 		Expect(createdCR.GetLabels()).To(HaveKeyWithValue(labels.ClusterOrderUuid, clusterID))
 	})
 
+	It("should serialize catalog-item template node sets into ClusterOrder node requests", func() {
+		scheme := runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			Build()
+
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().
+			Get(gomock.Any(), hubID).
+			Return(&controllers.HubEntry{
+				Namespace: hubNamespace,
+				Client:    fakeClient,
+			}, nil)
+
+		cluster := privatev1.Cluster_builder{
+			Id: clusterID,
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.Controller},
+				Tenant:     tenantName,
+			}.Build(),
+			Spec: privatev1.ClusterSpec_builder{
+				Template: &privatev1.ClusterTemplateReference{Name: "osac.templates.ocp_ci_small"},
+				NodeSets: map[string]*privatev1.ClusterNodeSet{
+					"ci-worker": privatev1.ClusterNodeSet_builder{
+						HostType: &privatev1.HostTypeReference{Name: "ci-worker"},
+						Size:     proto.Int32(1),
+					}.Build(),
+				},
+			}.Build(),
+			Status: privatev1.ClusterStatus_builder{
+				State: privatev1.ClusterState_CLUSTER_STATE_PROGRESSING,
+				Hub:   hubID,
+			}.Build(),
+		}.Build()
+
+		t := &task{
+			r: &function{
+				logger:         logger,
+				hubCache:       hubCache,
+				maskCalculator: nil,
+			},
+			cluster: cluster,
+		}
+
+		err := t.update(ctx)
+		Expect(err).ToNot(HaveOccurred())
+
+		list := &osacv1alpha1.ClusterOrderList{}
+		Expect(fakeClient.List(ctx, list)).To(Succeed())
+		Expect(list.Items).To(HaveLen(1))
+		Expect(list.Items[0].Spec.NodeRequests).To(HaveLen(1))
+		Expect(list.Items[0].Spec.NodeRequests[0].ResourceClass).To(Equal("ci-worker"))
+		Expect(list.Items[0].Spec.NodeRequests[0].NumberOfNodes).To(Equal(1))
+	})
+
 	It("should update ClusterOrder when node set size changes on a ready cluster", func() {
 		// Create an existing ClusterOrder with size 3:
 		existingOrder := &osacv1alpha1.ClusterOrder{

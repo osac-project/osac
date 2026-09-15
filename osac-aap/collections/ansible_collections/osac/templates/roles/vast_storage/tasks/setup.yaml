@@ -400,6 +400,22 @@
             _vast_cleanup_tenant_id: "{{ _vast_tenant_result.tenants.id }}"
           ignore_errors: true  # noqa: ignore-errors
 
+        - name: Rollback - delete VAST tenant (before local provider)
+          when:
+            - _vast_vms_conn is defined
+            - _vast_tenant_created | default(false) | bool
+          vastdata.vms.tenants:
+            vms: "{{ _vast_vms_conn }}"
+            name: "{{ tenant_name }}"
+            state: absent
+            force_remove: true
+          retries: 3
+          delay: 10
+          until: _vast_rollback_tenant_result is not failed
+          register: _vast_rollback_tenant_result
+          ignore_errors: true  # noqa: ignore-errors
+          no_log: true
+
         - name: Rollback - delete local provider
           when:
             - _vast_local_provider_created | default(false) | bool
@@ -415,21 +431,6 @@
             validate_certs: "{{ vast_storage_validate_certs }}"
             timeout: "{{ vast_storage_api_timeout | int }}"
             status_code: [200, 204, 404]
-          ignore_errors: true  # noqa: ignore-errors
-          no_log: true
-
-        - name: Rollback - delete VAST tenant
-          when:
-            - _vast_vms_conn is defined
-            - _vast_tenant_created | default(false) | bool
-          vastdata.vms.tenants:
-            vms: "{{ _vast_vms_conn }}"
-            name: "{{ tenant_name }}"
-            state: absent
-          retries: 3
-          delay: 10
-          until: _vast_rollback_tenant_result is not failed
-          register: _vast_rollback_tenant_result
           ignore_errors: true  # noqa: ignore-errors
           no_log: true
 

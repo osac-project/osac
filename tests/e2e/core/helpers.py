@@ -312,11 +312,7 @@ def wait_for_cluster_progressing(*, k8s: K8sClient, name: str) -> None:
 
 
 def wait_for_cluster_order_event_reasons(
-    *,
-    k8s: K8sClient,
-    name: str,
-    reasons: set[str],
-    stop_reasons: set[str] | None = None,
+    *, k8s: K8sClient, name: str, reasons: set[str], stop_reasons: set[str] | None = None
 ) -> dict[str, dict[str, Any]]:
     observed_events: dict[str, dict[str, Any]] = {}
 
@@ -355,39 +351,29 @@ def assert_cluster_order_lifecycle_events(*, k8s: K8sClient, name: str) -> None:
         "ControlPlaneStarting": ("Normal", "Provisioning", "Control Plane Starting"),
         "Ready": ("Normal", "Ready", "ClusterOrder is ready"),
     }
-    expected_reasons = set(expected_events)
     if k8s.get_cluster_order_status(name=name).get("nodeSets"):
         expected_events["WorkersJoining"] = ("Normal", "Provisioning", "Workers Joining")
-        expected_reasons.add("WorkersJoining")
 
-    events = wait_for_cluster_order_event_reasons(
-        k8s=k8s,
-        name=name,
-        reasons=expected_reasons,
-        stop_reasons={"Ready"},
-    )
+    events = {event["reason"]: event for event in k8s.get_cluster_order_events(name=name) if event.get("reason")}
     assert_cluster_order_events(events=events, expected=expected_events)
 
 
 def assert_cluster_order_deleting_event(*, k8s: K8sClient, name: str) -> None:
     events = wait_for_cluster_order_event_reasons(k8s=k8s, name=name, reasons={"Deleting"})
     assert_cluster_order_events(
-        events=events,
-        expected={"Deleting": ("Normal", "Deleting", "ClusterOrder entered deleting phase")},
+        events=events, expected={"Deleting": ("Normal", "Deleting", "ClusterOrder entered deleting phase")}
     )
 
 
 def wait_for_cluster_ready(*, k8s: K8sClient, name: str) -> None:
-    # Must stay safely above osac-aap's own wait_for_clusteroperators_retries
-    # budget (60 min) plus earlier steps in the same AAP job (create hosted
-    # cluster, retrieve kubeconfig, etc.), or this times out first with a
-    # less useful error while the ClusterOrder is still legitimately Progressing.
+    # Available=True is the single completion signal for a fully provisioned
+    # ClusterOrder. It is mapped to the fulfillment API's READY condition.
     poll_until(
-        fn=lambda: k8s.get_cluster_order_phase(name=name, checked=False),
-        until=lambda v: v == "Ready",
+        fn=lambda: k8s.get_cluster_order_condition_status(name=name, condition_type="Available", checked=False),
+        until=lambda v: v == "True",
         retries=480,
         delay=15,
-        description=f"{name} ClusterOrder Ready",
+        description=f"{name} ClusterOrder Available",
     )
 
 

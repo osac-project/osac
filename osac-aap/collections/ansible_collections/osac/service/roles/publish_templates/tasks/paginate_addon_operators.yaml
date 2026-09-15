@@ -8,11 +8,16 @@
   register: addon_operator_page
   no_log: true
 
+- name: Read AddOnOperator IDs from page
+  ansible.builtin.set_fact:
+    addon_operator_page_ids: "{{ addon_operator_page.json.get('items', []) | map(attribute='id') | list }}"
+  when: addon_operator_page.status == 200
+
 - name: Accumulate AddOnOperator IDs from page
   ansible.builtin.set_fact:
-    addon_operator_ids: >-
-      {{ addon_operator_ids
-         + (addon_operator_page.json.get('items', []) | map(attribute='id') | list) }}
+    addon_operator_id_set: >-
+      {{ addon_operator_id_set
+         | combine(dict(addon_operator_page_ids | zip(addon_operator_page_ids))) }}
     addon_operator_next_offset: >-
       {{ addon_operator_next_offset
          + (addon_operator_page.json.get('size', addon_operator_page.json.get('items', []) | length) | int) }}

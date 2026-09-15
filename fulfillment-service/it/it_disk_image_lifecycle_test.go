@@ -245,7 +245,7 @@ var _ = Describe("DiskImage lifecycle", func() {
 						SizeGib:     proto.Int32(20),
 						StorageTier: publicv1.StorageTierReference_builder{Id: storageTierId}.Build(),
 					}.Build(),
-					DiskImage: &publicv1.DiskImageReference{Id: diskImageId},
+					DiskImage: publicv1.DiskImageReference_builder{Id: diskImageId}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())

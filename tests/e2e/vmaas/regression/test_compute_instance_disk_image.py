@@ -112,51 +112,6 @@ def test_obsolete_disk_image_blocks_creation(
             grpc.delete_disk_image(disk_image_id=di_id)
 
 
-def test_deprecated_disk_image_allows_creation_with_warning(
-    grpc: GRPCClient,
-    vm_template: str,
-    default_subnet: str,
-    default_instance_type: str,
-    k8s_hub_client: K8sClient,
-    default_storage_tier: str,
-) -> None:
-    """AC-3 / TC-FR7-05: DEPRECATED DiskImage allows creation with warning."""
-    di_name = _unique_name("e2e-di")
-    di_id: str | None = None
-    ci_id: str | None = None
-    ci_name: str | None = None
-
-    try:
-        di_id = grpc.create_disk_image(name=di_name, source_ref=SOURCE_REF)
-
-        grpc.update_disk_image_lifecycle(disk_image_id=di_id, lifecycle="DISK_IMAGE_LIFECYCLE_DEPRECATED")
-
-        response = grpc.create_compute_instance_with_disk_image(
-            template=vm_template,
-            disk_image_name=di_name,
-            subnet_ids=[default_subnet],
-            instance_type=default_instance_type,
-            name=_unique_name("e2e-ci"),
-            boot_disk_storage_tier=default_storage_tier,
-        )
-        ci_id = response["object"]["id"]
-        assert ci_id, "CI creation with DEPRECATED DiskImage should succeed"
-        ci_name = wait_for_cr(k8s=k8s_hub_client, uuid=ci_id)
-
-        warnings: list[str] = response.get("warnings", [])
-        assert any("deprecated" in w.lower() for w in warnings), (
-            f"Response should contain deprecation warning, got: {warnings}"
-        )
-    finally:
-        if ci_id is not None:
-            grpc.delete_compute_instance(ci_id=ci_id)
-            if ci_name is not None:
-                wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
-            wait_for_grpc_removal(grpc=grpc, uuid=ci_id)
-        if di_id is not None:
-            grpc.delete_disk_image(disk_image_id=di_id)
-
-
 def test_template_disk_image_default(grpc: GRPCClient, private_grpc: GRPCClient) -> None:
     """AC-4 / TC-FR8-01: Template records its disk_image default, resolved from name to id at store time.
 

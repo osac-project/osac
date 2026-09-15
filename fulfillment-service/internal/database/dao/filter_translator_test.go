@@ -386,6 +386,16 @@ var _ = Describe("Filter translator", func() {
 				`data->'spec'->>'spec_enum' = 'MY_ENUM_VALUE_A'`,
 			),
 			Entry(
+				"Enum field in list",
+				`this.spec.spec_enum in [0, 1, 2]`,
+				`data->'spec'->>'spec_enum' in ('MY_ENUM_UNSPECIFIED', 'MY_ENUM_VALUE_A', 'MY_ENUM_VALUE_B')`,
+			),
+			Entry(
+				"Enum field in single-element list",
+				`this.spec.spec_enum in [1]`,
+				`data->'spec'->>'spec_enum' in ('MY_ENUM_VALUE_A')`,
+			),
+			Entry(
 				"Compare project to string",
 				`this.metadata.project == 'my_project'`,
 				`project = 'my_project'`,
@@ -434,6 +444,10 @@ var _ = Describe("Filter translator", func() {
 			Entry(
 				"Non-literal numeric expression not-equals enum",
 				`this.spec.spec_enum != (1 + 1)`,
+			),
+			Entry(
+				"Unknown enum value in list",
+				`this.spec.spec_enum in [1, 99]`,
 			),
 		)
 

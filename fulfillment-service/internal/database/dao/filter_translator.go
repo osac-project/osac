@@ -767,6 +767,28 @@ func (t *FilterTranslator) translateInList(key ast.Expr, list ast.ListExpr) (res
 			return
 		}
 	}
+	if keyTr.enumDesc != nil {
+		for i, valueTr := range valueTrs {
+			if !valueTr.hasIntValue {
+				err = fmt.Errorf(
+					"comparison of enum '%s' requires a literal integer value",
+					keyTr.enumDesc.FullName(),
+				)
+				return
+			}
+			name, found := t.resolveEnumName(keyTr.enumDesc, valueTr.intValue)
+			if !found {
+				err = fmt.Errorf("unknown enum value %d for %s", valueTr.intValue, keyTr.enumDesc.FullName())
+				return
+			}
+			text, escaped := t.translateString(name, "")
+			if escaped {
+				valueTrs[i].sql = fmt.Sprintf("e'%s'", text)
+			} else {
+				valueTrs[i].sql = fmt.Sprintf("'%s'", text)
+			}
+		}
+	}
 	var buffer bytes.Buffer
 	if keyTr.precedence < filterTranslatorInPrecedence {
 		fmt.Fprintf(&buffer, "(%s)", keyTr.sql)

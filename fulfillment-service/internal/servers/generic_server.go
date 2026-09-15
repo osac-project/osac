@@ -43,6 +43,11 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
+// PrepareCandidateFunc validates or transforms a prepared candidate before persistence.
+// Current is nil on Create; on Update it contains the stored object before merging.
+// Only the candidate is persisted, and a returned error discards its changes.
+type PrepareCandidateFunc[O dao.Object] func(ctx context.Context, current, candidate O) error
+
 // GenericServerBuilder contains the data and logic needed to create new generic servers.
 type GenericServerBuilder[O dao.Object] struct {
 	logger            *slog.Logger
@@ -514,24 +519,57 @@ func isSingletonConstraintViolation(constraintName string) bool {
 }
 
 func (s *GenericServer[O]) Create(ctx context.Context, request any, response any) error {
-	// Route dry-run requests to skip persistence and event emission. Resource-specific
-	// validation (template resolution, catalog item field definitions, spec defaults)
-	// runs in the calling server before reaching GenericServer. The dry-run flag is
-	// carried as gRPC metadata (HTTP header X-Dry-Run: true) rather than a proto field
-	// to keep request messages purely declarative.
-	if isDryRun(ctx) {
-		return s.createDryRun(ctx, request, response)
-	}
+	return s.CreateWithCandidatePreparation(ctx, request, response, nil)
+}
 
+// CreateWithCandidatePreparation prepares ownership metadata, lets the caller materialize and validate the candidate,
+// validates the result again, and then either returns it for dry-run or persists it.
+func (s *GenericServer[O]) CreateWithCandidatePreparation(
+	ctx context.Context,
+	request any,
+	response any,
+	prepareCandidate PrepareCandidateFunc[O],
+) error {
 	requestObject, err := s.prepareForCreate(ctx, request)
 	if err != nil {
 		return err
 	}
 
-	// Save the object:
-	daoResponse, err := s.dao.Create().
-		SetObject(requestObject).
-		Do(ctx)
+	var nilObject O
+	if prepareCandidate != nil {
+		preparedID := requestObject.GetId()
+		preparedMetadata := proto.Clone(s.getMetadata(requestObject)).(metadataIface)
+		if err = prepareCandidate(ctx, nilObject, requestObject); err != nil {
+			return err
+		}
+		if err = s.validatePreparedCandidate(ctx, requestObject, preparedID, preparedMetadata); err != nil {
+			return err
+		}
+	}
+
+	return s.createPrepared(ctx, requestObject, response)
+}
+
+func (s *GenericServer[O]) createPrepared(ctx context.Context, requestObject O, response any) error {
+	if s.isNil(requestObject) {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "object is mandatory")
+	}
+
+	// In dry-run mode, return the validated candidate in a fresh create response.
+	// The response includes defaults and resolved references produced during
+	// preparation. Database writes and creation events are skipped; validation may
+	// still perform database reads.
+	if isDryRun(ctx) {
+		type responseIface interface {
+			SetObject(O)
+		}
+		responseMsg := proto.Clone(s.createResponse).(responseIface)
+		responseMsg.SetObject(requestObject)
+		s.setPointer(response, responseMsg)
+		return nil
+	}
+
+	daoResponse, err := s.dao.Create().SetObject(requestObject).Do(ctx)
 	if err != nil {
 		var alreadyExistsErr *dao.ErrAlreadyExists
 		if errors.As(err, &alreadyExistsErr) {
@@ -562,23 +600,17 @@ func (s *GenericServer[O]) Create(ctx context.Context, request any, response any
 		if errors.As(err, &deadlockErr) {
 			return grpcstatus.Errorf(grpccodes.Aborted, "%s", deadlockErr.Error())
 		}
-		s.logger.ErrorContext(
-			ctx,
-			"Failed to create",
-			slog.Any("error", err),
-		)
+		s.logger.ErrorContext(ctx, "Failed to create", slog.Any("error", err))
 		return grpcstatus.Errorf(grpccodes.Internal, "failed to create object")
 	}
-	responseObject := daoResponse.GetObject()
 
 	// Create the response message:
 	type responseIface interface {
 		SetObject(O)
 	}
 	responseMsg := proto.Clone(s.createResponse).(responseIface)
-	responseMsg.SetObject(responseObject)
+	responseMsg.SetObject(daoResponse.GetObject())
 	s.setPointer(response, responseMsg)
-
 	return nil
 }
 
@@ -592,6 +624,8 @@ func (s *GenericServer[O]) prepareForCreate(ctx context.Context, request any) (O
 	requestObject := requestMsg.GetObject()
 	if s.isNil(requestObject) {
 		requestObject = proto.Clone(s.template).(O)
+	} else {
+		requestObject = proto.Clone(requestObject).(O)
 	}
 
 	requestMetadata := s.getMetadata(requestObject)
@@ -635,19 +669,24 @@ func (s *GenericServer[O]) checkAllowedTenant(tenant string) error {
 	return nil
 }
 
-func (s *GenericServer[O]) createDryRun(ctx context.Context, request any, response any) error {
-	requestObject, err := s.prepareForCreate(ctx, request)
-	if err != nil {
+// validatePreparedCandidate ensures preparation retained the server-assigned identity and produced a valid object.
+func (s *GenericServer[O]) validatePreparedCandidate(
+	ctx context.Context, candidate O, preparedID string, preparedMetadata metadataIface,
+) error {
+	metadata := s.getMetadata(candidate)
+	if metadata == nil {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "metadata is required")
+	}
+	if candidate.GetId() != preparedID || metadata.GetTenant() != preparedMetadata.GetTenant() ||
+		metadata.GetProject() != preparedMetadata.GetProject() || metadata.GetCreator() != preparedMetadata.GetCreator() {
+		return grpcstatus.Errorf(grpccodes.PermissionDenied, "candidate preparation cannot change identity or ownership metadata")
+	}
+	if err := s.validateMetadata(ctx, metadata); err != nil {
 		return err
 	}
-
-	type responseIface interface {
-		SetObject(O)
+	if err := s.validator.Validate(candidate); err != nil {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "validation failed: %s", err)
 	}
-	responseMsg := proto.Clone(s.createResponse).(responseIface)
-	responseMsg.SetObject(requestObject)
-	s.setPointer(response, responseMsg)
-
 	return nil
 }
 
@@ -672,6 +711,17 @@ func isDryRun(ctx context.Context) bool {
 }
 
 func (s *GenericServer[O]) Update(ctx context.Context, request any, response any) error {
+	return s.UpdateWithCandidatePreparation(ctx, request, response, nil)
+}
+
+// UpdateWithCandidatePreparation merges the update into a detached candidate, lets the caller apply resource semantics,
+// validates the result again, and persists it only when it differs from the stored object.
+func (s *GenericServer[O]) UpdateWithCandidatePreparation(
+	ctx context.Context,
+	request any,
+	response any,
+	prepareCandidate PrepareCandidateFunc[O],
+) error {
 	// Extract the object from the request message:
 	type requestIface interface {
 		GetObject() O
@@ -748,13 +798,12 @@ func (s *GenericServer[O]) Update(ctx context.Context, request any, response any
 		}
 	}
 
-	// Clone the current object so that in-place modifications (mask application, tenant calculation) don't
-	// affect the original that we use for the equivalence comparison later.
-	tmpObject := proto.Clone(currentObject).(O)
-
 	// Update the fields indicated in the update mask, or all the fields if there is no update mask:
 	requestMask := requestMsg.GetUpdateMask()
+	var tmpObject O
 	if requestMask != nil {
+		// Keep the stored object unchanged for comparison and detach any values copied from the request.
+		tmpObject = proto.Clone(currentObject).(O)
 		fieldPaths, err := s.compilePaths(requestMask.GetPaths())
 		if err != nil {
 			return err
@@ -767,8 +816,9 @@ func (s *GenericServer[O]) Update(ctx context.Context, request any, response any
 				fieldPath.Clear(tmpObject)
 			}
 		}
+		tmpObject = proto.Clone(tmpObject).(O)
 	} else {
-		tmpObject = requestObject
+		tmpObject = proto.Clone(requestObject).(O)
 	}
 
 	// Validate the merged object using protovalidate.
@@ -803,6 +853,17 @@ func (s *GenericServer[O]) Update(ctx context.Context, request any, response any
 	currentTenant := s.getMetadata(currentObject).GetTenant()
 	if assignedTenant != currentTenant {
 		if err = s.checkAllowedTenant(assignedTenant); err != nil {
+			return err
+		}
+	}
+
+	if prepareCandidate != nil {
+		preparedID := tmpObject.GetId()
+		preparedMetadata := proto.Clone(s.getMetadata(tmpObject)).(metadataIface)
+		if err = prepareCandidate(ctx, proto.Clone(currentObject).(O), tmpObject); err != nil {
+			return err
+		}
+		if err = s.validatePreparedCandidate(ctx, tmpObject, preparedID, preparedMetadata); err != nil {
 			return err
 		}
 	}

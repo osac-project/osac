@@ -19,10 +19,10 @@ OSAC CLI and API.
 
 ## Browse Cluster Catalog Items
 
-List all available catalog items:
+List published catalog items available for provisioning:
 
 ```bash
-osac get clustercatalogitems
+osac get clustercatalogitems --filter 'this.published'
 ```
 
 Inspect a specific catalog item to see its fields and defaults:
@@ -35,8 +35,8 @@ Key fields in a catalog item:
 
 - **`title`**: Human-friendly short description of the offering.
 - **`description`**: Detailed Markdown description of what the catalog item provides.
-- **`field_definitions`**: Definitions of the fields that users can set when creating a cluster,
-  including which fields are required, their types, and default values.
+- **`fields`**: Typed locked or editable policies for cluster fields, with optional defaults.
+- **`template_parameters`**: Typed policies for parameters declared by the referenced Template.
 
 ## Manage Cluster Versions
 
@@ -76,22 +76,26 @@ osac create cluster \
   --catalog-item hosted_cluster_offering
 ```
 
-To specify an OpenShift version explicitly:
+To specify an OpenShift version explicitly, the catalog's version policy must be editable or absent:
 
 ```bash
 osac create cluster \
   --catalog-item hosted_cluster_offering \
-  --version "4.17.0"
+  --version "4-17-0"
 ```
+
+If `fields.version` is locked, omit `--version`: the catalog supplies its fixed version and rejects
+any explicitly supplied version, including the same one.
 
 Optional flags:
 
 - `-n, --name <name>` - Human-readable name for the cluster
-- `--version <version>` - ClusterVersion `metadata.name` or `spec.version` string. Version is
-  resolved with the following precedence:
+- `--version <version>` - ClusterVersion `metadata.name` or `spec.version` string. For an editable
+  or ungoverned version, values are resolved with the following precedence:
   1. Explicit `--version` provided by the user.
-  2. Template or catalog item default (`spec_defaults.version_name` or field definition default).
-  3. System default ClusterVersion (`is_default = true`).
+  2. Catalog item editable default (`fields.version.editable.default_value`).
+  3. Template default (`spec_defaults.version`).
+  4. System default ClusterVersion (`is_default = true`).
 
 The command outputs the cluster ID upon successful creation.
 

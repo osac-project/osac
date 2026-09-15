@@ -134,7 +134,7 @@ const longHelp = `
 Create a cluster catalog item. A catalog item defines a curated cluster
 offering that references an underlying cluster template.
 
-To include field definitions, use {{ bt }}osac create -f{{ bt }} with a
+To configure typed field policies, use {{ bt }}osac create -f{{ bt }} with a
 YAML file instead.
 `
 

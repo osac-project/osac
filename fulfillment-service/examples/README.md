@@ -111,7 +111,7 @@ These YAML files use the protobuf `Any` encoding format required by
 - `@type` — protobuf message type (e.g., `type.googleapis.com/osac.private.v1.ClusterCatalogItem`)
 - `metadata.name` — unique identifier
 - `title` / `description` — human-friendly display text
-- `template` — template identifier this catalog item references
-- `published` — whether visible in the public API
-- `field_definitions` — user-editable fields with `path`, `display_name`,
-  `editable`, `default`, and `validation_schema`
+- `template` — typed Template reference (`id` or `name`, plus scope)
+- `published` — whether available for provisioning
+- `fields` — typed field policies selecting `locked` or `editable`, with an optional
+  `editable.default_value`

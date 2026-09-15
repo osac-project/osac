@@ -135,7 +135,7 @@ Create a compute instance catalog item. A catalog item defines a curated
 compute instance offering that references an underlying compute instance
 template.
 
-To include field definitions, use {{ bt }}osac create -f{{ bt }} with a
+To configure typed field policies, use {{ bt }}osac create -f{{ bt }} with a
 YAML file instead.
 `
 

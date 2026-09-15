@@ -265,11 +265,15 @@ invalid requests with `InvalidArgument` errors that include field-level violatio
 
 - **Create requests**: Validated by protovalidate interceptor before reaching server handlers
 - **Update requests**: Server validates the merged object after applying `update_mask`
-  - Interceptor skips validation to avoid false errors on partial objects
+  - Protovalidate interceptor skips validation to avoid false errors on partial objects
   - Server merges request fields (per mask) with database object
   - Server validates the complete merged result with protovalidate
 
 This ensures validation always runs on the actual final state, not partial input.
+
+The separate reference interceptor validates ordinary references on Create and Update; see
+[Server-side validation and resolution](#server-side-validation-and-resolution) for catalog and
+resource reference exceptions.
 
 ### Standard constraints
 
@@ -741,7 +745,7 @@ Repeated references (e.g., security groups in a network attachment) are arrays o
 
 ### Cross-project references
 
-To reference an object in a different project within the same tenant, set the `project` field:
+To reference an object by name in a different project within the same tenant, set the `project` field:
 
 ```json
 {
@@ -751,8 +755,8 @@ To reference an object in a different project within the same tenant, set the `p
 }
 ```
 
-To reference an object owned by the shared tenant (e.g., a globally available template), set
-`shared` to `true`:
+To reference an object by name in the shared tenant (e.g., a globally available template), set
+`shared` to `true`. A globally unique ID is sufficient when it is visible to the caller:
 
 ```json
 {
@@ -764,12 +768,24 @@ To reference an object owned by the shared tenant (e.g., a globally available te
 
 ### Server-side validation and resolution
 
-The server validates references automatically via a gRPC interceptor on `Create` and `Update`
-requests. For each reference field the interceptor:
+The gRPC interceptor validates ordinary references on `Create` and `Update`. Catalog authoring
+excludes `object.template` and `object.fields` from that early pass: handlers resolve them after
+ownership assignment and update-mask merging. Resource Create similarly resolves `spec.catalog_item`
+and `spec.template` in the handler. Resource Update excludes only `spec.catalog_item`, which is
+immutable historical provenance and may identify a deleted catalog.
 
-1. Determines the lookup scope (caller's tenant/project for local references; explicit
-   `project`/`shared` overrides for full references).
-2. Looks up the referenced object by `id`, `name`, or both.
+Catalog dependencies must belong to the shared tenant or the catalog's own tenant; shared catalogs
+use shared dependencies only. Local references must match the owner's tenant and project, including
+references copied into a new resource. Catalog and provisioning-source name lookups honor explicit
+scope selectors; IDs resolve through ordinary visibility and ownership checks. Handlers retain
+resource lifecycle, readiness, and cross-field validation after materialization.
+
+For ordinary reference fields validated by the interceptor:
+
+1. Passes the requested scope to the registered lookup (caller's tenant/project for local references;
+   explicit `project`/`shared` overrides for full references).
+2. Looks up the referenced object by `id`, `name`, or both. The ordinary DAO-backed interceptor
+   lookups use caller visibility; handlers perform the final ownership and scope checks.
 3. If both `id` and `name` are provided, verifies they refer to the same object.
 4. Auto-populates whichever of `id` or `name` was not provided by the caller.
 

@@ -1,35 +1,32 @@
 # Windows 11 Virtual Machine catalog item
 # A Windows 11 desktop virtual machine.
 
-"@type": type.googleapis.com/osac.private.v1.ComputeInstanceCatalogItem
+'@type': type.googleapis.com/osac.private.v1.ComputeInstanceCatalogItem
 metadata:
   name: windows-11-vm
 title: Windows 11 Virtual Machine
 description: A Windows 11 desktop virtual machine with customizable resources.
-template: osac.templates.ocp_virt_vm
+template:
+  id: osac.templates.ocp_virt_vm
+  shared: true
 published: true
-field_definitions:
-  - path: instance_type
-    display_name: Instance Type
-    editable: true
-    default: u1-medium
-    validation_schema: '{"type":"string","minLength":1}'
-  - path: boot_disk.size_gib
-    display_name: Boot Disk Size (GiB)
-    editable: true
-    default: 120
-    validation_schema: '{"type":"integer","minimum":10,"maximum":1024}'
-  - path: disk_image
-    display_name: Disk Image
-    editable: true
-    default: windows-11
-    validation_schema: '{"type":"string","minLength":1}'
-  - path: run_strategy
-    display_name: Run Strategy
-    editable: true
-    default: Always
-    validation_schema: '{"type":"string","enum":["Always","Halted"]}'
-  - path: user_data
-    display_name: Cloud Init User Data
-    editable: true
-    validation_schema: '{"type":"string"}'
+fields:
+  instance_type:
+    editable:
+      default_value:
+        name: u1-medium
+        shared: true
+  boot_disk:
+    size_gib:
+      editable:
+        default_value: 120
+  disk_image:
+    editable:
+      default_value:
+        name: windows-11
+        shared: true
+  run_strategy:
+    editable:
+      default_value: COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS
+  user_data:
+    editable: {}

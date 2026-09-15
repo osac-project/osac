@@ -33,8 +33,12 @@ type ResourceState struct {
 	// the most recent reset. Keyed by ComponentRecord.NodeSet; absent for
 	// resource types that don't decompose into components.
 	ComponentBillableSince map[string]time.Time
-	LastHeartbeatAt        *time.Time
-	TransitionTime         time.Time
-	FulfillmentVersion     int32
-	BillingDimensions      map[string]any
+	// ComponentEverStarted records whether each independently metered component
+	// has ever opened an interval. BMaaS uses it to distinguish started.v1 from
+	// resumed.v1 after consumption suspension.
+	ComponentEverStarted map[string]bool
+	LastHeartbeatAt      *time.Time
+	TransitionTime       time.Time
+	FulfillmentVersion   int32
+	BillingDimensions    map[string]any
 }

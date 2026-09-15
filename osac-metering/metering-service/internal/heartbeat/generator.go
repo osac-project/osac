@@ -134,30 +134,82 @@ func (g *Generator) publishResourceHeartbeats(ctx context.Context, hbEvents []cl
 }
 
 func (g *Generator) buildHeartbeatEvents(state *projection.ResourceState, now time.Time) ([]cloudevents.Event, error) {
-	buildFn := func(dims map[string]any, eventID string) (cloudevents.Event, error) {
-		return g.buildHeartbeatEvent(state, eventID, dims, now)
-	}
-
 	// Base ID should be reproducible for a given resource and heartbeat
 	// window, so that building this same tick's events more than once —
 	// e.g. a future in-tick retry — reproduces the same per-component
 	// CloudEvent IDs.
 	baseID := fmt.Sprintf("hb/%s/%d", state.ResourceID, now.Truncate(g.interval).Unix())
+	return BuildHeartbeatEvents(state, baseID, now, "osac-metering")
+}
+
+// BuildHeartbeatEvents builds the heartbeat event fan-out for one resource.
+// BMaaS has independent allocation and consumption meters; all other resource
+// types retain the existing resource decomposition behavior.
+func BuildHeartbeatEvents(state *projection.ResourceState, baseID string, now time.Time, source string) ([]cloudevents.Event, error) {
+	if state.ResourceType == events.ResourceTypeBareMetalInstance {
+		return buildBMaaSHeartbeatEvents(state, baseID, now, source)
+	}
+
+	buildFn := func(dims map[string]any, eventID string) (cloudevents.Event, error) {
+		return buildHeartbeatEvent(state, eventID, dims, now, source, heartbeatDurationSeconds(now, state.BillableSince))
+	}
 	return events.BuildResourceEvents(state.ResourceType, state.BillingDimensions, baseID, buildFn)
 }
 
-func (g *Generator) buildHeartbeatEvent(state *projection.ResourceState, eventID string, dims map[string]any, now time.Time) (cloudevents.Event, error) {
+func buildBMaaSHeartbeatEvents(state *projection.ResourceState, baseID string, now time.Time, source string) ([]cloudevents.Event, error) {
+	if !events.IsAllocationBillableState(state.CurrentState) {
+		return nil, nil
+	}
+
+	intervals := events.BMaaSMeterIntervals{AllocationSince: state.BillableSince}
+	allocationType := ""
+	if state.BillableSince != nil {
+		allocationType = events.EventHeartbeat
+	}
+	consumptionType := ""
+	if events.IsConsumptionBillableState(state.CurrentState) {
+		if since, ok := state.ComponentBillableSince[events.BMaaSMeterConsumption]; ok {
+			intervals.ConsumptionSince = &since
+			consumptionType = events.EventHeartbeat
+		}
+	}
+	if allocationType == "" && consumptionType == "" {
+		return nil, nil
+	}
+
+	return events.DecomposeBMIEvents(
+		state.BillingDimensions,
+		baseID,
+		now,
+		intervals,
+		func(request events.BMaaSEventBuildRequest) (cloudevents.Event, error) {
+			return buildHeartbeatEvent(state, request.EventID, request.BillingDims, now, source, request.DurationSeconds)
+		},
+		allocationType,
+		consumptionType,
+	)
+}
+
+func heartbeatDurationSeconds(now time.Time, since *time.Time) *float64 {
+	if since == nil {
+		return nil
+	}
+	seconds := now.Sub(*since).Seconds()
+	return &seconds
+}
+
+func buildHeartbeatEvent(state *projection.ResourceState, eventID string, dims map[string]any, now time.Time, source string, durationSeconds *float64) (cloudevents.Event, error) {
 	ce := cloudevents.NewEvent()
 	ce.SetID(eventID)
-	ce.SetSource("osac-metering")
+	ce.SetSource(source)
 	ce.SetType(events.EventHeartbeat)
 	ce.SetTime(now)
 
 	events.SetOSACExtensions(&ce, state.ResourceID, state.ResourceType, state.TenantID, state.ProjectID)
 
-	var durationSeconds float64
-	if state.BillableSince != nil {
-		durationSeconds = now.Sub(*state.BillableSince).Seconds()
+	duration := float64(0)
+	if durationSeconds != nil {
+		duration = *durationSeconds
 	}
 
 	data := heartbeatData{
@@ -166,7 +218,7 @@ func (g *Generator) buildHeartbeatEvent(state *projection.ResourceState, eventID
 		TenantID:          state.TenantID,
 		ProjectID:         events.NilIfEmpty(state.ProjectID),
 		CurrentState:      state.CurrentState,
-		DurationSeconds:   durationSeconds,
+		DurationSeconds:   duration,
 		BillingDimensions: dims,
 		SchemaVersion:     schema.SchemaVersion,
 	}

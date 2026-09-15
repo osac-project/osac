@@ -11,6 +11,7 @@ package schema
 
 // Resource type constants identify OSAC resource types in CloudEvent payloads.
 const (
-	ResourceTypeComputeInstance = "compute_instance"
-	ResourceTypeClusterOrder    = "cluster_order"
+	ResourceTypeComputeInstance   = "compute_instance"
+	ResourceTypeClusterOrder      = "cluster_order"
+	ResourceTypeBareMetalInstance = "bare_metal_instance"
 )

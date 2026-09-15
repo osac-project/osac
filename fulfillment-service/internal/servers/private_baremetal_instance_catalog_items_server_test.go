@@ -19,12 +19,13 @@ import (
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
-	"google.golang.org/protobuf/types/known/structpb"
 
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -80,6 +81,8 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 				SetAttributionLogic(attribution).
 				SetTenancyLogic(tenancy).
 				Build()
+			Expect(seedBareMetalCatalogItemTemplate(ctx, testTenant, "", "my-template-id")).To(Succeed())
+			Expect(seedBareMetalCatalogItemTemplate(ctx, auth.SharedTenant, "", "my-shared-template-id")).To(Succeed())
 			Expect(err).ToNot(HaveOccurred())
 		})
 
@@ -87,22 +90,48 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 			response, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
 					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						Tenant: testTenant,
 					}.Build(),
 					Title:       "My catalog item",
 					Description: "A test catalog item.",
-					Template:    privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
+					Template:    privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-shared-template-id"}.Build(),
 					Published:   true,
-					Tenant:      "my-tenant",
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			object := response.GetObject()
 			Expect(object.GetId()).ToNot(BeEmpty())
 			Expect(object.GetTitle()).To(Equal("My catalog item"))
-			Expect(object.GetTemplate().GetId()).To(Equal("my-template-id"))
+			Expect(object.GetTemplate().GetId()).To(Equal("my-shared-template-id"))
+			Expect(object.GetTemplate().GetShared()).To(BeTrue())
 			Expect(object.GetPublished()).To(BeTrue())
-			Expect(object.GetTenant()).To(Equal("my-tenant"))
+			Expect(object.GetMetadata().GetTenant()).To(Equal(testTenant))
+		})
+
+		It("reports DiskImage deprecation on Create and skips revalidation for title-only PATCH", func() {
+			images, err := dao.NewGenericDAO[*privatev1.DiskImage]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = images.Create().SetObject(privatev1.DiskImage_builder{
+				Id: "deprecated-policy-image", Metadata: privatev1.Metadata_builder{Name: "deprecated-policy-image", Tenant: testTenant}.Build(),
+				Spec: privatev1.DiskImageSpec_builder{Lifecycle: privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_DEPRECATED}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			response, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{Object: privatev1.BareMetalInstanceCatalogItem_builder{
+				Metadata: privatev1.Metadata_builder{Name: "deprecated-policy-catalog"}.Build(),
+				Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
+				Fields: privatev1.BareMetalInstanceCatalogItemFields_builder{DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{
+					Editable: privatev1.EditableDiskImageReferenceField_builder{DefaultValue: privatev1.DiskImageReference_builder{Id: "deprecated-policy-image"}.Build()}.Build(),
+				}.Build()}.Build(),
+			}.Build()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetWarnings()).To(ConsistOf(ContainSubstring("deprecated")))
+			updated, err := server.Update(ctx, privatev1.BareMetalInstanceCatalogItemsUpdateRequest_builder{
+				Object:     privatev1.BareMetalInstanceCatalogItem_builder{Id: response.GetObject().GetId(), Title: "Updated title"}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"title"}},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updated.GetWarnings()).To(BeEmpty())
 		})
 
 		It("Lists objects", func() {
@@ -150,11 +179,38 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 			Expect(updateResponse.GetObject().GetTitle()).To(Equal("Updated title"))
 		})
 
+		It("rejects changing the template on update", func() {
+			createResponse, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
+				Object: privatev1.BareMetalInstanceCatalogItem_builder{
+					Metadata: privatev1.Metadata_builder{Name: "test-baremetal-catalog-template-immutable"}.Build(),
+					Title:    "Catalog item",
+					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = server.Update(ctx, privatev1.BareMetalInstanceCatalogItemsUpdateRequest_builder{
+				Object: privatev1.BareMetalInstanceCatalogItem_builder{
+					Id:       createResponse.GetObject().GetId(),
+					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-shared-template-id"}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+
+			getResponse, err := server.Get(ctx, privatev1.BareMetalInstanceCatalogItemsGetRequest_builder{Id: createResponse.GetObject().GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(getResponse.GetObject().GetTemplate().GetId()).To(Equal("my-template-id"))
+		})
+
 		It("Deletes object without references", func() {
 			createResponse, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
 					Metadata: privatev1.Metadata_builder{
 						Finalizers: []string{"keep"},
+						Name:       "test-baremetal-catalog-delete",
 					}.Build(),
 					Title:    "My catalog item",
 					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
@@ -175,7 +231,7 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 			Expect(getResponse.GetObject().GetMetadata().GetDeletionTimestamp()).ToNot(BeNil())
 		})
 
-		It("Blocks delete when referenced by a bare metal instance", func() {
+		It("Allows delete when referenced by a bare metal instance", func() {
 			createResponse, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -184,6 +240,9 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 					Title:     "Referenced catalog item",
 					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
 					Published: true,
+					Fields: privatev1.BareMetalInstanceCatalogItemFields_builder{
+						SshPublicKey: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build(),
+					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -210,14 +269,10 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 			_, err = server.Delete(ctx, privatev1.BareMetalInstanceCatalogItemsDeleteRequest_builder{
 				Id: catalogItem.GetId(),
 			}.Build())
-			Expect(err).To(HaveOccurred())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
-			Expect(status.Message()).To(ContainSubstring("still referenced"))
+			Expect(err).ToNot(HaveOccurred())
 		})
 
-		It("Creates object with field definitions", func() {
+		It("Creates object with typed fields", func() {
 			response, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -225,21 +280,16 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 					}.Build(),
 					Title:    "Catalog item with fields",
 					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
-					FieldDefinitions: []*privatev1.FieldDefinition{
-						privatev1.FieldDefinition_builder{
-							Path:        "spec.run_strategy",
-							DisplayName: "Run strategy",
-							Editable:    true,
-						}.Build(),
-					},
+					Fields: privatev1.BareMetalInstanceCatalogItemFields_builder{
+						RunStrategy: privatev1.BareMetalInstanceRunStrategyFieldPolicy_builder{Editable: privatev1.EditableBareMetalInstanceRunStrategyField_builder{}.Build()}.Build(),
+					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			Expect(response.GetObject().GetFieldDefinitions()).To(HaveLen(1))
-			Expect(response.GetObject().GetFieldDefinitions()[0].GetPath()).To(Equal("spec.run_strategy"))
+			Expect(response.GetObject().GetFields().GetRunStrategy()).ToNot(BeNil())
 		})
 
-		It("Rejects non-editable field definition without default value", func() {
+		It("Rejects non-editable field policy without default value", func() {
 			_, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -247,12 +297,9 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 					}.Build(),
 					Title:    "Bad catalog item",
 					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
-					FieldDefinitions: []*privatev1.FieldDefinition{
-						privatev1.FieldDefinition_builder{
-							Path:     "spec.ssh_public_key",
-							Editable: false,
-						}.Build(),
-					},
+					Fields: privatev1.BareMetalInstanceCatalogItemFields_builder{
+						SshPublicKey: privatev1.StringFieldPolicy_builder{}.Build(),
+					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).To(HaveOccurred())
@@ -260,10 +307,10 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 			Expect(status.Message()).To(ContainSubstring("ssh_public_key"))
-			Expect(status.Message()).To(ContainSubstring("default value"))
+			Expect(status.Message()).To(ContainSubstring("no behavior"))
 		})
 
-		It("Accepts non-editable field definition with default value", func() {
+		It("Accepts non-editable field policy with default value", func() {
 			response, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -271,13 +318,9 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 					}.Build(),
 					Title:    "Good catalog item",
 					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
-					FieldDefinitions: []*privatev1.FieldDefinition{
-						privatev1.FieldDefinition_builder{
-							Path:     "spec.ssh_public_key",
-							Editable: false,
-							Default:  structpb.NewStringValue("my-secret"),
-						}.Build(),
-					},
+					Fields: privatev1.BareMetalInstanceCatalogItemFields_builder{
+						SshPublicKey: privatev1.StringFieldPolicy_builder{Locked: proto.String(testSSHPublicKey)}.Build(),
+					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -291,7 +334,7 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 			})
 		})
 
-		It("Accepts editable field definition without default value", func() {
+		It("Accepts editable field policy without default value", func() {
 			response, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -299,92 +342,9 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 					}.Build(),
 					Title:    "Editable no default",
 					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
-					FieldDefinitions: []*privatev1.FieldDefinition{
-						privatev1.FieldDefinition_builder{
-							Path:     "spec.ssh_public_key",
-							Editable: true,
-						}.Build(),
-					},
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			object := response.GetObject()
-			Expect(object).ToNot(BeNil())
-			DeferCleanup(func() {
-				_, err := server.Delete(ctx, privatev1.BareMetalInstanceCatalogItemsDeleteRequest_builder{
-					Id: object.GetId(),
-				}.Build())
-				Expect(err).ToNot(HaveOccurred())
-			})
-		})
-
-		It("Rejects non-editable field definition without default when not first in list", func() {
-			_, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
-				Object: privatev1.BareMetalInstanceCatalogItem_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					Fields: privatev1.BareMetalInstanceCatalogItemFields_builder{
+						SshPublicKey: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build(),
 					}.Build(),
-					Title:    "Bad catalog item",
-					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
-					FieldDefinitions: []*privatev1.FieldDefinition{
-						privatev1.FieldDefinition_builder{
-							Path:     "spec.ssh_public_key",
-							Editable: true,
-						}.Build(),
-						privatev1.FieldDefinition_builder{
-							Path:     "spec.ssh_public_key",
-							Editable: false,
-						}.Build(),
-					},
-				}.Build(),
-			}.Build())
-			Expect(err).To(HaveOccurred())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(ContainSubstring("ssh_public_key"))
-		})
-
-		It("Rejects field definition with invalid validation_schema JSON", func() {
-			_, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
-				Object: privatev1.BareMetalInstanceCatalogItem_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
-					}.Build(),
-					Title:    "Bad schema catalog item",
-					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
-					FieldDefinitions: []*privatev1.FieldDefinition{
-						privatev1.FieldDefinition_builder{
-							Path:             "spec.cores",
-							Editable:         true,
-							ValidationSchema: "{not valid json}",
-						}.Build(),
-					},
-				}.Build(),
-			}.Build())
-			Expect(err).To(HaveOccurred())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(ContainSubstring("cores"))
-			Expect(status.Message()).To(ContainSubstring("invalid validation_schema"))
-		})
-
-		It("Accepts field definition with valid validation_schema JSON", func() {
-			response, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
-				Object: privatev1.BareMetalInstanceCatalogItem_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
-					}.Build(),
-					Title:    "Valid schema catalog item",
-					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
-					FieldDefinitions: []*privatev1.FieldDefinition{
-						privatev1.FieldDefinition_builder{
-							Path:             "spec.cores",
-							Editable:         true,
-							ValidationSchema: `{"type":"number","minimum":1}`,
-						}.Build(),
-					},
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -420,64 +380,70 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 			_, err = server.Update(ctx, privatev1.BareMetalInstanceCatalogItemsUpdateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
 					Id: id,
-					FieldDefinitions: []*privatev1.FieldDefinition{
-						privatev1.FieldDefinition_builder{
-							Path:     "spec.cores",
-							Editable: false,
-						}.Build(),
-					},
-				}.Build(),
-				UpdateMask: &fieldmaskpb.FieldMask{
-					Paths: []string{"field_definitions"},
-				},
-			}.Build())
-			Expect(err).To(HaveOccurred())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(ContainSubstring("cores"))
-			Expect(status.Message()).To(ContainSubstring("default value"))
-		})
-
-		It("Rejects update that introduces invalid validation_schema", func() {
-			createResponse, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
-				Object: privatev1.BareMetalInstanceCatalogItem_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					Fields: privatev1.BareMetalInstanceCatalogItemFields_builder{
+						SshPublicKey: privatev1.StringFieldPolicy_builder{}.Build(),
 					}.Build(),
-					Title:    "Valid catalog item",
-					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			id := createResponse.GetObject().GetId()
-			DeferCleanup(func() {
-				_, err := server.Delete(ctx, privatev1.BareMetalInstanceCatalogItemsDeleteRequest_builder{
-					Id: id,
-				}.Build())
-				Expect(err).ToNot(HaveOccurred())
-			})
-
-			_, err = server.Update(ctx, privatev1.BareMetalInstanceCatalogItemsUpdateRequest_builder{
-				Object: privatev1.BareMetalInstanceCatalogItem_builder{
-					Id: id,
-					FieldDefinitions: []*privatev1.FieldDefinition{
-						privatev1.FieldDefinition_builder{
-							Path:             "spec.cores",
-							Editable:         true,
-							ValidationSchema: "{bad json}",
-						}.Build(),
-					},
 				}.Build(),
 				UpdateMask: &fieldmaskpb.FieldMask{
-					Paths: []string{"field_definitions"},
+					Paths: []string{"fields"},
 				},
 			}.Build())
 			Expect(err).To(HaveOccurred())
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(ContainSubstring("invalid validation_schema"))
+			Expect(status.Message()).To(ContainSubstring("ssh_public_key"))
+			Expect(status.Message()).To(ContainSubstring("oneof"))
 		})
+
+	})
+})
+
+var _ = Describe("Bare Metal Instance Catalog Item policy application", func() {
+	It("applies every Bare Metal policy and deep-clones lists and messages", func() {
+		instanceType := privatev1.BareMetalInstanceTypeLocalReference_builder{Id: "host-id", Name: "host"}.Build()
+		diskImage := privatev1.DiskImageReference_builder{Id: "image-id", Name: "disk-image"}.Build()
+		attachment := privatev1.BareMetalNetworkAttachment_builder{
+			Subnet:         policyTestSubnet("bare-metal-subnet"),
+			SecurityGroups: []*privatev1.SecurityGroupLocalReference{policyTestSecurityGroup("bare-metal-security-group")},
+		}.Build()
+		sshKey := "ssh-ed25519 bare-metal"
+		userData := "bare-metal-user-data"
+		runStrategy := privatev1.BareMetalInstanceRunStrategy_BARE_METAL_INSTANCE_RUN_STRATEGY_ALWAYS
+		autoExternalIP := false
+
+		fields := privatev1.BareMetalInstanceCatalogItemFields_builder{
+			SshPublicKey: privatev1.StringFieldPolicy_builder{Locked: &sshKey}.Build(),
+			UserData:     privatev1.StringFieldPolicy_builder{Locked: &userData}.Build(),
+			RunStrategy:  privatev1.BareMetalInstanceRunStrategyFieldPolicy_builder{Locked: &runStrategy}.Build(),
+			NetworkAttachments: privatev1.BareMetalNetworkAttachmentListFieldPolicy_builder{
+				Locked: privatev1.BareMetalNetworkAttachmentList_builder{Items: []*privatev1.BareMetalNetworkAttachment{nil, attachment}}.Build(),
+			}.Build(),
+			AutoExternalIpAttachment: privatev1.BoolFieldPolicy_builder{Locked: &autoExternalIP}.Build(),
+			InstanceType:             privatev1.BareMetalInstanceTypeLocalReferenceFieldPolicy_builder{Locked: instanceType}.Build(),
+			DiskImage:                privatev1.DiskImageReferenceFieldPolicy_builder{Locked: diskImage}.Build(),
+		}.Build()
+		item := privatev1.BareMetalInstanceCatalogItem_builder{Fields: fields}.Build()
+		spec := &privatev1.BareMetalInstanceSpec{}
+
+		Expect(applyBareMetalInstanceCatalogItemPolicies(spec, item.GetFields())).To(Succeed())
+		Expect(spec.GetSshPublicKey()).To(Equal(sshKey))
+		Expect(spec.GetUserData()).To(Equal(userData))
+		Expect(spec.GetRunStrategy()).To(Equal(runStrategy))
+		Expect(spec.GetNetworkAttachments()).To(HaveLen(2))
+		Expect(spec.GetNetworkAttachments()[0]).To(BeNil())
+		Expect(spec.GetNetworkAttachments()[1]).NotTo(BeIdenticalTo(attachment))
+		Expect(spec.GetAutoExternalIpAttachment()).To(BeFalse())
+		Expect(spec.GetInstanceType()).NotTo(BeIdenticalTo(instanceType))
+		Expect(spec.GetDiskImage()).NotTo(BeIdenticalTo(diskImage))
+
+		spec.GetNetworkAttachments()[1].GetSubnet().SetName("changed")
+		spec.GetNetworkAttachments()[1].GetSecurityGroups()[0].SetName("changed")
+		spec.GetInstanceType().SetName("changed")
+		spec.GetDiskImage().SetName("changed")
+		Expect(attachment.GetSubnet().GetName()).To(Equal("bare-metal-subnet"))
+		Expect(attachment.GetSecurityGroups()[0].GetName()).To(Equal("bare-metal-security-group"))
+		Expect(instanceType.GetName()).To(Equal("host"))
+		Expect(diskImage.GetName()).To(Equal("disk-image"))
 	})
 })

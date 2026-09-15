@@ -16,7 +16,9 @@ package servers
 import (
 	"context"
 	"errors"
+	"google.golang.org/protobuf/proto"
 	"log/slog"
+	"maps"
 
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -27,6 +29,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/events"
+	"github.com/osac-project/osac/fulfillment-service/internal/utils"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -36,7 +39,6 @@ type PrivateBareMetalInstanceCatalogItemsServerBuilder struct {
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
-	referenceChecker  catalogItemReferenceChecker
 	filterDesc        protoreflect.MessageDescriptor
 }
 
@@ -44,9 +46,12 @@ var _ privatev1.BareMetalInstanceCatalogItemsServer = (*PrivateBareMetalInstance
 
 type PrivateBareMetalInstanceCatalogItemsServer struct {
 	privatev1.UnimplementedBareMetalInstanceCatalogItemsServer
-	logger           *slog.Logger
-	generic          *GenericServer[*privatev1.BareMetalInstanceCatalogItem]
-	referenceChecker catalogItemReferenceChecker
+	generic                   *GenericServer[*privatev1.BareMetalInstanceCatalogItem]
+	templatesDao              *dao.GenericDAO[*privatev1.BareMetalInstanceTemplate]
+	bareMetalInstanceTypesDao *dao.GenericDAO[*privatev1.BareMetalInstanceType]
+	diskImagesDao             *dao.GenericDAO[*privatev1.DiskImage]
+	subnetsDao                *dao.GenericDAO[*privatev1.Subnet]
+	securityGroupsDao         *dao.GenericDAO[*privatev1.SecurityGroup]
 }
 
 func NewPrivateBareMetalInstanceCatalogItemsServer() *PrivateBareMetalInstanceCatalogItemsServerBuilder {
@@ -78,13 +83,8 @@ func (b *PrivateBareMetalInstanceCatalogItemsServerBuilder) SetMetricsRegisterer
 	return b
 }
 
-func (b *PrivateBareMetalInstanceCatalogItemsServerBuilder) SetReferenceChecker(value catalogItemReferenceChecker) *PrivateBareMetalInstanceCatalogItemsServerBuilder {
-	b.referenceChecker = value
-	return b
-}
-
-// SetFilterDesc sets the protobuf message descriptor used to validate and translate CEL filter
-// expressions. This is optional. When unset, the descriptor of this server's own private message type is used.
+// SetFilterDesc sets the protobuf descriptor used to validate public CEL filters. When omitted, the private Catalog
+// Item descriptor is used.
 func (b *PrivateBareMetalInstanceCatalogItemsServerBuilder) SetFilterDesc(value protoreflect.MessageDescriptor) *PrivateBareMetalInstanceCatalogItemsServerBuilder {
 	b.filterDesc = value
 	return b
@@ -104,6 +104,51 @@ func (b *PrivateBareMetalInstanceCatalogItemsServerBuilder) Build() (result *Pri
 		return
 	}
 
+	templatesDao, err := dao.NewGenericDAO[*privatev1.BareMetalInstanceTemplate]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
+	bareMetalInstanceTypesDao, err := dao.NewGenericDAO[*privatev1.BareMetalInstanceType]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
+	diskImagesDao, err := dao.NewGenericDAO[*privatev1.DiskImage]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
+	subnetsDao, err := dao.NewGenericDAO[*privatev1.Subnet]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
+	securityGroupsDao, err := dao.NewGenericDAO[*privatev1.SecurityGroup]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
 	generic, err := NewGenericServer[*privatev1.BareMetalInstanceCatalogItem]().
 		SetLogger(b.logger).
 		SetService(privatev1.BareMetalInstanceCatalogItems_ServiceDesc.ServiceName).
@@ -118,24 +163,13 @@ func (b *PrivateBareMetalInstanceCatalogItemsServerBuilder) Build() (result *Pri
 		return
 	}
 
-	refChecker := b.referenceChecker
-	if refChecker == nil {
-		bmiDao, daoErr := dao.NewGenericDAO[*privatev1.BareMetalInstance]().
-			SetLogger(b.logger).
-			SetTenancyLogic(b.tenancyLogic).
-			SetMetricsRegisterer(b.metricsRegisterer).
-			Build()
-		if daoErr != nil {
-			err = daoErr
-			return
-		}
-		refChecker = &daoReferenceChecker[*privatev1.BareMetalInstance]{resourceDao: bmiDao}
-	}
-
 	result = &PrivateBareMetalInstanceCatalogItemsServer{
-		logger:           b.logger,
-		generic:          generic,
-		referenceChecker: refChecker,
+		generic:                   generic,
+		templatesDao:              templatesDao,
+		bareMetalInstanceTypesDao: bareMetalInstanceTypesDao,
+		diskImagesDao:             diskImagesDao,
+		subnetsDao:                subnetsDao,
+		securityGroupsDao:         securityGroupsDao,
 	}
 	return
 }
@@ -154,40 +188,92 @@ func (s *PrivateBareMetalInstanceCatalogItemsServer) Get(ctx context.Context,
 
 func (s *PrivateBareMetalInstanceCatalogItemsServer) Create(ctx context.Context,
 	request *privatev1.BareMetalInstanceCatalogItemsCreateRequest) (response *privatev1.BareMetalInstanceCatalogItemsCreateResponse, err error) {
-	if object := request.GetObject(); object != nil {
-		if err = validateFieldDefinitions(object.GetFieldDefinitions()); err != nil {
-			return
-		}
+	var warnings []string
+	err = s.generic.CreateWithCandidatePreparation(ctx, request, &response, func(ctx context.Context, current, candidate *privatev1.BareMetalInstanceCatalogItem) error {
+		var err error
+		warnings, err = s.prepareCatalogItemCandidate(ctx, current, candidate)
+		return err
+	})
+	if err == nil {
+		response.SetWarnings(warnings)
 	}
-	err = s.generic.Create(ctx, request, &response)
 	return
 }
 
 func (s *PrivateBareMetalInstanceCatalogItemsServer) Update(ctx context.Context,
 	request *privatev1.BareMetalInstanceCatalogItemsUpdateRequest) (response *privatev1.BareMetalInstanceCatalogItemsUpdateResponse, err error) {
-	if object := request.GetObject(); object != nil {
-		if err = validateFieldDefinitions(object.GetFieldDefinitions()); err != nil {
-			return
+	var warnings []string
+	err = s.generic.UpdateWithCandidatePreparation(ctx, request, &response, func(ctx context.Context, current, candidate *privatev1.BareMetalInstanceCatalogItem) error {
+		var err error
+		warnings, err = s.prepareCatalogItemCandidate(ctx, current, candidate)
+		return err
+	})
+	if err == nil {
+		response.SetWarnings(warnings)
+	}
+	return
+}
+
+// prepareCatalogItemCandidate validates and canonicalizes a detached catalog after ownership preparation
+// or PATCH merging. It returns validation errors and any supported lifecycle warnings.
+func (s *PrivateBareMetalInstanceCatalogItemsServer) prepareCatalogItemCandidate(
+	ctx context.Context, current *privatev1.BareMetalInstanceCatalogItem, candidate *privatev1.BareMetalInstanceCatalogItem,
+) ([]string, error) {
+	if candidate == nil {
+		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "catalog item is mandatory")
+	}
+	if current != nil {
+		publishing := !current.GetPublished() && candidate.GetPublished()
+		configurationChanged := current.GetMetadata().GetTenant() != candidate.GetMetadata().GetTenant() ||
+			current.GetMetadata().GetProject() != candidate.GetMetadata().GetProject() ||
+			!proto.Equal(current.GetTemplate(), candidate.GetTemplate()) ||
+			!proto.Equal(current.GetFields(), candidate.GetFields()) ||
+			!maps.EqualFunc(current.GetTemplateParameters(), candidate.GetTemplateParameters(), func(a, b *privatev1.TemplateParameterPolicy) bool { return proto.Equal(a, b) })
+		// Unpublishing and descriptive edits must work even when dependencies are no longer usable.
+		if !publishing && !configurationChanged {
+			return nil, nil
 		}
 	}
-	err = s.generic.Update(ctx, request, &response)
-	return
+	if err := s.validateAndCanonicalizeTemplate(ctx, current, candidate); err != nil {
+		return nil, err
+	}
+	return validateAndCanonicalizeBareMetalInstanceCatalogItemPolicies(ctx, candidate, s.bareMetalInstanceTypesDao, s.diskImagesDao, s.subnetsDao, s.securityGroupsDao)
+}
+
+// validateAndCanonicalizeTemplate resolves the candidate Template under catalog ownership, enforces immutable identity, and validates parameter policies.
+func (s *PrivateBareMetalInstanceCatalogItemsServer) validateAndCanonicalizeTemplate(
+	ctx context.Context, current *privatev1.BareMetalInstanceCatalogItem, candidate *privatev1.BareMetalInstanceCatalogItem,
+) error {
+	ref := candidate.GetTemplate()
+	if ref == nil || (ref.GetId() == "" && ref.GetName() == "") {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'template' must specify id or name")
+	}
+	resolved, err := resolveFullResourceReference(ctx, s.templatesDao, catalogItemScope(candidate), ref,
+		"bare metal instance template", " in template", grpccodes.InvalidArgument)
+	if err != nil {
+		return err
+	}
+	if err := validateResourceNotDeleted("bare metal instance template", refKey(ref), " in template", resolved.GetMetadata()); err != nil {
+		return err
+	}
+	if current != nil {
+		currentRef := current.GetTemplate()
+		if currentRef == nil || currentRef.GetId() == "" {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument, "existing catalog item has no valid template reference")
+		}
+		if currentRef.GetId() != resolved.GetId() {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument, "cannot change template from '%s' to '%s': template is immutable", currentRef.GetName(), resolved.GetMetadata().GetName())
+		}
+	}
+	if err := validateCatalogItemTemplateParameterPolicies(utils.BareMetalInstanceTemplateAdapter{BareMetalInstanceTemplate: resolved}, candidate.GetTemplateParameters()); err != nil {
+		return err
+	}
+	candidate.SetTemplate(canonicalBareMetalInstanceTemplateReference(resolved))
+	return nil
 }
 
 func (s *PrivateBareMetalInstanceCatalogItemsServer) Delete(ctx context.Context,
 	request *privatev1.BareMetalInstanceCatalogItemsDeleteRequest) (response *privatev1.BareMetalInstanceCatalogItemsDeleteResponse, err error) {
-	hasRef, err := s.referenceChecker.hasReference(ctx, request.GetId())
-	if err != nil {
-		return
-	}
-	if hasRef {
-		err = grpcstatus.Errorf(
-			grpccodes.FailedPrecondition,
-			"cannot delete catalog item '%s': it is still referenced by one or more bare metal instances",
-			request.GetId(),
-		)
-		return
-	}
 	err = s.generic.Delete(ctx, request, &response)
 	return
 }

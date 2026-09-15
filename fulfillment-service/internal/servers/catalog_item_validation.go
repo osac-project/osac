@@ -35,9 +35,7 @@ import (
 // catalogItem is implemented by ClusterCatalogItem, ComputeInstanceCatalogItem,
 // and BareMetalInstanceCatalogItem.
 type catalogItem interface {
-	proto.Message
 	GetPublished() bool
-	GetFieldDefinitions() []*privatev1.FieldDefinition
 	GetMetadata() *privatev1.Metadata
 }
 
@@ -155,20 +153,6 @@ func applyFieldDefinitions(
 		return grpcstatus.Errorf(grpccodes.Internal, "failed to apply updated spec: %v", err)
 	}
 
-	return nil
-}
-
-// validateCatalogItemAccess checks that a catalog item is published and not deleted.
-// Tenant visibility is enforced by the GenericDAO's tenancy logic at the query level.
-func validateCatalogItemAccess(item catalogItem, ref string) error {
-	if item.GetMetadata().HasDeletionTimestamp() {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"catalog item '%s' has been deleted", ref)
-	}
-	if !item.GetPublished() {
-		return grpcstatus.Errorf(grpccodes.NotFound,
-			"catalog item '%s' is not published", ref)
-	}
 	return nil
 }
 

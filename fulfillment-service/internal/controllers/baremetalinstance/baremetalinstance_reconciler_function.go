@@ -63,16 +63,15 @@ type FunctionBuilder struct {
 }
 
 type function struct {
-	logger                              *slog.Logger
-	hubCache                            controllers.HubCache
-	bareMetalInstancesClient            privatev1.BareMetalInstancesClient
-	bareMetalInstanceCatalogItemsClient privatev1.BareMetalInstanceCatalogItemsClient
-	bareMetalInstanceTypesClient        privatev1.BareMetalInstanceTypesClient
-	bareMetalInstanceTemplatesClient    privatev1.BareMetalInstanceTemplatesClient
-	hubsClient                          privatev1.HubsClient
-	secretsClient                       privatev1.SecretsClient
-	diskImagesClient                    privatev1.DiskImagesClient
-	maskCalculator                      *masks.Calculator
+	logger                           *slog.Logger
+	hubCache                         controllers.HubCache
+	bareMetalInstancesClient         privatev1.BareMetalInstancesClient
+	bareMetalInstanceTypesClient     privatev1.BareMetalInstanceTypesClient
+	bareMetalInstanceTemplatesClient privatev1.BareMetalInstanceTemplatesClient
+	hubsClient                       privatev1.HubsClient
+	secretsClient                    privatev1.SecretsClient
+	diskImagesClient                 privatev1.DiskImagesClient
+	maskCalculator                   *masks.Calculator
 }
 
 type task struct {
@@ -123,16 +122,15 @@ func (b *FunctionBuilder) Build() (result controllers.ReconcilerFunction[*privat
 	}
 
 	object := &function{
-		logger:                              b.logger,
-		bareMetalInstancesClient:            privatev1.NewBareMetalInstancesClient(b.connection),
-		bareMetalInstanceCatalogItemsClient: privatev1.NewBareMetalInstanceCatalogItemsClient(b.connection),
-		bareMetalInstanceTypesClient:        privatev1.NewBareMetalInstanceTypesClient(b.connection),
-		bareMetalInstanceTemplatesClient:    privatev1.NewBareMetalInstanceTemplatesClient(b.connection),
-		hubsClient:                          privatev1.NewHubsClient(b.connection),
-		secretsClient:                       privatev1.NewSecretsClient(b.connection),
-		diskImagesClient:                    privatev1.NewDiskImagesClient(b.connection),
-		hubCache:                            b.hubCache,
-		maskCalculator:                      masks.NewCalculator().Build(),
+		logger:                           b.logger,
+		bareMetalInstancesClient:         privatev1.NewBareMetalInstancesClient(b.connection),
+		bareMetalInstanceTypesClient:     privatev1.NewBareMetalInstanceTypesClient(b.connection),
+		bareMetalInstanceTemplatesClient: privatev1.NewBareMetalInstanceTemplatesClient(b.connection),
+		hubsClient:                       privatev1.NewHubsClient(b.connection),
+		secretsClient:                    privatev1.NewSecretsClient(b.connection),
+		diskImagesClient:                 privatev1.NewDiskImagesClient(b.connection),
+		hubCache:                         b.hubCache,
+		maskCalculator:                   masks.NewCalculator().Build(),
 	}
 	result = object.run
 	return
@@ -636,20 +634,10 @@ func (t *task) mutateBMI(ctx context.Context, object *bmfov1alpha1.BareMetalInst
 	}
 	object.Annotations[annotations.Tenant] = t.bareMetalInstance.GetMetadata().GetTenant()
 
-	// Determine template ID: use direct template if present, otherwise resolve from catalog item.
-	var templateID string
-	if t.bareMetalInstance.GetSpec().HasTemplate() {
-		templateID = t.bareMetalInstance.GetSpec().GetTemplate().GetId()
-	} else if t.bareMetalInstance.GetSpec().HasCatalogItem() {
-		catalogItemResp, err := t.r.bareMetalInstanceCatalogItemsClient.Get(ctx, privatev1.BareMetalInstanceCatalogItemsGetRequest_builder{
-			Id: t.bareMetalInstance.GetSpec().GetCatalogItem().GetId(),
-		}.Build())
-		if err != nil {
-			return fmt.Errorf("failed to get catalog item '%s': %w", t.bareMetalInstance.GetSpec().GetCatalogItem().GetId(), err)
-		}
-		templateID = catalogItemResp.GetObject().GetTemplate().GetId()
-	} else {
-		return fmt.Errorf("BareMetalInstance must have either template or catalog_item")
+	// The API materializes the Template; the catalog reference is provenance only.
+	templateID := t.bareMetalInstance.GetSpec().GetTemplate().GetId()
+	if templateID == "" {
+		return fmt.Errorf("BareMetalInstance must have a materialized template")
 	}
 
 	// Resolve host selection labels for the CRD's Selector.HostSelector. When an instance type is

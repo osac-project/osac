@@ -23,7 +23,6 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -42,11 +41,10 @@ var _ publicv1.BareMetalInstanceCatalogItemsServer = (*BareMetalInstanceCatalogI
 type BareMetalInstanceCatalogItemsServer struct {
 	publicv1.UnimplementedBareMetalInstanceCatalogItemsServer
 
-	logger           *slog.Logger
-	referenceChecker catalogItemReferenceChecker
-	delegate         privatev1.BareMetalInstanceCatalogItemsServer
-	inMapper         *GenericMapper[*publicv1.BareMetalInstanceCatalogItem, *privatev1.BareMetalInstanceCatalogItem]
-	outMapper        *GenericMapper[*privatev1.BareMetalInstanceCatalogItem, *publicv1.BareMetalInstanceCatalogItem]
+	logger    *slog.Logger
+	delegate  privatev1.BareMetalInstanceCatalogItemsServer
+	inMapper  *GenericMapper[*publicv1.BareMetalInstanceCatalogItem, *privatev1.BareMetalInstanceCatalogItem]
+	outMapper *GenericMapper[*privatev1.BareMetalInstanceCatalogItem, *publicv1.BareMetalInstanceCatalogItem]
 }
 
 func NewBareMetalInstanceCatalogItemsServer() *BareMetalInstanceCatalogItemsServerBuilder {
@@ -109,23 +107,12 @@ func (b *BareMetalInstanceCatalogItemsServerBuilder) Build() (result *BareMetalI
 		return
 	}
 
-	bareMetalInstancesDao, err := dao.NewGenericDAO[*privatev1.BareMetalInstance]().
-		SetLogger(b.logger).
-		SetTenancyLogic(b.tenancyLogic).
-		SetMetricsRegisterer(b.metricsRegisterer).
-		Build()
-	if err != nil {
-		return
-	}
-	referenceChecker := &daoReferenceChecker[*privatev1.BareMetalInstance]{resourceDao: bareMetalInstancesDao}
-
 	delegate, err := NewPrivateBareMetalInstanceCatalogItemsServer().
 		SetLogger(b.logger).
 		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
-		SetReferenceChecker(referenceChecker).
 		SetFilterDesc((*publicv1.BareMetalInstanceCatalogItem)(nil).ProtoReflect().Descriptor()).
 		Build()
 	if err != nil {
@@ -133,11 +120,10 @@ func (b *BareMetalInstanceCatalogItemsServerBuilder) Build() (result *BareMetalI
 	}
 
 	result = &BareMetalInstanceCatalogItemsServer{
-		logger:           b.logger,
-		referenceChecker: referenceChecker,
-		delegate:         delegate,
-		inMapper:         inMapper,
-		outMapper:        outMapper,
+		logger:    b.logger,
+		delegate:  delegate,
+		inMapper:  inMapper,
+		outMapper: outMapper,
 	}
 	return
 }
@@ -149,11 +135,7 @@ func (s *BareMetalInstanceCatalogItemsServer) List(ctx context.Context,
 	if request.HasLimit() {
 		privateRequest.SetLimit(request.GetLimit())
 	}
-	composedFilter, err := s.addPublishedFilter(request.GetFilter())
-	if err != nil {
-		return nil, err
-	}
-	privateRequest.SetFilter(composedFilter)
+	privateRequest.SetFilter(request.GetFilter())
 	privateRequest.SetOrder(request.GetOrder())
 
 	privateResponse, err := s.delegate.List(ctx, privateRequest)
@@ -189,16 +171,6 @@ func (s *BareMetalInstanceCatalogItemsServer) Get(ctx context.Context,
 	privateResponse, err := s.delegate.Get(ctx, privateRequest)
 	if err != nil {
 		return nil, err
-	}
-
-	if !privateResponse.GetObject().GetPublished() {
-		hasRef, refErr := s.referenceChecker.hasReference(ctx, request.GetId())
-		if refErr != nil {
-			return nil, refErr
-		}
-		if !hasRef {
-			return nil, grpcstatus.Errorf(grpccodes.NotFound, "catalog item not found")
-		}
 	}
 
 	publicCatalogItem := &publicv1.BareMetalInstanceCatalogItem{}
@@ -248,6 +220,7 @@ func (s *BareMetalInstanceCatalogItemsServer) Create(ctx context.Context,
 
 	response = &publicv1.BareMetalInstanceCatalogItemsCreateResponse{}
 	response.SetObject(createdPublicCatalogItem)
+	response.SetWarnings(privateResponse.GetWarnings())
 	return
 }
 
@@ -264,24 +237,16 @@ func (s *BareMetalInstanceCatalogItemsServer) Update(ctx context.Context,
 		return
 	}
 
-	getRequest := &privatev1.BareMetalInstanceCatalogItemsGetRequest{}
-	getRequest.SetId(id)
-	getResponse, err := s.delegate.Get(ctx, getRequest)
+	privateCatalogItem := &privatev1.BareMetalInstanceCatalogItem{}
+	err = s.inMapper.Copy(ctx, publicCatalogItem, privateCatalogItem)
 	if err != nil {
-		return nil, err
-	}
-	existingPrivateCatalogItem := getResponse.GetObject()
-
-	err = s.inMapper.Copy(ctx, publicCatalogItem, existingPrivateCatalogItem)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to map public bare metal instance catalog item to private",
-			slog.Any("error", err))
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process bare metal instance catalog item")
-		return
+		s.logger.ErrorContext(ctx, "Failed to map public bare metal instance catalog item to private", slog.Any("error", err))
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process bare metal instance catalog item")
 	}
 
 	privateRequest := &privatev1.BareMetalInstanceCatalogItemsUpdateRequest{}
-	privateRequest.SetObject(existingPrivateCatalogItem)
+	privateRequest.SetObject(privateCatalogItem)
+	privateRequest.SetUpdateMask(request.GetUpdateMask())
 	privateRequest.SetLock(request.GetLock())
 	privateResponse, err := s.delegate.Update(ctx, privateRequest)
 	if err != nil {
@@ -299,6 +264,7 @@ func (s *BareMetalInstanceCatalogItemsServer) Update(ctx context.Context,
 
 	response = &publicv1.BareMetalInstanceCatalogItemsUpdateResponse{}
 	response.SetObject(updatedPublicCatalogItem)
+	response.SetWarnings(privateResponse.GetWarnings())
 	return
 }
 
@@ -314,14 +280,4 @@ func (s *BareMetalInstanceCatalogItemsServer) Delete(ctx context.Context,
 
 	response = &publicv1.BareMetalInstanceCatalogItemsDeleteResponse{}
 	return
-}
-
-func (s *BareMetalInstanceCatalogItemsServer) addPublishedFilter(filter string) (string, error) {
-	if filter == "" {
-		return "this.published", nil
-	}
-	if err := validateCELSyntax(filter); err != nil {
-		return "", grpcstatus.Errorf(grpccodes.InvalidArgument, "invalid filter: %v", err)
-	}
-	return "(" + filter + ") && this.published", nil
 }

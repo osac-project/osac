@@ -1021,6 +1021,8 @@ func catalogProvenanceUpdateMethods() []string {
 		privatev1.ComputeInstances_Update_FullMethodName,
 		publicv1.Clusters_Update_FullMethodName,
 		privatev1.Clusters_Update_FullMethodName,
+		publicv1.BareMetalInstances_Update_FullMethodName,
+		privatev1.BareMetalInstances_Update_FullMethodName,
 	}
 }
 
@@ -1034,6 +1036,10 @@ func catalogAuthoringMethods() []string {
 		privatev1.ClusterCatalogItems_Create_FullMethodName,
 		publicv1.ClusterCatalogItems_Update_FullMethodName,
 		privatev1.ClusterCatalogItems_Update_FullMethodName,
+		publicv1.BareMetalInstanceCatalogItems_Create_FullMethodName,
+		privatev1.BareMetalInstanceCatalogItems_Create_FullMethodName,
+		publicv1.BareMetalInstanceCatalogItems_Update_FullMethodName,
+		privatev1.BareMetalInstanceCatalogItems_Update_FullMethodName,
 	}
 }
 
@@ -1043,5 +1049,7 @@ func catalogCreationSourceMethods() []string {
 		privatev1.ComputeInstances_Create_FullMethodName,
 		publicv1.Clusters_Create_FullMethodName,
 		privatev1.Clusters_Create_FullMethodName,
+		publicv1.BareMetalInstances_Create_FullMethodName,
+		privatev1.BareMetalInstances_Create_FullMethodName,
 	}
 }

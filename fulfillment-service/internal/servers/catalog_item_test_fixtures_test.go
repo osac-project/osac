@@ -59,3 +59,23 @@ func seedClusterCatalogItemTemplate(ctx context.Context, tenant, project, id str
 	}.Build()).Do(ctx)
 	return err
 }
+
+func seedBareMetalCatalogItemTemplate(ctx context.Context, tenant, project, id string) error {
+	templatesDao, err := dao.NewGenericDAO[*privatev1.BareMetalInstanceTemplate]().
+		SetLogger(logger).
+		SetTenancyLogic(tenancy).
+		Build()
+	if err != nil {
+		return err
+	}
+	_, err = templatesDao.Create().SetObject(privatev1.BareMetalInstanceTemplate_builder{
+		Id: id,
+		Metadata: privatev1.Metadata_builder{
+			Name:    "my-bare-metal-template",
+			Tenant:  tenant,
+			Project: project,
+		}.Build(),
+		Title: "Catalog item test template",
+	}.Build()).Do(ctx)
+	return err
+}

@@ -15,6 +15,7 @@ package servers
 
 import (
 	"fmt"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
@@ -28,6 +29,16 @@ import (
 )
 
 var _ = Describe("Bare metal instances server", func() {
+	BeforeEach(func() {
+		types, err := dao.NewGenericDAO[*privatev1.BareMetalInstanceType]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+		Expect(err).ToNot(HaveOccurred())
+		_, err = types.Create().SetObject(privatev1.BareMetalInstanceType_builder{
+			Id:       "default-type",
+			Metadata: privatev1.Metadata_builder{Name: "default-type", Tenant: testTenant}.Build(),
+			Spec:     privatev1.BareMetalInstanceTypeSpec_builder{}.Build(),
+		}.Build()).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+	})
 	Describe("Creation", func() {
 		It("Can be built if all the required parameters are set", func() {
 			server, err := NewBareMetalInstancesServer().
@@ -76,6 +87,7 @@ var _ = Describe("Bare metal instances server", func() {
 				SetTenancyLogic(tenancy).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
+			Expect(seedBareMetalCatalogItemTemplate(ctx, testTenant, "", "test-template")).To(Succeed())
 			catalogResp, err := catalogServer.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
 					Metadata: privatev1.Metadata_builder{

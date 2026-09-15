@@ -277,8 +277,13 @@ var _ = Describe("User data secret validation", func() {
 			}.Build(),
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.user_data", "spec.user_data_secret"}},
 		}.Build()
-		Expect(server.validateUserDataMutualExclusionForUpdate(ctx, request)).To(Succeed())
-		Expect(server.validateImmutability(ctx, request)).To(Succeed())
+		Expect(server.validateAndResolveUserDataSecret(ctx, request.GetObject().GetSpec(), false)).To(Succeed())
+		candidate := proto.Clone(created.GetObject()).(*privatev1.BareMetalInstance)
+		candidate.GetSpec().ClearUserData()
+		candidate.GetSpec().SetUserDataSecret(request.GetObject().GetSpec().GetUserDataSecret())
+		Expect(validateBareMetalImmutability(
+			created.GetObject(), candidate, request.GetUpdateMask(),
+		)).To(Succeed())
 	})
 
 	It("allows a BareMetal Secret reference to be assigned when no user data exists", func() {
@@ -300,7 +305,11 @@ var _ = Describe("User data secret validation", func() {
 			}.Build(),
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.user_data_secret"}},
 		}.Build()
-		Expect(server.validateUserDataMutualExclusionForUpdate(ctx, request)).To(Succeed())
-		Expect(server.validateImmutability(ctx, request)).To(Succeed())
+		Expect(server.validateAndResolveUserDataSecret(ctx, request.GetObject().GetSpec(), false)).To(Succeed())
+		candidate := proto.Clone(created.GetObject()).(*privatev1.BareMetalInstance)
+		candidate.GetSpec().SetUserDataSecret(request.GetObject().GetSpec().GetUserDataSecret())
+		Expect(validateBareMetalImmutability(
+			created.GetObject(), candidate, request.GetUpdateMask(),
+		)).To(Succeed())
 	})
 })

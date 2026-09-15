@@ -6,6 +6,7 @@
       authorization: Bearer {{ osac_fulfillment_service_token }}
     status_code: [200, 404, 503]
   register: addon_operator_page
+  no_log: true
 
 - name: Accumulate AddOnOperator IDs from page
   ansible.builtin.set_fact:

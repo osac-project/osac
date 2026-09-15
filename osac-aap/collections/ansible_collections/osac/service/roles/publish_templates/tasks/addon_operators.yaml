@@ -6,6 +6,7 @@
       authorization: Bearer {{ osac_fulfillment_service_token }}
     status_code: [200, 404, 503]
   register: addon_operator_check
+  no_log: true
 
 - name: Skip AddOnOperators when service is disabled
   ansible.builtin.debug:
@@ -44,6 +45,7 @@
       authorization: Bearer {{ osac_fulfillment_service_token }}
     body_format: json
     body: "{{ template }}"
+  no_log: true
 
 - name: Create new AddOnOperator
   loop: "{{ osac_addon_operator_templates | default([]) }}"
@@ -62,3 +64,4 @@
       authorization: Bearer {{ osac_fulfillment_service_token }}
     body_format: json
     body: "{{ template }}"
+  no_log: true

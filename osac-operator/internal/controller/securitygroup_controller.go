@@ -29,10 +29,12 @@ import (
 	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	mcbuilder "sigs.k8s.io/multicluster-runtime/pkg/builder"
+	mchandler "sigs.k8s.io/multicluster-runtime/pkg/handler"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 	mc "sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
+	bmfov1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/pkg/dispatcher"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
@@ -48,12 +50,16 @@ type SecurityGroupReconciler struct {
 	APIReader client.Reader
 	Scheme    *runtime.Scheme
 	// mgr and targetCluster are stored for future multi-cluster target client resolution
-	mgr                  mcmanager.Manager
-	NetworkingNamespace  string
-	ProvisioningProvider provisioning.ProvisioningProvider
-	StatusPollInterval   time.Duration
-	MaxJobHistory        int
-	targetCluster        mc.ClusterName
+	mgr                        mcmanager.Manager
+	NetworkingNamespace        string
+	ComputeInstanceNamespace   string
+	ClusterOrderNamespace      string
+	BaremetalInstanceNamespace string
+	BareMetalInstanceEnabled   bool
+	ProvisioningProvider       provisioning.ProvisioningProvider
+	StatusPollInterval         time.Duration
+	MaxJobHistory              int
+	targetCluster              mc.ClusterName
 	// Resolver resolves a NetworkClass to its registered managers. Nil when the
 	// two-manager model isn't configured (no gRPC connection / networking namespace),
 	// in which case the controller always uses the legacy implementation-strategy path.
@@ -66,7 +72,7 @@ type SecurityGroupReconciler struct {
 // NewSecurityGroupReconciler creates a new reconciler for SecurityGroup resources.
 func NewSecurityGroupReconciler(
 	mgr mcmanager.Manager,
-	networkingNamespace string,
+	networkingNamespace, computeInstanceNamespace, clusterOrderNamespace, baremetalInstanceNamespace string,
 	provisioningProvider provisioning.ProvisioningProvider,
 	statusPollInterval time.Duration,
 	maxJobHistory int,
@@ -82,17 +88,29 @@ func NewSecurityGroupReconciler(
 	if maxJobHistory <= 0 {
 		maxJobHistory = provisioning.DefaultMaxJobHistory
 	}
+	if computeInstanceNamespace == "" {
+		computeInstanceNamespace = defaultComputeInstanceNamespace
+	}
+	if clusterOrderNamespace == "" {
+		clusterOrderNamespace = defaultClusterOrderNamespace
+	}
+	if baremetalInstanceNamespace == "" {
+		baremetalInstanceNamespace = DefaultBareMetalInstanceNamespace
+	}
 	return &SecurityGroupReconciler{
-		Client:               mgr.GetLocalManager().GetClient(),
-		APIReader:            mgr.GetLocalManager().GetAPIReader(),
-		Scheme:               mgr.GetLocalManager().GetScheme(),
-		mgr:                  mgr,
-		NetworkingNamespace:  networkingNamespace,
-		ProvisioningProvider: provisioningProvider,
-		StatusPollInterval:   statusPollInterval,
-		MaxJobHistory:        maxJobHistory,
-		targetCluster:        targetCluster,
-		Resolver:             resolver,
+		Client:                     mgr.GetLocalManager().GetClient(),
+		APIReader:                  mgr.GetLocalManager().GetAPIReader(),
+		Scheme:                     mgr.GetLocalManager().GetScheme(),
+		mgr:                        mgr,
+		NetworkingNamespace:        networkingNamespace,
+		ComputeInstanceNamespace:   computeInstanceNamespace,
+		ClusterOrderNamespace:      clusterOrderNamespace,
+		BaremetalInstanceNamespace: baremetalInstanceNamespace,
+		ProvisioningProvider:       provisioningProvider,
+		StatusPollInterval:         statusPollInterval,
+		MaxJobHistory:              maxJobHistory,
+		targetCluster:              targetCluster,
+		Resolver:                   resolver,
 	}
 }
 
@@ -100,6 +118,10 @@ func NewSecurityGroupReconciler(
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=securitygroups/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=securitygroups/finalizers,verbs=update
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=virtualnetworks,verbs=get;list;watch
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=computeinstances,verbs=get;list;watch
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=clusterorders,verbs=get;list;watch
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=baremetalinstances,verbs=get;list;watch
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=subnets,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -182,32 +204,20 @@ func (r *SecurityGroupReconciler) handleUpdate(ctx context.Context, sg *v1alpha1
 			sg.Spec.VirtualNetwork, len(vnetList.Items))
 	} else if len(vnetList.Items) == 1 {
 		networkClassID = vnetList.Items[0].Spec.NetworkClass
-
-		// Gate: at least one subnet must be Ready before creating SG ACL rules,
-		// because the ACL fan-out uses per-subnet CIDRs. Subnets don't carry
-		// the VN UUID label — filter by spec.VirtualNetwork instead.
-		subnetList := &v1alpha1.SubnetList{}
-		if err := r.List(ctx, subnetList,
-			client.InNamespace(sg.Namespace),
-		); err != nil {
-			return ctrl.Result{}, err
-		}
-		hasReadySubnet := false
-		for i := range subnetList.Items {
-			if subnetList.Items[i].Spec.VirtualNetwork == sg.Spec.VirtualNetwork &&
-				subnetList.Items[i].Status.Phase == v1alpha1.SubnetPhaseReady {
-				hasReadySubnet = true
-				break
-			}
-		}
-		if !hasReadySubnet {
-			log.Info("no Ready subnets in parent VirtualNetwork, requeueing",
-				"virtualNetwork", vnetList.Items[0].Name)
-			return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
-		}
 	} else {
 		log.Info("parent VirtualNetwork not found, using legacy implementation strategy", "uuid", sg.Spec.VirtualNetwork)
 	}
+
+	scope, pending, err := r.deriveAttachedSubnetScope(ctx, sg)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if pending {
+		log.Info("attached subnet not Ready, requeueing", "securityGroup", sg.Name)
+		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+	}
+	sg.Status.AttachedSubnetRefs = scope.Refs
+	sg.Status.AttachedSubnetCIDRs = scope.CIDRs
 
 	// resolveImplementationStrategy returns "" when the dispatcher path isn't available
 	// (resolver nil, networkClassID empty, or no manager configured). SecurityGroup
@@ -235,7 +245,8 @@ func (r *SecurityGroupReconciler) handleUpdate(ctx context.Context, sg *v1alpha1
 	desiredVersion, err := provisioning.ComputeDesiredConfigVersion(struct {
 		Spec                   v1alpha1.SecurityGroupSpec
 		ImplementationStrategy string
-	}{sg.Spec, implementationStrategy})
+		AttachedSubnetRefs     []string
+	}{sg.Spec, implementationStrategy, scope.Refs})
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to compute desired config version: %w", err)
 	}
@@ -343,10 +354,33 @@ func (r *SecurityGroupReconciler) updateStatusWithRetry(ctx context.Context, key
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *SecurityGroupReconciler) SetupWithManager(mgr mcmanager.Manager) error {
-	return mcbuilder.ControllerManagedBy(mgr).
+	b := mcbuilder.ControllerManagedBy(mgr).
 		For(&v1alpha1.SecurityGroup{},
 			mcbuilder.WithPredicates(NetworkingNamespacePredicate(r.NetworkingNamespace)),
 			mcbuilder.WithEngageWithLocalCluster(true),
 			mcbuilder.WithEngageWithProviderClusters(false)).
-		Complete(r)
+		Watches(
+			&v1alpha1.ComputeInstance{},
+			mchandler.EnqueueRequestsFromMapFunc(r.mapAttachmentsToSecurityGroups),
+			mcbuilder.WithPredicates(ComputeInstanceNamespacePredicate(r.ComputeInstanceNamespace)),
+			mcbuilder.WithEngageWithLocalCluster(true),
+			mcbuilder.WithEngageWithProviderClusters(false),
+		).
+		Watches(
+			&v1alpha1.ClusterOrder{},
+			mchandler.EnqueueRequestsFromMapFunc(r.mapAttachmentsToSecurityGroups),
+			mcbuilder.WithPredicates(NamespacePredicate(r.ClusterOrderNamespace)),
+			mcbuilder.WithEngageWithLocalCluster(true),
+			mcbuilder.WithEngageWithProviderClusters(false),
+		)
+	if r.BareMetalInstanceEnabled {
+		b = b.Watches(
+			&bmfov1alpha1.BareMetalInstance{},
+			mchandler.EnqueueRequestsFromMapFunc(r.mapAttachmentsToSecurityGroups),
+			mcbuilder.WithPredicates(BareMetalInstanceNamespacePredicate(r.BaremetalInstanceNamespace)),
+			mcbuilder.WithEngageWithLocalCluster(true),
+			mcbuilder.WithEngageWithProviderClusters(false),
+		)
+	}
+	return b.Complete(r)
 }

@@ -153,6 +153,20 @@ spec:
           status:
             description: status defines the observed state of SecurityGroup
             properties:
+              attachedSubnetCIDRs:
+                description: |-
+                  AttachedSubnetCIDRs lists IPv4 CIDRs for AttachedSubnetRefs in the same order.
+                  Consumed by the Netris Ansible role when creating ACL rules.
+                items:
+                  type: string
+                type: array
+              attachedSubnetRefs:
+                description: |-
+                  AttachedSubnetRefs lists Subnet CR names where a workload network attachment
+                  references this SecurityGroup. Operator-computed; used to scope Netris ACL fan-out.
+                items:
+                  type: string
+                type: array
               backendSecurityGroupId:
                 description: BackendSecurityGroupID stores provider-specific security
                   group identifier

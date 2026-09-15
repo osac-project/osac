@@ -2,6 +2,7 @@
 # SecurityGroup deletion - removes the corresponding Netris ACL rules.
 # Handles both old-style names (sg-ingress-N) and new per-subnet names
 # (sg-ingress-N-M) for backward compatibility during transition.
+# Uses operator-computed attachedSubnetCIDRs from SecurityGroup.status.
 
 - name: Extract SecurityGroup configuration
   ansible.builtin.set_fact:
@@ -17,27 +18,9 @@
       - "Ingress rules to delete: {{ ingress_rules | length }}"
       - "Egress rules to delete: {{ egress_rules | length }}"
 
-- name: Look up subnets in VirtualNetwork for per-subnet ACL cleanup
-  when: sg_virtual_network | length > 0
-  block:
-    - name: Look up all Subnets
-      kubernetes.core.k8s_info:
-        api_version: osac.openshift.io/v1alpha1
-        kind: Subnet
-        namespace: "{{ security_group.metadata.namespace }}"
-      register: _sg_del_subnets
-
-    - name: Count subnets in this VN
-      ansible.builtin.set_fact:
-        _sg_del_subnet_count: >-
-          {{ _sg_del_subnets.resources | default([])
-             | selectattr('spec.virtualNetwork', 'defined')
-             | selectattr('spec.virtualNetwork', 'equalto', sg_virtual_network)
-             | list | length }}
-
-- name: Default subnet count
+- name: Set scoped subnet CIDR count from SecurityGroup status
   ansible.builtin.set_fact:
-    _sg_del_subnet_count: "{{ _sg_del_subnet_count | default(1) | int }}"
+    _sg_del_subnet_count: "{{ security_group.status.attachedSubnetCIDRs | default([]) | length }}"
 
 - name: Delete per-subnet ACL rules for ingress
   ansible.builtin.include_role:
@@ -51,7 +34,7 @@
   loop: "{{ range(ingress_rules | length) | product(range(_sg_del_subnet_count | int)) | list }}"
   loop_control:
     label: "ingress-rule{{ item.0 }}-subnet{{ item.1 }}"
-  when: ingress_rules | length > 0
+  when: ingress_rules | length > 0 and (_sg_del_subnet_count | int) > 0
 
 - name: Delete legacy ACL rules for ingress
   ansible.builtin.include_role:
@@ -76,7 +59,7 @@
   loop: "{{ range(egress_rules | length) | product(range(_sg_del_subnet_count | int)) | list }}"
   loop_control:
     label: "egress-rule{{ item.0 }}-subnet{{ item.1 }}"
-  when: egress_rules | length > 0
+  when: egress_rules | length > 0 and (_sg_del_subnet_count | int) > 0
 
 - name: Delete legacy ACL rules for egress
   ansible.builtin.include_role:

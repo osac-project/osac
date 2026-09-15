@@ -772,9 +772,10 @@ func setupNetworkingControllers(
 		return err
 	}
 	if err := setupSecurityGroupControllers(
-		mgr, localMgr, grpcConn, networkingNamespace,
+		mgr, localMgr, grpcConn,
+		networkingNamespace, computeInstanceNamespace, clusterOrderNamespace, bareMetalInstanceNamespace,
 		networkingProvider, statusPollInterval, maxJobHistory, targetCluster, resolver,
-		networkProvisioningEnabled,
+		networkProvisioningEnabled, enableBareMetalInstance,
 	); err != nil {
 		return err
 	}
@@ -889,9 +890,10 @@ func setupSubnetControllers(
 
 func setupSecurityGroupControllers(
 	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn *grpc.ClientConn,
-	networkingNamespace string, provider provisioning.ProvisioningProvider,
+	networkingNamespace, computeInstanceNamespace, clusterOrderNamespace, baremetalInstanceNamespace string,
+	provider provisioning.ProvisioningProvider,
 	statusPollInterval time.Duration, maxJobHistory int, targetCluster multicluster.ClusterName,
-	resolver *dispatcher.Resolver, networkProvisioningEnabled bool,
+	resolver *dispatcher.Resolver, networkProvisioningEnabled bool, enableBareMetalInstance bool,
 ) error {
 	if grpcConn != nil {
 		if err := controller.NewSecurityGroupFeedbackReconciler(
@@ -901,9 +903,11 @@ func setupSecurityGroupControllers(
 		}
 	}
 	reconciler := controller.NewSecurityGroupReconciler(
-		mgr, networkingNamespace, provider, statusPollInterval, maxJobHistory, targetCluster, resolver,
+		mgr, networkingNamespace, computeInstanceNamespace, clusterOrderNamespace, baremetalInstanceNamespace,
+		provider, statusPollInterval, maxJobHistory, targetCluster, resolver,
 	)
 	reconciler.NetworkProvisioningEnabled = networkProvisioningEnabled
+	reconciler.BareMetalInstanceEnabled = enableBareMetalInstance
 	if err := reconciler.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("securitygroup controller: %w", err)
 	}

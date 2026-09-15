@@ -101,11 +101,22 @@ spec:
                 - message: storageTier is immutable
                   rule: self == oldSelf
               topology:
-                description: Topology contains optional CSI-style placement segments.
+                description: |-
+                  Topology carries CSI-style placement constraints for this volume.
+                  For node-local backends (e.g. LVMS), the "osac.io/node" segment
+                  pins the volume to the scheduler-selected node; the ComputeInstance
+                  using this volume is then node-pinned. For network backends,
+                  topology may carry zone/region segments or be empty.
+                  The target CSI driver must support WaitForFirstConsumer and
+                  advertise VOLUME_ACCESSIBILITY_CONSTRAINTS for topology to take
+                  effect. Immutable after creation.
                 properties:
                   segments:
                     additionalProperties:
                       type: string
+                    description: |-
+                      Segments is a CSI-style topology map (e.g. {"osac.io/node": "worker-1"}).
+                      Keys mirror CSI topology keys; values are scheduler-resolved.
                     type: object
                 type: object
                 x-kubernetes-validations:

@@ -193,7 +193,7 @@ func registerControllerFlags() *controllerFlags {
 
 // enableAllIfNoneSet enables all controllers if none are explicitly enabled.
 //
-// The Volume controller is included now that it has a real vendor provisioner.
+// The Volume controller is included now that it has real vendor provisioners.
 // When no vendor controllers are configured (OSAC_VENDOR_CONTROLLERS unset), the
 // controller still starts but runs with provisioning disabled: it never fails
 // the operator startup, so an unconfigured vendor backend cannot take down the

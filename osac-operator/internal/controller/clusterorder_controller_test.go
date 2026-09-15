@@ -487,6 +487,70 @@ var _ = Describe("ClusterOrder Controller", func() {
 			Expect(instance.IsStatusConditionTrue(v1alpha1.ConditionClusterAvailable)).To(BeTrue())
 		})
 
+		DescribeTable("should require worker readiness before finalizing the order",
+			func(nodePools []hypershiftv1beta1.NodePool, expected bool) {
+				hc := &hypershiftv1beta1.HostedCluster{
+					Status: hypershiftv1beta1.HostedClusterStatus{
+						Conditions: []metav1.Condition{
+							{Type: string(hypershiftv1beta1.KubeAPIServerAvailable), Status: metav1.ConditionTrue},
+							{Type: string(hypershiftv1beta1.HostedClusterAvailable), Status: metav1.ConditionTrue},
+							{Type: string(hypershiftv1beta1.HostedClusterDegraded), Status: metav1.ConditionFalse},
+							{Type: string(hypershiftv1beta1.ClusterVersionSucceeding), Status: metav1.ConditionTrue},
+						},
+					},
+				}
+
+				Expect(hostedClusterAndNodePoolsAreReady(&v1alpha1.ClusterOrder{}, hc, nodePools)).To(Equal(expected))
+			},
+			Entry("HostedCluster only", []hypershiftv1beta1.NodePool{}, true),
+			Entry("all requested NodePools have AllMachinesReady", []hypershiftv1beta1.NodePool{
+				{Status: hypershiftv1beta1.NodePoolStatus{Conditions: []hypershiftv1beta1.NodePoolCondition{
+					{Type: hypershiftv1beta1.NodePoolAllMachinesReadyConditionType, Status: corev1.ConditionTrue},
+				}}},
+				{Status: hypershiftv1beta1.NodePoolStatus{Conditions: []hypershiftv1beta1.NodePoolCondition{
+					{Type: hypershiftv1beta1.NodePoolAllMachinesReadyConditionType, Status: corev1.ConditionTrue},
+				}}},
+			}, true),
+			Entry("one NodePool is still joining", []hypershiftv1beta1.NodePool{
+				{Status: hypershiftv1beta1.NodePoolStatus{Conditions: []hypershiftv1beta1.NodePoolCondition{
+					{Type: hypershiftv1beta1.NodePoolAllMachinesReadyConditionType, Status: corev1.ConditionTrue},
+				}}},
+				{Status: hypershiftv1beta1.NodePoolStatus{Conditions: []hypershiftv1beta1.NodePoolCondition{
+					{Type: hypershiftv1beta1.NodePoolAllMachinesReadyConditionType, Status: corev1.ConditionFalse},
+				}}},
+			}, false),
+		)
+
+		It("should finalize Ready only after provisioning and HostedCluster readiness", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Status: v1alpha1.ClusterOrderStatus{
+					Phase: v1alpha1.ClusterOrderPhaseProgressing,
+					ProvisioningJobs: []v1alpha1.JobStatus{{
+						Type:  v1alpha1.JobTypeProvision,
+						State: v1alpha1.JobStateSucceeded,
+					}},
+				},
+			}
+			instance.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionTrue, "Workers Joining", v1alpha1.ReasonWorkersJoining)
+
+			hc := &hypershiftv1beta1.HostedCluster{
+				Status: hypershiftv1beta1.HostedClusterStatus{
+					Conditions: []metav1.Condition{
+						{Type: string(hypershiftv1beta1.KubeAPIServerAvailable), Status: metav1.ConditionTrue},
+						{Type: string(hypershiftv1beta1.HostedClusterAvailable), Status: metav1.ConditionTrue},
+						{Type: string(hypershiftv1beta1.HostedClusterDegraded), Status: metav1.ConditionFalse},
+						{Type: string(hypershiftv1beta1.ClusterVersionSucceeding), Status: metav1.ConditionTrue},
+					},
+				},
+			}
+
+			Expect(finalizeReadyIfProvisioned(instance, hc, nil, true)).To(BeTrue())
+			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseReady))
+			progressing := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
+			Expect(progressing.Status).To(Equal(metav1.ConditionFalse))
+			Expect(progressing.Reason).To(Equal(v1alpha1.ReasonAsExpected))
+		})
+
 		It("should not modify Phase when HostedCluster is not yet available", func() {
 			instance := &v1alpha1.ClusterOrder{
 				ObjectMeta: metav1.ObjectMeta{
@@ -1003,7 +1067,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 			Expect(cond.Message).To(Equal("provisioning in progress"))
 		})
 
-		It("should set Phase=Ready and Progressing=False on OnSuccess", func() {
+		It("should keep the order progressing on OnSuccess until the HostedCluster is ready", func() {
 			instance := &v1alpha1.ClusterOrder{
 				Status: v1alpha1.ClusterOrderStatus{
 					Phase: v1alpha1.ClusterOrderPhaseProgressing,
@@ -1014,14 +1078,14 @@ var _ = Describe("ClusterOrder Controller", func() {
 			callbacks := reconciler.provisioningCallbacks(instance)
 			callbacks.OnSuccess(provisioning.ProvisionStatus{})
 
-			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseReady))
+			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseProgressing))
 			cond := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
 			Expect(cond).NotTo(BeNil())
-			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
-			Expect(cond.Reason).To(Equal(v1alpha1.ReasonAsExpected))
+			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(cond.Reason).To(Equal(v1alpha1.ReasonProgressing))
 		})
 
-		It("should clear stale Progressing=False condition on provisioning recovery", func() {
+		It("should clear stale Progressing=False condition on provisioning recovery without marking Ready", func() {
 			instance := &v1alpha1.ClusterOrder{
 				Status: v1alpha1.ClusterOrderStatus{
 					Phase: v1alpha1.ClusterOrderPhaseProgressing,
@@ -1041,11 +1105,11 @@ var _ = Describe("ClusterOrder Controller", func() {
 			callbacks := reconciler.provisioningCallbacks(instance)
 			callbacks.OnSuccess(provisioning.ProvisionStatus{})
 
-			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseReady))
+			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseProgressing))
 			cond := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
 			Expect(cond).NotTo(BeNil())
-			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
-			Expect(cond.Reason).To(Equal(v1alpha1.ReasonAsExpected))
+			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(cond.Reason).To(Equal(v1alpha1.ReasonProgressing))
 			Expect(cond.Message).To(BeEmpty())
 		})
 	})

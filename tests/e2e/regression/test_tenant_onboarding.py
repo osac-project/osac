@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hmac
 import json
 import logging
+import os
 import re
 import subprocess
 import textwrap
@@ -19,7 +21,7 @@ from tests.e2e.core.keycloak_admin import (
     wait_for_organization,
 )
 from tests.e2e.core.osac_cli import OsacCLI
-from tests.e2e.core.runner import poll_until, run, run_unchecked
+from tests.e2e.core.runner import poll_until, run_unchecked
 
 logger = logging.getLogger(__name__)
 
@@ -73,23 +75,67 @@ def _cli_unchecked(resources: dict[str, str], identity: str, *args: str) -> tupl
     return run_unchecked(resources["cli_binary"], "--config", resources[f"{identity}_config_dir"], *args)
 
 
+def _collect_strings(value: object) -> list[str]:
+    """Return string leaves from a JSON-like Get response for secret comparison."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        found: list[str] = []
+        for key, item in value.items():
+            if isinstance(key, str):
+                found.append(key)
+            found.extend(_collect_strings(item))
+        return found
+    if isinstance(value, list):
+        found = []
+        for item in value:
+            found.extend(_collect_strings(item))
+        return found
+    return []
+
+
+def _secret_matches_any(secret: str, candidates: list[str]) -> bool:
+    """Compare secret to each candidate with hmac.compare_digest (no short-circuit)."""
+    leaked = False
+    secret_len = len(secret)
+    for candidate in candidates:
+        if len(candidate) != secret_len:
+            continue
+        leaked = hmac.compare_digest(candidate, secret) or leaked
+    return leaked
+
+
 def _password_login(resources: dict[str, str], identity: str, user: str, password: str) -> None:
-    """Log in on the public fulfillment address with the password grant."""
-    run(
-        resources["cli_binary"],
-        "--config",
-        resources[f"{identity}_config_dir"],
-        "login",
-        "--address",
-        resources["public_address"],
-        "--insecure",
-        "--flow",
-        "password",
-        "--user",
-        user,
-        "--password",
-        password,
-    )
+    """Log in on the public fulfillment address with the password grant.
+
+    The password is written to a 0600 file and passed with ``--password-file`` so
+    it never appears in subprocess argv if login fails.
+    """
+    password_path = Path(resources[f"{identity}_config_dir"]) / f".{identity}-login-password"
+    try:
+        fd = os.open(password_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(password)
+        combined, rc = run_unchecked(
+            resources["cli_binary"],
+            "--config",
+            resources[f"{identity}_config_dir"],
+            "login",
+            "--address",
+            resources["public_address"],
+            "--insecure",
+            "--flow",
+            "password",
+            "--user",
+            user,
+            "--password-file",
+            str(password_path),
+        )
+        assert rc == 0, f"osac login failed rc={rc}: {_redact_secrets(combined)}"
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(f"osac login failed rc={exc.returncode}") from None
+    finally:
+        password_path.unlink(missing_ok=True)
 
 
 def _whoami_roles(text: str) -> list[str]:
@@ -244,11 +290,14 @@ def test_tenant_onboarding_demo1_milestone_02(
     get_tenant = private_grpc.call(service=f"{PRIVATE_API}.Tenants/Get", data={"id": tenant_id})
     bg_user_id = _status_value(get_tenant, "break_glass_user_id")
     assert bg_user_id, "break_glass_user_id missing after SYNCED"
-    get_blob = json.dumps(get_tenant)
-    get_leaked = break_glass_password in get_blob
+    get_leaked = _secret_matches_any(break_glass_password, _collect_strings(get_tenant))
     assert not get_leaked, "Tenants/Get echoed break-glass password"
-    get_yaml = private_cli._run("get", "tenant", tenant_id, "-o", "yaml")
-    yaml_leaked = break_glass_password in get_yaml
+    get_cli_raw = private_cli._run("get", "tenant", tenant_id, "-o", "json")
+    try:
+        get_cli = json.loads(get_cli_raw)
+    except json.JSONDecodeError:
+        pytest.fail("CLI get tenant did not return JSON")
+    yaml_leaked = _secret_matches_any(break_glass_password, _collect_strings(get_cli))
     assert not yaml_leaked, "CLI get tenant echoed break-glass password"
 
     # Flow 3: Keycloak org enabled; tenant namespace Active with tenant-ref label.

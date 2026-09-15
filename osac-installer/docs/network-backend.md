@@ -6,16 +6,102 @@ the `NETWORK_CLASS` environment variable.
 
 For general AAP configuration see [AAP Configuration](aap-configuration.md).
 
+## User-Facing Networking Facade (preferred)
+
+Configure networking under `global.networking` in your environment values file.
+Helm derives operator manager ConfigMaps, AAP instance group environment
+variables, and the default NetworkClass from this single block.
+
+When `global.networking.provider` is `netris`, Helm automatically:
+
+- Enables `operator.networkManagers.fabricManagers.netris`
+- Sets `NETWORK_CLASS`, `NETWORK_STEPS_COLLECTION`, and shared `NETRIS_*` fields on
+  both AAP instance groups when they are enabled (no manual duplication)
+- Points the generated NetworkClass at `fabricManager: netris`
+
+The facade does **not** enable the AAP instance groups themselves. Set both
+`aap.instanceGroups.clusterFulfillment.enabled` and
+`aap.instanceGroups.networkFulfillment.enabled` to `true` for Netris-backed
+provisioning. Cluster fulfillment receives `NETWORK_CLASS` /
+`NETWORK_STEPS_COLLECTION` plus cluster-specific Netris fields; network
+fulfillment receives the shared Netris connection fields only.
+
+### Netris example
+
+```yaml
+global:
+  networking:
+    provider: netris
+    overlay: none
+    netris:
+      controllerUrl: "https://redhat-ctl.netris.io"
+      credentials:
+        username: "netris"
+        passwordSecretRef:
+          name: netris-credentials
+          key: NETRIS_PASSWORD
+      siteId: "5"
+      tenantId: "1"
+      tenantName: "Admin"
+
+aap:
+  instanceGroups:
+    clusterFulfillment:
+      enabled: true
+    networkFulfillment:
+      enabled: true
+```
+
+When Netris is selected, the schema requires `controllerUrl` (HTTPS), credentials,
+`siteId`, `tenantId`, and `tenantName`. Credentials may contain either a direct
+password or the external `netris-credentials` Secret reference shown above.
+
+### Agentless example
+
+```yaml
+global:
+  networking:
+    provider: none
+    overlay: k8s_only
+```
+
+## Supported networking profiles
+
+The Helm facade currently supports these provider/overlay pairs:
+
+| Provider | Overlay | Derived manager/backend |
+|----------|---------|-------------------------|
+| `cudn` | `none` | `fabricManager: cudn_net`; no provider-specific AAP backend |
+| `netris` | `none` | `fabricManager: netris`; `netris.steps` |
+| `none` | `k8s_only` | `k8sManager: k8s_only`; `agentless_net.steps` |
+
+The `vlan` provider and the `cudn_evpn` and `cudn_localnet` overlays are reserved for future
+implementations and currently fail Helm rendering when selected.
+
+### Expert overrides
+
+Set `global.expertOverrides.aap`, `global.expertOverrides.networkClass`, or
+`global.expertOverrides.networkManagers` to keep the corresponding low-level
+values authoritative instead of the facade:
+
+| Override | Low-level block |
+|----------|-----------------|
+| `expertOverrides.aap` | `aap.instanceGroups.clusterFulfillment` / `networkFulfillment` |
+| `expertOverrides.networkClass` | legacy top-level `networkClass` |
+| `expertOverrides.networkManagers` | `operator.networkManagers` |
+
 ## Supported Backends
 
 | `NETWORK_CLASS` | `NETWORK_STEPS_COLLECTION` | Description |
 |-----------------|---------------------------|-------------|
-| `esi` (default) | `osac.steps` | ESI (Elastic System Infrastructure) |
+| (empty) | (empty) | No AAP network backend selected (use `agentless_net` for agentless provisioning or `netris` for fabric-backed provisioning) |
 | `netris` | `netris.steps` | Netris controller API |
+| `agentless_net` | `agentless_net.steps` | Agentless network backend (no physical fabric) |
 
-## Netris Configuration
+## Netris Configuration (advanced / manual)
 
-When using `NETWORK_CLASS=netris`, the following additional variables must be set.
+When not using the facade, set variables on `aap.instanceGroups` directly and
+set `global.expertOverrides.aap: true`. The facade is preferred — see above.
 
 ### ConfigMap Variables
 
@@ -126,7 +212,7 @@ Create a separate secrets values file that is **not committed to git**
 # values/development-secrets.local.yaml
 clusterFulfillment:
   secret:
-    NETRIS_PASSWORD: "my-netris-password"
+    NETRIS_PASSWORD: "<netris-password>"
     AWS_ACCESS_KEY_ID: "AKIA..."
     AWS_SECRET_ACCESS_KEY: "..."
     SERVER_SSH_KEY: "<contents of ~/.ssh/id_rsa>"
@@ -134,7 +220,7 @@ clusterFulfillment:
 
 networkFulfillment:
   secret:
-    NETRIS_PASSWORD: "my-netris-password"
+    NETRIS_PASSWORD: "<netris-password>"
 ```
 
 Pass both files when deploying — Helm deep-merges them:

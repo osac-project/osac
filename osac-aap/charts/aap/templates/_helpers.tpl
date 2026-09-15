@@ -60,6 +60,32 @@ AAP controller hostname
 {{- end }}
 
 {{/*
+Return the Netris environment values derived from the shared networking
+facade. Cluster fulfillment additionally selects the Netris AAP backend and
+receives the resource-class configuration; network fulfillment only needs the
+shared controller connection fields.
+*/}}
+{{- define "osac-aap.netrisConfig" -}}
+{{- $netris := .netris | default dict -}}
+{{- $creds := $netris.credentials | default dict -}}
+{{- $derived := dict
+  "NETRIS_CONTROLLER_URL" ($netris.controllerUrl | default "")
+  "NETRIS_USERNAME" ($creds.username | default "")
+  "NETRIS_SITE_ID" ($netris.siteId | default "" | toString)
+  "NETRIS_TENANT_ID" ($netris.tenantId | default "" | toString)
+  "NETRIS_TENANT_NAME" ($netris.tenantName | default "")
+-}}
+{{- if .cluster -}}
+{{- $_ := set $derived "NETWORK_CLASS" "netris" -}}
+{{- $_ := set $derived "NETWORK_STEPS_COLLECTION" "netris.steps" -}}
+{{- $_ := set $derived "NETRIS_MGMT_VPC_ID" ($netris.mgmtVpcId | default "" | toString) -}}
+{{- $_ := set $derived "NETRIS_MGMT_VPC_NAME" ($netris.mgmtVpcName | default "") -}}
+{{- $_ := set $derived "NETRIS_RESOURCE_CLASS_MAP" ($netris.resourceClassMap | default "") -}}
+{{- end -}}
+{{- $derived | toYaml -}}
+{{- end }}
+
+{{/*
 Shared wait-for-aap readiness script (bootstrap-job.yaml, create-api-token.yaml).
 Wall-clock-bounded (1500s epoch deadline, not iteration count) since each
 iteration can take up to ~65s worst case -- keep activeDeadlineSeconds above this.

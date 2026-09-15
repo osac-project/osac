@@ -19,8 +19,8 @@ file and they are applied during `make install-osac`.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NETWORK_CLASS` | `esi` | Network backend (`netris` or `esi`) |
-| `NETWORK_STEPS_COLLECTION` | `osac.steps` | Ansible collection for network steps |
+| `NETWORK_CLASS` | (empty) | AAP cluster-fulfillment network backend (`netris` or `agentless_net`) |
+| `NETWORK_STEPS_COLLECTION` | (empty) | Ansible collection for network steps (`netris.steps`, `ci.steps`, or `agentless_net.steps`) |
 | `EXTERNAL_ACCESS_BASE_DOMAIN` | `box.massopen.cloud` | Base domain for cluster DNS records |
 | `EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS` | `box.massopen.cloud` | Comma-separated list of allowed domains |
 | `EXTERNAL_ACCESS_API_INTERNAL_NETWORK` | `hypershift` | Internal network for API access |
@@ -42,6 +42,10 @@ Kubernetes Secret. Do not pre-encode them.
 
 Additional variables are added by specific network backends — see
 [Network Backend Configuration](network-backend.md).
+
+For Netris, prefer the external `netris-credentials` Secret reference. The
+Secret must contain the `NETRIS_PASSWORD` key and is mounted into the AAP
+cluster-fulfillment and network-fulfillment workers.
 
 > **Note on SSH keys:** SSH private keys are not set via environment variables.
 > They must be added directly to the `cluster-fulfillment-ig` Kubernetes Secret.

@@ -11,6 +11,14 @@ global:
       enabled: false
     maas:
       enabled: false
+  networking:
+    provider: none
+    overlay: k8s_only
+    networkClass:
+      title: "K8s-only networking"
+      description: >-
+        VMaaS overlay without a physical fabric. VirtualNetwork/Subnet use CUDN,
+        SecurityGroup uses NetworkPolicy, ExternalIP uses MetalLB L2.
 
 # --- CSI Driver ---
 csiDriver:
@@ -49,7 +57,10 @@ operator:
     k8sManagers:
       k8s_only:
         enabled: true
-        capabilities: "ipv4,ipv6,dualStack"
+        capabilities:
+        - ipv4
+        - ipv6
+        - dualStack
 
 # --- Fulfillment Service ---
 service:
@@ -224,19 +235,6 @@ metering:
 # --- LVMS StorageBackend registration ---
 lvms:
   enabled: true
-
-# Default NetworkClass for VMaaS-without-fabric (create-network-class hook).
-# Must clear fabricManager — chart defaults leave cudn_net, and Helm merge
-# would stamp both managers
-networkClass:
-  enabled: true
-  title: "K8s-only networking"
-  description: >-
-    VMaaS overlay without a physical fabric. VirtualNetwork/Subnet use CUDN,
-    SecurityGroup uses NetworkPolicy, ExternalIP uses MetalLB L2.
-  fabricManager: ""
-  k8sManager: "k8s_only"
-  isDefault: true
 
 # --- Bundled OpenBao (Vault-compatible secret store) ---
 bundledVault:

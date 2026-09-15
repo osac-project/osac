@@ -55,15 +55,13 @@ Plus MetalLB-based ExternalIPPool / ExternalIP management (`metallb_l2`).
   bare-metal host lifecycle.
 - **`bm_private_network` / `bm_host_private_network`** — Private network
   attachment for bare-metal hosts.
-- Host lease management and the
-  [ESI (Elastic Secure Infrastructure)](https://esi.readthedocs.org) collection
-  (`massopencloud.esi`) for bare-metal provisioning via OpenStack Ironic.
+- Host lease management and bare-metal provisioning integrations.
 
 ### Clusters
 
 - **`ocp_small`**, **`ocp_4_20_ai_maas`**, **`ocp_ci_small`** — OpenShift cluster
   templates with different sizes, authentication methods, and infrastructure
-  backends (ESI, NICo).
+  backends (Netris, agentless_net).
 - Multi-step workflow playbooks for hosted cluster create / delete / post-install.
 
 ## Architecture
@@ -77,7 +75,7 @@ osac-aap/
 │   │   ├── templates/                      # Pluggable infrastructure roles with meta/osac.yaml
 │   │   ├── workflows/                      # Multi-step orchestration (cluster, compute_instance)
 │   │   └── config_as_code/                 # AAP configuration (job templates, inventories, credentials)
-│   ├── massopencloud/                      # ESI bare-metal + MOC workflow steps
+│   ├── massopencloud/                      # Bare-metal + MOC workflow steps
 │   ├── netris/                             # Netris network backend steps
 │   ├── nico/                               # NVIDIA NICo bare-metal backend steps
 │   ├── dns/                                # DNS management

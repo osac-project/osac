@@ -6,6 +6,35 @@
 {{- if $ingressDomain }}
 {{- $baseDomain = printf "hosted.%s" ($ingressDomain | trimPrefix "apps.") }}
 {{- end }}
+{{- $globalNetworking := dict -}}
+{{- if .Values.global }}
+{{- $globalNetworking = .Values.global.networking | default dict -}}
+{{- end }}
+{{- $provider := $globalNetworking.provider | default "cudn" -}}
+{{- $overlay := $globalNetworking.overlay | default "none" -}}
+{{- $netris := $globalNetworking.netris | default dict -}}
+{{- $netrisEnabled := eq $provider "netris" -}}
+{{- $agentlessEnabled := and (eq $provider "none") (eq $overlay "k8s_only") -}}
+{{- $netExpert := false -}}
+{{- if and .Values.global .Values.global.expertOverrides }}
+{{- $netExpert = .Values.global.expertOverrides.aap | default false -}}
+{{- end }}
+{{- $explicitCfg := .Values.instanceGroups.clusterFulfillment.config | default dict -}}
+{{- $explicitSec := .Values.instanceGroups.clusterFulfillment.secret | default dict -}}
+{{- $cfg := $explicitCfg -}}
+{{- $sec := $explicitSec -}}
+{{- if not $netExpert -}}
+{{- if $netrisEnabled -}}
+{{- $creds := $netris.credentials | default dict -}}
+{{- $derived := include "osac-aap.netrisConfig" (dict "netris" $netris "cluster" true) | fromYaml -}}
+{{- $cfg = merge $derived $explicitCfg -}}
+{{- if $creds.password }}
+{{- $sec = merge (dict "NETRIS_PASSWORD" $creds.password) $explicitSec -}}
+{{- end }}
+{{- else if $agentlessEnabled -}}
+{{- $cfg = merge (dict "NETWORK_CLASS" "agentless_net" "NETWORK_STEPS_COLLECTION" "agentless_net.steps") $explicitCfg -}}
+{{- end }}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -15,12 +44,12 @@ metadata:
     {{- include "osac-aap.labels" . | nindent 4 }}
     osac.openshift.io/project: osac-aap
 data:
-  {{- range $key, $val := .Values.instanceGroups.clusterFulfillment.config }}
+  {{- range $key, $val := $cfg }}
   {{- if and $val (ne $key "HOSTED_CLUSTER_BASE_DOMAIN") }}
   {{ $key }}: {{ $val | quote }}
   {{- end }}
   {{- end }}
-  HOSTED_CLUSTER_BASE_DOMAIN: {{ .Values.instanceGroups.clusterFulfillment.config.HOSTED_CLUSTER_BASE_DOMAIN | default $baseDomain | quote }}
+  HOSTED_CLUSTER_BASE_DOMAIN: {{ index $cfg "HOSTED_CLUSTER_BASE_DOMAIN" | default $baseDomain | quote }}
 ---
 apiVersion: v1
 kind: Secret
@@ -32,7 +61,7 @@ metadata:
     osac.openshift.io/project: osac-aap
 type: Opaque
 data:
-  {{- range $key, $val := .Values.instanceGroups.clusterFulfillment.secret }}
+  {{- range $key, $val := $sec }}
   {{- if $val }}
   {{ $key }}: {{ $val | b64enc | quote }}
   {{- end }}
@@ -61,6 +90,31 @@ data: {}
 {{- end }}
 ---
 {{- if .Values.instanceGroups.networkFulfillment.enabled }}
+{{- $globalNetworking := dict -}}
+{{- if .Values.global }}
+{{- $globalNetworking = .Values.global.networking | default dict -}}
+{{- end }}
+{{- $provider := $globalNetworking.provider | default "cudn" -}}
+{{- $netris := $globalNetworking.netris | default dict -}}
+{{- $netrisEnabled := eq $provider "netris" -}}
+{{- $netExpert := false -}}
+{{- if and .Values.global .Values.global.expertOverrides }}
+{{- $netExpert = .Values.global.expertOverrides.aap | default false -}}
+{{- end }}
+{{- $explicitCfg := .Values.instanceGroups.networkFulfillment.config | default dict -}}
+{{- $explicitSec := .Values.instanceGroups.networkFulfillment.secret | default dict -}}
+{{- $cfg := $explicitCfg -}}
+{{- $sec := $explicitSec -}}
+{{- if not $netExpert -}}
+{{- if $netrisEnabled -}}
+{{- $creds := $netris.credentials | default dict -}}
+{{- $derived := include "osac-aap.netrisConfig" (dict "netris" $netris "cluster" false) | fromYaml -}}
+{{- $cfg = merge $derived $explicitCfg -}}
+{{- if $creds.password }}
+{{- $sec = merge (dict "NETRIS_PASSWORD" $creds.password) $explicitSec -}}
+{{- end }}
+{{- end }}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -70,7 +124,7 @@ metadata:
     {{- include "osac-aap.labels" . | nindent 4 }}
     osac.openshift.io/project: osac-aap
 data:
-  {{- range $key, $val := .Values.instanceGroups.networkFulfillment.config }}
+  {{- range $key, $val := $cfg }}
   {{- if $val }}
   {{ $key }}: {{ $val | quote }}
   {{- end }}
@@ -86,7 +140,7 @@ metadata:
     osac.openshift.io/project: osac-aap
 type: Opaque
 data:
-  {{- range $key, $val := .Values.instanceGroups.networkFulfillment.secret }}
+  {{- range $key, $val := $sec }}
   {{- if $val }}
   {{ $key }}: {{ $val | b64enc | quote }}
   {{- end }}

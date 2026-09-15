@@ -22,12 +22,18 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
+	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
@@ -266,6 +272,106 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 	}
 
 	Context("Provisioning workflow", func() {
+		It("reconciles availability and worker readiness into ordered lifecycle events", func() {
+			const (
+				name       = "cluster-order-reconcile-lifecycle"
+				hostedName = "hosted-cluster-reconcile-lifecycle"
+			)
+
+			instance := newTestClusterOrder(name)
+			instance.Spec.NodeRequests = []osacv1alpha1.NodeRequest{{
+				NodeSet:       "worker",
+				NumberOfNodes: 1,
+				BareMetal:     &osacv1alpha1.BareMetalNodeSpec{InstanceType: "worker"},
+			}}
+
+			scheme := runtime.NewScheme()
+			Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+			Expect(hypershiftv1beta1.AddToScheme(scheme)).To(Succeed())
+			Expect(corev1.AddToScheme(scheme)).To(Succeed())
+			Expect(rbacv1.AddToScheme(scheme)).To(Succeed())
+			fakeClient := fake.NewClientBuilder().WithScheme(scheme).
+				WithStatusSubresource(&osacv1alpha1.ClusterOrder{}, &hypershiftv1beta1.HostedCluster{}, &hypershiftv1beta1.NodePool{}).
+				Build()
+			reconciler = NewClusterOrderReconciler(
+				fakeClient, fakeClient, scheme,
+				clusterOrderTestNamespace, "", "", noopProvisioningProvider{}, statusPollInterval, provisioning.DefaultMaxJobHistory,
+			)
+
+			instance.Status.NodeSets = []osacv1alpha1.NodeSetStatus{{
+				Name:   "worker",
+				Agents: []osacv1alpha1.AgentStatus{{AgentName: "agent-1"}},
+			}}
+			instance.Status.Phase = osacv1alpha1.ClusterOrderPhaseProgressing
+			instance.Status.Conditions = []metav1.Condition{
+				{Type: osacv1alpha1.ConditionProgressing, Status: metav1.ConditionTrue, Reason: osacv1alpha1.ReasonControlPlaneStarting},
+				{Type: osacv1alpha1.ConditionControlPlaneAvailable, Status: metav1.ConditionFalse, Reason: osacv1alpha1.ReasonInitialized},
+			}
+			Expect(reconciler.handleDesiredConfigVersion(instance)).To(Succeed())
+			instance.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{{
+				Type: osacv1alpha1.JobTypeProvision, JobID: "provisioned", State: osacv1alpha1.JobStateSucceeded,
+				ConfigVersion: instance.Status.DesiredConfigVersion,
+			}}
+			instance.Status.ClusterReference = &osacv1alpha1.ClusterOrderClusterReferenceType{Namespace: clusterOrderTestNamespace}
+			Expect(fakeClient.Create(ctx, instance)).To(Succeed())
+			Expect(fakeClient.Status().Update(ctx, instance)).To(Succeed())
+
+			recorder := events.NewFakeRecorder(10)
+			reconciler.Recorder = recorder
+			request := ctrl.Request{NamespacedName: types.NamespacedName{Name: name, Namespace: clusterOrderTestNamespace}}
+
+			labels := map[string]string{
+				osacClusterOrderNameLabel: name,
+				agentNodeSetLabel:         "worker",
+				agentInstanceTypeLabel:    "worker",
+			}
+			Expect(fakeClient.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: clusterOrderTestNamespace, Labels: labels}})).To(Succeed())
+			hc := &hypershiftv1beta1.HostedCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: hostedName, Namespace: clusterOrderTestNamespace, Labels: labels},
+			}
+			Expect(fakeClient.Create(ctx, hc)).To(Succeed())
+			hc.Status.Conditions = []metav1.Condition{
+				{Type: string(hypershiftv1beta1.InfrastructureReady), Status: metav1.ConditionTrue},
+				{Type: string(hypershiftv1beta1.KubeAPIServerAvailable), Status: metav1.ConditionTrue},
+				{Type: string(hypershiftv1beta1.HostedClusterAvailable), Status: metav1.ConditionTrue},
+				{Type: string(hypershiftv1beta1.HostedClusterDegraded), Status: metav1.ConditionFalse},
+				{Type: string(hypershiftv1beta1.ClusterVersionSucceeding), Status: metav1.ConditionTrue},
+			}
+			Expect(fakeClient.Status().Update(ctx, hc)).To(Succeed())
+
+			nodePool := &hypershiftv1beta1.NodePool{
+				ObjectMeta: metav1.ObjectMeta{Name: "worker", Namespace: clusterOrderTestNamespace, Labels: labels},
+				Status: hypershiftv1beta1.NodePoolStatus{
+					Replicas: 1,
+					Conditions: []hypershiftv1beta1.NodePoolCondition{
+						{Type: hypershiftv1beta1.NodePoolAllMachinesReadyConditionType, Status: corev1.ConditionTrue},
+						{Type: hypershiftv1beta1.NodePoolReadyConditionType, Status: corev1.ConditionTrue},
+					},
+				},
+			}
+			Expect(fakeClient.Create(ctx, nodePool)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			updated := &osacv1alpha1.ClusterOrder{}
+			Expect(fakeClient.Get(ctx, types.NamespacedName{Name: name, Namespace: clusterOrderTestNamespace}, updated)).To(Succeed())
+			Expect(updated.Status.Phase).To(Equal(osacv1alpha1.ClusterOrderPhaseProgressing))
+			Expect(updated.IsStatusConditionTrue(osacv1alpha1.ConditionControlPlaneAvailable)).To(BeTrue())
+			Expect(recorder.Events).To(Receive(ContainSubstring(osacv1alpha1.ReasonWorkersJoining)))
+
+			_, err = reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(fakeClient.Get(ctx, types.NamespacedName{Name: name, Namespace: clusterOrderTestNamespace}, updated)).To(Succeed())
+			Expect(updated.Status.Phase).To(Equal(osacv1alpha1.ClusterOrderPhaseReady))
+			progressing := apimeta.FindStatusCondition(updated.Status.Conditions, osacv1alpha1.ConditionProgressing)
+			Expect(progressing).NotTo(BeNil())
+			Expect(progressing.Status).To(Equal(metav1.ConditionFalse))
+			Expect(recorder.Events).To(Receive(And(
+				ContainSubstring(corev1.EventTypeNormal),
+				ContainSubstring(osacv1alpha1.ReasonReady),
+			)))
+		})
+
 		It("does not submit another cluster job after an attachment update is rejected and continues polling status", func() {
 			const name = "cluster-order-immutable-network-attachment-job"
 			instance := newTestClusterOrder(name)

@@ -204,6 +204,16 @@ type WorkerStatus struct {
 	// +kubebuilder:validation:Type=string
 	// +kubebuilder:validation:Format=date-time
 	LastFailureTime *metav1.Time `json:"lastFailureTime,omitempty"`
+
+	// AttemptStartTime records when the current provisioning attempt was first
+	// observed. This is set on the first reconciliation of a new or replaced
+	// worker to anchor the agent-registration timeout. Once a replacement is
+	// triggered (which sets NextRetryTime), this field is cleared because the
+	// replacement's NextRetryTime becomes the new timeout anchor.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:Format=date-time
+	AttemptStartTime *metav1.Time `json:"attemptStartTime,omitempty"`
 }
 
 // ClusterOrderStatus defines the observed state of ClusterOrder

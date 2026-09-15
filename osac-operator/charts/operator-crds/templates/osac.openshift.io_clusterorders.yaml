@@ -495,6 +495,15 @@ spec:
                         AttemptCount tracks how many provisioning attempts have been made
                         for this worker slot. Transient gRPC errors do not increment this counter.
                       type: integer
+                    attemptStartTime:
+                      description: |-
+                        AttemptStartTime records when the current provisioning attempt was first
+                        observed. This is set on the first reconciliation of a new or replaced
+                        worker to anchor the agent-registration timeout. Once a replacement is
+                        triggered (which sets NextRetryTime), this field is cleared because the
+                        replacement's NextRetryTime becomes the new timeout anchor.
+                      format: date-time
+                      type: string
                     bmiName:
                       description: BMIName is the name of the BareMetalInstance CR
                         for this worker.

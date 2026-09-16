@@ -6,26 +6,26 @@
 # reasons, both already established by ai-diagnostic-e2e.yml's identical
 # pattern: every real PR here is fork-originated, and a pull_request-
 # triggered job's own GITHUB_TOKEN is read-only (posting the comment could
-# never work directly from e2e-suite-selection-poc.yml's own job) and
-# Vertex AI's WIF trust only covers main-branch runs, never a fork PR's own
-# job. A workflow_call'd job inherits ITS CALLER's own token/context (this
+# never work directly from jobs-selection.yml's own job) and Vertex AI's
+# WIF trust only covers main-branch runs, never a fork PR's own job. A
+# workflow_call'd job inherits ITS CALLER's own token/context (this
 # wrapper's, i.e. osac's, native workflow_run-triggered one) regardless of
 # what originally triggered the upstream run -- see
-# osac-test-infra/.github/workflows/e2e-suite-selection-ai.yml's own header
+# osac-test-infra/.github/workflows/jobs-selection-report.yml's own header
 # for the rest of the reasoning.
-name: E2E Suite Selection AI Judgment
+name: Jobs Selection Report
 
 on:
   workflow_run:
     workflows:
-      - E2E Suite Selection POC
+      - Jobs Selection
     types: [completed]
 
 permissions: {}
 
 jobs:
   judge:
-    uses: osac-project/osac-test-infra/.github/workflows/e2e-suite-selection-ai.yml@main
+    uses: osac-project/osac-test-infra/.github/workflows/jobs-selection-report.yml@main
     permissions:
       contents: read
       pull-requests: write

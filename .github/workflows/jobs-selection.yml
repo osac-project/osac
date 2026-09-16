@@ -1,0 +1,453 @@
+---
+# Jobs Selection (formerly "E2E Suite Selection POC", OSAC-4741's code):
+# reports, for every real CI job category in this repo (unit tests,
+# integration tests, helm lint, proto/generated-code check, fulfillment-
+# service checks, both component image builds, ansible-lint, darwin
+# keychain tests, and the 3 E2E full-install suites), whether that job's
+# own real path filter WOULD consider this PR relevant -- WITHOUT gating
+# anything. Purely informational, posted as a PR comment. No required
+# check, no effect on merge. Deliberately observational-only for now (same
+# caution the separate, graph-BFS-based OSAC-4013/OSAC-4021 "ci-select"
+# effort already applies to a similar goal): a wrong "skip" here can only
+# ever mislead a comment, never actually skip a job, since none of the
+# booleans this file computes are wired into any real job's own `if:`.
+#
+# This file only ever prepares context and uploads it as an artifact -- it
+# NEVER posts the PR comment itself. Every real PR here is fork-originated,
+# and GitHub Actions gives a pull_request-triggered job from a fork a
+# read-only token unconditionally, regardless of any `permissions:` block
+# requesting write (same constraint ai-diagnostic-e2e.yml's own header
+# comment documents for Vertex AI auth) -- so posting/editing a PR comment
+# from here would silently fail for every real PR. osac-test-infra's
+# jobs-selection-report.yml listener (workflow_run-triggered, default-
+# branch YAML, a real write token) downloads this artifact and owns all
+# comment posting, whether or not it ends up needing Gemini at all.
+#
+# Two layers, both prepared here, judged there:
+# 1. A deterministic dorny/paths-filter pass (this file) that resolves
+#    every job category above by mirroring (as closely as each real
+#    workflow's own filter shape allows) that job's own real filter --
+#    including the 3 E2E suites' common, unambiguous cases (e.g. a
+#    bare-metal-fulfillment-operator/** change obviously means BMaaS)
+#    without ever needing Gemini.
+# 2. For the E2E suites specifically, anything left ambiguous by (1) (shared
+#    osac-operator/fulfillment-service code not clearly VMaaS- or CaaS-
+#    named, or YAML/JSON config files graphify can't model well) gets a
+#    Gemini judgment call from the listener. Every OTHER job category in
+#    this comment is deterministic-only -- no AI involved.
+name: Jobs Selection
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      # Booleans: true if ANY changed file matches that named filter's rules.
+      vmaas-clear: ${{ steps.filter.outputs.vmaas-clear }}
+      caas-clear: ${{ steps.filter.outputs.caas-clear }}
+      bmaas-clear: ${{ steps.filter.outputs.bmaas-clear }}
+      ambiguous-shared: ${{ steps.filter.outputs.ambiguous-shared }}
+      config-yaml-json: ${{ steps.filter.outputs.config-yaml-json }}
+      netris-relevant: ${{ steps.filter.outputs.netris-relevant }}
+      # JSON arrays of the actual matching paths for EVERY bucket, not just
+      # the ambiguous ones -- Gemini's own judgment step now gets shown
+      # which specific files earned each deterministic "clear" verdict
+      # (not just a bare boolean), so it can independently sanity-check
+      # those classifications against the file's own content, instead of
+      # only reasoning about the pre-filtered ambiguous/config lists. This
+      # is exactly what would have let it catch the references/ directory
+      # misclassification (PR #805) on its own, without needing a human to
+      # spot and patch the filter first.
+      vmaas-clear-files: ${{ steps.filter.outputs.vmaas-clear_files }}
+      caas-clear-files: ${{ steps.filter.outputs.caas-clear_files }}
+      bmaas-clear-files: ${{ steps.filter.outputs.bmaas-clear_files }}
+      ambiguous-shared-files: ${{ steps.filter.outputs.ambiguous-shared_files }}
+      config-yaml-json-files: ${{ steps.filter.outputs.config-yaml-json_files }}
+      netris-relevant-files: ${{ steps.filter.outputs.netris-relevant_files }}
+      # Booleans only (no _files) for the reporting-only job categories --
+      # see the filters' own comment above for why these aren't real gates.
+      unit-fulfillment-service: ${{ steps.filter.outputs.unit-fulfillment-service }}
+      unit-osac-metering: ${{ steps.filter.outputs.unit-osac-metering }}
+      unit-osac-metering-adapters: ${{ steps.filter.outputs.unit-osac-metering-adapters }}
+      unit-osac-metering-schema: ${{ steps.filter.outputs.unit-osac-metering-schema }}
+      integration-fulfillment-service: ${{ steps.filter.outputs.integration-fulfillment-service }}
+      integration-osac-operator: ${{ steps.filter.outputs.integration-osac-operator }}
+      integration-bare-metal-fulfillment-operator: ${{ steps.filter.outputs.integration-bare-metal-fulfillment-operator }}
+      integration-osac-aap: ${{ steps.filter.outputs.integration-osac-aap }}
+      helm-osac-operator: ${{ steps.filter.outputs.helm-osac-operator }}
+      helm-bare-metal-fulfillment-operator: ${{ steps.filter.outputs.helm-bare-metal-fulfillment-operator }}
+      helm-fulfillment-service: ${{ steps.filter.outputs.helm-fulfillment-service }}
+      helm-osac-aap: ${{ steps.filter.outputs.helm-osac-aap }}
+      helm-osac-csi-driver: ${{ steps.filter.outputs.helm-osac-csi-driver }}
+      helm-osac-metering: ${{ steps.filter.outputs.helm-osac-metering }}
+      helm-osac-installer: ${{ steps.filter.outputs.helm-osac-installer }}
+      proto-check: ${{ steps.filter.outputs.proto-check }}
+      fulfillment-service-checks: ${{ steps.filter.outputs.fulfillment-service-checks }}
+      build-osac-operator: ${{ steps.filter.outputs.build-osac-operator }}
+      build-bare-metal-fulfillment-operator: ${{ steps.filter.outputs.build-bare-metal-fulfillment-operator }}
+      ansible-osac-aap: ${{ steps.filter.outputs.ansible-osac-aap }}
+      darwin-keychain: ${{ steps.filter.outputs.darwin-keychain }}
+    steps:
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d  # v4.0.3
+        id: filter
+        with:
+          predicate-quantifier: 'every'
+          list-files: json
+          # Each of the three "-clear" filters is ONE brace-alternation
+          # pattern, not a flat list of separate alternatives -- with
+          # predicate-quantifier: 'every', multiple list ENTRIES all apply
+          # to the same candidate file as an AND (that's what lets
+          # ambiguous-shared/config-yaml-json below combine one broad match
+          # with several negations, exactly like this repo's own existing
+          # `code` filter in e2e-*-full-install.yml). Four disjoint full
+          # patterns as separate list entries would require a single file to
+          # satisfy ALL FOUR at once, which no real file ever does -- verified
+          # this distinction directly against real repo paths before landing
+          # this file (a flat-list version matched nothing at all).
+          filters: |
+            # tests/e2e/references/** is NOT exclusively a VMaaS directory --
+            # confirmed on disk: 4 of its 5 test files (compute/iam/
+            # ip_management/networking references) genuinely are VMaaS-only,
+            # but test_cluster_baremetal_references.py's own class/test names
+            # (TestClusterBareMetalReferences, test_cluster_provisioning_
+            # chain_by_name, test_baremetal_instance_chain_by_name) say
+            # plainly it's CaaS+BMaaS content, not VMaaS at all. Confirmed
+            # live: PR #805 touched exactly this file, and because the old
+            # blanket tests/e2e/references/** match only ever set
+            # vmaas-clear, CaaS/BMaaS got zero deterministic signal from it --
+            # a change to that file's ACTUAL CaaS/BMaaS test logic would have
+            # had no path-based signal at all, leaving it entirely up to
+            # Gemini (or, if nothing else in the same PR triggered AI, a
+            # silent "skip" with no judgment whatsoever). This is exactly the
+            # "test that needed to run doesn't run" failure mode the whole
+            # feature exists to prevent -- unlike the ambiguous-shared cases
+            # elsewhere in this file, this one doesn't need an LLM's opinion
+            # at all: the file's own name is unambiguous.
+            # proto/**/*<name>* entries: the proto contract moved
+            # from fulfillment-service/proto/ to the top-level proto/ module,
+            # so compute_instance_*.proto / cluster*.proto / baremetal_instance_
+            # *.proto now live at proto/private/osac/private/v1/ -- keep them
+            # attributed to the same suite the old fulfillment-service/**/*...*
+            # patterns caught.
+            vmaas-clear:
+              - '{osac-operator/**/*computeinstance*,fulfillment-service/**/*compute_instance*,proto/**/*compute_instance*,tests/e2e/vmaas/**,tests/e2e/references/**}'
+              - '!tests/e2e/references/test_cluster_baremetal_references.py'
+            caas-clear:
+              - '{osac-operator/**/*clusterorder*,fulfillment-service/**/*cluster*,proto/**/*cluster*,tests/e2e/caas/**,tests/e2e/references/test_cluster_baremetal_references.py}'
+            bmaas-clear:
+              - '{bare-metal-fulfillment-operator/**,proto/**/*baremetal_instance*,tests/e2e/bmaas/**,tests/e2e/references/test_cluster_baremetal_references.py}'
+            # osac-operator (all CRD controllers) and fulfillment-service
+            # (the gRPC/REST API) each back BOTH VMaaS and CaaS -- a change
+            # under either that ISN'T clearly computeinstance/cluster-named
+            # (per the *-clear filters above) can't be attributed by path
+            # alone. Confirmed on disk: osac-operator consistently names
+            # files computeinstance_*.go/clusterorder_*.go, but
+            # fulfillment-service's CaaS-facing files use a looser "cluster"
+            # substring (no "cluster_order"), so this bucket exists
+            # specifically to catch what the -clear filters miss, not as a
+            # rare edge case.
+            #
+            # tests/e2e/core/** (client/helper wrappers), tests/e2e/conftest.py
+            # (session fixtures), and tests/e2e/*.sh (run/setup scripts) are
+            # ALSO in this bucket, not just osac-operator/fulfillment-service --
+            # confirmed real via live production data: PR #688 changed 4
+            # tests/e2e/core/*.py files (grpc_client.py, helpers.py,
+            # k8s_client.py, osac_cli.py -- imported by every suite's test
+            # files per this repo's own AGENTS.md) plus tests/e2e/run-test.sh/
+            # setup-env.sh, and NONE of them matched any filter before this
+            # fix -- it only got a correct-looking verdict because that same
+            # PR also happened to touch a vmaas-specific test file. A PR
+            # touching ONLY shared test infra would previously have silently
+            # resolved every suite to "skip" with no AI judgment at all --
+            # exactly the "test that needed to run doesn't run" failure mode
+            # this whole feature exists to prevent.
+            # proto/**: a shared-API proto change not clearly named
+            # for one suite (subnets, storage, events, network_class, ...)
+            # affects both VMaaS and CaaS -- same "can't attribute by path
+            # alone" bucket as shared osac-operator/fulfillment-service code.
+            # proto/gen/** is generated Go, not a source signal, so it's
+            # excluded; the compute_instance/cluster-named protos are already
+            # resolved by the *-clear filters above.
+            ambiguous-shared:
+              - '{osac-operator/**,fulfillment-service/**,proto/**,tests/e2e/core/**,tests/e2e/conftest.py,tests/e2e/*.sh}'
+              - '!osac-operator/**/*computeinstance*'
+              - '!fulfillment-service/**/*compute_instance*'
+              - '!proto/**/*compute_instance*'
+              - '!osac-operator/**/*clusterorder*'
+              - '!fulfillment-service/**/*cluster*'
+              - '!proto/**/*cluster*'
+              - '!proto/**/*baremetal_instance*'
+              - '!proto/gen/**'
+              - '!**/*.md'
+              - '!**/docs/**'
+            # graphify's own knowledge graph is built from source via
+            # tree-sitter and has known gaps modeling plain YAML/JSON config
+            # (per AGENTS.md's graphify section) -- these need a different
+            # fallback (a curated path table, or Gemini judging the diff
+            # alone) rather than a graphify-augmented judgment. Deliberately
+            # excludes tests/e2e/**'s own fixtures and the vmaas/caas/bmaas
+            # CRD manifests already caught by the *-clear filters above --
+            # this bucket is for config files NOT already resolved.
+            config-yaml-json:
+              - '{**/*.yaml,**/*.yml,**/*.json}'
+              - '!tests/e2e/**'
+              - '!osac-operator/**/*computeinstance*'
+              - '!osac-operator/**/*clusterorder*'
+              - '!fulfillment-service/**/*compute_instance*'
+              - '!fulfillment-service/**/*cluster*'
+              - '!bare-metal-fulfillment-operator/**'
+            # Informational only -- CaaS Netris and BMaaS Netris (real
+            # EC2/Netris-SDN provisioning, triggered manually via label per
+            # e2e-bmaas-netris-full-install-caller.yml's `pull_request_target:
+            # types: [labeled]` trigger) aren't wired into this POC's gating
+            # at all yet (Phase 3 of the rollout plan, deliberately
+            # sequenced after the 3 standard suites are proven, given real
+            # cloud-cost/security stakes). This filter just surfaces "you
+            # probably want to run the Netris variant manually too" as a
+            # note in the comment, orthogonal to the vmaas/caas/bmaas
+            # decision rows above -- it does not add a new suite or gate
+            # anything.
+            #
+            # `git grep -il netris` confirms osac-aap/collections/
+            # ansible_collections/{netris,agentless_net}/** is the actual
+            # Ansible automation those two backends run -- no other
+            # directory in this repo references either backend by name
+            # outside CI/workflow wiring. tests/e2e/bmaas/regression/
+            # networking/** is confirmed Netris-lab-only per e2e-bmaas-
+            # full-install.yml's own comment ("Networking is Netris-lab
+            # only (eth9, virsh, 3 BMIs)"). fulfillment-service's
+            # NetworkClass files are how the platform represents which
+            # network backend (Netris vs. others) a tenant/subnet uses.
+            netris-relevant:
+              - '{osac-aap/collections/ansible_collections/netris/**,osac-aap/collections/ansible_collections/agentless_net/**,tests/e2e/bmaas/regression/networking/**,fulfillment-service/**/*network_class*,proto/**/*network_class*}'
+            # Everything below mirrors -- as closely as each real workflow's
+            # own filter allows -- the actual dorny/paths-filter patterns in
+            # unit-tests.yml, integration-tests.yml, helm-lint.yaml,
+            # check-generated-code.yaml, check-pull-request.yaml,
+            # build-image.yaml, build-bmf-image.yaml, ansible-lint.yml, and
+            # darwin-keychain-tests.yml. Purely informational (see this
+            # file's header) -- these do NOT gate whether those jobs
+            # actually run; they exist only so this workflow's own comment
+            # can show what a real per-job filter WOULD decide. Where a real
+            # filter's own list-of-disjoint-patterns-plus-negations shape
+            # would silently break under this step's `predicate-quantifier:
+            # 'every'` (multiple bare positive alternatives requiring the
+            # same file to match all of them at once, never true) that filter
+            # is copied here with disjoint positives wrapped into ONE
+            # brace-alternation entry -- the real build-image.yaml/
+            # build-bmf-image.yaml/ansible-lint.yml/check-pull-request.yaml
+            # filters all have this exact gap themselves (no
+            # predicate-quantifier: 'every' there, so their own negation
+            # patterns independently OR-match almost every file under
+            # dorny/paths-filter's default 'someOf' quantifier -- confirmed
+            # live, e.g. build-image.yaml's "test" job running on a
+            # README-only PR). Not fixed in those real files by this change
+            # (out of scope here -- this file only ever reports, never
+            # gates); only mirrored CORRECTLY in this reporting copy, so the
+            # comment shows what SHOULD happen, not the real files' current
+            # buggy always-true behavior.
+            unit-fulfillment-service:
+              - '{fulfillment-service/**,bare-metal-fulfillment-operator/**,osac-operator/api/**,proto/**,go.work,go.work.sum,.github/workflows/unit-tests.yml}'
+            unit-osac-metering:
+              - '{osac-metering/metering-service/**,osac-metering/schema/**,proto/**,go.work,go.work.sum,.github/workflows/unit-tests.yml}'
+            unit-osac-metering-adapters:
+              - '{osac-metering/adapters/**,osac-metering/schema/**,go.work,go.work.sum,.github/workflows/unit-tests.yml}'
+            unit-osac-metering-schema:
+              - '{osac-metering/schema/**,go.work,go.work.sum,.github/workflows/unit-tests.yml}'
+            integration-fulfillment-service:
+              - '{fulfillment-service/**,bare-metal-fulfillment-operator/**,osac-operator/api/**,proto/**,osac-installer/**,go.work,go.work.sum,.github/workflows/integration-tests.yml}'
+            integration-osac-operator:
+              - '{osac-operator/**,bare-metal-fulfillment-operator/**,proto/**,osac-installer/**,go.work,go.work.sum,.github/workflows/integration-tests.yml}'
+            integration-bare-metal-fulfillment-operator:
+              - '{bare-metal-fulfillment-operator/**,osac-operator/**,proto/**,osac-installer/**,go.work,go.work.sum,.github/workflows/integration-tests.yml}'
+            integration-osac-aap:
+              - '{osac-aap/**,.github/workflows/integration-tests.yml}'
+            # integration-osac-installer has no filter of its own: that job's
+            # real `if:` already reacts to any of the 7 helm-lint-style
+            # component paths below plus its own -- computed as an OR in
+            # select-jobs.py instead of duplicated here.
+            helm-osac-operator:
+              - '{osac-operator/api/**,osac-operator/charts/**,osac-operator/config/crd/bases/**,osac-operator/hack/sync-helm-crds.py,osac-operator/Makefile,.github/workflows/helm-lint.yaml}'
+            helm-bare-metal-fulfillment-operator:
+              - '{bare-metal-fulfillment-operator/api/**,bare-metal-fulfillment-operator/charts/**,bare-metal-fulfillment-operator/config/crd/bases/**,bare-metal-fulfillment-operator/hack/sync-helm-crds.py,bare-metal-fulfillment-operator/Makefile,.github/workflows/helm-lint.yaml}'
+            helm-fulfillment-service:
+              - '{fulfillment-service/charts/**,.github/workflows/helm-lint.yaml}'
+            helm-osac-aap:
+              - '{osac-aap/charts/**,.github/workflows/helm-lint.yaml}'
+            helm-osac-csi-driver:
+              - '{osac-csi-driver/charts/**,.github/workflows/helm-lint.yaml}'
+            helm-osac-metering:
+              - '{osac-metering/charts/**,.github/workflows/helm-lint.yaml}'
+            helm-osac-installer:
+              - '{osac-installer/charts/**,osac-installer/values/**,osac-installer/ct.yaml,.github/workflows/helm-lint.yaml}'
+            proto-check:
+              - '{proto/**,fulfillment-service/dev/**,fulfillment-service/dev.py,fulfillment-service/cmd/buf-plugin-osac-lint/**}'
+            fulfillment-service-checks:
+              - '{fulfillment-service/**,.github/workflows/check-pull-request.yaml}'
+              - '!fulfillment-service/OWNERS'
+              - '!fulfillment-service/LICENSE'
+              - '!fulfillment-service/**/*.md'
+              - '!fulfillment-service/docs/**'
+            build-osac-operator:
+              - '{osac-operator/**,.github/workflows/build-image.yaml}'
+              - '!osac-operator/OWNERS'
+              - '!osac-operator/LICENSE'
+              - '!osac-operator/**/*.md'
+              - '!osac-operator/docs/**'
+            build-bare-metal-fulfillment-operator:
+              - 'bare-metal-fulfillment-operator/**'
+              - '!bare-metal-fulfillment-operator/OWNERS'
+              - '!bare-metal-fulfillment-operator/LICENSE'
+              - '!bare-metal-fulfillment-operator/**/*.md'
+              - '!bare-metal-fulfillment-operator/docs/**'
+            ansible-osac-aap:
+              - '{osac-aap/**,.github/workflows/ansible-lint.yml}'
+              - '!osac-aap/OWNERS'
+              - '!osac-aap/LICENSE'
+              - '!osac-aap/**/*.md'
+              - '!osac-aap/docs/**'
+            darwin-keychain:
+              - '{.github/workflows/darwin-keychain-tests.yml,fulfillment-service/internal/config/config_secret_store.go,fulfillment-service/internal/config/config_secret_store_darwin.go,fulfillment-service/internal/config/config_secret_store_darwin_test.go,fulfillment-service/internal/config/config_secret_store_other.go,fulfillment-service/internal/config/config_settings.go,fulfillment-service/internal/config/config_settings_test.go}'
+
+  # Always runs (whether or not anything is ambiguous) -- the listener needs
+  # this context either way, to build the reported decision even in the
+  # all-deterministic case. See the file header for why this can't just
+  # post the comment itself.
+  prepare-context:
+    name: Prepare context for jobs-selection listener
+    needs: changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Build context payload
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          VMAAS_CLEAR: ${{ needs.changes.outputs.vmaas-clear }}
+          CAAS_CLEAR: ${{ needs.changes.outputs.caas-clear }}
+          BMAAS_CLEAR: ${{ needs.changes.outputs.bmaas-clear }}
+          VMAAS_CLEAR_FILES: ${{ needs.changes.outputs.vmaas-clear-files }}
+          CAAS_CLEAR_FILES: ${{ needs.changes.outputs.caas-clear-files }}
+          BMAAS_CLEAR_FILES: ${{ needs.changes.outputs.bmaas-clear-files }}
+          AMBIGUOUS_FILES: ${{ needs.changes.outputs.ambiguous-shared-files }}
+          CONFIG_FILES: ${{ needs.changes.outputs.config-yaml-json-files }}
+          NETRIS_RELEVANT_FILES: ${{ needs.changes.outputs.netris-relevant-files }}
+          UNIT_FULFILLMENT_SERVICE: ${{ needs.changes.outputs.unit-fulfillment-service }}
+          UNIT_OSAC_METERING: ${{ needs.changes.outputs.unit-osac-metering }}
+          UNIT_OSAC_METERING_ADAPTERS: ${{ needs.changes.outputs.unit-osac-metering-adapters }}
+          UNIT_OSAC_METERING_SCHEMA: ${{ needs.changes.outputs.unit-osac-metering-schema }}
+          INTEGRATION_FULFILLMENT_SERVICE: ${{ needs.changes.outputs.integration-fulfillment-service }}
+          INTEGRATION_OSAC_OPERATOR: ${{ needs.changes.outputs.integration-osac-operator }}
+          INTEGRATION_BMF_OPERATOR: ${{ needs.changes.outputs.integration-bare-metal-fulfillment-operator }}
+          INTEGRATION_OSAC_AAP: ${{ needs.changes.outputs.integration-osac-aap }}
+          HELM_OSAC_OPERATOR: ${{ needs.changes.outputs.helm-osac-operator }}
+          HELM_BMF_OPERATOR: ${{ needs.changes.outputs.helm-bare-metal-fulfillment-operator }}
+          HELM_FULFILLMENT_SERVICE: ${{ needs.changes.outputs.helm-fulfillment-service }}
+          HELM_OSAC_AAP: ${{ needs.changes.outputs.helm-osac-aap }}
+          HELM_OSAC_CSI_DRIVER: ${{ needs.changes.outputs.helm-osac-csi-driver }}
+          HELM_OSAC_METERING: ${{ needs.changes.outputs.helm-osac-metering }}
+          HELM_OSAC_INSTALLER: ${{ needs.changes.outputs.helm-osac-installer }}
+          PROTO_CHECK: ${{ needs.changes.outputs.proto-check }}
+          FULFILLMENT_SERVICE_CHECKS: ${{ needs.changes.outputs.fulfillment-service-checks }}
+          BUILD_OSAC_OPERATOR: ${{ needs.changes.outputs.build-osac-operator }}
+          BUILD_BMF_OPERATOR: ${{ needs.changes.outputs.build-bare-metal-fulfillment-operator }}
+          ANSIBLE_OSAC_AAP: ${{ needs.changes.outputs.ansible-osac-aap }}
+          DARWIN_KEYCHAIN: ${{ needs.changes.outputs.darwin-keychain }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/jobs-selection-context"
+          jq -n \
+            --arg pr_number "${PR_NUMBER}" \
+            --arg head_sha "${HEAD_SHA}" \
+            --argjson vmaas_clear "${VMAAS_CLEAR:-false}" \
+            --argjson caas_clear "${CAAS_CLEAR:-false}" \
+            --argjson bmaas_clear "${BMAAS_CLEAR:-false}" \
+            --argjson vmaas_clear_files "${VMAAS_CLEAR_FILES:-[]}" \
+            --argjson caas_clear_files "${CAAS_CLEAR_FILES:-[]}" \
+            --argjson bmaas_clear_files "${BMAAS_CLEAR_FILES:-[]}" \
+            --argjson ambiguous_files "${AMBIGUOUS_FILES:-[]}" \
+            --argjson config_files "${CONFIG_FILES:-[]}" \
+            --argjson netris_relevant_files "${NETRIS_RELEVANT_FILES:-[]}" \
+            --argjson unit_fulfillment_service "${UNIT_FULFILLMENT_SERVICE:-false}" \
+            --argjson unit_osac_metering "${UNIT_OSAC_METERING:-false}" \
+            --argjson unit_osac_metering_adapters "${UNIT_OSAC_METERING_ADAPTERS:-false}" \
+            --argjson unit_osac_metering_schema "${UNIT_OSAC_METERING_SCHEMA:-false}" \
+            --argjson integration_fulfillment_service "${INTEGRATION_FULFILLMENT_SERVICE:-false}" \
+            --argjson integration_osac_operator "${INTEGRATION_OSAC_OPERATOR:-false}" \
+            --argjson integration_bmf_operator "${INTEGRATION_BMF_OPERATOR:-false}" \
+            --argjson integration_osac_aap "${INTEGRATION_OSAC_AAP:-false}" \
+            --argjson helm_osac_operator "${HELM_OSAC_OPERATOR:-false}" \
+            --argjson helm_bmf_operator "${HELM_BMF_OPERATOR:-false}" \
+            --argjson helm_fulfillment_service "${HELM_FULFILLMENT_SERVICE:-false}" \
+            --argjson helm_osac_aap "${HELM_OSAC_AAP:-false}" \
+            --argjson helm_osac_csi_driver "${HELM_OSAC_CSI_DRIVER:-false}" \
+            --argjson helm_osac_metering "${HELM_OSAC_METERING:-false}" \
+            --argjson helm_osac_installer "${HELM_OSAC_INSTALLER:-false}" \
+            --argjson proto_check "${PROTO_CHECK:-false}" \
+            --argjson fulfillment_service_checks "${FULFILLMENT_SERVICE_CHECKS:-false}" \
+            --argjson build_osac_operator "${BUILD_OSAC_OPERATOR:-false}" \
+            --argjson build_bmf_operator "${BUILD_BMF_OPERATOR:-false}" \
+            --argjson ansible_osac_aap "${ANSIBLE_OSAC_AAP:-false}" \
+            --argjson darwin_keychain "${DARWIN_KEYCHAIN:-false}" \
+            '{
+              pr_number: ($pr_number | tonumber),
+              head_sha: $head_sha,
+              deterministic: {vmaas: $vmaas_clear, caas: $caas_clear, bmaas: $bmaas_clear},
+              deterministic_files: {vmaas: $vmaas_clear_files, caas: $caas_clear_files, bmaas: $bmaas_clear_files},
+              ambiguous_files: $ambiguous_files,
+              config_files: $config_files,
+              netris_relevant_files: $netris_relevant_files,
+              jobs: {
+                unit_tests: {
+                  fulfillment_service: $unit_fulfillment_service,
+                  osac_metering: $unit_osac_metering,
+                  osac_metering_adapters: $unit_osac_metering_adapters,
+                  osac_metering_schema: $unit_osac_metering_schema
+                },
+                integration_tests: {
+                  fulfillment_service: $integration_fulfillment_service,
+                  osac_operator: $integration_osac_operator,
+                  bare_metal_fulfillment_operator: $integration_bmf_operator,
+                  osac_aap: $integration_osac_aap
+                },
+                helm_lint: {
+                  osac_operator: $helm_osac_operator,
+                  bare_metal_fulfillment_operator: $helm_bmf_operator,
+                  fulfillment_service: $helm_fulfillment_service,
+                  osac_aap: $helm_osac_aap,
+                  osac_csi_driver: $helm_osac_csi_driver,
+                  osac_metering: $helm_osac_metering,
+                  osac_installer: $helm_osac_installer
+                },
+                checks: {
+                  proto: $proto_check,
+                  fulfillment_service: $fulfillment_service_checks
+                },
+                builds: {
+                  osac_operator: $build_osac_operator,
+                  bare_metal_fulfillment_operator: $build_bmf_operator
+                },
+                lint: {
+                  osac_aap: $ansible_osac_aap,
+                  darwin_keychain: $darwin_keychain
+                }
+              }
+            }' > "${RUNNER_TEMP}/jobs-selection-context/context.json"
+          cat "${RUNNER_TEMP}/jobs-selection-context/context.json"
+
+      - name: Upload context artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: jobs-selection-context
+          path: ${{ runner.temp }}/jobs-selection-context/context.json
+          retention-days: 1

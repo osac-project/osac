@@ -360,7 +360,9 @@ func (s *PrivateComputeInstancesServer) Create(ctx context.Context, request *pri
 	return
 }
 
-// prepareCreate resolves the selected Catalog Item or Template, applies defaults, and validates the final candidate.
+// prepareCreate fills the new VM before it is stored. It selects either a published Catalog
+// Item or a direct Template, applies Catalog rules and Template defaults, then checks the
+// resulting image, instance type, network, and other required inputs.
 func (s *PrivateComputeInstancesServer) prepareCreate(ctx context.Context, candidate *privatev1.ComputeInstance) (warnings []string, err error) {
 	spec := candidate.GetSpec()
 	template, err := s.resolveCreationSource(ctx, candidate)
@@ -376,8 +378,8 @@ func (s *PrivateComputeInstancesServer) prepareCreate(ctx context.Context, candi
 		return
 	}
 
-	// Catalog policies must see the user's original network-attachment presence. If neither
-	// the user nor the catalog supplied attachments, inject the tenant default now.
+	// Apply Catalog rules before adding the tenant's default network. Otherwise a locked
+	// network field could mistake the server-provided attachment for a caller override.
 	if len(spec.GetNetworkAttachments()) == 0 {
 		err = s.injectDefaultNetworkAttachments(ctx, candidate)
 		if err != nil {
@@ -423,8 +425,9 @@ func (s *PrivateComputeInstancesServer) prepareCreate(ctx context.Context, candi
 	return
 }
 
-// validateCatalogItemStorageTiers resolves the materialized disk tiers under the request transaction.
-// It canonicalizes references and rejects unusable tiers; backend selection belongs to volume provisioning.
+// validateCatalogItemStorageTiers checks tiers copied from Catalog disk policies after the
+// final disk list is known. It stores each tier's actual ID and name and rejects inactive
+// tiers; volume provisioning chooses the backend later.
 func (s *PrivateComputeInstancesServer) validateCatalogItemStorageTiers(ctx context.Context, instance *privatev1.ComputeInstance) error {
 	spec := instance.GetSpec()
 	disks := append([]*privatev1.ComputeInstanceDisk{spec.GetBootDisk()}, spec.GetAdditionalDisks()...)
@@ -445,7 +448,9 @@ func (s *PrivateComputeInstancesServer) validateCatalogItemStorageTiers(ctx cont
 	return nil
 }
 
-// resolveCreationSource enforces source exclusivity and returns the Template selected directly or by the Catalog Item.
+// resolveCreationSource accepts exactly one provisioning source: spec.catalog_item or
+// spec.template. For a Catalog Item it finds the item's Template and applies its field rules;
+// for a direct Template it resolves that reference under the VM's assigned tenant/project.
 func (s *PrivateComputeInstancesServer) resolveCreationSource(ctx context.Context,
 	candidate *privatev1.ComputeInstance) (*privatev1.ComputeInstanceTemplate, error) {
 	spec := candidate.GetSpec()
@@ -541,7 +546,9 @@ func (s *PrivateComputeInstancesServer) Signal(ctx context.Context,
 	return
 }
 
-// applyComputeTemplate resolves parameters, applies defaults, and records the canonical Template.
+// applyComputeTemplate validates the VM's Template parameters, fills omitted spec fields from
+// the Template, and stores the Template's actual ID, name, and scope on the VM. References
+// copied from a shared Template retain that scope when the VM belongs to a tenant.
 func (s *PrivateComputeInstancesServer) applyComputeTemplate(
 	instance *privatev1.ComputeInstance,
 	template *privatev1.ComputeInstanceTemplate,
@@ -567,8 +574,9 @@ func (s *PrivateComputeInstancesServer) applyComputeTemplate(
 	return utils.ValidateRequiredSpecFields(spec)
 }
 
-// validateInstanceType canonicalizes the materialized reference and validates the resolved type's lifecycle state.
-// The resource retains the reference without copying the type's cores or memory fields.
+// validateInstanceType checks the instance type selected by the caller, Catalog policy, or
+// Template and fills its stored ID/name/scope. The VM keeps the reference; the controller
+// reads cores and memory from the type later.
 func (s *PrivateComputeInstancesServer) validateInstanceType(
 	ctx context.Context,
 	ci *privatev1.ComputeInstance,
@@ -589,7 +597,8 @@ func (s *PrivateComputeInstancesServer) validateInstanceType(
 	return validateResolvedInstanceType(resolved, identifier, "")
 }
 
-// validateDiskImage resolves and canonicalizes the materialized reference and returns lifecycle warnings.
+// validateDiskImage checks the image selected by the caller, Catalog policy, or Template and
+// stores its actual ID/name/scope. Deprecated images produce a warning; obsolete ones fail.
 func (s *PrivateComputeInstancesServer) validateDiskImage(
 	ctx context.Context,
 	ci *privatev1.ComputeInstance,
@@ -1056,7 +1065,9 @@ func (s *PrivateComputeInstancesServer) validateNetworkReferencesState(
 	return nil
 }
 
-// resolveCatalogItem applies catalog policies and returns the materialized Template.
+// resolveCatalogItem finds the VM's published Catalog Item in the VM's selected tenant/project
+// or shared scope, then finds the item's Template under the item's ownership. It applies locked
+// and editable field and parameter rules to the new VM and returns that Template for defaults.
 func (s *PrivateComputeInstancesServer) resolveCatalogItem(
 	ctx context.Context, ci *privatev1.ComputeInstance,
 ) (*privatev1.ComputeInstanceTemplate, error) {

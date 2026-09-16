@@ -214,8 +214,10 @@ func (s *PrivateBareMetalInstanceCatalogItemsServer) Update(ctx context.Context,
 	return
 }
 
-// prepareCatalogItemCandidate validates and canonicalizes a detached catalog after ownership preparation
-// or PATCH merging. It returns validation errors and any supported lifecycle warnings.
+// prepareCatalogItemCandidate checks the Catalog Item that Create or Update would store.
+// GenericServer has assigned its tenant on Create or merged the update mask on Update, so
+// references are checked against that complete item. Recheck dependencies when an offering
+// changes or is published; descriptive edits and unpublishing need no new dependency lookup.
 func (s *PrivateBareMetalInstanceCatalogItemsServer) prepareCatalogItemCandidate(
 	ctx context.Context, current *privatev1.BareMetalInstanceCatalogItem, candidate *privatev1.BareMetalInstanceCatalogItem,
 ) ([]string, error) {
@@ -240,7 +242,10 @@ func (s *PrivateBareMetalInstanceCatalogItemsServer) prepareCatalogItemCandidate
 	return validateAndCanonicalizeBareMetalInstanceCatalogItemPolicies(ctx, candidate, s.bareMetalInstanceTypesDao, s.diskImagesDao, s.subnetsDao, s.securityGroupsDao)
 }
 
-// validateAndCanonicalizeTemplate resolves the candidate Template under catalog ownership, enforces immutable identity, and validates parameter policies.
+// validateAndCanonicalizeTemplate finds the Template named by this Catalog Item. A name lookup
+// starts in the item's tenant/project; project or shared selectors can choose another scope.
+// It stores the Template's actual ID/name/scope, checks parameter policies against that
+// Template, and forbids changing the Template on Update.
 func (s *PrivateBareMetalInstanceCatalogItemsServer) validateAndCanonicalizeTemplate(
 	ctx context.Context, current *privatev1.BareMetalInstanceCatalogItem, candidate *privatev1.BareMetalInstanceCatalogItem,
 ) error {

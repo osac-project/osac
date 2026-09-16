@@ -24,11 +24,11 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
-// validateAndCanonicalizeClusterCatalogItemPolicies validates a detached Catalog Item's field policies for authoring.
-// Scalar values are checked and dependency references are canonicalized in the item's prepared
-// tenant/project scope. Call within the request transaction; locks last until it ends.
-// The candidate may be partially changed on error and must then be discarded.
-// It returns the first validation error; publication and Template-parameter checks run separately.
+// validateAndCanonicalizeClusterCatalogItemPolicies checks the locked values and editable defaults
+// of the Cluster Catalog Item being saved. It resolves version, secret, network, and HostType
+// references using each field's full or local reference rules, then stores target IDs and names
+// in the policy. The request transaction holds dependency locks until the save ends.
+// On error, the caller discards this copy of the item; Template parameters are checked separately.
 func validateAndCanonicalizeClusterCatalogItemPolicies(
 	ctx context.Context,
 	item *privatev1.ClusterCatalogItem,
@@ -74,11 +74,11 @@ func validateAndCanonicalizeClusterCatalogItemPolicies(
 	return validateClusterCatalogItemNodeSetPolicy(ctx, item, template, hostTypesDao)
 }
 
-// applyClusterCatalogItemPolicies applies Catalog Item field governance to a detached resource spec.
-// It rejects supplied locked fields, preserves supplied editable values, and clones locked/default
-// values into omitted fields. Scalar presence includes zero/false/empty strings; empty collections
-// retain their existing omitted-input meaning. Discard the partially modified spec on error.
-// Reference resolution, Template defaults, normal defaults, and requiredness run separately afterward.
+// applyClusterCatalogItemPolicies merges the offering's field rules into a new Cluster spec.
+// It rejects caller values for locked fields, keeps caller values for editable fields, and copies
+// locked/default values into omitted fields. Explicit zero, false, and empty strings count as
+// supplied; empty collections follow their existing omitted-input behavior. The caller discards
+// this spec on error and resolves copied references and Template defaults afterward.
 func applyClusterCatalogItemPolicies(spec *privatev1.ClusterSpec, fields *privatev1.ClusterCatalogItemFields) error {
 	if spec == nil || fields == nil {
 		return nil
@@ -172,7 +172,9 @@ func validateClusterCatalogItemVersionPolicy(
 	return nil
 }
 
-// validateClusterCatalogItemPullSecretPolicy canonicalizes a locked/default local secret in Catalog Item scope, rejecting shared Catalog Item locked/default values.
+// validateClusterCatalogItemPullSecretPolicy checks a locked pull secret or editable default
+// in the Catalog Item's exact tenant/project and stores its ID/name. A shared offering cannot
+// set a tenant-local secret for every tenant, so it may only leave this field editable.
 func validateClusterCatalogItemPullSecretPolicy(
 	ctx context.Context,
 	scope referenceScope,
@@ -248,7 +250,9 @@ func validateClusterCatalogItemScalarPolicies(fields *privatev1.ClusterCatalogIt
 	return nil
 }
 
-// validateClusterCatalogItemNetworkAttachmentPolicy canonicalizes local network references and checks readiness and virtual-network compatibility.
+// validateClusterCatalogItemNetworkAttachmentPolicy checks the governed subnet and security
+// groups in the Catalog Item's exact tenant/project. It stores their IDs and names only after
+// readiness and virtual-network compatibility checks pass.
 func validateClusterCatalogItemNetworkAttachmentPolicy(
 	ctx context.Context,
 	scope referenceScope,
@@ -339,10 +343,11 @@ func validateClusterCatalogItemNodeSetMap(field string, nodeSets map[string]*pri
 	return nil
 }
 
-// validateClusterCatalogItemNodeSetPolicy resolves and canonicalizes HostTypes in a detached node-set policy.
-// Supplied references use Catalog Item scope; omitted references inherit the Template's selectors.
-// Resolved IDs must agree with the corresponding Template node set. Shape and size checks run
-// before this function. Dependency locks belong to the request transaction; the Template is not mutated.
+// validateClusterCatalogItemNodeSetPolicy checks HostType references in each governed node set.
+// A supplied name is looked up from the Catalog Item's tenant/project or explicit shared scope;
+// an omitted HostType inherits the corresponding Template node set's reference. The resolved ID
+// must match the Template's HostType. The item receives the resolved references, while the
+// Template stays unchanged; dependency locks last through the request transaction.
 func validateClusterCatalogItemNodeSetPolicy(
 	ctx context.Context,
 	item *privatev1.ClusterCatalogItem,

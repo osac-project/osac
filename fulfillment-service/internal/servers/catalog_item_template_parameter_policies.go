@@ -24,9 +24,10 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
-// validateCatalogItemTemplateParameterPolicies checks named Catalog Item policies against the selected Template's definitions.
-// Names are validated in sorted order for stable errors. Unsupported types, invalid policy behaviors,
-// and malformed encoded values are rejected without mutating either the Template or policies.
+// validateCatalogItemTemplateParameterPolicies checks that every governed parameter exists on
+// the selected Template and that each locked/default value has the Template's declared type.
+// For example, a Template integer parameter cannot receive a string default. It checks names
+// in sorted order for stable errors and does not change the Template or policies.
 func validateCatalogItemTemplateParameterPolicies(template utils.Template, policies map[string]*privatev1.TemplateParameterPolicy) error {
 	definitions := make(map[string]utils.TemplateParameterDefinition)
 	for _, parameter := range template.GetParameters() {
@@ -50,9 +51,10 @@ func validateCatalogItemTemplateParameterPolicies(template utils.Template, polic
 	return nil
 }
 
-// applyCatalogItemTemplateParameterPolicies validates governance and returns a detached map of Template inputs.
-// Supplied locked parameters are rejected; supplied editable values win over policy defaults.
-// Neither input map is changed. Template defaults and final requiredness are handled afterward.
+// applyCatalogItemTemplateParameterPolicies combines the caller's Template parameters with the
+// Catalog Item's rules. For example, if "size" is locked to 2, a caller-supplied "size" is
+// rejected; if it is editable with default 2, the caller's value wins and 2 is used only when
+// omitted. The returned map is a copy; Template defaults and required-parameter checks run later.
 func applyCatalogItemTemplateParameterPolicies(
 	template utils.Template,
 	policies map[string]*privatev1.TemplateParameterPolicy,

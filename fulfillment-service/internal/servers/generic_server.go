@@ -43,9 +43,10 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
-// PrepareCandidateFunc validates or transforms a prepared candidate before persistence.
-// Current is nil on Create; on Update it contains the stored object before merging.
-// Only the candidate is persisted, and a returned error discards its changes.
+// PrepareCandidateFunc may modify the proposed object (candidate) before it is returned or saved.
+// On Create, current is nil. On Update, current is a copy of the stored object before the request
+// changes, and candidate is a separate copy containing those changes. Returning an error rejects
+// the operation without changing the request or stored object.
 type PrepareCandidateFunc[O dao.Object] func(ctx context.Context, current, candidate O) error
 
 // GenericServerBuilder contains the data and logic needed to create new generic servers.
@@ -280,7 +281,7 @@ func (b *GenericServerBuilder[O]) Build() (result *GenericServer[O], err error) 
 		return
 	}
 
-	// Prepare the template for the object:
+	// Keep an empty object to clone when a Create request omits one:
 	var object O
 	reflect := object.ProtoReflect()
 	s.template = reflect.New().Interface()
@@ -294,8 +295,7 @@ func (b *GenericServerBuilder[O]) Build() (result *GenericServer[O], err error) 
 		return
 	}
 
-	// Prepare templates for the request and response types. These are empty messages that will be cloned when
-	// it is necessary to create new instances.
+	// Find the request and response types for each method. Responses are cloned when needed.
 	s.listRequest, s.listResponse, err = b.findRequestAndResponse(service, listMethod)
 	if err != nil {
 		return
@@ -522,8 +522,9 @@ func (s *GenericServer[O]) Create(ctx context.Context, request any, response any
 	return s.CreateWithCandidatePreparation(ctx, request, response, nil)
 }
 
-// CreateWithCandidatePreparation prepares ownership metadata, lets the caller materialize and validate the candidate,
-// validates the result again, and then either returns it for dry-run or persists it.
+// CreateWithCandidatePreparation copies the requested object and assigns its creator and tenant.
+// If provided, prepareCandidate may modify that copy before its final validation. A successful
+// request saves the result; a dry run returns it without saving.
 func (s *GenericServer[O]) CreateWithCandidatePreparation(
 	ctx context.Context,
 	request any,
@@ -669,7 +670,9 @@ func (s *GenericServer[O]) checkAllowedTenant(tenant string) error {
 	return nil
 }
 
-// validatePreparedCandidate ensures preparation retained the server-assigned identity and produced a valid object.
+// validatePreparedCandidate checks the object after preparation. The callback may change its
+// contents, but not the ID, creator, tenant, or project established before the callback. The
+// resulting metadata and object must also pass validation.
 func (s *GenericServer[O]) validatePreparedCandidate(
 	ctx context.Context, candidate O, preparedID string, preparedMetadata metadataIface,
 ) error {
@@ -714,8 +717,10 @@ func (s *GenericServer[O]) Update(ctx context.Context, request any, response any
 	return s.UpdateWithCandidatePreparation(ctx, request, response, nil)
 }
 
-// UpdateWithCandidatePreparation merges the update into a detached candidate, lets the caller apply resource semantics,
-// validates the result again, and persists it only when it differs from the stored object.
+// UpdateWithCandidatePreparation builds a proposed object by applying masked fields to a copy
+// of the stored object, or copying the full request when there is no mask. If provided, the
+// callback sees a separate copy of the stored object and may modify the proposal. The result
+// is validated, then saved only if it differs from the stored object.
 func (s *GenericServer[O]) UpdateWithCandidatePreparation(
 	ctx context.Context,
 	request any,

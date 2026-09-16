@@ -298,7 +298,9 @@ func (s *PrivateClustersServer) Create(ctx context.Context, request *privatev1.C
 	return
 }
 
-// prepareCreate resolves the selected Catalog Item or Template, applies defaults, and validates the final candidate.
+// prepareCreate fills the new Cluster before it is stored. It selects either a published
+// Catalog Item or a direct Template, applies Catalog rules and Template defaults, then
+// checks the resulting network, node sets, and other required inputs.
 func (s *PrivateClustersServer) prepareCreate(ctx context.Context, candidate *privatev1.Cluster) (err error) {
 	// Ensure sane defaults:
 	s.setDefaults(candidate)
@@ -352,7 +354,9 @@ func (s *PrivateClustersServer) prepareCreate(ctx context.Context, candidate *pr
 	return
 }
 
-// resolveCreationSource enforces source exclusivity and returns the Template selected directly or by the Catalog Item.
+// resolveCreationSource accepts exactly one provisioning source: spec.catalog_item or
+// spec.template. For a Catalog Item it finds the item's Template and applies its field rules;
+// for a direct Template it resolves that reference under the Cluster's assigned tenant/project.
 func (s *PrivateClustersServer) resolveCreationSource(ctx context.Context,
 	candidate *privatev1.Cluster) (*privatev1.ClusterTemplate, error) {
 	spec := candidate.GetSpec()
@@ -755,8 +759,9 @@ func (s *PrivateClustersServer) validateNodeSetHostTypeImmutability(
 	return nil
 }
 
-// validateClusterTemplateImmutability checks merged Template and parameter values and preserves weak provenance.
-// It only mutates the detached candidate's catalog reference and never reads the catalog.
+// validateClusterTemplateImmutability checks that Update keeps the Cluster's original Template
+// and parameters. It also preserves the stored spec.catalog_item as history, so a normal Update
+// works after that Catalog Item is deleted without reading the deleted item.
 func validateClusterTemplateImmutability(current, candidate *privatev1.Cluster, mask *fieldmaskpb.FieldMask) error {
 	oldSpec, newSpec := current.GetSpec(), candidate.GetSpec()
 	// Preserve the legacy unmasked Update behavior for omitted immutable inputs.
@@ -1272,6 +1277,9 @@ func (s *PrivateClustersServer) resolveClusterNodeSets(ctx context.Context, clus
 	return nil
 }
 
+// resolveCatalogItem finds the Cluster's published Catalog Item in the selected tenant/project
+// or shared scope, then finds the item's Template under the item's ownership. It applies locked
+// and editable field and parameter rules and returns that Template for defaults.
 func (s *PrivateClustersServer) resolveCatalogItem(ctx context.Context,
 	cluster *privatev1.Cluster) (*privatev1.ClusterTemplate, error) {
 	if cluster == nil {

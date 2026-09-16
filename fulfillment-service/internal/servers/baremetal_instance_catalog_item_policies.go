@@ -24,11 +24,11 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
-// validateAndCanonicalizeBareMetalInstanceCatalogItemPolicies validates a detached Catalog Item's field policies for authoring.
-// Scalar values are checked and dependency references are canonicalized in the item's prepared
-// tenant/project scope. Call within the request transaction; locks last until it ends.
-// The candidate may be partially changed on error and must then be discarded.
-// It returns lifecycle warnings and the first validation error.
+// validateAndCanonicalizeBareMetalInstanceCatalogItemPolicies checks the locked values and editable
+// defaults of the Catalog Item being saved. It resolves instance type, image, and network
+// references using each field's full or local reference rules, then stores target IDs and names
+// in the policy. The request transaction holds dependency locks until the save ends.
+// On error, the caller discards this copy of the item. Deprecated images produce warnings.
 func validateAndCanonicalizeBareMetalInstanceCatalogItemPolicies(
 	ctx context.Context,
 	item *privatev1.BareMetalInstanceCatalogItem,
@@ -64,11 +64,11 @@ func validateAndCanonicalizeBareMetalInstanceCatalogItemPolicies(
 	return warnings, nil
 }
 
-// applyBareMetalInstanceCatalogItemPolicies applies Catalog Item field governance to a detached resource spec.
-// It rejects supplied locked fields, preserves supplied editable values, and clones locked/default
-// values into omitted fields. Scalar presence includes zero/false/empty strings; empty collections
-// retain their existing omitted-input meaning. Discard the partially modified spec on error.
-// Reference resolution, Template defaults, normal defaults, and requiredness run separately afterward.
+// applyBareMetalInstanceCatalogItemPolicies merges the offering's field rules into a new bare
+// metal instance spec. It rejects caller values for locked fields, keeps caller values for
+// editable fields, and copies locked/default values into omitted fields. Explicit zero, false,
+// and empty strings count as supplied; empty collections follow their existing omitted-input
+// behavior. The caller discards this spec on error and resolves copied references afterward.
 func applyBareMetalInstanceCatalogItemPolicies(
 	spec *privatev1.BareMetalInstanceSpec,
 	fields *privatev1.BareMetalInstanceCatalogItemFields,
@@ -124,7 +124,9 @@ func validateBareMetalInstanceCatalogItemScalarPolicies(fields *privatev1.BareMe
 	return validateCatalogItemBoolPolicy(fields.GetAutoExternalIpAttachment(), "fields.auto_external_ip_attachment")
 }
 
-// validateBareMetalInstanceCatalogItemInstanceTypePolicy resolves and canonicalizes a tenant-local instance type in Catalog Item scope.
+// validateBareMetalInstanceCatalogItemInstanceTypePolicy checks a locked instance type or
+// editable default in the Catalog Item's exact tenant/project and stores its ID/name. A shared
+// offering cannot fix a tenant-local type.
 func validateBareMetalInstanceCatalogItemInstanceTypePolicy(
 	ctx context.Context,
 	scope referenceScope,
@@ -172,7 +174,9 @@ func validateBareMetalInstanceCatalogItemInstanceTypePolicy(
 	return nil
 }
 
-// validateBareMetalInstanceCatalogItemNetworkPolicy validates and canonicalizes local network policy references in Catalog Item scope.
+// validateBareMetalInstanceCatalogItemNetworkPolicy checks each governed subnet and security
+// group in the Catalog Item's exact tenant/project, then stores their IDs and names. A shared
+// offering cannot fix tenant-local network attachments.
 func validateBareMetalInstanceCatalogItemNetworkPolicy(
 	ctx context.Context,
 	scope referenceScope,

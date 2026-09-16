@@ -29,25 +29,11 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
-// validateDiskImageState looks up a DiskImage by id or name through the tenant-filtered DAO and
-// validates its lifecycle. It returns the resolved DiskImage (callers such as the ComputeInstance
-// handler backfill id/name onto the stored reference), a warning for DEPRECATED images, an error
-// for OBSOLETE or not-found images, and (nil, nil, nil) when key is empty. source adds context to
-// error messages (e.g. " in spec_defaults", " in fields.disk_image"); pass "" when validating directly on a
-// ComputeInstance. Shared by the ComputeInstance, ComputeInstanceTemplate, and CatalogItem servers,
-// mirroring validateInstanceTypeState.
-//
-// Names are unique only per tenant, so a lookup by name may match several rows (a shared image plus
-// same-name tenant images). preferredTenant breaks the tie: the preferred-tenant image wins, then
-// the shared image, otherwise the ambiguity is an InvalidArgument. Callers pass their default tenant
-// (own tenant for a tenant-scoped caller, shared for an admin; see
-// auth.TenancyLogic.DetermineDefaultTenant). A key that is an id matches at most one row, so callers
-// that always pass an id (ComputeInstance, ComputeInstanceTemplate) can pass an empty preferredTenant.
-//
-// Error codes follow the instance_type / ComputeInstance handlers: NotFound for missing,
-// FailedPrecondition for OBSOLETE, a warning for DEPRECATED. A cross-tenant reference resolves to
-// zero rows under the DAO's tenancy filter and collapses into the not-found case, avoiding any leak
-// of cross-tenant existence.
+// validateDiskImageState checks an image named in Template spec_defaults. The caller-visible
+// lookup prefers preferredTenant when a name exists in several tenants, then falls back to
+// shared; an ID identifies one image directly. It returns a warning for a deprecated image,
+// an error for an obsolete or missing image, and no result for an empty key. source names the
+// referencing field in errors, such as " in spec_defaults".
 func validateDiskImageState(
 	ctx context.Context,
 	diskImagesDao *dao.GenericDAO[*privatev1.DiskImage],
@@ -106,10 +92,13 @@ func resolveDiskImage(
 	return diskImage, nil
 }
 
-// resolveDiskImageReference resolves and locks a DiskImage dependency without changing its reference.
-// An unqualified name prefers the owning tenant, then shared images; explicit selectors use the
-// selected scope and IDs use caller-visible objects. Ownership is checked, but lifecycle validation
-// is left to the caller. The context must contain the request transaction.
+// resolveDiskImageReference finds the image named by a Catalog policy or resource.
+// If acme/apps and shared/apps both have "fedora", {name: "fedora"} prefers acme, while
+// {name: "fedora", shared: true} selects shared. Use project when the shared image is in a
+// different project. An ID selects a caller-visible image directly.
+// The image must belong to the owner tenant or shared tenant; callers check its lifecycle and
+// fill the stored reference after this function returns. The image stays locked until the request
+// transaction ends.
 func resolveDiskImageReference(ctx context.Context, resourceDao *dao.GenericDAO[*privatev1.DiskImage], scope referenceScope, ref *privatev1.DiskImageReference, source string) (*privatev1.DiskImage, error) {
 	var err error
 	var resolved *privatev1.DiskImage
@@ -165,14 +154,9 @@ func validateResolvedDiskImage(diskImage *privatev1.DiskImage, key, source strin
 	return warnings, nil
 }
 
-// resolvePreferredDiskImage breaks a disk-image name collision deterministically. Names are unique
-// only per tenant, so a shared image and one or more same-name tenant images can coexist. The image
-// owned by preferredTenant wins; failing that, the shared image; failing that, the collision is a
-// genuine ambiguity (e.g. a provider admin naming a name held by several tenants but by no shared
-// image) and is reported as InvalidArgument. Each candidate is fetched with an explicit tenant
-// filter (on top of the DAO's own tenancy filter) so the choice is exact regardless of how many
-// tenants share the name. An empty preferredTenant yields no candidate tenants and falls straight
-// through to the ambiguity error.
+// resolvePreferredDiskImage chooses between visible images with the same name: first the
+// preferred tenant, then shared. If neither owns one, the name remains ambiguous. For example,
+// an admin who can see "fedora" in two unrelated tenants must use an ID rather than that name alone.
 func resolvePreferredDiskImage(
 	ctx context.Context,
 	diskImagesDao *dao.GenericDAO[*privatev1.DiskImage],

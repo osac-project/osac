@@ -25,11 +25,11 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
-// validateAndCanonicalizeComputeInstanceCatalogItemPolicies validates a detached Catalog Item's field policies for authoring.
-// Scalar values are checked and dependency references are canonicalized in the item's prepared
-// tenant/project scope. Call within the request transaction; locks last until it ends.
-// The candidate may be partially changed on error and must then be discarded.
-// It returns lifecycle warnings and the first validation error.
+// validateAndCanonicalizeComputeInstanceCatalogItemPolicies checks the locked values and editable
+// defaults of the Catalog Item being saved. It resolves image, instance type, storage, and network
+// references using each field's full or local reference rules, then stores target IDs and names
+// in the policy. The request transaction holds dependency locks until the save ends.
+// On error, the caller discards this copy of the item. Deprecated targets produce warnings.
 func validateAndCanonicalizeComputeInstanceCatalogItemPolicies(
 	ctx context.Context,
 	item *privatev1.ComputeInstanceCatalogItem,
@@ -70,11 +70,11 @@ func validateAndCanonicalizeComputeInstanceCatalogItemPolicies(
 	return warnings, validateComputeInstanceCatalogItemScalarPolicies(fields)
 }
 
-// applyComputeInstanceCatalogItemPolicies applies Catalog Item field governance to a detached resource spec.
-// It rejects supplied locked fields, preserves supplied editable values, and clones locked/default
-// values into omitted fields. Scalar presence includes zero/false/empty strings; empty collections
-// retain their existing omitted-input meaning. Discard the partially modified spec on error.
-// Reference resolution, Template defaults, normal defaults, and requiredness run separately afterward.
+// applyComputeInstanceCatalogItemPolicies merges the offering's field rules into a new VM spec.
+// It rejects caller values for locked fields, keeps caller values for editable fields, and copies
+// locked/default values into omitted fields. Explicit zero, false, and empty strings count as
+// supplied; empty collections follow their existing omitted-input behavior. The caller discards
+// this spec on error and resolves copied references and Template defaults afterward.
 func applyComputeInstanceCatalogItemPolicies(spec *privatev1.ComputeInstanceSpec, fields *privatev1.ComputeInstanceCatalogItemFields) error {
 	if spec == nil || fields == nil {
 		return nil
@@ -134,7 +134,9 @@ func applyComputeInstanceCatalogItemBootDiskPolicies(
 	return nil
 }
 
-// validateComputeInstanceCatalogItemInstanceTypePolicy resolves and canonicalizes a locked/default type in Catalog Item scope, returning lifecycle warnings or an error.
+// validateComputeInstanceCatalogItemInstanceTypePolicy checks a locked instance type or editable
+// default when the offering is saved. It stores the resolved ID/name/scope and warns if the type
+// is deprecated.
 func validateComputeInstanceCatalogItemInstanceTypePolicy(
 	ctx context.Context,
 	scope referenceScope,
@@ -275,7 +277,9 @@ func validateComputeInstanceCatalogItemAdditionalDisksPolicy(
 	return nil
 }
 
-// validateComputeInstanceCatalogItemNetworkAttachmentsPolicy resolves local policy references in Catalog Item scope and checks readiness and network compatibility.
+// validateComputeInstanceCatalogItemNetworkAttachmentsPolicy checks each governed subnet and
+// security group in the Catalog Item's exact tenant/project. It stores their IDs and names only
+// after readiness and virtual-network compatibility checks pass.
 func validateComputeInstanceCatalogItemNetworkAttachmentsPolicy(
 	ctx context.Context,
 	scope referenceScope,

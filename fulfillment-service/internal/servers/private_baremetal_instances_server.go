@@ -327,7 +327,9 @@ func (s *PrivateBareMetalInstancesServer) Create(ctx context.Context, request *p
 	return
 }
 
-// prepareCreate resolves the selected Catalog Item or Template, applies defaults, and validates the final candidate.
+// prepareCreate fills the new bare metal instance before it is stored. It selects either a
+// published Catalog Item or a direct Template, applies Catalog rules and Template defaults,
+// then checks the resulting image, network, and other required inputs.
 func (s *PrivateBareMetalInstancesServer) prepareCreate(ctx context.Context, candidate *privatev1.BareMetalInstance) (warnings []string, err error) {
 	template, err := s.resolveCreationSource(ctx, candidate)
 	if err != nil {
@@ -392,7 +394,9 @@ func (s *PrivateBareMetalInstancesServer) prepareCreate(ctx context.Context, can
 	return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "disk_image is mandatory")
 }
 
-// resolveCreationSource enforces source exclusivity and returns the Template selected directly or by the Catalog Item.
+// resolveCreationSource accepts exactly one provisioning source: spec.catalog_item or
+// spec.template. For a Catalog Item it finds the item's Template and applies its field rules;
+// for a direct Template it resolves that reference under the instance's assigned tenant/project.
 func (s *PrivateBareMetalInstancesServer) resolveCreationSource(ctx context.Context,
 	candidate *privatev1.BareMetalInstance) (*privatev1.BareMetalInstanceTemplate, error) {
 	spec := candidate.GetSpec()
@@ -718,7 +722,9 @@ func (s *PrivateBareMetalInstancesServer) resolveDefaultInterface(
 		"host type '%s' has no fabric-role interface for default network attachment", hostTypeID)
 }
 
-// resolveCatalogItem resolves the Catalog-owned Template and applies Catalog policies.
+// resolveCatalogItem finds the instance's published Catalog Item in the selected tenant/project
+// or shared scope, then finds the item's Template under the item's ownership. It applies locked
+// and editable field and parameter rules and returns that Template for defaults.
 func (s *PrivateBareMetalInstancesServer) resolveCatalogItem(ctx context.Context,
 	bmi *privatev1.BareMetalInstance) (*privatev1.BareMetalInstanceTemplate, error) {
 	if bmi == nil {
@@ -763,7 +769,8 @@ func (s *PrivateBareMetalInstancesServer) resolveCatalogItem(ctx context.Context
 	return resolvedTemplate, nil
 }
 
-// applyBareMetalTemplate applies defaults and validates the resolved parameter set.
+// applyBareMetalTemplate validates the instance's Template parameters, fills omitted parameter
+// values from the Template, and stores the Template's actual ID, name, and scope.
 func (s *PrivateBareMetalInstancesServer) applyBareMetalTemplate(bmi *privatev1.BareMetalInstance, template *privatev1.BareMetalInstanceTemplate) error {
 	providedParams := bmi.GetSpec().GetTemplateParameters()
 	if len(template.GetParameters()) != 0 || len(providedParams) != 0 {

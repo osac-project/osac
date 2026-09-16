@@ -89,8 +89,9 @@ func (b *ReferenceValidatorBuilder) SetMetricsRegisterer(value prometheus.Regist
 	return b
 }
 
-// SetExcludedReferencePaths configures exact request-relative reference paths that the interceptor
-// should skip for the supplied methods.
+// SetExcludedReferencePaths skips the given request fields for the specified methods.
+// Paths are relative to the request message, such as "object.spec.target"; skipping a
+// message also skips references nested inside it. Other paths use registered lookups.
 func (b *ReferenceValidatorBuilder) SetExcludedReferencePaths(
 	methods []string, paths ...string,
 ) *ReferenceValidatorBuilder {

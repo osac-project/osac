@@ -26,8 +26,9 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
-// policyState records the selected locked value or editable default, including explicit scalar zero values.
-// Values may alias the policy; application must clone mutable values before assigning them.
+// policyState records whether a field has a locked value or an editable default. It keeps
+// explicit zero, false, and empty-string values distinct from an omitted default. Reference
+// values may still point into the policy and must be copied before assignment to a resource.
 type policyState[T any] struct {
 	hasLocked    bool
 	lockedValue  T
@@ -35,11 +36,10 @@ type policyState[T any] struct {
 	defaultValue T
 }
 
-// applyPolicy applies one typed Catalog Item policy through set on a detached resource candidate.
-// A supplied locked field is rejected even when its value matches. Supplied editable fields are
-// retained; omitted fields receive cloned locked/default values. The caller defines presence,
-// including the existing empty-collection semantics, and must discard the candidate on error.
-// This helper performs no reference lookup, Template defaulting, or resource validation.
+// applyPolicy applies one Catalog Item field rule to an object being created. A locked value
+// rejects any caller-supplied value, even an equal one. An editable value keeps caller input or
+// fills an omitted field from the policy default. The caller supplies the presence check and
+// copy function; reference lookup and other defaulting happen outside this helper.
 func applyPolicy[T any, P any](policy *P, present bool, set func(T), decode func(*P) (policyState[T], error), clone func(T) T) error {
 	if policy == nil {
 		return nil
@@ -62,8 +62,7 @@ func applyPolicy[T any, P any](policy *P, present bool, set func(T), decode func
 	return nil
 }
 
-// cloneMessage copies the collection and its protobuf values, retaining nil entries.
-// The result can be modified without changing the source policy.
+// cloneMessage copies a protobuf value so changing the destination cannot change its source.
 func cloneMessage[T proto.Message](value T) T {
 	return proto.Clone(value).(T)
 }
@@ -251,8 +250,9 @@ func validateCatalogItemBoolPolicy(policy *privatev1.BoolFieldPolicy, field stri
 	return nil
 }
 
-// validateSharedCatalogItemLocalReferencePolicy rejects locked/default local references in shared Catalog Items.
-// Editable policies without a value remain allowed because the provisioning caller supplies the local reference.
+// validateSharedCatalogItemLocalReferencePolicy rejects a shared offering that fixes a
+// tenant-local dependency. Other tenants could not use that locked value or default; an
+// editable field without a default lets each caller supply its own local reference.
 func validateSharedCatalogItemLocalReferencePolicy(scope referenceScope, field string, hasLocked, hasDefault bool) error {
 	if scope.tenant == auth.SharedTenant && (hasLocked || hasDefault) {
 		return catalogItemPolicyError(field, "shared catalog items cannot define a locked or default tenant-local reference")
@@ -269,9 +269,10 @@ func validateCatalogItemNetworkAttachmentsNotEmpty[T any](field string, state po
 	return nil
 }
 
-// validateCatalogItemDiskImagePolicy resolves the locked/default DiskImage in the Catalog Item owner scope and checks usability.
-// It canonicalizes the detached policy and returns lifecycle warnings or the first error.
-// The context must contain the request transaction; dependency locks last until that transaction ends.
+// validateCatalogItemDiskImagePolicy checks a locked image or editable image default when an
+// offering is saved. A name-only reference prefers the item's tenant image, then a shared image;
+// explicit project/shared selectors choose their scope. It stores the image's ID/name/scope in
+// the policy and holds a dependency lock through the request transaction.
 func validateCatalogItemDiskImagePolicy(
 	ctx context.Context,
 	scope referenceScope,
@@ -305,9 +306,9 @@ func validateCatalogItemDiskImagePolicy(
 	return warnings, nil
 }
 
-// resolveCatalogItemSubnet locks a subnet in the policy owner's exact tenant/project and checks
-// deletion and readiness. Diagnostic locations preserve the lookup, deletion, and attachment-level
-// errors used by each resource type. The returned object is not copied or assigned to the policy.
+// resolveCatalogItemSubnet finds a local subnet in the Catalog Item's exact tenant/project,
+// then rejects it if deletion has started or it is not ready. The caller fills the policy
+// reference from the returned subnet.
 func resolveCatalogItemSubnet(
 	ctx context.Context,
 	resourceDao *dao.GenericDAO[*privatev1.Subnet],
@@ -329,9 +330,9 @@ func resolveCatalogItemSubnet(
 	return resolved, nil
 }
 
-// resolveCatalogItemSecurityGroup locks a security group in the policy owner's exact scope and
-// checks deletion, readiness, and virtual-network compatibility. Diagnostic locations have the same
-// meaning as in resolveCatalogItemSubnet. An empty virtualNetworkID leaves compatibility unchecked.
+// resolveCatalogItemSecurityGroup finds a local security group in the Catalog Item's exact
+// tenant/project. It checks deletion, readiness, and whether the group belongs to the selected
+// subnet's virtual network. An empty virtualNetworkID skips the last check.
 func resolveCatalogItemSecurityGroup(
 	ctx context.Context,
 	resourceDao *dao.GenericDAO[*privatev1.SecurityGroup],

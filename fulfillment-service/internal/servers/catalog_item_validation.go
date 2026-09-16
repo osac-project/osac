@@ -29,8 +29,8 @@ type catalogItem interface {
 	GetMetadata() *privatev1.Metadata
 }
 
-// validateCatalogItemForCreation checks that a catalog item is published and not deleted.
-// Tenant visibility is enforced by the GenericDAO's tenancy logic at the query level.
+// validateCatalogItemForCreation allows a new resource to use only a published, active Catalog
+// Item. The DAO lookup has already limited the item to what this caller may see.
 func validateCatalogItemForCreation(item catalogItem, ref string) error {
 	if item.GetMetadata().HasDeletionTimestamp() {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
@@ -43,9 +43,10 @@ func validateCatalogItemForCreation(item catalogItem, ref string) error {
 	return nil
 }
 
-// preserveCatalogItemProvenance validates an Update against stored provenance without reading the catalog.
-// ID-only input is accepted; supplied identity or scope must agree. The returned clone preserves
-// the original canonical reference even after catalog deletion. An explicit clear is rejected.
+// preserveCatalogItemProvenance keeps an object's original spec.catalog_item reference. Updates
+// compare any supplied ID, name, and scope with the stored reference without fetching the Catalog
+// Item, which may have been deleted. An ID-only match is accepted; changing or clearing the
+// reference is rejected.
 func preserveCatalogItemProvenance[T interface {
 	fullResourceReference
 	proto.Message

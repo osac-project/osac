@@ -193,8 +193,8 @@ var _ = BeforeSuite(func() {
 		Build()
 	Expect(err).ToNot(HaveOccurred())
 
-	// Start a real gRPC server, with the same transaction interceptor production uses, and register every
-	// filterable resource through the exact same function production calls:
+	// Start a real gRPC server with the transaction and reference interceptors production uses, and
+	// register every filterable resource through the same function production calls:
 	referenceValidator, err := newReferenceValidator(logger, tenancy, metricsRegisterer)
 	Expect(err).ToNot(HaveOccurred())
 	server := itesting.NewServer(grpc.ChainUnaryInterceptor(

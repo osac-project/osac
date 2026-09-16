@@ -26,7 +26,8 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
-// referenceScope identifies the tenant and project used for name lookup and local-reference checks.
+// referenceScope identifies where a name is looked up. A local reference must also belong to
+// this exact tenant and project; a full reference may select a shared tenant or another project.
 type referenceScope struct {
 	tenant  string
 	project string
@@ -55,7 +56,9 @@ type fullResourceReference interface {
 	SetProject(string)
 }
 
-// catalogItemScope returns a Catalog Item's prepared ownership scope; missing metadata produces an empty scope.
+// catalogItemScope uses the tenant and project assigned to the Catalog Item being saved. Policy
+// resolvers use this as their starting scope; full references can select another project or the
+// shared tenant. Missing metadata produces an empty scope.
 func catalogItemScope(item catalogItem) referenceScope {
 	metadata := item.GetMetadata()
 	if metadata == nil {
@@ -64,11 +67,11 @@ func catalogItemScope(item catalogItem) referenceScope {
 	return referenceScope{tenant: metadata.GetTenant(), project: metadata.GetProject()}
 }
 
-// resolveAndCanonicalizeReference resolves a dependency relative to its owner, rejects deleted objects, and
-// updates the supplied reference with stored identity. It returns the resolved object for lifecycle checks.
-// Full-reference IDs select caller-visible objects; names use owner/explicit scope, while local
-// references require exact tenant/project ownership. Call with a detached reference and the request
-// transaction in context. Readiness and resource-specific compatibility remain the caller's responsibility.
+// resolveAndCanonicalizeReference finds a target for a full or local reference. A full reference
+// by name uses the owner's tenant/project unless selectors choose another allowed scope; a local
+// reference must match the owner's tenant/project. It rejects deleted targets and fills the
+// reference with stored ID and name, plus scope selectors for full references. The target stays
+// locked through the request transaction; callers check readiness and type-specific rules.
 func resolveAndCanonicalizeReference[O referenceResource](
 	ctx context.Context,
 	resourceDao *dao.GenericDAO[O],
@@ -113,10 +116,10 @@ func resolveAndCanonicalizeReference[O referenceResource](
 	return object, nil
 }
 
-// resolveFullResourceReference returns a locked object subject to caller visibility and dependency ownership.
-// IDs identify the object independently of shared/project selectors; a supplied name must still match.
-// Name-only references use the owner scope or explicit selectors. The request transaction owns
-// the lock. The caller remains responsible for deletion/readiness checks and canonicalization.
+// resolveFullResourceReference finds a caller-visible target by ID or by name in the selected
+// tenant/project. An ID identifies the target without using the scope selectors, but a supplied
+// name must still match. The target must belong to the owner's tenant or the shared tenant.
+// The caller checks its lifecycle and fills the reference from the stored target.
 func resolveFullResourceReference[O referenceResource](
 	ctx context.Context,
 	resourceDao *dao.GenericDAO[O],
@@ -162,10 +165,9 @@ func resolveFullResourceReference[O referenceResource](
 	return object, nil
 }
 
-// resolveResourceInScope returns a visible object locked in one exact tenant/project scope.
-// An ID takes precedence for lookup, but a supplied name must match the stored name.
-// The context must contain the request transaction, which owns the lock until completion.
-// This function neither changes a reference nor checks deletion/readiness; callers do those checks.
+// resolveResourceInScope finds a caller-visible target in exactly the supplied tenant and
+// project. An ID selects the target, but a supplied name must still match. The request transaction
+// holds a row lock. The caller checks lifecycle and fills the reference.
 func resolveResourceInScope[O referenceResource](
 	ctx context.Context,
 	resourceDao *dao.GenericDAO[O],
@@ -208,8 +210,10 @@ func resolveResourceInScope[O referenceResource](
 	return object, nil
 }
 
-// selectedReferenceScope applies name-lookup selectors to the owner scope.
-// An omitted project retains the owner project, including when shared is selected.
+// selectedReferenceScope starts with the owner's scope. shared=true selects the shared
+// tenant, and a nonempty project replaces the owner's project. An empty project keeps the
+// owner's project, including when switching to shared. For example, acme/apps plus shared=true
+// selects shared/apps unless a different project is supplied.
 func selectedReferenceScope(scope referenceScope, shared bool, project string) referenceScope {
 	result := scope
 	if shared {
@@ -221,8 +225,11 @@ func selectedReferenceScope(scope referenceScope, shared bool, project string) r
 	return result
 }
 
-// inheritReferenceScope fills omitted selectors using the Template that supplied a full reference.
-// It mutates only selectors, preserving explicit shared/project choices before resource-side resolution.
+// inheritReferenceScope updates ref when a default was copied from the object described by
+// owner. It carries that object's tenant/project into later name lookup. For example, an image
+// default from a shared Template must still select the shared image when used by an acme VM.
+// An explicitly shared ref is left alone; otherwise the shared flag is set from owner and
+// only an omitted project is filled. This function does not look up or validate the target.
 func inheritReferenceScope(ref interface {
 	GetShared() bool
 	SetShared(bool)
@@ -238,9 +245,10 @@ func inheritReferenceScope(ref interface {
 	}
 }
 
-// validateDependencyOwnerScope rejects dependencies outside the owner tenant and shared tenant,
-// even when the caller can see them. A shared owner can therefore depend only on shared objects.
-// Full references may cross projects; local-reference resolution checks exact project separately.
+// validateDependencyOwnerScope checks target's tenant against owner, independently of what
+// the caller can see. An acme owner may use acme or shared targets; a shared owner may use
+// only shared targets. Project checks for local references belong to resolveResourceInScope.
+// kind names the referenced type in errors; source adds the referencing field, or is empty.
 func validateDependencyOwnerScope(owner referenceScope, target *privatev1.Metadata, kind, source string) error {
 	if target.GetTenant() != auth.SharedTenant && target.GetTenant() != owner.tenant {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "%s reference%s must belong to the owning tenant or shared tenant", kind, source)
@@ -248,8 +256,8 @@ func validateDependencyOwnerScope(owner referenceScope, target *privatev1.Metada
 	return nil
 }
 
-// getLockedResource retrieves a caller-visible object by ID and locks its row in the context's request transaction.
-// The lock lasts until commit or rollback, preventing deletion between validation and persistence.
+// getLockedResource reads a caller-visible target by ID and locks its row until the request
+// transaction commits or rolls back.
 func getLockedResource[O dao.Object](ctx context.Context, resourceDao *dao.GenericDAO[O], id string) (O, error) {
 	response, err := resourceDao.Get().SetId(id).SetLock(true).Do(ctx)
 	if err != nil {
@@ -267,7 +275,9 @@ func referenceIdentifier(id, name string) string {
 	return name
 }
 
-// referenceNotFoundError returns the caller-selected status code with the reference identity and diagnostic location.
+// referenceNotFoundError reports a missing target with the caller-selected gRPC code.
+// kind names the resource type, identifier is the requested ID or name, and source is an
+// optional suffix identifying the referencing field, for example " in fields.disk_image".
 func referenceNotFoundError(code grpccodes.Code, kind, identifier, source string) error {
 	return grpcstatus.Errorf(code, "%s '%s'%s not found", kind, identifier, source)
 }
@@ -290,8 +300,8 @@ func resourceLookupError(err error, kind, identifier, source string, notFoundCod
 	return grpcstatus.Errorf(grpccodes.Internal, "failed to retrieve %s '%s'%s", kind, identifier, source)
 }
 
-// canonicalComputeInstanceTemplateReference builds a new canonical reference from a resolved object's stored identity.
-// It performs no lookup or validation and does not mutate the object.
+// canonicalComputeInstanceTemplateReference copies the resolved object's ID, name,
+// project, and shared-tenant selector into a new reference.
 func canonicalComputeInstanceTemplateReference(resolved *privatev1.ComputeInstanceTemplate) *privatev1.ComputeInstanceTemplateReference {
 	return privatev1.ComputeInstanceTemplateReference_builder{
 		Id:      resolved.GetId(),
@@ -301,8 +311,8 @@ func canonicalComputeInstanceTemplateReference(resolved *privatev1.ComputeInstan
 	}.Build()
 }
 
-// canonicalClusterTemplateReference builds a new canonical reference from a resolved object's stored identity.
-// It performs no lookup or validation and does not mutate the object.
+// canonicalClusterTemplateReference copies the resolved object's ID, name, project,
+// and shared-tenant selector into a new reference.
 func canonicalClusterTemplateReference(resolved *privatev1.ClusterTemplate) *privatev1.ClusterTemplateReference {
 	return privatev1.ClusterTemplateReference_builder{
 		Id:      resolved.GetId(),
@@ -312,8 +322,8 @@ func canonicalClusterTemplateReference(resolved *privatev1.ClusterTemplate) *pri
 	}.Build()
 }
 
-// canonicalBareMetalInstanceTemplateReference builds a new canonical reference from a resolved object's stored identity.
-// It performs no lookup or validation and does not mutate the object.
+// canonicalBareMetalInstanceTemplateReference copies the resolved object's ID, name,
+// project, and shared-tenant selector into a new reference.
 func canonicalBareMetalInstanceTemplateReference(resolved *privatev1.BareMetalInstanceTemplate) *privatev1.BareMetalInstanceTemplateReference {
 	return privatev1.BareMetalInstanceTemplateReference_builder{
 		Id:      resolved.GetId(),
@@ -323,8 +333,8 @@ func canonicalBareMetalInstanceTemplateReference(resolved *privatev1.BareMetalIn
 	}.Build()
 }
 
-// canonicalInstanceTypeReference builds a new canonical reference from a resolved object's stored identity.
-// It performs no lookup or validation and does not mutate the object.
+// canonicalInstanceTypeReference copies the resolved object's ID, name, project, and
+// shared-tenant selector into a new reference.
 func canonicalInstanceTypeReference(resolved *privatev1.InstanceType) *privatev1.InstanceTypeReference {
 	return privatev1.InstanceTypeReference_builder{
 		Id:      resolved.GetId(),
@@ -334,8 +344,8 @@ func canonicalInstanceTypeReference(resolved *privatev1.InstanceType) *privatev1
 	}.Build()
 }
 
-// canonicalDiskImageReference builds a new canonical reference from a resolved object's stored identity.
-// It performs no lookup or validation and does not mutate the object.
+// canonicalDiskImageReference copies the resolved object's ID, name, project, and
+// shared-tenant selector into a new reference.
 func canonicalDiskImageReference(resolved *privatev1.DiskImage) *privatev1.DiskImageReference {
 	return privatev1.DiskImageReference_builder{
 		Id:      resolved.GetId(),
@@ -345,32 +355,28 @@ func canonicalDiskImageReference(resolved *privatev1.DiskImage) *privatev1.DiskI
 	}.Build()
 }
 
-// canonicalStorageTierReference builds a new canonical reference from a resolved object's stored identity.
-// It performs no lookup or validation and does not mutate the object.
+// canonicalStorageTierReference copies the resolved object's ID and name into a new reference.
 func canonicalStorageTierReference(resolved *privatev1.StorageTier) *privatev1.StorageTierReference {
 	return privatev1.StorageTierReference_builder{Id: resolved.GetId(), Name: resolved.GetMetadata().GetName()}.Build()
 }
 
-// canonicalSecretLocalReference builds a new canonical reference from a resolved object's stored identity.
-// It performs no lookup or validation and does not mutate the object.
+// canonicalSecretLocalReference copies the resolved object's ID and name into a new local reference.
 func canonicalSecretLocalReference(resolved *privatev1.Secret) *privatev1.SecretLocalReference {
 	return privatev1.SecretLocalReference_builder{Id: resolved.GetId(), Name: resolved.GetMetadata().GetName()}.Build()
 }
 
-// canonicalBareMetalInstanceTypeLocalReference builds a new canonical reference from a resolved object's stored identity.
-// It performs no lookup or validation and does not mutate the object.
+// canonicalBareMetalInstanceTypeLocalReference copies the resolved object's ID and name
+// into a new local reference.
 func canonicalBareMetalInstanceTypeLocalReference(resolved *privatev1.BareMetalInstanceType) *privatev1.BareMetalInstanceTypeLocalReference {
 	return privatev1.BareMetalInstanceTypeLocalReference_builder{Id: resolved.GetId(), Name: resolved.GetMetadata().GetName()}.Build()
 }
 
-// canonicalSubnetLocalReference builds a new canonical reference from a resolved object's stored identity.
-// It performs no lookup or validation and does not mutate the object.
+// canonicalSubnetLocalReference copies the resolved object's ID and name into a new local reference.
 func canonicalSubnetLocalReference(resolved *privatev1.Subnet) *privatev1.SubnetLocalReference {
 	return privatev1.SubnetLocalReference_builder{Id: resolved.GetId(), Name: resolved.GetMetadata().GetName()}.Build()
 }
 
-// canonicalSecurityGroupLocalReference builds a new canonical reference from a resolved object's stored identity.
-// It performs no lookup or validation and does not mutate the object.
+// canonicalSecurityGroupLocalReference copies the resolved object's ID and name into a new local reference.
 func canonicalSecurityGroupLocalReference(resolved *privatev1.SecurityGroup) *privatev1.SecurityGroupLocalReference {
 	return privatev1.SecurityGroupLocalReference_builder{Id: resolved.GetId(), Name: resolved.GetMetadata().GetName()}.Build()
 }

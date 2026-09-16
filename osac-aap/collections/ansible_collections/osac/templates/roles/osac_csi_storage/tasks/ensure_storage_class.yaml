@@ -29,6 +29,11 @@
       storage tiers for this Tenant if VMaaS-only storage is intended.
   when: _remote_kubeconfig is not defined or _remote_kubeconfig | length == 0
 
+- name: Validate tenant_name is a valid DNS label
+  ansible.builtin.fail:
+    msg: "tenant_name '{{ tenant_name }}' is not a valid DNS label."
+  when: tenant_name is not regex('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
+
 - name: Build expected StorageClass entries
   ansible.builtin.set_fact:
     _osac_csi_expected_sc_entries: >-
@@ -44,44 +49,14 @@
       {% endfor -%}
       {{ names }}
 
-- name: Check existing tenant StorageClasses on guest cluster
-  kubernetes.core.k8s_info:
-    api_version: storage.k8s.io/v1
-    kind: StorageClass
-    label_selectors:
-      - "osac.openshift.io/tenant={{ tenant_name }}"
-      - "osac.openshift.io/managed-by=osac-csi-driver"
-  register: _osac_csi_sc_check
-
-- name: Determine if all StorageClasses already exist
-  ansible.builtin.set_fact:
-    _osac_csi_all_sc_exist: >-
-      {{ (_osac_csi_expected_sc_names | difference(
-            _osac_csi_sc_check.resources | map(attribute='metadata.name') | list
-          ) | length) == 0 }}
-
-- name: Set StorageClass names output and skip provisioning when all SCs exist
-  when: _osac_csi_all_sc_exist | bool
-  block:
-    - name: Set StorageClass names output (short-circuit)
-      ansible.builtin.set_fact:
-        storage_provider_storage_class_names: "{{ _osac_csi_expected_sc_entries }}"
-
-    - name: Log short-circuit
-      ansible.builtin.debug:
-        msg: >-
-          All {{ _osac_csi_expected_sc_names | length }} OSAC CSI StorageClasses already
-          exist on guest cluster — skipping provisioning.
-
-# --- Full provisioning path ---
 - name: Provision OSAC CSI driver and StorageClasses on guest cluster
-  when: not (_osac_csi_all_sc_exist | bool)
   block:
     - name: Read tenant-scoped CSI credentials from hub Secret
       ansible.builtin.include_tasks: read_hub_credentials.yaml
-
     - name: Ensure OSAC CSI driver namespace exists on guest cluster
       kubernetes.core.k8s:
+        kubeconfig: "{{ _remote_kubeconfig }}"
+        validate_certs: "{{ false if (_remote_kubeconfig_insecure | default(false) | bool) else omit }}"
         state: present
         definition:
           apiVersion: v1
@@ -89,11 +64,14 @@
           metadata:
             name: "{{ osac_csi_driver_namespace }}"
             labels:
+              app.kubernetes.io/managed-by: osac-aap
+              osac.openshift.io/tenant: "{{ tenant_name }}"
               pod-security.kubernetes.io/enforce: privileged
               pod-security.kubernetes.io/warn: privileged
-
     - name: Create tenant CSI credential Secret on guest cluster
       kubernetes.core.k8s:
+        kubeconfig: "{{ _remote_kubeconfig }}"
+        validate_certs: "{{ false if (_remote_kubeconfig_insecure | default(false) | bool) else omit }}"
         state: present
         definition:
           apiVersion: v1
@@ -113,6 +91,7 @@
     - name: Deploy OSAC CSI driver via Helm on guest cluster
       kubernetes.core.helm:
         kubeconfig: "{{ _remote_kubeconfig }}"
+        kubeconfig_insecure_skip_tls_verify: "{{ _remote_kubeconfig_insecure | default(false) | bool }}"
         release_name: "{{ osac_csi_driver_helm_release }}"
         chart_ref: "{{ osac_csi_driver_chart_ref }}"
         chart_version: "{{ osac_csi_driver_chart_version }}"
@@ -120,6 +99,7 @@
         create_namespace: false
         wait: true
         wait_timeout: 5m
+        no_log: true
         values:
           driverName: "{{ osac_csi_driver_name }}"
           namespace: "{{ osac_csi_driver_namespace }}"
@@ -133,24 +113,24 @@
                 clientSecretKey: client-secret
               tls:
                 insecureSkipVerify: "{{ osac_csi_driver_fulfillment_tls_insecure | bool }}"
-
-    # The csi-driver chart's fullname template produces "<release>-controller" when the
-    # release name ("csi-driver") already contains the chart name ("csi-driver").
-    - name: Wait for OSAC CSI controller Deployment to be available
-      kubernetes.core.k8s_info:
-        api_version: apps/v1
-        kind: Deployment
-        name: "{{ osac_csi_driver_helm_release }}-controller"
-        namespace: "{{ osac_csi_driver_namespace }}"
-      register: _osac_csi_controller_status
-      until:
-        - _osac_csi_controller_status.resources | length > 0
-        - (_osac_csi_controller_status.resources[0].status.availableReplicas | default(0) | int) >= 1
-      retries: 30
-      delay: 20
-
+          node:
+            vendorSockets: >-
+              {% set _pairs = [] -%}
+              {% for _k, _v in osac_csi_driver_vendor_node_socket_paths.items() -%}
+              {% set _sock = _v if _v.endswith('.sock') else (_v ~ '/csi.sock') -%}
+              {% set _ = _pairs.append(_k ~ '=' ~ _sock) -%}
+              {% endfor -%}
+              {{ _pairs | sort | join(',') }}
+          vendors: >-
+            {% set _vmap = {} -%}
+            {% for _k in osac_csi_driver_vendor_node_socket_paths.keys() -%}
+            {% set _ = _vmap.update({_k: {'enabled': true}}) -%}
+            {% endfor -%}
+            {{ _vmap }}
     - name: Create per-tier OSAC CSI StorageClasses on guest cluster
       kubernetes.core.k8s:
+        kubeconfig: "{{ _remote_kubeconfig }}"
+        validate_certs: "{{ false if (_remote_kubeconfig_insecure | default(false) | bool) else omit }}"
         state: present
         definition:
           apiVersion: storage.k8s.io/v1
@@ -165,14 +145,8 @@
               osac.openshift.io/storage-protocol: "{{ item.protocol }}"
           provisioner: "{{ osac_csi_driver_name }}"
           parameters:
-            csi.storage.k8s.io/provisioner-secret-name: "{{ osac_csi_driver_credentials_secret_name }}"
-            csi.storage.k8s.io/provisioner-secret-namespace: "{{ osac_csi_driver_namespace }}"
-            csi.storage.k8s.io/controller-publish-secret-name: "{{ osac_csi_driver_credentials_secret_name }}"
-            csi.storage.k8s.io/controller-publish-secret-namespace: "{{ osac_csi_driver_namespace }}"
-            csi.storage.k8s.io/node-publish-secret-name: "{{ osac_csi_driver_credentials_secret_name }}"
-            csi.storage.k8s.io/node-publish-secret-namespace: "{{ osac_csi_driver_namespace }}"
-            csi.storage.k8s.io/controller-expand-secret-name: "{{ osac_csi_driver_credentials_secret_name }}"
-            csi.storage.k8s.io/controller-expand-secret-namespace: "{{ osac_csi_driver_namespace }}"
+            tier: "{{ item.tier }}"
+            tenant: "{{ tenant_name }}"
             osac.openshift.io/tenant: "{{ tenant_name }}"
             osac.openshift.io/storage-tier: "{{ item.tier }}"
           reclaimPolicy: "{{ osac_csi_driver_reclaim_policy }}"

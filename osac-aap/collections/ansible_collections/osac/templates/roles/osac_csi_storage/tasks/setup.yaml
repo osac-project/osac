@@ -8,3 +8,8 @@
     msg: >-
       osac_csi_driver setup: tenant-scoped CSI credentials are created by OSAC-4197.
       No hub-side setup is required here.
+
+- name: Set tenant config output fact for osac_csi_driver (dispatcher contract)
+  ansible.builtin.set_fact:
+    storage_provider_tenant_config:
+      provider: "{{ _current_provider | default('osac_csi') }}"

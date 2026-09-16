@@ -987,8 +987,8 @@ func newDAOTierResolver(
 		selected := backends[0]
 		backendID := selected.GetBackendId()
 
-		// Volume.status.backend (and osac.backend downstream) identifies the
-		// vendor CSI routing target, not this specific StorageBackend row, so
+		// Volume.status.provider (and the CSI vendor routing context downstream)
+		// identifies the vendor routing target, not this specific StorageBackend row, so
 		// it must carry the backend's provider (e.g. "vast") rather than its
 		// server-generated id -- osac-csi-driver's --vendor-controllers and
 		// --vendor-sockets maps are keyed by provider, set once in the Helm
@@ -1003,7 +1003,6 @@ func newDAOTierResolver(
 		}
 
 		return &servers.TierResolution{
-			Backend:  backend.GetSpec().GetProvider(),
 			Provider: backend.GetSpec().GetProvider(),
 			Protocol: tier.GetSpec().GetProtocol(),
 		}, nil

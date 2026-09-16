@@ -94,6 +94,15 @@ var _ = Describe("Public volumes server", func() {
 			privateServer *PrivateVolumesServer
 		)
 
+		// stubResolver stamps a provider and protocol on created volumes so we can verify these
+		// internal fields are NOT exposed through the public API.
+		stubResolver := TierResolverFunc(func(_ context.Context, _ string) (*TierResolution, error) {
+			return &TierResolution{
+				Provider: "internal-provider",
+				Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
+			}, nil
+		})
+
 		BeforeEach(func() {
 			var err error
 
@@ -191,8 +200,11 @@ var _ = Describe("Public volumes server", func() {
 		It("Rejects a CEL filter that references a private-only field", func() {
 			createVolumeViaPrivate("filter-private-vol")
 
+			// status.provider exists on the private Volume but not the public one; SetFilterDesc
+			// restricts the public filter surface to public fields, so this must be rejected rather
+			// than silently ignored (which would let callers probe hidden fields).
 			listRequest := &publicv1.VolumesListRequest{}
-			listRequest.SetFilter(`this.status.backend == "internal-backend"`)
+			listRequest.SetFilter(`this.status.provider == "internal-provider"`)
 			_, err := publicServer.List(ctx, listRequest)
 			Expect(err).To(HaveOccurred())
 		})

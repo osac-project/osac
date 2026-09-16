@@ -163,7 +163,7 @@ func (x VolumeState) Number() protoreflect.EnumNumber {
 //
 // Volumes are created through the private API, typically by the OSAC CSI driver in response to a
 // PVC on a tenant cluster. The spec captures the user's requested configuration (tier, size,
-// access mode), while the status tracks the system-resolved state (vendor volume ID, backend,
+// access mode), while the status tracks the system-resolved state (vendor volume ID, provider,
 // protocol).
 type Volume struct {
 	state protoimpl.MessageState `protogen:"hybrid.v1"`
@@ -367,7 +367,7 @@ func (b0 VolumeTopology_builder) Build() *VolumeTopology {
 // Defines the desired configuration for a Volume. All fields are immutable after creation.
 type VolumeSpec struct {
 	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// Name of the StorageTier that determines which backend and protocol serve this volume.
+	// Name of the StorageTier that determines which provider and protocol serve this volume.
 	StorageTier string `protobuf:"bytes,1,opt,name=storage_tier,json=storageTier,proto3" json:"storage_tier,omitempty"`
 	// Requested storage capacity in gibibytes (GiB).
 	SizeGib int64 `protobuf:"varint,2,opt,name=size_gib,json=sizeGib,proto3" json:"size_gib,omitempty"`
@@ -462,7 +462,7 @@ func (x *VolumeSpec) ClearTopology() {
 type VolumeSpec_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
-	// Name of the StorageTier that determines which backend and protocol serve this volume.
+	// Name of the StorageTier that determines which provider and protocol serve this volume.
 	StorageTier string
 	// Requested storage capacity in gibibytes (GiB).
 	SizeGib int64

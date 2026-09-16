@@ -174,17 +174,19 @@ func TestListVolumesBuildsNameFilter(t *testing.T) {
 }
 
 func TestListVolumesBuildsProjectFilterIncludingDefaultProject(t *testing.T) {
+	tenant := "tenant-a"
 	project := ""
 	fake := &fakeVolumesClient{listResp: &privatev1.VolumesListResponse{}}
 	c := &grpcVolumeClient{client: fake}
 
 	if _, err := c.ListVolumes(context.Background(), ListVolumesParams{
 		NameFilter:    "pvc-abc",
+		TenantFilter:  &tenant,
 		ProjectFilter: &project,
 	}); err != nil {
 		t.Fatalf("ListVolumes error: %v", err)
 	}
-	if got, want := fake.listReq.GetFilter(), `this.metadata.name == "pvc-abc" && this.metadata.project == ""`; got != want {
+	if got, want := fake.listReq.GetFilter(), `this.metadata.name == "pvc-abc" && this.metadata.tenant == "tenant-a" && this.metadata.project == ""`; got != want {
 		t.Errorf("filter = %q, want %q", got, want)
 	}
 }

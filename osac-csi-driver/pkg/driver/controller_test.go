@@ -299,6 +299,9 @@ func TestCreateVolume_AlreadyExists(t *testing.T) {
 			if params.NameFilter != "pvc-123" {
 				t.Errorf("expected name filter 'pvc-123', got %q", params.NameFilter)
 			}
+			if params.TenantFilter == nil || *params.TenantFilter != "default" {
+				t.Errorf("expected default tenant filter, got %v", params.TenantFilter)
+			}
 			if params.ProjectFilter == nil || *params.ProjectFilter != "" {
 				t.Errorf("expected default project filter, got %v", params.ProjectFilter)
 			}
@@ -326,6 +329,9 @@ func TestCreateVolume_AlreadyExistsWithDifferentProject(t *testing.T) {
 			return nil, status.Error(codes.AlreadyExists, "already exists")
 		},
 		listVolumesFn: func(_ context.Context, params fulfillment.ListVolumesParams) ([]*fulfillment.VolumeInfo, error) {
+			if params.TenantFilter == nil || *params.TenantFilter != "my-tenant" {
+				t.Errorf("expected tenant filter 'my-tenant', got %v", params.TenantFilter)
+			}
 			if params.ProjectFilter == nil || *params.ProjectFilter != "project-a" {
 				t.Errorf("expected project filter 'project-a', got %v", params.ProjectFilter)
 			}

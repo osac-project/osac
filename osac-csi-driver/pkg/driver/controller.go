@@ -107,7 +107,7 @@ func (c *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 		st, ok := status.FromError(err)
 		if ok && st.Code() == codes.AlreadyExists {
 			klog.Infof("Volume %q already exists, resolving via ListVolumes", req.GetName())
-			vol, err = c.resolveExistingVolume(ctx, req.GetName(), project)
+			vol, err = c.resolveExistingVolume(ctx, req.GetName(), tenant, project)
 			if err != nil {
 				return nil, err
 			}
@@ -401,9 +401,10 @@ func (c *ControllerServer) ControllerGetCapabilities(_ context.Context, _ *csi.C
 	}, nil
 }
 
-func (c *ControllerServer) resolveExistingVolume(ctx context.Context, name, project string) (*fulfillment.VolumeInfo, error) {
+func (c *ControllerServer) resolveExistingVolume(ctx context.Context, name, tenant, project string) (*fulfillment.VolumeInfo, error) {
 	volumes, err := c.volumes.ListVolumes(ctx, fulfillment.ListVolumesParams{
 		NameFilter:    name,
+		TenantFilter:  &tenant,
 		ProjectFilter: &project,
 	})
 	if err != nil {

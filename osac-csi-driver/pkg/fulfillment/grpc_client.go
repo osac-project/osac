@@ -88,14 +88,18 @@ func (c *grpcVolumeClient) GetVolume(ctx context.Context, volumeID string) (*Vol
 	return volumeToInfo(resp.GetObject()), nil
 }
 
-// ListVolumes lists volumes, optionally filtering by metadata.name and
-// metadata.project. The filters are used by the controller to resolve a
-// volume created by a previous (retried) CreateVolume call.
+// ListVolumes lists volumes, optionally filtering by metadata.name,
+// metadata.tenant, and metadata.project. The filters are used by the
+// controller to resolve a volume created by a previous (retried) CreateVolume
+// call.
 func (c *grpcVolumeClient) ListVolumes(ctx context.Context, params ListVolumesParams) ([]*VolumeInfo, error) {
 	req := &privatev1.VolumesListRequest{}
-	filters := make([]string, 0, 2)
+	filters := make([]string, 0, 3)
 	if params.NameFilter != "" {
 		filters = append(filters, fmt.Sprintf("this.metadata.name == %q", params.NameFilter))
+	}
+	if params.TenantFilter != nil {
+		filters = append(filters, fmt.Sprintf("this.metadata.tenant == %q", *params.TenantFilter))
 	}
 	if params.ProjectFilter != nil {
 		filters = append(filters, fmt.Sprintf("this.metadata.project == %q", *params.ProjectFilter))

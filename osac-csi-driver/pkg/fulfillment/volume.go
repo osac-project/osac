@@ -42,11 +42,12 @@ type CreateVolumeParams struct {
 	PVCRef     string
 }
 
-// ListVolumesParams are the filter parameters for listing volumes. A non-nil
-// ProjectFilter selects the project explicitly, including the tenant default
-// project represented by an empty string.
+// ListVolumesParams are the filter parameters for listing volumes. Non-nil
+// tenant and project filters select their scopes explicitly, including the
+// tenant default project represented by an empty project string.
 type ListVolumesParams struct {
 	NameFilter    string
+	TenantFilter  *string
 	ProjectFilter *string
 }
 

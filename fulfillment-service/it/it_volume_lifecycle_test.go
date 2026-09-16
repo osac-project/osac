@@ -43,14 +43,12 @@ var _ = Describe("Volume lifecycle", func() {
 		volumesClient         privatev1.VolumesClient
 		storageBackendsClient privatev1.StorageBackendsClient
 		storageTiersClient    privatev1.StorageTiersClient
-		projectsClient        privatev1.ProjectsClient
 
 		kubeClient crclient.Client
 
 		backendId string
 		tierId    string
 		tierName  string
-		project   string
 	)
 
 	// "users" is a tenant the test tool provisions and waits for SYNCED
@@ -65,26 +63,7 @@ var _ = Describe("Volume lifecycle", func() {
 		volumesClient = privatev1.NewVolumesClient(tool.InternalView().AdminConn())
 		storageBackendsClient = privatev1.NewStorageBackendsClient(tool.InternalView().AdminConn())
 		storageTiersClient = privatev1.NewStorageTiersClient(tool.InternalView().AdminConn())
-		projectsClient = privatev1.NewProjectsClient(tool.InternalView().AdminConn())
 		kubeClient = tool.KubeClient()
-
-		project = fmt.Sprintf("test-volume-project-%s", uuid.New()[24:32])
-		projectResp, err := projectsClient.Create(ctx,
-			privatev1.ProjectsCreateRequest_builder{
-				Object: privatev1.Project_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name:   project,
-						Tenant: testTenant,
-					}.Build(),
-					Spec: privatev1.ProjectSpec_builder{
-						Title: "Volume integration project",
-					}.Build(),
-				}.Build(),
-			}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		DeferCleanup(func() {
-			deleteProject(ctx, projectsClient, projectResp.GetObject().GetId())
-		})
 
 		// --- Seed a StorageBackend (global admin resource, no tenant) ---
 		backendName := fmt.Sprintf("test-backend-%s", uuid.New()[24:32])
@@ -150,6 +129,25 @@ var _ = Describe("Volume lifecycle", func() {
 	// =========================================================================
 
 	It("should create and delete a Volume end-to-end", func() {
+		projectsClient := privatev1.NewProjectsClient(tool.InternalView().AdminConn())
+		project := fmt.Sprintf("test-volume-project-%s", uuid.New()[24:32])
+		projectResp, err := projectsClient.Create(ctx,
+			privatev1.ProjectsCreateRequest_builder{
+				Object: privatev1.Project_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:   project,
+						Tenant: testTenant,
+					}.Build(),
+					Spec: privatev1.ProjectSpec_builder{
+						Title: "Volume integration project",
+					}.Build(),
+				}.Build(),
+			}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func() {
+			deleteProject(ctx, projectsClient, projectResp.GetObject().GetId())
+		})
+
 		volName := fmt.Sprintf("test-vol-%s", uuid.New()[24:32])
 
 		// 1. CREATE volume (admin conn + explicit tenant)

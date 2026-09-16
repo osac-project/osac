@@ -163,7 +163,7 @@ func (x VolumeState) Number() protoreflect.EnumNumber {
 //
 // Volumes are created through the private API, typically by the OSAC CSI driver in response to a
 // PVC on a tenant cluster. The spec captures the user's requested configuration (tier, size,
-// access mode), while the status tracks the system-resolved state (vendor volume ID, backend,
+// access mode), while the status tracks the system-resolved state (vendor volume ID, provider,
 // protocol).
 type Volume struct {
 	state               protoimpl.MessageState `protogen:"opaque.v1"`
@@ -454,7 +454,7 @@ func (x *VolumeSpec) ClearTopology() {
 type VolumeSpec_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
-	// Name of the StorageTier that determines which backend and protocol serve this volume.
+	// Name of the StorageTier that determines which provider and protocol serve this volume.
 	StorageTier string
 	// Requested storage capacity in gibibytes (GiB).
 	SizeGib int64

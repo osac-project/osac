@@ -7,11 +7,10 @@
 #
 # Build context: mono-repo root (not tools/ci-cli/ alone).
 #
-#   docker buildx build \
-#     --platform linux/amd64,linux/arm64 \
-#     -f tools/ci-cli/Containerfile \
-#     -t quay.io/osac-project/ci-cli:latest \
-#     --push .
+#   podman build \
+#     --platform linux/amd64 \
+#     --build-arg VERSION=v0.1.0 \
+#     -f tools/ci-cli/Containerfile .
 #
 # See tools/ci-cli/build-push.sh for the full multi-arch workflow.
 
@@ -68,10 +67,19 @@ RUN dnf install -y --nodocs --setopt=install_weak_deps=0 jq && \
     rm -rf /var/cache/dnf
 
 # Install grpcurl (pre-built for the target architecture).
-RUN curl -fsSL \
-      "https://github.com/fullstorydev/grpcurl/releases/download/v${GRPCURL_VERSION}/grpcurl_${GRPCURL_VERSION}_linux_${TARGETARCH}.tar.gz" \
-    | tar -xz -C /usr/local/bin grpcurl && \
-    chmod +x /usr/local/bin/grpcurl
+# Docker/podman TARGETARCH uses "amd64" but grpcurl releases use "x86_64".
+RUN set -eux; \
+    GRPC_ARCH="${TARGETARCH}"; \
+    if [ "${GRPC_ARCH}" = "amd64" ]; then GRPC_ARCH="x86_64"; fi; \
+    tarball="grpcurl_${GRPCURL_VERSION}_linux_${GRPC_ARCH}.tar.gz"; \
+    curl -fsSL -o "/tmp/${tarball}" \
+      "https://github.com/fullstorydev/grpcurl/releases/download/v${GRPCURL_VERSION}/${tarball}" && \
+    curl -fsSL -o /tmp/checksums.txt \
+      "https://github.com/fullstorydev/grpcurl/releases/download/v${GRPCURL_VERSION}/grpcurl_${GRPCURL_VERSION}_checksums.txt" && \
+    cd /tmp && grep "${tarball}" checksums.txt | sha256sum -c - && \
+    tar -xzf "/tmp/${tarball}" -C /usr/local/bin grpcurl && \
+    chmod +x /usr/local/bin/grpcurl && \
+    rm -f "/tmp/${tarball}" /tmp/checksums.txt
 
 # Install the osac CLI built in stage 1.
 COPY --from=builder /tmp/osac /usr/local/bin/osac
@@ -81,5 +89,7 @@ USER 1001
 
 # Smoke-test all added tools.
 RUN jq --version && grpcurl --version && osac --help > /dev/null
+
+HEALTHCHECK --interval=30s --timeout=5s CMD ["/usr/local/bin/osac", "--help"]
 
 ENTRYPOINT ["/bin/bash"]

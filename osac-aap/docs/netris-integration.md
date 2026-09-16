@@ -111,9 +111,11 @@ playbook_osac_create_hosted_cluster.yml
 Reverse order:
 
 1. Delete HostedCluster CR, wait for agents to detach
-2. **External access cleanup** — delete DNAT rules (ingress HTTPS, HTTP, API),
-   delete legacy L4LB/DNAT rules, delete DNS records
-3. **Infrastructure cleanup** — delete NMStateConfig CRs, remove InfraEnv
+2. **External access cleanup** (performed by the OSAC Networking API and fabric
+   manager, not the CaaS template) — delete DNAT rules (ingress HTTPS, HTTP,
+   API), delete legacy L4LB/DNAT rules, delete DNS records
+3. **Infrastructure cleanup** (performed by the OSAC Networking API and fabric
+   manager, not the CaaS template) — delete NMStateConfig CRs, remove InfraEnv
    label selector, detach and unlabel agents, delete SNAT rule, delete server
    cluster, delete VPC
 

@@ -108,7 +108,7 @@ var _ = Describe("VolumeFeedbackController", func() {
 
 			cr := newVolumeFeedbackCR(volName, volNamespace, volID, v1alpha1.VolumePhaseReady, nil)
 			cr.Status.VendorVolumeID = "vast-001"
-			cr.Status.Backend = "vast-backend"
+			cr.Status.Provider = "vast"
 			cr.Status.Protocol = v1alpha1.VolumeProtocolBlock
 			Expect(fakeK8s.Create(ctx, cr)).To(Succeed())
 
@@ -121,7 +121,7 @@ var _ = Describe("VolumeFeedbackController", func() {
 			updated := mockServer.updates[0]
 			Expect(updated.GetStatus().GetState()).To(Equal(privatev1.VolumeState_VOLUME_STATE_AVAILABLE))
 			Expect(updated.GetStatus().GetVendorVolumeId()).To(Equal("vast-001"))
-			Expect(updated.GetStatus().GetBackend()).To(Equal("vast-backend"))
+			Expect(updated.GetStatus().GetProvider()).To(Equal("vast"))
 
 			// Signal should not be called on non-delete reconciles
 			Expect(mockServer.signals).To(BeEmpty())
@@ -165,12 +165,11 @@ var _ = Describe("VolumeFeedbackController", func() {
 	})
 
 	Context("vendor field syncing", func() {
-		It("should sync vendorVolumeID, backend, and protocol to remote", func() {
+		It("should sync vendorVolumeID, provider, and protocol to remote", func() {
 			mockServer.addVolume(newRemoteVolume(volID, privatev1.VolumeState_VOLUME_STATE_CREATING))
 
 			cr := newVolumeFeedbackCR(volName, volNamespace, volID, v1alpha1.VolumePhaseReady, nil)
 			cr.Status.VendorVolumeID = "netapp-vol-42"
-			cr.Status.Backend = "netapp-cluster-1"
 			cr.Status.Provider = "netapp"
 			cr.Status.Protocol = v1alpha1.VolumeProtocolNFS
 			Expect(fakeK8s.Create(ctx, cr)).To(Succeed())
@@ -183,7 +182,6 @@ var _ = Describe("VolumeFeedbackController", func() {
 			Expect(mockServer.updates).To(HaveLen(1))
 			updated := mockServer.updates[0]
 			Expect(updated.GetStatus().GetVendorVolumeId()).To(Equal("netapp-vol-42"))
-			Expect(updated.GetStatus().GetBackend()).To(Equal("netapp-cluster-1"))
 			Expect(updated.GetStatus().GetProvider()).To(Equal("netapp"))
 			Expect(updated.GetStatus().GetProtocol()).To(Equal(privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS))
 		})
@@ -193,7 +191,7 @@ var _ = Describe("VolumeFeedbackController", func() {
 
 			cr := newVolumeFeedbackCR(volName, volNamespace, volID, v1alpha1.VolumePhaseReady, nil)
 			cr.Status.VendorVolumeID = "vast-001"
-			cr.Status.Backend = "vast-backend"
+			cr.Status.Provider = "vast"
 			cr.Status.Protocol = v1alpha1.VolumeProtocolBlock
 			Expect(fakeK8s.Create(ctx, cr)).To(Succeed())
 
@@ -209,7 +207,7 @@ var _ = Describe("VolumeFeedbackController", func() {
 		It("should not overwrite remote fields when CR fields are empty", func() {
 			remote := newRemoteVolume(volID, privatev1.VolumeState_VOLUME_STATE_CREATING)
 			remote.GetStatus().SetVendorVolumeId("existing-id")
-			remote.GetStatus().SetBackend("existing-backend")
+			remote.GetStatus().SetProvider("existing-provider")
 			mockServer.addVolume(remote)
 
 			cr := newVolumeFeedbackCR(volName, volNamespace, volID, v1alpha1.VolumePhaseProgressing, nil)
@@ -366,12 +364,12 @@ var _ = Describe("VolumeFeedbackController", func() {
 		It("should not call Update when remote state already matches", func() {
 			remote := newRemoteVolume(volID, privatev1.VolumeState_VOLUME_STATE_AVAILABLE)
 			remote.GetStatus().SetVendorVolumeId("vast-001")
-			remote.GetStatus().SetBackend("vast-backend")
+			remote.GetStatus().SetProvider("vast")
 			mockServer.addVolume(remote)
 
 			cr := newVolumeFeedbackCR(volName, volNamespace, volID, v1alpha1.VolumePhaseReady, nil)
 			cr.Status.VendorVolumeID = "vast-001"
-			cr.Status.Backend = "vast-backend"
+			cr.Status.Provider = "vast"
 			// Pre-seed the feedback finalizer so the reconciler doesn't add it (which triggers an update)
 			cr.Finalizers = []string{osacVolumeFeedbackFinalizer}
 			Expect(fakeK8s.Create(ctx, cr)).To(Succeed())

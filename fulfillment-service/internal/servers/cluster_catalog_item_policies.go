@@ -145,7 +145,7 @@ func validateClusterCatalogItemVersionPolicy(
 		if ref == nil {
 			return nil, nil
 		}
-		resolved, resolveErr := resolveFullResourceReference(ctx, clusterVersionsDao, scope, ref,
+		resolved, resolveErr := resolveLockedFullResourceReference(ctx, clusterVersionsDao, scope, ref,
 			"cluster version", " in fields.version", grpccodes.InvalidArgument)
 		if resolveErr != nil {
 			return nil, resolveErr
@@ -195,7 +195,7 @@ func validateClusterCatalogItemPullSecretPolicy(
 		if ref == nil {
 			return nil, nil
 		}
-		resolved, resolveErr := resolveResourceInScope(ctx, secretsDao, scope, ref.GetId(), ref.GetName(),
+		resolved, resolveErr := resolveLockedResourceInScope(ctx, secretsDao, scope, ref.GetId(), ref.GetName(),
 			"secret", " in fields.pull_secret_secret", grpccodes.InvalidArgument)
 		if resolveErr != nil {
 			return nil, resolveErr
@@ -379,13 +379,13 @@ func validateClusterCatalogItemNodeSetPolicy(
 		if ref == nil {
 			return catalogItemPolicyError("fields.node_sets."+name, "host type is required")
 		}
-		resolved, err := resolveAndCanonicalizeReference(ctx, hostTypes, item.GetMetadata(), ref, "host type", grpccodes.InvalidArgument)
+		resolved, err := resolveAndCanonicalizeLockedReference(ctx, hostTypes, item.GetMetadata(), ref, "host type", grpccodes.InvalidArgument)
 		if err != nil {
 			return err
 		}
 		if templateNode != nil && templateNode.GetHostType() != nil {
 			expected := cloneMessage(templateNode.GetHostType())
-			templateHost, err := resolveAndCanonicalizeReference(ctx, hostTypes, template.GetMetadata(), expected, "host type", grpccodes.InvalidArgument)
+			templateHost, err := resolveAndCanonicalizeLockedReference(ctx, hostTypes, template.GetMetadata(), expected, "host type", grpccodes.InvalidArgument)
 			if err != nil {
 				return err
 			}

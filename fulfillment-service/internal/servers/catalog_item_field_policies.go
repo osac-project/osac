@@ -290,7 +290,7 @@ func validateCatalogItemDiskImagePolicy(
 	if state.hasLocked {
 		ref = state.lockedValue
 	}
-	resolved, err := resolveDiskImageReference(ctx, resourceDao, scope, ref, " in fields.disk_image")
+	resolved, err := resolveLockedDiskImageReference(ctx, resourceDao, scope, ref, " in fields.disk_image")
 	if err != nil {
 		return nil, err
 	}
@@ -316,7 +316,7 @@ func resolveCatalogItemSubnet(
 	ref *privatev1.SubnetLocalReference,
 	lookupSource, deletionSource, attachmentSource string,
 ) (*privatev1.Subnet, error) {
-	resolved, err := resolveResourceInScope(ctx, resourceDao, scope, ref.GetId(), ref.GetName(), "subnet", lookupSource, grpccodes.InvalidArgument)
+	resolved, err := resolveLockedResourceInScope(ctx, resourceDao, scope, ref.GetId(), ref.GetName(), "subnet", lookupSource, grpccodes.InvalidArgument)
 	if err != nil {
 		return nil, err
 	}
@@ -340,7 +340,7 @@ func resolveCatalogItemSecurityGroup(
 	ref *privatev1.SecurityGroupLocalReference,
 	lookupSource, deletionSource, attachmentSource, virtualNetworkID string,
 ) (*privatev1.SecurityGroup, error) {
-	resolved, err := resolveResourceInScope(ctx, resourceDao, scope, ref.GetId(), ref.GetName(), "security group", lookupSource, grpccodes.InvalidArgument)
+	resolved, err := resolveLockedResourceInScope(ctx, resourceDao, scope, ref.GetId(), ref.GetName(), "security group", lookupSource, grpccodes.InvalidArgument)
 	if err != nil {
 		return nil, err
 	}

@@ -261,7 +261,7 @@ func (s *PrivateComputeInstanceCatalogItemsServer) validateAndCanonicalizeTempla
 	if ref == nil || (ref.GetId() == "" && ref.GetName() == "") {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'template' must specify id or name")
 	}
-	resolved, err := resolveFullResourceReference(ctx, s.templatesDao, catalogItemScope(candidate), ref,
+	resolved, err := resolveLockedFullResourceReference(ctx, s.templatesDao, catalogItemScope(candidate), ref,
 		"compute instance template", " in template", grpccodes.InvalidArgument)
 	if err != nil {
 		return err

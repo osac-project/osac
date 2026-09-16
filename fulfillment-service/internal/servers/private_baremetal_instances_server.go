@@ -736,7 +736,7 @@ func (s *PrivateBareMetalInstancesServer) resolveCatalogItem(ctx context.Context
 	}
 	catalogItemRefStr := refKey(catalogItemRef)
 
-	item, err := resolveAndCanonicalizeReference(ctx, s.catalogItemsDao, bmi.GetMetadata(), catalogItemRef, "catalog item", grpccodes.NotFound)
+	item, err := resolveAndCanonicalizeLockedReference(ctx, s.catalogItemsDao, bmi.GetMetadata(), catalogItemRef, "catalog item", grpccodes.NotFound)
 	if err != nil {
 		return nil, err
 	}
@@ -751,7 +751,7 @@ func (s *PrivateBareMetalInstancesServer) resolveCatalogItem(ctx context.Context
 			"catalog item '%s' does not reference a template", catalogItemRefStr)
 	}
 	templateRef = cloneMessage(templateRef)
-	resolvedTemplate, resolveErr := resolveAndCanonicalizeReference(ctx, s.templatesDao, item.GetMetadata(), templateRef, "template", grpccodes.NotFound)
+	resolvedTemplate, resolveErr := resolveAndCanonicalizeLockedReference(ctx, s.templatesDao, item.GetMetadata(), templateRef, "template", grpccodes.NotFound)
 	if resolveErr != nil {
 		return nil, resolveErr
 	}

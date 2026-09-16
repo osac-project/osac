@@ -387,25 +387,9 @@ func (s *PrivateComputeInstancesServer) prepareCreate(ctx context.Context, candi
 		}
 	}
 
-	// Validate network references after catalog and template values are fully materialized.
-	err = s.validateNetworkReferencesTenancy(ctx, candidate)
-	if err != nil {
+	// Validate and resolve the final network, including Catalog and Template defaults.
+	if err = s.validateNetworkReferencesState(ctx, candidate); err != nil {
 		return
-	}
-	err = s.validateNetworkReferencesState(ctx, candidate)
-	if err != nil {
-		return
-	}
-
-	for _, attachment := range spec.GetNetworkAttachments() {
-		if _, err = resolveAndCanonicalizeReference(ctx, s.subnetsDao, candidate.GetMetadata(), attachment.GetSubnet(), "subnet", grpccodes.InvalidArgument); err != nil {
-			return
-		}
-		for _, ref := range attachment.GetSecurityGroups() {
-			if _, err = resolveAndCanonicalizeReference(ctx, s.securityGroupsDao, candidate.GetMetadata(), ref, "security group", grpccodes.InvalidArgument); err != nil {
-				return
-			}
-		}
 	}
 
 	// Validate instance type and disk image existence and lifecycle after defaults are applied.
@@ -482,14 +466,12 @@ func (s *PrivateComputeInstancesServer) Update(ctx context.Context,
 			return err
 		}
 		if updateIncludesField(request.GetUpdateMask(), "spec.network_attachments") {
-			// Tenant isolation still applies during deletion. Readiness does not: dependencies may already be deleted
-			// while the resource is being cleaned up.
-			if err := s.validateNetworkReferencesTenancy(ctx, candidate); err != nil {
-				return err
+			// During deletion, keep the existing visibility check without requiring dependencies
+			// to remain present or ready. Otherwise resolve and validate the final network once.
+			if current.GetMetadata().HasDeletionTimestamp() {
+				return s.validateNetworkReferencesTenancy(ctx, candidate)
 			}
-			if !current.GetMetadata().HasDeletionTimestamp() {
-				return s.validateNetworkReferencesState(ctx, candidate)
-			}
+			return s.validateNetworkReferencesState(ctx, candidate)
 		}
 		return nil
 	})
@@ -949,7 +931,8 @@ func (s *PrivateComputeInstancesServer) validateNetworkReferencesTenancy(
 // exist, are in READY state, and SecurityGroups belong to the same VirtualNetwork as their attachment's Subnet.
 //
 // This validation is SKIPPED during deletion because resources may already be deleted.
-// Tenant isolation is validated separately by validateNetworkReferencesTenancy.
+// Resolution checks tenant/project ownership and fills the final reference IDs. During deletion,
+// validateNetworkReferencesTenancy still runs separately without requiring readiness.
 //
 // Implements requirements VAL-01, VAL-02, VAL-03.
 func (s *PrivateComputeInstancesServer) validateNetworkReferencesState(
@@ -977,33 +960,15 @@ func (s *PrivateComputeInstancesServer) validateNetworkReferencesState(
 		subnetRef := att.GetSubnet()
 		securityGroupRefs := att.GetSecurityGroups()
 
-		// At this point, subnetRef is guaranteed to be non-nil because
-		// ValidateNetworkAttachments ensures all attachments have non-empty subnet
-		var subnet *privatev1.Subnet
-		var virtualNetworkID string
 		subnetKey := refKey(subnetRef)
-
-		// VAL-01: Validate Subnet exists and is READY
-		getSubnetResponse, getErr := s.subnetsDao.Get().
-			SetId(subnetKey).
-			Do(ctx)
-		if getErr != nil {
-			var notFoundErr *dao.ErrNotFound
-			if errors.As(getErr, &notFoundErr) {
+		subnet, err := resolveAndCanonicalizeReference(ctx, s.subnetsDao, vm.GetMetadata(), subnetRef,
+			"subnet", grpccodes.NotFound)
+		if err != nil {
+			if grpcstatus.Code(err) == grpccodes.NotFound {
 				return grpcstatus.Errorf(grpccodes.InvalidArgument,
 					"network_attachments[%d]: subnet '%s' does not exist", i, subnetKey)
 			}
-			// Note: TenancyErr won't happen here because tenancy was already validated
-			s.logger.ErrorContext(ctx, "Failed to query Subnet",
-				slog.String("subnet_id", subnetKey),
-				slog.Any("error", getErr))
-			return grpcstatus.Errorf(grpccodes.Internal, "failed to validate subnet")
-		}
-
-		subnet = getSubnetResponse.GetObject()
-		if subnet == nil {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"network_attachments[%d]: subnet '%s' does not exist", i, subnetKey)
+			return err
 		}
 
 		// VAL-02: Validate READY state
@@ -1013,7 +978,7 @@ func (s *PrivateComputeInstancesServer) validateNetworkReferencesState(
 				i, subnetKey, subnet.GetStatus().GetState().String())
 		}
 
-		virtualNetworkID = refKey(subnet.GetSpec().GetVirtualNetwork())
+		virtualNetworkID := refKey(subnet.GetSpec().GetVirtualNetwork())
 
 		for _, sgRef := range securityGroupRefs {
 			if sgRef == nil {
@@ -1021,26 +986,14 @@ func (s *PrivateComputeInstancesServer) validateNetworkReferencesState(
 			}
 			sgKey := refKey(sgRef)
 
-			getSGResponse, getErr := s.securityGroupsDao.Get().
-				SetId(sgKey).
-				Do(ctx)
-			if getErr != nil {
-				var notFoundErr *dao.ErrNotFound
-				if errors.As(getErr, &notFoundErr) {
+			sg, err := resolveAndCanonicalizeReference(ctx, s.securityGroupsDao, vm.GetMetadata(), sgRef,
+				"security group", grpccodes.NotFound)
+			if err != nil {
+				if grpcstatus.Code(err) == grpccodes.NotFound {
 					return grpcstatus.Errorf(grpccodes.InvalidArgument,
 						"network_attachments[%d]: security group '%s' does not exist", i, sgKey)
 				}
-				// Note: TenancyErr won't happen here because tenancy was already validated
-				s.logger.ErrorContext(ctx, "Failed to query SecurityGroup",
-					slog.String("security_group_id", sgKey),
-					slog.Any("error", getErr))
-				return grpcstatus.Errorf(grpccodes.Internal, "failed to validate security group")
-			}
-
-			sg := getSGResponse.GetObject()
-			if sg == nil {
-				return grpcstatus.Errorf(grpccodes.InvalidArgument,
-					"network_attachments[%d]: security group '%s' does not exist", i, sgKey)
+				return err
 			}
 
 			// VAL-02: Validate READY state
@@ -1080,7 +1033,7 @@ func (s *PrivateComputeInstancesServer) resolveCatalogItem(
 	}
 	catalogItemRefStr := refKey(catalogItemRef)
 
-	catalogItem, err := resolveAndCanonicalizeReference(ctx, s.catalogItemsDao, ci.GetMetadata(), catalogItemRef, "catalog item", grpccodes.NotFound)
+	catalogItem, err := resolveAndCanonicalizeLockedReference(ctx, s.catalogItemsDao, ci.GetMetadata(), catalogItemRef, "catalog item", grpccodes.NotFound)
 	if err != nil {
 		return nil, err
 	}
@@ -1095,7 +1048,7 @@ func (s *PrivateComputeInstancesServer) resolveCatalogItem(
 			"catalog item '%s' does not reference a template", catalogItemRefStr)
 	}
 	templateRef = cloneMessage(templateRef)
-	resolvedTemplate, resolveErr := resolveAndCanonicalizeReference(ctx, s.templatesDao, catalogItem.GetMetadata(), templateRef, "template", grpccodes.InvalidArgument)
+	resolvedTemplate, resolveErr := resolveAndCanonicalizeLockedReference(ctx, s.templatesDao, catalogItem.GetMetadata(), templateRef, "template", grpccodes.InvalidArgument)
 	if resolveErr != nil {
 		return nil, resolveErr
 	}

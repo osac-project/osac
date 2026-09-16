@@ -56,6 +56,8 @@ type fullResourceReference interface {
 	SetProject(string)
 }
 
+type referenceGetFunc[O dao.Object] func(context.Context, *dao.GenericDAO[O], string) (O, error)
+
 // catalogItemScope uses the tenant and project assigned to the Catalog Item being saved. Policy
 // resolvers use this as their starting scope; full references can select another project or the
 // shared tenant. Missing metadata produces an empty scope.
@@ -67,11 +69,19 @@ func catalogItemScope(item catalogItem) referenceScope {
 	return referenceScope{tenant: metadata.GetTenant(), project: metadata.GetProject()}
 }
 
-// resolveAndCanonicalizeReference finds a target for a full or local reference. A full reference
-// by name uses the owner's tenant/project unless selectors choose another allowed scope; a local
-// reference must match the owner's tenant/project. It rejects deleted targets and fills the
-// reference with stored ID and name, plus scope selectors for full references. The target stays
-// locked through the request transaction; callers check readiness and type-specific rules.
+// resolveAndCanonicalizeReference loads the referenced object and fills the reference with
+// its stored ID and name. Full references also receive the stored project and shared flag.
+// Deleted targets are rejected; readiness and other resource-specific checks belong to the caller.
+//
+// Parameters:
+//   - ctx carries the caller's authorization and the current database transaction.
+//   - resourceDao reads the referenced resource type and enforces caller visibility.
+//   - ownerMetadata is the assigned metadata of the object containing the reference.
+//     It supplies the default tenant/project; local references must match both exactly.
+//   - reference is modified only after lookup, ownership, and deletion checks succeed.
+//     Full references can select the shared tenant or another project when looking up a name.
+//   - kind is a human-readable resource name for errors, for example "disk image".
+//   - notFoundCode is the gRPC code to return when no target exists in the allowed scope.
 func resolveAndCanonicalizeReference[O referenceResource](
 	ctx context.Context,
 	resourceDao *dao.GenericDAO[O],
@@ -79,6 +89,32 @@ func resolveAndCanonicalizeReference[O referenceResource](
 	reference resourceReference,
 	kind string,
 	notFoundCode grpccodes.Code,
+) (O, error) {
+	return resolveAndCanonicalizeReferenceWithGet(ctx, resourceDao, ownerMetadata, reference, kind, notFoundCode, getReferenceResource[O])
+}
+
+// resolveAndCanonicalizeLockedReference resolves and fills a reference while holding an
+// exclusive lock on the target through the request transaction. Catalog Item creation and
+// authoring use this when the target must remain stable until their changes are saved.
+func resolveAndCanonicalizeLockedReference[O referenceResource](
+	ctx context.Context,
+	resourceDao *dao.GenericDAO[O],
+	ownerMetadata *privatev1.Metadata,
+	reference resourceReference,
+	kind string,
+	notFoundCode grpccodes.Code,
+) (O, error) {
+	return resolveAndCanonicalizeReferenceWithGet(ctx, resourceDao, ownerMetadata, reference, kind, notFoundCode, getLockedReferenceResource[O])
+}
+
+func resolveAndCanonicalizeReferenceWithGet[O referenceResource](
+	ctx context.Context,
+	resourceDao *dao.GenericDAO[O],
+	ownerMetadata *privatev1.Metadata,
+	reference resourceReference,
+	kind string,
+	notFoundCode grpccodes.Code,
+	get referenceGetFunc[O],
 ) (O, error) {
 	var zero O
 	if ownerMetadata == nil {
@@ -92,12 +128,12 @@ func resolveAndCanonicalizeReference[O referenceResource](
 	var object O
 	var err error
 	if fullReference, ok := reference.(fullResourceReference); ok {
-		object, err = resolveFullResourceReference(
-			ctx, resourceDao, ownerScope, fullReference, kind, "", notFoundCode,
+		object, err = resolveFullResourceReferenceWithGet(
+			ctx, resourceDao, ownerScope, fullReference, kind, "", notFoundCode, get,
 		)
 	} else {
-		object, err = resolveResourceInScope(
-			ctx, resourceDao, ownerScope, reference.GetId(), reference.GetName(), kind, "", notFoundCode,
+		object, err = resolveResourceInScopeWithGet(
+			ctx, resourceDao, ownerScope, reference.GetId(), reference.GetName(), kind, "", notFoundCode, get,
 		)
 	}
 	if err != nil {
@@ -116,10 +152,22 @@ func resolveAndCanonicalizeReference[O referenceResource](
 	return object, nil
 }
 
-// resolveFullResourceReference finds a caller-visible target by ID or by name in the selected
-// tenant/project. An ID identifies the target without using the scope selectors, but a supplied
-// name must still match. The target must belong to the owner's tenant or the shared tenant.
-// The caller checks its lifecycle and fills the reference from the stored target.
+// resolveFullResourceReference loads a full reference without modifying it. With a name,
+// shared and project select the lookup scope. With an ID, those selectors are ignored, but
+// a supplied name must still match. The target must belong to the owner's tenant or shared.
+// The caller checks deletion/readiness and copies stored values into the reference if needed.
+//
+// For an owner in acme/apps, {name: "vm-base", shared: true, project: "templates"}
+// selects shared/templates. An explicit ID may select any caller-visible project in acme
+// or shared, but cannot select another tenant's object just because the caller can see it.
+//
+// Parameters:
+//   - ctx carries caller authorization and the database transaction; resourceDao enforces visibility.
+//   - ownerScope is the tenant/project of the object containing reference.
+//   - reference supplies an ID, a name, or both, plus optional name-lookup selectors.
+//   - kind labels the target type in errors; source is an optional error suffix such as
+//     " in fields.version". source does not affect which object is selected.
+//   - notFoundCode is the gRPC code used for a missing target.
 func resolveFullResourceReference[O referenceResource](
 	ctx context.Context,
 	resourceDao *dao.GenericDAO[O],
@@ -129,10 +177,38 @@ func resolveFullResourceReference[O referenceResource](
 	source string,
 	notFoundCode grpccodes.Code,
 ) (O, error) {
+	return resolveFullResourceReferenceWithGet(ctx, resourceDao, ownerScope, reference, kind, source, notFoundCode, getReferenceResource[O])
+}
+
+// resolveLockedFullResourceReference has the same scope rules as
+// resolveFullResourceReference and holds an exclusive lock on the target until the
+// request transaction ends. Catalog Item authoring uses it for protected dependencies.
+func resolveLockedFullResourceReference[O referenceResource](
+	ctx context.Context,
+	resourceDao *dao.GenericDAO[O],
+	ownerScope referenceScope,
+	reference fullResourceReference,
+	kind string,
+	source string,
+	notFoundCode grpccodes.Code,
+) (O, error) {
+	return resolveFullResourceReferenceWithGet(ctx, resourceDao, ownerScope, reference, kind, source, notFoundCode, getLockedReferenceResource[O])
+}
+
+func resolveFullResourceReferenceWithGet[O referenceResource](
+	ctx context.Context,
+	resourceDao *dao.GenericDAO[O],
+	ownerScope referenceScope,
+	reference fullResourceReference,
+	kind string,
+	source string,
+	notFoundCode grpccodes.Code,
+	get referenceGetFunc[O],
+) (O, error) {
 	if reference.GetId() == "" {
 		scope := selectedReferenceScope(ownerScope, reference.GetShared(), reference.GetProject())
-		object, err := resolveResourceInScope(
-			ctx, resourceDao, scope, "", reference.GetName(), kind, source, notFoundCode,
+		object, err := resolveResourceInScopeWithGet(
+			ctx, resourceDao, scope, "", reference.GetName(), kind, source, notFoundCode, get,
 		)
 		if err == nil {
 			err = validateDependencyOwnerScope(ownerScope, object.GetMetadata(), kind, source)
@@ -141,7 +217,7 @@ func resolveFullResourceReference[O referenceResource](
 	}
 
 	identifier := referenceIdentifier(reference.GetId(), reference.GetName())
-	object, err := getLockedResource(ctx, resourceDao, reference.GetId())
+	object, err := get(ctx, resourceDao, reference.GetId())
 	if err != nil {
 		return object, resourceLookupError(err, kind, identifier, source, notFoundCode)
 	}
@@ -165,9 +241,19 @@ func resolveFullResourceReference[O referenceResource](
 	return object, nil
 }
 
-// resolveResourceInScope finds a caller-visible target in exactly the supplied tenant and
-// project. An ID selects the target, but a supplied name must still match. The request transaction
-// holds a row lock. The caller checks lifecycle and fills the reference.
+// resolveResourceInScope loads an object in exactly one tenant/project without changing
+// the caller's reference. For example, a subnet in acme/apps cannot resolve to a same-named
+// subnet in acme/test, even when the caller can see both. This applies to IDs as well as names.
+// The caller checks deletion/readiness and copies stored values into the reference if needed.
+//
+// Parameters:
+//   - ctx carries caller authorization and the database transaction; resourceDao enforces visibility.
+//   - scope is the required tenant/project. An empty project means no project.
+//   - id selects the object directly. If it is empty, name is resolved within scope first.
+//     At least one is required; when both are supplied, the stored name must match.
+//   - kind labels the target type in errors, for example "subnet".
+//   - source adds context to errors, for example " in fields.network_attachments"; it may be empty.
+//   - notFoundCode is returned when the target is missing, invisible, or outside scope.
 func resolveResourceInScope[O referenceResource](
 	ctx context.Context,
 	resourceDao *dao.GenericDAO[O],
@@ -175,28 +261,55 @@ func resolveResourceInScope[O referenceResource](
 	id, name, kind, source string,
 	notFoundCode grpccodes.Code,
 ) (O, error) {
+	return resolveResourceInScopeWithGet(ctx, resourceDao, scope, id, name, kind, source, notFoundCode, getReferenceResource[O])
+}
+
+// resolveLockedResourceInScope follows the same scope rules as resolveResourceInScope
+// and holds an exclusive lock on the target until the request transaction ends.
+func resolveLockedResourceInScope[O referenceResource](
+	ctx context.Context,
+	resourceDao *dao.GenericDAO[O],
+	scope referenceScope,
+	id, name, kind, source string,
+	notFoundCode grpccodes.Code,
+) (O, error) {
+	return resolveResourceInScopeWithGet(ctx, resourceDao, scope, id, name, kind, source, notFoundCode, getLockedReferenceResource[O])
+}
+
+func resolveResourceInScopeWithGet[O referenceResource](
+	ctx context.Context,
+	resourceDao *dao.GenericDAO[O],
+	scope referenceScope,
+	id, name, kind, source string,
+	notFoundCode grpccodes.Code,
+	get referenceGetFunc[O],
+) (O, error) {
 	var zero O
 	if id == "" && name == "" {
 		return zero, grpcstatus.Errorf(grpccodes.InvalidArgument, "%s reference%s must specify id or name", kind, source)
 	}
-	// Read by ID when available, then check the supplied name against the same object.
-	lookupName := name
-	if id != "" {
-		lookupName = ""
-	}
 	identifier := referenceIdentifier(id, name)
-	ref, err := references.NewScopedDAOLookupFunc(resourceDao)(ctx, scope.tenant, scope.project, id, lookupName)
-	if err != nil {
-		var notFound interface{ IsNotFound() bool }
-		if errors.As(err, &notFound) && notFound.IsNotFound() {
-			return zero, referenceNotFoundError(notFoundCode, kind, identifier, source)
+
+	// Names are only unique within a scope. Resolve the name to an ID before loading
+	// the object; a caller-supplied ID needs no preliminary lookup.
+	resolvedID := id
+	if resolvedID == "" {
+		lookup := references.NewScopedDAOLookupFunc(resourceDao)
+		resolved, err := lookup(ctx, scope.tenant, scope.project, "", name)
+		if err != nil {
+			return zero, resourceLookupError(err, kind, identifier, source, notFoundCode)
 		}
-		return zero, resourceLookupError(err, kind, identifier, source, notFoundCode)
+		resolvedID = resolved.ID
 	}
-	object, err := getLockedResource(ctx, resourceDao, ref.ID)
+
+	// Load the actual object. The caller chose an ordinary or locked read.
+	object, err := get(ctx, resourceDao, resolvedID)
 	if err != nil {
 		return zero, resourceLookupError(err, kind, identifier, source, notFoundCode)
 	}
+
+	// DAO visibility means the caller may see this object, not that it belongs to
+	// the required tenant/project. Check the loaded row for both lookup paths.
 	metadata := object.GetMetadata()
 	if metadata == nil {
 		return zero, grpcstatus.Errorf(grpccodes.Internal, "resolved %s '%s' has no metadata", kind, identifier)
@@ -204,7 +317,7 @@ func resolveResourceInScope[O referenceResource](
 	if metadata.GetTenant() != scope.tenant || metadata.GetProject() != scope.project {
 		return zero, referenceNotFoundError(notFoundCode, kind, identifier, source)
 	}
-	if id != "" && name != "" && metadata.GetName() != name {
+	if name != "" && metadata.GetName() != name {
 		return zero, grpcstatus.Errorf(grpccodes.InvalidArgument, "%s reference%s: id and name do not refer to the same resource", kind, source)
 	}
 	return object, nil
@@ -256,10 +369,19 @@ func validateDependencyOwnerScope(owner referenceScope, target *privatev1.Metada
 	return nil
 }
 
-// getLockedResource reads a caller-visible target by ID and locks its row until the request
-// transaction commits or rolls back.
-func getLockedResource[O dao.Object](ctx context.Context, resourceDao *dao.GenericDAO[O], id string) (O, error) {
-	response, err := resourceDao.Get().SetId(id).SetLock(true).Do(ctx)
+// getReferenceResource reads a stored object by ID using caller visibility and the
+// request transaction. It does not check ownership, deletion, or readiness.
+func getReferenceResource[O dao.Object](ctx context.Context, resourceDao *dao.GenericDAO[O], id string) (O, error) {
+	return executeReferenceGet(ctx, resourceDao.Get().SetId(id))
+}
+
+// getLockedReferenceResource takes an exclusive row lock until the request transaction ends.
+func getLockedReferenceResource[O dao.Object](ctx context.Context, resourceDao *dao.GenericDAO[O], id string) (O, error) {
+	return executeReferenceGet(ctx, resourceDao.Get().SetId(id).SetLock(true))
+}
+
+func executeReferenceGet[O dao.Object](ctx context.Context, request *dao.GetRequest[O]) (O, error) {
+	response, err := request.Do(ctx)
 	if err != nil {
 		var zero O
 		return zero, err
@@ -282,9 +404,17 @@ func referenceNotFoundError(code grpccodes.Code, kind, identifier, source string
 	return grpcstatus.Errorf(code, "%s '%s'%s not found", kind, identifier, source)
 }
 
-// resourceLookupError translates DAO lookup, visibility, and lock failures into gRPC status errors.
-// The source suffix identifies the referencing field; unexpected failures do not expose DAO details.
+// resourceLookupError translates err from either a scoped name lookup or DAO Get into a
+// gRPC error. kind names the resource type, identifier is the requested ID/name, and source
+// is an optional error suffix identifying the referencing field. notFoundCode controls the
+// missing-target response; denied access and deadlocks retain their own status codes.
+// Unexpected failures return Internal without exposing database details.
 func resourceLookupError(err error, kind, identifier, source string, notFoundCode grpccodes.Code) error {
+	// The scoped name lookup and DAO Get use different not-found error types.
+	var lookupNotFound interface{ IsNotFound() bool }
+	if errors.As(err, &lookupNotFound) && lookupNotFound.IsNotFound() {
+		return referenceNotFoundError(notFoundCode, kind, identifier, source)
+	}
 	var notFoundErr *dao.ErrNotFound
 	if errors.As(err, &notFoundErr) {
 		return referenceNotFoundError(notFoundCode, kind, identifier, source)

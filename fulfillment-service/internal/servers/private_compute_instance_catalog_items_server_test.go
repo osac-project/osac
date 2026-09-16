@@ -119,6 +119,25 @@ var _ = Describe("Private compute instance catalog items server", func() {
 				Expect(unlocked).To(BeZero(), "the dependency must remain locked until authoring commits")
 			})
 			Expect(err).NotTo(HaveOccurred())
+			// Direct provisioning can read the same Template without holding an exclusive lock.
+			instances, err := NewPrivateComputeInstancesServer().SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
+			Expect(err).NotTo(HaveOccurred())
+			err = transactions.Run(background, func(creation context.Context) {
+				template, err := instances.resolveCreationSource(creation, privatev1.ComputeInstance_builder{
+					Metadata: privatev1.Metadata_builder{Tenant: testTenant}.Build(),
+					Spec: privatev1.ComputeInstanceSpec_builder{
+						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "locked-template"}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).NotTo(HaveOccurred())
+				Expect(template.GetId()).To(Equal("locked-template"))
+				var unlocked int
+				err = pool.QueryRow(background, `select count(*) from
+	    (select id from compute_instance_templates where id = 'locked-template' for update skip locked) available`).Scan(&unlocked)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(unlocked).To(Equal(1), "direct Template reads must not serialize provisioning requests")
+			})
+			Expect(err).NotTo(HaveOccurred())
 			templates, err := NewPrivateComputeInstanceTemplatesServer().SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
 			Expect(err).NotTo(HaveOccurred())
 			err = transactions.Run(background, func(deletion context.Context) error {

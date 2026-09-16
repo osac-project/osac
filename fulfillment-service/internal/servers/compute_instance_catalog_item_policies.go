@@ -154,7 +154,7 @@ func validateComputeInstanceCatalogItemInstanceTypePolicy(
 	if state.hasLocked {
 		ref = state.lockedValue
 	}
-	resolved, err := resolveFullResourceReference(ctx, resourceDao, scope, ref,
+	resolved, err := resolveLockedFullResourceReference(ctx, resourceDao, scope, ref,
 		"instance type", " in fields.instance_type", grpccodes.NotFound)
 	if err != nil {
 		return nil, err
@@ -200,7 +200,7 @@ func validateComputeInstanceCatalogItemBootDiskPolicy(
 		if ref == nil {
 			return nil, nil
 		}
-		resolved, resolveErr := resolveResourceInScope(ctx, storageTiersDao, referenceScope{tenant: auth.SharedTenant}, ref.GetId(), ref.GetName(),
+		resolved, resolveErr := resolveLockedResourceInScope(ctx, storageTiersDao, referenceScope{tenant: auth.SharedTenant}, ref.GetId(), ref.GetName(),
 			"storage tier", " in fields.boot_disk.storage_tier", grpccodes.NotFound)
 		if resolveErr != nil {
 			return nil, resolveErr
@@ -252,7 +252,7 @@ func validateComputeInstanceCatalogItemAdditionalDisksPolicy(
 			if ref == nil {
 				continue
 			}
-			resolved, resolveErr := resolveResourceInScope(ctx, storageTiersDao, referenceScope{tenant: auth.SharedTenant}, ref.GetId(), ref.GetName(),
+			resolved, resolveErr := resolveLockedResourceInScope(ctx, storageTiersDao, referenceScope{tenant: auth.SharedTenant}, ref.GetId(), ref.GetName(),
 				"storage tier", fmt.Sprintf(" in fields.additional_disks[%d].storage_tier", i), grpccodes.NotFound)
 			if resolveErr != nil {
 				return resolveErr

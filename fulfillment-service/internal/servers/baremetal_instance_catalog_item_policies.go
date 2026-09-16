@@ -147,7 +147,7 @@ func validateBareMetalInstanceCatalogItemInstanceTypePolicy(
 		if ref == nil {
 			return nil, nil
 		}
-		resolved, resolveErr := resolveResourceInScope(ctx, resourceDao, scope, ref.GetId(), ref.GetName(),
+		resolved, resolveErr := resolveLockedResourceInScope(ctx, resourceDao, scope, ref.GetId(), ref.GetName(),
 			"bare metal instance type", " in fields.instance_type", grpccodes.NotFound)
 		if resolveErr != nil {
 			return nil, resolveErr

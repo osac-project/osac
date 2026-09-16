@@ -331,16 +331,6 @@ func (s *PrivateClustersServer) prepareCreate(ctx context.Context, candidate *pr
 	if err = s.validateNetworkAttachmentState(ctx, candidate); err != nil {
 		return
 	}
-	if attachment := spec.GetNetworkAttachment(); attachment != nil {
-		if _, err = resolveAndCanonicalizeReference(ctx, s.subnetsDao, candidate.GetMetadata(), attachment.GetSubnet(), "subnet", grpccodes.InvalidArgument); err != nil {
-			return
-		}
-		for _, ref := range attachment.GetSecurityGroups() {
-			if _, err = resolveAndCanonicalizeReference(ctx, s.securityGroupsDao, candidate.GetMetadata(), ref, "security group", grpccodes.InvalidArgument); err != nil {
-				return
-			}
-		}
-	}
 
 	// Resolve fabric_interface for each node set when the cluster has a
 	// network attachment. The HostType's interfaces list is searched for
@@ -938,21 +928,14 @@ func (s *PrivateClustersServer) validateNetworkAttachmentState(ctx context.Conte
 			"spec.network_attachment.subnet is required")
 	}
 
-	getResponse, getErr := s.subnetsDao.Get().SetId(subnetKey).Do(ctx)
-	if getErr != nil {
-		var notFoundErr *dao.ErrNotFound
-		if errors.As(getErr, &notFoundErr) {
+	subnet, err := resolveAndCanonicalizeReference(ctx, s.subnetsDao, cluster.GetMetadata(), subnetRef,
+		"subnet", grpccodes.NotFound)
+	if err != nil {
+		if grpcstatus.Code(err) == grpccodes.NotFound {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"spec.network_attachment: subnet '%s' does not exist", subnetKey)
 		}
-		s.logger.ErrorContext(ctx, "failed to query subnet",
-			slog.String("subnet_key", subnetKey), slog.Any("error", getErr))
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to validate subnet")
-	}
-	subnet := getResponse.GetObject()
-	if subnet == nil {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"spec.network_attachment: subnet '%s' does not exist", subnetKey)
+		return err
 	}
 	if subnet.GetStatus().GetState() != privatev1.SubnetState_SUBNET_STATE_READY {
 		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
@@ -973,23 +956,14 @@ func (s *PrivateClustersServer) validateNetworkAttachmentState(ctx context.Conte
 				"spec.network_attachment.security_groups[%d]: reference is empty", i)
 		}
 
-		sgResponse, getErr := s.securityGroupsDao.Get().SetId(sgKey).Do(ctx)
-		if getErr != nil {
-			var notFoundErr *dao.ErrNotFound
-			if errors.As(getErr, &notFoundErr) {
+		sg, err := resolveAndCanonicalizeReference(ctx, s.securityGroupsDao, cluster.GetMetadata(), sgRef,
+			"security group", grpccodes.NotFound)
+		if err != nil {
+			if grpcstatus.Code(err) == grpccodes.NotFound {
 				return grpcstatus.Errorf(grpccodes.InvalidArgument,
-					"spec.network_attachment.security_groups[%d]: security group '%s' does not exist",
-					i, sgKey)
+					"spec.network_attachment.security_groups[%d]: security group '%s' does not exist", i, sgKey)
 			}
-			s.logger.ErrorContext(ctx, "failed to query security group",
-				slog.String("security_group_key", sgKey), slog.Any("error", getErr))
-			return grpcstatus.Errorf(grpccodes.Internal, "failed to validate security group")
-		}
-		sg := sgResponse.GetObject()
-		if sg == nil {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"spec.network_attachment.security_groups[%d]: security group '%s' does not exist",
-				i, sgKey)
+			return err
 		}
 		if sg.GetStatus().GetState() != privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY {
 			return grpcstatus.Errorf(grpccodes.FailedPrecondition,
@@ -1291,7 +1265,7 @@ func (s *PrivateClustersServer) resolveCatalogItem(ctx context.Context,
 	}
 	catalogItemRefStr := refKey(catalogItemRef)
 
-	catalogItem, err := resolveAndCanonicalizeReference(ctx, s.catalogItemsDao, cluster.GetMetadata(), catalogItemRef, "catalog item", grpccodes.NotFound)
+	catalogItem, err := resolveAndCanonicalizeLockedReference(ctx, s.catalogItemsDao, cluster.GetMetadata(), catalogItemRef, "catalog item", grpccodes.NotFound)
 	if err != nil {
 		return nil, err
 	}
@@ -1305,7 +1279,7 @@ func (s *PrivateClustersServer) resolveCatalogItem(ctx context.Context,
 		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "catalog item '%s' has no template", catalogItemRefStr)
 	}
 	templateRef = cloneMessage(templateRef)
-	resolvedTemplate, resolveErr := resolveAndCanonicalizeReference(ctx, s.templatesDao, catalogItem.GetMetadata(), templateRef, "template", grpccodes.InvalidArgument)
+	resolvedTemplate, resolveErr := resolveAndCanonicalizeLockedReference(ctx, s.templatesDao, catalogItem.GetMetadata(), templateRef, "template", grpccodes.InvalidArgument)
 	if resolveErr != nil {
 		return nil, resolveErr
 	}

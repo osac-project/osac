@@ -504,11 +504,11 @@
     - name: Assert the csi-driver release revision was not incremented (install/upgrade skipped)
       ansible.builtin.assert:
         that:
-          - _driver_release_before_noop_dispatch.status.version == _driver_release_after_noop_dispatch.status.version
+          - _driver_release_before_noop_dispatch.status.revision == _driver_release_after_noop_dispatch.status.revision
         fail_msg: >-
           The csi-driver release revision changed on a zero-supported-vendor
-          dispatch (before={{ _driver_release_before_noop_dispatch.status.version }},
-          after={{ _driver_release_after_noop_dispatch.status.version }}), meaning a
+          dispatch (before={{ _driver_release_before_noop_dispatch.status.revision | default('none') }},
+          after={{ _driver_release_after_noop_dispatch.status.revision | default('none') }}), meaning a
           Helm upgrade ran instead of being skipped entirely.
         success_msg: "Zero-supported-vendor dispatch correctly skipped the install block -- Helm revision unchanged"
     - name: Assert the csi-driver release is unchanged from the prior (Test 4.5) dispatch

@@ -242,7 +242,7 @@ ENVEOF
     echo "Starting local OCI registry (TLS) on port ${CSI_DRIVER_TEST_REGISTRY_PORT}..."
     "${CSI_DRIVER_TEST_CONTAINER_TOOL}" rm -f osac-test-csi-registry > /dev/null 2>&1 || true
     "${CSI_DRIVER_TEST_CONTAINER_TOOL}" run -d --name osac-test-csi-registry \
-      -p "${CSI_DRIVER_TEST_REGISTRY_PORT}:5000" \
+      -p "127.0.0.1:${CSI_DRIVER_TEST_REGISTRY_PORT}:5000" \
       -v "${SCRIPT_DIR}/certs:/certs:ro" \
       -e REGISTRY_HTTP_TLS_CERTIFICATE=/certs/registry.pem \
       -e REGISTRY_HTTP_TLS_KEY=/certs/registry.key \

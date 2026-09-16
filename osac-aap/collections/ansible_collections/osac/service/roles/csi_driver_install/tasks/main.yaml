@@ -35,20 +35,22 @@
 - name: Extract unique providers from the dispatched tier list
   ansible.builtin.set_fact:
     _csi_driver_install_unique_providers: "{{ csi_driver_install_tiers | map(attribute='provider') | unique | sort | list }}"
+  when: csi_driver_install_enabled | default(false) | bool
 
 - name: Determine dispatched providers supported by the csi-driver chart
   ansible.builtin.set_fact:
     _csi_driver_install_dispatched_vendors: "{{ _csi_driver_install_unique_providers | intersect(csi_driver_install_supported_vendors) }}"
 
+  when: csi_driver_install_enabled | default(false) | bool
 - name: Warn about dispatched providers the csi-driver chart does not support
   ansible.builtin.debug:
     msg: >-
       Provider(s) {{ _csi_driver_install_unique_providers | difference(_csi_driver_install_dispatched_vendors) | join(', ') }}
       dispatched but not present in csi_driver_install_supported_vendors
       ({{ csi_driver_install_supported_vendors | join(', ') }}) — the OSAC CSI
-      driver will not be enabled for them.
-  when: (_csi_driver_install_unique_providers | difference(_csi_driver_install_dispatched_vendors)) | length > 0
-
+  when:
+    - csi_driver_install_enabled | default(false) | bool
+    - (_csi_driver_install_unique_providers | difference(_csi_driver_install_dispatched_vendors)) | length > 0
 - name: Read live vendor controller Services for dispatched, CSI-driver-supported providers
   kubernetes.core.k8s_info:
     api_version: v1
@@ -155,7 +157,7 @@
           {% if _ctrl.get(_v) != (_v ~ '-csi-controller.'
              ~ csi_driver_install_backends_namespace ~ '.svc.cluster.local:' ~ (_csi_driver_install_vendor_service_ports[_v] | string))
              or _node.get(_v) != (csi_driver_install_vendor_node_socket_paths[_v] ~ '/csi.sock')
-             or not (_vendors.get(_v, {}).get('enabled', false)) -%}
+             or not ((_vendors.get(_v) or {}).get('enabled', false)) -%}
           {% set _ns.ok = false -%}
           {% endif -%}
           {% endfor -%}

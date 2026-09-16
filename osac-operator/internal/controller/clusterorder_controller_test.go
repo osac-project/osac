@@ -641,7 +641,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 
 		ctx := context.Background()
 
-		It("should keep Phase progressing on the first HostedCluster-ready observation", func() {
+		It("should set Phase to Ready when HostedCluster is ready", func() {
 			instance := &v1alpha1.ClusterOrder{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-hc-no-phase",
@@ -664,7 +664,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 			err := reconciler.handleHostedCluster(ctx, instance, hc)
 			Expect(err).NotTo(HaveOccurred())
 
-			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseProgressing))
+			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseReady))
 
 			Expect(instance.IsStatusConditionTrue(v1alpha1.ConditionControlPlaneAvailable)).To(BeTrue())
 			Expect(instance.IsStatusConditionTrue(v1alpha1.ConditionClusterAvailable)).To(BeTrue())
@@ -696,7 +696,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 			}}}
 			nodePools := []hypershiftv1beta1.NodePool{readyClusterOrderNodePool("worker", 1)}
 
-			Expect(finalizeReadyIfProvisioned(logr.Discard(), instance, hc, nodePools, true)).To(BeTrue())
+			Expect(finalizeReadyIfProvisioned(logr.Discard(), instance, hc, nodePools)).To(BeTrue())
 			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseReady))
 			progressing := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
 			Expect(progressing).NotTo(BeNil())
@@ -1735,7 +1735,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 			Expect(cond.Message).To(Equal("provisioning in progress"))
 		})
 
-		It("should keep BMaaS Phase=Progressing and set WorkersJoining on OnSuccess while workers are pending", func() {
+		It("should leave live readiness observations to handleHostedCluster on OnSuccess", func() {
 			instance := &v1alpha1.ClusterOrder{
 				Spec: v1alpha1.ClusterOrderSpec{
 					NodeRequests: []v1alpha1.NodeRequest{{NodeSet: "bm.large",
@@ -1756,13 +1756,10 @@ var _ = Describe("ClusterOrder Controller", func() {
 			callbacks.OnSuccess(provisioning.ProvisionStatus{})
 
 			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseProgressing))
-			cond := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
-			Expect(cond).NotTo(BeNil())
-			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
-			Expect(cond.Reason).To(Equal(v1alpha1.ReasonWorkersJoining))
+			Expect(instance.Status.Conditions).To(BeEmpty())
 		})
 
-		It("should keep CaaS orders progressing after provisioning recovery until HostedCluster readiness", func() {
+		It("should not overwrite a stale condition on provisioning success", func() {
 			instance := &v1alpha1.ClusterOrder{
 				Status: v1alpha1.ClusterOrderStatus{
 					Phase: v1alpha1.ClusterOrderPhaseProgressing,
@@ -1785,9 +1782,9 @@ var _ = Describe("ClusterOrder Controller", func() {
 			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseProgressing))
 			cond := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
 			Expect(cond).NotTo(BeNil())
-			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
-			Expect(cond.Reason).To(Equal(v1alpha1.ReasonProgressing))
-			Expect(cond.Message).To(BeEmpty())
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal(v1alpha1.ReasonProvisioningFailed))
+			Expect(cond.Message).To(Equal("previous failure"))
 		})
 	})
 

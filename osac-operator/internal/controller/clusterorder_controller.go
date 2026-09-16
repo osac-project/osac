@@ -536,6 +536,10 @@ func (r *ClusterOrderReconciler) handleHostedCluster(ctx context.Context, instan
 	if err := r.handleNodePools(ctx, instance, nodePools); err != nil {
 		return err
 	}
+	// A successful provisioning job only means that the infrastructure request
+	// was accepted. Derive terminal readiness from the live HostedCluster and
+	// NodePool observations in this reconcile.
+	finalizeReadyIfProvisioned(instance, hc, nodePools.Items)
 	return nil
 }
 
@@ -737,6 +741,62 @@ func hostedClusterControlPlaneIsAvailable(hc *hypershiftv1beta1.HostedCluster) b
 func hostedClusterIsReady(hc *hypershiftv1beta1.HostedCluster) bool {
 	return (apimeta.IsStatusConditionTrue(hc.Status.Conditions, string(hypershiftv1beta1.ClusterVersionSucceeding)) &&
 		apimeta.IsStatusConditionFalse(hc.Status.Conditions, string(hypershiftv1beta1.HostedClusterDegraded)))
+}
+
+func hostedClusterAndNodePoolsAreReady(instance *v1alpha1.ClusterOrder, hc *hypershiftv1beta1.HostedCluster,
+	nodePools []hypershiftv1beta1.NodePool) bool {
+	if !hostedClusterControlPlaneIsAvailable(hc) ||
+		!apimeta.IsStatusConditionTrue(hc.Status.Conditions, string(hypershiftv1beta1.KubeAPIServerAvailable)) ||
+		!hostedClusterIsReady(hc) {
+		return false
+	}
+	if len(instance.Spec.NodeRequests) > 0 && len(nodePools) == 0 {
+		return false
+	}
+
+	requestedCapacity := 0
+	for _, request := range instance.Spec.NodeRequests {
+		requestedCapacity += request.NumberOfNodes
+	}
+	observedCapacity := 0
+	for i := range nodePools {
+		if !nodePoolIsReady(&nodePools[i]) {
+			return false
+		}
+		observedCapacity += int(nodePools[i].Status.Replicas)
+	}
+	return observedCapacity >= requestedCapacity
+}
+
+func nodePoolIsReady(nodePool *hypershiftv1beta1.NodePool) bool {
+	allMachinesReady := false
+	poolReady := false
+	for _, condition := range nodePool.Status.Conditions {
+		switch condition.Type {
+		case hypershiftv1beta1.NodePoolAllMachinesReadyConditionType:
+			allMachinesReady = condition.Status == corev1.ConditionTrue
+		case hypershiftv1beta1.NodePoolReadyConditionType:
+			poolReady = condition.Status == corev1.ConditionTrue
+		}
+	}
+	return allMachinesReady && poolReady
+}
+
+func provisioningJobSucceeded(instance *v1alpha1.ClusterOrder) bool {
+	job := provisioning.FindLatestJobByType(instance.Status.ProvisioningJobs, v1alpha1.JobTypeProvision)
+	return job != nil && job.State == v1alpha1.JobStateSucceeded
+}
+
+func finalizeReadyIfProvisioned(instance *v1alpha1.ClusterOrder, hc *hypershiftv1beta1.HostedCluster,
+	nodePools []hypershiftv1beta1.NodePool) bool {
+	if !provisioningJobSucceeded(instance) ||
+		!hostedClusterAndNodePoolsAreReady(instance, hc, nodePools) {
+		return false
+	}
+
+	instance.Status.Phase = v1alpha1.ClusterOrderPhaseReady
+	instance.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionFalse, "", v1alpha1.ReasonAsExpected)
+	return true
 }
 
 // deriveProvisioningSubStage returns a live sub-stage reason reflecting the current HC condition

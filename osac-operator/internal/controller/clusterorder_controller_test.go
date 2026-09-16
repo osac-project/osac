@@ -476,15 +476,49 @@ var _ = Describe("ClusterOrder Controller", func() {
 					},
 				},
 			}
-
 			err := reconciler.handleHostedCluster(ctx, instance, hc)
 			Expect(err).NotTo(HaveOccurred())
 
 			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseProgressing),
-				"handleHostedCluster must not set Phase to Ready — Phase is controlled by provisioning callbacks")
+				"handleHostedCluster must not set Phase to Ready — Phase is controlled by live resource observations")
 
 			Expect(instance.IsStatusConditionTrue(v1alpha1.ConditionControlPlaneAvailable)).To(BeTrue())
 			Expect(instance.IsStatusConditionTrue(v1alpha1.ConditionClusterAvailable)).To(BeTrue())
+		})
+
+		It("should finalize Ready after provisioning and live worker readiness", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Status: v1alpha1.ClusterOrderStatus{
+					Phase: v1alpha1.ClusterOrderPhaseProgressing,
+					ProvisioningJobs: []v1alpha1.JobStatus{{
+						Type:  v1alpha1.JobTypeProvision,
+						State: v1alpha1.JobStateSucceeded,
+					}},
+				},
+				Spec: v1alpha1.ClusterOrderSpec{
+					NodeRequests: []v1alpha1.NodeRequest{{ResourceClass: "worker", NumberOfNodes: 1}},
+				},
+			}
+			hc := &hypershiftv1beta1.HostedCluster{Status: hypershiftv1beta1.HostedClusterStatus{Conditions: []metav1.Condition{
+				{Type: string(hypershiftv1beta1.KubeAPIServerAvailable), Status: metav1.ConditionTrue},
+				{Type: string(hypershiftv1beta1.HostedClusterAvailable), Status: metav1.ConditionTrue},
+				{Type: string(hypershiftv1beta1.HostedClusterDegraded), Status: metav1.ConditionFalse},
+				{Type: string(hypershiftv1beta1.ClusterVersionSucceeding), Status: metav1.ConditionTrue},
+			}}}
+			nodePools := []hypershiftv1beta1.NodePool{{Status: hypershiftv1beta1.NodePoolStatus{
+				Replicas: 1,
+				Conditions: []hypershiftv1beta1.NodePoolCondition{
+					{Type: hypershiftv1beta1.NodePoolAllMachinesReadyConditionType, Status: corev1.ConditionTrue},
+					{Type: hypershiftv1beta1.NodePoolReadyConditionType, Status: corev1.ConditionTrue},
+				},
+			}}}
+
+			Expect(finalizeReadyIfProvisioned(instance, hc, nodePools)).To(BeTrue())
+			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseReady))
+			progressing := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
+			Expect(progressing).NotTo(BeNil())
+			Expect(progressing.Status).To(Equal(metav1.ConditionFalse))
+			Expect(progressing.Reason).To(Equal(v1alpha1.ReasonAsExpected))
 		})
 
 		It("should not modify Phase when HostedCluster is not yet available", func() {

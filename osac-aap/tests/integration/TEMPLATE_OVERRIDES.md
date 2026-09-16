@@ -43,13 +43,15 @@ Tasks performed:
 
 ### Install Flow (tasks/install.yaml)
 
-**4 overrideable steps**.
+**6 overrideable steps**.
 
 | Step Name | Default Role | Override Variable | Description |
 |-----------|-------------|-------------------|-------------|
 | Pre-install Hook | osac.templates.ocp_small (noop.yaml) | `install_step_pre_install_hook_override` | Hook before cluster creation (noop by default) |
 | **Create Hosted Cluster** | osac.service.hosted_cluster | `install_step_hosted_cluster_override` | **Creates HostedCluster and NodePool CRDs** ⚠️ |
 | Retrieve Kubeconfig | osac.service.retrieve_kubeconfig | `install_step_retrieve_kubeconfig_override` | Retrieves admin kubeconfig from cluster |
+| Wait for Nodes | osac.service.wait_for (wait_for_nodes.yaml) | `install_step_wait_for_nodes_override` | Waits for expected node count to be ready |
+| Wait for Cluster Operators | osac.service.wait_for (wait_for_cluster_operators.yaml) | `install_step_wait_for_cluster_operators_override` | Waits for all cluster operators to be available |
 | Post-install Hook | osac.templates.ocp_small (noop.yaml) | `install_step_post_install_hook_override` | Hook after cluster creation (noop by default) |
 
 > **Note (OSAC-2243):** The `cluster_infra` and `external_access` steps were

@@ -57,13 +57,9 @@ jobs:
       # go.mod require/replace directives, not guesses -- fulfillment-service
       # imports bare-metal-fulfillment-operator and osac-operator/api,
       # osac-metering/metering-service and osac-metering/adapters both import
-      # osac-metering/schema. go.work/go.work.sum are included in every Go
-      # component's filter too -- a workspace-level change (Go version bump,
-      # a module added/removed from `use`) can affect all of them without
-      # touching any single component's own directory. Missing one of these
-      # would reproduce exactly the class of bug OSAC-4066 found in graphify
-      # ci-select: a real dependency silently absent from the filter, causing
-      # a false skip.
+      # osac-metering/schema. Missing one of these would reproduce exactly
+      # the class of bug OSAC-4066 found in graphify ci-select: a real
+      # dependency silently absent from the filter, causing a false skip.
       fulfillment-service-relevant: ${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group') || steps.filter.outputs.fulfillment-service == 'true' }}
       osac-metering-relevant: ${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group') || steps.filter.outputs.osac-metering == 'true' }}
       osac-metering-adapters-relevant: ${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group') || steps.filter.outputs.osac-metering-adapters == 'true' }}
@@ -107,13 +103,13 @@ jobs:
               - '!.skillsaw.yaml'
               - '!.pre-commit-config.yaml'
             fulfillment-service:
-              - '{fulfillment-service/**,bare-metal-fulfillment-operator/**,osac-operator/api/**,proto/**,go.work,go.work.sum,.github/workflows/unit-tests.yml}'
+              - '{fulfillment-service/**,bare-metal-fulfillment-operator/**,osac-operator/api/**,proto/**,.github/workflows/unit-tests.yml}'
             osac-metering:
-              - '{osac-metering/metering-service/**,osac-metering/schema/**,proto/**,go.work,go.work.sum,.github/workflows/unit-tests.yml}'
+              - '{osac-metering/metering-service/**,osac-metering/schema/**,proto/**,.github/workflows/unit-tests.yml}'
             osac-metering-adapters:
-              - '{osac-metering/adapters/**,osac-metering/schema/**,go.work,go.work.sum,.github/workflows/unit-tests.yml}'
+              - '{osac-metering/adapters/**,osac-metering/schema/**,.github/workflows/unit-tests.yml}'
             osac-metering-schema:
-              - '{osac-metering/schema/**,go.work,go.work.sum,.github/workflows/unit-tests.yml}'
+              - '{osac-metering/schema/**,.github/workflows/unit-tests.yml}'
       # A job-level `concurrency:` block can reference `needs.*.outputs.*`,
       # unlike a workflow-level one, which is evaluated before any job runs
       # and so cannot depend on a computed value -- this is why the key is

@@ -39,26 +39,16 @@ jobs:
       # (schedule/workflow_dispatch/workflow_call runs skip the filter step
       # entirely, so steps.filter.outputs.* would otherwise be empty, not
       # 'true'). Cross-component edges (not just each component's own
-      # directory) are real dependencies, not guesses: fulfillment-service
-      # imports bare-metal-fulfillment-operator and osac-operator/api (Go
-      # module deps traced from go.work + each component's go.mod
-      # require/replace directives); osac-operator and
-      # bare-metal-fulfillment-operator import each other's whole module (a
-      # local-replace cycle). go.work/go.work.sum are included in every Go
-      # component's filter too -- a workspace-level change (Go version bump,
-      # a module added/removed from `use`) can affect all of them without
-      # touching any single component's own directory. osac-installer/** is
-      # included as well: fulfillment-service's, osac-operator's, and
-      # bare-metal-fulfillment-operator's jobs all run their setup and tests
-      # via `make -C osac-installer install-infra`/`make -C osac-installer
-      # test`, so an osac-installer-only change (Makefile, infra chart) can
-      # break them despite touching none of their own directories. osac-aap
-      # (pure Python/Ansible, no Go/osac-installer coupling) and
-      # osac-installer's own job (see its own `if:` below, deliberately
-      # unscoped -- it deploys the full stack) are the only two NOT
-      # narrowed. Missing one of these edges would reproduce exactly the
-      # class of bug OSAC-4066 found in graphify ci-select: a real
-      # dependency silently absent from the filter, causing a false skip.
+      # directory) are real Go module dependencies traced from go.work +
+      # each component's go.mod require/replace directives, not guesses:
+      # fulfillment-service imports bare-metal-fulfillment-operator and
+      # osac-operator/api; osac-operator and bare-metal-fulfillment-operator
+      # import each other's whole module (a local-replace cycle). osac-aap
+      # (pure Python/Ansible) and osac-installer (see its own job's `if:`
+      # below) are deliberately NOT narrowed. Missing one of these edges
+      # would reproduce exactly the class of bug OSAC-4066 found in graphify
+      # ci-select: a real dependency silently absent from the filter,
+      # causing a false skip.
       fulfillment-service-relevant: ${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group') || steps.filter.outputs.fulfillment-service == 'true' }}
       osac-operator-relevant: ${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group') || steps.filter.outputs.osac-operator == 'true' }}
       bare-metal-fulfillment-operator-relevant: ${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group') || steps.filter.outputs.bare-metal-fulfillment-operator == 'true' }}
@@ -102,11 +92,11 @@ jobs:
               - '!.skillsaw.yaml'
               - '!.pre-commit-config.yaml'
             fulfillment-service:
-              - '{fulfillment-service/**,bare-metal-fulfillment-operator/**,osac-operator/api/**,proto/**,osac-installer/**,go.work,go.work.sum,.github/workflows/integration-tests.yml}'
+              - '{fulfillment-service/**,bare-metal-fulfillment-operator/**,osac-operator/api/**,proto/**,.github/workflows/integration-tests.yml}'
             osac-operator:
-              - '{osac-operator/**,bare-metal-fulfillment-operator/**,proto/**,osac-installer/**,go.work,go.work.sum,.github/workflows/integration-tests.yml}'
+              - '{osac-operator/**,bare-metal-fulfillment-operator/**,proto/**,.github/workflows/integration-tests.yml}'
             bare-metal-fulfillment-operator:
-              - '{bare-metal-fulfillment-operator/**,osac-operator/**,proto/**,osac-installer/**,go.work,go.work.sum,.github/workflows/integration-tests.yml}'
+              - '{bare-metal-fulfillment-operator/**,osac-operator/**,proto/**,.github/workflows/integration-tests.yml}'
             osac-aap:
               - '{osac-aap/**,.github/workflows/integration-tests.yml}'
       # A job-level `concurrency:` block can reference `needs.*.outputs.*`,

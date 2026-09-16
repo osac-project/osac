@@ -36,6 +36,19 @@ import (
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 )
 
+func readyClusterOrderNodePool(resourceClass string, replicas int32) hypershiftv1beta1.NodePool {
+	return hypershiftv1beta1.NodePool{
+		ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{agentResourceClassLabel: resourceClass}},
+		Status: hypershiftv1beta1.NodePoolStatus{
+			Replicas: replicas,
+			Conditions: []hypershiftv1beta1.NodePoolCondition{
+				{Type: hypershiftv1beta1.NodePoolAllMachinesReadyConditionType, Status: corev1.ConditionTrue},
+				{Type: hypershiftv1beta1.NodePoolReadyConditionType, Status: corev1.ConditionTrue},
+			},
+		},
+	}
+}
+
 var _ = Describe("ClusterOrder Controller", func() {
 	Context("When reconciling a resource", func() {
 		const resourceName = "test-resource"
@@ -505,13 +518,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 				{Type: string(hypershiftv1beta1.HostedClusterDegraded), Status: metav1.ConditionFalse},
 				{Type: string(hypershiftv1beta1.ClusterVersionSucceeding), Status: metav1.ConditionTrue},
 			}}}
-			nodePools := []hypershiftv1beta1.NodePool{{Status: hypershiftv1beta1.NodePoolStatus{
-				Replicas: 1,
-				Conditions: []hypershiftv1beta1.NodePoolCondition{
-					{Type: hypershiftv1beta1.NodePoolAllMachinesReadyConditionType, Status: corev1.ConditionTrue},
-					{Type: hypershiftv1beta1.NodePoolReadyConditionType, Status: corev1.ConditionTrue},
-				},
-			}}}
+			nodePools := []hypershiftv1beta1.NodePool{readyClusterOrderNodePool("worker", 1)}
 
 			Expect(finalizeReadyIfProvisioned(instance, hc, nodePools)).To(BeTrue())
 			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseReady))
@@ -520,6 +527,30 @@ var _ = Describe("ClusterOrder Controller", func() {
 			Expect(progressing.Status).To(Equal(metav1.ConditionFalse))
 			Expect(progressing.Reason).To(Equal(v1alpha1.ReasonAsExpected))
 		})
+
+		DescribeTable("should require every NodePool to match its requested capacity",
+			func(requests []v1alpha1.NodeRequest, nodePools []hypershiftv1beta1.NodePool, expected bool) {
+				Expect(nodePoolsMatchRequests(requests, nodePools)).To(Equal(expected))
+			},
+			Entry("all pools match", []v1alpha1.NodeRequest{
+				{ResourceClass: "gpu", NumberOfNodes: 2},
+				{ResourceClass: "worker", NumberOfNodes: 3},
+			}, []hypershiftv1beta1.NodePool{
+				readyClusterOrderNodePool("gpu", 2), readyClusterOrderNodePool("worker", 3),
+			}, true),
+			Entry("one pool is under capacity", []v1alpha1.NodeRequest{
+				{ResourceClass: "gpu", NumberOfNodes: 2},
+				{ResourceClass: "worker", NumberOfNodes: 3},
+			}, []hypershiftv1beta1.NodePool{
+				readyClusterOrderNodePool("gpu", 1), readyClusterOrderNodePool("worker", 4),
+			}, false),
+			Entry("one pool is over capacity", []v1alpha1.NodeRequest{
+				{ResourceClass: "gpu", NumberOfNodes: 2},
+				{ResourceClass: "worker", NumberOfNodes: 3},
+			}, []hypershiftv1beta1.NodePool{
+				readyClusterOrderNodePool("gpu", 3), readyClusterOrderNodePool("worker", 2),
+			}, false),
+		)
 
 		It("should not modify Phase when HostedCluster is not yet available", func() {
 			instance := &v1alpha1.ClusterOrder{

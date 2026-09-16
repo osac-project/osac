@@ -750,22 +750,48 @@ func hostedClusterAndNodePoolsAreReady(instance *v1alpha1.ClusterOrder, hc *hype
 		!hostedClusterIsReady(hc) {
 		return false
 	}
-	if len(instance.Spec.NodeRequests) > 0 && len(nodePools) == 0 {
+	return nodePoolsMatchRequests(instance.Spec.NodeRequests, nodePools)
+}
+
+func nodePoolsMatchRequests(requests []v1alpha1.NodeRequest, nodePools []hypershiftv1beta1.NodePool) bool {
+	expectedReplicas := expectedNodePoolReplicas(requests)
+	if len(expectedReplicas) != len(nodePools) {
 		return false
 	}
 
-	requestedCapacity := 0
-	for _, request := range instance.Spec.NodeRequests {
-		requestedCapacity += request.NumberOfNodes
-	}
-	observedCapacity := 0
+	seen := make(map[string]struct{}, len(nodePools))
 	for i := range nodePools {
-		if !nodePoolIsReady(&nodePools[i]) {
+		resourceClass, ok := nodePoolResourceClass(&nodePools[i])
+		if !ok {
 			return false
 		}
-		observedCapacity += int(nodePools[i].Status.Replicas)
+		expected, ok := expectedReplicas[resourceClass]
+		if !ok {
+			return false
+		}
+		if _, duplicate := seen[resourceClass]; duplicate || !nodePoolMatchesRequest(&nodePools[i], expected) {
+			return false
+		}
+		seen[resourceClass] = struct{}{}
 	}
-	return observedCapacity >= requestedCapacity
+	return len(seen) == len(expectedReplicas)
+}
+
+func expectedNodePoolReplicas(requests []v1alpha1.NodeRequest) map[string]int {
+	expected := make(map[string]int, len(requests))
+	for _, request := range requests {
+		expected[request.ResourceClass] = request.NumberOfNodes
+	}
+	return expected
+}
+
+func nodePoolResourceClass(nodePool *hypershiftv1beta1.NodePool) (string, bool) {
+	resourceClass, ok := nodePool.Labels[agentResourceClassLabel]
+	return resourceClass, ok && resourceClass != ""
+}
+
+func nodePoolMatchesRequest(nodePool *hypershiftv1beta1.NodePool, expectedReplicas int) bool {
+	return nodePoolIsReady(nodePool) && int(nodePool.Status.Replicas) == expectedReplicas
 }
 
 func nodePoolIsReady(nodePool *hypershiftv1beta1.NodePool) bool {

@@ -206,8 +206,15 @@ wait_for_component_publish_workflow_run() {
     start=${SECONDS}
     run_id=""
     while true; do
-        run_id=$(gh run list --workflow "${workflow_file}" --branch "${tag}" --event push \
-            --limit 1 --json databaseId --jq '.[0].databaseId // empty' 2>/dev/null || true)
+        # Not `gh run list --branch/--event` (server-side filtered) -- confirmed
+        # live (OSAC-5357 follow-up) that it can silently miss a run that
+        # genuinely exists and already succeeded, for far longer than any
+        # reasonable indexing lag (45+ minutes observed on a real release
+        # dispatch). List recent runs for this workflow unfiltered instead and
+        # match the tag client-side with a real jq (not gh's --jq), which
+        # supports --arg for safe interpolation.
+        run_id=$(gh run list --workflow "${workflow_file}" --limit 30 --json databaseId,headBranch,event 2>/dev/null \
+            | jq -r --arg tag "${tag}" '[.[] | select(.headBranch == $tag and .event == "push")][0].databaseId // empty' 2>/dev/null || true)
         [[ -n "${run_id}" ]] && break
         if (( SECONDS - start >= timeout )); then
             echo "::error::${safe_workflow} never started for tag ${safe_tag} within ${timeout}s -- a real push should trigger it, but no matching run appeared; the component tag exists without a real publish" >&2

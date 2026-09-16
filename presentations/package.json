@@ -2,6 +2,6 @@
   "name": "osac-pr-dashboard-presentations",
   "private": true,
   "devDependencies": {
-    "@marp-team/marp-cli": "4.4.0"
+    "@marp-team/marp-cli": "4.5.1"
   }
 }

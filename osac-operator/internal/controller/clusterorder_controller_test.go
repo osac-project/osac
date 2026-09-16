@@ -587,13 +587,13 @@ var _ = Describe("ClusterOrder Controller", func() {
 				{ResourceClass: "gpu", NumberOfNodes: 2},
 				{ResourceClass: "worker", NumberOfNodes: 3},
 			}, []hypershiftv1beta1.NodePool{
-				readyClusterOrderNodePool("gpu", 1), readyClusterOrderNodePool("worker", 4),
+				readyClusterOrderNodePool("gpu", 1), readyClusterOrderNodePool("worker", 3),
 			}, false),
 			Entry("one pool is over capacity", []v1alpha1.NodeRequest{
 				{ResourceClass: "gpu", NumberOfNodes: 2},
 				{ResourceClass: "worker", NumberOfNodes: 3},
 			}, []hypershiftv1beta1.NodePool{
-				readyClusterOrderNodePool("gpu", 3), readyClusterOrderNodePool("worker", 2),
+				readyClusterOrderNodePool("gpu", 3), readyClusterOrderNodePool("worker", 3),
 			}, false),
 			Entry("duplicate resource classes do not collapse", []v1alpha1.NodeRequest{
 				{ResourceClass: "worker", NumberOfNodes: 1},

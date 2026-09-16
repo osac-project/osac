@@ -29,6 +29,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -762,7 +763,7 @@ func nodePoolsMatchRequests(requests []v1alpha1.NodeRequest, nodePools []hypersh
 		return false
 	}
 
-	seen := make(map[string]struct{}, len(nodePools))
+	seen := sets.New[string]()
 	for i := range nodePools {
 		resourceClass, ok := nodePoolResourceClass(&nodePools[i])
 		if !ok {
@@ -772,21 +773,21 @@ func nodePoolsMatchRequests(requests []v1alpha1.NodeRequest, nodePools []hypersh
 		if !ok {
 			return false
 		}
-		if _, duplicate := seen[resourceClass]; duplicate || !nodePoolMatchesRequest(&nodePools[i], expected) {
+		if seen.Has(resourceClass) || !nodePoolMatchesRequest(&nodePools[i], expected) {
 			return false
 		}
-		seen[resourceClass] = struct{}{}
+		seen.Insert(resourceClass)
 	}
 	return len(seen) == len(expectedReplicas)
 }
 
 func nodeRequestsContainDuplicateResourceClasses(requests []v1alpha1.NodeRequest) bool {
-	seen := make(map[string]struct{}, len(requests))
+	seen := sets.New[string]()
 	for _, request := range requests {
-		if _, duplicate := seen[request.ResourceClass]; duplicate {
+		if seen.Has(request.ResourceClass) {
 			return true
 		}
-		seen[request.ResourceClass] = struct{}{}
+		seen.Insert(request.ResourceClass)
 	}
 	return false
 }

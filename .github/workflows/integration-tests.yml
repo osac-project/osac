@@ -32,6 +32,27 @@ jobs:
       # workflow_dispatch always run. Job-level `if:` skip reports success
       # so docs-only PRs (and merge groups) are not blocked.
       should-run: ${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group') || steps.filter.outputs.code == 'true' }}
+      # Per-component narrowing on top of should-run above: a PR touching
+      # only e.g. osac-aap/** shouldn't also run fulfillment-service's or
+      # osac-operator's integration tests. Same "always true on non-PR/
+      # merge_group events" passthrough as should-run, for the same reason
+      # (schedule/workflow_dispatch/workflow_call runs skip the filter step
+      # entirely, so steps.filter.outputs.* would otherwise be empty, not
+      # 'true'). Cross-component edges (not just each component's own
+      # directory) are real Go module dependencies traced from go.work +
+      # each component's go.mod require/replace directives, not guesses:
+      # fulfillment-service imports bare-metal-fulfillment-operator and
+      # osac-operator/api; osac-operator and bare-metal-fulfillment-operator
+      # import each other's whole module (a local-replace cycle). osac-aap
+      # (pure Python/Ansible) and osac-installer (see its own job's `if:`
+      # below) are deliberately NOT narrowed. Missing one of these edges
+      # would reproduce exactly the class of bug OSAC-4066 found in graphify
+      # ci-select: a real dependency silently absent from the filter,
+      # causing a false skip.
+      fulfillment-service-relevant: ${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group') || steps.filter.outputs.fulfillment-service == 'true' }}
+      osac-operator-relevant: ${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group') || steps.filter.outputs.osac-operator == 'true' }}
+      bare-metal-fulfillment-operator-relevant: ${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group') || steps.filter.outputs.bare-metal-fulfillment-operator == 'true' }}
+      osac-aap-relevant: ${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group') || steps.filter.outputs.osac-aap == 'true' }}
       concurrency-key: ${{ steps.concurrency-key.outputs.key }}
     steps:
       # dorny/paths-filter uses git diff on merge_group (not the PR Files API),
@@ -45,6 +66,17 @@ jobs:
         if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
         id: filter
         with:
+          # predicate-quantifier: 'every' applies to every filter in this
+          # step, not just `code` -- required there to combine a broad '**'
+          # match with several negations as an AND. The per-component
+          # filters below don't need negations, just "does any of these
+          # patterns match", so each is written as ONE brace-alternation
+          # entry (not a flat list of separate entries) -- same convention
+          # already verified against real repo paths in
+          # e2e-suite-selection-poc.yml's own vmaas-clear/caas-clear/etc.
+          # filters (that file's own comment: "a flat-list version matched
+          # nothing at all" under 'every', since a flat list would require a
+          # single file to satisfy every entry simultaneously).
           predicate-quantifier: 'every'
           filters: |
             code:
@@ -59,6 +91,14 @@ jobs:
               - '!.design/**'
               - '!.skillsaw.yaml'
               - '!.pre-commit-config.yaml'
+            fulfillment-service:
+              - '{fulfillment-service/**,bare-metal-fulfillment-operator/**,osac-operator/api/**,proto/**,.github/workflows/integration-tests.yml}'
+            osac-operator:
+              - '{osac-operator/**,bare-metal-fulfillment-operator/**,proto/**,.github/workflows/integration-tests.yml}'
+            bare-metal-fulfillment-operator:
+              - '{bare-metal-fulfillment-operator/**,osac-operator/**,proto/**,.github/workflows/integration-tests.yml}'
+            osac-aap:
+              - '{osac-aap/**,.github/workflows/integration-tests.yml}'
       # A job-level `concurrency:` block can reference `needs.*.outputs.*`,
       # unlike a workflow-level one (removed above), which is evaluated
       # before any job runs and so cannot depend on a computed value -- this
@@ -111,7 +151,7 @@ jobs:
   fulfillment-service:
     name: Run integration test (fulfillment-service)
     needs: changes
-    if: needs.changes.outputs.should-run == 'true'
+    if: needs.changes.outputs.should-run == 'true' && needs.changes.outputs.fulfillment-service-relevant == 'true'
     concurrency:
       group: integration-fulfillment-service-${{ needs.changes.outputs.concurrency-key }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
@@ -168,7 +208,7 @@ jobs:
   osac-operator:
     name: Run integration test (osac-operator)
     needs: changes
-    if: needs.changes.outputs.should-run == 'true'
+    if: needs.changes.outputs.should-run == 'true' && needs.changes.outputs.osac-operator-relevant == 'true'
     concurrency:
       group: integration-osac-operator-${{ needs.changes.outputs.concurrency-key }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
@@ -222,7 +262,7 @@ jobs:
   bare-metal-fulfillment-operator:
     name: Run integration test (bare-metal-fulfillment-operator)
     needs: changes
-    if: needs.changes.outputs.should-run == 'true'
+    if: needs.changes.outputs.should-run == 'true' && needs.changes.outputs.bare-metal-fulfillment-operator-relevant == 'true'
     concurrency:
       group: integration-bare-metal-fulfillment-operator-${{ needs.changes.outputs.concurrency-key }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
@@ -282,7 +322,7 @@ jobs:
   osac-aap:
     name: Run integration test (osac-aap)
     needs: changes
-    if: needs.changes.outputs.should-run == 'true'
+    if: needs.changes.outputs.should-run == 'true' && needs.changes.outputs.osac-aap-relevant == 'true'
     concurrency:
       group: integration-osac-aap-${{ needs.changes.outputs.concurrency-key }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}

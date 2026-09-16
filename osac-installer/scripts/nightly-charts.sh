@@ -197,7 +197,7 @@ _component_publish_workflows() {
 # to trigger silently didn't run or failed.
 wait_for_component_publish_workflow_run() {
     local workflow_file="$1" tag="$2" timeout="${3:-2700}" interval="${4:-15}"
-    local start start_time run_id safe_workflow safe_tag limit runs run_count oldest_created gh_err gh_err_file
+    local start start_time run_id safe_workflow safe_tag limit runs run_count oldest_created gh_err gh_err_file safe_gh_err
 
     safe_workflow=$(_gha_sanitize_for_message "${workflow_file}")
     safe_tag=$(_gha_sanitize_for_message "${tag}")
@@ -242,8 +242,15 @@ wait_for_component_publish_workflow_run() {
             # error) looks identical to "no match yet" unless logged
             # explicitly -- silently defaulting to an empty list here made a
             # real command failure indistinguishable from a genuine miss in
-            # past runs.
-            [[ -n "${gh_err}" ]] && echo "::warning::gh run list --workflow ${safe_workflow} --limit ${limit} failed: ${gh_err}" >&2
+            # past runs. Sanitized before interpolation into the workflow
+            # command: gh's raw stderr could contain newlines or its own
+            # "::" sequences, which would otherwise break the ::warning::
+            # across multiple lines or be misread as an unrelated workflow
+            # command.
+            if [[ -n "${gh_err}" ]]; then
+                safe_gh_err=$(_gha_sanitize_for_message "${gh_err}")
+                echo "::warning::gh run list --workflow ${safe_workflow} --limit ${limit} failed: ${safe_gh_err}" >&2
+            fi
             run_id=$(jq -r --arg tag "${tag}" \
                 '[.[] | select(.headBranch == $tag and .event == "push")][0].databaseId // empty' \
                 <<<"${runs}")

@@ -1,0 +1,360 @@
+{{- if .Values.caIssuer.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: osac-infra-apply-ca-bundle
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-infra.hookLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+    "helm.sh/hook-weight": "12"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: osac-infra-apply-ca-bundle
+  labels:
+    {{- include "osac-infra.hookLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+    "helm.sh/hook-weight": "12"
+rules:
+  - apiGroups: ["trust.cert-manager.io"]
+    resources: ["bundles"]
+    verbs: ["get", "create", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: osac-infra-apply-ca-bundle
+  labels:
+    {{- include "osac-infra.hookLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+    "helm.sh/hook-weight": "12"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: osac-infra-apply-ca-bundle
+subjects:
+  - kind: ServiceAccount
+    name: osac-infra-apply-ca-bundle
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: osac-infra-apply-ca-bundle
+  namespace: cert-manager
+  labels:
+    {{- include "osac-infra.hookLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+    "helm.sh/hook-weight": "12"
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["endpoints"]
+    verbs: ["get"]
+  - apiGroups: ["cert-manager.io"]
+    resources: ["certificates"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: osac-infra-apply-ca-bundle
+  namespace: cert-manager
+  labels:
+    {{- include "osac-infra.hookLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+    "helm.sh/hook-weight": "12"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: osac-infra-apply-ca-bundle
+subjects:
+  - kind: ServiceAccount
+    name: osac-infra-apply-ca-bundle
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: osac-infra-apply-ca-bundle
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-infra.hookLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-weight": "12"
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 1800
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        {{- include "osac-infra.hookLabels" . | nindent 8 }}
+    spec:
+      securityContext:
+        {{- if .Values.cliJobPodSecurityContext }}
+        {{- toYaml .Values.cliJobPodSecurityContext | nindent 8 }}
+        {{- else }}
+        runAsNonRoot: true
+        {{- end }}
+      serviceAccountName: osac-infra-apply-ca-bundle
+      restartPolicy: Never
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: scripts
+          configMap:
+            name: osac-infra-hook-scripts
+      containers:
+        - name: apply-ca-bundle
+          image: {{ .Values.cliImage }}
+          env:
+            - name: HOME
+              value: /tmp
+            - name: CERT_MANAGER_NAMESPACE
+              value: cert-manager
+            - name: WAIT_DEFAULT_CA
+              value: "true"
+            - name: CA_BUNDLE_NAME
+              value: {{ .Values.certs.caBundle.configMap | quote }}
+            - name: RELEASE_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: OSAC_NAMESPACE
+              value: {{ .Values.osacNamespace | quote }}
+            - name: USE_DEFAULT_CAS
+              value: {{ .Values.keycloak.route.publicIngress | quote }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: scripts
+              mountPath: /scripts
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          command:
+            - /bin/bash
+            - /scripts/apply-ca-bundle.sh
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: osac-infra-delete-ca-bundle
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-infra.hookLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+    "helm.sh/hook-weight": "0"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: osac-infra-delete-ca-bundle
+  labels:
+    {{- include "osac-infra.hookLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+    "helm.sh/hook-weight": "0"
+rules:
+  - apiGroups: ["trust.cert-manager.io"]
+    resources: ["bundles"]
+    verbs: ["get", "delete"]
+    resourceNames: [{{ .Values.certs.caBundle.configMap | quote }}]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles", "clusterrolebindings"]
+    verbs: ["get", "delete"]
+    resourceNames: ["osac-infra-apply-ca-bundle"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: osac-infra-delete-ca-bundle
+  labels:
+    {{- include "osac-infra.hookLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+    "helm.sh/hook-weight": "0"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: osac-infra-delete-ca-bundle
+subjects:
+  - kind: ServiceAccount
+    name: osac-infra-delete-ca-bundle
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: osac-infra-delete-ca-bundle
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-infra.hookLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+    "helm.sh/hook-weight": "0"
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "delete"]
+    resourceNames: ["osac-infra-apply-ca-bundle"]
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["get", "delete"]
+    resourceNames: ["osac-infra-apply-ca-bundle"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: osac-infra-delete-ca-bundle
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-infra.hookLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+    "helm.sh/hook-weight": "0"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: osac-infra-delete-ca-bundle
+subjects:
+  - kind: ServiceAccount
+    name: osac-infra-delete-ca-bundle
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: osac-infra-delete-ca-bundle
+  namespace: cert-manager
+  labels:
+    {{- include "osac-infra.hookLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+    "helm.sh/hook-weight": "0"
+rules:
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings"]
+    verbs: ["get", "delete"]
+    resourceNames: ["osac-infra-apply-ca-bundle"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: osac-infra-delete-ca-bundle
+  namespace: cert-manager
+  labels:
+    {{- include "osac-infra.hookLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+    "helm.sh/hook-weight": "0"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: osac-infra-delete-ca-bundle
+subjects:
+  - kind: ServiceAccount
+    name: osac-infra-delete-ca-bundle
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: osac-infra-delete-ca-bundle
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-infra.hookLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-weight": "0"
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        {{- include "osac-infra.hookLabels" . | nindent 8 }}
+    spec:
+      securityContext:
+        {{- if .Values.cliJobPodSecurityContext }}
+        {{- toYaml .Values.cliJobPodSecurityContext | nindent 8 }}
+        {{- else }}
+        runAsNonRoot: true
+        {{- end }}
+      serviceAccountName: osac-infra-delete-ca-bundle
+      restartPolicy: Never
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: scripts
+          configMap:
+            name: osac-infra-hook-scripts
+      containers:
+        - name: delete-ca-bundle
+          image: {{ .Values.cliImage }}
+          env:
+            - name: HOME
+              value: /tmp
+            - name: CA_BUNDLE_NAME
+              value: {{ .Values.certs.caBundle.configMap | quote }}
+            - name: RELEASE_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: scripts
+              mountPath: /scripts
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          command:
+            - /bin/bash
+            - /scripts/delete-ca-bundle.sh
+{{- end }}

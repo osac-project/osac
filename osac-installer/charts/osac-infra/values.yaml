@@ -1,4 +1,11 @@
 cliImage: quay.io/openshift/origin-cli:4.20.0
+# Pod securityContext for cliImage hook Jobs. Leave unset so OpenShift
+# restricted-v2 SCC allocates the UID. Kind has no SCC and origin-cli
+# USER is 0, so kind-infra.yaml sets runAsUser/fsGroup.
+# cliJobPodSecurityContext:
+#   runAsNonRoot: true
+#   runAsUser: 1000
+#   fsGroup: 1000
 osacNamespace: osac
 csiNamespace: osac-csi
 # Name of the "osac" umbrella chart's Helm release. The csi-driver subchart

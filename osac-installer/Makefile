@@ -173,7 +173,8 @@ endif
 		--namespace osac-infra --create-namespace \
 		-f $(INFRA_VALUES) $(INFRA_VALUES_EXTRA) \
 		--set osacNamespace=$(NS) \
-		--wait-for-jobs --timeout 30m
+		--wait-for-jobs --timeout 30m \
+	|| { echo "=== osac-infra hook jobs ==="; kubectl get jobs,pods,cm -n osac-infra || true; kubectl logs -n osac-infra -l job-name=osac-infra-apply-ca-bundle --tail=200 || true; kubectl get deploy,endpoints,certificate -n cert-manager || true; exit 1; }
 	@for f in ../osac-operator/config/crd/fakes/*.yaml; do \
 		case "$$(basename "$$f")" in \
 			*osac.openshift.io*) continue ;; \
@@ -202,7 +203,8 @@ else
 		--set keycloak.hostname=https://keycloak-keycloak.$(DOMAIN) \
 		--set keycloak.route.hostname=keycloak-keycloak.$(DOMAIN) \
 		--set "bundledVault.keycloakIssuerUrl=https://keycloak-keycloak.$(DOMAIN)/realms/osac" \
-		--timeout 30m --wait-for-jobs
+		--timeout 30m --wait-for-jobs \
+	|| { echo "=== osac-infra hook jobs ==="; oc get jobs,pods,cm -n osac-infra || true; oc logs -n osac-infra -l job-name=osac-infra-apply-ca-bundle --tail=200 || true; oc get deploy,endpoints,certificate -n cert-manager || true; exit 1; }
 endif
 
 .PHONY: uninstall-infra

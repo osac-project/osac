@@ -42,6 +42,12 @@ bundledVault:
   devRootToken: "dev-root-token"
   keycloakIssuerUrl: "https://keycloak.keycloak.svc.cluster.local:8443/realms/osac"
 
+# origin-cli USER is 0; kind has no SCC to allocate a UID.
+cliJobPodSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
 # --- CA issuer ---
 caIssuer:
   enabled: true

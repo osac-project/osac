@@ -1,0 +1,11 @@
+# Create with: osac --tenant shared create -f examples/catalog-items/00-shared-fedora-disk-image.yaml
+'@type': type.googleapis.com/osac.private.v1.DiskImage
+metadata:
+  name: fedora
+  tenant: shared
+spec:
+  source_type: SOURCE_TYPE_REGISTRY
+  source_ref: quay.io/containerdisks/fedora:41
+  guest_os_family: GUEST_OS_FAMILY_LINUX
+  architecture:
+    - ARCHITECTURE_AMD64

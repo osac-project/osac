@@ -21,10 +21,9 @@ fields:
       editable:
         default_value: 120
   disk_image:
-    editable:
-      default_value:
-        name: fedora
-        shared: true
+    locked:
+      name: fedora
+      shared: true
   run_strategy:
     editable:
       default_value: COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS

@@ -29,8 +29,13 @@ Example catalog items for clusters and VMs. Load them with:
 # Create a single catalog item
 osac create -f examples/catalog-items/simple-ocp-4-17-cluster.yaml
 
-# Create all catalog items at once
-for f in examples/catalog-items/*.yaml; do osac create -f "$f"; done
+# Prepare the shared resources used by linux-vm.yaml, in this order
+osac --tenant shared create -f examples/catalog-items/00-shared-fedora-disk-image.yaml
+osac --tenant shared create -f examples/catalog-items/01-shared-u1-small-instance-type.yaml
+
+# Select your tenant, then create its catalog item
+osac tenant YOUR_TENANT
+osac create -f examples/catalog-items/linux-vm.yaml
 ```
 
 **Note:** `osac create -f` is **not idempotent** — it will fail if the resource
@@ -44,13 +49,21 @@ After loading catalog items, use `--catalog-item` to create resources from them:
 # Create a cluster (CIDR fields have defaults, so no extra flags needed)
 osac create cluster --catalog-item simple-ocp-4-17-cluster
 
-# Create a VM (network attachment is required — depends on your tenant's subnets)
-osac create computeinstance --catalog-item linux-vm --network-attachment subnet=SUBNET_ID
+# Create a 10 GiB VM from the Linux catalog item; use the ID printed at creation
+osac create computeinstance --catalog-item CATALOG_ITEM_ID \
+  --name my-linux-vm --boot-disk-size 10 \
+  --boot-disk-storage-tier TIER_NAME \
+  --network-attachment subnet=SUBNET_ID
 ```
 
-**Note:** VM catalog items cannot default the `network_attachments` field because
-the valid values depend on the tenant's existing subnets. You must always provide
-at least one `--network-attachment` when creating a compute instance.
+The Linux VM catalog item does not select a StorageTier. List available tiers with
+`osac get storagetiers`, then supply an active one with `--boot-disk-storage-tier`
+when creating a VM. The installer registers `local` when LVMS is enabled.
+
+**Note:** These VM examples leave `network_attachments` unset because valid
+subnets depend on the tenant. Provide at least one `--network-attachment` when
+creating a compute instance from them unless the tenant has a ready default
+subnet.
 
 ### Cluster catalog items
 
@@ -82,23 +95,23 @@ roles in `osac-aap/collections/ansible_collections/osac/templates/roles/`.
 List available templates with `osac get clustertemplates` or
 `osac get computeinstancetemplates`.
 
-The VM catalog items reference **instance types** (e.g., `u1-medium`) that
-must also exist before VMs can be provisioned. Catalog seeding is not yet
-automated (`make seed-catalog` is currently a stub), so on any cluster
-`osac get instancetypes` is empty — create the required instance types first,
-or update the `instance_type` default in the YAML files to match your
-environment.
+The VM catalog items reference **instance types** (e.g., `u1-small`) that
+must exist before the catalog items can be created. The shared `u1-small`
+definition for `linux-vm.yaml` is in
+[`01-shared-u1-small-instance-type.yaml`](catalog-items/01-shared-u1-small-instance-type.yaml).
+Other examples may need different instance types.
 
 The VM catalog items also reference **disk images** (e.g., `fedora`) by name.
-DiskImage resources must be created before VMs can be provisioned — they map a
-human-readable name to a container disk OCI reference. On a fresh cluster
-`osac get diskimages` is empty — create the required disk images first, or
-update the `disk_image` default in the YAML files to match your environment.
+DiskImage resources must exist before their catalog items can be created —
+they map a human-readable name to a container disk OCI reference. The shared
+`fedora` definition for `linux-vm.yaml` is in
+[`00-shared-fedora-disk-image.yaml`](catalog-items/00-shared-fedora-disk-image.yaml).
+Other examples may need different disk images.
 
 Catalog items also assume the relevant **artifacts** are already available:
 
 - **Container disk images** — OCI artifacts referenced by DiskImage resources
-  (e.g., `quay.io/containerdisks/fedora:latest`)
+  (e.g., `quay.io/containerdisks/fedora:41`)
 - **OpenShift artifacts** — release images and operators required for
   provisioning tenant clusters
 

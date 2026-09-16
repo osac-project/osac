@@ -2,14 +2,11 @@
 
 ## Overview
 
-OSAC uses a three-level hierarchy to provision infrastructure resources:
+Users can create a resource directly from a Template or through a Catalog Item that references one:
 
 ```
-Template
-    ↓  referenced by
-Catalog Item
-    ↓  used by
-Resource (cluster, compute instance, or bare metal instance)
+Template → Catalog Item → Resource
+Template ───────────────→ Resource (direct API creation)
 ```
 
 **Templates** are infrastructure blueprints supplied by the platform. They define node sets, host
@@ -150,6 +147,7 @@ osac get computeinstancetemplates
 osac get computeinstancetemplates osac.templates.ocp_virt_vm -o yaml
 osac get instancetypes
 osac get diskimages
+osac get storagetiers
 ```
 
 ### ComputeInstanceCatalogItem
@@ -196,7 +194,7 @@ metadata:
   name: u1-small
   tenant: shared
 spec:
-  cores: 1
+  cores: 2
   memory_gib: 2
   state: INSTANCE_TYPE_STATE_ACTIVE
 ```
@@ -210,7 +208,7 @@ metadata:
   tenant: shared
 spec:
   source_type: SOURCE_TYPE_REGISTRY
-  source_ref: "quay.io/containerdisks/fedora:latest"
+  source_ref: "quay.io/containerdisks/fedora:41"
   guest_os_family: GUEST_OS_FAMILY_LINUX
   architecture:
     - ARCHITECTURE_AMD64
@@ -307,7 +305,6 @@ fields; in YAML, write them as nested mappings.
 |-------|-------------|
 | `instance_type` | Local BareMetalInstanceType reference for host placement; separate from compute InstanceType |
 | `disk_image` | DiskImage reference |
-| `image` | Inline provisioning image configuration |
 | `ssh_public_key` | SSH public key |
 | `user_data` | Provisioning user data |
 | `run_strategy` | Bare metal run strategy |
@@ -317,7 +314,7 @@ fields; in YAML, write them as nested mappings.
 ### List and node-set policies
 
 List policies put their values under `items`. This example offers a default additional disk that
-users can change. The `standard` StorageTier must already exist and be ready:
+users can change. The `standard` StorageTier must already exist and be active:
 
 ```yaml
 fields:
@@ -370,14 +367,18 @@ no catalog policy if the user or template supplies a value.
 
 ## Creating Resources from Catalog Items
 
-Once a catalog item is published, users create resources from it using `--catalog-item`:
+Once a catalog item is published, users create resources from it using `--catalog-item`. The VM
+offering above leaves the boot-disk StorageTier ungoverned, so choose an active tier when creating
+each VM:
 
 ```bash
-osac create computeinstance --catalog-item <standard-vm-id>
+osac create computeinstance --catalog-item <standard-vm-id> \
+  --boot-disk-storage-tier <active-tier-name>
 ```
 
 Replace `<standard-vm-id>` with the ID from the create output or catalog listing. The compute
-instance command currently expects an ID for `--catalog-item`.
+instance command currently expects an ID for `--catalog-item`. These VM commands use the tenant's
+default subnet. If there is no ready default subnet, add `--network-attachment subnet=SUBNET_ID`.
 
 Users can provide spec fields via CLI flags and `--set`. For the VM example, increase the boot disk
 to 100 GiB and supply your own SSH key:
@@ -386,6 +387,7 @@ to 100 GiB and supply your own SSH key:
 osac create computeinstance --catalog-item <standard-vm-id> \
   --name my-vm \
   --boot-disk-size 100 \
+  --boot-disk-storage-tier <active-tier-name> \
   --ssh-public-key "$(cat ~/.ssh/id_ed25519.pub)"
 ```
 

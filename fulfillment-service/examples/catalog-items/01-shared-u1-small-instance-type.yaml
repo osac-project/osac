@@ -1,0 +1,8 @@
+# Create with: osac --tenant shared create -f examples/catalog-items/01-shared-u1-small-instance-type.yaml
+'@type': type.googleapis.com/osac.private.v1.InstanceType
+metadata:
+  name: u1-small
+  tenant: shared
+spec:
+  cores: 2
+  memory_gib: 2

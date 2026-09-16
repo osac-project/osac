@@ -245,11 +245,10 @@ var _ = Describe("DiskImage lifecycle", func() {
 	})
 
 	AfterEach(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Minute)
-		defer cleanupCancel()
-
 		if computeInstanceId != "" {
-			if _, err := computeInstancesClient.Delete(cleanupCtx, publicv1.ComputeInstancesDeleteRequest_builder{
+			delCtx, delCancel := context.WithTimeout(context.Background(), time.Minute)
+			defer delCancel()
+			if _, err := computeInstancesClient.Delete(delCtx, publicv1.ComputeInstancesDeleteRequest_builder{
 				Id: computeInstanceId,
 			}.Build()); err != nil {
 				GinkgoT().Logf("cleanup: failed to delete ComputeInstance %s: %v", computeInstanceId, err)
@@ -257,7 +256,9 @@ var _ = Describe("DiskImage lifecycle", func() {
 			computeInstanceId = ""
 		}
 		if diskImageId != "" {
-			if _, err := diskImagesClient.Delete(cleanupCtx, privatev1.DiskImagesDeleteRequest_builder{
+			delCtx, delCancel := context.WithTimeout(context.Background(), time.Minute)
+			defer delCancel()
+			if _, err := diskImagesClient.Delete(delCtx, privatev1.DiskImagesDeleteRequest_builder{
 				Id: diskImageId,
 			}.Build()); err != nil {
 				GinkgoT().Logf("cleanup: failed to delete DiskImage %s: %v", diskImageId, err)
@@ -265,7 +266,9 @@ var _ = Describe("DiskImage lifecycle", func() {
 			diskImageId = ""
 		}
 		if subnetId != "" {
-			if _, err := subnetsClient.Delete(cleanupCtx, privatev1.SubnetsDeleteRequest_builder{
+			delCtx, delCancel := context.WithTimeout(context.Background(), time.Minute)
+			defer delCancel()
+			if _, err := subnetsClient.Delete(delCtx, privatev1.SubnetsDeleteRequest_builder{
 				Id: subnetId,
 			}.Build()); err != nil {
 				GinkgoT().Logf("cleanup: failed to delete Subnet %s: %v", subnetId, err)
@@ -273,7 +276,9 @@ var _ = Describe("DiskImage lifecycle", func() {
 			subnetId = ""
 		}
 		if virtualNetworkId != "" {
-			if _, err := virtualNetworksClient.Delete(cleanupCtx, privatev1.VirtualNetworksDeleteRequest_builder{
+			delCtx, delCancel := context.WithTimeout(context.Background(), time.Minute)
+			defer delCancel()
+			if _, err := virtualNetworksClient.Delete(delCtx, privatev1.VirtualNetworksDeleteRequest_builder{
 				Id: virtualNetworkId,
 			}.Build()); err != nil {
 				GinkgoT().Logf("cleanup: failed to delete VirtualNetwork %s: %v", virtualNetworkId, err)
@@ -281,7 +286,9 @@ var _ = Describe("DiskImage lifecycle", func() {
 			virtualNetworkId = ""
 		}
 		if networkClassId != "" {
-			if _, err := networkClassesClient.Delete(cleanupCtx, privatev1.NetworkClassesDeleteRequest_builder{
+			delCtx, delCancel := context.WithTimeout(context.Background(), time.Minute)
+			defer delCancel()
+			if _, err := networkClassesClient.Delete(delCtx, privatev1.NetworkClassesDeleteRequest_builder{
 				Id: networkClassId,
 			}.Build()); err != nil {
 				GinkgoT().Logf("cleanup: failed to delete NetworkClass %s: %v", networkClassId, err)
@@ -289,7 +296,9 @@ var _ = Describe("DiskImage lifecycle", func() {
 			networkClassId = ""
 		}
 		if computeInstanceTemplateId != "" {
-			if _, err := computeInstanceTemplatesClient.Delete(cleanupCtx, privatev1.ComputeInstanceTemplatesDeleteRequest_builder{
+			delCtx, delCancel := context.WithTimeout(context.Background(), time.Minute)
+			defer delCancel()
+			if _, err := computeInstanceTemplatesClient.Delete(delCtx, privatev1.ComputeInstanceTemplatesDeleteRequest_builder{
 				Id: computeInstanceTemplateId,
 			}.Build()); err != nil {
 				GinkgoT().Logf("cleanup: failed to delete ComputeInstanceTemplate %s: %v", computeInstanceTemplateId, err)
@@ -297,7 +306,9 @@ var _ = Describe("DiskImage lifecycle", func() {
 			computeInstanceTemplateId = ""
 		}
 		if instanceTypeId != "" {
-			if _, err := instanceTypesClient.Delete(cleanupCtx, privatev1.InstanceTypesDeleteRequest_builder{
+			delCtx, delCancel := context.WithTimeout(context.Background(), time.Minute)
+			defer delCancel()
+			if _, err := instanceTypesClient.Delete(delCtx, privatev1.InstanceTypesDeleteRequest_builder{
 				Id: instanceTypeId,
 			}.Build()); err != nil {
 				GinkgoT().Logf("cleanup: failed to delete InstanceType %s: %v", instanceTypeId, err)
@@ -305,7 +316,9 @@ var _ = Describe("DiskImage lifecycle", func() {
 			instanceTypeId = ""
 		}
 		if storageTierId != "" {
-			if _, err := storageTiersClient.Delete(cleanupCtx, privatev1.StorageTiersDeleteRequest_builder{
+			delCtx, delCancel := context.WithTimeout(context.Background(), time.Minute)
+			defer delCancel()
+			if _, err := storageTiersClient.Delete(delCtx, privatev1.StorageTiersDeleteRequest_builder{
 				Id: storageTierId,
 			}.Build()); err != nil {
 				GinkgoT().Logf("cleanup: failed to delete StorageTier %s: %v", storageTierId, err)
@@ -313,7 +326,9 @@ var _ = Describe("DiskImage lifecycle", func() {
 			storageTierId = ""
 		}
 		if storageBackendId != "" {
-			if _, err := storageBackendsClient.Delete(cleanupCtx, privatev1.StorageBackendsDeleteRequest_builder{
+			delCtx, delCancel := context.WithTimeout(context.Background(), time.Minute)
+			defer delCancel()
+			if _, err := storageBackendsClient.Delete(delCtx, privatev1.StorageBackendsDeleteRequest_builder{
 				Id: storageBackendId,
 			}.Build()); err != nil {
 				GinkgoT().Logf("cleanup: failed to delete StorageBackend %s: %v", storageBackendId, err)

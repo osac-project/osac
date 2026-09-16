@@ -29,7 +29,7 @@ type VolumeTopology struct {
 
 // VolumeSpec defines the desired state of Volume.
 type VolumeSpec struct {
-	// StorageTier is the name of the StorageTier that determines which backend
+	// StorageTier is the name of the StorageTier that determines which provider
 	// and protocol serve this volume.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
@@ -126,11 +126,6 @@ type VolumeStatus struct {
 	// +kubebuilder:validation:Optional
 	VendorVolumeID string `json:"vendorVolumeID,omitempty"`
 
-	// Backend is the name of the StorageBackend that serves this volume.
-	// Resolved during tier resolution at creation time.
-	// +kubebuilder:validation:Optional
-	Backend string `json:"backend,omitempty"`
-
 	// Provider identifies the registered VendorProvisioner implementation selected for this volume.
 	// Resolved during tier resolution at creation time.
 	// +kubebuilder:validation:Optional
@@ -158,7 +153,7 @@ type VolumeStatus struct {
 // +kubebuilder:printcolumn:name="Size",type=integer,JSONPath=`.spec.sizeGiB`
 // +kubebuilder:printcolumn:name="Access",type=string,JSONPath=`.spec.accessMode`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
-// +kubebuilder:printcolumn:name="Backend",type=string,JSONPath=`.status.backend`,priority=1
+// +kubebuilder:printcolumn:name="Provider",type=string,JSONPath=`.status.provider`,priority=1
 // +kubebuilder:printcolumn:name="VendorID",type=string,JSONPath=`.status.vendorVolumeID`,priority=1
 
 // Volume is the Schema for the volumes API.

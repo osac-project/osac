@@ -686,24 +686,15 @@ func (r *ClusterOrderReconciler) handleNodePool(ctx context.Context, instance *v
 	nodePool *hypershiftv1beta1.NodePool) error {
 	log := ctrllog.FromContext(ctx)
 
-	// TODO: Currently there is no way to know what is the item of the `nodeRequests` field that corresponds to a
-	// node pool. The best we can do is check if there is exactly one, and then assume that this node pool
-	// corresponds to that node request.
-
 	log.Info("processing nodepool", "nodepool", nodePool.GetName())
-	nodeRequestsCount := len(instance.Spec.NodeRequests)
-	if nodeRequestsCount != 1 {
-		log.Info(
-			"expected exactly one node request, will ignore the node pool",
-			"node_pool", nodePool.Name,
-			"node_requests", nodeRequestsCount,
-		)
+	resourceClass, ok := nodePoolResourceClass(nodePool)
+	if !ok {
+		log.Info("node pool has no resource class label, will ignore it", "node_pool", nodePool.Name)
 		return nil
 	}
 
 	// Find the matching item inside the `nodeRequests` field of the status, or create a new one if there is no
 	// matching item yet.
-	resourceClass := instance.Spec.NodeRequests[0].ResourceClass
 	var nodeRequestStatus *v1alpha1.NodeRequest
 	for i, nodeRequestsItem := range instance.Status.NodeRequests {
 		log.Info("looking for resource class", "want", resourceClass, "have", nodeRequestsItem.ResourceClass)

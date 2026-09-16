@@ -971,6 +971,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 			}
 
 			nodePool := &hypershiftv1beta1.NodePool{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{agentResourceClassLabel: "m1.large"}},
 				Status: hypershiftv1beta1.NodePoolStatus{
 					Replicas: 5,
 				},
@@ -1006,6 +1007,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 			}
 
 			nodePool := &hypershiftv1beta1.NodePool{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{agentResourceClassLabel: "m1.large"}},
 				Status: hypershiftv1beta1.NodePoolStatus{
 					Replicas: 5,
 				},
@@ -1020,7 +1022,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 				"spec must not be modified")
 		})
 
-		It("should skip when spec has more than one node request", func() {
+		It("should update the status entry matching the node pool resource class", func() {
 			instance := &v1alpha1.ClusterOrder{
 				Spec: v1alpha1.ClusterOrderSpec{
 					NodeRequests: []v1alpha1.NodeRequest{
@@ -1031,16 +1033,24 @@ var _ = Describe("ClusterOrder Controller", func() {
 			}
 
 			nodePool := &hypershiftv1beta1.NodePool{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{agentResourceClassLabel: "m1.small"}},
 				Status: hypershiftv1beta1.NodePoolStatus{
-					Replicas: 5,
+					Replicas: 2,
 				},
 			}
+			status := []v1alpha1.NodeRequest{
+				{ResourceClass: "m1.large", NumberOfNodes: 0},
+				{ResourceClass: "m1.small", NumberOfNodes: 0},
+			}
+			instance.Status.NodeRequests = status
 
 			err := reconciler.handleNodePool(ctx, instance, nodePool)
 			Expect(err).NotTo(HaveOccurred())
 
-			Expect(instance.Status.NodeRequests).To(BeEmpty(),
-				"status.nodeRequests should not be touched when spec has multiple node requests")
+			Expect(instance.Status.NodeRequests).To(ConsistOf(
+				v1alpha1.NodeRequest{ResourceClass: "m1.large", NumberOfNodes: 0},
+				v1alpha1.NodeRequest{ResourceClass: "m1.small", NumberOfNodes: 2},
+			))
 		})
 
 		It("should not modify status when replicas already match", func() {
@@ -1058,6 +1068,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 			}
 
 			nodePool := &hypershiftv1beta1.NodePool{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{agentResourceClassLabel: "m1.large"}},
 				Status: hypershiftv1beta1.NodePoolStatus{
 					Replicas: 5,
 				},
@@ -1193,6 +1204,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 			}
 
 			nodePool := &hypershiftv1beta1.NodePool{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{agentResourceClassLabel: "m1.large"}},
 				Status: hypershiftv1beta1.NodePoolStatus{
 					Replicas: 5,
 				},
@@ -1228,6 +1240,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 			}
 
 			nodePool := &hypershiftv1beta1.NodePool{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{agentResourceClassLabel: "m1.large"}},
 				Status: hypershiftv1beta1.NodePoolStatus{
 					Replicas: 5,
 				},
@@ -1242,7 +1255,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 				"spec must not be modified")
 		})
 
-		It("should skip when spec has more than one node request", func() {
+		It("should update the status entry matching the node pool resource class", func() {
 			instance := &v1alpha1.ClusterOrder{
 				Spec: v1alpha1.ClusterOrderSpec{
 					NodeRequests: []v1alpha1.NodeRequest{
@@ -1253,16 +1266,23 @@ var _ = Describe("ClusterOrder Controller", func() {
 			}
 
 			nodePool := &hypershiftv1beta1.NodePool{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{agentResourceClassLabel: "m1.small"}},
 				Status: hypershiftv1beta1.NodePoolStatus{
-					Replicas: 5,
+					Replicas: 2,
 				},
+			}
+			instance.Status.NodeRequests = []v1alpha1.NodeRequest{
+				{ResourceClass: "m1.large", NumberOfNodes: 0},
+				{ResourceClass: "m1.small", NumberOfNodes: 0},
 			}
 
 			err := reconciler.handleNodePool(ctx, instance, nodePool)
 			Expect(err).NotTo(HaveOccurred())
 
-			Expect(instance.Status.NodeRequests).To(BeEmpty(),
-				"status.nodeRequests should not be touched when spec has multiple node requests")
+			Expect(instance.Status.NodeRequests).To(ConsistOf(
+				v1alpha1.NodeRequest{ResourceClass: "m1.large", NumberOfNodes: 0},
+				v1alpha1.NodeRequest{ResourceClass: "m1.small", NumberOfNodes: 2},
+			))
 		})
 
 		It("should not modify status when replicas already match", func() {
@@ -1280,6 +1300,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 			}
 
 			nodePool := &hypershiftv1beta1.NodePool{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{agentResourceClassLabel: "m1.large"}},
 				Status: hypershiftv1beta1.NodePoolStatus{
 					Replicas: 5,
 				},

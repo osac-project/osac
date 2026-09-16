@@ -43,32 +43,35 @@ Tasks performed:
 
 ### Install Flow (tasks/install.yaml)
 
-**6 overrideable steps**.
+**4 overrideable steps**.
 
 | Step Name | Default Role | Override Variable | Description |
 |-----------|-------------|-------------------|-------------|
-| Pre-install Hook | osac.workflows.workflow_helpers (noop.yml) | `install_step_pre_install_hook_override` | Hook before cluster creation (noop by default) |
+| Pre-install Hook | osac.templates.ocp_small (noop.yaml) | `install_step_pre_install_hook_override` | Hook before cluster creation (noop by default) |
 | **Create Hosted Cluster** | osac.service.hosted_cluster | `install_step_hosted_cluster_override` | **Creates HostedCluster and NodePool CRDs** ⚠️ |
-| **Create Cluster Infra** | osac.service.cluster_infra | `install_step_cluster_infra_override` | **Creates Agent infrastructure and bare metal hosts via OpenStack/ESI** ⚠️ |
-| **Configure Port Forwarding** | osac.service.external_access | `install_step_external_access_override` | **Allocates floating IPs and configures port forwarding via OpenStack/ESI** ⚠️ |
 | Retrieve Kubeconfig | osac.service.retrieve_kubeconfig | `install_step_retrieve_kubeconfig_override` | Retrieves admin kubeconfig from cluster |
-| Post-install Hook | osac.workflows.workflow_helpers (noop.yml) | `install_step_post_install_hook_override` | Hook after cluster creation (noop by default) |
+| Post-install Hook | osac.templates.ocp_small (noop.yaml) | `install_step_post_install_hook_override` | Hook after cluster creation (noop by default) |
 
-**Critical for Testing**: Override infrastructure steps (hosted_cluster, cluster_infra, external_access) to skip actual resource creation.
+> **Note (OSAC-2243):** The `cluster_infra` and `external_access` steps were
+> removed. Networking is now handled by the OSAC Networking API and fabric
+> manager roles.
+
+**Critical for Testing**: Override `install_step_hosted_cluster_override` to skip actual resource creation.
 
 ### Delete Flow (tasks/delete.yaml)
 
-**5 overrideable steps**.
+**3 overrideable steps**.
 
 | Step Name | Default Role | Override Variable | Description |
 |-----------|-------------|-------------------|-------------|
-| Pre-delete Hook | osac.workflows.workflow_helpers (noop.yml) | `delete_step_pre_delete_hook_override` | Hook before cluster deletion (noop by default) |
+| Pre-delete Hook | osac.templates.ocp_small (noop.yaml) | `delete_step_pre_delete_hook_override` | Hook before cluster deletion (noop by default) |
 | **Destroy Hosted Cluster** | osac.service.hosted_cluster | `delete_step_hosted_cluster_override` | **Deletes HostedCluster and NodePool CRDs** ⚠️ |
-| **Remove Port Forwarding** | osac.service.external_access | `delete_step_external_access_override` | **Removes floating IPs and port forwarding via OpenStack/ESI** ⚠️ |
-| **Destroy Cluster Infra** | osac.service.cluster_infra | `delete_step_cluster_infra_override` | **Destroys Agent infrastructure and bare metal hosts** ⚠️ |
-| Post-delete Hook | osac.workflows.workflow_helpers (noop.yml) | `delete_step_post_delete_hook_override` | Hook after cluster deletion (noop by default) |
+| Post-delete Hook | osac.templates.ocp_small (noop.yaml) | `delete_step_post_delete_hook_override` | Hook after cluster deletion (noop by default) |
 
-**Critical for Testing**: Override infrastructure steps (hosted_cluster, external_access, cluster_infra) to skip actual resource deletion.
+> **Note (OSAC-2243):** The `external_access` and `cluster_infra` steps were
+> removed. Networking teardown is now handled by the OSAC Networking API.
+
+**Critical for Testing**: Override `delete_step_hosted_cluster_override` to skip actual resource deletion.
 
 ### Post-Install Flow (tasks/post_install.yaml)
 
@@ -104,12 +107,6 @@ create_step_wait_annotate_override:
 install_step_hosted_cluster_override:
   name: osac.workflows.workflow_helpers
   tasks_from: noop.yml
-install_step_cluster_infra_override:
-  name: osac.workflows.workflow_helpers
-  tasks_from: noop.yml
-install_step_external_access_override:
-  name: osac.workflows.workflow_helpers
-  tasks_from: noop.yml
 install_step_retrieve_kubeconfig_override:
   name: osac.workflows.workflow_helpers
   tasks_from: noop.yml
@@ -119,12 +116,6 @@ install_step_retrieve_kubeconfig_override:
 ```yaml
 # Use real template from fixture: osac.templates.ocp_small
 delete_step_hosted_cluster_override:
-  name: osac.workflows.workflow_helpers
-  tasks_from: noop.yml
-delete_step_external_access_override:
-  name: osac.workflows.workflow_helpers
-  tasks_from: noop.yml
-delete_step_cluster_infra_override:
   name: osac.workflows.workflow_helpers
   tasks_from: noop.yml
 ```
@@ -208,6 +199,7 @@ The following tasks **cannot be tested without real infrastructure**:
 
 ### OpenStack/ESI Resources
 - `osac.service.cluster_infra` - Creates bare metal hosts via OpenStack Ironic
+  (no longer dispatched from CaaS templates; see OSAC-2243)
 - Requires OpenStack auth_url and credentials
 
 ### AAP Resources

@@ -1003,7 +1003,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 			Expect(cond.Message).To(Equal("provisioning in progress"))
 		})
 
-		It("should set Phase=Ready and Progressing=False on OnSuccess", func() {
+		It("should leave readiness status to live resource observation on OnSuccess", func() {
 			instance := &v1alpha1.ClusterOrder{
 				Status: v1alpha1.ClusterOrderStatus{
 					Phase: v1alpha1.ClusterOrderPhaseProgressing,
@@ -1014,14 +1014,11 @@ var _ = Describe("ClusterOrder Controller", func() {
 			callbacks := reconciler.provisioningCallbacks(instance)
 			callbacks.OnSuccess(provisioning.ProvisionStatus{})
 
-			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseReady))
-			cond := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
-			Expect(cond).NotTo(BeNil())
-			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
-			Expect(cond.Reason).To(Equal(v1alpha1.ReasonAsExpected))
+			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseProgressing))
+			Expect(instance.Status.Conditions).To(BeEmpty())
 		})
 
-		It("should clear stale Progressing=False condition on provisioning recovery", func() {
+		It("should not overwrite an existing progressing condition on provisioning success", func() {
 			instance := &v1alpha1.ClusterOrder{
 				Status: v1alpha1.ClusterOrderStatus{
 					Phase: v1alpha1.ClusterOrderPhaseProgressing,
@@ -1041,12 +1038,12 @@ var _ = Describe("ClusterOrder Controller", func() {
 			callbacks := reconciler.provisioningCallbacks(instance)
 			callbacks.OnSuccess(provisioning.ProvisionStatus{})
 
-			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseReady))
+			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseProgressing))
 			cond := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
 			Expect(cond).NotTo(BeNil())
 			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
-			Expect(cond.Reason).To(Equal(v1alpha1.ReasonAsExpected))
-			Expect(cond.Message).To(BeEmpty())
+			Expect(cond.Reason).To(Equal(v1alpha1.ReasonProvisioningFailed))
+			Expect(cond.Message).To(Equal("previous failure"))
 		})
 	})
 

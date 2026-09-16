@@ -36,7 +36,7 @@ rm -f "${SCRIPT_DIR}"/certs/registry-ca.key "${SCRIPT_DIR}"/certs/registry-ca.pe
 # OCI registry section, so it doesn't persist beyond this test run on a real workstation
 # (CI runners are ephemeral, but this is also run locally).
 if [ -f /usr/local/share/ca-certificates/osac-test-registry-ca.crt ]; then
-  sudo rm -f /usr/local/share/ca-certificates/osac-test-registry-ca.crt
+  sudo rm -f /usr/local/share/ca-certificates/osac-test-registry-ca.crt || true
   sudo update-ca-certificates > /dev/null 2>&1 || true
 fi
 

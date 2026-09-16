@@ -40,14 +40,15 @@
 - name: Determine dispatched providers supported by the csi-driver chart
   ansible.builtin.set_fact:
     _csi_driver_install_dispatched_vendors: "{{ _csi_driver_install_unique_providers | intersect(csi_driver_install_supported_vendors) }}"
-
   when: csi_driver_install_enabled | default(false) | bool
+
 - name: Warn about dispatched providers the csi-driver chart does not support
   ansible.builtin.debug:
     msg: >-
       Provider(s) {{ _csi_driver_install_unique_providers | difference(_csi_driver_install_dispatched_vendors) | join(', ') }}
       dispatched but not present in csi_driver_install_supported_vendors
       ({{ csi_driver_install_supported_vendors | join(', ') }}) — the OSAC CSI
+      driver will not be enabled for them.
   when:
     - csi_driver_install_enabled | default(false) | bool
     - (_csi_driver_install_unique_providers | difference(_csi_driver_install_dispatched_vendors)) | length > 0
@@ -300,14 +301,18 @@
           {% set _map = {} -%}
           {% for _pair in _csi_driver_install_prior_controller_sockets_raw.split(',') if _pair | trim | length > 0 -%}
           {% set _kv = _pair.split('=', 1) -%}
+          {% if _kv | length == 2 -%}
           {% set _ = _map.update({_kv[0]: _kv[1]}) -%}
+          {% endif -%}
           {% endfor -%}
           {{ _map }}
         _csi_driver_install_prior_node_sockets: >-
           {% set _map = {} -%}
           {% for _pair in _csi_driver_install_prior_node_sockets_raw.split(',') if _pair | trim | length > 0 -%}
           {% set _kv = _pair.split('=', 1) -%}
+          {% if _kv | length == 2 -%}
           {% set _ = _map.update({_kv[0]: _kv[1]}) -%}
+          {% endif -%}
           {% endfor -%}
           {{ _map }}
 
@@ -367,6 +372,7 @@
           namespace: "{{ csi_driver_install_namespace }}"
           controller:
             vendorControllers: "{{ _csi_driver_install_controller_vendor_sockets }}"
+            vendorSockets: ""
           node:
             vendorSockets: "{{ _csi_driver_install_node_vendor_sockets }}"
           vendors: "{{ _csi_driver_install_vendors_enabled }}"

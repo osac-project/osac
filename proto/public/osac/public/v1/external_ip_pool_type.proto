@@ -15,14 +15,15 @@ syntax = "proto3";
 
 package osac.public.v1;
 
+import "buf/validate/validate.proto";
 import "google/api/field_behavior.proto";
 import "osac/public/v1/ip_family_type.proto";
 import "osac/public/v1/metadata_type.proto";
 
 // Represents a pool of external IP addresses available for allocation.
 //
-// Each ExternalIPPool supports a single IP family (IPv4 or IPv6). The pool contains one or more CIDR
-// ranges from which individual ExternalIP addresses are allocated. Pools are provider-managed
+// Each ExternalIPPool currently supports one canonical IPv4 CIDR from which individual ExternalIP addresses are
+// allocated. Pools are provider-managed
 // resources created by administrators through the private API.
 //
 // "External" means external to the VirtualNetwork. The addresses may be internet-routable or
@@ -54,11 +55,11 @@ message ExternalIPPool {
 message ExternalIPPoolSpec {
   // IP address family for this pool. Required and immutable after creation.
   //
-  // Determines whether the CIDRs in this pool are IPv4 or IPv6. All CIDRs must match this
-  // family. A single pool cannot mix IPv4 and IPv6 ranges.
+  // The only supported family is IP_FAMILY_IPV4. IPv6 and unspecified-family pools are rejected.
   IPFamily ip_family = 3 [
     (google.api.field_behavior) = REQUIRED,
-    (google.api.field_behavior) = IMMUTABLE
+    (google.api.field_behavior) = IMMUTABLE,
+    (buf.validate.field).enum = {defined_only: true, not_in: [0, 2]}
   ];
 }
 

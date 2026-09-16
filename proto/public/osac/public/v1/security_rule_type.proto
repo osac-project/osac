@@ -15,6 +15,8 @@ syntax = "proto3";
 
 package osac.public.v1;
 
+import "buf/validate/validate.proto";
+
 // Defines a single firewall rule for network traffic filtering.
 //
 // SecurityRule specifies which traffic to allow based on protocol, port ranges (for TCP/UDP), and source/
@@ -23,10 +25,8 @@ package osac.public.v1;
 //
 // Port ranges apply only to TCP and UDP protocols. For ICMP and ALL protocols, port fields are ignored.
 //
-// CIDR fields support IPv4-only, IPv6-only, or dual-stack configurations:
-// - IPv4-only: Set ipv4_cidr, leave ipv6_cidr empty
-// - IPv6-only: Set ipv6_cidr, leave ipv4_cidr empty
-// - Dual-stack: Set both ipv4_cidr and ipv6_cidr (creates two separate rules internally)
+// Rules currently support canonical IPv4 CIDRs only. The legacy ipv6_cidr field remains in the wire contract for
+// compatibility, but non-empty IPv6 and dual-stack requests are rejected.
 message SecurityRule {
   // Protocol to match for this rule.
   //
@@ -52,19 +52,25 @@ message SecurityRule {
 
   // IPv4 CIDR block for source (ingress) or destination (egress) addresses.
   //
-  // Must be valid CIDR notation. Use '0.0.0.0/0' to match all IPv4 addresses. Validation enforced at
-  // service layer.
+  // Must be a canonical IPv4 CIDR with no host bits set. Use '0.0.0.0/0' to match all IPv4 addresses.
   //
   // Example: '192.168.1.0/24', '10.0.0.0/8', '0.0.0.0/0' (all IPv4)
-  optional string ipv4_cidr = 4;
+  optional string ipv4_cidr = 4 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "canonical_ipv4_cidr"
+      message: "must be a canonical IPv4 CIDR"
+      expression: "this.isIpPrefix(4, true)"
+    }
+  ];
 
-  // IPv6 CIDR block for source (ingress) or destination (egress) addresses.
-  //
-  // Must be valid CIDR notation. Use '::/0' to match all IPv6 addresses. Validation enforced at service
-  // layer.
-  //
-  // Example: '2001:db8::/32', 'fd00::/64', '::/0' (all IPv6)
-  optional string ipv6_cidr = 5;
+  // Legacy IPv6 CIDR field. IPv6 and dual-stack networking are not supported; non-empty values are rejected.
+  optional string ipv6_cidr = 5 [(buf.validate.field).cel = {
+    id: "ipv6_cidr_not_supported"
+    message: "IPv6 and dual-stack networking are not supported"
+    expression: "this == ''"
+  }];
 }
 
 // Network protocol types for SecurityRule matching.

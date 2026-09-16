@@ -271,10 +271,6 @@ invalid requests with `InvalidArgument` errors that include field-level violatio
 
 This ensures validation always runs on the actual final state, not partial input.
 
-The separate reference interceptor validates ordinary references on Create and Update; see
-[Server-side validation and resolution](#server-side-validation-and-resolution) for catalog and
-resource reference exceptions.
-
 ### Standard constraints
 
 Common validation patterns:
@@ -756,7 +752,7 @@ To reference an object by name in a different project within the same tenant, se
 ```
 
 To reference an object by name in the shared tenant (e.g., a globally available template), set
-`shared` to `true`. A globally unique ID is sufficient when it is visible to the caller:
+`shared` to `true`:
 
 ```json
 {
@@ -768,30 +764,21 @@ To reference an object by name in the shared tenant (e.g., a globally available 
 
 ### Server-side validation and resolution
 
-The gRPC interceptor validates ordinary references on `Create` and `Update`. Catalog authoring
-excludes `object.template` and `object.fields` from that early pass: handlers resolve them after
-ownership assignment and update-mask merging. Resource Create similarly resolves `spec.catalog_item`
-and `spec.template` in the handler. Resource Update excludes only `spec.catalog_item`, which is
-immutable historical provenance and may identify a deleted catalog.
+The server validates references on `Create` and `Update`. A gRPC interceptor handles most
+reference fields. For each field it handles, the interceptor:
 
-Catalog dependencies must belong to the shared tenant or the catalog's own tenant; shared catalogs
-use shared dependencies only. Local references must match the owner's tenant and project, including
-references copied into a new resource. Catalog and provisioning-source name lookups honor explicit
-scope selectors; IDs resolve through ordinary visibility and ownership checks. Handlers retain
-resource lifecycle, readiness, and cross-field validation after materialization.
-
-For ordinary reference fields validated by the interceptor:
-
-1. Passes the requested scope to the registered lookup (caller's tenant/project for local references;
-   explicit `project`/`shared` overrides for full references).
-2. Looks up the referenced object by `id`, `name`, or both. The ordinary DAO-backed interceptor
-   lookups use caller visibility; handlers perform the final ownership and scope checks.
+1. Determines the lookup scope from the object's tenant and project. For a full reference by
+   name, the `project` and `shared` fields can select another scope.
+2. Looks up the referenced object by `id` or `name`.
 3. If both `id` and `name` are provided, verifies they refer to the same object.
-4. Auto-populates whichever of `id` or `name` was not provided by the caller.
+4. Fills in whichever of `id` or `name` the caller omitted.
 
-Invalid references produce an `InvalidArgument` error with `google.rpc.BadRequest` details
-containing one `FieldViolation` per invalid reference. The `field` value is the dot-separated
-path to the reference field (e.g., `object.spec.template`, `object.spec.network_attachments[0].subnet`).
+Some references are validated by the object's handler after the complete object to be saved is
+known.
+
+For invalid references found by the interceptor, the server returns `InvalidArgument` with
+`google.rpc.BadRequest` details. Each `FieldViolation` names the reference field (e.g.,
+`object.spec.network_attachments[0].subnet`).
 
 ## Documentation
 

@@ -75,14 +75,16 @@ jobs:
       netris-relevant-files: ${{ steps.filter.outputs.netris-relevant_files }}
       # Booleans only (no _files) for the reporting-only job categories --
       # see the filters' own comment above for why these aren't real gates.
-      unit-fulfillment-service: ${{ steps.filter.outputs.unit-fulfillment-service }}
-      unit-osac-metering: ${{ steps.filter.outputs.unit-osac-metering }}
-      unit-osac-metering-adapters: ${{ steps.filter.outputs.unit-osac-metering-adapters }}
-      unit-osac-metering-schema: ${{ steps.filter.outputs.unit-osac-metering-schema }}
-      integration-fulfillment-service: ${{ steps.filter.outputs.integration-fulfillment-service }}
-      integration-osac-operator: ${{ steps.filter.outputs.integration-osac-operator }}
-      integration-bare-metal-fulfillment-operator: ${{ steps.filter.outputs.integration-bare-metal-fulfillment-operator }}
-      integration-osac-aap: ${{ steps.filter.outputs.integration-osac-aap }}
+      # unit-tests.yml/integration-tests.yml themselves have NO per-component
+      # scoping today -- every job in both files is gated only by the same
+      # blanket `code` filter (any non-doc change runs all of them,
+      # including e.g. an osac-csi-driver-only change). Mirroring individual
+      # per-component filters for those two files would report a narrower
+      # "would run" than what actually happens, exactly the kind of
+      # comment/reality mismatch this whole feature exists to avoid -- so
+      # `code` here is the ONLY signal for every Unit Tests/Integration
+      # Tests row (see select-jobs.py's JOB_GROUPS "code" sentinel).
+      code: ${{ steps.filter.outputs.code }}
       helm-osac-operator: ${{ steps.filter.outputs.helm-osac-operator }}
       helm-bare-metal-fulfillment-operator: ${{ steps.filter.outputs.helm-bare-metal-fulfillment-operator }}
       helm-fulfillment-service: ${{ steps.filter.outputs.helm-fulfillment-service }}
@@ -255,26 +257,21 @@ jobs:
             # gates); only mirrored CORRECTLY in this reporting copy, so the
             # comment shows what SHOULD happen, not the real files' current
             # buggy always-true behavior.
-            unit-fulfillment-service:
-              - '{fulfillment-service/**,bare-metal-fulfillment-operator/**,osac-operator/api/**,proto/**,go.work,go.work.sum,.github/workflows/unit-tests.yml}'
-            unit-osac-metering:
-              - '{osac-metering/metering-service/**,osac-metering/schema/**,proto/**,go.work,go.work.sum,.github/workflows/unit-tests.yml}'
-            unit-osac-metering-adapters:
-              - '{osac-metering/adapters/**,osac-metering/schema/**,go.work,go.work.sum,.github/workflows/unit-tests.yml}'
-            unit-osac-metering-schema:
-              - '{osac-metering/schema/**,go.work,go.work.sum,.github/workflows/unit-tests.yml}'
-            integration-fulfillment-service:
-              - '{fulfillment-service/**,bare-metal-fulfillment-operator/**,osac-operator/api/**,proto/**,osac-installer/**,go.work,go.work.sum,.github/workflows/integration-tests.yml}'
-            integration-osac-operator:
-              - '{osac-operator/**,bare-metal-fulfillment-operator/**,proto/**,osac-installer/**,go.work,go.work.sum,.github/workflows/integration-tests.yml}'
-            integration-bare-metal-fulfillment-operator:
-              - '{bare-metal-fulfillment-operator/**,osac-operator/**,proto/**,osac-installer/**,go.work,go.work.sum,.github/workflows/integration-tests.yml}'
-            integration-osac-aap:
-              - '{osac-aap/**,.github/workflows/integration-tests.yml}'
-            # integration-osac-installer has no filter of its own: that job's
-            # real `if:` already reacts to any of the 7 helm-lint-style
-            # component paths below plus its own -- computed as an OR in
-            # select-jobs.py instead of duplicated here.
+            # Exact copy of unit-tests.yml's/integration-tests.yml's own
+            # `code` filter (identical in both real files) -- the single
+            # signal that actually gates every job in both workflows today.
+            code:
+              - '**'
+              - '!**/OWNERS'
+              - '!**/LICENSE'
+              - '!**/*.md'
+              - '!**/docs/**'
+              - '!**/.claude/**'
+              - '!**/.cursor/**'
+              - '!**/.gemini/**'
+              - '!.design/**'
+              - '!.skillsaw.yaml'
+              - '!.pre-commit-config.yaml'
             helm-osac-operator:
               - '{osac-operator/api/**,osac-operator/charts/**,osac-operator/config/crd/bases/**,osac-operator/hack/sync-helm-crds.py,osac-operator/Makefile,.github/workflows/helm-lint.yaml}'
             helm-bare-metal-fulfillment-operator:
@@ -342,14 +339,7 @@ jobs:
           AMBIGUOUS_FILES: ${{ needs.changes.outputs.ambiguous-shared-files }}
           CONFIG_FILES: ${{ needs.changes.outputs.config-yaml-json-files }}
           NETRIS_RELEVANT_FILES: ${{ needs.changes.outputs.netris-relevant-files }}
-          UNIT_FULFILLMENT_SERVICE: ${{ needs.changes.outputs.unit-fulfillment-service }}
-          UNIT_OSAC_METERING: ${{ needs.changes.outputs.unit-osac-metering }}
-          UNIT_OSAC_METERING_ADAPTERS: ${{ needs.changes.outputs.unit-osac-metering-adapters }}
-          UNIT_OSAC_METERING_SCHEMA: ${{ needs.changes.outputs.unit-osac-metering-schema }}
-          INTEGRATION_FULFILLMENT_SERVICE: ${{ needs.changes.outputs.integration-fulfillment-service }}
-          INTEGRATION_OSAC_OPERATOR: ${{ needs.changes.outputs.integration-osac-operator }}
-          INTEGRATION_BMF_OPERATOR: ${{ needs.changes.outputs.integration-bare-metal-fulfillment-operator }}
-          INTEGRATION_OSAC_AAP: ${{ needs.changes.outputs.integration-osac-aap }}
+          CODE: ${{ needs.changes.outputs.code }}
           HELM_OSAC_OPERATOR: ${{ needs.changes.outputs.helm-osac-operator }}
           HELM_BMF_OPERATOR: ${{ needs.changes.outputs.helm-bare-metal-fulfillment-operator }}
           HELM_FULFILLMENT_SERVICE: ${{ needs.changes.outputs.helm-fulfillment-service }}
@@ -378,14 +368,7 @@ jobs:
             --argjson ambiguous_files "${AMBIGUOUS_FILES:-[]}" \
             --argjson config_files "${CONFIG_FILES:-[]}" \
             --argjson netris_relevant_files "${NETRIS_RELEVANT_FILES:-[]}" \
-            --argjson unit_fulfillment_service "${UNIT_FULFILLMENT_SERVICE:-false}" \
-            --argjson unit_osac_metering "${UNIT_OSAC_METERING:-false}" \
-            --argjson unit_osac_metering_adapters "${UNIT_OSAC_METERING_ADAPTERS:-false}" \
-            --argjson unit_osac_metering_schema "${UNIT_OSAC_METERING_SCHEMA:-false}" \
-            --argjson integration_fulfillment_service "${INTEGRATION_FULFILLMENT_SERVICE:-false}" \
-            --argjson integration_osac_operator "${INTEGRATION_OSAC_OPERATOR:-false}" \
-            --argjson integration_bmf_operator "${INTEGRATION_BMF_OPERATOR:-false}" \
-            --argjson integration_osac_aap "${INTEGRATION_OSAC_AAP:-false}" \
+            --argjson code "${CODE:-false}" \
             --argjson helm_osac_operator "${HELM_OSAC_OPERATOR:-false}" \
             --argjson helm_bmf_operator "${HELM_BMF_OPERATOR:-false}" \
             --argjson helm_fulfillment_service "${HELM_FULFILLMENT_SERVICE:-false}" \
@@ -408,18 +391,11 @@ jobs:
               config_files: $config_files,
               netris_relevant_files: $netris_relevant_files,
               jobs: {
-                unit_tests: {
-                  fulfillment_service: $unit_fulfillment_service,
-                  osac_metering: $unit_osac_metering,
-                  osac_metering_adapters: $unit_osac_metering_adapters,
-                  osac_metering_schema: $unit_osac_metering_schema
-                },
-                integration_tests: {
-                  fulfillment_service: $integration_fulfillment_service,
-                  osac_operator: $integration_osac_operator,
-                  bare_metal_fulfillment_operator: $integration_bmf_operator,
-                  osac_aap: $integration_osac_aap
-                },
+                # The only signal for every Unit Tests/Integration Tests row
+                # (see this filter's own comment above) -- both real
+                # workflows gate every job in them on this exact boolean,
+                # nothing narrower.
+                code: $code,
                 helm_lint: {
                   osac_operator: $helm_osac_operator,
                   bare_metal_fulfillment_operator: $helm_bmf_operator,

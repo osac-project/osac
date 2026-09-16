@@ -1272,6 +1272,16 @@ jobs:
   # already succeeded, which itself required the whole test gate to pass
   # -- so tagging is atomic with the rest of this pipeline: nothing gets
   # a permanent tag unless everything requested this run passed together.
+  #
+  # Pushed with a real PAT (checkout's `token:` below), not GITHUB_TOKEN --
+  # a per-component tag is expected to fire that component's own
+  # tag-triggered publish workflow(s) (image, binaries, proto), which
+  # GITHUB_TOKEN-authored pushes never do (OSAC-5357). "Verify component
+  # publish workflows actually ran" then confirms each one actually started
+  # and succeeded before this job -- and the whole run -- is allowed to
+  # report success; a component tag existing is not itself evidence its
+  # publish happened.
+  #
   # Download chart-sources.txt artifact; post Slack summary with
   # published chart OCI links.
   # -------------------------------------------------------------------
@@ -1279,7 +1289,10 @@ jobs:
     name: Tag and notify
     needs: [prepare, publish]
     runs-on: osac-ci
-    timeout-minutes: 15
+    # Generous: "Verify component publish workflows actually ran" below
+    # blocks on real per-component image/binary/proto builds it doesn't
+    # control the runtime of.
+    timeout-minutes: 90
     # Bare success() checks the WHOLE transitive dependency graph, not just
     # this job's direct needs -- confirmed live: with skip_e2e=true, the
     # three e2e-*-test jobs (skipped, further back in the graph) cascaded
@@ -1288,8 +1301,10 @@ jobs:
     # already documents. Check only this job's real dependencies instead.
     if: always() && needs.prepare.result == 'success' && needs.publish.result == 'success'
     permissions:
-      # Create the umbrella/component git tags
-      contents: write
+      # The umbrella/component git tags are pushed via the checkout step's
+      # persisted OSAC_BOT_PAT credential (see below), not GITHUB_TOKEN --
+      # so GITHUB_TOKEN itself never writes to repo contents in this job.
+      contents: read
       # Look up the package version URL for the Slack notification
       packages: read
       # Download chart-sources.txt from the publish job
@@ -1305,6 +1320,17 @@ jobs:
         ref: ${{ needs.prepare.outputs.temp-branch }}
         fetch-depth: 0
         # persist-credentials left enabled (default): this job pushes git tags.
+        # Deliberately NOT the default GITHUB_TOKEN (github.token) -- GitHub
+        # never fires push-triggered workflows for a ref created/pushed by
+        # the built-in GITHUB_TOKEN (anti-recursion by design), so every
+        # <component>/vX.Y.Z tag pushed below would silently never trigger
+        # its own publish-image.yaml/publish-binaries.yaml/etc, even though
+        # this job (and the whole run) reports success (OSAC-5357). A PAT
+        # authenticates as a real actor, so the same push fires those
+        # workflows exactly like a human's `git push` does -- same identity
+        # already used for this class of GITHUB_TOKEN limitation in
+        # pr-dashboard.yml.
+        token: ${{ secrets.OSAC_BOT_PAT }}
 
     - name: Create umbrella tag
       env:
@@ -1377,6 +1403,31 @@ jobs:
           git tag "${TAG}" -m "Release ${VERSION}"
           git push origin "${TAG}"
           echo "Tagged: ${TAG}"
+        done
+
+    # The push above (real PAT, not GITHUB_TOKEN -- see the checkout step)
+    # should already have fired each tagged component's own tag-triggered
+    # publish workflow(s). Don't just trust that it did: wait for and
+    # require each one to have actually started and succeeded before this
+    # job -- and therefore the whole run -- is allowed to report success. A
+    # permanent component tag existing is not evidence its image, binaries,
+    # or proto schema actually got published (OSAC-5357).
+    - name: Verify component publish workflows actually ran
+      if: inputs.mode == 'release'
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+        COMPONENT_VERSIONS: ${{ needs.prepare.outputs.component-versions }}
+        COMPONENTS_TO_TAG: ${{ needs.prepare.outputs.components-to-tag }}
+      run: |
+        set -euo pipefail
+        source osac-installer/scripts/nightly-charts.sh
+
+        for COMPONENT in $(jq -r '.[]' <<<"${COMPONENTS_TO_TAG}"); do
+          VERSION=$(jq -r --arg k "${COMPONENT}" '.[$k]' <<<"${COMPONENT_VERSIONS}")
+          echo "::group::Verifying publish for ${COMPONENT}/v${VERSION}"
+          verify_component_publish "${COMPONENT}" "${VERSION}"
+          echo "::endgroup::"
         done
 
     - name: Download chart manifest

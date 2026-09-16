@@ -28,3 +28,12 @@ Nightly builds use provisional `sha-*` image tags while all build, unit,
 integration, security, and E2E gates run. Promote images to release-looking
 nightly tags only after every required gate passes; failed runs must not publish
 release-looking tags.
+
+A real, permanent `<component>/vX.Y.Z` tag (release mode's `component_versions`
+bump) must be pushed with real actor credentials, not the default
+`GITHUB_TOKEN` — GitHub does not fire push-triggered workflows for a ref
+created by `GITHUB_TOKEN`, so a component's own image/binary/proto publish
+workflow would silently never run even though the tag exists (OSAC-5357).
+Whatever creates such a tag must also verify each of that component's
+downstream publish workflows actually started and succeeded before reporting
+success; a tag existing is not evidence its publish happened.

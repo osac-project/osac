@@ -161,6 +161,94 @@ retag_component_image() {
     skopeo inspect "docker://${image_repo}:${target_version}" > /dev/null
 }
 
+# Usage: _component_publish_workflows <component>
+# Prints, one per line, the workflow filenames that a real push of
+# <component>/vX.Y.Z is expected to trigger (each `on: push: tags:
+# '<component>/v*'`) -- the actual image/binary/proto publish for a
+# real, permanent per-component release tag happens in these, not in
+# osac-build-and-publish.yaml's own build/publish jobs (those only ever push
+# provisional sha-<short> images for e2e). See OSAC-5357: creating the tag is
+# not evidence any of this ran.
+_component_publish_workflows() {
+    local component="$1"
+    case "${component}" in
+        osac-operator) printf '%s\n' build-image.yaml ;;
+        fulfillment-service) printf '%s\n' publish-image.yaml publish-binaries.yaml publish-proto.yaml ;;
+        osac-aap) printf '%s\n' execution-environment.yml ;;
+        bare-metal-fulfillment-operator) printf '%s\n' build-bmf-image.yaml ;;
+        osac-metering) printf '%s\n' build-metering-service-image.yaml build-metering-m360-adapter-image.yaml build-metering-echo-adapter-image.yaml ;;
+        osac-csi-driver) printf '%s\n' publish-csi-driver-image.yaml ;;
+        *)
+            echo "::error::_component_publish_workflows: unknown component '${component}'" >&2
+            return 1
+            ;;
+    esac
+}
+
+# Usage: wait_for_component_publish_workflow_run <workflow_file> <tag> [timeout_seconds] [interval_seconds]
+# Polls (via `gh run list`) for a run of <workflow_file> whose head branch is
+# the real tag-push ref <tag>, then `gh run watch`es it to a terminal state
+# and requires conclusion == success. Requires GH_TOKEN/GH_REPO in the
+# environment. A tag-push-triggered run doesn't necessarily exist yet the
+# moment its `git push` returns, so this polls rather than checking once.
+# Fails loudly (::error + non-zero) if no matching run ever appears within
+# the timeout, or if it appears but doesn't succeed -- a permanent component
+# tag must never be reported as a successful release when what it's supposed
+# to trigger silently didn't run or failed (OSAC-5357).
+wait_for_component_publish_workflow_run() {
+    local workflow_file="$1" tag="$2" timeout="${3:-2700}" interval="${4:-15}"
+    local start run_id safe_workflow safe_tag
+
+    safe_workflow=$(_gha_sanitize_for_message "${workflow_file}")
+    safe_tag=$(_gha_sanitize_for_message "${tag}")
+
+    echo "Waiting up to ${timeout}s for '${safe_workflow}' to start for tag ${safe_tag}..."
+    start=${SECONDS}
+    run_id=""
+    while true; do
+        run_id=$(gh run list --workflow "${workflow_file}" --branch "${tag}" --event push \
+            --limit 1 --json databaseId --jq '.[0].databaseId // empty' 2>/dev/null || true)
+        [[ -n "${run_id}" ]] && break
+        if (( SECONDS - start >= timeout )); then
+            echo "::error::${safe_workflow} never started for tag ${safe_tag} within ${timeout}s -- a real push should trigger it, but no matching run appeared; the component tag exists without a real publish" >&2
+            return 1
+        fi
+        sleep "${interval}"
+    done
+
+    echo "Found ${safe_workflow} run ${run_id} for tag ${safe_tag}; waiting for it to finish..."
+    if ! gh run watch "${run_id}" --exit-status; then
+        echo "::error::${safe_workflow} run ${run_id} for tag ${safe_tag} did not succeed -- the component tag exists without a completed publish" >&2
+        return 1
+    fi
+    echo "${safe_workflow} run ${run_id} for tag ${safe_tag} completed successfully."
+}
+
+# Usage: verify_component_publish <component> <version>
+# For a component this run just created a real <component>/vX.Y.Z tag for,
+# requires every one of its downstream tag-triggered publish workflows
+# (_component_publish_workflows) to have actually started and succeeded.
+# Requires GH_TOKEN/GH_REPO in the environment. See OSAC-5357.
+verify_component_publish() {
+    local component="$1" version="$2"
+    local tag="${component}/v${version}"
+    local workflow_file workflows
+
+    # Captured into a variable (not piped via process substitution) so an
+    # unknown component's non-zero exit status is actually seen -- a `while
+    # read < <(...)` loop over empty stdout would otherwise iterate zero
+    # times and this function would return success, silently skipping
+    # verification entirely instead of failing loudly.
+    if ! workflows=$(_component_publish_workflows "${component}"); then
+        return 1
+    fi
+
+    while IFS= read -r workflow_file; do
+        [[ -z "${workflow_file}" ]] && continue
+        wait_for_component_publish_workflow_run "${workflow_file}" "${tag}" || return 1
+    done <<< "${workflows}"
+}
+
 # Usage: stamp_component_image_refs <component> <umbrella_values> <tag_value>
 # Stamps every values.yaml field (the component's own sub-chart plus the
 # umbrella's corresponding field) that references <component>'s image to

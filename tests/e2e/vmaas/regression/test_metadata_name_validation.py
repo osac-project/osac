@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 import subprocess
 import uuid
 
@@ -9,6 +8,7 @@ import pytest
 from tests.e2e.core.grpc_client import PUBLIC_API, GRPCClient
 from tests.e2e.core.helpers import (
     assert_grpc_rejected,
+    grpc_error_message,
     wait_for_virtual_network_cr,
     wait_for_virtual_network_deletion,
     wait_for_virtual_network_ready,
@@ -17,12 +17,6 @@ from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.runner import poll_until
 
 pytestmark = pytest.mark.regression
-
-
-def _grpc_error_message(exc: subprocess.CalledProcessError) -> str:
-    combined = (exc.stderr or "") + (exc.stdout or "")
-    match = re.search(r"Message:\s*(.+)", combined)
-    return match.group(1).strip() if match else ""
 
 
 class TestVirtualNetworkNameValidation:
@@ -35,7 +29,7 @@ class TestVirtualNetworkNameValidation:
                 data={"object": {"spec": {"ipv4_cidr": "10.100.0.0/16"}}},
             )
         assert_grpc_rejected(exc_info, "InvalidArgument")
-        grpc_msg = _grpc_error_message(exc_info.value)
+        grpc_msg = grpc_error_message(exc_info.value)
         assert "metadata is required" in grpc_msg.lower(), "gRPC rejection should reference metadata is required"
 
     @pytest.mark.parametrize(

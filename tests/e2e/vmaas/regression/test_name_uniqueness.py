@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 import subprocess
 import uuid
 
@@ -9,6 +8,7 @@ import pytest
 from tests.e2e.core.grpc_client import PUBLIC_API, GRPCClient
 from tests.e2e.core.helpers import (
     assert_grpc_rejected,
+    grpc_error_message,
     wait_for_virtual_network_cr,
     wait_for_virtual_network_deletion,
     wait_for_virtual_network_ready,
@@ -16,12 +16,6 @@ from tests.e2e.core.helpers import (
 from tests.e2e.core.k8s_client import K8sClient
 
 pytestmark = pytest.mark.regression
-
-
-def _grpc_error_message(exc: subprocess.CalledProcessError) -> str:
-    combined = (exc.stderr or "") + (exc.stdout or "")
-    match = re.search(r"Message:\s*(.+)", combined)
-    return match.group(1).strip() if match else ""
 
 
 class TestVirtualNetworkProjectScopedUniqueness:
@@ -35,7 +29,7 @@ class TestVirtualNetworkProjectScopedUniqueness:
             with pytest.raises(subprocess.CalledProcessError) as exc_info:
                 jwt_grpc_tenant1.create_virtual_network(name=vn_name, ipv4_cidr="10.121.0.0/16")
             assert_grpc_rejected(exc_info, "AlreadyExists")
-            msg = _grpc_error_message(exc_info.value)
+            msg = grpc_error_message(exc_info.value)
             assert "virtual network" in msg.lower(), f"Error should mention 'virtual network', got: {msg}"
         finally:
             if vn_id:
@@ -45,17 +39,25 @@ class TestVirtualNetworkProjectScopedUniqueness:
         self, jwt_grpc_tenant1: GRPCClient, k8s_hub_client: K8sClient
     ) -> None:
         vn_name = f"del-dup-{uuid.uuid4().hex[:8]}"
-        vn_id = jwt_grpc_tenant1.create_virtual_network(name=vn_name, ipv4_cidr="10.122.0.0/16")
-        cr_name = wait_for_virtual_network_cr(k8s=k8s_hub_client, uuid=vn_id)
-        wait_for_virtual_network_ready(k8s=k8s_hub_client, name=cr_name)
+        vn_id: str | None = jwt_grpc_tenant1.create_virtual_network(name=vn_name, ipv4_cidr="10.122.0.0/16")
+        duplicate_vn_id: str | None = None
+        try:
+            cr_name = wait_for_virtual_network_cr(k8s=k8s_hub_client, uuid=vn_id)
+            wait_for_virtual_network_ready(k8s=k8s_hub_client, name=cr_name)
 
-        jwt_grpc_tenant1.delete_virtual_network(vn_id=vn_id)
+            jwt_grpc_tenant1.delete_virtual_network(vn_id=vn_id)
+            vn_id = None
 
-        with pytest.raises(subprocess.CalledProcessError) as exc_info:
-            jwt_grpc_tenant1.create_virtual_network(name=vn_name, ipv4_cidr="10.123.0.0/16")
-        assert_grpc_rejected(exc_info, "AlreadyExists")
+            with pytest.raises(subprocess.CalledProcessError) as exc_info:
+                duplicate_vn_id = jwt_grpc_tenant1.create_virtual_network(name=vn_name, ipv4_cidr="10.123.0.0/16")
+            assert_grpc_rejected(exc_info, "AlreadyExists")
 
-        wait_for_virtual_network_deletion(k8s=k8s_hub_client, name=cr_name)
+            wait_for_virtual_network_deletion(k8s=k8s_hub_client, name=cr_name)
+        finally:
+            if duplicate_vn_id is not None:
+                jwt_grpc_tenant1.delete_virtual_network(vn_id=duplicate_vn_id)
+            if vn_id is not None:
+                jwt_grpc_tenant1.delete_virtual_network(vn_id=vn_id)
 
     def test_same_name_different_tenants_succeeds(
         self, jwt_grpc_tenant1: GRPCClient, jwt_grpc_tenant2: GRPCClient

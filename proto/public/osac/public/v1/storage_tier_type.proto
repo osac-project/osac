@@ -59,14 +59,8 @@ message StorageTierSpec {
   // Storage protocol used by this tier. Always an explicit protocol (NFS or BLOCK); never UNSPECIFIED.
   StorageProtocol protocol = 2 [(buf.validate.field).enum = {defined_only: true, not_in: [0]}];
 
-  // Maximum read bandwidth in megabytes per second.
-  int32 max_read_bandwidth_mbs = 3;
-
-  // Maximum write bandwidth in megabytes per second.
-  int32 max_write_bandwidth_mbs = 4;
-
-  // Whether data at rest is encrypted on this tier.
-  bool encryption_enabled = 5;
+  reserved 3, 4, 5;
+  reserved "max_read_bandwidth_mbs", "max_write_bandwidth_mbs", "encryption_enabled";
 }
 
 // Contains the system-provided status of a StorageTier.

@@ -232,9 +232,6 @@ var _ = Describe("Storage tiers server", func() {
 			Expect(obj.GetMetadata().GetName()).To(Equal("test-tier"))
 			Expect(obj.GetSpec().GetDescription()).To(Equal("A test storage tier"))
 			Expect(obj.GetSpec().GetProtocol()).To(Equal(publicv1.StorageProtocol_STORAGE_PROTOCOL_NFS))
-			Expect(obj.GetSpec().GetMaxReadBandwidthMbs()).To(Equal(int32(1000)))
-			Expect(obj.GetSpec().GetMaxWriteBandwidthMbs()).To(Equal(int32(500)))
-			Expect(obj.GetSpec().GetEncryptionEnabled()).To(BeTrue())
 			Expect(obj.GetStatus().GetState()).To(Equal(publicv1.StorageTierState_STORAGE_TIER_STATE_ACTIVE))
 		})
 
@@ -315,27 +312,6 @@ var _ = Describe("Storage tiers server", func() {
 			Expect(st.Code()).To(Equal(codes.InvalidArgument))
 			Expect(response).To(BeNil())
 		})
-
-		DescribeTable("List rejects filters on fields that exist publicly but at a different path privately",
-			func(filter string) {
-				// Seed a tier whose values would match these filters if forwarded, so a
-				// delegated-but-empty result can't masquerade as rejection:
-				createTier("test-tier", defaultBackend())
-
-				response, err := publicServer.List(ctx, publicv1.StorageTiersListRequest_builder{
-					Filter: new(filter),
-				}.Build())
-				Expect(err).To(HaveOccurred())
-				st, ok := status.FromError(err)
-				Expect(ok).To(BeTrue())
-				Expect(st.Code()).To(Equal(codes.InvalidArgument))
-				Expect(st.Message()).To(ContainSubstring("not yet supported"))
-				Expect(response).To(BeNil())
-			},
-			Entry("max_read_bandwidth_mbs", "this.spec.max_read_bandwidth_mbs == 1000"),
-			Entry("max_write_bandwidth_mbs", "this.spec.max_write_bandwidth_mbs == 500"),
-			Entry("encryption_enabled", "this.spec.encryption_enabled == true"),
-		)
 
 		It("List forwards a filter on this.spec.protocol now that the path is shared with the private schema", func() {
 			nfsTier := createTier("nfs-tier", defaultBackend())
@@ -499,26 +475,21 @@ var _ = Describe("Storage tiers server", func() {
 	})
 
 	Describe("Schema drift regression", func() {
-		It("Every StorageTierSpec field except description and protocol is covered by the Layer 2 rejection list", func() {
+		It("Public StorageTierSpec has only description and protocol fields", func() {
 			descriptor := (&publicv1.StorageTierSpec{}).ProtoReflect().Descriptor()
 			fields := descriptor.Fields()
 
-			rejected := make(map[string]bool, len(storageTierUnforwardableFilterFields))
-			for _, field := range storageTierUnforwardableFilterFields {
-				rejected[field] = true
+			allowed := map[string]bool{
+				"description": true,
+				"protocol":    true,
 			}
 
 			for i := range fields.Len() {
 				field := fields.Get(i)
-				// description/protocol share the same path publicly and privately, so they're forwardable.
-				if field.Name() == "description" || field.Name() == "protocol" {
-					continue
-				}
-				path := fmt.Sprintf("this.spec.%s", field.Name())
-				Expect(rejected[path]).To(BeTrue(),
+				Expect(allowed[string(field.Name())]).To(BeTrue(),
 					fmt.Sprintf(
-						"field %q is not covered by storageTierUnforwardableFilterFields — update the "+
-							"rejection list in storage_tiers_server.go",
+						"unexpected field %q on public StorageTierSpec — QoS and encryption "+
+							"fields belong exclusively on BackendAssociation",
 						field.Name(),
 					))
 			}

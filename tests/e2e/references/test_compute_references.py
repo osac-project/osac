@@ -44,18 +44,18 @@ def ref_instance_type(private_grpc: GRPCClient) -> Generator[str, None, None]:
 def ref_ci_catalog_item(private_grpc: GRPCClient, compute_template: str) -> Generator[str, None, None]:
     tag = uuid4().hex[:8]
     name = f"ref-ci-cat-{tag}"
-    cat_id = private_grpc.create_compute_instance_catalog_item(name=name, template=compute_template)
+    cat_id = private_grpc.create_compute_instance_catalog_item(name=name, template=compute_template, api=PRIVATE_API)
     yield cat_id
     try:
-        private_grpc.delete_compute_instance_catalog_item(catalog_item_id=cat_id)
+        private_grpc.delete_compute_instance_catalog_item(catalog_item_id=cat_id, api=PRIVATE_API)
     except subprocess.CalledProcessError:
         logger.warning("Failed to cleanup catalog item %s", cat_id)
 
 
 @pytest.fixture(scope="module")
 def ref_disk_image(grpc: GRPCClient) -> Generator[str, None, None]:
-    # Provider-admin (grpc) DiskImages are globally visible, so this single fixture also
-    # satisfies tenant-scoped creates (e.g. the cross-tenant test's jwt_grpc_tenant1).
+    # Both grpc and jwt_grpc_tenant1 use tenant1, so this tenant-owned image is visible
+    # to the reference tests that create compute instances with either client.
     tag = uuid4().hex[:8]
     name = f"ref-di-{tag}"
     di_id = grpc.create_disk_image(name=name, source_ref="quay.io/containerdisks/fedora:41")
@@ -79,8 +79,8 @@ def _ci_create_data(
         "object": {
             "metadata": {"name": name},
             "spec": {
-                "catalog_item": {"name": cat_item_name},
-                "instance_type": {"name": instance_type},
+                "catalog_item": {"name": cat_item_name, "shared": True},
+                "instance_type": {"name": instance_type, "shared": True},
                 "disk_image": {"name": disk_image},
                 "boot_disk": {"storage_tier": {"name": storage_tier}},
                 "network_attachments": [{"subnet": {"name": subnet_name}, "security_groups": [{"name": sg_name}]}],
@@ -209,8 +209,8 @@ class TestComputeReferences:
                     "object": {
                         "metadata": {"name": f"ref-ci-bad-sg-{tag}"},
                         "spec": {
-                            "catalog_item": {"name": cat_item_name},
-                            "instance_type": {"name": ref_instance_type},
+                            "catalog_item": {"name": cat_item_name, "shared": True},
+                            "instance_type": {"name": ref_instance_type, "shared": True},
                             "disk_image": {"name": ref_disk_image},
                             "boot_disk": {"storage_tier": {"name": default_storage_tier}},
                             "network_attachments": [
@@ -238,7 +238,9 @@ class TestComputeReferences:
     ):
         tag = uuid4().hex[:8]
         cat_name = f"ref-xt-cat-{tag}"
-        cat_id = private_grpc.create_compute_instance_catalog_item(name=cat_name, template=compute_template)
+        cat_id = private_grpc.create_compute_instance_catalog_item(
+            name=cat_name, template=compute_template, api=PRIVATE_API
+        )
         ci_id = None
         try:
             response: dict[str, Any] = jwt_grpc_tenant1.call(
@@ -265,7 +267,7 @@ class TestComputeReferences:
                 except subprocess.CalledProcessError:
                     logger.warning("Failed to cleanup compute instance %s", ci_id)
             try:
-                private_grpc.delete_compute_instance_catalog_item(catalog_item_id=cat_id)
+                private_grpc.delete_compute_instance_catalog_item(catalog_item_id=cat_id, api=PRIVATE_API)
             except subprocess.CalledProcessError:
                 logger.warning("Failed to cleanup cross-tenant catalog item %s", cat_id)
 

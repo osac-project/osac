@@ -100,7 +100,15 @@ def test_cluster_create_rejected_for_invalid_version(
     def _create_with_version(version_name: str) -> tuple[str, int]:
         return grpc.call_unchecked(
             service="osac.public.v1.Clusters/Create",
-            data={"object": {"spec": {"template": {"name": cluster_template}, "version": {"name": version_name}}}},
+            data={
+                "object": {
+                    "metadata": {"name": unique_name("e2e-invalid-version")},
+                    "spec": {
+                        "template": {"name": cluster_template, "shared": True},
+                        "version": {"name": version_name, "shared": True},
+                    },
+                }
+            },
         )
 
     created_version_ids: list[str] = []

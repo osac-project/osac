@@ -140,7 +140,12 @@ def test_create_cluster_with_unpublished_catalog_item_fails(grpc: GRPCClient, cl
     try:
         output, rc = grpc.call_unchecked(
             service="osac.public.v1.Clusters/Create",
-            data={"object": {"spec": {"catalog_item": {"id": catalog_item_id}}}},
+            data={
+                "object": {
+                    "metadata": {"name": unique_name("e2e-cl-unpub")},
+                    "spec": {"catalog_item": {"id": catalog_item_id}},
+                }
+            },
         )
         assert rc != 0, f"Expected create to fail for unpublished catalog item, got: {output}"
         assert "not published" in output.lower() or "not found" in output.lower()
@@ -158,7 +163,7 @@ def test_cluster_survives_catalog_item_deletion(grpc: GRPCClient, cli: OsacCLI, 
         cluster_id = cli.create_cluster_with_catalog_item(catalog_item=catalog_item_id, name=cluster_name)
 
         output, rc = grpc.call_unchecked(
-            service="osac.private.v1.ClusterCatalogItems/Delete", data={"id": catalog_item_id}
+            service="osac.public.v1.ClusterCatalogItems/Delete", data={"id": catalog_item_id}
         )
         assert rc == 0, f"Expected catalog item deletion to succeed, got: {output}"
         catalog_deleted = True
@@ -191,7 +196,7 @@ def test_create_cluster_with_catalog_item_version(
         name=name,
         template=cluster_template,
         published=True,
-        fields={"version": {"editable": {"default_value": {"name": version["name"]}}}},
+        fields={"version": {"editable": {"default_value": {"name": version["name"], "shared": True}}}},
     )
     cluster_id = ""
     try:

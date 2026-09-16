@@ -104,6 +104,7 @@ def test_obsolete_disk_image_blocks_creation(
                 disk_image_name=di_name,
                 subnet_ids=[default_subnet],
                 instance_type=default_instance_type,
+                name=_unique_name("e2e-ci-obsolete"),
                 boot_disk_storage_tier=default_storage_tier,
             )
         assert_grpc_rejected(exc_info, "FailedPrecondition")

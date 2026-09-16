@@ -55,18 +55,18 @@ def bmi_disk_image(grpc: GRPCClient, test_run_id: str) -> Generator[str, None, N
 
 @pytest.fixture(scope="session")
 def catalog_item(
-    private_grpc: GRPCClient, bmi_template: str, test_run_id: str, bmi_disk_image: str
+    grpc: GRPCClient, bmi_template: str, test_run_id: str, bmi_disk_image: str
 ) -> Generator[str, None, None]:
     name = f"e2e-bmaas-{test_run_id}"
     print(f"\nCreating BareMetalInstanceCatalogItem: {name}")
-    item_id: str = private_grpc.create_baremetal_instance_catalog_item(
+    item_id: str = grpc.create_baremetal_instance_catalog_item(
         name=name,
         title=f"E2E BMaaS Test ({test_run_id})",
         description="Temporary catalog item for BMaaS E2E tests",
         template=bmi_template,
         fields={
             "ssh_public_key": {"editable": {}},
-            "disk_image": {"editable": {"default_value": {"name": bmi_disk_image, "shared": True}}},
+            "disk_image": {"editable": {"default_value": {"name": bmi_disk_image}}},
         },
     )
     print(f"CatalogItem created: {item_id}")
@@ -75,7 +75,7 @@ def catalog_item(
 
     try:
         print(f"\nDeleting BareMetalInstanceCatalogItem {item_id}...")
-        private_grpc.delete_baremetal_instance_catalog_item(item_id=item_id)
+        grpc.delete_baremetal_instance_catalog_item(item_id=item_id)
         print(f"CatalogItem {item_id} deleted")
     except Exception as e:
         print(f"WARNING: Failed to delete catalog item {item_id}: {e}")

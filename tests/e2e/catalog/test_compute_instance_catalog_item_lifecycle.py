@@ -81,19 +81,21 @@ def test_compute_instance_catalog_item_unpublish_transition(grpc: GRPCClient, co
 
 
 def test_compute_instance_catalog_item_fields(grpc: GRPCClient, compute_instance_template: str) -> None:
-    fields = {"ssh_public_key": {"editable": {"default_value": "initial-key"}}}
+    initial_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG8K1ZuSC7tmzxD5LJJXwkCfStVEjzXWYCFhJaLBxWAn test@example.com"
+    locked_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBe5EVW4cHjAFNa8jMJQqLGBJENvJRfH+Q2lOjFr93vd other@example.com"
+    fields = {"ssh_public_key": {"editable": {"default_value": initial_key}}}
     catalog_item_id = grpc.create_compute_instance_catalog_item(
         name=unique_name("e2e-ci-policy"), template=compute_instance_template, fields=fields
     )
     try:
         item = grpc.get_compute_instance_catalog_item(catalog_item_id=catalog_item_id)["object"]
-        assert item["fields"]["sshPublicKey"]["editable"]["defaultValue"] == "initial-key"
+        assert item["fields"]["sshPublicKey"]["editable"]["defaultValue"] == initial_key
 
         grpc.update_compute_instance_catalog_item(
-            catalog_item_id=catalog_item_id, fields={"ssh_public_key": {"locked": "locked-key"}}
+            catalog_item_id=catalog_item_id, fields={"ssh_public_key": {"locked": locked_key}}
         )
         item = grpc.get_compute_instance_catalog_item(catalog_item_id=catalog_item_id)["object"]
-        assert item["fields"]["sshPublicKey"] == {"locked": "locked-key"}
+        assert item["fields"]["sshPublicKey"] == {"locked": locked_key}
 
         grpc.update_compute_instance_catalog_item(catalog_item_id=catalog_item_id, fields={})
         item = grpc.get_compute_instance_catalog_item(catalog_item_id=catalog_item_id)["object"]
@@ -148,11 +150,12 @@ def test_create_compute_instance_with_unpublished_catalog_item_fails(
             service="osac.public.v1.ComputeInstances/Create",
             data={
                 "object": {
+                    "metadata": {"name": unique_name("e2e-ci-unpub-create")},
                     "spec": {
                         "catalog_item": {"id": catalog_item_id},
                         "boot_disk": {"storage_tier": {"name": default_storage_tier}},
                         "network_attachments": [{"subnet": {"id": default_subnet_id}}],
-                    }
+                    },
                 }
             },
         )
@@ -181,7 +184,7 @@ def test_compute_instance_survives_catalog_item_deletion(
         )
 
         output, rc = grpc.call_unchecked(
-            service="osac.private.v1.ComputeInstanceCatalogItems/Delete", data={"id": catalog_item_id}
+            service="osac.public.v1.ComputeInstanceCatalogItems/Delete", data={"id": catalog_item_id}
         )
         assert rc == 0, f"Expected catalog item deletion to succeed, got: {output}"
         catalog_deleted = True

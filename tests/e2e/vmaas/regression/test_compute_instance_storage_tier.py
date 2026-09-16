@@ -143,20 +143,20 @@ def test_compute_instance_multiple_disks_different_tiers(
 
 
 def test_compute_instance_nonexistent_tier_rejected(
-    private_grpc: GRPCClient, vm_template: str, default_subnet: str, default_instance_type: str, default_disk_image: str
+    grpc: GRPCClient, vm_template: str, default_subnet: str, default_instance_type: str, default_disk_image: str
 ) -> None:
     """Verify that requesting a nonexistent storage tier returns INVALID_ARGUMENT."""
     nonexistent_tier = f"nonexistent-tier-{unique_name('test')}"
 
     with pytest.raises(subprocess.CalledProcessError) as exc_info:
-        private_grpc.call(
-            service="osac.private.v1.ComputeInstances/Create",
+        grpc.call(
+            service="osac.public.v1.ComputeInstances/Create",
             data={
                 "object": {
                     "metadata": {"name": unique_name("e2e-ci-bad-tier")},
                     "spec": {
-                        "template": {"name": vm_template},
-                        "instance_type": {"name": default_instance_type},
+                        "template": {"name": vm_template, "shared": True},
+                        "instance_type": {"name": default_instance_type, "shared": True},
                         "boot_disk": {"size_gib": 20, "storage_tier": {"name": nonexistent_tier}},
                         "network_attachments": [{"subnet": {"id": default_subnet}}],
                         "disk_image": {"name": default_disk_image},
@@ -168,8 +168,8 @@ def test_compute_instance_nonexistent_tier_rejected(
 
     assert_grpc_rejected(exc_info, "InvalidArgument")
     error_lower = str(exc_info.value.stderr).lower()
-    assert any(term in error_lower for term in ["not found", "does not exist", "notfound"]), (
-        f"Expected not-found/does-not-exist error, got: {exc_info.value.stderr}"
+    assert nonexistent_tier in error_lower and "tier" in error_lower, (
+        f"Expected missing tier error, got: {exc_info.value.stderr}"
     )
 
 
@@ -233,7 +233,7 @@ def test_compute_instance_tier_immutability(
 
 @pytest.mark.parametrize("storage_tier", [None, {"name": ""}])
 def test_compute_instance_boot_disk_tier_required(
-    private_grpc: GRPCClient,
+    grpc: GRPCClient,
     vm_template: str,
     default_subnet: str,
     default_instance_type: str,
@@ -246,14 +246,14 @@ def test_compute_instance_boot_disk_tier_required(
         boot_disk["storage_tier"] = storage_tier
 
     with pytest.raises(subprocess.CalledProcessError) as exc_info:
-        private_grpc.call(
-            service="osac.private.v1.ComputeInstances/Create",
+        grpc.call(
+            service="osac.public.v1.ComputeInstances/Create",
             data={
                 "object": {
                     "metadata": {"name": unique_name("e2e-ci-no-tier")},
                     "spec": {
-                        "template": {"name": vm_template},
-                        "instance_type": {"name": default_instance_type},
+                        "template": {"name": vm_template, "shared": True},
+                        "instance_type": {"name": default_instance_type, "shared": True},
                         "boot_disk": boot_disk,
                         "network_attachments": [{"subnet": {"id": default_subnet}}],
                         "disk_image": {"name": default_disk_image},
@@ -274,7 +274,7 @@ def test_compute_instance_boot_disk_tier_required(
 
 @pytest.mark.parametrize("storage_tier", [None, {"name": ""}])
 def test_compute_instance_additional_disk_tier_required(
-    private_grpc: GRPCClient,
+    grpc: GRPCClient,
     vm_template: str,
     default_subnet: str,
     default_storage_tier: str,
@@ -288,14 +288,14 @@ def test_compute_instance_additional_disk_tier_required(
         additional_disk["storage_tier"] = storage_tier
 
     with pytest.raises(subprocess.CalledProcessError) as exc_info:
-        private_grpc.call(
-            service="osac.private.v1.ComputeInstances/Create",
+        grpc.call(
+            service="osac.public.v1.ComputeInstances/Create",
             data={
                 "object": {
                     "metadata": {"name": unique_name("e2e-ci-add-disk-no-tier")},
                     "spec": {
-                        "template": {"name": vm_template},
-                        "instance_type": {"name": default_instance_type},
+                        "template": {"name": vm_template, "shared": True},
+                        "instance_type": {"name": default_instance_type, "shared": True},
                         "boot_disk": {"size_gib": 20, "storage_tier": {"name": default_storage_tier}},
                         "additional_disks": [additional_disk],
                         "network_attachments": [{"subnet": {"id": default_subnet}}],
@@ -316,7 +316,6 @@ def test_compute_instance_additional_disk_tier_required(
 
 
 def test_compute_instance_boot_disk_tier_from_catalog_item_default(
-    private_grpc: GRPCClient,
     grpc: GRPCClient,
     k8s_hub_client: K8sClient,
     k8s_virt_client: K8sClient,
@@ -337,7 +336,7 @@ def test_compute_instance_boot_disk_tier_from_catalog_item_default(
         "instance_type": {"editable": {}},
         "run_strategy": {"editable": {}},
     }
-    catalog_item_id = private_grpc.create_compute_instance_catalog_item(
+    catalog_item_id = grpc.create_compute_instance_catalog_item(
         name=unique_name("e2e-cat-tier"), template=vm_template, published=True, fields=fields
     )
 
@@ -350,7 +349,7 @@ def test_compute_instance_boot_disk_tier_from_catalog_item_default(
                     "metadata": {"name": unique_name("e2e-ci-cat-def")},
                     "spec": {
                         "catalog_item": {"id": catalog_item_id},
-                        "instance_type": {"name": default_instance_type},
+                        "instance_type": {"name": default_instance_type, "shared": True},
                         "boot_disk": {"size_gib": 20},  # No storage_tier
                         "network_attachments": [{"subnet": {"id": default_subnet}}],
                         "disk_image": {"name": default_disk_image},
@@ -382,7 +381,7 @@ def test_compute_instance_boot_disk_tier_from_catalog_item_default(
             grpc.delete_compute_instance(ci_id=uuid)
             wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
     finally:
-        private_grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
+        grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
 
 
 @pytest.mark.skip(
@@ -409,7 +408,6 @@ def test_compute_instance_boot_disk_tier_from_template_default() -> None:
 
 
 def test_compute_instance_user_tier_overrides_catalog_item_default(
-    private_grpc: GRPCClient,
     grpc: GRPCClient,
     k8s_hub_client: K8sClient,
     k8s_virt_client: K8sClient,
@@ -433,7 +431,7 @@ def test_compute_instance_user_tier_overrides_catalog_item_default(
         "instance_type": {"editable": {}},
         "run_strategy": {"editable": {}},
     }
-    catalog_item_id = private_grpc.create_compute_instance_catalog_item(
+    catalog_item_id = grpc.create_compute_instance_catalog_item(
         name=unique_name("e2e-cat-override"), template=vm_template, published=True, fields=fields
     )
 
@@ -446,7 +444,7 @@ def test_compute_instance_user_tier_overrides_catalog_item_default(
                     "metadata": {"name": unique_name("e2e-ci-override")},
                     "spec": {
                         "catalog_item": {"id": catalog_item_id},
-                        "instance_type": {"name": default_instance_type},
+                        "instance_type": {"name": default_instance_type, "shared": True},
                         "boot_disk": {"size_gib": 20, "storage_tier": {"name": fast_tier}},  # Override
                         "network_attachments": [{"subnet": {"id": default_subnet}}],
                         "disk_image": {"name": default_disk_image},
@@ -478,11 +476,10 @@ def test_compute_instance_user_tier_overrides_catalog_item_default(
             grpc.delete_compute_instance(ci_id=uuid)
             wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
     finally:
-        private_grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
+        grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
 
 
 def test_compute_instance_explicit_additional_disks_without_catalog_item_default(
-    private_grpc: GRPCClient,
     grpc: GRPCClient,
     k8s_hub_client: K8sClient,
     k8s_virt_client: K8sClient,
@@ -509,7 +506,7 @@ def test_compute_instance_explicit_additional_disks_without_catalog_item_default
         "instance_type": {"editable": {}},
         "run_strategy": {"editable": {}},
     }
-    catalog_item_id = private_grpc.create_compute_instance_catalog_item(
+    catalog_item_id = grpc.create_compute_instance_catalog_item(
         name=unique_name("e2e-cat-no-add-def"), template=vm_template, published=True, fields=fields
     )
 
@@ -522,7 +519,7 @@ def test_compute_instance_explicit_additional_disks_without_catalog_item_default
                     "metadata": {"name": unique_name("e2e-ci-explicit-add")},
                     "spec": {
                         "catalog_item": {"id": catalog_item_id},
-                        "instance_type": {"name": default_instance_type},
+                        "instance_type": {"name": default_instance_type, "shared": True},
                         "boot_disk": {"size_gib": 20},  # Uses CatalogItem default tier
                         "additional_disks": [
                             {"size_gib": 5, "storage_tier": {"name": fast_tier}},
@@ -562,11 +559,10 @@ def test_compute_instance_explicit_additional_disks_without_catalog_item_default
             grpc.delete_compute_instance(ci_id=uuid)
             wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
     finally:
-        private_grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
+        grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
 
 
 def test_compute_instance_additional_disks_from_catalog_item_default(
-    private_grpc: GRPCClient,
     grpc: GRPCClient,
     k8s_hub_client: K8sClient,
     k8s_virt_client: K8sClient,
@@ -590,7 +586,7 @@ def test_compute_instance_additional_disks_from_catalog_item_default(
         "instance_type": {"editable": {}},
         "run_strategy": {"editable": {}},
     }
-    catalog_item_id = private_grpc.create_compute_instance_catalog_item(
+    catalog_item_id = grpc.create_compute_instance_catalog_item(
         name=unique_name("e2e-cat-add-disks"), template=vm_template, published=True, fields=fields
     )
 
@@ -603,7 +599,7 @@ def test_compute_instance_additional_disks_from_catalog_item_default(
                     "metadata": {"name": unique_name("e2e-ci-add-def")},
                     "spec": {
                         "catalog_item": {"id": catalog_item_id},
-                        "instance_type": {"name": default_instance_type},
+                        "instance_type": {"name": default_instance_type, "shared": True},
                         "boot_disk": {"size_gib": 20, "storage_tier": {"name": default_storage_tier}},
                         # No additional_disks specified
                         "network_attachments": [{"subnet": {"id": default_subnet}}],
@@ -637,11 +633,10 @@ def test_compute_instance_additional_disks_from_catalog_item_default(
             grpc.delete_compute_instance(ci_id=uuid)
             wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
     finally:
-        private_grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
+        grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
 
 
 def test_compute_instance_additional_disks_from_catalog_item_typed_name_default(
-    private_grpc: GRPCClient,
     grpc: GRPCClient,
     k8s_hub_client: K8sClient,
     k8s_virt_client: K8sClient,
@@ -666,7 +661,7 @@ def test_compute_instance_additional_disks_from_catalog_item_typed_name_default(
         "instance_type": {"editable": {}},
         "run_strategy": {"editable": {}},
     }
-    catalog_item_id = private_grpc.create_compute_instance_catalog_item(
+    catalog_item_id = grpc.create_compute_instance_catalog_item(
         name=unique_name("e2e-cat-typed-name"), template=vm_template, published=True, fields=fields
     )
 
@@ -679,7 +674,7 @@ def test_compute_instance_additional_disks_from_catalog_item_typed_name_default(
                     "metadata": {"name": unique_name("e2e-ci-legacy-def")},
                     "spec": {
                         "catalog_item": {"id": catalog_item_id},
-                        "instance_type": {"name": default_instance_type},
+                        "instance_type": {"name": default_instance_type, "shared": True},
                         "boot_disk": {"size_gib": 20, "storage_tier": {"name": default_storage_tier}},
                         # No additional_disks specified
                         "network_attachments": [{"subnet": {"id": default_subnet}}],
@@ -704,11 +699,10 @@ def test_compute_instance_additional_disks_from_catalog_item_typed_name_default(
             grpc.delete_compute_instance(ci_id=uuid)
             wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
     finally:
-        private_grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
+        grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
 
 
 def test_compute_instance_user_additional_disks_override_catalog_item_default(
-    private_grpc: GRPCClient,
     grpc: GRPCClient,
     k8s_hub_client: K8sClient,
     k8s_virt_client: K8sClient,
@@ -733,7 +727,7 @@ def test_compute_instance_user_additional_disks_override_catalog_item_default(
         "instance_type": {"editable": {}},
         "run_strategy": {"editable": {}},
     }
-    catalog_item_id = private_grpc.create_compute_instance_catalog_item(
+    catalog_item_id = grpc.create_compute_instance_catalog_item(
         name=unique_name("e2e-cat-add-override"), template=vm_template, published=True, fields=fields
     )
 
@@ -746,7 +740,7 @@ def test_compute_instance_user_additional_disks_override_catalog_item_default(
                     "metadata": {"name": unique_name("e2e-ci-add-override")},
                     "spec": {
                         "catalog_item": {"id": catalog_item_id},
-                        "instance_type": {"name": default_instance_type},
+                        "instance_type": {"name": default_instance_type, "shared": True},
                         "boot_disk": {"size_gib": 20, "storage_tier": {"name": default_storage_tier}},
                         "additional_disks": [  # Override
                             {"size_gib": 10, "storage_tier": {"name": archive_tier}}
@@ -782,11 +776,10 @@ def test_compute_instance_user_additional_disks_override_catalog_item_default(
             grpc.delete_compute_instance(ci_id=uuid)
             wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
     finally:
-        private_grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
+        grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
 
 
 def test_compute_instance_empty_additional_disks_uses_catalog_item_default(
-    private_grpc: GRPCClient,
     grpc: GRPCClient,
     k8s_hub_client: K8sClient,
     k8s_virt_client: K8sClient,
@@ -810,7 +803,7 @@ def test_compute_instance_empty_additional_disks_uses_catalog_item_default(
         "instance_type": {"editable": {}},
         "run_strategy": {"editable": {}},
     }
-    catalog_item_id = private_grpc.create_compute_instance_catalog_item(
+    catalog_item_id = grpc.create_compute_instance_catalog_item(
         name=unique_name("e2e-cat-add-empty"), template=vm_template, published=True, fields=fields
     )
 
@@ -823,7 +816,7 @@ def test_compute_instance_empty_additional_disks_uses_catalog_item_default(
                     "metadata": {"name": unique_name("e2e-ci-add-empty")},
                     "spec": {
                         "catalog_item": {"id": catalog_item_id},
-                        "instance_type": {"name": default_instance_type},
+                        "instance_type": {"name": default_instance_type, "shared": True},
                         "boot_disk": {"size_gib": 20, "storage_tier": {"name": default_storage_tier}},
                         "additional_disks": [],  # Explicit empty array
                         "network_attachments": [{"subnet": {"id": default_subnet}}],
@@ -857,4 +850,4 @@ def test_compute_instance_empty_additional_disks_uses_catalog_item_default(
             grpc.delete_compute_instance(ci_id=uuid)
             wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
     finally:
-        private_grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
+        grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_item_id)

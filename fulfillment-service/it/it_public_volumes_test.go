@@ -16,6 +16,7 @@ package it
 import (
 	"context"
 	"fmt"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
@@ -156,15 +157,18 @@ var _ = Describe("Public volumes API", func() {
 			}.Build())
 		Expect(err).ToNot(HaveOccurred())
 
-		// Verify deleted
-		_, err = publicVolumesClient.Get(ctx,
-			publicv1.VolumesGetRequest_builder{
-				Id: volId,
-			}.Build())
-		Expect(err).To(HaveOccurred())
-		st, ok := grpcstatus.FromError(err)
-		Expect(ok).To(BeTrue())
-		Expect(st.Code()).To(Equal(grpccodes.NotFound))
+		// Verify deleted — volume deletion may be async, so retry until the
+		// resource is no longer found rather than asserting immediately.
+		Eventually(func(g Gomega) {
+			_, err := publicVolumesClient.Get(ctx,
+				publicv1.VolumesGetRequest_builder{
+					Id: volId,
+				}.Build())
+			g.Expect(err).To(HaveOccurred())
+			st, ok := grpcstatus.FromError(err)
+			g.Expect(ok).To(BeTrue())
+			g.Expect(st.Code()).To(Equal(grpccodes.NotFound))
+		}, 30*time.Second, time.Second).Should(Succeed())
 	})
 
 	// TC-IT6: Positive field allowlist — verify the public Volume response contains exactly

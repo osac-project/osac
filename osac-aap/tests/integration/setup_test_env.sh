@@ -248,32 +248,38 @@ ENVEOF
       registry:2 > /dev/null
 
     echo "Waiting for local OCI registry to be ready..."
+    CSI_DRIVER_TEST_REGISTRY_READY="false"
     for i in $(seq 1 10); do
       if curl -sf "https://${CSI_DRIVER_TEST_REGISTRY_HOST}:${CSI_DRIVER_TEST_REGISTRY_PORT}/v2/" > /dev/null 2>&1; then
         echo "Local OCI registry ready on ${CSI_DRIVER_TEST_REGISTRY_HOST}:${CSI_DRIVER_TEST_REGISTRY_PORT}"
+        CSI_DRIVER_TEST_REGISTRY_READY="true"
         break
       fi
       sleep 1
     done
 
-    echo "Packaging and pushing the csi-driver chart at versions 0.1.0 and 0.1.1..."
-    CSI_DRIVER_CHARTS_DIR="${REPO_ROOT}/osac-csi-driver/charts"
-    CSI_DRIVER_CHART_PKG_DIR="${SCRIPT_DIR}/.csi_driver_chart_pkgs"
-    rm -rf "${CSI_DRIVER_CHART_PKG_DIR}"
-    mkdir -p "${CSI_DRIVER_CHART_PKG_DIR}"
+    if [ "${CSI_DRIVER_TEST_REGISTRY_READY}" = "true" ]; then
+      echo "Packaging and pushing the csi-driver chart at versions 0.1.0 and 0.1.1..."
+      CSI_DRIVER_CHARTS_DIR="${REPO_ROOT}/osac-csi-driver/charts"
+      CSI_DRIVER_CHART_PKG_DIR="${SCRIPT_DIR}/.csi_driver_chart_pkgs"
+      rm -rf "${CSI_DRIVER_CHART_PKG_DIR}"
+      mkdir -p "${CSI_DRIVER_CHART_PKG_DIR}"
 
-    for version in 0.1.0 0.1.1; do
-      helm package "${CSI_DRIVER_CHARTS_DIR}/csi-driver" --version "${version}" --app-version "${version}" \
-        -d "${CSI_DRIVER_CHART_PKG_DIR}"
-      helm push "${CSI_DRIVER_CHART_PKG_DIR}/csi-driver-${version}.tgz" "${CSI_DRIVER_TEST_REGISTRY_REPO}"
-    done
+      for version in 0.1.0 0.1.1; do
+        helm package "${CSI_DRIVER_CHARTS_DIR}/csi-driver" --version "${version}" --app-version "${version}" \
+          -d "${CSI_DRIVER_CHART_PKG_DIR}"
+        helm push "${CSI_DRIVER_CHART_PKG_DIR}/csi-driver-${version}.tgz" "${CSI_DRIVER_TEST_REGISTRY_REPO}"
+      done
 
-    # Append to the same env file consumed by run_tests.sh (Make runs each recipe line in
-    # a separate shell) so the csi_driver_install role-level test uses this deterministic
-    # local chart instead of depending on GHCR network access.
-    cat >> "${SCRIPT_DIR}/.storage_env" <<ENVEOF
+      # Append to the same env file consumed by run_tests.sh (Make runs each recipe line in
+      # a separate shell) so the csi_driver_install role-level test uses this deterministic
+      # local chart instead of depending on GHCR network access.
+      cat >> "${SCRIPT_DIR}/.storage_env" <<ENVEOF
 export CSI_DRIVER_INSTALL_TEST_REGISTRY="${CSI_DRIVER_TEST_REGISTRY_REPO}"
 ENVEOF
+    else
+      echo "WARNING: Local OCI registry was not ready after 10 attempts; skipping chart push and leaving CSI_DRIVER_INSTALL_TEST_REGISTRY unset."
+    fi
   else
     echo "No supported CA trust store found (expected /usr/local/share/ca-certificates on Debian/Ubuntu, which is what CI runs on) -- skipping local OCI registry setup. csi_driver_install's role-level test will use the published GHCR chart if accessible; every other STORAGE_TESTS_ENABLED test is unaffected."
   fi

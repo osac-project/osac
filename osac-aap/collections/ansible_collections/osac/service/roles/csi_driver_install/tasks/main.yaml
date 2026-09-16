@@ -55,6 +55,7 @@
     kind: Service
     name: "{{ item }}-csi-controller"
     namespace: "{{ csi_driver_install_backends_namespace }}"
+  when: csi_driver_install_enabled | default(false) | bool
   register: _csi_driver_install_vendor_service_info
   loop: "{{ _csi_driver_install_dispatched_vendors }}"
   loop_control:
@@ -69,8 +70,9 @@
   loop: "{{ _csi_driver_install_vendor_service_info.results }}"
   loop_control:
     label: "{{ item.item }}-csi-controller"
-  when: (item.resources | default([])) | length == 0
-
+  when:
+    - csi_driver_install_enabled | default(false) | bool
+    - (item.resources | default([])) | length == 0
 - name: Build vendor controller Service port map from the live read
   ansible.builtin.set_fact:
     _csi_driver_install_vendor_service_ports: >-
@@ -79,6 +81,7 @@
       {% set _ = _map.update({_result.item: _result.resources[0].spec.ports[0].port}) -%}
       {% endfor -%}
       {{ _map }}
+  when: csi_driver_install_enabled | default(false) | bool
 
 # Convergence pre-check (lock-free). Read the currently-deployed csi-driver
 # release and decide whether this dispatch would change anything at all: same
@@ -104,7 +107,9 @@
 # defaults do); a supported vendor missing a socketPath fails loudly here and at
 # the accumulate below, by design.
 - name: Convergence pre-check for the csi-driver release (skipped when no supported vendor is dispatched)
-  when: _csi_driver_install_dispatched_vendors | length > 0
+  when:
+    - csi_driver_install_enabled | default(false) | bool
+    - _csi_driver_install_dispatched_vendors | length > 0
   block:
     - name: Read currently installed csi-driver release (lock-free convergence pre-check)
       kubernetes.core.helm_info:
@@ -127,18 +132,23 @@
         _csi_driver_install_converged: >-
           {% set _ns = namespace(ok=false) -%}
           {% if _csi_driver_install_precheck_status is not none -%}
-          {% set _s = _csi_driver_install_precheck_status -%}
+          {% set _values = _s['values'] | default({}, true) -%}
+          {% set _controller = _values['controller'] | default({}, true) -%}
+          {% set _node_values = _values['node'] | default({}, true) -%}
           {% set _ctrl = {} -%}
-          {% for _pair in (_s['values'].controller.vendorControllers | default(_s['values'].controller.vendorSockets | default('', true), true) | trim).split(',') if _pair | trim | length > 0 -%}
+          {% set _controller_raw = (_controller['vendorControllers'] | default('', true))
+             or (_controller['vendorSockets'] | default('', true)) -%}
+          {% for _pair in (_controller_raw | trim).split(',') if _pair | trim | length > 0 -%}
           {% set _kv = _pair.split('=', 1) -%}
           {% set _ = _ctrl.update({_kv[0]: _kv[1]}) -%}
           {% endfor -%}
           {% set _node = {} -%}
-          {% for _pair in (_s['values'].node.vendorSockets | default('', true) | trim).split(',') if _pair | trim | length > 0 -%}
+          {% set _node_raw = _node_values['vendorSockets'] | default('', true) -%}
+          {% for _pair in (_node_raw | trim).split(',') if _pair | trim | length > 0 -%}
           {% set _kv = _pair.split('=', 1) -%}
           {% set _ = _node.update({_kv[0]: _kv[1]}) -%}
           {% endfor -%}
-          {% set _vendors = _s['values'].vendors | default({}, true) -%}
+          {% set _vendors = _values['vendors'] | default({}, true) -%}
           {% set _ns.ok = (_s.chart | default('') == 'csi-driver-' ~ csi_driver_install_chart_version) -%}
           {% for _v in _csi_driver_install_dispatched_vendors -%}
           {% if _ctrl.get(_v) != (_v ~ '-csi-controller.'
@@ -159,6 +169,7 @@
 # such dispatch just to leave csi-driver unchanged.
 - name: Install OSAC CSI driver
   when:
+    - csi_driver_install_enabled | default(false) | bool
     - _csi_driver_install_dispatched_vendors | length > 0
     - not (_csi_driver_install_converged | default(false))
   block:
@@ -252,15 +263,33 @@
     # release dict has a real key literally named "values", which collides
     # with Python dict's own .values() method — attribute access would
     # silently return the bound method instead of the chart values.
+    - name: Normalize previously deployed csi-driver values
+      ansible.builtin.set_fact:
+        _csi_driver_install_prior_values: >-
+          {{
+            _csi_driver_install_prior_driver_status['values'] | default({}, true)
+            if _csi_driver_install_prior_driver_status is not none
+            else {}
+          }}
+
+    - name: Normalize previously deployed controller and node values
+      ansible.builtin.set_fact:
+        _csi_driver_install_prior_controller: >-
+          {{ _csi_driver_install_prior_values['controller'] | default({}, true) }}
+        _csi_driver_install_prior_node: >-
+          {{ _csi_driver_install_prior_values['node'] | default({}, true) }}
+
     - name: Extract previously-deployed controller/node vendor endpoints strings (empty string if unset)
       ansible.builtin.set_fact:
         _csi_driver_install_prior_controller_sockets_raw: >-
-          {{ ((_csi_driver_install_prior_driver_status['values'].controller.vendorControllers | default('', true))
-              or (_csi_driver_install_prior_driver_status['values'].controller.vendorSockets | default('', true)) | trim)
-             if (_csi_driver_install_prior_driver_status is not none) else '' }}
+          {{
+            (
+              (_csi_driver_install_prior_controller['vendorControllers'] | default('', true))
+              or (_csi_driver_install_prior_controller['vendorSockets'] | default('', true))
+            ) | trim
+          }}
         _csi_driver_install_prior_node_sockets_raw: >-
-          {{ (_csi_driver_install_prior_driver_status['values'].node.vendorSockets | default('', true) | trim)
-             if (_csi_driver_install_prior_driver_status is not none) else '' }}
+          {{ _csi_driver_install_prior_node['vendorSockets'] | default('', true) | trim }}
 
     - name: Parse previously-deployed vendorSockets strings into per-vendor maps (empty map if unset)
       ansible.builtin.set_fact:
@@ -364,7 +393,7 @@
       ansible.builtin.fail:
         msg: >-
           OSAC CSI driver install failed. Failed task: {{ ansible_failed_task.name | default('unknown') }}.
-          Error: {{ ansible_failed_result.msg | default('see logs for details') }}.
+          {{ ('Error: ' ~ ansible_failed_result.msg) if (ansible_verbosity | default(0) >= 2) else 'Run with -vv for full error details.' }}
 
   always:
     # Guarded by _csi_driver_install_lock_acquired -- see the "Mark the lock

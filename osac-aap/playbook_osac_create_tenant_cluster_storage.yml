@@ -92,6 +92,16 @@
     # _remote_kubeconfig. Skipping for ClusterOrder (CaaS) avoids installing the
     # OSAC CSI driver on a tenant's guest cluster, which is out of scope here.
     #
+    # HUB vs. GUEST-CLUSTER TARGETING:
+    # This playbook is invoked for two distinct targets:
+    # 1. Hub cluster storage (kind == 'Tenant') via handleClusterStorageProvisioning.
+    # 2. Tenant guest cluster storage / CaaS (kind == 'ClusterOrder') via handleCaaSUpdate.
+    #
+    # csi_driver_install deploys to the HUB cluster using the default hub kubeconfig
+    # context. It must run ONLY for the Tenant (hub) case and NEVER for ClusterOrder
+    # (guest-cluster) cases, where guest-cluster CSI driver installation is handled
+    # directly on the remote cluster via osac.templates.osac_csi_driver (OSAC-3291).
+    #
     # This playbook's own task order does NOT guarantee the vendor controller
     # Service csi_driver_install's pre-block fail-fast requires already exists
     # -- this is Stage 2 (ensure_storage_class), which never calls
@@ -105,8 +115,11 @@
     # internal/controller/storage_controller_test.go ("Stage 1: Backend
     # provisioning" and "Stage 2: Cluster storage provisioning" contexts),
     # which drive handleBackendReadiness against a real envtest control plane.
+    # Gated by csi_driver_install_enabled (default false).
     - name: Install OSAC CSI driver on the hub (once per dispatch, regardless of provider count)
-      when: osac_job_vars.resource.kind == 'Tenant'
+      when:
+        - csi_driver_install_enabled | default(false) | bool
+        - osac_job_vars.resource.kind == 'Tenant'
       ansible.builtin.include_role:
         name: "{{ (csi_driver_install_override | default(csi_driver_install_default)).name }}"
         tasks_from: "{{ (csi_driver_install_override | default(csi_driver_install_default)).tasks_from }}"

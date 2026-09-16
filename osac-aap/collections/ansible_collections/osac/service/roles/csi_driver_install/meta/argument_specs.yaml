@@ -16,6 +16,15 @@ argument_specs:
       keep storage_provider/tests/test.yml's zero-live-I/O validation
       guarantee intact.
     options:
+      csi_driver_install_enabled:
+        type: bool
+        required: false
+        default: false
+        description: >
+          Whether to install or upgrade the OSAC CSI driver Helm release on
+          the hub cluster. Defaults to false so standard clusters where the
+          osac-installer umbrella chart deploys the driver do not encounter
+          Helm ownership collisions or VM-creation lock contention.
       csi_driver_install_tiers:
         type: list
         required: true

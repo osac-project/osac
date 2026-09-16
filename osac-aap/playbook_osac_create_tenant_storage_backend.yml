@@ -57,7 +57,9 @@
     # The umbrella installer owns the shared csi-backends controller Services under
     # OSAC-4252. AAP's csi_driver_install role consumes those Services and fails fast
     # if the umbrella has not provisioned the requested vendor yet.
+    # Gated by csi_driver_install_enabled (default false).
     - name: Install OSAC CSI driver (once per dispatch, regardless of provider count)
+      when: csi_driver_install_enabled | default(false) | bool
       ansible.builtin.include_role:
         name: "{{ (csi_driver_install_override | default(csi_driver_install_default)).name }}"
         tasks_from: "{{ (csi_driver_install_override | default(csi_driver_install_default)).tasks_from }}"

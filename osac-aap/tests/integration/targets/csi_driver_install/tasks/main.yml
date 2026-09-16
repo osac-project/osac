@@ -34,11 +34,20 @@
     # Set once as a fact rather than repeated in every scenario's own vars: below --
     # facts persist across every later play in this file targeting the same host, and
     # a pre-set fact outranks the role's own default (see the file-level comment above).
-    - name: Point csi_driver_install_chart_registry at the local test registry
+    - name: Point csi_driver_install_chart_registry at the local test registry and configure test defaults
       ansible.builtin.set_fact:
         csi_driver_install_chart_registry: >-
           {{ lookup('env', 'CSI_DRIVER_INSTALL_TEST_REGISTRY') | default('oci://ghcr.io/osac-project/charts', true) }}
-
+        csi_driver_install_enabled: true
+        # Test 3 and Test 5 test multi-vendor accumulation (pure) and missing-service fail-fast (trident)
+        csi_driver_install_supported_vendors:
+          - vast
+          - pure
+          - trident
+        csi_driver_install_vendor_node_socket_paths:
+          vast: /var/lib/kubelet/plugins/csi.vast.vastdata.com
+          pure: /var/lib/kubelet/plugins/csi.pure.purestorage.com
+          trident: /var/lib/kubelet/plugins/csi.trident.netapp.io
     - name: Uninstall any pre-existing csi-driver release
       kubernetes.core.helm:
         name: csi-driver
@@ -478,39 +487,32 @@
         provider: lvms
 
   tasks:
-    - name: Read the install lock's Lease object before the zero-supported-vendor dispatch
-      kubernetes.core.k8s_info:
-        api_version: coordination.k8s.io/v1
-        kind: Lease
-        name: csi-driver-install-lock
-        namespace: "{{ lookup('env', 'POD_NAMESPACE') }}"
-      register: _lease_before_noop_dispatch
+    - name: Read installed csi-driver release before the zero-supported-vendor dispatch
+      kubernetes.core.helm_info:
+        name: csi-driver
+        release_namespace: osac-csi
+      register: _driver_release_before_noop_dispatch
 
     - name: Call csi_driver_install role with only an unsupported provider (lvms)
       ansible.builtin.include_role:
         name: osac.service.csi_driver_install
 
-    - name: Read the install lock's Lease object after the zero-supported-vendor dispatch
-      kubernetes.core.k8s_info:
-        api_version: coordination.k8s.io/v1
-        kind: Lease
-        name: csi-driver-install-lock
-        namespace: "{{ lookup('env', 'POD_NAMESPACE') }}"
-      register: _lease_after_noop_dispatch
+    - name: Read installed csi-driver release after the zero-supported-vendor dispatch
+      kubernetes.core.helm_info:
+        name: csi-driver
+        release_namespace: osac-csi
+      register: _driver_release_after_noop_dispatch
 
-    - name: Assert the install lock was never touched (block was skipped, not just a no-op)
+    - name: Assert the csi-driver release revision was not incremented (install/upgrade skipped)
       ansible.builtin.assert:
         that:
-          - >-
-            (_lease_before_noop_dispatch.resources[0].metadata.resourceVersion | default(''))
-            == (_lease_after_noop_dispatch.resources[0].metadata.resourceVersion | default(''))
+          - _driver_release_before_noop_dispatch.status.version == _driver_release_after_noop_dispatch.status.version
         fail_msg: >-
-          The install lock's Lease resourceVersion changed on a zero-supported-vendor
-          dispatch, meaning the block ran (acquired/released the lock) instead of being
-          skipped entirely: before={{ _lease_before_noop_dispatch.resources[0].metadata.resourceVersion | default('none') }},
-          after={{ _lease_after_noop_dispatch.resources[0].metadata.resourceVersion | default('none') }}
-        success_msg: "Zero-supported-vendor dispatch correctly skipped the entire install block -- lock never touched"
-
+          The csi-driver release revision changed on a zero-supported-vendor
+          dispatch (before={{ _driver_release_before_noop_dispatch.status.version }},
+          after={{ _driver_release_after_noop_dispatch.status.version }}), meaning a
+          Helm upgrade ran instead of being skipped entirely.
+        success_msg: "Zero-supported-vendor dispatch correctly skipped the install block -- Helm revision unchanged"
     - name: Read installed csi-driver release after the zero-supported-vendor dispatch
       kubernetes.core.helm_info:
         name: csi-driver

@@ -27,6 +27,10 @@ else
 fi
 "${_CSI_DRIVER_TEST_CONTAINER_TOOL}" rm -f osac-test-csi-registry > /dev/null 2>&1 || true
 rm -rf "${SCRIPT_DIR}/.csi_driver_chart_pkgs"
+rm -f "${SCRIPT_DIR}"/certs/registry-ca.key "${SCRIPT_DIR}"/certs/registry-ca.pem \
+      "${SCRIPT_DIR}"/certs/registry-ca.srl "${SCRIPT_DIR}"/certs/registry.key \
+      "${SCRIPT_DIR}"/certs/registry.pem "${SCRIPT_DIR}"/certs/registry.csr \
+      "${SCRIPT_DIR}"/certs/registry.ext
 
 # Remove the local CA installed into the system trust store by setup_test_env.sh's local
 # OCI registry section, so it doesn't persist beyond this test run on a real workstation

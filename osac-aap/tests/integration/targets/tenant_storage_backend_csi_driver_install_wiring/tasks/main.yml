@@ -43,7 +43,7 @@
         vast_storage_vip_pool_ip_ranges: '[["10.0.0.10","10.0.0.50"]]'
         vast_storage_vip_pool_subnet_cidr: "24"
         vast_storage_config_namespace: "osac-system"
-
+        csi_driver_install_enabled: true
     - name: Delete any pre-existing hub Secret (clean slate)
       kubernetes.core.k8s:
         state: absent

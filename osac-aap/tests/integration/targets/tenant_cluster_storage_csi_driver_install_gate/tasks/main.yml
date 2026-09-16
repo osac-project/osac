@@ -59,7 +59,7 @@
       ansible.builtin.set_fact:
         vast_storage_config_namespace: "osac-system"
         vast_storage_validate_certs: false
-
+        csi_driver_install_enabled: true
     - name: Delete any pre-existing test resources (clean slate)
       block:
         - name: Delete hub Secret if exists

@@ -377,6 +377,10 @@ class K8sClient:
         output = self.get_jsonpath(resource="clusterorder", name=name, jsonpath="{.spec}")
         return json.loads(output) if output else {}
 
+    def get_cluster_order_status(self, *, name: str) -> dict[str, Any]:
+        output = self.get_jsonpath(resource="clusterorder", name=name, jsonpath="{.status}")
+        return json.loads(output) if output else {}
+
     def get_cluster_order_condition_status(self, *, name: str, condition_type: str, checked: bool = True) -> str:
         output, rc = self._get("get", "clusterorder", name, "-n", self.namespace, "-o", "json", checked=checked)
         if rc != 0:
@@ -386,6 +390,22 @@ class K8sClient:
             if cond.get("type") == condition_type:
                 return cond.get("status", "")
         return ""
+
+    def get_cluster_order_events(self, *, name: str, checked: bool = True) -> list[dict[str, Any]]:
+        output, rc = self._get(
+            "get",
+            "events",
+            "-n",
+            self.namespace,
+            "--field-selector",
+            f"involvedObject.kind=ClusterOrder,involvedObject.name={name}",
+            "-o",
+            "json",
+            checked=checked,
+        )
+        if rc != 0:
+            return []
+        return json.loads(output).get("items", [])
 
     def get_cluster_order_finalizers(self, *, name: str, checked: bool = True) -> list[str]:
         output, rc = self._get("get", "clusterorder", name, "-n", self.namespace, "-o", "json", checked=checked)

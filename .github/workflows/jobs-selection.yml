@@ -392,7 +392,7 @@ jobs:
               netris_relevant_files: $netris_relevant_files,
               jobs: {
                 # The only signal for every Unit Tests/Integration Tests row
-                # (see this filter's own comment above) -- both real
+                # (see the code filter comment above) -- both real
                 # workflows gate every job in them on this exact boolean,
                 # nothing narrower.
                 code: $code,

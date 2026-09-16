@@ -1,4 +1,22 @@
 ---
+# Reject cleartext HTTP endpoints (except loopback) before sending any
+# authenticated request.  HTTPS is always accepted; plain HTTP is allowed
+# only for loopback addresses used by test mocks (127.0.0.1, localhost,
+# [::1]).  See OSAC-5383.
+- name: Validate fulfillment-service URI scheme
+  ansible.builtin.assert:
+    that:
+      - >-
+        osac_fulfillment_service_uri is regex('^https://', ignorecase=True)
+        or (
+          osac_fulfillment_service_uri is regex('^http://', ignorecase=True)
+          and osac_fulfillment_service_uri is regex('^http://(localhost|127\.0\.0\.1|\[::1\])(:|/|$)', ignorecase=True)
+        )
+    fail_msg: >-
+      Refusing to send fulfillment-service bearer token over cleartext HTTP.
+      osac_fulfillment_service_uri={{ osac_fulfillment_service_uri }}
+      — use https:// or a loopback http:// address (localhost / 127.0.0.1 / [::1]).
+
 - name: Apply templates for clusters
   ansible.builtin.include_tasks: clusters.yaml
 

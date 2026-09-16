@@ -274,6 +274,66 @@ var _ = Describe("update", func() {
 		Expect(created.Items[0].GetAnnotations()).To(
 			HaveKeyWithValue(annotations.Project, "project-1"))
 	})
+
+	It("sets tenant and project annotations when updating an existing hub Volume", func() {
+		ctx := context.Background()
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+
+		scheme := runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		existing := &osacv1alpha1.Volume{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "vol-existing",
+				Namespace: "test-ns",
+				Labels: map[string]string{
+					labels.VolumeUuid: "vol-project-annotations-update",
+				},
+			},
+		}
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(existing).
+			WithStatusSubresource(&osacv1alpha1.Volume{}).
+			Build()
+
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().
+			Get(gomock.Any(), "hub-1").
+			Return(&controllers.HubEntry{Namespace: "test-ns", Client: fakeClient}, nil)
+
+		volume := privatev1.Volume_builder{
+			Id: "vol-project-annotations-update",
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.Controller},
+				Tenant:     "tenant-1",
+				Project:    "project-1",
+			}.Build(),
+			Spec: privatev1.VolumeSpec_builder{
+				StorageTier: "gold",
+				SizeGib:     10,
+				AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+			}.Build(),
+			Status: privatev1.VolumeStatus_builder{
+				State:    privatev1.VolumeState_VOLUME_STATE_CREATING,
+				Hub:      "hub-1",
+				Backend:  "test-backend",
+				Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
+			}.Build(),
+		}.Build()
+
+		t := &task{
+			r:      &function{logger: logger, hubCache: hubCache},
+			volume: volume,
+		}
+
+		Expect(t.update(ctx)).To(Succeed())
+
+		updated := &osacv1alpha1.Volume{}
+		Expect(fakeClient.Get(ctx, clnt.ObjectKey{Name: existing.Name, Namespace: existing.Namespace}, updated)).To(Succeed())
+		Expect(updated.GetAnnotations()).To(HaveKeyWithValue(annotations.Tenant, "tenant-1"))
+		Expect(updated.GetAnnotations()).To(HaveKeyWithValue(annotations.Project, "project-1"))
+	})
 })
 
 var _ = Describe("validateTenant", func() {

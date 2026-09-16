@@ -1,0 +1,301 @@
+#
+# Copyright (c) 2025 Red Hat Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
+# in compliance with the License. You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software distributed under the License
+# is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+# or implied. See the License for the specific language governing permissions and limitations under
+# the License.
+#
+
+# Automatically bumps the osac-ui version pin in the mono-repo when a new
+# UI release is published. osac-ui is the only external OCI chart dependency
+# in the umbrella chart (everything else uses file:// paths to sibling
+# components), so its version drifts silently without this.
+#
+# Three triggers:
+#   1. repository_dispatch (type: osac-ui-release) — fired by osac-ui's own
+#      publish workflow after a successful release
+#   2. workflow_dispatch — manual, with an optional version override
+#   3. schedule — weekly fallback in case the dispatch was missed
+
+name: Bump osac-ui version pin
+
+on:
+  repository_dispatch:
+    types: [osac-ui-release]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: >-
+          Override version to bump to (e.g. "v0.0.7"). When empty, the
+          latest osac-ui release is resolved from the GitHub API.
+        type: string
+        required: false
+        default: ''
+  schedule:
+    # Weekly fallback: Monday 06:17 UTC (off-minute to reduce :00/:30 crowding)
+    - cron: '17 6 * * 1'
+
+permissions: {}
+
+concurrency:
+  group: bump-osac-ui
+  cancel-in-progress: true
+
+jobs:
+  bump:
+    name: Bump osac-ui version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+    - name: Generate osac-ci app token
+      id: app-token
+      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+      with:
+        app-id: "4966101"
+        private-key: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
+
+    - name: Checkout repository
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      with:
+        token: ${{ steps.app-token.outputs.token }}
+
+    - name: Resolve latest osac-ui version
+      id: resolve
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        INPUT_VERSION: ${{ inputs.version || '' }}
+      run: |
+        set -euo pipefail
+
+        if [[ -n "${INPUT_VERSION}" ]]; then
+          VERSION="${INPUT_VERSION}"
+        else
+          VERSION=$(gh api repos/osac-project/osac-ui/releases/latest --jq '.tag_name')
+        fi
+
+        if [[ -z "${VERSION}" ]]; then
+          echo "::error::Could not resolve osac-ui version"
+          exit 1
+        fi
+
+        # Ensure the tag starts with 'v' for image references; strip it for
+        # the Helm chart dependency version field (Chart.yaml uses bare semver).
+        if [[ "${VERSION}" != v* ]]; then
+          VERSION="v${VERSION}"
+        fi
+        TAG="${VERSION}"
+        CHART_VERSION="${VERSION#v}"
+
+        echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+        echo "chart-version=${CHART_VERSION}" >> "$GITHUB_OUTPUT"
+        echo "Resolved osac-ui version: ${TAG} (chart: ${CHART_VERSION})"
+
+    - name: Validate version format
+      env:
+        TAG: ${{ steps.resolve.outputs.tag }}
+      run: |
+        set -euo pipefail
+        if [[ ! "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "::error::Version '${TAG}' does not match semver pattern v<major>.<minor>.<patch>"
+          exit 1
+        fi
+
+    - name: Verify image exists in GHCR
+      env:
+        TAG: ${{ steps.resolve.outputs.tag }}
+      run: |
+        set -euo pipefail
+
+        # Obtain an anonymous pull token for the public osac-ui image
+        TOKEN=$(curl -sf \
+          "https://ghcr.io/token?scope=repository:osac-project/osac-ui:pull" \
+          | jq -r '.token')
+        if [[ -z "${TOKEN}" || "${TOKEN}" == "null" ]]; then
+          echo "::error::Could not obtain GHCR token for osac-ui"
+          exit 1
+        fi
+
+        HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
+          -H "Authorization: Bearer ${TOKEN}" \
+          -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json" \
+          "https://ghcr.io/v2/osac-project/osac-ui/manifests/${TAG}")
+
+        if [[ "${HTTP_CODE}" != "200" ]]; then
+          echo "::error::osac-ui image '${TAG}' not found in GHCR (HTTP ${HTTP_CODE})"
+          exit 1
+        fi
+        echo "Verified ghcr.io/osac-project/osac-ui:${TAG} exists"
+
+    - name: Verify Helm chart exists in GHCR
+      env:
+        CHART_VERSION: ${{ steps.resolve.outputs.chart-version }}
+      run: |
+        set -euo pipefail
+
+        TOKEN=$(curl -sf \
+          "https://ghcr.io/token?scope=repository:osac-project/charts/osac-ui:pull" \
+          | jq -r '.token')
+        if [[ -z "${TOKEN}" || "${TOKEN}" == "null" ]]; then
+          echo "::error::Could not obtain GHCR token for osac-ui Helm chart"
+          exit 1
+        fi
+
+        HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
+          -H "Authorization: Bearer ${TOKEN}" \
+          -H "Accept: application/vnd.oci.image.manifest.v1+json" \
+          "https://ghcr.io/v2/osac-project/charts/osac-ui/manifests/${CHART_VERSION}")
+
+        if [[ "${HTTP_CODE}" != "200" ]]; then
+          echo "::error::osac-ui Helm chart '${CHART_VERSION}' not found in oci://ghcr.io/osac-project/charts/osac-ui (HTTP ${HTTP_CODE})"
+          exit 1
+        fi
+        echo "Verified oci://ghcr.io/osac-project/charts/osac-ui:${CHART_VERSION} exists"
+
+    - name: Check current version
+      id: current
+      env:
+        CHART_VERSION: ${{ steps.resolve.outputs.chart-version }}
+        TAG: ${{ steps.resolve.outputs.tag }}
+      run: |
+        set -euo pipefail
+        CURRENT=$(yq -r '(.dependencies[] | select(.name == "osac-ui")).version' \
+          osac-installer/charts/osac/Chart.yaml)
+        echo "current-chart-version=${CURRENT}" >> "$GITHUB_OUTPUT"
+
+        # Check all managed files before deciding to skip — Chart.yaml
+        # alone is not sufficient; values.yaml or CI overlays may be stale.
+        STALE="false"
+        if [[ "${CURRENT}" != "${CHART_VERSION}" ]]; then
+          echo "Chart.yaml dependency version is stale: ${CURRENT} -> ${CHART_VERSION}"
+          STALE="true"
+        fi
+
+        if ! grep -q "ghcr.io/osac-project/osac-ui:${TAG}" \
+             osac-installer/charts/osac/values.yaml; then
+          echo "values.yaml image tag is stale"
+          STALE="true"
+        fi
+
+        for overlay in \
+          osac-installer/values/full-ci/instance.yaml \
+          osac-installer/values/bmaas-ci/instance.yaml \
+          osac-installer/values/vmaas-ci/instance.yaml; do
+          if grep -q 'ghcr.io/osac-project/osac-ui:' "${overlay}" \
+             && ! grep -q "ghcr.io/osac-project/osac-ui:${TAG}" "${overlay}"; then
+            echo "CI overlay ${overlay} is stale"
+            STALE="true"
+          fi
+        done
+
+        if [[ "${STALE}" == "false" ]]; then
+          echo "osac-ui is already at ${CHART_VERSION} across all managed files — nothing to do"
+          echo "skip=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "Bumping osac-ui: ${CURRENT} -> ${CHART_VERSION}"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Update Chart.yaml dependency version
+      if: steps.current.outputs.skip != 'true'
+      env:
+        CHART_VERSION: ${{ steps.resolve.outputs.chart-version }}
+      run: |
+        set -euo pipefail
+        # yq is safe for Chart.yaml — yamllint does not check it (see
+        # .yamllint.yaml ignore list and rewrite_umbrella_osac_ui_dependency
+        # in osac-installer/scripts/nightly-charts.sh).
+        DEP_NAME="osac-ui" DEP_VERSION="${CHART_VERSION}" yq -i \
+          '(.dependencies[] | select(.name == strenv(DEP_NAME))).version = strenv(DEP_VERSION)' \
+          osac-installer/charts/osac/Chart.yaml
+
+    - name: Update umbrella values.yaml image tag
+      if: steps.current.outputs.skip != 'true'
+      env:
+        TAG: ${{ steps.resolve.outputs.tag }}
+      run: |
+        set -euo pipefail
+        # Use sed to preserve formatting — yq reformats inline comments
+        # (2-space → 1-space before '#'), breaking ct lint's yamllint
+        # (same rationale as stamp_umbrella_nested_field in nightly-charts.sh).
+        sed -i "s|ghcr.io/osac-project/osac-ui:[^ ]*|ghcr.io/osac-project/osac-ui:${TAG}|" \
+          osac-installer/charts/osac/values.yaml
+
+    - name: Update CI overlay values
+      if: steps.current.outputs.skip != 'true'
+      env:
+        TAG: ${{ steps.resolve.outputs.tag }}
+      run: |
+        set -euo pipefail
+        # Stamp the osac-ui image tag in every CI overlay that carries one.
+        # Uses sed (not yq) to avoid reformatting the entire file — these
+        # overlay files are yamllint-checked on PR.
+        for overlay in \
+          osac-installer/values/full-ci/instance.yaml \
+          osac-installer/values/bmaas-ci/instance.yaml \
+          osac-installer/values/vmaas-ci/instance.yaml; do
+          if grep -q 'ghcr.io/osac-project/osac-ui:' "${overlay}"; then
+            sed -i "s|ghcr.io/osac-project/osac-ui:[^ ]*|ghcr.io/osac-project/osac-ui:${TAG}|" "${overlay}"
+            echo "Stamped ${overlay}"
+          else
+            echo "Skipped ${overlay} (no osac-ui image reference)"
+          fi
+        done
+
+    - name: Create pull request
+      if: steps.current.outputs.skip != 'true'
+      env:
+        GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        TAG: ${{ steps.resolve.outputs.tag }}
+        CHART_VERSION: ${{ steps.resolve.outputs.chart-version }}
+        CURRENT: ${{ steps.current.outputs.current-chart-version }}
+      run: |
+        set -euo pipefail
+        BRANCH="osac-3620/bump-osac-ui-${CHART_VERSION}"
+
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+        git checkout -b "${BRANCH}"
+        git add osac-installer/
+        git diff --cached --quiet && {
+          echo "No changes to commit — osac-ui references already match ${TAG}"
+          exit 0
+        }
+
+        git commit -s \
+          -m "OSAC-3620: bump osac-ui to ${TAG}" \
+          -m "Update the osac-ui chart dependency version from ${CURRENT} to ${CHART_VERSION} and stamp the image tag to ${TAG} in the umbrella chart values and CI overlay files."
+
+        # Fetch the remote branch ref so --force-with-lease has a baseline
+        # (actions/checkout defaults to depth-one with no remote-tracking ref).
+        git fetch origin "${BRANCH}" || true
+        git push --force-with-lease origin "${BRANCH}"
+
+        # Reuse an existing open PR for this version instead of creating a duplicate
+        EXISTING=$(gh pr list --head "${BRANCH}" --state open --json number --jq '.[0].number // empty')
+        if [[ -n "${EXISTING}" ]]; then
+          echo "PR #${EXISTING} already open for ${BRANCH}"
+          exit 0
+        fi
+
+        PR_BODY="Automated bump of the osac-ui version pin."
+        PR_BODY+=$'\n\n## Changes\n'
+        PR_BODY+=$'\n- `osac-installer/charts/osac/Chart.yaml`: dependency version '"${CURRENT}"' → '"${CHART_VERSION}"
+        PR_BODY+=$'\n- `osac-installer/charts/osac/values.yaml`: image tag → `'"${TAG}"'`'
+        PR_BODY+=$'\n- CI overlay values (`full-ci`, `bmaas-ci`, `vmaas-ci`): image tag → `'"${TAG}"'`'
+        PR_BODY+=$'\n\nTriggered by osac-ui release ['"${TAG}"'](https://github.com/osac-project/osac-ui/releases/tag/'"${TAG}"').'
+        PR_BODY+=$'\n\n---'
+        PR_BODY+=$'\n*This PR was created automatically by the [bump-osac-ui](../actions/workflows/bump-osac-ui.yaml) workflow.*'
+
+        gh pr create \
+          --title "OSAC-3620: bump osac-ui to ${TAG}" \
+          --body "${PR_BODY}" \
+          --base main

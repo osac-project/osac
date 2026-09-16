@@ -60,14 +60,14 @@ func (f *fakeVolumesClient) Signal(_ context.Context, _ *privatev1.VolumesSignal
 }
 
 // newTestVolume builds a proto Volume with the given fields for response fixtures.
-func newTestVolume(id, name string, state privatev1.VolumeState, backend, vendorID string, proto privatev1.StorageProtocol, sizeGiB int64) *privatev1.Volume {
+func newTestVolume(id, name string, state privatev1.VolumeState, provider, vendorID string, proto privatev1.StorageProtocol, sizeGiB int64) *privatev1.Volume {
 	md := &privatev1.Metadata{}
 	md.SetName(name)
 	spec := &privatev1.VolumeSpec{}
 	spec.SetSizeGib(sizeGiB)
 	st := &privatev1.VolumeStatus{}
 	st.SetState(state)
-	st.SetBackend(backend)
+	st.SetProvider(provider)
 	st.SetVendorVolumeId(vendorID)
 	st.SetProtocol(proto)
 	v := &privatev1.Volume{}
@@ -81,7 +81,7 @@ func newTestVolume(id, name string, state privatev1.VolumeState, backend, vendor
 func TestCreateVolumeMapsRequestAndResponse(t *testing.T) {
 	resp := &privatev1.VolumesCreateResponse{}
 	resp.SetObject(newTestVolume("vol-1", "pvc-abc", privatev1.VolumeState_VOLUME_STATE_CREATING,
-		"vast-backend", "", privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS, 5))
+		"vast", "", privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS, 5))
 	fake := &fakeVolumesClient{createResp: resp}
 	c := &grpcVolumeClient{client: fake}
 
@@ -125,8 +125,8 @@ func TestCreateVolumeMapsRequestAndResponse(t *testing.T) {
 	if info.State != VolumeStateCreating {
 		t.Errorf("info.State = %q, want CREATING", info.State)
 	}
-	if info.Backend != "vast-backend" {
-		t.Errorf("info.Backend = %q, want vast-backend", info.Backend)
+	if info.Backend != "vast" {
+		t.Errorf("info.Backend = %q, want vast", info.Backend)
 	}
 	if info.CapacityBytes != 5*bytesPerGiB {
 		t.Errorf("info.CapacityBytes = %d, want %d", info.CapacityBytes, 5*bytesPerGiB)
@@ -147,7 +147,7 @@ func TestListVolumesBuildsNameFilter(t *testing.T) {
 	resp := &privatev1.VolumesListResponse{}
 	resp.SetItems([]*privatev1.Volume{
 		newTestVolume("vol-1", "pvc-abc", privatev1.VolumeState_VOLUME_STATE_AVAILABLE,
-			"vast-backend", "vendor-9", privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK, 2),
+			"vast", "vendor-9", privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK, 2),
 	})
 	fake := &fakeVolumesClient{listResp: resp}
 	c := &grpcVolumeClient{client: fake}

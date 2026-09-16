@@ -505,7 +505,6 @@ spec:
                     bmiName:
                       description: BMIName is the name of the BareMetalInstance CR
                         for this worker.
-                      minLength: 1
                       type: string
                     bmiNamespace:
                       description: BMINamespace is the namespace of the BareMetalInstance
@@ -527,13 +526,22 @@ spec:
                         computed from the escalating backoff schedule.
                       format: date-time
                       type: string
+                    workerID:
+                      description: |-
+                        WorkerID is a stable identifier for this worker slot (e.g. "worker-0",
+                        "worker-1"). It is assigned when the worker entry is created and never
+                        changes, even when the underlying BareMetalInstance is replaced. This
+                        stability makes it safe to use as the list-map key so that BMI
+                        replacements update the existing entry instead of orphaning it.
+                      minLength: 1
+                      type: string
                   required:
-                  - bmiName
                   - bmiNamespace
+                  - workerID
                   type: object
                 type: array
                 x-kubernetes-list-map-keys:
-                - bmiName
+                - workerID
                 x-kubernetes-list-type: map
             type: object
         type: object

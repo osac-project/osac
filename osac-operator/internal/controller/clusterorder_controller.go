@@ -506,6 +506,12 @@ func (r *ClusterOrderReconciler) handleUpdate(ctx context.Context, _ reconcile.R
 
 	// Reconcile bare-metal worker failures (timeout detection, BMI replacement,
 	// terminal condition) when the worker reconciler is configured.
+	//
+	// NOTE: instance.Status.Workers is currently not populated by this
+	// controller. The BMaaS provisioning flow (a follow-up story) will
+	// populate Workers when bare-metal worker nodes are created for a
+	// ClusterOrder. Until then, the guard below keeps the reconciler
+	// inactive.
 	if r.WorkerReconciler != nil && len(instance.Status.Workers) > 0 {
 		workerResult, err := r.WorkerReconciler.ReconcileWorkers(ctx, instance)
 		if err != nil {

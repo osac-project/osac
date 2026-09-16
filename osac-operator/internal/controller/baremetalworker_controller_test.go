@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
@@ -27,8 +28,10 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
@@ -183,6 +186,91 @@ var _ = Describe("IsTransientGRPCError", func() {
 	})
 })
 
+// testNetError implements net.Error for testing transient network errors.
+type testNetError struct {
+	msg     string
+	timeout bool
+}
+
+func (e *testNetError) Error() string   { return e.msg }
+func (e *testNetError) Timeout() bool   { return e.timeout }
+func (e *testNetError) Temporary() bool { return e.timeout } //nolint:staticcheck
+
+var _ = Describe("IsNotFoundError", func() {
+	It("should return false for nil error", func() {
+		Expect(IsNotFoundError(nil)).To(BeFalse())
+	})
+
+	It("should return true for k8s API NotFound", func() {
+		err := apierrors.NewNotFound(schema.GroupResource{Group: "osac.openshift.io", Resource: "baremetalinstances"}, "test-bmi")
+		Expect(IsNotFoundError(err)).To(BeTrue())
+	})
+
+	It("should return true for gRPC NotFound", func() {
+		err := status.Error(codes.NotFound, "not found")
+		Expect(IsNotFoundError(err)).To(BeTrue())
+	})
+
+	It("should return false for non-NotFound errors", func() {
+		Expect(IsNotFoundError(errors.New("some error"))).To(BeFalse())
+	})
+
+	It("should return false for gRPC Unavailable", func() {
+		err := status.Error(codes.Unavailable, "service unavailable")
+		Expect(IsNotFoundError(err)).To(BeFalse())
+	})
+})
+
+var _ = Describe("IsTransientError", func() {
+	It("should return false for nil error", func() {
+		Expect(IsTransientError(nil)).To(BeFalse())
+	})
+
+	It("should return true for gRPC Unavailable", func() {
+		err := status.Error(codes.Unavailable, "service unavailable")
+		Expect(IsTransientError(err)).To(BeTrue())
+	})
+
+	It("should return true for gRPC DeadlineExceeded", func() {
+		err := status.Error(codes.DeadlineExceeded, "deadline exceeded")
+		Expect(IsTransientError(err)).To(BeTrue())
+	})
+
+	It("should return true for network timeout errors", func() {
+		err := &testNetError{msg: "connection timed out", timeout: true}
+		Expect(IsTransientError(err)).To(BeTrue())
+	})
+
+	It("should return true for connection refused errors", func() {
+		err := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+		Expect(IsTransientError(err)).To(BeTrue())
+	})
+
+	It("should return true for k8s API server timeout", func() {
+		err := apierrors.NewServerTimeout(schema.GroupResource{Group: "osac.openshift.io", Resource: "baremetalinstances"}, "get", 5)
+		Expect(IsTransientError(err)).To(BeTrue())
+	})
+
+	It("should return true for k8s API TooManyRequests", func() {
+		err := apierrors.NewTooManyRequests("too many requests", 5)
+		Expect(IsTransientError(err)).To(BeTrue())
+	})
+
+	It("should return false for k8s API NotFound", func() {
+		err := apierrors.NewNotFound(schema.GroupResource{Group: "osac.openshift.io", Resource: "baremetalinstances"}, "test-bmi")
+		Expect(IsTransientError(err)).To(BeFalse())
+	})
+
+	It("should return false for non-transient gRPC errors", func() {
+		err := status.Error(codes.PermissionDenied, "permission denied")
+		Expect(IsTransientError(err)).To(BeFalse())
+	})
+
+	It("should return false for plain errors", func() {
+		Expect(IsTransientError(errors.New("some error"))).To(BeFalse())
+	})
+})
+
 var _ = Describe("ComputeWorkerBackoff", func() {
 	It("should return base delay for first attempt", func() {
 		Expect(ComputeWorkerBackoff(0)).To(Equal(provisioning.BackoffBaseDelay))
@@ -246,7 +334,7 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 		It("should return early without panic when BMIProvider is nil", func() {
 			reconciler.BMIProvider = nil
 			instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
-				{BMIName: "worker-1", BMINamespace: "osac-baremetalinstance"},
+				{WorkerID: "worker-1", BMIName: "worker-1", BMINamespace: "osac-baremetalinstance"},
 			})
 
 			result, err := reconciler.ReconcileWorkers(ctx, instance)
@@ -259,7 +347,7 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 		It("should skip ready workers", func() {
 			bmiProvider.isReady = true
 			instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
-				{BMIName: "worker-1", BMINamespace: "osac-baremetalinstance"},
+				{WorkerID: "worker-1", BMIName: "worker-1", BMINamespace: "osac-baremetalinstance"},
 			})
 
 			result, err := reconciler.ReconcileWorkers(ctx, instance)
@@ -280,6 +368,7 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 				failTime := metav1.NewTime(now.Add(-31 * time.Minute))
 				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
 					{
+						WorkerID:        "worker-1",
 						BMIName:         "worker-1",
 						BMINamespace:    "osac-baremetalinstance",
 						AttemptCount:    0,
@@ -307,6 +396,7 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 				failTime := metav1.NewTime(now.Add(-15 * time.Minute))
 				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
 					{
+						WorkerID:        "worker-1",
 						BMIName:         "worker-1",
 						BMINamespace:    "osac-baremetalinstance",
 						AttemptCount:    0,
@@ -336,6 +426,7 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 				nextRetry := metav1.NewTime(now.Add(5 * time.Minute))
 				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
 					{
+						WorkerID:      "worker-1",
 						BMIName:       "worker-1",
 						BMINamespace:  "osac-baremetalinstance",
 						AttemptCount:  2,
@@ -357,6 +448,7 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 				failTime := metav1.NewTime(now.Add(-35 * time.Minute))
 				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
 					{
+						WorkerID:        "worker-1",
 						BMIName:         "worker-1",
 						BMINamespace:    "osac-baremetalinstance",
 						AttemptCount:    1,
@@ -385,6 +477,7 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 
 					instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
 						{
+							WorkerID:        fmt.Sprintf("worker-%d", attempt),
 							BMIName:         fmt.Sprintf("worker-%d", attempt),
 							BMINamespace:    "osac-baremetalinstance",
 							AttemptCount:    attempt,
@@ -403,7 +496,7 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 			It("should set FulfillmentServiceUnavailable on transient error during readiness check", func() {
 				bmiProvider.readyErr = status.Error(codes.Unavailable, "service unavailable")
 				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
-					{BMIName: "worker-1", BMINamespace: "osac-baremetalinstance"},
+					{WorkerID: "worker-1", BMIName: "worker-1", BMINamespace: "osac-baremetalinstance"},
 				})
 
 				result, err := reconciler.ReconcileWorkers(ctx, instance)
@@ -420,7 +513,7 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 				bmiProvider.isReady = false
 				bmiProvider.regTimeErr = status.Error(codes.DeadlineExceeded, "deadline exceeded")
 				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
-					{BMIName: "worker-1", BMINamespace: "osac-baremetalinstance"},
+					{WorkerID: "worker-1", BMIName: "worker-1", BMINamespace: "osac-baremetalinstance"},
 				})
 
 				result, err := reconciler.ReconcileWorkers(ctx, instance)
@@ -435,7 +528,7 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 			It("should not count transient gRPC errors toward retry budget", func() {
 				bmiProvider.readyErr = status.Error(codes.Unavailable, "service unavailable")
 				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
-					{BMIName: "worker-1", BMINamespace: "osac-baremetalinstance", AttemptCount: 3},
+					{WorkerID: "worker-1", BMIName: "worker-1", BMINamespace: "osac-baremetalinstance", AttemptCount: 3},
 				})
 
 				_, err := reconciler.ReconcileWorkers(ctx, instance)
@@ -447,7 +540,7 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 			It("should return error for non-transient gRPC errors during readiness check", func() {
 				bmiProvider.readyErr = status.Error(codes.Internal, "internal error")
 				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
-					{BMIName: "worker-1", BMINamespace: "osac-baremetalinstance"},
+					{WorkerID: "worker-1", BMIName: "worker-1", BMINamespace: "osac-baremetalinstance"},
 				})
 
 				_, err := reconciler.ReconcileWorkers(ctx, instance)
@@ -459,7 +552,7 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 				bmiProvider.isReady = true
 				fulfillmentClient.reportErr = status.Error(codes.ResourceExhausted, "resource exhausted")
 				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
-					{BMIName: "worker-1", BMINamespace: "osac-baremetalinstance"},
+					{WorkerID: "worker-1", BMIName: "worker-1", BMINamespace: "osac-baremetalinstance"},
 				})
 
 				result, err := reconciler.ReconcileWorkers(ctx, instance)
@@ -474,12 +567,14 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 				Expect(result.RequeueAfter).To(Equal(provisioning.BackoffBaseDelay))
 			})
 
-			It("should clear FulfillmentServiceUnavailable when all workers are ready and no transient errors", func() {
+			It("should set FulfillmentServiceUnavailable to False when all workers are ready and no transient errors", func() {
+				// Fix 6: The condition should be set to False (not removed)
+				// so patchStatusWithRetry persists the cleared state.
 				bmiProvider.isReady = true
 				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
-					{BMIName: "worker-1", BMINamespace: "osac-baremetalinstance"},
+					{WorkerID: "worker-1", BMIName: "worker-1", BMINamespace: "osac-baremetalinstance"},
 				})
-				// Pre-set the condition
+				// Pre-set the condition to True
 				instance.SetStatusCondition(
 					v1alpha1.ConditionFulfillmentServiceUnavailable,
 					metav1.ConditionTrue,
@@ -491,7 +586,9 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 				Expect(err).NotTo(HaveOccurred())
 
 				cond := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionFulfillmentServiceUnavailable)
-				Expect(cond).To(BeNil())
+				Expect(cond).NotTo(BeNil(), "condition should be set to False, not removed")
+				Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+				Expect(cond.Reason).To(Equal(v1alpha1.ReasonAllWorkersHealthy))
 			})
 
 			It("should NOT clear FulfillmentServiceUnavailable when one worker has transient error and another is ready", func() {
@@ -503,8 +600,8 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 					{ready: true, err: nil},
 				}
 				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
-					{BMIName: "worker-0", BMINamespace: "osac-baremetalinstance"},
-					{BMIName: "worker-1", BMINamespace: "osac-baremetalinstance"},
+					{WorkerID: "worker-0", BMIName: "worker-0", BMINamespace: "osac-baremetalinstance"},
+					{WorkerID: "worker-1", BMIName: "worker-1", BMINamespace: "osac-baremetalinstance"},
 				})
 
 				_, err := reconciler.ReconcileWorkers(ctx, instance)
@@ -522,7 +619,7 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 				bmiProvider.isReady = true
 				fulfillmentClient.reportErr = status.Error(codes.Unavailable, "service unavailable")
 				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
-					{BMIName: "worker-1", BMINamespace: "osac-baremetalinstance"},
+					{WorkerID: "worker-1", BMIName: "worker-1", BMINamespace: "osac-baremetalinstance"},
 				})
 				// Pre-set the condition to verify it is NOT cleared
 				instance.SetStatusCondition(
@@ -544,8 +641,8 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 			It("should set WorkersFailed when all workers exhaust retries", func() {
 				reconciler.MaxRetries = 3
 				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
-					{BMIName: "worker-1", BMINamespace: "osac-baremetalinstance", AttemptCount: 3},
-					{BMIName: "worker-2", BMINamespace: "osac-baremetalinstance", AttemptCount: 3},
+					{WorkerID: "worker-1", BMIName: "worker-1", BMINamespace: "osac-baremetalinstance", AttemptCount: 3},
+					{WorkerID: "worker-2", BMIName: "worker-2", BMINamespace: "osac-baremetalinstance", AttemptCount: 3},
 				})
 
 				// Workers at max retries but readiness check won't be reached (short-circuits)
@@ -569,8 +666,8 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 
 				nextRetry := metav1.NewTime(now.Add(5 * time.Minute))
 				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
-					{BMIName: "worker-1", BMINamespace: "osac-baremetalinstance", AttemptCount: 3},
-					{BMIName: "worker-2", BMINamespace: "osac-baremetalinstance", AttemptCount: 1, NextRetryTime: &nextRetry},
+					{WorkerID: "worker-1", BMIName: "worker-1", BMINamespace: "osac-baremetalinstance", AttemptCount: 3},
+					{WorkerID: "worker-2", BMIName: "worker-2", BMINamespace: "osac-baremetalinstance", AttemptCount: 1, NextRetryTime: &nextRetry},
 				})
 
 				result, err := reconciler.ReconcileWorkers(ctx, instance)
@@ -581,7 +678,11 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 				Expect(cond).To(BeNil())
 			})
 
-			It("should set WorkerProvisioningFailed on final replacement attempt", func() {
+			It("should set WorkerProvisioningFailed on final replacement attempt without deleting BMI", func() {
+				// Fix 4: On the last attempt, the old BMI should NOT be
+				// deleted — leave it in place for debugging. The terminal
+				// condition is set, and BMIName still references the
+				// existing (running) BMI.
 				reconciler.MaxRetries = 2
 				bmiProvider.isReady = false
 				bmiProvider.regTime = time.Time{}
@@ -590,6 +691,7 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 				failTime := metav1.NewTime(now.Add(-35 * time.Minute))
 				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
 					{
+						WorkerID:        "worker-1",
 						BMIName:         "worker-1",
 						BMINamespace:    "osac-baremetalinstance",
 						AttemptCount:    1,
@@ -606,6 +708,15 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 				cond := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionWorkerProvisioningFailed)
 				Expect(cond).NotTo(BeNil())
 				Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+
+				// Fix 4: BMI should NOT have been deleted on the last attempt
+				Expect(bmiProvider.deleteCalls).To(Equal(0),
+					"BMI should not be deleted on the last attempt — leave it for debugging")
+				Expect(bmiProvider.createCalls).To(Equal(0),
+					"no replacement should be created when max retries are exhausted")
+				// BMIName should still reference the original BMI
+				Expect(instance.Status.Workers[0].BMIName).To(Equal("worker-1"),
+					"BMIName should still point to the existing BMI for debugging")
 			})
 		})
 
@@ -620,6 +731,7 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 				failTime := metav1.NewTime(now.Add(-35 * time.Minute))
 				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
 					{
+						WorkerID:        "worker-0",
 						BMIName:         "old-bmi",
 						BMINamespace:    "osac-baremetalinstance",
 						AttemptCount:    0,
@@ -640,6 +752,7 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 				failTime := metav1.NewTime(now.Add(-35 * time.Minute))
 				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
 					{
+						WorkerID:        "worker-0",
 						BMIName:         "old-bmi",
 						BMINamespace:    "osac-baremetalinstance",
 						AttemptCount:    0,
@@ -664,6 +777,7 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 				failTime := metav1.NewTime(now.Add(-35 * time.Minute))
 				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
 					{
+						WorkerID:        "worker-1",
 						BMIName:         "worker-1",
 						BMINamespace:    "osac-baremetalinstance",
 						AttemptCount:    0,
@@ -681,12 +795,64 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 				Expect(instance.Status.Workers[0].AttemptCount).To(Equal(0))
 			})
 
+			It("should handle NotFound from DeleteBMI as success", func() {
+				// Fix 2: If the BMI is already gone (NotFound), treat it as a
+				// successful deletion and proceed with replacement.
+				bmiProvider.deleteErr = apierrors.NewNotFound(
+					schema.GroupResource{Group: "osac.openshift.io", Resource: "baremetalinstances"}, "worker-1")
+				bmiProvider.nextCreateName = "replacement-bmi"
+
+				failTime := metav1.NewTime(now.Add(-35 * time.Minute))
+				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
+					{
+						WorkerID:        "worker-1",
+						BMIName:         "worker-1",
+						BMINamespace:    "osac-baremetalinstance",
+						AttemptCount:    0,
+						LastFailureTime: &failTime,
+					},
+				})
+
+				result, err := reconciler.ReconcileWorkers(ctx, instance)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+				// Should have proceeded to create a replacement
+				Expect(bmiProvider.createCalls).To(Equal(1))
+				Expect(instance.Status.Workers[0].BMIName).To(Equal("replacement-bmi"))
+				Expect(instance.Status.Workers[0].AttemptCount).To(Equal(1))
+			})
+
+			It("should clear BMIName after successful DeleteBMI before CreateBMI", func() {
+				// Fix 2: When CreateBMI fails after DeleteBMI succeeds,
+				// BMIName should be empty (cleared) so the next reconcile
+				// does not reference a deleted BMI.
+				bmiProvider.createErr = status.Error(codes.Aborted, "aborted")
+
+				failTime := metav1.NewTime(now.Add(-35 * time.Minute))
+				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
+					{
+						WorkerID:        "worker-1",
+						BMIName:         "worker-1",
+						BMINamespace:    "osac-baremetalinstance",
+						AttemptCount:    0,
+						LastFailureTime: &failTime,
+					},
+				})
+
+				_, err := reconciler.ReconcileWorkers(ctx, instance)
+				Expect(err).NotTo(HaveOccurred())
+				// BMIName should have been cleared after DeleteBMI succeeded
+				Expect(instance.Status.Workers[0].BMIName).To(BeEmpty(),
+					"BMIName must be cleared after successful DeleteBMI to avoid referencing a ghost")
+			})
+
 			It("should handle transient gRPC error during BMI creation without stale retry state", func() {
 				bmiProvider.createErr = status.Error(codes.Aborted, "aborted")
 
 				failTime := metav1.NewTime(now.Add(-35 * time.Minute))
 				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
 					{
+						WorkerID:        "worker-1",
 						BMIName:         "worker-1",
 						BMINamespace:    "osac-baremetalinstance",
 						AttemptCount:    0,
@@ -725,6 +891,7 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 				oldFailTime := metav1.NewTime(now.Add(-36 * time.Minute))
 				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
 					{
+						WorkerID:          "worker-1",
 						BMIName:           "worker-1",
 						BMINamespace:      "osac-baremetalinstance",
 						AttemptCount:      2,
@@ -755,6 +922,7 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 				oldFailTime := metav1.NewTime(now.Add(-36 * time.Minute))
 				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
 					{
+						WorkerID:          "worker-1",
 						BMIName:           "worker-1",
 						BMINamespace:      "osac-baremetalinstance",
 						AttemptCount:      1,
@@ -780,7 +948,7 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 			It("should report worker status to fulfillment service", func() {
 				bmiProvider.isReady = true
 				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
-					{BMIName: "worker-1", BMINamespace: "osac-baremetalinstance"},
+					{WorkerID: "worker-1", BMIName: "worker-1", BMINamespace: "osac-baremetalinstance"},
 				})
 
 				_, err := reconciler.ReconcileWorkers(ctx, instance)
@@ -793,7 +961,7 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 				reconciler.FulfillmentClient = nil
 				bmiProvider.isReady = true
 				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
-					{BMIName: "worker-1", BMINamespace: "osac-baremetalinstance"},
+					{WorkerID: "worker-1", BMIName: "worker-1", BMINamespace: "osac-baremetalinstance"},
 				})
 
 				_, err := reconciler.ReconcileWorkers(ctx, instance)
@@ -806,7 +974,7 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 				bmiProvider.isReady = false
 				bmiProvider.regTime = now.Add(-5 * time.Minute) // agent registered 5 minutes ago
 				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
-					{BMIName: "worker-1", BMINamespace: "osac-baremetalinstance"},
+					{WorkerID: "worker-1", BMIName: "worker-1", BMINamespace: "osac-baremetalinstance"},
 				})
 
 				result, err := reconciler.ReconcileWorkers(ctx, instance)
@@ -823,6 +991,7 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 				bmiProvider.regTime = time.Time{} // agent not registered
 				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
 					{
+						WorkerID:     "worker-1",
 						BMIName:      "worker-1",
 						BMINamespace: "osac-baremetalinstance",
 						AttemptCount: 0,
@@ -854,6 +1023,7 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 				attemptStart := metav1.NewTime(now.Add(-15 * time.Minute))
 				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
 					{
+						WorkerID:         "worker-1",
 						BMIName:          "worker-1",
 						BMINamespace:     "osac-baremetalinstance",
 						AttemptCount:     0,
@@ -881,6 +1051,7 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 				attemptStart := metav1.NewTime(now.Add(-31 * time.Minute))
 				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
 					{
+						WorkerID:         "worker-1",
 						BMIName:          "worker-1",
 						BMINamespace:     "osac-baremetalinstance",
 						AttemptCount:     0,
@@ -915,6 +1086,7 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 				failTime := metav1.NewTime(now.Add(-35 * time.Minute))
 				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
 					{
+						WorkerID:        "worker-0",
 						BMIName:         "old-bmi",
 						BMINamespace:    "osac-baremetalinstance",
 						AttemptCount:    0,

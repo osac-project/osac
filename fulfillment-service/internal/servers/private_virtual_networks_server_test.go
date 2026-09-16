@@ -224,8 +224,8 @@ var _ = Describe("Private virtual networks server", func() {
 			})
 		})
 
-		Context("VN-VAL-02: IPv6 CIDR validation", func() {
-			It("accepts valid IPv6 CIDR", func() {
+		Context("IPv6-only and dual-stack requests", func() {
+			It("rejects a valid IPv6 CIDR", func() {
 				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
 
 				vn := privatev1.VirtualNetwork_builder{
@@ -237,7 +237,8 @@ var _ = Describe("Private virtual networks server", func() {
 				}.Build()
 
 				err := server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(err).ToNot(HaveOccurred())
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("IPv6 and dual-stack networking are not supported"))
 			})
 
 			It("rejects invalid IPv6 CIDR format", func() {
@@ -250,7 +251,7 @@ var _ = Describe("Private virtual networks server", func() {
 
 				err := server.validateVirtualNetwork(ctx, vn, nil)
 				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("invalid IPv6 CIDR"))
+				Expect(err.Error()).To(ContainSubstring("IPv6 and dual-stack networking are not supported"))
 			})
 
 			It("rejects IPv6 with invalid mask", func() {
@@ -263,7 +264,7 @@ var _ = Describe("Private virtual networks server", func() {
 
 				err := server.validateVirtualNetwork(ctx, vn, nil)
 				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("invalid IPv6 CIDR"))
+				Expect(err.Error()).To(ContainSubstring("IPv6 and dual-stack networking are not supported"))
 			})
 
 			It("rejects IPv4 address in IPv6 field", func() {
@@ -276,12 +277,12 @@ var _ = Describe("Private virtual networks server", func() {
 
 				err := server.validateVirtualNetwork(ctx, vn, nil)
 				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("contains IPv4 address"))
+				Expect(err.Error()).To(ContainSubstring("IPv6 and dual-stack networking are not supported"))
 			})
 		})
 
-		Context("CIDR canonicalization", func() {
-			It("canonicalizes non-canonical IPv4 and IPv6 CIDRs on Create", func() {
+		Context("CIDR canonical form", func() {
+			It("rejects non-canonical IPv4 and legacy IPv6 CIDRs on Create", func() {
 				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
 
 				ipv4VN := privatev1.VirtualNetwork_builder{
@@ -292,8 +293,8 @@ var _ = Describe("Private virtual networks server", func() {
 					}.Build(),
 				}.Build()
 				err := server.validateVirtualNetwork(ctx, ipv4VN, nil)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(ipv4VN.GetSpec().GetIpv4Cidr()).To(Equal("10.0.1.0/24"))
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("canonical"))
 
 				ipv6VN := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
@@ -303,14 +304,14 @@ var _ = Describe("Private virtual networks server", func() {
 					}.Build(),
 				}.Build()
 				err = server.validateVirtualNetwork(ctx, ipv6VN, nil)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(ipv6VN.GetSpec().GetIpv6Cidr()).To(Equal("2001:db8::/32"))
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("IPv6 and dual-stack networking are not supported"))
 			})
 
-			It("stores canonical IPv4 CIDR on Create round-trip", func() {
+			It("rejects a non-canonical IPv4 CIDR on Create before persistence", func() {
 				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
 
-				createResponse, err := server.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
+				_, err := server.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 					Object: privatev1.VirtualNetwork_builder{
 						Metadata: privatev1.Metadata_builder{
 							Name:   "test-virtual-network",
@@ -323,18 +324,18 @@ var _ = Describe("Private virtual networks server", func() {
 						}.Build(),
 					}.Build(),
 				}.Build())
-				Expect(err).ToNot(HaveOccurred())
-				Expect(createResponse.GetObject().GetSpec().GetIpv4Cidr()).To(Equal("10.0.1.0/24"))
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("canonical"))
 			})
 
-			It("canonicalizes on Update including preserved legacy CIDR when omitted", func() {
+			It("preserves canonical CIDRs on Update when omitted", func() {
 				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
 
 				existing := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Region:       "us-west-1",
 						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-						Ipv4Cidr:     new("10.0.1.5/24"),
+						Ipv4Cidr:     new("10.0.1.0/24"),
 					}.Build(),
 				}.Build()
 
@@ -371,7 +372,7 @@ var _ = Describe("Private virtual networks server", func() {
 
 				err := server.validateVirtualNetwork(ctx, vn, nil)
 				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("at least one"))
+				Expect(err.Error()).To(ContainSubstring("spec.ipv4_cidr"))
 			})
 
 			It("accepts IPv4-only configuration", func() {
@@ -389,7 +390,7 @@ var _ = Describe("Private virtual networks server", func() {
 				Expect(err).ToNot(HaveOccurred())
 			})
 
-			It("accepts IPv6-only configuration", func() {
+			It("rejects IPv6-only configuration", func() {
 				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
 
 				vn := privatev1.VirtualNetwork_builder{
@@ -401,10 +402,11 @@ var _ = Describe("Private virtual networks server", func() {
 				}.Build()
 
 				err := server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(err).ToNot(HaveOccurred())
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("IPv6 and dual-stack networking are not supported"))
 			})
 
-			It("accepts dual-stack configuration", func() {
+			It("rejects dual-stack configuration", func() {
 				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
 
 				vn := privatev1.VirtualNetwork_builder{
@@ -417,7 +419,8 @@ var _ = Describe("Private virtual networks server", func() {
 				}.Build()
 
 				err := server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(err).ToNot(HaveOccurred())
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("IPv6 and dual-stack networking are not supported"))
 			})
 		})
 
@@ -683,7 +686,7 @@ var _ = Describe("Private virtual networks server", func() {
 
 				err := server.validateVirtualNetwork(ctx, vn, nil)
 				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("does not support IPv6"))
+				Expect(err.Error()).To(ContainSubstring("IPv6 and dual-stack networking are not supported"))
 			})
 
 			It("accepts a dual-stack VirtualNetwork when NetworkClass supports dual-stack", func() {
@@ -706,7 +709,8 @@ var _ = Describe("Private virtual networks server", func() {
 				}.Build()
 
 				err := server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(err).ToNot(HaveOccurred())
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("IPv6 and dual-stack networking are not supported"))
 			})
 
 			It("rejects a dual-stack VirtualNetwork when NetworkClass supports each family individually but not dual-stack", func() {
@@ -730,7 +734,7 @@ var _ = Describe("Private virtual networks server", func() {
 
 				err := server.validateVirtualNetwork(ctx, vn, nil)
 				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("does not support dual-stack"))
+				Expect(err.Error()).To(ContainSubstring("IPv6 and dual-stack networking are not supported"))
 			})
 
 			It("accepts any addressing mode when NetworkClass has no capabilities set", func() {
@@ -768,7 +772,8 @@ var _ = Describe("Private virtual networks server", func() {
 				}.Build()
 
 				err = server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(err).ToNot(HaveOccurred())
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("IPv6 and dual-stack networking are not supported"))
 			})
 		})
 
@@ -959,10 +964,8 @@ var _ = Describe("Private virtual networks server", func() {
 				Expect(err).ToNot(HaveOccurred())
 			})
 
-			It("prevents adding ipv4_cidr to an IPv6-only VirtualNetwork", func() {
-				// existing: IPv6-only (no ipv4_cidr set).
-				// updated: explicitly sets ipv4_cidr — HasIpv4Cidr() returns true,
-				// existing.GetIpv4Cidr() == "" != new value → reject.
+			It("rejects an IPv4 update that also carries a legacy IPv6 CIDR", func() {
+				// Legacy IPv6 data is rejected before immutable-field comparison.
 				existing := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Region:       "us-west-1",
@@ -985,8 +988,8 @@ var _ = Describe("Private virtual networks server", func() {
 				status, ok := grpcstatus.FromError(err)
 				Expect(ok).To(BeTrue())
 				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-				Expect(err.Error()).To(ContainSubstring("ipv4_cidr"))
-				Expect(err.Error()).To(ContainSubstring("immutable"))
+				Expect(err.Error()).To(ContainSubstring("ipv6_cidr"))
+				Expect(err.Error()).To(ContainSubstring("IPv6 and dual-stack networking are not supported"))
 			})
 
 			It("rejects explicit empty ipv4_cidr on Update when existing ipv4_cidr is set (empty string edge case)", func() {
@@ -1005,7 +1008,6 @@ var _ = Describe("Private virtual networks server", func() {
 						Region:       "us-west-1",
 						NetworkClass: privatev1.NetworkClassReference_builder{Id: "test-class"}.Build(),
 						Ipv4Cidr:     new(""),
-						Ipv6Cidr:     new("2001:db8::/32"),
 					}.Build(),
 				}.Build()
 
@@ -1020,7 +1022,7 @@ var _ = Describe("Private virtual networks server", func() {
 		})
 
 		Context("VN-VAL-12: IPv6 CIDR immutability on Update", func() {
-			It("prevents ipv6_cidr field modification", func() {
+			It("rejects an IPv6 CIDR field modification", func() {
 				existing := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Region:       "us-west-1",
@@ -1043,10 +1045,10 @@ var _ = Describe("Private virtual networks server", func() {
 				Expect(ok).To(BeTrue())
 				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 				Expect(err.Error()).To(ContainSubstring("ipv6_cidr"))
-				Expect(err.Error()).To(ContainSubstring("immutable"))
+				Expect(err.Error()).To(ContainSubstring("IPv6 and dual-stack networking are not supported"))
 			})
 
-			It("allows ipv6_cidr to stay same on Update", func() {
+			It("rejects an unchanged legacy ipv6_cidr on Update", func() {
 				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
 
 				existing := privatev1.VirtualNetwork_builder{
@@ -1066,10 +1068,11 @@ var _ = Describe("Private virtual networks server", func() {
 				}.Build()
 
 				err := server.validateVirtualNetwork(ctx, updated, existing)
-				Expect(err).ToNot(HaveOccurred())
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("IPv6 and dual-stack networking are not supported"))
 			})
 
-			It("prevents adding ipv6_cidr to an IPv4-only VirtualNetwork", func() {
+			It("rejects adding ipv6_cidr to an IPv4-only VirtualNetwork", func() {
 				// existing: IPv4-only (no ipv6_cidr set).
 				// updated: explicitly sets ipv6_cidr — HasIpv6Cidr() returns true,
 				// existing.GetIpv6Cidr() == "" != new value → reject.
@@ -1097,7 +1100,7 @@ var _ = Describe("Private virtual networks server", func() {
 				Expect(ok).To(BeTrue())
 				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 				Expect(err.Error()).To(ContainSubstring("ipv6_cidr"))
-				Expect(err.Error()).To(ContainSubstring("immutable"))
+				Expect(err.Error()).To(ContainSubstring("IPv6 and dual-stack networking are not supported"))
 			})
 
 			It("rejects explicit empty ipv6_cidr on Update when existing ipv6_cidr is set (empty string edge case)", func() {
@@ -1564,7 +1567,7 @@ var _ = Describe("Private virtual networks server", func() {
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(err.Error()).To(ContainSubstring("does not support IPv6"))
+			Expect(err.Error()).To(ContainSubstring("IPv6 and dual-stack networking are not supported"))
 		})
 
 		It("Create VN without network_class after default NC is deleted", func() {

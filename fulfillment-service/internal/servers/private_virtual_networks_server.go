@@ -174,8 +174,14 @@ func (s *PrivateVirtualNetworksServer) Update(ctx context.Context,
 
 	existingVN := getResponse.GetObject()
 
-	// Validate with existing object context:
-	err = s.validateVirtualNetwork(ctx, request.GetObject(), existingVN)
+	validationObject, mergeErr := s.generic.mergeUpdateObject(request.GetObject(), existingVN, request.GetUpdateMask())
+	if mergeErr != nil {
+		err = mergeErr
+		return
+	}
+
+	// Validate the merged object with existing object context:
+	err = s.validateVirtualNetwork(ctx, validationObject, existingVN)
 	if err != nil {
 		return
 	}
@@ -227,26 +233,26 @@ func (s *PrivateVirtualNetworksServer) validateVirtualNetwork(ctx context.Contex
 		return
 	}
 
+	if spec.GetIpv6Cidr() != "" {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'spec.ipv6_cidr': IPv6 and dual-stack networking are not supported")
+	}
+
 	// VN-VAL-09, VN-VAL-10, VN-VAL-11, VN-VAL-12: Check immutable fields (only on Update).
-	// Run before VN-VAL-03 so that explicit-empty-string attempts to clear an immutable CIDR
-	// return "field is immutable" rather than "at least one CIDR required".
+	// Run after rejecting non-empty legacy IPv6 values so every attempted IPv6 or dual-stack
+	// request receives the same clear unsupported-networking error.
 	if err = validateImmutableFields(newVN, existingVN); err != nil {
 		return
 	}
 
-	// VN-VAL-03: At least one CIDR must be provided
-	if spec.GetIpv4Cidr() == "" && spec.GetIpv6Cidr() == "" {
-		err = grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"at least one of 'spec.ipv4_cidr' or 'spec.ipv6_cidr' must be provided")
-		return
+	if spec.GetIpv4Cidr() == "" {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'spec.ipv4_cidr' is required and must be a canonical IPv4 CIDR")
 	}
-
-	// VN-VAL-01, VN-VAL-02: Validate and canonicalize CIDRs
-	if err = canonicalizeDualStackCIDRs(
-		spec.GetIpv4Cidr, spec.SetIpv4Cidr,
-		spec.GetIpv6Cidr, spec.SetIpv6Cidr,
-	); err != nil {
-		return
+	if canonical, validationErr := parseAndValidateCanonicalCIDR(spec.GetIpv4Cidr(), cidrIPv4); validationErr != nil {
+		return validationErr
+	} else {
+		spec.SetIpv4Cidr(canonical)
 	}
 
 	// VN-VAL-04, VN-VAL-05, VN-VAL-06: Validate NetworkClass

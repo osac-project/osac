@@ -188,8 +188,14 @@ func (s *PrivateSecurityGroupsServer) Update(ctx context.Context,
 
 	existingSecurityGroup := getResponse.GetObject()
 
-	// Validate with existing object context:
-	err = s.validateSecurityGroup(ctx, request.GetObject(), existingSecurityGroup)
+	validationObject, mergeErr := s.generic.mergeUpdateObject(request.GetObject(), existingSecurityGroup, request.GetUpdateMask())
+	if mergeErr != nil {
+		err = mergeErr
+		return
+	}
+
+	// Validate the merged object with existing object context:
+	err = s.validateSecurityGroup(ctx, validationObject, existingSecurityGroup)
 	if err != nil {
 		return
 	}
@@ -354,16 +360,15 @@ func validateSecurityRule(rule *privatev1.SecurityRule, ruleType string, index i
 		}
 	}
 
-	// At least one CIDR must be specified
-	if rule.GetIpv4Cidr() == "" && rule.GetIpv6Cidr() == "" {
+	if rule.GetIpv6Cidr() != "" {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"%s rule at index %d: at least one of ipv4_cidr or ipv6_cidr must be provided", ruleType, index)
+			"%s rule at index %d: IPv6 and dual-stack networking are not supported", ruleType, index)
 	}
-
-	if err := canonicalizeDualStackCIDRs(
-		rule.GetIpv4Cidr, rule.SetIpv4Cidr,
-		rule.GetIpv6Cidr, rule.SetIpv6Cidr,
-	); err != nil {
+	if rule.GetIpv4Cidr() == "" {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"%s rule at index %d: ipv4_cidr is required and must be a canonical IPv4 CIDR", ruleType, index)
+	}
+	if _, err := parseAndValidateCanonicalCIDR(rule.GetIpv4Cidr(), cidrIPv4); err != nil {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"%s rule at index %d: %v", ruleType, index, err)
 	}

@@ -181,13 +181,15 @@ func (s *PrivateExternalIPPoolsServer) validateCreate(ctx context.Context,
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "external IP pool spec is mandatory")
 	}
 
-	if spec.GetIpFamily() == privatev1.IPFamily_IP_FAMILY_UNSPECIFIED {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec.ip_family' is required")
+	if spec.GetIpFamily() != privatev1.IPFamily_IP_FAMILY_IPV4 {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'spec.ip_family' must be IP_FAMILY_IPV4; IPv6 and unspecified-family pools are not supported")
 	}
 
 	cidrs := spec.GetCidrs()
-	if len(cidrs) == 0 {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec.cidrs' is required")
+	if len(cidrs) != 1 {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'spec.cidrs' must contain exactly one canonical IPv4 CIDR")
 	}
 
 	canonicalCIDRs := make([]string, len(cidrs))
@@ -218,15 +220,30 @@ func validateExternalIPPoolUpdate(newPool *privatev1.ExternalIPPool, existing *p
 	}
 
 	if spec.GetIpFamily() != privatev1.IPFamily_IP_FAMILY_UNSPECIFIED &&
+		spec.GetIpFamily() != privatev1.IPFamily_IP_FAMILY_IPV4 {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'spec.ip_family' must be IP_FAMILY_IPV4; IPv6 and unspecified-family pools are not supported")
+	}
+
+	if spec.GetIpFamily() != privatev1.IPFamily_IP_FAMILY_UNSPECIFIED &&
 		spec.GetIpFamily() != existing.GetSpec().GetIpFamily() {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"field 'spec.ip_family' is immutable and cannot be changed from '%s' to '%s'",
 			existing.GetSpec().GetIpFamily().String(), spec.GetIpFamily().String())
 	}
 
-	if newCIDRs := spec.GetCidrs(); len(newCIDRs) > 0 && !cidrSlicesEqual(newCIDRs, existing.GetSpec().GetCidrs()) {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"field 'spec.cidrs' is immutable and cannot be changed after creation")
+	if newCIDRs := spec.GetCidrs(); len(newCIDRs) > 0 {
+		if len(newCIDRs) != 1 {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"field 'spec.cidrs' must contain exactly one canonical IPv4 CIDR")
+		}
+		if _, err := validatePoolCIDRFormat(newCIDRs[0], privatev1.IPFamily_IP_FAMILY_IPV4, 0); err != nil {
+			return err
+		}
+		if !cidrSlicesEqual(newCIDRs, existing.GetSpec().GetCidrs()) {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"field 'spec.cidrs' is immutable and cannot be changed after creation")
+		}
 	}
 
 	return nil

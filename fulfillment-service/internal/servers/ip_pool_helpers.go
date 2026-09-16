@@ -25,6 +25,11 @@ import (
 )
 
 func validatePoolCIDRFormat(cidrStr string, ipFamily privatev1.IPFamily, idx int) (string, error) {
+	if ipFamily != privatev1.IPFamily_IP_FAMILY_IPV4 {
+		return "", grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'spec.ip_family' must be IP_FAMILY_IPV4; IPv6 and unspecified-family pools are not supported")
+	}
+
 	prefix, err := netip.ParsePrefix(cidrStr)
 	if err != nil {
 		return "", grpcstatus.Errorf(grpccodes.InvalidArgument,
@@ -32,20 +37,17 @@ func validatePoolCIDRFormat(cidrStr string, ipFamily privatev1.IPFamily, idx int
 	}
 
 	isIPv4 := prefix.Addr().Is4()
-	switch ipFamily {
-	case privatev1.IPFamily_IP_FAMILY_IPV4:
-		if !isIPv4 {
-			return "", grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"field 'spec.cidrs[%d]' contains IPv6 address but pool ip_family is IPv4: %s", idx, cidrStr)
-		}
-	case privatev1.IPFamily_IP_FAMILY_IPV6:
-		if isIPv4 {
-			return "", grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"field 'spec.cidrs[%d]' contains IPv4 address but pool ip_family is IPv6: %s", idx, cidrStr)
-		}
+	if !isIPv4 {
+		return "", grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'spec.cidrs[%d]' must be a canonical IPv4 CIDR; IPv6 address is not supported: %s", idx, cidrStr)
+	}
+	canonical := prefix.Masked().String()
+	if canonical != cidrStr {
+		return "", grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'spec.cidrs[%d]' CIDR '%s' is not canonical; use '%s'", idx, cidrStr, canonical)
 	}
 
-	return prefix.Masked().String(), nil
+	return canonical, nil
 }
 
 func validateNoCIDRSelfOverlap(cidrs []string) error {

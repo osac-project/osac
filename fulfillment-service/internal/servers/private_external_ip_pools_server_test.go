@@ -370,7 +370,7 @@ var _ = Describe("Private external IP pools server", func() {
 				Expect(err.Error()).To(ContainSubstring("IPv6"))
 			})
 
-			It("canonicalizes non-canonical CIDRs on Create", func() {
+			It("rejects non-canonical CIDRs on Create", func() {
 				pool := privatev1.ExternalIPPool_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name: "test-pool-ip-family",
@@ -382,8 +382,8 @@ var _ = Describe("Private external IP pools server", func() {
 				}.Build()
 
 				err := poolsServer.validateCreate(ctx, pool)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(pool.GetSpec().GetCidrs()).To(Equal([]string{"10.0.1.0/24"}))
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("canonical"))
 			})
 		})
 
@@ -447,7 +447,7 @@ var _ = Describe("Private external IP pools server", func() {
 		})
 
 		Context("Intra-pool CIDR overlap detection", func() {
-			It("rejects a pool whose second CIDR is a subset of the first", func() {
+			It("rejects a pool with multiple CIDRs", func() {
 				pool := privatev1.ExternalIPPool_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name: "test-pool-intra-pool-overlap",
@@ -463,7 +463,7 @@ var _ = Describe("Private external IP pools server", func() {
 				status, ok := grpcstatus.FromError(err)
 				Expect(ok).To(BeTrue())
 				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-				Expect(err.Error()).To(ContainSubstring("overlaps"))
+				Expect(err.Error()).To(ContainSubstring("exactly one"))
 			})
 		})
 
@@ -564,7 +564,7 @@ var _ = Describe("Private external IP pools server", func() {
 				Expect(ok).To(BeTrue())
 				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 				Expect(err.Error()).To(ContainSubstring("ip_family"))
-				Expect(err.Error()).To(ContainSubstring("immutable"))
+				Expect(err.Error()).To(ContainSubstring("must be IP_FAMILY_IPV4"))
 			})
 
 			It("Rejects update of the name of ExternalIPPool (spec fields omitted)", func() {

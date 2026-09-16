@@ -45,9 +45,10 @@ as Pods on a separate hosting cluster.
 MOC: The MassOpen Cloud (MOC) is a public computing cloud where the Open
 Sovereign AI Cloud is being deployed.
 
-Tenant: A user or group of people with the ability to self-service provision
-clusters; acts as a cluster administrator for their own cluster(s). An end user
-of the OSAC solution.
+Tenant: A user or group of users at the same organization with the ability to
+self-service provision cloud assets, including VMs and clusters. Acts as the
+administrator for infrastructure that they provision. An end user of the OSAC
+solution, and a customer of the CSP.
 
 See [personas.md](personas.md) for a description of OSAC personas.
 

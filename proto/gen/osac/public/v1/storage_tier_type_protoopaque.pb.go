@@ -227,11 +227,11 @@ func (b0 StorageTier_builder) Build() *StorageTier {
 
 // Defines the advertised service level of a StorageTier.
 type StorageTierSpec struct {
-	state                           protoimpl.MessageState `protogen:"opaque.v1"`
-	xxx_hidden_Description string          `protobuf:"bytes,1,opt,name=description,proto3"`
-	xxx_hidden_Protocol    StorageProtocol `protobuf:"varint,2,opt,name=protocol,proto3,enum=osac.public.v1.StorageProtocol"`
+	state                  protoimpl.MessageState `protogen:"opaque.v1"`
+	xxx_hidden_Description string                 `protobuf:"bytes,1,opt,name=description,proto3"`
+	xxx_hidden_Protocol    StorageProtocol        `protobuf:"varint,2,opt,name=protocol,proto3,enum=osac.public.v1.StorageProtocol"`
 	unknownFields          protoimpl.UnknownFields
-	sizeCache                       protoimpl.SizeCache
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *StorageTierSpec) Reset() {

@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
@@ -528,6 +529,50 @@ var _ = Describe("ClusterOrder Controller", func() {
 			Expect(progressing.Reason).To(Equal(v1alpha1.ReasonAsExpected))
 		})
 
+		It("should finalize Ready through handleHostedCluster", func() {
+			instance := &v1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-hc-finalize-ready", Namespace: "default"},
+				Status: v1alpha1.ClusterOrderStatus{
+					Phase: v1alpha1.ClusterOrderPhaseProgressing,
+					ProvisioningJobs: []v1alpha1.JobStatus{{
+						Type:  v1alpha1.JobTypeProvision,
+						State: v1alpha1.JobStateSucceeded,
+					}},
+				},
+				Spec: v1alpha1.ClusterOrderSpec{
+					NodeRequests: []v1alpha1.NodeRequest{{ResourceClass: "worker", NumberOfNodes: 1}},
+				},
+			}
+			hc := &hypershiftv1beta1.HostedCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-hc-finalize-ready", Namespace: "default"},
+				Status: hypershiftv1beta1.HostedClusterStatus{Conditions: []metav1.Condition{
+					{Type: string(hypershiftv1beta1.KubeAPIServerAvailable), Status: metav1.ConditionTrue},
+					{Type: string(hypershiftv1beta1.HostedClusterAvailable), Status: metav1.ConditionTrue},
+					{Type: string(hypershiftv1beta1.HostedClusterDegraded), Status: metav1.ConditionFalse},
+					{Type: string(hypershiftv1beta1.ClusterVersionSucceeding), Status: metav1.ConditionTrue},
+				}},
+			}
+			nodePool := readyClusterOrderNodePool("worker", 1)
+			nodePool.ObjectMeta = metav1.ObjectMeta{
+				Name:      "test-hc-finalize-ready-worker",
+				Namespace: "default",
+				Labels: map[string]string{
+					osacClusterOrderNameLabel: instance.Name,
+					agentResourceClassLabel:   "worker",
+				},
+			}
+			reconciler.Client = fake.NewClientBuilder().
+				WithScheme(k8sClient.Scheme()).
+				WithObjects(&nodePool).
+				Build()
+
+			Expect(reconciler.handleHostedCluster(ctx, instance, hc)).To(Succeed())
+			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseReady))
+			progressing := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
+			Expect(progressing).NotTo(BeNil())
+			Expect(progressing.Status).To(Equal(metav1.ConditionFalse))
+		})
+
 		DescribeTable("should require every NodePool to match its requested capacity",
 			func(requests []v1alpha1.NodeRequest, nodePools []hypershiftv1beta1.NodePool, expected bool) {
 				Expect(nodePoolsMatchRequests(requests, nodePools)).To(Equal(expected))
@@ -549,6 +594,12 @@ var _ = Describe("ClusterOrder Controller", func() {
 				{ResourceClass: "worker", NumberOfNodes: 3},
 			}, []hypershiftv1beta1.NodePool{
 				readyClusterOrderNodePool("gpu", 3), readyClusterOrderNodePool("worker", 2),
+			}, false),
+			Entry("duplicate resource classes do not collapse", []v1alpha1.NodeRequest{
+				{ResourceClass: "worker", NumberOfNodes: 1},
+				{ResourceClass: "worker", NumberOfNodes: 5},
+			}, []hypershiftv1beta1.NodePool{
+				readyClusterOrderNodePool("worker", 5),
 			}, false),
 		)
 

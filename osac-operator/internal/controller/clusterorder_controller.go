@@ -754,6 +754,9 @@ func hostedClusterAndNodePoolsAreReady(instance *v1alpha1.ClusterOrder, hc *hype
 }
 
 func nodePoolsMatchRequests(requests []v1alpha1.NodeRequest, nodePools []hypershiftv1beta1.NodePool) bool {
+	if nodeRequestsContainDuplicateResourceClasses(requests) {
+		return false
+	}
 	expectedReplicas := expectedNodePoolReplicas(requests)
 	if len(expectedReplicas) != len(nodePools) {
 		return false
@@ -775,6 +778,17 @@ func nodePoolsMatchRequests(requests []v1alpha1.NodeRequest, nodePools []hypersh
 		seen[resourceClass] = struct{}{}
 	}
 	return len(seen) == len(expectedReplicas)
+}
+
+func nodeRequestsContainDuplicateResourceClasses(requests []v1alpha1.NodeRequest) bool {
+	seen := make(map[string]struct{}, len(requests))
+	for _, request := range requests {
+		if _, duplicate := seen[request.ResourceClass]; duplicate {
+			return true
+		}
+		seen[request.ResourceClass] = struct{}{}
+	}
+	return false
 }
 
 func expectedNodePoolReplicas(requests []v1alpha1.NodeRequest) map[string]int {

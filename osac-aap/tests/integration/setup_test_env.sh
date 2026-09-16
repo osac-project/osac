@@ -233,6 +233,7 @@ ENVEOF
       -CA "${SCRIPT_DIR}/certs/registry-ca.pem" -CAkey "${SCRIPT_DIR}/certs/registry-ca.key" \
       -CAcreateserial -out "${SCRIPT_DIR}/certs/registry.pem" \
       -days 1 -extfile "${SCRIPT_DIR}/certs/registry.ext" 2>/dev/null
+    chmod 0600 "${SCRIPT_DIR}/certs"/*.key 2>/dev/null || true
 
     echo "Installing the local CA into the system trust store..."
     sudo cp "${SCRIPT_DIR}/certs/registry-ca.pem" /usr/local/share/ca-certificates/osac-test-registry-ca.crt

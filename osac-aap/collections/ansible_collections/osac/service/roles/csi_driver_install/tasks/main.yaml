@@ -132,6 +132,7 @@
         _csi_driver_install_converged: >-
           {% set _ns = namespace(ok=false) -%}
           {% if _csi_driver_install_precheck_status is not none -%}
+          {% set _s = _csi_driver_install_precheck_status -%}
           {% set _values = _s['values'] | default({}, true) -%}
           {% set _controller = _values['controller'] | default({}, true) -%}
           {% set _node_values = _values['node'] | default({}, true) -%}
@@ -393,8 +394,7 @@
       ansible.builtin.fail:
         msg: >-
           OSAC CSI driver install failed. Failed task: {{ ansible_failed_task.name | default('unknown') }}.
-          {{ ('Error: ' ~ ansible_failed_result.msg) if (ansible_verbosity | default(0) >= 2) else 'Run with -vv for full error details.' }}
-
+          Error: {{ ansible_failed_result.msg | default('see logs for details') }}.
   always:
     # Guarded by _csi_driver_install_lock_acquired -- see the "Mark the lock
     # as acquired" task above for why this must not release unconditionally.

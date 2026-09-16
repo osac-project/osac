@@ -472,10 +472,8 @@
 # pre-create, one Helm call) is skipped outright, not merely idempotent.
 # Matches the real-world JIT compute-instance case today, where every
 # dispatch sends only the not-yet-supported 'lvms' provider. Proven by
-# reading the install lock's own Lease object's resourceVersion before/after
-# -- acquiring (and releasing) the lock always mutates it via
-# server-side-apply, so an unchanged resourceVersion means the lock was
-# never touched at all, not just a no-op Helm call inside an acquired lock ──
+# comparing the csi-driver release revision before and after the dispatch --
+# an unchanged revision proves no Helm install/upgrade ran at all. ──
 - name: "CSI Driver Install - Zero supported providers dispatch is a complete no-op (lvms only)"
   hosts: localhost
   gather_facts: false
@@ -513,12 +511,6 @@
           after={{ _driver_release_after_noop_dispatch.status.version }}), meaning a
           Helm upgrade ran instead of being skipped entirely.
         success_msg: "Zero-supported-vendor dispatch correctly skipped the install block -- Helm revision unchanged"
-    - name: Read installed csi-driver release after the zero-supported-vendor dispatch
-      kubernetes.core.helm_info:
-        name: csi-driver
-        release_namespace: osac-csi
-      register: _driver_release_after_noop_dispatch
-
     - name: Assert the csi-driver release is unchanged from the prior (Test 4.5) dispatch
       ansible.builtin.assert:
         that:

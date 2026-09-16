@@ -23,6 +23,7 @@ csi_driver_install_backends_namespace: "osac-csi-backends"
 # from what this chart happens to support today.
 csi_driver_install_supported_vendors:
   - vast
+
 # Per-vendor node CSI socket directory, mirroring the csi-driver chart's own
 # vendors.<name>.node.socketPath defaults (osac-csi-driver/charts/csi-driver/
 # values.yaml). These are chart-version-invariant constants, so the role reads

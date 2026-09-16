@@ -54,13 +54,15 @@ on:
         default: false
         required: false
     secrets:
-      OSAC_BOT_PAT:
+      OSAC_CI_APP_PRIVATE_KEY:
         description: >-
-          Real-actor PAT used to push the umbrella/component release tags
-          in "Tag and notify" -- GitHub never fires push-triggered
-          workflows for a ref pushed with the default GITHUB_TOKEN
-          (OSAC-5357), so this must authenticate as an actual user, not
-          the automatic token.
+          Private key for the osac-ci GitHub App (App ID 4966101,
+          installed on this repo with Contents: read/write). Exchanged at
+          runtime for a short-lived installation token used to push the
+          umbrella/component release tags in "Tag and notify" -- GitHub
+          never fires push-triggered workflows for a ref pushed with the
+          default GITHUB_TOKEN (OSAC-5357), so this must authenticate as
+          a real actor instead of the automatic token.
         required: true
 
 permissions: {}
@@ -1323,6 +1325,13 @@ jobs:
       MODE: ${{ inputs.mode }}
 
     steps:
+    - name: Generate osac-ci app token
+      id: app-token
+      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+      with:
+        app-id: "4966101"
+        private-key: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
+
     - name: Checkout repository
       uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
       with:
@@ -1334,12 +1343,11 @@ jobs:
         # the built-in GITHUB_TOKEN (anti-recursion by design), so every
         # <component>/vX.Y.Z tag pushed below would silently never trigger
         # its own publish-image.yaml/publish-binaries.yaml/etc, even though
-        # this job (and the whole run) reports success (OSAC-5357). A PAT
-        # authenticates as a real actor, so the same push fires those
-        # workflows exactly like a human's `git push` does -- same identity
-        # already used for this class of GITHUB_TOKEN limitation in
-        # pr-dashboard.yml.
-        token: ${{ secrets.OSAC_BOT_PAT }}
+        # this job (and the whole run) reports success (OSAC-5357). The
+        # osac-ci GitHub App's installation token authenticates as a real
+        # actor, so the same push fires those workflows exactly like a
+        # human's `git push` does.
+        token: ${{ steps.app-token.outputs.token }}
 
     - name: Create umbrella tag
       env:

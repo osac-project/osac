@@ -69,7 +69,7 @@ jobs:
       actions: read
     uses: ./.github/workflows/osac-build-and-publish.yaml
     # Reusable workflows never inherit the caller's secrets automatically --
-    # without this, secrets.OSAC_BOT_PAT resolves to empty inside
+    # without this, secrets.OSAC_CI_APP_PRIVATE_KEY resolves to empty inside
     # osac-build-and-publish.yaml's "Tag and notify" job, and its checkout
     # step fails outright ("Input required and not supplied: token"),
     # confirmed live on a real release dispatch (OSAC-5357 follow-up).
@@ -77,7 +77,7 @@ jobs:
     # one secret it actually declares needing, not this workflow's entire
     # secret set.
     secrets:
-      OSAC_BOT_PAT: ${{ secrets.OSAC_BOT_PAT }}
+      OSAC_CI_APP_PRIVATE_KEY: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
     with:
       mode: release
       release_version: ${{ github.event.inputs.release_version }}

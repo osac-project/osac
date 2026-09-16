@@ -38,7 +38,7 @@ jobs:
       actions: read
     uses: ./.github/workflows/osac-build-and-publish.yaml
     # Reusable workflows never inherit the caller's secrets automatically --
-    # without this, secrets.OSAC_BOT_PAT resolves to empty inside
+    # without this, secrets.OSAC_CI_APP_PRIVATE_KEY resolves to empty inside
     # osac-build-and-publish.yaml's "Tag and notify" job (its checkout step
     # requires that token unconditionally, in both nightly and release
     # mode), and checkout fails outright ("Input required and not supplied:
@@ -48,7 +48,7 @@ jobs:
     # one secret it actually declares needing, not this workflow's entire
     # secret set.
     secrets:
-      OSAC_BOT_PAT: ${{ secrets.OSAC_BOT_PAT }}
+      OSAC_CI_APP_PRIVATE_KEY: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
     with:
       mode: nightly
       skip_e2e: ${{ github.event.inputs.skip_e2e == 'true' }}

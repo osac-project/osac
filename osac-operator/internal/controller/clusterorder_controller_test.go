@@ -20,6 +20,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/go-logr/logr"
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
@@ -521,7 +522,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 			}}}
 			nodePools := []hypershiftv1beta1.NodePool{readyClusterOrderNodePool("worker", 1)}
 
-			Expect(finalizeReadyIfProvisioned(instance, hc, nodePools)).To(BeTrue())
+			Expect(finalizeReadyIfProvisioned(logr.Discard(), instance, hc, nodePools)).To(BeTrue())
 			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseReady))
 			progressing := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
 			Expect(progressing).NotTo(BeNil())

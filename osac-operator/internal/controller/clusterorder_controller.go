@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/go-logr/logr"
 	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -540,7 +541,7 @@ func (r *ClusterOrderReconciler) handleHostedCluster(ctx context.Context, instan
 	// A successful provisioning job only means that the infrastructure request
 	// was accepted. Derive terminal readiness from the live HostedCluster and
 	// NodePool observations in this reconcile.
-	finalizeReadyIfProvisioned(instance, hc, nodePools.Items)
+	finalizeReadyIfProvisioned(log, instance, hc, nodePools.Items)
 	return nil
 }
 
@@ -828,10 +829,16 @@ func provisioningJobSucceeded(instance *v1alpha1.ClusterOrder) bool {
 	return job != nil && job.State == v1alpha1.JobStateSucceeded
 }
 
-func finalizeReadyIfProvisioned(instance *v1alpha1.ClusterOrder, hc *hypershiftv1beta1.HostedCluster,
+func finalizeReadyIfProvisioned(log logr.Logger, instance *v1alpha1.ClusterOrder, hc *hypershiftv1beta1.HostedCluster,
 	nodePools []hypershiftv1beta1.NodePool) bool {
-	if !provisioningJobSucceeded(instance) ||
-		!hostedClusterAndNodePoolsAreReady(instance, hc, nodePools) {
+	if !provisioningJobSucceeded(instance) {
+		return false
+	}
+	if nodeRequestsContainDuplicateResourceClasses(instance.Spec.NodeRequests) {
+		log.Info("node pool readiness blocked by duplicate resource class in node requests")
+		return false
+	}
+	if !hostedClusterAndNodePoolsAreReady(instance, hc, nodePools) {
 		return false
 	}
 

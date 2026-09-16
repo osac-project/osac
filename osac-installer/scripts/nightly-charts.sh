@@ -197,70 +197,122 @@ _component_publish_workflows() {
 # to trigger silently didn't run or failed.
 wait_for_component_publish_workflow_run() {
     local workflow_file="$1" tag="$2" timeout="${3:-2700}" interval="${4:-15}"
-    local start start_time run_id safe_workflow safe_tag limit runs run_count oldest_created gh_err gh_err_file safe_gh_err
+    local start run_id safe_workflow safe_tag page runs run_count gh_err safe_gh_err
+    local response http_code body curl_exit gh_curl_config remaining connect_timeout
 
     safe_workflow=$(_gha_sanitize_for_message "${workflow_file}")
     safe_tag=$(_gha_sanitize_for_message "${tag}")
-    # Anything created before this function was even called can't be the run
-    # our own tag push just triggered -- used below as the pagination
-    # stopping point, so a single busy workflow can't push the real match
-    # past a fixed page size (see the --limit note further down).
-    start_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+    # GH_TOKEN passed via a curl config file, not `-H "Authorization: Bearer
+    # ${GH_TOKEN}"` directly -- the latter puts the token in this process's
+    # argv, visible to anything else on the same machine (e.g. `ps aux`)
+    # while curl runs. This job's runner is a persistent, reused self-hosted
+    # box, not an ephemeral one, so that exposure window is real.
+    #
+    # Cleanup registered immediately after mktemp -- before chmod or writing
+    # the token -- so a failure in either of those still triggers it, and on
+    # both RETURN and EXIT: RETURN alone only cleans up on a normal function
+    # return, but this job can just as well be killed or cancelled outright
+    # while this function is still running, which EXIT also covers.
+    #
+    # Known limitation, not fixed here: bash's RETURN trap is not truly
+    # function-scoped the way you'd expect -- confirmed empirically that a
+    # RETURN trap set in a called function clobbers a caller's own RETURN
+    # trap permanently, and that `trap -p RETURN` queried from the callee
+    # does not reliably expose the caller's prior trap to save and restore.
+    # Nothing in this file or its caller sets one today (verified), so
+    # there's nothing to clobber right now, but a future caller adding its
+    # own RETURN trap around a call into this function should be aware of
+    # this rather than silently losing it.
+    gh_curl_config=$(mktemp)
+    trap 'rm -f "${gh_curl_config}"' RETURN EXIT
+    chmod 600 "${gh_curl_config}"
+    printf 'header = "Authorization: Bearer %s"\n' "${GH_TOKEN}" > "${gh_curl_config}"
 
     echo "Waiting up to ${timeout}s for '${safe_workflow}' to start for tag ${safe_tag}..."
     start=${SECONDS}
     run_id=""
     while true; do
-        # Not `gh run list --branch/--event` (server-side filtered) -- confirmed
-        # live that it can silently miss a run that
-        # genuinely exists and already succeeded, for far longer than any
-        # reasonable indexing lag (45+ minutes observed on a real release
-        # dispatch). List recent runs for this workflow unfiltered instead and
-        # match the tag client-side with a real jq (not gh's --jq), which
-        # supports --arg for safe interpolation.
-        #
-        # A single fixed --limit can silently reintroduce the same class of
-        # bug on a busy workflow (e.g. fulfillment-service's own publish-*
-        # workflows also fire on every PR touching that path): our run could
-        # be pushed past a small page by newer, unrelated runs before we poll.
-        # Grow the page geometrically instead, stopping only once we've
-        # either found the match or paged back far enough that everything
-        # left is provably older than this function's own start_time (so it
-        # cannot be the run our push just triggered) -- or the workflow
-        # simply has fewer runs than the current page size.
-        limit=30
+        # Plain curl against the REST API, not `gh run list`/`gh run watch` --
+        # confirmed live: this job's runs-on: osac-ci self-hosted runner does
+        # not have the gh CLI on PATH at all ("gh: command not found"), so
+        # every `gh` call here was failing instantly. That failure was being
+        # swallowed into an empty result, indistinguishable from a genuine
+        # "no match yet", which is exactly why this looked like a silent
+        # 45-minute hang instead of an obvious, immediate error. curl is far
+        # more safely assumed present on any runner than a specific CLI tool.
+        page=1
         while true; do
             gh_err=""
-            gh_err_file=$(mktemp)
-            if ! runs=$(gh run list --workflow "${workflow_file}" --limit "${limit}" \
-                --json databaseId,headBranch,event,createdAt 2>"${gh_err_file}"); then
-                gh_err=$(cat "${gh_err_file}" 2>/dev/null)
+            curl_exit=0
+            # Timeouts derived from the remaining poll budget so a hung
+            # connection (as opposed to a clean failure) can't defeat the
+            # timeout this loop is supposed to guarantee -- without this, a
+            # single curl call that never returns blocks the whole function
+            # indefinitely regardless of how the surrounding loop is bounded.
+            remaining=$(( timeout - (SECONDS - start) ))
+            (( remaining < 5 )) && remaining=5
+            connect_timeout=$(( remaining < 10 ? remaining : 10 ))
+            response=$(curl -sS -w '\n%{http_code}' -K "${gh_curl_config}" \
+                --connect-timeout "${connect_timeout}" --max-time "${remaining}" \
+                -H "Accept: application/vnd.github+json" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "https://api.github.com/repos/${GH_REPO}/actions/workflows/${workflow_file}/runs?per_page=100&page=${page}" 2>&1) || curl_exit=$?
+            if (( curl_exit != 0 )); then
+                # Never leave this blank: a command that fails before
+                # printing anything (missing binary, DNS failure, etc.) is
+                # exactly the failure mode that caused the original 45-minute
+                # silent hangs this function exists to prevent -- the exit
+                # code alone must be enough to show something went wrong.
+                gh_err="curl exited ${curl_exit}${response:+: ${response}}"
                 runs='[]'
+            else
+                http_code="${response##*$'\n'}"
+                body="${response%$'\n'*}"
+                if [[ "${http_code}" != "200" ]]; then
+                    gh_err="HTTP ${http_code}: ${body}"
+                    runs='[]'
+                else
+                    # Guards against more than just unparseable JSON: a 200
+                    # response whose .workflow_runs is present but isn't an
+                    # array (a string, object, etc. -- an unexpected but not
+                    # inconceivable API response shape) would otherwise
+                    # produce a non-array `runs`, and the candidate-selection
+                    # `jq` calls below would then fail outright on it
+                    # ("Cannot iterate over string"). Routed through the same
+                    # gh_err/warning/retry path as an actual parse failure
+                    # instead of letting that failure hit set -e unguarded.
+                    runs=$(jq -c '(.workflow_runs // []) as $r | if ($r | type) == "array" then $r else error("workflow_runs is not an array (got \($r | type))") end' \
+                        <<<"${body}" 2>/dev/null) || { gh_err="could not parse response as JSON: ${body}"; runs='[]'; }
+                fi
             fi
-            rm -f "${gh_err_file}"
-            # Surfaced, not swallowed: a `gh` failure (auth, rate limit, API
-            # error) looks identical to "no match yet" unless logged
-            # explicitly -- silently defaulting to an empty list here made a
-            # real command failure indistinguishable from a genuine miss in
+            # Surfaced, not swallowed: a request failure (network, auth, rate
+            # limit, missing tool) looks identical to "no match yet" unless
+            # logged explicitly -- silently defaulting to an empty list here
+            # made a real failure indistinguishable from a genuine miss in
             # past runs. Sanitized before interpolation into the workflow
-            # command: gh's raw stderr could contain newlines or its own
-            # "::" sequences, which would otherwise break the ::warning::
-            # across multiple lines or be misread as an unrelated workflow
-            # command.
+            # command: the raw error could contain newlines or its own "::"
+            # sequences, which would otherwise break the ::warning:: across
+            # multiple lines or be misread as an unrelated workflow command.
             if [[ -n "${gh_err}" ]]; then
                 safe_gh_err=$(_gha_sanitize_for_message "${gh_err}")
-                echo "::warning::gh run list --workflow ${safe_workflow} --limit ${limit} failed: ${safe_gh_err}" >&2
+                echo "::warning::listing runs for ${safe_workflow} (page ${page}) failed: ${safe_gh_err}" >&2
             fi
             run_id=$(jq -r --arg tag "${tag}" \
-                '[.[] | select(.headBranch == $tag and .event == "push")][0].databaseId // empty' \
+                '[.[] | select(.head_branch == $tag and .event == "push")][0].id // empty' \
                 <<<"${runs}")
             [[ -n "${run_id}" ]] && break
             run_count=$(jq 'length' <<<"${runs}")
-            (( run_count < limit )) && break
-            oldest_created=$(jq -r '.[-1].createdAt // empty' <<<"${runs}")
-            [[ -n "${oldest_created}" && "${oldest_created}" < "${start_time}" ]] && break
-            (( limit *= 2 ))
-            (( limit > 1000 )) && break
+            # Fewer than a full page means there's nothing more to page
+            # through -- stop for this poll. (Not stopping early based on
+            # each page's oldest created_at vs. this function's own start
+            # time -- clock skew between this self-hosted runner and
+            # GitHub's servers could make that comparison wrong, and this
+            # runner has already shown it isn't a standard environment.
+            # Searching all the way to the page cap is cheap insurance.)
+            (( run_count < 100 )) && break
+            (( page += 1 ))
+            (( page > 10 )) && break
         done
         [[ -n "${run_id}" ]] && break
         if (( SECONDS - start >= timeout )); then
@@ -271,8 +323,64 @@ wait_for_component_publish_workflow_run() {
     done
 
     echo "Found ${safe_workflow} run ${run_id} for tag ${safe_tag}; waiting for it to finish..."
-    if ! gh run watch "${run_id}" --exit-status; then
-        echo "::error::${safe_workflow} run ${run_id} for tag ${safe_tag} did not succeed -- the component tag exists without a completed publish" >&2
+    # gh run watch replaced with the same plain-curl approach as the listing
+    # above, for the same reason: gh itself is not available on this runner.
+    # Shares `start` (not a fresh timer of its own) with the listing phase,
+    # so "up to ${timeout}s" -- what this function's own opening message
+    # promises -- is the real combined budget for the whole function, not
+    # up to 2x that if a second, independent clock were started here.
+    # Surfaces request failures the same way as the listing phase too -- an
+    # unbounded `while true` here with silently-swallowed curl errors would
+    # just relocate the exact same class of silent hang instead of actually
+    # fixing it.
+    local run_status run_conclusion run_response run_http_code run_body
+    while true; do
+        curl_exit=0
+        remaining=$(( timeout - (SECONDS - start) ))
+        (( remaining < 5 )) && remaining=5
+        connect_timeout=$(( remaining < 10 ? remaining : 10 ))
+        run_response=$(curl -sS -w '\n%{http_code}' -K "${gh_curl_config}" \
+            --connect-timeout "${connect_timeout}" --max-time "${remaining}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GH_REPO}/actions/runs/${run_id}" 2>&1) || curl_exit=$?
+        if (( curl_exit != 0 )); then
+            safe_gh_err=$(_gha_sanitize_for_message "curl exited ${curl_exit}${run_response:+: ${run_response}}")
+            echo "::warning::checking run ${run_id} for ${safe_workflow} failed: ${safe_gh_err}" >&2
+        else
+            run_http_code="${run_response##*$'\n'}"
+            run_body="${run_response%$'\n'*}"
+            if [[ "${run_http_code}" == "200" ]]; then
+                # jq is guarded here (unlike the listing loop's jq calls,
+                # which only ever operate on runs='[]' or an already-parsed
+                # value) because run_body comes straight from the response
+                # body with no prior validation -- a malformed body would
+                # make jq exit non-zero, and this whole script runs under
+                # set -euo pipefail, so an unguarded assignment here would
+                # silently kill the job instead of going through this
+                # function's own error handling.
+                if run_status=$(jq -r '.status // empty' <<<"${run_body}" 2>/dev/null); then
+                    if [[ "${run_status}" == "completed" ]]; then
+                        run_conclusion=$(jq -r '.conclusion // empty' <<<"${run_body}" 2>/dev/null) || run_conclusion=""
+                        break
+                    fi
+                else
+                    safe_gh_err=$(_gha_sanitize_for_message "could not parse response as JSON: ${run_body}")
+                    echo "::warning::checking run ${run_id} for ${safe_workflow} failed: ${safe_gh_err}" >&2
+                fi
+            else
+                safe_gh_err=$(_gha_sanitize_for_message "HTTP ${run_http_code}: ${run_body}")
+                echo "::warning::checking run ${run_id} for ${safe_workflow} failed: ${safe_gh_err}" >&2
+            fi
+        fi
+        if (( SECONDS - start >= timeout )); then
+            echo "::error::${safe_workflow} run ${run_id} for tag ${safe_tag} did not reach a completed status within the remaining ${timeout}s budget (shared with the listing phase)" >&2
+            return 1
+        fi
+        sleep "${interval}"
+    done
+    if [[ "${run_conclusion}" != "success" ]]; then
+        echo "::error::${safe_workflow} run ${run_id} for tag ${safe_tag} did not succeed (conclusion: ${run_conclusion:-unknown}) -- the component tag exists without a completed publish" >&2
         return 1
     fi
     echo "${safe_workflow} run ${run_id} for tag ${safe_tag} completed successfully."

@@ -1096,7 +1096,9 @@
         "username",
         "organization",
         "roles",
-        "osac-api"
+        "osac-api",
+        "profile",
+        "email"
       ],
       "optionalClientScopes": []
     },

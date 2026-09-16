@@ -150,6 +150,24 @@ keycloak:
 - Production clusters where browser cert warnings are unacceptable
 - Environments with corporate CA or Let's Encrypt ingress certs
 
+### Keycloak osac-ui client scopes
+
+The `osac-ui` client in `charts/osac-infra/files/realm.json` must be assigned
+every OIDC scope the shipped UI image requests (`profile`, `email`, and
+`organization` while the realm has `organizationsEnabled: true`). Keycloak
+rejects an authorization request naming any scope the client does not have,
+sending the browser to `/callback?error=invalid_scope` and leaving the UI
+loading forever.
+
+Because the client sets its own `defaultClientScopes`, it fully overrides the
+realm-level `defaultDefaultClientScopes` — listing `profile`/`email` as realm
+defaults is not enough, they have to be on the client.
+
+`make helm-validate` runs `scripts/validate-keycloak-ui-client-scopes.sh`,
+which fails if the client loses a required scope or references a scope the
+realm does not define. When the UI starts requesting a new scope, add it to
+both `realm.json` copies and to `UI_REQUIRED_SCOPES` in that script.
+
 ## Makefile Targets
 
 All targets require `PLATFORM=kind|openshift PROFILE=dev|vmaas-ci|... NS=<namespace>`.

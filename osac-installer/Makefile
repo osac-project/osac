@@ -353,4 +353,5 @@ helm-validate: helm-lint ## Validate all charts (lint + template)
 	@echo "Validating values/dev/kind-infra.yaml..."
 	helm template osac-infra $(INFRA_CHART) --values values/dev/kind-infra.yaml
 	./scripts/validate-keycloak-credentials.sh
+	./scripts/validate-keycloak-ui-client-scopes.sh
 	@echo "Validation passed."

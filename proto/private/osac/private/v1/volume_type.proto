@@ -125,10 +125,6 @@ message VolumeStatus {
   // CSI CreateVolume succeeds. Visible only through the private API.
   string vendor_volume_id = 3 [(cleanapi.field).private = true];
 
-  // Deprecated: use provider (field 8). This field is retained for wire compatibility but is no
-  // longer written. Its field number must not be reused. Visible only through the private API.
-  string backend = 4 [(cleanapi.field).private = true];
-
   // Storage protocol used for this volume. Resolved during tier resolution at creation time.
   // Visible only through the private API.
   StorageProtocol protocol = 5 [(cleanapi.field).private = true];

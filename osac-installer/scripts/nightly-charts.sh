@@ -198,7 +198,7 @@ _component_publish_workflows() {
 wait_for_component_publish_workflow_run() {
     local workflow_file="$1" tag="$2" timeout="${3:-2700}" interval="${4:-15}"
     local start run_id safe_workflow safe_tag page runs run_count gh_err safe_gh_err
-    local response http_code body curl_exit gh_curl_config remaining connect_timeout
+    local response http_code body curl_exit gh_curl_config remaining connect_timeout quoted_gh_curl_config
 
     safe_workflow=$(_gha_sanitize_for_message "${workflow_file}")
     safe_tag=$(_gha_sanitize_for_message "${tag}")
@@ -225,7 +225,24 @@ wait_for_component_publish_workflow_run() {
     # own RETURN trap around a call into this function should be aware of
     # this rather than silently losing it.
     gh_curl_config=$(mktemp)
-    trap 'rm -f "${gh_curl_config}"' RETURN EXIT
+    # Double-quoted so ${gh_curl_config} expands NOW, into a literal path
+    # baked into the registered trap string -- not a variable reference
+    # re-evaluated whenever the trap actually fires. That distinction is
+    # real: gh_curl_config is local to this function, but EXIT fires at
+    # process termination, potentially long after this function (and its
+    # local scope) has already returned. A single-quoted trap referencing
+    # the variable by name hits "unbound variable" under set -u at that
+    # point -- confirmed live, after this exact function otherwise ran
+    # correctly end to end.
+    #
+    # Shell-escaped via printf %q, not hand-wrapped in single quotes --
+    # confirmed a literal single quote in the path (e.g. from an unusual
+    # TMPDIR on this already-nonstandard runner) breaks the naive
+    # '${gh_curl_config}' form with a syntax error when the trap fires,
+    # since the trap string is re-parsed as shell code at that point, not
+    # just substituted literally.
+    printf -v quoted_gh_curl_config '%q' "${gh_curl_config}"
+    trap "rm -f ${quoted_gh_curl_config}" RETURN EXIT
     chmod 600 "${gh_curl_config}"
     printf 'header = "Authorization: Bearer %s"\n' "${GH_TOKEN}" > "${gh_curl_config}"
 

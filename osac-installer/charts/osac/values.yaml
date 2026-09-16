@@ -34,7 +34,7 @@ global:
     maas:
       enabled: true
 
-cliImage: quay.io/openshift/origin-cli:4.20.0
+cliImage: quay.io/osac-project/ci-cli:latest
 
 # Shared PostgreSQL host for the db-init hook.
 dbInit:

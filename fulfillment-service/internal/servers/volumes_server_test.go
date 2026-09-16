@@ -164,6 +164,10 @@ var _ = Describe("Public volumes server", func() {
 			// Status state is visible; the private server stamped CREATING.
 			Expect(object.GetStatus().GetState()).
 				To(Equal(publicv1.VolumeState_VOLUME_STATE_CREATING))
+
+			// The internal routing fields (provider, protocol, hub, vendor_volume_id) are not part of
+			// the public Volume type at all, so they cannot leak. This is enforced at compile time by
+			// publicv1.VolumeStatus only exposing state and message.
 		})
 
 		It("Returns an error getting a volume that does not exist", func() {

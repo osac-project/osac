@@ -28,8 +28,10 @@ import (
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
-// VolumesServerBuilder configures and constructs a VolumesServer. Use NewVolumesServer to create
-// one.
+// VolumesServer is the public, read-only Volume API. It exposes only List and Get; volume
+// lifecycle (create, update, delete) remains on the private API. It delegates to the
+// PrivateVolumesServer, which enforces tenant scoping, and maps private Volumes to their public
+// representation, dropping internal routing fields (provider, protocol, hub, vendor_volume_id).
 type VolumesServerBuilder struct {
 	logger            *slog.Logger
 	notifier          events.Notifier

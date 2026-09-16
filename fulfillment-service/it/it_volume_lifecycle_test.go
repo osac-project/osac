@@ -24,6 +24,7 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/annotations"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
@@ -42,12 +43,14 @@ var _ = Describe("Volume lifecycle", func() {
 		volumesClient         privatev1.VolumesClient
 		storageBackendsClient privatev1.StorageBackendsClient
 		storageTiersClient    privatev1.StorageTiersClient
+		projectsClient        privatev1.ProjectsClient
 
 		kubeClient crclient.Client
 
 		backendId string
 		tierId    string
 		tierName  string
+		project   string
 	)
 
 	// "users" is a tenant the test tool provisions and waits for SYNCED
@@ -62,7 +65,26 @@ var _ = Describe("Volume lifecycle", func() {
 		volumesClient = privatev1.NewVolumesClient(tool.InternalView().AdminConn())
 		storageBackendsClient = privatev1.NewStorageBackendsClient(tool.InternalView().AdminConn())
 		storageTiersClient = privatev1.NewStorageTiersClient(tool.InternalView().AdminConn())
+		projectsClient = privatev1.NewProjectsClient(tool.InternalView().AdminConn())
 		kubeClient = tool.KubeClient()
+
+		project = fmt.Sprintf("test-volume-project-%s", uuid.New()[24:32])
+		projectResp, err := projectsClient.Create(ctx,
+			privatev1.ProjectsCreateRequest_builder{
+				Object: privatev1.Project_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:   project,
+						Tenant: testTenant,
+					}.Build(),
+					Spec: privatev1.ProjectSpec_builder{
+						Title: "Volume integration project",
+					}.Build(),
+				}.Build(),
+			}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func() {
+			deleteProject(ctx, projectsClient, projectResp.GetObject().GetId())
+		})
 
 		// --- Seed a StorageBackend (global admin resource, no tenant) ---
 		backendName := fmt.Sprintf("test-backend-%s", uuid.New()[24:32])
@@ -135,8 +157,9 @@ var _ = Describe("Volume lifecycle", func() {
 			privatev1.VolumesCreateRequest_builder{
 				Object: privatev1.Volume_builder{
 					Metadata: privatev1.Metadata_builder{
-						Name:   volName,
-						Tenant: testTenant,
+						Name:    volName,
+						Tenant:  testTenant,
+						Project: project,
 					}.Build(),
 					Spec: privatev1.VolumeSpec_builder{
 						StorageTier: tierName,
@@ -166,6 +189,7 @@ var _ = Describe("Volume lifecycle", func() {
 		Expect(vol.GetStatus().GetState()).To(Equal(privatev1.VolumeState_VOLUME_STATE_CREATING))
 		Expect(vol.GetStatus().GetBackend()).To(Equal("test-provider"))
 		Expect(vol.GetStatus().GetProtocol()).To(Equal(privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK))
+		Expect(vol.GetMetadata().GetProject()).To(Equal(project))
 
 		// 2b. VERIFY hub is assigned asynchronously by the reconciler (selectHub → SetHub).
 		Eventually(func(g Gomega) {
@@ -193,6 +217,8 @@ var _ = Describe("Volume lifecycle", func() {
 			g.Expect(cr.Spec.StorageTier).To(Equal(tierName))
 			g.Expect(cr.Spec.SizeGiB).To(Equal(int64(10)))
 			g.Expect(string(cr.Spec.AccessMode)).To(ContainSubstring("ReadWriteOnce"))
+			g.Expect(cr.GetAnnotations()).To(HaveKeyWithValue(annotations.Tenant, testTenant))
+			g.Expect(cr.GetAnnotations()).To(HaveKeyWithValue(annotations.Project, project))
 		}, time.Minute, time.Second).Should(Succeed())
 
 		// 4. FEEDBACK — simulate controller updating status to AVAILABLE

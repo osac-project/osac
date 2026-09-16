@@ -87,6 +87,7 @@ func TestCreateVolumeMapsRequestAndResponse(t *testing.T) {
 
 	info, err := c.CreateVolume(context.Background(), CreateVolumeParams{
 		Tenant:     "tenant-a",
+		Project:    "project-a",
 		Tier:       "gold",
 		SizeBytes:  5 * bytesPerGiB,
 		AccessMode: "SINGLE_NODE_WRITER",
@@ -103,6 +104,9 @@ func TestCreateVolumeMapsRequestAndResponse(t *testing.T) {
 	}
 	if got := gotObj.GetMetadata().GetTenant(); got != "tenant-a" {
 		t.Errorf("metadata.tenant = %q, want %q", got, "tenant-a")
+	}
+	if got := gotObj.GetMetadata().GetProject(); got != "project-a" {
+		t.Errorf("metadata.project = %q, want %q", got, "project-a")
 	}
 	if got := gotObj.GetSpec().GetStorageTier(); got != "gold" {
 		t.Errorf("spec.storage_tier = %q, want %q", got, "gold")
@@ -166,6 +170,22 @@ func TestListVolumesBuildsNameFilter(t *testing.T) {
 	}
 	if infos[0].State != VolumeStateAvailable {
 		t.Errorf("State = %q, want AVAILABLE", infos[0].State)
+	}
+}
+
+func TestListVolumesBuildsProjectFilterIncludingDefaultProject(t *testing.T) {
+	project := ""
+	fake := &fakeVolumesClient{listResp: &privatev1.VolumesListResponse{}}
+	c := &grpcVolumeClient{client: fake}
+
+	if _, err := c.ListVolumes(context.Background(), ListVolumesParams{
+		NameFilter:    "pvc-abc",
+		ProjectFilter: &project,
+	}); err != nil {
+		t.Fatalf("ListVolumes error: %v", err)
+	}
+	if got, want := fake.listReq.GetFilter(), `this.metadata.name == "pvc-abc" && this.metadata.project == ""`; got != want {
+		t.Errorf("filter = %q, want %q", got, want)
 	}
 }
 

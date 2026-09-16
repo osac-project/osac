@@ -190,7 +190,8 @@ func (t *task) update(ctx context.Context) error {
 					labels.VolumeUuid: t.volume.GetId(),
 				},
 				Annotations: map[string]string{
-					annotations.Tenant: t.volume.GetMetadata().GetTenant(),
+					annotations.Tenant:  t.volume.GetMetadata().GetTenant(),
+					annotations.Project: t.volume.GetMetadata().GetProject(),
 				},
 			},
 			Spec: spec,

@@ -15,3 +15,6 @@ package annotations
 
 // Tenant is the annotation key for tenant information on all OSAC resources.
 const Tenant = "osac.openshift.io/tenant"
+
+// Project is the annotation key for project information on all OSAC resources.
+const Project = "osac.openshift.io/project"

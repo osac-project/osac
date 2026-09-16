@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -35,15 +36,17 @@ func NewVolumeClient(conn grpc.ClientConnInterface) VolumeClient {
 
 // CreateVolume creates a volume through the fulfillment service. It sets
 // metadata.name to the CSI volume name (the PVC ref) so a retried CreateVolume
-// for the same PVC can be resolved via ListVolumes, and metadata.tenant so the
-// server scopes the volume to the requesting tenant. The server rejects an
-// UNSPECIFIED access mode or a non-positive size, so those surface as
-// InvalidArgument to the caller. gRPC status codes (notably AlreadyExists) are
-// propagated unchanged for the controller's idempotency handling.
+// for the same PVC can be resolved via ListVolumes, and metadata.tenant and
+// metadata.project so the server scopes the volume to the requesting tenant and
+// project. The server rejects an UNSPECIFIED access mode or a non-positive size,
+// so those surface as InvalidArgument to the caller. gRPC status codes (notably
+// AlreadyExists) are propagated unchanged for the controller's idempotency
+// handling.
 func (c *grpcVolumeClient) CreateVolume(ctx context.Context, params CreateVolumeParams) (*VolumeInfo, error) {
 	md := &privatev1.Metadata{}
 	md.SetName(params.PVCRef)
 	md.SetTenant(params.Tenant)
+	md.SetProject(params.Project)
 
 	spec := &privatev1.VolumeSpec{}
 	spec.SetStorageTier(params.Tier)
@@ -85,15 +88,22 @@ func (c *grpcVolumeClient) GetVolume(ctx context.Context, volumeID string) (*Vol
 	return volumeToInfo(resp.GetObject()), nil
 }
 
-// ListVolumes lists volumes, optionally filtering by metadata.name. The name
-// filter is used by the controller to resolve a volume created by a previous
-// (retried) CreateVolume call.
+// ListVolumes lists volumes, optionally filtering by metadata.name and
+// metadata.project. The filters are used by the controller to resolve a
+// volume created by a previous (retried) CreateVolume call.
 func (c *grpcVolumeClient) ListVolumes(ctx context.Context, params ListVolumesParams) ([]*VolumeInfo, error) {
 	req := &privatev1.VolumesListRequest{}
+	filters := make([]string, 0, 2)
 	if params.NameFilter != "" {
-		// CEL filter expression evaluated server-side (see fulfillment-service
-		// generic DAO filter language).
-		req.SetFilter(fmt.Sprintf("this.metadata.name == %q", params.NameFilter))
+		filters = append(filters, fmt.Sprintf("this.metadata.name == %q", params.NameFilter))
+	}
+	if params.ProjectFilter != nil {
+		filters = append(filters, fmt.Sprintf("this.metadata.project == %q", *params.ProjectFilter))
+	}
+	if len(filters) > 0 {
+		// CEL filter expressions are evaluated server-side (see
+		// fulfillment-service generic DAO filter language).
+		req.SetFilter(strings.Join(filters, " && "))
 	}
 
 	resp, err := c.client.List(ctx, req)

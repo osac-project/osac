@@ -75,6 +75,7 @@ func (c *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 	if tenant == "" {
 		tenant = "default"
 	}
+	project := req.GetParameters()["project"]
 
 	var sizeBytes int64
 	if cr := req.GetCapacityRange(); cr != nil {
@@ -93,6 +94,7 @@ func (c *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 
 	params := fulfillment.CreateVolumeParams{
 		Tenant:     tenant,
+		Project:    project,
 		Tier:       tier,
 		SizeBytes:  sizeBytes,
 		AccessMode: accessMode,
@@ -105,7 +107,7 @@ func (c *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 		st, ok := status.FromError(err)
 		if ok && st.Code() == codes.AlreadyExists {
 			klog.Infof("Volume %q already exists, resolving via ListVolumes", req.GetName())
-			vol, err = c.resolveExistingVolume(ctx, req.GetName())
+			vol, err = c.resolveExistingVolume(ctx, req.GetName(), project)
 			if err != nil {
 				return nil, err
 			}
@@ -399,8 +401,11 @@ func (c *ControllerServer) ControllerGetCapabilities(_ context.Context, _ *csi.C
 	}, nil
 }
 
-func (c *ControllerServer) resolveExistingVolume(ctx context.Context, name string) (*fulfillment.VolumeInfo, error) {
-	volumes, err := c.volumes.ListVolumes(ctx, fulfillment.ListVolumesParams{NameFilter: name})
+func (c *ControllerServer) resolveExistingVolume(ctx context.Context, name, project string) (*fulfillment.VolumeInfo, error) {
+	volumes, err := c.volumes.ListVolumes(ctx, fulfillment.ListVolumesParams{
+		NameFilter:    name,
+		ProjectFilter: &project,
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to list volumes: %v", err)
 	}
@@ -409,8 +414,8 @@ func (c *ControllerServer) resolveExistingVolume(ctx context.Context, name strin
 			return v, nil
 		}
 	}
-	return nil, status.Errorf(codes.Internal,
-		"volume %q reported as existing but not found via list", name)
+	return nil, status.Errorf(codes.AlreadyExists,
+		"volume %q already exists with a different project", name)
 }
 
 func capacityCompatible(volBytes int64, cr *csi.CapacityRange) bool {

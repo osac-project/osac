@@ -42,7 +42,7 @@ type BareMetalInstanceCatalogItemsServer struct {
 	publicv1.UnimplementedBareMetalInstanceCatalogItemsServer
 
 	logger    *slog.Logger
-	delegate  privatev1.BareMetalInstanceCatalogItemsServer
+	delegate  *PrivateBareMetalInstanceCatalogItemsServer
 	inMapper  *GenericMapper[*publicv1.BareMetalInstanceCatalogItem, *privatev1.BareMetalInstanceCatalogItem]
 	outMapper *GenericMapper[*privatev1.BareMetalInstanceCatalogItem, *publicv1.BareMetalInstanceCatalogItem]
 }
@@ -236,12 +236,29 @@ func (s *BareMetalInstanceCatalogItemsServer) Update(ctx context.Context,
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object identifier is mandatory")
 		return
 	}
+	if request.GetLock() && publicCatalogItem.GetMetadata() == nil {
+		return nil, grpcstatus.Errorf(grpccodes.Aborted, "object with identifier '%s' has no requested version", id)
+	}
 
 	privateCatalogItem := &privatev1.BareMetalInstanceCatalogItem{}
 	err = s.inMapper.Copy(ctx, publicCatalogItem, privateCatalogItem)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to map public bare metal instance catalog item to private", slog.Any("error", err))
 		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process bare metal instance catalog item")
+	}
+
+	if request.GetUpdateMask() == nil {
+		// Preserve private metadata under a row lock so a concurrent finalizer update cannot be lost.
+		current, err := getLockedReferenceResource(ctx, s.delegate.generic.dao, id)
+		if err != nil {
+			return nil, resourceLookupError(err, "catalog item", id, "", grpccodes.NotFound)
+		}
+		metadata := cloneMessage(current.GetMetadata())
+		if privateCatalogItem.GetMetadata() == nil {
+			privateCatalogItem.SetMetadata(metadata)
+		} else {
+			privateCatalogItem.GetMetadata().SetFinalizers(metadata.GetFinalizers())
+		}
 	}
 
 	privateRequest := &privatev1.BareMetalInstanceCatalogItemsUpdateRequest{}

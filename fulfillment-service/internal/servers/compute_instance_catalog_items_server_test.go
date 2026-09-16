@@ -78,6 +78,51 @@ var _ = Describe("Compute instance catalog items server", func() {
 			Expect(seedComputeCatalogItemTemplate(ctx, auth.SharedTenant, "", "my-ci-shared-template-id")).To(Succeed())
 		})
 
+		DescribeTable("preserves private metadata on mask-less public updates", func(omitMetadata, lock, stale bool) {
+			created, err := server.delegate.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
+				Object: privatev1.ComputeInstanceCatalogItem_builder{
+					Metadata: privatev1.Metadata_builder{Name: "preserve-finalizers", Finalizers: []string{"cleanup"}}.Build(),
+					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+					Title:    "Original", Published: true,
+				}.Build(),
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			object := publicv1.ComputeInstanceCatalogItem_builder{
+				Id: created.GetObject().GetId(), Title: "Updated", Published: false,
+				Template: publicv1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+			}.Build()
+			if !omitMetadata {
+				version := created.GetObject().GetMetadata().GetVersion()
+				if stale {
+					version--
+				}
+				object.SetMetadata(publicv1.Metadata_builder{Name: "preserve-finalizers", Version: version}.Build())
+			}
+			_, err = server.Update(ctx, publicv1.ComputeInstanceCatalogItemsUpdateRequest_builder{Object: object, Lock: lock}.Build())
+			rejected := lock && (stale || omitMetadata)
+			if rejected {
+				Expect(status.Code(err)).To(Equal(codes.Aborted))
+			} else {
+				Expect(err).NotTo(HaveOccurred())
+			}
+			stored, err := server.delegate.Get(ctx, privatev1.ComputeInstanceCatalogItemsGetRequest_builder{Id: object.GetId()}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(stored.GetObject().GetMetadata().GetFinalizers()).To(Equal([]string{"cleanup"}))
+			if rejected {
+				Expect(stored.GetObject().GetTitle()).To(Equal("Original"))
+				Expect(stored.GetObject().GetPublished()).To(BeTrue())
+			} else {
+				Expect(stored.GetObject().GetTitle()).To(Equal("Updated"))
+				Expect(stored.GetObject().GetPublished()).To(BeFalse())
+			}
+		},
+			Entry("metadata supplied", false, false, false),
+			Entry("metadata omitted", true, false, false),
+			Entry("matching version", false, true, false),
+			Entry("stale version", false, true, true),
+			Entry("missing version", true, true, false),
+		)
+
 		It("Creates object", func() {
 			response, err := server.Create(ctx, publicv1.ComputeInstanceCatalogItemsCreateRequest_builder{
 				Object: publicv1.ComputeInstanceCatalogItem_builder{

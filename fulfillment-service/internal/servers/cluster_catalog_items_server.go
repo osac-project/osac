@@ -42,7 +42,7 @@ type ClusterCatalogItemsServer struct {
 	publicv1.UnimplementedClusterCatalogItemsServer
 
 	logger    *slog.Logger
-	delegate  privatev1.ClusterCatalogItemsServer
+	delegate  *PrivateClusterCatalogItemsServer
 	inMapper  *GenericMapper[*publicv1.ClusterCatalogItem, *privatev1.ClusterCatalogItem]
 	outMapper *GenericMapper[*privatev1.ClusterCatalogItem, *publicv1.ClusterCatalogItem]
 }
@@ -225,12 +225,29 @@ func (s *ClusterCatalogItemsServer) Update(ctx context.Context,
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object identifier is mandatory")
 		return
 	}
+	if request.GetLock() && publicCatalogItem.GetMetadata() == nil {
+		return nil, grpcstatus.Errorf(grpccodes.Aborted, "object with identifier '%s' has no requested version", id)
+	}
 
 	privateCatalogItem := &privatev1.ClusterCatalogItem{}
 	err = s.inMapper.Copy(ctx, publicCatalogItem, privateCatalogItem)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to map public cluster catalog item to private", slog.Any("error", err))
 		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process cluster catalog item")
+	}
+
+	if request.GetUpdateMask() == nil {
+		// Preserve private metadata under a row lock so a concurrent finalizer update cannot be lost.
+		current, err := getLockedReferenceResource(ctx, s.delegate.generic.dao, id)
+		if err != nil {
+			return nil, resourceLookupError(err, "catalog item", id, "", grpccodes.NotFound)
+		}
+		metadata := cloneMessage(current.GetMetadata())
+		if privateCatalogItem.GetMetadata() == nil {
+			privateCatalogItem.SetMetadata(metadata)
+		} else {
+			privateCatalogItem.GetMetadata().SetFinalizers(metadata.GetFinalizers())
+		}
 	}
 
 	privateRequest := &privatev1.ClusterCatalogItemsUpdateRequest{}

@@ -80,6 +80,13 @@ var _ = DescribeMigration("Typed catalog policy reverse references", func() {
 				var pgError *pgconn.PgError
 				Expect(errors.As(err, &pgError)).To(BeTrue())
 				Expect(pgError.Code).To(Equal("Z0003"))
+				if tc.target == "disk_images" {
+					referrer := map[string]string{
+						"compute_instance_catalog_items":    "compute instance catalog item",
+						"bare_metal_instance_catalog_items": "bare metal instance catalog item",
+					}[tc.catalog]
+					Expect(pgError.Message).To(ContainSubstring("at least one "+referrer), "%s %s", tc.catalog, branch)
+				}
 				_, err = conn.Exec(ctx, fmt.Sprintf("update %s set deletion_timestamp = now() where id = 'catalog'", tc.catalog))
 				Expect(err).ToNot(HaveOccurred())
 				_, err = conn.Exec(ctx, fmt.Sprintf("update %s set deletion_timestamp = now() where id = 'target'", tc.target))
@@ -161,6 +168,14 @@ var _ = DescribeMigration("Typed catalog policy reverse references", func() {
 			var pgError *pgconn.PgError
 			Expect(errors.As(err, &pgError)).To(BeTrue(), tc.name)
 			Expect(pgError.Code).To(Equal("Z0003"), tc.name)
+			if tc.targetTable == "disk_images" {
+				referrer := map[string]string{
+					"compute_instances":          "compute instance",
+					"compute_instance_templates": "compute instance template",
+					"bare_metal_instances":       "bare metal instance",
+				}[tc.referenceTable]
+				Expect(pgError.Message).To(ContainSubstring("at least one "+referrer), tc.name)
+			}
 
 			_, err = conn.Exec(ctx, fmt.Sprintf("update %s set deletion_timestamp = now() where id = $1", tc.referenceTable), "reference-"+id)
 			Expect(err).ToNot(HaveOccurred())

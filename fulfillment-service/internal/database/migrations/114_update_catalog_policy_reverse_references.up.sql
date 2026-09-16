@@ -110,22 +110,46 @@ begin
     select 1 from compute_instances
     where deletion_timestamp = 'epoch'
       and data->'spec'->'disk_image'->>'id' = old.id
-  ) or exists (
+  ) then
+    raise exception using
+      errcode = 'Z0003',
+      message = format('cannot delete disk image ''%s'': it is in use by at least one compute instance', old.id);
+  end if;
+
+  if exists (
     select 1 from compute_instance_templates
     where deletion_timestamp = 'epoch'
       and data->'spec_defaults'->'disk_image'->>'id' = old.id
-  ) or exists (
+  ) then
+    raise exception using
+      errcode = 'Z0003',
+      message = format('cannot delete disk image ''%s'': it is in use by at least one compute instance template', old.id);
+  end if;
+
+  if exists (
     select 1 from bare_metal_instances
     where deletion_timestamp = 'epoch'
       and data->'spec'->'disk_image'->>'id' = old.id
-  ) or exists (
+  ) then
+    raise exception using
+      errcode = 'Z0003',
+      message = format('cannot delete disk image ''%s'': it is in use by at least one bare metal instance', old.id);
+  end if;
+
+  if exists (
     select 1 from compute_instance_catalog_items c
     where c.deletion_timestamp = 'epoch'
       and (
         c.data->'fields'->'disk_image'->'locked'->>'id' = old.id
         or c.data->'fields'->'disk_image'->'editable'->'default_value'->>'id' = old.id
       )
-  ) or exists (
+  ) then
+    raise exception using
+      errcode = 'Z0003',
+      message = format('cannot delete disk image ''%s'': it is in use by at least one compute instance catalog item', old.id);
+  end if;
+
+  if exists (
     select 1 from bare_metal_instance_catalog_items c
     where c.deletion_timestamp = 'epoch'
       and (
@@ -135,7 +159,7 @@ begin
   ) then
     raise exception using
       errcode = 'Z0003',
-      message = format('cannot delete disk image ''%s'': it is in use by an active resource or catalog policy', old.id);
+      message = format('cannot delete disk image ''%s'': it is in use by at least one bare metal instance catalog item', old.id);
   end if;
 
   return new;

@@ -452,12 +452,6 @@ var _ = Describe("Private compute instances server", func() {
 			Expect(response.GetObject().GetSpec().GetUserDataSecret().GetName()).To(Equal(secret.GetMetadata().GetName()))
 		})
 
-		// Storage tier reference validation is now handled by the reference validator
-		// interceptor at the gRPC layer (StorageTierReference is registered in
-		// reference_lookups.go). These unit tests exercise the server directly without the
-		// interceptor chain, so invalid reference names are accepted at this level.
-		// Integration tests verify that the interceptor rejects nonexistent storage tiers.
-
 		It("Creates object with additional disks", func() {
 			createTemplate("general.small")
 
@@ -1026,6 +1020,69 @@ var _ = Describe("Private compute instances server", func() {
 			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
 			Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("subnet"))
 		})
+
+		DescribeTable("validates final storage tiers for direct-template creation", func(state string, additional, inherited bool, expected grpccodes.Code) {
+			createTemplate("storage-validation-template")
+			ref := privatev1.StorageTierReference_builder{Name: "missing-tier"}.Build()
+			if state != "missing" {
+				tier, err := server.storageTiersDao.Create().SetObject(privatev1.StorageTier_builder{
+					Metadata: privatev1.Metadata_builder{Name: "validated-tier", Tenant: auth.SharedTenant, Finalizers: []string{"keep"}}.Build(),
+					Status:   privatev1.StorageTierStatus_builder{State: privatev1.StorageTierState_STORAGE_TIER_STATE_ACTIVE}.Build(),
+				}.Build()).Do(ctx)
+				Expect(err).NotTo(HaveOccurred())
+				switch state {
+				case "deleted":
+					_, err = server.storageTiersDao.Delete().SetId(tier.GetObject().GetId()).Do(ctx)
+					Expect(err).NotTo(HaveOccurred())
+				case "inactive":
+					tier.GetObject().GetStatus().SetState(privatev1.StorageTierState_STORAGE_TIER_STATE_UNSPECIFIED)
+					_, err = server.storageTiersDao.Update().SetObject(tier.GetObject()).Do(ctx)
+					Expect(err).NotTo(HaveOccurred())
+				}
+				ref.SetName("validated-tier")
+			}
+			disk := privatev1.ComputeInstanceDisk_builder{SizeGib: proto.Int32(20), StorageTier: ref}.Build()
+			spec := privatev1.ComputeInstanceSpec_builder{
+				Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "storage-validation-template"}.Build(),
+				NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+					privatev1.ComputeNetworkAttachment_builder{Subnet: privatev1.SubnetLocalReference_builder{Id: "test-subnet"}.Build()}.Build(),
+				},
+			}.Build()
+			if inherited {
+				template, err := server.templatesDao.Get().SetId("storage-validation-template").Do(ctx)
+				Expect(err).NotTo(HaveOccurred())
+				template.GetObject().GetSpecDefaults().SetBootDisk(disk)
+				_, err = server.templatesDao.Update().SetObject(template.GetObject()).Do(ctx)
+				Expect(err).NotTo(HaveOccurred())
+			} else if additional {
+				spec.SetAdditionalDisks([]*privatev1.ComputeInstanceDisk{disk})
+			} else {
+				spec.SetBootDisk(disk)
+			}
+			response, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
+				Object: privatev1.ComputeInstance_builder{Metadata: privatev1.Metadata_builder{Name: "validate-tier-vm"}.Build(), Spec: spec}.Build(),
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(expected))
+			if expected == grpccodes.OK {
+				Expect(response.GetObject().GetSpec().GetBootDisk().GetStorageTier().GetId()).NotTo(BeEmpty())
+				Expect(response.GetObject().GetSpec().GetBootDisk().GetStorageTier().GetName()).To(Equal("validated-tier"))
+			} else {
+				stored, err := server.List(ctx, privatev1.ComputeInstancesListRequest_builder{Filter: new("this.metadata.name == 'validate-tier-vm'")}.Build())
+				Expect(err).NotTo(HaveOccurred())
+				Expect(stored.GetItems()).To(BeEmpty())
+			}
+		},
+			Entry("missing boot tier", "missing", false, false, grpccodes.NotFound),
+			Entry("deleted boot tier", "deleted", false, false, grpccodes.InvalidArgument),
+			Entry("inactive boot tier", "inactive", false, false, grpccodes.FailedPrecondition),
+			Entry("missing additional tier", "missing", true, false, grpccodes.NotFound),
+			Entry("deleted additional tier", "deleted", true, false, grpccodes.InvalidArgument),
+			Entry("inactive additional tier", "inactive", true, false, grpccodes.FailedPrecondition),
+			Entry("missing inherited tier", "missing", false, true, grpccodes.NotFound),
+			Entry("deleted inherited tier", "deleted", false, true, grpccodes.InvalidArgument),
+			Entry("inactive inherited tier", "inactive", false, true, grpccodes.FailedPrecondition),
+			Entry("canonicalizes an active inherited tier", "active", false, true, grpccodes.OK),
+		)
 
 		It("Applies template spec defaults when user omits spec fields", func() {
 			createTemplate("defaults-template")
@@ -3622,11 +3679,11 @@ var _ = Describe("Catalog materialized defaults", func() {
 			} else {
 				instance.GetSpec().SetBootDisk(disk)
 			}
-			Expect(server.validateCatalogItemStorageTiers(ctx, instance)).To(Succeed())
+			Expect(server.validateStorageTiers(ctx, instance)).To(Succeed())
 			tier.GetStatus().SetState(privatev1.StorageTierState_STORAGE_TIER_STATE_UNSPECIFIED)
 			_, err = server.storageTiersDao.Update().SetObject(tier).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
-			Expect(server.validateCatalogItemStorageTiers(ctx, instance)).ToNot(Succeed())
+			Expect(server.validateStorageTiers(ctx, instance)).ToNot(Succeed())
 			tier.GetStatus().SetState(privatev1.StorageTierState_STORAGE_TIER_STATE_ACTIVE)
 			_, err = server.storageTiersDao.Update().SetObject(tier).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())

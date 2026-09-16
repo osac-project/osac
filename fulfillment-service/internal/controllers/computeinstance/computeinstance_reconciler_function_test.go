@@ -24,8 +24,6 @@ import (
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -47,7 +45,6 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/gvks"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
-	"github.com/osac-project/osac/fulfillment-service/internal/masks"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -568,69 +565,6 @@ func newTaskForDelete(ciID, hubID string, hubCache controllers.HubCache) *task {
 		computeInstance: ci,
 	}
 }
-
-var _ = Describe("finalizer conflicts", func() {
-	var (
-		client *MockComputeInstancesClient
-		r      *function
-	)
-
-	BeforeEach(func() {
-		ctrl := gomock.NewController(GinkgoT())
-		DeferCleanup(ctrl.Finish)
-		client = NewMockComputeInstancesClient(ctrl)
-		r = &function{logger: logger, computeInstancesClient: client, maskCalculator: masks.NewCalculator().Build()}
-	})
-
-	DescribeTable("preserves concurrent finalizers after rereading the instance", func(deleting bool) {
-		initial := privatev1.ComputeInstance_builder{
-			Id:       "instance",
-			Metadata: privatev1.Metadata_builder{Version: 1}.Build(),
-		}.Build()
-		if deleting {
-			initial.GetMetadata().SetFinalizers([]string{finalizers.Controller})
-			initial.GetMetadata().SetDeletionTimestamp(timestamppb.Now())
-		}
-		fresh := proto.Clone(initial).(*privatev1.ComputeInstance)
-		fresh.GetMetadata().SetVersion(2)
-		fresh.GetMetadata().SetFinalizers(append(fresh.GetMetadata().GetFinalizers(), "another-controller"))
-		gomock.InOrder(
-			client.EXPECT().Update(gomock.Any(), gomock.Any()).DoAndReturn(
-				func(_ context.Context, request *privatev1.ComputeInstancesUpdateRequest, _ ...grpc.CallOption) (*privatev1.ComputeInstancesUpdateResponse, error) {
-					Expect(request.GetLock()).To(BeTrue())
-					Expect(request.GetObject().GetMetadata().GetVersion()).To(Equal(int32(1)))
-					return nil, status.Error(codes.Aborted, "concurrent update")
-				}),
-			client.EXPECT().Get(gomock.Any(), gomock.Any()).Return(privatev1.ComputeInstancesGetResponse_builder{Object: fresh}.Build(), nil),
-			client.EXPECT().Update(gomock.Any(), gomock.Any()).DoAndReturn(
-				func(_ context.Context, request *privatev1.ComputeInstancesUpdateRequest, _ ...grpc.CallOption) (*privatev1.ComputeInstancesUpdateResponse, error) {
-					expected := []string{"another-controller"}
-					if !deleting {
-						expected = append(expected, finalizers.Controller)
-					}
-					actual := request.GetObject().GetMetadata()
-					Expect(request.GetLock()).To(BeTrue())
-					Expect(actual.GetVersion()).To(Equal(int32(2)))
-					Expect(actual.GetFinalizers()).To(ConsistOf(expected))
-					Expect(proto.Equal(actual.GetDeletionTimestamp(), fresh.GetMetadata().GetDeletionTimestamp())).To(BeTrue())
-					return privatev1.ComputeInstancesUpdateResponse_builder{Object: request.GetObject()}.Build(), nil
-				}),
-		)
-		Expect(r.run(context.Background(), initial)).To(Succeed())
-	},
-		Entry("adding the controller finalizer", false),
-		Entry("removing the controller finalizer", true),
-	)
-
-	It("stops retrying after three conflicting updates", func() {
-		object := privatev1.ComputeInstance_builder{Id: "instance", Metadata: privatev1.Metadata_builder{Version: 1}.Build()}.Build()
-		client.EXPECT().Update(gomock.Any(), gomock.Any()).Return(nil, status.Error(codes.Aborted, "conflict")).Times(3)
-		client.EXPECT().Get(gomock.Any(), gomock.Any()).DoAndReturn(func(context.Context, *privatev1.ComputeInstancesGetRequest, ...grpc.CallOption) (*privatev1.ComputeInstancesGetResponse, error) {
-			return privatev1.ComputeInstancesGetResponse_builder{Object: privatev1.ComputeInstance_builder{Id: "instance", Metadata: privatev1.Metadata_builder{Version: 2}.Build()}.Build()}.Build(), nil
-		}).Times(2)
-		Expect(status.Code(r.run(context.Background(), object))).To(Equal(codes.Aborted))
-	})
-})
 
 var _ = Describe("delete", func() {
 	const (

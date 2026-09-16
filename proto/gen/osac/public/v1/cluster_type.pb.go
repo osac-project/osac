@@ -311,7 +311,8 @@ type ClusterSpec struct {
 	state protoimpl.MessageState `protogen:"hybrid.v1"`
 	// Reference to the cluster template. Either `template` or `catalog_item` is required on create.
 	//
-	// Mutually exclusive with `catalog_item`.
+	// Mutually exclusive with `catalog_item` on Create. For catalog-created clusters, the server
+	// populates this reference from the catalog item.
 	//
 	// This can't be modified after the cluster is created.
 	Template *ClusterTemplateReference `protobuf:"bytes,1,opt,name=template,proto3" json:"template,omitempty"`
@@ -683,7 +684,8 @@ type ClusterSpec_builder struct {
 
 	// Reference to the cluster template. Either `template` or `catalog_item` is required on create.
 	//
-	// Mutually exclusive with `catalog_item`.
+	// Mutually exclusive with `catalog_item` on Create. For catalog-created clusters, the server
+	// populates this reference from the catalog item.
 	//
 	// This can't be modified after the cluster is created.
 	Template *ClusterTemplateReference

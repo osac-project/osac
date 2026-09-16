@@ -270,25 +270,6 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	c.catalogItemsClient = publicv1.NewComputeInstanceCatalogItemsClient(conn)
 	c.computeInstancesClient = publicv1.NewComputeInstancesClient(conn)
 
-	if c.args.instanceType != "" {
-		instanceTypesClient := publicv1.NewInstanceTypesClient(conn)
-		instanceType, err := lookup.Find(c.args.instanceType, "instance type",
-			func(filter string, limit int32) ([]*publicv1.InstanceType, error) {
-				response, err := instanceTypesClient.List(ctx, publicv1.InstanceTypesListRequest_builder{
-					Filter: proto.String(filter),
-					Limit:  proto.Int32(limit),
-				}.Build())
-				if err != nil {
-					return nil, fmt.Errorf("failed to list instance types: %w", err)
-				}
-				return response.GetItems(), nil
-			})
-		if err != nil {
-			return err
-		}
-		c.args.instanceType = instanceType.GetId()
-	}
-
 	if c.args.catalogItem != "" {
 		// Catalog item path: resolve an ID or visible name, then skip template lookup (per D-04).
 		catalogItem, err := lookup.Find(c.args.catalogItem, "compute instance catalog item",
@@ -1125,8 +1106,7 @@ times.
 
 const instanceTypeFlagHelp = `
 _ID_OR_NAME_ - Instance type identifier or name. Specifies the compute resource
-configuration for this instance. If a name matches more than one visible type,
-use its identifier.
+configuration for this instance. Instance type identifiers are their names.
 `
 
 const diskImageFlagHelp = `

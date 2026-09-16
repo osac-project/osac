@@ -403,16 +403,14 @@ func (s *PrivateComputeInstancesServer) prepareCreate(ctx context.Context, candi
 		return
 	}
 	warnings = append(warnings, diskImageWarnings...)
-	if spec.GetCatalogItem() != nil {
-		err = s.validateCatalogItemStorageTiers(ctx, candidate)
-	}
+	err = s.validateStorageTiers(ctx, candidate)
 	return
 }
 
-// validateCatalogItemStorageTiers checks tiers copied from Catalog disk policies after the
-// final disk list is known. It stores each tier's actual ID and name and rejects inactive
+// validateStorageTiers checks all disk tiers after Catalog policies and Template defaults
+// have been applied. It stores each tier's actual ID and name and rejects inactive
 // tiers; volume provisioning chooses the backend later.
-func (s *PrivateComputeInstancesServer) validateCatalogItemStorageTiers(ctx context.Context, instance *privatev1.ComputeInstance) error {
+func (s *PrivateComputeInstancesServer) validateStorageTiers(ctx context.Context, instance *privatev1.ComputeInstance) error {
 	spec := instance.GetSpec()
 	disks := append([]*privatev1.ComputeInstanceDisk{spec.GetBootDisk()}, spec.GetAdditionalDisks()...)
 	for _, disk := range disks {

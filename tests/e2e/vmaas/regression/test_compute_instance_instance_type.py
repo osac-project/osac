@@ -242,6 +242,6 @@ def test_compute_instance_obsolete_instance_type(
             pytest.fail(f"ComputeInstance CR {ci_name} leaked but UUID could not be parsed from output: {output}")
     assert rc != 0, f"create with OBSOLETE instance type should be rejected, got: {output}"
     error_lower = output.lower()
-    assert any(term in error_lower for term in ["obsolete", "rejected", "failedprecondition", "409", "conflict"]), (
-        f"Expected rejection error for obsolete instance type, got: {output}"
+    assert "obsolete" in error_lower and "failedprecondition" in error_lower, (
+        f"Expected FailedPrecondition for obsolete instance type, got: {output}"
     )

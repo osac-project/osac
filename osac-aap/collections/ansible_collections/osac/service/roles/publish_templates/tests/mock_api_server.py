@@ -1,11 +1,10 @@
 """Minimal mock HTTP server for publish_templates role tests.
 
 Simulates the fulfillment-service private API list/create/update endpoints
-for cluster_templates, compute_instance_templates, and baremetal_instance_templates.
-Any path not explicitly listed here falls back to the scenario's default response, so
-new endpoints (e.g. a new template type) work against the "empty"/"no_items_key"
-scenarios automatically -- only "populated" needs an explicit entry to be treated as
-an existing item.
+for cluster_templates, compute_instance_templates, baremetal_instance_templates,
+and add_on_operators. Only explicitly known collection routes are treated as
+collections; unknown routes return 404. Known member routes are accepted only
+for PATCH requests so incorrect URLs do not pass as successful API calls.
 
 Usage:
     python mock_api_server.py [port] [scenario]
@@ -14,6 +13,8 @@ Scenarios:
     empty    - All endpoints return {"items": []} with no size field (proto3 omit)
     populated - Endpoints return items with size field present
     no_items_key - Response is {} (edge case: no items key at all)
+    disabled - Collection endpoints return 404, except AddOnOperators return 503
+    not_found - All known collection endpoints return 404
 """
 
 import json
@@ -40,7 +41,32 @@ POPULATED_RESPONSES = {
         "total": 1,
         "items": [{"id": "existing-bm-template", "title": "Test BM"}],
     },
+    "/api/private/v1/add_on_operators": {
+        "size": 1,
+        "total": 1,
+        "items": [{"id": "existing-addon-operator", "title": "Test AddOnOperator"}],
+    },
 }
+
+KNOWN_MEMBER_PATHS = {
+    f"{endpoint}/{item['id']}"
+    for endpoint, response in POPULATED_RESPONSES.items()
+    for item in response["items"]
+}
+
+
+def _is_member_path(path):
+    return path in KNOWN_MEMBER_PATHS
+
+
+def _authorization_fields(headers):
+    """Return safe authorization metadata without retaining credentials."""
+    authorization = headers.get("Authorization", "")
+    scheme = authorization.split(" ", 1)[0] if authorization else None
+    return {
+        "authorization_present": bool(authorization),
+        "authorization_scheme": scheme,
+    }
 
 
 class MockHandler(BaseHTTPRequestHandler):
@@ -56,17 +82,38 @@ class MockHandler(BaseHTTPRequestHandler):
             self._respond(200, {"status": "reset"})
             return
 
-        CALL_LOG.append({"method": "GET", "path": path})
+        CALL_LOG.append(
+            {
+                "method": "GET",
+                "path": path,
+                **_authorization_fields(self.headers),
+            }
+        )
 
-        if SCENARIO == "empty":
+        known_collection = path in POPULATED_RESPONSES
+        known_member = _is_member_path(path)
+        if not known_collection and not known_member:
+            CALL_LOG[-1]["status"] = 404
+            self._respond(404, {"error": "not found"})
+        elif known_member:
+            CALL_LOG[-1]["status"] = 404
+            self._respond(404, {"error": "not found"})
+        elif SCENARIO in ["disabled", "not_found"]:
+            if path == "/api/private/v1/add_on_operators":
+                status = 503 if SCENARIO == "disabled" else 404
+                CALL_LOG[-1]["status"] = status
+                error = "service disabled" if SCENARIO == "disabled" else "not found"
+                self._respond(status, {"error": error})
+            else:
+                CALL_LOG[-1]["status"] = 404
+                self._respond(404, {"error": "service disabled" if SCENARIO == "disabled" else "not found"})
+        elif SCENARIO == "empty":
             self._respond(200, {"items": []})
         elif SCENARIO == "no_items_key":
             self._respond(200, {})
         elif SCENARIO == "populated":
-            base_path = path.rstrip("/")
-            # If path has an ID suffix (e.g. /api/.../templates/some-id), use base
             for endpoint, data in POPULATED_RESPONSES.items():
-                if base_path == endpoint:
+                if path == endpoint:
                     self._respond(200, data)
                     return
             self._respond(200, {"items": []})
@@ -77,22 +124,37 @@ class MockHandler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0]
         content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length) if content_length else b""
-        CALL_LOG.append({
+        call = {
             "method": "POST",
             "path": path,
             "body": json.loads(body) if body else None,
-        })
+        }
+        call.update(_authorization_fields(self.headers))
+        if SCENARIO == "disabled" or path not in POPULATED_RESPONSES:
+            call["status"] = 404
+            CALL_LOG.append(call)
+            self._respond(404, {"error": "not found"})
+            return
+        CALL_LOG.append(call)
         self._respond(200, {"id": "new-item", "status": "created"})
 
     def do_PATCH(self):
         path = self.path.split("?")[0]
         content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length) if content_length else b""
-        CALL_LOG.append({
+        call = {
             "method": "PATCH",
             "path": path,
+            "request_uri": self.path,
             "body": json.loads(body) if body else None,
-        })
+        }
+        call.update(_authorization_fields(self.headers))
+        if SCENARIO == "disabled" or not _is_member_path(path):
+            call["status"] = 404
+            CALL_LOG.append(call)
+            self._respond(404, {"error": "not found"})
+            return
+        CALL_LOG.append(call)
         self._respond(200, {"id": "updated-item", "status": "updated"})
 
     def _respond(self, status, data):

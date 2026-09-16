@@ -2,8 +2,8 @@
 # Reject cleartext HTTP endpoints (except loopback) before sending any
 # authenticated request.  HTTPS is always accepted; plain HTTP is allowed
 # only for loopback addresses used by test mocks (127.0.0.1, localhost,
-# [::1]).  The base URI and all three per-type endpoint overrides are
-# validated because each independently carries a Bearer token.
+# [::1]).  The base URI and all per-type endpoint overrides are validated
+# because each independently carries a Bearer token.
 # See OSAC-5383.
 - name: Validate publish endpoint URI schemes
   ansible.builtin.assert:
@@ -25,6 +25,8 @@
       uri: "{{ publish_templates_compute_instance_api_endpoint }}"
     - name: publish_templates_bare_metal_instance_api_endpoint
       uri: "{{ publish_templates_bare_metal_instance_api_endpoint }}"
+    - name: publish_templates_addon_operator_api_endpoint
+      uri: "{{ publish_templates_addon_operator_api_endpoint }}"
   loop_control:
     loop_var: _endpoint
     label: "{{ _endpoint.name }}"
@@ -37,3 +39,6 @@
 
 - name: Apply templates for bare metal instances
   ansible.builtin.include_tasks: bare_metal_instances.yaml
+
+- name: Apply templates for add-on operators
+  ansible.builtin.include_tasks: addon_operators.yaml

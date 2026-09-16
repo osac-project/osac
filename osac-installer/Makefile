@@ -226,20 +226,27 @@ endif
 ##@ Entity: Osac
 
 AAP_LICENSE_FILE ?= values/$(PROFILE)/license.zip
+# EXTERNAL_AAP=true skips the AAP license.zip check. Use it together with
+# Helm externalAap.enabled (see values/examples/external-aap.yaml). Either
+# switch alone is wrong: values without Make fail on license.zip; Make
+# without values skips the license and still deploys managed AAP.
+EXTERNAL_AAP ?=
 
 .PHONY: install-osac
 install-osac: ## Install OSAC instance (PLATFORM= PROFILE= NS= required)
 	helm dependency build $(OSAC_CHART)
 ifneq ($(PLATFORM),kind)
-	@[ -n "$(AAP_LICENSE_FILE)" ] || { echo "ERROR: AAP_LICENSE_FILE is required for PLATFORM=openshift" >&2; exit 1; }
-	@[ -f "$(AAP_LICENSE_FILE)" ] || { echo "ERROR: AAP_LICENSE_FILE not found at $(AAP_LICENSE_FILE)" >&2; exit 1; }
 	oc create namespace $(NS) --dry-run=client -o yaml | oc apply -f -
+ifneq ($(EXTERNAL_AAP),true)
+	@[ -n "$(AAP_LICENSE_FILE)" ] || { echo "ERROR: AAP_LICENSE_FILE is required for PLATFORM=openshift (set EXTERNAL_AAP=true to skip)" >&2; exit 1; }
+	@[ -f "$(AAP_LICENSE_FILE)" ] || { echo "ERROR: AAP_LICENSE_FILE not found at $(AAP_LICENSE_FILE)" >&2; exit 1; }
 	oc create secret generic config-as-code-manifest-ig \
 		--from-file=license.zip="$(AAP_LICENSE_FILE)" \
 		-n $(NS) --dry-run=client -o yaml | oc apply --server-side -f -
 	oc label secret config-as-code-manifest-ig \
 		osac.openshift.io/project=osac-aap \
 		-n $(NS) --overwrite
+endif
 	@bash -c 'source scripts/lib.sh && check_postgres_prerequisites "$(NS)" "$(INFRA_VALUES)"'
 	$(eval DOMAIN := $(shell oc get ingresses.config/cluster -o jsonpath='{.spec.domain}'))
 	@[ -n "$(DOMAIN)" ] || { echo "ERROR: Could not determine cluster domain. Is oc logged in?" >&2; exit 1; }

@@ -21,6 +21,9 @@ spec:
       containers:
       - name: validate
         image: {{ .Values.cliImage }}
+        {{- $ext := include "osac.externalAap.cfg" . | fromYaml }}
+        {{- $aapExt := dig "externalAap" (dict) .Values.aap }}
+        {{- $globExt := dig "externalAap" (dict) (.Values.global | default dict) }}
         command:
         - /bin/sh
         - -c
@@ -47,6 +50,64 @@ spec:
             echo "WARNING: No default StorageClass found."
             echo "Some components (PostgreSQL, Keycloak) may fail to create PVCs."
           fi
+
+          {{- if $ext.enabled }}
+          # Validate external AAP configuration
+          echo "Checking external AAP configuration..."
+          {{- if not $ext.url }}
+          echo "ERROR: external AAP is enabled but url is empty."
+          echo "Set global.externalAap.url (and aap.externalAap.url) to the full URL of your existing AAP controller API."
+          echo "Example: https://my-aap.aap-namespace.apps.mycluster.example.com/api/controller"
+          exit 1
+          {{- else if not (hasPrefix "https://" ($ext.url | lower)) }}
+          echo "ERROR: external AAP url must start with https://"
+          echo "The AAP client sends a bearer token to this URL. HTTP is not allowed."
+          exit 1
+          {{- end }}
+          {{- if not (dig "tokenSecret" "name" "" $ext) }}
+          echo "ERROR: external AAP is enabled but tokenSecret.name is empty."
+          echo "Create a Secret in the OSAC namespace with your AAP API token and set"
+          echo "global.externalAap.tokenSecret.name (and aap.externalAap.tokenSecret.name) to its name."
+          exit 1
+          {{- end }}
+          {{- if not (dig "externalAap" "enabled" false .Values.global) }}
+          echo "ERROR: aap.externalAap.enabled is true but global.externalAap.enabled is false."
+          echo "Helm only shares global.* with subcharts. Set global.externalAap to the same"
+          echo "values so the OSAC operator and BMF auto-wire OSAC_AAP_URL and OSAC_AAP_TOKEN."
+          echo "See values/examples/external-aap.yaml for a YAML-anchor copy."
+          exit 1
+          {{- end }}
+          {{- if and (dig "enabled" false $aapExt) (dig "enabled" false $globExt) }}
+          {{- if or (ne (printf "%v" (dig "url" "" $aapExt)) (printf "%v" (dig "url" "" $globExt))) (ne (printf "%v" (dig "tokenSecret" "name" "" $aapExt)) (printf "%v" (dig "tokenSecret" "name" "" $globExt))) (ne (printf "%v" (dig "tokenSecret" "key" "token" $aapExt)) (printf "%v" (dig "tokenSecret" "key" "token" $globExt))) }}
+          echo "ERROR: aap.externalAap and global.externalAap must match."
+          echo "Set the same url, tokenSecret.name, and tokenSecret.key on both copies"
+          echo "(YAML anchor as in values/examples/external-aap.yaml). Umbrella hooks read"
+          echo "aap.externalAap; the operator and BMF read global.externalAap."
+          exit 1
+          {{- end }}
+          {{- end }}
+          {{- if .Values.aap.aap.instance.enabled }}
+          echo "ERROR: external AAP is enabled but aap.aap.instance.enabled is also true."
+          echo "When using an external AAP, set aap.aap.instance.enabled to false to prevent"
+          echo "the installer from creating a conflicting AnsibleAutomationPlatform CR."
+          exit 1
+          {{- end }}
+          {{- if .Values.aap.bootstrap.enabled }}
+          echo "ERROR: external AAP is enabled but aap.bootstrap.enabled is also true."
+          echo "When using an external AAP, set aap.bootstrap.enabled to false. The external"
+          echo "controller must be pre-configured with OSAC job templates and credentials."
+          exit 1
+          {{- end }}
+          {{- if .Values.aap.apiToken.create }}
+          echo "ERROR: external AAP is enabled but aap.apiToken.create is also true."
+          echo "When using an external AAP, set aap.apiToken.create to false. The installer"
+          echo "must not create a token against a managed osac-aap instance that will not exist."
+          exit 1
+          {{- end }}
+          printf '%s\n' "  External AAP URL: ${OSAC_EXTERNAL_AAP_URL}"
+          printf '%s\n' "  Token secret: ${OSAC_EXTERNAL_AAP_TOKEN_SECRET}"
+          echo "  External AAP configuration valid."
+          {{- end }}
 
           {{- if .Values.bmf.metal3.enabled }}
           # Check that Metal3 BareMetalHost CRD exists
@@ -79,6 +140,13 @@ spec:
           {{- end }}
 
           echo "=== Validation passed ==="
+        {{- if $ext.enabled }}
+        env:
+        - name: OSAC_EXTERNAL_AAP_URL
+          value: {{ $ext.url | quote }}
+        - name: OSAC_EXTERNAL_AAP_TOKEN_SECRET
+          value: {{ dig "tokenSecret" "name" "" $ext | quote }}
+        {{- end }}
   backoffLimit: 0
 ---
 apiVersion: v1

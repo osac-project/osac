@@ -1,0 +1,63 @@
+# External (brownfield) AAP values overlay
+#
+# Use this overlay when pointing OSAC at a pre-existing AAP controller
+# (e.g. one already installed for ACM). The installer will not create an
+# AnsibleAutomationPlatform CR, bootstrap job, or token-creation job.
+# The operator and BMF read global.externalAap and auto-wire OSAC_AAP_URL
+# and OSAC_AAP_TOKEN — do not also set operator.aap.url or bmf.env.aapUrl.
+# url must be https:// (the client sends a bearer token).
+#
+# Prerequisites:
+#   1. Set aapOperator.enabled: false in your infra.yaml to skip installing
+#      the AAP operator Subscription in ansible-aap.
+#   2. Pre-configure the external AAP with OSAC org, job templates, and
+#      credentials (see osac-aap/docs/ for the expected config-as-code layout).
+#      The default publish-templates hook calls job template
+#      osac-publish-templates on that controller. Create it before install,
+#      or Helm --wait fails. To skip the hook, set
+#      aap.instanceGroups.publishTemplates.enabled: false in this overlay.
+#   3. Create a Secret in the OSAC namespace with a valid AAP API token
+#      BEFORE install. With externalAap.enabled, operator and BMF require
+#      that Secret (optional: false); a missing Secret is
+#      CreateContainerConfigError, not an empty OSAC_AAP_TOKEN:
+#        oc create secret generic my-aap-token \
+#          --from-literal=token=<your-aap-token> -n <osac-namespace>
+#   4. Helm values and Make EXTERNAL_AAP=true are a pair. Use both:
+#        - this overlay (externalAap.enabled) skips deploying AAP
+#        - EXTERNAL_AAP=true skips the license.zip check
+#      Overlay without Make fails looking for license.zip. Make without
+#      the overlay skips the license and still deploys managed AAP.
+#        make install-osac PLATFORM=openshift PROFILE=<profile> NS=<ns> \
+#          EXTERNAL_AAP=true INSTANCE_VALUES_EXTRA="-f values/examples/external-aap.yaml"
+#
+# Replace the placeholder URL and secret name in the anchored block.
+
+global:
+  # Helm only shares global.* with subcharts (operator, BMF).
+  externalAap: &externalAap
+    enabled: true
+    url: "https://my-aap.aap-namespace.apps.mycluster.example.com/api/controller"
+    tokenSecret:
+      name: "my-aap-token"
+      key: "token"
+
+aap:
+  # Umbrella templates (validation, NOTES, publish-templates) read this copy.
+  externalAap: *externalAap
+  aap:
+    instance:
+      enabled: false
+  bootstrap:
+    enabled: false
+  apiToken:
+    create: false
+
+# TLS skip-verify is already "true" on the umbrella chart
+# (operator.aap.insecureSkipVerify, bmf.env.aapInsecureSkipVerify), so
+# ACM / self-signed AAP works without extra values. For a real CA, verify:
+# operator:
+#   aap:
+#     insecureSkipVerify: "false"
+# bmf:
+#   env:
+#     aapInsecureSkipVerify: "false"

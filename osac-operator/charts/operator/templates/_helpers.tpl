@@ -99,3 +99,52 @@ Otherwise, falls back to global.services.<serviceKey>.enabled (default true).
 {{- $enabled -}}
 {{- end -}}
 {{- end }}
+
+{{/*
+AAP controller URL. global.externalAap (umbrella) wins so a brownfield
+install can point operator at an existing controller without duplicating
+operator.aap.url.
+*/}}
+{{- define "osac-operator.aapUrl" -}}
+{{- $ext := dig "externalAap" (dict) (.Values.global | default dict) -}}
+{{- if and (index $ext "enabled") (index $ext "url") -}}
+{{- index $ext "url" -}}
+{{- else -}}
+{{- .Values.aap.url | default "http://osac-aap/api/controller" -}}
+{{- end -}}
+{{- end }}
+
+{{- define "osac-operator.aapTokenSecretName" -}}
+{{- $ext := dig "externalAap" (dict) (.Values.global | default dict) -}}
+{{- $extSecret := dig "tokenSecret" (dict) $ext -}}
+{{- if and (index $ext "enabled") (index $extSecret "name") -}}
+{{- index $extSecret "name" -}}
+{{- else if and .Values.aap.tokenSecret .Values.aap.tokenSecret.name -}}
+{{- .Values.aap.tokenSecret.name -}}
+{{- end -}}
+{{- end }}
+
+{{- define "osac-operator.aapTokenSecretKey" -}}
+{{- $ext := dig "externalAap" (dict) (.Values.global | default dict) -}}
+{{- $extSecret := dig "tokenSecret" (dict) $ext -}}
+{{- if and (index $ext "enabled") (index $extSecret "name") -}}
+{{- index $extSecret "key" | default "token" -}}
+{{- else if and .Values.aap.tokenSecret .Values.aap.tokenSecret.name -}}
+{{- .Values.aap.tokenSecret.key | default "token" -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Required when pointing at a pre-existing AAP so a missing token Secret
+fails the pod at start instead of injecting an empty OSAC_AAP_TOKEN.
+Greenfield keeps optional so the token-creation job can land later.
+*/}}
+{{- define "osac-operator.aapTokenSecretOptional" -}}
+{{- $ext := dig "externalAap" (dict) (.Values.global | default dict) -}}
+{{- $extSecret := dig "tokenSecret" (dict) $ext -}}
+{{- if and (index $ext "enabled") (index $extSecret "name") -}}
+false
+{{- else -}}
+true
+{{- end -}}
+{{- end }}

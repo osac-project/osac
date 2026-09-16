@@ -27,17 +27,21 @@ spec:
       containers:
       - name: publish-templates
         image: {{ .Values.cliImage }}
+        {{- $ext := include "osac.externalAap.cfg" . | fromYaml }}
         command:
           - /bin/bash
           - -euo
           - pipefail
           - -c
           - |
+            {{- if $ext.enabled }}
+            [[ -n "${AAP_TOKEN}" ]] || { echo "ERROR: external AAP token is empty"; exit 1; }
+            {{- else }}
             AAP_TOKEN=$(kubectl get secret osac-aap-api-token -n {{ .Release.Namespace }} \
               -o jsonpath='{.data.token}' | base64 -d)
             [[ -n "${AAP_TOKEN}" ]] || { echo "ERROR: osac-aap-api-token secret is empty"; exit 1; }
-
             AAP_URL="http://{{ .Values.aap.aap.instance.name }}"
+            {{- end }}
 
             TEMPLATE_NAME="{{ .Values.operator.aap.templatePrefix | default "osac" }}-publish-templates"
             echo "Looking up ${TEMPLATE_NAME} job template..."
@@ -98,6 +102,16 @@ spec:
           value: /tmp
         - name: OSAC_AAP_TEMPLATE_PREFIX
           value: {{ .Values.operator.aap.templatePrefix | default "osac" | quote }}
+        {{- if $ext.enabled }}
+        - name: AAP_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: {{ dig "tokenSecret" "name" "" $ext | quote }}
+              key: {{ dig "tokenSecret" "key" "token" $ext | quote }}
+        {{- /* Operator URL includes /api/controller; this hook builds paths from the origin. */}}
+        - name: AAP_URL
+          value: {{ $ext.url | trimSuffix "/" | trimSuffix "/api/controller" | quote }}
+        {{- end }}
         volumeMounts:
         - name: tmp
           mountPath: /tmp

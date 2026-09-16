@@ -150,6 +150,113 @@ keycloak:
 - Production clusters where browser cert warnings are unacceptable
 - Environments with corporate CA or Let's Encrypt ingress certs
 
+## External (Brownfield) AAP
+
+When deploying OSAC on a cluster that already has an Ansible Automation
+Platform controller (e.g. installed by ACM), use the external AAP path
+instead of letting the installer deploy its own. This avoids duplicate
+operators, field-manager conflicts, and bootstrap hangs.
+
+### Prerequisites
+
+1. The existing AAP controller must be reachable from the OSAC namespace
+   (URL and network path). This path does **not** create an
+   `AnsibleAutomationPlatform` CR in the OSAC namespace, so the existing
+   operator does not need to watch that namespace.
+2. The existing AAP controller must be pre-configured with the OSAC
+   organization, job templates, credentials, and execution environment.
+   See `osac-aap/docs/` for the expected config-as-code layout.
+   The post-install `osac-publish-templates` hook is still enabled by
+   default and will call the job template named
+   `<operator.aap.templatePrefix>-publish-templates` (default
+   `osac-publish-templates`) on that controller. Create that template
+   before install, or Helm `--wait` fails. To skip the hook instead,
+   set `aap.instanceGroups.publishTemplates.enabled: false`.
+3. Create a Secret in the OSAC namespace with a valid AAP API token
+   **before** install. When `externalAap` is enabled, the operator and BMF
+   require that Secret (`secretKeyRef.optional: false`). A missing Secret
+   fails the pods with `CreateContainerConfigError` instead of an empty
+   `OSAC_AAP_TOKEN`.
+
+```bash
+oc create secret generic my-aap-token \
+  --from-literal=token=<your-aap-token> -n <osac-namespace>
+```
+
+### Configuration
+
+**Infra values** (`values/<profile>/infra.yaml`) — disable the operator
+install:
+
+```yaml
+aapOperator:
+  enabled: false
+```
+
+**Instance values** (`values/<profile>/instance.yaml`) — point at the
+external controller. Set `global.externalAap` so the operator and BMF
+auto-wire `OSAC_AAP_URL` / `OSAC_AAP_TOKEN`. Copy the same block to
+`aap.externalAap` (a YAML anchor is enough) for umbrella validation:
+
+```yaml
+global:
+  externalAap: &externalAap
+    enabled: true
+    url: "https://my-aap.aap-namespace.apps.mycluster.example.com/api/controller"
+    tokenSecret:
+      name: "my-aap-token"
+      key: "token"
+
+aap:
+  externalAap: *externalAap
+  aap:
+    instance:
+      enabled: false
+  bootstrap:
+    enabled: false
+  apiToken:
+    create: false
+```
+
+Do not set `operator.aap.url` or `bmf.env.aapUrl` for this path; those
+are filled from `global.externalAap`. The URL must be `https://`; the
+pre-install hook rejects HTTP because the client sends a bearer token.
+
+TLS skip-verify is already on by default
+(`operator.aap.insecureSkipVerify` and `bmf.env.aapInsecureSkipVerify`).
+ACM-managed or other internal-CA AAP works without extra values. For a
+production CA, set both to `"false"` so the operators verify the
+controller certificate.
+
+A complete example overlay is provided at
+`values/examples/external-aap.yaml`.
+
+### Install
+
+Helm values and Make are a pair. Use both, or the install disagrees with
+itself:
+
+| Helm `externalAap.enabled` | Make `EXTERNAL_AAP=true` | Result |
+|---|---|---|
+| true | true | Brownfield path (intended) |
+| true | unset | Fails looking for `license.zip` you do not need |
+| false | true | Skips the license, then still deploys managed AAP |
+
+```bash
+make install-infra PLATFORM=openshift PROFILE=<profile> NS=<namespace>
+make install-osac  PLATFORM=openshift PROFILE=<profile> NS=<namespace> \
+  EXTERNAL_AAP=true
+```
+
+Pass the overlay with `INSTANCE_VALUES_EXTRA="-f values/examples/external-aap.yaml"`
+(and keep `aapOperator.enabled: false` in infra values).
+
+The pre-install validation hook will fail if external AAP is enabled but
+the URL is empty or not `https://`, the token secret name is empty,
+`aap.externalAap` does not match `global.externalAap`, or conflicting
+instance/bootstrap/apiToken flags are still on. The token Secret itself
+must exist before operator and BMF pods start (`secretKeyRef.optional: false`).
+
 ## Makefile Targets
 
 All targets require `PLATFORM=kind|openshift PROFILE=dev|vmaas-ci|... NS=<namespace>`.
@@ -216,10 +323,13 @@ oc logs job/osac-publish-templates -n ${NAMESPACE} -c publish-templates     # ma
   `https://fulfillment-rest-gateway:8000/healthz` for up to 600s. If it
   times out, check that the fulfillment service pods are running and the
   `fulfillment-rest-gateway` Service exists.
-- **AAP token missing or empty** - The main container reads the `osac-aap-api-token`
-  Secret and fails if the token is absent or empty. Verify the secret exists
-  and contains a valid token:
-  `oc get secret osac-aap-api-token -n ${NAMESPACE} -o jsonpath='{.data.token}' | base64 -d`.
+- **AAP token missing or empty** - The main container reads the AAP token
+  Secret. Managed AAP uses `osac-aap-api-token`. External AAP uses
+  `global.externalAap.tokenSecret.name` (and that Secret's key). Verify
+  the Secret exists and the token key is non-empty, for example:
+  `oc get secret osac-aap-api-token -n ${NAMESPACE} -o jsonpath='{.data.token}' | base64 -d`
+  or, for brownfield, the same command with your configured Secret name
+  and key.
 - **AAP job template not found** - The `osac-publish-templates` job template
   must exist in AAP. Verify via AAP UI or API after the bootstrap job
   completes.

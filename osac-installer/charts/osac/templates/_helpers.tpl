@@ -71,6 +71,20 @@ identity changes across upgrades and reinstall attempts.
 {{- end -}}
 
 {{/*
+External (brownfield) AAP. User overlay may set aap.externalAap and/or
+global.externalAap; Helm only propagates global.* into subcharts, so the
+operator and BMF auto-wire from global.externalAap. Umbrella templates
+honor either source.
+*/}}
+{{- define "osac.externalAap.cfg" -}}
+{{- if dig "externalAap" "enabled" false .Values.aap -}}
+{{- .Values.aap.externalAap | toYaml -}}
+{{- else -}}
+{{- dig "externalAap" (dict "enabled" false "url" "" "tokenSecret" (dict "name" "" "key" "token")) .Values.global | toYaml -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Wait-for-fulfillment init container.
 Uses .Values.cliImage for the container image.
 */}}

@@ -49,3 +49,50 @@ Service account name
 {{- required "serviceAccount.name must be set when serviceAccount.create=false" .Values.serviceAccount.name }}
 {{- end }}
 {{- end }}
+
+{{/*
+AAP connection. global.externalAap from the umbrella chart wins so BMaaS
+does not need a duplicated bmf.env.aapUrl / token secret.
+*/}}
+{{- define "bare-metal-fulfillment-operator.aapUrl" -}}
+{{- $ext := dig "externalAap" (dict) (.Values.global | default dict) -}}
+{{- if and (index $ext "enabled") (index $ext "url") -}}
+{{- index $ext "url" -}}
+{{- else -}}
+{{- .Values.env.aapUrl | default "" -}}
+{{- end -}}
+{{- end }}
+
+{{- define "bare-metal-fulfillment-operator.aapTokenSecretName" -}}
+{{- $ext := dig "externalAap" (dict) (.Values.global | default dict) -}}
+{{- $extSecret := dig "tokenSecret" (dict) $ext -}}
+{{- if and (index $ext "enabled") (index $extSecret "name") -}}
+{{- index $extSecret "name" -}}
+{{- else -}}
+{{- .Values.env.aapTokenSecretName | default "" -}}
+{{- end -}}
+{{- end }}
+
+{{- define "bare-metal-fulfillment-operator.aapTokenSecretKey" -}}
+{{- $ext := dig "externalAap" (dict) (.Values.global | default dict) -}}
+{{- $extSecret := dig "tokenSecret" (dict) $ext -}}
+{{- if and (index $ext "enabled") (index $extSecret "name") -}}
+{{- index $extSecret "key" | default "token" -}}
+{{- else -}}
+{{- .Values.env.aapTokenSecretKey | default "token" -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Required when pointing at a pre-existing AAP so a missing token Secret
+fails the pod at start instead of injecting an empty OSAC_AAP_TOKEN.
+*/}}
+{{- define "bare-metal-fulfillment-operator.aapTokenSecretOptional" -}}
+{{- $ext := dig "externalAap" (dict) (.Values.global | default dict) -}}
+{{- $extSecret := dig "tokenSecret" (dict) $ext -}}
+{{- if and (index $ext "enabled") (index $extSecret "name") -}}
+false
+{{- else -}}
+true
+{{- end -}}
+{{- end }}

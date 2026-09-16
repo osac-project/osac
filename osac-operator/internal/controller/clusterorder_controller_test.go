@@ -602,6 +602,11 @@ var _ = Describe("ClusterOrder Controller", func() {
 			}, []hypershiftv1beta1.NodePool{
 				readyClusterOrderNodePool("worker", 5),
 			}, false),
+			Entry("duplicate node pool resource classes do not match", []v1alpha1.NodeRequest{
+				{ResourceClass: "worker", NumberOfNodes: 1},
+			}, []hypershiftv1beta1.NodePool{
+				readyClusterOrderNodePool("worker", 1), readyClusterOrderNodePool("worker", 1),
+			}, false),
 		)
 
 		It("should not modify Phase when HostedCluster is not yet available", func() {

@@ -165,10 +165,18 @@ type ClusterOrderClusterReferenceType struct {
 // WorkerStatus tracks the provisioning state of a single bare-metal worker
 // within a ClusterOrder, enabling failure handling and retry logic.
 type WorkerStatus struct {
-	// BMIName is the name of the BareMetalInstance CR for this worker.
+	// WorkerID is a stable identifier for this worker slot (e.g. "worker-0",
+	// "worker-1"). It is assigned when the worker entry is created and never
+	// changes, even when the underlying BareMetalInstance is replaced. This
+	// stability makes it safe to use as the list-map key so that BMI
+	// replacements update the existing entry instead of orphaning it.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
-	BMIName string `json:"bmiName"`
+	WorkerID string `json:"workerID"`
+
+	// BMIName is the name of the BareMetalInstance CR for this worker.
+	// +kubebuilder:validation:Optional
+	BMIName string `json:"bmiName,omitempty"`
 
 	// BMINamespace is the namespace of the BareMetalInstance CR.
 	// +kubebuilder:validation:Required
@@ -263,7 +271,7 @@ type ClusterOrderStatus struct {
 	// Each entry corresponds to a bare-metal worker slot in the cluster.
 	// +kubebuilder:validation:Optional
 	// +listType=map
-	// +listMapKey=bmiName
+	// +listMapKey=workerID
 	Workers []WorkerStatus `json:"workers,omitempty"`
 }
 

@@ -118,4 +118,9 @@ const (
 
 	// ReasonGRPCUnavailable indicates a transient gRPC service error.
 	ReasonGRPCUnavailable = "GRPCUnavailable"
+
+	// ReasonAllWorkersHealthy indicates that all workers completed
+	// reconciliation without transient errors, clearing the
+	// FulfillmentServiceUnavailable condition.
+	ReasonAllWorkersHealthy = "AllWorkersHealthy"
 )

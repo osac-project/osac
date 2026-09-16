@@ -14,6 +14,8 @@ Also in this directory:
 - [codex-getting-started.md](codex-getting-started.md) — onboarding OpenAI
   Codex against an OSAC checkout (install, `/import`, permissions, hook trust,
   MCP, and workflow differences).
+- [RELEASING.md](RELEASING.md) — how nightly builds work, how to cut a real
+  `osac` release, and how to release a new version of a single component.
 
 Regeneration tooling for these documents is unconfirmed. Any future
 regeneration must preserve the cross-component-only scope rather than replace

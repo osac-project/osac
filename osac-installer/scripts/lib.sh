@@ -178,11 +178,10 @@ resolve_release_tag() {
 # semver.org grammar adapted to POSIX ERE for bash's =~: rejects
 # leading-zero numeric identifiers (e.g. "01.2.3", "1.2.3-01") and
 # malformed dot-separated prerelease/build identifiers that a more
-# permissive [a-zA-Z0-9.]+ charset would let through. Same grammar as
-# publish-osac-installer-chart.yaml's own inline SEMVER_RE (left as-is
-# there for now -- see OSAC-5183); shared here so nightly-build.yaml's new
-# release-mode `release_version` input doesn't grow a second hand-copied
-# regex to drift out of sync with, the exact class of bug OSAC-5178 fixed.
+# permissive [a-zA-Z0-9.]+ charset would let through. Shared here so
+# osac-build-and-publish.yaml's release_version/component_versions inputs
+# (see OSAC-5337) don't grow a second hand-copied regex to drift out of
+# sync with, the exact class of bug OSAC-5178 fixed.
 # Usage: validate_semver <version>
 validate_semver() {
     local version="$1"

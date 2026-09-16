@@ -118,74 +118,6 @@ check_osac_ui_image() {
     echo "${sha}"
 }
 
-# Usage: check_chart_published <chart_name> <version> [repo_owner]
-# Verify oci://ghcr.io/<repo_owner>/charts/<chart_name>:<version> exists.
-# Same anonymous-GHCR-token-then-manifest-HEAD-check technique as
-# check_osac_ui_image above, applied to a chart OCI artifact (helm push)
-# rather than a container image -- GHCR serves both under the same
-# manifests API, just under the "charts/<name>" package path helm push uses.
-check_chart_published() {
-    local chart_name="$1" version="$2" repo_owner="${3:-osac-project}"
-    local token safe_name safe_version
-
-    if [[ ! "${chart_name}" =~ ^[a-zA-Z0-9._-]+$ ]]; then
-        safe_name=$(_gha_sanitize_for_message "${chart_name}")
-        echo "::error::Invalid chart name '${safe_name}' — must match [a-zA-Z0-9._-]+" >&2
-        return 1
-    fi
-    if [[ ! "${version}" =~ ^[a-zA-Z0-9._+-]+$ ]]; then
-        safe_version=$(_gha_sanitize_for_message "${version}")
-        echo "::error::Invalid version '${safe_version}' for chart ${chart_name}" >&2
-        return 1
-    fi
-
-    safe_name=$(_gha_sanitize_for_message "${chart_name}")
-    if ! token=$(http_json "Could not obtain GHCR token to verify chart ${safe_name}:${version}" 3 5 '.token' \
-        "https://ghcr.io/token?scope=repository:${repo_owner}/charts/${chart_name}:pull"); then
-        echo "::error::Could not obtain GHCR token to verify chart ${safe_name}:${version}" >&2
-        return 1
-    fi
-    if [[ -z "${token}" || "${token}" == "null" ]]; then
-        echo "::error::GHCR token is empty or null for chart ${safe_name}:${version}" >&2
-        return 1
-    fi
-
-    if ! http_retry "Chart ${safe_name}:${version} not found in GHCR" 3 5 \
-        -s -o /dev/null \
-        -H "Authorization: Bearer ${token}" \
-        -H "Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json" \
-        "https://ghcr.io/v2/${repo_owner}/charts/${chart_name}/manifests/${version}"; then
-        echo "::error::Chart ${safe_name}:${version} not found in GHCR — has publish-charts.yaml published it yet for this release?" >&2
-        return 1
-    fi
-}
-
-# Usage: check_umbrella_mono_repo_charts_published <version> [repo_owner]
-# Verify every mono-repo-resident umbrella dependency (see
-# MONO_REPO_UMBRELLA_DEPENDENCIES) is already published to GHCR at
-# <version> -- one shared version across all of them per release cut (see
-# publish-osac-installer-chart.yaml's "Component versions" release-notes
-# table). Closes the ordering gap between publish-charts.yaml's per-component
-# publishes and the umbrella publish, which has no explicit dependency on
-# them completing first: checks every dependency (not just the first
-# failure) so a caller sees the full list of what's missing at once, and
-# fails loudly rather than letting the umbrella rewrite proceed and silently
-# ship a stale file:// path for whatever isn't published yet.
-check_umbrella_mono_repo_charts_published() {
-    local version="$1" repo_owner="${2:-osac-project}"
-    local entry dep_name failed=0
-
-    for entry in "${MONO_REPO_UMBRELLA_DEPENDENCIES[@]}"; do
-        dep_name="${entry%%:*}"
-        check_chart_published "${dep_name}" "${version}" "${repo_owner}" || failed=1
-    done
-
-    if (( failed )); then
-        echo "::error::One or more mono-repo-resident chart dependencies are not yet published at version ${version} — aborting rather than shipping a file:// dependency path in the published umbrella chart" >&2
-        return 1
-    fi
-}
-
 # Usage: retag_component_image <image_repo> <source_short_sha> <target_version>
 # Alias-tags the already-built <image_repo>:sha-<source_short_sha> image to
 # <image_repo>:<target_version> via a server-side skopeo copy (no rebuild).
@@ -265,9 +197,9 @@ stamp_component_image_refs() {
             # configAsCode.eeImage is the execution-environment image AAP's
             # config-as-code sync uses (osac-aap/charts/aap/templates/config-as-code-secret.yaml)
             # -- the same osac-aap image as bootstrap.image above, just a
-            # separate values.yaml field. publish-osac-installer-chart.yaml
-            # already stamps this; nightly never did, leaving it at its
-            # committed "" placeholder in every published chart until now.
+            # separate values.yaml field. Previously left at its committed
+            # "" placeholder in every published chart until this was fixed
+            # in OSAC-5183.
             IMAGE_REF="ghcr.io/osac-project/osac-aap:${tag_value}" \
                 yq -i '.configAsCode.eeImage = strenv(IMAGE_REF)' "osac-aap/charts/aap/values.yaml"
             stamp_umbrella_nested_field "${umbrella_values}" aap configAsCode eeImage "ghcr.io/osac-project/osac-aap:${tag_value}"

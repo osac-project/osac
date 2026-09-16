@@ -50,18 +50,24 @@ image, so pin both rather than accepting any workflow or any tag in this repo:
 | metering-echo-adapter                       | `osac-project/metering-echo-adapter`   | `build-metering-echo-adapter-image.yaml`    | `osac-metering`                    |
 | osac-csi-driver                             | `osac-project/osac-csi-driver`         | `publish-csi-driver-image.yaml`             | `osac-csi-driver`                  |
 
-`nightly-build.yaml` independently rebuilds and republishes every image above
-on its own schedule (`schedule` or a manual `workflow_dispatch`), so
-`nightly-build.yaml@refs/heads/main` is also a valid signer identity for any
-image in this table — not just the workflow listed. Signing isn't skipped for
-an already-signed digest: nightly signs whatever digest each run pushes, even
-when a rebuild is byte-identical to an already-published one, so that digest
-ends up with more than one valid signature from different identities rather
-than only the newest. `workflow_dispatch` has no restriction to `main` — it
-checks out `github.sha` for whichever ref is selected when the run is
-dispatched, so a manual run against a non-`main` ref signs under that ref's
-identity instead; match the regex to the ref actually used if you dispatched
-it yourself.
+`nightly-build.yaml` always rebuilds and republishes every image above as
+part of its nightly run. `osac-release.yaml` only rebuilds and republishes
+images whose components are actually selected for rebuilding (named in
+that release's `component_versions`, and not already published at the
+requested version) — every other component is pinned to its existing
+published image, untouched, not resigned. Both call into the same shared
+`osac-build-and-publish.yaml` reusable workflow whenever a rebuild does
+happen, so `osac-build-and-publish.yaml@refs/heads/main` is the one
+signer identity that covers either case, for any image in this table —
+not just the workflow listed. Signing isn't skipped for an already-signed
+digest: every run signs whatever digest it pushes, even when a rebuild is
+byte-identical to an already-published one, so that digest ends up with more
+than one valid signature from different identities rather than only the
+newest. A manual dispatch against a non-`main` ref signs under that ref's
+identity instead (the reusable workflow call follows whatever ref
+`nightly-build.yaml`/`osac-release.yaml` were themselves dispatched
+against) — match the regex to the ref actually used if you dispatched it
+yourself.
 
 Verify an image, substituting the workflow file and tag prefix from the table above:
 
@@ -81,6 +87,25 @@ cosign verify \
   ghcr.io/osac-project/osac-operator@sha256:<digest>
 ```
 
+To verify an image instead produced by a nightly run or a release
+dispatched from `main` (the common case) — e.g. a metering-echo-adapter
+image:
+
+```bash
+cosign verify \
+  --certificate-identity-regexp '^https://github\.com/osac-project/osac/\.github/workflows/osac-build-and-publish\.yaml@refs/heads/main$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/osac-project/metering-echo-adapter@sha256:<digest>
+```
+
+If `nightly-build.yaml`/`osac-release.yaml` was manually dispatched against
+a different ref, replace `refs/heads/main` above with the exact ref used.
+Note that a component's own tag-triggered build (the first example above)
+and a nightly/release run can independently produce a byte-identical image
+from the same commit — when that happens, both identities may validly have
+signed that exact digest. If one identity doesn't verify, check the other
+workflow/ref identity before concluding the artifact isn't signed.
+
 ## Verifying Helm chart signatures
 
 Helm charts published to `oci://ghcr.io/osac-project/charts/*` are signed the
@@ -88,18 +113,20 @@ same way. All charts built from this mono-repo's own components (everything
 except `osac`, the umbrella chart) are published by `publish-charts.yaml`,
 which only ever runs via `workflow_run` off the repository's default branch
 (`main`) — never a tag ref, regardless of which component's tag triggered the
-originating image build. `publish-osac-installer-chart.yaml` (the umbrella
-chart) is `workflow_dispatch`-only and normally also runs from `main`, but can
-be dispatched against one of the umbrella chart's own `osac/v*` tags.
+originating image build.
 
-`nightly-build.yaml` also independently packages and republishes every chart
-above (including the umbrella chart) as part of its nightly run. The same
-rule as images applies: `nightly-build.yaml@refs/heads/main` is a valid
-alternate identity for any chart here, and it signs every chart it packages
-each run regardless of whether that run's digest is byte-identical to an
-already-published one — so a chart digest can legitimately carry signatures
-from more than one identity, not just the most recent signer. The same
-`workflow_dispatch`-ref caveat from the image section applies here too.
+`nightly-build.yaml` and `osac-release.yaml` also independently package and
+republish every chart above (including the umbrella chart), as part of a
+nightly run or a real release — both call into the same shared
+`osac-build-and-publish.yaml` reusable workflow to do so. The umbrella
+chart's own release path (a real `osac/vX.Y.Z` git tag) only ever runs
+through `osac-release.yaml`; there is no other publisher for it. The same
+rule as images applies: `osac-build-and-publish.yaml@refs/heads/main` is a
+valid alternate identity for any chart here, and it signs every chart it
+packages each run regardless of whether that run's digest is byte-identical
+to an already-published one — so a chart digest can legitimately carry
+signatures from more than one identity, not just the most recent signer. The
+same `workflow_dispatch`-ref caveat from the image section applies here too.
 
 `helm pull`/`helm push` print the artifact's digest directly, so no extra
 tooling is needed to resolve it:
@@ -109,19 +136,32 @@ helm pull oci://ghcr.io/osac-project/charts/<chart-name> --version <version>
 # Digest: sha256:<digest>
 
 cosign verify \
-  --certificate-identity-regexp '^https://github\.com/osac-project/osac/\.github/workflows/(publish-charts|nightly-build)\.yaml@refs/heads/main$' \
+  --certificate-identity-regexp '^https://github\.com/osac-project/osac/\.github/workflows/(publish-charts\.yaml@refs/heads/main|osac-build-and-publish\.yaml@refs/.+)$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   ghcr.io/osac-project/charts/<chart-name>@sha256:<digest>
 ```
 
-For the umbrella chart, accept either ref:
+Each alternative has its own ref constraint: `publish-charts.yaml` is
+pinned to `refs/heads/main` (it only ever runs via `workflow_run` off
+`main`, never a tag or other ref), while `osac-build-and-publish.yaml`
+accepts any ref, since a nightly run or a manually dispatched release can
+run from a different branch or tag.
+
+The umbrella chart (`osac`) only ever has one signer identity —
+`osac-build-and-publish.yaml`. For a normal nightly run or a release
+dispatched from `main` (the common case), verify with just:
 
 ```bash
 cosign verify \
-  --certificate-identity-regexp '^https://github\.com/osac-project/osac/\.github/workflows/(publish-osac-installer-chart\.yaml@refs/(heads/main|tags/osac/.+)|nightly-build\.yaml@refs/heads/main)$' \
+  --certificate-identity-regexp '^https://github\.com/osac-project/osac/\.github/workflows/osac-build-and-publish\.yaml@refs/heads/main$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   ghcr.io/osac-project/charts/osac@sha256:<digest>
 ```
+
+If `osac-release.yaml` was manually dispatched against a different ref
+(GitHub's "Use workflow from" selector), the signature carries that ref
+instead — replace `refs/heads/main` above with the exact ref actually used
+(e.g. `refs/heads/<branch>`).
 
 Always verify by digest (`@sha256:...`), not by mutable tag — resolve a tag to
 its digest first with `skopeo inspect docker://ghcr.io/osac-project/<component>:<tag>`

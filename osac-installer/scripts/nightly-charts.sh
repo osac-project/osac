@@ -197,10 +197,15 @@ _component_publish_workflows() {
 # to trigger silently didn't run or failed (OSAC-5357).
 wait_for_component_publish_workflow_run() {
     local workflow_file="$1" tag="$2" timeout="${3:-2700}" interval="${4:-15}"
-    local start run_id safe_workflow safe_tag
+    local start start_time run_id safe_workflow safe_tag limit runs run_count oldest_created
 
     safe_workflow=$(_gha_sanitize_for_message "${workflow_file}")
     safe_tag=$(_gha_sanitize_for_message "${tag}")
+    # Anything created before this function was even called can't be the run
+    # our own tag push just triggered -- used below as the pagination
+    # stopping point, so a single busy workflow can't push the real match
+    # past a fixed page size (see the --limit note further down).
+    start_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
     echo "Waiting up to ${timeout}s for '${safe_workflow}' to start for tag ${safe_tag}..."
     start=${SECONDS}
@@ -213,8 +218,31 @@ wait_for_component_publish_workflow_run() {
         # dispatch). List recent runs for this workflow unfiltered instead and
         # match the tag client-side with a real jq (not gh's --jq), which
         # supports --arg for safe interpolation.
-        run_id=$(gh run list --workflow "${workflow_file}" --limit 30 --json databaseId,headBranch,event 2>/dev/null \
-            | jq -r --arg tag "${tag}" '[.[] | select(.headBranch == $tag and .event == "push")][0].databaseId // empty' 2>/dev/null || true)
+        #
+        # A single fixed --limit can silently reintroduce the same class of
+        # bug on a busy workflow (e.g. fulfillment-service's own publish-*
+        # workflows also fire on every PR touching that path): our run could
+        # be pushed past a small page by newer, unrelated runs before we poll.
+        # Grow the page geometrically instead, stopping only once we've
+        # either found the match or paged back far enough that everything
+        # left is provably older than this function's own start_time (so it
+        # cannot be the run our push just triggered) -- or the workflow
+        # simply has fewer runs than the current page size.
+        limit=30
+        while true; do
+            runs=$(gh run list --workflow "${workflow_file}" --limit "${limit}" \
+                --json databaseId,headBranch,event,createdAt 2>/dev/null) || runs='[]'
+            run_id=$(jq -r --arg tag "${tag}" \
+                '[.[] | select(.headBranch == $tag and .event == "push")][0].databaseId // empty' \
+                <<<"${runs}")
+            [[ -n "${run_id}" ]] && break
+            run_count=$(jq 'length' <<<"${runs}")
+            (( run_count < limit )) && break
+            oldest_created=$(jq -r '.[-1].createdAt // empty' <<<"${runs}")
+            [[ -n "${oldest_created}" && "${oldest_created}" < "${start_time}" ]] && break
+            (( limit *= 2 ))
+            (( limit > 1000 )) && break
+        done
         [[ -n "${run_id}" ]] && break
         if (( SECONDS - start >= timeout )); then
             echo "::error::${safe_workflow} never started for tag ${safe_tag} within ${timeout}s -- a real push should trigger it, but no matching run appeared; the component tag exists without a real publish" >&2

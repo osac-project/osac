@@ -72,7 +72,7 @@ jobs:
     # without this, secrets.OSAC_CI_APP_PRIVATE_KEY resolves to empty inside
     # osac-build-and-publish.yaml's "Tag and notify" job, and its checkout
     # step fails outright ("Input required and not supplied: token"),
-    # confirmed live on a real release dispatch (OSAC-5357 follow-up).
+    # confirmed live on a real release dispatch.
     # Passed explicitly (not `secrets: inherit`) so this job only gets the
     # one secret it actually declares needing, not this workflow's entire
     # secret set.

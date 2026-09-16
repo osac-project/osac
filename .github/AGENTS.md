@@ -33,7 +33,7 @@ A real, permanent `<component>/vX.Y.Z` tag (release mode's `component_versions`
 bump) must be pushed with real actor credentials, not the default
 `GITHUB_TOKEN` — GitHub does not fire push-triggered workflows for a ref
 created by `GITHUB_TOKEN`, so a component's own image/binary/proto publish
-workflow would silently never run even though the tag exists (OSAC-5357).
+workflow would silently never run even though the tag exists.
 Whatever creates such a tag must also verify each of that component's
 downstream publish workflows actually started and succeeded before reporting
 success; a tag existing is not evidence its publish happened.

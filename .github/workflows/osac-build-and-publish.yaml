@@ -61,7 +61,7 @@ on:
           runtime for a short-lived installation token used to push the
           umbrella/component release tags in "Tag and notify" -- GitHub
           never fires push-triggered workflows for a ref pushed with the
-          default GITHUB_TOKEN (OSAC-5357), so this must authenticate as
+          default GITHUB_TOKEN, so this must authenticate as
           a real actor instead of the automatic token.
         required: true
 
@@ -1287,7 +1287,7 @@ jobs:
   # Pushed with a real PAT (checkout's `token:` below), not GITHUB_TOKEN --
   # a per-component tag is expected to fire that component's own
   # tag-triggered publish workflow(s) (image, binaries, proto), which
-  # GITHUB_TOKEN-authored pushes never do (OSAC-5357). "Verify component
+  # GITHUB_TOKEN-authored pushes never do. "Verify component
   # publish workflows actually ran" then confirms each one actually started
   # and succeeded before this job -- and the whole run -- is allowed to
   # report success; a component tag existing is not itself evidence its
@@ -1343,7 +1343,7 @@ jobs:
         # the built-in GITHUB_TOKEN (anti-recursion by design), so every
         # <component>/vX.Y.Z tag pushed below would silently never trigger
         # its own publish-image.yaml/publish-binaries.yaml/etc, even though
-        # this job (and the whole run) reports success (OSAC-5357). The
+        # this job (and the whole run) reports success. The
         # osac-ci GitHub App's installation token authenticates as a real
         # actor, so the same push fires those workflows exactly like a
         # human's `git push` does.
@@ -1428,7 +1428,7 @@ jobs:
     # require each one to have actually started and succeeded before this
     # job -- and therefore the whole run -- is allowed to report success. A
     # permanent component tag existing is not evidence its image, binaries,
-    # or proto schema actually got published (OSAC-5357).
+    # or proto schema actually got published.
     - name: Verify component publish workflows actually ran
       if: inputs.mode == 'release'
       env:

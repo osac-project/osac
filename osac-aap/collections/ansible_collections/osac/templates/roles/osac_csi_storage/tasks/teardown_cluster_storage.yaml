@@ -9,6 +9,19 @@
 # consistent with the CaaS teardown pattern in storage_controller.go.
 # Called only when _remote_kubeconfig is defined (CaaS path).
 
+- name: Fail when called without a guest-cluster kubeconfig (hub path unsupported)
+  ansible.builtin.fail:
+    msg: >-
+      osac_csi_driver teardown_cluster_storage requires a guest-cluster admin_kubeconfig
+      (_remote_kubeconfig must be set). The OSAC CSI meta-driver is only deployed to
+      CaaS tenant clusters, not to the hub cluster.
+  when: _remote_kubeconfig is not defined or _remote_kubeconfig | length == 0
+
+- name: Validate tenant_name is a valid DNS label
+  ansible.builtin.fail:
+    msg: "tenant_name '{{ tenant_name }}' is not a valid DNS label."
+  when: tenant_name is not regex('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
+
 - name: Assert _provider_tiers is defined and non-empty
   ansible.builtin.assert:
     that:
@@ -16,22 +29,35 @@
       - _provider_tiers | length > 0
     fail_msg: _provider_tiers must be provided by the service role dispatcher.
 
-- name: Delete per-tenant OSAC CSI StorageClasses on guest cluster
+- name: Find all tenant OSAC CSI StorageClasses by label selector
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ _remote_kubeconfig }}"
+    validate_certs: "{{ false if (_remote_kubeconfig_insecure | default(false) | bool) else omit }}"
+    kind: StorageClass
+    label_selectors:
+      - "osac.openshift.io/tenant={{ tenant_name }}"
+      - "osac.openshift.io/managed-by=osac-csi-driver"
+  register: _osac_csi_tenant_scs
+
+- name: Delete discovered tenant OSAC CSI StorageClasses on guest cluster
   kubernetes.core.k8s:
+    kubeconfig: "{{ _remote_kubeconfig }}"
+    validate_certs: "{{ false if (_remote_kubeconfig_insecure | default(false) | bool) else omit }}"
     state: absent
     definition:
       apiVersion: storage.k8s.io/v1
       kind: StorageClass
       metadata:
-        name: "osac-{{ tenant_name }}-{{ item.name }}"
-  loop: "{{ _provider_tiers }}"
+        name: "{{ item.metadata.name }}"
+  loop: "{{ _osac_csi_tenant_scs.resources | default([]) }}"
   loop_control:
-    label: "osac-{{ tenant_name }}-{{ item.name }}"
+    label: "{{ item.metadata.name }}"
   ignore_errors: true  # noqa: ignore-errors
 
 - name: Uninstall OSAC CSI driver Helm release from guest cluster
   kubernetes.core.helm:
     kubeconfig: "{{ _remote_kubeconfig }}"
+    kubeconfig_insecure_skip_tls_verify: "{{ _remote_kubeconfig_insecure | default(false) | bool }}"
     release_name: "{{ osac_csi_driver_helm_release }}"
     release_namespace: "{{ osac_csi_driver_namespace }}"
     state: absent
@@ -41,6 +67,8 @@
 
 - name: Delete tenant credential Secret from guest cluster
   kubernetes.core.k8s:
+    kubeconfig: "{{ _remote_kubeconfig }}"
+    validate_certs: "{{ false if (_remote_kubeconfig_insecure | default(false) | bool) else omit }}"
     state: absent
     definition:
       apiVersion: v1
@@ -52,7 +80,11 @@
 
 - name: Delete OSAC CSI driver namespace from guest cluster
   kubernetes.core.k8s:
+    kubeconfig: "{{ _remote_kubeconfig }}"
+    validate_certs: "{{ false if (_remote_kubeconfig_insecure | default(false) | bool) else omit }}"
     state: absent
+    wait: true
+    wait_timeout: 120
     definition:
       apiVersion: v1
       kind: Namespace

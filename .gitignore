@@ -5,10 +5,10 @@ skills/
 # this path and drop the ignore.
 .osac-ai-skills/
 
-# Skill-relative sibling checkouts (tools/bootstrap.sh). osac-docs is
-# osac-project/docs — do not ignore docs/ (in-tree ARCHITECTURE/CONVENTIONS).
-# osac-test-infra/ is kept so leftover clones from older bootstrap runs
-# are not committed; bootstrap no longer creates it (E2E is tests/e2e/).
+# Skill-relative sibling checkouts (tools/bootstrap.sh).
+# osac-test-infra/ and osac-docs/ are kept so leftover clones from older
+# bootstrap runs are not committed; bootstrap no longer creates either
+# (E2E is tests/e2e/; docs content is in-tree under docs/).
 enhancement-proposals/
 osac-ux/
 osac-ui/

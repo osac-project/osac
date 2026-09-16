@@ -26,8 +26,8 @@ This guide covers:
 ### What This Guide Does NOT Cover
 
 - Configuring the OSAC realm itself (managed by the platform)
-- The internal LDAP integration architecture (see
-  [osac-ldap-keycloak-setup-guide.md](osac-ldap-keycloak-setup-guide.md))
+- The internal LDAP integration architecture (see the internal LDAP +
+  Keycloak setup guide, not published in this repo)
 
 ---
 
@@ -451,5 +451,5 @@ tenant's IdP — the CLI and the OSAC platform never see it.
 - [Keycloak Organizations — Managing IdPs](https://docs.redhat.com/en/documentation/red_hat_build_of_keycloak/26.6/html/server_administration_guide/managing_organizations)
 - [Keycloak User Storage Federation](https://docs.redhat.com/en/documentation/red_hat_build_of_keycloak/26.6/html/server_administration_guide/user-storage-federation)
 - [Keycloak OIDC Identity Brokering](https://www.keycloak.org/docs/latest/server_admin/#_identity_broker_oidc)
-- [Internal: LDAP + Keycloak Setup Guide](osac-ldap-keycloak-setup-guide.md) (engineering reference)
-- [Internal: Multi-Tenant LDAP Isolation Research](multi-tenant-ldap-isolation-research.md)
+- Internal: LDAP + Keycloak Setup Guide (engineering reference, not published in this repo)
+- Internal: Multi-Tenant LDAP Isolation Research (not published in this repo)

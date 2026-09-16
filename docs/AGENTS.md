@@ -14,6 +14,13 @@ location.
 
 ## What This Repo Contains
 
+This directory also holds the mono-repo's pre-existing cross-component
+conventions files (`ARCHITECTURE.md`, `CONVENTIONS.md`,
+`INTEGRATION-TESTING.md`, `RELEASING.md`, `codex-getting-started.md`,
+`pr-dashboard/`) — see [`README.md`](README.md) for those; this section
+covers only the project documentation merged in from the former
+`osac-project/docs` repo.
+
 **Architecture documentation** (`architecture/`)
 - `cluster-fulfillment.md` — Cluster fulfillment workflows
 - `vm-fulfillment.md` — VM fulfillment patterns
@@ -21,11 +28,12 @@ location.
 - `aap-provisioning/` — AAP provisioning state machines and sequence diagrams (PlantUML sources)
 - `bm-server-fulfillment.md` — Bare metal server fulfillment
 
-**Developer guides** (`guides/developer/`)
-- Tenant setup procedures
-- ComputeInstance creation workflows
-- InstanceType management (create, list, update, delete)
-- PublicIP allocation examples
+**Guides** (`guides/`)
+- `keycloak-configuration.md`, `keycloak-upgrade-rollback.md` — Keycloak setup and upgrade/rollback
+- `customer-ldap-federation-guide.md` — Customer LDAP federation
+- `tenant-identity-and-access-guide.md` — Tenant identity and access
+- `admin/` — `bcm-backend.md`, `metal3-backend.md`
+- `developer/` — Tenant setup, ComputeInstance creation/catalog items, InstanceType management, PublicIP allocation, networking examples
 
 **Feature documentation** (`features/`)
 - `MGMT-22670-console-access.md` — Console access patterns
@@ -39,7 +47,6 @@ location.
 - `importing-esi-nodes.md` — Steps to import an ESI node into ACM
 - `personas.md` — User archetypes and use cases
 - `AI-POLICY.md` — Transparency and disclosure requirements for AI-assisted contributions
-- `README.md` — Project overview and contribution workflow
 
 **Diagrams**: PlantUML source files (`.puml`) with container-based PNG generation. Standalone images (`images/`) support root-level documents.
 
@@ -59,18 +66,26 @@ docs/
 │   ├── netris-caas-networking.md
 │   └── README.md
 ├── guides/
-│   └── developer/
-│       ├── computeinstance-guide.md
-│       ├── instancetype-guide.md
-│       ├── publicip-guide.md
-│       └── tenant-setup.md
+│   ├── admin/
+│   │   ├── bcm-backend.md
+│   │   └── metal3-backend.md
+│   ├── developer/
+│   │   ├── computeinstance-catalogitem-guide.md
+│   │   ├── computeinstance-guide.md
+│   │   ├── instancetype-guide.md
+│   │   ├── networking-guide.md
+│   │   ├── publicip-guide.md
+│   │   └── tenant-setup.md
+│   ├── customer-ldap-federation-guide.md
+│   ├── keycloak-configuration.md
+│   ├── keycloak-upgrade-rollback.md
+│   └── tenant-identity-and-access-guide.md
 ├── images/                        # Standalone diagrams for root-level docs
 ├── networking/
 │   └── setup-bpg-vrf-lite/        # CUDN provider network integration lab
 ├── AI-POLICY.md
 ├── designdoc.md
 ├── importing-esi-nodes.md
-├── LICENSE
 ├── OWNERS                         # Prow approvers/reviewers
 ├── personas.md
 └── README.md
@@ -309,16 +324,16 @@ Or set up a commit template with DCO trailer in `~/.gitmessage`.
 | `README.md` | Project overview and contribution workflow |
 | `architecture/aap-provisioning/generate_images.sh` | PlantUML diagram generation |
 
-## Related Repositories
+## Related Components and Repositories
 
 Documentation references code and designs from:
-- `fulfillment-service` — gRPC API definitions and server implementation
-- `osac-operator` — Kubernetes operator for cluster/VM provisioning
-- `osac-aap` — Ansible Automation Platform roles
-- `enhancement-proposals` — Design RFCs and feature proposals
-- `osac-installer` — Installation manifests and setup scripts
+- [`../fulfillment-service/`](../fulfillment-service/) — gRPC API definitions and server implementation
+- [`../osac-operator/`](../osac-operator/) — Kubernetes operator for cluster/VM provisioning
+- [`../osac-aap/`](../osac-aap/) — Ansible Automation Platform roles
+- [`../osac-installer/`](../osac-installer/) — Installation manifests and setup scripts
+- [`enhancement-proposals`](https://github.com/osac-project/enhancement-proposals) — Design RFCs and feature proposals (still a separate repo)
 
-When documenting new features, verify implementation details in the relevant component repo before finalizing architecture or developer guide content.
+When documenting new features, verify implementation details in the relevant component directory before finalizing architecture or developer guide content.
 
 ## Quick Reference
 

@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/lookup"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
@@ -103,6 +104,22 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	}
 	defer conn.Close()
 
+	templatesClient := publicv1.NewComputeInstanceTemplatesClient(conn)
+	template, err := lookup.Find(c.args.template, "compute instance template",
+		func(filter string, limit int32) ([]*publicv1.ComputeInstanceTemplate, error) {
+			response, err := templatesClient.List(ctx, publicv1.ComputeInstanceTemplatesListRequest_builder{
+				Filter: proto.String(filter),
+				Limit:  proto.Int32(limit),
+			}.Build())
+			if err != nil {
+				return nil, fmt.Errorf("failed to list templates: %w", err)
+			}
+			return response.GetItems(), nil
+		})
+	if err != nil {
+		return err
+	}
+
 	client := publicv1.NewComputeInstanceCatalogItemsClient(conn)
 
 	catalogItem := publicv1.ComputeInstanceCatalogItem_builder{
@@ -111,7 +128,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		}.Build(),
 		Title:       c.args.title,
 		Description: c.args.description,
-		Template:    &publicv1.ComputeInstanceTemplateReference{Name: c.args.template},
+		Template:    &publicv1.ComputeInstanceTemplateReference{Id: template.GetId()},
 		Published:   c.args.published,
 	}.Build()
 
@@ -153,7 +170,8 @@ _TEXT_ - Human-friendly long description in Markdown format.
 `
 
 const templateFlagHelp = `
-_ID_ - Identifier of the underlying compute instance template.
+_ID_OR_NAME_ - Identifier or name of the underlying compute instance template.
+If a name matches more than one visible template, use its identifier.
 `
 
 const publishedFlagHelp = `

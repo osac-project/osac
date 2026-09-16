@@ -65,6 +65,14 @@ var _ = Describe("parseNetworkAttachmentFlag", func() {
 // Legacy subnet and security-groups tests removed - these fields are no longer supported
 
 var _ = Describe("buildSpec", func() {
+	It("should send the resolved instance type ID", func() {
+		c := &runnerContext{}
+		c.args.instanceType = "instance-type-id"
+		spec, err := c.buildSpec("tmpl", nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(spec.GetInstanceType().GetId()).To(Equal("instance-type-id"))
+	})
+
 	It("should populate attachments when network-attachment flags are set", func() {
 		c := &runnerContext{}
 		c.args.networkAttachments = []string{"n1", "subnet=n2,security-groups=g1"}
@@ -114,6 +122,14 @@ var _ = Describe("buildSpec", func() {
 })
 
 var _ = Describe("buildSpecFromCatalogItem", func() {
+	It("should send the resolved instance type ID", func() {
+		c := &runnerContext{}
+		c.args.instanceType = "instance-type-id"
+		spec, err := c.buildSpecFromCatalogItem("cat-001")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(spec.GetInstanceType().GetId()).To(Equal("instance-type-id"))
+	})
+
 	It("should populate attachments when network-attachment flags are set", func() {
 		c := &runnerContext{}
 		c.args.networkAttachments = []string{"n1", "subnet=n2,security-groups=g1"}

@@ -234,7 +234,8 @@ _NAME_ - Name of the bare metal instance.
 `
 
 const catalogItemFlagHelp = `
-_ID_ - Catalog item identifier or name. Required.
+_ID_OR_NAME_ - Catalog item identifier or name. If a name matches more than
+one visible item, use its identifier. Required.
 `
 
 const sshKeyFlagHelp = `

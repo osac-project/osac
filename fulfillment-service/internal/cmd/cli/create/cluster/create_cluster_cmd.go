@@ -35,6 +35,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/fieldutil"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/netutil"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/lookup"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/exit"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
@@ -172,6 +173,7 @@ type runnerContext struct {
 	console               *terminal.Console
 	settings              *config.Settings
 	templatesClient       publicv1.ClusterTemplatesClient
+	catalogItemsClient    publicv1.ClusterCatalogItemsClient
 	clustersClient        publicv1.ClustersClient
 	clusterVersionsClient publicv1.ClusterVersionsClient
 }
@@ -238,6 +240,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 
 	// Create the gRPC clients:
 	c.templatesClient = publicv1.NewClusterTemplatesClient(conn)
+	c.catalogItemsClient = publicv1.NewClusterCatalogItemsClient(conn)
 	c.clustersClient = publicv1.NewClustersClient(conn)
 	c.clusterVersionsClient = publicv1.NewClusterVersionsClient(conn)
 
@@ -257,9 +260,23 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	}
 
 	if c.args.catalogItem != "" {
-		// Catalog item path: skip template lookup entirely (per D-04).
+		// Catalog item path: resolve an ID or visible name, then skip template lookup (per D-04).
+		catalogItem, err := lookup.Find(c.args.catalogItem, "cluster catalog item",
+			func(filter string, limit int32) ([]*publicv1.ClusterCatalogItem, error) {
+				response, err := c.catalogItemsClient.List(ctx, publicv1.ClusterCatalogItemsListRequest_builder{
+					Filter: proto.String(filter),
+					Limit:  proto.Int32(limit),
+				}.Build())
+				if err != nil {
+					return nil, fmt.Errorf("failed to list catalog items: %w", err)
+				}
+				return response.GetItems(), nil
+			})
+		if err != nil {
+			return err
+		}
 		specBuilder := publicv1.ClusterSpec_builder{
-			CatalogItem: &publicv1.ClusterCatalogItemReference{Name: c.args.catalogItem},
+			CatalogItem: &publicv1.ClusterCatalogItemReference{Id: catalogItem.GetId()},
 		}
 		c.applyOptionalSpecFields(&specBuilder, sshPublicKey)
 		if cmd.Flags().Changed("external-ip-attachment") {
@@ -375,8 +392,7 @@ func (c *runnerContext) createCluster(ctx context.Context, spec *publicv1.Cluste
 	return nil
 }
 
-// findTemplate finds a cluster template by identifier or name. It tries to find by identifier first, and if that fails
-// it searches for templates matching the value as either an identifier or name using a server-side filter. If there is
+// findTemplate finds a cluster template by identifier or name using a server-side filter. If there is
 // exactly one match it returns it. If there are multiple matches it displays them to the user and returns an error. If
 // there are no matches it displays available templates and returns an error.
 func (c *runnerContext) findTemplate(ctx context.Context) (result *publicv1.ClusterTemplate, err error) {
@@ -933,11 +949,13 @@ _NAME_ - Name of the cluster.
 
 const templateFlagHelp = `
 _TEMPLATE_ - Template identifier or name. Mutually exclusive with
-{{ bt }}--catalog-item{{ bt }}.
+{{ bt }}--catalog-item{{ bt }}. If a name matches more than one visible template,
+use its identifier.
 `
 
 const catalogItemFlagHelp = `
-_ID_ - Catalog item identifier. Mutually exclusive with
+_ID_OR_NAME_ - Catalog item identifier or name. If a name matches more than
+one visible item, use its identifier. Mutually exclusive with
 {{ bt }}--template{{ bt }}.
 `
 

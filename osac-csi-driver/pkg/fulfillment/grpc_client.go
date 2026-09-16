@@ -194,7 +194,7 @@ func volumeToInfo(v *privatev1.Volume) *VolumeInfo {
 	}
 	if st := v.GetStatus(); st != nil {
 		info.State = fromProtoState(st.GetState())
-		info.Backend = st.GetBackend()
+		info.Backend = st.GetProvider()
 		info.VendorVolumeID = st.GetVendorVolumeId()
 		info.Protocol = fromProtoProtocol(st.GetProtocol())
 		info.VendorContext = st.GetVendorContext()

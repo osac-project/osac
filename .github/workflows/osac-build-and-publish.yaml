@@ -53,6 +53,15 @@ on:
         type: boolean
         default: false
         required: false
+    secrets:
+      OSAC_BOT_PAT:
+        description: >-
+          Real-actor PAT used to push the umbrella/component release tags
+          in "Tag and notify" -- GitHub never fires push-triggered
+          workflows for a ref pushed with the default GITHUB_TOKEN
+          (OSAC-5357), so this must authenticate as an actual user, not
+          the automatic token.
+        required: true
 
 permissions: {}
 

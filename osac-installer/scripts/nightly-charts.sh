@@ -167,7 +167,7 @@ retag_component_image() {
 # '<component>/v*'`) -- the actual image/binary/proto publish for a
 # real, permanent per-component release tag happens in these, not in
 # osac-build-and-publish.yaml's own build/publish jobs (those only ever push
-# provisional sha-<short> images for e2e). See OSAC-5357: creating the tag is
+# provisional sha-<short> images for e2e). Creating the tag is
 # not evidence any of this ran.
 _component_publish_workflows() {
     local component="$1"
@@ -194,7 +194,7 @@ _component_publish_workflows() {
 # Fails loudly (::error + non-zero) if no matching run ever appears within
 # the timeout, or if it appears but doesn't succeed -- a permanent component
 # tag must never be reported as a successful release when what it's supposed
-# to trigger silently didn't run or failed (OSAC-5357).
+# to trigger silently didn't run or failed.
 wait_for_component_publish_workflow_run() {
     local workflow_file="$1" tag="$2" timeout="${3:-2700}" interval="${4:-15}"
     local start start_time run_id safe_workflow safe_tag limit runs run_count oldest_created gh_err gh_err_file
@@ -212,7 +212,7 @@ wait_for_component_publish_workflow_run() {
     run_id=""
     while true; do
         # Not `gh run list --branch/--event` (server-side filtered) -- confirmed
-        # live (OSAC-5357 follow-up) that it can silently miss a run that
+        # live that it can silently miss a run that
         # genuinely exists and already succeeded, for far longer than any
         # reasonable indexing lag (45+ minutes observed on a real release
         # dispatch). List recent runs for this workflow unfiltered instead and
@@ -242,7 +242,7 @@ wait_for_component_publish_workflow_run() {
             # error) looks identical to "no match yet" unless logged
             # explicitly -- silently defaulting to an empty list here made a
             # real command failure indistinguishable from a genuine miss in
-            # past runs (OSAC-5357 follow-up).
+            # past runs.
             [[ -n "${gh_err}" ]] && echo "::warning::gh run list --workflow ${safe_workflow} --limit ${limit} failed: ${gh_err}" >&2
             run_id=$(jq -r --arg tag "${tag}" \
                 '[.[] | select(.headBranch == $tag and .event == "push")][0].databaseId // empty' \
@@ -275,7 +275,7 @@ wait_for_component_publish_workflow_run() {
 # For a component this run just created a real <component>/vX.Y.Z tag for,
 # requires every one of its downstream tag-triggered publish workflows
 # (_component_publish_workflows) to have actually started and succeeded.
-# Requires GH_TOKEN/GH_REPO in the environment. See OSAC-5357.
+# Requires GH_TOKEN/GH_REPO in the environment.
 verify_component_publish() {
     local component="$1" version="$2"
     local tag="${component}/v${version}"

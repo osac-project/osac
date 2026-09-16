@@ -1032,23 +1032,31 @@ var _ = Describe("ClusterOrder Controller", func() {
 				},
 			}
 
-			nodePool := &hypershiftv1beta1.NodePool{
-				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{agentResourceClassLabel: "m1.small"}},
-				Status: hypershiftv1beta1.NodePoolStatus{
-					Replicas: 2,
+			nodePools := &hypershiftv1beta1.NodePoolList{Items: []hypershiftv1beta1.NodePool{
+				{
+					ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{agentResourceClassLabel: "m1.small"}},
+					Status: hypershiftv1beta1.NodePoolStatus{
+						Replicas: 2,
+					},
 				},
-			}
+				{
+					ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{agentResourceClassLabel: "m1.large"}},
+					Status: hypershiftv1beta1.NodePoolStatus{
+						Replicas: 4,
+					},
+				},
+			}}
 			status := []v1alpha1.NodeRequest{
 				{ResourceClass: "m1.large", NumberOfNodes: 0},
 				{ResourceClass: "m1.small", NumberOfNodes: 0},
 			}
 			instance.Status.NodeRequests = status
 
-			err := reconciler.handleNodePool(ctx, instance, nodePool)
+			err := reconciler.handleNodePools(ctx, instance, nodePools)
 			Expect(err).NotTo(HaveOccurred())
 
 			Expect(instance.Status.NodeRequests).To(ConsistOf(
-				v1alpha1.NodeRequest{ResourceClass: "m1.large", NumberOfNodes: 0},
+				v1alpha1.NodeRequest{ResourceClass: "m1.large", NumberOfNodes: 4},
 				v1alpha1.NodeRequest{ResourceClass: "m1.small", NumberOfNodes: 2},
 			))
 		})

@@ -43,15 +43,20 @@ RUN \
   if [[ "${DEBUG}" == "true" ]]; then \
     gcflags="all=-N -l"; \
   fi; \
-  go build -gcflags="${gcflags}" -ldflags="${ldflags}" ./cmd/fulfillment-service
+  go build -gcflags="${gcflags}" -ldflags="${ldflags}" ./cmd/fulfillment-service; \
+  go build -gcflags="${gcflags}" -ldflags="${ldflags}" ./cmd/osac
 
 # dlv stage — only pulled into the build graph when targeting runtime-debug.
 FROM builder AS dlv-builder
 RUN go install github.com/go-delve/delve/cmd/dlv@latest
 
-# Common runtime base with the service binary.
+# Common runtime base with the service binary. osac (the CLI) ships
+# alongside it -- one image, one build, always version-matched to the
+# service it was built with; no separate release mechanism to keep in
+# sync (see docs/RELEASING.md).
 FROM registry.access.redhat.com/ubi10-minimal:10.2-1789456728 AS runtime-base
 COPY --from=builder /opt/app-root/src/fulfillment-service/fulfillment-service /usr/local/bin
+COPY --from=builder /opt/app-root/src/fulfillment-service/osac /usr/local/bin
 USER 1001
 
 # Debug variant — adds dlv on top of the base; build with: podman build --target runtime-debug .

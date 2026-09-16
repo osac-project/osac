@@ -58,13 +58,17 @@ spec:
             description: spec defines the desired state of ExternalIPPool
             properties:
               cidrs:
-                description: CIDRs is the list of CIDR blocks for this pool. All CIDRs
-                  must match the declared IPFamily.
+                description: CIDRs is the list of canonical IPv4 CIDR blocks for this
+                  pool. Exactly one is supported.
                 items:
                   type: string
+                maxItems: 1
                 minItems: 1
                 type: array
                 x-kubernetes-validations:
+                - message: cidrs must contain only canonical IPv4 CIDRs
+                  rule: self.all(c, isCIDR(c) && cidr(c).ip().family() == 4 && cidr(c)
+                    == cidr(c).masked())
                 - message: cidrs is immutable
                   rule: self == oldSelf
               implementationStrategy:
@@ -79,11 +83,10 @@ spec:
                 - message: implementationStrategy is immutable
                   rule: self == oldSelf
               ipFamily:
-                description: IPFamily indicates the IP address family for this pool
-                  (IPv4 or IPv6)
+                description: IPFamily indicates the IP address family for this pool.
+                  Only IPv4 is supported.
                 enum:
                 - IPv4
-                - IPv6
                 type: string
                 x-kubernetes-validations:
                 - message: ipFamily is immutable

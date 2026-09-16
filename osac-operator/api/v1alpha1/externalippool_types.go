@@ -22,16 +22,18 @@ import (
 
 // ExternalIPPoolSpec defines the desired state of ExternalIPPool
 type ExternalIPPoolSpec struct {
-	// CIDRs is the list of CIDR blocks for this pool. All CIDRs must match the declared IPFamily.
+	// CIDRs is the list of canonical IPv4 CIDR blocks for this pool. Exactly one is supported.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=1
+	// +kubebuilder:validation:XValidation:rule="self.all(c, isCIDR(c) && cidr(c).ip().family() == 4 && cidr(c) == cidr(c).masked())",message="cidrs must contain only canonical IPv4 CIDRs"
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="cidrs is immutable"
 	CIDRs []string `json:"cidrs"`
 
-	// IPFamily indicates the IP address family for this pool (IPv4 or IPv6)
+	// IPFamily indicates the IP address family for this pool. Only IPv4 is supported.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Type=string
-	// +kubebuilder:validation:Enum=IPv4;IPv6
+	// +kubebuilder:validation:Enum=IPv4
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="ipFamily is immutable"
 	IPFamily string `json:"ipFamily"`
 

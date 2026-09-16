@@ -52,15 +52,24 @@ spec:
             description: spec defines the desired state of VirtualNetwork
             properties:
               ipv4Cidr:
-                description: IPv4CIDR is the IPv4 CIDR block for this virtual network
+                description: IPv4CIDR is the required canonical IPv4 CIDR block for
+                  this virtual network.
+                minLength: 1
                 type: string
                 x-kubernetes-validations:
+                - message: ipv4Cidr must be a canonical IPv4 CIDR
+                  rule: isCIDR(self) && cidr(self).ip().family() == 4 && cidr(self)
+                    == cidr(self).masked()
                 - message: ipv4Cidr is immutable
                   rule: self == oldSelf
               ipv6Cidr:
-                description: IPv6CIDR is the IPv6 CIDR block for this virtual network
+                description: |-
+                  IPv6CIDR is retained for wire compatibility, but IPv6 and dual-stack
+                  networking are not supported. Non-empty values are rejected.
                 type: string
                 x-kubernetes-validations:
+                - message: IPv6 and dual-stack networking are not supported
+                  rule: self == ''
                 - message: ipv6Cidr is immutable
                   rule: self == oldSelf
               networkClass:
@@ -79,6 +88,7 @@ spec:
                 - message: region is immutable
                   rule: self == oldSelf
             required:
+            - ipv4Cidr
             - region
             type: object
           status:

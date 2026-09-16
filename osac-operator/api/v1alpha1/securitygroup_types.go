@@ -61,11 +61,13 @@ type SecurityRule struct {
 	// SourceCIDR specifies the source CIDR block for this rule
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:XValidation:rule="self == '' || (isCIDR(self) && cidr(self).ip().family() == 4 && cidr(self) == cidr(self).masked())",message="sourceCidr must be a canonical IPv4 CIDR"
 	SourceCIDR string `json:"sourceCidr,omitempty"`
 
 	// DestinationCIDR specifies the destination CIDR block for this rule
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:XValidation:rule="self == '' || (isCIDR(self) && cidr(self).ip().family() == 4 && cidr(self) == cidr(self).masked())",message="destinationCidr must be a canonical IPv4 CIDR"
 	DestinationCIDR string `json:"destinationCidr,omitempty"`
 }
 

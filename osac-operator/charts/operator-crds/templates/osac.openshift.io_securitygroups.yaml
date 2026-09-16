@@ -63,6 +63,10 @@ spec:
                       description: DestinationCIDR specifies the destination CIDR
                         block for this rule
                       type: string
+                      x-kubernetes-validations:
+                      - message: destinationCidr must be a canonical IPv4 CIDR
+                        rule: self == '' || (isCIDR(self) && cidr(self).ip().family()
+                          == 4 && cidr(self) == cidr(self).masked())
                     portFrom:
                       description: PortFrom specifies the start of the port range
                       format: int32
@@ -93,6 +97,10 @@ spec:
                       description: SourceCIDR specifies the source CIDR block for
                         this rule
                       type: string
+                      x-kubernetes-validations:
+                      - message: sourceCidr must be a canonical IPv4 CIDR
+                        rule: self == '' || (isCIDR(self) && cidr(self).ip().family()
+                          == 4 && cidr(self) == cidr(self).masked())
                   required:
                   - protocol
                   type: object
@@ -107,6 +115,10 @@ spec:
                       description: DestinationCIDR specifies the destination CIDR
                         block for this rule
                       type: string
+                      x-kubernetes-validations:
+                      - message: destinationCidr must be a canonical IPv4 CIDR
+                        rule: self == '' || (isCIDR(self) && cidr(self).ip().family()
+                          == 4 && cidr(self) == cidr(self).masked())
                     portFrom:
                       description: PortFrom specifies the start of the port range
                       format: int32
@@ -137,6 +149,10 @@ spec:
                       description: SourceCIDR specifies the source CIDR block for
                         this rule
                       type: string
+                      x-kubernetes-validations:
+                      - message: sourceCidr must be a canonical IPv4 CIDR
+                        rule: self == '' || (isCIDR(self) && cidr(self).ip().family()
+                          == 4 && cidr(self) == cidr(self).masked())
                   required:
                   - protocol
                   type: object

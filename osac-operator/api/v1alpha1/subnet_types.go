@@ -28,15 +28,19 @@ type SubnetSpec struct {
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="virtualNetwork is immutable"
 	VirtualNetwork string `json:"virtualNetwork"`
 
-	// IPv4CIDR is the IPv4 CIDR block for this subnet
-	// +kubebuilder:validation:Optional
+	// IPv4CIDR is the required canonical IPv4 CIDR block for this subnet.
+	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:XValidation:rule="isCIDR(self) && cidr(self).ip().family() == 4 && cidr(self) == cidr(self).masked()",message="ipv4Cidr must be a canonical IPv4 CIDR"
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="ipv4Cidr is immutable"
 	IPv4CIDR string `json:"ipv4Cidr,omitempty"`
 
-	// IPv6CIDR is the IPv6 CIDR block for this subnet
+	// IPv6CIDR is retained for wire compatibility, but IPv6 and dual-stack
+	// networking are not supported. Non-empty values are rejected.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:XValidation:rule="self == ''",message="IPv6 and dual-stack networking are not supported"
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="ipv6Cidr is immutable"
 	IPv6CIDR string `json:"ipv6Cidr,omitempty"`
 }

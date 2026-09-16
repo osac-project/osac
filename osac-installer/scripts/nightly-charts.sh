@@ -197,7 +197,7 @@ _component_publish_workflows() {
 # to trigger silently didn't run or failed (OSAC-5357).
 wait_for_component_publish_workflow_run() {
     local workflow_file="$1" tag="$2" timeout="${3:-2700}" interval="${4:-15}"
-    local start start_time run_id safe_workflow safe_tag limit runs run_count oldest_created
+    local start start_time run_id safe_workflow safe_tag limit runs run_count oldest_created gh_err gh_err_file
 
     safe_workflow=$(_gha_sanitize_for_message "${workflow_file}")
     safe_tag=$(_gha_sanitize_for_message "${tag}")
@@ -230,8 +230,20 @@ wait_for_component_publish_workflow_run() {
         # simply has fewer runs than the current page size.
         limit=30
         while true; do
-            runs=$(gh run list --workflow "${workflow_file}" --limit "${limit}" \
-                --json databaseId,headBranch,event,createdAt 2>/dev/null) || runs='[]'
+            gh_err=""
+            gh_err_file=$(mktemp)
+            if ! runs=$(gh run list --workflow "${workflow_file}" --limit "${limit}" \
+                --json databaseId,headBranch,event,createdAt 2>"${gh_err_file}"); then
+                gh_err=$(cat "${gh_err_file}" 2>/dev/null)
+                runs='[]'
+            fi
+            rm -f "${gh_err_file}"
+            # Surfaced, not swallowed: a `gh` failure (auth, rate limit, API
+            # error) looks identical to "no match yet" unless logged
+            # explicitly -- silently defaulting to an empty list here made a
+            # real command failure indistinguishable from a genuine miss in
+            # past runs (OSAC-5357 follow-up).
+            [[ -n "${gh_err}" ]] && echo "::warning::gh run list --workflow ${safe_workflow} --limit ${limit} failed: ${gh_err}" >&2
             run_id=$(jq -r --arg tag "${tag}" \
                 '[.[] | select(.headBranch == $tag and .event == "push")][0].databaseId // empty' \
                 <<<"${runs}")

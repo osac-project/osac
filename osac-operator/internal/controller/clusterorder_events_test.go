@@ -250,22 +250,12 @@ var _ = Describe("ClusterOrder transition events", func() {
 		Consistently(recorder.Events, 200*time.Millisecond).ShouldNot(Receive())
 	})
 
-	It("records the Ready event after HostedCluster becomes available and workers join", func() {
+	It("records skipped worker stage before Ready when one reconcile observes completion", func() {
 		recorder := newRecorder()
 		reconciler := &ClusterOrderReconciler{Recorder: recorder}
 		instance := &v1alpha1.ClusterOrder{}
 
-		oldStatus := statusWithProgressingReason(v1alpha1.ReasonPreparingInfrastructure)
-		instance.Status = statusWithProgressingReason(v1alpha1.ReasonControlPlaneStarting)
-		reconciler.recordTransitionEvents(instance, &oldStatus)
-		Eventually(recorder.Events).Should(Receive(ContainSubstring(v1alpha1.ReasonControlPlaneStarting)))
-
-		oldStatus = instance.Status
-		instance.Status = statusWithProgressingReason(v1alpha1.ReasonWorkersJoining)
-		reconciler.recordTransitionEvents(instance, &oldStatus)
-		Eventually(recorder.Events).Should(Receive(ContainSubstring(v1alpha1.ReasonWorkersJoining)))
-
-		oldStatus = instance.Status
+		oldStatus := statusWithProgressingReason(v1alpha1.ReasonControlPlaneStarting)
 		instance.Status = v1alpha1.ClusterOrderStatus{
 			Phase: v1alpha1.ClusterOrderPhaseReady,
 			Conditions: []metav1.Condition{{
@@ -275,6 +265,7 @@ var _ = Describe("ClusterOrder transition events", func() {
 			}},
 		}
 		reconciler.recordTransitionEvents(instance, &oldStatus)
+		Expect(recorder.Events).To(Receive(ContainSubstring(v1alpha1.ReasonWorkersJoining)))
 		Eventually(recorder.Events).Should(Receive(And(
 			ContainSubstring(corev1.EventTypeNormal),
 			ContainSubstring(v1alpha1.ReasonReady),

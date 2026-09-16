@@ -505,24 +505,30 @@ var _ = Describe("ClusterOrder Controller", func() {
 			},
 			Entry("HostedCluster only", nil, []hypershiftv1beta1.NodePool{}, true),
 			Entry("requested workers with no NodePools", []v1alpha1.NodeRequest{{ResourceClass: "worker", NumberOfNodes: 1}}, []hypershiftv1beta1.NodePool{}, false),
-			Entry("all requested NodePools are ready", []v1alpha1.NodeRequest{{ResourceClass: "worker", NumberOfNodes: 1}}, []hypershiftv1beta1.NodePool{
-				{Status: hypershiftv1beta1.NodePoolStatus{Conditions: []hypershiftv1beta1.NodePoolCondition{
+			Entry("ready workers without requested capacity", []v1alpha1.NodeRequest{{ResourceClass: "worker", NumberOfNodes: 2}}, []hypershiftv1beta1.NodePool{
+				{Status: hypershiftv1beta1.NodePoolStatus{Replicas: 1, Conditions: []hypershiftv1beta1.NodePoolCondition{
 					{Type: hypershiftv1beta1.NodePoolAllMachinesReadyConditionType, Status: corev1.ConditionTrue},
 					{Type: hypershiftv1beta1.NodePoolReadyConditionType, Status: corev1.ConditionTrue},
 				}}},
-				{Status: hypershiftv1beta1.NodePoolStatus{Conditions: []hypershiftv1beta1.NodePoolCondition{
+			}, false),
+			Entry("all requested NodePools are ready", []v1alpha1.NodeRequest{{ResourceClass: "worker", NumberOfNodes: 1}}, []hypershiftv1beta1.NodePool{
+				{Status: hypershiftv1beta1.NodePoolStatus{Replicas: 1, Conditions: []hypershiftv1beta1.NodePoolCondition{
+					{Type: hypershiftv1beta1.NodePoolAllMachinesReadyConditionType, Status: corev1.ConditionTrue},
+					{Type: hypershiftv1beta1.NodePoolReadyConditionType, Status: corev1.ConditionTrue},
+				}}},
+				{Status: hypershiftv1beta1.NodePoolStatus{Replicas: 1, Conditions: []hypershiftv1beta1.NodePoolCondition{
 					{Type: hypershiftv1beta1.NodePoolAllMachinesReadyConditionType, Status: corev1.ConditionTrue},
 					{Type: hypershiftv1beta1.NodePoolReadyConditionType, Status: corev1.ConditionTrue},
 				}}},
 			}, true),
 			Entry("machines are ready but worker Nodes are not ready", []v1alpha1.NodeRequest{{ResourceClass: "worker", NumberOfNodes: 1}}, []hypershiftv1beta1.NodePool{
-				{Status: hypershiftv1beta1.NodePoolStatus{Conditions: []hypershiftv1beta1.NodePoolCondition{
+				{Status: hypershiftv1beta1.NodePoolStatus{Replicas: 1, Conditions: []hypershiftv1beta1.NodePoolCondition{
 					{Type: hypershiftv1beta1.NodePoolAllMachinesReadyConditionType, Status: corev1.ConditionTrue},
 					{Type: hypershiftv1beta1.NodePoolReadyConditionType, Status: corev1.ConditionFalse},
 				}}},
 			}, false),
 			Entry("one NodePool is still joining", []v1alpha1.NodeRequest{{ResourceClass: "worker", NumberOfNodes: 1}}, []hypershiftv1beta1.NodePool{
-				{Status: hypershiftv1beta1.NodePoolStatus{Conditions: []hypershiftv1beta1.NodePoolCondition{
+				{Status: hypershiftv1beta1.NodePoolStatus{Replicas: 1, Conditions: []hypershiftv1beta1.NodePoolCondition{
 					{Type: hypershiftv1beta1.NodePoolAllMachinesReadyConditionType, Status: corev1.ConditionTrue},
 					{Type: hypershiftv1beta1.NodePoolReadyConditionType, Status: corev1.ConditionTrue},
 				}}},
@@ -559,11 +565,11 @@ var _ = Describe("ClusterOrder Controller", func() {
 				},
 			}
 
-			nodePools := []hypershiftv1beta1.NodePool{{Status: hypershiftv1beta1.NodePoolStatus{Conditions: []hypershiftv1beta1.NodePoolCondition{
+			nodePools := []hypershiftv1beta1.NodePool{{Status: hypershiftv1beta1.NodePoolStatus{Replicas: 1, Conditions: []hypershiftv1beta1.NodePoolCondition{
 				{Type: hypershiftv1beta1.NodePoolAllMachinesReadyConditionType, Status: corev1.ConditionTrue},
 				{Type: hypershiftv1beta1.NodePoolReadyConditionType, Status: corev1.ConditionTrue},
 			}}}}
-			Expect(finalizeReadyIfProvisioned(instance, hc, nodePools, true)).To(BeTrue())
+			Expect(finalizeReadyIfProvisioned(instance, hc, nodePools)).To(BeTrue())
 			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseReady))
 			progressing := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
 			Expect(progressing.Status).To(Equal(metav1.ConditionFalse))
@@ -1086,7 +1092,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 			Expect(cond.Message).To(Equal("provisioning in progress"))
 		})
 
-		It("should keep the order progressing on OnSuccess until the HostedCluster is ready", func() {
+		It("should leave phase and progressing reason to live cluster observations on OnSuccess", func() {
 			instance := &v1alpha1.ClusterOrder{
 				Status: v1alpha1.ClusterOrderStatus{
 					Phase: v1alpha1.ClusterOrderPhaseProgressing,
@@ -1098,13 +1104,10 @@ var _ = Describe("ClusterOrder Controller", func() {
 			callbacks.OnSuccess(provisioning.ProvisionStatus{})
 
 			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseProgressing))
-			cond := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
-			Expect(cond).NotTo(BeNil())
-			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
-			Expect(cond.Reason).To(Equal(v1alpha1.ReasonProgressing))
+			Expect(instance.Status.Conditions).To(BeEmpty())
 		})
 
-		It("should clear stale Progressing=False condition on provisioning recovery without marking Ready", func() {
+		It("should not overwrite a stale condition on provisioning success", func() {
 			instance := &v1alpha1.ClusterOrder{
 				Status: v1alpha1.ClusterOrderStatus{
 					Phase: v1alpha1.ClusterOrderPhaseProgressing,
@@ -1127,9 +1130,9 @@ var _ = Describe("ClusterOrder Controller", func() {
 			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseProgressing))
 			cond := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
 			Expect(cond).NotTo(BeNil())
-			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
-			Expect(cond.Reason).To(Equal(v1alpha1.ReasonProgressing))
-			Expect(cond.Message).To(BeEmpty())
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal(v1alpha1.ReasonProvisioningFailed))
+			Expect(cond.Message).To(Equal("previous failure"))
 		})
 	})
 

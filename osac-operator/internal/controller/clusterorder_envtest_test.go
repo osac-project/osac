@@ -172,21 +172,16 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 			}
 			Expect(fakeClient.Status().Update(ctx, nodePool)).To(Succeed())
 
-			// The first observation records the worker-joining stage but remains progressing.
+			// A single observation sees the live HostedCluster, ready NodePool, and
+			// succeeded provision job, so it reaches Ready and emits the skipped
+			// WorkersJoining stage before the terminal event.
 			_, err := reconciler.Reconcile(ctx, request)
 			Expect(err).NotTo(HaveOccurred())
 			updated := &osacv1alpha1.ClusterOrder{}
 			Expect(fakeClient.Get(ctx, types.NamespacedName{Name: name, Namespace: clusterOrderTestNamespace}, updated)).To(Succeed())
-			Expect(updated.Status.Phase).To(Equal(osacv1alpha1.ClusterOrderPhaseProgressing))
+			Expect(updated.Status.Phase).To(Equal(osacv1alpha1.ClusterOrderPhaseReady))
 			Expect(updated.IsStatusConditionTrue(osacv1alpha1.ConditionControlPlaneAvailable)).To(BeTrue())
 			Expect(recorder.Events).To(Receive(ContainSubstring(osacv1alpha1.ReasonWorkersJoining)))
-
-			// A subsequent reconcile observes the persisted availability condition and
-			// finalizes the order only after the worker NodePool is ready.
-			_, err = reconciler.Reconcile(ctx, request)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(fakeClient.Get(ctx, types.NamespacedName{Name: name, Namespace: clusterOrderTestNamespace}, updated)).To(Succeed())
-			Expect(updated.Status.Phase).To(Equal(osacv1alpha1.ClusterOrderPhaseReady))
 			progressing := apimeta.FindStatusCondition(updated.Status.Conditions, osacv1alpha1.ConditionProgressing)
 			Expect(progressing).NotTo(BeNil())
 			Expect(progressing.Status).To(Equal(metav1.ConditionFalse))

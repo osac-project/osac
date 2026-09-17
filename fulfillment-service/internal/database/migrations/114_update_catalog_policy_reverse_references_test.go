@@ -26,45 +26,130 @@ var _ = DescribeMigration("Typed catalog policy reverse references", func() {
 	BeforeEach(func(ctx context.Context) { Expect(tool.Migrate(ctx, 114)).To(Succeed()) })
 
 	It("protects locked and editable default dependencies of active catalog items", func(ctx context.Context) {
-		cases := []struct {
-			target, catalog, field string
-			value                  any
-		}{
-			{"storage_tiers", "compute_instance_catalog_items", "boot_disk", nil},
-			{"storage_tiers", "compute_instance_catalog_items", "additional_disks", map[string]any{"items": []any{map[string]any{"storage_tier": map[string]any{"id": "target"}}}}},
-			{"instance_types", "compute_instance_catalog_items", "instance_type", map[string]any{"id": "target"}},
-			{"cluster_versions", "cluster_catalog_items", "version", map[string]any{"id": "target"}},
-			{"subnets", "compute_instance_catalog_items", "network_attachments", map[string]any{"items": []any{map[string]any{"subnet": map[string]any{"id": "target"}}}}},
-			{"security_groups", "compute_instance_catalog_items", "network_attachments", map[string]any{"items": []any{map[string]any{"security_groups": []any{map[string]any{"id": "target"}}}}}},
-			{"subnets", "cluster_catalog_items", "network_attachment", map[string]any{"subnet": map[string]any{"id": "target"}}},
-			{"security_groups", "cluster_catalog_items", "network_attachment", map[string]any{"security_groups": []any{map[string]any{"id": "target"}}}},
-			{"subnets", "bare_metal_instance_catalog_items", "network_attachments", map[string]any{"items": []any{map[string]any{"subnet": map[string]any{"id": "target"}}}}},
-			{"security_groups", "bare_metal_instance_catalog_items", "network_attachments", map[string]any{"items": []any{map[string]any{"security_groups": []any{map[string]any{"id": "target"}}}}}},
-
-			{"bare_metal_instance_types", "bare_metal_instance_catalog_items", "instance_type", map[string]any{"id": "target"}},
-			{"disk_images", "compute_instance_catalog_items", "disk_image", map[string]any{"id": "target"}},
-			{"disk_images", "bare_metal_instance_catalog_items", "disk_image", map[string]any{"id": "target"}},
-			{"secrets", "cluster_catalog_items", "pull_secret_secret", map[string]any{"id": "target"}},
-			{"host_types", "cluster_catalog_items", "node_sets", map[string]any{"items": map[string]any{"arbitrary": map[string]any{"host_type": map[string]any{"id": "target"}, "size": 2}}}},
+		// Keep these cases in one spec: DescribeMigration creates and migrates a fresh database per spec.
+		type dependencyCase struct {
+			name, target, catalog, field string
+			targetData                   string // Empty means an empty JSON object.
+			value                        string // Empty means the direct {"id":"target"} reference.
+		}
+		cases := []dependencyCase{
+			{
+				name:    "compute boot disk tier",
+				target:  "storage_tiers",
+				catalog: "compute_instance_catalog_items",
+				field:   "boot_disk",
+			},
+			{
+				name:    "compute additional disk tier",
+				target:  "storage_tiers",
+				catalog: "compute_instance_catalog_items",
+				field:   "additional_disks",
+				value:   `{"items":[{"storage_tier":{"id":"target"}}]}`,
+			},
+			{
+				name:    "compute instance type",
+				target:  "instance_types",
+				catalog: "compute_instance_catalog_items",
+				field:   "instance_type",
+			},
+			{
+				name:       "cluster version",
+				target:     "cluster_versions",
+				catalog:    "cluster_catalog_items",
+				field:      "version",
+				targetData: `{"spec":{"version":"4.20.0","image":"quay.io/example/release:4.20"}}`,
+			},
+			{
+				name:    "compute subnet",
+				target:  "subnets",
+				catalog: "compute_instance_catalog_items",
+				field:   "network_attachments",
+				value:   `{"items":[{"subnet":{"id":"target"}}]}`,
+			},
+			{
+				name:    "compute security group",
+				target:  "security_groups",
+				catalog: "compute_instance_catalog_items",
+				field:   "network_attachments",
+				value:   `{"items":[{"security_groups":[{"id":"target"}]}]}`,
+			},
+			{
+				name:    "cluster subnet",
+				target:  "subnets",
+				catalog: "cluster_catalog_items",
+				field:   "network_attachment",
+				value:   `{"subnet":{"id":"target"}}`,
+			},
+			{
+				name:    "cluster security group",
+				target:  "security_groups",
+				catalog: "cluster_catalog_items",
+				field:   "network_attachment",
+				value:   `{"security_groups":[{"id":"target"}]}`,
+			},
+			{
+				name:    "bare metal subnet",
+				target:  "subnets",
+				catalog: "bare_metal_instance_catalog_items",
+				field:   "network_attachments",
+				value:   `{"items":[{"subnet":{"id":"target"}}]}`,
+			},
+			{
+				name:    "bare metal security group",
+				target:  "security_groups",
+				catalog: "bare_metal_instance_catalog_items",
+				field:   "network_attachments",
+				value:   `{"items":[{"security_groups":[{"id":"target"}]}]}`,
+			},
+			{
+				name:    "bare metal instance type",
+				target:  "bare_metal_instance_types",
+				catalog: "bare_metal_instance_catalog_items",
+				field:   "instance_type",
+			},
+			{
+				name:    "compute disk image",
+				target:  "disk_images",
+				catalog: "compute_instance_catalog_items",
+				field:   "disk_image",
+			},
+			{
+				name:    "bare metal disk image",
+				target:  "disk_images",
+				catalog: "bare_metal_instance_catalog_items",
+				field:   "disk_image",
+			},
+			{
+				name:       "cluster pull secret",
+				target:     "secrets",
+				catalog:    "cluster_catalog_items",
+				field:      "pull_secret_secret",
+				targetData: `{"backend":"SECRET_BACKEND_HUB"}`,
+			},
+			{
+				name:    "cluster node host type",
+				target:  "host_types",
+				catalog: "cluster_catalog_items",
+				field:   "node_sets",
+				value:   `{"items":{"arbitrary":{"host_type":{"id":"target"},"size":2}}}`,
+			},
 		}
 		for _, tc := range cases {
 			for _, branch := range []string{"locked", "default"} {
+				By(fmt.Sprintf("%s in %s policy", tc.name, branch))
 				targetData := `{}`
-				if tc.target == "secrets" {
-					targetData = `{"backend":"SECRET_BACKEND_HUB"}`
-				}
-				if tc.target == "cluster_versions" {
-					targetData = `{"spec":{"version":"4.20.0","image":"quay.io/example/release:4.20"}}`
+				if tc.targetData != "" {
+					targetData = tc.targetData
 				}
 				_, err := conn.Exec(ctx, fmt.Sprintf("insert into %s (id, name, tenant, data) values ('target', 'target', 'system', $1::jsonb)", tc.target), targetData)
 				Expect(err).ToNot(HaveOccurred())
 				value := tc.value
-				if value == nil {
-					value = map[string]any{"id": "target"}
+				if value == "" {
+					value = `{"id":"target"}`
 				}
-				policy := map[string]any{"locked": value}
+				policy := map[string]any{"locked": json.RawMessage(value)}
 				if branch == "default" {
-					policy = map[string]any{"editable": map[string]any{"default_value": value}}
+					policy = map[string]any{"editable": map[string]any{"default_value": json.RawMessage(value)}}
 				}
 				var field any = policy
 				if tc.field == "boot_disk" {
@@ -117,39 +202,194 @@ var _ = DescribeMigration("Typed catalog policy reverse references", func() {
 		Expect(pgError.Code).To(Equal("Z0003"))
 	})
 
-	It("preserves deletion protection for existing resource and template references", func(ctx context.Context) {
-		cases := []struct {
+	It("protects resource and template references, including new guards", func(ctx context.Context) {
+		type referenceCase struct {
 			name, targetTable, referenceTable string
 			targetData, referenceData         func(string) string
-		}{
-			{"cluster version from cluster", "cluster_versions", "clusters", clusterVersionData, jsonAt("spec", "version")},
-			{"cluster version from template", "cluster_versions", "cluster_templates", clusterVersionData, jsonAt("spec_defaults", "version")},
-			{"instance type from compute instance", "instance_types", "compute_instances", emptyJSON, jsonAt("spec", "instance_type")},
-			{"instance type from compute template", "instance_types", "compute_instance_templates", emptyJSON, jsonAt("spec_defaults", "instance_type")},
-			{"disk image from compute instance", "disk_images", "compute_instances", emptyJSON, jsonAt("spec", "disk_image")},
-			{"disk image from compute template", "disk_images", "compute_instance_templates", emptyJSON, jsonAt("spec_defaults", "disk_image")},
-			{"disk image from bare metal instance", "disk_images", "bare_metal_instances", emptyJSON, jsonAt("spec", "disk_image")},
-			{"secret from cluster", "secrets", "clusters", emptyJSON, jsonAt("spec", "pull_secret_secret")},
-			{"secret from cluster template", "secrets", "cluster_templates", emptyJSON, jsonAt("spec_defaults", "pull_secret_secret")},
-			{"secret from hub", "secrets", "hubs", emptyJSON, jsonAt("spec", "kubeconfig_secret")},
-			{"secret from identity provider", "secrets", "identity_providers", emptyJSON, jsonAt("spec", "open_id_connect", "client_secret_secret")},
-			{"secret from storage backend", "secrets", "storage_backends", emptyJSON, jsonAt("spec", "credentials", "password_secret")},
-			{"subnet from compute instance", "subnets", "compute_instances", emptyJSON, jsonArrayAt("spec", "network_attachments", "subnet")},
-			{"subnet from cluster", "subnets", "clusters", emptyJSON, jsonAt("spec", "network_attachment", "subnet")},
-			{"subnet from bare metal instance", "subnets", "bare_metal_instances", emptyJSON, jsonArrayAt("spec", "network_attachments", "subnet")},
-			{"security group from compute instance", "security_groups", "compute_instances", emptyJSON, jsonSecurityGroupArrayAt("spec", "network_attachments")},
-			{"security group from cluster", "security_groups", "clusters", emptyJSON, jsonSecurityGroupsAt("spec", "network_attachment")},
-			{"security group from bare metal instance", "security_groups", "bare_metal_instances", emptyJSON, jsonSecurityGroupArrayAt("spec", "network_attachments")},
-			{"storage tier from compute boot disk", "storage_tiers", "compute_instances", emptyJSON, jsonAt("spec", "boot_disk", "storage_tier")},
-			{"storage tier from compute additional disk", "storage_tiers", "compute_instances", emptyJSON, jsonArrayAt("spec", "additional_disks", "storage_tier")},
-			{"storage tier from template boot disk", "storage_tiers", "compute_instance_templates", emptyJSON, jsonAt("spec_defaults", "boot_disk", "storage_tier")},
-			{"storage tier from template additional disk", "storage_tiers", "compute_instance_templates", emptyJSON, jsonArrayAt("spec_defaults", "additional_disks", "storage_tier")},
-			{"bare metal instance type from resource", "bare_metal_instance_types", "bare_metal_instances", emptyJSON, jsonAt("spec", "instance_type")},
-			{"host type from cluster", "host_types", "clusters", emptyJSON, jsonNodeSetAt("spec", "node_sets")},
-			{"host type from cluster template", "host_types", "cluster_templates", emptyJSON, jsonNodeSetAt("node_sets")},
-			{"host type from bare metal template", "host_types", "bare_metal_instance_templates", emptyJSON, func(id string) string {
-				return fmt.Sprintf(`{"host_type":%q}`, id)
-			}},
+		}
+		cases := []referenceCase{
+			{
+				name:           "cluster version from cluster",
+				targetTable:    "cluster_versions",
+				referenceTable: "clusters",
+				targetData:     clusterVersionData,
+				referenceData:  jsonAt("spec", "version"),
+			},
+			{
+				name:           "cluster version from template",
+				targetTable:    "cluster_versions",
+				referenceTable: "cluster_templates",
+				targetData:     clusterVersionData,
+				referenceData:  jsonAt("spec_defaults", "version"),
+			},
+			{
+				name:           "instance type from compute instance",
+				targetTable:    "instance_types",
+				referenceTable: "compute_instances",
+				targetData:     emptyJSON,
+				referenceData:  jsonAt("spec", "instance_type"),
+			},
+			{
+				name:           "instance type from compute template",
+				targetTable:    "instance_types",
+				referenceTable: "compute_instance_templates",
+				targetData:     emptyJSON,
+				referenceData:  jsonAt("spec_defaults", "instance_type"),
+			},
+			{
+				name:           "disk image from compute instance",
+				targetTable:    "disk_images",
+				referenceTable: "compute_instances",
+				targetData:     emptyJSON,
+				referenceData:  jsonAt("spec", "disk_image"),
+			},
+			{
+				name:           "disk image from compute template",
+				targetTable:    "disk_images",
+				referenceTable: "compute_instance_templates",
+				targetData:     emptyJSON,
+				referenceData:  jsonAt("spec_defaults", "disk_image"),
+			},
+			{
+				name:           "disk image from bare metal instance",
+				targetTable:    "disk_images",
+				referenceTable: "bare_metal_instances",
+				targetData:     emptyJSON,
+				referenceData:  jsonAt("spec", "disk_image"),
+			},
+			{
+				name:           "secret from cluster",
+				targetTable:    "secrets",
+				referenceTable: "clusters",
+				targetData:     emptyJSON,
+				referenceData:  jsonAt("spec", "pull_secret_secret"),
+			},
+			{
+				name:           "secret from cluster template",
+				targetTable:    "secrets",
+				referenceTable: "cluster_templates",
+				targetData:     emptyJSON,
+				referenceData:  jsonAt("spec_defaults", "pull_secret_secret"),
+			},
+			{
+				name:           "secret from hub",
+				targetTable:    "secrets",
+				referenceTable: "hubs",
+				targetData:     emptyJSON,
+				referenceData:  jsonAt("spec", "kubeconfig_secret"),
+			},
+			{
+				name:           "secret from identity provider",
+				targetTable:    "secrets",
+				referenceTable: "identity_providers",
+				targetData:     emptyJSON,
+				referenceData:  jsonAt("spec", "open_id_connect", "client_secret_secret"),
+			},
+			{
+				name:           "secret from storage backend",
+				targetTable:    "secrets",
+				referenceTable: "storage_backends",
+				targetData:     emptyJSON,
+				referenceData:  jsonAt("spec", "credentials", "password_secret"),
+			},
+			{
+				name:           "subnet from compute instance",
+				targetTable:    "subnets",
+				referenceTable: "compute_instances",
+				targetData:     emptyJSON,
+				referenceData:  jsonArrayAt("spec", "network_attachments", "subnet"),
+			},
+			{
+				name:           "subnet from cluster",
+				targetTable:    "subnets",
+				referenceTable: "clusters",
+				targetData:     emptyJSON,
+				referenceData:  jsonAt("spec", "network_attachment", "subnet"),
+			},
+			{
+				name:           "subnet from bare metal instance",
+				targetTable:    "subnets",
+				referenceTable: "bare_metal_instances",
+				targetData:     emptyJSON,
+				referenceData:  jsonArrayAt("spec", "network_attachments", "subnet"),
+			},
+			{
+				name:           "security group from compute instance",
+				targetTable:    "security_groups",
+				referenceTable: "compute_instances",
+				targetData:     emptyJSON,
+				referenceData:  jsonSecurityGroupArrayAt("spec", "network_attachments"),
+			},
+			{
+				name:           "security group from cluster",
+				targetTable:    "security_groups",
+				referenceTable: "clusters",
+				targetData:     emptyJSON,
+				referenceData:  jsonSecurityGroupsAt("spec", "network_attachment"),
+			},
+			{
+				name:           "security group from bare metal instance",
+				targetTable:    "security_groups",
+				referenceTable: "bare_metal_instances",
+				targetData:     emptyJSON,
+				referenceData:  jsonSecurityGroupArrayAt("spec", "network_attachments"),
+			},
+			{
+				name:           "storage tier from compute boot disk",
+				targetTable:    "storage_tiers",
+				referenceTable: "compute_instances",
+				targetData:     emptyJSON,
+				referenceData:  jsonAt("spec", "boot_disk", "storage_tier"),
+			},
+			{
+				name:           "storage tier from compute additional disk",
+				targetTable:    "storage_tiers",
+				referenceTable: "compute_instances",
+				targetData:     emptyJSON,
+				referenceData:  jsonArrayAt("spec", "additional_disks", "storage_tier"),
+			},
+			{
+				name:           "storage tier from template boot disk",
+				targetTable:    "storage_tiers",
+				referenceTable: "compute_instance_templates",
+				targetData:     emptyJSON,
+				referenceData:  jsonAt("spec_defaults", "boot_disk", "storage_tier"),
+			},
+			{
+				name:           "storage tier from template additional disk",
+				targetTable:    "storage_tiers",
+				referenceTable: "compute_instance_templates",
+				targetData:     emptyJSON,
+				referenceData:  jsonArrayAt("spec_defaults", "additional_disks", "storage_tier"),
+			},
+			{
+				name:           "bare metal instance type from resource",
+				targetTable:    "bare_metal_instance_types",
+				referenceTable: "bare_metal_instances",
+				targetData:     emptyJSON,
+				referenceData:  jsonAt("spec", "instance_type"),
+			},
+			{
+				name:           "host type from cluster",
+				targetTable:    "host_types",
+				referenceTable: "clusters",
+				targetData:     emptyJSON,
+				referenceData:  jsonNodeSetAt("spec", "node_sets"),
+			},
+			{
+				name:           "host type from cluster template",
+				targetTable:    "host_types",
+				referenceTable: "cluster_templates",
+				targetData:     emptyJSON,
+				referenceData:  jsonNodeSetAt("node_sets"),
+			},
+			{
+				name:           "host type from bare metal template",
+				targetTable:    "host_types",
+				referenceTable: "bare_metal_instance_templates",
+				targetData:     emptyJSON,
+				referenceData:  bareMetalTemplateHostTypeData,
+			},
 		}
 
 		for i, tc := range cases {
@@ -186,6 +426,7 @@ var _ = DescribeMigration("Typed catalog policy reverse references", func() {
 
 	It("protects templates while allowing deletion of catalogs used by resources", func(ctx context.Context) {
 		for _, kind := range []string{"compute_instance", "cluster", "bare_metal_instance"} {
+			By(kind + ": protecting a Template referenced by a Catalog Item")
 			template, catalog, resource := kind+"_templates", kind+"_catalog_items", kind+"s"
 			_, err := conn.Exec(ctx, fmt.Sprintf("insert into %s (id, name, tenant, data) values ('template', 'template', 'system', '{}')", template))
 			Expect(err).ToNot(HaveOccurred())
@@ -193,12 +434,15 @@ var _ = DescribeMigration("Typed catalog policy reverse references", func() {
 			Expect(err).ToNot(HaveOccurred())
 			_, err = conn.Exec(ctx, fmt.Sprintf("update %s set deletion_timestamp = now() where id = 'template'", template))
 			Expect(err).To(HaveOccurred())
+			By(kind + ": allowing Catalog Item deletion while a resource retains provenance")
 			_, err = conn.Exec(ctx, fmt.Sprintf(`insert into %s (id, name, tenant, data) values ('resource', 'resource', 'system', '{"spec":{"catalog_item":{"id":"catalog"},"template":{"id":"template"}}}')`, resource))
 			Expect(err).ToNot(HaveOccurred())
 			_, err = conn.Exec(ctx, fmt.Sprintf("update %s set deletion_timestamp = now() where id = 'catalog'", catalog))
 			Expect(err).ToNot(HaveOccurred())
+			By(kind + ": keeping the materialized Template protected by the resource")
 			_, err = conn.Exec(ctx, fmt.Sprintf("update %s set deletion_timestamp = now() where id = 'template'", template))
 			Expect(err).To(HaveOccurred())
+			By(kind + ": allowing Template deletion after resource deletion")
 			_, err = conn.Exec(ctx, fmt.Sprintf("update %s set deletion_timestamp = now() where id = 'resource'", resource))
 			Expect(err).ToNot(HaveOccurred())
 			_, err = conn.Exec(ctx, fmt.Sprintf("update %s set deletion_timestamp = now() where id = 'template'", template))
@@ -215,6 +459,10 @@ func clusterVersionData(id string) string {
 	return fmt.Sprintf(`{"spec":{"version":%q,"image":"quay.io/example/release:4.20"}}`, id)
 }
 
+func bareMetalTemplateHostTypeData(id string) string {
+	return fmt.Sprintf(`{"host_type":%q}`, id)
+}
+
 func jsonAt(path ...string) func(string) string {
 	return func(id string) string {
 		value := any(map[string]any{"id": id})
@@ -229,8 +477,9 @@ func jsonAt(path ...string) func(string) string {
 
 func jsonArrayAt(container, field, reference string) func(string) string {
 	return func(id string) string {
+		item := map[string]any{reference: map[string]any{"id": id}}
 		data, err := json.Marshal(map[string]any{
-			container: map[string]any{field: []any{map[string]any{reference: map[string]any{"id": id}}}},
+			container: map[string]any{field: []any{item}},
 		})
 		Expect(err).ToNot(HaveOccurred())
 		return string(data)
@@ -239,8 +488,10 @@ func jsonArrayAt(container, field, reference string) func(string) string {
 
 func jsonSecurityGroupArrayAt(container, field string) func(string) string {
 	return func(id string) string {
+		groups := []any{map[string]any{"id": id}}
+		attachment := map[string]any{"security_groups": groups}
 		data, err := json.Marshal(map[string]any{
-			container: map[string]any{field: []any{map[string]any{"security_groups": []any{map[string]any{"id": id}}}}},
+			container: map[string]any{field: []any{attachment}},
 		})
 		Expect(err).ToNot(HaveOccurred())
 		return string(data)
@@ -249,8 +500,10 @@ func jsonSecurityGroupArrayAt(container, field string) func(string) string {
 
 func jsonSecurityGroupsAt(container, field string) func(string) string {
 	return func(id string) string {
+		groups := []any{map[string]any{"id": id}}
+		attachment := map[string]any{"security_groups": groups}
 		data, err := json.Marshal(map[string]any{
-			container: map[string]any{field: map[string]any{"security_groups": []any{map[string]any{"id": id}}}},
+			container: map[string]any{field: attachment},
 		})
 		Expect(err).ToNot(HaveOccurred())
 		return string(data)
@@ -259,7 +512,9 @@ func jsonSecurityGroupsAt(container, field string) func(string) string {
 
 func jsonNodeSetAt(path ...string) func(string) string {
 	return func(id string) string {
-		value := any(map[string]any{"worker": map[string]any{"host_type": map[string]any{"id": id}}})
+		hostType := map[string]any{"id": id}
+		nodeSet := map[string]any{"host_type": hostType}
+		value := any(map[string]any{"worker": nodeSet})
 		for i := len(path) - 1; i >= 0; i-- {
 			value = map[string]any{path[i]: value}
 		}

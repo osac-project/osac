@@ -9,18 +9,21 @@ Template → Catalog Item → Resource
 Template ───────────────→ Resource (direct API creation)
 ```
 
-**Templates** are infrastructure blueprints supplied by the platform. They define node sets, host
-types, and resource defaults, such as SSH keys, versions, and network CIDRs. They also declare custom
-provisioning inputs called template parameters. Users can list and inspect available templates.
+**Templates** describe how OSAC provisions a cluster, virtual machine (VM), or bare metal instance. For
+example, a template can specify the number and type of machines in a cluster, a VM's boot-disk size,
+or the hardware type for a bare metal instance. Templates can also define inputs that users provide
+when creating a resource; these are called template parameters. Users can list and inspect the
+templates available to them.
 
-**Catalog items** turn a template into a curated offering for users. An admin uses policies in
-`fields` and `template_parameters` to fix selected values or offer defaults that users can change.
-Fields without policies keep their normal creation behavior. For example, a Linux VM offering can
-fix its disk image while letting users choose an instance type and boot-disk size.
+**Catalog items** are curated offerings for creating resources. Each references a template and can
+fix selected inputs or provide defaults that users may change. Policies for these inputs appear in
+`fields` and `template_parameters`. Inputs without policies keep their normal creation behavior.
+For example, a Linux VM offering can fix its disk image while letting users choose an instance type
+and boot-disk size.
 
-Cloud Provider Admins manage shared offerings. Tenant Admins manage offerings for their own
-organization. Tenant and project access rules determine which catalog items you can read, including
-unpublished items.
+Cloud Provider Admins manage offerings shared across organizations (tenants). Tenant Admins manage
+offerings for their own organization. Tenant and project access rules determine which catalog items
+you can read, including unpublished items.
 
 Setting `published: true` makes an item available for provisioning. No role can use an unpublished
 item to create resources.
@@ -53,7 +56,8 @@ osac get clusterversions
 
 For the cluster example below, assume the administrator has installed a `sandbox` template and
 its provisioning workflow. It defines optional `vpc_id` and `vlan` parameters with defaults. Its
-`fc430` HostType must already exist in the shared tenant:
+`fc430` HostType (hardware type) must already exist in the shared tenant. A node set groups machines
+of the same hardware type; the `workers` node set below starts with one `fc430` machine:
 
 ```yaml
 '@type': type.googleapis.com/osac.private.v1.ClusterTemplate
@@ -348,7 +352,8 @@ If neither is set, the template's node sets are used.
 
 ### Template parameter policies
 
-Template parameters are custom provisioning inputs forwarded to AAP as Ansible extra variables.
+Template parameters are custom provisioning inputs passed to Ansible Automation Platform (AAP) as
+Ansible extra variables.
 Each policy uses a parameter name, such as `vpc_id` or `vlan` in the cluster example.
 
 The template declares which parameters exist, their types, any defaults, and whether they are

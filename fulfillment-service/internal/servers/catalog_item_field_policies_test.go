@@ -56,6 +56,7 @@ var _ = Describe("Shared typed-policy helper", func() {
 	})
 
 	It("applies editable defaults and preserves supplied values", func() {
+		By("applying compute instance disk-image defaults")
 		diskImage := privatev1.DiskImageReference_builder{Name: "default-image"}.Build()
 		computeFields := privatev1.ComputeInstanceCatalogItemFields_builder{
 			DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{
@@ -71,6 +72,7 @@ var _ = Describe("Shared typed-policy helper", func() {
 		Expect(applyComputeInstanceCatalogItemPolicies(suppliedCompute, privatev1.ComputeInstanceCatalogItem_builder{Fields: computeFields}.Build().GetFields())).To(Succeed())
 		Expect(suppliedCompute.GetDiskImage()).To(BeIdenticalTo(suppliedImage))
 
+		By("applying cluster version and node-set defaults")
 		version := privatev1.ClusterVersionReference_builder{Name: "default-version"}.Build()
 		clusterFields := privatev1.ClusterCatalogItemFields_builder{
 			Version: privatev1.ClusterVersionReferenceFieldPolicy_builder{
@@ -97,6 +99,7 @@ var _ = Describe("Shared typed-policy helper", func() {
 		Expect(suppliedCluster.GetVersion()).To(BeIdenticalTo(suppliedVersion))
 		Expect(suppliedCluster.GetNodeSets()["workers"].GetSize()).To(Equal(int32(5)))
 
+		By("applying bare metal disk-image defaults")
 		image := privatev1.DiskImageReference_builder{Name: "default"}.Build()
 		bareMetalFields := privatev1.BareMetalInstanceCatalogItemFields_builder{
 			DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{
@@ -126,6 +129,7 @@ var _ = Describe("Shared typed-policy helper", func() {
 	})
 
 	It("rejects explicit false, zero, and empty string values for locked policies", func() {
+		By("rejecting an explicitly empty SSH key")
 		empty := ""
 		stringSpec := &privatev1.ComputeInstanceSpec{}
 		stringSpec.SetSshPublicKey(empty)
@@ -138,6 +142,7 @@ var _ = Describe("Shared typed-policy helper", func() {
 		Expect(stringSpec.HasSshPublicKey()).To(BeTrue())
 		Expect(stringSpec.GetSshPublicKey()).To(Equal(empty))
 
+		By("rejecting an explicitly false external-IP setting")
 		falseValue := false
 		boolSpec := &privatev1.ComputeInstanceSpec{}
 		boolSpec.SetAutoExternalIpAttachment(falseValue)
@@ -150,6 +155,7 @@ var _ = Describe("Shared typed-policy helper", func() {
 		Expect(boolSpec.HasAutoExternalIpAttachment()).To(BeTrue())
 		Expect(boolSpec.GetAutoExternalIpAttachment()).To(BeFalse())
 
+		By("rejecting an explicitly zero boot-disk size")
 		zero := int32(0)
 		sizeSpec := &privatev1.ComputeInstanceSpec{}
 		sizeSpec.SetBootDisk(privatev1.ComputeInstanceDisk_builder{SizeGib: &zero}.Build())
@@ -167,6 +173,7 @@ var _ = Describe("Shared typed-policy helper", func() {
 	})
 
 	It("treats empty collections as omitted input", func() {
+		By("defaulting empty compute attachment and disk lists")
 		computeAttachment := privatev1.ComputeNetworkAttachment_builder{Subnet: policyTestSubnet("compute-subnet")}.Build()
 		computeSpec := &privatev1.ComputeInstanceSpec{}
 		computeSpec.SetNetworkAttachments([]*privatev1.ComputeNetworkAttachment{})
@@ -183,6 +190,7 @@ var _ = Describe("Shared typed-policy helper", func() {
 		Expect(computeSpec.GetNetworkAttachments()).To(HaveLen(1))
 		Expect(computeSpec.GetAdditionalDisks()).To(HaveLen(1))
 
+		By("defaulting an empty cluster node-set map")
 		clusterSize := int32(2)
 		clusterSpec := &privatev1.ClusterSpec{}
 		clusterSpec.SetNodeSets(map[string]*privatev1.ClusterNodeSet{})
@@ -194,6 +202,7 @@ var _ = Describe("Shared typed-policy helper", func() {
 		Expect(applyClusterCatalogItemPolicies(clusterSpec, privatev1.ClusterCatalogItem_builder{Fields: clusterFields}.Build().GetFields())).To(Succeed())
 		Expect(clusterSpec.GetNodeSets()).To(HaveLen(1))
 
+		By("defaulting an empty bare metal attachment list")
 		bareMetalAttachment := privatev1.BareMetalNetworkAttachment_builder{Subnet: policyTestSubnet("bare-metal-subnet")}.Build()
 		bareMetalSpec := &privatev1.BareMetalInstanceSpec{}
 		bareMetalSpec.SetNetworkAttachments([]*privatev1.BareMetalNetworkAttachment{})

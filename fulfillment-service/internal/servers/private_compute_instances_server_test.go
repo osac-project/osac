@@ -3665,28 +3665,29 @@ var _ = Describe("Catalog materialized defaults", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(subnet.GetId()).To(Equal("destination"))
 	})
-	It("rechecks catalog boot and additional disk tiers after authoring", func() {
+	DescribeTable("rechecks catalog disk tiers after authoring", func(additional bool) {
 		server, err := NewPrivateComputeInstancesServer().SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
 		Expect(err).ToNot(HaveOccurred())
 		result, err := server.storageTiersDao.Create().SetObject(privatev1.StorageTier_builder{Metadata: privatev1.Metadata_builder{Name: "tier", Tenant: auth.SharedTenant}.Build(), Status: privatev1.StorageTierStatus_builder{State: privatev1.StorageTierState_STORAGE_TIER_STATE_ACTIVE}.Build()}.Build()).Do(ctx)
 		Expect(err).ToNot(HaveOccurred())
 		tier := result.GetObject()
-		for _, additional := range []bool{false, true} {
-			instance := privatev1.ComputeInstance_builder{Spec: &privatev1.ComputeInstanceSpec{}}.Build()
-			disk := privatev1.ComputeInstanceDisk_builder{StorageTier: privatev1.StorageTierReference_builder{Id: tier.GetId()}.Build()}.Build()
-			if additional {
-				instance.GetSpec().SetAdditionalDisks([]*privatev1.ComputeInstanceDisk{disk})
-			} else {
-				instance.GetSpec().SetBootDisk(disk)
-			}
-			Expect(server.validateStorageTiers(ctx, instance)).To(Succeed())
-			tier.GetStatus().SetState(privatev1.StorageTierState_STORAGE_TIER_STATE_UNSPECIFIED)
-			_, err = server.storageTiersDao.Update().SetObject(tier).Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(server.validateStorageTiers(ctx, instance)).ToNot(Succeed())
-			tier.GetStatus().SetState(privatev1.StorageTierState_STORAGE_TIER_STATE_ACTIVE)
-			_, err = server.storageTiersDao.Update().SetObject(tier).Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
+		instance := privatev1.ComputeInstance_builder{Spec: &privatev1.ComputeInstanceSpec{}}.Build()
+		disk := privatev1.ComputeInstanceDisk_builder{StorageTier: privatev1.StorageTierReference_builder{Id: tier.GetId()}.Build()}.Build()
+		if additional {
+			instance.GetSpec().SetAdditionalDisks([]*privatev1.ComputeInstanceDisk{disk})
+		} else {
+			instance.GetSpec().SetBootDisk(disk)
 		}
-	})
+		Expect(server.validateStorageTiers(ctx, instance)).To(Succeed())
+		tier.GetStatus().SetState(privatev1.StorageTierState_STORAGE_TIER_STATE_UNSPECIFIED)
+		_, err = server.storageTiersDao.Update().SetObject(tier).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(server.validateStorageTiers(ctx, instance)).ToNot(Succeed())
+		tier.GetStatus().SetState(privatev1.StorageTierState_STORAGE_TIER_STATE_ACTIVE)
+		_, err = server.storageTiersDao.Update().SetObject(tier).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+	},
+		Entry("boot disk", false),
+		Entry("additional disk", true),
+	)
 })

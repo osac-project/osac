@@ -42,31 +42,39 @@ respective areas.
 
 ## Validation
 
-From `fulfillment-service/`:
+Run these checks from `fulfillment-service/` as applicable.
+
+### Local checks
 
 ```bash
-uv run dev.py lint                 # Go/proto lint
-uv run ruff check                  # Python lint
+uv run dev.py lint
+uv run ruff check
 helm lint charts/service -f charts/service/ci-values.yaml
 helm template test charts/service -f charts/service/ci-values.yaml
 go build ./cmd/fulfillment-service ./cmd/osac
-ginkgo run -r internal             # Unit tests; excludes it/
-ginkgo run internal/servers        # Focused package tests
+ginkgo run -r internal
 ```
 
-Use the installer target for integration tests. See `README.md` for prerequisites and host entries.
+`ginkgo run -r internal` runs the unit suites without `it/`. For a focused
+server run, use `ginkgo run internal/servers`.
 
-```bash
-make -C ../osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment
-```
+### Integration tests
 
-This builds, loads, and deploys the current service image; it reuses existing infrastructure.
-To prevent leftover resources, database records, or configuration from affecting results,
-recreate `osac-dev` when a clean environment is needed:
+The installer test target builds, loads, and deploys the current service image.
+It reuses the existing cluster and database. For a full suite run, use a fresh
+environment unless the user agrees to reuse the database. See `README.md` for
+prerequisites and host entries.
 
-Collect useful diagnostics before deleting a cluster.
+To prepare a fresh environment, recreate the dedicated `osac-dev` Kind
+cluster. Collect useful diagnostics before deleting it.
 
 ```bash
 kind delete cluster --name osac-dev
 make -C ../osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac
+```
+
+Then run the suite:
+
+```bash
+make -C ../osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment
 ```

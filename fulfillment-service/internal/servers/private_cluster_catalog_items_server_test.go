@@ -518,40 +518,28 @@ var _ = Describe("Private cluster catalog items server", func() {
 			Expect(err.Error()).To(ContainSubstring("immutable"))
 		})
 
-		It("Rejects non-editable field policy without default value", func() {
-			_, err := server.Create(ctx, privatev1.ClusterCatalogItemsCreateRequest_builder{
-				Object: privatev1.ClusterCatalogItem_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.New()[24:32]),
-					}.Build(),
-					Title:    "Bad catalog item",
-					Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
-					Fields: privatev1.ClusterCatalogItemFields_builder{
-						SshPublicKey: privatev1.StringFieldPolicy_builder{}.Build(),
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).To(HaveOccurred())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(ContainSubstring("ssh_public_key"))
-			Expect(status.Message()).To(ContainSubstring("no behavior"))
-		})
-
-		It("Accepts non-editable field policy with default value", func() {
+		DescribeTable("validates SSH public key policy on Create", func(policy *privatev1.StringFieldPolicy, invalid bool) {
 			response, err := server.Create(ctx, privatev1.ClusterCatalogItemsCreateRequest_builder{
 				Object: privatev1.ClusterCatalogItem_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name: fmt.Sprintf("test-%s", uuid.New()[24:32]),
 					}.Build(),
-					Title:    "Good catalog item",
+					Title:    "SSH key policy",
 					Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 					Fields: privatev1.ClusterCatalogItemFields_builder{
-						SshPublicKey: privatev1.StringFieldPolicy_builder{Locked: proto.String(testSSHPublicKey)}.Build(),
+						SshPublicKey: policy,
 					}.Build(),
 				}.Build(),
 			}.Build())
+			if invalid {
+				Expect(err).To(HaveOccurred())
+				status, ok := grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+				Expect(status.Message()).To(ContainSubstring("ssh_public_key"))
+				Expect(status.Message()).To(ContainSubstring("no behavior"))
+				return
+			}
 			Expect(err).ToNot(HaveOccurred())
 			object := response.GetObject()
 			Expect(object).ToNot(BeNil())
@@ -561,31 +549,11 @@ var _ = Describe("Private cluster catalog items server", func() {
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 			})
-		})
-
-		It("Accepts editable field policy without default value", func() {
-			response, err := server.Create(ctx, privatev1.ClusterCatalogItemsCreateRequest_builder{
-				Object: privatev1.ClusterCatalogItem_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.New()[24:32]),
-					}.Build(),
-					Title:    "Editable no default",
-					Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
-					Fields: privatev1.ClusterCatalogItemFields_builder{
-						SshPublicKey: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build(),
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			object := response.GetObject()
-			Expect(object).ToNot(BeNil())
-			DeferCleanup(func() {
-				_, err := server.Delete(ctx, privatev1.ClusterCatalogItemsDeleteRequest_builder{
-					Id: object.GetId(),
-				}.Build())
-				Expect(err).ToNot(HaveOccurred())
-			})
-		})
+		},
+			Entry("rejects a policy without behavior", privatev1.StringFieldPolicy_builder{}.Build(), true),
+			Entry("accepts a locked value", privatev1.StringFieldPolicy_builder{Locked: proto.String(testSSHPublicKey)}.Build(), false),
+			Entry("accepts editable input without a default", privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build(), false),
+		)
 
 		It("Rejects update that introduces non-editable field without default", func() {
 			createResponse, err := server.Create(ctx, privatev1.ClusterCatalogItemsCreateRequest_builder{

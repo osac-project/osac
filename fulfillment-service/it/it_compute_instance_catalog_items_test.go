@@ -32,6 +32,7 @@ import (
 var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func() {
 	Context("Provisioning and field governance", func() {
 		It("materializes typed policies before Template defaults and persists explicit scalar presence", func(ctx context.Context) {
+			By("authoring a tenant offering with locked and editable VM policies")
 			network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 			instanceType := createCatalogItemComputeInstanceTypeFixture(ctx)
 			image := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
@@ -57,6 +58,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 				RunStrategy: publicv1.ComputeInstanceRunStrategyFieldPolicy_builder{
 					Editable: publicv1.EditableComputeInstanceRunStrategyField_builder{}.Build(),
 				}.Build(),
+
 				BootDisk: publicv1.ComputeInstanceBootDiskFieldPolicies_builder{
 					SizeGib: publicv1.Int32FieldPolicy_builder{
 						Editable: publicv1.EditableInt32Field_builder{DefaultValue: new(int32(30))}.Build(),
@@ -65,6 +67,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 						Locked: publicv1.StorageTierReference_builder{Id: tier}.Build(),
 					}.Build(),
 				}.Build(),
+
 				AdditionalDisks: publicv1.ComputeInstanceDiskListFieldPolicy_builder{
 					Editable: publicv1.EditableComputeInstanceDiskList_builder{
 						DefaultValue: publicv1.ComputeInstanceDiskList_builder{
@@ -77,11 +80,13 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 						}.Build(),
 					}.Build(),
 				}.Build(),
+
 				NetworkAttachments: publicv1.ComputeNetworkAttachmentListFieldPolicy_builder{
 					Locked: publicv1.ComputeNetworkAttachmentList_builder{Items: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()}}.Build(),
 				}.Build(),
 				AutoExternalIpAttachment: publicv1.BoolFieldPolicy_builder{Locked: new(false)}.Build(),
 			}.Build()
+
 			item := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ComputeInstanceCatalogItem_builder{
 				Metadata:           publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
 				Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
@@ -89,6 +94,8 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 				Fields:             fields,
 				TemplateParameters: catalogItemParameterPolicies(),
 			}.Build())
+
+			By("creating a VM with caller-selected disk inputs")
 			request := publicv1.ComputeInstanceSpec_builder{
 				DiskImage:   publicv1.DiskImageReference_builder{Id: overrideImage.GetId()}.Build(),
 				CatalogItem: publicv1.ComputeInstanceCatalogItemReference_builder{Id: item.GetId()}.Build(),
@@ -103,6 +110,8 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			}.Build()
 			created, err := createComputeInstanceFixture(ctx, tool.ExternalView().UserConn(), request)
 			Expect(err).NotTo(HaveOccurred())
+
+			By("checking the stored VM's materialized policies and Template inputs")
 			client := publicv1.NewComputeInstancesClient(tool.ExternalView().UserConn())
 			response, err := client.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: created.GetId()}.Build())
 			Expect(err).NotTo(HaveOccurred())
@@ -128,22 +137,49 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			Expect(proto.Equal(spec.GetTemplateParameters()["ordinary"], catalogItemParameterValue(wrapperspb.String("template")))).To(BeTrue())
 			Expect(spec.GetTemplate().GetId()).To(Equal(template))
 			By("rejecting explicit locked inputs without persisting partially resolved candidates")
-			for _, input := range []struct {
+			type invalidInput struct {
 				name string
 				set  func(*publicv1.ComputeInstanceSpec)
-			}{{"identical InstanceType", func(s *publicv1.ComputeInstanceSpec) {
-				s.SetInstanceType(publicv1.InstanceTypeReference_builder{Id: instanceType}.Build())
-			}}, {"empty user data", func(s *publicv1.ComputeInstanceSpec) {
-				s.SetUserData("")
-			}}, {"false external IP", func(s *publicv1.ComputeInstanceSpec) {
-				s.SetAutoExternalIpAttachment(false)
-			}}, {"identical storage tier", func(s *publicv1.ComputeInstanceSpec) {
-				s.GetBootDisk().SetStorageTier(publicv1.StorageTierReference_builder{Id: tier}.Build())
-			}}, {"identical network", func(s *publicv1.ComputeInstanceSpec) {
-				s.SetNetworkAttachments([]*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()})
-			}}, {"locked parameter", func(s *publicv1.ComputeInstanceSpec) {
-				s.GetTemplateParameters()["enabled"] = catalogItemParameterValue(wrapperspb.Bool(false))
-			}}} {
+			}
+			inputs := []invalidInput{
+				{
+					name: "identical InstanceType",
+					set: func(s *publicv1.ComputeInstanceSpec) {
+						s.SetInstanceType(publicv1.InstanceTypeReference_builder{Id: instanceType}.Build())
+					},
+				},
+				{
+					name: "empty user data",
+					set: func(s *publicv1.ComputeInstanceSpec) {
+						s.SetUserData("")
+					},
+				},
+				{
+					name: "false external IP",
+					set: func(s *publicv1.ComputeInstanceSpec) {
+						s.SetAutoExternalIpAttachment(false)
+					},
+				},
+				{
+					name: "identical storage tier",
+					set: func(s *publicv1.ComputeInstanceSpec) {
+						s.GetBootDisk().SetStorageTier(publicv1.StorageTierReference_builder{Id: tier}.Build())
+					},
+				},
+				{
+					name: "identical network",
+					set: func(s *publicv1.ComputeInstanceSpec) {
+						s.SetNetworkAttachments([]*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()})
+					},
+				},
+				{
+					name: "locked parameter",
+					set: func(s *publicv1.ComputeInstanceSpec) {
+						s.GetTemplateParameters()["enabled"] = catalogItemParameterValue(wrapperspb.Bool(false))
+					},
+				},
+			}
+			for _, input := range inputs {
 				By(input.name)
 				candidate := proto.Clone(request).(*publicv1.ComputeInstanceSpec)
 				input.set(candidate)
@@ -242,6 +278,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			Expect(persisted.GetObject().GetSpec().GetInstanceType().GetId()).To(Equal(instanceType))
 		})
 		It("validates dry-run candidates and direct provisioning without networking or persistence side effects", func(ctx context.Context) {
+			By("authoring a shared offering with user-data and external-IP defaults")
 			network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 			template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
 			item := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ComputeInstanceCatalogItem_builder{
@@ -267,6 +304,8 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 				NetworkAttachments: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()},
 			}.Build()
 			dry := metadata.AppendToOutgoingContext(ctx, "x-dry-run", "true")
+
+			By("validating a dry-run VM without storing it or allocating an external IP")
 			result, e := client.Create(dry, publicv1.ComputeInstancesCreateRequest_builder{
 				Object: publicv1.ComputeInstance_builder{
 					Metadata: publicv1.Metadata_builder{Name: name}.Build(),
@@ -282,6 +321,8 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			after, e := externalIPs.List(ctx, privatev1.ExternalIPsListRequest_builder{}.Build())
 			Expect(e).NotTo(HaveOccurred())
 			Expect(after.GetTotal()).To(Equal(before.GetTotal()))
+
+			By("rejecting a request that names both the offering and its Template")
 			spec.SetTemplate(publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build())
 			_, e = client.Create(dry, publicv1.ComputeInstancesCreateRequest_builder{
 				Object: publicv1.ComputeInstance_builder{
@@ -290,6 +331,8 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 				}.Build(),
 			}.Build())
 			expectCatalogItemStatusCode(e, codes.InvalidArgument)
+
+			By("creating directly from the Template with caller-supplied values")
 			spec.ClearCatalogItem()
 			spec.SetAutoExternalIpAttachment(false)
 			spec.SetUserData("direct")
@@ -297,6 +340,8 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			Expect(e).NotTo(HaveOccurred())
 			Expect(direct.GetSpec().HasCatalogItem()).To(BeFalse())
 			Expect(direct.GetSpec().GetUserData()).To(Equal("direct"))
+
+			By("rejecting creation without a Catalog Item or Template")
 			spec.ClearTemplate()
 			_, e = createComputeInstanceFixture(ctx, tool.ExternalView().UserConn(), spec)
 			expectCatalogItemStatusCode(e, codes.InvalidArgument)
@@ -389,6 +434,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 	})
 	Context("Template parameters", func() {
 		It("changes parameter policies only for future provisioning and permits ungoverned structured input", func(ctx context.Context) {
+			By("publishing a VM offering with a locked size and an ungoverned structured parameter")
 			template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, []*privatev1.ComputeInstanceTemplateParameterDefinition{
 				privatev1.ComputeInstanceTemplateParameterDefinition_builder{Name: "size", Type: "type.googleapis.com/google.protobuf.Int32Value", Default: catalogItemParameterValue(wrapperspb.Int32(10))}.Build(),
 				privatev1.ComputeInstanceTemplateParameterDefinition_builder{Name: "structured", Type: "type.googleapis.com/google.protobuf.Value"}.Build(),
@@ -407,6 +453,8 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			}.Build()
 			first, err := createComputeInstanceFixture(ctx, tool.ExternalView().UserConn(), spec)
 			Expect(err).NotTo(HaveOccurred())
+
+			By("rejecting a caller override while size is locked")
 			items := publicv1.NewComputeInstanceCatalogItemsClient(tool.ExternalView().AdminConn())
 			objects := publicv1.NewComputeInstancesClient(tool.ExternalView().UserConn())
 			dry := metadata.AppendToOutgoingContext(ctx, "x-dry-run", "true")
@@ -414,6 +462,8 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			spec.GetTemplateParameters()["size"] = catalogItemParameterValue(wrapperspb.Int32(30))
 			_, err = objects.Create(dry, request)
 			expectCatalogItemStatusCode(err, codes.InvalidArgument)
+
+			By("allowing caller input and a default after making size editable")
 			_, err = items.Update(ctx, publicv1.ComputeInstanceCatalogItemsUpdateRequest_builder{
 				Object: publicv1.ComputeInstanceCatalogItem_builder{Id: item.GetId(), TemplateParameters: map[string]*publicv1.TemplateParameterPolicy{
 					"size": publicv1.TemplateParameterPolicy_builder{Editable: publicv1.EditableTemplateParameter_builder{DefaultValue: catalogItemParameterValue(wrapperspb.Int32(40))}.Build()}.Build(),
@@ -427,6 +477,8 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			defaulted, err := objects.Create(dry, request)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(proto.Equal(defaulted.GetObject().GetSpec().GetTemplateParameters()["size"], catalogItemParameterValue(wrapperspb.Int32(40)))).To(BeTrue())
+
+			By("falling back to the Template default after clearing the size policy")
 			_, err = items.Update(ctx, publicv1.ComputeInstanceCatalogItemsUpdateRequest_builder{
 				Object: publicv1.ComputeInstanceCatalogItem_builder{Id: item.GetId()}.Build(), UpdateMask: catalogItemUpdateMask("template_parameters"),
 			}.Build())
@@ -434,6 +486,8 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			fallback, err := objects.Create(dry, request)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(proto.Equal(fallback.GetObject().GetSpec().GetTemplateParameters()["size"], catalogItemParameterValue(wrapperspb.Int32(10)))).To(BeTrue())
+
+			By("keeping the original VM's resolved size and structured input")
 			persisted, err := objects.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: first.GetId()}.Build())
 			Expect(err).NotTo(HaveOccurred())
 			Expect(proto.Equal(persisted.GetObject().GetSpec().GetTemplateParameters()["size"], catalogItemParameterValue(wrapperspb.Int32(20)))).To(BeTrue())
@@ -441,6 +495,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 		})
 
 		It("distinguishes editable required input from Template defaults and invalid values", func(ctx context.Context) {
+			By("publishing a VM offering with a required editable parameter")
 			template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, computeInstanceCatalogItemParameterDefinitions())
 			network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 			item := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ComputeInstanceCatalogItem_builder{
@@ -467,18 +522,42 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 				}.Build(),
 			}.Build()
 			dry := metadata.AppendToOutgoingContext(ctx, "x-dry-run", "true")
+
+			By("rejecting a VM request that omits the required parameter")
 			_, err := client.Create(dry, request)
 			expectCatalogItemStatusCode(err, codes.InvalidArgument)
-			request.GetObject().GetSpec().SetTemplateParameters(map[string]*anypb.Any{"enabled": catalogItemParameterValue(wrapperspb.Bool(false)), "ordinary": catalogItemParameterValue(wrapperspb.String("user"))})
+
+			By("accepting caller input and applying the Template size default")
+			request.GetObject().GetSpec().SetTemplateParameters(map[string]*anypb.Any{
+				"enabled":  catalogItemParameterValue(wrapperspb.Bool(false)),
+				"ordinary": catalogItemParameterValue(wrapperspb.String("user")),
+			})
 			response, err := client.Create(dry, request)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(proto.Equal(response.GetObject().GetSpec().GetTemplateParameters()["size"], catalogItemParameterValue(wrapperspb.Int32(10)))).To(BeTrue())
 			Expect(proto.Equal(response.GetObject().GetSpec().GetTemplateParameters()["ordinary"], catalogItemParameterValue(wrapperspb.String("user")))).To(BeTrue())
-			for _, input := range []map[string]*anypb.Any{
-				{"enabled": catalogItemParameterValue(wrapperspb.String("false"))},
-				{"enabled": catalogItemParameterValue(wrapperspb.Bool(false)), "unknown": catalogItemParameterValue(wrapperspb.Bool(true))},
+
+			By("rejecting malformed and unknown Template parameters")
+			for _, tc := range []struct {
+				name       string
+				parameters map[string]*anypb.Any
+			}{
+				{
+					name: "wrong parameter type",
+					parameters: map[string]*anypb.Any{
+						"enabled": catalogItemParameterValue(wrapperspb.String("false")),
+					},
+				},
+				{
+					name: "unknown parameter",
+					parameters: map[string]*anypb.Any{
+						"enabled": catalogItemParameterValue(wrapperspb.Bool(false)),
+						"unknown": catalogItemParameterValue(wrapperspb.Bool(true)),
+					},
+				},
 			} {
-				request.GetObject().GetSpec().SetTemplateParameters(input)
+				By(tc.name)
+				request.GetObject().GetSpec().SetTemplateParameters(tc.parameters)
 				_, err = client.Create(dry, request)
 				expectCatalogItemStatusCode(err, codes.InvalidArgument)
 			}
@@ -487,6 +566,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 
 	Context("Authoring and publication", func() {
 		It("lets a Tenant Admin publish governed items for members of that tenant", func(ctx context.Context) {
+			By("creating a tenant-owned draft through the Tenant Admin public API")
 			template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
 			tenant, conn := createCatalogItemTenantAdminFixture(ctx)
 			items := publicv1.NewComputeInstanceCatalogItemsClient(conn)
@@ -495,6 +575,8 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 				Template: publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
 			}.Build())
 			Expect(owned.GetMetadata().GetTenant()).To(Equal(tenant), "tenant authoring scope")
+
+			By("publishing governed fields for members of the tenant")
 			memberConn := createCatalogItemMemberFixture(ctx, tenant)
 			memberItems := publicv1.NewComputeInstanceCatalogItemsClient(memberConn)
 			_, err := items.Update(ctx, publicv1.ComputeInstanceCatalogItemsUpdateRequest_builder{
@@ -511,6 +593,8 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			Expect(visible.GetObject().GetFields().GetUserData().GetEditable().GetDefaultValue()).To(Equal("tenant default"))
 			Expect(visible.GetObject().GetFields().GetAutoExternalIpAttachment().HasLocked()).To(BeTrue())
 			Expect(visible.GetObject().GetFields().GetAutoExternalIpAttachment().GetLocked()).To(BeFalse())
+
+			By("provisioning a VM as a member with an editable override")
 			network := createCatalogItemNetworkFixture(ctx, tenant, "")
 			spec := publicv1.ComputeInstanceSpec_builder{
 				CatalogItem:        publicv1.ComputeInstanceCatalogItemReference_builder{Id: owned.GetId()}.Build(),
@@ -526,6 +610,8 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			Expect(stored.GetObject().GetSpec().GetUserData()).To(Equal("member input"))
 			Expect(stored.GetObject().GetSpec().HasAutoExternalIpAttachment()).To(BeTrue())
 			Expect(stored.GetObject().GetSpec().GetAutoExternalIpAttachment()).To(BeFalse())
+
+			By("hiding the tenant offering from an unrelated tenant")
 			outsider := publicv1.NewComputeInstanceCatalogItemsClient(tool.ExternalView().UserConn())
 			_, err = outsider.Get(ctx, publicv1.ComputeInstanceCatalogItemsGetRequest_builder{Id: owned.GetId()}.Build())
 			expectCatalogItemStatusCode(err, codes.NotFound)
@@ -536,9 +622,12 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 				CatalogItem: publicv1.ComputeInstanceCatalogItemReference_builder{Id: owned.GetId()}.Build(),
 			}.Build())
 			expectCatalogItemStatusCode(err, codes.NotFound)
+
+			By("denying catalog deletion to a tenant member")
 			_, err = memberItems.Delete(ctx, publicv1.ComputeInstanceCatalogItemsDeleteRequest_builder{Id: owned.GetId()}.Build())
 			expectCatalogItemStatusCode(err, codes.PermissionDenied)
 
+			By("stopping new member provisioning after unpublishing")
 			_, err = items.Update(ctx, publicv1.ComputeInstanceCatalogItemsUpdateRequest_builder{
 				Object:     publicv1.ComputeInstanceCatalogItem_builder{Id: owned.GetId(), Published: false}.Build(),
 				UpdateMask: catalogItemUpdateMask("published"),
@@ -579,6 +668,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			Expect(listed.GetItems()).To(HaveLen(1))
 		})
 		It("keeps unmasked policies and atomically rejects invalid merged candidates", func(ctx context.Context) {
+			By("authoring an offering with two field policies")
 			template := createCatalogItemComputeInstanceTemplateFixture(ctx, nil, nil)
 			item := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ComputeInstanceCatalogItem_builder{
 				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
@@ -590,6 +680,8 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 				}.Build(),
 			}.Build())
 			client := publicv1.NewComputeInstanceCatalogItemsClient(tool.ExternalView().AdminConn())
+
+			By("editing one policy while retaining the other")
 			_, err := client.Update(ctx, publicv1.ComputeInstanceCatalogItemsUpdateRequest_builder{
 				Object: publicv1.ComputeInstanceCatalogItem_builder{
 					Id: item.GetId(),
@@ -608,6 +700,8 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			Expect(before.GetObject().GetFields().GetAutoExternalIpAttachment().GetLocked()).To(BeFalse())
 			Expect(before.GetObject().GetFields().GetUserData().HasLocked()).To(BeFalse())
 			Expect(before.GetObject().GetFields().GetUserData().GetEditable().GetDefaultValue()).To(Equal("edited"))
+
+			By("rejecting an invalid policy without changing the offering title")
 			_, err = client.Update(ctx, publicv1.ComputeInstanceCatalogItemsUpdateRequest_builder{
 				Object: publicv1.ComputeInstanceCatalogItem_builder{
 					Id:    item.GetId(),
@@ -622,6 +716,8 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			after, err := client.Get(ctx, publicv1.ComputeInstanceCatalogItemsGetRequest_builder{Id: item.GetId()}.Build())
 			Expect(err).NotTo(HaveOccurred())
 			Expect(proto.Equal(before.GetObject(), after.GetObject())).To(BeTrue())
+
+			By("clearing all field policies explicitly")
 			_, err = client.Update(ctx, publicv1.ComputeInstanceCatalogItemsUpdateRequest_builder{
 				Object: publicv1.ComputeInstanceCatalogItem_builder{
 					Id:     item.GetId(),
@@ -682,37 +778,63 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			Expect(err).NotTo(HaveOccurred())
 		})
 		It("protects referenced objects through publication and policy changes", func(ctx context.Context) {
+			By("authoring a published compute offering with a locked dependency")
 			template := createCatalogItemComputeInstanceTemplateFixture(ctx, nil, nil)
 			id := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName()).GetId()
 			items := publicv1.NewComputeInstanceCatalogItemsClient(tool.ExternalView().AdminConn())
 			dependencies := privatev1.NewDiskImagesClient(tool.InternalView().AdminConn())
 			item := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ComputeInstanceCatalogItem_builder{
-				Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
-				Template: publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(), Published: true,
-				Fields: publicv1.ComputeInstanceCatalogItemFields_builder{DiskImage: publicv1.DiskImageReferenceFieldPolicy_builder{Locked: publicv1.DiskImageReference_builder{Id: id}.Build()}.Build()}.Build(),
+				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
+				Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+				Published: true,
+				Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
+					DiskImage: publicv1.DiskImageReferenceFieldPolicy_builder{
+						Locked: publicv1.DiskImageReference_builder{Id: id}.Build(),
+					}.Build(),
+				}.Build(),
 			}.Build())
 			other := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ComputeInstanceCatalogItem_builder{
 				Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
 				Template: publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
-				Fields:   publicv1.ComputeInstanceCatalogItemFields_builder{DiskImage: publicv1.DiskImageReferenceFieldPolicy_builder{Locked: publicv1.DiskImageReference_builder{Id: id}.Build()}.Build()}.Build(),
+				Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
+					DiskImage: publicv1.DiskImageReferenceFieldPolicy_builder{
+						Locked: publicv1.DiskImageReference_builder{Id: id}.Build(),
+					}.Build(),
+				}.Build(),
 			}.Build())
 
+			By("blocking deletion while the dependency is locked")
 			_, err := dependencies.Delete(ctx, privatev1.DiskImagesDeleteRequest_builder{Id: id}.Build())
 			expectCatalogItemStatusCode(err, codes.FailedPrecondition)
+
+			By("retaining protection after unpublishing and switching to an editable default")
 			_, err = items.Update(ctx, publicv1.ComputeInstanceCatalogItemsUpdateRequest_builder{
-				Object: publicv1.ComputeInstanceCatalogItem_builder{Id: item.GetId(), Published: false,
-					Fields: publicv1.ComputeInstanceCatalogItemFields_builder{DiskImage: publicv1.DiskImageReferenceFieldPolicy_builder{Editable: publicv1.EditableDiskImageReferenceField_builder{DefaultValue: publicv1.DiskImageReference_builder{Id: id}.Build()}.Build()}.Build()}.Build(),
-				}.Build(), UpdateMask: catalogItemUpdateMask("published", "fields.disk_image"),
+				Object: publicv1.ComputeInstanceCatalogItem_builder{
+					Id:        item.GetId(),
+					Published: false,
+					Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
+						DiskImage: publicv1.DiskImageReferenceFieldPolicy_builder{
+							Editable: publicv1.EditableDiskImageReferenceField_builder{
+								DefaultValue: publicv1.DiskImageReference_builder{Id: id}.Build(),
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build(),
+				UpdateMask: catalogItemUpdateMask("published", "fields.disk_image"),
 			}.Build())
 			Expect(err).NotTo(HaveOccurred())
 			_, err = dependencies.Delete(ctx, privatev1.DiskImagesDeleteRequest_builder{Id: id}.Build())
 			expectCatalogItemStatusCode(err, codes.FailedPrecondition)
+
+			By("clearing the dependency policy")
 			_, err = items.Update(ctx, publicv1.ComputeInstanceCatalogItemsUpdateRequest_builder{
 				Object: publicv1.ComputeInstanceCatalogItem_builder{Id: item.GetId()}.Build(), UpdateMask: catalogItemUpdateMask("fields.disk_image"),
 			}.Build())
 			Expect(err).NotTo(HaveOccurred())
 			_, err = dependencies.Delete(ctx, privatev1.DiskImagesDeleteRequest_builder{Id: id}.Build())
 			expectCatalogItemStatusCode(err, codes.FailedPrecondition)
+
+			By("deleting the second offering before releasing the shared disk image")
 			_, err = items.Delete(ctx, publicv1.ComputeInstanceCatalogItemsDeleteRequest_builder{Id: other.GetId()}.Build())
 			Expect(err).NotTo(HaveOccurred())
 			_, err = dependencies.Delete(ctx, privatev1.DiskImagesDeleteRequest_builder{Id: id}.Build())
@@ -721,6 +843,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 		})
 
 		It("uses catalog item owner scope for names, preserves selected scope, and rejects wrong-project local inputs", func(ctx context.Context) {
+			By("authoring a project offering that resolves a same-name disk image in its own project")
 			project := createCatalogItemProjectFixture(ctx, usersGroup)
 			otherProject := createCatalogItemProjectFixture(ctx, usersGroup)
 			name := catalogItemFixtureName()
@@ -746,6 +869,8 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			}.Build())
 			Expect(item.GetFields().GetDiskImage().GetLocked().GetId()).To(Equal(image.GetId()))
 			Expect(item.GetFields().GetDiskImage().GetLocked().GetProject()).To(Equal(project))
+
+			By("resolving the offering and network defaults within the selected project")
 			// The provider can see both projects; dependencies must still respect resource ownership.
 			client := publicv1.NewComputeInstancesClient(tool.ExternalView().AdminConn())
 			dry := metadata.AppendToOutgoingContext(ctx, "x-dry-run", "true")
@@ -761,9 +886,13 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.GetObject().GetSpec().GetCatalogItem().GetId()).To(Equal(item.GetId()))
 			Expect(result.GetObject().GetSpec().GetNetworkAttachments()[0].GetSubnet().GetId()).To(Equal(network.subnetID))
+
+			By("rejecting a network attachment from another project")
 			request.GetObject().GetSpec().SetNetworkAttachments([]*publicv1.ComputeNetworkAttachment{foreignNetwork.computeInstanceAttachment()})
 			_, err = client.Create(dry, request)
 			expectCatalogItemStatusCode(err, codes.InvalidArgument)
+
+			By("retargeting the disk image policy to the same-name image in another project")
 			items := publicv1.NewComputeInstanceCatalogItemsClient(tool.ExternalView().AdminConn())
 			_, err = items.Update(ctx, publicv1.ComputeInstanceCatalogItemsUpdateRequest_builder{
 				Object: publicv1.ComputeInstanceCatalogItem_builder{
@@ -781,6 +910,8 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			Expect(err).NotTo(HaveOccurred())
 			Expect(updated.GetObject().GetFields().GetDiskImage().GetLocked().GetId()).To(Equal(otherImage.GetId()))
 			Expect(updated.GetObject().GetFields().GetDiskImage().GetLocked().GetProject()).To(Equal(otherProject))
+
+			By("rejecting a local network policy that points outside the offering's project")
 			_, err = items.Update(ctx, publicv1.ComputeInstanceCatalogItemsUpdateRequest_builder{
 				Object: publicv1.ComputeInstanceCatalogItem_builder{
 					Id: item.GetId(),
@@ -795,6 +926,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			expectCatalogItemStatusCode(err, codes.InvalidArgument)
 		})
 		It("canonicalizes names in owner scope and revalidates retained dependencies on configuration changes", func(ctx context.Context) {
+			By("resolving a same-name disk image in the catalog owner's tenant")
 			template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
 			name := catalogItemFixtureName()
 			shared := createCatalogItemDiskImageFixture(ctx, "shared", name)
@@ -812,25 +944,27 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			}.Build())
 			Expect(item.GetFields().GetDiskImage().GetLocked().GetId()).To(Equal(local.GetId()))
 			Expect(item.GetFields().GetDiskImage().GetLocked().GetShared()).To(BeFalse())
-			for index, ref := range []*publicv1.DiskImageReference{
-				publicv1.DiskImageReference_builder{Id: local.GetId(), Name: "disagrees"}.Build(),
-				publicv1.DiskImageReference_builder{Name: name, Shared: true, Project: "invalid"}.Build(),
+			for _, tc := range []struct {
+				name      string
+				reference *publicv1.DiskImageReference
+				code      codes.Code
+			}{
+				{"mismatched ID and name", publicv1.DiskImageReference_builder{Id: local.GetId(), Name: "disagrees"}.Build(), codes.InvalidArgument},
+				{"shared image in an invalid project", publicv1.DiskImageReference_builder{Name: name, Shared: true, Project: "invalid"}.Build(), codes.NotFound},
 			} {
+				By(tc.name)
 				_, err := client.Update(ctx, publicv1.ComputeInstanceCatalogItemsUpdateRequest_builder{
 					Object: publicv1.ComputeInstanceCatalogItem_builder{
 						Id: item.GetId(),
 						Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
-							DiskImage: publicv1.DiskImageReferenceFieldPolicy_builder{Locked: ref}.Build(),
+							DiskImage: publicv1.DiskImageReferenceFieldPolicy_builder{Locked: tc.reference}.Build(),
 						}.Build(),
 					}.Build(),
 					UpdateMask: catalogItemUpdateMask("fields.disk_image"),
 				}.Build())
-				if index == 0 {
-					expectCatalogItemStatusCode(err, codes.InvalidArgument)
-				} else {
-					expectCatalogItemStatusCode(err, codes.NotFound)
-				}
+				expectCatalogItemStatusCode(err, tc.code)
 			}
+			By("switching the policy explicitly to the shared disk image")
 			_, err := client.Update(ctx, publicv1.ComputeInstanceCatalogItemsUpdateRequest_builder{
 				Object: publicv1.ComputeInstanceCatalogItem_builder{
 					Id: item.GetId(),
@@ -843,6 +977,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 				UpdateMask: catalogItemUpdateMask("fields.disk_image"),
 			}.Build())
 			Expect(err).NotTo(HaveOccurred())
+			By("revalidating a retained reference as the image becomes deprecated and obsolete")
 			images := privatev1.NewDiskImagesClient(tool.InternalView().AdminConn())
 			_, err = images.Update(ctx, privatev1.DiskImagesUpdateRequest_builder{
 				Object: privatev1.DiskImage_builder{
@@ -877,6 +1012,8 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			Expect(err).NotTo(HaveOccurred())
 			_, err = resources.Create(dry, request)
 			expectCatalogItemStatusCode(err, codes.FailedPrecondition)
+
+			By("retiring the offering without changing its obsolete image policy")
 			_, err = client.Update(ctx, publicv1.ComputeInstanceCatalogItemsUpdateRequest_builder{
 				Object: publicv1.ComputeInstanceCatalogItem_builder{Id: item.GetId(), Title: "Retired offering", Published: false}.Build(),
 				UpdateMask: catalogItemUpdateMask("title",
@@ -885,7 +1022,16 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			Expect(err).NotTo(HaveOccurred())
 			before, err := client.Get(ctx, publicv1.ComputeInstanceCatalogItemsGetRequest_builder{Id: item.GetId()}.Build())
 			Expect(err).NotTo(HaveOccurred())
-			for _, mask := range [][]string{{"published"}, {"fields.user_data"}} {
+
+			By("rejecting publication and field changes that revalidate the obsolete image")
+			for _, tc := range []struct {
+				name string
+				mask string
+			}{
+				{name: "republishing the offering", mask: "published"},
+				{name: "changing an unrelated field policy", mask: "fields.user_data"},
+			} {
+				By(tc.name)
 				_, err = client.Update(ctx, publicv1.ComputeInstanceCatalogItemsUpdateRequest_builder{
 					Object: publicv1.ComputeInstanceCatalogItem_builder{
 						Id:        item.GetId(),
@@ -894,7 +1040,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 							UserData: publicv1.StringFieldPolicy_builder{Locked: new("changed")}.Build(),
 						}.Build(),
 					}.Build(),
-					UpdateMask: catalogItemUpdateMask(mask...),
+					UpdateMask: catalogItemUpdateMask(tc.mask),
 				}.Build())
 				expectCatalogItemStatusCode(err, codes.FailedPrecondition)
 				after, e := client.Get(ctx, publicv1.ComputeInstanceCatalogItemsGetRequest_builder{Id: item.GetId()}.Build())
@@ -908,8 +1054,11 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			foreign := createCatalogItemDiskImageFixture(ctx, tenant, catalogItemFixtureName())
 			network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 			client := publicv1.NewComputeInstanceCatalogItemsClient(tool.ExternalView().AdminConn())
-			for _, candidate := range []*publicv1.ComputeInstanceCatalogItem{
-				publicv1.ComputeInstanceCatalogItem_builder{
+			for _, tc := range []struct {
+				name      string
+				candidate *publicv1.ComputeInstanceCatalogItem
+			}{
+				{"foreign tenant disk image", publicv1.ComputeInstanceCatalogItem_builder{
 					Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
 					Template: publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
 					Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
@@ -917,8 +1066,8 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 							Locked: publicv1.DiskImageReference_builder{Id: foreign.GetId()}.Build(),
 						}.Build(),
 					}.Build(),
-				}.Build(),
-				publicv1.ComputeInstanceCatalogItem_builder{
+				}.Build()},
+				{"shared catalog with tenant-local network", publicv1.ComputeInstanceCatalogItem_builder{
 					Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
 					Template: publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
 					Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
@@ -926,14 +1075,16 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 							Locked: publicv1.ComputeNetworkAttachmentList_builder{Items: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()}}.Build(),
 						}.Build(),
 					}.Build(),
-				}.Build(),
+				}.Build()},
 			} {
-				_, err := client.Create(ctx, publicv1.ComputeInstanceCatalogItemsCreateRequest_builder{Object: candidate}.Build())
+				By(tc.name)
+				_, err := client.Create(ctx, publicv1.ComputeInstanceCatalogItemsCreateRequest_builder{Object: tc.candidate}.Build())
 				expectCatalogItemStatusCode(err, codes.InvalidArgument)
 			}
 		})
 
 		It("keeps protection until the last reference is cleared and transfers protection on replacement", func(ctx context.Context) {
+			By("authoring an offering that references the same storage tier in boot and additional disks")
 			template := createCatalogItemComputeInstanceTemplateFixture(ctx, nil, nil)
 			oldTier := createCatalogItemStorageTierFixture(ctx)
 			newTier := createCatalogItemStorageTierFixture(ctx)
@@ -960,6 +1111,8 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			}.Build())
 			client := publicv1.NewComputeInstanceCatalogItemsClient(tool.ExternalView().AdminConn())
 			tiers := privatev1.NewStorageTiersClient(tool.InternalView().AdminConn())
+
+			By("clearing the boot disk policy while the additional disk still protects the old tier")
 			_, err := client.Update(ctx, publicv1.ComputeInstanceCatalogItemsUpdateRequest_builder{
 				Object: publicv1.ComputeInstanceCatalogItem_builder{
 					Id: item.GetId(),
@@ -972,6 +1125,8 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			Expect(err).NotTo(HaveOccurred())
 			_, err = tiers.Delete(ctx, privatev1.StorageTiersDeleteRequest_builder{Id: oldTier}.Build())
 			expectCatalogItemStatusCode(err, codes.FailedPrecondition)
+
+			By("replacing the additional disk tier and transferring deletion protection")
 			_, err = client.Update(ctx, publicv1.ComputeInstanceCatalogItemsUpdateRequest_builder{
 				Object: publicv1.ComputeInstanceCatalogItem_builder{
 					Id: item.GetId(),
@@ -995,15 +1150,20 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			Expect(err).NotTo(HaveOccurred())
 			_, err = tiers.Delete(ctx, privatev1.StorageTiersDeleteRequest_builder{Id: newTier}.Build())
 			expectCatalogItemStatusCode(err, codes.FailedPrecondition)
+
+			By("rejecting invalid disk policies without changing the stored offering")
 			before, err := client.Get(ctx, publicv1.ComputeInstanceCatalogItemsGetRequest_builder{Id: item.GetId()}.Build())
 			Expect(err).NotTo(HaveOccurred())
-			for _, invalid := range []*publicv1.ComputeInstanceCatalogItemFields{
-				publicv1.ComputeInstanceCatalogItemFields_builder{
+			for _, tc := range []struct {
+				name   string
+				fields *publicv1.ComputeInstanceCatalogItemFields
+			}{
+				{"zero boot disk size", publicv1.ComputeInstanceCatalogItemFields_builder{
 					BootDisk: publicv1.ComputeInstanceBootDiskFieldPolicies_builder{
 						SizeGib: publicv1.Int32FieldPolicy_builder{Locked: new(int32(0))}.Build(),
 					}.Build(),
-				}.Build(),
-				publicv1.ComputeInstanceCatalogItemFields_builder{
+				}.Build()},
+				{"negative additional disk size", publicv1.ComputeInstanceCatalogItemFields_builder{
 					AdditionalDisks: publicv1.ComputeInstanceDiskListFieldPolicy_builder{
 						Locked: publicv1.ComputeInstanceDiskList_builder{
 							Items: []*publicv1.ComputeInstanceDisk{
@@ -1014,10 +1174,11 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 							},
 						}.Build(),
 					}.Build(),
-				}.Build(),
+				}.Build()},
 			} {
+				By(tc.name)
 				_, err = client.Update(ctx, publicv1.ComputeInstanceCatalogItemsUpdateRequest_builder{
-					Object: publicv1.ComputeInstanceCatalogItem_builder{Id: item.GetId(), Title: "must not persist", Fields: invalid}.Build(),
+					Object: publicv1.ComputeInstanceCatalogItem_builder{Id: item.GetId(), Title: "must not persist", Fields: tc.fields}.Build(),
 					UpdateMask: catalogItemUpdateMask("title",
 						"fields"),
 				}.Build())
@@ -1030,6 +1191,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 	})
 	Context("Lifecycle independence", func() {
 		It("applies policy edits only to future compute instances and preserves provenance after catalog item deletion", func(ctx context.Context) {
+			By("creating a VM from the original catalog policy")
 			network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 			template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
 			items := publicv1.NewComputeInstanceCatalogItemsClient(tool.ExternalView().AdminConn())
@@ -1050,6 +1212,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			}.Build()
 			first, e := createComputeInstanceFixture(ctx, tool.ExternalView().UserConn(), spec)
 			Expect(e).NotTo(HaveOccurred())
+			By("changing the policy and checking that only new VMs receive it")
 			_, e = items.Update(ctx, publicv1.ComputeInstanceCatalogItemsUpdateRequest_builder{
 				Object: publicv1.ComputeInstanceCatalogItem_builder{
 					Id: item.GetId(),
@@ -1071,6 +1234,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			stored, e := client.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: first.GetId()}.Build())
 			Expect(e).NotTo(HaveOccurred())
 			Expect(stored.GetObject().GetSpec().GetUserData()).To(Equal("first"))
+			By("clearing one policy without changing other fields or the immutable Template")
 			_, e = items.Update(ctx, publicv1.ComputeInstanceCatalogItemsUpdateRequest_builder{
 				Object: publicv1.ComputeInstanceCatalogItem_builder{
 					Id:     item.GetId(),
@@ -1092,6 +1256,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 				UpdateMask: catalogItemUpdateMask("template"),
 			}.Build())
 			expectCatalogItemStatusCode(e, codes.InvalidArgument)
+			By("updating the original VM without reapplying the catalog policy")
 			_, e = client.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
 				Object:     publicv1.ComputeInstance_builder{Id: first.GetId(), Spec: publicv1.ComputeInstanceSpec_builder{RunStrategy: new(publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS)}.Build()}.Build(),
 				UpdateMask: catalogItemUpdateMask("spec.run_strategy"),
@@ -1107,6 +1272,8 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			}.Build())
 			Expect(e).NotTo(HaveOccurred())
 
+			By("deleting the catalog item while retaining the VM's provenance")
+			// Existing VMs keep materialized inputs, so later updates do not resolve the deleted item.
 			_, e = items.Delete(ctx, publicv1.ComputeInstanceCatalogItemsDeleteRequest_builder{Id: item.GetId()}.Build())
 			Expect(e).NotTo(HaveOccurred())
 			By("normal updates through both APIs no longer resolve the removed catalog item")
@@ -1143,7 +1310,9 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			Expect(e).NotTo(HaveOccurred())
 			Expect(privateUpdated.GetObject().GetSpec().GetRunStrategy()).To(Equal(privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_HALTED))
 
+			By("rejecting public provenance mutation through whole-field and nested masks")
 			for _, mask := range []string{"spec.catalog_item", "spec.catalog_item.name", "spec.catalog_item.shared"} {
+				By(mask)
 				_, e = client.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
 					Object: publicv1.ComputeInstance_builder{
 						Id: first.GetId(),
@@ -1164,14 +1333,18 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			}.Build())
 			expectCatalogItemStatusCode(e, codes.InvalidArgument)
 			By("rejecting provenance mutation and clearing through the private API")
-			for _, reference := range []*privatev1.ComputeInstanceCatalogItemReference{
-				privatev1.ComputeInstanceCatalogItemReference_builder{Id: "different"}.Build(),
-				nil,
+			for _, tc := range []struct {
+				name      string
+				reference *privatev1.ComputeInstanceCatalogItemReference
+			}{
+				{"different catalog item", privatev1.ComputeInstanceCatalogItemReference_builder{Id: "different"}.Build()},
+				{"cleared catalog item", nil},
 			} {
+				By(tc.name)
 				_, e = private.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
 					Object: privatev1.ComputeInstance_builder{
 						Id:   first.GetId(),
-						Spec: privatev1.ComputeInstanceSpec_builder{CatalogItem: reference}.Build(),
+						Spec: privatev1.ComputeInstanceSpec_builder{CatalogItem: tc.reference}.Build(),
 					}.Build(),
 					UpdateMask: catalogItemUpdateMask("spec.catalog_item"),
 				}.Build())

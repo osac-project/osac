@@ -40,15 +40,18 @@ const catalogItemFixtureSSHPublicKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG8K
 func catalogItemFixtureName() string {
 	return "catalog-item-" + uuid.New()[24:]
 }
+
 func catalogItemUpdateMask(paths ...string) *fieldmaskpb.FieldMask {
 	return &fieldmaskpb.FieldMask{Paths: paths}
 }
+
 func catalogItemParameterValue(value proto.Message) *anypb.Any {
 	GinkgoHelper()
 	result, err := anypb.New(value)
 	Expect(err).NotTo(HaveOccurred())
 	return result
 }
+
 func expectCatalogItemStatusCode(err error, expected codes.Code) {
 	GinkgoHelper()
 	Expect(err).To(HaveOccurred())
@@ -73,9 +76,11 @@ func deferCatalogItemFixtureDeletion(deleteDependency func(context.Context) erro
 		}
 	})
 }
+
 func catalogItemFixtureMetadata(tenant, project string) *privatev1.Metadata {
 	return privatev1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: tenant, Project: project}.Build()
 }
+
 func createCatalogItemProjectFixture(ctx context.Context, tenant string) string {
 	GinkgoHelper()
 	client := privatev1.NewProjectsClient(tool.InternalView().AdminConn())
@@ -97,6 +102,7 @@ func createCatalogItemDiskImageFixture(ctx context.Context, tenant, name string)
 	GinkgoHelper()
 	return createCatalogItemDiskImageInProjectFixture(ctx, tenant, "", name)
 }
+
 func createCatalogItemDiskImageInProjectFixture(ctx context.Context, tenant, project, name string) *privatev1.DiskImage {
 	GinkgoHelper()
 	client := privatev1.NewDiskImagesClient(tool.InternalView().AdminConn())
@@ -119,6 +125,7 @@ func createCatalogItemDiskImageInProjectFixture(ctx context.Context, tenant, pro
 	}, nil)
 	return object
 }
+
 func createCatalogItemComputeInstanceTypeFixture(ctx context.Context) string {
 	GinkgoHelper()
 	client := privatev1.NewInstanceTypesClient(tool.InternalView().AdminConn())
@@ -136,6 +143,7 @@ func createCatalogItemComputeInstanceTypeFixture(ctx context.Context) string {
 	}, nil)
 	return id
 }
+
 func createCatalogItemStorageTierFixture(ctx context.Context) string {
 	GinkgoHelper()
 	backends := privatev1.NewStorageBackendsClient(tool.InternalView().AdminConn())
@@ -219,6 +227,7 @@ func createCatalogItemSubnetInClassFixture(ctx context.Context, tenant, project,
 	}.Build())
 	Expect(err).NotTo(HaveOccurred())
 	networkID := network.GetObject().GetId()
+
 	deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
 		_, err := networks.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{Id: networkID}.Build())
 		return err
@@ -236,16 +245,19 @@ func createCatalogItemSubnetInClassFixture(ctx context.Context, tenant, project,
 		}
 		return false, err
 	})
+
 	Eventually(func() privatev1.VirtualNetworkState {
 		r, e := networks.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: networkID}.Build())
 		Expect(e).NotTo(HaveOccurred())
 		return r.GetObject().GetStatus().GetState()
 	}, time.Minute, time.Second).Should(Equal(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING))
+	// Catalog provisioning needs a ready network, so advance this fixture from Pending to Ready.
 	currentVirtualNetwork, err := networks.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: networkID}.Build())
 	Expect(err).NotTo(HaveOccurred())
 	currentVirtualNetwork.GetObject().SetStatus(privatev1.VirtualNetworkStatus_builder{State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY}.Build())
 	_, err = networks.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{Object: currentVirtualNetwork.GetObject(), UpdateMask: catalogItemUpdateMask("status.state")}.Build())
 	Expect(err).NotTo(HaveOccurred())
+
 	subnets := privatev1.NewSubnetsClient(tool.InternalView().AdminConn())
 	subnet, err := subnets.Create(ctx, privatev1.SubnetsCreateRequest_builder{
 		Object: privatev1.Subnet_builder{
@@ -258,6 +270,7 @@ func createCatalogItemSubnetInClassFixture(ctx context.Context, tenant, project,
 	}.Build())
 	Expect(err).NotTo(HaveOccurred())
 	subnetID := subnet.GetObject().GetId()
+
 	deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
 		_, err := subnets.Delete(ctx, privatev1.SubnetsDeleteRequest_builder{Id: subnetID}.Build())
 		return err
@@ -275,11 +288,13 @@ func createCatalogItemSubnetInClassFixture(ctx context.Context, tenant, project,
 		}
 		return false, err
 	})
+
 	Eventually(func() privatev1.SubnetState {
 		r, e := subnets.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: subnetID}.Build())
 		Expect(e).NotTo(HaveOccurred())
 		return r.GetObject().GetStatus().GetState()
 	}, time.Minute, time.Second).Should(Equal(privatev1.SubnetState_SUBNET_STATE_PENDING))
+	// Catalog provisioning needs a ready Subnet, so advance this fixture from Pending to Ready.
 	currentSubnet, err := subnets.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: subnetID}.Build())
 	Expect(err).NotTo(HaveOccurred())
 	currentSubnet.GetObject().SetStatus(privatev1.SubnetStatus_builder{State: privatev1.SubnetState_SUBNET_STATE_READY}.Build())
@@ -303,6 +318,7 @@ func createCatalogItemNetworkInClassFixture(ctx context.Context, tenant, project
 	}.Build())
 	Expect(err).NotTo(HaveOccurred())
 	groupID := group.GetObject().GetId()
+
 	deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
 		_, err := groups.Delete(ctx, privatev1.SecurityGroupsDeleteRequest_builder{Id: groupID}.Build())
 		return err
@@ -320,11 +336,13 @@ func createCatalogItemNetworkInClassFixture(ctx context.Context, tenant, project
 		}
 		return false, err
 	})
+
 	Eventually(func() privatev1.SecurityGroupState {
 		r, e := groups.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: groupID}.Build())
 		Expect(e).NotTo(HaveOccurred())
 		return r.GetObject().GetStatus().GetState()
 	}, time.Minute, time.Second).Should(Equal(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_PENDING))
+	// The Security Group must be ready before it can join a resource attachment.
 	currentSecurityGroup, err := groups.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: groupID}.Build())
 	Expect(err).NotTo(HaveOccurred())
 	currentSecurityGroup.GetObject().SetStatus(privatev1.SecurityGroupStatus_builder{State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY}.Build())
@@ -333,6 +351,7 @@ func createCatalogItemNetworkInClassFixture(ctx context.Context, tenant, project
 	network.securityGroupID = groupID
 	return network
 }
+
 func (f catalogItemNetworkFixture) computeInstanceAttachment() *publicv1.ComputeNetworkAttachment {
 	attachment := publicv1.ComputeNetworkAttachment_builder{
 		Subnet: publicv1.SubnetLocalReference_builder{Id: f.subnetID}.Build(),
@@ -344,6 +363,7 @@ func (f catalogItemNetworkFixture) computeInstanceAttachment() *publicv1.Compute
 	}
 	return attachment
 }
+
 func (f catalogItemNetworkFixture) bareMetalInstanceAttachment() *publicv1.BareMetalNetworkAttachment {
 	attachment := publicv1.BareMetalNetworkAttachment_builder{
 		Subnet: publicv1.SubnetLocalReference_builder{Id: f.subnetID}.Build(),
@@ -355,6 +375,7 @@ func (f catalogItemNetworkFixture) bareMetalInstanceAttachment() *publicv1.BareM
 	}
 	return attachment
 }
+
 func (f catalogItemNetworkFixture) clusterAttachment() *publicv1.ClusterNetworkAttachment {
 	attachment := publicv1.ClusterNetworkAttachment_builder{
 		Subnet: publicv1.SubnetLocalReference_builder{Id: f.subnetID}.Build(),
@@ -366,6 +387,7 @@ func (f catalogItemNetworkFixture) clusterAttachment() *publicv1.ClusterNetworkA
 	}
 	return attachment
 }
+
 func createCatalogItemSecretFixture(ctx context.Context, tenant string) string {
 	GinkgoHelper()
 	client := privatev1.NewSecretsClient(tool.InternalView().AdminConn())
@@ -383,6 +405,7 @@ func createCatalogItemSecretFixture(ctx context.Context, tenant string) string {
 	}, nil)
 	return id
 }
+
 func computeInstanceCatalogItemParameterDefinitions() []*privatev1.ComputeInstanceTemplateParameterDefinition {
 	return []*privatev1.ComputeInstanceTemplateParameterDefinition{
 		privatev1.ComputeInstanceTemplateParameterDefinition_builder{Name: "enabled", Type: "type.googleapis.com/google.protobuf.BoolValue", Required: true}.Build(),
@@ -394,6 +417,7 @@ func computeInstanceCatalogItemParameterDefinitions() []*privatev1.ComputeInstan
 		}.Build(),
 	}
 }
+
 func catalogItemParameterPolicies() map[string]*publicv1.TemplateParameterPolicy {
 	return map[string]*publicv1.TemplateParameterPolicy{
 		"enabled": publicv1.TemplateParameterPolicy_builder{Locked: catalogItemParameterValue(wrapperspb.Bool(false))}.Build(),
@@ -402,6 +426,7 @@ func catalogItemParameterPolicies() map[string]*publicv1.TemplateParameterPolicy
 		}.Build(),
 	}
 }
+
 func createCatalogItemHostTypeFixture(ctx context.Context) string {
 	GinkgoHelper()
 	client := privatev1.NewHostTypesClient(tool.InternalView().AdminConn())
@@ -458,9 +483,11 @@ func createCatalogItemTenantAdminFixture(ctx context.Context) (string, *grpc.Cli
 		}
 		deleteTenant(ctx, tenants, privatev1.NewProjectsClient(tool.InternalView().AdminConn()), id, name)
 	})
+
 	waitForTenantSynced(ctx, tenants, id)
 	tenant, err := tenants.Get(ctx, privatev1.TenantsGetRequest_builder{Id: id}.Build())
 	Expect(err).NotTo(HaveOccurred())
+
 	roleStatus, body, err := tool.KeycloakAdminRequest(ctx, http.MethodGet, "/roles/tenant-admin", nil)
 	Expect(err).NotTo(HaveOccurred())
 	if roleStatus == http.StatusNotFound {
@@ -476,12 +503,14 @@ func createCatalogItemTenantAdminFixture(ctx context.Context) (string, *grpc.Cli
 	code, _, err := tool.KeycloakAdminRequest(ctx, http.MethodPost, "/users/"+tenant.GetObject().GetStatus().GetBreakGlassUserId()+"/role-mappings/realm", []map[string]any{role})
 	Expect(err).NotTo(HaveOccurred())
 	Expect(code).To(Equal(http.StatusNoContent))
+
 	_, token := loginAsBreakGlass(ctx, tenants, name, id)
 	conn, err := tool.makeGrpcConn(externalServiceAddr, token)
 	Expect(err).NotTo(HaveOccurred())
 	DeferCleanup(conn.Close)
 	return name, conn
 }
+
 func createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx context.Context, parameters []*privatev1.ComputeInstanceTemplateParameterDefinition) string {
 	GinkgoHelper()
 	instanceType := createCatalogItemComputeInstanceTypeFixture(ctx)
@@ -518,6 +547,7 @@ func createCatalogItemComputeInstanceTemplateFixture(ctx context.Context, defaul
 	}, nil)
 	return id
 }
+
 func createCatalogItemClusterTemplateFixture(ctx context.Context, host string, defaults *privatev1.ClusterTemplateSpecDefaults, parameters []*privatev1.ClusterTemplateParameterDefinition) string {
 	GinkgoHelper()
 	client := privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
@@ -546,6 +576,7 @@ func createCatalogItemClusterTemplateFixture(ctx context.Context, host string, d
 	}, nil)
 	return id
 }
+
 func createCatalogItemBareMetalInstanceTemplateFixture(ctx context.Context, defaults *privatev1.BareMetalInstanceTemplateSpecDefaults, parameters []*privatev1.BareMetalInstanceTemplateParameterDefinition) string {
 	GinkgoHelper()
 	client := privatev1.NewBareMetalInstanceTemplatesClient(tool.InternalView().AdminConn())
@@ -566,6 +597,7 @@ func createCatalogItemBareMetalInstanceTemplateFixture(ctx context.Context, defa
 	}, nil)
 	return id
 }
+
 func createCatalogItemBareMetalInstanceTypeFixture(ctx context.Context, tenant string) string {
 	GinkgoHelper()
 	client := privatev1.NewBareMetalInstanceTypesClient(tool.InternalView().AdminConn())
@@ -590,6 +622,7 @@ func createCatalogItemBareMetalInstanceTypeFixture(ctx context.Context, tenant s
 	}, nil)
 	return id
 }
+
 func createCatalogItemClusterVersionFixture(ctx context.Context, version string) string {
 	GinkgoHelper()
 	client := privatev1.NewClusterVersionsClient(tool.InternalView().AdminConn())
@@ -607,6 +640,7 @@ func createCatalogItemClusterVersionFixture(ctx context.Context, version string)
 	}, nil)
 	return id
 }
+
 func createComputeInstanceCatalogItemFixture(ctx context.Context, conn *grpc.ClientConn, object *publicv1.ComputeInstanceCatalogItem) *publicv1.ComputeInstanceCatalogItem {
 	GinkgoHelper()
 	client := publicv1.NewComputeInstanceCatalogItemsClient(conn)
@@ -619,6 +653,7 @@ func createComputeInstanceCatalogItemFixture(ctx context.Context, conn *grpc.Cli
 	}, nil)
 	return result
 }
+
 func createClusterCatalogItemFixture(ctx context.Context, conn *grpc.ClientConn, object *publicv1.ClusterCatalogItem) *publicv1.ClusterCatalogItem {
 	GinkgoHelper()
 	client := publicv1.NewClusterCatalogItemsClient(conn)
@@ -631,6 +666,7 @@ func createClusterCatalogItemFixture(ctx context.Context, conn *grpc.ClientConn,
 	}, nil)
 	return result
 }
+
 func createBareMetalInstanceCatalogItemFixture(ctx context.Context, conn *grpc.ClientConn, object *publicv1.BareMetalInstanceCatalogItem) *publicv1.BareMetalInstanceCatalogItem {
 	GinkgoHelper()
 	client := publicv1.NewBareMetalInstanceCatalogItemsClient(conn)
@@ -643,6 +679,7 @@ func createBareMetalInstanceCatalogItemFixture(ctx context.Context, conn *grpc.C
 	}, nil)
 	return result
 }
+
 func createComputeInstanceFixture(ctx context.Context, conn *grpc.ClientConn, spec *publicv1.ComputeInstanceSpec) (*publicv1.ComputeInstance, error) {
 	GinkgoHelper()
 	client := publicv1.NewComputeInstancesClient(conn)
@@ -675,6 +712,7 @@ func createComputeInstanceFixture(ctx context.Context, conn *grpc.ClientConn, sp
 	})
 	return result, nil
 }
+
 func createClusterFixture(ctx context.Context, conn *grpc.ClientConn, spec *publicv1.ClusterSpec) (*publicv1.Cluster, error) {
 	GinkgoHelper()
 	client := publicv1.NewClustersClient(conn)
@@ -707,6 +745,7 @@ func createClusterFixture(ctx context.Context, conn *grpc.ClientConn, spec *publ
 	})
 	return result, nil
 }
+
 func createBareMetalInstanceFixture(ctx context.Context, conn *grpc.ClientConn, spec *publicv1.BareMetalInstanceSpec) (*publicv1.BareMetalInstance, error) {
 	GinkgoHelper()
 	client := publicv1.NewBareMetalInstancesClient(conn)
@@ -739,6 +778,7 @@ func createBareMetalInstanceFixture(ctx context.Context, conn *grpc.ClientConn, 
 	})
 	return result, nil
 }
+
 func clusterCatalogItemParameterDefinitions() []*privatev1.ClusterTemplateParameterDefinition {
 	result := []*privatev1.ClusterTemplateParameterDefinition{}
 	for _, p := range computeInstanceCatalogItemParameterDefinitions() {
@@ -746,6 +786,7 @@ func clusterCatalogItemParameterDefinitions() []*privatev1.ClusterTemplateParame
 	}
 	return result
 }
+
 func bareMetalInstanceCatalogItemParameterDefinitions() []*privatev1.BareMetalInstanceTemplateParameterDefinition {
 	result := []*privatev1.BareMetalInstanceTemplateParameterDefinition{}
 	for _, p := range computeInstanceCatalogItemParameterDefinitions() {
@@ -753,6 +794,7 @@ func bareMetalInstanceCatalogItemParameterDefinitions() []*privatev1.BareMetalIn
 	}
 	return result
 }
+
 func setCatalogItemSubnetFixtureState(ctx context.Context, id string, state privatev1.SubnetState) {
 	GinkgoHelper()
 	client := privatev1.NewSubnetsClient(tool.InternalView().AdminConn())

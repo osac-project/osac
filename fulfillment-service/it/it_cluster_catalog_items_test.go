@@ -30,6 +30,7 @@ import (
 var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 	Context("Provisioning and field governance", func() {
 		It("resolves typed fields and atomic node maps without changing Template HostType authority", func(ctx context.Context) {
+			By("authoring a tenant offering with network and node-set policies")
 			network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 			secret := createCatalogItemSecretFixture(ctx, usersGroup)
 			host := createCatalogItemHostTypeFixture(ctx)
@@ -58,6 +59,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 					}.Build(),
 				}.Build(),
 				NetworkAttachment: publicv1.ClusterNetworkAttachmentFieldPolicy_builder{Locked: network.clusterAttachment()}.Build(),
+
 				NodeSets: publicv1.ClusterNodeSetMapPolicy_builder{
 					Editable: publicv1.EditableClusterNodeSetMap_builder{
 						DefaultValue: publicv1.ClusterNodeSetMap_builder{
@@ -69,6 +71,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 				}.Build(),
 				AutoExternalIpAttachment: publicv1.BoolFieldPolicy_builder{Locked: new(false)}.Build(),
 			}.Build()
+
 			items := publicv1.NewClusterCatalogItemsClient(tool.ExternalView().AdminConn())
 			item := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
 				Metadata:           publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
@@ -79,6 +82,8 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			}.Build())
 			Expect(item.GetFields().GetNetwork().GetPodCidr().GetLocked()).To(Equal("10.132.0.0/14"))
 			Expect(item.GetFields().GetNodeSets().GetEditable().GetDefaultValue().GetItems()["workers"].GetHostType().GetId()).To(Equal(host))
+
+			By("creating a cluster with caller-selected version and node set")
 			request := publicv1.ClusterSpec_builder{
 				Version:     publicv1.ClusterVersionReference_builder{Id: overrideVersion}.Build(),
 				CatalogItem: publicv1.ClusterCatalogItemReference_builder{Id: item.GetId()}.Build(),
@@ -93,6 +98,8 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			}.Build()
 			created, e := createClusterFixture(ctx, tool.ExternalView().UserConn(), request)
 			Expect(e).NotTo(HaveOccurred())
+
+			By("checking the stored cluster's policy resolution and Template authority")
 			client := publicv1.NewClustersClient(tool.ExternalView().UserConn())
 			persisted, e := client.Get(ctx, publicv1.ClustersGetRequest_builder{Id: created.GetId()}.Build())
 			Expect(e).NotTo(HaveOccurred())
@@ -127,33 +134,70 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			Expect(proto.Equal(defaulted.GetSpec().GetTemplateParameters()["size"], catalogItemParameterValue(wrapperspb.Int32(20)))).To(BeTrue())
 			Expect(defaulted.GetSpec().GetNodeSets()["workers"].GetSize()).To(Equal(int32(4)))
 			Expect(defaulted.GetSpec().GetNodeSets()["workers"].GetHostType().GetId()).To(Equal(host))
-			for _, input := range []struct {
+
+			By("rejecting caller inputs that conflict with locked policies or Template HostTypes")
+			type invalidInput struct {
 				name string
 				set  func(*publicv1.ClusterSpec)
-			}{{"identical locked CIDR", func(s *publicv1.ClusterSpec) {
-				s.GetNetwork().SetPodCidr("10.132.0.0/14")
-			}}, {"identical locked Secret", func(s *publicv1.ClusterSpec) {
-				s.SetPullSecretSecret(publicv1.SecretLocalReference_builder{Id: secret}.Build())
-			}}, {"identical locked attachment", func(s *publicv1.ClusterSpec) {
-				s.SetNetworkAttachment(network.clusterAttachment())
-			}}, {"explicit false", func(s *publicv1.ClusterSpec) {
-				s.SetAutoExternalIpAttachment(false)
-			}}, {"Template HostType conflict", func(s *publicv1.ClusterSpec) {
-				s.SetNodeSets(map[string]*publicv1.ClusterNodeSet{
-					"workers": publicv1.ClusterNodeSet_builder{
-						HostType: publicv1.HostTypeReference_builder{Id: extraHost}.Build(),
-						Size:     new(int32(3)),
-					}.Build(),
-				})
-			}}, {"new key missing HostType", func(s *publicv1.ClusterSpec) {
-				s.SetNodeSets(map[string]*publicv1.ClusterNodeSet{
-					"extra": publicv1.ClusterNodeSet_builder{Size: new(int32(3))}.Build(),
-				})
-			}}, {"invalid numeric zero", func(s *publicv1.ClusterSpec) {
-				s.GetNodeSets()["extra"].SetSize(0)
-			}}, {"locked parameter", func(s *publicv1.ClusterSpec) {
-				s.GetTemplateParameters()["enabled"] = catalogItemParameterValue(wrapperspb.Bool(false))
-			}}} {
+			}
+			inputs := []invalidInput{
+				{
+					name: "identical locked CIDR",
+					set: func(s *publicv1.ClusterSpec) {
+						s.GetNetwork().SetPodCidr("10.132.0.0/14")
+					},
+				},
+				{
+					name: "identical locked Secret",
+					set: func(s *publicv1.ClusterSpec) {
+						s.SetPullSecretSecret(publicv1.SecretLocalReference_builder{Id: secret}.Build())
+					},
+				},
+				{
+					name: "identical locked attachment",
+					set: func(s *publicv1.ClusterSpec) {
+						s.SetNetworkAttachment(network.clusterAttachment())
+					},
+				},
+				{
+					name: "explicit false",
+					set: func(s *publicv1.ClusterSpec) {
+						s.SetAutoExternalIpAttachment(false)
+					},
+				},
+				{
+					name: "Template HostType conflict",
+					set: func(s *publicv1.ClusterSpec) {
+						s.SetNodeSets(map[string]*publicv1.ClusterNodeSet{
+							"workers": publicv1.ClusterNodeSet_builder{
+								HostType: publicv1.HostTypeReference_builder{Id: extraHost}.Build(),
+								Size:     new(int32(3)),
+							}.Build(),
+						})
+					},
+				},
+				{
+					name: "new key missing HostType",
+					set: func(s *publicv1.ClusterSpec) {
+						s.SetNodeSets(map[string]*publicv1.ClusterNodeSet{
+							"extra": publicv1.ClusterNodeSet_builder{Size: new(int32(3))}.Build(),
+						})
+					},
+				},
+				{
+					name: "invalid numeric zero",
+					set: func(s *publicv1.ClusterSpec) {
+						s.GetNodeSets()["extra"].SetSize(0)
+					},
+				},
+				{
+					name: "locked parameter",
+					set: func(s *publicv1.ClusterSpec) {
+						s.GetTemplateParameters()["enabled"] = catalogItemParameterValue(wrapperspb.Bool(false))
+					},
+				},
+			}
+			for _, input := range inputs {
 				By(input.name)
 				s := proto.Clone(request).(*publicv1.ClusterSpec)
 				input.set(s)
@@ -185,6 +229,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			expectCatalogItemStatusCode(e, codes.InvalidArgument)
 		})
 		It("falls through to Template and system values and supports dry-run and direct creation", func(ctx context.Context) {
+			By("authoring a shared offering with Template and catalog defaults")
 			host := createCatalogItemHostTypeFixture(ctx)
 			version := createCatalogItemClusterVersionFixture(ctx, "4.20.0")
 			template := createCatalogItemClusterTemplateFixture(ctx, host, privatev1.ClusterTemplateSpecDefaults_builder{
@@ -213,6 +258,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			Expect(err).NotTo(HaveOccurred())
 			dry := metadata.AppendToOutgoingContext(ctx, "x-dry-run", "true")
 			name := catalogItemFixtureName()
+			By("validating a dry-run cluster without storing network resources")
 			result, e := client.Create(dry, publicv1.ClustersCreateRequest_builder{
 				Object: publicv1.Cluster_builder{
 					Metadata: publicv1.Metadata_builder{Name: name}.Build(),
@@ -233,6 +279,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			afterSubnets, err := subnets.List(ctx, privatev1.SubnetsListRequest_builder{}.Build())
 			Expect(err).NotTo(HaveOccurred())
 			Expect(afterSubnets.GetTotal()).To(Equal(beforeSubnets.GetTotal()))
+			By("rejecting a request that names both the offering and its Template")
 			_, e = client.Create(dry, publicv1.ClustersCreateRequest_builder{
 				Object: publicv1.Cluster_builder{
 					Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
@@ -243,6 +290,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 				}.Build(),
 			}.Build())
 			expectCatalogItemStatusCode(e, codes.InvalidArgument)
+			By("rejecting creation without a Catalog Item or Template")
 			_, e = client.Create(dry, publicv1.ClustersCreateRequest_builder{
 				Object: publicv1.Cluster_builder{
 					Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
@@ -250,6 +298,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 				}.Build(),
 			}.Build())
 			expectCatalogItemStatusCode(e, codes.InvalidArgument)
+			By("creating directly from a Template with its version default")
 			network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 			direct, e := createClusterFixture(ctx, tool.ExternalView().UserConn(), publicv1.ClusterSpec_builder{
 				Template:          publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
@@ -258,6 +307,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			Expect(e).NotTo(HaveOccurred())
 			Expect(direct.GetSpec().HasCatalogItem()).To(BeFalse())
 			Expect(direct.GetSpec().GetVersion().GetId()).To(Equal(version))
+			By("falling back to the system version without an authored default")
 			systemTemplate := createCatalogItemClusterTemplateFixture(ctx, host, nil, nil)
 			system, e := createClusterFixture(ctx, tool.ExternalView().UserConn(), publicv1.ClusterSpec_builder{
 				Template:          publicv1.ClusterTemplateReference_builder{Id: systemTemplate}.Build(),
@@ -306,6 +356,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 	})
 	Context("Template parameters", func() {
 		It("distinguishes editable required input from Template defaults and invalid values", func(ctx context.Context) {
+			By("publishing a cluster offering with a required editable parameter")
 			template := createCatalogItemClusterTemplateFixture(ctx, createCatalogItemHostTypeFixture(ctx), nil, clusterCatalogItemParameterDefinitions())
 			network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 			item := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
@@ -332,18 +383,42 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 				}.Build(),
 			}.Build()
 			dry := metadata.AppendToOutgoingContext(ctx, "x-dry-run", "true")
+
+			By("rejecting a cluster request that omits the required parameter")
 			_, err := client.Create(dry, request)
 			expectCatalogItemStatusCode(err, codes.InvalidArgument)
-			request.GetObject().GetSpec().SetTemplateParameters(map[string]*anypb.Any{"enabled": catalogItemParameterValue(wrapperspb.Bool(false)), "ordinary": catalogItemParameterValue(wrapperspb.String("user"))})
+
+			By("accepting caller input and applying the Template size default")
+			request.GetObject().GetSpec().SetTemplateParameters(map[string]*anypb.Any{
+				"enabled":  catalogItemParameterValue(wrapperspb.Bool(false)),
+				"ordinary": catalogItemParameterValue(wrapperspb.String("user")),
+			})
 			response, err := client.Create(dry, request)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(proto.Equal(response.GetObject().GetSpec().GetTemplateParameters()["size"], catalogItemParameterValue(wrapperspb.Int32(10)))).To(BeTrue())
 			Expect(proto.Equal(response.GetObject().GetSpec().GetTemplateParameters()["ordinary"], catalogItemParameterValue(wrapperspb.String("user")))).To(BeTrue())
-			for _, input := range []map[string]*anypb.Any{
-				{"enabled": catalogItemParameterValue(wrapperspb.String("false"))},
-				{"enabled": catalogItemParameterValue(wrapperspb.Bool(false)), "unknown": catalogItemParameterValue(wrapperspb.Bool(true))},
+
+			By("rejecting malformed and unknown Template parameters")
+			for _, tc := range []struct {
+				name       string
+				parameters map[string]*anypb.Any
+			}{
+				{
+					name: "wrong parameter type",
+					parameters: map[string]*anypb.Any{
+						"enabled": catalogItemParameterValue(wrapperspb.String("false")),
+					},
+				},
+				{
+					name: "unknown parameter",
+					parameters: map[string]*anypb.Any{
+						"enabled": catalogItemParameterValue(wrapperspb.Bool(false)),
+						"unknown": catalogItemParameterValue(wrapperspb.Bool(true)),
+					},
+				},
 			} {
-				request.GetObject().GetSpec().SetTemplateParameters(input)
+				By(tc.name)
+				request.GetObject().GetSpec().SetTemplateParameters(tc.parameters)
 				_, err = client.Create(dry, request)
 				expectCatalogItemStatusCode(err, codes.InvalidArgument)
 			}
@@ -352,6 +427,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 
 	Context("Authoring and publication", func() {
 		It("lets a Tenant Admin publish governed items for members of that tenant", func(ctx context.Context) {
+			By("creating a tenant-owned draft through the Tenant Admin public API")
 			version := createCatalogItemClusterVersionFixture(ctx, "4.20.0")
 			template := createCatalogItemClusterTemplateFixture(ctx, createCatalogItemHostTypeFixture(ctx), privatev1.ClusterTemplateSpecDefaults_builder{
 				Version: privatev1.ClusterVersionReference_builder{Id: version}.Build(),
@@ -363,6 +439,8 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 				Template: publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
 			}.Build())
 			Expect(owned.GetMetadata().GetTenant()).To(Equal(tenant), "tenant authoring scope")
+
+			By("publishing governed fields for members of the tenant")
 			memberConn := createCatalogItemMemberFixture(ctx, tenant)
 			memberItems := publicv1.NewClusterCatalogItemsClient(memberConn)
 			_, err := items.Update(ctx, publicv1.ClusterCatalogItemsUpdateRequest_builder{
@@ -379,6 +457,8 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			Expect(visible.GetObject().GetFields().GetSshPublicKey().GetEditable().GetDefaultValue()).To(Equal(catalogItemFixtureSSHPublicKey))
 			Expect(visible.GetObject().GetFields().GetAutoExternalIpAttachment().HasLocked()).To(BeTrue())
 			Expect(visible.GetObject().GetFields().GetAutoExternalIpAttachment().GetLocked()).To(BeFalse())
+
+			By("provisioning a cluster as a member with an editable override")
 			network := createCatalogItemNetworkFixture(ctx, tenant, "")
 			spec := publicv1.ClusterSpec_builder{
 				CatalogItem:       publicv1.ClusterCatalogItemReference_builder{Id: owned.GetId()}.Build(),
@@ -394,6 +474,8 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			Expect(stored.GetObject().GetSpec().GetSshPublicKey()).To(Equal(catalogItemFixtureSSHPublicKey + " member"))
 			Expect(stored.GetObject().GetSpec().HasAutoExternalIpAttachment()).To(BeTrue())
 			Expect(stored.GetObject().GetSpec().GetAutoExternalIpAttachment()).To(BeFalse())
+
+			By("hiding the tenant offering from an unrelated tenant")
 			outsider := publicv1.NewClusterCatalogItemsClient(tool.ExternalView().UserConn())
 			_, err = outsider.Get(ctx, publicv1.ClusterCatalogItemsGetRequest_builder{Id: owned.GetId()}.Build())
 			expectCatalogItemStatusCode(err, codes.NotFound)
@@ -404,9 +486,12 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 				CatalogItem: publicv1.ClusterCatalogItemReference_builder{Id: owned.GetId()}.Build(),
 			}.Build())
 			expectCatalogItemStatusCode(err, codes.NotFound)
+
+			By("denying catalog deletion to a tenant member")
 			_, err = memberItems.Delete(ctx, publicv1.ClusterCatalogItemsDeleteRequest_builder{Id: owned.GetId()}.Build())
 			expectCatalogItemStatusCode(err, codes.PermissionDenied)
 
+			By("stopping new member provisioning after unpublishing")
 			_, err = items.Update(ctx, publicv1.ClusterCatalogItemsUpdateRequest_builder{
 				Object:     publicv1.ClusterCatalogItem_builder{Id: owned.GetId(), Published: false}.Build(),
 				UpdateMask: catalogItemUpdateMask("published"),
@@ -447,6 +532,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			Expect(listed.GetItems()).To(HaveLen(1))
 		})
 		It("keeps unmasked policies and atomically rejects invalid merged candidates", func(ctx context.Context) {
+			By("authoring an offering with two field policies")
 			template := createCatalogItemClusterTemplateFixture(ctx, createCatalogItemHostTypeFixture(ctx), nil, nil)
 			item := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
 				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
@@ -458,6 +544,8 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 				}.Build(),
 			}.Build())
 			client := publicv1.NewClusterCatalogItemsClient(tool.ExternalView().AdminConn())
+
+			By("editing one policy while retaining the other")
 			_, err := client.Update(ctx, publicv1.ClusterCatalogItemsUpdateRequest_builder{
 				Object: publicv1.ClusterCatalogItem_builder{
 					Id: item.GetId(),
@@ -476,6 +564,8 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			Expect(before.GetObject().GetFields().GetAutoExternalIpAttachment().GetLocked()).To(BeFalse())
 			Expect(before.GetObject().GetFields().GetSshPublicKey().HasLocked()).To(BeFalse())
 			Expect(before.GetObject().GetFields().GetSshPublicKey().GetEditable().GetDefaultValue()).To(Equal(catalogItemFixtureSSHPublicKey + " edited"))
+
+			By("rejecting an invalid policy without changing the offering title")
 			_, err = client.Update(ctx, publicv1.ClusterCatalogItemsUpdateRequest_builder{
 				Object: publicv1.ClusterCatalogItem_builder{
 					Id:    item.GetId(),
@@ -491,6 +581,8 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			after, err := client.Get(ctx, publicv1.ClusterCatalogItemsGetRequest_builder{Id: item.GetId()}.Build())
 			Expect(err).NotTo(HaveOccurred())
 			Expect(proto.Equal(before.GetObject(), after.GetObject())).To(BeTrue())
+
+			By("clearing all field policies explicitly")
 			_, err = client.Update(ctx, publicv1.ClusterCatalogItemsUpdateRequest_builder{
 				Object: publicv1.ClusterCatalogItem_builder{
 					Id:     item.GetId(),
@@ -593,29 +685,52 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			Expect(err).NotTo(HaveOccurred())
 		})
 		It("protects referenced objects through publication and policy changes", func(ctx context.Context) {
+			By("authoring a published cluster offering with a locked dependency")
 			template := createCatalogItemClusterTemplateFixture(ctx, createCatalogItemHostTypeFixture(ctx), nil, nil)
 			id := createCatalogItemClusterVersionFixture(ctx, "4.20.0")
 			items := publicv1.NewClusterCatalogItemsClient(tool.ExternalView().AdminConn())
 			dependencies := privatev1.NewClusterVersionsClient(tool.InternalView().AdminConn())
 			item := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
-				Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
-				Template: publicv1.ClusterTemplateReference_builder{Id: template}.Build(), Published: true,
-				Fields: publicv1.ClusterCatalogItemFields_builder{Version: publicv1.ClusterVersionReferenceFieldPolicy_builder{Locked: publicv1.ClusterVersionReference_builder{Id: id}.Build()}.Build()}.Build(),
+				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
+				Template:  publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
+				Published: true,
+				Fields: publicv1.ClusterCatalogItemFields_builder{
+					Version: publicv1.ClusterVersionReferenceFieldPolicy_builder{
+						Locked: publicv1.ClusterVersionReference_builder{Id: id}.Build(),
+					}.Build(),
+				}.Build(),
 			}.Build())
+
+			By("blocking deletion while the dependency is locked")
 			_, err := dependencies.Delete(ctx, privatev1.ClusterVersionsDeleteRequest_builder{Id: id}.Build())
 			expectCatalogItemStatusCode(err, codes.FailedPrecondition)
+
+			By("retaining protection after unpublishing and switching to an editable default")
 			_, err = items.Update(ctx, publicv1.ClusterCatalogItemsUpdateRequest_builder{
-				Object: publicv1.ClusterCatalogItem_builder{Id: item.GetId(), Published: false,
-					Fields: publicv1.ClusterCatalogItemFields_builder{Version: publicv1.ClusterVersionReferenceFieldPolicy_builder{Editable: publicv1.EditableClusterVersionReferenceField_builder{DefaultValue: publicv1.ClusterVersionReference_builder{Id: id}.Build()}.Build()}.Build()}.Build(),
-				}.Build(), UpdateMask: catalogItemUpdateMask("published", "fields.version"),
+				Object: publicv1.ClusterCatalogItem_builder{
+					Id:        item.GetId(),
+					Published: false,
+					Fields: publicv1.ClusterCatalogItemFields_builder{
+						Version: publicv1.ClusterVersionReferenceFieldPolicy_builder{
+							Editable: publicv1.EditableClusterVersionReferenceField_builder{
+								DefaultValue: publicv1.ClusterVersionReference_builder{Id: id}.Build(),
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build(),
+				UpdateMask: catalogItemUpdateMask("published", "fields.version"),
 			}.Build())
 			Expect(err).NotTo(HaveOccurred())
 			_, err = dependencies.Delete(ctx, privatev1.ClusterVersionsDeleteRequest_builder{Id: id}.Build())
 			expectCatalogItemStatusCode(err, codes.FailedPrecondition)
+
+			By("clearing the dependency policy")
 			_, err = items.Update(ctx, publicv1.ClusterCatalogItemsUpdateRequest_builder{
 				Object: publicv1.ClusterCatalogItem_builder{Id: item.GetId()}.Build(), UpdateMask: catalogItemUpdateMask("fields.version"),
 			}.Build())
 			Expect(err).NotTo(HaveOccurred())
+
+			By("releasing the dependency after the last policy reference is cleared")
 			_, err = dependencies.Delete(ctx, privatev1.ClusterVersionsDeleteRequest_builder{Id: id}.Build())
 			Expect(err).NotTo(HaveOccurred())
 		})
@@ -623,6 +738,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 	})
 	Context("Lifecycle independence", func() {
 		It("applies policy edits only to future clusters and permits ordinary version updates after catalog item deletion", func(ctx context.Context) {
+			By("creating a cluster from the original version policy")
 			host := createCatalogItemHostTypeFixture(ctx)
 			network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 			firstVersion := createCatalogItemClusterVersionFixture(ctx, "4.20.0")
@@ -645,6 +761,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			}.Build()
 			first, e := createClusterFixture(ctx, tool.ExternalView().UserConn(), request)
 			Expect(e).NotTo(HaveOccurred())
+			By("changing the policy and checking that only new clusters receive it")
 			_, e = items.Update(ctx, publicv1.ClusterCatalogItemsUpdateRequest_builder{
 				Object: publicv1.ClusterCatalogItem_builder{
 					Id: item.GetId(),
@@ -667,6 +784,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			stored, e := client.Get(ctx, publicv1.ClustersGetRequest_builder{Id: first.GetId()}.Build())
 			Expect(e).NotTo(HaveOccurred())
 			Expect(stored.GetObject().GetSpec().GetVersion().GetId()).To(Equal(firstVersion))
+			By("updating the original cluster through its ordinary version field")
 			_, e = client.Update(ctx, publicv1.ClustersUpdateRequest_builder{
 				Object:     publicv1.Cluster_builder{Id: first.GetId(), Spec: publicv1.ClusterSpec_builder{Version: publicv1.ClusterVersionReference_builder{Id: secondVersion}.Build()}.Build()}.Build(),
 				UpdateMask: catalogItemUpdateMask("spec.version"),
@@ -676,6 +794,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			Expect(e).NotTo(HaveOccurred())
 			Expect(liveUpdate.GetObject().GetSpec().GetVersion().GetId()).To(Equal(secondVersion))
 
+			By("unpublishing the catalog item while keeping the existing cluster usable")
 			_, e = items.Update(ctx, publicv1.ClusterCatalogItemsUpdateRequest_builder{
 				Object:     publicv1.ClusterCatalogItem_builder{Id: item.GetId(), Published: false}.Build(),
 				UpdateMask: catalogItemUpdateMask("published"),
@@ -689,6 +808,8 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			}.Build())
 			Expect(e).NotTo(HaveOccurred())
 
+			By("updating through the public API after catalog deletion")
+			// The stored catalog reference is provenance; ordinary updates use the materialized inputs.
 			_, e = items.Delete(ctx, publicv1.ClusterCatalogItemsDeleteRequest_builder{Id: item.GetId()}.Build())
 			Expect(e).NotTo(HaveOccurred())
 			_, e = client.Update(ctx, publicv1.ClustersUpdateRequest_builder{
@@ -708,6 +829,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			Expect(updated.GetObject().GetSpec().GetVersion().GetId()).To(Equal(secondVersion))
 
 			internal := privatev1.NewClustersClient(tool.InternalView().AdminConn())
+			By("updating through the private API after catalog deletion")
 			_, e = internal.Update(ctx, privatev1.ClustersUpdateRequest_builder{
 				Object: privatev1.Cluster_builder{
 					Id: first.GetId(),
@@ -724,6 +846,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			Expect(e).NotTo(HaveOccurred())
 			Expect(privateUpdated.GetObject().GetSpec().GetVersion().GetId()).To(Equal(firstVersion))
 
+			By("rejecting provenance mutation through the public API")
 			_, e = client.Update(ctx, publicv1.ClustersUpdateRequest_builder{
 				Object: publicv1.Cluster_builder{
 					Id: first.GetId(),
@@ -745,14 +868,18 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			expectCatalogItemStatusCode(e, codes.InvalidArgument)
 
 			By("rejecting provenance mutation and clearing through the private API")
-			for _, reference := range []*privatev1.ClusterCatalogItemReference{
-				privatev1.ClusterCatalogItemReference_builder{Id: "different"}.Build(),
-				nil,
+			for _, tc := range []struct {
+				name      string
+				reference *privatev1.ClusterCatalogItemReference
+			}{
+				{"different catalog item", privatev1.ClusterCatalogItemReference_builder{Id: "different"}.Build()},
+				{"cleared catalog item", nil},
 			} {
+				By(tc.name)
 				_, e = internal.Update(ctx, privatev1.ClustersUpdateRequest_builder{
 					Object: privatev1.Cluster_builder{
 						Id:   first.GetId(),
-						Spec: privatev1.ClusterSpec_builder{CatalogItem: reference}.Build(),
+						Spec: privatev1.ClusterSpec_builder{CatalogItem: tc.reference}.Build(),
 					}.Build(),
 					UpdateMask: catalogItemUpdateMask("spec.catalog_item"),
 				}.Build())

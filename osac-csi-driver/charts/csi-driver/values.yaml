@@ -77,6 +77,10 @@ controller:
 node:
   privileged: true
   vendorSockets: ""
+  # TopoLVM's node-local CSI socket. The driver also accepts an
+  # OSAC_LVMS_NODE_SOCKET environment override at runtime.
+  lvmsNodeSocket: /run/topolvm/csi-topolvm.sock
+  lvmsNodeSocketDir: /run/topolvm
   resources:
     limits:
       cpu: 500m

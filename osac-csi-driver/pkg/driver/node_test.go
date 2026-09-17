@@ -580,7 +580,8 @@ func TestNodeGetVolumeStats(t *testing.T) {
 // --- NodeGetInfo / NodeGetCapabilities ---
 
 func TestNodeGetInfo(t *testing.T) {
-	ns := NewNodeServer("my-node-42", proxy.NewManager(nil), nil)
+	t.Setenv(nodeNameEnv, "my-node-42")
+	ns := NewNodeServer("constructor-node-must-not-be-used", proxy.NewManager(nil), nil)
 	resp, err := ns.NodeGetInfo(context.Background(), &csi.NodeGetInfoRequest{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -588,6 +589,45 @@ func TestNodeGetInfo(t *testing.T) {
 	if resp.GetNodeId() != "my-node-42" {
 		t.Errorf("expected nodeId my-node-42, got %s", resp.GetNodeId())
 	}
+	if got := resp.GetAccessibleTopology().GetSegments()[volumeNodeTopologyKey]; got != "my-node-42" {
+		t.Errorf("topology node = %q, want my-node-42", got)
+	}
+}
+
+func TestNodeGetInfoMissingNodeName(t *testing.T) {
+	t.Setenv(nodeNameEnv, "")
+	ns := NewNodeServer("constructor-node-must-not-be-used", proxy.NewManager(nil), nil)
+
+	_, err := ns.NodeGetInfo(context.Background(), &csi.NodeGetInfoRequest{})
+	assertGRPCCode(t, err, codes.FailedPrecondition)
+}
+
+func TestNewNodeServerResolvesLVMSSocket(t *testing.T) {
+	t.Run("environment override", func(t *testing.T) {
+		t.Setenv(lvmsNodeSocketEnv, "/run/custom/topolvm.sock")
+		ns := NewNodeServer("node", proxy.NewManager(nil), nil)
+
+		got, err := ns.resolveVendorSocket(map[string]string{"osac.backend": lvmsProvider})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "/run/custom/topolvm.sock" {
+			t.Errorf("LVMS socket = %q, want /run/custom/topolvm.sock", got)
+		}
+	})
+
+	t.Run("default", func(t *testing.T) {
+		t.Setenv(lvmsNodeSocketEnv, "")
+		ns := NewNodeServer("node", proxy.NewManager(nil), nil)
+
+		got, err := ns.resolveVendorSocket(map[string]string{"osac.backend": lvmsProvider})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != defaultLVMSNodeSocket {
+			t.Errorf("LVMS socket = %q, want %q", got, defaultLVMSNodeSocket)
+		}
+	})
 }
 
 func TestNodeGetCapabilities(t *testing.T) {

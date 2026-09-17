@@ -40,6 +40,7 @@ func TestSanity(t *testing.T) {
 	driverSocket := filepath.Join(tmpDir, "driver.sock")
 	nodeID := "test-node-1"
 	backendName := "fake"
+	t.Setenv("NODE_NAME", nodeID)
 
 	vendorSrv, _, err := startFakeVendor(vendorSocket, nodeID)
 	if err != nil {

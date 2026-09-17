@@ -49,6 +49,7 @@ func NewDriver(name, version, endpoint, nodeID, clusterID string, vc fulfillment
 	// clusterID is optional — the fulfillment service may identify the
 	// cluster from connection credentials or a mounted ConfigMap.
 
+	vendorSockets = normalizeVendorSockets(vendorSockets)
 	proxyMgr := proxy.NewManager(vendorSockets)
 
 	return &Driver{

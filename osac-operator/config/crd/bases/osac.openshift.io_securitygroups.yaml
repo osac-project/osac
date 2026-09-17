@@ -106,6 +106,10 @@ spec:
                   type: object
                 maxItems: 100
                 type: array
+                x-kubernetes-validations:
+                - message: egress rules must contain only a destination CIDR
+                  rule: self.all(r, r.destinationCidr != '' && (!has(r.sourceCidr)
+                    || r.sourceCidr == ''))
               ingressRules:
                 description: IngressRules defines the ingress security rules
                 items:
@@ -161,6 +165,10 @@ spec:
                   type: object
                 maxItems: 100
                 type: array
+                x-kubernetes-validations:
+                - message: ingress rules must contain only a source CIDR
+                  rule: self.all(r, r.sourceCidr != '' && (!has(r.destinationCidr)
+                    || r.destinationCidr == ''))
               virtualNetwork:
                 description: VirtualNetwork is the ID of the parent VirtualNetwork
                 type: string

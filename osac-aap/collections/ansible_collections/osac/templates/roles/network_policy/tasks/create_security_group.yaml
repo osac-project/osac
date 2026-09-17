@@ -41,6 +41,24 @@
       - "Ingress rules count: {{ ingress_rules | length }}"
       - "Egress rules count: {{ egress_rules | length }}"
 
+- name: Validate ingress rule CIDRs
+  ansible.builtin.assert:
+    that:
+      - item.sourceCidr is defined
+      - item.sourceCidr | default('') | length > 0
+      - item.destinationCidr | default('') | length == 0
+    fail_msg: "SecurityGroup ingress rules require a source CIDR and must not set a destination CIDR"
+  loop: "{{ ingress_rules }}"
+
+- name: Validate egress rule CIDRs
+  ansible.builtin.assert:
+    that:
+      - item.destinationCidr is defined
+      - item.destinationCidr | default('') | length > 0
+      - item.sourceCidr | default('') | length == 0
+    fail_msg: "SecurityGroup egress rules require a destination CIDR and must not set a source CIDR"
+  loop: "{{ egress_rules }}"
+
 - name: Initialize ingress and egress policy rule arrays
   ansible.builtin.set_fact:
     ingress_policy_rules: []
@@ -50,7 +68,7 @@
   ansible.builtin.set_fact:
     ingress_policy_rules: "{{ ingress_policy_rules + [_rule] }}"
   vars:
-    _has_cidr: "{{ item.sourceCidr is defined and item.sourceCidr | length > 0 }}"
+    _has_cidr: "{{ item.destinationCidr is defined and item.destinationCidr | length > 0 }}"
     _has_port: "{{ item.protocol not in ['icmp', 'all'] and item.portFrom is defined }}"
     _from_part: "{{ (_has_cidr | bool) | ternary({'from': [{'ipBlock': {'cidr': item.sourceCidr}}]}, {}) }}"
     _port_base: "{{ {'protocol': item.protocol | upper, 'port': item.portFrom | default(0)} }}"
@@ -65,7 +83,7 @@
   vars:
     _has_cidr: "{{ item.sourceCidr is defined and item.sourceCidr | length > 0 }}"
     _has_port: "{{ item.protocol not in ['icmp', 'all'] and item.portFrom is defined }}"
-    _to_part: "{{ (_has_cidr | bool) | ternary({'to': [{'ipBlock': {'cidr': item.sourceCidr}}]}, {}) }}"
+    _to_part: "{{ (_has_cidr | bool) | ternary({'to': [{'ipBlock': {'cidr': item.destinationCidr}}]}, {}) }}"
     _port_base: "{{ {'protocol': item.protocol | upper, 'port': item.portFrom | default(0)} }}"
     _port_range: "{{ (item.portTo is defined and item.portTo != item.portFrom | default(0)) | ternary({'endPort': item.portTo | default(0)}, {}) }}"
     _ports_part: "{{ (_has_port | bool) | ternary({'ports': [_port_base | combine(_port_range)]}, {}) }}"

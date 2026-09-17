@@ -84,11 +84,13 @@ type SecurityGroupSpec struct {
 	// IngressRules defines the ingress security rules
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:MaxItems=100
+	// +kubebuilder:validation:XValidation:rule="self.all(r, r.sourceCidr != '' && (!has(r.destinationCidr) || r.destinationCidr == ''))",message="ingress rules must contain only a source CIDR"
 	IngressRules []SecurityRule `json:"ingressRules,omitempty"`
 
 	// EgressRules defines the egress security rules
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:MaxItems=100
+	// +kubebuilder:validation:XValidation:rule="self.all(r, r.destinationCidr != '' && (!has(r.sourceCidr) || r.sourceCidr == ''))",message="egress rules must contain only a destination CIDR"
 	EgressRules []SecurityRule `json:"egressRules,omitempty"`
 }
 

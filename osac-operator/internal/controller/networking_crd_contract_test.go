@@ -140,7 +140,9 @@ var _ = Describe("IPv4-only networking CRD contracts", func() {
 			name string
 			rule v1alpha1.SecurityRule
 		}{
+			{name: "missing ingress CIDR", rule: v1alpha1.SecurityRule{Protocol: v1alpha1.SecurityGroupProtocolAll}},
 			{name: "host-bit source", rule: v1alpha1.SecurityRule{Protocol: v1alpha1.SecurityGroupProtocolAll, SourceCIDR: "10.255.0.1/16"}},
+			{name: "ingress destination-only CIDR", rule: v1alpha1.SecurityRule{Protocol: v1alpha1.SecurityGroupProtocolAll, DestinationCIDR: "10.255.0.0/16"}},
 			{name: "IPv6 source", rule: v1alpha1.SecurityRule{Protocol: v1alpha1.SecurityGroupProtocolAll, SourceCIDR: "2001:db8::/64"}},
 			{name: "host-bit destination", rule: v1alpha1.SecurityRule{Protocol: v1alpha1.SecurityGroupProtocolAll, DestinationCIDR: "10.255.1.1/24"}},
 			{name: "IPv6 destination", rule: v1alpha1.SecurityRule{Protocol: v1alpha1.SecurityGroupProtocolAll, DestinationCIDR: "2001:db8::/64"}},
@@ -150,6 +152,21 @@ var _ = Describe("IPv4-only networking CRD contracts", func() {
 			expectCRDCreateRejected(&v1alpha1.SecurityGroup{
 				ObjectMeta: metav1.ObjectMeta{Name: networkingContractName("invalid-sg"), Namespace: "default"},
 				Spec:       v1alpha1.SecurityGroupSpec{VirtualNetwork: "parent-vn", IngressRules: []v1alpha1.SecurityRule{testCase.rule}},
+			})
+		}
+
+		egressCases := []struct {
+			name string
+			rule v1alpha1.SecurityRule
+		}{
+			{name: "missing egress CIDR", rule: v1alpha1.SecurityRule{Protocol: v1alpha1.SecurityGroupProtocolAll}},
+			{name: "egress source-only CIDR", rule: v1alpha1.SecurityRule{Protocol: v1alpha1.SecurityGroupProtocolAll, SourceCIDR: "10.255.0.0/16"}},
+		}
+		for _, testCase := range egressCases {
+			By("rejecting " + testCase.name)
+			expectCRDCreateRejected(&v1alpha1.SecurityGroup{
+				ObjectMeta: metav1.ObjectMeta{Name: networkingContractName("invalid-egress-sg"), Namespace: "default"},
+				Spec:       v1alpha1.SecurityGroupSpec{VirtualNetwork: "parent-vn", EgressRules: []v1alpha1.SecurityRule{testCase.rule}},
 			})
 		}
 	})

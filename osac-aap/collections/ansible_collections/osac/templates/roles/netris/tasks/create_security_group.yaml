@@ -73,6 +73,24 @@
   ansible.builtin.debug:
     msg: "ACL rules will be created for subnet CIDRs: {{ _sg_subnet_cidrs }}"
 
+- name: Validate ingress rule CIDRs
+  ansible.builtin.assert:
+    that:
+      - item.sourceCidr is defined
+      - item.sourceCidr | default('') | length > 0
+      - item.destinationCidr | default('') | length == 0
+    fail_msg: "SecurityGroup ingress rules require a source CIDR and must not set a destination CIDR"
+  loop: "{{ ingress_rules }}"
+
+- name: Validate egress rule CIDRs
+  ansible.builtin.assert:
+    that:
+      - item.destinationCidr is defined
+      - item.destinationCidr | default('') | length > 0
+      - item.sourceCidr | default('') | length == 0
+    fail_msg: "SecurityGroup egress rules require a destination CIDR and must not set a source CIDR"
+  loop: "{{ egress_rules }}"
+
 - name: Create ACL rules for ingress (per subnet)
   ansible.builtin.include_role:
     name: netris.controller.acl
@@ -83,7 +101,7 @@
     acl_action: permit
     acl_proto: "{{ item.0.protocol }}"
     acl_vpc_id: "{{ _sg_vpc_id }}"
-    acl_src_prefix: "{{ item.0.sourceCidr | default(item.0.ipv4Cidr | default('0.0.0.0/0')) }}"
+    acl_src_prefix: "{{ item.0.sourceCidr }}"
     acl_dst_prefix: "{{ item.1 }}"
     acl_dst_port_from: "{{ item.0.portFrom | default(none) }}"
     acl_dst_port_to: "{{ item.0.portTo | default(item.0.portFrom) | default(none) }}"
@@ -105,7 +123,7 @@
     acl_proto: "{{ item.0.protocol }}"
     acl_vpc_id: "{{ _sg_vpc_id }}"
     acl_src_prefix: "{{ item.1 }}"
-    acl_dst_prefix: "{{ item.0.sourceCidr | default(item.0.ipv4Cidr | default('0.0.0.0/0')) }}"
+    acl_dst_prefix: "{{ item.0.destinationCidr }}"
     acl_dst_port_from: "{{ item.0.portFrom | default(none) }}"
     acl_dst_port_to: "{{ item.0.portTo | default(item.0.portFrom) | default(none) }}"
     acl_comment: "OSAC SG {{ sg_name }} egress rule {{ idx }} subnet {{ subnet_idx }}"

@@ -20,6 +20,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 	"google.golang.org/grpc/codes"
@@ -28,9 +29,10 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+const computeInstanceTestFinalizer = "integration-test"
+
 func setComputeInstanceTestFinalizer(ctx context.Context, client privatev1.ComputeInstancesClient, id string, add bool) {
 	GinkgoHelper()
-	const finalizer = "integration-test"
 	Eventually(func() error {
 		response, err := client.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
 		if !add && status.Code(err) == codes.NotFound {
@@ -40,9 +42,9 @@ func setComputeInstanceTestFinalizer(ctx context.Context, client privatev1.Compu
 			return err
 		}
 		object := response.GetObject()
-		values := slices.DeleteFunc(object.GetMetadata().GetFinalizers(), func(value string) bool { return value == finalizer })
+		values := slices.DeleteFunc(object.GetMetadata().GetFinalizers(), func(value string) bool { return value == computeInstanceTestFinalizer })
 		if add {
-			values = append(values, finalizer)
+			values = append(values, computeInstanceTestFinalizer)
 		}
 		object.GetMetadata().SetFinalizers(values)
 		_, err = client.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{Object: object, UpdateMask: catalogItemUpdateMask("metadata.finalizers"), Lock: true}.Build())
@@ -61,8 +63,18 @@ var _ = Describe("Compute instance updates", Label("compute-updates"), func() {
 		Expect(err).NotTo(HaveOccurred())
 		client := privatev1.NewComputeInstancesClient(tool.InternalView().AdminConn())
 		if deleteFirst {
+			By("waiting for the reconciler to persist its finalizer")
+			Eventually(func(g Gomega) {
+				response, err := client.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: resource.GetId()}.Build())
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(response.GetObject().GetMetadata().GetFinalizers()).To(ContainElement(finalizers.Controller))
+			}, time.Minute, 100*time.Millisecond).Should(Succeed())
+
 			setComputeInstanceTestFinalizer(ctx, client, resource.GetId(), true)
 			DeferCleanup(func(ctx context.Context) { setComputeInstanceTestFinalizer(ctx, client, resource.GetId(), false) })
+			beforeDeletion, err := client.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: resource.GetId()}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(beforeDeletion.GetObject().GetMetadata().GetFinalizers()).To(ContainElement(computeInstanceTestFinalizer))
 
 			By("starting deletion through the API while a test finalizer holds the resource")
 			_, err = client.Delete(ctx, privatev1.ComputeInstancesDeleteRequest_builder{Id: resource.GetId()}.Build())
@@ -71,6 +83,9 @@ var _ = Describe("Compute instance updates", Label("compute-updates"), func() {
 		stored, err := client.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: resource.GetId()}.Build())
 		Expect(err).NotTo(HaveOccurred())
 		Expect(stored.GetObject().GetMetadata().HasDeletionTimestamp()).To(Equal(deleteFirst))
+		if deleteFirst {
+			Expect(stored.GetObject().GetMetadata().GetFinalizers()).To(ContainElement(computeInstanceTestFinalizer))
+		}
 		setCatalogItemSubnetFixtureState(ctx, network.subnetID, privatev1.SubnetState_SUBNET_STATE_PENDING)
 		candidate := proto.Clone(stored.GetObject()).(*privatev1.ComputeInstance)
 		candidate.GetSpec().GetNetworkAttachments()[0].SetSecurityGroups(nil)

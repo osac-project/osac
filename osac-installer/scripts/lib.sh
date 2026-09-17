@@ -164,7 +164,7 @@ resolve_release_tag() {
     match_pattern="${prefix}/v[0-9]*.[0-9]*.[0-9]*"
     validate_regex="^${prefix}/v[0-9]+\\.[0-9]+\\.[0-9]+$"
 
-    tag=$(git -C "${path}" tag -l "${match_pattern}" | grep -E "${validate_regex}" | sort -V | tail -1)
+    tag=$(git -C "${path}" tag -l "${match_pattern}" | { grep -E "${validate_regex}" || true; } | sort -V | tail -1)
     if [[ -z "${tag}" ]]; then
         echo "ERROR: no real (non-nightly) ${prefix}/vX.Y.Z release tag found in ${path} — refusing to guess a version" >&2
         return 1

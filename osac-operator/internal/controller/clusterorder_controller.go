@@ -747,6 +747,9 @@ func hostedClusterAndNodePoolsAreReady(instance *v1alpha1.ClusterOrder, hc *hype
 }
 
 func nodePoolsMatchRequests(requests []v1alpha1.NodeRequest, nodePools []hypershiftv1beta1.NodePool) bool {
+	if len(requests) == 0 || len(nodePools) == 0 {
+		return false
+	}
 	if nodeRequestsContainDuplicateResourceClasses(requests) {
 		return false
 	}

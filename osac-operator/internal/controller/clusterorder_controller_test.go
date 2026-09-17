@@ -607,6 +607,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 			}, []hypershiftv1beta1.NodePool{
 				readyClusterOrderNodePool("worker", 1), readyClusterOrderNodePool("worker", 1),
 			}, false),
+			Entry("empty requests and pools do not match", []v1alpha1.NodeRequest{}, []hypershiftv1beta1.NodePool{}, false),
 		)
 
 		It("should not modify Phase when HostedCluster is not yet available", func() {

@@ -54,7 +54,7 @@ RUN go install github.com/go-delve/delve/cmd/dlv@latest
 # alongside it -- one image, one build, always version-matched to the
 # service it was built with; no separate release mechanism to keep in
 # sync (see docs/RELEASING.md).
-FROM registry.access.redhat.com/ubi10-minimal:10.2-1789456728 AS runtime-base
+FROM registry.access.redhat.com/ubi10-minimal:10.2-1789645153 AS runtime-base
 COPY --from=builder /opt/app-root/src/fulfillment-service/fulfillment-service /usr/local/bin
 COPY --from=builder /opt/app-root/src/fulfillment-service/osac /usr/local/bin
 USER 1001

@@ -3599,8 +3599,10 @@ var _ = Describe("Private clusters server", func() {
 				Expect(err).To(HaveOccurred())
 				st, ok := grpcstatus.FromError(err)
 				Expect(ok).To(BeTrue())
-				Expect(st.Code()).To(Equal(grpccodes.FailedPrecondition))
-				Expect(st.Message()).To(ContainSubstring("baremetal_instance_type is required when network_attachment is set"))
+				Expect(st.Code()).To(Equal(grpccodes.InvalidArgument))
+				Expect(st.Message()).To(ContainSubstring("host type for node set"))
+				// Note: upstream's resolveClusterNodeSets rejects missing host_type before
+				// resolveFabricInterfaces can check for baremetal_instance_type.
 			})
 
 			It("Falls back to HostType when only host_type is set (migration path)", func() {

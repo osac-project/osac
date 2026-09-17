@@ -1270,9 +1270,8 @@ func convertTemplateNodeSets(value map[string]*privatev1.ClusterTemplateNodeSet)
 		}
 		size := nodeSet.GetSize()
 		result[name] = privatev1.ClusterNodeSet_builder{
-			HostType:              cloneMessage(nodeSet.GetHostType()),
-			BaremetalInstanceType: cloneMessage(nodeSet.GetBaremetalInstanceType()),
-			Size:                  &size,
+			HostType: cloneMessage(nodeSet.GetHostType()),
+			Size:     &size,
 		}.Build()
 	}
 	return result

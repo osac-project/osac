@@ -29,6 +29,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/updatable"
 	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 	"github.com/osac-project/osac/fulfillment-service/internal/testing"
@@ -132,7 +133,7 @@ var _ = Describe("Edit command", func() {
 		mockHelper.EXPECT().IsUpdatable().Return(false)
 		mockHelper.EXPECT().FullName().Return(protoreflect.FullName("osac.public.v1.VirtualNetwork"))
 
-		err := ensureUpdatable(mockHelper)
+		err := updatable.Ensure(mockHelper)
 		Expect(err).To(MatchError(`object type "osac.public.v1.VirtualNetwork" is immutable; updates are not supported`))
 	})
 
@@ -142,7 +143,7 @@ var _ = Describe("Edit command", func() {
 		mockHelper := reflection.NewMockObjectHelper(ctrl)
 		mockHelper.EXPECT().IsUpdatable().Return(true)
 
-		Expect(ensureUpdatable(mockHelper)).ToNot(HaveOccurred())
+		Expect(updatable.Ensure(mockHelper)).ToNot(HaveOccurred())
 	})
 
 	Describe("fetchObject", func() {

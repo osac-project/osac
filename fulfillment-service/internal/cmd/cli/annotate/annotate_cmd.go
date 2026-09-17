@@ -22,6 +22,7 @@ import (
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/updatable"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 	"github.com/osac-project/osac/fulfillment-service/internal/packages"
@@ -111,7 +112,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		})
 		return nil
 	}
-	if err := ensureUpdatable(c.helper); err != nil {
+	if err := updatable.Ensure(c.helper); err != nil {
 		return err
 	}
 
@@ -151,13 +152,6 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
-}
-
-func ensureUpdatable(helper reflection.ObjectHelper) error {
-	if helper.IsUpdatable() {
-		return nil
-	}
-	return fmt.Errorf("object type %q is immutable; updates are not supported", helper.FullName())
 }
 
 // annotationOperation represents a single annotation set or remove operation.

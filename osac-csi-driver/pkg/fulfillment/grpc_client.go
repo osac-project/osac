@@ -52,6 +52,15 @@ func (c *grpcVolumeClient) CreateVolume(ctx context.Context, params CreateVolume
 	spec.SetStorageTier(params.Tier)
 	spec.SetSizeGib(bytesToGiB(params.SizeBytes))
 	spec.SetAccessMode(toProtoAccessMode(params.AccessMode))
+	if params.Topology != nil {
+		segments := make(map[string]string, len(params.Topology.Segments))
+		for key, value := range params.Topology.Segments {
+			segments[key] = value
+		}
+		topology := &privatev1.VolumeTopology{}
+		topology.SetSegments(segments)
+		spec.SetTopology(topology)
+	}
 
 	// params.ClusterID has no corresponding field on the private Volume API, so
 	// cluster provenance is intentionally not carried to fulfillment here.
@@ -194,7 +203,8 @@ func volumeToInfo(v *privatev1.Volume) *VolumeInfo {
 	}
 	if st := v.GetStatus(); st != nil {
 		info.State = fromProtoState(st.GetState())
-		info.Backend = st.GetProvider()
+		info.Provider = st.GetProvider()
+		info.Backend = info.Provider
 		info.Message = st.GetMessage()
 		info.VendorVolumeID = st.GetVendorVolumeId()
 		info.Protocol = fromProtoProtocol(st.GetProtocol())

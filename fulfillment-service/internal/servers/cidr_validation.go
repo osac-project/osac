@@ -96,16 +96,15 @@ func validateImmutableCIDR(fieldName, existingCIDR, newCIDR, ipVersion string) e
 	if err == nil && equal {
 		return nil
 	}
-	from, to := existingCIDR, newCIDR
+	from := existingCIDR
 	if existingCIDR != "" {
 		if canonical, err := parseAndValidateCIDR(existingCIDR, ipVersion); err == nil {
 			from = canonical
 		}
 	}
-	to = canonicalNew
 	return grpcstatus.Errorf(grpccodes.InvalidArgument,
 		"field '%s' is immutable and cannot be changed from '%s' to '%s'",
-		fieldName, from, to)
+		fieldName, from, canonicalNew)
 }
 
 // immutableCIDRField groups optional CIDR field accessors for preserve-and-validate on Update.

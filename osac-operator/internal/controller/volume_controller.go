@@ -144,6 +144,7 @@ func NewVolumeReconciler(
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=volumes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=volumes/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=volumes/finalizers,verbs=update
+// +kubebuilder:rbac:groups=topolvm.io,resources=logicalvolumes,verbs=get;list;watch;create;delete
 
 // Reconcile is part of the main Kubernetes reconciliation loop. It drives
 // Volume CRs through the provisioning lifecycle: Progressing -> Ready (on

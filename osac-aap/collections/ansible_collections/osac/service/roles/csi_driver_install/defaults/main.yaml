@@ -32,3 +32,12 @@ csi_driver_install_supported_vendors:
 # socketPath ever changes there; the role appends '/csi.sock' to each.
 csi_driver_install_vendor_node_socket_paths:
   vast: /var/lib/kubelet/plugins/csi.vast.vastdata.com
+
+# OSAC-4361 local-tier overlay for the csi_driver_install role introduced by
+# PR #361. These defaults are intentionally independent of the chart's
+# network-vendor enablement list: LVMS needs a StorageClass, not a vendor
+# controller Service.
+csi_driver_install_local_provider: lvms
+csi_driver_install_storage_class_provisioner: csi.osac.openshift.io
+csi_driver_install_storage_class_reclaim_policy: Delete
+csi_driver_install_storage_class_volume_binding_mode: WaitForFirstConsumer

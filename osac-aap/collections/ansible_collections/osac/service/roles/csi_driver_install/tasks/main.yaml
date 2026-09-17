@@ -393,3 +393,11 @@
         lease_state: absent
         lease_name: "csi-driver-install-lock"
         lease_holder: "{{ _csi_driver_install_lock_holder }}"
+
+# OSAC-4361 local-tier overlay for the csi_driver_install role introduced by
+# PR #361. The dependency's Helm-install tasks remain authoritative; this
+# separate task file handles the local-tier StorageClass independently of the
+# supported network-vendor list.
+- name: Create StorageClasses for local CSI tiers
+  ansible.builtin.include_tasks: storage_classes.yaml
+  when: csi_driver_install_enabled | default(false) | bool

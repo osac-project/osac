@@ -1,0 +1,40 @@
+---
+- name: Select local tiers for the OSAC CSI StorageClass
+  ansible.builtin.set_fact:
+    _csi_driver_install_local_tiers: >-
+      {{ csi_driver_install_tiers | default([])
+         | selectattr('provider', 'equalto', csi_driver_install_local_provider)
+         | list }}
+
+- name: Validate tenant identity for local CSI StorageClasses
+  ansible.builtin.assert:
+    that:
+      - tenant_name is defined
+      - tenant_name | length > 0
+      - tenant_name is regex('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
+    fail_msg: >-
+      tenant_name must be a DNS label when local CSI tiers are configured;
+      got {{ tenant_name | default('undefined') }}.
+  when: _csi_driver_install_local_tiers | length > 0
+
+- name: Create local-tier OSAC CSI StorageClasses
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: storage.k8s.io/v1
+      kind: StorageClass
+      metadata:
+        name: "osac-{{ tenant_name }}-{{ item.name }}"
+        labels:
+          osac.openshift.io/tenant: "{{ tenant_name }}"
+          osac.openshift.io/storage-tier: "{{ item.name }}"
+          app.kubernetes.io/managed-by: osac-aap
+      provisioner: "{{ csi_driver_install_storage_class_provisioner }}"
+      parameters:
+        osac.tier: "{{ item.name }}"
+      reclaimPolicy: "{{ csi_driver_install_storage_class_reclaim_policy }}"
+      volumeBindingMode: "{{ csi_driver_install_storage_class_volume_binding_mode }}"
+  loop: "{{ _csi_driver_install_local_tiers }}"
+  loop_control:
+    label: "osac-{{ tenant_name }}-{{ item.name }}"
+  when: _csi_driver_install_local_tiers | length > 0

@@ -1,0 +1,73 @@
+---
+# OSAC-4361 overlay case for the csi_driver_install integration target from
+# PR #361. Include this scenario from that target after the dependency is
+# reconciled into the branch.
+- name: "CSI Driver Install - Local-tier StorageClass"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    csi_driver_install_enabled: true
+    csi_driver_install_tiers:
+      - name: local
+        protocol: block
+        provider: lvms
+    tenant_name: test-local-tier
+
+  tasks:
+    - name: Remove any previous local-tier StorageClass
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: osac-test-local-tier-local
+      failed_when: false
+
+    - name: Create local-tier StorageClass through csi_driver_install
+      ansible.builtin.include_role:
+        name: osac.service.csi_driver_install
+
+    - name: Read local-tier StorageClass
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: osac-test-local-tier-local
+      register: _local_storage_class
+
+    - name: Assert local-tier StorageClass contract
+      ansible.builtin.assert:
+        that:
+          - _local_storage_class.resources | length == 1
+          - _local_storage_class.resources[0].provisioner == 'csi.osac.openshift.io'
+          - _local_storage_class.resources[0].volumeBindingMode == 'WaitForFirstConsumer'
+          - _local_storage_class.resources[0].reclaimPolicy == 'Delete'
+          - "_local_storage_class.resources[0].parameters == {'osac.tier': 'local'}"
+          - "'osac.io/device-class' not in _local_storage_class.resources[0].parameters"
+          - "'topolvm.io/device-class' not in _local_storage_class.resources[0].parameters"
+        fail_msg: >-
+          Local-tier StorageClass did not match the OSAC CSI contract:
+          {{ _local_storage_class.resources | to_json }}
+
+    - name: Re-run csi_driver_install to verify idempotency
+      ansible.builtin.include_role:
+        name: osac.service.csi_driver_install
+
+    - name: Read local-tier StorageClass after the idempotent re-run
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: osac-test-local-tier-local
+      register: _local_storage_class_after_rerun
+
+    - name: Assert idempotent re-run leaves one local-tier StorageClass
+      ansible.builtin.assert:
+        that:
+          - _local_storage_class_after_rerun.resources | length == 1
+          - "_local_storage_class_after_rerun.resources[0].parameters == {'osac.tier': 'local'}"
+
+    - name: Delete local-tier StorageClass
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: osac-test-local-tier-local

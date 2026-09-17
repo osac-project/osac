@@ -26,6 +26,16 @@ import (
 // singular and plural names that can be used as shell completion candidates. This function does not
 // require a gRPC connection — it reads only from the compiled-in proto registry.
 func ObjectTypeNames(packages ...string) []string {
+	return objectTypeNames(packages, false)
+}
+
+// UpdatableObjectTypeNames scans the proto registry for object types in the given packages and returns
+// only the types that expose the standard Update method. It is used by commands that mutate objects.
+func UpdatableObjectTypeNames(packages ...string) []string {
+	return objectTypeNames(packages, true)
+}
+
+func objectTypeNames(packages []string, requireUpdate bool) []string {
 	pkgSet := make(map[protoreflect.FullName]bool, len(packages))
 	for _, pkg := range packages {
 		pkgSet[protoreflect.FullName(pkg)] = true
@@ -38,7 +48,7 @@ func ObjectTypeNames(packages ...string) []string {
 		}
 		serviceDescs := fileDesc.Services()
 		for i := range serviceDescs.Len() {
-			scanServiceForNames(serviceDescs.Get(i), seen)
+			scanServiceForNames(serviceDescs.Get(i), seen, requireUpdate)
 		}
 		return true
 	})
@@ -53,9 +63,13 @@ func ObjectTypeNames(packages ...string) []string {
 
 // scanServiceForNames checks whether a service has the standard CRUD methods and, if so, adds
 // the singular and plural forms of the object type to the seen map.
-func scanServiceForNames(serviceDesc protoreflect.ServiceDescriptor, seen map[string]bool) {
+func scanServiceForNames(serviceDesc protoreflect.ServiceDescriptor, seen map[string]bool, requireUpdate bool) {
 	methodDescs := serviceDesc.Methods()
-	for _, name := range []protoreflect.Name{getMethodName, listMethodName, createMethodName, updateMethodName, deleteMethodName} {
+	methods := []protoreflect.Name{getMethodName, listMethodName, createMethodName, deleteMethodName}
+	if requireUpdate {
+		methods = append(methods, updateMethodName)
+	}
+	for _, name := range methods {
 		if methodDescs.ByName(name) == nil {
 			return
 		}

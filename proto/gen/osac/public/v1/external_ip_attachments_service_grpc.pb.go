@@ -35,7 +35,6 @@ const (
 	ExternalIPAttachments_List_FullMethodName   = "/osac.public.v1.ExternalIPAttachments/List"
 	ExternalIPAttachments_Get_FullMethodName    = "/osac.public.v1.ExternalIPAttachments/Get"
 	ExternalIPAttachments_Create_FullMethodName = "/osac.public.v1.ExternalIPAttachments/Create"
-	ExternalIPAttachments_Update_FullMethodName = "/osac.public.v1.ExternalIPAttachments/Update"
 	ExternalIPAttachments_Delete_FullMethodName = "/osac.public.v1.ExternalIPAttachments/Delete"
 )
 
@@ -49,8 +48,6 @@ type ExternalIPAttachmentsClient interface {
 	Get(ctx context.Context, in *ExternalIPAttachmentsGetRequest, opts ...grpc.CallOption) (*ExternalIPAttachmentsGetResponse, error)
 	// Creates a new external IP attachment. Binds an ExternalIP to a target resource.
 	Create(ctx context.Context, in *ExternalIPAttachmentsCreateRequest, opts ...grpc.CallOption) (*ExternalIPAttachmentsCreateResponse, error)
-	// Updates an existing external IP attachment. Allows modifying metadata (labels, annotations).
-	Update(ctx context.Context, in *ExternalIPAttachmentsUpdateRequest, opts ...grpc.CallOption) (*ExternalIPAttachmentsUpdateResponse, error)
 	// Deletes an external IP attachment. Triggers the detach workflow to unbind the ExternalIP from the target.
 	Delete(ctx context.Context, in *ExternalIPAttachmentsDeleteRequest, opts ...grpc.CallOption) (*ExternalIPAttachmentsDeleteResponse, error)
 }
@@ -93,16 +90,6 @@ func (c *externalIPAttachmentsClient) Create(ctx context.Context, in *ExternalIP
 	return out, nil
 }
 
-func (c *externalIPAttachmentsClient) Update(ctx context.Context, in *ExternalIPAttachmentsUpdateRequest, opts ...grpc.CallOption) (*ExternalIPAttachmentsUpdateResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ExternalIPAttachmentsUpdateResponse)
-	err := c.cc.Invoke(ctx, ExternalIPAttachments_Update_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *externalIPAttachmentsClient) Delete(ctx context.Context, in *ExternalIPAttachmentsDeleteRequest, opts ...grpc.CallOption) (*ExternalIPAttachmentsDeleteResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ExternalIPAttachmentsDeleteResponse)
@@ -123,8 +110,6 @@ type ExternalIPAttachmentsServer interface {
 	Get(context.Context, *ExternalIPAttachmentsGetRequest) (*ExternalIPAttachmentsGetResponse, error)
 	// Creates a new external IP attachment. Binds an ExternalIP to a target resource.
 	Create(context.Context, *ExternalIPAttachmentsCreateRequest) (*ExternalIPAttachmentsCreateResponse, error)
-	// Updates an existing external IP attachment. Allows modifying metadata (labels, annotations).
-	Update(context.Context, *ExternalIPAttachmentsUpdateRequest) (*ExternalIPAttachmentsUpdateResponse, error)
 	// Deletes an external IP attachment. Triggers the detach workflow to unbind the ExternalIP from the target.
 	Delete(context.Context, *ExternalIPAttachmentsDeleteRequest) (*ExternalIPAttachmentsDeleteResponse, error)
 	mustEmbedUnimplementedExternalIPAttachmentsServer()
@@ -145,9 +130,6 @@ func (UnimplementedExternalIPAttachmentsServer) Get(context.Context, *ExternalIP
 }
 func (UnimplementedExternalIPAttachmentsServer) Create(context.Context, *ExternalIPAttachmentsCreateRequest) (*ExternalIPAttachmentsCreateResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Create not implemented")
-}
-func (UnimplementedExternalIPAttachmentsServer) Update(context.Context, *ExternalIPAttachmentsUpdateRequest) (*ExternalIPAttachmentsUpdateResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Update not implemented")
 }
 func (UnimplementedExternalIPAttachmentsServer) Delete(context.Context, *ExternalIPAttachmentsDeleteRequest) (*ExternalIPAttachmentsDeleteResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
@@ -227,24 +209,6 @@ func _ExternalIPAttachments_Create_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
-func _ExternalIPAttachments_Update_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ExternalIPAttachmentsUpdateRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ExternalIPAttachmentsServer).Update(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: ExternalIPAttachments_Update_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ExternalIPAttachmentsServer).Update(ctx, req.(*ExternalIPAttachmentsUpdateRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _ExternalIPAttachments_Delete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ExternalIPAttachmentsDeleteRequest)
 	if err := dec(in); err != nil {
@@ -281,10 +245,6 @@ var ExternalIPAttachments_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Create",
 			Handler:    _ExternalIPAttachments_Create_Handler,
-		},
-		{
-			MethodName: "Update",
-			Handler:    _ExternalIPAttachments_Update_Handler,
 		},
 		{
 			MethodName: "Delete",

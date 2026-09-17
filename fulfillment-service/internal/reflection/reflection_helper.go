@@ -25,6 +25,8 @@ import (
 	"github.com/gobuffalo/flect"
 	"golang.org/x/exp/maps"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
@@ -71,6 +73,7 @@ type ObjectHelper interface {
 	GetName(object proto.Message) string
 	GetMetadata(object proto.Message) Metadata
 	Create(ctx context.Context, object proto.Message) (proto.Message, error)
+	IsUpdatable() bool
 	Update(ctx context.Context, object proto.Message) (proto.Message, error)
 	Delete(ctx context.Context, id string) error
 	FindObject(ctx context.Context, ref string, console Renderer) (proto.Message, error)
@@ -259,7 +262,8 @@ func (h *helper) scanFile(fileDesc protoreflect.FileDescriptor) bool {
 }
 
 func (h *helper) scanService(serviceDesc protoreflect.ServiceDescriptor) {
-	// The service must have the get, list, update and delete method:
+	// The service must have the get, list, create and delete methods. Update is optional because some
+	// resources are intentionally immutable through the public API.
 	h.logger.Debug(
 		"Scanning service",
 		slog.String("service", string(serviceDesc.FullName())),
@@ -278,9 +282,6 @@ func (h *helper) scanService(serviceDesc protoreflect.ServiceDescriptor) {
 		return
 	}
 	updateDesc := methodDescs.ByName(updateMethodName)
-	if updateDesc == nil {
-		return
-	}
 	deleteDesc := methodDescs.ByName(deleteMethodName)
 	if deleteDesc == nil {
 		return
@@ -333,20 +334,23 @@ func (h *helper) scanService(serviceDesc protoreflect.ServiceDescriptor) {
 		return
 	}
 
-	// The request and response of the `Update` method must have an `object` message field:
-	updateRequestObjectFieldDesc := h.getObjectField(updateDesc.Input())
-	if updateRequestObjectFieldDesc == nil {
-		return
-	}
-	if updateRequestObjectFieldDesc.Message() != objectDesc {
-		return
-	}
-	updateResponseObjectFieldDesc := h.getObjectField(updateDesc.Output())
-	if updateResponseObjectFieldDesc == nil {
-		return
-	}
-	if updateResponseObjectFieldDesc.Message() != objectDesc {
-		return
+	var updateRequestObjectFieldDesc, updateResponseObjectFieldDesc protoreflect.FieldDescriptor
+	if updateDesc != nil {
+		// The request and response of the `Update` method must have an `object` message field:
+		updateRequestObjectFieldDesc = h.getObjectField(updateDesc.Input())
+		if updateRequestObjectFieldDesc == nil {
+			return
+		}
+		if updateRequestObjectFieldDesc.Message() != objectDesc {
+			return
+		}
+		updateResponseObjectFieldDesc = h.getObjectField(updateDesc.Output())
+		if updateResponseObjectFieldDesc == nil {
+			return
+		}
+		if updateResponseObjectFieldDesc.Message() != objectDesc {
+			return
+		}
 	}
 
 	// The request of the `Delete` method must have an `id` string field:
@@ -362,7 +366,10 @@ func (h *helper) scanService(serviceDesc protoreflect.ServiceDescriptor) {
 	getRequestTemplate, getResponseTemplate := h.makeMethodTemplates(getDesc)
 	listRequestTemplate, listResponseTemplate := h.makeMethodTemplates(listDesc)
 	createRequestTemplate, createResponseTemplate := h.makeMethodTemplates(createDesc)
-	updateRequestTemplate, updateResponseTemplate := h.makeMethodTemplates(updateDesc)
+	var updateRequestTemplate, updateResponseTemplate proto.Message
+	if updateDesc != nil {
+		updateRequestTemplate, updateResponseTemplate = h.makeMethodTemplates(updateDesc)
+	}
 	deleteRequestTemplate, deleteResponseTemplate := h.makeMethodTemplates(deleteDesc)
 
 	// Calculate the singular and pluran names:
@@ -415,15 +422,6 @@ func (h *helper) scanService(serviceDesc protoreflect.ServiceDescriptor) {
 			in:  createRequestObjectFieldDesc,
 			out: createResponseObjectFieldDesc,
 		},
-		update: updateInfo{
-			methodInfo: methodInfo{
-				path:     h.makeMethodPath(updateDesc),
-				request:  updateRequestTemplate,
-				response: updateResponseTemplate,
-			},
-			in:  updateRequestObjectFieldDesc,
-			out: updateResponseObjectFieldDesc,
-		},
 		delete: deleteInfo{
 			methodInfo: methodInfo{
 				path:     h.makeMethodPath(deleteDesc),
@@ -432,6 +430,17 @@ func (h *helper) scanService(serviceDesc protoreflect.ServiceDescriptor) {
 			},
 			id: deleteRequestIdFieldDesc,
 		},
+	}
+	if updateDesc != nil {
+		helper.update = updateInfo{
+			methodInfo: methodInfo{
+				path:     h.makeMethodPath(updateDesc),
+				request:  updateRequestTemplate,
+				response: updateResponseTemplate,
+			},
+			in:  updateRequestObjectFieldDesc,
+			out: updateResponseObjectFieldDesc,
+		}
 	}
 	h.helpers = append(h.helpers, helper)
 }
@@ -756,7 +765,14 @@ func (h *objectHelper) Create(ctx context.Context, object proto.Message) (result
 	return
 }
 
+func (h *objectHelper) IsUpdatable() bool {
+	return h.update.path != ""
+}
+
 func (h *objectHelper) Update(ctx context.Context, object proto.Message) (result proto.Message, err error) {
+	if !h.IsUpdatable() {
+		return nil, grpcstatus.Errorf(codes.FailedPrecondition, "object type %q is immutable; updates are not supported", h.FullName())
+	}
 	request := proto.Clone(h.update.request)
 	h.setObject(request, h.update.in, object)
 	response := proto.Clone(h.update.response)

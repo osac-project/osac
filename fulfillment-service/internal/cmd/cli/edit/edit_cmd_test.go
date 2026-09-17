@@ -22,11 +22,14 @@ import (
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/ginkgo/v2/dsl/table"
 	. "github.com/onsi/gomega"
+	"github.com/spf13/cobra"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/updatable"
 	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 	"github.com/osac-project/osac/fulfillment-service/internal/testing"
@@ -109,6 +112,39 @@ var _ = Describe("Edit command", func() {
 		Entry("public identity provider is not watchable", "identityprovider", map[string]int{"osac.public.v1": 0}, false),
 		Entry("private hub is watchable", "hub", map[string]int{"osac.private.v1": 0}, true),
 	)
+
+	It("does not offer immutable networking resources for edit completion", func() {
+		completed, directive := completeObjectTypes(nil, nil, "")
+		Expect(directive).To(Equal(cobra.ShellCompDirectiveNoFileComp))
+		Expect(completed).ToNot(ContainElements(
+			"virtualnetwork", "virtualnetworks",
+			"subnet", "subnets",
+			"securitygroup", "securitygroups",
+			"externalip", "externalips",
+			"externalipattachment", "externalipattachments",
+			"natgateway", "natgateways",
+		))
+	})
+
+	It("rejects direct edits of immutable objects before opening an editor", func() {
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+		mockHelper := reflection.NewMockObjectHelper(ctrl)
+		mockHelper.EXPECT().IsUpdatable().Return(false)
+		mockHelper.EXPECT().FullName().Return(protoreflect.FullName("osac.public.v1.VirtualNetwork"))
+
+		err := updatable.Ensure(mockHelper)
+		Expect(err).To(MatchError(`object type "osac.public.v1.VirtualNetwork" is immutable; updates are not supported`))
+	})
+
+	It("allows edits of update-capable objects", func() {
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+		mockHelper := reflection.NewMockObjectHelper(ctrl)
+		mockHelper.EXPECT().IsUpdatable().Return(true)
+
+		Expect(updatable.Ensure(mockHelper)).ToNot(HaveOccurred())
+	})
 
 	Describe("fetchObject", func() {
 		var (

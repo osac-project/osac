@@ -49,6 +49,12 @@ delegates to the private server and converts between the two representations usi
 which copies matching fields by protobuf reflection. Fields that don't exist on one side are simply
 skipped (or ignored explicitly via `AddIgnoredFields`).
 
+Networking follows the same split with a deliberately narrower public contract. Public
+`VirtualNetworks`, `Subnets`, `SecurityGroups`, `ExternalIPs`, `ExternalIPAttachments`, and
+`NATGateways` expose Create/List/Get/Delete only. Their private services retain Update so
+controllers can persist status and provider feedback; that private mutation path is not reachable
+through the public gRPC or REST descriptors.
+
 **Table naming and JSON encoding are derived by reflection, not hardcoded.**
 `GenericDAOBuilder[O].tableName()`
 ([`internal/database/dao/generic_dao.go`](https://github.com/osac-project/osac/blob/main/fulfillment-service/internal/database/dao/generic_dao.go))

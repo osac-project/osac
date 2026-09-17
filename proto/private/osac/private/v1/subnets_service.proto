@@ -89,6 +89,7 @@ message SubnetsCreateResponse {
 }
 
 message SubnetsUpdateRequest {
+  option (cleanapi.message).private = true;
   Subnet object = 1;
   google.protobuf.FieldMask update_mask = 2;
 
@@ -99,6 +100,7 @@ message SubnetsUpdateRequest {
 }
 
 message SubnetsUpdateResponse {
+  option (cleanapi.message).private = true;
   Subnet object = 1;
 }
 
@@ -142,6 +144,7 @@ service Subnets {
 
   // Updates an existing subnet.
   rpc Update(SubnetsUpdateRequest) returns (SubnetsUpdateResponse) {
+    option (cleanapi.method).private = true;
     option (google.api.http) = {
       patch: "/api/private/v1/subnets/{object.id}"
       body: "object"

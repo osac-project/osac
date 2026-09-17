@@ -31,6 +31,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"gopkg.in/yaml.v3"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/updatable"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 	"github.com/osac-project/osac/fulfillment-service/internal/packages"
@@ -141,6 +142,9 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 			"Object": args[0],
 		})
 		return nil
+	}
+	if err := updatable.Ensure(c.helper); err != nil {
+		return err
 	}
 
 	// Check the flags:
@@ -390,7 +394,7 @@ func completeObjectTypes(cmd *cobra.Command, args []string, toComplete string) (
 	if len(args) != 0 {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
-	return reflection.ObjectTypeNames(packages.Public...), cobra.ShellCompDirectiveNoFileComp
+	return reflection.UpdatableObjectTypeNames(packages.Public...), cobra.ShellCompDirectiveNoFileComp
 }
 
 const shortHelp = `Edit objects`

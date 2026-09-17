@@ -184,22 +184,6 @@ class GRPCClient:
         )
         return response["object"]["id"]
 
-    def update_security_group_rules(
-        self, *, sg_id: str, ingress: list[dict[str, Any]] | None = None, egress: list[dict[str, Any]] | None = None
-    ) -> None:
-        spec: dict[str, Any] = {}
-        paths: list[str] = []
-        if ingress is not None:
-            spec["ingress"] = ingress
-            paths.append("spec.ingress")
-        if egress is not None:
-            spec["egress"] = egress
-            paths.append("spec.egress")
-        self.call(
-            service=f"{PUBLIC_API}.SecurityGroups/Update",
-            data={"object": {"id": sg_id, "spec": spec}, "updateMask": {"paths": paths}},
-        )
-
     # Console operations
 
     def create_console_session(

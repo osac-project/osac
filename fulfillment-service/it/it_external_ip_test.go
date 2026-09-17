@@ -407,37 +407,6 @@ var _ = Describe("ExternalIP lifecycle", func() {
 		Expect(listResponse.GetItems()).ToNot(BeEmpty())
 	})
 
-	It("Rejects changing immutable pool field", func() {
-		ipId := fmt.Sprintf("test-ip-%s", uuid.New())
-		response, err := externalIPsClient.Create(ctx, publicv1.ExternalIPsCreateRequest_builder{
-			Object: publicv1.ExternalIP_builder{
-				Id: ipId,
-				Metadata: publicv1.Metadata_builder{
-					Name: fmt.Sprintf("test-ip-%s", uuid.New()[24:32]),
-				}.Build(),
-				Spec: publicv1.ExternalIPSpec_builder{
-					Pool: publicv1.ExternalIPPoolReference_builder{Id: poolId}.Build(),
-				}.Build(),
-			}.Build(),
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		name := response.GetObject().GetMetadata().GetName()
-		_, err = externalIPsClient.Update(ctx, publicv1.ExternalIPsUpdateRequest_builder{
-			Object: publicv1.ExternalIP_builder{
-				Id: ipId,
-				Metadata: publicv1.Metadata_builder{
-					Name: name,
-				}.Build(),
-				Spec: publicv1.ExternalIPSpec_builder{
-					Pool: publicv1.ExternalIPPoolReference_builder{Name: "different-pool"}.Build(),
-				}.Build(),
-			}.Build(),
-			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.pool"}},
-		}.Build())
-		Expect(err).To(HaveOccurred())
-		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-	})
-
 	It("Can delete an ExternalIP in ALLOCATED state", func() {
 		ipId := fmt.Sprintf("test-ip-%s", uuid.New())
 		_, err := externalIPsClient.Create(ctx, publicv1.ExternalIPsCreateRequest_builder{
@@ -919,45 +888,6 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 					Cluster:    publicv1.ClusterLocalReference_builder{Id: clusterId}.Build(),
 				}.Build(),
 			}.Build(),
-		}.Build())
-		Expect(err).To(HaveOccurred())
-		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-	})
-
-	It("Rejects immutable fields on update", func() {
-		attName := fmt.Sprintf("test-att-%s", uuid.New()[24:32])
-		attachmentId := fmt.Sprintf("test-att-%s", uuid.New())
-		_, err := attachmentsClient.Create(ctx, publicv1.ExternalIPAttachmentsCreateRequest_builder{
-			Object: publicv1.ExternalIPAttachment_builder{
-				Id: attachmentId,
-				Metadata: publicv1.Metadata_builder{
-					Name: attName,
-				}.Build(),
-				Spec: publicv1.ExternalIPAttachmentSpec_builder{
-					ExternalIp:     publicv1.ExternalIPLocalReference_builder{Id: externalIPId}.Build(),
-					Cluster:        publicv1.ClusterLocalReference_builder{Id: clusterId}.Build(),
-					TargetEndpoint: publicv1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_API,
-				}.Build(),
-			}.Build(),
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		DeferCleanup(func() {
-			attachmentsClient.Delete(ctx, publicv1.ExternalIPAttachmentsDeleteRequest_builder{
-				Id: attachmentId,
-			}.Build())
-		})
-
-		_, err = attachmentsClient.Update(ctx, publicv1.ExternalIPAttachmentsUpdateRequest_builder{
-			Object: publicv1.ExternalIPAttachment_builder{
-				Id: attachmentId,
-				Metadata: publicv1.Metadata_builder{
-					Name: attName,
-				}.Build(),
-				Spec: publicv1.ExternalIPAttachmentSpec_builder{
-					ExternalIp: publicv1.ExternalIPLocalReference_builder{Id: "different-ip"}.Build(),
-				}.Build(),
-			}.Build(),
-			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.external_ip"}},
 		}.Build())
 		Expect(err).To(HaveOccurred())
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))

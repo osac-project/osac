@@ -66,8 +66,6 @@ var hostConditionsNotSurfaced = map[BareMetalInstanceConditionType]struct{}{
 }
 
 var _ = Describe("DeriveProvisioningProgress", func() {
-	// TC-FR2-01: operator lifecycle conditions map to the correct furthest-advanced
-	// state/step, order-independently, plus per-stage failure classification.
 	DescribeTable("maps conditions to the furthest-advanced progress",
 		func(conds []metav1.Condition, want ProvisioningProgress) {
 			Expect(DeriveProvisioningProgress(conds)).To(Equal(want))
@@ -189,7 +187,7 @@ var _ = Describe("DeriveProvisioningProgress", func() {
 			},
 			ProvisioningProgress{State: StateProvisioned, Step: StepReadyPowerSync}),
 
-		// --- Failures: each IC-5 classification ---
+		// --- Failures ---
 		Entry("Allocated False+NoMatchingHosts -> NoMatchingHosts failure",
 			[]metav1.Condition{condFalse(HostConditionAllocated, HostConditionReasonNoMatchingHosts)},
 			ProvisioningProgress{State: StateFailed, Step: StepHostAllocation, Failure: FailureNoMatchingHosts}),
@@ -275,8 +273,6 @@ var _ = Describe("DeriveProvisioningProgress", func() {
 			ProvisioningProgress{State: StateFailed, Step: StepNetworkSetupAttachment, Failure: FailureNetworkAttachment}),
 	)
 
-	// TC-FR2-04: an unrecognized condition type is ignored, not classified, and does
-	// not panic.
 	It("ignores unrecognized condition types", func() {
 		Expect(func() {
 			progress := DeriveProvisioningProgress([]metav1.Condition{
@@ -288,7 +284,6 @@ var _ = Describe("DeriveProvisioningProgress", func() {
 })
 
 var _ = Describe("ProvisioningStep.Stage", func() {
-	// TC-FR2-01: each step reports its user-facing stage.
 	DescribeTable("maps each step to its stage",
 		func(step ProvisioningStep, want ProvisioningStage) {
 			Expect(step.Stage()).To(Equal(want))
@@ -302,7 +297,6 @@ var _ = Describe("ProvisioningStep.Stage", func() {
 		Entry("unrecognized step -> empty stage", ProvisioningStep("Bogus"), ProvisioningStage("")),
 	)
 
-	// TC-FR2-04: Stage() is total — every ProvisioningStep maps to a non-empty stage.
 	It("is total over every ProvisioningStep", func() {
 		for _, step := range allProvisioningSteps {
 			Expect(step.Stage()).NotTo(BeEmpty(), "step %q has no stage; add a case to Stage()", step)
@@ -321,8 +315,6 @@ var _ = Describe("classifyHostConditionFailure", func() {
 	})
 })
 
-// TC-FR2-04: the CR->stage derivation is exhaustive over the operator condition
-// constants.
 var _ = Describe("HostCondition classification exhaustiveness", func() {
 	It("classifies every HostCondition* constant as exactly one of surfaced / not-surfaced", func() {
 		surfaced := map[BareMetalInstanceConditionType]struct{}{}

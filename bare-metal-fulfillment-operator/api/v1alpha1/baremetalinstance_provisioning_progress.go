@@ -83,9 +83,10 @@ const (
 	StepReadyPowerSync ProvisioningStep = "ReadyPowerSync"
 )
 
-// FailureClassification is the fixed IC-5 failure vocabulary the function returns
-// (never a display string). Fulfillment maps it to a curated message and carrier
-// condition.
+// FailureClassification is the machine-readable failure vocabulary returned by
+// DeriveProvisioningProgress (never a display string). Each value maps exactly one
+// failing condition/reason to a curated message and carrier condition in the
+// fulfillment presentation layer; the mapping is fixed and deterministic.
 type FailureClassification string
 
 const (
@@ -249,9 +250,9 @@ func DeriveProvisioningProgress(conds []metav1.Condition) ProvisioningProgress {
 }
 
 // classifyHostConditionFailure maps a surfaced condition (and, for Host Allocation,
-// its operator reason) to the failed step and the fixed IC-5 failure
-// classification. Only HostConditionAllocated needs the reason, to distinguish
-// "no host matched the selector" from any other allocation failure.
+// its operator reason) to the failed step and the corresponding FailureClassification.
+// Only HostConditionAllocated needs the reason, to distinguish "no host matched the
+// selector" from any other allocation failure.
 func classifyHostConditionFailure(
 	ct BareMetalInstanceConditionType, reason string,
 ) (ProvisioningStep, FailureClassification) {

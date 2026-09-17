@@ -149,11 +149,24 @@ func IsNotFoundError(err error) bool {
 
 // IsTransientError returns true if the error is transient (should not count
 // toward the maximum retry budget) across both gRPC status codes and common
-// Kubernetes client errors. It covers:
+// Kubernetes client errors.
+//
+// Covered errors (transient):
 //   - gRPC: Unavailable, DeadlineExceeded, ResourceExhausted, Aborted
-//   - K8s: network timeouts, connection refused (net.Error with Timeout())
-//   - K8s: API server throttling (429 Too Many Requests)
-//   - K8s: server errors (5xx) indicating temporary unavailability
+//   - Kubernetes API server errors:
+//   - Timeout (apierrors.IsTimeout)
+//   - ServerTimeout (apierrors.IsServerTimeout)
+//   - ServiceUnavailable (apierrors.IsServiceUnavailable)
+//   - TooManyRequests / 429 (apierrors.IsTooManyRequests)
+//   - InternalError / 500 (apierrors.IsInternalError)
+//   - Network-level errors (net.Error), including:
+//   - Connection timeouts
+//   - Connection refused
+//   - DNS resolution failures
+//
+// NOT transient (permanent — these count toward the retry budget):
+//   - NotFound (resource does not exist; handled separately by IsNotFoundError)
+//   - Conflict (optimistic concurrency violation; caller should re-read and retry)
 func IsTransientError(err error) bool {
 	if err == nil {
 		return false
@@ -292,7 +305,7 @@ func (r *BareMetalWorkerReconciler) ReconcileWorkers(
 			v1alpha1.ConditionFulfillmentServiceUnavailable,
 			metav1.ConditionFalse,
 			"No transient errors during reconciliation",
-			v1alpha1.ReasonAllWorkersHealthy,
+			v1alpha1.ReasonNoTransientErrors,
 		)
 	}
 
@@ -326,6 +339,16 @@ func (r *BareMetalWorkerReconciler) reconcileWorker(
 	// Check if max retries exhausted
 	if worker.AttemptCount >= r.MaxRetries {
 		return workerReconcileResult{exhausted: true}, nil
+	}
+
+	// If BMIName is empty but we have prior attempts, the old BMI was
+	// successfully deleted but the subsequent CreateBMI failed transiently.
+	// Skip readiness/registration checks (there is no BMI to check) and go
+	// directly to creation.
+	if worker.BMIName == "" && worker.AttemptCount > 0 {
+		log.Info("worker has empty BMIName after prior attempt, retrying BMI creation",
+			"workerID", worker.WorkerID, "attemptCount", worker.AttemptCount)
+		return r.createReplacementBMI(ctx, instance, worker)
 	}
 
 	// Check if worker is ready
@@ -375,6 +398,10 @@ func (r *BareMetalWorkerReconciler) reconcileWorker(
 	}
 
 	// Agent is registered but BMI is not yet ready — poll periodically.
+	// TODO(OSAC-5126): Add a readiness timeout here once BMIProvider is wired
+	// with concrete implementations. If the BMI stays not-ready beyond a
+	// threshold (e.g. 60 minutes after agent registration), trigger a
+	// replacement via replaceBMI to avoid workers being stuck indefinitely.
 	return workerReconcileResult{requeueAfter: bootingWorkerRequeueInterval}, nil
 }
 
@@ -551,6 +578,53 @@ func (r *BareMetalWorkerReconciler) replaceBMI(
 	)
 
 	return ctrl.Result{RequeueAfter: backoff}, false, nil
+}
+
+// createReplacementBMI creates a new BMI for a worker whose previous BMI was
+// already deleted (BMIName is empty). This handles the case where DeleteBMI
+// succeeded but CreateBMI failed transiently, leaving the worker with an empty
+// BMIName. Unlike replaceBMI, it skips the deletion step entirely.
+func (r *BareMetalWorkerReconciler) createReplacementBMI(
+	ctx context.Context,
+	instance *v1alpha1.ClusterOrder,
+	worker *v1alpha1.WorkerStatus,
+) (workerReconcileResult, error) {
+	log := ctrllog.FromContext(ctx)
+
+	workerIndex := r.findWorkerIndex(instance, worker)
+	newName, newNamespace, err := r.BMIProvider.CreateBMI(ctx, instance, workerIndex)
+	if err != nil {
+		if IsTransientError(err) {
+			log.Info("transient error creating BMI for worker with empty BMIName",
+				"workerID", worker.WorkerID)
+			instance.SetStatusCondition(
+				v1alpha1.ConditionFulfillmentServiceUnavailable,
+				metav1.ConditionTrue,
+				sanitizeFeedbackText(fmt.Sprintf("Transient error: %v", err)),
+				v1alpha1.ReasonGRPCUnavailable,
+			)
+			return workerReconcileResult{
+				requeueAfter:      provisioning.BackoffBaseDelay,
+				hadTransientError: true,
+			}, nil
+		}
+		return workerReconcileResult{}, fmt.Errorf("creating BMI for worker %s: %w", worker.WorkerID, err)
+	}
+
+	// Creation succeeded — record the new BMI and set timing metadata.
+	now := r.now()
+	attemptStart := metav1.NewTime(now)
+	worker.BMIName = newName
+	worker.BMINamespace = newNamespace
+	worker.AttemptStartTime = &attemptStart
+
+	log.Info("created BMI for worker with empty BMIName",
+		"workerID", worker.WorkerID,
+		"newBMI", newName,
+		"attempt", worker.AttemptCount,
+	)
+
+	return workerReconcileResult{requeueAfter: bootingWorkerRequeueInterval}, nil
 }
 
 // getBMICreationTime returns the effective creation time of a worker's BMI

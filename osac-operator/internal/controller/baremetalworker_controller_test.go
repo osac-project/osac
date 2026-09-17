@@ -588,7 +588,7 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 				cond := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionFulfillmentServiceUnavailable)
 				Expect(cond).NotTo(BeNil(), "condition should be set to False, not removed")
 				Expect(cond.Status).To(Equal(metav1.ConditionFalse))
-				Expect(cond.Reason).To(Equal(v1alpha1.ReasonAllWorkersHealthy))
+				Expect(cond.Reason).To(Equal(v1alpha1.ReasonNoTransientErrors))
 			})
 
 			It("should NOT clear FulfillmentServiceUnavailable when one worker has transient error and another is ready", func() {
@@ -941,6 +941,83 @@ var _ = Describe("BareMetalWorkerReconciler", func() {
 				Expect(worker.LastFailureReason).To(Equal(v1alpha1.ReasonAgentRegistrationTimeout))
 				Expect(worker.NextRetryTime).NotTo(BeNil())
 				Expect(worker.NextRetryTime.Time).To(BeTemporally(">", now))
+			})
+		})
+
+		Context("empty BMIName recovery", func() {
+			It("should create BMI directly when BMIName is empty and AttemptCount > 0", func() {
+				// When DeleteBMI succeeds but CreateBMI fails transiently,
+				// the worker ends up with BMIName="" and AttemptCount > 0.
+				// On the next reconcile, the controller must skip delete and
+				// go directly to creation.
+				bmiProvider.nextCreateName = "recovered-bmi"
+				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
+					{
+						WorkerID:     "worker-1",
+						BMIName:      "", // empty after failed create
+						BMINamespace: "osac-baremetalinstance",
+						AttemptCount: 2,
+					},
+				})
+
+				result, err := reconciler.ReconcileWorkers(ctx, instance)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+
+				// Must NOT have attempted to delete (nothing to delete)
+				Expect(bmiProvider.deleteCalls).To(Equal(0),
+					"should not call DeleteBMI when BMIName is already empty")
+				// Must have created a new BMI
+				Expect(bmiProvider.createCalls).To(Equal(1))
+				Expect(instance.Status.Workers[0].BMIName).To(Equal("recovered-bmi"),
+					"BMIName must be updated after successful creation")
+				Expect(instance.Status.Workers[0].BMINamespace).To(Equal("osac-baremetalinstance"))
+				// AttemptCount should NOT change — the attempt was already
+				// counted when the original replaceBMI incremented it.
+				Expect(instance.Status.Workers[0].AttemptCount).To(Equal(2),
+					"AttemptCount must not change on recovery creation")
+			})
+
+			It("should handle transient error during recovery creation", func() {
+				bmiProvider.createErr = status.Error(codes.Unavailable, "service unavailable")
+				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
+					{
+						WorkerID:     "worker-1",
+						BMIName:      "",
+						BMINamespace: "osac-baremetalinstance",
+						AttemptCount: 1,
+					},
+				})
+
+				result, err := reconciler.ReconcileWorkers(ctx, instance)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result.RequeueAfter).To(Equal(provisioning.BackoffBaseDelay))
+
+				cond := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionFulfillmentServiceUnavailable)
+				Expect(cond).NotTo(BeNil())
+				Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+				// BMIName should still be empty after transient failure
+				Expect(instance.Status.Workers[0].BMIName).To(BeEmpty())
+			})
+
+			It("should not trigger recovery path when BMIName is empty and AttemptCount is 0", func() {
+				// A brand-new worker with empty BMIName and AttemptCount=0 is
+				// not a recovery case — it should follow the normal path.
+				bmiProvider.isReady = false
+				bmiProvider.regTime = time.Time{}
+				instance := newClusterOrderWithWorkers([]v1alpha1.WorkerStatus{
+					{
+						WorkerID:     "worker-1",
+						BMIName:      "",
+						BMINamespace: "osac-baremetalinstance",
+						AttemptCount: 0,
+					},
+				})
+
+				_, err := reconciler.ReconcileWorkers(ctx, instance)
+				Expect(err).NotTo(HaveOccurred())
+				// Should NOT have created a BMI via the recovery path
+				Expect(bmiProvider.createCalls).To(Equal(0))
 			})
 		})
 

@@ -547,16 +547,28 @@ read_validated_chart_name() {
 push_and_sign_chart() {
     local chart_tgz="$1" chart_name="$2" oci_repo="$3"
     local output digest status=0
+    local output_file
+    output_file=$(mktemp)
+    trap 'rm -f "${output_file}"' RETURN
 
-    # `local output=$(...)` (or a bare assignment) as a simple command makes
-    # its exit status the exit status of the command substitution -- under
-    # set -e that aborts the function right here on a failed push, before
-    # the "echo output" below ever runs, silently discarding the one place
-    # helm's real error text lives (confirmed live: a real push failure
-    # produced zero diagnostic output, just "Process completed with exit
-    # code 1"). Capture the exit status explicitly instead so the output is
-    # always printed, success or failure.
-    output=$(helm push "${chart_tgz}" "oci://${oci_repo}" 2>&1) || status=$?
+    # GHCR has been observed to fail the final "Tag" step of an OCI push
+    # with "not found" for a digest it was just handed -- a propagation
+    # delay on the registry side (confirmed live: the identical push
+    # succeeded for every other chart in the same job seconds earlier, and
+    # the next nightly run's identical push succeeded outright). Retry a
+    # few times via the shared retry_command helper before giving up.
+    #
+    # helm's output goes to a file rather than a `local output=$(...)`
+    # capture so retry_command can drive the retry loop itself: a bare
+    # assignment like that makes its exit status the exit status of the
+    # command substitution, which under set -e would abort the function
+    # right here on a failed push, before the "echo output" below ever
+    # runs, silently discarding the one place helm's real error text lives
+    # (confirmed live: a real push failure produced zero diagnostic output,
+    # just "Process completed with exit code 1").
+    retry_command 60 10 bash -c 'helm push "$1" "oci://$2" > "$3" 2>&1' _ \
+        "${chart_tgz}" "${oci_repo}" "${output_file}" || status=$?
+    output=$(cat "${output_file}")
     echo "${output}"
     if [[ "${status}" -ne 0 ]]; then
         echo "::error::helm push failed for ${chart_name} (exit ${status}) -- see output above" >&2

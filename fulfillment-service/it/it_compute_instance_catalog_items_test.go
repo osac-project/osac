@@ -386,7 +386,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 		})
 
 		It("checks user-data Secret conflicts after defaults and releases the conflict when the policy is cleared", func(ctx context.Context) {
-			secret := createCatalogItemSecretFixture(ctx, usersGroup)
+			secret := createCatalogItemUserDataSecretFixture(ctx, usersGroup)
 			template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
 			item := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ComputeInstanceCatalogItem_builder{
 				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),

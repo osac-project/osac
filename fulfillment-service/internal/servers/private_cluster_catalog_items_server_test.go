@@ -362,6 +362,49 @@ var _ = Describe("Private cluster catalog items server", func() {
 			Expect(fetched.GetFields().GetNetwork().GetPodCidr().GetEditable()).ToNot(BeNil())
 		})
 
+		DescribeTable("Rejects a non-pull Secret in a pull-secret policy", func(locked bool) {
+			secretsDao, err := dao.NewGenericDAO[*privatev1.Secret]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = secretsDao.Create().SetObject(privatev1.Secret_builder{
+				Id:   "non-pull-secret",
+				Type: privatev1.SecretType_SECRET_TYPE_OPAQUE,
+				Metadata: privatev1.Metadata_builder{
+					Name:   "non-pull-secret",
+					Tenant: testTenant,
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			ref := privatev1.SecretLocalReference_builder{Id: "non-pull-secret"}.Build()
+			var policy *privatev1.SecretReferenceFieldPolicy
+			if locked {
+				policy = privatev1.SecretReferenceFieldPolicy_builder{Locked: ref}.Build()
+			} else {
+				policy = privatev1.SecretReferenceFieldPolicy_builder{
+					Editable: privatev1.EditableSecretReferenceField_builder{DefaultValue: ref}.Build(),
+				}.Build()
+			}
+
+			_, err = server.Create(ctx, privatev1.ClusterCatalogItemsCreateRequest_builder{
+				Object: privatev1.ClusterCatalogItem_builder{
+					Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.New()[24:32])}.Build(),
+					Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+					Fields: privatev1.ClusterCatalogItemFields_builder{
+						PullSecretSecret: policy,
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("fields.pull_secret_secret"))
+			Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("SECRET_TYPE_OPAQUE"))
+		},
+			Entry("locked value", true),
+			Entry("editable default", false),
+		)
+
 		It("Delete object", func() {
 			createResponse, err := server.Create(ctx, privatev1.ClusterCatalogItemsCreateRequest_builder{
 				Object: privatev1.ClusterCatalogItem_builder{

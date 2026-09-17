@@ -383,7 +383,7 @@ func (s *PrivateBareMetalInstancesServer) prepareCreate(ctx context.Context, can
 		if refKey(ref) == "" {
 			return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "disk_image is mandatory")
 		}
-		resolved, err := resolveDiskImageReference(ctx, s.diskImagesDao, referenceScope{tenant: candidate.GetMetadata().GetTenant(), project: candidate.GetMetadata().GetProject()}, ref, "")
+		resolved, err := resolveLockedDiskImageReference(ctx, s.diskImagesDao, referenceScope{tenant: candidate.GetMetadata().GetTenant(), project: candidate.GetMetadata().GetProject()}, ref, "")
 		if err != nil {
 			return nil, err
 		}

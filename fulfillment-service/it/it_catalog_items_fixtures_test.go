@@ -388,13 +388,26 @@ func (f catalogItemNetworkFixture) clusterAttachment() *publicv1.ClusterNetworkA
 	return attachment
 }
 
-func createCatalogItemSecretFixture(ctx context.Context, tenant string) string {
+func createCatalogItemPullSecretFixture(ctx context.Context, tenant string) string {
+	GinkgoHelper()
+	return createCatalogItemSecretFixture(ctx, tenant, privatev1.SecretType_SECRET_TYPE_PULL_SECRET,
+		map[string][]byte{".dockerconfigjson": []byte(dockerConfigJSON)})
+}
+
+func createCatalogItemUserDataSecretFixture(ctx context.Context, tenant string) string {
+	GinkgoHelper()
+	return createCatalogItemSecretFixture(ctx, tenant, privatev1.SecretType_SECRET_TYPE_USER_DATA,
+		map[string][]byte{"userdata": []byte("#cloud-config\n")})
+}
+
+func createCatalogItemSecretFixture(ctx context.Context, tenant string, secretType privatev1.SecretType, data map[string][]byte) string {
 	GinkgoHelper()
 	client := privatev1.NewSecretsClient(tool.InternalView().AdminConn())
 	response, err := client.Create(ctx, privatev1.SecretsCreateRequest_builder{
 		Object: privatev1.Secret_builder{
 			Metadata: catalogItemFixtureMetadata(tenant, ""),
-			Data:     map[string][]byte{".dockerconfigjson": []byte(dockerConfigJSON), "userdata": []byte("#cloud-config\n")},
+			Type:     secretType,
+			Data:     data,
 		}.Build(),
 	}.Build())
 	Expect(err).NotTo(HaveOccurred())

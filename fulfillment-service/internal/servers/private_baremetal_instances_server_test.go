@@ -336,17 +336,16 @@ var _ = Describe("Private bare metal instances server", func() {
 						Title:     "Catalog item with a disk image default",
 						Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "test-template"}.Build(),
 						Published: true,
-						FieldDefinitions: []*privatev1.FieldDefinition{
-							privatev1.FieldDefinition_builder{
-								Path:     "disk_image",
-								Editable: true,
-								Default:  structpb.NewStringValue("default-bmi-disk-image"),
+						Fields: privatev1.BareMetalInstanceCatalogItemFields_builder{
+							DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{
+								Editable: privatev1.EditableDiskImageReferenceField_builder{
+									DefaultValue: privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+								}.Build(),
 							}.Build(),
-							privatev1.FieldDefinition_builder{
-								Path:     "ssh_public_key",
-								Editable: true,
+							SshPublicKey: privatev1.StringFieldPolicy_builder{
+								Editable: privatev1.EditableStringField_builder{}.Build(),
 							}.Build(),
-						},
+						}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -620,6 +619,7 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
 						Template:       privatev1.BareMetalInstanceTemplateReference_builder{Id: templateID}.Build(),
 						UserDataSecret: privatev1.SecretLocalReference_builder{Name: secret.GetObject().GetMetadata().GetName()}.Build(),
 					}.Build(),
@@ -1370,7 +1370,15 @@ var _ = Describe("Private bare metal instances server", func() {
 					Title:     "Catalog with both constraints",
 					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "combo-template"}.Build(),
 					Published: true,
-					Fields:    privatev1.BareMetalInstanceCatalogItemFields_builder{SshPublicKey: privatev1.StringFieldPolicy_builder{Locked: proto.String(testSSHPublicKey)}.Build()}.Build(), TemplateParameters: map[string]*privatev1.TemplateParameterPolicy{"os_version": privatev1.TemplateParameterPolicy_builder{Editable: &privatev1.EditableTemplateParameter{}}.Build()},
+					Fields: privatev1.BareMetalInstanceCatalogItemFields_builder{
+						DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{
+							Locked: privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						}.Build(),
+						SshPublicKey: privatev1.StringFieldPolicy_builder{Locked: proto.String(testSSHPublicKey)}.Build(),
+					}.Build(),
+					TemplateParameters: map[string]*privatev1.TemplateParameterPolicy{
+						"os_version": privatev1.TemplateParameterPolicy_builder{Editable: &privatev1.EditableTemplateParameter{}}.Build(),
+					},
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -1437,7 +1445,7 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(st.Message()).To(ContainSubstring("not editable"))
 		})
 
-		It("Accepts editable field_definition alongside template_parameters", func() {
+		It("Accepts editable field policy alongside template_parameters", func() {
 			createTemplate("editable-combo-template", []*privatev1.BareMetalInstanceTemplateParameterDefinition{
 				{Name: "os_version", Required: true, Type: "type.googleapis.com/google.protobuf.StringValue"},
 			})
@@ -1450,7 +1458,15 @@ var _ = Describe("Private bare metal instances server", func() {
 					Title:     "Editable + template params",
 					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "editable-combo-template"}.Build(),
 					Published: true,
-					Fields:    privatev1.BareMetalInstanceCatalogItemFields_builder{SshPublicKey: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build()}.Build(), TemplateParameters: map[string]*privatev1.TemplateParameterPolicy{"os_version": privatev1.TemplateParameterPolicy_builder{Editable: &privatev1.EditableTemplateParameter{}}.Build()},
+					Fields: privatev1.BareMetalInstanceCatalogItemFields_builder{
+						DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{
+							Locked: privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						}.Build(),
+						SshPublicKey: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build(),
+					}.Build(),
+					TemplateParameters: map[string]*privatev1.TemplateParameterPolicy{
+						"os_version": privatev1.TemplateParameterPolicy_builder{Editable: &privatev1.EditableTemplateParameter{}}.Build(),
+					},
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())

@@ -32,7 +32,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 		It("resolves typed fields and atomic node maps without changing Template HostType authority", func(ctx context.Context) {
 			By("authoring a tenant offering with network and node-set policies")
 			network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
-			secret := createCatalogItemSecretFixture(ctx, usersGroup)
+			secret := createCatalogItemPullSecretFixture(ctx, usersGroup)
 			host := createCatalogItemHostTypeFixture(ctx)
 			extraHost := createCatalogItemHostTypeFixture(ctx)
 			version := createCatalogItemClusterVersionFixture(ctx, "4.20.0")

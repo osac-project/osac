@@ -173,8 +173,9 @@ func validateClusterCatalogItemVersionPolicy(
 }
 
 // validateClusterCatalogItemPullSecretPolicy checks a locked pull secret or editable default
-// in the Catalog Item's exact tenant/project and stores its ID/name. A shared offering cannot
-// set a tenant-local secret for every tenant, so it may only leave this field editable.
+// in the Catalog Item's exact tenant/project, verifies its type, and stores its ID/name.
+// A shared offering cannot set a tenant-local secret for every tenant, so it may only leave
+// this field editable.
 func validateClusterCatalogItemPullSecretPolicy(
 	ctx context.Context,
 	scope referenceScope,
@@ -202,6 +203,11 @@ func validateClusterCatalogItemPullSecretPolicy(
 		}
 		if err := validateResourceNotDeleted("secret", refKey(ref), " in fields.pull_secret_secret", resolved.GetMetadata()); err != nil {
 			return nil, err
+		}
+		if resolved.GetType() != privatev1.SecretType_SECRET_TYPE_PULL_SECRET {
+			return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"secret '%s' referenced by fields.pull_secret_secret has type %s; expected %s",
+				refKey(ref), resolved.GetType(), privatev1.SecretType_SECRET_TYPE_PULL_SECRET)
 		}
 		return canonicalSecretLocalReference(resolved), nil
 	}

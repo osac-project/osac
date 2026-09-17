@@ -23,8 +23,8 @@ operator:
 # (no real vendor backend integration needed for local dev).
 #
 # CSI backends (VAST, Pure, NetApp) are available but not enabled for local dev.
-# The driver uses vendorControllers="local=none" for node-local storage (hostPath,
-# local PVs) which doesn't require external storage array controllers.
+# The driver uses vendorControllers="lvms=none" for node-local LVMS storage,
+# which doesn't require an external storage-array controller.
 csiDriver:
   enabled: true
   image:

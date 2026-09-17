@@ -257,12 +257,15 @@ func TestParseBackendMap(t *testing.T) {
 	})
 
 	t.Run("multiple pairs", func(t *testing.T) {
-		m, err := parseBackendMap("ontap=/csi/trident/csi.sock,local=none")
+		m, err := parseBackendMap("ontap=/csi/trident/csi.sock,lvms=none")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if len(m) != 2 {
 			t.Fatalf("expected 2 pairs, got %d", len(m))
+		}
+		if m["lvms"] != "none" {
+			t.Fatalf("expected lvms=none, got %v", m)
 		}
 	})
 

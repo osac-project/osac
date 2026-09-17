@@ -164,14 +164,21 @@ func (t *task) update(ctx context.Context) error {
 		return err
 	}
 
+	// Prepare the changes to the spec:
+	// Stored objects may predate the IPv4-only contract. Reject any legacy or incomplete
+	// rule before it can be converted into an empty CIDR, which downstream providers may
+	// interpret as an unrestricted 0.0.0.0/0 rule.
+	spec, err := t.buildSpec()
+	if err != nil {
+		t.setFailed(err)
+		return nil
+	}
+
 	// Get the K8S object:
 	object, err := t.getKubeObject(ctx)
 	if err != nil {
 		return err
 	}
-
-	// Prepare the changes to the spec:
-	spec := t.buildSpec()
 
 	// Create or update the Kubernetes object:
 	if object == nil {
@@ -371,7 +378,7 @@ func (t *task) setFailed(err error) {
 
 // buildSpec constructs the spec for the Kubernetes SecurityGroup object based on the
 // security group from the database.
-func (t *task) buildSpec() osacv1alpha1.SecurityGroupSpec {
+func (t *task) buildSpec() (osacv1alpha1.SecurityGroupSpec, error) {
 	spec := osacv1alpha1.SecurityGroupSpec{
 		VirtualNetwork: controllers.RefKeyStr(t.securityGroup.GetSpec().GetVirtualNetwork()),
 	}
@@ -379,25 +386,44 @@ func (t *task) buildSpec() osacv1alpha1.SecurityGroupSpec {
 	// Add ingress rules if present:
 	ingressRules := t.securityGroup.GetSpec().GetIngress()
 	if len(ingressRules) > 0 {
-		spec.IngressRules = convertRules(ingressRules, true)
+		var err error
+		spec.IngressRules, err = convertRules(ingressRules, true)
+		if err != nil {
+			return spec, err
+		}
 	}
 
 	// Add egress rules if present:
 	egressRules := t.securityGroup.GetSpec().GetEgress()
 	if len(egressRules) > 0 {
-		spec.EgressRules = convertRules(egressRules, false)
+		var err error
+		spec.EgressRules, err = convertRules(egressRules, false)
+		if err != nil {
+			return spec, err
+		}
 	}
 
-	return spec
+	return spec, nil
 }
 
 // convertRules converts a slice of proto SecurityRule messages to a slice of typed
 // SecurityRule structs for the Kubernetes SecurityGroup object. The proto has a
 // single IPv4 CIDR field whose meaning depends on direction: ingress is sourced
 // from the CIDR, while egress is destined for it.
-func convertRules(rules []*privatev1.SecurityRule, ingress bool) []osacv1alpha1.SecurityRule {
+func convertRules(rules []*privatev1.SecurityRule, ingress bool) ([]osacv1alpha1.SecurityRule, error) {
 	result := make([]osacv1alpha1.SecurityRule, 0, len(rules))
-	for _, rule := range rules {
+	direction := "egress"
+	if ingress {
+		direction = "ingress"
+	}
+	for index, rule := range rules {
+		if rule == nil || !rule.HasIpv4Cidr() || rule.GetIpv4Cidr() == "" || rule.HasIpv6Cidr() {
+			return nil, fmt.Errorf(
+				"security group %s rule %d must contain an IPv4 CIDR and no IPv6 CIDR",
+				direction,
+				index,
+			)
+		}
 		r := osacv1alpha1.SecurityRule{
 			Protocol: osacv1alpha1.SecurityGroupProtocol(protocolToString(rule.GetProtocol())),
 		}
@@ -409,16 +435,14 @@ func convertRules(rules []*privatev1.SecurityRule, ingress bool) []osacv1alpha1.
 			portTo := int32(rule.GetPortTo())
 			r.PortTo = &portTo
 		}
-		if rule.HasIpv4Cidr() {
-			if ingress {
-				r.SourceCIDR = rule.GetIpv4Cidr()
-			} else {
-				r.DestinationCIDR = rule.GetIpv4Cidr()
-			}
+		if ingress {
+			r.SourceCIDR = rule.GetIpv4Cidr()
+		} else {
+			r.DestinationCIDR = rule.GetIpv4Cidr()
 		}
 		result = append(result, r)
 	}
-	return result
+	return result, nil
 }
 
 // protocolToString converts a Protocol enum value to a lowercase string matching the K8s CR enum.

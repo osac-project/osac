@@ -91,33 +91,6 @@ func addDAOEventCallback[O dao.Object](builder *dao.GenericDAOBuilder[O], notifi
 	}
 }
 
-func validatePublicUpdateMask(mask *fieldmaskpb.FieldMask) error {
-	if mask == nil || len(mask.GetPaths()) == 0 {
-		return grpcstatus.Error(grpccodes.InvalidArgument, "update_mask must explicitly name metadata or spec fields")
-	}
-	for _, path := range mask.GetPaths() {
-		if path == "status" || strings.HasPrefix(path, "status"+".") {
-			return grpcstatus.Error(grpccodes.InvalidArgument, "status output fields cannot be updated")
-		}
-		if path != "metadata" && path != "spec" && !strings.HasPrefix(path, "metadata"+".") && !strings.HasPrefix(path, "spec"+".") {
-			return grpcstatus.Error(grpccodes.InvalidArgument, "update_mask paths must name metadata or spec fields")
-		}
-	}
-	return nil
-}
-
-func validatePublicMetadataUpdateMask(mask *fieldmaskpb.FieldMask) error {
-	if err := validatePublicUpdateMask(mask); err != nil {
-		return err
-	}
-	for _, path := range mask.GetPaths() {
-		if path != "metadata" && !strings.HasPrefix(path, "metadata"+".") {
-			return grpcstatus.Error(grpccodes.InvalidArgument, "public lifecycle updates may only name metadata fields")
-		}
-	}
-	return nil
-}
-
 func validatePrivateLifecycleUpdateMask(mask *fieldmaskpb.FieldMask, allowedStatusPaths, rejectedStatusPaths []string) error {
 	if mask == nil || len(mask.GetPaths()) == 0 {
 		return grpcstatus.Error(grpccodes.InvalidArgument, "update_mask is mandatory for private lifecycle updates")

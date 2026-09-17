@@ -15,8 +15,6 @@ package servers
 
 import (
 	"fmt"
-	"math"
-
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -237,117 +235,6 @@ var _ = Describe("Virtual networks server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			publicObj := getResponse.GetObject()
 			Expect(publicObj.GetId()).To(Equal(privateObj.GetId()))
-		})
-
-		It("Update object", func() {
-			// Create the object via the private server:
-			privateObj := createVirtualNetwork()
-			originalName := privateObj.GetMetadata().GetName()
-
-			// Update the object via public server:
-			updateResponse, err := publicServer.Update(ctx, publicv1.VirtualNetworksUpdateRequest_builder{
-				Object: publicv1.VirtualNetwork_builder{
-					Id: privateObj.GetId(),
-					Metadata: publicv1.Metadata_builder{
-						Name: originalName,
-					}.Build(),
-					Spec: publicv1.VirtualNetworkSpec_builder{
-						Ipv4Cidr: new("10.0.0.0/16"),
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Expect(updateResponse.GetObject().GetMetadata().GetName()).To(Equal(originalName))
-
-			// Get and verify via public server:
-			getResponse, err := publicServer.Get(ctx, publicv1.VirtualNetworksGetRequest_builder{
-				Id: privateObj.GetId(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Expect(getResponse.GetObject().GetMetadata().GetName()).To(Equal(originalName))
-		})
-
-		It("Update object preserves CIDRs when explicitly repeated in request", func() {
-			// Create the object via the private server:
-			privateObj := createVirtualNetwork()
-
-			// Update with CIDRs explicitly repeated — must pass, CIDRs preserved.
-			updateResponse, err := publicServer.Update(ctx, publicv1.VirtualNetworksUpdateRequest_builder{
-				Object: publicv1.VirtualNetwork_builder{
-					Id: privateObj.GetId(),
-					Metadata: publicv1.Metadata_builder{
-						Name: privateObj.GetMetadata().GetName(),
-					}.Build(),
-					Spec: publicv1.VirtualNetworkSpec_builder{
-						Ipv4Cidr: new("10.0.0.0/16"),
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Expect(updateResponse.GetObject().GetSpec().GetIpv4Cidr()).To(Equal("10.0.0.0/16"))
-		})
-
-		It("Update object preserves CIDRs when omitted from request body", func() {
-			// Create the object via the private server:
-			privateObj := createVirtualNetwork()
-
-			// Update body omits CIDR fields entirely. The private server's
-			// validateImmutableFieldsVirtualNetwork backfills CIDRs from the existing object.
-			updateResponse, err := publicServer.Update(ctx, publicv1.VirtualNetworksUpdateRequest_builder{
-				Object: publicv1.VirtualNetwork_builder{
-					Id: privateObj.GetId(),
-					Metadata: publicv1.Metadata_builder{
-						Name: privateObj.GetMetadata().GetName(),
-					}.Build(),
-					Spec: publicv1.VirtualNetworkSpec_builder{}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Expect(updateResponse.GetObject().GetSpec().GetIpv4Cidr()).To(Equal("10.0.0.0/16"))
-		})
-
-		It("Update object rejects CIDR change via public API (CR-001)", func() {
-			// Create with a known CIDR via the private server:
-			privateObj := createVirtualNetwork()
-
-			// Update via public server with a different CIDR — must be rejected as immutable.
-			_, err := publicServer.Update(ctx, publicv1.VirtualNetworksUpdateRequest_builder{
-				Object: publicv1.VirtualNetwork_builder{
-					Id: privateObj.GetId(),
-					Spec: publicv1.VirtualNetworkSpec_builder{
-						Ipv4Cidr: new("192.168.0.0/16"),
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).To(HaveOccurred())
-			st, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(st.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(err.Error()).To(ContainSubstring("immutable"))
-		})
-
-		It("Update object rejects stale version when lock is enabled", func() {
-			// Create the object via the private server:
-			privateObj := createVirtualNetwork()
-
-			// Attempt an update via public server with lock enabled and a wrong version — expect codes.Aborted:
-			_, err := publicServer.Update(ctx, publicv1.VirtualNetworksUpdateRequest_builder{
-				Object: publicv1.VirtualNetwork_builder{
-					Id: privateObj.GetId(),
-					Metadata: publicv1.Metadata_builder{
-						Name:    "locked-update",
-						Version: math.MaxInt32,
-					}.Build(),
-					Spec: publicv1.VirtualNetworkSpec_builder{
-						Ipv4Cidr: new("10.0.0.0/16"),
-					}.Build(),
-				}.Build(),
-				Lock: true,
-			}.Build())
-			Expect(err).To(HaveOccurred())
-			st, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(st.Code()).To(Equal(grpccodes.Aborted))
 		})
 
 		It("Create object via public API sets default region", func() {

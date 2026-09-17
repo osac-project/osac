@@ -696,6 +696,80 @@ var _ = Describe("Rego authorization interceptor", func() {
 			),
 		)
 
+		DescribeTable(
+			"Allows Keycloak users on public networking CRUD APIs",
+			func(ctx context.Context, method string) {
+				token := createKeycloakUserToken("my-tenant", "my-user", nil)
+				ctx = ContextWithToken(ctx, token)
+				handled := false
+				_, err := interceptor.UnaryServer(
+					ctx,
+					nil,
+					&grpc.UnaryServerInfo{FullMethod: method},
+					func(ctx context.Context, req any) (any, error) {
+						handled = true
+						return nil, nil
+					},
+				)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(handled).To(BeTrue())
+			},
+			Entry("VirtualNetworks Create", "/osac.public.v1.VirtualNetworks/Create"),
+			Entry("VirtualNetworks Get", "/osac.public.v1.VirtualNetworks/Get"),
+			Entry("VirtualNetworks List", "/osac.public.v1.VirtualNetworks/List"),
+			Entry("VirtualNetworks Delete", "/osac.public.v1.VirtualNetworks/Delete"),
+			Entry("Subnets Create", "/osac.public.v1.Subnets/Create"),
+			Entry("Subnets Get", "/osac.public.v1.Subnets/Get"),
+			Entry("Subnets List", "/osac.public.v1.Subnets/List"),
+			Entry("Subnets Delete", "/osac.public.v1.Subnets/Delete"),
+			Entry("SecurityGroups Create", "/osac.public.v1.SecurityGroups/Create"),
+			Entry("SecurityGroups Get", "/osac.public.v1.SecurityGroups/Get"),
+			Entry("SecurityGroups List", "/osac.public.v1.SecurityGroups/List"),
+			Entry("SecurityGroups Delete", "/osac.public.v1.SecurityGroups/Delete"),
+			Entry("ExternalIPs Create", "/osac.public.v1.ExternalIPs/Create"),
+			Entry("ExternalIPs Get", "/osac.public.v1.ExternalIPs/Get"),
+			Entry("ExternalIPs List", "/osac.public.v1.ExternalIPs/List"),
+			Entry("ExternalIPs Delete", "/osac.public.v1.ExternalIPs/Delete"),
+			Entry("ExternalIPAttachments Create", "/osac.public.v1.ExternalIPAttachments/Create"),
+			Entry("ExternalIPAttachments Get", "/osac.public.v1.ExternalIPAttachments/Get"),
+			Entry("ExternalIPAttachments List", "/osac.public.v1.ExternalIPAttachments/List"),
+			Entry("ExternalIPAttachments Delete", "/osac.public.v1.ExternalIPAttachments/Delete"),
+			Entry("NATGateways Create", "/osac.public.v1.NATGateways/Create"),
+			Entry("NATGateways Get", "/osac.public.v1.NATGateways/Get"),
+			Entry("NATGateways List", "/osac.public.v1.NATGateways/List"),
+			Entry("NATGateways Delete", "/osac.public.v1.NATGateways/Delete"),
+		)
+
+		DescribeTable(
+			"Denies Keycloak users on public networking Update APIs",
+			func(ctx context.Context, method string) {
+				token := createKeycloakUserToken("my-tenant", "my-user", nil)
+				ctx = ContextWithToken(ctx, token)
+				handled := false
+				_, err := interceptor.UnaryServer(
+					ctx,
+					nil,
+					&grpc.UnaryServerInfo{FullMethod: method},
+					func(ctx context.Context, req any) (any, error) {
+						handled = true
+						return nil, nil
+					},
+				)
+				Expect(err).To(HaveOccurred())
+				status, ok := grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(status.Code()).To(Equal(grpccodes.PermissionDenied))
+				Expect(status.Message()).To(Equal("permission denied"))
+				Expect(handled).To(BeFalse())
+			},
+			Entry("VirtualNetworks Update", "/osac.public.v1.VirtualNetworks/Update"),
+			Entry("Subnets Update", "/osac.public.v1.Subnets/Update"),
+			Entry("SecurityGroups Update", "/osac.public.v1.SecurityGroups/Update"),
+			Entry("ExternalIPs Update", "/osac.public.v1.ExternalIPs/Update"),
+			Entry("ExternalIPAttachments Update", "/osac.public.v1.ExternalIPAttachments/Update"),
+			Entry("NATGateways Update", "/osac.public.v1.NATGateways/Update"),
+		)
+
 		It("Allows regular users to browse add-on operators", func(ctx context.Context) {
 			ctx = ContextWithToken(ctx, createKeycloakUserToken("my-tenant", "my-user", nil))
 			for _, method := range []string{

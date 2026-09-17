@@ -89,6 +89,7 @@ message ExternalIPsCreateResponse {
 }
 
 message ExternalIPsUpdateRequest {
+  option (cleanapi.message).private = true;
   ExternalIP object = 1;
   google.protobuf.FieldMask update_mask = 2;
 
@@ -99,6 +100,7 @@ message ExternalIPsUpdateRequest {
 }
 
 message ExternalIPsUpdateResponse {
+  option (cleanapi.message).private = true;
   ExternalIP object = 1;
 }
 
@@ -142,6 +144,7 @@ service ExternalIPs {
 
   // Updates an existing external IP. Allows modifying metadata (labels, annotations). The spec.pool field is immutable.
   rpc Update(ExternalIPsUpdateRequest) returns (ExternalIPsUpdateResponse) {
+    option (cleanapi.method).private = true;
     option (google.api.http) = {
       patch: "/api/private/v1/external_ips/{object.id}"
       body: "object"

@@ -209,36 +209,5 @@ var _ = Describe("Public external IPs server", func() {
 			Expect(grpcstatus.Code(err)).To(Equal(codes.InvalidArgument))
 		})
 
-		It("rejects output-only status updates with nil and explicit masks", func() {
-			poolID := getPoolID()
-			createResp, err := publicServer.Create(ctx, publicv1.ExternalIPsCreateRequest_builder{
-				Object: publicv1.ExternalIP_builder{
-					Metadata: publicv1.Metadata_builder{Name: "test-eip", Tenant: testTenant}.Build(),
-					Spec:     publicv1.ExternalIPSpec_builder{Pool: publicv1.ExternalIPPoolReference_builder{Id: poolID}.Build()}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-
-			_, err = publicServer.Update(ctx, publicv1.ExternalIPsUpdateRequest_builder{
-				Object: createResp.GetObject(),
-			}.Build())
-			Expect(grpcstatus.Code(err)).To(Equal(codes.InvalidArgument))
-
-			_, err = publicServer.Update(ctx, publicv1.ExternalIPsUpdateRequest_builder{
-				Object: publicv1.ExternalIP_builder{Id: createResp.GetObject().GetId()}.Build(),
-				UpdateMask: &fieldmaskpb.FieldMask{
-					Paths: []string{"status.state"},
-				},
-			}.Build())
-			Expect(grpcstatus.Code(err)).To(Equal(codes.InvalidArgument))
-
-			_, err = publicServer.Update(ctx, publicv1.ExternalIPsUpdateRequest_builder{
-				Object: publicv1.ExternalIP_builder{Id: createResp.GetObject().GetId()}.Build(),
-				UpdateMask: &fieldmaskpb.FieldMask{
-					Paths: []string{"status.hub"},
-				},
-			}.Build())
-			Expect(grpcstatus.Code(err)).To(Equal(codes.InvalidArgument))
-		})
 	})
 })

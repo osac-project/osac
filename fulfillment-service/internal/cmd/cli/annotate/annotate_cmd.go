@@ -111,6 +111,9 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		})
 		return nil
 	}
+	if err := ensureUpdatable(c.helper); err != nil {
+		return err
+	}
 
 	// Check that the object identifier or name has been specified:
 	if len(args) < 2 {
@@ -148,6 +151,13 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+func ensureUpdatable(helper reflection.ObjectHelper) error {
+	if helper.IsUpdatable() {
+		return nil
+	}
+	return fmt.Errorf("object type %q is immutable; updates are not supported", helper.FullName())
 }
 
 // annotationOperation represents a single annotation set or remove operation.
@@ -219,7 +229,7 @@ func completeObjectTypes(cmd *cobra.Command, args []string, toComplete string) (
 	if len(args) != 0 {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
-	return reflection.ObjectTypeNames(packages.Public...), cobra.ShellCompDirectiveNoFileComp
+	return reflection.UpdatableObjectTypeNames(packages.Public...), cobra.ShellCompDirectiveNoFileComp
 }
 
 const shortHelp = `Add or remove annotations from objects`

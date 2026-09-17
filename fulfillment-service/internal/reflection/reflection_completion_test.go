@@ -41,8 +41,28 @@ var _ = Describe("ObjectTypeNames", func() {
 		names := ObjectTypeNames(packages.Public...)
 		Expect(names).To(ContainElement("virtualnetwork"))
 		Expect(names).To(ContainElement("virtualnetworks"))
+		Expect(names).To(ContainElements(
+			"subnet", "subnets",
+			"securitygroup", "securitygroups",
+			"externalip", "externalips",
+			"externalipattachment", "externalipattachments",
+			"natgateway", "natgateways",
+		))
 		Expect(names).To(ContainElement("computeinstance"))
 		Expect(names).To(ContainElement("computeinstances"))
+	})
+
+	It("only returns update-capable types for update completion", func() {
+		names := UpdatableObjectTypeNames(packages.Public...)
+		Expect(names).To(ContainElements("cluster", "clusters", "computeinstance", "computeinstances"))
+		Expect(names).ToNot(ContainElements(
+			"virtualnetwork", "virtualnetworks",
+			"subnet", "subnets",
+			"securitygroup", "securitygroups",
+			"externalip", "externalips",
+			"externalipattachment", "externalipattachments",
+			"natgateway", "natgateways",
+		))
 	})
 
 	It("returns sorted results", func() {

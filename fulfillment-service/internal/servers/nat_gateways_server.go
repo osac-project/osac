@@ -238,55 +238,6 @@ func (s *NATGatewaysServer) Create(ctx context.Context,
 	return
 }
 
-func (s *NATGatewaysServer) Update(ctx context.Context,
-	request *publicv1.NATGatewaysUpdateRequest) (response *publicv1.NATGatewaysUpdateResponse, err error) {
-	publicNATGateway := request.GetObject()
-	if publicNATGateway == nil {
-		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object is mandatory")
-		return
-	}
-	if err = validatePublicMetadataUpdateMask(request.GetUpdateMask()); err != nil {
-		return
-	}
-	privateNATGateway := &privatev1.NATGateway{}
-	err = s.inMapper.Copy(ctx, publicNATGateway, privateNATGateway)
-	if err != nil {
-		s.logger.ErrorContext(
-			ctx,
-			"Failed to map public NAT gateway to private",
-			slog.Any("error", err),
-		)
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process NAT gateway")
-		return
-	}
-
-	privateRequest := &privatev1.NATGatewaysUpdateRequest{}
-	privateRequest.SetObject(privateNATGateway)
-	privateRequest.SetUpdateMask(request.GetUpdateMask())
-	privateRequest.SetLock(request.GetLock())
-	privateResponse, err := s.delegate.Update(ctx, privateRequest)
-	if err != nil {
-		return nil, err
-	}
-
-	updatedPrivateNATGateway := privateResponse.GetObject()
-	updatedPublicNATGateway := &publicv1.NATGateway{}
-	err = s.outMapper.Copy(ctx, updatedPrivateNATGateway, updatedPublicNATGateway)
-	if err != nil {
-		s.logger.ErrorContext(
-			ctx,
-			"Failed to map private NAT gateway to public",
-			slog.Any("error", err),
-		)
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process NAT gateway")
-		return
-	}
-
-	response = &publicv1.NATGatewaysUpdateResponse{}
-	response.SetObject(updatedPublicNATGateway)
-	return
-}
-
 func (s *NATGatewaysServer) Delete(ctx context.Context,
 	request *publicv1.NATGatewaysDeleteRequest) (response *publicv1.NATGatewaysDeleteResponse, err error) {
 	privateRequest := &privatev1.NATGatewaysDeleteRequest{}

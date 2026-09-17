@@ -19,6 +19,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
+	"github.com/spf13/cobra"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/protobuf/proto"
 
@@ -113,5 +114,18 @@ var _ = Describe("Get command", func() {
 			_, err := runner.fetchObjects(ctx, []string{"my-cluster"})
 			Expect(err).To(HaveOccurred())
 		})
+	})
+
+	It("offers all networking resources for get completion", func() {
+		completed, directive := completeObjectTypes(nil, nil, "")
+		Expect(directive).To(Equal(cobra.ShellCompDirectiveNoFileComp))
+		Expect(completed).To(ContainElements(
+			"virtualnetwork", "virtualnetworks",
+			"subnet", "subnets",
+			"securitygroup", "securitygroups",
+			"externalip", "externalips",
+			"externalipattachment", "externalipattachments",
+			"natgateway", "natgateways",
+		))
 	})
 })

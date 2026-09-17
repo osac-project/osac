@@ -21,7 +21,9 @@ import (
 	. "github.com/onsi/ginkgo/v2/dsl/table"
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/packages"
@@ -206,6 +208,55 @@ var _ = Describe("Reflection helper", func() {
 				"virtualnetworks",
 			))
 		})
+
+		DescribeTable(
+			"recognizes public networking resources as immutable",
+			func(objectType string) {
+				objectHelper := helper.Lookup(objectType)
+				Expect(objectHelper).ToNot(BeNil())
+				Expect(objectHelper.IsUpdatable()).To(BeFalse())
+			},
+			Entry("VirtualNetwork", "virtualnetwork"),
+			Entry("Subnet", "subnet"),
+			Entry("SecurityGroup", "securitygroup"),
+			Entry("ExternalIP", "externalip"),
+			Entry("ExternalIPAttachment", "externalipattachment"),
+			Entry("NATGateway", "natgateway"),
+		)
+
+		It("rejects updates for a public networking resource without invoking gRPC", func() {
+			objectHelper := helper.Lookup("virtualnetwork")
+			Expect(objectHelper).ToNot(BeNil())
+			Expect(objectHelper.IsUpdatable()).To(BeFalse())
+
+			_, err := objectHelper.Update(ctx, &publicv1.VirtualNetwork{Id: "virtual-network-1"})
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(codes.FailedPrecondition))
+			Expect(status.Message()).To(ContainSubstring("immutable"))
+		})
+
+		DescribeTable(
+			"keeps private networking updates available for status and feedback",
+			func(objectType string) {
+				privateHelper, err := NewHelper().
+					SetLogger(logger).
+					SetConnection(connection).
+					AddPackage(packages.PrivateV1, 1).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+
+				objectHelper := privateHelper.Lookup(objectType)
+				Expect(objectHelper).ToNot(BeNil())
+				Expect(objectHelper.IsUpdatable()).To(BeTrue())
+			},
+			Entry("VirtualNetwork", "virtualnetwork"),
+			Entry("Subnet", "subnet"),
+			Entry("SecurityGroup", "securitygroup"),
+			Entry("ExternalIP", "externalip"),
+			Entry("ExternalIPAttachment", "externalipattachment"),
+			Entry("NATGateway", "natgateway"),
+		)
 
 		DescribeTable(
 			"Lookup by object type",

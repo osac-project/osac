@@ -235,52 +235,6 @@ func (s *ExternalIPAttachmentsServer) Create(ctx context.Context,
 	return response, nil
 }
 
-func (s *ExternalIPAttachmentsServer) Update(ctx context.Context,
-	request *publicv1.ExternalIPAttachmentsUpdateRequest) (*publicv1.ExternalIPAttachmentsUpdateResponse, error) {
-	publicAttachment := request.GetObject()
-	if publicAttachment == nil {
-		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "object is mandatory")
-	}
-	if err := validatePublicMetadataUpdateMask(request.GetUpdateMask()); err != nil {
-		return nil, err
-	}
-	privateAttachment := &privatev1.ExternalIPAttachment{}
-	err := s.inMapper.Copy(ctx, publicAttachment, privateAttachment)
-	if err != nil {
-		s.logger.ErrorContext(
-			ctx,
-			"Failed to map public external IP attachment to private",
-			slog.Any("error", err),
-		)
-		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process external IP attachment")
-	}
-
-	privateRequest := &privatev1.ExternalIPAttachmentsUpdateRequest{}
-	privateRequest.SetObject(privateAttachment)
-	privateRequest.SetUpdateMask(request.GetUpdateMask())
-	privateRequest.SetLock(request.GetLock())
-	privateResponse, err := s.delegate.Update(ctx, privateRequest)
-	if err != nil {
-		return nil, err
-	}
-
-	updatedPrivateAttachment := privateResponse.GetObject()
-	updatedPublicAttachment := &publicv1.ExternalIPAttachment{}
-	err = s.outMapper.Copy(ctx, updatedPrivateAttachment, updatedPublicAttachment)
-	if err != nil {
-		s.logger.ErrorContext(
-			ctx,
-			"Failed to map private external IP attachment to public",
-			slog.Any("error", err),
-		)
-		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process external IP attachment")
-	}
-
-	response := &publicv1.ExternalIPAttachmentsUpdateResponse{}
-	response.SetObject(updatedPublicAttachment)
-	return response, nil
-}
-
 func (s *ExternalIPAttachmentsServer) Delete(ctx context.Context,
 	request *publicv1.ExternalIPAttachmentsDeleteRequest) (*publicv1.ExternalIPAttachmentsDeleteResponse, error) {
 	privateRequest := &privatev1.ExternalIPAttachmentsDeleteRequest{}

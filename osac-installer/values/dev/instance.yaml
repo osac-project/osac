@@ -20,6 +20,9 @@ operator:
   aap:
     url: ""
     insecureSkipVerify: "true"
+    tokenSecret:
+      name: osac-aap-api-token
+      key: token
     statusPollInterval: "30s"
     templatePrefix: "osac"
   fulfillment:

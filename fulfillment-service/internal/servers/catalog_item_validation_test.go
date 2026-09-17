@@ -20,6 +20,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
@@ -27,6 +28,117 @@ import (
 )
 
 var _ = Describe("applyFieldDefinitions", func() {
+	additionalDisksDefault := func() *structpb.Value {
+		value, err := structpb.NewValue([]any{
+			map[string]any{
+				"size_gib":     float64(100),
+				"storage_tier": map[string]any{"name": "standard"},
+			},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		return value
+	}
+
+	It("preserves an empty additional_disks list when the exact field is masked", func() {
+		spec := &privatev1.ComputeInstanceSpec{}
+		fieldDefs := []*privatev1.FieldDefinition{{
+			Path:     "additional_disks",
+			Editable: true,
+			Default:  additionalDisksDefault(),
+		}}
+
+		err := applyFieldDefinitionsWithSpecFields(spec, fieldDefs, &fieldmaskpb.FieldMask{
+			Paths: []string{"additional_disks"},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(spec.GetAdditionalDisks()).To(BeEmpty())
+	})
+
+	It("preserves an empty additional_disks list when the masked field has no default", func() {
+		spec := &privatev1.ComputeInstanceSpec{}
+		fieldDefs := []*privatev1.FieldDefinition{{
+			Path:     "additional_disks",
+			Editable: true,
+		}}
+
+		err := applyFieldDefinitionsWithSpecFields(spec, fieldDefs, &fieldmaskpb.FieldMask{
+			Paths: []string{"additional_disks"},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(spec.GetAdditionalDisks()).To(BeEmpty())
+	})
+
+	It("applies the additional_disks default for a non-editable masked field", func() {
+		spec := &privatev1.ComputeInstanceSpec{}
+		fieldDefs := []*privatev1.FieldDefinition{{
+			Path:     "additional_disks",
+			Editable: false,
+			Default:  additionalDisksDefault(),
+		}}
+
+		err := applyFieldDefinitionsWithSpecFields(spec, fieldDefs, &fieldmaskpb.FieldMask{
+			Paths: []string{"additional_disks"},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(spec.GetAdditionalDisks()).To(HaveLen(1))
+	})
+
+	It("applies the additional_disks default when the mask is nil", func() {
+		spec := &privatev1.ComputeInstanceSpec{}
+		fieldDefs := []*privatev1.FieldDefinition{{
+			Path:     "additional_disks",
+			Editable: true,
+			Default:  additionalDisksDefault(),
+		}}
+
+		err := applyFieldDefinitionsWithSpecFields(spec, fieldDefs, nil)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(spec.GetAdditionalDisks()).To(HaveLen(1))
+	})
+
+	It("applies the additional_disks default when an unrelated field is masked", func() {
+		spec := &privatev1.ComputeInstanceSpec{}
+		fieldDefs := []*privatev1.FieldDefinition{{
+			Path:     "additional_disks",
+			Editable: true,
+			Default:  additionalDisksDefault(),
+		}}
+
+		err := applyFieldDefinitionsWithSpecFields(spec, fieldDefs, &fieldmaskpb.FieldMask{
+			Paths: []string{"boot_disk"},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(spec.GetAdditionalDisks()).To(HaveLen(1))
+	})
+
+	It("does not treat spec.additional_disks as an exact additional_disks mask", func() {
+		spec := &privatev1.ComputeInstanceSpec{}
+		fieldDefs := []*privatev1.FieldDefinition{{
+			Path:     "additional_disks",
+			Editable: true,
+			Default:  additionalDisksDefault(),
+		}}
+
+		err := applyFieldDefinitionsWithSpecFields(spec, fieldDefs, &fieldmaskpb.FieldMask{
+			Paths: []string{"spec.additional_disks"},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(spec.GetAdditionalDisks()).To(HaveLen(1))
+	})
+
+	It("preserves required-field behavior when the mask is nil", func() {
+		spec := &privatev1.ComputeInstanceSpec{}
+		fieldDefs := []*privatev1.FieldDefinition{{
+			Path:     "additional_disks",
+			Editable: true,
+		}}
+
+		err := applyFieldDefinitionsWithSpecFields(spec, fieldDefs, nil)
+		Expect(err).To(HaveOccurred())
+		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+		Expect(err.Error()).To(ContainSubstring("additional_disks"))
+	})
+
 	It("rejects editable field with no default and no user value", func() {
 		spec := &privatev1.ClusterSpec{}
 		fieldDefs := []*privatev1.FieldDefinition{{

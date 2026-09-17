@@ -366,7 +366,7 @@ func (s *PrivateComputeInstancesServer) Create(ctx context.Context,
 	}
 	var template *privatev1.ComputeInstanceTemplate
 	if catalogItemRef != nil {
-		err = s.validateAndTransformCatalogItem(ctx, request.GetObject())
+		err = s.validateAndTransformCatalogItem(ctx, request.GetObject(), request.GetSpecFields())
 		if err != nil {
 			return
 		}
@@ -1215,6 +1215,7 @@ func (s *PrivateComputeInstancesServer) validateNetworkReferencesState(
 // this succeeds, using the template reference now set on the spec.
 func (s *PrivateComputeInstancesServer) validateAndTransformCatalogItem(
 	ctx context.Context, ci *privatev1.ComputeInstance,
+	specFields *fieldmaskpb.FieldMask,
 ) error {
 	if ci == nil {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "object is mandatory")
@@ -1241,7 +1242,7 @@ func (s *PrivateComputeInstancesServer) validateAndTransformCatalogItem(
 	}
 	ci.GetSpec().SetTemplate(templateRef)
 
-	return applyFieldDefinitions(ci.GetSpec(), catalogItem.GetFieldDefinitions())
+	return applyFieldDefinitionsWithSpecFields(ci.GetSpec(), catalogItem.GetFieldDefinitions(), specFields)
 }
 
 func (s *PrivateComputeInstancesServer) lookupCatalogItem(ctx context.Context,

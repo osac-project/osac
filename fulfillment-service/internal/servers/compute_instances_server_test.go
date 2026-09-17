@@ -14,6 +14,7 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -29,6 +30,18 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
+
+type captureComputeInstancesServer struct {
+	privatev1.UnimplementedComputeInstancesServer
+	createRequest *privatev1.ComputeInstancesCreateRequest
+}
+
+func (s *captureComputeInstancesServer) Create(_ context.Context, request *privatev1.ComputeInstancesCreateRequest) (*privatev1.ComputeInstancesCreateResponse, error) {
+	s.createRequest = request
+	return privatev1.ComputeInstancesCreateResponse_builder{
+		Object: request.GetObject(),
+	}.Build(), nil
+}
 
 var _ = Describe("Compute instances server", func() {
 	Describe("Builder", func() {
@@ -299,6 +312,21 @@ var _ = Describe("Compute instances server", func() {
 			Expect(object.GetId()).ToNot(BeEmpty())
 			Expect(object.GetSpec().GetTemplate().GetId()).To(Equal("general.small"))
 			Expect(object.GetStatus().GetState()).To(Equal(publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING))
+		})
+
+		It("forwards spec_fields to the private server on create", func() {
+			capture := &captureComputeInstancesServer{}
+			server.delegate = capture
+			mask := &fieldmaskpb.FieldMask{Paths: []string{"additional_disks"}}
+
+			_, err := server.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
+				Object: publicv1.ComputeInstance_builder{
+					Metadata: publicv1.Metadata_builder{Name: "test-forward-mask"}.Build(),
+				}.Build(),
+				SpecFields: mask,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(capture.createRequest.GetSpecFields().GetPaths()).To(Equal([]string{"additional_disks"}))
 		})
 
 		It("List objects", func() {

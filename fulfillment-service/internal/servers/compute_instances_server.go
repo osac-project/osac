@@ -235,6 +235,7 @@ func (s *ComputeInstancesServer) Create(ctx context.Context,
 	// Delegate to the private server:
 	privateRequest := &privatev1.ComputeInstancesCreateRequest{}
 	privateRequest.SetObject(privateComputeInstance)
+	privateRequest.SetSpecFields(request.GetSpecFields())
 	privateResponse, err := s.delegate.Create(ctx, privateRequest)
 	if err != nil {
 		return nil, err

@@ -1608,6 +1608,86 @@ var _ = Describe("Private compute instances server", func() {
 				Expect(object.GetSpec().GetSshPublicKey()).To(Equal("default-key"))
 			})
 
+			It("preserves an explicitly empty additional_disks list when the field is masked", func() {
+				additionalDisksDefault, err := structpb.NewValue([]any{
+					map[string]any{
+						"size_gib":     float64(100),
+						"storage_tier": map[string]any{"name": "standard"},
+					},
+				})
+				Expect(err).ToNot(HaveOccurred())
+				createCICatalogItem("ci-cat-empty-disks", true, []*privatev1.FieldDefinition{
+					privatev1.FieldDefinition_builder{
+						Path:     "additional_disks",
+						Editable: true,
+						Default:  additionalDisksDefault,
+					}.Build(),
+					privatev1.FieldDefinition_builder{
+						Path:     "network_attachments",
+						Editable: true,
+					}.Build(),
+				})
+
+				response, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
+					Object: privatev1.ComputeInstance_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
+						Spec: privatev1.ComputeInstanceSpec_builder{
+							CatalogItem:     privatev1.ComputeInstanceCatalogItemReference_builder{Id: "ci-cat-empty-disks"}.Build(),
+							AdditionalDisks: []*privatev1.ComputeInstanceDisk{},
+							NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+								privatev1.ComputeNetworkAttachment_builder{
+									Subnet: privatev1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+					SpecFields: &fieldmaskpb.FieldMask{Paths: []string{"additional_disks"}},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetSpec().GetAdditionalDisks()).To(BeEmpty())
+			})
+
+			It("applies the additional_disks default when the mask is nil", func() {
+				additionalDisksDefault, err := structpb.NewValue([]any{
+					map[string]any{
+						"size_gib":     float64(100),
+						"storage_tier": map[string]any{"name": "standard"},
+					},
+				})
+				Expect(err).ToNot(HaveOccurred())
+				createCICatalogItem("ci-cat-default-disks", true, []*privatev1.FieldDefinition{
+					privatev1.FieldDefinition_builder{
+						Path:     "additional_disks",
+						Editable: true,
+						Default:  additionalDisksDefault,
+					}.Build(),
+					privatev1.FieldDefinition_builder{
+						Path:     "network_attachments",
+						Editable: true,
+					}.Build(),
+				})
+
+				response, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
+					Object: privatev1.ComputeInstance_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
+						Spec: privatev1.ComputeInstanceSpec_builder{
+							CatalogItem: privatev1.ComputeInstanceCatalogItemReference_builder{Id: "ci-cat-default-disks"}.Build(),
+							NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+								privatev1.ComputeNetworkAttachment_builder{
+									Subnet: privatev1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetSpec().GetAdditionalDisks()).To(HaveLen(1))
+			})
+
 			It("Rejects changing catalog_item on update", func() {
 				createCICatalogItem("ci-cat-immut", true, nil)
 

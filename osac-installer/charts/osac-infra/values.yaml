@@ -35,6 +35,8 @@ keycloak:
   # Use this for SPI overrides that must be set at the server level (e.g.
   # KC_SPI_CONNECTIONS_HTTP_CLIENT_DEFAULT_DISABLE_TRUST_MANAGER for Kind).
   extraEnv: []
+  # Public UI host used for the osac-ui OIDC client's redirect URI.
+  uiHostname: ""
   route:
     hostname: ""
     publicIngress: false

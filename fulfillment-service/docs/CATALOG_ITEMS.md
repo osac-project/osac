@@ -338,6 +338,11 @@ osac create cluster --catalog-item dev-sandbox \
   --pod-cidr "10.128.0.0/14"
 ```
 
+For a `ComputeInstanceCatalogItem`, use `--additional-disk ""` to explicitly opt out of the
+catalog item's `additional_disks` default. REST callers must add
+`spec_fields.paths=additional_disks` to the create request, and gRPC callers must set the same path
+in the request's `spec_fields` field.
+
 ### Shared pull secrets in cluster templates
 
 Platform administrators can create a Vault-backed pull Secret in the `shared` tenant and reference

@@ -83,6 +83,7 @@ message ComputeInstancesGetResponse {
 
 message ComputeInstancesCreateRequest {
   ComputeInstance object = 1;
+  google.protobuf.FieldMask spec_fields = 2;
 }
 
 message ComputeInstancesCreateResponse {

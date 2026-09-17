@@ -806,9 +806,6 @@ def test_compute_instance_user_additional_disks_override_catalog_item_default(
         private_grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
 
 
-@pytest.mark.skip(
-    reason="OSAC-4356: empty additional_disks: [] does not opt out of the CatalogItem default (backend gap)"
-)
 def test_compute_instance_empty_additional_disks_opts_out_of_catalog_item_default(
     private_grpc: GRPCClient,
     grpc: GRPCClient,
@@ -847,6 +844,7 @@ def test_compute_instance_empty_additional_disks_opts_out_of_catalog_item_defaul
         ci_obj = grpc.call(
             service="osac.public.v1.ComputeInstances/Create",
             data={
+                "spec_fields": {"paths": ["additional_disks"]},
                 "object": {
                     "metadata": {"name": unique_name("e2e-ci-add-empty")},
                     "spec": {
@@ -858,7 +856,7 @@ def test_compute_instance_empty_additional_disks_opts_out_of_catalog_item_defaul
                         "disk_image": {"name": default_disk_image},
                         "run_strategy": "Always",
                     },
-                }
+                },
             },
         )
         uuid = ci_obj["object"]["id"]

@@ -30,6 +30,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
@@ -288,9 +289,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 			Spec: specResult,
 		}.Build()
 
-		response, err := c.computeInstancesClient.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
-			Object: computeInstance,
-		}.Build())
+		response, err := c.computeInstancesClient.Create(ctx, c.buildCatalogItemCreateRequest(computeInstance))
 		if err != nil {
 			return fmt.Errorf("failed to create compute instance: %w", err)
 		}
@@ -930,9 +929,23 @@ func (c *runnerContext) buildSpecFromCatalogItem(catalogItemID string) (*publicv
 	return spec.Build(), nil
 }
 
+func (c *runnerContext) buildCatalogItemCreateRequest(computeInstance *publicv1.ComputeInstance) *publicv1.ComputeInstancesCreateRequest {
+	request := publicv1.ComputeInstancesCreateRequest_builder{
+		Object: computeInstance,
+	}
+	if len(c.args.additionalDisks) > 0 {
+		request.SpecFields = &fieldmaskpb.FieldMask{Paths: []string{"additional_disks"}}
+	}
+	return request.Build()
+}
+
 // parseAdditionalDisks parses disk specifications in key=value format:
 // "size=100,storage-tier=standard".
 func parseAdditionalDisks(diskArgs []string) ([]*publicv1.ComputeInstanceDisk, error) {
+	if len(diskArgs) == 1 && strings.TrimSpace(diskArgs[0]) == "" {
+		return []*publicv1.ComputeInstanceDisk{}, nil
+	}
+
 	disks := make([]*publicv1.ComputeInstanceDisk, 0, len(diskArgs))
 	for _, arg := range diskArgs {
 		arg = strings.TrimSpace(arg)
@@ -1109,6 +1122,7 @@ _TIER_ - Storage tier for the boot disk.
 const additionalDiskFlagHelp = `
 _SPEC_ - Additional disk specification. Accepts two formats:
 {{ bt }}size=<GiB>,storage-tier=<name>{{ bt }} specifies disk size and storage tier name.
+{{ bt }}""{{ bt }} explicitly opts out of the catalog item's additional disk defaults.
 The storage tier is required for every additional disk.
 
 Can be specified multiple times to add more than one disk.

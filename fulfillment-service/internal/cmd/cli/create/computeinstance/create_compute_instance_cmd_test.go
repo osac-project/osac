@@ -178,6 +178,57 @@ var _ = Describe("buildSpecFromCatalogItem", func() {
 
 		Expect(spec.GetUserDataSecret().GetName()).To(Equal("cloud-init"))
 	})
+
+	It("should leave spec_fields unset without additional disks", func() {
+		c := &runnerContext{}
+		spec, err := c.buildSpecFromCatalogItem("cat-006")
+		Expect(err).NotTo(HaveOccurred())
+
+		request := c.buildCatalogItemCreateRequest(publicv1.ComputeInstance_builder{
+			Spec: spec,
+		}.Build())
+		Expect(request.GetSpecFields()).To(BeNil())
+	})
+
+	It("should set one additional_disks spec field when disks are supplied", func() {
+		c := &runnerContext{}
+		c.args.additionalDisks = []string{"size=50,storage-tier=fast"}
+		spec, err := c.buildSpecFromCatalogItem("cat-007")
+		Expect(err).NotTo(HaveOccurred())
+
+		request := c.buildCatalogItemCreateRequest(publicv1.ComputeInstance_builder{
+			Spec: spec,
+		}.Build())
+		Expect(request.GetSpecFields().GetPaths()).To(Equal([]string{"additional_disks"}))
+	})
+
+	It("should emit only one additional_disks spec field for multiple disks", func() {
+		c := &runnerContext{}
+		c.args.additionalDisks = []string{
+			"size=50,storage-tier=fast",
+			"size=100,storage-tier=archive",
+		}
+		spec, err := c.buildSpecFromCatalogItem("cat-008")
+		Expect(err).NotTo(HaveOccurred())
+
+		request := c.buildCatalogItemCreateRequest(publicv1.ComputeInstance_builder{
+			Spec: spec,
+		}.Build())
+		Expect(request.GetSpecFields().GetPaths()).To(Equal([]string{"additional_disks"}))
+	})
+
+	It("should set the additional_disks spec field for an explicit empty list", func() {
+		c := &runnerContext{}
+		c.args.additionalDisks = []string{""}
+		spec, err := c.buildSpecFromCatalogItem("cat-009")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(spec.GetAdditionalDisks()).To(BeEmpty())
+
+		request := c.buildCatalogItemCreateRequest(publicv1.ComputeInstance_builder{
+			Spec: spec,
+		}.Build())
+		Expect(request.GetSpecFields().GetPaths()).To(Equal([]string{"additional_disks"}))
+	})
 })
 
 var _ = Describe("Create computeinstance flag registration", func() {
@@ -346,6 +397,21 @@ var _ = Describe("--additional-disk flag parsing", func() {
 		Expect(disks[0].GetStorageTier().GetName()).To(Equal("fast"))
 		Expect(disks[1].GetSizeGib()).To(Equal(int32(100)))
 		Expect(disks[1].GetStorageTier().GetName()).To(Equal("archive"))
+	})
+
+	It("should preserve an explicit empty additional disk list", func() {
+		raw := rawDisks("--additional-disk", "")
+		Expect(raw).To(Equal([]string{""}))
+
+		disks, err := parseAdditionalDisks(raw)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(disks).To(BeEmpty())
+	})
+
+	It("should reject an empty additional disk mixed with a real disk", func() {
+		_, err := parseAdditionalDisks([]string{"", "size=50,storage-tier=fast"})
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("empty --additional-disk value"))
 	})
 
 	It("should reject a bare integer additional disk", func() {

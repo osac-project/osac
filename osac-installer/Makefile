@@ -202,6 +202,7 @@ else
 		--set keycloak.hostname=https://keycloak-keycloak.$(DOMAIN) \
 		--set keycloak.route.hostname=keycloak-keycloak.$(DOMAIN) \
 		--set "bundledVault.keycloakIssuerUrl=https://keycloak-keycloak.$(DOMAIN)/realms/osac" \
+		--set keycloak.uiHostname=osac-ui-$(NS).$(DOMAIN) \
 		--timeout 30m --wait-for-jobs
 endif
 
@@ -237,9 +238,15 @@ ifneq ($(PLATFORM),kind)
 	oc create secret generic config-as-code-manifest-ig \
 		--from-file=license.zip="$(AAP_LICENSE_FILE)" \
 		-n $(NS) --dry-run=client -o yaml | oc apply --server-side -f -
-	oc label secret config-as-code-manifest-ig \
-		osac.openshift.io/project=osac-aap \
-		-n $(NS) --overwrite
+	@current_label="$$(oc get secret config-as-code-manifest-ig -n "$(NS)" \
+		-o jsonpath='{.metadata.labels.osac\.openshift\.io/project}')"; \
+	if [[ "$$current_label" != "osac-aap" ]]; then \
+		oc label secret config-as-code-manifest-ig \
+			osac.openshift.io/project=osac-aap \
+			-n "$(NS)" --overwrite; \
+	else \
+		echo "secret/config-as-code-manifest-ig already labeled"; \
+	fi
 	@bash -c 'source scripts/lib.sh && check_postgres_prerequisites "$(NS)" "$(INFRA_VALUES)"'
 	$(eval DOMAIN := $(shell oc get ingresses.config/cluster -o jsonpath='{.spec.domain}'))
 	@[ -n "$(DOMAIN)" ] || { echo "ERROR: Could not determine cluster domain. Is oc logged in?" >&2; exit 1; }

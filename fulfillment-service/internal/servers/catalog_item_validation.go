@@ -28,6 +28,7 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
@@ -89,6 +90,14 @@ func applyFieldDefinitions(
 	spec proto.Message,
 	fieldDefinitions []*privatev1.FieldDefinition,
 ) error {
+	return applyFieldDefinitionsWithSpecFields(spec, fieldDefinitions, nil)
+}
+
+func applyFieldDefinitionsWithSpecFields(
+	spec proto.Message,
+	fieldDefinitions []*privatev1.FieldDefinition,
+	specFields *fieldmaskpb.FieldMask,
+) error {
 	if len(fieldDefinitions) == 0 {
 		return nil
 	}
@@ -135,14 +144,19 @@ func applyFieldDefinitions(
 
 		defaultVal := fd.GetDefault()
 		userVal, userHasValue := maputil.GetNestedValue(specMap, path)
+		suppressDefault := fd.GetEditable() &&
+			path == "additional_disks" &&
+			specFieldsContains(specFields, path)
 
 		if !fd.GetEditable() {
 			if userHasValue && userVal != nil {
 				return grpcstatus.Errorf(grpccodes.InvalidArgument,
 					"field '%s' is not editable", path)
 			}
-			if err := applyDefault(specMap, path, defaultVal); err != nil {
-				return err
+			if !suppressDefault {
+				if err := applyDefault(specMap, path, defaultVal); err != nil {
+					return err
+				}
 			}
 		} else {
 			if userHasValue && userVal != nil {
@@ -152,6 +166,8 @@ func applyFieldDefinitions(
 						return err
 					}
 				}
+			} else if suppressDefault {
+				continue
 			} else {
 				if defaultVal == nil {
 					return grpcstatus.Errorf(grpccodes.InvalidArgument,
@@ -175,6 +191,10 @@ func applyFieldDefinitions(
 	}
 
 	return nil
+}
+
+func specFieldsContains(specFields *fieldmaskpb.FieldMask, path string) bool {
+	return specFields != nil && slices.Contains(specFields.GetPaths(), path)
 }
 
 // validateCatalogItemAccess checks that a catalog item is published and not deleted.

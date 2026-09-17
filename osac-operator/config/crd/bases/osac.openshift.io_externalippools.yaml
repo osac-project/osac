@@ -61,14 +61,14 @@ spec:
                 description: CIDRs is the list of canonical IPv4 CIDR blocks for this
                   pool. Exactly one is supported.
                 items:
+                  maxLength: 18
                   type: string
                 maxItems: 1
                 minItems: 1
                 type: array
                 x-kubernetes-validations:
                 - message: cidrs must contain only canonical IPv4 CIDRs
-                  rule: self.all(c, isCIDR(c) && cidr(c).ip().family() == 4 && cidr(c)
-                    == cidr(c).masked())
+                  rule: self.all(c, string(cidr(c).masked()) == c && !c.contains(':'))
                 - message: cidrs is immutable
                   rule: self == oldSelf
               implementationStrategy:

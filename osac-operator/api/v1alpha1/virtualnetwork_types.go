@@ -32,7 +32,8 @@ type VirtualNetworkSpec struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Type=string
 	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:XValidation:rule="isCIDR(self) && cidr(self).ip().family() == 4 && cidr(self) == cidr(self).masked()",message="ipv4Cidr must be a canonical IPv4 CIDR"
+	// +kubebuilder:validation:MaxLength=18
+	// +kubebuilder:validation:XValidation:rule="string(cidr(self).masked()) == self && !self.contains(':')",message="ipv4Cidr must be a canonical IPv4 CIDR"
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="ipv4Cidr is immutable"
 	IPv4CIDR string `json:"ipv4Cidr,omitempty"`
 

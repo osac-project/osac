@@ -61,13 +61,15 @@ type SecurityRule struct {
 	// SourceCIDR specifies the source CIDR block for this rule
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string
-	// +kubebuilder:validation:XValidation:rule="self == '' || (isCIDR(self) && cidr(self).ip().family() == 4 && cidr(self) == cidr(self).masked())",message="sourceCidr must be a canonical IPv4 CIDR"
+	// +kubebuilder:validation:MaxLength=18
+	// +kubebuilder:validation:XValidation:rule="self == '' || (string(cidr(self).masked()) == self && !self.contains(':'))",message="sourceCidr must be a canonical IPv4 CIDR"
 	SourceCIDR string `json:"sourceCidr,omitempty"`
 
 	// DestinationCIDR specifies the destination CIDR block for this rule
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string
-	// +kubebuilder:validation:XValidation:rule="self == '' || (isCIDR(self) && cidr(self).ip().family() == 4 && cidr(self) == cidr(self).masked())",message="destinationCidr must be a canonical IPv4 CIDR"
+	// +kubebuilder:validation:MaxLength=18
+	// +kubebuilder:validation:XValidation:rule="self == '' || (string(cidr(self).masked()) == self && !self.contains(':'))",message="destinationCidr must be a canonical IPv4 CIDR"
 	DestinationCIDR string `json:"destinationCidr,omitempty"`
 }
 
@@ -81,10 +83,12 @@ type SecurityGroupSpec struct {
 
 	// IngressRules defines the ingress security rules
 	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxItems=100
 	IngressRules []SecurityRule `json:"ingressRules,omitempty"`
 
 	// EgressRules defines the egress security rules
 	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxItems=100
 	EgressRules []SecurityRule `json:"egressRules,omitempty"`
 }
 

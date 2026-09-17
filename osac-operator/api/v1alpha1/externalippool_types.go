@@ -26,7 +26,8 @@ type ExternalIPPoolSpec struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=1
-	// +kubebuilder:validation:XValidation:rule="self.all(c, isCIDR(c) && cidr(c).ip().family() == 4 && cidr(c) == cidr(c).masked())",message="cidrs must contain only canonical IPv4 CIDRs"
+	// +kubebuilder:validation:items:MaxLength=18
+	// +kubebuilder:validation:XValidation:rule="self.all(c, string(cidr(c).masked()) == c && !c.contains(':'))",message="cidrs must contain only canonical IPv4 CIDRs"
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="cidrs is immutable"
 	CIDRs []string `json:"cidrs"`
 

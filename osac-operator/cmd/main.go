@@ -653,7 +653,7 @@ func setupVolumeControllers(mgr mcmanager.Manager, grpcConn *grpc.ClientConn) er
 		}
 		var perr error
 		provisioners, perr = newVendorProvisionerRegistry(
-			localMgr.GetAPIReader(), configNamespace, endpoints,
+			localMgr.GetAPIReader(), localMgr.GetClient(), configNamespace, endpoints,
 		)
 		if perr != nil {
 			setupLog.Error(perr, "vendor provisioner registry init failed; volume provisioning disabled")
@@ -678,6 +678,7 @@ func setupVolumeControllers(mgr mcmanager.Manager, grpcConn *grpc.ClientConn) er
 // provisioner.
 func newVendorProvisionerRegistry(
 	reader client.Reader,
+	writer client.Client,
 	configNamespace string,
 	endpoints map[string]string,
 ) (controller.VendorProvisionerRegistry, error) {
@@ -689,6 +690,11 @@ func newVendorProvisionerRegistry(
 	// Progressing).
 	for key := range endpoints {
 		registry[key] = nil
+	}
+	if _, ok := endpoints["lvms"]; ok {
+		// LVMS is in-cluster and uses Kubernetes resources directly; the
+		// configured endpoint value is only an enablement marker.
+		registry["lvms"] = controller.NewLvmsVendorProvisioner(writer)
 	}
 
 	vastEndpoint, ok := endpoints["vast"]
@@ -705,13 +711,15 @@ func newVendorProvisionerRegistry(
 		return nil, err
 	}
 	registry["vast"] = provisioner
+
 	return registry, nil
 }
 
-// parseVendorControllers parses a comma-separated list of provider=endpoint pairs
-// (e.g. "vast=vast-csi-controller.osac-csi-backends.svc:50051") into a map from
-// provider name to vendor CSI controller gRPC endpoint. An empty input
-// yields an empty map, which leaves volume provisioning disabled.
+// parseVendorControllers parses a comma-separated list of provider=endpoint
+// pairs (e.g. "vast=vast-csi-controller.osac-csi-backends.svc:50051") into a
+// map from provider name to vendor CSI controller gRPC endpoint. The in-cluster
+// LVMS provider uses "lvms=none" as an enablement marker. An empty input yields
+// an empty map, which leaves volume provisioning disabled.
 func parseVendorControllers(s string) (map[string]string, error) {
 	result := make(map[string]string)
 	if s == "" {

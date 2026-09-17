@@ -15,10 +15,13 @@ const (
 
 // VolumeInfo describes a volume managed by the fulfillment service.
 type VolumeInfo struct {
-	ID             string
-	Name           string
-	State          VolumeState
-	Backend        string
+	ID      string
+	Name    string
+	State   VolumeState
+	Backend string
+	// Message contains the detailed fulfillment/operator failure reason, when
+	// the volume is in the error state.
+	Message        string
 	VendorVolumeID string
 	Protocol       string
 	CapacityBytes  int64

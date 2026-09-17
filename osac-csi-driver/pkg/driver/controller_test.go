@@ -426,8 +426,9 @@ func TestCreateVolume_ErrorState(t *testing.T) {
 		},
 		getVolumeFn: func(_ context.Context, volumeID string) (*fulfillment.VolumeInfo, error) {
 			return &fulfillment.VolumeInfo{
-				ID:    volumeID,
-				State: fulfillment.VolumeStateError,
+				ID:      volumeID,
+				State:   fulfillment.VolumeStateError,
+				Message: "insufficient vg1 capacity",
 			}, nil
 		},
 	}
@@ -439,6 +440,9 @@ func TestCreateVolume_ErrorState(t *testing.T) {
 		Parameters:         map[string]string{"tier": "gold"},
 	})
 	assertCode(t, err, codes.Internal)
+	if got, want := status.Convert(err).Message(), "volume vol-1 entered error state: insufficient vg1 capacity"; got != want {
+		t.Fatalf("error message = %q, want %q", got, want)
+	}
 }
 
 func TestCreateVolume_ContextCancelled(t *testing.T) {

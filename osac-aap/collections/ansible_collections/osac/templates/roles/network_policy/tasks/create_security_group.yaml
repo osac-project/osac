@@ -68,7 +68,7 @@
   ansible.builtin.set_fact:
     ingress_policy_rules: "{{ ingress_policy_rules + [_rule] }}"
   vars:
-    _has_cidr: "{{ item.destinationCidr is defined and item.destinationCidr | length > 0 }}"
+    _has_cidr: "{{ item.sourceCidr is defined and item.sourceCidr | default('') | length > 0 }}"
     _has_port: "{{ item.protocol not in ['icmp', 'all'] and item.portFrom is defined }}"
     _from_part: "{{ (_has_cidr | bool) | ternary({'from': [{'ipBlock': {'cidr': item.sourceCidr}}]}, {}) }}"
     _port_base: "{{ {'protocol': item.protocol | upper, 'port': item.portFrom | default(0)} }}"
@@ -81,7 +81,7 @@
   ansible.builtin.set_fact:
     egress_policy_rules: "{{ egress_policy_rules + [_rule] }}"
   vars:
-    _has_cidr: "{{ item.sourceCidr is defined and item.sourceCidr | length > 0 }}"
+    _has_cidr: "{{ item.destinationCidr is defined and item.destinationCidr | default('') | length > 0 }}"
     _has_port: "{{ item.protocol not in ['icmp', 'all'] and item.portFrom is defined }}"
     _to_part: "{{ (_has_cidr | bool) | ternary({'to': [{'ipBlock': {'cidr': item.destinationCidr}}]}, {}) }}"
     _port_base: "{{ {'protocol': item.protocol | upper, 'port': item.portFrom | default(0)} }}"

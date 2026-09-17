@@ -98,6 +98,7 @@ type VendorDeleteVolumeRequest struct {
 	VendorVolumeID string
 	Provider       string
 	Tenant         string
+	VendorContext  map[string]string
 }
 
 // VolumeReconciler reconciles Volume CRs created by the fulfillment-service
@@ -367,6 +368,7 @@ func (r *VolumeReconciler) handleDelete(ctx context.Context, vol *v1alpha1.Volum
 			VendorVolumeID: vol.Status.VendorVolumeID,
 			Provider:       provider,
 			Tenant:         vol.GetAnnotations()[osacTenantKey],
+			VendorContext:  vol.Status.VendorContext,
 		})
 		if err != nil {
 			log.Error(err, "vendor deprovisioning failed")

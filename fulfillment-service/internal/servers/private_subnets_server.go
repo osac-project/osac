@@ -171,36 +171,11 @@ func (s *PrivateSubnetsServer) Create(ctx context.Context,
 // SUB-SVC-04: Update updates an existing Subnet with validation
 func (s *PrivateSubnetsServer) Update(ctx context.Context,
 	request *privatev1.SubnetsUpdateRequest) (response *privatev1.SubnetsUpdateResponse, err error) {
-	// Get existing object for immutability validation:
-	id := request.GetObject().GetId()
-	if id == "" {
+	if request.GetObject().GetId() == "" {
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object identifier is mandatory")
 		return
 	}
-
-	getRequest := &privatev1.SubnetsGetRequest{}
-	getRequest.SetId(id)
-	var getResponse *privatev1.SubnetsGetResponse
-	err = s.generic.Get(ctx, getRequest, &getResponse)
-	if err != nil {
-		return
-	}
-
-	existingSubnet := getResponse.GetObject()
-
-	validationObject, mergeErr := s.generic.mergeUpdateObject(request.GetObject(), existingSubnet, request.GetUpdateMask())
-	if mergeErr != nil {
-		err = mergeErr
-		return
-	}
-
-	// Validate the merged object with existing object context:
-	err = s.validateSubnet(ctx, validationObject, existingSubnet)
-	if err != nil {
-		return
-	}
-
-	err = s.generic.Update(ctx, request, &response)
+	err = s.generic.UpdateWithValidation(ctx, request, &response, s.validateSubnet)
 	return
 }
 

@@ -672,6 +672,20 @@ func isDryRun(ctx context.Context) bool {
 }
 
 func (s *GenericServer[O]) Update(ctx context.Context, request any, response any) error {
+	return s.UpdateWithValidation(ctx, request, response, nil)
+}
+
+// UpdateWithValidation updates an object after applying the request's field mask and
+// invokes validate on the merged object before the generic validation and persistence
+// steps. The current object is passed to validate so resource-specific validation can
+// enforce immutability and cross-resource constraints without fetching and merging the
+// object a second time.
+func (s *GenericServer[O]) UpdateWithValidation(
+	ctx context.Context,
+	request any,
+	response any,
+	validate func(context.Context, O, O) error,
+) error {
 	// Extract the object from the request message:
 	type requestIface interface {
 		GetObject() O
@@ -753,6 +767,11 @@ func (s *GenericServer[O]) Update(ctx context.Context, request any, response any
 	tmpObject, err := s.mergeUpdateObject(requestObject, currentObject, requestMsg.GetUpdateMask())
 	if err != nil {
 		return err
+	}
+	if validate != nil {
+		if err = validate(ctx, tmpObject, currentObject); err != nil {
+			return err
+		}
 	}
 
 	// Validate the merged object using protovalidate.

@@ -171,36 +171,11 @@ func (s *PrivateSecurityGroupsServer) Create(ctx context.Context,
 
 func (s *PrivateSecurityGroupsServer) Update(ctx context.Context,
 	request *privatev1.SecurityGroupsUpdateRequest) (response *privatev1.SecurityGroupsUpdateResponse, err error) {
-	// Get existing object for immutability validation:
-	id := request.GetObject().GetId()
-	if id == "" {
+	if request.GetObject().GetId() == "" {
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object identifier is mandatory")
 		return
 	}
-
-	getRequest := &privatev1.SecurityGroupsGetRequest{}
-	getRequest.SetId(id)
-	var getResponse *privatev1.SecurityGroupsGetResponse
-	err = s.generic.Get(ctx, getRequest, &getResponse)
-	if err != nil {
-		return
-	}
-
-	existingSecurityGroup := getResponse.GetObject()
-
-	validationObject, mergeErr := s.generic.mergeUpdateObject(request.GetObject(), existingSecurityGroup, request.GetUpdateMask())
-	if mergeErr != nil {
-		err = mergeErr
-		return
-	}
-
-	// Validate the merged object with existing object context:
-	err = s.validateSecurityGroup(ctx, validationObject, existingSecurityGroup)
-	if err != nil {
-		return
-	}
-
-	err = s.generic.Update(ctx, request, &response)
+	err = s.generic.UpdateWithValidation(ctx, request, &response, s.validateSecurityGroup)
 	return
 }
 

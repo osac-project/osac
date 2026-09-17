@@ -157,36 +157,11 @@ func (s *PrivateVirtualNetworksServer) Create(ctx context.Context,
 
 func (s *PrivateVirtualNetworksServer) Update(ctx context.Context,
 	request *privatev1.VirtualNetworksUpdateRequest) (response *privatev1.VirtualNetworksUpdateResponse, err error) {
-	// Get existing object for immutability validation:
-	id := request.GetObject().GetId()
-	if id == "" {
+	if request.GetObject().GetId() == "" {
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object identifier is mandatory")
 		return
 	}
-
-	getRequest := &privatev1.VirtualNetworksGetRequest{}
-	getRequest.SetId(id)
-	var getResponse *privatev1.VirtualNetworksGetResponse
-	err = s.generic.Get(ctx, getRequest, &getResponse)
-	if err != nil {
-		return
-	}
-
-	existingVN := getResponse.GetObject()
-
-	validationObject, mergeErr := s.generic.mergeUpdateObject(request.GetObject(), existingVN, request.GetUpdateMask())
-	if mergeErr != nil {
-		err = mergeErr
-		return
-	}
-
-	// Validate the merged object with existing object context:
-	err = s.validateVirtualNetwork(ctx, validationObject, existingVN)
-	if err != nil {
-		return
-	}
-
-	err = s.generic.Update(ctx, request, &response)
+	err = s.generic.UpdateWithValidation(ctx, request, &response, s.validateVirtualNetwork)
 	return
 }
 

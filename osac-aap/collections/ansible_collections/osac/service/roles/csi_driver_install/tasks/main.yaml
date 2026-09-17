@@ -269,31 +269,24 @@
     # Bracket notation (['values']) is required here, not dot notation: the
     # release dict has a real key literally named "values", which collides
     # with Python dict's own .values() method — attribute access would
-        _csi_driver_install_prior_values: >-
-          {{
-            (_csi_driver_install_prior_driver_status.get('values') or {})
-            if (_csi_driver_install_prior_driver_status is mapping)
-            else {}
-          }}
-
-    - name: Normalize previously deployed controller and node values
-      ansible.builtin.set_fact:
-        _csi_driver_install_prior_controller: >-
-          {{ _csi_driver_install_prior_values.get('controller') or {} }}
-        _csi_driver_install_prior_node: >-
-          {{ _csi_driver_install_prior_values.get('node') or {} }}
-
+    # silently return the bound method instead of the chart values.
     - name: Extract previously-deployed controller/node vendor endpoints strings (empty string if unset)
       ansible.builtin.set_fact:
         _csi_driver_install_prior_controller_sockets_raw: >-
           {{
             (
-              (_csi_driver_install_prior_controller.get('vendorControllers') or '')
-              or (_csi_driver_install_prior_controller.get('vendorSockets') or '')
+              ((_csi_driver_install_prior_driver_status['values']['controller'] | default({}, true)).vendorControllers | default('', true))
+              or ((_csi_driver_install_prior_driver_status['values']['controller'] | default({}, true)).vendorSockets | default('', true))
             ) | trim
+            if (_csi_driver_install_prior_driver_status is mapping and 'values' in _csi_driver_install_prior_driver_status)
+            else ''
           }}
         _csi_driver_install_prior_node_sockets_raw: >-
-          {{ (_csi_driver_install_prior_node.get('vendorSockets') or '') | trim }}
+          {{
+            ((_csi_driver_install_prior_driver_status['values']['node'] | default({}, true)).vendorSockets | default('', true) | trim)
+            if (_csi_driver_install_prior_driver_status is mapping and 'values' in _csi_driver_install_prior_driver_status)
+            else ''
+          }}
 
     - name: Parse previously-deployed vendorSockets strings into per-vendor maps (empty map if unset)
       ansible.builtin.set_fact:
@@ -301,18 +294,14 @@
           {% set _map = {} -%}
           {% for _pair in _csi_driver_install_prior_controller_sockets_raw.split(',') if _pair | trim | length > 0 -%}
           {% set _kv = _pair.split('=', 1) -%}
-          {% if _kv | length == 2 -%}
           {% set _ = _map.update({_kv[0]: _kv[1]}) -%}
-          {% endif -%}
           {% endfor -%}
           {{ _map }}
         _csi_driver_install_prior_node_sockets: >-
           {% set _map = {} -%}
           {% for _pair in _csi_driver_install_prior_node_sockets_raw.split(',') if _pair | trim | length > 0 -%}
           {% set _kv = _pair.split('=', 1) -%}
-          {% if _kv | length == 2 -%}
           {% set _ = _map.update({_kv[0]: _kv[1]}) -%}
-          {% endif -%}
           {% endfor -%}
           {{ _map }}
 

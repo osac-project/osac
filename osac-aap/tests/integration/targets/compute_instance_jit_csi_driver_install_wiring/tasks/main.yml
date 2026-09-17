@@ -105,6 +105,7 @@
           spec:
             templateID: osac.test_overrides.noop_template
             cores: 2
+            vcpus: 2
             memoryGiB: 4
             bootDisk:
               sizeGiB: 20
@@ -308,6 +309,7 @@
           spec:
             templateID: osac.test_overrides.noop_template
             cores: 2
+            vcpus: 2
             memoryGiB: 4
             bootDisk:
               sizeGiB: 20

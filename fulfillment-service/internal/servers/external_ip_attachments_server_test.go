@@ -22,7 +22,6 @@ import (
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
@@ -323,82 +322,6 @@ var _ = Describe("External IP attachments server", func() {
 				}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(proto.Equal(created, getResponse.GetObject())).To(BeTrue())
-		})
-
-		It("Updates labels on an external IP attachment", func() {
-			created := createAttachment()
-
-			updateResponse, err := externalIPAttachmentsServer.Update(ctx,
-				publicv1.ExternalIPAttachmentsUpdateRequest_builder{
-					Object: publicv1.ExternalIPAttachment_builder{
-						Id: created.GetId(),
-						Metadata: publicv1.Metadata_builder{
-							Name: "test-eip-attachment",
-							Labels: map[string]string{
-								"env": "test",
-							},
-						}.Build(),
-					}.Build(),
-					UpdateMask: &fieldmaskpb.FieldMask{
-						Paths: []string{"metadata.labels"},
-					},
-				}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Expect(updateResponse.GetObject().GetMetadata().GetLabels()).To(
-				HaveKeyWithValue("env", "test"),
-			)
-
-			getResponse, err := externalIPAttachmentsServer.Get(ctx,
-				publicv1.ExternalIPAttachmentsGetRequest_builder{
-					Id: created.GetId(),
-				}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Expect(getResponse.GetObject().GetMetadata().GetLabels()).To(
-				HaveKeyWithValue("env", "test"),
-			)
-		})
-
-		It("Rejects update with nil object", func() {
-			_, err := externalIPAttachmentsServer.Update(ctx,
-				publicv1.ExternalIPAttachmentsUpdateRequest_builder{}.Build())
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("object is mandatory"))
-		})
-
-		It("rejects public lifecycle updates to spec fields", func() {
-			created := createAttachment()
-
-			_, err := externalIPAttachmentsServer.Update(ctx,
-				publicv1.ExternalIPAttachmentsUpdateRequest_builder{
-					Object: publicv1.ExternalIPAttachment_builder{
-						Id: created.GetId(),
-						Spec: publicv1.ExternalIPAttachmentSpec_builder{
-							ExternalIp: publicv1.ExternalIPLocalReference_builder{Id: "different-ip-id"}.Build(),
-						}.Build(),
-					}.Build(),
-					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.external_ip"}},
-				}.Build())
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("public lifecycle updates may only name metadata fields"))
-		})
-
-		It("rejects output-only status updates with nil and explicit masks", func() {
-			created := createAttachment()
-
-			_, err := externalIPAttachmentsServer.Update(ctx,
-				publicv1.ExternalIPAttachmentsUpdateRequest_builder{
-					Object: created,
-				}.Build())
-			Expect(grpcstatus.Code(err)).To(Equal(codes.InvalidArgument))
-
-			_, err = externalIPAttachmentsServer.Update(ctx,
-				publicv1.ExternalIPAttachmentsUpdateRequest_builder{
-					Object: publicv1.ExternalIPAttachment_builder{Id: created.GetId()}.Build(),
-					UpdateMask: &fieldmaskpb.FieldMask{
-						Paths: []string{"status.state"},
-					},
-				}.Build())
-			Expect(grpcstatus.Code(err)).To(Equal(codes.InvalidArgument))
 		})
 
 		It("Delete object", func() {

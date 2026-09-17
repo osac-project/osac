@@ -142,6 +142,9 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		})
 		return nil
 	}
+	if err := ensureUpdatable(c.helper); err != nil {
+		return err
+	}
 
 	// Check the flags:
 	if c.format != outputFormatJson && c.format != outputFormatYaml {
@@ -251,6 +254,13 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+func ensureUpdatable(helper reflection.ObjectHelper) error {
+	if helper.IsUpdatable() {
+		return nil
+	}
+	return fmt.Errorf("object type %q is immutable; updates are not supported", helper.FullName())
 }
 
 // findEditor tries to find the name of the editor command. It will first try with the content of the `EDITOR` and
@@ -390,7 +400,7 @@ func completeObjectTypes(cmd *cobra.Command, args []string, toComplete string) (
 	if len(args) != 0 {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
-	return reflection.ObjectTypeNames(packages.Public...), cobra.ShellCompDirectiveNoFileComp
+	return reflection.UpdatableObjectTypeNames(packages.Public...), cobra.ShellCompDirectiveNoFileComp
 }
 
 const shortHelp = `Edit objects`

@@ -35,7 +35,6 @@ const (
 	Subnets_List_FullMethodName   = "/osac.public.v1.Subnets/List"
 	Subnets_Get_FullMethodName    = "/osac.public.v1.Subnets/Get"
 	Subnets_Create_FullMethodName = "/osac.public.v1.Subnets/Create"
-	Subnets_Update_FullMethodName = "/osac.public.v1.Subnets/Update"
 	Subnets_Delete_FullMethodName = "/osac.public.v1.Subnets/Delete"
 )
 
@@ -49,8 +48,6 @@ type SubnetsClient interface {
 	Get(ctx context.Context, in *SubnetsGetRequest, opts ...grpc.CallOption) (*SubnetsGetResponse, error)
 	// Creates a new subnet.
 	Create(ctx context.Context, in *SubnetsCreateRequest, opts ...grpc.CallOption) (*SubnetsCreateResponse, error)
-	// Updates an existing subnet.
-	Update(ctx context.Context, in *SubnetsUpdateRequest, opts ...grpc.CallOption) (*SubnetsUpdateResponse, error)
 	// Deletes a subnet.
 	Delete(ctx context.Context, in *SubnetsDeleteRequest, opts ...grpc.CallOption) (*SubnetsDeleteResponse, error)
 }
@@ -93,16 +90,6 @@ func (c *subnetsClient) Create(ctx context.Context, in *SubnetsCreateRequest, op
 	return out, nil
 }
 
-func (c *subnetsClient) Update(ctx context.Context, in *SubnetsUpdateRequest, opts ...grpc.CallOption) (*SubnetsUpdateResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(SubnetsUpdateResponse)
-	err := c.cc.Invoke(ctx, Subnets_Update_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *subnetsClient) Delete(ctx context.Context, in *SubnetsDeleteRequest, opts ...grpc.CallOption) (*SubnetsDeleteResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SubnetsDeleteResponse)
@@ -123,8 +110,6 @@ type SubnetsServer interface {
 	Get(context.Context, *SubnetsGetRequest) (*SubnetsGetResponse, error)
 	// Creates a new subnet.
 	Create(context.Context, *SubnetsCreateRequest) (*SubnetsCreateResponse, error)
-	// Updates an existing subnet.
-	Update(context.Context, *SubnetsUpdateRequest) (*SubnetsUpdateResponse, error)
 	// Deletes a subnet.
 	Delete(context.Context, *SubnetsDeleteRequest) (*SubnetsDeleteResponse, error)
 	mustEmbedUnimplementedSubnetsServer()
@@ -145,9 +130,6 @@ func (UnimplementedSubnetsServer) Get(context.Context, *SubnetsGetRequest) (*Sub
 }
 func (UnimplementedSubnetsServer) Create(context.Context, *SubnetsCreateRequest) (*SubnetsCreateResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Create not implemented")
-}
-func (UnimplementedSubnetsServer) Update(context.Context, *SubnetsUpdateRequest) (*SubnetsUpdateResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Update not implemented")
 }
 func (UnimplementedSubnetsServer) Delete(context.Context, *SubnetsDeleteRequest) (*SubnetsDeleteResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
@@ -227,24 +209,6 @@ func _Subnets_Create_Handler(srv interface{}, ctx context.Context, dec func(inte
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Subnets_Update_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SubnetsUpdateRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(SubnetsServer).Update(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Subnets_Update_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(SubnetsServer).Update(ctx, req.(*SubnetsUpdateRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _Subnets_Delete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SubnetsDeleteRequest)
 	if err := dec(in); err != nil {
@@ -281,10 +245,6 @@ var Subnets_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Create",
 			Handler:    _Subnets_Create_Handler,
-		},
-		{
-			MethodName: "Update",
-			Handler:    _Subnets_Update_Handler,
 		},
 		{
 			MethodName: "Delete",

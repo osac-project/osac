@@ -16,7 +16,6 @@ syntax = "proto3";
 package osac.public.v1;
 
 import "google/api/annotations.proto";
-import "google/protobuf/field_mask.proto";
 import "osac/public/v1/external_ip_type.proto";
 
 message ExternalIPsListRequest {
@@ -84,20 +83,6 @@ message ExternalIPsCreateResponse {
   ExternalIP object = 1;
 }
 
-message ExternalIPsUpdateRequest {
-  ExternalIP object = 1;
-  google.protobuf.FieldMask update_mask = 2;
-
-  // Lock enables optimistic locking. When set to true, the server verifies that the current version of the object
-  // matches the value of the metadata.version field of the submitted object. If they differ the update will be
-  // rejected. This is useful to prevent lost updates when multiple clients are modifying the same object concurrently.
-  bool lock = 3;
-}
-
-message ExternalIPsUpdateResponse {
-  ExternalIP object = 1;
-}
-
 message ExternalIPsDeleteRequest {
   string id = 1;
 }
@@ -122,15 +107,6 @@ service ExternalIPs {
   rpc Create(ExternalIPsCreateRequest) returns (ExternalIPsCreateResponse) {
     option (google.api.http) = {
       post: "/api/fulfillment/v1/external_ips"
-      body: "object"
-      response_body: "object"
-    };
-  }
-
-  // Updates an existing external IP. Allows modifying metadata (labels, annotations). The spec.pool field is immutable.
-  rpc Update(ExternalIPsUpdateRequest) returns (ExternalIPsUpdateResponse) {
-    option (google.api.http) = {
-      patch: "/api/fulfillment/v1/external_ips/{object.id}"
       body: "object"
       response_body: "object"
     };

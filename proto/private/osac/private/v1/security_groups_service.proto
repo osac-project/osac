@@ -89,6 +89,7 @@ message SecurityGroupsCreateResponse {
 }
 
 message SecurityGroupsUpdateRequest {
+  option (cleanapi.message).private = true;
   SecurityGroup object = 1;
   google.protobuf.FieldMask update_mask = 2;
 
@@ -99,6 +100,7 @@ message SecurityGroupsUpdateRequest {
 }
 
 message SecurityGroupsUpdateResponse {
+  option (cleanapi.message).private = true;
   SecurityGroup object = 1;
 }
 
@@ -142,6 +144,7 @@ service SecurityGroups {
 
   // Updates an existing security group.
   rpc Update(SecurityGroupsUpdateRequest) returns (SecurityGroupsUpdateResponse) {
+    option (cleanapi.method).private = true;
     option (google.api.http) = {
       patch: "/api/private/v1/security_groups/{object.id}"
       body: "object"

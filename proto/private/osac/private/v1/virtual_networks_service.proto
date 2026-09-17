@@ -89,6 +89,7 @@ message VirtualNetworksCreateResponse {
 }
 
 message VirtualNetworksUpdateRequest {
+  option (cleanapi.message).private = true;
   VirtualNetwork object = 1;
   google.protobuf.FieldMask update_mask = 2;
 
@@ -99,6 +100,7 @@ message VirtualNetworksUpdateRequest {
 }
 
 message VirtualNetworksUpdateResponse {
+  option (cleanapi.message).private = true;
   VirtualNetwork object = 1;
 }
 
@@ -142,6 +144,7 @@ service VirtualNetworks {
 
   // Updates an existing virtual network.
   rpc Update(VirtualNetworksUpdateRequest) returns (VirtualNetworksUpdateResponse) {
+    option (cleanapi.method).private = true;
     option (google.api.http) = {
       patch: "/api/private/v1/virtual_networks/{object.id}"
       body: "object"

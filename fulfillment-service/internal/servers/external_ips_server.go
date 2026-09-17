@@ -238,55 +238,6 @@ func (s *ExternalIPsServer) Create(ctx context.Context,
 	return
 }
 
-func (s *ExternalIPsServer) Update(ctx context.Context,
-	request *publicv1.ExternalIPsUpdateRequest) (response *publicv1.ExternalIPsUpdateResponse, err error) {
-	publicExternalIP := request.GetObject()
-	if publicExternalIP == nil {
-		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object is mandatory")
-		return
-	}
-	if err = validatePublicMetadataUpdateMask(request.GetUpdateMask()); err != nil {
-		return
-	}
-	privateExternalIP := &privatev1.ExternalIP{}
-	err = s.inMapper.Copy(ctx, publicExternalIP, privateExternalIP)
-	if err != nil {
-		s.logger.ErrorContext(
-			ctx,
-			"Failed to map public external IP to private",
-			slog.Any("error", err),
-		)
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process external IP")
-		return
-	}
-
-	privateRequest := &privatev1.ExternalIPsUpdateRequest{}
-	privateRequest.SetObject(privateExternalIP)
-	privateRequest.SetUpdateMask(request.GetUpdateMask())
-	privateRequest.SetLock(request.GetLock())
-	privateResponse, err := s.delegate.Update(ctx, privateRequest)
-	if err != nil {
-		return nil, err
-	}
-
-	updatedPrivateExternalIP := privateResponse.GetObject()
-	updatedPublicExternalIP := &publicv1.ExternalIP{}
-	err = s.outMapper.Copy(ctx, updatedPrivateExternalIP, updatedPublicExternalIP)
-	if err != nil {
-		s.logger.ErrorContext(
-			ctx,
-			"Failed to map private external IP to public",
-			slog.Any("error", err),
-		)
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to process external IP")
-		return
-	}
-
-	response = &publicv1.ExternalIPsUpdateResponse{}
-	response.SetObject(updatedPublicExternalIP)
-	return
-}
-
 func (s *ExternalIPsServer) Delete(ctx context.Context,
 	request *publicv1.ExternalIPsDeleteRequest) (response *publicv1.ExternalIPsDeleteResponse, err error) {
 	privateRequest := &privatev1.ExternalIPsDeleteRequest{}

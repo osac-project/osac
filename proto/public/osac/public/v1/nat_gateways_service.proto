@@ -16,7 +16,6 @@ syntax = "proto3";
 package osac.public.v1;
 
 import "google/api/annotations.proto";
-import "google/protobuf/field_mask.proto";
 import "osac/public/v1/nat_gateway_type.proto";
 
 message NATGatewaysListRequest {
@@ -84,20 +83,6 @@ message NATGatewaysCreateResponse {
   NATGateway object = 1;
 }
 
-message NATGatewaysUpdateRequest {
-  NATGateway object = 1;
-  google.protobuf.FieldMask update_mask = 2;
-
-  // Lock enables optimistic locking. When set to true, the server verifies that the current version of the object
-  // matches the value of the metadata.version field of the submitted object. If they differ the update will be
-  // rejected. This is useful to prevent lost updates when multiple clients are modifying the same object concurrently.
-  bool lock = 3;
-}
-
-message NATGatewaysUpdateResponse {
-  NATGateway object = 1;
-}
-
 message NATGatewaysDeleteRequest {
   string id = 1;
 }
@@ -122,15 +107,6 @@ service NATGateways {
   rpc Create(NATGatewaysCreateRequest) returns (NATGatewaysCreateResponse) {
     option (google.api.http) = {
       post: "/api/fulfillment/v1/nat_gateways"
-      body: "object"
-      response_body: "object"
-    };
-  }
-
-  // Updates an existing NAT gateway. The spec fields are immutable; only metadata (labels, annotations) can be changed.
-  rpc Update(NATGatewaysUpdateRequest) returns (NATGatewaysUpdateResponse) {
-    option (google.api.http) = {
-      patch: "/api/fulfillment/v1/nat_gateways/{object.id}"
       body: "object"
       response_body: "object"
     };

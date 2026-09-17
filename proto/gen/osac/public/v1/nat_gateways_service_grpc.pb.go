@@ -35,7 +35,6 @@ const (
 	NATGateways_List_FullMethodName   = "/osac.public.v1.NATGateways/List"
 	NATGateways_Get_FullMethodName    = "/osac.public.v1.NATGateways/Get"
 	NATGateways_Create_FullMethodName = "/osac.public.v1.NATGateways/Create"
-	NATGateways_Update_FullMethodName = "/osac.public.v1.NATGateways/Update"
 	NATGateways_Delete_FullMethodName = "/osac.public.v1.NATGateways/Delete"
 )
 
@@ -49,8 +48,6 @@ type NATGatewaysClient interface {
 	Get(ctx context.Context, in *NATGatewaysGetRequest, opts ...grpc.CallOption) (*NATGatewaysGetResponse, error)
 	// Creates a new NAT gateway. Configures outbound SNAT for a VirtualNetwork using an ExternalIP.
 	Create(ctx context.Context, in *NATGatewaysCreateRequest, opts ...grpc.CallOption) (*NATGatewaysCreateResponse, error)
-	// Updates an existing NAT gateway. The spec fields are immutable; only metadata (labels, annotations) can be changed.
-	Update(ctx context.Context, in *NATGatewaysUpdateRequest, opts ...grpc.CallOption) (*NATGatewaysUpdateResponse, error)
 	// Deletes a NAT gateway. The SNAT rule is removed and the ExternalIP is released for other use.
 	Delete(ctx context.Context, in *NATGatewaysDeleteRequest, opts ...grpc.CallOption) (*NATGatewaysDeleteResponse, error)
 }
@@ -93,16 +90,6 @@ func (c *nATGatewaysClient) Create(ctx context.Context, in *NATGatewaysCreateReq
 	return out, nil
 }
 
-func (c *nATGatewaysClient) Update(ctx context.Context, in *NATGatewaysUpdateRequest, opts ...grpc.CallOption) (*NATGatewaysUpdateResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(NATGatewaysUpdateResponse)
-	err := c.cc.Invoke(ctx, NATGateways_Update_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *nATGatewaysClient) Delete(ctx context.Context, in *NATGatewaysDeleteRequest, opts ...grpc.CallOption) (*NATGatewaysDeleteResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(NATGatewaysDeleteResponse)
@@ -123,8 +110,6 @@ type NATGatewaysServer interface {
 	Get(context.Context, *NATGatewaysGetRequest) (*NATGatewaysGetResponse, error)
 	// Creates a new NAT gateway. Configures outbound SNAT for a VirtualNetwork using an ExternalIP.
 	Create(context.Context, *NATGatewaysCreateRequest) (*NATGatewaysCreateResponse, error)
-	// Updates an existing NAT gateway. The spec fields are immutable; only metadata (labels, annotations) can be changed.
-	Update(context.Context, *NATGatewaysUpdateRequest) (*NATGatewaysUpdateResponse, error)
 	// Deletes a NAT gateway. The SNAT rule is removed and the ExternalIP is released for other use.
 	Delete(context.Context, *NATGatewaysDeleteRequest) (*NATGatewaysDeleteResponse, error)
 	mustEmbedUnimplementedNATGatewaysServer()
@@ -145,9 +130,6 @@ func (UnimplementedNATGatewaysServer) Get(context.Context, *NATGatewaysGetReques
 }
 func (UnimplementedNATGatewaysServer) Create(context.Context, *NATGatewaysCreateRequest) (*NATGatewaysCreateResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Create not implemented")
-}
-func (UnimplementedNATGatewaysServer) Update(context.Context, *NATGatewaysUpdateRequest) (*NATGatewaysUpdateResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Update not implemented")
 }
 func (UnimplementedNATGatewaysServer) Delete(context.Context, *NATGatewaysDeleteRequest) (*NATGatewaysDeleteResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
@@ -227,24 +209,6 @@ func _NATGateways_Create_Handler(srv interface{}, ctx context.Context, dec func(
 	return interceptor(ctx, in, info, handler)
 }
 
-func _NATGateways_Update_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(NATGatewaysUpdateRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(NATGatewaysServer).Update(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: NATGateways_Update_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(NATGatewaysServer).Update(ctx, req.(*NATGatewaysUpdateRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _NATGateways_Delete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(NATGatewaysDeleteRequest)
 	if err := dec(in); err != nil {
@@ -281,10 +245,6 @@ var NATGateways_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Create",
 			Handler:    _NATGateways_Create_Handler,
-		},
-		{
-			MethodName: "Update",
-			Handler:    _NATGateways_Update_Handler,
 		},
 		{
 			MethodName: "Delete",

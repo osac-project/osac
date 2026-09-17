@@ -31,6 +31,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"gopkg.in/yaml.v3"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/updatable"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 	"github.com/osac-project/osac/fulfillment-service/internal/packages"
@@ -142,7 +143,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		})
 		return nil
 	}
-	if err := ensureUpdatable(c.helper); err != nil {
+	if err := updatable.Ensure(c.helper); err != nil {
 		return err
 	}
 
@@ -254,13 +255,6 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
-}
-
-func ensureUpdatable(helper reflection.ObjectHelper) error {
-	if helper.IsUpdatable() {
-		return nil
-	}
-	return fmt.Errorf("object type %q is immutable; updates are not supported", helper.FullName())
 }
 
 // findEditor tries to find the name of the editor command. It will first try with the content of the `EDITOR` and

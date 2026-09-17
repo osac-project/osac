@@ -41,7 +41,6 @@ var _ = Describe("buildSpec", func() {
 		portFrom := int32(80)
 		portTo := int32(443)
 		ipv4 := "10.0.0.0/8"
-		ipv6 := "2001:db8::/32"
 
 		t := &task{
 			securityGroup: privatev1.SecurityGroup_builder{
@@ -59,7 +58,7 @@ var _ = Describe("buildSpec", func() {
 					Egress: []*privatev1.SecurityRule{
 						privatev1.SecurityRule_builder{
 							Protocol: privatev1.Protocol_PROTOCOL_ALL,
-							Ipv6Cidr: &ipv6,
+							Ipv4Cidr: &ipv4,
 						}.Build(),
 					},
 				}.Build(),
@@ -75,10 +74,12 @@ var _ = Describe("buildSpec", func() {
 		Expect(*spec.IngressRules[0].PortFrom).To(Equal(int32(80)))
 		Expect(*spec.IngressRules[0].PortTo).To(Equal(int32(443)))
 		Expect(spec.IngressRules[0].SourceCIDR).To(Equal("10.0.0.0/8"))
+		Expect(spec.IngressRules[0].DestinationCIDR).To(BeEmpty())
 
 		Expect(spec.EgressRules).To(HaveLen(1))
 		Expect(string(spec.EgressRules[0].Protocol)).To(Equal("all"))
-		Expect(spec.EgressRules[0].DestinationCIDR).To(Equal("2001:db8::/32"))
+		Expect(spec.EgressRules[0].DestinationCIDR).To(Equal("10.0.0.0/8"))
+		Expect(spec.EgressRules[0].SourceCIDR).To(BeEmpty())
 		Expect(spec.EgressRules[0].PortFrom).To(BeNil())
 		Expect(spec.EgressRules[0].PortTo).To(BeNil())
 	})

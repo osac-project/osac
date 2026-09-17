@@ -379,21 +379,23 @@ func (t *task) buildSpec() osacv1alpha1.SecurityGroupSpec {
 	// Add ingress rules if present:
 	ingressRules := t.securityGroup.GetSpec().GetIngress()
 	if len(ingressRules) > 0 {
-		spec.IngressRules = convertRules(ingressRules)
+		spec.IngressRules = convertRules(ingressRules, true)
 	}
 
 	// Add egress rules if present:
 	egressRules := t.securityGroup.GetSpec().GetEgress()
 	if len(egressRules) > 0 {
-		spec.EgressRules = convertRules(egressRules)
+		spec.EgressRules = convertRules(egressRules, false)
 	}
 
 	return spec
 }
 
 // convertRules converts a slice of proto SecurityRule messages to a slice of typed
-// SecurityRule structs for the Kubernetes SecurityGroup object.
-func convertRules(rules []*privatev1.SecurityRule) []osacv1alpha1.SecurityRule {
+// SecurityRule structs for the Kubernetes SecurityGroup object. The proto has a
+// single IPv4 CIDR field whose meaning depends on direction: ingress is sourced
+// from the CIDR, while egress is destined for it.
+func convertRules(rules []*privatev1.SecurityRule, ingress bool) []osacv1alpha1.SecurityRule {
 	result := make([]osacv1alpha1.SecurityRule, 0, len(rules))
 	for _, rule := range rules {
 		r := osacv1alpha1.SecurityRule{
@@ -408,10 +410,11 @@ func convertRules(rules []*privatev1.SecurityRule) []osacv1alpha1.SecurityRule {
 			r.PortTo = &portTo
 		}
 		if rule.HasIpv4Cidr() {
-			r.SourceCIDR = rule.GetIpv4Cidr()
-		}
-		if rule.HasIpv6Cidr() {
-			r.DestinationCIDR = rule.GetIpv6Cidr()
+			if ingress {
+				r.SourceCIDR = rule.GetIpv4Cidr()
+			} else {
+				r.DestinationCIDR = rule.GetIpv4Cidr()
+			}
 		}
 		result = append(result, r)
 	}

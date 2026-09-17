@@ -410,10 +410,5 @@ func (t *task) buildSpec() osacv1alpha1.SubnetSpec {
 		spec.IPv4CIDR = t.subnet.GetSpec().GetIpv4Cidr()
 	}
 
-	// Add IPv6 CIDR if present:
-	if t.subnet.GetSpec().HasIpv6Cidr() {
-		spec.IPv6CIDR = t.subnet.GetSpec().GetIpv6Cidr()
-	}
-
 	return spec
 }

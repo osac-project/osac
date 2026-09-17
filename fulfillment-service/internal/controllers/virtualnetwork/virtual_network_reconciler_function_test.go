@@ -40,7 +40,7 @@ import (
 )
 
 var _ = Describe("buildSpec", func() {
-	It("Includes all fields when IPv4 and IPv6 are present with capabilities", func() {
+	It("Copies only the canonical IPv4 field when a legacy IPv6 field is present", func() {
 		ipv4 := "10.0.0.0/16"
 		ipv6 := "2001:db8::/48"
 		region := "us-east-1"
@@ -63,7 +63,7 @@ var _ = Describe("buildSpec", func() {
 		Expect(spec.Region).To(Equal(region))
 		Expect(spec.NetworkClass).To(Equal(networkClass))
 		Expect(spec.IPv4CIDR).To(Equal(ipv4))
-		Expect(spec.IPv6CIDR).To(Equal(ipv6))
+		Expect(spec.IPv6CIDR).To(BeEmpty())
 	})
 
 	It("Includes only IPv4 when IPv6 is not present", func() {
@@ -90,7 +90,7 @@ var _ = Describe("buildSpec", func() {
 		Expect(spec.IPv6CIDR).To(BeEmpty())
 	})
 
-	It("Includes only IPv6 when IPv4 is not present", func() {
+	It("Does not project a legacy IPv6-only object", func() {
 		ipv6 := "fd00:1234::/32"
 		region := "ap-south-1"
 		networkClass := "ovn-kubernetes"
@@ -111,7 +111,7 @@ var _ = Describe("buildSpec", func() {
 		Expect(spec.Region).To(Equal(region))
 		Expect(spec.NetworkClass).To(Equal(networkClass))
 		Expect(spec.IPv4CIDR).To(BeEmpty())
-		Expect(spec.IPv6CIDR).To(Equal(ipv6))
+		Expect(spec.IPv6CIDR).To(BeEmpty())
 	})
 
 	It("Handles missing capabilities field", func() {

@@ -65,7 +65,7 @@
         name: osac.service.publish_templates
       vars:
         osac_fulfillment_service_uri: "http://127.0.0.1:{{ test_mock_port }}"
-        osac_fulfillment_service_token: "test-token"
+        osac_fulfillment_service_token: "mock_fulfillment_service_token"
         publish_templates_validate_certs: false
         osac_cluster_templates:
           - id: "new-cluster-template"
@@ -141,7 +141,7 @@
         name: osac.service.publish_templates
       vars:
         osac_fulfillment_service_uri: "http://127.0.0.1:{{ test_mock_port }}"
-        osac_fulfillment_service_token: "test-token"
+        osac_fulfillment_service_token: "mock_fulfillment_service_token"
         publish_templates_validate_certs: false
         osac_cluster_templates:
           - id: "existing-cluster-template"
@@ -219,7 +219,7 @@
         name: osac.service.publish_templates
       vars:
         osac_fulfillment_service_uri: "http://127.0.0.1:{{ test_mock_port }}"
-        osac_fulfillment_service_token: "test-token"
+        osac_fulfillment_service_token: "mock_fulfillment_service_token"
         publish_templates_validate_certs: false
         osac_cluster_templates:
           - id: "edge-case-cluster"
@@ -272,7 +272,7 @@
             name: osac.service.publish_templates
           vars:
             osac_fulfillment_service_uri: "http://fulfillment-api.example.com:8000"
-            osac_fulfillment_service_token: "test-token"
+            osac_fulfillment_service_token: "mock_fulfillment_service_token"
             publish_templates_validate_certs: false
             osac_cluster_templates:
               - id: "should-not-reach"
@@ -287,12 +287,15 @@
         - name: Verify failure was the expected URI-scheme rejection
           ansible.builtin.assert:
             that:
+              - ansible_failed_task.name is search('Validate publish endpoint URI schemes')
               - >-
-                ansible_failed_result.msg is search('cleartext HTTP', ignorecase=True)
-                or ansible_failed_result.msg is search('Refusing to send', ignorecase=True)
+                ansible_failed_result.results | default([])
+                | selectattr('msg', 'defined')
+                | selectattr('msg', 'search', 'Fulfillment-service URI must use HTTPS')
+                | list | length > 0
             fail_msg: >-
-              Role failed, but not with the expected cleartext-rejection message.
-              Got: {{ ansible_failed_result.msg }}
+              Role failed, but not from the expected URI-scheme validation task.
+              Failed task: {{ ansible_failed_task.name }}
             success_msg: "OSAC-5383 cleartext rejection passed: non-loopback http:// correctly refused"
 
 # ──────────────────────────────────────────────────────────────
@@ -332,7 +335,7 @@
         name: osac.service.publish_templates
       vars:
         osac_fulfillment_service_uri: "http://127.0.0.1:{{ test_mock_port }}"
-        osac_fulfillment_service_token: "test-token"
+        osac_fulfillment_service_token: "mock_fulfillment_service_token"
         publish_templates_validate_certs: false
         osac_cluster_templates:
           - id: "loopback-cluster"

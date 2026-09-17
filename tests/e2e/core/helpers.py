@@ -366,9 +366,17 @@ def assert_cluster_order_deleting_event(*, k8s: K8sClient, name: str) -> None:
 
 
 def wait_for_cluster_ready(*, k8s: K8sClient, name: str) -> None:
-    # Available=True is the single completion signal for a fully provisioned
-    # ClusterOrder. It is mapped to the fulfillment API's READY condition.
-    wait_for_cluster_order_condition(k8s=k8s, name=name, condition_type="Available")
+    # Must stay safely above osac-aap's own wait_for_clusteroperators_retries
+    # budget (60 min) plus earlier steps in the same AAP job (create hosted
+    # cluster, retrieve kubeconfig, etc.), or this times out first with a
+    # less useful error while the ClusterOrder is still legitimately Progressing.
+    poll_until(
+        fn=lambda: k8s.get_cluster_order_phase(name=name, checked=False),
+        until=lambda v: v == "Ready",
+        retries=480,
+        delay=15,
+        description=f"{name} ClusterOrder Ready",
+    )
 
 
 def wait_for_cluster_deletion(*, k8s: K8sClient, name: str) -> None:

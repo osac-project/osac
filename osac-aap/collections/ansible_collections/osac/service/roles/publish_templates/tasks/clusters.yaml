@@ -2,6 +2,7 @@
   ansible.builtin.uri:
     url: "{{ publish_templates_cluster_api_endpoint }}"
     validate_certs: "{{ publish_templates_validate_certs | default(true) | bool }}"
+    follow_redirects: none
     headers:
       authorization: Bearer {{ osac_fulfillment_service_token }}
     status_code: [200, 404, 503]
@@ -29,6 +30,7 @@
   ansible.builtin.uri:
     url: "{{ publish_templates_cluster_api_endpoint }}/{{ template.id }}"
     validate_certs: "{{ publish_templates_validate_certs | default(true) | bool }}"
+    follow_redirects: none
     method: PATCH
     headers:
       authorization: Bearer {{ osac_fulfillment_service_token }}
@@ -44,6 +46,7 @@
   ansible.builtin.uri:
     url: "{{ publish_templates_cluster_api_endpoint }}"
     validate_certs: "{{ publish_templates_validate_certs | default(true) | bool }}"
+    follow_redirects: none
     method: POST
     headers:
       authorization: Bearer {{ osac_fulfillment_service_token }}

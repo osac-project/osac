@@ -444,6 +444,9 @@ func (c *ControllerServer) pollVolumeUntilAvailable(ctx context.Context, volumeI
 		case fulfillment.VolumeStateAvailable:
 			return vol, nil
 		case fulfillment.VolumeStateError:
+			if vol.Message != "" {
+				return nil, status.Errorf(codes.Internal, "volume %s entered error state: %s", volumeID, vol.Message)
+			}
 			return nil, status.Errorf(codes.Internal, "volume %s entered error state", volumeID)
 		case fulfillment.VolumeStateCreating:
 			// continue polling

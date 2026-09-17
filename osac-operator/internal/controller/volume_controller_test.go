@@ -477,6 +477,8 @@ var _ = Describe("VolumeReconciler", func() {
 		provisioned := &osacv1alpha1.Volume{}
 		Expect(k8sClient.Get(testCtx, types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace}, provisioned)).To(Succeed())
 		Expect(provisioned.Status.VendorVolumeID).To(HavePrefix("mock-"))
+		provisioned.Status.VendorContext = map[string]string{"logicalvolume": "pvc-test-vol-abc"}
+		Expect(k8sClient.Status().Update(testCtx, provisioned)).To(Succeed())
 
 		Expect(k8sClient.Delete(testCtx, vol)).To(Succeed())
 
@@ -498,6 +500,7 @@ var _ = Describe("VolumeReconciler", func() {
 		Expect(req.Tenant).To(Equal("acme"))
 		Expect(req.Provider).To(Equal(provisioned.Status.Provider))
 		Expect(req.VendorVolumeID).To(Equal(provisioned.Status.VendorVolumeID))
+		Expect(req.VendorContext).To(Equal(provisioned.Status.VendorContext))
 	})
 
 	It("dispatches by provider and does not call another registered provider", func() {

@@ -198,3 +198,13 @@ rules:
   - get
   - list
   - watch
+- apiGroups:
+  - topolvm.io
+  resources:
+  - logicalvolumes
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - watch

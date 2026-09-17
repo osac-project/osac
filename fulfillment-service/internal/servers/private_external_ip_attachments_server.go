@@ -47,6 +47,7 @@ type PrivateExternalIPAttachmentsServer struct {
 	privatev1.UnimplementedExternalIPAttachmentsServer
 
 	logger                  *slog.Logger
+	tenancyLogic            auth.TenancyLogic
 	generic                 *GenericServer[*privatev1.ExternalIPAttachment]
 	externalIPDao           *dao.GenericDAO[*privatev1.ExternalIP]
 	computeInstanceDao      *dao.GenericDAO[*privatev1.ComputeInstance]
@@ -170,6 +171,7 @@ func (b *PrivateExternalIPAttachmentsServerBuilder) Build() (*PrivateExternalIPA
 
 	result := &PrivateExternalIPAttachmentsServer{
 		logger:                  b.logger,
+		tenancyLogic:            b.tenancyLogic,
 		generic:                 generic,
 		externalIPDao:           externalIPDao,
 		computeInstanceDao:      computeInstanceDao,
@@ -217,9 +219,17 @@ func (s *PrivateExternalIPAttachmentsServer) Create(ctx context.Context,
 	spec := attachment.GetSpec()
 	externalIPRef := spec.GetExternalIp()
 	externalIPKey := refKey(externalIPRef)
-
-	err = s.validateExternalIPReference(ctx, externalIPKey)
+	attachmentTenant, err := resolveObjectTenant(ctx, attachment.GetMetadata(), s.tenancyLogic)
 	if err != nil {
+		return
+	}
+
+	var externalIP *privatev1.ExternalIP
+	externalIP, err = s.validateExternalIPReference(ctx, externalIPKey)
+	if err != nil {
+		return
+	}
+	if err = validateTenantMatch(attachmentTenant, externalIP, "ExternalIP", externalIPKey); err != nil {
 		return
 	}
 
@@ -417,7 +427,7 @@ func validateImmutableFieldsExternalIPAttachment(
 }
 
 func (s *PrivateExternalIPAttachmentsServer) validateExternalIPReference(
-	ctx context.Context, externalIPID string) error {
+	ctx context.Context, externalIPID string) (*privatev1.ExternalIP, error) {
 	getResponse, err := s.externalIPDao.Get().
 		SetId(externalIPID).
 		SetLock(true).
@@ -425,24 +435,24 @@ func (s *PrivateExternalIPAttachmentsServer) validateExternalIPReference(
 	if err != nil {
 		var notFoundErr *dao.ErrNotFound
 		if errors.As(err, &notFoundErr) {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"ExternalIP '%s' does not exist", externalIPID)
 		}
 		s.logger.ErrorContext(ctx, "Failed to query ExternalIP",
 			slog.String("external_ip_id", externalIPID),
 			slog.Any("error", err))
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to validate external_ip")
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to validate external_ip")
 	}
 
 	externalIP := getResponse.GetObject()
 
 	if externalIP.GetStatus().GetState() != privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED {
-		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+		return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition,
 			"ExternalIP '%s' is not in ALLOCATED state (current state: %s)",
 			externalIPID, externalIP.GetStatus().GetState().String())
 	}
 
-	return nil
+	return externalIP, nil
 }
 
 func (s *PrivateExternalIPAttachmentsServer) validateTargetReference(

@@ -777,10 +777,18 @@ var _ = Describe("Private subnets server", func() {
 			})
 
 			It("rejects subnet with different tenant than parent", func() {
-				// Note: SUB-VAL-09 tenant isolation is enforced by tenancy logic at the DAO layer,
-				// not in validation logic. This test documents the expected behavior but actual
-				// enforcement happens in servers_tenancy_test.go (see SUB-VAL-12, SUB-VAL-13).
-				// In validation, we verify parent exists and is accessible.
+				vn := createVirtualNetwork(ctx, "10.0.0.0/16", "")
+				subnet := privatev1.Subnet_builder{
+					Metadata: privatev1.Metadata_builder{Tenant: "different-tenant"}.Build(),
+					Spec: privatev1.SubnetSpec_builder{
+						Ipv4Cidr:       new("10.0.1.0/24"),
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vn.GetId()}.Build(),
+					}.Build(),
+				}.Build()
+
+				err := server.validateSubnet(ctx, subnet, nil)
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(err).To(MatchError(ContainSubstring("belongs to tenant")))
 			})
 		})
 

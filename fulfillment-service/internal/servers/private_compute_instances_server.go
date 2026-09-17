@@ -437,7 +437,22 @@ func (s *PrivateComputeInstancesServer) Update(ctx context.Context,
 	// Only validate fields affected by the update mask. With a field mask the object
 	// is sparse so validating fields absent from it would fail incorrectly.
 	mask := request.GetUpdateMask()
-	isBeingDeleted := request.GetObject().GetMetadata().GetDeletionTimestamp() != nil
+	updatingNetworkAttachments := hasMaskPrefix(mask, "spec.network_attachments")
+	isBeingDeleted := false
+	if updatingNetworkAttachments {
+		// The request object may not contain metadata when a field mask is used. Read the
+		// persisted object so deletion handling is based on the state that generic.Update
+		// will merge and persist, rather than on the sparse request.
+		currentResponse, getErr := s.generic.dao.Get().
+			SetId(request.GetObject().GetId()).
+			SetLock(true).
+			Do(ctx)
+		if getErr != nil {
+			return nil, getErr
+		}
+		isBeingDeleted = currentResponse.GetObject().GetMetadata().GetDeletionTimestamp() != nil ||
+			request.GetObject().GetMetadata().GetDeletionTimestamp() != nil
+	}
 	if err = s.validateUserDataMutualExclusionForUpdate(ctx, request); err != nil {
 		return
 	}

@@ -46,6 +46,7 @@ type PrivateSubnetsServer struct {
 	privatev1.UnimplementedSubnetsServer
 
 	logger            *slog.Logger
+	tenancyLogic      auth.TenancyLogic
 	generic           *GenericServer[*privatev1.Subnet]
 	virtualNetworkDao *dao.GenericDAO[*privatev1.VirtualNetwork]
 }
@@ -126,6 +127,7 @@ func (b *PrivateSubnetsServerBuilder) Build() (result *PrivateSubnetsServer, err
 	// Create and populate the object:
 	result = &PrivateSubnetsServer{
 		logger:            b.logger,
+		tenancyLogic:      b.tenancyLogic,
 		generic:           generic,
 		virtualNetworkDao: virtualNetworkDao,
 	}
@@ -258,7 +260,7 @@ func (s *PrivateSubnetsServer) validateSubnet(ctx context.Context,
 	// Only on Create (existingSubnet == nil) or if virtual_network differs (SUB-VAL-11 above prevents
 	// VN changes on Update, so the second branch is effectively dead but kept for safety).
 	if existingSubnet == nil || refKey(spec.GetVirtualNetwork()) != refKey(existingSubnet.GetSpec().GetVirtualNetwork()) {
-		if err := s.validateVirtualNetworkReference(ctx, spec); err != nil {
+		if err := s.validateVirtualNetworkReference(ctx, newSubnet); err != nil {
 			return err
 		}
 	}
@@ -304,7 +306,8 @@ func validateCIDRSubset(subnetCIDR string, parentCIDR string, ipVersion string) 
 // validateVirtualNetworkReference validates that the referenced VirtualNetwork exists, is in READY state,
 // and has matching IP families.
 func (s *PrivateSubnetsServer) validateVirtualNetworkReference(ctx context.Context,
-	spec *privatev1.SubnetSpec) error {
+	subnet *privatev1.Subnet) error {
+	spec := subnet.GetSpec()
 
 	virtualNetworkID := spec.GetVirtualNetwork()
 	if virtualNetworkID == nil {
@@ -328,6 +331,13 @@ func (s *PrivateSubnetsServer) validateVirtualNetworkReference(ctx context.Conte
 	}
 
 	virtualNetwork := getResponse.GetObject()
+	subnetTenant, err := resolveObjectTenant(ctx, subnet.GetMetadata(), s.tenancyLogic)
+	if err != nil {
+		return err
+	}
+	if err := validateTenantMatch(subnetTenant, virtualNetwork, "VirtualNetwork", refKey(virtualNetworkID)); err != nil {
+		return err
+	}
 
 	// SUB-VAL-05: Check parent VirtualNetwork is READY
 	if virtualNetwork.GetStatus().GetState() != privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY {

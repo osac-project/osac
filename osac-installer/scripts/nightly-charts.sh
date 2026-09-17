@@ -581,7 +581,20 @@ push_and_sign_chart() {
         return 1
     fi
 
-    cosign sign --yes "${oci_repo}/${chart_name}@${digest}"
+    # `|| status=$?` (not `if ! cosign ...; then status=$?`) for two
+    # reasons: `!` inverts $? itself, so a `then`-block `status=$?` would
+    # capture the inverted 0/1 boolean, not cosign's real exit code
+    # (confirmed live: that form reported a real signing failure as
+    # status 0); and leaving this as a bare last statement is aborted by
+    # errexit without ever running the RETURN trap above (also confirmed
+    # live -- unlike an explicit `return`, errexit on a function's last
+    # command skips RETURN traps entirely), which would leak output_file.
+    cosign sign --yes "${oci_repo}/${chart_name}@${digest}" || status=$?
+    if [[ "${status}" -ne 0 ]]; then
+        echo "::error::cosign sign failed for ${chart_name} (exit ${status})" >&2
+        rm -f "${output_file}"
+        return "${status}"
+    fi
 }
 
 # Usage: compute_nightly_chart_version <base_tag> <nightly_suffix>

@@ -312,7 +312,7 @@ var _ = Describe("Private volumes server", func() {
 						State:          privatev1.VolumeState_VOLUME_STATE_AVAILABLE,
 						VendorVolumeId: "vast-vol-123",
 						Backend:        "vast-1",
-						Protocol:       privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS,
+						Protocol:       privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
 					}.Build(),
 				}.Build(),
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
@@ -328,8 +328,28 @@ var _ = Describe("Private volumes server", func() {
 			Expect(updateResponse.GetObject().GetStatus().GetVendorVolumeId()).To(Equal("vast-vol-123"))
 			Expect(updateResponse.GetObject().GetStatus().GetBackend()).To(Equal("vast-1"))
 			Expect(updateResponse.GetObject().GetStatus().GetProtocol()).To(Equal(
-				privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS))
+				privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK))
 			Expect(updateResponse.GetObject().GetSpec().GetStorageTier()).To(Equal("gold"))
+		})
+
+		It("Rejects updates that change the protocol", func() {
+			created := createVolume()
+
+			_, err := server.Update(ctx, privatev1.VolumesUpdateRequest_builder{
+				Object: privatev1.Volume_builder{
+					Id: created.GetId(),
+					Status: privatev1.VolumeStatus_builder{
+						Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS,
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.protocol"}},
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			st, ok := status.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(st.Code()).To(Equal(codes.InvalidArgument))
+			Expect(st.Message()).To(ContainSubstring("status.protocol"))
+			Expect(st.Message()).To(ContainSubstring("immutable"))
 		})
 
 		It("Delete removes the object", func() {

@@ -291,15 +291,17 @@ func applyVolumeUpdate(base, update *privatev1.Volume, mask *fieldmaskpb.FieldMa
 				dst[k] = v
 			}
 			base.GetSpec().GetTopology().SetSegments(dst)
+		case "status.protocol":
+			base.GetStatus().SetProtocol(update.GetStatus().GetProtocol())
 		default:
 			// Unknown paths are handled by the generic update layer.
 		}
 	}
 }
 
-// validateVolumeImmutability checks that immutable spec fields have not been changed.
-// storage_tier, size_gib, and access_mode are immutable after creation because they are
-// provisioned directly into the vendor CSI call and cannot be modified post-creation.
+// validateVolumeImmutability checks that immutable volume fields have not been changed.
+// storage_tier, size_gib, access_mode, and protocol are immutable after creation because
+// they are provisioned directly into the vendor CSI call and cannot be modified post-creation.
 func validateVolumeImmutability(merged, existing *privatev1.Volume) error {
 	if merged.GetSpec().GetStorageTier() != existing.GetSpec().GetStorageTier() {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
@@ -316,6 +318,10 @@ func validateVolumeImmutability(merged, existing *privatev1.Volume) error {
 	if !proto.Equal(merged.GetSpec().GetTopology(), existing.GetSpec().GetTopology()) {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"field 'spec.topology' is immutable and cannot be changed after creation")
+	}
+	if merged.GetStatus().GetProtocol() != existing.GetStatus().GetProtocol() {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'status.protocol' is immutable and cannot be changed after creation")
 	}
 	return nil
 }

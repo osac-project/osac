@@ -134,7 +134,7 @@
       ansible.builtin.set_fact:
         _csi_driver_install_converged: >-
           {% set _ns = namespace(ok=false) -%}
-          {% if _csi_driver_install_precheck_status is not none -%}
+          {% if _csi_driver_install_precheck_status is mapping -%}
           {% set _s = _csi_driver_install_precheck_status -%}
           {% set _values = (_s.get('values') or {}) -%}
           {% set _controller = (_values.get('controller') or {}) -%}
@@ -272,7 +272,7 @@
         _csi_driver_install_prior_values: >-
           {{
             (_csi_driver_install_prior_driver_status.get('values') or {})
-            if _csi_driver_install_prior_driver_status is not none
+            if (_csi_driver_install_prior_driver_status is mapping)
             else {}
           }}
 

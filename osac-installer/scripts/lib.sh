@@ -133,19 +133,20 @@ http_json() {
     return 1
 }
 
-# Resolve the nearest real (non-nightly) component release tag reachable from a
-# repo path's HEAD. --match narrows git describe's glob search to tags shaped
-# like "<prefix>/vX.Y.Z" -- scoped by the component prefix, not just a bare
-# "vX.Y.Z", because git tags aren't path-scoped and a bare vX.Y.Z pattern can
-# match an unrelated component's old tag (e.g. fulfillment-service tagged bare
-# vX.Y.Z releases before OSAC-3529 moved it to a component-scoped prefix; that
-# history is still reachable from HEAD). --match is still a glob, not a real
-# anchor (its trailing '*' is needed to allow multi-digit version segments,
-# but that same '*' would also accept a stray "-rc1"/".4" suffix), so the
-# result is re-validated with a real regex before being trusted. Fails loudly
-# rather than silently guessing a version: publishing a chart under a made-up
-# placeholder tag would be worse than failing the build outright, since it
-# could get pushed to the registry unnoticed.
+# Resolve the highest real (non-nightly) component release tag matching
+# "<prefix>/vX.Y.Z" -- scoped by prefix since tags aren't path-scoped.
+#
+# Name-based (git tag -l), not ancestry-based (git describe --tags):
+# release tags get created on a throwaway temp-branch commit that's never
+# merged back into the default branch, so an ancestry walk from a fresh
+# checkout can never see them -- confirmed live, it left nightly stuck
+# resolving a week-old base version while real releases kept shipping.
+# `git tag -l` lists every tag in the local object database regardless of
+# branch, which is what "latest real release" actually means here.
+#
+# The glob is still not a real anchor, so candidates are re-validated with
+# a regex before being trusted -- fails loudly rather than guessing a
+# version and packaging a chart under a made-up tag.
 # Usage: resolve_release_tag <repo_path> [tag_prefix]
 # tag_prefix defaults to "osac" (umbrella chart tags: osac/vX.Y.Z).
 resolve_release_tag() {
@@ -163,12 +164,9 @@ resolve_release_tag() {
     match_pattern="${prefix}/v[0-9]*.[0-9]*.[0-9]*"
     validate_regex="^${prefix}/v[0-9]+\\.[0-9]+\\.[0-9]+$"
 
-    if ! tag=$(git -C "${path}" describe --tags --abbrev=0 --match "${match_pattern}" --exclude '*-nightly*' 2>/dev/null); then
-        echo "ERROR: no real (non-nightly) ${prefix}/vX.Y.Z release tag reachable from ${path} — refusing to guess a version" >&2
-        return 1
-    fi
-    if [[ ! "${tag}" =~ ${validate_regex} ]]; then
-        echo "ERROR: nearest release tag '${tag}' reachable from ${path} is not a plain ${prefix}/vX.Y.Z tag — refusing to guess a version" >&2
+    tag=$(git -C "${path}" tag -l "${match_pattern}" | grep -E "${validate_regex}" | sort -V | tail -1)
+    if [[ -z "${tag}" ]]; then
+        echo "ERROR: no real (non-nightly) ${prefix}/vX.Y.Z release tag found in ${path} — refusing to guess a version" >&2
         return 1
     fi
     echo "${tag}"

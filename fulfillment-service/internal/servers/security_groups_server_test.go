@@ -315,8 +315,8 @@ var _ = Describe("SecurityGroups server", func() {
 			Expect(proto.Equal(createResponse.GetObject(), getResponse.GetObject())).To(BeTrue())
 		})
 
-		It("Canonicalizes non-canonical rule CIDRs on Create", func() {
-			response, err := server.Create(ctx, publicv1.SecurityGroupsCreateRequest_builder{
+		It("Rejects non-canonical rule CIDRs on Create", func() {
+			_, err := server.Create(ctx, publicv1.SecurityGroupsCreateRequest_builder{
 				Object: publicv1.SecurityGroup_builder{
 					Metadata: publicv1.Metadata_builder{
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
@@ -340,11 +340,11 @@ var _ = Describe("SecurityGroups server", func() {
 					}.Build(),
 				}.Build(),
 			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Expect(response.GetObject().GetSpec().GetIngress()[0].GetIpv4Cidr()).To(Equal("10.0.1.0/24"))
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("canonical"))
 		})
 
-		It("Canonicalizes rule CIDRs on Update", func() {
+		It("Rejects non-canonical rule CIDRs on Update", func() {
 			createResponse, err := server.Create(ctx, publicv1.SecurityGroupsCreateRequest_builder{
 				Object: publicv1.SecurityGroup_builder{
 					Metadata: publicv1.Metadata_builder{
@@ -372,7 +372,7 @@ var _ = Describe("SecurityGroups server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			object := createResponse.GetObject()
 			name := object.GetMetadata().GetName()
-			updateResponse, err := server.Update(ctx, publicv1.SecurityGroupsUpdateRequest_builder{
+			_, err = server.Update(ctx, publicv1.SecurityGroupsUpdateRequest_builder{
 				Object: publicv1.SecurityGroup_builder{
 					Id:       object.GetId(),
 					Metadata: publicv1.Metadata_builder{Name: name}.Build(),
@@ -395,8 +395,8 @@ var _ = Describe("SecurityGroups server", func() {
 					}.Build(),
 				}.Build(),
 			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Expect(updateResponse.GetObject().GetSpec().GetIngress()[0].GetIpv4Cidr()).To(Equal("10.0.2.0/24"))
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("canonical"))
 		})
 
 		It("Update object", func() {

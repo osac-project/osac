@@ -16,6 +16,7 @@ syntax = "proto3";
 package osac.private.v1;
 
 import "cleanapi/cleanapi.proto";
+import "buf/validate/validate.proto";
 import "google/api/field_behavior.proto";
 import "osac/private/v1/ip_family_type.proto";
 import "osac/private/v1/metadata_type.proto";
@@ -24,8 +25,8 @@ option (cleanapi.file).package = "osac.public.v1";
 
 // Represents a pool of external IP addresses available for allocation.
 //
-// Each ExternalIPPool supports a single IP family (IPv4 or IPv6). The pool contains one or more CIDR
-// ranges from which individual ExternalIP addresses are allocated. Pools are provider-managed
+// Each ExternalIPPool currently supports one canonical IPv4 CIDR from which individual ExternalIP addresses are
+// allocated. Pools are provider-managed
 // resources created by administrators through the private API.
 //
 // "External" means external to the VirtualNetwork. The addresses may be internet-routable or
@@ -55,26 +56,37 @@ message ExternalIPPool {
 // All spec fields are immutable after creation. To change CIDRs, delete the pool and create a
 // new one. The Update RPC only allows metadata changes (name, labels, annotations).
 message ExternalIPPoolSpec {
-  // CIDR ranges for this pool. Required and immutable after creation.
+  // The single canonical IPv4 CIDR for this pool. Required and immutable after creation.
   //
-  // Each entry must be valid CIDR notation matching the declared ip_family. All CIDRs must be
-  // the same IP family. CIDRs must not overlap with CIDRs in other pools.
+  // The CIDR must use canonical network notation with no host bits set. It must not overlap with
+  // CIDRs in other pools.
   //
-  // Example (IPv4): ["192.168.1.0/24", "10.0.5.0/28"]
-  // Example (IPv6): ["2001:db8::/64"]
+  // Example: ["192.168.1.0/24"]
   repeated string cidrs = 2 [
     (cleanapi.field).private = true,
     (google.api.field_behavior) = REQUIRED,
-    (google.api.field_behavior) = IMMUTABLE
+    (google.api.field_behavior) = IMMUTABLE,
+    (buf.validate.field).repeated = {
+      min_items: 1
+      max_items: 1
+      items: {
+        string: {min_len: 1}
+        cel: {
+          id: "canonical_ipv4_cidr"
+          message: "must be a canonical IPv4 CIDR"
+          expression: "this.isIpPrefix(4, true)"
+        }
+      }
+    }
   ];
 
   // IP address family for this pool. Required and immutable after creation.
   //
-  // Determines whether the CIDRs in this pool are IPv4 or IPv6. All CIDRs must match this
-  // family. A single pool cannot mix IPv4 and IPv6 ranges.
+  // The only supported family is IP_FAMILY_IPV4. IPv6 and unspecified-family pools are rejected.
   IPFamily ip_family = 3 [
     (google.api.field_behavior) = REQUIRED,
-    (google.api.field_behavior) = IMMUTABLE
+    (google.api.field_behavior) = IMMUTABLE,
+    (buf.validate.field).enum = {defined_only: true, not_in: [0, 2]}
   ];
 
   // Backend strategy used to advertise IPs from this pool on the target cluster.

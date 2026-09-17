@@ -39,7 +39,7 @@ import (
 )
 
 var _ = Describe("buildSpec", func() {
-	It("Includes all fields when IPv4 and IPv6 are present", func() {
+	It("Copies only the canonical IPv4 field when a legacy IPv6 field is present", func() {
 		ipv4 := "10.0.1.0/24"
 		ipv6 := "2001:db8::/64"
 		vnetID := "vnet-123"
@@ -59,7 +59,7 @@ var _ = Describe("buildSpec", func() {
 
 		Expect(spec.VirtualNetwork).To(Equal(vnetID))
 		Expect(spec.IPv4CIDR).To(Equal(ipv4))
-		Expect(spec.IPv6CIDR).To(Equal(ipv6))
+		Expect(spec.IPv6CIDR).To(BeEmpty())
 	})
 
 	It("Includes only IPv4 when IPv6 is not present", func() {
@@ -83,7 +83,7 @@ var _ = Describe("buildSpec", func() {
 		Expect(spec.IPv6CIDR).To(BeEmpty())
 	})
 
-	It("Includes only IPv6 when IPv4 is not present", func() {
+	It("Does not project a legacy IPv6-only object", func() {
 		ipv6 := "fd00:1234::/64"
 		vnetID := "vnet-789"
 
@@ -101,7 +101,7 @@ var _ = Describe("buildSpec", func() {
 
 		Expect(spec.VirtualNetwork).To(Equal(vnetID))
 		Expect(spec.IPv4CIDR).To(BeEmpty())
-		Expect(spec.IPv6CIDR).To(Equal(ipv6))
+		Expect(spec.IPv6CIDR).To(BeEmpty())
 	})
 })
 

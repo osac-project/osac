@@ -672,6 +672,20 @@ func isDryRun(ctx context.Context) bool {
 }
 
 func (s *GenericServer[O]) Update(ctx context.Context, request any, response any) error {
+	return s.UpdateWithValidation(ctx, request, response, nil)
+}
+
+// UpdateWithValidation updates an object after applying the request's field mask and
+// invokes validate on the merged object before the generic validation and persistence
+// steps. The current object is passed to validate so resource-specific validation can
+// enforce immutability and cross-resource constraints without fetching and merging the
+// object a second time.
+func (s *GenericServer[O]) UpdateWithValidation(
+	ctx context.Context,
+	request any,
+	response any,
+	validate func(context.Context, O, O) error,
+) error {
 	// Extract the object from the request message:
 	type requestIface interface {
 		GetObject() O
@@ -750,25 +764,14 @@ func (s *GenericServer[O]) Update(ctx context.Context, request any, response any
 
 	// Clone the current object so that in-place modifications (mask application, tenant calculation) don't
 	// affect the original that we use for the equivalence comparison later.
-	tmpObject := proto.Clone(currentObject).(O)
-
-	// Update the fields indicated in the update mask, or all the fields if there is no update mask:
-	requestMask := requestMsg.GetUpdateMask()
-	if requestMask != nil {
-		fieldPaths, err := s.compilePaths(requestMask.GetPaths())
-		if err != nil {
+	tmpObject, err := s.mergeUpdateObject(requestObject, currentObject, requestMsg.GetUpdateMask())
+	if err != nil {
+		return err
+	}
+	if validate != nil {
+		if err = validate(ctx, tmpObject, currentObject); err != nil {
 			return err
 		}
-		for _, fieldPath := range fieldPaths {
-			value, ok := fieldPath.Get(requestObject)
-			if ok {
-				fieldPath.Set(tmpObject, value)
-			} else {
-				fieldPath.Clear(tmpObject)
-			}
-		}
-	} else {
-		tmpObject = requestObject
 	}
 
 	// Validate the merged object using protovalidate.
@@ -830,6 +833,34 @@ func (s *GenericServer[O]) Update(ctx context.Context, request any, response any
 	s.setPointer(response, responseMsg)
 
 	return nil
+}
+
+// mergeUpdateObject applies an update mask to a clone of currentObject. The
+// resulting object is used by both the generic validator and resource-specific
+// server validation, so partial updates are validated in their persisted shape.
+func (s *GenericServer[O]) mergeUpdateObject(
+	requestObject O,
+	currentObject O,
+	requestMask *fieldmaskpb.FieldMask,
+) (O, error) {
+	if requestMask == nil {
+		return requestObject, nil
+	}
+
+	merged := proto.Clone(currentObject).(O)
+	fieldPaths, err := s.compilePaths(requestMask.GetPaths())
+	if err != nil {
+		return merged, err
+	}
+	for _, fieldPath := range fieldPaths {
+		value, ok := fieldPath.Get(requestObject)
+		if ok {
+			fieldPath.Set(merged, value)
+		} else {
+			fieldPath.Clear(merged)
+		}
+	}
+	return merged, nil
 }
 
 func (s *GenericServer[O]) translateUpdateError(ctx context.Context, requestId string, err error) error {

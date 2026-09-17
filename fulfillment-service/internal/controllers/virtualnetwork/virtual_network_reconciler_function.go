@@ -466,10 +466,5 @@ func (t *task) buildSpec() osacv1alpha1.VirtualNetworkSpec {
 		spec.IPv4CIDR = t.virtualNetwork.GetSpec().GetIpv4Cidr()
 	}
 
-	// Add IPv6 CIDR if present:
-	if t.virtualNetwork.GetSpec().HasIpv6Cidr() {
-		spec.IPv6CIDR = t.virtualNetwork.GetSpec().GetIpv6Cidr()
-	}
-
 	return spec
 }

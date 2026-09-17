@@ -171,30 +171,11 @@ func (s *PrivateSubnetsServer) Create(ctx context.Context,
 // SUB-SVC-04: Update updates an existing Subnet with validation
 func (s *PrivateSubnetsServer) Update(ctx context.Context,
 	request *privatev1.SubnetsUpdateRequest) (response *privatev1.SubnetsUpdateResponse, err error) {
-	// Get existing object for immutability validation:
-	id := request.GetObject().GetId()
-	if id == "" {
+	if request.GetObject().GetId() == "" {
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object identifier is mandatory")
 		return
 	}
-
-	getRequest := &privatev1.SubnetsGetRequest{}
-	getRequest.SetId(id)
-	var getResponse *privatev1.SubnetsGetResponse
-	err = s.generic.Get(ctx, getRequest, &getResponse)
-	if err != nil {
-		return
-	}
-
-	existingSubnet := getResponse.GetObject()
-
-	// Validate with existing object context:
-	err = s.validateSubnet(ctx, request.GetObject(), existingSubnet)
-	if err != nil {
-		return
-	}
-
-	err = s.generic.Update(ctx, request, &response)
+	err = s.generic.UpdateWithValidation(ctx, request, &response, s.validateSubnet)
 	return
 }
 
@@ -233,25 +214,26 @@ func (s *PrivateSubnetsServer) validateSubnet(ctx context.Context,
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "subnet spec is mandatory")
 	}
 
+	if spec.GetIpv6Cidr() != "" {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'spec.ipv6_cidr': IPv6 and dual-stack networking are not supported")
+	}
+
 	// SUB-VAL-11, SUB-VAL-14, SUB-VAL-15: Check immutable fields (only on Update).
-	// Run before SUB-VAL-03 so that explicit-empty-string attempts to clear an immutable CIDR
-	// return "field is immutable" rather than "at least one CIDR required".
+	// Run after rejecting non-empty legacy IPv6 values so every attempted IPv6 or dual-stack
+	// request receives the same clear unsupported-networking error.
 	if err := validateImmutableFieldsSubnet(newSubnet, existingSubnet); err != nil {
 		return err
 	}
 
-	// SUB-VAL-03: At least one CIDR must be provided
-	if spec.GetIpv4Cidr() == "" && spec.GetIpv6Cidr() == "" {
+	if spec.GetIpv4Cidr() == "" {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"at least one of 'spec.ipv4_cidr' or 'spec.ipv6_cidr' must be provided")
+			"field 'spec.ipv4_cidr' is required and must be a canonical IPv4 CIDR")
 	}
-
-	// SUB-VAL-01, SUB-VAL-02: Validate and canonicalize CIDRs
-	if err := canonicalizeDualStackCIDRs(
-		spec.GetIpv4Cidr, spec.SetIpv4Cidr,
-		spec.GetIpv6Cidr, spec.SetIpv6Cidr,
-	); err != nil {
+	if canonical, err := parseAndValidateCanonicalCIDR(spec.GetIpv4Cidr(), cidrIPv4); err != nil {
 		return err
+	} else {
+		spec.SetIpv4Cidr(canonical)
 	}
 
 	// SUB-VAL-04, SUB-VAL-05, SUB-VAL-06, SUB-VAL-07, SUB-VAL-08: Validate parent VirtualNetwork

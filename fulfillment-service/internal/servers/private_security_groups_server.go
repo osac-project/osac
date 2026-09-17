@@ -171,30 +171,11 @@ func (s *PrivateSecurityGroupsServer) Create(ctx context.Context,
 
 func (s *PrivateSecurityGroupsServer) Update(ctx context.Context,
 	request *privatev1.SecurityGroupsUpdateRequest) (response *privatev1.SecurityGroupsUpdateResponse, err error) {
-	// Get existing object for immutability validation:
-	id := request.GetObject().GetId()
-	if id == "" {
+	if request.GetObject().GetId() == "" {
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object identifier is mandatory")
 		return
 	}
-
-	getRequest := &privatev1.SecurityGroupsGetRequest{}
-	getRequest.SetId(id)
-	var getResponse *privatev1.SecurityGroupsGetResponse
-	err = s.generic.Get(ctx, getRequest, &getResponse)
-	if err != nil {
-		return
-	}
-
-	existingSecurityGroup := getResponse.GetObject()
-
-	// Validate with existing object context:
-	err = s.validateSecurityGroup(ctx, request.GetObject(), existingSecurityGroup)
-	if err != nil {
-		return
-	}
-
-	err = s.generic.Update(ctx, request, &response)
+	err = s.generic.UpdateWithValidation(ctx, request, &response, s.validateSecurityGroup)
 	return
 }
 
@@ -354,16 +335,15 @@ func validateSecurityRule(rule *privatev1.SecurityRule, ruleType string, index i
 		}
 	}
 
-	// At least one CIDR must be specified
-	if rule.GetIpv4Cidr() == "" && rule.GetIpv6Cidr() == "" {
+	if rule.GetIpv6Cidr() != "" {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"%s rule at index %d: at least one of ipv4_cidr or ipv6_cidr must be provided", ruleType, index)
+			"%s rule at index %d: IPv6 and dual-stack networking are not supported", ruleType, index)
 	}
-
-	if err := canonicalizeDualStackCIDRs(
-		rule.GetIpv4Cidr, rule.SetIpv4Cidr,
-		rule.GetIpv6Cidr, rule.SetIpv6Cidr,
-	); err != nil {
+	if rule.GetIpv4Cidr() == "" {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"%s rule at index %d: ipv4_cidr is required and must be a canonical IPv4 CIDR", ruleType, index)
+	}
+	if _, err := parseAndValidateCanonicalCIDR(rule.GetIpv4Cidr(), cidrIPv4); err != nil {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"%s rule at index %d: %v", ruleType, index, err)
 	}

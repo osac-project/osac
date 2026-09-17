@@ -1,0 +1,19 @@
+---
+
+- name: Validate ingress rule CIDRs
+  ansible.builtin.assert:
+    that:
+      - item.sourceCidr is defined
+      - item.sourceCidr | default('') | length > 0
+      - item.destinationCidr | default('') | length == 0
+    fail_msg: "SecurityGroup ingress rules require a source CIDR and must not set a destination CIDR"
+  loop: "{{ ingress_rules }}"
+
+- name: Validate egress rule CIDRs
+  ansible.builtin.assert:
+    that:
+      - item.destinationCidr is defined
+      - item.destinationCidr | default('') | length > 0
+      - item.sourceCidr | default('') | length == 0
+    fail_msg: "SecurityGroup egress rules require a destination CIDR and must not set a source CIDR"
+  loop: "{{ egress_rules }}"

@@ -47,6 +47,21 @@ func parseAndValidateCIDR(cidrStr string, ipVersion string) (string, error) {
 	return prefix.Masked().String(), nil
 }
 
+// parseAndValidateCanonicalCIDR validates a CIDR without silently changing the
+// address supplied by the caller. Networking API contracts use canonical
+// prefixes so that the persisted value and the request value are identical.
+func parseAndValidateCanonicalCIDR(cidrStr string, ipVersion string) (string, error) {
+	canonical, err := parseAndValidateCIDR(cidrStr, ipVersion)
+	if err != nil {
+		return "", err
+	}
+	if canonical != cidrStr {
+		return "", grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"CIDR '%s' is not canonical; use '%s'", cidrStr, canonical)
+	}
+	return canonical, nil
+}
+
 // cidrPrefixesEqual reports whether two CIDR strings denote the same network prefix.
 func cidrPrefixesEqual(a, b string) (bool, error) {
 	if a == b {
@@ -63,25 +78,33 @@ func cidrPrefixesEqual(a, b string) (bool, error) {
 	return prefixA.Masked() == prefixB.Masked(), nil
 }
 
-// validateImmutableCIDR rejects updates that change the network prefix; canonically equivalent
-// notation (e.g. 10.0.1.5/24 vs 10.0.1.0/24) is allowed.
+// validateImmutableCIDR rejects updates that change the network prefix or
+// provide a non-canonical replacement. The existing value is normalized only
+// for comparison and error reporting because legacy records may predate the
+// strict input contract.
 func validateImmutableCIDR(fieldName, existingCIDR, newCIDR, ipVersion string) error {
+	if newCIDR == "" {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field '%s' is immutable and cannot be cleared", fieldName)
+	}
+	canonicalNew, err := parseAndValidateCanonicalCIDR(newCIDR, ipVersion)
+	if err != nil {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field '%s': %v", fieldName, err)
+	}
+
 	equal, err := cidrPrefixesEqual(existingCIDR, newCIDR)
 	if err == nil && equal {
 		return nil
 	}
-	from, to := existingCIDR, newCIDR
+	from := existingCIDR
 	if existingCIDR != "" {
 		if canonical, err := parseAndValidateCIDR(existingCIDR, ipVersion); err == nil {
 			from = canonical
 		}
 	}
-	if canonical, err := parseAndValidateCIDR(newCIDR, ipVersion); err == nil {
-		to = canonical
-	}
 	return grpcstatus.Errorf(grpccodes.InvalidArgument,
 		"field '%s' is immutable and cannot be changed from '%s' to '%s'",
-		fieldName, from, to)
+		fieldName, from, canonicalNew)
 }
 
 // immutableCIDRField groups optional CIDR field accessors for preserve-and-validate on Update.

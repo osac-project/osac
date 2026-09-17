@@ -27,6 +27,26 @@ var _ = Describe("cidr validation helpers", func() {
 		})
 	})
 
+	Describe("parseAndValidateCanonicalCIDR", func() {
+		It("accepts a canonical IPv4 prefix", func() {
+			canonical, err := parseAndValidateCanonicalCIDR("10.0.1.0/24", cidrIPv4)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(canonical).To(Equal("10.0.1.0/24"))
+		})
+
+		It("rejects IPv4 host bits instead of masking them", func() {
+			_, err := parseAndValidateCanonicalCIDR("10.0.1.5/24", cidrIPv4)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("canonical"))
+		})
+
+		It("rejects an IPv6 prefix when IPv4 is required", func() {
+			_, err := parseAndValidateCanonicalCIDR("2001:db8::/32", cidrIPv4)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("IPv6"))
+		})
+	})
+
 	Describe("cidrPrefixesEqual", func() {
 		It("returns true for identical strings", func() {
 			equal, err := cidrPrefixesEqual("10.0.1.0/24", "10.0.1.0/24")

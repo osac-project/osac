@@ -352,6 +352,19 @@ var _ = Describe("Private volumes server", func() {
 			Expect(st.Message()).To(ContainSubstring("immutable"))
 		})
 
+		It("Allows the first protocol assignment from unspecified", func() {
+			existing := privatev1.Volume_builder{
+				Status: privatev1.VolumeStatus_builder{}.Build(),
+			}.Build()
+			merged := privatev1.Volume_builder{
+				Status: privatev1.VolumeStatus_builder{
+					Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
+				}.Build(),
+			}.Build()
+
+			Expect(validateVolumeImmutability(merged, existing)).To(Succeed())
+		})
+
 		It("Delete removes the object", func() {
 			created := createVolume()
 

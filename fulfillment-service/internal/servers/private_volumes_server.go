@@ -319,7 +319,8 @@ func validateVolumeImmutability(merged, existing *privatev1.Volume) error {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"field 'spec.topology' is immutable and cannot be changed after creation")
 	}
-	if merged.GetStatus().GetProtocol() != existing.GetStatus().GetProtocol() {
+	if existing.GetStatus().GetProtocol() != privatev1.StorageProtocol_STORAGE_PROTOCOL_UNSPECIFIED &&
+		merged.GetStatus().GetProtocol() != existing.GetStatus().GetProtocol() {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"field 'status.protocol' is immutable and cannot be changed after creation")
 	}

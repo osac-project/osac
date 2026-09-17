@@ -39,6 +39,11 @@ type TierResolution struct {
 	Protocol privatev1.StorageProtocol
 }
 
+const (
+	lvmsProvider        = "lvms"
+	nodeTopologySegment = "osac.io/node"
+)
+
 // TierResolverFunc resolves a StorageTier name to a provider and protocol.
 type TierResolverFunc func(ctx context.Context, tierName string) (*TierResolution, error)
 
@@ -167,6 +172,14 @@ func (s *PrivateVolumesServer) Create(ctx context.Context,
 	resolved, err := s.tierResolver(ctx, vol.GetSpec().GetStorageTier())
 	if err != nil {
 		return
+	}
+	if resolved.Provider == lvmsProvider {
+		topology := vol.GetSpec().GetTopology()
+		if topology == nil || topology.GetSegments()[nodeTopologySegment] == "" {
+			err = grpcstatus.Errorf(grpccodes.FailedPrecondition,
+				`node-local volume requires topology.segments["%s"]`, nodeTopologySegment)
+			return
+		}
 	}
 
 	if vol.GetStatus() == nil {

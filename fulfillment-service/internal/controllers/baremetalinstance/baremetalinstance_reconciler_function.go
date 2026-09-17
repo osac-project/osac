@@ -449,23 +449,66 @@ func (t *task) syncStatus(object *bmfov1alpha1.BareMetalInstance) {
 
 	t.syncState(object, powerSynced)
 
-	readyStatus := privatev1.ConditionStatus_CONDITION_STATUS_TRUE
-	state := t.bareMetalInstance.GetStatus().GetState()
-	if state == privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_PROVISIONING ||
-		state == privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_DELETING ||
-		state == privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_FAILED {
-		readyStatus = privatev1.ConditionStatus_CONDITION_STATUS_FALSE
-	}
-	t.updateCondition(privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY, readyStatus, "", "")
-
-	// PROVISIONED is a ratchet: only promoted True once the template completes;
-	// never demoted False once set (re-provisioning cycles must not un-provision the instance).
-	// TemplateComplete=True implies Allocated=True by ordering, so no separate allocation check needed.
-	templateCond := object.GetStatusCondition(bmfov1alpha1.HostConditionProvisionTemplateComplete)
-	if templateCond != nil && templateCond.Status == metav1.ConditionTrue {
+	// Derive PROVISIONED and READY from the operator's lifecycle conditions. The
+	// Deleting phase is guarded: conditions may still indicate a ready instance, but
+	// provisioning progress is not meaningful while the instance is being deleted.
+	if object.Status.Phase != bmfov1alpha1.BareMetalInstancePhaseDeleting {
+		progress := bmfov1alpha1.DeriveProvisioningProgress(object.Status.Conditions)
+		switch progress.State {
+		case bmfov1alpha1.StateInProgress:
+			stage := progress.Step.Stage()
+			t.updateCondition(
+				privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
+				privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+				string(stage), stageMessage(stage))
+			t.updateCondition(
+				privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
+				privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "", "")
+		case bmfov1alpha1.StateProvisioned:
+			t.updateCondition(
+				privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
+				privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+				string(bmfov1alpha1.StateProvisioned), "Infrastructure has been allocated and provisioned.")
+			t.updateCondition(
+				privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
+				privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "", "")
+		case bmfov1alpha1.StateReady:
+			t.updateCondition(
+				privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
+				privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+				string(bmfov1alpha1.StateProvisioned), "Infrastructure has been allocated and provisioned.")
+			t.updateCondition(
+				privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
+				privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+				string(bmfov1alpha1.StateReady), "The instance is ready.")
+		case bmfov1alpha1.StateFailed:
+			if progress.Step == bmfov1alpha1.StepReadyPowerSync {
+				// Ready-axis failure: provisioning completed; the host did not reach its
+				// desired power state. PROVISIONED stays True; READY carries the failure.
+				t.updateCondition(
+					privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
+					privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+					string(bmfov1alpha1.StateProvisioned), "Infrastructure has been allocated and provisioned.")
+				t.updateCondition(
+					privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
+					privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+					string(progress.Failure), "")
+			} else {
+				// Provisioning-axis failure. PROVISIONED carries the failure reason;
+				// READY is False (provisioning never completed).
+				t.updateCondition(
+					privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
+					privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+					string(progress.Failure), "")
+				t.updateCondition(
+					privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
+					privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "", "")
+			}
+		}
+	} else {
 		t.updateCondition(
-			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
-			privatev1.ConditionStatus_CONDITION_STATUS_TRUE, "", "")
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
+			privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "", "")
 	}
 
 	protoStatuses := make([]*privatev1.BareMetalNetworkAttachmentStatus, 0, len(object.Status.NetworkAttachmentStatuses))

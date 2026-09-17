@@ -622,6 +622,22 @@ func sanitizeConditionMessage(condType bmfov1alpha1.BareMetalInstanceConditionTy
 	return ""
 }
 
+// stageMessage returns the curated tenant-facing in-progress message for the given
+// provisioning stage. Returns "" for an unrecognized stage so callers never panic on
+// future stage additions before this switch is updated.
+func stageMessage(stage bmfov1alpha1.ProvisioningStage) string {
+	switch stage {
+	case bmfov1alpha1.StageHostAllocation:
+		return "Host allocation is in progress."
+	case bmfov1alpha1.StageProvisioning:
+		return "OS provisioning is in progress."
+	case bmfov1alpha1.StageNetworkSetup:
+		return "Network setup is in progress."
+	default:
+		return ""
+	}
+}
+
 // mutateBMI sets the fulfillment-service-owned metadata and spec fields, leaving
 // operator-managed fields (ExternalHostID, HostClass, etc.) untouched.
 func (t *task) mutateBMI(ctx context.Context, object *bmfov1alpha1.BareMetalInstance) error {

@@ -2471,6 +2471,21 @@ var _ = Describe("mapConditionStatus", func() {
 	})
 })
 
+var _ = Describe("stageMessage", func() {
+	DescribeTable("returns the curated in-progress message per stage",
+		func(stage bmfov1alpha1.ProvisioningStage, expectedMsg string) {
+			Expect(stageMessage(stage)).To(Equal(expectedMsg))
+		},
+		Entry("HostAllocation", bmfov1alpha1.StageHostAllocation, "Host allocation is in progress."),
+		Entry("Provisioning", bmfov1alpha1.StageProvisioning, "OS provisioning is in progress."),
+		Entry("NetworkSetup", bmfov1alpha1.StageNetworkSetup, "Network setup is in progress."),
+	)
+
+	It("returns empty string for an unrecognized stage", func() {
+		Expect(stageMessage(bmfov1alpha1.ProvisioningStage("Unknown"))).To(BeEmpty())
+	})
+})
+
 var _ = Describe("Kubernetes validation error handling", func() {
 	It("should set state to FAILED when K8s Create returns Invalid error", func() {
 		ctx := context.Background()

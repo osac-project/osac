@@ -775,14 +775,14 @@ func TestControllerPublishVolume_Error(t *testing.T) {
 // needs no controller-side attach, so publish is a no-op and no vendor
 // controller is dialed.
 func TestControllerPublishVolume_NoAttachBackendIsNoop(t *testing.T) {
-	cs := newTestControllerWithVendor(&mockVolumeClient{}, map[string]string{"local": noAttachEndpoint})
+	cs := newTestControllerWithVendor(&mockVolumeClient{}, map[string]string{"lvms": noAttachEndpoint})
 
 	resp, err := cs.ControllerPublishVolume(context.Background(), &csi.ControllerPublishVolumeRequest{
 		VolumeId:         "vol-1",
 		NodeId:           "node-1",
 		VolumeCapability: singleCap(),
 		VolumeContext: map[string]string{
-			"osac.backend":   "local",
+			"osac.backend":   "lvms",
 			"osac.volume-id": "vendor-vol-1",
 		},
 	})
@@ -936,11 +936,11 @@ func TestControllerUnpublishVolume_NoAttachBackendIsNoop(t *testing.T) {
 	vc := &mockVolumeClient{
 		getVolumeFn: func(_ context.Context, volumeID string) (*fulfillment.VolumeInfo, error) {
 			vol := availableVolume(volumeID, "pvc-123")
-			vol.Backend = "local"
+			vol.Backend = "lvms"
 			return vol, nil
 		},
 	}
-	cs := newTestControllerWithVendor(vc, map[string]string{"local": noAttachEndpoint})
+	cs := newTestControllerWithVendor(vc, map[string]string{"lvms": noAttachEndpoint})
 
 	_, err := cs.ControllerUnpublishVolume(context.Background(), &csi.ControllerUnpublishVolumeRequest{
 		VolumeId: "vol-1",

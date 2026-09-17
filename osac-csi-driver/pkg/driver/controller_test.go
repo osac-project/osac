@@ -230,6 +230,106 @@ func TestCreateVolume_Success(t *testing.T) {
 	}
 }
 
+func TestCreateVolume_LVMSTopology(t *testing.T) {
+	vol := availableVolume("vol-lvms", "pvc-lvms")
+	vol.Provider = "lvms"
+	vol.Backend = "lvms"
+	vol.VendorVolumeID = "topolvm-volume-1"
+
+	var gotParams fulfillment.CreateVolumeParams
+	vc := &mockVolumeClient{
+		createVolumeFn: func(_ context.Context, params fulfillment.CreateVolumeParams) (*fulfillment.VolumeInfo, error) {
+			gotParams = params
+			return vol, nil
+		},
+	}
+	cs := newTestController(vc)
+
+	resp, err := cs.CreateVolume(context.Background(), &csi.CreateVolumeRequest{
+		Name:               "pvc-lvms",
+		VolumeCapabilities: defaultCaps(),
+		Parameters:         map[string]string{"osac.tier": "local"},
+		AccessibilityRequirements: &csi.TopologyRequirement{
+			Preferred: []*csi.Topology{
+				{Segments: map[string]string{"osac.io/node": "worker-1"}},
+				{Segments: map[string]string{"osac.io/node": "worker-2"}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if gotParams.Topology == nil {
+		t.Fatal("expected preferred topology to reach fulfillment")
+	}
+	if got := gotParams.Topology.Segments["osac.io/node"]; got != "worker-1" {
+		t.Errorf("topology node = %q, want worker-1", got)
+	}
+
+	accessible := resp.GetVolume().GetAccessibleTopology()
+	if len(accessible) != 1 {
+		t.Fatalf("expected one accessible topology, got %d", len(accessible))
+	}
+	if got := accessible[0].GetSegments()["osac.io/node"]; got != "worker-1" {
+		t.Errorf("accessible topology node = %q, want worker-1", got)
+	}
+	if got := resp.GetVolume().GetVolumeContext()["osac.topolvm-volume-id"]; got != "topolvm-volume-1" {
+		t.Errorf("osac.topolvm-volume-id = %q, want topolvm-volume-1", got)
+	}
+}
+
+func TestCreateVolume_VASTHasNoAccessibleTopology(t *testing.T) {
+	vol := availableVolume("vol-vast", "pvc-vast")
+	vol.Provider = "vast"
+	vol.Backend = "vast"
+
+	vc := &mockVolumeClient{
+		createVolumeFn: func(_ context.Context, _ fulfillment.CreateVolumeParams) (*fulfillment.VolumeInfo, error) {
+			return vol, nil
+		},
+	}
+	cs := newTestController(vc)
+
+	resp, err := cs.CreateVolume(context.Background(), &csi.CreateVolumeRequest{
+		Name:               "pvc-vast",
+		VolumeCapabilities: defaultCaps(),
+		Parameters:         map[string]string{"osac.tier": "network"},
+		AccessibilityRequirements: &csi.TopologyRequirement{
+			Preferred: []*csi.Topology{{Segments: map[string]string{"osac.io/node": "worker-1"}}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := resp.GetVolume().GetAccessibleTopology(); len(got) != 0 {
+		t.Errorf("expected no accessible topology for VAST, got %#v", got)
+	}
+	if _, ok := resp.GetVolume().GetVolumeContext()["osac.topolvm-volume-id"]; ok {
+		t.Error("did not expect osac.topolvm-volume-id for VAST")
+	}
+}
+
+func TestCreateVolume_LVMSMissingTopologyReturnsFailedPrecondition(t *testing.T) {
+	vol := availableVolume("vol-lvms", "pvc-lvms")
+	vol.Provider = "lvms"
+	vol.Backend = "lvms"
+
+	vc := &mockVolumeClient{
+		createVolumeFn: func(_ context.Context, _ fulfillment.CreateVolumeParams) (*fulfillment.VolumeInfo, error) {
+			return vol, nil
+		},
+	}
+	cs := newTestController(vc)
+
+	_, err := cs.CreateVolume(context.Background(), &csi.CreateVolumeRequest{
+		Name:               "pvc-lvms",
+		VolumeCapabilities: defaultCaps(),
+		Parameters:         map[string]string{"osac.tier": "local"},
+	})
+	assertCode(t, err, codes.FailedPrecondition)
+}
+
 func TestCreateVolume_DefaultTenant(t *testing.T) {
 	vc := &mockVolumeClient{
 		createVolumeFn: func(_ context.Context, params fulfillment.CreateVolumeParams) (*fulfillment.VolumeInfo, error) {

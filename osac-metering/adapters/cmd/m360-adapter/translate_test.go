@@ -285,6 +285,49 @@ var _ = Describe("translateEvent", func() {
 		})
 	})
 
+	Describe("storage events", func() {
+		It("translates Volume events to the storage endpoint", func() {
+			ce := buildCloudEvent(
+				"ce-volume", "osac.resource.started.v1", "volume-001", "volume",
+				"tenant-acme", "project-storage", map[string]any{
+					"volume_id": "volume-001", "storage_tier": "gold", "size_gib": 100,
+				},
+			)
+
+			endpoint, payload, err := translateEvent(ce)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(endpoint).To(Equal("/storage/event"))
+			Expect(payload["resource_type"]).To(Equal("volume"))
+		})
+
+		It("flattens canonical Volume usage for M360", func() {
+			ce := buildCloudEvent(
+				"ce-volume-usage", "osac.resource.suspended.v1", "volume-001", "volume",
+				"tenant-acme", "project-storage", map[string]any{
+					"volume_id": "volume-001", "storage_tier": "gold", "size_gib": 100,
+				},
+			)
+			var data map[string]any
+			Expect(ce.DataAs(&data)).To(Succeed())
+			data["usage"] = map[string]any{
+				"semantics": "interval", "from": "2026-07-20T10:00:00.000000Z",
+				"to": "2026-07-20T10:01:00.000000Z", "quantity": "6000.000000",
+				"unit": "gibibyte_second", "precision": "microsecond",
+			}
+			Expect(ce.SetData(cloudevents.ApplicationJSON, data)).To(Succeed())
+
+			endpoint, payload, err := translateEvent(ce)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(endpoint).To(Equal("/storage/event"))
+			Expect(payload["usage_quantity"]).To(Equal("6000.000000"))
+			Expect(payload["usage_unit"]).To(Equal("gibibyte_second"))
+			Expect(payload).NotTo(HaveKey("usage"))
+		})
+
+	})
+
 	Describe("error cases", func() {
 		It("returns NonRetryableError for unknown resource_type", func() {
 			ce := buildCloudEvent(

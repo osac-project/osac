@@ -95,6 +95,7 @@ const (
 	VolumePhaseReady       VolumePhaseType = "Ready"
 	VolumePhaseFailed      VolumePhaseType = "Failed"
 	VolumePhaseDeleting    VolumePhaseType = "Deleting"
+	VolumePhaseDeleted     VolumePhaseType = "Deleted"
 )
 
 // VolumeConditionType is a valid value for .status.conditions.type
@@ -110,7 +111,7 @@ const (
 type VolumeStatus struct {
 	// Phase provides a single-value overview of the state of the Volume.
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:Enum=Progressing;Ready;Failed;Deleting
+	// +kubebuilder:validation:Enum=Progressing;Ready;Failed;Deleting;Deleted
 	Phase VolumePhaseType `json:"phase,omitempty"`
 
 	// Conditions holds an array of metav1.Condition that describe the state of the Volume.
@@ -149,6 +150,15 @@ type VolumeStatus struct {
 	// osac-csi-driver to the vendor CSI controller's ControllerPublishVolume.
 	// +kubebuilder:validation:Optional
 	VendorContext map[string]string `json:"vendorContext,omitempty"`
+
+	// StateTransitionTime is the authoritative time at which the lifecycle
+	// phase last changed.
+	// +kubebuilder:validation:Optional
+	StateTransitionTime *metav1.Time `json:"stateTransitionTime,omitempty"`
+
+	// ProvisionedSizeGiB is the capacity last committed on the vendor array.
+	// +kubebuilder:validation:Optional
+	ProvisionedSizeGiB int64 `json:"provisionedSizeGiB,omitempty"`
 }
 
 // +kubebuilder:object:root=true

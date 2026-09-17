@@ -204,6 +204,7 @@ spec:
                 - Ready
                 - Failed
                 - Deleting
+                - Deleted
                 type: string
               protocol:
                 allOf:
@@ -221,6 +222,17 @@ spec:
                 description: |-
                   Provider identifies the registered VendorProvisioner implementation selected for this volume.
                   Resolved during tier resolution at creation time.
+                type: string
+              provisionedSizeGiB:
+                description: ProvisionedSizeGiB is the capacity last committed on
+                  the vendor array.
+                format: int64
+                type: integer
+              stateTransitionTime:
+                description: |-
+                  StateTransitionTime is the authoritative time at which the lifecycle
+                  phase last changed.
+                format: date-time
                 type: string
               vendorContext:
                 additionalProperties:

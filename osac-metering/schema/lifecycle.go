@@ -12,6 +12,13 @@ package schema
 // SchemaVersion is the current version of the lifecycle event schema.
 const SchemaVersion = "v1"
 
+const (
+	UsageSemanticsInterval    = "interval"
+	UsageSemanticsCumulative  = "cumulative"
+	UsageUnitGiByteSecond     = "gibibyte_second"
+	UsagePrecisionMicrosecond = "microsecond"
+)
+
 // LifecycleData is the canonical JSON payload for lifecycle and scaling events
 // across all resource types. It defines the contract between the metering-service
 // producer and adapter consumers.
@@ -26,8 +33,21 @@ type LifecycleData struct {
 	CurrentState      string         `json:"current_state"`
 	TransitionTime    string         `json:"transition_time"`
 	DurationSeconds   *float64       `json:"duration_seconds"`
+	Usage             *Usage         `json:"usage,omitempty"`
 	BillingDimensions map[string]any `json:"billing_dimensions"`
 	SchemaVersion     string         `json:"schema_version"`
+}
+
+// Usage is the canonical allocation usage record. Timestamps are UTC and
+// normalized to microsecond precision. Quantity is fixed-point text so JSON
+// decoding cannot turn billing values into binary floating-point numbers.
+type Usage struct {
+	Semantics string `json:"semantics"`
+	From      string `json:"from"`
+	To        string `json:"to"`
+	Quantity  string `json:"quantity"`
+	Unit      string `json:"unit"`
+	Precision string `json:"precision"`
 }
 
 // lifecycleDataFields holds the canonical field list. Unexported to prevent
@@ -43,6 +63,7 @@ var lifecycleDataFields = [...]string{
 	"current_state",
 	"transition_time",
 	"duration_seconds",
+	"usage",
 	"schema_version",
 }
 

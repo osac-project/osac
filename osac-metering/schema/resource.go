@@ -15,4 +15,5 @@ const (
 	ResourceTypeClusterOrder    = "cluster_order"
 	ResourceTypeExternalIP      = "external_ip"
 	ResourceTypeNATGateway      = "nat_gateway"
+	ResourceTypeVolume          = "volume"
 )

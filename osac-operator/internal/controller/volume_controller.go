@@ -162,21 +162,28 @@ func (r *VolumeReconciler) Reconcile(ctx context.Context, req mcreconcile.Reques
 	log.Info("start reconcile")
 
 	oldstatus := vol.Status.DeepCopy()
+	deleting := !vol.ObjectMeta.DeletionTimestamp.IsZero()
 
 	var res ctrl.Result
 	var err error
-	if vol.ObjectMeta.DeletionTimestamp.IsZero() {
+	if !deleting {
 		res, err = r.handleUpdate(ctx, vol)
 	} else {
 		res, err = r.handleDelete(ctx, vol)
 	}
 
-	if !equality.Semantic.DeepEqual(vol.Status, *oldstatus) {
+	if !deleting && !equality.Semantic.DeepEqual(vol.Status, *oldstatus) {
 		log.Info("status requires update")
 		if updateErr := r.Status().Update(ctx, vol); updateErr != nil {
 			// On the delete path the object may already be gone once its last
 			// finalizer was removed; tolerate NotFound and preserve any
 			// reconcile error alongside a genuine status-update failure.
+			return res, errors.Join(err, client.IgnoreNotFound(updateErr))
+		}
+	}
+	if deleting && !equality.Semantic.DeepEqual(vol.Status, *oldstatus) {
+		log.Info("status requires update during deletion")
+		if updateErr := r.Status().Update(ctx, vol); updateErr != nil {
 			return res, errors.Join(err, client.IgnoreNotFound(updateErr))
 		}
 	}
@@ -207,11 +214,15 @@ func (r *VolumeReconciler) handleUpdate(ctx context.Context, vol *v1alpha1.Volum
 		return ctrl.Result{RequeueAfter: statusStampPollInterval}, nil
 	}
 
+	previousPhase := vol.Status.Phase
 	if vol.Status.Phase == "" {
 		vol.Status.Phase = v1alpha1.VolumePhaseProgressing
 	}
+	if vol.Status.Phase != previousPhase {
+		now := metav1.Now()
+		vol.Status.StateTransitionTime = &now
+	}
 
-	// Already provisioned; nothing to do until spec changes (future: resize).
 	if vol.Status.Phase == v1alpha1.VolumePhaseReady {
 		return ctrl.Result{}, nil
 	}
@@ -271,15 +282,29 @@ func (r *VolumeReconciler) handleProvisioning(ctx context.Context, vol *v1alpha1
 	if err != nil {
 		log.Error(err, "vendor provisioning failed")
 		vol.Status.Phase = v1alpha1.VolumePhaseFailed
+		now := metav1.Now()
+		vol.Status.StateTransitionTime = &now
 		setVendorProvisionedCondition(&vol.Status.Conditions, metav1.ConditionFalse, "ProvisioningFailed", err.Error())
 		return ctrl.Result{}, nil
+	}
+	if resp.VendorVolumeID == "" {
+		return r.failProvisioning(vol, "vendor CreateVolume returned an empty volume ID")
+	}
+	if resp.Protocol != string(v1alpha1.VolumeProtocolBlock) {
+		return r.failProvisioning(vol, fmt.Sprintf("vendor CreateVolume returned unsupported protocol %q", resp.Protocol))
+	}
+	if vol.Status.VendorVolumeID != "" && vol.Status.VendorVolumeID != resp.VendorVolumeID {
+		return r.failProvisioning(vol, fmt.Sprintf("vendor volume ID changed from %q to %q", vol.Status.VendorVolumeID, resp.VendorVolumeID))
 	}
 
 	vol.Status.VendorVolumeID = resp.VendorVolumeID
 	vol.Status.Backend = resp.Backend
 	vol.Status.Protocol = v1alpha1.VolumeProtocol(resp.Protocol)
 	vol.Status.VendorContext = resp.VendorContext
+	vol.Status.ProvisionedSizeGiB = vol.Spec.SizeGiB
 	vol.Status.Phase = v1alpha1.VolumePhaseReady
+	now := metav1.Now()
+	vol.Status.StateTransitionTime = &now
 	setVendorProvisionedCondition(&vol.Status.Conditions, metav1.ConditionTrue, "Provisioned", "Volume provisioned on vendor storage array")
 
 	log.Info("vendor provisioning succeeded",
@@ -292,6 +317,14 @@ func (r *VolumeReconciler) handleProvisioning(ctx context.Context, vol *v1alpha1
 	return ctrl.Result{}, nil
 }
 
+func (r *VolumeReconciler) failProvisioning(vol *v1alpha1.Volume, message string) (ctrl.Result, error) {
+	vol.Status.Phase = v1alpha1.VolumePhaseFailed
+	now := metav1.Now()
+	vol.Status.StateTransitionTime = &now
+	setVendorProvisionedCondition(&vol.Status.Conditions, metav1.ConditionFalse, "ProvisioningFailed", message)
+	return ctrl.Result{}, nil
+}
+
 // handleDelete runs when the Volume CR has a deletion timestamp. It calls the
 // vendor to deprovision the volume from the backend array, then removes the
 // resource controller's finalizer. If deprovisioning fails the error is
@@ -300,7 +333,22 @@ func (r *VolumeReconciler) handleDelete(ctx context.Context, vol *v1alpha1.Volum
 	log := ctrllog.FromContext(ctx)
 	log.Info("deleting volume")
 
-	vol.Status.Phase = v1alpha1.VolumePhaseDeleting
+	if vol.Status.Phase == v1alpha1.VolumePhaseDeleted {
+		if controllerutil.RemoveFinalizer(vol, osacVolumeFinalizer) {
+			if err := r.Update(ctx, vol); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+		return ctrl.Result{}, nil
+	}
+
+	phaseChanged := vol.Status.Phase != v1alpha1.VolumePhaseDeleting
+	if phaseChanged {
+		vol.Status.Phase = v1alpha1.VolumePhaseDeleting
+		now := metav1.Now()
+		vol.Status.StateTransitionTime = &now
+		return ctrl.Result{}, nil
+	}
 
 	if !controllerutil.ContainsFinalizer(vol, osacVolumeFinalizer) {
 		return ctrl.Result{}, nil
@@ -337,11 +385,9 @@ func (r *VolumeReconciler) handleDelete(ctx context.Context, vol *v1alpha1.Volum
 		log.Info("vendor deprovisioning succeeded", "vendorVolumeID", vol.Status.VendorVolumeID)
 	}
 
-	if controllerutil.RemoveFinalizer(vol, osacVolumeFinalizer) {
-		if err := r.Update(ctx, vol); err != nil {
-			return ctrl.Result{}, err
-		}
-	}
+	vol.Status.Phase = v1alpha1.VolumePhaseDeleted
+	now := metav1.Now()
+	vol.Status.StateTransitionTime = &now
 
 	return ctrl.Result{}, nil
 }

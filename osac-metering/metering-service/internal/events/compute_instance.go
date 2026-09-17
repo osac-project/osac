@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/osac-project/osac-metering/schema"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -142,6 +143,10 @@ func (m *computeInstanceMapper) IsBillable() bool {
 
 func (m *computeInstanceMapper) BillingDimensionsMap() (map[string]any, error) {
 	return ComputeInstanceBillingDimensions(m.ci), nil
+}
+
+func (m *computeInstanceMapper) Usage(string, *time.Time, time.Time, map[string]any) (*schema.Usage, error) {
+	return nil, nil
 }
 
 func ComputeInstanceBillingDimensions(ci *privatev1.ComputeInstance) map[string]any {

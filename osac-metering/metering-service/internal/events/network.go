@@ -29,13 +29,6 @@ func HeartbeatIdentity(resourceType string, dimensions map[string]any, sliceStar
 	return hex.EncodeToString(hash[:]), nil
 }
 
-// MapperContext contains the fulfillment data that is not carried by a
-// networking resource itself but is required to publish its billing record.
-type MapperContext struct {
-	DeploymentID    string
-	ExternalIPPools map[string]string
-}
-
 var requiredBillingDimensions = map[string][]string{
 	schema.ResourceTypeExternalIP: {
 		"deployment",
@@ -63,10 +56,7 @@ func IsNetworkingResourceType(resourceType string) bool {
 	return ok
 }
 
-// ValidateBillingDimensions rejects incomplete networking dimensions before an
-// event reaches Kafka. An empty project_id identifies the tenant default
-// project; all other string dimensions must be non-empty.
-func ValidateBillingDimensions(resourceType string, dimensions map[string]any) error {
+func validateNetworkingBillingDimensions(resourceType string, dimensions map[string]any) error {
 	for _, key := range requiredBillingDimensions[resourceType] {
 		value, ok := dimensions[key]
 		if !ok {

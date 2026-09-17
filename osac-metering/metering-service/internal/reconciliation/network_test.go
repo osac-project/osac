@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/go-logr/logr"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc"
@@ -55,6 +54,23 @@ type networkNATGatewayClient struct {
 	items []*privatev1.NATGateway
 }
 
+type volumeClient struct {
+	items []*privatev1.Volume
+}
+
+func (c volumeClient) List(context.Context, *privatev1.VolumesListRequest, ...grpc.CallOption) (*privatev1.VolumesListResponse, error) {
+	return &privatev1.VolumesListResponse{Total: int32(len(c.items)), Items: c.items}, nil
+}
+
+func (c volumeClient) Get(_ context.Context, request *privatev1.VolumesGetRequest, _ ...grpc.CallOption) (*privatev1.VolumesGetResponse, error) {
+	for _, item := range c.items {
+		if item.GetId() == request.GetId() {
+			return &privatev1.VolumesGetResponse{Object: item}, nil
+		}
+	}
+	return nil, fmt.Errorf("volume %s not found", request.GetId())
+}
+
 func (c networkNATGatewayClient) List(context.Context, *privatev1.NATGatewaysListRequest, ...grpc.CallOption) (*privatev1.NATGatewaysListResponse, error) {
 	return &privatev1.NATGatewaysListResponse{Total: int32(len(c.items)), Items: c.items}, nil
 }
@@ -69,10 +85,106 @@ func (c networkNATGatewayClient) Get(_ context.Context, request *privatev1.NATGa
 }
 
 var _ = Describe("ExternalIP pool loader", func() {
+	It("fails loudly when a Volume changes billability without a transition", func() {
+		transition := timestamppb.Now()
+		volume := &privatev1.Volume{
+			Id:       "volume-billability-drift",
+			Metadata: &privatev1.Metadata{Tenant: "tenant-1", Version: 2},
+			Spec:     &privatev1.VolumeSpec{StorageTier: "gold", SizeGib: 10},
+			Status: &privatev1.VolumeStatus{
+				State:               privatev1.VolumeState_VOLUME_STATE_AVAILABLE,
+				Protocol:            privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
+				ProvisionedSizeGib:  10,
+				StateTransitionTime: transition,
+			},
+		}
+		store := newMockStore()
+		store.states[volume.GetId()] = projection.ResourceState{
+			ResourceID:         volume.GetId(),
+			ResourceType:       events.ResourceTypeVolume,
+			TenantID:           "tenant-1",
+			CurrentState:       events.VolumeStateAvailable,
+			IsBillable:         true,
+			FulfillmentVersion: 1,
+			BillingDimensions: map[string]any{
+				"volume_id":    volume.GetId(),
+				"tenant_id":    "tenant-1",
+				"project_id":   "",
+				"storage_tier": "gold",
+				"size_gib":     int64(10),
+			},
+		}
+		reconciler := newConfiguredReconciler(
+			&mockComputeClient{},
+			&mockClusterClient{},
+			networkExternalIPClient{},
+			networkNATGatewayClient{},
+			networkPoolClient{response: &privatev1.ExternalIPPoolsListResponse{}},
+			volumeClient{items: []*privatev1.Volume{volume}},
+			store,
+			&mockPublisher{},
+			time.Hour,
+			"deployment-1",
+		)
+
+		Expect(reconciler.Reconcile(context.Background())).To(MatchError(ContainSubstring("changed billability without an authoritative transition")))
+	})
+
+	It("leaves the projection unchanged when a Volume resize has no authoritative boundary", func() {
+		transition := timestamppb.Now()
+		volume := &privatev1.Volume{
+			Id:       "volume-resize-drift",
+			Metadata: &privatev1.Metadata{Tenant: "tenant-1", Version: 2},
+			Spec:     &privatev1.VolumeSpec{StorageTier: "gold", SizeGib: 20},
+			Status: &privatev1.VolumeStatus{
+				State:               privatev1.VolumeState_VOLUME_STATE_AVAILABLE,
+				Protocol:            privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
+				VendorVolumeId:      "vendor-volume-resize-drift",
+				ProvisionedSizeGib:  20,
+				StateTransitionTime: transition,
+			},
+		}
+		store := newMockStore()
+		store.states[volume.GetId()] = projection.ResourceState{
+			ResourceID:         volume.GetId(),
+			ResourceType:       events.ResourceTypeVolume,
+			TenantID:           "tenant-1",
+			CurrentState:       events.VolumeStateAvailable,
+			IsBillable:         true,
+			FulfillmentVersion: 1,
+			BillingDimensions: map[string]any{
+				"volume_id": volume.GetId(), "tenant_id": "tenant-1", "project_id": "",
+				"storage_tier": "gold", "size_gib": int64(10),
+			},
+		}
+		publisher := &mockPublisher{}
+		projectionBefore := store.states[volume.GetId()]
+		reconciler := newConfiguredReconciler(
+			&mockComputeClient{},
+			&mockClusterClient{},
+			networkExternalIPClient{},
+			networkNATGatewayClient{},
+			networkPoolClient{response: &privatev1.ExternalIPPoolsListResponse{}},
+			volumeClient{items: []*privatev1.Volume{volume}},
+			store,
+			publisher,
+			time.Hour,
+			"deployment-1",
+		)
+
+		Expect(reconciler.Reconcile(context.Background())).To(MatchError(ContainSubstring("unobserved billing-dimension change")))
+		publisher.mu.Lock()
+		publishedCount := len(publisher.published)
+		publisher.mu.Unlock()
+		Expect(publishedCount).To(BeZero())
+		Expect(store.states[volume.GetId()]).To(Equal(projectionBefore))
+	})
+
 	It("does not fail reconciliation for pending networking resources without timestamps", func() {
 		store := newMockStore()
-		reconciler := reconciliation.NewReconciler(nil, nil, store, &mockPublisher{}, logr.Discard(), time.Hour)
-		reconciler.SetNetworkingClients(
+		reconciler := newConfiguredReconciler(
+			&mockComputeClient{},
+			&mockClusterClient{},
 			networkExternalIPClient{items: []*privatev1.ExternalIP{{
 				Id:       "ip-pending",
 				Metadata: &privatev1.Metadata{Tenant: "tenant-1", Version: 1},
@@ -95,6 +207,10 @@ var _ = Describe("ExternalIP pool loader", func() {
 					Spec: &privatev1.ExternalIPPoolSpec{IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4},
 				}},
 			}},
+			volumeClient{},
+			store,
+			&mockPublisher{},
+			time.Hour,
 			"deployment-1",
 		)
 
@@ -108,15 +224,16 @@ var _ = Describe("ExternalIP pool loader", func() {
 			ResourceID: "ip-billable",
 			IsBillable: true,
 		}
-		reconciler := reconciliation.NewReconciler(nil, nil, store, &mockPublisher{}, logr.Discard(), time.Hour)
-		reconciler.SetNetworkingClients(
+		reconciler := newConfiguredReconciler(
+			&mockComputeClient{},
+			&mockClusterClient{},
 			networkExternalIPClient{items: []*privatev1.ExternalIP{{
 				Id:       "ip-billable",
 				Metadata: &privatev1.Metadata{Tenant: "tenant-1", Version: 2},
 				Spec:     &privatev1.ExternalIPSpec{Pool: &privatev1.ExternalIPPoolReference{Id: "pool-1"}},
 				Status:   &privatev1.ExternalIPStatus{State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED},
 			}}},
-			nil,
+			networkNATGatewayClient{},
 			networkPoolClient{response: &privatev1.ExternalIPPoolsListResponse{
 				Total: 1,
 				Items: []*privatev1.ExternalIPPool{{
@@ -124,6 +241,10 @@ var _ = Describe("ExternalIP pool loader", func() {
 					Spec: &privatev1.ExternalIPPoolSpec{IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4},
 				}},
 			}},
+			volumeClient{},
+			store,
+			&mockPublisher{},
+			time.Hour,
 			"deployment-1",
 		)
 
@@ -132,15 +253,16 @@ var _ = Describe("ExternalIP pool loader", func() {
 
 	It("fails reconciliation for an unprojected billable ExternalIP without a timestamp", func() {
 		store := newMockStore()
-		reconciler := reconciliation.NewReconciler(nil, nil, store, &mockPublisher{}, logr.Discard(), time.Hour)
-		reconciler.SetNetworkingClients(
+		reconciler := newConfiguredReconciler(
+			&mockComputeClient{},
+			&mockClusterClient{},
 			networkExternalIPClient{items: []*privatev1.ExternalIP{{
 				Id:       "ip-unprojected",
 				Metadata: &privatev1.Metadata{Tenant: "tenant-1", Version: 1},
 				Spec:     &privatev1.ExternalIPSpec{Pool: &privatev1.ExternalIPPoolReference{Id: "pool-1"}},
 				Status:   &privatev1.ExternalIPStatus{State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED},
 			}}},
-			nil,
+			networkNATGatewayClient{},
 			networkPoolClient{response: &privatev1.ExternalIPPoolsListResponse{
 				Total: 1,
 				Items: []*privatev1.ExternalIPPool{{
@@ -148,6 +270,10 @@ var _ = Describe("ExternalIP pool loader", func() {
 					Spec: &privatev1.ExternalIPPoolSpec{IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4},
 				}},
 			}},
+			volumeClient{},
+			store,
+			&mockPublisher{},
+			time.Hour,
 			"deployment-1",
 		)
 
@@ -156,9 +282,10 @@ var _ = Describe("ExternalIP pool loader", func() {
 
 	It("fails reconciliation for an unprojected billable NATGateway without a timestamp", func() {
 		store := newMockStore()
-		reconciler := reconciliation.NewReconciler(nil, nil, store, &mockPublisher{}, logr.Discard(), time.Hour)
-		reconciler.SetNetworkingClients(
-			nil,
+		reconciler := newConfiguredReconciler(
+			&mockComputeClient{},
+			&mockClusterClient{},
+			networkExternalIPClient{},
 			networkNATGatewayClient{items: []*privatev1.NATGateway{{
 				Id:       "nat-unprojected",
 				Metadata: &privatev1.Metadata{Tenant: "tenant-1", Version: 1},
@@ -168,7 +295,11 @@ var _ = Describe("ExternalIP pool loader", func() {
 				},
 				Status: &privatev1.NATGatewayStatus{State: privatev1.NATGatewayState_NAT_GATEWAY_STATE_READY},
 			}}},
-			nil,
+			networkPoolClient{response: &privatev1.ExternalIPPoolsListResponse{}},
+			volumeClient{},
+			store,
+			&mockPublisher{},
+			time.Hour,
 			"deployment-1",
 		)
 
@@ -252,10 +383,11 @@ var _ = Describe("ExternalIP pool loader", func() {
 				"project_id": "project-1",
 			},
 		}
-		reconciler := reconciliation.NewReconciler(nil, nil, store, &mockPublisher{}, logr.Discard(), time.Hour)
-		reconciler.SetNetworkingClients(
+		reconciler := newConfiguredReconciler(
+			&mockComputeClient{},
+			&mockClusterClient{},
 			networkExternalIPClient{items: []*privatev1.ExternalIP{ip}},
-			nil,
+			networkNATGatewayClient{},
 			networkPoolClient{response: &privatev1.ExternalIPPoolsListResponse{
 				Total: 1,
 				Items: []*privatev1.ExternalIPPool{{
@@ -263,6 +395,10 @@ var _ = Describe("ExternalIP pool loader", func() {
 					Spec: &privatev1.ExternalIPPoolSpec{IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4},
 				}},
 			}},
+			volumeClient{},
+			store,
+			&mockPublisher{},
+			time.Hour,
 			"deployment-1",
 		)
 

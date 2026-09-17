@@ -17,6 +17,8 @@ package osac.private.v1;
 
 import "buf/validate/validate.proto";
 import "cleanapi/cleanapi.proto";
+import "google/api/field_behavior.proto";
+import "google/protobuf/timestamp.proto";
 import "osac/private/v1/metadata_type.proto";
 import "osac/private/v1/storage_common_type.proto";
 
@@ -144,8 +146,21 @@ message VolumeStatus {
   // forwarded unchanged by osac-csi-driver to the vendor CSI controller's ControllerPublishVolume.
   // Visible only through the private API.
   map<string, string> vendor_context = 7 [(cleanapi.field).private = true];
-
   // Provider selected by StorageTier resolution. This is the provider key used by the operator
   // to select a VendorProvisioner implementation.
   string provider = 8 [(cleanapi.field).private = true];
+
+  // Time at which the lifecycle state last changed. Written by the operator
+  // and persisted unchanged by fulfillment-service.
+  google.protobuf.Timestamp state_transition_time = 9 [
+    (cleanapi.field).private = true,
+    (google.api.field_behavior) = OUTPUT_ONLY
+  ];
+
+  // Capacity successfully committed on the vendor storage array. Visible only
+  // through the private API.
+  int64 provisioned_size_gib = 10 [
+    (cleanapi.field).private = true,
+    (google.api.field_behavior) = OUTPUT_ONLY
+  ];
 }

@@ -17,6 +17,7 @@ import (
 
 	cloudevents "github.com/cloudevents/sdk-go/v2"
 
+	"github.com/osac-project/osac-metering/schema"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -95,6 +96,10 @@ func (m *clusterMapper) IsBillable() bool {
 
 func (m *clusterMapper) BillingDimensionsMap() (map[string]any, error) {
 	return ClusterBillingDimensions(m.cl), nil
+}
+
+func (m *clusterMapper) Usage(string, *time.Time, time.Time, map[string]any) (*schema.Usage, error) {
+	return nil, nil
 }
 
 // CaaS cluster state machine. Both PROGRESSING and READY are billable.

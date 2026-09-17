@@ -878,6 +878,33 @@ var _ = Describe("MapWatchEvent", func() {
 })
 
 var _ = Describe("DimensionsEqual", func() {
+	It("rejects a mapper without a resource identity", func() {
+		mapper, err := events.MapperForEvent(&privatev1.Event{
+			Id: "event-1",
+			Payload: &privatev1.Event_ComputeInstance{ComputeInstance: &privatev1.ComputeInstance{
+				Metadata: &privatev1.Metadata{Tenant: "tenant-1"},
+			}},
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		err = events.ValidateResourceIdentity(mapper, "event-1")
+		Expect(errors.Is(err, events.ErrDataQuality)).To(BeTrue())
+	})
+
+	It("rejects a mapper without a tenant identity", func() {
+		mapper, err := events.MapperForEvent(&privatev1.Event{
+			Id: "event-1",
+			Payload: &privatev1.Event_ComputeInstance{ComputeInstance: &privatev1.ComputeInstance{
+				Id:       "compute-1",
+				Metadata: &privatev1.Metadata{},
+			}},
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		err = events.ValidateResourceIdentity(mapper, "event-1")
+		Expect(errors.Is(err, events.ErrDataQuality)).To(BeTrue())
+	})
+
 	It("returns true for equal maps", func() {
 		a := map[string]any{"k": "v", "n": int32(50)}
 		b := map[string]any{"k": "v", "n": int32(50)}

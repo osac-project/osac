@@ -10,6 +10,7 @@ in compliance with the License. You may obtain a copy of the License at
 package heartbeat
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -86,5 +87,60 @@ func TestBuildNetworkingHeartbeatEvents(t *testing.T) {
 	}
 	if got := heartbeat[0].Extensions()["osacresourcetype"]; got != events.ResourceTypeNATGateway {
 		t.Errorf("expected NATGateway resource type, got %v", got)
+	}
+}
+
+func TestVolumeHeartbeatIDsIncludeBillingSliceIdentity(t *testing.T) {
+	start := time.Date(2026, 9, 16, 10, 0, 0, 0, time.UTC)
+	makeState := func(size int64) projection.ResourceState {
+		return projection.ResourceState{
+			ResourceID:    "volume-1",
+			ResourceType:  events.ResourceTypeVolume,
+			TenantID:      "tenant-1",
+			CurrentState:  events.VolumeStateAvailable,
+			IsBillable:    true,
+			BillableSince: &start,
+			BillingDimensions: map[string]any{
+				"volume_id": "volume-1", "tenant_id": "tenant-1", "project_id": "project-1",
+				"storage_tier": "gold", "size_gib": size,
+			},
+		}
+	}
+	g := &Generator{interval: time.Minute}
+	first, err := g.buildHeartbeatEvents(&[]projection.ResourceState{makeState(10)}[0], start.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := g.buildHeartbeatEvents(&[]projection.ResourceState{makeState(20)}[0], start.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first[0].ID() == second[0].ID() {
+		t.Fatalf("heartbeat IDs collided across size slices: %q", first[0].ID())
+	}
+}
+
+func TestVolumeHeartbeatCarriesCumulativeUsage(t *testing.T) {
+	start := time.Date(2026, 9, 16, 10, 0, 0, 0, time.UTC)
+	state := &projection.ResourceState{
+		ResourceID: "volume-1", ResourceType: events.ResourceTypeVolume, TenantID: "tenant-1",
+		CurrentState: events.VolumeStateAvailable, IsBillable: true, BillableSince: &start,
+		BillingDimensions: map[string]any{
+			"volume_id": "volume-1", "tenant_id": "tenant-1", "project_id": "project-1",
+			"storage_tier": "gold", "size_gib": int64(10),
+		},
+	}
+	g := &Generator{interval: time.Minute}
+	items, err := g.buildHeartbeatEvents(state, start.Add(60*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var data map[string]any
+	if err := json.Unmarshal(items[0].Data(), &data); err != nil {
+		t.Fatal(err)
+	}
+	usage := data["usage"].(map[string]any)
+	if usage["semantics"] != "cumulative" || usage["unit"] != "gibibyte_second" || usage["quantity"] != "600.000000" {
+		t.Fatalf("heartbeat usage = %#v", usage)
 	}
 }

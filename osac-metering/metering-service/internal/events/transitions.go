@@ -56,6 +56,7 @@ const (
 	ResourceTypeClusterOrder    = schema.ResourceTypeClusterOrder
 	ResourceTypeExternalIP      = schema.ResourceTypeExternalIP
 	ResourceTypeNATGateway      = schema.ResourceTypeNATGateway
+	ResourceTypeVolume          = schema.ResourceTypeVolume
 )
 
 // StateEmpty is the empty previous state for initial transitions.
@@ -156,6 +157,7 @@ var resourceDecomposers = map[string]EventDecomposer{
 	ResourceTypeClusterOrder:    DecomposeClusterEvents,
 	ResourceTypeExternalIP:      singleEvent,
 	ResourceTypeNATGateway:      singleEvent,
+	ResourceTypeVolume:          singleEvent,
 }
 
 // BuildResourceEvents dispatches event building to the correct decomposer

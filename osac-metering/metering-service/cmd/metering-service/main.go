@@ -57,15 +57,10 @@ type config struct {
 	heartbeatInterval      time.Duration
 	reconciliationInterval time.Duration
 	deploymentID           string
-	enableCaaS             bool
-	enableVMaaS            bool
-	enableBMaaS            bool
-	enableMaaS             bool
 }
 
 func main() {
 	cfg := configFromEnv()
-	cfg.enableAllIfNoneSet()
 	if err := cfg.validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "configuration error: %v\n", err)
 		os.Exit(2)
@@ -98,23 +93,6 @@ func configFromEnv() *config {
 		heartbeatInterval:      parseDurationOrDefault(os.Getenv("HEARTBEAT_INTERVAL"), 60*time.Second),
 		reconciliationInterval: parseDurationOrDefault(os.Getenv("RECONCILIATION_INTERVAL"), 60*time.Minute),
 		deploymentID:           os.Getenv("METERING_DEPLOYMENT_ID"),
-		enableCaaS:             envBool("ENABLE_CAAS"),
-		enableVMaaS:            envBool("ENABLE_VMAAS"),
-		enableBMaaS:            envBool("ENABLE_BMAAS"),
-		enableMaaS:             envBool("ENABLE_MAAS"),
-	}
-}
-
-func envBool(key string) bool {
-	return strings.EqualFold(os.Getenv(key), "true")
-}
-
-func (c *config) enableAllIfNoneSet() {
-	if !c.enableCaaS && !c.enableVMaaS && !c.enableBMaaS && !c.enableMaaS {
-		c.enableCaaS = true
-		c.enableVMaaS = true
-		c.enableBMaaS = true
-		c.enableMaaS = true
 	}
 }
 
@@ -231,29 +209,32 @@ func run(ctx context.Context, logger logr.Logger, cfg *config) error {
 
 	publisher := kafkapub.NewPublisher(producer)
 
-	logger.Info("service enablement",
-		"caas", cfg.enableCaaS,
-		"vmaas", cfg.enableVMaaS,
-		"bmaas", cfg.enableBMaaS,
-		"maas", cfg.enableMaaS,
-	)
-
-	var computeClient privatev1.ComputeInstancesClient
-	var clusterClient privatev1.ClustersClient
-	if cfg.enableVMaaS {
-		computeClient = privatev1.NewComputeInstancesClient(grpcConn)
-	}
-	if cfg.enableCaaS {
-		clusterClient = privatev1.NewClustersClient(grpcConn)
-	}
+	computeClient := privatev1.NewComputeInstancesClient(grpcConn)
+	clusterClient := privatev1.NewClustersClient(grpcConn)
 	externalIPClient := privatev1.NewExternalIPsClient(grpcConn)
 	natGatewayClient := privatev1.NewNATGatewaysClient(grpcConn)
 	externalIPPoolClient := privatev1.NewExternalIPPoolsClient(grpcConn)
-	reconciler := reconciliation.NewReconciler(computeClient, clusterClient, store, publisher, logger, cfg.heartbeatInterval)
-	reconciler.SetNetworkingClients(externalIPClient, natGatewayClient, externalIPPoolClient, cfg.deploymentID)
+	volumeClient := privatev1.NewVolumesClient(grpcConn)
+	reconciler := reconciliation.NewReconciler(
+		computeClient,
+		clusterClient,
+		externalIPClient,
+		natGatewayClient,
+		externalIPPoolClient,
+		volumeClient,
+		store,
+		publisher,
+		logger,
+		cfg.heartbeatInterval,
+		cfg.deploymentID,
+	)
 	pools, err := reconciliation.LoadExternalIPPools(ctx, externalIPPoolClient)
 	if err != nil {
 		return fmt.Errorf("loading external IP pool families: %w", err)
+	}
+	mapperFactory, err := watch.NewMapperFactory(externalIPPoolClient, cfg.deploymentID, pools)
+	if err != nil {
+		return fmt.Errorf("creating Watch mapper factory: %w", err)
 	}
 
 	logger.Info("running startup reconciliation")
@@ -283,11 +264,16 @@ func run(ctx context.Context, logger logr.Logger, cfg *config) error {
 	}()
 
 	eventsClient := privatev1.NewEventsClient(grpcConn)
-	consumer := watch.NewConsumer(eventsClient, publisher, store, logger)
-	consumer.Filter = watch.BuildFilter(cfg.enableVMaaS, cfg.enableCaaS)
-	consumer.DeploymentID = cfg.deploymentID
-	consumer.ExternalIPPoolClient = externalIPPoolClient
-	consumer.ExternalIPPools = pools
+	consumer, err := watch.NewConsumer(
+		eventsClient,
+		publisher,
+		store,
+		logger,
+		mapperFactory,
+	)
+	if err != nil {
+		return fmt.Errorf("creating Watch consumer: %w", err)
+	}
 	err = consumer.Run(ctx)
 	runCancel()
 	wg.Wait()

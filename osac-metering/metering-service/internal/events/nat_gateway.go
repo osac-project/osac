@@ -61,6 +61,10 @@ type natGatewayMapper struct {
 	deployment string
 }
 
+func NewNATGatewayMapper(gateway *privatev1.NATGateway, deploymentID string) ResourceMapper {
+	return &natGatewayMapper{gateway: gateway, deployment: deploymentID}
+}
+
 func (m *natGatewayMapper) ResourceType() string { return schema.ResourceTypeNATGateway }
 func (m *natGatewayMapper) ResourceID() string   { return m.gateway.GetId() }
 
@@ -97,7 +101,11 @@ func (m *natGatewayMapper) IsBillable() bool {
 
 func (m *natGatewayMapper) BillingDimensionsMap() (map[string]any, error) {
 	dimensions := NATGatewayBillingDimensions(m.gateway, m.deployment)
-	return dimensions, nil
+	return dimensions, validateNetworkingBillingDimensions(schema.ResourceTypeNATGateway, dimensions)
+}
+
+func (m *natGatewayMapper) Usage(string, *time.Time, time.Time, map[string]any) (*schema.Usage, error) {
+	return nil, nil
 }
 
 func NATGatewayBillingDimensions(gateway *privatev1.NATGateway, deploymentID string) map[string]any {

@@ -16,7 +16,10 @@ package grpcserver
 import (
 	"context"
 	"net"
+	"net/http"
+	"net/http/httptest"
 
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/prometheus/client_golang/prometheus"
@@ -27,6 +30,8 @@ import (
 	"google.golang.org/grpc/tap"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/services"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 func newTestHandler(disabledServices map[string]string) (tap.ServerInHandle, *prometheus.Registry) {
@@ -100,6 +105,60 @@ var _ = Describe("DisabledServiceTapHandler", func() {
 		Expect(ok).To(BeTrue())
 		Expect(st.Code()).To(Equal(codes.Unavailable))
 		Expect(st.Message()).To(Equal("the CaaS service is not enabled on this server"))
+	})
+
+	It("returns Unavailable for disabled AddOnOperator endpoints", func() {
+		handler, _ := newTestHandler(buildDisabledServiceMap(&services.Flags{
+			CaaS:  false,
+			VMaaS: true,
+			BMaaS: true,
+		}))
+		conn, cleanup := startTestServerWithTap(handler)
+		DeferCleanup(cleanup)
+
+		for _, method := range []string{
+			"/osac.public.v1.AddOnOperators/List",
+			"/osac.private.v1.AddOnOperators/List",
+		} {
+			err := invokeMethod(conn, method)
+			Expect(err).To(HaveOccurred())
+
+			st, ok := status.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(st.Code()).To(Equal(codes.Unavailable))
+			Expect(st.Message()).To(Equal("the CaaS service is not enabled on this server"))
+		}
+	})
+
+	It("translates disabled AddOnOperator endpoints to HTTP 503", func() {
+		handler, _ := newTestHandler(buildDisabledServiceMap(&services.Flags{
+			CaaS:  false,
+			VMaaS: true,
+			BMaaS: true,
+		}))
+		conn, cleanup := startTestServerWithTap(handler)
+		DeferCleanup(cleanup)
+
+		mux := runtime.NewServeMux()
+		err := publicv1.RegisterAddOnOperatorsHandler(context.Background(), mux, conn)
+		Expect(err).ToNot(HaveOccurred())
+		err = privatev1.RegisterAddOnOperatorsHandler(context.Background(), mux, conn)
+		Expect(err).ToNot(HaveOccurred())
+
+		gateway := httptest.NewServer(mux)
+		DeferCleanup(gateway.Close)
+
+		for _, path := range []string{
+			"/api/fulfillment/v1/add_on_operators",
+			"/api/private/v1/add_on_operators",
+		} {
+			request, err := http.NewRequest(http.MethodGet, gateway.URL+path, nil)
+			Expect(err).ToNot(HaveOccurred())
+			response, err := http.DefaultClient.Do(request)
+			Expect(err).ToNot(HaveOccurred())
+			response.Body.Close()
+			Expect(response.StatusCode).To(Equal(http.StatusServiceUnavailable))
+		}
 	})
 
 	It("returns Unimplemented for an unknown service", func() {

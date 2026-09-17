@@ -32,10 +32,12 @@ import (
 var disabledServicePrefixes = map[string][]string{
 	"CaaS": {
 		"/osac.public.v1.ClusterTemplates/",
+		"/osac.public.v1.AddOnOperators/",
 		"/osac.public.v1.ClusterCatalogItems/",
 		"/osac.public.v1.Clusters/",
 		"/osac.public.v1.ClusterVersions/",
 		"/osac.private.v1.ClusterTemplates/",
+		"/osac.private.v1.AddOnOperators/",
 		"/osac.private.v1.ClusterCatalogItems/",
 		"/osac.private.v1.Clusters/",
 		"/osac.private.v1.ClusterVersions/",

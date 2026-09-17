@@ -57,10 +57,12 @@ func containsAll(names []string, expected []string) []string {
 
 var caasHandlers = []string{
 	"public/v1.RegisterClusterTemplatesHandler",
+	"public/v1.RegisterAddOnOperatorsHandler",
 	"public/v1.RegisterClusterCatalogItemsHandler",
 	"public/v1.RegisterClustersHandler",
 	"public/v1.RegisterClusterVersionsHandler",
 	"private/v1.RegisterClusterTemplatesHandler",
+	"private/v1.RegisterAddOnOperatorsHandler",
 	"private/v1.RegisterClusterCatalogItemsHandler",
 	"private/v1.RegisterClustersHandler",
 	"private/v1.RegisterClusterVersionsHandler",

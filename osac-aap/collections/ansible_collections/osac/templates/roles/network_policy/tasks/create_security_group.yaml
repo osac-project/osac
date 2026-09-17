@@ -41,23 +41,10 @@
       - "Ingress rules count: {{ ingress_rules | length }}"
       - "Egress rules count: {{ egress_rules | length }}"
 
-- name: Validate ingress rule CIDRs
-  ansible.builtin.assert:
-    that:
-      - item.sourceCidr is defined
-      - item.sourceCidr | default('') | length > 0
-      - item.destinationCidr | default('') | length == 0
-    fail_msg: "SecurityGroup ingress rules require a source CIDR and must not set a destination CIDR"
-  loop: "{{ ingress_rules }}"
-
-- name: Validate egress rule CIDRs
-  ansible.builtin.assert:
-    that:
-      - item.destinationCidr is defined
-      - item.destinationCidr | default('') | length > 0
-      - item.sourceCidr | default('') | length == 0
-    fail_msg: "SecurityGroup egress rules require a destination CIDR and must not set a source CIDR"
-  loop: "{{ egress_rules }}"
+- name: Validate SecurityGroup rule CIDRs
+  ansible.builtin.include_role:
+    name: osac.templates.security_group_validation
+    tasks_from: validate_cidrs
 
 - name: Initialize ingress and egress policy rule arrays
   ansible.builtin.set_fact:

@@ -50,6 +50,19 @@ func validatePoolCIDRFormat(cidrStr string, ipFamily privatev1.IPFamily, idx int
 	return canonical, nil
 }
 
+func validateSingleIPv4PoolCIDR(cidrs []string) ([]string, error) {
+	if len(cidrs) != 1 {
+		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'spec.cidrs' must contain exactly one canonical IPv4 CIDR")
+	}
+
+	canonical, err := validatePoolCIDRFormat(cidrs[0], privatev1.IPFamily_IP_FAMILY_IPV4, 0)
+	if err != nil {
+		return nil, err
+	}
+	return []string{canonical}, nil
+}
+
 func validateNoCIDRSelfOverlap(cidrs []string) error {
 	prefixes := make([]netip.Prefix, len(cidrs))
 	for i, cidr := range cidrs {

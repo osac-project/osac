@@ -186,19 +186,9 @@ func (s *PrivateExternalIPPoolsServer) validateCreate(ctx context.Context,
 			"field 'spec.ip_family' must be IP_FAMILY_IPV4; IPv6 and unspecified-family pools are not supported")
 	}
 
-	cidrs := spec.GetCidrs()
-	if len(cidrs) != 1 {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"field 'spec.cidrs' must contain exactly one canonical IPv4 CIDR")
-	}
-
-	canonicalCIDRs := make([]string, len(cidrs))
-	for i, cidr := range cidrs {
-		canonical, err := validatePoolCIDRFormat(cidr, spec.GetIpFamily(), i)
-		if err != nil {
-			return err
-		}
-		canonicalCIDRs[i] = canonical
+	canonicalCIDRs, err := validateSingleIPv4PoolCIDR(spec.GetCidrs())
+	if err != nil {
+		return err
 	}
 	spec.SetCidrs(canonicalCIDRs)
 
@@ -233,11 +223,7 @@ func validateExternalIPPoolUpdate(newPool *privatev1.ExternalIPPool, existing *p
 	}
 
 	if newCIDRs := spec.GetCidrs(); len(newCIDRs) > 0 {
-		if len(newCIDRs) != 1 {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"field 'spec.cidrs' must contain exactly one canonical IPv4 CIDR")
-		}
-		if _, err := validatePoolCIDRFormat(newCIDRs[0], privatev1.IPFamily_IP_FAMILY_IPV4, 0); err != nil {
+		if _, err := validateSingleIPv4PoolCIDR(newCIDRs); err != nil {
 			return err
 		}
 		if !cidrSlicesEqual(newCIDRs, existing.GetSpec().GetCidrs()) {

@@ -481,6 +481,70 @@ spec:
                   - type
                   type: object
                 type: array
+              workers:
+                description: |-
+                  Workers tracks per-worker provisioning state for failure handling and retry.
+                  Each entry corresponds to a bare-metal worker slot in the cluster.
+                items:
+                  description: |-
+                    WorkerStatus tracks the provisioning state of a single bare-metal worker
+                    within a ClusterOrder, enabling failure handling and retry logic.
+                  properties:
+                    attemptCount:
+                      description: |-
+                        AttemptCount tracks how many provisioning attempts have been made
+                        for this worker slot. Transient gRPC errors do not increment this counter.
+                      type: integer
+                    attemptStartTime:
+                      description: |-
+                        AttemptStartTime records when the current provisioning attempt was first
+                        observed. This is set on the first reconciliation of a new or replaced
+                        worker to anchor the agent-registration timeout. Once a replacement is
+                        triggered (which sets NextRetryTime), this field is cleared because the
+                        replacement's NextRetryTime becomes the new timeout anchor.
+                      format: date-time
+                      type: string
+                    bmiName:
+                      description: BMIName is the name of the BareMetalInstance CR
+                        for this worker.
+                      type: string
+                    bmiNamespace:
+                      description: BMINamespace is the namespace of the BareMetalInstance
+                        CR.
+                      minLength: 1
+                      type: string
+                    lastFailureReason:
+                      description: LastFailureReason is a machine-readable reason
+                        for the most recent failure.
+                      type: string
+                    lastFailureTime:
+                      description: LastFailureTime is the timestamp of the most recent
+                        failure.
+                      format: date-time
+                      type: string
+                    nextRetryTime:
+                      description: |-
+                        NextRetryTime is the earliest time at which the next retry may be attempted,
+                        computed from the escalating backoff schedule.
+                      format: date-time
+                      type: string
+                    workerID:
+                      description: |-
+                        WorkerID is a stable identifier for this worker slot (e.g. "worker-0",
+                        "worker-1"). It is assigned when the worker entry is created and never
+                        changes, even when the underlying BareMetalInstance is replaced. This
+                        stability makes it safe to use as the list-map key so that BMI
+                        replacements update the existing entry instead of orphaning it.
+                      minLength: 1
+                      type: string
+                  required:
+                  - bmiNamespace
+                  - workerID
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - workerID
+                x-kubernetes-list-type: map
             type: object
         type: object
     served: true

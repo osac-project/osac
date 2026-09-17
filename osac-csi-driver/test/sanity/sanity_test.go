@@ -94,8 +94,8 @@ func TestSanity(t *testing.T) {
 	config.Address = driverSocket
 	config.SecretsFile = secretsFile
 	config.TestVolumeParameters = map[string]string{
-		"tier":   "default",
-		"tenant": "test-tenant",
+		"osac.tier": "default",
+		"tenant":    "test-tenant",
 	}
 	config.TargetPath = filepath.Join(tmpDir, "target")
 	config.StagingPath = filepath.Join(tmpDir, "staging")

@@ -128,6 +128,28 @@ var _ = Describe("Cluster reconciler", func() {
 	})
 
 	It("Creates the Kubernetes object when a cluster is created", func() {
+		operatorsClient := privatev1.NewAddOnOperatorsClient(tool.InternalView().AdminConn())
+		operatorID := fmt.Sprintf("test-operator-%s", uuid.New())
+		operatorName := fmt.Sprintf("test-operator-%s", uuid.New()[24:32])
+		_, err := operatorsClient.Create(ctx, privatev1.AddOnOperatorsCreateRequest_builder{
+			Object: privatev1.AddOnOperator_builder{
+				Id: operatorID,
+				Metadata: privatev1.Metadata_builder{
+					Name: operatorName,
+				}.Build(),
+				Title:       "Test operator",
+				Description: "Test operator.",
+				Published:   proto.Bool(true),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func() {
+			_, err := operatorsClient.Delete(ctx, privatev1.AddOnOperatorsDeleteRequest_builder{
+				Id: operatorID,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		})
+
 		// Create the cluster
 		response, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
@@ -136,6 +158,9 @@ var _ = Describe("Cluster reconciler", func() {
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					AddOnOperators: []*publicv1.AddOnOperatorReference{
+						publicv1.AddOnOperatorReference_builder{Id: operatorID}.Build(),
+					},
 					TemplateParameters: map[string]*anypb.Any{
 						"my": makeAny(wrapperspb.String("my_value")),
 					},
@@ -175,12 +200,57 @@ var _ = Describe("Cluster reconciler", func() {
 		Expect(kubeObject.Spec.NodeRequests).To(HaveLen(1))
 		Expect(kubeObject.Spec.NodeRequests[0].ResourceClass).To(Equal(hostTypeId))
 		Expect(kubeObject.Spec.NodeRequests[0].NumberOfNodes).To(BeNumerically("==", 3))
+		Expect(kubeObject.Spec.AddOnOperators).To(Equal([]string{operatorName}))
 
 		// Verify that the template parameters are reflected in the Kubernetes object:
 		Expect(kubeObject.Spec.TemplateParameters).To(MatchJSON(`{
 			"my": "my_value",
 			"your": "your_default"
 		}`))
+	})
+
+	It("Rejects unpublished add-on operators through the public cluster API", func() {
+		operatorsClient := privatev1.NewAddOnOperatorsClient(tool.InternalView().AdminConn())
+		operatorID := fmt.Sprintf("test-unpublished-operator-%s", uuid.New())
+		_, err := operatorsClient.Create(ctx, privatev1.AddOnOperatorsCreateRequest_builder{
+			Object: privatev1.AddOnOperator_builder{
+				Id: operatorID,
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("test-unpublished-operator-%s", uuid.New()[24:32]),
+				}.Build(),
+				Title:       "Test unpublished operator",
+				Description: "Test unpublished operator.",
+				Published:   proto.Bool(false),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func() {
+			_, err := operatorsClient.Delete(ctx, privatev1.AddOnOperatorsDeleteRequest_builder{
+				Id: operatorID,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		_, err = clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
+			Object: publicv1.Cluster_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-unpublished-cluster-%s", uuid.New()[24:32]),
+				}.Build(),
+				Spec: publicv1.ClusterSpec_builder{
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					AddOnOperators: []*publicv1.AddOnOperatorReference{
+						publicv1.AddOnOperatorReference_builder{Id: operatorID}.Build(),
+					},
+					TemplateParameters: map[string]*anypb.Any{
+						"my": makeAny(wrapperspb.String("my_value")),
+					},
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).To(HaveOccurred())
+		status, ok := grpcstatus.FromError(err)
+		Expect(ok).To(BeTrue())
+		Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 	})
 
 	It("Deletes the Kubernetes object when a cluster is deleted", func() {

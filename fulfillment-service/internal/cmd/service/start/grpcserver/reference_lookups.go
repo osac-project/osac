@@ -198,7 +198,7 @@ func registerReferenceLookups(
 		return fmt.Errorf("failed to create AddOnOperator DAO for reference lookups: %w", err)
 	}
 	references.RegisterDAOLookup(validator, "osac.private.v1.AddOnOperatorReference", addOnOperatorsDAO)
-	references.RegisterDAOLookup(validator, "osac.public.v1.AddOnOperatorReference", addOnOperatorsDAO)
+	validator.Register("osac.public.v1.AddOnOperatorReference", references.NewPublishedDAOLookupFunc(addOnOperatorsDAO))
 	references.RegisterDAOLookup(validator, "osac.private.v1.AddOnOperatorLocalReference", addOnOperatorsDAO)
 	references.RegisterDAOLookup(validator, "osac.public.v1.AddOnOperatorLocalReference", addOnOperatorsDAO)
 

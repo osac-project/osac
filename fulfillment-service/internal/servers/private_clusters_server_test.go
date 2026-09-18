@@ -323,6 +323,137 @@ var _ = Describe("Private clusters server", func() {
 			Expect(object.GetId()).ToNot(BeEmpty())
 		})
 
+		It("Preserves direct add-on operators through create and get", func() {
+			operators := []*privatev1.AddOnOperatorReference{
+				privatev1.AddOnOperatorReference_builder{Id: "operator-1", Name: "operator-one"}.Build(),
+				privatev1.AddOnOperatorReference_builder{Id: "operator-2", Name: "operator-two"}.Build(),
+			}
+
+			createResponse, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+				Object: privatev1.Cluster_builder{
+					Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.New()[24:32])}.Build(),
+					Spec: privatev1.ClusterSpec_builder{
+						Template:       privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+						AddOnOperators: operators,
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			getResponse, err := server.Get(ctx, privatev1.ClustersGetRequest_builder{
+				Id: createResponse.GetObject().GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			storedOperators := getResponse.GetObject().GetSpec().GetAddOnOperators()
+			Expect(storedOperators).To(HaveLen(len(operators)))
+			for i, operator := range operators {
+				Expect(proto.Equal(storedOperators[i], operator)).To(BeTrue())
+			}
+		})
+
+		It("Rejects changing add-on operators with a field mask", func() {
+			createResponse, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+				Object: privatev1.Cluster_builder{
+					Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.New()[24:32])}.Build(),
+					Spec: privatev1.ClusterSpec_builder{
+						Template:       privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+						AddOnOperators: []*privatev1.AddOnOperatorReference{privatev1.AddOnOperatorReference_builder{Id: "operator-1", Name: "operator-one"}.Build()},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+				Object: privatev1.Cluster_builder{
+					Id: createResponse.GetObject().GetId(),
+					Spec: privatev1.ClusterSpec_builder{
+						AddOnOperators: []*privatev1.AddOnOperatorReference{privatev1.AddOnOperatorReference_builder{Id: "operator-2", Name: "operator-two"}.Build()},
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.add_on_operators"}},
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(ContainSubstring("spec.add_on_operators"))
+			Expect(status.Message()).To(ContainSubstring("immutable"))
+		})
+
+		It("Rejects changing add-on operators on a full-object update", func() {
+			createResponse, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+				Object: privatev1.Cluster_builder{
+					Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.New()[24:32])}.Build(),
+					Spec: privatev1.ClusterSpec_builder{
+						Template:       privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+						AddOnOperators: []*privatev1.AddOnOperatorReference{privatev1.AddOnOperatorReference_builder{Id: "operator-1", Name: "operator-one"}.Build()},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			updated := proto.Clone(createResponse.GetObject()).(*privatev1.Cluster)
+			updated.GetSpec().SetAddOnOperators([]*privatev1.AddOnOperatorReference{
+				privatev1.AddOnOperatorReference_builder{Id: "operator-2", Name: "operator-two"}.Build(),
+			})
+			_, err = server.Update(ctx, privatev1.ClustersUpdateRequest_builder{Object: updated}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(ContainSubstring("spec.add_on_operators"))
+			Expect(status.Message()).To(ContainSubstring("immutable"))
+		})
+
+		It("Rejects an add-on operator update when the masked spec is omitted", func() {
+			createResponse, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+				Object: privatev1.Cluster_builder{
+					Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.New()[24:32])}.Build(),
+					Spec: privatev1.ClusterSpec_builder{
+						Template:       privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+						AddOnOperators: []*privatev1.AddOnOperatorReference{privatev1.AddOnOperatorReference_builder{Id: "operator-1", Name: "operator-one"}.Build()},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+				Object:     privatev1.Cluster_builder{Id: createResponse.GetObject().GetId()}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.add_on_operators"}},
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(Equal("object and spec are required"))
+		})
+
+		It("Preserves add-on operators on a full-object metadata update", func() {
+			createResponse, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+				Object: privatev1.Cluster_builder{
+					Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.New()[24:32])}.Build(),
+					Spec: privatev1.ClusterSpec_builder{
+						Template:       privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+						AddOnOperators: []*privatev1.AddOnOperatorReference{privatev1.AddOnOperatorReference_builder{Id: "operator-1", Name: "operator-one"}.Build()},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			updateResponse, err := server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+				Object: privatev1.Cluster_builder{
+					Id: createResponse.GetObject().GetId(),
+					Metadata: privatev1.Metadata_builder{
+						Name:   createResponse.GetObject().GetMetadata().GetName(),
+						Labels: map[string]string{"example.com/my-label": "my-value"},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updateResponse.GetObject().GetSpec().GetAddOnOperators()).To(HaveLen(1))
+			Expect(updateResponse.GetObject().GetSpec().GetAddOnOperators()[0].GetName()).To(Equal("operator-one"))
+		})
+
 		It("Creates object with template specified by name", func() {
 			// Create the object:
 			response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{

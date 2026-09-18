@@ -73,6 +73,27 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 		return instance
 	}
 
+	It("should round-trip add-on operator names through the ClusterOrder CRD", func() {
+		const name = "cluster-order-add-on-operators"
+		instance := newTestClusterOrder(name)
+		instance.Spec.AddOnOperators = []string{"operator-one", "operator-two"}
+		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, instance) })
+
+		stored := getClusterOrder(name)
+		Expect(stored.Spec.AddOnOperators).To(Equal([]string{"operator-one", "operator-two"}))
+	})
+
+	It("should omit add-on operators when none are requested", func() {
+		const name = "cluster-order-without-add-on-operators"
+		instance := newTestClusterOrder(name)
+		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, instance) })
+
+		stored := getClusterOrder(name)
+		Expect(stored.Spec.AddOnOperators).To(BeEmpty())
+	})
+
 	countProvisionJobs := func(instance *osacv1alpha1.ClusterOrder) int {
 		count := 0
 		for _, j := range instance.Status.ProvisioningJobs {

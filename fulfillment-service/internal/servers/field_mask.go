@@ -14,9 +14,9 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
-	"strings"
-
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+
+	"github.com/osac-project/osac/fulfillment-service/internal/fieldmask"
 )
 
 // updateIncludesField reports whether a field (or any of its children) is being
@@ -28,17 +28,5 @@ import (
 // Use this to guard field-specific validation in Update hooks so that
 // validation only runs when the field is actually part of the update.
 func updateIncludesField(mask *fieldmaskpb.FieldMask, prefixes ...string) bool {
-	if mask == nil || len(mask.GetPaths()) == 0 {
-		return true
-	}
-	for _, path := range mask.GetPaths() {
-		for _, prefix := range prefixes {
-			if path == prefix ||
-				strings.HasPrefix(path, prefix+".") ||
-				strings.HasPrefix(prefix, path+".") {
-				return true
-			}
-		}
-	}
-	return false
+	return fieldmask.Includes(mask, prefixes...)
 }

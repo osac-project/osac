@@ -158,6 +158,11 @@ func (in *ClusterOrderSpec) DeepCopyInto(out *ClusterOrderSpec) {
 		*out = make([]NodeRequest, len(*in))
 		copy(*out, *in)
 	}
+	if in.AddOnOperators != nil {
+		in, out := &in.AddOnOperators, &out.AddOnOperators
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.Network != nil {
 		in, out := &in.Network, &out.Network
 		*out = new(ClusterNetworkSpec)

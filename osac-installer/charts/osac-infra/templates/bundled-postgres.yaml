@@ -167,6 +167,8 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       volumes:
       - name: server-cert
         secret:

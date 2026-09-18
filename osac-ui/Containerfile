@@ -40,7 +40,7 @@ COPY proxy/ ./
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o osac-proxy .
 
 # ── Stage 4: production image ──────────────────────────────────────────────
-FROM registry.access.redhat.com/ubi9/ubi-minimal:9.5 AS production
+FROM registry.access.redhat.com/ubi9/ubi-minimal:9.8-1789546276 AS production
 WORKDIR /app
 
 ENV PORT=8080

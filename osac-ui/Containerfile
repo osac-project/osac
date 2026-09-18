@@ -29,7 +29,7 @@ COPY apps/app-frontend/ ./apps/app-frontend/
 RUN pnpm --filter @osac/app-frontend run build
 
 # ── Stage 3: build Go proxy ───────────────────────────────────────────────
-FROM registry.access.redhat.com/ubi9/go-toolset:1.25 AS proxy-builder
+FROM registry.access.redhat.com/ubi9/go-toolset:1.26.7-1789040808 AS proxy-builder
 USER root
 WORKDIR /build
 

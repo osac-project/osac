@@ -89,6 +89,18 @@ class TestResolveEffectiveAuthor(unittest.TestCase):
         result = resolve_effective_author("some-other-bot", body)
         self.assertEqual(result, "some-other-bot")
 
+    def test_quoted_attribution_not_matched(self):
+        """Quoted attribution (e.g. '> @alice requested in ...') must not match."""
+        body = "> @alice requested in [Slack thread](https://slack.com/t/123)"
+        result = resolve_effective_author("redhat-chai-bot", body)
+        self.assertEqual(result, "redhat-chai-bot")
+
+    def test_indented_attribution_not_matched(self):
+        """Indented attribution (e.g. '  @alice requested in ...') must not match."""
+        body = "  @alice requested in [Slack thread](https://slack.com/t/123)"
+        result = resolve_effective_author("redhat-chai-bot", body)
+        self.assertEqual(result, "redhat-chai-bot")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -9,9 +9,8 @@ argument_specs:
       are configured in the dispatched tier list) -- a dispatch with zero
       supported providers is a no-op. Called directly
       from every hub-targeting storage dispatch point —
-      playbook_osac_create_tenant_storage_backend.yml, the Tenant (hub) call
-      site of playbook_osac_create_tenant_cluster_storage.yml, and
-      playbook_osac_create_compute_instance.yml's JIT storage path —
+      playbook_osac_create_tenant_storage_backend.yml and the Tenant (hub) call
+      site of playbook_osac_create_tenant_cluster_storage.yml —
       deliberately not from osac.service.storage_provider's own dispatcher, to
       keep storage_provider/tests/test.yml's zero-live-I/O validation
       guarantee intact.
@@ -29,8 +28,7 @@ argument_specs:
         type: list
         required: true
         description: >
-          The tier list for this dispatch (osac_job_vars.storage_tier_definitions
-          or, for the JIT compute-instance path, the filtered _jit_storage_tiers).
+          The tier list for this dispatch (osac_job_vars.storage_tier_definitions).
           Only the provider field is read — untouched by
           storage_provider's own qos_policy derivation, so the raw,
           pre-derivation list is equivalent for this role's purposes. Unique

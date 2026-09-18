@@ -132,6 +132,7 @@
   gather_facts: false
 
   vars:
+    ansible_verbosity: 2
     csi_driver_install_chart_version: "0.1.0"
     csi_driver_install_tiers:
       - name: default

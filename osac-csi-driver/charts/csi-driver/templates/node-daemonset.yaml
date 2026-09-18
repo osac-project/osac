@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: {{ include "csi-driver.fullname" . }}-node
-  namespace: {{ .Values.namespace }}
+  namespace: {{ default .Release.Namespace .Values.namespace }}
   labels:
     {{- include "csi-driver.labels" . | nindent 4 }}
     app.kubernetes.io/component: node

@@ -2,8 +2,7 @@
 # Idempotent, provider-agnostic install of the OSAC CSI driver (csi-driver
 # Helm chart). Invoked directly from every hub-targeting storage dispatch
 # point (playbook_osac_create_tenant_storage_backend.yml; the Tenant call
-# site of playbook_osac_create_tenant_cluster_storage.yml;
-# playbook_osac_create_compute_instance.yml's JIT storage path), before their
+# site of playbook_osac_create_tenant_cluster_storage.yml), before their
 # own osac.service.storage_provider include — not from storage_provider's own
 # dispatcher, so that storage_provider/tests/test.yml's zero-live-I/O
 # validation guarantee stays intact. Never invoked for the CaaS/guest-cluster
@@ -358,7 +357,6 @@
     - name: Build csi-driver chart values for this dispatch
       ansible.builtin.set_fact:
         _csi_driver_install_driver_values:
-          namespace: "{{ csi_driver_install_namespace }}"
           controller:
             vendorControllers: "{{ _csi_driver_install_controller_vendor_sockets }}"
           node:
@@ -390,7 +388,7 @@
       ansible.builtin.fail:
         msg: >-
           OSAC CSI driver install failed. Failed task: {{ ansible_failed_task.name | default('unknown') }}.
-          Error: {{ ansible_failed_result.msg | default('see logs for details') }}.
+          {{ ('Details: ' ~ (ansible_failed_result.msg | default('see logs for details'))) if (ansible_verbosity | default(0) >= 2) else 'Run with -vv for full error details.' }}
   always:
     # Guarded by _csi_driver_install_lock_acquired -- see the "Mark the lock
     # as acquired" task above for why this must not release unconditionally.

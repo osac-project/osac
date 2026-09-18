@@ -1,9 +1,12 @@
-name: Test
+name: Unit Tests (osac-ui)
 
-# Carried over as-is from osac-ui's own standalone repo at merge time, only
-# relocated (osac-ui/-prefixed paths) and path-scoped so it runs only on
-# osac-ui changes -- not yet wired into this repo's own test/CI conventions.
-# That's a follow-up, not this move.
+# Carried over from osac-ui's own standalone repo, relocated
+# (osac-ui/-prefixed paths). Kept as its own path-scoped workflow rather
+# than folded into unit-tests.yml: that file's jobs all share one blanket
+# repo-wide filter with no per-component scoping, which would run this
+# alongside every other component's tests on every PR instead of only
+# osac-ui changes. Named to match unit-tests.yml's own "Run unit tests
+# (<component>)" convention for the job itself.
 on:
   pull_request:
     paths:
@@ -18,7 +21,7 @@ concurrency:
 
 jobs:
   test:
-    name: Test
+    name: Run unit tests (osac-ui)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

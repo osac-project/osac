@@ -59,6 +59,11 @@ jobs:
               - '!.design/**'
               - '!.skillsaw.yaml'
               - '!.pre-commit-config.yaml'
+              # osac-ui has its own dedicated test/lint/typecheck workflows
+              # (osac-ui-*.yaml), scoped to osac-ui/** -- without this, an
+              # osac-ui-only change would still trip this blanket filter and
+              # run every job below, none of which touch osac-ui at all.
+              - '!osac-ui/**'
       # A job-level `concurrency:` block can reference `needs.*.outputs.*`,
       # unlike a workflow-level one (removed above), which is evaluated
       # before any job runs and so cannot depend on a computed value -- this

@@ -1,0 +1,35 @@
+name: Build ci-cli image
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'tools/ci-cli/**'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g. v0.1.0). Omit for :latest only.'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Log into quay.io
+        env:
+          QUAY_USER: ${{ secrets.QUAY_USERNAME }}
+          QUAY_PASS: ${{ secrets.QUAY_PASSWORD }}
+        run: podman login -u "${QUAY_USER}" -p "${QUAY_PASS}" quay.io
+
+      - name: Build and push image
+        run: tools/ci-cli/build-push.sh ${{ inputs.version }}

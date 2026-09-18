@@ -7,6 +7,7 @@ import logging
 import sys
 from datetime import datetime, timezone
 
+from attribution import resolve_effective_author
 from classifier import classify_prs
 from config import load_config
 from data_formatter import format_dashboard_data
@@ -38,7 +39,10 @@ def build_dashboard_data(prs, config) -> dict:
         classified = [
             classified_pr
             for classified_pr in classified
-            if classified_pr.pr.author.lower() in allowed
+            if resolve_effective_author(
+                classified_pr.pr.author, classified_pr.pr.body
+            ).lower()
+            in allowed
         ]
         logger.info(
             "Filtered to %d PRs by %d team members",

@@ -960,10 +960,31 @@ jobs:
         FULFILLMENT_VER=$(jq -r '.["fulfillment-service"] // empty' <<<"${COMPONENT_VERSIONS}")
         AAP_VER=$(jq -r '.["osac-aap"] // empty' <<<"${COMPONENT_VERSIONS}")
         UI_VER=$(jq -r '.["osac-ui"] // empty' <<<"${COMPONENT_VERSIONS}")
-        [[ -n "${OPERATOR_VER}" ]] && stamp_ci_overlay_if_present "${DEV_OVERLAY}" '.operator.image.tag' "${OPERATOR_VER}"
-        [[ -n "${FULFILLMENT_VER}" ]] && stamp_ci_overlay_if_present "${DEV_OVERLAY}" '.service.images.service' "ghcr.io/osac-project/fulfillment-service:${FULFILLMENT_VER}"
-        [[ -n "${AAP_VER}" ]] && stamp_ci_overlay_if_present "${DEV_OVERLAY}" '.aap.bootstrap.image' "ghcr.io/osac-project/osac-aap:${AAP_VER}"
-        [[ -n "${UI_VER}" ]] && stamp_ci_overlay_if_present "${DEV_OVERLAY}" '.ui.images.ui' "ghcr.io/osac-project/osac-ui:${UI_VER}"
+        # `if; then; fi`, not a bare `[[ ]] && cmd` -- a shell script's own
+        # exit status is whatever its last executed command returned, and
+        # the UI_VER line below is the last line of this script. A bare
+        # `[[ -n "$X" ]] && cmd` evaluates to the test's own false/1 when X
+        # is empty (cmd never runs to overwrite that with its own status),
+        # so an empty UI_VER made this whole step report failure even
+        # though nothing actually went wrong -- confirmed live, on osac-ui's
+        # first nightly run with no resolved version yet. An `if` statement
+        # doesn't have this problem: its own exit status is always 0 when
+        # the condition is false and there's no `else`. The same latent
+        # trailing-exit-code risk applied to the other three lines too
+        # (whichever ends up last after a future reorder), so all four are
+        # rewritten the same way rather than just the one that failed.
+        if [[ -n "${OPERATOR_VER}" ]]; then
+          stamp_ci_overlay_if_present "${DEV_OVERLAY}" '.operator.image.tag' "${OPERATOR_VER}"
+        fi
+        if [[ -n "${FULFILLMENT_VER}" ]]; then
+          stamp_ci_overlay_if_present "${DEV_OVERLAY}" '.service.images.service' "ghcr.io/osac-project/fulfillment-service:${FULFILLMENT_VER}"
+        fi
+        if [[ -n "${AAP_VER}" ]]; then
+          stamp_ci_overlay_if_present "${DEV_OVERLAY}" '.aap.bootstrap.image' "ghcr.io/osac-project/osac-aap:${AAP_VER}"
+        fi
+        if [[ -n "${UI_VER}" ]]; then
+          stamp_ci_overlay_if_present "${DEV_OVERLAY}" '.ui.images.ui' "ghcr.io/osac-project/osac-ui:${UI_VER}"
+        fi
 
     - name: Package and push sub-charts
       env:

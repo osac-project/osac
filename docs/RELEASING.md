@@ -29,10 +29,10 @@ workflow_dispatch     ──►  osac-release.yaml         ──┘        (pre
 Independently of both, each mono-repo component still has its own
 push/tag-triggered build workflow (`build-image.yaml`,
 `publish-image.yaml`, `build-bmf-image.yaml`, `execution-environment.yml`,
-`build-metering-*-image.yaml`), and `publish-charts.yaml` publishes that
-component's chart once its image build completes. This path is unrelated
-to nightly/release and always available — see "Releasing a new component
-version" below.
+`build-metering-*-image.yaml`), which builds and signs that component's
+image on a `<component>/vX.Y.Z` tag push. Publishing that component's
+*chart* only ever happens as part of a full `osac-build-and-publish.yaml`
+run (nightly or release) — see "Releasing a new component version" below.
 
 ## Versioning model
 
@@ -125,29 +125,29 @@ for validating the release *mechanism* itself (e.g. after a change to
 - Every image and chart signed with cosign; see the root
   [`README.md`](../README.md#verifying-container-image-signatures) for
   how to verify a specific artifact.
+- A GitHub Release page for every bumped component that has one:
+  `osac-operator`, `osac-aap`, `bare-metal-fulfillment-operator`,
+  `osac-csi-driver`, and `osac-metering` (`fulfillment-service` and
+  `osac-ui` don't get one — never did).
 
 ## Releasing a new component version
 
-Two ways to get a new component version out, depending on what you need:
+Use `osac-release.yaml`'s `component_versions` input (see above) — it
+builds, tests, tags, and publishes the component's image *and* chart, and
+bundles it into the new umbrella release together, atomically. A single
+component's chart is never published outside a full `osac-release.yaml`
+run.
 
-1. **Just release the component, independent of any OSAC release.** Push
-   a `<component>/vX.Y.Z` tag directly (e.g. `git tag
-   osac-operator/v0.0.13 && git push origin osac-operator/v0.0.13`). That
-   component's own build workflow triggers on the tag push;
-   `publish-charts.yaml` picks up the completed build and publishes its
-   chart. This makes the version available in GHCR, but does **not** pull
-   it into a new umbrella release — `osac`'s currently-published version
-   keeps pointing at whatever it already pinned until a release run picks
-   up the new tag.
-2. **Release the component as part of a new OSAC version, in one
-   dispatch.** Use `osac-release.yaml`'s `component_versions` input (see
-   above) — it builds, tests, tags, and publishes the component *and*
-   bundles it into the new umbrella release together, atomically.
-
-Use (1) when you just need the component's own artifact out (e.g. someone
-else is consuming the chart/image directly) without cutting a full OSAC
-release. Use (2) when the point is to ship that fix as part of the next
-OSAC version.
+There used to be a second path — pushing a `<component>/vX.Y.Z` tag
+directly, which a separate `publish-charts.yaml` workflow picked up to
+publish just that component's chart, independent of any OSAC release.
+That workflow was removed: it duplicated `osac-build-and-publish.yaml`'s
+own chart-packaging for every tag produced by a real release, and the two
+raced to publish the same OCI chart artifact. A manually pushed
+`<component>/vX.Y.Z` tag still triggers that component's own build
+workflow (so its image gets built and signed), but nothing publishes a
+chart or creates a GitHub Release for it anymore — only a real
+`osac-release.yaml` dispatch does both.
 
 ## Verifying what shipped in a release
 

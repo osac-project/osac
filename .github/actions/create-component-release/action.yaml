@@ -1,0 +1,58 @@
+#
+# Copyright (c) 2025 Red Hat Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
+# in compliance with the License. You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software distributed under the License
+# is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+# or implied. See the License for the specific language governing permissions and limitations under
+# the License.
+#
+
+name: Create component GitHub Release
+description: >-
+  Create (or, if it already exists, retitle) the GitHub Release page for a
+  single mono-repo component's just-pushed <component>/vX.Y.Z tag, with
+  auto-generated notes. Runs synchronously as a step in the calling job --
+  no separate workflow_run-triggered pipeline to fire-and-forget, poll, or
+  guard against tag races, unlike this repo's old publish-charts.yaml,
+  which fired independently off each component's tag push and had no
+  visibility from the release pipeline that created the tag in the first
+  place.
+inputs:
+  component:
+    description: Component name, used verbatim in the release title (e.g. "osac-operator").
+    required: true
+  tag:
+    description: The already-pushed git tag to attach the release to (e.g. "osac-operator/v0.0.15").
+    required: true
+  version:
+    description: Version string for the release title, with its leading "v" (e.g. "v0.0.15").
+    required: true
+  github-token:
+    description: "Token with `contents: write` on this repo, used for `gh release create/edit`."
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Create GitHub Release
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        TAG: ${{ inputs.tag }}
+        COMPONENT: ${{ inputs.component }}
+        VERSION: ${{ inputs.version }}
+        REPO: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+        gh release create "${TAG}" \
+          --repo "${REPO}" \
+          --title "${COMPONENT} ${VERSION}" \
+          --generate-notes \
+          --verify-tag \
+        || gh release edit "${TAG}" \
+          --repo "${REPO}" \
+          --title "${COMPONENT} ${VERSION}"

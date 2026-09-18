@@ -108,7 +108,7 @@ log:
 
 # Image configuration:
 images:
-  service: ghcr.io/osac/fulfillment-service:main  # PLACEHOLDER -- overwritten at release time by publish-charts.yaml
+  service: ghcr.io/osac/fulfillment-service:main  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
   pullPolicy: IfNotPresent
   envoy: docker.io/envoyproxy/envoy:v1.37.1
 

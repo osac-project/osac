@@ -1,6 +1,6 @@
 image:
   repository: ghcr.io/osac-project/osac-operator
-  tag: latest  # PLACEHOLDER -- overwritten at release time by publish-charts.yaml
+  tag: latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
   pullPolicy: Always
 
 replicaCount: 1

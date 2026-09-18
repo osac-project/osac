@@ -1445,11 +1445,73 @@ jobs:
           -d @/tmp/slack-payload.json
 
   # -------------------------------------------------------------------
-  # Job 7: Notify on failure
+  # Job 7: Create each eligible component's GitHub Release page, directly
+  # in this pipeline -- not via a separate workflow_run-triggered
+  # publish-charts.yaml (removed) that fired independently off each
+  # component's tag push with no visibility from here. This job runs
+  # synchronously right after tag-and-notify actually pushed the tags, so
+  # there's no tag-race window to guard against either: the tag this
+  # creates a release for was pushed by this exact run, seconds ago.
+  #
+  # Only 5 of the 7 mono-repo components ever got a GitHub Release page
+  # (fulfillment-service and osac-ui never did) -- matrix covers exactly
+  # those 5, and the "Skip if not tagged this run" step further narrows
+  # to whichever of them components-to-tag actually includes (nightly
+  # mode, and a release that isn't bumping every component, both leave
+  # this empty or partial).
+  # -------------------------------------------------------------------
+  create-component-releases:
+    name: Create GitHub Release (${{ matrix.component }})
+    needs: [prepare, tag-and-notify]
+    if: always() && inputs.mode == 'release' && needs.tag-and-notify.result == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        component:
+          - osac-operator
+          - osac-aap
+          - bare-metal-fulfillment-operator
+          - osac-csi-driver
+          - osac-metering
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+    - name: Skip if not tagged this run
+      id: check
+      env:
+        COMPONENTS_TO_TAG: ${{ needs.prepare.outputs.components-to-tag }}
+      run: |
+        set -euo pipefail
+        if jq -e --arg c "${{ matrix.component }}" 'any(.[]; . == $c)' <<<"${COMPONENTS_TO_TAG}" >/dev/null; then
+          echo "tagged=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "${{ matrix.component }} was not tagged this run -- skipping release"
+          echo "tagged=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Checkout repository
+      if: steps.check.outputs.tagged == 'true'
+      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      with:
+        persist-credentials: false
+
+    - name: Create GitHub Release
+      if: steps.check.outputs.tagged == 'true'
+      uses: ./.github/actions/create-component-release
+      with:
+        component: ${{ matrix.component }}
+        tag: ${{ matrix.component }}/v${{ fromJSON(needs.prepare.outputs.component-versions)[matrix.component] }}
+        version: v${{ fromJSON(needs.prepare.outputs.component-versions)[matrix.component] }}
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  # -------------------------------------------------------------------
+  # Job 8: Notify on failure
   # -------------------------------------------------------------------
   notify-failure:
     name: Notify failure
-    needs: [prepare, build, unit-tests, integration-tests, security-tests, e2e-vmaas-test, e2e-caas-test, e2e-bmaas-test, publish, tag-and-notify]
+    needs: [prepare, build, unit-tests, integration-tests, security-tests, e2e-vmaas-test, e2e-caas-test, e2e-bmaas-test, publish, tag-and-notify, create-component-releases]
     runs-on: osac-ci
     timeout-minutes: 10
     if: failure()

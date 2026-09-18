@@ -31,4 +31,4 @@ log:
 
 # Image configuration:
 images:
-  ui: ghcr.io/osac-project/osac-ui:main  # PLACEHOLDER -- overwritten at release time by publish-charts.yaml
+  ui: ghcr.io/osac-project/osac-ui:main  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml

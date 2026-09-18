@@ -22,12 +22,12 @@ readonly NIGHTLY_CHART_SLACK_ORDER=(
     osac
 )
 
-# Every umbrella dependency other than osac-ui, mapped "<Chart.yaml
-# dependency name>:<owning component>" -- the owning component is what
-# COMPONENT_VERSIONS (nightly-build.yaml's per-release-cut version map) is
-# keyed by. osac-operator-crds/bare-metal-fulfillment-operator-crds/
-# csi-backends share their owning component's version with their non-crds
-# sibling chart; they have no independent release cadence of their own.
+# Every umbrella dependency, mapped "<Chart.yaml dependency name>:<owning
+# component>" -- the owning component is what COMPONENT_VERSIONS (nightly-
+# build.yaml's per-release-cut version map) is keyed by.
+# osac-operator-crds/bare-metal-fulfillment-operator-crds/csi-backends share
+# their owning component's version with their non-crds sibling chart; they
+# have no independent release cadence of their own.
 readonly MONO_REPO_UMBRELLA_DEPENDENCIES=(
     "osac-operator-crds:osac-operator"
     "osac-operator:osac-operator"
@@ -38,6 +38,7 @@ readonly MONO_REPO_UMBRELLA_DEPENDENCIES=(
     "osac-metering:osac-metering"
     "csi-driver:osac-csi-driver"
     "csi-backends:osac-csi-driver"
+    "osac-ui:osac-ui"
 )
 
 # CI overlay values files with their own separate floating image tag
@@ -61,61 +62,6 @@ append_chart_source() {
     else
         printf '%s %s\n' "${chart_name}" "${version}" >> "${manifest_file}"
     fi
-}
-
-# Usage: check_osac_ui_image [repo_name]
-# Resolve osac-ui@main HEAD and verify ghcr.io/osac-project/<repo>:sha-<7> exists.
-# Prints the full commit SHA on stdout; fails if the image is not published yet.
-check_osac_ui_image() {
-    local repo="${1:-osac-ui}"
-    local sha tag token safe_repo safe_sha attempt
-
-    if [[ ! "${repo}" =~ ^[a-zA-Z0-9._-]+$ ]]; then
-        safe_repo=$(_gha_sanitize_for_message "${repo}")
-        echo "::error::Invalid osac-ui repo name '${safe_repo}' — must match [a-zA-Z0-9._-]+" >&2
-        return 1
-    fi
-
-    for attempt in 1 2 3; do
-        if sha=$(git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=10 \
-            ls-remote "https://github.com/osac-project/${repo}.git" refs/heads/main | cut -f1); then
-            [[ -n "${sha}" ]] && break
-        fi
-        if (( attempt < 3 )); then
-            echo "  check_osac_ui_image: git ls-remote attempt ${attempt}/3 failed, retrying in 5s..." >&2
-            sleep 5
-        fi
-    done
-
-    if [[ -z "${sha}" || ! "${sha}" =~ ^[0-9a-f]{40}$ ]]; then
-        safe_sha=$(_gha_sanitize_for_message "${sha}")
-        safe_repo=$(_gha_sanitize_for_message "${repo}")
-        echo "::error::Could not resolve ${safe_repo} main HEAD SHA (got: '${safe_sha}')" >&2
-        return 1
-    fi
-
-    tag="sha-${sha:0:7}"
-    safe_repo=$(_gha_sanitize_for_message "${repo}")
-    if ! token=$(http_json "Could not obtain GHCR token to verify ${safe_repo}:${tag}" 3 5 '.token' \
-        "https://ghcr.io/token?scope=repository:osac-project/${repo}:pull"); then
-        echo "::error::Could not obtain GHCR token to verify ${safe_repo}:${tag}" >&2
-        return 1
-    fi
-    if [[ -z "${token}" || "${token}" == "null" ]]; then
-        echo "::error::GHCR token is empty or null for ${safe_repo}:${tag}" >&2
-        return 1
-    fi
-
-    if ! http_retry "${safe_repo} main HEAD ${sha:0:7} has no published image (tag ${tag})" 3 5 \
-        -s -o /dev/null \
-        -H "Authorization: Bearer ${token}" \
-        -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json" \
-        "https://ghcr.io/v2/osac-project/${repo}/manifests/${tag}"; then
-        echo "::error::${safe_repo} main HEAD ${sha:0:7} has no published image (tag ${tag})" >&2
-        return 1
-    fi
-
-    echo "${sha}"
 }
 
 # Usage: retag_component_image <image_repo> <source_short_sha> <target_version>
@@ -488,6 +434,12 @@ stamp_component_image_refs() {
             TAG_VALUE="${tag_value}" yq -i '.image.tag = strenv(TAG_VALUE)' "osac-csi-driver/charts/csi-driver/values.yaml"
             stamp_umbrella_nested_field "${umbrella_values}" csiDriver image tag "${tag_value}"
             ;;
+        osac-ui)
+            # osac-ui/charts/ui/templates/deployment.yaml reads .Values.images.ui.
+            IMAGE_REF="ghcr.io/osac-project/osac-ui:${tag_value}" \
+                yq -i '.images.ui = strenv(IMAGE_REF)' "osac-ui/charts/ui/values.yaml"
+            stamp_umbrella_nested_field "${umbrella_values}" ui images ui "ghcr.io/osac-project/osac-ui:${tag_value}"
+            ;;
         *)
             echo "::error::stamp_component_image_refs: unknown component '${component}'" >&2
             return 1
@@ -856,16 +808,10 @@ rewrite_umbrella_dependency() {
         "${chart_yaml}"
 }
 
-# Usage: rewrite_umbrella_osac_ui_dependency <chart_yaml> <ui_version> <oci_repo>
-rewrite_umbrella_osac_ui_dependency() {
-    local chart_yaml="$1" ui_version="$2" oci_repo="$3"
-    rewrite_umbrella_dependency "${chart_yaml}" osac-ui "${ui_version}" "${oci_repo}"
-}
-
 # Usage: rewrite_umbrella_mono_repo_dependencies <chart_yaml> <oci_repo> <component_versions_json> [skipped_file]
-# Rewrite every mono-repo-resident umbrella dependency (everything but
-# osac-ui -- see MONO_REPO_UMBRELLA_DEPENDENCIES) from its committed file://
-# path to a pinned oci:// reference, for every dependency whose owning
+# Rewrite every umbrella dependency (see MONO_REPO_UMBRELLA_DEPENDENCIES)
+# from its committed file:// path to a pinned oci:// reference, for every
+# dependency whose owning
 # component has a resolved version in component_versions_json (a JSON map
 # of component name -> version, same shape as nightly-build.yaml's
 # COMPONENT_VERSIONS output). A dependency whose owning component has no
@@ -896,16 +842,6 @@ rewrite_umbrella_mono_repo_dependencies() {
         fi
         rewrite_umbrella_dependency "${chart_yaml}" "${dep_name}" "${version}" "${oci_repo}"
     done
-}
-
-# Usage: stamp_osac_ui_chart <chart_dir> <sub_version> <image_ref>
-# The subchart is not subject to yamllinting. Hence, safe to use yq here.
-stamp_osac_ui_chart() {
-    local chart_dir="$1" sub_version="$2" image_ref="$3"
-    # osac-ui/charts/ui/templates/deployment.yaml reads .Values.images.ui
-    SUB_VERSION="${sub_version}" yq -i '.version = strenv(SUB_VERSION)' "${chart_dir}/Chart.yaml"
-    SUB_VERSION="${sub_version}" yq -i '.appVersion = strenv(SUB_VERSION)' "${chart_dir}/Chart.yaml"
-    IMAGE_REF="${image_ref}" yq -i '.images.ui = strenv(IMAGE_REF)' "${chart_dir}/values.yaml"
 }
 
 # Usage: chart_version_url <chart_name> <version> <repo_owner>

@@ -90,10 +90,6 @@ jobs:
       contents: write
     outputs:
       temp-branch: ${{ steps.push.outputs.branch }}
-      ui-sha: ${{ steps.ui.outputs.sha }}
-      ui-short-sha: ${{ steps.ui.outputs.short-sha }}
-      ui-sub-version: ${{ steps.versions.outputs.ui-sub-version }}
-      ui-needs-build: ${{ steps.versions.outputs.ui-needs-build }}
       nightly-suffix: ${{ steps.versions.outputs.nightly-suffix }}
       component-versions: ${{ steps.versions.outputs.component-versions }}
       components-needing-build: ${{ steps.versions.outputs.components-needing-build }}
@@ -128,47 +124,15 @@ jobs:
           fi
         done < <(gh api --paginate "repos/${GITHUB_REPOSITORY}/git/matching-refs/heads/nightly/" --jq '.[].ref')
 
-    # Resolve osac-ui@main HEAD once, but only accept it when ghcr.io/.../osac-ui:sha-<7>
-    # already exists (check_osac_ui_image) -- osac-ui is a separate repo we
-    # don't build here, so we can only gate on an image it already published.
-    - name: Resolve and gate osac-ui SHA
-      id: ui
-      run: |
-        set -euo pipefail
-        source osac-installer/scripts/nightly-charts.sh
-
-        UI_SHA=$(check_osac_ui_image osac-ui)
-        UI_SHORT_SHA="${UI_SHA:0:7}"
-
-        mkdir -p osac-installer/pinned
-        printf '%s\n' "${UI_SHA}" > osac-installer/pinned/osac-ui.commit
-
-        echo "sha=${UI_SHA}" >> "$GITHUB_OUTPUT"
-        echo "short-sha=${UI_SHORT_SHA}" >> "$GITHUB_OUTPUT"
-        echo "Pinned osac-ui ${UI_SHORT_SHA}"
-
-    # Needed only for resolve_bare_release_tag_at's `git describe` below --
-    # a local checkout of the pinned commit, not the file content (that's
-    # separately checked out again in publish, which packages its chart).
-    - name: Checkout osac-ui at pinned SHA
-      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
-      with:
-        repository: osac-project/osac-ui
-        ref: ${{ steps.ui.outputs.sha }}
-        path: osac-ui
-        fetch-depth: 0
-        persist-credentials: false
-
-    # Resolve every mono-repo component's target version (and osac-ui's) up
-    # front, before anything is stamped or built. component-versions is a
-    # JSON map so the build matrix (a separate job) can look up its own
-    # component's version without re-deriving it independently.
-    # components-needing-build/components-to-tag are JSON arrays: the only
-    # two mode-dependent decisions in this whole pipeline (see module header).
+    # Resolve every mono-repo component's target version up front, before
+    # anything is stamped or built. component-versions is a JSON map so the
+    # build matrix (a separate job) can look up its own component's version
+    # without re-deriving it independently. components-needing-build/
+    # components-to-tag are JSON arrays: the only two mode-dependent
+    # decisions in this whole pipeline (see module header).
     - name: Resolve component versions
       id: versions
       env:
-        UI_SHA: ${{ steps.ui.outputs.sha }}
         MODE: ${{ inputs.mode }}
         RELEASE_VERSION: ${{ inputs.release_version }}
         COMPONENT_VERSIONS_OVERRIDE: ${{ inputs.component_versions }}
@@ -184,6 +148,7 @@ jobs:
           bare-metal-fulfillment-operator
           osac-metering
           osac-csi-driver
+          osac-ui
         )
 
         if [[ "${MODE}" == "release" ]]; then
@@ -307,29 +272,6 @@ jobs:
         echo "components-needing-build=${build_json}" >> "$GITHUB_OUTPUT"
         echo "components-to-tag=${tag_json}" >> "$GITHUB_OUTPUT"
 
-        # osac-ui keeps its own independent release cadence regardless of
-        # mode -- neither release_version nor component_versions apply to
-        # it (see OSAC-5178): it has its own separate repo and release
-        # process, and this pipeline never builds it from source anyway
-        # (only its already-published sha-<short> image, gated above).
-        # Nightly always gives it a fresh nightly-suffixed chart/image
-        # promotion; release mode always pins its latest real tag.
-        if UI_BASE_TAG=$(resolve_bare_release_tag_at osac-ui "${UI_SHA}"); then
-          UI_BASE_VERSION="${UI_BASE_TAG#v}"
-          if [[ "${MODE}" == "nightly" ]]; then
-            UI_SUB_VERSION=$(compute_nightly_chart_version "${UI_BASE_TAG}" "${NIGHTLY_SUFFIX}")
-            UI_NEEDS_BUILD=true
-          else
-            UI_SUB_VERSION="${UI_BASE_VERSION}"
-            UI_NEEDS_BUILD=false
-          fi
-          echo "ui-sub-version=${UI_SUB_VERSION}" >> "$GITHUB_OUTPUT"
-          echo "ui-needs-build=${UI_NEEDS_BUILD}" >> "$GITHUB_OUTPUT"
-          echo "osac-ui: ${UI_SUB_VERSION} (from tag ${UI_BASE_TAG})"
-        else
-          echo "::warning title=osac-ui::No vX.Y.Z release tag found for osac-ui -- its own sub-chart won't be stamped/published this run"
-        fi
-
     # Stamp every sub-chart's Chart.yaml, the umbrella's own values.yaml, and
     # the 4 CI overlay files -- all of it now, before the temp branch is
     # pushed, so both the parallel build phase and the e2e jobs operate on
@@ -353,9 +295,6 @@ jobs:
       env:
         COMPONENT_VERSIONS: ${{ steps.versions.outputs.component-versions }}
         COMPONENTS_NEEDING_BUILD: ${{ steps.versions.outputs.components-needing-build }}
-        UI_SHORT_SHA: ${{ steps.ui.outputs.short-sha }}
-        UI_SUB_VERSION: ${{ steps.versions.outputs.ui-sub-version }}
-        UI_NEEDS_BUILD: ${{ steps.versions.outputs.ui-needs-build }}
       run: |
         set -euo pipefail
         source osac-installer/scripts/nightly-charts.sh
@@ -371,6 +310,7 @@ jobs:
           ["bare-metal-fulfillment-operator"]="bare-metal-fulfillment-operator/charts/operator bare-metal-fulfillment-operator/charts/operator-crds"
           ["osac-metering"]="osac-metering/charts/osac-metering"
           ["osac-csi-driver"]="osac-csi-driver/charts/csi-driver osac-csi-driver/charts/csi-backends"
+          ["osac-ui"]="osac-ui/charts/ui"
         )
 
         for COMPONENT in $(printf '%s\n' "${!SUB_CHARTS[@]}" | sort); do
@@ -395,20 +335,6 @@ jobs:
             stamp_component_image_refs "${COMPONENT}" "${UMBRELLA_VALUES}" "${SUB_VERSION}"
           fi
         done
-
-        # osac-ui: stamp only the umbrella's own ui.images.ui field here, to
-        # whatever image reference is actually correct for this run -- the
-        # sha-<short> image its own CI already published (needs building
-        # this run) or its already-published final version (pinned). Its
-        # own sub-chart Chart.yaml/values.yaml are stamped and packaged
-        # later in the publish job only when it needs building.
-        if [[ -n "${UI_SHORT_SHA}" ]]; then
-          if [[ "${UI_NEEDS_BUILD}" == "true" ]]; then
-            stamp_umbrella_nested_field "${UMBRELLA_VALUES}" ui images ui "ghcr.io/osac-project/osac-ui:sha-${UI_SHORT_SHA}"
-          else
-            stamp_umbrella_nested_field "${UMBRELLA_VALUES}" ui images ui "ghcr.io/osac-project/osac-ui:${UI_SUB_VERSION}"
-          fi
-        fi
 
         # AAP's config-as-code sync pulls osac-aap's own Ansible automation
         # (provisioning/restart/hardware-inventory playbooks, etc.) from
@@ -451,6 +377,7 @@ jobs:
         BMF_VER=$(jq -r '.["bare-metal-fulfillment-operator"] // empty' <<<"${COMPONENT_VERSIONS}")
         METERING_VER=$(jq -r '.["osac-metering"] // empty' <<<"${COMPONENT_VERSIONS}")
         CSI_VER=$(jq -r '.["osac-csi-driver"] // empty' <<<"${COMPONENT_VERSIONS}")
+        UI_VER=$(jq -r '.["osac-ui"] // empty' <<<"${COMPONENT_VERSIONS}")
 
         for overlay in "${NIGHTLY_CI_OVERLAY_VALUES[@]}"; do
           [[ -f "${overlay}" ]] || continue
@@ -496,12 +423,9 @@ jobs:
               stamp_ci_overlay_if_present "${overlay}" '.csiDriver.image.tag' "${CSI_VER}"
             fi
           fi
-          if [[ -n "${UI_SHORT_SHA}" ]]; then
-            if [[ "${UI_NEEDS_BUILD}" == "true" ]]; then
-              stamp_ci_overlay_if_present "${overlay}" '.ui.images.ui' "ghcr.io/osac-project/osac-ui:sha-${UI_SHORT_SHA}"
-            else
-              stamp_ci_overlay_if_present "${overlay}" '.ui.images.ui' "ghcr.io/osac-project/osac-ui:${UI_SUB_VERSION}"
-            fi
+          if [[ -n "${UI_VER}" ]]; then
+            NB=$(needs_build_for osac-ui)
+            stamp_ci_overlay_if_present "${overlay}" '.ui.images.ui' "$(ref_for ghcr.io/osac-project/osac-ui osac-ui "${NB}" "${UI_VER}")"
           fi
           echo "Stamped ${overlay} (fields present in that file only)"
         done
@@ -510,11 +434,6 @@ jobs:
       id: push
       run: |
         set -euo pipefail
-        # osac-ui was checked out earlier (own nested .git) purely for git
-        # describe in "Resolve component versions" -- it is not part of this
-        # repo's tree and must not be staged as an embedded repository.
-        rm -rf osac-ui
-
         DATE=$(date -u +%Y%m%d)
         SHORT_SHA=$(git rev-parse --short=7 HEAD)
         BRANCH="nightly/${DATE}-${SHORT_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
@@ -547,12 +466,6 @@ jobs:
   # target (the same targets a human runs locally) rather than
   # duplicating build-step logic here or in each component's own
   # per-push build workflow.
-  #
-  # osac-ui has no entry here: it's an external repo we don't build, and
-  # its sha-<short> image already exists (published by its own CI,
-  # gated on by prepare's check_osac_ui_image) -- nothing to do until
-  # publish retags it (nightly mode) or references it directly (release,
-  # pinned).
   # -------------------------------------------------------------------
   build:
     name: Build ${{ matrix.name }}
@@ -623,6 +536,12 @@ jobs:
             push_target: image-push
             image: ghcr.io/osac-project/osac-csi-driver
             version_arg: true
+          - name: osac-ui
+            component: osac-ui
+            dir: osac-ui
+            target: image-build
+            push_target: image-push
+            image: ghcr.io/osac-project/osac-ui
     steps:
     - name: Checkout temporary branch
       uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
@@ -906,19 +825,6 @@ jobs:
         fetch-depth: 0
         persist-credentials: false
 
-    # osac-ui is an external repo (not in the osac mono-repo). The prepare job
-    # resolves one gated SHA per run (ls-remote main + GHCR sha-<7> manifest check)
-    # and records it in osac-installer/pinned/osac-ui.commit on the temp branch.
-    # Publish reuses that exact commit — do not checkout ref: main here.
-    - name: Checkout osac-ui at pinned SHA
-      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
-      with:
-        repository: osac-project/osac-ui
-        ref: ${{ needs.prepare.outputs.ui-sha }}
-        path: osac-ui
-        fetch-depth: 0
-        persist-credentials: false
-
     - name: Set up Helm
       uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
       with:
@@ -996,9 +902,6 @@ jobs:
       env:
         COMPONENT_VERSIONS: ${{ needs.prepare.outputs.component-versions }}
         COMPONENTS_NEEDING_BUILD: ${{ needs.prepare.outputs.components-needing-build }}
-        UI_SHORT_SHA: ${{ needs.prepare.outputs.ui-short-sha }}
-        UI_SUB_VERSION: ${{ needs.prepare.outputs.ui-sub-version }}
-        UI_NEEDS_BUILD: ${{ needs.prepare.outputs.ui-needs-build }}
       run: |
         set -euo pipefail
         source osac-installer/scripts/nightly-charts.sh
@@ -1006,7 +909,7 @@ jobs:
         UMBRELLA_VALUES="osac-installer/charts/osac/values.yaml"
         MAIN_SHORT_SHA="${GITHUB_SHA:0:7}"
 
-        for COMPONENT in osac-operator fulfillment-service osac-aap bare-metal-fulfillment-operator osac-metering osac-csi-driver; do
+        for COMPONENT in osac-operator fulfillment-service osac-aap bare-metal-fulfillment-operator osac-metering osac-csi-driver osac-ui; do
           SUB_VERSION=$(jq -r --arg k "${COMPONENT}" '.[$k] // empty' <<<"${COMPONENT_VERSIONS}")
           if [[ -z "${SUB_VERSION}" ]]; then
             safe_component=$(_gha_sanitize_for_message "${COMPONENT}")
@@ -1028,6 +931,7 @@ jobs:
             bare-metal-fulfillment-operator) IMAGES=(ghcr.io/osac-project/bare-metal-fulfillment-operator) ;;
             osac-metering) IMAGES=(ghcr.io/osac-project/metering-service ghcr.io/osac-project/metering-m360-adapter ghcr.io/osac-project/metering-echo-adapter) ;;
             osac-csi-driver) IMAGES=(ghcr.io/osac-project/osac-csi-driver) ;;
+            osac-ui) IMAGES=(ghcr.io/osac-project/osac-ui) ;;
           esac
 
           echo "Promoting ${COMPONENT} image(s) sha-${MAIN_SHORT_SHA} -> ${SUB_VERSION}..."
@@ -1037,16 +941,6 @@ jobs:
 
           stamp_component_image_refs "${COMPONENT}" "${UMBRELLA_VALUES}" "${SUB_VERSION}"
         done
-
-        # osac-ui: only promote when it needed building this run (nightly,
-        # always). When pinned (release mode), it's already at its final
-        # version and the umbrella's ui.images.ui was already stamped
-        # correctly by prepare -- nothing to do here.
-        if [[ "${UI_NEEDS_BUILD}" == "true" && -n "${UI_SUB_VERSION}" ]]; then
-          echo "Promoting osac-ui image sha-${UI_SHORT_SHA} -> ${UI_SUB_VERSION}..."
-          retag_component_image "ghcr.io/osac-project/osac-ui" "${UI_SHORT_SHA}" "${UI_SUB_VERSION}"
-          stamp_umbrella_nested_field "${UMBRELLA_VALUES}" ui images ui "ghcr.io/osac-project/osac-ui:${UI_SUB_VERSION}"
-        fi
 
         # dev/instance.yaml is the one CI overlay that ISN'T dead after e2e:
         # "Generate images.txt" below renders the umbrella chart with it as
@@ -1065,12 +959,11 @@ jobs:
         OPERATOR_VER=$(jq -r '.["osac-operator"] // empty' <<<"${COMPONENT_VERSIONS}")
         FULFILLMENT_VER=$(jq -r '.["fulfillment-service"] // empty' <<<"${COMPONENT_VERSIONS}")
         AAP_VER=$(jq -r '.["osac-aap"] // empty' <<<"${COMPONENT_VERSIONS}")
+        UI_VER=$(jq -r '.["osac-ui"] // empty' <<<"${COMPONENT_VERSIONS}")
         [[ -n "${OPERATOR_VER}" ]] && stamp_ci_overlay_if_present "${DEV_OVERLAY}" '.operator.image.tag' "${OPERATOR_VER}"
         [[ -n "${FULFILLMENT_VER}" ]] && stamp_ci_overlay_if_present "${DEV_OVERLAY}" '.service.images.service' "ghcr.io/osac-project/fulfillment-service:${FULFILLMENT_VER}"
         [[ -n "${AAP_VER}" ]] && stamp_ci_overlay_if_present "${DEV_OVERLAY}" '.aap.bootstrap.image' "ghcr.io/osac-project/osac-aap:${AAP_VER}"
-        if [[ -n "${UI_SUB_VERSION}" ]]; then
-          stamp_ci_overlay_if_present "${DEV_OVERLAY}" '.ui.images.ui' "ghcr.io/osac-project/osac-ui:${UI_SUB_VERSION}"
-        fi
+        [[ -n "${UI_VER}" ]] && stamp_ci_overlay_if_present "${DEV_OVERLAY}" '.ui.images.ui' "ghcr.io/osac-project/osac-ui:${UI_VER}"
 
     - name: Package and push sub-charts
       env:
@@ -1100,6 +993,7 @@ jobs:
           ["osac-metering/charts/osac-metering"]="osac-metering"
           ["osac-csi-driver/charts/csi-driver"]="osac-csi-driver"
           ["osac-csi-driver/charts/csi-backends"]="osac-csi-driver"
+          ["osac-ui/charts/ui"]="osac-ui"
         )
 
         for CHART_DIR in "${!CHART_TO_COMPONENT[@]}"; do
@@ -1124,27 +1018,6 @@ jobs:
           append_chart_source chart-sources.txt "${CHART_NAME}" "${SUB_VERSION}"
         done
 
-        # osac-ui: only package/push its sub-chart when it needed building
-        # this run (nightly, always). When pinned (release mode), its
-        # already-published chart is pulled directly by the umbrella's
-        # dependency resolution below, same as every other pinned component.
-        UI_SUB_VERSION="${{ needs.prepare.outputs.ui-sub-version }}"
-        UI_NEEDS_BUILD="${{ needs.prepare.outputs.ui-needs-build }}"
-        if [[ "${UI_NEEDS_BUILD}" == "true" && -n "${UI_SUB_VERSION}" ]]; then
-          UI_CHART_DIR="osac-ui/charts/ui"
-          UI_CHART_NAME=$(read_validated_chart_name "${UI_CHART_DIR}")
-          UI_IMAGE_REF="ghcr.io/osac-project/osac-ui:${UI_SUB_VERSION}"
-          stamp_osac_ui_chart "${UI_CHART_DIR}" "${UI_SUB_VERSION}" "${UI_IMAGE_REF}"
-          helm package "${UI_CHART_DIR}" --destination ./packaged-charts
-          push_and_sign_chart "./packaged-charts/${UI_CHART_NAME}-${UI_SUB_VERSION}.tgz" "${UI_CHART_NAME}" "${REGISTRY}/${CHARTS_REPO}"
-          append_chart_source chart-sources.txt "${UI_CHART_NAME}" "${UI_SUB_VERSION}" "${{ needs.prepare.outputs.ui-short-sha }}" "${{ needs.prepare.outputs.ui-sha }}"
-          echo "${UI_SUB_VERSION}" > osac-ui-nightly-version.txt
-        elif [[ -n "${UI_SUB_VERSION}" ]]; then
-          echo "osac-ui is pinned to its already-published ${UI_SUB_VERSION} this run — no sub-chart packaging needed"
-        else
-          echo "::warning title=osac-ui::No resolved osac-ui version — skipping sub-chart packaging"
-        fi
-
     - name: Build umbrella chart dependencies
       env:
         OCI_REPO: oci://${{ env.REGISTRY }}/${{ env.CHARTS_REPO }}
@@ -1168,11 +1041,6 @@ jobs:
         # -- recorded to SKIPPED_DEPS_FILE so it's surfaced below and in the
         # Slack summary, not just a raw log warning nobody reads on a green run.
         rewrite_umbrella_mono_repo_dependencies "${CHART_YAML}" "${OCI_REPO}" "${COMPONENT_VERSIONS}" "${SKIPPED_DEPS_FILE}"
-
-        UI_SUB_VERSION="${{ needs.prepare.outputs.ui-sub-version }}"
-        if [[ -n "${UI_SUB_VERSION}" ]]; then
-          rewrite_umbrella_osac_ui_dependency "${CHART_YAML}" "${UI_SUB_VERSION}" "${OCI_REPO}"
-        fi
 
         rm -f osac-installer/charts/osac/Chart.lock
         helm dependency build osac-installer/charts/osac/
@@ -1232,7 +1100,6 @@ jobs:
       env:
         VERSION: ${{ steps.version.outputs.version }}
         BASE_VERSION: ${{ steps.version.outputs.base-version }}
-        UI_SHORT_SHA: ${{ needs.prepare.outputs.ui-short-sha }}
       run: |
         set -euo pipefail
         # grep's own no-match exit code (1) must not poison the pipeline under
@@ -1257,7 +1124,6 @@ jobs:
         echo "" >> images.txt
         echo "# Chart source & version" >> images.txt
         echo "# osac: source=v${BASE_VERSION} (${GITHUB_SHA:0:7}), chart=oci://${REGISTRY}/${CHARTS_REPO}/osac:${VERSION}" >> images.txt
-        echo "# osac-ui: source=sha-${UI_SHORT_SHA}, chart=oci://${REGISTRY}/${CHARTS_REPO}/osac-ui (see chart-sources.txt)" >> images.txt
 
         echo "--- images.txt ---"
         cat images.txt

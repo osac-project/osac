@@ -21,7 +21,7 @@ on:
     # this workflow at all without each component's build workflow name also
     # present in this list (missed once for osac-aap, see OSAC-3511/#49 --
     # don't repeat that).
-    workflows: ["Container image", "Build container image", "Build execution environment", "Build bare-metal-fulfillment-operator image", "Build osac-csi-driver image", "Build metering-service image", "Build metering-m360-adapter image"]
+    workflows: ["Container image", "Build container image", "Build execution environment", "Build bare-metal-fulfillment-operator image", "Build osac-csi-driver image", "Build metering-service image", "Build metering-m360-adapter image", "Container image (osac-ui)"]
     types: [completed]
 
 env:
@@ -49,7 +49,8 @@ jobs:
        startsWith(github.event.workflow_run.head_branch, 'osac-aap/v') ||
        startsWith(github.event.workflow_run.head_branch, 'bare-metal-fulfillment-operator/v') ||
        startsWith(github.event.workflow_run.head_branch, 'osac-csi-driver/v') ||
-       startsWith(github.event.workflow_run.head_branch, 'osac-metering/v'))
+       startsWith(github.event.workflow_run.head_branch, 'osac-metering/v') ||
+       startsWith(github.event.workflow_run.head_branch, 'osac-ui/v'))
     outputs:
       tag: ${{ github.event.workflow_run.head_branch }}
       version: ${{ steps.check.outputs.version }}
@@ -72,6 +73,7 @@ jobs:
           bare-metal-fulfillment-operator/v*) VERSION="${HEAD_BRANCH#bare-metal-fulfillment-operator/}" ;;
           osac-csi-driver/v*) VERSION="${HEAD_BRANCH#osac-csi-driver/}" ;;
           osac-metering/v*) VERSION="${HEAD_BRANCH#osac-metering/}" ;;
+          osac-ui/v*) VERSION="${HEAD_BRANCH#osac-ui/}" ;;
           *) echo "::error::Tag '$HEAD_BRANCH' does not match a known component prefix"; exit 1 ;;
         esac
 
@@ -152,6 +154,73 @@ jobs:
         chart_name="$(yq -r '.name' charts/service/Chart.yaml)"
         echo "chart-name=${chart_name}" >> "$GITHUB_OUTPUT"
         echo "chart-file=fulfillment-service/${chart_name}-${chart_version}.tgz" >> "$GITHUB_OUTPUT"
+
+    - name: Push and sign chart
+      uses: ./.github/actions/helm-push-and-sign
+      with:
+        chart-file: ${{ steps.run.outputs.chart-file }}
+        chart-name: ${{ steps.run.outputs.chart-name }}
+        oci-repo: ${{ env.REGISTRY }}/${{ env.CHARTS_REPO }}
+
+  publish-ui-chart:
+    name: Publish osac-ui chart
+    needs: guard
+    if: success() && github.event.workflow_run.name == 'Container image (osac-ui)'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      with:
+        ref: ${{ needs.guard.outputs.sha }}
+        fetch-depth: 0
+        persist-credentials: false
+
+    - name: Verify tag still points at the guarded commit
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAG: ${{ needs.guard.outputs.tag }}
+        GUARDED_SHA: ${{ needs.guard.outputs.sha }}
+        REPO: ${{ github.repository }}
+      run: .github/scripts/osac-ui-verify-tag-matches-sha.sh
+
+    - id: run
+      working-directory: osac-ui
+      env:
+        VERSION: ${{ needs.guard.outputs.version }}
+        REGISTRY_USERNAME: ${{ github.actor }}
+        REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        # Hardcoded rather than github.repository: that now resolves to
+        # osac-project/osac post-merge, which would inject a reference to an
+        # image that doesn't exist there -- the real image only ever gets
+        # published to osac-project/osac-ui (see osac-ui-publish-image.yaml's
+        # own IMAGE_NAME). Only used below to build the image reference
+        # written into the chart, nothing else in this job needs it to be
+        # the actual triggering repo.
+        REPO: osac-project/osac-ui
+      run: |
+        # Login to the registry:
+        export registry="ghcr.io"
+        echo "${REGISTRY_PASSWORD}" | helm registry login --username "${REGISTRY_USERNAME}" --password-stdin "${registry}"
+
+        # Get the bare version from the tag that triggered the image build (the
+        # component-scoped prefix was already stripped by the guard job):
+        export git_version="${VERSION}"
+
+        # Update the image reference in the chart:
+        export app_version="${git_version}"
+        export app_image="${registry}/${REPO}:${app_version}"
+        yq -i '.images.ui = strenv(app_image)' charts/ui/values.yaml
+
+        # Package the chart:
+        export chart_version="${git_version#v}"
+        helm package charts/ui --version "${chart_version}" --app-version "${app_version}"
+
+        chart_name="$(yq -r '.name' charts/ui/Chart.yaml)"
+        echo "chart-name=${chart_name}" >> "$GITHUB_OUTPUT"
+        echo "chart-file=osac-ui/${chart_name}-${chart_version}.tgz" >> "$GITHUB_OUTPUT"
 
     - name: Push and sign chart
       uses: ./.github/actions/helm-push-and-sign

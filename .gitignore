@@ -8,10 +8,12 @@ skills/
 # Skill-relative sibling checkouts (tools/bootstrap.sh).
 # osac-test-infra/ and osac-docs/ are kept so leftover clones from older
 # bootstrap runs are not committed; bootstrap no longer creates either
-# (E2E is tests/e2e/; docs content is in-tree under docs/).
+# (E2E is tests/e2e/; docs content is in-tree under docs/). osac-ui/ was
+# removed from this list once it stopped being a sibling checkout and
+# became real tracked content in this repo -- this entry would otherwise
+# silently gitignore any new file created under it.
 enhancement-proposals/
 osac-ux/
-osac-ui/
 osac-test-infra/
 osac-docs/
 

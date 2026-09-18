@@ -1,88 +1,140 @@
-name: Publish container image
+name: Container image (osac-ui)
 
-# Carried over from osac-ui's own standalone repo at merge time, relocated
-# (osac-ui/-prefixed paths) and path-scoped to osac-ui/** so a mono-repo
-# push touching unrelated components doesn't trigger it. NOT yet wired
-# into this repo's own tag/release conventions (every other mono-repo
-# component publishes via osac-build-and-publish.yaml and tags as
-# <component>/vX.Y.Z, not a bare vX.Y.Z push) -- that redesign is a
-# deliberate follow-up, not part of this move. Until it lands, the
-# `tags: ['v*']` branch below has no real trigger path (nothing pushes a
-# bare vX.Y.Z tag to this repo), so only the branch-push path is live,
-# same as it always was for this workflow.
-#
-# IMAGE_NAME is hardcoded rather than derived from ${{ github.repository }}
-# (which now resolves to osac-project/osac, not osac-project/osac-ui) --
-# every existing chart/values reference still points at
-# ghcr.io/osac-project/osac-ui, so the published image name must not
-# change as a side effect of where the source code happens to live.
 on:
+  pull_request:
+    paths:
+      - 'osac-ui/**'
   push:
     branches:
       - main
     paths:
       - 'osac-ui/**'
     tags:
-      - 'v*'
+      - 'osac-ui/v*'
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.sha }}-image
-  cancel-in-progress: false
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}-image
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
   packages: write
-  # cosign's keyless image signing below -- safe directly on this job, no
-  # pull_request exposure: this workflow only ever runs on push (main or a
-  # release tag).
-  id-token: write
 
 env:
+  # Use docker.io for Docker Hub if empty
   REGISTRY: ghcr.io
+  # Hardcoded rather than github.repository: that now resolves to
+  # osac-project/osac for every component's build workflow post-merge,
+  # colliding on mutable tags with every other component's image. Keeping
+  # this component's pre-merge image identity stable instead, same as
+  # fulfillment-service's own publish-image.yaml does.
   IMAGE_NAME: osac-project/osac-ui
 
 jobs:
-  publish:
-    name: Build and publish container image
+  image:
     runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
+      # Login against a Docker registry except on PR
+      # https://github.com/docker/login-action
       - name: Log into registry ${{ env.REGISTRY }}
-        uses: docker/login-action@v4
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Component-scoped tags (see the `tags:` trigger above) can't be used verbatim
+      # as image tags -- Docker/OCI tags can't contain the '/' the git tag does --
+      # so strip the prefix here to recover the bare vX.Y.Z for the actual image tags.
+      - name: Compute release version
+        if: startsWith(github.ref, 'refs/tags/osac-ui/')
+        run: |
+          version="${GITHUB_REF_NAME#osac-ui/}"
+          # Same SemVer rule as publish-charts.yaml's guard job -- rejects build
+          # metadata (+...) and validates the core/prerelease shape before it's
+          # trusted as an image tag.
+          semver_re='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\.((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?$'
+          if ! [[ "${version}" =~ ${semver_re} ]]; then
+            echo "::error::Tag '${GITHUB_REF_NAME}' is not a valid semver release tag"
+            exit 1
+          fi
+          # Prerelease identifiers can themselves contain dots (e.g. v1.2.3-beta.1),
+          # so derive major/minor from the prerelease-stripped core version --
+          # otherwise a dotted prerelease would corrupt the major.minor alias.
+          core="${version%%-*}"
+          echo "RELEASE_VERSION=${version}" >> "$GITHUB_ENV"
+          echo "RELEASE_MAJOR_MINOR=${core%.*}" >> "$GITHUB_ENV"
+          echo "RELEASE_MAJOR=${core%%.*}" >> "$GITHUB_ENV"
+
+      # Extract metadata (tags, labels) for Docker
+      # https://github.com/docker/metadata-action
       - name: Extract Docker metadata
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302  # v6
         with:
           context: git
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # No `type=ref,event=tag` here: the `tags:` trigger above only ever
+          # matches this component's own scoped prefix, so the tag-triggered
+          # case is always covered by the three raw entries below already --
+          # keeping it would just add a redundant, slash-sanitized duplicate
+          # tag (e.g. "osac-ui-v1.2.3").
           tags: |
-            type=semver,pattern=v{{version}}
-            type=semver,pattern=v{{major}}.{{minor}}
-            type=semver,pattern=v{{major}}
+            type=raw,value=${{ env.RELEASE_VERSION }},enable=${{ env.RELEASE_VERSION != '' }}
+            type=raw,value=${{ env.RELEASE_MAJOR_MINOR }},enable=${{ env.RELEASE_VERSION != '' }}
+            type=raw,value=${{ env.RELEASE_MAJOR }},enable=${{ env.RELEASE_VERSION != '' }}
             type=ref,event=branch
-            type=ref,event=tag
+            type=ref,event=pr
             type=sha
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
 
+      # Build and push Docker image with Buildx (don't push on PR). context
+      # is osac-ui itself, not repo root -- every COPY in its Containerfile
+      # (package.json, proxy/go.mod, ...) is relative to that directory.
       - name: Build and push Docker image
         id: build
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7
         with:
           context: osac-ui
           file: osac-ui/Containerfile
-          push: true
+          push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
-      - name: Install cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
+  # Signing gets its own job, granted id-token: write only here, rather than
+  # on `image` -- `image` also runs (build-only, no push) on pull_request
+  # with PR-controlled Containerfile/build context, so it must never hold
+  # the OIDC permission that mints Fulcio signing certs.
+  sign:
+    needs: image
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Log into registry ${{ env.REGISTRY }}
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Sign image with cosign
-        run: cosign sign --yes "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"
+        uses: ./.github/actions/cosign-sign-image
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.image.outputs.digest }}

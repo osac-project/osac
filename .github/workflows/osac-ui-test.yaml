@@ -11,6 +11,11 @@ on:
   pull_request:
     paths:
       - 'osac-ui/**'
+  # Invoked as a parallel "box" by osac-build-and-publish.yaml, same as
+  # unit-tests.yml/integration-tests.yml/codeql.yml -- unconditional there
+  # (a release/nightly run always tests osac-ui, regardless of whether this
+  # specific run touched it), not gated by the paths filter above.
+  workflow_call:
 
 permissions:
   contents: read

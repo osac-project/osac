@@ -11,7 +11,6 @@ import (
 	"time"
 
 	log "github.com/sirupsen/logrus"
-	"golang.org/x/net/http2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -183,9 +182,16 @@ func newGRPCTransport(tlsConfig *tls.Config) http.RoundTripper {
 			ForceAttemptHTTP2: true,
 		}
 	}
-	return &http2.Transport{
-		AllowHTTP: true,
-		DialTLSContext: func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
+	// http2.Transport (golang.org/x/net/http2) is deprecated in favor of
+	// net/http.Transport's own Protocols field, which now supports h2c
+	// (unencrypted HTTP/2) natively -- UnencryptedHTTP2 without HTTP1 makes
+	// this transport speak HTTP/2 in cleartext for http:// requests instead
+	// of falling back to HTTP/1.1.
+	protocols := new(http.Protocols)
+	protocols.SetUnencryptedHTTP2(true)
+	return &http.Transport{
+		Protocols: protocols,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			var d net.Dialer
 			return d.DialContext(ctx, network, addr)
 		},

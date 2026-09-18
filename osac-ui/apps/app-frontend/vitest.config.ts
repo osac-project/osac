@@ -28,6 +28,10 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     passWithNoTests: true,
+    // Explicit reporters list opts out of Vitest's automatic 'github-actions'
+    // reporter (which writes a "Vitest Test Report" job summary) -- Vitest
+    // only auto-adds it when `reporters` is left unset.
+    reporters: ['default'],
     setupFiles: ['./src/test-setup.ts'],
     include: [
       'src/**/*.{test,spec}.{ts,tsx}',

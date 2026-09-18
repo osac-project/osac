@@ -272,6 +272,35 @@ jobs:
         echo "components-needing-build=${build_json}" >> "$GITHUB_OUTPUT"
         echo "components-to-tag=${tag_json}" >> "$GITHUB_OUTPUT"
 
+    # Surface the resolved versions in the run's own job summary as soon as
+    # they're known -- at the very start of the pipeline, not just in the
+    # Slack message tag-and-notify posts after every test box (including
+    # e2e) has already passed. Lets a human check which versions a run is
+    # about to publish without waiting for it to finish.
+    - name: Publish planned version summary
+      env:
+        MODE: ${{ inputs.mode }}
+        RELEASE_VERSION: ${{ inputs.release_version }}
+        COMPONENT_VERSIONS: ${{ steps.versions.outputs.component-versions }}
+      run: |
+        set -euo pipefail
+
+        RUN_KIND="Nightly Build"
+        HEADER_VERSION=""
+        if [[ "${MODE}" == "release" ]]; then
+          RUN_KIND="Release"
+          HEADER_VERSION=" ${RELEASE_VERSION}"
+        fi
+
+        {
+          echo "## ${RUN_KIND}${HEADER_VERSION} — versions to publish"
+          echo
+          echo "| Component | Version |"
+          echo "| --- | --- |"
+          [[ "${MODE}" == "release" ]] && echo "| osac (umbrella) | ${RELEASE_VERSION} |"
+          jq -r 'to_entries[] | "| \(.key) | \(.value) |"' <<<"${COMPONENT_VERSIONS}"
+        } >> "$GITHUB_STEP_SUMMARY"
+
     # Stamp every sub-chart's Chart.yaml, the umbrella's own values.yaml, and
     # the 4 CI overlay files -- all of it now, before the temp branch is
     # pushed, so both the parallel build phase and the e2e jobs operate on

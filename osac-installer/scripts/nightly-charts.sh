@@ -124,6 +124,7 @@ _component_publish_workflows() {
         bare-metal-fulfillment-operator) printf '%s\n' build-bmf-image.yaml ;;
         osac-metering) printf '%s\n' build-metering-service-image.yaml build-metering-m360-adapter-image.yaml build-metering-echo-adapter-image.yaml ;;
         osac-csi-driver) printf '%s\n' publish-csi-driver-image.yaml ;;
+        osac-ui) printf '%s\n' osac-ui-publish-image.yaml ;;
         *)
             echo "::error::_component_publish_workflows: unknown component '${component}'" >&2
             return 1

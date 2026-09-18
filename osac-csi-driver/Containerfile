@@ -18,6 +18,7 @@ COPY --chown=1001:1001 osac-operator/api/go.mod osac-operator/api/go.sum osac-op
 COPY --chown=1001:1001 osac-metering/schema/go.mod osac-metering/schema/go.sum osac-metering/schema/
 COPY --chown=1001:1001 osac-metering/metering-service/go.mod osac-metering/metering-service/go.sum osac-metering/metering-service/
 COPY --chown=1001:1001 osac-metering/adapters/go.mod osac-metering/adapters/go.sum osac-metering/adapters/
+COPY --chown=1001:1001 osac-ui/proxy/go.mod osac-ui/proxy/go.sum osac-ui/proxy/
 RUN cd osac-csi-driver && go mod download
 
 COPY --chown=1001:1001 proto/ proto/

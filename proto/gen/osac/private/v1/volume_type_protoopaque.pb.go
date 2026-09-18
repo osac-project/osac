@@ -631,8 +631,8 @@ type VolumeStatus_builder struct {
 	// Opaque identifier assigned by the vendor storage array. Set by the osac-operator after vendor
 	// CSI CreateVolume succeeds. Visible only through the private API.
 	VendorVolumeId string
-	// Name of the StorageBackend that serves this volume. Resolved during tier resolution at
-	// creation time. Visible only through the private API.
+	// Provider of the StorageBackend that serves this volume (e.g. "vast"). Resolved during tier
+	// resolution at creation time. Visible only through the private API.
 	Backend string
 	// Storage protocol used for this volume. Resolved during tier resolution at creation time.
 	// Visible only through the private API.

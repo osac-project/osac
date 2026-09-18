@@ -139,7 +139,7 @@
         provider: vast
 
   tasks:
-    - name: Pre-create csi-driver namespace (no Helm ownership metadata)
+    - name: Pre-create csi-driver namespace
       kubernetes.core.k8s:
         state: present
         kind: Namespace

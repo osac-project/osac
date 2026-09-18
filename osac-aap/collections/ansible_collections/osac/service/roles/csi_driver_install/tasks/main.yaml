@@ -228,7 +228,7 @@
 
     # Node DaemonSet runs privileged (hostPath mount to /var/lib/kubelet) --
     # matches ensure_csi_backends.yaml's identical PSA labeling for the same reason.
-    - name: Pre-create csi-driver namespace with Helm release ownership metadata
+    - name: Pre-create csi-driver namespace with PSA privileged labels
       kubernetes.core.k8s:
         state: present
         definition:
@@ -237,13 +237,8 @@
           metadata:
             name: "{{ csi_driver_install_namespace }}"
             labels:
-              app.kubernetes.io/managed-by: Helm
               pod-security.kubernetes.io/enforce: privileged
               pod-security.kubernetes.io/warn: privileged
-            annotations:
-              meta.helm.sh/release-name: csi-driver
-              meta.helm.sh/release-namespace: "{{ csi_driver_install_namespace }}"
-
     - name: Check currently installed csi-driver release
       kubernetes.core.helm_info:
         name: csi-driver

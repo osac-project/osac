@@ -280,7 +280,7 @@ var _ = Describe("update", func() {
 			Status: privatev1.VolumeStatus_builder{
 				State:    privatev1.VolumeState_VOLUME_STATE_CREATING,
 				Hub:      "hub-1",
-				Backend:  "test-backend",
+				Provider: "test-provider",
 				Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
 			}.Build(),
 		}.Build()
@@ -345,7 +345,7 @@ var _ = Describe("update", func() {
 			Status: privatev1.VolumeStatus_builder{
 				State:    privatev1.VolumeState_VOLUME_STATE_CREATING,
 				Hub:      "hub-1",
-				Backend:  "test-backend",
+				Provider: "test-provider",
 				Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
 			}.Build(),
 		}.Build()

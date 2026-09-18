@@ -354,13 +354,6 @@ func (v *ReferenceValidator) walkMessage(ctx context.Context, msg protoreflect.M
 		if fd.IsList() {
 			list := val.List()
 			isPublicAddOnOperators := isPublicAddOnOperatorList(fd)
-			if cache := getPublishedLookupCache(ctx); cache != nil && isPublicAddOnOperators && list.Len() > 32 {
-				*violations = append(*violations, &errdetails.BadRequest_FieldViolation{
-					Field:       strings.Join(fieldPath, "."),
-					Description: "AddOnOperator reference list must contain no more than 32 items",
-				})
-				return false
-			}
 			if cache := getPublishedLookupCache(ctx); cache != nil && isPublicAddOnOperators {
 				cachePublicAddOnOperatorIdentifiers(cache, list)
 			}

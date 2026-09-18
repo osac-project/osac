@@ -4,7 +4,7 @@ go 1.25.5
 
 require (
 	connectrpc.com/vanguard v0.4.0
-	github.com/andybalholm/brotli v1.2.1
+	github.com/andybalholm/brotli v1.2.4
 	github.com/go-chi/chi/v5 v5.3.0
 	github.com/sirupsen/logrus v1.9.4
 	golang.org/x/net v0.53.0

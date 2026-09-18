@@ -318,7 +318,7 @@
             in (_driver_release_info.status['values'].controller.vendorControllers | default(_driver_release_info.status['values'].controller.vendorSockets | default('')))
           # Test 1 dispatches only vast, so node.vendorSockets is exactly the chart-default socketPath + '/csi.sock'.
           - _driver_release_info.status['values'].node.vendorSockets == 'vast=/var/lib/kubelet/plugins/csi.vast.vastdata.com/csi.sock'
-        fail_msg: "csi-driver release values did not reflect the dispatched vast vendor: {{ _driver_release_info.status['values'] }}"
+        fail_msg: "csi-driver release values did not reflect the dispatched vast vendor with live controller and node sockets"
         success_msg: "csi-driver release correctly enables vast with the live-resolved controller socket and node socket populated"
 
 # ── Test 2: Second, identical dispatch is idempotent ──
@@ -384,9 +384,7 @@
             ('pure=' in (_driver_release_after_pure.status['values'].controller.vendorSockets | default('')))
           - "'vast=/var/lib/kubelet/plugins/csi.vast.vastdata.com/csi.sock' in _driver_release_after_pure.status['values'].node.vendorSockets"
           - "'pure=/var/lib/kubelet/plugins/csi.pure.purestorage.com/csi.sock' in _driver_release_after_pure.status['values'].node.vendorSockets"
-        fail_msg: >-
-          Dispatching a second provider must not clear the first provider's wiring:
-          {{ _driver_release_after_pure.status['values'] }}
+        fail_msg: "Dispatching a second provider did not retain the first provider's wiring in release values"
         success_msg: "vast wiring survived the pure dispatch; both vendors are enabled"
 
 # ── Test 4: A pinned chart-version bump between dispatches triggers a real upgrade ──
@@ -518,9 +516,7 @@
           - "'0.1.1' in _driver_release_after_noop_dispatch.status.chart"
           - _driver_release_after_noop_dispatch.status['values'].vendors.vast.enabled | bool
           - "'lvms' not in _driver_release_after_noop_dispatch.status['values'].vendors"
-        fail_msg: >-
-          A zero-supported-vendor dispatch must leave the csi-driver release untouched:
-          {{ _driver_release_after_noop_dispatch.status['values'] }}
+        fail_msg: "A zero-supported-vendor dispatch modified the csi-driver release values"
         success_msg: "csi-driver release state correctly unchanged after the zero-supported-vendor dispatch"
 
 # ── Test 5: A dispatched, chart-supported vendor with no live controller

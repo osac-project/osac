@@ -117,12 +117,9 @@
         that:
           - "'csi_driver_install' in _override_log"
           - >-
-            'tiers=' ~ (osac_job_vars.storage_tier_definitions | to_json) in _override_log
-        fail_msg: >-
-          csi_driver_install override did not fire with the expected playbook-computed vars.
-          Log: {{ _override_log }}
-        success_msg: "csi_driver_install override fired with the correct tiers from the playbook's vars: mapping"
-
+            'providers=' ~ (osac_job_vars.storage_tier_definitions | map(attribute='provider') | sort | list | to_json) in _override_log
+        fail_msg: "csi_driver_install override did not fire with the expected providers from the playbook's vars: mapping"
+        success_msg: "csi_driver_install override fired with the correct providers from the playbook's vars: mapping"
     # Proves the rest of the playbook (the pre-existing osac.service.storage_provider
     # dispatch) still executed for real and succeeded, immediately after the stubbed
     # csi_driver_install step -- not just that csi_driver_install's own wiring point

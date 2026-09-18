@@ -388,7 +388,7 @@
       ansible.builtin.fail:
         msg: >-
           OSAC CSI driver install failed. Failed task: {{ ansible_failed_task.name | default('unknown') }}.
-          {{ ('Details: ' ~ (ansible_failed_result.msg | default('see logs for details'))) if (ansible_verbosity | default(0) >= 2) else 'Run with -vv for full error details.' }}
+          Error: {{ ansible_failed_result.msg | default('see logs for details') }}.
   always:
     # Guarded by _csi_driver_install_lock_acquired -- see the "Mark the lock
     # as acquired" task above for why this must not release unconditionally.

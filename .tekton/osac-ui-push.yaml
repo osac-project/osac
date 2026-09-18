@@ -25,9 +25,9 @@ spec:
   - name: output-image
     value: quay.io/redhat-user-workloads/osac-tenant/osac-ui:{{revision}}
   - name: dockerfile
-    value: osac-ui/Containerfile
+    value: Containerfile
   - name: path-context
-    value: .
+    value: osac-ui
   pipelineSpec:
     description: |
       This pipeline is ideal for building container images from a Containerfile while maintaining trust after pipeline customization.

@@ -94,15 +94,6 @@ var _ = Describe("Public volumes server", func() {
 			privateServer *PrivateVolumesServer
 		)
 
-		// stubResolver stamps a provider and protocol on created volumes so we can verify these
-		// internal fields are NOT exposed through the public API.
-		stubResolver := TierResolverFunc(func(_ context.Context, _ string) (*TierResolution, error) {
-			return &TierResolution{
-				Provider: "internal-provider",
-				Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
-			}, nil
-		})
-
 		BeforeEach(func() {
 			var err error
 

@@ -14,7 +14,8 @@ import re
 _BOT_AUTHORS: frozenset[str] = frozenset({"redhat-chai-bot"})
 
 _ATTRIBUTION_RE = re.compile(
-    r"@([a-zA-Z\d][\w-]*)\s+requested\s+(?:in\b|via\b)",
+    r"^@([a-zA-Z\d][\w-]*)\s+requested\s+(?:in\b|via\b)",
+    re.MULTILINE,
 )
 
 

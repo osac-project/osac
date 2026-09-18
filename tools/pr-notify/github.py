@@ -34,6 +34,7 @@ def _build_graphql_query(repos: list[str]) -> str:
         pageInfo {{ hasNextPage }}
         nodes {{
           title
+          body
           url
           author {{ login }}
           createdAt
@@ -171,6 +172,7 @@ def _parse_pr_nodes(repo_name: str, pr_nodes: list[dict]) -> list[PRData]:
             PRData(
                 title=pr.get("title", ""),
                 url=pr.get("url", ""),
+                body=pr.get("body", ""),
                 author=author_obj.get("login", "ghost"),
                 repo=repo_name,
                 created_at=pr.get("createdAt", ""),

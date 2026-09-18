@@ -53,6 +53,7 @@ class PRData:
     ci_status: str | None
     mergeable: str | None = None
     check_runs: list[CheckRun] = field(default_factory=list)
+    body: str = ""  # PR description; used for bot attribution parsing
 
 
 @dataclass

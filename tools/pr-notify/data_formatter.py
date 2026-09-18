@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 
+from attribution import resolve_effective_author
 from models import ClassifiedPR, DEFAULT_TITLE, PRStatus
 
 
@@ -94,7 +95,7 @@ def format_dashboard_data(
 
 
 def _serialize_pr(cpr: ClassifiedPR) -> dict:
-    return {
+    result = {
         "title": cpr.pr.title,
         "url": cpr.pr.url,
         "author": cpr.pr.author,
@@ -110,3 +111,7 @@ def _serialize_pr(cpr: ClassifiedPR) -> dict:
             for cr in cpr.pr.check_runs
         ],
     }
+    effective = resolve_effective_author(cpr.pr.author, cpr.pr.body)
+    if effective.lower() != cpr.pr.author.lower():
+        result["attributed_to"] = effective
+    return result

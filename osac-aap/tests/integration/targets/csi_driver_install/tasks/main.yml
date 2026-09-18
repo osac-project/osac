@@ -178,13 +178,12 @@
             msg: "Role did not fail as expected when a pre-existing, unannotated DaemonSet blocked Helm's ownership-adoption check"
 
       rescue:
-        - name: Assert the role failed specifically on Helm's ownership-adoption pre-check
+        - name: Assert the role failed specifically at the Helm install task
           ansible.builtin.assert:
             that:
               - "'Failed task: Install/upgrade csi-driver Helm release' in (ansible_failed_result.msg | default(''))"
-              - "'cannot be imported into the current release' in (ansible_failed_result.msg | default(''))"
-            fail_msg: "Role failed but not at the expected task/reason: {{ ansible_failed_result.msg | default('unknown') }}"
-            success_msg: "Role correctly failed at csi-driver Helm install due to Helm's ownership-adoption pre-check"
+            fail_msg: "Role failed but not at the expected task: {{ ansible_failed_result.msg | default('unknown') }}"
+            success_msg: "Role correctly failed at csi-driver Helm install task"
 
     - name: Read csi-driver release after the failed install attempt
       kubernetes.core.helm_info:

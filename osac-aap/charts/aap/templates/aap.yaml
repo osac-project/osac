@@ -1,4 +1,4 @@
-{{- if .Values.aap.instance.enabled }}
+{{- if and .Values.aap.instance.enabled (eq (include "osac-aap.existingUrl" .) "") }}
 apiVersion: aap.ansible.com/v1alpha1
 kind: AnsibleAutomationPlatform
 metadata:

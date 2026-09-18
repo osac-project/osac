@@ -8,6 +8,15 @@
 global:
   # Required stable identity for this OSAC/fulfillment-service deployment.
   osacDeploymentId: ""
+  # Customer-managed AAP. When url is set, install-osac does not create
+  # AnsibleAutomationPlatform/osac-aap, bootstrap, or a token job. The OSAC
+  # operator and BMF use this URL and Secret instead of http://osac-aap.
+  # Create the token Secret in the OSAC namespace before install.
+  existingAap:
+    url: ""
+    tokenSecret:
+      name: ""
+      key: "token"
   # [REQUIRED on OpenShift, via --set global.clusterDomain=$(oc get ingresses.config/cluster -o jsonpath='{.spec.domain}')]
   # Backs the tpl-templated defaults below (service.auth.issuerUrl,
   # service.idp.url, service.vault.keycloakIssuerUrl) so they automatically
@@ -65,6 +74,9 @@ operator:
   aap:
     url: ""
     token: ""
+    tokenSecret:
+      name: ""
+      key: "token"
     insecureSkipVerify: "true"
     statusPollInterval: "30s"
     templatePrefix: "osac"

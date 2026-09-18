@@ -1,4 +1,4 @@
-{{- if .Values.bootstrap.enabled }}
+{{- if and .Values.bootstrap.enabled (eq (include "osac-aap.existingUrl" .) "") }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:

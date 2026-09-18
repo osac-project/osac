@@ -51,6 +51,17 @@ Installs OSAC: operator, fulfillment-service, AAP bootstrap, UI. All
 prerequisites are ready - certificates issued, secrets created, CRDs
 registered.
 
+To point OSAC at an AAP that already exists, set `AAP_URL` and
+`AAP_TOKEN_SECRET` (Secret must already be in `NS`). The installer then
+skips `license.zip`, does not create `osac-aap`, and passes the URL and
+token into the OSAC operator and BMF.
+
+```bash
+make install-osac PLATFORM=openshift PROFILE=full-ci NS=osac \
+  AAP_URL=https://aap.example.com/api/controller \
+  AAP_TOKEN_SECRET=my-aap-token
+```
+
 ### Post-Install Hooks
 
 After Phase 3, Helm runs post-install (and post-upgrade) hooks that
@@ -158,7 +169,7 @@ All targets require `PLATFORM=kind|openshift PROFILE=dev|vmaas-ci|... NS=<namesp
 |--------|-------------|
 | `make install` | Full install (infra + osac) |
 | `make install-infra` | Infrastructure only (osac-deps + osac-infra) |
-| `make install-osac` | OSAC instance only |
+| `make install-osac` | OSAC instance only (`AAP_URL`/`AAP_TOKEN_SECRET` for a customer-managed AAP) |
 | `make uninstall` | Full uninstall (reverse order) |
 | `make test` | Run integration tests (SUITE= required) |
 | `make helm-lint` | Lint all charts |

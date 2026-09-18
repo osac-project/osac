@@ -38,14 +38,15 @@ spec:
               optional: {{ .Values.configSecret.optional }}
         env:
           - name: OSAC_AAP_URL
-            value: {{ .Values.aap.url | default "http://osac-aap/api/controller" | quote }}
-          {{- if and .Values.aap.tokenSecret .Values.aap.tokenSecret.name }}
+            value: {{ include "osac-operator.aapUrl" . | quote }}
+          {{- $aapTokenSecret := include "osac-operator.aapTokenSecretName" . }}
+          {{- if $aapTokenSecret }}
           - name: OSAC_AAP_TOKEN
             valueFrom:
               secretKeyRef:
-                name: {{ .Values.aap.tokenSecret.name }}
-                key: {{ .Values.aap.tokenSecret.key | default "token" }}
-                optional: true
+                name: {{ $aapTokenSecret | quote }}
+                key: {{ include "osac-operator.aapTokenSecretKey" . | quote }}
+                optional: {{ include "osac-operator.aapTokenSecretOptional" . }}
           {{- else if .Values.aap.token }}
           - name: OSAC_AAP_TOKEN
             value: {{ .Values.aap.token | quote }}

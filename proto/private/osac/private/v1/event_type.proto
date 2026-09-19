@@ -48,6 +48,7 @@ import "osac/private/v1/security_group_type.proto";
 import "osac/private/v1/storage_backend_type.proto";
 import "osac/private/v1/storage_tier_type.proto";
 import "osac/private/v1/subnet_type.proto";
+import "osac/private/v1/ssh_key_type.proto";
 import "osac/private/v1/user_type.proto";
 import "osac/private/v1/virtual_network_type.proto";
 import "osac/private/v1/volume_type.proto";
@@ -104,6 +105,7 @@ message Event {
     NATGateway nat_gateway = 33 [(cleanapi.field).private = true];
     StorageTier storage_tier = 34 [(cleanapi.field).private = true];
     Volume volume = 35 [(cleanapi.field).private = true];
+    SshKey ssh_key = 38;
     AddOnOperator add_on_operator = 37 [(cleanapi.field).private = true];
   }
 

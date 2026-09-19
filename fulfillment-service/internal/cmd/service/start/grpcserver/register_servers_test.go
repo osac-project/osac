@@ -544,6 +544,7 @@ var _ = Describe("Conditional service registration", func() {
 		"osac.public.v1.Projects",
 		"osac.public.v1.Users",
 		"osac.public.v1.Secrets",
+		"osac.public.v1.SshKeys",
 		"osac.public.v1.StorageTiers",
 		"osac.private.v1.HostTypes",
 		"osac.private.v1.Hubs",
@@ -564,6 +565,7 @@ var _ = Describe("Conditional service registration", func() {
 		"osac.private.v1.Users",
 		"osac.private.v1.StorageBackends",
 		"osac.private.v1.Secrets",
+		"osac.private.v1.SshKeys",
 		"osac.private.v1.StorageTiers",
 	}
 

@@ -49,6 +49,15 @@ var _ = Describe("RegisterReferenceLookups", func() {
 		}
 	})
 
+	It("registers tenant-scoped SshKeyReference for private and public APIs", func() {
+		for _, name := range []protoreflect.FullName{
+			"osac.private.v1.SshKeyReference",
+			"osac.public.v1.SshKeyReference",
+		} {
+			Expect(validator.HasLookup(name)).To(BeTrue(), "missing lookup for %s", name)
+		}
+	})
+
 	It("registers every reference type used in Create or Update requests", func() {
 		var missing []string
 		for _, name := range createOrUpdateReferenceTypes() {

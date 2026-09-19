@@ -30,6 +30,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/hub"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/secret"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/securitygroup"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/sshkey"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/subnet"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/virtualnetwork"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -55,6 +56,7 @@ var _ = Describe("Create command", func() {
 		Entry("subnet", subnet.Cmd, (*publicv1.Subnet)(nil)),
 		Entry("secret", secret.Cmd, (*publicv1.Secret)(nil)),
 		Entry("securitygroup", securitygroup.Cmd, (*publicv1.SecurityGroup)(nil)),
+		Entry("sshkey", sshkey.Cmd, (*publicv1.SshKey)(nil)),
 	)
 
 	Describe("Subcommands", func() {
@@ -80,6 +82,7 @@ var _ = Describe("Create command", func() {
 				"subnet",
 				"secret",
 				"securitygroup",
+				"sshkey",
 			))
 		})
 	})

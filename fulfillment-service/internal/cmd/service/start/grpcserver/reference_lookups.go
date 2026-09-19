@@ -324,5 +324,22 @@ func registerReferenceLookups(
 		references.NewScopedDAOLookupFunc(secretsDAO),
 	)
 
+	sshKeysDAO, err := dao.NewGenericDAO[*privatev1.SshKey]().
+		SetLogger(logger).
+		SetTenancyLogic(tenancyLogic).
+		SetMetricsRegisterer(metricsRegisterer).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create SshKey DAO for reference lookups: %w", err)
+	}
+	validator.Register(
+		"osac.private.v1.SshKeyReference",
+		references.NewTenantScopedDAOLookupFunc(sshKeysDAO),
+	)
+	validator.Register(
+		"osac.public.v1.SshKeyReference",
+		references.NewTenantScopedDAOLookupFunc(sshKeysDAO),
+	)
+
 	return nil
 }

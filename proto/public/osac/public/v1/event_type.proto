@@ -30,6 +30,7 @@ import "osac/public/v1/tenant_type.proto";
 import "osac/public/v1/role_binding_type.proto";
 import "osac/public/v1/role_type.proto";
 import "osac/public/v1/secret_type.proto";
+import "osac/public/v1/ssh_key_type.proto";
 
 // Represents events delivered by the server.
 message Event {
@@ -62,6 +63,7 @@ message Event {
     RoleBinding role_binding = 14;
     Secret secret = 15;
     Tenant tenant = 16;
+    SshKey ssh_key = 38;
   }
 }
 

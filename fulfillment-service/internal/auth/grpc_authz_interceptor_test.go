@@ -779,6 +779,32 @@ var _ = Describe("Rego authorization interceptor", func() {
 		)
 
 		DescribeTable(
+			"Allows Keycloak users on the public SSH keys API",
+			func(ctx context.Context, method string) {
+				ctx = ContextWithToken(ctx, createKeycloakUserToken("my-tenant", "my-user", nil))
+				_, err := interceptor.UnaryServer(ctx, nil, &grpc.UnaryServerInfo{FullMethod: method},
+					func(ctx context.Context, _ any) (any, error) {
+						Expect(SubjectFromContext(ctx).User).To(Equal("my-user"))
+						return nil, nil
+					})
+				Expect(err).ToNot(HaveOccurred())
+			},
+			Entry("List", "/osac.public.v1.SshKeys/List"),
+			Entry("Get", "/osac.public.v1.SshKeys/Get"),
+			Entry("Create", "/osac.public.v1.SshKeys/Create"),
+			Entry("Delete", "/osac.public.v1.SshKeys/Delete"),
+		)
+
+		It("Rejects unauthenticated users on the public SSH keys API", func(ctx context.Context) {
+			_, err := interceptor.UnaryServer(ctx, nil, &grpc.UnaryServerInfo{
+				FullMethod: "/osac.public.v1.SshKeys/List",
+			}, func(context.Context, any) (any, error) {
+				return nil, nil
+			})
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.Unauthenticated))
+		})
+
+		DescribeTable(
 			"Allows Keycloak users on the public Volumes API",
 			func(ctx context.Context, method string) {
 				token := createKeycloakUserToken("my-tenant", "my-user", nil)
@@ -839,6 +865,22 @@ var _ = Describe("Rego authorization interceptor", func() {
 			Entry("Update", "/osac.private.v1.Secrets/Update"),
 			Entry("Delete", "/osac.private.v1.Secrets/Delete"),
 			Entry("Signal", "/osac.private.v1.Secrets/Signal"),
+		)
+
+		DescribeTable(
+			"Denies Keycloak users on the private SSH keys API",
+			func(ctx context.Context, method string) {
+				ctx = ContextWithToken(ctx, createKeycloakUserToken("my-tenant", "my-user", nil))
+				_, err := interceptor.UnaryServer(ctx, nil, &grpc.UnaryServerInfo{FullMethod: method},
+					func(context.Context, any) (any, error) { return nil, nil })
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied))
+			},
+			Entry("List", "/osac.private.v1.SshKeys/List"),
+			Entry("Get", "/osac.private.v1.SshKeys/Get"),
+			Entry("Create", "/osac.private.v1.SshKeys/Create"),
+			Entry("Update", "/osac.private.v1.SshKeys/Update"),
+			Entry("Delete", "/osac.private.v1.SshKeys/Delete"),
+			Entry("Signal", "/osac.private.v1.SshKeys/Signal"),
 		)
 
 		It("Allows tenant admin to manage users", func(ctx context.Context) {

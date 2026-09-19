@@ -89,6 +89,36 @@ var _ = Describe("Generic server", func() {
 		Expect(metadata.GetName()).To(Equal("my-object"))
 	})
 
+	It("Sets the SSH key payload via reflection", func() {
+		var event *privatev1.Event
+		notifier := events.NewMockNotifier(ctrl)
+		notifier.EXPECT().
+			Notify(gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, payload proto.Message) error {
+				event = payload.(*privatev1.Event)
+				return nil
+			})
+
+		server, err := NewGenericServer[*privatev1.SshKey]().
+			SetLogger(logger).
+			SetService(privatev1.SshKeys_ServiceDesc.ServiceName).
+			SetAttributionLogic(attribution).
+			SetTenancyLogic(tenancy).
+			SetNotifier(notifier).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		object := privatev1.SshKey_builder{
+			Id:       "key-1",
+			Metadata: privatev1.Metadata_builder{Name: "my-key"}.Build(),
+			Spec:     privatev1.SshKeySpec_builder{PublicKey: validSshKeyForTest}.Build(),
+		}.Build()
+		err = server.notifyEvent(ctx, dao.Event{Type: dao.EventTypeCreated, Object: object})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(event.GetSshKey().GetId()).To(Equal("key-1"))
+		Expect(event.GetSshKey().GetSpec().GetPublicKey()).To(Equal(validSshKeyForTest))
+	})
+
 	It("Adds a timestamp to every database event type", func() {
 		notifier := events.NewMockNotifier(ctrl)
 		notifier.EXPECT().

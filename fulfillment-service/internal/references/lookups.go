@@ -40,17 +40,23 @@ func (e *errRefNotFound) IsNotFound() bool {
 // NewDAOLookupFunc creates a ReferenceLookupFunc backed by a GenericDAO. It queries the DAO
 // using a CEL filter that matches by id or metadata.name and returns the resolved reference metadata.
 func NewDAOLookupFunc[O dao.Object](d *dao.GenericDAO[O]) ReferenceLookupFunc {
-	return newDAOLookupFunc(d, false)
+	return newDAOLookupFunc(d, false, false)
 }
 
 // NewScopedDAOLookupFunc creates a DAO lookup that additionally constrains references to an
 // explicitly supplied tenant/project. If the caller has no explicit tenant, it retains the
 // visibility-based behavior of NewDAOLookupFunc.
 func NewScopedDAOLookupFunc[O dao.Object](d *dao.GenericDAO[O]) ReferenceLookupFunc {
-	return newDAOLookupFunc(d, true)
+	return newDAOLookupFunc(d, true, false)
 }
 
-func newDAOLookupFunc[O dao.Object](d *dao.GenericDAO[O], scopeExplicitTenant bool) ReferenceLookupFunc {
+// NewTenantScopedDAOLookupFunc creates a DAO lookup that constrains references to the supplied tenant while ignoring
+// project scope. It is used for objects whose names are unique across a tenant rather than within a project.
+func NewTenantScopedDAOLookupFunc[O dao.Object](d *dao.GenericDAO[O]) ReferenceLookupFunc {
+	return newDAOLookupFunc(d, false, true)
+}
+
+func newDAOLookupFunc[O dao.Object](d *dao.GenericDAO[O], scopeExplicitTenant, scopeTenantOnly bool) ReferenceLookupFunc {
 	return func(ctx context.Context, tenant, project, id, name string) (*ResolvedRef, error) {
 		var filter string
 		switch {
@@ -74,6 +80,8 @@ func newDAOLookupFunc[O dao.Object](d *dao.GenericDAO[O], scopeExplicitTenant bo
 				" && this.metadata.tenant == %s && this.metadata.project == %s",
 				strconv.Quote(tenant), strconv.Quote(project),
 			)
+		} else if scopeTenantOnly && tenant != "" {
+			filter += fmt.Sprintf(" && this.metadata.tenant == %s", strconv.Quote(tenant))
 		}
 
 		response, err := d.List().

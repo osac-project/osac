@@ -1,0 +1,59 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "buf/validate/validate.proto";
+import "cleanapi/cleanapi.proto";
+import "google/api/field_behavior.proto";
+import "osac/private/v1/metadata_type.proto";
+
+option (cleanapi.file).package = "osac.public.v1";
+
+// Represents a tenant-scoped OpenSSH public key that can be reused by other objects.
+message SshKey {
+  // Unique identifier of the SSH key.
+  string id = 1;
+
+  // Metadata of the SSH key, including its tenant-scoped name.
+  Metadata metadata = 2;
+
+  // The immutable public key material in OpenSSH authorized_keys format.
+  SshKeySpec spec = 3;
+
+  // Current state of the SSH key.
+  SshKeyStatus status = 4;
+}
+
+// Desired configuration of an SSH key.
+message SshKeySpec {
+  // Public key material in OpenSSH authorized_keys format.
+  string public_key = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (google.api.field_behavior) = IMMUTABLE
+  ];
+}
+
+// Current state of an SSH key.
+message SshKeyStatus {}
+
+// Reference to a tenant-scoped SSH key.
+message SshKeyReference {
+  // Unique identifier of the referenced SSH key.
+  string id = 1;
+
+  // Tenant-scoped name of the referenced SSH key.
+  string name = 2;
+}

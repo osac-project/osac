@@ -324,6 +324,7 @@ func buildHandlerList() []handlerRegistrar {
 		publicv1.RegisterJsonWebKeySetHandler,
 		publicv1.RegisterStorageTiersHandler,
 		publicv1.RegisterVolumesHandler,
+		publicv1.RegisterSshKeysHandler,
 		// Shared private API:
 		privatev1.RegisterCapabilitiesHandler,
 		privatev1.RegisterEventsHandler,
@@ -331,6 +332,7 @@ func buildHandlerList() []handlerRegistrar {
 		privatev1.RegisterHubsHandler,
 		privatev1.RegisterNetworkClassesHandler,
 		privatev1.RegisterSecretsHandler,
+		privatev1.RegisterSshKeysHandler,
 		privatev1.RegisterStorageBackendsHandler,
 		privatev1.RegisterStorageTiersHandler,
 		privatev1.RegisterVirtualNetworksHandler,

@@ -1,0 +1,101 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.public.v1;
+
+import "google/api/annotations.proto";
+import "osac/public/v1/ssh_key_type.proto";
+
+message SshKeysListRequest {
+  // Index of the first result. If not specified the default value will be zero.
+  optional int32 offset = 1;
+
+  // Maximum number of results to return.
+  optional int32 limit = 2;
+
+  // Filter criteria evaluated against each SSH key.
+  optional string filter = 3;
+
+  // Ordering criteria for the returned SSH keys.
+  optional string order = 4;
+}
+
+message SshKeysListResponse {
+  // Number of items returned.
+  int32 size = 1;
+
+  // Total number of matching SSH keys.
+  int32 total = 2;
+
+  // Matching SSH keys.
+  repeated SshKey items = 3;
+}
+
+message SshKeysGetRequest {
+  // Unique identifier of the SSH key.
+  string id = 1;
+}
+
+message SshKeysGetResponse {
+  // Retrieved SSH key.
+  SshKey object = 1;
+}
+
+message SshKeysCreateRequest {
+  // SSH key to create.
+  SshKey object = 1;
+}
+
+message SshKeysCreateResponse {
+  // Created SSH key.
+  SshKey object = 1;
+}
+
+message SshKeysDeleteRequest {
+  // Unique identifier of the SSH key to delete.
+  string id = 1;
+}
+
+message SshKeysDeleteResponse {}
+
+// Service for managing tenant-scoped SSH keys.
+service SshKeys {
+  // Retrieves tenant-scoped SSH keys.
+  rpc List(SshKeysListRequest) returns (SshKeysListResponse) {
+    option (google.api.http) = {get: "/api/fulfillment/v1/ssh-keys"};
+  }
+
+  // Retrieves one SSH key by identifier.
+  rpc Get(SshKeysGetRequest) returns (SshKeysGetResponse) {
+    option (google.api.http) = {
+      get: "/api/fulfillment/v1/ssh-keys/{id}"
+      response_body: "object"
+    };
+  }
+
+  // Creates a tenant-scoped SSH key.
+  rpc Create(SshKeysCreateRequest) returns (SshKeysCreateResponse) {
+    option (google.api.http) = {
+      post: "/api/fulfillment/v1/ssh-keys"
+      body: "object"
+      response_body: "object"
+    };
+  }
+
+  // Deletes an SSH key by identifier.
+  rpc Delete(SshKeysDeleteRequest) returns (SshKeysDeleteResponse) {
+    option (google.api.http) = {delete: "/api/fulfillment/v1/ssh-keys/{id}"};
+  }
+}

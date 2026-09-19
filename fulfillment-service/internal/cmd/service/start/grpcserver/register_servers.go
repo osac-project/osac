@@ -686,6 +686,34 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	}
 	publicv1.RegisterSecretsServer(registrar, publicSecretsServer)
 
+	// Create the private SSH keys server:
+	deps.Logger.InfoContext(ctx, "Creating private SSH keys server")
+	privateSshKeysServer, err := servers.NewPrivateSshKeysServer().
+		SetLogger(deps.Logger).
+		SetNotifier(deps.Notifier).
+		SetAttributionLogic(deps.PrivateAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create private SSH keys server: %w", err)
+	}
+	privatev1.RegisterSshKeysServer(registrar, privateSshKeysServer)
+
+	// Create the public SSH keys server:
+	deps.Logger.InfoContext(ctx, "Creating public SSH keys server")
+	publicSshKeysServer, err := servers.NewSshKeysServer().
+		SetLogger(deps.Logger).
+		SetNotifier(deps.Notifier).
+		SetAttributionLogic(deps.PublicAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create public SSH keys server: %w", err)
+	}
+	publicv1.RegisterSshKeysServer(registrar, publicSshKeysServer)
+
 	// Create the storage backends DAO for cross-resource validation in the storage tiers server:
 	storageBackendsDAO, err := dao.NewGenericDAO[*privatev1.StorageBackend]().
 		SetLogger(deps.Logger).

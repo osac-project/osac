@@ -11,10 +11,13 @@ Components deployed:
   Hub components (per management cluster):
     - OSAC Operator CRDs
     - OSAC Operator Controller Manager
-{{- if .Values.aap.aap.instance.enabled }}
+{{- $ext := include "osac.externalAap.cfg" . | fromYaml }}
+{{- if $ext.enabled }}
+    - External AAP ({{ $ext.url }})
+{{- else if .Values.aap.aap.instance.enabled }}
     - AAP instance ({{ .Values.aap.aap.instance.name }})
 {{- end }}
-{{- if .Values.aap.bootstrap.enabled }}
+{{- if and .Values.aap.bootstrap.enabled (not $ext.enabled) }}
     - AAP bootstrap job (post-install hook)
 {{- end }}
 
@@ -28,7 +31,16 @@ To check the status of the deployment:
   helm status {{ .Release.Name }} -n {{ .Release.Namespace }}
   kubectl get pods -n {{ .Release.Namespace }}
 
-{{- if .Values.aap.bootstrap.enabled }}
+{{- if $ext.enabled }}
+
+External AAP mode: the installer is using a pre-existing AAP controller.
+No AnsibleAutomationPlatform CR, bootstrap job, or token-creation job was deployed.
+Ensure your external AAP is pre-configured with the OSAC org, job templates,
+and credentials before provisioning resources.
+
+  External AAP URL:    {{ $ext.url }}
+  Token secret:        {{ dig "tokenSecret" "name" "" $ext }}
+{{- else if .Values.aap.bootstrap.enabled }}
 
 The AAP bootstrap job runs as a post-install hook. To monitor its progress:
 

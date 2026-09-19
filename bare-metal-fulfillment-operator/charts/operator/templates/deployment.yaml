@@ -83,17 +83,19 @@ spec:
             valueFrom:
               fieldRef:
                 fieldPath: metadata.namespace
-          {{- if .Values.env.aapUrl }}
+          {{- $aapUrl := include "bare-metal-fulfillment-operator.aapUrl" . }}
+          {{- $aapTokenSecret := include "bare-metal-fulfillment-operator.aapTokenSecretName" . }}
+          {{- if $aapUrl }}
           - name: OSAC_AAP_URL
-            value: {{ .Values.env.aapUrl | quote }}
+            value: {{ $aapUrl | quote }}
           {{- end }}
-          {{- if .Values.env.aapTokenSecretName }}
+          {{- if $aapTokenSecret }}
           - name: OSAC_AAP_TOKEN
             valueFrom:
               secretKeyRef:
-                name: {{ .Values.env.aapTokenSecretName | quote }}
-                key: {{ .Values.env.aapTokenSecretKey | default "token" | quote }}
-                optional: true
+                name: {{ $aapTokenSecret | quote }}
+                key: {{ include "bare-metal-fulfillment-operator.aapTokenSecretKey" . | default "token" | quote }}
+                optional: {{ include "bare-metal-fulfillment-operator.aapTokenSecretOptional" . }}
           {{- end }}
           {{- if .Values.env.aapInsecureSkipVerify }}
           - name: OSAC_AAP_INSECURE_SKIP_VERIFY

@@ -29,6 +29,16 @@ global:
       enabled: true
     maas:
       enabled: true
+  # Mirrored to every subchart so the operator and BMF can auto-wire
+  # OSAC_AAP_URL / OSAC_AAP_TOKEN from a single overlay. Set this (or
+  # aap.externalAap — umbrella templates honor either) when pointing at a
+  # pre-existing AAP controller.
+  externalAap:
+    enabled: false
+    url: ""
+    tokenSecret:
+      name: ""
+      key: "token"
 
 cliImage: quay.io/openshift/origin-cli:4.20.0
 
@@ -154,6 +164,25 @@ service:
 
 # --- AAP ---
 aap:
+  # --- External (brownfield) AAP ---
+  # Set externalAap.enabled to true when pointing at a pre-existing AAP
+  # controller (e.g. one already installed for ACM). When enabled, the
+  # installer skips the AnsibleAutomationPlatform CR, bootstrap job,
+  # and token-creation job. The user must supply the controller URL and
+  # a pre-created API token secret in the OSAC namespace.
+  # Also set global.externalAap to the same values so the operator and BMF
+  # subcharts receive them (Helm only shares global.* with subcharts).
+  # values/examples/external-aap.yaml uses a YAML anchor for that copy.
+  externalAap:
+    enabled: false
+    # Full URL to the existing AAP controller API.
+    # Example: "https://my-aap.aap-acm.apps.mycluster.example.com/api/controller"
+    url: ""
+    # Name of a pre-existing Secret (in the OSAC namespace) containing the
+    # AAP API token under the key specified below.
+    tokenSecret:
+      name: ""
+      key: "token"
   aap:
     instance:
       enabled: true
@@ -168,6 +197,8 @@ aap:
       redisMode: standalone
       routeTlsTerminationMechanism: Edge
       imagePullPolicy: IfNotPresent
+  apiToken:
+    create: true
   bootstrap:
     enabled: true
     image: ghcr.io/osac-project/osac-aap:latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml

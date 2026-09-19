@@ -33,7 +33,7 @@ func NewLifecycleClientFromConfig(
 	lifecycle LifecycleConfig,
 	caPool *x509.CertPool,
 ) (LifecycleClient, error) {
-	if err := ValidateBaseKeycloakConfig(base); err != nil {
+	if err := ValidateBaseConfig(base); err != nil {
 		return nil, err
 	}
 	if err := ValidateLifecycleConfig(lifecycle); err != nil {

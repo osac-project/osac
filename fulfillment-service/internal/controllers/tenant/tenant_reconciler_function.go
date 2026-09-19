@@ -95,6 +95,10 @@ func (b *FunctionBuilder) Build() (result *function, err error) {
 		err = errors.New("IDP manager is mandatory")
 		return
 	}
+	if b.vaultLifecycle == nil {
+		err = errors.New("vault lifecycle client is mandatory")
+		return
+	}
 
 	result = &function{
 		logger:                b.logger,

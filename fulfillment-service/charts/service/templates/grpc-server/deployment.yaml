@@ -12,6 +12,10 @@ specific language governing permissions and limitations under the License.
 */}}
 
 {{- $caBundleConfigMap := required "certs.caBundle.configMap is required" .Values.certs.caBundle.configMap }}
+{{- $vaultEndpoint := tpl (required "vault.endpoint is required" .Values.vault.endpoint) . }}
+{{- $vaultCredentials := required "vault.credentials is required" .Values.vault.credentials }}
+{{- $vaultIssuerURL := tpl (required "vault.keycloakIssuerUrl is required" .Values.vault.keycloakIssuerUrl) . }}
+{{- $vaultClientID := required "vault.keycloakClientId is required" .Values.vault.keycloakClientId }}
 
 apiVersion: apps/v1
 kind: Deployment
@@ -46,11 +50,10 @@ spec:
           items:
           - key: tls.crt
             path: tls.crt
-      {{- if and .Values.vault.endpoint .Values.vault.credentials }}
       - name: vault-credentials
         projected:
           sources:
-          {{- range .Values.vault.credentials }}
+          {{- range $vaultCredentials }}
           {{- if .configMap }}
           - configMap:
               name: {{ .configMap.name }}
@@ -70,7 +73,6 @@ spec:
               {{- end }}
           {{- end }}
           {{- end }}
-      {{- end }}
       {{- if and .Values.vault.endpoint .Values.vault.caBundle.configMap }}
       - name: vault-cas
         configMap:
@@ -120,11 +122,9 @@ spec:
         volumeMounts:
         - name: cas
           mountPath: /etc/fulfillment-grpc-server/tls/cas
-        {{- if and .Values.vault.endpoint .Values.vault.credentials }}
         - name: vault-credentials
           mountPath: /etc/fulfillment-grpc-server/vault
           readOnly: true
-        {{- end }}
         {{- if and .Values.vault.endpoint .Values.vault.caBundle.configMap }}
         - name: vault-cas
           mountPath: /etc/fulfillment-grpc-server/vault-cas
@@ -184,17 +184,15 @@ spec:
         {{- if include "fulfillment-service.serviceEnabled" (list . "maas") }}
         - --enable-maas
         {{- end }}
-        {{- if and .Values.vault.endpoint .Values.vault.credentials }}
-        - --vault-endpoint={{ tpl .Values.vault.endpoint . }}
+        - --vault-endpoint={{ $vaultEndpoint }}
         - --vault-namespace={{ .Values.vault.namespace }}
         - --vault-kv-mount-path={{ .Values.vault.kvMountPath }}
         {{- if .Values.vault.caBundle.configMap }}
         - --vault-ca-cert-file=/etc/fulfillment-grpc-server/vault-cas/bundle.pem
         {{- end }}
-        - --vault-keycloak-issuer-url={{ tpl .Values.vault.keycloakIssuerUrl . }}
-        - --vault-keycloak-client-id={{ .Values.vault.keycloakClientId }}
+        - --vault-keycloak-issuer-url={{ $vaultIssuerURL }}
+        - --vault-keycloak-client-id={{ $vaultClientID }}
         - --vault-keycloak-client-secret-file=/etc/fulfillment-grpc-server/vault/client-secret
-        {{- end }}
         ports:
         - name: grpc
           containerPort: 8000

@@ -193,6 +193,20 @@ func ValidateBaseKeycloakConfig(cfg BaseConfig) error {
 	return nil
 }
 
+// ValidateBaseConfig checks that all Vault settings required by the service are set.
+func ValidateBaseConfig(cfg BaseConfig) error {
+	if cfg.Endpoint == "" {
+		return fmt.Errorf("flag '--%s' is required", endpointFlagName)
+	}
+	if cfg.Namespace == "" {
+		return fmt.Errorf("flag '--%s' is required", namespaceFlagName)
+	}
+	if cfg.KVMountPath == "" {
+		return fmt.Errorf("flag '--%s' is required", kvMountPathFlagName)
+	}
+	return ValidateBaseKeycloakConfig(cfg)
+}
+
 func ValidateLifecycleConfig(cfg LifecycleConfig) error {
 	if cfg.Role == "" {
 		return fmt.Errorf(

@@ -16,6 +16,11 @@ specific language governing permissions and limitations under the License.
 {{- $authControllerCredentials := required "auth.controllerCredentials is required" .Values.auth.controllerCredentials }}
 {{- $idpUrl := tpl (required "idp.url is required" .Values.idp.url) . }}
 {{- $idpCredentials := required "idp.credentials is required" .Values.idp.credentials }}
+{{- $vaultEndpoint := tpl (required "vault.endpoint is required" .Values.vault.endpoint) . }}
+{{- $vaultCredentials := required "vault.credentials is required" .Values.vault.credentials }}
+{{- $vaultIssuerURL := tpl (required "vault.keycloakIssuerUrl is required" .Values.vault.keycloakIssuerUrl) . }}
+{{- $vaultClientID := required "vault.keycloakClientId is required" .Values.vault.keycloakClientId }}
+{{- $vaultLifecycleRole := required "vault.lifecycleRole is required" .Values.vault.lifecycleRole }}
 
 apiVersion: apps/v1
 kind: Deployment
@@ -87,11 +92,10 @@ spec:
               {{- end }}
           {{- end }}
           {{- end }}
-      {{- if and .Values.vault.endpoint .Values.vault.credentials }}
       - name: vault-credentials
         projected:
           sources:
-          {{- range .Values.vault.credentials }}
+          {{- range $vaultCredentials }}
           {{- if .configMap }}
           - configMap:
               name: {{ .configMap.name }}
@@ -111,7 +115,6 @@ spec:
               {{- end }}
           {{- end }}
           {{- end }}
-      {{- end }}
       {{- if and .Values.vault.endpoint .Values.vault.caBundle.configMap }}
       - name: vault-cas
         configMap:
@@ -137,11 +140,9 @@ spec:
         - name: idp-credentials
           mountPath: /etc/fulfillment-controller/idp
           readOnly: true
-        {{- if and .Values.vault.endpoint .Values.vault.credentials }}
         - name: vault-credentials
           mountPath: /etc/fulfillment-controller/vault
           readOnly: true
-        {{- end }}
         command:
         {{ if .Values.debug }}
         - dlv
@@ -175,19 +176,17 @@ spec:
         - --grpc-listener-tls-crt=/etc/fulfillment-controller/tls/tls.crt
         - --grpc-listener-tls-key=/etc/fulfillment-controller/tls/tls.key
         - --metrics-listener-address=0.0.0.0:8002
-        {{- if and .Values.vault.endpoint .Values.vault.credentials }}
-        - --vault-endpoint={{ tpl .Values.vault.endpoint . }}
+        - --vault-endpoint={{ $vaultEndpoint }}
         - --vault-namespace={{ .Values.vault.namespace }}
         - --vault-kv-mount-path={{ .Values.vault.kvMountPath }}
-        - --vault-lifecycle-role={{ .Values.vault.lifecycleRole }}
+        - --vault-lifecycle-role={{ $vaultLifecycleRole }}
         - --vault-lifecycle-mount-path={{ .Values.vault.lifecycleMountPath }}
-        - --vault-keycloak-client-id={{ .Values.vault.keycloakClientId }}
+        - --vault-keycloak-client-id={{ $vaultClientID }}
         - --vault-keycloak-client-secret-file=/etc/fulfillment-controller/vault/client-secret
-        - --vault-keycloak-issuer-url={{ tpl .Values.vault.keycloakIssuerUrl . }}
+        - --vault-keycloak-issuer-url={{ $vaultIssuerURL }}
         - --vault-keycloak-audience={{ .Values.vault.keycloakAudience }}
         {{- if .Values.vault.caBundle.configMap }}
         - --vault-ca-cert-file=/etc/fulfillment-controller/vault-cas/bundle.pem
-        {{- end }}
         {{- end }}
         ports:
         - name: grpc

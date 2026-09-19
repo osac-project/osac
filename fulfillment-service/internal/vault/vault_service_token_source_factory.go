@@ -28,7 +28,7 @@ func NewServiceTenantTokenSourceFromConfig(
 	base BaseConfig,
 	caPool *x509.CertPool,
 ) (TenantTokenSource, error) {
-	if err := ValidateBaseKeycloakConfig(base); err != nil {
+	if err := ValidateBaseConfig(base); err != nil {
 		return nil, err
 	}
 

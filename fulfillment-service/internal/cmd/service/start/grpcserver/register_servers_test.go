@@ -53,6 +53,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/servers"
 	"github.com/osac-project/osac/fulfillment-service/internal/services"
 	itesting "github.com/osac-project/osac/fulfillment-service/internal/testing"
+	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -211,6 +212,7 @@ var _ = BeforeSuite(func() {
 		TenancyLogic:            tenancy,
 		MetricsRegisterer:       metricsRegisterer,
 		HubScheme:               hubScheme,
+		SecretStore:             vault.NewMockSecretStore(ctrl),
 		TierResolver:            tierResolver,
 		PrivateUsersServer:      privateUsersServer,
 		Services:                &services.Flags{CaaS: true, VMaaS: true, BMaaS: true, MaaS: true},
@@ -474,6 +476,7 @@ func registerWithFlags(svcFlags *services.Flags) (map[string]grpc.ServiceInfo, *
 		TenancyLogic:            tenancy,
 		MetricsRegisterer:       prometheus.NewRegistry(),
 		HubScheme:               hubScheme,
+		SecretStore:             vault.NewMockSecretStore(ctrl),
 		TierResolver:            tierResolver,
 		PrivateUsersServer:      nil,
 		Services:                svcFlags,

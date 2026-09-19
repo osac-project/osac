@@ -56,3 +56,15 @@ database:
       items:
       - key: uri
         param: url
+
+vault:
+  endpoint: https://vault.ci.example.com
+  lifecycleRole: ci-lifecycle
+  keycloakClientId: ci-vault-client
+  keycloakIssuerUrl: https://idp.ci.example.com/realms/osac
+  credentials:
+  - secret:
+      name: ci-vault-credentials
+      items:
+      - key: client-secret
+        param: client-secret

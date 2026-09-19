@@ -14,7 +14,7 @@ language governing permissions and limitations under the License.
 package vault
 
 import (
-	. "github.com/onsi/ginkgo/v2/dsl/core"
+	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/spf13/pflag"
 )
@@ -92,6 +92,34 @@ var _ = Describe("Vault flags", func() {
 			}
 			Expect(ValidateBaseKeycloakConfig(cfg)).To(HaveOccurred())
 		})
+	})
+
+	Describe("ValidateBaseConfig", func() {
+		valid := BaseConfig{
+			Endpoint:                 "https://vault.example.com",
+			Namespace:                "osac",
+			KVMountPath:              "secret",
+			KeycloakIssuerURL:        "https://kc/realms/osac",
+			KeycloakClientID:         "vault-client",
+			KeycloakClientSecretFile: "/etc/secret",
+		}
+
+		It("returns nil when all required fields are set", func() {
+			Expect(ValidateBaseConfig(valid)).To(Succeed())
+		})
+
+		DescribeTable("rejects missing required fields", func(update func(*BaseConfig), message string) {
+			cfg := valid
+			update(&cfg)
+			Expect(ValidateBaseConfig(cfg)).To(MatchError(ContainSubstring(message)))
+		},
+			Entry("endpoint", func(cfg *BaseConfig) { cfg.Endpoint = "" }, "--vault-endpoint"),
+			Entry("namespace", func(cfg *BaseConfig) { cfg.Namespace = "" }, "--vault-namespace"),
+			Entry("KV mount path", func(cfg *BaseConfig) { cfg.KVMountPath = "" }, "--vault-kv-mount-path"),
+			Entry("issuer URL", func(cfg *BaseConfig) { cfg.KeycloakIssuerURL = "" }, "--vault-keycloak-issuer-url"),
+			Entry("client ID", func(cfg *BaseConfig) { cfg.KeycloakClientID = "" }, "--vault-keycloak-client-id"),
+			Entry("client secret file", func(cfg *BaseConfig) { cfg.KeycloakClientSecretFile = "" }, "--vault-keycloak-client-secret-file"),
+		)
 	})
 
 	Describe("ValidateLifecycleConfig", func() {

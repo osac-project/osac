@@ -31,6 +31,7 @@ import (
 var _ = Describe("ComputeInstance with Subnet attachment", func() {
 	var (
 		ctx                            context.Context
+		fixtureClients                 computeInstanceFixtureClients
 		subnetsClient                  privatev1.SubnetsClient
 		virtualNetworksClient          privatev1.VirtualNetworksClient
 		networkClassesClient           privatev1.NetworkClassesClient
@@ -55,16 +56,16 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 	BeforeEach(func() {
 		ctx = context.Background()
 
-		// Create clients
-		subnetsClient = privatev1.NewSubnetsClient(tool.InternalView().AdminConn())
-		virtualNetworksClient = privatev1.NewVirtualNetworksClient(tool.InternalView().AdminConn())
-		networkClassesClient = privatev1.NewNetworkClassesClient(tool.InternalView().AdminConn())
-		computeInstancesClient = publicv1.NewComputeInstancesClient(tool.ExternalView().UserConn())
-		computeInstanceTemplatesClient = privatev1.NewComputeInstanceTemplatesClient(tool.InternalView().AdminConn())
-		instanceTypesClient = privatev1.NewInstanceTypesClient(tool.InternalView().AdminConn())
-		storageTiersClient = privatev1.NewStorageTiersClient(tool.InternalView().AdminConn())
-		storageBackendsClient = privatev1.NewStorageBackendsClient(tool.InternalView().AdminConn())
-		diskImagesClient = privatev1.NewDiskImagesClient(tool.InternalView().AdminConn())
+		fixtureClients = newComputeInstanceFixtureClients()
+		subnetsClient = fixtureClients.subnets
+		virtualNetworksClient = fixtureClients.virtualNetworks
+		networkClassesClient = fixtureClients.networkClasses
+		computeInstancesClient = fixtureClients.computeInstances
+		computeInstanceTemplatesClient = fixtureClients.computeInstanceTemplates
+		instanceTypesClient = fixtureClients.instanceTypes
+		storageTiersClient = fixtureClients.storageTiers
+		storageBackendsClient = fixtureClients.storageBackends
+		diskImagesClient = fixtureClients.diskImages
 
 		// Create StorageBackend
 		sbResp, err := storageBackendsClient.Create(ctx, privatev1.StorageBackendsCreateRequest_builder{
@@ -85,6 +86,7 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		storageBackendId = sbResp.GetObject().GetId()
+		waitForComputeInstanceFixtureStorageBackend(ctx, storageBackendsClient, storageBackendId)
 
 		// Create StorageTier
 		stResp, err := storageTiersClient.Create(ctx, privatev1.StorageTiersCreateRequest_builder{
@@ -257,68 +259,8 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 	})
 
 	AfterEach(func() {
-		// Clean up ComputeInstance if created
-		if computeInstanceId != "" {
-			computeInstancesClient.Delete(ctx, publicv1.ComputeInstancesDeleteRequest_builder{
-				Id: computeInstanceId,
-			}.Build())
-		}
-
-		// Clean up Subnet
-		if subnetId != "" {
-			subnetsClient.Delete(ctx, privatev1.SubnetsDeleteRequest_builder{
-				Id: subnetId,
-			}.Build())
-		}
-
-		// Clean up VirtualNetwork
-		if virtualNetworkId != "" {
-			virtualNetworksClient.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{
-				Id: virtualNetworkId,
-			}.Build())
-		}
-
-		// Clean up NetworkClass
-		if networkClassId != "" {
-			networkClassesClient.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{
-				Id: networkClassId,
-			}.Build())
-		}
-
-		// Clean up ComputeInstanceTemplate
-		if computeInstanceTemplateId != "" {
-			computeInstanceTemplatesClient.Delete(ctx, privatev1.ComputeInstanceTemplatesDeleteRequest_builder{
-				Id: computeInstanceTemplateId,
-			}.Build())
-		}
-
-		// Clean up InstanceType
-		if instanceTypeId != "" {
-			instanceTypesClient.Delete(ctx, privatev1.InstanceTypesDeleteRequest_builder{
-				Id: instanceTypeId,
-			}.Build())
-		}
-
-		// Clean up StorageTier
-		if storageTierId != "" {
-			storageTiersClient.Delete(ctx, privatev1.StorageTiersDeleteRequest_builder{
-				Id: storageTierId,
-			}.Build())
-		}
-
-		// Clean up StorageBackend
-		if storageBackendId != "" {
-			storageBackendsClient.Delete(ctx, privatev1.StorageBackendsDeleteRequest_builder{
-				Id: storageBackendId,
-			}.Build())
-		}
-
-		// Clean up DiskImage
-		if diskImageId != "" {
-			diskImagesClient.Delete(ctx, privatev1.DiskImagesDeleteRequest_builder{
-				Id: diskImageId,
-			}.Build())
-		}
+		cleanupComputeInstanceFixture(ctx, fixtureClients, computeInstanceId, "", instanceTypeId,
+			subnetId, virtualNetworkId, networkClassId, computeInstanceTemplateId, diskImageId, storageTierId, storageBackendId)
 	})
 
 	It("creates ComputeInstance with network attachments", func() {

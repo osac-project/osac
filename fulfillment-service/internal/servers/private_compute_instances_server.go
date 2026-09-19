@@ -452,6 +452,21 @@ func (s *PrivateComputeInstancesServer) resolveCreationSource(ctx context.Contex
 
 func (s *PrivateComputeInstancesServer) Update(ctx context.Context,
 	request *privatev1.ComputeInstancesUpdateRequest) (response *privatev1.ComputeInstancesUpdateResponse, err error) {
+	var existingComputeInstance *privatev1.ComputeInstance
+	var resizeWarnings []string
+	var resizeNoOp bool
+	if updateIncludesField(request.GetUpdateMask(), "spec.instance_type") {
+		existingComputeInstance, resizeWarnings, resizeNoOp, err = s.validateInstanceTypeResize(ctx, request)
+		if err != nil {
+			return
+		}
+	}
+	if resizeNoOp && onlyInstanceTypeMask(request.GetUpdateMask()) {
+		response = &privatev1.ComputeInstancesUpdateResponse{}
+		response.SetObject(existingComputeInstance)
+		return
+	}
+
 	err = s.generic.UpdateWithCandidatePreparation(ctx, request, &response, func(ctx context.Context, current, candidate *privatev1.ComputeInstance) error {
 		if err := validateComputeInstanceImmutability(current, candidate, request.GetUpdateMask()); err != nil {
 			return err
@@ -473,7 +488,26 @@ func (s *PrivateComputeInstancesServer) Update(ctx context.Context,
 		}
 		return nil
 	})
+	if err != nil {
+		return
+	}
+	if len(resizeWarnings) > 0 {
+		response.SetWarnings(resizeWarnings)
+	}
 	return
+}
+
+func onlyInstanceTypeMask(mask *fieldmaskpb.FieldMask) bool {
+	paths := mask.GetPaths()
+	if len(paths) == 0 {
+		return false
+	}
+	for _, path := range paths {
+		if !updateIncludesField(&fieldmaskpb.FieldMask{Paths: []string{path}}, "spec.instance_type") {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *PrivateComputeInstancesServer) validateAndResolveUserDataSecret(
@@ -577,6 +611,72 @@ func (s *PrivateComputeInstancesServer) validateInstanceType(
 	return validateResolvedInstanceType(resolved, identifier, "")
 }
 
+func (s *PrivateComputeInstancesServer) validateInstanceTypeResize(
+	ctx context.Context,
+	request *privatev1.ComputeInstancesUpdateRequest,
+) (existing *privatev1.ComputeInstance, warnings []string, noOp bool, err error) {
+	ci := request.GetObject()
+	if ci == nil {
+		return nil, nil, false, grpcstatus.Errorf(grpccodes.InvalidArgument, "compute instance is mandatory")
+	}
+	if ci.GetId() == "" {
+		return nil, nil, false, grpcstatus.Errorf(grpccodes.InvalidArgument, "compute instance id is mandatory")
+	}
+
+	getResponse, err := s.generic.dao.Get().SetId(ci.GetId()).Do(ctx)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	existing = getResponse.GetObject()
+	currentRef := existing.GetSpec().GetInstanceType()
+	targetRef := ci.GetSpec().GetInstanceType()
+	if refKey(currentRef) == refKey(targetRef) {
+		return existing, nil, true, nil
+	}
+
+	targetName := refKey(targetRef)
+	warnings, err = validateInstanceTypeState(ctx, s.instanceTypesDao, targetName, "")
+	if err != nil {
+		if grpcstatus.Code(err) == grpccodes.NotFound {
+			return nil, nil, false, grpcstatus.Errorf(
+				grpccodes.InvalidArgument,
+				"instance type '%s' not found",
+				targetName,
+			)
+		}
+		return nil, nil, false, err
+	}
+
+	currentResponse, err := s.instanceTypesDao.Get().SetId(refKey(currentRef)).Do(ctx)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	targetResponse, err := s.instanceTypesDao.Get().SetId(targetName).Do(ctx)
+	if err != nil {
+		if grpcstatus.Code(err) == grpccodes.NotFound {
+			return nil, nil, false, grpcstatus.Errorf(
+				grpccodes.InvalidArgument,
+				"instance type '%s' not found",
+				targetName,
+			)
+		}
+		return nil, nil, false, err
+	}
+	if !proto.Equal(
+		currentResponse.GetObject().GetSpec().GetGpu(),
+		targetResponse.GetObject().GetSpec().GetGpu(),
+	) {
+		return nil, nil, false, grpcstatus.Errorf(
+			grpccodes.FailedPrecondition,
+			"cannot change GPU configuration when resizing from instance type '%s' to '%s'",
+			refKey(currentRef),
+			targetName,
+		)
+	}
+
+	return existing, warnings, false, nil
+}
+
 // validateDiskImage checks the image selected by the caller, Catalog policy, or Template and
 // stores its actual ID/name/scope. Deprecated images produce a warning; obsolete ones fail.
 func (s *PrivateComputeInstancesServer) validateDiskImage(
@@ -628,12 +728,11 @@ func validateComputeTemplateImmutability(
 	updatingTemplate := updateIncludesField(updateMask, "spec.template")
 	updatingTemplateParams := updateIncludesField(updateMask, "spec.template_parameters")
 	updatingCatalogItem := updateIncludesField(updateMask, "spec.catalog_item")
-	updatingInstanceType := updateIncludesField(updateMask, "spec.instance_type")
 	updatingDiskImage := updateIncludesField(updateMask, "spec.disk_image")
 	updatingAutoExternalIP := updateIncludesField(updateMask, "spec.auto_external_ip_attachment")
 	updatingUserDataSecret := updateIncludesField(updateMask, "spec.user_data_secret")
 
-	if !updatingTemplate && !updatingTemplateParams && !updatingCatalogItem && !updatingInstanceType &&
+	if !updatingTemplate && !updatingTemplateParams && !updatingCatalogItem &&
 		!updatingDiskImage && !updatingAutoExternalIP && !updatingUserDataSecret {
 		return nil
 	}
@@ -668,15 +767,6 @@ func validateComputeTemplateImmutability(
 			return err
 		}
 		newSpec.SetCatalogItem(ref)
-	}
-
-	if updatingInstanceType && refKey(existingSpec.GetInstanceType()) != refKey(newSpec.GetInstanceType()) {
-		return grpcstatus.Errorf(
-			grpccodes.InvalidArgument,
-			"cannot change spec.instance_type from '%s' to '%s': instance type is immutable",
-			refKey(existingSpec.GetInstanceType()),
-			refKey(newSpec.GetInstanceType()),
-		)
 	}
 
 	if updatingDiskImage && refKey(existingSpec.GetDiskImage()) != refKey(newSpec.GetDiskImage()) {

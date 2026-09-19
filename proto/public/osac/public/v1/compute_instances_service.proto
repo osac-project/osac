@@ -100,6 +100,9 @@ message ComputeInstancesUpdateRequest {
 
 message ComputeInstancesUpdateResponse {
   ComputeInstance object = 1;
+
+  // Deprecation notices returned when a resize selects a DEPRECATED instance type.
+  repeated string warnings = 2;
 }
 
 message ComputeInstancesDeleteRequest {

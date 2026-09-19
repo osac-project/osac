@@ -1,8 +1,9 @@
 ---
 # SecurityGroup maps to Netris ACL rules (v1 API)
 # Creates permit ACL rules for each ingress and egress rule in the SecurityGroup CR.
-# ACL rules are created per-subnet in the VN — each subnet maps to a Netris network
+# ACL rules are created per attached subnet — each subnet maps to a Netris network
 # segment, and Netris ACL rules must use subnet CIDRs (not the wider VN CIDR).
+# Attached subnet CIDRs are operator-computed in SecurityGroup.status.
 
 - name: Extract SecurityGroup configuration
   ansible.builtin.set_fact:
@@ -19,7 +20,7 @@
       - "Ingress rules count: {{ ingress_rules | length }}"
       - "Egress rules count: {{ egress_rules | length }}"
 
-- name: Resolve VirtualNetwork UUID to VPC ID and discover subnets
+- name: Resolve VirtualNetwork UUID to VPC ID
   when: sg_virtual_network | length > 0
   block:
     - name: Look up VirtualNetwork CR by UUID label
@@ -44,36 +45,16 @@
         _sg_vpc_id: "{{ (netris_vpc.id | default(1)) }}"
       when: _sg_vn_lookup.resources | length > 0
 
-    - name: Look up all Subnets in this VirtualNetwork
-      kubernetes.core.k8s_info:
-        api_version: osac.openshift.io/v1alpha1
-        kind: Subnet
-        namespace: "{{ security_group.metadata.namespace }}"
-      register: _sg_all_subnets
-      when: _sg_vn_lookup.resources | length > 0
-
-    - name: Filter subnets belonging to this VirtualNetwork
-      ansible.builtin.set_fact:
-        _sg_subnet_cidrs: >-
-          {{ _sg_all_subnets.resources | default([])
-             | selectattr('spec.virtualNetwork', 'defined')
-             | selectattr('spec.virtualNetwork', 'equalto', sg_virtual_network)
-             | map(attribute='spec.ipv4Cidr')
-             | select('defined')
-             | reject('equalto', '')
-             | list }}
-      when: _sg_vn_lookup.resources | length > 0
-
-- name: Default VPC ID and subnet CIDRs if not resolved
+- name: Set scoped subnet CIDRs from SecurityGroup status
   ansible.builtin.set_fact:
     _sg_vpc_id: "{{ _sg_vpc_id | default(1) }}"
-    _sg_subnet_cidrs: "{{ _sg_subnet_cidrs | default(['0.0.0.0/0']) }}"
+    _sg_subnet_cidrs: "{{ security_group.status.attachedSubnetCIDRs | default([]) }}"
 
 - name: Display resolved subnet CIDRs
   ansible.builtin.debug:
-    msg: "ACL rules will be created for subnet CIDRs: {{ _sg_subnet_cidrs }}"
+    msg: "ACL rules will be created for attached subnet CIDRs: {{ _sg_subnet_cidrs }}"
 
-- name: Create ACL rules for ingress (per subnet)
+- name: Create ACL rules for ingress (per attached subnet)
   ansible.builtin.include_role:
     name: netris.controller.acl
     tasks_from: create
@@ -92,9 +73,9 @@
   loop_control:
     index_var: idx
     label: "{{ item.0.protocol | default('all') }}:{{ item.1 }}"
-  when: ingress_rules | length > 0
+  when: ingress_rules | length > 0 and _sg_subnet_cidrs | length > 0
 
-- name: Create ACL rules for egress (per subnet)
+- name: Create ACL rules for egress (per attached subnet)
   ansible.builtin.include_role:
     name: netris.controller.acl
     tasks_from: create
@@ -113,11 +94,11 @@
   loop_control:
     index_var: idx
     label: "{{ item.0.protocol | default('all') }}:{{ item.1 }}"
-  when: egress_rules | length > 0
+  when: egress_rules | length > 0 and _sg_subnet_cidrs | length > 0
 
 - name: Display SecurityGroup creation result
   ansible.builtin.debug:
     msg: >-
       ACL rules created for SecurityGroup '{{ sg_name }}':
-      {{ ingress_rules | length }} ingress × {{ _sg_subnet_cidrs | length }} subnets,
-      {{ egress_rules | length }} egress × {{ _sg_subnet_cidrs | length }} subnets
+      {{ ingress_rules | length }} ingress × {{ _sg_subnet_cidrs | length }} attached subnets,
+      {{ egress_rules | length }} egress × {{ _sg_subnet_cidrs | length }} attached subnets

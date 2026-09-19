@@ -103,7 +103,7 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			},
 		}
 
-		// Create Ready subnet fixture so the subnet-readiness gate passes by default
+		// Ready subnet fixture used when tests attach the SG to a workload.
 		readySubnet = &osacv1alpha1.Subnet{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "test-subnet",
@@ -114,6 +114,7 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			},
 			Spec: osacv1alpha1.SubnetSpec{
 				VirtualNetwork: "test-vnet-uuid",
+				IPv4CIDR:       "10.0.1.0/24",
 			},
 		}
 
@@ -139,11 +140,59 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			APIReader:                  fakeClient,
 			Scheme:                     testScheme,
 			NetworkingNamespace:        "test-namespace",
+			ComputeInstanceNamespace:   "test-namespace",
+			ClusterOrderNamespace:      "test-namespace",
 			ProvisioningProvider:       mockProvider,
 			StatusPollInterval:         1 * time.Second,
 			MaxJobHistory:              10,
 			NetworkProvisioningEnabled: true,
 		}
+	})
+
+	Context("attached subnet scope", func() {
+		It("populates status from ComputeInstance attachment and excludes other subnets", func() {
+			subnetB := &osacv1alpha1.Subnet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "subnet-b",
+					Namespace: "test-namespace",
+				},
+				Spec: osacv1alpha1.SubnetSpec{
+					VirtualNetwork: "test-vnet-uuid",
+					IPv4CIDR:       "10.0.2.0/24",
+				},
+			}
+			Expect(fakeClient.Create(ctx, subnetB)).To(Succeed())
+			subnetB.Status.Phase = osacv1alpha1.SubnetPhaseReady
+			Expect(fakeClient.Status().Update(ctx, subnetB)).To(Succeed())
+
+			ci := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-ci",
+					Namespace: "test-namespace",
+				},
+				Spec: osacv1alpha1.ComputeInstanceSpec{
+					TemplateID: "default",
+					NetworkAttachments: []osacv1alpha1.ComputeNetworkAttachment{
+						{
+							SubnetRef:         readySubnet.Name,
+							SecurityGroupRefs: []string{sg.Name},
+						},
+					},
+				},
+			}
+			Expect(fakeClient.Create(ctx, ci)).To(Succeed())
+
+			key := types.NamespacedName{Name: sg.Name, Namespace: sg.Namespace}
+			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+			_, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &osacv1alpha1.SecurityGroup{}
+			Expect(fakeClient.Get(ctx, key, updated)).To(Succeed())
+			Expect(updated.Status.AttachedSubnetRefs).To(Equal([]string{readySubnet.Name}))
+			Expect(updated.Status.AttachedSubnetCIDRs).To(Equal([]string{"10.0.1.0/24"}))
+		})
 	})
 
 	Context("Reconcile", func() {
@@ -689,25 +738,24 @@ var _ = Describe("SecurityGroupReconciler", func() {
 		})
 	})
 
-	Context("subnet readiness gate", func() {
-		It("should requeue when parent VirtualNetwork has no Ready subnets", func() {
-			// Build a client WITHOUT any subnets
+	Context("attached subnet readiness gate", func() {
+		It("should provision with empty scope when no workloads reference the SecurityGroup", func() {
 			testScheme := runtime.NewScheme()
 			Expect(osacv1alpha1.AddToScheme(testScheme)).To(Succeed())
 			Expect(scheme.AddToScheme(testScheme)).To(Succeed())
 
-			noSubnetSG := &osacv1alpha1.SecurityGroup{
+			noAttachmentSG := &osacv1alpha1.SecurityGroup{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      "sg-no-subnets",
+					Name:      "sg-no-attachments",
 					Namespace: "test-namespace",
 				},
 				Spec: osacv1alpha1.SecurityGroupSpec{
 					VirtualNetwork: "test-vnet-uuid",
 				},
 			}
-			noSubnetClient := fake.NewClientBuilder().
+			noAttachmentClient := fake.NewClientBuilder().
 				WithScheme(testScheme).
-				WithObjects(vnet, noSubnetSG).
+				WithObjects(vnet, noAttachmentSG).
 				WithStatusSubresource(&osacv1alpha1.SecurityGroup{}).
 				Build()
 
@@ -715,36 +763,40 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			mockProvider.triggerProvisionFunc = func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
 				provisionCalled = true
 				return &provisioning.ProvisionResult{
-					JobID:        "job-should-not-fire",
+					JobID:        "job-empty-scope",
 					InitialState: osacv1alpha1.JobStatePending,
 				}, nil
 			}
 
 			r := &SecurityGroupReconciler{
-				Client:                     noSubnetClient,
-				APIReader:                  noSubnetClient,
+				Client:                     noAttachmentClient,
+				APIReader:                  noAttachmentClient,
 				Scheme:                     testScheme,
 				NetworkingNamespace:        "test-namespace",
+				ComputeInstanceNamespace:   "test-namespace",
+				ClusterOrderNamespace:      "test-namespace",
 				ProvisioningProvider:       mockProvider,
 				StatusPollInterval:         1 * time.Second,
 				MaxJobHistory:              10,
 				NetworkProvisioningEnabled: true,
 			}
 
-			key := types.NamespacedName{Name: noSubnetSG.Name, Namespace: noSubnetSG.Namespace}
+			key := types.NamespacedName{Name: noAttachmentSG.Name, Namespace: noAttachmentSG.Namespace}
 
-			// First reconcile adds finalizer
 			_, err := r.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
-
-			// Second reconcile should requeue because no subnets exist
 			result, err := r.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
-			Expect(provisionCalled).To(BeFalse())
+			Expect(result.RequeueAfter).To(BeZero())
+			Expect(provisionCalled).To(BeTrue())
+
+			updated := &osacv1alpha1.SecurityGroup{}
+			Expect(noAttachmentClient.Get(ctx, key, updated)).To(Succeed())
+			Expect(updated.Status.AttachedSubnetRefs).To(BeEmpty())
+			Expect(updated.Status.AttachedSubnetCIDRs).To(BeEmpty())
 		})
 
-		It("should requeue when subnets exist but none are Ready", func() {
+		It("should requeue when an attached subnet is not Ready", func() {
 			testScheme := runtime.NewScheme()
 			Expect(osacv1alpha1.AddToScheme(testScheme)).To(Succeed())
 			Expect(scheme.AddToScheme(testScheme)).To(Succeed())
@@ -753,12 +805,10 @@ var _ = Describe("SecurityGroupReconciler", func() {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "progressing-subnet",
 					Namespace: "test-namespace",
-					Labels: map[string]string{
-						osacVirtualNetworkIDLabel: "test-vnet-uuid",
-					},
 				},
 				Spec: osacv1alpha1.SubnetSpec{
 					VirtualNetwork: "test-vnet-uuid",
+					IPv4CIDR:       "10.0.3.0/24",
 				},
 			}
 			progressingSG := &osacv1alpha1.SecurityGroup{
@@ -770,13 +820,27 @@ var _ = Describe("SecurityGroupReconciler", func() {
 					VirtualNetwork: "test-vnet-uuid",
 				},
 			}
+			ci := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "ci-progressing-subnet",
+					Namespace: "test-namespace",
+				},
+				Spec: osacv1alpha1.ComputeInstanceSpec{
+					TemplateID: "default",
+					NetworkAttachments: []osacv1alpha1.ComputeNetworkAttachment{
+						{
+							SubnetRef:         progressingSubnet.Name,
+							SecurityGroupRefs: []string{progressingSG.Name},
+						},
+					},
+				},
+			}
 			progressingClient := fake.NewClientBuilder().
 				WithScheme(testScheme).
-				WithObjects(vnet, progressingSG, progressingSubnet).
+				WithObjects(vnet, progressingSG, progressingSubnet, ci).
 				WithStatusSubresource(&osacv1alpha1.SecurityGroup{}, &osacv1alpha1.Subnet{}).
 				Build()
 
-			// Set subnet phase to Progressing
 			progressingSubnet.Status.Phase = osacv1alpha1.SubnetPhaseProgressing
 			Expect(progressingClient.Status().Update(ctx, progressingSubnet)).To(Succeed())
 
@@ -794,6 +858,8 @@ var _ = Describe("SecurityGroupReconciler", func() {
 				APIReader:                  progressingClient,
 				Scheme:                     testScheme,
 				NetworkingNamespace:        "test-namespace",
+				ComputeInstanceNamespace:   "test-namespace",
+				ClusterOrderNamespace:      "test-namespace",
 				ProvisioningProvider:       mockProvider,
 				StatusPollInterval:         1 * time.Second,
 				MaxJobHistory:              10,
@@ -802,18 +868,33 @@ var _ = Describe("SecurityGroupReconciler", func() {
 
 			key := types.NamespacedName{Name: progressingSG.Name, Namespace: progressingSG.Namespace}
 
-			// First reconcile adds finalizer
 			_, err := r.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 
-			// Second reconcile should requeue because subnet is not Ready
 			result, err := r.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
 			Expect(provisionCalled).To(BeFalse())
 		})
 
-		It("should proceed to provisioning when at least one subnet is Ready", func() {
+		It("should proceed to provisioning when a referenced subnet is Ready", func() {
+			ci := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "ci-ready-subnet",
+					Namespace: "test-namespace",
+				},
+				Spec: osacv1alpha1.ComputeInstanceSpec{
+					TemplateID: "default",
+					NetworkAttachments: []osacv1alpha1.ComputeNetworkAttachment{
+						{
+							SubnetRef:         readySubnet.Name,
+							SecurityGroupRefs: []string{sg.Name},
+						},
+					},
+				},
+			}
+			Expect(fakeClient.Create(ctx, ci)).To(Succeed())
+
 			key := types.NamespacedName{Name: sg.Name, Namespace: sg.Namespace}
 
 			provisionCalled := false

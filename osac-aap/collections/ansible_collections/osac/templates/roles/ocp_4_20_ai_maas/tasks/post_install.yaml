@@ -3,32 +3,56 @@
 # Orchestrates: operator installation → MaaS configuration → verification.
 # Uses admin_kubeconfig from the parent pipeline (retrieved at step 5).
 
-- name: Verify admin_kubeconfig is available
+- name: Verify admin_kubeconfig is available and is not a file path
   ansible.builtin.assert:
     that:
       - admin_kubeconfig is defined
       - admin_kubeconfig | length > 0
+      - admin_kubeconfig is not string or not admin_kubeconfig.startswith('/')
     fail_msg: >-
-      admin_kubeconfig is not set. In production, this is provided by the
-      ocp_small pipeline. For local testing, set KUBECONFIG env var
-      or pass admin_kubeconfig as a playbook variable.
+      admin_kubeconfig must be a kubeconfig dict or raw YAML string, not a
+      file path. In production this is provided by the ocp_small pipeline.
+      For local testing pass the kubeconfig content, not a path.
 
-- name: Install platform operators (BOM Phase 2 + 3)
-  ansible.builtin.include_tasks: install_operators.yaml
+# Write kubeconfig to a temp file once for the entire post-install flow.
+# Using a file path prevents kubernetes.core from masking resource values
+# when kubeconfig is passed as an in-memory dict (kubernetes.core/issues/870).
+- name: Create kubeconfig temp file
+  ansible.builtin.tempfile:
+    suffix: .kubeconfig
+  register: _kubeconfig_tmpfile
 
-- name: Configure cluster (gateway, observability)
-  ansible.builtin.include_tasks: configure_cluster.yaml
+- name: Write kubeconfig to temp file
+  ansible.builtin.copy:
+    content: "{{ admin_kubeconfig | to_yaml if admin_kubeconfig is mapping else admin_kubeconfig }}"
+    dest: "{{ _kubeconfig_tmpfile.path }}"
+    mode: "0600"
+  no_log: true
 
-- name: Configure MaaS platform (Phases 1-5)
-  ansible.builtin.include_tasks: configure_maas.yaml
-  when: ocp_4_20_ai_maas_enable_maas | default(true) | bool
+- name: Run post-install phases with guaranteed tmpfile cleanup
+  block:
+    - name: Install platform operators (BOM Phase 2 + 3)
+      ansible.builtin.include_tasks: install_operators.yaml
 
-- name: Run verification smoke tests
-  ansible.builtin.include_tasks: verify.yaml
-  when: ocp_4_20_ai_maas_run_verify | default(true)
+    - name: Configure cluster (gateway, observability)
+      ansible.builtin.include_tasks: configure_cluster.yaml
 
-- name: Configure external models (Phase 6 — after verify)
-  ansible.builtin.include_tasks: configure_external_models.yaml
-  when:
-    - ocp_4_20_ai_maas_enable_maas | default(true) | bool
-    - ocp_4_20_ai_maas_external_models | default([]) | length > 0
+    - name: Configure MaaS platform (Phases 1-5)
+      ansible.builtin.include_tasks: configure_maas.yaml
+      when: ocp_4_20_ai_maas_enable_maas | default(true) | bool
+
+    - name: Run verification smoke tests
+      ansible.builtin.include_tasks: verify.yaml
+      when: ocp_4_20_ai_maas_run_verify | default(true)
+
+    - name: Configure external models (Phase 6 — after verify)
+      ansible.builtin.include_tasks: configure_external_models.yaml
+      when:
+        - ocp_4_20_ai_maas_enable_maas | default(true) | bool
+        - ocp_4_20_ai_maas_external_models | default([]) | length > 0
+  always:
+    - name: Remove kubeconfig temp file
+      ansible.builtin.file:
+        path: "{{ _kubeconfig_tmpfile.path }}"
+        state: absent
+      when: _kubeconfig_tmpfile.path is defined

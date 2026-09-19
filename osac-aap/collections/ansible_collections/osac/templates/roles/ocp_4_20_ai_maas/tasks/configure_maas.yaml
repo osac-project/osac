@@ -27,7 +27,7 @@
   block:
     - name: Apply Keycloak resources (namespace, RHBK, PostgreSQL, instance, route)
       kubernetes.core.k8s:
-        kubeconfig: "{{ admin_kubeconfig }}"
+        kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
         state: present
         definition: "{{ item }}"
       loop: "{{ lookup('ansible.builtin.template', 'keycloak.yaml.j2') | from_yaml_all | list }}"
@@ -41,7 +41,7 @@
 
     - name: Wait for Keycloak PostgreSQL
       kubernetes.core.k8s_info:
-        kubeconfig: "{{ admin_kubeconfig }}"
+        kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
         api_version: apps/v1
         kind: Deployment
         name: keycloak-postgres
@@ -55,7 +55,7 @@
 
     - name: Wait for Keycloak instance ready
       kubernetes.core.k8s_info:
-        kubeconfig: "{{ admin_kubeconfig }}"
+        kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
         api_version: k8s.keycloak.org/v2alpha1
         kind: Keycloak
         name: "{{ ocp_4_20_ai_maas_keycloak_namespace }}"
@@ -87,7 +87,7 @@
 
     - name: Apply Keycloak realm import
       kubernetes.core.k8s:
-        kubeconfig: "{{ admin_kubeconfig }}"
+        kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
         state: present
         definition: "{{ lookup('ansible.builtin.template', 'keycloak-realm-maas.yaml.j2') | from_yaml }}"
       no_log: true
@@ -98,7 +98,7 @@
 
     - name: Wait for realm import
       kubernetes.core.k8s_info:
-        kubeconfig: "{{ admin_kubeconfig }}"
+        kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
         api_version: k8s.keycloak.org/v2alpha1
         kind: KeycloakRealmImport
         name: maas-realm
@@ -130,9 +130,9 @@
 
 # --- Phase 2: MaaS Prerequisites ---
 
-- name: Apply Kuadrant resources (namespace, service, Kuadrant, Authorino)
+- name: Apply Kuadrant resources (namespace and Kuadrant CR)
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     definition: "{{ item }}"
   loop: "{{ lookup('ansible.builtin.file', role_path + '/files/kuadrant-instance.yaml') | from_yaml_all | list }}"
@@ -145,7 +145,7 @@
 
 - name: Wait for Kuadrant ready
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: kuadrant.io/v1beta1
     kind: Kuadrant
     name: kuadrant
@@ -162,9 +162,60 @@
       | selectattr('status', 'equalto', 'True')
       | list | length > 0
 
+- name: Fail if Kuadrant never became Ready
+  ansible.builtin.fail:
+    msg: "Kuadrant did not become Ready after {{ ocp_4_20_ai_maas_operator_retries }} retries."
+  when: >-
+    _kuadrant.resources is not defined
+    or _kuadrant.resources | length == 0
+    or (_kuadrant.resources[0].status.conditions | default([])
+       | selectattr('type', 'equalto', 'Ready')
+       | selectattr('status', 'equalto', 'True')
+       | list | length == 0)
+
+# Kuadrant creates the Authorino CR with listener.tls.enabled: false regardless
+# of cert availability. Set enabled: true and add the cluster root CA volume so
+# Authorino trusts the Keycloak ingress cert (signed by OU=openshift,CN=root-ca).
+# kube-root-ca.crt is auto-injected into every namespace by Kubernetes.
+#
+# The root CA is mounted at the RHEL system bundle path, replacing it with just
+# the cluster root CA. This is safe here because Authorino's only outbound HTTPS
+# connections are to Keycloak (for OIDC discovery and JWKS) — both signed by the
+# cluster root CA. No public CA-signed HTTPS endpoints are contacted.
+- name: Configure Authorino TLS and cluster root CA volume
+  kubernetes.core.k8s:
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
+    state: present
+    merge_type: merge
+    definition:
+      apiVersion: operator.authorino.kuadrant.io/v1beta1
+      kind: Authorino
+      metadata:
+        name: authorino
+        namespace: kuadrant-system
+      spec:
+        listener:
+          tls:
+            enabled: true
+            certSecretRef:
+              name: authorino-server-cert
+        volumes:
+          items:
+            - name: cluster-root-ca
+              configMaps:
+                - kube-root-ca.crt
+              items:
+                - key: ca.crt
+                  path: tls-ca-bundle.pem
+              mountPath: /etc/pki/ca-trust/extracted/pem
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
 - name: Apply gateway resources ConfigMap
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     definition: "{{ lookup('ansible.builtin.template', 'gateway-resources.yaml.j2') | from_yaml }}"
   register: _r
@@ -174,7 +225,7 @@
 
 - name: Apply maas-default-gateway
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     definition: "{{ lookup('ansible.builtin.template', 'gateway.yaml.j2') | from_yaml }}"
   register: _r
@@ -182,9 +233,56 @@
   delay: 10
   until: _r is not failed
 
+# The OpenShift Router handles *.apps.* wildcard DNS. Without this Route the
+# Router returns 503 — same pattern as the auto-created data-science-gateway Route.
+- name: Wait for maas-default-gateway Service to exist before creating Route
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
+    api_version: v1
+    kind: Service
+    name: maas-default-gateway-data-science-gateway-class
+    namespace: openshift-ingress
+  register: _gw_svc
+  retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+  until: _gw_svc.resources | length > 0
+
+- name: Assert gateway Service has expected port 443
+  ansible.builtin.assert:
+    that:
+      - _gw_svc.resources[0].spec.ports | selectattr('port', 'equalto', 443) | list | length > 0
+    fail_msg: >-
+      maas-default-gateway-data-science-gateway-class Service does not expose port 443.
+      The gateway controller may not have created the Service correctly.
+
+- name: Create OpenShift Route for maas-default-gateway
+  kubernetes.core.k8s:
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
+    state: present
+    definition:
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: maas-default-gateway
+        namespace: openshift-ingress
+      spec:
+        host: "{{ ocp_4_20_ai_maas_gateway_hostname }}.{{ _cluster_domain }}"
+        port:
+          targetPort: 443
+        tls:
+          termination: passthrough
+        to:
+          kind: Service
+          name: maas-default-gateway-data-science-gateway-class
+          weight: 100
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
 - name: Wait for gateway Programmed
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: gateway.networking.k8s.io/v1
     kind: Gateway
     name: maas-default-gateway
@@ -205,7 +303,7 @@
 # isn't fully active (admission webhooks, quota controllers need time).
 - name: Create maas-db namespace
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     definition:
       apiVersion: v1
@@ -219,7 +317,7 @@
 
 - name: Create maas-postgres PVC
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     definition:
       apiVersion: v1
@@ -240,7 +338,7 @@
 
 - name: Apply PostgreSQL for maas-api
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     definition: "{{ item }}"
   loop: "{{ lookup('ansible.builtin.template', 'postgres-maas.yaml.j2') | from_yaml_all | list }}"
@@ -254,7 +352,7 @@
 
 - name: Wait for maas-postgres
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: apps/v1
     kind: Deployment
     name: maas-postgres
@@ -270,7 +368,7 @@
 
 - name: Create maas-db-config secret
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     definition:
       apiVersion: v1
@@ -292,7 +390,7 @@
 
 - name: Patch DSC to enable MaaS
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     definition:
       apiVersion: datasciencecluster.opendatahub.io/v1
@@ -313,7 +411,7 @@
 
 - name: Wait for MaaS components ready
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: datasciencecluster.opendatahub.io/v1
     kind: DataScienceCluster
     name: default-dsc
@@ -344,7 +442,7 @@
 
 - name: Configure Tenant CR
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     definition:
       apiVersion: maas.opendatahub.io/v1alpha1
@@ -379,7 +477,7 @@
 
 - name: Wait for Tenant Active
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: maas.opendatahub.io/v1alpha1
     kind: Tenant
     name: "{{ ocp_4_20_ai_maas_tenant_name }}"
@@ -407,7 +505,7 @@
 
 - name: Patch OdhDashboardConfig with MaaS feature flags
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     merge_type: merge
     definition:
@@ -430,7 +528,7 @@
 
 - name: Create model namespace
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     definition:
       apiVersion: v1
@@ -444,7 +542,7 @@
 
 - name: Deploy LLMInferenceService
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     definition: "{{ lookup('ansible.builtin.template', 'model.yaml.j2') | from_yaml }}"
   register: _r
@@ -454,7 +552,7 @@
 
 - name: Wait for LLMInferenceService Ready
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: serving.kserve.io/v1alpha2
     kind: LLMInferenceService
     name: "{{ ocp_4_20_ai_maas_model_name }}"
@@ -485,7 +583,7 @@
 
 - name: Create MaaSModelRef
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     definition: "{{ lookup('ansible.builtin.template', 'maas-model-ref.yaml.j2') | from_yaml }}"
   register: _r
@@ -495,7 +593,7 @@
 
 - name: Wait for MaaSModelRef Ready
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: maas.opendatahub.io/v1alpha1
     kind: MaaSModelRef
     name: "{{ ocp_4_20_ai_maas_model_name }}"
@@ -522,7 +620,7 @@
 
 - name: Create MaaSAuthPolicy
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     definition: "{{ lookup('ansible.builtin.template', 'maas-auth-policy.yaml.j2') | from_yaml }}"
   register: _r
@@ -532,7 +630,7 @@
 
 - name: Create MaaSSubscriptions
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     definition: "{{ item }}"
   loop: "{{ lookup('ansible.builtin.template', 'maas-subscriptions.yaml.j2') | from_yaml_all | list }}"
@@ -545,7 +643,7 @@
 
 - name: Wait for auto-generated AuthPolicy
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: kuadrant.io/v1
     kind: AuthPolicy
     namespace: "{{ ocp_4_20_ai_maas_model_namespace }}"
@@ -563,7 +661,7 @@
 # restart, subscriptions stay Degraded and inference returns 403.
 - name: Restart maas-controller for subscription reconciliation
   environment:
-    KUBECONFIG: "{{ admin_kubeconfig | expanduser }}"
+    KUBECONFIG: "{{ _kubeconfig_tmpfile.path }}"
   ansible.builtin.shell: |
     oc rollout restart deployment/maas-controller -n redhat-ods-applications
     oc rollout status deployment/maas-controller -n redhat-ods-applications --timeout=180s
@@ -573,7 +671,7 @@
 
 - name: Wait for all subscriptions Active
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: maas.opendatahub.io/v1alpha1
     kind: MaaSSubscription
     namespace: models-as-a-service
@@ -607,7 +705,7 @@
 # restart. Without this, rate limiting verify tests fail (all 200, no 429).
 - name: Wait for TokenRateLimitPolicy enforcement
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: kuadrant.io/v1alpha1
     kind: TokenRateLimitPolicy
     namespace: "{{ ocp_4_20_ai_maas_model_namespace }}"

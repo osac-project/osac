@@ -45,6 +45,12 @@ osac.service.external_access
   -> {{ network_steps_collection }}.external_access (create/delete)
 ```
 
+> **Note (OSAC-2243):** The `ocp_small` and `ocp_ci_small` CaaS templates
+> no longer call `osac.service.cluster_infra` or `osac.service.external_access`
+> directly. Networking is now handled by the OSAC Networking API and fabric
+> manager roles, with agent selection managed by the operator. The service
+> roles themselves still exist for other consumers.
+
 ### Ansible Collections
 
 | Collection | Purpose |
@@ -56,22 +62,23 @@ osac.service.external_access
 
 ### Template Integration
 
-The Netris network class is not tied to a specific template. It plugs into any
-template that uses the `osac.service.cluster_infra` and
-`osac.service.external_access` roles. The standard hosted cluster template is
-`ocp_small` (`collections/ansible_collections/osac/templates/roles/ocp_small/`),
-which orchestrates the following steps — each overridable via
+The Netris network class is not tied to a specific template. The standard hosted
+cluster template is `ocp_small`
+(`collections/ansible_collections/osac/templates/roles/ocp_small/`), which
+orchestrates the following steps — each overridable via
 `install_step_*_override` variables:
 
 1. Pre-install hook (noop by default)
 2. Create hosted cluster (`osac.service.hosted_cluster`)
-3. Create cluster infrastructure (`osac.service.cluster_infra`)
-4. Configure external access (`osac.service.external_access`)
-5. Retrieve kubeconfig (`osac.service.retrieve_kubeconfig`)
+3. Retrieve kubeconfig (`osac.service.retrieve_kubeconfig`)
+4. Wait for nodes
+5. Wait for cluster operators
 6. Post-install hook (noop by default)
 
-Steps 3 and 4 are where the network class takes effect — they delegate to the
-`netris.steps` collection when `network_class: netris` is set.
+> **Note (OSAC-2243):** The `ocp_small` template previously included
+> `osac.service.cluster_infra` and `osac.service.external_access` steps between
+> the hosted cluster creation and kubeconfig retrieval. These were removed as
+> part of the migration to the OSAC Networking API and fabric manager roles.
 
 ### Cluster Create Flow
 
@@ -84,39 +91,31 @@ playbook_osac_create_hosted_cluster.yml
       |
       +-- 1. Create HostedCluster + NodePool CRs
       |
-      +-- 2. Cluster Infrastructure (netris.steps.cluster_infra.create)
-      |       - Wait for agents from previous runs to be removed
-      |       - Select and label available Agent CRs
-      |       - Read server cluster template for NIC mapping
-      |       - Create Netris server cluster (creates VPC)
-      |       - Allocate 1 NAT IP from IPAM -> create SNAT rule
-      |       - Create NMStateConfig CRs (static IPs on VPC NICs)
-      |       - Patch InfraEnv nmStateConfigLabelSelector
-      |       - Attach and approve agents
-      |
-      +-- 3. External Access (netris.steps.external_access.create)
-      |       - Wait for kube-apiserver LoadBalancer to get internal IP
-      |       - Allocate 2 NAT IPs from IPAM (API + ingress)
-      |       - Create DNAT rule: public IP:6443 -> internal API
-      |       - Create DNS A records (api, api-int, *.apps)
-      |       - Wait for DNS propagation
-      |       - Retrieve managed cluster kubeconfig
-      |       - Wait for network cluster operator
-      |       - Configure MetalLB on managed cluster
-      |       - Create DNAT rules for ingress HTTP (:80) and HTTPS (:443)
-      |
-      +-- 4. Retrieve kubeconfig
-      +-- 5. Wait for ClusterOperators
+      +-- 2. Retrieve kubeconfig
+      +-- 3. Wait for nodes
+      +-- 4. Wait for ClusterOperators
 ```
+
+> **Note (OSAC-2243):** Cluster infrastructure and external access provisioning
+> (previously steps 2–3 above) have been removed from the CaaS template. These
+> responsibilities are now handled by the OSAC Networking API and fabric manager
+> roles, with agent selection managed by the operator.
+>
+> The Netris-specific steps (server cluster creation, NAT/SNAT/DNAT rules,
+> NMState configuration, DNS records, MetalLB setup) are now invoked through
+> the networking API workflow rather than the CaaS template's step-collection
+> dispatch.
 
 ### Cluster Delete Flow
 
 Reverse order:
 
 1. Delete HostedCluster CR, wait for agents to detach
-2. **External access cleanup** — delete DNAT rules (ingress HTTPS, HTTP, API),
-   delete legacy L4LB/DNAT rules, delete DNS records
-3. **Infrastructure cleanup** — delete NMStateConfig CRs, remove InfraEnv
+2. **External access cleanup** (performed by the OSAC Networking API and fabric
+   manager, not the CaaS template) — delete DNAT rules (ingress HTTPS, HTTP,
+   API), delete legacy L4LB/DNAT rules, delete DNS records
+3. **Infrastructure cleanup** (performed by the OSAC Networking API and fabric
+   manager, not the CaaS template) — delete NMStateConfig CRs, remove InfraEnv
    label selector, detach and unlabel agents, delete SNAT rule, delete server
    cluster, delete VPC
 

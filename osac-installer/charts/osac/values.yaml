@@ -364,6 +364,9 @@ validation:
 #     role: k8s
 #     description: "CUDN LocalNet k8s manager"
 #     capabilities: "ipv4,ipv6,dualStack"
+# Keep the base chart free of environment-specific registrations. Environments
+# with prepared EVPN/BGP/VTEP infrastructure can opt in with the complete
+# values/cudn-evpn-netris-test profile.
 networkManagers: []
 
 # --- MetalLB Address Pool ---

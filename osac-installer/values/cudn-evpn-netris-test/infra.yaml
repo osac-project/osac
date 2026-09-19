@@ -1,0 +1,48 @@
+# CUDN EVPN/Netris VMaaS E2E profile -- infrastructure values for osac-deps
+# and osac-infra charts.
+#
+# The CUDN EVPN/BGP/VTEP fabric and its EVPN FRRConfiguration are external
+# prerequisites. This file enables the VMaaS cluster prerequisites; it does not
+# install the FRR operator, create FRRConfiguration, or create the external
+# EVPN fabric itself.
+
+# --- OLM Subscriptions (osac-deps) ---
+certManager:
+  enabled: true
+trustManager:
+  enabled: true
+aapOperator:
+  enabled: true
+lvms:
+  enabled: true
+metallb:
+  enabled: true
+cnv:
+  enabled: true
+mce:
+  enabled: false
+
+# --- Infrastructure (osac-infra) ---
+caIssuer:
+  enabled: true
+keycloak:
+  enabled: true
+  devFixtures:
+    enabled: true
+kafka:
+  enabled: true
+
+# --- Bundled PostgreSQL ---
+# Single-pod ephemeral database for testing.
+bundledPostgres:
+  enabled: true
+  database:
+    name: service
+
+# --- Bundled OpenBao ---
+# Single-pod ephemeral Vault-compatible store for testing.
+bundledVault:
+  enabled: true
+  devRootToken: "dev-root-token"
+  podSecurityContext:
+    runAsNonRoot: true

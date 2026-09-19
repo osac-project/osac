@@ -182,7 +182,7 @@ func (c *Client) GetTenant(ctx context.Context, name string) (*Tenant, error) {
 		return nil, fmt.Errorf("failed to decode organization response: %w", err)
 	}
 	if len(kcOrgs) == 0 {
-		return nil, fmt.Errorf("organization %q not found", name)
+		return nil, &ErrNotFound{Kind: "organization", Name: name}
 	}
 	kcOrg := kcOrgs[0]
 	return fromKeycloakOrganization(&kcOrg), nil
@@ -218,7 +218,8 @@ func (c *Client) DeleteTenant(ctx context.Context, tenantName string) error {
 
 	org, err := c.GetTenant(ctx, tenantName)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
+		var notFoundErr *ErrNotFound
+		if errors.As(err, &notFoundErr) {
 			return nil
 		}
 		return fmt.Errorf("failed to get organization: %w", err)

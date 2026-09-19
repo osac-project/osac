@@ -4,13 +4,23 @@ on:
 # No paths filter: the required check name "Check generated code (proto)" must
 # report on every PR. Skip is on job steps (dorny + should-run); a trigger path
 # filter would leave the name pending forever on PRs that don't touch proto/.
+  # pull_request runs unprivileged and actions/checkout supplies GitHub's
+  # synthetic PR merge ref by default. Applying the replay label refreshes
+  # that ref with the current main workflow for an existing PR.
   pull_request:
     branches:
       - main
+    # Applying this label lets a maintainer replay the required check for an
+    # existing PR without changing its branch. The job below ignores all
+    # other label events.
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
   merge_group:
 
-permissions:
-  contents: read
+permissions: {}
+
+concurrency:
+  group: check-generated-code-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
 
@@ -20,7 +30,7 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
-      proto: ${{ steps.filter.outputs.proto }}
+      proto: ${{ steps.filter.outputs.proto || 'false' }}
     steps:
       # dorny/paths-filter uses git diff on merge_group (not the PR Files API),
       # so the repo must be checked out with enough history for base..head.
@@ -48,49 +58,63 @@ jobs:
     needs: changes
     # Run even if `changes` failed: a skipped job reports success, which would
     # let the required check pass without buf generate. Fail in the first step.
-    if: ${{ always() }}
+    if: >-
+      always() &&
+      (github.event_name != 'pull_request' ||
+      github.event.action != 'labeled' ||
+      github.event.label.name == 'ci-retest-generated-code')
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-    - name: Fail if path filter failed
-      if: needs.changes.result != 'success'
-      run: exit 1
-    - id: should-run
-      if: needs.changes.result == 'success' && needs.changes.outputs.proto == 'true'
-      run: echo "run=true" >> "$GITHUB_OUTPUT"
-    - if: steps.should-run.outputs.run
-      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      with:
-        persist-credentials: false
-    - if: steps.should-run.outputs.run
-      uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3  # v1
-      with:
-        version: '1.50.0'
-        setup_only: true
-    - if: steps.should-run.outputs.run
-      name: Install uv
-      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
-      with:
-        enable-cache: auto
-        version: "latest-known"
-    - if: steps.should-run.outputs.run
-      name: Install protoc
-      run: |
-        # protoc is needed for the private -> public cleanapi generation step
-        sudo apt-get update -qq
-        sudo apt-get install -qq -y protobuf-compiler
-    - if: steps.should-run.outputs.run
-      name: Regenerate the shared proto module
-      working-directory: proto
-      # `make generate` = `dev.py build protos` (private -> public) + `buf generate`
-      # (the single Go tree under proto/gen/ that every module imports).
-      run: make generate
-    - if: steps.should-run.outputs.run
-      name: Check for uncommitted changes
-      run: |
-        if ! git diff --exit-code -- proto/ || [ -n "$(git ls-files --others --exclude-standard -- proto/)" ]; then
-          echo "::error::Generated proto code is out of date. Run 'make generate' in proto/ and commit proto/public/ + proto/gen/."
-          git status --porcelain -- proto/
-          exit 1
-        fi
+      - name: Fail if path filter failed
+        if: needs.changes.result != 'success'
+        run: exit 1
+      - id: should-run
+        if: needs.changes.result == 'success' && needs.changes.outputs.proto == 'true'
+        run: echo "run=true" >> "$GITHUB_OUTPUT"
+      # On pull_request, the default checkout is GitHub's synthetic merge ref
+      # and the job runs with the unprivileged PR token. Avoid a custom ref:
+      # actions/checkout v7 intentionally rejects fork PR refs from trusted
+      # pull_request_target workflows.
+      - if: steps.should-run.outputs.run == 'true' && github.event_name == 'pull_request'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - if: steps.should-run.outputs.run == 'true' && github.event_name == 'merge_group'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - if: steps.should-run.outputs.run == 'true'
+        uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3  # v1
+        with:
+          version: '1.50.0'
+          setup_only: true
+      - if: steps.should-run.outputs.run == 'true'
+        name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: auto
+          version: "latest-known"
+      - if: steps.should-run.outputs.run == 'true'
+        name: Install protoc
+        run: |
+          # protoc is needed for the private -> public cleanapi generation step
+          sudo apt-get update -qq
+          sudo apt-get install -qq -y protobuf-compiler
+      - if: steps.should-run.outputs.run == 'true'
+        name: Regenerate the shared proto module
+        working-directory: proto
+        # `make generate` = `dev.py build protos` (private -> public) + `buf generate`
+        # (the single Go tree under proto/gen/ that every module imports).
+        run: make generate
+      - if: steps.should-run.outputs.run == 'true'
+        name: Check for uncommitted changes
+        run: |
+          if ! git diff --exit-code -- proto/ || [ -n "$(git ls-files --others --exclude-standard -- proto/)" ]; then
+            echo "::error::Generated proto code is out of date. Run 'make generate' in proto/ and commit proto/public/ + proto/gen/."
+            git status --porcelain -- proto/
+            exit 1
+          fi

@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	cloudevents "github.com/cloudevents/sdk-go/v2"
+	"github.com/osac-project/osac-metering/internal/projection"
 )
 
 func TestBuildComponentEventHandlesNilBaseData(t *testing.T) {
@@ -35,5 +36,20 @@ func TestBuildComponentEventHandlesNilBaseData(t *testing.T) {
 	}
 	if data["billing_dimensions"] == nil {
 		t.Errorf("expected billing_dimensions to be set on the component event even when the base event carried no data")
+	}
+}
+
+func TestProjectionIsAheadTreatsTombstoneAsTerminal(t *testing.T) {
+	existing := &projection.ResourceState{
+		ResourceID:         "bmi-tombstoned",
+		Deleted:            true,
+		FulfillmentVersion: 4,
+		CurrentState:       "RUNNING",
+	}
+
+	for _, version := range []int32{1, 4, 5, 100} {
+		if !projectionIsAhead(existing, version, "RUNNING", nil) {
+			t.Errorf("projectionIsAhead() = false for tombstone at incoming version %d", version)
+		}
 	}
 }

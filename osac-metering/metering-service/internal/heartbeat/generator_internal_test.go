@@ -16,6 +16,7 @@ import (
 	"time"
 
 	cloudevents "github.com/cloudevents/sdk-go/v2"
+	"github.com/go-logr/logr"
 
 	"github.com/osac-project/osac-metering/internal/events"
 	"github.com/osac-project/osac-metering/internal/projection"
@@ -32,7 +33,9 @@ func (s *tickStore) Get(context.Context, string) (*projection.ResourceState, err
 
 func (s *tickStore) Upsert(context.Context, projection.ResourceState) error { return nil }
 
-func (s *tickStore) Delete(context.Context, string) error { return nil }
+func (s *tickStore) DeleteIfVersion(context.Context, string, int32) (bool, error) {
+	return true, nil
+}
 
 func (s *tickStore) ListBillable(context.Context) ([]projection.ResourceState, error) {
 	return s.billable, nil
@@ -340,6 +343,48 @@ func TestTickCheckpointsBMaaSAfterPublishingHeartbeat(t *testing.T) {
 	}
 	if len(publisher.published) != 1 {
 		t.Fatalf("published %d heartbeat events, want 1", len(publisher.published))
+	}
+	if len(store.updatedIDs) != 1 || store.updatedIDs[0] != "bmi-stopped" {
+		t.Fatalf("checkpointed resource IDs %v, want [bmi-stopped]", store.updatedIDs)
+	}
+}
+
+func TestTickBMaaSMuteSuppressesOnlyConsumption(t *testing.T) {
+	allocationSince := time.Date(2026, 1, 1, 11, 0, 0, 0, time.UTC)
+	consumptionSince := time.Date(2026, 1, 1, 11, 30, 0, 0, time.UTC)
+	store := &tickStore{billable: []projection.ResourceState{{
+		ResourceID:   "bmi-stopped",
+		ResourceType: events.ResourceTypeBareMetalInstance,
+		CurrentState: "RUNNING",
+		BillingDimensions: map[string]any{
+			"bm_instance_type": "gpu-large",
+		},
+		BMaaSMeterState: projection.BMaaSMeterState{
+			Allocation:  projection.MeterState{ActiveSince: &allocationSince},
+			Consumption: projection.MeterState{ActiveSince: &consumptionSince},
+		},
+	}}}
+	publisher := &tickPublisher{}
+	presence := NewBMaaSPresence()
+	presence.Replace([]string{"bmi-stopped"})
+	presence.SetMeterMutes(map[string]BMaaSMeterMute{
+		"bmi-stopped": {Consumption: true},
+	})
+	generator := NewGenerator(store, publisher, logr.Discard(), time.Minute)
+	generator.SetBMaaSPresence(presence)
+
+	if err := generator.tick(context.Background()); err != nil {
+		t.Fatalf("tick() error = %v", err)
+	}
+	if len(publisher.published) != 1 {
+		t.Fatalf("published %d heartbeat events, want one allocation heartbeat", len(publisher.published))
+	}
+	var data heartbeatData
+	if err := json.Unmarshal(publisher.published[0].Data(), &data); err != nil {
+		t.Fatalf("heartbeat data: %v", err)
+	}
+	if got := data.BillingDimensions["meter_type"]; got != events.BMaaSMeterAllocation {
+		t.Fatalf("meter_type = %v, want %q", got, events.BMaaSMeterAllocation)
 	}
 	if len(store.updatedIDs) != 1 || store.updatedIDs[0] != "bmi-stopped" {
 		t.Fatalf("checkpointed resource IDs %v, want [bmi-stopped]", store.updatedIDs)

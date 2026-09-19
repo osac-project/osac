@@ -29,8 +29,10 @@ type mockStore struct {
 func (s *mockStore) Get(_ context.Context, _ string) (*projection.ResourceState, error) {
 	return nil, nil
 }
-func (s *mockStore) Upsert(_ context.Context, _ projection.ResourceState) error    { return nil }
-func (s *mockStore) Delete(_ context.Context, _ string) error                      { return nil }
+func (s *mockStore) Upsert(_ context.Context, _ projection.ResourceState) error { return nil }
+func (s *mockStore) DeleteIfVersion(_ context.Context, _ string, _ int32) (bool, error) {
+	return true, nil
+}
 func (s *mockStore) ListAll(_ context.Context) ([]projection.ResourceState, error) { return nil, nil }
 
 func (s *mockStore) ListBillable(_ context.Context) ([]projection.ResourceState, error) {
@@ -103,6 +105,25 @@ func makeBillableState(id string) projection.ResourceState {
 	}
 }
 
+func makeBMaaSBillableState(id string) projection.ResourceState {
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	return projection.ResourceState{
+		ResourceID:    id,
+		ResourceType:  events.ResourceTypeBareMetalInstance,
+		TenantID:      "tenant-1",
+		ProjectID:     "project-1",
+		CurrentState:  "RUNNING",
+		IsBillable:    true,
+		BillableSince: &now,
+		ComponentBillableSince: map[string]time.Time{
+			events.BMaaSMeterConsumption: now,
+		},
+		BillingDimensions: map[string]any{
+			"bm_instance_type": "bm.large",
+		},
+	}
+}
+
 var _ = Describe("Generator", func() {
 	Describe("Run", func() {
 		It("publishes heartbeats for billable resources on each tick", func() {
@@ -144,6 +165,35 @@ var _ = Describe("Generator", func() {
 	})
 
 	Describe("tick behavior", func() {
+		It("does not heartbeat BMaaS projections absent from the fulfillment snapshot", func() {
+			store := &mockStore{
+				billable: []projection.ResourceState{
+					makeBMaaSBillableState("bmi-ghost"),
+					makeBMaaSBillableState("bmi-present"),
+				},
+			}
+			pub := &mockPublisher{}
+			presence := heartbeat.NewBMaaSPresence()
+			presence.Replace([]string{"bmi-present"})
+			gen := heartbeat.NewGenerator(store, pub, logr.Discard(), 100*time.Millisecond)
+			gen.SetBMaaSPresence(presence)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+			defer cancel()
+
+			Expect(gen.Run(ctx)).To(Succeed())
+
+			pub.mu.Lock()
+			defer pub.mu.Unlock()
+			Expect(pub.published).NotTo(BeEmpty())
+			for _, event := range pub.published {
+				Expect(event.Extensions()["osacresourceid"]).To(Equal("bmi-present"))
+			}
+			store.mu.Lock()
+			defer store.mu.Unlock()
+			Expect(store.updatedIDs).To(Equal([]string{"bmi-present"}))
+		})
+
 		It("does nothing when no billable resources exist", func() {
 			store := &mockStore{billable: []projection.ResourceState{}}
 			pub := &mockPublisher{}

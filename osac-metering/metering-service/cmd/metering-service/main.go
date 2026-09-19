@@ -239,6 +239,7 @@ func run(ctx context.Context, logger logr.Logger, cfg *config) error {
 
 	var computeClient privatev1.ComputeInstancesClient
 	var clusterClient privatev1.ClustersClient
+	var bareMetalClient privatev1.BareMetalInstancesClient
 	if cfg.enableVMaaS {
 		computeClient = privatev1.NewComputeInstancesClient(grpcConn)
 	}
@@ -248,12 +249,18 @@ func run(ctx context.Context, logger logr.Logger, cfg *config) error {
 	externalIPClient := privatev1.NewExternalIPsClient(grpcConn)
 	natGatewayClient := privatev1.NewNATGatewaysClient(grpcConn)
 	externalIPPoolClient := privatev1.NewExternalIPPoolsClient(grpcConn)
-	reconciler := reconciliation.NewReconciler(computeClient, clusterClient, store, publisher, logger, cfg.heartbeatInterval)
+	if cfg.enableBMaaS {
+		bareMetalClient = privatev1.NewBareMetalInstancesClient(grpcConn)
+	}
+	replaySource := reconciliation.NewUnavailableBMaaSReplaySource()
+	bmaasPresence := heartbeat.NewBMaaSPresence()
+	reconciler := reconciliation.NewReconciler(computeClient, clusterClient, bareMetalClient, replaySource, store, publisher, logger, cfg.heartbeatInterval)
 	reconciler.SetNetworkingClients(externalIPClient, natGatewayClient, externalIPPoolClient, cfg.deploymentID)
 	pools, err := reconciliation.LoadExternalIPPools(ctx, externalIPPoolClient)
 	if err != nil {
 		return fmt.Errorf("loading external IP pool families: %w", err)
 	}
+	reconciler.SetBMaaSPresence(bmaasPresence)
 
 	logger.Info("running startup reconciliation")
 	if err := reconciler.Reconcile(ctx); err != nil {
@@ -266,6 +273,7 @@ func run(ctx context.Context, logger logr.Logger, cfg *config) error {
 	logger.Info("service ready")
 
 	hbGen := heartbeat.NewGenerator(store, publisher, logger, cfg.heartbeatInterval)
+	hbGen.SetBMaaSPresence(bmaasPresence)
 
 	var wg sync.WaitGroup
 

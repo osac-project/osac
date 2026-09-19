@@ -15,12 +15,12 @@ import (
 	"time"
 )
 
-var ErrStaleVersion = errors.New("fulfillment_version is stale: stored version > incoming version")
+var ErrStaleVersion = errors.New("fulfillment_version is stale: stored version is not older than incoming version")
 
 type Store interface {
 	Get(ctx context.Context, resourceID string) (*ResourceState, error)
 	Upsert(ctx context.Context, state ResourceState) error
-	Delete(ctx context.Context, resourceID string) error
+	DeleteIfVersion(ctx context.Context, resourceID string, version int32) (bool, error)
 	ListBillable(ctx context.Context) ([]ResourceState, error)
 	ListAll(ctx context.Context) ([]ResourceState, error)
 	UpdateLastHeartbeat(ctx context.Context, resourceIDs []string, at time.Time) error

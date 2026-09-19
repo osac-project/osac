@@ -133,21 +133,24 @@ for validating the release *mechanism* itself (e.g. after a change to
 ## Releasing a new component version
 
 Use `osac-release.yaml`'s `component_versions` input (see above) — it
-builds, tests, tags, and publishes the component's image *and* chart, and
-bundles it into the new umbrella release together, atomically. A single
-component's chart is never published outside a full `osac-release.yaml`
-run.
+builds, tests, tags, and publishes the component's image *and* chart,
+bundled into the new umbrella release in the same release pipeline run.
 
 There used to be a second path — pushing a `<component>/vX.Y.Z` tag
 directly, which a separate `publish-charts.yaml` workflow picked up to
 publish just that component's chart, independent of any OSAC release.
 That workflow was removed: it duplicated `osac-build-and-publish.yaml`'s
 own chart-packaging for every tag produced by a real release, and the two
-raced to publish the same OCI chart artifact. A manually pushed
-`<component>/vX.Y.Z` tag still triggers that component's own build
-workflow (so its image gets built and signed), but nothing publishes a
-chart or creates a GitHub Release for it anymore — only a real
-`osac-release.yaml` dispatch does both.
+raced to publish the same OCI chart artifact. Pushing a
+`<component>/vX.Y.Z` tag directly still triggers that component's own
+build workflow (`build-image.yaml`/`execution-environment.yml`/etc.), but
+that workflow only ever builds and signs the image — it never published a
+chart itself. Chart publication (and, for a real release, the GitHub
+Release page) only ever happens through the shared
+`osac-build-and-publish.yaml` pipeline, in either mode: a nightly run
+publishes a chart at a throwaway nightly-suffixed version, and a real
+`osac-release.yaml` dispatch is the only way to publish one at a real,
+permanent `<component>/vX.Y.Z`-matching version.
 
 ## Verifying what shipped in a release
 

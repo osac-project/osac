@@ -876,6 +876,8 @@ var _ = Describe("Network classes server", func() {
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 				Expect(response.GetObject().GetFabricManager()).To(Equal("netris"))
+				Expect(response.GetObject().GetStatus().GetState()).To(Equal(
+					privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY))
 
 				getResponse, err := privateServer.Get(ctx, privatev1.NetworkClassesGetRequest_builder{
 					Id: response.GetObject().GetId(),
@@ -931,6 +933,8 @@ var _ = Describe("Network classes server", func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(response.GetObject().HasFabricManager()).To(BeFalse())
 				Expect(response.GetObject().GetK8SManager()).To(Equal("cudn_localnet"))
+				Expect(response.GetObject().GetStatus().GetState()).To(Equal(
+					privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING))
 			})
 
 			It("Create with k8s_manager persists the value", func() {
@@ -944,6 +948,8 @@ var _ = Describe("Network classes server", func() {
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 				Expect(response.GetObject().GetK8SManager()).To(Equal("cudn_localnet"))
+				Expect(response.GetObject().GetStatus().GetState()).To(Equal(
+					privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING))
 
 				getResponse, err := privateServer.Get(ctx, privatev1.NetworkClassesGetRequest_builder{
 					Id: response.GetObject().GetId(),

@@ -202,12 +202,12 @@ func (s *PrivateNetworkClassesServer) Create(ctx context.Context,
 		return
 	}
 
-	// Set status to READY on creation since NetworkClass has no backend provisioning.
+	// Kubernetes-backed NetworkClasses remain pending until the operator confirms manager availability.
 	nc := request.GetObject()
 	if nc.Status == nil {
 		nc.Status = &privatev1.NetworkClassStatus{}
 	}
-	nc.Status.SetState(privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
+	nc.Status.SetState(initialNetworkClassState(nc))
 
 	// Clear any caller-provided ID so the DAO always generates a UUID.
 	nc.SetId("")
@@ -238,6 +238,13 @@ func (s *PrivateNetworkClassesServer) Create(ctx context.Context,
 	// from this call means the ordinary per-name uniqueness index was violated instead.
 	err = s.generic.Create(ctx, request, &response)
 	return
+}
+
+func initialNetworkClassState(nc *privatev1.NetworkClass) privatev1.NetworkClassState {
+	if nc.GetK8SManager() != "" {
+		return privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING
+	}
+	return privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY
 }
 
 func (s *PrivateNetworkClassesServer) Update(ctx context.Context,

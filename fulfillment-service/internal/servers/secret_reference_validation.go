@@ -93,7 +93,15 @@ func validateResolvedSecretType(
 		return grpcstatus.Errorf(grpccodes.Internal, "failed to resolve %s reference", field)
 	}
 
-	secret := secretResponse.GetObject()
+	return validateSecretType(secretResponse.GetObject(), ref, field, expected)
+}
+
+func validateSecretType(
+	secret *privatev1.Secret,
+	ref *privatev1.SecretLocalReference,
+	field string,
+	expected privatev1.SecretType,
+) error {
 	if secret.GetType() != expected {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"secret '%s' referenced by %s has type %s; expected %s",

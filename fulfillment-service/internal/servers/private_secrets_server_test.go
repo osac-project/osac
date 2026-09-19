@@ -480,6 +480,44 @@ var _ = Describe("Private secrets server", func() {
 		})
 
 		Describe("Immutability", func() {
+			DescribeTable("Update of user data Secret data fails",
+				func(updateMask *fieldmaskpb.FieldMask) {
+					existing := privatev1.Secret_builder{
+						Type: privatev1.SecretType_SECRET_TYPE_USER_DATA,
+						Data: map[string][]byte{"userdata": []byte("original")},
+					}.Build()
+					updated := privatev1.Secret_builder{
+						Type: privatev1.SecretType_SECRET_TYPE_USER_DATA,
+						Data: map[string][]byte{"userdata": []byte("changed")},
+					}.Build()
+
+					err := server.validateSecretUpdate(ctx, updated, updateMask, existing)
+					Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+					Expect(err.Error()).To(ContainSubstring("data"))
+					Expect(err.Error()).To(ContainSubstring("immutable"))
+				},
+				Entry("with an explicit data mask", &fieldmaskpb.FieldMask{Paths: []string{"data"}}),
+				Entry("with an empty mask", &fieldmaskpb.FieldMask{}),
+				Entry("with no mask", nil),
+			)
+
+			It("allows metadata-only updates to user data Secrets", func() {
+				existing := privatev1.Secret_builder{Type: privatev1.SecretType_SECRET_TYPE_USER_DATA}.Build()
+				updated := privatev1.Secret_builder{Type: privatev1.SecretType_SECRET_TYPE_USER_DATA}.Build()
+				Expect(server.validateSecretUpdate(ctx, updated,
+					&fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}}, existing)).To(Succeed())
+			})
+
+			It("allows data updates to opaque Secrets", func() {
+				existing := privatev1.Secret_builder{Type: privatev1.SecretType_SECRET_TYPE_OPAQUE}.Build()
+				updated := privatev1.Secret_builder{
+					Type: privatev1.SecretType_SECRET_TYPE_OPAQUE,
+					Data: map[string][]byte{"key": []byte("changed")},
+				}.Build()
+				Expect(server.validateSecretUpdate(ctx, updated,
+					&fieldmaskpb.FieldMask{Paths: []string{"data"}}, existing)).To(Succeed())
+			})
+
 			It("Update changing type fails", func() {
 				created := createVaultSecret()
 

@@ -326,6 +326,7 @@ class TestComputeReferences:
             data={
                 "object": {
                     "metadata": {"name": secret_name},
+                    "type": "SECRET_TYPE_USER_DATA",
                     "data": {"userdata": base64.b64encode(b"#cloud-config\n").decode()},
                 }
             },

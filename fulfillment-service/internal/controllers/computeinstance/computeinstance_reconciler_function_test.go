@@ -1321,7 +1321,7 @@ var _ = Describe("ensureUserDataSecret", func() {
 		Expect(t.ensureUserDataSecret(ctx, owner)).To(MatchError(ContainSubstring("missing non-empty data")))
 	})
 
-	It("should update user data when Secret already exists", func() {
+	It("should preserve user data when Secret already exists", func() {
 		existingSecret := &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{Namespace: hubNamespace, Name: ciID + userDataSecretSuffix},
 			StringData: map[string]string{userDataSecretKey: "old-data"},
@@ -1352,7 +1352,7 @@ var _ = Describe("ensureUserDataSecret", func() {
 		Expect(err).ToNot(HaveOccurred())
 		secret := &corev1.Secret{}
 		Expect(fakeClient.Get(ctx, clnt.ObjectKey{Namespace: hubNamespace, Name: ciID + userDataSecretSuffix}, secret)).To(Succeed())
-		Expect(secret.StringData[userDataSecretKey]).To(Equal("some-data"))
+		Expect(secret.StringData[userDataSecretKey]).To(Equal("old-data"))
 	})
 
 	It("should propagate error when Secret creation fails", func() {

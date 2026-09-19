@@ -609,6 +609,7 @@ var _ = Describe("Private bare metal instances server", func() {
 					Name:   fmt.Sprintf("userdata-%s", uuid.NewString()[:8]),
 					Tenant: testTenant,
 				}.Build(),
+				Type: privatev1.SecretType_SECRET_TYPE_USER_DATA,
 				Data: map[string][]byte{userDataSecretDataKey: []byte("#cloud-config")},
 			}.Build()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
@@ -732,6 +733,7 @@ var _ = Describe("Private bare metal instances server", func() {
 					Name:   fmt.Sprintf("userdata-%s", uuid.NewString()[:8]),
 					Tenant: testTenant,
 				}.Build(),
+				Type: privatev1.SecretType_SECRET_TYPE_USER_DATA,
 				Data: map[string][]byte{userDataSecretDataKey: []byte("#cloud-config")},
 			}.Build()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())

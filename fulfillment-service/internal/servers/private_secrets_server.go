@@ -467,6 +467,10 @@ func (s *PrivateSecretsServer) validateSecretUpdate(_ context.Context,
 	if !dataUpdated {
 		return nil
 	}
+	if existingSecret.GetType() == privatev1.SecretType_SECRET_TYPE_USER_DATA {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'data' is immutable for secrets of type %s", existingSecret.GetType())
+	}
 	if existingSecret.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_HUB && len(newSecret.GetData()) > 0 {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"field 'data' must be empty when backend is HUB")

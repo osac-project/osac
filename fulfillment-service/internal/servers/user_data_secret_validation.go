@@ -69,6 +69,9 @@ func validateUserDataSecret(
 		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to resolve user_data_secret reference")
 	}
 	secret := secretResponse.GetObject()
+	if err := validateSecretType(secret, ref, "user_data_secret", privatev1.SecretType_SECRET_TYPE_USER_DATA); err != nil {
+		return nil, err
+	}
 	data := secret.GetData()
 	if len(data) == 0 && secret.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT {
 		if secretStore == nil {

@@ -29,6 +29,34 @@ global:
       enabled: true
     maas:
       enabled: true
+  # Primary networking configuration shared with the operator and AAP
+  # subcharts. The selected provider/overlay pair is translated into the
+  # existing manager names and AAP settings by Helm.
+  networking:
+    # provider selects the fabric/backend family; overlay selects the Kubernetes
+    # networking mode. Supported facade profiles:
+    #   - provider: netris, overlay: none  → fabricManager netris
+    #   - provider: none, overlay: k8s_only → k8sManager k8s_only (default)
+    # Reserved values (cudn, vlan, cudn_evpn, cudn_localnet) fail during render.
+    provider: none
+    overlay: k8s_only
+    netris:
+      controllerUrl: ""
+      credentials:
+        username: ""
+      siteId: ""
+      tenantId: ""
+      tenantName: ""
+      mgmtVpcId: ""
+      mgmtVpcName: ""
+      resourceClassMap: ""
+    # An empty block causes Helm to generate the default NetworkClass from
+    # provider and overlay. Explicit fields override generated values.
+    networkClass: {}
+  expertOverrides:
+    aap: false
+    networkClass: false
+    networkManagers: false
 
 cliImage: quay.io/openshift/origin-cli:4.20.0
 
@@ -79,12 +107,20 @@ operator:
   controllers:
     tenant: true
     networking: true
+    # networkingProvisioning dispatches VirtualNetwork/Subnet/SecurityGroup/
+    # NATGateway to AAP. Distinct from controllers.networking, which only
+    # reconciles NetworkClass. Set false for local environments without a fabric.
+    networkingProvisioning: true
     storage: true
   configSecret:
     name: "osac-config"
     optional: true
   hubAccess:
     enabled: false
+  # Network manager ConfigMaps use the nested operator.networkManagers map
+  # (fabricManagers / k8sManagers). Defaults live in the osac-operator subchart;
+  # override operator.networkManagers here to enable netris/k8s_only or change
+  # capabilitiesSyncInterval.
 
 # --- Fulfillment Service ---
 service:
@@ -198,6 +234,8 @@ aap:
         NETWORK_STEPS_COLLECTION: ""
         DNS_CLASS: ""
         DNS_ZONE: ""
+        # Netris connection fields below must also be set on networkFulfillment
+        # (including NETRIS_PASSWORD); there is no shared Netris config block.
         NETRIS_CONTROLLER_URL: ""
         NETRIS_USERNAME: ""
         NETRIS_SITE_ID: ""
@@ -234,6 +272,7 @@ aap:
     networkFulfillment:
       enabled: false
       config:
+        # Duplicate of clusterFulfillment Netris connection fields — set both.
         NETRIS_CONTROLLER_URL: ""
         NETRIS_USERNAME: ""
         NETRIS_SITE_ID: ""
@@ -353,24 +392,6 @@ bmf:
 validation:
   enabled: true
 
-# --- Network Manager ConfigMaps ---
-# Each entry creates a ConfigMap for the osac-operator dispatcher to discover.
-# networkManagers:
-#   - name: netris
-#     role: fabric        # "fabric" or "k8s"
-#     description: "Netris SDN fabric manager"
-#     capabilities: "ipv4"
-#   - name: cudn_localnet
-#     role: k8s
-#     description: "CUDN LocalNet k8s manager"
-#     capabilities: "ipv4,ipv6,dualStack"
-networkManagers: []
-
-# --- MetalLB Address Pool ---
-metallb:
-  enabled: false
-  addressCIDR: "192.168.40.0/24"
-
 hubAccess:
   enabled: false
 
@@ -393,36 +414,34 @@ lvms:
   enabled: false
 
 networkClass:
-  # Create a NetworkClass in the fulfillment service after install. At least one of
-  # k8sManager/fabricManager must be set when enabled — the corresponding manager
-  # must already be registered via operator.networkManagers (see that chart's values).
+  # Legacy expert override. Used only when global.expertOverrides.networkClass
+  # is true. Normal deployments leave this block disabled and configure
+  # global.networking (and optional global.networking.networkClass overrides)
+  # instead — the create-network-class hook derives the NetworkClass from the
+  # facade.
   #
-  # Enabled by default with fabricManager: cudn_net, matching operator.networkManagers'
-  # own cudn_net fabric manager (enabled by default) as the platform default NetworkClass --
-  # every install needs a default NetworkClass for VirtualNetwork/tenant onboarding to work.
-  enabled: true
+  # When enabling this expert path, set title and at least one of
+  # k8sManager/fabricManager. The corresponding manager must already be
+  # registered via operator.networkManagers.
+  enabled: false
   # [REQUIRED when enabled] Human-friendly short title — the fulfillment service
   # rejects NetworkClass creation without one (NC-VAL-02).
-  title: "CUDN Network Implementation"
-  description: >-
-    Provisions networking resources using ClusterUserDefinedNetwork (CUDN) on OpenShift.
-    Handles both VirtualNetwork (logical grouping) and Subnet (CUDN + Namespace creation).
+  title: ""
+  description: ""
   k8sManager: ""
-  fabricManager: "cudn_net"
+  fabricManager: ""
   isDefault: true
   defaults:
-    # Tenant-onboarding defaults: without these, this being the default NetworkClass
-    # does not auto-create a VirtualNetwork/Subnet/SecurityGroup for new tenants, and
-    # ComputeInstance creation without explicit network_attachments will fail.
+    # Tenant-onboarding defaults used when this expert block is enabled.
     virtualNetworkIPv4CIDR: "10.200.0.0/16"
     subnetIPv4CIDR: "10.200.0.0/20"
     enableNatGateway: false
     egressRules:
     - protocol: PROTOCOL_ALL
       ipv4Cidr: "0.0.0.0/0"
-  # Example override (k8s-only profile — switches the default NetworkClass's
-  # manager from cudn_net to k8s_only instead of adding a second NetworkClass,
-  # since only one NetworkClass may exist per deployment):
+      # ipv6Cidr is optional and forwarded by the create-network-class hook.
+  # Example expert override (k8s-only):
+  # enabled: true
   # title: "K8s-only networking"
   # fabricManager: ""
   # k8sManager: "k8s_only"

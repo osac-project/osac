@@ -148,24 +148,8 @@ validation:
 dbMigrate:
   enabled: false
 
-# --- Instance Groups (disabled) ---
-instanceGroups:
-  enabled: false
-
-# --- Cluster/Network/Storage Fulfillment (disabled) ---
-clusterFulfillment:
-  enabled: false
-networkFulfillment:
-  enabled: false
-storageFulfillment:
-  enabled: false
-
 # --- UI (disabled -- uses OpenShift Route, run via pnpm dev instead) ---
 ui:
-  enabled: false
-
-# --- MetalLB (disabled) ---
-metallb:
   enabled: false
 
 # --- CAPI Provider (disabled) ---

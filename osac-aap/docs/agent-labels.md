@@ -198,4 +198,4 @@ workflow:
 - [Bare Metal Agent Import (BMH)](import-agents.md) - BareMetalHost-based import with Ironic
 - [BCM Inventory Integration](bcm-inventory-integration.md) - NVIDIA Base Command Manager import
 - [NICo Integration](nico-integration.md) - NVIDIA NICo bare metal provisioning
-- [Netris Integration](netris-integration.md) - Netris network backend (requires `netris.server/name`)
+- [Network Backend Configuration](../../osac-installer/docs/network-backend.md) - Netris and agentless networking (requires `netris.server/name` for Netris)

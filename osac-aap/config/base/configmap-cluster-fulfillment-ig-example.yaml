@@ -14,10 +14,10 @@ data:
   HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: "HighlyAvailable"
 
   # -- Network class --
-  # Which network backend to use (netris / esi). Templates like
+  # Which network class to use (netris / agentless_net). Templates like
   # ocp_hosted_netris override this automatically.
-  NETWORK_CLASS: "esi"
-  NETWORK_STEPS_COLLECTION: "osac.steps"
+  NETWORK_CLASS: ""
+  NETWORK_STEPS_COLLECTION: ""
 
   # -- Netris controller connection --
   NETRIS_CONTROLLER_URL: "https://redhat-ctl.netris.io"

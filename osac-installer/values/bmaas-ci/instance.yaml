@@ -12,6 +12,19 @@ global:
       enabled: true
     maas:
       enabled: false
+  networking:
+    provider: netris
+    overlay: none
+    netris:
+      controllerUrl: "https://test-ctl.netris.io"
+      credentials:
+        username: "netris"
+        # NETRIS_PASSWORD is supplied by the externally managed Secret
+        # netris-credentials in the AAP namespace.
+        externalSecret: true
+      siteId: "1"
+      tenantId: "1"
+      tenantName: "Admin"
 
 # --- Operator ---
 operator:
@@ -158,6 +171,11 @@ aap:
     eeImage: "ghcr.io/osac-project/osac-aap:latest"
     projectGitUri: "https://github.com/osac-project/osac"
     projectGitBranch: "main"
+  instanceGroups:
+    clusterFulfillment:
+      enabled: true
+    networkFulfillment:
+      enabled: true
 
 # --- Validation ---
 validation:
@@ -181,12 +199,6 @@ bmf:
 # --- Hub Access ---
 hubAccess:
   enabled: true
-
-networkManagers:
-  - name: netris
-    role: fabric
-    description: "Netris SDN fabric manager"
-    capabilities: "ipv4"
 
 # --- LVMS StorageBackend registration ---
 lvms:

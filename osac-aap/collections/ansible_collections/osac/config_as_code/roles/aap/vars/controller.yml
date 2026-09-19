@@ -727,6 +727,11 @@ controller_instance_groups: # noqa: var-naming[no-role-prefix]
                   optional: true
               - secretRef:
                   name: cluster-fulfillment-ig
+              # Netris credentials are deployment-owned and may be supplied
+              # by an external Secret rather than Helm values.
+              - secretRef:
+                  name: netris-credentials
+                  optional: true
         volumes:
         - name: bcm-certs
           secret:

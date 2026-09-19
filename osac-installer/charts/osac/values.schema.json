@@ -6,59 +6,12 @@
   "properties": {
     "global": {
       "type": "object",
-      "description": "Values propagated unchanged into every subchart, shared between the umbrella chart's own templates and its subcharts",
+      "description": "Values propagated unchanged into every subchart, shared between the umbrella chart's own templates and its subcharts. Use global.networking as the primary networking configuration API.",
       "properties": {
         "clusterDomain": {
           "type": "string",
           "description": "OpenShift cluster ingress domain (e.g. apps.mycluster.example.com). Backs the tpl-templated defaults for service.auth.issuerUrl, service.idp.url, and service.vault.keycloakIssuerUrl. Set via --set global.clusterDomain=$(oc get ingresses.config/cluster -o jsonpath='{.spec.domain}'). Leave empty on platforms (e.g. kind) that set those three values explicitly instead."
         },
-        "osacDeploymentId": {
-          "type": "string",
-          "description": "Required stable identity for this OSAC/fulfillment-service deployment"
-        }
-      }
-    },
-    "cliImage": {
-      "type": "string",
-      "description": "Default OpenShift CLI image used by hook jobs"
-    },
-    "dbInit": {
-      "type": "object",
-      "description": "Shared PostgreSQL host for the db-init hook",
-      "properties": {
-        "host": {
-          "type": "string",
-          "description": "PostgreSQL host for db-init hook",
-          "default": "postgres.osac-infra.svc.cluster.local"
-        }
-      }
-    },
-    "kafka": {
-      "type": "object",
-      "description": "Kafka cluster coordinates for per-instance topic/user creation",
-      "properties": {
-        "clusterName": {
-          "type": "string",
-          "description": "Strimzi Kafka cluster name",
-          "default": "osac-kafka"
-        },
-        "clusterNamespace": {
-          "type": "string",
-          "description": "Namespace of the Kafka cluster",
-          "default": "osac-kafka"
-        },
-        "replicas": {
-          "type": "integer",
-          "description": "Kafka broker replica count (drives topic replication factor)",
-          "default": 3,
-          "minimum": 1
-        }
-      }
-    },
-    "global": {
-      "type": "object",
-      "description": "Global values propagated to all subcharts via Helm's built-in global mechanism",
-      "properties": {
         "services": {
           "type": "object",
           "description": "Service tier enablement flags. Controls which tiers are active across all OSAC components.",
@@ -112,6 +65,50 @@
         "osacDeploymentId": {
           "type": "string",
           "description": "Required stable identity for this OSAC/fulfillment-service deployment"
+        },
+        "networking": {
+          "$ref": "#/$defs/globalNetworking"
+        },
+        "expertOverrides": {
+          "$ref": "#/$defs/globalExpertOverrides"
+        }
+      },
+      "additionalProperties": false
+    },
+    "cliImage": {
+      "type": "string",
+      "description": "Default OpenShift CLI image used by hook jobs"
+    },
+    "dbInit": {
+      "type": "object",
+      "description": "Shared PostgreSQL host for the db-init hook",
+      "properties": {
+        "host": {
+          "type": "string",
+          "description": "PostgreSQL host for db-init hook",
+          "default": "postgres.osac-infra.svc.cluster.local"
+        }
+      }
+    },
+    "kafka": {
+      "type": "object",
+      "description": "Kafka cluster coordinates for per-instance topic/user creation",
+      "properties": {
+        "clusterName": {
+          "type": "string",
+          "description": "Strimzi Kafka cluster name",
+          "default": "osac-kafka"
+        },
+        "clusterNamespace": {
+          "type": "string",
+          "description": "Namespace of the Kafka cluster",
+          "default": "osac-kafka"
+        },
+        "replicas": {
+          "type": "integer",
+          "description": "Kafka broker replica count (drives topic replication factor)",
+          "default": 3,
+          "minimum": 1
         }
       }
     },
@@ -255,14 +252,14 @@
               "description": "Enable networking controllers",
               "default": true
             },
-            "networkingProvisioning": {
-              "type": "boolean",
-              "description": "Dispatch AAP jobs to provision networking resources. Set false for Kind dev (no fabric): controllers reconcile VirtualNetwork/Subnet/SecurityGroup to READY without provisioning.",
-              "default": true
-            },
             "storage": {
               "type": "boolean",
               "description": "Enable Storage controller",
+              "default": true
+            },
+            "networkingProvisioning": {
+              "type": "boolean",
+              "description": "Enable networking resource provisioning (VirtualNetwork, Subnet, SecurityGroup, NATGateway). Distinct from controllers.networking, which only reconciles NetworkClass.",
               "default": true
             }
           }
@@ -291,6 +288,79 @@
               "type": "boolean",
               "description": "Create hub-access ClusterRole (exported for fulfillment-service to bind)",
               "default": false
+            }
+          }
+        },
+        "networkManagers": {
+          "type": "object",
+          "description": "Network manager ConfigMaps consumed by the operator subchart (nested fabricManagers/k8sManagers map). This is the user-facing registration API — there is no top-level networkManagers array on the umbrella chart. Defaults live in the osac-operator subchart; override here to enable extra managers or change the sync interval.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Create fabric/k8s manager ConfigMaps from the maps below",
+              "default": true
+            },
+            "capabilitiesSyncInterval": {
+              "type": "string",
+              "description": "How often the operator recomputes NetworkClass capabilities from manager ConfigMaps, in addition to reacting immediately to ConfigMap changes. Common values: 30s, 1m, 5m, 15m, 30m, 1h (any valid Go duration is accepted).",
+              "default": "5m",
+              "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$"
+            },
+            "fabricManagers": {
+              "type": "object",
+              "description": "Map of fabric manager name → registration. Keys become ConfigMap names (underscores converted to hyphens) and the NetworkClass fabricManager value.",
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean",
+                    "description": "Create a ConfigMap for this fabric manager"
+                  },
+                  "description": {
+                    "type": "string",
+                    "description": "Human-readable description stored on the ConfigMap"
+                  },
+                  "capabilities": {
+                    "type": "array",
+                    "description": "Capability tokens advertised for this manager. Only ipv4 is supported in the current release.",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "ipv4"
+                      ]
+                    },
+                    "uniqueItems": true
+                  }
+                }
+              }
+            },
+            "k8sManagers": {
+              "type": "object",
+              "description": "Map of k8s manager name → registration. Keys become ConfigMap names and the NetworkClass k8sManager value.",
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean",
+                    "description": "Create a ConfigMap for this k8s manager"
+                  },
+                  "description": {
+                    "type": "string",
+                    "description": "Human-readable description stored on the ConfigMap"
+                  },
+                  "capabilities": {
+                    "type": "array",
+                    "description": "Capability tokens advertised for this manager. Only ipv4 is supported in the current release.",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "ipv4"
+                      ]
+                    },
+                    "uniqueItems": true
+                  }
+                }
+              }
             }
           }
         }
@@ -766,33 +836,34 @@
                 "config": {
                   "type": "object",
                   "description": "Environment variables for the cluster-fulfillment instance group",
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/aapNetrisConfig"
+                    }
+                  ],
                   "properties": {
                     "NETWORK_CLASS": {
                       "type": "string",
-                      "description": "Network implementation class",
+                      "description": "Supported values: netris, agentless_net. Legacy backends (esi, nico) are removed from the standard schema; direct AAP configuration via expertOverrides.aap accepts any free-form string.",
                       "enum": [
                         "",
-                        "esi",
                         "netris",
-                        "nico",
                         "agentless_net"
                       ]
                     },
                     "NETWORK_STEPS_COLLECTION": {
                       "type": "string",
-                      "description": "Ansible collection providing network-class-specific steps",
+                      "description": "Supported values: netris.steps, ci.steps, agentless_net.steps. Legacy collections (nico.steps, osac.steps) are removed from the standard schema; direct AAP configuration via expertOverrides.aap accepts any free-form string.",
                       "enum": [
                         "",
-                        "osac.steps",
                         "netris.steps",
                         "ci.steps",
-                        "nico.steps",
                         "agentless_net.steps"
                       ]
                     },
                     "DNS_CLASS": {
                       "type": "string",
-                      "description": "Fully-qualified Ansible role name of the DNS driver",
+                      "description": "Fully-qualified Ansible role name of the DNS driver. Only dns.route53.dns is shipped today; leave empty to use that default.",
                       "enum": [
                         "",
                         "dns.route53.dns"
@@ -801,26 +872,6 @@
                     "DNS_ZONE": {
                       "type": "string",
                       "description": "DNS zone to operate in (defaults to EXTERNAL_ACCESS_BASE_DOMAIN)"
-                    },
-                    "NETRIS_CONTROLLER_URL": {
-                      "type": "string",
-                      "description": "Netris controller API URL"
-                    },
-                    "NETRIS_USERNAME": {
-                      "type": "string",
-                      "description": "Netris controller username"
-                    },
-                    "NETRIS_SITE_ID": {
-                      "type": "string",
-                      "description": "Netris site ID"
-                    },
-                    "NETRIS_TENANT_ID": {
-                      "type": "string",
-                      "description": "Netris tenant ID"
-                    },
-                    "NETRIS_TENANT_NAME": {
-                      "type": "string",
-                      "description": "Netris tenant name"
                     },
                     "NETRIS_MGMT_VPC_ID": {
                       "type": "string",
@@ -910,7 +961,7 @@
                     },
                     "BCM_API_URL": {
                       "type": "string",
-                      "pattern": "^$|^https?://",
+                      "pattern": "^$|^https?://[^/\\s:]+[^\\s]*$",
                       "description": "BCM head node API endpoint (e.g., https://bcm-head:8081)"
                     },
                     "BCM_VALIDATE_CERTS": {
@@ -939,7 +990,7 @@
                   "properties": {
                     "NETRIS_PASSWORD": {
                       "type": "string",
-                      "description": "Netris controller password"
+                      "description": "Netris controller password. Must be set identically on clusterFulfillment.secret and networkFulfillment.secret; there is no shared Netris config block."
                     },
                     "AWS_ACCESS_KEY_ID": {
                       "type": "string",
@@ -973,28 +1024,11 @@
                 "config": {
                   "type": "object",
                   "description": "Environment variables for the network-fulfillment instance group",
-                  "properties": {
-                    "NETRIS_CONTROLLER_URL": {
-                      "type": "string",
-                      "description": "Netris controller API URL"
-                    },
-                    "NETRIS_USERNAME": {
-                      "type": "string",
-                      "description": "Netris controller username"
-                    },
-                    "NETRIS_SITE_ID": {
-                      "type": "string",
-                      "description": "Netris site ID"
-                    },
-                    "NETRIS_TENANT_ID": {
-                      "type": "string",
-                      "description": "Netris tenant ID"
-                    },
-                    "NETRIS_TENANT_NAME": {
-                      "type": "string",
-                      "description": "Netris tenant name"
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/aapNetrisConfig"
                     }
-                  }
+                  ]
                 },
                 "secret": {
                   "type": "object",
@@ -1002,7 +1036,7 @@
                   "properties": {
                     "NETRIS_PASSWORD": {
                       "type": "string",
-                      "description": "Netris controller password"
+                      "description": "Netris controller password. Must be set identically on clusterFulfillment.secret and networkFulfillment.secret; there is no shared Netris config block."
                     }
                   }
                 }
@@ -1482,57 +1516,6 @@
         }
       }
     },
-    "networkManagers": {
-      "type": "array",
-      "description": "Network manager ConfigMaps for the osac-operator dispatcher",
-      "default": [],
-      "items": {
-        "type": "object",
-        "required": [
-          "name",
-          "role"
-        ],
-        "properties": {
-          "name": {
-            "type": "string",
-            "description": "Manager name (e.g. netris, cudn_localnet)"
-          },
-          "role": {
-            "type": "string",
-            "enum": [
-              "fabric",
-              "k8s"
-            ],
-            "description": "Manager role: fabric or k8s"
-          },
-          "description": {
-            "type": "string",
-            "description": "Human-readable description"
-          },
-          "capabilities": {
-            "type": "string",
-            "description": "Comma-separated capabilities (e.g. ipv4,ipv6,dualStack)",
-            "default": "ipv4"
-          }
-        }
-      }
-    },
-    "metallb": {
-      "type": "object",
-      "description": "MetalLB IPAddressPool and L2Advertisement for LoadBalancer services",
-      "properties": {
-        "enabled": {
-          "type": "boolean",
-          "description": "Create MetalLB IPAddressPool and L2Advertisement",
-          "default": false
-        },
-        "addressCIDR": {
-          "type": "string",
-          "description": "CIDR range for the MetalLB address pool",
-          "default": "192.168.40.0/24"
-        }
-      }
-    },
     "hubAccess": {
       "type": "object",
       "description": "Hub access SA, RBAC, and create-hub hook (CI/dev only)",
@@ -1594,17 +1577,17 @@
     },
     "networkClass": {
       "type": "object",
-      "description": "Create a NetworkClass in the fulfillment service after install. At least one of k8sManager/fabricManager must be set when enabled.",
+      "description": "Create a NetworkClass in the fulfillment service after install. When enabled, title is required and at least one of k8sManager/fabricManager must be set. k8sManager k8s_only is only valid when fabricManager is empty.",
       "properties": {
         "enabled": {
           "type": "boolean",
-          "description": "Run the create-network-class hook job",
-          "default": true
+          "description": "Run the create-network-class hook job. Legacy expert path only — normal deployments use global.networking.",
+          "default": false
         },
         "title": {
           "type": "string",
           "description": "Human-friendly short title for the NetworkClass. Required when enabled — the fulfillment service rejects NetworkClass creation without one.",
-          "default": "CUDN Network Implementation"
+          "default": ""
         },
         "description": {
           "type": "string",
@@ -1613,13 +1596,13 @@
         },
         "k8sManager": {
           "type": "string",
-          "description": "k8sManager name to set on the NetworkClass (must match a manager already registered via operator.networkManagers.k8sManagers)",
+          "description": "k8sManager name to set on the NetworkClass (must match a manager already registered via operator.networkManagers.k8sManagers). k8s_only is only valid when fabricManager is empty.",
           "default": ""
         },
         "fabricManager": {
           "type": "string",
           "description": "fabricManager name to set on the NetworkClass (must match a manager already registered via operator.networkManagers.fabricManagers)",
-          "default": "cudn_net"
+          "default": ""
         },
         "isDefault": {
           "type": "boolean",
@@ -1632,11 +1615,13 @@
           "properties": {
             "virtualNetworkIPv4CIDR": {
               "type": "string",
-              "description": "IPv4 CIDR for the auto-created tenant VirtualNetwork (e.g. 10.200.0.0/16)"
+              "description": "IPv4 CIDR for the auto-created tenant VirtualNetwork (e.g. 10.200.0.0/16)",
+              "pattern": "^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)/(3[0-2]|[12]?[0-9])$"
             },
             "subnetIPv4CIDR": {
               "type": "string",
-              "description": "IPv4 CIDR for the auto-created tenant Subnet (e.g. 10.200.0.0/20)"
+              "description": "IPv4 CIDR for the auto-created tenant Subnet (e.g. 10.200.0.0/20)",
+              "pattern": "^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)/(3[0-2]|[12]?[0-9])$"
             },
             "enableNatGateway": {
               "type": "boolean",
@@ -1645,7 +1630,7 @@
             },
             "egressRules": {
               "type": "array",
-              "description": "Default egress rules for the auto-created tenant SecurityGroup",
+              "description": "Default egress rules for the auto-created tenant SecurityGroup (applied whenever defaults are used, not only when enableNatGateway is true)",
               "items": {
                 "type": "object",
                 "required": [
@@ -1664,24 +1649,536 @@
                   },
                   "ipv4Cidr": {
                     "type": "string",
-                    "description": "IPv4 CIDR for this rule (e.g. 0.0.0.0/0)"
+                    "description": "IPv4 CIDR for this rule (e.g. 0.0.0.0/0)",
+                    "pattern": "^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)/(3[0-2]|[12]?[0-9])$"
                   },
                   "ipv6Cidr": {
                     "type": "string",
-                    "description": "IPv6 CIDR for this rule"
+                    "description": "Optional IPv6 CIDR for this rule. The create-network-class hook forwards it when set. Netris fabric is IPv4-only; CUDN/k8s_only may use IPv6.",
+                    "pattern": "^$|^[0-9a-fA-F:]+/(12[0-8]|1[01][0-9]|[1-9]?[0-9])$"
                   },
                   "portFrom": {
                     "type": "integer",
-                    "description": "Starting port (tcp/udp only)"
+                    "description": "Starting port (tcp/udp only)",
+                    "minimum": 1,
+                    "maximum": 65535
                   },
                   "portTo": {
                     "type": "integer",
-                    "description": "Ending port (tcp/udp only)"
+                    "description": "Ending port (tcp/udp only)",
+                    "minimum": 1,
+                    "maximum": 65535
+                  }
+                },
+                "allOf": [
+                  {
+                    "if": {
+                      "properties": {
+                        "protocol": {
+                          "enum": [
+                            "PROTOCOL_ICMP",
+                            "PROTOCOL_ALL"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "protocol"
+                      ]
+                    },
+                    "then": {
+                      "properties": {
+                        "portFrom": {
+                          "not": {}
+                        },
+                        "portTo": {
+                          "not": {}
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "enabled": {
+                "const": true
+              }
+            },
+            "required": [
+              "enabled"
+            ]
+          },
+          "then": {
+            "properties": {
+              "title": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "anyOf": [
+              {
+                "properties": {
+                  "k8sManager": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "k8sManager"
+                ]
+              },
+              {
+                "properties": {
+                  "fabricManager": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "fabricManager"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "k8sManager": {
+                "const": "k8s_only"
+              }
+            },
+            "required": [
+              "k8sManager"
+            ]
+          },
+          "then": {
+            "properties": {
+              "fabricManager": {
+                "type": "string",
+                "maxLength": 0
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "globalNetworking": {
+      "type": "object",
+      "description": "High-level networking profile shared by the umbrella, operator, and AAP charts.",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "description": "Supported providers: netris and none. The cudn and vlan providers are reserved and rejected during Helm rendering; valid overlays are constrained by provider.",
+          "enum": [
+            "netris",
+            "vlan",
+            "cudn",
+            "none"
+          ],
+          "default": "none"
+        },
+        "overlay": {
+          "type": "string",
+          "description": "Kubernetes networking overlay. Unsupported provider/overlay combinations fail during Helm rendering.",
+          "enum": [
+            "none",
+            "cudn_evpn",
+            "k8s_only",
+            "cudn_localnet"
+          ],
+          "default": "k8s_only"
+        },
+        "netris": {
+          "$ref": "#/$defs/networkingNetris"
+        },
+        "networkClass": {
+          "$ref": "#/$defs/networkingNetworkClass"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "provider": {
+                "const": "netris"
+              }
+            },
+            "required": [
+              "provider"
+            ]
+          },
+          "then": {
+            "properties": {
+              "overlay": {
+                "enum": [
+                  "none"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "provider": {
+                "const": "cudn"
+              }
+            },
+            "required": [
+              "provider"
+            ]
+          },
+          "then": {
+            "properties": {
+              "overlay": {
+                "enum": [
+                  "none"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "provider": {
+                "const": "none"
+              }
+            },
+            "required": [
+              "provider"
+            ]
+          },
+          "then": {
+            "properties": {
+              "overlay": {
+                "enum": [
+                  "none",
+                  "k8s_only"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "provider": {
+                "const": "netris"
+              }
+            },
+            "required": [
+              "provider"
+            ]
+          },
+          "then": {
+            "required": [
+              "netris"
+            ],
+            "properties": {
+              "netris": {
+                "required": [
+                  "controllerUrl",
+                  "credentials",
+                  "siteId",
+                  "tenantId",
+                  "tenantName"
+                ],
+                "properties": {
+                  "controllerUrl": {
+                    "minLength": 1,
+                    "pattern": "^https://[^/\\s:]+(:[0-9]+)?(/[^\\s]*)?$"
+                  },
+                  "credentials": {
+                    "required": [
+                      "username"
+                    ],
+                    "oneOf": [
+                      {
+                        "required": [
+                          "password"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "externalSecret"
+                        ],
+                        "properties": {
+                          "externalSecret": {
+                            "const": true
+                          }
+                        }
+                      }
+                    ],
+                    "properties": {
+                      "username": {
+                        "minLength": 1
+                      },
+                      "password": {
+                        "minLength": 1
+                      },
+                      "externalSecret": {
+                        "type": "boolean",
+                        "const": true,
+                        "description": "Use the externally managed netris-credentials Secret (NETRIS_PASSWORD key) in the AAP namespace instead of an inline password."
+                      }
+                    }
+                  },
+                  "siteId": {
+                    "minLength": 1
+                  },
+                  "tenantId": {
+                    "minLength": 1
+                  },
+                  "tenantName": {
+                    "minLength": 1
                   }
                 }
               }
             }
           }
+        }
+      ]
+    },
+    "networkingNetris": {
+      "type": "object",
+      "description": "Netris provider configuration.",
+      "properties": {
+        "controllerUrl": {
+          "type": "string",
+          "description": "Netris controller API URL (HTTPS only).",
+          "pattern": "^$|^https://[^/\\s:]+(:[0-9]+)?(/[^\\s]*)?$"
+        },
+        "credentials": {
+          "type": "object",
+          "properties": {
+            "username": {
+              "type": "string"
+            },
+            "password": {
+              "type": "string"
+            },
+            "externalSecret": {
+              "type": "boolean",
+              "const": true,
+              "description": "Use the externally managed netris-credentials Secret (NETRIS_PASSWORD key) in the AAP namespace instead of an inline password."
+            }
+          }
+        },
+        "siteId": {
+          "type": "string"
+        },
+        "tenantId": {
+          "type": "string"
+        },
+        "tenantName": {
+          "type": "string"
+        },
+        "mgmtVpcId": {
+          "type": "string"
+        },
+        "mgmtVpcName": {
+          "type": "string"
+        },
+        "resourceClassMap": {
+          "type": "string"
+        }
+      }
+    },
+    "networkingNetworkClass": {
+      "type": "object",
+      "description": "Optional NetworkClass override. Empty or partial values are merged with the provider-specific default generated by Helm. Explicit values take precedence.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Human-friendly short title. If omitted, Helm generates one from provider and overlay."
+        },
+        "description": {
+          "type": "string"
+        },
+        "fabricManager": {
+          "type": "string",
+          "description": "Fabric manager override. If omitted, Helm derives it from provider and overlay."
+        },
+        "k8sManager": {
+          "type": "string",
+          "description": "Kubernetes manager override. If omitted, Helm derives it from provider and overlay."
+        },
+        "isDefault": {
+          "type": "boolean",
+          "default": true
+        },
+        "defaults": {
+          "type": "object",
+          "properties": {
+            "virtualNetworkIPv4CIDR": {
+              "type": "string",
+              "description": "IPv4 CIDR for the auto-created tenant VirtualNetwork.",
+              "pattern": "^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)/(3[0-2]|[12]?[0-9])$"
+            },
+            "subnetIPv4CIDR": {
+              "type": "string",
+              "description": "IPv4 CIDR for the auto-created tenant Subnet.",
+              "pattern": "^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)/(3[0-2]|[12]?[0-9])$"
+            },
+            "enableNatGateway": {
+              "type": "boolean",
+              "description": "Auto-create a NATGateway for the tenant's default VirtualNetwork."
+            },
+            "egressRules": {
+              "type": "array",
+              "description": "Default egress rules for the auto-created tenant SecurityGroup.",
+              "items": {
+                "type": "object",
+                "required": [
+                  "protocol"
+                ],
+                "properties": {
+                  "protocol": {
+                    "type": "string",
+                    "enum": [
+                      "PROTOCOL_TCP",
+                      "PROTOCOL_UDP",
+                      "PROTOCOL_ICMP",
+                      "PROTOCOL_ALL"
+                    ]
+                  },
+                  "ipv4Cidr": {
+                    "type": "string",
+                    "description": "IPv4 CIDR for this rule.",
+                    "pattern": "^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)/(3[0-2]|[12]?[0-9])$"
+                  },
+                  "ipv6Cidr": {
+                    "type": "string",
+                    "description": "Optional IPv6 CIDR for this rule. Netris fabric is IPv4-only; CUDN/k8s_only may use IPv6.",
+                    "pattern": "^$|^[0-9a-fA-F:]+/(12[0-8]|1[01][0-9]|[1-9]?[0-9])$"
+                  },
+                  "portFrom": {
+                    "type": "integer",
+                    "description": "Starting port (TCP/UDP only).",
+                    "minimum": 1,
+                    "maximum": 65535
+                  },
+                  "portTo": {
+                    "type": "integer",
+                    "description": "Ending port (TCP/UDP only).",
+                    "minimum": 1,
+                    "maximum": 65535
+                  }
+                },
+                "allOf": [
+                  {
+                    "if": {
+                      "properties": {
+                        "protocol": {
+                          "enum": [
+                            "PROTOCOL_ICMP",
+                            "PROTOCOL_ALL"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "protocol"
+                      ]
+                    },
+                    "then": {
+                      "properties": {
+                        "portFrom": {
+                          "not": {}
+                        },
+                        "portTo": {
+                          "not": {}
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "k8sManager": {
+                "const": "k8s_only"
+              }
+            },
+            "required": [
+              "k8sManager"
+            ]
+          },
+          "then": {
+            "properties": {
+              "fabricManager": {
+                "type": "string",
+                "maxLength": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    "aapNetrisConfig": {
+      "type": "object",
+      "properties": {
+        "NETRIS_CONTROLLER_URL": {
+          "type": "string",
+          "pattern": "^$|^https://[^/\\s:]+(:[0-9]+)?(/[^\\s]*)?$",
+          "description": "Netris controller API URL. Must match between AAP instance groups."
+        },
+        "NETRIS_USERNAME": {
+          "type": "string",
+          "description": "Netris controller username. Must match between AAP instance groups."
+        },
+        "NETRIS_SITE_ID": {
+          "type": "string",
+          "description": "Netris site ID. Must match between AAP instance groups."
+        },
+        "NETRIS_TENANT_ID": {
+          "type": "string",
+          "description": "Netris tenant ID. Must match between AAP instance groups."
+        },
+        "NETRIS_TENANT_NAME": {
+          "type": "string",
+          "description": "Netris tenant name. Must match between AAP instance groups."
+        }
+      }
+    },
+    "globalExpertOverrides": {
+      "type": "object",
+      "description": "When true, the corresponding low-level values block is authoritative and the facade does not auto-fill that surface",
+      "properties": {
+        "aap": {
+          "type": "boolean",
+          "default": false
+        },
+        "networkClass": {
+          "type": "boolean",
+          "default": false
+        },
+        "networkManagers": {
+          "type": "boolean",
+          "default": false
         }
       }
     }

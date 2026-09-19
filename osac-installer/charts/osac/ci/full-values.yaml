@@ -1,5 +1,19 @@
 # Full scenario: everything enabled, exercises all template branches.
 
+global:
+  osacDeploymentId: "ci/osac"
+  networking:
+    provider: netris
+    overlay: none
+    netris:
+      controllerUrl: "https://test-ctl.netris.io"
+      credentials:
+        username: "testuser"
+        externalSecret: true
+      siteId: "1"
+      tenantId: "1"
+      tenantName: "Admin"
+
 ui:
   enabled: true
   externalHostname: osac-ui.example.com
@@ -67,6 +81,30 @@ aap:
     image: ghcr.io/osac-project/osac-aap:latest
   configAsCode:
     importBcmAgentsEnabled: false
+  instanceGroups:
+    clusterFulfillment:
+      enabled: true
+      config:
+        DNS_CLASS: "dns.route53.dns"
+        DNS_ZONE: "test.example.com"
+        EXTERNAL_ACCESS_BASE_DOMAIN: "test.example.com"
+        EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS: "test.example.com"
+        EXTERNAL_ACCESS_API_INTERNAL_NETWORK: "hypershift"
+        HOSTED_CLUSTER_BASE_DOMAIN: "test.example.com"
+        HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY: "SingleReplica"
+        HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: "SingleReplica"
+        IMPORT_AGENTS_NAMESPACE: "hardware-inventory"
+        IMPORT_AGENTS_INFRAENV_NAME: "infraenv"
+        IMPORT_AGENTS_PULL_SECRET_NAME: "pull-secret"
+        IMPORT_AGENTS_DISABLE_BMC_CERT_VERIFICATION: "true"
+        BCM_API_URL: "https://bcm-head.example.com:8081"
+        BCM_VALIDATE_CERTS: "false"
+        BCM_DISABLE_BMC_CERT_VERIFICATION: "true"
+      secret: {}
+    networkFulfillment:
+      enabled: true
+      config: {}
+      secret: {}
 
 csiDriver:
   enabled: true
@@ -93,42 +131,3 @@ dbMigrate:
   enabled: true
   image: ghcr.io/osac-project/fulfillment-service:latest
   dbUrlFile: "/etc/fulfillment-service/db/url"
-
-clusterFulfillment:
-  enabled: true
-  config:
-    NETWORK_CLASS: "netris"
-    NETWORK_STEPS_COLLECTION: "netris.steps"
-    DNS_CLASS: "dns.route53.dns"
-    DNS_ZONE: "test.example.com"
-    NETRIS_CONTROLLER_URL: "https://test-ctl.netris.io"
-    NETRIS_USERNAME: "testuser"
-    NETRIS_SITE_ID: "1"
-    NETRIS_TENANT_ID: "1"
-    NETRIS_TENANT_NAME: "Admin"
-    EXTERNAL_ACCESS_BASE_DOMAIN: "test.example.com"
-    EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS: "test.example.com"
-    EXTERNAL_ACCESS_API_INTERNAL_NETWORK: "hypershift"
-    HOSTED_CLUSTER_BASE_DOMAIN: "test.example.com"
-    HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY: "SingleReplica"
-    HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: "SingleReplica"
-    IMPORT_AGENTS_NAMESPACE: "hardware-inventory"
-    IMPORT_AGENTS_INFRAENV_NAME: "infraenv"
-    IMPORT_AGENTS_PULL_SECRET_NAME: "pull-secret"
-    IMPORT_AGENTS_DISABLE_BMC_CERT_VERIFICATION: "true"
-    BCM_API_URL: "https://bcm-head.example.com:8081"
-    BCM_VALIDATE_CERTS: "false"
-    BCM_DISABLE_BMC_CERT_VERIFICATION: "true"
-  secret:
-    NETRIS_PASSWORD: "test-password"
-
-networkFulfillment:
-  enabled: true
-  config:
-    NETRIS_CONTROLLER_URL: "https://test-ctl.netris.io"
-    NETRIS_USERNAME: "testuser"
-    NETRIS_SITE_ID: "1"
-    NETRIS_TENANT_ID: "1"
-    NETRIS_TENANT_NAME: "Admin"
-  secret:
-    NETRIS_PASSWORD: "test-password"

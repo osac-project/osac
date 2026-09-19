@@ -230,6 +230,11 @@ jobs:
       working-directory: osac-installer
       run: helm dependency build charts/osac/
 
+    - name: Test networking values
+      if: steps.should-run.outputs.run
+      working-directory: osac-installer
+      run: ./scripts/test-networking-values.sh
+
     - name: Run chart-testing lint
       if: steps.should-run.outputs.run
       working-directory: osac-installer

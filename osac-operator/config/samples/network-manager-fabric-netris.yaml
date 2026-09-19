@@ -24,5 +24,5 @@ data:
     Manages VLAN/VxLAN segments, ACLs, public IP allocation, and NAT gateways.
 
   # Comma-separated list of capabilities this manager supports.
-  # Valid values: ipv4, ipv6, dualStack, dpuSupport
+  # Current release: ipv4 only.
   capabilities: "ipv4"

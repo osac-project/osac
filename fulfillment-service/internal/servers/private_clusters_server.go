@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -390,6 +391,12 @@ func (s *PrivateClustersServer) Update(ctx context.Context,
 	}
 	err = s.validateAutoExternalIPImmutability(ctx, request)
 	if err != nil {
+		return
+	}
+	updateMask := request.GetUpdateMask()
+	if updateMask != nil && len(updateMask.GetPaths()) > 0 &&
+		updateIncludesField(updateMask, "spec.add_on_operators") && request.GetObject().GetSpec() == nil {
+		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object and spec are required")
 		return
 	}
 
@@ -767,6 +774,13 @@ func validateClusterTemplateImmutability(current, candidate *privatev1.Cluster, 
 		if len(newSpec.GetTemplateParameters()) == 0 {
 			newSpec.SetTemplateParameters(cloneMessage(oldSpec).GetTemplateParameters())
 		}
+		if len(newSpec.GetAddOnOperators()) == 0 {
+			operators := make([]*privatev1.AddOnOperatorReference, len(oldSpec.GetAddOnOperators()))
+			for i, operator := range oldSpec.GetAddOnOperators() {
+				operators[i] = cloneMessage(operator)
+			}
+			newSpec.SetAddOnOperators(operators)
+		}
 	}
 	if updateIncludesField(mask, "spec.template") && refKey(oldSpec.GetTemplate()) != refKey(newSpec.GetTemplate()) {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "cannot change spec.template from '%s' to '%s': template is immutable", refKey(oldSpec.GetTemplate()), refKey(newSpec.GetTemplate()))
@@ -782,6 +796,16 @@ func validateClusterTemplateImmutability(current, candidate *privatev1.Cluster, 
 		if newSpec != nil {
 			newSpec.SetCatalogItem(ref)
 		}
+	}
+
+	updatingAddOnOperators := mask == nil || updateIncludesField(mask, "spec.add_on_operators")
+	if updatingAddOnOperators && !slices.EqualFunc(oldSpec.GetAddOnOperators(), newSpec.GetAddOnOperators(), func(a, b *privatev1.AddOnOperatorReference) bool {
+		return proto.Equal(a, b)
+	}) {
+		return grpcstatus.Errorf(
+			grpccodes.InvalidArgument,
+			"cannot change spec.add_on_operators: add-on operators are immutable",
+		)
 	}
 	return nil
 }

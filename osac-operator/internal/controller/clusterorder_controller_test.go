@@ -73,7 +73,8 @@ var _ = Describe("ClusterOrder Controller", func() {
 						Namespace: "default",
 					},
 					Spec: v1alpha1.ClusterOrderSpec{
-						TemplateID: "test",
+						TemplateID:     "test",
+						AddOnOperators: []string{"operator-one"},
 					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
@@ -103,6 +104,10 @@ var _ = Describe("ClusterOrder Controller", func() {
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
+
+			stored := &v1alpha1.ClusterOrder{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, stored)).To(Succeed())
+			Expect(stored.Spec.AddOnOperators).To(Equal([]string{"operator-one"}))
 		})
 	})
 

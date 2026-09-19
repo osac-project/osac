@@ -107,7 +107,7 @@ var _ = Describe("update tenant annotation", func() {
 		DeferCleanup(ctrl.Finish)
 	})
 
-	It("should set tenant annotation when creating a new ClusterOrder CR", func() {
+	It("should set tenant annotation and operators when creating a new ClusterOrder CR", func() {
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
 
@@ -131,6 +131,10 @@ var _ = Describe("update tenant annotation", func() {
 			}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
 				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
+				AddOnOperators: []*privatev1.AddOnOperatorReference{
+					privatev1.AddOnOperatorReference_builder{Id: "operator-1", Name: "operator-one"}.Build(),
+					privatev1.AddOnOperatorReference_builder{Id: "operator-2", Name: "operator-two"}.Build(),
+				},
 			}.Build(),
 			Status: privatev1.ClusterStatus_builder{
 				State: privatev1.ClusterState_CLUSTER_STATE_PROGRESSING,
@@ -159,6 +163,7 @@ var _ = Describe("update tenant annotation", func() {
 		createdCR := list.Items[0]
 		Expect(createdCR.GetAnnotations()).To(HaveKeyWithValue(annotations.Tenant, tenantName))
 		Expect(createdCR.GetLabels()).To(HaveKeyWithValue(labels.ClusterOrderUuid, clusterID))
+		Expect(createdCR.Spec.AddOnOperators).To(Equal([]string{"operator-one", "operator-two"}))
 	})
 
 	It("should update ClusterOrder when node set size changes on a ready cluster", func() {

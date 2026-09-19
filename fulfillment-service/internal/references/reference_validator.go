@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -31,6 +32,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/fieldmask"
 	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
 )
 
@@ -178,12 +180,18 @@ func (v *ReferenceValidator) UnaryServer(ctx context.Context, request any, info 
 	if !isCreateOrUpdate(info.FullMethod) {
 		return handler(ctx, request)
 	}
-
-	if isObjectBeingDeleted(request) {
+	if err := validateCanonicalUpdateMask(request); err != nil {
+		return nil, err
+	}
+	if strings.HasSuffix(info.FullMethod, "/Update") && isMetadataOnlyUpdate(request) {
 		return handler(ctx, request)
 	}
 
-	err = v.validate(ctx, request, v.excludedReferencePathsByMethod[info.FullMethod])
+	excluded := v.excludedReferencePathsByMethod[info.FullMethod]
+	if strings.HasSuffix(info.FullMethod, "/Update") && !updateMaskIncludesField(request, "spec.add_on_operators") {
+		excluded = addExcludedReferencePath(excluded, "object.spec.add_on_operators")
+	}
+	err = v.validate(ctx, request, excluded)
 	if err != nil {
 		return
 	}
@@ -208,6 +216,11 @@ func (v *ReferenceValidator) validate(ctx context.Context, request any, excluded
 	tenant, project := extractTenantProject(message)
 
 	var violations []*errdetails.BadRequest_FieldViolation
+	if _, excluded := excluded["object.spec.add_on_operators"]; !excluded {
+		if hasPublicAddOnOperatorList(message) {
+			ctx = withPublishedLookupCache(ctx)
+		}
+	}
 	err := v.walkMessage(ctx, message.ProtoReflect(), nil, &violations, tenant, project, excluded)
 	if err != nil {
 		return err
@@ -234,6 +247,81 @@ func (v *ReferenceValidator) validate(ctx context.Context, request any, excluded
 	}
 
 	return nil
+}
+
+func addExcludedReferencePath(excluded map[string]struct{}, path string) map[string]struct{} {
+	result := maps.Clone(excluded)
+	if result == nil {
+		result = make(map[string]struct{}, 1)
+	}
+	result[path] = struct{}{}
+	return result
+}
+
+func updateMaskIncludesField(request any, prefix string) bool {
+	message, ok := request.(proto.Message)
+	if !ok {
+		return true
+	}
+	mask, ok := fieldmask.FromMessage(message)
+	if !ok {
+		return true
+	}
+	return fieldmask.Includes(mask, prefix)
+}
+
+func validateCanonicalUpdateMask(request any) error {
+	message, ok := request.(proto.Message)
+	if !ok {
+		return nil
+	}
+	mask, ok := fieldmask.FromMessage(message)
+	if !ok {
+		return nil
+	}
+	if !fieldmask.IsCanonical(mask) {
+		return grpcstatus.Error(grpccodes.InvalidArgument, "update mask contains a non-canonical path")
+	}
+	return nil
+}
+
+func hasPublicAddOnOperatorList(message proto.Message) bool {
+	msg := message.ProtoReflect()
+	objectField := msg.Descriptor().Fields().ByName("object")
+	if objectField == nil || objectField.Kind() != protoreflect.MessageKind {
+		return false
+	}
+	object := msg.Get(objectField).Message()
+	specField := object.Descriptor().Fields().ByName("spec")
+	if specField == nil || specField.Kind() != protoreflect.MessageKind {
+		return false
+	}
+	spec := object.Get(specField).Message()
+	operatorsField := spec.Descriptor().Fields().ByName("add_on_operators")
+	return isPublicAddOnOperatorList(operatorsField)
+}
+
+func isPublicAddOnOperatorList(field protoreflect.FieldDescriptor) bool {
+	return field != nil && field.IsList() && field.Kind() == protoreflect.MessageKind &&
+		field.Message().FullName() == protoreflect.FullName("osac.public.v1.AddOnOperatorReference")
+}
+
+func cachePublicAddOnOperatorIdentifiers(cache *publishedLookupCache, list protoreflect.List) {
+	if cache == nil || cache.identifiers != nil {
+		return
+	}
+	seen := make(map[string]struct{})
+	for i := 0; i < list.Len() && i < 32; i++ {
+		element := list.Get(i).Message()
+		idField := element.Descriptor().Fields().ByName("id")
+		nameField := element.Descriptor().Fields().ByName("name")
+		identifier := publishedLookupIdentifier{id: element.Get(idField).String(), name: element.Get(nameField).String()}
+		key := identifier.id + "\x00" + identifier.name
+		if _, exists := seen[key]; !exists {
+			seen[key] = struct{}{}
+			cache.identifiers = append(cache.identifiers, identifier)
+		}
+	}
 }
 
 // walkMessage recursively walks a protoreflect.Message, discovering and validating reference-typed
@@ -265,6 +353,10 @@ func (v *ReferenceValidator) walkMessage(ctx context.Context, msg protoreflect.M
 
 		if fd.IsList() {
 			list := val.List()
+			isPublicAddOnOperators := isPublicAddOnOperatorList(fd)
+			if cache := getPublishedLookupCache(ctx); cache != nil && isPublicAddOnOperators {
+				cachePublicAddOnOperatorIdentifiers(cache, list)
+			}
 			for i := 0; i < list.Len(); i++ {
 				elemMsg := list.Get(i).Message()
 				fullName := elemMsg.Descriptor().FullName()
@@ -496,24 +588,25 @@ func isCreateOrUpdate(method string) bool {
 	return strings.HasSuffix(method, "/Create") || strings.HasSuffix(method, "/Update")
 }
 
-func isObjectBeingDeleted(request any) bool {
+func isMetadataOnlyUpdate(request any) bool {
 	message, ok := request.(proto.Message)
 	if !ok {
 		return false
 	}
-	msg := message.ProtoReflect()
-	for _, name := range []protoreflect.Name{"object", "metadata"} {
-		fd := msg.Descriptor().Fields().ByName(name)
-		if fd == nil || fd.Kind() != protoreflect.MessageKind {
-			return false
-		}
-		msg = msg.Get(fd).Message()
-	}
-	fd := msg.Descriptor().Fields().ByName("deletion_timestamp")
-	if fd == nil {
+	mask, ok := fieldmask.FromMessage(message)
+	if !ok {
 		return false
 	}
-	return msg.Has(fd)
+	paths := mask.GetPaths()
+	if len(paths) == 0 {
+		return false
+	}
+	for _, path := range paths {
+		if path != "metadata" && !strings.HasPrefix(path, "metadata.") {
+			return false
+		}
+	}
+	return true
 }
 
 // isNotFoundErr checks whether an error represents a "not found" condition.

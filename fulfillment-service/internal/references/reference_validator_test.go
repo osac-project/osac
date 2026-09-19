@@ -26,6 +26,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	testsv1 "github.com/osac-project/osac/proto/gen/osac/tests/v1"
@@ -167,6 +168,37 @@ var _ = Describe("Reference validator", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(handlerCalled).To(BeTrue())
 			Expect(response).To(Equal("response"))
+		})
+
+		It("Does not skip Create reference validation for a deletion timestamp", func() {
+			validator.Register("osac.tests.v1.TestTargetReference", func(
+				ctx context.Context, tenant, project, id, name string,
+			) (*ResolvedRef, error) {
+				return nil, &errRefNotFound{identifier: name}
+			})
+			request := testsv1.CreateTestResourceWithRefsRequest_builder{
+				Object: testsv1.TestResourceWithRefs_builder{
+					Metadata: testsv1.Metadata_builder{
+						Tenant:            "tenant-a",
+						DeletionTimestamp: timestamppb.Now(),
+					}.Build(),
+					Spec: testsv1.TestRefSpec_builder{
+						Target: testsv1.TestTargetReference_builder{Name: "unpublished"}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build()
+
+			handlerCalled := false
+			_, err := validator.UnaryServer(
+				context.Background(), request,
+				&grpc.UnaryServerInfo{FullMethod: "/osac.tests.v1.TestService/Create"},
+				func(ctx context.Context, req any) (any, error) {
+					handlerCalled = true
+					return nil, nil
+				},
+			)
+			Expect(err).To(HaveOccurred())
+			Expect(handlerCalled).To(BeFalse())
 		})
 
 		It("Validates Update requests", func() {

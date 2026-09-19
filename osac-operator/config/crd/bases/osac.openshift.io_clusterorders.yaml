@@ -52,6 +52,13 @@ spec:
           spec:
             description: ClusterOrderSpec defines the desired state of ClusterOrder
             properties:
+              addOnOperators:
+                description: AddOnOperators lists the stable names of operators requested
+                  for the cluster.
+                items:
+                  type: string
+                maxItems: 32
+                type: array
               network:
                 description: Network contains cluster networking configuration.
                 properties:
@@ -163,6 +170,10 @@ spec:
             required:
             - templateID
             type: object
+            x-kubernetes-validations:
+            - message: addOnOperators is immutable
+              rule: has(self.addOnOperators) == has(oldSelf.addOnOperators) && (!has(self.addOnOperators)
+                || self.addOnOperators == oldSelf.addOnOperators)
           status:
             description: ClusterOrderStatus defines the observed state of ClusterOrder
             properties:

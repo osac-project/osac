@@ -25,6 +25,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/events"
+	"github.com/osac-project/osac/fulfillment-service/internal/references"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
@@ -200,5 +201,5 @@ func (s *AddOnOperatorsServer) addPublishedFilter(filter string) (string, error)
 	if err := validateCELSyntax(filter); err != nil {
 		return "", grpcstatus.Errorf(grpccodes.InvalidArgument, "invalid filter: %v", err)
 	}
-	return "(" + filter + ") && this.published", nil
+	return references.PublishedFilter(filter), nil
 }

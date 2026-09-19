@@ -20,6 +20,7 @@ import "cleanapi/cleanapi.proto";
 import "google/api/field_behavior.proto";
 import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
+import "osac/private/v1/add_on_operator_type.proto";
 import "osac/private/v1/cluster_catalog_item_type.proto";
 import "osac/private/v1/cluster_common_type.proto";
 import "osac/private/v1/cluster_template_type.proto";
@@ -197,6 +198,12 @@ message ClusterSpec {
   // must exist in the same tenant. When unset, a shared Secret may be inherited if the shared template provides it as
   // the default pull secret.
   SecretLocalReference pull_secret_secret = 11;
+
+  // Add-on operators requested for the cluster. The field is immutable after creation.
+  repeated AddOnOperatorReference add_on_operators = 12 [
+    (google.api.field_behavior) = IMMUTABLE,
+    (buf.validate.field).repeated.max_items = 32
+  ];
 }
 
 // The status contains the details of the cluster provided by the system.

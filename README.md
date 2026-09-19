@@ -21,6 +21,9 @@ documentation:
   presents a single CSI identity to Kubernetes and routes storage requests to vendor-specific
   CSI drivers (NetApp Trident, VAST, Pure Storage) based on storage tier resolution from the
   fulfillment service.
+- **[osac-metering/](osac-metering/README.md)** — the metering pipeline: watches the
+  fulfillment service's gRPC event stream, maps resource lifecycle events to CloudEvents via a
+  shared schema, and publishes them to Kafka for downstream billing adapters.
 
 See each subdirectory's `README.md` (and `docs/`, where present) for setup, build, test, and
 deployment instructions specific to that component. This repo's top-level

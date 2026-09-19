@@ -80,7 +80,7 @@
     },
     "cliImage": {
       "type": "string",
-      "description": "Default OpenShift CLI image used by hook jobs"
+      "description": "CLI image (with oc, jq, grpcurl, osac) used by hook jobs"
     },
     "dbInit": {
       "type": "object",

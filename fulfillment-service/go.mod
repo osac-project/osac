@@ -16,7 +16,7 @@ require (
 	github.com/gobuffalo/flect v1.0.3
 	github.com/google/go-querystring v1.2.0
 	github.com/google/uuid v1.6.0
-	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0
+	github.com/grpc-ecosystem/grpc-gateway/v2 v2.30.0
 	github.com/hashicorp/vault/api v1.23.0
 	github.com/jackc/pgerrcode v0.0.0-20250907135507-afb5586c32a6
 	github.com/jackc/puddle/v2 v2.2.2
@@ -27,7 +27,7 @@ require (
 	github.com/mattn/go-colorable v0.1.15
 	github.com/mattn/go-isatty v0.0.24
 	github.com/muesli/cancelreader v0.2.2
-	github.com/open-policy-agent/opa v1.18.2
+	github.com/open-policy-agent/opa v1.20.2
 	github.com/osac-project/osac/bare-metal-fulfillment-operator v0.0.0-00010101000000-000000000000
 	github.com/osac-project/osac/osac-operator/api v0.0.7
 	github.com/osac-project/osac/proto v0.0.0-00010101000000-000000000000
@@ -80,7 +80,7 @@ require (
 	github.com/dlclark/regexp2/v2 v2.2.1 // indirect
 	github.com/emicklei/go-restful/v3 v3.13.0 // indirect
 	github.com/evanphx/json-patch/v5 v5.9.11 // indirect
-	github.com/felixge/httpsnoop v1.0.4 // indirect
+	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.4 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.5 // indirect
 	github.com/go-openapi/jsonpointer v1.0.1 // indirect
@@ -137,7 +137,7 @@ require (
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/ryanuber/go-glob v1.0.0 // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
-	github.com/sirupsen/logrus v1.9.4 // indirect
+	github.com/sirupsen/logrus v1.10.2 // indirect
 	github.com/tchap/go-patricia/v2 v2.3.3 // indirect
 	github.com/valyala/fastjson v1.6.10 // indirect
 	github.com/vektah/gqlparser/v2 v2.5.37 // indirect

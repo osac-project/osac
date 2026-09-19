@@ -22,7 +22,7 @@ require (
 	github.com/google/pprof v0.0.0-20260906184651-6331bc6350fe // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
-	github.com/onsi/ginkgo/v2 v2.32.1 // indirect
+	github.com/onsi/ginkgo/v2 v2.32.2 // indirect
 	github.com/onsi/gomega v1.42.1 // indirect
 	github.com/rogpeppe/go-internal v1.15.0 // indirect
 	github.com/stretchr/testify v1.12.1 // indirect

@@ -93,8 +93,9 @@ INSTANCE_VALUES := values/$(PROFILE)/instance.yaml
 endif
 
 # Kind cluster create/delete routing. dev-full needs a rootful runtime (KubeVirt
-# chowns /dev/kvm), so it goes through the cross-platform wrapper; plain dev uses
-# bare kind (unchanged integration-test path).
+# chowns /dev/kvm), so it goes through the cross-platform wrapper. Apple Silicon
+# also uses the wrapper for both Kind profiles, keeping image build/load and Kind
+# provider selection aligned.
 KIND_RUNTIME := scripts/dev-full/kind-runtime.sh
 KIND_ARM64_CLI_IMAGE := quay.io/openshift/origin-cli:4.20.0
 
@@ -125,10 +126,10 @@ define kind-load-image
 	@if [ "$$(basename $(CONTAINER_TOOL))" = "podman" ]; then \
 		tmpfile=$$(mktemp /tmp/kind-image-XXXXXX.tar); \
 		$(CONTAINER_TOOL) save $(1) -o "$$tmpfile"; \
-		kind load image-archive "$$tmpfile" --name $(KIND_CLUSTER_NAME); \
+		$(KIND_RUNTIME) load image-archive "$$tmpfile" --name $(KIND_CLUSTER_NAME); \
 		rm -f "$$tmpfile"; \
 	else \
-		kind load docker-image $(1) --name $(KIND_CLUSTER_NAME); \
+		$(KIND_RUNTIME) load docker-image $(1) --name $(KIND_CLUSTER_NAME); \
 	fi
 endef
 
@@ -143,12 +144,12 @@ help: ## Display this help
 .PHONY: install-infra
 install-infra: ## Install infrastructure (PLATFORM= PROFILE= NS= required)
 ifeq ($(PLATFORM),kind)
-ifeq ($(PROFILE),dev-full)
+ifeq ($(HOST_IS_MAC_ARM),true)
 	@$(KIND_RUNTIME) check
 	@$(KIND_RUNTIME) create-cluster $(KIND_CLUSTER_NAME) $(KIND_CONFIG) $(KIND_KUBECONFIG)
-ifeq ($(HOST_IS_MAC_ARM),true)
-	@$(KIND_ARM64_CLI_IMAGE_SCRIPT) $(KIND_CLUSTER_NAME) $(KIND_ARM64_CLI_IMAGE)
-endif
+else ifeq ($(PROFILE),dev-full)
+	@$(KIND_RUNTIME) check
+	@$(KIND_RUNTIME) create-cluster $(KIND_CLUSTER_NAME) $(KIND_CONFIG) $(KIND_KUBECONFIG)
 else
 	@if kind get clusters | grep -q "^$(KIND_CLUSTER_NAME)$$"; then \
 		echo "Kind cluster '$(KIND_CLUSTER_NAME)' already exists"; \
@@ -157,6 +158,9 @@ else
 		kind create cluster --name $(KIND_CLUSTER_NAME) --config $(KIND_CONFIG) --wait 60s; \
 	fi
 	@kind export kubeconfig --name $(KIND_CLUSTER_NAME) --kubeconfig $(KIND_KUBECONFIG)
+endif
+ifeq ($(HOST_IS_MAC_ARM),true)
+	@$(KIND_ARM64_CLI_IMAGE_SCRIPT) $(KIND_CLUSTER_NAME) $(KIND_ARM64_CLI_IMAGE)
 endif
 	helm upgrade --install cert-manager oci://quay.io/jetstack/charts/cert-manager \
 		--version v1.20.0 --namespace cert-manager --create-namespace \
@@ -211,7 +215,9 @@ endif
 .PHONY: uninstall-infra
 uninstall-infra: ## Uninstall infrastructure (PLATFORM= PROFILE= NS= required)
 ifeq ($(PLATFORM),kind)
-ifeq ($(PROFILE),dev-full)
+ifeq ($(HOST_IS_MAC_ARM),true)
+	@$(KIND_RUNTIME) delete-cluster $(KIND_CLUSTER_NAME)
+else ifeq ($(PROFILE),dev-full)
 	@$(KIND_RUNTIME) delete-cluster $(KIND_CLUSTER_NAME)
 else
 	helm uninstall osac-infra --namespace osac-infra --ignore-not-found

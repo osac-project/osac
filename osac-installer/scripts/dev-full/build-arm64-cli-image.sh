@@ -1,29 +1,28 @@
 #!/usr/bin/env bash
 # Build and load the arm64 replacement for the OpenShift CLI image used by the
 # installer hooks. The image keeps the upstream tag so no chart values change
-# is needed.
+# is needed. Use kind-runtime.sh so Docker and Podman use the same provider for
+# both the build and the Kind image load.
 
 set -euo pipefail
 
 cluster_name=${1:?usage: $0 <kind-cluster-name> [image]}
 image=${2:-quay.io/openshift/origin-cli:4.20.0}
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+kind_runtime=${KIND_RUNTIME:-"${script_dir}/kind-runtime.sh"}
+archive=$(mktemp "${TMPDIR:-/tmp}/osac-cli-image-XXXXXX.tar")
+trap 'rm -f "${archive}"' EXIT
 
-command -v docker >/dev/null 2>&1 || {
-  echo "docker is required to build the Apple Silicon CLI image" >&2
-  exit 1
-}
-command -v kind >/dev/null 2>&1 || {
-  echo "kind is required to load the Apple Silicon CLI image" >&2
+[[ -x "${kind_runtime}" ]] || {
+  echo "kind runtime wrapper is not executable: ${kind_runtime}" >&2
   exit 1
 }
 
 echo "Building ${image} for linux/arm64..."
-docker build --platform linux/arm64 -t "${image}" - <<'EOF'
-FROM registry.fedoraproject.org/fedora:latest
-RUN dnf install -y tar gzip jq curl openssl python3 && \
-    curl -L https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/openshift-client-linux-arm64.tar.gz | tar -xz -C /usr/local/bin/ oc kubectl && \
-    chmod +x /usr/local/bin/oc /usr/local/bin/kubectl
-EOF
+"${kind_runtime}" container-build-file "${script_dir}/Containerfile.arm64-cli" \
+  --platform linux/arm64 -t "${image}"
+
+"${kind_runtime}" container save "${image}" -o "${archive}"
 
 echo "Loading ${image} into kind cluster ${cluster_name}..."
-kind load docker-image "${image}" --name "${cluster_name}"
+"${kind_runtime}" load image-archive "${archive}" --name "${cluster_name}"

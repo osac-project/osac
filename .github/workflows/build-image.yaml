@@ -89,6 +89,8 @@ jobs:
       - name: Run unit tests
         if: steps.should-run.outputs.run
         working-directory: osac-operator
+        env:
+          GODEBUG: http2client=0
         run: make test
       - name: Lint Helm charts
         if: steps.should-run.outputs.run

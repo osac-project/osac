@@ -33,6 +33,10 @@ runs:
   - name: Download Go modules
     shell: bash
     working-directory: ${{ inputs.working-directory }}
+    env:
+      # Work around HTTP/2 INTERNAL_ERROR stream resets from proxy.golang.org
+      # during long downloads (see osac-test-infra#543).
+      GODEBUG: http2client=0
     run: |
       for i in 1 2 3; do
         go mod download && exit 0
@@ -51,6 +55,8 @@ runs:
   - if: steps.ginkgo-cache.outputs.cache-hit != 'true'
     shell: bash
     working-directory: ${{ inputs.working-directory }}
+    env:
+      GODEBUG: http2client=0
     run: |
       module="github.com/onsi/ginkgo/v2"
       version=$(go list -f '{{ .Version }}' -m "${module}")

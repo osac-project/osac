@@ -9,6 +9,13 @@
     template_id: "{{ osac_job_vars.resource.spec.templateID }}"
     template_parameters: {}
     tenant_storage_classes: "{{ osac_job_vars.tenant_storage_classes | default([]) }}"
+    # Overridable so tests can stub out the real Helm install while still
+    # exercising this playbook's own when: gate and vars: mapping, matching
+    # the pattern osac.templates.ocp_virt_vm already uses for its
+    # create_step_* hooks.
+    csi_driver_install_default:
+      name: osac.service.csi_driver_install
+      tasks_from: main.yaml
 
   pre_tasks:
     - name: Show resource metadata

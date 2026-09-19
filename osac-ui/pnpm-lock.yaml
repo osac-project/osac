@@ -195,7 +195,7 @@ importers:
         version: 6.4.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@patternfly/react-table':
         specifier: ^6.4.0
-        version: 6.4.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+        version: 6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@patternfly/react-templates':
         specifier: ^6.4.1
         version: 6.5.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
@@ -989,12 +989,6 @@ packages:
 
   '@patternfly/react-styles@6.6.1':
     resolution: {integrity: sha512-hwByXA4wSpOIBJFtrYUdkFDIqvzHRP5yzvip/NHDlG0y/kXausOh5Z4m00SbTA6t7Hzudw5eU1lf+IOPCm5C6Q==}
-
-  '@patternfly/react-table@6.4.1':
-    resolution: {integrity: sha512-dceS5X1I5gmhRfEf6gsLIdFhrQd5hY+SWRIYzEvI19rrdN9VwCVWg+bhSsNv05pQnGs8uOlzYVBI25p7PJtFeA==}
-    peerDependencies:
-      react: ^17 || ^18 || ^19
-      react-dom: ^17 || ^18 || ^19
 
   '@patternfly/react-table@6.6.1':
     resolution: {integrity: sha512-owyLpkhFg28nQWkTA3jnhmbe8FOX5vXqZntbrjse4BfdaBTOzsBxPqtBzbf6o214Q8OQBzC2Atgz9C3j0yFscQ==}
@@ -4231,17 +4225,6 @@ snapshots:
   '@patternfly/react-styles@6.5.1': {}
 
   '@patternfly/react-styles@6.6.1': {}
-
-  '@patternfly/react-table@6.4.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)':
-    dependencies:
-      '@patternfly/react-core': 6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
-      '@patternfly/react-icons': 6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
-      '@patternfly/react-styles': 6.4.0
-      '@patternfly/react-tokens': 6.4.0
-      lodash: 4.18.1
-      react: 19.2.5
-      react-dom: 19.2.5(react@19.2.5)
-      tslib: 2.8.1
 
   '@patternfly/react-table@6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)':
     dependencies:

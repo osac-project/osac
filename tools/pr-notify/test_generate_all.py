@@ -7,8 +7,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from generate import build_dashboard_data
 from generate_all import main
-from models import PRData
+from models import ClassifiedPR, Config, PRData, PRStatus
 
 
 def _pr(author: str, repo: str = "osac-project/osac") -> PRData:
@@ -95,6 +96,58 @@ class TestGenerateAll(unittest.TestCase):
             self.assertEqual(filtered["title"], "Filtered")
             self.assertEqual(len(filtered["repos"][0]["prs"]), 1)
             self.assertEqual([repo["name"] for repo in other["repos"]], ["osac-project/osac-ui"])
+
+
+class TestBotAttributionFiltering(unittest.TestCase):
+    """Bot-authored PRs with attribution are included under the human author's filter."""
+
+    def _bot_pr(self) -> PRData:
+        return PRData(
+            title="OSAC-5309: automated update",
+            url="https://github.com/osac-project/osac/pull/99",
+            author="redhat-chai-bot",
+            repo="osac-project/osac",
+            created_at="2026-01-01T00:00:00Z",
+            is_draft=False,
+            labels=[],
+            reviews=[],
+            review_requests=[],
+            last_commit_date="2026-01-01T00:00:00Z",
+            ci_status="SUCCESS",
+            body="@janboll requested in [Slack thread](https://slack.com/t/1)",
+        )
+
+    @patch("generate.classify_prs")
+    def test_bot_pr_included_when_attributed_author_in_filter(self, mock_classify):
+        pr = self._bot_pr()
+        mock_classify.return_value = [
+            ClassifiedPR(pr=pr, status=PRStatus.NEEDS_REVIEW, age_days=1),
+        ]
+        config = Config(
+            repos=["osac-project/osac"],
+            filter_authors=["janboll"],
+        )
+
+        data = build_dashboard_data([pr], config)
+
+        self.assertEqual(len(data["repos"]), 1)
+        self.assertEqual(len(data["repos"][0]["prs"]), 1)
+        self.assertEqual(data["repos"][0]["prs"][0]["author"], "redhat-chai-bot")
+
+    @patch("generate.classify_prs")
+    def test_bot_pr_excluded_when_attributed_author_not_in_filter(self, mock_classify):
+        pr = self._bot_pr()
+        mock_classify.return_value = [
+            ClassifiedPR(pr=pr, status=PRStatus.NEEDS_REVIEW, age_days=1),
+        ]
+        config = Config(
+            repos=["osac-project/osac"],
+            filter_authors=["someoneelse"],
+        )
+
+        data = build_dashboard_data([pr], config)
+
+        self.assertEqual(data["repos"], [])
 
 
 if __name__ == "__main__":

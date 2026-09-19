@@ -49,6 +49,7 @@ const (
 
 	conditionReasonConfigurationApplied  = "ConfigurationApplied"
 	conditionMessageConfigurationApplied = "Controller has processed the current spec"
+	conditionMessageNoManagerConfigured  = "No dispatcher-resolvable network manager is configured"
 
 	labelValueTrue = "true"
 )

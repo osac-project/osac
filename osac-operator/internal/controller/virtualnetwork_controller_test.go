@@ -239,7 +239,7 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			Expect(latestJob.JobID).To(Equal("concurrent-job-123"))
 		})
 
-		It("should requeue and set a blocked Ready condition when the NetworkClass has no manager configured", func() {
+		It("should fail and set a blocked Ready condition when the NetworkClass has no manager configured", func() {
 			// "some-class" is registered with the dispatcher (see BeforeEach) but has
 			// neither a fabricManager nor a k8sManager set.
 			vnetNoStrategy := &osacv1alpha1.VirtualNetwork{
@@ -266,8 +266,8 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 					Namespace: vnetNoStrategy.Namespace,
 				},
 			}})
-			Expect(err).NotTo(HaveOccurred())
-			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(err).To(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeZero())
 
 			updated := &osacv1alpha1.VirtualNetwork{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: vnetNoStrategy.Name, Namespace: vnetNoStrategy.Namespace}, updated)).To(Succeed())
@@ -847,7 +847,7 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("netris"))
 		})
 
-		It("requeues and sets a blocked condition when the NetworkClass has no manager configured (no legacy fallback)", func() {
+		It("fails and sets a blocked condition when the NetworkClass has no manager configured (no legacy fallback)", func() {
 			disc, err := networkmanager.NewDiscovery(fakeDiscoveryClient, "osac")
 			Expect(err).NotTo(HaveOccurred())
 			reconciler.Resolver = dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
@@ -860,8 +860,8 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			result, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
 				NamespacedName: types.NamespacedName{Name: vnet.Name, Namespace: vnet.Namespace},
 			}})
-			Expect(err).NotTo(HaveOccurred())
-			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(err).To(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeZero())
 
 			updated := &osacv1alpha1.VirtualNetwork{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: vnet.Name, Namespace: vnet.Namespace}, updated)).To(Succeed())

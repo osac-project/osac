@@ -183,7 +183,7 @@ importers:
         version: link:../types
       '@patternfly/patternfly':
         specifier: ^6.4.0
-        version: 6.4.0
+        version: 6.6.1
       '@patternfly/react-charts':
         specifier: ^8.0.0
         version: 8.4.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(victory-area@37.3.6(react@19.2.5))(victory-axis@37.3.6(react@19.2.5))(victory-bar@37.3.6(react@19.2.5))(victory-box-plot@37.3.6(react@19.2.5))(victory-chart@37.3.6(react@19.2.5))(victory-core@37.3.6(react@19.2.5))(victory-create-container@37.3.6(react@19.2.5))(victory-cursor-container@37.3.6(react@19.2.5))(victory-group@37.3.6(react@19.2.5))(victory-legend@37.3.6(react@19.2.5))(victory-line@37.3.6(react@19.2.5))(victory-pie@37.3.6(react@19.2.5))(victory-scatter@37.3.6(react@19.2.5))(victory-stack@37.3.6(react@19.2.5))(victory-tooltip@37.3.6(react@19.2.5))(victory-voronoi-container@37.3.6(react@19.2.5))(victory-zoom-container@37.3.6(react@19.2.5))
@@ -828,9 +828,6 @@ packages:
 
   '@oxc-project/types@0.124.0':
     resolution: {integrity: sha512-VBFWMTBvHxS11Z5Lvlr3IWgrwhMTXV+Md+EQF0Xf60+wAdsGFTBx7X7K/hP4pi8N7dcm1RvcHwDxZ16Qx8keUg==}
-
-  '@patternfly/patternfly@6.4.0':
-    resolution: {integrity: sha512-4drFhg74sEc/fftark5wZevODIog17qR4pwLCdB3j5iK3Uu5oMA2SdLhsEeEQggalfnFzve/Km87MdVR0ghhvQ==}
 
   '@patternfly/patternfly@6.6.1':
     resolution: {integrity: sha512-8P9C1TmFk5y5s2/1XVjmP9JmSyDXDiNBwPZewhPizULtqlaRu+Evljx/X1HTSFrCNY0qgI1uDKy+NXiorIniyA==}
@@ -4132,8 +4129,6 @@ snapshots:
   '@novnc/novnc@1.5.0': {}
 
   '@oxc-project/types@0.124.0': {}
-
-  '@patternfly/patternfly@6.4.0': {}
 
   '@patternfly/patternfly@6.6.1': {}
 

@@ -15,6 +15,7 @@ package network
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"slices"
@@ -97,11 +98,22 @@ func (b *CorsMiddlewareBuilder) Build() (result func(http.Handler) http.Handler,
 		return
 	}
 
-	// If no allowed origins are set, use the default value:
-	allowedOrigins := slices.Clone(b.allowedOrigins)
+	// Require at least one allowed origin.
 	if len(b.allowedOrigins) == 0 {
-		allowedOrigins = []string{"*"}
+		err = fmt.Errorf(
+			"CORS allowed origins are required; use '--%s' to configure them",
+			corsFlagName(b.name, corsAllowedOriginsFlagSuffix),
+		)
+		return
 	}
+	if slices.Contains(b.allowedOrigins, "*") {
+		err = fmt.Errorf(
+			"wildcard '*' is not allowed in CORS origins; use '--%s' to set explicit origins",
+			corsFlagName(b.name, corsAllowedOriginsFlagSuffix),
+		)
+		return
+	}
+	allowedOrigins := slices.Clone(b.allowedOrigins)
 	b.logger.Info(
 		"CORS configuration",
 		slog.String("listener", b.name),

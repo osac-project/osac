@@ -125,8 +125,8 @@ message VolumeStatus {
   // CSI CreateVolume succeeds. Visible only through the private API.
   string vendor_volume_id = 3 [(cleanapi.field).private = true];
 
-  // Name of the StorageBackend that serves this volume. Resolved during tier resolution at
-  // creation time. Visible only through the private API.
+  // Provider of the StorageBackend that serves this volume (e.g. "vast"). Resolved during tier
+  // resolution at creation time. Visible only through the private API.
   string backend = 4 [(cleanapi.field).private = true];
 
   // Storage protocol used for this volume. Resolved during tier resolution at creation time.

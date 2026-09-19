@@ -45,7 +45,7 @@ func main() {
 		"Comma-separated backend=socketpath pairs for vendor node CSI sockets (e.g. ontap=/csi/trident/csi.sock)")
 	vendorControllersFlag := flag.String("vendor-controllers", "",
 		"Comma-separated backend=endpoint pairs for vendor CSI controllers, keyed "+
-			"by StorageBackend name (e.g. ontap=trident-csi-controller.osac-csi-backends.svc:50051). "+
+			"by StorageBackend provider (e.g. ontap=trident-csi-controller.osac-csi-backends.svc:50051). "+
 			"Use the value 'none' for node-local backends that need no attach (e.g. local=none)")
 	driverName := flag.String("driver-name", "csi.osac.openshift.io", "CSI driver name")
 

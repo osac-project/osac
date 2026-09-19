@@ -13,9 +13,9 @@ controller:
   vendorSockets: ""
   # Comma-separated backend=endpoint pairs for vendor CSI controllers, used to
   # proxy attach/detach (ControllerPublish/UnpublishVolume). The routing key is
-  # the "osac.backend" volume-context value, which is the StorageBackend name
+  # the "osac.backend" volume-context value, which is the StorageBackend provider
   # resolved from the volume's StorageTier — so each key MUST match a
-  # StorageBackend's metadata.name that a Cloud Provider Admin created. The names
+  # StorageBackend's spec.provider that a Cloud Provider Admin created. The values
   # below are the expected convention; align them with your actual backends.
   # Endpoints for network-attached vendors are the Services created by the
   # csi-backends chart (namespace osac-csi-backends, gRPC port 50051). Use the

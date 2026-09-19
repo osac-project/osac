@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/spf13/pflag"
@@ -72,6 +73,12 @@ type Reconciler[O dao.Object] struct {
 	getResponse    proto.Message
 	objectChannel  chan O
 	eventsClient   privatev1.EventsClient
+
+	// firstSyncDone gates the watch loop's initial sync kick. The sync loop
+	// already runs immediately on startup; kicking it again from watchEvents
+	// before the first sync completes causes the same objects to be enqueued
+	// twice, which can result in duplicate CRs (OSAC-4208).
+	firstSyncDone sync.Once
 }
 
 // NewReconciler creates a builder that can then be used to configure and create a controller.
@@ -471,7 +478,15 @@ func (c *Reconciler[O]) Start(ctx context.Context) error {
 }
 
 func (c *Reconciler[O]) watchEvents(ctx context.Context) error {
-	c.syncLoop.Kick()
+	// On the first call the sync loop is already running its initial pass,
+	// so kicking it would cause a redundant second full-list that enqueues
+	// every object twice (OSAC-4208). On reconnects (second+ call) the kick
+	// ensures a catch-up sync for events missed during the disconnect.
+	alreadyStarted := true
+	c.firstSyncDone.Do(func() { alreadyStarted = false })
+	if alreadyStarted {
+		c.syncLoop.Kick()
+	}
 	stream, err := c.eventsClient.Watch(ctx, &privatev1.EventsWatchRequest{
 		Filter: &c.eventFilter,
 	})

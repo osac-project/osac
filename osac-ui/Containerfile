@@ -4,7 +4,7 @@
 #   podman run --rm -p 8080:8080 -e FULFILLMENT_API_URL=https://fulfillment.example.com osac:latest
 
 # ── Stage 1: install SPA workspace dependencies ───────────────────────────
-FROM registry.access.redhat.com/ubi9/nodejs-22-minimal:9.8 AS deps
+FROM registry.access.redhat.com/ubi9/nodejs-22-minimal:9.8-1789639077 AS deps
 USER root
 WORKDIR /app
 

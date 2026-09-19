@@ -1131,6 +1131,18 @@ func (r *BareMetalInstanceReconciler) reconcileDeprovisioning(ctx context.Contex
 	result, done, err := provisioning.RunDeprovisioningLifecycle(
 		ctx, r.ProvisioningProvider, bareMetalInstance,
 		&bareMetalInstance.Status.ProvisioningJobs, provisioning.DefaultMaxJobHistory, r.ProvisionPollIntervalDuration,
+		func() bool {
+			return provisioning.CheckAPIServerForNonTerminalDeprovisionJob(
+				ctx, r.apiReaderOrClient(), client.ObjectKeyFromObject(bareMetalInstance),
+				&v1alpha1.BareMetalInstance{},
+				func(obj client.Object) []opv1alpha1.JobStatus {
+					return obj.(*v1alpha1.BareMetalInstance).Status.ProvisioningJobs
+				},
+			)
+		},
+		func() error {
+			return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(bareMetalInstance), bareMetalInstance.Status)
+		},
 	)
 	// DeprovisionSkipped is represented as !done + zero result + nil error; treat as done.
 	if !done && result.IsZero() && err == nil {

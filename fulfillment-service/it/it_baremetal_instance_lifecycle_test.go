@@ -145,6 +145,14 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 						Memory: privatev1.BareMetalMemorySpec_builder{
 							TotalGb: 16,
 						}.Build(),
+						NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
+							privatev1.BareMetalNetworkPortSpec_builder{
+								Name:  "data-0",
+								Role:  "fabric",
+								Type:  "Ethernet",
+								Speed: "25Gbps",
+							}.Build(),
+						},
 					}.Build(),
 					HostLabelSelector: privatev1.BareMetalLabelSelector_builder{
 						MatchLabels: map[string]string{

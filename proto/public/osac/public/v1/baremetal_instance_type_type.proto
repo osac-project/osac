@@ -55,6 +55,11 @@ message BareMetalHardwareSpec {
     message: "network port names must be unique"
     expression: "this.network_ports.map(p, p.name).unique()"
   };
+  option (buf.validate.message).cel = {
+    id: "hardware_spec.at_least_one_fabric_port"
+    message: "at least one network port with role 'fabric' is required"
+    expression: "this.network_ports.exists(p, p.role == 'fabric')"
+  };
 
   // CPU specifications.
   BareMetalCPUSpec cpu = 1 [(buf.validate.field).required = true];

@@ -89,6 +89,14 @@ var _ = Describe("Private bare metal instance types server", func() {
 								TotalGb: 128,
 								Type:    "DDR4",
 							}.Build(),
+							NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
+								privatev1.BareMetalNetworkPortSpec_builder{
+									Name:  "data-0",
+									Role:  "fabric",
+									Type:  "Ethernet",
+									Speed: "25Gbps",
+								}.Build(),
+							},
 						}.Build(),
 						HostLabelSelector: privatev1.BareMetalLabelSelector_builder{
 							MatchLabels: map[string]string{
@@ -128,6 +136,14 @@ var _ = Describe("Private bare metal instance types server", func() {
 								Memory: privatev1.BareMetalMemorySpec_builder{
 									TotalGb: 64,
 								}.Build(),
+								NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
+									privatev1.BareMetalNetworkPortSpec_builder{
+										Name:  "data-0",
+										Role:  "fabric",
+										Type:  "Ethernet",
+										Speed: "25Gbps",
+									}.Build(),
+								},
 							}.Build(),
 							HostLabelSelector: privatev1.BareMetalLabelSelector_builder{
 								MatchLabels: map[string]string{
@@ -174,6 +190,14 @@ var _ = Describe("Private bare metal instance types server", func() {
 									MemoryGb: int32Ptr(40),
 								}.Build(),
 							},
+							NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
+								privatev1.BareMetalNetworkPortSpec_builder{
+									Name:  "data-0",
+									Role:  "fabric",
+									Type:  "Ethernet",
+									Speed: "25Gbps",
+								}.Build(),
+							},
 						}.Build(),
 						HostLabelSelector: privatev1.BareMetalLabelSelector_builder{
 							MatchLabels: map[string]string{
@@ -216,6 +240,14 @@ var _ = Describe("Private bare metal instance types server", func() {
 							Memory: privatev1.BareMetalMemorySpec_builder{
 								TotalGb: 32,
 							}.Build(),
+							NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
+								privatev1.BareMetalNetworkPortSpec_builder{
+									Name:  "data-0",
+									Role:  "fabric",
+									Type:  "Ethernet",
+									Speed: "25Gbps",
+								}.Build(),
+							},
 						}.Build(),
 						HostLabelSelector: privatev1.BareMetalLabelSelector_builder{
 							MatchLabels: map[string]string{
@@ -266,6 +298,14 @@ var _ = Describe("Private bare metal instance types server", func() {
 							Memory: privatev1.BareMetalMemorySpec_builder{
 								TotalGb: 16,
 							}.Build(),
+							NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
+								privatev1.BareMetalNetworkPortSpec_builder{
+									Name:  "data-0",
+									Role:  "fabric",
+									Type:  "Ethernet",
+									Speed: "25Gbps",
+								}.Build(),
+							},
 						}.Build(),
 						HostLabelSelector: privatev1.BareMetalLabelSelector_builder{
 							MatchLabels: map[string]string{
@@ -310,6 +350,14 @@ var _ = Describe("Private bare metal instance types server", func() {
 							Memory: privatev1.BareMetalMemorySpec_builder{
 								TotalGb: 8,
 							}.Build(),
+							NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
+								privatev1.BareMetalNetworkPortSpec_builder{
+									Name:  "data-0",
+									Role:  "fabric",
+									Type:  "Ethernet",
+									Speed: "25Gbps",
+								}.Build(),
+							},
 						}.Build(),
 						HostLabelSelector: privatev1.BareMetalLabelSelector_builder{
 							MatchLabels: map[string]string{
@@ -346,6 +394,14 @@ var _ = Describe("Private bare metal instance types server", func() {
 								Memory: privatev1.BareMetalMemorySpec_builder{
 									TotalGb: 64,
 								}.Build(),
+								NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
+									privatev1.BareMetalNetworkPortSpec_builder{
+										Name:  "data-0",
+										Role:  "fabric",
+										Type:  "Ethernet",
+										Speed: "25Gbps",
+									}.Build(),
+								},
 							}.Build(),
 							HostLabelSelector: privatev1.BareMetalLabelSelector_builder{
 								MatchLabels: map[string]string{
@@ -393,6 +449,14 @@ var _ = Describe("Private bare metal instance types server", func() {
 								Memory: privatev1.BareMetalMemorySpec_builder{
 									TotalGb: 64,
 								}.Build(),
+								NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
+									privatev1.BareMetalNetworkPortSpec_builder{
+										Name:  "data-0",
+										Role:  "fabric",
+										Type:  "Ethernet",
+										Speed: "25Gbps",
+									}.Build(),
+								},
 							}.Build(),
 							HostLabelSelector: privatev1.BareMetalLabelSelector_builder{
 								MatchLabels: map[string]string{
@@ -440,6 +504,14 @@ var _ = Describe("Private bare metal instance types server", func() {
 								Memory: privatev1.BareMetalMemorySpec_builder{
 									TotalGb: 64,
 								}.Build(),
+								NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
+									privatev1.BareMetalNetworkPortSpec_builder{
+										Name:  "data-0",
+										Role:  "fabric",
+										Type:  "Ethernet",
+										Speed: "25Gbps",
+									}.Build(),
+								},
 							}.Build(),
 							HostLabelSelector: privatev1.BareMetalLabelSelector_builder{
 								MatchLabels: map[string]string{
@@ -487,6 +559,14 @@ var _ = Describe("Private bare metal instance types server", func() {
 								Memory: privatev1.BareMetalMemorySpec_builder{
 									TotalGb: 64,
 								}.Build(),
+								NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
+									privatev1.BareMetalNetworkPortSpec_builder{
+										Name:  "data-0",
+										Role:  "fabric",
+										Type:  "Ethernet",
+										Speed: "25Gbps",
+									}.Build(),
+								},
 							}.Build(),
 							HostLabelSelector: privatev1.BareMetalLabelSelector_builder{
 								MatchLabels: map[string]string{

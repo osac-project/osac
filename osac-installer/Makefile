@@ -229,20 +229,35 @@ endif
 ##@ Entity: Osac
 
 AAP_LICENSE_FILE ?= values/$(PROFILE)/license.zip
+# Customer-managed AAP. When AAP_URL is set, skip license.zip and do not
+# create osac-aap. Point the OSAC operator and BMF at this controller.
+AAP_URL ?=
+AAP_TOKEN_SECRET ?=
+AAP_TOKEN_SECRET_KEY ?= token
+
+EXISTING_AAP_HELM_ARGS :=
+ifneq ($(AAP_URL),)
+EXISTING_AAP_HELM_ARGS := --set-string global.existingAap.url=$(AAP_URL) --set-string global.existingAap.tokenSecret.name=$(AAP_TOKEN_SECRET) --set-string global.existingAap.tokenSecret.key=$(AAP_TOKEN_SECRET_KEY)
+endif
 
 .PHONY: install-osac
 install-osac: ## Install OSAC instance (PLATFORM= PROFILE= NS= required)
 	helm dependency build $(OSAC_CHART)
 ifneq ($(PLATFORM),kind)
-	@[ -n "$(AAP_LICENSE_FILE)" ] || { echo "ERROR: AAP_LICENSE_FILE is required for PLATFORM=openshift" >&2; exit 1; }
-	@[ -f "$(AAP_LICENSE_FILE)" ] || { echo "ERROR: AAP_LICENSE_FILE not found at $(AAP_LICENSE_FILE)" >&2; exit 1; }
 	oc create namespace $(NS) --dry-run=client -o yaml | oc apply -f -
+ifneq ($(AAP_URL),)
+	@[ -n "$(AAP_TOKEN_SECRET)" ] || { echo "ERROR: AAP_TOKEN_SECRET is required when AAP_URL is set" >&2; exit 1; }
+	@oc get secret "$(AAP_TOKEN_SECRET)" -n "$(NS)" >/dev/null || { echo "ERROR: secret $(AAP_TOKEN_SECRET) not found in namespace $(NS). Create it with key $(AAP_TOKEN_SECRET_KEY) before install-osac." >&2; exit 1; }
+else
+	@[ -n "$(AAP_LICENSE_FILE)" ] || { echo "ERROR: AAP_LICENSE_FILE is required for PLATFORM=openshift (or set AAP_URL for an existing AAP)" >&2; exit 1; }
+	@[ -f "$(AAP_LICENSE_FILE)" ] || { echo "ERROR: AAP_LICENSE_FILE not found at $(AAP_LICENSE_FILE)" >&2; exit 1; }
 	oc create secret generic config-as-code-manifest-ig \
 		--from-file=license.zip="$(AAP_LICENSE_FILE)" \
 		-n $(NS) --dry-run=client -o yaml | oc apply --server-side -f -
 	oc label secret config-as-code-manifest-ig \
 		osac.openshift.io/project=osac-aap \
 		-n $(NS) --overwrite
+endif
 	@bash -c 'source scripts/lib.sh && check_postgres_prerequisites "$(NS)" "$(INFRA_VALUES)"'
 	$(eval DOMAIN := $(shell oc get ingresses.config/cluster -o jsonpath='{.spec.domain}'))
 	@[ -n "$(DOMAIN)" ] || { echo "ERROR: Could not determine cluster domain. Is oc logged in?" >&2; exit 1; }
@@ -252,6 +267,7 @@ endif
 		--namespace $(NS) --create-namespace \
 		--set-string global.osacDeploymentId=$(NS)/osac \
 		$(if $(DOMAIN),--set service.externalHostname=fulfillment-api-$(NS).$(DOMAIN) --set service.internalHostname=fulfillment-internal-api-$(NS).$(DOMAIN) --set global.clusterDomain=$(DOMAIN)) \
+		$(EXISTING_AAP_HELM_ARGS) \
 		$(EXTRA_HELM_ARGS) \
 		--wait --timeout 40m
 

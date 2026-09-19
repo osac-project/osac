@@ -1,4 +1,5 @@
-{{- if .Values.aap.instanceGroups.publishTemplates.enabled }}
+{{- $existingAapUrl := include "osac.existingAap.url" . }}
+{{- if and .Values.aap.instanceGroups.publishTemplates.enabled (eq $existingAapUrl "") }}
 apiVersion: batch/v1
 kind: Job
 metadata:

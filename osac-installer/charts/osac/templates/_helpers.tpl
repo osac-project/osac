@@ -71,6 +71,18 @@ identity changes across upgrades and reinstall attempts.
 {{- end -}}
 
 {{/*
+Customer-managed AAP URL (global.existingAap.url). Empty means install osac-aap.
+*/}}
+{{- define "osac.existingAap.url" -}}
+{{- dig "existingAap" "url" "" (.Values.global | default dict) | trim -}}
+{{- end }}
+
+{{- define "osac.existingAap.tokenSecretName" -}}
+{{- $sec := dig "existingAap" "tokenSecret" (dict) (.Values.global | default dict) -}}
+{{- index $sec "name" | default "" -}}
+{{- end }}
+
+{{/*
 Wait-for-fulfillment init container.
 Uses .Values.cliImage for the container image.
 */}}

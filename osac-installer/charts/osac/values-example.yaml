@@ -57,7 +57,13 @@ operator:
 
     # [REQUIRED for provisioning] AAP API token for authentication.
     # Created by create-api-token Helm hook from the AAP admin credentials.
+    # Prefer tokenSecret for a customer-managed AAP (see global.existingAap).
     token: ""
+
+    # Existing Secret with the AAP API token. Used when token is empty.
+    tokenSecret:
+      name: ""
+      key: "token"
 
     # Skip TLS verification for AAP connection. Set to "false" in production
     # if using trusted certificates.

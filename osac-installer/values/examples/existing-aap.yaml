@@ -1,0 +1,17 @@
+# Customer-managed AAP: OSAC does not create AnsibleAutomationPlatform/osac-aap.
+# Create a token Secret in the OSAC namespace first, then either:
+#
+#   make install-osac AAP_URL=https://aap.example.com/api/controller \
+#     AAP_TOKEN_SECRET=my-aap-token PLATFORM=openshift PROFILE=full-ci NS=osac
+#
+# or helm -f this file (replace the placeholders):
+#
+# global.existingAap.url is the controller API URL the OSAC operator and BMF
+# use. The Secret must already exist in the release namespace.
+
+global:
+  existingAap:
+    url: "https://aap.example.com/api/controller"
+    tokenSecret:
+      name: "my-aap-token"
+      key: "token"

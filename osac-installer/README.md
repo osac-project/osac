@@ -144,11 +144,24 @@ make install-infra PLATFORM=openshift PROFILE=<profile> NS=<namespace>   # Infra
 make install-osac  PLATFORM=openshift PROFILE=<profile> NS=<namespace>   # OSAC application
 ```
 
+To use an AAP controller that already exists (do not create `osac-aap`):
+
+```bash
+# Token Secret must already exist in NS
+oc create secret generic my-aap-token --from-literal=token=<token> -n <namespace>
+
+make install-osac PLATFORM=openshift PROFILE=<profile> NS=<namespace> \
+  AAP_URL=https://aap.example.com/api/controller \
+  AAP_TOKEN_SECRET=my-aap-token
+```
+
 | Variable | Description |
 |----------|-------------|
 | `PLATFORM` | `kind` or `openshift` (required) |
 | `PROFILE` | `dev`, `dev-full`, `vmaas-ci`, `bmaas-ci`, `caas-ci`, or `full-ci` (required; `dev-full` is kind only) |
 | `NS` | Target namespace (required) |
+| `AAP_URL` | Existing AAP controller URL. When set, skip license.zip and do not create `osac-aap`. Requires `AAP_TOKEN_SECRET`. |
+| `AAP_TOKEN_SECRET` | Secret in `NS` that holds the AAP token (`AAP_TOKEN_SECRET_KEY`, default `token`) |
 | `EXTRA_HELM_ARGS` | Extra `--set`/`--set-string` args appended to helm commands |
 
 #### Full local dev environment (`PROFILE=dev-full`, kind only)

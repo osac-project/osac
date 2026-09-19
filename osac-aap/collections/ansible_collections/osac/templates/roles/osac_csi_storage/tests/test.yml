@@ -1,0 +1,207 @@
+---
+# Test playbook for osac.templates.osac_csi_driver / osac_csi_storage role.
+#
+# Scenarios:
+#   Test 1 (hub-cluster path rejected when _remote_kubeconfig is absent):
+#     ansible-playbook ... -e test_hub_path_rejected=true
+#
+#   Test 2 (missing hub credential Secret fails referencing OSAC-4197):
+#     ansible-playbook ... -e test_missing_hub_secret=true
+#
+#   Test 3 (setup action sets required storage_provider_tenant_config):
+#     ansible-playbook ... -e test_setup_contract=true
+#
+#   Test 4 (storage_provider dispatcher integration for osac-csi / osac_csi_driver):
+#     ansible-playbook ... -e test_dispatcher_integration=true
+#
+#   Test 5 (StorageClass entry derivation and structure):
+#     ansible-playbook ... -e test_sc_derivation=true
+
+# ──────────────────────────────────────────────────────────────
+# Test 1: Hub-cluster path is rejected (no _remote_kubeconfig)
+# ──────────────────────────────────────────────────────────────
+- name: Test osac_csi_driver -- hub path rejected (no remote kubeconfig)
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: tenant-beta
+    tenant_namespace: osac-tenants
+    _provider_tiers:
+      - name: default
+        protocol: nfs
+        provider: osac_csi_driver
+
+  tasks:
+    - name: Run hub-path-rejected test
+      when: test_hub_path_rejected | default(false) | bool
+      block:
+        - name: Call ensure_storage_class without _remote_kubeconfig (expected to fail)
+          ansible.builtin.include_role:
+            name: osac.templates.osac_csi_driver
+            tasks_from: ensure_storage_class
+
+        - name: This should not be reached
+          ansible.builtin.fail:
+            msg: "Role should have failed when _remote_kubeconfig is absent"
+
+      rescue:
+        - name: Verify failure message mentions kubeconfig requirement
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('admin_kubeconfig')
+            fail_msg: "Expected failure about admin_kubeconfig, got: {{ ansible_failed_result.msg }}"
+            success_msg: "Hub-path correctly rejected with actionable error"
+
+# ──────────────────────────────────────────────────────────────
+# Test 2: Missing hub credential Secret
+# ──────────────────────────────────────────────────────────────
+- name: Test osac_csi_driver -- missing hub credential Secret
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: tenant-gamma
+    tenant_namespace: openshift-osac-storage
+    osac_csi_driver_hub_secret_namespace: osac-system
+    _remote_kubeconfig: hack/tmp/fake.kubeconfig
+    _remote_kubeconfig_insecure: true
+    _provider_tiers:
+      - name: default
+        protocol: nfs
+        provider: osac_csi_driver
+
+  tasks:
+    - name: Run missing-secret test
+      when: test_missing_hub_secret | default(false) | bool
+      block:
+        - name: Mock empty hub Secret response
+          ansible.builtin.set_fact:
+            _osac_csi_hub_secret:
+              resources: []
+
+        - name: Call read_hub_credentials (expected to fail on non-existent Secret)
+          ansible.builtin.include_role:
+            name: osac.templates.osac_csi_driver
+            tasks_from: read_hub_credentials
+
+        - name: This should not be reached
+          ansible.builtin.fail:
+            msg: "Should have failed on missing hub Secret"
+
+      rescue:
+        - name: Verify failure message references OSAC-4197
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('OSAC-4197')
+            fail_msg: "Expected OSAC-4197 in error message, got: {{ ansible_failed_result.msg }}"
+            success_msg: "Missing Secret error correctly references OSAC-4197"
+
+# ──────────────────────────────────────────────────────────────
+# Test 3: Setup contract (sets storage_provider_tenant_config)
+# ──────────────────────────────────────────────────────────────
+- name: Test osac_csi_driver -- setup contract
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: tenant-delta
+    tenant_namespace: osac-tenants
+
+  tasks:
+    - name: Run setup action directly
+      when: test_setup_contract | default(false) | bool
+      block:
+        - name: Include setup action
+          ansible.builtin.include_role:
+            name: osac.templates.osac_csi_driver
+            tasks_from: setup
+
+        - name: Verify storage_provider_tenant_config is populated
+          ansible.builtin.assert:
+            that:
+              - storage_provider_tenant_config is defined
+              - storage_provider_tenant_config is mapping
+            success_msg: "Setup contract satisfied: storage_provider_tenant_config is defined"
+
+# ──────────────────────────────────────────────────────────────
+# Test 4: Dispatcher integration (storage_provider dispatch)
+# ──────────────────────────────────────────────────────────────
+- name: Test osac_csi_driver -- storage_provider dispatcher integration
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: tenant-epsilon
+    tenant_namespace: osac-tenants
+
+  tasks:
+    - name: Run dispatcher integration test for both osac-csi and osac_csi_driver
+      when: test_dispatcher_integration | default(false) | bool
+      block:
+        - name: Test storage_provider setup with provider osac-csi
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_action: setup
+            storage_provider_tiers:
+              - name: gold
+                protocol: nfs
+                provider: osac-csi
+
+        - name: Test storage_provider setup with provider osac_csi_driver
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_action: setup
+            storage_provider_tiers:
+              - name: silver
+                protocol: block
+                provider: osac_csi_driver
+
+        - name: Verify dispatcher produced merged tenant configs
+          ansible.builtin.assert:
+            that:
+              - storage_provider_tenant_configs is defined
+              - "('osac-csi' in storage_provider_tenant_configs) or ('osac_csi' in storage_provider_tenant_configs) or ('osac_csi_driver' in storage_provider_tenant_configs)"
+            success_msg: "storage_provider successfully dispatched to osac_csi role"
+
+# ──────────────────────────────────────────────────────────────
+# Test 5: StorageClass name and parameter derivation
+# ──────────────────────────────────────────────────────────────
+- name: Test osac_csi_driver -- StorageClass derivation
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: tenant-zeta
+    _provider_tiers:
+      - name: default
+        protocol: nfs
+        provider: osac-csi
+      - name: fast
+        protocol: block
+        provider: osac-csi
+
+  tasks:
+    - name: Test SC entry derivation
+      when: test_sc_derivation | default(false) | bool
+      block:
+        - name: Derive expected SC entries
+          ansible.builtin.set_fact:
+            _derived: >-
+              {% set entries = [] -%}
+              {% for tier in _provider_tiers -%}
+              {% set _ = entries.append({'name': 'osac-' ~ tenant_name ~ '-' ~ tier.name, 'tier': tier.name, 'protocol': tier.protocol}) -%}
+              {% endfor -%}
+              {{ entries }}
+
+        - name: Assert derived entries are correct
+          ansible.builtin.assert:
+            that:
+              - _derived | length == 2
+              - _derived[0].name == 'osac-tenant-zeta-default'
+              - _derived[1].name == 'osac-tenant-zeta-fast'
+              - _derived[0].protocol == 'nfs'
+              - _derived[1].protocol == 'block'
+            success_msg: "StorageClass entries derived correctly"

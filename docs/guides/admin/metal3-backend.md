@@ -352,7 +352,7 @@ oc get baremetalhost -n osac-host-inventory \
 Install OSAC using the Helm installer with the Metal3 backend enabled. See
 [Enabling Metal3 in the Helm chart](#enabling-metal3-in-the-helm-chart) for
 the chart values and the
-[Helm Deployment Guide](https://github.com/osac-project/osac/blob/main/osac-installer/docs/helm-deployment-guide.md)
+[Helm Deployment Guide](https://github.com/osac-project/osac/blob/main/docs/guides/installation/helm-deployment-guide.md)
 for the full installation procedure.
 
 ```bash
@@ -409,7 +409,7 @@ state.
 
 - [Bare Metal Fulfillment Enhancement Proposal](https://github.com/osac-project/enhancement-proposals/tree/main/enhancements/bare-metal-fulfillment)
 - [AAP Provisioning Architecture](../../architecture/aap-provisioning/)
-- [Helm Deployment Guide](https://github.com/osac-project/osac/blob/main/osac-installer/docs/helm-deployment-guide.md) — full OSAC installation procedure
+- [Helm Deployment Guide](https://github.com/osac-project/osac/blob/main/docs/guides/installation/helm-deployment-guide.md) — full OSAC installation procedure
 - [bare-metal-fulfillment-operator Helm chart](https://github.com/osac-project/osac/tree/main/bare-metal-fulfillment-operator/charts/operator) — chart values and templates
 - [bm_host_provisioning role](https://github.com/osac-project/osac/tree/main/osac-aap/collections/ansible_collections/osac/templates/roles/bm_host_provisioning) — AAP provisioning role source
 - [Metal3 Project](https://metal3.io/)

@@ -42,7 +42,7 @@ type VolumesServerBuilder struct {
 var _ publicv1.VolumesServer = (*VolumesServer)(nil)
 
 // VolumesServer is the public-facing gRPC server for volumes. It wraps the PrivateVolumesServer
-// and maps between public and private protobuf types, filtering out private-only fields (backend,
+// and maps between public and private protobuf types, filtering out private-only fields (provider,
 // protocol, hub, vendor_volume_id, vendor_context). Create, Update, and Delete delegate to the
 // private server after applying public-layer validation (block-protocol check, state guards).
 type VolumesServer struct {
@@ -54,7 +54,7 @@ type VolumesServer struct {
 	// delegate is the private volumes server that performs the actual operations.
 	delegate privatev1.VolumesServer
 
-	// tierResolver resolves a storage tier name to its backend and protocol.
+	// tierResolver resolves a storage tier name to its provider and protocol.
 	tierResolver TierResolverFunc
 
 	// inMapper maps public Volume messages to private Volume messages (strict mode).
@@ -101,7 +101,7 @@ func (b *VolumesServerBuilder) SetMetricsRegisterer(value prometheus.Registerer)
 }
 
 // SetTierResolver sets the tier resolver function used to resolve storage tier names to their
-// backend and protocol. This is mandatory for CUD operations.
+// provider and protocol. This is mandatory for CUD operations.
 func (b *VolumesServerBuilder) SetTierResolver(value TierResolverFunc) *VolumesServerBuilder {
 	b.tierResolver = value
 	return b

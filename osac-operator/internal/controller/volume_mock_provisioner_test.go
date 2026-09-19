@@ -31,7 +31,7 @@ type MockVendorProvisioner struct {
 
 	// LastCreateReq and LastDeleteReq record the most recent request the
 	// controller passed in, so tests can assert the controller populates the
-	// vendor request fields (tenant, tier, protocol, backend, ...) correctly.
+	// vendor request fields (tenant, tier, protocol, provider, ...) correctly.
 	LastCreateReq VendorCreateVolumeRequest
 	LastDeleteReq VendorDeleteVolumeRequest
 
@@ -50,7 +50,7 @@ func NewMockVendorProvisioner() *MockVendorProvisioner {
 }
 
 // CreateVolume returns a deterministic vendor volume ID composed of
-// "mock-" plus a monotonic counter. Backend and protocol are fixed
+// "mock-" plus a monotonic counter. Protocol is fixed
 // strings suitable for test assertions.
 func (m *MockVendorProvisioner) CreateVolume(_ context.Context, req VendorCreateVolumeRequest) (VendorCreateVolumeResponse, error) {
 	m.LastCreateReq = req
@@ -60,7 +60,6 @@ func (m *MockVendorProvisioner) CreateVolume(_ context.Context, req VendorCreate
 	}
 	return VendorCreateVolumeResponse{
 		VendorVolumeID: fmt.Sprintf("mock-%d", n),
-		Backend:        "mock-backend",
 		Protocol:       "Block",
 	}, nil
 }

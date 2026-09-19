@@ -31,19 +31,15 @@ import (
 )
 
 // TierResolution holds the result of resolving a StorageTier name to a
-// concrete backend, provider, and protocol. Backend is the StorageBackend's provider
-// (e.g. "vast"), matching Volume.status.backend's documented contract and the
-// vendor routing keys ("vast", "pure", "ontap", ...) that osac-csi-driver's
-// Helm-templated --vendor-controllers/--vendor-sockets maps use -- those maps
-// can't be keyed by the StorageBackend's server-generated id, since that id
-// doesn't exist yet when the chart values are authored.
+// provider and protocol. Provider is the StorageBackend's provider (e.g. "vast"),
+// matching the vendor routing keys ("vast", "pure", "ontap", ...) that
+// osac-csi-driver's Helm-templated --vendor-controllers/--vendor-sockets maps use.
 type TierResolution struct {
-	Backend  string
 	Provider string
 	Protocol privatev1.StorageProtocol
 }
 
-// TierResolverFunc resolves a StorageTier name to a backend and protocol.
+// TierResolverFunc resolves a StorageTier name to a provider and protocol.
 type TierResolverFunc func(ctx context.Context, tierName string) (*TierResolution, error)
 
 type PrivateVolumesServerBuilder struct {
@@ -180,12 +176,7 @@ func (s *PrivateVolumesServer) Create(ctx context.Context,
 	// populated only by the operator feedback path after vendor provisioning.
 	vol.GetStatus().SetVendorContext(nil)
 	vol.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_CREATING)
-	vol.GetStatus().SetBackend(resolved.Backend)
-	provider := resolved.Provider
-	if provider == "" {
-		provider = resolved.Backend
-	}
-	vol.GetStatus().SetProvider(provider)
+	vol.GetStatus().SetProvider(resolved.Provider)
 	vol.GetStatus().SetProtocol(resolved.Protocol)
 
 	vol.SetId("")

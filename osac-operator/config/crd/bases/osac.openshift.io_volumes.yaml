@@ -29,8 +29,8 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
-    - jsonPath: .status.backend
-      name: Backend
+    - jsonPath: .status.provider
+      name: Provider
       priority: 1
       type: string
     - jsonPath: .status.vendorVolumeID
@@ -91,7 +91,7 @@ spec:
                   rule: self == oldSelf
               storageTier:
                 description: |-
-                  StorageTier is the name of the StorageTier that determines which backend
+                  StorageTier is the name of the StorageTier that determines which provider
                   and protocol serve this volume.
                 minLength: 1
                 type: string
@@ -128,11 +128,6 @@ spec:
           status:
             description: VolumeStatus defines the observed state of Volume.
             properties:
-              backend:
-                description: |-
-                  Backend is the name of the StorageBackend that serves this volume.
-                  Resolved during tier resolution at creation time.
-                type: string
               conditions:
                 description: Conditions holds an array of metav1.Condition that describe
                   the state of the Volume.

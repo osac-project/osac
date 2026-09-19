@@ -44,7 +44,7 @@ import (
 // (which holds identifiers shared with the feedback controller).
 const osacVolumeFinalizer = "osac.openshift.io/volume-finalizer"
 
-// statusStampPollInterval is the requeue delay when backend/protocol have not
+// statusStampPollInterval is the requeue delay when provider/protocol have not
 // yet been stamped by the fulfillment-service. Kept short because the stamp
 // typically lands within a second of CR creation.
 const statusStampPollInterval = 2 * time.Second
@@ -60,7 +60,7 @@ type VendorProvisioner interface {
 }
 
 // VendorCreateVolumeRequest carries the provider-neutral parameters needed to
-// provision a volume. Provider, Backend, and Protocol are resolved by the
+// provision a volume. Provider and Protocol are resolved by the
 // fulfillment-service before the Volume CR is created; the operator passes
 // them through to the selected implementation without re-resolving.
 // Tenant and Tier let the vendor implementation select the per-tenant
@@ -69,7 +69,6 @@ type VendorProvisioner interface {
 type VendorCreateVolumeRequest struct {
 	Name       string
 	Provider   string
-	Backend    string
 	Tenant     string
 	Tier       string
 	SizeGiB    int64
@@ -82,7 +81,6 @@ type VendorCreateVolumeRequest struct {
 // feedback controller syncs back to the fulfillment-service inventory.
 type VendorCreateVolumeResponse struct {
 	VendorVolumeID string
-	Backend        string
 	Protocol       string
 
 	// VendorContext holds the backend-specific attach parameters used for this vendor's
@@ -99,7 +97,6 @@ type VendorCreateVolumeResponse struct {
 type VendorDeleteVolumeRequest struct {
 	VendorVolumeID string
 	Provider       string
-	Backend        string
 	Tenant         string
 }
 
@@ -197,13 +194,13 @@ func (r *VolumeReconciler) handleUpdate(ctx context.Context, vol *v1alpha1.Volum
 		}
 	}
 
-	// Backend and protocol are stamped by the fulfillment-service in a separate
+	// Provider and protocol are stamped by the fulfillment-service in a separate
 	// Status().Update() after it creates the Volume CR. If the operator reconciles
 	// before that stamp lands, these fields are empty. Requeue WITHOUT writing
 	// status (no phase change) to avoid clobbering FS's concurrent stamp with a
 	// resourceVersion bump.
-	if vol.Status.Backend == "" || vol.Status.Protocol == "" {
-		log.Info("backend/protocol not yet populated by fulfillment-service, requeueing")
+	if vol.Status.Provider == "" || vol.Status.Protocol == "" {
+		log.Info("provider/protocol not yet populated by fulfillment-service, requeueing")
 		return ctrl.Result{RequeueAfter: statusStampPollInterval}, nil
 	}
 
@@ -260,7 +257,6 @@ func (r *VolumeReconciler) handleProvisioning(ctx context.Context, vol *v1alpha1
 	resp, err := provisioner.CreateVolume(ctx, VendorCreateVolumeRequest{
 		Name:       vol.Name,
 		Provider:   provider,
-		Backend:    vol.Status.Backend,
 		Tenant:     vol.GetAnnotations()[osacTenantKey],
 		Tier:       vol.Spec.StorageTier,
 		SizeGiB:    vol.Spec.SizeGiB,
@@ -276,7 +272,6 @@ func (r *VolumeReconciler) handleProvisioning(ctx context.Context, vol *v1alpha1
 	}
 
 	vol.Status.VendorVolumeID = resp.VendorVolumeID
-	vol.Status.Backend = resp.Backend
 	vol.Status.Protocol = v1alpha1.VolumeProtocol(resp.Protocol)
 	vol.Status.VendorContext = resp.VendorContext
 	vol.Status.Phase = v1alpha1.VolumePhaseReady
@@ -285,7 +280,6 @@ func (r *VolumeReconciler) handleProvisioning(ctx context.Context, vol *v1alpha1
 	log.Info("vendor provisioning succeeded",
 		"vendorVolumeID", resp.VendorVolumeID,
 		"provider", provider,
-		"backend", resp.Backend,
 		"protocol", resp.Protocol,
 	)
 
@@ -327,7 +321,6 @@ func (r *VolumeReconciler) handleDelete(ctx context.Context, vol *v1alpha1.Volum
 		err = provisioner.DeleteVolume(ctx, VendorDeleteVolumeRequest{
 			VendorVolumeID: vol.Status.VendorVolumeID,
 			Provider:       provider,
-			Backend:        vol.Status.Backend,
 			Tenant:         vol.GetAnnotations()[osacTenantKey],
 		})
 		if err != nil {
@@ -346,15 +339,9 @@ func (r *VolumeReconciler) handleDelete(ctx context.Context, vol *v1alpha1.Volum
 	return ctrl.Result{}, nil
 }
 
-// resolvedVolumeProvider returns the explicit provider when present. The
-// backend fallback keeps deletion and reconciliation of legacy Volume CRs
-// created before status.provider was added operational; current objects always
-// carry the provider stamped by the fulfillment-service.
+// resolvedVolumeProvider returns the provider stamped by the fulfillment-service.
 func resolvedVolumeProvider(vol *v1alpha1.Volume) string {
-	if vol.Status.Provider != "" {
-		return vol.Status.Provider
-	}
-	return vol.Status.Backend
+	return vol.Status.Provider
 }
 
 func copyVolumeTopology(topology *v1alpha1.VolumeTopology) v1alpha1.VolumeTopology {

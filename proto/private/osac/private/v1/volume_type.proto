@@ -76,7 +76,7 @@ enum VolumeState {
 //
 // Volumes are created through the private API, typically by the OSAC CSI driver in response to a
 // PVC on a tenant cluster. The spec captures the user's requested configuration (tier, size,
-// access mode), while the status tracks the system-resolved state (vendor volume ID, backend,
+// access mode), while the status tracks the system-resolved state (vendor volume ID, provider,
 // protocol).
 message Volume {
   // Unique identifier of the volume.
@@ -100,7 +100,7 @@ message VolumeTopology {
 
 // Defines the desired configuration for a Volume. All fields are immutable after creation.
 message VolumeSpec {
-  // Name of the StorageTier that determines which backend and protocol serve this volume.
+  // Name of the StorageTier that determines which provider and protocol serve this volume.
   string storage_tier = 1 [(buf.validate.field).string.min_len = 1];
 
   // Requested storage capacity in gibibytes (GiB).
@@ -124,10 +124,6 @@ message VolumeStatus {
   // Opaque identifier assigned by the vendor storage array. Set by the osac-operator after vendor
   // CSI CreateVolume succeeds. Visible only through the private API.
   string vendor_volume_id = 3 [(cleanapi.field).private = true];
-
-  // Name of the StorageBackend that serves this volume. Resolved during tier resolution at
-  // creation time. Visible only through the private API.
-  string backend = 4 [(cleanapi.field).private = true];
 
   // Storage protocol used for this volume. Resolved during tier resolution at creation time.
   // Visible only through the private API.

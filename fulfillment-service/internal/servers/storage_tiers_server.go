@@ -29,14 +29,6 @@ import (
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
-// storageTierUnforwardableFilterFields: public field paths that live under backends[0] privately, so
-// filters referencing them can't be forwarded (protocol is excluded -- its path matches on both schemas).
-var storageTierUnforwardableFilterFields = []string{
-	"this.spec.max_read_bandwidth_mbs",
-	"this.spec.max_write_bandwidth_mbs",
-	"this.spec.encryption_enabled",
-}
-
 type StorageTiersServerBuilder struct {
 	logger             *slog.Logger
 	notifier           events.Notifier
@@ -121,7 +113,7 @@ func (b *StorageTiersServerBuilder) Build() (result *StorageTiersServer, err err
 		return
 	}
 
-	// spec is ignored here since it's hand-flattened in toPublicTier, not copied field-by-name:
+	// spec is ignored here since it's hand-mapped in toPublicTier, not copied field-by-name:
 	outMapper, err := NewGenericMapper[*privatev1.StorageTier, *publicv1.StorageTier]().
 		SetLogger(b.logger).
 		SetStrict(false).
@@ -167,24 +159,11 @@ func (s *StorageTiersServer) List(ctx context.Context,
 	request *publicv1.StorageTiersListRequest) (response *publicv1.StorageTiersListResponse, err error) {
 	filter := request.GetFilter()
 	if filter != "" {
-		// Layer 1 (security): reject filters that don't even compile against the public schema. This
+		// Reject filters that don't compile against the public schema. This
 		// is the fix for the CEL-filter oracle described on the filterValidator field.
 		_, err = s.filterValidator.Translate(ctx, filter)
 		if err != nil {
 			err = grpcstatus.Errorf(grpccodes.InvalidArgument, "invalid filter: %v", err)
-			return
-		}
-
-		// Layer 2 (correctness): reject filters that compile publicly but reference a field whose
-		// path doesn't match privately (see storageTierUnforwardableFilterFields).
-		var unforwardable bool
-		unforwardable, err = filterReferencesAnyField(filter, storageTierUnforwardableFilterFields...)
-		if err != nil {
-			err = grpcstatus.Errorf(grpccodes.InvalidArgument, "invalid filter: %v", err)
-			return
-		}
-		if unforwardable {
-			err = grpcstatus.Errorf(grpccodes.InvalidArgument, "filtering by bandwidth or encryption is not yet supported")
 			return
 		}
 	}
@@ -254,8 +233,8 @@ func (s *StorageTiersServer) Get(ctx context.Context,
 	return
 }
 
-// toPublicTier flattens the private tier's single backend into the public spec; errMsg lets List/Get
-// report their own wording without leaking internal detail on failure.
+// toPublicTier maps a private tier to the public shape; errMsg lets List/Get report their own
+// wording without leaking internal detail on failure.
 func (s *StorageTiersServer) toPublicTier(ctx context.Context, privateTier *privatev1.StorageTier,
 	errMsg string) (*publicv1.StorageTier, error) {
 	publicTier := &publicv1.StorageTier{}
@@ -271,13 +250,9 @@ func (s *StorageTiersServer) toPublicTier(ctx context.Context, privateTier *priv
 			slog.String("id", privateTier.GetId()), slog.Int("count", len(backends)))
 		return nil, grpcstatus.Errorf(grpccodes.Internal, "%s", errMsg)
 	}
-	backend := backends[0]
 	publicTier.SetSpec(publicv1.StorageTierSpec_builder{
-		Description:          privateTier.GetSpec().GetDescription(),
-		Protocol:             s.toPublicStorageProtocol(ctx, privateTier.GetSpec().GetProtocol()),
-		MaxReadBandwidthMbs:  backend.GetMaxReadBandwidthMbs(),
-		MaxWriteBandwidthMbs: backend.GetMaxWriteBandwidthMbs(),
-		EncryptionEnabled:    backend.GetEncryptionEnabled(),
+		Description: privateTier.GetSpec().GetDescription(),
+		Protocol:    s.toPublicStorageProtocol(ctx, privateTier.GetSpec().GetProtocol()),
 	}.Build())
 	return publicTier, nil
 }

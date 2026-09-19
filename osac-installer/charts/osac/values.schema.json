@@ -772,6 +772,7 @@
                       "description": "Network implementation class",
                       "enum": [
                         "",
+                        "ci",
                         "esi",
                         "netris",
                         "nico",
@@ -795,6 +796,7 @@
                       "description": "Fully-qualified Ansible role name of the DNS driver",
                       "enum": [
                         "",
+                        "dns.noop.dns",
                         "dns.route53.dns"
                       ]
                     },

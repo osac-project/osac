@@ -35,6 +35,14 @@ keycloak:
   enabled: true
   realmOverwrite: true
   hostname: "keycloak.keycloak.svc.cluster.local"
+  # uiUrl is the browser-facing base URL of the OSAC UI (scheme://host[:port],
+  # no trailing path). It is substituted into the osac-ui client's rootUrl,
+  # redirectUris and webOrigins in realm.json, which Keycloak validates the
+  # authorization-code redirect_uri against -- a relative value there breaks
+  # browser login with "Invalid parameter: redirect_uri" (OSAC-3884).
+  # The default matches the kind dev-full UI HTTPRoute; on OpenShift
+  # `make install-infra` overrides it with the osac-ui Route URL.
+  uiUrl: "http://ui.osac.localhost:8080"
   adminUsername: admin
   adminPassword: admin
   defaultUserPassword: foobar

@@ -36,6 +36,21 @@ CSI_DRIVER_SECRET=$(oc get secret "${SECRET_NAME}" -n "${NAMESPACE}" -o jsonpath
 REALM_ADMIN_USERNAME="${REALM_ADMIN_USERNAME:-admin}"
 REALM_ADMIN_PASSWORD="${REALM_ADMIN_PASSWORD:?REALM_ADMIN_PASSWORD must be set}"
 
+# OSAC-3884: the osac-ui client's rootUrl/redirectUris/webOrigins must be
+# absolute and match the browser-facing UI URL. Keycloak does not resolve a
+# relative redirectUri (e.g. "/*") against the Route hostname, so an absolute
+# callback from the UI is rejected with "Invalid parameter: redirect_uri".
+# The value comes from .Values.keycloak.uiUrl via the initContainer's env.
+OSAC_UI_URL="${OSAC_UI_URL:?OSAC_UI_URL must be set (Helm value keycloak.uiUrl)}"
+OSAC_UI_URL="${OSAC_UI_URL%/}"
+# Restricted to scheme://host[:port]: anything outside this charset would
+# either need JSON escaping before landing in realm.json, or silently produce
+# a redirectUri Keycloak will not match.
+[[ "${OSAC_UI_URL}" =~ ^https?://[A-Za-z0-9._-]+(:[0-9]+)?$ ]] || {
+    echo "ERROR: OSAC_UI_URL must be an absolute scheme://host[:port] URL with no path, got '${OSAC_UI_URL}'" >&2
+    exit 1
+}
+
 # REALM_ADMIN_USERNAME/PASSWORD are user-supplied Helm values (unlike the
 # auto-generated base64 client secrets above) substituted into JSON string
 # values, so each needs two escaping passes: first full JSON string escaping
@@ -58,6 +73,7 @@ sed \
     -e "s#__OSAC_CSI_DRIVER_CLIENT_SECRET__#${CSI_DRIVER_SECRET}#" \
     -e "s#__OSAC_REALM_ADMIN_USERNAME__#$(escape_sed_replacement "$(json_escape_string "${REALM_ADMIN_USERNAME}")")#" \
     -e "s#__OSAC_REALM_ADMIN_PASSWORD__#$(escape_sed_replacement "$(json_escape_string "${REALM_ADMIN_PASSWORD}")")#" \
+    -e "s#__OSAC_UI_URL__#$(escape_sed_replacement "${OSAC_UI_URL}")#g" \
     "${RAW_REALM}" > "${RESOLVED_REALM}"
 
 echo "Realm secrets resolved -> ${RESOLVED_REALM}"

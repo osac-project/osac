@@ -100,6 +100,14 @@ oc apply -f prerequisites/keycloak/service/ -n keycloak
 oc wait --for=condition=Available deployment/keycloak-service -n keycloak --timeout=600s
 ```
 
+Before applying `prerequisites/keycloak/service/`, set `OSAC_UI_URL` in
+`prerequisites/keycloak/service/deployment.yaml` to the browser-facing URL of
+the OSAC UI Route (`https://osac-ui-<namespace>.<cluster ingress domain>`).
+It is substituted into the `osac-ui` client's `rootUrl`, `redirectUris` and
+`webOrigins`; the placeholder value makes browser login fail with
+`Invalid parameter: redirect_uri`. The Helm chart sets this automatically from
+`keycloak.uiUrl`.
+
 ### Step 5: Red Hat AAP Operator
 
 Ansible Automation Platform for provisioning workflows.

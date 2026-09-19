@@ -80,6 +80,11 @@ spec:
           CSI_DRIVER_SECRET=$(oc get secret keycloak-client-secrets -o jsonpath='{.data.osac-csi-driver}' | base64 -d)
           [[ -n "${CONTROLLER_SECRET}" && -n "${ADMIN_SECRET}" && -n "${CSI_DRIVER_SECRET}" ]] || { echo "ERROR: keycloak-client-secrets is missing osac-controller, osac-admin, or osac-csi-driver" >&2; exit 1; }
           [[ -n "${REALM_ADMIN_USERNAME}" && -n "${REALM_ADMIN_PASSWORD}" ]] || { echo "ERROR: keycloak-admin-credentials is missing admin-username or admin-password" >&2; exit 1; }
+          # OSAC-3884: Keycloak rejects an absolute browser callback when the
+          # osac-ui client's redirectUris are relative, so the UI's real URL is
+          # substituted into rootUrl/redirectUris/webOrigins here.
+          OSAC_UI_URL="${OSAC_UI_URL%/}"
+          [[ "${OSAC_UI_URL}" =~ ^https?://[A-Za-z0-9._-]+(:[0-9]+)?$ ]] || { echo "ERROR: OSAC_UI_URL must be an absolute scheme://host[:port] URL with no path, got '${OSAC_UI_URL}'" >&2; exit 1; }
           json_escape_string() { python3 -c "import json,sys; print(json.dumps(sys.argv[1])[1:-1])" "$1"; }
           escape_sed_replacement() { printf '%s' "$1" | sed -e 's/[\&#]/\\&/g'; }
           sed \
@@ -88,8 +93,14 @@ spec:
             -e "s#__OSAC_CSI_DRIVER_CLIENT_SECRET__#${CSI_DRIVER_SECRET}#" \
             -e "s#__OSAC_REALM_ADMIN_USERNAME__#$(escape_sed_replacement "$(json_escape_string "${REALM_ADMIN_USERNAME}")")#" \
             -e "s#__OSAC_REALM_ADMIN_PASSWORD__#$(escape_sed_replacement "$(json_escape_string "${REALM_ADMIN_PASSWORD}")")#" \
+            -e "s#__OSAC_UI_URL__#$(escape_sed_replacement "${OSAC_UI_URL}")#g" \
             /realm-raw/realm.json > /realm/realm.json
         env:
+        # Browser-facing base URL of the OSAC UI Route, e.g.
+        # https://osac-ui-<namespace>.<cluster ingress domain>. Edit this before
+        # applying the manifest -- the Helm chart sets it from keycloak.uiUrl.
+        - name: OSAC_UI_URL
+          value: "https://osac-ui-osac.apps.example.com"
         - name: REALM_ADMIN_USERNAME
           valueFrom:
             secretKeyRef:

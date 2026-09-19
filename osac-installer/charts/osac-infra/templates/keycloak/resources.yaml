@@ -390,6 +390,8 @@ spec:
           value: /realm-raw/realm.json
         - name: REALM_OUTPUT_PATH
           value: /realm/realm.json
+        - name: OSAC_UI_URL
+          value: {{ .Values.keycloak.uiUrl | quote }}
         - name: REALM_ADMIN_USERNAME
           valueFrom:
             secretKeyRef:

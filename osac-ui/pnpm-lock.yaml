@@ -158,7 +158,7 @@ importers:
     dependencies:
       '@bufbuild/protobuf':
         specifier: 2.12.0
-        version: 2.15.0
+        version: 2.12.0
     devDependencies:
       '@bufbuild/buf':
         specifier: 1.73.0
@@ -198,7 +198,7 @@ importers:
         version: 6.4.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@patternfly/react-templates':
         specifier: ^6.4.1
-        version: 6.5.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+        version: 6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@tanstack/react-query':
         specifier: ^5.0.0
         version: 5.99.2(react@19.2.5)
@@ -395,6 +395,9 @@ packages:
     resolution: {integrity: sha512-W3whb4P1y3Hs9bqwCu9++W1v1ofHZ3dBUCe6JSZq0Ff5OK5UKKZuMN4iunPbgdyXY4+4ujEYf2ESrN/6MbcFSQ==}
     engines: {node: '>=12'}
     hasBin: true
+
+  '@bufbuild/protobuf@2.12.0':
+    resolution: {integrity: sha512-B/XlCaFIP8LOwzo+bz5uFzATYokcwCKQcghqnlfwSmM5eX/qTkvDBnDPs+gXtX/RyjxJ4DRikECcPJbyALA8FA==}
 
   '@bufbuild/protobuf@2.15.0':
     resolution: {integrity: sha512-DAheWUkVr/SJTWCc+lg9dhY0eN4SaWlf4+bG1KzHeXbnqt0AfB/NX0Z+VunGlM1ki1B4zVvye27MpKh/svySUA==}
@@ -984,9 +987,6 @@ packages:
   '@patternfly/react-styles@6.4.0':
     resolution: {integrity: sha512-EXmHA67s5sy+Wy/0uxWoUQ52jr9lsH2wV3QcgtvVc5zxpyBX89gShpqv4jfVqaowznHGDoL6fVBBrSe9BYOliQ==}
 
-  '@patternfly/react-styles@6.5.1':
-    resolution: {integrity: sha512-yQMzUbbf6qYM/v3JbPvaCJTgxRbOKoEw229XZmnnM8gDvp8ECiI7LqihrAOK/NA6T6M3DDgsRMd2JurUBhPDEw==}
-
   '@patternfly/react-styles@6.6.1':
     resolution: {integrity: sha512-hwByXA4wSpOIBJFtrYUdkFDIqvzHRP5yzvip/NHDlG0y/kXausOh5Z4m00SbTA6t7Hzudw5eU1lf+IOPCm5C6Q==}
 
@@ -1002,17 +1002,14 @@ packages:
       react: ^17 || ^18 || ^19
       react-dom: ^17 || ^18 || ^19
 
-  '@patternfly/react-templates@6.5.1':
-    resolution: {integrity: sha512-uzUZfWt5FpaFBz0/c8mhZJb9jdGdwUVAGsSUUW4cxADnLoMNq6p5uSFZvcFF6EAjBqA5BaORrDIJKTDe4344hQ==}
+  '@patternfly/react-templates@6.6.1':
+    resolution: {integrity: sha512-QpFOE5xFONDNT507hzVCnvpzCLt8j1jXoPBW7WZhgRayeLpZHKgYewOkPZMy9pi6MBf0Q9dybjjX7OC4l/dW/w==}
     peerDependencies:
       react: ^17 || ^18 || ^19
       react-dom: ^17 || ^18 || ^19
 
   '@patternfly/react-tokens@6.4.0':
     resolution: {integrity: sha512-iZthBoXSGQ/+PfGTdPFJVulaJZI3rwE+7A/whOXPGp3Jyq3k6X52pr1+5nlO6WHasbZ9FyeZGqXf4fazUZNjbw==}
-
-  '@patternfly/react-tokens@6.5.1':
-    resolution: {integrity: sha512-zwepLsIQTL0Lf4R2/PIBOk1m+pm0hYVT3lktf2H4+Y87eRIifwMRb19c+pr4hj4ckGvHs+WxwjTfTj2Qqwn5rw==}
 
   '@patternfly/react-tokens@6.6.1':
     resolution: {integrity: sha512-t7dDEJMnO3QkdIKyjbyKJznVYki9ONZG27Cn/9RXwaM0lDGCrgQEJXy2XoVUCdYhIdXZu+TGSEqXeNFYUyZECg==}
@@ -3791,6 +3788,8 @@ snapshots:
       '@bufbuild/buf-win32-arm64': 1.73.0
       '@bufbuild/buf-win32-x64': 1.73.0
 
+  '@bufbuild/protobuf@2.12.0': {}
+
   '@bufbuild/protobuf@2.15.0': {}
 
   '@connectrpc/connect-web@2.2.0(@bufbuild/protobuf@2.15.0)(@connectrpc/connect@2.1.2(@bufbuild/protobuf@2.15.0))':
@@ -4228,8 +4227,6 @@ snapshots:
 
   '@patternfly/react-styles@6.4.0': {}
 
-  '@patternfly/react-styles@6.5.1': {}
-
   '@patternfly/react-styles@6.6.1': {}
 
   '@patternfly/react-table@6.4.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)':
@@ -4254,19 +4251,17 @@ snapshots:
       react-dom: 19.2.5(react@19.2.5)
       tslib: 2.8.1
 
-  '@patternfly/react-templates@6.5.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)':
+  '@patternfly/react-templates@6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)':
     dependencies:
       '@patternfly/react-core': 6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@patternfly/react-icons': 6.6.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
-      '@patternfly/react-styles': 6.5.1
-      '@patternfly/react-tokens': 6.5.1
+      '@patternfly/react-styles': 6.6.1
+      '@patternfly/react-tokens': 6.6.1
       react: 19.2.5
       react-dom: 19.2.5(react@19.2.5)
       tslib: 2.8.1
 
   '@patternfly/react-tokens@6.4.0': {}
-
-  '@patternfly/react-tokens@6.5.1': {}
 
   '@patternfly/react-tokens@6.6.1': {}
 

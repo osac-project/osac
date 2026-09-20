@@ -1063,12 +1063,13 @@
       "enabled": true,
       "alwaysDisplayInConsole": false,
       "clientAuthenticatorType": "client-secret",
-       "redirectUris": [
-         "*"
-       ],
-       "webOrigins": [
-         "*"
-       ],
+      "redirectUris": [
+        "http://ui.osac.localhost:8080/callback",
+        "http://ui.osac.localhost:8080/*"
+      ],
+      "webOrigins": [
+        "http://ui.osac.localhost:8080"
+      ],
       "notBefore": 0,
       "bearerOnly": false,
       "consentRequired": false,

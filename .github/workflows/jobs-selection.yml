@@ -231,10 +231,13 @@ jobs:
               head_sha: $head_sha,
               deterministic: {vmaas: $vmaas_clear, caas: $caas_clear, bmaas: $bmaas_clear},
               # The ONLY signal that may ever authorize a real "skip" for an
-              # E2E suite (see select-jobs.py's decide()) -- true means every
-              # changed file falls inside that suite's reviewed, provably-
-              # irrelevant allow-list (ci-filters.yml's *-outside-known-safe
-              # filters, inverted once already at this job's own outputs).
+              # E2E suite (see decide() in select-jobs.py) -- true means every
+              # changed file falls inside the reviewed, provably-irrelevant
+              # allow-list for that suite (the *-outside-known-safe filters
+              # in ci-filters.yml, inverted once already at this job output).
+              # No apostrophes in this comment block: it lives inside a
+              # single-quoted jq program string in a bash run: step, and a
+              # literal quote here would terminate that string early.
               exclusive_skip: {vmaas: $vmaas_exclusive_skip, caas: $caas_exclusive_skip, bmaas: $bmaas_exclusive_skip},
               deterministic_files: {vmaas: $vmaas_clear_files, caas: $caas_clear_files, bmaas: $bmaas_clear_files},
               ambiguous_files: $ambiguous_files,

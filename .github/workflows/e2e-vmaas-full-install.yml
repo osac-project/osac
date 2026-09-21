@@ -116,8 +116,30 @@ jobs:
       # reports success. Unreadiness skips the gate so the required check
       # stays pending instead of failing.
       # tests/e2e/** is the full-install suite (OSAC-3593); still run when that
-      # tree changes even though `code` ignores **/tests/**.
-      should-run: ${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group') || steps.filter.outputs.code == 'true' || steps.filter.outputs.e2e-suite == 'true' }}
+      # tree changes even though `e2e-code` ignores **/tests/**. Filter
+      # definitions live in the shared ../filters/ci-filters.yml.
+      #
+      # CI_GATING_ENABLED == 'false' is an emergency global override forcing
+      # this suite to run regardless of any filter result below.
+      should-run: ${{ vars.CI_GATING_ENABLED == 'false' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || steps.filter.outputs.e2e-code == 'true' || steps.filter.outputs.e2e-suite == 'true' }}
+      # Real skip-gating (Phase 2 of the CI-gating rollout plan): true only
+      # when EVERY changed file falls inside vmaas's reviewed,
+      # provably-irrelevant allow-list (ci-filters.yml's
+      # vmaas-outside-known-safe, inverted here -- see that file's own
+      # comment on why the raw filter is named for what it detects, not for
+      # the skip decision itself). Never derived from AI judgment alone, at
+      # any confidence -- mirrors the invariant select-jobs.py's decide()
+      # already enforces on the informational Jobs Selection path. Forced
+      # false on any non-pull_request/merge_group event (the filter step
+      # below never runs then, so its outputs are empty -- fail safe to
+      # "not skippable" rather than skip a scheduled/dispatched run) and by
+      # the CI_GATING_ENABLED kill switch.
+      vmaas-exclusive-skip: >-
+        ${{
+          vars.CI_GATING_ENABLED != 'false' &&
+          (github.event_name == 'pull_request' || github.event_name == 'merge_group') &&
+          steps.filter.outputs.vmaas-outside-known-safe != 'true'
+        }}
     steps:
       # dorny/paths-filter uses git diff on merge_group (not the PR Files API),
       # so the repo must be checked out with enough history for base..head.
@@ -131,35 +153,7 @@ jobs:
         id: filter
         with:
           predicate-quantifier: 'every'
-          filters: |
-            code:
-              - '**'
-              - '!**/OWNERS'
-              - '!**/LICENSE'
-              - '!**/*.md'
-              - '!**/docs/**'
-              - '!**/.claude/**'
-              - '!**/.cursor/**'
-              - '!**/.gemini/**'
-              - '!.design/**'
-              - '!.skillsaw.yaml'
-              - '!.pre-commit-config.yaml'
-              - '!.codex/**'
-              - '!.agents/**'
-              - '!.ai-context/**'
-              - '!.autofix-context/**'
-              - '!graphify-out/**'
-              - '!**/.gitignore'
-              - '!.gitignore'
-              - '!**/*_test.go'
-              - '!**/testdata/**'
-              - '!**/test/**'
-              - '!**/tests/**'
-              - '!**/it/**'
-              - '!**/conftest.py'
-              - '!**/fixtures/**'
-            e2e-suite:
-              - 'tests/e2e/**'
+          filters: .github/filters/ci-filters.yml
 
   # OSAC-3370: cheap readiness gate before expensive runners.
   # Allow: lgtm (present or previously applied), e2e-ready by github-actions[bot], or
@@ -207,6 +201,7 @@ jobs:
       always()
       && needs.changes.result == 'success'
       && needs.changes.outputs.should-run == 'true'
+      && needs.changes.outputs.vmaas-exclusive-skip != 'true'
       && (needs.e2e-readiness.result == 'skipped'
           || needs.e2e-readiness.outputs.ready == 'true')
     permissions:
@@ -296,6 +291,8 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ needs.changes.outputs.should-run }}" != "true" ]; then
             echo "docs-only, skipped"
+          elif [ "${{ needs.changes.outputs.vmaas-exclusive-skip }}" = "true" ]; then
+            echo "every changed file is in vmaas's reviewed allow-list, skipped"
           else
             echo "e2e passed"
           fi

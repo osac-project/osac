@@ -20,7 +20,7 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
-      proto: ${{ steps.filter.outputs.proto }}
+      proto: ${{ steps.filter.outputs.proto-check }}
     steps:
       # dorny/paths-filter uses git diff on merge_group (not the PR Files API),
       # so the repo must be checked out with enough history for base..head.
@@ -33,15 +33,8 @@ jobs:
         if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
         id: filter
         with:
-          filters: |
-            proto:
-              # One shared proto module. Anything touching proto
-              # sources/config, or the fulfillment-service dev.py toolchain that
-              # regenerates proto/public/, can change the committed output.
-              - 'proto/**'
-              - 'fulfillment-service/dev/**'
-              - 'fulfillment-service/dev.py'
-              - 'fulfillment-service/cmd/buf-plugin-osac-lint/**'
+          predicate-quantifier: 'every'
+          filters: .github/filters/ci-filters.yml
 
   check-generated-code:
     name: Check generated code (proto)
@@ -57,7 +50,9 @@ jobs:
       if: needs.changes.result != 'success'
       run: exit 1
     - id: should-run
-      if: needs.changes.result == 'success' && needs.changes.outputs.proto == 'true'
+      # CI_GATING_ENABLED == 'false' is an emergency global override forcing
+      # this job to run regardless of the filter result.
+      if: needs.changes.result == 'success' && (vars.CI_GATING_ENABLED == 'false' || needs.changes.outputs.proto == 'true')
       run: echo "run=true" >> "$GITHUB_OUTPUT"
     - if: steps.should-run.outputs.run
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1

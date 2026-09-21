@@ -52,6 +52,21 @@ jobs:
       # everything" -- it should run osac-ui's job and skip every other
       # job in this file instead.
       should-run-ui: ${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group') || steps.filter.outputs.ui == 'true' }}
+      # Per-component narrowing on top of should-run above: a PR touching
+      # only e.g. osac-aap/** shouldn't also run fulfillment-service's or
+      # osac-metering's unit tests. Same "always true on non-PR/merge_group
+      # events" passthrough as should-run (schedule/workflow_dispatch/
+      # workflow_call runs skip the filter step entirely, so
+      # steps.filter.outputs.* would otherwise be empty, not 'true'). Filter
+      # definitions (with the cross-component dependency rationale) live in
+      # the shared ci-filters.yml. CI_GATING_ENABLED == 'false' is an
+      # emergency global override forcing every component "relevant" (i.e.
+      # run everything) regardless of the filter result; unset/anything
+      # else means gating is active, matching this rollout's default-on intent.
+      fulfillment-service-relevant: ${{ vars.CI_GATING_ENABLED == 'false' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || steps.filter.outputs.unit-tests-fulfillment-service == 'true' }}
+      osac-metering-relevant: ${{ vars.CI_GATING_ENABLED == 'false' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || steps.filter.outputs.unit-tests-osac-metering == 'true' }}
+      osac-metering-adapters-relevant: ${{ vars.CI_GATING_ENABLED == 'false' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || steps.filter.outputs.unit-tests-osac-metering-adapters == 'true' }}
+      osac-metering-schema-relevant: ${{ vars.CI_GATING_ENABLED == 'false' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || steps.filter.outputs.unit-tests-osac-metering-schema == 'true' }}
       concurrency-key: ${{ steps.concurrency-key.outputs.key }}
     steps:
       # dorny/paths-filter uses git diff on merge_group (not the PR Files API),
@@ -66,26 +81,7 @@ jobs:
         id: filter
         with:
           predicate-quantifier: 'every'
-          filters: |
-            code:
-              - '**'
-              - '!**/OWNERS'
-              - '!**/LICENSE'
-              - '!**/*.md'
-              - '!**/docs/**'
-              - '!**/.claude/**'
-              - '!**/.cursor/**'
-              - '!**/.gemini/**'
-              - '!.design/**'
-              - '!.skillsaw.yaml'
-              - '!.pre-commit-config.yaml'
-              # osac-ui's own unit-test job below is gated by the separate
-              # ui filter instead -- without this, an osac-ui-only change
-              # would still trip this blanket filter and run every other
-              # job below, none of which touch osac-ui at all.
-              - '!osac-ui/**'
-            ui:
-              - 'osac-ui/**'
+          filters: .github/filters/ci-filters.yml
       # A job-level `concurrency:` block can reference `needs.*.outputs.*`,
       # unlike a workflow-level one, which is evaluated before any job runs
       # and so cannot depend on a computed value -- this is why the key is
@@ -131,7 +127,7 @@ jobs:
   run-unit-tests:
     name: Run unit tests
     needs: changes
-    if: needs.changes.outputs.should-run == 'true'
+    if: needs.changes.outputs.should-run == 'true' && needs.changes.outputs.fulfillment-service-relevant == 'true'
     concurrency:
       group: run-unit-tests-${{ needs.changes.outputs.concurrency-key }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
@@ -150,7 +146,7 @@ jobs:
   run-osac-metering-tests:
     name: Run unit tests (osac-metering)
     needs: changes
-    if: needs.changes.outputs.should-run == 'true'
+    if: needs.changes.outputs.should-run == 'true' && needs.changes.outputs.osac-metering-relevant == 'true'
     concurrency:
       group: run-osac-metering-tests-${{ needs.changes.outputs.concurrency-key }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
@@ -169,7 +165,7 @@ jobs:
   run-osac-metering-adapters-tests:
     name: Run unit tests (osac-metering/adapters)
     needs: changes
-    if: needs.changes.outputs.should-run == 'true'
+    if: needs.changes.outputs.should-run == 'true' && needs.changes.outputs.osac-metering-adapters-relevant == 'true'
     concurrency:
       group: run-osac-metering-adapters-tests-${{ needs.changes.outputs.concurrency-key }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
@@ -188,7 +184,7 @@ jobs:
   run-osac-metering-schema-tests:
     name: Run unit tests (osac-metering/schema)
     needs: changes
-    if: needs.changes.outputs.should-run == 'true'
+    if: needs.changes.outputs.should-run == 'true' && needs.changes.outputs.osac-metering-schema-relevant == 'true'
     concurrency:
       group: run-osac-metering-schema-tests-${{ needs.changes.outputs.concurrency-key }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}

@@ -40,7 +40,9 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
-      should-run: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.darwin == 'true' }}
+      # CI_GATING_ENABLED == 'false' is an emergency global override forcing
+      # this job to run regardless of the filter result.
+      should-run: ${{ vars.CI_GATING_ENABLED == 'false' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.darwin-keychain == 'true' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         if: github.event_name == 'merge_group'
@@ -51,15 +53,8 @@ jobs:
         if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
         id: filter
         with:
-          filters: |
-            darwin:
-              - '.github/workflows/darwin-keychain-tests.yml'
-              - 'fulfillment-service/internal/config/config_secret_store.go'
-              - 'fulfillment-service/internal/config/config_secret_store_darwin.go'
-              - 'fulfillment-service/internal/config/config_secret_store_darwin_test.go'
-              - 'fulfillment-service/internal/config/config_secret_store_other.go'
-              - 'fulfillment-service/internal/config/config_settings.go'
-              - 'fulfillment-service/internal/config/config_settings_test.go'
+          predicate-quantifier: 'every'
+          filters: .github/filters/ci-filters.yml
 
   run-darwin-keychain-tests:
     name: Run darwin keychain tests

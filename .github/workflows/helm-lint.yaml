@@ -32,38 +32,8 @@ jobs:
         if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
         id: filter
         with:
-          filters: |
-            osac-operator:
-              - 'osac-operator/api/**'
-              - 'osac-operator/charts/**'
-              - 'osac-operator/config/crd/bases/**'
-              - 'osac-operator/hack/sync-helm-crds.py'
-              - 'osac-operator/Makefile'
-              - '.github/workflows/helm-lint.yaml'
-            bare-metal-fulfillment-operator:
-              - 'bare-metal-fulfillment-operator/api/**'
-              - 'bare-metal-fulfillment-operator/charts/**'
-              - 'bare-metal-fulfillment-operator/config/crd/bases/**'
-              - 'bare-metal-fulfillment-operator/hack/sync-helm-crds.py'
-              - 'bare-metal-fulfillment-operator/Makefile'
-              - '.github/workflows/helm-lint.yaml'
-            fulfillment-service:
-              - 'fulfillment-service/charts/**'
-              - '.github/workflows/helm-lint.yaml'
-            osac-aap:
-              - 'osac-aap/charts/**'
-              - '.github/workflows/helm-lint.yaml'
-            osac-csi-driver:
-              - 'osac-csi-driver/charts/**'
-              - '.github/workflows/helm-lint.yaml'
-            osac-metering:
-              - 'osac-metering/charts/**'
-              - '.github/workflows/helm-lint.yaml'
-            osac-installer:
-              - 'osac-installer/charts/**'
-              - 'osac-installer/values/**'
-              - 'osac-installer/ct.yaml'
-              - '.github/workflows/helm-lint.yaml'
+          predicate-quantifier: 'every'
+          filters: .github/filters/ci-filters.yml
 
   # Matrixed over every component that generates Helm CRD templates from a
   # kubebuilder config/crd/bases/ source of truth via hack/sync-helm-crds.py
@@ -84,7 +54,15 @@ jobs:
       run: exit 1
     - name: Check component changes
       id: should-run
-      if: needs.changes.result == 'success' && contains(fromJSON(needs.changes.outputs.changes), matrix.component)
+      # CI_GATING_ENABLED == 'false' is an emergency global override forcing
+      # this job to run regardless of the filter result. matrix.component
+      # values (e.g. "osac-operator") are looked up as "helm-osac-operator"
+      # in the shared ci-filters.yml's matched-filters list, since filter
+      # names there are namespaced per-consumer to avoid collisions.
+      if: >-
+        needs.changes.result == 'success' && (
+          vars.CI_GATING_ENABLED == 'false' ||
+          contains(fromJSON(needs.changes.outputs.changes), format('helm-{0}', matrix.component)))
       run: echo "run=true" >> "$GITHUB_OUTPUT"
 
     - name: Checkout repository
@@ -142,7 +120,15 @@ jobs:
       run: exit 1
     - name: Check component changes
       id: should-run
-      if: needs.changes.result == 'success' && contains(fromJSON(needs.changes.outputs.changes), matrix.component)
+      # CI_GATING_ENABLED == 'false' is an emergency global override forcing
+      # this job to run regardless of the filter result. matrix.component
+      # values are looked up as "helm-<component>" in the shared
+      # ci-filters.yml's matched-filters list (namespaced per-consumer to
+      # avoid collisions).
+      if: >-
+        needs.changes.result == 'success' && (
+          vars.CI_GATING_ENABLED == 'false' ||
+          contains(fromJSON(needs.changes.outputs.changes), format('helm-{0}', matrix.component)))
       run: echo "run=true" >> "$GITHUB_OUTPUT"
 
     - name: Checkout repository
@@ -198,15 +184,20 @@ jobs:
       run: exit 1
     - name: Check whether to lint
       id: should-run
+      # CI_GATING_ENABLED == 'false' is an emergency global override forcing
+      # this job to run regardless of the filter result. Filter names are
+      # looked up as "helm-<component>" in the shared ci-filters.yml's
+      # matched-filters list (namespaced per-consumer to avoid collisions).
       if: >-
         needs.changes.result == 'success' && (
-          contains(fromJSON(needs.changes.outputs.changes), 'osac-installer') ||
-          contains(fromJSON(needs.changes.outputs.changes), 'osac-operator') ||
-          contains(fromJSON(needs.changes.outputs.changes), 'bare-metal-fulfillment-operator') ||
-          contains(fromJSON(needs.changes.outputs.changes), 'fulfillment-service') ||
-          contains(fromJSON(needs.changes.outputs.changes), 'osac-aap') ||
-          contains(fromJSON(needs.changes.outputs.changes), 'osac-csi-driver') ||
-          contains(fromJSON(needs.changes.outputs.changes), 'osac-metering'))
+          vars.CI_GATING_ENABLED == 'false' ||
+          contains(fromJSON(needs.changes.outputs.changes), 'helm-osac-installer') ||
+          contains(fromJSON(needs.changes.outputs.changes), 'helm-osac-operator') ||
+          contains(fromJSON(needs.changes.outputs.changes), 'helm-bare-metal-fulfillment-operator') ||
+          contains(fromJSON(needs.changes.outputs.changes), 'helm-fulfillment-service') ||
+          contains(fromJSON(needs.changes.outputs.changes), 'helm-osac-aap') ||
+          contains(fromJSON(needs.changes.outputs.changes), 'helm-osac-csi-driver') ||
+          contains(fromJSON(needs.changes.outputs.changes), 'helm-osac-metering'))
       run: echo "run=true" >> "$GITHUB_OUTPUT"
 
     - name: Checkout repository

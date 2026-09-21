@@ -37,7 +37,9 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
-      should-run: ${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group') || steps.filter.outputs.code == 'true' }}
+      # CI_GATING_ENABLED == 'false' is an emergency global override forcing
+      # this job to run regardless of the filter result.
+      should-run: ${{ vars.CI_GATING_ENABLED == 'false' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || steps.filter.outputs.build-bare-metal-fulfillment-operator == 'true' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         if: github.event_name == 'merge_group'
@@ -48,14 +50,13 @@ jobs:
         if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
         id: filter
         with:
-          filters: |
-            code:
-              - 'bare-metal-fulfillment-operator/**'
-              - '!bare-metal-fulfillment-operator/OWNERS'
-              - '!bare-metal-fulfillment-operator/LICENSE'
-              - '!bare-metal-fulfillment-operator/**/*.md'
-              - '!bare-metal-fulfillment-operator/docs/**'
-              - '.github/workflows/build-bmf-image.yaml'
+          # Previously missing -- under the default 'someOf' quantifier, a
+          # positive pattern plus separate negation entries meant each
+          # negation independently OR-matched almost every file. Fixed by
+          # migrating to the shared ci-filters.yml, where this filter is
+          # written as one brace-alternation entry compatible with 'every'.
+          predicate-quantifier: 'every'
+          filters: .github/filters/ci-filters.yml
 
   test:
     name: Run unit tests (bare-metal-fulfillment-operator)

@@ -355,3 +355,4 @@ export enum TenantState {
  */
 export const TenantStateSchema: GenEnum<TenantState> = /*@__PURE__*/
   enumDesc(file_osac_private_v1_tenant_type, 1);
+

@@ -39,19 +39,6 @@ const vmCatalogItem: ComputeInstanceCatalogItem = {
   description: 'RHEL 9 base image',
   template: create(ComputeInstanceTemplateReferenceSchema, { id: 'tpl-rhel-9' }),
   published: true,
-  fieldDefinitions: [
-    {
-      $typeName: 'osac.public.v1.FieldDefinition',
-      path: 'spec.image.source_ref',
-      displayName: 'VM image',
-      editable: true,
-      validationSchema: '',
-      default: {
-        $typeName: 'google.protobuf.Value',
-        kind: { case: 'stringValue', value: 'quay.io/example/rhel9' },
-      },
-    },
-  ],
   templateParameters: {},
 };
 
@@ -74,7 +61,6 @@ const clusterCatalogItem: ClusterCatalogItem = {
   description: 'Standard OpenShift cluster offering',
   template: create(ClusterTemplateReferenceSchema, { id: 'tpl-openshift-4' }),
   published: true,
-  fieldDefinitions: [],
   templateParameters: {},
 };
 

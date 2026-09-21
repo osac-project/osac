@@ -22,8 +22,6 @@ const makeStorageTier = (id: string, state: StorageTierState = StorageTierState.
     spec: {
       description: '',
       protocol: StorageProtocol.NFS,
-      maxReadBandwidthMbs: 100,
-      maxWriteBandwidthMbs: 100,
     },
     status: { state },
   });

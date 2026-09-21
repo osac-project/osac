@@ -134,3 +134,4 @@ export type Duration = Message<"google.protobuf.Duration"> & {
  */
 export const DurationSchema: GenMessage<Duration> = /*@__PURE__*/
   messageDesc(file_google_protobuf_duration, 0);
+

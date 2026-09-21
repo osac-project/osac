@@ -80,3 +80,4 @@ export const openapiv2_tag: GenExtension<ServiceOptions, Tag> = /*@__PURE__*/
  */
 export const openapiv2_field: GenExtension<FieldOptions, JSONSchema> = /*@__PURE__*/
   extDesc(file_protoc_gen_openapiv2_options_annotations, 5);
+

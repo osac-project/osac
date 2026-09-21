@@ -265,3 +265,4 @@ export type UserReference = Message<"osac.private.v1.UserReference"> & {
  */
 export const UserReferenceSchema: GenMessage<UserReference> = /*@__PURE__*/
   messageDesc(file_osac_private_v1_user_type, 5);
+

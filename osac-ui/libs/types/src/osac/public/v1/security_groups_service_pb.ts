@@ -18,8 +18,6 @@
 import type { GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv2";
 import { fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2";
 import { file_google_api_annotations } from "../../../google/api/annotations_pb";
-import type { FieldMask } from "../../../google/protobuf/field_mask_pb";
-import { file_google_protobuf_field_mask } from "../../../google/protobuf/field_mask_pb";
 import type { SecurityGroup } from "./security_group_type_pb";
 import { file_osac_public_v1_security_group_type } from "./security_group_type_pb";
 import type { Message } from "@bufbuild/protobuf";
@@ -28,7 +26,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/public/v1/security_groups_service.proto.
  */
 export const file_osac_public_v1_security_groups_service: GenFile = /*@__PURE__*/
-  fileDesc("Cixvc2FjL3B1YmxpYy92MS9zZWN1cml0eV9ncm91cHNfc2VydmljZS5wcm90bxIOb3NhYy5wdWJsaWMudjEilwEKGVNlY3VyaXR5R3JvdXBzTGlzdFJlcXVlc3QSEwoGb2Zmc2V0GAEgASgFSACIAQESEgoFbGltaXQYAiABKAVIAYgBARITCgZmaWx0ZXIYAyABKAlIAogBARISCgVvcmRlchgEIAEoCUgDiAEBQgkKB19vZmZzZXRCCAoGX2xpbWl0QgkKB19maWx0ZXJCCAoGX29yZGVyImcKGlNlY3VyaXR5R3JvdXBzTGlzdFJlc3BvbnNlEgwKBHNpemUYASABKAUSDQoFdG90YWwYAiABKAUSLAoFaXRlbXMYAyADKAsyHS5vc2FjLnB1YmxpYy52MS5TZWN1cml0eUdyb3VwIiYKGFNlY3VyaXR5R3JvdXBzR2V0UmVxdWVzdBIKCgJpZBgBIAEoCSJKChlTZWN1cml0eUdyb3Vwc0dldFJlc3BvbnNlEi0KBm9iamVjdBgBIAEoCzIdLm9zYWMucHVibGljLnYxLlNlY3VyaXR5R3JvdXAiTAobU2VjdXJpdHlHcm91cHNDcmVhdGVSZXF1ZXN0Ei0KBm9iamVjdBgBIAEoCzIdLm9zYWMucHVibGljLnYxLlNlY3VyaXR5R3JvdXAiTQocU2VjdXJpdHlHcm91cHNDcmVhdGVSZXNwb25zZRItCgZvYmplY3QYASABKAsyHS5vc2FjLnB1YmxpYy52MS5TZWN1cml0eUdyb3VwIosBChtTZWN1cml0eUdyb3Vwc1VwZGF0ZVJlcXVlc3QSLQoGb2JqZWN0GAEgASgLMh0ub3NhYy5wdWJsaWMudjEuU2VjdXJpdHlHcm91cBIvCgt1cGRhdGVfbWFzaxgCIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5GaWVsZE1hc2sSDAoEbG9jaxgDIAEoCCJNChxTZWN1cml0eUdyb3Vwc1VwZGF0ZVJlc3BvbnNlEi0KBm9iamVjdBgBIAEoCzIdLm9zYWMucHVibGljLnYxLlNlY3VyaXR5R3JvdXAiKQobU2VjdXJpdHlHcm91cHNEZWxldGVSZXF1ZXN0EgoKAmlkGAEgASgJIh4KHFNlY3VyaXR5R3JvdXBzRGVsZXRlUmVzcG9uc2UyngYKDlNlY3VyaXR5R3JvdXBzEooBCgRMaXN0Eikub3NhYy5wdWJsaWMudjEuU2VjdXJpdHlHcm91cHNMaXN0UmVxdWVzdBoqLm9zYWMucHVibGljLnYxLlNlY3VyaXR5R3JvdXBzTGlzdFJlc3BvbnNlIiuC0+STAiUSIy9hcGkvZnVsZmlsbG1lbnQvdjEvc2VjdXJpdHlfZ3JvdXBzEpQBCgNHZXQSKC5vc2FjLnB1YmxpYy52MS5TZWN1cml0eUdyb3Vwc0dldFJlcXVlc3QaKS5vc2FjLnB1YmxpYy52MS5TZWN1cml0eUdyb3Vwc0dldFJlc3BvbnNlIjiC0+STAjJiBm9iamVjdBIoL2FwaS9mdWxmaWxsbWVudC92MS9zZWN1cml0eV9ncm91cHMve2lkfRKgAQoGQ3JlYXRlEisub3NhYy5wdWJsaWMudjEuU2VjdXJpdHlHcm91cHNDcmVhdGVSZXF1ZXN0Giwub3NhYy5wdWJsaWMudjEuU2VjdXJpdHlHcm91cHNDcmVhdGVSZXNwb25zZSI7gtPkkwI1OgZvYmplY3RiBm9iamVjdCIjL2FwaS9mdWxmaWxsbWVudC92MS9zZWN1cml0eV9ncm91cHMSrAEKBlVwZGF0ZRIrLm9zYWMucHVibGljLnYxLlNlY3VyaXR5R3JvdXBzVXBkYXRlUmVxdWVzdBosLm9zYWMucHVibGljLnYxLlNlY3VyaXR5R3JvdXBzVXBkYXRlUmVzcG9uc2UiR4LT5JMCQToGb2JqZWN0YgZvYmplY3QyLy9hcGkvZnVsZmlsbG1lbnQvdjEvc2VjdXJpdHlfZ3JvdXBzL3tvYmplY3QuaWR9EpUBCgZEZWxldGUSKy5vc2FjLnB1YmxpYy52MS5TZWN1cml0eUdyb3Vwc0RlbGV0ZVJlcXVlc3QaLC5vc2FjLnB1YmxpYy52MS5TZWN1cml0eUdyb3Vwc0RlbGV0ZVJlc3BvbnNlIjCC0+STAioqKC9hcGkvZnVsZmlsbG1lbnQvdjEvc2VjdXJpdHlfZ3JvdXBzL3tpZH1iBnByb3RvMw", [file_google_api_annotations, file_google_protobuf_field_mask, file_osac_public_v1_security_group_type]);
+  fileDesc("Cixvc2FjL3B1YmxpYy92MS9zZWN1cml0eV9ncm91cHNfc2VydmljZS5wcm90bxIOb3NhYy5wdWJsaWMudjEilwEKGVNlY3VyaXR5R3JvdXBzTGlzdFJlcXVlc3QSEwoGb2Zmc2V0GAEgASgFSACIAQESEgoFbGltaXQYAiABKAVIAYgBARITCgZmaWx0ZXIYAyABKAlIAogBARISCgVvcmRlchgEIAEoCUgDiAEBQgkKB19vZmZzZXRCCAoGX2xpbWl0QgkKB19maWx0ZXJCCAoGX29yZGVyImcKGlNlY3VyaXR5R3JvdXBzTGlzdFJlc3BvbnNlEgwKBHNpemUYASABKAUSDQoFdG90YWwYAiABKAUSLAoFaXRlbXMYAyADKAsyHS5vc2FjLnB1YmxpYy52MS5TZWN1cml0eUdyb3VwIiYKGFNlY3VyaXR5R3JvdXBzR2V0UmVxdWVzdBIKCgJpZBgBIAEoCSJKChlTZWN1cml0eUdyb3Vwc0dldFJlc3BvbnNlEi0KBm9iamVjdBgBIAEoCzIdLm9zYWMucHVibGljLnYxLlNlY3VyaXR5R3JvdXAiTAobU2VjdXJpdHlHcm91cHNDcmVhdGVSZXF1ZXN0Ei0KBm9iamVjdBgBIAEoCzIdLm9zYWMucHVibGljLnYxLlNlY3VyaXR5R3JvdXAiTQocU2VjdXJpdHlHcm91cHNDcmVhdGVSZXNwb25zZRItCgZvYmplY3QYASABKAsyHS5vc2FjLnB1YmxpYy52MS5TZWN1cml0eUdyb3VwIikKG1NlY3VyaXR5R3JvdXBzRGVsZXRlUmVxdWVzdBIKCgJpZBgBIAEoCSIeChxTZWN1cml0eUdyb3Vwc0RlbGV0ZVJlc3BvbnNlMu8ECg5TZWN1cml0eUdyb3VwcxKKAQoETGlzdBIpLm9zYWMucHVibGljLnYxLlNlY3VyaXR5R3JvdXBzTGlzdFJlcXVlc3QaKi5vc2FjLnB1YmxpYy52MS5TZWN1cml0eUdyb3Vwc0xpc3RSZXNwb25zZSIrgtPkkwIlEiMvYXBpL2Z1bGZpbGxtZW50L3YxL3NlY3VyaXR5X2dyb3VwcxKUAQoDR2V0Eigub3NhYy5wdWJsaWMudjEuU2VjdXJpdHlHcm91cHNHZXRSZXF1ZXN0Gikub3NhYy5wdWJsaWMudjEuU2VjdXJpdHlHcm91cHNHZXRSZXNwb25zZSI4gtPkkwIyYgZvYmplY3QSKC9hcGkvZnVsZmlsbG1lbnQvdjEvc2VjdXJpdHlfZ3JvdXBzL3tpZH0SoAEKBkNyZWF0ZRIrLm9zYWMucHVibGljLnYxLlNlY3VyaXR5R3JvdXBzQ3JlYXRlUmVxdWVzdBosLm9zYWMucHVibGljLnYxLlNlY3VyaXR5R3JvdXBzQ3JlYXRlUmVzcG9uc2UiO4LT5JMCNToGb2JqZWN0YgZvYmplY3QiIy9hcGkvZnVsZmlsbG1lbnQvdjEvc2VjdXJpdHlfZ3JvdXBzEpUBCgZEZWxldGUSKy5vc2FjLnB1YmxpYy52MS5TZWN1cml0eUdyb3Vwc0RlbGV0ZVJlcXVlc3QaLC5vc2FjLnB1YmxpYy52MS5TZWN1cml0eUdyb3Vwc0RlbGV0ZVJlc3BvbnNlIjCC0+STAioqKC9hcGkvZnVsZmlsbG1lbnQvdjEvc2VjdXJpdHlfZ3JvdXBzL3tpZH1iBnByb3RvMw", [file_google_api_annotations, file_osac_public_v1_security_group_type]);
 
 /**
  * @generated from message osac.public.v1.SecurityGroupsListRequest
@@ -196,54 +194,6 @@ export const SecurityGroupsCreateResponseSchema: GenMessage<SecurityGroupsCreate
   messageDesc(file_osac_public_v1_security_groups_service, 5);
 
 /**
- * @generated from message osac.public.v1.SecurityGroupsUpdateRequest
- */
-export type SecurityGroupsUpdateRequest = Message<"osac.public.v1.SecurityGroupsUpdateRequest"> & {
-  /**
-   * @generated from field: osac.public.v1.SecurityGroup object = 1;
-   */
-  object?: SecurityGroup | undefined;
-
-  /**
-   * @generated from field: google.protobuf.FieldMask update_mask = 2;
-   */
-  updateMask?: FieldMask | undefined;
-
-  /**
-   * Lock enables optimistic locking. When set to true, the server verifies that the current version of the object
-   * matches the value of the metadata.version field of the submitted object. If they differ the update will be
-   * rejected. This is useful to prevent lost updates when multiple clients are modifying the same object concurrently.
-   *
-   * @generated from field: bool lock = 3;
-   */
-  lock: boolean;
-};
-
-/**
- * Describes the message osac.public.v1.SecurityGroupsUpdateRequest.
- * Use `create(SecurityGroupsUpdateRequestSchema)` to create a new message.
- */
-export const SecurityGroupsUpdateRequestSchema: GenMessage<SecurityGroupsUpdateRequest> = /*@__PURE__*/
-  messageDesc(file_osac_public_v1_security_groups_service, 6);
-
-/**
- * @generated from message osac.public.v1.SecurityGroupsUpdateResponse
- */
-export type SecurityGroupsUpdateResponse = Message<"osac.public.v1.SecurityGroupsUpdateResponse"> & {
-  /**
-   * @generated from field: osac.public.v1.SecurityGroup object = 1;
-   */
-  object?: SecurityGroup | undefined;
-};
-
-/**
- * Describes the message osac.public.v1.SecurityGroupsUpdateResponse.
- * Use `create(SecurityGroupsUpdateResponseSchema)` to create a new message.
- */
-export const SecurityGroupsUpdateResponseSchema: GenMessage<SecurityGroupsUpdateResponse> = /*@__PURE__*/
-  messageDesc(file_osac_public_v1_security_groups_service, 7);
-
-/**
  * @generated from message osac.public.v1.SecurityGroupsDeleteRequest
  */
 export type SecurityGroupsDeleteRequest = Message<"osac.public.v1.SecurityGroupsDeleteRequest"> & {
@@ -258,7 +208,7 @@ export type SecurityGroupsDeleteRequest = Message<"osac.public.v1.SecurityGroups
  * Use `create(SecurityGroupsDeleteRequestSchema)` to create a new message.
  */
 export const SecurityGroupsDeleteRequestSchema: GenMessage<SecurityGroupsDeleteRequest> = /*@__PURE__*/
-  messageDesc(file_osac_public_v1_security_groups_service, 8);
+  messageDesc(file_osac_public_v1_security_groups_service, 6);
 
 /**
  * @generated from message osac.public.v1.SecurityGroupsDeleteResponse
@@ -271,7 +221,7 @@ export type SecurityGroupsDeleteResponse = Message<"osac.public.v1.SecurityGroup
  * Use `create(SecurityGroupsDeleteResponseSchema)` to create a new message.
  */
 export const SecurityGroupsDeleteResponseSchema: GenMessage<SecurityGroupsDeleteResponse> = /*@__PURE__*/
-  messageDesc(file_osac_public_v1_security_groups_service, 9);
+  messageDesc(file_osac_public_v1_security_groups_service, 7);
 
 /**
  * @generated from service osac.public.v1.SecurityGroups
@@ -308,16 +258,6 @@ export const SecurityGroups: GenService<{
     output: typeof SecurityGroupsCreateResponseSchema;
   },
   /**
-   * Updates an existing security group.
-   *
-   * @generated from rpc osac.public.v1.SecurityGroups.Update
-   */
-  update: {
-    methodKind: "unary";
-    input: typeof SecurityGroupsUpdateRequestSchema;
-    output: typeof SecurityGroupsUpdateResponseSchema;
-  },
-  /**
    * Deletes a security group.
    *
    * @generated from rpc osac.public.v1.SecurityGroups.Delete
@@ -329,3 +269,4 @@ export const SecurityGroups: GenService<{
   },
 }> = /*@__PURE__*/
   serviceDesc(file_osac_public_v1_security_groups_service, 0);
+

@@ -329,3 +329,4 @@ export const ClusterTemplates: GenService<{
   },
 }> = /*@__PURE__*/
   serviceDesc(file_osac_public_v1_cluster_templates_service, 0);
+

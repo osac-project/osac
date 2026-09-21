@@ -15,8 +15,8 @@
 // @generated from file osac/public/v1/capabilities_service.proto (package osac.public.v1, syntax proto3)
 /* eslint-disable */
 
-import type { GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv2";
-import { fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2";
+import type { GenEnum, GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv2";
+import { enumDesc, fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2";
 import { file_google_api_annotations } from "../../../google/api/annotations_pb";
 import type { AuthnCapabilities } from "./authn_capabilities_type_pb";
 import { file_osac_public_v1_authn_capabilities_type } from "./authn_capabilities_type_pb";
@@ -26,7 +26,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/public/v1/capabilities_service.proto.
  */
 export const file_osac_public_v1_capabilities_service: GenFile = /*@__PURE__*/
-  fileDesc("Cilvc2FjL3B1YmxpYy92MS9jYXBhYmlsaXRpZXNfc2VydmljZS5wcm90bxIOb3NhYy5wdWJsaWMudjEiGAoWQ2FwYWJpbGl0aWVzR2V0UmVxdWVzdCJLChdDYXBhYmlsaXRpZXNHZXRSZXNwb25zZRIwCgVhdXRobhgBIAEoCzIhLm9zYWMucHVibGljLnYxLkF1dGhuQ2FwYWJpbGl0aWVzMpEBCgxDYXBhYmlsaXRpZXMSgAEKA0dldBImLm9zYWMucHVibGljLnYxLkNhcGFiaWxpdGllc0dldFJlcXVlc3QaJy5vc2FjLnB1YmxpYy52MS5DYXBhYmlsaXRpZXNHZXRSZXNwb25zZSIogtPkkwIiEiAvYXBpL2Z1bGZpbGxtZW50L3YxL2NhcGFiaWxpdGllc2IGcHJvdG8z", [file_google_api_annotations, file_osac_public_v1_authn_capabilities_type]);
+  fileDesc("Cilvc2FjL3B1YmxpYy92MS9jYXBhYmlsaXRpZXNfc2VydmljZS5wcm90bxIOb3NhYy5wdWJsaWMudjEiGAoWQ2FwYWJpbGl0aWVzR2V0UmVxdWVzdCKCAQoXQ2FwYWJpbGl0aWVzR2V0UmVzcG9uc2USMAoFYXV0aG4YASABKAsyIS5vc2FjLnB1YmxpYy52MS5BdXRobkNhcGFiaWxpdGllcxI1ChBlbmFibGVkX3NlcnZpY2VzGAIgAygOMhsub3NhYy5wdWJsaWMudjEuU2VydmljZVRpZXIqiQEKC1NlcnZpY2VUaWVyEhwKGFNFUlZJQ0VfVElFUl9VTlNQRUNJRklFRBAAEhUKEVNFUlZJQ0VfVElFUl9DQUFTEAESFgoSU0VSVklDRV9USUVSX1ZNQUFTEAISFgoSU0VSVklDRV9USUVSX0JNQUFTEAMSFQoRU0VSVklDRV9USUVSX01BQVMQBDKRAQoMQ2FwYWJpbGl0aWVzEoABCgNHZXQSJi5vc2FjLnB1YmxpYy52MS5DYXBhYmlsaXRpZXNHZXRSZXF1ZXN0Gicub3NhYy5wdWJsaWMudjEuQ2FwYWJpbGl0aWVzR2V0UmVzcG9uc2UiKILT5JMCIhIgL2FwaS9mdWxmaWxsbWVudC92MS9jYXBhYmlsaXRpZXNiBnByb3RvMw", [file_google_api_annotations, file_osac_public_v1_authn_capabilities_type]);
 
 /**
  * Request message for the `Get` method of the `Capabilities` service.
@@ -55,6 +55,13 @@ export type CapabilitiesGetResponse = Message<"osac.public.v1.CapabilitiesGetRes
    * @generated from field: osac.public.v1.AuthnCapabilities authn = 1;
    */
   authn?: AuthnCapabilities | undefined;
+
+  /**
+   * Service tiers enabled in this deployment.
+   *
+   * @generated from field: repeated osac.public.v1.ServiceTier enabled_services = 2;
+   */
+  enabledServices: ServiceTier[];
 };
 
 /**
@@ -63,6 +70,54 @@ export type CapabilitiesGetResponse = Message<"osac.public.v1.CapabilitiesGetRes
  */
 export const CapabilitiesGetResponseSchema: GenMessage<CapabilitiesGetResponse> = /*@__PURE__*/
   messageDesc(file_osac_public_v1_capabilities_service, 1);
+
+/**
+ * Service tiers that can be enabled in an OSAC deployment.
+ *
+ * @generated from enum osac.public.v1.ServiceTier
+ */
+export enum ServiceTier {
+  /**
+   * Service tier is unknown or has not been specified.
+   *
+   * @generated from enum value: SERVICE_TIER_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * Container as a Service.
+   *
+   * @generated from enum value: SERVICE_TIER_CAAS = 1;
+   */
+  CAAS = 1,
+
+  /**
+   * Virtual Machine as a Service.
+   *
+   * @generated from enum value: SERVICE_TIER_VMAAS = 2;
+   */
+  VMAAS = 2,
+
+  /**
+   * Bare Metal as a Service.
+   *
+   * @generated from enum value: SERVICE_TIER_BMAAS = 3;
+   */
+  BMAAS = 3,
+
+  /**
+   * Metal as a Service.
+   *
+   * @generated from enum value: SERVICE_TIER_MAAS = 4;
+   */
+  MAAS = 4,
+}
+
+/**
+ * Describes the enum osac.public.v1.ServiceTier.
+ */
+export const ServiceTierSchema: GenEnum<ServiceTier> = /*@__PURE__*/
+  enumDesc(file_osac_public_v1_capabilities_service, 0);
 
 /**
  * Provides information about the capabilities of the server, such as the list of trusted token issuers for
@@ -84,3 +139,4 @@ export const Capabilities: GenService<{
   },
 }> = /*@__PURE__*/
   serviceDesc(file_osac_public_v1_capabilities_service, 0);
+

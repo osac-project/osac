@@ -167,3 +167,4 @@ export type HostTypeReference = Message<"osac.private.v1.HostTypeReference"> & {
  */
 export const HostTypeReferenceSchema: GenMessage<HostTypeReference> = /*@__PURE__*/
   messageDesc(file_osac_private_v1_host_type_type, 2);
+

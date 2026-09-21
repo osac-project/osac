@@ -335,3 +335,4 @@ export const BareMetalInstances: GenService<{
   },
 }> = /*@__PURE__*/
   serviceDesc(file_osac_private_v1_baremetal_instances_service, 0);
+

@@ -216,8 +216,8 @@ export type ComputeInstanceSpec = Message<"osac.public.v1.ComputeInstanceSpec"> 
   networkAttachments: ComputeNetworkAttachment[];
 
   /**
-   * Reference to a compute instance catalog item. Mutually exclusive with template during the migration period.
-   * When set, the server fetches the catalog item and applies its field definitions.
+   * Reference to a compute instance catalog item. Mutually exclusive with template on Create; retained as immutable provenance afterward.
+   * When set, the server fetches the catalog item and applies its typed field policies.
    *
    * @generated from field: osac.public.v1.ComputeInstanceCatalogItemReference catalog_item = 15;
    */
@@ -634,3 +634,4 @@ export enum ComputeInstanceConditionType {
  */
 export const ComputeInstanceConditionTypeSchema: GenEnum<ComputeInstanceConditionType> = /*@__PURE__*/
   enumDesc(file_osac_public_v1_compute_instance_type, 1);
+

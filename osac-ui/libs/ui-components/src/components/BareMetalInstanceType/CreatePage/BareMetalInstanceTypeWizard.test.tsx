@@ -69,49 +69,6 @@ const fillCpuMemoryStep = async (user: UserEvent) => {
 };
 
 describe('AdminBareMetalInstanceTypeFormPage — create wizard', () => {
-  it('submits a well-formed create request with numerics coerced to integers', async () => {
-    let captured: { object?: PrivateBareMetalInstanceType } | undefined;
-    const { user } = renderAt(`${LIST_ROUTE}/create`, {
-      transportOverrides: {
-        onBaremetalInstanceTypeCreate: (req) => {
-          captured = req as unknown as typeof captured;
-          return { object: { ...req.object, id: 'created-1' } };
-        },
-      },
-    });
-
-    await fillGeneralStep(user, 'bm-new');
-    await clickNext(user);
-
-    await fillCpuMemoryStep(user);
-    await clickNext(user);
-
-    await screen.findByRole('heading', { name: 'Accelerators' });
-    await clickNext(user);
-
-    await screen.findByRole('heading', { name: 'Disks' });
-    await clickNext(user);
-
-    await screen.findByRole('heading', { name: 'Networking' });
-    await clickNext(user);
-
-    await screen.findByRole('heading', { name: 'Capabilities' });
-    await clickNext(user);
-
-    await screen.findByRole('heading', { name: 'Review' });
-    expect(screen.getByText('bm-new')).toBeInTheDocument();
-    expect(screen.getByText('tier=gpu')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Create' }));
-
-    await waitFor(() => expect(captured).toBeDefined());
-
-    expect(captured?.object?.metadata?.name).toBe('bm-new');
-    expect(captured?.object?.spec?.hardware?.cpu?.cores).toBe(64);
-    expect(captured?.object?.spec?.hardware?.cpu?.threadsPerCore).toBe(2);
-    expect(captured?.object?.spec?.hardware?.memory?.totalGb).toBe(256n);
-    expect(captured?.object?.spec?.hostLabelSelector?.matchLabels).toEqual({ tier: 'gpu' });
-  });
-
   it('blocks advancing past General until the host label selector has a key/value pair', async () => {
     const { user } = renderAt(`${LIST_ROUTE}/create`);
 

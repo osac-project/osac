@@ -153,7 +153,7 @@ export type BareMetalInstanceCatalogItemsCreateResponse = Message<"osac.private.
   object?: BareMetalInstanceCatalogItem | undefined;
 
   /**
-   * Deprecation or validation warnings (e.g. deprecated disk_image in field_definitions).
+   * Deprecation or validation warnings for typed catalog policies.
    *
    * @generated from field: repeated string warnings = 2;
    */
@@ -208,7 +208,7 @@ export type BareMetalInstanceCatalogItemsUpdateResponse = Message<"osac.private.
   object?: BareMetalInstanceCatalogItem | undefined;
 
   /**
-   * Deprecation or validation warnings (e.g. deprecated disk_image in field_definitions).
+   * Deprecation or validation warnings for typed catalog policies.
    *
    * @generated from field: repeated string warnings = 2;
    */
@@ -342,3 +342,4 @@ export const BareMetalInstanceCatalogItems: GenService<{
   },
 }> = /*@__PURE__*/
   serviceDesc(file_osac_private_v1_baremetal_instance_catalog_items_service, 0);
+

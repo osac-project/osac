@@ -24,3 +24,4 @@ import { file_protoc_gen_openapiv2_options_annotations } from "../../../protoc-g
  */
 export const file_osac_public_v1_openapi_options: GenFile = /*@__PURE__*/
   fileDesc("CiRvc2FjL3B1YmxpYy92MS9vcGVuYXBpX29wdGlvbnMucHJvdG8SDm9zYWMucHVibGljLnYxQsUBkkHBARKXAQoIT1NBQyBBUEkiLwoMT1NBQyBQcm9qZWN0Eh9odHRwczovL2dpdGh1Yi5jb20vb3NhYy1wcm9qZWN0KlMKCkFwYWNoZS0yLjASRWh0dHBzOi8vZ2l0aHViLmNvbS9vc2FjLXByb2plY3QvZnVsZmlsbG1lbnQtc2VydmljZS9ibG9iL21haW4vTElDRU5TRTIFMC4wLjEqAQIyEGFwcGxpY2F0aW9uL2pzb246EGFwcGxpY2F0aW9uL2pzb25iBnByb3RvMw", [file_protoc_gen_openapiv2_options_annotations]);
+

@@ -18,8 +18,6 @@
 import type { GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv2";
 import { fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2";
 import { file_google_api_annotations } from "../../../google/api/annotations_pb";
-import type { FieldMask } from "../../../google/protobuf/field_mask_pb";
-import { file_google_protobuf_field_mask } from "../../../google/protobuf/field_mask_pb";
 import type { ExternalIPAttachment } from "./external_ip_attachment_type_pb";
 import { file_osac_public_v1_external_ip_attachment_type } from "./external_ip_attachment_type_pb";
 import type { Message } from "@bufbuild/protobuf";
@@ -28,7 +26,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/public/v1/external_ip_attachments_service.proto.
  */
 export const file_osac_public_v1_external_ip_attachments_service: GenFile = /*@__PURE__*/
-  fileDesc("CjRvc2FjL3B1YmxpYy92MS9leHRlcm5hbF9pcF9hdHRhY2htZW50c19zZXJ2aWNlLnByb3RvEg5vc2FjLnB1YmxpYy52MSKeAQogRXh0ZXJuYWxJUEF0dGFjaG1lbnRzTGlzdFJlcXVlc3QSEwoGb2Zmc2V0GAEgASgFSACIAQESEgoFbGltaXQYAiABKAVIAYgBARITCgZmaWx0ZXIYAyABKAlIAogBARISCgVvcmRlchgEIAEoCUgDiAEBQgkKB19vZmZzZXRCCAoGX2xpbWl0QgkKB19maWx0ZXJCCAoGX29yZGVyInUKIUV4dGVybmFsSVBBdHRhY2htZW50c0xpc3RSZXNwb25zZRIMCgRzaXplGAEgASgFEg0KBXRvdGFsGAIgASgFEjMKBWl0ZW1zGAMgAygLMiQub3NhYy5wdWJsaWMudjEuRXh0ZXJuYWxJUEF0dGFjaG1lbnQiLQofRXh0ZXJuYWxJUEF0dGFjaG1lbnRzR2V0UmVxdWVzdBIKCgJpZBgBIAEoCSJYCiBFeHRlcm5hbElQQXR0YWNobWVudHNHZXRSZXNwb25zZRI0CgZvYmplY3QYASABKAsyJC5vc2FjLnB1YmxpYy52MS5FeHRlcm5hbElQQXR0YWNobWVudCJaCiJFeHRlcm5hbElQQXR0YWNobWVudHNDcmVhdGVSZXF1ZXN0EjQKBm9iamVjdBgBIAEoCzIkLm9zYWMucHVibGljLnYxLkV4dGVybmFsSVBBdHRhY2htZW50IlsKI0V4dGVybmFsSVBBdHRhY2htZW50c0NyZWF0ZVJlc3BvbnNlEjQKBm9iamVjdBgBIAEoCzIkLm9zYWMucHVibGljLnYxLkV4dGVybmFsSVBBdHRhY2htZW50IpkBCiJFeHRlcm5hbElQQXR0YWNobWVudHNVcGRhdGVSZXF1ZXN0EjQKBm9iamVjdBgBIAEoCzIkLm9zYWMucHVibGljLnYxLkV4dGVybmFsSVBBdHRhY2htZW50Ei8KC3VwZGF0ZV9tYXNrGAIgASgLMhouZ29vZ2xlLnByb3RvYnVmLkZpZWxkTWFzaxIMCgRsb2NrGAMgASgIIlsKI0V4dGVybmFsSVBBdHRhY2htZW50c1VwZGF0ZVJlc3BvbnNlEjQKBm9iamVjdBgBIAEoCzIkLm9zYWMucHVibGljLnYxLkV4dGVybmFsSVBBdHRhY2htZW50IjAKIkV4dGVybmFsSVBBdHRhY2htZW50c0RlbGV0ZVJlcXVlc3QSCgoCaWQYASABKAkiJQojRXh0ZXJuYWxJUEF0dGFjaG1lbnRzRGVsZXRlUmVzcG9uc2UykwcKFUV4dGVybmFsSVBBdHRhY2htZW50cxKgAQoETGlzdBIwLm9zYWMucHVibGljLnYxLkV4dGVybmFsSVBBdHRhY2htZW50c0xpc3RSZXF1ZXN0GjEub3NhYy5wdWJsaWMudjEuRXh0ZXJuYWxJUEF0dGFjaG1lbnRzTGlzdFJlc3BvbnNlIjOC0+STAi0SKy9hcGkvZnVsZmlsbG1lbnQvdjEvZXh0ZXJuYWxfaXBfYXR0YWNobWVudHMSqgEKA0dldBIvLm9zYWMucHVibGljLnYxLkV4dGVybmFsSVBBdHRhY2htZW50c0dldFJlcXVlc3QaMC5vc2FjLnB1YmxpYy52MS5FeHRlcm5hbElQQXR0YWNobWVudHNHZXRSZXNwb25zZSJAgtPkkwI6YgZvYmplY3QSMC9hcGkvZnVsZmlsbG1lbnQvdjEvZXh0ZXJuYWxfaXBfYXR0YWNobWVudHMve2lkfRK2AQoGQ3JlYXRlEjIub3NhYy5wdWJsaWMudjEuRXh0ZXJuYWxJUEF0dGFjaG1lbnRzQ3JlYXRlUmVxdWVzdBozLm9zYWMucHVibGljLnYxLkV4dGVybmFsSVBBdHRhY2htZW50c0NyZWF0ZVJlc3BvbnNlIkOC0+STAj06Bm9iamVjdGIGb2JqZWN0IisvYXBpL2Z1bGZpbGxtZW50L3YxL2V4dGVybmFsX2lwX2F0dGFjaG1lbnRzEsIBCgZVcGRhdGUSMi5vc2FjLnB1YmxpYy52MS5FeHRlcm5hbElQQXR0YWNobWVudHNVcGRhdGVSZXF1ZXN0GjMub3NhYy5wdWJsaWMudjEuRXh0ZXJuYWxJUEF0dGFjaG1lbnRzVXBkYXRlUmVzcG9uc2UiT4LT5JMCSToGb2JqZWN0YgZvYmplY3QyNy9hcGkvZnVsZmlsbG1lbnQvdjEvZXh0ZXJuYWxfaXBfYXR0YWNobWVudHMve29iamVjdC5pZH0SqwEKBkRlbGV0ZRIyLm9zYWMucHVibGljLnYxLkV4dGVybmFsSVBBdHRhY2htZW50c0RlbGV0ZVJlcXVlc3QaMy5vc2FjLnB1YmxpYy52MS5FeHRlcm5hbElQQXR0YWNobWVudHNEZWxldGVSZXNwb25zZSI4gtPkkwIyKjAvYXBpL2Z1bGZpbGxtZW50L3YxL2V4dGVybmFsX2lwX2F0dGFjaG1lbnRzL3tpZH1iBnByb3RvMw", [file_google_api_annotations, file_google_protobuf_field_mask, file_osac_public_v1_external_ip_attachment_type]);
+  fileDesc("CjRvc2FjL3B1YmxpYy92MS9leHRlcm5hbF9pcF9hdHRhY2htZW50c19zZXJ2aWNlLnByb3RvEg5vc2FjLnB1YmxpYy52MSKeAQogRXh0ZXJuYWxJUEF0dGFjaG1lbnRzTGlzdFJlcXVlc3QSEwoGb2Zmc2V0GAEgASgFSACIAQESEgoFbGltaXQYAiABKAVIAYgBARITCgZmaWx0ZXIYAyABKAlIAogBARISCgVvcmRlchgEIAEoCUgDiAEBQgkKB19vZmZzZXRCCAoGX2xpbWl0QgkKB19maWx0ZXJCCAoGX29yZGVyInUKIUV4dGVybmFsSVBBdHRhY2htZW50c0xpc3RSZXNwb25zZRIMCgRzaXplGAEgASgFEg0KBXRvdGFsGAIgASgFEjMKBWl0ZW1zGAMgAygLMiQub3NhYy5wdWJsaWMudjEuRXh0ZXJuYWxJUEF0dGFjaG1lbnQiLQofRXh0ZXJuYWxJUEF0dGFjaG1lbnRzR2V0UmVxdWVzdBIKCgJpZBgBIAEoCSJYCiBFeHRlcm5hbElQQXR0YWNobWVudHNHZXRSZXNwb25zZRI0CgZvYmplY3QYASABKAsyJC5vc2FjLnB1YmxpYy52MS5FeHRlcm5hbElQQXR0YWNobWVudCJaCiJFeHRlcm5hbElQQXR0YWNobWVudHNDcmVhdGVSZXF1ZXN0EjQKBm9iamVjdBgBIAEoCzIkLm9zYWMucHVibGljLnYxLkV4dGVybmFsSVBBdHRhY2htZW50IlsKI0V4dGVybmFsSVBBdHRhY2htZW50c0NyZWF0ZVJlc3BvbnNlEjQKBm9iamVjdBgBIAEoCzIkLm9zYWMucHVibGljLnYxLkV4dGVybmFsSVBBdHRhY2htZW50IjAKIkV4dGVybmFsSVBBdHRhY2htZW50c0RlbGV0ZVJlcXVlc3QSCgoCaWQYASABKAkiJQojRXh0ZXJuYWxJUEF0dGFjaG1lbnRzRGVsZXRlUmVzcG9uc2UyzgUKFUV4dGVybmFsSVBBdHRhY2htZW50cxKgAQoETGlzdBIwLm9zYWMucHVibGljLnYxLkV4dGVybmFsSVBBdHRhY2htZW50c0xpc3RSZXF1ZXN0GjEub3NhYy5wdWJsaWMudjEuRXh0ZXJuYWxJUEF0dGFjaG1lbnRzTGlzdFJlc3BvbnNlIjOC0+STAi0SKy9hcGkvZnVsZmlsbG1lbnQvdjEvZXh0ZXJuYWxfaXBfYXR0YWNobWVudHMSqgEKA0dldBIvLm9zYWMucHVibGljLnYxLkV4dGVybmFsSVBBdHRhY2htZW50c0dldFJlcXVlc3QaMC5vc2FjLnB1YmxpYy52MS5FeHRlcm5hbElQQXR0YWNobWVudHNHZXRSZXNwb25zZSJAgtPkkwI6YgZvYmplY3QSMC9hcGkvZnVsZmlsbG1lbnQvdjEvZXh0ZXJuYWxfaXBfYXR0YWNobWVudHMve2lkfRK2AQoGQ3JlYXRlEjIub3NhYy5wdWJsaWMudjEuRXh0ZXJuYWxJUEF0dGFjaG1lbnRzQ3JlYXRlUmVxdWVzdBozLm9zYWMucHVibGljLnYxLkV4dGVybmFsSVBBdHRhY2htZW50c0NyZWF0ZVJlc3BvbnNlIkOC0+STAj06Bm9iamVjdGIGb2JqZWN0IisvYXBpL2Z1bGZpbGxtZW50L3YxL2V4dGVybmFsX2lwX2F0dGFjaG1lbnRzEqsBCgZEZWxldGUSMi5vc2FjLnB1YmxpYy52MS5FeHRlcm5hbElQQXR0YWNobWVudHNEZWxldGVSZXF1ZXN0GjMub3NhYy5wdWJsaWMudjEuRXh0ZXJuYWxJUEF0dGFjaG1lbnRzRGVsZXRlUmVzcG9uc2UiOILT5JMCMiowL2FwaS9mdWxmaWxsbWVudC92MS9leHRlcm5hbF9pcF9hdHRhY2htZW50cy97aWR9YgZwcm90bzM", [file_google_api_annotations, file_osac_public_v1_external_ip_attachment_type]);
 
 /**
  * @generated from message osac.public.v1.ExternalIPAttachmentsListRequest
@@ -192,54 +190,6 @@ export const ExternalIPAttachmentsCreateResponseSchema: GenMessage<ExternalIPAtt
   messageDesc(file_osac_public_v1_external_ip_attachments_service, 5);
 
 /**
- * @generated from message osac.public.v1.ExternalIPAttachmentsUpdateRequest
- */
-export type ExternalIPAttachmentsUpdateRequest = Message<"osac.public.v1.ExternalIPAttachmentsUpdateRequest"> & {
-  /**
-   * @generated from field: osac.public.v1.ExternalIPAttachment object = 1;
-   */
-  object?: ExternalIPAttachment | undefined;
-
-  /**
-   * @generated from field: google.protobuf.FieldMask update_mask = 2;
-   */
-  updateMask?: FieldMask | undefined;
-
-  /**
-   * Lock enables optimistic locking. When set to true, the server verifies that the current version of the object
-   * matches the value of the metadata.version field of the submitted object. If they differ the update will be
-   * rejected. This is useful to prevent lost updates when multiple clients are modifying the same object concurrently.
-   *
-   * @generated from field: bool lock = 3;
-   */
-  lock: boolean;
-};
-
-/**
- * Describes the message osac.public.v1.ExternalIPAttachmentsUpdateRequest.
- * Use `create(ExternalIPAttachmentsUpdateRequestSchema)` to create a new message.
- */
-export const ExternalIPAttachmentsUpdateRequestSchema: GenMessage<ExternalIPAttachmentsUpdateRequest> = /*@__PURE__*/
-  messageDesc(file_osac_public_v1_external_ip_attachments_service, 6);
-
-/**
- * @generated from message osac.public.v1.ExternalIPAttachmentsUpdateResponse
- */
-export type ExternalIPAttachmentsUpdateResponse = Message<"osac.public.v1.ExternalIPAttachmentsUpdateResponse"> & {
-  /**
-   * @generated from field: osac.public.v1.ExternalIPAttachment object = 1;
-   */
-  object?: ExternalIPAttachment | undefined;
-};
-
-/**
- * Describes the message osac.public.v1.ExternalIPAttachmentsUpdateResponse.
- * Use `create(ExternalIPAttachmentsUpdateResponseSchema)` to create a new message.
- */
-export const ExternalIPAttachmentsUpdateResponseSchema: GenMessage<ExternalIPAttachmentsUpdateResponse> = /*@__PURE__*/
-  messageDesc(file_osac_public_v1_external_ip_attachments_service, 7);
-
-/**
  * @generated from message osac.public.v1.ExternalIPAttachmentsDeleteRequest
  */
 export type ExternalIPAttachmentsDeleteRequest = Message<"osac.public.v1.ExternalIPAttachmentsDeleteRequest"> & {
@@ -254,7 +204,7 @@ export type ExternalIPAttachmentsDeleteRequest = Message<"osac.public.v1.Externa
  * Use `create(ExternalIPAttachmentsDeleteRequestSchema)` to create a new message.
  */
 export const ExternalIPAttachmentsDeleteRequestSchema: GenMessage<ExternalIPAttachmentsDeleteRequest> = /*@__PURE__*/
-  messageDesc(file_osac_public_v1_external_ip_attachments_service, 8);
+  messageDesc(file_osac_public_v1_external_ip_attachments_service, 6);
 
 /**
  * @generated from message osac.public.v1.ExternalIPAttachmentsDeleteResponse
@@ -267,7 +217,7 @@ export type ExternalIPAttachmentsDeleteResponse = Message<"osac.public.v1.Extern
  * Use `create(ExternalIPAttachmentsDeleteResponseSchema)` to create a new message.
  */
 export const ExternalIPAttachmentsDeleteResponseSchema: GenMessage<ExternalIPAttachmentsDeleteResponse> = /*@__PURE__*/
-  messageDesc(file_osac_public_v1_external_ip_attachments_service, 9);
+  messageDesc(file_osac_public_v1_external_ip_attachments_service, 7);
 
 /**
  * @generated from service osac.public.v1.ExternalIPAttachments
@@ -304,16 +254,6 @@ export const ExternalIPAttachments: GenService<{
     output: typeof ExternalIPAttachmentsCreateResponseSchema;
   },
   /**
-   * Updates an existing external IP attachment. Allows modifying metadata (labels, annotations).
-   *
-   * @generated from rpc osac.public.v1.ExternalIPAttachments.Update
-   */
-  update: {
-    methodKind: "unary";
-    input: typeof ExternalIPAttachmentsUpdateRequestSchema;
-    output: typeof ExternalIPAttachmentsUpdateResponseSchema;
-  },
-  /**
    * Deletes an external IP attachment. Triggers the detach workflow to unbind the ExternalIP from the target.
    *
    * @generated from rpc osac.public.v1.ExternalIPAttachments.Delete
@@ -325,3 +265,4 @@ export const ExternalIPAttachments: GenService<{
   },
 }> = /*@__PURE__*/
   serviceDesc(file_osac_public_v1_external_ip_attachments_service, 0);
+

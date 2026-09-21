@@ -1,64 +1,27 @@
+import { readdirSync, unlinkSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const typesDirectory = dirname(dirname(fileURLToPath(import.meta.url)));
-const templatePath = join(typesDirectory, 'buf.gen.yaml');
-const args = process.argv.slice(2);
+const sourceDirectory = join(typesDirectory, 'src');
 
-const getCommit = (providedArgs) => {
-  if (providedArgs.length === 0) {
-    return undefined;
+const removeGeneratedBindings = (directory) => {
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const entryPath = join(directory, entry.name);
+
+    if (entry.isDirectory()) {
+      removeGeneratedBindings(entryPath);
+    } else if (entry.isFile() && entry.name.endsWith('_pb.ts')) {
+      unlinkSync(entryPath);
+    }
   }
-
-  if (providedArgs.length === 1 && !providedArgs[0].startsWith('--')) {
-    return providedArgs[0];
-  }
-
-  if (providedArgs.length === 2 && providedArgs[0] === '--commit') {
-    return providedArgs[1];
-  }
-
-  if (providedArgs.length === 1 && providedArgs[0].startsWith('--commit=')) {
-    return providedArgs[0].slice('--commit='.length);
-  }
-
-  throw new Error('Usage: pnpm gen-types [commit] or pnpm gen-types --commit <commit>');
 };
 
-let temporaryDirectory;
-
 try {
-  const commit = getCommit(args);
-  let bufArgs = ['generate'];
+  removeGeneratedBindings(sourceDirectory);
 
-  if (commit !== undefined) {
-    if (commit.length === 0 || /\s/.test(commit)) {
-      throw new Error('The commit must not contain whitespace.');
-    }
-
-    const template = readFileSync(templatePath, 'utf8');
-    const branchPattern = /^(\s*)branch: main$/gm;
-    const branchMatches = template.match(branchPattern);
-
-    if (branchMatches?.length !== 2) {
-      throw new Error('Expected both protobuf inputs to use branch: main.');
-    }
-
-    const customTemplate = template.replace(
-      branchPattern,
-      (_, indentation) => `${indentation}ref: ${JSON.stringify(commit)}`,
-    );
-
-    temporaryDirectory = mkdtempSync(join(tmpdir(), 'osac-gen-types-'));
-    const temporaryTemplatePath = join(temporaryDirectory, 'buf.gen.yaml');
-    writeFileSync(temporaryTemplatePath, customTemplate);
-    bufArgs = ['generate', '--template', temporaryTemplatePath];
-  }
-
-  const result = spawnSync('buf', bufArgs, {
+  const result = spawnSync('buf', ['generate'], {
     cwd: typesDirectory,
     stdio: 'inherit',
   });
@@ -71,8 +34,4 @@ try {
 } catch (error) {
   process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
   process.exitCode = 1;
-} finally {
-  if (temporaryDirectory) {
-    rmSync(temporaryDirectory, { force: true, recursive: true });
-  }
 }

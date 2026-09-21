@@ -33,15 +33,6 @@ const clusterCatalogItem: ClusterCatalogItem = {
     shared: false,
   },
   published: true,
-  fieldDefinitions: [
-    {
-      $typeName: 'osac.public.v1.FieldDefinition',
-      path: 'version',
-      displayName: 'Version',
-      editable: true,
-      validationSchema: '',
-    },
-  ],
   templateParameters: {},
 };
 

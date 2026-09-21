@@ -19,9 +19,7 @@ import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import { fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
 import { file_buf_validate_validate } from "../../../buf/validate/validate_pb";
 import { file_google_api_field_behavior } from "../../../google/api/field_behavior_pb";
-import type { FieldDefinition } from "./field_definition_type_pb";
-import { file_osac_public_v1_field_definition_type } from "./field_definition_type_pb";
-import type { BareMetalInstanceImageFieldPolicy, BareMetalInstanceRunStrategyFieldPolicy, BareMetalInstanceTypeLocalReferenceFieldPolicy, BareMetalNetworkAttachmentListFieldPolicy, BoolFieldPolicy, DiskImageReferenceFieldPolicy, StringFieldPolicy, TemplateParameterPolicy } from "./field_policy_type_pb";
+import type { BareMetalInstanceRunStrategyFieldPolicy, BareMetalInstanceTypeLocalReferenceFieldPolicy, BareMetalNetworkAttachmentListFieldPolicy, BoolFieldPolicy, DiskImageReferenceFieldPolicy, StringFieldPolicy, TemplateParameterPolicy } from "./field_policy_type_pb";
 import { file_osac_public_v1_field_policy_type } from "./field_policy_type_pb";
 import type { Metadata } from "./metadata_type_pb";
 import { file_osac_public_v1_metadata_type } from "./metadata_type_pb";
@@ -33,7 +31,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/public/v1/baremetal_instance_catalog_item_type.proto.
  */
 export const file_osac_public_v1_baremetal_instance_catalog_item_type: GenFile = /*@__PURE__*/
-  fileDesc("Cjlvc2FjL3B1YmxpYy92MS9iYXJlbWV0YWxfaW5zdGFuY2VfY2F0YWxvZ19pdGVtX3R5cGUucHJvdG8SDm9zYWMucHVibGljLnYxIqwEChxCYXJlTWV0YWxJbnN0YW5jZUNhdGFsb2dJdGVtEgoKAmlkGAEgASgJEioKCG1ldGFkYXRhGAIgASgLMhgub3NhYy5wdWJsaWMudjEuTWV0YWRhdGESDQoFdGl0bGUYAyABKAkSEwoLZGVzY3JpcHRpb24YBCABKAkSUgoIdGVtcGxhdGUYBSABKAsyMi5vc2FjLnB1YmxpYy52MS5CYXJlTWV0YWxJbnN0YW5jZVRlbXBsYXRlUmVmZXJlbmNlQgzgQQLgQQW6SAPIAQESEQoJcHVibGlzaGVkGAYgASgIEj4KEWZpZWxkX2RlZmluaXRpb25zGAggAygLMh8ub3NhYy5wdWJsaWMudjEuRmllbGREZWZpbml0aW9uQgIYARJhChN0ZW1wbGF0ZV9wYXJhbWV0ZXJzGAkgAygLMkQub3NhYy5wdWJsaWMudjEuQmFyZU1ldGFsSW5zdGFuY2VDYXRhbG9nSXRlbS5UZW1wbGF0ZVBhcmFtZXRlcnNFbnRyeRJCCgZmaWVsZHMYCiABKAsyMi5vc2FjLnB1YmxpYy52MS5CYXJlTWV0YWxJbnN0YW5jZUNhdGFsb2dJdGVtRmllbGRzGmIKF1RlbXBsYXRlUGFyYW1ldGVyc0VudHJ5EgsKA2tleRgBIAEoCRI2CgV2YWx1ZRgCIAEoCzInLm9zYWMucHVibGljLnYxLlRlbXBsYXRlUGFyYW1ldGVyUG9saWN5OgI4ASLeBAoiQmFyZU1ldGFsSW5zdGFuY2VDYXRhbG9nSXRlbUZpZWxkcxI5Cg5zc2hfcHVibGljX2tleRgBIAEoCzIhLm9zYWMucHVibGljLnYxLlN0cmluZ0ZpZWxkUG9saWN5EjQKCXVzZXJfZGF0YRgCIAEoCzIhLm9zYWMucHVibGljLnYxLlN0cmluZ0ZpZWxkUG9saWN5Ek0KDHJ1bl9zdHJhdGVneRgDIAEoCzI3Lm9zYWMucHVibGljLnYxLkJhcmVNZXRhbEluc3RhbmNlUnVuU3RyYXRlZ3lGaWVsZFBvbGljeRJACgVpbWFnZRgEIAEoCzIxLm9zYWMucHVibGljLnYxLkJhcmVNZXRhbEluc3RhbmNlSW1hZ2VGaWVsZFBvbGljeRJWChNuZXR3b3JrX2F0dGFjaG1lbnRzGAUgASgLMjkub3NhYy5wdWJsaWMudjEuQmFyZU1ldGFsTmV0d29ya0F0dGFjaG1lbnRMaXN0RmllbGRQb2xpY3kSRAobYXV0b19leHRlcm5hbF9pcF9hdHRhY2htZW50GAYgASgLMh8ub3NhYy5wdWJsaWMudjEuQm9vbEZpZWxkUG9saWN5ElUKDWluc3RhbmNlX3R5cGUYByABKAsyPi5vc2FjLnB1YmxpYy52MS5CYXJlTWV0YWxJbnN0YW5jZVR5cGVMb2NhbFJlZmVyZW5jZUZpZWxkUG9saWN5EkEKCmRpc2tfaW1hZ2UYCCABKAsyLS5vc2FjLnB1YmxpYy52MS5EaXNrSW1hZ2VSZWZlcmVuY2VGaWVsZFBvbGljeSJiCiVCYXJlTWV0YWxJbnN0YW5jZUNhdGFsb2dJdGVtUmVmZXJlbmNlEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSDwoHcHJvamVjdBgDIAEoCRIOCgZzaGFyZWQYBCABKAhiBnByb3RvMw", [file_buf_validate_validate, file_google_api_field_behavior, file_osac_public_v1_field_definition_type, file_osac_public_v1_field_policy_type, file_osac_public_v1_metadata_type, file_osac_public_v1_baremetal_instance_template_type]);
+  fileDesc("Cjlvc2FjL3B1YmxpYy92MS9iYXJlbWV0YWxfaW5zdGFuY2VfY2F0YWxvZ19pdGVtX3R5cGUucHJvdG8SDm9zYWMucHVibGljLnYxIpMEChxCYXJlTWV0YWxJbnN0YW5jZUNhdGFsb2dJdGVtEgoKAmlkGAEgASgJEioKCG1ldGFkYXRhGAIgASgLMhgub3NhYy5wdWJsaWMudjEuTWV0YWRhdGESDQoFdGl0bGUYAyABKAkSEwoLZGVzY3JpcHRpb24YBCABKAkSUgoIdGVtcGxhdGUYBSABKAsyMi5vc2FjLnB1YmxpYy52MS5CYXJlTWV0YWxJbnN0YW5jZVRlbXBsYXRlUmVmZXJlbmNlQgzgQQLgQQW6SAPIAQESEQoJcHVibGlzaGVkGAYgASgIEmEKE3RlbXBsYXRlX3BhcmFtZXRlcnMYCSADKAsyRC5vc2FjLnB1YmxpYy52MS5CYXJlTWV0YWxJbnN0YW5jZUNhdGFsb2dJdGVtLlRlbXBsYXRlUGFyYW1ldGVyc0VudHJ5EkIKBmZpZWxkcxgKIAEoCzIyLm9zYWMucHVibGljLnYxLkJhcmVNZXRhbEluc3RhbmNlQ2F0YWxvZ0l0ZW1GaWVsZHMaYgoXVGVtcGxhdGVQYXJhbWV0ZXJzRW50cnkSCwoDa2V5GAEgASgJEjYKBXZhbHVlGAIgASgLMicub3NhYy5wdWJsaWMudjEuVGVtcGxhdGVQYXJhbWV0ZXJQb2xpY3k6AjgBSgQIBxAISgQICBAJUgZ0ZW5hbnRSEWZpZWxkX2RlZmluaXRpb25zIqkECiJCYXJlTWV0YWxJbnN0YW5jZUNhdGFsb2dJdGVtRmllbGRzEjkKDnNzaF9wdWJsaWNfa2V5GAEgASgLMiEub3NhYy5wdWJsaWMudjEuU3RyaW5nRmllbGRQb2xpY3kSNAoJdXNlcl9kYXRhGAIgASgLMiEub3NhYy5wdWJsaWMudjEuU3RyaW5nRmllbGRQb2xpY3kSTQoMcnVuX3N0cmF0ZWd5GAMgASgLMjcub3NhYy5wdWJsaWMudjEuQmFyZU1ldGFsSW5zdGFuY2VSdW5TdHJhdGVneUZpZWxkUG9saWN5ElYKE25ldHdvcmtfYXR0YWNobWVudHMYBSABKAsyOS5vc2FjLnB1YmxpYy52MS5CYXJlTWV0YWxOZXR3b3JrQXR0YWNobWVudExpc3RGaWVsZFBvbGljeRJEChthdXRvX2V4dGVybmFsX2lwX2F0dGFjaG1lbnQYBiABKAsyHy5vc2FjLnB1YmxpYy52MS5Cb29sRmllbGRQb2xpY3kSVQoNaW5zdGFuY2VfdHlwZRgHIAEoCzI+Lm9zYWMucHVibGljLnYxLkJhcmVNZXRhbEluc3RhbmNlVHlwZUxvY2FsUmVmZXJlbmNlRmllbGRQb2xpY3kSQQoKZGlza19pbWFnZRgIIAEoCzItLm9zYWMucHVibGljLnYxLkRpc2tJbWFnZVJlZmVyZW5jZUZpZWxkUG9saWN5SgQIBBAFUgVpbWFnZSJiCiVCYXJlTWV0YWxJbnN0YW5jZUNhdGFsb2dJdGVtUmVmZXJlbmNlEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSDwoHcHJvamVjdBgDIAEoCRIOCgZzaGFyZWQYBCABKAhiBnByb3RvMw", [file_buf_validate_validate, file_google_api_field_behavior, file_osac_public_v1_field_policy_type, file_osac_public_v1_metadata_type, file_osac_public_v1_baremetal_instance_template_type]);
 
 /**
  * A bare metal instance catalog item defines a curated hardware offering that references an underlying bare metal
@@ -78,20 +76,11 @@ export type BareMetalInstanceCatalogItem = Message<"osac.public.v1.BareMetalInst
   template?: BareMetalInstanceTemplateReference | undefined;
 
   /**
-   * Whether this catalog item is published and visible to tenants.
+   * Whether this catalog item is available for provisioning. Drafts retain ordinary tenant/project visibility.
    *
    * @generated from field: bool published = 6;
    */
   published: boolean;
-
-  /**
-   * Deprecated: definitions of the fields that users can or cannot set when creating a resource from this catalog item.
-   * Use `fields` and `template_parameters` instead.
-   *
-   * @generated from field: repeated osac.public.v1.FieldDefinition field_definitions = 8 [deprecated = true];
-   * @deprecated
-   */
-  fieldDefinitions: FieldDefinition[];
 
   /**
    * Policies that govern template parameters during resource creation.
@@ -135,11 +124,6 @@ export type BareMetalInstanceCatalogItemFields = Message<"osac.public.v1.BareMet
    * @generated from field: osac.public.v1.BareMetalInstanceRunStrategyFieldPolicy run_strategy = 3;
    */
   runStrategy?: BareMetalInstanceRunStrategyFieldPolicy | undefined;
-
-  /**
-   * @generated from field: osac.public.v1.BareMetalInstanceImageFieldPolicy image = 4;
-   */
-  image?: BareMetalInstanceImageFieldPolicy | undefined;
 
   /**
    * @generated from field: osac.public.v1.BareMetalNetworkAttachmentListFieldPolicy network_attachments = 5;
@@ -206,3 +190,4 @@ export type BareMetalInstanceCatalogItemReference = Message<"osac.public.v1.Bare
  */
 export const BareMetalInstanceCatalogItemReferenceSchema: GenMessage<BareMetalInstanceCatalogItemReference> = /*@__PURE__*/
   messageDesc(file_osac_public_v1_baremetal_instance_catalog_item_type, 2);
+

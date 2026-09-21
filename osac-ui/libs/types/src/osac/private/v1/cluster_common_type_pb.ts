@@ -100,3 +100,4 @@ export type ClusterNetworkAttachment = Message<"osac.private.v1.ClusterNetworkAt
  */
 export const ClusterNetworkAttachmentSchema: GenMessage<ClusterNetworkAttachment> = /*@__PURE__*/
   messageDesc(file_osac_private_v1_cluster_common_type, 1);
+

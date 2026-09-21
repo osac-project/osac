@@ -64,6 +64,7 @@ const mockCluster = (state: ClusterState): Cluster => ({
     templateParameters: {},
     nodeSets: {},
     catalogItem: create(ClusterCatalogItemReferenceSchema, { id: '' }),
+    addOnOperators: [],
   },
 });
 

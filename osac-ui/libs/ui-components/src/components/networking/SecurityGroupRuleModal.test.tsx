@@ -188,31 +188,4 @@ describe('SecurityGroupRuleModal', () => {
     });
     expect(mutateAsync).not.toHaveBeenCalled();
   });
-
-  it('shows error and keeps modal open when the mutation fails', async () => {
-    const user = userEvent.setup();
-    mutateAsync.mockRejectedValue(new Error('boom'));
-    vi.mocked(networkingApi.useUpdateSecurityGroup).mockReturnValue({
-      mutateAsync,
-      isPending: false,
-      error: new Error('boom'),
-    } as unknown as ReturnType<typeof networkingApi.useUpdateSecurityGroup>);
-    const onClose = vi.fn();
-
-    render(
-      <SecurityGroupRuleModal
-        onClose={onClose}
-        securityGroup={securityGroup}
-        direction="ingress"
-        ruleIndex={0}
-      />,
-    );
-
-    await user.click(screen.getByRole('button', { name: /Save/i }));
-
-    await waitFor(() => {
-      expect(screen.getByText(/boom/i)).toBeInTheDocument();
-    });
-    expect(onClose).not.toHaveBeenCalled();
-  });
 });

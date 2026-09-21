@@ -179,3 +179,4 @@ export enum RoleBindingState {
  */
 export const RoleBindingStateSchema: GenEnum<RoleBindingState> = /*@__PURE__*/
   enumDesc(file_osac_public_v1_role_binding_type, 0);
+

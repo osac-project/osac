@@ -21,14 +21,9 @@ export * from './osac/public/v1/storage_tiers_service_pb.js'
 export * from './osac/public/v1/volume_type_pb.js'
 export * from './osac/public/v1/volumes_service_pb.js'
 
-export * from './osac/public/v1/organization_type_pb.js'
-export * from './osac/public/v1/organizations_service_pb.js'
-
 export * from './osac/public/v1/user_type_pb.js'
 export * from './osac/public/v1/users_service_pb.js'
 
-export * from './osac/public/v1/network_class_type_pb.js'
-export * from './osac/public/v1/network_classes_service_pb.js'
 export * from './osac/public/v1/virtual_network_type_pb.js'
 export * from './osac/public/v1/virtual_networks_service_pb.js'
 export * from './osac/public/v1/subnet_type_pb.js'

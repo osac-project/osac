@@ -18,8 +18,6 @@
 import type { GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv2";
 import { fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2";
 import { file_google_api_annotations } from "../../../google/api/annotations_pb";
-import type { FieldMask } from "../../../google/protobuf/field_mask_pb";
-import { file_google_protobuf_field_mask } from "../../../google/protobuf/field_mask_pb";
 import type { Subnet } from "./subnet_type_pb";
 import { file_osac_public_v1_subnet_type } from "./subnet_type_pb";
 import type { Message } from "@bufbuild/protobuf";
@@ -28,7 +26,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/public/v1/subnets_service.proto.
  */
 export const file_osac_public_v1_subnets_service: GenFile = /*@__PURE__*/
-  fileDesc("CiRvc2FjL3B1YmxpYy92MS9zdWJuZXRzX3NlcnZpY2UucHJvdG8SDm9zYWMucHVibGljLnYxIpABChJTdWJuZXRzTGlzdFJlcXVlc3QSEwoGb2Zmc2V0GAEgASgFSACIAQESEgoFbGltaXQYAiABKAVIAYgBARITCgZmaWx0ZXIYAyABKAlIAogBARISCgVvcmRlchgEIAEoCUgDiAEBQgkKB19vZmZzZXRCCAoGX2xpbWl0QgkKB19maWx0ZXJCCAoGX29yZGVyIlkKE1N1Ym5ldHNMaXN0UmVzcG9uc2USDAoEc2l6ZRgBIAEoBRINCgV0b3RhbBgCIAEoBRIlCgVpdGVtcxgDIAMoCzIWLm9zYWMucHVibGljLnYxLlN1Ym5ldCIfChFTdWJuZXRzR2V0UmVxdWVzdBIKCgJpZBgBIAEoCSI8ChJTdWJuZXRzR2V0UmVzcG9uc2USJgoGb2JqZWN0GAEgASgLMhYub3NhYy5wdWJsaWMudjEuU3VibmV0Ij4KFFN1Ym5ldHNDcmVhdGVSZXF1ZXN0EiYKBm9iamVjdBgBIAEoCzIWLm9zYWMucHVibGljLnYxLlN1Ym5ldCI/ChVTdWJuZXRzQ3JlYXRlUmVzcG9uc2USJgoGb2JqZWN0GAEgASgLMhYub3NhYy5wdWJsaWMudjEuU3VibmV0In0KFFN1Ym5ldHNVcGRhdGVSZXF1ZXN0EiYKBm9iamVjdBgBIAEoCzIWLm9zYWMucHVibGljLnYxLlN1Ym5ldBIvCgt1cGRhdGVfbWFzaxgCIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5GaWVsZE1hc2sSDAoEbG9jaxgDIAEoCCI/ChVTdWJuZXRzVXBkYXRlUmVzcG9uc2USJgoGb2JqZWN0GAEgASgLMhYub3NhYy5wdWJsaWMudjEuU3VibmV0IiIKFFN1Ym5ldHNEZWxldGVSZXF1ZXN0EgoKAmlkGAEgASgJIhcKFVN1Ym5ldHNEZWxldGVSZXNwb25zZTKmBQoHU3VibmV0cxJ0CgRMaXN0EiIub3NhYy5wdWJsaWMudjEuU3VibmV0c0xpc3RSZXF1ZXN0GiMub3NhYy5wdWJsaWMudjEuU3VibmV0c0xpc3RSZXNwb25zZSIjgtPkkwIdEhsvYXBpL2Z1bGZpbGxtZW50L3YxL3N1Ym5ldHMSfgoDR2V0EiEub3NhYy5wdWJsaWMudjEuU3VibmV0c0dldFJlcXVlc3QaIi5vc2FjLnB1YmxpYy52MS5TdWJuZXRzR2V0UmVzcG9uc2UiMILT5JMCKmIGb2JqZWN0EiAvYXBpL2Z1bGZpbGxtZW50L3YxL3N1Ym5ldHMve2lkfRKKAQoGQ3JlYXRlEiQub3NhYy5wdWJsaWMudjEuU3VibmV0c0NyZWF0ZVJlcXVlc3QaJS5vc2FjLnB1YmxpYy52MS5TdWJuZXRzQ3JlYXRlUmVzcG9uc2UiM4LT5JMCLToGb2JqZWN0YgZvYmplY3QiGy9hcGkvZnVsZmlsbG1lbnQvdjEvc3VibmV0cxKWAQoGVXBkYXRlEiQub3NhYy5wdWJsaWMudjEuU3VibmV0c1VwZGF0ZVJlcXVlc3QaJS5vc2FjLnB1YmxpYy52MS5TdWJuZXRzVXBkYXRlUmVzcG9uc2UiP4LT5JMCOToGb2JqZWN0YgZvYmplY3QyJy9hcGkvZnVsZmlsbG1lbnQvdjEvc3VibmV0cy97b2JqZWN0LmlkfRJ/CgZEZWxldGUSJC5vc2FjLnB1YmxpYy52MS5TdWJuZXRzRGVsZXRlUmVxdWVzdBolLm9zYWMucHVibGljLnYxLlN1Ym5ldHNEZWxldGVSZXNwb25zZSIogtPkkwIiKiAvYXBpL2Z1bGZpbGxtZW50L3YxL3N1Ym5ldHMve2lkfWIGcHJvdG8z", [file_google_api_annotations, file_google_protobuf_field_mask, file_osac_public_v1_subnet_type]);
+  fileDesc("CiRvc2FjL3B1YmxpYy92MS9zdWJuZXRzX3NlcnZpY2UucHJvdG8SDm9zYWMucHVibGljLnYxIpABChJTdWJuZXRzTGlzdFJlcXVlc3QSEwoGb2Zmc2V0GAEgASgFSACIAQESEgoFbGltaXQYAiABKAVIAYgBARITCgZmaWx0ZXIYAyABKAlIAogBARISCgVvcmRlchgEIAEoCUgDiAEBQgkKB19vZmZzZXRCCAoGX2xpbWl0QgkKB19maWx0ZXJCCAoGX29yZGVyIlkKE1N1Ym5ldHNMaXN0UmVzcG9uc2USDAoEc2l6ZRgBIAEoBRINCgV0b3RhbBgCIAEoBRIlCgVpdGVtcxgDIAMoCzIWLm9zYWMucHVibGljLnYxLlN1Ym5ldCIfChFTdWJuZXRzR2V0UmVxdWVzdBIKCgJpZBgBIAEoCSI8ChJTdWJuZXRzR2V0UmVzcG9uc2USJgoGb2JqZWN0GAEgASgLMhYub3NhYy5wdWJsaWMudjEuU3VibmV0Ij4KFFN1Ym5ldHNDcmVhdGVSZXF1ZXN0EiYKBm9iamVjdBgBIAEoCzIWLm9zYWMucHVibGljLnYxLlN1Ym5ldCI/ChVTdWJuZXRzQ3JlYXRlUmVzcG9uc2USJgoGb2JqZWN0GAEgASgLMhYub3NhYy5wdWJsaWMudjEuU3VibmV0IiIKFFN1Ym5ldHNEZWxldGVSZXF1ZXN0EgoKAmlkGAEgASgJIhcKFVN1Ym5ldHNEZWxldGVSZXNwb25zZTKNBAoHU3VibmV0cxJ0CgRMaXN0EiIub3NhYy5wdWJsaWMudjEuU3VibmV0c0xpc3RSZXF1ZXN0GiMub3NhYy5wdWJsaWMudjEuU3VibmV0c0xpc3RSZXNwb25zZSIjgtPkkwIdEhsvYXBpL2Z1bGZpbGxtZW50L3YxL3N1Ym5ldHMSfgoDR2V0EiEub3NhYy5wdWJsaWMudjEuU3VibmV0c0dldFJlcXVlc3QaIi5vc2FjLnB1YmxpYy52MS5TdWJuZXRzR2V0UmVzcG9uc2UiMILT5JMCKmIGb2JqZWN0EiAvYXBpL2Z1bGZpbGxtZW50L3YxL3N1Ym5ldHMve2lkfRKKAQoGQ3JlYXRlEiQub3NhYy5wdWJsaWMudjEuU3VibmV0c0NyZWF0ZVJlcXVlc3QaJS5vc2FjLnB1YmxpYy52MS5TdWJuZXRzQ3JlYXRlUmVzcG9uc2UiM4LT5JMCLToGb2JqZWN0YgZvYmplY3QiGy9hcGkvZnVsZmlsbG1lbnQvdjEvc3VibmV0cxJ/CgZEZWxldGUSJC5vc2FjLnB1YmxpYy52MS5TdWJuZXRzRGVsZXRlUmVxdWVzdBolLm9zYWMucHVibGljLnYxLlN1Ym5ldHNEZWxldGVSZXNwb25zZSIogtPkkwIiKiAvYXBpL2Z1bGZpbGxtZW50L3YxL3N1Ym5ldHMve2lkfWIGcHJvdG8z", [file_google_api_annotations, file_osac_public_v1_subnet_type]);
 
 /**
  * @generated from message osac.public.v1.SubnetsListRequest
@@ -196,54 +194,6 @@ export const SubnetsCreateResponseSchema: GenMessage<SubnetsCreateResponse> = /*
   messageDesc(file_osac_public_v1_subnets_service, 5);
 
 /**
- * @generated from message osac.public.v1.SubnetsUpdateRequest
- */
-export type SubnetsUpdateRequest = Message<"osac.public.v1.SubnetsUpdateRequest"> & {
-  /**
-   * @generated from field: osac.public.v1.Subnet object = 1;
-   */
-  object?: Subnet | undefined;
-
-  /**
-   * @generated from field: google.protobuf.FieldMask update_mask = 2;
-   */
-  updateMask?: FieldMask | undefined;
-
-  /**
-   * Lock enables optimistic locking. When set to true, the server verifies that the current version of the object
-   * matches the value of the metadata.version field of the submitted object. If they differ the update will be
-   * rejected. This is useful to prevent lost updates when multiple clients are modifying the same object concurrently.
-   *
-   * @generated from field: bool lock = 3;
-   */
-  lock: boolean;
-};
-
-/**
- * Describes the message osac.public.v1.SubnetsUpdateRequest.
- * Use `create(SubnetsUpdateRequestSchema)` to create a new message.
- */
-export const SubnetsUpdateRequestSchema: GenMessage<SubnetsUpdateRequest> = /*@__PURE__*/
-  messageDesc(file_osac_public_v1_subnets_service, 6);
-
-/**
- * @generated from message osac.public.v1.SubnetsUpdateResponse
- */
-export type SubnetsUpdateResponse = Message<"osac.public.v1.SubnetsUpdateResponse"> & {
-  /**
-   * @generated from field: osac.public.v1.Subnet object = 1;
-   */
-  object?: Subnet | undefined;
-};
-
-/**
- * Describes the message osac.public.v1.SubnetsUpdateResponse.
- * Use `create(SubnetsUpdateResponseSchema)` to create a new message.
- */
-export const SubnetsUpdateResponseSchema: GenMessage<SubnetsUpdateResponse> = /*@__PURE__*/
-  messageDesc(file_osac_public_v1_subnets_service, 7);
-
-/**
  * @generated from message osac.public.v1.SubnetsDeleteRequest
  */
 export type SubnetsDeleteRequest = Message<"osac.public.v1.SubnetsDeleteRequest"> & {
@@ -258,7 +208,7 @@ export type SubnetsDeleteRequest = Message<"osac.public.v1.SubnetsDeleteRequest"
  * Use `create(SubnetsDeleteRequestSchema)` to create a new message.
  */
 export const SubnetsDeleteRequestSchema: GenMessage<SubnetsDeleteRequest> = /*@__PURE__*/
-  messageDesc(file_osac_public_v1_subnets_service, 8);
+  messageDesc(file_osac_public_v1_subnets_service, 6);
 
 /**
  * @generated from message osac.public.v1.SubnetsDeleteResponse
@@ -271,7 +221,7 @@ export type SubnetsDeleteResponse = Message<"osac.public.v1.SubnetsDeleteRespons
  * Use `create(SubnetsDeleteResponseSchema)` to create a new message.
  */
 export const SubnetsDeleteResponseSchema: GenMessage<SubnetsDeleteResponse> = /*@__PURE__*/
-  messageDesc(file_osac_public_v1_subnets_service, 9);
+  messageDesc(file_osac_public_v1_subnets_service, 7);
 
 /**
  * @generated from service osac.public.v1.Subnets
@@ -308,16 +258,6 @@ export const Subnets: GenService<{
     output: typeof SubnetsCreateResponseSchema;
   },
   /**
-   * Updates an existing subnet.
-   *
-   * @generated from rpc osac.public.v1.Subnets.Update
-   */
-  update: {
-    methodKind: "unary";
-    input: typeof SubnetsUpdateRequestSchema;
-    output: typeof SubnetsUpdateResponseSchema;
-  },
-  /**
    * Deletes a subnet.
    *
    * @generated from rpc osac.public.v1.Subnets.Delete
@@ -329,3 +269,4 @@ export const Subnets: GenService<{
   },
 }> = /*@__PURE__*/
   serviceDesc(file_osac_public_v1_subnets_service, 0);
+

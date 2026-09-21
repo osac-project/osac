@@ -57,3 +57,4 @@ export enum IPFamily {
  */
 export const IPFamilySchema: GenEnum<IPFamily> = /*@__PURE__*/
   enumDesc(file_osac_public_v1_ip_family_type, 0);
+

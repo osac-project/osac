@@ -292,3 +292,4 @@ export const ConsoleSessions: GenService<{
   },
 }> = /*@__PURE__*/
   serviceDesc(file_osac_public_v1_console_service, 0);
+

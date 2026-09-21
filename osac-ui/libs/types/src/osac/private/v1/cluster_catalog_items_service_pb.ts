@@ -340,3 +340,4 @@ export const ClusterCatalogItems: GenService<{
   },
 }> = /*@__PURE__*/
   serviceDesc(file_osac_private_v1_cluster_catalog_items_service, 0);
+

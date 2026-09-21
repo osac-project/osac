@@ -55,7 +55,6 @@ export const BareMetalCreatePage = () => {
             t('Provide either an SSH public key or user data containing access credentials.'),
           );
         }
-
         const instance = await createBareMetalInstance.mutateAsync(bareMetalPayload);
         if (!instance) {
           throw new Error('Create response missing instance');

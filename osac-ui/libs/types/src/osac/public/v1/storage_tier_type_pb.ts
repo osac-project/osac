@@ -28,7 +28,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/public/v1/storage_tier_type.proto.
  */
 export const file_osac_public_v1_storage_tier_type: GenFile = /*@__PURE__*/
-  fileDesc("CiZvc2FjL3B1YmxpYy92MS9zdG9yYWdlX3RpZXJfdHlwZS5wcm90bxIOb3NhYy5wdWJsaWMudjEipwEKC1N0b3JhZ2VUaWVyEgoKAmlkGAEgASgJEioKCG1ldGFkYXRhGAIgASgLMhgub3NhYy5wdWJsaWMudjEuTWV0YWRhdGESLQoEc3BlYxgDIAEoCzIfLm9zYWMucHVibGljLnYxLlN0b3JhZ2VUaWVyU3BlYxIxCgZzdGF0dXMYBCABKAsyIS5vc2FjLnB1YmxpYy52MS5TdG9yYWdlVGllclN0YXR1cyLCAQoPU3RvcmFnZVRpZXJTcGVjEhMKC2Rlc2NyaXB0aW9uGAEgASgJEj0KCHByb3RvY29sGAIgASgOMh8ub3NhYy5wdWJsaWMudjEuU3RvcmFnZVByb3RvY29sQgq6SAeCAQQQASAAEh4KFm1heF9yZWFkX2JhbmR3aWR0aF9tYnMYAyABKAUSHwoXbWF4X3dyaXRlX2JhbmR3aWR0aF9tYnMYBCABKAUSGgoSZW5jcnlwdGlvbl9lbmFibGVkGAUgASgIImYKEVN0b3JhZ2VUaWVyU3RhdHVzEi8KBXN0YXRlGAEgASgOMiAub3NhYy5wdWJsaWMudjEuU3RvcmFnZVRpZXJTdGF0ZRIUCgdtZXNzYWdlGAIgASgJSACIAQFCCgoIX21lc3NhZ2UqVQoQU3RvcmFnZVRpZXJTdGF0ZRIiCh5TVE9SQUdFX1RJRVJfU1RBVEVfVU5TUEVDSUZJRUQQABIdChlTVE9SQUdFX1RJRVJfU1RBVEVfQUNUSVZFEAFiBnByb3RvMw", [file_buf_validate_validate, file_osac_public_v1_metadata_type, file_osac_public_v1_storage_common_type]);
+  fileDesc("CiZvc2FjL3B1YmxpYy92MS9zdG9yYWdlX3RpZXJfdHlwZS5wcm90bxIOb3NhYy5wdWJsaWMudjEipwEKC1N0b3JhZ2VUaWVyEgoKAmlkGAEgASgJEioKCG1ldGFkYXRhGAIgASgLMhgub3NhYy5wdWJsaWMudjEuTWV0YWRhdGESLQoEc3BlYxgDIAEoCzIfLm9zYWMucHVibGljLnYxLlN0b3JhZ2VUaWVyU3BlYxIxCgZzdGF0dXMYBCABKAsyIS5vc2FjLnB1YmxpYy52MS5TdG9yYWdlVGllclN0YXR1cyJlCg9TdG9yYWdlVGllclNwZWMSEwoLZGVzY3JpcHRpb24YASABKAkSPQoIcHJvdG9jb2wYAiABKA4yHy5vc2FjLnB1YmxpYy52MS5TdG9yYWdlUHJvdG9jb2xCCrpIB4IBBBABIAAiZgoRU3RvcmFnZVRpZXJTdGF0dXMSLwoFc3RhdGUYASABKA4yIC5vc2FjLnB1YmxpYy52MS5TdG9yYWdlVGllclN0YXRlEhQKB21lc3NhZ2UYAiABKAlIAIgBAUIKCghfbWVzc2FnZSpVChBTdG9yYWdlVGllclN0YXRlEiIKHlNUT1JBR0VfVElFUl9TVEFURV9VTlNQRUNJRklFRBAAEh0KGVNUT1JBR0VfVElFUl9TVEFURV9BQ1RJVkUQAWIGcHJvdG8z", [file_buf_validate_validate, file_osac_public_v1_metadata_type, file_osac_public_v1_storage_common_type]);
 
 /**
  * Describes a class of storage service that can be referenced by name when provisioning
@@ -99,27 +99,6 @@ export type StorageTierSpec = Message<"osac.public.v1.StorageTierSpec"> & {
    * @generated from field: osac.public.v1.StorageProtocol protocol = 2;
    */
   protocol: StorageProtocol;
-
-  /**
-   * Maximum read bandwidth in megabytes per second.
-   *
-   * @generated from field: int32 max_read_bandwidth_mbs = 3;
-   */
-  maxReadBandwidthMbs: number;
-
-  /**
-   * Maximum write bandwidth in megabytes per second.
-   *
-   * @generated from field: int32 max_write_bandwidth_mbs = 4;
-   */
-  maxWriteBandwidthMbs: number;
-
-  /**
-   * Whether data at rest is encrypted on this tier.
-   *
-   * @generated from field: bool encryption_enabled = 5;
-   */
-  encryptionEnabled: boolean;
 };
 
 /**
@@ -183,3 +162,4 @@ export enum StorageTierState {
  */
 export const StorageTierStateSchema: GenEnum<StorageTierState> = /*@__PURE__*/
   enumDesc(file_osac_public_v1_storage_tier_type, 0);
+

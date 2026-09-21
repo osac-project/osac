@@ -15,8 +15,8 @@
 // @generated from file osac/public/v1/secret_type.proto (package osac.public.v1, syntax proto3)
 /* eslint-disable */
 
-import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
-import { fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
+import type { GenEnum, GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
+import { enumDesc, fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
 import { file_buf_validate_validate } from "../../../buf/validate/validate_pb";
 import type { Metadata } from "./metadata_type_pb";
 import { file_osac_public_v1_metadata_type } from "./metadata_type_pb";
@@ -26,13 +26,13 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/public/v1/secret_type.proto.
  */
 export const file_osac_public_v1_secret_type: GenFile = /*@__PURE__*/
-  fileDesc("CiBvc2FjL3B1YmxpYy92MS9zZWNyZXRfdHlwZS5wcm90bxIOb3NhYy5wdWJsaWMudjEiqwEKBlNlY3JldBIKCgJpZBgBIAEoCRIqCghtZXRhZGF0YRgCIAEoCzIYLm9zYWMucHVibGljLnYxLk1ldGFkYXRhEjwKBGRhdGEYAyADKAsyIC5vc2FjLnB1YmxpYy52MS5TZWNyZXQuRGF0YUVudHJ5Qgy6SAmaAQYiBHICEAEaKwoJRGF0YUVudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoDDoCOAEiMAoUU2VjcmV0TG9jYWxSZWZlcmVuY2USCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCWIGcHJvdG8z", [file_buf_validate_validate, file_osac_public_v1_metadata_type]);
+  fileDesc("CiBvc2FjL3B1YmxpYy92MS9zZWNyZXRfdHlwZS5wcm90bxIOb3NhYy5wdWJsaWMudjEi3wEKBlNlY3JldBIKCgJpZBgBIAEoCRIqCghtZXRhZGF0YRgCIAEoCzIYLm9zYWMucHVibGljLnYxLk1ldGFkYXRhEjwKBGRhdGEYAyADKAsyIC5vc2FjLnB1YmxpYy52MS5TZWNyZXQuRGF0YUVudHJ5Qgy6SAmaAQYiBHICEAESMgoEdHlwZRgGIAEoDjIaLm9zYWMucHVibGljLnYxLlNlY3JldFR5cGVCCLpIBYIBAhABGisKCURhdGFFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAw6AjgBIjAKFFNlY3JldExvY2FsUmVmZXJlbmNlEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkqrAEKClNlY3JldFR5cGUSGwoXU0VDUkVUX1RZUEVfVU5TUEVDSUZJRUQQABIbChdTRUNSRVRfVFlQRV9QVUxMX1NFQ1JFVBABEhoKFlNFQ1JFVF9UWVBFX0tVQkVDT05GSUcQAhIZChVTRUNSRVRfVFlQRV9VU0VSX0RBVEEQAxIWChJTRUNSRVRfVFlQRV9PUEFRVUUQBBIVChFTRUNSRVRfVFlQRV9WQUxVRRAFYgZwcm90bzM", [file_buf_validate_validate, file_osac_public_v1_metadata_type]);
 
 /**
- * Represents a secret containing opaque key-value data.
+ * Represents a secret containing typed or opaque key-value data.
  *
  * Secrets store sensitive information such as TLS certificates, pull secrets, and credentials. Each secret holds a map
- * of named binary values. For example, a TLS secret might contain entries named `tls.crt` and `tls.key`.
+ * of named binary values.
  *
  * Secrets are scoped to a tenant and can be referenced by other resources that require sensitive configuration data.
  *
@@ -63,6 +63,13 @@ export type Secret = Message<"osac.public.v1.Secret"> & {
    * @generated from field: map<string, bytes> data = 3;
    */
   data: { [key: string]: Uint8Array };
+
+  /**
+   * Type of data stored in the secret.
+   *
+   * @generated from field: osac.public.v1.SecretType type = 6;
+   */
+  type: SecretType;
 };
 
 /**
@@ -95,3 +102,59 @@ export type SecretLocalReference = Message<"osac.public.v1.SecretLocalReference"
  */
 export const SecretLocalReferenceSchema: GenMessage<SecretLocalReference> = /*@__PURE__*/
   messageDesc(file_osac_public_v1_secret_type, 1);
+
+/**
+ * The type of data stored in a secret.
+ *
+ * @generated from enum osac.public.v1.SecretType
+ */
+export enum SecretType {
+  /**
+   * The secret type is not specified. The service treats an unspecified type as opaque when creating a secret.
+   *
+   * @generated from enum value: SECRET_TYPE_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * A Kubernetes-compatible container registry pull secret. Requires a `.dockerconfigjson` data key.
+   *
+   * @generated from enum value: SECRET_TYPE_PULL_SECRET = 1;
+   */
+  PULL_SECRET = 1,
+
+  /**
+   * A Kubernetes client configuration. Requires a `kubeconfig` data key.
+   *
+   * @generated from enum value: SECRET_TYPE_KUBECONFIG = 2;
+   */
+  KUBECONFIG = 2,
+
+  /**
+   * Cloud-init or other instance user data. Requires a `userdata` data key.
+   *
+   * @generated from enum value: SECRET_TYPE_USER_DATA = 3;
+   */
+  USER_DATA = 3,
+
+  /**
+   * An opaque secret with no required data keys.
+   *
+   * @generated from enum value: SECRET_TYPE_OPAQUE = 4;
+   */
+  OPAQUE = 4,
+
+  /**
+   * Represents a single value of any kind. Requires a `value` data key.
+   *
+   * @generated from enum value: SECRET_TYPE_VALUE = 5;
+   */
+  VALUE = 5,
+}
+
+/**
+ * Describes the enum osac.public.v1.SecretType.
+ */
+export const SecretTypeSchema: GenEnum<SecretType> = /*@__PURE__*/
+  enumDesc(file_osac_public_v1_secret_type, 0);
+

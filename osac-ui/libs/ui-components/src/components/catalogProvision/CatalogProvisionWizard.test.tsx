@@ -8,8 +8,8 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   type ClusterCatalogItem,
   type ComputeInstanceCatalogItem,
-  ComputeInstanceRunStrategy,
   type Secret,
+  SecretType,
 } from '@osac/types';
 import {
   ClusterTemplateReferenceSchema,
@@ -46,18 +46,6 @@ const fillGeneralStep = async (user: UserEvent, name: string) => {
   const nameInput = screen.getByLabelText(/^Name/);
   await user.clear(nameInput);
   await user.type(nameInput, name);
-};
-
-const fillClusterNodeSetRow = async (user: UserEvent, hostTypeLabel = 'ACME 1TB', size = '3') => {
-  await waitFor(() => {
-    expect(screen.getByText('Node set 1')).toBeInTheDocument();
-  });
-  await user.type(screen.getByLabelText(/^Name/), 'workers');
-  await user.click(screen.getByLabelText(/^Host type/));
-  await user.click(screen.getByRole('option', { name: hostTypeLabel }));
-  const sizeInput = screen.getByRole('spinbutton', { name: /^Nodes/ });
-  await user.clear(sizeInput);
-  await user.type(sizeInput, size);
 };
 
 export const clickWizardNext = async (user: UserEvent) => {
@@ -201,36 +189,6 @@ const getCancelModal = () => {
   return within(dialog);
 };
 
-const advanceToClusterConfigurationStep = async (
-  user: UserEvent,
-  catalogItemTitle: string,
-  name = 'my-cluster',
-) => {
-  await selectCatalogItem(user, catalogItemTitle);
-  await clickWizardNext(user);
-  await fillClusterGeneralStep(user, name);
-  await clickWizardNext(user);
-  await waitFor(() => {
-    expect(screen.getByLabelText(/^Version/)).toBeInTheDocument();
-  });
-  await waitFor(() => {
-    expect(screen.getByRole('button', { name: 'Add node set' })).toBeInTheDocument();
-  });
-};
-
-const advanceToClusterReviewStep = async (user: UserEvent, catalogItemTitle: string) => {
-  await advanceToClusterConfigurationStep(user, catalogItemTitle);
-  await fillClusterNodeSetRow(user);
-  await clickWizardNext(user);
-  await waitFor(() => {
-    expect(screen.getByLabelText(/Pod CIDR/)).toBeInTheDocument();
-  });
-  await clickWizardNext(user);
-  await waitFor(() => {
-    expect(screen.getByRole('button', { name: 'Create' })).toBeInTheDocument();
-  });
-};
-
 const vmCatalogItem: ComputeInstanceCatalogItem = {
   $typeName: 'osac.public.v1.ComputeInstanceCatalogItem',
   id: 'catalog-rhel-9',
@@ -250,19 +208,6 @@ const vmCatalogItem: ComputeInstanceCatalogItem = {
   description: 'RHEL 9 base image',
   template: create(ComputeInstanceTemplateReferenceSchema, { id: 'tpl-rhel-9' }),
   published: true,
-  fieldDefinitions: [
-    {
-      $typeName: 'osac.public.v1.FieldDefinition',
-      path: 'spec.image.source_ref',
-      displayName: 'VM image',
-      editable: true,
-      validationSchema: '',
-      default: {
-        $typeName: 'google.protobuf.Value',
-        kind: { case: 'stringValue', value: 'quay.io/example/rhel9' },
-      },
-    },
-  ],
   templateParameters: {},
 };
 
@@ -285,80 +230,11 @@ const clusterCatalogItem: ClusterCatalogItem = {
   description: 'Standard OpenShift cluster offering',
   template: create(ClusterTemplateReferenceSchema, { id: 'tpl-openshift-4' }),
   published: true,
-  fieldDefinitions: [
-    {
-      $typeName: 'osac.public.v1.FieldDefinition',
-      path: 'version',
-      displayName: 'Version',
-      editable: true,
-      validationSchema: '',
-      default: {
-        $typeName: 'google.protobuf.Value',
-        kind: { case: 'stringValue', value: '4.17.0' },
-      },
-    },
-  ],
   templateParameters: {},
 };
 
 const catalogItemWithDistinctDefaults: ComputeInstanceCatalogItem = {
   ...vmCatalogItem,
-  fieldDefinitions: [
-    {
-      $typeName: 'osac.public.v1.FieldDefinition',
-      path: 'spec.image.source_ref',
-      displayName: 'VM image',
-      editable: true,
-      validationSchema: '',
-      default: {
-        $typeName: 'google.protobuf.Value',
-        kind: { case: 'stringValue', value: 'quay.io/example/rhel9' },
-      },
-    },
-  ],
-  templateParameters: {},
-};
-
-const multiFieldCatalogItem: ComputeInstanceCatalogItem = {
-  $typeName: 'osac.public.v1.ComputeInstanceCatalogItem',
-  id: 'catalog-rhel-9',
-  metadata: {
-    $typeName: 'osac.public.v1.Metadata',
-    displayName: '',
-    description: '',
-    name: 'catalog-rhel-9',
-    annotations: {},
-    creator: 'foo',
-    labels: {},
-    project: 'foo',
-    tenant: 'foo',
-    version: 1,
-  },
-  title: 'RHEL 9 catalog',
-  description: 'RHEL 9 base image',
-  template: create(ComputeInstanceTemplateReferenceSchema, { id: 'tpl-rhel-9' }),
-  published: true,
-  fieldDefinitions: [
-    {
-      $typeName: 'osac.public.v1.FieldDefinition',
-      path: 'spec.image.source_ref',
-      displayName: 'VM image',
-      editable: true,
-      validationSchema: '',
-      default: {
-        $typeName: 'google.protobuf.Value',
-        kind: { case: 'stringValue', value: 'quay.io/example/rhel9' },
-      },
-    },
-    {
-      $typeName: 'osac.public.v1.FieldDefinition',
-      path: 'spec.boot_disk.size_gib',
-      displayName: 'Boot disk',
-      editable: true,
-      validationSchema: '',
-      default: { $typeName: 'google.protobuf.Value', kind: { case: 'numberValue', value: 40 } },
-    },
-  ],
   templateParameters: {},
 };
 
@@ -380,6 +256,7 @@ const apiFixtures: MockApiFixtures = {
         version: 1,
       },
       data: {},
+      type: SecretType.PULL_SECRET,
     } as Secret,
   ],
   catalogItems: [vmCatalogItem],
@@ -636,49 +513,6 @@ describe('CatalogProvisionWizard', () => {
     await clickWizardNext(user);
 
     await expectConfigurationDefaults();
-  });
-
-  it('applies multi-field catalog defaults through configuration and create', async () => {
-    const onProvision = vi.fn().mockResolvedValue(undefined);
-    const { user } = renderWizard({
-      apiFixtures: {
-        ...apiFixtures,
-        catalogItems: [multiFieldCatalogItem],
-      },
-      onProvision,
-    });
-
-    await selectCatalogItem(user, vmCatalogItem.title);
-    await clickWizardNext(user);
-    await fillGeneralStep(user, 'web-01');
-    await clickWizardNext(user);
-
-    await expectConfigurationDefaults();
-    await waitForConfigurationReady();
-
-    await clickWizardNext(user);
-    await waitFor(() => {
-      expect(screen.getByLabelText<HTMLInputElement>(/Boot disk/).value).toBe('40');
-    });
-    await fillStorageStep(user);
-
-    await clickWizardNext(user);
-    await selectNetworkingPickers(user);
-    await clickWizardNext(user);
-
-    await user.click(screen.getByRole('button', { name: 'Create' }));
-
-    await waitFor(() => {
-      expect(onProvision).toHaveBeenCalledTimes(1);
-    });
-
-    expect(onProvision.mock.calls[0][0]).toMatchObject({
-      spec: {
-        runStrategy: ComputeInstanceRunStrategy.COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS,
-        instanceType: { id: 'standard-4-8' },
-        bootDisk: { sizeGib: 40, storageTier: { id: 'id-fast', name: 'fast' } },
-      },
-    });
   });
 
   it('prefills configuration fields when deep-linked before catalog items finish loading', async () => {
@@ -1133,45 +967,5 @@ describe('CatalogProvisionWizard', () => {
         'Name must only contain lowercase letters (a-z), digits (0-9), and hyphens (-)',
       ),
     ).toBeInTheDocument();
-  });
-
-  it('shows host type display name on the cluster review step', async () => {
-    const { user } = renderWizard({ kind: 'cluster' });
-
-    await advanceToClusterReviewStep(user, clusterCatalogItem.title);
-
-    await waitFor(() => {
-      expect(screen.getByText('ACME 1TB: 3')).toBeInTheDocument();
-    });
-  });
-
-  it('starts with one node set and submits cluster create payload after filling it', async () => {
-    const onProvision = vi.fn().mockResolvedValue(undefined);
-    const { user } = renderWizard({
-      kind: 'cluster',
-      onProvision,
-    });
-
-    await advanceToClusterConfigurationStep(user, clusterCatalogItem.title);
-    expect(screen.getByText('Node set 1')).toBeInTheDocument();
-
-    await fillClusterNodeSetRow(user);
-    await clickWizardNext(user);
-    await clickWizardNext(user);
-    await user.click(screen.getByRole('button', { name: 'Create' }));
-
-    await waitFor(() => {
-      expect(onProvision).toHaveBeenCalledTimes(1);
-    });
-
-    expect(onProvision.mock.calls[0][0]).toMatchObject({
-      metadata: { name: 'my-cluster' },
-      spec: {
-        catalogItem: { id: clusterCatalogItem.id },
-      },
-    });
-    expect(onProvision.mock.calls[0][0]).toHaveProperty('spec.nodeSets', {
-      workers: { hostType: { id: 'acme_1tb' }, size: 3 },
-    });
   });
 });

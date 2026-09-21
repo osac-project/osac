@@ -27,7 +27,6 @@ import {
   BM_USER_DATA_WIRE_PATH,
   BareMetalInstanceWizardValues,
 } from './fields';
-import { getDiskImageName } from './utils';
 import { useTranslation } from '../../../../../hooks/useTranslation';
 import OsacForm from '../../../../Form/OsacForm';
 import { getCatalogFieldOverlay, readCatalogFieldDefinitions } from '../../catalogOverlay';
@@ -170,7 +169,7 @@ const BareMetalConfigurationStep = ({ catalogItem }: Props) => {
           <GalleryItem>
             <Card variant="secondary" isFullHeight>
               <CardTitle>{t('Disk image')}</CardTitle>
-              <CardBody>{getDiskImageName(catalogItem) || '-'}</CardBody>
+              <CardBody>{'-'}</CardBody>
             </Card>
           </GalleryItem>
         </Gallery>

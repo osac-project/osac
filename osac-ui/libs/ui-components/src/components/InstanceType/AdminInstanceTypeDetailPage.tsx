@@ -18,7 +18,12 @@ import {
   StackItem,
 } from '@patternfly/react-core';
 
-import { InstanceTypeState, type InstanceType as PrivateInstanceType } from '@osac/types/private';
+import {
+  InstanceTypeState,
+  InstanceTypes,
+  type InstanceType as PrivateInstanceType,
+} from '@osac/types/private';
+import { useGetResource } from '@osac/ui-components/api/use-resource';
 
 import InstanceTypeDeleteConfirmModal from './InstanceTypeDeleteConfirmModal';
 import InstanceTypeLifecycleLabel from './InstanceTypeLifecycleLabel';
@@ -26,7 +31,6 @@ import {
   getInstanceTypeLifecycleActions,
   useInstanceTypeLifecycleAction,
 } from './useInstanceTypeLifecycleAction';
-import { useAdminInstanceType } from '../../api/v1/private/instance-type';
 import { useTranslation } from '../../hooks/useTranslation';
 import ListPage from '../Page/ListPage';
 import ListPageBody from '../Page/ListPageBody';
@@ -109,7 +113,9 @@ const AdminInstanceTypeDetailPage = () => {
   const navigate = useNavigate();
   const { id = '' } = useParams<{ id: string }>();
 
-  const { data: instanceType, isLoading, error } = useAdminInstanceType(id);
+  const { data, isLoading, error } = useGetResource(InstanceTypes, { id });
+
+  const instanceType = data?.object;
 
   const name = instanceType?.metadata?.name ?? id;
   const gpu = instanceType?.spec?.gpu;

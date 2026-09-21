@@ -1620,3 +1620,4 @@ export enum Scheme {
  */
 export const SchemeSchema: GenEnum<Scheme> = /*@__PURE__*/
   enumDesc(file_protoc_gen_openapiv2_options_openapiv2, 0);
+

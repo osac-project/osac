@@ -21,8 +21,6 @@ import { file_buf_validate_validate } from "../../../buf/validate/validate_pb";
 import { file_cleanapi_cleanapi } from "../../../cleanapi/cleanapi_pb";
 import type { Any } from "../../../google/protobuf/any_pb";
 import { file_google_protobuf_any } from "../../../google/protobuf/any_pb";
-import type { BareMetalInstanceImage } from "./baremetal_instance_common_type_pb";
-import { file_osac_private_v1_baremetal_instance_common_type } from "./baremetal_instance_common_type_pb";
 import type { Metadata } from "./metadata_type_pb";
 import { file_osac_private_v1_metadata_type } from "./metadata_type_pb";
 import type { Message } from "@bufbuild/protobuf";
@@ -31,7 +29,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/private/v1/baremetal_instance_template_type.proto.
  */
 export const file_osac_private_v1_baremetal_instance_template_type: GenFile = /*@__PURE__*/
-  fileDesc("CjZvc2FjL3ByaXZhdGUvdjEvYmFyZW1ldGFsX2luc3RhbmNlX3RlbXBsYXRlX3R5cGUucHJvdG8SD29zYWMucHJpdmF0ZS52MSLRAgoZQmFyZU1ldGFsSW5zdGFuY2VUZW1wbGF0ZRIuCgJpZBgBIAEoCUIiukgfch0QATIZXlthLXpBLVpfXVthLXpBLVowLTkuX10qJBIrCghtZXRhZGF0YRgCIAEoCzIZLm9zYWMucHJpdmF0ZS52MS5NZXRhZGF0YRINCgV0aXRsZRgDIAEoCRITCgtkZXNjcmlwdGlvbhgEIAEoCRJNCg1zcGVjX2RlZmF1bHRzGAUgASgLMjYub3NhYy5wcml2YXRlLnYxLkJhcmVNZXRhbEluc3RhbmNlVGVtcGxhdGVTcGVjRGVmYXVsdHMSUQoKcGFyYW1ldGVycxgGIAMoCzI9Lm9zYWMucHJpdmF0ZS52MS5CYXJlTWV0YWxJbnN0YW5jZVRlbXBsYXRlUGFyYW1ldGVyRGVmaW5pdGlvbhIRCglob3N0X3R5cGUYByABKAkipwEKLEJhcmVNZXRhbEluc3RhbmNlVGVtcGxhdGVQYXJhbWV0ZXJEZWZpbml0aW9uEgwKBG5hbWUYASABKAkSDQoFdGl0bGUYAiABKAkSEwoLZGVzY3JpcHRpb24YAyABKAkSEAoIcmVxdWlyZWQYBCABKAgSDAoEdHlwZRgFIAEoCRIlCgdkZWZhdWx0GAYgASgLMhQuZ29vZ2xlLnByb3RvYnVmLkFueSJuCiVCYXJlTWV0YWxJbnN0YW5jZVRlbXBsYXRlU3BlY0RlZmF1bHRzEjsKBWltYWdlGAEgASgLMicub3NhYy5wcml2YXRlLnYxLkJhcmVNZXRhbEluc3RhbmNlSW1hZ2VIAIgBAUIICgZfaW1hZ2UiXwoiQmFyZU1ldGFsSW5zdGFuY2VUZW1wbGF0ZVJlZmVyZW5jZRIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJEg8KB3Byb2plY3QYAyABKAkSDgoGc2hhcmVkGAQgASgIQhSKtRgQEg5vc2FjLnB1YmxpYy52MWIGcHJvdG8z", [file_buf_validate_validate, file_cleanapi_cleanapi, file_google_protobuf_any, file_osac_private_v1_baremetal_instance_common_type, file_osac_private_v1_metadata_type]);
+  fileDesc("CjZvc2FjL3ByaXZhdGUvdjEvYmFyZW1ldGFsX2luc3RhbmNlX3RlbXBsYXRlX3R5cGUucHJvdG8SD29zYWMucHJpdmF0ZS52MSLRAgoZQmFyZU1ldGFsSW5zdGFuY2VUZW1wbGF0ZRIuCgJpZBgBIAEoCUIiukgfch0QATIZXlthLXpBLVpfXVthLXpBLVowLTkuX10qJBIrCghtZXRhZGF0YRgCIAEoCzIZLm9zYWMucHJpdmF0ZS52MS5NZXRhZGF0YRINCgV0aXRsZRgDIAEoCRITCgtkZXNjcmlwdGlvbhgEIAEoCRJNCg1zcGVjX2RlZmF1bHRzGAUgASgLMjYub3NhYy5wcml2YXRlLnYxLkJhcmVNZXRhbEluc3RhbmNlVGVtcGxhdGVTcGVjRGVmYXVsdHMSUQoKcGFyYW1ldGVycxgGIAMoCzI9Lm9zYWMucHJpdmF0ZS52MS5CYXJlTWV0YWxJbnN0YW5jZVRlbXBsYXRlUGFyYW1ldGVyRGVmaW5pdGlvbhIRCglob3N0X3R5cGUYByABKAkipwEKLEJhcmVNZXRhbEluc3RhbmNlVGVtcGxhdGVQYXJhbWV0ZXJEZWZpbml0aW9uEgwKBG5hbWUYASABKAkSDQoFdGl0bGUYAiABKAkSEwoLZGVzY3JpcHRpb24YAyABKAkSEAoIcmVxdWlyZWQYBCABKAgSDAoEdHlwZRgFIAEoCRIlCgdkZWZhdWx0GAYgASgLMhQuZ29vZ2xlLnByb3RvYnVmLkFueSI0CiVCYXJlTWV0YWxJbnN0YW5jZVRlbXBsYXRlU3BlY0RlZmF1bHRzSgQIARACUgVpbWFnZSJfCiJCYXJlTWV0YWxJbnN0YW5jZVRlbXBsYXRlUmVmZXJlbmNlEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSDwoHcHJvamVjdBgDIAEoCRIOCgZzaGFyZWQYBCABKAhCFIq1GBASDm9zYWMucHVibGljLnYxYgZwcm90bzM", [file_buf_validate_validate, file_cleanapi_cleanapi, file_google_protobuf_any, file_osac_private_v1_metadata_type]);
 
 /**
  * A bare metal instance template defines a hardware profile (host type, OS image, network configuration)
@@ -188,12 +186,6 @@ export const BareMetalInstanceTemplateParameterDefinitionSchema: GenMessage<Bare
  * @generated from message osac.private.v1.BareMetalInstanceTemplateSpecDefaults
  */
 export type BareMetalInstanceTemplateSpecDefaults = Message<"osac.private.v1.BareMetalInstanceTemplateSpecDefaults"> & {
-  /**
-   * Default OS base image used when the tenant does not specify one.
-   *
-   * @generated from field: optional osac.private.v1.BareMetalInstanceImage image = 1;
-   */
-  image?: BareMetalInstanceImage | undefined;
 };
 
 /**
@@ -236,3 +228,4 @@ export type BareMetalInstanceTemplateReference = Message<"osac.private.v1.BareMe
  */
 export const BareMetalInstanceTemplateReferenceSchema: GenMessage<BareMetalInstanceTemplateReference> = /*@__PURE__*/
   messageDesc(file_osac_private_v1_baremetal_instance_template_type, 3);
+

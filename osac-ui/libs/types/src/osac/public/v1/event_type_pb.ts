@@ -17,6 +17,8 @@
 
 import type { GenEnum, GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import { enumDesc, fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
+import type { Timestamp } from "../../../google/protobuf/timestamp_pb";
+import { file_google_protobuf_timestamp } from "../../../google/protobuf/timestamp_pb";
 import type { BareMetalInstance } from "./baremetal_instance_type_pb";
 import { file_osac_public_v1_baremetal_instance_type } from "./baremetal_instance_type_pb";
 import type { ClusterTemplate } from "./cluster_template_type_pb";
@@ -51,7 +53,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/public/v1/event_type.proto.
  */
 export const file_osac_public_v1_event_type: GenFile = /*@__PURE__*/
-  fileDesc("Ch9vc2FjL3B1YmxpYy92MS9ldmVudF90eXBlLnByb3RvEg5vc2FjLnB1YmxpYy52MSKqBgoFRXZlbnQSCgoCaWQYASABKAkSJwoEdHlwZRgCIAEoDjIZLm9zYWMucHVibGljLnYxLkV2ZW50VHlwZRJAChNiYXJlX21ldGFsX2luc3RhbmNlGAMgASgLMiEub3NhYy5wdWJsaWMudjEuQmFyZU1ldGFsSW5zdGFuY2VIABIqCgdjbHVzdGVyGAQgASgLMhcub3NhYy5wdWJsaWMudjEuQ2x1c3RlckgAEjsKEGNsdXN0ZXJfdGVtcGxhdGUYBSABKAsyHy5vc2FjLnB1YmxpYy52MS5DbHVzdGVyVGVtcGxhdGVIABI5Cg9jbHVzdGVyX3ZlcnNpb24YBiABKAsyHi5vc2FjLnB1YmxpYy52MS5DbHVzdGVyVmVyc2lvbkgAEjsKEGNvbXB1dGVfaW5zdGFuY2UYByABKAsyHy5vc2FjLnB1YmxpYy52MS5Db21wdXRlSW5zdGFuY2VIABJMChljb21wdXRlX2luc3RhbmNlX3RlbXBsYXRlGAggASgLMicub3NhYy5wdWJsaWMudjEuQ29tcHV0ZUluc3RhbmNlVGVtcGxhdGVIABIvCgpkaXNrX2ltYWdlGAkgASgLMhkub3NhYy5wdWJsaWMudjEuRGlza0ltYWdlSAASLQoJaG9zdF90eXBlGAogASgLMhgub3NhYy5wdWJsaWMudjEuSG9zdFR5cGVIABI1Cg1pbnN0YW5jZV90eXBlGAsgASgLMhwub3NhYy5wdWJsaWMudjEuSW5zdGFuY2VUeXBlSAASKgoHcHJvamVjdBgMIAEoCzIXLm9zYWMucHVibGljLnYxLlByb2plY3RIABIkCgRyb2xlGA0gASgLMhQub3NhYy5wdWJsaWMudjEuUm9sZUgAEjMKDHJvbGVfYmluZGluZxgOIAEoCzIbLm9zYWMucHVibGljLnYxLlJvbGVCaW5kaW5nSAASKAoGc2VjcmV0GA8gASgLMhYub3NhYy5wdWJsaWMudjEuU2VjcmV0SAASKAoGdGVuYW50GBAgASgLMhYub3NhYy5wdWJsaWMudjEuVGVuYW50SABCCQoHcGF5bG9hZCqEAQoJRXZlbnRUeXBlEhoKFkVWRU5UX1RZUEVfVU5TUEVDSUZJRUQQABIdChlFVkVOVF9UWVBFX09CSkVDVF9DUkVBVEVEEAESHQoZRVZFTlRfVFlQRV9PQkpFQ1RfVVBEQVRFRBACEh0KGUVWRU5UX1RZUEVfT0JKRUNUX0RFTEVURUQQA2IGcHJvdG8z", [file_osac_public_v1_baremetal_instance_type, file_osac_public_v1_cluster_template_type, file_osac_public_v1_cluster_version_type, file_osac_public_v1_cluster_type, file_osac_public_v1_compute_instance_template_type, file_osac_public_v1_compute_instance_type, file_osac_public_v1_disk_image_type, file_osac_public_v1_host_type_type, file_osac_public_v1_instance_type_type, file_osac_public_v1_project_type, file_osac_public_v1_tenant_type, file_osac_public_v1_role_binding_type, file_osac_public_v1_role_type, file_osac_public_v1_secret_type]);
+  fileDesc("Ch9vc2FjL3B1YmxpYy92MS9ldmVudF90eXBlLnByb3RvEg5vc2FjLnB1YmxpYy52MSLZBgoFRXZlbnQSCgoCaWQYASABKAkSJwoEdHlwZRgCIAEoDjIZLm9zYWMucHVibGljLnYxLkV2ZW50VHlwZRItCgl0aW1lc3RhbXAYJCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEkAKE2JhcmVfbWV0YWxfaW5zdGFuY2UYAyABKAsyIS5vc2FjLnB1YmxpYy52MS5CYXJlTWV0YWxJbnN0YW5jZUgAEioKB2NsdXN0ZXIYBCABKAsyFy5vc2FjLnB1YmxpYy52MS5DbHVzdGVySAASOwoQY2x1c3Rlcl90ZW1wbGF0ZRgFIAEoCzIfLm9zYWMucHVibGljLnYxLkNsdXN0ZXJUZW1wbGF0ZUgAEjkKD2NsdXN0ZXJfdmVyc2lvbhgGIAEoCzIeLm9zYWMucHVibGljLnYxLkNsdXN0ZXJWZXJzaW9uSAASOwoQY29tcHV0ZV9pbnN0YW5jZRgHIAEoCzIfLm9zYWMucHVibGljLnYxLkNvbXB1dGVJbnN0YW5jZUgAEkwKGWNvbXB1dGVfaW5zdGFuY2VfdGVtcGxhdGUYCCABKAsyJy5vc2FjLnB1YmxpYy52MS5Db21wdXRlSW5zdGFuY2VUZW1wbGF0ZUgAEi8KCmRpc2tfaW1hZ2UYCSABKAsyGS5vc2FjLnB1YmxpYy52MS5EaXNrSW1hZ2VIABItCglob3N0X3R5cGUYCiABKAsyGC5vc2FjLnB1YmxpYy52MS5Ib3N0VHlwZUgAEjUKDWluc3RhbmNlX3R5cGUYCyABKAsyHC5vc2FjLnB1YmxpYy52MS5JbnN0YW5jZVR5cGVIABIqCgdwcm9qZWN0GAwgASgLMhcub3NhYy5wdWJsaWMudjEuUHJvamVjdEgAEiQKBHJvbGUYDSABKAsyFC5vc2FjLnB1YmxpYy52MS5Sb2xlSAASMwoMcm9sZV9iaW5kaW5nGA4gASgLMhsub3NhYy5wdWJsaWMudjEuUm9sZUJpbmRpbmdIABIoCgZzZWNyZXQYDyABKAsyFi5vc2FjLnB1YmxpYy52MS5TZWNyZXRIABIoCgZ0ZW5hbnQYECABKAsyFi5vc2FjLnB1YmxpYy52MS5UZW5hbnRIAEIJCgdwYXlsb2FkKoQBCglFdmVudFR5cGUSGgoWRVZFTlRfVFlQRV9VTlNQRUNJRklFRBAAEh0KGUVWRU5UX1RZUEVfT0JKRUNUX0NSRUFURUQQARIdChlFVkVOVF9UWVBFX09CSkVDVF9VUERBVEVEEAISHQoZRVZFTlRfVFlQRV9PQkpFQ1RfREVMRVRFRBADYgZwcm90bzM", [file_google_protobuf_timestamp, file_osac_public_v1_baremetal_instance_type, file_osac_public_v1_cluster_template_type, file_osac_public_v1_cluster_version_type, file_osac_public_v1_cluster_type, file_osac_public_v1_compute_instance_template_type, file_osac_public_v1_compute_instance_type, file_osac_public_v1_disk_image_type, file_osac_public_v1_host_type_type, file_osac_public_v1_instance_type_type, file_osac_public_v1_project_type, file_osac_public_v1_tenant_type, file_osac_public_v1_role_binding_type, file_osac_public_v1_role_type, file_osac_public_v1_secret_type]);
 
 /**
  * Represents events delivered by the server.
@@ -72,6 +74,17 @@ export type Event = Message<"osac.public.v1.Event"> & {
    * @generated from field: osac.public.v1.EventType type = 2;
    */
   type: EventType;
+
+  /**
+   * Time at which the event was generated.
+   *
+   * For EVENT_TYPE_OBJECT_DELETED, this is the authoritative deletion boundary: the time at which the object had no
+   * remaining finalizers and the deletion event was generated. It is distinct from Metadata.deletion_timestamp, which
+   * records when deletion was requested.
+   *
+   * @generated from field: google.protobuf.Timestamp timestamp = 36;
+   */
+  timestamp?: Timestamp | undefined;
 
   /**
    * Payload of the event.
@@ -216,3 +229,4 @@ export enum EventType {
  */
 export const EventTypeSchema: GenEnum<EventType> = /*@__PURE__*/
   enumDesc(file_osac_public_v1_event_type, 0);
+

@@ -30,7 +30,6 @@ const vmCatalogItem: ComputeInstanceCatalogItem = {
     shared: false,
   },
   published: true,
-  fieldDefinitions: [],
   templateParameters: {},
 };
 

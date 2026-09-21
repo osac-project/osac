@@ -54,8 +54,6 @@ const fillValidForm = async (user: ReturnType<typeof renderCreatePage>['user']) 
   await user.click(screen.getByLabelText(/^Backend/));
   await user.click(screen.getByRole('option', { name: 'fast-nvme' }));
   await user.click(screen.getByRole('radio', { name: 'NFS' }));
-  await user.type(screen.getByRole('spinbutton', { name: 'Max read bandwidth (MB/s)' }), '100');
-  await user.type(screen.getByRole('spinbutton', { name: 'Max write bandwidth (MB/s)' }), '80');
 };
 
 const EDIT_ROUTE_PATH = '/admin/infrastructure/storage/tiers/:id/edit';
@@ -74,9 +72,6 @@ const existingTier = {
   spec: {
     description: 'fast storage',
     protocol: StorageProtocol.NFS,
-    maxReadBandwidthMbs: 100,
-    maxWriteBandwidthMbs: 80,
-    encryptionEnabled: false,
     backends: [
       {
         backendId: 'backend-2',
@@ -119,13 +114,6 @@ describe('StorageTierCreatePage', () => {
       expect(screen.getByLabelText(/^Backend/)).toBeInTheDocument();
       expect(screen.getByRole('radio', { name: 'NFS' })).toBeInTheDocument();
       expect(screen.getByRole('radio', { name: 'Block' })).toBeInTheDocument();
-      expect(
-        screen.getByRole('spinbutton', { name: 'Max read bandwidth (MB/s)' }),
-      ).toBeInTheDocument();
-      expect(
-        screen.getByRole('spinbutton', { name: 'Max write bandwidth (MB/s)' }),
-      ).toBeInTheDocument();
-      expect(screen.getByRole('checkbox', { name: 'Encryption enabled' })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Create' })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
     });
@@ -169,20 +157,6 @@ describe('StorageTierCreatePage', () => {
       expect(screen.queryAllByRole('option')).toHaveLength(0);
     });
 
-    it('rejects a value over the int32 maximum for a bandwidth field', async () => {
-      const { user } = renderCreatePage({ apiFixtures: { storageBackends: [readyBackend] } });
-
-      await user.type(
-        screen.getByRole('spinbutton', { name: 'Max read bandwidth (MB/s)' }),
-        '9999999999',
-      );
-      await user.click(screen.getByRole('button', { name: 'Create' }));
-
-      await waitFor(() => {
-        expect(screen.getByText('Must be at most 2147483647')).toBeInTheDocument();
-      });
-    });
-
     it('rejects a name that is not a valid DNS label', async () => {
       const { user } = renderCreatePage({ apiFixtures: { storageBackends: [readyBackend] } });
 
@@ -198,18 +172,7 @@ describe('StorageTierCreatePage', () => {
       });
     });
 
-    it('rejects a non-positive value for a QoS field', async () => {
-      const { user } = renderCreatePage({ apiFixtures: { storageBackends: [readyBackend] } });
-
-      await user.type(screen.getByRole('spinbutton', { name: 'Max read bandwidth (MB/s)' }), '0');
-      await user.click(screen.getByRole('button', { name: 'Create' }));
-
-      await waitFor(() => {
-        expect(screen.getByText('Must be greater than zero')).toBeInTheDocument();
-      });
-    });
-
-    it('submits protocol, bandwidth, and encryption at the tier level, and spec.backends as a one-element array without protocol or quota, navigating to the created tier details page on success', async () => {
+    it('submits the protocol and backend association, navigating to the created tier details page on success', async () => {
       const onStorageTierCreate = vi.fn(
         (req: { object?: { metadata?: unknown; spec?: unknown } }) => ({
           object: {
@@ -227,7 +190,6 @@ describe('StorageTierCreatePage', () => {
       });
 
       await fillValidForm(user);
-      await user.click(screen.getByRole('checkbox', { name: 'Encryption enabled' }));
       await user.click(screen.getByRole('button', { name: 'Create' }));
 
       await waitFor(() => {
@@ -238,24 +200,15 @@ describe('StorageTierCreatePage', () => {
       expect(request.object?.metadata).toMatchObject({ name: 'fast-tier' });
       const spec = request.object?.spec as {
         protocol?: StorageProtocol;
-        maxReadBandwidthMbs?: number;
-        maxWriteBandwidthMbs?: number;
-        encryptionEnabled?: boolean;
         backends?: unknown[];
       };
       expect(spec).toMatchObject({
         protocol: StorageProtocol.NFS,
-        maxReadBandwidthMbs: 100,
-        maxWriteBandwidthMbs: 80,
-        encryptionEnabled: true,
       });
       expect(Array.isArray(spec.backends)).toBe(true);
       expect(spec.backends).toHaveLength(1);
       expect(spec.backends?.[0]).toMatchObject({
         backendId: 'backend-1',
-        maxReadBandwidthMbs: 100,
-        maxWriteBandwidthMbs: 80,
-        encryptionEnabled: true,
       });
       expect(spec.backends?.[0]).not.toHaveProperty('protocol');
       expect(spec.backends?.[0]).not.toHaveProperty('quotaGib');
@@ -345,13 +298,6 @@ describe('StorageTierCreatePage', () => {
         expect(screen.getByLabelText(/^Backend/)).toHaveTextContent('legacy-backend');
       });
       expect(screen.getByRole('radio', { name: 'NFS' })).toBeChecked();
-      expect(screen.getByRole('spinbutton', { name: 'Max read bandwidth (MB/s)' })).toHaveValue(
-        100,
-      );
-      expect(screen.getByRole('spinbutton', { name: 'Max write bandwidth (MB/s)' })).toHaveValue(
-        80,
-      );
-      expect(screen.getByRole('checkbox', { name: 'Encryption enabled' })).not.toBeChecked();
     });
 
     it('renders the name field disabled', async () => {
@@ -381,19 +327,16 @@ describe('StorageTierCreatePage', () => {
       expect(screen.queryByText(/StorageClass/)).not.toBeInTheDocument();
     });
 
-    it('shows the QoS-change alert when a QoS field changes', async () => {
+    it('shows the QoS-change alert when the protocol changes', async () => {
       const { user } = renderEditPage();
 
-      const maxReadInput = await screen.findByRole('spinbutton', {
-        name: 'Max read bandwidth (MB/s)',
-      });
-      await user.clear(maxReadInput);
-      await user.type(maxReadInput, '999');
+      await screen.findByRole('radio', { name: 'NFS' });
+      await user.click(screen.getByRole('radio', { name: 'Block' }));
 
       expect(screen.getByText(/StorageClass/)).toBeInTheDocument();
     });
 
-    it('submits spec.backends, tier-level QoS fields, and spec.description together when the description changes', async () => {
+    it('submits spec.backends and spec.description together when the description changes', async () => {
       const onStorageTierUpdate = vi.fn(
         (req: { object?: { metadata?: unknown; spec?: unknown } }) => ({
           object: {
@@ -424,9 +367,6 @@ describe('StorageTierCreatePage', () => {
       expect(request.object?.spec?.backends).toMatchObject([{ backendId: 'backend-2' }]);
       expect(request.updateMask?.paths).toEqual([
         'spec.protocol',
-        'spec.max_read_bandwidth_mbs',
-        'spec.max_write_bandwidth_mbs',
-        'spec.encryption_enabled',
         'spec.backends',
         'spec.description',
       ]);
@@ -438,7 +378,7 @@ describe('StorageTierCreatePage', () => {
       );
     });
 
-    it('always submits the full tier-level QoS bundle and spec.backends together, masked accordingly, when a QoS field changes', async () => {
+    it('submits protocol and spec.backends together, masked accordingly, when the protocol changes', async () => {
       const onStorageTierUpdate = vi.fn((_req: { object?: unknown; updateMask?: unknown }) => ({
         object: { ...existingTier },
       }));
@@ -446,11 +386,8 @@ describe('StorageTierCreatePage', () => {
         transportOverrides: { onStorageTierUpdate: onStorageTierUpdate as never },
       });
 
-      const maxReadInput = await screen.findByRole('spinbutton', {
-        name: 'Max read bandwidth (MB/s)',
-      });
-      await user.clear(maxReadInput);
-      await user.type(maxReadInput, '999');
+      await screen.findByRole('radio', { name: 'NFS' });
+      await user.click(screen.getByRole('radio', { name: 'Block' }));
       await user.click(screen.getByRole('button', { name: 'Save' }));
 
       await waitFor(() => expect(onStorageTierUpdate).toHaveBeenCalledTimes(1));
@@ -458,34 +395,23 @@ describe('StorageTierCreatePage', () => {
         object?: {
           spec?: {
             protocol?: StorageProtocol;
-            maxReadBandwidthMbs?: number;
             backends?: unknown;
           };
         };
         updateMask?: { paths?: string[] };
       };
-      expect(request.updateMask?.paths).toEqual([
-        'spec.protocol',
-        'spec.max_read_bandwidth_mbs',
-        'spec.max_write_bandwidth_mbs',
-        'spec.encryption_enabled',
-        'spec.backends',
-      ]);
+      expect(request.updateMask?.paths).toEqual(['spec.protocol', 'spec.backends']);
       expect(request.object?.spec).toMatchObject({
-        protocol: StorageProtocol.NFS,
-        maxReadBandwidthMbs: 999,
+        protocol: StorageProtocol.BLOCK,
       });
       expect(request.object?.spec?.backends).toMatchObject([
         {
           backendId: 'backend-2',
-          maxReadBandwidthMbs: 999,
-          maxWriteBandwidthMbs: 80,
-          encryptionEnabled: false,
         },
       ]);
     });
 
-    it('submits the full tier-level QoS bundle and spec.backends with the same update_mask even when nothing changed', async () => {
+    it('submits protocol and spec.backends with the same update_mask even when nothing changed', async () => {
       const onStorageTierUpdate = vi.fn((_req: { object?: unknown; updateMask?: unknown }) => ({
         object: { ...existingTier },
       }));
@@ -501,13 +427,7 @@ describe('StorageTierCreatePage', () => {
         object?: { spec?: { backends?: unknown; description?: unknown } };
         updateMask?: { paths?: string[] };
       };
-      expect(request.updateMask?.paths).toEqual([
-        'spec.protocol',
-        'spec.max_read_bandwidth_mbs',
-        'spec.max_write_bandwidth_mbs',
-        'spec.encryption_enabled',
-        'spec.backends',
-      ]);
+      expect(request.updateMask?.paths).toEqual(['spec.protocol', 'spec.backends']);
       expect(request.object?.spec?.backends).toMatchObject([{ backendId: 'backend-2' }]);
     });
 

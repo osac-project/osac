@@ -105,25 +105,6 @@ export const StorageTierDetails = ({ tier }: StorageTierDetailsProps) => {
                 </DescriptionListDescription>
               </DescriptionListGroup>
 
-              <DescriptionListGroup>
-                <DescriptionListTerm>{t('Max read bandwidth')}</DescriptionListTerm>
-                <DescriptionListDescription>
-                  {tier.spec ? `${tier.spec.maxReadBandwidthMbs} MB/s` : '—'}
-                </DescriptionListDescription>
-              </DescriptionListGroup>
-              <DescriptionListGroup>
-                <DescriptionListTerm>{t('Max write bandwidth')}</DescriptionListTerm>
-                <DescriptionListDescription>
-                  {tier.spec ? `${tier.spec.maxWriteBandwidthMbs} MB/s` : '—'}
-                </DescriptionListDescription>
-              </DescriptionListGroup>
-              <DescriptionListGroup>
-                <DescriptionListTerm>{t('Encryption')}</DescriptionListTerm>
-                <DescriptionListDescription>
-                  {tier.spec ? (tier.spec.encryptionEnabled ? t('Yes') : t('No')) : '—'}
-                </DescriptionListDescription>
-              </DescriptionListGroup>
-
               {tier.status?.message && (
                 <DescriptionListGroup>
                   <DescriptionListTerm>{t('Message')}</DescriptionListTerm>

@@ -19,17 +19,21 @@ import type { GenEnum, GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2"
 import { enumDesc, fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
 import { file_cleanapi_cleanapi } from "../../../cleanapi/cleanapi_pb";
 import { file_google_api_field_behavior } from "../../../google/api/field_behavior_pb";
+import type { Timestamp } from "../../../google/protobuf/timestamp_pb";
+import { file_google_protobuf_timestamp } from "../../../google/protobuf/timestamp_pb";
 import type { Metadata } from "./metadata_type_pb";
 import { file_osac_private_v1_metadata_type } from "./metadata_type_pb";
 import type { ExternalIPPoolReference } from "./external_ip_pool_type_pb";
 import { file_osac_private_v1_external_ip_pool_type } from "./external_ip_pool_type_pb";
+import type { ExternalIPAttribution } from "./external_ip_attribution_type_pb";
+import { file_osac_private_v1_external_ip_attribution_type } from "./external_ip_attribution_type_pb";
 import type { Message } from "@bufbuild/protobuf";
 
 /**
  * Describes the file osac/private/v1/external_ip_type.proto.
  */
 export const file_osac_private_v1_external_ip_type: GenFile = /*@__PURE__*/
-  fileDesc("CiZvc2FjL3ByaXZhdGUvdjEvZXh0ZXJuYWxfaXBfdHlwZS5wcm90bxIPb3NhYy5wcml2YXRlLnYxIqcBCgpFeHRlcm5hbElQEgoKAmlkGAEgASgJEisKCG1ldGFkYXRhGAIgASgLMhkub3NhYy5wcml2YXRlLnYxLk1ldGFkYXRhEi0KBHNwZWMYAyABKAsyHy5vc2FjLnByaXZhdGUudjEuRXh0ZXJuYWxJUFNwZWMSMQoGc3RhdHVzGAQgASgLMiEub3NhYy5wcml2YXRlLnYxLkV4dGVybmFsSVBTdGF0dXMiUAoORXh0ZXJuYWxJUFNwZWMSPgoEcG9vbBgBIAEoCzIoLm9zYWMucHJpdmF0ZS52MS5FeHRlcm5hbElQUG9vbFJlZmVyZW5jZUIG4EEC4EEFIscBChBFeHRlcm5hbElQU3RhdHVzEjQKBXN0YXRlGAEgASgOMiAub3NhYy5wcml2YXRlLnYxLkV4dGVybmFsSVBTdGF0ZUID4EEDEhkKB21lc3NhZ2UYAiABKAlCA+BBA0gAiAEBEhQKB2FkZHJlc3MYAyABKAlCA+BBAxIRCgRwb29sGAQgASgJQgPgQQMSFQoIYXR0YWNoZWQYBSABKAhCA+BBAxIWCgNodWIYBiABKAlCCeBBA4q1GAIIAUIKCghfbWVzc2FnZSI0ChhFeHRlcm5hbElQTG9jYWxSZWZlcmVuY2USCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCSqyAQoPRXh0ZXJuYWxJUFN0YXRlEiEKHUVYVEVSTkFMX0lQX1NUQVRFX1VOU1BFQ0lGSUVEEAASHQoZRVhURVJOQUxfSVBfU1RBVEVfUEVORElORxABEh8KG0VYVEVSTkFMX0lQX1NUQVRFX0FMTE9DQVRFRBACEhwKGEVYVEVSTkFMX0lQX1NUQVRFX0ZBSUxFRBADEh4KGkVYVEVSTkFMX0lQX1NUQVRFX0RFTEVUSU5HEARCFIq1GBASDm9zYWMucHVibGljLnYxYgZwcm90bzM", [file_cleanapi_cleanapi, file_google_api_field_behavior, file_osac_private_v1_metadata_type, file_osac_private_v1_external_ip_pool_type]);
+  fileDesc("CiZvc2FjL3ByaXZhdGUvdjEvZXh0ZXJuYWxfaXBfdHlwZS5wcm90bxIPb3NhYy5wcml2YXRlLnYxIqcBCgpFeHRlcm5hbElQEgoKAmlkGAEgASgJEisKCG1ldGFkYXRhGAIgASgLMhkub3NhYy5wcml2YXRlLnYxLk1ldGFkYXRhEi0KBHNwZWMYAyABKAsyHy5vc2FjLnByaXZhdGUudjEuRXh0ZXJuYWxJUFNwZWMSMQoGc3RhdHVzGAQgASgLMiEub3NhYy5wcml2YXRlLnYxLkV4dGVybmFsSVBTdGF0dXMiUAoORXh0ZXJuYWxJUFNwZWMSPgoEcG9vbBgBIAEoCzIoLm9zYWMucHJpdmF0ZS52MS5FeHRlcm5hbElQUG9vbFJlZmVyZW5jZUIG4EEC4EEFIuMDChBFeHRlcm5hbElQU3RhdHVzEjQKBXN0YXRlGAEgASgOMiAub3NhYy5wcml2YXRlLnYxLkV4dGVybmFsSVBTdGF0ZUID4EEDEhkKB21lc3NhZ2UYAiABKAlCA+BBA0gAiAEBEhQKB2FkZHJlc3MYAyABKAlCA+BBAxIRCgRwb29sGAQgASgJQgPgQQMSFQoIYXR0YWNoZWQYBSABKAhCA+BBAxIWCgNodWIYBiABKAlCCeBBA4q1GAIIARJGCgthdHRyaWJ1dGlvbhgHIAEoCzImLm9zYWMucHJpdmF0ZS52MS5FeHRlcm5hbElQQXR0cmlidXRpb25CCeBBA4q1GAIIARJOChphdHRhY2htZW50X3RyYW5zaXRpb25fdGltZRgIIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXBCCeBBA4q1GAIIAUgBiAEBEkkKFXN0YXRlX3RyYW5zaXRpb25fdGltZRgJIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXBCCeBBA4q1GAIIAUgCiAEBQgoKCF9tZXNzYWdlQh0KG19hdHRhY2htZW50X3RyYW5zaXRpb25fdGltZUIYChZfc3RhdGVfdHJhbnNpdGlvbl90aW1lIjQKGEV4dGVybmFsSVBMb2NhbFJlZmVyZW5jZRIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJKrIBCg9FeHRlcm5hbElQU3RhdGUSIQodRVhURVJOQUxfSVBfU1RBVEVfVU5TUEVDSUZJRUQQABIdChlFWFRFUk5BTF9JUF9TVEFURV9QRU5ESU5HEAESHwobRVhURVJOQUxfSVBfU1RBVEVfQUxMT0NBVEVEEAISHAoYRVhURVJOQUxfSVBfU1RBVEVfRkFJTEVEEAMSHgoaRVhURVJOQUxfSVBfU1RBVEVfREVMRVRJTkcQBEIUirUYEBIOb3NhYy5wdWJsaWMudjFiBnByb3RvMw", [file_cleanapi_cleanapi, file_google_api_field_behavior, file_google_protobuf_timestamp, file_osac_private_v1_metadata_type, file_osac_private_v1_external_ip_pool_type, file_osac_private_v1_external_ip_attribution_type]);
 
 /**
  * Represents an external IP address allocated from an ExternalIPPool.
@@ -177,6 +181,27 @@ export type ExternalIPStatus = Message<"osac.private.v1.ExternalIPStatus"> & {
    * @generated from field: string hub = 6;
    */
   hub: string;
+
+  /**
+   * Settled target attribution reported by the operator.
+   *
+   * @generated from field: osac.private.v1.ExternalIPAttribution attribution = 7;
+   */
+  attribution?: ExternalIPAttribution | undefined;
+
+  /**
+   * Time at which the settled attachment attribution changed, as reported by the operator.
+   *
+   * @generated from field: optional google.protobuf.Timestamp attachment_transition_time = 8;
+   */
+  attachmentTransitionTime?: Timestamp | undefined;
+
+  /**
+   * Time at which the ExternalIP entered its current state, as reported by the operator.
+   *
+   * @generated from field: optional google.protobuf.Timestamp state_transition_time = 9;
+   */
+  stateTransitionTime?: Timestamp | undefined;
 };
 
 /**
@@ -275,3 +300,4 @@ export enum ExternalIPState {
  */
 export const ExternalIPStateSchema: GenEnum<ExternalIPState> = /*@__PURE__*/
   enumDesc(file_osac_private_v1_external_ip_type, 0);
+

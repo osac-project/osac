@@ -97,3 +97,4 @@ export const Events: GenService<{
   },
 }> = /*@__PURE__*/
   serviceDesc(file_osac_public_v1_events_service, 0);
+

@@ -28,7 +28,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/public/v1/baremetal_instance_common_type.proto.
  */
 export const file_osac_public_v1_baremetal_instance_common_type: GenFile = /*@__PURE__*/
-  fileDesc("CjNvc2FjL3B1YmxpYy92MS9iYXJlbWV0YWxfaW5zdGFuY2VfY29tbW9uX3R5cGUucHJvdG8SDm9zYWMucHVibGljLnYxIu8BChpCYXJlTWV0YWxOZXR3b3JrQXR0YWNobWVudBI5CgZzdWJuZXQYASABKAsyJC5vc2FjLnB1YmxpYy52MS5TdWJuZXRMb2NhbFJlZmVyZW5jZUID4EEFEkQKD3NlY3VyaXR5X2dyb3VwcxgCIAMoCzIrLm9zYWMucHVibGljLnYxLlNlY3VyaXR5R3JvdXBMb2NhbFJlZmVyZW5jZRIbCglpbnRlcmZhY2UYAyABKAlCA+BBBUgAiAEBEhkKB3ByaW1hcnkYBCABKAhCA+BBBUgBiAEBQgwKCl9pbnRlcmZhY2VCCgoIX3ByaW1hcnkiQQoWQmFyZU1ldGFsSW5zdGFuY2VJbWFnZRITCgtzb3VyY2VfdHlwZRgBIAEoCRISCgpzb3VyY2VfcmVmGAIgASgJKqoBChxCYXJlTWV0YWxJbnN0YW5jZVJ1blN0cmF0ZWd5EjAKLEJBUkVfTUVUQUxfSU5TVEFOQ0VfUlVOX1NUUkFURUdZX1VOU1BFQ0lGSUVEEAASKwonQkFSRV9NRVRBTF9JTlNUQU5DRV9SVU5fU1RSQVRFR1lfQUxXQVlTEAESKwonQkFSRV9NRVRBTF9JTlNUQU5DRV9SVU5fU1RSQVRFR1lfSEFMVEVEEAJiBnByb3RvMw", [file_google_api_field_behavior, file_osac_public_v1_security_group_type, file_osac_public_v1_subnet_type]);
+  fileDesc("CjNvc2FjL3B1YmxpYy92MS9iYXJlbWV0YWxfaW5zdGFuY2VfY29tbW9uX3R5cGUucHJvdG8SDm9zYWMucHVibGljLnYxIu8BChpCYXJlTWV0YWxOZXR3b3JrQXR0YWNobWVudBI5CgZzdWJuZXQYASABKAsyJC5vc2FjLnB1YmxpYy52MS5TdWJuZXRMb2NhbFJlZmVyZW5jZUID4EEFEkQKD3NlY3VyaXR5X2dyb3VwcxgCIAMoCzIrLm9zYWMucHVibGljLnYxLlNlY3VyaXR5R3JvdXBMb2NhbFJlZmVyZW5jZRIbCglpbnRlcmZhY2UYAyABKAlCA+BBBUgAiAEBEhkKB3ByaW1hcnkYBCABKAhCA+BBBUgBiAEBQgwKCl9pbnRlcmZhY2VCCgoIX3ByaW1hcnkqqgEKHEJhcmVNZXRhbEluc3RhbmNlUnVuU3RyYXRlZ3kSMAosQkFSRV9NRVRBTF9JTlNUQU5DRV9SVU5fU1RSQVRFR1lfVU5TUEVDSUZJRUQQABIrCidCQVJFX01FVEFMX0lOU1RBTkNFX1JVTl9TVFJBVEVHWV9BTFdBWVMQARIrCidCQVJFX01FVEFMX0lOU1RBTkNFX1JVTl9TVFJBVEVHWV9IQUxURUQQAmIGcHJvdG8z", [file_google_api_field_behavior, file_osac_public_v1_security_group_type, file_osac_public_v1_subnet_type]);
 
 /**
  * Network attachment for a bare metal instance NIC.
@@ -77,34 +77,6 @@ export const BareMetalNetworkAttachmentSchema: GenMessage<BareMetalNetworkAttach
   messageDesc(file_osac_public_v1_baremetal_instance_common_type, 0);
 
 /**
- * Contains the image configuration for a bare metal instance.
- *
- * @generated from message osac.public.v1.BareMetalInstanceImage
- */
-export type BareMetalInstanceImage = Message<"osac.public.v1.BareMetalInstanceImage"> & {
-  /**
-   * Image source type (e.g. "registry").
-   *
-   * @generated from field: string source_type = 1;
-   */
-  sourceType: string;
-
-  /**
-   * Image reference (e.g. OCI image URL).
-   *
-   * @generated from field: string source_ref = 2;
-   */
-  sourceRef: string;
-};
-
-/**
- * Describes the message osac.public.v1.BareMetalInstanceImage.
- * Use `create(BareMetalInstanceImageSchema)` to create a new message.
- */
-export const BareMetalInstanceImageSchema: GenMessage<BareMetalInstanceImage> = /*@__PURE__*/
-  messageDesc(file_osac_public_v1_baremetal_instance_common_type, 1);
-
-/**
  * Run strategy for the bare metal instance.
  *
  * @generated from enum osac.public.v1.BareMetalInstanceRunStrategy
@@ -135,3 +107,4 @@ export enum BareMetalInstanceRunStrategy {
  */
 export const BareMetalInstanceRunStrategySchema: GenEnum<BareMetalInstanceRunStrategy> = /*@__PURE__*/
   enumDesc(file_osac_public_v1_baremetal_instance_common_type, 0);
+

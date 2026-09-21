@@ -18,13 +18,14 @@
 import type { GenEnum, GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import { enumDesc, fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
 import { file_cleanapi_cleanapi } from "../../../cleanapi/cleanapi_pb";
+import { file_buf_validate_validate } from "../../../buf/validate/validate_pb";
 import type { Message } from "@bufbuild/protobuf";
 
 /**
  * Describes the file osac/private/v1/security_rule_type.proto.
  */
 export const file_osac_private_v1_security_rule_type: GenFile = /*@__PURE__*/
-  fileDesc("Cihvc2FjL3ByaXZhdGUvdjEvc2VjdXJpdHlfcnVsZV90eXBlLnByb3RvEg9vc2FjLnByaXZhdGUudjEizwEKDFNlY3VyaXR5UnVsZRIrCghwcm90b2NvbBgBIAEoDjIZLm9zYWMucHJpdmF0ZS52MS5Qcm90b2NvbBIWCglwb3J0X2Zyb20YAiABKAVIAIgBARIUCgdwb3J0X3RvGAMgASgFSAGIAQESFgoJaXB2NF9jaWRyGAQgASgJSAKIAQESFgoJaXB2Nl9jaWRyGAUgASgJSAOIAQFCDAoKX3BvcnRfZnJvbUIKCghfcG9ydF90b0IMCgpfaXB2NF9jaWRyQgwKCl9pcHY2X2NpZHIqbQoIUHJvdG9jb2wSGAoUUFJPVE9DT0xfVU5TUEVDSUZJRUQQABIQCgxQUk9UT0NPTF9UQ1AQARIQCgxQUk9UT0NPTF9VRFAQAhIRCg1QUk9UT0NPTF9JQ01QEAMSEAoMUFJPVE9DT0xfQUxMEARCFIq1GBASDm9zYWMucHVibGljLnYxYgZwcm90bzM", [file_cleanapi_cleanapi]);
+  fileDesc("Cihvc2FjL3ByaXZhdGUvdjEvc2VjdXJpdHlfcnVsZV90eXBlLnByb3RvEg9vc2FjLnByaXZhdGUudjEiiwMKDFNlY3VyaXR5UnVsZRIrCghwcm90b2NvbBgBIAEoDjIZLm9zYWMucHJpdmF0ZS52MS5Qcm90b2NvbBIWCglwb3J0X2Zyb20YAiABKAVIAIgBARIUCgdwb3J0X3RvGAMgASgFSAGIAQEScwoJaXB2NF9jaWRyGAQgASgJQlu6SFi6AU4KE2Nhbm9uaWNhbF9pcHY0X2NpZHISHW11c3QgYmUgYSBjYW5vbmljYWwgSVB2NCBDSURSGhh0aGlzLmlzSXBQcmVmaXgoNCwgdHJ1ZSnIAQFyAhABSAKIAQESdQoJaXB2Nl9jaWRyGAUgASgJQl26SFq6AVcKF2lwdjZfY2lkcl9ub3Rfc3VwcG9ydGVkEjBJUHY2IGFuZCBkdWFsLXN0YWNrIG5ldHdvcmtpbmcgYXJlIG5vdCBzdXBwb3J0ZWQaCnRoaXMgPT0gJydIA4gBAUIMCgpfcG9ydF9mcm9tQgoKCF9wb3J0X3RvQgwKCl9pcHY0X2NpZHJCDAoKX2lwdjZfY2lkciptCghQcm90b2NvbBIYChRQUk9UT0NPTF9VTlNQRUNJRklFRBAAEhAKDFBST1RPQ09MX1RDUBABEhAKDFBST1RPQ09MX1VEUBACEhEKDVBST1RPQ09MX0lDTVAQAxIQCgxQUk9UT0NPTF9BTEwQBEIUirUYEBIOb3NhYy5wdWJsaWMudjFiBnByb3RvMw", [file_cleanapi_cleanapi, file_buf_validate_validate]);
 
 /**
  * Defines a single firewall rule for network traffic filtering.
@@ -35,10 +36,8 @@ export const file_osac_private_v1_security_rule_type: GenFile = /*@__PURE__*/
  *
  * Port ranges apply only to TCP and UDP protocols. For ICMP and ALL protocols, port fields are ignored.
  *
- * CIDR fields support IPv4-only, IPv6-only, or dual-stack configurations:
- * - IPv4-only: Set ipv4_cidr, leave ipv6_cidr empty
- * - IPv6-only: Set ipv6_cidr, leave ipv4_cidr empty
- * - Dual-stack: Set both ipv4_cidr and ipv6_cidr (creates two separate rules internally)
+ * Rules currently support canonical IPv4 CIDRs only. The legacy ipv6_cidr field remains in the wire contract for
+ * compatibility, but non-empty IPv6 and dual-stack requests are rejected.
  *
  * @generated from message osac.private.v1.SecurityRule
  */
@@ -80,8 +79,7 @@ export type SecurityRule = Message<"osac.private.v1.SecurityRule"> & {
   /**
    * IPv4 CIDR block for source (ingress) or destination (egress) addresses.
    *
-   * Must be valid CIDR notation. Use '0.0.0.0/0' to match all IPv4 addresses. Validation enforced at
-   * service layer.
+   * Must be a canonical IPv4 CIDR with no host bits set. Use '0.0.0.0/0' to match all IPv4 addresses.
    *
    * Example: '192.168.1.0/24', '10.0.0.0/8', '0.0.0.0/0' (all IPv4)
    *
@@ -90,12 +88,7 @@ export type SecurityRule = Message<"osac.private.v1.SecurityRule"> & {
   ipv4Cidr?: string | undefined;
 
   /**
-   * IPv6 CIDR block for source (ingress) or destination (egress) addresses.
-   *
-   * Must be valid CIDR notation. Use '::/0' to match all IPv6 addresses. Validation enforced at service
-   * layer.
-   *
-   * Example: '2001:db8::/32', 'fd00::/64', '::/0' (all IPv6)
+   * Legacy IPv6 CIDR field. IPv6 and dual-stack networking are not supported; non-empty values are rejected.
    *
    * @generated from field: optional string ipv6_cidr = 5;
    */
@@ -168,3 +161,4 @@ export enum Protocol {
  */
 export const ProtocolSchema: GenEnum<Protocol> = /*@__PURE__*/
   enumDesc(file_osac_private_v1_security_rule_type, 0);
+

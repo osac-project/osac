@@ -17,6 +17,7 @@
 
 import type { GenEnum, GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import { enumDesc, fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
+import { file_buf_validate_validate } from "../../../buf/validate/validate_pb";
 import { file_google_api_field_behavior } from "../../../google/api/field_behavior_pb";
 import type { Metadata } from "./metadata_type_pb";
 import { file_osac_public_v1_metadata_type } from "./metadata_type_pb";
@@ -28,13 +29,15 @@ import type { ComputeInstanceLocalReference } from "./compute_instance_type_pb";
 import { file_osac_public_v1_compute_instance_type } from "./compute_instance_type_pb";
 import type { ExternalIPLocalReference } from "./external_ip_type_pb";
 import { file_osac_public_v1_external_ip_type } from "./external_ip_type_pb";
+import type { ExternalIPAttachmentEndpoint } from "./external_ip_attribution_type_pb";
+import { file_osac_public_v1_external_ip_attribution_type } from "./external_ip_attribution_type_pb";
 import type { Message } from "@bufbuild/protobuf";
 
 /**
  * Describes the file osac/public/v1/external_ip_attachment_type.proto.
  */
 export const file_osac_public_v1_external_ip_attachment_type: GenFile = /*@__PURE__*/
-  fileDesc("CjBvc2FjL3B1YmxpYy92MS9leHRlcm5hbF9pcF9hdHRhY2htZW50X3R5cGUucHJvdG8SDm9zYWMucHVibGljLnYxIsIBChRFeHRlcm5hbElQQXR0YWNobWVudBIKCgJpZBgBIAEoCRIqCghtZXRhZGF0YRgCIAEoCzIYLm9zYWMucHVibGljLnYxLk1ldGFkYXRhEjYKBHNwZWMYAyABKAsyKC5vc2FjLnB1YmxpYy52MS5FeHRlcm5hbElQQXR0YWNobWVudFNwZWMSOgoGc3RhdHVzGAQgASgLMioub3NhYy5wdWJsaWMudjEuRXh0ZXJuYWxJUEF0dGFjaG1lbnRTdGF0dXMiiwMKGEV4dGVybmFsSVBBdHRhY2htZW50U3BlYxJFCgtleHRlcm5hbF9pcBgBIAEoCzIoLm9zYWMucHVibGljLnYxLkV4dGVybmFsSVBMb2NhbFJlZmVyZW5jZUIG4EEC4EEFEkkKEGNvbXB1dGVfaW5zdGFuY2UYAiABKAsyLS5vc2FjLnB1YmxpYy52MS5Db21wdXRlSW5zdGFuY2VMb2NhbFJlZmVyZW5jZUgAEjgKB2NsdXN0ZXIYAyABKAsyJS5vc2FjLnB1YmxpYy52MS5DbHVzdGVyTG9jYWxSZWZlcmVuY2VIABJNChJiYXJlbWV0YWxfaW5zdGFuY2UYBCABKAsyLy5vc2FjLnB1YmxpYy52MS5CYXJlTWV0YWxJbnN0YW5jZUxvY2FsUmVmZXJlbmNlSAASSgoPdGFyZ2V0X2VuZHBvaW50GAUgASgOMiwub3NhYy5wdWJsaWMudjEuRXh0ZXJuYWxJUEF0dGFjaG1lbnRFbmRwb2ludEID4EEFQggKBnRhcmdldCKkAQoaRXh0ZXJuYWxJUEF0dGFjaG1lbnRTdGF0dXMSPQoFc3RhdGUYASABKA4yKS5vc2FjLnB1YmxpYy52MS5FeHRlcm5hbElQQXR0YWNobWVudFN0YXRlQgPgQQMSIAoTZXh0ZXJuYWxfaXBfYWRkcmVzcxgCIAEoCUID4EEDEhkKB21lc3NhZ2UYAyABKAlCA+BBA0gAiAEBQgoKCF9tZXNzYWdlKqUBChxFeHRlcm5hbElQQXR0YWNobWVudEVuZHBvaW50Ei8KK0VYVEVSTkFMX0lQX0FUVEFDSE1FTlRfRU5EUE9JTlRfVU5TUEVDSUZJRUQQABInCiNFWFRFUk5BTF9JUF9BVFRBQ0hNRU5UX0VORFBPSU5UX0FQSRABEisKJ0VYVEVSTkFMX0lQX0FUVEFDSE1FTlRfRU5EUE9JTlRfSU5HUkVTUxACKu8BChlFeHRlcm5hbElQQXR0YWNobWVudFN0YXRlEiwKKEVYVEVSTkFMX0lQX0FUVEFDSE1FTlRfU1RBVEVfVU5TUEVDSUZJRUQQABIoCiRFWFRFUk5BTF9JUF9BVFRBQ0hNRU5UX1NUQVRFX1BFTkRJTkcQARImCiJFWFRFUk5BTF9JUF9BVFRBQ0hNRU5UX1NUQVRFX1JFQURZEAISJwojRVhURVJOQUxfSVBfQVRUQUNITUVOVF9TVEFURV9GQUlMRUQQAxIpCiVFWFRFUk5BTF9JUF9BVFRBQ0hNRU5UX1NUQVRFX0RFTEVUSU5HEARiBnByb3RvMw", [file_google_api_field_behavior, file_osac_public_v1_metadata_type, file_osac_public_v1_baremetal_instance_type, file_osac_public_v1_cluster_type, file_osac_public_v1_compute_instance_type, file_osac_public_v1_external_ip_type]);
+  fileDesc("CjBvc2FjL3B1YmxpYy92MS9leHRlcm5hbF9pcF9hdHRhY2htZW50X3R5cGUucHJvdG8SDm9zYWMucHVibGljLnYxIsIBChRFeHRlcm5hbElQQXR0YWNobWVudBIKCgJpZBgBIAEoCRIqCghtZXRhZGF0YRgCIAEoCzIYLm9zYWMucHVibGljLnYxLk1ldGFkYXRhEjYKBHNwZWMYAyABKAsyKC5vc2FjLnB1YmxpYy52MS5FeHRlcm5hbElQQXR0YWNobWVudFNwZWMSOgoGc3RhdHVzGAQgASgLMioub3NhYy5wdWJsaWMudjEuRXh0ZXJuYWxJUEF0dGFjaG1lbnRTdGF0dXMivgYKGEV4dGVybmFsSVBBdHRhY2htZW50U3BlYxJFCgtleHRlcm5hbF9pcBgBIAEoCzIoLm9zYWMucHVibGljLnYxLkV4dGVybmFsSVBMb2NhbFJlZmVyZW5jZUIG4EEC4EEFEkkKEGNvbXB1dGVfaW5zdGFuY2UYAiABKAsyLS5vc2FjLnB1YmxpYy52MS5Db21wdXRlSW5zdGFuY2VMb2NhbFJlZmVyZW5jZUgAEjgKB2NsdXN0ZXIYAyABKAsyJS5vc2FjLnB1YmxpYy52MS5DbHVzdGVyTG9jYWxSZWZlcmVuY2VIABJNChJiYXJlbWV0YWxfaW5zdGFuY2UYBCABKAsyLy5vc2FjLnB1YmxpYy52MS5CYXJlTWV0YWxJbnN0YW5jZUxvY2FsUmVmZXJlbmNlSAASUgoPdGFyZ2V0X2VuZHBvaW50GAUgASgOMiwub3NhYy5wdWJsaWMudjEuRXh0ZXJuYWxJUEF0dGFjaG1lbnRFbmRwb2ludEIL4EEFukgFggECEAE6oQO6SJ0DGt0BCiBleHRlcm5hbF9pcF9hdHRhY2htZW50X3RhcmdldF9pZBIsdGhlIHNlbGVjdGVkIHRhcmdldCBtdXN0IGhhdmUgYSBub24tZW1wdHkgaWQaigFoYXModGhpcy5jb21wdXRlX2luc3RhbmNlKSA/IHRoaXMuY29tcHV0ZV9pbnN0YW5jZS5pZCAhPSAnJyA6IGhhcyh0aGlzLmNsdXN0ZXIpID8gdGhpcy5jbHVzdGVyLmlkICE9ICcnIDogdGhpcy5iYXJlbWV0YWxfaW5zdGFuY2UuaWQgIT0gJycaugEKH2V4dGVybmFsX2lwX2F0dGFjaG1lbnRfZW5kcG9pbnQSLWVuZHBvaW50IGlzIHJlcXVpcmVkIG9ubHkgZm9yIGNsdXN0ZXIgdGFyZ2V0cxpoaGFzKHRoaXMuY2x1c3RlcikgPyAodGhpcy50YXJnZXRfZW5kcG9pbnQgPT0gMSB8fCB0aGlzLnRhcmdldF9lbmRwb2ludCA9PSAyKSA6IHRoaXMudGFyZ2V0X2VuZHBvaW50ID09IDBCDwoGdGFyZ2V0EgW6SAIIASKkAQoaRXh0ZXJuYWxJUEF0dGFjaG1lbnRTdGF0dXMSPQoFc3RhdGUYASABKA4yKS5vc2FjLnB1YmxpYy52MS5FeHRlcm5hbElQQXR0YWNobWVudFN0YXRlQgPgQQMSIAoTZXh0ZXJuYWxfaXBfYWRkcmVzcxgCIAEoCUID4EEDEhkKB21lc3NhZ2UYAyABKAlCA+BBA0gAiAEBQgoKCF9tZXNzYWdlKu8BChlFeHRlcm5hbElQQXR0YWNobWVudFN0YXRlEiwKKEVYVEVSTkFMX0lQX0FUVEFDSE1FTlRfU1RBVEVfVU5TUEVDSUZJRUQQABIoCiRFWFRFUk5BTF9JUF9BVFRBQ0hNRU5UX1NUQVRFX1BFTkRJTkcQARImCiJFWFRFUk5BTF9JUF9BVFRBQ0hNRU5UX1NUQVRFX1JFQURZEAISJwojRVhURVJOQUxfSVBfQVRUQUNITUVOVF9TVEFURV9GQUlMRUQQAxIpCiVFWFRFUk5BTF9JUF9BVFRBQ0hNRU5UX1NUQVRFX0RFTEVUSU5HEARiBnByb3RvMw", [file_buf_validate_validate, file_google_api_field_behavior, file_osac_public_v1_metadata_type, file_osac_public_v1_baremetal_instance_type, file_osac_public_v1_cluster_type, file_osac_public_v1_compute_instance_type, file_osac_public_v1_external_ip_type, file_osac_public_v1_external_ip_attribution_type]);
 
 /**
  * Represents a binding between an ExternalIP and a target resource.
@@ -220,49 +223,6 @@ export const ExternalIPAttachmentStatusSchema: GenMessage<ExternalIPAttachmentSt
   messageDesc(file_osac_public_v1_external_ip_attachment_type, 2);
 
 /**
- * Endpoint type for cluster-targeted ExternalIPAttachments.
- *
- * When attaching an external IP to a cluster, this enum specifies which cluster endpoint
- * receives the DNAT rule.
- *
- * @generated from enum osac.public.v1.ExternalIPAttachmentEndpoint
- */
-export enum ExternalIPAttachmentEndpoint {
-  /**
-   * Endpoint is unknown or has not been specified.
-   *
-   * @generated from enum value: EXTERNAL_IP_ATTACHMENT_ENDPOINT_UNSPECIFIED = 0;
-   */
-  EXTERNAL_IP_ATTACHMENT_ENDPOINT_UNSPECIFIED = 0,
-
-  /**
-   * The cluster's API server endpoint.
-   *
-   * The external IP will be routed to the cluster's Kubernetes API server VIP, making the
-   * cluster API reachable from outside the VirtualNetwork.
-   *
-   * @generated from enum value: EXTERNAL_IP_ATTACHMENT_ENDPOINT_API = 1;
-   */
-  EXTERNAL_IP_ATTACHMENT_ENDPOINT_API = 1,
-
-  /**
-   * The cluster's ingress endpoint.
-   *
-   * The external IP will be routed to the cluster's ingress controller VIP, making
-   * applications hosted on the cluster reachable from outside the VirtualNetwork.
-   *
-   * @generated from enum value: EXTERNAL_IP_ATTACHMENT_ENDPOINT_INGRESS = 2;
-   */
-  EXTERNAL_IP_ATTACHMENT_ENDPOINT_INGRESS = 2,
-}
-
-/**
- * Describes the enum osac.public.v1.ExternalIPAttachmentEndpoint.
- */
-export const ExternalIPAttachmentEndpointSchema: GenEnum<ExternalIPAttachmentEndpoint> = /*@__PURE__*/
-  enumDesc(file_osac_public_v1_external_ip_attachment_type, 0);
-
-/**
  * Lifecycle states for ExternalIPAttachment resources.
  *
  * State transitions: UNSPECIFIED -> PENDING -> READY. On deletion: any state -> DELETING.
@@ -323,4 +283,5 @@ export enum ExternalIPAttachmentState {
  * Describes the enum osac.public.v1.ExternalIPAttachmentState.
  */
 export const ExternalIPAttachmentStateSchema: GenEnum<ExternalIPAttachmentState> = /*@__PURE__*/
-  enumDesc(file_osac_public_v1_external_ip_attachment_type, 1);
+  enumDesc(file_osac_public_v1_external_ip_attachment_type, 0);
+

@@ -7,9 +7,5 @@ plugins:
     include_imports: true
     include_wkt: true
 inputs:
-  - git_repo: https://github.com/osac-project/osac.git
-    branch: main
-    subdir: proto/public
-  - git_repo: https://github.com/osac-project/osac.git
-    branch: main
-    subdir: proto/private
+  - directory: ../../../proto/public
+  - directory: ../../../proto/private

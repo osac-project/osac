@@ -57,3 +57,4 @@ export enum StorageProtocol {
  */
 export const StorageProtocolSchema: GenEnum<StorageProtocol> = /*@__PURE__*/
   enumDesc(file_osac_public_v1_storage_common_type, 0);
+

@@ -7,6 +7,8 @@ import {
   InstanceTypeSchema,
   InstanceTypeState,
   InstanceTypesDeleteResponseSchema,
+  type InstanceTypesGetResponse,
+  InstanceTypesGetResponseSchema,
   type InstanceType as PrivateInstanceType,
 } from '@osac/types/private';
 import { mockQueryResult } from '@osac/ui-components/test-utils/query';
@@ -24,13 +26,12 @@ vi.mock('react-router-dom', async (importOriginal) => {
   };
 });
 
-vi.mock('@osac/ui-components/api/v1/private/instance-type', async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import('@osac/ui-components/api/v1/private/instance-type')>();
-  return { ...actual, useAdminInstanceType: vi.fn() };
+vi.mock('@osac/ui-components/api/use-resource', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@osac/ui-components/api/use-resource')>();
+  return { ...actual, useGetResource: vi.fn() };
 });
 
-const { useAdminInstanceType } = await import('@osac/ui-components/api/v1/private/instance-type');
+const { useGetResource } = await import('@osac/ui-components/api/use-resource');
 
 const LIST_ROUTE = '/admin/infrastructure/instance-types';
 const DETAIL_ROUTE = `${LIST_ROUTE}/gp-small`;
@@ -58,8 +59,10 @@ const renderDetailPage = (
   instanceType: PrivateInstanceType,
   transportOverrides?: MockTransportOverrides,
 ) => {
-  vi.mocked(useAdminInstanceType).mockReturnValue(
-    mockQueryResult<PrivateInstanceType>({ data: instanceType }),
+  vi.mocked(useGetResource).mockReturnValue(
+    mockQueryResult<InstanceTypesGetResponse>({
+      data: create(InstanceTypesGetResponseSchema, { object: instanceType }),
+    }),
   );
   return renderWithProviders(
     <Routes>
@@ -72,7 +75,7 @@ const renderDetailPage = (
 describe('AdminInstanceTypeDetailPage', () => {
   afterEach(() => {
     mockNavigate.mockReset();
-    vi.mocked(useAdminInstanceType).mockReset();
+    vi.mocked(useGetResource).mockReset();
   });
 
   it('renders the breadcrumb, title, description, and details', () => {
@@ -110,8 +113,8 @@ describe('AdminInstanceTypeDetailPage', () => {
   });
 
   it('shows a loading spinner while the query is in flight', () => {
-    vi.mocked(useAdminInstanceType).mockReturnValue(
-      mockQueryResult<PrivateInstanceType>({ data: undefined, isLoading: true }),
+    vi.mocked(useGetResource).mockReturnValue(
+      mockQueryResult<InstanceTypesGetResponse>({ data: undefined, isLoading: true }),
     );
 
     renderWithProviders(
@@ -125,8 +128,8 @@ describe('AdminInstanceTypeDetailPage', () => {
   });
 
   it('uses the page-level error state when the query fails', () => {
-    vi.mocked(useAdminInstanceType).mockReturnValue(
-      mockQueryResult<PrivateInstanceType>({
+    vi.mocked(useGetResource).mockReturnValue(
+      mockQueryResult<InstanceTypesGetResponse>({
         data: undefined,
         error: new Error('Instance type unavailable'),
       }),

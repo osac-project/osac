@@ -11,9 +11,11 @@ import {
 } from '@patternfly/react-core';
 import { Formik } from 'formik';
 
+import { InstanceTypes } from '@osac/types/private';
+import { useCreateResource } from '@osac/ui-components/api/use-resource';
+
 import { getInstanceTypeCreateSchema } from './validation';
 import { InstanceTypeCreateFormValues, instanceTypeCreateValues } from './values';
-import { useCreateInstanceType } from '../../../api/v1/private/instance-type';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { getErrorMessage } from '../../../utils/error';
 import NameField from '../../catalogProvision/wizard/fields/NameField';
@@ -26,7 +28,7 @@ export const INSTANCE_TYPES_LIST_ROUTE = '/admin/infrastructure/instance-types';
 const InstanceTypeCreateForm = () => {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { mutateAsync: create, error } = useCreateInstanceType();
+  const { mutateAsync: create, error } = useCreateResource(InstanceTypes);
 
   const onSubmit = async (values: InstanceTypeCreateFormValues) => {
     const { gpu } = values.spec;
@@ -34,23 +36,25 @@ const InstanceTypeCreateForm = () => {
 
     try {
       const created = await create({
-        metadata: { name: values.metadata.name },
-        spec: {
-          description: values.spec.description,
-          vcpus: Number(values.spec.vcpus),
-          memoryGib: Number(values.spec.memoryGib),
-          ...(hasGpu
-            ? {
-                gpu: {
-                  pciDeviceSelector: gpu.pciDeviceSelector,
-                  resourceName: gpu.resourceName,
-                  count: Number(gpu.count),
-                },
-              }
-            : {}),
+        object: {
+          metadata: { name: values.metadata.name },
+          spec: {
+            description: values.spec.description,
+            vcpus: Number(values.spec.vcpus),
+            memoryGib: Number(values.spec.memoryGib),
+            ...(hasGpu
+              ? {
+                  gpu: {
+                    pciDeviceSelector: gpu.pciDeviceSelector,
+                    resourceName: gpu.resourceName,
+                    count: Number(gpu.count),
+                  },
+                }
+              : {}),
+          },
         },
       });
-      navigate(`${INSTANCE_TYPES_LIST_ROUTE}/${created.id}`);
+      navigate(`${INSTANCE_TYPES_LIST_ROUTE}/${created.object?.id}`);
     } catch {
       // tanstack handles the error
     }

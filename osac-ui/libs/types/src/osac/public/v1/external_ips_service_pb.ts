@@ -18,8 +18,6 @@
 import type { GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv2";
 import { fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2";
 import { file_google_api_annotations } from "../../../google/api/annotations_pb";
-import type { FieldMask } from "../../../google/protobuf/field_mask_pb";
-import { file_google_protobuf_field_mask } from "../../../google/protobuf/field_mask_pb";
 import type { ExternalIP } from "./external_ip_type_pb";
 import { file_osac_public_v1_external_ip_type } from "./external_ip_type_pb";
 import type { Message } from "@bufbuild/protobuf";
@@ -28,7 +26,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/public/v1/external_ips_service.proto.
  */
 export const file_osac_public_v1_external_ips_service: GenFile = /*@__PURE__*/
-  fileDesc("Cilvc2FjL3B1YmxpYy92MS9leHRlcm5hbF9pcHNfc2VydmljZS5wcm90bxIOb3NhYy5wdWJsaWMudjEilAEKFkV4dGVybmFsSVBzTGlzdFJlcXVlc3QSEwoGb2Zmc2V0GAEgASgFSACIAQESEgoFbGltaXQYAiABKAVIAYgBARITCgZmaWx0ZXIYAyABKAlIAogBARISCgVvcmRlchgEIAEoCUgDiAEBQgkKB19vZmZzZXRCCAoGX2xpbWl0QgkKB19maWx0ZXJCCAoGX29yZGVyImEKF0V4dGVybmFsSVBzTGlzdFJlc3BvbnNlEgwKBHNpemUYASABKAUSDQoFdG90YWwYAiABKAUSKQoFaXRlbXMYAyADKAsyGi5vc2FjLnB1YmxpYy52MS5FeHRlcm5hbElQIiMKFUV4dGVybmFsSVBzR2V0UmVxdWVzdBIKCgJpZBgBIAEoCSJEChZFeHRlcm5hbElQc0dldFJlc3BvbnNlEioKBm9iamVjdBgBIAEoCzIaLm9zYWMucHVibGljLnYxLkV4dGVybmFsSVAiRgoYRXh0ZXJuYWxJUHNDcmVhdGVSZXF1ZXN0EioKBm9iamVjdBgBIAEoCzIaLm9zYWMucHVibGljLnYxLkV4dGVybmFsSVAiRwoZRXh0ZXJuYWxJUHNDcmVhdGVSZXNwb25zZRIqCgZvYmplY3QYASABKAsyGi5vc2FjLnB1YmxpYy52MS5FeHRlcm5hbElQIoUBChhFeHRlcm5hbElQc1VwZGF0ZVJlcXVlc3QSKgoGb2JqZWN0GAEgASgLMhoub3NhYy5wdWJsaWMudjEuRXh0ZXJuYWxJUBIvCgt1cGRhdGVfbWFzaxgCIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5GaWVsZE1hc2sSDAoEbG9jaxgDIAEoCCJHChlFeHRlcm5hbElQc1VwZGF0ZVJlc3BvbnNlEioKBm9iamVjdBgBIAEoCzIaLm9zYWMucHVibGljLnYxLkV4dGVybmFsSVAiJgoYRXh0ZXJuYWxJUHNEZWxldGVSZXF1ZXN0EgoKAmlkGAEgASgJIhsKGUV4dGVybmFsSVBzRGVsZXRlUmVzcG9uc2Uy7gUKC0V4dGVybmFsSVBzEoEBCgRMaXN0EiYub3NhYy5wdWJsaWMudjEuRXh0ZXJuYWxJUHNMaXN0UmVxdWVzdBonLm9zYWMucHVibGljLnYxLkV4dGVybmFsSVBzTGlzdFJlc3BvbnNlIiiC0+STAiISIC9hcGkvZnVsZmlsbG1lbnQvdjEvZXh0ZXJuYWxfaXBzEosBCgNHZXQSJS5vc2FjLnB1YmxpYy52MS5FeHRlcm5hbElQc0dldFJlcXVlc3QaJi5vc2FjLnB1YmxpYy52MS5FeHRlcm5hbElQc0dldFJlc3BvbnNlIjWC0+STAi9iBm9iamVjdBIlL2FwaS9mdWxmaWxsbWVudC92MS9leHRlcm5hbF9pcHMve2lkfRKXAQoGQ3JlYXRlEigub3NhYy5wdWJsaWMudjEuRXh0ZXJuYWxJUHNDcmVhdGVSZXF1ZXN0Gikub3NhYy5wdWJsaWMudjEuRXh0ZXJuYWxJUHNDcmVhdGVSZXNwb25zZSI4gtPkkwIyOgZvYmplY3RiBm9iamVjdCIgL2FwaS9mdWxmaWxsbWVudC92MS9leHRlcm5hbF9pcHMSowEKBlVwZGF0ZRIoLm9zYWMucHVibGljLnYxLkV4dGVybmFsSVBzVXBkYXRlUmVxdWVzdBopLm9zYWMucHVibGljLnYxLkV4dGVybmFsSVBzVXBkYXRlUmVzcG9uc2UiRILT5JMCPjoGb2JqZWN0YgZvYmplY3QyLC9hcGkvZnVsZmlsbG1lbnQvdjEvZXh0ZXJuYWxfaXBzL3tvYmplY3QuaWR9EowBCgZEZWxldGUSKC5vc2FjLnB1YmxpYy52MS5FeHRlcm5hbElQc0RlbGV0ZVJlcXVlc3QaKS5vc2FjLnB1YmxpYy52MS5FeHRlcm5hbElQc0RlbGV0ZVJlc3BvbnNlIi2C0+STAicqJS9hcGkvZnVsZmlsbG1lbnQvdjEvZXh0ZXJuYWxfaXBzL3tpZH1iBnByb3RvMw", [file_google_api_annotations, file_google_protobuf_field_mask, file_osac_public_v1_external_ip_type]);
+  fileDesc("Cilvc2FjL3B1YmxpYy92MS9leHRlcm5hbF9pcHNfc2VydmljZS5wcm90bxIOb3NhYy5wdWJsaWMudjEilAEKFkV4dGVybmFsSVBzTGlzdFJlcXVlc3QSEwoGb2Zmc2V0GAEgASgFSACIAQESEgoFbGltaXQYAiABKAVIAYgBARITCgZmaWx0ZXIYAyABKAlIAogBARISCgVvcmRlchgEIAEoCUgDiAEBQgkKB19vZmZzZXRCCAoGX2xpbWl0QgkKB19maWx0ZXJCCAoGX29yZGVyImEKF0V4dGVybmFsSVBzTGlzdFJlc3BvbnNlEgwKBHNpemUYASABKAUSDQoFdG90YWwYAiABKAUSKQoFaXRlbXMYAyADKAsyGi5vc2FjLnB1YmxpYy52MS5FeHRlcm5hbElQIiMKFUV4dGVybmFsSVBzR2V0UmVxdWVzdBIKCgJpZBgBIAEoCSJEChZFeHRlcm5hbElQc0dldFJlc3BvbnNlEioKBm9iamVjdBgBIAEoCzIaLm9zYWMucHVibGljLnYxLkV4dGVybmFsSVAiRgoYRXh0ZXJuYWxJUHNDcmVhdGVSZXF1ZXN0EioKBm9iamVjdBgBIAEoCzIaLm9zYWMucHVibGljLnYxLkV4dGVybmFsSVAiRwoZRXh0ZXJuYWxJUHNDcmVhdGVSZXNwb25zZRIqCgZvYmplY3QYASABKAsyGi5vc2FjLnB1YmxpYy52MS5FeHRlcm5hbElQIiYKGEV4dGVybmFsSVBzRGVsZXRlUmVxdWVzdBIKCgJpZBgBIAEoCSIbChlFeHRlcm5hbElQc0RlbGV0ZVJlc3BvbnNlMsgECgtFeHRlcm5hbElQcxKBAQoETGlzdBImLm9zYWMucHVibGljLnYxLkV4dGVybmFsSVBzTGlzdFJlcXVlc3QaJy5vc2FjLnB1YmxpYy52MS5FeHRlcm5hbElQc0xpc3RSZXNwb25zZSIogtPkkwIiEiAvYXBpL2Z1bGZpbGxtZW50L3YxL2V4dGVybmFsX2lwcxKLAQoDR2V0EiUub3NhYy5wdWJsaWMudjEuRXh0ZXJuYWxJUHNHZXRSZXF1ZXN0GiYub3NhYy5wdWJsaWMudjEuRXh0ZXJuYWxJUHNHZXRSZXNwb25zZSI1gtPkkwIvYgZvYmplY3QSJS9hcGkvZnVsZmlsbG1lbnQvdjEvZXh0ZXJuYWxfaXBzL3tpZH0SlwEKBkNyZWF0ZRIoLm9zYWMucHVibGljLnYxLkV4dGVybmFsSVBzQ3JlYXRlUmVxdWVzdBopLm9zYWMucHVibGljLnYxLkV4dGVybmFsSVBzQ3JlYXRlUmVzcG9uc2UiOILT5JMCMjoGb2JqZWN0YgZvYmplY3QiIC9hcGkvZnVsZmlsbG1lbnQvdjEvZXh0ZXJuYWxfaXBzEowBCgZEZWxldGUSKC5vc2FjLnB1YmxpYy52MS5FeHRlcm5hbElQc0RlbGV0ZVJlcXVlc3QaKS5vc2FjLnB1YmxpYy52MS5FeHRlcm5hbElQc0RlbGV0ZVJlc3BvbnNlIi2C0+STAicqJS9hcGkvZnVsZmlsbG1lbnQvdjEvZXh0ZXJuYWxfaXBzL3tpZH1iBnByb3RvMw", [file_google_api_annotations, file_osac_public_v1_external_ip_type]);
 
 /**
  * @generated from message osac.public.v1.ExternalIPsListRequest
@@ -196,54 +194,6 @@ export const ExternalIPsCreateResponseSchema: GenMessage<ExternalIPsCreateRespon
   messageDesc(file_osac_public_v1_external_ips_service, 5);
 
 /**
- * @generated from message osac.public.v1.ExternalIPsUpdateRequest
- */
-export type ExternalIPsUpdateRequest = Message<"osac.public.v1.ExternalIPsUpdateRequest"> & {
-  /**
-   * @generated from field: osac.public.v1.ExternalIP object = 1;
-   */
-  object?: ExternalIP | undefined;
-
-  /**
-   * @generated from field: google.protobuf.FieldMask update_mask = 2;
-   */
-  updateMask?: FieldMask | undefined;
-
-  /**
-   * Lock enables optimistic locking. When set to true, the server verifies that the current version of the object
-   * matches the value of the metadata.version field of the submitted object. If they differ the update will be
-   * rejected. This is useful to prevent lost updates when multiple clients are modifying the same object concurrently.
-   *
-   * @generated from field: bool lock = 3;
-   */
-  lock: boolean;
-};
-
-/**
- * Describes the message osac.public.v1.ExternalIPsUpdateRequest.
- * Use `create(ExternalIPsUpdateRequestSchema)` to create a new message.
- */
-export const ExternalIPsUpdateRequestSchema: GenMessage<ExternalIPsUpdateRequest> = /*@__PURE__*/
-  messageDesc(file_osac_public_v1_external_ips_service, 6);
-
-/**
- * @generated from message osac.public.v1.ExternalIPsUpdateResponse
- */
-export type ExternalIPsUpdateResponse = Message<"osac.public.v1.ExternalIPsUpdateResponse"> & {
-  /**
-   * @generated from field: osac.public.v1.ExternalIP object = 1;
-   */
-  object?: ExternalIP | undefined;
-};
-
-/**
- * Describes the message osac.public.v1.ExternalIPsUpdateResponse.
- * Use `create(ExternalIPsUpdateResponseSchema)` to create a new message.
- */
-export const ExternalIPsUpdateResponseSchema: GenMessage<ExternalIPsUpdateResponse> = /*@__PURE__*/
-  messageDesc(file_osac_public_v1_external_ips_service, 7);
-
-/**
  * @generated from message osac.public.v1.ExternalIPsDeleteRequest
  */
 export type ExternalIPsDeleteRequest = Message<"osac.public.v1.ExternalIPsDeleteRequest"> & {
@@ -258,7 +208,7 @@ export type ExternalIPsDeleteRequest = Message<"osac.public.v1.ExternalIPsDelete
  * Use `create(ExternalIPsDeleteRequestSchema)` to create a new message.
  */
 export const ExternalIPsDeleteRequestSchema: GenMessage<ExternalIPsDeleteRequest> = /*@__PURE__*/
-  messageDesc(file_osac_public_v1_external_ips_service, 8);
+  messageDesc(file_osac_public_v1_external_ips_service, 6);
 
 /**
  * @generated from message osac.public.v1.ExternalIPsDeleteResponse
@@ -271,7 +221,7 @@ export type ExternalIPsDeleteResponse = Message<"osac.public.v1.ExternalIPsDelet
  * Use `create(ExternalIPsDeleteResponseSchema)` to create a new message.
  */
 export const ExternalIPsDeleteResponseSchema: GenMessage<ExternalIPsDeleteResponse> = /*@__PURE__*/
-  messageDesc(file_osac_public_v1_external_ips_service, 9);
+  messageDesc(file_osac_public_v1_external_ips_service, 7);
 
 /**
  * @generated from service osac.public.v1.ExternalIPs
@@ -308,16 +258,6 @@ export const ExternalIPs: GenService<{
     output: typeof ExternalIPsCreateResponseSchema;
   },
   /**
-   * Updates an existing external IP. Allows modifying metadata (labels, annotations). The spec.pool field is immutable.
-   *
-   * @generated from rpc osac.public.v1.ExternalIPs.Update
-   */
-  update: {
-    methodKind: "unary";
-    input: typeof ExternalIPsUpdateRequestSchema;
-    output: typeof ExternalIPsUpdateResponseSchema;
-  },
-  /**
    * Deletes an external IP. The allocated address is returned to the parent pool's available capacity.
    *
    * @generated from rpc osac.public.v1.ExternalIPs.Delete
@@ -329,3 +269,4 @@ export const ExternalIPs: GenService<{
   },
 }> = /*@__PURE__*/
   serviceDesc(file_osac_public_v1_external_ips_service, 0);
+

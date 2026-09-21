@@ -105,3 +105,4 @@ export type HttpBody = Message<"google.api.HttpBody"> & {
  */
 export const HttpBodySchema: GenMessage<HttpBody> = /*@__PURE__*/
   messageDesc(file_google_api_httpbody, 0);
+

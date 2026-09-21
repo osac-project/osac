@@ -379,3 +379,4 @@ export enum ProjectConditionType {
  */
 export const ProjectConditionTypeSchema: GenEnum<ProjectConditionType> = /*@__PURE__*/
   enumDesc(file_osac_private_v1_project_type, 1);
+

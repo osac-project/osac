@@ -1,6 +1,6 @@
 import { MessageInitShape } from '@bufbuild/protobuf';
 
-import { BareMetalInstanceTypeSchema } from '@osac/types/index-private';
+import { BareMetalInstanceTypeSchema } from '@osac/types/private';
 
 import { BareMetalInstanceTypeFormValues } from './values';
 import { KeyValuePair } from '../../Form/KeyValueMapField';

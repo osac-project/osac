@@ -1,0 +1,87 @@
+name: Check UI types
+
+on:
+  # Keep the check reporting on every PR so it can be made a required status
+  # without leaving non-proto PRs pending. The job itself runs only when the
+  # shared proto module changes.
+  pull_request:
+    branches:
+      - main
+  merge_group:
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      proto: ${{ steps.filter.outputs.proto }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        if: github.event_name == 'merge_group'
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d  # v4.0.3
+        id: filter
+        with:
+          filters: |
+            proto:
+              - 'proto/**'
+              - 'osac-ui/libs/types/buf.gen.yaml'
+              - 'osac-ui/libs/types/scripts/gen-types.mjs'
+              - 'osac-ui/libs/types/package.json'
+              - 'osac-ui/libs/types/src/**'
+
+  check-ui-types:
+    name: Check UI types (proto)
+    needs: changes
+    # A skipped job reports success, which is intentional for PRs without a
+    # proto change; failures in the filter job must still fail this check.
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Fail if path filter failed
+        if: needs.changes.result != 'success'
+        run: exit 1
+      - id: should-run
+        if: needs.changes.outputs.proto == 'true'
+        run: echo "run=true" >> "$GITHUB_OUTPUT"
+      - if: steps.should-run.outputs.run
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - if: steps.should-run.outputs.run
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1  # v4.3.0
+        with:
+          run_install: false
+          package_json_file: osac-ui/package.json
+      - if: steps.should-run.outputs.run
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+        with:
+          node-version-file: osac-ui/package.json
+          cache: pnpm
+          cache-dependency-path: osac-ui/pnpm-lock.yaml
+      - if: steps.should-run.outputs.run
+        name: Install UI dependencies
+        working-directory: osac-ui
+        run: pnpm install --frozen-lockfile
+      - if: steps.should-run.outputs.run
+        name: Regenerate UI types from local proto
+        working-directory: osac-ui
+        run: pnpm gen-types
+      - if: steps.should-run.outputs.run
+        name: Check for uncommitted UI type changes
+        run: |
+          if ! git diff --exit-code -- osac-ui/libs/types/src/ || \
+            [ -n "$(git ls-files --others --exclude-standard -- osac-ui/libs/types/src/)" ]; then
+            echo "::error::UI types are out of date. Run 'pnpm gen-types' in osac-ui and commit the generated files."
+            git status --short -- osac-ui/libs/types/src/
+            exit 1
+          fi

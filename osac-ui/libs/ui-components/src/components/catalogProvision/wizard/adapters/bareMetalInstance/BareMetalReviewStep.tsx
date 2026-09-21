@@ -11,11 +11,7 @@ import {
 } from '@patternfly/react-core';
 import { useFormikContext } from 'formik';
 
-import {
-  BareMetalInstanceCatalogItem,
-  BareMetalInstanceType,
-  BareMetalInstanceTypes,
-} from '@osac/types';
+import { BareMetalInstanceType, BareMetalInstanceTypes } from '@osac/types';
 import { cel } from '@osac/ui-components/api/cel';
 import { useListResource } from '@osac/ui-components/api/use-resource';
 import { useProjects } from '@osac/ui-components/api/v1/project';
@@ -27,7 +23,6 @@ import {
 import { getErrorMessage } from '@osac/ui-components/utils/error';
 
 import { type BareMetalInstanceWizardValues, hasBareMetalAuthentication } from './fields';
-import { getDiskImageName } from './utils';
 import {
   formatResourceIdsForReview,
   resourceDisplayName,
@@ -150,9 +145,7 @@ export const BareMetalReviewStep = ({ catalogItem }: Props) => {
           </DescriptionListGroup>
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Disk image')}</DescriptionListTerm>
-            <DescriptionListDescription>
-              {getDiskImageName(catalogItem as BareMetalInstanceCatalogItem) || '-'}
-            </DescriptionListDescription>
+            <DescriptionListDescription>{'-'}</DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Instance type')}</DescriptionListTerm>

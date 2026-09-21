@@ -29,7 +29,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/private/v1/network_class_type.proto.
  */
 export const file_osac_private_v1_network_class_type: GenFile = /*@__PURE__*/
-  fileDesc("Cihvc2FjL3ByaXZhdGUvdjEvbmV0d29ya19jbGFzc190eXBlLnByb3RvEg9vc2FjLnByaXZhdGUudjEi8gMKDE5ldHdvcmtDbGFzcxIKCgJpZBgBIAEoCRIrCghtZXRhZGF0YRgCIAEoCzIZLm9zYWMucHJpdmF0ZS52MS5NZXRhZGF0YRINCgV0aXRsZRgDIAEoCRITCgtkZXNjcmlwdGlvbhgEIAEoCRI9Cgtjb25zdHJhaW50cxgGIAEoCzIoLm9zYWMucHJpdmF0ZS52MS5OZXR3b3JrQ2xhc3NDb25zdHJhaW50cxI/CgxjYXBhYmlsaXRpZXMYByABKAsyKS5vc2FjLnByaXZhdGUudjEuTmV0d29ya0NsYXNzQ2FwYWJpbGl0aWVzEjMKBnN0YXR1cxgIIAEoCzIjLm9zYWMucHJpdmF0ZS52MS5OZXR3b3JrQ2xhc3NTdGF0dXMSFwoKaXNfZGVmYXVsdBgJIAEoCEgAiAEBEhsKDmZhYnJpY19tYW5hZ2VyGAogASgJSAGIAQESGAoLazhzX21hbmFnZXIYCyABKAlIAogBARIvCgRzcGVjGAwgASgLMiEub3NhYy5wcml2YXRlLnYxLk5ldHdvcmtDbGFzc1NwZWNCDQoLX2lzX2RlZmF1bHRCEQoPX2ZhYnJpY19tYW5hZ2VyQg4KDF9rOHNfbWFuYWdlckoECAUQBlIXaW1wbGVtZW50YXRpb25fc3RyYXRlZ3ki0QEKEE5ldHdvcmtDbGFzc1NwZWMSMgoIZGVmYXVsdHMYASABKAsyIC5vc2FjLnByaXZhdGUudjEuTmV0d29ya0RlZmF1bHRzEkcKFGRpc2FibGVfY2FwYWJpbGl0aWVzGAIgASgLMikub3NhYy5wcml2YXRlLnYxLk5ldHdvcmtDbGFzc0NhcGFiaWxpdGllcxIqChF2aXBfcHJlZml4X2xlbmd0aBgDIAEoBUIKukgHGgUYgAEoAUgAiAEBQhQKEl92aXBfcHJlZml4X2xlbmd0aCLnCAoPTmV0d29ya0RlZmF1bHRzEpoBChl2aXJ0dWFsX25ldHdvcmtfaXB2NF9jaWRyGAEgASgJQne6SHS6AXEKD3ZhbGlkX2lwdjRfY2lkchI2bXVzdCBiZSB2YWxpZCBJUHY0IENJRFIgbm90YXRpb24gKGUuZy4sICcxMC4wLjAuMC8xNicpGiZ0aGlzID09ICcnIHx8IHRoaXMuaXNJcFByZWZpeCg0LCB0cnVlKRKYAQoZdmlydHVhbF9uZXR3b3JrX2lwdjZfY2lkchgFIAEoCUJ1ukhyugFvCg92YWxpZF9pcHY2X2NpZHISNG11c3QgYmUgdmFsaWQgSVB2NiBDSURSIG5vdGF0aW9uIChlLmcuLCAnZmQwMDo6LzQ4JykaJnRoaXMgPT0gJycgfHwgdGhpcy5pc0lwUHJlZml4KDYsIHRydWUpEpEBChBzdWJuZXRfaXB2NF9jaWRyGAIgASgJQne6SHS6AXEKD3ZhbGlkX2lwdjRfY2lkchI2bXVzdCBiZSB2YWxpZCBJUHY0IENJRFIgbm90YXRpb24gKGUuZy4sICcxMC4wLjEuMC8yNCcpGiZ0aGlzID09ICcnIHx8IHRoaXMuaXNJcFByZWZpeCg0LCB0cnVlKRKVAQoQc3VibmV0X2lwdjZfY2lkchgGIAEoCUJ7ukh4ugF1Cg92YWxpZF9pcHY2X2NpZHISOm11c3QgYmUgdmFsaWQgSVB2NiBDSURSIG5vdGF0aW9uIChlLmcuLCAnZmQwMDowOjA6MTo6LzY0JykaJnRoaXMgPT0gJycgfHwgdGhpcy5pc0lwUHJlZml4KDYsIHRydWUpEjQKDWluZ3Jlc3NfcnVsZXMYAyADKAsyHS5vc2FjLnByaXZhdGUudjEuU2VjdXJpdHlSdWxlEjMKDGVncmVzc19ydWxlcxgEIAMoCzIdLm9zYWMucHJpdmF0ZS52MS5TZWN1cml0eVJ1bGUSGgoSZW5hYmxlX25hdF9nYXRld2F5GAcgASgIOugCukjkAhqvAQopc3VibmV0X2lwdjRfcmVxdWlyZXNfdmlydHVhbF9uZXR3b3JrX2lwdjQSPXN1Ym5ldF9pcHY0X2NpZHIgcmVxdWlyZXMgdmlydHVhbF9uZXR3b3JrX2lwdjRfY2lkciB0byBiZSBzZXQaQ3RoaXMuc3VibmV0X2lwdjRfY2lkciA9PSAnJyB8fCB0aGlzLnZpcnR1YWxfbmV0d29ya19pcHY0X2NpZHIgIT0gJycarwEKKXN1Ym5ldF9pcHY2X3JlcXVpcmVzX3ZpcnR1YWxfbmV0d29ya19pcHY2Ej1zdWJuZXRfaXB2Nl9jaWRyIHJlcXVpcmVzIHZpcnR1YWxfbmV0d29ya19pcHY2X2NpZHIgdG8gYmUgc2V0GkN0aGlzLnN1Ym5ldF9pcHY2X2NpZHIgPT0gJycgfHwgdGhpcy52aXJ0dWFsX25ldHdvcmtfaXB2Nl9jaWRyICE9ICcnIhkKF05ldHdvcmtDbGFzc0NvbnN0cmFpbnRzInoKGE5ldHdvcmtDbGFzc0NhcGFiaWxpdGllcxIVCg1zdXBwb3J0c19pcHY0GAEgASgIEhUKDXN1cHBvcnRzX2lwdjYYAiABKAgSGwoTc3VwcG9ydHNfZHVhbF9zdGFjaxgDIAEoCBITCgtkcHVfc3VwcG9ydBgEIAEoCCJ2ChJOZXR3b3JrQ2xhc3NTdGF0dXMSMQoFc3RhdGUYASABKA4yIi5vc2FjLnByaXZhdGUudjEuTmV0d29ya0NsYXNzU3RhdGUSFAoHbWVzc2FnZRgCIAEoCUgAiAEBEgsKA2h1YhgDIAEoCUIKCghfbWVzc2FnZSJSChVOZXR3b3JrQ2xhc3NSZWZlcmVuY2USCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCRIPCgdwcm9qZWN0GAMgASgJEg4KBnNoYXJlZBgEIAEoCCqYAQoRTmV0d29ya0NsYXNzU3RhdGUSIwofTkVUV09SS19DTEFTU19TVEFURV9VTlNQRUNJRklFRBAAEh8KG05FVFdPUktfQ0xBU1NfU1RBVEVfUEVORElORxABEh0KGU5FVFdPUktfQ0xBU1NfU1RBVEVfUkVBRFkQAhIeChpORVRXT1JLX0NMQVNTX1NUQVRFX0ZBSUxFRBADQgaKtRgCCAFiBnByb3RvMw", [file_buf_validate_validate, file_cleanapi_cleanapi, file_osac_private_v1_metadata_type, file_osac_private_v1_security_rule_type]);
+  fileDesc("Cihvc2FjL3ByaXZhdGUvdjEvbmV0d29ya19jbGFzc190eXBlLnByb3RvEg9vc2FjLnByaXZhdGUudjEi8gMKDE5ldHdvcmtDbGFzcxIKCgJpZBgBIAEoCRIrCghtZXRhZGF0YRgCIAEoCzIZLm9zYWMucHJpdmF0ZS52MS5NZXRhZGF0YRINCgV0aXRsZRgDIAEoCRITCgtkZXNjcmlwdGlvbhgEIAEoCRI9Cgtjb25zdHJhaW50cxgGIAEoCzIoLm9zYWMucHJpdmF0ZS52MS5OZXR3b3JrQ2xhc3NDb25zdHJhaW50cxI/CgxjYXBhYmlsaXRpZXMYByABKAsyKS5vc2FjLnByaXZhdGUudjEuTmV0d29ya0NsYXNzQ2FwYWJpbGl0aWVzEjMKBnN0YXR1cxgIIAEoCzIjLm9zYWMucHJpdmF0ZS52MS5OZXR3b3JrQ2xhc3NTdGF0dXMSFwoKaXNfZGVmYXVsdBgJIAEoCEgAiAEBEhsKDmZhYnJpY19tYW5hZ2VyGAogASgJSAGIAQESGAoLazhzX21hbmFnZXIYCyABKAlIAogBARIvCgRzcGVjGAwgASgLMiEub3NhYy5wcml2YXRlLnYxLk5ldHdvcmtDbGFzc1NwZWNCDQoLX2lzX2RlZmF1bHRCEQoPX2ZhYnJpY19tYW5hZ2VyQg4KDF9rOHNfbWFuYWdlckoECAUQBlIXaW1wbGVtZW50YXRpb25fc3RyYXRlZ3kijAIKEE5ldHdvcmtDbGFzc1NwZWMSMgoIZGVmYXVsdHMYASABKAsyIC5vc2FjLnByaXZhdGUudjEuTmV0d29ya0RlZmF1bHRzEkcKFGRpc2FibGVfY2FwYWJpbGl0aWVzGAIgASgLMikub3NhYy5wcml2YXRlLnYxLk5ldHdvcmtDbGFzc0NhcGFiaWxpdGllcxIqChF2aXBfcHJlZml4X2xlbmd0aBgDIAEoBUIKukgHGgUYgAEoAUgAiAEBEjkKEGVhc3Rfd2VzdF9jb25maWcYBCABKAsyHy5vc2FjLnByaXZhdGUudjEuRWFzdFdlc3RDb25maWdCFAoSX3ZpcF9wcmVmaXhfbGVuZ3RoIucICg9OZXR3b3JrRGVmYXVsdHMSmgEKGXZpcnR1YWxfbmV0d29ya19pcHY0X2NpZHIYASABKAlCd7pIdLoBcQoPdmFsaWRfaXB2NF9jaWRyEjZtdXN0IGJlIHZhbGlkIElQdjQgQ0lEUiBub3RhdGlvbiAoZS5nLiwgJzEwLjAuMC4wLzE2JykaJnRoaXMgPT0gJycgfHwgdGhpcy5pc0lwUHJlZml4KDQsIHRydWUpEpgBChl2aXJ0dWFsX25ldHdvcmtfaXB2Nl9jaWRyGAUgASgJQnW6SHK6AW8KD3ZhbGlkX2lwdjZfY2lkchI0bXVzdCBiZSB2YWxpZCBJUHY2IENJRFIgbm90YXRpb24gKGUuZy4sICdmZDAwOjovNDgnKRomdGhpcyA9PSAnJyB8fCB0aGlzLmlzSXBQcmVmaXgoNiwgdHJ1ZSkSkQEKEHN1Ym5ldF9pcHY0X2NpZHIYAiABKAlCd7pIdLoBcQoPdmFsaWRfaXB2NF9jaWRyEjZtdXN0IGJlIHZhbGlkIElQdjQgQ0lEUiBub3RhdGlvbiAoZS5nLiwgJzEwLjAuMS4wLzI0JykaJnRoaXMgPT0gJycgfHwgdGhpcy5pc0lwUHJlZml4KDQsIHRydWUpEpUBChBzdWJuZXRfaXB2Nl9jaWRyGAYgASgJQnu6SHi6AXUKD3ZhbGlkX2lwdjZfY2lkchI6bXVzdCBiZSB2YWxpZCBJUHY2IENJRFIgbm90YXRpb24gKGUuZy4sICdmZDAwOjA6MDoxOjovNjQnKRomdGhpcyA9PSAnJyB8fCB0aGlzLmlzSXBQcmVmaXgoNiwgdHJ1ZSkSNAoNaW5ncmVzc19ydWxlcxgDIAMoCzIdLm9zYWMucHJpdmF0ZS52MS5TZWN1cml0eVJ1bGUSMwoMZWdyZXNzX3J1bGVzGAQgAygLMh0ub3NhYy5wcml2YXRlLnYxLlNlY3VyaXR5UnVsZRIaChJlbmFibGVfbmF0X2dhdGV3YXkYByABKAg66AK6SOQCGq8BCilzdWJuZXRfaXB2NF9yZXF1aXJlc192aXJ0dWFsX25ldHdvcmtfaXB2NBI9c3VibmV0X2lwdjRfY2lkciByZXF1aXJlcyB2aXJ0dWFsX25ldHdvcmtfaXB2NF9jaWRyIHRvIGJlIHNldBpDdGhpcy5zdWJuZXRfaXB2NF9jaWRyID09ICcnIHx8IHRoaXMudmlydHVhbF9uZXR3b3JrX2lwdjRfY2lkciAhPSAnJxqvAQopc3VibmV0X2lwdjZfcmVxdWlyZXNfdmlydHVhbF9uZXR3b3JrX2lwdjYSPXN1Ym5ldF9pcHY2X2NpZHIgcmVxdWlyZXMgdmlydHVhbF9uZXR3b3JrX2lwdjZfY2lkciB0byBiZSBzZXQaQ3RoaXMuc3VibmV0X2lwdjZfY2lkciA9PSAnJyB8fCB0aGlzLnZpcnR1YWxfbmV0d29ya19pcHY2X2NpZHIgIT0gJyciGQoXTmV0d29ya0NsYXNzQ29uc3RyYWludHMi3wEKGE5ldHdvcmtDbGFzc0NhcGFiaWxpdGllcxIVCg1zdXBwb3J0c19pcHY0GAEgASgIEhUKDXN1cHBvcnRzX2lwdjYYAiABKAgSGwoTc3VwcG9ydHNfZHVhbF9zdGFjaxgDIAEoCBITCgtkcHVfc3VwcG9ydBgEIAEoCBIjChtzdXBwb3J0c19lYXN0X3dlc3RfZXRoZXJuZXQYBSABKAgSJQodc3VwcG9ydHNfZWFzdF93ZXN0X2luZmluaWJhbmQYBiABKAgSFwoPc3VwcG9ydHNfbnZsaW5rGAcgASgIIscBCg5FYXN0V2VzdENvbmZpZxI8CgtldGhlcm5ldF9ldxgBIAEoCzInLm9zYWMucHJpdmF0ZS52MS5FdGhlcm5ldEVhc3RXZXN0Q29uZmlnEkAKDWluZmluaWJhbmRfZXcYAiABKAsyKS5vc2FjLnByaXZhdGUudjEuSW5maW5pQmFuZEVhc3RXZXN0Q29uZmlnEjUKBm52bGluaxgDIAEoCzIlLm9zYWMucHJpdmF0ZS52MS5OVkxpbmtFYXN0V2VzdENvbmZpZyItChZFdGhlcm5ldEVhc3RXZXN0Q29uZmlnEhMKC3RlbXBsYXRlX2lkGAEgASgJIj0KGEluZmluaUJhbmRFYXN0V2VzdENvbmZpZxIMCgRtb2RlGAEgASgJEhMKC3BrZXlfcG9saWN5GAIgASgJIjkKFE5WTGlua0Vhc3RXZXN0Q29uZmlnEg8KB2JhY2tlbmQYASABKAkSEAoIZW5kcG9pbnQYAiABKAkidgoSTmV0d29ya0NsYXNzU3RhdHVzEjEKBXN0YXRlGAEgASgOMiIub3NhYy5wcml2YXRlLnYxLk5ldHdvcmtDbGFzc1N0YXRlEhQKB21lc3NhZ2UYAiABKAlIAIgBARILCgNodWIYAyABKAlCCgoIX21lc3NhZ2UiUgoVTmV0d29ya0NsYXNzUmVmZXJlbmNlEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSDwoHcHJvamVjdBgDIAEoCRIOCgZzaGFyZWQYBCABKAgqmAEKEU5ldHdvcmtDbGFzc1N0YXRlEiMKH05FVFdPUktfQ0xBU1NfU1RBVEVfVU5TUEVDSUZJRUQQABIfChtORVRXT1JLX0NMQVNTX1NUQVRFX1BFTkRJTkcQARIdChlORVRXT1JLX0NMQVNTX1NUQVRFX1JFQURZEAISHgoaTkVUV09SS19DTEFTU19TVEFURV9GQUlMRUQQA0IGirUYAggBYgZwcm90bzM", [file_buf_validate_validate, file_cleanapi_cleanapi, file_osac_private_v1_metadata_type, file_osac_private_v1_security_rule_type]);
 
 /**
  * Describes a network implementation strategy available for creating virtual networks.
@@ -181,6 +181,13 @@ export type NetworkClassSpec = Message<"osac.private.v1.NetworkClassSpec"> & {
    * @generated from field: optional int32 vip_prefix_length = 3;
    */
   vipPrefixLength?: number | undefined;
+
+  /**
+   * Backend configuration for east-west fabric domains.
+   *
+   * @generated from field: osac.private.v1.EastWestConfig east_west_config = 4;
+   */
+  eastWestConfig?: EastWestConfig | undefined;
 };
 
 /**
@@ -319,6 +326,27 @@ export type NetworkClassCapabilities = Message<"osac.private.v1.NetworkClassCapa
    * @generated from field: bool dpu_support = 4;
    */
   dpuSupport: boolean;
+
+  /**
+   * Whether this network class supports Ethernet east-west fabric domains.
+   *
+   * @generated from field: bool supports_east_west_ethernet = 5;
+   */
+  supportsEastWestEthernet: boolean;
+
+  /**
+   * Whether this network class supports InfiniBand east-west fabric domains.
+   *
+   * @generated from field: bool supports_east_west_infiniband = 6;
+   */
+  supportsEastWestInfiniband: boolean;
+
+  /**
+   * Whether this network class supports NVLink fabric domains.
+   *
+   * @generated from field: bool supports_nvlink = 7;
+   */
+  supportsNvlink: boolean;
 };
 
 /**
@@ -327,6 +355,94 @@ export type NetworkClassCapabilities = Message<"osac.private.v1.NetworkClassCapa
  */
 export const NetworkClassCapabilitiesSchema: GenMessage<NetworkClassCapabilities> = /*@__PURE__*/
   messageDesc(file_osac_private_v1_network_class_type, 4);
+
+/**
+ * @generated from message osac.private.v1.EastWestConfig
+ */
+export type EastWestConfig = Message<"osac.private.v1.EastWestConfig"> & {
+  /**
+   * @generated from field: osac.private.v1.EthernetEastWestConfig ethernet_ew = 1;
+   */
+  ethernetEw?: EthernetEastWestConfig | undefined;
+
+  /**
+   * @generated from field: osac.private.v1.InfiniBandEastWestConfig infiniband_ew = 2;
+   */
+  infinibandEw?: InfiniBandEastWestConfig | undefined;
+
+  /**
+   * @generated from field: osac.private.v1.NVLinkEastWestConfig nvlink = 3;
+   */
+  nvlink?: NVLinkEastWestConfig | undefined;
+};
+
+/**
+ * Describes the message osac.private.v1.EastWestConfig.
+ * Use `create(EastWestConfigSchema)` to create a new message.
+ */
+export const EastWestConfigSchema: GenMessage<EastWestConfig> = /*@__PURE__*/
+  messageDesc(file_osac_private_v1_network_class_type, 5);
+
+/**
+ * @generated from message osac.private.v1.EthernetEastWestConfig
+ */
+export type EthernetEastWestConfig = Message<"osac.private.v1.EthernetEastWestConfig"> & {
+  /**
+   * @generated from field: string template_id = 1;
+   */
+  templateId: string;
+};
+
+/**
+ * Describes the message osac.private.v1.EthernetEastWestConfig.
+ * Use `create(EthernetEastWestConfigSchema)` to create a new message.
+ */
+export const EthernetEastWestConfigSchema: GenMessage<EthernetEastWestConfig> = /*@__PURE__*/
+  messageDesc(file_osac_private_v1_network_class_type, 6);
+
+/**
+ * @generated from message osac.private.v1.InfiniBandEastWestConfig
+ */
+export type InfiniBandEastWestConfig = Message<"osac.private.v1.InfiniBandEastWestConfig"> & {
+  /**
+   * @generated from field: string mode = 1;
+   */
+  mode: string;
+
+  /**
+   * @generated from field: string pkey_policy = 2;
+   */
+  pkeyPolicy: string;
+};
+
+/**
+ * Describes the message osac.private.v1.InfiniBandEastWestConfig.
+ * Use `create(InfiniBandEastWestConfigSchema)` to create a new message.
+ */
+export const InfiniBandEastWestConfigSchema: GenMessage<InfiniBandEastWestConfig> = /*@__PURE__*/
+  messageDesc(file_osac_private_v1_network_class_type, 7);
+
+/**
+ * @generated from message osac.private.v1.NVLinkEastWestConfig
+ */
+export type NVLinkEastWestConfig = Message<"osac.private.v1.NVLinkEastWestConfig"> & {
+  /**
+   * @generated from field: string backend = 1;
+   */
+  backend: string;
+
+  /**
+   * @generated from field: string endpoint = 2;
+   */
+  endpoint: string;
+};
+
+/**
+ * Describes the message osac.private.v1.NVLinkEastWestConfig.
+ * Use `create(NVLinkEastWestConfigSchema)` to create a new message.
+ */
+export const NVLinkEastWestConfigSchema: GenMessage<NVLinkEastWestConfig> = /*@__PURE__*/
+  messageDesc(file_osac_private_v1_network_class_type, 8);
 
 /**
  * Represents the current operational state of a NetworkClass.
@@ -363,7 +479,7 @@ export type NetworkClassStatus = Message<"osac.private.v1.NetworkClassStatus"> &
  * Use `create(NetworkClassStatusSchema)` to create a new message.
  */
 export const NetworkClassStatusSchema: GenMessage<NetworkClassStatus> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_network_class_type, 5);
+  messageDesc(file_osac_private_v1_network_class_type, 9);
 
 /**
  * Reference to a NetworkClass resource.
@@ -397,7 +513,7 @@ export type NetworkClassReference = Message<"osac.private.v1.NetworkClassReferen
  * Use `create(NetworkClassReferenceSchema)` to create a new message.
  */
 export const NetworkClassReferenceSchema: GenMessage<NetworkClassReference> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_network_class_type, 6);
+  messageDesc(file_osac_private_v1_network_class_type, 10);
 
 /**
  * Lifecycle states for NetworkClass resources.
@@ -439,3 +555,4 @@ export enum NetworkClassState {
  */
 export const NetworkClassStateSchema: GenEnum<NetworkClassState> = /*@__PURE__*/
   enumDesc(file_osac_private_v1_network_class_type, 0);
+

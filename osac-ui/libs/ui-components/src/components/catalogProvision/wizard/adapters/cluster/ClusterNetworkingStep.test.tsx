@@ -34,19 +34,6 @@ const clusterCatalogItem: ClusterCatalogItem = {
     shared: false,
   },
   published: true,
-  fieldDefinitions: [
-    {
-      $typeName: 'osac.public.v1.FieldDefinition',
-      path: 'version',
-      displayName: 'Version',
-      editable: true,
-      validationSchema: '',
-      default: {
-        $typeName: 'google.protobuf.Value',
-        kind: { case: 'stringValue', value: '4.17.0' },
-      },
-    },
-  ],
   templateParameters: {},
 };
 

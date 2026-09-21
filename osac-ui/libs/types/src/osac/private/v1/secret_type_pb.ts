@@ -27,13 +27,13 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/private/v1/secret_type.proto.
  */
 export const file_osac_private_v1_secret_type: GenFile = /*@__PURE__*/
-  fileDesc("CiFvc2FjL3ByaXZhdGUvdjEvc2VjcmV0X3R5cGUucHJvdG8SD29zYWMucHJpdmF0ZS52MSLhAgoGU2VjcmV0EgoKAmlkGAEgASgJEisKCG1ldGFkYXRhGAIgASgLMhkub3NhYy5wcml2YXRlLnYxLk1ldGFkYXRhEj0KBGRhdGEYAyADKAsyIS5vc2FjLnByaXZhdGUudjEuU2VjcmV0LkRhdGFFbnRyeUIMukgJmgEGIgRyAhABEjcKB2JhY2tlbmQYBCABKA4yHi5vc2FjLnByaXZhdGUudjEuU2VjcmV0QmFja2VuZEIGirUYAggBEkUKC2Nvb3JkaW5hdGVzGAUgAygLMigub3NhYy5wcml2YXRlLnYxLlNlY3JldC5Db29yZGluYXRlc0VudHJ5QgaKtRgCCAEaKwoJRGF0YUVudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoDDoCOAEaMgoQQ29vcmRpbmF0ZXNFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBIjAKFFNlY3JldExvY2FsUmVmZXJlbmNlEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkqaQoNU2VjcmV0QmFja2VuZBIeChpTRUNSRVRfQkFDS0VORF9VTlNQRUNJRklFRBAAEhgKFFNFQ1JFVF9CQUNLRU5EX1ZBVUxUEAESFgoSU0VDUkVUX0JBQ0tFTkRfSFVCEAIaBoq1GAIIAUIUirUYEBIOb3NhYy5wdWJsaWMudjFiBnByb3RvMw", [file_buf_validate_validate, file_cleanapi_cleanapi, file_osac_private_v1_metadata_type]);
+  fileDesc("CiFvc2FjL3ByaXZhdGUvdjEvc2VjcmV0X3R5cGUucHJvdG8SD29zYWMucHJpdmF0ZS52MSKWAwoGU2VjcmV0EgoKAmlkGAEgASgJEisKCG1ldGFkYXRhGAIgASgLMhkub3NhYy5wcml2YXRlLnYxLk1ldGFkYXRhEj0KBGRhdGEYAyADKAsyIS5vc2FjLnByaXZhdGUudjEuU2VjcmV0LkRhdGFFbnRyeUIMukgJmgEGIgRyAhABEjcKB2JhY2tlbmQYBCABKA4yHi5vc2FjLnByaXZhdGUudjEuU2VjcmV0QmFja2VuZEIGirUYAggBEkUKC2Nvb3JkaW5hdGVzGAUgAygLMigub3NhYy5wcml2YXRlLnYxLlNlY3JldC5Db29yZGluYXRlc0VudHJ5QgaKtRgCCAESMwoEdHlwZRgGIAEoDjIbLm9zYWMucHJpdmF0ZS52MS5TZWNyZXRUeXBlQgi6SAWCAQIQARorCglEYXRhRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgMOgI4ARoyChBDb29yZGluYXRlc0VudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoCToCOAEiMAoUU2VjcmV0TG9jYWxSZWZlcmVuY2USCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCSqsAQoKU2VjcmV0VHlwZRIbChdTRUNSRVRfVFlQRV9VTlNQRUNJRklFRBAAEhsKF1NFQ1JFVF9UWVBFX1BVTExfU0VDUkVUEAESGgoWU0VDUkVUX1RZUEVfS1VCRUNPTkZJRxACEhkKFVNFQ1JFVF9UWVBFX1VTRVJfREFUQRADEhYKElNFQ1JFVF9UWVBFX09QQVFVRRAEEhUKEVNFQ1JFVF9UWVBFX1ZBTFVFEAUqaQoNU2VjcmV0QmFja2VuZBIeChpTRUNSRVRfQkFDS0VORF9VTlNQRUNJRklFRBAAEhgKFFNFQ1JFVF9CQUNLRU5EX1ZBVUxUEAESFgoSU0VDUkVUX0JBQ0tFTkRfSFVCEAIaBoq1GAIIAUIUirUYEBIOb3NhYy5wdWJsaWMudjFiBnByb3RvMw", [file_buf_validate_validate, file_cleanapi_cleanapi, file_osac_private_v1_metadata_type]);
 
 /**
- * Represents a secret containing opaque key-value data.
+ * Represents a secret containing typed or opaque key-value data.
  *
  * Secrets store sensitive information such as TLS certificates, pull secrets, and credentials. Each secret holds a map
- * of named binary values. For example, a TLS secret might contain entries named `tls.crt` and `tls.key`.
+ * of named binary values.
  *
  * Secrets are scoped to a tenant and can be referenced by other resources that require sensitive configuration data.
  *
@@ -79,6 +79,13 @@ export type Secret = Message<"osac.private.v1.Secret"> & {
    * @generated from field: map<string, string> coordinates = 5;
    */
   coordinates: { [key: string]: string };
+
+  /**
+   * Type of data stored in the secret.
+   *
+   * @generated from field: osac.private.v1.SecretType type = 6;
+   */
+  type: SecretType;
 };
 
 /**
@@ -113,6 +120,61 @@ export const SecretLocalReferenceSchema: GenMessage<SecretLocalReference> = /*@_
   messageDesc(file_osac_private_v1_secret_type, 1);
 
 /**
+ * The type of data stored in a secret.
+ *
+ * @generated from enum osac.private.v1.SecretType
+ */
+export enum SecretType {
+  /**
+   * The secret type is not specified. The service treats an unspecified type as opaque when creating a secret.
+   *
+   * @generated from enum value: SECRET_TYPE_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * A Kubernetes-compatible container registry pull secret. Requires a `.dockerconfigjson` data key.
+   *
+   * @generated from enum value: SECRET_TYPE_PULL_SECRET = 1;
+   */
+  PULL_SECRET = 1,
+
+  /**
+   * A Kubernetes client configuration. Requires a `kubeconfig` data key.
+   *
+   * @generated from enum value: SECRET_TYPE_KUBECONFIG = 2;
+   */
+  KUBECONFIG = 2,
+
+  /**
+   * Cloud-init or other instance user data. Requires a `userdata` data key.
+   *
+   * @generated from enum value: SECRET_TYPE_USER_DATA = 3;
+   */
+  USER_DATA = 3,
+
+  /**
+   * An opaque secret with no required data keys.
+   *
+   * @generated from enum value: SECRET_TYPE_OPAQUE = 4;
+   */
+  OPAQUE = 4,
+
+  /**
+   * Represents a single value of any kind. Requires a `value` data key.
+   *
+   * @generated from enum value: SECRET_TYPE_VALUE = 5;
+   */
+  VALUE = 5,
+}
+
+/**
+ * Describes the enum osac.private.v1.SecretType.
+ */
+export const SecretTypeSchema: GenEnum<SecretType> = /*@__PURE__*/
+  enumDesc(file_osac_private_v1_secret_type, 0);
+
+/**
  * Storage backends for secret management.
  *
  * @generated from enum osac.private.v1.SecretBackend
@@ -144,4 +206,5 @@ export enum SecretBackend {
  * Describes the enum osac.private.v1.SecretBackend.
  */
 export const SecretBackendSchema: GenEnum<SecretBackend> = /*@__PURE__*/
-  enumDesc(file_osac_private_v1_secret_type, 0);
+  enumDesc(file_osac_private_v1_secret_type, 1);
+

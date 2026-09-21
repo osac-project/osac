@@ -7,6 +7,7 @@ import {
   InstanceTypeSchema,
   InstanceTypeState,
   InstanceTypesDeleteResponseSchema,
+  type InstanceTypesListResponse,
   InstanceTypesListResponseSchema,
   InstanceTypesUpdateResponseSchema,
   type InstanceType as PrivateInstanceType,
@@ -16,16 +17,15 @@ import { mockQueryResult } from '@osac/ui-components/test-utils/query';
 import AdminInstanceTypeListPage from './AdminInstanceTypeListPage';
 import { renderWithProviders } from '../../test-utils/TestProviders';
 
-vi.mock('@osac/ui-components/api/v1/private/instance-type', async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import('@osac/ui-components/api/v1/private/instance-type')>();
-  return { ...actual, useAdminInstanceTypes: vi.fn() };
+vi.mock('@osac/ui-components/api/use-resource', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@osac/ui-components/api/use-resource')>();
+  return { ...actual, useListResource: vi.fn() };
 });
 
-const { useAdminInstanceTypes } = await import('@osac/ui-components/api/v1/private/instance-type');
-const { useAdminInstanceTypes: useAdminInstanceTypesActual } = await vi.importActual<
-  typeof import('@osac/ui-components/api/v1/private/instance-type')
->('@osac/ui-components/api/v1/private/instance-type');
+const { useListResource } = await import('@osac/ui-components/api/use-resource');
+const { useListResource: useListResourceActual } = await vi.importActual<
+  typeof import('@osac/ui-components/api/use-resource')
+>('@osac/ui-components/api/use-resource');
 
 const makeInstanceType = (
   id: string,
@@ -47,6 +47,13 @@ const makeInstanceType = (
     },
   });
 
+const makeListResponse = (items: PrivateInstanceType[]): InstanceTypesListResponse =>
+  create(InstanceTypesListResponseSchema, {
+    items,
+    size: items.length,
+    total: items.length,
+  });
+
 const renderPage = () => renderWithProviders(<AdminInstanceTypeListPage />);
 
 const renderPageWithCreateRoute = () =>
@@ -63,13 +70,13 @@ const renderPageWithCreateRoute = () =>
 
 describe('AdminInstanceTypeListPage', () => {
   afterEach(() => {
-    vi.mocked(useAdminInstanceTypes).mockReset();
+    vi.mocked(useListResource).mockReset();
   });
 
   it('renders the required columns and lifecycle labels for populated data', () => {
-    vi.mocked(useAdminInstanceTypes).mockReturnValue(
-      mockQueryResult<PrivateInstanceType[]>({
-        data: [
+    vi.mocked(useListResource).mockReturnValue(
+      mockQueryResult<InstanceTypesListResponse>({
+        data: makeListResponse([
           makeInstanceType('active-1', InstanceTypeState.ACTIVE, {
             pciDeviceSelector: '10DE:20B0',
             resourceName: 'nvidia.com/A100',
@@ -77,7 +84,7 @@ describe('AdminInstanceTypeListPage', () => {
           }),
           makeInstanceType('deprecated-1', InstanceTypeState.DEPRECATED),
           makeInstanceType('obsolete-1', InstanceTypeState.OBSOLETE),
-        ],
+        ]),
       }),
     );
 
@@ -103,8 +110,8 @@ describe('AdminInstanceTypeListPage', () => {
   });
 
   it('shows a loading spinner while the query is in flight', () => {
-    vi.mocked(useAdminInstanceTypes).mockReturnValue(
-      mockQueryResult<PrivateInstanceType[]>({
+    vi.mocked(useListResource).mockReturnValue(
+      mockQueryResult<InstanceTypesListResponse>({
         data: undefined,
         isLoading: true,
       }),
@@ -116,9 +123,9 @@ describe('AdminInstanceTypeListPage', () => {
   });
 
   it('shows the empty state when no instance types are returned', () => {
-    vi.mocked(useAdminInstanceTypes).mockReturnValue(
-      mockQueryResult<PrivateInstanceType[]>({
-        data: [],
+    vi.mocked(useListResource).mockReturnValue(
+      mockQueryResult<InstanceTypesListResponse>({
+        data: makeListResponse([]),
       }),
     );
 
@@ -132,9 +139,9 @@ describe('AdminInstanceTypeListPage', () => {
   });
 
   it('uses the page-level error state when the query fails', () => {
-    vi.mocked(useAdminInstanceTypes).mockReturnValue(
-      mockQueryResult<PrivateInstanceType[]>({
-        data: [],
+    vi.mocked(useListResource).mockReturnValue(
+      mockQueryResult<InstanceTypesListResponse>({
+        data: makeListResponse([]),
         error: new Error('Private instance types unavailable'),
       }),
     );
@@ -147,9 +154,9 @@ describe('AdminInstanceTypeListPage', () => {
   });
 
   it('navigates to the create route when the create button is clicked', async () => {
-    vi.mocked(useAdminInstanceTypes).mockReturnValue(
-      mockQueryResult<PrivateInstanceType[]>({
-        data: [],
+    vi.mocked(useListResource).mockReturnValue(
+      mockQueryResult<InstanceTypesListResponse>({
+        data: makeListResponse([]),
       }),
     );
 
@@ -161,7 +168,7 @@ describe('AdminInstanceTypeListPage', () => {
   });
 
   it('sends the deprecate request and re-fetches the list to reflect the new state', async () => {
-    vi.mocked(useAdminInstanceTypes).mockImplementation(useAdminInstanceTypesActual);
+    vi.mocked(useListResource).mockImplementation(useListResourceActual);
     const items = [makeInstanceType('active-1', InstanceTypeState.ACTIVE)];
     let captured: Record<string, unknown> | undefined;
     let listCalls = 0;
@@ -171,11 +178,7 @@ describe('AdminInstanceTypeListPage', () => {
       transportOverrides: {
         onInstanceTypeList: () => {
           listCalls += 1;
-          return create(InstanceTypesListResponseSchema, {
-            items,
-            size: items.length,
-            total: items.length,
-          });
+          return makeListResponse(items);
         },
         onInstanceTypeUpdate: (req) => {
           captured = req as unknown as Record<string, unknown>;
@@ -199,7 +202,7 @@ describe('AdminInstanceTypeListPage', () => {
   });
 
   it('sends the delete request and removes the row after the list re-fetches', async () => {
-    vi.mocked(useAdminInstanceTypes).mockImplementation(useAdminInstanceTypesActual);
+    vi.mocked(useListResource).mockImplementation(useListResourceActual);
     const items = [makeInstanceType('obsolete-1', InstanceTypeState.OBSOLETE)];
     let deleteCalled = false;
 

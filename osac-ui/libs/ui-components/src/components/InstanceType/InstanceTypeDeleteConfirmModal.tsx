@@ -1,7 +1,7 @@
-import type { InstanceType as PrivateInstanceType } from '@osac/types/private';
+import { InstanceTypes, type InstanceType as PrivateInstanceType } from '@osac/types/private';
+import { useDeleteResource } from '@osac/ui-components/api/use-resource';
 import DeleteResourceModal from '@osac/ui-components/components/Resource/DeleteResourceModal.tsx';
 
-import { useDeleteInstanceType } from '../../api/v1/private/instance-type';
 import { useTranslation } from '../../hooks/useTranslation';
 
 interface InstanceTypeDeleteConfirmModalProps {
@@ -16,7 +16,7 @@ const InstanceTypeDeleteConfirmModal = ({
   onSuccess,
 }: InstanceTypeDeleteConfirmModalProps) => {
   const { t } = useTranslation();
-  const deleteInstanceType = useDeleteInstanceType();
+  const deleteInstanceType = useDeleteResource(InstanceTypes);
   const name = instanceType.metadata?.name ?? instanceType.id;
 
   return (
@@ -27,7 +27,7 @@ const InstanceTypeDeleteConfirmModal = ({
       onClose={onClose}
       onSuccess={onSuccess}
       mutation={deleteInstanceType}
-      variables={instanceType.id}
+      variables={{ id: instanceType.id }}
     />
   );
 };

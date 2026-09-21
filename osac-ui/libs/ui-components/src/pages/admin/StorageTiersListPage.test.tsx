@@ -30,9 +30,6 @@ const makeTier = (
     spec: {
       description: '',
       protocol,
-      maxReadBandwidthMbs: 0,
-      maxWriteBandwidthMbs: 0,
-      encryptionEnabled: false,
       backends: backendIds.map((backendId) => ({
         backendId,
         maxReadBandwidthMbs: 0,

@@ -339,3 +339,4 @@ export enum InstanceTypeState {
  */
 export const InstanceTypeStateSchema: GenEnum<InstanceTypeState> = /*@__PURE__*/
   enumDesc(file_osac_private_v1_instance_type_type, 0);
+

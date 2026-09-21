@@ -13,7 +13,7 @@ metadata:
   annotations:
     "helm.sh/hook": post-install,pre-upgrade
     "helm.sh/hook-delete-policy": before-hook-creation
-    "helm.sh/hook-weight": "15"
+    "helm.sh/hook-weight": "14"
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -25,7 +25,7 @@ metadata:
   annotations:
     "helm.sh/hook": post-install,pre-upgrade
     "helm.sh/hook-delete-policy": before-hook-creation
-    "helm.sh/hook-weight": "15"
+    "helm.sh/hook-weight": "14"
 rules:
 - apiGroups: [""]
   resources: [secrets]
@@ -42,7 +42,7 @@ metadata:
   annotations:
     "helm.sh/hook": post-install,pre-upgrade
     "helm.sh/hook-delete-policy": before-hook-creation
-    "helm.sh/hook-weight": "15"
+    "helm.sh/hook-weight": "14"
 rules:
 - apiGroups: [route.openshift.io]
   resources: [routes]
@@ -59,7 +59,7 @@ metadata:
   annotations:
     "helm.sh/hook": post-install,pre-upgrade
     "helm.sh/hook-delete-policy": before-hook-creation
-    "helm.sh/hook-weight": "15"
+    "helm.sh/hook-weight": "14"
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -79,7 +79,7 @@ metadata:
   annotations:
     "helm.sh/hook": post-install,pre-upgrade
     "helm.sh/hook-delete-policy": before-hook-creation
-    "helm.sh/hook-weight": "15"
+    "helm.sh/hook-weight": "14"
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role

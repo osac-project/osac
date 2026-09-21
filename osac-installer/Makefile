@@ -128,14 +128,14 @@ export KUBECONFIG := $(or $(KUBECONFIG),$(KIND_KUBECONFIG))
 define kind-load-image
 	@if [ "$(KIND_RUNTIME_REQUIRED)" = "true" ]; then \
 		tmpfile=$$(mktemp /tmp/kind-image-XXXXXX.tar); \
+		trap 'rm -f "$$tmpfile"' EXIT; \
 		$(KIND_RUNTIME) container save $(1) -o "$$tmpfile"; \
 		$(KIND_RUNTIME) load image-archive "$$tmpfile" --name $(KIND_CLUSTER_NAME); \
-		rm -f "$$tmpfile"; \
 	elif [ "$$(basename $(CONTAINER_TOOL))" = "podman" ]; then \
 		tmpfile=$$(mktemp /tmp/kind-image-XXXXXX.tar); \
+		trap 'rm -f "$$tmpfile"' EXIT; \
 		$(CONTAINER_TOOL) save $(1) -o "$$tmpfile"; \
 		kind load image-archive "$$tmpfile" --name $(KIND_CLUSTER_NAME); \
-		rm -f "$$tmpfile"; \
 	else \
 		kind load docker-image $(1) --name $(KIND_CLUSTER_NAME); \
 	fi

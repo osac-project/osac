@@ -46,48 +46,16 @@ def _build_graphql_query(repos: list[str], after: str | None = None) -> str:
           createdAt
           isDraft
           mergeable
-          labels(first: 20) {{
-            pageInfo {{ hasNextPage endCursor }}
-            nodes {{ name }}
-          }}
-          reviews(last: 20) {{
-            pageInfo {{ hasPreviousPage startCursor }}
-            nodes {{
-              author {{ login }}
-              state
-              submittedAt
-            }}
-          }}
-          reviewRequests(first: 10) {{
-            pageInfo {{ hasNextPage endCursor }}
-            nodes {{
-              requestedReviewer {{
-                ... on User {{ login }}
-              }}
-            }}
-          }}
+          {_connection_fields("labels", "first: 20")}
+          {_connection_fields("reviews", "last: 20")}
+          {_connection_fields("reviewRequests", "first: 10")}
           commits(last: 1) {{
             nodes {{
               commit {{
                 committedDate
                 statusCheckRollup {{
                   state
-                  contexts(first: 20) {{
-                    pageInfo {{ hasNextPage endCursor }}
-                    nodes {{
-                      __typename
-                      ... on CheckRun {{
-                        name
-                        conclusion
-                        detailsUrl
-                      }}
-                      ... on StatusContext {{
-                        context
-                        state
-                        targetUrl
-                      }}
-                    }}
-                  }}
+                  {_connection_fields("contexts", "first: 20")}
                 }}
               }}
             }}
@@ -153,17 +121,25 @@ def _connection_fields(connection: str, page_args: str) -> str:
     raise ValueError(f"Unsupported connection: {connection}")
 
 
-def _build_pr_details_query(repo: str, pr_numbers: list[int]) -> str:
+def _build_pr_details_query(
+    repo: str, connections_by_number: dict[int, set[str]]
+) -> str:
     """Build a bounded query for overflowed PR connections."""
     owner, name = repo.split("/", 1)
     aliases = []
-    for number in pr_numbers:
+    for number, connections in connections_by_number.items():
         alias = f"pr_{number}"
-        aliases.append(f"""
-    {alias}: pullRequest(number: {number}) {{
-      {_connection_fields("labels", f"first: {DETAIL_PAGE_SIZE}")}
-      {_connection_fields("reviews", f"last: {DETAIL_PAGE_SIZE}")}
-      {_connection_fields("reviewRequests", f"first: {DETAIL_PAGE_SIZE}")}
+        fields = []
+        for connection in ("labels", "reviews", "reviewRequests"):
+            if connection in connections:
+                page_args = (
+                    f"last: {DETAIL_PAGE_SIZE}"
+                    if connection == "reviews"
+                    else f"first: {DETAIL_PAGE_SIZE}"
+                )
+                fields.append(_connection_fields(connection, page_args))
+        if "contexts" in connections:
+            fields.append(f"""
       commits(last: 1) {{
         nodes {{
           commit {{
@@ -172,8 +148,13 @@ def _build_pr_details_query(repo: str, pr_numbers: list[int]) -> str:
             }}
           }}
         }}
-      }}
-    }}""")
+      }}""")
+        aliases.append(
+            f"""
+    {alias}: pullRequest(number: {number}) {{
+      {''.join(fields)}
+    }}"""
+        )
     return (
         "{\n  repository(owner: "
         + json.dumps(owner)
@@ -246,7 +227,7 @@ def _fetch_connection_pages(
     repo: str, pr_number: int, connection: str, initial: dict
 ) -> dict:
     """Fetch all remaining pages for one PR connection."""
-    nodes = list(initial.get("nodes", []))
+    page_nodes = [list(initial.get("nodes", []))]
     page_info = initial.get("pageInfo", {})
     direction = "hasPreviousPage" if connection == "reviews" else "hasNextPage"
     if direction not in page_info:
@@ -271,11 +252,7 @@ def _fetch_connection_pages(
                 f"No data returned for pull request {repo}#{pr_number}"
             )
         page = _extract_connection(pull_request, connection)
-        page_nodes = page.get("nodes", [])
-        if connection == "reviews":
-            nodes = page_nodes + nodes
-        else:
-            nodes.extend(page_nodes)
+        page_nodes.append(page.get("nodes", []))
         page_info = page.get("pageInfo", {})
         if direction not in page_info:
             raise GitHubFetchError(
@@ -283,29 +260,33 @@ def _fetch_connection_pages(
                 "pagination metadata"
             )
 
+    pages = reversed(page_nodes) if connection == "reviews" else page_nodes
     return {
         "pageInfo": {"hasNextPage": False, "hasPreviousPage": False},
-        "nodes": nodes,
+        "nodes": [node for page in pages for node in page],
     }
 
 
-def _needs_connection_details(pr: dict) -> bool:
-    """Return whether any nested PR connection needs an overflow query."""
-    return any(
-        _connection_has_more(
+def _overflowing_connections(pr: dict) -> set[str]:
+    """Return the nested PR connections that need an overflow query."""
+    return {
+        connection
+        for connection in PAGINATED_CONNECTIONS
+        if _connection_has_more(
             connection, _extract_connection(pr, connection).get("pageInfo", {})
         )
-        for connection in PAGINATED_CONNECTIONS
-    )
+    }
 
 
-def _merge_connection_details(repo: str, pr: dict, details: dict) -> None:
+def _merge_connection_details(
+    repo: str, pr: dict, details: dict, connections: set[str]
+) -> None:
     """Replace initial connection pages with complete connection data."""
     pr_number = pr.get("number")
     if not pr_number:
         raise GitHubFetchError("Cannot paginate PR connections without PR number")
 
-    for connection in ("labels", "reviews", "reviewRequests"):
+    for connection in connections & {"labels", "reviews", "reviewRequests"}:
         initial = details.get(connection)
         if initial is None:
             raise GitHubFetchError(
@@ -315,26 +296,37 @@ def _merge_connection_details(repo: str, pr: dict, details: dict) -> None:
             repo, pr_number, connection, initial
         )
 
-    context_details = _extract_connection(details, "contexts")
-    commits = pr.get("commits", {}).get("nodes", [])
-    if context_details and commits:
-        rollup = commits[0].get("commit", {}).get("statusCheckRollup")
-        if rollup is not None:
-            rollup["contexts"] = _fetch_connection_pages(
-                repo, pr_number, "contexts", context_details
-            )
+    if "contexts" in connections:
+        context_details = _extract_connection(details, "contexts")
+        commits = pr.get("commits", {}).get("nodes", [])
+        if context_details and commits:
+            rollup = commits[0].get("commit", {}).get("statusCheckRollup")
+            if rollup is not None:
+                rollup["contexts"] = _fetch_connection_pages(
+                    repo, pr_number, "contexts", context_details
+                )
 
 
 def _hydrate_overflowing_connections(repo: str, pr_nodes: list[dict]) -> None:
     """Complete nested connections only for PRs whose first page overflowed."""
-    overflowing = [pr for pr in pr_nodes if _needs_connection_details(pr)]
-    for pr in overflowing:
-        if not pr.get("number"):
+    connections_by_number = {}
+    for pr in pr_nodes:
+        connections = _overflowing_connections(pr)
+        if connections:
+            connections_by_number[pr.get("number")] = connections
+    for number in connections_by_number:
+        if not number:
             raise GitHubFetchError("Cannot paginate PR connections without PR number")
-    numbers = [pr["number"] for pr in overflowing]
+    numbers = list(connections_by_number)
+    pr_by_number = {pr.get("number"): pr for pr in pr_nodes}
     for start in range(0, len(numbers), DETAIL_BATCH_SIZE):
         batch = numbers[start:start + DETAIL_BATCH_SIZE]
-        response = _run_graphql_query(_build_pr_details_query(repo, batch))
+        batch_connections = {
+            number: connections_by_number[number] for number in batch
+        }
+        response = _run_graphql_query(
+            _build_pr_details_query(repo, batch_connections)
+        )
         repository = response.get("data", {}).get("repository")
         if repository is None:
             raise GitHubFetchError(f"No data returned for repository '{repo}'")
@@ -347,10 +339,10 @@ def _hydrate_overflowing_connections(repo: str, pr_nodes: list[dict]) -> None:
                 )
             details_by_number[number] = details
 
-        for pr in pr_nodes:
-            number = pr.get("number")
-            if number in details_by_number:
-                _merge_connection_details(repo, pr, details_by_number[number])
+        for number, details in details_by_number.items():
+            _merge_connection_details(
+                repo, pr_by_number[number], details, batch_connections[number]
+            )
 
 
 def _parse_pr_nodes(repo_name: str, pr_nodes: list[dict]) -> list[PRData]:

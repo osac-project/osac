@@ -282,6 +282,8 @@ func applyVolumeUpdate(base, update *privatev1.Volume, mask *fieldmaskpb.FieldMa
 				dst[k] = v
 			}
 			base.GetSpec().GetTopology().SetSegments(dst)
+		case "status.provider":
+			base.GetStatus().SetProvider(update.GetStatus().GetProvider())
 		case "status.protocol":
 			base.GetStatus().SetProtocol(update.GetStatus().GetProtocol())
 		default:
@@ -291,7 +293,7 @@ func applyVolumeUpdate(base, update *privatev1.Volume, mask *fieldmaskpb.FieldMa
 }
 
 // validateVolumeImmutability checks that immutable volume fields have not been changed.
-// storage_tier, size_gib, access_mode, and protocol are immutable after creation because
+// storage_tier, size_gib, access_mode, provider, and protocol are immutable after creation because
 // they are provisioned directly into the vendor CSI call and cannot be modified post-creation.
 func validateVolumeImmutability(merged, existing *privatev1.Volume) error {
 	if merged.GetSpec().GetStorageTier() != existing.GetSpec().GetStorageTier() {
@@ -309,6 +311,11 @@ func validateVolumeImmutability(merged, existing *privatev1.Volume) error {
 	if !proto.Equal(merged.GetSpec().GetTopology(), existing.GetSpec().GetTopology()) {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"field 'spec.topology' is immutable and cannot be changed after creation")
+	}
+	if existing.GetStatus().GetProvider() != "" &&
+		merged.GetStatus().GetProvider() != existing.GetStatus().GetProvider() {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'status.provider' is immutable and cannot be changed after creation")
 	}
 	if existing.GetStatus().GetProtocol() != privatev1.StorageProtocol_STORAGE_PROTOCOL_UNSPECIFIED &&
 		merged.GetStatus().GetProtocol() != existing.GetStatus().GetProtocol() {

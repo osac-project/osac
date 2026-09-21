@@ -143,5 +143,5 @@ message VolumeStatus {
 
   // Provider selected by StorageTier resolution. This is the provider key used by the operator
   // to select a VendorProvisioner implementation.
-  string provider = 8 [(cleanapi.field).private = true];
+  string provider = 4 [(cleanapi.field).private = true];
 }

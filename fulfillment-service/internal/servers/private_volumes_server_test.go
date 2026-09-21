@@ -310,7 +310,7 @@ var _ = Describe("Private volumes server", func() {
 					Status: privatev1.VolumeStatus_builder{
 						State:          privatev1.VolumeState_VOLUME_STATE_AVAILABLE,
 						VendorVolumeId: "vast-vol-123",
-						Provider:       "vast-1",
+						Provider:       "test-provider",
 						Protocol:       privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
 					}.Build(),
 				}.Build(),
@@ -325,10 +325,30 @@ var _ = Describe("Private volumes server", func() {
 			Expect(updateResponse.GetObject().GetStatus().GetState()).To(Equal(
 				privatev1.VolumeState_VOLUME_STATE_AVAILABLE))
 			Expect(updateResponse.GetObject().GetStatus().GetVendorVolumeId()).To(Equal("vast-vol-123"))
-			Expect(updateResponse.GetObject().GetStatus().GetProvider()).To(Equal("vast-1"))
+			Expect(updateResponse.GetObject().GetStatus().GetProvider()).To(Equal("test-provider"))
 			Expect(updateResponse.GetObject().GetStatus().GetProtocol()).To(Equal(
 				privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK))
 			Expect(updateResponse.GetObject().GetSpec().GetStorageTier()).To(Equal("gold"))
+		})
+
+		It("Rejects updates that change the provider", func() {
+			created := createVolume()
+
+			_, err := server.Update(ctx, privatev1.VolumesUpdateRequest_builder{
+				Object: privatev1.Volume_builder{
+					Id: created.GetId(),
+					Status: privatev1.VolumeStatus_builder{
+						Provider: "vast-1",
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.provider"}},
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			st, ok := status.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(st.Code()).To(Equal(codes.InvalidArgument))
+			Expect(st.Message()).To(ContainSubstring("status.provider"))
+			Expect(st.Message()).To(ContainSubstring("immutable"))
 		})
 
 		It("Rejects updates that change the protocol", func() {
@@ -358,6 +378,19 @@ var _ = Describe("Private volumes server", func() {
 			merged := privatev1.Volume_builder{
 				Status: privatev1.VolumeStatus_builder{
 					Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
+				}.Build(),
+			}.Build()
+
+			Expect(validateVolumeImmutability(merged, existing)).To(Succeed())
+		})
+
+		It("Allows the first provider assignment from empty", func() {
+			existing := privatev1.Volume_builder{
+				Status: privatev1.VolumeStatus_builder{}.Build(),
+			}.Build()
+			merged := privatev1.Volume_builder{
+				Status: privatev1.VolumeStatus_builder{
+					Provider: "test-provider",
 				}.Build(),
 			}.Build()
 

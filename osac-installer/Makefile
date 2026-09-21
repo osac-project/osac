@@ -104,6 +104,9 @@ KIND_ARM64_CLI_IMAGE := quay.io/openshift/origin-cli:4.20.0
 # using the shared cliImage value without platform-specific values files.
 HOST_IS_MAC_ARM := $(shell if [ "$$(uname -s)" = "Darwin" ] && { [ "$$(uname -m)" = "arm64" ] || [ "$$(sysctl -in hw.optional.arm64 2>/dev/null)" = "1" ]; }; then echo true; fi)
 KIND_ARM64_CLI_IMAGE_SCRIPT := scripts/dev-full/build-arm64-cli-image.sh
+# Apple Silicon and dev-full use the runtime wrapper. Plain non-macOS dev
+# keeps its existing direct Kind/container-tool behavior.
+KIND_RUNTIME_REQUIRED := $(if $(filter true,$(HOST_IS_MAC_ARM)),true,$(if $(filter dev-full,$(PROFILE)),true,false))
 
 # Container tool and Kind cluster config.
 CONTAINER_TOOL ?= $(or $(shell command -v podman 2>/dev/null),$(shell command -v docker 2>/dev/null),$(error neither podman nor docker found in PATH))
@@ -123,13 +126,26 @@ endif
 export KUBECONFIG := $(or $(KUBECONFIG),$(KIND_KUBECONFIG))
 
 define kind-load-image
-	@if [ "$$(basename $(CONTAINER_TOOL))" = "podman" ]; then \
+	@if [ "$(KIND_RUNTIME_REQUIRED)" = "true" ]; then \
 		tmpfile=$$(mktemp /tmp/kind-image-XXXXXX.tar); \
-		$(CONTAINER_TOOL) save $(1) -o "$$tmpfile"; \
+		$(KIND_RUNTIME) container save $(1) -o "$$tmpfile"; \
 		$(KIND_RUNTIME) load image-archive "$$tmpfile" --name $(KIND_CLUSTER_NAME); \
 		rm -f "$$tmpfile"; \
+	elif [ "$$(basename $(CONTAINER_TOOL))" = "podman" ]; then \
+		tmpfile=$$(mktemp /tmp/kind-image-XXXXXX.tar); \
+		$(CONTAINER_TOOL) save $(1) -o "$$tmpfile"; \
+		kind load image-archive "$$tmpfile" --name $(KIND_CLUSTER_NAME); \
+		rm -f "$$tmpfile"; \
 	else \
-		$(KIND_RUNTIME) load docker-image $(1) --name $(KIND_CLUSTER_NAME); \
+		kind load docker-image $(1) --name $(KIND_CLUSTER_NAME); \
+	fi
+endef
+
+define kind-container-build
+	@if [ "$(KIND_RUNTIME_REQUIRED)" = "true" ]; then \
+		$(KIND_RUNTIME) container build $(1); \
+	else \
+		$(CONTAINER_TOOL) build $(1); \
 	fi
 endef
 
@@ -303,7 +319,7 @@ ifeq ($(SUITE),all)
 	$(MAKE) test SUITE=bmf
 endif
 ifeq ($(SUITE),fulfillment)
-	$(CONTAINER_TOOL) build -t localhost/fulfillment-service:it -f ../fulfillment-service/Containerfile ..
+	$(call kind-container-build,-t localhost/fulfillment-service:it -f ../fulfillment-service/Containerfile ..)
 	$(call kind-load-image,localhost/fulfillment-service:it)
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
 		EXTRA_HELM_ARGS="--set service.images.service=localhost/fulfillment-service:it --set operator.enabled=false --set networkClass.enabled=false"
@@ -314,14 +330,14 @@ ifeq ($(SUITE),fulfillment)
 	cd ../fulfillment-service && IT_TEST_SUITE=bmaas-disabled ginkgo run --timeout 1h -v --focus 'Service enablement' it
 endif
 ifeq ($(SUITE),operator)
-	$(CONTAINER_TOOL) build -t localhost/osac-operator:it -f ../osac-operator/Containerfile ..
+	$(call kind-container-build,-t localhost/osac-operator:it -f ../osac-operator/Containerfile ..)
 	$(call kind-load-image,localhost/osac-operator:it)
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
 		EXTRA_HELM_ARGS="--set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set service.enabled=false --set hubAccess.enabled=false --set validation.enabled=false --set networkClass.enabled=false"
 	cd ../osac-operator && ginkgo run --timeout 30m -v test/integration
 endif
 ifeq ($(SUITE),bmf)
-	$(CONTAINER_TOOL) build -t localhost/bmf-operator:it -f ../bare-metal-fulfillment-operator/Containerfile ..
+	$(call kind-container-build,-t localhost/bmf-operator:it -f ../bare-metal-fulfillment-operator/Containerfile ..)
 	$(call kind-load-image,localhost/bmf-operator:it)
 	kubectl apply --server-side --force-conflicts -f ../bare-metal-fulfillment-operator/test/crds/
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \

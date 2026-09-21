@@ -8,7 +8,7 @@ metadata:
   annotations:
     "helm.sh/hook": post-install,post-upgrade
     "helm.sh/hook-weight": "-10"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-delete-policy": hook-succeeded
 spec:
   backoffLimit: 4
   template:
@@ -48,6 +48,10 @@ metadata:
   name: {{ include "osac-infra.fullname" . }}-coredns-patch
   labels:
     {{- include "osac-infra.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-11"
+    "helm.sh/hook-delete-policy": hook-succeeded
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -56,6 +60,10 @@ metadata:
   namespace: kube-system
   labels:
     {{- include "osac-infra.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-11"
+    "helm.sh/hook-delete-policy": hook-succeeded
 rules:
   - apiGroups: [""]
     resources: ["configmaps"]
@@ -76,6 +84,10 @@ metadata:
   namespace: kube-system
   labels:
     {{- include "osac-infra.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-11"
+    "helm.sh/hook-delete-policy": hook-succeeded
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role

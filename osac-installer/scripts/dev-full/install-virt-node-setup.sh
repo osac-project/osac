@@ -28,14 +28,16 @@ use_podman() {
   command -v podman >/dev/null 2>&1 || die "podman is required by KIND_EXPERIMENTAL_PROVIDER=podman"
 
   RUNTIME=podman
-  # Check if cluster exists in rootful podman (created with sudo)
-  if sudo podman ps --filter "name=${CLUSTER_NAME}-control-plane" --format '{{.Names}}' 2>/dev/null | grep -q "${CLUSTER_NAME}-control-plane"; then
+  # Podman Desktop on macOS is user-scoped. Avoid an unnecessary sudo prompt
+  # there; Linux retains the rootful-first compatibility path for clusters
+  # created with sudo.
+  if [[ "$(uname -s)" != "Darwin" ]] && \
+    sudo podman ps --filter "name=${CLUSTER_NAME}-control-plane" --format '{{.Names}}' 2>/dev/null | grep -q "${CLUSTER_NAME}-control-plane"; then
     RUNTIME="sudo podman"
-  # Check if cluster exists in rootless podman
   elif podman ps --filter "name=${CLUSTER_NAME}-control-plane" --format '{{.Names}}' 2>/dev/null | grep -q "${CLUSTER_NAME}-control-plane"; then
     RUNTIME=podman
   else
-    die "Kind cluster '${CLUSTER_NAME}' not found in podman (tried both rootful and rootless)"
+    die "Kind cluster '${CLUSTER_NAME}' not found in podman"
   fi
 }
 

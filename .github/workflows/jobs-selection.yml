@@ -40,6 +40,7 @@ name: Jobs Selection
 on:
   pull_request:
     branches: [main]
+  merge_group:
 
 permissions:
   contents: read
@@ -58,6 +59,15 @@ jobs:
       ambiguous-shared: ${{ steps.filter.outputs.ambiguous-shared }}
       config-yaml-json: ${{ steps.filter.outputs.config-yaml-json }}
       netris-relevant: ${{ steps.filter.outputs.netris-relevant }}
+      # Inverted here, once, at the only place it's computed -- see
+      # ci-filters.yml's own comment on the *-outside-known-safe filters for
+      # why the raw filter is named/oriented the other way around. true
+      # means "every changed file falls inside the reviewed safe list for
+      # this suite", i.e. this is the ONLY signal that may ever authorize a
+      # real "skip" for an E2E suite (see select-jobs.py's decide()).
+      vmaas-exclusive-skip: ${{ steps.filter.outputs.vmaas-outside-known-safe != 'true' }}
+      caas-exclusive-skip: ${{ steps.filter.outputs.caas-outside-known-safe != 'true' }}
+      bmaas-exclusive-skip: ${{ steps.filter.outputs.bmaas-outside-known-safe != 'true' }}
       # JSON arrays of the actual matching paths for EVERY bucket, not just
       # the ambiguous ones -- Gemini's own judgment step now gets shown
       # which specific files earned each deterministic "clear" verdict
@@ -99,221 +109,25 @@ jobs:
       ansible-osac-aap: ${{ steps.filter.outputs.ansible-osac-aap }}
       darwin-keychain: ${{ steps.filter.outputs.darwin-keychain }}
     steps:
+      # dorny/paths-filter uses git diff on merge_group (not the PR Files
+      # API), so the repo must be checked out with enough history for
+      # base..head -- same pattern as this repo's other merge_group-aware
+      # changes jobs (e.g. unit-tests.yml, helm-lint.yaml).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        if: github.event_name == 'merge_group'
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d  # v4.0.3
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
         id: filter
         with:
           predicate-quantifier: 'every'
           list-files: json
-          # Each of the three "-clear" filters is ONE brace-alternation
-          # pattern, not a flat list of separate alternatives -- with
-          # predicate-quantifier: 'every', multiple list ENTRIES all apply
-          # to the same candidate file as an AND (that's what lets
-          # ambiguous-shared/config-yaml-json below combine one broad match
-          # with several negations, exactly like this repo's own existing
-          # `code` filter in e2e-*-full-install.yml). Four disjoint full
-          # patterns as separate list entries would require a single file to
-          # satisfy ALL FOUR at once, which no real file ever does -- verified
-          # this distinction directly against real repo paths before landing
-          # this file (a flat-list version matched nothing at all).
-          filters: |
-            # tests/e2e/references/** is NOT exclusively a VMaaS directory --
-            # confirmed on disk: 4 of its 5 test files (compute/iam/
-            # ip_management/networking references) genuinely are VMaaS-only,
-            # but test_cluster_baremetal_references.py's own class/test names
-            # (TestClusterBareMetalReferences, test_cluster_provisioning_
-            # chain_by_name, test_baremetal_instance_chain_by_name) say
-            # plainly it's CaaS+BMaaS content, not VMaaS at all. Confirmed
-            # live: PR #805 touched exactly this file, and because the old
-            # blanket tests/e2e/references/** match only ever set
-            # vmaas-clear, CaaS/BMaaS got zero deterministic signal from it --
-            # a change to that file's ACTUAL CaaS/BMaaS test logic would have
-            # had no path-based signal at all, leaving it entirely up to
-            # Gemini (or, if nothing else in the same PR triggered AI, a
-            # silent "skip" with no judgment whatsoever). This is exactly the
-            # "test that needed to run doesn't run" failure mode the whole
-            # feature exists to prevent -- unlike the ambiguous-shared cases
-            # elsewhere in this file, this one doesn't need an LLM's opinion
-            # at all: the file's own name is unambiguous.
-            # proto/**/*<name>* entries: the proto contract moved
-            # from fulfillment-service/proto/ to the top-level proto/ module,
-            # so compute_instance_*.proto / cluster*.proto / baremetal_instance_
-            # *.proto now live at proto/private/osac/private/v1/ -- keep them
-            # attributed to the same suite the old fulfillment-service/**/*...*
-            # patterns caught.
-            vmaas-clear:
-              - '{osac-operator/**/*computeinstance*,fulfillment-service/**/*compute_instance*,proto/**/*compute_instance*,tests/e2e/vmaas/**,tests/e2e/references/**}'
-              - '!tests/e2e/references/test_cluster_baremetal_references.py'
-            caas-clear:
-              - '{osac-operator/**/*clusterorder*,fulfillment-service/**/*cluster*,proto/**/*cluster*,tests/e2e/caas/**,tests/e2e/references/test_cluster_baremetal_references.py}'
-            bmaas-clear:
-              - '{bare-metal-fulfillment-operator/**,proto/**/*baremetal_instance*,tests/e2e/bmaas/**,tests/e2e/references/test_cluster_baremetal_references.py}'
-            # osac-operator (all CRD controllers) and fulfillment-service
-            # (the gRPC/REST API) each back BOTH VMaaS and CaaS -- a change
-            # under either that ISN'T clearly computeinstance/cluster-named
-            # (per the *-clear filters above) can't be attributed by path
-            # alone. Confirmed on disk: osac-operator consistently names
-            # files computeinstance_*.go/clusterorder_*.go, but
-            # fulfillment-service's CaaS-facing files use a looser "cluster"
-            # substring (no "cluster_order"), so this bucket exists
-            # specifically to catch what the -clear filters miss, not as a
-            # rare edge case.
-            #
-            # tests/e2e/core/** (client/helper wrappers), tests/e2e/conftest.py
-            # (session fixtures), and tests/e2e/*.sh (run/setup scripts) are
-            # ALSO in this bucket, not just osac-operator/fulfillment-service --
-            # confirmed real via live production data: PR #688 changed 4
-            # tests/e2e/core/*.py files (grpc_client.py, helpers.py,
-            # k8s_client.py, osac_cli.py -- imported by every suite's test
-            # files per this repo's own AGENTS.md) plus tests/e2e/run-test.sh/
-            # setup-env.sh, and NONE of them matched any filter before this
-            # fix -- it only got a correct-looking verdict because that same
-            # PR also happened to touch a vmaas-specific test file. A PR
-            # touching ONLY shared test infra would previously have silently
-            # resolved every suite to "skip" with no AI judgment at all --
-            # exactly the "test that needed to run doesn't run" failure mode
-            # this whole feature exists to prevent.
-            # proto/**: a shared-API proto change not clearly named
-            # for one suite (subnets, storage, events, network_class, ...)
-            # affects both VMaaS and CaaS -- same "can't attribute by path
-            # alone" bucket as shared osac-operator/fulfillment-service code.
-            # proto/gen/** is generated Go, not a source signal, so it's
-            # excluded; the compute_instance/cluster-named protos are already
-            # resolved by the *-clear filters above.
-            ambiguous-shared:
-              - '{osac-operator/**,fulfillment-service/**,proto/**,tests/e2e/core/**,tests/e2e/conftest.py,tests/e2e/*.sh}'
-              - '!osac-operator/**/*computeinstance*'
-              - '!fulfillment-service/**/*compute_instance*'
-              - '!proto/**/*compute_instance*'
-              - '!osac-operator/**/*clusterorder*'
-              - '!fulfillment-service/**/*cluster*'
-              - '!proto/**/*cluster*'
-              - '!proto/**/*baremetal_instance*'
-              - '!proto/gen/**'
-              - '!**/*.md'
-              - '!**/docs/**'
-            # graphify's own knowledge graph is built from source via
-            # tree-sitter and has known gaps modeling plain YAML/JSON config
-            # (per AGENTS.md's graphify section) -- these need a different
-            # fallback (a curated path table, or Gemini judging the diff
-            # alone) rather than a graphify-augmented judgment. Deliberately
-            # excludes tests/e2e/**'s own fixtures and the vmaas/caas/bmaas
-            # CRD manifests already caught by the *-clear filters above --
-            # this bucket is for config files NOT already resolved.
-            config-yaml-json:
-              - '{**/*.yaml,**/*.yml,**/*.json}'
-              - '!tests/e2e/**'
-              - '!osac-operator/**/*computeinstance*'
-              - '!osac-operator/**/*clusterorder*'
-              - '!fulfillment-service/**/*compute_instance*'
-              - '!fulfillment-service/**/*cluster*'
-              - '!bare-metal-fulfillment-operator/**'
-            # Informational only -- CaaS Netris and BMaaS Netris (real
-            # EC2/Netris-SDN provisioning, triggered manually via label per
-            # e2e-bmaas-netris-full-install-caller.yml's `pull_request_target:
-            # types: [labeled]` trigger) aren't wired into this POC's gating
-            # at all yet (Phase 3 of the rollout plan, deliberately
-            # sequenced after the 3 standard suites are proven, given real
-            # cloud-cost/security stakes). This filter just surfaces "you
-            # probably want to run the Netris variant manually too" as a
-            # note in the comment, orthogonal to the vmaas/caas/bmaas
-            # decision rows above -- it does not add a new suite or gate
-            # anything.
-            #
-            # `git grep -il netris` confirms osac-aap/collections/
-            # ansible_collections/{netris,agentless_net}/** is the actual
-            # Ansible automation those two backends run -- no other
-            # directory in this repo references either backend by name
-            # outside CI/workflow wiring. tests/e2e/bmaas/regression/
-            # networking/** is confirmed Netris-lab-only per e2e-bmaas-
-            # full-install.yml's own comment ("Networking is Netris-lab
-            # only (eth9, virsh, 3 BMIs)"). fulfillment-service's
-            # NetworkClass files are how the platform represents which
-            # network backend (Netris vs. others) a tenant/subnet uses.
-            netris-relevant:
-              - '{osac-aap/collections/ansible_collections/netris/**,osac-aap/collections/ansible_collections/agentless_net/**,tests/e2e/bmaas/regression/networking/**,fulfillment-service/**/*network_class*,proto/**/*network_class*}'
-            # Everything below mirrors -- as closely as each real workflow's
-            # own filter allows -- the actual dorny/paths-filter patterns in
-            # unit-tests.yml, integration-tests.yml, helm-lint.yaml,
-            # check-generated-code.yaml, check-pull-request.yaml,
-            # build-image.yaml, build-bmf-image.yaml, ansible-lint.yml, and
-            # darwin-keychain-tests.yml. Purely informational (see this
-            # file's header) -- these do NOT gate whether those jobs
-            # actually run; they exist only so this workflow's own comment
-            # can show what a real per-job filter WOULD decide. Where a real
-            # filter's own list-of-disjoint-patterns-plus-negations shape
-            # would silently break under this step's `predicate-quantifier:
-            # 'every'` (multiple bare positive alternatives requiring the
-            # same file to match all of them at once, never true) that filter
-            # is copied here with disjoint positives wrapped into ONE
-            # brace-alternation entry -- the real build-image.yaml/
-            # build-bmf-image.yaml/ansible-lint.yml/check-pull-request.yaml
-            # filters all have this exact gap themselves (no
-            # predicate-quantifier: 'every' there, so their own negation
-            # patterns independently OR-match almost every file under
-            # dorny/paths-filter's default 'someOf' quantifier -- confirmed
-            # live, e.g. build-image.yaml's "test" job running on a
-            # README-only PR). Not fixed in those real files by this change
-            # (out of scope here -- this file only ever reports, never
-            # gates); only mirrored CORRECTLY in this reporting copy, so the
-            # comment shows what SHOULD happen, not the real files' current
-            # buggy always-true behavior.
-            # Exact copy of unit-tests.yml's/integration-tests.yml's own
-            # `code` filter (identical in both real files) -- the single
-            # signal that actually gates every job in both workflows today.
-            code:
-              - '**'
-              - '!**/OWNERS'
-              - '!**/LICENSE'
-              - '!**/*.md'
-              - '!**/docs/**'
-              - '!**/.claude/**'
-              - '!**/.cursor/**'
-              - '!**/.gemini/**'
-              - '!.design/**'
-              - '!.skillsaw.yaml'
-              - '!.pre-commit-config.yaml'
-            helm-osac-operator:
-              - '{osac-operator/api/**,osac-operator/charts/**,osac-operator/config/crd/bases/**,osac-operator/hack/sync-helm-crds.py,osac-operator/Makefile,.github/workflows/helm-lint.yaml}'
-            helm-bare-metal-fulfillment-operator:
-              - '{bare-metal-fulfillment-operator/api/**,bare-metal-fulfillment-operator/charts/**,bare-metal-fulfillment-operator/config/crd/bases/**,bare-metal-fulfillment-operator/hack/sync-helm-crds.py,bare-metal-fulfillment-operator/Makefile,.github/workflows/helm-lint.yaml}'
-            helm-fulfillment-service:
-              - '{fulfillment-service/charts/**,.github/workflows/helm-lint.yaml}'
-            helm-osac-aap:
-              - '{osac-aap/charts/**,.github/workflows/helm-lint.yaml}'
-            helm-osac-csi-driver:
-              - '{osac-csi-driver/charts/**,.github/workflows/helm-lint.yaml}'
-            helm-osac-metering:
-              - '{osac-metering/charts/**,.github/workflows/helm-lint.yaml}'
-            helm-osac-installer:
-              - '{osac-installer/charts/**,osac-installer/values/**,osac-installer/ct.yaml,.github/workflows/helm-lint.yaml}'
-            proto-check:
-              - '{proto/**,fulfillment-service/dev/**,fulfillment-service/dev.py,fulfillment-service/cmd/buf-plugin-osac-lint/**}'
-            fulfillment-service-checks:
-              - '{fulfillment-service/**,.github/workflows/check-pull-request.yaml}'
-              - '!fulfillment-service/OWNERS'
-              - '!fulfillment-service/LICENSE'
-              - '!fulfillment-service/**/*.md'
-              - '!fulfillment-service/docs/**'
-            build-osac-operator:
-              - '{osac-operator/**,.github/workflows/build-image.yaml}'
-              - '!osac-operator/OWNERS'
-              - '!osac-operator/LICENSE'
-              - '!osac-operator/**/*.md'
-              - '!osac-operator/docs/**'
-            build-bare-metal-fulfillment-operator:
-              - 'bare-metal-fulfillment-operator/**'
-              - '!bare-metal-fulfillment-operator/OWNERS'
-              - '!bare-metal-fulfillment-operator/LICENSE'
-              - '!bare-metal-fulfillment-operator/**/*.md'
-              - '!bare-metal-fulfillment-operator/docs/**'
-            ansible-osac-aap:
-              - '{osac-aap/**,.github/workflows/ansible-lint.yml}'
-              - '!osac-aap/OWNERS'
-              - '!osac-aap/LICENSE'
-              - '!osac-aap/**/*.md'
-              - '!osac-aap/docs/**'
-            darwin-keychain:
-              - '{.github/workflows/darwin-keychain-tests.yml,fulfillment-service/internal/config/config_secret_store.go,fulfillment-service/internal/config/config_secret_store_darwin.go,fulfillment-service/internal/config/config_secret_store_darwin_test.go,fulfillment-service/internal/config/config_secret_store_other.go,fulfillment-service/internal/config/config_settings.go,fulfillment-service/internal/config/config_settings_test.go}'
+          # Single source of truth -- see that file's own header for the
+          # Phase 1 migration note and the *-outside-known-safe inversion
+          # this job's outputs above rely on.
+          filters: .github/filters/ci-filters.yml
 
   # Always runs (whether or not anything is ambiguous) -- the listener needs
   # this context either way, to build the reported decision even in the
@@ -326,13 +140,40 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Build context payload
+      # github.event.pull_request is unset on merge_group -- extract the PR
+      # number from the queue ref instead, same approach (and same
+      # confirmed-live regex) as integration-tests.yml's own
+      # "Compute stable per-PR concurrency key" step: merge_group's
+      # github.ref_name is gh-readonly-queue/<base>/pr-<number>-<sha>, and
+      # the pr-<number> segment stays constant across queue reshuffles even
+      # though the trailing sha changes.
+      - name: Resolve PR number and head SHA
+        id: pr
         env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_GROUP_SHA: ${{ github.sha }}
+        run: |
+          if [[ "${EVENT_NAME}" == "merge_group" ]]; then
+            NUMBER=$(echo "${REF_NAME}" | grep -oE 'pr-[0-9]+' | tail -1 | grep -oE '[0-9]+' || true)
+            echo "number=${NUMBER:-0}" >> "$GITHUB_OUTPUT"
+            echo "head-sha=${MERGE_GROUP_SHA}" >> "$GITHUB_OUTPUT"
+          else
+            echo "number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+            echo "head-sha=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build context payload
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          HEAD_SHA: ${{ steps.pr.outputs.head-sha }}
           VMAAS_CLEAR: ${{ needs.changes.outputs.vmaas-clear }}
           CAAS_CLEAR: ${{ needs.changes.outputs.caas-clear }}
           BMAAS_CLEAR: ${{ needs.changes.outputs.bmaas-clear }}
+          VMAAS_EXCLUSIVE_SKIP: ${{ needs.changes.outputs.vmaas-exclusive-skip }}
+          CAAS_EXCLUSIVE_SKIP: ${{ needs.changes.outputs.caas-exclusive-skip }}
+          BMAAS_EXCLUSIVE_SKIP: ${{ needs.changes.outputs.bmaas-exclusive-skip }}
           VMAAS_CLEAR_FILES: ${{ needs.changes.outputs.vmaas-clear-files }}
           CAAS_CLEAR_FILES: ${{ needs.changes.outputs.caas-clear-files }}
           BMAAS_CLEAR_FILES: ${{ needs.changes.outputs.bmaas-clear-files }}
@@ -362,6 +203,9 @@ jobs:
             --argjson vmaas_clear "${VMAAS_CLEAR:-false}" \
             --argjson caas_clear "${CAAS_CLEAR:-false}" \
             --argjson bmaas_clear "${BMAAS_CLEAR:-false}" \
+            --argjson vmaas_exclusive_skip "${VMAAS_EXCLUSIVE_SKIP:-false}" \
+            --argjson caas_exclusive_skip "${CAAS_EXCLUSIVE_SKIP:-false}" \
+            --argjson bmaas_exclusive_skip "${BMAAS_EXCLUSIVE_SKIP:-false}" \
             --argjson vmaas_clear_files "${VMAAS_CLEAR_FILES:-[]}" \
             --argjson caas_clear_files "${CAAS_CLEAR_FILES:-[]}" \
             --argjson bmaas_clear_files "${BMAAS_CLEAR_FILES:-[]}" \
@@ -386,6 +230,12 @@ jobs:
               pr_number: ($pr_number | tonumber),
               head_sha: $head_sha,
               deterministic: {vmaas: $vmaas_clear, caas: $caas_clear, bmaas: $bmaas_clear},
+              # The ONLY signal that may ever authorize a real "skip" for an
+              # E2E suite (see select-jobs.py's decide()) -- true means every
+              # changed file falls inside that suite's reviewed, provably-
+              # irrelevant allow-list (ci-filters.yml's *-outside-known-safe
+              # filters, inverted once already at this job's own outputs).
+              exclusive_skip: {vmaas: $vmaas_exclusive_skip, caas: $caas_exclusive_skip, bmaas: $bmaas_exclusive_skip},
               deterministic_files: {vmaas: $vmaas_clear_files, caas: $caas_clear_files, bmaas: $bmaas_clear_files},
               ambiguous_files: $ambiguous_files,
               config_files: $config_files,

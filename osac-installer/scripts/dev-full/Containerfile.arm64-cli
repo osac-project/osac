@@ -4,7 +4,7 @@
 FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
 
 RUN microdnf install -y tar gzip jq openssl python3 shadow-utils && \
-    curl -L https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/openshift-client-linux-arm64.tar.gz | tar -xz -C /usr/local/bin/ oc kubectl && \
+    curl -L https://mirror.openshift.com/pub/openshift-v4/clients/ocp/4.20.0/openshift-client-linux-arm64.tar.gz | tar -xz -C /usr/local/bin/ oc kubectl && \
     chmod +x /usr/local/bin/oc /usr/local/bin/kubectl && \
     microdnf clean all && \
     rm -rf /var/cache/dnf

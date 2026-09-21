@@ -110,6 +110,19 @@ KIND_RUNTIME_REQUIRED := $(if $(filter true,$(HOST_IS_MAC_ARM)),true,$(if $(filt
 
 # Container tool and Kind cluster config.
 CONTAINER_TOOL ?= $(or $(shell command -v podman 2>/dev/null),$(shell command -v docker 2>/dev/null),$(error neither podman nor docker found in PATH))
+# On Apple Silicon, honor an explicitly selected container tool when the Kind
+# provider has not been set separately. This keeps an existing Docker- or
+# Podman-backed cluster on the same runtime for all installer operations.
+KIND_RUNTIME_PROVIDER := $(strip $(KIND_EXPERIMENTAL_PROVIDER))
+ifeq ($(HOST_IS_MAC_ARM),true)
+ifeq ($(KIND_RUNTIME_PROVIDER),)
+ifneq ($(filter command line environment,$(origin CONTAINER_TOOL)),)
+KIND_RUNTIME_PROVIDER := $(notdir $(CONTAINER_TOOL))
+endif
+endif
+endif
+KIND_RUNTIME_ENV := $(if $(KIND_RUNTIME_PROVIDER),KIND_EXPERIMENTAL_PROVIDER=$(KIND_RUNTIME_PROVIDER))
+KIND_RUNTIME_CMD := $(KIND_RUNTIME_ENV) $(KIND_RUNTIME)
 KIND_CLUSTER_NAME ?= osac-dev
 KIND_CONFIG := kind-config.yaml
 # dev-full runs its cluster in a separate (rootful) podman daemon; give it a
@@ -129,8 +142,8 @@ define kind-load-image
 	@if [ "$(KIND_RUNTIME_REQUIRED)" = "true" ]; then \
 		tmpfile=$$(mktemp /tmp/kind-image-XXXXXX.tar); \
 		trap 'rm -f "$$tmpfile"' EXIT; \
-		$(KIND_RUNTIME) container save $(1) -o "$$tmpfile"; \
-		$(KIND_RUNTIME) load image-archive "$$tmpfile" --name $(KIND_CLUSTER_NAME); \
+		$(KIND_RUNTIME_CMD) container save $(1) -o "$$tmpfile"; \
+		$(KIND_RUNTIME_CMD) load image-archive "$$tmpfile" --name $(KIND_CLUSTER_NAME); \
 	elif [ "$$(basename $(CONTAINER_TOOL))" = "podman" ]; then \
 		tmpfile=$$(mktemp /tmp/kind-image-XXXXXX.tar); \
 		trap 'rm -f "$$tmpfile"' EXIT; \
@@ -143,7 +156,7 @@ endef
 
 define kind-container-build
 	@if [ "$(KIND_RUNTIME_REQUIRED)" = "true" ]; then \
-		$(KIND_RUNTIME) container build $(1); \
+		$(KIND_RUNTIME_CMD) container build $(1); \
 	else \
 		$(CONTAINER_TOOL) build $(1); \
 	fi
@@ -161,11 +174,11 @@ help: ## Display this help
 install-infra: ## Install infrastructure (PLATFORM= PROFILE= NS= required)
 ifeq ($(PLATFORM),kind)
 ifeq ($(HOST_IS_MAC_ARM),true)
-	@$(KIND_RUNTIME) check
-	@$(KIND_RUNTIME) create-cluster $(KIND_CLUSTER_NAME) $(KIND_CONFIG) $(KIND_KUBECONFIG)
+	@$(KIND_RUNTIME_CMD) check
+	@$(KIND_RUNTIME_CMD) create-cluster $(KIND_CLUSTER_NAME) $(KIND_CONFIG) $(KIND_KUBECONFIG)
 else ifeq ($(PROFILE),dev-full)
-	@$(KIND_RUNTIME) check
-	@$(KIND_RUNTIME) create-cluster $(KIND_CLUSTER_NAME) $(KIND_CONFIG) $(KIND_KUBECONFIG)
+	@$(KIND_RUNTIME_CMD) check
+	@$(KIND_RUNTIME_CMD) create-cluster $(KIND_CLUSTER_NAME) $(KIND_CONFIG) $(KIND_KUBECONFIG)
 else
 	@if kind get clusters | grep -q "^$(KIND_CLUSTER_NAME)$$"; then \
 		echo "Kind cluster '$(KIND_CLUSTER_NAME)' already exists"; \
@@ -176,7 +189,7 @@ else
 	@kind export kubeconfig --name $(KIND_CLUSTER_NAME) --kubeconfig $(KIND_KUBECONFIG)
 endif
 ifeq ($(HOST_IS_MAC_ARM),true)
-	@$(KIND_ARM64_CLI_IMAGE_SCRIPT) $(KIND_CLUSTER_NAME) $(KIND_ARM64_CLI_IMAGE)
+	@$(KIND_RUNTIME_ENV) $(KIND_ARM64_CLI_IMAGE_SCRIPT) $(KIND_CLUSTER_NAME) $(KIND_ARM64_CLI_IMAGE)
 endif
 	helm upgrade --install cert-manager oci://quay.io/jetstack/charts/cert-manager \
 		--version v1.20.0 --namespace cert-manager --create-namespace \
@@ -232,9 +245,9 @@ endif
 uninstall-infra: ## Uninstall infrastructure (PLATFORM= PROFILE= NS= required)
 ifeq ($(PLATFORM),kind)
 ifeq ($(HOST_IS_MAC_ARM),true)
-	@$(KIND_RUNTIME) delete-cluster $(KIND_CLUSTER_NAME)
+	@$(KIND_RUNTIME_CMD) delete-cluster $(KIND_CLUSTER_NAME)
 else ifeq ($(PROFILE),dev-full)
-	@$(KIND_RUNTIME) delete-cluster $(KIND_CLUSTER_NAME)
+	@$(KIND_RUNTIME_CMD) delete-cluster $(KIND_CLUSTER_NAME)
 else
 	helm uninstall osac-infra --namespace osac-infra --ignore-not-found
 	helm uninstall strimzi-cluster-operator --namespace osac-kafka --ignore-not-found
@@ -289,7 +302,7 @@ ifneq ($(PLATFORM)/$(PROFILE),kind/dev-full)
 	@echo "ERROR: install-devstack requires PLATFORM=kind PROFILE=dev-full" >&2; exit 1
 endif
 	# Pre-install: node-level CNI setup (requires host container runtime access)
-	scripts/dev-full/install-virt-node-setup.sh $(KIND_CLUSTER_NAME)
+	$(KIND_RUNTIME_ENV) scripts/dev-full/install-virt-node-setup.sh $(KIND_CLUSTER_NAME)
 	# Helm install: operators + AWX + UI + seeding
 	helm upgrade --install osac-devstack charts/osac-devstack \
 		--namespace $(NS) --create-namespace \

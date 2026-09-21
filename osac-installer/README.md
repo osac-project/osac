@@ -197,7 +197,10 @@ so networking resources reconcile to READY without a real fabric (kind has none)
     verify `podman info` succeeds before installing.
 - **`/dev/kvm`** present (Linux), **`fs.inotify.max_user_instances >= 256`**, and
   `kind`, `helm`, `kubectl`, `jq`, `curl`, `openssl`, `python3` on `PATH`
-- Override runtime detection with `KIND_EXPERIMENTAL_PROVIDER=docker|podman`
+- Override runtime detection with `KIND_EXPERIMENTAL_PROVIDER=docker|podman`.
+  On Apple Silicon, an explicit `CONTAINER_TOOL=docker|podman` selects the same
+  runtime for installer operations when `KIND_EXPERIMENTAL_PROVIDER` is unset;
+  the latter takes precedence when both are provided.
 
 On an Apple Silicon Mac, either Kind profile automatically builds an arm64
 replacement for `quay.io/openshift/origin-cli:4.20.0` with the selected

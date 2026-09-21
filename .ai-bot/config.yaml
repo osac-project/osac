@@ -27,6 +27,14 @@ validation_commands:
   - "cd osac-operator && make fmt"
   - "cd osac-operator && make lint"
   - "cd osac-operator && make test"
+  # osac-aap
+  - "cd osac-aap && uv run ansible-lint"
+  - "cd osac-aap && pre-commit run --all-files"
+  # osac-installer
+  - "cd osac-installer && yamllint --strict ."
+  - "cd osac-installer && pre-commit run --all-files"
+  - "cd osac-installer && helm lint charts/osac/"
+  - "cd osac-installer && bash -c 'for f in values/*/values.yaml; do helm template osac charts/osac/ --values \"$f\" > /dev/null; done'"
 
 # Auxiliary repositories cloned into the workspace before AI execution.
 # Both components imported this same repo to the same path; the install

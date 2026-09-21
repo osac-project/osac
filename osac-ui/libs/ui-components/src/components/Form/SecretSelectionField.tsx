@@ -36,13 +36,23 @@ const SecretSelectionField = ({
         isRequired={isRequired}
         isLoading={isLoading}
         isDisabled={isDisabled || !!error}
-        options={[
-          ...(allowEmptySelection ? [{ value: '', label: t('None') }] : []),
-          ...(data?.items || []).map((d) => ({
-            value: d.metadata?.name || '',
-            label: d.metadata?.name || '',
-          })),
-        ]}
+        options={
+          data?.items.length
+            ? [
+                ...(allowEmptySelection ? [{ value: '', label: t('None') }] : []),
+                ...(data?.items || []).map((d) => ({
+                  value: d.metadata?.name || '',
+                  label: d.metadata?.name || '',
+                })),
+              ]
+            : [
+                {
+                  value: '',
+                  label: t('No secret available'),
+                  isDisabled: true,
+                },
+              ]
+        }
       />
       {error && (
         <Alert variant="danger" isInline title={t('Failed to fetch secrets')}>

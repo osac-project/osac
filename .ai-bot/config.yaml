@@ -5,7 +5,8 @@
 #
 # The bot resolves exactly one .ai-bot/config.yaml per cloned repository,
 # at the clone's root — it has no concept of per-subdirectory config, so
-# this single file covers both fulfillment-service/ and osac-operator/.
+# this single file covers all four components: fulfillment-service/,
+# osac-operator/, osac-aap/, and osac-installer/.
 # Component-scoped commands are expressed by cd'ing into the component
 # directory first, the same pattern the root pre-commit config already
 # uses for its per-component local hooks.

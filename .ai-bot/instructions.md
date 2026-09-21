@@ -1,13 +1,16 @@
 # Project Instructions
 
-This is the osac monorepo. It contains two independently-versioned Go
+This is the osac monorepo. It contains four independently-versioned
 components, each with its own build/test toolchain. Determine which
 component a ticket or PR concerns from its description and the files
 involved, then follow that component's section below. If a change spans
-both components, apply both sections and validate each independently.
+multiple components, apply each relevant section and validate
+independently.
 
 - `fulfillment-service/` — see [fulfillment-service](#fulfillment-service)
 - `osac-operator/` — see [osac-operator](#osac-operator)
+- `osac-aap/` — see [osac-aap](#osac-aap)
+- `osac-installer/` — see [osac-installer](#osac-installer)
 
 ## fulfillment-service
 
@@ -226,3 +229,248 @@ These are generated — your edits will be overwritten or cause CI to fail:
 - `osac-operator/.claude/rules/common-pitfalls.md` — 10 common issues and how to avoid them
 - `osac-operator/.claude/rules/common-tasks.md` — how to add CRDs, fields, RBAC
 - `osac-operator/.claude/rules/configuration.md` — environment variables reference
+
+## osac-aap
+
+This is an Ansible automation repository for provisioning OSAC infrastructure.
+It contains playbooks, four Ansible collections (`osac.service`,
+`osac.templates`, `osac.workflows`, `osac.config_as_code`), integration tests,
+Helm charts, and an Execution Environment definition.
+
+The project uses **uv** for Python dependency management (Python 3.13),
+**ansible-lint** for linting, **pre-commit** for formatting checks, and
+**kind** clusters for integration testing.
+
+### Critical Ansible Conventions
+
+These rules are non-negotiable. Violations will fail lint and/or break
+runtime behavior:
+
+1. **Use FQCN for all modules**: `ansible.builtin.debug`, not `debug`.
+   ansible-lint enforces this.
+2. **Every task must have a `name:` field.** No unnamed tasks.
+3. **Use underscores in role names, `implementation_strategy`, and
+   `fabric_manager`/`k8s_manager` values**, never hyphens. Role directory
+   name, `meta/osac.yaml`, and the value stamped into the CR annotation must
+   all match. This underscore convention applies to those *values*, not to
+   the fixed, hyphenated annotation **key** itself
+   (`osac.openshift.io/implementation-strategy`) — never rename that key.
+   Network roles identify themselves via `fabric_manager`/`k8s_manager`;
+   other template types (compute, storage, cluster) still use
+   `implementation_strategy`.
+4. **Always include `osac.service.common`** (with
+   `tasks_from: get_remote_cluster_kubeconfig`) before creating K8s resources
+   on remote clusters.
+5. **Namespace label syntax**: `k8s.ovn.org/primary-user-defined-network: ""`
+   must be an empty string, not a missing value.
+
+### Validation Commands
+
+Run these commands (from the `osac-aap/` directory) before considering
+any change complete:
+
+```bash
+cd osac-aap
+
+# Install dependencies (if not already done)
+uv sync --all-groups && source .venv/bin/activate
+
+# Primary lint check (MUST pass)
+uv run ansible-lint
+
+# Syntax check individual playbooks
+ansible-playbook --syntax-check playbook_osac_<name>.yml
+
+# Pre-commit hooks (trailing whitespace, YAML lint, etc.)
+pre-commit run --all-files
+
+# Helm chart lint (only if charts/ was modified)
+helm lint charts/aap/
+helm template test charts/aap/ > /dev/null
+```
+
+#### Integration Tests
+
+Integration tests require a kind cluster and significant resources.
+**Do not run integration tests automatically.** If your change touches
+workflows, service roles, or test fixtures, note in the PR description
+that integration testing is needed and let human reviewers trigger it
+via CI.
+
+### Coding Standards
+
+#### Commit Format
+
+```
+git commit -s -m "OSAC-XXXXX: description of change"
+```
+
+Commits must be signed-off (`-s`). Include the Jira ticket key.
+
+#### Playbook Naming Convention
+
+- File: `playbook_osac_{action}_{resource}.yml`
+- AAP template: `osac-{action}-{resource}`
+- Actions: `create`, `delete`, `report`, `attach`, `detach`, `cleanup`
+
+#### Standard Playbook Pattern
+
+Every playbook receives a K8s CR via `osac_job_vars.resource`, extracts
+`implementation_strategy` from the CR annotation
+(`osac.openshift.io/implementation-strategy`), and dynamically includes the
+matching role from `osac.templates`:
+
+```yaml
+- name: Call the selected role
+  ansible.builtin.include_role:
+    name: "osac.templates.{{ implementation_strategy }}"
+    tasks_from: create_<resource>
+```
+
+#### Template Role Requirements
+
+Every template role needs:
+1. `meta/osac.yaml` with `template_type` and `capabilities`, plus an identity
+   field: `fabric_manager`/`k8s_manager` for `template_type: network`, or
+   `implementation_strategy` for other template types
+2. Task files named `tasks/create_<resource>.yaml` and
+   `tasks/delete_<resource>.yaml`
+3. Underscore naming throughout (directory name matches the identity field)
+
+#### ansible-lint Configuration
+
+- **Skip list**: `role-name[path]`, `parser-error`, `fqcn[keyword]`
+- **Warn list**: `risky-file-permissions`
+- **Excluded paths**: `vendor/`, `.github/`,
+  `collections/ansible_collections/massopencloud/`, `execution-environment/`
+- **Ignore file**: `.ansible-lint-ignore` lists known acceptable violations
+  (mostly `var-naming[no-role-prefix]` in playbooks and `risky-file-permissions`
+  in test overrides). **Do not add new entries to `.ansible-lint-ignore`.**
+  Fix violations instead. If a violation cannot be fixed, flag it in the
+  PR description and let a human decide.
+
+#### yamllint Configuration
+
+Extends default with: line-length disabled, document-start disabled,
+indent-sequences whatever, hyphens max-spaces-after 4, truthy check-keys
+false, comments min-spaces-from-content 1.
+
+### Repository Structure Quick Reference
+
+```
+osac-aap/
+  playbook_osac_*.yml                    Top-level playbooks (AAP job templates)
+  collections/ansible_collections/
+    osac/service/                        Core utility roles + filter plugins
+    osac/templates/                      Infrastructure template roles
+    osac/workflows/                      Multi-step workflow playbooks
+    osac/config_as_code/                 AAP configuration
+    osac/test_overrides/                 Test-only override collection
+  tests/integration/                     Kind-based integration tests
+  vendor/                                Vendored dependency collections
+  charts/aap/                            Helm chart for AAP deployment
+  samples/                               Example payloads
+```
+
+### Files Never to Edit
+
+- `osac-aap/vendor/` — vendored third-party collections; re-vendor with
+  `ansible-galaxy collection install -r collections/requirements.yml`
+- `osac-aap/uv.lock` — auto-generated lockfile; only modify via `uv sync`
+- `.github/workflows/` — CI pipelines owned by the platform team
+- `osac-aap/collections/ansible_collections/massopencloud/` — third-party
+- `osac-aap/execution-environment/requirements.txt` — generated; update the
+  `execution-environment.yaml` instead
+- `OWNERS` — repo ownership; requires admin approval
+- `LICENSE` — do not change
+- `osac-aap/.ansible-lint-ignore` — lint suppressions; additions require human
+  approval
+- `osac-aap/pyproject.toml` — Python project configuration
+- `osac-aap/.pre-commit-config.yaml` — pre-commit hook configuration
+- `osac-aap/ansible.cfg` — Ansible core configuration
+
+### Cross-Component Dependencies
+
+Changes in osac-aap often require coordinated changes in:
+- **osac-operator** — CRD spec changes, controller logic
+- **fulfillment-service** — proto/API field additions
+- **osac-installer** — chart dependency and Helm values update (mono-repo PR)
+
+You operate on `osac-aap/` only. If a fix requires changes in another
+component, document the dependency in the PR description and stop. Do not
+attempt cross-component changes.
+
+## osac-installer
+
+This is a **Helm-based infrastructure/deployment repository** in the `osac`
+mono-repo. It assembles component charts (osac-operator, fulfillment-service,
+osac-aap, bare-metal-fulfillment-operator, osac-csi-driver, osac-metering) via
+`file://` references and deploys **osac-ui** from an external OCI chart. There
+is no Go code, no container builds, and no unit tests in this directory. All
+validation is structural.
+
+### Validation Commands
+
+After making changes, run the following commands (from the `osac-installer/`
+directory) in order. Every command must pass — CI enforces all of them on
+every PR.
+
+```bash
+cd osac-installer
+
+# 1. YAML lint (strict mode, repo-level .yamllint.yaml config)
+yamllint --strict .
+
+# 2. Pre-commit hooks (trailing whitespace, merge conflicts, large
+#    files, private key detection, YAML lint)
+pre-commit run --all-files
+
+# 3. Helm lint (validates chart structure and templates)
+make helm-lint
+
+# 4. Helm template render (validates against all values files)
+make helm-validate
+```
+
+### Coding Conventions
+
+- All YAML files must pass `yamllint --strict` with the repo's
+  `.yamllint.yaml` config (line-length disabled, document-start disabled,
+  indent-sequences: whatever).
+- Shell scripts must use `set -euo pipefail`. Source `scripts/lib.sh` for
+  shared functions (`retry_until`, `wait_for_resource`,
+  `wait_for_namespace_cleanup`).
+- Always use explicit `-n <namespace>` flags in `oc` commands — never
+  rely on the current context namespace.
+- Every new Helm value must have a matching entry in
+  `charts/osac/values.schema.json`.
+
+### Repository Structure
+
+```
+osac-installer/
+  charts/osac/                     Helm umbrella chart
+    Chart.yaml                     Dependencies on subchart repos
+    values.yaml                    Default values
+    values.schema.json             JSON Schema for values validation
+    templates/                     Deployment templates
+
+  values/
+    development/values.yaml        All controllers, latest images
+    vmaas-ci/values.yaml           VMaaS CI: pinned images
+    caas-ci/values.yaml            CaaS CI: pinned images
+
+  prerequisites/                   Cluster-wide operator manifests
+  scripts/                         Automation scripts (setup, teardown, sync)
+```
+
+Component source lives in sibling directories at the `osac` repo root (not
+under `osac-installer/`). **osac-ui** is external (OCI chart dependency).
+
+### Files Never to Edit
+
+- Do not edit component implementation under sibling mono-repo directories
+  (e.g. `fulfillment-service/`) from an `osac-installer/`-only mindset —
+  land one PR at the `osac` repo root. **osac-ui** is external; chart version
+  bumps belong in `charts/osac/Chart.yaml` or release workflows, not ad-hoc
+  edits in a checkout of `osac-ui` from here.

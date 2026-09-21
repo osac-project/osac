@@ -1,5 +1,5 @@
-import { useCallback, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useCallback, useMemo, useState } from 'react';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   Alert,
   Breadcrumb,
@@ -24,6 +24,7 @@ import {
 import { getErrorMessage } from '@osac/ui-components/utils/error';
 
 import { buildSecretCreatePayload, buildSecretUpdatePayload } from './payload';
+import SecretDataStep from './steps/SecretDataStep';
 import SecretGeneralStep from './steps/SecretGeneralStep';
 import SecretReviewStep from './steps/SecretReviewStep';
 import { getSecretValidationSchema, secretStepHasErrors } from './validation';
@@ -32,8 +33,9 @@ import { useTranslation } from '../../../hooks/useTranslation';
 import { FieldValidationProvider } from '../../Form/FieldValidationContext';
 import LeaveFormConfirmation from '../../Form/LeaveFormConfirmation';
 import { OSACWizardFooter } from '../../Wizard/OSACWizardFooter';
+import { isTypeFilterValue } from '../utils';
 
-type SecretCreateWizardSteps = 'general' | 'review';
+type SecretCreateWizardSteps = 'general' | 'data' | 'review';
 
 interface SecretCreateWizardProps {
   secret?: Secret;
@@ -41,6 +43,9 @@ interface SecretCreateWizardProps {
 
 const SecretCreateWizard = ({ secret }: SecretCreateWizardProps) => {
   const { t } = useTranslation();
+  const [searchParams] = useSearchParams();
+
+  const typeParam = searchParams.get('type');
 
   const navigate = useNavigate();
   const {
@@ -60,7 +65,12 @@ const SecretCreateWizard = ({ secret }: SecretCreateWizardProps) => {
     resetUpdate();
   }, [resetCreate, resetUpdate]);
 
-  const initialValues = getSecretValues(secret);
+  const initialValues = useMemo(
+    () => getSecretValues(typeParam && isTypeFilterValue(typeParam) ? typeParam : null, secret),
+    // only on initial render
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
 
   const onSubmit = async (values: SecretValues) => {
     try {
@@ -68,7 +78,7 @@ const SecretCreateWizard = ({ secret }: SecretCreateWizardProps) => {
         await updateAsync({
           object: {
             id: secret.id,
-            ...buildSecretUpdatePayload(values, secret),
+            ...buildSecretUpdatePayload(values),
           },
         });
         navigate(`/secrets/${secret.id}`);
@@ -135,6 +145,9 @@ const SecretCreateWizard = ({ secret }: SecretCreateWizardProps) => {
             >
               <WizardStep id="general" name={t('General')}>
                 {currentStep === 'general' && <SecretGeneralStep isEdit={!!secret} />}
+              </WizardStep>
+              <WizardStep id="data" name={t('Secret data')}>
+                {currentStep === 'data' && <SecretDataStep isEdit={!!secret} />}
               </WizardStep>
               <WizardStep id="review" name={t('Review')}>
                 {currentStep === 'review' && <SecretReviewStep />}

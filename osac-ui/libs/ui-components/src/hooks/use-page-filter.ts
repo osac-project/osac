@@ -28,7 +28,7 @@ const parseTypeFilters = <T extends string>(
 export const useArrayPageFilter = <T extends string>(
   filterKey: string,
   typeGuard: (val: string) => val is T,
-): [T[], (filter: T) => void] => {
+): [T[], (filter: T) => void, VoidFunction] => {
   const [searchParams, setSearchParams] = useSearchParams();
 
   const filter = useMemo(
@@ -67,7 +67,19 @@ export const useArrayPageFilter = <T extends string>(
     [filterKey, setSearchParams],
   );
 
-  return [filter, setFilter];
+  const clear = () => {
+    filterRef.current = [];
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete(filterKey);
+        return next;
+      },
+      { replace: true },
+    );
+  };
+
+  return [filter, setFilter, clear];
 };
 
 export const usePageFilter = (filterKey: string): [string, (filter: string) => void] => {

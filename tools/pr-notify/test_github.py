@@ -7,6 +7,7 @@ from github import (
     GitHubFetchError,
     _fetch_connection_pages,
     _fetch_repo_prs,
+    _new_connection_state,
     _parse_pr_nodes,
     fetch_open_prs,
 )
@@ -216,7 +217,7 @@ class TestFetchFailures(unittest.TestCase):
                 mock_query.return_value = {
                     "data": {
                         "repository": {
-                            "pullRequest": pull_request
+                            f"page_1_{connection}": pull_request
                         }
                     }
                 }
@@ -228,11 +229,13 @@ class TestFetchFailures(unittest.TestCase):
                     ),
                     "nodes": [{"name": "current"}],
                 }
-                result = _fetch_connection_pages(
+                state = _new_connection_state(
                     "osac-project/osac", 1, connection, initial
                 )
+                states = {(1, connection): state}
+                _fetch_connection_pages("osac-project/osac", states)
 
-                self.assertEqual(len(result["nodes"]), 2)
+                self.assertEqual(len(state["result"]["nodes"]), 2)
 
     def test_nested_connection_without_cursor_fails(self):
         for connection in ("labels", "reviews", "reviewRequests", "contexts"):
@@ -246,9 +249,10 @@ class TestFetchFailures(unittest.TestCase):
                     "nodes": [],
                 }
                 with self.assertRaises(GitHubFetchError):
-                    _fetch_connection_pages(
+                    state = _new_connection_state(
                         "osac-project/osac", 1, connection, initial
                     )
+                    _fetch_connection_pages("osac-project/osac", {(1, connection): state})
 
     @patch("github._fetch_repo_prs")
     def test_one_repository_failure_stops_collection(self, mock_fetch_repo):

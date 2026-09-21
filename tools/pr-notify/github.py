@@ -13,7 +13,14 @@ DELAY_BETWEEN_QUERIES_SECONDS = 1
 PR_PAGE_SIZE = 50
 DETAIL_PAGE_SIZE = 100
 DETAIL_BATCH_SIZE = 5
-PAGINATED_CONNECTIONS = ("labels", "reviews", "reviewRequests", "contexts")
+PAGE_BATCH_SIZE = 5
+CONNECTION_CONFIG = {
+    "labels": {"direction": "forward"},
+    "reviews": {"direction": "backward"},
+    "reviewRequests": {"direction": "forward"},
+    "contexts": {"direction": "forward"},
+}
+PAGINATED_CONNECTIONS = tuple(CONNECTION_CONFIG)
 
 
 class GitHubFetchError(RuntimeError):
@@ -69,9 +76,10 @@ def _build_graphql_query(repos: list[str], after: str | None = None) -> str:
 
 def _connection_fields(connection: str, page_args: str) -> str:
     """Return the GraphQL fields for one paginated PR connection."""
+    direction = CONNECTION_CONFIG[connection]["direction"]
     page_info = (
         "hasPreviousPage startCursor"
-        if connection == "reviews"
+        if direction == "backward"
         else "hasNextPage endCursor"
     )
     if connection == "labels":
@@ -121,6 +129,27 @@ def _connection_fields(connection: str, page_args: str) -> str:
     raise ValueError(f"Unsupported connection: {connection}")
 
 
+def _context_connection_fields(page_args: str) -> str:
+    """Return the commits wrapper containing the check-context connection."""
+    return f"""
+      commits(last: 1) {{
+        nodes {{
+          commit {{
+            statusCheckRollup {{
+              {_connection_fields("contexts", page_args)}
+            }}
+          }}
+        }}
+      }}"""
+
+
+def _connection_page_args(connection: str, cursor: str) -> str:
+    """Return GraphQL pagination arguments for a connection cursor."""
+    if CONNECTION_CONFIG[connection]["direction"] == "backward":
+        return f"last: {DETAIL_PAGE_SIZE}, before: {json.dumps(cursor)}"
+    return f"first: {DETAIL_PAGE_SIZE}, after: {json.dumps(cursor)}"
+
+
 def _build_pr_details_query(
     repo: str, connections_by_number: dict[int, set[str]]
 ) -> str:
@@ -134,21 +163,14 @@ def _build_pr_details_query(
             if connection in connections:
                 page_args = (
                     f"last: {DETAIL_PAGE_SIZE}"
-                    if connection == "reviews"
+                    if CONNECTION_CONFIG[connection]["direction"] == "backward"
                     else f"first: {DETAIL_PAGE_SIZE}"
                 )
                 fields.append(_connection_fields(connection, page_args))
         if "contexts" in connections:
-            fields.append(f"""
-      commits(last: 1) {{
-        nodes {{
-          commit {{
-            statusCheckRollup {{
-              {_connection_fields("contexts", f"first: {DETAIL_PAGE_SIZE}")}
-            }}
-          }}
-        }}
-      }}""")
+            fields.append(
+                _context_connection_fields(f"first: {DETAIL_PAGE_SIZE}")
+            )
         aliases.append(
             f"""
     {alias}: pullRequest(number: {number}) {{
@@ -166,36 +188,26 @@ def _build_pr_details_query(
     )
 
 
-def _build_connection_page_query(
-    repo: str, pr_number: int, connection: str, cursor: str
-) -> str:
-    """Build a query for the next or previous page of one PR connection."""
+def _build_connection_page_query(repo: str, requests: list[dict]) -> str:
+    """Build one query for independent pages across multiple PR connections."""
     owner, name = repo.split("/", 1)
-    if connection == "reviews":
-        page_args = f"last: {DETAIL_PAGE_SIZE}, before: {json.dumps(cursor)}"
-    else:
-        page_args = f"first: {DETAIL_PAGE_SIZE}, after: {json.dumps(cursor)}"
-
-    connection_query = _connection_fields(connection, page_args)
-    if connection == "contexts":
-        fields = f"""
-      commits(last: 1) {{
-        nodes {{
-          commit {{
-            statusCheckRollup {{
-              {connection_query}
-            }}
-          }}
-        }}
-      }}"""
-    else:
-        fields = connection_query
+    aliases = []
+    for request in requests:
+        connection = request["connection"]
+        page_args = _connection_page_args(connection, request["cursor"])
+        fields = (
+            _context_connection_fields(page_args)
+            if connection == "contexts"
+            else _connection_fields(connection, page_args)
+        )
+        aliases.append(f"""
+    {request["alias"]}: pullRequest(number: {request["number"]}) {{
+      {fields}
+    }}""")
     return f"""
 {{
   repository(owner: {json.dumps(owner)}, name: {json.dumps(name)}) {{
-    pullRequest(number: {pr_number}) {{
-      {fields}
-    }}
+    {''.join(aliases)}
   }}
 }}"""
 
@@ -213,58 +225,105 @@ def _extract_connection(pr: dict, connection: str) -> dict:
 
 def _connection_has_more(connection: str, page_info: dict) -> bool:
     """Return whether a connection has another page in its direction."""
-    if connection == "reviews":
+    if CONNECTION_CONFIG[connection]["direction"] == "backward":
         return page_info.get("hasPreviousPage", False)
     return page_info.get("hasNextPage", False)
 
 
 def _connection_cursor(connection: str, page_info: dict) -> str | None:
     """Return the cursor needed to fetch the next connection page."""
-    return page_info.get("startCursor" if connection == "reviews" else "endCursor")
+    cursor_name = (
+        "startCursor"
+        if CONNECTION_CONFIG[connection]["direction"] == "backward"
+        else "endCursor"
+    )
+    return page_info.get(cursor_name)
 
 
-def _fetch_connection_pages(
+def _new_connection_state(
     repo: str, pr_number: int, connection: str, initial: dict
 ) -> dict:
-    """Fetch all remaining pages for one PR connection."""
-    page_nodes = [list(initial.get("nodes", []))]
+    """Validate and initialize state for one paginated connection."""
     page_info = initial.get("pageInfo", {})
-    direction = "hasPreviousPage" if connection == "reviews" else "hasNextPage"
+    direction = (
+        "hasPreviousPage"
+        if CONNECTION_CONFIG[connection]["direction"] == "backward"
+        else "hasNextPage"
+    )
     if direction not in page_info:
         raise GitHubFetchError(
             f"Pull request {repo}#{pr_number} response omitted {connection} "
             "pagination metadata"
         )
-    while _connection_has_more(connection, page_info):
-        cursor = _connection_cursor(connection, page_info)
-        if not cursor:
-            raise GitHubFetchError(
-                f"Pull request {repo}#{pr_number} has another {connection} page "
-                "but no cursor"
-            )
-        response = _run_graphql_query(
-            _build_connection_page_query(repo, pr_number, connection, cursor)
-        )
-        repository = response.get("data", {}).get("repository")
-        pull_request = repository.get("pullRequest") if repository else None
-        if pull_request is None:
-            raise GitHubFetchError(
-                f"No data returned for pull request {repo}#{pr_number}"
-            )
-        page = _extract_connection(pull_request, connection)
-        page_nodes.append(page.get("nodes", []))
-        page_info = page.get("pageInfo", {})
-        if direction not in page_info:
-            raise GitHubFetchError(
-                f"Pull request {repo}#{pr_number} response omitted {connection} "
-                "pagination metadata"
+    return {
+        "pages": [list(initial.get("nodes", []))],
+        "page_info": page_info,
+    }
+
+
+def _fetch_connection_pages(repo: str, states: dict[tuple[int, str], dict]) -> None:
+    """Fetch remaining pages for independent PR connections in batches."""
+    while True:
+        requests = []
+        for (pr_number, connection), state in states.items():
+            if not _connection_has_more(connection, state["page_info"]):
+                continue
+            cursor = _connection_cursor(connection, state["page_info"])
+            if not cursor:
+                raise GitHubFetchError(
+                    f"Pull request {repo}#{pr_number} has another {connection} "
+                    "page but no cursor"
+                )
+            requests.append(
+                {
+                    "alias": f"page_{pr_number}_{connection}",
+                    "number": pr_number,
+                    "connection": connection,
+                    "cursor": cursor,
+                }
             )
 
-    pages = reversed(page_nodes) if connection == "reviews" else page_nodes
-    return {
-        "pageInfo": {"hasNextPage": False, "hasPreviousPage": False},
-        "nodes": [node for page in pages for node in page],
-    }
+        if not requests:
+            break
+
+        for start in range(0, len(requests), PAGE_BATCH_SIZE):
+            batch = requests[start:start + PAGE_BATCH_SIZE]
+            response = _run_graphql_query(_build_connection_page_query(repo, batch))
+            repository = response.get("data", {}).get("repository")
+            if repository is None:
+                raise GitHubFetchError(f"No data returned for repository '{repo}'")
+
+            for request in batch:
+                pull_request = repository.get(request["alias"])
+                if pull_request is None:
+                    raise GitHubFetchError(
+                        f"No data returned for pull request {repo}#{request['number']}"
+                    )
+                page = _extract_connection(pull_request, request["connection"])
+                page_info = page.get("pageInfo", {})
+                direction = (
+                    "hasPreviousPage"
+                    if CONNECTION_CONFIG[request["connection"]]["direction"]
+                    == "backward"
+                    else "hasNextPage"
+                )
+                if direction not in page_info:
+                    raise GitHubFetchError(
+                        f"Pull request {repo}#{request['number']} response omitted "
+                        f"{request['connection']} pagination metadata"
+                    )
+                state = states[(request["number"], request["connection"])]
+                state["pages"].append(page.get("nodes", []))
+                state["page_info"] = page_info
+
+    for (pr_number, connection), state in states.items():
+        pages = state["pages"]
+        if CONNECTION_CONFIG[connection]["direction"] == "backward":
+            pages = reversed(pages)
+        state["result"] = {
+            "pageInfo": {"hasNextPage": False, "hasPreviousPage": False},
+            "nodes": [node for page in pages for node in page],
+        }
 
 
 def _overflowing_connections(pr: dict) -> set[str]:
@@ -276,35 +335,6 @@ def _overflowing_connections(pr: dict) -> set[str]:
             connection, _extract_connection(pr, connection).get("pageInfo", {})
         )
     }
-
-
-def _merge_connection_details(
-    repo: str, pr: dict, details: dict, connections: set[str]
-) -> None:
-    """Replace initial connection pages with complete connection data."""
-    pr_number = pr.get("number")
-    if not pr_number:
-        raise GitHubFetchError("Cannot paginate PR connections without PR number")
-
-    for connection in connections & {"labels", "reviews", "reviewRequests"}:
-        initial = details.get(connection)
-        if initial is None:
-            raise GitHubFetchError(
-                f"Pull request #{pr_number} response omitted {connection} data"
-            )
-        pr[connection] = _fetch_connection_pages(
-            repo, pr_number, connection, initial
-        )
-
-    if "contexts" in connections:
-        context_details = _extract_connection(details, "contexts")
-        commits = pr.get("commits", {}).get("nodes", [])
-        if context_details and commits:
-            rollup = commits[0].get("commit", {}).get("statusCheckRollup")
-            if rollup is not None:
-                rollup["contexts"] = _fetch_connection_pages(
-                    repo, pr_number, "contexts", context_details
-                )
 
 
 def _hydrate_overflowing_connections(repo: str, pr_nodes: list[dict]) -> None:
@@ -339,10 +369,39 @@ def _hydrate_overflowing_connections(repo: str, pr_nodes: list[dict]) -> None:
                 )
             details_by_number[number] = details
 
+        states = {}
         for number, details in details_by_number.items():
-            _merge_connection_details(
-                repo, pr_by_number[number], details, batch_connections[number]
-            )
+            for connection in batch_connections[number]:
+                initial = (
+                    _extract_connection(details, "contexts")
+                    if connection == "contexts"
+                    else details.get(connection)
+                )
+                if initial is None:
+                    raise GitHubFetchError(
+                        f"Pull request #{number} response omitted {connection} data"
+                    )
+                states[(number, connection)] = _new_connection_state(
+                    repo, number, connection, initial
+                )
+
+        _fetch_connection_pages(repo, states)
+        for (number, connection), state in states.items():
+            pr = pr_by_number[number]
+            if connection == "contexts":
+                commits = pr.get("commits", {}).get("nodes", [])
+                rollup = (
+                    commits[0].get("commit", {}).get("statusCheckRollup")
+                    if commits
+                    else None
+                )
+                if rollup is None:
+                    raise GitHubFetchError(
+                        f"Pull request {repo}#{number} omitted check status data"
+                    )
+                rollup["contexts"] = state["result"]
+            else:
+                pr[connection] = state["result"]
 
 
 def _parse_pr_nodes(repo_name: str, pr_nodes: list[dict]) -> list[PRData]:

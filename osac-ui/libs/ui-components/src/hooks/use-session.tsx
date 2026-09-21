@@ -1,5 +1,8 @@
 import { createContext, useCallback, useContext, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { Bullseye, Spinner } from '@patternfly/react-core';
+
+import { Capabilities, ServiceTier } from '@osac/types';
 
 import type { UserRole } from '../shellTypes';
 import {
@@ -10,6 +13,9 @@ import {
   useTheme,
 } from './use-theme';
 import { useUserPreferences } from './use-user-preferences';
+import { useTranslation } from './useTranslation';
+import { useGetResource } from '../api/use-resource';
+import QueryErrorState from '../components/Resource/QueryErrorState';
 
 interface SessionContextValue {
   role: UserRole;
@@ -23,6 +29,7 @@ interface SessionContextValue {
   setUserContrast: (contrast: Contrast) => void;
   projects: string[];
   setProjects: (projects: string[]) => void;
+  enabledServices: ServiceTier[];
 }
 
 const SessionContext = createContext<SessionContextValue | null>(null);
@@ -43,6 +50,7 @@ export const getProjectFilterStorageKey = (username: string) =>
   `${PROJECT_FILTER_STORAGE_PREFIX}${username}`;
 
 export const SessionProvider = ({ children, role, username, tenantId }: SessionProviderProps) => {
+  const { t } = useTranslation();
   const themeProps = useTheme();
 
   const [searchParams] = useSearchParams();
@@ -67,7 +75,35 @@ export const SessionProvider = ({ children, role, username, tenantId }: SessionP
     [setStoredProjects],
   );
 
-  return role ? (
+  const { data, isLoading, error, refetch } = useGetResource(
+    Capabilities,
+    {},
+    {
+      staleTime: Infinity,
+      refetchInterval: false,
+    },
+  );
+
+  if (isLoading) {
+    return (
+      <Bullseye>
+        <Spinner size="xl" />
+      </Bullseye>
+    );
+  }
+
+  if (error) {
+    return (
+      <QueryErrorState
+        error={error}
+        mode="page"
+        onRetry={() => void refetch()}
+        title={t('Failed to fetch capabilities')}
+      />
+    );
+  }
+
+  return (
     <SessionContext.Provider
       value={{
         role,
@@ -75,12 +111,13 @@ export const SessionProvider = ({ children, role, username, tenantId }: SessionP
         tenantId,
         projects,
         setProjects,
+        enabledServices: data?.enabledServices || [],
         ...themeProps,
       }}
     >
       {children}
     </SessionContext.Provider>
-  ) : undefined;
+  );
 };
 
 export const useSession = (): SessionContextValue => {

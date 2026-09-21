@@ -7,16 +7,19 @@ import { describe, expect, it } from 'vitest';
 import {
   BareMetalInstanceCatalogItem,
   BareMetalInstanceCatalogItems,
+  Capabilities,
   ClusterCatalogItem,
   ClusterCatalogItems,
   ClusterTemplateReferenceSchema,
   ComputeInstanceCatalogItem,
   ComputeInstanceCatalogItems,
   ComputeInstanceTemplateReferenceSchema,
+  ServiceTier,
 } from '@osac/types';
 
 import CatalogPage from './CatalogPage';
 import { CatalogItemDetailPage } from '../../components/catalog/details/CatalogItemDetailPage.tsx';
+import { SessionProvider } from '../../hooks/use-session';
 import { wrapWithAuthInterceptor } from '../../test-utils/createMockConnectTransport';
 import { renderWithProviders } from '../../test-utils/TestProviders';
 
@@ -64,9 +67,33 @@ const clusterCatalogItem: ClusterCatalogItem = {
   templateParameters: {},
 };
 
+const bareMetalCatalogItem: BareMetalInstanceCatalogItem = {
+  $typeName: 'osac.public.v1.BareMetalInstanceCatalogItem',
+  id: 'catalog-bare-metal-1',
+  metadata: {
+    $typeName: 'osac.public.v1.Metadata',
+    displayName: '',
+    description: '',
+    name: 'catalog-bare-metal-1',
+    creator: 'admin',
+    annotations: {},
+    labels: {},
+    project: 'foo',
+    tenant: 'foo',
+    version: 1,
+  },
+  title: 'Bare metal offering',
+  description: 'Standard bare metal offering',
+  published: true,
+  templateParameters: {},
+};
+
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 type CatalogTransportOptions = {
+  enabledServices?: ServiceTier[];
+  capabilitiesError?: Error;
+  capabilitiesDelayMs?: number;
   vmItems?: ComputeInstanceCatalogItem[];
   clusterItems?: ClusterCatalogItem[];
   bmItems?: BareMetalInstanceCatalogItem[];
@@ -76,6 +103,14 @@ type CatalogTransportOptions = {
   vmDelayMs?: number;
   clusterDelayMs?: number;
   bmDelayMs?: number;
+  requestCounts?: CatalogRequestCounts;
+};
+
+type CatalogRequestCounts = {
+  capabilities: number;
+  vm: number;
+  cluster: number;
+  bm: number;
 };
 
 const toConnectError = (error: Error) => {
@@ -86,6 +121,9 @@ const toConnectError = (error: Error) => {
 };
 
 const createCatalogPageTransport = ({
+  enabledServices = [ServiceTier.CAAS, ServiceTier.VMAAS, ServiceTier.BMAAS],
+  capabilitiesError,
+  capabilitiesDelayMs = 0,
   vmItems = [vmCatalogItem],
   clusterItems = [clusterCatalogItem],
   bmItems = [],
@@ -95,11 +133,30 @@ const createCatalogPageTransport = ({
   vmDelayMs = 0,
   clusterDelayMs = 0,
   bmDelayMs = 0,
+  requestCounts,
 }: CatalogTransportOptions = {}) =>
   wrapWithAuthInterceptor(
     createRouterTransport((router) => {
+      router.service(Capabilities, {
+        get: async () => {
+          if (requestCounts) {
+            requestCounts.capabilities += 1;
+          }
+          if (capabilitiesDelayMs) {
+            await delay(capabilitiesDelayMs);
+          }
+          if (capabilitiesError) {
+            throw toConnectError(capabilitiesError);
+          }
+          return { enabledServices };
+        },
+      });
+
       router.service(ComputeInstanceCatalogItems, {
         list: async () => {
+          if (requestCounts) {
+            requestCounts.vm += 1;
+          }
           if (vmDelayMs) {
             await delay(vmDelayMs);
           }
@@ -115,6 +172,9 @@ const createCatalogPageTransport = ({
 
       router.service(ClusterCatalogItems, {
         list: async () => {
+          if (requestCounts) {
+            requestCounts.cluster += 1;
+          }
           if (clusterDelayMs) {
             await delay(clusterDelayMs);
           }
@@ -130,6 +190,9 @@ const createCatalogPageTransport = ({
 
       router.service(BareMetalInstanceCatalogItems, {
         list: async () => {
+          if (requestCounts) {
+            requestCounts.bm += 1;
+          }
           if (bmDelayMs) {
             await delay(bmDelayMs);
           }
@@ -151,17 +214,31 @@ const unauthorizedTransport = createCatalogPageTransport({
   bmError: Object.assign(new Error(), { name: 'UnauthorizedError' }),
 });
 
-const renderCatalogPage = (transport = unauthorizedTransport) =>
-  renderWithProviders(<CatalogPage />, { transport });
+const createRequestCounts = (): CatalogRequestCounts => ({
+  capabilities: 0,
+  vm: 0,
+  cluster: 0,
+  bm: 0,
+});
+
+const renderCatalogPage = (transport = unauthorizedTransport, routerEntries = ['/catalog']) =>
+  renderWithProviders(
+    <SessionProvider role="tenant-user" username="test-user" tenantId="test-tenant">
+      <CatalogPage />
+    </SessionProvider>,
+    { transport, routerEntries },
+  );
 
 const renderCatalogPageWithDetailRoutes = (transport = createCatalogPageTransport()) =>
   renderWithProviders(
-    <Routes>
-      <Route path="/catalog" element={<CatalogPage />} />
-      <Route path="/catalog/:kind/:id" element={<CatalogItemDetailPage />} />
-      <Route path="/clusters/create/:catalogItemId" element={<div>Create cluster page</div>} />
-      <Route path="/vms/create/:catalogItemId" element={<div>Create virtual machine page</div>} />
-    </Routes>,
+    <SessionProvider role="tenant-user" username="test-user" tenantId="test-tenant">
+      <Routes>
+        <Route path="/catalog" element={<CatalogPage />} />
+        <Route path="/catalog/:kind/:id" element={<CatalogItemDetailPage />} />
+        <Route path="/clusters/create/:catalogItemId" element={<div>Create cluster page</div>} />
+        <Route path="/vms/create/:catalogItemId" element={<div>Create virtual machine page</div>} />
+      </Routes>
+    </SessionProvider>,
     { transport, routerEntries: ['/catalog'] },
   );
 
@@ -201,7 +278,8 @@ describe('CatalogPage', () => {
   it('disables search while catalog queries are loading', async () => {
     renderCatalogPage(createCatalogPageTransport({ vmDelayMs: 250, clusterItems: [] }));
 
-    const searchInput = screen.getByRole('textbox', { name: 'Filter catalog by keyword' });
+    expect(screen.getByRole('progressbar')).toBeInTheDocument();
+    const searchInput = await screen.findByRole('textbox', { name: 'Filter catalog by keyword' });
     expect(searchInput).toBeDisabled();
 
     await waitFor(() => {
@@ -230,6 +308,131 @@ describe('CatalogPage', () => {
       expect(screen.getByText(vmCatalogItem.title)).toBeInTheDocument();
       expect(screen.getByText(clusterCatalogItem.title)).toBeInTheDocument();
     });
+  });
+
+  it.each([
+    {
+      service: ServiceTier.CAAS,
+      title: clusterCatalogItem.title,
+      createAction: 'Create cluster',
+      enabledRequest: 'cluster',
+      disabledRequests: ['vm', 'bm'],
+      disabledFilters: ['vm', 'bm'],
+    },
+    {
+      service: ServiceTier.VMAAS,
+      title: vmCatalogItem.title,
+      createAction: 'Create virtual machine',
+      enabledRequest: 'vm',
+      disabledRequests: ['cluster', 'bm'],
+      disabledFilters: ['cluster', 'bm'],
+    },
+    {
+      service: ServiceTier.BMAAS,
+      title: bareMetalCatalogItem.title,
+      createAction: 'Provision bare metal',
+      enabledRequest: 'bm',
+      disabledRequests: ['vm', 'cluster'],
+      disabledFilters: ['vm', 'cluster'],
+    },
+  ])(
+    'renders only the $service service surface and queries its catalog',
+    async ({ service, title, createAction, enabledRequest, disabledRequests, disabledFilters }) => {
+      const requestCounts = createRequestCounts();
+      renderCatalogPage(
+        createCatalogPageTransport({
+          enabledServices: [service],
+          bmItems: [bareMetalCatalogItem],
+          requestCounts,
+        }),
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText(title)).toBeInTheDocument();
+      });
+
+      expect(screen.getByRole('button', { name: createAction })).toBeInTheDocument();
+      expect(requestCounts.capabilities).toBe(1);
+      expect(requestCounts[enabledRequest as keyof CatalogRequestCounts]).toBe(1);
+      for (const request of disabledRequests) {
+        expect(requestCounts[request as keyof CatalogRequestCounts]).toBe(0);
+      }
+      for (const filter of disabledFilters) {
+        expect(document.getElementById(`catalog-type-filter-${filter}`)).not.toBeInTheDocument();
+      }
+    },
+  );
+
+  it.each([
+    { enabledServices: [ServiceTier.MAAS], label: 'MaaS' },
+    { enabledServices: [] as ServiceTier[], label: 'no services' },
+  ])(
+    'loads without service catalog requests when enabled services are $label',
+    async ({ enabledServices }) => {
+      const requestCounts = createRequestCounts();
+      renderCatalogPage(createCatalogPageTransport({ enabledServices, requestCounts }));
+
+      expect(
+        await screen.findByRole('heading', { name: 'No catalog items found' }),
+      ).toBeInTheDocument();
+      expect(screen.getByText('No published catalog items are available yet.')).toBeInTheDocument();
+      expect(requestCounts).toEqual({ capabilities: 1, vm: 0, cluster: 0, bm: 0 });
+      expect(
+        screen.queryByRole('group', { name: 'Filter catalog by resource type' }),
+      ).toBeInTheDocument();
+      expect(document.getElementById('catalog-type-filter-vm')).not.toBeInTheDocument();
+      expect(document.getElementById('catalog-type-filter-cluster')).not.toBeInTheDocument();
+      expect(document.getElementById('catalog-type-filter-bm')).not.toBeInTheDocument();
+    },
+  );
+
+  it('does not mount the catalog while Capabilities is loading', async () => {
+    const requestCounts = createRequestCounts();
+    renderCatalogPage(createCatalogPageTransport({ capabilitiesDelayMs: 250, requestCounts }));
+
+    expect(screen.getByRole('progressbar')).toBeInTheDocument();
+    expect(screen.queryByText('Catalog')).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(requestCounts.capabilities).toBe(1);
+    });
+    expect(requestCounts.vm).toBe(0);
+    expect(requestCounts.cluster).toBe(0);
+    expect(requestCounts.bm).toBe(0);
+
+    await waitFor(() => {
+      expect(screen.getByText(vmCatalogItem.title)).toBeInTheDocument();
+    });
+  });
+
+  it('fails closed with a retryable error when Capabilities discovery fails', async () => {
+    const requestCounts = createRequestCounts();
+    renderCatalogPage(
+      createCatalogPageTransport({
+        capabilitiesError: new Error('Capabilities unavailable'),
+        requestCounts,
+      }),
+    );
+
+    expect(
+      await screen.findByRole('heading', { name: 'Failed to fetch capabilities' }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Capabilities unavailable')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(screen.queryByText('Catalog')).not.toBeInTheDocument();
+    expect(requestCounts).toEqual({ capabilities: 1, vm: 0, cluster: 0, bm: 0 });
+  });
+
+  it('ignores a disabled type in the URL filter', async () => {
+    renderCatalogPage(createCatalogPageTransport({ enabledServices: [ServiceTier.CAAS] }), [
+      '/catalog?types=vm',
+    ]);
+
+    await waitFor(() => {
+      expect(screen.getByText(clusterCatalogItem.title)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(vmCatalogItem.title)).not.toBeInTheDocument();
+    expect(document.getElementById('catalog-type-filter-vm')).not.toBeInTheDocument();
+    expect(document.getElementById('catalog-type-filter-cluster')).toBeInTheDocument();
   });
 
   it('filters to cluster catalog items when the cluster type toggle is selected', async () => {

@@ -1,21 +1,23 @@
 import { describe, expect, it } from 'vitest';
 
+import { ServiceTier } from '@osac/types';
 import type { UserRole } from '@osac/ui-components/shellTypes';
 import { tIdentity } from '@osac/ui-components/test-utils/i18n';
 
 import { NavLink, NavSection, isNavLink, isNavSection, navRowsForRole } from './shellNav';
 
 const nonIdpRoles: UserRole[] = ['tenant-admin', 'tenant-user'];
+const allServices: ServiceTier[] = [ServiceTier.CAAS, ServiceTier.BMAAS, ServiceTier.VMAAS];
 
 const findLink = (role: UserRole, linkId: string): NavLink | undefined =>
-  navRowsForRole(role, tIdentity).find((row) => isNavLink(row) && row.id === linkId) as
-    | NavLink
-    | undefined;
+  navRowsForRole(role, tIdentity, allServices).find(
+    (row) => isNavLink(row) && row.id === linkId,
+  ) as NavLink | undefined;
 
 const findSection = (role: UserRole, sectionId: string): NavSection | undefined =>
-  navRowsForRole(role, tIdentity).find((row) => isNavSection(row) && row.id === sectionId) as
-    | NavSection
-    | undefined;
+  navRowsForRole(role, tIdentity, allServices).find(
+    (row) => isNavSection(row) && row.id === sectionId,
+  ) as NavSection | undefined;
 
 const servicesChildren = (role: UserRole) =>
   findSection(role, 'nav-tenant-services')?.children ?? [];
@@ -24,12 +26,72 @@ describe('navRowsForRole', () => {
   it('includes Virtual Machines, Clusters, and Bare Metal under Services for tenant roles', () => {
     for (const role of nonIdpRoles) {
       expect(servicesChildren(role)).toEqual([
-        { kind: 'link', id: 'bare-metal', label: 'Bare Metal', path: '/bare-metal' },
-        { kind: 'link', id: 'clusters', label: 'Clusters', path: '/clusters' },
-        { kind: 'link', id: 'compute-vms', label: 'Virtual Machines', path: '/vms' },
+        {
+          kind: 'link',
+          id: 'bare-metal',
+          label: 'Bare Metal',
+          path: '/bare-metal',
+          service: ServiceTier.BMAAS,
+        },
+        {
+          kind: 'link',
+          id: 'clusters',
+          label: 'Clusters',
+          path: '/clusters',
+          service: ServiceTier.CAAS,
+        },
+        {
+          kind: 'link',
+          id: 'compute-vms',
+          label: 'Virtual Machines',
+          path: '/vms',
+          service: ServiceTier.VMAAS,
+        },
       ]);
     }
     expect(servicesChildren('tenant-idp-manager')).toEqual([]);
+  });
+
+  it('removes unavailable service links and empty service sections', () => {
+    const rows = navRowsForRole('tenant-user', tIdentity, [ServiceTier.CAAS]);
+
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'catalog' }),
+        expect.objectContaining({
+          id: 'nav-tenant-services',
+          children: [expect.objectContaining({ id: 'clusters', service: ServiceTier.CAAS })],
+        }),
+      ]),
+    );
+    expect(
+      navRowsForRole('tenant-user', tIdentity, []).some(
+        (row) => isNavSection(row) && row.id === 'nav-tenant-services',
+      ),
+    ).toBe(false);
+  });
+
+  it.each([
+    { service: ServiceTier.CAAS, linkId: 'clusters' },
+    { service: ServiceTier.VMAAS, linkId: 'compute-vms' },
+    { service: ServiceTier.BMAAS, linkId: 'bare-metal' },
+  ])('keeps only the enabled $service service link', ({ service, linkId }) => {
+    const services = navRowsForRole('tenant-user', tIdentity, [service]).find(
+      (row) => isNavSection(row) && row.id === 'nav-tenant-services',
+    );
+
+    expect(services).toEqual(
+      expect.objectContaining({
+        children: [expect.objectContaining({ id: linkId, service })],
+      }),
+    );
+  });
+
+  it('does not create a MaaS navigation surface', () => {
+    const rows = navRowsForRole('tenant-user', tIdentity, [ServiceTier.MAAS]);
+
+    expect(rows.some((row) => isNavSection(row) && row.id === 'nav-tenant-services')).toBe(false);
+    expect(rows).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'catalog' })]));
   });
 
   it('excludes Services section for admin (cloud-provider-admin) role', () => {

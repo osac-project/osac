@@ -34,8 +34,7 @@ validation_commands:
   # osac-installer
   - "cd osac-installer && yamllint --strict ."
   - "cd osac-installer && pre-commit run --all-files"
-  - "cd osac-installer && helm lint charts/osac/"
-  - "cd osac-installer && bash -c 'for f in values/*/values.yaml; do helm template osac charts/osac/ --values \"$f\" > /dev/null; done'"
+  - "cd osac-installer && make helm-validate"
 
 # Auxiliary repositories cloned into the workspace before AI execution.
 # Both components imported this same repo to the same path; the install

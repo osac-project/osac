@@ -289,13 +289,25 @@ helm lint charts/aap/
 helm template test charts/aap/ > /dev/null
 ```
 
+#### Unit Tests
+
+For filter, variable-transform, or isolated plugin changes, run the unit
+test suite:
+
+```bash
+uv run pytest tests/unit
+```
+
+These run quickly with no cluster dependencies and are included in the
+`Run integration test (osac-aap)` CI gate (which executes `uv run make test`).
+
 #### Integration Tests
 
 Integration tests require a kind cluster and significant resources.
 **Do not run integration tests automatically.** If your change touches
 workflows, service roles, or test fixtures, note in the PR description
 that integration testing is needed and let human reviewers trigger it
-via CI.
+via the `Run integration test (osac-aap)` CI gate.
 
 ### Coding Standards
 
@@ -385,9 +397,14 @@ osac-aap/
 - `LICENSE` — do not change
 - `osac-aap/.ansible-lint-ignore` — lint suppressions; additions require human
   approval
-- `osac-aap/pyproject.toml` — Python project configuration
 - `osac-aap/.pre-commit-config.yaml` — pre-commit hook configuration
-- `osac-aap/ansible.cfg` — Ansible core configuration
+
+### Files to Edit with Care
+
+- `osac-aap/pyproject.toml` — owns development dependencies; rerun
+  `uv sync --all-groups` after changes
+- `osac-aap/ansible.cfg` — controls collection search paths (`vendor/` before
+  local collections); stale vendored content can hide local changes
 
 ### Cross-Component Dependencies
 

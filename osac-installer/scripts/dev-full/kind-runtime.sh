@@ -26,8 +26,8 @@ set -euo pipefail
 # ── Configuration ────────────────────────────────────────────────────────────
 ROOTFUL_SOCKET="${ROOTFUL_SOCKET:-/run/podman/podman.sock}"
 
-# Auto-detect container runtime (prefer Podman on macOS when available, Docker otherwise).
-if [[ "$(uname -s)" == "Darwin" ]] && command -v podman >/dev/null 2>&1; then
+# Auto-detect container runtime (prefer Podman when available, Docker otherwise).
+if command -v podman >/dev/null 2>&1; then
   KIND_PROVIDER="${KIND_EXPERIMENTAL_PROVIDER:-podman}"
 else
   KIND_PROVIDER="${KIND_EXPERIMENTAL_PROVIDER:-docker}"

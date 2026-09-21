@@ -31,7 +31,12 @@ jobs:
       # Same ignore list for pull_request and merge_group. schedule /
       # workflow_dispatch always run. Job-level `if:` skip reports success
       # so docs-only PRs (and merge groups) are not blocked.
-      should-run: ${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group') || steps.filter.outputs.code == 'true' }}
+      # CI_GATING_ENABLED == 'false' also forces this outer gate open, not
+      # just the per-component narrowing below -- otherwise a docs-only PR
+      # with the kill switch flipped would still resolve should-run to
+      # false and no job would run at all, defeating the kill switch's
+      # "always run" intent.
+      should-run: ${{ vars.CI_GATING_ENABLED == 'false' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || steps.filter.outputs.code == 'true' }}
       # Per-component narrowing on top of should-run above: a PR touching
       # only e.g. osac-aap/** shouldn't also run fulfillment-service's or
       # osac-operator's integration tests. Filter definitions (with the
@@ -50,7 +55,7 @@ jobs:
       # dorny/paths-filter uses git diff on merge_group (not the PR Files API),
       # so the repo must be checked out with enough history for base..head.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        if: github.event_name == 'merge_group'
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
         with:
           fetch-depth: 0
           persist-credentials: false

@@ -10,29 +10,35 @@ logger = logging.getLogger(__name__)
 INITIAL_BACKOFF_SECONDS = 2
 MAX_RETRIES = 3
 DELAY_BETWEEN_QUERIES_SECONDS = 1
+PR_PAGE_SIZE = 50
+DETAIL_PAGE_SIZE = 100
+DETAIL_BATCH_SIZE = 5
+PAGINATED_CONNECTIONS = ("labels", "reviews", "reviewRequests", "contexts")
 
 
 class GitHubFetchError(RuntimeError):
     """Raised when a complete PR dashboard snapshot cannot be collected."""
 
 
-def _build_graphql_query(repos: list[str]) -> str:
+def _build_graphql_query(repos: list[str], after: str | None = None) -> str:
     """Build a single GraphQL query fetching open PRs from multiple repos.
 
     Each repo gets an aliased sub-query (repo_0, repo_1, etc.) so all data
     comes back in one API call.
     """
     repo_fragments = []
+    after_clause = f", after: {json.dumps(after)}" if after is not None else ""
     for idx, repo in enumerate(repos):
         owner, name = repo.split("/", 1)
         alias = f"repo_{idx}"
         repo_fragments.append(f"""
     {alias}: repository(owner: "{owner}", name: "{name}") {{
       nameWithOwner
-      pullRequests(states: OPEN, first: 50) {{
+      pullRequests(states: OPEN, first: {PR_PAGE_SIZE}{after_clause}) {{
         totalCount
-        pageInfo {{ hasNextPage }}
+        pageInfo {{ hasNextPage endCursor }}
         nodes {{
+          number
           title
           body
           url
@@ -40,9 +46,12 @@ def _build_graphql_query(repos: list[str]) -> str:
           createdAt
           isDraft
           mergeable
-          labels(first: 20) {{ nodes {{ name }} }}
+          labels(first: 20) {{
+            pageInfo {{ hasNextPage endCursor }}
+            nodes {{ name }}
+          }}
           reviews(last: 20) {{
-            pageInfo {{ hasPreviousPage }}
+            pageInfo {{ hasPreviousPage startCursor }}
             nodes {{
               author {{ login }}
               state
@@ -50,6 +59,7 @@ def _build_graphql_query(repos: list[str]) -> str:
             }}
           }}
           reviewRequests(first: 10) {{
+            pageInfo {{ hasNextPage endCursor }}
             nodes {{
               requestedReviewer {{
                 ... on User {{ login }}
@@ -63,7 +73,7 @@ def _build_graphql_query(repos: list[str]) -> str:
                 statusCheckRollup {{
                   state
                   contexts(first: 20) {{
-                    pageInfo {{ hasNextPage }}
+                    pageInfo {{ hasNextPage endCursor }}
                     nodes {{
                       __typename
                       ... on CheckRun {{
@@ -87,6 +97,260 @@ def _build_graphql_query(repos: list[str]) -> str:
     }}""")
 
     return "{\n" + "\n".join(repo_fragments) + "\n}"
+
+
+def _connection_fields(connection: str, page_args: str) -> str:
+    """Return the GraphQL fields for one paginated PR connection."""
+    page_info = (
+        "hasPreviousPage startCursor"
+        if connection == "reviews"
+        else "hasNextPage endCursor"
+    )
+    if connection == "labels":
+        return f"""
+    labels({page_args}) {{
+      pageInfo {{ {page_info} }}
+      nodes {{ name }}
+    }}"""
+    if connection == "reviews":
+        return f"""
+    reviews({page_args}) {{
+      pageInfo {{ {page_info} }}
+      nodes {{
+        author {{ login }}
+        state
+        submittedAt
+      }}
+    }}"""
+    if connection == "reviewRequests":
+        return f"""
+    reviewRequests({page_args}) {{
+      pageInfo {{ {page_info} }}
+      nodes {{
+        requestedReviewer {{
+          ... on User {{ login }}
+        }}
+      }}
+    }}"""
+    if connection == "contexts":
+        return f"""
+    contexts({page_args}) {{
+      pageInfo {{ {page_info} }}
+      nodes {{
+        __typename
+        ... on CheckRun {{
+          name
+          conclusion
+          detailsUrl
+        }}
+        ... on StatusContext {{
+          context
+          state
+          targetUrl
+        }}
+      }}
+    }}"""
+    raise ValueError(f"Unsupported connection: {connection}")
+
+
+def _build_pr_details_query(repo: str, pr_numbers: list[int]) -> str:
+    """Build a bounded query for overflowed PR connections."""
+    owner, name = repo.split("/", 1)
+    aliases = []
+    for number in pr_numbers:
+        alias = f"pr_{number}"
+        aliases.append(f"""
+    {alias}: pullRequest(number: {number}) {{
+      {_connection_fields("labels", f"first: {DETAIL_PAGE_SIZE}")}
+      {_connection_fields("reviews", f"last: {DETAIL_PAGE_SIZE}")}
+      {_connection_fields("reviewRequests", f"first: {DETAIL_PAGE_SIZE}")}
+      commits(last: 1) {{
+        nodes {{
+          commit {{
+            statusCheckRollup {{
+              {_connection_fields("contexts", f"first: {DETAIL_PAGE_SIZE}")}
+            }}
+          }}
+        }}
+      }}
+    }}""")
+    return (
+        "{\n  repository(owner: "
+        + json.dumps(owner)
+        + ", name: "
+        + json.dumps(name)
+        + ") {\n"
+        + "\n".join(aliases)
+        + "\n  }\n}"
+    )
+
+
+def _build_connection_page_query(
+    repo: str, pr_number: int, connection: str, cursor: str
+) -> str:
+    """Build a query for the next or previous page of one PR connection."""
+    owner, name = repo.split("/", 1)
+    if connection == "reviews":
+        page_args = f"last: {DETAIL_PAGE_SIZE}, before: {json.dumps(cursor)}"
+    else:
+        page_args = f"first: {DETAIL_PAGE_SIZE}, after: {json.dumps(cursor)}"
+
+    connection_query = _connection_fields(connection, page_args)
+    if connection == "contexts":
+        fields = f"""
+      commits(last: 1) {{
+        nodes {{
+          commit {{
+            statusCheckRollup {{
+              {connection_query}
+            }}
+          }}
+        }}
+      }}"""
+    else:
+        fields = connection_query
+    return f"""
+{{
+  repository(owner: {json.dumps(owner)}, name: {json.dumps(name)}) {{
+    pullRequest(number: {pr_number}) {{
+      {fields}
+    }}
+  }}
+}}"""
+
+
+def _extract_connection(pr: dict, connection: str) -> dict:
+    """Extract a connection from a pull request node."""
+    if connection != "contexts":
+        return pr.get(connection, {})
+    commits = pr.get("commits", {}).get("nodes", [])
+    if not commits:
+        return {}
+    rollup = commits[0].get("commit", {}).get("statusCheckRollup")
+    return rollup.get("contexts", {}) if rollup else {}
+
+
+def _connection_has_more(connection: str, page_info: dict) -> bool:
+    """Return whether a connection has another page in its direction."""
+    if connection == "reviews":
+        return page_info.get("hasPreviousPage", False)
+    return page_info.get("hasNextPage", False)
+
+
+def _connection_cursor(connection: str, page_info: dict) -> str | None:
+    """Return the cursor needed to fetch the next connection page."""
+    return page_info.get("startCursor" if connection == "reviews" else "endCursor")
+
+
+def _fetch_connection_pages(
+    repo: str, pr_number: int, connection: str, initial: dict
+) -> dict:
+    """Fetch all remaining pages for one PR connection."""
+    nodes = list(initial.get("nodes", []))
+    page_info = initial.get("pageInfo", {})
+    direction = "hasPreviousPage" if connection == "reviews" else "hasNextPage"
+    if direction not in page_info:
+        raise GitHubFetchError(
+            f"Pull request {repo}#{pr_number} response omitted {connection} "
+            "pagination metadata"
+        )
+    while _connection_has_more(connection, page_info):
+        cursor = _connection_cursor(connection, page_info)
+        if not cursor:
+            raise GitHubFetchError(
+                f"Pull request {repo}#{pr_number} has another {connection} page "
+                "but no cursor"
+            )
+        response = _run_graphql_query(
+            _build_connection_page_query(repo, pr_number, connection, cursor)
+        )
+        repository = response.get("data", {}).get("repository")
+        pull_request = repository.get("pullRequest") if repository else None
+        if pull_request is None:
+            raise GitHubFetchError(
+                f"No data returned for pull request {repo}#{pr_number}"
+            )
+        page = _extract_connection(pull_request, connection)
+        page_nodes = page.get("nodes", [])
+        if connection == "reviews":
+            nodes = page_nodes + nodes
+        else:
+            nodes.extend(page_nodes)
+        page_info = page.get("pageInfo", {})
+        if direction not in page_info:
+            raise GitHubFetchError(
+                f"Pull request {repo}#{pr_number} response omitted {connection} "
+                "pagination metadata"
+            )
+
+    return {
+        "pageInfo": {"hasNextPage": False, "hasPreviousPage": False},
+        "nodes": nodes,
+    }
+
+
+def _needs_connection_details(pr: dict) -> bool:
+    """Return whether any nested PR connection needs an overflow query."""
+    return any(
+        _connection_has_more(
+            connection, _extract_connection(pr, connection).get("pageInfo", {})
+        )
+        for connection in PAGINATED_CONNECTIONS
+    )
+
+
+def _merge_connection_details(repo: str, pr: dict, details: dict) -> None:
+    """Replace initial connection pages with complete connection data."""
+    pr_number = pr.get("number")
+    if not pr_number:
+        raise GitHubFetchError("Cannot paginate PR connections without PR number")
+
+    for connection in ("labels", "reviews", "reviewRequests"):
+        initial = details.get(connection)
+        if initial is None:
+            raise GitHubFetchError(
+                f"Pull request #{pr_number} response omitted {connection} data"
+            )
+        pr[connection] = _fetch_connection_pages(
+            repo, pr_number, connection, initial
+        )
+
+    context_details = _extract_connection(details, "contexts")
+    commits = pr.get("commits", {}).get("nodes", [])
+    if context_details and commits:
+        rollup = commits[0].get("commit", {}).get("statusCheckRollup")
+        if rollup is not None:
+            rollup["contexts"] = _fetch_connection_pages(
+                repo, pr_number, "contexts", context_details
+            )
+
+
+def _hydrate_overflowing_connections(repo: str, pr_nodes: list[dict]) -> None:
+    """Complete nested connections only for PRs whose first page overflowed."""
+    overflowing = [pr for pr in pr_nodes if _needs_connection_details(pr)]
+    for pr in overflowing:
+        if not pr.get("number"):
+            raise GitHubFetchError("Cannot paginate PR connections without PR number")
+    numbers = [pr["number"] for pr in overflowing]
+    for start in range(0, len(numbers), DETAIL_BATCH_SIZE):
+        batch = numbers[start:start + DETAIL_BATCH_SIZE]
+        response = _run_graphql_query(_build_pr_details_query(repo, batch))
+        repository = response.get("data", {}).get("repository")
+        if repository is None:
+            raise GitHubFetchError(f"No data returned for repository '{repo}'")
+        details_by_number = {}
+        for number in batch:
+            details = repository.get(f"pr_{number}")
+            if details is None:
+                raise GitHubFetchError(
+                    f"No data returned for pull request {repo}#{number}"
+                )
+            details_by_number[number] = details
+
+        for pr in pr_nodes:
+            number = pr.get("number")
+            if number in details_by_number:
+                _merge_connection_details(repo, pr, details_by_number[number])
 
 
 def _parse_pr_nodes(repo_name: str, pr_nodes: list[dict]) -> list[PRData]:
@@ -115,7 +379,7 @@ def _parse_pr_nodes(repo_name: str, pr_nodes: list[dict]) -> list[PRData]:
             contexts_data = rollup.get("contexts", {})
             if contexts_data.get("pageInfo", {}).get("hasNextPage"):
                 raise GitHubFetchError(
-                    "PR '%s' has more than 20 check contexts; refusing to publish "
+                    "PR '%s' has incomplete check contexts; refusing to publish "
                     "a truncated dashboard snapshot"
                     % pr.get("title", "")
                 )
@@ -140,7 +404,7 @@ def _parse_pr_nodes(repo_name: str, pr_nodes: list[dict]) -> list[PRData]:
         reviews_data = pr.get("reviews", {})
         if reviews_data.get("pageInfo", {}).get("hasPreviousPage"):
             raise GitHubFetchError(
-                "PR '%s' has more than 20 reviews; refusing to publish a "
+                "PR '%s' has incomplete review history; refusing to publish a "
                 "truncated dashboard snapshot"
                 % pr.get("title", "")
             )
@@ -244,34 +508,42 @@ def _run_graphql_query(query: str) -> dict:
 
 
 def _fetch_repo_prs(repo: str) -> list[PRData]:
-    """Fetch open PRs for a single repo with rate-limit handling."""
-    query = _build_graphql_query([repo])
-    logger.debug("Fetching PRs for %s", repo)
+    """Fetch all open PRs for a single repo with rate-limit handling."""
+    all_pr_nodes = []
+    cursor = None
+    repo_name = repo
 
-    response = _run_graphql_query(query)
+    while True:
+        query = _build_graphql_query([repo], after=cursor)
+        logger.debug("Fetching PRs for %s%s", repo, " (next page)" if cursor else "")
+        response = _run_graphql_query(query)
 
-    data = response.get("data")
-    if not data:
-        raise GitHubFetchError(f"No data in GitHub GraphQL response for '{repo}'")
+        data = response.get("data")
+        if not data:
+            raise GitHubFetchError(f"No data in GitHub GraphQL response for '{repo}'")
 
-    repo_data = data.get("repo_0")
-    if repo_data is None:
-        raise GitHubFetchError(f"No data returned for repository '{repo}'")
+        repo_data = data.get("repo_0")
+        if repo_data is None:
+            raise GitHubFetchError(f"No data returned for repository '{repo}'")
 
-    repo_name = repo_data.get("nameWithOwner", repo)
-    pr_data = repo_data.get("pullRequests", {})
-    total_count = pr_data.get("totalCount", 0)
-    has_next = pr_data.get("pageInfo", {}).get("hasNextPage", False)
-    if has_next:
-        raise GitHubFetchError(
-            "Repository '%s' has %d open PRs but the current query only fetches "
-            "the first 50"
-            % (
-            repo_name, total_count,
+        repo_name = repo_data.get("nameWithOwner", repo)
+        pr_data = repo_data.get("pullRequests", {})
+        all_pr_nodes.extend(pr_data.get("nodes", []))
+        page_info = pr_data.get("pageInfo", {})
+        if "hasNextPage" not in page_info:
+            raise GitHubFetchError(
+                f"Repository '{repo_name}' response omitted PR pagination metadata"
             )
-        )
-    pr_nodes = pr_data.get("nodes", [])
-    return _parse_pr_nodes(repo_name, pr_nodes)
+        if not page_info.get("hasNextPage", False):
+            _hydrate_overflowing_connections(repo, all_pr_nodes)
+            return _parse_pr_nodes(repo_name, all_pr_nodes)
+
+        cursor = page_info.get("endCursor")
+        if not cursor:
+            raise GitHubFetchError(
+                f"Repository '{repo_name}' has another PR page but no cursor"
+            )
+        time.sleep(DELAY_BETWEEN_QUERIES_SECONDS)
 
 
 def fetch_open_prs(repos: list[str]) -> list[PRData]:

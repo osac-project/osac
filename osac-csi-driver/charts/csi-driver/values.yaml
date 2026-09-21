@@ -80,7 +80,12 @@ node:
   # TopoLVM's node-local CSI socket. The driver also accepts an
   # OSAC_LVMS_NODE_SOCKET environment override at runtime.
   lvmsNodeSocket: /run/topolvm/csi-topolvm.sock
+  # Container path where the host's TopoLVM socket directory is mounted.
   lvmsNodeSocketDir: /run/topolvm
+  # Host path exposed by the TopoLVM node plugin. Keep this separate from
+  # lvmsNodeSocketDir because the plugin can mount a different host path into
+  # its own container at /run/topolvm.
+  lvmsNodeSocketHostPath: /var/lib/kubelet/plugins/topolvm.io/node
   resources:
     limits:
       cpu: 500m

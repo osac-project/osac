@@ -1,0 +1,49 @@
+suite: node TopoLVM socket
+templates:
+  - templates/node-daemonset.yaml
+tests:
+  - it: mounts the TopoLVM host socket at the driver socket path
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OSAC_LVMS_NODE_SOCKET
+            value: /run/topolvm/csi-topolvm.sock
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: lvms-socket-dir
+            mountPath: /run/topolvm
+            readOnly: true
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: lvms-socket-dir
+            hostPath:
+              path: /var/lib/kubelet/plugins/topolvm.io/node
+              type: DirectoryOrCreate
+
+  - it: allows the host and container socket paths to differ
+    set:
+      node.lvmsNodeSocket: /run/custom-topolvm/csi.sock
+      node.lvmsNodeSocketDir: /run/custom-topolvm
+      node.lvmsNodeSocketHostPath: /var/lib/kubelet/plugins/custom-topolvm
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OSAC_LVMS_NODE_SOCKET
+            value: /run/custom-topolvm/csi.sock
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: lvms-socket-dir
+            mountPath: /run/custom-topolvm
+            readOnly: true
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: lvms-socket-dir
+            hostPath:
+              path: /var/lib/kubelet/plugins/custom-topolvm
+              type: DirectoryOrCreate

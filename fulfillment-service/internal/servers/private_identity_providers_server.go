@@ -192,6 +192,11 @@ func (s *PrivateIdentityProvidersServer) Update(ctx context.Context,
 			obj.SetStatus(&privatev1.IdentityProviderStatus{})
 		}
 		obj.GetStatus().SetPhase(privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_UNKNOWN)
+		// generic.Update strictly honours the update mask: only masked paths are
+		// copied from the request object to the stored clone. Without this, the
+		// phase reset above would be silently dropped.
+		mask := request.GetUpdateMask()
+		mask.Paths = append(mask.GetPaths(), "status.phase")
 	}
 	err = s.generic.Update(ctx, request, &response)
 	return

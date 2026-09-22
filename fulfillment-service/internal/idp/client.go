@@ -790,7 +790,12 @@ func (c *Client) UpdateIdentityProvider(ctx context.Context, tenantName string, 
 	if err != nil {
 		return nil, fmt.Errorf("failed to update identity provider: %w", err)
 	}
-	response.Body.Close()
+	if closeErr := response.Body.Close(); closeErr != nil {
+		c.logger.WarnContext(ctx, "Failed to close update identity provider response body",
+			slog.String("alias", idpProvider.Alias),
+			slog.Any("error", closeErr),
+		)
+	}
 
 	// Fetch and return the updated representation
 	result, err := c.GetIdentityProvider(ctx, tenantName, idpProvider.Alias)

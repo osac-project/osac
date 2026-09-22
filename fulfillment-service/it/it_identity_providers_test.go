@@ -1006,6 +1006,7 @@ var _ = Describe("Identity provider client_secret_secret", func() {
 		secondSecretId, _ := createClientSecret(ctx, map[string][]byte{"value": []byte("rotated-secret")})
 
 		idpName := fmt.Sprintf("test-rotate-%s", uuid.New())
+		expectedAlias := fmt.Sprintf("%s-%s", tenantName, idpName)
 
 		createResponse, err := client.Create(ctx, privatev1.IdentityProvidersCreateRequest_builder{
 			Object: privatev1.IdentityProvider_builder{
@@ -1085,6 +1086,19 @@ var _ = Describe("Identity provider client_secret_secret", func() {
 		Expect(err).ToNot(HaveOccurred())
 		ref := getResponse.GetObject().GetSpec().GetOidc().GetClientSecretSecret()
 		Expect(ref.GetId()).To(Equal(secondSecretId))
+
+		// Verify Keycloak received the rotated secret value (not just the DB reference).
+		// Keycloak returns clientSecret in the config map of the IdP representation.
+		code, body, err := tool.KeycloakAdminRequest(ctx, http.MethodGet,
+			fmt.Sprintf("/identity-provider/instances/%s", expectedAlias), nil)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(code).To(Equal(http.StatusOK))
+		var kcIdp map[string]interface{}
+		Expect(json.Unmarshal(body, &kcIdp)).To(Succeed())
+		kcConfig, ok := kcIdp["config"].(map[string]interface{})
+		Expect(ok).To(BeTrue(), "Keycloak IdP should have a config map")
+		Expect(kcConfig["clientSecret"]).To(Equal("rotated-secret"),
+			"Keycloak should have the rotated client secret value")
 	})
 
 	It("Updates client_secret_secret to another Vault-backed secret", func() {

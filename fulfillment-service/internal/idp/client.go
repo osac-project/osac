@@ -797,6 +797,16 @@ func (c *Client) UpdateIdentityProvider(ctx context.Context, tenantName string, 
 		)
 	}
 
+	// Re-link to the organization after realm-level PUT.
+	// Keycloak's PUT on realm-level instances may unlink the IdP from its organization.
+	err = c.linkIdentityProviderToOrganization(ctx, tenantName, idpProvider.Alias)
+	if err != nil {
+		if !isConflictError(err) {
+			return nil, fmt.Errorf("failed to re-link identity provider to organization after update: %w", err)
+		}
+		// 409 = already linked, treat as success
+	}
+
 	// Fetch and return the updated representation
 	result, err := c.GetIdentityProvider(ctx, tenantName, idpProvider.Alias)
 	if err != nil {

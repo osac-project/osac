@@ -41,6 +41,10 @@ type MockVendorProvisioner struct {
 	// succeeding. Allows tests to simulate vendor failures.
 	CreateErr error
 
+	// Pending makes CreateVolume return an in-progress response so the
+	// controller's requeue and vendor-context persistence can be tested.
+	Pending bool
+
 	// DeleteErr, when non-nil, is returned by DeleteVolume instead of
 	// succeeding.
 	DeleteErr error
@@ -62,6 +66,15 @@ func (m *MockVendorProvisioner) CreateVolume(_ context.Context, req VendorCreate
 	}
 	if m.UseCreateResponse {
 		return m.CreateResponse, nil
+	}
+	if m.Pending {
+		return VendorCreateVolumeResponse{
+			Protocol: "Block",
+			Pending:  true,
+			VendorContext: map[string]string{
+				"pending": "true",
+			},
+		}, nil
 	}
 	return VendorCreateVolumeResponse{
 		VendorVolumeID: fmt.Sprintf("mock-%d", n),

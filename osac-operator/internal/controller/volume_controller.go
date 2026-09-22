@@ -20,18 +20,22 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/equality"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	mcbuilder "sigs.k8s.io/multicluster-runtime/pkg/builder"
+	mchandler "sigs.k8s.io/multicluster-runtime/pkg/handler"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
@@ -68,6 +72,7 @@ type VendorProvisioner interface {
 // (e.g. the VAST subsystem/view name) without re-deriving them.
 type VendorCreateVolumeRequest struct {
 	Name       string
+	UID        string
 	Provider   string
 	Tenant     string
 	Tier       string
@@ -75,6 +80,11 @@ type VendorCreateVolumeRequest struct {
 	AccessMode v1alpha1.VolumeAccessMode
 	Protocol   v1alpha1.VolumeProtocol
 	Topology   v1alpha1.VolumeTopology
+
+	// VendorContext contains opaque state returned by a previous create call.
+	// It lets asynchronous provisioners resume an in-progress operation without
+	// creating a second backend resource after a reconcile.
+	VendorContext map[string]string
 }
 
 // VendorCreateVolumeResponse carries the vendor-assigned identifiers that the
@@ -82,6 +92,10 @@ type VendorCreateVolumeRequest struct {
 type VendorCreateVolumeResponse struct {
 	VendorVolumeID string
 	Protocol       string
+	// Pending indicates that the vendor resource exists but is not ready yet.
+	// The volume controller persists VendorContext and waits for the vendor
+	// resource watch to report a state change.
+	Pending bool
 
 	// VendorContext holds the backend-specific attach parameters used for this vendor's
 	// CreateVolume call (for example VAST's "subsystem" and "vip_pool_name"). Opaque to the
@@ -95,6 +109,11 @@ type VendorCreateVolumeResponse struct {
 // lets the vendor implementation select the per-tenant credentials needed to
 // authenticate the deprovision call.
 type VendorDeleteVolumeRequest struct {
+	// Name is the OSAC Volume resource name and is the authoritative owner
+	// identity for CR-based provisioners.
+	Name string
+	// UID is the immutable UID of the OSAC Volume resource.
+	UID            string
 	VendorVolumeID string
 	Provider       string
 	Tenant         string
@@ -107,8 +126,9 @@ type VendorDeleteVolumeRequest struct {
 // The feedback controller then syncs that status back to fulfillment-service.
 //
 // Unlike networking and compute controllers that use AAP for provisioning,
-// this controller calls the vendor CSI directly because storage provisioning
-// is a synchronous gRPC call, not an asynchronous job.
+// this controller invokes a provider-specific provisioner directly. A
+// provisioner may complete synchronously or persist backend state and ask the
+// controller to requeue while that state becomes ready.
 type VolumeReconciler struct {
 	client.Client
 	Scheme             *runtime.Scheme
@@ -156,6 +176,13 @@ func (r *VolumeReconciler) Reconcile(ctx context.Context, req mcreconcile.Reques
 	vol := &v1alpha1.Volume{}
 	if err := r.Get(ctx, req.NamespacedName, vol); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	// Skip unmanaged resources, but still allow deletion to proceed so a
+	// finalizer left by an earlier managed reconcile can be removed safely.
+	if val, exists := vol.Annotations[osacManagementStateAnnotation]; vol.ObjectMeta.DeletionTimestamp.IsZero() && exists && val == ManagementStateUnmanaged {
+		ctrllog.FromContext(ctx).Info("skipping volume reconciliation — management state is Unmanaged")
+		return ctrl.Result{}, nil
 	}
 
 	log.Info("start reconcile")
@@ -238,11 +265,13 @@ func (r *VolumeReconciler) handleUpdate(ctx context.Context, vol *v1alpha1.Volum
 	return r.handleProvisioning(ctx, vol)
 }
 
-// handleProvisioning calls the vendor CSI to create the volume on the backend
-// array. On success it transitions the phase to Ready and sets the
-// VendorProvisioned condition. On failure it transitions to Failed and returns
-// nil (no retry) so the error is visible in the condition; the feedback
-// controller will sync this state to the fulfillment-service.
+// handleProvisioning calls the vendor provisioner to create the volume on the
+// backend. On success it transitions the phase to Ready and sets the
+// VendorProvisioned condition. A pending response persists vendor context and
+// relies on the backend resource watch to trigger the next reconcile. On
+// failure it transitions to Failed and returns nil (no retry) so the error is
+// visible in the condition; the feedback controller will sync this state to
+// the fulfillment-service.
 func (r *VolumeReconciler) handleProvisioning(ctx context.Context, vol *v1alpha1.Volume) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
@@ -268,14 +297,16 @@ func (r *VolumeReconciler) handleProvisioning(ctx context.Context, vol *v1alpha1
 	}
 
 	resp, err := provisioner.CreateVolume(ctx, VendorCreateVolumeRequest{
-		Name:       vol.Name,
-		Provider:   provider,
-		Tenant:     vol.GetAnnotations()[osacTenantKey],
-		Tier:       vol.Spec.StorageTier,
-		SizeGiB:    vol.Spec.SizeGiB,
-		AccessMode: vol.Spec.AccessMode,
-		Protocol:   vol.Status.Protocol,
-		Topology:   copyVolumeTopology(vol.Spec.Topology),
+		Name:          vol.Name,
+		UID:           string(vol.UID),
+		Provider:      provider,
+		Tenant:        vol.GetAnnotations()[osacTenantKey],
+		Tier:          vol.Spec.StorageTier,
+		SizeGiB:       vol.Spec.SizeGiB,
+		AccessMode:    vol.Spec.AccessMode,
+		Protocol:      vol.Status.Protocol,
+		Topology:      copyVolumeTopology(vol.Spec.Topology),
+		VendorContext: maps.Clone(vol.Status.VendorContext),
 	})
 	if err != nil {
 		log.Error(err, "vendor provisioning failed")
@@ -283,6 +314,11 @@ func (r *VolumeReconciler) handleProvisioning(ctx context.Context, vol *v1alpha1
 		now := metav1.Now()
 		vol.Status.StateTransitionTime = &now
 		setVendorProvisionedCondition(&vol.Status.Conditions, metav1.ConditionFalse, "ProvisioningFailed", err.Error())
+		return ctrl.Result{}, nil
+	}
+	vol.Status.VendorContext = resp.VendorContext
+	if resp.Pending {
+		vol.Status.Phase = v1alpha1.VolumePhaseProgressing
 		return ctrl.Result{}, nil
 	}
 	if resp.VendorVolumeID == "" {
@@ -294,7 +330,6 @@ func (r *VolumeReconciler) handleProvisioning(ctx context.Context, vol *v1alpha1
 
 	vol.Status.VendorVolumeID = resp.VendorVolumeID
 	vol.Status.Protocol = v1alpha1.VolumeProtocol(resp.Protocol)
-	vol.Status.VendorContext = resp.VendorContext
 	vol.Status.ProvisionedSizeGiB = vol.Spec.SizeGiB
 	vol.Status.Phase = v1alpha1.VolumePhaseReady
 	now := metav1.Now()
@@ -353,12 +388,12 @@ func (r *VolumeReconciler) handleDelete(ctx context.Context, vol *v1alpha1.Volum
 	// volume would leak silently. The reconcile requeues until a provisioner
 	// is available. Volumes that failed before vendor provisioning have no
 	// VendorVolumeID, so they fall through to finalizer removal.
-	if vol.Status.VendorVolumeID != "" {
+	if vol.Status.VendorVolumeID != "" || len(vol.Status.VendorContext) > 0 {
 		if len(r.VendorProvisioners) == 0 {
 			return ctrl.Result{}, fmt.Errorf(
-				"volume %q has vendorVolumeID %q but no vendor provisioner is configured; "+
+				"volume %q has vendor state but no vendor provisioner is configured; "+
 					"refusing to remove finalizer to avoid leaking the backend volume",
-				vol.Name, vol.Status.VendorVolumeID)
+				vol.Name)
 		}
 		provider := resolvedVolumeProvider(vol)
 		provisioner, err := r.VendorProvisioners.Lookup(provider)
@@ -366,6 +401,8 @@ func (r *VolumeReconciler) handleDelete(ctx context.Context, vol *v1alpha1.Volum
 			return ctrl.Result{}, err
 		}
 		err = provisioner.DeleteVolume(ctx, VendorDeleteVolumeRequest{
+			Name:           vol.Name,
+			UID:            string(vol.UID),
 			VendorVolumeID: vol.Status.VendorVolumeID,
 			Provider:       provider,
 			Tenant:         vol.GetAnnotations()[osacTenantKey],
@@ -413,14 +450,42 @@ func VolumeNamespacePredicate(namespace string) predicate.Predicate {
 }
 
 // SetupWithManager registers the Volume controller with the manager. It
-// watches Volume CRs in the configured namespace on the local (hub) cluster.
+// watches Volume CRs and owned TopoLVM LogicalVolumes on the local (hub)
+// cluster.
 func (r *VolumeReconciler) SetupWithManager(mgr mcmanager.Manager) error {
+	logicalVolumeMetadata := &metav1.PartialObjectMetadata{}
+	logicalVolumeMetadata.SetGroupVersionKind(logicalVolumeGVK)
+
 	return mcbuilder.ControllerManagedBy(mgr).
 		For(&v1alpha1.Volume{},
 			mcbuilder.WithPredicates(VolumeNamespacePredicate(r.VolumeNamespace)),
 			mcbuilder.WithEngageWithLocalCluster(true),
 			mcbuilder.WithEngageWithProviderClusters(false)).
+		WatchesMetadata(
+			logicalVolumeMetadata,
+			mchandler.EnqueueRequestsFromMapFunc(r.mapLogicalVolumeToVolume),
+			mcbuilder.WithPredicates(logicalVolumeOwnerPredicate()),
+			mcbuilder.WithEngageWithLocalCluster(true),
+			mcbuilder.WithEngageWithProviderClusters(false),
+		).
 		Complete(r)
+}
+
+func logicalVolumeOwnerPredicate() predicate.Predicate {
+	return predicate.NewPredicateFuncs(func(obj client.Object) bool {
+		return obj.GetAnnotations()[logicalVolumeOwnerAnnotation] != ""
+	})
+}
+
+func (r *VolumeReconciler) mapLogicalVolumeToVolume(_ context.Context, obj client.Object) []reconcile.Request {
+	volumeName := obj.GetAnnotations()[logicalVolumeOwnerAnnotation]
+	if volumeName == "" {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{
+		Namespace: r.VolumeNamespace,
+		Name:      volumeName,
+	}}}
 }
 
 // setVendorProvisionedCondition upserts the VendorProvisioned condition.

@@ -16,6 +16,7 @@ import (
 const (
 	defaultPollInitialInterval = 1 * time.Second
 	defaultPollMaxInterval     = 30 * time.Second
+	volumeProvisioningError    = "volume provisioning failed"
 
 	// noAttachEndpoint is the sentinel vendor-controller endpoint for backends
 	// that need no controller-side attach/detach — node-local storage such as
@@ -117,7 +118,7 @@ func (c *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 			}
 		} else {
 			klog.Errorf("Failed to create volume: %v", err)
-			return nil, err
+			return nil, safeVolumeProvisioningError(err)
 		}
 	}
 	if vol == nil {
@@ -437,21 +438,21 @@ func (c *ControllerServer) pollVolumeUntilAvailable(ctx context.Context, volumeI
 	for {
 		vol, err := c.volumes.GetVolume(ctx, volumeID)
 		if err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to get volume %s: %v", volumeID, err)
+			klog.Errorf("Failed to get volume %s while waiting for provisioning: %v", volumeID, err)
+			return nil, safeVolumeProvisioningError(err)
 		}
 
 		switch vol.State {
 		case fulfillment.VolumeStateAvailable:
 			return vol, nil
 		case fulfillment.VolumeStateError:
-			if vol.Message != "" {
-				return nil, status.Errorf(codes.Internal, "volume %s entered error state: %s", volumeID, vol.Message)
-			}
-			return nil, status.Errorf(codes.Internal, "volume %s entered error state", volumeID)
+			klog.Errorf("Volume %s entered error state: %s", volumeID, vol.Message)
+			return nil, status.Error(codes.Internal, volumeProvisioningError)
 		case fulfillment.VolumeStateCreating:
 			// continue polling
 		default:
-			return nil, status.Errorf(codes.Internal, "volume %s in unexpected state %s", volumeID, vol.State)
+			klog.Errorf("Volume %s entered unexpected state %s", volumeID, vol.State)
+			return nil, status.Error(codes.Internal, volumeProvisioningError)
 		}
 
 		select {
@@ -463,4 +464,12 @@ func (c *ControllerServer) pollVolumeUntilAvailable(ctx context.Context, volumeI
 
 		interval = min(interval*2, c.pollMaxInterval)
 	}
+}
+
+func safeVolumeProvisioningError(err error) error {
+	code := codes.Internal
+	if st, ok := status.FromError(err); ok && st.Code() != codes.OK {
+		code = st.Code()
+	}
+	return status.Error(code, volumeProvisioningError)
 }

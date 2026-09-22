@@ -23,7 +23,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"sort"
 	"strings"
 	"testing"
 
@@ -146,32 +145,6 @@ func findMainHubAccessRole(t *testing.T, roles []clusterRole) clusterRole {
 	return clusterRole{} // unreachable
 }
 
-// ruleKey uniquely identifies a rule by its apiGroup + sorted resource list.
-type ruleKey struct {
-	apiGroup  string
-	resources string // comma-joined sorted resources
-}
-
-// indexRules groups ClusterRole rules by (apiGroup, resources) so that
-// assertions can look up expected verbs by resource group.
-func indexRules(rules []policyRule) map[ruleKey][]string {
-	idx := make(map[ruleKey][]string, len(rules))
-	for _, r := range rules {
-		for _, group := range r.APIGroups {
-			res := make([]string, len(r.Resources))
-			copy(res, r.Resources)
-			sort.Strings(res)
-
-			key := ruleKey{
-				apiGroup:  group,
-				resources: strings.Join(res, ","),
-			}
-			idx[key] = r.Verbs
-		}
-	}
-	return idx
-}
-
 // verbExpectation declares which verbs a resource group must contain.
 type verbExpectation struct {
 	name      string   // human-readable label for test output
@@ -255,20 +228,10 @@ func expectedHubAccessVerbs() []verbExpectation {
 func TestHubAccessClusterRoleVerbs(t *testing.T) {
 	roles := loadHubAccessClusterRoles(t)
 	cr := findMainHubAccessRole(t, roles)
-	ruleIndex := indexRules(cr.Rules)
 
 	for _, exp := range expectedHubAccessVerbs() {
 		t.Run(exp.name, func(t *testing.T) {
-			sorted := make([]string, len(exp.resources))
-			copy(sorted, exp.resources)
-			sort.Strings(sorted)
-
-			key := ruleKey{
-				apiGroup:  exp.apiGroup,
-				resources: strings.Join(sorted, ","),
-			}
-
-			actualVerbs, ok := ruleIndex[key]
+			actualVerbs, ok := clusterRoleRuleVerbs(cr, exp.apiGroup, exp.resources)
 			if !ok {
 				t.Fatalf("rule group not found in ClusterRole: apiGroup=%q resources=%v",
 					exp.apiGroup, exp.resources)

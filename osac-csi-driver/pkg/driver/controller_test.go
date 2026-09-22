@@ -440,7 +440,7 @@ func TestCreateVolume_ErrorState(t *testing.T) {
 		Parameters:         map[string]string{"tier": "gold"},
 	})
 	assertCode(t, err, codes.Internal)
-	if got, want := status.Convert(err).Message(), "volume vol-1 entered error state: insufficient vg1 capacity"; got != want {
+	if got, want := status.Convert(err).Message(), "volume provisioning failed"; got != want {
 		t.Fatalf("error message = %q, want %q", got, want)
 	}
 }
@@ -518,6 +518,9 @@ func TestCreateVolume_CreateError(t *testing.T) {
 		Parameters:         map[string]string{"tier": "gold"},
 	})
 	assertCode(t, err, codes.Unavailable)
+	if got, want := status.Convert(err).Message(), "volume provisioning failed"; got != want {
+		t.Fatalf("error message = %q, want %q", got, want)
+	}
 }
 
 // --- DeleteVolume tests ---

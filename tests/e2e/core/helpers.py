@@ -33,6 +33,18 @@ def assert_grpc_rejected(exc_info: pytest.ExceptionInfo[subprocess.CalledProcess
     assert re.search(rf"Code:\s*{code}", combined), f"Expected gRPC {code}, got: {combined.strip()}"
 
 
+def assert_grpc_method_unavailable(
+    exc_info: pytest.ExceptionInfo[subprocess.CalledProcessError], *, service: str, method: str
+) -> None:
+    """Assert that grpcurl cannot invoke a method absent from a public service descriptor."""
+    exc = exc_info.value
+    combined: str = (exc.stderr or "") + (exc.stdout or "")
+    descriptor_error = f'service "{service}" does not include a method named "{method}"'
+    assert re.search(r"Code:\s*Unimplemented", combined) or descriptor_error in combined, (
+        f"Expected {service}/{method} to be unavailable, got: {combined.strip()}"
+    )
+
+
 def assert_grpc_field_violation(
     exc_info: pytest.ExceptionInfo[subprocess.CalledProcessError], *, field_path: str
 ) -> None:

@@ -49,8 +49,10 @@ that run's release notes/Slack summary, not implied by the number itself.
 `osac-ui` is a mono-repo component like every other one here — built,
 tested, tagged, and published by this same pipeline, with its own
 `osac-ui/vX.Y.Z` tags. It has its own unit-test job but no integration-test
-suite, and (like `fulfillment-service`) never gets a GitHub Release page,
-but otherwise follows the exact same version model as the rest.
+suite, and never gets a GitHub Release page (`fulfillment-service` does,
+just with attached binaries rather than a plain changelog — see "What you
+get on success" below), but otherwise follows the exact same version model
+as the rest.
 
 ## How nightlies work
 

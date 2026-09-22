@@ -144,11 +144,13 @@ see that pipeline's documentation for verifying those instead.
 ## Verifying binary signatures
 
 The `osac` CLI and `fulfillment-service` binaries are released to GitHub
-Releases by `publish-binaries.yaml`, triggered on `fulfillment-service/vX.Y.Z`
-tags. Each release binary is signed the same keyless way as the images and
-charts above; goreleaser's `signs` step produces a single Sigstore bundle
-(`<binary>.sigstore.json`, containing both the certificate and signature)
-alongside every binary in the release.
+Releases by `publish-binaries.yaml`, called directly by
+`osac-build-and-publish.yaml` right after it tags a release that bumps
+fulfillment-service (it has no trigger of its own). Each release binary is
+signed the same keyless way as the images and charts above; goreleaser's
+`signs` step produces a single Sigstore bundle (`<binary>.sigstore.json`,
+containing both the certificate and signature) alongside every binary in
+the release.
 
 Download a binary with its bundle, then verify:
 
@@ -159,10 +161,14 @@ gh release download fulfillment-service/<version> \
 
 cosign verify-blob \
   --bundle osac_<os>_<arch>.sigstore.json \
-  --certificate-identity-regexp '^https://github\.com/osac-project/osac/\.github/workflows/publish-binaries\.yaml@refs/tags/fulfillment-service/.+$' \
+  --certificate-identity-regexp '^https://github\.com/osac-project/osac/\.github/workflows/publish-binaries\.yaml@refs/heads/main$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   osac_<os>_<arch>
 ```
+
+If `osac-release.yaml` was manually dispatched against a different ref,
+replace `refs/heads/main` with the exact ref used (same caveat as the
+image/chart identities above).
 
 Substitute `fulfillment-service` for `osac` to verify that binary instead —
 both are built and signed from the same release. `<os>`/`<arch>` match the

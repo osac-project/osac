@@ -16,11 +16,16 @@ import (
 
 type fakeNodePlugin struct {
 	csi.UnimplementedNodeServer
-	stageCalled     bool
-	unstageCalled   bool
-	publishCalled   bool
-	unpublishCalled bool
-	statsCalled     bool
+	stageCalled       bool
+	unstageCalled     bool
+	publishCalled     bool
+	unpublishCalled   bool
+	statsCalled       bool
+	stageVolumeID     string
+	unstageVolumeID   string
+	publishVolumeID   string
+	unpublishVolumeID string
+	statsVolumeID     string
 
 	stageErr     error
 	unstageErr   error
@@ -30,40 +35,45 @@ type fakeNodePlugin struct {
 	statsErr     error
 }
 
-func (f *fakeNodePlugin) NodeStageVolume(_ context.Context, _ *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
+func (f *fakeNodePlugin) NodeStageVolume(_ context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
 	f.stageCalled = true
+	f.stageVolumeID = req.GetVolumeId()
 	if f.stageErr != nil {
 		return nil, f.stageErr
 	}
 	return &csi.NodeStageVolumeResponse{}, nil
 }
 
-func (f *fakeNodePlugin) NodeUnstageVolume(_ context.Context, _ *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error) {
+func (f *fakeNodePlugin) NodeUnstageVolume(_ context.Context, req *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error) {
 	f.unstageCalled = true
+	f.unstageVolumeID = req.GetVolumeId()
 	if f.unstageErr != nil {
 		return nil, f.unstageErr
 	}
 	return &csi.NodeUnstageVolumeResponse{}, nil
 }
 
-func (f *fakeNodePlugin) NodePublishVolume(_ context.Context, _ *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
+func (f *fakeNodePlugin) NodePublishVolume(_ context.Context, req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
 	f.publishCalled = true
+	f.publishVolumeID = req.GetVolumeId()
 	if f.publishErr != nil {
 		return nil, f.publishErr
 	}
 	return &csi.NodePublishVolumeResponse{}, nil
 }
 
-func (f *fakeNodePlugin) NodeUnpublishVolume(_ context.Context, _ *csi.NodeUnpublishVolumeRequest) (*csi.NodeUnpublishVolumeResponse, error) {
+func (f *fakeNodePlugin) NodeUnpublishVolume(_ context.Context, req *csi.NodeUnpublishVolumeRequest) (*csi.NodeUnpublishVolumeResponse, error) {
 	f.unpublishCalled = true
+	f.unpublishVolumeID = req.GetVolumeId()
 	if f.unpublishErr != nil {
 		return nil, f.unpublishErr
 	}
 	return &csi.NodeUnpublishVolumeResponse{}, nil
 }
 
-func (f *fakeNodePlugin) NodeGetVolumeStats(_ context.Context, _ *csi.NodeGetVolumeStatsRequest) (*csi.NodeGetVolumeStatsResponse, error) {
+func (f *fakeNodePlugin) NodeGetVolumeStats(_ context.Context, req *csi.NodeGetVolumeStatsRequest) (*csi.NodeGetVolumeStatsResponse, error) {
 	f.statsCalled = true
+	f.statsVolumeID = req.GetVolumeId()
 	if f.statsErr != nil {
 		return nil, f.statsErr
 	}
@@ -575,6 +585,74 @@ func TestNodeGetVolumeStats(t *testing.T) {
 		})
 		assertGRPCCode(t, err, codes.FailedPrecondition)
 	})
+}
+
+func TestNodeServerUsesVendorVolumeID(t *testing.T) {
+	ctx := context.Background()
+	sock, plugin, cleanup := startFakeNodePlugin(t)
+	defer cleanup()
+	ns := newTestNodeServer(t, "vendor-a", sock)
+	volumeContext := map[string]string{
+		"osac.backend":            "vendor-a",
+		"osac.volume-id":          "generic-vendor-id",
+		topolvmVolumeIDContextKey: "topolvm-vendor-id",
+	}
+
+	_, err := ns.NodeStageVolume(ctx, &csi.NodeStageVolumeRequest{
+		VolumeId:          "fulfillment-volume-id",
+		StagingTargetPath: "/staging/volume",
+		VolumeCapability:  blockCap(),
+		VolumeContext:     volumeContext,
+	})
+	if err != nil {
+		t.Fatalf("stage: %v", err)
+	}
+
+	_, err = ns.NodePublishVolume(ctx, &csi.NodePublishVolumeRequest{
+		VolumeId:         "fulfillment-volume-id",
+		TargetPath:       "/target/volume",
+		VolumeCapability: blockCap(),
+		VolumeContext:    volumeContext,
+	})
+	if err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	_, err = ns.NodeGetVolumeStats(ctx, &csi.NodeGetVolumeStatsRequest{
+		VolumeId:   "fulfillment-volume-id",
+		VolumePath: "/target/volume",
+	})
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+
+	_, err = ns.NodeUnpublishVolume(ctx, &csi.NodeUnpublishVolumeRequest{
+		VolumeId:   "fulfillment-volume-id",
+		TargetPath: "/target/volume",
+	})
+	if err != nil {
+		t.Fatalf("unpublish: %v", err)
+	}
+
+	_, err = ns.NodeUnstageVolume(ctx, &csi.NodeUnstageVolumeRequest{
+		VolumeId:          "fulfillment-volume-id",
+		StagingTargetPath: "/staging/volume",
+	})
+	if err != nil {
+		t.Fatalf("unstage: %v", err)
+	}
+
+	for operation, got := range map[string]string{
+		"stage":     plugin.stageVolumeID,
+		"publish":   plugin.publishVolumeID,
+		"stats":     plugin.statsVolumeID,
+		"unpublish": plugin.unpublishVolumeID,
+		"unstage":   plugin.unstageVolumeID,
+	} {
+		if got != "topolvm-vendor-id" {
+			t.Errorf("%s forwarded volume ID = %q, want topolvm-vendor-id", operation, got)
+		}
+	}
 }
 
 // --- NodeGetInfo / NodeGetCapabilities ---

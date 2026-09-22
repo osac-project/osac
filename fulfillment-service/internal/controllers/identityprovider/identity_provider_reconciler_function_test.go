@@ -796,7 +796,7 @@ var _ = Describe("Client secret secret resolution", func() {
 })
 
 var _ = Describe("Skip Reconciliation", func() {
-	It("should re-sync ready identity providers to IDP", func() {
+	It("should sync UNKNOWN identity providers to IDP via CreateIdentityProvider", func() {
 		ctrl := gomock.NewController(GinkgoT())
 		defer ctrl.Finish()
 		mockClient := idp.NewMockClientInterface(ctrl)
@@ -807,7 +807,7 @@ var _ = Describe("Skip Reconciliation", func() {
 		}
 
 		identityProvider := privatev1.IdentityProvider_builder{
-			Id: "idp-ready-update",
+			Id: "idp-unknown-sync",
 			Metadata: privatev1.Metadata_builder{
 				Name:       "test-oidc",
 				Tenant:     "my-org",
@@ -824,14 +824,9 @@ var _ = Describe("Skip Reconciliation", func() {
 				}.Build(),
 			}.Build(),
 			Status: privatev1.IdentityProviderStatus_builder{
-				Phase: privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_READY,
+				Phase: privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_UNKNOWN,
 			}.Build(),
 		}.Build()
-
-		// The reconciler should set the phase to UNKNOWN via setDefaults (since the server
-		// resets it before persisting), but for this test we verify that READY-phase objects
-		// are NOT silently skipped.  We manually set UNKNOWN to simulate the server reset.
-		identityProvider.GetStatus().SetPhase(privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_UNKNOWN)
 
 		mockClient.EXPECT().
 			CreateIdentityProvider(gomock.Any(), "my-org", gomock.Any()).
@@ -841,6 +836,40 @@ var _ = Describe("Skip Reconciliation", func() {
 				return idpProvider, nil
 			}).
 			Times(1)
+
+		task := &task{
+			r:                reconciler,
+			identityProvider: identityProvider,
+		}
+
+		err := task.update(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(identityProvider.GetStatus().GetPhase()).To(Equal(privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_READY))
+	})
+
+	It("should skip reconciliation for READY identity providers with no spec change", func() {
+		ctrl := gomock.NewController(GinkgoT())
+		defer ctrl.Finish()
+		mockClient := idp.NewMockClientInterface(ctrl)
+
+		reconciler := &function{
+			logger:    logger,
+			idpClient: mockClient,
+		}
+
+		identityProvider := privatev1.IdentityProvider_builder{
+			Metadata: privatev1.Metadata_builder{
+				Name:       "stable-idp",
+				Tenant:     "my-org",
+				Finalizers: []string{finalizers.Controller},
+			}.Build(),
+			Status: privatev1.IdentityProviderStatus_builder{
+				Phase: privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_READY,
+			}.Build(),
+		}.Build()
+
+		// No Keycloak methods should be invoked for a READY IDP.
+		// gomock will fail the test if any unexpected call is made on mockClient.
 
 		task := &task{
 			r:                reconciler,

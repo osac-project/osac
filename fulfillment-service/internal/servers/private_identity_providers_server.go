@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
 	grpccodes "google.golang.org/grpc/codes"
@@ -176,13 +177,22 @@ func (s *PrivateIdentityProvidersServer) Update(ctx context.Context,
 	if err = s.validateClientSecretSecret(ctx, request.GetObject()); err != nil {
 		return
 	}
-	// Reset the phase so the reconciler re-syncs the updated spec to Keycloak.
-	// This also provides a recovery path for IDPs stuck in ERROR phase.
-	obj := request.GetObject()
-	if !obj.HasStatus() {
-		obj.SetStatus(&privatev1.IdentityProviderStatus{})
+	// Only reset phase when the client is changing spec fields (user-initiated intent change).
+	// Do NOT reset when the reconciler is writing status back (would cause infinite reconcile loop).
+	hasSpecUpdate := false
+	for _, path := range request.GetUpdateMask().GetPaths() {
+		if strings.HasPrefix(path, "spec.") || path == "spec" {
+			hasSpecUpdate = true
+			break
+		}
 	}
-	obj.GetStatus().SetPhase(privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_UNKNOWN)
+	if hasSpecUpdate {
+		obj := request.GetObject()
+		if !obj.HasStatus() {
+			obj.SetStatus(&privatev1.IdentityProviderStatus{})
+		}
+		obj.GetStatus().SetPhase(privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_UNKNOWN)
+	}
 	err = s.generic.Update(ctx, request, &response)
 	return
 }

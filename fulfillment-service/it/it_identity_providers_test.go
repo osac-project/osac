@@ -15,6 +15,7 @@ package it
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
@@ -542,6 +543,102 @@ var _ = Describe("Identity provider lifecycle", func() {
 				"IdP with alias %q should exist in Keycloak", entry.alias)
 		}
 	})
+
+	It("Recovers from ERROR phase via spec update and upserts to Keycloak", func() {
+		// This test verifies the 409-upsert path: when an IDP was previously created in
+		// Keycloak but the fulfillment record is in ERROR phase (e.g. linking failed),
+		// editing the spec resets the phase to UNKNOWN. The reconciler attempts
+		// CreateIdentityProvider which returns 409 (already exists), then falls back to
+		// UpdateIdentityProvider, resulting in a READY state.
+		//
+		// Limitation: we cannot directly pre-seed Keycloak with an orphaned IdP in the
+		// integration harness, so we simulate the scenario by creating an IDP normally
+		// (which seeds Keycloak), then forcing a re-reconcile via a spec update. The
+		// reconciler's syncToIDP calls Create, gets 409, and upserts — exercising the
+		// same code path.
+
+		idpName := fmt.Sprintf("test-upsert-%s", uuid.New())
+		expectedAlias := fmt.Sprintf("%s-%s", tenantName, idpName)
+
+		createResponse, err := client.Create(ctx, privatev1.IdentityProvidersCreateRequest_builder{
+			Object: privatev1.IdentityProvider_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   idpName,
+					Tenant: tenantName,
+				}.Build(),
+				Spec: privatev1.IdentityProviderSpec_builder{
+					Title:   "Upsert Test Provider",
+					Enabled: true,
+					Oidc: privatev1.OidcConfig_builder{
+						AuthorizationUrl: "https://oidc.example.com/authorize",
+						TokenUrl:         "https://oidc.example.com/token",
+						ClientId:         "test-client",
+						Issuer:           "https://oidc.example.com",
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		idpID := createResponse.GetObject().GetId()
+		DeferCleanup(func() {
+			_, _ = client.Delete(ctx, privatev1.IdentityProvidersDeleteRequest_builder{
+				Id: idpID,
+			}.Build())
+		})
+
+		// Wait for initial READY
+		Eventually(
+			func(g Gomega) {
+				getResponse, err := client.Get(ctx, privatev1.IdentityProvidersGetRequest_builder{
+					Id: idpID,
+				}.Build())
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(getResponse.GetObject().GetStatus().GetPhase()).To(
+					Equal(privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_READY),
+				)
+			},
+			2*time.Minute,
+			time.Second,
+		).Should(Succeed())
+
+		// Update the title — this resets phase to UNKNOWN, triggering re-sync.
+		// Since the IdP already exists in Keycloak, CreateIdentityProvider returns 409
+		// and the reconciler falls back to UpdateIdentityProvider (upsert path).
+		_, err = client.Update(ctx, privatev1.IdentityProvidersUpdateRequest_builder{
+			Object: privatev1.IdentityProvider_builder{
+				Id: idpID,
+				Spec: privatev1.IdentityProviderSpec_builder{
+					Title: "Upserted Title",
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.title"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		// Wait for re-reconciliation to READY
+		Eventually(
+			func(g Gomega) {
+				getResponse, err := client.Get(ctx, privatev1.IdentityProvidersGetRequest_builder{
+					Id: idpID,
+				}.Build())
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(getResponse.GetObject().GetStatus().GetPhase()).To(
+					Equal(privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_READY),
+				)
+			},
+			2*time.Minute,
+			time.Second,
+		).Should(Succeed())
+
+		// Verify Keycloak has the upserted display name
+		code, body, err := tool.KeycloakAdminRequest(ctx, http.MethodGet,
+			fmt.Sprintf("/identity-provider/instances/%s", expectedAlias), nil)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(code).To(Equal(http.StatusOK))
+		var kcIdp map[string]interface{}
+		Expect(json.Unmarshal(body, &kcIdp)).To(Succeed())
+		Expect(kcIdp["displayName"]).To(Equal("Upserted Title"))
+	})
 })
 
 var _ = Describe("Identity provider client_secret_secret", func() {
@@ -817,7 +914,9 @@ var _ = Describe("Identity provider client_secret_secret", func() {
 			fmt.Sprintf("/identity-provider/instances/%s", expectedAlias), nil)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(code).To(Equal(http.StatusOK))
-		Expect(string(body)).To(ContainSubstring("Updated Title"))
+		var kcIdp map[string]interface{}
+		Expect(json.Unmarshal(body, &kcIdp)).To(Succeed())
+		Expect(kcIdp["displayName"]).To(Equal("Updated Title"))
 	})
 
 	It("Enables and disables identity provider via update", func() {
@@ -897,7 +996,9 @@ var _ = Describe("Identity provider client_secret_secret", func() {
 			fmt.Sprintf("/identity-provider/instances/%s", expectedAlias), nil)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(code).To(Equal(http.StatusOK))
-		Expect(string(body)).To(ContainSubstring(`"enabled":false`))
+		var kcIdp map[string]interface{}
+		Expect(json.Unmarshal(body, &kcIdp)).To(Succeed())
+		Expect(kcIdp["enabled"]).To(BeFalse())
 	})
 
 	It("Rotates client_secret_secret and reconciles updated secret to Keycloak", func() {

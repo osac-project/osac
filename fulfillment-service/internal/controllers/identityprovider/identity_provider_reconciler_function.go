@@ -152,7 +152,13 @@ func (t *task) update(ctx context.Context) error {
 		return nil
 	}
 
-	// Identity provider is UNSPECIFIED or UNKNOWN, perform initial sync to IDP
+	// Fast-path: READY IDPs are in sync unless the spec was changed.
+	// Phase is reset to UNKNOWN by the private server when a spec update is received.
+	if state == privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_READY {
+		return nil
+	}
+
+	// Identity provider is UNSPECIFIED or UNKNOWN, perform initial sync (or re-sync after spec change) to IDP
 	return t.syncToIDP(ctx)
 }
 

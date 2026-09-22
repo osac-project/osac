@@ -37,16 +37,24 @@ var _ = Describe("Service enablement", func() {
 
 	It("filters HostTypes and rejects disabled service endpoints", func(ctx context.Context) {
 		var (
-			expectedServices  []string
-			disabledHostType  string
-			enabledHostType   string
-			disabledRestPath  string
-			disabledGrpcError error
+			expectedPublicServices  []publicv1.ServiceTier
+			expectedPrivateServices []privatev1.ServiceTier
+			disabledHostType        string
+			enabledHostType         string
+			disabledRestPath        string
+			disabledGrpcError       error
 		)
 
 		switch config.TestSuite {
 		case "bmaas-disabled":
-			expectedServices = []string{"caas", "vmaas"}
+			expectedPublicServices = []publicv1.ServiceTier{
+				publicv1.ServiceTier_SERVICE_TIER_CAAS,
+				publicv1.ServiceTier_SERVICE_TIER_VMAAS,
+			}
+			expectedPrivateServices = []privatev1.ServiceTier{
+				privatev1.ServiceTier_SERVICE_TIER_CAAS,
+				privatev1.ServiceTier_SERVICE_TIER_VMAAS,
+			}
 			disabledHostType = fmt.Sprintf("it-bm-host-type-%s", uuid.New())
 			enabledHostType = fmt.Sprintf("it-vm-host-type-%s", uuid.New())
 			disabledRestPath = "/api/fulfillment/v1/baremetal_instances"
@@ -54,7 +62,14 @@ var _ = Describe("Service enablement", func() {
 			client := publicv1.NewBareMetalInstancesClient(tool.ExternalView().UserConn())
 			_, disabledGrpcError = client.List(ctx, publicv1.BareMetalInstancesListRequest_builder{}.Build())
 		case "vmaas-disabled":
-			expectedServices = []string{"caas", "bmaas"}
+			expectedPublicServices = []publicv1.ServiceTier{
+				publicv1.ServiceTier_SERVICE_TIER_CAAS,
+				publicv1.ServiceTier_SERVICE_TIER_BMAAS,
+			}
+			expectedPrivateServices = []privatev1.ServiceTier{
+				privatev1.ServiceTier_SERVICE_TIER_CAAS,
+				privatev1.ServiceTier_SERVICE_TIER_BMAAS,
+			}
 			disabledHostType = fmt.Sprintf("it-vm-host-type-%s", uuid.New())
 			enabledHostType = fmt.Sprintf("it-bm-host-type-%s", uuid.New())
 			disabledRestPath = "/api/fulfillment/v1/compute_instances"
@@ -69,12 +84,12 @@ var _ = Describe("Service enablement", func() {
 		publicCapabilities := publicv1.NewCapabilitiesClient(tool.ExternalView().AnonymousConn())
 		publicCapabilitiesResponse, err := publicCapabilities.Get(ctx, publicv1.CapabilitiesGetRequest_builder{}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		Expect(publicCapabilitiesResponse.GetEnabledServices()).To(Equal(expectedServices))
+		Expect(publicCapabilitiesResponse.GetEnabledServices()).To(Equal(expectedPublicServices))
 
 		privateCapabilities := privatev1.NewCapabilitiesClient(tool.InternalView().AdminConn())
 		privateCapabilitiesResponse, err := privateCapabilities.Get(ctx, privatev1.CapabilitiesGetRequest_builder{}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		Expect(privateCapabilitiesResponse.GetEnabledServices()).To(Equal(expectedServices))
+		Expect(privateCapabilitiesResponse.GetEnabledServices()).To(Equal(expectedPrivateServices))
 
 		Expect(grpcstatus.Code(disabledGrpcError)).To(Equal(grpccodes.Unavailable))
 

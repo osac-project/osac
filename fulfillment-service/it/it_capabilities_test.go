@@ -25,16 +25,25 @@ import (
 
 var _ = Describe("Capabilities", func() {
 	It("advertises enabled services over public and private gRPC", func(ctx context.Context) {
-		expected := []string{"caas", "vmaas", "bmaas"}
+		expectedPublic := []publicv1.ServiceTier{
+			publicv1.ServiceTier_SERVICE_TIER_CAAS,
+			publicv1.ServiceTier_SERVICE_TIER_VMAAS,
+			publicv1.ServiceTier_SERVICE_TIER_BMAAS,
+		}
+		expectedPrivate := []privatev1.ServiceTier{
+			privatev1.ServiceTier_SERVICE_TIER_CAAS,
+			privatev1.ServiceTier_SERVICE_TIER_VMAAS,
+			privatev1.ServiceTier_SERVICE_TIER_BMAAS,
+		}
 
 		publicClient := publicv1.NewCapabilitiesClient(tool.ExternalView().AnonymousConn())
 		publicResponse, err := publicClient.Get(ctx, publicv1.CapabilitiesGetRequest_builder{}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		Expect(publicResponse.GetEnabledServices()).To(Equal(expected))
+		Expect(publicResponse.GetEnabledServices()).To(Equal(expectedPublic))
 
 		privateClient := privatev1.NewCapabilitiesClient(tool.InternalView().AdminConn())
 		privateResponse, err := privateClient.Get(ctx, privatev1.CapabilitiesGetRequest_builder{}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		Expect(privateResponse.GetEnabledServices()).To(Equal(expected))
+		Expect(privateResponse.GetEnabledServices()).To(Equal(expectedPrivate))
 	})
 })

@@ -12,8 +12,6 @@ on:
   push:
     branches:
     - main
-    tags:
-    - 'bare-metal-fulfillment-operator/v*'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
@@ -105,7 +103,6 @@ jobs:
       packages: write
     outputs:
       operator-digest: ${{ steps.build-operator.outputs.digest }}
-      manifest-digest: ${{ steps.build-manifests.outputs.digest }}
 
     steps:
       - name: Checkout repository
@@ -123,28 +120,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Component-scoped tags (see the `tags:` trigger above) can't be used verbatim
-      # as image tags -- Docker/OCI tags can't contain the '/' the git tag does --
-      # so strip the prefix here to recover the bare vX.Y.Z for the actual image tags.
-      - name: Compute release version
-        if: startsWith(github.ref, 'refs/tags/bare-metal-fulfillment-operator/')
-        run: |
-          version="${GITHUB_REF_NAME#bare-metal-fulfillment-operator/}"
-          # Rejects build metadata (+...) and validates the core/prerelease
-          # shape before it's trusted as an image tag.
-          semver_re='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\.((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?$'
-          if ! [[ "${version}" =~ ${semver_re} ]]; then
-            echo "::error::Tag '${GITHUB_REF_NAME}' is not a valid semver release tag"
-            exit 1
-          fi
-          # Prerelease identifiers can themselves contain dots (e.g. v1.2.3-beta.1),
-          # so derive major/minor from the prerelease-stripped core version --
-          # otherwise a dotted prerelease would corrupt the major.minor alias.
-          core="${version%%-*}"
-          echo "RELEASE_VERSION=${version}" >> "$GITHUB_ENV"
-          echo "RELEASE_MAJOR_MINOR=${core%.*}" >> "$GITHUB_ENV"
-          echo "RELEASE_MAJOR=${core%%.*}" >> "$GITHUB_ENV"
-
       # Extract metadata (tags, labels) for Docker
       # https://github.com/docker/metadata-action
       - name: Extract Docker metadata
@@ -152,15 +127,7 @@ jobs:
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302  # v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          # No `type=ref,event=tag` here: the `tags:` trigger above only ever
-          # matches this component's own scoped prefix, so the tag-triggered
-          # case is always covered by the three raw entries below already --
-          # keeping it would just add a redundant, slash-sanitized duplicate
-          # tag (e.g. "bare-metal-fulfillment-operator-v1.2.3").
           tags: |
-            type=raw,value=${{ env.RELEASE_VERSION }},enable=${{ env.RELEASE_VERSION != '' }}
-            type=raw,value=${{ env.RELEASE_MAJOR_MINOR }},enable=${{ env.RELEASE_VERSION != '' }}
-            type=raw,value=${{ env.RELEASE_MAJOR }},enable=${{ env.RELEASE_VERSION != '' }}
             type=ref,event=branch
             type=ref,event=pr
             type=sha
@@ -178,76 +145,6 @@ jobs:
           push: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-
-      # Extract the commit SHA tag for manifest generation
-      - name: Extract commit SHA tag
-        id: sha-tag
-        if: github.event_name != 'pull_request' && github.event_name != 'merge_group'
-        run: |
-          # Extract the sha tag from the metadata output
-          FULL_SHA_TAG=$(echo "${{ steps.meta.outputs.tags }}" | grep -E "sha-[0-9a-f]{7}" | head -n1)
-          SHA_TAG=$(echo "$FULL_SHA_TAG" | sed "s/.*://")
-          echo "sha-tag=$SHA_TAG" >> $GITHUB_OUTPUT
-          echo "full-sha-tag=$FULL_SHA_TAG" >> $GITHUB_OUTPUT
-          echo "manifest-tag=$SHA_TAG-manifests" >> $GITHUB_OUTPUT
-          echo "Using SHA tag: $SHA_TAG"
-          echo "Full SHA tag: $FULL_SHA_TAG"
-          echo "Manifest tag: $SHA_TAG-manifests"
-
-      # Generate manifests with helm template pointing to the SHA-tagged image
-      - name: Generate manifests with helm template
-        if: github.event_name != 'pull_request' && github.event_name != 'merge_group'
-        working-directory: bare-metal-fulfillment-operator
-        env:
-          SHA_IMG: ${{ steps.sha-tag.outputs.full-sha-tag }}
-        run: |
-          mkdir -p dist
-          REPO="${SHA_IMG%%:*}"
-          TAG="${SHA_IMG##*:}"
-          helm template bmf-operator-crds charts/operator-crds/ > dist/install.yaml
-          echo "---" >> dist/install.yaml
-          helm template bmf-operator charts/operator/ \
-            --set image.repository="$REPO" \
-            --set image.tag="$TAG" >> dist/install.yaml
-
-          echo "Generated manifest with image: $SHA_IMG"
-          echo "Manifest content preview:"
-          head -20 dist/install.yaml
-
-      # Create Dockerfile for manifest container
-      - name: Create manifest container Dockerfile
-        if: github.event_name != 'pull_request' && github.event_name != 'merge_group'
-        working-directory: bare-metal-fulfillment-operator
-        run: |
-          cat > Dockerfile.manifests << 'EOF'
-          FROM scratch
-          COPY dist/install.yaml /manifests/install.yaml
-          EOF
-
-          echo "Created Dockerfile.manifests:"
-          cat Dockerfile.manifests
-
-      # Extract metadata for manifest container
-      - name: Extract manifest container metadata
-        id: meta-manifests
-        if: github.event_name != 'pull_request' && github.event_name != 'merge_group'
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302  # v6
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=raw,value=${{ steps.sha-tag.outputs.manifest-tag }}
-
-      # Build and push manifest container
-      - name: Build and push manifest container
-        id: build-manifests
-        if: github.event_name != 'pull_request' && github.event_name != 'merge_group'
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7
-        with:
-          context: bare-metal-fulfillment-operator
-          file: bare-metal-fulfillment-operator/Dockerfile.manifests
-          push: true
-          tags: ${{ steps.meta-manifests.outputs.tags }}
-          labels: ${{ steps.meta-manifests.outputs.labels }}
 
   # Signing gets its own job, granted id-token: write only here, rather than
   # on `build` -- `build` also runs (build-only, no push) on pull_request and
@@ -278,8 +175,3 @@ jobs:
         uses: ./.github/actions/cosign-sign-image
         with:
           image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.operator-digest }}
-
-      - name: Sign manifest container with cosign
-        uses: ./.github/actions/cosign-sign-image
-        with:
-          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.manifest-digest }}

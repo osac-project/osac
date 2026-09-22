@@ -48,6 +48,7 @@ jobs:
     # secret set.
     secrets:
       OSAC_CI_APP_PRIVATE_KEY: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
+      BUF_TOKEN: ${{ secrets.BUF_TOKEN }}
     with:
       mode: nightly
       skip_e2e: ${{ github.event.inputs.skip_e2e == 'true' }}

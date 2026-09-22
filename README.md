@@ -37,33 +37,30 @@ in with its full commit history).
 Container images published to `ghcr.io/osac-project/*` from this repo's GitHub
 Actions workflows are signed keylessly with [cosign](https://docs.sigstore.dev/),
 using each workflow run's GitHub Actions OIDC identity via Fulcio/Rekor — no
-long-lived private key is involved. Images are signed both from ordinary
-pushes to `main` and from component-scoped release tags; the certificate
-identity's workflow filename and ref reflect whichever build produced the
-image, so pin both rather than accepting any workflow or any tag in this repo:
+long-lived private key is involved.
 
-| Component (+ manifest image, where built) | Image                                 | Workflow file                             | Release tag prefix                |
-|--------------------------------------------|----------------------------------------|---------------------------------------------|------------------------------------|
-| osac-operator                               | `osac-project/osac-operator`           | `build-image.yaml`                          | `osac-operator`                    |
-| fulfillment-service                         | `osac-project/fulfillment-service`     | `publish-image.yaml`                        | `fulfillment-service`              |
-| bare-metal-fulfillment-operator             | `osac-project/bare-metal-fulfillment-operator` | `build-bmf-image.yaml`              | `bare-metal-fulfillment-operator`  |
-| osac-aap                                    | `osac-project/osac-aap`                | `execution-environment.yml`                 | `osac-aap`                         |
-| metering-service                            | `osac-project/metering-service`        | `build-metering-service-image.yaml`         | `osac-metering`                    |
-| metering-m360-adapter                       | `osac-project/metering-m360-adapter`   | `build-metering-m360-adapter-image.yaml`    | `osac-metering`                    |
-| metering-echo-adapter                       | `osac-project/metering-echo-adapter`   | `build-metering-echo-adapter-image.yaml`    | `osac-metering`                    |
-| osac-csi-driver                             | `osac-project/osac-csi-driver`         | `publish-csi-driver-image.yaml`             | `osac-csi-driver`                  |
+`osac-build-and-publish.yaml` (called by `nightly-build.yaml` and
+`osac-release.yaml`) is the sole publisher of any image at a real version —
+each component's own tag-triggered build workflow only reacts to a push to
+`main` now (for a `sha-<short>`-tagged dev image) or a pull request (build
+only, never pushed or signed); pushing a `<component>/vX.Y.Z` tag doesn't
+trigger anything. So `osac-build-and-publish.yaml@refs/heads/main` is the one
+signer identity for any real-version image in this repo:
 
-`nightly-build.yaml` always rebuilds and republishes every image above as
-part of its nightly run. `osac-release.yaml` only rebuilds and republishes
-images whose components are actually selected for rebuilding (named in
-that release's `component_versions`, and not already published at the
-requested version) — every other component is pinned to its existing
-published image, untouched, not resigned. Both call into the same shared
-`osac-build-and-publish.yaml` reusable workflow whenever a rebuild does
-happen, so `osac-build-and-publish.yaml@refs/heads/main` is the one
-signer identity that covers either case, for any image in this table —
-not just the workflow listed. Signing isn't skipped for an already-signed
-digest: every run signs whatever digest it pushes, even when a rebuild is
+```bash
+cosign verify \
+  --certificate-identity-regexp '^https://github\.com/osac-project/osac/\.github/workflows/osac-build-and-publish\.yaml@refs/heads/main$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/<image>@sha256:<digest>
+```
+
+`nightly-build.yaml` always rebuilds and republishes every component's image
+as part of its nightly run. `osac-release.yaml` only rebuilds and republishes
+images whose components are actually selected for rebuilding (named in that
+release's `component_versions`, and not already published at the requested
+version) — every other component is pinned to its existing published image,
+untouched, not resigned. Signing isn't skipped for an already-signed digest:
+every run signs whatever digest it pushes, even when a rebuild is
 byte-identical to an already-published one, so that digest ends up with more
 than one valid signature from different identities rather than only the
 newest. A manual dispatch against a non-`main` ref signs under that ref's
@@ -72,42 +69,28 @@ identity instead (the reusable workflow call follows whatever ref
 against) — match the regex to the ref actually used if you dispatched it
 yourself.
 
-Verify an image, substituting the workflow file and tag prefix from the table above:
+**Verifying an older image, published before each component's own
+tag-triggered build workflow stopped reacting to tag pushes:** that older
+build's own workflow file and tag prefix are a second valid identity for that
+specific digest —
+
+| Component | Image | Workflow file | Release tag prefix |
+|---|---|---|---|
+| osac-operator | `osac-project/osac-operator` | `build-image.yaml` | `osac-operator` |
+| fulfillment-service | `osac-project/fulfillment-service` | `publish-image.yaml` | `fulfillment-service` |
+| bare-metal-fulfillment-operator | `osac-project/bare-metal-fulfillment-operator` | `build-bmf-image.yaml` | `bare-metal-fulfillment-operator` |
+| osac-aap | `osac-project/osac-aap` | `execution-environment.yml` | `osac-aap` |
+| metering-service | `osac-project/metering-service` | `build-metering-service-image.yaml` | `osac-metering` |
+| metering-m360-adapter | `osac-project/metering-m360-adapter` | `build-metering-m360-adapter-image.yaml` | `osac-metering` |
+| metering-echo-adapter | `osac-project/metering-echo-adapter` | `build-metering-echo-adapter-image.yaml` | `osac-metering` |
+| osac-csi-driver | `osac-project/osac-csi-driver` | `publish-csi-driver-image.yaml` | `osac-csi-driver` |
 
 ```bash
 cosign verify \
-  --certificate-identity-regexp '^https://github\.com/osac-project/osac/\.github/workflows/<workflow-file>@refs/(heads/main|tags/<tag-prefix>/.+)$' \
+  --certificate-identity-regexp '^https://github\.com/osac-project/osac/\.github/workflows/<workflow-file>@refs/tags/<tag-prefix>/.+$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   ghcr.io/<image>@sha256:<digest>
 ```
-
-For example, to verify an osac-operator image:
-
-```bash
-cosign verify \
-  --certificate-identity-regexp '^https://github\.com/osac-project/osac/\.github/workflows/build-image\.yaml@refs/(heads/main|tags/osac-operator/.+)$' \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/osac-project/osac-operator@sha256:<digest>
-```
-
-To verify an image instead produced by a nightly run or a release
-dispatched from `main` (the common case) — e.g. a metering-echo-adapter
-image:
-
-```bash
-cosign verify \
-  --certificate-identity-regexp '^https://github\.com/osac-project/osac/\.github/workflows/osac-build-and-publish\.yaml@refs/heads/main$' \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/osac-project/metering-echo-adapter@sha256:<digest>
-```
-
-If `nightly-build.yaml`/`osac-release.yaml` was manually dispatched against
-a different ref, replace `refs/heads/main` above with the exact ref used.
-Note that a component's own tag-triggered build (the first example above)
-and a nightly/release run can independently produce a byte-identical image
-from the same commit — when that happens, both identities may validly have
-signed that exact digest. If one identity doesn't verify, check the other
-workflow/ref identity before concluding the artifact isn't signed.
 
 ## Verifying Helm chart signatures
 

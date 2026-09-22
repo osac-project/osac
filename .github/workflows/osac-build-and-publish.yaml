@@ -59,10 +59,16 @@ on:
           Private key for the osac-ci GitHub App (App ID 4966101,
           installed on this repo with Contents: read/write). Exchanged at
           runtime for a short-lived installation token used to push the
-          umbrella/component release tags in "Tag and notify" -- GitHub
-          never fires push-triggered workflows for a ref pushed with the
-          default GITHUB_TOKEN, so this must authenticate as
-          a real actor instead of the automatic token.
+          umbrella/component release tags in "Tag and notify" -- kept
+          separate from that job's own GITHUB_TOKEN (scoped read-only)
+          rather than widening it, least-privilege.
+        required: true
+      BUF_TOKEN:
+        description: >-
+          Token for the buf.build schema registry, passed through to
+          publish-proto.yaml's "Publish proto (fulfillment-service)" job
+          (release mode only, when fulfillment-service is actually bumped
+          this run).
         required: true
 
 permissions: {}
@@ -1201,13 +1207,15 @@ jobs:
   # a permanent tag unless everything requested this run passed together.
   #
   # Pushed with a real PAT (checkout's `token:` below), not GITHUB_TOKEN --
-  # a per-component tag is expected to fire that component's own
-  # tag-triggered publish workflow(s) (image, binaries, proto), which
-  # GITHUB_TOKEN-authored pushes never do. "Verify component
-  # publish workflows actually ran" then confirms each one actually started
-  # and succeeded before this job -- and the whole run -- is allowed to
-  # report success; a component tag existing is not itself evidence its
-  # publish happened.
+  # least-privilege: this job's own GITHUB_TOKEN is scoped contents: read
+  # (see permissions below), so the one privileged action it takes (pushing
+  # tags) uses a separate, purpose-built credential instead of widening the
+  # job's own token. This pipeline is the sole publisher of any real
+  # <component>/vX.Y.Z artifact -- per-component tag pushes no longer
+  # trigger anything downstream (see build-image.yaml/execution-environment.yml/
+  # etc., none of which have a tags: trigger anymore), so there's nothing left
+  # to verify after pushing besides what this job already does itself
+  # (publish-binaries/publish-proto below, create-component-releases after).
   #
   # Download chart-sources.txt artifact; post Slack summary with
   # published chart OCI links.
@@ -1216,10 +1224,7 @@ jobs:
     name: Tag and notify
     needs: [prepare, publish]
     runs-on: osac-ci
-    # Generous: "Verify component publish workflows actually ran" below
-    # blocks on real per-component image/binary/proto builds it doesn't
-    # control the runtime of.
-    timeout-minutes: 90
+    timeout-minutes: 30
     # Bare success() checks the WHOLE transitive dependency graph, not just
     # this job's direct needs -- confirmed live: with skip_e2e=true, the
     # three e2e-*-test jobs (skipped, further back in the graph) cascaded
@@ -1254,15 +1259,10 @@ jobs:
         ref: ${{ needs.prepare.outputs.temp-branch }}
         fetch-depth: 0
         # persist-credentials left enabled (default): this job pushes git tags.
-        # Deliberately NOT the default GITHUB_TOKEN (github.token) -- GitHub
-        # never fires push-triggered workflows for a ref created/pushed by
-        # the built-in GITHUB_TOKEN (anti-recursion by design), so every
-        # <component>/vX.Y.Z tag pushed below would silently never trigger
-        # its own publish-image.yaml/publish-binaries.yaml/etc, even though
-        # this job (and the whole run) reports success. The
-        # osac-ci GitHub App's installation token authenticates as a real
-        # actor, so the same push fires those workflows exactly like a
-        # human's `git push` does.
+        # Deliberately NOT the default GITHUB_TOKEN (github.token) -- this
+        # job's own GITHUB_TOKEN is scoped contents: read (see permissions
+        # above), so pushing tags uses a separate, purpose-built credential
+        # instead of widening it, least-privilege.
         token: ${{ steps.app-token.outputs.token }}
 
     - name: Create umbrella tag
@@ -1336,31 +1336,6 @@ jobs:
           git tag "${TAG}" -m "Release ${VERSION}"
           git push origin "${TAG}"
           echo "Tagged: ${TAG}"
-        done
-
-    # The push above (real PAT, not GITHUB_TOKEN -- see the checkout step)
-    # should already have fired each tagged component's own tag-triggered
-    # publish workflow(s). Don't just trust that it did: wait for and
-    # require each one to have actually started and succeeded before this
-    # job -- and therefore the whole run -- is allowed to report success. A
-    # permanent component tag existing is not evidence its image, binaries,
-    # or proto schema actually got published.
-    - name: Verify component publish workflows actually ran
-      if: inputs.mode == 'release'
-      env:
-        GH_TOKEN: ${{ github.token }}
-        GH_REPO: ${{ github.repository }}
-        COMPONENT_VERSIONS: ${{ needs.prepare.outputs.component-versions }}
-        COMPONENTS_TO_TAG: ${{ needs.prepare.outputs.components-to-tag }}
-      run: |
-        set -euo pipefail
-        source osac-installer/scripts/nightly-charts.sh
-
-        for COMPONENT in $(jq -r '.[]' <<<"${COMPONENTS_TO_TAG}"); do
-          VERSION=$(jq -r --arg k "${COMPONENT}" '.[$k]' <<<"${COMPONENT_VERSIONS}")
-          echo "::group::Verifying publish for ${COMPONENT}/v${VERSION}"
-          verify_component_publish "${COMPONENT}" "${VERSION}"
-          echo "::endgroup::"
         done
 
     - name: Download chart manifest
@@ -1507,11 +1482,51 @@ jobs:
         github-token: ${{ secrets.GITHUB_TOKEN }}
 
   # -------------------------------------------------------------------
-  # Job 8: Notify on failure
+  # Job 8: Publish fulfillment-service's binaries and proto schema --
+  # directly in this pipeline, right after tag-and-notify pushes its real
+  # tag, for the same reason as create-component-releases above: these used
+  # to be independent, tag-triggered workflows (publish-binaries.yaml,
+  # publish-proto.yaml), which meant the binaries actually released were a
+  # second, independent build of the same commit rather than the exact one
+  # this pipeline already built and tested. Both are now workflow_call-only
+  # reusable workflows with no trigger of their own.
+  # -------------------------------------------------------------------
+  publish-fulfillment-service-binaries:
+    name: Publish binaries (fulfillment-service)
+    needs: [prepare, tag-and-notify]
+    if: >-
+      always() && inputs.mode == 'release' && needs.tag-and-notify.result == 'success'
+      && contains(fromJSON(needs.prepare.outputs.components-to-tag), 'fulfillment-service')
+    permissions:
+      contents: write
+      id-token: write
+    uses: ./.github/workflows/publish-binaries.yaml
+    with:
+      version: v${{ fromJSON(needs.prepare.outputs.component-versions)['fulfillment-service'] }}
+      tag: fulfillment-service/v${{ fromJSON(needs.prepare.outputs.component-versions)['fulfillment-service'] }}
+      ref: ${{ needs.prepare.outputs.temp-branch }}
+
+  publish-fulfillment-service-proto:
+    name: Publish proto (fulfillment-service)
+    needs: [prepare, tag-and-notify]
+    if: >-
+      always() && inputs.mode == 'release' && needs.tag-and-notify.result == 'success'
+      && contains(fromJSON(needs.prepare.outputs.components-to-tag), 'fulfillment-service')
+    permissions:
+      contents: read
+    uses: ./.github/workflows/publish-proto.yaml
+    with:
+      version: v${{ fromJSON(needs.prepare.outputs.component-versions)['fulfillment-service'] }}
+      ref: ${{ needs.prepare.outputs.temp-branch }}
+    secrets:
+      buf-token: ${{ secrets.BUF_TOKEN }}
+
+  # -------------------------------------------------------------------
+  # Job 9: Notify on failure
   # -------------------------------------------------------------------
   notify-failure:
     name: Notify failure
-    needs: [prepare, build, unit-tests, integration-tests, security-tests, e2e-vmaas-test, e2e-caas-test, e2e-bmaas-test, publish, tag-and-notify, create-component-releases]
+    needs: [prepare, build, unit-tests, integration-tests, security-tests, e2e-vmaas-test, e2e-caas-test, e2e-bmaas-test, publish, tag-and-notify, create-component-releases, publish-fulfillment-service-binaries, publish-fulfillment-service-proto]
     runs-on: osac-ci
     timeout-minutes: 10
     if: failure()
@@ -1577,7 +1592,7 @@ jobs:
           -d @/tmp/slack-payload.json
 
   # -------------------------------------------------------------------
-  # Job 8: Cleanup — delete temp branch, success only. Deleting unconditionally
+  # Job 10: Cleanup — delete temp branch, success only. Deleting unconditionally
   # (the previous `if: always()`) broke GitHub's "Re-run failed jobs": a retry
   # reuses `prepare`'s cached temp-branch output from the original attempt,
   # but that branch was already gone -- this job had deleted it the moment

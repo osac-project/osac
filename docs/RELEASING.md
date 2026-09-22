@@ -27,12 +27,15 @@ workflow_dispatch     ──►  osac-release.yaml         ──┘        (pre
   `component_versions` input.
 
 Independently of both, each mono-repo component still has its own
-push/tag-triggered build workflow (`build-image.yaml`,
+push/pull_request-triggered build workflow (`build-image.yaml`,
 `publish-image.yaml`, `build-bmf-image.yaml`, `execution-environment.yml`,
-`build-metering-*-image.yaml`), which builds and signs that component's
-image on a `<component>/vX.Y.Z` tag push. Publishing that component's
-*chart* only ever happens as part of a full `osac-build-and-publish.yaml`
-run (nightly or release) — see "Releasing a new component version" below.
+`build-metering-*-image.yaml`), but only for a `main`-branch push (a
+`sha-<short>`-tagged dev image) or a pull request (build-only, never
+pushed or signed). None of them react to a `<component>/vX.Y.Z` tag push
+anymore — `osac-build-and-publish.yaml` is the sole source of truth for
+producing anything under a real version: image, chart, and (for
+fulfillment-service) binaries and the proto schema. See "Releasing a new
+component version" below.
 
 ## Versioning model
 
@@ -43,10 +46,11 @@ own release version. "OSAC vX.Y.Z" means a specific, tested combination of
 component versions — recorded in the published chart's `Chart.lock` and in
 that run's release notes/Slack summary, not implied by the number itself.
 
-`osac-ui` is an exception: it lives in its own repo
-(`osac-project/osac-ui`) with its own independent release cadence, and is
-never built by this pipeline — only its already-published image/chart are
-referenced. Bumping it means releasing it in its own repo first.
+`osac-ui` is a mono-repo component like every other one here — built,
+tested, tagged, and published by this same pipeline, with its own
+`osac-ui/vX.Y.Z` tags. It has its own unit-test job but no integration-test
+suite, and (like `fulfillment-service`) never gets a GitHub Release page,
+but otherwise follows the exact same version model as the rest.
 
 ## How nightlies work
 
@@ -129,6 +133,10 @@ for validating the release *mechanism* itself (e.g. after a change to
   `osac-operator`, `osac-aap`, `bare-metal-fulfillment-operator`,
   `osac-csi-driver`, and `osac-metering` (`fulfillment-service` and
   `osac-ui` don't get one — never did).
+- If `fulfillment-service` was bumped this run: its signed release
+  binaries (attached to its own GitHub Release, separate from the plain
+  changelog releases above) and its proto schema pushed to the buf.build
+  registry.
 
 ## Releasing a new component version
 
@@ -137,20 +145,25 @@ builds, tests, tags, and publishes the component's image *and* chart,
 bundled into the new umbrella release in the same release pipeline run.
 
 There used to be a second path — pushing a `<component>/vX.Y.Z` tag
-directly, which a separate `publish-charts.yaml` workflow picked up to
-publish just that component's chart, independent of any OSAC release.
-That workflow was removed: it duplicated `osac-build-and-publish.yaml`'s
-own chart-packaging for every tag produced by a real release, and the two
-raced to publish the same OCI chart artifact. Pushing a
-`<component>/vX.Y.Z` tag directly still triggers that component's own
-build workflow (`build-image.yaml`/`execution-environment.yml`/etc.), but
-that workflow only ever builds and signs the image — it never published a
-chart itself. Chart publication (and, for a real release, the GitHub
-Release page) only ever happens through the shared
-`osac-build-and-publish.yaml` pipeline, in either mode: a nightly run
-publishes a chart at a throwaway nightly-suffixed version, and a real
-`osac-release.yaml` dispatch is the only way to publish one at a real,
-permanent `<component>/vX.Y.Z`-matching version.
+directly, which independently triggered that component's own build
+workflow (image, and for fulfillment-service also binaries and the proto
+schema) plus a separate `publish-charts.yaml` workflow for its chart. Both
+were removed: they duplicated `osac-build-and-publish.yaml`'s own
+build/package/sign work for every tag a real release produced, and raced
+to publish the same artifacts. Confirmed live on a real release: the loser
+of that race ended up publishing an artifact that was never actually
+tested by that release's own test gate.
+
+`osac-build-and-publish.yaml` is now the *only* thing that can ever
+produce anything under a real `<component>/vX.Y.Z` version — image,
+chart, and (for fulfillment-service) binaries and the proto schema. A
+manually pushed `<component>/vX.Y.Z` tag doesn't trigger anything at all
+anymore; a component's own build workflow still exists, but only reacts
+to a push to `main` (a `sha-<short>`-tagged dev image) or a pull request
+(build-only, never pushed or signed). A nightly run publishes every
+artifact at a throwaway nightly-suffixed version; a real `osac-release.yaml`
+dispatch is the only way to publish one at a real, permanent
+`<component>/vX.Y.Z`-matching version.
 
 ## Verifying what shipped in a release
 

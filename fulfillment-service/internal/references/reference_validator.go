@@ -250,7 +250,7 @@ func validateCanonicalUpdateMask(request any) error {
 	if !ok {
 		return nil
 	}
-	if !isCanonicalUpdateMask(mask) {
+	if !isCanonicalUpdateMask(mask, updateObjectDescriptor(message.ProtoReflect().Descriptor())) {
 		return grpcstatus.Error(grpccodes.InvalidArgument, "update mask contains a non-canonical path")
 	}
 	return nil
@@ -266,31 +266,80 @@ func updateMaskFromMessage(message proto.Message) (*fieldmaskpb.FieldMask, bool)
 	return mask, ok
 }
 
-func isCanonicalFieldMaskPath(path string) bool {
+func updateObjectDescriptor(request protoreflect.MessageDescriptor) protoreflect.MessageDescriptor {
+	field := request.Fields().ByName("object")
+	if field == nil || field.Kind() != protoreflect.MessageKind {
+		return nil
+	}
+	return field.Message()
+}
+
+func isCanonicalFieldMaskPath(path string, descriptor protoreflect.MessageDescriptor) bool {
 	if path == "" || path != strings.TrimSpace(path) || strings.IndexFunc(path, unicode.IsSpace) >= 0 {
 		return false
 	}
+	mapKey := false
+	terminal := false
 	for _, segment := range strings.Split(path, ".") {
 		if segment == "" {
 			return false
 		}
-		for i, character := range segment {
-			validStart := unicode.IsLetter(character) || character == '_'
-			validPart := validStart || unicode.IsDigit(character)
-			if (i == 0 && !validStart) || (i > 0 && !validPart) {
-				return false
+		if terminal {
+			return false
+		}
+		if mapKey {
+			mapKey = false
+			terminal = descriptor == nil
+			continue
+		}
+		if !isCanonicalFieldMaskSegment(segment) {
+			return false
+		}
+		if descriptor == nil {
+			continue
+		}
+		field := descriptor.Fields().ByName(protoreflect.Name(segment))
+		if field == nil {
+			descriptor = nil
+			continue
+		}
+		if field.IsMap() {
+			mapKey = true
+			if field.MapValue().Kind() == protoreflect.MessageKind {
+				descriptor = field.MapValue().Message()
+			} else {
+				descriptor = nil
 			}
+		} else if field.IsList() {
+			descriptor = nil
+			terminal = true
+		} else if field.Kind() == protoreflect.MessageKind {
+			descriptor = field.Message()
+		} else {
+			descriptor = nil
+			terminal = true
 		}
 	}
 	return true
 }
 
-func isCanonicalUpdateMask(mask *fieldmaskpb.FieldMask) bool {
+func isCanonicalFieldMaskSegment(segment string) bool {
+	for i, character := range segment {
+		validStart := unicode.IsLetter(character) || character == '_'
+		validPart := validStart || unicode.IsDigit(character)
+		if (i == 0 && !validStart) || (i > 0 && !validPart) {
+			return false
+		}
+	}
+	return true
+}
+
+func isCanonicalUpdateMask(mask *fieldmaskpb.FieldMask, descriptor protoreflect.MessageDescriptor) bool {
 	if mask == nil {
 		return true
 	}
 	for _, path := range mask.GetPaths() {
-		if !isCanonicalFieldMaskPath(path) {
+		if !isCanonicalFieldMaskPath(path, descriptor) {
 			return false
 		}
 	}

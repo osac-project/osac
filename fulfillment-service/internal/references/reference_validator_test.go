@@ -59,8 +59,14 @@ var _ = Describe("Reference validator", func() {
 				valid bool
 			}{
 				{path: "spec.add_on_operators", valid: true},
+				{path: "spec.node_sets.control-plane.size", valid: true},
+				{path: "metadata.labels.control-plane", valid: true},
 				{path: "spec .add_on_operators", valid: false},
 				{path: "spec.add_on_operators.-1", valid: false},
+				{path: "spec.add_on_operators.id", valid: false},
+				{path: "spec.node_sets.control-plane.invalid-field", valid: false},
+				{path: "spec.node_sets.control-plane.size.host_type", valid: false},
+				{path: "metadata.labels.control-plane.name", valid: false},
 				{path: "spec..add_on_operators", valid: false},
 			} {
 				request := privatev1.ClustersUpdateRequest_builder{

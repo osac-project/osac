@@ -32,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
@@ -108,6 +109,53 @@ var _ = Describe("ClusterOrder Controller", func() {
 			stored := &v1alpha1.ClusterOrder{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, stored)).To(Succeed())
 			Expect(stored.Spec.AddOnOperators).To(Equal([]string{"operator-one"}))
+		})
+	})
+
+	Context("When adding the controller finalizer", func() {
+		It("should preserve a concurrent storage finalizer", func() {
+			ctx := context.Background()
+			initial := &v1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "concurrent-finalizer",
+					Namespace: "default",
+				},
+				Spec: v1alpha1.ClusterOrderSpec{
+					TemplateID:     "test",
+					AddOnOperators: []string{"operator-one"},
+				},
+			}
+			conflictClient := fake.NewClientBuilder().
+				WithScheme(k8sClient.Scheme()).
+				WithObjects(initial).
+				WithInterceptorFuncs(interceptor.Funcs{
+					Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+						latest := &v1alpha1.ClusterOrder{}
+						Expect(c.Get(ctx, client.ObjectKeyFromObject(obj), latest)).To(Succeed())
+						latest.Finalizers = append(latest.Finalizers, clusterStorageFinalizer)
+						Expect(c.Update(ctx, latest)).To(Succeed())
+						return c.Patch(ctx, obj, patch, opts...)
+					},
+				}).
+				Build()
+
+			instance := &v1alpha1.ClusterOrder{}
+			key := client.ObjectKeyFromObject(initial)
+			Expect(conflictClient.Get(ctx, key, instance)).To(Succeed())
+
+			reconciler := &ClusterOrderReconciler{
+				Client:               conflictClient,
+				apiReader:            conflictClient,
+				Scheme:               k8sClient.Scheme(),
+				ProvisioningProvider: noopProvisioningProvider{},
+				MaxJobHistory:        provisioning.DefaultMaxJobHistory,
+			}
+			_, err := reconciler.handleUpdate(ctx, reconcile.Request{NamespacedName: key}, instance)
+			Expect(errors.IsConflict(err)).To(BeTrue())
+
+			stored := &v1alpha1.ClusterOrder{}
+			Expect(conflictClient.Get(ctx, key, stored)).To(Succeed())
+			Expect(stored.Finalizers).To(ConsistOf(clusterStorageFinalizer))
 		})
 	})
 

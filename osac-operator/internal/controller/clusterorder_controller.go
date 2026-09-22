@@ -446,7 +446,7 @@ func (r *ClusterOrderReconciler) handleUpdate(ctx context.Context, _ reconcile.R
 	if !controllerutil.ContainsFinalizer(instance, osacFinalizer) {
 		base := instance.DeepCopy()
 		controllerutil.AddFinalizer(instance, osacFinalizer)
-		if err := r.Patch(ctx, instance, client.MergeFrom(base)); err != nil {
+		if err := r.Patch(ctx, instance, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
 			return ctrl.Result{}, err
 		}
 	}

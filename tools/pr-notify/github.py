@@ -527,6 +527,17 @@ def _run_graphql_query(query: str) -> dict:
         except (json.JSONDecodeError, ValueError):
             if result.returncode != 0:
                 error_msg = result.stderr.strip() or result.stdout.strip()
+                if (
+                    any(code in error_msg for code in ("HTTP 502", "HTTP 503", "HTTP 504"))
+                    and attempt < MAX_RETRIES
+                ):
+                    logger.warning(
+                        "Transient HTTP error (attempt %d/%d), retrying in %ds: %s",
+                        attempt, MAX_RETRIES, backoff, error_msg,
+                    )
+                    time.sleep(backoff)
+                    backoff *= 2
+                    continue
                 raise GitHubFetchError(f"GitHub GraphQL query failed: {error_msg}")
             raise GitHubFetchError("Failed to parse GitHub API response (malformed JSON)")
 

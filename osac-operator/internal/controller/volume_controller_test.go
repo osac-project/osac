@@ -101,6 +101,43 @@ var _ = Describe("VolumeReconciler", func() {
 		Expect(updated.Finalizers).To(ContainElement(osacVolumeFinalizer))
 	})
 
+	It("should ignore unmanaged volumes", func() {
+		vol.Annotations = map[string]string{osacManagementStateAnnotation: ManagementStateUnmanaged}
+		Expect(k8sClient.Create(testCtx, vol)).To(Succeed())
+
+		_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{
+			Request: reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace},
+			},
+		})
+		Expect(err).ToNot(HaveOccurred())
+
+		updated := &osacv1alpha1.Volume{}
+		Expect(k8sClient.Get(testCtx, types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace}, updated)).To(Succeed())
+		Expect(updated.Finalizers).To(BeEmpty())
+		Expect(updated.Status.Phase).To(BeEmpty())
+	})
+
+	It("should persist pending vendor state and requeue", func() {
+		mockProv.Pending = true
+		Expect(k8sClient.Create(testCtx, vol)).To(Succeed())
+		stampProviderProtocol(vol)
+
+		result, err := reconciler.Reconcile(testCtx, mcreconcile.Request{
+			Request: reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace},
+			},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.RequeueAfter).To(BeZero())
+
+		updated := &osacv1alpha1.Volume{}
+		Expect(k8sClient.Get(testCtx, types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace}, updated)).To(Succeed())
+		Expect(updated.Status.Phase).To(Equal(osacv1alpha1.VolumePhaseProgressing))
+		Expect(updated.Status.VendorContext).To(Equal(map[string]string{"pending": "true"}))
+		Expect(updated.Status.VendorVolumeID).To(BeEmpty())
+	})
+
 	It("should reach Ready on first reconcile when the mock provisioner succeeds", func() {
 		Expect(k8sClient.Create(testCtx, vol)).To(Succeed())
 		stampProviderProtocol(vol)

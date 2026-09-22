@@ -186,7 +186,7 @@ var _ = Describe("VolumeFeedbackController", func() {
 
 			Expect(mockServer.updates).To(HaveLen(1))
 			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.VolumeState_VOLUME_STATE_FAILED))
-			Expect(mockServer.updates[0].GetStatus().GetMessage()).To(Equal("insufficient vg1 capacity"))
+			Expect(mockServer.updates[0].GetStatus().GetMessage()).To(Equal("volume provisioning failed"))
 			Expect(mockServer.updateMasks).To(HaveLen(1))
 			Expect(mockServer.updateMasks[0]).To(ContainElement("status.message"))
 			Expect(mockServer.signals).To(BeEmpty())

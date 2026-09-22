@@ -43,7 +43,7 @@ jobs:
       - name: Generate all dashboards
         working-directory: tools/pr-notify
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           template_dir="../../docs/pr-dashboard"
           python3 generate_all.py --output-root ../..

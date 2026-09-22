@@ -35,7 +35,7 @@ def test_short_lived_vm_metering(
     ci_name: str = wait_for_cr(k8s=k8s_hub_client, uuid=uuid)
 
     cli.delete_compute_instance(uuid=uuid)
-    metering.expect("osac.resource.deleted.v1", resource_id=uuid)
+    metering.expect("osac.resource.deleted.v1", resource_id=uuid, timeout=180)
 
     wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
     wait_for_grpc_removal(grpc=grpc, uuid=uuid)

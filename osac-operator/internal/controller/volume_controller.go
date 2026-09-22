@@ -28,6 +28,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -200,7 +201,7 @@ func (r *VolumeReconciler) Reconcile(ctx context.Context, req mcreconcile.Reques
 
 	if !deleting && !equality.Semantic.DeepEqual(vol.Status, *oldstatus) {
 		log.Info("status requires update")
-		if updateErr := r.Status().Update(ctx, vol); updateErr != nil {
+		if updateErr := r.updateStatusWithConflictRetry(ctx, vol); updateErr != nil {
 			// On the delete path the object may already be gone once its last
 			// finalizer was removed; tolerate NotFound and preserve any
 			// reconcile error alongside a genuine status-update failure.
@@ -216,6 +217,26 @@ func (r *VolumeReconciler) Reconcile(ctx context.Context, req mcreconcile.Reques
 
 	log.Info("end reconcile")
 	return res, err
+}
+
+// updateStatusWithConflictRetry persists the status produced by this
+// reconciler after re-fetching the current object on every attempt. The
+// volume and feedback controllers both manage finalizers on the same CR, so a
+// vendor create can finish while the other controller changes the object
+// resourceVersion. Retrying the stale object would keep failing; retrying with
+// a fresh object preserves the successful vendor result and prevents a second
+// vendor create on the next reconcile.
+func (r *VolumeReconciler) updateStatusWithConflictRetry(ctx context.Context, vol *v1alpha1.Volume) error {
+	desiredStatus := vol.Status.DeepCopy()
+
+	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		current := &v1alpha1.Volume{}
+		if err := r.Get(ctx, client.ObjectKeyFromObject(vol), current); err != nil {
+			return err
+		}
+		current.Status = *desiredStatus
+		return r.Status().Update(ctx, current)
+	})
 }
 
 // handleUpdate runs on every non-deleted reconcile. It ensures the finalizer

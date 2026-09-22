@@ -262,6 +262,26 @@ var _ = Describe("VolumeReconciler", func() {
 		Expect(cond.Reason).To(Equal("Provisioned"))
 	})
 
+	It("should retry a conflicting status update without re-provisioning", func() {
+		Expect(k8sClient.Create(testCtx, vol)).To(Succeed())
+		stampProviderProtocol(vol)
+
+		reconciler.Client = &conflictOnceStatusClient{Client: k8sClient}
+
+		_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{
+			Request: reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace},
+			},
+		})
+		Expect(err).ToNot(HaveOccurred())
+
+		updated := &osacv1alpha1.Volume{}
+		Expect(k8sClient.Get(testCtx, types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace}, updated)).To(Succeed())
+		Expect(updated.Status.Phase).To(Equal(osacv1alpha1.VolumePhaseReady))
+		Expect(updated.Status.VendorVolumeID).To(Equal("mock-1"))
+		Expect(mockProv.CreateCallCount()).To(Equal(int64(1)))
+	})
+
 	It("should set phase to Failed when vendor provisioning fails", func() {
 		mockProv.CreateErr = fmt.Errorf("vendor array unreachable")
 

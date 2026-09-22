@@ -223,6 +223,29 @@ class TestRealTemplateMetadata:
                 assert "@type" in dumped
                 assert "value" in dumped
 
+    def test_accepts_both_east_west_capability_names(self):
+        metadata = Metadata.model_validate(
+            {
+                "title": "Netris",
+                "template_type": "network",
+                "capabilities": {
+                    "supports_east_west": True,
+                    "supports_east_west_ethernet": True,
+                },
+            }
+        )
+
+        assert metadata.capabilities == {
+            "supports_east_west": True,
+            "supports_east_west_ethernet": True,
+        }
+
+    def test_netris_metadata_contains_both_east_west_capability_names(self):
+        metadata = _load_metadata(_roles_dir_path(), "netris")
+
+        assert metadata.capabilities["supports_east_west"] is True
+        assert metadata.capabilities["supports_east_west_ethernet"] is True
+
 
 # ---------------------------------------------------------------------------
 # TestTypeMappingCompleteness

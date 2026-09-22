@@ -35,17 +35,19 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/events"
+	"github.com/osac-project/osac/fulfillment-service/internal/references"
 	"github.com/osac-project/osac/fulfillment-service/internal/utils"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 type PrivateClustersServerBuilder struct {
-	logger            *slog.Logger
-	notifier          events.Notifier
-	attributionLogic  auth.AttributionLogic
-	tenancyLogic      auth.TenancyLogic
-	metricsRegisterer prometheus.Registerer
-	filterDesc        protoreflect.MessageDescriptor
+	logger              *slog.Logger
+	notifier            events.Notifier
+	attributionLogic    auth.AttributionLogic
+	tenancyLogic        auth.TenancyLogic
+	metricsRegisterer   prometheus.Registerer
+	filterDesc          protoreflect.MessageDescriptor
+	addOnOperatorLookup references.ReferenceLookupFunc
 }
 
 var _ privatev1.ClustersServer = (*PrivateClustersServer)(nil)
@@ -65,6 +67,7 @@ type PrivateClustersServer struct {
 	externalIPDao           *dao.GenericDAO[*privatev1.ExternalIP]
 	externalIPAttachmentDao *dao.GenericDAO[*privatev1.ExternalIPAttachment]
 	secretsDao              *dao.GenericDAO[*privatev1.Secret]
+	addOnOperatorLookup     references.ReferenceLookupFunc
 	generic                 *GenericServer[*privatev1.Cluster]
 	lifecycle               *externalIPLifecycle
 }
@@ -107,6 +110,12 @@ func (b *PrivateClustersServerBuilder) SetFilterDesc(value protoreflect.MessageD
 	return b
 }
 
+// SetAddOnOperatorLookup sets the resolver used for add-on operator references.
+func (b *PrivateClustersServerBuilder) SetAddOnOperatorLookup(value references.ReferenceLookupFunc) *PrivateClustersServerBuilder {
+	b.addOnOperatorLookup = value
+	return b
+}
+
 func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, err error) {
 	// Check parameters:
 	if b.logger == nil {
@@ -135,6 +144,21 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 		Build()
 	if err != nil {
 		return
+	}
+
+	addOnOperatorLookup := b.addOnOperatorLookup
+	if addOnOperatorLookup == nil {
+		// Create the private add-on operators DAO:
+		addOnOperatorsDao, daoErr := dao.NewGenericDAO[*privatev1.AddOnOperator]().
+			SetLogger(b.logger).
+			SetTenancyLogic(b.tenancyLogic).
+			SetMetricsRegisterer(b.metricsRegisterer).
+			Build()
+		if daoErr != nil {
+			err = daoErr
+			return
+		}
+		addOnOperatorLookup = references.NewDAOLookupFunc(addOnOperatorsDao)
 	}
 
 	// Create the host types DAO:
@@ -252,6 +276,7 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 		externalIPDao:           externalIPDao,
 		externalIPAttachmentDao: externalIPAttachmentDao,
 		secretsDao:              secretsDao,
+		addOnOperatorLookup:     addOnOperatorLookup,
 		generic:                 generic,
 	}
 	result.lifecycle = newExternalIPLifecycle(
@@ -304,6 +329,9 @@ func (s *PrivateClustersServer) Create(ctx context.Context, request *privatev1.C
 func (s *PrivateClustersServer) prepareCreate(ctx context.Context, candidate *privatev1.Cluster) (err error) {
 	// Ensure sane defaults:
 	s.setDefaults(candidate)
+	if err = s.resolveAddOnOperators(ctx, candidate); err != nil {
+		return
+	}
 
 	// Get the spec:
 	spec := candidate.GetSpec()
@@ -347,6 +375,36 @@ func (s *PrivateClustersServer) prepareCreate(ctx context.Context, candidate *pr
 	}
 
 	return
+}
+
+func (s *PrivateClustersServer) resolveAddOnOperators(ctx context.Context, cluster *privatev1.Cluster) error {
+	metadata := cluster.GetMetadata()
+	for index, ref := range cluster.GetSpec().GetAddOnOperators() {
+		if ref == nil || (ref.GetId() == "" && ref.GetName() == "") {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"spec.add_on_operators[%d] must specify id or name", index)
+		}
+
+		resolved, err := s.addOnOperatorLookup(ctx, metadata.GetTenant(), metadata.GetProject(), ref.GetId(), ref.GetName())
+		if err != nil {
+			var notFound interface{ IsNotFound() bool }
+			if errors.As(err, &notFound) && notFound.IsNotFound() {
+				return grpcstatus.Errorf(grpccodes.InvalidArgument,
+					"add-on operator %q referenced by spec.add_on_operators[%d] was not found",
+					refKey(ref), index)
+			}
+			return grpcstatus.Errorf(grpccodes.Internal,
+				"failed to resolve spec.add_on_operators[%d]", index)
+		}
+		if resolved == nil {
+			return grpcstatus.Errorf(grpccodes.Internal,
+				"failed to resolve spec.add_on_operators[%d]", index)
+		}
+
+		ref.SetId(resolved.ID)
+		ref.SetName(resolved.Name)
+	}
+	return nil
 }
 
 // resolveCreationSource accepts exactly one provisioning source: spec.catalog_item or
@@ -397,6 +455,10 @@ func (s *PrivateClustersServer) Update(ctx context.Context,
 	if err != nil {
 		return
 	}
+	err = s.validateSpecUpdateRequest(request)
+	if err != nil {
+		return
+	}
 
 	err = s.generic.UpdateWithCandidatePreparation(ctx, request, &response, func(ctx context.Context, current *privatev1.Cluster, candidate *privatev1.Cluster) error {
 		if err := validateClusterTemplateImmutability(current, candidate, request.GetUpdateMask()); err != nil {
@@ -408,6 +470,9 @@ func (s *PrivateClustersServer) Update(ctx context.Context,
 					return grpcstatus.Errorf(grpccodes.InvalidArgument, "spec.ssh_public_key: %s", err)
 				}
 			}
+		}
+		if err := s.validateAddOnOperatorImmutability(current, candidate, request.GetUpdateMask()); err != nil {
+			return err
 		}
 		if err := utils.ValidateClusterSpecFields(candidate.GetSpec()); err != nil {
 			return err
@@ -427,6 +492,15 @@ func (s *PrivateClustersServer) Update(ctx context.Context,
 		return nil
 	})
 	return
+}
+
+func (s *PrivateClustersServer) validateSpecUpdateRequest(request *privatev1.ClustersUpdateRequest) error {
+	updateMask := request.GetUpdateMask()
+	if updateMask != nil && len(updateMask.GetPaths()) > 0 &&
+		updateIncludesField(updateMask, "spec") && request.GetObject().GetSpec() == nil {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "object and spec are required")
+	}
+	return nil
 }
 
 func (s *PrivateClustersServer) Delete(ctx context.Context,
@@ -814,6 +888,44 @@ func validateClusterTemplateImmutability(current, candidate *privatev1.Cluster, 
 			newSpec.SetCatalogItem(ref)
 		}
 	}
+
+	return nil
+}
+
+// validateAddOnOperatorImmutability validates and preserves the canonical operator references during updates.
+func (s *PrivateClustersServer) validateAddOnOperatorImmutability(
+	current, candidate *privatev1.Cluster, mask *fieldmaskpb.FieldMask,
+) error {
+	currentOperators := current.GetSpec().GetAddOnOperators()
+	candidateOperators := candidate.GetSpec().GetAddOnOperators()
+	cloneCurrent := func() []*privatev1.AddOnOperatorReference {
+		result := make([]*privatev1.AddOnOperatorReference, len(currentOperators))
+		for i, ref := range currentOperators {
+			result[i] = cloneMessage(ref)
+		}
+		return result
+	}
+
+	if !updateIncludesField(mask, "spec.add_on_operators") || (mask == nil && len(candidateOperators) == 0) {
+		candidate.GetSpec().SetAddOnOperators(cloneCurrent())
+		return nil
+	}
+	if len(currentOperators) != len(candidateOperators) {
+		return grpcstatus.Errorf(
+			grpccodes.InvalidArgument,
+			"cannot change spec.add_on_operators: add-on operators are immutable",
+		)
+	}
+
+	for i, ref := range candidateOperators {
+		stored := currentOperators[i]
+		if err := validateImmutableReferenceIdentity(
+			stored, ref, fmt.Sprintf("spec.add_on_operators[%d]", i), "add-on operators", true,
+		); err != nil {
+			return err
+		}
+	}
+	candidate.GetSpec().SetAddOnOperators(cloneCurrent())
 	return nil
 }
 

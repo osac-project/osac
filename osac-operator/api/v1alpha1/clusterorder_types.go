@@ -25,6 +25,7 @@ import (
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
 // ClusterOrderSpec defines the desired state of ClusterOrder
+// +kubebuilder:validation:XValidation:rule="has(self.addOnOperators) == has(oldSelf.addOnOperators) && (!has(self.addOnOperators) || self.addOnOperators == oldSelf.addOnOperators)",message="addOnOperators is immutable"
 type ClusterOrderSpec struct {
 	// TemplateID is the unique identigier of the cluster template to use when creating this cluster
 	// +kubebuilder:validation:Required
@@ -41,6 +42,10 @@ type ClusterOrderSpec struct {
 	// defaults. The selected template may limit what node types you can request.
 	// +kubebuilder:validation:Optional
 	NodeRequests []NodeRequest `json:"nodeRequests,omitempty"`
+	// AddOnOperators lists the stable names of operators requested for the cluster.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxItems=32
+	AddOnOperators []string `json:"addOnOperators,omitempty"`
 
 	// PullSecret contains credentials for authenticating to container image repositories.
 	// If not provided, the provider's default pull secret is used.

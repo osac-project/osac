@@ -259,6 +259,42 @@ var _ = Describe("Clusters server", func() {
 					State:     privatev1.ClusterVersionState_CLUSTER_VERSION_STATE_ACTIVE,
 				}.Build(),
 			}.Build())
+			seedAddOnOperator(ctx, "published-operator-id", "published-operator", true)
+			seedAddOnOperator(ctx, "unpublished-operator-id", "unpublished-operator", false)
+		})
+
+		It("resolves a published add-on operator reference during public create", func() {
+			response, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
+				Object: publicv1.Cluster_builder{
+					Metadata: publicv1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.NewString()[:8])}.Build(),
+					Spec: publicv1.ClusterSpec_builder{
+						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
+						AddOnOperators: []*publicv1.AddOnOperatorReference{
+							publicv1.AddOnOperatorReference_builder{Name: "published-operator"}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetObject().GetSpec().GetAddOnOperators()[0].GetId()).To(Equal("published-operator-id"))
+		})
+
+		It("rejects an unpublished add-on operator during public create", func() {
+			_, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
+				Object: publicv1.Cluster_builder{
+					Metadata: publicv1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.NewString()[:8])}.Build(),
+					Spec: publicv1.ClusterSpec_builder{
+						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
+						AddOnOperators: []*publicv1.AddOnOperatorReference{
+							publicv1.AddOnOperatorReference_builder{Name: "unpublished-operator"}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 		})
 
 		It("Creates object", func() {

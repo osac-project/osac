@@ -443,8 +443,10 @@ func (r *ClusterOrderReconciler) handleUpdate(ctx context.Context, _ reconcile.R
 		r.initializeProgressingStage(instance)
 	}
 
-	if controllerutil.AddFinalizer(instance, osacFinalizer) {
-		if err := r.Update(ctx, instance); err != nil {
+	if !controllerutil.ContainsFinalizer(instance, osacFinalizer) {
+		base := instance.DeepCopy()
+		controllerutil.AddFinalizer(instance, osacFinalizer)
+		if err := r.Patch(ctx, instance, client.MergeFrom(base)); err != nil {
 			return ctrl.Result{}, err
 		}
 	}

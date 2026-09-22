@@ -33,9 +33,7 @@ func updateIncludesField(mask *fieldmaskpb.FieldMask, prefixes ...string) bool {
 	}
 	for _, path := range mask.GetPaths() {
 		for _, prefix := range prefixes {
-			if path == prefix ||
-				strings.HasPrefix(path, prefix+".") ||
-				strings.HasPrefix(prefix, path+".") {
+			if path == prefix || strings.HasPrefix(path, prefix+".") || strings.HasPrefix(prefix, path+".") {
 				return true
 			}
 		}

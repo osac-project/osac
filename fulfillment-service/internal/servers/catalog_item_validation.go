@@ -54,12 +54,8 @@ func preserveCatalogItemProvenance[T interface {
 	if proto.Equal(current, candidate) || (mask == nil && !candidate.ProtoReflect().IsValid()) {
 		return cloneMessage(current), nil
 	}
-	if !current.ProtoReflect().IsValid() || !candidate.ProtoReflect().IsValid() ||
-		candidate.GetId() != current.GetId() ||
-		(candidate.GetName() != "" && candidate.GetName() != current.GetName()) ||
-		(candidate.GetProject() != "" && candidate.GetProject() != current.GetProject()) ||
-		(candidate.GetShared() && !current.GetShared()) {
-		return candidate, grpcstatus.Errorf(grpccodes.InvalidArgument, "cannot change spec.catalog_item from '%s' to '%s': catalog item is immutable", refKey(current), refKey(candidate))
+	if err := validateImmutableReferenceIdentity(current, candidate, "spec.catalog_item", "catalog item", false); err != nil {
+		return candidate, err
 	}
 	// A false shared flag has no protobuf presence; a mask targeting that flag makes it explicit.
 	for _, path := range mask.GetPaths() {

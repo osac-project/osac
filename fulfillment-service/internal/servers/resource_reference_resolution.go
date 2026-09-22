@@ -19,6 +19,7 @@ import (
 
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
@@ -54,6 +55,26 @@ type fullResourceReference interface {
 	GetProject() string
 	SetShared(bool)
 	SetProject(string)
+}
+
+func validateImmutableReferenceIdentity[T interface {
+	fullResourceReference
+	proto.Message
+}](current, candidate T, path, label string, allowMissingID bool) error {
+	identityChanged := candidate.GetId() != current.GetId()
+	if allowMissingID && candidate.GetId() == "" {
+		identityChanged = candidate.GetName() != current.GetName()
+	}
+	if !current.ProtoReflect().IsValid() || !candidate.ProtoReflect().IsValid() ||
+		identityChanged ||
+		(candidate.GetName() != "" && candidate.GetName() != current.GetName()) ||
+		(candidate.GetProject() != "" && candidate.GetProject() != current.GetProject()) ||
+		(candidate.GetShared() && !current.GetShared()) {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"cannot change %s from '%s' to '%s': %s is immutable",
+			path, refKey(current), refKey(candidate), label)
+	}
+	return nil
 }
 
 type referenceGetFunc[O dao.Object] func(context.Context, *dao.GenericDAO[O], string) (O, error)

@@ -40,25 +40,28 @@ func (e *errRefNotFound) IsNotFound() bool {
 // NewDAOLookupFunc creates a ReferenceLookupFunc backed by a GenericDAO. It queries the DAO
 // using a CEL filter that matches by id or metadata.name and returns the resolved reference metadata.
 func NewDAOLookupFunc[O dao.Object](d *dao.GenericDAO[O]) ReferenceLookupFunc {
-	return newDAOLookupFunc(d, false)
+	return newDAOLookupFunc(d, false, false)
+}
+
+// NewPublishedDAOLookupFunc creates a DAO lookup that only resolves published resources.
+// It is intended for references exposed through the public API.
+func NewPublishedDAOLookupFunc[O dao.Object](d *dao.GenericDAO[O]) ReferenceLookupFunc {
+	return newDAOLookupFunc(d, false, true)
 }
 
 // NewScopedDAOLookupFunc creates a DAO lookup that additionally constrains references to an
 // explicitly supplied tenant/project. If the caller has no explicit tenant, it retains the
 // visibility-based behavior of NewDAOLookupFunc.
 func NewScopedDAOLookupFunc[O dao.Object](d *dao.GenericDAO[O]) ReferenceLookupFunc {
-	return newDAOLookupFunc(d, true)
+	return newDAOLookupFunc(d, true, false)
 }
 
-func newDAOLookupFunc[O dao.Object](d *dao.GenericDAO[O], scopeExplicitTenant bool) ReferenceLookupFunc {
+func newDAOLookupFunc[O dao.Object](d *dao.GenericDAO[O], scopeExplicitTenant, publishedOnly bool) ReferenceLookupFunc {
 	return func(ctx context.Context, tenant, project, id, name string) (*ResolvedRef, error) {
 		var filter string
 		switch {
 		case id != "" && name != "":
-			filter = fmt.Sprintf(
-				"this.id == %s && this.metadata.name == %s",
-				strconv.Quote(id), strconv.Quote(name),
-			)
+			filter = fmt.Sprintf("this.id == %s && this.metadata.name == %s", strconv.Quote(id), strconv.Quote(name))
 		case id != "":
 			filter = fmt.Sprintf("this.id == %s", strconv.Quote(id))
 		case name != "":
@@ -74,6 +77,9 @@ func newDAOLookupFunc[O dao.Object](d *dao.GenericDAO[O], scopeExplicitTenant bo
 				" && this.metadata.tenant == %s && this.metadata.project == %s",
 				strconv.Quote(tenant), strconv.Quote(project),
 			)
+		}
+		if publishedOnly {
+			filter = PublishedFilter(filter)
 		}
 
 		response, err := d.List().
@@ -94,19 +100,20 @@ func newDAOLookupFunc[O dao.Object](d *dao.GenericDAO[O], scopeExplicitTenant bo
 		}
 
 		item := items[0]
-		resolved := &ResolvedRef{
-			ID: item.GetId(),
-		}
-
+		resolved := &ResolvedRef{ID: item.GetId()}
 		if metadata, ok := reflection.ResolveFieldPath[protoreflect.Message](item, "metadata"); ok {
 			m := metadata.Interface()
 			resolved.Name = reflection.ResolveFieldPathOr(m, "name", "")
 			resolved.Tenant = reflection.ResolveFieldPathOr(m, "tenant", "")
 			resolved.Project = reflection.ResolveFieldPathOr(m, "project", "")
 		}
-
 		return resolved, nil
 	}
+}
+
+// PublishedFilter adds the public publication and lifecycle predicates to a DAO filter.
+func PublishedFilter(filter string) string {
+	return "this.published == true && !has(this.metadata.deletion_timestamp) && (" + filter + ")"
 }
 
 // RegisterDAOLookup is a convenience that instantiates a DAO lookup and registers it on the

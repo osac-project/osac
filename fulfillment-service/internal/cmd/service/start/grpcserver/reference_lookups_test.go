@@ -52,6 +52,9 @@ var _ = Describe("RegisterReferenceLookups", func() {
 	It("registers every reference type used in Create or Update requests", func() {
 		var missing []string
 		for _, name := range createOrUpdateReferenceTypes() {
+			if isHandlerOwnedReferenceType(name) {
+				continue
+			}
 			if !validator.HasLookup(name) {
 				missing = append(missing, string(name))
 			}
@@ -88,6 +91,11 @@ var _ = Describe("RegisterReferenceLookups", func() {
 		}
 	})
 })
+
+func isHandlerOwnedReferenceType(name protoreflect.FullName) bool {
+	return name == "osac.private.v1.AddOnOperatorReference" ||
+		name == "osac.public.v1.AddOnOperatorReference"
+}
 
 func newTestReferenceValidator() *references.ReferenceValidator {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))

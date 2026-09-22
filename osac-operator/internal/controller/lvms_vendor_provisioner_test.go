@@ -69,6 +69,9 @@ func (c *recordingLogicalVolumeClient) Create(_ context.Context, obj client.Obje
 	if volume.GetName() == "" {
 		volume.SetName(fmt.Sprintf("%s%02d", strings.TrimSuffix(volume.GetGenerateName(), "-"), len(c.created)+1))
 	}
+	if _, exists := c.objects[volume.GetName()]; exists {
+		return apierrors.NewAlreadyExists(schema.GroupResource{Group: logicalVolumeGroup, Resource: logicalVolumeResource}, volume.GetName())
+	}
 	if volume.GetUID() == "" {
 		volume.SetUID(types.UID(fmt.Sprintf("logical-volume-uid-%02d", len(c.created)+1)))
 	}
@@ -112,10 +115,17 @@ func newTestLvmsProvisioner(t *testing.T, client *recordingLogicalVolumeClient) 
 	return NewLvmsVendorProvisioner(client)
 }
 
+func setNestedField(t *testing.T, object map[string]interface{}, value interface{}, fields ...string) {
+	t.Helper()
+	if err := unstructured.SetNestedField(object, value, fields...); err != nil {
+		t.Fatalf("SetNestedField(%v) error: %v", fields, err)
+	}
+}
+
 func TestLvmsCreateVolumeBuildsAndWaitsForLogicalVolume(t *testing.T) {
 	api := newRecordingLogicalVolumeClient()
 	api.afterCreate = func(volume *unstructured.Unstructured) {
-		_ = unstructured.SetNestedField(volume.Object, "lv-123", "status", "volumeID")
+		setNestedField(t, volume.Object, "lv-123", "status", "volumeID")
 	}
 
 	provisioner := newTestLvmsProvisioner(t, api)
@@ -137,8 +147,11 @@ func TestLvmsCreateVolumeBuildsAndWaitsForLogicalVolume(t *testing.T) {
 		t.Fatalf("created %d LogicalVolumes, want 1", len(api.created))
 	}
 	volume := api.created[0]
-	if got := volume.GetGenerateName(); got != "pvc-volume-uid-" {
-		t.Errorf("generateName = %q, want pvc-volume-uid-", got)
+	if got := volume.GetName(); got != "pvc-source-volume-uid" {
+		t.Errorf("name = %q, want pvc-source-volume-uid", got)
+	}
+	if got := volume.GetGenerateName(); got != "" {
+		t.Errorf("generateName = %q, want empty", got)
 	}
 	if got := volume.GetLabels()[logicalVolumeUUIDLabel]; got != "source-volume-uid" {
 		t.Errorf("volume UUID label = %q, want source-volume-uid", got)
@@ -171,7 +184,7 @@ func TestLvmsCreateVolumeBuildsAndWaitsForLogicalVolume(t *testing.T) {
 		}
 	}
 	if got := response.VendorContext[logicalVolumeNameContextKey]; got != volume.GetName() {
-		t.Errorf("VendorContext[%q] = %q, want generated name %q", logicalVolumeNameContextKey, got, volume.GetName())
+		t.Errorf("VendorContext[%q] = %q, want LogicalVolume name %q", logicalVolumeNameContextKey, got, volume.GetName())
 	}
 }
 
@@ -212,8 +225,8 @@ func TestLvmsCreateVolumeRequiresNodeTopology(t *testing.T) {
 func TestLvmsCreateVolumeResourceExhaustedRollsBack(t *testing.T) {
 	api := newRecordingLogicalVolumeClient()
 	api.afterCreate = func(volume *unstructured.Unstructured) {
-		_ = unstructured.SetNestedField(volume.Object, int64(codes.ResourceExhausted), "status", "code")
-		_ = unstructured.SetNestedField(volume.Object, "not enough space", "status", "message")
+		setNestedField(t, volume.Object, int64(codes.ResourceExhausted), "status", "code")
+		setNestedField(t, volume.Object, "not enough space", "status", "message")
 	}
 
 	provisioner := newTestLvmsProvisioner(t, api)
@@ -245,7 +258,7 @@ func TestLvmsCreateVolumeReturnsPendingUntilReady(t *testing.T) {
 		t.Fatalf("%d LogicalVolumes exist after initial create, want 1", len(api.objects))
 	}
 	name := response.VendorContext[logicalVolumeNameContextKey]
-	_ = unstructured.SetNestedField(api.objects[name].Object, "lv-ready", "status", "volumeID")
+	setNestedField(t, api.objects[name].Object, "lv-ready", "status", "volumeID")
 
 	request.VendorContext = response.VendorContext
 	response, err = provisioner.CreateVolume(context.Background(), request)
@@ -257,6 +270,55 @@ func TestLvmsCreateVolumeReturnsPendingUntilReady(t *testing.T) {
 	}
 	if response.VendorVolumeID != "lv-ready" {
 		t.Fatalf("VendorVolumeID = %q, want lv-ready", response.VendorVolumeID)
+	}
+}
+
+func TestLvmsCreateVolumeAdoptsExistingLogicalVolume(t *testing.T) {
+	api := newRecordingLogicalVolumeClient()
+	provisioner := newTestLvmsProvisioner(t, api)
+	request := lvmsCreateRequest()
+
+	first, err := provisioner.CreateVolume(context.Background(), request)
+	if err != nil {
+		t.Fatalf("initial CreateVolume error: %v", err)
+	}
+	if !first.Pending {
+		t.Fatal("initial CreateVolume response is not pending")
+	}
+
+	second, err := provisioner.CreateVolume(context.Background(), request)
+	if err != nil {
+		t.Fatalf("duplicate CreateVolume error: %v", err)
+	}
+	if !second.Pending {
+		t.Fatal("duplicate CreateVolume response is not pending")
+	}
+	if len(api.created) != 1 || len(api.objects) != 1 {
+		t.Fatalf("duplicate create produced %d API creates and %d LogicalVolumes, want 1 each", len(api.created), len(api.objects))
+	}
+	if second.VendorContext[logicalVolumeNameContextKey] != first.VendorContext[logicalVolumeNameContextKey] {
+		t.Fatalf("adopted LogicalVolume name = %q, want %q", second.VendorContext[logicalVolumeNameContextKey], first.VendorContext[logicalVolumeNameContextKey])
+	}
+}
+
+func TestLvmsCreateVolumeRejectsExistingLogicalVolumeWithWrongOwner(t *testing.T) {
+	api := newRecordingLogicalVolumeClient()
+	request := lvmsCreateRequest()
+	foreign := buildLogicalVolume(request, "worker-1")
+	foreign.SetUID("foreign-logical-volume")
+	labels := foreign.GetLabels()
+	labels[logicalVolumeUUIDLabel] = "different-volume-uid"
+	foreign.SetLabels(labels)
+	api.objects[foreign.GetName()] = foreign
+
+	provisioner := newTestLvmsProvisioner(t, api)
+	if _, err := provisioner.CreateVolume(context.Background(), request); err == nil {
+		t.Fatal("expected ownership mismatch for an existing LogicalVolume")
+	} else if !strings.Contains(err.Error(), "ownership mismatch") {
+		t.Fatalf("error = %v, want ownership mismatch", err)
+	}
+	if len(api.created) != 0 {
+		t.Fatalf("created %d LogicalVolumes while rejecting foreign object, want 0", len(api.created))
 	}
 }
 
@@ -281,11 +343,11 @@ func TestLvmsCreateVolumeImmediateRetryLeavesOneLogicalVolume(t *testing.T) {
 	api := newRecordingLogicalVolumeClient()
 	api.afterCreate = func(volume *unstructured.Unstructured) {
 		if len(api.created) == 0 {
-			_ = unstructured.SetNestedField(volume.Object, int64(codes.ResourceExhausted), "status", "code")
-			_ = unstructured.SetNestedField(volume.Object, "not enough space", "status", "message")
+			setNestedField(t, volume.Object, int64(codes.ResourceExhausted), "status", "code")
+			setNestedField(t, volume.Object, "not enough space", "status", "message")
 			return
 		}
-		_ = unstructured.SetNestedField(volume.Object, "lv-retry", "status", "volumeID")
+		setNestedField(t, volume.Object, "lv-retry", "status", "volumeID")
 	}
 	provisioner := newTestLvmsProvisioner(t, api)
 
@@ -302,15 +364,15 @@ func TestLvmsCreateVolumeImmediateRetryLeavesOneLogicalVolume(t *testing.T) {
 	if len(api.objects) != 1 {
 		t.Fatalf("%d LogicalVolumes remain after retry, want 1", len(api.objects))
 	}
-	if len(api.created) != 2 || api.created[0].GetName() == api.created[1].GetName() {
-		t.Fatalf("retry did not use a new generated name: %#v", api.created)
+	if len(api.created) != 2 || api.created[0].GetName() != api.created[1].GetName() {
+		t.Fatalf("retry did not reuse the stable name: %#v", api.created)
 	}
 }
 
 func TestLvmsDeleteVolumeUsesGeneratedNameAndIsIdempotent(t *testing.T) {
 	api := newRecordingLogicalVolumeClient()
 	api.afterCreate = func(volume *unstructured.Unstructured) {
-		_ = unstructured.SetNestedField(volume.Object, "lv-delete", "status", "volumeID")
+		setNestedField(t, volume.Object, "lv-delete", "status", "volumeID")
 	}
 	provisioner := newTestLvmsProvisioner(t, api)
 	response, err := provisioner.CreateVolume(context.Background(), lvmsCreateRequest())
@@ -356,7 +418,7 @@ func TestLvmsCreateVolumeRequiresTenant(t *testing.T) {
 func TestLvmsDeleteVolumeUsesUIDOwnershipWhenMetadataChanges(t *testing.T) {
 	api := newRecordingLogicalVolumeClient()
 	api.afterCreate = func(volume *unstructured.Unstructured) {
-		_ = unstructured.SetNestedField(volume.Object, "lv-delete", "status", "volumeID")
+		setNestedField(t, volume.Object, "lv-delete", "status", "volumeID")
 	}
 	provisioner := newTestLvmsProvisioner(t, api)
 	response, err := provisioner.CreateVolume(context.Background(), lvmsCreateRequest())
@@ -388,7 +450,7 @@ func TestLvmsDeleteVolumeUsesUIDOwnershipWhenMetadataChanges(t *testing.T) {
 func TestLvmsDeleteVolumeRejectsLogicalVolumeReplacement(t *testing.T) {
 	api := newRecordingLogicalVolumeClient()
 	api.afterCreate = func(volume *unstructured.Unstructured) {
-		_ = unstructured.SetNestedField(volume.Object, "lv-delete", "status", "volumeID")
+		setNestedField(t, volume.Object, "lv-delete", "status", "volumeID")
 	}
 	provisioner := newTestLvmsProvisioner(t, api)
 	response, err := provisioner.CreateVolume(context.Background(), lvmsCreateRequest())

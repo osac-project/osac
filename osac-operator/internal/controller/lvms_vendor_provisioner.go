@@ -73,8 +73,8 @@ func NewLvmsVendorProvisioner(kubeClient logicalVolumeClient) *LvmsVendorProvisi
 }
 
 // CreateVolume creates a LogicalVolume and checks whether TopoLVM has assigned
-// its volumeID. If the CR is still pending, the generated name is returned in
-// VendorContext so the next reconcile can resume the operation without
+// its volumeID. If the CR is still pending, the LogicalVolume name is returned
+// in VendorContext so the next reconcile can resume the operation without
 // creating a duplicate resource or blocking a reconcile worker.
 func (p *LvmsVendorProvisioner) CreateVolume(ctx context.Context, req VendorCreateVolumeRequest) (VendorCreateVolumeResponse, error) {
 	if p.client == nil {
@@ -110,8 +110,24 @@ func (p *LvmsVendorProvisioner) CreateVolume(ctx context.Context, req VendorCrea
 	volume.SetGroupVersionKind(logicalVolumeGVK)
 	if generatedName == "" {
 		volume = buildLogicalVolume(req, nodeName)
+		generatedName = volume.GetName()
 		if err := p.client.Create(ctx, volume); err != nil {
-			return VendorCreateVolumeResponse{}, fmt.Errorf("create LogicalVolume: %w", err)
+			if !apierrors.IsAlreadyExists(err) {
+				return VendorCreateVolumeResponse{}, fmt.Errorf("create LogicalVolume: %w", err)
+			}
+
+			// Another reconcile may have created the deterministic resource first.
+			// Adopt it only when its immutable ownership metadata identifies this
+			// OSAC Volume; never treat an arbitrary pre-existing object as ours.
+			volume = &unstructured.Unstructured{}
+			volume.SetGroupVersionKind(logicalVolumeGVK)
+			volume.SetName(generatedName)
+			if getErr := p.client.Get(ctx, client.ObjectKey{Name: generatedName}, volume); getErr != nil {
+				return VendorCreateVolumeResponse{}, fmt.Errorf("get existing LogicalVolume %q after create conflict: %w", generatedName, getErr)
+			}
+			if ownershipErr := validateLogicalVolumeOwnership(volume, req); ownershipErr != nil {
+				return VendorCreateVolumeResponse{}, ownershipErr
+			}
 		}
 		generatedName = volume.GetName()
 		if generatedName == "" {
@@ -133,6 +149,9 @@ func (p *LvmsVendorProvisioner) CreateVolume(ctx context.Context, req VendorCrea
 		volume, err = p.getLogicalVolumeByUID(ctx, generatedName, logicalVolumeUID)
 		if err != nil {
 			return VendorCreateVolumeResponse{}, fmt.Errorf("get LogicalVolume %q: %w", generatedName, err)
+		}
+		if err := validateLogicalVolumeOwnership(volume, req); err != nil {
+			return VendorCreateVolumeResponse{}, err
 		}
 	}
 
@@ -211,7 +230,7 @@ func buildLogicalVolume(req VendorCreateVolumeRequest, nodeName string) *unstruc
 		"apiVersion": logicalVolumeGroup + "/" + logicalVolumeVersion,
 		"kind":       logicalVolumeKind,
 		"metadata": map[string]interface{}{
-			"generateName": volumeName + "-",
+			"name": logicalVolumeResourceName(req),
 		},
 		"spec": map[string]interface{}{
 			"name":        volumeName,
@@ -228,6 +247,32 @@ func buildLogicalVolume(req VendorCreateVolumeRequest, nodeName string) *unstruc
 		logicalVolumeSourceUIDAnnotation: req.UID,
 	})
 	return volume
+}
+
+func logicalVolumeResourceName(req VendorCreateVolumeRequest) string {
+	return "pvc-" + req.UID
+}
+
+func validateLogicalVolumeOwnership(volume *unstructured.Unstructured, req VendorCreateVolumeRequest) error {
+	labels := volume.GetLabels()
+	annotations := volume.GetAnnotations()
+	checks := []struct {
+		field string
+		got   string
+		want  string
+	}{
+		{field: "label " + logicalVolumeUUIDLabel, got: labels[logicalVolumeUUIDLabel], want: req.UID},
+		{field: "label " + osacTenantKey, got: labels[osacTenantKey], want: req.Tenant},
+		{field: "annotation " + logicalVolumeSourceUIDAnnotation, got: annotations[logicalVolumeSourceUIDAnnotation], want: req.UID},
+		{field: "annotation " + logicalVolumeOwnerAnnotation, got: annotations[logicalVolumeOwnerAnnotation], want: req.Name},
+		{field: "annotation " + osacTenantKey, got: annotations[osacTenantKey], want: req.Tenant},
+	}
+	for _, check := range checks {
+		if check.got != check.want {
+			return fmt.Errorf("LogicalVolume %q ownership mismatch: %s = %q, want %q", volume.GetName(), check.field, check.got, check.want)
+		}
+	}
+	return nil
 }
 
 func logicalVolumeVendorContext(sourceVolumeUID, generatedName, logicalVolumeUID string) map[string]string {

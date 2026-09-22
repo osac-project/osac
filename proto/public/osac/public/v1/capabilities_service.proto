@@ -21,13 +21,31 @@ import "osac/public/v1/authn_capabilities_type.proto";
 // Request message for the `Get` method of the `Capabilities` service.
 message CapabilitiesGetRequest {}
 
+// Service tiers that can be enabled in an OSAC deployment.
+enum ServiceTier {
+  // Service tier is unknown or has not been specified.
+  SERVICE_TIER_UNSPECIFIED = 0;
+
+  // Container as a Service.
+  SERVICE_TIER_CAAS = 1;
+
+  // Virtual Machine as a Service.
+  SERVICE_TIER_VMAAS = 2;
+
+  // Bare Metal as a Service.
+  SERVICE_TIER_BMAAS = 3;
+
+  // Metal as a Service.
+  SERVICE_TIER_MAAS = 4;
+}
+
 // Response message for the `Get` method of the `Capabilities` service.
 message CapabilitiesGetResponse {
   // Authentication capabilities of the server.
   AuthnCapabilities authn = 1;
 
-  // Lowercase names of the services enabled in this deployment.
-  repeated string enabled_services = 2;
+  // Service tiers enabled in this deployment.
+  repeated ServiceTier enabled_services = 2;
 }
 
 // Provides information about the capabilities of the server, such as the list of trusted token issuers for

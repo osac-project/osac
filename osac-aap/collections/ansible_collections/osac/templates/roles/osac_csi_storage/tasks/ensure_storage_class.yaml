@@ -42,17 +42,11 @@
       {% set _ = entries.append({'name': 'osac-' ~ tenant_name ~ '-' ~ tier.name, 'tier': tier.name, 'protocol': tier.protocol}) -%}
       {% endfor -%}
       {{ entries }}
-    _osac_csi_expected_sc_names: >-
-      {% set names = [] -%}
-      {% for tier in _provider_tiers -%}
-      {% set _ = names.append('osac-' ~ tenant_name ~ '-' ~ tier.name) -%}
-      {% endfor -%}
-      {{ names }}
+
 
 - name: Provision OSAC CSI driver and StorageClasses on guest cluster
   block:
-    - name: Read tenant-scoped CSI credentials from hub Secret
-      ansible.builtin.include_tasks: read_hub_credentials.yaml
+
     - name: Ensure OSAC CSI driver namespace exists on guest cluster
       kubernetes.core.k8s:
         kubeconfig: "{{ _remote_kubeconfig }}"
@@ -68,30 +62,22 @@
               osac.openshift.io/tenant: "{{ tenant_name }}"
               pod-security.kubernetes.io/enforce: privileged
               pod-security.kubernetes.io/warn: privileged
-    - name: Create tenant CSI credential Secret on guest cluster
-      kubernetes.core.k8s:
-        kubeconfig: "{{ _remote_kubeconfig }}"
-        validate_certs: "{{ false if (_remote_kubeconfig_insecure | default(false) | bool) else omit }}"
-        state: present
-        definition:
-          apiVersion: v1
-          kind: Secret
-          metadata:
-            name: "{{ osac_csi_driver_credentials_secret_name }}"
-            namespace: "{{ osac_csi_driver_namespace }}"
-            labels:
-              app.kubernetes.io/managed-by: osac-aap
-              osac.openshift.io/tenant: "{{ tenant_name }}"
-          type: Opaque
-          stringData:
-            client-id: "{{ _osac_csi_client_id }}"
-            client-secret: "{{ _osac_csi_client_secret }}"
-      no_log: true
+
+
+    - name: Derive OSAC CSI driver vendor sockets configuration
+      ansible.builtin.set_fact:
+        _osac_csi_derived_vendor_sockets: >-
+          {% set _pairs = [] -%}
+          {% for _k, _v in osac_csi_driver_vendor_node_socket_paths.items() -%}
+          {% set _sock = _v if _v.endswith('.sock') else (_v ~ '/csi.sock') -%}
+          {% set _ = _pairs.append(_k ~ '=' ~ _sock) -%}
+          {% endfor -%}
+          {{ _pairs | sort | join(',') }}
 
     - name: Deploy OSAC CSI driver via Helm on guest cluster
       kubernetes.core.helm:
         kubeconfig: "{{ _remote_kubeconfig }}"
-        kubeconfig_insecure_skip_tls_verify: "{{ _remote_kubeconfig_insecure | default(false) | bool }}"
+        validate_certs: "{{ false if (_remote_kubeconfig_insecure | default(false) | bool) else omit }}"
         release_name: "{{ osac_csi_driver_helm_release }}"
         chart_ref: "{{ osac_csi_driver_chart_ref }}"
         chart_version: "{{ osac_csi_driver_chart_version }}"
@@ -99,14 +85,13 @@
         create_namespace: false
         wait: true
         wait_timeout: 5m
-        no_log: true
         values:
           driverName: "{{ osac_csi_driver_name }}"
           namespace: "{{ osac_csi_driver_namespace }}"
           controller:
             fulfillment:
-              endpoint: "{{ _osac_csi_fulfillment_endpoint }}"
-              issuerUrl: "{{ _osac_csi_issuer_url }}"
+              endpoint: "{{ osac_csi_driver_fulfillment_endpoint | default('http://fulfillment-service.osac-system.svc.cluster.local:8080') }}"
+              issuerUrl: "{{ osac_csi_driver_issuer_url | default('http://keycloak.osac-system.svc.cluster.local:8080/realms/osac') }}"
               credentials:
                 secretName: "{{ osac_csi_driver_credentials_secret_name }}"
                 clientIdKey: client-id
@@ -114,19 +99,7 @@
               tls:
                 insecureSkipVerify: "{{ osac_csi_driver_fulfillment_tls_insecure | bool }}"
           node:
-            vendorSockets: >-
-              {% set _pairs = [] -%}
-              {% for _k, _v in osac_csi_driver_vendor_node_socket_paths.items() -%}
-              {% set _sock = _v if _v.endswith('.sock') else (_v ~ '/csi.sock') -%}
-              {% set _ = _pairs.append(_k ~ '=' ~ _sock) -%}
-              {% endfor -%}
-              {{ _pairs | sort | join(',') }}
-          vendors: >-
-            {% set _vmap = {} -%}
-            {% for _k in osac_csi_driver_vendor_node_socket_paths.keys() -%}
-            {% set _ = _vmap.update({_k: {'enabled': true}}) -%}
-            {% endfor -%}
-            {{ _vmap }}
+            vendorSockets: "{{ _osac_csi_derived_vendor_sockets }}" 
     - name: Create per-tier OSAC CSI StorageClasses on guest cluster
       kubernetes.core.k8s:
         kubeconfig: "{{ _remote_kubeconfig }}"
@@ -160,12 +133,4 @@
       ansible.builtin.set_fact:
         storage_provider_storage_class_names: "{{ _osac_csi_expected_sc_entries }}"
 
-  always:
-    - name: Clear tenant CSI credential facts from play scope
-      ansible.builtin.set_fact:
-        _osac_csi_client_id: ""
-        _osac_csi_client_secret: ""
-        _osac_csi_issuer_url: ""
-        _osac_csi_fulfillment_endpoint: ""
-        _osac_csi_hub_secret: {}
-      no_log: true
+

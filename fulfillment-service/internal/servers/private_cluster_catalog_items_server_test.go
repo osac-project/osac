@@ -89,6 +89,44 @@ var _ = Describe("Private cluster catalog items server", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
+		DescribeTable("checks inherited node sets against concrete network policies", func(hasFabric bool) {
+			host := privatev1.HostType_builder{
+				Id:       "inherited-host",
+				Metadata: privatev1.Metadata_builder{Name: "inherited-host", Tenant: testTenant}.Build(),
+			}.Build()
+			if hasFabric {
+				host.SetInterfaces([]*privatev1.NetworkInterface{
+					privatev1.NetworkInterface_builder{Name: "data-0", Role: "fabric"}.Build(),
+				})
+			}
+			_, err := server.hostTypesDao.Create().SetObject(host).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			template := privatev1.ClusterTemplate_builder{
+				Metadata: privatev1.Metadata_builder{Tenant: testTenant}.Build(),
+				NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
+					"workers": privatev1.ClusterTemplateNodeSet_builder{
+						HostType: privatev1.HostTypeReference_builder{Id: host.GetId()}.Build(), Size: 1,
+					}.Build(),
+				},
+			}.Build()
+			item := privatev1.ClusterCatalogItem_builder{
+				Metadata: privatev1.Metadata_builder{Tenant: testTenant}.Build(),
+				Fields: privatev1.ClusterCatalogItemFields_builder{
+					NetworkAttachment: privatev1.ClusterNetworkAttachmentFieldPolicy_builder{
+						Locked: privatev1.ClusterNetworkAttachment_builder{
+							Subnet: privatev1.SubnetLocalReference_builder{Id: "subnet"}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build()
+			err = validateClusterCatalogItemNodeSetPolicy(ctx, item, template, server.hostTypesDao)
+			if hasFabric {
+				Expect(err).ToNot(HaveOccurred())
+			} else {
+				Expect(err).To(MatchError(ContainSubstring("has no interface with role 'fabric'")))
+			}
+		}, Entry("accepts a fabric interface", true), Entry("rejects a missing fabric interface", false))
+
 		It("Creates object", func() {
 			response, err := server.Create(ctx, privatev1.ClusterCatalogItemsCreateRequest_builder{
 				Object: privatev1.ClusterCatalogItem_builder{

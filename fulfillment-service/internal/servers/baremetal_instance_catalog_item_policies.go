@@ -16,6 +16,7 @@ package servers
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
@@ -31,10 +32,15 @@ import (
 // On error, the caller discards this copy of the item. Deprecated images produce warnings.
 func validateAndCanonicalizeBareMetalInstanceCatalogItemPolicies(
 	ctx context.Context,
+	logger *slog.Logger,
 	item *privatev1.BareMetalInstanceCatalogItem,
+	template *privatev1.BareMetalInstanceTemplate,
 	bareMetalInstanceTypesDao *dao.GenericDAO[*privatev1.BareMetalInstanceType],
 	diskImagesDao *dao.GenericDAO[*privatev1.DiskImage],
+	hostTypesDao *dao.GenericDAO[*privatev1.HostType],
 	subnetsDao *dao.GenericDAO[*privatev1.Subnet],
+	virtualNetworksDao *dao.GenericDAO[*privatev1.VirtualNetwork],
+	networkClassesDao *dao.GenericDAO[*privatev1.NetworkClass],
 	securityGroupsDao *dao.GenericDAO[*privatev1.SecurityGroup],
 ) ([]string, error) {
 	if item == nil {
@@ -58,7 +64,8 @@ func validateAndCanonicalizeBareMetalInstanceCatalogItemPolicies(
 		return nil, err
 	}
 
-	if err := validateBareMetalInstanceCatalogItemNetworkPolicy(ctx, scope, fields.GetNetworkAttachments(), subnetsDao, securityGroupsDao); err != nil {
+	if err := validateBareMetalInstanceCatalogItemNetworkPolicy(ctx, logger, scope, fields.GetNetworkAttachments(), template,
+		hostTypesDao, subnetsDao, virtualNetworksDao, networkClassesDao, securityGroupsDao); err != nil {
 		return nil, err
 	}
 	return warnings, nil
@@ -102,19 +109,11 @@ func applyBareMetalInstanceCatalogItemPolicies(
 
 // validateBareMetalInstanceCatalogItemScalarPolicies checks supported scalar values and returns the first invalid policy.
 func validateBareMetalInstanceCatalogItemScalarPolicies(fields *privatev1.BareMetalInstanceCatalogItemFields) error {
-	if err := validateCatalogItemStringPolicy(fields.GetSshPublicKey(), "fields.ssh_public_key", func(value string) error {
-		if value == "" {
-			return nil
-		}
-		return validateOpenSSHPublicKey(value)
-	}); err != nil {
+	if err := validateCatalogItemStringPolicy(fields.GetSshPublicKey(), "fields.ssh_public_key", validateOpenSSHPublicKey); err != nil {
 		return err
 	}
 	if err := validateCatalogItemStringPolicy(fields.GetUserData(), "fields.user_data", func(value string) error {
-		if len(value) > bareMetalInstanceUserDataMaxBytes {
-			return fmt.Errorf("size %d exceeds the maximum of %d bytes", len(value), bareMetalInstanceUserDataMaxBytes)
-		}
-		return nil
+		return validateBareMetalUserData([]byte(value))
 	}); err != nil {
 		return err
 	}
@@ -174,14 +173,20 @@ func validateBareMetalInstanceCatalogItemInstanceTypePolicy(
 	return nil
 }
 
-// validateBareMetalInstanceCatalogItemNetworkPolicy checks each governed subnet and security
-// group in the Catalog Item's exact tenant/project, then stores their IDs and names. A shared
-// offering cannot fix tenant-local network attachments.
+// validateBareMetalInstanceCatalogItemNetworkPolicy checks each configured subnet and security
+// group in the Catalog Item's tenant and project, then stores their IDs and names. It also checks
+// that the Template's HostType supports the selected interfaces and that each subnet uses a
+// NetworkClass with a fabric manager. A shared Catalog Item cannot fix tenant-local attachments.
 func validateBareMetalInstanceCatalogItemNetworkPolicy(
 	ctx context.Context,
+	logger *slog.Logger,
 	scope referenceScope,
 	policy *privatev1.BareMetalNetworkAttachmentListFieldPolicy,
+	template *privatev1.BareMetalInstanceTemplate,
+	hostTypesDao *dao.GenericDAO[*privatev1.HostType],
 	subnetsDao *dao.GenericDAO[*privatev1.Subnet],
+	virtualNetworksDao *dao.GenericDAO[*privatev1.VirtualNetwork],
+	networkClassesDao *dao.GenericDAO[*privatev1.NetworkClass],
 	securityGroupsDao *dao.GenericDAO[*privatev1.SecurityGroup],
 ) error {
 	if policy == nil {
@@ -197,11 +202,13 @@ func validateBareMetalInstanceCatalogItemNetworkPolicy(
 	if err := validateSharedCatalogItemLocalReferencePolicy(scope, "fields.network_attachments", state.hasLocked, state.hasDefault); err != nil {
 		return err
 	}
+	// Validate each concrete policy value with the same attachment rules used by the resource server.
 	validateAttachments := func(attachments []*privatev1.BareMetalNetworkAttachment) error {
+		if err := validateBareMetalNetworkAttachmentStructure("fields.network_attachments", attachments); err != nil {
+			return err
+		}
+		// Resolve references before checking SecurityGroup ownership and the subnet's fabric configuration.
 		for i, attachment := range attachments {
-			if attachment == nil || attachment.GetSubnet() == nil {
-				return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'fields.network_attachments[%d].subnet' is required", i)
-			}
 			subnetRef := attachment.GetSubnet()
 			resolvedSubnet, resolveErr := resolveCatalogItemSubnet(ctx, subnetsDao, scope, subnetRef,
 				fmt.Sprintf(" in fields.network_attachments[%d].subnet", i), " in fields.network_attachments", fmt.Sprintf(" in fields.network_attachments[%d]", i))
@@ -220,6 +227,21 @@ func validateBareMetalInstanceCatalogItemNetworkPolicy(
 					return resolveErr
 				}
 				attachment.GetSecurityGroups()[j] = canonicalSecurityGroupLocalReference(resolvedSecurityGroup)
+			}
+			if err := validateBareMetalSubnetFabricManager(ctx, resolvedSubnet, fmt.Sprintf("fields.network_attachments[%d]", i), virtualNetworksDao, networkClassesDao, logger); err != nil {
+				return err
+			}
+		}
+		// The Template selects the HostType whose physical interfaces must support the attachment list.
+		if hostTypeID := template.GetHostType(); hostTypeID != "" {
+			ref := privatev1.HostTypeReference_builder{Id: hostTypeID}.Build()
+			hostType, err := resolveAndCanonicalizeLockedReference(ctx, hostTypesDao,
+				template.GetMetadata(), ref, "host type", grpccodes.InvalidArgument)
+			if err != nil {
+				return err
+			}
+			if err := validateBareMetalAttachmentsForHostType("fields.network_attachments", attachments, hostType); err != nil {
+				return err
 			}
 		}
 		return nil

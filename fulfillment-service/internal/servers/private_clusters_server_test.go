@@ -44,6 +44,25 @@ func seedClusterVersion(ctx context.Context, cv *privatev1.ClusterVersion) {
 }
 
 var _ = Describe("Private clusters server", func() {
+	Describe("node-set validation", func() {
+		It("validates the resolved node-set map", func() {
+			size := int32(2)
+			hostType := privatev1.HostTypeReference_builder{Id: "worker"}.Build()
+			valid := map[string]*privatev1.ClusterNodeSet{
+				"workers": privatev1.ClusterNodeSet_builder{Size: &size, HostType: hostType}.Build(),
+			}
+			Expect(validateClusterNodeSetMap(valid)).To(Succeed())
+			Expect(validateClusterNodeSetMap(map[string]*privatev1.ClusterNodeSet{
+				"workers": nil,
+			})).To(MatchError("node set 'workers' must not be null"))
+
+			zero := int32(0)
+			Expect(validateClusterNodeSetMap(map[string]*privatev1.ClusterNodeSet{
+				"workers": privatev1.ClusterNodeSet_builder{Size: &zero, HostType: hostType}.Build(),
+			})).To(MatchError("size for node set 'workers' should be greater than zero, but it is 0"))
+		})
+	})
+
 	Describe("Creation", func() {
 		It("Can be built if all the required parameters are set", func() {
 			server, err := NewPrivateClustersServer().
@@ -1779,7 +1798,7 @@ var _ = Describe("Private clusters server", func() {
 				Expect(status.Message()).To(ContainSubstring("not editable"))
 			})
 
-			DescribeTable("accepts editable values without legacy JSON Schema constraints",
+			DescribeTable("validates editable SSH public keys",
 				func(catID string, value string, expectError bool) {
 					createCatalogItem(catID, true, privatev1.ClusterCatalogItemFields_builder{SshPublicKey: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build()}.Build())
 
@@ -1802,18 +1821,19 @@ var _ = Describe("Private clusters server", func() {
 						status, ok := grpcstatus.FromError(err)
 						Expect(ok).To(BeTrue())
 						Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-						Expect(status.Message()).To(ContainSubstring("validation failed for field 'ssh_public_key'"))
+						Expect(status.Message()).To(ContainSubstring("spec.ssh_public_key"))
+						Expect(status.Message()).To(ContainSubstring("invalid OpenSSH public key"))
 					} else {
 						Expect(err).ToNot(HaveOccurred())
 						Expect(response.GetObject().GetSpec().GetSshPublicKey()).To(Equal(value))
 					}
 				},
-				Entry("accepts a short value", "cat-schema-reject", "short-val", false),
-				Entry("accepts value meeting minLength", "cat-schema-accept", "long-enough-value", false),
+				Entry("rejects malformed value", "cat-ssh-invalid", "short-val", true),
+				Entry("accepts an OpenSSH public key", "cat-ssh-valid", testSSHPublicKey, false),
 			)
 
 			It("Applies default for editable field when not provided", func() {
-				createCatalogItem("cat-default", true, privatev1.ClusterCatalogItemFields_builder{SshPublicKey: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{DefaultValue: proto.String("default-key")}.Build()}.Build()}.Build())
+				createCatalogItem("cat-default", true, privatev1.ClusterCatalogItemFields_builder{SshPublicKey: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{DefaultValue: proto.String(testSSHPublicKey)}.Build()}.Build()}.Build())
 
 				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
@@ -1830,7 +1850,7 @@ var _ = Describe("Private clusters server", func() {
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 				object := response.GetObject()
-				Expect(object.GetSpec().GetSshPublicKey()).To(Equal("default-key"))
+				Expect(object.GetSpec().GetSshPublicKey()).To(Equal(testSSHPublicKey))
 			})
 
 			It("Applies spec defaults from template when created via catalog item", func() {
@@ -1857,7 +1877,7 @@ var _ = Describe("Private clusters server", func() {
 								}.Build(),
 							},
 							SpecDefaults: privatev1.ClusterTemplateSpecDefaults_builder{
-								SshPublicKey: proto.String("ssh-rsa TEMPLATE_DEFAULT_KEY"),
+								SshPublicKey: proto.String(testSSHPublicKey),
 							}.Build(),
 						}.Build(),
 					).
@@ -1897,7 +1917,7 @@ var _ = Describe("Private clusters server", func() {
 				object := response.GetObject()
 
 				// Verify spec defaults from template are applied:
-				Expect(object.GetSpec().GetSshPublicKey()).To(Equal("ssh-rsa TEMPLATE_DEFAULT_KEY"))
+				Expect(object.GetSpec().GetSshPublicKey()).To(Equal(testSSHPublicKey))
 
 				// Verify node sets are also populated:
 				nodeSets := object.GetSpec().GetNodeSets()

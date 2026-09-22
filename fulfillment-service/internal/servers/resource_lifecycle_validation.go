@@ -42,7 +42,9 @@ func validateResolvedStorageTier(tier *privatev1.StorageTier, source string) err
 // validateResolvedSubnetReady checks readiness after reference resolution.
 func validateResolvedSubnetReady(subnet *privatev1.Subnet, identifier, source string) error {
 	if subnet.GetStatus().GetState() != privatev1.SubnetState_SUBNET_STATE_READY {
-		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "subnet '%s'%s is not in READY state", identifier, source)
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"subnet '%s'%s is not in READY state (current state: %s)",
+			identifier, source, subnet.GetStatus().GetState())
 	}
 	return nil
 }
@@ -50,10 +52,15 @@ func validateResolvedSubnetReady(subnet *privatev1.Subnet, identifier, source st
 // validateResolvedSecurityGroup checks readiness and membership in the attachment's virtual network.
 func validateResolvedSecurityGroup(group *privatev1.SecurityGroup, identifier, source, virtualNetworkID string) error {
 	if group.GetStatus().GetState() != privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY {
-		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "security group '%s'%s is not in READY state", identifier, source)
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"security group '%s'%s is not in READY state (current state: %s)",
+			identifier, source, group.GetStatus().GetState())
 	}
-	if virtualNetworkID != "" && virtualNetworkID != refKey(group.GetSpec().GetVirtualNetwork()) {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument, "security group '%s'%s belongs to a different virtual network", identifier, source)
+	groupVirtualNetworkID := refKey(group.GetSpec().GetVirtualNetwork())
+	if virtualNetworkID != "" && virtualNetworkID != groupVirtualNetworkID {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"security group '%s'%s belongs to a different virtual network (actual: '%s', expected: '%s')",
+			identifier, source, groupVirtualNetworkID, virtualNetworkID)
 	}
 	return nil
 }

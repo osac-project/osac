@@ -69,10 +69,11 @@ func validateUserDataSecret(
 		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to resolve user_data_secret reference")
 	}
 	secret := secretResponse.GetObject()
-	if err := validateSecretType(secret, ref, "user_data_secret", privatev1.SecretType_SECRET_TYPE_USER_DATA); err != nil {
+	if err := validateSecretType(secret, refKey(ref), "user_data_secret", privatev1.SecretType_SECRET_TYPE_USER_DATA); err != nil {
 		return nil, err
 	}
 	data := secret.GetData()
+	// Vault-backed Secrets may keep their value outside the database and must be fetched before validation.
 	if len(data) == 0 && secret.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT {
 		if secretStore == nil {
 			logger.ErrorContext(ctx, "Failed to load user_data_secret value: secret store isn't configured")
@@ -91,10 +92,10 @@ func validateUserDataSecret(
 			"secret '%s' referenced by user_data_secret must contain a non-empty '%s' entry",
 			refKey(ref), userDataSecretDataKey)
 	}
-	if len(value) > bareMetalInstanceUserDataMaxBytes {
+	if err := validateBareMetalUserData(value); err != nil {
 		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"secret '%s' referenced by user_data_secret has a '%s' entry whose size %d exceeds the maximum of %d bytes",
-			refKey(ref), userDataSecretDataKey, len(value), bareMetalInstanceUserDataMaxBytes)
+			"secret '%s' referenced by user_data_secret has a '%s' entry whose %s",
+			refKey(ref), userDataSecretDataKey, err)
 	}
 
 	result := &privatev1.SecretLocalReference{}

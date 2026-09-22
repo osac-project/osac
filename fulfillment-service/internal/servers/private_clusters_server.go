@@ -321,6 +321,11 @@ func (s *PrivateClustersServer) prepareCreate(ctx context.Context, candidate *pr
 	if err = s.applyClusterTemplate(ctx, candidate, template); err != nil {
 		return
 	}
+	if key := spec.GetSshPublicKey(); key != "" {
+		if err = validateOpenSSHPublicKey(key); err != nil {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument, "spec.ssh_public_key: %s", err)
+		}
+	}
 
 	if candidate.GetSpec().GetNetworkAttachment() == nil {
 		if err = s.injectDefaultNetworkAttachment(ctx, candidate); err != nil {
@@ -396,6 +401,13 @@ func (s *PrivateClustersServer) Update(ctx context.Context,
 	err = s.generic.UpdateWithCandidatePreparation(ctx, request, &response, func(ctx context.Context, current *privatev1.Cluster, candidate *privatev1.Cluster) error {
 		if err := validateClusterTemplateImmutability(current, candidate, request.GetUpdateMask()); err != nil {
 			return err
+		}
+		if updateIncludesField(request.GetUpdateMask(), "spec.ssh_public_key") {
+			if key := candidate.GetSpec().GetSshPublicKey(); key != "" {
+				if err := validateOpenSSHPublicKey(key); err != nil {
+					return grpcstatus.Errorf(grpccodes.InvalidArgument, "spec.ssh_public_key: %s", err)
+				}
+			}
 		}
 		if err := utils.ValidateClusterSpecFields(candidate.GetSpec()); err != nil {
 			return err
@@ -509,12 +521,8 @@ func (s *PrivateClustersServer) validatePullSecretSecret(
 			return err
 		}
 	}
-	if secret.GetType() != privatev1.SecretType_SECRET_TYPE_PULL_SECRET {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"secret '%s' referenced by pull_secret_secret has type %s; expected %s",
-			identifier, secret.GetType(), privatev1.SecretType_SECRET_TYPE_PULL_SECRET)
-	}
-	return nil
+	return validateResolvedSecretLifecycleAndType(secret, identifier, "pull_secret_secret",
+		privatev1.SecretType_SECRET_TYPE_PULL_SECRET)
 }
 
 func (s *PrivateClustersServer) lookupHostType(ctx context.Context,
@@ -719,6 +727,29 @@ func (s *PrivateClustersServer) validateAtLeastOneNodeSet(nodeSets map[string]*p
 			grpccodes.InvalidArgument,
 			"cannot remove the last node set: clusters must have at least one node set",
 		)
+	}
+	return nil
+}
+
+// validateClusterNodeSetMap checks that a node-set map has at least one entry and that
+// every entry has the fields required after defaults and references have been resolved.
+func validateClusterNodeSetMap(nodeSets map[string]*privatev1.ClusterNodeSet) error {
+	if len(nodeSets) == 0 {
+		return fmt.Errorf("must contain at least one node set")
+	}
+	for name, nodeSet := range nodeSets {
+		if nodeSet == nil {
+			return fmt.Errorf("node set '%s' must not be null", name)
+		}
+		if !nodeSet.HasSize() {
+			return fmt.Errorf("size for node set '%s' is required", name)
+		}
+		if nodeSet.GetSize() <= 0 {
+			return fmt.Errorf("size for node set '%s' should be greater than zero, but it is %d", name, nodeSet.GetSize())
+		}
+		if nodeSet.GetHostType() == nil || refKey(nodeSet.GetHostType()) == "" {
+			return fmt.Errorf("host type for node set '%s' is required", name)
+		}
 	}
 	return nil
 }
@@ -937,10 +968,8 @@ func (s *PrivateClustersServer) validateNetworkAttachmentState(ctx context.Conte
 		}
 		return err
 	}
-	if subnet.GetStatus().GetState() != privatev1.SubnetState_SUBNET_STATE_READY {
-		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
-			"spec.network_attachment: subnet '%s' is not in READY state (current state: %s)",
-			subnetKey, subnet.GetStatus().GetState().String())
+	if err := validateResolvedSubnetReady(subnet, subnetKey, " in spec.network_attachment"); err != nil {
+		return err
 	}
 
 	virtualNetworkID := refKey(subnet.GetSpec().GetVirtualNetwork())
@@ -949,6 +978,7 @@ func (s *PrivateClustersServer) validateNetworkAttachmentState(ctx context.Conte
 			"spec.network_attachment: subnet '%s' has no virtual network reference", subnetKey)
 	}
 
+	// Use the subnet's VirtualNetwork as the expected owner for every SecurityGroup.
 	for i, sgRef := range att.GetSecurityGroups() {
 		sgKey := refKey(sgRef)
 		if sgKey == "" {
@@ -965,18 +995,9 @@ func (s *PrivateClustersServer) validateNetworkAttachmentState(ctx context.Conte
 			}
 			return err
 		}
-		if sg.GetStatus().GetState() != privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY {
-			return grpcstatus.Errorf(grpccodes.FailedPrecondition,
-				"spec.network_attachment.security_groups[%d]: security group '%s' is not in READY state (current state: %s)",
-				i, sgKey, sg.GetStatus().GetState().String())
-		}
-
-		sgVirtualNetworkID := refKey(sg.GetSpec().GetVirtualNetwork())
-		if sgVirtualNetworkID != virtualNetworkID {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"spec.network_attachment.security_groups[%d]: security group '%s' belongs to VirtualNetwork '%s', "+
-					"but subnet '%s' belongs to VirtualNetwork '%s'",
-				i, sgKey, sgVirtualNetworkID, subnetKey, virtualNetworkID)
+		if err := validateResolvedSecurityGroup(sg, sgKey,
+			fmt.Sprintf(" in spec.network_attachment.security_groups[%d]", i), virtualNetworkID); err != nil {
+			return err
 		}
 	}
 
@@ -1022,21 +1043,23 @@ func (s *PrivateClustersServer) resolveFabricInterfaces(ctx context.Context, spe
 		if hostType == nil {
 			continue
 		}
-		fabricInterface := ""
-		for _, ni := range hostType.GetInterfaces() {
-			if strings.EqualFold(ni.GetRole(), "fabric") {
-				fabricInterface = ni.GetName()
-				break
-			}
-		}
-		if fabricInterface == "" {
+		fabricInterface, err := selectClusterFabricInterface(hostType)
+		if err != nil {
 			return grpcstatus.Errorf(grpccodes.FailedPrecondition,
-				"node_sets[%s]: host type '%s' has no interface with role 'fabric'",
-				name, hostTypeKey)
+				"node_sets[%s]: %s", name, err)
 		}
 		nodeSet.SetFabricInterface(fabricInterface)
 	}
 	return nil
+}
+
+func selectClusterFabricInterface(hostType *privatev1.HostType) (string, error) {
+	for _, networkInterface := range hostType.GetInterfaces() {
+		if strings.EqualFold(networkInterface.GetRole(), "fabric") {
+			return networkInterface.GetName(), nil
+		}
+	}
+	return "", fmt.Errorf("host type '%s' has no interface with role 'fabric'", hostType.GetId())
 }
 
 // autoProvisionExternalIPs creates two ExternalIPs and two ExternalIPAttachments
@@ -1207,6 +1230,11 @@ func (s *PrivateClustersServer) resolveClusterNodeSets(ctx context.Context, clus
 	if useTemplateMap {
 		nodes = convertTemplateNodeSets(template.GetNodeSets())
 	}
+	// An existing Template may contain no node sets. Keep the Cluster map empty so the
+	// infrastructure provider can choose node placement.
+	if len(nodes) == 0 && len(template.GetNodeSets()) == 0 {
+		return nil
+	}
 	for name, node := range nodes {
 		if node == nil {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument, "node set '%s' is required", name)
@@ -1236,18 +1264,15 @@ func (s *PrivateClustersServer) resolveClusterNodeSets(ctx context.Context, clus
 		if host == nil {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument, "host type for node set '%s' is required", name)
 		}
-		if !node.HasSize() {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument, "size for node set '%s' is required", name)
-		}
-		if node.GetSize() <= 0 {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument, "size for node set '%s' should be greater than zero, but it is %d", name, node.GetSize())
-		}
 		node.SetHostType(privatev1.HostTypeReference_builder{
 			Id: host.GetId(), Name: host.GetMetadata().GetName(),
 			Shared: host.GetMetadata().GetTenant() == auth.SharedTenant, Project: host.GetMetadata().GetProject(),
 		}.Build())
 	}
 	cluster.GetSpec().SetNodeSets(nodes)
+	if err := validateClusterNodeSetMap(nodes); err != nil {
+		return grpcstatus.Error(grpccodes.InvalidArgument, err.Error())
+	}
 	return nil
 }
 

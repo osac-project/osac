@@ -21,7 +21,9 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/computeinstancespec"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	"github.com/osac-project/osac/fulfillment-service/internal/utils"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -240,18 +242,14 @@ func validateComputeInstanceCatalogItemAdditionalDisksPolicy(
 	if err != nil {
 		return catalogItemPolicyError("fields.additional_disks", err.Error())
 	}
+	// Additional-disk entries must be complete because Template defaults do not merge into this list.
 	resolveDisks := func(disks []*privatev1.ComputeInstanceDisk) error {
 		for i, disk := range disks {
-			if disk == nil {
-				return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'fields.additional_disks[%d]' must not be null", i)
-			}
-			if disk.HasSizeGib() && disk.GetSizeGib() <= 0 {
-				return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'fields.additional_disks[%d].size_gib' must be greater than zero", i)
+			if err := utils.ValidateCompleteComputeInstanceDisk(disk); err != nil {
+				return grpcstatus.Errorf(grpccodes.InvalidArgument,
+					"field 'fields.additional_disks[%d]' is incomplete: %s", i, err)
 			}
 			ref := disk.GetStorageTier()
-			if ref == nil {
-				continue
-			}
 			resolved, resolveErr := resolveLockedResourceInScope(ctx, storageTiersDao, referenceScope{tenant: auth.SharedTenant}, ref.GetId(), ref.GetName(),
 				"storage tier", fmt.Sprintf(" in fields.additional_disks[%d].storage_tier", i), grpccodes.NotFound)
 			if resolveErr != nil {
@@ -300,14 +298,12 @@ func validateComputeInstanceCatalogItemNetworkAttachmentsPolicy(
 	if err := validateSharedCatalogItemLocalReferencePolicy(scope, "fields.network_attachments", state.hasLocked, state.hasDefault); err != nil {
 		return err
 	}
+	// Validate list structure before resolving and canonicalizing each attachment dependency.
 	validateAttachments := func(attachments []*privatev1.ComputeNetworkAttachment) error {
+		if err := computeinstancespec.ValidateNetworkAttachments(attachments); err != nil {
+			return catalogItemPolicyError("fields.network_attachments", err.Error())
+		}
 		for i, attachment := range attachments {
-			if attachment == nil {
-				return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'fields.network_attachments[%d]' must not be null", i)
-			}
-			if attachment.GetSubnet() == nil {
-				return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'fields.network_attachments[%d].subnet' is required", i)
-			}
 			subnetRef := attachment.GetSubnet()
 			resolvedSubnet, resolveErr := resolveCatalogItemSubnet(ctx, subnetsDao, scope, subnetRef,
 				fmt.Sprintf(" in fields.network_attachments[%d].subnet", i), fmt.Sprintf(" in fields.network_attachments[%d].subnet", i), fmt.Sprintf(" in fields.network_attachments[%d]", i))
@@ -345,12 +341,7 @@ func validateComputeInstanceCatalogItemNetworkAttachmentsPolicy(
 
 // validateComputeInstanceCatalogItemScalarPolicies checks the supported scalar policies and returns the first invalid value.
 func validateComputeInstanceCatalogItemScalarPolicies(fields *privatev1.ComputeInstanceCatalogItemFields) error {
-	if err := validateCatalogItemStringPolicy(fields.GetSshPublicKey(), "fields.ssh_public_key", func(value string) error {
-		if value == "" {
-			return nil
-		}
-		return validateOpenSSHPublicKey(value)
-	}); err != nil {
+	if err := validateCatalogItemStringPolicy(fields.GetSshPublicKey(), "fields.ssh_public_key", validateOpenSSHPublicKey); err != nil {
 		return err
 	}
 	if _, err := decodeComputeInstanceRunStrategyPolicy(fields.GetRunStrategy()); err != nil {

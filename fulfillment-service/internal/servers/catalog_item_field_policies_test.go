@@ -14,6 +14,8 @@ specific language governing permissions and limitations under the License.
 package servers
 
 import (
+	"strings"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/protobuf/proto"
@@ -33,6 +35,25 @@ func policyTestSecurityGroup(name string) *privatev1.SecurityGroupLocalReference
 }
 
 var _ = Describe("Shared typed-policy helper", func() {
+	Describe("Cluster CIDR policies", func() {
+		It("canonicalizes IPv6 defaults", func() {
+			value := "2001:db8:1::1/48"
+			policy := privatev1.StringFieldPolicy_builder{
+				Editable: privatev1.EditableStringField_builder{DefaultValue: &value}.Build(),
+			}.Build()
+			Expect(canonicalizeCatalogItemCIDRPolicy(policy, "fields.network.pod_cidr")).To(Succeed())
+			Expect(policy.GetEditable().GetDefaultValue()).To(Equal("2001:db8:1::/48"))
+		})
+
+		It("qualifies invalid values once", func() {
+			value := "invalid"
+			policy := privatev1.StringFieldPolicy_builder{Locked: &value}.Build()
+			err := canonicalizeCatalogItemCIDRPolicy(policy, "fields.network.pod_cidr")
+			Expect(err).To(HaveOccurred())
+			Expect(strings.Count(err.Error(), "fields.network.pod_cidr")).To(Equal(1))
+		})
+	})
+
 	It("applies scalar precedence", func() {
 		locked := "locked"
 		got := ""

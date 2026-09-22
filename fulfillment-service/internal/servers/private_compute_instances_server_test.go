@@ -1680,7 +1680,7 @@ var _ = Describe("Private compute instances server", func() {
 				Expect(status.Message()).To(ContainSubstring("not editable"))
 			})
 
-			DescribeTable("accepts editable values without legacy JSON Schema constraints",
+			DescribeTable("validates editable SSH public keys",
 				func(catID string, value string, expectError bool) {
 					createCICatalogItem(catID, true, privatev1.ComputeInstanceCatalogItemFields_builder{SshPublicKey: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build(), NetworkAttachments: privatev1.ComputeNetworkAttachmentListFieldPolicy_builder{Editable: &privatev1.EditableComputeNetworkAttachmentList{}}.Build()}.Build())
 
@@ -1705,18 +1705,19 @@ var _ = Describe("Private compute instances server", func() {
 						status, ok := grpcstatus.FromError(err)
 						Expect(ok).To(BeTrue())
 						Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-						Expect(status.Message()).To(ContainSubstring("validation failed for field 'ssh_public_key'"))
+						Expect(status.Message()).To(ContainSubstring("spec.ssh_public_key"))
+						Expect(status.Message()).To(ContainSubstring("invalid OpenSSH public key"))
 					} else {
 						Expect(err).ToNot(HaveOccurred())
 						Expect(response.GetObject().GetSpec().GetSshPublicKey()).To(Equal(value))
 					}
 				},
-				Entry("accepts a short value", "ci-cat-schema-reject", "short-val", false),
-				Entry("accepts value meeting minLength", "ci-cat-schema-accept", "long-enough-key", false),
+				Entry("rejects malformed value", "ci-cat-ssh-invalid", "short-val", true),
+				Entry("accepts an OpenSSH public key", "ci-cat-ssh-valid", testSSHPublicKey, false),
 			)
 
 			It("Applies default for editable field when not provided", func() {
-				createCICatalogItem("ci-cat-dflt", true, privatev1.ComputeInstanceCatalogItemFields_builder{SshPublicKey: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{DefaultValue: proto.String("default-key")}.Build()}.Build(), NetworkAttachments: privatev1.ComputeNetworkAttachmentListFieldPolicy_builder{Editable: &privatev1.EditableComputeNetworkAttachmentList{}}.Build()}.Build())
+				createCICatalogItem("ci-cat-dflt", true, privatev1.ComputeInstanceCatalogItemFields_builder{SshPublicKey: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{DefaultValue: proto.String(testSSHPublicKey)}.Build()}.Build(), NetworkAttachments: privatev1.ComputeNetworkAttachmentListFieldPolicy_builder{Editable: &privatev1.EditableComputeNetworkAttachmentList{}}.Build()}.Build())
 
 				response, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
 					Object: privatev1.ComputeInstance_builder{
@@ -1735,7 +1736,7 @@ var _ = Describe("Private compute instances server", func() {
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 				object := response.GetObject()
-				Expect(object.GetSpec().GetSshPublicKey()).To(Equal("default-key"))
+				Expect(object.GetSpec().GetSshPublicKey()).To(Equal(testSSHPublicKey))
 			})
 
 			It("Rejects changing catalog_item on update", func() {
@@ -2488,7 +2489,7 @@ var _ = Describe("Private compute instances server", func() {
 				Expect(ok).To(BeTrue())
 				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 				Expect(status.Message()).To(ContainSubstring("security group"))
-				Expect(status.Message()).To(ContainSubstring("belongs to VirtualNetwork"))
+				Expect(status.Message()).To(ContainSubstring("belongs to a different virtual network"))
 			})
 
 			It("Should allow empty security_groups in network_attachments", func() {

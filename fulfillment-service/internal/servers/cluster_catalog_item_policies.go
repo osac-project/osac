@@ -64,10 +64,6 @@ func validateAndCanonicalizeClusterCatalogItemPolicies(
 		return err
 	}
 
-	if err := validateClusterCatalogItemNodeSetValues(fields); err != nil {
-		return err
-	}
-
 	if err := validateClusterCatalogItemNetworkAttachmentPolicy(ctx, scope, fields.GetNetworkAttachment(), subnetsDao, securityGroupsDao); err != nil {
 		return err
 	}
@@ -201,13 +197,9 @@ func validateClusterCatalogItemPullSecretPolicy(
 		if resolveErr != nil {
 			return nil, resolveErr
 		}
-		if err := validateResourceNotDeleted("secret", refKey(ref), " in fields.pull_secret_secret", resolved.GetMetadata()); err != nil {
+		if err := validateResolvedSecretLifecycleAndType(resolved, refKey(ref), "fields.pull_secret_secret",
+			privatev1.SecretType_SECRET_TYPE_PULL_SECRET); err != nil {
 			return nil, err
-		}
-		if resolved.GetType() != privatev1.SecretType_SECRET_TYPE_PULL_SECRET {
-			return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"secret '%s' referenced by fields.pull_secret_secret has type %s; expected %s",
-				refKey(ref), resolved.GetType(), privatev1.SecretType_SECRET_TYPE_PULL_SECRET)
 		}
 		return canonicalSecretLocalReference(resolved), nil
 	}
@@ -241,12 +233,7 @@ func validateClusterCatalogItemNetworkCIDRPolicies(network *privatev1.ClusterNet
 
 // validateClusterCatalogItemScalarPolicies checks SSH-key and automatic-external-IP policies without changing them.
 func validateClusterCatalogItemScalarPolicies(fields *privatev1.ClusterCatalogItemFields) error {
-	if err := validateCatalogItemStringPolicy(fields.GetSshPublicKey(), "fields.ssh_public_key", func(value string) error {
-		if value == "" {
-			return nil
-		}
-		return validateOpenSSHPublicKey(value)
-	}); err != nil {
+	if err := validateCatalogItemStringPolicy(fields.GetSshPublicKey(), "fields.ssh_public_key", validateOpenSSHPublicKey); err != nil {
 		return err
 	}
 	if err := validateCatalogItemBoolPolicy(fields.GetAutoExternalIpAttachment(), "fields.auto_external_ip_attachment"); err != nil {
@@ -314,46 +301,12 @@ func validateClusterCatalogItemNetworkAttachmentPolicy(
 	return nil
 }
 
-// validateClusterCatalogItemNodeSetValues checks the policy branch and node-set sizes without resolving references.
-func validateClusterCatalogItemNodeSetValues(fields *privatev1.ClusterCatalogItemFields) error {
-	state, err := decodeClusterNodeSetMapPolicy(fields.GetNodeSets())
-	if err != nil {
-		return catalogItemPolicyError("fields.node_sets", err.Error())
-	}
-	if state.hasLocked {
-		if err := validateClusterCatalogItemNodeSetMap("fields.node_sets", state.lockedValue); err != nil {
-			return err
-		}
-	}
-	if state.hasDefault {
-		if err := validateClusterCatalogItemNodeSetMap("fields.node_sets", state.defaultValue); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// validateClusterCatalogItemNodeSetMap checks nonempty node-set values and positive sizes, returning the first invalid entry.
-func validateClusterCatalogItemNodeSetMap(field string, nodeSets map[string]*privatev1.ClusterNodeSet) error {
-	if len(nodeSets) == 0 {
-		return catalogItemPolicyError(field, "locked/default node sets must not be empty")
-	}
-	for name, nodeSet := range nodeSets {
-		if nodeSet == nil {
-			return catalogItemPolicyError(field, fmt.Sprintf("node set '%s' must not be null", name))
-		}
-		if !nodeSet.HasSize() || nodeSet.GetSize() <= 0 {
-			return catalogItemPolicyError(field, fmt.Sprintf("node set '%s' size must be greater than zero", name))
-		}
-	}
-	return nil
-}
-
-// validateClusterCatalogItemNodeSetPolicy checks HostType references in each governed node set.
-// A supplied name is looked up from the Catalog Item's tenant/project or explicit shared scope;
-// an omitted HostType inherits the corresponding Template node set's reference. The resolved ID
-// must match the Template's HostType. The item receives the resolved references, while the
-// Template stays unchanged; dependency locks last through the request transaction.
+// validateClusterCatalogItemNodeSetPolicy checks HostType references supplied by the Catalog Item
+// or inherited from its Template. A supplied name is looked up from the Catalog Item's
+// tenant/project or explicit shared scope. An omitted HostType inherits the corresponding
+// Template node set's reference, and a concrete network policy requires each effective HostType
+// to provide a fabric interface. Resolved references are stored in the Catalog Item, while the
+// Template remains unchanged. Dependency locks are held until the request transaction finishes.
 func validateClusterCatalogItemNodeSetPolicy(
 	ctx context.Context,
 	item *privatev1.ClusterCatalogItem,
@@ -361,15 +314,43 @@ func validateClusterCatalogItemNodeSetPolicy(
 	hostTypes *dao.GenericDAO[*privatev1.HostType],
 ) error {
 	policy := item.GetFields().GetNodeSets()
-	if policy == nil {
+	state, err := decodeClusterNodeSetMapPolicy(policy)
+	if err != nil {
+		return catalogItemPolicyError("fields.node_sets", err.Error())
+	}
+	networkState, err := decodeClusterNetworkAttachmentPolicy(item.GetFields().GetNetworkAttachment())
+	if err != nil {
+		return catalogItemPolicyError("fields.network_attachment", err.Error())
+	}
+	// Defer fabric validation when callers must supply the editable network attachment themselves.
+	requiresFabricInterface := networkState.hasLocked || networkState.hasDefault
+	var nodeMap *privatev1.ClusterNodeSetMap
+	// Select the concrete policy branch; otherwise the Template's node sets remain effective.
+	switch {
+	case state.hasLocked:
+		nodeMap = policy.GetLocked()
+	case state.hasDefault:
+		nodeMap = policy.GetEditable().GetDefaultValue()
+	default:
+		if requiresFabricInterface {
+			// A concrete network policy also requires inherited Template HostTypes to expose fabric interfaces.
+			for name, node := range template.GetNodeSets() {
+				ref := cloneMessage(node.GetHostType())
+				if ref == nil {
+					return catalogItemPolicyError("fields.node_sets."+name, "host type is required")
+				}
+				hostType, err := resolveAndCanonicalizeLockedReference(ctx, hostTypes, template.GetMetadata(), ref, "host type", grpccodes.InvalidArgument)
+				if err != nil {
+					return err
+				}
+				if _, err := selectClusterFabricInterface(hostType); err != nil {
+					return catalogItemPolicyError("fields.node_sets."+name, err.Error())
+				}
+			}
+		}
 		return nil
 	}
-	var nodeMap *privatev1.ClusterNodeSetMap
-	if policy.HasLocked() {
-		nodeMap = policy.GetLocked()
-	} else {
-		nodeMap = policy.GetEditable().GetDefaultValue()
-	}
+	// Resolve explicit or inherited HostTypes and enforce compatibility with matching Template node sets.
 	for name, node := range nodeMap.GetItems() {
 		if node == nil {
 			return catalogItemPolicyError("fields.node_sets", "node set is required")
@@ -399,7 +380,15 @@ func validateClusterCatalogItemNodeSetPolicy(
 				return catalogItemPolicyError("fields.node_sets."+name, "host type conflicts with the template")
 			}
 		}
+		if requiresFabricInterface {
+			if _, err := selectClusterFabricInterface(resolved); err != nil {
+				return catalogItemPolicyError("fields.node_sets."+name, err.Error())
+			}
+		}
 		node.SetHostType(ref)
+	}
+	if err := validateClusterNodeSetMap(convertTemplateNodeSets(nodeMap.GetItems())); err != nil {
+		return catalogItemPolicyError("fields.node_sets", err.Error())
 	}
 	return nil
 }

@@ -1667,7 +1667,7 @@ var _ = Describe("Clusters server", func() {
 		})
 
 		It("Preserves explicit fields through create and get", func() {
-			sshKey := "ssh-ed25519 AAAA..."
+			sshKey := testSSHPublicKey
 			podCIDR := "10.128.0.0/14"
 			serviceCIDR := "172.30.0.0/16"
 

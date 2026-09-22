@@ -93,19 +93,22 @@ func validateResolvedSecretType(
 		return grpcstatus.Errorf(grpccodes.Internal, "failed to resolve %s reference", field)
 	}
 
-	return validateSecretType(secretResponse.GetObject(), ref, field, expected)
+	return validateSecretType(secretResponse.GetObject(), refKey(ref), field, expected)
 }
 
-func validateSecretType(
-	secret *privatev1.Secret,
-	ref *privatev1.SecretLocalReference,
-	field string,
-	expected privatev1.SecretType,
-) error {
+// validateResolvedSecretLifecycleAndType checks a Secret that has already been loaded.
+func validateResolvedSecretLifecycleAndType(secret *privatev1.Secret, identifier, field string, expected privatev1.SecretType) error {
+	if err := validateResourceNotDeleted("secret", identifier, " referenced by "+field, secret.GetMetadata()); err != nil {
+		return err
+	}
+	return validateSecretType(secret, identifier, field, expected)
+}
+
+func validateSecretType(secret *privatev1.Secret, identifier, field string, expected privatev1.SecretType) error {
 	if secret.GetType() != expected {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"secret '%s' referenced by %s has type %s; expected %s",
-			refKey(ref), field, secret.GetType(), expected)
+			identifier, field, secret.GetType(), expected)
 	}
 	return nil
 }

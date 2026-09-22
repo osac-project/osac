@@ -374,6 +374,12 @@ func (s *PrivateComputeInstancesServer) prepareCreate(ctx context.Context, candi
 	if err != nil {
 		return
 	}
+	if key := spec.GetSshPublicKey(); key != "" {
+		if err = validateOpenSSHPublicKey(key); err != nil {
+			err = grpcstatus.Errorf(grpccodes.InvalidArgument, "spec.ssh_public_key: %s", err)
+			return
+		}
+	}
 	if err = s.validateAndResolveUserDataSecret(ctx, spec, true); err != nil {
 		return
 	}
@@ -462,6 +468,13 @@ func (s *PrivateComputeInstancesServer) Update(ctx context.Context,
 			updateIncludesField(request.GetUpdateMask(), "spec.user_data_secret"),
 		); err != nil {
 			return err
+		}
+		if updateIncludesField(request.GetUpdateMask(), "spec.ssh_public_key") {
+			if key := candidate.GetSpec().GetSshPublicKey(); key != "" {
+				if err := validateOpenSSHPublicKey(key); err != nil {
+					return grpcstatus.Errorf(grpccodes.InvalidArgument, "spec.ssh_public_key: %s", err)
+				}
+			}
 		}
 		if updateIncludesField(request.GetUpdateMask(), "spec.network_attachments") {
 			// During deletion, keep the existing visibility check without requiring dependencies
@@ -969,15 +982,15 @@ func (s *PrivateComputeInstancesServer) validateNetworkReferencesState(
 			return err
 		}
 
+		source := fmt.Sprintf(" in network_attachments[%d]", i)
 		// VAL-02: Validate READY state
-		if subnet.GetStatus().GetState() != privatev1.SubnetState_SUBNET_STATE_READY {
-			return grpcstatus.Errorf(grpccodes.FailedPrecondition,
-				"network_attachments[%d]: subnet '%s' is not in READY state (current state: %s)",
-				i, subnetKey, subnet.GetStatus().GetState().String())
+		if err := validateResolvedSubnetReady(subnet, subnetKey, source); err != nil {
+			return err
 		}
 
 		virtualNetworkID := refKey(subnet.GetSpec().GetVirtualNetwork())
 
+		// Use the subnet's VirtualNetwork as the expected owner for every SecurityGroup.
 		for _, sgRef := range securityGroupRefs {
 			if sgRef == nil {
 				continue
@@ -995,20 +1008,9 @@ func (s *PrivateComputeInstancesServer) validateNetworkReferencesState(
 			}
 
 			// VAL-02: Validate READY state
-			if sg.GetStatus().GetState() != privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY {
-				return grpcstatus.Errorf(grpccodes.FailedPrecondition,
-					"network_attachments[%d]: security group '%s' is not in READY state (current state: %s)",
-					i, sgKey, sg.GetStatus().GetState().String())
-			}
-
 			// VAL-03: Validate SecurityGroup belongs to same VirtualNetwork as Subnet
-			if virtualNetworkID != "" {
-				sgVirtualNetworkID := refKey(sg.GetSpec().GetVirtualNetwork())
-				if sgVirtualNetworkID != virtualNetworkID {
-					return grpcstatus.Errorf(grpccodes.InvalidArgument,
-						"network_attachments[%d]: security group '%s' belongs to VirtualNetwork '%s', but subnet '%s' belongs to VirtualNetwork '%s'",
-						i, sgKey, sgVirtualNetworkID, subnetKey, virtualNetworkID)
-				}
+			if err := validateResolvedSecurityGroup(sg, sgKey, source, virtualNetworkID); err != nil {
+				return err
 			}
 		}
 	}

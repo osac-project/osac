@@ -796,23 +796,60 @@ var _ = Describe("Client secret secret resolution", func() {
 })
 
 var _ = Describe("Skip Reconciliation", func() {
-	It("should skip reconciliation for ready identity providers", func() {
+	It("should re-sync ready identity providers to IDP", func() {
+		ctrl := gomock.NewController(GinkgoT())
+		defer ctrl.Finish()
+		mockClient := idp.NewMockClientInterface(ctrl)
+
+		reconciler := &function{
+			logger:    logger,
+			idpClient: mockClient,
+		}
+
 		identityProvider := privatev1.IdentityProvider_builder{
+			Id: "idp-ready-update",
 			Metadata: privatev1.Metadata_builder{
+				Name:       "test-oidc",
 				Tenant:     "my-org",
 				Finalizers: []string{finalizers.Controller},
+			}.Build(),
+			Spec: privatev1.IdentityProviderSpec_builder{
+				Title:   "Updated OIDC",
+				Enabled: true,
+				Oidc: privatev1.OidcConfig_builder{
+					AuthorizationUrl: "https://example.com/auth",
+					TokenUrl:         "https://example.com/token",
+					ClientId:         "client-123",
+					Issuer:           "https://example.com",
+				}.Build(),
 			}.Build(),
 			Status: privatev1.IdentityProviderStatus_builder{
 				Phase: privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_READY,
 			}.Build(),
 		}.Build()
 
+		// The reconciler should set the phase to UNKNOWN via setDefaults (since the server
+		// resets it before persisting), but for this test we verify that READY-phase objects
+		// are NOT silently skipped.  We manually set UNKNOWN to simulate the server reset.
+		identityProvider.GetStatus().SetPhase(privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_UNKNOWN)
+
+		mockClient.EXPECT().
+			CreateIdentityProvider(gomock.Any(), "my-org", gomock.Any()).
+			DoAndReturn(func(ctx context.Context, tenantName string, idpProvider *idp.IdentityProvider) (*idp.IdentityProvider, error) {
+				Expect(idpProvider.Alias).To(Equal("my-org-test-oidc"))
+				Expect(idpProvider.DisplayName).To(Equal("Updated OIDC"))
+				return idpProvider, nil
+			}).
+			Times(1)
+
 		task := &task{
+			r:                reconciler,
 			identityProvider: identityProvider,
 		}
 
-		err := task.update(context.Background())
+		err := task.update(ctx)
 		Expect(err).ToNot(HaveOccurred())
+		Expect(identityProvider.GetStatus().GetPhase()).To(Equal(privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_READY))
 	})
 
 	It("should skip reconciliation for error state identity providers", func() {
@@ -857,11 +894,13 @@ var _ = Describe("Deletion", func() {
 		ctrl.Finish()
 	})
 
-	It("should remove finalizer when identity provider not synced", func() {
+	It("should attempt Keycloak deletion for UNKNOWN phase identity providers", func() {
 		deletionTimestamp := timestamppb.New(time.Now())
 		identityProvider := privatev1.IdentityProvider_builder{
+			Id: "idp-unknown-delete",
 			Metadata: privatev1.Metadata_builder{
 				Name:              "test-idp",
+				Tenant:            "tenant-1",
 				Finalizers:        []string{finalizers.Controller},
 				DeletionTimestamp: deletionTimestamp,
 			}.Build(),
@@ -869,6 +908,16 @@ var _ = Describe("Deletion", func() {
 				Phase: privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_UNKNOWN,
 			}.Build(),
 		}.Build()
+
+		// Even for UNKNOWN phase, deletion should attempt Keycloak cleanup.
+		// 404 is expected if the IdP was never synced.
+		mockClient.EXPECT().
+			DeleteIdentityProvider(gomock.Any(), "tenant-1", "tenant-1-test-idp").
+			Return(&apiclient.APIError{
+				StatusCode: 404,
+				Body:       "Identity provider not found",
+			}).
+			Times(1)
 
 		task := &task{
 			r:                reconciler,
@@ -880,11 +929,13 @@ var _ = Describe("Deletion", func() {
 		Expect(identityProvider.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.Controller))
 	})
 
-	It("should remove finalizer when in ERROR state", func() {
+	It("should attempt Keycloak deletion for ERROR phase identity providers", func() {
 		deletionTimestamp := timestamppb.New(time.Now())
 		identityProvider := privatev1.IdentityProvider_builder{
+			Id: "idp-error-delete",
 			Metadata: privatev1.Metadata_builder{
-				Name:              "test-idp",
+				Name:              "error-idp",
+				Tenant:            "tenant-1",
 				Finalizers:        []string{finalizers.Controller},
 				DeletionTimestamp: deletionTimestamp,
 			}.Build(),
@@ -892,6 +943,16 @@ var _ = Describe("Deletion", func() {
 				Phase: privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_ERROR,
 			}.Build(),
 		}.Build()
+
+		// ERROR phase may have a partially-created IdP in Keycloak; deletion should
+		// attempt cleanup. 404 is handled gracefully.
+		mockClient.EXPECT().
+			DeleteIdentityProvider(gomock.Any(), "tenant-1", "tenant-1-error-idp").
+			Return(&apiclient.APIError{
+				StatusCode: 404,
+				Body:       "Identity provider not found",
+			}).
+			Times(1)
 
 		task := &task{
 			r:                reconciler,
@@ -1043,5 +1104,119 @@ var _ = Describe("Deletion", func() {
 
 		task.removeFinalizer()
 		Expect(identityProvider.HasMetadata()).To(BeFalse())
+	})
+})
+
+var _ = Describe("409 Conflict Upsert", func() {
+	var (
+		ctrl       *gomock.Controller
+		mockClient *idp.MockClientInterface
+		reconciler *function
+	)
+
+	BeforeEach(func() {
+		ctrl = gomock.NewController(GinkgoT())
+		mockClient = idp.NewMockClientInterface(ctrl)
+
+		reconciler = &function{
+			logger:    logger,
+			idpClient: mockClient,
+		}
+	})
+
+	AfterEach(func() {
+		ctrl.Finish()
+	})
+
+	It("should handle 409 conflict as upsert during creation", func() {
+		identityProvider := privatev1.IdentityProvider_builder{
+			Id: "idp-conflict",
+			Metadata: privatev1.Metadata_builder{
+				Name:       "existing-oidc",
+				Tenant:     "tenant-1",
+				Finalizers: []string{finalizers.Controller},
+			}.Build(),
+			Spec: privatev1.IdentityProviderSpec_builder{
+				Title:   "Existing OIDC",
+				Enabled: true,
+				Oidc: privatev1.OidcConfig_builder{
+					AuthorizationUrl: "https://example.com/auth",
+					TokenUrl:         "https://example.com/token",
+					ClientId:         "client-123",
+					Issuer:           "https://example.com",
+				}.Build(),
+			}.Build(),
+		}.Build()
+
+		// Create returns 409 - IdP already exists in Keycloak
+		mockClient.EXPECT().
+			CreateIdentityProvider(gomock.Any(), "tenant-1", gomock.Any()).
+			Return(nil, &apiclient.APIError{
+				StatusCode: 409,
+				Body:       "Identity provider already exists",
+			}).
+			Times(1)
+
+		// Fallback to update
+		mockClient.EXPECT().
+			UpdateIdentityProvider(gomock.Any(), "tenant-1", gomock.Any()).
+			DoAndReturn(func(ctx context.Context, tenantName string, idpProvider *idp.IdentityProvider) (*idp.IdentityProvider, error) {
+				Expect(idpProvider.Alias).To(Equal("tenant-1-existing-oidc"))
+				Expect(idpProvider.DisplayName).To(Equal("Existing OIDC"))
+				return idpProvider, nil
+			}).
+			Times(1)
+
+		task := &task{
+			r:                reconciler,
+			identityProvider: identityProvider,
+		}
+
+		err := task.update(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(identityProvider.GetStatus().GetPhase()).To(Equal(privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_READY))
+		Expect(identityProvider.GetStatus().GetMessage()).To(ContainSubstring("synced successfully"))
+	})
+
+	It("should set ERROR phase when 409 upsert update also fails", func() {
+		identityProvider := privatev1.IdentityProvider_builder{
+			Id: "idp-conflict-fail",
+			Metadata: privatev1.Metadata_builder{
+				Name:       "fail-oidc",
+				Tenant:     "tenant-1",
+				Finalizers: []string{finalizers.Controller},
+			}.Build(),
+			Spec: privatev1.IdentityProviderSpec_builder{
+				Title: "Fail OIDC",
+				Oidc: privatev1.OidcConfig_builder{
+					Issuer: "https://example.com",
+				}.Build(),
+			}.Build(),
+		}.Build()
+
+		// Create returns 409
+		mockClient.EXPECT().
+			CreateIdentityProvider(gomock.Any(), "tenant-1", gomock.Any()).
+			Return(nil, &apiclient.APIError{
+				StatusCode: 409,
+				Body:       "Identity provider already exists",
+			}).
+			Times(1)
+
+		// Update also fails
+		mockClient.EXPECT().
+			UpdateIdentityProvider(gomock.Any(), "tenant-1", gomock.Any()).
+			Return(nil, fmt.Errorf("Keycloak unavailable")).
+			Times(1)
+
+		task := &task{
+			r:                reconciler,
+			identityProvider: identityProvider,
+		}
+
+		err := task.update(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(identityProvider.GetStatus().GetPhase()).To(Equal(privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_ERROR))
+		Expect(identityProvider.GetStatus().GetMessage()).To(ContainSubstring("update in IDP failed"))
 	})
 })

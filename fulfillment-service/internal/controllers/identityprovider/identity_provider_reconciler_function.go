@@ -152,11 +152,6 @@ func (t *task) update(ctx context.Context) error {
 		return nil
 	}
 
-	// For ready identity providers, no updates are needed
-	if state == privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_READY {
-		return nil
-	}
-
 	// Identity provider is UNSPECIFIED or UNKNOWN, perform initial sync to IDP
 	return t.syncToIDP(ctx)
 }
@@ -194,19 +189,34 @@ func (t *task) syncToIDP(ctx context.Context) error {
 	}
 
 	tenantName := t.identityProvider.GetMetadata().GetTenant()
-	createdIdp, err := t.r.idpClient.CreateIdentityProvider(ctx, tenantName, idpProvider)
+	resultIdp, err := t.r.idpClient.CreateIdentityProvider(ctx, tenantName, idpProvider)
 	if err != nil {
-		t.identityProvider.GetStatus().SetPhase(privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_ERROR)
-		t.identityProvider.GetStatus().SetMessage(fmt.Sprintf("Identity provider creation in IDP failed: %v", err))
-		return nil
+		// Handle 409 conflict as upsert: the IdP already exists in Keycloak, update it instead
+		var apiErr *apiclient.APIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusConflict {
+			t.r.logger.InfoContext(ctx, "Identity provider already exists in IDP, updating",
+				slog.String("identity_provider_id", t.identityProvider.GetId()),
+				slog.String("alias", alias),
+			)
+			resultIdp, err = t.r.idpClient.UpdateIdentityProvider(ctx, tenantName, idpProvider)
+			if err != nil {
+				t.identityProvider.GetStatus().SetPhase(privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_ERROR)
+				t.identityProvider.GetStatus().SetMessage(fmt.Sprintf("Identity provider update in IDP failed: %v", err))
+				return nil
+			}
+		} else {
+			t.identityProvider.GetStatus().SetPhase(privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_ERROR)
+			t.identityProvider.GetStatus().SetMessage(fmt.Sprintf("Identity provider creation in IDP failed: %v", err))
+			return nil
+		}
 	}
 
 	t.identityProvider.GetStatus().SetPhase(privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_READY)
-	t.identityProvider.GetStatus().SetMessage(fmt.Sprintf("Identity provider created successfully with alias: %s", createdIdp.Alias))
+	t.identityProvider.GetStatus().SetMessage(fmt.Sprintf("Identity provider synced successfully with alias: %s", resultIdp.Alias))
 
 	t.r.logger.DebugContext(ctx, "Identity provider synced to IDP",
 		slog.String("identity_provider_id", t.identityProvider.GetId()),
-		slog.String("alias", createdIdp.Alias),
+		slog.String("alias", resultIdp.Alias),
 	)
 
 	return nil
@@ -323,13 +333,9 @@ func (t *task) removeFinalizer() {
 }
 
 // delete performs the deletion cleanup for an identity provider.
+// Attempts Keycloak deletion for all phases to avoid orphaned IdPs.
+// If the IdP was never synced or was already deleted, Keycloak returns 404 which is handled gracefully.
 func (t *task) delete(ctx context.Context) error {
-	// Skip if not in ready state (not synced to IDP yet)
-	if t.identityProvider.GetStatus().GetPhase() != privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_READY {
-		t.removeFinalizer()
-		return nil
-	}
-
 	// Delete the identity provider from Keycloak
 	// Use tenant-prefixed alias (same as in syncToIDP)
 	tenantName := t.identityProvider.GetMetadata().GetTenant()

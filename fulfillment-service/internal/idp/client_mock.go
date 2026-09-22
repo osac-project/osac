@@ -534,6 +534,21 @@ func (mr *MockClientInterfaceMockRecorder) RemoveUserFromGroup(ctx, tenantName, 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RemoveUserFromGroup", reflect.TypeOf((*MockClientInterface)(nil).RemoveUserFromGroup), ctx, tenantName, idpUserID, groupID)
 }
 
+// UpdateIdentityProvider mocks base method.
+func (m *MockClientInterface) UpdateIdentityProvider(ctx context.Context, tenantName string, idpProvider *IdentityProvider) (*IdentityProvider, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateIdentityProvider", ctx, tenantName, idpProvider)
+	ret0, _ := ret[0].(*IdentityProvider)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// UpdateIdentityProvider indicates an expected call of UpdateIdentityProvider.
+func (mr *MockClientInterfaceMockRecorder) UpdateIdentityProvider(ctx, tenantName, idpProvider any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateIdentityProvider", reflect.TypeOf((*MockClientInterface)(nil).UpdateIdentityProvider), ctx, tenantName, idpProvider)
+}
+
 // UpdateTenant mocks base method.
 func (m *MockClientInterface) UpdateTenant(ctx context.Context, tenant *Tenant) (*Tenant, error) {
 	m.ctrl.T.Helper()

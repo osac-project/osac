@@ -48,6 +48,7 @@ type ClientInterface interface {
 	AssignIdpManagerPermissions(ctx context.Context, userID string) error
 	GetUserByUsername(ctx context.Context, tenantName, username string) (*User, error)
 	CreateIdentityProvider(ctx context.Context, tenantName string, idpProvider *IdentityProvider) (*IdentityProvider, error)
+	UpdateIdentityProvider(ctx context.Context, tenantName string, idpProvider *IdentityProvider) (*IdentityProvider, error)
 	GetIdentityProvider(ctx context.Context, tenantName, alias string) (*IdentityProvider, error)
 	DeleteIdentityProvider(ctx context.Context, tenantName, alias string) error
 	ListIdentityProviders(ctx context.Context, tenantName string) ([]*IdentityProvider, error)

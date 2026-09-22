@@ -176,6 +176,13 @@ func (s *PrivateIdentityProvidersServer) Update(ctx context.Context,
 	if err = s.validateClientSecretSecret(ctx, request.GetObject()); err != nil {
 		return
 	}
+	// Reset the phase so the reconciler re-syncs the updated spec to Keycloak.
+	// This also provides a recovery path for IDPs stuck in ERROR phase.
+	obj := request.GetObject()
+	if !obj.HasStatus() {
+		obj.SetStatus(&privatev1.IdentityProviderStatus{})
+	}
+	obj.GetStatus().SetPhase(privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_UNKNOWN)
 	err = s.generic.Update(ctx, request, &response)
 	return
 }

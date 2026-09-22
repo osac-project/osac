@@ -737,6 +737,255 @@ var _ = Describe("Identity provider client_secret_secret", func() {
 		Expect(status.Message()).To(ContainSubstring("SECRET_TYPE_VALUE"))
 	})
 
+	It("Updates OIDC config and verifies Keycloak reflects new values", func() {
+		firstSecretId, _ := createClientSecret(ctx, map[string][]byte{"value": []byte("orig-secret")})
+
+		idpName := fmt.Sprintf("test-update-cfg-%s", uuid.New())
+		expectedAlias := fmt.Sprintf("%s-%s", tenantName, idpName)
+
+		createResponse, err := client.Create(ctx, privatev1.IdentityProvidersCreateRequest_builder{
+			Object: privatev1.IdentityProvider_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   idpName,
+					Tenant: tenantName,
+				}.Build(),
+				Spec: privatev1.IdentityProviderSpec_builder{
+					Title:   "Original Title",
+					Enabled: true,
+					Oidc: privatev1.OidcConfig_builder{
+						AuthorizationUrl:   "https://oidc.example.com/authorize",
+						TokenUrl:           "https://oidc.example.com/token",
+						ClientId:           "test-client",
+						ClientSecretSecret: privatev1.SecretLocalReference_builder{Id: firstSecretId}.Build(),
+						Issuer:             "https://oidc.example.com",
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		idpID := createResponse.GetObject().GetId()
+		DeferCleanup(func() {
+			_, _ = client.Delete(ctx, privatev1.IdentityProvidersDeleteRequest_builder{
+				Id: idpID,
+			}.Build())
+		})
+
+		// Wait for initial READY
+		Eventually(
+			func(g Gomega) {
+				getResponse, err := client.Get(ctx, privatev1.IdentityProvidersGetRequest_builder{
+					Id: idpID,
+				}.Build())
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(getResponse.GetObject().GetStatus().GetPhase()).To(
+					Equal(privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_READY),
+				)
+			},
+			2*time.Minute,
+			time.Second,
+		).Should(Succeed())
+
+		// Update the display name
+		_, err = client.Update(ctx, privatev1.IdentityProvidersUpdateRequest_builder{
+			Object: privatev1.IdentityProvider_builder{
+				Id: idpID,
+				Spec: privatev1.IdentityProviderSpec_builder{
+					Title: "Updated Title",
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.title"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		// Wait for re-reconciliation to READY with updated values
+		Eventually(
+			func(g Gomega) {
+				getResponse, err := client.Get(ctx, privatev1.IdentityProvidersGetRequest_builder{
+					Id: idpID,
+				}.Build())
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(getResponse.GetObject().GetStatus().GetPhase()).To(
+					Equal(privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_READY),
+				)
+			},
+			2*time.Minute,
+			time.Second,
+		).Should(Succeed())
+
+		// Verify Keycloak has the updated display name
+		code, body, err := tool.KeycloakAdminRequest(ctx, http.MethodGet,
+			fmt.Sprintf("/identity-provider/instances/%s", expectedAlias), nil)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(code).To(Equal(http.StatusOK))
+		Expect(string(body)).To(ContainSubstring("Updated Title"))
+	})
+
+	It("Enables and disables identity provider via update", func() {
+		idpName := fmt.Sprintf("test-toggle-%s", uuid.New())
+		expectedAlias := fmt.Sprintf("%s-%s", tenantName, idpName)
+
+		createResponse, err := client.Create(ctx, privatev1.IdentityProvidersCreateRequest_builder{
+			Object: privatev1.IdentityProvider_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   idpName,
+					Tenant: tenantName,
+				}.Build(),
+				Spec: privatev1.IdentityProviderSpec_builder{
+					Title:   "Toggle Provider",
+					Enabled: true,
+					Oidc: privatev1.OidcConfig_builder{
+						AuthorizationUrl: "https://oidc.example.com/authorize",
+						TokenUrl:         "https://oidc.example.com/token",
+						ClientId:         "test-client",
+						Issuer:           "https://oidc.example.com",
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		idpID := createResponse.GetObject().GetId()
+		DeferCleanup(func() {
+			_, _ = client.Delete(ctx, privatev1.IdentityProvidersDeleteRequest_builder{
+				Id: idpID,
+			}.Build())
+		})
+
+		// Wait for initial READY
+		Eventually(
+			func(g Gomega) {
+				getResponse, err := client.Get(ctx, privatev1.IdentityProvidersGetRequest_builder{
+					Id: idpID,
+				}.Build())
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(getResponse.GetObject().GetStatus().GetPhase()).To(
+					Equal(privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_READY),
+				)
+			},
+			2*time.Minute,
+			time.Second,
+		).Should(Succeed())
+
+		// Disable the IdP
+		_, err = client.Update(ctx, privatev1.IdentityProvidersUpdateRequest_builder{
+			Object: privatev1.IdentityProvider_builder{
+				Id: idpID,
+				Spec: privatev1.IdentityProviderSpec_builder{
+					Enabled: false,
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.enabled"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		// Wait for re-reconciliation to READY
+		Eventually(
+			func(g Gomega) {
+				getResponse, err := client.Get(ctx, privatev1.IdentityProvidersGetRequest_builder{
+					Id: idpID,
+				}.Build())
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(getResponse.GetObject().GetStatus().GetPhase()).To(
+					Equal(privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_READY),
+				)
+			},
+			2*time.Minute,
+			time.Second,
+		).Should(Succeed())
+
+		// Verify Keycloak shows disabled
+		code, body, err := tool.KeycloakAdminRequest(ctx, http.MethodGet,
+			fmt.Sprintf("/identity-provider/instances/%s", expectedAlias), nil)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(code).To(Equal(http.StatusOK))
+		Expect(string(body)).To(ContainSubstring(`"enabled":false`))
+	})
+
+	It("Rotates client_secret_secret and reconciles updated secret to Keycloak", func() {
+		firstSecretId, _ := createClientSecret(ctx, map[string][]byte{"value": []byte("initial-secret")})
+		secondSecretId, _ := createClientSecret(ctx, map[string][]byte{"value": []byte("rotated-secret")})
+
+		idpName := fmt.Sprintf("test-rotate-%s", uuid.New())
+
+		createResponse, err := client.Create(ctx, privatev1.IdentityProvidersCreateRequest_builder{
+			Object: privatev1.IdentityProvider_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   idpName,
+					Tenant: tenantName,
+				}.Build(),
+				Spec: privatev1.IdentityProviderSpec_builder{
+					Title:   "Rotate Secret Provider",
+					Enabled: true,
+					Oidc: privatev1.OidcConfig_builder{
+						AuthorizationUrl:   "https://oidc.example.com/authorize",
+						TokenUrl:           "https://oidc.example.com/token",
+						ClientId:           "test-client",
+						ClientSecretSecret: privatev1.SecretLocalReference_builder{Id: firstSecretId}.Build(),
+						Issuer:             "https://oidc.example.com",
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		idpID := createResponse.GetObject().GetId()
+		DeferCleanup(func() {
+			_, _ = client.Delete(ctx, privatev1.IdentityProvidersDeleteRequest_builder{
+				Id: idpID,
+			}.Build())
+		})
+
+		// Wait for initial READY
+		Eventually(
+			func(g Gomega) {
+				getResponse, err := client.Get(ctx, privatev1.IdentityProvidersGetRequest_builder{
+					Id: idpID,
+				}.Build())
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(getResponse.GetObject().GetStatus().GetPhase()).To(
+					Equal(privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_READY),
+				)
+			},
+			2*time.Minute,
+			time.Second,
+		).Should(Succeed())
+
+		// Rotate the client secret
+		_, err = client.Update(ctx, privatev1.IdentityProvidersUpdateRequest_builder{
+			Object: privatev1.IdentityProvider_builder{
+				Id: idpID,
+				Spec: privatev1.IdentityProviderSpec_builder{
+					Oidc: privatev1.OidcConfig_builder{
+						ClientSecretSecret: privatev1.SecretLocalReference_builder{Id: secondSecretId}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.oidc.client_secret_secret"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		// Wait for re-reconciliation to READY
+		Eventually(
+			func(g Gomega) {
+				getResponse, err := client.Get(ctx, privatev1.IdentityProvidersGetRequest_builder{
+					Id: idpID,
+				}.Build())
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(getResponse.GetObject().GetStatus().GetPhase()).To(
+					Equal(privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_READY),
+				)
+			},
+			2*time.Minute,
+			time.Second,
+		).Should(Succeed())
+
+		// Verify the IDP reference was updated in the database
+		getResponse, err := client.Get(ctx, privatev1.IdentityProvidersGetRequest_builder{
+			Id: idpID,
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		ref := getResponse.GetObject().GetSpec().GetOidc().GetClientSecretSecret()
+		Expect(ref.GetId()).To(Equal(secondSecretId))
+	})
+
 	It("Updates client_secret_secret to another Vault-backed secret", func() {
 		// Both secrets go through the real Secrets API, so their values live in Vault (not the
 		// database column). A successful update proves the update-path validation hydrates the

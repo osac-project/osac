@@ -767,6 +767,51 @@ func (c *Client) CreateIdentityProvider(ctx context.Context, tenantName string, 
 	return result, nil
 }
 
+// UpdateIdentityProvider updates an existing identity provider at the realm level.
+// In Keycloak, this replaces the full IdP representation using PUT.
+func (c *Client) UpdateIdentityProvider(ctx context.Context, tenantName string, idpProvider *IdentityProvider) (*IdentityProvider, error) {
+	if idpProvider == nil {
+		return nil, fmt.Errorf("identity provider is nil")
+	}
+	c.logger.InfoContext(ctx, "Updating identity provider",
+		slog.String("realm", c.realmName),
+		slog.String("organization", tenantName),
+		slog.String("alias", idpProvider.Alias),
+		slog.String("type", idpProvider.Type),
+	)
+
+	path := fmt.Sprintf("/admin/realms/%s/identity-provider/instances/%s",
+		url.PathEscape(c.realmName),
+		url.PathEscape(idpProvider.Alias),
+	)
+	kcIdp := toKeycloakIdentityProvider(idpProvider)
+
+	response, err := c.httpClient.DoRequest(ctx, http.MethodPut, path, kcIdp)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update identity provider: %w", err)
+	}
+	response.Body.Close()
+
+	// Fetch and return the updated representation
+	result, err := c.GetIdentityProvider(ctx, tenantName, idpProvider.Alias)
+	if err != nil {
+		// IdP was successfully updated - treat read failure as non-fatal
+		c.logger.WarnContext(ctx, "Updated identity provider but failed to fetch it back",
+			slog.String("organization", tenantName),
+			slog.String("alias", idpProvider.Alias),
+			slog.String("error", err.Error()),
+		)
+		return &IdentityProvider{
+			Alias:       idpProvider.Alias,
+			DisplayName: idpProvider.DisplayName,
+			Type:        idpProvider.Type,
+			Enabled:     idpProvider.Enabled,
+			Config:      nil,
+		}, nil
+	}
+	return result, nil
+}
+
 // GetIdentityProvider retrieves an identity provider for a specific organization.
 func (c *Client) GetIdentityProvider(ctx context.Context, tenantName, alias string) (*IdentityProvider, error) {
 	c.logger.InfoContext(ctx, "Getting identity provider",

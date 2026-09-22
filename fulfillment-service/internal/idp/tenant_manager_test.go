@@ -253,6 +253,10 @@ func (m *mockClient) CreateIdentityProvider(ctx context.Context, tenantName stri
 	return idp, nil
 }
 
+func (m *mockClient) UpdateIdentityProvider(ctx context.Context, tenantName string, idp *IdentityProvider) (*IdentityProvider, error) {
+	return idp, nil
+}
+
 func (m *mockClient) GetIdentityProvider(ctx context.Context, tenantName, alias string) (*IdentityProvider, error) {
 	return nil, nil
 }

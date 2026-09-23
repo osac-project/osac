@@ -40,7 +40,7 @@ def assert_grpc_method_unavailable(
     exc = exc_info.value
     combined: str = (exc.stderr or "") + (exc.stdout or "")
     descriptor_error = f'service "{service}" does not include a method named "{method}"'
-    assert re.search(r"Code:\s*Unimplemented", combined) or descriptor_error in combined, (
+    assert descriptor_error in combined, (
         f"Expected {service}/{method} to be unavailable, got: {combined.strip()}"
     )
 

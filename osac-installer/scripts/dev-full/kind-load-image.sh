@@ -1,23 +1,16 @@
 #!/usr/bin/env bash
-# Load one locally built image into the PROFILE=dev-full Kind cluster.
+# Load one locally built image into the Kind cluster.
 # Component Makefiles call this script so the runtime and kubeconfig details stay
 # owned by the installer rather than being duplicated in each component.
 
 set -euo pipefail
 
 IMAGE="${1:?usage: kind-load-image.sh IMAGE}"
-PLATFORM="${PLATFORM:?PLATFORM is required}"
-PROFILE="${PROFILE:?PROFILE is required}"
 NS="${NS:?NS is required}"
 KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-osac-dev}"
 CONTAINER_TOOL="${CONTAINER_TOOL:-podman}"
 INSTALLER_DIR="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")/../.." >/dev/null && pwd)"
 KIND_RUNTIME="${INSTALLER_DIR}/scripts/dev-full/kind-runtime.sh"
-
-if [[ "${PLATFORM}/${PROFILE}" != "kind/dev-full" ]]; then
-  echo "ERROR: image loading requires PLATFORM=kind PROFILE=dev-full" >&2
-  exit 1
-fi
 
 if [[ -z "${KUBECONFIG:-}" ]]; then
   KUBECONFIG="${HOME}/.kube/${KIND_CLUSTER_NAME}-kind-root.kubeconfig"

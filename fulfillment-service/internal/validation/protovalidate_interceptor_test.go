@@ -343,7 +343,6 @@ var _ = Describe("Protovalidate interceptor", func() {
 			Expect(response).To(Equal("response"))
 		})
 
-		//////////////////////////////////
 		It("reports an invalid ExternalIPAttachment target at the target field", func() {
 			request := publicv1.ExternalIPAttachmentsCreateRequest_builder{
 				Object: publicv1.ExternalIPAttachment_builder{

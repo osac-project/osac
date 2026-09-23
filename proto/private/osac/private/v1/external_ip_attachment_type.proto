@@ -63,7 +63,6 @@ message ExternalIPAttachment {
 // All fields are required and immutable after creation. The external_ip must reference an
 // existing ExternalIP in ALLOCATED state. The target must reference a valid resource that
 // supports external IP attachment.
-// //////////////////////////////////////////////
 message ExternalIPAttachmentSpec {
   option (buf.validate.message).cel = {
     id: "external_ip_attachment_endpoint"
@@ -127,7 +126,6 @@ message ExternalIPAttachmentSpec {
     (buf.validate.field).enum.defined_only = true
   ];
 }
-// //////////////////////////////////////////////
 
 // Represents the current operational state of an ExternalIPAttachment.
 //

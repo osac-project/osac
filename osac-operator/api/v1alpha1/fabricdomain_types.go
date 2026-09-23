@@ -40,7 +40,7 @@ type FabricDomainSpec struct {
 	// Servers lists the hostnames of the servers that belong to the fabric domain.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinItems=1
-	// +kubebuilder:validation:Items:MinLength=1
+	// +kubebuilder:validation:items:MinLength=1
 	Servers []string `json:"servers"`
 
 	// VirtualNetworks lists the VirtualNetwork resources associated with the domain.
@@ -48,7 +48,7 @@ type FabricDomainSpec struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=1
-	// +kubebuilder:validation:Items:MinLength=1
+	// +kubebuilder:validation:items:MinLength=1
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="virtualNetworks is immutable"
 	VirtualNetworks []string `json:"virtualNetworks"`
 }

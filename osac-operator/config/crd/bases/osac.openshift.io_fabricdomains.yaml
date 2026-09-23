@@ -55,6 +55,7 @@ spec:
                 description: Servers lists the hostnames of the servers that belong
                   to the fabric domain.
                 items:
+                  minLength: 1
                   type: string
                 minItems: 1
                 type: array
@@ -74,6 +75,7 @@ spec:
                   VirtualNetworks lists the VirtualNetwork resources associated with the domain.
                   Phase 1 supports exactly one virtual network. These references cannot be changed after creation.
                 items:
+                  minLength: 1
                   type: string
                 maxItems: 1
                 minItems: 1

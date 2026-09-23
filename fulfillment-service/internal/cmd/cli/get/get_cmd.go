@@ -293,10 +293,6 @@ func (c *runnerContext) renderTable(ctx context.Context, objects []proto.Message
 }
 
 func (c *runnerContext) renderJson(ctx context.Context, objects []proto.Message) error {
-	if len(objects) == 0 {
-		c.console.Render(ctx, "no_matching_objects.txt", nil)
-		return exit.Error(1)
-	}
 	values, err := c.encodeObjects(objects)
 	if err != nil {
 		return err
@@ -306,14 +302,13 @@ func (c *runnerContext) renderJson(ctx context.Context, objects []proto.Message)
 	} else {
 		c.console.RenderJson(ctx, values)
 	}
+	if len(objects) == 0 {
+		return exit.Error(1)
+	}
 	return nil
 }
 
 func (c *runnerContext) renderYaml(ctx context.Context, objects []proto.Message) error {
-	if len(objects) == 0 {
-		c.console.Render(ctx, "no_matching_objects.txt", nil)
-		return exit.Error(1)
-	}
 	values, err := c.encodeObjects(objects)
 	if err != nil {
 		return err
@@ -322,6 +317,9 @@ func (c *runnerContext) renderYaml(ctx context.Context, objects []proto.Message)
 		c.console.RenderYaml(ctx, values[0])
 	} else {
 		c.console.RenderYaml(ctx, values)
+	}
+	if len(objects) == 0 {
+		return exit.Error(1)
 	}
 	return nil
 }

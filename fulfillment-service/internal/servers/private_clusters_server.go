@@ -34,18 +34,19 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/osac/fulfillment-service/internal/references"
+	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	"github.com/osac-project/osac/fulfillment-service/internal/utils"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 type PrivateClustersServerBuilder struct {
-	logger              *slog.Logger
-	attributionLogic    auth.AttributionLogic
-	tenancyLogic        auth.TenancyLogic
-	metricsRegisterer   prometheus.Registerer
-	filterDesc          protoreflect.MessageDescriptor
-	addOnOperatorLookup references.ReferenceLookupFunc
+	logger                       *slog.Logger
+	notifier                     events.Notifier
+	attributionLogic             auth.AttributionLogic
+	tenancyLogic                 auth.TenancyLogic
+	metricsRegisterer            prometheus.Registerer
+	filterDesc                   protoreflect.MessageDescriptor
+	addOnOperatorResolverFactory addOnOperatorResolverFactory
 }
 
 var _ privatev1.ClustersServer = (*PrivateClustersServer)(nil)
@@ -53,6 +54,7 @@ var _ privatev1.ClustersServer = (*PrivateClustersServer)(nil)
 type PrivateClustersServer struct {
 	privatev1.UnimplementedClustersServer
 	logger                  *slog.Logger
+	notifier                events.Notifier
 	tenancyLogic            auth.TenancyLogic
 	templatesDao            *dao.GenericDAO[*privatev1.ClusterTemplate]
 	catalogItemsDao         *dao.GenericDAO[*privatev1.ClusterCatalogItem]
@@ -64,7 +66,7 @@ type PrivateClustersServer struct {
 	externalIPDao           *dao.GenericDAO[*privatev1.ExternalIP]
 	externalIPAttachmentDao *dao.GenericDAO[*privatev1.ExternalIPAttachment]
 	secretsDao              *dao.GenericDAO[*privatev1.Secret]
-	addOnOperatorLookup     references.ReferenceLookupFunc
+	addOnOperators          *addOnOperatorResourceResolver
 	generic                 *GenericServer[*privatev1.Cluster]
 	lifecycle               *externalIPLifecycle
 }
@@ -75,6 +77,11 @@ func NewPrivateClustersServer() *PrivateClustersServerBuilder {
 
 func (b *PrivateClustersServerBuilder) SetLogger(value *slog.Logger) *PrivateClustersServerBuilder {
 	b.logger = value
+	return b
+}
+
+func (b *PrivateClustersServerBuilder) SetNotifier(value events.Notifier) *PrivateClustersServerBuilder {
+	b.notifier = value
 	return b
 }
 
@@ -102,11 +109,13 @@ func (b *PrivateClustersServerBuilder) SetFilterDesc(value protoreflect.MessageD
 	return b
 }
 
-// SetAddOnOperatorLookup sets the resolver used for add-on operator references.
-func (b *PrivateClustersServerBuilder) SetAddOnOperatorLookup(value references.ReferenceLookupFunc) *PrivateClustersServerBuilder {
-	b.addOnOperatorLookup = value
+// SetAddOnOperatorResolverFactory sets the resolver policy used with the server-owned DAO.
+func (b *PrivateClustersServerBuilder) SetAddOnOperatorResolverFactory(value addOnOperatorResolverFactory) *PrivateClustersServerBuilder {
+	b.addOnOperatorResolverFactory = value
 	return b
 }
+
+type addOnOperatorResolverFactory func(*dao.GenericDAO[*privatev1.AddOnOperator]) *addOnOperatorResourceResolver
 
 func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, err error) {
 	// Check parameters:
@@ -138,21 +147,21 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 		return
 	}
 
-	addOnOperatorLookup := b.addOnOperatorLookup
-	if addOnOperatorLookup == nil {
-		// Create the private add-on operators DAO:
-		addOnOperatorsDao, daoErr := dao.NewGenericDAO[*privatev1.AddOnOperator]().
-			SetLogger(b.logger).
-			SetTenancyLogic(b.tenancyLogic).
-			SetMetricsRegisterer(b.metricsRegisterer).
-			Build()
-		if daoErr != nil {
-			err = daoErr
-			return
-		}
-		addOnOperatorLookup = references.NewDAOLookupFunc(addOnOperatorsDao)
+	// Create the private add-on operators DAO:
+	addOnOperatorsDao, err := dao.NewGenericDAO[*privatev1.AddOnOperator]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
 	}
-
+	var addOnOperators *addOnOperatorResourceResolver
+	if b.addOnOperatorResolverFactory != nil {
+		addOnOperators = b.addOnOperatorResolverFactory(addOnOperatorsDao)
+	} else {
+		addOnOperators = newScopedAddOnOperatorResourceResolver(addOnOperatorsDao)
+	}
 	// Create the host types DAO:
 	hostTypesDao, err := dao.NewGenericDAO[*privatev1.HostType]().
 		SetLogger(b.logger).
@@ -188,6 +197,7 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer)
+	addDAOEventCallback(externalIPPoolDaoBuilder, b.notifier)
 	externalIPPoolDao, err := externalIPPoolDaoBuilder.Build()
 	if err != nil {
 		return
@@ -207,6 +217,7 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer)
+	addDAOEventCallback(externalIPDaoBuilder, b.notifier)
 	externalIPDao, err := externalIPDaoBuilder.Build()
 	if err != nil {
 		return
@@ -216,6 +227,7 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer)
+	addDAOEventCallback(externalIPAttachmentDaoBuilder, b.notifier)
 	externalIPAttachmentDao, err := externalIPAttachmentDaoBuilder.Build()
 	if err != nil {
 		return
@@ -239,6 +251,7 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 	generic, err := NewGenericServer[*privatev1.Cluster]().
 		SetLogger(b.logger).
 		SetService(privatev1.Clusters_ServiceDesc.ServiceName).
+		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
@@ -252,6 +265,7 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 	// Create and populate the object:
 	result = &PrivateClustersServer{
 		logger:                  b.logger,
+		notifier:                b.notifier,
 		tenancyLogic:            b.tenancyLogic,
 		templatesDao:            templatesDao,
 		catalogItemsDao:         catalogItemsDao,
@@ -263,7 +277,7 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 		externalIPDao:           externalIPDao,
 		externalIPAttachmentDao: externalIPAttachmentDao,
 		secretsDao:              secretsDao,
-		addOnOperatorLookup:     addOnOperatorLookup,
+		addOnOperators:          addOnOperators,
 		generic:                 generic,
 	}
 	result.lifecycle = newExternalIPLifecycle(
@@ -316,9 +330,6 @@ func (s *PrivateClustersServer) Create(ctx context.Context, request *privatev1.C
 func (s *PrivateClustersServer) prepareCreate(ctx context.Context, candidate *privatev1.Cluster) (err error) {
 	// Ensure sane defaults:
 	s.setDefaults(candidate)
-	if err = s.resolveAddOnOperators(ctx, candidate); err != nil {
-		return
-	}
 
 	// Get the spec:
 	spec := candidate.GetSpec()
@@ -342,6 +353,10 @@ func (s *PrivateClustersServer) prepareCreate(ctx context.Context, candidate *pr
 		}
 	}
 
+	if err = s.validateAndExpandAddOnOperators(ctx, candidate); err != nil {
+		return
+	}
+
 	if candidate.GetSpec().GetNetworkAttachment() == nil {
 		if err = s.injectDefaultNetworkAttachment(ctx, candidate); err != nil {
 			return
@@ -362,36 +377,6 @@ func (s *PrivateClustersServer) prepareCreate(ctx context.Context, candidate *pr
 	}
 
 	return
-}
-
-func (s *PrivateClustersServer) resolveAddOnOperators(ctx context.Context, cluster *privatev1.Cluster) error {
-	metadata := cluster.GetMetadata()
-	for index, ref := range cluster.GetSpec().GetAddOnOperators() {
-		if ref == nil || (ref.GetId() == "" && ref.GetName() == "") {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"spec.add_on_operators[%d] must specify id or name", index)
-		}
-
-		resolved, err := s.addOnOperatorLookup(ctx, metadata.GetTenant(), metadata.GetProject(), ref.GetId(), ref.GetName())
-		if err != nil {
-			var notFound interface{ IsNotFound() bool }
-			if errors.As(err, &notFound) && notFound.IsNotFound() {
-				return grpcstatus.Errorf(grpccodes.InvalidArgument,
-					"add-on operator %q referenced by spec.add_on_operators[%d] was not found",
-					refKey(ref), index)
-			}
-			return grpcstatus.Errorf(grpccodes.Internal,
-				"failed to resolve spec.add_on_operators[%d]", index)
-		}
-		if resolved == nil {
-			return grpcstatus.Errorf(grpccodes.Internal,
-				"failed to resolve spec.add_on_operators[%d]", index)
-		}
-
-		ref.SetId(resolved.ID)
-		ref.SetName(resolved.Name)
-	}
-	return nil
 }
 
 // resolveCreationSource accepts exactly one provisioning source: spec.catalog_item or

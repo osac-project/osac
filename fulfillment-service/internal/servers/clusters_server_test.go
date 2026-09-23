@@ -295,6 +295,62 @@ var _ = Describe("Clusters server", func() {
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			expectAddOnOperatorFieldViolation(err, "spec.add_on_operators[0]")
+			Expect(status.Message()).To(ContainSubstring("not found"))
+		})
+
+		It("rejects a published add-on operator with an unpublished dependency during public create", func() {
+			dependency := newTestAddOnOperator("unpublished-dependency-id", "unpublished-dependency", false)
+			seedAddOnOperatorObject(ctx, dependency)
+			root := newTestAddOnOperator("published-root-id", "published-root", true)
+			root.SetDependencies([]*privatev1.AddOnOperatorLocalReference{
+				privatev1.AddOnOperatorLocalReference_builder{Id: dependency.GetId()}.Build(),
+			})
+			seedAddOnOperatorObject(ctx, root)
+
+			_, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
+				Object: publicv1.Cluster_builder{
+					Metadata: publicv1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.NewString()[:8])}.Build(),
+					Spec: publicv1.ClusterSpec_builder{
+						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
+						AddOnOperators: []*publicv1.AddOnOperatorReference{
+							publicv1.AddOnOperatorReference_builder{Name: root.GetMetadata().GetName()}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			expectAddOnOperatorFieldViolation(err, "spec.add_on_operators[0]")
+			Expect(status.Message()).To(ContainSubstring("not found"))
+		})
+
+		It("rejects a deleted add-on operator as not found during public create", func() {
+			seedAddOnOperator(ctx, "deleted-operator-id", "deleted-operator", true)
+			operatorDao, err := dao.NewGenericDAO[*privatev1.AddOnOperator]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = operatorDao.Delete().SetId("deleted-operator-id").Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = server.Create(ctx, publicv1.ClustersCreateRequest_builder{
+				Object: publicv1.Cluster_builder{
+					Metadata: publicv1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.NewString()[:8])}.Build(),
+					Spec: publicv1.ClusterSpec_builder{
+						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
+						AddOnOperators: []*publicv1.AddOnOperatorReference{
+							publicv1.AddOnOperatorReference_builder{Name: "deleted-operator"}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			expectAddOnOperatorFieldViolation(err, "spec.add_on_operators[0]")
+			Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("not found"))
 		})
 
 		It("Creates object", func() {

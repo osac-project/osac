@@ -256,7 +256,7 @@ jobs:
 
             if [[ "${MODE}" == "nightly" ]]; then
               # Always a fresh build from HEAD -- never promoted to a
-              # permanent tag (see promote-and-publish/tag-and-notify below).
+              # permanent tag (see promote-and-publish/tag below).
               TARGET_VERSION="${LATEST_BASE}-${NIGHTLY_SUFFIX}"
               NEEDS_BUILD=true
               WILL_TAG=false
@@ -318,9 +318,10 @@ jobs:
 
     # Surface the resolved versions in the run's own job summary as soon as
     # they're known -- at the very start of the pipeline, not just in the
-    # Slack message tag-and-notify posts after every test box (including
-    # e2e) has already passed. Lets a human check which versions a run is
-    # about to publish without waiting for it to finish.
+    # Slack message notify-release posts after every test box (including
+    # e2e) and every publish step has already passed. Lets a human check
+    # which versions a run is about to publish without waiting for it to
+    # finish.
     - name: Publish planned version summary
       env:
         MODE: ${{ inputs.mode }}
@@ -1064,7 +1065,7 @@ jobs:
   # dev CI overlay) to everyone's final version in one place, point the
   # umbrella chart's dependencies at their real published versions,
   # package/sign the umbrella chart itself, and record everything
-  # (images.txt, chart-sources.txt) for tag-and-notify to pick up.
+  # (images.txt, chart-sources.txt) for notify-release to pick up.
   # -------------------------------------------------------------------
   publish-umbrella:
     name: Publish umbrella chart
@@ -1326,7 +1327,7 @@ jobs:
         retention-days: 14
 
   # -------------------------------------------------------------------
-  # Tag and notify — record success on temp branch + Slack.
+  # Tag — create the real git tags on the temp branch commit.
   # Creates the umbrella's osac/v<version> git tag at the temp branch
   # commit (same pin E2E tested and publish-umbrella packaged), plus a
   # real, permanent <component>/vX.Y.Z git tag for every component this
@@ -1348,11 +1349,17 @@ jobs:
   # to verify after pushing besides what this job already does itself
   # (publish-binaries/publish-proto below, create-component-releases after).
   #
-  # Download chart-sources.txt artifact; post Slack summary with
-  # published chart OCI links.
+  # Deliberately does NOT post the Slack success notification itself --
+  # that used to happen here, right after tagging, which meant a viewer
+  # saw "Published" in Slack before create-component-releases/
+  # publish-fulfillment-service-binaries/publish-fulfillment-service-proto
+  # (all of which need this job and can still fail) had even started.
+  # notify-release below waits for all of those too before announcing
+  # success, so a later failure among them can't contradict an
+  # already-sent success message.
   # -------------------------------------------------------------------
-  tag-and-notify:
-    name: Tag and notify
+  tag:
+    name: Tag release
     needs: [prepare, promote-and-publish, publish-umbrella]
     runs-on: osac-ci
     timeout-minutes: 30
@@ -1372,10 +1379,6 @@ jobs:
       # persisted OSAC_BOT_PAT credential (see below), not GITHUB_TOKEN --
       # so GITHUB_TOKEN itself never writes to repo contents in this job.
       contents: read
-      # Look up the package version URL for the Slack notification
-      packages: read
-      # Download chart-sources.txt from the publish-umbrella job
-      actions: read
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
       MODE: ${{ inputs.mode }}
@@ -1474,6 +1477,150 @@ jobs:
           echo "Tagged: ${TAG}"
         done
 
+  # -------------------------------------------------------------------
+  # Create each eligible component's GitHub Release page, directly
+  # in this pipeline -- not via a separate workflow_run-triggered
+  # publish-charts.yaml (removed) that fired independently off each
+  # component's tag push with no visibility from here. This job runs
+  # synchronously right after tag actually pushed the tags, so
+  # there's no tag-race window to guard against either: the tag this
+  # creates a release for was pushed by this exact run, seconds ago.
+  #
+  # Only 5 of the 7 mono-repo components ever got a GitHub Release page
+  # (fulfillment-service and osac-ui never did) -- matrix covers exactly
+  # those 5, and the "Skip if not tagged this run" step further narrows
+  # to whichever of them components-to-tag actually includes (nightly
+  # mode, and a release that isn't bumping every component, both leave
+  # this empty or partial).
+  # -------------------------------------------------------------------
+  create-component-releases:
+    name: Create GitHub Release (${{ matrix.component }})
+    needs: [prepare, tag]
+    if: always() && inputs.mode == 'release' && needs.tag.result == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        component:
+          - osac-operator
+          - osac-aap
+          - bare-metal-fulfillment-operator
+          - osac-csi-driver
+          - osac-metering
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+    - name: Skip if not tagged this run
+      id: check
+      env:
+        COMPONENTS_TO_TAG: ${{ needs.prepare.outputs.components-to-tag }}
+      run: |
+        set -euo pipefail
+        if jq -e --arg c "${{ matrix.component }}" 'any(.[]; . == $c)' <<<"${COMPONENTS_TO_TAG}" >/dev/null; then
+          echo "tagged=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "${{ matrix.component }} was not tagged this run -- skipping release"
+          echo "tagged=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Checkout repository
+      if: steps.check.outputs.tagged == 'true'
+      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      with:
+        persist-credentials: false
+
+    - name: Create GitHub Release
+      if: steps.check.outputs.tagged == 'true'
+      uses: ./.github/actions/create-component-release
+      with:
+        component: ${{ matrix.component }}
+        tag: ${{ matrix.component }}/v${{ fromJSON(needs.prepare.outputs.component-versions)[matrix.component] }}
+        version: v${{ fromJSON(needs.prepare.outputs.component-versions)[matrix.component] }}
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  # -------------------------------------------------------------------
+  # Publish fulfillment-service's binaries and proto schema --
+  # directly in this pipeline, right after tag pushes its real
+  # tag, for the same reason as create-component-releases above: these used
+  # to be independent, tag-triggered workflows (publish-binaries.yaml,
+  # publish-proto.yaml), which meant the binaries actually released were a
+  # second, independent build of the same commit rather than the exact one
+  # this pipeline already built and tested. Both are now workflow_call-only
+  # reusable workflows with no trigger of their own.
+  # -------------------------------------------------------------------
+  publish-fulfillment-service-binaries:
+    name: Publish binaries (fulfillment-service)
+    needs: [prepare, tag]
+    if: >-
+      always() && inputs.mode == 'release' && needs.tag.result == 'success'
+      && contains(fromJSON(needs.prepare.outputs.components-to-tag), 'fulfillment-service')
+    permissions:
+      contents: write
+      id-token: write
+    uses: ./.github/workflows/publish-binaries.yaml
+    with:
+      version: v${{ fromJSON(needs.prepare.outputs.component-versions)['fulfillment-service'] }}
+      tag: fulfillment-service/v${{ fromJSON(needs.prepare.outputs.component-versions)['fulfillment-service'] }}
+      ref: ${{ needs.prepare.outputs.temp-branch }}
+
+  publish-fulfillment-service-proto:
+    name: Publish proto (fulfillment-service)
+    needs: [prepare, tag]
+    if: >-
+      always() && inputs.mode == 'release' && needs.tag.result == 'success'
+      && contains(fromJSON(needs.prepare.outputs.components-to-tag), 'fulfillment-service')
+    permissions:
+      contents: read
+    uses: ./.github/workflows/publish-proto.yaml
+    with:
+      version: v${{ fromJSON(needs.prepare.outputs.component-versions)['fulfillment-service'] }}
+      ref: ${{ needs.prepare.outputs.temp-branch }}
+    secrets:
+      buf-token: ${{ secrets.BUF_TOKEN }}
+
+  # -------------------------------------------------------------------
+  # Notify release success — the one and only "this run is genuinely
+  # done and everything published" signal, deliberately separate from
+  # tag above. Waits on create-component-releases/publish-fulfillment-
+  # service-binaries/publish-fulfillment-service-proto in addition to
+  # tag itself (each tolerated as success OR skipped: skipped is the
+  # normal outcome in nightly mode, or in a release that isn't bumping
+  # fulfillment-service/any of the 5 GitHub-Release-eligible components)
+  # so a failure in any of them is never contradicted by an
+  # already-sent "Published" message -- confirmed live: before this
+  # job existed, tag-and-notify posted success immediately after
+  # tagging, so a subsequent publish-proto failure produced both a green
+  # success and a red failure message in Slack for the same run.
+  # -------------------------------------------------------------------
+  notify-release:
+    name: Notify release success
+    needs: [prepare, tag, create-component-releases, publish-fulfillment-service-binaries, publish-fulfillment-service-proto]
+    runs-on: osac-ci
+    timeout-minutes: 10
+    if: |
+      always() &&
+      needs.tag.result == 'success' &&
+      contains(fromJSON('["success", "skipped"]'), needs.create-component-releases.result) &&
+      contains(fromJSON('["success", "skipped"]'), needs.publish-fulfillment-service-binaries.result) &&
+      contains(fromJSON('["success", "skipped"]'), needs.publish-fulfillment-service-proto.result)
+    permissions:
+      # Look up the package version URL for the Slack notification
+      packages: read
+      # Download chart-sources.txt from the publish-umbrella job
+      actions: read
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      MODE: ${{ inputs.mode }}
+
+    steps:
+    - name: Checkout repository
+      # Only needed to resolve the local ./.github/actions/vault-slack-webhook
+      # composite action and to source nightly-charts.sh below -- no tag
+      # is pushed from this job, so the default read-only GITHUB_TOKEN is
+      # enough (unlike tag, which needs a separate PAT for that).
+      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+
     - name: Download chart manifest
       uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
       with:
@@ -1556,113 +1703,11 @@ jobs:
           -d @/tmp/slack-payload.json
 
   # -------------------------------------------------------------------
-  # Create each eligible component's GitHub Release page, directly
-  # in this pipeline -- not via a separate workflow_run-triggered
-  # publish-charts.yaml (removed) that fired independently off each
-  # component's tag push with no visibility from here. This job runs
-  # synchronously right after tag-and-notify actually pushed the tags, so
-  # there's no tag-race window to guard against either: the tag this
-  # creates a release for was pushed by this exact run, seconds ago.
-  #
-  # Only 5 of the 7 mono-repo components ever got a GitHub Release page
-  # (fulfillment-service and osac-ui never did) -- matrix covers exactly
-  # those 5, and the "Skip if not tagged this run" step further narrows
-  # to whichever of them components-to-tag actually includes (nightly
-  # mode, and a release that isn't bumping every component, both leave
-  # this empty or partial).
-  # -------------------------------------------------------------------
-  create-component-releases:
-    name: Create GitHub Release (${{ matrix.component }})
-    needs: [prepare, tag-and-notify]
-    if: always() && inputs.mode == 'release' && needs.tag-and-notify.result == 'success'
-    strategy:
-      fail-fast: false
-      matrix:
-        component:
-          - osac-operator
-          - osac-aap
-          - bare-metal-fulfillment-operator
-          - osac-csi-driver
-          - osac-metering
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: write
-    steps:
-    - name: Skip if not tagged this run
-      id: check
-      env:
-        COMPONENTS_TO_TAG: ${{ needs.prepare.outputs.components-to-tag }}
-      run: |
-        set -euo pipefail
-        if jq -e --arg c "${{ matrix.component }}" 'any(.[]; . == $c)' <<<"${COMPONENTS_TO_TAG}" >/dev/null; then
-          echo "tagged=true" >> "$GITHUB_OUTPUT"
-        else
-          echo "${{ matrix.component }} was not tagged this run -- skipping release"
-          echo "tagged=false" >> "$GITHUB_OUTPUT"
-        fi
-
-    - name: Checkout repository
-      if: steps.check.outputs.tagged == 'true'
-      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
-      with:
-        persist-credentials: false
-
-    - name: Create GitHub Release
-      if: steps.check.outputs.tagged == 'true'
-      uses: ./.github/actions/create-component-release
-      with:
-        component: ${{ matrix.component }}
-        tag: ${{ matrix.component }}/v${{ fromJSON(needs.prepare.outputs.component-versions)[matrix.component] }}
-        version: v${{ fromJSON(needs.prepare.outputs.component-versions)[matrix.component] }}
-        github-token: ${{ secrets.GITHUB_TOKEN }}
-
-  # -------------------------------------------------------------------
-  # Publish fulfillment-service's binaries and proto schema --
-  # directly in this pipeline, right after tag-and-notify pushes its real
-  # tag, for the same reason as create-component-releases above: these used
-  # to be independent, tag-triggered workflows (publish-binaries.yaml,
-  # publish-proto.yaml), which meant the binaries actually released were a
-  # second, independent build of the same commit rather than the exact one
-  # this pipeline already built and tested. Both are now workflow_call-only
-  # reusable workflows with no trigger of their own.
-  # -------------------------------------------------------------------
-  publish-fulfillment-service-binaries:
-    name: Publish binaries (fulfillment-service)
-    needs: [prepare, tag-and-notify]
-    if: >-
-      always() && inputs.mode == 'release' && needs.tag-and-notify.result == 'success'
-      && contains(fromJSON(needs.prepare.outputs.components-to-tag), 'fulfillment-service')
-    permissions:
-      contents: write
-      id-token: write
-    uses: ./.github/workflows/publish-binaries.yaml
-    with:
-      version: v${{ fromJSON(needs.prepare.outputs.component-versions)['fulfillment-service'] }}
-      tag: fulfillment-service/v${{ fromJSON(needs.prepare.outputs.component-versions)['fulfillment-service'] }}
-      ref: ${{ needs.prepare.outputs.temp-branch }}
-
-  publish-fulfillment-service-proto:
-    name: Publish proto (fulfillment-service)
-    needs: [prepare, tag-and-notify]
-    if: >-
-      always() && inputs.mode == 'release' && needs.tag-and-notify.result == 'success'
-      && contains(fromJSON(needs.prepare.outputs.components-to-tag), 'fulfillment-service')
-    permissions:
-      contents: read
-    uses: ./.github/workflows/publish-proto.yaml
-    with:
-      version: v${{ fromJSON(needs.prepare.outputs.component-versions)['fulfillment-service'] }}
-      ref: ${{ needs.prepare.outputs.temp-branch }}
-    secrets:
-      buf-token: ${{ secrets.BUF_TOKEN }}
-
-  # -------------------------------------------------------------------
   # Notify on failure
   # -------------------------------------------------------------------
   notify-failure:
     name: Notify failure
-    needs: [prepare, build, unit-tests, integration-tests, security-tests, e2e-vmaas-test, e2e-caas-test, e2e-bmaas-test, promote-and-publish, publish-umbrella, tag-and-notify, create-component-releases, publish-fulfillment-service-binaries, publish-fulfillment-service-proto]
+    needs: [prepare, build, unit-tests, integration-tests, security-tests, e2e-vmaas-test, e2e-caas-test, e2e-bmaas-test, promote-and-publish, publish-umbrella, tag, create-component-releases, publish-fulfillment-service-binaries, publish-fulfillment-service-proto, notify-release]
     runs-on: osac-ci
     timeout-minutes: 10
     if: failure()
@@ -1735,18 +1780,30 @@ jobs:
   # the first attempt reached ANY terminal state, including failure. Branches
   # from failed runs are now left for cleanup-nightly-branches.yaml's 7-day
   # TTL sweep instead, so a failed run can still be retried.
+  #
+  # create-component-releases/publish-fulfillment-service-binaries/
+  # publish-fulfillment-service-proto/notify-release are listed in needs
+  # purely for ordering, not because this job's own `if:` cares about their
+  # result -- without them here, cleanup only needed tag, so GitHub was
+  # free to schedule it at the same time as those four (all of which also
+  # only need tag), racing publish-fulfillment-service-binaries/-proto's own
+  # checkout of this same temp branch against cleanup deleting it.
   # -------------------------------------------------------------------
   cleanup:
     name: Cleanup temp branch
-    needs: [prepare, build, unit-tests, integration-tests, security-tests, e2e-vmaas-test, e2e-caas-test, e2e-bmaas-test, promote-and-publish, publish-umbrella, tag-and-notify, notify-failure]
+    needs: [prepare, build, unit-tests, integration-tests, security-tests, e2e-vmaas-test, e2e-caas-test, e2e-bmaas-test, promote-and-publish, publish-umbrella, tag, create-component-releases, publish-fulfillment-service-binaries, publish-fulfillment-service-proto, notify-release, notify-failure]
     runs-on: ubuntu-latest
-    # notify-failure is routinely skipped whenever nothing fails, and GitHub
+    # notify-failure (and now notify-release, create-component-releases,
+    # publish-fulfillment-service-binaries/-proto) are routinely skipped
+    # whenever nothing fails or nightly mode doesn't run them, and GitHub
     # skip-cascades a job whose needs include a skipped job regardless of a
     # custom `if:` unless the expression includes always() -- so always() is
     # required here even though this job only wants to act on real success.
-    # tag-and-notify succeeding is sufficient proof the whole pipeline (build,
-    # every test box, promote/publish) already succeeded, since it's gated on that.
-    if: always() && needs.tag-and-notify.result == 'success'
+    # tag succeeding is sufficient proof the whole pipeline (build, every
+    # test box, promote/publish) already succeeded, since it's gated on
+    # that -- the rest of needs above exists only to order this job after
+    # every other consumer of the temp branch, not to gate on their result.
+    if: always() && needs.tag.result == 'success'
     permissions:
       contents: write
     env:

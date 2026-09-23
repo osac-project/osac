@@ -56,6 +56,27 @@ const userDataSecretSuffix = "-user-data"
 
 const userDataSecretKey = "userdata"
 
+// Curated tenant-facing condition messages.
+const (
+	messageProvisioned                 = "Infrastructure has been allocated and provisioned."
+	messageReady                       = "The instance is ready."
+	messageStepHostAllocation          = "Host allocation is in progress."
+	messageStepProvisioning            = "OS provisioning is in progress."
+	messageStepNetworkSetupAttachment  = "Network attachment is in progress."
+	messageStepNetworkSetupHandoff     = "Network handoff is in progress."
+	messageStepNetworkSetupIPDiscovery = "IP address discovery is in progress."
+	messageStepReadyPowerSync          = "Power synchronization is in progress."
+
+	// IC-5 failure messages — exact strings; one per FailureClassification.
+	messageFailureNoMatchingHosts   = "No bare metal host matched the requested profile."
+	messageFailureHostAllocation    = "Host allocation failed."
+	messageFailureProvisionJob      = "OS installation and configuration did not complete; the provisioning job failed."
+	messageFailureNetworkAttachment = "Network attachment did not complete."
+	messageFailureNetworkHandoff    = "Network handoff (reboot) did not complete."
+	messageFailureIPDiscovery       = "IP address discovery did not complete."
+	messageFailureReadyTimeout      = "The instance did not reach its powered-on ready state."
+)
+
 // FunctionBuilder contains the data and logic needed to build a function that reconciles bare metal instances.
 type FunctionBuilder struct {
 	logger     *slog.Logger
@@ -450,23 +471,67 @@ func (t *task) syncStatus(object *bmfov1alpha1.BareMetalInstance) {
 
 	t.syncState(object, powerSynced)
 
-	readyStatus := privatev1.ConditionStatus_CONDITION_STATUS_TRUE
-	state := t.bareMetalInstance.GetStatus().GetState()
-	if state == privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_PROVISIONING ||
-		state == privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_DELETING ||
-		state == privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_FAILED {
-		readyStatus = privatev1.ConditionStatus_CONDITION_STATUS_FALSE
-	}
-	t.updateCondition(privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY, readyStatus, "", "")
-
-	// PROVISIONED is a ratchet: only promoted True once the template completes;
-	// never demoted False once set (re-provisioning cycles must not un-provision the instance).
-	// TemplateComplete=True implies Allocated=True by ordering, so no separate allocation check needed.
-	templateCond := object.GetStatusCondition(bmfov1alpha1.HostConditionProvisionTemplateComplete)
-	if templateCond != nil && templateCond.Status == metav1.ConditionTrue {
+	// Derive PROVISIONED and READY from the operator's lifecycle conditions. The
+	// Deleting phase is guarded: conditions may still indicate a ready instance, but
+	// provisioning progress is not meaningful while the instance is being deleted.
+	if object.Status.Phase != bmfov1alpha1.BareMetalInstancePhaseDeleting {
+		progress := bmfov1alpha1.DeriveProvisioningProgress(object.Status.Conditions)
+		switch progress.State {
+		case bmfov1alpha1.StateInProgress:
+			stage := progress.Step.Stage()
+			t.updateCondition(
+				privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
+				privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+				string(stage), stepMessage(progress.Step))
+			t.updateCondition(
+				privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
+				privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "", "")
+		case bmfov1alpha1.StateProvisioned:
+			t.updateCondition(
+				privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
+				privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+				string(bmfov1alpha1.StateProvisioned), messageProvisioned)
+			t.updateCondition(
+				privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
+				privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+				string(bmfov1alpha1.StageReady), stepMessage(bmfov1alpha1.StepReadyPowerSync))
+		case bmfov1alpha1.StateReady:
+			t.updateCondition(
+				privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
+				privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+				string(bmfov1alpha1.StateProvisioned), messageProvisioned)
+			t.updateCondition(
+				privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
+				privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+				string(bmfov1alpha1.StateReady), messageReady)
+		case bmfov1alpha1.StateFailed:
+			if progress.Step == bmfov1alpha1.StepReadyPowerSync {
+				// Ready-axis failure: provisioning completed; the host did not reach its
+				// desired power state. PROVISIONED stays True; READY carries the failure.
+				t.updateCondition(
+					privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
+					privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+					string(bmfov1alpha1.StateProvisioned), messageProvisioned)
+				t.updateCondition(
+					privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
+					privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+					string(progress.Failure), failureMessage(progress.Failure))
+			} else {
+				// Provisioning-axis failure. PROVISIONED carries the failure reason;
+				// READY is False (provisioning never completed).
+				t.updateCondition(
+					privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
+					privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+					string(progress.Failure), failureMessage(progress.Failure))
+				t.updateCondition(
+					privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
+					privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "", "")
+			}
+		}
+	} else {
 		t.updateCondition(
-			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
-			privatev1.ConditionStatus_CONDITION_STATUS_TRUE, "", "")
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
+			privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "", "")
 	}
 
 	protoStatuses := make([]*privatev1.BareMetalNetworkAttachmentStatus, 0, len(object.Status.NetworkAttachmentStatuses))
@@ -621,6 +686,52 @@ func sanitizeConditionMessage(condType bmfov1alpha1.BareMetalInstanceConditionTy
 		}
 	}
 	return ""
+}
+
+// stepMessage returns the curated tenant-facing in-progress message for the given
+// provisioning step. Returns "" for an unrecognized step so callers never panic on
+// future step additions before this switch is updated.
+func stepMessage(step bmfov1alpha1.ProvisioningStep) string {
+	switch step {
+	case bmfov1alpha1.StepHostAllocation:
+		return messageStepHostAllocation
+	case bmfov1alpha1.StepProvisioning:
+		return messageStepProvisioning
+	case bmfov1alpha1.StepNetworkSetupAttachment:
+		return messageStepNetworkSetupAttachment
+	case bmfov1alpha1.StepNetworkSetupHandoff:
+		return messageStepNetworkSetupHandoff
+	case bmfov1alpha1.StepNetworkSetupIPDiscovery:
+		return messageStepNetworkSetupIPDiscovery
+	case bmfov1alpha1.StepReadyPowerSync:
+		return messageStepReadyPowerSync
+	default:
+		return ""
+	}
+}
+
+// failureMessage returns the IC-5 curated tenant-facing message for the given
+// failure classification. Returns "" for an unrecognized classification so
+// callers never panic on future additions before this switch is updated.
+func failureMessage(failure bmfov1alpha1.FailureClassification) string {
+	switch failure {
+	case bmfov1alpha1.FailureNoMatchingHosts:
+		return messageFailureNoMatchingHosts
+	case bmfov1alpha1.FailureHostAllocation:
+		return messageFailureHostAllocation
+	case bmfov1alpha1.FailureProvisionJob:
+		return messageFailureProvisionJob
+	case bmfov1alpha1.FailureNetworkAttachment:
+		return messageFailureNetworkAttachment
+	case bmfov1alpha1.FailureNetworkHandoff:
+		return messageFailureNetworkHandoff
+	case bmfov1alpha1.FailureIPDiscovery:
+		return messageFailureIPDiscovery
+	case bmfov1alpha1.FailureReadyTimeout:
+		return messageFailureReadyTimeout
+	default:
+		return ""
+	}
 }
 
 // mutateBMI sets the fulfillment-service-owned metadata and spec fields, leaving

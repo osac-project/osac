@@ -1832,12 +1832,9 @@ var _ = Describe("syncStatus", func() {
 			Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_DELETING))
 	})
 
-	It("should set PROVISIONED=True when ProvisionTemplateComplete is True", func() {
+	It("should set PROVISIONED reason=NetworkSetup when ProvisionTemplateComplete is True but network absent", func() {
 		t := newTask(0)
 		object := &bmfov1alpha1.BareMetalInstance{
-			Spec: bmfov1alpha1.BareMetalInstanceSpec{
-				TemplateID: "some_template",
-			},
 			Status: bmfov1alpha1.BareMetalInstanceStatus{
 				Conditions: []metav1.Condition{
 					{
@@ -1852,7 +1849,9 @@ var _ = Describe("syncStatus", func() {
 		cond := findProtoCondition(t.bareMetalInstance,
 			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED)
 		Expect(cond).ToNot(BeNil())
-		Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+		Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		Expect(cond.GetReason()).To(Equal(string(bmfov1alpha1.StageNetworkSetup)))
+		Expect(cond.GetMessage()).To(Equal("Network attachment is in progress."))
 	})
 
 	It("should not set PROVISIONED=True when ProvisionTemplateComplete is absent", func() {
@@ -1883,12 +1882,8 @@ var _ = Describe("syncStatus", func() {
 		Expect(cond.GetStatus()).ToNot(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
 	})
 
-	It("should not demote PROVISIONED to False when ProvisionTemplateComplete goes False (ratchet)", func() {
+	It("should reflect the current stage when conditions advance (no ratchet)", func() {
 		t := newTask(0)
-		t.updateCondition(
-			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
-			privatev1.ConditionStatus_CONDITION_STATUS_TRUE, "", "")
-
 		object := &bmfov1alpha1.BareMetalInstance{
 			Status: bmfov1alpha1.BareMetalInstanceStatus{
 				Conditions: []metav1.Condition{
@@ -1900,7 +1895,7 @@ var _ = Describe("syncStatus", func() {
 					{
 						Type:   string(bmfov1alpha1.HostConditionProvisionTemplateComplete),
 						Status: metav1.ConditionFalse,
-						Reason: "Progressing",
+						Reason: bmfov1alpha1.HostConditionReasonProgressing,
 					},
 				},
 			},
@@ -1908,7 +1903,9 @@ var _ = Describe("syncStatus", func() {
 		t.syncStatus(object)
 		cond := findProtoCondition(t.bareMetalInstance,
 			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED)
-		Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+		Expect(cond).ToNot(BeNil())
+		Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		Expect(cond.GetReason()).To(Equal(string(bmfov1alpha1.StageProvisioning)))
 	})
 
 	It("should map ProvisionTemplateComplete condition to CONFIGURATION_APPLIED with sanitized message", func() {
@@ -2411,6 +2408,267 @@ var _ = Describe("syncStatus", func() {
 		Expect(t.bareMetalInstance.GetStatus().HasHardware()).To(BeFalse())
 	})
 
+	// --- provisioning-progress (DeriveProvisioningProgress integration) ---
+
+	DescribeTable("should stamp PROVISIONED with the furthest-advanced in-progress stage",
+		func(conditions []metav1.Condition, expectedReason string, expectedMsg string) {
+			t := newTask(0)
+			object := &bmfov1alpha1.BareMetalInstance{
+				Status: bmfov1alpha1.BareMetalInstanceStatus{Conditions: conditions},
+			}
+			t.syncStatus(object)
+			cond := findProtoCondition(t.bareMetalInstance,
+				privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED)
+			Expect(cond).ToNot(BeNil())
+			Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+			Expect(cond.GetReason()).To(Equal(expectedReason))
+			Expect(cond.GetMessage()).To(Equal(expectedMsg))
+			ready := findProtoCondition(t.bareMetalInstance,
+				privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY)
+			Expect(ready).ToNot(BeNil())
+			Expect(ready.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		},
+		Entry("no conditions → HostAllocation stage",
+			[]metav1.Condition{},
+			string(bmfov1alpha1.StageHostAllocation), "Host allocation is in progress."),
+		Entry("Allocated=True → Provisioning stage",
+			[]metav1.Condition{
+				{Type: string(bmfov1alpha1.HostConditionAllocated), Status: metav1.ConditionTrue, Reason: "Allocated"},
+			},
+			string(bmfov1alpha1.StageProvisioning), "OS provisioning is in progress."),
+		Entry("ProvisionTemplateComplete=True → NetworkSetup/attachment step",
+			[]metav1.Condition{
+				{Type: string(bmfov1alpha1.HostConditionAllocated), Status: metav1.ConditionTrue, Reason: "Allocated"},
+				{Type: string(bmfov1alpha1.HostConditionProvisionTemplateComplete), Status: metav1.ConditionTrue, Reason: "Succeeded"},
+			},
+			string(bmfov1alpha1.StageNetworkSetup), "Network attachment is in progress."),
+		Entry("NetworkAttachmentsReady=True → NetworkSetup/handoff step",
+			[]metav1.Condition{
+				{Type: string(bmfov1alpha1.HostConditionNetworkAttachmentsReady), Status: metav1.ConditionTrue, Reason: "Ready"},
+			},
+			string(bmfov1alpha1.StageNetworkSetup), "Network handoff is in progress."),
+		Entry("NetworkHandoffComplete=True → NetworkSetup/IP-discovery step",
+			[]metav1.Condition{
+				{Type: string(bmfov1alpha1.HostConditionNetworkHandoffComplete), Status: metav1.ConditionTrue, Reason: "Complete"},
+			},
+			string(bmfov1alpha1.StageNetworkSetup), "IP address discovery is in progress."),
+	)
+
+	It("should select the furthest-advanced stage regardless of condition slice order", func() {
+		// Allocated first (earlier stage), ProvisionTemplateComplete second — but order must not matter.
+		condsFwd := []metav1.Condition{
+			{Type: string(bmfov1alpha1.HostConditionAllocated), Status: metav1.ConditionTrue, Reason: "Allocated"},
+			{Type: string(bmfov1alpha1.HostConditionProvisionTemplateComplete), Status: metav1.ConditionTrue, Reason: "Succeeded"},
+		}
+		condsRev := []metav1.Condition{
+			{Type: string(bmfov1alpha1.HostConditionProvisionTemplateComplete), Status: metav1.ConditionTrue, Reason: "Succeeded"},
+			{Type: string(bmfov1alpha1.HostConditionAllocated), Status: metav1.ConditionTrue, Reason: "Allocated"},
+		}
+		for _, conds := range [][]metav1.Condition{condsFwd, condsRev} {
+			t := newTask(0)
+			t.syncStatus(&bmfov1alpha1.BareMetalInstance{
+				Status: bmfov1alpha1.BareMetalInstanceStatus{Conditions: conds},
+			})
+			cond := findProtoCondition(t.bareMetalInstance,
+				privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED)
+			Expect(cond).ToNot(BeNil())
+			Expect(cond.GetReason()).To(Equal(string(bmfov1alpha1.StageNetworkSetup)))
+		}
+	})
+
+	It("should set PROVISIONED=True/Provisioned when all network conditions are satisfied", func() {
+		t := newTask(0)
+		object := &bmfov1alpha1.BareMetalInstance{
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				Conditions: []metav1.Condition{
+					{Type: string(bmfov1alpha1.HostConditionAllocated), Status: metav1.ConditionTrue, Reason: "Allocated"},
+					{Type: string(bmfov1alpha1.HostConditionProvisionTemplateComplete), Status: metav1.ConditionTrue, Reason: "Succeeded"},
+					{Type: string(bmfov1alpha1.HostConditionNetworkAttachmentsReady), Status: metav1.ConditionTrue, Reason: "Ready"},
+					{Type: string(bmfov1alpha1.HostConditionNetworkHandoffComplete), Status: metav1.ConditionTrue, Reason: "Complete"},
+					{Type: string(bmfov1alpha1.HostConditionIPDiscoveryComplete), Status: metav1.ConditionTrue, Reason: "Complete"},
+				},
+			},
+		}
+		t.syncStatus(object)
+		provisioned := findProtoCondition(t.bareMetalInstance,
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED)
+		Expect(provisioned).ToNot(BeNil())
+		Expect(provisioned.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+		Expect(provisioned.GetReason()).To(Equal(string(bmfov1alpha1.StateProvisioned)))
+		Expect(provisioned.GetMessage()).To(Equal("Infrastructure has been allocated and provisioned."))
+		ready := findProtoCondition(t.bareMetalInstance,
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY)
+		Expect(ready).ToNot(BeNil())
+		Expect(ready.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		Expect(ready.GetReason()).To(Equal(string(bmfov1alpha1.StageReady)))
+		Expect(ready.GetMessage()).To(Equal("Power synchronization is in progress."))
+	})
+
+	It("should set READY=True/Ready when PowerSynced is True", func() {
+		t := newTask(0)
+		object := &bmfov1alpha1.BareMetalInstance{
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				Phase: bmfov1alpha1.BareMetalInstancePhaseReady,
+				Conditions: []metav1.Condition{
+					{Type: string(bmfov1alpha1.HostConditionPowerSynced), Status: metav1.ConditionTrue, Reason: bmfov1alpha1.HostConditionReasonPowerOn},
+				},
+			},
+		}
+		t.syncStatus(object)
+		provisioned := findProtoCondition(t.bareMetalInstance,
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED)
+		Expect(provisioned).ToNot(BeNil())
+		Expect(provisioned.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+		Expect(provisioned.GetReason()).To(Equal(string(bmfov1alpha1.StateProvisioned)))
+		ready := findProtoCondition(t.bareMetalInstance,
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY)
+		Expect(ready).ToNot(BeNil())
+		Expect(ready.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+		Expect(ready.GetReason()).To(Equal(string(bmfov1alpha1.StateReady)))
+		Expect(ready.GetMessage()).To(Equal("The instance is ready."))
+	})
+
+	It("should advance past network-setup when all network conditions are trivially satisfied", func() {
+		// Represents an instance with no network attachment: operator sets all three
+		// network conditions True trivially. The derivation must reach Provisioned.
+		t := newTask(0)
+		object := &bmfov1alpha1.BareMetalInstance{
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				Conditions: []metav1.Condition{
+					{Type: string(bmfov1alpha1.HostConditionNetworkAttachmentsReady), Status: metav1.ConditionTrue, Reason: "Ready"},
+					{Type: string(bmfov1alpha1.HostConditionNetworkHandoffComplete), Status: metav1.ConditionTrue, Reason: "Complete"},
+					{Type: string(bmfov1alpha1.HostConditionIPDiscoveryComplete), Status: metav1.ConditionTrue, Reason: "Complete"},
+				},
+			},
+		}
+		t.syncStatus(object)
+		provisioned := findProtoCondition(t.bareMetalInstance,
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED)
+		Expect(provisioned).ToNot(BeNil())
+		Expect(provisioned.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+		Expect(provisioned.GetReason()).To(Equal(string(bmfov1alpha1.StateProvisioned)))
+	})
+
+	DescribeTable("should stamp the IC-5 failure message on the carrier condition",
+		func(conditions []metav1.Condition, carrier privatev1.BareMetalInstanceConditionType,
+			expectedReason string, expectedMsg string) {
+			t := newTask(0)
+			object := &bmfov1alpha1.BareMetalInstance{
+				Status: bmfov1alpha1.BareMetalInstanceStatus{Conditions: conditions},
+			}
+			t.syncStatus(object)
+			cond := findProtoCondition(t.bareMetalInstance, carrier)
+			Expect(cond).ToNot(BeNil())
+			Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+			Expect(cond.GetReason()).To(Equal(expectedReason))
+			Expect(cond.GetMessage()).To(Equal(expectedMsg))
+		},
+		Entry("NoMatchingHosts → PROVISIONED",
+			[]metav1.Condition{{Type: string(bmfov1alpha1.HostConditionAllocated), Status: metav1.ConditionFalse, Reason: bmfov1alpha1.HostConditionReasonNoMatchingHosts}},
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
+			string(bmfov1alpha1.FailureNoMatchingHosts), "No bare metal host matched the requested profile."),
+		Entry("HostAllocationFailed → PROVISIONED",
+			[]metav1.Condition{{Type: string(bmfov1alpha1.HostConditionAllocated), Status: metav1.ConditionFalse, Reason: "SomeAllocationError"}},
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
+			string(bmfov1alpha1.FailureHostAllocation), "Host allocation failed."),
+		Entry("ProvisionJobFailed → PROVISIONED",
+			[]metav1.Condition{{Type: string(bmfov1alpha1.HostConditionProvisionTemplateComplete), Status: metav1.ConditionFalse, Reason: "ProvisionFailed"}},
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
+			string(bmfov1alpha1.FailureProvisionJob), "OS installation and configuration did not complete; the provisioning job failed."),
+		Entry("NetworkAttachmentFailed → PROVISIONED",
+			[]metav1.Condition{{Type: string(bmfov1alpha1.HostConditionNetworkAttachmentsReady), Status: metav1.ConditionFalse, Reason: "AttachmentFailed"}},
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
+			string(bmfov1alpha1.FailureNetworkAttachment), "Network attachment did not complete."),
+		Entry("NetworkHandoffFailed → PROVISIONED",
+			[]metav1.Condition{{Type: string(bmfov1alpha1.HostConditionNetworkHandoffComplete), Status: metav1.ConditionFalse, Reason: "HandoffFailed"}},
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
+			string(bmfov1alpha1.FailureNetworkHandoff), "Network handoff (reboot) did not complete."),
+		Entry("IPDiscoveryFailed → PROVISIONED",
+			[]metav1.Condition{{Type: string(bmfov1alpha1.HostConditionIPDiscoveryComplete), Status: metav1.ConditionFalse, Reason: "DiscoveryFailed"}},
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
+			string(bmfov1alpha1.FailureIPDiscovery), "IP address discovery did not complete."),
+		Entry("ReadyTimeout → READY",
+			[]metav1.Condition{
+				{Type: string(bmfov1alpha1.HostConditionNetworkAttachmentsReady), Status: metav1.ConditionTrue, Reason: "Ready"},
+				{Type: string(bmfov1alpha1.HostConditionNetworkHandoffComplete), Status: metav1.ConditionTrue, Reason: "Complete"},
+				{Type: string(bmfov1alpha1.HostConditionIPDiscoveryComplete), Status: metav1.ConditionTrue, Reason: "Complete"},
+				{Type: string(bmfov1alpha1.HostConditionPowerSynced), Status: metav1.ConditionFalse, Reason: bmfov1alpha1.HostConditionReasonPowerSyncFailed},
+			},
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
+			string(bmfov1alpha1.FailureReadyTimeout), "The instance did not reach its powered-on ready state."),
+	)
+
+	It("should keep PROVISIONED=True/Provisioned when the ready-axis fails (ReadyTimeout)", func() {
+		// The DescribeTable above asserts the READY carrier for ReadyTimeout.
+		// This locks the other side: PROVISIONED must stay True (provisioning completed).
+		t := newTask(0)
+		object := &bmfov1alpha1.BareMetalInstance{
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				Conditions: []metav1.Condition{
+					{Type: string(bmfov1alpha1.HostConditionNetworkAttachmentsReady), Status: metav1.ConditionTrue, Reason: "Ready"},
+					{Type: string(bmfov1alpha1.HostConditionNetworkHandoffComplete), Status: metav1.ConditionTrue, Reason: "Complete"},
+					{Type: string(bmfov1alpha1.HostConditionIPDiscoveryComplete), Status: metav1.ConditionTrue, Reason: "Complete"},
+					{Type: string(bmfov1alpha1.HostConditionPowerSynced), Status: metav1.ConditionFalse, Reason: bmfov1alpha1.HostConditionReasonPowerSyncFailed},
+				},
+			},
+		}
+		t.syncStatus(object)
+		provisioned := findProtoCondition(t.bareMetalInstance,
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED)
+		Expect(provisioned).ToNot(BeNil())
+		Expect(provisioned.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+		Expect(provisioned.GetReason()).To(Equal(string(bmfov1alpha1.StateProvisioned)))
+		Expect(provisioned.GetMessage()).To(Equal(messageProvisioned))
+	})
+
+	It("should not surface raw operator error text in any condition (TC-FR5-02)", func() {
+		const rawError = "internal: ironic returned HTTP 503 with body: <stack-trace-xyz>"
+		t := newTask(0)
+		object := &bmfov1alpha1.BareMetalInstance{
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				Conditions: []metav1.Condition{
+					// The operator condition Message carries raw internal text; only Reason is classified.
+					{Type: string(bmfov1alpha1.HostConditionAllocated), Status: metav1.ConditionFalse,
+						Reason: bmfov1alpha1.HostConditionReasonNoMatchingHosts, Message: rawError},
+				},
+			},
+		}
+		t.syncStatus(object)
+		for _, c := range t.bareMetalInstance.GetStatus().GetConditions() {
+			Expect(c.GetReason()).NotTo(ContainSubstring(rawError))
+			Expect(c.GetMessage()).NotTo(ContainSubstring(rawError))
+		}
+	})
+
+	It("should set READY=False and leave PROVISIONED unchanged for Deleting phase", func() {
+		t := newTask(0)
+		// Pre-populate PROVISIONED=True to verify it is not touched during deletion.
+		t.updateCondition(
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
+			privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+			string(bmfov1alpha1.StateProvisioned), "Infrastructure has been allocated and provisioned.")
+		object := &bmfov1alpha1.BareMetalInstance{
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				Phase: bmfov1alpha1.BareMetalInstancePhaseDeleting,
+				Conditions: []metav1.Condition{
+					// PowerSynced=True would yield StateReady via derivation; the Deleting guard must prevent that.
+					{Type: string(bmfov1alpha1.HostConditionPowerSynced), Status: metav1.ConditionTrue, Reason: bmfov1alpha1.HostConditionReasonPowerOn},
+				},
+			},
+		}
+		t.syncStatus(object)
+		provisioned := findProtoCondition(t.bareMetalInstance,
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED)
+		Expect(provisioned).ToNot(BeNil())
+		Expect(provisioned.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+		ready := findProtoCondition(t.bareMetalInstance,
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY)
+		Expect(ready).ToNot(BeNil())
+		Expect(ready.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+	})
+
+	// --- end provisioning-progress ---
+
 	It("should clear previously-set hardware when CRD Hardware becomes nil", func() {
 		t := newTask(0)
 		// First sync: hardware present
@@ -2468,6 +2726,43 @@ var _ = Describe("mapConditionStatus", func() {
 	It("should map ConditionUnknown to CONDITION_STATUS_UNSPECIFIED", func() {
 		Expect(mapConditionStatus(metav1.ConditionUnknown)).To(
 			Equal(privatev1.ConditionStatus_CONDITION_STATUS_UNSPECIFIED))
+	})
+})
+
+var _ = Describe("stepMessage", func() {
+	DescribeTable("returns the curated in-progress message per step",
+		func(step bmfov1alpha1.ProvisioningStep, expectedMsg string) {
+			Expect(stepMessage(step)).To(Equal(expectedMsg))
+		},
+		Entry("HostAllocation", bmfov1alpha1.StepHostAllocation, "Host allocation is in progress."),
+		Entry("Provisioning", bmfov1alpha1.StepProvisioning, "OS provisioning is in progress."),
+		Entry("NetworkSetupAttachment", bmfov1alpha1.StepNetworkSetupAttachment, "Network attachment is in progress."),
+		Entry("NetworkSetupHandoff", bmfov1alpha1.StepNetworkSetupHandoff, "Network handoff is in progress."),
+		Entry("NetworkSetupIPDiscovery", bmfov1alpha1.StepNetworkSetupIPDiscovery, "IP address discovery is in progress."),
+		Entry("ReadyPowerSync", bmfov1alpha1.StepReadyPowerSync, "Power synchronization is in progress."),
+	)
+
+	It("returns empty string for an unrecognized step", func() {
+		Expect(stepMessage(bmfov1alpha1.ProvisioningStep("Unknown"))).To(BeEmpty())
+	})
+})
+
+var _ = Describe("failureMessage", func() {
+	DescribeTable("returns the IC-5 curated message per failure classification",
+		func(failure bmfov1alpha1.FailureClassification, expectedMsg string) {
+			Expect(failureMessage(failure)).To(Equal(expectedMsg))
+		},
+		Entry("NoMatchingHosts", bmfov1alpha1.FailureNoMatchingHosts, "No bare metal host matched the requested profile."),
+		Entry("HostAllocationFailed", bmfov1alpha1.FailureHostAllocation, "Host allocation failed."),
+		Entry("ProvisionJobFailed", bmfov1alpha1.FailureProvisionJob, "OS installation and configuration did not complete; the provisioning job failed."),
+		Entry("NetworkAttachmentFailed", bmfov1alpha1.FailureNetworkAttachment, "Network attachment did not complete."),
+		Entry("NetworkHandoffFailed", bmfov1alpha1.FailureNetworkHandoff, "Network handoff (reboot) did not complete."),
+		Entry("IPDiscoveryFailed", bmfov1alpha1.FailureIPDiscovery, "IP address discovery did not complete."),
+		Entry("ReadyTimeout", bmfov1alpha1.FailureReadyTimeout, "The instance did not reach its powered-on ready state."),
+	)
+
+	It("returns empty string for an unrecognized classification", func() {
+		Expect(failureMessage(bmfov1alpha1.FailureClassification("Unknown"))).To(BeEmpty())
 	})
 })
 

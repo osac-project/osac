@@ -203,19 +203,19 @@ jobs:
             echo "MERGE_QUEUE_TOKEN missing"
             exit 1
           fi
-          required_merge_labels() {
-            jq -e '
-              ([.labels[].name] | contains(["lgtm","approved","jira/valid-reference"]))
-              and ([.labels[].name] | any(. == "do-not-merge/hold" or . == "do-not-merge/work-in-progress" or . == "do-not-merge/invalid-owners-file" or . == "needs-rebase") | not)
-            '
+          required_labels_jq='([.labels[].name] | contains(["lgtm","approved","jira/valid-reference"])) and ([.labels[].name] | any(. == "do-not-merge/hold" or . == "do-not-merge/work-in-progress" or . == "do-not-merge/invalid-owners-file" or . == "needs-rebase") | not)'
+          is_requeue_eligible() {
+            jq -e ".isDraft == false and .autoMergeRequest == null and ${required_labels_jq}"
+          }
+          is_enqueue_eligible() {
+            jq -e ".isDraft == false and .autoMergeRequest != null and .mergeable == \"MERGEABLE\" and .mergeStateStatus == \"CLEAN\" and ${required_labels_jq}"
           }
 
           echo "Scanning eligible PRs without auto-merge..."
           candidates=$(gh pr list --repo "${REPO}" --state open --limit 200 \
             --json number,isDraft,autoMergeRequest,labels)
           prs=$(jq -c '.[]' <<<"${candidates}" | while read -r candidate; do
-            if jq -e '.isDraft == false and .autoMergeRequest == null' <<<"${candidate}" >/dev/null && \
-              required_merge_labels <<<"${candidate}" >/dev/null; then
+            if is_requeue_eligible <<<"${candidate}" >/dev/null; then
               jq -r '.number' <<<"${candidate}"
             fi
           done | jq -Rsc 'split("\n") | map(select(length > 0) | tonumber)')
@@ -242,8 +242,7 @@ jobs:
               echo "Unable to refresh PR #${pr}, skipping this run"
               continue
             fi
-            if ! jq -e '.isDraft == false and .autoMergeRequest == null' <<<"${current}" >/dev/null || \
-              ! required_merge_labels <<<"${current}" >/dev/null; then
+            if ! is_requeue_eligible <<<"${current}" >/dev/null; then
               echo "PR #${pr} is no longer eligible, skipping"
               continue
             fi
@@ -259,8 +258,7 @@ jobs:
           candidates=$(gh pr list --repo "${REPO}" --state open --limit 200 \
             --json number,isDraft,mergeable,mergeStateStatus,autoMergeRequest,labels)
           prs=$(jq -c '.[]' <<<"${candidates}" | while read -r candidate; do
-            if jq -e '.isDraft == false and .autoMergeRequest != null and .mergeable == "MERGEABLE" and .mergeStateStatus == "CLEAN"' <<<"${candidate}" >/dev/null && \
-              required_merge_labels <<<"${candidate}" >/dev/null; then
+            if is_enqueue_eligible <<<"${candidate}" >/dev/null; then
               jq -c '{number, id}' <<<"${candidate}"
             fi
           done | jq -sc '.')
@@ -276,8 +274,7 @@ jobs:
               echo "Unable to refresh PR #${number}, skipping this run"
               continue
             fi
-            if ! jq -e '.isDraft == false and .autoMergeRequest != null and .mergeable == "MERGEABLE" and .mergeStateStatus == "CLEAN"' <<<"${current}" >/dev/null || \
-              ! required_merge_labels <<<"${current}" >/dev/null; then
+            if ! is_enqueue_eligible <<<"${current}" >/dev/null; then
               echo "PR #${number} is no longer eligible, skipping"
               continue
             fi

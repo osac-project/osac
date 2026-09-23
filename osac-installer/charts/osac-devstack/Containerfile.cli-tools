@@ -5,7 +5,7 @@
 #   podman build --platform linux/amd64,linux/arm64 -t ghcr.io/osac-project/cli-tools:latest -f Containerfile.cli-tools .
 #   podman push ghcr.io/osac-project/cli-tools:latest
 
-FROM registry.k8s.io/kubectl:v1.32.1
+FROM registry.k8s.io/kubectl:v1.37.1
 
 # Install required tools for dev-full hooks
 RUN apt-get update && apt-get install -y \

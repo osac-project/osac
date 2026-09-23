@@ -923,6 +923,43 @@ var _ = Describe("Deletion", func() {
 		ctrl.Finish()
 	})
 
+	It("should skip Keycloak delete when ownership check returns 404 (not in this tenant's org)", func() {
+		deletionTimestamp := timestamppb.New(time.Now())
+		identityProvider := privatev1.IdentityProvider_builder{
+			Id: "idp-foreign-delete",
+			Metadata: privatev1.Metadata_builder{
+				Name:              "test-idp",
+				Tenant:            "tenant-1",
+				Finalizers:        []string{finalizers.Controller},
+				DeletionTimestamp: deletionTimestamp,
+			}.Build(),
+			Status: privatev1.IdentityProviderStatus_builder{
+				Phase: privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_UNKNOWN,
+			}.Build(),
+		}.Build()
+
+		// Ownership check: IdP not linked to this tenant's org
+		mockClient.EXPECT().
+			GetIdentityProvider(gomock.Any(), "tenant-1", "tenant-1-test-idp").
+			Return(nil, &apiclient.APIError{
+				StatusCode: 404,
+				Body:       "Identity provider not found",
+			}).
+			Times(1)
+
+		// DeleteIdentityProvider must NOT be called — the IdP doesn't belong to this tenant
+		// (gomock will fail if DeleteIdentityProvider is invoked)
+
+		task := &task{
+			r:                reconciler,
+			identityProvider: identityProvider,
+		}
+
+		err := task.delete(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(identityProvider.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.Controller))
+	})
+
 	It("should attempt Keycloak deletion for UNKNOWN phase identity providers", func() {
 		deletionTimestamp := timestamppb.New(time.Now())
 		identityProvider := privatev1.IdentityProvider_builder{
@@ -937,6 +974,12 @@ var _ = Describe("Deletion", func() {
 				Phase: privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_UNKNOWN,
 			}.Build(),
 		}.Build()
+
+		// Ownership check: IdP is linked to this tenant's org
+		mockClient.EXPECT().
+			GetIdentityProvider(gomock.Any(), "tenant-1", "tenant-1-test-idp").
+			Return(&idp.IdentityProvider{Alias: "tenant-1-test-idp"}, nil).
+			Times(1)
 
 		// Even for UNKNOWN phase, deletion should attempt Keycloak cleanup.
 		// 404 is expected if the IdP was never synced.
@@ -973,6 +1016,12 @@ var _ = Describe("Deletion", func() {
 			}.Build(),
 		}.Build()
 
+		// Ownership check: IdP is linked to this tenant's org
+		mockClient.EXPECT().
+			GetIdentityProvider(gomock.Any(), "tenant-1", "tenant-1-error-idp").
+			Return(&idp.IdentityProvider{Alias: "tenant-1-error-idp"}, nil).
+			Times(1)
+
 		// ERROR phase may have a partially-created IdP in Keycloak; deletion should
 		// attempt cleanup. 404 is handled gracefully.
 		mockClient.EXPECT().
@@ -1008,6 +1057,12 @@ var _ = Describe("Deletion", func() {
 			}.Build(),
 		}.Build()
 
+		// Ownership check passes
+		mockClient.EXPECT().
+			GetIdentityProvider(gomock.Any(), "tenant-1", "tenant-1-test-idp").
+			Return(&idp.IdentityProvider{Alias: "tenant-1-test-idp"}, nil).
+			Times(1)
+
 		mockClient.EXPECT().
 			DeleteIdentityProvider(gomock.Any(), "tenant-1", "tenant-1-test-idp").
 			Return(nil).
@@ -1038,7 +1093,13 @@ var _ = Describe("Deletion", func() {
 			}.Build(),
 		}.Build()
 
-		// Simulate 404 - IdP was already deleted
+		// Ownership check passes
+		mockClient.EXPECT().
+			GetIdentityProvider(gomock.Any(), "tenant-1", "tenant-1-missing-idp").
+			Return(&idp.IdentityProvider{Alias: "tenant-1-missing-idp"}, nil).
+			Times(1)
+
+		// Simulate 404 - IdP was already deleted at realm level
 		mockClient.EXPECT().
 			DeleteIdentityProvider(gomock.Any(), "tenant-1", "tenant-1-missing-idp").
 			Return(&apiclient.APIError{
@@ -1071,6 +1132,12 @@ var _ = Describe("Deletion", func() {
 				Phase: privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_READY,
 			}.Build(),
 		}.Build()
+
+		// Ownership check passes
+		mockClient.EXPECT().
+			GetIdentityProvider(gomock.Any(), "tenant-1", "tenant-1-failing-idp").
+			Return(&idp.IdentityProvider{Alias: "tenant-1-failing-idp"}, nil).
+			Times(1)
 
 		// Simulate transient error (500)
 		mockClient.EXPECT().
@@ -1186,6 +1253,12 @@ var _ = Describe("409 Conflict Upsert", func() {
 			}).
 			Times(1)
 
+		// Ownership check: GetIdentityProvider succeeds (IdP belongs to this tenant)
+		mockClient.EXPECT().
+			GetIdentityProvider(gomock.Any(), "tenant-1", "tenant-1-existing-oidc").
+			Return(&idp.IdentityProvider{Alias: "tenant-1-existing-oidc"}, nil).
+			Times(1)
+
 		// Fallback to update
 		mockClient.EXPECT().
 			UpdateIdentityProvider(gomock.Any(), "tenant-1", gomock.Any()).
@@ -1205,6 +1278,59 @@ var _ = Describe("409 Conflict Upsert", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(identityProvider.GetStatus().GetPhase()).To(Equal(privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_READY))
 		Expect(identityProvider.GetStatus().GetMessage()).To(ContainSubstring("synced successfully"))
+	})
+
+	It("should set ERROR phase on 409 when IdP belongs to a different tenant (alias collision)", func() {
+		identityProvider := privatev1.IdentityProvider_builder{
+			Id: "idp-collision",
+			Metadata: privatev1.Metadata_builder{
+				Name:       "corp-sso",
+				Tenant:     "acme",
+				Finalizers: []string{finalizers.Controller},
+			}.Build(),
+			Spec: privatev1.IdentityProviderSpec_builder{
+				Title:   "Corp SSO",
+				Enabled: true,
+				Oidc: privatev1.OidcConfig_builder{
+					AuthorizationUrl: "https://example.com/auth",
+					TokenUrl:         "https://example.com/token",
+					ClientId:         "client-123",
+					Issuer:           "https://example.com",
+				}.Build(),
+			}.Build(),
+		}.Build()
+
+		// Create returns 409 — alias "acme-corp-sso" already taken by tenant "acme-corp"
+		mockClient.EXPECT().
+			CreateIdentityProvider(gomock.Any(), "acme", gomock.Any()).
+			Return(nil, &apiclient.APIError{
+				StatusCode: 409,
+				Body:       "Identity provider already exists",
+			}).
+			Times(1)
+
+		// Ownership check: GetIdentityProvider returns 404 — IdP is NOT linked to this tenant's org
+		mockClient.EXPECT().
+			GetIdentityProvider(gomock.Any(), "acme", "acme-corp-sso").
+			Return(nil, fmt.Errorf("failed to get identity provider: %w", &apiclient.APIError{
+				StatusCode: 404,
+				Body:       "Identity provider not found",
+			})).
+			Times(1)
+
+		// UpdateIdentityProvider must NOT be called — the IdP belongs to another tenant
+		// (gomock will fail the test if UpdateIdentityProvider is invoked)
+
+		task := &task{
+			r:                reconciler,
+			identityProvider: identityProvider,
+		}
+
+		err := task.update(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(identityProvider.GetStatus().GetPhase()).To(Equal(privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_ERROR))
+		Expect(identityProvider.GetStatus().GetMessage()).To(ContainSubstring("Alias collision"))
+		Expect(identityProvider.GetStatus().GetMessage()).To(ContainSubstring("different tenant"))
 	})
 
 	It("should set ERROR phase when 409 upsert update also fails", func() {
@@ -1230,6 +1356,12 @@ var _ = Describe("409 Conflict Upsert", func() {
 				StatusCode: 409,
 				Body:       "Identity provider already exists",
 			}).
+			Times(1)
+
+		// Ownership check passes
+		mockClient.EXPECT().
+			GetIdentityProvider(gomock.Any(), "tenant-1", "tenant-1-fail-oidc").
+			Return(&idp.IdentityProvider{Alias: "tenant-1-fail-oidc"}, nil).
 			Times(1)
 
 		// Update also fails

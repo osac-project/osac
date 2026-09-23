@@ -197,9 +197,27 @@ func (t *task) syncToIDP(ctx context.Context) error {
 	tenantName := t.identityProvider.GetMetadata().GetTenant()
 	resultIdp, err := t.r.idpClient.CreateIdentityProvider(ctx, tenantName, idpProvider)
 	if err != nil {
-		// Handle 409 conflict as upsert: the IdP already exists in Keycloak, update it instead
+		// Handle 409 conflict as upsert: the IdP already exists in Keycloak, update it instead.
+		// Before updating, verify ownership via the org-scoped endpoint to prevent cross-tenant
+		// alias collisions (e.g. tenant "a-b" + name "c" vs tenant "a" + name "b-c" both produce "a-b-c").
 		var apiErr *apiclient.APIError
 		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusConflict {
+			// Ownership check: GetIdentityProvider uses the org-scoped Keycloak endpoint.
+			// If the IdP is linked to this tenant's org, the GET succeeds → safe to update.
+			// If it returns 404, the IdP belongs to a different tenant → do NOT update.
+			_, getErr := t.r.idpClient.GetIdentityProvider(ctx, tenantName, alias)
+			if getErr != nil {
+				t.r.logger.ErrorContext(ctx, "Alias collision: identity provider exists but is not linked to this tenant's organization",
+					slog.String("identity_provider_id", t.identityProvider.GetId()),
+					slog.String("alias", alias),
+					slog.String("tenant", tenantName),
+				)
+				t.identityProvider.GetStatus().SetPhase(privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_ERROR)
+				t.identityProvider.GetStatus().SetMessage(fmt.Sprintf(
+					"Alias collision: identity provider with alias %q already exists in Keycloak but belongs to a different tenant", alias))
+				return nil
+			}
+
 			t.r.logger.InfoContext(ctx, "Identity provider already exists in IDP, updating",
 				slog.String("identity_provider_id", t.identityProvider.GetId()),
 				slog.String("alias", alias),
@@ -346,6 +364,20 @@ func (t *task) delete(ctx context.Context) error {
 	// Use tenant-prefixed alias (same as in syncToIDP)
 	tenantName := t.identityProvider.GetMetadata().GetTenant()
 	alias := fmt.Sprintf("%s-%s", tenantName, t.identityProvider.GetMetadata().GetName())
+
+	// Ownership check: verify the IdP is linked to this tenant's organization before deleting.
+	// GetIdentityProvider uses the org-scoped endpoint — if 404, the IdP either doesn't exist
+	// or belongs to another tenant (alias collision). In both cases, skip deletion.
+	_, getErr := t.r.idpClient.GetIdentityProvider(ctx, tenantName, alias)
+	if getErr != nil {
+		t.r.logger.InfoContext(ctx, "Identity provider not found in this tenant's organization, skipping Keycloak delete",
+			slog.String("identity_provider_id", t.identityProvider.GetId()),
+			slog.String("alias", alias),
+			slog.String("tenant", tenantName),
+		)
+		t.removeFinalizer()
+		return nil
+	}
 
 	err := t.r.idpClient.DeleteIdentityProvider(ctx, tenantName, alias)
 	if err != nil {

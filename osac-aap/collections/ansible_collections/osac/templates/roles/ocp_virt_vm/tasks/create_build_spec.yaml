@@ -121,3 +121,17 @@
               deviceName: "{{ compute_instance.spec.gpu.resourceName }}"
   loop: "{{ range(compute_instance.spec.gpu.count | int) | list }}"
   when: compute_instance.spec.gpu is defined
+
+- name: Enable UEFI for Linux GPU VMs (large-BAR GPU passthrough requires OVMF)
+  ansible.builtin.set_fact:
+    vm_template_spec: "{{ vm_template_spec | combine(uefi_patch, recursive=True) }}"
+  vars:
+    uefi_patch:
+      domain:
+        firmware:
+          bootloader:
+            efi:
+              secureBoot: false
+  when:
+    - guest_os_family != 'windows'
+    - gpu_devices | default([]) | length > 0

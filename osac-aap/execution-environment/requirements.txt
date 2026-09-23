@@ -151,7 +151,7 @@ openstacksdk==4.10.0
     #   python-esileapclient
     #   python-ironicclient
     #   python-openstackclient
-os-service-types==1.8.2
+os-service-types==1.9.0
     # via
     #   keystoneauth1
     #   openstacksdk

@@ -14,7 +14,9 @@ language governing permissions and limitations under the License.
 package get
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
@@ -22,7 +24,9 @@ import (
 	"go.uber.org/mock/gomock"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/exit"
 	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
+	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
@@ -112,6 +116,64 @@ var _ = Describe("Get command", func() {
 
 			_, err := runner.fetchObjects(ctx, []string{"my-cluster"})
 			Expect(err).To(HaveOccurred())
+		})
+	})
+
+	Describe("render with no matching objects", func() {
+		var (
+			console *terminal.Console
+			stdout  *bytes.Buffer
+		)
+
+		BeforeEach(func() {
+			var err error
+			stdout = &bytes.Buffer{}
+			console, err = terminal.NewConsole().
+				SetLogger(logger).
+				SetStdout(stdout).
+				SetStderr(GinkgoWriter).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			err = console.AddTemplates(templatesFS, "templates")
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("renderTable returns exit.Error when no objects match", func() {
+			runner := &runnerContext{
+				logger:  logger,
+				console: console,
+			}
+			err := runner.renderTable(ctx, []proto.Message{})
+			Expect(err).To(HaveOccurred())
+			var exitErr exit.Error
+			Expect(errors.As(err, &exitErr)).To(BeTrue())
+			Expect(exitErr.Code()).To(Equal(1))
+		})
+
+		It("renderJson returns exit.Error when no objects match", func() {
+			runner := &runnerContext{
+				logger:  logger,
+				console: console,
+			}
+			err := runner.renderJson(ctx, []proto.Message{})
+			Expect(err).To(HaveOccurred())
+			var exitErr exit.Error
+			Expect(errors.As(err, &exitErr)).To(BeTrue())
+			Expect(exitErr.Code()).To(Equal(1))
+			Expect(stdout.String()).To(MatchJSON("[]"))
+		})
+
+		It("renderYaml returns exit.Error when no objects match", func() {
+			runner := &runnerContext{
+				logger:  logger,
+				console: console,
+			}
+			err := runner.renderYaml(ctx, []proto.Message{})
+			Expect(err).To(HaveOccurred())
+			var exitErr exit.Error
+			Expect(errors.As(err, &exitErr)).To(BeTrue())
+			Expect(exitErr.Code()).To(Equal(1))
+			Expect(stdout.String()).To(MatchYAML("[]"))
 		})
 	})
 })

@@ -22,6 +22,8 @@ import (
 	. "github.com/onsi/gomega"
 )
 
+// Authentication probes use the default cluster version created by BeforeSuite so a
+// successful get never depends on compute instances being present.
 var _ = Describe("CLI Authentication", Label("cli", "auth"), func() {
 	var homeDir string
 
@@ -40,7 +42,7 @@ var _ = Describe("CLI Authentication", Label("cli", "auth"), func() {
 		Expect(exitCode).To(Equal(0), "login should succeed")
 
 		// Verify that subsequent commands work with the stored credentials
-		_, _, exitCode = tool.RunCLI(ctx, homeDir, "get", "computeinstance")
+		_, _, exitCode = tool.RunCLI(ctx, homeDir, "get", "clusterversion", "default")
 		Expect(exitCode).To(Equal(0), "get should succeed after login")
 	})
 
@@ -55,7 +57,7 @@ var _ = Describe("CLI Authentication", Label("cli", "auth"), func() {
 		Expect(exitCode).To(Equal(0), "client credentials login should succeed")
 
 		// Verify that subsequent commands work with the stored credentials
-		_, _, exitCode = tool.RunCLI(ctx, homeDir, "get", "computeinstance")
+		_, _, exitCode = tool.RunCLI(ctx, homeDir, "get", "clusterversion", "default")
 		Expect(exitCode).To(Equal(0), "get should succeed after client credentials login")
 	})
 
@@ -65,7 +67,7 @@ var _ = Describe("CLI Authentication", Label("cli", "auth"), func() {
 		Expect(stderr).To(ContainSubstring("invalid_grant"), "should report invalid credentials")
 
 		// Verify that no valid configuration was saved
-		_, _, exitCode = tool.RunCLI(ctx, homeDir, "get", "computeinstance")
+		_, _, exitCode = tool.RunCLI(ctx, homeDir, "get", "clusterversion", "default")
 		Expect(exitCode).ToNot(Equal(0), "commands should fail after failed login")
 	})
 
@@ -75,7 +77,7 @@ var _ = Describe("CLI Authentication", Label("cli", "auth"), func() {
 		Expect(exitCode).To(Equal(0), "login should succeed")
 
 		// Verify commands work
-		_, _, exitCode = tool.RunCLI(ctx, homeDir, "get", "computeinstance")
+		_, _, exitCode = tool.RunCLI(ctx, homeDir, "get", "clusterversion", "default")
 		Expect(exitCode).To(Equal(0), "get should succeed after login")
 
 		// Logout
@@ -83,7 +85,7 @@ var _ = Describe("CLI Authentication", Label("cli", "auth"), func() {
 		Expect(exitCode).To(Equal(0), "logout should succeed")
 
 		// Verify commands fail after logout
-		_, stderr, exitCode := tool.RunCLI(ctx, homeDir, "get", "computeinstance")
+		_, stderr, exitCode := tool.RunCLI(ctx, homeDir, "get", "clusterversion", "default")
 		Expect(exitCode).ToNot(Equal(0), "commands should fail after logout")
 		Expect(stderr).To(ContainSubstring("there is no configuration"))
 	})
@@ -98,7 +100,7 @@ var _ = Describe("CLI Authentication", Label("cli", "auth"), func() {
 		Expect(err).ToNot(HaveOccurred())
 
 		// The CLI should fail with a clear error, not a panic
-		_, stderr, exitCode := tool.RunCLI(ctx, homeDir, "get", "computeinstance")
+		_, stderr, exitCode := tool.RunCLI(ctx, homeDir, "get", "clusterversion", "default")
 		Expect(exitCode).ToNot(Equal(0), "commands with corrupted config should fail")
 		Expect(stderr).ToNot(BeEmpty(), "should produce an error message")
 		Expect(stderr).ToNot(ContainSubstring("runtime error"), "should not panic")

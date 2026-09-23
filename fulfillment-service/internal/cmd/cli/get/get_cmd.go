@@ -32,6 +32,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/storagetier"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/token"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
+	"github.com/osac-project/osac/fulfillment-service/internal/exit"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 	"github.com/osac-project/osac/fulfillment-service/internal/packages"
 	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
@@ -274,7 +275,7 @@ func (c *runnerContext) renderTable(ctx context.Context, objects []proto.Message
 	// Check if there are results:
 	if len(objects) == 0 {
 		c.console.Render(ctx, "no_matching_objects.txt", nil)
-		return nil
+		return exit.Error(1)
 	}
 
 	// Create the table renderer:
@@ -301,6 +302,9 @@ func (c *runnerContext) renderJson(ctx context.Context, objects []proto.Message)
 	} else {
 		c.console.RenderJson(ctx, values)
 	}
+	if len(objects) == 0 {
+		return exit.Error(1)
+	}
 	return nil
 }
 
@@ -313,6 +317,9 @@ func (c *runnerContext) renderYaml(ctx context.Context, objects []proto.Message)
 		c.console.RenderYaml(ctx, values[0])
 	} else {
 		c.console.RenderYaml(ctx, values)
+	}
+	if len(objects) == 0 {
+		return exit.Error(1)
 	}
 	return nil
 }

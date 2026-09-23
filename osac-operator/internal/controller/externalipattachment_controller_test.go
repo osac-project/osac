@@ -1412,6 +1412,7 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 				Namespace: bmiAttachment.Namespace, Name: bmiAttachment.Name,
 			}, fetched)
 			Expect(apierrors.IsNotFound(err)).To(BeTrue())
+			Expect(sourceClient.getID).To(Equal(testBMIUUID))
 		})
 
 		It("should requeue when the fulfillment BMI exists but its CR is not projected", func() {

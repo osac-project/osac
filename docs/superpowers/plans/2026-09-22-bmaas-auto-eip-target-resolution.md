@@ -48,7 +48,6 @@ Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
 Expect(attachmentAfter.DeletionTimestamp).To(BeNil())
 Expect(sourceClient.getID).To(Equal(testBMIUUID))
 \`\`\`
-
 This test must fail against the current implementation because the current code deletes the attachment immediately.
 
 - [ ] **Step 4: Add failing tests for source deletion outcomes.**
@@ -210,4 +209,3 @@ Use a Jira-linked commit message:
 git add osac-operator/cmd/main.go osac-operator/internal/controller/externalipattachment_controller.go osac-operator/internal/controller/externalipattachment_controller_test.go
 git commit -s -m "OSAC-5505: Resolve BMaaS auto-EIP targets from fulfillment API"
 \`\`\`
-

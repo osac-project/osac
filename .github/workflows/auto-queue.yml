@@ -187,7 +187,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions: {}
     steps:
-      - name: Re-enable auto-merge on eligible PRs
+      # A PR can have auto-merge enabled and be fully green (mergeStateStatus
+      # CLEAN) yet never actually be sitting in the merge queue: GitHub only
+      # enqueues on specific triggers (new commit, review, label, or the
+      # enable-auto-merge call above), not on a passive change to *why* the
+      # PR became mergeable -- e.g. a branch-protection/ruleset update that
+      # drops a stale required check. Reconcile both cases in one step so the
+      # label/blocker predicate stays shared and consistent.
+      - name: Reconcile scheduled merge-queue maintenance
         env:
           GH_TOKEN: ${{ secrets.MERGE_QUEUE_TOKEN }}
           REPO: ${{ github.repository }}
@@ -197,15 +204,18 @@ jobs:
             echo "MERGE_QUEUE_TOKEN missing"
             exit 1
           fi
-          echo "Scanning for eligible PRs without auto-merge..."
-          prs=$(gh pr list --repo "${REPO}" --state open --limit 200 --json number,isDraft,labels,autoMergeRequest --jq '
-            [.[] | select(
-              .isDraft == false
-              and .autoMergeRequest == null
-              and ([.labels[].name] | contains(["lgtm","approved","jira/valid-reference"]))
+          required_merge_labels() {
+            jq -e '
+              ([.labels[].name] | contains(["lgtm","approved","jira/valid-reference"]))
               and ([.labels[].name] | any(. == "do-not-merge/hold" or . == "do-not-merge/work-in-progress" or . == "do-not-merge/invalid-owners-file" or . == "needs-rebase") | not)
-            ) | .number]')
-          echo "Eligible PRs: $prs"
+            '
+          }
+
+          echo "Scanning eligible PRs without auto-merge..."
+          prs=$(gh pr list --repo "${REPO}" --state open --limit 200 \
+            --json number,isDraft,autoMergeRequest --jq '
+            [.[] | select(.isDraft == false and .autoMergeRequest == null) | .number]')
+          echo "Eligible PRs without auto-merge: $prs"
           for pr in $(echo "$prs" | jq -r '.[]'); do
             reviews=$(gh api --paginate --slurp "repos/${REPO}/pulls/${pr}/reviews" | jq 'add // []')
             while read -r review_id; do
@@ -228,12 +238,8 @@ jobs:
               echo "Unable to refresh PR #${pr}, skipping this run"
               continue
             fi
-            if ! jq -e '
-              .isDraft == false
-              and .autoMergeRequest == null
-              and ([.labels[].name] | contains(["lgtm","approved","jira/valid-reference"]))
-              and ([.labels[].name] | any(. == "do-not-merge/hold" or . == "do-not-merge/work-in-progress" or . == "do-not-merge/invalid-owners-file" or . == "needs-rebase") | not)
-            ' <<<"${current}" >/dev/null; then
+            if ! jq -e '.isDraft == false and .autoMergeRequest == null' <<<"${current}" >/dev/null || \
+              ! required_merge_labels <<<"${current}" >/dev/null; then
               echo "PR #${pr} is no longer eligible, skipping"
               continue
             fi
@@ -241,47 +247,20 @@ jobs:
             echo "Re-enabling auto-merge on PR #$pr at ${head}"
             gh pr merge "$pr" --repo "${REPO}" --auto --match-head-commit "$head"
           done
-          echo "Scan complete."
 
-      # A PR can have auto-merge enabled and be fully green (mergeStateStatus
-      # CLEAN) yet never actually be sitting in the merge queue: GitHub only
-      # enqueues on specific triggers (new commit, review, label, or the
-      # enable-auto-merge call above), not on a passive change to *why* the
-      # PR became mergeable -- e.g. a branch-protection/ruleset update that
-      # drops a stale required check. The step above skips these PRs entirely
-      # (autoMergeRequest is already set), so they'd otherwise sit stuck
-      # indefinitely with no automation able to notice. Force them in
-      # directly via the enqueuePullRequest mutation, the same call GitHub's
-      # own "Merge when ready" button makes.
-      - name: Enqueue CLEAN PRs whose auto-merge never actually queued
-        env:
-          GH_TOKEN: ${{ secrets.MERGE_QUEUE_TOKEN }}
-          REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${GH_TOKEN:-}" ]]; then
-            echo "MERGE_QUEUE_TOKEN missing"
-            exit 1
-          fi
           echo "Scanning CLEAN PRs with auto-merge already enabled..."
           # mergeStateStatus alone is not enough: required_approving_review_count
           # is 0 on this repo's pull_request ruleset rule, so CLEAN says nothing
-          # about outstanding human review state or do-not-merge/* labels --
-          # those are enforced only by this bot's own reactive logic elsewhere
-          # in this file (the enable-auto-merge job's Disable-auto-merge step),
-          # which could in principle miss an event. Reapply the same label and
-          # review checks used by the other two paths above before force-queueing.
+          # about outstanding human review state or do-not-merge/* labels.
           prs=$(gh pr list --repo "${REPO}" --state open --limit 200 \
-            --json number,id,isDraft,mergeable,mergeStateStatus,autoMergeRequest,labels --jq '
+            --json number,id,isDraft,mergeable,mergeStateStatus,autoMergeRequest --jq '
             [.[] | select(
               .isDraft == false
               and .autoMergeRequest != null
               and .mergeable == "MERGEABLE"
               and .mergeStateStatus == "CLEAN"
-              and ([.labels[].name] | contains(["lgtm","approved","jira/valid-reference"]))
-              and ([.labels[].name] | any(. == "do-not-merge/hold" or . == "do-not-merge/work-in-progress" or . == "do-not-merge/invalid-owners-file" or . == "needs-rebase") | not)
             ) | {number, id}]')
-          echo "CLEAN with auto-merge already on, past label checks: $(echo "$prs" | jq -c '[.[].number]')"
+          echo "CLEAN with auto-merge already on: $(echo "$prs" | jq -c '[.[].number]')"
           echo "$prs" | jq -c '.[]' | while read -r pr; do
             number=$(jq -r '.number' <<<"$pr")
             id=$(jq -r '.id' <<<"$pr")
@@ -294,14 +273,8 @@ jobs:
               echo "Unable to refresh PR #${number}, skipping this run"
               continue
             fi
-            if ! jq -e '
-              .isDraft == false
-              and .autoMergeRequest != null
-              and .mergeable == "MERGEABLE"
-              and .mergeStateStatus == "CLEAN"
-              and ([.labels[].name] | contains(["lgtm","approved","jira/valid-reference"]))
-              and ([.labels[].name] | any(. == "do-not-merge/hold" or . == "do-not-merge/work-in-progress" or . == "do-not-merge/invalid-owners-file" or . == "needs-rebase") | not)
-            ' <<<"${current}" >/dev/null; then
+            if ! jq -e '.isDraft == false and .autoMergeRequest != null and .mergeable == "MERGEABLE" and .mergeStateStatus == "CLEAN"' <<<"${current}" >/dev/null || \
+              ! required_merge_labels <<<"${current}" >/dev/null; then
               echo "PR #${number} is no longer eligible, skipping"
               continue
             fi

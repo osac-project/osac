@@ -62,6 +62,7 @@
               osac.openshift.io/tenant: "{{ tenant_name }}"
               pod-security.kubernetes.io/enforce: privileged
               pod-security.kubernetes.io/warn: privileged
+      no_log: true
 
 
     - name: Derive OSAC CSI driver vendor sockets configuration
@@ -99,7 +100,9 @@
               tls:
                 insecureSkipVerify: "{{ osac_csi_driver_fulfillment_tls_insecure | bool }}"
           node:
-            vendorSockets: "{{ _osac_csi_derived_vendor_sockets }}" 
+            vendorSockets: "{{ _osac_csi_derived_vendor_sockets }}"
+      no_log: true
+
     - name: Create per-tier OSAC CSI StorageClasses on guest cluster
       kubernetes.core.k8s:
         kubeconfig: "{{ _remote_kubeconfig }}"
@@ -128,6 +131,7 @@
       loop: "{{ _osac_csi_expected_sc_entries }}"
       loop_control:
         label: "{{ item.name }}"
+      no_log: true
 
     - name: Set StorageClass names output
       ansible.builtin.set_fact:

@@ -12,7 +12,7 @@ template_type: storage_provider
 implementation_strategy: osac_csi
 capabilities:
   supported_protocols:
-    - nfs
+    - nfs    # NOTE: NFS volumes will provision but metering and policy enforcement are not yet implemented
     - block
   provisioning_targets:
     - caas

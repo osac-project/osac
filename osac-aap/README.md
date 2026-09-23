@@ -40,7 +40,14 @@ pluggable backends:
 |----------------|------|---------|
 | `cudn_net` | ClusterUserDefinedNetwork (CUDN) on OpenShift | OVN-Kubernetes |
 | `netris` | Netris Controller API | Netris |
+| `agentless_net` | Unified networking stub for resource-operation testing | AgentlessNet (NotImplemented) |
 | `openstack` | OpenStack Neutron | Neutron |
+
+The `agentless_net` role currently provides twelve deliberate fail-fast
+entrypoints for VirtualNetwork, Subnet, SecurityGroup, ExternalIPPool,
+ExternalIP, and NATGateway create/delete operations. It performs no provider
+side work. Physical attachment, DHCP lease discovery, and ExternalIPAttachment
+operations are reserved for later API and CRD changes.
 
 Plus MetalLB-based ExternalIPPool / ExternalIP management (`metallb_l2`).
 
@@ -101,9 +108,10 @@ capabilities:
   supports_dual_stack: true
 ```
 
-Running `playbook_osac_config_as_code.yml` publishes these as NetworkClasses /
-ComputeClasses that the fulfillment-service auto-discovers, making the system
-pluggable — new backends can be added without changing the operator or API.
+Network roles declare their dispatcher identity for the operator. The installer
+owns NetworkClass creation; `agentless_net` is selected through the installer
+overlay documented below and is not published as a ComputeClass. The generic
+resource playbooks then include the selected role without changing the API.
 
 ## Pre-requisites
 

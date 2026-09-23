@@ -107,6 +107,33 @@ Key settings:
 | `service.auth.issuerUrl` | Keycloak realm URL (default works for in-cluster Keycloak) |
 | `operator.controllers.*` | Enable/disable individual controllers |
 
+### AgentlessNet resource-operation stub
+
+To deploy with the unified Networking API selecting the AgentlessNet stub, apply
+the overlay after the profile values:
+
+```bash
+make install-osac \
+  PLATFORM=openshift \
+  PROFILE=bmaas-ci \
+  NS=<disposable-osac-namespace> \
+  EXTRA_HELM_ARGS="-f values/agentless-net-stub.yaml"
+```
+
+The overlay registers `agentless_net` as the fabric manager and creates a
+default NetworkClass that selects it. NetworkClass registration can succeed
+while networking resources fail. The twelve resource-operation entrypoints for
+VirtualNetwork, Subnet, SecurityGroup, ExternalIPPool, ExternalIP, and
+NATGateway deliberately return `NotImplemented` before provider-side work.
+Existing operator retries, provisioning job history, finalizers, and failed
+resource status continue to apply.
+
+Physical attachment, DHCP lease discovery, and ExternalIPAttachment are outside
+this stub and await their planned API/CRD changes. Existing inline CaaS
+workflows using `agentless_net.steps` are unchanged. AAP must run the project
+content and execution environment containing the AgentlessNet role; a stale
+project revision will not contain the fail-fast entrypoints.
+
 ## CI/Dev-Only Features
 
 These values control bundled dev/CI services. Disable in production.

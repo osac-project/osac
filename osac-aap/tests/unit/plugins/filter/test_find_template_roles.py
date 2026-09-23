@@ -257,6 +257,7 @@ class TestMetadataTemplateTypes:
             ("ocp_small", TemplateTypeEnum.cluster),
             ("ocp_virt_vm", TemplateTypeEnum.compute_instance),
             ("cudn_net", TemplateTypeEnum.network),
+            ("agentless_net", TemplateTypeEnum.network),
             ("bm_host_agent_provisioning", TemplateTypeEnum.bare_metal_instance),
             ("vast_storage", TemplateTypeEnum.storage_provider),
             ("cert_manager", TemplateTypeEnum.addon_operator),

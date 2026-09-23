@@ -82,35 +82,52 @@
     - name: Run input validation tests
       when: test_input_validation | default(false) | bool
       block:
-        - name: Call ensure_storage_class with invalid tenant_name
-          ansible.builtin.include_role:
-            name: osac.templates.osac_csi_driver
-            tasks_from: ensure_storage_class
-          vars:
-            tenant_name: "Invalid_Name!"
-            _provider_tiers:
-              - name: default
-                protocol: nfs
-                provider: osac_csi_driver
-          ignore_errors: true
-          register: name_result
+        - name: Test invalid tenant_name is rejected
+          block:
+            - name: Call ensure_storage_class with invalid tenant_name
+              ansible.builtin.include_role:
+                name: osac.templates.osac_csi_driver
+                tasks_from: ensure_storage_class
+              vars:
+                tenant_name: "Invalid_Name!"
+                _provider_tiers:
+                  - name: default
+                    protocol: nfs
+                    provider: osac_csi_driver
 
-        - name: Call ensure_storage_class with empty _provider_tiers
-          ansible.builtin.include_role:
-            name: osac.templates.osac_csi_driver
-            tasks_from: ensure_storage_class
-          vars:
-            tenant_name: valid-name
-            _provider_tiers: []
-          ignore_errors: true
-          register: tiers_result
+            - name: Should not reach here (invalid tenant_name)
+              ansible.builtin.fail:
+                msg: "Role should have failed for invalid tenant_name"
 
-        - name: Verify input validation failures
-          ansible.builtin.assert:
-            that:
-              - name_result.msg is search('not a valid DNS label')
-              - tiers_result.msg is search('_provider_tiers must be provided')
-            success_msg: "Input validation successfully guarded invalid inputs"
+          rescue:
+            - name: Verify tenant_name validation error
+              ansible.builtin.assert:
+                that:
+                  - ansible_failed_result.msg is search('not a valid DNS label')
+                fail_msg: "Expected failure about DNS label, got: {{ ansible_failed_result.msg }}"
+                success_msg: "Invalid tenant_name correctly rejected"
+
+        - name: Test empty _provider_tiers is rejected
+          block:
+            - name: Call ensure_storage_class with empty _provider_tiers
+              ansible.builtin.include_role:
+                name: osac.templates.osac_csi_driver
+                tasks_from: ensure_storage_class
+              vars:
+                tenant_name: valid-name
+                _provider_tiers: []
+
+            - name: Should not reach here (empty _provider_tiers)
+              ansible.builtin.fail:
+                msg: "Role should have failed for empty _provider_tiers"
+
+          rescue:
+            - name: Verify _provider_tiers validation error
+              ansible.builtin.assert:
+                that:
+                  - ansible_failed_result.msg is search('_provider_tiers must be provided')
+                fail_msg: "Expected failure about _provider_tiers, got: {{ ansible_failed_result.msg }}"
+                success_msg: "Empty _provider_tiers correctly rejected"
 
 # ──────────────────────────────────────────────────────────────
 # Test 3: Setup contract (sets storage_provider_tenant_config)
@@ -221,11 +238,14 @@
               - _derived[1].protocol == 'block'
             success_msg: "StorageClass entries derived correctly"
 
-        - name: Derive vendor sockets
+        - name: Define vendor socket paths for derivation test
           ansible.builtin.set_fact:
             osac_csi_driver_vendor_node_socket_paths:
               vast: /var/lib/kubelet/plugins/vast.csi.com
               pure: /var/lib/kubelet/plugins/pure.csi.com/csi.sock
+
+        - name: Derive vendor sockets from defined paths
+          ansible.builtin.set_fact:
             _derived_sockets: >-
               {% set _pairs = [] -%}
               {% for _k, _v in osac_csi_driver_vendor_node_socket_paths.items() -%}

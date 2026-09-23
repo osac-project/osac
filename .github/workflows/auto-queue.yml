@@ -212,9 +212,14 @@ jobs:
           }
 
           echo "Scanning eligible PRs without auto-merge..."
-          prs=$(gh pr list --repo "${REPO}" --state open --limit 200 \
-            --json number,isDraft,autoMergeRequest --jq '
-            [.[] | select(.isDraft == false and .autoMergeRequest == null) | .number]')
+          candidates=$(gh pr list --repo "${REPO}" --state open --limit 200 \
+            --json number,isDraft,autoMergeRequest,labels)
+          prs=$(jq -c '.[]' <<<"${candidates}" | while read -r candidate; do
+            if jq -e '.isDraft == false and .autoMergeRequest == null' <<<"${candidate}" >/dev/null && \
+              required_merge_labels <<<"${candidate}" >/dev/null; then
+              jq -r '.number' <<<"${candidate}"
+            fi
+          done | jq -Rsc 'split("\n") | map(select(length > 0) | tonumber)')
           echo "Eligible PRs without auto-merge: $prs"
           for pr in $(echo "$prs" | jq -r '.[]'); do
             reviews=$(gh api --paginate --slurp "repos/${REPO}/pulls/${pr}/reviews" | jq 'add // []')
@@ -252,14 +257,14 @@ jobs:
           # mergeStateStatus alone is not enough: required_approving_review_count
           # is 0 on this repo's pull_request ruleset rule, so CLEAN says nothing
           # about outstanding human review state or do-not-merge/* labels.
-          prs=$(gh pr list --repo "${REPO}" --state open --limit 200 \
-            --json number,id,isDraft,mergeable,mergeStateStatus,autoMergeRequest --jq '
-            [.[] | select(
-              .isDraft == false
-              and .autoMergeRequest != null
-              and .mergeable == "MERGEABLE"
-              and .mergeStateStatus == "CLEAN"
-            ) | {number, id}]')
+          candidates=$(gh pr list --repo "${REPO}" --state open --limit 200 \
+            --json number,id,isDraft,mergeable,mergeStateStatus,autoMergeRequest,labels)
+          prs=$(jq -c '.[]' <<<"${candidates}" | while read -r candidate; do
+            if jq -e '.isDraft == false and .autoMergeRequest != null and .mergeable == "MERGEABLE" and .mergeStateStatus == "CLEAN"' <<<"${candidate}" >/dev/null && \
+              required_merge_labels <<<"${candidate}" >/dev/null; then
+              jq -c '{number, id}' <<<"${candidate}"
+            fi
+          done | jq -sc '.')
           echo "CLEAN with auto-merge already on: $(echo "$prs" | jq -c '[.[].number]')"
           echo "$prs" | jq -c '.[]' | while read -r pr; do
             number=$(jq -r '.number' <<<"$pr")

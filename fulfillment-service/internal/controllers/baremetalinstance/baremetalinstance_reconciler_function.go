@@ -55,6 +55,15 @@ const userDataSecretSuffix = "-user-data"
 
 const userDataSecretKey = "userdata"
 
+// Curated tenant-facing condition messages.
+const (
+	messageProvisioned         = "Infrastructure has been allocated and provisioned."
+	messageReady               = "The instance is ready."
+	messageStageHostAllocation = "Host allocation is in progress."
+	messageStageProvisioning   = "OS provisioning is in progress."
+	messageStageNetworkSetup   = "Network setup is in progress."
+)
+
 // FunctionBuilder contains the data and logic needed to build a function that reconciles bare metal instances.
 type FunctionBuilder struct {
 	logger     *slog.Logger
@@ -468,7 +477,7 @@ func (t *task) syncStatus(object *bmfov1alpha1.BareMetalInstance) {
 			t.updateCondition(
 				privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
 				privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
-				string(bmfov1alpha1.StateProvisioned), "Infrastructure has been allocated and provisioned.")
+				string(bmfov1alpha1.StateProvisioned), messageProvisioned)
 			t.updateCondition(
 				privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
 				privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "", "")
@@ -476,11 +485,11 @@ func (t *task) syncStatus(object *bmfov1alpha1.BareMetalInstance) {
 			t.updateCondition(
 				privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
 				privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
-				string(bmfov1alpha1.StateProvisioned), "Infrastructure has been allocated and provisioned.")
+				string(bmfov1alpha1.StateProvisioned), messageProvisioned)
 			t.updateCondition(
 				privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
 				privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
-				string(bmfov1alpha1.StateReady), "The instance is ready.")
+				string(bmfov1alpha1.StateReady), messageReady)
 		case bmfov1alpha1.StateFailed:
 			if progress.Step == bmfov1alpha1.StepReadyPowerSync {
 				// Ready-axis failure: provisioning completed; the host did not reach its
@@ -488,7 +497,7 @@ func (t *task) syncStatus(object *bmfov1alpha1.BareMetalInstance) {
 				t.updateCondition(
 					privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
 					privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
-					string(bmfov1alpha1.StateProvisioned), "Infrastructure has been allocated and provisioned.")
+					string(bmfov1alpha1.StateProvisioned), messageProvisioned)
 				t.updateCondition(
 					privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
 					privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
@@ -671,11 +680,11 @@ func sanitizeConditionMessage(condType bmfov1alpha1.BareMetalInstanceConditionTy
 func stageMessage(stage bmfov1alpha1.ProvisioningStage) string {
 	switch stage {
 	case bmfov1alpha1.StageHostAllocation:
-		return "Host allocation is in progress."
+		return messageStageHostAllocation
 	case bmfov1alpha1.StageProvisioning:
-		return "OS provisioning is in progress."
+		return messageStageProvisioning
 	case bmfov1alpha1.StageNetworkSetup:
-		return "Network setup is in progress."
+		return messageStageNetworkSetup
 	default:
 		return ""
 	}

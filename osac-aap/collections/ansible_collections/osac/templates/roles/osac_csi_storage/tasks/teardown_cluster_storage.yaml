@@ -38,7 +38,8 @@
       - "osac.openshift.io/tenant={{ tenant_name }}"
       - "osac.openshift.io/managed-by=osac-csi-driver"
   register: _osac_csi_tenant_scs
-  ignore_errors: true  # noqa: ignore-errors
+  no_log: true
+  failed_when: false
 
 - name: Delete discovered tenant OSAC CSI StorageClasses on guest cluster
   kubernetes.core.k8s:
@@ -53,6 +54,7 @@
   loop: "{{ _osac_csi_tenant_scs.resources | default([]) }}"
   loop_control:
     label: "{{ item.metadata.name }}"
+  no_log: true
   ignore_errors: true  # noqa: ignore-errors
 
 - name: Uninstall OSAC CSI driver Helm release from guest cluster
@@ -64,6 +66,7 @@
     state: absent
     wait: true
     wait_timeout: 3m
+  no_log: true
   ignore_errors: true  # noqa: ignore-errors
 
 - name: Delete tenant credential Secret from guest cluster
@@ -77,6 +80,7 @@
       metadata:
         name: "{{ osac_csi_driver_credentials_secret_name }}"
         namespace: "{{ osac_csi_driver_namespace }}"
+  no_log: true
   ignore_errors: true  # noqa: ignore-errors
 
 - name: Delete OSAC CSI driver namespace from guest cluster
@@ -91,4 +95,5 @@
       kind: Namespace
       metadata:
         name: "{{ osac_csi_driver_namespace }}"
+  no_log: true
   ignore_errors: true  # noqa: ignore-errors

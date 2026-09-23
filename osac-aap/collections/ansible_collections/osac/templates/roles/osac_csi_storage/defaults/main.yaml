@@ -12,7 +12,7 @@ osac_csi_driver_chart_ref: oci://ghcr.io/osac-project/charts/csi-driver
 
 # Chart version to deploy.  Pinned to the same version as csi_driver_install_chart_version
 # in osac.service.csi_driver_install so hub and tenant clusters run identical binaries.
-osac_csi_driver_chart_version: "0.0.0"
+osac_csi_driver_chart_version: "0.0.1"
 
 # Helm release name on the tenant cluster.  Matches the hub-side release name used by
 # osac.service.csi_driver_install so tooling, dashboards, and runbooks use a consistent name.
@@ -40,12 +40,13 @@ osac_csi_driver_fulfillment_tls_insecure: false
 # StorageClass reclaim policy.
 osac_csi_driver_reclaim_policy: Delete
 
-# StorageClass volumeBindingMode. WaitForFirstConsumer is safe for all opaque tiers.
-osac_csi_driver_volume_binding_mode: WaitForFirstConsumer
+# StorageClass volumeBindingMode. Immediate is preferred for OSAC-managed tiers
+# because the backend handles topology independently.
+osac_csi_driver_volume_binding_mode: Immediate
 
 # Per-vendor node CSI socket paths for volume mounting on guest worker nodes,
 # matching csi_driver_install_vendor_node_socket_paths from OSAC-3290.
 osac_csi_driver_vendor_node_socket_paths:
   vast: /var/lib/kubelet/plugins/csi.vast.vastdata.com
   pure: /var/lib/kubelet/plugins/csi.pure.purestorage.com
-  trident: /var/lib/kubelet/plugins/csi.trident.netapp.io
+  ontap: /var/lib/kubelet/plugins/csi.trident.netapp.io

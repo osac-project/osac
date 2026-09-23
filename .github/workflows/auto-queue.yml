@@ -1,9 +1,10 @@
 ---
 name: auto-queue
 
-# Prow labels still required (label-gate). Human GitHub "Request changes"
-# also blocks until that reviewer approves or an admin dismisses. Bot
-# Request changes (CodeRabbit, etc.) are dismissed and do not block.
+# Prow labels still required (label-gate). The Prow `lgtm` label is the
+# authoritative approval signal for queue eligibility, so a stale human GitHub
+# "Request changes" review does not block after LGTM. Bot Request changes
+# (CodeRabbit, etc.) are dismissed and do not block.
 on:
   pull_request_target:
     types: [opened, reopened, ready_for_review, synchronize, labeled, unlabeled]
@@ -85,19 +86,25 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          echo "labels=$LABELS"
           blocked=false
-          for label in "do-not-merge/hold" "do-not-merge/work-in-progress" "do-not-merge/invalid-owners-file" "needs-rebase"; do
-            if echo "$LABELS" | jq -e "index(\"$label\")" > /dev/null; then
-              echo "Blocking label found: $label"
-              blocked=true
-            fi
-          done
-
           if [[ -z "${GH_TOKEN:-}" ]]; then
             echo "MERGE_QUEUE_TOKEN unavailable; cannot evaluate human reviews. Treating as blocked."
             blocked=true
           else
+            # Read live labels because Prow can apply lgtm/approved/jira-valid-reference
+            # as separate events. See OSAC-5507.
+            LABELS=$(gh pr view "$PR" --repo "$REPO" --json labels --jq '[.labels[].name]')
+            echo "labels=$LABELS"
+            for label in "do-not-merge/hold" "do-not-merge/work-in-progress" "do-not-merge/invalid-owners-file" "needs-rebase"; do
+              if echo "$LABELS" | jq -e "index(\"$label\")" > /dev/null; then
+                echo "Blocking label found: $label"
+                blocked=true
+              fi
+            done
+
+            if echo "$LABELS" | jq -e 'index("lgtm")' > /dev/null; then
+              echo "lgtm label present; ignoring stale human CHANGES_REQUESTED reviews"
+            else
             reviews=$(gh api --paginate --slurp "repos/${REPO}/pulls/${PR}/reviews" | jq 'add // []')
             set +e
             jq -e '
@@ -120,6 +127,7 @@ jobs:
             elif [[ ${rc} -ne 1 ]]; then
               echo "Cannot evaluate human review state (jq rc=${rc}); treating as blocked."
               blocked=true
+            fi
             fi
           fi
           eligible=true
@@ -203,29 +211,8 @@ jobs:
               | .id
             ' <<<"${reviews}")
 
-            set +e
-            jq -e '
-              [.[]
-                | select(.user != null)
-                | select(((.user.login // "") | endswith("[bot]")) | not)
-                | select((.user.type // "User") != "Bot")
-                | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED")
-              ]
-              | group_by(.user.login)
-              | map(max_by([(.submitted_at // ""), (.id // 0)]))
-              | map(select(.state == "CHANGES_REQUESTED"))
-              | length > 0
-            ' <<<"${reviews}" >/dev/null
-            rc=$?
-            set -e
-            if [[ ${rc} -eq 0 ]]; then
-              echo "Skipping PR #${pr}: human CHANGES_REQUESTED still outstanding"
-              continue
-            elif [[ ${rc} -ne 1 ]]; then
-              echo "Skipping PR #${pr}: cannot evaluate human review state (jq rc=${rc})"
-              continue
-            fi
-
+            # The candidate already has the authoritative lgtm label. Keep
+            # requeue behavior consistent with the event-driven path (OSAC-5507).
             echo "Re-enabling auto-merge on PR #$pr"
             gh pr merge "$pr" --repo "${REPO}" --auto
           done
@@ -274,30 +261,8 @@ jobs:
             number=$(jq -r '.number' <<<"$pr")
             id=$(jq -r '.id' <<<"$pr")
 
-            reviews=$(gh api --paginate --slurp "repos/${REPO}/pulls/${number}/reviews" | jq 'add // []')
-            set +e
-            jq -e '
-              [.[]
-                | select(.user != null)
-                | select(((.user.login // "") | endswith("[bot]")) | not)
-                | select((.user.type // "User") != "Bot")
-                | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED")
-              ]
-              | group_by(.user.login)
-              | map(max_by([(.submitted_at // ""), (.id // 0)]))
-              | map(select(.state == "CHANGES_REQUESTED"))
-              | length > 0
-            ' <<<"${reviews}" >/dev/null
-            rc=$?
-            set -e
-            if [[ ${rc} -eq 0 ]]; then
-              echo "Skipping PR #${number}: human CHANGES_REQUESTED still outstanding"
-              continue
-            elif [[ ${rc} -ne 1 ]]; then
-              echo "Skipping PR #${number}: cannot evaluate human review state (jq rc=${rc})"
-              continue
-            fi
-
+            # The candidate already has the authoritative lgtm label. Keep
+            # enqueue behavior consistent with the event-driven path (OSAC-5507).
             if ! already_queued=$(gh api graphql -f query='
               query($id: ID!) {
                 node(id: $id) {

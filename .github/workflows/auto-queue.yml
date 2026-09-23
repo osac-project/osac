@@ -93,15 +93,7 @@ jobs:
           else
             # Read live labels because Prow can apply lgtm/approved/jira-valid-reference
             # as separate events. See OSAC-5507.
-            labels_fetched=false
-            for attempt in 1 2 3; do
-              if LABELS=$(gh pr view "$PR" --repo "$REPO" --json labels --jq '[.labels[].name]'); then
-                labels_fetched=true
-                break
-              fi
-              echo "Unable to fetch live labels (attempt ${attempt}/3)"
-            done
-            if [[ "$labels_fetched" != true ]]; then
+            if ! LABELS=$(gh pr view "$PR" --repo "$REPO" --json labels --jq '[.labels[].name]'); then
               echo "Unable to evaluate live labels; treating PR as blocked."
               echo "blocked=true" >> "$GITHUB_OUTPUT"
               echo "eligible=false" >> "$GITHUB_OUTPUT"

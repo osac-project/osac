@@ -32,6 +32,7 @@
       provisioner: "{{ csi_driver_install_storage_class_provisioner }}"
       parameters:
         osac.tier: "{{ item.name }}"
+        tenant: "{{ tenant_name }}"
       reclaimPolicy: "{{ csi_driver_install_storage_class_reclaim_policy }}"
       volumeBindingMode: "{{ csi_driver_install_storage_class_volume_binding_mode }}"
   loop: "{{ _csi_driver_install_local_tiers }}"

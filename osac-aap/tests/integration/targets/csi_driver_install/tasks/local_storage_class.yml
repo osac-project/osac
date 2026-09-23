@@ -1,7 +1,7 @@
 ---
 # OSAC-4361 overlay case for the csi_driver_install integration target from
-# PR #361. Include this scenario from that target after the dependency is
-# reconciled into the branch.
+# PR #361. This verifies the local-tier StorageClass independently from the
+# network-vendor Helm release scenario.
 - name: "CSI Driver Install - Local-tier StorageClass"
   hosts: localhost
   gather_facts: false
@@ -41,7 +41,9 @@
           - _local_storage_class.resources[0].provisioner == 'csi.osac.openshift.io'
           - _local_storage_class.resources[0].volumeBindingMode == 'WaitForFirstConsumer'
           - _local_storage_class.resources[0].reclaimPolicy == 'Delete'
-          - "_local_storage_class.resources[0].parameters == {'osac.tier': 'local'}"
+          - _local_storage_class.resources[0].metadata.labels['osac.openshift.io/tenant'] == tenant_name
+          - _local_storage_class.resources[0].metadata.labels['osac.openshift.io/storage-tier'] == 'local'
+          - "_local_storage_class.resources[0].parameters == {'osac.tier': 'local', 'tenant': tenant_name}"
           - "'osac.io/device-class' not in _local_storage_class.resources[0].parameters"
           - "'topolvm.io/device-class' not in _local_storage_class.resources[0].parameters"
         fail_msg: >-
@@ -63,7 +65,8 @@
       ansible.builtin.assert:
         that:
           - _local_storage_class_after_rerun.resources | length == 1
-          - "_local_storage_class_after_rerun.resources[0].parameters == {'osac.tier': 'local'}"
+          - _local_storage_class_after_rerun.resources[0].metadata.labels['osac.openshift.io/tenant'] == tenant_name
+          - "_local_storage_class_after_rerun.resources[0].parameters == {'osac.tier': 'local', 'tenant': tenant_name}"
 
     - name: Delete local-tier StorageClass
       kubernetes.core.k8s:

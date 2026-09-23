@@ -168,12 +168,16 @@ jobs:
       - name: Disable auto-merge
         if: >-
           always()
-          &&
-          steps.org-check.outputs.org_member == 'true'
           && (
-            steps.label-check.outcome != 'success' ||
-            steps.label-check.outputs.blocked != 'false' ||
-            steps.label-check.outputs.eligible != 'true'
+            steps.org-check.outcome != 'success' ||
+            (
+              steps.org-check.outputs.org_member == 'true'
+              && (
+                steps.label-check.outcome != 'success' ||
+                steps.label-check.outputs.blocked != 'false' ||
+                steps.label-check.outputs.eligible != 'true'
+              )
+            )
           )
         env:
           GH_TOKEN: ${{ secrets.MERGE_QUEUE_TOKEN }}
@@ -259,7 +263,7 @@ jobs:
             --json number,isDraft,mergeable,mergeStateStatus,autoMergeRequest,labels)
           prs=$(jq -c '.[]' <<<"${candidates}" | while read -r candidate; do
             if is_enqueue_eligible <<<"${candidate}" >/dev/null; then
-              jq -c '{number, id}' <<<"${candidate}"
+              jq -c '{number}' <<<"${candidate}"
             fi
           done | jq -sc '.')
           echo "CLEAN with auto-merge already on: $(echo "$prs" | jq -c '[.[].number]')"

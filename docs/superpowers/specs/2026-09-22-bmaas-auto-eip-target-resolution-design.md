@@ -163,4 +163,3 @@ insufficient as the long-term deterministic policy.
 This would enforce Kubernetes ordering but would move fulfillment resource
 ownership into the operator and create a larger cross-component API change. It
 is not needed to solve the current race.
-

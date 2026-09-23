@@ -1851,7 +1851,7 @@ var _ = Describe("syncStatus", func() {
 		Expect(cond).ToNot(BeNil())
 		Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
 		Expect(cond.GetReason()).To(Equal(string(bmfov1alpha1.StageNetworkSetup)))
-		Expect(cond.GetMessage()).To(Equal("Network setup is in progress."))
+		Expect(cond.GetMessage()).To(Equal("Network attachment is in progress."))
 	})
 
 	It("should not set PROVISIONED=True when ProvisionTemplateComplete is absent", func() {
@@ -2436,12 +2436,22 @@ var _ = Describe("syncStatus", func() {
 				{Type: string(bmfov1alpha1.HostConditionAllocated), Status: metav1.ConditionTrue, Reason: "Allocated"},
 			},
 			string(bmfov1alpha1.StageProvisioning), "OS provisioning is in progress."),
-		Entry("ProvisionTemplateComplete=True → NetworkSetup stage",
+		Entry("ProvisionTemplateComplete=True → NetworkSetup/attachment step",
 			[]metav1.Condition{
 				{Type: string(bmfov1alpha1.HostConditionAllocated), Status: metav1.ConditionTrue, Reason: "Allocated"},
 				{Type: string(bmfov1alpha1.HostConditionProvisionTemplateComplete), Status: metav1.ConditionTrue, Reason: "Succeeded"},
 			},
-			string(bmfov1alpha1.StageNetworkSetup), "Network setup is in progress."),
+			string(bmfov1alpha1.StageNetworkSetup), "Network attachment is in progress."),
+		Entry("NetworkAttachmentsReady=True → NetworkSetup/handoff step",
+			[]metav1.Condition{
+				{Type: string(bmfov1alpha1.HostConditionNetworkAttachmentsReady), Status: metav1.ConditionTrue, Reason: "Ready"},
+			},
+			string(bmfov1alpha1.StageNetworkSetup), "Network handoff is in progress."),
+		Entry("NetworkHandoffComplete=True → NetworkSetup/IP-discovery step",
+			[]metav1.Condition{
+				{Type: string(bmfov1alpha1.HostConditionNetworkHandoffComplete), Status: metav1.ConditionTrue, Reason: "Complete"},
+			},
+			string(bmfov1alpha1.StageNetworkSetup), "IP address discovery is in progress."),
 	)
 
 	It("should select the furthest-advanced stage regardless of condition slice order", func() {
@@ -2674,18 +2684,20 @@ var _ = Describe("mapConditionStatus", func() {
 	})
 })
 
-var _ = Describe("stageMessage", func() {
-	DescribeTable("returns the curated in-progress message per stage",
-		func(stage bmfov1alpha1.ProvisioningStage, expectedMsg string) {
-			Expect(stageMessage(stage)).To(Equal(expectedMsg))
+var _ = Describe("stepMessage", func() {
+	DescribeTable("returns the curated in-progress message per step",
+		func(step bmfov1alpha1.ProvisioningStep, expectedMsg string) {
+			Expect(stepMessage(step)).To(Equal(expectedMsg))
 		},
-		Entry("HostAllocation", bmfov1alpha1.StageHostAllocation, "Host allocation is in progress."),
-		Entry("Provisioning", bmfov1alpha1.StageProvisioning, "OS provisioning is in progress."),
-		Entry("NetworkSetup", bmfov1alpha1.StageNetworkSetup, "Network setup is in progress."),
+		Entry("HostAllocation", bmfov1alpha1.StepHostAllocation, "Host allocation is in progress."),
+		Entry("Provisioning", bmfov1alpha1.StepProvisioning, "OS provisioning is in progress."),
+		Entry("NetworkSetupAttachment", bmfov1alpha1.StepNetworkSetupAttachment, "Network attachment is in progress."),
+		Entry("NetworkSetupHandoff", bmfov1alpha1.StepNetworkSetupHandoff, "Network handoff is in progress."),
+		Entry("NetworkSetupIPDiscovery", bmfov1alpha1.StepNetworkSetupIPDiscovery, "IP address discovery is in progress."),
 	)
 
-	It("returns empty string for an unrecognized stage", func() {
-		Expect(stageMessage(bmfov1alpha1.ProvisioningStage("Unknown"))).To(BeEmpty())
+	It("returns empty string for an unrecognized step", func() {
+		Expect(stepMessage(bmfov1alpha1.ProvisioningStep("Unknown"))).To(BeEmpty())
 	})
 })
 

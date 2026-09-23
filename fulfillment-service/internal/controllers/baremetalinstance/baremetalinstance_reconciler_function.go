@@ -57,11 +57,13 @@ const userDataSecretKey = "userdata"
 
 // Curated tenant-facing condition messages.
 const (
-	messageProvisioned         = "Infrastructure has been allocated and provisioned."
-	messageReady               = "The instance is ready."
-	messageStageHostAllocation = "Host allocation is in progress."
-	messageStageProvisioning   = "OS provisioning is in progress."
-	messageStageNetworkSetup   = "Network setup is in progress."
+	messageProvisioned                 = "Infrastructure has been allocated and provisioned."
+	messageReady                       = "The instance is ready."
+	messageStepHostAllocation          = "Host allocation is in progress."
+	messageStepProvisioning            = "OS provisioning is in progress."
+	messageStepNetworkSetupAttachment  = "Network attachment is in progress."
+	messageStepNetworkSetupHandoff     = "Network handoff is in progress."
+	messageStepNetworkSetupIPDiscovery = "IP address discovery is in progress."
 )
 
 // FunctionBuilder contains the data and logic needed to build a function that reconciles bare metal instances.
@@ -469,7 +471,7 @@ func (t *task) syncStatus(object *bmfov1alpha1.BareMetalInstance) {
 			t.updateCondition(
 				privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
 				privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
-				string(stage), stageMessage(stage))
+				string(stage), stepMessage(progress.Step))
 			t.updateCondition(
 				privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
 				privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "", "")
@@ -674,17 +676,21 @@ func sanitizeConditionMessage(condType bmfov1alpha1.BareMetalInstanceConditionTy
 	return ""
 }
 
-// stageMessage returns the curated tenant-facing in-progress message for the given
-// provisioning stage. Returns "" for an unrecognized stage so callers never panic on
-// future stage additions before this switch is updated.
-func stageMessage(stage bmfov1alpha1.ProvisioningStage) string {
-	switch stage {
-	case bmfov1alpha1.StageHostAllocation:
-		return messageStageHostAllocation
-	case bmfov1alpha1.StageProvisioning:
-		return messageStageProvisioning
-	case bmfov1alpha1.StageNetworkSetup:
-		return messageStageNetworkSetup
+// stepMessage returns the curated tenant-facing in-progress message for the given
+// provisioning step. Returns "" for an unrecognized step so callers never panic on
+// future step additions before this switch is updated.
+func stepMessage(step bmfov1alpha1.ProvisioningStep) string {
+	switch step {
+	case bmfov1alpha1.StepHostAllocation:
+		return messageStepHostAllocation
+	case bmfov1alpha1.StepProvisioning:
+		return messageStepProvisioning
+	case bmfov1alpha1.StepNetworkSetupAttachment:
+		return messageStepNetworkSetupAttachment
+	case bmfov1alpha1.StepNetworkSetupHandoff:
+		return messageStepNetworkSetupHandoff
+	case bmfov1alpha1.StepNetworkSetupIPDiscovery:
+		return messageStepNetworkSetupIPDiscovery
 	default:
 		return ""
 	}

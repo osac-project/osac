@@ -184,6 +184,32 @@ var _ = Describe("Dispatcher", func() {
 		Expect(plan.Targets[0].Manager.Name).To(Equal("netris"))
 	})
 
+	It("dispatches every in-scope AgentlessNet resource to the fabric manager", func() {
+		stub := newStubWithManagers("agentless_net", "")
+		cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+			newFabricManagerConfigMap("fm-agentless-net", "agentless_net", "ipv4"),
+		).Build()
+
+		disc, err := networkmanager.NewDiscovery(cl, "osac")
+		Expect(err).NotTo(HaveOccurred())
+		d := dispatcher.NewDispatcher(dispatcher.NewResolver(stub, disc))
+
+		for _, kind := range []string{
+			"VirtualNetwork",
+			"Subnet",
+			"SecurityGroup",
+			"ExternalIPPool",
+			"ExternalIP",
+			"NATGateway",
+		} {
+			plan, dispatchErr := d.Dispatch(ctx, kind, "nc-test")
+			Expect(dispatchErr).NotTo(HaveOccurred(), kind)
+			Expect(plan.Targets).To(HaveLen(1), kind)
+			Expect(plan.Targets[0].Role).To(Equal(dispatcher.ManagerRoleFabric), kind)
+			Expect(plan.Targets[0].Manager.Name).To(Equal("agentless_net"), kind)
+		}
+	})
+
 	It("dispatches Subnet to fabric + k8s when both configured", func() {
 		stub := newStubWithManagers("neutron", "cudn_localnet")
 		cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(

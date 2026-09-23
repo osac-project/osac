@@ -1,0 +1,114 @@
+---
+- name: Verify AgentlessNet resource-operation stubs
+  hosts: localhost
+  gather_facts: false
+  vars:
+    expected_error: "NotImplemented: agentless_net resource operations are not implemented."
+    agentless_operations:
+      - create_virtual_network
+      - delete_virtual_network
+      - create_subnet
+      - delete_subnet
+      - create_security_group
+      - delete_security_group
+      - create_external_ip_pool
+      - delete_external_ip_pool
+      - create_external_ip
+      - delete_external_ip
+      - create_nat_gateway
+      - delete_nat_gateway
+    resource_playbooks:
+      - playbook_osac_create_virtual_network.yml
+      - playbook_osac_delete_virtual_network.yml
+      - playbook_osac_create_subnet.yml
+      - playbook_osac_delete_subnet.yml
+      - playbook_osac_create_security_group.yml
+      - playbook_osac_delete_security_group.yml
+      - playbook_osac_create_external_ip_pool.yml
+      - playbook_osac_delete_external_ip_pool.yml
+      - playbook_osac_create_external_ip.yml
+      - playbook_osac_delete_external_ip.yml
+      - playbook_osac_create_nat_gateway.yml
+      - playbook_osac_delete_nat_gateway.yml
+    resource_extra_vars:
+      osac_job_vars:
+        resource:
+          metadata:
+            name: agentless-net-stub-test
+            namespace: default
+            annotations:
+              osac.openshift.io/implementation-strategy: agentless_net
+  tasks:
+    - name: Invoke every AgentlessNet resource-operation entrypoint
+      ansible.builtin.include_tasks: ../expect_failure.yaml
+      loop: "{{ agentless_operations }}"
+      loop_control:
+        loop_var: operation_name
+
+    - name: Assert excluded operations have no AgentlessNet role entrypoint
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/../../../../../collections/ansible_collections/osac/templates/roles/agentless_net/tasks/{{ item }}.yaml"
+      register: excluded_operation_files
+      loop:
+        - attach_external_ip
+        - detach_external_ip
+        - move_network_attachment
+        - query_dhcp_lease
+
+    - name: Verify excluded operations remain uncreated
+      ansible.builtin.assert:
+        that:
+          - not item.stat.exists
+        fail_msg: "Excluded AgentlessNet operation was added: {{ item.item }}"
+      loop: "{{ excluded_operation_files.results }}"
+
+    - name: Execute every generic AgentlessNet resource playbook
+      ansible.builtin.command:
+        argv:
+          - ansible-playbook
+          - --check
+          - "{{ playbook_dir }}/../../../../../{{ item }}"
+          - -e
+          - "{{ resource_extra_vars | to_json }}"
+        chdir: "{{ playbook_dir }}/../../../../../"
+      register: playbook_result
+      changed_when: false
+      failed_when: false
+      loop: "{{ resource_playbooks }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Verify every generic playbook fails with the AgentlessNet stub error
+      ansible.builtin.assert:
+        that:
+          - item.rc != 0
+          - expected_error in (item.stdout + item.stderr)
+        fail_msg: >-
+          {{ item.item }} did not fail with the expected AgentlessNet error:
+          {{ item.stdout + item.stderr }}
+      loop: "{{ playbook_result.results }}"
+
+    - name: Execute every generic AgentlessNet resource playbook in normal mode
+      ansible.builtin.command:
+        argv:
+          - ansible-playbook
+          - "{{ playbook_dir }}/../../../../../{{ item }}"
+          - -e
+          - "{{ resource_extra_vars | to_json }}"
+        chdir: "{{ playbook_dir }}/../../../../../"
+      register: normal_playbook_result
+      changed_when: false
+      failed_when: false
+      loop: "{{ resource_playbooks }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Verify normal-mode playbooks fail with the AgentlessNet stub error
+      ansible.builtin.assert:
+        that:
+          - item.rc != 0
+          - expected_error in (item.stdout + item.stderr)
+        fail_msg: >-
+          {{ item.item }} did not fail with the expected AgentlessNet error:
+          {{ item.stdout + item.stderr }}
+      loop: "{{ normal_playbook_result.results }}"

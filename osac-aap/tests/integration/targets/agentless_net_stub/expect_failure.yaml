@@ -1,0 +1,16 @@
+---
+- name: Invoke the AgentlessNet operation
+  block:
+    - name: Run {{ operation_name }}
+      ansible.builtin.include_role:
+        name: osac.templates.agentless_net
+        tasks_from: "{{ operation_name }}"
+  rescue:
+    - name: Assert {{ operation_name }} fails before changing state
+      ansible.builtin.assert:
+        that:
+          - ansible_failed_result.msg == expected_error
+          - not (ansible_failed_result.changed | default(false) | bool)
+        fail_msg: >-
+          {{ operation_name }} returned an unexpected failure:
+          {{ ansible_failed_result.msg | default('no message') }}

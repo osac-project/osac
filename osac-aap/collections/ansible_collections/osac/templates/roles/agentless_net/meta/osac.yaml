@@ -1,0 +1,13 @@
+---
+name: agentless_net
+title: AgentlessNet networking stub
+description: >-
+  Registers AgentlessNet for unified networking. The available resource
+  operation entrypoints currently fail with NotImplemented.
+
+template_type: network
+fabric_manager: agentless_net
+capabilities:
+  supports_ipv4: true
+  supports_ipv6: false
+  supports_dual_stack: false

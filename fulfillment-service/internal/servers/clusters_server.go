@@ -24,14 +24,14 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/osac/fulfillment-service/internal/references"
+	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 type ClustersServerBuilder struct {
 	logger            *slog.Logger
+	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -55,6 +55,12 @@ func NewClustersServer() *ClustersServerBuilder {
 // SetLogger sets the logger to use. This is mandatory.
 func (b *ClustersServerBuilder) SetLogger(value *slog.Logger) *ClustersServerBuilder {
 	b.logger = value
+	return b
+}
+
+// SetNotifier sets the notifier to use. This is optional.
+func (b *ClustersServerBuilder) SetNotifier(value events.Notifier) *ClustersServerBuilder {
+	b.notifier = value
 	return b
 }
 
@@ -117,22 +123,14 @@ func (b *ClustersServerBuilder) Build() (result *ClustersServer, err error) {
 	}
 
 	// Create the private server to delegate to:
-	addOnOperatorsDao, err := dao.NewGenericDAO[*privatev1.AddOnOperator]().
-		SetLogger(b.logger).
-		SetTenancyLogic(b.tenancyLogic).
-		SetMetricsRegisterer(b.metricsRegisterer).
-		Build()
-	if err != nil {
-		return
-	}
-	publishedAddOnOperatorLookup := references.NewPublishedDAOLookupFunc(addOnOperatorsDao)
 	delegate, err := NewPrivateClustersServer().
 		SetLogger(b.logger).
+		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		SetAddOnOperatorResolverFactory(newPublishedScopedAddOnOperatorResourceResolver).
 		SetFilterDesc(objectDesc).
-		SetAddOnOperatorLookup(publishedAddOnOperatorLookup).
 		Build()
 	if err != nil {
 		return

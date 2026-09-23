@@ -43,10 +43,10 @@ func NewDAOLookupFunc[O dao.Object](d *dao.GenericDAO[O]) ReferenceLookupFunc {
 	return newDAOLookupFunc(d, false, false)
 }
 
-// NewPublishedDAOLookupFunc creates a DAO lookup that only resolves published resources.
-// It is intended for references exposed through the public API.
-func NewPublishedDAOLookupFunc[O dao.Object](d *dao.GenericDAO[O]) ReferenceLookupFunc {
-	return newDAOLookupFunc(d, false, true)
+// NewPublishedScopedDAOLookupFunc creates a DAO lookup that only resolves published resources
+// inside the explicitly supplied tenant/project scope.
+func NewPublishedScopedDAOLookupFunc[O dao.Object](d *dao.GenericDAO[O]) ReferenceLookupFunc {
+	return newDAOLookupFunc(d, true, true)
 }
 
 // NewScopedDAOLookupFunc creates a DAO lookup that additionally constrains references to an

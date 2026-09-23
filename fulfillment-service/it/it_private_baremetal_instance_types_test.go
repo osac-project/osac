@@ -767,6 +767,7 @@ var _ = Describe("Private bare metal instance types", func() {
 			Memory: privatev1.BareMetalMemorySpec_builder{
 				TotalGb: 128, // Different value - should be rejected as immutable
 			}.Build(),
+			NetworkPorts: existingObject.GetSpec().GetHardware().GetNetworkPorts(),
 		}.Build()
 
 		updatedObject := privatev1.BareMetalInstanceType_builder{

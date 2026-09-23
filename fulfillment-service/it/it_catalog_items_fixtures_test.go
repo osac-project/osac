@@ -621,6 +621,14 @@ func createCatalogItemBareMetalInstanceTypeFixture(ctx context.Context, tenant s
 				Hardware: privatev1.BareMetalHardwareSpec_builder{
 					Cpu:    privatev1.BareMetalCPUSpec_builder{Cores: 4, Architecture: "x86_64", ThreadsPerCore: 2}.Build(),
 					Memory: privatev1.BareMetalMemorySpec_builder{TotalGb: 16}.Build(),
+					NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
+						privatev1.BareMetalNetworkPortSpec_builder{
+							Name:  "data-0",
+							Role:  "fabric",
+							Type:  "Ethernet",
+							Speed: "25Gbps",
+						}.Build(),
+					},
 				}.Build(),
 				HostLabelSelector: privatev1.BareMetalLabelSelector_builder{MatchLabels: map[string]string{"osac.openshift.io/host-type": "compute"}}.Build(),
 				Description:       "Catalog item integration hardware",

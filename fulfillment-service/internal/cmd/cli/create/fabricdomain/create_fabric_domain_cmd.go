@@ -14,6 +14,7 @@ specific language governing permissions and limitations under the License.
 package fabricdomain
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -44,9 +45,15 @@ func Cmd() *cobra.Command {
 	flags.StringVar(&runner.args.domainType, "type", "ethernet_ew", typeFlagHelp)
 	flags.StringSliceVar(&runner.args.servers, "servers", nil, serversFlagHelp)
 	flags.StringVar(&runner.args.virtualNetwork, "virtual-network", "", virtualNetworkFlagHelp)
-	_ = result.MarkFlagRequired("name")
-	_ = result.MarkFlagRequired("servers")
-	_ = result.MarkFlagRequired("virtual-network")
+	if err := result.MarkFlagRequired("name"); err != nil {
+		panic(fmt.Sprintf("failed to mark name flag as required: %v", err))
+	}
+	if err := result.MarkFlagRequired("servers"); err != nil {
+		panic(fmt.Sprintf("failed to mark servers flag as required: %v", err))
+	}
+	if err := result.MarkFlagRequired("virtual-network"); err != nil {
+		panic(fmt.Sprintf("failed to mark virtual-network flag as required: %v", err))
+	}
 	return result
 }
 
@@ -62,7 +69,7 @@ type runnerContext struct {
 	settings *config.Settings
 }
 
-func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
+func (c *runnerContext) run(cmd *cobra.Command, args []string) (runErr error) {
 	ctx := cmd.Context()
 	c.logger = logging.LoggerFromContext(ctx)
 	c.console = terminal.ConsoleFromContext(ctx)
@@ -91,7 +98,11 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create gRPC connection: %w", err)
 	}
-	defer conn.Close()
+	defer func() {
+		if err := conn.Close(); err != nil {
+			runErr = errors.Join(runErr, fmt.Errorf("failed to close gRPC connection: %w", err))
+		}
+	}()
 
 	vnClient := publicv1.NewVirtualNetworksClient(conn)
 	virtualNetwork, err := lookup.Find(c.args.virtualNetwork, "virtual network", func(filter string, limit int32) ([]*publicv1.VirtualNetwork, error) {

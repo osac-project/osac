@@ -15,6 +15,7 @@ package fabricdomain
 
 import (
 	"bytes"
+	"errors"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
@@ -46,7 +47,7 @@ var _ = Describe("Describe fabric domain", func() {
 		}.Build()
 
 		var output bytes.Buffer
-		RenderFabricDomain(&output, domain)
+		Expect(RenderFabricDomain(&output, domain)).To(Succeed())
 
 		Expect(output.String()).To(ContainSubstring("fd-001"))
 		Expect(output.String()).To(ContainSubstring("tenant-a-gpu-ew"))
@@ -60,11 +61,25 @@ var _ = Describe("Describe fabric domain", func() {
 
 	It("renders placeholders when optional fields are absent", func() {
 		var output bytes.Buffer
-		RenderFabricDomain(&output, publicv1.FabricDomain_builder{Id: "fd-002"}.Build())
+		Expect(RenderFabricDomain(&output, publicv1.FabricDomain_builder{Id: "fd-002"}.Build())).To(Succeed())
 
 		Expect(output.String()).To(MatchRegexp(`Name:\s+-`))
 		Expect(output.String()).To(MatchRegexp(`State:\s+-`))
 		Expect(output.String()).To(MatchRegexp(`Status:\s+-`))
 		Expect(output.String()).To(MatchRegexp(`Message:\s+-`))
 	})
+
+	It("returns output errors", func() {
+		err := errors.New("write failed")
+		Expect(RenderFabricDomain(failingWriter{err: err}, publicv1.FabricDomain_builder{Id: "fd-003"}.Build())).
+			To(MatchError(ContainSubstring("failed to flush fabric domain output")))
+	})
 })
+
+type failingWriter struct {
+	err error
+}
+
+func (w failingWriter) Write([]byte) (int, error) {
+	return 0, w.err
+}

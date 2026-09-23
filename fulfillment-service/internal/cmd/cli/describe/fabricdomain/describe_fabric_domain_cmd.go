@@ -14,6 +14,7 @@ specific language governing permissions and limitations under the License.
 package fabricdomain
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -43,7 +44,7 @@ func Cmd() *cobra.Command {
 
 type runnerContext struct{ console *terminal.Console }
 
-func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
+func (c *runnerContext) run(cmd *cobra.Command, args []string) (runErr error) {
 	ctx := cmd.Context()
 	c.console = terminal.ConsoleFromContext(ctx)
 	cfg := config.SettingsFromContext(ctx)
@@ -55,7 +56,11 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create gRPC connection: %w", err)
 	}
-	defer conn.Close()
+	defer func() {
+		if err := conn.Close(); err != nil {
+			runErr = errors.Join(runErr, fmt.Errorf("failed to close gRPC connection: %w", err))
+		}
+	}()
 
 	client := publicv1.NewFabricDomainsClient(conn)
 	matched, err := lookup.Find(args[0], "fabric domain", func(filter string, limit int32) ([]*publicv1.FabricDomain, error) {
@@ -72,11 +77,10 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	RenderFabricDomain(c.console, matched)
-	return nil
+	return RenderFabricDomain(c.console, matched)
 }
 
-func RenderFabricDomain(w io.Writer, domain *publicv1.FabricDomain) {
+func RenderFabricDomain(w io.Writer, domain *publicv1.FabricDomain) error {
 	writer := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	name := domain.GetMetadata().GetName()
 	if name == "" {
@@ -96,15 +100,27 @@ func RenderFabricDomain(w io.Writer, domain *publicv1.FabricDomain) {
 			message = conditions[0].GetMessage()
 		}
 	}
-	fmt.Fprintf(writer, "ID:\t%s\n", domain.GetId())
-	fmt.Fprintf(writer, "Name:\t%s\n", name)
-	fmt.Fprintf(writer, "Type:\t%s\n", domainType)
-	fmt.Fprintf(writer, "Servers:\t%s\n", strings.Join(domain.GetSpec().GetServers(), ", "))
-	fmt.Fprintf(writer, "Virtual Networks:\t%s\n", strings.Join(domain.GetSpec().GetVirtualNetworks(), ", "))
-	fmt.Fprintf(writer, "State:\t%s\n", state)
-	fmt.Fprintf(writer, "Status:\t%s\n", conditionStatus)
-	fmt.Fprintf(writer, "Message:\t%s\n", message)
-	writer.Flush()
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{"ID", domain.GetId()},
+		{"Name", name},
+		{"Type", domainType},
+		{"Servers", strings.Join(domain.GetSpec().GetServers(), ", ")},
+		{"Virtual Networks", strings.Join(domain.GetSpec().GetVirtualNetworks(), ", ")},
+		{"State", state},
+		{"Status", conditionStatus},
+		{"Message", message},
+	} {
+		if _, err := fmt.Fprintf(writer, "%s:\t%s\n", field.name, field.value); err != nil {
+			return fmt.Errorf("failed to render fabric domain %s: %w", strings.ToLower(field.name), err)
+		}
+	}
+	if err := writer.Flush(); err != nil {
+		return fmt.Errorf("failed to flush fabric domain output: %w", err)
+	}
+	return nil
 }
 
 const shortHelp = `Describe a fabric domain`

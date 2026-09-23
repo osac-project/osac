@@ -12,6 +12,7 @@ HUB_KUBECONFIG=${HUB_KUBECONFIG:?"HUB_KUBECONFIG must be set"}
 REMOTE_KUBECONFIG=${REMOTE_KUBECONFIG:?"REMOTE_KUBECONFIG must be set"}
 REMOTE_API_ADDRESS=${REMOTE_API_ADDRESS:?"REMOTE_API_ADDRESS must be set (e.g. https://192.168.128.10:6443)"}
 INSTALLER_NAMESPACE=${INSTALLER_NAMESPACE:-"osac"}
+OPERATOR_DEPLOYMENT_NAME=${OPERATOR_DEPLOYMENT_NAME:-"osac-operator"}
 
 hub="--kubeconfig ${HUB_KUBECONFIG}"
 remote="--kubeconfig ${REMOTE_KUBECONFIG}"
@@ -170,7 +171,7 @@ oc ${hub} label secret osac-remote-kubeconfig \
 
 rm -f "${REMOTE_KUBECONFIG_FILE}"
 
-oc ${hub} patch deployment osac-operator-controller-manager -n ${INSTALLER_NAMESPACE} --type=strategic -p '{
+oc ${hub} patch deployment ${OPERATOR_DEPLOYMENT_NAME} -n ${INSTALLER_NAMESPACE} --type=strategic -p '{
   "spec": {"template": {"spec": {
     "volumes": [{"name": "remote-kubeconfig", "secret": {"secretName": "osac-remote-kubeconfig"}}],
     "containers": [{"name": "manager",

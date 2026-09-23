@@ -2500,6 +2500,8 @@ var _ = Describe("syncStatus", func() {
 			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY)
 		Expect(ready).ToNot(BeNil())
 		Expect(ready.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		Expect(ready.GetReason()).To(Equal(string(bmfov1alpha1.StageReady)))
+		Expect(ready.GetMessage()).To(Equal("Power synchronization is in progress."))
 	})
 
 	It("should set READY=True/Ready when PowerSynced is True", func() {
@@ -2694,6 +2696,7 @@ var _ = Describe("stepMessage", func() {
 		Entry("NetworkSetupAttachment", bmfov1alpha1.StepNetworkSetupAttachment, "Network attachment is in progress."),
 		Entry("NetworkSetupHandoff", bmfov1alpha1.StepNetworkSetupHandoff, "Network handoff is in progress."),
 		Entry("NetworkSetupIPDiscovery", bmfov1alpha1.StepNetworkSetupIPDiscovery, "IP address discovery is in progress."),
+		Entry("ReadyPowerSync", bmfov1alpha1.StepReadyPowerSync, "Power synchronization is in progress."),
 	)
 
 	It("returns empty string for an unrecognized step", func() {

@@ -64,6 +64,7 @@ const (
 	messageStepNetworkSetupAttachment  = "Network attachment is in progress."
 	messageStepNetworkSetupHandoff     = "Network handoff is in progress."
 	messageStepNetworkSetupIPDiscovery = "IP address discovery is in progress."
+	messageStepReadyPowerSync          = "Power synchronization is in progress."
 )
 
 // FunctionBuilder contains the data and logic needed to build a function that reconciles bare metal instances.
@@ -482,7 +483,8 @@ func (t *task) syncStatus(object *bmfov1alpha1.BareMetalInstance) {
 				string(bmfov1alpha1.StateProvisioned), messageProvisioned)
 			t.updateCondition(
 				privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
-				privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "", "")
+				privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+				string(bmfov1alpha1.StageReady), stepMessage(bmfov1alpha1.StepReadyPowerSync))
 		case bmfov1alpha1.StateReady:
 			t.updateCondition(
 				privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
@@ -691,6 +693,8 @@ func stepMessage(step bmfov1alpha1.ProvisioningStep) string {
 		return messageStepNetworkSetupHandoff
 	case bmfov1alpha1.StepNetworkSetupIPDiscovery:
 		return messageStepNetworkSetupIPDiscovery
+	case bmfov1alpha1.StepReadyPowerSync:
+		return messageStepReadyPowerSync
 	default:
 		return ""
 	}

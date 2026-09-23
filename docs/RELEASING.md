@@ -12,9 +12,19 @@ workflows trigger it:
 ```
 schedule (03:00 UTC)  ──►  nightly-build.yaml       ──┐
                                                           ├──►  osac-build-and-publish.yaml
-workflow_dispatch     ──►  osac-release.yaml         ──┘        (prepare → build → test → promote/publish
-                                                                  → publish umbrella → tag → notify)
+workflow_dispatch     ──►  osac-release.yaml         ──┘        (prepare → build → test →
+                                                                  promote-and-publish → publish-umbrella →
+                                                                  tag → notify-release)
 ```
+
+In release mode, `tag` also fans out to three more jobs —
+`create-component-releases`, `publish-fulfillment-service-binaries`, and
+`publish-fulfillment-service-proto` — and `notify-release` waits for all
+three (tolerating each as `skipped`, the normal outcome in nightly mode or
+when a release doesn't touch the relevant components) before announcing
+success, so a later failure in any of them can't be contradicted by an
+already-sent success message. See "What you get on success" below for
+what each of those three actually produces.
 
 - **`osac-build-and-publish.yaml`** — the real pipeline: resolves every
   component's version, builds and tests whatever needs building, packages

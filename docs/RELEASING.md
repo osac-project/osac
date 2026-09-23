@@ -12,7 +12,8 @@ workflows trigger it:
 ```
 schedule (03:00 UTC)  ──►  nightly-build.yaml       ──┐
                                                           ├──►  osac-build-and-publish.yaml
-workflow_dispatch     ──►  osac-release.yaml         ──┘        (prepare → build → test → publish → tag)
+workflow_dispatch     ──►  osac-release.yaml         ──┘        (prepare → build → test → promote/publish
+                                                                  → publish umbrella → tag → notify)
 ```
 
 - **`osac-build-and-publish.yaml`** — the real pipeline: resolves every
@@ -131,13 +132,14 @@ for validating the release *mechanism* itself (e.g. after a change to
 - Every image and chart signed with cosign; see the root
   [`README.md`](../README.md#verifying-container-image-signatures) for
   how to verify a specific artifact.
-- A GitHub Release page for every bumped component that has one:
-  `osac-operator`, `osac-aap`, `bare-metal-fulfillment-operator`,
-  `osac-csi-driver`, and `osac-metering` (`fulfillment-service` and
-  `osac-ui` don't get one — never did).
-- If `fulfillment-service` was bumped this run: its signed release
-  binaries (attached to its own GitHub Release, separate from the plain
-  changelog releases above) and its proto schema pushed to the buf.build
+- A plain changelog-style GitHub Release page for every bumped component
+  among `osac-operator`, `osac-aap`, `bare-metal-fulfillment-operator`,
+  `osac-csi-driver`, and `osac-metering` (`osac-ui` never gets one, on any
+  release).
+- If `fulfillment-service` was bumped this run: its own GitHub Release
+  page too, but a different kind — created by goreleaser with its signed
+  release binaries attached, not the plain changelog style above — plus
+  its proto schema pushed to the buf.build
   registry.
 
 ## Releasing a new component version

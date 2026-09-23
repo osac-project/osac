@@ -63,12 +63,8 @@ message ExternalIPAttachment {
 // All fields are required and immutable after creation. The external_ip must reference an
 // existing ExternalIP in ALLOCATED state. The target must reference a valid resource that
 // supports external IP attachment.
+// //////////////////////////////////////////////
 message ExternalIPAttachmentSpec {
-  option (buf.validate.message).cel = {
-    id: "external_ip_attachment_target_id"
-    message: "the selected target must have a non-empty id"
-    expression: "has(this.compute_instance) ? this.compute_instance.id != '' : has(this.cluster) ? this.cluster.id != '' : this.baremetal_instance.id != ''"
-  };
   option (buf.validate.message).cel = {
     id: "external_ip_attachment_endpoint"
     message: "endpoint is required only for cluster targets"
@@ -93,7 +89,11 @@ message ExternalIPAttachmentSpec {
     //
     // Must reference an existing ComputeInstance in RUNNING state. Only one
     // ExternalIPAttachment may exist per ComputeInstance.
-    ComputeInstanceLocalReference compute_instance = 2;
+    ComputeInstanceLocalReference compute_instance = 2 [(buf.validate.field).cel = {
+      id: "compute_instance_target_id",
+      message: "compute_instance must have a non-empty id",
+      expression: "this.id != ''"
+    }];
 
     // Cluster reference to attach this external IP to.
     //
@@ -101,13 +101,21 @@ message ExternalIPAttachmentSpec {
     // when targeting a cluster to specify which endpoint (API or ingress) receives the
     // external IP. The attachment can be created before the cluster is ready and will
     // activate once the cluster's VIP is available.
-    ClusterLocalReference cluster = 3;
+    ClusterLocalReference cluster = 3 [(buf.validate.field).cel = {
+      id: "cluster_target_id",
+      message: "cluster must have a non-empty id",
+      expression: "this.id != ''"
+    }];
 
     // BareMetalInstance reference to attach this external IP to.
     //
     // Must reference an existing BareMetalInstance. DNAT rules will be configured
     // to forward traffic from the external IP to the bare-metal instance's internal IP.
-    BareMetalInstanceLocalReference baremetal_instance = 4;
+    BareMetalInstanceLocalReference baremetal_instance = 4 [(buf.validate.field).cel = {
+      id: "baremetal_instance_target_id",
+      message: "baremetal_instance must have a non-empty id",
+      expression: "this.id != ''"
+    }];
   }
 
   // Cluster endpoint to attach the external IP to. Required when target is cluster.
@@ -119,6 +127,7 @@ message ExternalIPAttachmentSpec {
     (buf.validate.field).enum.defined_only = true
   ];
 }
+// //////////////////////////////////////////////
 
 // Represents the current operational state of an ExternalIPAttachment.
 //

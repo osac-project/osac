@@ -11,18 +11,21 @@ _CLUSTER_ORDER_NOT_FOUND_RE = re.compile(
     r'Error from server \(NotFound\): clusterorders(?:\.osac\.openshift\.io)? "(?P<name>[^"]+)" not found',
     re.IGNORECASE,
 )
+_RESOURCE_NOT_FOUND_RE = re.compile(r'Error from server \(NotFound\): .* "(?P<name>[^"]+)" not found', re.IGNORECASE)
 
 
 class K8sClient:
-    def __init__(self, *, namespace: str, kubeconfig: str | None = None) -> None:
+    def __init__(self, *, namespace: str, kubeconfig: str | None = None, as_system_admin: bool = True) -> None:
         self.namespace: str = namespace
         self.kubeconfig: str | None = kubeconfig
+        self.as_system_admin: bool = as_system_admin
 
     def _base(self) -> list[str]:
         args: list[str] = ["kubectl"]
         if self.kubeconfig is not None:
             args.extend(["--kubeconfig", self.kubeconfig])
-        args.extend(["--as", "system:admin"])
+        if self.as_system_admin:
+            args.extend(["--as", "system:admin"])
         return args
 
     def _get(self, *args: str, checked: bool = True) -> tuple[str, int]:
@@ -32,8 +35,62 @@ class K8sClient:
 
     # Generic kubectl operations
 
-    def get_json(self, *, resource: str, name: str) -> dict[str, Any]:
-        return json.loads(run(*self._base(), "get", resource, name, "-n", self.namespace, "-o", "json"))
+    def get_json(self, *, resource: str, name: str, namespace: str | None = None) -> dict[str, Any]:
+        target_namespace = self.namespace if namespace is None else namespace
+        return json.loads(run(*self._base(), "get", resource, name, "-n", target_namespace, "-o", "json"))
+
+    def list_json(self, *, resource: str, namespace: str | None = None) -> dict[str, Any]:
+        args = [*self._base(), "get", resource]
+        if namespace is not None:
+            args.extend(["-n", namespace])
+        args.extend(["-o", "json"])
+        return json.loads(run(*args))
+
+    def get_operator_metrics(self) -> str:
+        services = self.list_json(resource="services", namespace=self.namespace).get("items", [])
+        metrics_service = next(
+            (
+                service
+                for service in services
+                if service.get("metadata", {}).get("labels", {}).get("app.kubernetes.io/name") == "operator"
+                and any(
+                    port.get("name") == "https" and port.get("port") == 8443
+                    for port in service.get("spec", {}).get("ports", [])
+                )
+            ),
+            None,
+        )
+        if metrics_service is None:
+            raise RuntimeError(f"No operator metrics service on HTTPS port 8443 in namespace {self.namespace}")
+
+        service_name = metrics_service.get("metadata", {}).get("name", "")
+        if not service_name:
+            raise RuntimeError("Operator metrics service has no metadata.name")
+        pod_name = run(
+            *self._base(),
+            "get",
+            "pods",
+            "-n",
+            self.namespace,
+            "-l",
+            "app.kubernetes.io/name=operator,control-plane=controller-manager",
+            "-o",
+            "jsonpath={.items[0].metadata.name}",
+        )
+        token = run(*self._base(), "create", "token", "osac-operator", "-n", self.namespace, "--duration=10m")
+        return run(
+            *self._base(),
+            "exec",
+            pod_name,
+            "-n",
+            self.namespace,
+            "--",
+            "curl",
+            "-sk",
+            "-H",
+            f"Authorization: Bearer {token}",
+            "https://127.0.0.1:8443/metrics",
+        )
 
     def get_jsonpath(self, *, resource: str, name: str, jsonpath: str) -> str:
         return run(*self._base(), "get", resource, name, "-n", self.namespace, "-o", f"jsonpath={jsonpath}")
@@ -57,6 +114,16 @@ class K8sClient:
     def is_present(self, *, resource: str, name: str) -> bool:
         _, rc = run_unchecked(*self._base(), "get", resource, name, "-n", self.namespace)
         return rc == 0
+
+    def is_absent(self, *, resource: str, name: str) -> bool:
+        args = ("get", resource, name, "-n", self.namespace)
+        output, rc = run_unchecked(*self._base(), *args)
+        if rc == 0:
+            return False
+        not_found = _RESOURCE_NOT_FOUND_RE.search(output.strip())
+        if not_found is not None and not_found.group("name") == name:
+            return True
+        raise subprocess.CalledProcessError(rc, [*self._base(), *args], output=output, stderr=output)
 
     def count_by_label_all_namespaces(self, *, resource: str, label: str) -> int:
         output: str = run(*self._base(), "get", resource, "-A", "-l", label, "--no-headers")
@@ -329,6 +396,24 @@ class K8sClient:
             checked=checked,
         )
         return output if rc == 0 else ""
+
+    def get_cluster_order_status(self, *, name: str, checked: bool = True) -> dict[str, Any]:
+        output, rc = self._get("get", "clusterorder", name, "-n", self.namespace, "-o", "json", checked=checked)
+        if rc != 0:
+            return {}
+        return json.loads(output).get("status", {})
+
+    def get_cluster_order_infra_env_name(self, *, name: str, checked: bool = True) -> str:
+        output, rc = self._get(
+            "get", "infraenv.agent-install.openshift.io", "-n", self.namespace, "-o", "json", checked=checked
+        )
+        if rc != 0:
+            return ""
+        for item in json.loads(output).get("items", []):
+            owner_references = item.get("metadata", {}).get("ownerReferences", [])
+            if any(owner.get("kind") == "ClusterOrder" and owner.get("name") == name for owner in owner_references):
+                return item.get("metadata", {}).get("name", "")
+        return ""
 
     def get_cluster_order_phase(self, *, name: str, checked: bool = True) -> str | None:
         # In unchecked mode, None means that this ClusterOrder is gone. Keep a

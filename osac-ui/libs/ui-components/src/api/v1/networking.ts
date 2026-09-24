@@ -343,18 +343,6 @@ export const useCreateSecurityGroup = () => {
   });
 };
 
-export const useUpdateSecurityGroup = () => {
-  const client = useApiFetch(SecurityGroups);
-  const qc = useApiQueryClient();
-  return useMutation({
-    mutationFn: async ({ object }: { object: MessageInitShape<typeof SecurityGroupSchema> }) => {
-      const resp = await client.update({ object });
-      return resp.object;
-    },
-    onSuccess: () => invalidateSecurityGroupsQueries(qc),
-  });
-};
-
 export const useDeleteSecurityGroup = () => {
   const client = useApiFetch(SecurityGroups);
   const qc = useApiQueryClient();

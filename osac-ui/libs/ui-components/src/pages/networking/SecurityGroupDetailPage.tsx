@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { type MessageInitShape } from '@bufbuild/protobuf';
 import {
   Alert,
   Breadcrumb,
@@ -18,58 +17,31 @@ import {
   Tabs,
 } from '@patternfly/react-core';
 
-import { type SecurityGroup, SecurityGroupSchema, SecurityGroupState } from '@osac/types';
+import { SecurityGroupState } from '@osac/types';
 
 import {
   resourceDisplayName,
   useDeleteSecurityGroup,
   useSecurityGroup,
-  useUpdateSecurityGroup,
   useVirtualNetworks,
 } from '../../api/v1/networking';
-import { SecurityGroupRuleModal } from '../../components/networking/SecurityGroupRuleModal';
 import { SecurityGroupRulesTable } from '../../components/networking/SecurityGroupRulesTable';
-import { toPlainRule } from '../../components/networking/securityGroupRuleUtils';
 import { SecurityGroupStatusLabel } from '../../components/networking/SecurityGroupStatusLabel';
 import ListPage from '../../components/Page/ListPage';
 import ListPageBody from '../../components/Page/ListPageBody';
 import DeleteResourceModal from '../../components/Resource/DeleteResourceModal';
 import { useTranslation } from '../../hooks/useTranslation';
 
-type RuleTarget = { direction: 'ingress' | 'egress'; ruleIndex?: number };
-
-const securityGroupWithoutRule = (
-  sg: SecurityGroup,
-  target: Required<RuleTarget>,
-): MessageInitShape<typeof SecurityGroupSchema> => {
-  const newIngress = (sg.spec?.ingress ?? []).map(toPlainRule);
-  const newEgress = (sg.spec?.egress ?? []).map(toPlainRule);
-  const targetList = target.direction === 'ingress' ? newIngress : newEgress;
-  targetList.splice(target.ruleIndex, 1);
-  return {
-    id: sg.id,
-    metadata: { name: sg.metadata?.name ?? '' },
-    spec: {
-      virtualNetwork: sg.spec?.virtualNetwork,
-      ingress: newIngress,
-      egress: newEgress,
-    },
-  };
-};
-
 export const SecurityGroupDetailPage = () => {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { id } = useParams() as { id: string };
   const [activeTabKey, setActiveTabKey] = useState<string | number>(0);
-  const [ruleEditor, setRuleEditor] = useState<RuleTarget | null>(null);
-  const [deleteRuleTarget, setDeleteRuleTarget] = useState<Required<RuleTarget> | null>(null);
   const [showDeleteSgModal, setShowDeleteSgModal] = useState(false);
 
   const { data: sg, isLoading, error } = useSecurityGroup(id);
   const { data: virtualNetworks = [] } = useVirtualNetworks();
   const deleteSecurityGroup = useDeleteSecurityGroup();
-  const updateSecurityGroup = useUpdateSecurityGroup();
 
   const sgName = sg?.metadata?.name ?? id;
   const isFailed = sg?.status?.state === SecurityGroupState.FAILED;
@@ -117,15 +89,7 @@ export const SecurityGroupDetailPage = () => {
           <Tab eventKey={0} title={<TabTitleText>{t('Inbound Rules')}</TabTitleText>}>
             <Card>
               <CardBody>
-                <SecurityGroupRulesTable
-                  rules={sg?.spec?.ingress ?? []}
-                  direction="ingress"
-                  onAddRule={() => setRuleEditor({ direction: 'ingress' })}
-                  onEditRule={(ruleIndex) => setRuleEditor({ direction: 'ingress', ruleIndex })}
-                  onDeleteRule={(ruleIndex) =>
-                    setDeleteRuleTarget({ direction: 'ingress', ruleIndex })
-                  }
-                />
+                <SecurityGroupRulesTable rules={sg?.spec?.ingress ?? []} direction="ingress" />
               </CardBody>
             </Card>
           </Tab>
@@ -133,15 +97,7 @@ export const SecurityGroupDetailPage = () => {
           <Tab eventKey={1} title={<TabTitleText>{t('Outbound Rules')}</TabTitleText>}>
             <Card>
               <CardBody>
-                <SecurityGroupRulesTable
-                  rules={sg?.spec?.egress ?? []}
-                  direction="egress"
-                  onAddRule={() => setRuleEditor({ direction: 'egress' })}
-                  onEditRule={(ruleIndex) => setRuleEditor({ direction: 'egress', ruleIndex })}
-                  onDeleteRule={(ruleIndex) =>
-                    setDeleteRuleTarget({ direction: 'egress', ruleIndex })
-                  }
-                />
+                <SecurityGroupRulesTable rules={sg?.spec?.egress ?? []} direction="egress" />
               </CardBody>
             </Card>
           </Tab>
@@ -194,29 +150,6 @@ export const SecurityGroupDetailPage = () => {
           </Tab>
         </Tabs>
       </ListPageBody>
-
-      {ruleEditor && sg && (
-        <SecurityGroupRuleModal
-          onClose={() => setRuleEditor(null)}
-          securityGroup={sg}
-          direction={ruleEditor.direction}
-          ruleIndex={ruleEditor.ruleIndex}
-        />
-      )}
-
-      {deleteRuleTarget && sg && (
-        <DeleteResourceModal
-          resourceName={t('rule')}
-          label={t(
-            'This will permanently delete the rule. This action cannot be undone. Traffic matching this rule will be blocked.',
-          )}
-          errorLabel={t('Failed to delete rule')}
-          onClose={() => setDeleteRuleTarget(null)}
-          onSuccess={() => setDeleteRuleTarget(null)}
-          mutation={updateSecurityGroup}
-          variables={{ object: securityGroupWithoutRule(sg, deleteRuleTarget) }}
-        />
-      )}
 
       {showDeleteSgModal && (
         <DeleteResourceModal

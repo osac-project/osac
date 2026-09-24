@@ -80,25 +80,37 @@ Approve commands as they arise and only persist the ones you run constantly.
 
 ## Trusting the repo's hooks (`.codex/hooks.json`)
 
-The repo ships `.codex/hooks.json`, which mirrors the Claude Code hooks:
+The repo ships native Codex hooks in `.codex/hooks.json`:
 
 - **SessionStart** refreshes the vendored `ai-workflows` context and fetches
   the latest published graphify bundle into `graphify-out/`.
 - **PreToolUse (Bash)** nudges you to consult the knowledge graph before broad
-  shell exploration (best-effort; it no-ops when `graphify` isn't installed).
+  shell exploration (best-effort; it no-ops when `graphify` isn't installed)
+  and runs component checks before commits and PR creation.
+- **PostToolUse (`apply_patch`)** routes proto, module, and operator API edits
+  to the component checks shared with Claude Code.
 
 Codex requires you to trust repo hooks before they run — use `/hooks` in the
-Codex CLI to review and trust them. Until you do, sessions start without the
-context refresh and graph fetch (Codex falls back to normal cold exploration).
+Codex CLI to review and trust them. Until you do, none of the repo hooks run:
+the session context refresh, graph fetch, and component checks are skipped.
+Codex ties trust to the current hook definition, so changes to the config or
+hook scripts may require review again.
 For non-interactive runs where you can't trust interactively, Codex offers a
 bypass flag (`--dangerously-bypass-hook-trust`). Use it only in protected,
 reviewed CI or other pre-vetted automation—never for untrusted pull-request
 code unless the workflow separately verifies the hook definition and every
 referenced script.
 
-The hook scripts are agent-neutral: they resolve the project directory from the
-git worktree root when Codex doesn't set `CLAUDE_PROJECT_DIR`, so the same
-scripts serve both tools.
+Codex reports `apply_patch` edits as patch text in `tool_input.command` rather
+than a separate file-path field. The Codex adapter extracts paths from the
+supported `Update File`, `Add File`, `Delete File`, and `Move to` patch headers,
+then passes them to the shared path router. An unrecognized patch format or
+tool with no usable path is a no-op; it doesn't route against unrelated dirty
+files in the worktree. PostToolUse runs after the edit, so it can't undo an
+edit if a follow-up generator fails.
+
+The shared hook scripts resolve the project root from the event's `cwd`, so
+they work from Codex and Claude Code without `CLAUDE_PROJECT_DIR`.
 
 ## Reconnecting authenticated services (MCP)
 

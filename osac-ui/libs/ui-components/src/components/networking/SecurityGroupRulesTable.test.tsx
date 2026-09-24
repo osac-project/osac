@@ -1,6 +1,5 @@
 import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { Protocol, SecurityRule } from '@osac/types';
 
@@ -29,165 +28,37 @@ describe('SecurityGroupRulesTable', () => {
     },
   ];
 
-  it('renders empty state for ingress with add button', () => {
-    const onAddRule = vi.fn();
-    render(
-      <SecurityGroupRulesTable
-        rules={[]}
-        direction="ingress"
-        onAddRule={onAddRule}
-        onEditRule={vi.fn()}
-        onDeleteRule={vi.fn()}
-      />,
-    );
+  it('renders a read-only empty state for ingress', () => {
+    render(<SecurityGroupRulesTable rules={[]} direction="ingress" />);
 
-    expect(screen.getByText(/No inbound rules yet/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Add rule/i })).toBeInTheDocument();
+    expect(screen.getByText('No inbound rules.')).toBeInTheDocument();
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
 
-  it('renders empty state for egress with add button', () => {
-    const onAddRule = vi.fn();
-    render(
-      <SecurityGroupRulesTable
-        rules={[]}
-        direction="egress"
-        onAddRule={onAddRule}
-        onEditRule={vi.fn()}
-        onDeleteRule={vi.fn()}
-      />,
-    );
+  it('renders a read-only empty state for egress', () => {
+    render(<SecurityGroupRulesTable rules={[]} direction="egress" />);
 
-    expect(screen.getByText(/No outbound rules yet/)).toBeInTheDocument();
+    expect(screen.getByText('No outbound rules.')).toBeInTheDocument();
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
 
-  it('renders rules table with protocol, port range, and CIDR columns', () => {
-    render(
-      <SecurityGroupRulesTable
-        rules={mockRules}
-        direction="ingress"
-        onAddRule={vi.fn()}
-        onEditRule={vi.fn()}
-        onDeleteRule={vi.fn()}
-      />,
-    );
+  it('renders rules without update actions', () => {
+    render(<SecurityGroupRulesTable rules={mockRules} direction="ingress" />);
 
     expect(screen.getByText('Protocol')).toBeInTheDocument();
     expect(screen.getByText('Port Range')).toBeInTheDocument();
     expect(screen.getByText('Source CIDR')).toBeInTheDocument();
-    expect(screen.getByText('Actions')).toBeInTheDocument();
+    expect(screen.queryByText('Actions')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
 
-  it('shows Destination CIDR label for egress direction', () => {
-    render(
-      <SecurityGroupRulesTable
-        rules={mockRules}
-        direction="egress"
-        onAddRule={vi.fn()}
-        onEditRule={vi.fn()}
-        onDeleteRule={vi.fn()}
-      />,
-    );
+  it('shows Destination CIDR for egress and formats rule values', () => {
+    render(<SecurityGroupRulesTable rules={mockRules} direction="egress" />);
 
     expect(screen.getByText('Destination CIDR')).toBeInTheDocument();
-  });
-
-  it('formats protocol names correctly', () => {
-    render(
-      <SecurityGroupRulesTable
-        rules={mockRules}
-        direction="ingress"
-        onAddRule={vi.fn()}
-        onEditRule={vi.fn()}
-        onDeleteRule={vi.fn()}
-      />,
-    );
-
     expect(screen.getByText('TCP')).toBeInTheDocument();
-    expect(screen.getByText('UDP')).toBeInTheDocument();
-    expect(screen.getByText('ICMP')).toBeInTheDocument();
-  });
-
-  it('formats port range as single port when from equals to', () => {
-    render(
-      <SecurityGroupRulesTable
-        rules={mockRules}
-        direction="ingress"
-        onAddRule={vi.fn()}
-        onEditRule={vi.fn()}
-        onDeleteRule={vi.fn()}
-      />,
-    );
-
     expect(screen.getByText('80')).toBeInTheDocument();
-    expect(screen.getByText('53')).toBeInTheDocument();
-  });
-
-  it('formats CIDR combining IPv4 and IPv6', () => {
-    render(
-      <SecurityGroupRulesTable
-        rules={mockRules}
-        direction="ingress"
-        onAddRule={vi.fn()}
-        onEditRule={vi.fn()}
-        onDeleteRule={vi.fn()}
-      />,
-    );
-
     expect(screen.getByText('0.0.0.0/0')).toBeInTheDocument();
     expect(screen.getByText('::/0')).toBeInTheDocument();
-    expect(screen.getByText('10.0.0.0/8')).toBeInTheDocument();
-  });
-
-  it('calls onAddRule when Add rule button is clicked', async () => {
-    const user = userEvent.setup();
-    const onAddRule = vi.fn();
-    render(
-      <SecurityGroupRulesTable
-        rules={mockRules}
-        direction="ingress"
-        onAddRule={onAddRule}
-        onEditRule={vi.fn()}
-        onDeleteRule={vi.fn()}
-      />,
-    );
-
-    await user.click(screen.getByRole('button', { name: /Add rule/i }));
-    expect(onAddRule).toHaveBeenCalledTimes(1);
-  });
-
-  it('calls onEditRule with correct index when Edit is clicked', async () => {
-    const user = userEvent.setup();
-    const onEditRule = vi.fn();
-    render(
-      <SecurityGroupRulesTable
-        rules={mockRules}
-        direction="ingress"
-        onAddRule={vi.fn()}
-        onEditRule={onEditRule}
-        onDeleteRule={vi.fn()}
-      />,
-    );
-
-    const editButtons = screen.getAllByRole('button', { name: /Edit/i });
-    await user.click(editButtons[1]);
-    expect(onEditRule).toHaveBeenCalledWith(1);
-  });
-
-  it('calls onDeleteRule with correct index when Delete is clicked', async () => {
-    const user = userEvent.setup();
-    const onDeleteRule = vi.fn();
-    render(
-      <SecurityGroupRulesTable
-        rules={mockRules}
-        direction="ingress"
-        onAddRule={vi.fn()}
-        onEditRule={vi.fn()}
-        onDeleteRule={onDeleteRule}
-      />,
-    );
-
-    const deleteButtons = screen.getAllByRole('button', { name: /Delete/i });
-    await user.click(deleteButtons[2]);
-    expect(onDeleteRule).toHaveBeenCalledWith(2);
   });
 });

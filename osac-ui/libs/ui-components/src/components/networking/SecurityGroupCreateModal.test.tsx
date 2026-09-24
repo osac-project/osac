@@ -1,6 +1,7 @@
 import { MemoryRouter } from 'react-router-dom';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useField } from 'formik';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { VirtualNetworkState } from '@osac/types';
@@ -16,6 +17,13 @@ vi.mock('../../api/v1/networking', async (importOriginal) => {
     useCreateSecurityGroup: vi.fn(),
   };
 });
+
+vi.mock('../../components/Form/ProjectField', () => ({
+  default: function ProjectFieldMock() {
+    const [field] = useField('metadata.project');
+    return <input aria-label="Project" {...field} />;
+  },
+}));
 
 describe('SecurityGroupCreateModal', () => {
   const mockVirtualNetworks = [
@@ -62,7 +70,7 @@ describe('SecurityGroupCreateModal', () => {
     expect(screen.getByText('Create security group')).toBeInTheDocument();
     expect(screen.getByLabelText(/Virtual Network/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Name/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Create/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Next/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Cancel/i })).toBeInTheDocument();
   });
 
@@ -74,13 +82,15 @@ describe('SecurityGroupCreateModal', () => {
 
     await user.click(screen.getByLabelText(/Virtual Network/i));
     await user.click(screen.getByRole('option', { name: /vn-prod/i }));
+    await user.type(screen.getByLabelText('Project'), 'project-a');
     await user.type(screen.getByLabelText(/Name/i), 'sg-web');
+    await user.click(screen.getByRole('button', { name: /Next/i }));
     await user.click(screen.getByRole('button', { name: /Create/i }));
 
     await waitFor(() => {
       expect(mutateAsync).toHaveBeenCalledWith(
         expect.objectContaining({
-          metadata: { name: 'sg-web' },
+          metadata: { name: 'sg-web', project: 'project-a', description: '' },
           spec: { virtualNetwork: { id: 'vn-1' }, ingress: [], egress: [] },
         }),
       );
@@ -99,7 +109,9 @@ describe('SecurityGroupCreateModal', () => {
 
     await user.click(screen.getByLabelText(/Virtual Network/i));
     await user.click(screen.getByRole('option', { name: /vn-prod/i }));
+    await user.type(screen.getByLabelText('Project'), 'project-a');
     await user.type(screen.getByLabelText(/Name/i), 'sg-web');
+    await user.click(screen.getByRole('button', { name: /Next/i }));
     await user.click(screen.getByRole('button', { name: /Create/i }));
 
     await waitFor(() => {

@@ -397,3 +397,10 @@ integration-tests-bare-metal-fulfillment-operator:
   - '{bare-metal-fulfillment-operator/**,osac-operator/**,proto/**,osac-installer/**,go.work,go.work.sum,.github/workflows/integration-tests.yml}'
 integration-tests-osac-aap:
   - '{osac-aap/**,.github/workflows/integration-tests.yml}'
+
+# Claude/Codex component-hook smoke coverage. Keep this scoped to the shared
+# component hooks, their registrations, the Codex adapter, and the smoke test
+# itself. The workflow and filter are included so edits to the CI wiring are
+# exercised too.
+component-hooks-smoke:
+  - '{.claude/settings.json,.claude/hooks/component-*.sh,.codex/hooks.json,.codex/hooks/**,tools/test/component-hooks-smoke.sh,.github/filters/ci-filters.yml,.github/workflows/component-hooks-smoke.yml}'

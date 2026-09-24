@@ -1,6 +1,5 @@
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { render, screen, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Protocol, SecurityGroupState, VirtualNetworkState } from '@osac/types';
@@ -14,7 +13,6 @@ vi.mock('../../api/v1/networking', async (importOriginal) => {
     ...actual,
     useSecurityGroup: vi.fn(),
     useVirtualNetworks: vi.fn(),
-    useUpdateSecurityGroup: vi.fn(),
     useDeleteSecurityGroup: vi.fn(),
   };
 });
@@ -52,9 +50,6 @@ describe('SecurityGroupDetailPage', () => {
     status: { state: SecurityGroupState.READY },
   };
 
-  const mutate = vi.fn();
-  const reset = vi.fn();
-
   beforeEach(() => {
     vi.clearAllMocks();
 
@@ -69,14 +64,6 @@ describe('SecurityGroupDetailPage', () => {
       isLoading: false,
       error: null,
     } as ReturnType<typeof networkingApi.useVirtualNetworks>);
-
-    vi.mocked(networkingApi.useUpdateSecurityGroup).mockReturnValue({
-      mutate,
-      mutateAsync: vi.fn(),
-      isPending: false,
-      error: null,
-      reset,
-    } as unknown as ReturnType<typeof networkingApi.useUpdateSecurityGroup>);
 
     vi.mocked(networkingApi.useDeleteSecurityGroup).mockReturnValue({
       mutate: vi.fn(),
@@ -127,85 +114,5 @@ describe('SecurityGroupDetailPage', () => {
     expect(alertTitle).toBeInTheDocument();
     const alert = alertTitle.closest('.pf-v6-c-alert') as HTMLElement;
     expect(within(alert).getByText('Network error')).toBeInTheDocument();
-  });
-
-  describe('rule deletion', () => {
-    it('removes the targeted ingress rule and keeps the rest', async () => {
-      const user = userEvent.setup();
-      renderPage();
-
-      const tabPanel = within(screen.getByRole('tabpanel'));
-      const deleteButtons = tabPanel.getAllByRole('button', { name: /^Delete$/i });
-      await user.click(deleteButtons[0]);
-
-      const dialog = within(screen.getByRole('dialog'));
-      await user.click(dialog.getByRole('button', { name: /^Delete$/i }));
-
-      expect(mutate).toHaveBeenCalledWith(
-        {
-          object: {
-            id: 'sg-1',
-            metadata: { name: 'sg-web' },
-            spec: {
-              virtualNetwork: { id: 'vn-1' },
-              ingress: [
-                { protocol: Protocol.TCP, portFrom: 443, portTo: 443, ipv4Cidr: '0.0.0.0/0' },
-              ],
-              egress: [{ protocol: Protocol.ALL }],
-            },
-          },
-        },
-        { onSuccess: expect.any(Function) as unknown },
-      );
-    });
-
-    it('removes the targeted egress rule', async () => {
-      const user = userEvent.setup();
-      renderPage();
-
-      await user.click(screen.getByRole('tab', { name: /Outbound Rules/i }));
-
-      const tabPanel = within(screen.getByRole('tabpanel'));
-      const deleteButtons = tabPanel.getAllByRole('button', { name: /^Delete$/i });
-      await user.click(deleteButtons[0]);
-
-      const dialog = within(screen.getByRole('dialog'));
-      await user.click(dialog.getByRole('button', { name: /^Delete$/i }));
-
-      expect(mutate).toHaveBeenCalledWith(
-        {
-          object: {
-            id: 'sg-1',
-            metadata: { name: 'sg-web' },
-            spec: {
-              virtualNetwork: { id: 'vn-1' },
-              ingress: [
-                { protocol: Protocol.TCP, portFrom: 80, portTo: 80, ipv4Cidr: '0.0.0.0/0' },
-                { protocol: Protocol.TCP, portFrom: 443, portTo: 443, ipv4Cidr: '0.0.0.0/0' },
-              ],
-              egress: [],
-            },
-          },
-        },
-        { onSuccess: expect.any(Function) as unknown },
-      );
-    });
-
-    it('closes the delete rule modal on Cancel', async () => {
-      const user = userEvent.setup();
-      renderPage();
-
-      const tabPanel = within(screen.getByRole('tabpanel'));
-      const deleteButtons = tabPanel.getAllByRole('button', { name: /^Delete$/i });
-      await user.click(deleteButtons[0]);
-
-      expect(screen.getByRole('dialog')).toBeInTheDocument();
-
-      const dialog = within(screen.getByRole('dialog'));
-      await user.click(dialog.getByRole('button', { name: /Cancel/i }));
-
-      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-      expect(mutate).not.toHaveBeenCalled();
-    });
   });
 });

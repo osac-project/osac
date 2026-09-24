@@ -44,11 +44,12 @@ type FabricDomainSpec struct {
 	// +kubebuilder:validation:items:MinLength=1
 	Servers []string `json:"servers"`
 
-	// VirtualNetworks contains OSAC VirtualNetwork IDs associated with the domain.
-	// The repeated shape mirrors the fulfillment API and leaves room for future multi-VN sharing;
-	// this API version requires exactly one reference. In Phase 1, its NetworkClass resolves the
-	// Netris VPC for EthernetEW. InfiniBandEW and NVLink use different fabric mechanisms and are
-	// reserved for later phases. This reference cannot be changed after creation.
+	// VirtualNetworks contains the OSAC VirtualNetwork ID associated with the domain.
+	// The plural field mirrors the fulfillment API, but this API version requires exactly one
+	// reference. A Phase 1 EthernetEW domain maps to one Netris Server Cluster in the VPC resolved
+	// through that network's NetworkClass; multi-VN semantics are not defined. InfiniBandEW and
+	// NVLink are reserved for later phases and may use different references. This reference is
+	// immutable after creation.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=1

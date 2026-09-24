@@ -19,6 +19,7 @@ import "google/protobuf/any.proto";
 import "osac/public/v1/cluster_common_type.proto";
 import "osac/public/v1/cluster_version_type.proto";
 import "osac/public/v1/metadata_type.proto";
+import "osac/public/v1/baremetal_instance_type_type.proto";
 import "osac/public/v1/host_type_type.proto";
 import "osac/public/v1/secret_type.proto";
 
@@ -111,6 +112,7 @@ message ClusterTemplateNodeSet {
 
   // Number of nodes of the set.
   int32 size = 2;
+  BareMetalInstanceTypeReference baremetal_instance_type = 3;
 }
 
 // Default values for cluster spec fields. These are applied when a user creates a cluster without

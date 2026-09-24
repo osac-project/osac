@@ -39,7 +39,15 @@ message BareMetalInstanceType {
   BareMetalInstanceTypeStatus status = 4;
 }
 
-// Defines the hardware specifications for a BareMetalInstanceType.
+// Reference to a BareMetalInstanceType resource.
+message BareMetalInstanceTypeReference {
+  string id = 1;
+  string name = 2;
+  string project = 3;
+  bool shared = 4;
+}
+
+// Defines the hardware specifications and host label selector for a BareMetalInstanceType.
 message BareMetalInstanceTypeSpec {
   // Hardware specifications for this bare metal instance type.
   BareMetalHardwareSpec hardware = 1 [(buf.validate.field).required = true];

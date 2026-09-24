@@ -19,6 +19,7 @@ import "buf/validate/validate.proto";
 import "cleanapi/cleanapi.proto";
 import "google/api/field_behavior.proto";
 import "google/protobuf/timestamp.proto";
+import "osac/private/v1/disk_image_type.proto";
 import "osac/private/v1/metadata_type.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
@@ -140,6 +141,10 @@ message ClusterVersionSpec {
     (google.api.field_behavior) = IMMUTABLE,
     (buf.validate.field).string = {min_len: 1, max_len: 256}
   ];
+
+  // Reference to a DiskImage resource used to boot bare-metal workers of clusters on this
+  // version. The server validates existence, lifecycle, and tenant visibility.
+  DiskImageReference disk_image = 7;
 }
 
 // Contains the system-provided status of a ClusterVersion.

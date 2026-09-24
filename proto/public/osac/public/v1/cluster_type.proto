@@ -20,6 +20,7 @@ import "google/api/field_behavior.proto";
 import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
 import "osac/public/v1/add_on_operator_type.proto";
+import "osac/public/v1/baremetal_instance_type_type.proto";
 import "osac/public/v1/cluster_catalog_item_type.proto";
 import "osac/public/v1/cluster_common_type.proto";
 import "osac/public/v1/cluster_template_type.proto";
@@ -370,37 +371,25 @@ enum ClusterConditionType {
 
   // Indicates that the cluster is degraded.
   CLUSTER_CONDITION_TYPE_DEGRADED = 4;
+  CLUSTER_CONDITION_TYPE_WORKER_PROVISIONING_FAILED = 5;
+  CLUSTER_CONDITION_TYPE_WORKER_PROVISIONING_BLOCKED = 6;
 }
 
 // Defines a set of nodes that are part of the cluster, all of them of the same type of host.
 message ClusterNodeSet {
   // Identifier of the type of hosts that are part of the set.
   //
-  // The details of the host type can be obtained using the `List` and `Get` method of the `HostTypes` service. For
-  // example, to get the details of the `acme_1tb` host type using the HTTP+JSON version of the API:
-  //
-  // ```http
-  // GET /api/fulfillment/v1/host_types/acme_1tb
-  // ```
-  //
-  // Which will return something like this:
-  //
-  // ```json
-  // {
-  //   "id": "acme_1tb",
-  //   "title": "ACME server with 1 TiB of RAM and no GPU",
-  //   "description": "ACME server model XYZ with 1 TiB of RAM, 2 Xeon 6 CPUS and no GPU."
-  // }
-  // ```
-  //
-  // This will be set by the system when the cluster is initially created, according to the template selected by the
-  // user.
-  //
-  // The user will not have permission to change this field.
+  // Retained for backward compatibility; superseded by baremetal_instance_type and slated
+  // for removal in OSAC-4154. New node sets should set baremetal_instance_type.
   HostTypeReference host_type = 1;
 
   // Number of nodes of the set.
   optional int32 size = 2 [(buf.validate.field).int32.gt = 0];
+
+  // BareMetalInstanceType (hardware profile) for the nodes in this set.
+  //
+  // Immutable after creation.
+  BareMetalInstanceTypeReference baremetal_instance_type = 4 [(google.api.field_behavior) = IMMUTABLE];
 }
 
 // Local reference to a Cluster resource.

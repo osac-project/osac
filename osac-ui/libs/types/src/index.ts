@@ -39,6 +39,7 @@ export * from './osac/public/v1/external_ip_type_pb.js'
 export * from './osac/public/v1/external_ips_service_pb.js'
 export * from './osac/public/v1/external_ip_attachment_type_pb.js'
 export * from './osac/public/v1/external_ip_attachments_service_pb.js'
+export * from './osac/public/v1/external_ip_attribution_type_pb.js'
 
 export * from './osac/public/v1/nat_gateway_type_pb.js'
 export * from './osac/public/v1/nat_gateways_service_pb.js'

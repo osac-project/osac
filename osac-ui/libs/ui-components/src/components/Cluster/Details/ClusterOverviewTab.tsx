@@ -1,3 +1,5 @@
+import { Stack, StackItem } from '@patternfly/react-core';
+
 import type { Cluster } from '@osac/types';
 
 import { ClusterConfigurationCard } from './ClusterConfigurationCard';
@@ -7,5 +9,11 @@ interface ClusterOverviewTabProps {
 }
 
 export const ClusterOverviewTab = ({ cluster }: ClusterOverviewTabProps) => {
-  return <ClusterConfigurationCard cluster={cluster} />;
+  return (
+    <Stack hasGutter>
+      <StackItem>
+        <ClusterConfigurationCard cluster={cluster} />
+      </StackItem>
+    </Stack>
+  );
 };

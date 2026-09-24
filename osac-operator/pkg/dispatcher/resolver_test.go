@@ -190,6 +190,32 @@ var _ = Describe("Resolver", func() {
 		Expect(result.K8sManager.Name).To(Equal("cudn_localnet"))
 	})
 
+	It("resolves cudn_evpn as an IPv4-only k8s manager", func() {
+		stub := &stubNetworkClassClient{
+			getFunc: func(_ context.Context, _ string) (*dispatcher.NetworkClassManagers, error) {
+				return &dispatcher.NetworkClassManagers{
+					K8sManager: "cudn_evpn",
+				}, nil
+			},
+		}
+
+		cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+			newK8sManagerConfigMap("km-cudn-evpn", "cudn_evpn", "ipv4"),
+		).Build()
+		disc, err := networkmanager.NewDiscovery(cl, "osac")
+		Expect(err).NotTo(HaveOccurred())
+		resolver := dispatcher.NewResolver(stub, disc)
+
+		result, err := resolver.Resolve(ctx, "nc-cudn-evpn")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.FabricManager).To(BeNil())
+		Expect(result.K8sManager).NotTo(BeNil())
+		Expect(result.K8sManager.Name).To(Equal("cudn_evpn"))
+		Expect(result.K8sManager.Type).To(Equal(networkmanager.K8sManager))
+		Expect(result.K8sManager.HasCapability(networkmanager.CapabilityIPv4)).To(BeTrue())
+		Expect(result.K8sManager.HasCapability(networkmanager.CapabilityIPv6)).To(BeFalse())
+	})
+
 	It("returns error when neither fabricManager nor k8sManager is set", func() {
 		stub := &stubNetworkClassClient{
 			getFunc: func(_ context.Context, _ string) (*dispatcher.NetworkClassManagers, error) {
@@ -247,6 +273,7 @@ var _ = Describe("Resolver", func() {
 
 		_, err = resolver.Resolve(ctx, "nc-bad-k8s")
 		Expect(err).To(HaveOccurred())
+		Expect(networkmanager.IsManagerNotFound(err)).To(BeTrue())
 		Expect(err.Error()).To(ContainSubstring("resolving k8sManager"))
 		Expect(err.Error()).To(ContainSubstring("missing-k8s"))
 	})

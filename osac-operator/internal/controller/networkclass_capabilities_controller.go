@@ -40,7 +40,7 @@ import (
 
 // NetworkClassCapabilitiesReconciler computes NetworkClass.capabilities as the
 // intersection of the capabilities declared by its resolved fabric and k8s manager
-// ConfigMaps, and writes the result back to the fulfillment service.
+// ConfigMaps, and reconciles manager-dependent NetworkClass status.
 //
 // NetworkClass has no CRD in this operator, so it can't be watched directly. This
 // reconciler instead watches the manager registration ConfigMaps (a k8s-native event
@@ -138,9 +138,8 @@ func (r *NetworkClassCapabilitiesReconciler) resyncAllLocked(ctx context.Context
 	return errors.Join(errs...)
 }
 
-// syncOne resolves and applies the capability intersection for a single NetworkClass,
-// updating it via the fulfillment service only when the computed capabilities differ
-// from what's already stored.
+// syncOne resolves and applies capabilities and manager availability for a single
+// NetworkClass, updating it only when either value differs from what's already stored.
 func (r *NetworkClassCapabilitiesReconciler) syncOne(ctx context.Context, nc *privatev1.NetworkClass) error {
 	log := ctrllog.FromContext(ctx)
 
@@ -151,36 +150,87 @@ func (r *NetworkClassCapabilitiesReconciler) syncOne(ctx context.Context, nc *pr
 			"networkClassID", nc.GetId())
 		return nil
 	case networkmanager.IsManagerNotFound(err):
-		log.Info("network class references an unregistered manager, skipping capabilities sync",
-			"networkClassID", nc.GetId(), "error", err)
+		log.Info("network class references an unregistered manager", "networkClassID", nc.GetId(), "error", err)
+		newStatus := desiredNetworkClassStatus(nc, nil, err)
+		if networkClassStatusEqual(newStatus, nc.GetStatus()) {
+			return nil
+		}
+		nc.SetStatus(newStatus)
+		_, updateErr := r.networkClassesClient.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
+			Object: nc,
+		}.Build())
+		if updateErr != nil {
+			return fmt.Errorf("updating status for network class %q: %w", nc.GetId(), updateErr)
+		}
+		log.Info("updated network class status", "networkClassID", nc.GetId(),
+			"state", newStatus.GetState(), "message", newStatus.GetMessage())
 		return nil
 	case err != nil:
 		return fmt.Errorf("resolving managers for network class %q: %w", nc.GetId(), err)
 	}
 
-	// Capabilities describe fabric-level networking support, so a NetworkClass
-	// with no fabricManager (k8s-only deployment) has none to report.
-	if resolved.FabricManager == nil {
-		log.V(1).Info("network class has no fabricManager set, skipping capabilities sync",
-			"networkClassID", nc.GetId())
+	newStatus := desiredNetworkClassStatus(nc, resolved, nil)
+	newCaps := nc.GetCapabilities()
+	if resolved.FabricManager != nil {
+		newCaps = computeCapabilities(resolved)
+	}
+	if capabilitiesEqual(newCaps, nc.GetCapabilities()) && networkClassStatusEqual(newStatus, nc.GetStatus()) {
 		return nil
 	}
 
-	newCaps := computeCapabilities(resolved)
-	if capabilitiesEqual(newCaps, nc.GetCapabilities()) {
-		return nil
+	if resolved.FabricManager != nil {
+		nc.SetCapabilities(newCaps)
 	}
-
-	nc.SetCapabilities(newCaps)
+	nc.SetStatus(newStatus)
 	_, err = r.networkClassesClient.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
 		Object: nc,
 	}.Build())
 	if err != nil {
-		return fmt.Errorf("updating capabilities for network class %q: %w", nc.GetId(), err)
+		return fmt.Errorf("updating network class %q: %w", nc.GetId(), err)
 	}
 
-	log.Info("updated network class capabilities", "networkClassID", nc.GetId(), "capabilities", newCaps)
+	log.Info("updated network class", "networkClassID", nc.GetId(),
+		"state", newStatus.GetState(), "capabilities", newCaps)
 	return nil
+}
+
+func desiredNetworkClassStatus(
+	nc *privatev1.NetworkClass,
+	resolved *dispatcher.ResolvedManagers,
+	resolveErr error,
+) *privatev1.NetworkClassStatus {
+	hub := ""
+	if current := nc.GetStatus(); current != nil {
+		hub = current.GetHub()
+	}
+
+	state := privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY
+	var message *string
+	if resolveErr != nil {
+		state = privatev1.NetworkClassState_NETWORK_CLASS_STATE_FAILED
+		failureMessage := resolveErr.Error()
+		message = &failureMessage
+	} else if resolved == nil {
+		state = privatev1.NetworkClassState_NETWORK_CLASS_STATE_FAILED
+		failureMessage := "manager resolution returned no managers"
+		message = &failureMessage
+	}
+
+	return privatev1.NetworkClassStatus_builder{
+		State:   state,
+		Message: message,
+		Hub:     hub,
+	}.Build()
+}
+
+func networkClassStatusEqual(a, b *privatev1.NetworkClassStatus) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.GetState() == b.GetState() &&
+		a.GetHub() == b.GetHub() &&
+		a.HasMessage() == b.HasMessage() &&
+		a.GetMessage() == b.GetMessage()
 }
 
 // computeCapabilities returns the capability intersection of the resolved fabric and

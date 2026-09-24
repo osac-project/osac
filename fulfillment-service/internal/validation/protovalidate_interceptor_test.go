@@ -379,7 +379,7 @@ var _ = Describe("Protovalidate interceptor", func() {
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(ContainSubstring("compute_instance"))
+			Expect(status.Message()).To(ContainSubstring("object.spec.compute_instance"))
 		})
 
 		DescribeTable("Accepts display_name and description within length limits",

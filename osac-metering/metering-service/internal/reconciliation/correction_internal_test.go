@@ -195,32 +195,32 @@ func TestBuildCorrectionEventsCanonicalizesAdjustmentOrder(t *testing.T) {
 		"release_image":    "4.17.0",
 		"components": []any{
 			map[string]any{
-				"node_set":   "_control_plane",
-				"component":  "control_plane",
-				"host_type":  "_control_plane",
-				"node_count": int32(1),
+				"node_set":                "_control_plane",
+				"component":               "control_plane",
+				"baremetal_instance_type": "_control_plane",
+				"node_count":              int32(1),
 			},
 			map[string]any{
-				"node_set":   "gpu-workers",
-				"component":  "worker",
-				"host_type":  "gpu-h100",
-				"node_count": int32(2),
+				"node_set":                "gpu-workers",
+				"component":               "worker",
+				"baremetal_instance_type": "gpu-h100",
+				"node_count":              int32(2),
 			},
 		},
 	}
 	secondOrder := map[string]any{
 		"components": []any{
 			map[string]any{
-				"node_count": int32(2),
-				"host_type":  "gpu-h100",
-				"component":  "worker",
-				"node_set":   "gpu-workers",
+				"node_count":              int32(2),
+				"baremetal_instance_type": "gpu-h100",
+				"component":               "worker",
+				"node_set":                "gpu-workers",
 			},
 			map[string]any{
-				"node_count": int32(1),
-				"host_type":  "_control_plane",
-				"component":  "control_plane",
-				"node_set":   "_control_plane",
+				"node_count":              int32(1),
+				"baremetal_instance_type": "_control_plane",
+				"component":               "control_plane",
+				"node_set":                "_control_plane",
 			},
 		},
 		"release_image":    "4.17.0",

@@ -1,0 +1,131 @@
+# Approve the InstallPlan for the pinned AAP operator CSV.
+#
+# FIXME(OSAC-5621): remove this file once the credential-type migration
+# lands and the startingCSV / Manual pins are removed from
+# aap-installation.yaml.
+#
+# Usage:
+#   oc apply -f prerequisites/aap-installplan-approve.yaml -n ansible-aap
+#
+# The Job waits for OLM to create an InstallPlan referencing the pinned
+# startingCSV (aap-operator.v2.6.0-0.1787258256), then patches
+# spec.approved=true.  It exits after the first approval, so later
+# upgrade InstallPlans remain unapproved (the Manual pin holds).
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: approve-aap-installplan
+  namespace: ansible-aap
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: approve-aap-installplan
+  namespace: ansible-aap
+rules:
+  - apiGroups: ["operators.coreos.com"]
+    resources: ["installplans"]
+    verbs: ["get", "list", "watch", "patch"]
+  - apiGroups: ["operators.coreos.com"]
+    resources: ["subscriptions", "clusterserviceversions"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: approve-aap-installplan
+  namespace: ansible-aap
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: approve-aap-installplan
+subjects:
+  - kind: ServiceAccount
+    name: approve-aap-installplan
+    namespace: ansible-aap
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: approve-aap-installplan-script
+  namespace: ansible-aap
+data:
+  approve.sh: |
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    TARGET_CSV="aap-operator.v2.6.0-0.1787258256"
+    NAMESPACE="ansible-aap"
+
+    echo "Waiting for InstallPlan referencing ${TARGET_CSV} in ${NAMESPACE}..."
+
+    while true; do
+      for plan in $(oc get installplan -n "${NAMESPACE}" --no-headers \
+          -o custom-columns=NAME:.metadata.name 2>/dev/null || true); do
+        csvs=$(oc get installplan "${plan}" -n "${NAMESPACE}" \
+          -o jsonpath='{.spec.clusterServiceVersionNames[*]}' 2>/dev/null || true)
+        if echo "${csvs}" | grep -qw "${TARGET_CSV}"; then
+          approved=$(oc get installplan "${plan}" -n "${NAMESPACE}" \
+            -o jsonpath='{.spec.approved}' 2>/dev/null || true)
+          if [[ "${approved}" == "true" ]]; then
+            echo "InstallPlan ${plan} for ${TARGET_CSV} is already approved."
+            exit 0
+          fi
+          echo "Approving InstallPlan ${plan}..."
+          oc patch installplan "${plan}" -n "${NAMESPACE}" \
+            --type merge -p '{"spec":{"approved":true}}'
+          echo "InstallPlan ${plan} approved for CSV ${TARGET_CSV}."
+          exit 0
+        fi
+      done
+      sleep 10
+    done
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: approve-aap-installplan
+  namespace: ansible-aap
+spec:
+  backoffLimit: 5
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      serviceAccountName: approve-aap-installplan
+      restartPolicy: OnFailure
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: scripts
+          configMap:
+            name: approve-aap-installplan-script
+            defaultMode: 493  # 0755 octal
+      containers:
+        - name: approve-installplan
+          image: quay.io/openshift/origin-cli:4.20.0
+          env:
+            - name: HOME
+              value: /tmp
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: scripts
+              mountPath: /scripts
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          command:
+            - /bin/bash
+            - /scripts/approve.sh

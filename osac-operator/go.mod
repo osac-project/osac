@@ -4,7 +4,7 @@ go 1.26.3
 
 require (
 	github.com/coder/websocket v1.8.15
-	github.com/container-storage-interface/spec v1.12.0
+	github.com/container-storage-interface/spec v1.13.0
 	github.com/go-logr/logr v1.4.4
 	github.com/onsi/ginkgo/v2 v2.32.2
 	github.com/onsi/gomega v1.42.1

@@ -37,6 +37,47 @@ rules:
     verbs: ["get", "list", "create", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: osac-infra-configure-mce
+  namespace: multicluster-engine
+  labels:
+    {{- include "osac-infra.hookLabels" . | nindent 4 }}
+  annotations:
+    osac.openshift.io/tenant: platform
+    osac.openshift.io/owner-reference: MultiClusterEngine/multiclusterengine
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation
+    "helm.sh/hook-weight": "9"
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get"]
+    resourceNames: ["osac-infra-mce-image-overrides"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: osac-infra-configure-mce
+  namespace: multicluster-engine
+  labels:
+    {{- include "osac-infra.hookLabels" . | nindent 4 }}
+  annotations:
+    osac.openshift.io/tenant: platform
+    osac.openshift.io/owner-reference: MultiClusterEngine/multiclusterengine
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation
+    "helm.sh/hook-weight": "9"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: osac-infra-configure-mce
+subjects:
+  - kind: ServiceAccount
+    name: osac-infra-configure-mce
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   name: osac-infra-configure-mce

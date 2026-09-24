@@ -34,18 +34,9 @@ configAsCode:
   eeImagePull: ""
   projectGitUri: ""
   projectGitBranch: ""
-  importAgentsEnabled: false
-  importBcmAgentsEnabled: false
   manifest:
     create: false
     data: {}
-
-importAgents:
-  servers: []
-
-importBcmAgents:
-  cert: ""
-  key: ""
 
 serviceAccounts:
   osacSa: "osac-sa"

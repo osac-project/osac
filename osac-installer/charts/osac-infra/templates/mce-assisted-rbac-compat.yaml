@@ -1,0 +1,53 @@
+{{- if .Values.mce.imageOverrides }}
+# MCE 2.17 omits this permission from its generated Assisted Service role,
+# while the MCE 5.0 infrastructure-operator image reads the API server config.
+# Keep the compatibility grant separate from MCE-managed RBAC resources.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: osac-infra-mce-assisted-service-ocm5-compat
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+  annotations:
+    osac.openshift.io/tenant: platform
+    osac.openshift.io/owner-reference: MultiClusterEngine/multiclusterengine
+rules:
+  - apiGroups:
+      - config.openshift.io
+    resources:
+      - apiservers
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - networking.k8s.io
+    resources:
+      - networkpolicies
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: osac-infra-mce-assisted-service-ocm5-compat
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+  annotations:
+    osac.openshift.io/tenant: platform
+    osac.openshift.io/owner-reference: MultiClusterEngine/multiclusterengine
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: osac-infra-mce-assisted-service-ocm5-compat
+subjects:
+  - kind: ServiceAccount
+    name: assisted-service
+    namespace: multicluster-engine
+{{- end }}

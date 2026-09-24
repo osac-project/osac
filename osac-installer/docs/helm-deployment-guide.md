@@ -106,6 +106,7 @@ Key settings:
 | `service.internalHostname` | Required. Set automatically by `make install-osac`. |
 | `service.auth.issuerUrl` | Keycloak realm URL (default works for in-cluster Keycloak) |
 | `operator.controllers.*` | Enable/disable individual controllers |
+| `operator.ignition.trustIngressCA` | On OpenShift with a cluster-signed ingress Route, add `openshift-config-managed/default-ingress-cert` to the operator's trust roots for Assisted Service ignition fetches (enabled in `caas-ci`). Restart the operator after ingress CA rotation. |
 
 ## CI/Dev-Only Features
 

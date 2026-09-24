@@ -30,5 +30,3 @@ license_manifest_path: "{{ lookup('env', 'LICENSE_MANIFEST_PATH', default='/var/
 remote_cluster_kubeconfig_secret_name: "{{ lookup('env', 'REMOTE_CLUSTER_KUBECONFIG_SECRET_NAME', default='') }}"
 remote_cluster_kubeconfig_secret_key: "{{ lookup('env', 'REMOTE_CLUSTER_KUBECONFIG_SECRET_KEY', default='kubeconfig') }}"
 osac_publish_templates_enabled: "{{ lookup('env', 'OSAC_PUBLISH_TEMPLATES_ENABLED', default='true') | bool }}"
-osac_import_agents_enabled: "{{ lookup('env', 'OSAC_IMPORT_AGENTS_ENABLED', default='false') | bool }}"
-osac_import_bcm_agents_enabled: "{{ lookup('env', 'OSAC_IMPORT_BCM_AGENTS_ENABLED', default='false') | bool }}"

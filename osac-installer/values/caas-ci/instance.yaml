@@ -13,8 +13,10 @@ global:
   services:
     caas:
       enabled: true
+    # CaaS-over-BMaaS registers the RHCOS DiskImage through the VMaaS-owned
+    # DiskImages API even though it does not provision VMaaS instances.
     vmaas:
-      enabled: false
+      enabled: true
     bmaas:
       enabled: true
     maas:
@@ -37,9 +39,15 @@ operator:
     serverAddress: "fulfillment-internal-api:8001"
     tokenFile: "/var/run/secrets/kubernetes.io/serviceaccount/token"
   controllers:
+    computeInstance: false
     tenant: true
     networking: true
     storage: true
+    bareMetalInstance: true
+  # MCE's Assisted Service ignition URL uses the OpenShift ingress Route;
+  # trust its cluster-managed CA instead of bypassing TLS verification.
+  ignition:
+    trustIngressCA: true
   hubAccess:
     enabled: true
   tenants:
@@ -140,6 +148,9 @@ aap:
   configAsCode:
     manifestSecret: "config-as-code-manifest-ig"
     secret: "config-as-code-ig"
+    # CaaS workers are provisioned on demand. The deprecated import-agent and
+    # BCM pool toggles are intentionally not set in this profile; standalone
+    # BMaaS profiles retain those controls for host-inventory registration.
     # NOTE: e2e's COMPONENT_BUILD_RESULTS image-override step overrides
     # bootstrap.image with this PR's own built image but does not touch
     # eeImage, so the two can diverge at e2e runtime even though they're
@@ -164,15 +175,20 @@ validation:
   enabled: true
 
 # --- Bare Metal Fulfillment Operator ---
-# BMaaS is enabled (so CaaS satisfies the "requires VMaaS or BMaaS" constraint
-# and BMaaS API endpoints register), but the BMF operator runs with zero
-# replicas because the CaaS CI cluster has no Metal3 infrastructure.
 bmf:
-  replicaCount: 0
+  enabled: true
   image:
     repository: ghcr.io/osac-project/bare-metal-fulfillment-operator
     tag: latest
     pullPolicy: Always
+  env:
+    aapUrl: "http://osac-aap/api/controller"
+    aapInsecureSkipVerify: "true"
+    enableNetworkingProvisioning: "false"
+  metal3:
+    enabled: true
+    namespace: host-inventory
+    hostClass: metal3
 
 # --- Cluster Versions ---
 clusterVersions:

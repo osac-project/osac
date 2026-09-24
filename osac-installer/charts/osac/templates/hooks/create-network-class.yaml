@@ -19,6 +19,7 @@
         "egress_rules" $egressRules
       ))
     -}}
+{{- if .Values.networkClass.vipPrefixLength }}{{ $_ := set (index $body "spec") "vip_prefix_length" (.Values.networkClass.vipPrefixLength | int) }}{{ end -}}
 {{- if .Values.networkClass.description }}{{ $_ := set $body "description" .Values.networkClass.description }}{{ end -}}
 {{- if .Values.networkClass.k8sManager }}{{ $_ := set $body "k8s_manager" .Values.networkClass.k8sManager }}{{ end -}}
 {{- if .Values.networkClass.fabricManager }}{{ $_ := set $body "fabric_manager" .Values.networkClass.fabricManager }}{{ end -}}

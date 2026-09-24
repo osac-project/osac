@@ -14,7 +14,4 @@ capabilities:
   supports_ipv4: true
   supports_ipv6: false
   supports_dual_stack: false
-  # Deprecated compatibility alias; remove after the capability rename has
-  # been supported for one release cycle.
-  supports_east_west: true
   supports_east_west_ethernet: true

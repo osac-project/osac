@@ -334,11 +334,7 @@ class Metadata(Base):
     catalog_source_namespace: str | None = None
     default_node_request: list[NodeRequest] = pydantic.Field(default_factory=list)
     allowed_resource_classes: list[str] | None = None
-    # Network role metadata is currently consumed by installation/configuration
-    # workflows rather than template discovery. Keep both the legacy
-    # supports_east_west key and the more specific
-    # supports_east_west_ethernet key when parsing metadata during the
-    # capability rename transition.
+    # Capabilities declared by network template roles.
     capabilities: dict[str, Any] = pydantic.Field(default_factory=dict)
     parameters: list[TemplateParameterDefinition] = pydantic.Field(default_factory=list)
 

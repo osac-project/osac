@@ -229,6 +229,23 @@ func (s *PrivateNATGatewaysServer) Update(ctx context.Context,
 		return
 	}
 
+	getRequest := &privatev1.NATGatewaysGetRequest{}
+	getRequest.SetId(id)
+	var getResponse *privatev1.NATGatewaysGetResponse
+	err = s.generic.Get(ctx, getRequest, &getResponse)
+	if err != nil {
+		return
+	}
+
+	if err = validateDefaultLabelUpdate(
+		getResponse.GetObject().GetMetadata().GetLabels(),
+		request.GetObject().GetMetadata().GetLabels(),
+		request.GetUpdateMask(),
+		"NAT gateway",
+	); err != nil {
+		return
+	}
+
 	mask := request.GetUpdateMask()
 	if err = validatePrivateLifecycleUpdateMask(mask,
 		[]string{"status.state", "status.message", "status.hub", "status.state_transition_time"},

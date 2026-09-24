@@ -20,6 +20,8 @@ import (
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -282,6 +284,97 @@ var _ = Describe("Default networking provisioning", func() {
 			g.Expect(cond.HasReason()).To(BeTrue())
 			g.Expect(cond.GetReason()).To(Equal("NoDefaultNetworking"))
 		}, time.Minute, time.Second).Should(Succeed())
+	})
+
+	It("rejects Delete and default-label removal for system-managed VN/Subnet/SG", func(ctx context.Context) {
+		tenantName := fmt.Sprintf("test-defnet-protect-%s", uuid.New())
+
+		By("Creating tenant and waiting for SYNCED")
+		tenantId := createTenant(ctx, tenantsClient, tenantName)
+		waitForTenantSynced(ctx, tenantsClient, tenantId)
+
+		defaultLabelFilter := fmt.Sprintf(
+			"this.metadata.labels['osac.openshift.io/default'] == 'true' && this.metadata.tenant == %q",
+			tenantName,
+		)
+
+		By("Waiting for default VirtualNetwork, Subnet, and SecurityGroup")
+		var vnId, subnetId, sgId string
+		Eventually(func(g Gomega) {
+			vnResp, err := virtualNetworksClient.List(ctx, privatev1.VirtualNetworksListRequest_builder{
+				Filter: &defaultLabelFilter,
+			}.Build())
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(vnResp.GetItems()).ToNot(BeEmpty())
+			vnId = vnResp.GetItems()[0].GetId()
+
+			subnetResp, err := subnetsClient.List(ctx, privatev1.SubnetsListRequest_builder{
+				Filter: &defaultLabelFilter,
+			}.Build())
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(subnetResp.GetItems()).ToNot(BeEmpty())
+			subnetId = subnetResp.GetItems()[0].GetId()
+
+			sgResp, err := securityGroupsClient.List(ctx, privatev1.SecurityGroupsListRequest_builder{
+				Filter: &defaultLabelFilter,
+			}.Build())
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(sgResp.GetItems()).ToNot(BeEmpty())
+			sgId = sgResp.GetItems()[0].GetId()
+		}, time.Minute, time.Second).Should(Succeed())
+
+		vnBefore, err := virtualNetworksClient.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: vnId}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		subnetBefore, err := subnetsClient.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: subnetId}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		sgBefore, err := securityGroupsClient.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: sgId}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		By("Rejecting Delete of default VirtualNetwork without entering PENDING/deletion")
+		_, err = virtualNetworksClient.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{Id: vnId}.Build())
+		Expect(err).To(HaveOccurred())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+		Expect(err.Error()).To(And(ContainSubstring("default"), ContainSubstring("system-managed")))
+		vnAfter, err := virtualNetworksClient.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: vnId}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(vnAfter.GetObject().GetMetadata().GetDeletionTimestamp()).To(BeNil())
+		Expect(vnAfter.GetObject().GetStatus().GetState()).To(Equal(vnBefore.GetObject().GetStatus().GetState()))
+
+		By("Rejecting Delete of default Subnet without entering PENDING/deletion")
+		_, err = subnetsClient.Delete(ctx, privatev1.SubnetsDeleteRequest_builder{Id: subnetId}.Build())
+		Expect(err).To(HaveOccurred())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+		Expect(err.Error()).To(And(ContainSubstring("default"), ContainSubstring("system-managed")))
+		subnetAfter, err := subnetsClient.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: subnetId}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(subnetAfter.GetObject().GetMetadata().GetDeletionTimestamp()).To(BeNil())
+		Expect(subnetAfter.GetObject().GetStatus().GetState()).To(Equal(subnetBefore.GetObject().GetStatus().GetState()))
+
+		By("Rejecting Delete of default SecurityGroup without entering PENDING/deletion")
+		_, err = securityGroupsClient.Delete(ctx, privatev1.SecurityGroupsDeleteRequest_builder{Id: sgId}.Build())
+		Expect(err).To(HaveOccurred())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+		Expect(err.Error()).To(And(ContainSubstring("default"), ContainSubstring("system-managed")))
+		sgAfter, err := securityGroupsClient.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: sgId}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(sgAfter.GetObject().GetMetadata().GetDeletionTimestamp()).To(BeNil())
+		Expect(sgAfter.GetObject().GetStatus().GetState()).To(Equal(sgBefore.GetObject().GetStatus().GetState()))
+
+		By("Rejecting Update that strips the default label from VirtualNetwork")
+		vnObj := vnAfter.GetObject()
+		vnObj.GetMetadata().SetLabels(map[string]string{"env": "test"})
+		_, err = virtualNetworksClient.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
+			Object:     vnObj,
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
+		}.Build())
+		Expect(err).To(HaveOccurred())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+		Expect(err.Error()).To(And(ContainSubstring("default"), ContainSubstring("system-managed")))
+
+		vnFinal, err := virtualNetworksClient.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: vnId}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(vnFinal.GetObject().GetMetadata().GetLabels()).To(HaveKeyWithValue("osac.openshift.io/default", "true"))
+		Expect(vnFinal.GetObject().GetMetadata().GetDeletionTimestamp()).To(BeNil())
 	})
 })
 

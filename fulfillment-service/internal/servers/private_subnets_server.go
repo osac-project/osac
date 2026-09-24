@@ -187,6 +187,14 @@ func (s *PrivateSubnetsServer) Update(ctx context.Context,
 	}
 
 	existingSubnet := getResponse.GetObject()
+	if err = validateDefaultLabelUpdate(
+		existingSubnet.GetMetadata().GetLabels(),
+		request.GetObject().GetMetadata().GetLabels(),
+		request.GetUpdateMask(),
+		"subnet",
+	); err != nil {
+		return
+	}
 
 	// Validate with existing object context:
 	err = s.validateSubnet(ctx, request.GetObject(), existingSubnet)

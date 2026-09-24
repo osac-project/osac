@@ -72,27 +72,21 @@ spec:
                 x-kubernetes-validations:
                 - message: type is immutable
                   rule: self == oldSelf
-              virtualNetworks:
+              virtualNetwork:
                 description: |-
-                  VirtualNetworks contains the OSAC VirtualNetwork ID associated with the domain.
-                  The plural field mirrors the fulfillment API, but this API version requires exactly one
-                  reference. A Phase 1 EthernetEW domain maps to one Netris Server Cluster in the VPC resolved
-                  through that network's NetworkClass; multi-VN semantics are not defined. InfiniBandEW and
-                  NVLink are reserved for later phases and may use different references. This reference is
-                  immutable after creation.
-                items:
-                  minLength: 1
-                  type: string
-                maxItems: 1
-                minItems: 1
-                type: array
+                  VirtualNetwork is the OSAC VirtualNetwork associated with the domain.
+                  For the currently supported EthernetEW type, its NetworkClass resolves the VPC for one Netris
+                  Server Cluster. InfiniBandEW and NVLink are reserved for later phases and may define different
+                  connectivity in a later API version. This reference is immutable after creation.
+                minLength: 1
+                type: string
                 x-kubernetes-validations:
-                - message: virtualNetworks is immutable
+                - message: virtualNetwork is immutable
                   rule: self == oldSelf
             required:
             - servers
             - type
-            - virtualNetworks
+            - virtualNetwork
             type: object
           status:
             description: status defines the observed state of FabricDomain.

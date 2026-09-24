@@ -44,18 +44,14 @@ type FabricDomainSpec struct {
 	// +kubebuilder:validation:items:MinLength=1
 	Servers []string `json:"servers"`
 
-	// VirtualNetworks contains the OSAC VirtualNetwork ID associated with the domain.
-	// The plural field mirrors the fulfillment API, but this API version requires exactly one
-	// reference. A Phase 1 EthernetEW domain maps to one Netris Server Cluster in the VPC resolved
-	// through that network's NetworkClass; multi-VN semantics are not defined. InfiniBandEW and
-	// NVLink are reserved for later phases and may use different references. This reference is
-	// immutable after creation.
+	// VirtualNetwork is the OSAC VirtualNetwork associated with the domain.
+	// For the currently supported EthernetEW type, its NetworkClass resolves the VPC for one Netris
+	// Server Cluster. InfiniBandEW and NVLink are reserved for later phases and may define different
+	// connectivity in a later API version. This reference is immutable after creation.
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MinItems=1
-	// +kubebuilder:validation:MaxItems=1
-	// +kubebuilder:validation:items:MinLength=1
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="virtualNetworks is immutable"
-	VirtualNetworks []string `json:"virtualNetworks"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="virtualNetwork is immutable"
+	VirtualNetwork string `json:"virtualNetwork"`
 }
 
 // FabricDomainMemberState describes the provisioning state of an individual server.

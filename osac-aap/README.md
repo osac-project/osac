@@ -110,7 +110,8 @@ capabilities:
 
 Network roles declare their dispatcher identity for the operator. The installer
 owns NetworkClass creation; `agentless_net` is selected through the installer
-overlay documented below and is not published as a ComputeClass. The generic
+[overlay instructions](../osac-installer/docs/helm-deployment-guide.md#agentlessnet-resource-operation-stub)
+and is not published as a ComputeClass. The generic
 resource playbooks then include the selected role without changing the API.
 
 ## Pre-requisites

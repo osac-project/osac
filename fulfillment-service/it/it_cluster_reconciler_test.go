@@ -48,12 +48,12 @@ func verifyNotFound(g Gomega, err error) {
 
 var _ = Describe("Cluster reconciler", func() {
 	var (
-		ctx             context.Context
-		clustersClient  publicv1.ClustersClient
-		hostTypesClient privatev1.HostTypesClient
-		hostTypeId      string
-		templatesClient privatev1.ClusterTemplatesClient
-		templateId      string
+		ctx                 context.Context
+		clustersClient      publicv1.ClustersClient
+		instanceTypesClient privatev1.BareMetalInstanceTypesClient
+		bmitName            string
+		templatesClient     privatev1.ClusterTemplatesClient
+		templateId          string
 	)
 
 	makeAny := func(value proto.Message) *anypb.Any {
@@ -68,16 +68,32 @@ var _ = Describe("Cluster reconciler", func() {
 
 		// Create the clients:
 		clustersClient = publicv1.NewClustersClient(tool.ExternalView().UserConn())
-		hostTypesClient = privatev1.NewHostTypesClient(tool.InternalView().AdminConn())
+		instanceTypesClient = privatev1.NewBareMetalInstanceTypesClient(tool.InternalView().AdminConn())
 		templatesClient = privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
 
-		// Create a host type for testing:
-		hostTypeId = fmt.Sprintf("my_host_type_%s", uuid.New())
-		_, err := hostTypesClient.Create(ctx, privatev1.HostTypesCreateRequest_builder{
-			Object: privatev1.HostType_builder{
-				Id: hostTypeId,
+		// Create a bare metal instance type for testing:
+		bmitName = fmt.Sprintf("test-bmit-%s", uuid.New()[24:32])
+		_, err := instanceTypesClient.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
+			Object: privatev1.BareMetalInstanceType_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name: fmt.Sprintf("test-ht-%s", uuid.New()[24:32]),
+					Name: bmitName,
+				}.Build(),
+				Spec: privatev1.BareMetalInstanceTypeSpec_builder{
+				Hardware: privatev1.BareMetalHardwareSpec_builder{
+					Cpu:    privatev1.BareMetalCPUSpec_builder{Cores: 32, Architecture: "x86_64", ThreadsPerCore: 2}.Build(),
+					Memory: privatev1.BareMetalMemorySpec_builder{TotalGb: 128}.Build(),
+					NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
+						privatev1.BareMetalNetworkPortSpec_builder{
+							Name:  "eth0",
+							Role:  "fabric",
+							Type:  "Ethernet",
+							Speed: "10Gbps",
+						}.Build(),
+					},
+				}.Build(),
+					HostLabelSelector: privatev1.BareMetalLabelSelector_builder{
+						MatchLabels: map[string]string{"hardware.profile": "compute"},
+					}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -112,8 +128,8 @@ var _ = Describe("Cluster reconciler", func() {
 				},
 				NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
 					"my_node_set": privatev1.ClusterTemplateNodeSet_builder{
-						HostType: privatev1.HostTypeReference_builder{Id: hostTypeId}.Build(),
-						Size:     3,
+						BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: bmitName}.Build(),
+						Size:                  3,
 					}.Build(),
 				},
 			}.Build(),
@@ -198,7 +214,9 @@ var _ = Describe("Cluster reconciler", func() {
 
 		// Verify that the node sets from the template are reflected in the Kubernetes object:
 		Expect(kubeObject.Spec.NodeRequests).To(HaveLen(1))
-		Expect(kubeObject.Spec.NodeRequests[0].ResourceClass).To(Equal(hostTypeId))
+		Expect(kubeObject.Spec.NodeRequests[0].ResourceClass).To(Equal(bmitName))
+		Expect(kubeObject.Spec.NodeRequests[0].BareMetal).ToNot(BeNil())
+		Expect(kubeObject.Spec.NodeRequests[0].BareMetal.InstanceType).To(Equal(bmitName))
 		Expect(kubeObject.Spec.NodeRequests[0].NumberOfNodes).To(BeNumerically("==", 3))
 		Expect(kubeObject.Spec.AddOnOperators).To(Equal([]string{operatorName}))
 
@@ -327,8 +345,8 @@ var _ = Describe("Cluster reconciler", func() {
 					},
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"my_node_set": publicv1.ClusterNodeSet_builder{
-							HostType: publicv1.HostTypeReference_builder{Id: hostTypeId}.Build(),
-							Size:     proto.Int32(3),
+							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName}.Build(),
+							Size:                  proto.Int32(3),
 						}.Build(),
 					},
 				}.Build(),
@@ -362,7 +380,7 @@ var _ = Describe("Cluster reconciler", func() {
 
 		// Verify the initial node set size in the Kubernetes object:
 		Expect(clusterOrderObj.Spec.NodeRequests).To(HaveLen(1))
-		Expect(clusterOrderObj.Spec.NodeRequests[0].ResourceClass).To(Equal(hostTypeId))
+		Expect(clusterOrderObj.Spec.NodeRequests[0].ResourceClass).To(Equal(bmitName))
 		Expect(clusterOrderObj.Spec.NodeRequests[0].NumberOfNodes).To(BeNumerically("==", 3))
 
 		// Update the cluster to change the node set size
@@ -379,8 +397,8 @@ var _ = Describe("Cluster reconciler", func() {
 					},
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"my_node_set": publicv1.ClusterNodeSet_builder{
-							HostType: publicv1.HostTypeReference_builder{Id: hostTypeId}.Build(),
-							Size:     proto.Int32(5),
+							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName}.Build(),
+							Size:                  proto.Int32(5),
 						}.Build(),
 					},
 				}.Build(),
@@ -398,7 +416,7 @@ var _ = Describe("Cluster reconciler", func() {
 				err := kubeClient.Get(ctx, clusterOrderKey, clusterOrderObj)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(clusterOrderObj.Spec.NodeRequests).To(HaveLen(1))
-				g.Expect(clusterOrderObj.Spec.NodeRequests[0].ResourceClass).To(Equal(hostTypeId))
+				g.Expect(clusterOrderObj.Spec.NodeRequests[0].ResourceClass).To(Equal(bmitName))
 				g.Expect(clusterOrderObj.Spec.NodeRequests[0].NumberOfNodes).To(BeNumerically("==", 5))
 			},
 			time.Minute,

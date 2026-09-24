@@ -152,8 +152,8 @@ var _ = Describe("Private clusters server", func() {
 				}.Build(),
 			}.Build())
 
-			// Create the host types DAO:
-			hostTypesDao, err := dao.NewGenericDAO[*privatev1.HostType]().
+			// Create the bare metal instance types DAO:
+			bmitDao, err := dao.NewGenericDAO[*privatev1.BareMetalInstanceType]().
 				SetLogger(logger).
 				SetTenancyLogic(tenancy).
 				Build()
@@ -166,38 +166,41 @@ var _ = Describe("Private clusters server", func() {
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 
-			// Create the host types:
-			fabricInterfaces := []*privatev1.NetworkInterface{
-				privatev1.NetworkInterface_builder{
-					Name: "data-0", Role: "fabric", Description: "100GbE data interface",
-				}.Build(),
-			}
-			_, err = hostTypesDao.Create().
+			// Create the bare metal instance types (platform-scoped, with a fabric network port
+			// so network attachment specs can resolve a fabric interface):
+			fabricPort := privatev1.BareMetalNetworkPortSpec_builder{
+				Name: "data-0", Role: "fabric", Type: "Ethernet", Speed: "100Gbps",
+			}.Build()
+			_, err = bmitDao.Create().
 				SetObject(
-					privatev1.HostType_builder{
-						Id: "acme-1ti-id",
+					privatev1.BareMetalInstanceType_builder{
+						Id: "acme-bmit-id",
 						Metadata: privatev1.Metadata_builder{
-							Name:   "acme-1ti-name",
-							Tenant: testTenant,
+							Name:   "acme-bmit-name",
+							Tenant: auth.SharedTenant,
 						}.Build(),
-						Title:       "ACME 1TiB",
-						Description: "ACME 1TiB.",
-						Interfaces:  fabricInterfaces,
+						Spec: privatev1.BareMetalInstanceTypeSpec_builder{
+							Hardware: privatev1.BareMetalHardwareSpec_builder{
+								NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{fabricPort},
+							}.Build(),
+						}.Build(),
 					}.Build(),
 				).
 				Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
-			_, err = hostTypesDao.Create().
+			_, err = bmitDao.Create().
 				SetObject(
-					privatev1.HostType_builder{
-						Id: "acme-gpu-id",
+					privatev1.BareMetalInstanceType_builder{
+						Id: "acme-gpu-bmit-id",
 						Metadata: privatev1.Metadata_builder{
 							Name:   "acme-gpu-name",
-							Tenant: testTenant,
+							Tenant: auth.SharedTenant,
 						}.Build(),
-						Title:       "ACME GPU",
-						Description: "ACME GPU.",
-						Interfaces:  fabricInterfaces,
+						Spec: privatev1.BareMetalInstanceTypeSpec_builder{
+							Hardware: privatev1.BareMetalHardwareSpec_builder{
+								NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{fabricPort},
+							}.Build(),
+						}.Build(),
 					}.Build(),
 				).
 				Do(ctx)
@@ -216,12 +219,33 @@ var _ = Describe("Private clusters server", func() {
 						Description: "My template",
 						NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
 							"compute": privatev1.ClusterTemplateNodeSet_builder{
-								HostType: privatev1.HostTypeReference_builder{Id: "acme-1ti-id"}.Build(),
-								Size:     3,
+								BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "acme-bmit-id"}.Build(),
+								Size:                  3,
 							}.Build(),
 							"gpu": privatev1.ClusterTemplateNodeSet_builder{
-								HostType: privatev1.HostTypeReference_builder{Id: "acme-gpu-id"}.Build(),
-								Size:     1,
+								BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "acme-gpu-bmit-id"}.Build(),
+								Size:                  1,
+							}.Build(),
+						},
+					}.Build(),
+				).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			// Create a template whose node set defines no bare metal instance type:
+			_, err = templatesDao.Create().
+				SetObject(
+					privatev1.ClusterTemplate_builder{
+						Id: "no-bmit-template-id",
+						Metadata: privatev1.Metadata_builder{
+							Name:   "no-bmit-template-name",
+							Tenant: testTenant,
+						}.Build(),
+						Title:       "No BMI template",
+						Description: "Template with a node set that has no bare metal instance type",
+						NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
+							"compute": privatev1.ClusterTemplateNodeSet_builder{
+								Size: 3,
 							}.Build(),
 						},
 					}.Build(),
@@ -329,8 +353,8 @@ var _ = Describe("Private clusters server", func() {
 							}.Build(),
 							NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
 								"compute": privatev1.ClusterTemplateNodeSet_builder{
-									HostType: privatev1.HostTypeReference_builder{Id: "acme-1ti-id"}.Build(),
-									Size:     3,
+									BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "acme-bmit-id"}.Build(),
+									Size:                  3,
 								}.Build(),
 							},
 						}.Build(),
@@ -362,6 +386,17 @@ var _ = Describe("Private clusters server", func() {
 			object := response.GetObject()
 			Expect(object).ToNot(BeNil())
 			Expect(object.GetId()).ToNot(BeEmpty())
+
+			// Verify that the node sets inherited from the template carry the canonicalized
+			// bare metal instance type references:
+			nodeSets := object.GetSpec().GetNodeSets()
+			Expect(nodeSets).To(HaveLen(2))
+			Expect(nodeSets["compute"].GetBaremetalInstanceType().GetId()).To(Equal("acme-bmit-id"))
+			Expect(nodeSets["compute"].GetBaremetalInstanceType().GetName()).To(Equal("acme-bmit-name"))
+			Expect(nodeSets["compute"].GetSize()).To(BeNumerically("==", 3))
+			Expect(nodeSets["gpu"].GetBaremetalInstanceType().GetId()).To(Equal("acme-gpu-bmit-id"))
+			Expect(nodeSets["gpu"].GetBaremetalInstanceType().GetName()).To(Equal("acme-gpu-name"))
+			Expect(nodeSets["gpu"].GetSize()).To(BeNumerically("==", 1))
 		})
 
 		It("Preserves direct add-on operators through create and get", func() {
@@ -600,78 +635,8 @@ var _ = Describe("Private clusters server", func() {
 			))
 		})
 
-		It("Creates object with host type specified by name in node set", func() {
-			// Create a cluster specifying the host type by name:
-			response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
-				Object: privatev1.Cluster_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.New()[24:32]),
-					}.Build(),
-					Spec: privatev1.ClusterSpec_builder{
-						Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
-						NodeSets: map[string]*privatev1.ClusterNodeSet{
-							"compute": privatev1.ClusterNodeSet_builder{
-								HostType: privatev1.HostTypeReference_builder{Name: "acme-1ti-name"}.Build(),
-								Size:     proto.Int32(5),
-							}.Build(),
-						},
-					}.Build(),
-					Status: privatev1.ClusterStatus_builder{
-						Hub: "my-hub-id",
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Expect(response).ToNot(BeNil())
-			object := response.GetObject()
-			Expect(object).ToNot(BeNil())
-			Expect(object.GetId()).ToNot(BeEmpty())
-
-			// Verify that the host type name was replaced by the identifier and name is preserved:
-			nodeSets := object.GetSpec().GetNodeSets()
-			Expect(nodeSets).To(HaveKey("compute"))
-			nodeSet := nodeSets["compute"]
-			Expect(nodeSet.GetHostType().GetId()).To(Equal("acme-1ti-id"))
-			Expect(nodeSet.GetHostType().GetName()).To(Equal("acme-1ti-name"))
-		})
-
-		It("Creates object with host type specified by identifier in node set", func() {
-			// Create a cluster specifying the host type by identifier:
-			response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
-				Object: privatev1.Cluster_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.New()[24:32]),
-					}.Build(),
-					Spec: privatev1.ClusterSpec_builder{
-						Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
-						NodeSets: map[string]*privatev1.ClusterNodeSet{
-							"compute": privatev1.ClusterNodeSet_builder{
-								HostType: privatev1.HostTypeReference_builder{Id: "acme-1ti-id"}.Build(),
-								Size:     proto.Int32(7),
-							}.Build(),
-						},
-					}.Build(),
-					Status: privatev1.ClusterStatus_builder{
-						Hub: "my-hub-id",
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Expect(response).ToNot(BeNil())
-			object := response.GetObject()
-			Expect(object).ToNot(BeNil())
-			Expect(object.GetId()).ToNot(BeEmpty())
-
-			// Verify that the host type identifier is preserved and name is resolved:
-			nodeSets := object.GetSpec().GetNodeSets()
-			Expect(nodeSets).To(HaveKey("compute"))
-			nodeSet := nodeSets["compute"]
-			Expect(nodeSet.GetHostType().GetId()).To(Equal("acme-1ti-id"))
-			Expect(nodeSet.GetHostType().GetName()).To(Equal("acme-1ti-name"))
-		})
-
-		It("Creates object with template and host type specified by name", func() {
-			// Create a cluster specifying the template and the host type by name:
+		It("Creates object with template specified by name and bare metal instance type in node set", func() {
+			// Create a cluster specifying the template by name and the bare metal instance type by name:
 			response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 				Object: privatev1.Cluster_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -681,8 +646,8 @@ var _ = Describe("Private clusters server", func() {
 						Template: privatev1.ClusterTemplateReference_builder{Name: "my-template-name"}.Build(),
 						NodeSets: map[string]*privatev1.ClusterNodeSet{
 							"compute": privatev1.ClusterNodeSet_builder{
-								HostType: privatev1.HostTypeReference_builder{Name: "acme-1ti-name"}.Build(),
-								Size:     proto.Int32(7),
+								BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Name: "acme-bmit-name"}.Build(),
+								Size:                  proto.Int32(7),
 							}.Build(),
 						},
 					}.Build(),
@@ -697,18 +662,18 @@ var _ = Describe("Private clusters server", func() {
 			Expect(object).ToNot(BeNil())
 			Expect(object.GetId()).ToNot(BeEmpty())
 
-			// Verify that the template and host type names were replaced by the identifiers
-			// and metadata names are preserved on the resolved references:
+			// Verify that the template and bare metal instance type names were replaced by the
+			// identifiers and metadata names are preserved on the resolved references:
 			Expect(object.GetSpec().GetTemplate().GetId()).To(Equal("my-template-id"))
 			Expect(object.GetSpec().GetTemplate().GetName()).To(Equal("my-template-name"))
 			nodeSets := object.GetSpec().GetNodeSets()
 			Expect(nodeSets).To(HaveKey("compute"))
 			nodeSet := nodeSets["compute"]
-			Expect(nodeSet.GetHostType().GetId()).To(Equal("acme-1ti-id"))
-			Expect(nodeSet.GetHostType().GetName()).To(Equal("acme-1ti-name"))
+			Expect(nodeSet.GetBaremetalInstanceType().GetId()).To(Equal("acme-bmit-id"))
+			Expect(nodeSet.GetBaremetalInstanceType().GetName()).To(Equal("acme-bmit-name"))
 		})
 
-		It("Fails when creating object with non-existent host type name", func() {
+		It("Fails when creating object with non-existent bare metal instance type name", func() {
 			_, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 				Object: privatev1.Cluster_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -718,8 +683,8 @@ var _ = Describe("Private clusters server", func() {
 						Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 						NodeSets: map[string]*privatev1.ClusterNodeSet{
 							"compute": privatev1.ClusterNodeSet_builder{
-								HostType: privatev1.HostTypeReference_builder{Id: "does-not-exist"}.Build(),
-								Size:     proto.Int32(5),
+								BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Name: "does-not-exist"}.Build(),
+								Size:                  proto.Int32(5),
 							}.Build(),
 						},
 					}.Build(),
@@ -733,11 +698,11 @@ var _ = Describe("Private clusters server", func() {
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.NotFound))
 			Expect(status.Message()).To(Equal(
-				"host type 'does-not-exist' not found",
+				"there is no bare metal instance type with identifier or name 'does-not-exist'",
 			))
 		})
 
-		It("Accepts an additional node set with a valid host type", func() {
+		It("Accepts an additional node set with a valid bare metal instance type", func() {
 			response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 				Object: privatev1.Cluster_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -747,8 +712,8 @@ var _ = Describe("Private clusters server", func() {
 						Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 						NodeSets: map[string]*privatev1.ClusterNodeSet{
 							"does-not-exist": privatev1.ClusterNodeSet_builder{
-								HostType: privatev1.HostTypeReference_builder{Id: "acme-1ti-id"}.Build(),
-								Size:     proto.Int32(5),
+								BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "acme-bmit-id"}.Build(),
+								Size:                  proto.Int32(5),
 							}.Build(),
 						},
 					}.Build(),
@@ -760,10 +725,11 @@ var _ = Describe("Private clusters server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			nodes := response.GetObject().GetSpec().GetNodeSets()
 			Expect(nodes).To(HaveLen(1))
-			Expect(nodes["does-not-exist"].GetHostType().GetId()).To(Equal("acme-1ti-id"))
+			Expect(nodes["does-not-exist"].GetBaremetalInstanceType().GetId()).To(Equal("acme-bmit-id"))
+			Expect(nodes["does-not-exist"].GetBaremetalInstanceType().GetName()).To(Equal("acme-bmit-name"))
 		})
 
-		It("Fails when creating object with host type that doesn't match template", func() {
+		It("Rejects an additional node set without bare metal instance type", func() {
 			_, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 				Object: privatev1.Cluster_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -772,9 +738,8 @@ var _ = Describe("Private clusters server", func() {
 					Spec: privatev1.ClusterSpec_builder{
 						Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 						NodeSets: map[string]*privatev1.ClusterNodeSet{
-							"compute": privatev1.ClusterNodeSet_builder{
-								HostType: privatev1.HostTypeReference_builder{Id: "acme-gpu-id"}.Build(),
-								Size:     proto.Int32(5),
+							"does-not-exist": privatev1.ClusterNodeSet_builder{
+								Size: proto.Int32(5),
 							}.Build(),
 						},
 					}.Build(),
@@ -788,8 +753,32 @@ var _ = Describe("Private clusters server", func() {
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 			Expect(status.Message()).To(Equal(
-				"host type for node set 'compute' should be empty, 'acme-1ti-name' or 'acme-1ti-id', " +
-					"like in template 'my-template-id', but it is 'acme-gpu-id'",
+				"node set 'does-not-exist' is not defined in template 'my-template-id' and must specify a bare metal instance type",
+			))
+		})
+
+		It("Fails when template node set has no bare metal instance type", func() {
+			// Create a cluster from a template whose node set defines no bare metal
+			// instance type, without providing node sets:
+			_, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+				Object: privatev1.Cluster_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.New()[24:32]),
+					}.Build(),
+					Spec: privatev1.ClusterSpec_builder{
+						Template: privatev1.ClusterTemplateReference_builder{Id: "no-bmit-template-id"}.Build(),
+					}.Build(),
+					Status: privatev1.ClusterStatus_builder{
+						Hub: "my-hub-id",
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(Equal(
+				"template 'no-bmit-template-id' node set 'compute' must define a bare metal instance type",
 			))
 		})
 
@@ -1185,16 +1174,16 @@ var _ = Describe("Private clusters server", func() {
 					Spec: privatev1.ClusterSpec_builder{
 						NodeSets: map[string]*privatev1.ClusterNodeSet{
 							"compute": privatev1.ClusterNodeSet_builder{
-								HostType: privatev1.HostTypeReference_builder{Id: "acme-1ti-id"}.Build(),
-								Size:     proto.Int32(3),
+								BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "acme-bmit-id"}.Build(),
+								Size:                  proto.Int32(3),
 							}.Build(),
 							"gpu": privatev1.ClusterNodeSet_builder{
-								HostType: privatev1.HostTypeReference_builder{Id: "acme-gpu-id"}.Build(),
-								Size:     proto.Int32(1),
+								BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "acme-gpu-bmit-id"}.Build(),
+								Size:                  proto.Int32(1),
 							}.Build(),
 							"storage": privatev1.ClusterNodeSet_builder{
-								HostType: privatev1.HostTypeReference_builder{Id: "acme-1ti-id"}.Build(),
-								Size:     proto.Int32(2),
+								BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "acme-bmit-id"}.Build(),
+								Size:                  proto.Int32(2),
 							}.Build(),
 						},
 					}.Build(),
@@ -1227,8 +1216,8 @@ var _ = Describe("Private clusters server", func() {
 					Spec: privatev1.ClusterSpec_builder{
 						NodeSets: map[string]*privatev1.ClusterNodeSet{
 							"compute": privatev1.ClusterNodeSet_builder{
-								HostType: privatev1.HostTypeReference_builder{Id: "acme-1ti-id"}.Build(),
-								Size:     proto.Int32(3),
+								BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "acme-bmit-id"}.Build(),
+								Size:                  proto.Int32(3),
 							}.Build(),
 						},
 					}.Build(),
@@ -1273,7 +1262,7 @@ var _ = Describe("Private clusters server", func() {
 			Expect(status.Message()).To(Equal("cannot remove the last node set: clusters must have at least one node set"))
 		})
 
-		It("Rejects changing host_type of an existing node set", func() {
+		It("Rejects changing baremetal_instance_type of an existing node set", func() {
 			// Create a cluster with the default node sets from the template
 			createResponse, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 				Object: privatev1.Cluster_builder{
@@ -1286,19 +1275,19 @@ var _ = Describe("Private clusters server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			object := createResponse.GetObject()
 
-			// Try to change the host_type of the compute node set
+			// Try to change the bare metal instance type of the compute node set
 			_, err = server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
 				Object: privatev1.Cluster_builder{
 					Id: object.GetId(),
 					Spec: privatev1.ClusterSpec_builder{
 						NodeSets: map[string]*privatev1.ClusterNodeSet{
 							"compute": privatev1.ClusterNodeSet_builder{
-								HostType: privatev1.HostTypeReference_builder{Id: "acme-gpu-id"}.Build(), // Changed from acme-1ti-id
-								Size:     proto.Int32(3),
+								BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "acme-gpu-bmit-id"}.Build(), // Changed from acme-bmit-id
+								Size:                  proto.Int32(3),
 							}.Build(),
 							"gpu": privatev1.ClusterNodeSet_builder{
-								HostType: privatev1.HostTypeReference_builder{Id: "acme-gpu-id"}.Build(),
-								Size:     proto.Int32(1),
+								BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "acme-gpu-bmit-id"}.Build(),
+								Size:                  proto.Int32(1),
 							}.Build(),
 						},
 					}.Build(),
@@ -1311,7 +1300,7 @@ var _ = Describe("Private clusters server", func() {
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(Equal("cannot change host_type for node set 'compute' from 'acme-1ti-id' to 'acme-gpu-id': host_type is immutable"))
+			Expect(status.Message()).To(Equal("cannot change baremetal_instance_type for node set 'compute' from 'acme-bmit-id' to 'acme-gpu-bmit-id': baremetal_instance_type is immutable"))
 		})
 
 		It("Allows changing size of an existing node set", func() {
@@ -1334,12 +1323,12 @@ var _ = Describe("Private clusters server", func() {
 					Spec: privatev1.ClusterSpec_builder{
 						NodeSets: map[string]*privatev1.ClusterNodeSet{
 							"compute": privatev1.ClusterNodeSet_builder{
-								HostType: privatev1.HostTypeReference_builder{Id: "acme-1ti-id"}.Build(),
-								Size:     proto.Int32(5),
+								BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "acme-bmit-id"}.Build(),
+								Size:                  proto.Int32(5),
 							}.Build(),
 							"gpu": privatev1.ClusterNodeSet_builder{
-								HostType: privatev1.HostTypeReference_builder{Id: "acme-gpu-id"}.Build(),
-								Size:     proto.Int32(1),
+								BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "acme-gpu-bmit-id"}.Build(),
+								Size:                  proto.Int32(1),
 							}.Build(),
 						},
 					}.Build(),
@@ -1881,12 +1870,12 @@ var _ = Describe("Private clusters server", func() {
 				nodeSets := object.GetSpec().GetNodeSets()
 				Expect(nodeSets).To(HaveLen(2))
 				Expect(nodeSets).To(HaveKey("compute"))
-				Expect(nodeSets["compute"].GetHostType().GetId()).To(Equal("acme-1ti-id"))
-				Expect(nodeSets["compute"].GetHostType().GetName()).To(Equal("acme-1ti-name"))
+				Expect(nodeSets["compute"].GetBaremetalInstanceType().GetId()).To(Equal("acme-bmit-id"))
+				Expect(nodeSets["compute"].GetBaremetalInstanceType().GetName()).To(Equal("acme-bmit-name"))
 				Expect(nodeSets["compute"].GetSize()).To(Equal(int32(3)))
 				Expect(nodeSets).To(HaveKey("gpu"))
-				Expect(nodeSets["gpu"].GetHostType().GetId()).To(Equal("acme-gpu-id"))
-				Expect(nodeSets["gpu"].GetHostType().GetName()).To(Equal("acme-gpu-name"))
+				Expect(nodeSets["gpu"].GetBaremetalInstanceType().GetId()).To(Equal("acme-gpu-bmit-id"))
+				Expect(nodeSets["gpu"].GetBaremetalInstanceType().GetName()).To(Equal("acme-gpu-name"))
 				Expect(nodeSets["gpu"].GetSize()).To(Equal(int32(1)))
 			})
 
@@ -2081,8 +2070,8 @@ var _ = Describe("Private clusters server", func() {
 							Description: "Template with spec defaults",
 							NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
 								"worker": privatev1.ClusterTemplateNodeSet_builder{
-									HostType: privatev1.HostTypeReference_builder{Id: "acme-1ti-id"}.Build(),
-									Size:     2,
+									BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "acme-bmit-id"}.Build(),
+									Size:                  2,
 								}.Build(),
 							},
 							SpecDefaults: privatev1.ClusterTemplateSpecDefaults_builder{
@@ -2132,7 +2121,7 @@ var _ = Describe("Private clusters server", func() {
 				nodeSets := object.GetSpec().GetNodeSets()
 				Expect(nodeSets).To(HaveLen(1))
 				Expect(nodeSets).To(HaveKey("worker"))
-				Expect(nodeSets["worker"].GetHostType().GetId()).To(Equal("acme-1ti-id"))
+				Expect(nodeSets["worker"].GetBaremetalInstanceType().GetId()).To(Equal("acme-bmit-id"))
 				Expect(nodeSets["worker"].GetSize()).To(Equal(int32(2)))
 			})
 
@@ -2169,8 +2158,8 @@ var _ = Describe("Private clusters server", func() {
 							Description: "Template that pins version via spec_defaults",
 							NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
 								"worker": privatev1.ClusterTemplateNodeSet_builder{
-									HostType: &privatev1.HostTypeReference{Id: "acme-1ti-id"},
-									Size:     2,
+									BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Id: "acme-bmit-id"},
+									Size:                  2,
 								}.Build(),
 							},
 							SpecDefaults: privatev1.ClusterTemplateSpecDefaults_builder{
@@ -2251,8 +2240,8 @@ var _ = Describe("Private clusters server", func() {
 							Description: "Template whose spec_defaults are overridden by fields",
 							NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
 								"worker": privatev1.ClusterTemplateNodeSet_builder{
-									HostType: &privatev1.HostTypeReference{Id: "acme-1ti-id"},
-									Size:     2,
+									BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Id: "acme-bmit-id"},
+									Size:                  2,
 								}.Build(),
 							},
 							SpecDefaults: privatev1.ClusterTemplateSpecDefaults_builder{
@@ -2318,8 +2307,8 @@ var _ = Describe("Private clusters server", func() {
 							Description: "Template with no spec_defaults.version",
 							NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
 								"worker": privatev1.ClusterTemplateNodeSet_builder{
-									HostType: &privatev1.HostTypeReference{Id: "acme-1ti-id"},
-									Size:     2,
+									BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Id: "acme-bmit-id"},
+									Size:                  2,
 								}.Build(),
 							},
 						}.Build(),
@@ -3118,8 +3107,8 @@ var _ = Describe("Private clusters server", func() {
 							Template: privatev1.ClusterTemplateReference_builder{Name: "my-template-name"}.Build(),
 							NodeSets: map[string]*privatev1.ClusterNodeSet{
 								"compute": privatev1.ClusterNodeSet_builder{
-									HostType: privatev1.HostTypeReference_builder{Name: "acme-1ti-name"}.Build(),
-									Size:     proto.Int32(7),
+									BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Name: "acme-bmit-name"}.Build(),
+									Size:                  proto.Int32(7),
 								}.Build(),
 							},
 						}.Build(),
@@ -3134,7 +3123,7 @@ var _ = Describe("Private clusters server", func() {
 				Expect(object.GetSpec().GetTemplate().GetId()).To(Equal("my-template-id"))
 				nodeSets := object.GetSpec().GetNodeSets()
 				Expect(nodeSets).To(HaveKey("compute"))
-				Expect(nodeSets["compute"].GetHostType().GetId()).To(Equal("acme-1ti-id"))
+				Expect(nodeSets["compute"].GetBaremetalInstanceType().GetId()).To(Equal("acme-bmit-id"))
 			})
 
 			It("Returns resolved cluster with catalog item path", func() {
@@ -3424,8 +3413,8 @@ var _ = Describe("Private clusters server", func() {
 							Description: "Template with pull_secret_secret in spec defaults",
 							NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
 								"compute": privatev1.ClusterTemplateNodeSet_builder{
-									HostType: privatev1.HostTypeReference_builder{Id: "acme-1ti-id"}.Build(),
-									Size:     3,
+									BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "acme-bmit-id"}.Build(),
+									Size:                  3,
 								}.Build(),
 							},
 							SpecDefaults: privatev1.ClusterTemplateSpecDefaults_builder{
@@ -3468,13 +3457,6 @@ var _ = Describe("Private clusters server", func() {
 				}.Build()).Do(ctx)
 				Expect(err).ToNot(HaveOccurred())
 
-				hosts, err := dao.NewGenericDAO[*privatev1.HostType]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
-				Expect(err).ToNot(HaveOccurred())
-				_, err = hosts.Create().SetObject(privatev1.HostType_builder{
-					Id: "shared-secret-template-host", Metadata: privatev1.Metadata_builder{Name: "shared-secret-template-host", Tenant: auth.SharedTenant}.Build(),
-				}.Build()).Do(ctx)
-				Expect(err).ToNot(HaveOccurred())
-
 				templatesDao, err := dao.NewGenericDAO[*privatev1.ClusterTemplate]().
 					SetLogger(logger).
 					SetTenancyLogic(tenancy).
@@ -3490,8 +3472,8 @@ var _ = Describe("Private clusters server", func() {
 					Description: "Shared template with a canonical pull Secret reference",
 					NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
 						"compute": privatev1.ClusterTemplateNodeSet_builder{
-							HostType: privatev1.HostTypeReference_builder{Id: "shared-secret-template-host"}.Build(),
-							Size:     3,
+							BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "acme-bmit-id"}.Build(),
+							Size:                  3,
 						}.Build(),
 					},
 					SpecDefaults: privatev1.ClusterTemplateSpecDefaults_builder{
@@ -3558,8 +3540,8 @@ var _ = Describe("Private clusters server", func() {
 							Description: "Template with pull_secret_secret default",
 							NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
 								"compute": privatev1.ClusterTemplateNodeSet_builder{
-									HostType: privatev1.HostTypeReference_builder{Id: "acme-1ti-id"}.Build(),
-									Size:     3,
+									BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "acme-bmit-id"}.Build(),
+									Size:                  3,
 								}.Build(),
 							},
 							SpecDefaults: privatev1.ClusterTemplateSpecDefaults_builder{

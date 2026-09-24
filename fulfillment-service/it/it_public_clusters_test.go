@@ -30,12 +30,12 @@ import (
 
 var _ = Describe("Public clusters", func() {
 	var (
-		ctx             context.Context
-		clustersClient  publicv1.ClustersClient
-		hostTypesClient privatev1.HostTypesClient
-		templatesClient privatev1.ClusterTemplatesClient
-		hostTypeId      string
-		templateId      string
+		ctx                 context.Context
+		clustersClient      publicv1.ClustersClient
+		instanceTypesClient privatev1.BareMetalInstanceTypesClient
+		templatesClient     privatev1.ClusterTemplatesClient
+		bmitName            string
+		templateId          string
 	)
 
 	BeforeEach(func() {
@@ -44,23 +44,39 @@ var _ = Describe("Public clusters", func() {
 
 		// Create the clients:
 		clustersClient = publicv1.NewClustersClient(tool.ExternalView().UserConn())
-		hostTypesClient = privatev1.NewHostTypesClient(tool.InternalView().AdminConn())
+		instanceTypesClient = privatev1.NewBareMetalInstanceTypesClient(tool.InternalView().AdminConn())
 		templatesClient = privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
 
-		// Create a host type for testing:
-		hostTypeId = fmt.Sprintf("my-host-type-%s", uuid.New())
-		_, err := hostTypesClient.Create(ctx, privatev1.HostTypesCreateRequest_builder{
-			Object: privatev1.HostType_builder{
+		// Create a bare metal instance type for testing:
+		bmitName = fmt.Sprintf("test-bmit-%s", uuid.New()[24:32])
+		_, err := instanceTypesClient.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
+			Object: privatev1.BareMetalInstanceType_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name: fmt.Sprintf("test-ht-%s", uuid.New()[24:32]),
+					Name: bmitName,
 				}.Build(),
-				Id: hostTypeId,
+				Spec: privatev1.BareMetalInstanceTypeSpec_builder{
+					Hardware: privatev1.BareMetalHardwareSpec_builder{
+						Cpu:    privatev1.BareMetalCPUSpec_builder{Cores: 32, Architecture: "x86_64", ThreadsPerCore: 2}.Build(),
+						Memory: privatev1.BareMetalMemorySpec_builder{TotalGb: 128}.Build(),
+						NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
+							privatev1.BareMetalNetworkPortSpec_builder{
+								Name:  "eth0",
+								Role:  "fabric",
+								Type:  "Ethernet",
+								Speed: "10Gbps",
+							}.Build(),
+						},
+					}.Build(),
+					HostLabelSelector: privatev1.BareMetalLabelSelector_builder{
+						MatchLabels: map[string]string{"hardware.profile": "compute"},
+					}.Build(),
+				}.Build(),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func() {
-			_, err := hostTypesClient.Delete(ctx, privatev1.HostTypesDeleteRequest_builder{
-				Id: hostTypeId,
+			_, err := instanceTypesClient.Delete(ctx, privatev1.BareMetalInstanceTypesDeleteRequest_builder{
+				Id: bmitName,
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 		})
@@ -77,8 +93,8 @@ var _ = Describe("Public clusters", func() {
 				Description: "My template.",
 				NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
 					"my-node-set": privatev1.ClusterTemplateNodeSet_builder{
-						HostType: privatev1.HostTypeReference_builder{Id: hostTypeId}.Build(),
-						Size:     3,
+						BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: bmitName}.Build(),
+						Size:                  3,
 					}.Build(),
 				},
 			}.Build(),
@@ -224,8 +240,8 @@ var _ = Describe("Public clusters", func() {
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"my-node-set": {
-							HostType: publicv1.HostTypeReference_builder{Id: hostTypeId}.Build(),
-							Size:     proto.Int32(4),
+							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName}.Build(),
+							Size:                  proto.Int32(4),
 						},
 					},
 				}.Build(),

@@ -198,7 +198,7 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 			result, err := reconciler.handleDeprovisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(statusPollInterval))
-			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+			instance = getClusterOrder(name)
 
 			job := provisioning.FindLatestJobByType(instance.Status.ProvisioningJobs, osacv1alpha1.JobTypeDeprovision)
 			Expect(job).NotTo(BeNil())
@@ -220,7 +220,8 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 
 			_, err := reconciler.handleDeprovisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+			instance = getClusterOrder(name)
+			Expect(provisioning.FindLatestJobByType(instance.Status.ProvisioningJobs, osacv1alpha1.JobTypeDeprovision)).NotTo(BeNil())
 
 			provider.setDeprovisionJobState(osacv1alpha1.JobStateFailed, "Cleanup failed")
 			instance = getClusterOrder(name)

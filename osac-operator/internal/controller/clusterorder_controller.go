@@ -75,7 +75,6 @@ type ClusterOrderReconciler struct {
 	apiReader             client.Reader
 	Scheme                *runtime.Scheme
 	ClusterOrderNamespace string
-	AgentNamespace        string
 	NetworkingNamespace   string
 	ProvisioningProvider  provisioning.ProvisioningProvider
 	StatusPollInterval    time.Duration
@@ -83,11 +82,6 @@ type ClusterOrderReconciler struct {
 	StallThresholds       ClusterOrderStallThresholds
 	Recorder              events.EventRecorder
 	now                   func() time.Time
-
-	// WorkerReconciler handles bare-metal worker failure detection,
-	// BMI replacement with escalating backoff, and terminal failure
-	// conditions. Nil when bare-metal worker handling is not enabled.
-	WorkerReconciler *BareMetalWorkerReconciler
 }
 
 const (
@@ -120,7 +114,6 @@ func NewClusterOrderReconciler(
 	apiReader client.Reader,
 	scheme *runtime.Scheme,
 	clusterOrderNamespace string,
-	agentNamespace string,
 	networkingNamespace string,
 	provisioningProvider provisioning.ProvisioningProvider,
 	statusPollInterval time.Duration,
@@ -129,10 +122,6 @@ func NewClusterOrderReconciler(
 
 	if clusterOrderNamespace == "" {
 		clusterOrderNamespace = defaultClusterOrderNamespace
-	}
-
-	if agentNamespace == "" {
-		agentNamespace = defaultAgentNamespace
 	}
 
 	if statusPollInterval <= 0 {
@@ -148,7 +137,6 @@ func NewClusterOrderReconciler(
 		apiReader:             apiReader,
 		Scheme:                scheme,
 		ClusterOrderNamespace: clusterOrderNamespace,
-		AgentNamespace:        agentNamespace,
 		NetworkingNamespace:   networkingNamespace,
 		ProvisioningProvider:  provisioningProvider,
 		StatusPollInterval:    statusPollInterval,
@@ -164,7 +152,6 @@ func NewClusterOrderReconciler(
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=clusterorders/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=namespaces;serviceaccounts,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=agent-install.openshift.io,resources=agents,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=hypershift.openshift.io,resources=hostedclusters;nodepools,verbs=get;list;watch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=subnets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=networkclasses,verbs=get;list;watch
@@ -315,17 +302,36 @@ func (r *ClusterOrderReconciler) patchStatusWithRetry(ctx context.Context, key c
 			return err
 		}
 		base := latest.DeepCopy()
-		latest.Status.Phase = computed.Phase
+		terminalPhase := latest.Status.Phase == v1alpha1.ClusterOrderPhaseFailed ||
+			latest.Status.Phase == v1alpha1.ClusterOrderPhaseDeleting
+		workerPending := !terminalPhase && computed.Phase == v1alpha1.ClusterOrderPhaseReady &&
+			latest.HasBareMetalNodeSet() && !bareMetalWorkersReady(latest)
+		switch {
+		case terminalPhase:
+			// A stale reconcile must not revive a terminal order.
+		case workerPending:
+			latest.Status.Phase = v1alpha1.ClusterOrderPhaseProgressing
+		default:
+			latest.Status.Phase = computed.Phase
+		}
 		latest.Status.ClusterReference = computed.ClusterReference
 		latest.Status.NodeRequests = computed.NodeRequests
-		latest.Status.NodeSets = computed.NodeSets
 		latest.Status.ProvisioningJobs = computed.ProvisioningJobs
 		latest.Status.DesiredConfigVersion = computed.DesiredConfigVersion
 		latest.Status.ApiEndpoint = computed.ApiEndpoint
 		latest.Status.IngressEndpoint = computed.IngressEndpoint
-		latest.Status.Workers = computed.Workers
+		// Workers[] and its aggregate counts are owned by the BareMetalWorkerReconciler.
+		// Leave them from the fresh read so a concurrent worker status update is preserved.
 		for _, c := range computed.Conditions {
+			if c.Type == v1alpha1.ConditionWorkersFailed ||
+				(terminalPhase && c.Type == v1alpha1.ConditionProgressing) {
+				continue
+			}
 			apimeta.SetStatusCondition(&latest.Status.Conditions, c)
+		}
+		if workerPending {
+			latest.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionTrue,
+				humanizeConditionName(v1alpha1.ReasonWorkersJoining), v1alpha1.ReasonWorkersJoining)
 		}
 		return r.Status().Patch(ctx, latest, client.MergeFrom(base))
 	})
@@ -486,44 +492,23 @@ func (r *ClusterOrderReconciler) handleUpdate(ctx context.Context, _ reconcile.R
 		return ctrl.Result{}, err
 	}
 
-	// Select agents for each node set (labels them for HyperShift NodePool claiming)
-	agentResult, err := r.reconcileAgentSelection(ctx, instance)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if agentResult.RequeueAfter > 0 {
-		return r.withStallRequeue(instance, agentResult), nil
-	}
-
 	ns, err := r.findNamespace(ctx, instance)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
-	if hc, _ := r.findHostedCluster(ctx, instance, ns.GetName()); hc != nil {
+	hc, err := r.findHostedCluster(ctx, instance, ns.GetName())
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if hc != nil {
 		if err := r.handleHostedCluster(ctx, instance, hc); err != nil {
 			return ctrl.Result{}, err
 		}
-	}
-
-	// Reconcile bare-metal worker failures (timeout detection, BMI replacement,
-	// terminal condition) when the worker reconciler is configured.
-	//
-	// NOTE: instance.Status.Workers is currently not populated by this
-	// controller. The BMaaS provisioning flow (a follow-up story) will
-	// populate Workers when bare-metal worker nodes are created for a
-	// ClusterOrder. Until then, the guard below keeps the reconciler
-	// inactive.
-	if r.WorkerReconciler != nil && len(instance.Status.Workers) > 0 {
-		workerResult, err := r.WorkerReconciler.ReconcileWorkers(ctx, instance)
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-		if workerResult.RequeueAfter > 0 {
-			if provisionResult.RequeueAfter == 0 || workerResult.RequeueAfter < provisionResult.RequeueAfter {
-				provisionResult = workerResult
-			}
-		}
+	} else if instance.Status.Phase != v1alpha1.ClusterOrderPhaseFailed &&
+		instance.Status.Phase != v1alpha1.ClusterOrderPhaseDeleting {
+		instance.Status.Phase = v1alpha1.ClusterOrderPhaseProgressing
+		r.setProgressingStage(instance, v1alpha1.ReasonControlPlaneStarting)
 	}
 
 	// If provision job needs polling, requeue for status updates
@@ -570,7 +555,70 @@ func (r *ClusterOrderReconciler) handleHostedCluster(ctx context.Context, instan
 	// was accepted. Derive terminal readiness from the live HostedCluster and
 	// NodePool observations in this reconcile.
 	finalizeReadyIfProvisioned(log, instance, hc, nodePools.Items)
+	r.reconcileClusterOrderReadiness(instance, hc)
 	return nil
+}
+
+func bareMetalWorkersReady(instance *v1alpha1.ClusterOrder) bool {
+	if instance == nil {
+		return false
+	}
+	if !instance.HasBareMetalNodeSet() {
+		return true
+	}
+	if instance.Status.DesiredWorkers == nil ||
+		instance.Status.CurrentWorkers == nil ||
+		instance.Status.ReadyWorkers == nil {
+		return false
+	}
+	if apimeta.IsStatusConditionTrue(instance.Status.Conditions, v1alpha1.ConditionWorkersFailed) {
+		return false
+	}
+	requestedWorkers := int32(0)
+	for _, nodeRequest := range instance.Spec.NodeRequests {
+		if !nodeRequest.IsBareMetal() {
+			continue
+		}
+		if nodeRequest.NumberOfNodes <= 0 {
+			return false
+		}
+		requestedWorkers += int32(nodeRequest.NumberOfNodes)
+	}
+	if requestedWorkers <= 0 || *instance.Status.DesiredWorkers != requestedWorkers {
+		return false
+	}
+	return *instance.Status.ReadyWorkers >= *instance.Status.DesiredWorkers &&
+		*instance.Status.CurrentWorkers >= *instance.Status.DesiredWorkers
+}
+
+func (r *ClusterOrderReconciler) reconcileClusterOrderReadiness(
+	instance *v1alpha1.ClusterOrder,
+	hostedCluster *hypershiftv1beta1.HostedCluster,
+) {
+	if hostedCluster == nil {
+		return
+	}
+	if instance.Status.Phase == v1alpha1.ClusterOrderPhaseFailed ||
+		instance.Status.Phase == v1alpha1.ClusterOrderPhaseDeleting {
+		return
+	}
+	if !hostedClusterControlPlaneIsAvailable(hostedCluster) || !hostedClusterIsReady(hostedCluster) {
+		instance.Status.Phase = v1alpha1.ClusterOrderPhaseProgressing
+		r.setProgressingStage(instance, deriveProvisioningSubStage(hostedCluster))
+		return
+	}
+
+	instance.SetStatusCondition(v1alpha1.ConditionClusterAvailable, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
+
+	if instance.HasBareMetalNodeSet() && !bareMetalWorkersReady(instance) {
+		instance.Status.Phase = v1alpha1.ClusterOrderPhaseProgressing
+		instance.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionTrue,
+			humanizeConditionName(v1alpha1.ReasonWorkersJoining), v1alpha1.ReasonWorkersJoining)
+		return
+	}
+
+	instance.Status.Phase = v1alpha1.ClusterOrderPhaseReady
+	instance.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionFalse, "", v1alpha1.ReasonAsExpected)
 }
 
 func (r *ClusterOrderReconciler) setProgressingStage(instance *v1alpha1.ClusterOrder, stage string) {
@@ -863,7 +911,6 @@ func finalizeReadyIfProvisioned(log logr.Logger, instance *v1alpha1.ClusterOrder
 	if !hostedClusterAndNodePoolsAreReady(instance, hc, nodePools) {
 		return false
 	}
-
 	instance.Status.Phase = v1alpha1.ClusterOrderPhaseReady
 	instance.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionFalse, "", v1alpha1.ReasonAsExpected)
 	return true
@@ -937,11 +984,6 @@ func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ reconcile.R
 	done, cleanupResult, err := r.reconcileAutoExternalIPCleanup(ctx, instance)
 	if err != nil || !done {
 		return cleanupResult, err
-	}
-
-	// Release agents allocated to this cluster
-	if err := r.reconcileAgentCleanup(ctx, instance); err != nil {
-		return ctrl.Result{}, err
 	}
 
 	// Handle deprovisioning via provider
@@ -1080,9 +1122,18 @@ func (r *ClusterOrderReconciler) provisioningCallbacks(instance *v1alpha1.Cluste
 			}
 		},
 		OnSuccess: func(_ provisioning.ProvisionStatus) {
-			// Job success only records the provisioning result. The live
-			// HostedCluster and NodePool observations determine the phase and
-			// detailed progressing reason.
+			if instance.Status.Phase != v1alpha1.ClusterOrderPhaseProgressing {
+				return
+			}
+			if instance.HasBareMetalNodeSet() && !bareMetalWorkersReady(instance) {
+				instance.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionTrue,
+					humanizeConditionName(v1alpha1.ReasonWorkersJoining), v1alpha1.ReasonWorkersJoining)
+				return
+			}
+			progressing := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
+			if progressing == nil || progressing.Status != metav1.ConditionTrue {
+				instance.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionTrue, "", v1alpha1.ReasonProgressing)
+			}
 		},
 	}
 }

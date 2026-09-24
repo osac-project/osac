@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -63,6 +64,7 @@ import (
 	v1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/helpers"
 	"github.com/osac-project/osac/osac-operator/internal/controller"
+	"github.com/osac-project/osac/osac-operator/internal/controller/baremetalworker"
 	"github.com/osac-project/osac/osac-operator/internal/dispatcheradapter"
 	"github.com/osac-project/osac/osac-operator/internal/migrations"
 	"github.com/osac-project/osac/osac-operator/pkg/aap"
@@ -82,7 +84,6 @@ const (
 	envComputeInstanceNamespace   = "OSAC_COMPUTE_INSTANCE_NAMESPACE"
 	envNetworkingNamespace        = "OSAC_NETWORKING_NAMESPACE"
 	envClusterOrderNamespace      = "OSAC_CLUSTER_ORDER_NAMESPACE"
-	envAgentNamespace             = "OSAC_AGENT_NAMESPACE"
 	envBareMetalInstanceNamespace = "OSAC_BARE_METAL_INSTANCE_NAMESPACE"
 	envVolumeNamespace            = "OSAC_VOLUME_NAMESPACE"
 	// envStorageConfigNamespace is the namespace holding the per-tenant
@@ -370,6 +371,27 @@ func setupClusterControllers(
 	maxJobHistory int,
 ) error {
 	localMgr := mgr.GetLocalManager()
+
+	// BareMetalWorkerReconciler watches the same ClusterOrders and manages bare-metal worker
+	// provisioning (currently: ensure the cluster InfraEnv + fetch discovery ignition).
+	var bmwFulfillment baremetalworker.FulfillmentClient
+	if grpcConn != nil {
+		bmwFulfillment = baremetalworker.NewFulfillmentClientFromConn(grpcConn)
+	}
+	if err := baremetalworker.NewReconciler(
+		localMgr.GetClient(), localMgr.GetAPIReader(), localMgr.GetScheme(),
+		bmwFulfillment,
+		baremetalworker.NewIgnitionFetcher(&http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // test-only: hub CA not yet mounted
+			},
+		}),
+		localMgr.GetEventRecorder("baremetalworker"),
+		os.Getenv(envClusterOrderNamespace),
+	).SetupWithManager(mgr); err != nil {
+		return err
+	}
+
 	return setupProvisioningController(
 		envClusterAAPProvisionTemplate, envClusterAAPDeprovisionTemplate,
 		func() error {
@@ -385,13 +407,11 @@ func setupClusterControllers(
 			reconciler := controller.NewClusterOrderReconciler(
 				localMgr.GetClient(), localMgr.GetAPIReader(), localMgr.GetScheme(),
 				os.Getenv(envClusterOrderNamespace),
-				os.Getenv(envAgentNamespace),
 				os.Getenv(envNetworkingNamespace),
 				provider, pollInterval, maxJobHistory,
 			)
 			reconciler.StallThresholds = clusterOrderStallThresholdsFromEnv()
 			reconciler.Recorder = localMgr.GetEventRecorder(controller.ClusterOrderControllerName)
-			reconciler.WorkerReconciler = controller.NewBareMetalWorkerReconciler(nil, nil)
 			return reconciler.SetupWithManager(mgr)
 		},
 	)
@@ -1083,6 +1103,7 @@ func setupBareMetalInstanceControllers(
 }
 
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
+// +kubebuilder:rbac:urls=/metrics,verbs=get
 
 func main() {
 	var err error

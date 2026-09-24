@@ -38,6 +38,9 @@ const (
 	ConditionAvailable = "Available"
 	// ConditionReady indicates the resource has reached a ready state.
 	ConditionReady = "Ready"
+	// CaaS bare-metal worker provisioning conditions (OSAC-2135).
+	ConditionInfraEnvReady                 = "InfraEnvReady"
+	ConditionRHCOSImageNotFound            = "RHCOSImageNotFound"
 )
 
 // Worker failure condition constants

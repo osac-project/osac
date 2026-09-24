@@ -1,33 +1,34 @@
 ---
-- name: Cluster Delete - Baseline Test
+- name: Cluster Delete CaaS - Baseline Test
   hosts: localhost
   gather_facts: true
   vars_files:
     - ../../../common_vars.yml
 
   tasks:
-    - name: Read ClusterOrder fixture
+    - name: Read CaaS ClusterOrder fixture
       ansible.builtin.set_fact:
-        test_cluster_order: "{{ lookup('file', '../../../fixtures/clusterorder-test.yaml') | from_yaml }}"
+        test_cluster_order: "{{ lookup('file', '../../../fixtures/clusterorder-ci-test.yaml') | from_yaml }}"
 
-    - name: Set test variables for baseline workflow
+    - name: Set test variables for CaaS baseline workflow
       ansible.builtin.set_fact:
         osac_job_vars:
           resource: "{{ test_cluster_order }}"
         cluster_working_namespace: "cluster-test-cluster-work"
-        # NOTE: Using real template (osac.templates.ocp_small from fixture)
-        # Override infrastructure-deleting steps to avoid actual resource deletion
         delete_step_hosted_cluster_override:
+          name: osac.workflows.workflow_helpers
+          tasks_from: noop.yml
+        delete_step_cluster_network_override:
           name: osac.workflows.workflow_helpers
           tasks_from: noop.yml
         delete_step_external_access_override:
           name: osac.workflows.workflow_helpers
           tasks_from: noop.yml
 
-- name: Import cluster delete workflow (baseline)
+- name: Import CaaS cluster delete workflow (baseline)
   ansible.builtin.import_playbook: osac.workflows.cluster.delete
 
-- name: Verify baseline results
+- name: Verify CaaS baseline results
   hosts: localhost
   gather_facts: false
   vars_files:
@@ -52,5 +53,12 @@
       ansible.builtin.assert:
         that:
           - template_id is defined
-          - template_id == "osac.templates.ocp_small"
-        fail_msg: "Template ID not extracted correctly"
+          - template_id == "osac.templates.ocp_ci_small"
+        fail_msg: "CaaS template ID not extracted correctly"
+
+    - name: Verify CaaS does not dispatch the pool infrastructure phase
+      ansible.builtin.assert:
+        that:
+          - delete_step_cluster_infra_default is not defined
+          - delete_step_cluster_network_default is defined
+          - delete_step_pre_delete_hook_default.tasks_from == "noop.yaml"

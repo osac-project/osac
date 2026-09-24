@@ -180,27 +180,6 @@ class TemplateParameter(Base):
         return None
 
 
-class NodeRequest(Base):
-    """NodeRequest represents the bare metal resources requested for a cluster"""
-
-    resource_class: str = pydantic.Field(..., validation_alias="resourceClass")
-    number_of_nodes: int = pydantic.Field(...,
-                                          validation_alias="numberOfNodes")
-
-
-class HostTypeReference(Base):
-    """Typed reference to a HostType resource (matches the proto HostTypeReference message)."""
-
-    name: str
-
-
-class NodeSet(Base):
-    """NodeSet represents the template's default bare metal resources"""
-
-    host_type: HostTypeReference
-    size: int
-
-
 class DiskImageReference(Base):
     """Reference to a DiskImage resource."""
 
@@ -332,8 +311,6 @@ class Metadata(Base):
     channel: str | None = None
     catalog_source: str | None = None
     catalog_source_namespace: str | None = None
-    default_node_request: list[NodeRequest] = pydantic.Field(default_factory=list)
-    allowed_resource_classes: list[str] | None = None
     parameters: list[TemplateParameterDefinition] = pydantic.Field(default_factory=list)
 
     # spec_defaults is used to set optional default values for the related spec fields associated
@@ -456,20 +433,7 @@ class ClusterTemplate(BaseTemplate):
     template_type: Literal[TemplateTypeEnum.cluster] = pydantic.Field(
         default=TemplateTypeEnum.cluster, exclude=True
     )
-    default_node_request: list[NodeRequest] = pydantic.Field(default=[], exclude=True)
-    allowed_resource_classes: list[str] | None = pydantic.Field(None, exclude=True)
     spec_defaults: ClusterTemplateSpecDefaults | None = None
-
-    @pydantic.computed_field
-    def node_sets(self) -> dict[str, NodeSet] | None:
-        ret = {
-            nr.resource_class: NodeSet(
-                host_type=HostTypeReference(name=nr.resource_class),
-                size=nr.number_of_nodes,
-            )
-            for nr in self.default_node_request
-        }
-        return ret if ret else None
 
 
 class ComputeInstanceTemplate(BaseTemplate):
@@ -642,8 +606,6 @@ class Collection(Base):
                             )
                         yield ClusterTemplate(
                             **common,
-                            default_node_request=metadata.default_node_request,
-                            allowed_resource_classes=metadata.allowed_resource_classes,
                             spec_defaults=cluster_spec_defaults,
                         )
                     elif metadata.template_type == TemplateTypeEnum.addon_operator:

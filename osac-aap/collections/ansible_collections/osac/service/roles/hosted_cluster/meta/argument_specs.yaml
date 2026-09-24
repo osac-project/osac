@@ -36,6 +36,9 @@ argument_specs:
           ssh_public_key:
             type: str
             required: false
+          ovn_kubernetes_mtu:
+            type: int
+            required: false
       hosted_cluster_controller_availability_policy:
         type: str
         required: false

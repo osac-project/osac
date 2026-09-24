@@ -76,6 +76,22 @@
         infrastructureAvailabilityPolicy: "{{ hosted_cluster_infrastructure_availability_policy }}"
         olmCatalogPlacement: management
 
+- name: Configure HostedCluster definition
+  ansible.builtin.set_fact:
+    hosted_cluster_definition: >-
+      {{ hosted_cluster_definition | combine({
+        'spec': {
+          'operatorConfiguration': {
+            'clusterNetworkOperator': {
+              'ovnKubernetesConfig': {
+                'mtu': hosted_cluster_settings.ovn_kubernetes_mtu | int
+              }
+            }
+          }
+        }
+      }, recursive=true) }}
+  when: hosted_cluster_settings.ovn_kubernetes_mtu is defined
+
 - name: Hook - Modify HostedCluster definition
   ansible.builtin.include_role:
     name: "{{ hosted_cluster_modify_definition_hook.name }}"
@@ -121,9 +137,9 @@
         'apiVersion': 'hypershift.openshift.io/v1beta1',
         'kind': 'NodePool',
         'metadata': {
-          'name': nodepool_prefix + '-' + item.resourceClass,
+          'name': nodepool_prefix + '-' + (item.resourceClass | default(item.bareMetal.instanceType if (item.bareMetal is defined and item.bareMetal.instanceType is defined) else 'default')),
           'namespace': hosted_cluster_namespace,
-          'labels': {agent_resource_class_label: item.resourceClass} | combine(hosted_cluster_default_cluster_order_label)
+          'labels': {agent_resource_class_label: (item.resourceClass | default(item.bareMetal.instanceType if (item.bareMetal is defined and item.bareMetal.instanceType is defined) else 'default'))} | combine(hosted_cluster_default_cluster_order_label)
         },
         'spec': {
           'clusterName': hosted_cluster_name,
@@ -136,7 +152,7 @@
             'type': 'Agent',
             'agent': {
               'agentLabelSelector': {
-                'matchLabels': {agent_resource_class_label: item.resourceClass} | combine(hosted_cluster_default_cluster_order_label)
+                'matchLabels': {agent_resource_class_label: (item.resourceClass | default(item.bareMetal.instanceType if (item.bareMetal is defined and item.bareMetal.instanceType is defined) else 'default'))} | combine(hosted_cluster_default_cluster_order_label)
               }
             }
           },
@@ -165,7 +181,14 @@
   block:
     - name: Set requested resource classes
       ansible.builtin.set_fact:
-        hosted_cluster_requested_resource_classes: "{{ hosted_cluster_node_requests | map(attribute='resourceClass') }}"
+        hosted_cluster_requested_resource_classes: >-
+          {%- set classes = [] -%}
+          {%- for np in (nodepool_definitions | default([])) -%}
+            {%- if np.metadata.labels is defined and agent_resource_class_label in np.metadata.labels -%}
+              {%- set _ = classes.append(np.metadata.labels[agent_resource_class_label]) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ classes }}
 
     - name: Retrieve all currently allocated nodepools
       kubernetes.core.k8s_info:

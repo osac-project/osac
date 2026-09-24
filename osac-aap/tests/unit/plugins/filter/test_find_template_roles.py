@@ -361,8 +361,6 @@ class TestAddOnOperatorTemplate:
             title="OpenShift Small Cluster",
             description="A cluster.",
             parameters=[],
-            default_node_request=[],
-            allowed_resource_classes=[],
         )
         monkeypatch.setattr(
             filter_plugin,

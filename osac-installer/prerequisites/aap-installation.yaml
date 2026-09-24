@@ -30,13 +30,16 @@ metadata:
   namespace: ansible-aap
 spec:
   channel: stable-2.6-cluster-scoped
-  # FIXME(OSAC-5621): installPlanApproval pinned to Manual to prevent
-  # auto-upgrade to aap-operator.v2.6.0-0.1789678003+ which ships
-  # Automation Controller >=4.7.17. That release (CVE-2026-75884) tightens
-  # the pod_spec_override blocklist and breaks OSAC's instance-group
-  # secret-mounting patterns. Remove this pin and revert to Automatic once
-  # the credential-type migration in OSAC-5621 is complete.
+  # FIXME(OSAC-5621): Subscription pinned to the last pre-CVE-2026-75884 CSV
+  # via startingCSV + Manual approval.  aap-operator.v2.6.0-0.1789678003+
+  # ships Automation Controller >=4.7.17, which tightens the
+  # pod_spec_override blocklist and breaks OSAC's instance-group
+  # secret-mounting patterns.  startingCSV ensures fresh installs resolve to
+  # the pinned version; installPlanApproval: Manual prevents OLM from
+  # auto-approving upgrades past it.  Remove both pins and revert to
+  # Automatic once the credential-type migration in OSAC-5621 is complete.
   installPlanApproval: Manual
+  startingCSV: aap-operator.v2.6.0-0.1787258256
   name: ansible-automation-platform-operator
   source: redhat-operators
   sourceNamespace: openshift-marketplace

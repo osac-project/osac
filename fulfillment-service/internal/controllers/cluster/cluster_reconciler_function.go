@@ -425,6 +425,19 @@ func (t *task) addExplicitFields(ctx context.Context, spec *osacv1alpha1.Cluster
 			spec.Network = network
 		}
 	}
+	if clusterSpec.HasNetworkAttachment() {
+		na := clusterSpec.GetNetworkAttachment()
+		cna := &osacv1alpha1.ClusterNetworkAttachment{}
+		if subnet := na.GetSubnet(); subnet != nil {
+			cna.SubnetRef = subnet.GetName()
+		}
+		for _, sg := range na.GetSecurityGroups() {
+			cna.SecurityGroupRefs = append(cna.SecurityGroupRefs, sg.GetName())
+		}
+		if cna.SubnetRef != "" {
+			spec.NetworkAttachment = cna
+		}
+	}
 	return nil
 }
 
@@ -509,10 +522,22 @@ func (t *task) prepareNodeRequests() []osacv1alpha1.NodeRequest {
 }
 
 func (t *task) prepareNodeRequest(nodeSet *privatev1.ClusterNodeSet) osacv1alpha1.NodeRequest {
-	return osacv1alpha1.NodeRequest{
-		ResourceClass: controllers.RefKeyStr(nodeSet.GetHostType()),
+	rc := controllers.RefKeyStr(nodeSet.GetHostType())
+	if rc == "" {
+		if bmit := nodeSet.GetBaremetalInstanceType(); bmit != nil && bmit.GetName() != "" {
+			rc = bmit.GetName()
+		}
+	}
+	nr := osacv1alpha1.NodeRequest{
+		ResourceClass: rc,
 		NumberOfNodes: int(nodeSet.GetSize()),
 	}
+	if bmit := nodeSet.GetBaremetalInstanceType(); bmit != nil && bmit.GetName() != "" {
+		nr.BareMetal = &osacv1alpha1.BareMetalNodeSpec{
+			InstanceType: bmit.GetName(),
+		}
+	}
+	return nr
 }
 
 func (t *task) delete(ctx context.Context) (err error) {

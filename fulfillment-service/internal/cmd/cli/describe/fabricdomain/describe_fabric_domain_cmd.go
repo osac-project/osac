@@ -108,7 +108,7 @@ func RenderFabricDomain(w io.Writer, domain *publicv1.FabricDomain) error {
 		{"Name", name},
 		{"Type", domainType},
 		{"Servers", strings.Join(domain.GetSpec().GetServers(), ", ")},
-		{"Virtual Networks", strings.Join(domain.GetSpec().GetVirtualNetworks(), ", ")},
+		{"Virtual Network", domain.GetSpec().GetVirtualNetwork()},
 		{"State", state},
 		{"Status", conditionStatus},
 		{"Message", message},

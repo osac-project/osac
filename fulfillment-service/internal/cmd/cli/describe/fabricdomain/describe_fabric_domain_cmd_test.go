@@ -31,9 +31,9 @@ var _ = Describe("Describe fabric domain", func() {
 				Name: "tenant-a-gpu-ew",
 			}.Build(),
 			Spec: publicv1.FabricDomainSpec_builder{
-				Type:            publicv1.FabricDomainType_FABRIC_DOMAIN_TYPE_ETHERNET_EW,
-				Servers:         []string{"hgx-01", "hgx-02"},
-				VirtualNetworks: []string{"vnet-001"},
+				Type:           publicv1.FabricDomainType_FABRIC_DOMAIN_TYPE_ETHERNET_EW,
+				Servers:        []string{"hgx-01", "hgx-02"},
+				VirtualNetwork: "vnet-001",
 			}.Build(),
 			Status: publicv1.FabricDomainStatus_builder{
 				Conditions: []*publicv1.FabricDomainCondition{

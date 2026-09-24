@@ -125,9 +125,9 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) (runErr error) {
 			Tenant: c.settings.Tenant(),
 		}.Build(),
 		Spec: publicv1.FabricDomainSpec_builder{
-			Type:            domainType,
-			Servers:         servers,
-			VirtualNetworks: []string{virtualNetwork.GetId()},
+			Type:           domainType,
+			Servers:        servers,
+			VirtualNetwork: virtualNetwork.GetId(),
 		}.Build(),
 	}.Build()
 

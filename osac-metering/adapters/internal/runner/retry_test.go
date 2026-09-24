@@ -16,9 +16,9 @@ import (
 
 	cloudevents "github.com/cloudevents/sdk-go/v2"
 	"github.com/go-logr/logr"
-	"github.com/osac-project/osac-metering/adapters"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/osac-project/osac-metering/adapters"
 )
 
 // Override sleepFunc to skip real sleeps in all tests.
@@ -163,6 +163,8 @@ func (a *retryTestAdapter) Submit(_ context.Context, _ adapters.MeteringEvent) e
 	}
 	return nil
 }
-func (a *retryTestAdapter) Flush(_ context.Context) (adapters.SubmitResult, error) { return adapters.SubmitResult{}, nil }
-func (a *retryTestAdapter) HealthCheck(_ context.Context) error           { return nil }
-func (a *retryTestAdapter) Close() error                                  { return nil }
+func (a *retryTestAdapter) Flush(_ context.Context) (adapters.SubmitResult, error) {
+	return adapters.SubmitResult{}, nil
+}
+func (a *retryTestAdapter) HealthCheck(_ context.Context) error { return nil }
+func (a *retryTestAdapter) Close() error                        { return nil }

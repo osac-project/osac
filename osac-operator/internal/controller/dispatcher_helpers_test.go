@@ -52,6 +52,7 @@ var _ = Describe("resolveDispatchPlan", func() {
 		fakeDiscoveryClient = fake.NewClientBuilder().WithScheme(scheme).WithObjects(
 			newFabricManagerConfigMap("fm-netris", "osac", "netris"),
 			newK8sManagerConfigMap("km-cudn", "osac", "cudn_net", "ipv4"),
+			newK8sManagerConfigMap("km-k8s-only", "osac", "k8s_only", "ipv4"),
 		).Build()
 	})
 
@@ -172,10 +173,26 @@ var _ = Describe("resolveImplementationStrategy", func() {
 		fakeDiscoveryClient = fake.NewClientBuilder().WithScheme(scheme).WithObjects(
 			newFabricManagerConfigMap("fm-netris", "osac", "netris"),
 			newK8sManagerConfigMap("km-cudn", "osac", "cudn_net", "ipv4"),
+			newK8sManagerConfigMap("km-k8s-only", "osac", "k8s_only", "ipv4"),
 		).Build()
 	})
 
-	It("returns the resolved k8s manager's name for a K8sFallback kind with no fabricManager set", func() {
+	It("returns the resolved k8s-only manager's name for a fallback kind with no fabricManager set", func() {
+		disc, err := networkmanager.NewDiscovery(fakeDiscoveryClient, "osac")
+		Expect(err).NotTo(HaveOccurred())
+		k8sManagerName := dispatcher.K8sOnlyManagerName
+		resolver := dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+			[]*privatev1.NetworkClass{{Id: "nc-k8s-fallback", K8SManager: &k8sManagerName}},
+			&[]*privatev1.NetworkClass{},
+		)), disc)
+
+		// VirtualNetwork's fallback is restricted to the explicit k8s_only profile.
+		strategy, err := resolveImplementationStrategy(ctx, resolver, "VirtualNetwork", "nc-k8s-fallback")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(strategy).To(Equal(dispatcher.K8sOnlyManagerName))
+	})
+
+	It("rejects an arbitrary k8s manager for a fabric-owned resource", func() {
 		disc, err := networkmanager.NewDiscovery(fakeDiscoveryClient, "osac")
 		Expect(err).NotTo(HaveOccurred())
 		k8sManagerName := "cudn_net"
@@ -184,13 +201,30 @@ var _ = Describe("resolveImplementationStrategy", func() {
 			&[]*privatev1.NetworkClass{},
 		)), disc)
 
-		// VirtualNetwork's dispatch config is Fabric-role-only with K8sFallback: true, so a
-		// NetworkClass with only a k8sManager set resolves the fabric role's target to the k8s
-		// manager (see dispatch.go's Dispatch), and this should NOT fall back to legacyStrategy.
-		strategy, err := resolveImplementationStrategy(ctx, resolver, "VirtualNetwork", "nc-k8s-fallback", "legacy-strategy")
-		Expect(err).NotTo(HaveOccurred())
-		Expect(strategy).To(Equal("cudn_net"))
+		_, err = resolveImplementationStrategy(ctx, resolver, "SecurityGroup", "nc-k8s-fallback")
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("required network manager is unavailable"))
 	})
+
+	DescribeTable("resolves k8s-only kinds to the composite k8s manager",
+		func(kind string) {
+			disc, err := networkmanager.NewDiscovery(fakeDiscoveryClient, "osac")
+			Expect(err).NotTo(HaveOccurred())
+			k8sManagerName := "k8s_only"
+			resolver := dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+				[]*privatev1.NetworkClass{{Id: "nc-k8s-only", K8SManager: &k8sManagerName}},
+				&[]*privatev1.NetworkClass{},
+			)), disc)
+
+			strategy, err := resolveImplementationStrategy(ctx, resolver, kind, "nc-k8s-only")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(strategy).To(Equal("k8s_only"))
+		},
+		Entry("SecurityGroup", "SecurityGroup"),
+		Entry("ExternalIP", "ExternalIP"),
+		Entry("ExternalIPPool", "ExternalIPPool"),
+		Entry("ExternalIPAttachment", "ExternalIPAttachment"),
+	)
 
 	It("returns the resolved fabric manager's name when the NetworkClass has a fabricManager set", func() {
 		disc, err := networkmanager.NewDiscovery(fakeDiscoveryClient, "osac")
@@ -199,15 +233,15 @@ var _ = Describe("resolveImplementationStrategy", func() {
 			[]*privatev1.NetworkClass{{Id: "nc-fabric", FabricManager: ptr.To("netris")}}, &[]*privatev1.NetworkClass{},
 		)), disc)
 
-		strategy, err := resolveImplementationStrategy(ctx, resolver, "VirtualNetwork", "nc-fabric", "legacy-strategy")
+		strategy, err := resolveImplementationStrategy(ctx, resolver, "VirtualNetwork", "nc-fabric")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(strategy).To(Equal("netris"))
 	})
 
-	It("returns legacyStrategy when the dispatcher path is not active", func() {
-		strategy, err := resolveImplementationStrategy(ctx, nil, "VirtualNetwork", "nc-any", "legacy-strategy")
+	It("returns an empty strategy when the dispatcher path is not active", func() {
+		strategy, err := resolveImplementationStrategy(ctx, nil, "VirtualNetwork", "nc-any")
 		Expect(err).NotTo(HaveOccurred())
-		Expect(strategy).To(Equal("legacy-strategy"))
+		Expect(strategy).To(BeEmpty())
 	})
 })
 

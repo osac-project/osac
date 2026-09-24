@@ -51,6 +51,16 @@ rules:
   - create
   - patch
 - apiGroups:
+  - agent-install.openshift.io
+  resources:
+  - agents
+  verbs:
+  - delete
+  - get
+  - list
+  - patch
+  - watch
+- apiGroups:
   - hypershift.openshift.io
   resources:
   - hostedclusters

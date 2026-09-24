@@ -218,10 +218,11 @@ var _ = Describe("SecurityGroupReconciler", func() {
 				}, nil
 			}
 
-			// First reconcile: adds finalizer and triggers job (with no resolver,
-			// the annotation doesn't change so provisioning proceeds immediately).
-			// The concurrent modification must not prevent the job from being recorded.
+			// First reconcile adds the finalizer and stamps the dispatcher-resolved
+			// implementation strategy. The second reconcile triggers provisioning.
 			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+			_, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 
 			// Verify the job was persisted
@@ -380,11 +381,13 @@ var _ = Describe("SecurityGroupReconciler", func() {
 
 			req := mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}}
 
-			// First reconcile adds finalizer and triggers the provision job (with no resolver,
-			// annotation doesn't change so provisioning proceeds immediately). Returns with
-			// RequeueAfter for status polling.
+			// First reconcile adds the finalizer and stamps the dispatcher-resolved
+			// implementation strategy. The next reconcile triggers the provision job.
+			_, err := reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
 			result, err := reconciler.Reconcile(ctx, req)
 			Expect(err).NotTo(HaveOccurred())
+			// RequeueAfter is set for status polling after the job is triggered.
 			Expect(result.RequeueAfter).To(Equal(reconciler.StatusPollInterval))
 
 			// Fetch updated SecurityGroup to check job state

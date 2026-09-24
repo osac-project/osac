@@ -406,7 +406,7 @@ func (t *task) getKubeObject(ctx context.Context) (result *osacv1alpha1.VirtualN
 	if count > 1 {
 		// OSAC-4208: prune duplicate CRs instead of erroring.
 		slices.SortFunc(items, func(a, b osacv1alpha1.VirtualNetwork) int {
-			return a.CreationTimestamp.Time.Compare(b.CreationTimestamp.Time)
+			return a.CreationTimestamp.Compare(b.CreationTimestamp.Time)
 		})
 		extras := make([]clnt.Object, count-1)
 		for i := 1; i < count; i++ {

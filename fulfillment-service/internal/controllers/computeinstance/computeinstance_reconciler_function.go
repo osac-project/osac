@@ -436,7 +436,7 @@ func (t *task) getKubeObject(ctx context.Context) (result *osacv1alpha1.ComputeI
 	if count > 1 {
 		// OSAC-4208: prune duplicate CRs instead of erroring.
 		slices.SortFunc(items, func(a, b osacv1alpha1.ComputeInstance) int {
-			return a.CreationTimestamp.Time.Compare(b.CreationTimestamp.Time)
+			return a.CreationTimestamp.Compare(b.CreationTimestamp.Time)
 		})
 		extras := make([]clnt.Object, count-1)
 		for i := 1; i < count; i++ {
@@ -471,7 +471,7 @@ func (t *task) getSubnetCR(ctx context.Context, subnetID string) (*osacv1alpha1.
 	if count > 1 {
 		// OSAC-4208: prune duplicate CRs instead of erroring.
 		slices.SortFunc(items, func(a, b osacv1alpha1.Subnet) int {
-			return a.CreationTimestamp.Time.Compare(b.CreationTimestamp.Time)
+			return a.CreationTimestamp.Compare(b.CreationTimestamp.Time)
 		})
 		extras := make([]clnt.Object, count-1)
 		for i := 1; i < count; i++ {
@@ -505,7 +505,7 @@ func (t *task) getSecurityGroupCR(ctx context.Context, securityGroupID string) (
 	if count > 1 {
 		// OSAC-4208: prune duplicate CRs instead of erroring.
 		slices.SortFunc(items, func(a, b osacv1alpha1.SecurityGroup) int {
-			return a.CreationTimestamp.Time.Compare(b.CreationTimestamp.Time)
+			return a.CreationTimestamp.Compare(b.CreationTimestamp.Time)
 		})
 		extras := make([]clnt.Object, count-1)
 		for i := 1; i < count; i++ {

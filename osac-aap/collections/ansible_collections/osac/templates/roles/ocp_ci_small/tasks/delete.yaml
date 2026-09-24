@@ -2,15 +2,15 @@
   ansible.builtin.set_fact:
     delete_step_pre_delete_hook_default:
       name: osac.templates.ocp_ci_small
-      tasks_from: pre_delete.yaml
+      tasks_from: noop.yaml
     delete_step_hosted_cluster_default:
       name: osac.service.hosted_cluster
       tasks_from: main.yaml
+    delete_step_cluster_network_default:
+      name: osac.service.cluster_network
+      tasks_from: main.yaml
     delete_step_external_access_default:
       name: osac.service.external_access
-      tasks_from: main.yaml
-    delete_step_cluster_infra_default:
-      name: osac.service.cluster_infra
       tasks_from: main.yaml
     delete_step_post_delete_hook_default:
       name: osac.templates.ocp_ci_small
@@ -36,6 +36,27 @@
     hosted_cluster_node_count: >-
       {{ cluster_order.spec.nodeRequests | map(attribute="numberOfNodes") | sum }}
 
+- name: Normalize node requests with resourceClass
+  ansible.builtin.set_fact:
+    normalized_node_requests: >-
+      {%- set requests = [] -%}
+      {%- for nr in (cluster_order.spec.nodeRequests | default([])) -%}
+        {%- set rc = nr.resourceClass | default(nr.bareMetal.instanceType if (nr.bareMetal is defined and nr.bareMetal.instanceType is defined) else 'default') -%}
+        {%- set _ = requests.append(nr | combine({'resourceClass': rc})) -%}
+      {%- endfor -%}
+      {{ requests | unique(attribute='resourceClass') }}
+
+- name: Step - Destroy cluster network
+  ansible.builtin.include_role:
+    name: "{{ (delete_step_cluster_network_override | default(delete_step_cluster_network_default)).name }}"
+    tasks_from: "{{ (delete_step_cluster_network_override | default(delete_step_cluster_network_default)).tasks_from }}"
+  vars:
+    cluster_network_state: absent
+    cluster_network_name: "{{ cluster_order.metadata.name }}"
+    cluster_network_namespace: "{{ cluster_working_namespace }}"
+    cluster_network_infraenv_name: "{{ cluster_order.metadata.name }}-infraenv"
+    cluster_network_node_requests: "{{ normalized_node_requests }}"
+
 - name: Step - Remove port forwarding
   ansible.builtin.include_role:
     name: "{{ (delete_step_external_access_override | default(delete_step_external_access_default)).name }}"
@@ -44,16 +65,6 @@
     external_access_state: absent
     external_access_name: "{{ cluster_order.metadata.name }}"
     external_access_namespace: "{{ cluster_working_namespace }}"
-
-- name: Step - Destroy cluster infrastructure
-  ansible.builtin.include_role:
-    name: "{{ (delete_step_cluster_infra_override | default(delete_step_cluster_infra_default)).name }}"
-    tasks_from: "{{ (delete_step_cluster_infra_override | default(delete_step_cluster_infra_default)).tasks_from }}"
-  vars:
-    cluster_infra_state: absent
-    cluster_infra_name: "{{ cluster_order.metadata.name }}"
-    cluster_infra_namespace: "{{ cluster_working_namespace }}"
-    cluster_infra_node_requests: []
 
 - name: Step - Post-delete hook
   ansible.builtin.include_role:

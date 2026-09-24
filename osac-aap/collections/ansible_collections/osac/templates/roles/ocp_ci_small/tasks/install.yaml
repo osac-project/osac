@@ -6,8 +6,8 @@
     install_step_hosted_cluster_default:
       name: osac.service.hosted_cluster
       tasks_from: main.yaml
-    install_step_cluster_infra_default:
-      name: osac.service.cluster_infra
+    install_step_cluster_network_default:
+      name: osac.service.cluster_network
       tasks_from: main.yaml
     install_step_external_access_default:
       name: osac.service.external_access
@@ -21,11 +21,22 @@
     install_step_post_install_hook_default:
       name: osac.templates.ocp_ci_small
       tasks_from: noop.yaml
+    skip_cluster_operators_wait: true
 
 - name: Step - Pre-install hook
   ansible.builtin.include_role:
     name: "{{ (install_step_pre_install_hook_override | default(install_step_pre_install_hook_default)).name }}"
     tasks_from: "{{ (install_step_pre_install_hook_override | default(install_step_pre_install_hook_default)).tasks_from }}"
+
+- name: Normalize node requests with resourceClass
+  ansible.builtin.set_fact:
+    normalized_node_requests: >-
+      {%- set requests = [] -%}
+      {%- for nr in (cluster_order.spec.nodeRequests | default([])) -%}
+        {%- set rc = nr.resourceClass | default(nr.bareMetal.instanceType if (nr.bareMetal is defined and nr.bareMetal.instanceType is defined) else 'default') -%}
+        {%- set _ = requests.append(nr | combine({'resourceClass': rc})) -%}
+      {%- endfor -%}
+      {{ requests | unique(attribute='resourceClass') }}
 
 - name: Step - Create hosted cluster
   ansible.builtin.include_role:
@@ -38,19 +49,23 @@
       ocp_release_image: "{{ ocp_release_image }}"
       pull_secret: "{{ template_parameters.pull_secret }}"
       ssh_public_key: "{{ template_parameters.ssh_public_key }}"
-    hosted_cluster_node_requests: "{{ cluster_order.spec.nodeRequests | unique(attribute='resourceClass') }}"
+      # Agent-platform CNO cannot probe guest-worker MTU. The CI BMaaS
+      # network has a 1500-byte uplink, so the OVN tunnel MTU is 1400.
+      ovn_kubernetes_mtu: 1400
+    hosted_cluster_node_requests: "{{ normalized_node_requests }}"
     hosted_cluster_state: present
     hosted_cluster_infrastructure_availability_policy: "{{ lookup('env', 'HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY', default='SingleReplica') }}"
 
-- name: Step - Create cluster infrastructure
+- name: Step - Configure cluster network
   ansible.builtin.include_role:
-    name: "{{ (install_step_cluster_infra_override | default(install_step_cluster_infra_default)).name }}"
-    tasks_from: "{{ (install_step_cluster_infra_override | default(install_step_cluster_infra_default)).tasks_from }}"
+    name: "{{ (install_step_cluster_network_override | default(install_step_cluster_network_default)).name }}"
+    tasks_from: "{{ (install_step_cluster_network_override | default(install_step_cluster_network_default)).tasks_from }}"
   vars:
-    cluster_infra_state: present
-    cluster_infra_name: "{{ cluster_order.metadata.name }}"
-    cluster_infra_namespace: "{{ cluster_working_namespace }}"
-    cluster_infra_node_requests: "{{ cluster_order.spec.nodeRequests | unique(attribute='resourceClass') }}"
+    cluster_network_state: present
+    cluster_network_name: "{{ cluster_order.metadata.name }}"
+    cluster_network_namespace: "{{ cluster_working_namespace }}"
+    cluster_network_infraenv_name: "{{ cluster_order.metadata.name }}-infraenv"
+    cluster_network_node_requests: "{{ normalized_node_requests }}"
 
 - name: Step - Configure port forwarding
   ansible.builtin.include_role:
@@ -61,6 +76,9 @@
     external_access_state: present
     external_access_namespace: "{{ cluster_working_namespace }}"
     external_access_ingress_internal_network: "network-{{ cluster_order.metadata.name }}"
+    # The guest network DaemonSets cannot schedule until the Agent NodePool
+    # installs its first worker, so waiting here would deadlock CI provisioning.
+    external_access_skip_network_operator_wait: true
 
 - name: Step - Retrieve kubeconfig
   ansible.builtin.include_role:
@@ -71,6 +89,7 @@
     retrieve_kubeconfig_namespace: "{{ cluster_working_namespace }}"
 
 - name: Step - Wait for cluster operators
+  when: not skip_cluster_operators_wait
   ansible.builtin.include_role:
     name: "{{ (install_step_wait_for_cluster_operators_override | default(install_step_wait_for_cluster_operators_default)).name }}"
     tasks_from: "{{ (install_step_wait_for_cluster_operators_override | default(install_step_wait_for_cluster_operators_default)).tasks_from }}"

@@ -6,9 +6,6 @@
     install_step_hosted_cluster_default:
       name: osac.service.hosted_cluster
       tasks_from: main.yaml
-    install_step_cluster_infra_default:
-      name: osac.service.cluster_infra
-      tasks_from: main.yaml
     install_step_external_access_default:
       name: osac.service.external_access
       tasks_from: main.yaml
@@ -43,16 +40,6 @@
       ssh_public_key: "{{ cluster_settings_ssh_public_key }}"
     hosted_cluster_node_requests: "{{ cluster_order.spec.nodeRequests | unique(attribute='resourceClass') }}"
     hosted_cluster_state: present
-
-- name: Step - Create cluster infrastructure
-  ansible.builtin.include_role:
-    name: "{{ (install_step_cluster_infra_override | default(install_step_cluster_infra_default)).name }}"
-    tasks_from: "{{ (install_step_cluster_infra_override | default(install_step_cluster_infra_default)).tasks_from }}"
-  vars:
-    cluster_infra_state: present
-    cluster_infra_name: "{{ cluster_order.metadata.name }}"
-    cluster_infra_namespace: "{{ cluster_working_namespace }}"
-    cluster_infra_node_requests: "{{ cluster_order.spec.nodeRequests | unique(attribute='resourceClass') }}"
 
 - name: Step - Configure port forwarding
   ansible.builtin.include_role:

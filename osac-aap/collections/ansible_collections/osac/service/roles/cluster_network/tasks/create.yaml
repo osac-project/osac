@@ -1,0 +1,32 @@
+---
+- name: Capture cluster network backend inputs
+  ansible.builtin.set_fact:
+    _cluster_network_backend_inputs:
+      state: "{{ cluster_network_state }}"
+      name: "{{ cluster_network_name }}"
+      namespace: "{{ cluster_network_namespace }}"
+      node_requests: "{{ cluster_network_node_requests }}"
+      working_namespace: "{{ cluster_working_namespace }}"
+      order: "{{ cluster_order }}"
+      order_label: "{{ cluster_order_label }}"
+      agent_resource_class_label: "{{ agent_resource_class_label }}"
+      agent_namespace: "{{ default_agent_namespace }}"
+      infraenv_name: "{{ cluster_network_infraenv_name }}"
+      steps_collection: "{{ network_steps_collection }}"
+
+- name: Include network-class-specific create tasks
+  ansible.builtin.include_role:
+    name: "{{ network_steps_collection }}.cluster_network"
+    tasks_from: create.yaml
+  vars:
+    cluster_network_state: "{{ _cluster_network_backend_inputs.state }}"
+    cluster_network_name: "{{ _cluster_network_backend_inputs.name }}"
+    cluster_network_namespace: "{{ _cluster_network_backend_inputs.namespace }}"
+    cluster_network_node_requests: "{{ _cluster_network_backend_inputs.node_requests }}"
+    cluster_working_namespace: "{{ _cluster_network_backend_inputs.working_namespace }}"
+    cluster_order: "{{ _cluster_network_backend_inputs.order }}"
+    cluster_order_label: "{{ _cluster_network_backend_inputs.order_label }}"
+    agent_resource_class_label: "{{ _cluster_network_backend_inputs.agent_resource_class_label }}"
+    default_agent_namespace: "{{ _cluster_network_backend_inputs.agent_namespace }}"
+    cluster_network_infraenv_name: "{{ _cluster_network_backend_inputs.infraenv_name }}"
+    network_steps_collection: "{{ _cluster_network_backend_inputs.steps_collection }}"

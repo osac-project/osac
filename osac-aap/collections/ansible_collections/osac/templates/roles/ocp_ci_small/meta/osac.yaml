@@ -6,12 +6,6 @@ description: >
 
 template_type: cluster
 
-default_node_request:
-- resourceClass: ci-worker
-  numberOfNodes: 1
-
-allowed_resource_classes: []
-
 spec_defaults:
   version_name: "4.17.0"
 

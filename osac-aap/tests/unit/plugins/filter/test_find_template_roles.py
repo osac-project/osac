@@ -193,6 +193,18 @@ def pytest_generate_tests(metafunc):
 
 class TestRealTemplateMetadata:
 
+    def test_removed_cluster_node_defaults_are_not_metadata_fields(self):
+        metadata = Metadata.model_validate(
+            {
+                "title": "Cluster",
+                "default_node_request": [{"resourceClass": "fc430", "numberOfNodes": 3}],
+                "allowed_resource_classes": ["fc430"],
+            }
+        )
+
+        assert "default_node_request" not in metadata.model_dump()
+        assert "allowed_resource_classes" not in metadata.model_dump()
+
     def test_roles_dir_exists(self, roles_dir):
         assert roles_dir.exists(), f"Template roles directory not found: {roles_dir}"
 
@@ -380,8 +392,6 @@ class TestAddOnOperatorTemplate:
             title="OpenShift Small Cluster",
             description="A cluster.",
             parameters=[],
-            default_node_request=[],
-            allowed_resource_classes=[],
         )
         monkeypatch.setattr(
             filter_plugin,

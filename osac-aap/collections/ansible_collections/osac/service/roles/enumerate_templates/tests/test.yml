@@ -56,22 +56,9 @@
           - item.id is defined
           - item.title is defined
           - item.title | length > 0
-          - item.node_sets is defined
-          - item.node_sets | length > 0
         fail_msg: "Cluster template '{{ item.id }}' missing required fields"
         success_msg: "Cluster template '{{ item.id }}' has correct structure"
       loop: "{{ osac_cluster_templates }}"
-      loop_control:
-        label: "{{ item.id }}"
-      when: test_discover_all | default(false) | bool
-
-    - name: Verify known templates include fc430 node set
-      ansible.builtin.assert:
-        that:
-          - "'fc430' in item.node_sets"
-        fail_msg: "Template '{{ item.id }}' expected to have fc430 node set"
-        success_msg: "Template '{{ item.id }}' has fc430 node set"
-      loop: "{{ osac_cluster_templates | selectattr('id', 'in', ['osac.templates.ocp_small']) | list }}"
       loop_control:
         label: "{{ item.id }}"
       when: test_discover_all | default(false) | bool

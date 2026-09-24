@@ -1,0 +1,6 @@
+---
+# CI has no network backend resources to remove. Agent binding and worker
+# scaling are owned by osac-operator.
+- name: No-op CI cluster network deletion
+  ansible.builtin.debug:
+    msg: CI cluster network deletion has no backend resources to remove

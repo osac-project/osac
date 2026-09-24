@@ -4,7 +4,7 @@
     bmh_patch:
       spec:
         image:
-          url: "{{ template_params.imageURL }}"
+          url: "{{ ('oci://' ~ template_params.imageURL) if (template_params.imageSourceType | default('') == 'registry' and not template_params.imageURL.startswith('oci://')) else template_params.imageURL }}"
         online: true
 
 - name: Add checksum to BMH patch for non-OCI images

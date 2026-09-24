@@ -32,8 +32,8 @@ var _ = Describe("CaaS Cluster Mapper", func() {
 				CatalogItem: &privatev1.ClusterCatalogItemReference{Id: "cluster-catalog-1", Name: "cluster-catalog-1"},
 				Version:     &privatev1.ClusterVersionReference{Id: "4.17.0", Name: "4.17.0"},
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
-					"gpu-workers": {HostType: &privatev1.HostTypeReference{Name: "gpu-h100"}, Size: proto.Int32(2)},
-					"cpu-workers": {HostType: &privatev1.HostTypeReference{Name: "cpu-only"}, Size: proto.Int32(3)},
+					"gpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "gpu-h100"}, Size: proto.Int32(2)},
+					"cpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "cpu-only"}, Size: proto.Int32(3)},
 				},
 			},
 			Status: &privatev1.ClusterStatus{
@@ -329,7 +329,7 @@ var _ = Describe("CaaS Cluster Mapper", func() {
 			cp := components[0].(map[string]any)
 			Expect(cp["node_set"]).To(Equal("_control_plane"))
 			Expect(cp["component"]).To(Equal("control_plane"))
-			Expect(cp["host_type"]).To(Equal("_control_plane"))
+			Expect(cp["baremetal_instance_type"]).To(Equal("_control_plane"))
 			Expect(cp["node_count"]).To(Equal(int32(1)))
 		})
 
@@ -340,11 +340,11 @@ var _ = Describe("CaaS Cluster Mapper", func() {
 			// control_plane first, then sorted by node set key: "cpu-workers" < "gpu-workers"
 			w1 := components[1].(map[string]any)
 			Expect(w1["node_set"]).To(Equal("cpu-workers"))
-			Expect(w1["host_type"]).To(Equal("cpu-only"))
+			Expect(w1["baremetal_instance_type"]).To(Equal("cpu-only"))
 			Expect(w1["node_count"]).To(Equal(int32(3)))
 			w2 := components[2].(map[string]any)
 			Expect(w2["node_set"]).To(Equal("gpu-workers"))
-			Expect(w2["host_type"]).To(Equal("gpu-h100"))
+			Expect(w2["baremetal_instance_type"]).To(Equal("gpu-h100"))
 			Expect(w2["node_count"]).To(Equal(int32(2)))
 		})
 
@@ -368,6 +368,22 @@ var _ = Describe("CaaS Cluster Mapper", func() {
 			cp := components[0].(map[string]any)
 			Expect(cp["node_set"]).To(Equal("_control_plane"))
 			Expect(cp["component"]).To(Equal("control_plane"))
+		})
+
+		It("uses baremetal_instance_type and ignores legacy host_type", func() {
+			cl.Spec.NodeSets = map[string]*privatev1.ClusterNodeSet{
+				"workers": {
+					HostType:              &privatev1.HostTypeReference{Name: "legacy-host"},
+					BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "ci-worker-bm"},
+					Size:                  proto.Int32(1),
+				},
+			}
+
+			dims := events.ClusterBillingDimensions(cl)
+			components := dims["components"].([]any)
+			worker := components[1].(map[string]any)
+			Expect(worker["baremetal_instance_type"]).To(Equal("ci-worker-bm"))
+			Expect(worker).NotTo(HaveKey("host_type"))
 		})
 
 		It("DecomposeClusterComponents works on fresh (non-JSONB) output", func() {
@@ -471,8 +487,8 @@ var _ = Describe("DecomposeClusterEvents", func() {
 		dims := map[string]any{
 			"cluster_template": "ocp-ci-small",
 			"components": []any{
-				map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
-				map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": int32(2)},
+				map[string]any{"node_set": "_control_plane", "component": "control_plane", "baremetal_instance_type": "_control_plane", "node_count": int32(1)},
+				map[string]any{"node_set": "gpu-workers", "component": "worker", "baremetal_instance_type": "gpu-h100", "node_count": int32(2)},
 			},
 		}
 
@@ -539,9 +555,9 @@ var _ = Describe("DecomposeClusterComponents", func() {
 			"cluster_template": "ocp-ci-small",
 			"release_image":    "quay.io/ocp:4.17.0",
 			"components": []any{
-				map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
-				map[string]any{"node_set": "cpu-workers", "component": "worker", "host_type": "cpu-only", "node_count": int32(3)},
-				map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": int32(2)},
+				map[string]any{"node_set": "_control_plane", "component": "control_plane", "baremetal_instance_type": "_control_plane", "node_count": int32(1)},
+				map[string]any{"node_set": "cpu-workers", "component": "worker", "baremetal_instance_type": "cpu-only", "node_count": int32(3)},
+				map[string]any{"node_set": "gpu-workers", "component": "worker", "baremetal_instance_type": "gpu-h100", "node_count": int32(2)},
 			},
 		}
 
@@ -551,19 +567,19 @@ var _ = Describe("DecomposeClusterComponents", func() {
 
 		Expect(records[0].NodeSet).To(Equal("_control_plane"))
 		Expect(records[0].Component).To(Equal("control_plane"))
-		Expect(records[0].HostType).To(Equal("_control_plane"))
+		Expect(records[0].BaremetalInstanceType).To(Equal("_control_plane"))
 		Expect(records[0].NodeCount).To(Equal(int32(1)))
 		Expect(records[0].ClusterTemplate).To(Equal("ocp-ci-small"))
 		Expect(records[0].ReleaseImage).To(Equal("quay.io/ocp:4.17.0"))
 
 		Expect(records[1].NodeSet).To(Equal("cpu-workers"))
 		Expect(records[1].Component).To(Equal("worker"))
-		Expect(records[1].HostType).To(Equal("cpu-only"))
+		Expect(records[1].BaremetalInstanceType).To(Equal("cpu-only"))
 		Expect(records[1].NodeCount).To(Equal(int32(3)))
 
 		Expect(records[2].NodeSet).To(Equal("gpu-workers"))
 		Expect(records[2].Component).To(Equal("worker"))
-		Expect(records[2].HostType).To(Equal("gpu-h100"))
+		Expect(records[2].BaremetalInstanceType).To(Equal("gpu-h100"))
 		Expect(records[2].NodeCount).To(Equal(int32(2)))
 	})
 
@@ -571,8 +587,8 @@ var _ = Describe("DecomposeClusterComponents", func() {
 		dims := map[string]any{
 			"cluster_template": "tmpl",
 			"components": []any{
-				map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": float64(1)},
-				map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": float64(2)},
+				map[string]any{"node_set": "_control_plane", "component": "control_plane", "baremetal_instance_type": "_control_plane", "node_count": float64(1)},
+				map[string]any{"node_set": "gpu-workers", "component": "worker", "baremetal_instance_type": "gpu-h100", "node_count": float64(2)},
 			},
 		}
 
@@ -599,12 +615,12 @@ var _ = Describe("DecomposeClusterComponents", func() {
 var _ = Describe("ComponentRecord", func() {
 	It("produces flat billing dimensions", func() {
 		cr := events.ComponentRecord{
-			NodeSet:         "gpu-workers",
-			Component:       "worker",
-			HostType:        "gpu-h100",
-			NodeCount:       2,
-			ClusterTemplate: "ocp-ci-small",
-			ReleaseImage:    "quay.io/ocp:4.17.0",
+			NodeSet:               "gpu-workers",
+			Component:             "worker",
+			BaremetalInstanceType: "gpu-h100",
+			NodeCount:             2,
+			ClusterTemplate:       "ocp-ci-small",
+			ReleaseImage:          "quay.io/ocp:4.17.0",
 		}
 
 		flat := cr.FlatBillingDimensions()
@@ -612,17 +628,18 @@ var _ = Describe("ComponentRecord", func() {
 		Expect(flat["release_image"]).To(Equal("quay.io/ocp:4.17.0"))
 		Expect(flat["node_set"]).To(Equal("gpu-workers"))
 		Expect(flat["component"]).To(Equal("worker"))
-		Expect(flat["host_type"]).To(Equal("gpu-h100"))
+		Expect(flat["baremetal_instance_type"]).To(Equal("gpu-h100"))
+		Expect(flat).NotTo(HaveKey("host_type"))
 		Expect(flat["node_count"]).To(Equal(int32(2)))
 	})
 
 	It("omits release_image when empty", func() {
 		cr := events.ComponentRecord{
-			NodeSet:         "_control_plane",
-			Component:       "control_plane",
-			HostType:        "_control_plane",
-			NodeCount:       1,
-			ClusterTemplate: "tmpl",
+			NodeSet:               "_control_plane",
+			Component:             "control_plane",
+			BaremetalInstanceType: "_control_plane",
+			NodeCount:             1,
+			ClusterTemplate:       "tmpl",
 		}
 
 		flat := cr.FlatBillingDimensions()
@@ -632,7 +649,7 @@ var _ = Describe("ComponentRecord", func() {
 
 var _ = Describe("ComponentEventID", func() {
 	It("produces deterministic IDs", func() {
-		comp := events.ComponentRecord{NodeSet: "gpu-workers", Component: "worker", HostType: "gpu-h100"}
+		comp := events.ComponentRecord{NodeSet: "gpu-workers", Component: "worker", BaremetalInstanceType: "gpu-h100"}
 		id1 := events.ComponentEventID("evt-123", comp)
 		id2 := events.ComponentEventID("evt-123", comp)
 		Expect(id1).To(Equal(id2))
@@ -640,13 +657,13 @@ var _ = Describe("ComponentEventID", func() {
 	})
 
 	It("produces different IDs for different components", func() {
-		cp := events.ComponentRecord{NodeSet: "_control_plane", Component: "control_plane", HostType: "_control_plane"}
-		worker := events.ComponentRecord{NodeSet: "gpu-workers", Component: "worker", HostType: "gpu-h100"}
+		cp := events.ComponentRecord{NodeSet: "_control_plane", Component: "control_plane", BaremetalInstanceType: "_control_plane"}
+		worker := events.ComponentRecord{NodeSet: "gpu-workers", Component: "worker", BaremetalInstanceType: "gpu-h100"}
 		Expect(events.ComponentEventID("evt-1", cp)).NotTo(Equal(events.ComponentEventID("evt-1", worker)))
 	})
 
 	It("produces different IDs for different base events", func() {
-		comp := events.ComponentRecord{NodeSet: "gpu-workers", Component: "worker", HostType: "gpu-h100"}
+		comp := events.ComponentRecord{NodeSet: "gpu-workers", Component: "worker", BaremetalInstanceType: "gpu-h100"}
 		Expect(events.ComponentEventID("evt-1", comp)).NotTo(Equal(events.ComponentEventID("evt-2", comp)))
 	})
 })
@@ -656,22 +673,22 @@ var _ = Describe("ChangedComponents", func() {
 		oldDims := map[string]any{
 			"cluster_template": "tmpl",
 			"components": []any{
-				map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
-				map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": int32(2)},
+				map[string]any{"node_set": "_control_plane", "component": "control_plane", "baremetal_instance_type": "_control_plane", "node_count": int32(1)},
+				map[string]any{"node_set": "gpu-workers", "component": "worker", "baremetal_instance_type": "gpu-h100", "node_count": int32(2)},
 			},
 		}
 		newDims := map[string]any{
 			"cluster_template": "tmpl",
 			"components": []any{
-				map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
-				map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": int32(4)},
+				map[string]any{"node_set": "_control_plane", "component": "control_plane", "baremetal_instance_type": "_control_plane", "node_count": int32(1)},
+				map[string]any{"node_set": "gpu-workers", "component": "worker", "baremetal_instance_type": "gpu-h100", "node_count": int32(4)},
 			},
 		}
 
 		changed, err := events.ChangedComponents(oldDims, newDims)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(changed).To(HaveLen(1))
-		Expect(changed[0].HostType).To(Equal("gpu-h100"))
+		Expect(changed[0].BaremetalInstanceType).To(Equal("gpu-h100"))
 		Expect(changed[0].NodeCount).To(Equal(int32(4)))
 	})
 
@@ -679,7 +696,7 @@ var _ = Describe("ChangedComponents", func() {
 		dims := map[string]any{
 			"cluster_template": "tmpl",
 			"components": []any{
-				map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
+				map[string]any{"node_set": "_control_plane", "component": "control_plane", "baremetal_instance_type": "_control_plane", "node_count": int32(1)},
 			},
 		}
 
@@ -692,42 +709,42 @@ var _ = Describe("ChangedComponents", func() {
 		oldDims := map[string]any{
 			"cluster_template": "tmpl",
 			"components": []any{
-				map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
+				map[string]any{"node_set": "_control_plane", "component": "control_plane", "baremetal_instance_type": "_control_plane", "node_count": int32(1)},
 			},
 		}
 		newDims := map[string]any{
 			"cluster_template": "tmpl",
 			"components": []any{
-				map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
-				map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": int32(2)},
+				map[string]any{"node_set": "_control_plane", "component": "control_plane", "baremetal_instance_type": "_control_plane", "node_count": int32(1)},
+				map[string]any{"node_set": "gpu-workers", "component": "worker", "baremetal_instance_type": "gpu-h100", "node_count": int32(2)},
 			},
 		}
 
 		changed, err := events.ChangedComponents(oldDims, newDims)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(changed).To(HaveLen(1))
-		Expect(changed[0].HostType).To(Equal("gpu-h100"))
+		Expect(changed[0].BaremetalInstanceType).To(Equal("gpu-h100"))
 	})
 
 	It("detects removed worker node set with NodeCount=0", func() {
 		oldDims := map[string]any{
 			"cluster_template": "tmpl",
 			"components": []any{
-				map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
-				map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": int32(2)},
+				map[string]any{"node_set": "_control_plane", "component": "control_plane", "baremetal_instance_type": "_control_plane", "node_count": int32(1)},
+				map[string]any{"node_set": "gpu-workers", "component": "worker", "baremetal_instance_type": "gpu-h100", "node_count": int32(2)},
 			},
 		}
 		newDims := map[string]any{
 			"cluster_template": "tmpl",
 			"components": []any{
-				map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
+				map[string]any{"node_set": "_control_plane", "component": "control_plane", "baremetal_instance_type": "_control_plane", "node_count": int32(1)},
 			},
 		}
 
 		changed, err := events.ChangedComponents(oldDims, newDims)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(changed).To(HaveLen(1))
-		Expect(changed[0].HostType).To(Equal("gpu-h100"))
+		Expect(changed[0].BaremetalInstanceType).To(Equal("gpu-h100"))
 		Expect(changed[0].NodeCount).To(Equal(int32(0)))
 		Expect(changed[0].NodeSet).To(Equal("gpu-workers"))
 	})
@@ -736,15 +753,15 @@ var _ = Describe("ChangedComponents", func() {
 		oldDims := map[string]any{
 			"cluster_template": "tmpl",
 			"components": []any{
-				map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
-				map[string]any{"node_set": "pool-a", "component": "worker", "host_type": "gpu-h100", "node_count": int32(2)},
-				map[string]any{"node_set": "pool-b", "component": "worker", "host_type": "cpu-only", "node_count": int32(3)},
+				map[string]any{"node_set": "_control_plane", "component": "control_plane", "baremetal_instance_type": "_control_plane", "node_count": int32(1)},
+				map[string]any{"node_set": "pool-a", "component": "worker", "baremetal_instance_type": "gpu-h100", "node_count": int32(2)},
+				map[string]any{"node_set": "pool-b", "component": "worker", "baremetal_instance_type": "cpu-only", "node_count": int32(3)},
 			},
 		}
 		newDims := map[string]any{
 			"cluster_template": "tmpl",
 			"components": []any{
-				map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
+				map[string]any{"node_set": "_control_plane", "component": "control_plane", "baremetal_instance_type": "_control_plane", "node_count": int32(1)},
 			},
 		}
 
@@ -752,33 +769,33 @@ var _ = Describe("ChangedComponents", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(changed).To(HaveLen(2))
 
-		nodeSetToHostType := map[string]string{}
+		nodeSetToInstanceType := map[string]string{}
 		for _, c := range changed {
 			Expect(c.NodeCount).To(Equal(int32(0)))
 			Expect(c.NodeSet).NotTo(BeEmpty())
 			id := events.ComponentEventID("evt-1", c)
 			Expect(id).NotTo(Equal("evt-1/"))
-			nodeSetToHostType[c.NodeSet] = c.HostType
+			nodeSetToInstanceType[c.NodeSet] = c.BaremetalInstanceType
 		}
-		Expect(nodeSetToHostType).To(HaveLen(2))
-		Expect(nodeSetToHostType["pool-a"]).To(Equal("gpu-h100"))
-		Expect(nodeSetToHostType["pool-b"]).To(Equal("cpu-only"))
+		Expect(nodeSetToInstanceType).To(HaveLen(2))
+		Expect(nodeSetToInstanceType["pool-a"]).To(Equal("gpu-h100"))
+		Expect(nodeSetToInstanceType["pool-b"]).To(Equal("cpu-only"))
 	})
 
 	It("sets IsNew=true for newly-added components and IsNew=false for modified", func() {
 		oldDims := map[string]any{
 			"cluster_template": "tmpl",
 			"components": []any{
-				map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
-				map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": int32(2)},
+				map[string]any{"node_set": "_control_plane", "component": "control_plane", "baremetal_instance_type": "_control_plane", "node_count": int32(1)},
+				map[string]any{"node_set": "gpu-workers", "component": "worker", "baremetal_instance_type": "gpu-h100", "node_count": int32(2)},
 			},
 		}
 		newDims := map[string]any{
 			"cluster_template": "tmpl",
 			"components": []any{
-				map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
-				map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": int32(4)},
-				map[string]any{"node_set": "tpu-workers", "component": "worker", "host_type": "tpu-v5", "node_count": int32(2)},
+				map[string]any{"node_set": "_control_plane", "component": "control_plane", "baremetal_instance_type": "_control_plane", "node_count": int32(1)},
+				map[string]any{"node_set": "gpu-workers", "component": "worker", "baremetal_instance_type": "gpu-h100", "node_count": int32(4)},
+				map[string]any{"node_set": "tpu-workers", "component": "worker", "baremetal_instance_type": "tpu-v5", "node_count": int32(2)},
 			},
 		}
 
@@ -797,40 +814,40 @@ var _ = Describe("ChangedComponents", func() {
 			"newly-added component should have IsNew=true")
 	})
 
-	It("detects host_type change within a node set", func() {
+	It("detects baremetal_instance_type change within a node set", func() {
 		oldDims := map[string]any{
 			"cluster_template": "tmpl",
 			"components": []any{
-				map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
-				map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": int32(2)},
+				map[string]any{"node_set": "_control_plane", "component": "control_plane", "baremetal_instance_type": "_control_plane", "node_count": int32(1)},
+				map[string]any{"node_set": "gpu-workers", "component": "worker", "baremetal_instance_type": "gpu-h100", "node_count": int32(2)},
 			},
 		}
 		newDims := map[string]any{
 			"cluster_template": "tmpl",
 			"components": []any{
-				map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
-				map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-a100", "node_count": int32(2)},
+				map[string]any{"node_set": "_control_plane", "component": "control_plane", "baremetal_instance_type": "_control_plane", "node_count": int32(1)},
+				map[string]any{"node_set": "gpu-workers", "component": "worker", "baremetal_instance_type": "gpu-a100", "node_count": int32(2)},
 			},
 		}
 
 		changed, err := events.ChangedComponents(oldDims, newDims)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(changed).To(HaveLen(1))
-		Expect(changed[0].HostType).To(Equal("gpu-a100"))
+		Expect(changed[0].BaremetalInstanceType).To(Equal("gpu-a100"))
 		Expect(changed[0].NodeCount).To(Equal(int32(2)))
 	})
 
-	It("detects cluster_template change with unchanged node_count and host_type", func() {
+	It("detects cluster_template change with unchanged node_count and baremetal_instance_type", func() {
 		oldDims := map[string]any{
 			"cluster_template": "ocp-ci-small",
 			"components": []any{
-				map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": int32(2)},
+				map[string]any{"node_set": "gpu-workers", "component": "worker", "baremetal_instance_type": "gpu-h100", "node_count": int32(2)},
 			},
 		}
 		newDims := map[string]any{
 			"cluster_template": "ocp-ci-large",
 			"components": []any{
-				map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": int32(2)},
+				map[string]any{"node_set": "gpu-workers", "component": "worker", "baremetal_instance_type": "gpu-h100", "node_count": int32(2)},
 			},
 		}
 
@@ -840,19 +857,19 @@ var _ = Describe("ChangedComponents", func() {
 		Expect(changed[0].ClusterTemplate).To(Equal("ocp-ci-large"))
 	})
 
-	It("detects release_image change with unchanged node_count and host_type", func() {
+	It("detects release_image change with unchanged node_count and baremetal_instance_type", func() {
 		oldDims := map[string]any{
 			"cluster_template": "tmpl",
 			"release_image":    "quay.io/openshift-release-dev/ocp-release:4.17.0-x86_64",
 			"components": []any{
-				map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": int32(2)},
+				map[string]any{"node_set": "gpu-workers", "component": "worker", "baremetal_instance_type": "gpu-h100", "node_count": int32(2)},
 			},
 		}
 		newDims := map[string]any{
 			"cluster_template": "tmpl",
 			"release_image":    "quay.io/openshift-release-dev/ocp-release:4.18.0-x86_64",
 			"components": []any{
-				map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": int32(2)},
+				map[string]any{"node_set": "gpu-workers", "component": "worker", "baremetal_instance_type": "gpu-h100", "node_count": int32(2)},
 			},
 		}
 
@@ -866,13 +883,13 @@ var _ = Describe("ChangedComponents", func() {
 		oldDims := map[string]any{
 			"cluster_template": "tmpl",
 			"components": []any{
-				map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": int32(2)},
+				map[string]any{"node_set": "gpu-workers", "component": "worker", "baremetal_instance_type": "gpu-h100", "node_count": int32(2)},
 			},
 		}
 		newDims := map[string]any{
 			"cluster_template": "tmpl",
 			"components": []any{
-				map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": float64(2)},
+				map[string]any{"node_set": "gpu-workers", "component": "worker", "baremetal_instance_type": "gpu-h100", "node_count": float64(2)},
 			},
 		}
 
@@ -888,16 +905,16 @@ var _ = Describe("DimensionsEqual with nested CaaS components", func() {
 			"cluster_template": "ocp-ci-small",
 			"release_image":    "quay.io/ocp:4.17.0",
 			"components": []any{
-				map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
-				map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": int32(2)},
+				map[string]any{"node_set": "_control_plane", "component": "control_plane", "baremetal_instance_type": "_control_plane", "node_count": int32(1)},
+				map[string]any{"node_set": "gpu-workers", "component": "worker", "baremetal_instance_type": "gpu-h100", "node_count": int32(2)},
 			},
 		}
 		b := map[string]any{
 			"cluster_template": "ocp-ci-small",
 			"release_image":    "quay.io/ocp:4.17.0",
 			"components": []any{
-				map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
-				map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": int32(2)},
+				map[string]any{"node_set": "_control_plane", "component": "control_plane", "baremetal_instance_type": "_control_plane", "node_count": int32(1)},
+				map[string]any{"node_set": "gpu-workers", "component": "worker", "baremetal_instance_type": "gpu-h100", "node_count": int32(2)},
 			},
 		}
 		Expect(events.DimensionsEqual(a, b)).To(BeTrue())
@@ -907,13 +924,13 @@ var _ = Describe("DimensionsEqual with nested CaaS components", func() {
 		a := map[string]any{
 			"cluster_template": "tmpl",
 			"components": []any{
-				map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": int32(2)},
+				map[string]any{"node_set": "gpu-workers", "component": "worker", "baremetal_instance_type": "gpu-h100", "node_count": int32(2)},
 			},
 		}
 		b := map[string]any{
 			"cluster_template": "tmpl",
 			"components": []any{
-				map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": int32(4)},
+				map[string]any{"node_set": "gpu-workers", "component": "worker", "baremetal_instance_type": "gpu-h100", "node_count": int32(4)},
 			},
 		}
 		Expect(events.DimensionsEqual(a, b)).To(BeFalse())
@@ -923,14 +940,14 @@ var _ = Describe("DimensionsEqual with nested CaaS components", func() {
 		a := map[string]any{
 			"cluster_template": "tmpl",
 			"components": []any{
-				map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
+				map[string]any{"node_set": "_control_plane", "component": "control_plane", "baremetal_instance_type": "_control_plane", "node_count": int32(1)},
 			},
 		}
 		b := map[string]any{
 			"cluster_template": "tmpl",
 			"components": []any{
-				map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
-				map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": int32(2)},
+				map[string]any{"node_set": "_control_plane", "component": "control_plane", "baremetal_instance_type": "_control_plane", "node_count": int32(1)},
+				map[string]any{"node_set": "gpu-workers", "component": "worker", "baremetal_instance_type": "gpu-h100", "node_count": int32(2)},
 			},
 		}
 		Expect(events.DimensionsEqual(a, b)).To(BeFalse())
@@ -941,8 +958,8 @@ var _ = Describe("DimensionsEqual with nested CaaS components", func() {
 			"cluster_template": "tmpl",
 			"release_image":    "quay.io/ocp:4.17.0",
 			"components": []any{
-				map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
-				map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": int32(2)},
+				map[string]any{"node_set": "_control_plane", "component": "control_plane", "baremetal_instance_type": "_control_plane", "node_count": int32(1)},
+				map[string]any{"node_set": "gpu-workers", "component": "worker", "baremetal_instance_type": "gpu-h100", "node_count": int32(2)},
 			},
 		}
 
@@ -961,7 +978,7 @@ var _ = Describe("DimensionsEqual with nested CaaS components", func() {
 		stored := map[string]any{
 			"cluster_template": "tmpl",
 			"components": []any{
-				map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": int32(2)},
+				map[string]any{"node_set": "gpu-workers", "component": "worker", "baremetal_instance_type": "gpu-h100", "node_count": int32(2)},
 			},
 		}
 		data, err := json.Marshal(stored)
@@ -974,7 +991,7 @@ var _ = Describe("DimensionsEqual with nested CaaS components", func() {
 		incoming := map[string]any{
 			"cluster_template": "tmpl",
 			"components": []any{
-				map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": int32(4)},
+				map[string]any{"node_set": "gpu-workers", "component": "worker", "baremetal_instance_type": "gpu-h100", "node_count": int32(4)},
 			},
 		}
 
@@ -986,9 +1003,9 @@ var _ = Describe("DimensionsEqual with nested CaaS components", func() {
 			"cluster_template": "ocp-ci-small",
 			"release_image":    "quay.io/ocp:4.17.0",
 			"components": []any{
-				map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
-				map[string]any{"node_set": "cpu-workers", "component": "worker", "host_type": "cpu-only", "node_count": int32(3)},
-				map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": int32(2)},
+				map[string]any{"node_set": "_control_plane", "component": "control_plane", "baremetal_instance_type": "_control_plane", "node_count": int32(1)},
+				map[string]any{"node_set": "cpu-workers", "component": "worker", "baremetal_instance_type": "cpu-only", "node_count": int32(3)},
+				map[string]any{"node_set": "gpu-workers", "component": "worker", "baremetal_instance_type": "gpu-h100", "node_count": int32(2)},
 			},
 		}
 
@@ -1006,17 +1023,17 @@ var _ = Describe("DimensionsEqual with nested CaaS components", func() {
 		Expect(events.DimensionsEqual(rt1, rt2)).To(BeTrue())
 	})
 
-	It("detects host_type change within components", func() {
+	It("detects baremetal_instance_type change within components", func() {
 		a := map[string]any{
 			"cluster_template": "tmpl",
 			"components": []any{
-				map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": int32(2)},
+				map[string]any{"node_set": "gpu-workers", "component": "worker", "baremetal_instance_type": "gpu-h100", "node_count": int32(2)},
 			},
 		}
 		b := map[string]any{
 			"cluster_template": "tmpl",
 			"components": []any{
-				map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-a100", "node_count": int32(2)},
+				map[string]any{"node_set": "gpu-workers", "component": "worker", "baremetal_instance_type": "gpu-a100", "node_count": int32(2)},
 			},
 		}
 		Expect(events.DimensionsEqual(a, b)).To(BeFalse())

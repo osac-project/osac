@@ -956,7 +956,7 @@ var _ = Describe("Reconciler", func() {
 					Template: &privatev1.ClusterTemplateReference{Name: "ocp-ci-small"},
 					Version:  &privatev1.ClusterVersionReference{Id: "4.17.0", Name: "4.17.0"},
 					NodeSets: map[string]*privatev1.ClusterNodeSet{
-						"gpu-workers": {HostType: &privatev1.HostTypeReference{Name: "gpu-h100"}, Size: proto.Int32(2)},
+						"gpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "gpu-h100"}, Size: proto.Int32(2)},
 					},
 				},
 				Status: &privatev1.ClusterStatus{State: state},
@@ -988,7 +988,7 @@ var _ = Describe("Reconciler", func() {
 					Expect(data["resource_type"]).To(Equal(events.ResourceTypeClusterOrder))
 					bd := data["billing_dimensions"].(map[string]any)
 					Expect(bd).To(HaveKey("component"))
-					Expect(bd).To(HaveKey("host_type"))
+					Expect(bd).To(HaveKey("baremetal_instance_type"))
 					Expect(bd).NotTo(HaveKey("components"))
 				}
 			}
@@ -1023,8 +1023,8 @@ var _ = Describe("Reconciler", func() {
 					"cluster_template": "ocp-ci-small",
 					"release_image":    "4.17.0",
 					"components": []any{
-						map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": float64(1)},
-						map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": float64(2)},
+						map[string]any{"node_set": "_control_plane", "component": "control_plane", "baremetal_instance_type": "_control_plane", "node_count": float64(1)},
+						map[string]any{"node_set": "gpu-workers", "component": "worker", "baremetal_instance_type": "gpu-h100", "node_count": float64(2)},
 					},
 				},
 			}
@@ -1069,8 +1069,8 @@ var _ = Describe("Reconciler", func() {
 				BillingDimensions: map[string]any{
 					"cluster_template": "ocp-ci-small",
 					"components": []any{
-						map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": float64(1)},
-						map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": float64(2)},
+						map[string]any{"node_set": "_control_plane", "component": "control_plane", "baremetal_instance_type": "_control_plane", "node_count": float64(1)},
+						map[string]any{"node_set": "gpu-workers", "component": "worker", "baremetal_instance_type": "gpu-h100", "node_count": float64(2)},
 					},
 				},
 			}
@@ -1143,8 +1143,8 @@ var _ = Describe("Reconciler", func() {
 					"cluster_template": "ocp-ci-small",
 					"release_image":    "4.17.0",
 					"components": []any{
-						map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": float64(1)},
-						map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": float64(2)},
+						map[string]any{"node_set": "_control_plane", "component": "control_plane", "baremetal_instance_type": "_control_plane", "node_count": float64(1)},
+						map[string]any{"node_set": "gpu-workers", "component": "worker", "baremetal_instance_type": "gpu-h100", "node_count": float64(2)},
 					},
 				},
 			}

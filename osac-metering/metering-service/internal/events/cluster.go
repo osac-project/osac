@@ -209,10 +209,10 @@ func ClusterBillingDimensions(cl *privatev1.Cluster) map[string]any {
 	// assertion works for both fresh dims and JSONB-round-tripped dims.
 	components := []any{
 		map[string]any{
-			"node_set":   "_control_plane",
-			"component":  "control_plane",
-			"host_type":  "_control_plane",
-			"node_count": int32(1),
+			"node_set":                "_control_plane",
+			"component":               "control_plane",
+			"baremetal_instance_type": "_control_plane",
+			"node_count":              int32(1),
 		},
 	}
 
@@ -225,10 +225,10 @@ func ClusterBillingDimensions(cl *privatev1.Cluster) map[string]any {
 		for _, k := range keys {
 			ns := nodeSets[k]
 			components = append(components, map[string]any{
-				"node_set":   k,
-				"component":  "worker",
-				"host_type":  ns.GetHostType().GetName(),
-				"node_count": ns.GetSize(),
+				"node_set":                k,
+				"component":               "worker",
+				"baremetal_instance_type": ns.GetBaremetalInstanceType().GetName(),
+				"node_count":              ns.GetSize(),
 			})
 		}
 	}
@@ -239,24 +239,24 @@ func ClusterBillingDimensions(cl *privatev1.Cluster) map[string]any {
 
 // ComponentRecord represents one billing record in the N+1 decomposition.
 type ComponentRecord struct {
-	NodeSet         string
-	Component       string
-	HostType        string
-	NodeCount       int32
-	ClusterTemplate string
-	ReleaseImage    string
-	IsNew           bool
+	NodeSet               string
+	Component             string
+	BaremetalInstanceType string
+	NodeCount             int32
+	ClusterTemplate       string
+	ReleaseImage          string
+	IsNew                 bool
 }
 
 // FlatBillingDimensions returns per-component billing dimensions for a single
 // CloudEvent record.
 func (cr ComponentRecord) FlatBillingDimensions() map[string]any {
 	dims := map[string]any{
-		"cluster_template": cr.ClusterTemplate,
-		"node_set":         cr.NodeSet,
-		"component":        cr.Component,
-		"host_type":        cr.HostType,
-		"node_count":       cr.NodeCount,
+		"cluster_template":        cr.ClusterTemplate,
+		"node_set":                cr.NodeSet,
+		"component":               cr.Component,
+		"baremetal_instance_type": cr.BaremetalInstanceType,
+		"node_count":              cr.NodeCount,
 	}
 	if cr.ReleaseImage != "" {
 		dims[DimensionReleaseImage] = cr.ReleaseImage
@@ -295,18 +295,18 @@ func DecomposeClusterComponents(billingDims map[string]any) ([]ComponentRecord, 
 		}
 		nodeSet, _ := cm["node_set"].(string)
 		component, _ := cm["component"].(string)
-		hostType, _ := cm["host_type"].(string)
+		baremetalInstanceType, _ := cm["baremetal_instance_type"].(string)
 
 		nc, _ := toFloat64(cm["node_count"])
 		nodeCount := int32(nc)
 
 		records = append(records, ComponentRecord{
-			NodeSet:         nodeSet,
-			Component:       component,
-			HostType:        hostType,
-			NodeCount:       nodeCount,
-			ClusterTemplate: clusterTemplate,
-			ReleaseImage:    releaseImage,
+			NodeSet:               nodeSet,
+			Component:             component,
+			BaremetalInstanceType: baremetalInstanceType,
+			NodeCount:             nodeCount,
+			ClusterTemplate:       clusterTemplate,
+			ReleaseImage:          releaseImage,
 		})
 	}
 	sort.Slice(records, func(i, j int) bool {
@@ -323,8 +323,8 @@ func componentRecordLess(a, b ComponentRecord) bool {
 	if a.Component != b.Component {
 		return a.Component < b.Component
 	}
-	if a.HostType != b.HostType {
-		return a.HostType < b.HostType
+	if a.BaremetalInstanceType != b.BaremetalInstanceType {
+		return a.BaremetalInstanceType < b.BaremetalInstanceType
 	}
 	if a.NodeCount != b.NodeCount {
 		return a.NodeCount < b.NodeCount
@@ -400,12 +400,12 @@ func ChangedComponents(oldDims, newDims map[string]any) ([]ComponentRecord, erro
 	for _, r := range oldRecords {
 		if !newByKey[r.NodeSet] {
 			changed = append(changed, ComponentRecord{
-				NodeSet:         r.NodeSet,
-				Component:       r.Component,
-				HostType:        r.HostType,
-				NodeCount:       0,
-				ClusterTemplate: r.ClusterTemplate,
-				ReleaseImage:    r.ReleaseImage,
+				NodeSet:               r.NodeSet,
+				Component:             r.Component,
+				BaremetalInstanceType: r.BaremetalInstanceType,
+				NodeCount:             0,
+				ClusterTemplate:       r.ClusterTemplate,
+				ReleaseImage:          r.ReleaseImage,
 			})
 		}
 	}

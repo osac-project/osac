@@ -209,11 +209,11 @@ var _ = Describe("translateEvent", func() {
 				"tenant-acme",
 				"project-ml",
 				map[string]any{
-					"cluster_template": "ocp-ci-small",
-					"release_image":    "quay.io/openshift-release-dev/ocp-release:4.17.0-x86_64",
-					"component":        "control_plane",
-					"host_type":        "_control_plane",
-					"node_count":       1,
+					"cluster_template":        "ocp-ci-small",
+					"release_image":           "quay.io/openshift-release-dev/ocp-release:4.17.0-x86_64",
+					"component":               "control_plane",
+					"baremetal_instance_type": "_control_plane",
+					"node_count":              1,
 				},
 			)
 
@@ -223,6 +223,8 @@ var _ = Describe("translateEvent", func() {
 			Expect(endpoint).To(Equal("/caas/event"))
 			Expect(payload["cluster_template"]).To(Equal("ocp-ci-small"))
 			Expect(payload["component"]).To(Equal("control_plane"))
+			Expect(payload["baremetal_instance_type"]).To(Equal("_control_plane"))
+			Expect(payload).NotTo(HaveKey("host_type"))
 			Expect(payload["node_count"]).To(BeEquivalentTo(1))
 		})
 	})

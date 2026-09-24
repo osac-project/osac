@@ -310,8 +310,8 @@ var _ = Describe("Generator", func() {
 					"cluster_template": "ocp-ci-small",
 					"release_image":    "4.17.0",
 					"components": []any{
-						map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": float64(1)},
-						map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": float64(2)},
+						map[string]any{"node_set": "_control_plane", "component": "control_plane", "baremetal_instance_type": "_control_plane", "node_count": float64(1)},
+						map[string]any{"node_set": "gpu-workers", "component": "worker", "baremetal_instance_type": "gpu-h100", "node_count": float64(2)},
 					},
 				},
 			}
@@ -342,9 +342,9 @@ var _ = Describe("Generator", func() {
 				bd := data["billing_dimensions"].(map[string]any)
 				Expect(bd).NotTo(HaveKey("components"))
 				Expect(bd).To(HaveKey("component"))
-				Expect(bd).To(HaveKey("host_type"))
+				Expect(bd).To(HaveKey("baremetal_instance_type"))
 				Expect(bd).To(HaveKey("node_count"))
-				comp := bd["component"].(string) + ":" + bd["host_type"].(string)
+				comp := bd["component"].(string) + ":" + bd["baremetal_instance_type"].(string)
 				components[comp] = true
 			}
 			Expect(components).To(HaveKey("control_plane:_control_plane"))

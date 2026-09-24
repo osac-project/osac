@@ -15,11 +15,28 @@ cnv:
   enabled: false
 mce:
   enabled: true
-  osImages:
-    - openshiftVersion: "4.22"
-      version: "9.8.20260428-0"
-      url: "https://mirror.openshift.com/pub/openshift-v4/x86_64/dependencies/rhcos/4.22/4.22.0/rhcos-4.22.0-x86_64-live-iso.x86_64.iso"
-      cpuArchitecture: "x86_64"
+  imageService:
+    # Keep enabled until the Assisted discovery-artifact fix is released and
+    # verified. Do not disable this setting in the CaaS profile yet.
+    enabled: true
+  # Temporary MCE 5.0 operand bridge until a stable MCE 5.0 catalog is available.
+  imageOverrides:
+    - image-name: assisted-service
+      image-remote: quay.io/edge-infrastructure
+      image-digest: sha256:c007ecc530f4bb0a43814f4373bdec6e27d1fa3698554b0935a07c086802e479
+      image-key: assisted_service_9
+    - image-name: assisted-installer-agent
+      image-remote: quay.io/edge-infrastructure
+      image-digest: sha256:0f4f6041821d1a03da280090cf8a857e6b081487301de7e37553b0398925b391
+      image-key: assisted_installer_agent
+    - image-name: assisted-installer
+      image-remote: quay.io/edge-infrastructure
+      image-digest: sha256:04fe09dddf10be4fa7dfd91bde7b4c6addb60b3d1291596a9399fe057f5f1f3b
+      image-key: assisted_installer
+    - image-name: assisted-installer-controller
+      image-remote: quay.io/edge-infrastructure
+      image-digest: sha256:54c095c08defc738558948ef1be52dd980642bf0020570435a68384d1d5177a3
+      image-key: assisted_installer_controller
 
 # --- Infrastructure (osac-infra) ---
 caIssuer:

@@ -1,0 +1,139 @@
+{{- if and .Values.global.services.caas.enabled .Values.global.services.bmaas.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: seed-baremetal-catalog-item
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "40"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 5
+  activeDeadlineSeconds: 900
+  template:
+    metadata:
+      labels:
+        {{- include "osac.labels" . | nindent 8 }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      serviceAccountName: admin
+      initContainers:
+      {{- include "osac.waitForFulfillment" . | nindent 6 }}
+      containers:
+      - name: seed-catalog-item
+        image: {{ .Values.cliImage }}
+        command:
+          - /bin/bash
+          - -euo
+          - pipefail
+          - -c
+          - |
+            AUTH_TOKEN=$(< /var/run/secrets/kubernetes.io/serviceaccount/token)
+            API="https://fulfillment-internal-api:8001/api/private/v1"
+            BMIT_RESPONSE=/tmp/bmit-response.json
+
+            echo "Listing BareMetalInstanceTypes before seeding the system catalog item..."
+            BMIT_CODE=$(curl -skS \
+              --connect-timeout 5 \
+              --max-time 30 \
+              -o "${BMIT_RESPONSE}" \
+              -w '%{http_code}' \
+              -H "Authorization: Bearer ${AUTH_TOKEN}" \
+              "${API}/bare_metal_instance_types")
+
+            case "${BMIT_CODE}" in
+              2??)
+                ;;
+              *)
+                echo "ERROR: Failed to list BareMetalInstanceTypes (HTTP ${BMIT_CODE})" >&2
+                cat "${BMIT_RESPONSE}" >&2
+                exit 1
+                ;;
+            esac
+
+            USABLE_BMIT_COUNT=$(python3 -c '
+            import json
+            import sys
+
+            response = json.load(sys.stdin)
+            print(sum(1 for item in response.get("items", []) if item.get("id")))
+            ' < "${BMIT_RESPONSE}")
+
+            if [[ "${USABLE_BMIT_COUNT}" -eq 0 ]]; then
+              echo "No usable BareMetalInstanceType exists; catalog seed is a successful no-op."
+              exit 0
+            fi
+
+            PAYLOAD=$(python3 -c '
+            import json
+
+            print(json.dumps({
+                "metadata": {
+                    "name": "system-bmi-passthrough",
+                    "tenant": "system",
+                    "annotations": {
+                        "osac.openshift.io/tenant": "system",
+                        "osac.openshift.io/owner-reference": "BareMetalInstanceTemplate/osac.templates.bm_host_provisioning",
+                    },
+                },
+                "title": "System BMI Pass-through",
+                "template": {"id": "osac.templates.bm_host_provisioning", "shared": True},
+                "published": True,
+                "field_definitions": [],
+            }))
+            ')
+
+            RESPONSE=/tmp/bmci-response.json
+            CODE=$(curl -skS \
+              --connect-timeout 5 \
+              --max-time 30 \
+              -o "${RESPONSE}" \
+              -w '%{http_code}' \
+              -X POST \
+              -H "Authorization: Bearer ${AUTH_TOKEN}" \
+              -H "Content-Type: application/json" \
+              --data-binary "${PAYLOAD}" \
+              "${API}/baremetal_instance_catalog_items")
+
+            case "${CODE}" in
+              2??)
+                echo "Created BareMetalInstanceCatalogItem system-bmi-passthrough."
+                ;;
+              409)
+                echo "BareMetalInstanceCatalogItem system-bmi-passthrough already exists, skipping."
+                ;;
+              *)
+                echo "ERROR: Failed to create system-bmi-passthrough (HTTP ${CODE})" >&2
+                cat "${RESPONSE}" >&2
+                exit 1
+                ;;
+            esac
+        env:
+        - name: HOME
+          value: /tmp
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      restartPolicy: OnFailure
+{{- end }}

@@ -225,7 +225,11 @@ aap:
     eeImage: ""
     projectGitUri: ""
     projectGitBranch: ""
+    # Deprecated for CaaS: on-demand workers no longer use the pre-boot agent
+    # pool. Retained for standalone BMaaS host-inventory import.
     importAgentsEnabled: false
+    # Deprecated for CaaS: the BCM import backend belongs to the removed
+    # pre-boot pool path. Retained for standalone BMaaS.
     importBcmAgentsEnabled: false
   importAgents:
     servers: []
@@ -263,6 +267,8 @@ aap:
         HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: ""
         PARKING_VNET_NAME: ""
         IMPORT_AGENTS_NAMESPACE: ""
+        # Deprecated for CaaS: CaaS creates per-cluster InfraEnvs on demand.
+        # Retained for standalone BMaaS shared-InfraEnv workflows.
         IMPORT_AGENTS_INFRAENV_NAME: ""
         IMPORT_AGENTS_PULL_SECRET_NAME: ""
         IMPORT_AGENTS_DISABLE_BMC_CERT_VERIFICATION: ""

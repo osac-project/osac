@@ -4,6 +4,22 @@
   "description": "Configuration values for OSAC shared infrastructure (Phase 2)",
   "type": "object",
   "properties": {
+    "mce": {
+      "type": "object",
+      "properties": {
+        "imageService": {
+          "type": "object",
+          "description": "Assisted Image Service configuration",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Create and run the Assisted Image Service",
+              "default": true
+            }
+          }
+        }
+      }
+    },
     "bundledVault": {
       "type": "object",
       "description": "Bundled OpenBao (Vault-compatible) secret store for dev/CI environments. When enabled, deploys a single-replica OpenBao instance in dev mode with emptyDir storage.",

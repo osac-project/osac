@@ -803,12 +803,12 @@
             },
             "importAgentsEnabled": {
               "type": "boolean",
-              "description": "Enable ConfigMap-based bare metal agent import. Sets OSAC_IMPORT_AGENTS_ENABLED=true in the config-as-code-ig Secret and gates the import-agents-inventory ConfigMap.",
+              "description": "Enable ConfigMap-based bare metal agent import. Sets OSAC_IMPORT_AGENTS_ENABLED=true in the config-as-code-ig Secret and gates the import-agents-inventory ConfigMap. Deprecated for CaaS because on-demand workers no longer use the pre-boot pool; retained for standalone BMaaS host-inventory import.",
               "default": false
             },
             "importBcmAgentsEnabled": {
               "type": "boolean",
-              "description": "Enable BCM inventory backend. Sets OSAC_IMPORT_BCM_AGENTS_ENABLED=true in the config-as-code-ig Secret and gates the bcm-certs Secret.",
+              "description": "Enable BCM inventory backend. Sets OSAC_IMPORT_BCM_AGENTS_ENABLED=true in the config-as-code-ig Secret and gates the bcm-certs Secret. Deprecated for CaaS because the BCM import backend belongs to the removed pre-boot pool path; retained for standalone BMaaS.",
               "default": false
             }
           }
@@ -1012,7 +1012,7 @@
                     },
                     "IMPORT_AGENTS_INFRAENV_NAME": {
                       "type": "string",
-                      "description": "InfraEnv CR name for agent discovery (effective default: infraenv)"
+                      "description": "InfraEnv CR name for agent discovery (effective default: infraenv). Deprecated for CaaS because CaaS creates per-cluster InfraEnvs on demand; retained for standalone BMaaS shared-InfraEnv workflows."
                     },
                     "IMPORT_AGENTS_PULL_SECRET_NAME": {
                       "type": "string",

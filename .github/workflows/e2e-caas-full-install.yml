@@ -212,7 +212,7 @@ jobs:
       contents: read
       # See e2e-vmaas-full-install.yml's identical grant for why this is needed.
       id-token: write
-    uses: osac-project/osac-test-infra/.github/workflows/e2e-caas-full-install.yml@main
+    uses: rccrdpccl/osac-test-infra/.github/workflows/e2e-caas-full-install.yml@feat/caas-metal3-provisioning
     with:
       # test-source=osac prefixes tests/e2e/. PR/merge_group: full caas suite
       # (sanity + regression). Schedule: regression. workflow_dispatch: honor

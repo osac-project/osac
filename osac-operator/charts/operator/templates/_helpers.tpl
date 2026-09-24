@@ -99,3 +99,48 @@ Otherwise, falls back to global.services.<serviceKey>.enabled (default true).
 {{- $enabled -}}
 {{- end -}}
 {{- end }}
+
+{{/*
+Customer-managed AAP URL from the umbrella chart (global.existingAap).
+Empty when OSAC should install and use osac-aap.
+*/}}
+{{- define "osac-operator.existingAapUrl" -}}
+{{- dig "existingAap" "url" "" (.Values.global | default dict) | trim -}}
+{{- end }}
+
+{{- define "osac-operator.aapUrl" -}}
+{{- $existing := include "osac-operator.existingAapUrl" . -}}
+{{- if $existing -}}
+{{- $existing -}}
+{{- else -}}
+{{- .Values.aap.url | default "http://osac-aap/api/controller" -}}
+{{- end -}}
+{{- end }}
+
+{{- define "osac-operator.aapTokenSecretName" -}}
+{{- $existing := include "osac-operator.existingAapUrl" . -}}
+{{- $sec := dig "existingAap" "tokenSecret" (dict) (.Values.global | default dict) -}}
+{{- if $existing -}}
+{{- required "global.existingAap.tokenSecret.name is required when global.existingAap.url is set" (index $sec "name" | default "") -}}
+{{- else -}}
+{{- dig "tokenSecret" "name" "" (.Values.aap | default dict) -}}
+{{- end -}}
+{{- end }}
+
+{{- define "osac-operator.aapTokenSecretKey" -}}
+{{- $existing := include "osac-operator.existingAapUrl" . -}}
+{{- $sec := dig "existingAap" "tokenSecret" (dict) (.Values.global | default dict) -}}
+{{- if $existing -}}
+{{- index $sec "key" | default "token" -}}
+{{- else -}}
+{{- dig "tokenSecret" "key" "token" (.Values.aap | default dict) -}}
+{{- end -}}
+{{- end }}
+
+{{- define "osac-operator.aapTokenSecretOptional" -}}
+{{- if include "osac-operator.existingAapUrl" . -}}
+false
+{{- else -}}
+true
+{{- end -}}
+{{- end }}

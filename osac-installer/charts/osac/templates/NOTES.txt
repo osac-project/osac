@@ -11,10 +11,13 @@ Components deployed:
   Hub components (per management cluster):
     - OSAC Operator CRDs
     - OSAC Operator Controller Manager
-{{- if .Values.aap.aap.instance.enabled }}
+{{- $existingAapUrl := include "osac.existingAap.url" . }}
+{{- if $existingAapUrl }}
+    - Existing AAP ({{ $existingAapUrl }})
+{{- else if .Values.aap.aap.instance.enabled }}
     - AAP instance ({{ .Values.aap.aap.instance.name }})
 {{- end }}
-{{- if .Values.aap.bootstrap.enabled }}
+{{- if and .Values.aap.bootstrap.enabled (eq $existingAapUrl "") }}
     - AAP bootstrap job (post-install hook)
 {{- end }}
 
@@ -28,7 +31,16 @@ To check the status of the deployment:
   helm status {{ .Release.Name }} -n {{ .Release.Namespace }}
   kubectl get pods -n {{ .Release.Namespace }}
 
-{{- if .Values.aap.bootstrap.enabled }}
+{{- if $existingAapUrl }}
+
+Existing AAP: OSAC is using a customer-managed controller. No AnsibleAutomationPlatform
+CR, bootstrap job, or token-creation job was deployed. Create the token Secret
+in this namespace before install, and ensure OSAC job templates already exist
+on that AAP.
+
+  AAP URL:       {{ $existingAapUrl }}
+  Token secret:  {{ include "osac.existingAap.tokenSecretName" . }}
+{{- else if .Values.aap.bootstrap.enabled }}
 
 The AAP bootstrap job runs as a post-install hook. To monitor its progress:
 

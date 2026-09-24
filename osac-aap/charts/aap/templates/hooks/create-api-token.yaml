@@ -1,4 +1,4 @@
-{{- if .Values.apiToken.create }}
+{{- if and .Values.apiToken.create (eq (include "osac-aap.existingUrl" .) "") }}
 apiVersion: batch/v1
 kind: Job
 metadata:

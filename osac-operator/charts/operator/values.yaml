@@ -16,6 +16,9 @@ resources:
 aap:
   url: ""
   token: ""
+  tokenSecret:
+    name: ""
+    key: "token"
   insecureSkipVerify: "true"
   statusPollInterval: "30s"
   templatePrefix: "osac"

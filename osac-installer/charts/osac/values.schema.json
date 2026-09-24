@@ -75,6 +75,30 @@
         "osacDeploymentId": {
           "type": "string",
           "description": "Required stable identity for this OSAC/fulfillment-service deployment"
+        },
+        "existingAap": {
+          "type": "object",
+          "description": "Customer-managed AAP. When url is set, OSAC does not create osac-aap and uses this controller instead.",
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "AAP controller API URL (e.g. https://aap.example.com/api/controller)"
+            },
+            "tokenSecret": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "Secret in the OSAC namespace that holds the AAP token"
+                },
+                "key": {
+                  "type": "string",
+                  "description": "Key in the Secret",
+                  "default": "token"
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -209,6 +233,21 @@
             "token": {
               "type": "string",
               "description": "AAP API token"
+            },
+            "tokenSecret": {
+              "type": "object",
+              "description": "Existing Secret that holds the AAP API token",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "Secret name in the OSAC namespace"
+                },
+                "key": {
+                  "type": "string",
+                  "description": "Key in the Secret",
+                  "default": "token"
+                }
+              }
             },
             "insecureSkipVerify": {
               "type": "string",

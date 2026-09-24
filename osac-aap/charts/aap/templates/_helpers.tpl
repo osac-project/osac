@@ -39,6 +39,14 @@ AAP instance name
 {{- end }}
 
 {{/*
+Non-empty when the umbrella chart points at a customer-managed AAP
+(global.existingAap.url). Skip creating osac-aap in that case.
+*/}}
+{{- define "osac-aap.existingUrl" -}}
+{{- dig "existingAap" "url" "" (.Values.global | default dict) | trim -}}
+{{- end }}
+
+{{/*
 AAP gateway hostname (service name)
 */}}
 {{- define "osac-aap.gatewayHostname" -}}

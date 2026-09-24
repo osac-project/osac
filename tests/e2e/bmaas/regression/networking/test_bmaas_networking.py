@@ -322,9 +322,7 @@ class TestBmaasNetworking:
         bmi1 = self.state["bmi1"]
         bmi3 = self.state["bmi3"]
 
-        # Verify SSH transport is healthy so a connection failure cannot masquerade as "no connectivity".
-        bmi_ssh.ssh_bmi(bmi1["ssh_host"], "true")
-
+        # The probe helper requires a completion marker from the same SSH command.
         assert not bmi_ssh.arping(bmi1["ssh_host"], bmi3["ip"]), (
             f"arping from BMI1 ({bmi1['ip']}, subnet A) to BMI3 ({bmi3['ip']}, subnet B) "
             f"succeeded unexpectedly — different subnets should be different broadcast domains"
@@ -334,9 +332,7 @@ class TestBmaasNetworking:
         _require(self.state, "bmi1")
         bmi1 = self.state["bmi1"]
 
-        # Verify SSH transport is healthy so a connection failure cannot masquerade as "no connectivity".
-        bmi_ssh.ssh_bmi(bmi1["ssh_host"], "true")
-
+        # The probe helper requires a completion marker from the same SSH command.
         assert not bmi_ssh.ping(bmi1["ssh_host"], mgmt_cluster_ip), (
             f"ping from BMI1 ({bmi1['ip']}) to management cluster ({mgmt_cluster_ip}) "
             f"succeeded unexpectedly — tenant isolation should prevent cross-VNet traffic"

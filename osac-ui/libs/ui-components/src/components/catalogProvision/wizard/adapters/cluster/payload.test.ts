@@ -150,6 +150,104 @@ describe('buildClusterCreatePayload', () => {
     expect(nodeSets?.['__proto__']).toEqual({ hostType: { id: 'acme_1tb' }, size: 3 });
   });
 
+  it('omits networkAttachment when useDefaultNetwork is true', () => {
+    const values = {
+      ...createEmptyClusterValues(),
+      catalogItemId: clusterCatalogItem.id,
+      metadata: { name: 'my-cluster', project: '' },
+      spec: {
+        ...createEmptyClusterValues().spec,
+        pullSecretSecret: { name: 'secret' },
+        useDefaultNetwork: true,
+        networkAttachment: {
+          virtualNetwork: 'vn-1',
+          subnet: 'subnet-1',
+          securityGroups: ['sg-1'],
+        },
+      },
+    };
+
+    const payload = buildClusterCreatePayload(values, clusterCatalogItem);
+    expect(payload.spec).not.toHaveProperty('networkAttachment');
+  });
+
+  it('omits networkAttachment when useDefaultNetwork is false but pickers are empty', () => {
+    const values = {
+      ...createEmptyClusterValues(),
+      catalogItemId: clusterCatalogItem.id,
+      metadata: { name: 'my-cluster', project: '' },
+      spec: {
+        ...createEmptyClusterValues().spec,
+        pullSecretSecret: { name: 'secret' },
+        useDefaultNetwork: false,
+        networkAttachment: {
+          virtualNetwork: '',
+          subnet: '',
+          securityGroups: [],
+        },
+      },
+    };
+
+    const payload = buildClusterCreatePayload(values, clusterCatalogItem);
+    expect(payload.spec).not.toHaveProperty('networkAttachment');
+  });
+
+  it('includes networkAttachment with subnet and security groups when pickers have values', () => {
+    const values = {
+      ...createEmptyClusterValues(),
+      catalogItemId: clusterCatalogItem.id,
+      metadata: { name: 'my-cluster', project: '' },
+      spec: {
+        ...createEmptyClusterValues().spec,
+        pullSecretSecret: { name: 'secret' },
+        useDefaultNetwork: false,
+        networkAttachment: {
+          virtualNetwork: 'vn-1',
+          subnet: 'my-subnet',
+          securityGroups: ['sg-1', 'sg-2'],
+        },
+      },
+    };
+
+    const payload = buildClusterCreatePayload(values, clusterCatalogItem);
+    expect(payload.spec?.networkAttachment).toEqual({
+      subnet: { name: 'my-subnet' },
+      securityGroups: [{ name: 'sg-1' }, { name: 'sg-2' }],
+    });
+  });
+
+  it('includes autoExternalIpAttachment only when true', () => {
+    const values = {
+      ...createEmptyClusterValues(),
+      catalogItemId: clusterCatalogItem.id,
+      metadata: { name: 'my-cluster', project: '' },
+      spec: {
+        ...createEmptyClusterValues().spec,
+        pullSecretSecret: { name: 'secret' },
+        autoExternalIpAttachment: true,
+      },
+    };
+
+    const payload = buildClusterCreatePayload(values, clusterCatalogItem);
+    expect(payload.spec?.autoExternalIpAttachment).toBe(true);
+  });
+
+  it('omits autoExternalIpAttachment when false', () => {
+    const values = {
+      ...createEmptyClusterValues(),
+      catalogItemId: clusterCatalogItem.id,
+      metadata: { name: 'my-cluster', project: '' },
+      spec: {
+        ...createEmptyClusterValues().spec,
+        pullSecretSecret: { name: 'secret' },
+        autoExternalIpAttachment: false,
+      },
+    };
+
+    const payload = buildClusterCreatePayload(values, clusterCatalogItem);
+    expect(payload.spec).not.toHaveProperty('autoExternalIpAttachment');
+  });
+
   it.each([
     ['default (no project)', ''],
     ['top-level project', 'my-project'],

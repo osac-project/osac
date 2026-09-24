@@ -19,6 +19,13 @@ export const createEmptyClusterValues = (): ClusterWizardValues => ({
       podCidr: '',
       serviceCidr: '',
     },
+    useDefaultNetwork: true,
+    networkAttachment: {
+      virtualNetwork: '',
+      subnet: '',
+      securityGroups: [],
+    },
+    autoExternalIpAttachment: false,
   },
 });
 
@@ -68,6 +75,22 @@ export const buildClusterCreatePayload = (
       ...(podCidr ? { podCidr } : {}),
       ...(serviceCidr ? { serviceCidr } : {}),
     };
+  }
+
+  if (!values.spec.useDefaultNetwork) {
+    const subnetName = values.spec.networkAttachment.subnet.trim();
+    if (subnetName) {
+      spec.networkAttachment = {
+        subnet: { name: subnetName },
+        securityGroups: values.spec.networkAttachment.securityGroups
+          .filter((sg) => sg.trim())
+          .map((sg) => ({ name: sg })),
+      };
+    }
+  }
+
+  if (values.spec.autoExternalIpAttachment) {
+    spec.autoExternalIpAttachment = true;
   }
 
   return {

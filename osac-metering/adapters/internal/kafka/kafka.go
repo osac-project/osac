@@ -20,6 +20,14 @@ import (
 	"github.com/xdg-go/scram"
 )
 
+// KafkaConfig configures the Kafka consumer connection.
+type KafkaConfig struct {
+	TLSEnabled   bool   // Enable TLS for broker connections
+	TLSCACert    string // Path to CA certificate file (empty = system CAs)
+	SASLUser     string // SASL/SCRAM username
+	SASLPassFile string // Path to file containing SASL password
+}
+
 // newConsumerConfig creates a Sarama config for the adapter consumer group.
 func newConsumerConfig(cfg KafkaConfig) (*sarama.Config, error) {
 	sc := sarama.NewConfig()

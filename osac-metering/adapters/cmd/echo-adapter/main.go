@@ -45,9 +45,10 @@ import (
 
 	"github.com/go-logr/stdr"
 
-	"github.com/osac-project/osac-metering/adapters"
 	"github.com/osac-project/osac-metering/adapters/echo"
 	"github.com/osac-project/osac-metering/adapters/internal/envutil"
+	"github.com/osac-project/osac-metering/adapters/internal/kafka"
+	"github.com/osac-project/osac-metering/adapters/internal/runner"
 )
 
 func main() {
@@ -77,9 +78,9 @@ func main() {
 
 	logger := stdr.New(log.New(os.Stderr, "", log.LstdFlags))
 
-	kafkaCfg := adapters.KafkaConfigFromEnv()
+	kafkaCfg := kafka.KafkaConfigFromEnv()
 
-	dlqOpt, dlqClose, err := adapters.DLQOptionFromEnv(brokers, kafkaCfg)
+	dlqOpt, dlqClose, err := runner.DLQOptionFromEnv(brokers, kafkaCfg)
 	if err != nil {
 		log.Fatalf("setting up DLQ: %v", err)
 	}
@@ -88,17 +89,17 @@ func main() {
 			log.Printf("DLQ producer close failed: %v", err)
 		}
 	}()
-	var opts []adapters.RunnerOption
+	var opts []runner.RunnerOption
 	if dlqOpt != nil {
 		opts = append(opts, dlqOpt)
-		log.Printf("DLQ enabled: topic=%s", envutil.EnvOrDefault("DLQ_TOPIC", adapters.TopicDLQ))
+		log.Printf("DLQ enabled: topic=%s", envutil.EnvOrDefault("DLQ_TOPIC", kafka.TopicDLQ))
 	}
 
 	adapter := echo.NewAdapter(bufferSize)
-	runner := adapters.NewRunner(adapter, adapters.RunnerConfig{
+	runner := runner.NewRunner(adapter, runner.RunnerConfig{
 		Brokers:       brokers,
 		ConsumerGroup: group,
-		Topics:        adapters.AllTopics,
+		Topics:        kafka.AllTopics,
 		FlushInterval: flushInterval,
 		Kafka:         kafkaCfg,
 	}, logger, opts...)
@@ -137,7 +138,7 @@ func main() {
 	defer cancel()
 
 	log.Printf("starting echo adapter: broker_count=%d topics=%v group=%s flush=%s",
-		len(strings.Split(brokers, ",")), adapters.AllTopics, group, flushInterval)
+		len(strings.Split(brokers, ",")), kafka.AllTopics, group, flushInterval)
 
 	if err := runner.Run(ctx); err != nil {
 		log.Fatalf("runner error: %v", err)

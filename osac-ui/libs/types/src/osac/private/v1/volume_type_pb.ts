@@ -19,6 +19,9 @@ import type { GenEnum, GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2"
 import { enumDesc, fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
 import { file_buf_validate_validate } from "../../../buf/validate/validate_pb";
 import { file_cleanapi_cleanapi } from "../../../cleanapi/cleanapi_pb";
+import { file_google_api_field_behavior } from "../../../google/api/field_behavior_pb";
+import type { Timestamp } from "../../../google/protobuf/timestamp_pb";
+import { file_google_protobuf_timestamp } from "../../../google/protobuf/timestamp_pb";
 import type { Metadata } from "./metadata_type_pb";
 import { file_osac_private_v1_metadata_type } from "./metadata_type_pb";
 import type { StorageProtocol } from "./storage_common_type_pb";
@@ -29,7 +32,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/private/v1/volume_type.proto.
  */
 export const file_osac_private_v1_volume_type: GenFile = /*@__PURE__*/
-  fileDesc("CiFvc2FjL3ByaXZhdGUvdjEvdm9sdW1lX3R5cGUucHJvdG8SD29zYWMucHJpdmF0ZS52MSKbAQoGVm9sdW1lEgoKAmlkGAEgASgJEisKCG1ldGFkYXRhGAIgASgLMhkub3NhYy5wcml2YXRlLnYxLk1ldGFkYXRhEikKBHNwZWMYAyABKAsyGy5vc2FjLnByaXZhdGUudjEuVm9sdW1lU3BlYxItCgZzdGF0dXMYBCABKAsyHS5vc2FjLnByaXZhdGUudjEuVm9sdW1lU3RhdHVzIogBCgpWb2x1bWVTcGVjEh0KDHN0b3JhZ2VfdGllchgBIAEoCUIHukgEcgIQARIZCghzaXplX2dpYhgCIAEoA0IHukgEIgIgABJACgthY2Nlc3NfbW9kZRgDIAEoDjIhLm9zYWMucHJpdmF0ZS52MS5Wb2x1bWVBY2Nlc3NNb2RlQgi6SAWCAQIQASLJAgoMVm9sdW1lU3RhdHVzEisKBXN0YXRlGAEgASgOMhwub3NhYy5wcml2YXRlLnYxLlZvbHVtZVN0YXRlEhQKB21lc3NhZ2UYAiABKAlIAIgBARIYChB2ZW5kb3Jfdm9sdW1lX2lkGAMgASgJEg8KB2JhY2tlbmQYBCABKAkSMgoIcHJvdG9jb2wYBSABKA4yIC5vc2FjLnByaXZhdGUudjEuU3RvcmFnZVByb3RvY29sEgsKA2h1YhgGIAEoCRJICg52ZW5kb3JfY29udGV4dBgHIAMoCzIwLm9zYWMucHJpdmF0ZS52MS5Wb2x1bWVTdGF0dXMuVmVuZG9yQ29udGV4dEVudHJ5GjQKElZlbmRvckNvbnRleHRFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBQgoKCF9tZXNzYWdlKtkBChBWb2x1bWVBY2Nlc3NNb2RlEiIKHlZPTFVNRV9BQ0NFU1NfTU9ERV9VTlNQRUNJRklFRBAAEiYKIlZPTFVNRV9BQ0NFU1NfTU9ERV9SRUFEX1dSSVRFX09OQ0UQARIlCiFWT0xVTUVfQUNDRVNTX01PREVfUkVBRF9PTkxZX01BTlkQAhImCiJWT0xVTUVfQUNDRVNTX01PREVfUkVBRF9XUklURV9NQU5ZEAMSKgomVk9MVU1FX0FDQ0VTU19NT0RFX1JFQURfV1JJVEVfT05DRV9QT0QQBCqwAQoLVm9sdW1lU3RhdGUSHAoYVk9MVU1FX1NUQVRFX1VOU1BFQ0lGSUVEEAASGQoVVk9MVU1FX1NUQVRFX0NSRUFUSU5HEAESGgoWVk9MVU1FX1NUQVRFX0FWQUlMQUJMRRACEhcKE1ZPTFVNRV9TVEFURV9GQUlMRUQQAxIZChVWT0xVTUVfU1RBVEVfREVMRVRJTkcQBBIYChRWT0xVTUVfU1RBVEVfREVMRVRFRBAFQgaKtRgCCAFiBnByb3RvMw", [file_buf_validate_validate, file_cleanapi_cleanapi, file_osac_private_v1_metadata_type, file_osac_private_v1_storage_common_type]);
+  fileDesc("CiFvc2FjL3ByaXZhdGUvdjEvdm9sdW1lX3R5cGUucHJvdG8SD29zYWMucHJpdmF0ZS52MSKbAQoGVm9sdW1lEgoKAmlkGAEgASgJEisKCG1ldGFkYXRhGAIgASgLMhkub3NhYy5wcml2YXRlLnYxLk1ldGFkYXRhEikKBHNwZWMYAyABKAsyGy5vc2FjLnByaXZhdGUudjEuVm9sdW1lU3BlYxItCgZzdGF0dXMYBCABKAsyHS5vc2FjLnByaXZhdGUudjEuVm9sdW1lU3RhdHVzIoIBCg5Wb2x1bWVUb3BvbG9neRI/CghzZWdtZW50cxgBIAMoCzItLm9zYWMucHJpdmF0ZS52MS5Wb2x1bWVUb3BvbG9neS5TZWdtZW50c0VudHJ5Gi8KDVNlZ21lbnRzRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4ASK7AQoKVm9sdW1lU3BlYxIdCgxzdG9yYWdlX3RpZXIYASABKAlCB7pIBHICEAESGQoIc2l6ZV9naWIYAiABKANCB7pIBCICIAASQAoLYWNjZXNzX21vZGUYAyABKA4yIS5vc2FjLnByaXZhdGUudjEuVm9sdW1lQWNjZXNzTW9kZUIIukgFggECEAESMQoIdG9wb2xvZ3kYBCABKAsyHy5vc2FjLnByaXZhdGUudjEuVm9sdW1lVG9wb2xvZ3ki4QMKDFZvbHVtZVN0YXR1cxIrCgVzdGF0ZRgBIAEoDjIcLm9zYWMucHJpdmF0ZS52MS5Wb2x1bWVTdGF0ZRIUCgdtZXNzYWdlGAIgASgJSACIAQESIAoQdmVuZG9yX3ZvbHVtZV9pZBgDIAEoCUIGirUYAggBEjoKCHByb3RvY29sGAUgASgOMiAub3NhYy5wcml2YXRlLnYxLlN0b3JhZ2VQcm90b2NvbEIGirUYAggBEhMKA2h1YhgGIAEoCUIGirUYAggBElAKDnZlbmRvcl9jb250ZXh0GAcgAygLMjAub3NhYy5wcml2YXRlLnYxLlZvbHVtZVN0YXR1cy5WZW5kb3JDb250ZXh0RW50cnlCBoq1GAIIARIYCghwcm92aWRlchgEIAEoCUIGirUYAggBEkQKFXN0YXRlX3RyYW5zaXRpb25fdGltZRgJIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXBCCeBBA4q1GAIIARInChRwcm92aXNpb25lZF9zaXplX2dpYhgKIAEoA0IJ4EEDirUYAggBGjQKElZlbmRvckNvbnRleHRFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBQgoKCF9tZXNzYWdlKtkBChBWb2x1bWVBY2Nlc3NNb2RlEiIKHlZPTFVNRV9BQ0NFU1NfTU9ERV9VTlNQRUNJRklFRBAAEiYKIlZPTFVNRV9BQ0NFU1NfTU9ERV9SRUFEX1dSSVRFX09OQ0UQARIlCiFWT0xVTUVfQUNDRVNTX01PREVfUkVBRF9PTkxZX01BTlkQAhImCiJWT0xVTUVfQUNDRVNTX01PREVfUkVBRF9XUklURV9NQU5ZEAMSKgomVk9MVU1FX0FDQ0VTU19NT0RFX1JFQURfV1JJVEVfT05DRV9QT0QQBCqwAQoLVm9sdW1lU3RhdGUSHAoYVk9MVU1FX1NUQVRFX1VOU1BFQ0lGSUVEEAASGQoVVk9MVU1FX1NUQVRFX0NSRUFUSU5HEAESGgoWVk9MVU1FX1NUQVRFX0FWQUlMQUJMRRACEhcKE1ZPTFVNRV9TVEFURV9GQUlMRUQQAxIZChVWT0xVTUVfU1RBVEVfREVMRVRJTkcQBBIYChRWT0xVTUVfU1RBVEVfREVMRVRFRBAFQhaKtRgSCAESDm9zYWMucHVibGljLnYxYgZwcm90bzM", [file_buf_validate_validate, file_cleanapi_cleanapi, file_google_api_field_behavior, file_google_protobuf_timestamp, file_osac_private_v1_metadata_type, file_osac_private_v1_storage_common_type]);
 
 /**
  * Represents a block storage volume managed by the OSAC storage control plane.
@@ -41,7 +44,7 @@ export const file_osac_private_v1_volume_type: GenFile = /*@__PURE__*/
  *
  * Volumes are created through the private API, typically by the OSAC CSI driver in response to a
  * PVC on a tenant cluster. The spec captures the user's requested configuration (tier, size,
- * access mode), while the status tracks the system-resolved state (vendor volume ID, backend,
+ * access mode), while the status tracks the system-resolved state (vendor volume ID, provider,
  * protocol).
  *
  * @generated from message osac.private.v1.Volume
@@ -84,13 +87,33 @@ export const VolumeSchema: GenMessage<Volume> = /*@__PURE__*/
   messageDesc(file_osac_private_v1_volume_type, 0);
 
 /**
+ * CSI-style topology segments that constrain where a volume may be
+ * provisioned. Providers interpret only the segments they support.
+ *
+ * @generated from message osac.private.v1.VolumeTopology
+ */
+export type VolumeTopology = Message<"osac.private.v1.VolumeTopology"> & {
+  /**
+   * @generated from field: map<string, string> segments = 1;
+   */
+  segments: { [key: string]: string };
+};
+
+/**
+ * Describes the message osac.private.v1.VolumeTopology.
+ * Use `create(VolumeTopologySchema)` to create a new message.
+ */
+export const VolumeTopologySchema: GenMessage<VolumeTopology> = /*@__PURE__*/
+  messageDesc(file_osac_private_v1_volume_type, 1);
+
+/**
  * Defines the desired configuration for a Volume. All fields are immutable after creation.
  *
  * @generated from message osac.private.v1.VolumeSpec
  */
 export type VolumeSpec = Message<"osac.private.v1.VolumeSpec"> & {
   /**
-   * Name of the StorageTier that determines which backend and protocol serve this volume.
+   * Name of the StorageTier that determines which provider and protocol serve this volume.
    *
    * @generated from field: string storage_tier = 1;
    */
@@ -109,6 +132,13 @@ export type VolumeSpec = Message<"osac.private.v1.VolumeSpec"> & {
    * @generated from field: osac.private.v1.VolumeAccessMode access_mode = 3;
    */
   accessMode: VolumeAccessMode;
+
+  /**
+   * Optional CSI-style topology segments supplied by the volume requester.
+   *
+   * @generated from field: osac.private.v1.VolumeTopology topology = 4;
+   */
+  topology?: VolumeTopology | undefined;
 };
 
 /**
@@ -116,7 +146,7 @@ export type VolumeSpec = Message<"osac.private.v1.VolumeSpec"> & {
  * Use `create(VolumeSpecSchema)` to create a new message.
  */
 export const VolumeSpecSchema: GenMessage<VolumeSpec> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_volume_type, 1);
+  messageDesc(file_osac_private_v1_volume_type, 2);
 
 /**
  * Represents the current operational state of a Volume.
@@ -140,19 +170,11 @@ export type VolumeStatus = Message<"osac.private.v1.VolumeStatus"> & {
 
   /**
    * Opaque identifier assigned by the vendor storage array. Set by the osac-operator after vendor
-   * CSI CreateVolume succeeds.
+   * CSI CreateVolume succeeds. Visible only through the private API.
    *
    * @generated from field: string vendor_volume_id = 3;
    */
   vendorVolumeId: string;
-
-  /**
-   * Name of the StorageBackend that serves this volume. Resolved during tier resolution at
-   * creation time. Visible only through the private API.
-   *
-   * @generated from field: string backend = 4;
-   */
-  backend: string;
 
   /**
    * Storage protocol used for this volume. Resolved during tier resolution at creation time.
@@ -164,7 +186,8 @@ export type VolumeStatus = Message<"osac.private.v1.VolumeStatus"> & {
 
   /**
    * Identifier of the hub cluster where the Volume CR is created. Set by the fulfillment-service
-   * reconciler when selecting the hub. Used to look up the hub connection during delete.
+   * reconciler when selecting the hub. Used to look up the hub connection during delete. Visible
+   * only through the private API.
    *
    * @generated from field: string hub = 6;
    */
@@ -175,10 +198,35 @@ export type VolumeStatus = Message<"osac.private.v1.VolumeStatus"> & {
    * "subsystem" and "vip_pool_name"). Opaque to fulfillment-service and osac-csi-driver: set by
    * the osac-operator from the same parameters it used for the vendor CreateVolume call, and
    * forwarded unchanged by osac-csi-driver to the vendor CSI controller's ControllerPublishVolume.
+   * Visible only through the private API.
    *
    * @generated from field: map<string, string> vendor_context = 7;
    */
   vendorContext: { [key: string]: string };
+
+  /**
+   * Provider selected by StorageTier resolution. This is the provider key used by the operator
+   * to select a VendorProvisioner implementation.
+   *
+   * @generated from field: string provider = 4;
+   */
+  provider: string;
+
+  /**
+   * Time at which the lifecycle state last changed. Written by the operator
+   * and persisted unchanged by fulfillment-service.
+   *
+   * @generated from field: google.protobuf.Timestamp state_transition_time = 9;
+   */
+  stateTransitionTime?: Timestamp | undefined;
+
+  /**
+   * Capacity successfully committed on the vendor storage array. Visible only
+   * through the private API.
+   *
+   * @generated from field: int64 provisioned_size_gib = 10;
+   */
+  provisionedSizeGib: bigint;
 };
 
 /**
@@ -186,7 +234,7 @@ export type VolumeStatus = Message<"osac.private.v1.VolumeStatus"> & {
  * Use `create(VolumeStatusSchema)` to create a new message.
  */
 export const VolumeStatusSchema: GenMessage<VolumeStatus> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_volume_type, 2);
+  messageDesc(file_osac_private_v1_volume_type, 3);
 
 /**
  * Access modes for Volume resources, matching Kubernetes PersistentVolume access modes.

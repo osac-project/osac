@@ -18,6 +18,9 @@ export * from './osac/public/v1/storage_common_type_pb.js'
 export * from './osac/public/v1/storage_tier_type_pb.js'
 export * from './osac/public/v1/storage_tiers_service_pb.js'
 
+export * from './osac/public/v1/volume_type_pb.js'
+export * from './osac/public/v1/volumes_service_pb.js'
+
 export * from './osac/public/v1/organization_type_pb.js'
 export * from './osac/public/v1/organizations_service_pb.js'
 

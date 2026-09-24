@@ -13,18 +13,16 @@ aap:
     redisMode: standalone
     routeTlsTerminationMechanism: Edge
     imagePullPolicy: IfNotPresent
-
 bootstrap:
   enabled: true
-  image: ghcr.io/osac-project/osac-aap:latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
+  image: ghcr.io/osac-project/osac-aap:sha-b2c6e54 # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
   cliImage: quay.io/openshift/origin-cli:4.20.0
   backoffLimit: 15
   readinessConsecutiveSuccesses: 3
-
 configAsCode:
   manifestSecret: "config-as-code-manifest-ig"
   secret: "config-as-code-ig"
-  eeImage: ""
+  eeImage: "ghcr.io/osac-project/osac-aap:sha-b2c6e54"
   # Controller's own execution_environment.pull field (always / missing /
   # never). Left empty by default (config-as-code-secret.yaml omits the env
   # var, Ansible side falls back to "always", preserving today's behavior
@@ -39,21 +37,16 @@ configAsCode:
   manifest:
     create: false
     data: {}
-
 importAgents:
   servers: []
-
 importBcmAgents:
   cert: ""
   key: ""
-
 serviceAccounts:
   osacSa: "osac-sa"
   templatePublisher: "template-publisher"
-
 apiToken:
   create: true
-
 instanceGroups:
   clusterFulfillment:
     enabled: false

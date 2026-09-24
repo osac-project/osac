@@ -34,6 +34,7 @@ The following table lists the configurable parameters of the chart and their def
 | `log.bodies`               | Enable logging of HTTP/gRPC request and response bodies                           | `false`                                                        |
 | `images.service`           | Fulfillment service container image                                               | `ghcr.io/osac/fulfillment-service:main`                        |
 | `images.envoy`             | Envoy proxy container image                                                       | `docker.io/envoyproxy/envoy:v1.37.1`                           |
+| `ingressProxy.concurrency` | Number of worker threads for the fulfillment ingress proxy                       | `4`                                                            |
 | `database.connection`      | List of sources for database connection parameters (see below)                    | `[]`                                                           |
 
 **Note on hostnames:** Both `externalHostname` and `internalHostname` are required because TLS

@@ -121,6 +121,7 @@ applicable integration tests separately to validate workflow behavior.
 
 - **Filters, variable transforms, and isolated plugin logic:** Include invalid input and default handling.
 - **Ansible roles, workflow tasks, hooks, leases, finalizers, or Kubernetes resources:** The test must exercise the role/playbook through Ansible against Kind.
+- **Netris tenant networking idempotency (OSAC-4923):** Unit tests cover `netris.controller` idempotency filters (immutable mismatch, default-label detection, V-Net port membership). Component target `tests/integration/targets/netris_idempotency/` exercises default-delete refuse, mismatch messaging, and move membership helpers without a live Netris controller. SecurityGroup stale ACL prune is **out of scope** here ([OSAC-4888](https://redhat.atlassian.net/browse/OSAC-4888)); attached-subnet ACL scoping is [OSAC-4925](https://redhat.atlassian.net/browse/OSAC-4925). Live fabric convergence belongs under the qualifying [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) provider suite.
 - **Execution-environment definition or dependency inputs:** Image success does not prove the workflow boundary.
 - **AAP, OpenStack, KubeVirt/RHACM, or provider provisioning:** Kind-only tests with mocks cannot claim provider coverage.
 - **Storage-provider behavior:** The mock VMS server validates role logic, not the provider API.

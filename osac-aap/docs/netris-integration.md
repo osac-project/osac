@@ -339,3 +339,11 @@ credentials:
 |----------|------|
 | ConfigMap `network-fulfillment-ig` | `NETRIS_CONTROLLER_URL`, `NETRIS_USERNAME`, `NETRIS_SITE_ID`, `NETRIS_TENANT_ID`, `NETRIS_TENANT_NAME` |
 | Secret `network-fulfillment-ig` | `NETRIS_PASSWORD` |
+
+## Idempotency and update-safety
+
+Tenant networking create/delete/move playbooks must be safe to rerun and must
+fail clearly on immutable field drift (no delete-and-recreate of defaults).
+See [netris-idempotency.md](netris-idempotency.md) (OSAC-4923). SecurityGroup
+ACL prune and attached-subnet scoping remain [OSAC-4888](https://redhat.atlassian.net/browse/OSAC-4888) /
+[OSAC-4925](https://redhat.atlassian.net/browse/OSAC-4925).

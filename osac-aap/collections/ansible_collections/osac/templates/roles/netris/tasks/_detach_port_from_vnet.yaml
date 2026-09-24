@@ -1,6 +1,7 @@
 ---
 # Detach _target_port from the Netris V-Net named _op_vnet_name. No-op if the
 # V-Net is absent, the port is unresolved, or the port is not on the V-Net.
+# Asserts post-condition when a detach mutation ran: port is not on the V-Net.
 
 - name: Detach port from V-Net
   when:
@@ -13,6 +14,13 @@
         tasks_from: read
       vars:
         vnet_name: "{{ _op_vnet_name }}"
+
+    - name: Treat missing source V-Net as successful detach
+      ansible.builtin.debug:
+        msg: >-
+          V-Net '{{ _op_vnet_name }}' not found; treating detach of
+          '{{ na_logical_interface }}' as already complete.
+      when: netris_vnet is none
 
     - name: Remove the port when the V-Net exists
       when: netris_vnet is not none
@@ -27,9 +35,7 @@
         - name: Check port membership
           ansible.builtin.set_fact:
             _det_present: >-
-              {{ (netris_vnet_detail.ports | default([]))
-                 | selectattr('id', 'equalto', _target_port.id)
-                 | list | length > 0 }}
+              {{ netris_vnet_detail | netris.controller.netris_port_on_vnet(_target_port.id) }}
 
         - name: Remove port from V-Net
           ansible.builtin.include_role:
@@ -41,6 +47,27 @@
               {{ netris_vnet_detail | combine({'ports': (netris_vnet_detail.ports | default([]))
                  | rejectattr('id', 'equalto', _target_port.id) | list}) }}
           when: _det_present | bool
+
+        - name: Re-read V-Net details after detach
+          when: _det_present | bool
+          block:
+            - name: Get V-Net details after detach
+              ansible.builtin.include_role:
+                name: netris.controller.vnet
+                tasks_from: read_by_id
+              vars:
+                vnet_id: "{{ netris_vnet.id }}"
+
+        - name: Assert port is not on source V-Net
+          ansible.builtin.assert:
+            that:
+              - not (netris_vnet_detail | netris.controller.netris_port_on_vnet(_target_port.id))
+            fail_msg: >-
+              Post-condition failed: port '{{ na_logical_interface }}' (id={{ _target_port.id }})
+              is still on V-Net '{{ _op_vnet_name }}' after detach.
+            success_msg: >-
+              Port '{{ na_logical_interface }}' is not on V-Net '{{ _op_vnet_name }}'
+              {{ (_det_present | bool) | ternary('', '(was not attached)') }}
 
         - name: Display detach result
           ansible.builtin.debug:

@@ -3,6 +3,12 @@
 # (if set) then attach to to_vnet_name (if set). Either may be empty for a pure
 # detach or attach. Backend/lifecycle-agnostic — callers decide what the V-Nets
 # mean (tenant, provisioning, ...), so this is reusable across BMaaS and CaaS.
+#
+# Idempotent / interrupt-safe (OSAC-4923):
+# - Port already off source → detach is a no-op success
+# - Port already on target → attach is a no-op success
+# - Interrupted after detach before attach → rerun completes attach
+# Attach/detach helpers assert membership post-conditions.
 
 - name: Extract move configuration
   ansible.builtin.set_fact:
@@ -37,3 +43,10 @@
   vars:
     _op_vnet_name: "{{ _na_to }}"
   when: _na_to | length > 0
+
+- name: Display move completion
+  ansible.builtin.debug:
+    msg: >-
+      Move of '{{ na_host_name }}/{{ na_logical_interface }}'
+      from '{{ _na_from | default('(none)') }}' to '{{ _na_to | default('(none)') }}'
+      completed with post-conditions satisfied.

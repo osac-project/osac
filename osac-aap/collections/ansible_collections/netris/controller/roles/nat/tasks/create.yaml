@@ -67,6 +67,47 @@
     nat_existing_rule: "{{ _existing_nat }}"
   when: _existing_nat is defined and _existing_nat is not none
 
+- name: Fail when existing NAT rule has immutable field mismatch
+  when: _existing_nat is defined and _existing_nat is not none
+  block:
+    - name: Build expected immutable NAT fields
+      ansible.builtin.set_fact:
+        _nat_expected_fields:
+          action: "{{ nat_action | upper }}"
+          "vpc.id": "{{ nat_vpc_id }}"
+          sourceAddress: "{{ nat_source_address | default('0.0.0.0/0') }}"
+
+    - name: Add SNAT immutable expectations
+      ansible.builtin.set_fact:
+        _nat_expected_fields: >-
+          {{ _nat_expected_fields | combine({'snatToIP': nat_snat_to_ip}) }}
+      when:
+        - nat_action == 'snat'
+        - nat_snat_to_ip is defined
+
+    - name: Add DNAT immutable expectations
+      ansible.builtin.set_fact:
+        _nat_expected_fields: >-
+          {{ _nat_expected_fields | combine({
+               'dnatToIP': nat_dnat_to_ip,
+               'destinationAddress': nat_destination_address | default('0.0.0.0/0')
+             }) }}
+      when:
+        - nat_action == 'dnat'
+        - nat_dnat_to_ip is defined
+
+    - name: Compute NAT immutable mismatches
+      ansible.builtin.set_fact:
+        _nat_mismatches: >-
+          {{ _existing_nat | netris.controller.netris_immutable_mismatch(_nat_expected_fields) }}
+
+    - name: Fail on NAT immutable mismatch
+      ansible.builtin.fail:
+        msg: >-
+          {{ 'NAT rule' | netris.controller.format_immutable_mismatch_message(
+               nat_name, _nat_mismatches) }}
+      when: (_nat_mismatches | default([]) | length) > 0
+
 - name: Create NAT rule
   ansible.builtin.uri:
     url: "{{ netris_controller_url }}/api/v2/nat"

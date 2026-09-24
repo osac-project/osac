@@ -31,6 +31,26 @@
     vnet_already_existed: true
   when: _existing_vnet is defined and _existing_vnet is not none
 
+- name: Fail when existing V-Net has immutable field mismatch
+  when:
+    - _existing_vnet is defined
+    - _existing_vnet is not none
+    - vnet_vpc_id is defined
+  block:
+    - name: Compute V-Net immutable mismatches
+      ansible.builtin.set_fact:
+        _vnet_mismatches: >-
+          {{ _existing_vnet | netris.controller.netris_immutable_mismatch({
+               'vpc.id': vnet_vpc_id
+             }) }}
+
+    - name: Fail on V-Net immutable mismatch
+      ansible.builtin.fail:
+        msg: >-
+          {{ 'V-Net' | netris.controller.format_immutable_mismatch_message(
+               vnet_name, _vnet_mismatches) }}
+      when: (_vnet_mismatches | default([]) | length) > 0
+
 - name: Build V-Net body
   ansible.builtin.set_fact:
     _vnet_body:

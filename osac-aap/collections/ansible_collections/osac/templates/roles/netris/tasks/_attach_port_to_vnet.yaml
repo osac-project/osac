@@ -2,6 +2,7 @@
 # Attach _target_port to the Netris V-Net named _op_vnet_name (idempotent).
 # Fails if the V-Net is not found or _target_port is none.
 # Waits for the V-Net to become active after attaching.
+# Asserts post-condition: port is a member of the target V-Net.
 
 - name: Fail if no port to attach
   ansible.builtin.fail:
@@ -30,9 +31,7 @@
 - name: Check port membership
   ansible.builtin.set_fact:
     _att_already: >-
-      {{ (netris_vnet_detail.ports | default([]))
-         | selectattr('id', 'equalto', _target_port.id)
-         | list | length > 0 }}
+      {{ netris_vnet_detail | netris.controller.netris_port_on_vnet(_target_port.id) }}
 
 - name: Add port to V-Net
   ansible.builtin.include_role:
@@ -44,6 +43,27 @@
       {{ netris_vnet_detail | combine({'ports': (netris_vnet_detail.ports | default([]))
          + [{'id': _target_port.id, 'state': 'active', 'accessMode': true}]}) }}
   when: not (_att_already | bool)
+
+- name: Re-read V-Net details after attach
+  when: not (_att_already | bool)
+  block:
+    - name: Get V-Net details after attach
+      ansible.builtin.include_role:
+        name: netris.controller.vnet
+        tasks_from: read_by_id
+      vars:
+        vnet_id: "{{ netris_vnet.id }}"
+
+- name: Assert port is on target V-Net
+  ansible.builtin.assert:
+    that:
+      - netris_vnet_detail | netris.controller.netris_port_on_vnet(_target_port.id)
+    fail_msg: >-
+      Post-condition failed: port '{{ na_logical_interface }}' (id={{ _target_port.id }})
+      is not on V-Net '{{ _op_vnet_name }}' after attach.
+    success_msg: >-
+      Port '{{ na_logical_interface }}' is on V-Net '{{ _op_vnet_name }}'
+      {{ (_att_already | bool) | ternary('(already present)', '') }}
 
 - name: Display attach result
   ansible.builtin.debug:

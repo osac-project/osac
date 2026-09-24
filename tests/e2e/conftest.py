@@ -38,7 +38,7 @@ def default_storage_tier() -> str:
 def _requires_serial_xdist(args: list[str]) -> bool:
     """True when CLI targets a suite that must run sequentially.
 
-    BMaaS serial/full and enablement suites require ``-n 0``.
+    CaaS, BMaaS serial/full, and enablement suites require ``-n 0``.
     Broader invocations like ``pytest tests/`` are not detected.
     """
     normalized = [str(a).replace("\\", "/").rstrip("/") for a in args]
@@ -50,6 +50,8 @@ def _requires_serial_xdist(args: list[str]) -> bool:
         or a.endswith("tests/e2e/bmaas")
         or a.endswith("/e2e/bmaas")
         or a == "e2e/bmaas"
+        or a.endswith("e2e/caas")
+        or "/e2e/caas/" in (a + "/")
         or a.endswith("e2e/enablement")
         or "/e2e/enablement/" in (a + "/")
         for a in normalized
@@ -216,8 +218,10 @@ def setup_organization_memberships(ensure_tenants: None, keycloak_url: str, keyc
     org_users = {"tenant1": ["tenant1_user", "tenant1_admin"], "tenant2": ["tenant2_user", "tenant2_admin"]}
 
     for org_name, usernames in org_users.items():
+        admin_token = get_admin_token(keycloak_url=keycloak_url, username="admin", password=keycloak_admin_password)
         # Wait for the organization to be synced to Keycloak by the tenant controller
         org_id = wait_for_organization(keycloak_url=keycloak_url, admin_token=admin_token, org_name=org_name)
+        admin_token = get_admin_token(keycloak_url=keycloak_url, username="admin", password=keycloak_admin_password)
 
         # Add each user to the organization
         for username in usernames:

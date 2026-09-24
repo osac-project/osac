@@ -17,8 +17,12 @@ from tests.e2e.core.runner import env
 # finalizer blocks ClusterOrder deletion indefinitely. Using SA auth places the cluster
 # in the shared tenant, which the storage controller skips.
 @pytest.fixture(scope="session")
-def cli(namespace: str, fulfillment_address: str, service_account: str) -> Iterator[OsacCLI]:
-    """Session-scoped osac CLI authenticated with a service-account token."""
+def cli(
+    namespace: str, fulfillment_address: str, service_account: str, jwt_cli_admin: OsacCLI
+) -> Iterator[OsacCLI]:
+    if env("OSAC_CAAS_USE_JWT", "true").lower() == "true":
+        yield jwt_cli_admin
+        return
     instance = OsacCLI(
         binary=env("OSAC_CLI_PATH", "osac"),
         address=f"https://{fulfillment_address.rsplit(':', 1)[0]}",

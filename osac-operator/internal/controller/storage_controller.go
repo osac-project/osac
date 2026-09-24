@@ -765,15 +765,9 @@ func (r *StorageReconciler) handleBackendProvisioning(ctx context.Context, insta
 // for an external trigger before retrying.
 func (r *StorageReconciler) handleClusterStorageProvisioning(ctx context.Context, instance *v1alpha1.Tenant, hubSecretReady bool) (ctrl.Result, error) {
 	latestJob := provisioning.FindLatestJobByType(instance.Status.ClusterStorageJobs, v1alpha1.JobTypeProvision)
-	if latestJob != nil && latestJob.State == v1alpha1.JobStateFailed {
-		if hubSecretReady {
-			// Hub Secret exists: the storage backend is provisioned. Requeue
-			// periodically so the controller picks up when the failed job is
-			// externally cleared or the AAP template becomes available.
-			ctrllog.FromContext(ctx).Info("latest cluster storage provision job failed, requeueing",
-				"message", latestJob.Message)
-			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-		}
+	// Ready backends can recover through the shared lifecycle's capped backoff.
+	// Keep failed jobs in history so repeated failures increase the delay.
+	if latestJob != nil && latestJob.State == v1alpha1.JobStateFailed && !hubSecretReady {
 		ctrllog.FromContext(ctx).Info("latest cluster storage provision job failed, waiting for external trigger to retry",
 			"message", latestJob.Message)
 		return ctrl.Result{}, nil

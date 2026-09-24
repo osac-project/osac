@@ -18,7 +18,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strconv"
 	"strings"
 
 	"github.com/bits-and-blooms/bitset"
@@ -56,8 +55,6 @@ type PrivateClustersServer struct {
 	tenancyLogic              auth.TenancyLogic
 	templatesDao              *dao.GenericDAO[*privatev1.ClusterTemplate]
 	catalogItemsDao           *dao.GenericDAO[*privatev1.ClusterCatalogItem]
-	hostTypesDao              *dao.GenericDAO[*privatev1.HostType]
-	bareMetalInstanceTypesDao *dao.GenericDAO[*privatev1.BareMetalInstanceType]
 	clusterVersionsDao        *dao.GenericDAO[*privatev1.ClusterVersion]
 	subnetsDao                *dao.GenericDAO[*privatev1.Subnet]
 	securityGroupsDao         *dao.GenericDAO[*privatev1.SecurityGroup]
@@ -68,6 +65,7 @@ type PrivateClustersServer struct {
 	addOnOperatorLookup       references.ReferenceLookupFunc
 	generic                   *GenericServer[*privatev1.Cluster]
 	lifecycle                 *externalIPLifecycle
+	bareMetalInstanceTypesDao *dao.GenericDAO[*privatev1.BareMetalInstanceType]
 }
 
 func NewPrivateClustersServer() *PrivateClustersServerBuilder {
@@ -152,16 +150,6 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 			return
 		}
 		addOnOperatorLookup = references.NewDAOLookupFunc(addOnOperatorsDao)
-	}
-
-	// Create the host types DAO:
-	hostTypesDao, err := dao.NewGenericDAO[*privatev1.HostType]().
-		SetLogger(b.logger).
-		SetTenancyLogic(b.tenancyLogic).
-		SetMetricsRegisterer(b.metricsRegisterer).
-		Build()
-	if err != nil {
-		return
 	}
 
 	// Create the bare metal instance types DAO:
@@ -266,7 +254,6 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 		tenancyLogic:              b.tenancyLogic,
 		templatesDao:              templatesDao,
 		catalogItemsDao:           catalogItemsDao,
-		hostTypesDao:              hostTypesDao,
 		bareMetalInstanceTypesDao: bareMetalInstanceTypesDao,
 		clusterVersionsDao:        clusterVersionsDao,
 		subnetsDao:                subnetsDao,
@@ -360,17 +347,18 @@ func (s *PrivateClustersServer) prepareCreate(ctx context.Context, candidate *pr
 		}
 	}
 
-	if err = s.validateNetworkAttachmentState(ctx, candidate); err != nil {
-		return
-	}
-
 	// Resolve fabric_interface for each node set when the cluster has a
-	// network attachment. The BareMetalInstanceType's network_ports list
-	// is searched for the first port with role "fabric".
+	// network attachment. The BareMetalInstanceType's network ports are
+	// searched for the first port with role "fabric". This runs before
+	// network attachment validation so a missing fabric port surfaces first.
 	if spec.GetNetworkAttachment() != nil {
-		if err = s.resolveFabricInterfaces(ctx, spec); err != nil {
+		if err = s.resolveFabricInterfaces(ctx, candidate); err != nil {
 			return
 		}
+	}
+
+	if err = s.validateNetworkAttachmentState(ctx, candidate); err != nil {
+		return
 	}
 
 	return
@@ -463,18 +451,30 @@ func (s *PrivateClustersServer) Update(ctx context.Context,
 		if err := validateClusterTemplateImmutability(current, candidate, request.GetUpdateMask()); err != nil {
 			return err
 		}
-		if updateIncludesField(request.GetUpdateMask(), "spec.ssh_public_key") {
+		mask := request.GetUpdateMask()
+		sizeOnlyNodeSets := len(mask.GetPaths()) > 0 && s.isUpdatingOnlySizes(mask)
+		if err := s.prepareUpdatedClusterNodeSets(ctx, current, candidate, mask, sizeOnlyNodeSets); err != nil {
+			return err
+		}
+		if updateIncludesField(mask, "spec.ssh_public_key") {
 			if key := candidate.GetSpec().GetSshPublicKey(); key != "" {
 				if err := validateOpenSSHPublicKey(key); err != nil {
 					return grpcstatus.Errorf(grpccodes.InvalidArgument, "spec.ssh_public_key: %s", err)
 				}
 			}
 		}
-		if err := s.validateAddOnOperatorImmutability(current, candidate, request.GetUpdateMask()); err != nil {
+		if err := s.validateAddOnOperatorImmutability(current, candidate, mask); err != nil {
 			return err
 		}
 		if err := utils.ValidateClusterSpecFields(candidate.GetSpec()); err != nil {
 			return err
+		}
+		// An explicit size-only update keeps the existing hardware type and fabric interface.
+		// Re-resolving here would prevent scaling legacy clusters with tenant-scoped BMITs.
+		if s.updateAffectsNodeSets(mask) && candidate.GetSpec().GetNetworkAttachment() != nil && !sizeOnlyNodeSets {
+			if err := s.resolveFabricInterfaces(ctx, candidate); err != nil {
+				return err
+			}
 		}
 		if updateIncludesField(request.GetUpdateMask(), "spec.network_attachment.security_groups") {
 			if err := s.validateNetworkAttachmentState(ctx, candidate); err != nil {
@@ -491,6 +491,41 @@ func (s *PrivateClustersServer) Update(ctx context.Context,
 		return nil
 	})
 	return
+}
+
+// prepareUpdatedClusterNodeSets retains resolved metadata for unchanged NodeSets and
+// validates new hardware selections against the shared CaaS type scope.
+func (s *PrivateClustersServer) prepareUpdatedClusterNodeSets(
+	ctx context.Context, current, candidate *privatev1.Cluster, mask *fieldmaskpb.FieldMask, sizeOnlyNodeSets bool,
+) error {
+	if !s.updateAffectsNodeSets(mask) {
+		return nil
+	}
+	for name, nodeSet := range candidate.GetSpec().GetNodeSets() {
+		existing := current.GetSpec().GetNodeSets()[name]
+		if sizeOnlyNodeSets && existing == nil {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"node_sets.%s.baremetal_instance_type is required when adding a node set with a size-only update", name)
+		}
+		if existing != nil &&
+			(refKey(existing.GetBaremetalInstanceType()) == refKey(nodeSet.GetBaremetalInstanceType()) ||
+				(s.isUpdatingOnlySizes(mask) && refKey(nodeSet.GetBaremetalInstanceType()) == "")) {
+			// Nested map masks replace the entire NodeSet message, so size-only updates
+			// must restore both server-owned fields from the persisted NodeSet.
+			nodeSet.SetBaremetalInstanceType(cloneMessage(existing.GetBaremetalInstanceType()))
+			if sizeOnlyNodeSets {
+				nodeSet.SetFabricInterface(existing.GetFabricInterface())
+			}
+			continue
+		}
+		if key := refKey(nodeSet.GetBaremetalInstanceType()); key != "" {
+			if _, err := resolveCaaSBareMetalInstanceType(ctx, s.bareMetalInstanceTypesDao, candidate.GetMetadata(),
+				nodeSet.GetBaremetalInstanceType(), "node_sets."+name+".baremetal_instance_type", false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (s *PrivateClustersServer) validateSpecUpdateRequest(request *privatev1.ClustersUpdateRequest) error {
@@ -598,41 +633,6 @@ func (s *PrivateClustersServer) validatePullSecretSecret(
 		privatev1.SecretType_SECRET_TYPE_PULL_SECRET)
 }
 
-func (s *PrivateClustersServer) lookupBareMetalInstanceType(ctx context.Context,
-	key string) (result *privatev1.BareMetalInstanceType, err error) {
-	if key == "" {
-		return
-	}
-	response, err := s.bareMetalInstanceTypesDao.List().
-		SetFilter(fmt.Sprintf("this.id == %[1]s || this.metadata.name == %[1]s", strconv.Quote(key))).
-		SetLimit(1).
-		Do(ctx)
-	if err != nil {
-		var deniedErr *dao.ErrDenied
-		if errors.As(err, &deniedErr) {
-			err = grpcstatus.Errorf(grpccodes.PermissionDenied, "%s", deniedErr.Reason)
-		}
-		return
-	}
-	switch response.GetTotal() {
-	case 0:
-		err = grpcstatus.Errorf(
-			grpccodes.NotFound,
-			"there is no bare metal instance type with identifier or name '%s'",
-			key,
-		)
-	case 1:
-		result = response.GetItems()[0]
-	default:
-		err = grpcstatus.Errorf(
-			grpccodes.InvalidArgument,
-			"there are multiple bare metal instance types with identifier or name '%s'",
-			key,
-		)
-	}
-	return
-}
-
 // ensureClusterVersion makes sure the cluster spec has a usable version reference: if the user didn't provide one, it
 // resolves the system default. Either way, it validates that the resulting ClusterVersion isn't deleted, disabled,
 // or obsolete.
@@ -705,7 +705,7 @@ func (s *PrivateClustersServer) validateNodeSetsUpdate(ctx context.Context,
 	if err := s.validateAtLeastOneNodeSet(newNodeSets); err != nil {
 		return err
 	}
-	if err := s.validateNodeSetHostTypeImmutability(existingNodeSets, newNodeSets); err != nil {
+	if err := s.validateNodeSetBareMetalInstanceTypeImmutability(existingNodeSets, newNodeSets); err != nil {
 		return err
 	}
 
@@ -820,30 +820,30 @@ func validateClusterNodeSetMap(nodeSets map[string]*privatev1.ClusterNodeSet) er
 		if nodeSet.GetSize() <= 0 {
 			return fmt.Errorf("size for node set '%s' should be greater than zero, but it is %d", name, nodeSet.GetSize())
 		}
+		if refKey(nodeSet.GetBaremetalInstanceType()) == "" {
+			return fmt.Errorf("bare metal instance type for node set '%s' is required", name)
+		}
 	}
 	return nil
 }
 
-// validateNodeSetHostTypeImmutability ensures that the baremetal_instance_type field of existing node sets
-// cannot be changed. This is an existing documented restriction in the API specification.
-func (s *PrivateClustersServer) validateNodeSetHostTypeImmutability(
+func (s *PrivateClustersServer) validateNodeSetBareMetalInstanceTypeImmutability(
 	existingNodeSets map[string]*privatev1.ClusterNodeSet,
 	newNodeSets map[string]*privatev1.ClusterNodeSet) error {
 	for nodeSetName, existingNodeSet := range existingNodeSets {
 		newNodeSet, exists := newNodeSets[nodeSetName]
 		if !exists {
-			// Node set is being removed, which is allowed (if at least one remains)
 			continue
 		}
-		existingBMIT := existingNodeSet.GetBaremetalInstanceType()
-		newBMIT := newNodeSet.GetBaremetalInstanceType()
-		if refKey(existingBMIT) != refKey(newBMIT) {
+		existingBmit := existingNodeSet.GetBaremetalInstanceType()
+		newBmit := newNodeSet.GetBaremetalInstanceType()
+		if refKey(existingBmit) != refKey(newBmit) {
 			return grpcstatus.Errorf(
 				grpccodes.InvalidArgument,
 				"cannot change baremetal_instance_type for node set '%s' from '%s' to '%s': baremetal_instance_type is immutable",
 				nodeSetName,
-				refKey(existingBMIT),
-				refKey(newBMIT),
+				refKey(existingBmit),
+				refKey(newBmit),
 			)
 		}
 	}
@@ -1137,49 +1137,33 @@ func (s *PrivateClustersServer) validateAutoExternalIPImmutability(ctx context.C
 }
 
 // resolveFabricInterfaces populates fabric_interface on each node set by
-// looking up the BareMetalInstanceType and selecting the first port with role "fabric".
-func (s *PrivateClustersServer) resolveFabricInterfaces(ctx context.Context, spec *privatev1.ClusterSpec) error {
-	for name, nodeSet := range spec.GetNodeSets() {
-		bmitKey := refKey(nodeSet.GetBaremetalInstanceType())
-		if bmitKey == "" {
-			// Template-derived node sets may have no BareMetalInstanceType yet;
-			// the fabric interface will be resolved once the caller supplies one.
+// resolving its canonical BareMetalInstanceType reference and selecting the first interface with role "fabric".
+func (s *PrivateClustersServer) resolveFabricInterfaces(ctx context.Context, cluster *privatev1.Cluster) error {
+	for name, nodeSet := range cluster.GetSpec().GetNodeSets() {
+		if refKey(nodeSet.GetBaremetalInstanceType()) == "" {
 			continue
 		}
-		bmit, err := s.lookupBareMetalInstanceType(ctx, bmitKey)
+		bmit, err := resolveCaaSBareMetalInstanceType(ctx, s.bareMetalInstanceTypesDao, cluster.GetMetadata(),
+			nodeSet.GetBaremetalInstanceType(), "node_sets."+name+".baremetal_instance_type", false)
 		if err != nil {
 			return err
 		}
-		if bmit == nil {
-			return grpcstatus.Errorf(grpccodes.NotFound,
-				"node_sets[%s]: bare metal instance type '%s' not found", name, bmitKey)
-		}
-		fabricInterface := ""
-		for _, port := range bmit.GetSpec().GetHardware().GetNetworkPorts() {
-			if strings.EqualFold(port.GetRole(), "fabric") {
-				fabricInterface = port.GetName()
-				break
-			}
-		}
-		if fabricInterface == "" {
-			return grpcstatus.Errorf(grpccodes.FailedPrecondition,
-				"node_sets[%s]: bare metal instance type '%s' has no network port with role 'fabric'",
-				name, bmitKey)
+		fabricInterface, err := selectClusterFabricInterface(bmit)
+		if err != nil {
+			return grpcstatus.Errorf(grpccodes.FailedPrecondition, "node_sets[%s]: %s", name, err)
 		}
 		nodeSet.SetFabricInterface(fabricInterface)
 	}
 	return nil
 }
 
-// selectClusterFabricInterface returns the name of the first interface with role "fabric" on a
-// HostType. Used during catalog-item validation where the Template still references HostTypes.
-func selectClusterFabricInterface(hostType *privatev1.HostType) (string, error) {
-	for _, networkInterface := range hostType.GetInterfaces() {
-		if strings.EqualFold(networkInterface.GetRole(), "fabric") {
-			return networkInterface.GetName(), nil
+func selectClusterFabricInterface(instanceType *privatev1.BareMetalInstanceType) (string, error) {
+	for _, port := range instanceType.GetSpec().GetHardware().GetNetworkPorts() {
+		if strings.EqualFold(port.GetRole(), "fabric") {
+			return port.GetName(), nil
 		}
 	}
-	return "", fmt.Errorf("host type '%s' has no interface with role 'fabric'", hostType.GetId())
+	return "", fmt.Errorf("bare metal instance type '%s' has no network port with role 'fabric'", instanceType.GetId())
 }
 
 // autoProvisionExternalIPs creates two ExternalIPs and two ExternalIPAttachments
@@ -1310,112 +1294,28 @@ func (s *PrivateClustersServer) applyClusterTemplate(ctx context.Context, cluste
 		return err
 	}
 
-	if err := s.resolveClusterNodeSets(ctx, cluster, template); err != nil {
+	if err := s.resolveClusterNodeSets(ctx, cluster); err != nil {
 		return err
 	}
 
-	// Make sure that the template is referenced by its identifier and name, as that is what we want to save
-	// to the database. Both fields are needed: id for lookups, name for display and billing dimensions
-	// (metering reads the name).
+	// Store the template reference with both ID and name. NodeSet hardware references were
+	// canonicalized in resolveClusterNodeSets, so metering can use their names.
 	cluster.GetSpec().SetTemplate(canonicalClusterTemplateReference(template))
 
 	return nil
 }
 
-// convertTemplateNodeSets copies Template node sets into resource node sets, preserving names and nil entries.
-// Sizes gain explicit presence; resolution and compatibility checks run later.
-func convertTemplateNodeSets(value map[string]*privatev1.ClusterTemplateNodeSet) map[string]*privatev1.ClusterNodeSet {
-	if value == nil {
-		return nil
+// resolveClusterNodeSets validates and canonicalizes the effective Cluster NodeSets after
+// Catalog Item policies have been applied. Templates do not supply hardware selections.
+func (s *PrivateClustersServer) resolveClusterNodeSets(ctx context.Context, cluster *privatev1.Cluster) error {
+	if err := validateClusterNodeSetMap(cluster.GetSpec().GetNodeSets()); err != nil {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "node_sets: %s", err)
 	}
-	result := make(map[string]*privatev1.ClusterNodeSet, len(value))
-	for name, nodeSet := range value {
-		if nodeSet == nil {
-			result[name] = nil
-			continue
+	for name, nodeSet := range cluster.GetSpec().GetNodeSets() {
+		if _, err := resolveCaaSBareMetalInstanceType(ctx, s.bareMetalInstanceTypesDao, cluster.GetMetadata(),
+			nodeSet.GetBaremetalInstanceType(), "node_sets."+name+".baremetal_instance_type", false); err != nil {
+			return err
 		}
-		size := nodeSet.GetSize()
-		result[name] = privatev1.ClusterNodeSet_builder{
-			Size: &size,
-		}.Build()
-	}
-	return result
-}
-
-// resolveClusterNodeSets applies whole-map defaults and resolves BareMetalInstanceType references.
-// When a node set carries no baremetal_instance_type but the corresponding template node set
-// provides a host_type, the host_type key is used as a fallback to look up a matching
-// BareMetalInstanceType. This keeps existing templates that only define HostType working
-// (OSAC-5117).
-func (s *PrivateClustersServer) resolveClusterNodeSets(ctx context.Context, cluster *privatev1.Cluster, template *privatev1.ClusterTemplate) error {
-	nodes := cluster.GetSpec().GetNodeSets()
-	useTemplateMap := len(nodes) == 0
-	if useTemplateMap {
-		nodes = convertTemplateNodeSets(template.GetNodeSets())
-	}
-	// An existing Template may contain no node sets. Keep the Cluster map empty so the
-	// infrastructure provider can choose node placement.
-	if len(nodes) == 0 && len(template.GetNodeSets()) == 0 {
-		return nil
-	}
-	for name, node := range nodes {
-		if node == nil {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument, "node set '%s' is required", name)
-		}
-
-		// Resolve host_type from the template, then optionally override with cluster's host_type.
-		var templateHost *privatev1.HostType
-		if defaults := template.GetNodeSets()[name]; defaults != nil && defaults.GetHostType() != nil {
-			ref := cloneMessage(defaults.GetHostType())
-			var err error
-			templateHost, err = resolveAndCanonicalizeReference(ctx, s.hostTypesDao, template.GetMetadata(), ref, "host type", grpccodes.NotFound)
-			if err != nil {
-				return err
-			}
-		}
-		host := templateHost
-		if ref := node.GetHostType(); !useTemplateMap && ref != nil {
-			var err error
-			host, err = resolveAndCanonicalizeReference(ctx, s.hostTypesDao, cluster.GetMetadata(), ref, "host type", grpccodes.NotFound)
-			if err != nil {
-				return err
-			}
-			if templateHost != nil && host.GetId() != templateHost.GetId() {
-				return grpcstatus.Errorf(grpccodes.InvalidArgument,
-					"host type for node set '%s' should be empty, '%s' or '%s', like in template '%s', but it is '%s'",
-					name, templateHost.GetMetadata().GetName(), templateHost.GetId(), template.GetId(), refKey(ref))
-			}
-		}
-		if host == nil && node.GetBaremetalInstanceType() == nil {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument, "host type or baremetal instance type for node set '%s' is required", name)
-		}
-		if host != nil {
-			node.SetHostType(privatev1.HostTypeReference_builder{
-				Id: host.GetId(), Name: host.GetMetadata().GetName(),
-				Shared: host.GetMetadata().GetTenant() == auth.SharedTenant, Project: host.GetMetadata().GetProject(),
-			}.Build())
-		}
-
-		// Resolve baremetal_instance_type when present. Missing BMIT is not an error —
-		// legacy clusters may only carry a host_type reference.
-		if bmitRef := node.GetBaremetalInstanceType(); bmitRef != nil {
-			bmitKey := refKey(bmitRef)
-			if bmitKey != "" {
-				bmit, err := s.lookupBareMetalInstanceType(ctx, bmitKey)
-				if err != nil {
-					return err
-				}
-				if bmit != nil {
-					node.SetBaremetalInstanceType(privatev1.BareMetalInstanceTypeLocalReference_builder{
-						Id: bmit.GetId(), Name: bmit.GetMetadata().GetName(),
-					}.Build())
-				}
-			}
-		}
-	}
-	cluster.GetSpec().SetNodeSets(nodes)
-	if err := validateClusterNodeSetMap(nodes); err != nil {
-		return grpcstatus.Error(grpccodes.InvalidArgument, err.Error())
 	}
 	return nil
 }
@@ -1423,6 +1323,40 @@ func (s *PrivateClustersServer) resolveClusterNodeSets(ctx context.Context, clus
 // resolveCatalogItem finds the Cluster's published Catalog Item in the selected tenant/project
 // or shared scope, then finds the item's Template under the item's ownership. It applies locked
 // and editable field and parameter rules and returns that Template for defaults.
+func resolveCaaSBareMetalInstanceType(
+	ctx context.Context,
+	instanceTypes *dao.GenericDAO[*privatev1.BareMetalInstanceType],
+	ownerMetadata *privatev1.Metadata,
+	ref *privatev1.BareMetalInstanceTypeReference,
+	kind string,
+	lockTarget bool,
+) (*privatev1.BareMetalInstanceType, error) {
+	if ref == nil {
+		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "%s reference is mandatory", kind)
+	}
+
+	// Cluster NodeSets and Catalog Item policies select hardware only; callers cannot
+	// select a tenant-scoped BMIT by omitting or changing the reference scope.
+	ref.SetShared(true)
+	var (
+		resolved *privatev1.BareMetalInstanceType
+		err      error
+	)
+	if lockTarget {
+		resolved, err = resolveAndCanonicalizeLockedReference(ctx, instanceTypes, ownerMetadata, ref, kind, grpccodes.InvalidArgument)
+	} else {
+		resolved, err = resolveAndCanonicalizeReference(ctx, instanceTypes, ownerMetadata, ref, kind, grpccodes.InvalidArgument)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if resolved.GetMetadata().GetTenant() != auth.SharedTenant {
+		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"%s must reference a bare metal instance type in the shared tenant", kind)
+	}
+	return resolved, nil
+}
+
 func (s *PrivateClustersServer) resolveCatalogItem(ctx context.Context,
 	cluster *privatev1.Cluster) (*privatev1.ClusterTemplate, error) {
 	if cluster == nil {

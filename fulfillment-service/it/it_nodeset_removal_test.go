@@ -28,41 +28,73 @@ import (
 
 var _ = Describe("Node set removal", func() {
 	var (
-		ctx               context.Context
-		clustersClient    publicv1.ClustersClient
-		hostTypesClient   privatev1.HostTypesClient
-		templatesClient   privatev1.ClusterTemplatesClient
-		workerHostTypeId  string
-		storageHostTypeId string
-		templateId        string
+		ctx                 context.Context
+		clustersClient      publicv1.ClustersClient
+		instanceTypesClient privatev1.BareMetalInstanceTypesClient
+		templatesClient     privatev1.ClusterTemplatesClient
+		workerBmitName      string
+		storageBmitName     string
+		templateId          string
 	)
 
 	BeforeEach(func() {
 		ctx = context.Background()
 
 		clustersClient = publicv1.NewClustersClient(tool.ExternalView().UserConn())
-		hostTypesClient = privatev1.NewHostTypesClient(tool.InternalView().AdminConn())
+		instanceTypesClient = privatev1.NewBareMetalInstanceTypesClient(tool.InternalView().AdminConn())
 		templatesClient = privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
 
-		// Create worker host type:
-		workerHostTypeId = fmt.Sprintf("worker_type_%s", uuid.New())
-		_, err := hostTypesClient.Create(ctx, privatev1.HostTypesCreateRequest_builder{
-			Object: privatev1.HostType_builder{
-				Id: workerHostTypeId,
+		// Create worker bare metal instance type:
+		workerBmitName = fmt.Sprintf("worker-bmit-%s", uuid.New()[24:32])
+		_, err := instanceTypesClient.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
+			Object: privatev1.BareMetalInstanceType_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name: fmt.Sprintf("worker-type-%s", uuid.New()),
+					Name: workerBmitName,
+				}.Build(),
+				Spec: privatev1.BareMetalInstanceTypeSpec_builder{
+					Hardware: privatev1.BareMetalHardwareSpec_builder{
+						Cpu:    privatev1.BareMetalCPUSpec_builder{Cores: 32, Architecture: "x86_64", ThreadsPerCore: 2}.Build(),
+						Memory: privatev1.BareMetalMemorySpec_builder{TotalGb: 128}.Build(),
+						NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
+							privatev1.BareMetalNetworkPortSpec_builder{
+								Name:  "eth0",
+								Role:  "fabric",
+								Type:  "Ethernet",
+								Speed: "10Gbps",
+							}.Build(),
+						},
+					}.Build(),
+					HostLabelSelector: privatev1.BareMetalLabelSelector_builder{
+						MatchLabels: map[string]string{"hardware.profile": "worker"},
+					}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 
-		// Create storage host type:
-		storageHostTypeId = fmt.Sprintf("storage_type_%s", uuid.New())
-		_, err = hostTypesClient.Create(ctx, privatev1.HostTypesCreateRequest_builder{
-			Object: privatev1.HostType_builder{
-				Id: storageHostTypeId,
+		// Create storage bare metal instance type:
+		storageBmitName = fmt.Sprintf("storage-bmit-%s", uuid.New()[24:32])
+		_, err = instanceTypesClient.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
+			Object: privatev1.BareMetalInstanceType_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name: fmt.Sprintf("storage-type-%s", uuid.New()),
+					Name: storageBmitName,
+				}.Build(),
+				Spec: privatev1.BareMetalInstanceTypeSpec_builder{
+					Hardware: privatev1.BareMetalHardwareSpec_builder{
+						Cpu:    privatev1.BareMetalCPUSpec_builder{Cores: 32, Architecture: "x86_64", ThreadsPerCore: 2}.Build(),
+						Memory: privatev1.BareMetalMemorySpec_builder{TotalGb: 128}.Build(),
+						NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
+							privatev1.BareMetalNetworkPortSpec_builder{
+								Name:  "eth0",
+								Role:  "fabric",
+								Type:  "Ethernet",
+								Speed: "10Gbps",
+							}.Build(),
+						},
+					}.Build(),
+					HostLabelSelector: privatev1.BareMetalLabelSelector_builder{
+						MatchLabels: map[string]string{"hardware.profile": "storage"},
+					}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -80,12 +112,12 @@ var _ = Describe("Node set removal", func() {
 				Description: "A template with workers and storage node sets.",
 				NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
 					"workers": privatev1.ClusterTemplateNodeSet_builder{
-						HostType: privatev1.HostTypeReference_builder{Id: workerHostTypeId}.Build(),
-						Size:     3,
+						BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: workerBmitName}.Build(),
+						Size:                  3,
 					}.Build(),
 					"storage": privatev1.ClusterTemplateNodeSet_builder{
-						HostType: privatev1.HostTypeReference_builder{Id: storageHostTypeId}.Build(),
-						Size:     2,
+						BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: storageBmitName}.Build(),
+						Size:                  2,
 					}.Build(),
 				},
 			}.Build(),

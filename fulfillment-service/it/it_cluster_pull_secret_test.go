@@ -39,12 +39,12 @@ const dockerConfigJSON = `{"auths":{"registry.example.com":{"auth":"dGVzdDp0ZXN0
 
 var _ = Describe("Cluster pull_secret_secret", Label("secrets", "cluster"), func() {
 	var (
-		ctx             context.Context
-		clustersClient  publicv1.ClustersClient
-		secretsClient   publicv1.SecretsClient
-		hostTypesClient privatev1.HostTypesClient
-		templatesClient privatev1.ClusterTemplatesClient
-		hostTypeId      string
+		ctx                 context.Context
+		clustersClient      publicv1.ClustersClient
+		secretsClient       publicv1.SecretsClient
+		instanceTypesClient privatev1.BareMetalInstanceTypesClient
+		templatesClient     privatev1.ClusterTemplatesClient
+		bmitName            string
 
 		makeAny = func(value proto.Message) *anypb.Any {
 			result, err := anypb.New(value)
@@ -117,8 +117,8 @@ var _ = Describe("Cluster pull_secret_secret", Label("secrets", "cluster"), func
 				},
 				NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
 					"my_node_set": privatev1.ClusterTemplateNodeSet_builder{
-						HostType: privatev1.HostTypeReference_builder{Id: hostTypeId}.Build(),
-						Size:     3,
+						BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: bmitName}.Build(),
+						Size:                  3,
 					}.Build(),
 				},
 				SpecDefaults: defaults,
@@ -159,15 +159,31 @@ var _ = Describe("Cluster pull_secret_secret", Label("secrets", "cluster"), func
 
 		clustersClient = publicv1.NewClustersClient(tool.ExternalView().UserConn())
 		secretsClient = publicv1.NewSecretsClient(tool.ExternalView().UserConn())
-		hostTypesClient = privatev1.NewHostTypesClient(tool.InternalView().AdminConn())
+		instanceTypesClient = privatev1.NewBareMetalInstanceTypesClient(tool.InternalView().AdminConn())
 		templatesClient = privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
 
-		hostTypeId = fmt.Sprintf("my_host_type_%s", uuid.New())
-		_, err := hostTypesClient.Create(ctx, privatev1.HostTypesCreateRequest_builder{
-			Object: privatev1.HostType_builder{
-				Id: hostTypeId,
+		bmitName = fmt.Sprintf("test-bmit-%s", uuid.New()[24:32])
+		_, err := instanceTypesClient.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
+			Object: privatev1.BareMetalInstanceType_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name: fmt.Sprintf("test-ht-%s", uuid.New()[24:32]),
+					Name: bmitName,
+				}.Build(),
+				Spec: privatev1.BareMetalInstanceTypeSpec_builder{
+				Hardware: privatev1.BareMetalHardwareSpec_builder{
+					Cpu:    privatev1.BareMetalCPUSpec_builder{Cores: 32, Architecture: "x86_64", ThreadsPerCore: 2}.Build(),
+					Memory: privatev1.BareMetalMemorySpec_builder{TotalGb: 128}.Build(),
+					NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
+						privatev1.BareMetalNetworkPortSpec_builder{
+							Name:  "eth0",
+							Role:  "fabric",
+							Type:  "Ethernet",
+							Speed: "10Gbps",
+						}.Build(),
+					},
+				}.Build(),
+					HostLabelSelector: privatev1.BareMetalLabelSelector_builder{
+						MatchLabels: map[string]string{"hardware.profile": "compute"},
+					}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())

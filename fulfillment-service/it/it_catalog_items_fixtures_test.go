@@ -567,15 +567,17 @@ func createCatalogItemComputeInstanceTemplateFixture(ctx context.Context, defaul
 	return id
 }
 
-func createCatalogItemClusterTemplateFixture(ctx context.Context, host string, defaults *privatev1.ClusterTemplateSpecDefaults, parameters []*privatev1.ClusterTemplateParameterDefinition) string {
+func createCatalogItemClusterTemplateFixture(ctx context.Context, host string, bmit string, defaults *privatev1.ClusterTemplateSpecDefaults, parameters []*privatev1.ClusterTemplateParameterDefinition) string {
 	GinkgoHelper()
 	client := privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
 	nodes := map[string]*privatev1.ClusterTemplateNodeSet{}
 	if host != "" {
-		nodes["workers"] = privatev1.ClusterTemplateNodeSet_builder{
-			HostType: privatev1.HostTypeReference_builder{Id: host}.Build(),
-			Size:     2,
-		}.Build()
+		ns := privatev1.ClusterTemplateNodeSet_builder{Size: 2}
+		ns.HostType = privatev1.HostTypeReference_builder{Id: host}.Build()
+		if bmit != "" {
+			ns.BaremetalInstanceType = privatev1.BareMetalInstanceTypeReference_builder{Id: bmit}.Build()
+		}
+		nodes["workers"] = ns.Build()
 	}
 	response, err := client.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 		Object: privatev1.ClusterTemplate_builder{

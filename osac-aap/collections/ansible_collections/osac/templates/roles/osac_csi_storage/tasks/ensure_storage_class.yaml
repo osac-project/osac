@@ -91,8 +91,8 @@
           namespace: "{{ osac_csi_driver_namespace }}"
           controller:
             fulfillment:
-              endpoint: "{{ osac_csi_driver_fulfillment_endpoint | default('http://fulfillment-service.osac-system.svc.cluster.local:8080') }}"
-              issuerUrl: "{{ osac_csi_driver_issuer_url | default('http://keycloak.osac-system.svc.cluster.local:8080/realms/osac') }}"
+              endpoint: "{{ fulfillment_endpoint }}"
+              issuerUrl: "{{ fulfillment_issuer_url }}"
               credentials:
                 secretName: "{{ osac_csi_driver_credentials_secret_name }}"
                 clientIdKey: client-id

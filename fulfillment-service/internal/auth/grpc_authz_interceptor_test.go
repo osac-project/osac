@@ -36,64 +36,31 @@ import (
 var _ = Describe("Rego authorization interceptor", func() {
 	Describe("Creation", func() {
 		It("Can be built if all the required parameters are set", func() {
+			evaluator, err := NewEvaluator().
+				AddEmergencyServiceAccounts([]string{"admin"}).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
 			interceptor, err := NewGrpcAuthzInterceptor().
 				SetLogger(logger).
+				SetEvaluator(evaluator).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 			Expect(interceptor).ToNot(BeNil())
 		})
 
 		It("Can't be built without a logger", func() {
+			evaluator, err := NewEvaluator().
+				AddEmergencyServiceAccounts([]string{"admin"}).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
 			interceptor, err := NewGrpcAuthzInterceptor().
+				SetEvaluator(evaluator).
 				Build()
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("logger is mandatory"))
 			Expect(interceptor).To(BeNil())
-		})
-
-		It("Rejects empty emergency service account name", func() {
-			_, err := NewGrpcAuthzInterceptor().
-				SetLogger(logger).
-				AddEmergencyServiceAccounts("").
-				Build()
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("not a valid Kubernetes service account name"))
-		})
-
-		It("Rejects whitespace-only emergency service account name", func() {
-			_, err := NewGrpcAuthzInterceptor().
-				SetLogger(logger).
-				AddEmergencyServiceAccounts("  ").
-				Build()
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("not a valid Kubernetes service account name"))
-		})
-
-		It("Rejects emergency service account name with colon", func() {
-			_, err := NewGrpcAuthzInterceptor().
-				SetLogger(logger).
-				AddEmergencyServiceAccounts("system:admin").
-				Build()
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("not a valid Kubernetes service account name"))
-		})
-
-		It("Rejects emergency service account name with uppercase", func() {
-			_, err := NewGrpcAuthzInterceptor().
-				SetLogger(logger).
-				AddEmergencyServiceAccounts("Admin").
-				Build()
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("not a valid Kubernetes service account name"))
-		})
-
-		It("Rejects emergency service account name starting with hyphen", func() {
-			_, err := NewGrpcAuthzInterceptor().
-				SetLogger(logger).
-				AddEmergencyServiceAccounts("-admin").
-				Build()
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("not a valid Kubernetes service account name"))
 		})
 	})
 
@@ -173,18 +140,24 @@ var _ = Describe("Rego authorization interceptor", func() {
 		BeforeEach(func() {
 			var err error
 
+			// Create the authorization evaluator with emergency service accounts:
+			evaluator, err := NewEvaluator().
+				AddEmergencyServiceAccounts([]string{
+					"admin",
+					"template-publisher",
+					"osac-operator",
+					"osac-operator-controller-manager",
+				}).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
 			// Create the interceptor:
 			interceptor, err = NewGrpcAuthzInterceptor().
 				SetLogger(logger).
+				SetEvaluator(evaluator).
 				AddAnonymousMethodRegex(`^/grpc\.health\.v1\.Health/.*$`).
 				AddAnonymousMethodRegex(`^/grpc\.reflection\.v1\.ServerReflection/.*$`).
 				AddAnonymousMethodRegex(`^/osac\.public\.v1\.Capabilities/.*$`).
-				AddEmergencyServiceAccounts(
-					"admin",
-					"osac-operator",
-					"osac-operator-controller-manager",
-					"template-publisher",
-				).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 		})
@@ -1106,8 +1079,14 @@ var _ = Describe("Rego authorization interceptor", func() {
 		})
 
 		It("Allows project manager to get project memberships", func(ctx context.Context) {
+			evaluator, err := NewEvaluator().
+				AddEmergencyServiceAccounts([]string{"admin"}).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
 			pmInterceptor, err := NewGrpcAuthzInterceptor().
 				SetLogger(logger).
+				SetEvaluator(evaluator).
 				SetProjectMembershipMetadataFetcher(func(ctx context.Context, id string) *ObjectMetadata {
 					Expect(id).To(Equal("pm-100"))
 					return &ObjectMetadata{Tenant: "my-tenant", Project: "my-project"}
@@ -1144,8 +1123,14 @@ var _ = Describe("Rego authorization interceptor", func() {
 		})
 
 		It("Allows project manager to update project memberships", func(ctx context.Context) {
+			evaluator, err := NewEvaluator().
+				AddEmergencyServiceAccounts([]string{"admin"}).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
 			pmInterceptor, err := NewGrpcAuthzInterceptor().
 				SetLogger(logger).
+				SetEvaluator(evaluator).
 				SetProjectMembershipMetadataFetcher(func(ctx context.Context, id string) *ObjectMetadata {
 					Expect(id).To(Equal("pm-200"))
 					return &ObjectMetadata{Tenant: "my-tenant", Project: "my-project"}
@@ -1185,8 +1170,14 @@ var _ = Describe("Rego authorization interceptor", func() {
 		})
 
 		It("Allows project manager to delete project memberships", func(ctx context.Context) {
+			evaluator, err := NewEvaluator().
+				AddEmergencyServiceAccounts([]string{"admin"}).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
 			pmInterceptor, err := NewGrpcAuthzInterceptor().
 				SetLogger(logger).
+				SetEvaluator(evaluator).
 				SetProjectMembershipMetadataFetcher(func(ctx context.Context, id string) *ObjectMetadata {
 					Expect(id).To(Equal("pm-300"))
 					return &ObjectMetadata{Tenant: "my-tenant", Project: "my-project"}

@@ -15,31 +15,21 @@ package auth
 
 import (
 	"context"
-	_ "embed"
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"regexp"
-	"strings"
 
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/open-policy-agent/opa/v1/rego"
-	"github.com/open-policy-agent/opa/v1/storage/inmem"
 	"google.golang.org/grpc"
 	grpccodes "google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
-	"k8s.io/apimachinery/pkg/util/validation"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/collections"
-	k8sfiles "github.com/osac-project/osac/fulfillment-service/internal/kubernetes/files"
 	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
 )
-
-//go:embed policies/authz.rego
-var authzPolicy string
 
 // ObjectMetadata contains the metadata fields fetched from the database for authorization decisions.
 type ObjectMetadata struct {
@@ -51,32 +41,6 @@ type ObjectMetadata struct {
 // MetadataFetcher fetches object metadata for authorization. Returns nil if the object is not found or on error.
 type MetadataFetcher func(ctx context.Context, id string) *ObjectMetadata
 
-// ContextExtensions holds the typed fields passed to OPA as input.context.context_extensions.
-type ContextExtensions struct {
-	ID      string
-	Tenant  string
-	Name    string
-	Project string
-}
-
-// ToMap converts the extensions to the untyped map OPA expects, omitting empty fields.
-func (e *ContextExtensions) ToMap() map[string]any {
-	m := map[string]any{}
-	if e.ID != "" {
-		m["id"] = e.ID
-	}
-	if e.Tenant != "" {
-		m["tenant"] = e.Tenant
-	}
-	if e.Name != "" {
-		m["name"] = e.Name
-	}
-	if e.Project != "" {
-		m["project"] = e.Project
-	}
-	return m
-}
-
 // GrpcAuthzInterceptorBuilder contains the data and logic needed to build an interceptor that checks authorization
 // using an embedded Rego policy evaluated with the OPA library. Don't create instances of this type directly, use the
 // NewGrpcAuthzInterceptor function instead.
@@ -86,7 +50,7 @@ type GrpcAuthzInterceptorBuilder struct {
 	inputCallback                    func(ctx context.Context, input map[string]any) error
 	metadataFetcher                  MetadataFetcher
 	projectMembershipMetadataFetcher MetadataFetcher
-	emergencyServiceAccounts         []string
+	evaluator                        AuthorizationEvaluator
 }
 
 // GrpcAuthzInterceptor is a gRPC interceptor that evaluates an embedded Rego policy for authorization. It reads the
@@ -97,7 +61,7 @@ type GrpcAuthzInterceptor struct {
 	logger                           *slog.Logger
 	anonymousMethods                 []*regexp.Regexp
 	inputCallback                    func(ctx context.Context, input map[string]any) error
-	query                            rego.PreparedEvalQuery
+	evaluator                        AuthorizationEvaluator
 	metadataFetcher                  MetadataFetcher
 	projectMembershipMetadataFetcher MetadataFetcher
 }
@@ -149,12 +113,9 @@ func (b *GrpcAuthzInterceptorBuilder) SetProjectMembershipMetadataFetcher(
 	return b
 }
 
-// AddEmergencyServiceAccounts adds Kubernetes service account names that are allowed to access the private API with
-// administrator permissions. These are intended only for emergency situations, for example when the regular
-// authentication mechanisms are not working.
-func (b *GrpcAuthzInterceptorBuilder) AddEmergencyServiceAccounts(
-	values ...string) *GrpcAuthzInterceptorBuilder {
-	b.emergencyServiceAccounts = append(b.emergencyServiceAccounts, values...)
+// SetEvaluator sets the AuthorizationEvaluator to use for policy evaluation. This is mandatory.
+func (b *GrpcAuthzInterceptorBuilder) SetEvaluator(value AuthorizationEvaluator) *GrpcAuthzInterceptorBuilder {
+	b.evaluator = value
 	return b
 }
 
@@ -165,71 +126,8 @@ func (b *GrpcAuthzInterceptorBuilder) Build() (result *GrpcAuthzInterceptor, err
 		return
 	}
 
-	// If we are running in a Kubernetes pod we want to add a 'nsName' to the external data, so that it can be
-	// used by the policy to construct the full names of Kubernetes service accounts.
-	var nsName string
-	nsBytes, err := os.ReadFile(k8sfiles.ServiceAccountNamespace)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			b.logger.Warn(
-				"Kubernetes namespace file not found, will use the default",
-				slog.String("file", k8sfiles.ServiceAccountNamespace),
-				slog.String("default", grpcAuthzDefaultNamespace),
-			)
-			nsName = grpcAuthzDefaultNamespace
-		} else {
-			err = fmt.Errorf(
-				"failed to read Kubernetes namespace file '%s': %w",
-				k8sfiles.ServiceAccountNamespace, err,
-			)
-			return
-		}
-	} else {
-		nsName = strings.TrimSpace(string(nsBytes))
-		if nsName == "" {
-			b.logger.Warn(
-				"Kubernetes namespace file is empty",
-				slog.String("file", k8sfiles.ServiceAccountNamespace),
-			)
-			nsName = grpcAuthzDefaultNamespace
-		}
-	}
-
-	// Validate and build the full Kubernetes service account names for the emergency accounts:
-	emergencyServiceAccounts := make([]any, 0, len(b.emergencyServiceAccounts))
-	for _, emergencyServiceAccount := range b.emergencyServiceAccounts {
-		emergencyServiceAccount = strings.TrimSpace(emergencyServiceAccount)
-		errs := validation.IsDNS1123Subdomain(emergencyServiceAccount)
-		if len(errs) > 0 {
-			err = fmt.Errorf(
-				"emergency service account name '%s' is not a valid Kubernetes service account name",
-				emergencyServiceAccount,
-			)
-			return
-		}
-
-		emergencyServiceAccountName := fmt.Sprintf(
-			"system:serviceaccount:%s:%s",
-			nsName, emergencyServiceAccount,
-		)
-		emergencyServiceAccounts = append(emergencyServiceAccounts, emergencyServiceAccountName)
-	}
-
-	// Build external data for the policy:
-	policyData := inmem.NewFromObject(map[string]any{
-		"emergency_service_accounts": emergencyServiceAccounts,
-	})
-
-	// Prepare the Rego query by compiling the embedded policy once. The query evaluates all exported variables in
-	// the authz package so we can read 'allow', 'subject_user', 'subject_tenant_result' and 'is_admin' from the
-	// results.
-	query, err := rego.New(
-		rego.Query("data.authz"),
-		rego.Module("authz.rego", authzPolicy),
-		rego.Store(policyData),
-	).PrepareForEval(context.Background())
-	if err != nil {
-		err = fmt.Errorf("failed to compile authorization policy: %w", err)
+	if b.evaluator == nil {
+		err = errors.New("evaluator is mandatory")
 		return
 	}
 
@@ -250,7 +148,7 @@ func (b *GrpcAuthzInterceptorBuilder) Build() (result *GrpcAuthzInterceptor, err
 		metadataFetcher:                  b.metadataFetcher,
 		projectMembershipMetadataFetcher: b.projectMembershipMetadataFetcher,
 		inputCallback:                    b.inputCallback,
-		query:                            query,
+		evaluator:                        b.evaluator,
 	}
 	return
 }
@@ -334,23 +232,29 @@ func (i *GrpcAuthzInterceptor) authorizeWithoutToken(ctx context.Context, method
 
 func (i *GrpcAuthzInterceptor) authorizeWithToken(ctx context.Context, method string, request any,
 	token *jwt.Token) (result context.Context, err error) {
-	// Build the input for the Rego policy:
-	input, err := i.buildInput(ctx, method, request, token)
+	logger := i.logger.With(slog.String("method", method))
+
+	// Extract authentication context from the JWT token
+	authContext, err := i.extractAuthContext(token)
 	if err != nil {
-		i.logger.ErrorContext(
+		logger.ErrorContext(
 			ctx,
-			"Failed to build authorization policy input",
+			"Failed to extract authentication context",
 			slog.Any("error", err),
 		)
 		err = grpcstatus.Error(grpccodes.Internal, "failed to process authorization")
 		return
 	}
 
-	// If there is an input callback, call it:
+	// Build context extensions from the request and method
+	i.buildContextExtensions(ctx, authContext, method, request)
+
+	// If there is an input callback, build the legacy input map and call it for backwards compatibility
 	if i.inputCallback != nil {
+		input := constructOPAInput(authContext, method)
 		err = i.inputCallback(ctx, input)
 		if err != nil {
-			i.logger.ErrorContext(
+			logger.ErrorContext(
 				ctx,
 				"Failed to call input callback",
 				slog.Any("error", err),
@@ -360,9 +264,8 @@ func (i *GrpcAuthzInterceptor) authorizeWithToken(ctx context.Context, method st
 		}
 	}
 
-	// Evaluate th e policy:
-	logger := i.logger.With(slog.String("method", method))
-	results, err := i.query.Eval(ctx, rego.EvalInput(input))
+	// Evaluate the authorization policy using the shared evaluator
+	decision, err := i.evaluator.Evaluate(ctx, authContext, method)
 	if err != nil {
 		logger.ErrorContext(
 			ctx,
@@ -372,30 +275,16 @@ func (i *GrpcAuthzInterceptor) authorizeWithToken(ctx context.Context, method st
 		err = grpcstatus.Error(grpccodes.Internal, "failed to evaluate authorization policy")
 		return
 	}
-	if len(results) == 0 {
-		logger.DebugContext(ctx, "Authorization policy returned no results")
-		err = grpcstatus.Error(grpccodes.PermissionDenied, "permission denied")
-		return
-	}
 
-	// The query is 'data.authz' so 'results[0].Expressions[0].Value' is a map of all exported variables:
-	authzData, ok := results[0].Expressions[0].Value.(map[string]any)
-	if !ok {
-		logger.ErrorContext(ctx, "Authorization policy returned unexpected result type")
-		err = grpcstatus.Error(grpccodes.Internal, "failed to evaluate authorization policy")
-		return
-	}
-
-	// Check if the request is allowed:
-	allow, _ := authzData["allow"].(bool)
-	if !allow {
+	// Check if the request is allowed
+	if decision == nil || !decision.Allowed {
 		logger.DebugContext(ctx, "Permission denied by authorization policy")
 		err = grpcstatus.Error(grpccodes.PermissionDenied, "permission denied")
 		return
 	}
 
-	// Build the subject from the policy output:
-	subject, err := i.buildSubject(authzData)
+	// Build the subject from the decision
+	subject, err := i.buildSubjectFromDecision(decision)
 	if err != nil {
 		logger.ErrorContext(
 			ctx,
@@ -464,101 +353,84 @@ func (i *GrpcAuthzInterceptor) isAnonymousMethod(method string) bool {
 	return false
 }
 
-// buildInput constructs the OPA input map from the validated JWT token.
-func (i *GrpcAuthzInterceptor) buildInput(ctx context.Context, method string, request any,
-	token *jwt.Token) (result map[string]any, err error) {
+// extractAuthContext extracts an AuthContext from the validated JWT token.
+// This preserves all identity claims needed for OPA policy evaluation.
+func (i *GrpcAuthzInterceptor) extractAuthContext(token *jwt.Token) (*AuthContext, error) {
 	// Get the claims from the token:
 	claims, ok := token.Claims.(jwt.MapClaims)
 	if !ok {
-		err = fmt.Errorf("unexpected claims type")
-		return
+		return nil, fmt.Errorf("unexpected claims type")
 	}
 
 	// Check if this the token corresponds to a Kubernetes service account:
 	_, kube := claims["kubernetes.io"]
 
-	// Build the context extensions that the OPA policy reads from input.context.context_extensions.
-	var ext ContextExtensions
+	authContext := &AuthContext{}
+
+	if kube {
+		authContext.AuthMethod = "serviceaccount"
+		authContext.Username, _ = claims["sub"].(string)
+		authContext.Groups = claimAsAnySlice(claims, "groups")
+	} else {
+		authContext.AuthMethod = "jwt"
+
+		username, _ := claims["preferred_username"].(string)
+		if username == "" {
+			username, _ = claims["username"].(string)
+		}
+		authContext.Username = username
+		authContext.Groups = claimAsAnySlice(claims, "groups")
+
+		// Handle organization claim - can be array or object
+		if orgValue := claims["organization"]; orgValue != nil {
+			if orgArray := claimAsAnySlice(claims, "organization"); orgArray != nil {
+				authContext.Organization = orgArray
+			} else if orgObj, ok := orgValue.(map[string]any); ok {
+				authContext.Organization = orgObj
+			}
+		}
+
+		authContext.Organizations = claimAsAnySlice(claims, "organizations")
+
+		if realmAccess, ok := claims["realm_access"].(map[string]any); ok {
+			authContext.RealmAccess = realmAccess
+		}
+	}
+
+	return authContext, nil
+}
+
+// buildContextExtensions builds the ContextExtensions from the request and method.
+// This includes extracting IDs, fetching metadata from the database for certain operations,
+// and extracting project names from request bodies.
+func (i *GrpcAuthzInterceptor) buildContextExtensions(ctx context.Context, authContext *AuthContext, method string, request any) {
 	if request != nil {
-		ext.ID = i.extractId(request)
+		authContext.ID = i.extractId(request)
 
 		// For project Get/Delete/Update operations, fetch the authoritative tenant and name from the database
 		// to prevent clients from spoofing these values for authorization bypass.
-		if i.shouldFetchProjectMetadata(method, ext.ID) && i.metadataFetcher != nil {
-			if meta := i.metadataFetcher(ctx, ext.ID); meta != nil {
-				ext.Tenant = meta.Tenant
-				ext.Name = meta.Name
+		if i.shouldFetchProjectMetadata(method, authContext.ID) && i.metadataFetcher != nil {
+			if meta := i.metadataFetcher(ctx, authContext.ID); meta != nil {
+				authContext.Tenant = meta.Tenant
+				authContext.Name = meta.Name
 			}
 		}
 
 		// For project membership Get/Delete/Update, fetch the membership's tenant and project name
 		// from the database for authorization.
-		if i.shouldFetchProjectMembershipMetadata(method, ext.ID) && i.projectMembershipMetadataFetcher != nil {
-			if meta := i.projectMembershipMetadataFetcher(ctx, ext.ID); meta != nil {
-				ext.Tenant = meta.Tenant
-				ext.Project = meta.Project
+		if i.shouldFetchProjectMembershipMetadata(method, authContext.ID) && i.projectMembershipMetadataFetcher != nil {
+			if meta := i.projectMembershipMetadataFetcher(ctx, authContext.ID); meta != nil {
+				authContext.Tenant = meta.Tenant
+				authContext.Project = meta.Project
 			}
 		}
 
 		// For project membership Create, extract the project name from the request body.
 		// The OPA policy iterates over the user's tenants to check manager group membership.
 		if method == "/osac.public.v1.ProjectMemberships/Create" {
-			ext.Project = i.extractProjectFromRequest(request)
+			authContext.Project = i.extractProjectFromRequest(request)
 		}
 	}
-
-	// Build the identity document:
-	identity := map[string]any{}
-	if kube {
-		identity["authnMethod"] = "serviceaccount"
-		sub, _ := claims["sub"].(string)
-		identity["user"] = map[string]any{
-			"username": sub,
-			"groups":   claimAsAnySlice(claims, "groups"),
-		}
-	} else {
-		identity["authnMethod"] = "jwt"
-
-		username, _ := claims["preferred_username"].(string)
-		if username == "" {
-			username, _ = claims["username"].(string)
-		}
-		identity["username"] = username
-
-		if groups := claimAsAnySlice(claims, "groups"); groups != nil {
-			identity["groups"] = groups
-		}
-		// Handle organization claim - can be array or object
-		if orgValue := claims["organization"]; orgValue != nil {
-			if orgArray := claimAsAnySlice(claims, "organization"); orgArray != nil {
-				identity["organization"] = orgArray
-			} else if orgObj, ok := orgValue.(map[string]any); ok {
-				identity["organization"] = orgObj
-			}
-		}
-		if orgs := claimAsAnySlice(claims, "organizations"); orgs != nil {
-			identity["organizations"] = orgs
-		}
-		if realmAccess, ok := claims["realm_access"].(map[string]any); ok {
-			identity["realm_access"] = realmAccess
-		}
-	}
-
-	// Build the input document:
-	result = map[string]any{
-		"context": map[string]any{
-			"request": map[string]any{
-				"http": map[string]any{
-					"path": method,
-				},
-			},
-			"context_extensions": ext.ToMap(),
-		},
-		"auth": map[string]any{
-			"identity": identity,
-		},
-	}
-	return
 }
 
 // shouldFetchProjectMetadata determines if we should fetch project metadata from the database for authorization.
@@ -615,36 +487,27 @@ func claimAsAnySlice(claims jwt.MapClaims, name string) []any {
 	}
 }
 
-// buildSubject constructs a Subject from the Rego policy evaluation output.
-func (i *GrpcAuthzInterceptor) buildSubject(authzData map[string]any) (result *Subject, err error) {
-	user, _ := authzData["subject_user"].(string)
-	if user == "" {
+// buildSubjectFromDecision constructs a Subject from an AuthzDecision.
+func (i *GrpcAuthzInterceptor) buildSubjectFromDecision(decision *AuthzDecision) (result *Subject, err error) {
+	if decision.SubjectUser == "" {
 		err = fmt.Errorf("policy did not produce a subject_user")
 		return
 	}
 
-	tenantValues, _ := authzData["subject_tenant_result"].([]any)
-	var tenantNames []string
-	for _, v := range tenantValues {
-		if s, ok := v.(string); ok {
-			if s == "*" {
-				result = &Subject{
-					User:    user,
-					Tenants: AllTenants,
-				}
-				return
+	// Check for the universal tenant marker "*"
+	for _, tenant := range decision.SubjectTenants {
+		if tenant == "*" {
+			result = &Subject{
+				User:    decision.SubjectUser,
+				Tenants: AllTenants,
 			}
-			tenantNames = append(tenantNames, s)
+			return
 		}
 	}
 
 	result = &Subject{
-		User:    user,
-		Tenants: collections.NewSet(tenantNames...),
+		User:    decision.SubjectUser,
+		Tenants: collections.NewSet(decision.SubjectTenants...),
 	}
 	return
 }
-
-// k8sTokenFile is the value of the 'namespace' external data item passed to the Rego policy when we aren't running
-// inside a Kubernetes pod.
-const grpcAuthzDefaultNamespace = "osac"

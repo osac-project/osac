@@ -380,6 +380,14 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		return fmt.Errorf("failed to create default tenancy logic: %w", err)
 	}
 
+	// Create the authorization evaluator:
+	evaluator, err := auth.NewEvaluator().
+		AddEmergencyServiceAccounts(c.args.emergencyServiceAccounts).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create authorization evaluator: %w", err)
+	}
+
 	// Prepare the authorization interceptor:
 	c.logger.InfoContext(ctx, "Creating Rego authorization interceptor")
 	authzInterceptor, err := auth.NewGrpcAuthzInterceptor().
@@ -387,7 +395,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		AddAnonymousMethodRegex(anonymousMethodsRegex).
 		SetMetadataFetcher(metadataFetcher).
 		SetProjectMembershipMetadataFetcher(pmMetadataFetcher).
-		AddEmergencyServiceAccounts(c.args.emergencyServiceAccounts...).
+		SetEvaluator(evaluator).
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create Rego authorization interceptor: %w", err)

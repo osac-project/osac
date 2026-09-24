@@ -357,11 +357,11 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1
 
 	clusterName := string(r.targetCluster)
 
-	// needsMissingTierRetry is set when some defined tiers still lack a
+	// hasMissingTiers is set when some defined tiers still lack a
 	// StorageClass. The provisioning retry is deferred past Stage 3
 	// (handleCaaSUpdate) so that CaaS cluster lifecycle management
 	// (finalizer addition/removal, CaaS provisioning) is never blocked.
-	var needsMissingTierRetry bool
+	var hasMissingTiers bool
 
 	if r.ClusterStorageProvider != nil {
 		scResult, err := r.resolveTenantSpecificStorageClasses(ctx, targetClient, tenantName)
@@ -415,8 +415,8 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1
 		// return here would block CaaS ClusterOrder lifecycle
 		// management (finalizer addition, provisioning).
 		missing := missingTierNames(tierDefinitions, scResult.resolved, scResult.ambiguousTiers)
-		needsMissingTierRetry = len(missing) > 0 && len(tierDefinitions) > 0
-		if needsMissingTierRetry {
+		hasMissingTiers = len(missing) > 0 && len(tierDefinitions) > 0
+		if hasMissingTiers {
 			instance.SetStatusCondition(v1alpha1.TenantConditionClusterStorageReady,
 				metav1.ConditionFalse,
 				v1alpha1.TenantReasonNotFound,
@@ -477,14 +477,6 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1
 		}
 	}
 
-	// Poll any non-terminal class provision job to update its status
-	latestClassJob := provisioning.FindLatestJobByType(instance.Status.ClusterStorageJobs, v1alpha1.JobTypeProvision)
-	if latestClassJob != nil && !latestClassJob.State.IsTerminal() && r.ClusterStorageProvider != nil {
-		return provisioning.PollJob(ctx, r.ClusterStorageProvider, instance,
-			&provisioning.State{Jobs: &instance.Status.ClusterStorageJobs},
-			latestClassJob, r.StatusPollInterval, nil)
-	}
-
 	// Stage 3: provision cluster-side storage on CaaS clusters owned by this tenant.
 	// Runs after VMaaS (Stage 2) because CaaS requires StorageBackendReady (Stage 1)
 	// to have completed during tenant onboarding before cluster-side resources can
@@ -496,12 +488,19 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1
 		}
 	}
 
-	// Deferred missing-tier retry: trigger VMaaS provisioning for tiers
-	// that still lack a StorageClass. This runs after Stage 3
-	// (handleCaaSUpdate) so that CaaS cluster lifecycle management
-	// (finalizer addition/removal, CaaS provisioning) is never blocked
-	// by VMaaS provisioning state.
-	if needsMissingTierRetry {
+	// Poll any non-terminal class provision job to update its status.
+	// This runs after handleCaaSUpdate (Stage 3) so that CaaS cluster
+	// lifecycle management is never blocked by VMaaS job polling.
+	latestClassJob := provisioning.FindLatestJobByType(instance.Status.ClusterStorageJobs, v1alpha1.JobTypeProvision)
+	if latestClassJob != nil && !latestClassJob.State.IsTerminal() && r.ClusterStorageProvider != nil {
+		return provisioning.PollJob(ctx, r.ClusterStorageProvider, instance,
+			&provisioning.State{Jobs: &instance.Status.ClusterStorageJobs},
+			latestClassJob, r.StatusPollInterval, nil)
+	}
+
+	// Stage 4: Retry provisioning for any storage tiers that failed to resolve.
+	// This runs after handleCaaSUpdate to avoid blocking cluster lifecycle.
+	if hasMissingTiers {
 		return r.handleClusterStorageProvisioning(ctx, instance, hubSecretReady)
 	}
 

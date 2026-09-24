@@ -449,26 +449,35 @@ func VolumeNamespacePredicate(namespace string) predicate.Predicate {
 	)
 }
 
-// SetupWithManager registers the Volume controller with the manager. It
-// watches Volume CRs and owned TopoLVM LogicalVolumes on the local (hub)
-// cluster.
+// SetupWithManager registers the Volume controller with the manager. It always
+// watches Volume CRs, and watches owned TopoLVM LogicalVolumes only when an
+// LVMS provisioner is configured. TopoLVM is optional, so registering that
+// watch without LVMS would make manager startup depend on an absent CRD.
 func (r *VolumeReconciler) SetupWithManager(mgr mcmanager.Manager) error {
-	logicalVolumeMetadata := &metav1.PartialObjectMetadata{}
-	logicalVolumeMetadata.SetGroupVersionKind(logicalVolumeGVK)
-
-	return mcbuilder.ControllerManagedBy(mgr).
+	builder := mcbuilder.ControllerManagedBy(mgr).
 		For(&v1alpha1.Volume{},
 			mcbuilder.WithPredicates(VolumeNamespacePredicate(r.VolumeNamespace)),
 			mcbuilder.WithEngageWithLocalCluster(true),
-			mcbuilder.WithEngageWithProviderClusters(false)).
-		WatchesMetadata(
+			mcbuilder.WithEngageWithProviderClusters(false))
+
+	if r.hasLVMSProvisioner() {
+		logicalVolumeMetadata := &metav1.PartialObjectMetadata{}
+		logicalVolumeMetadata.SetGroupVersionKind(logicalVolumeGVK)
+		builder = builder.WatchesMetadata(
 			logicalVolumeMetadata,
 			mchandler.EnqueueRequestsFromMapFunc(r.mapLogicalVolumeToVolume),
 			mcbuilder.WithPredicates(logicalVolumeOwnerPredicate()),
 			mcbuilder.WithEngageWithLocalCluster(true),
 			mcbuilder.WithEngageWithProviderClusters(false),
-		).
-		Complete(r)
+		)
+	}
+
+	return builder.Complete(r)
+}
+
+func (r *VolumeReconciler) hasLVMSProvisioner() bool {
+	_, err := r.VendorProvisioners.Lookup(lvmsProvider)
+	return err == nil
 }
 
 func logicalVolumeOwnerPredicate() predicate.Predicate {

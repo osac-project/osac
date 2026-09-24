@@ -86,6 +86,17 @@ var _ = Describe("VolumeReconciler", func() {
 		}
 	})
 
+	DescribeTable("adds the TopoLVM watch only when an LVMS provisioner is registered",
+		func(provisioners VendorProvisionerRegistry, expected bool) {
+			reconciler.VendorProvisioners = provisioners
+			Expect(reconciler.hasLVMSProvisioner()).To(Equal(expected))
+		},
+		Entry("no vendor provisioners", VendorProvisionerRegistry{}, false),
+		Entry("a network provider only", VendorProvisionerRegistry{"vast-primary": NewMockVendorProvisioner()}, false),
+		Entry("LVMS registered", VendorProvisionerRegistry{lvmsProvider: NewLvmsVendorProvisioner(nil)}, true),
+		Entry("LVMS entry without an implementation", VendorProvisionerRegistry{lvmsProvider: nil}, false),
+	)
+
 	It("should add finalizer on first reconcile", func() {
 		Expect(k8sClient.Create(testCtx, vol)).To(Succeed())
 

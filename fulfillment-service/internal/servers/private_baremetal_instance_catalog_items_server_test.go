@@ -86,6 +86,17 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
+		It("rejects system-tenant catalog items while allowing shared offerings", func() {
+			_, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
+				Object: privatev1.BareMetalInstanceCatalogItem_builder{
+					Metadata: privatev1.Metadata_builder{Name: "system-bmi-offering", Tenant: auth.SystemTenant}.Build(),
+					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-shared-template-id", Shared: true}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied))
+			Expect(err).To(MatchError(ContainSubstring("objects cannot be placed in the 'system' tenant")))
+		})
+
 		It("Creates object", func() {
 			response, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{

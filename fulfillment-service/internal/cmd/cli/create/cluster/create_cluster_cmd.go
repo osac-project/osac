@@ -19,8 +19,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -32,6 +34,7 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
+	"gopkg.in/yaml.v3"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/fieldutil"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/netutil"
@@ -147,6 +150,12 @@ func Cmd() *cobra.Command {
 		false,
 		externalIPAttachmentFlagHelp,
 	)
+	flags.StringArrayVar(
+		&runner.args.nodeSets,
+		"node-set",
+		nil,
+		nodeSetFlagHelp,
+	)
 	result.MarkFlagsMutuallyExclusive("catalog-item", "template")
 	result.MarkFlagsOneRequired("catalog-item", "template")
 	return result
@@ -167,6 +176,7 @@ type runnerContext struct {
 		podCIDR                 string
 		serviceCIDR             string
 		networkAttachment       string
+		nodeSets                []string
 		externalIPAttachment    bool
 	}
 	logger                *slog.Logger
@@ -278,7 +288,9 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		specBuilder := publicv1.ClusterSpec_builder{
 			CatalogItem: &publicv1.ClusterCatalogItemReference{Id: catalogItem.GetId()},
 		}
-		c.applyOptionalSpecFields(&specBuilder, sshPublicKey)
+		if err := c.applyOptionalSpecFields(&specBuilder, sshPublicKey); err != nil {
+			return err
+		}
 		if cmd.Flags().Changed("external-ip-attachment") {
 			specBuilder.AutoExternalIpAttachment = proto.Bool(c.args.externalIPAttachment)
 		}
@@ -320,7 +332,9 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		Template:           &publicv1.ClusterTemplateReference{Id: template.GetId()},
 		TemplateParameters: templateParameterValues,
 	}
-	c.applyOptionalSpecFields(&specBuilder, sshPublicKey)
+	if err := c.applyOptionalSpecFields(&specBuilder, sshPublicKey); err != nil {
+		return err
+	}
 	if cmd.Flags().Changed("external-ip-attachment") {
 		specBuilder.AutoExternalIpAttachment = proto.Bool(c.args.externalIPAttachment)
 	}
@@ -344,11 +358,11 @@ func (c *runnerContext) resolveSSHPublicKey() (sshPublicKey string, err error) {
 	return
 }
 
-// applyOptionalSpecFields sets pull secret, SSH public key, version, and network CIDRs
+// applyOptionalSpecFields sets pull secret, SSH public key, version, network CIDRs, and node sets
 // on the spec builder when their corresponding flags are provided.
 func (c *runnerContext) applyOptionalSpecFields(
 	specBuilder *publicv1.ClusterSpec_builder, sshPublicKey string,
-) {
+) error {
 	if c.args.pullSecret != "" {
 		specBuilder.PullSecretSecret = publicv1.SecretLocalReference_builder{
 			Name: c.args.pullSecret,
@@ -370,6 +384,19 @@ func (c *runnerContext) applyOptionalSpecFields(
 		}
 		specBuilder.Network = networkBuilder.Build()
 	}
+	if len(c.args.nodeSets) > 0 {
+		if specBuilder.NodeSets == nil {
+			specBuilder.NodeSets = map[string]*publicv1.ClusterNodeSet{}
+		}
+		for _, nsArg := range c.args.nodeSets {
+			name, ns, err := parseClusterNodeSetFlag(nsArg)
+			if err != nil {
+				return err
+			}
+			specBuilder.NodeSets[name] = ns
+		}
+	}
+	return nil
 }
 
 // createCluster creates a cluster with the given spec and prints the result.
@@ -936,6 +963,148 @@ func parseClusterSubnetRef(s string) (string, error) {
 	}
 	return s, nil
 }
+
+// parseClusterNodeSetFlag parses one --node-set value.
+// Accepted formats:
+//   - Structured mapping: --node-set 'workers={size: 2, baremetal_instance_type: {name: ci-worker-bm}}'
+//   - Flat mapping:       --node-set 'workers={size: 2, baremetal_instance_type: ci-worker-bm}'
+//   - Key-value list:     --node-set name=workers,size=2,baremetal_instance_type=ci-worker-bm
+//     --node-set workers,size=2,baremetal_instance_type=ci-worker-bm
+//   - Future compute:     --node-set 'workers={size: 2, instance_type: compute-small}'
+//     --node-set name=workers,size=2,instance_type=compute-small
+func parseClusterNodeSetFlag(s string) (string, *publicv1.ClusterNodeSet, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", nil, fmt.Errorf("empty --node-set value")
+	}
+
+	var name string
+	var rawBody string
+
+	// Handle name={...} or workers={...}
+	if idx := strings.Index(s, "={"); idx != -1 && strings.HasSuffix(s, "}") {
+		name = strings.TrimSpace(s[:idx])
+		rawBody = strings.TrimSpace(s[idx+1:])
+	} else if strings.HasPrefix(s, "{") && strings.HasSuffix(s, "}") {
+		rawBody = s
+	} else {
+		// Key-value pairs: name=workers,size=2,... or workers,size=2,...
+		pairs := strings.Split(s, ",")
+		parsed := make(map[string]any)
+		for i, pair := range pairs {
+			kv := strings.SplitN(strings.TrimSpace(pair), "=", 2)
+			if len(kv) == 2 {
+				k := strings.ToLower(strings.TrimSpace(kv[0]))
+				v := strings.TrimSpace(kv[1])
+				switch k {
+				case "name":
+					name = v
+				case "size":
+					if n, err := strconv.ParseInt(v, 10, 32); err == nil {
+						parsed["size"] = n
+					}
+				default:
+					parsed[k] = v
+				}
+			} else if i == 0 && len(kv) == 1 {
+				name = strings.TrimSpace(kv[0])
+			}
+		}
+		return buildNodeSetFromMap(name, parsed, s)
+	}
+
+	if name == "" {
+		return "", nil, fmt.Errorf("node set name cannot be empty in %q", s)
+	}
+
+	var parsed map[string]any
+	if err := yaml.Unmarshal([]byte(rawBody), &parsed); err != nil {
+		normalized := regexp.MustCompile(`:(\S)`).ReplaceAllString(rawBody, ": $1")
+		if err2 := yaml.Unmarshal([]byte(normalized), &parsed); err2 != nil {
+			return "", nil, fmt.Errorf("invalid node set payload %q: %w", rawBody, err)
+		}
+	}
+
+	return buildNodeSetFromMap(name, parsed, s)
+}
+
+func buildNodeSetFromMap(name string, parsed map[string]any, original string) (string, *publicv1.ClusterNodeSet, error) {
+	if name == "" {
+		if n, ok := parsed["name"].(string); ok && n != "" {
+			name = n
+		} else {
+			name = "workers"
+		}
+	}
+
+	builder := publicv1.ClusterNodeSet_builder{}
+	const (
+		minInt32 = int64(-1 << 31)
+		maxInt32 = int64(1<<31 - 1)
+	)
+	setSize := func(value any) error {
+		var size int64
+		switch v := value.(type) {
+		case int:
+			size = int64(v)
+		case int32:
+			size = int64(v)
+		case int64:
+			size = v
+		case float64:
+			if math.Trunc(v) != v || v < float64(minInt32) || v > float64(maxInt32) {
+				return fmt.Errorf("node set size must be a 32-bit integer in %q", original)
+			}
+			size = int64(v)
+		default:
+			return fmt.Errorf("node set size must be an integer in %q", original)
+		}
+		if size < minInt32 || size > maxInt32 {
+			return fmt.Errorf("node set size must be a 32-bit integer in %q", original)
+		}
+		builder.Size = proto.Int32(int32(size))
+		return nil
+	}
+
+	if sz, ok := parsed["size"]; ok {
+		if err := setSize(sz); err != nil {
+			return "", nil, err
+		}
+	}
+
+	var bmitName string
+	for _, k := range []string{"baremetal_instance_type", "baremetal-instance-type", "bmit", "instance_type", "instance-type"} {
+		if val, ok := parsed[k]; ok {
+			switch v := val.(type) {
+			case string:
+				bmitName = v
+			case map[string]any:
+				if n, ok := v["name"].(string); ok {
+					bmitName = n
+				}
+			}
+			break
+		}
+	}
+	if bmitName != "" {
+		builder.BaremetalInstanceType = publicv1.BareMetalInstanceTypeReference_builder{
+			Name: bmitName,
+		}.Build()
+	}
+
+	return name, builder.Build(), nil
+}
+
+const nodeSetFlagHelp = `
+_NODE_SET_ - Node set configuration for worker pools in format
+{{ bt }}name={size: <int>, baremetal_instance_type: <name>}{{ bt }} or
+{{ bt }}name=<name>,size=<int>,baremetal_instance_type=<name>{{ bt }}.
+Can be specified multiple times for multiple worker pools.
+Examples:
+  {{ bt }}--node-set 'workers={size: 2, baremetal_instance_type: {name: ci-worker-bm}}'{{ bt }}
+  {{ bt }}--node-set 'workers={size: 2, baremetal_instance_type: ci-worker-bm}'{{ bt }}
+  {{ bt }}--node-set name=workers,size=2,baremetal_instance_type=ci-worker-bm{{ bt }}
+`
 
 const shortHelp = `Create a cluster`
 

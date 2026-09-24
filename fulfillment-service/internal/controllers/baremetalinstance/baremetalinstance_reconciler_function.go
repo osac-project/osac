@@ -364,7 +364,7 @@ func (t *task) getKubeObject(ctx context.Context) (result *bmfov1alpha1.BareMeta
 	if count > 1 {
 		// OSAC-4208: prune duplicate CRs instead of erroring.
 		slices.SortFunc(items, func(a, b bmfov1alpha1.BareMetalInstance) int {
-			return a.CreationTimestamp.Time.Compare(b.CreationTimestamp.Time)
+			return a.CreationTimestamp.Compare(b.CreationTimestamp.Time)
 		})
 		extras := make([]clnt.Object, count-1)
 		for i := 1; i < count; i++ {

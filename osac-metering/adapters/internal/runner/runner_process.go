@@ -18,6 +18,7 @@ import (
 	"github.com/IBM/sarama"
 	cloudevents "github.com/cloudevents/sdk-go/v2"
 
+	"github.com/osac-project/osac-metering/adapters"
 	"github.com/osac-project/osac-metering/schema"
 )
 
@@ -51,7 +52,7 @@ func (r *Runner) processMessage(
 
 	r.checkOutOfOrder(ce, provider)
 
-	event := MeteringEvent{
+	event := adapters.MeteringEvent{
 		CloudEvent: ce,
 		Topic:      msg.Topic,
 		Partition:  msg.Partition,

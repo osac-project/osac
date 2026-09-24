@@ -87,7 +87,7 @@ func main() {
 	}
 
 	adapter := m360.NewAdapter(m360URL, apiVersion, apiKey, logger)
-	runner := runner.NewRunner(adapter, runner.RunnerConfig{
+	r := runner.NewRunner(adapter, runner.RunnerConfig{
 		Brokers:       brokers,
 		ConsumerGroup: group,
 		Topics:        topics,
@@ -96,7 +96,7 @@ func main() {
 	}, logger, opts...)
 
 	mux := http.NewServeMux()
-	mux.Handle("/metrics", runner.MetricsHandler())
+	mux.Handle("/metrics", r.MetricsHandler())
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
@@ -129,7 +129,7 @@ func main() {
 	log.Printf("starting m360 adapter: topics=%v group=%s api_version=%s flush=%s",
 		topics, group, apiVersion, flushInterval)
 
-	runErr := runner.Run(ctx)
+	runErr := r.Run(ctx)
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()

@@ -19,6 +19,7 @@ import (
 	"github.com/IBM/sarama/mocks"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/osac-project/osac-metering/adapters/internal/kafka"
 )
 
 var _ = Describe("DLQProducer", func() {
@@ -29,7 +30,7 @@ var _ = Describe("DLQProducer", func() {
 
 	BeforeEach(func() {
 		mockProducer = mocks.NewSyncProducer(GinkgoT(), nil)
-		dlq = NewDLQProducerFromSyncProducer(mockProducer, TopicDLQ)
+		dlq = NewDLQProducerFromSyncProducer(mockProducer, kafka.TopicDLQ)
 	})
 
 	AfterEach(func() {
@@ -42,7 +43,7 @@ var _ = Describe("DLQProducer", func() {
 		It("preserves original message value bytes", func() {
 			originalValue := []byte(`{"specversion":"1.0","id":"evt-1","type":"test"}`)
 			msg := &sarama.ConsumerMessage{
-				Topic:     TopicLifecycle,
+				Topic:     kafka.TopicLifecycle,
 				Partition: 2,
 				Offset:    42,
 				Value:     originalValue,
@@ -68,7 +69,7 @@ var _ = Describe("DLQProducer", func() {
 
 		It("includes correct failure metadata headers", func() {
 			msg := &sarama.ConsumerMessage{
-				Topic:     TopicLifecycle,
+				Topic:     kafka.TopicLifecycle,
 				Partition: 3,
 				Offset:    100,
 				Value:     []byte(`{}`),
@@ -87,10 +88,10 @@ var _ = Describe("DLQProducer", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			Expect(sentMsg).NotTo(BeNil())
-			Expect(sentMsg.Topic).To(Equal(TopicDLQ))
+			Expect(sentMsg.Topic).To(Equal(kafka.TopicDLQ))
 
 			headers := headerMap(sentMsg.Headers)
-			Expect(headers["original-topic"]).To(Equal(TopicLifecycle))
+			Expect(headers["original-topic"]).To(Equal(kafka.TopicLifecycle))
 			Expect(headers["original-offset"]).To(Equal("100"))
 			Expect(headers["original-partition"]).To(Equal("3"))
 			Expect(headers["failure-reason"]).To(Equal("retries exhausted"))
@@ -103,7 +104,7 @@ var _ = Describe("DLQProducer", func() {
 
 		It("preserves original message key", func() {
 			msg := &sarama.ConsumerMessage{
-				Topic:     TopicLifecycle,
+				Topic:     kafka.TopicLifecycle,
 				Partition: 0,
 				Offset:    0,
 				Value:     []byte(`{}`),
@@ -128,7 +129,7 @@ var _ = Describe("DLQProducer", func() {
 
 		It("handles nil key gracefully", func() {
 			msg := &sarama.ConsumerMessage{
-				Topic:     TopicLifecycle,
+				Topic:     kafka.TopicLifecycle,
 				Partition: 0,
 				Offset:    0,
 				Value:     []byte(`{}`),
@@ -142,7 +143,7 @@ var _ = Describe("DLQProducer", func() {
 
 		It("truncates long failure-reason header", func() {
 			msg := &sarama.ConsumerMessage{
-				Topic:     TopicLifecycle,
+				Topic:     kafka.TopicLifecycle,
 				Partition: 0,
 				Offset:    0,
 				Value:     []byte(`{}`),
@@ -167,7 +168,7 @@ var _ = Describe("DLQProducer", func() {
 
 		It("truncates at UTF-8 rune boundary", func() {
 			msg := &sarama.ConsumerMessage{
-				Topic:     TopicLifecycle,
+				Topic:     kafka.TopicLifecycle,
 				Partition: 0,
 				Offset:    0,
 				Value:     []byte(`{}`),
@@ -194,7 +195,7 @@ var _ = Describe("DLQProducer", func() {
 
 		It("returns error when producer send fails", func() {
 			msg := &sarama.ConsumerMessage{
-				Topic:     TopicLifecycle,
+				Topic:     kafka.TopicLifecycle,
 				Partition: 0,
 				Offset:    0,
 				Value:     []byte(`{}`),
@@ -219,7 +220,7 @@ var _ = Describe("DLQProducer", func() {
 var _ = Describe("DLQOptionFromEnv", func() {
 	It("returns a no-op when DLQ_ENABLED is unset", func() {
 		GinkgoT().Setenv("DLQ_ENABLED", "")
-		opt, closeFn, err := DLQOptionFromEnv("localhost:9092", KafkaConfig{})
+		opt, closeFn, err := DLQOptionFromEnv("localhost:9092", kafka.KafkaConfig{})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(opt).To(BeNil())
 		Expect(closeFn).NotTo(BeNil())
@@ -228,7 +229,7 @@ var _ = Describe("DLQOptionFromEnv", func() {
 
 	It("returns a no-op when DLQ_ENABLED is not true", func() {
 		GinkgoT().Setenv("DLQ_ENABLED", "false")
-		opt, closeFn, err := DLQOptionFromEnv("localhost:9092", KafkaConfig{})
+		opt, closeFn, err := DLQOptionFromEnv("localhost:9092", kafka.KafkaConfig{})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(opt).To(BeNil())
 		Expect(closeFn()).To(Succeed())
@@ -236,7 +237,7 @@ var _ = Describe("DLQOptionFromEnv", func() {
 
 	It("returns a no-op for common falsy values", func() {
 		GinkgoT().Setenv("DLQ_ENABLED", "0")
-		opt, _, err := DLQOptionFromEnv("localhost:9092", KafkaConfig{})
+		opt, _, err := DLQOptionFromEnv("localhost:9092", kafka.KafkaConfig{})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(opt).To(BeNil())
 	})
@@ -274,7 +275,7 @@ func (f *fakeOffsets) GetOffset(_ string, partitionID int32, time int64) (int64,
 var _ = Describe("DLQProducer Occupancy", func() {
 	It("sums newest minus oldest across partitions", func() {
 		dlq := &DLQProducer{
-			topic: TopicDLQ,
+			topic: kafka.TopicDLQ,
 			offsets: &fakeOffsets{
 				partitions: []int32{0, 1, 2},
 				newest:     map[int32]int64{0: 10, 1: 5, 2: 20},
@@ -289,7 +290,7 @@ var _ = Describe("DLQProducer Occupancy", func() {
 
 	It("treats empty partitions as zero", func() {
 		dlq := &DLQProducer{
-			topic: TopicDLQ,
+			topic: kafka.TopicDLQ,
 			offsets: &fakeOffsets{
 				partitions: []int32{0},
 				newest:     map[int32]int64{0: 0},
@@ -304,7 +305,7 @@ var _ = Describe("DLQProducer Occupancy", func() {
 
 	It("clamps inverted offsets to zero for that partition", func() {
 		dlq := &DLQProducer{
-			topic: TopicDLQ,
+			topic: kafka.TopicDLQ,
 			offsets: &fakeOffsets{
 				partitions: []int32{0, 1},
 				newest:     map[int32]int64{0: 4, 1: 1},
@@ -318,14 +319,14 @@ var _ = Describe("DLQProducer Occupancy", func() {
 	})
 
 	It("returns an error when no Kafka client is attached", func() {
-		dlq := NewDLQProducerFromSyncProducer(nil, TopicDLQ)
+		dlq := NewDLQProducerFromSyncProducer(nil, kafka.TopicDLQ)
 		_, err := dlq.Occupancy()
 		Expect(err).To(MatchError(ContainSubstring("Kafka client")))
 	})
 
 	It("returns an error when partition listing fails", func() {
 		dlq := &DLQProducer{
-			topic: TopicDLQ,
+			topic: kafka.TopicDLQ,
 			offsets: &fakeOffsets{
 				partitionsErr: errors.New("broker down"),
 			},
@@ -337,7 +338,7 @@ var _ = Describe("DLQProducer Occupancy", func() {
 
 	It("returns an error when GetOffset fails and does not report a partial total", func() {
 		dlq := &DLQProducer{
-			topic: TopicDLQ,
+			topic: kafka.TopicDLQ,
 			offsets: &fakeOffsets{
 				partitions: []int32{0, 1},
 				newest:     map[int32]int64{0: 10},
@@ -362,8 +363,8 @@ func headerMap(headers []sarama.RecordHeader) map[string]string {
 
 var _ = Describe("newProducerConfig", func() {
 	It("creates an idempotent producer config", func() {
-		cfg := KafkaConfig{TLSEnabled: false}
-		sc, err := newProducerConfig(cfg)
+		cfg := kafka.KafkaConfig{TLSEnabled: false}
+		sc, err := kafka.NewProducerConfig(cfg)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(sc.Producer.Idempotent).To(BeTrue())
 		Expect(sc.Producer.RequiredAcks).To(Equal(sarama.WaitForAll))
@@ -372,8 +373,8 @@ var _ = Describe("newProducerConfig", func() {
 	})
 
 	It("enables TLS when configured", func() {
-		cfg := KafkaConfig{TLSEnabled: true}
-		sc, err := newProducerConfig(cfg)
+		cfg := kafka.KafkaConfig{TLSEnabled: true}
+		sc, err := kafka.NewProducerConfig(cfg)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(sc.Net.TLS.Enable).To(BeTrue())
 	})

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/osac-project/osac-metering/adapters"
 )
 
 const (
@@ -64,8 +65,8 @@ var sleepFunc = func(ctx context.Context, d time.Duration) error {
 // submitWithRetry calls adapter.Submit with exponential backoff on retryable errors.
 func submitWithRetry(
 	ctx context.Context,
-	adapter ProviderAdapter,
-	event MeteringEvent,
+	adapter adapters.ProviderAdapter,
+	event adapters.MeteringEvent,
 	maxRetries int,
 	logger logr.Logger,
 ) retryResult {
@@ -84,7 +85,7 @@ func submitWithRetry(
 			}
 		}
 
-		var nonRetryable *NonRetryableError
+		var nonRetryable *adapters.NonRetryableError
 		if errors.As(err, &nonRetryable) {
 			logger.Error(err, "non-retryable error, skipping event",
 				"event_id", event.CloudEvent.ID(),

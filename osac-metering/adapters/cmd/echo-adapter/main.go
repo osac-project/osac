@@ -96,7 +96,7 @@ func main() {
 	}
 
 	adapter := echo.NewAdapter(bufferSize)
-	runner := runner.NewRunner(adapter, runner.RunnerConfig{
+	r := runner.NewRunner(adapter, runner.RunnerConfig{
 		Brokers:       brokers,
 		ConsumerGroup: group,
 		Topics:        kafka.AllTopics,
@@ -107,7 +107,7 @@ func main() {
 	// Serve metrics, health, and event query endpoints.
 	go func() {
 		mux := http.NewServeMux()
-		mux.Handle("/metrics", runner.MetricsHandler())
+		mux.Handle("/metrics", r.MetricsHandler())
 		mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 			if err := adapter.HealthCheck(r.Context()); err != nil {
 				w.WriteHeader(http.StatusServiceUnavailable)
@@ -140,7 +140,7 @@ func main() {
 	log.Printf("starting echo adapter: broker_count=%d topics=%v group=%s flush=%s",
 		len(strings.Split(brokers, ",")), kafka.AllTopics, group, flushInterval)
 
-	if err := runner.Run(ctx); err != nil {
+	if err := r.Run(ctx); err != nil {
 		log.Fatalf("runner error: %v", err)
 	}
 

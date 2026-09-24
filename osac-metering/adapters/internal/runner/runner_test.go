@@ -21,6 +21,8 @@ import (
 	"github.com/go-logr/logr"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/osac-project/osac-metering/adapters"
+	"github.com/osac-project/osac-metering/adapters/internal/kafka"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
@@ -30,15 +32,15 @@ type mockAdapter struct {
 	mu          sync.Mutex
 	name        string
 	submitErr   error
-	submitFn    func(MeteringEvent) error
+	submitFn    func(adapters.MeteringEvent) error
 	flushErr    error
-	submitCalls []MeteringEvent
+	submitCalls []adapters.MeteringEvent
 	flushCalls  int
 	closed      bool
 }
 
 func (m *mockAdapter) Name() string { return m.name }
-func (m *mockAdapter) Submit(_ context.Context, event MeteringEvent) error {
+func (m *mockAdapter) Submit(_ context.Context, event adapters.MeteringEvent) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.submitCalls = append(m.submitCalls, event)
@@ -47,11 +49,11 @@ func (m *mockAdapter) Submit(_ context.Context, event MeteringEvent) error {
 	}
 	return m.submitErr
 }
-func (m *mockAdapter) Flush(_ context.Context) (SubmitResult, error) {
+func (m *mockAdapter) Flush(_ context.Context) (adapters.SubmitResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.flushCalls++
-	return SubmitResult{}, m.flushErr
+	return adapters.SubmitResult{}, m.flushErr
 }
 func (m *mockAdapter) HealthCheck(_ context.Context) error { return nil }
 func (m *mockAdapter) Close() error {
@@ -147,7 +149,7 @@ func (m *mockDLQOccupier) Occupancy() (int64, error) {
 
 func (m *mockDLQOccupier) Topic() string {
 	if m.topic == "" {
-		return TopicDLQ
+		return kafka.TopicDLQ
 	}
 	return m.topic
 }
@@ -171,7 +173,7 @@ func newTestMessageWithTime(id, resourceID string, offset int64, tt time.Time) *
 
 	ceJSON, _ := json.Marshal(ce)
 	return &sarama.ConsumerMessage{
-		Topic:     TopicLifecycle,
+		Topic:     kafka.TopicLifecycle,
 		Partition: 0,
 		Offset:    offset,
 		Value:     ceJSON,
@@ -188,29 +190,29 @@ func newTestMessageWithoutTransitionTime(id, resourceID string, offset int64) *s
 
 	ceJSON, _ := json.Marshal(ce)
 	return &sarama.ConsumerMessage{
-		Topic:     TopicLifecycle,
+		Topic:     kafka.TopicLifecycle,
 		Partition: 0,
 		Offset:    offset,
 		Value:     ceJSON,
 	}
 }
 
-func newRunner(adapter ProviderAdapter) *Runner {
+func newRunner(adapter adapters.ProviderAdapter) *Runner {
 	return NewRunner(adapter, RunnerConfig{
 		Brokers:       "localhost:9092",
 		ConsumerGroup: "test-group",
-		Topics:        []string{TopicLifecycle},
+		Topics:        []string{kafka.TopicLifecycle},
 		FlushInterval: 10 * time.Second,
 		DedupTTL:      10 * time.Minute,
 		MaxRetries:    3,
 	}, logr.Discard())
 }
 
-func newRunnerWithDLQ(adapter ProviderAdapter, dlq DLQSender) *Runner {
+func newRunnerWithDLQ(adapter adapters.ProviderAdapter, dlq DLQSender) *Runner {
 	return NewRunner(adapter, RunnerConfig{
 		Brokers:       "localhost:9092",
 		ConsumerGroup: "test-group",
-		Topics:        []string{TopicLifecycle},
+		Topics:        []string{kafka.TopicLifecycle},
 		FlushInterval: 10 * time.Second,
 		DedupTTL:      10 * time.Minute,
 		MaxRetries:    3,
@@ -241,7 +243,7 @@ var _ = Describe("Runner", func() {
 		runner = newRunner(adapter)
 		session = &mockSession{ctx: context.Background()}
 		claim = &mockClaim{
-			topic:     TopicLifecycle,
+			topic:     kafka.TopicLifecycle,
 			partition: 0,
 			messages:  make(chan *sarama.ConsumerMessage, 10),
 		}
@@ -274,7 +276,7 @@ var _ = Describe("Runner", func() {
 
 			runner.mu.Lock()
 			defer runner.mu.Unlock()
-			tp := topicPartition{Topic: TopicLifecycle, Partition: 0}
+			tp := topicPartition{Topic: kafka.TopicLifecycle, Partition: 0}
 			Expect(runner.offsets[tp]).To(Equal(int64(5)))
 		})
 
@@ -285,7 +287,7 @@ var _ = Describe("Runner", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			val := testutil.ToFloat64(
-				runner.metrics.eventsSubmitted.WithLabelValues("test-provider", TopicLifecycle),
+				runner.metrics.eventsSubmitted.WithLabelValues("test-provider", kafka.TopicLifecycle),
 			)
 			Expect(val).To(Equal(float64(1)))
 		})
@@ -320,7 +322,7 @@ var _ = Describe("Runner", func() {
 
 			runner.mu.Lock()
 			defer runner.mu.Unlock()
-			tp := topicPartition{Topic: TopicLifecycle, Partition: 0}
+			tp := topicPartition{Topic: kafka.TopicLifecycle, Partition: 0}
 			Expect(runner.offsets[tp]).To(Equal(int64(3)))
 		})
 	})
@@ -367,7 +369,7 @@ var _ = Describe("Runner", func() {
 	Describe("ConsumeClaim — error handling", func() {
 		It("skips messages with invalid JSON", func() {
 			msg := &sarama.ConsumerMessage{
-				Topic:     TopicLifecycle,
+				Topic:     kafka.TopicLifecycle,
 				Partition: 0,
 				Offset:    0,
 				Value:     []byte("not valid json{{{"),
@@ -388,14 +390,14 @@ var _ = Describe("Runner", func() {
 			Expect(dropped).To(Equal(float64(1)))
 
 			runner.mu.Lock()
-			offset, ok := runner.offsets[topicPartition{Topic: TopicLifecycle, Partition: 0}]
+			offset, ok := runner.offsets[topicPartition{Topic: kafka.TopicLifecycle, Partition: 0}]
 			runner.mu.Unlock()
 			Expect(ok).To(BeTrue())
 			Expect(offset).To(Equal(int64(0)))
 		})
 
 		It("increments non_retryable metric on NonRetryableError", func() {
-			adapter.submitErr = &NonRetryableError{Err: errors.New("bad schema")}
+			adapter.submitErr = &adapters.NonRetryableError{Err: errors.New("bad schema")}
 			feedMessages(claim, newTestMessage("evt-1", "res-1", 0))
 
 			err := runner.ConsumeClaim(session, claim)
@@ -417,7 +419,7 @@ var _ = Describe("Runner", func() {
 		})
 
 		It("tracks offsets for non-retryable errors", func() {
-			adapter.submitErr = &NonRetryableError{Err: errors.New("bad schema")}
+			adapter.submitErr = &adapters.NonRetryableError{Err: errors.New("bad schema")}
 			feedMessages(claim, newTestMessage("evt-1", "res-1", 7))
 
 			err := runner.ConsumeClaim(session, claim)
@@ -425,7 +427,7 @@ var _ = Describe("Runner", func() {
 
 			runner.mu.Lock()
 			defer runner.mu.Unlock()
-			tp := topicPartition{Topic: TopicLifecycle, Partition: 0}
+			tp := topicPartition{Topic: kafka.TopicLifecycle, Partition: 0}
 			Expect(runner.offsets[tp]).To(Equal(int64(7)))
 		})
 
@@ -438,7 +440,7 @@ var _ = Describe("Runner", func() {
 
 			runner.mu.Lock()
 			defer runner.mu.Unlock()
-			tp := topicPartition{Topic: TopicLifecycle, Partition: 0}
+			tp := topicPartition{Topic: kafka.TopicLifecycle, Partition: 0}
 			Expect(runner.offsets[tp]).To(Equal(int64(12)))
 		})
 
@@ -461,7 +463,7 @@ var _ = Describe("Runner", func() {
 
 			runner.mu.Lock()
 			defer runner.mu.Unlock()
-			tp := topicPartition{Topic: TopicLifecycle, Partition: 0}
+			tp := topicPartition{Topic: kafka.TopicLifecycle, Partition: 0}
 			_, tracked := runner.offsets[tp]
 			Expect(tracked).To(BeFalse(), "offset should not be tracked when context is cancelled")
 		})
@@ -471,7 +473,7 @@ var _ = Describe("Runner", func() {
 		It("commits offsets on successful flush", func() {
 			// Simulate processed messages by setting tracked offsets
 			runner.mu.Lock()
-			runner.offsets[topicPartition{Topic: TopicLifecycle, Partition: 0}] = 5
+			runner.offsets[topicPartition{Topic: kafka.TopicLifecycle, Partition: 0}] = 5
 			runner.mu.Unlock()
 
 			err := runner.flush(context.Background())
@@ -481,7 +483,7 @@ var _ = Describe("Runner", func() {
 			defer session.mu.Unlock()
 			Expect(session.marks).To(HaveLen(1))
 			Expect(session.marks[0]).To(Equal(markEntry{
-				topic: TopicLifecycle, partition: 0, offset: 6, // offset+1
+				topic: kafka.TopicLifecycle, partition: 0, offset: 6, // offset+1
 			}))
 			Expect(session.committed).To(Equal(1))
 		})
@@ -489,7 +491,7 @@ var _ = Describe("Runner", func() {
 		It("does not commit offsets when flush fails", func() {
 			adapter.flushErr = errors.New("provider unavailable")
 			runner.mu.Lock()
-			runner.offsets[topicPartition{Topic: TopicLifecycle, Partition: 0}] = 5
+			runner.offsets[topicPartition{Topic: kafka.TopicLifecycle, Partition: 0}] = 5
 			runner.mu.Unlock()
 
 			err := runner.flush(context.Background())
@@ -506,7 +508,7 @@ var _ = Describe("Runner", func() {
 
 		It("clears tracked offsets after successful flush", func() {
 			runner.mu.Lock()
-			runner.offsets[topicPartition{Topic: TopicLifecycle, Partition: 0}] = 5
+			runner.offsets[topicPartition{Topic: kafka.TopicLifecycle, Partition: 0}] = 5
 			runner.mu.Unlock()
 
 			err := runner.flush(context.Background())
@@ -530,7 +532,7 @@ var _ = Describe("Runner", func() {
 			_ = runner.Cleanup(session)
 
 			runner.mu.Lock()
-			runner.offsets[topicPartition{Topic: TopicLifecycle, Partition: 0}] = 5
+			runner.offsets[topicPartition{Topic: kafka.TopicLifecycle, Partition: 0}] = 5
 			runner.mu.Unlock()
 
 			err := runner.flush(context.Background())
@@ -539,7 +541,7 @@ var _ = Describe("Runner", func() {
 			// Offsets should be retained for the next session
 			runner.mu.Lock()
 			defer runner.mu.Unlock()
-			tp := topicPartition{Topic: TopicLifecycle, Partition: 0}
+			tp := topicPartition{Topic: kafka.TopicLifecycle, Partition: 0}
 			Expect(runner.offsets[tp]).To(Equal(int64(5)))
 		})
 	})
@@ -613,7 +615,7 @@ var _ = Describe("Runner DLQ integration", func() {
 		runner = newRunnerWithDLQ(adapter, dlqSender)
 		session = &mockSession{ctx: context.Background()}
 		claim = &mockClaim{
-			topic:     TopicLifecycle,
+			topic:     kafka.TopicLifecycle,
 			partition: 0,
 			messages:  make(chan *sarama.ConsumerMessage, 10),
 		}
@@ -622,7 +624,7 @@ var _ = Describe("Runner DLQ integration", func() {
 
 	Describe("non-retryable errors", func() {
 		It("routes to DLQ with correct metadata", func() {
-			adapter.submitErr = &NonRetryableError{Err: errors.New("bad schema")}
+			adapter.submitErr = &adapters.NonRetryableError{Err: errors.New("bad schema")}
 			feedMessages(claim, newTestMessage("evt-1", "res-1", 5))
 
 			err := runner.ConsumeClaim(session, claim)
@@ -636,7 +638,7 @@ var _ = Describe("Runner DLQ integration", func() {
 		})
 
 		It("tracks offset after DLQ send", func() {
-			adapter.submitErr = &NonRetryableError{Err: errors.New("bad")}
+			adapter.submitErr = &adapters.NonRetryableError{Err: errors.New("bad")}
 			feedMessages(claim, newTestMessage("evt-1", "res-1", 7))
 
 			err := runner.ConsumeClaim(session, claim)
@@ -644,12 +646,12 @@ var _ = Describe("Runner DLQ integration", func() {
 
 			runner.mu.Lock()
 			defer runner.mu.Unlock()
-			tp := topicPartition{Topic: TopicLifecycle, Partition: 0}
+			tp := topicPartition{Topic: kafka.TopicLifecycle, Partition: 0}
 			Expect(runner.offsets[tp]).To(Equal(int64(7)))
 		})
 
 		It("increments dlq_events_total without changing occupancy-based dlq_depth", func() {
-			adapter.submitErr = &NonRetryableError{Err: errors.New("bad")}
+			adapter.submitErr = &adapters.NonRetryableError{Err: errors.New("bad")}
 			feedMessages(claim, newTestMessage("evt-1", "res-1", 0))
 
 			err := runner.ConsumeClaim(session, claim)
@@ -657,7 +659,7 @@ var _ = Describe("Runner DLQ integration", func() {
 
 			val := testutil.ToFloat64(runner.metrics.dlqEventsTotal.WithLabelValues("test-provider"))
 			Expect(val).To(Equal(float64(1)))
-			depth := testutil.ToFloat64(runner.metrics.dlqDepth.WithLabelValues(TopicDLQ))
+			depth := testutil.ToFloat64(runner.metrics.dlqDepth.WithLabelValues(kafka.TopicDLQ))
 			Expect(depth).To(Equal(float64(0)))
 		})
 	})
@@ -681,7 +683,7 @@ var _ = Describe("Runner DLQ integration", func() {
 	Describe("deserialization errors", func() {
 		It("routes raw bytes to DLQ", func() {
 			msg := &sarama.ConsumerMessage{
-				Topic:     TopicLifecycle,
+				Topic:     kafka.TopicLifecycle,
 				Partition: 0,
 				Offset:    42,
 				Value:     []byte("not valid json{{{"),
@@ -702,7 +704,7 @@ var _ = Describe("Runner DLQ integration", func() {
 		It("stops partition claim when DLQ send fails for deserialization errors", func() {
 			dlqSender.sendErr = errors.New("DLQ broker down")
 			msg := &sarama.ConsumerMessage{
-				Topic:     TopicLifecycle,
+				Topic:     kafka.TopicLifecycle,
 				Partition: 0,
 				Offset:    42,
 				Value:     []byte("not valid json{{{"),
@@ -714,14 +716,14 @@ var _ = Describe("Runner DLQ integration", func() {
 
 			runner.mu.Lock()
 			defer runner.mu.Unlock()
-			tp := topicPartition{Topic: TopicLifecycle, Partition: 0}
+			tp := topicPartition{Topic: kafka.TopicLifecycle, Partition: 0}
 			_, tracked := runner.offsets[tp]
 			Expect(tracked).To(BeFalse(), "offset must not be tracked when DLQ send fails")
 		})
 
 		It("tracks offset after DLQ send for deserialization errors", func() {
 			msg := &sarama.ConsumerMessage{
-				Topic:     TopicLifecycle,
+				Topic:     kafka.TopicLifecycle,
 				Partition: 0,
 				Offset:    99,
 				Value:     []byte("bad"),
@@ -733,14 +735,14 @@ var _ = Describe("Runner DLQ integration", func() {
 
 			runner.mu.Lock()
 			defer runner.mu.Unlock()
-			tp := topicPartition{Topic: TopicLifecycle, Partition: 0}
+			tp := topicPartition{Topic: kafka.TopicLifecycle, Partition: 0}
 			Expect(runner.offsets[tp]).To(Equal(int64(99)))
 		})
 	})
 
 	Describe("DLQ send failures", func() {
 		It("stops partition claim and does not track offset when DLQ send fails", func() {
-			adapter.submitErr = &NonRetryableError{Err: errors.New("bad")}
+			adapter.submitErr = &adapters.NonRetryableError{Err: errors.New("bad")}
 			dlqSender.sendErr = errors.New("DLQ broker down")
 
 			feedMessages(claim,
@@ -753,13 +755,13 @@ var _ = Describe("Runner DLQ integration", func() {
 
 			runner.mu.Lock()
 			defer runner.mu.Unlock()
-			tp := topicPartition{Topic: TopicLifecycle, Partition: 0}
+			tp := topicPartition{Topic: kafka.TopicLifecycle, Partition: 0}
 			_, tracked := runner.offsets[tp]
 			Expect(tracked).To(BeFalse(), "offset must not be tracked when DLQ send fails")
 		})
 
 		It("does not process subsequent messages after DLQ send failure", func() {
-			adapter.submitErr = &NonRetryableError{Err: errors.New("bad")}
+			adapter.submitErr = &adapters.NonRetryableError{Err: errors.New("bad")}
 			dlqSender.sendErr = errors.New("DLQ broker down")
 
 			feedMessages(claim,
@@ -776,7 +778,7 @@ var _ = Describe("Runner DLQ integration", func() {
 		})
 
 		It("increments dlq_send_errors metric", func() {
-			adapter.submitErr = &NonRetryableError{Err: errors.New("bad")}
+			adapter.submitErr = &adapters.NonRetryableError{Err: errors.New("bad")}
 			dlqSender.sendErr = errors.New("DLQ broker down")
 
 			feedMessages(claim, newTestMessage("evt-1", "res-1", 0))
@@ -794,12 +796,12 @@ var _ = Describe("Runner DLQ integration", func() {
 			noDLQRunner := newRunner(adapter)
 			_ = noDLQRunner.Setup(session)
 			noDLQClaim := &mockClaim{
-				topic:     TopicLifecycle,
+				topic:     kafka.TopicLifecycle,
 				partition: 0,
 				messages:  make(chan *sarama.ConsumerMessage, 10),
 			}
 
-			adapter.submitErr = &NonRetryableError{Err: errors.New("bad")}
+			adapter.submitErr = &adapters.NonRetryableError{Err: errors.New("bad")}
 			feedMessages(noDLQClaim, newTestMessage("evt-1", "res-1", 0))
 
 			err := noDLQRunner.ConsumeClaim(session, noDLQClaim)
@@ -827,13 +829,13 @@ var _ = Describe("Runner DLQ occupancy metrics", func() {
 		runner = NewRunner(adapter, RunnerConfig{
 			Brokers:       "localhost:9092",
 			ConsumerGroup: "test-group",
-			Topics:        []string{TopicLifecycle},
+			Topics:        []string{kafka.TopicLifecycle},
 		}, logr.Discard(), WithDLQ(occ))
 	})
 
 	It("sets dlq_depth from topic occupancy", func() {
 		runner.updateDLQDepthMetrics(occ)
-		depth := testutil.ToFloat64(runner.metrics.dlqDepth.WithLabelValues(TopicDLQ))
+		depth := testutil.ToFloat64(runner.metrics.dlqDepth.WithLabelValues(kafka.TopicDLQ))
 		Expect(depth).To(Equal(float64(42)))
 	})
 
@@ -852,7 +854,7 @@ var _ = Describe("Runner DLQ occupancy metrics", func() {
 
 		runner.updateDLQDepthMetrics(occ)
 
-		depth := testutil.ToFloat64(runner.metrics.dlqDepth.WithLabelValues(TopicDLQ))
+		depth := testutil.ToFloat64(runner.metrics.dlqDepth.WithLabelValues(kafka.TopicDLQ))
 		Expect(depth).To(Equal(float64(42)))
 	})
 
@@ -861,7 +863,7 @@ var _ = Describe("Runner DLQ occupancy metrics", func() {
 		cancel()
 		runner.dlqDepthMetricsLoop(ctx, occ)
 
-		depth := testutil.ToFloat64(runner.metrics.dlqDepth.WithLabelValues(TopicDLQ))
+		depth := testutil.ToFloat64(runner.metrics.dlqDepth.WithLabelValues(kafka.TopicDLQ))
 		Expect(depth).To(Equal(float64(42)))
 	})
 })

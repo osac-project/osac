@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
+	"github.com/osac-project/osac-metering/adapters/internal/kafka"
 )
 
 const maxReasonLen = 1024
@@ -51,13 +52,13 @@ type DLQProducer struct {
 }
 
 // NewDLQProducer creates a DLQ producer connected to the given brokers.
-func NewDLQProducer(brokers string, topic string, kafkaCfg KafkaConfig) (*DLQProducer, error) {
-	sc, err := newProducerConfig(kafkaCfg)
+func NewDLQProducer(brokers string, topic string, kafkaCfg kafka.KafkaConfig) (*DLQProducer, error) {
+	sc, err := kafka.NewProducerConfig(kafkaCfg)
 	if err != nil {
 		return nil, fmt.Errorf("creating DLQ producer config: %w", err)
 	}
 
-	addrs := splitAndTrimBrokers(brokers, ",")
+	addrs := kafka.SplitAndTrimBrokers(brokers, ",")
 	client, err := sarama.NewClient(addrs, sc)
 	if err != nil {
 		return nil, fmt.Errorf("creating DLQ Kafka client: %w", err)
@@ -168,7 +169,7 @@ func (d *DLQProducer) Close() error {
 // Chart deployments set DLQ_ENABLED=true; requiring opt-in keeps image-before-chart
 // upgrades on the previous drop-and-continue path until matching KafkaUser ACLs exist.
 // The caller must defer the returned close function to release resources.
-func DLQOptionFromEnv(brokers string, kafkaCfg KafkaConfig) (RunnerOption, func() error, error) {
+func DLQOptionFromEnv(brokers string, kafkaCfg kafka.KafkaConfig) (RunnerOption, func() error, error) {
 	noop := func() error { return nil }
 	if !strings.EqualFold(os.Getenv("DLQ_ENABLED"), "true") {
 		return nil, noop, nil
@@ -176,7 +177,7 @@ func DLQOptionFromEnv(brokers string, kafkaCfg KafkaConfig) (RunnerOption, func(
 
 	topic := os.Getenv("DLQ_TOPIC")
 	if topic == "" {
-		topic = TopicDLQ
+		topic = kafka.TopicDLQ
 	}
 
 	dlq, err := NewDLQProducer(brokers, topic, kafkaCfg)

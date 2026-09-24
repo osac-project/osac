@@ -19,6 +19,8 @@ import (
 
 	"github.com/IBM/sarama"
 	"github.com/go-logr/logr"
+	"github.com/osac-project/osac-metering/adapters"
+	"github.com/osac-project/osac-metering/adapters/internal/kafka"
 )
 
 const (
@@ -39,7 +41,7 @@ type RunnerConfig struct {
 	FlushInterval time.Duration // default 10s
 	DedupTTL      time.Duration // default 10m
 	MaxRetries    int           // default 10
-	Kafka         KafkaConfig
+	Kafka         kafka.KafkaConfig
 }
 
 type topicPartition struct {
@@ -57,7 +59,7 @@ func WithDLQ(dlq DLQSender) RunnerOption {
 
 // Runner manages the Kafka consumer lifecycle for a ProviderAdapter.
 type Runner struct {
-	adapter ProviderAdapter
+	adapter adapters.ProviderAdapter
 	cfg     RunnerConfig
 	logger  logr.Logger
 	metrics *adapterMetrics
@@ -71,7 +73,7 @@ type Runner struct {
 }
 
 // NewRunner creates a Runner for the given adapter.
-func NewRunner(adapter ProviderAdapter, cfg RunnerConfig, logger logr.Logger, opts ...RunnerOption) *Runner {
+func NewRunner(adapter adapters.ProviderAdapter, cfg RunnerConfig, logger logr.Logger, opts ...RunnerOption) *Runner {
 	if cfg.FlushInterval == 0 {
 		cfg.FlushInterval = defaultFlushInterval
 	}
@@ -104,12 +106,12 @@ func (r *Runner) MetricsHandler() http.Handler {
 
 // Run starts the Kafka consumer group and blocks until ctx is cancelled.
 func (r *Runner) Run(ctx context.Context) error {
-	sc, err := newConsumerConfig(r.cfg.Kafka)
+	sc, err := kafka.NewConsumerConfig(r.cfg.Kafka)
 	if err != nil {
 		return fmt.Errorf("creating consumer config: %w", err)
 	}
 
-	brokers := splitAndTrimBrokers(r.cfg.Brokers, ",")
+	brokers := kafka.SplitAndTrimBrokers(r.cfg.Brokers, ",")
 	group, err := sarama.NewConsumerGroup(brokers, r.cfg.ConsumerGroup, sc)
 	if err != nil {
 		return fmt.Errorf("creating consumer group: %w", err)

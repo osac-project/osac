@@ -28,8 +28,8 @@ type KafkaConfig struct {
 	SASLPassFile string // Path to file containing SASL password
 }
 
-// newConsumerConfig creates a Sarama config for the adapter consumer group.
-func newConsumerConfig(cfg KafkaConfig) (*sarama.Config, error) {
+// NewConsumerConfig creates a Sarama config for the adapter consumer group.
+func NewConsumerConfig(cfg KafkaConfig) (*sarama.Config, error) {
 	sc := sarama.NewConfig()
 	sc.Version = sarama.V3_9_0_0
 	sc.Consumer.Return.Errors = true
@@ -110,7 +110,7 @@ func (c *adapterScramClient) Done() bool {
 	return c.conversation.Done()
 }
 
-func newProducerConfig(cfg KafkaConfig) (*sarama.Config, error) {
+func NewProducerConfig(cfg KafkaConfig) (*sarama.Config, error) {
 	sc := sarama.NewConfig()
 	sc.Version = sarama.V3_9_0_0
 	sc.Producer.RequiredAcks = sarama.WaitForAll
@@ -131,7 +131,7 @@ func newProducerConfig(cfg KafkaConfig) (*sarama.Config, error) {
 	return sc, nil
 }
 
-func splitAndTrimBrokers(s, sep string) []string {
+func SplitAndTrimBrokers(s, sep string) []string {
 	parts := strings.Split(s, sep)
 	result := parts[:0]
 	for _, p := range parts {

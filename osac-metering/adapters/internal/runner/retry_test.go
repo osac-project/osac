@@ -16,6 +16,7 @@ import (
 
 	cloudevents "github.com/cloudevents/sdk-go/v2"
 	"github.com/go-logr/logr"
+	"github.com/osac-project/osac-metering/adapters"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -68,7 +69,7 @@ var _ = Describe("calculateBackoff", func() {
 var _ = Describe("submitWithRetry", func() {
 	var (
 		adapter *retryTestAdapter
-		event   MeteringEvent
+		event   adapters.MeteringEvent
 		logger  logr.Logger
 	)
 
@@ -78,7 +79,7 @@ var _ = Describe("submitWithRetry", func() {
 		ce.SetID("retry-test")
 		ce.SetType("osac.test.v1")
 		ce.SetSource("test")
-		event = MeteringEvent{CloudEvent: ce, Topic: "t", Partition: 0, Offset: 0}
+		event = adapters.MeteringEvent{CloudEvent: ce, Topic: "t", Partition: 0, Offset: 0}
 		logger = logr.Discard()
 	})
 
@@ -91,7 +92,7 @@ var _ = Describe("submitWithRetry", func() {
 
 	It("skips immediately on NonRetryableError", func() {
 		adapter.errs = []error{
-			&NonRetryableError{Err: errors.New("bad schema")},
+			&adapters.NonRetryableError{Err: errors.New("bad schema")},
 		}
 		result := submitWithRetry(context.Background(), adapter, event, 3, logger)
 		Expect(result.Err).To(HaveOccurred())
@@ -152,7 +153,7 @@ type retryTestAdapter struct {
 }
 
 func (a *retryTestAdapter) Name() string { return a.name }
-func (a *retryTestAdapter) Submit(_ context.Context, _ MeteringEvent) error {
+func (a *retryTestAdapter) Submit(_ context.Context, _ adapters.MeteringEvent) error {
 	a.calls++
 	if a.onSubmit != nil {
 		a.onSubmit()
@@ -162,6 +163,6 @@ func (a *retryTestAdapter) Submit(_ context.Context, _ MeteringEvent) error {
 	}
 	return nil
 }
-func (a *retryTestAdapter) Flush(_ context.Context) (SubmitResult, error) { return SubmitResult{}, nil }
+func (a *retryTestAdapter) Flush(_ context.Context) (adapters.SubmitResult, error) { return adapters.SubmitResult{}, nil }
 func (a *retryTestAdapter) HealthCheck(_ context.Context) error           { return nil }
 func (a *retryTestAdapter) Close() error                                  { return nil }

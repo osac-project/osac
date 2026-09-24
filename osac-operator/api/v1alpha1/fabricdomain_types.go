@@ -16,6 +16,7 @@ package v1alpha1
 import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 // FabricDomainType identifies the physical fabric used for east-west connectivity.
+// Phase 1 supports EthernetEW; InfiniBandEW and NVLink are reserved for later phases.
 // +kubebuilder:validation:Enum=EthernetEW;InfiniBandEW;NVLink
 type FabricDomainType string
 
@@ -23,11 +24,11 @@ const (
 	// FabricDomainTypeEthernetEW identifies an Ethernet east-west fabric.
 	FabricDomainTypeEthernetEW FabricDomainType = "EthernetEW"
 
-	// FabricDomainTypeInfiniBandEW identifies an InfiniBand east-west fabric.
-	FabricDomainTypeInfiniBandEW FabricDomainType = "InfiniBandEW"
+// FabricDomainTypeInfiniBandEW identifies an InfiniBand east-west fabric, reserved for Phase 2.
+FabricDomainTypeInfiniBandEW FabricDomainType = "InfiniBandEW"
 
-	// FabricDomainTypeNVLink identifies an NVIDIA NVLink fabric.
-	FabricDomainTypeNVLink FabricDomainType = "NVLink"
+// FabricDomainTypeNVLink identifies an NVIDIA NVLink fabric, reserved for Phase 3.
+FabricDomainTypeNVLink FabricDomainType = "NVLink"
 )
 
 // FabricDomainSpec defines the desired state of FabricDomain.
@@ -43,8 +44,11 @@ type FabricDomainSpec struct {
 	// +kubebuilder:validation:items:MinLength=1
 	Servers []string `json:"servers"`
 
-	// VirtualNetworks lists the VirtualNetwork resources associated with the domain.
-	// Phase 1 supports exactly one virtual network. These references cannot be changed after creation.
+	// VirtualNetworks contains OSAC VirtualNetwork IDs associated with the domain.
+	// The repeated shape mirrors the fulfillment API and leaves room for future multi-VN sharing;
+	// this API version requires exactly one reference. In Phase 1, its NetworkClass resolves the
+	// Netris VPC for EthernetEW. InfiniBandEW and NVLink use different fabric mechanisms and are
+	// reserved for later phases. This reference cannot be changed after creation.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=1

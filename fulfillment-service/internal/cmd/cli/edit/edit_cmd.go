@@ -34,7 +34,6 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/updatable"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
-	"github.com/osac-project/osac/fulfillment-service/internal/packages"
 	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -394,7 +393,11 @@ func completeObjectTypes(cmd *cobra.Command, args []string, toComplete string) (
 	if len(args) != 0 {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
-	return reflection.UpdatableObjectTypeNames(packages.Public...), cobra.ShellCompDirectiveNoFileComp
+	var ctx context.Context
+	if cmd != nil {
+		ctx = cmd.Context()
+	}
+	return reflection.UpdatableObjectTypeNames(config.PackageNamesFromContext(ctx)...), cobra.ShellCompDirectiveNoFileComp
 }
 
 const shortHelp = `Edit objects`

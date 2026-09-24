@@ -565,6 +565,16 @@ func (c *Settings) Packages() map[string]int {
 	return result
 }
 
+// PackageNames returns the active package names as a flat slice.
+func (c *Settings) PackageNames() []string {
+	pkgs := c.Packages()
+	names := make([]string, 0, len(pkgs))
+	for name := range pkgs {
+		names = append(names, name)
+	}
+	return names
+}
+
 // TokenStore returns an implementation of the auth.TokenStore interface that loads and saves tokens from/to
 // the configuration.
 func (c *Settings) TokenStore() auth.TokenStore {

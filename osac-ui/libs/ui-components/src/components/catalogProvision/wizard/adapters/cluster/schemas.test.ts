@@ -59,6 +59,13 @@ const emptyValues: ClusterWizardValues = {
       podCidr: '',
       serviceCidr: '',
     },
+    useDefaultNetwork: true,
+    networkAttachment: {
+      virtualNetwork: '',
+      subnet: '',
+      securityGroups: [],
+    },
+    autoExternalIpAttachment: false,
   },
 };
 
@@ -447,6 +454,64 @@ describe('buildClusterStepSchema', () => {
         },
       },
     });
+  });
+
+  it('validates networking step when useDefaultNetwork is true', async () => {
+    const errors = await validateStep(
+      'networking',
+      {
+        ...emptyValues,
+        catalogItemId: clusterCatalogItem.id,
+        spec: {
+          ...emptyValues.spec,
+          useDefaultNetwork: true,
+          networkAttachment: {
+            virtualNetwork: '',
+            subnet: '',
+            securityGroups: [],
+          },
+        },
+      },
+      clusterCatalogItem,
+    );
+    expect(errors).toEqual({});
+  });
+
+  it('validates networking step when useDefaultNetwork is false and pickers are empty', async () => {
+    const errors = await validateStep(
+      'networking',
+      {
+        ...emptyValues,
+        catalogItemId: clusterCatalogItem.id,
+        spec: {
+          ...emptyValues.spec,
+          useDefaultNetwork: false,
+          networkAttachment: {
+            virtualNetwork: '',
+            subnet: '',
+            securityGroups: [],
+          },
+        },
+      },
+      clusterCatalogItem,
+    );
+    expect(errors).toEqual({});
+  });
+
+  it('validates networking step with autoExternalIpAttachment set to true', async () => {
+    const errors = await validateStep(
+      'networking',
+      {
+        ...emptyValues,
+        catalogItemId: clusterCatalogItem.id,
+        spec: {
+          ...emptyValues.spec,
+          autoExternalIpAttachment: true,
+        },
+      },
+      clusterCatalogItem,
+    );
+    expect(errors).toEqual({});
   });
 
   it('returns undefined for review step', () => {

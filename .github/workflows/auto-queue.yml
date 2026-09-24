@@ -1,10 +1,9 @@
 ---
 name: auto-queue
 
-# Queue policy lives in .github/scripts/auto-queue.sh. Prow labels are still
-# required. A human "Request changes" review at or before the current lgtm
-# label is dismissed (OSAC-5507). A newer one still blocks. Bot "Request
-# changes" reviews are dismissed and do not block.
+# Queue policy lives in .github/scripts/auto-queue.sh. If lgtm is present,
+# every Request changes review is dismissed (OSAC-5507) and auto-merge is
+# enabled so required tests can run.
 on:
   pull_request_target:
     types: [opened, reopened, ready_for_review, synchronize, labeled, unlabeled]

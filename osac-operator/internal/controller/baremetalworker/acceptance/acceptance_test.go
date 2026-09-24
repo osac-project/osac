@@ -172,7 +172,6 @@ var _ = Describe("Bare-metal worker provisioning", func() {
 				PullSecret:   "{\"auths\":{}}",
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
 				NodeRequests: []osacv1alpha1.NodeRequest{{
-					ResourceClass: "bm-standard",
 					NumberOfNodes: 2,
 					BareMetal:     &osacv1alpha1.BareMetalNodeSpec{InstanceType: "bm-standard"},
 				}},
@@ -382,7 +381,6 @@ var _ = Describe("Bare-metal worker provisioning", func() {
 				PullSecret:   "{\"auths\":{}}",
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
 				NodeRequests: []osacv1alpha1.NodeRequest{{
-					ResourceClass: "bm-standard",
 					NumberOfNodes: 2,
 					BareMetal: &osacv1alpha1.BareMetalNodeSpec{
 						InstanceType: "bm-standard",

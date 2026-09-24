@@ -105,8 +105,8 @@ var _ = Describe("Catalog Item typed field policies", func() {
 	It("treats locked Cluster node sets as a whole map", func() {
 		size := int32(3)
 		nodeSets := privatev1.ClusterNodeSetMap_builder{
-			Items: map[string]*privatev1.ClusterTemplateNodeSet{
-				"workers": privatev1.ClusterTemplateNodeSet_builder{Size: size}.Build(),
+			Items: map[string]*privatev1.ClusterCatalogNodeSet{
+				"workers": privatev1.ClusterCatalogNodeSet_builder{Size: size}.Build(),
 			},
 		}.Build()
 		item := privatev1.ClusterCatalogItem_builder{

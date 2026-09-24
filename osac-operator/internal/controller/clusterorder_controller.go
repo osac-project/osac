@@ -93,19 +93,19 @@ const (
 // ClusterOrderStallThresholds configures the maximum time a ClusterOrder may spend
 // in each provisioning stage before it is reported as stalled.
 type ClusterOrderStallThresholds struct {
-	PreparingInfrastructure  time.Duration
-	ControlPlaneStarting     time.Duration
-	WorkersJoining           time.Duration
-	WorkersJoiningByHostType map[string]time.Duration
+	PreparingInfrastructure      time.Duration
+	ControlPlaneStarting         time.Duration
+	WorkersJoining               time.Duration
+	WorkersJoiningByInstanceType map[string]time.Duration
 }
 
 // DefaultClusterOrderStallThresholds returns the production-safe stall thresholds.
 func DefaultClusterOrderStallThresholds() ClusterOrderStallThresholds {
 	return ClusterOrderStallThresholds{
-		PreparingInfrastructure:  defaultPreparingInfrastructureStallThreshold,
-		ControlPlaneStarting:     defaultControlPlaneStartingStallThreshold,
-		WorkersJoining:           defaultWorkersJoiningStallThreshold,
-		WorkersJoiningByHostType: map[string]time.Duration{},
+		PreparingInfrastructure:      defaultPreparingInfrastructureStallThreshold,
+		ControlPlaneStarting:         defaultControlPlaneStartingStallThreshold,
+		WorkersJoining:               defaultWorkersJoiningStallThreshold,
+		WorkersJoiningByInstanceType: map[string]time.Duration{},
 	}
 }
 
@@ -174,6 +174,13 @@ func (r *ClusterOrderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if instance.ObjectMeta.DeletionTimestamp.IsZero() && exists && val == ManagementStateUnmanaged {
 		log.Info("ignoring ClusterOrder due to management-state annotation", "management-state", val)
 		return ctrl.Result{}, nil
+	}
+	if instance.ObjectMeta.DeletionTimestamp.IsZero() {
+		for i, request := range instance.Spec.NodeRequests {
+			if request.BareMetal == nil || request.BareMetal.InstanceType == "" {
+				return ctrl.Result{}, fmt.Errorf("spec.nodeRequests[%d].bareMetal.instanceType is required", i)
+			}
+		}
 	}
 
 	log.Info("start reconcile")
@@ -718,11 +725,14 @@ func (thresholds ClusterOrderStallThresholds) workersJoiningThreshold(nodeReques
 	}
 
 	// A cluster cannot finish joining until every node set does. Use the longest
-	// effective threshold among its requested host types.
+	// effective threshold among its requested instance types.
 	threshold := time.Duration(0)
 	for _, nodeRequest := range nodeRequests {
 		effectiveThreshold := baseThreshold
-		if override, found := thresholds.WorkersJoiningByHostType[nodeRequest.ResourceClass]; found && override > 0 {
+		if nodeRequest.BareMetal == nil {
+			continue
+		}
+		if override, found := thresholds.WorkersJoiningByInstanceType[nodeRequest.BareMetal.InstanceType]; found && override > 0 {
 			effectiveThreshold = override
 		}
 		if effectiveThreshold > threshold {
@@ -763,9 +773,9 @@ func (r *ClusterOrderReconciler) handleNodePool(ctx context.Context, instance *v
 	log := ctrllog.FromContext(ctx)
 
 	log.Info("processing nodepool", "nodepool", nodePool.GetName())
-	resourceClass, ok := nodePoolResourceClass(nodePool)
+	instanceType, ok := nodePoolInstanceType(nodePool)
 	if !ok {
-		log.Info("node pool has no resource class label, will ignore it", "node_pool", nodePool.Name)
+		log.Info("node pool has no instance type label, will ignore it", "node_pool", nodePool.Name)
 		return nil
 	}
 
@@ -773,14 +783,13 @@ func (r *ClusterOrderReconciler) handleNodePool(ctx context.Context, instance *v
 	// matching item yet.
 	var nodeRequestStatus *v1alpha1.NodeRequest
 	for i, nodeRequestsItem := range instance.Status.NodeRequests {
-		log.Info("looking for resource class", "want", resourceClass, "have", nodeRequestsItem.ResourceClass)
-		if nodeRequestsItem.ResourceClass == resourceClass {
+		if nodeRequestsItem.BareMetal != nil && nodeRequestsItem.BareMetal.InstanceType == instanceType {
 			nodeRequestStatus = &instance.Status.NodeRequests[i]
 		}
 	}
 	if nodeRequestStatus == nil {
 		instance.Status.NodeRequests = append(instance.Status.NodeRequests, v1alpha1.NodeRequest{
-			ResourceClass: resourceClass,
+			BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: instanceType},
 		})
 		nodeRequestStatus = &instance.Status.NodeRequests[len(instance.Status.NodeRequests)-1]
 	}
@@ -792,7 +801,7 @@ func (r *ClusterOrderReconciler) handleNodePool(ctx context.Context, instance *v
 		log.Info(
 			"updating number of nodes from node pool",
 			"node_pool", nodePool.Name,
-			"resource_class", resourceClass,
+			"instance_type", instanceType,
 			"old_value", oldValue,
 			"new_value", newValue,
 		)
@@ -826,7 +835,7 @@ func nodePoolsMatchRequests(requests []v1alpha1.NodeRequest, nodePools []hypersh
 	if len(requests) == 0 || len(nodePools) == 0 {
 		return false
 	}
-	if nodeRequestsContainDuplicateResourceClasses(requests) {
+	if nodeRequestsContainDuplicateInstanceTypes(requests) {
 		return false
 	}
 	expectedReplicas := expectedNodePoolReplicas(requests)
@@ -836,29 +845,29 @@ func nodePoolsMatchRequests(requests []v1alpha1.NodeRequest, nodePools []hypersh
 
 	seen := sets.New[string]()
 	for i := range nodePools {
-		resourceClass, ok := nodePoolResourceClass(&nodePools[i])
+		instanceType, ok := nodePoolInstanceType(&nodePools[i])
 		if !ok {
 			return false
 		}
-		expected, ok := expectedReplicas[resourceClass]
+		expected, ok := expectedReplicas[instanceType]
 		if !ok {
 			return false
 		}
-		if seen.Has(resourceClass) || !nodePoolMatchesRequest(&nodePools[i], expected) {
+		if seen.Has(instanceType) || !nodePoolMatchesRequest(&nodePools[i], expected) {
 			return false
 		}
-		seen.Insert(resourceClass)
+		seen.Insert(instanceType)
 	}
 	return len(seen) == len(expectedReplicas)
 }
 
-func nodeRequestsContainDuplicateResourceClasses(requests []v1alpha1.NodeRequest) bool {
+func nodeRequestsContainDuplicateInstanceTypes(requests []v1alpha1.NodeRequest) bool {
 	seen := sets.New[string]()
 	for _, request := range requests {
-		if seen.Has(request.ResourceClass) {
+		if request.BareMetal == nil || request.BareMetal.InstanceType == "" || seen.Has(request.BareMetal.InstanceType) {
 			return true
 		}
-		seen.Insert(request.ResourceClass)
+		seen.Insert(request.BareMetal.InstanceType)
 	}
 	return false
 }
@@ -866,14 +875,16 @@ func nodeRequestsContainDuplicateResourceClasses(requests []v1alpha1.NodeRequest
 func expectedNodePoolReplicas(requests []v1alpha1.NodeRequest) map[string]int {
 	expected := make(map[string]int, len(requests))
 	for _, request := range requests {
-		expected[request.ResourceClass] = request.NumberOfNodes
+		if request.BareMetal != nil && request.BareMetal.InstanceType != "" {
+			expected[request.BareMetal.InstanceType] = request.NumberOfNodes
+		}
 	}
 	return expected
 }
 
-func nodePoolResourceClass(nodePool *hypershiftv1beta1.NodePool) (string, bool) {
-	resourceClass, ok := nodePool.Labels[agentResourceClassLabel]
-	return resourceClass, ok && resourceClass != ""
+func nodePoolInstanceType(nodePool *hypershiftv1beta1.NodePool) (string, bool) {
+	instanceType, ok := nodePool.Labels[agentInstanceTypeLabel]
+	return instanceType, ok && instanceType != ""
 }
 
 func nodePoolMatchesRequest(nodePool *hypershiftv1beta1.NodePool, expectedReplicas int) bool {
@@ -904,8 +915,8 @@ func finalizeReadyIfProvisioned(log logr.Logger, instance *v1alpha1.ClusterOrder
 	if !provisioningJobSucceeded(instance) {
 		return false
 	}
-	if nodeRequestsContainDuplicateResourceClasses(instance.Spec.NodeRequests) {
-		log.Info("node pool readiness blocked by duplicate resource class in node requests")
+	if nodeRequestsContainDuplicateInstanceTypes(instance.Spec.NodeRequests) {
+		log.Info("node pool readiness blocked by duplicate instance type in node requests")
 		return false
 	}
 	if !hostedClusterAndNodePoolsAreReady(instance, hc, nodePools) {

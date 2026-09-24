@@ -21,6 +21,10 @@
     name: "{{ (delete_step_pre_delete_hook_override | default(delete_step_pre_delete_hook_default)).name }}"
     tasks_from: "{{ (delete_step_pre_delete_hook_override | default(delete_step_pre_delete_hook_default)).tasks_from }}"
 
+- name: Preserve requested instance types and counts
+  ansible.builtin.set_fact:
+    normalized_node_requests: "{{ cluster_order.spec.nodeRequests }}"
+
 - name: Step - Destroy hosted cluster
   ansible.builtin.include_role:
     name: "{{ (delete_step_hosted_cluster_override | default(delete_step_hosted_cluster_default)).name }}"
@@ -35,16 +39,7 @@
       ssh_public_key: "{{ template_parameters.ssh_public_key }}"
     hosted_cluster_node_count: >-
       {{ cluster_order.spec.nodeRequests | map(attribute="numberOfNodes") | sum }}
-
-- name: Normalize node requests with resourceClass
-  ansible.builtin.set_fact:
-    normalized_node_requests: >-
-      {%- set requests = [] -%}
-      {%- for nr in (cluster_order.spec.nodeRequests | default([])) -%}
-        {%- set rc = nr.resourceClass | default(nr.bareMetal.instanceType if (nr.bareMetal is defined and nr.bareMetal.instanceType is defined) else 'default') -%}
-        {%- set _ = requests.append(nr | combine({'resourceClass': rc})) -%}
-      {%- endfor -%}
-      {{ requests | unique(attribute='resourceClass') }}
+    hosted_cluster_node_requests: "{{ normalized_node_requests }}"
 
 - name: Step - Destroy cluster network
   ansible.builtin.include_role:

@@ -12,5 +12,6 @@ spec:
       "ssh_public_key": "ssh-rsa test-key test@example.com"
     }
   nodeRequests:
-    - resourceClass: ci-worker
-      numberOfNodes: 1
+    - numberOfNodes: 1
+      bareMetal:
+        instanceType: ci-worker

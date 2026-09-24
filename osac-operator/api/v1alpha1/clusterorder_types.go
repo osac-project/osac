@@ -38,8 +38,7 @@ type ClusterOrderSpec struct {
 	// +kubebuilder:validation:Optional
 	TemplateParameters string `json:"templateParameters,omitempty"`
 	// NodeRequests defines the types of nodes and number of each type of node that will be used
-	// to build the cluster. This value is optional and if not provided will be filled in with template-provided
-	// defaults. The selected template may limit what node types you can request.
+	// to build the cluster. Each request selects a BareMetalInstanceType.
 	// +kubebuilder:validation:Optional
 	NodeRequests []NodeRequest `json:"nodeRequests,omitempty"`
 	// AddOnOperators lists the stable names of operators requested for the cluster.
@@ -69,7 +68,7 @@ type ClusterOrderSpec struct {
 
 	// NetworkAttachment connects this cluster to a tenant subnet.
 	// All node sets share the same subnet; the fabric interface for each
-	// node set is resolved from the node set's host type.
+	// node set is resolved from the selected BareMetalInstanceType.
 	// When omitted, the system populates the field from the tenant's
 	// default subnet and security groups during creation.
 	// +kubebuilder:validation:Optional
@@ -111,26 +110,18 @@ type ClusterNetworkAttachment struct {
 }
 
 type NodeRequest struct {
-	// ResourceClass describes the type of node you are requesting.
-	//
-	// Retained for backward compatibility; superseded by BareMetal.InstanceType and slated
-	// for removal in OSAC-4154. New callers should set BareMetal instead.
-	// +kubebuilder:validation:Optional
-	ResourceClass string `json:"resourceClass,omitempty"`
-	// NumberOfNodes describes the number of nodes you want of the given resource class
+	// NumberOfNodes describes the number of nodes of this instance type.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Minimum=1
 	NumberOfNodes int `json:"numberOfNodes"`
 	// BareMetal holds bare-metal-specific configuration for this node set.
-	// When set, this node request targets bare-metal workers.
-	// Mutually exclusive with future platform variants (e.g. Virtual).
-	// +kubebuilder:validation:Optional
+	// This node request targets bare-metal workers.
+	// +kubebuilder:validation:Required
 	BareMetal *BareMetalNodeSpec `json:"bareMetal,omitempty"`
 	// FabricInterface is the host NIC name used for tenant network traffic.
 	// When set, IP discovery filters Agent inventory interfaces by this name,
 	// preventing the provisioning NIC address from being returned.
-	// Resolved from the host type's NetworkInterface list during template
-	// expansion; may also be set explicitly.
+	// Resolved from the instance type's fabric network port; may also be set explicitly.
 	// +kubebuilder:validation:Optional
 	FabricInterface string `json:"fabricInterface,omitempty"`
 }
@@ -284,7 +275,7 @@ type WorkerStatus struct {
 
 	// InstanceType is the BareMetalInstanceType (hardware profile) this worker was
 	// provisioned from. Exposed as the instance_type metric label; sourced from
-	// spec.nodeRequests[].bareMetal.instanceType (not the deprecated resourceClass).
+	// spec.nodeRequests[].bareMetal.instanceType.
 	// +kubebuilder:validation:Optional
 	InstanceType string `json:"instanceType,omitempty"`
 

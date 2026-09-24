@@ -92,7 +92,7 @@ const (
 	eventReasonStaleIgnition         = "StaleIgnition"
 	reasonInfraEnvRecreated          = "InfraEnvRecreated"
 	reasonStaleIgnitionWorkersMarked = "StaleIgnitionWorkersMarked"
-	nodePoolResourceClassLabel       = "osac.openshift.io/resource_class"
+	agentInstanceTypeLabel           = "osac.openshift.io/instance_type"
 
 	bmWorkerFinalizer = "osac.openshift.io/baremetalworker-finalizer"
 
@@ -172,6 +172,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 	if v, ok := co.Annotations[managementStateAnnotation]; ok && v == managementStateUnmanaged {
 		return ctrl.Result{}, nil
+	}
+	for i, request := range co.Spec.NodeRequests {
+		if request.BareMetal == nil || request.BareMetal.InstanceType == "" {
+			return ctrl.Result{}, fmt.Errorf("spec.nodeRequests[%d].bareMetal.instanceType is required", i)
+		}
 	}
 	if !co.HasBareMetalNodeSet() {
 		return ctrl.Result{}, nil
@@ -853,7 +858,7 @@ func (r *Reconciler) ensureWorkerBMI(
 	log := ctrllog.FromContext(ctx)
 	if bmi, ok := existingByName[workerName]; ok {
 		log.Info("worker BMI already exists, skipping create", "name", workerName)
-		return newWorkerStatus(nr.ResourceClass, nr.BareMetal.InstanceType, workerName, bmi.GetId()), ctrl.Result{}, nil
+		return newWorkerStatus(nr.BareMetal.InstanceType, workerName, bmi.GetId()), ctrl.Result{}, nil
 	}
 
 	bmi, res, err := r.ensureBMI(ctx, co, *nr, workerName, image, ignitionRaw, filter, fabricInterface)
@@ -866,7 +871,7 @@ func (r *Reconciler) ensureWorkerBMI(
 	log.Info("created BMI", "name", workerName, "id", bmi.GetId())
 	r.recorder.Eventf(co, nil, corev1.EventTypeNormal, eventReasonWorkerCreated, "CreateWorker",
 		"worker %s: BMI %s created", workerName, bmi.GetId())
-	return newWorkerStatus(nr.ResourceClass, nr.BareMetal.InstanceType, workerName, bmi.GetId()), ctrl.Result{}, nil
+	return newWorkerStatus(nr.BareMetal.InstanceType, workerName, bmi.GetId()), ctrl.Result{}, nil
 }
 
 // handleFailedWorkers processes workers in Failed phase: deletes their BMIs via the
@@ -1020,9 +1025,9 @@ func (r *Reconciler) findBMIByName(ctx context.Context, filter, name string) (*p
 	return nil, fmt.Errorf("BMI %s returned AlreadyExists but not found in re-list", name)
 }
 
-func newWorkerStatus(nodeSet, instanceType, name, resourceID string) v1alpha1.WorkerStatus {
+func newWorkerStatus(instanceType, name, resourceID string) v1alpha1.WorkerStatus {
 	return v1alpha1.WorkerStatus{
-		NodeSet:           nodeSet,
+		NodeSet:           instanceType,
 		InstanceType:      instanceType,
 		Name:              name,
 		Kind:              workerKindBMI,

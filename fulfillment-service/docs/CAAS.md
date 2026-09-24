@@ -6,7 +6,8 @@ OSAC CLI and API.
 ## Prerequisites
 
 - `osac` installed and authenticated (`osac login`)
-- A cluster catalog item published by your provider
+- A published cluster catalog item or an available cluster template
+- BareMetalInstanceType hardware profiles available to the cluster or its catalog item's scope
 
 ## Workflow Overview
 
@@ -69,11 +70,26 @@ and `image` fields are immutable after creation.
 
 ## Create a Cluster
 
-Create a cluster using a catalog item:
+Create a cluster using a catalog item whose node-set policy supplies the worker map:
 
 ```bash
 osac create cluster \
   --catalog-item hosted_cluster_offering
+```
+
+Every cluster needs at least one node set. Supply `--node-set` with a positive size and a
+BareMetalInstanceType name for each worker group, or use a catalog item whose locked or editable
+default `fields.node_sets` policy supplies the complete map. Cluster templates describe provisioning
+behavior and parameters; they do not supply node sets or hardware. The fulfillment service resolves
+the effective BareMetalInstanceType references in the cluster's scope and writes each selected type
+and size to `ClusterOrder.spec.nodeRequests[].bareMetal.instanceType` and `numberOfNodes`. An absent
+map or a set without a valid type is rejected before provisioning.
+
+For a catalog item with an editable node-set policy, specify a different worker configuration:
+
+```bash
+osac create cluster --catalog-item hosted_cluster_offering \
+  --node-set name=workers,size=2,baremetal-instance-type=ci-worker-bm
 ```
 
 To specify an OpenShift version explicitly, the catalog's version policy must be editable or absent:
@@ -96,6 +112,8 @@ Optional flags:
   2. Catalog item editable default (`fields.version.editable.default_value`).
   3. Template default (`spec_defaults.version`).
   4. System default ClusterVersion (`is_default = true`).
+- `--node-set name=<group>,size=<positive-integer>,baremetal-instance-type=<name>` - Repeat for
+  multiple worker groups. Omit only when the catalog item supplies a locked or default node-set map.
 
 The command outputs the cluster ID upon successful creation.
 
@@ -198,7 +216,7 @@ Use this when you want to review or change multiple fields at once.
 
 ### Constraints
 
-- The `host_type` of an existing node set cannot be changed (immutable after creation)
+- The `baremetal_instance_type` of an existing node set cannot be changed (immutable after creation)
 - At least one node set must remain; node sets can be scaled to zero (the control
   plane continues to run on the hub)
 

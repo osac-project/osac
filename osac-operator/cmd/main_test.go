@@ -207,7 +207,7 @@ var _ = Describe("clusterOrderStallThresholdsFromEnv", func() {
 		Expect(thresholds.PreparingInfrastructure).To(Equal(10 * time.Minute))
 		Expect(thresholds.ControlPlaneStarting).To(Equal(25 * time.Minute))
 		Expect(thresholds.WorkersJoining).To(Equal(15 * time.Minute))
-		Expect(thresholds.WorkersJoiningByHostType).To(Equal(map[string]time.Duration{
+		Expect(thresholds.WorkersJoiningByInstanceType).To(Equal(map[string]time.Duration{
 			"fast": 5 * time.Minute,
 			"slow": 40 * time.Minute,
 		}))

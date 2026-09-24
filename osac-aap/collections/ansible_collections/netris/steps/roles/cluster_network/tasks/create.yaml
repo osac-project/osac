@@ -90,19 +90,8 @@
     cluster_network_netris_server_names: []
   when: cluster_agents_for_netris.resources | length == 0
 
-- name: Resolve resource class configuration
-  ansible.builtin.set_fact:
-    _netris_resource_class: "{{ cluster_network_node_requests[0].resourceClass }}"
-    _netris_rc_config: >-
-      {{ netris_resource_class_map[cluster_network_node_requests[0].resourceClass]
-         | default(netris_resource_class_map['ci-worker']
-         | default(netris_resource_class_map.values() | first, true), true) }}
-
-- name: Set resource class derived values
-  ansible.builtin.set_fact:
-    _netris_server_cluster_template_id: "{{ _netris_rc_config.server_cluster_template_id }}"
-    _server_mgmt_interface: "{{ _netris_rc_config.mgmt_interface }}"
-    _server_vpc_interfaces: "{{ _netris_rc_config.vpc_interfaces }}"
+- name: Resolve instance type network configuration
+  ansible.builtin.include_tasks: resolve_instance_type.yaml
 
 - name: Read server cluster template for server NICs
   ansible.builtin.include_role:

@@ -96,6 +96,7 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 
 		Describe("cluster resources", func() {
 			var tenantClusterMapping map[string][]string
+			var clusterBMIT string
 
 			BeforeAll(func(ctx context.Context) {
 				// Create map to track which clusters belong to which tenants
@@ -104,24 +105,25 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 				// Create a bare metal instance type for testing
 				instanceTypesClient := privatev1.NewBareMetalInstanceTypesClient(tool.InternalView().AdminConn())
 				bmitName := fmt.Sprintf("test-bmit-%s", uuid.New()[24:32])
+				clusterBMIT = bmitName
 				_, err := instanceTypesClient.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
 					Object: privatev1.BareMetalInstanceType_builder{
 						Metadata: privatev1.Metadata_builder{
 							Name: bmitName,
 						}.Build(),
 						Spec: privatev1.BareMetalInstanceTypeSpec_builder{
-						Hardware: privatev1.BareMetalHardwareSpec_builder{
-							Cpu:    privatev1.BareMetalCPUSpec_builder{Cores: 32, Architecture: "x86_64", ThreadsPerCore: 2}.Build(),
-							Memory: privatev1.BareMetalMemorySpec_builder{TotalGb: 128}.Build(),
-							NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
-								privatev1.BareMetalNetworkPortSpec_builder{
-									Name:  "eth0",
-									Role:  "fabric",
-									Type:  "Ethernet",
-									Speed: "10Gbps",
-								}.Build(),
-							},
-						}.Build(),
+							Hardware: privatev1.BareMetalHardwareSpec_builder{
+								Cpu:    privatev1.BareMetalCPUSpec_builder{Cores: 32, Architecture: "x86_64", ThreadsPerCore: 2}.Build(),
+								Memory: privatev1.BareMetalMemorySpec_builder{TotalGb: 128}.Build(),
+								NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
+									privatev1.BareMetalNetworkPortSpec_builder{
+										Name:  "eth0",
+										Role:  "fabric",
+										Type:  "Ethernet",
+										Speed: "10Gbps",
+									}.Build(),
+								},
+							}.Build(),
 							HostLabelSelector: privatev1.BareMetalLabelSelector_builder{
 								MatchLabels: map[string]string{"hardware.profile": "compute"},
 							}.Build(),
@@ -162,12 +164,6 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 						Metadata: privatev1.Metadata_builder{
 							Name: fmt.Sprintf("test-template-%s", uuid.New()[24:32]),
 						}.Build(),
-						NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
-							"my-node-set": privatev1.ClusterTemplateNodeSet_builder{
-								BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: bmitName}.Build(),
-								Size:                  3,
-							}.Build(),
-						},
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -193,6 +189,7 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 							}.Build(),
 							Spec: publicv1.ClusterSpec_builder{
 								Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+								NodeSets: testClusterNodeSets(clusterBMIT, 3),
 							}.Build(),
 						}.Build(),
 					}.Build())
@@ -365,6 +362,7 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 			var (
 				tenantClusterMapping map[string][]string
 				clusterTenantMapping map[string][]string
+				clusterBMIT          string
 			)
 
 			BeforeAll(func(ctx context.Context) {
@@ -399,6 +397,7 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 
 				// Create a bare metal instance type for testing
 				bmitName := fmt.Sprintf("test-bmit-%s", uuid.New()[24:32])
+				clusterBMIT = bmitName
 				instanceTypesClient := privatev1.NewBareMetalInstanceTypesClient(tool.InternalView().AdminConn())
 				_, err := instanceTypesClient.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
 					Object: privatev1.BareMetalInstanceType_builder{
@@ -406,18 +405,18 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 							Name: bmitName,
 						}.Build(),
 						Spec: privatev1.BareMetalInstanceTypeSpec_builder{
-						Hardware: privatev1.BareMetalHardwareSpec_builder{
-							Cpu:    privatev1.BareMetalCPUSpec_builder{Cores: 32, Architecture: "x86_64", ThreadsPerCore: 2}.Build(),
-							Memory: privatev1.BareMetalMemorySpec_builder{TotalGb: 128}.Build(),
-							NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
-								privatev1.BareMetalNetworkPortSpec_builder{
-									Name:  "eth0",
-									Role:  "fabric",
-									Type:  "Ethernet",
-									Speed: "10Gbps",
-								}.Build(),
-							},
-						}.Build(),
+							Hardware: privatev1.BareMetalHardwareSpec_builder{
+								Cpu:    privatev1.BareMetalCPUSpec_builder{Cores: 32, Architecture: "x86_64", ThreadsPerCore: 2}.Build(),
+								Memory: privatev1.BareMetalMemorySpec_builder{TotalGb: 128}.Build(),
+								NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
+									privatev1.BareMetalNetworkPortSpec_builder{
+										Name:  "eth0",
+										Role:  "fabric",
+										Type:  "Ethernet",
+										Speed: "10Gbps",
+									}.Build(),
+								},
+							}.Build(),
 							HostLabelSelector: privatev1.BareMetalLabelSelector_builder{
 								MatchLabels: map[string]string{"hardware.profile": "compute"},
 							}.Build(),
@@ -441,12 +440,6 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 						Metadata: privatev1.Metadata_builder{
 							Name: fmt.Sprintf("test-template-%s", uuid.New()[24:32]),
 						}.Build(),
-						NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
-							"my-node-set": privatev1.ClusterTemplateNodeSet_builder{
-								BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: bmitName}.Build(),
-								Size:                  3,
-							}.Build(),
-						},
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -472,6 +465,7 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 							}.Build(),
 							Spec: publicv1.ClusterSpec_builder{
 								Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+								NodeSets: testClusterNodeSets(clusterBMIT, 3),
 							}.Build(),
 						}.Build(),
 					}.Build())

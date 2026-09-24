@@ -100,7 +100,7 @@ var _ = Describe("Node set removal", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 
-		// Create a template with 2 node sets:
+		// Create a provisioning template; the Cluster supplies its two node sets.
 		templateId = fmt.Sprintf("template_2_nodesets_%s", uuid.New())
 		_, err = templatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
@@ -108,18 +108,8 @@ var _ = Describe("Node set removal", func() {
 				Metadata: privatev1.Metadata_builder{
 					Name: fmt.Sprintf("template-2-nodesets-%s", uuid.New()),
 				}.Build(),
-				Title:       "Template with 2 node sets",
-				Description: "A template with workers and storage node sets.",
-				NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
-					"workers": privatev1.ClusterTemplateNodeSet_builder{
-						BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: workerBmitName}.Build(),
-						Size:                  3,
-					}.Build(),
-					"storage": privatev1.ClusterTemplateNodeSet_builder{
-						BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: storageBmitName}.Build(),
-						Size:                  2,
-					}.Build(),
-				},
+				Title:       "Provisioning template",
+				Description: "Template for a cluster with workers and storage nodes.",
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
@@ -134,6 +124,10 @@ var _ = Describe("Node set removal", func() {
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NodeSets: map[string]*publicv1.ClusterNodeSet{
+						"workers": publicv1.ClusterNodeSet_builder{Size: new(int32(3)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: workerBmitName}.Build()}.Build(),
+						"storage": publicv1.ClusterNodeSet_builder{Size: new(int32(2)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: storageBmitName}.Build()}.Build(),
+					},
 				}.Build(),
 			}.Build(),
 		}.Build())

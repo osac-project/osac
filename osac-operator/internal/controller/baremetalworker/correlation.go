@@ -292,8 +292,8 @@ func (r *Reconciler) bindAgent(
 		workerName := ""
 		if worker != nil {
 			workerName = worker.Name
-			if worker.NodeSet != "" {
-				labels[nodePoolResourceClassLabel] = worker.NodeSet
+			if worker.InstanceType != "" {
+				labels[agentInstanceTypeLabel] = worker.InstanceType
 			}
 		}
 		labels[workerNameLabel] = workerName
@@ -399,17 +399,17 @@ func (r *Reconciler) reconcileNodePoolReplicas(
 		return ctrl.Result{RequeueAfter: agentRequeueInterval}, nil
 	}
 
-	replicas := requestedBareMetalWorkersByResourceClass(co)
+	replicas := requestedBareMetalWorkersByInstanceType(co)
 	return ctrl.Result{}, r.patchNodePoolReplicas(ctx, nodePools, replicas)
 }
 
-// requestedBareMetalWorkersByResourceClass preserves each requested NodePool capacity while
+// requestedBareMetalWorkersByInstanceType preserves each requested NodePool capacity while
 // BMaaS workers are still provisioning and their Agents have not registered yet.
-func requestedBareMetalWorkersByResourceClass(co *v1alpha1.ClusterOrder) map[string]int64 {
+func requestedBareMetalWorkersByInstanceType(co *v1alpha1.ClusterOrder) map[string]int64 {
 	replicas := make(map[string]int64)
 	for _, request := range co.Spec.NodeRequests {
 		if request.IsBareMetal() {
-			replicas[request.ResourceClass] += int64(request.NumberOfNodes)
+			replicas[request.BareMetal.InstanceType] += int64(request.NumberOfNodes)
 		}
 	}
 	return replicas
@@ -430,13 +430,13 @@ func (r *Reconciler) listNodePools(ctx context.Context, namespace, clusterOrderN
 }
 
 func (r *Reconciler) patchNodePoolReplicas(
-	ctx context.Context, nodePools *unstructured.UnstructuredList, replicasByResourceClass map[string]int64,
+	ctx context.Context, nodePools *unstructured.UnstructuredList, replicasByInstanceType map[string]int64,
 ) error {
 	log := ctrllog.FromContext(ctx)
 	for idx := range nodePools.Items {
 		np := &nodePools.Items[idx]
-		resourceClass := np.GetLabels()[nodePoolResourceClassLabel]
-		replicas, ok := replicasByResourceClass[resourceClass]
+		instanceType := np.GetLabels()[agentInstanceTypeLabel]
+		replicas, ok := replicasByInstanceType[instanceType]
 		if !ok {
 			continue
 		}

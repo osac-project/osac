@@ -125,7 +125,6 @@ var _ = Describe("BareMetalWorkerReconciler ensureInfraEnv", func() {
 				PullSecret:   "{\"auths\":{}}",
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
 				NodeRequests: []osacv1alpha1.NodeRequest{{
-					ResourceClass: "bm-standard",
 					NumberOfNodes: 1,
 					BareMetal: &osacv1alpha1.BareMetalNodeSpec{
 						InstanceType: "bm-standard",
@@ -264,11 +263,8 @@ var _ = Describe("BareMetalWorkerReconciler ensureInfraEnv", func() {
 		co := &osacv1alpha1.ClusterOrder{
 			ObjectMeta: metav1.ObjectMeta{Name: "bmw-none", Namespace: testNamespace},
 			Spec: osacv1alpha1.ClusterOrderSpec{
-				TemplateID: "test",
-				NodeRequests: []osacv1alpha1.NodeRequest{{
-					ResourceClass: "vm-standard",
-					NumberOfNodes: 1,
-				}},
+				TemplateID:   "test",
+				NodeRequests: nil,
 			},
 		}
 		create(co)
@@ -342,7 +338,6 @@ var _ = Describe("BareMetalWorkerReconciler ensureSystemCatalogItem", func() {
 				TemplateID: "test",
 				PullSecret: "{\"auths\":{}}",
 				NodeRequests: []osacv1alpha1.NodeRequest{{
-					ResourceClass: "bm-standard",
 					NumberOfNodes: 1,
 					BareMetal: &osacv1alpha1.BareMetalNodeSpec{
 						InstanceType: "bm-standard",
@@ -507,7 +502,6 @@ var _ = Describe("BareMetalWorkerReconciler resolveDiskImage", func() {
 				PullSecret:   "{\"auths\":{}}",
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
 				NodeRequests: []osacv1alpha1.NodeRequest{{
-					ResourceClass: "bm-standard",
 					NumberOfNodes: 1,
 					BareMetal: &osacv1alpha1.BareMetalNodeSpec{
 						InstanceType: "bm-standard",
@@ -760,7 +754,6 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", func() {
 				PullSecret:   "{\"auths\":{}}",
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
 				NodeRequests: []osacv1alpha1.NodeRequest{{
-					ResourceClass: "bm-standard",
 					NumberOfNodes: numWorkers,
 					BareMetal: &osacv1alpha1.BareMetalNodeSpec{
 						InstanceType: "bm-standard",
@@ -1147,12 +1140,10 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", func() {
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
 				NodeRequests: []osacv1alpha1.NodeRequest{
 					{
-						ResourceClass: "bm-standard",
 						NumberOfNodes: 1,
 						BareMetal:     &osacv1alpha1.BareMetalNodeSpec{InstanceType: "bm-standard"},
 					},
 					{
-						ResourceClass: "bm-gpu",
 						NumberOfNodes: 1,
 						BareMetal:     &osacv1alpha1.BareMetalNodeSpec{InstanceType: "bm-gpu"},
 					},
@@ -1188,7 +1179,6 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", func() {
 				PullSecret:   "{\"auths\":{}}",
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
 				NodeRequests: []osacv1alpha1.NodeRequest{{
-					ResourceClass: "bm-standard",
 					NumberOfNodes: 1,
 					BareMetal:     &osacv1alpha1.BareMetalNodeSpec{InstanceType: "bm-standard"},
 				}},
@@ -1273,7 +1263,6 @@ var _ = Describe("BareMetalWorkerReconciler correlateAgents", func() {
 				PullSecret:   "{\"auths\":{}}",
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
 				NodeRequests: []osacv1alpha1.NodeRequest{{
-					ResourceClass: "bm-standard",
 					NumberOfNodes: numWorkers,
 					BareMetal: &osacv1alpha1.BareMetalNodeSpec{
 						InstanceType: "bm-standard",
@@ -1577,7 +1566,6 @@ var _ = Describe("BareMetalWorkerReconciler workerRetry", func() {
 				PullSecret:   "{\"auths\":{}}",
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
 				NodeRequests: []osacv1alpha1.NodeRequest{{
-					ResourceClass: "bm-standard",
 					NumberOfNodes: 1,
 					BareMetal: &osacv1alpha1.BareMetalNodeSpec{
 						InstanceType: "bm-standard",
@@ -1856,7 +1844,6 @@ var _ = Describe("BareMetalWorkerReconciler scale-up", func() {
 				PullSecret:   "{\"auths\":{}}",
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
 				NodeRequests: []osacv1alpha1.NodeRequest{{
-					ResourceClass: "bm-standard",
 					NumberOfNodes: numWorkers,
 					BareMetal: &osacv1alpha1.BareMetalNodeSpec{
 						InstanceType: "bm-standard",
@@ -2131,7 +2118,6 @@ var _ = Describe("BareMetalWorkerReconciler stale ignition", func() {
 				PullSecret:   "{\"auths\":{}}",
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
 				NodeRequests: []osacv1alpha1.NodeRequest{{
-					ResourceClass: "bm-standard",
 					NumberOfNodes: 1,
 					BareMetal: &osacv1alpha1.BareMetalNodeSpec{
 						InstanceType: "bm-standard",
@@ -2369,7 +2355,6 @@ var _ = Describe("BareMetalWorkerReconciler scale-down", func() {
 				PullSecret:   "{\"auths\":{}}",
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
 				NodeRequests: []osacv1alpha1.NodeRequest{{
-					ResourceClass: "bm-standard",
 					NumberOfNodes: numWorkers,
 					BareMetal: &osacv1alpha1.BareMetalNodeSpec{
 						InstanceType: "bm-standard",
@@ -2786,7 +2771,6 @@ var _ = Describe("BareMetalWorkerReconciler cluster deletion", func() {
 				PullSecret:   "{\"auths\":{}}",
 				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
 				NodeRequests: []osacv1alpha1.NodeRequest{{
-					ResourceClass: "bm-standard",
 					NumberOfNodes: numWorkers,
 					BareMetal: &osacv1alpha1.BareMetalNodeSpec{
 						InstanceType: "bm-standard",

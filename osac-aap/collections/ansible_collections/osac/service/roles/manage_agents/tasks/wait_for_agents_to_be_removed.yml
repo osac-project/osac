@@ -6,7 +6,7 @@
     namespace: "{{ default_agent_namespace }}"
     label_selectors:
       - "{{ cluster_order_label }}={{ manage_agents_cluster_order_name }}"
-      - "{{ agent_resource_class_label }}={{ manage_agents_resource_class }}"
+      - "{{ agent_instance_type_label }}={{ manage_agents_instance_type }}"
   register: manage_agents_allocated
 
 - name: Display agent counts (wait_for_agents)
@@ -28,7 +28,7 @@
       namespace: "{{ default_agent_namespace }}"
       label_selectors:
         - "{{ cluster_order_label }}={{ manage_agents_cluster_order_name }}"
-        - "{{ agent_resource_class_label }}={{ manage_agents_resource_class }}"
+        - "{{ agent_instance_type_label }}={{ manage_agents_instance_type }}"
     register: manage_agents_allocated
     until: >
       (manage_agents_allocated.resources

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 import shutil
 import tempfile
@@ -235,7 +234,12 @@ class OsacCLI:
         if node_sets is not None:
             if isinstance(node_sets, dict):
                 for key, val in node_sets.items():
-                    args.extend(["--node-set", f"{key}={json.dumps(val)}"])
+                    args.extend(
+                        [
+                            "--node-set",
+                            f"name={key},size={val['size']},baremetal-instance-type={val['baremetal_instance_type']['name']}",
+                        ]
+                    )
             elif isinstance(node_sets, list):
                 for item in node_sets:
                     args.extend(["--node-set", item])

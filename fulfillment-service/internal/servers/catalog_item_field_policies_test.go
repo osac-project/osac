@@ -101,8 +101,8 @@ var _ = Describe("Shared typed-policy helper", func() {
 			}.Build(),
 			NodeSets: privatev1.ClusterNodeSetMapPolicy_builder{
 				Editable: privatev1.EditableClusterNodeSetMap_builder{
-					DefaultValue: privatev1.ClusterNodeSetMap_builder{Items: map[string]*privatev1.ClusterTemplateNodeSet{
-						"workers": privatev1.ClusterTemplateNodeSet_builder{Size: 3}.Build(),
+					DefaultValue: privatev1.ClusterNodeSetMap_builder{Items: map[string]*privatev1.ClusterCatalogNodeSet{
+						"workers": privatev1.ClusterCatalogNodeSet_builder{Size: 3}.Build(),
 					}}.Build(),
 				}.Build(),
 			}.Build(),
@@ -217,7 +217,7 @@ var _ = Describe("Shared typed-policy helper", func() {
 		clusterSpec.SetNodeSets(map[string]*privatev1.ClusterNodeSet{})
 		clusterFields := privatev1.ClusterCatalogItemFields_builder{
 			NodeSets: privatev1.ClusterNodeSetMapPolicy_builder{
-				Locked: privatev1.ClusterNodeSetMap_builder{Items: map[string]*privatev1.ClusterTemplateNodeSet{"workers": privatev1.ClusterTemplateNodeSet_builder{Size: clusterSize}.Build()}}.Build(),
+				Locked: privatev1.ClusterNodeSetMap_builder{Items: map[string]*privatev1.ClusterCatalogNodeSet{"workers": privatev1.ClusterCatalogNodeSet_builder{Size: clusterSize}.Build()}}.Build(),
 			}.Build(),
 		}.Build()
 		Expect(applyClusterCatalogItemPolicies(clusterSpec, privatev1.ClusterCatalogItem_builder{Fields: clusterFields}.Build().GetFields())).To(Succeed())

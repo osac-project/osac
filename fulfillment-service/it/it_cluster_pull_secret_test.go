@@ -94,8 +94,7 @@ var _ = Describe("Cluster pull_secret_secret", Label("secrets", "cluster"), func
 		return id, name
 	}
 
-	// createTemplate creates a cluster template with a single required node set. When defaults is
-	// non-nil it is attached as the template's spec_defaults.
+	// createTemplate creates a cluster template with provisioning defaults but no hardware selection.
 	createTemplate := func(ctx context.Context, defaults *privatev1.ClusterTemplateSpecDefaults) string {
 		templateId := fmt.Sprintf("my_template_%s", uuid.New())
 		_, err := templatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
@@ -113,12 +112,6 @@ var _ = Describe("Cluster pull_secret_secret", Label("secrets", "cluster"), func
 						Title:       "My required parameter",
 						Description: "My required parameter.",
 						Required:    true,
-					}.Build(),
-				},
-				NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
-					"my_node_set": privatev1.ClusterTemplateNodeSet_builder{
-						BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: bmitName}.Build(),
-						Size:                  3,
 					}.Build(),
 				},
 				SpecDefaults: defaults,
@@ -165,22 +158,23 @@ var _ = Describe("Cluster pull_secret_secret", Label("secrets", "cluster"), func
 		bmitName = fmt.Sprintf("test-bmit-%s", uuid.New()[24:32])
 		_, err := instanceTypesClient.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
 			Object: privatev1.BareMetalInstanceType_builder{
+				Id: bmitName,
 				Metadata: privatev1.Metadata_builder{
 					Name: bmitName,
 				}.Build(),
 				Spec: privatev1.BareMetalInstanceTypeSpec_builder{
-				Hardware: privatev1.BareMetalHardwareSpec_builder{
-					Cpu:    privatev1.BareMetalCPUSpec_builder{Cores: 32, Architecture: "x86_64", ThreadsPerCore: 2}.Build(),
-					Memory: privatev1.BareMetalMemorySpec_builder{TotalGb: 128}.Build(),
-					NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
-						privatev1.BareMetalNetworkPortSpec_builder{
-							Name:  "eth0",
-							Role:  "fabric",
-							Type:  "Ethernet",
-							Speed: "10Gbps",
-						}.Build(),
-					},
-				}.Build(),
+					Hardware: privatev1.BareMetalHardwareSpec_builder{
+						Cpu:    privatev1.BareMetalCPUSpec_builder{Cores: 32, Architecture: "x86_64", ThreadsPerCore: 2}.Build(),
+						Memory: privatev1.BareMetalMemorySpec_builder{TotalGb: 128}.Build(),
+						NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
+							privatev1.BareMetalNetworkPortSpec_builder{
+								Name:  "eth0",
+								Role:  "fabric",
+								Type:  "Ethernet",
+								Speed: "10Gbps",
+							}.Build(),
+						},
+					}.Build(),
 					HostLabelSelector: privatev1.BareMetalLabelSelector_builder{
 						MatchLabels: map[string]string{"hardware.profile": "compute"},
 					}.Build(),
@@ -201,6 +195,9 @@ var _ = Describe("Cluster pull_secret_secret", Label("secrets", "cluster"), func
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NodeSets: map[string]*publicv1.ClusterNodeSet{"workers": publicv1.ClusterNodeSet_builder{
+						Size: proto.Int32(2), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName}.Build(),
+					}.Build()},
 					TemplateParameters: map[string]*anypb.Any{
 						"my": makeAny(wrapperspb.String("my_value")),
 					},
@@ -229,6 +226,9 @@ var _ = Describe("Cluster pull_secret_secret", Label("secrets", "cluster"), func
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NodeSets: map[string]*publicv1.ClusterNodeSet{"workers": publicv1.ClusterNodeSet_builder{
+						Size: proto.Int32(2), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName}.Build(),
+					}.Build()},
 					TemplateParameters: map[string]*anypb.Any{
 						"my": makeAny(wrapperspb.String("my_value")),
 					},
@@ -256,6 +256,9 @@ var _ = Describe("Cluster pull_secret_secret", Label("secrets", "cluster"), func
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NodeSets: map[string]*publicv1.ClusterNodeSet{"workers": publicv1.ClusterNodeSet_builder{
+						Size: proto.Int32(2), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName}.Build(),
+					}.Build()},
 					TemplateParameters: map[string]*anypb.Any{
 						"my": makeAny(wrapperspb.String("my_value")),
 					},
@@ -284,6 +287,9 @@ var _ = Describe("Cluster pull_secret_secret", Label("secrets", "cluster"), func
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NodeSets: map[string]*publicv1.ClusterNodeSet{"workers": publicv1.ClusterNodeSet_builder{
+						Size: proto.Int32(2), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName}.Build(),
+					}.Build()},
 					TemplateParameters: map[string]*anypb.Any{
 						"my": makeAny(wrapperspb.String("my_value")),
 					},
@@ -313,6 +319,9 @@ var _ = Describe("Cluster pull_secret_secret", Label("secrets", "cluster"), func
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NodeSets: map[string]*publicv1.ClusterNodeSet{"workers": publicv1.ClusterNodeSet_builder{
+						Size: proto.Int32(2), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName}.Build(),
+					}.Build()},
 					TemplateParameters: map[string]*anypb.Any{
 						"my": makeAny(wrapperspb.String("my_value")),
 					},
@@ -346,6 +355,9 @@ var _ = Describe("Cluster pull_secret_secret", Label("secrets", "cluster"), func
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NodeSets: map[string]*publicv1.ClusterNodeSet{"workers": publicv1.ClusterNodeSet_builder{
+						Size: proto.Int32(2), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName}.Build(),
+					}.Build()},
 					TemplateParameters: map[string]*anypb.Any{
 						"my": makeAny(wrapperspb.String("my_value")),
 					},

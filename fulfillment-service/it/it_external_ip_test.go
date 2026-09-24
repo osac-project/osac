@@ -681,12 +681,6 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 				Metadata: privatev1.Metadata_builder{
 					Name: fmt.Sprintf("test-tmpl-%s", uuid.New()[24:32]),
 				}.Build(),
-				NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
-					"workers": privatev1.ClusterTemplateNodeSet_builder{
-						BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: bmitName}.Build(),
-						Size:                  1,
-					}.Build(),
-				},
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
@@ -698,6 +692,9 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NodeSets: map[string]*publicv1.ClusterNodeSet{"workers": publicv1.ClusterNodeSet_builder{
+						Size: new(int32(1)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName}.Build(),
+					}.Build()},
 				}.Build(),
 			}.Build(),
 		}.Build())

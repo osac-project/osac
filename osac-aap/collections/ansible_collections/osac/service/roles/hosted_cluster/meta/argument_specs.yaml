@@ -20,9 +20,13 @@ argument_specs:
           numberOfNodes:
             type: int
             required: true
-          resourceClass:
-            type: str
+          bareMetal:
+            type: dict
             required: true
+            options:
+              instanceType:
+                type: str
+                required: true
       hosted_cluster_settings:
         type: dict
         required: true

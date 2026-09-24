@@ -75,9 +75,9 @@ spec:
           - name: OSAC_CLUSTER_WORKERS_JOINING_STALL_THRESHOLD
             value: {{ .Values.stall.workersJoiningThreshold | quote }}
           {{- end }}
-          {{- if .Values.stall.workersJoiningByHostType }}
+          {{- if .Values.stall.workersJoiningByInstanceType }}
           - name: OSAC_CLUSTER_WORKERS_JOINING_STALL_THRESHOLD_OVERRIDES
-            value: {{ .Values.stall.workersJoiningByHostType | toJson | quote }}
+            value: {{ .Values.stall.workersJoiningByInstanceType | toJson | quote }}
           {{- end }}
           {{- if .Values.networkManagers.capabilitiesSyncInterval }}
           - name: OSAC_NETWORK_CLASS_SYNC_INTERVAL

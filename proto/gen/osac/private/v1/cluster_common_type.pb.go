@@ -147,7 +147,7 @@ func (b0 ClusterNetwork_builder) Build() *ClusterNetwork {
 //
 // Unlike compute instances, which support multiple network attachments (one per virtual NIC), a cluster has a single
 // network attachment shared by all node sets. The fabric interface for each node set is resolved automatically by the
-// system from the node set's host type.
+// system from the node set's selected BareMetalInstanceType.
 type ClusterNetworkAttachment struct {
 	state protoimpl.MessageState `protogen:"hybrid.v1"`
 	// Reference to the subnet to connect the cluster to.

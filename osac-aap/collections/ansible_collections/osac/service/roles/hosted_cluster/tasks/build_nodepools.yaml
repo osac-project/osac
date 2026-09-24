@@ -1,0 +1,35 @@
+---
+- name: Build NodePool definitions for requested instance types
+  ansible.builtin.set_fact:
+    nodepool_definitions: >-
+      {{ nodepool_definitions | default([]) + [{
+        'apiVersion': 'hypershift.openshift.io/v1beta1',
+        'kind': 'NodePool',
+        'metadata': {
+          'name': nodepool_prefix + '-' + item.0,
+          'namespace': hosted_cluster_namespace,
+          'labels': {agent_instance_type_label: item.0} | combine(hosted_cluster_default_cluster_order_label)
+        },
+        'spec': {
+          'clusterName': hosted_cluster_name,
+          'replicas': item.1 | map(attribute='numberOfNodes') | map('int') | sum,
+          'management': {
+            'autoRepair': false,
+            'upgradeType': 'InPlace'
+          },
+          'platform': {
+            'type': 'Agent',
+            'agent': {
+              'agentLabelSelector': {
+                'matchLabels': {agent_instance_type_label: item.0} | combine(hosted_cluster_default_cluster_order_label)
+              }
+            }
+          },
+          'release': {
+            'image': ocp_release_image
+          }
+        }
+      }] }}
+  loop: "{{ hosted_cluster_node_requests | groupby('bareMetal.instanceType') }}"
+  loop_control:
+    label: "{{ item.0 }}"

@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -238,23 +239,48 @@ var _ = Describe("advanceBindingWorkers", func() {
 	)
 })
 
-var _ = Describe("requestedBareMetalWorkersByResourceClass", func() {
-	It("counts requested bare-metal workers before any Agent is correlated", func() {
+var _ = Describe("requestedBareMetalWorkersByInstanceType", func() {
+	It("keys NodePool capacity by the selected instance type", func() {
+		co := &v1alpha1.ClusterOrder{}
+		co.Spec.NodeRequests = []v1alpha1.NodeRequest{{
+			NumberOfNodes: 2,
+			BareMetal:     &v1alpha1.BareMetalNodeSpec{InstanceType: "bm-worker"},
+		}}
+		Expect(requestedBareMetalWorkersByInstanceType(co)).To(Equal(map[string]int64{"bm-worker": 2}))
+	})
+	It("counts each requested instance type before any Agent is correlated", func() {
 		co := &v1alpha1.ClusterOrder{}
 		co.Spec.NodeRequests = []v1alpha1.NodeRequest{
-			{ResourceClass: "bm-worker", NumberOfNodes: 2,
+			{NumberOfNodes: 2,
 				BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "bm-worker"}},
-			{NumberOfNodes: 3},
+			{NumberOfNodes: 3, BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "bm-gpu"}},
 		}
 
-		Expect(requestedBareMetalWorkersByResourceClass(co)).To(Equal(map[string]int64{
+		Expect(requestedBareMetalWorkersByInstanceType(co)).To(Equal(map[string]int64{
 			"bm-worker": 2,
+			"bm-gpu":    3,
 		}))
 	})
 })
 
+var _ = Describe("BareMetalWorker direct ClusterOrder validation", func() {
+	It("rejects a node request without bareMetal before provisioning", func() {
+		co := &v1alpha1.ClusterOrder{
+			ObjectMeta: metav1.ObjectMeta{Name: "invalid-workers", Namespace: "osac"},
+			Spec:       v1alpha1.ClusterOrderSpec{NodeRequests: []v1alpha1.NodeRequest{{NumberOfNodes: 2}}},
+		}
+		s := runtime.NewScheme()
+		Expect(v1alpha1.AddToScheme(s)).To(Succeed())
+		k8sClient := clientfake.NewClientBuilder().WithScheme(s).WithObjects(co).Build()
+		r := &Reconciler{Client: k8sClient}
+
+		_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: co.Name, Namespace: co.Namespace}})
+		Expect(err).To(MatchError(ContainSubstring("bareMetal.instanceType is required")))
+	})
+})
+
 var _ = Describe("reconcileNodePoolReplicas", func() {
-	It("keeps replica counts isolated by resource class", func() {
+	It("keeps replica counts isolated by instance type", func() {
 		nodePoolGVK := schema.GroupVersionKind{
 			Group: "hypershift.openshift.io", Version: "v1beta1", Kind: "NodePool",
 		}
@@ -269,9 +295,9 @@ var _ = Describe("reconcileNodePoolReplicas", func() {
 			ObjectMeta: metav1.ObjectMeta{Name: "co-replicas", Namespace: "osac"},
 			Spec: v1alpha1.ClusterOrderSpec{
 				NodeRequests: []v1alpha1.NodeRequest{
-					{ResourceClass: "bm-standard", NumberOfNodes: 2,
+					{NumberOfNodes: 2,
 						BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "bm-standard"}},
-					{ResourceClass: "bm-gpu", NumberOfNodes: 1,
+					{NumberOfNodes: 1,
 						BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "bm-gpu"}},
 				},
 			},
@@ -280,14 +306,14 @@ var _ = Describe("reconcileNodePoolReplicas", func() {
 			},
 		}
 
-		makeNodePool := func(name, resourceClass string) *unstructured.Unstructured {
+		makeNodePool := func(name, instanceType string) *unstructured.Unstructured {
 			np := &unstructured.Unstructured{Object: map[string]interface{}{}}
 			np.SetGroupVersionKind(nodePoolGVK)
 			np.SetName(name)
 			np.SetNamespace("workload")
 			np.SetLabels(map[string]string{
-				"osac.openshift.io/clusterorder": co.Name,
-				nodePoolResourceClassLabel:       resourceClass,
+				"osac.openshift.io/clusterorder":  co.Name,
+				"osac.openshift.io/instance_type": instanceType,
 			})
 			Expect(unstructured.SetNestedField(np.Object, int64(0), "spec", "replicas")).To(Succeed())
 			return np
@@ -317,7 +343,7 @@ var _ = Describe("reconcileNodePoolReplicas", func() {
 })
 
 var _ = Describe("correlateAgents with transient Agent conflicts", func() {
-	It("eventually binds both resource classes and preserves the binding contract", func() {
+	It("labels correlated Agents with their instance type and preserves the binding contract", func() {
 		const (
 			namespace        = "osac-e2e-ci"
 			clusterOrderName = "ci-cluster"
@@ -341,18 +367,20 @@ var _ = Describe("correlateAgents with transient Agent conflicts", func() {
 			ObjectMeta: metav1.ObjectMeta{Name: clusterOrderName, Namespace: namespace},
 			Status: v1alpha1.ClusterOrderStatus{Workers: []v1alpha1.WorkerStatus{
 				{
-					NodeSet:    "compute",
-					Name:       "ci-worker-bm",
-					Kind:       workerKindBMI,
-					ResourceID: "bmi-compute",
-					Phase:      workerPhaseWaitingForAgent,
+					NodeSet:      "compute",
+					InstanceType: "bm-compute",
+					Name:         "ci-worker-bm",
+					Kind:         workerKindBMI,
+					ResourceID:   "bmi-compute",
+					Phase:        workerPhaseWaitingForAgent,
 				},
 				{
-					NodeSet:    "gpu",
-					Name:       "ci-worker-bm-gpu",
-					Kind:       workerKindBMI,
-					ResourceID: "bmi-gpu",
-					Phase:      workerPhaseWaitingForAgent,
+					NodeSet:      "gpu",
+					InstanceType: "bm-gpu",
+					Name:         "ci-worker-bm-gpu",
+					Kind:         workerKindBMI,
+					ResourceID:   "bmi-gpu",
+					Phase:        workerPhaseWaitingForAgent,
 				},
 			}},
 		}
@@ -398,10 +426,10 @@ var _ = Describe("correlateAgents with transient Agent conflicts", func() {
 		Expect(result).To(BeZero())
 
 		for _, expected := range []struct {
-			name, workerName, resourceClass string
+			name, workerName, instanceType string
 		}{
-			{name: "agent-compute", workerName: "ci-worker-bm", resourceClass: "compute"},
-			{name: "agent-gpu", workerName: "ci-worker-bm-gpu", resourceClass: "gpu"},
+			{name: "agent-compute", workerName: "ci-worker-bm", instanceType: "bm-compute"},
+			{name: "agent-gpu", workerName: "ci-worker-bm-gpu", instanceType: "bm-gpu"},
 		} {
 			agent := &unstructured.Unstructured{}
 			agent.SetGroupVersionKind(agentGVK)
@@ -425,7 +453,8 @@ var _ = Describe("correlateAgents with transient Agent conflicts", func() {
 			Expect(found).To(BeTrue())
 			Expect(approved).To(BeTrue())
 			Expect(agent.GetLabels()).To(HaveKeyWithValue(workerNameLabel, expected.workerName))
-			Expect(agent.GetLabels()).To(HaveKeyWithValue(nodePoolResourceClassLabel, expected.resourceClass))
+			Expect(agent.GetLabels()).To(HaveKeyWithValue("osac.openshift.io/instance_type", expected.instanceType))
+			Expect(agent.GetLabels()).NotTo(HaveKey("osac.openshift.io/resource_class"))
 			Expect(agent.GetLabels()).To(HaveKeyWithValue(agentBareMetalRoleLabel, "true"))
 			Expect(agent.GetLabels()).To(HaveKeyWithValue(clusterOrderLabel, clusterOrderName))
 			Expect(agent.GetLabels()).To(HaveKeyWithValue("osac.openshift.io/clusterorder", clusterOrderName))

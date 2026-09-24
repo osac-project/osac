@@ -24,7 +24,7 @@ argument_specs:
       cluster_order_label:
         type: str
         required: true
-      agent_resource_class_label:
+      agent_instance_type_label:
         type: str
         required: true
       default_agent_namespace:

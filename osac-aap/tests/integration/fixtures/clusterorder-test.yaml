@@ -12,5 +12,6 @@ spec:
       "ssh_public_key": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC5VZfsNrMDcHgF+1DlN8N4FHg9T8J9x9K+wXYzrP3lL2QR6eQ1mF7yJ8T2P3qL4R5tP6sN7kM8vQ9zX5yF6tN8pR5sQ9mF7yJ8T2P3qL4R5tP6sN7kM8vQ9zX5yF6tN test@example.com"
     }
   nodeRequests:
-    - resourceClass: test-class
-      numberOfNodes: 1
+    - numberOfNodes: 1
+      bareMetal:
+        instanceType: test-class

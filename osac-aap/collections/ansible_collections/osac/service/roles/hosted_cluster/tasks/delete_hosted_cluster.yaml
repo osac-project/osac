@@ -37,10 +37,10 @@
     api_version: hypershift.openshift.io/v1beta1
     kind: NodePool
     namespace: "{{ hosted_cluster_namespace }}"
-    name: "nodepool-{{ hosted_cluster_name }}-{{ item.resourceClass }}"
+    name: "nodepool-{{ hosted_cluster_name }}-{{ item.bareMetal.instanceType }}"
   loop: "{{ hosted_cluster_node_requests }}"
   loop_control:
-    label: "Delete NodePool nodepool-{{ hosted_cluster_name }}-{{ item.resourceClass }}"
+    label: "Delete NodePool nodepool-{{ hosted_cluster_name }}-{{ item.bareMetal.instanceType }}"
 
 # Wait for the HostedCluster to delete before we proceed; this ensures that we
 # don't prematurely destroy infrastructure resources required for the clean

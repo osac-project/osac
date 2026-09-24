@@ -25,6 +25,7 @@ pytestmark = pytest.mark.sanity
 def test_cluster_delete_reports_deleting_state_without_provisioning(
     cli: OsacCLI,
     grpc: GRPCClient,
+    private_grpc: GRPCClient,
     k8s_hub_client: K8sClient,
     cluster_template: str,
     pull_secret_path: str,
@@ -33,10 +34,15 @@ def test_cluster_delete_reports_deleting_state_without_provisioning(
     """Verify that cluster deletion transitions through DELETING state
     without waiting for full provisioning. Runs on kind without HyperShift
     (OSAC-1586)."""
+    private_grpc.ensure_bare_metal_instance_type(
+        name="ci-worker-bm", host_label_selector={"osac.openshift.io/host-type": "default"}
+    )
+    node_sets = {"workers": {"size": 1, "baremetal_instance_type": {"name": "ci-worker-bm"}}}
     name = unique_name("e2e-cluster")
     uuid = cli.create_cluster(
         name=name,
         template=cluster_template,
+        node_sets=node_sets,
         template_parameter_files={"pull_secret": pull_secret_path},
         template_parameters={"ssh_public_key": Path(ssh_public_key_path).read_text().strip()},
     )

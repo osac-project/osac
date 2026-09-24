@@ -194,7 +194,10 @@ def test_cluster_create(
         original_size = int(node_sets[worker_node_set].get("size", 1))
         node_requests = cluster_order_spec.get("nodeRequests", [])
         assert len(node_requests) == 1, "Expected one node request for the CaaS sanity scenario"
-        worker_resource_class = node_requests[0].get("resourceClass", "")
+        assert all("resourceClass" not in request for request in node_requests)
+        worker_instance_type = node_requests[0]["bareMetal"]["instanceType"]
+        assert worker_instance_type == node_sets[worker_node_set]["baremetalInstanceType"]["name"] == "ci-worker-bm"
+        assert int(node_requests[0]["numberOfNodes"]) == original_size
 
         def _get_node_pool() -> dict[str, Any] | None:
             node_pools = k8s_hub_client.list_json(
@@ -204,8 +207,8 @@ def test_cluster_create(
                 (
                     item
                     for item in node_pools
-                    if item.get("metadata", {}).get("labels", {}).get("osac.openshift.io/resource_class")
-                    == worker_resource_class
+                    if item.get("metadata", {}).get("labels", {}).get("osac.openshift.io/instance_type")
+                    == worker_instance_type
                 ),
                 None,
             )
@@ -226,9 +229,13 @@ def test_cluster_create(
                 expected_workers=original_size,
                 get_node_pool=_get_node_pool,
                 expected_ready_nodes=original_size,
-                node_pool_description=f"{hosted_cluster_name} NodePool {worker_resource_class} ready nodes",
+                node_pool_description=f"{hosted_cluster_name} NodePool {worker_instance_type} ready nodes",
             )
-        assert node_pool is not None, f"No NodePool found for resource class {worker_resource_class!r}"
+        assert node_pool is not None, f"No NodePool found for instance type {worker_instance_type!r}"
+        assert "osac.openshift.io/resource_class" not in node_pool.get("metadata", {}).get("labels", {})
+        selector = node_pool.get("spec", {}).get("platform", {}).get("agent", {}).get("agentLabelSelector", {})
+        assert selector.get("matchLabels", {}).get("osac.openshift.io/instance_type") == worker_instance_type
+        assert "osac.openshift.io/resource_class" not in selector.get("matchLabels", {})
 
         bmi_filter = f'this.metadata.labels["osac.openshift.io/cluster-order"] == "{co_name}"'
         run_owned_bmi_ids = set(private_grpc.list_baremetal_instance_ids(filter_expr=bmi_filter))
@@ -340,10 +347,10 @@ def test_cluster_create_with_two_node_sets(
 ) -> None:
     """Verify NodePool replicas stay isolated when a cluster has two BMaaS node sets."""
 
-    resource_classes = {"compute": "ci-worker-bm", "gpu": "ci-worker-bm-gpu"}
-    for resource_class in resource_classes.values():
+    instance_types = {"compute": "ci-worker-bm", "gpu": "ci-worker-bm-gpu"}
+    for instance_type in instance_types.values():
         private_grpc.ensure_bare_metal_instance_type(
-            name=resource_class, host_label_selector={"osac.openshift.io/host-type": "default"}
+            name=instance_type, host_label_selector={"osac.openshift.io/host-type": "default"}
         )
 
     version = private_grpc.ensure_cluster_version(
@@ -357,8 +364,8 @@ def test_cluster_create_with_two_node_sets(
         template=cluster_template,
         version=version["name"],
         node_sets={
-            node_set: {"size": 1, "baremetal_instance_type": {"name": resource_class}}
-            for node_set, resource_class in resource_classes.items()
+            node_set: {"size": 1, "baremetal_instance_type": {"name": instance_type}}
+            for node_set, instance_type in instance_types.items()
         },
         template_parameter_files={"pull_secret": pull_secret_path},
         template_parameters={"ssh_public_key": Path(ssh_public_key_path).read_text().strip()},
@@ -374,15 +381,21 @@ def test_cluster_create_with_two_node_sets(
 
         cluster_order = k8s_hub_client.get_json(resource="clusterorder", name=co_name)
         node_requests = cluster_order.get("spec", {}).get("nodeRequests", [])
+        assert len(node_requests) == len(instance_types)
+        assert all("resourceClass" not in request for request in node_requests)
         expected_replicas = {
-            request["resourceClass"]: int(request["numberOfNodes"])
-            for request in node_requests
-            if request.get("resourceClass") in resource_classes.values()
+            request["bareMetal"]["instanceType"]: int(request["numberOfNodes"]) for request in node_requests
         }
-        assert expected_replicas == {resource_class: 1 for resource_class in resource_classes.values()}
+        assert expected_replicas == {instance_type: 1 for instance_type in instance_types.values()}
+
+        cluster_node_sets = grpc.get_cluster(cluster_id=uuid)["object"]["spec"]["nodeSets"]
+        assert {
+            node_set["baremetalInstanceType"]["name"]: int(node_set["size"]) for node_set in cluster_node_sets.values()
+        } == expected_replicas
 
         hosted_cluster_ns = k8s_hub_client.get_cluster_order_namespace(name=co_name)
-        resource_class_label = "osac.openshift.io/resource_class"
+        instance_type_label = "osac.openshift.io/instance_type"
+        old_label = "osac.openshift.io/resource_class"
 
         def _get_worker_counts() -> tuple[int, int, int]:
             status = k8s_hub_client.get_json(resource="clusterorder", name=co_name).get("status", {})
@@ -402,7 +415,7 @@ def test_cluster_create_with_two_node_sets(
                 for condition in agent.get("status", {}).get("conditions", [])
             )
 
-        def _get_agents_by_resource_class() -> dict[str, list[dict[str, Any]]]:
+        def _get_agents_by_instance_type() -> dict[str, list[dict[str, Any]]]:
             agents: dict[str, list[dict[str, Any]]] = {}
             items = k8s_hub_client.list_json(
                 resource="agents.agent-install.openshift.io", namespace=k8s_hub_client.namespace
@@ -411,20 +424,21 @@ def test_cluster_create_with_two_node_sets(
                 labels = item.get("metadata", {}).get("labels", {})
                 if labels.get("osac.openshift.io/clusterorder") != co_name:
                     continue
-                resource_class = labels.get(resource_class_label)
-                if resource_class in expected_replicas:
-                    agents.setdefault(resource_class, []).append(item)
+                instance_type = labels.get(instance_type_label)
+                if instance_type in expected_replicas:
+                    assert old_label not in labels
+                    agents.setdefault(instance_type, []).append(item)
             return agents
 
-        agents_by_resource_class = poll_until(
-            fn=_get_agents_by_resource_class,
+        agents_by_instance_type = poll_until(
+            fn=_get_agents_by_instance_type,
             until=lambda agents: (
                 set(agents) == set(expected_replicas)
                 and all(len(items) == 1 and _agent_is_installed(items[0]) for items in agents.values())
             ),
             retries=120,
             delay=10,
-            description=f"{co_name} installed Agents by resource class",
+            description=f"{co_name} installed Agents by instance type",
         )
 
         def _get_node_pools() -> dict[str, dict[str, Any]]:
@@ -432,9 +446,9 @@ def test_cluster_create_with_two_node_sets(
                 resource="nodepools.hypershift.openshift.io", namespace=hosted_cluster_ns
             ).get("items", [])
             return {
-                item.get("metadata", {}).get("labels", {}).get(resource_class_label, ""): item
+                item.get("metadata", {}).get("labels", {}).get(instance_type_label, ""): item
                 for item in items
-                if item.get("metadata", {}).get("labels", {}).get(resource_class_label) in expected_replicas
+                if item.get("metadata", {}).get("labels", {}).get(instance_type_label) in expected_replicas
             }
 
         node_pools = poll_until(
@@ -442,22 +456,24 @@ def test_cluster_create_with_two_node_sets(
             until=lambda pools: (
                 set(pools) == set(expected_replicas)
                 and all(
-                    int(pools[resource_class].get("spec", {}).get("replicas", -1)) == replicas
-                    for resource_class, replicas in expected_replicas.items()
+                    int(pools[instance_type].get("spec", {}).get("replicas", -1)) == replicas
+                    for instance_type, replicas in expected_replicas.items()
                 )
             ),
             retries=60,
             delay=10,
-            description=f"{co_name} per-resource-class NodePool replicas",
+            description=f"{co_name} per-instance-type NodePool replicas",
         )
 
-        for resource_class, node_pool in node_pools.items():
+        for instance_type, node_pool in node_pools.items():
             labels = node_pool.get("metadata", {}).get("labels", {})
             assert labels.get("osac.openshift.io/clusterorder") == co_name
+            assert old_label not in labels
             selector = node_pool.get("spec", {}).get("platform", {}).get("agent", {}).get("agentLabelSelector", {})
-            assert selector.get("matchLabels", {}).get(resource_class_label) == resource_class
+            assert selector.get("matchLabels", {}).get(instance_type_label) == instance_type
+            assert old_label not in selector.get("matchLabels", {})
 
-        surviving_agents = {item["metadata"]["name"] for item in agents_by_resource_class[resource_classes["gpu"]]}
+        surviving_agents = {item["metadata"]["name"] for item in agents_by_instance_type[instance_types["gpu"]]}
         assert len(surviving_agents) == 1, f"Expected one GPU Agent, got {surviving_agents}"
 
         cli.delete_cluster(uuid=uuid)
@@ -544,6 +560,9 @@ def test_cluster_create_rejected_for_invalid_version(
 ) -> None:
     """Verify cluster creation is rejected for disabled, obsolete, and
     non-existent versions."""
+    private_grpc.ensure_bare_metal_instance_type(
+        name="ci-worker-bm", host_label_selector={"osac.openshift.io/host-type": "default"}
+    )
     disabled = private_grpc.ensure_cluster_version(version="4.20.0-e2e-disabled", image=TEST_RELEASE_IMAGE)
     private_grpc.update_cluster_version(version_id=disabled["id"], enabled=False)
 
@@ -553,7 +572,15 @@ def test_cluster_create_rejected_for_invalid_version(
     def _create_with_version(version_name: str) -> tuple[str, int]:
         return grpc.call_unchecked(
             service="osac.public.v1.Clusters/Create",
-            data={"object": {"spec": {"template": {"name": cluster_template}, "version": {"name": version_name}}}},
+            data={
+                "object": {
+                    "spec": {
+                        "template": {"name": cluster_template},
+                        "version": {"name": version_name},
+                        "nodeSets": {"workers": {"size": 1, "baremetalInstanceType": {"name": "ci-worker-bm"}}},
+                    }
+                }
+            },
         )
 
     output, rc = _create_with_version(disabled["name"])

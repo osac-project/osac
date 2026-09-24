@@ -1,0 +1,30 @@
+---
+- name: Netris selects the requested instance type's network configuration
+  hosts: localhost
+  gather_facts: false
+  vars:
+    cluster_network_node_requests:
+      - numberOfNodes: 2
+        bareMetal:
+          instanceType: bm.large
+    netris_resource_class_map:
+      bm.large:
+        server_cluster_template_id: 42
+        mgmt_interface: ens4
+        vpc_interfaces: [ens13]
+      ci-worker:
+        server_cluster_template_id: 99
+        mgmt_interface: eth0
+        vpc_interfaces: [eth1]
+  tasks:
+    - name: Resolve network configuration for the instance type
+      ansible.builtin.include_role:
+        name: netris.steps.cluster_network
+        tasks_from: resolve_instance_type.yaml
+
+    - name: Verify Netris hardware-specific configuration
+      ansible.builtin.assert:
+        that:
+          - _netris_server_cluster_template_id == 42
+          - _server_mgmt_interface == 'ens4'
+          - _server_vpc_interfaces == ['ens13']

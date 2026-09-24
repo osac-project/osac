@@ -28,15 +28,9 @@
     name: "{{ (install_step_pre_install_hook_override | default(install_step_pre_install_hook_default)).name }}"
     tasks_from: "{{ (install_step_pre_install_hook_override | default(install_step_pre_install_hook_default)).tasks_from }}"
 
-- name: Normalize node requests with resourceClass
+- name: Preserve requested instance types and counts
   ansible.builtin.set_fact:
-    normalized_node_requests: >-
-      {%- set requests = [] -%}
-      {%- for nr in (cluster_order.spec.nodeRequests | default([])) -%}
-        {%- set rc = nr.resourceClass | default(nr.bareMetal.instanceType if (nr.bareMetal is defined and nr.bareMetal.instanceType is defined) else 'default') -%}
-        {%- set _ = requests.append(nr | combine({'resourceClass': rc})) -%}
-      {%- endfor -%}
-      {{ requests | unique(attribute='resourceClass') }}
+    normalized_node_requests: "{{ cluster_order.spec.nodeRequests }}"
 
 - name: Step - Create hosted cluster
   ansible.builtin.include_role:

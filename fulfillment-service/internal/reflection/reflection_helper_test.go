@@ -459,7 +459,8 @@ var _ = Describe("Reflection helper", func() {
 							Spec: publicv1.ClusterSpec_builder{
 								NodeSets: map[string]*publicv1.ClusterNodeSet{
 									"xyz": publicv1.ClusterNodeSet_builder{
-										Size: proto.Int32(3),
+										BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "acme_1tib"}.Build(),
+										Size:                  proto.Int32(3),
 									}.Build(),
 								},
 							}.Build(),
@@ -471,7 +472,8 @@ var _ = Describe("Reflection helper", func() {
 							Spec: publicv1.ClusterSpec_builder{
 								NodeSets: map[string]*publicv1.ClusterNodeSet{
 									"xyz": publicv1.ClusterNodeSet_builder{
-										Size: proto.Int32(3),
+										BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "acme_1tib"}.Build(),
+										Size:                  proto.Int32(3),
 									}.Build(),
 								},
 							}.Build(),
@@ -491,7 +493,8 @@ var _ = Describe("Reflection helper", func() {
 				Spec: publicv1.ClusterSpec_builder{
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"xyz": publicv1.ClusterNodeSet_builder{
-							Size: proto.Int32(3),
+							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "acme_1tib"}.Build(),
+							Size:                  proto.Int32(3),
 						}.Build(),
 					},
 				}.Build(),
@@ -504,7 +507,8 @@ var _ = Describe("Reflection helper", func() {
 					Spec: publicv1.ClusterSpec_builder{
 						NodeSets: map[string]*publicv1.ClusterNodeSet{
 							"xyz": publicv1.ClusterNodeSet_builder{
-								Size: proto.Int32(3),
+								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "acme_1tib"}.Build(),
+								Size:                  proto.Int32(3),
 							}.Build(),
 						},
 					}.Build(),
@@ -537,7 +541,8 @@ var _ = Describe("Reflection helper", func() {
 							Spec: publicv1.ClusterSpec_builder{
 								NodeSets: map[string]*publicv1.ClusterNodeSet{
 									"xyz": publicv1.ClusterNodeSet_builder{
-										Size: proto.Int32(3),
+										BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "acme_1tib"}.Build(),
+										Size:                  proto.Int32(3),
 									}.Build(),
 								},
 							}.Build(),
@@ -571,7 +576,8 @@ var _ = Describe("Reflection helper", func() {
 					Spec: publicv1.ClusterSpec_builder{
 						NodeSets: map[string]*publicv1.ClusterNodeSet{
 							"xyz": publicv1.ClusterNodeSet_builder{
-								Size: proto.Int32(3),
+								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "acme_1tib"}.Build(),
+								Size:                  proto.Int32(3),
 							}.Build(),
 						},
 					}.Build(),

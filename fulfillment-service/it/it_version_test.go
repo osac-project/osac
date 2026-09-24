@@ -87,12 +87,6 @@ var _ = Describe("Version", func() {
 				}.Build(),
 				Title:       "My template",
 				Description: "My template.",
-				NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
-					"my-node-set": privatev1.ClusterTemplateNodeSet_builder{
-						BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: bmitName}.Build(),
-						Size:                  3,
-					}.Build(),
-				},
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
@@ -113,6 +107,7 @@ var _ = Describe("Version", func() {
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NodeSets: testClusterNodeSets(bmitName, 3),
 				}.Build(),
 			}.Build(),
 		}.Build())

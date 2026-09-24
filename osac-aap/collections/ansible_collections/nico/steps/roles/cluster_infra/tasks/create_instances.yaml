@@ -70,15 +70,15 @@
 
 - name: Display instance provisioning plan
   ansible.builtin.debug:
-    msg: "Will provision {{ cluster_infra_total_instances }} total instances across {{ nico_infra_node_requests | length }} resource class(es)"
+    msg: "Will provision {{ cluster_infra_total_instances }} total instances across {{ nico_infra_node_requests | length }} instance type(s)"
 
-# Process each resource class request
-- name: Provision instances for each resource class
+# Process each instance type request
+- name: Provision instances for each instance type
   ansible.builtin.include_tasks: create_instances_for_resource_class.yaml
   loop: "{{ nico_infra_node_requests }}"
   loop_control:
     loop_var: node_request
-    label: "{{ node_request.resourceClass }}: {{ node_request.numberOfNodes }} nodes"
+    label: "{{ node_request.bareMetal.instanceType }}: {{ node_request.numberOfNodes }} nodes"
 
 - name: Collect all provisioned instance IDs
   ansible.builtin.set_fact:
@@ -239,7 +239,7 @@
           {{
             {
               cluster_order_label: nico_infra_name,
-              agent_resource_class_label: matched_agent.instance_info.resource_class,
+              agent_instance_type_label: matched_agent.instance_info.resource_class,
               'nico-instance-id': matched_agent.instance_info.instance_id
             }
           }}

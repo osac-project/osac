@@ -131,37 +131,7 @@
     nodepool_prefix: "nodepool-{{ hosted_cluster_name }}"
 
 - name: Build NodePool definitions
-  ansible.builtin.set_fact:
-    nodepool_definitions: >-
-      {{ nodepool_definitions | default([]) + [{
-        'apiVersion': 'hypershift.openshift.io/v1beta1',
-        'kind': 'NodePool',
-        'metadata': {
-          'name': nodepool_prefix + '-' + (item.resourceClass | default(item.bareMetal.instanceType if (item.bareMetal is defined and item.bareMetal.instanceType is defined) else 'default')),
-          'namespace': hosted_cluster_namespace,
-          'labels': {agent_resource_class_label: (item.resourceClass | default(item.bareMetal.instanceType if (item.bareMetal is defined and item.bareMetal.instanceType is defined) else 'default'))} | combine(hosted_cluster_default_cluster_order_label)
-        },
-        'spec': {
-          'clusterName': hosted_cluster_name,
-          'replicas': item.numberOfNodes | int,
-          'management': {
-            'autoRepair': false,
-            'upgradeType': 'InPlace'
-          },
-          'platform': {
-            'type': 'Agent',
-            'agent': {
-              'agentLabelSelector': {
-                'matchLabels': {agent_resource_class_label: (item.resourceClass | default(item.bareMetal.instanceType if (item.bareMetal is defined and item.bareMetal.instanceType is defined) else 'default'))} | combine(hosted_cluster_default_cluster_order_label)
-              }
-            }
-          },
-          'release': {
-            'image': ocp_release_image
-          }
-        }
-      }] }}
-  loop: "{{ hosted_cluster_node_requests }}"
+  ansible.builtin.include_tasks: build_nodepools.yaml
 
 - name: Hook - Modify NodePool definitions
   ansible.builtin.include_role:
@@ -177,15 +147,15 @@
   loop_control:
     label: "Create NodePool {{ item.metadata.name }}"
 
-- name: Remove node pools matching resource classes that are no longer requested
+- name: Remove node pools matching instance types that are no longer requested
   block:
-    - name: Set requested resource classes
+    - name: Set requested instance types
       ansible.builtin.set_fact:
-        hosted_cluster_requested_resource_classes: >-
+        hosted_cluster_requested_instance_types: >-
           {%- set classes = [] -%}
           {%- for np in (nodepool_definitions | default([])) -%}
-            {%- if np.metadata.labels is defined and agent_resource_class_label in np.metadata.labels -%}
-              {%- set _ = classes.append(np.metadata.labels[agent_resource_class_label]) -%}
+            {%- if np.metadata.labels is defined and agent_instance_type_label in np.metadata.labels -%}
+              {%- set _ = classes.append(np.metadata.labels[agent_instance_type_label]) -%}
             {%- endif -%}
           {%- endfor -%}
           {{ classes }}
@@ -197,20 +167,20 @@
         namespace: "{{ hosted_cluster_namespace }}"
       register: hosted_cluster_nodepools
 
-    - name: Determine which resource classes are no longer needed
+    - name: Determine which instance types are no longer needed
       ansible.builtin.set_fact:
-        hosted_cluster_removed_resource_classes: "{{ hosted_cluster_removed_resource_classes | default([]) + [item.metadata.labels[agent_resource_class_label]] }}"
+        hosted_cluster_removed_instance_types: "{{ hosted_cluster_removed_instance_types | default([]) + [item.metadata.labels[agent_instance_type_label]] }}"
       with_items: "{{ hosted_cluster_nodepools.resources }}"
       when:
         - item.metadata.labels is defined
-        - agent_resource_class_label in item.metadata.labels
-        - item.metadata.labels[agent_resource_class_label] not in hosted_cluster_requested_resource_classes
+        - agent_instance_type_label in item.metadata.labels
+        - item.metadata.labels[agent_instance_type_label] not in hosted_cluster_requested_instance_types
 
     - name: Set nodepools to be removed
       ansible.builtin.set_fact:
-        hosted_cluster_removed_nodepools: "{{ hosted_cluster_removed_resource_classes | default([]) | map('regex_replace', '^', nodepool_prefix + '-') }}"
+        hosted_cluster_removed_nodepools: "{{ hosted_cluster_removed_instance_types | default([]) | map('regex_replace', '^', nodepool_prefix + '-') }}"
 
-    - name: Display resource classes to be removed
+    - name: Display instance types to be removed
       ansible.builtin.debug:
         msg: "The following NodePools are no longer needed and will be removed: {{ hosted_cluster_removed_nodepools }}"
 

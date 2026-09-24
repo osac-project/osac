@@ -474,14 +474,14 @@ func clusterOrderStallThresholdsFromEnv() controller.ClusterOrderStallThresholds
 			"envVar", envClusterWorkersJoiningStallThresholdOverrides)
 		return thresholds
 	}
-	for hostType, encodedDuration := range encodedOverrides {
+	for instanceType, encodedDuration := range encodedOverrides {
 		duration, err := time.ParseDuration(encodedDuration)
 		if err != nil || duration <= 0 {
 			setupLog.Info("invalid worker-join stall threshold override; ignoring",
-				"hostType", hostType, "value", encodedDuration)
+				"instanceType", instanceType, "value", encodedDuration)
 			continue
 		}
-		thresholds.WorkersJoiningByHostType[hostType] = duration
+		thresholds.WorkersJoiningByInstanceType[instanceType] = duration
 	}
 	return thresholds
 }

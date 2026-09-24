@@ -56,6 +56,10 @@
           - item.id is defined
           - item.title is defined
           - item.title | length > 0
+          - item.nodeSets is not defined
+          - item.node_sets is not defined
+          - item.default_node_request is not defined
+          - item.allowed_resource_classes is not defined
         fail_msg: "Cluster template '{{ item.id }}' missing required fields"
         success_msg: "Cluster template '{{ item.id }}' has correct structure"
       loop: "{{ osac_cluster_templates }}"

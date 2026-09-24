@@ -44,10 +44,11 @@ type FabricDomainSpec struct {
 	// +kubebuilder:validation:items:MinLength=1
 	Servers []string `json:"servers"`
 
-	// VirtualNetwork is the OSAC VirtualNetwork associated with the domain.
-	// For the currently supported EthernetEW type, its NetworkClass resolves the VPC for one Netris
-	// Server Cluster. InfiniBandEW and NVLink are reserved for later phases and may define different
-	// connectivity in a later API version. This reference is immutable after creation.
+	// VirtualNetwork is the ID of the OSAC VirtualNetwork associated with the domain.
+	// For Netris EthernetEW, this VirtualNetwork is the source of truth for the VPC where the Server
+	// Cluster is created; its NetworkClass supplies backend configuration such as the cluster template.
+	// InfiniBandEW and NVLink are reserved for later phases and may define different connectivity.
+	// This reference is immutable after creation.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="virtualNetwork is immutable"

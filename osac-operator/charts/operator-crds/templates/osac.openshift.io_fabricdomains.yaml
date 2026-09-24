@@ -74,10 +74,11 @@ spec:
                   rule: self == oldSelf
               virtualNetwork:
                 description: |-
-                  VirtualNetwork is the OSAC VirtualNetwork associated with the domain.
-                  For the currently supported EthernetEW type, its NetworkClass resolves the VPC for one Netris
-                  Server Cluster. InfiniBandEW and NVLink are reserved for later phases and may define different
-                  connectivity in a later API version. This reference is immutable after creation.
+                  VirtualNetwork is the ID of the OSAC VirtualNetwork associated with the domain.
+                  For Netris EthernetEW, this VirtualNetwork is the source of truth for the VPC where the Server
+                  Cluster is created; its NetworkClass supplies backend configuration such as the cluster template.
+                  InfiniBandEW and NVLink are reserved for later phases and may define different connectivity.
+                  This reference is immutable after creation.
                 minLength: 1
                 type: string
                 x-kubernetes-validations:

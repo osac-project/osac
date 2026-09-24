@@ -1,10 +1,11 @@
 ---
 name: auto-queue
 
-# Prow labels still required (label-gate). The Prow `lgtm` label is the
-# authoritative approval signal for queue eligibility, so a stale human GitHub
-# "Request changes" review does not block after LGTM. Bot Request changes
-# (CodeRabbit, etc.) are dismissed and do not block.
+# Prow labels still required (label-gate). A human "Request changes" review
+# submitted at or before the current `lgtm` label is dismissed so GitHub's
+# pull-request rule allows the merge queue. A human "Request changes" review
+# newer than that label still blocks. Bot Request changes (CodeRabbit, etc.)
+# are dismissed and do not block.
 on:
   pull_request_target:
     types: [opened, reopened, ready_for_review, synchronize, labeled, unlabeled]
@@ -85,6 +86,79 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          # Keep in sync with reconcile_lgtm_reviews in requeue-eligible-prs.
+          # Returns 0 when no human CHANGES_REQUESTED review is newer than lgtm.
+          # Returns 1 when a newer or undated one remains. Returns 2 when the
+          # label time or review list cannot be read, or a dismiss call fails.
+          # Dismisses human CHANGES_REQUESTED reviews submitted at or before the
+          # latest lgtm labeled event. See OSAC-5507.
+          reconcile_lgtm_reviews() {
+            local pr="$1"
+            local lgtm_at reviews classified row id submitted disposition
+            local blocking=false
+            if ! lgtm_at=$(gh api --paginate --slurp "repos/${REPO}/issues/${pr}/events" \
+              | jq -r '[.[][] | select(.event == "labeled" and (.label.name // "") == "lgtm") | .created_at] | max // empty'); then
+              echo "Unable to read lgtm label time for PR #${pr}"
+              return 2
+            fi
+            if [[ -z "${lgtm_at}" ]]; then
+              echo "PR #${pr} has lgtm but no labeled event; treating as blocked"
+              return 2
+            fi
+            if ! reviews=$(gh api --paginate --slurp "repos/${REPO}/pulls/${pr}/reviews" | jq 'add // []'); then
+              echo "Unable to read reviews for PR #${pr}"
+              return 2
+            fi
+            if ! classified=$(jq -c --arg lgtm "$lgtm_at" '
+              [.[]
+                | select(.user != null)
+                | select(((.user.login // "") | endswith("[bot]")) | not)
+                | select((.user.type // "User") != "Bot")
+                | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED")
+              ]
+              | group_by(.user.login)
+              | map(max_by([(.submitted_at // ""), (.id // 0)]))
+              | map(select(.state == "CHANGES_REQUESTED"))
+              | map({
+                  id,
+                  submitted_at: (.submitted_at // ""),
+                  disposition: (
+                    if (.submitted_at // "") == "" then "unknown"
+                    elif .submitted_at <= $lgtm then "stale"
+                    else "newer"
+                    end
+                  )
+                })
+            ' <<<"${reviews}"); then
+              echo "Cannot classify human reviews for PR #${pr}"
+              return 2
+            fi
+            while read -r row; do
+              [[ -z "${row}" ]] && continue
+              id=$(jq -r '.id' <<<"${row}")
+              submitted=$(jq -r '.submitted_at' <<<"${row}")
+              disposition=$(jq -r '.disposition' <<<"${row}")
+              if [[ "${disposition}" == "stale" ]]; then
+                echo "Dismissing stale human review ${id} on PR #${pr} (submitted ${submitted}, lgtm ${lgtm_at})"
+                if ! gh api "repos/${REPO}/pulls/${pr}/reviews/${id}/dismissals" \
+                  -X PUT -f message="Auto-dismissed: lgtm label is newer than this Request changes review"; then
+                  echo "Failed to dismiss review ${id} on PR #${pr}"
+                  return 2
+                fi
+              elif [[ "${disposition}" == "unknown" ]]; then
+                echo "PR #${pr}: human CHANGES_REQUESTED review ${id} has no submitted_at; still blocking"
+                blocking=true
+              else
+                echo "PR #${pr}: human CHANGES_REQUESTED review ${id} submitted ${submitted} is newer than lgtm ${lgtm_at}"
+                blocking=true
+              fi
+            done < <(jq -c '.[]' <<<"${classified}")
+            if [[ "${blocking}" == true ]]; then
+              return 1
+            fi
+            return 0
+          }
+          LABELS='[]'
           blocked=false
           if [[ -z "${GH_TOKEN:-}" ]]; then
             echo "MERGE_QUEUE_TOKEN unavailable; cannot evaluate human reviews. Treating as blocked."
@@ -107,9 +181,11 @@ jobs:
             done
 
             if echo "$LABELS" | jq -e 'index("lgtm")' > /dev/null; then
-              # Prow's lgtm plugin applies this label only for its configured
-              # OWNERS-based approval, so it is the trusted approval signal.
-              echo "lgtm label present; ignoring stale human CHANGES_REQUESTED reviews"
+              # Dismiss reviews that predate lgtm so the pull-request ruleset
+              # stops blocking the queue. A newer Request changes still blocks.
+              if ! reconcile_lgtm_reviews "$PR"; then
+                blocked=true
+              fi
             else
               reviews=$(gh api --paginate --slurp "repos/${REPO}/pulls/${PR}/reviews" | jq 'add // []')
               set +e
@@ -207,6 +283,78 @@ jobs:
             echo "MERGE_QUEUE_TOKEN missing"
             exit 1
           fi
+          # Keep in sync with reconcile_lgtm_reviews in enable-auto-merge.
+          # Returns 0 when no human CHANGES_REQUESTED review is newer than lgtm.
+          # Returns 1 when a newer or undated one remains. Returns 2 when the
+          # label time or review list cannot be read, or a dismiss call fails.
+          # Dismisses human CHANGES_REQUESTED reviews submitted at or before the
+          # latest lgtm labeled event. See OSAC-5507.
+          reconcile_lgtm_reviews() {
+            local pr="$1"
+            local lgtm_at reviews classified row id submitted disposition
+            local blocking=false
+            if ! lgtm_at=$(gh api --paginate --slurp "repos/${REPO}/issues/${pr}/events" \
+              | jq -r '[.[][] | select(.event == "labeled" and (.label.name // "") == "lgtm") | .created_at] | max // empty'); then
+              echo "Unable to read lgtm label time for PR #${pr}"
+              return 2
+            fi
+            if [[ -z "${lgtm_at}" ]]; then
+              echo "PR #${pr} has lgtm but no labeled event; treating as blocked"
+              return 2
+            fi
+            if ! reviews=$(gh api --paginate --slurp "repos/${REPO}/pulls/${pr}/reviews" | jq 'add // []'); then
+              echo "Unable to read reviews for PR #${pr}"
+              return 2
+            fi
+            if ! classified=$(jq -c --arg lgtm "$lgtm_at" '
+              [.[]
+                | select(.user != null)
+                | select(((.user.login // "") | endswith("[bot]")) | not)
+                | select((.user.type // "User") != "Bot")
+                | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED")
+              ]
+              | group_by(.user.login)
+              | map(max_by([(.submitted_at // ""), (.id // 0)]))
+              | map(select(.state == "CHANGES_REQUESTED"))
+              | map({
+                  id,
+                  submitted_at: (.submitted_at // ""),
+                  disposition: (
+                    if (.submitted_at // "") == "" then "unknown"
+                    elif .submitted_at <= $lgtm then "stale"
+                    else "newer"
+                    end
+                  )
+                })
+            ' <<<"${reviews}"); then
+              echo "Cannot classify human reviews for PR #${pr}"
+              return 2
+            fi
+            while read -r row; do
+              [[ -z "${row}" ]] && continue
+              id=$(jq -r '.id' <<<"${row}")
+              submitted=$(jq -r '.submitted_at' <<<"${row}")
+              disposition=$(jq -r '.disposition' <<<"${row}")
+              if [[ "${disposition}" == "stale" ]]; then
+                echo "Dismissing stale human review ${id} on PR #${pr} (submitted ${submitted}, lgtm ${lgtm_at})"
+                if ! gh api "repos/${REPO}/pulls/${pr}/reviews/${id}/dismissals" \
+                  -X PUT -f message="Auto-dismissed: lgtm label is newer than this Request changes review"; then
+                  echo "Failed to dismiss review ${id} on PR #${pr}"
+                  return 2
+                fi
+              elif [[ "${disposition}" == "unknown" ]]; then
+                echo "PR #${pr}: human CHANGES_REQUESTED review ${id} has no submitted_at; still blocking"
+                blocking=true
+              else
+                echo "PR #${pr}: human CHANGES_REQUESTED review ${id} submitted ${submitted} is newer than lgtm ${lgtm_at}"
+                blocking=true
+              fi
+            done < <(jq -c '.[]' <<<"${classified}")
+            if [[ "${blocking}" == true ]]; then
+              return 1
+            fi
+            return 0
+          }
           required_labels_jq='([.labels[].name] | contains(["lgtm","approved","jira/valid-reference"])) and ([.labels[].name] | any(. == "do-not-merge/hold" or . == "do-not-merge/work-in-progress" or . == "do-not-merge/invalid-owners-file" or . == "needs-rebase") | not)'
           is_requeue_eligible() {
             jq -e ".isDraft == false and .autoMergeRequest == null and ${required_labels_jq}"
@@ -214,6 +362,26 @@ jobs:
           is_enqueue_eligible() {
             jq -e ".isDraft == false and .autoMergeRequest != null and .mergeable == \"MERGEABLE\" and .mergeStateStatus == \"CLEAN\" and ${required_labels_jq}"
           }
+
+          echo "Clearing human Request changes reviews that predate lgtm..."
+          open_prs=$(gh pr list --repo "${REPO}" --state open --limit 200 \
+            --json number,isDraft,autoMergeRequest,labels)
+          while read -r row; do
+            [[ -z "${row}" ]] && continue
+            clear_pr=$(jq -r '.number' <<<"${row}")
+            if reconcile_lgtm_reviews "$clear_pr"; then
+              continue
+            else
+              rc=$?
+              if [[ "${rc}" -eq 1 ]] && jq -e '.autoMergeRequest != null' <<<"${row}" >/dev/null; then
+                echo "Disabling auto-merge on PR #${clear_pr}: human CHANGES_REQUESTED is newer than lgtm"
+                gh pr merge "$clear_pr" --repo "${REPO}" --disable-auto \
+                  || echo "Failed to disable auto-merge on PR #${clear_pr}, will retry next run"
+              else
+                echo "Leaving PR #${clear_pr} unchanged after review reconcile (rc=${rc})"
+              fi
+            fi
+          done < <(jq -c '.[] | select(.isDraft == false and (([.labels[].name] | index("lgtm")) != null))' <<<"${open_prs}")
 
           echo "Scanning eligible PRs without auto-merge..."
           candidates=$(gh pr list --repo "${REPO}" --state open --limit 200 \
@@ -250,15 +418,30 @@ jobs:
               echo "PR #${pr} is no longer eligible, skipping"
               continue
             fi
+            if reconcile_lgtm_reviews "$pr"; then
+              :
+            else
+              rc=$?
+              if [[ "${rc}" -eq 1 ]]; then
+                echo "Skipping PR #${pr}: human CHANGES_REQUESTED is newer than lgtm"
+              else
+                echo "Skipping PR #${pr}: could not evaluate reviews (rc=${rc})"
+              fi
+              continue
+            fi
             head=$(jq -r '.headRefOid' <<<"${current}")
             echo "Re-enabling auto-merge on PR #$pr at ${head}"
-            gh pr merge "$pr" --repo "${REPO}" --auto --match-head-commit "$head"
+            if ! gh pr merge "$pr" --repo "${REPO}" --auto --match-head-commit "$head"; then
+              echo "Failed to enable auto-merge on PR #${pr} at ${head}, will retry next run"
+              continue
+            fi
           done
 
           echo "Scanning CLEAN PRs with auto-merge already enabled..."
           # mergeStateStatus alone is not enough: required_approving_review_count
-          # is 0 on this repo's pull_request ruleset rule, so CLEAN says nothing
-          # about outstanding human review state or do-not-merge/* labels.
+          # is 0, and a stale Request changes review is dismissed above before
+          # this scan. A newer human Request changes still skips enqueue.
+          # do-not-merge/* labels are not visible in CLEAN either.
           candidates=$(gh pr list --repo "${REPO}" --state open --limit 200 \
             --json number,isDraft,mergeable,mergeStateStatus,autoMergeRequest,labels)
           prs=$(jq -c '.[]' <<<"${candidates}" | while read -r candidate; do
@@ -280,6 +463,19 @@ jobs:
             fi
             if ! is_enqueue_eligible <<<"${current}" >/dev/null; then
               echo "PR #${number} is no longer eligible, skipping"
+              continue
+            fi
+            if reconcile_lgtm_reviews "$number"; then
+              :
+            else
+              rc=$?
+              if [[ "${rc}" -eq 1 ]]; then
+                echo "Skipping enqueue for PR #${number}: human CHANGES_REQUESTED is newer than lgtm"
+                gh pr merge "$number" --repo "${REPO}" --disable-auto \
+                  || echo "Failed to disable auto-merge on PR #${number}, will retry next run"
+              else
+                echo "Skipping enqueue for PR #${number}: could not evaluate reviews (rc=${rc})"
+              fi
               continue
             fi
             id=$(jq -r '.id' <<<"${current}")

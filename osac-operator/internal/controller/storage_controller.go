@@ -357,6 +357,12 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1
 
 	clusterName := string(r.targetCluster)
 
+	// needsMissingTierRetry is set when some defined tiers still lack a
+	// StorageClass. The provisioning retry is deferred past Stage 3
+	// (handleCaaSUpdate) so that CaaS cluster lifecycle management
+	// (finalizer addition/removal, CaaS provisioning) is never blocked.
+	var needsMissingTierRetry bool
+
 	if r.ClusterStorageProvider != nil {
 		scResult, err := r.resolveTenantSpecificStorageClasses(ctx, targetClient, tenantName)
 		if err != nil {
@@ -402,11 +408,15 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1
 		condMsg = r.appendMissingTierWarnings(instance, tierDefinitions, scResult.resolved, scResult.ambiguousTiers, condMsg)
 
 		// When tier definitions are available and some tiers are still
-		// missing their StorageClass, keep ClusterStorageReady=False and
-		// enter the retry path so provisioning is reattempted for the
-		// missing tier(s) instead of permanently abandoning them.
+		// missing their StorageClass, keep ClusterStorageReady=False so
+		// provisioning is reattempted for the missing tier(s) after
+		// Stage 3 (CaaS update) completes. The retry is deferred (no
+		// early return) so that handleCaaSUpdate still runs — an early
+		// return here would block CaaS ClusterOrder lifecycle
+		// management (finalizer addition, provisioning).
 		missing := missingTierNames(tierDefinitions, scResult.resolved, scResult.ambiguousTiers)
-		if len(missing) > 0 && len(tierDefinitions) > 0 {
+		needsMissingTierRetry = len(missing) > 0 && len(tierDefinitions) > 0
+		if needsMissingTierRetry {
 			instance.SetStatusCondition(v1alpha1.TenantConditionClusterStorageReady,
 				metav1.ConditionFalse,
 				v1alpha1.TenantReasonNotFound,
@@ -415,16 +425,15 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1
 			instance.Status.ClusterStorage = []v1alpha1.ClusterStorageStatus{
 				{ClusterName: clusterName, Ready: false, Reason: v1alpha1.TenantReasonNotFound},
 			}
-			return r.handleClusterStorageProvisioning(ctx, instance, hubSecretReady)
-		}
-
-		instance.SetStatusCondition(v1alpha1.TenantConditionClusterStorageReady,
-			metav1.ConditionTrue,
-			v1alpha1.TenantReasonFound,
-			condMsg)
-		instance.Status.StorageClasses = scResult.resolved
-		instance.Status.ClusterStorage = []v1alpha1.ClusterStorageStatus{
-			{ClusterName: clusterName, Ready: true, Reason: v1alpha1.TenantReasonFound},
+		} else {
+			instance.SetStatusCondition(v1alpha1.TenantConditionClusterStorageReady,
+				metav1.ConditionTrue,
+				v1alpha1.TenantReasonFound,
+				condMsg)
+			instance.Status.StorageClasses = scResult.resolved
+			instance.Status.ClusterStorage = []v1alpha1.ClusterStorageStatus{
+				{ClusterName: clusterName, Ready: true, Reason: v1alpha1.TenantReasonFound},
+			}
 		}
 	} else {
 		// When no provisioning provider is configured, resolve StorageClasses
@@ -485,6 +494,15 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1
 		if caasErr != nil || caasResult.RequeueAfter > 0 {
 			return caasResult, caasErr
 		}
+	}
+
+	// Deferred missing-tier retry: trigger VMaaS provisioning for tiers
+	// that still lack a StorageClass. This runs after Stage 3
+	// (handleCaaSUpdate) so that CaaS cluster lifecycle management
+	// (finalizer addition/removal, CaaS provisioning) is never blocked
+	// by VMaaS provisioning state.
+	if needsMissingTierRetry {
+		return r.handleClusterStorageProvisioning(ctx, instance, hubSecretReady)
 	}
 
 	return ctrl.Result{}, nil

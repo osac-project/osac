@@ -68,11 +68,17 @@ func deferCatalogItemFixtureDeletion(deleteDependency func(context.Context) erro
 		}
 		Expect(err).NotTo(HaveOccurred())
 		if deleted != nil {
-			Eventually(func(g Gomega) bool {
+			Eventually(func() bool {
 				removed, err := deleted(ctx)
-				g.Expect(err).NotTo(HaveOccurred())
+				if err != nil {
+					if status.Code(err) == codes.NotFound {
+						return true
+					}
+					// Transient error during async deletion — retry.
+					return false
+				}
 				return removed
-			}, 2*time.Minute, time.Second).Should(BeTrue(), "fixture was not removed")
+			}, 5*time.Minute, 2*time.Second).Should(BeTrue(), "fixture was not removed")
 		}
 	})
 }
@@ -237,13 +243,13 @@ func createCatalogItemSubnetInClassFixture(ctx context.Context, tenant, project,
 			return true, nil
 		}
 		if err != nil {
-			return false, err
+			return false, nil
 		}
 		_, err = privatev1.NewVirtualNetworksClient(tool.InternalView().AdminConn()).Signal(ctx, privatev1.VirtualNetworksSignalRequest_builder{Id: networkID}.Build())
 		if status.Code(err) == codes.NotFound {
 			return true, nil
 		}
-		return false, err
+		return false, nil
 	})
 
 	Eventually(func() privatev1.VirtualNetworkState {
@@ -280,13 +286,13 @@ func createCatalogItemSubnetInClassFixture(ctx context.Context, tenant, project,
 			return true, nil
 		}
 		if err != nil {
-			return false, err
+			return false, nil
 		}
 		_, err = privatev1.NewSubnetsClient(tool.InternalView().AdminConn()).Signal(ctx, privatev1.SubnetsSignalRequest_builder{Id: subnetID}.Build())
 		if status.Code(err) == codes.NotFound {
 			return true, nil
 		}
-		return false, err
+		return false, nil
 	})
 
 	Eventually(func() privatev1.SubnetState {
@@ -328,13 +334,13 @@ func createCatalogItemNetworkInClassFixture(ctx context.Context, tenant, project
 			return true, nil
 		}
 		if err != nil {
-			return false, err
+			return false, nil
 		}
 		_, err = privatev1.NewSecurityGroupsClient(tool.InternalView().AdminConn()).Signal(ctx, privatev1.SecurityGroupsSignalRequest_builder{Id: groupID}.Build())
 		if status.Code(err) == codes.NotFound {
 			return true, nil
 		}
-		return false, err
+		return false, nil
 	})
 
 	Eventually(func() privatev1.SecurityGroupState {

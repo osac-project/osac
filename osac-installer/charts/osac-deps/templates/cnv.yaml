@@ -30,7 +30,7 @@ metadata:
 spec:
   channel: {{ .Values.cnv.channel }}
   name: kubevirt-hyperconverged
-  source: redhat-operators
-  sourceNamespace: openshift-marketplace
+  source: {{ .Values.catalogSource }}
+  sourceNamespace: {{ .Values.catalogSourceNamespace }}
   installPlanApproval: Automatic
 {{- end }}

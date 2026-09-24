@@ -34,60 +34,21 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/go-logr/stdr"
 
 	"github.com/osac-project/osac-metering/adapters"
-	"github.com/osac-project/osac-metering/adapters/envutil"
+	"github.com/osac-project/osac-metering/adapters/echo"
+	"github.com/osac-project/osac-metering/adapters/internal/envutil"
 )
-
-// echoAdapter logs every event to stdout, stores it in a ring buffer
-// for HTTP queries, and counts submissions.
-type echoAdapter struct {
-	store     *eventStore
-	submitted atomic.Int64
-	flushed   atomic.Int64
-}
-
-func (a *echoAdapter) Name() string { return "echo" }
-
-func (a *echoAdapter) Submit(_ context.Context, event adapters.MeteringEvent) error {
-	fmt.Printf("[SUBMIT] id=%-36s type=%-30s topic=%-30s partition=%d offset=%d\n",
-		event.CloudEvent.ID(),
-		event.CloudEvent.Type(),
-		event.Topic,
-		event.Partition,
-		event.Offset,
-	)
-	a.store.add(event)
-	a.submitted.Add(1)
-	return nil
-}
-
-func (a *echoAdapter) Flush(_ context.Context) (adapters.SubmitResult, error) {
-	n := a.flushed.Add(1)
-	total := a.submitted.Load()
-	fmt.Printf("[FLUSH]  #%d — %d events submitted so far\n", n, total)
-	return adapters.SubmitResult{Idempotent: true}, nil
-}
-
-func (a *echoAdapter) HealthCheck(_ context.Context) error { return nil }
-
-func (a *echoAdapter) Close() error {
-	fmt.Printf("[CLOSE]  total events submitted: %d, total flushes: %d\n",
-		a.submitted.Load(), a.flushed.Load())
-	return nil
-}
 
 func main() {
 	brokers := envutil.RequireEnv("KAFKA_BROKERS")
@@ -105,7 +66,7 @@ func main() {
 
 	metricsAddr := envutil.EnvOrDefault("METRICS_ADDR", ":2112")
 
-	bufferSize := defaultMaxEvents
+	bufferSize := echo.DefaultMaxEvents
 	if v := os.Getenv("ECHO_BUFFER_SIZE"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n <= 0 {
@@ -133,8 +94,7 @@ func main() {
 		log.Printf("DLQ enabled: topic=%s", envutil.EnvOrDefault("DLQ_TOPIC", adapters.TopicDLQ))
 	}
 
-	store := newEventStore(bufferSize)
-	adapter := &echoAdapter{store: store}
+	adapter := echo.NewAdapter(bufferSize)
 	runner := adapters.NewRunner(adapter, adapters.RunnerConfig{
 		Brokers:       brokers,
 		ConsumerGroup: group,
@@ -154,10 +114,10 @@ func main() {
 			}
 			w.WriteHeader(http.StatusOK)
 		})
-		mux.HandleFunc("GET /events", store.handleEvents)
-		mux.HandleFunc("DELETE /events", store.handleDeleteEvents)
-		mux.HandleFunc("GET /events/count", store.handleCount)
-		mux.HandleFunc("GET /events/{id}", store.handleEventByID)
+		mux.HandleFunc("GET /events", adapter.HandleEvents)
+		mux.HandleFunc("DELETE /events", adapter.HandleDeleteEvents)
+		mux.HandleFunc("GET /events/count", adapter.HandleCount)
+		mux.HandleFunc("GET /events/{id}", adapter.HandleEventByID)
 		httpServer := &http.Server{
 			Addr:              metricsAddr,
 			Handler:           mux,

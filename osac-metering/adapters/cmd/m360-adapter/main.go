@@ -30,32 +30,9 @@ import (
 	"github.com/go-logr/stdr"
 
 	"github.com/osac-project/osac-metering/adapters"
-	"github.com/osac-project/osac-metering/adapters/envutil"
+	"github.com/osac-project/osac-metering/adapters/internal/envutil"
+	"github.com/osac-project/osac-metering/adapters/m360"
 )
-
-type m360Adapter struct {
-	client *m360Client
-}
-
-func (a *m360Adapter) Name() string { return "m360" }
-
-func (a *m360Adapter) Submit(ctx context.Context, event adapters.MeteringEvent) error {
-	endpoint, payload, err := translateEvent(event.CloudEvent)
-	if err != nil {
-		return err
-	}
-	return a.client.post(ctx, endpoint, payload)
-}
-
-func (a *m360Adapter) Flush(_ context.Context) (adapters.SubmitResult, error) {
-	return adapters.SubmitResult{Idempotent: true}, nil
-}
-
-func (a *m360Adapter) HealthCheck(ctx context.Context) error {
-	return a.client.healthCheck(ctx)
-}
-
-func (a *m360Adapter) Close() error { return nil }
 
 func main() {
 	brokers := envutil.RequireEnv("KAFKA_BROKERS")
@@ -108,10 +85,7 @@ func main() {
 		log.Printf("DLQ enabled: topic=%s", envutil.EnvOrDefault("DLQ_TOPIC", adapters.TopicDLQ))
 	}
 
-	client := newM360Client(m360URL, apiVersion, apiKey)
-	client.logger = logger
-
-	adapter := &m360Adapter{client: client}
+	adapter := m360.NewAdapter(m360URL, apiVersion, apiKey, logger)
 	runner := adapters.NewRunner(adapter, adapters.RunnerConfig{
 		Brokers:       brokers,
 		ConsumerGroup: group,

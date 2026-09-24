@@ -1,0 +1,121 @@
+# Minimal values for the sim integration test environment.
+# Deploys fulfillment-service + bundled Postgres + self-signed CA on kind.
+# Usage: helm install osac ../../osac-installer/charts/osac/ -n osac --create-namespace -f hack/sim-values.yaml
+
+# --- Self-signed CA (cert-manager + trust-manager installed separately by sim-up.sh) ---
+ca:
+  selfSigned:
+    enabled: true
+
+# --- Bundled PostgreSQL ---
+bundledPostgres:
+  enabled: true
+  database:
+    name: service
+    user: service
+
+# --- Fulfillment Service ---
+service:
+  variant: kind
+  externalHostname: fulfillment-api.osac.svc.cluster.local
+  internalHostname: fulfillment-internal-api.osac.svc.cluster.local
+  certs:
+    issuerRef:
+      kind: ClusterIssuer
+      name: default-ca
+    caBundle:
+      configMap: ca-bundle
+  auth:
+    # Dummy issuer URL — only emergency SA tokens are used in sim; JWKS is never fetched.
+    issuerUrl: https://kubernetes.default.svc
+    emergencyServiceAccounts:
+      - admin
+      - osac-operator
+      - osac-operator-controller-manager
+  database:
+    connection:
+      - secret:
+          name: fulfillment-db
+          items:
+            - key: url
+              param: url
+      - secret:
+          name: postgres-client-cert-service
+          items:
+            - key: tls.crt
+              param: sslcert
+            - key: tls.key
+              param: sslkey
+            - key: ca.crt
+              param: sslrootcert
+  idp:
+    provider: keycloak
+    url: https://unused.example.com
+  log:
+    level: debug
+
+# --- Operator ---
+operator:
+  image:
+    repository: ghcr.io/osac-project/osac-operator
+    tag: latest
+    pullPolicy: Always
+  fulfillment:
+    serverAddress: "fulfillment-internal-api:8001"
+    tokenFile: "/var/run/secrets/kubernetes.io/serviceaccount/token"
+  controllers:
+    clusterOrder: false
+    computeInstance: false
+    tenant: false
+    networking: false
+    bareMetalInstance: false
+    storage: false
+
+# --- Disabled components ---
+aap:
+  apiToken:
+    create: false
+  aap:
+    instance:
+      enabled: false
+  bootstrap:
+    enabled: false
+  instanceGroups:
+    publishTemplates:
+      enabled: false
+
+bmf:
+  enabled: false
+
+ui:
+  enabled: false
+
+metering:
+  enabled: false
+
+csiDriver:
+  enabled: false
+
+validation:
+  enabled: false
+
+dbMigrate:
+  enabled: false
+
+hubAccess:
+  enabled: false
+
+metallb:
+  enabled: false
+
+capiProvider:
+  enabled: false
+
+clusterFulfillment:
+  enabled: false
+
+networkFulfillment:
+  enabled: false
+
+storageFulfillment:
+  enabled: false

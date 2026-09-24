@@ -1,0 +1,209 @@
+#!/usr/bin/env bash
+# Manage the sim (simulated integration) environment for osac-operator.
+#
+# Creates a kind cluster and deploys the OSAC umbrella chart with bundled
+# Postgres, cert-manager, trust-manager, and a self-signed CA — everything
+# the fulfillment-service needs to serve gRPC, in a single helm install.
+#
+# Usage:
+#   ./hack/sim up                              # Create cluster and deploy
+#   ./hack/sim down                            # Tear down
+#   CLUSTER_NAME=osac-dev ./hack/sim up        # Custom cluster name
+set -euo pipefail
+
+SCRIPT_DIR="$(realpath "$(dirname "${BASH_SOURCE[0]}")")"
+OPERATOR_DIR="$(realpath "${SCRIPT_DIR}/..")"
+REPO_ROOT="$(realpath "${OPERATOR_DIR}/..")"
+CHART_DIR="${REPO_ROOT}/osac-installer/charts/osac"
+
+CLUSTER_NAME="${CLUSTER_NAME:-osac-sim}"
+NAMESPACE="${NAMESPACE:-osac}"
+
+log() { echo "==> $*"; }
+
+cmd_up() {
+  # Step 1: Kind cluster
+  if kind get clusters 2>/dev/null | grep -q "^${CLUSTER_NAME}$"; then
+    log "Kind cluster '${CLUSTER_NAME}' already exists, reusing"
+  else
+    log "Creating kind cluster '${CLUSTER_NAME}'..."
+    kind create cluster --name "${CLUSTER_NAME}" --config "${SCRIPT_DIR}/sim-kind-config.yaml" --wait 60s
+  fi
+
+  # Point kubectl at the cluster
+  export KUBECONFIG="${HOME}/.kube/${CLUSTER_NAME}-kind.kubeconfig"
+  mkdir -p "${HOME}/.kube"
+  kind get kubeconfig --name "${CLUSTER_NAME}" > "${KUBECONFIG}"
+  chmod 600 "${KUBECONFIG}"
+
+  # Step 2: Install cert-manager + trust-manager (CRDs must exist before umbrella chart)
+  log "Adding jetstack Helm repo..."
+  helm repo add jetstack https://charts.jetstack.io --force-update 2>/dev/null
+
+  log "Installing cert-manager..."
+  helm upgrade --install cert-manager jetstack/cert-manager \
+    --namespace cert-manager --create-namespace \
+    --set crds.enabled=true \
+    --wait --timeout 5m
+
+  log "Installing trust-manager..."
+  helm upgrade --install trust-manager jetstack/trust-manager \
+    --namespace cert-manager \
+    --wait --timeout 5m
+
+  # Step 3: Install Gateway API CRDs (Envoy Gateway bundles TLSRoute v1alpha3, which the chart needs)
+  log "Installing Gateway API CRDs..."
+  helm show crds oci://docker.io/envoyproxy/gateway-helm --version v1.6.5 2>/dev/null | \
+    kubectl apply --server-side --force-conflicts -f - 2>&1 | tail -5
+
+  # Step 4: Create self-signed CA (ClusterIssuer + trust-manager Bundle)
+  log "Creating self-signed CA..."
+  kubectl apply -f - <<'CA_RESOURCES'
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned-bootstrap
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: default-ca-ca
+  namespace: cert-manager
+spec:
+  isCA: true
+  commonName: "OSAC Self-Signed CA"
+  secretName: default-ca
+  issuerRef:
+    name: selfsigned-bootstrap
+    kind: ClusterIssuer
+  privateKey:
+    algorithm: RSA
+    size: 2048
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: default-ca
+spec:
+  ca:
+    secretName: default-ca
+CA_RESOURCES
+
+  # Wait for the CA secret to be created by cert-manager
+  log "Waiting for CA certificate..."
+  for _ in $(seq 1 30); do
+    if kubectl -n cert-manager get secret default-ca >/dev/null 2>&1; then
+      break
+    fi
+    sleep 2
+  done
+
+  # Create trust-manager Bundle to distribute CA cert as ConfigMap
+  kubectl apply -f - <<'BUNDLE'
+apiVersion: trust.cert-manager.io/v1alpha1
+kind: Bundle
+metadata:
+  name: ca-bundle
+spec:
+  sources:
+    - secret:
+        name: default-ca
+        key: ca.crt
+  target:
+    configMap:
+      key: bundle.pem
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values: [kube-node-lease, kube-public, kube-system, local-path-storage]
+BUNDLE
+
+  # Step 5: Build umbrella chart dependencies
+  log "Building chart dependencies..."
+  helm dependency update "${CHART_DIR}" 2>&1 | tail -5
+
+  # Step 6: Deploy OSAC umbrella chart
+  log "Installing OSAC (fulfillment-service + Postgres + CA)..."
+  helm upgrade --install osac "${CHART_DIR}" \
+    --namespace "${NAMESPACE}" \
+    --create-namespace \
+    --values "${SCRIPT_DIR}/sim-values.yaml" \
+    --timeout 10m
+
+  # Wait for the pods we actually need (grpc server + ingress proxy)
+  log "Waiting for fulfillment-service pods..."
+  kubectl -n "${NAMESPACE}" wait --for=condition=Ready pod -l app=fulfillment-grpc-server --timeout=5m
+  kubectl -n "${NAMESPACE}" wait --for=condition=Ready pod -l app=fulfillment-ingress-proxy --timeout=5m
+
+  # Step 7: Expose fulfillment-internal-api via NodePort (mapped to host port 8001 by kind)
+  log "Creating NodePort service for fulfillment-internal-api..."
+  kubectl -n "${NAMESPACE}" apply -f - <<'NODEPORT_SVC'
+apiVersion: v1
+kind: Service
+metadata:
+  name: fulfillment-internal-api-nodeport
+spec:
+  type: NodePort
+  selector:
+    app: fulfillment-ingress-proxy
+  ports:
+    - port: 8001
+      targetPort: internal-api
+      nodePort: 30001
+NODEPORT_SVC
+
+  # Step 8: Extract connection details for Go tests
+  log "Extracting test credentials..."
+
+  SIM_ENV_FILE="${SCRIPT_DIR}/sim.env"
+  CA_FILE="${SCRIPT_DIR}/sim-ca.pem"
+
+  # Wait for the ca-bundle ConfigMap (trust-manager distributes it)
+  for _ in $(seq 1 30); do
+    if kubectl -n "${NAMESPACE}" get configmap ca-bundle >/dev/null 2>&1; then
+      break
+    fi
+    sleep 2
+  done
+
+  kubectl -n "${NAMESPACE}" get configmap ca-bundle \
+    -o jsonpath='{.data.bundle\.pem}' > "${CA_FILE}"
+
+  TOKEN=$(kubectl -n "${NAMESPACE}" create token osac-operator-controller-manager --duration=24h 2>/dev/null || \
+          kubectl -n "${NAMESPACE}" create token admin --duration=24h)
+
+  cat > "${SIM_ENV_FILE}" <<EOF
+# Generated by sim — do not edit
+SIM_GRPC_ADDRESS=localhost:8001
+SIM_CA_FILE=${CA_FILE}
+SIM_TOKEN=${TOKEN}
+SIM_KUBECONFIG=${KUBECONFIG}
+SIM_NAMESPACE=${NAMESPACE}
+SIM_SERVER_NAME=fulfillment-internal-api.${NAMESPACE}.svc.cluster.local
+EOF
+
+  log "Sim environment ready"
+  log "Run tests:    make test-integration-sim"
+  log "Teardown:     hack/sim down"
+}
+
+cmd_down() {
+  log "Deleting kind cluster '${CLUSTER_NAME}'..."
+  kind delete cluster --name "${CLUSTER_NAME}" || true
+
+  rm -f "${SCRIPT_DIR}/sim.env" "${SCRIPT_DIR}/sim-ca.pem"
+
+  log "Sim environment cleaned up"
+}
+
+case "${1:-}" in
+  up)   cmd_up ;;
+  down) cmd_down ;;
+  *)
+    echo "Usage: $0 {up|down}" >&2
+    exit 1
+    ;;
+esac

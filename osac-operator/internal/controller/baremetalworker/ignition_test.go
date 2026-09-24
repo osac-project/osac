@@ -15,6 +15,8 @@ package baremetalworker
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"net/http"
 	"net/http/httptest"
 
@@ -47,6 +49,23 @@ var _ = Describe("IgnitionFetcher", func() {
 		defer srv.Close()
 
 		body, err := NewIgnitionFetcher(nil).FetchIgnition(ctx, srv.URL)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(string(body)).To(Equal("ignition-content"))
+	})
+
+	It("fetches HTTPS ignition when the server CA is trusted", func() {
+		srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte("ignition-content"))
+		}))
+		defer srv.Close()
+
+		roots := x509.NewCertPool()
+		roots.AddCert(srv.Certificate())
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.TLSClientConfig = &tls.Config{RootCAs: roots}
+		defer transport.CloseIdleConnections()
+
+		body, err := NewIgnitionFetcher(&http.Client{Transport: transport}).FetchIgnition(ctx, srv.URL)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(string(body)).To(Equal("ignition-content"))
 	})

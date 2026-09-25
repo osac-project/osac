@@ -58,12 +58,12 @@ type addOnOperatorReferenceCacheKey struct {
 	shared       bool
 }
 
-type addOnOperatorGraphResolver struct {
+type addOnOperatorReferenceResolver struct {
 	resource *addOnOperatorResourceResolver
 	cache    map[addOnOperatorReferenceCacheKey]*privatev1.AddOnOperator
 }
 
-func (r *addOnOperatorGraphResolver) resolve(
+func (r *addOnOperatorReferenceResolver) resolve(
 	ctx context.Context,
 	ref resourceReference,
 	ownerMetadata *privatev1.Metadata,
@@ -222,79 +222,114 @@ func (s *PrivateClustersServer) resolveAndExpandAddOnOperators(
 	cluster *privatev1.Cluster,
 	requested []*privatev1.AddOnOperatorReference,
 ) (map[string]*privatev1.AddOnOperator, map[string]string, []string, error) {
-	resolver := &addOnOperatorGraphResolver{
+	resolver := &addOnOperatorReferenceResolver{
 		resource: s.addOnOperators,
 		cache:    make(map[addOnOperatorReferenceCacheKey]*privatev1.AddOnOperator),
 	}
-	// selected contains the unique operators already expanded, keyed by ID.
-	selected := make(map[string]*privatev1.AddOnOperator)
-	// selectedFields preserves the originating request field for validation errors.
-	selectedFields := make(map[string]string)
-	// selectedOrder is dependency-first because operators are appended after their dependencies.
-	selectedOrder := make([]string, 0, len(requested))
-	// visiting and stack track the active DFS path used to report dependency cycles.
-	visiting := make(map[string]int)
-	stack := make([]string, 0, len(requested))
-	// relationshipEdges bounds dependency traversal work even when metadata is malformed.
-	relationshipEdges := 0
+	graph := newAddOnOperatorGraph(resolver.resolve)
+	return graph.resolveAndExpand(ctx, cluster.GetMetadata(), requested)
+}
 
-	var visit func(*privatev1.AddOnOperator, string) error
-	visit = func(operator *privatev1.AddOnOperator, field string) error {
-		operatorID := operator.GetId()
-		if start, ok := visiting[operatorID]; ok {
-			cycle := append(append([]string{}, stack[start:]...), operatorID)
-			return addOnOperatorFieldError(field,
-				fmt.Sprintf("add-on operator dependency cycle detected: %s", strings.Join(cycle, " -> ")))
-		}
-		if _, ok := selected[operatorID]; ok {
-			return nil
-		}
-		// The current node is not counted yet, so reject before admitting node 33.
-		if len(selected)+len(visiting) >= maxClusterAddOnOperators {
-			return addOnOperatorFieldError("spec.add_on_operators",
-				fmt.Sprintf("resolved add-on operator set exceeds maximum of %d operators", maxClusterAddOnOperators))
-		}
+type addOnOperatorReferenceResolverFunc func(
+	context.Context,
+	resourceReference,
+	*privatev1.Metadata,
+	string,
+) (*privatev1.AddOnOperator, error)
 
-		visiting[operatorID] = len(stack)
-		stack = append(stack, operatorID)
-		defer func() {
-			delete(visiting, operatorID)
-			stack = stack[:len(stack)-1]
-		}()
+type addOnOperatorGraph struct {
+	resolveReference  addOnOperatorReferenceResolverFunc
+	selected          map[string]*privatev1.AddOnOperator
+	selectedFields    map[string]string
+	selectedOrder     []string
+	visiting          map[string]int
+	stack             []string
+	relationshipEdges int
+}
 
-		// Post-order DFS selects dependencies before their parent operator.
-		for _, dependency := range operator.GetDependencies() {
-			relationshipEdges++
-			if relationshipEdges > maxAddOnOperatorRelationshipEdges {
-				return addOnOperatorFieldError("spec.add_on_operators",
-					fmt.Sprintf("add-on operator dependency graph exceeds %d relationships", maxAddOnOperatorRelationshipEdges))
-			}
-			resolved, err := resolver.resolve(ctx, dependency, operator.GetMetadata(), field)
-			if err != nil {
-				return err
-			}
-			if err := visit(resolved, field); err != nil {
-				return err
-			}
-		}
-
-		selected[operatorID] = operator
-		selectedFields[operatorID] = field
-		selectedOrder = append(selectedOrder, operatorID)
-		return nil
+func newAddOnOperatorGraph(resolveReference addOnOperatorReferenceResolverFunc) *addOnOperatorGraph {
+	return &addOnOperatorGraph{
+		resolveReference: resolveReference,
 	}
+}
+
+func (g *addOnOperatorGraph) resolveAndExpand(
+	ctx context.Context,
+	ownerMetadata *privatev1.Metadata,
+	requested []*privatev1.AddOnOperatorReference,
+) (map[string]*privatev1.AddOnOperator, map[string]string, []string, error) {
+	// selected contains the unique operators already expanded, keyed by ID.
+	g.selected = make(map[string]*privatev1.AddOnOperator)
+	// selectedFields preserves the originating request field for validation errors.
+	g.selectedFields = make(map[string]string)
+	// selectedOrder is dependency-first because operators are appended after their dependencies.
+	g.selectedOrder = make([]string, 0, len(requested))
+	// visiting and stack track the active DFS path used to report dependency cycles.
+	g.visiting = make(map[string]int)
+	g.stack = make([]string, 0, len(requested))
+	// relationshipEdges bounds dependency traversal work even when metadata is malformed.
+	g.relationshipEdges = 0
 
 	for index, reference := range requested {
 		field := fmt.Sprintf("spec.add_on_operators[%d]", index)
-		operator, err := resolver.resolve(ctx, reference, cluster.GetMetadata(), field)
+		operator, err := g.resolveReference(ctx, reference, ownerMetadata, field)
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		if err := visit(operator, field); err != nil {
+		if err := g.visit(ctx, operator, field); err != nil {
 			return nil, nil, nil, err
 		}
 	}
-	return selected, selectedFields, selectedOrder, nil
+	return g.selected, g.selectedFields, g.selectedOrder, nil
+}
+
+func (g *addOnOperatorGraph) visit(
+	ctx context.Context,
+	operator *privatev1.AddOnOperator,
+	field string,
+) error {
+	operatorID := operator.GetId()
+	if start, ok := g.visiting[operatorID]; ok {
+		cycle := append(append([]string{}, g.stack[start:]...), operatorID)
+		return addOnOperatorFieldError(field,
+			fmt.Sprintf("add-on operator dependency cycle detected: %s", strings.Join(cycle, " -> ")))
+	}
+	if _, ok := g.selected[operatorID]; ok {
+		return nil
+	}
+	// The current node is not counted yet, so reject before admitting node 33.
+	if len(g.selected)+len(g.visiting) >= maxClusterAddOnOperators {
+		return addOnOperatorFieldError("spec.add_on_operators",
+			fmt.Sprintf("resolved add-on operator set exceeds maximum of %d operators", maxClusterAddOnOperators))
+	}
+
+	g.visiting[operatorID] = len(g.stack)
+	g.stack = append(g.stack, operatorID)
+	defer func() {
+		delete(g.visiting, operatorID)
+		g.stack = g.stack[:len(g.stack)-1]
+	}()
+
+	// Post-order DFS selects dependencies before their parent operator.
+	for _, dependency := range operator.GetDependencies() {
+		g.relationshipEdges++
+		if g.relationshipEdges > maxAddOnOperatorRelationshipEdges {
+			return addOnOperatorFieldError("spec.add_on_operators",
+				fmt.Sprintf("add-on operator dependency graph exceeds %d relationships", maxAddOnOperatorRelationshipEdges))
+		}
+		resolved, err := g.resolveReference(ctx, dependency, operator.GetMetadata(), field)
+		if err != nil {
+			return err
+		}
+		if err := g.visit(ctx, resolved, field); err != nil {
+			return err
+		}
+	}
+
+	g.selected[operatorID] = operator
+	g.selectedFields[operatorID] = field
+	g.selectedOrder = append(g.selectedOrder, operatorID)
+	return nil
 }
 
 func validateSelectedAddOnOperators(
@@ -314,10 +349,12 @@ func validateSelectedAddOnOperators(
 				return addOnOperatorFieldError("spec.add_on_operators",
 					fmt.Sprintf("add-on operator exclusion graph exceeds %d relationships", maxAddOnOperatorRelationshipEdges))
 			}
-			if excludedID, excludedName := selectedExclusion(operator, exclusion, selected); excludedID != "" {
+			excludedID, excludedName := selectedExclusion(operator, exclusion, selected)
+			if excludedID != "" {
 				return addOnOperatorFieldError(field,
 					fmt.Sprintf("add-on operators %q and %q are mutually exclusive", operator.GetMetadata().GetName(), selected[excludedID].GetMetadata().GetName()))
-			} else if excludedName != "" {
+			}
+			if excludedName != "" {
 				return addOnOperatorFieldError(field,
 					fmt.Sprintf("add-on operators %q and %q are mutually exclusive", operator.GetMetadata().GetName(), excludedName))
 			}

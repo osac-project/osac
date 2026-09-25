@@ -1023,11 +1023,15 @@ func setupExternalIPAttachmentControllers(
 	if grpcConn != nil {
 		bareMetalInstancesClient = privatev1.NewBareMetalInstancesClient(grpcConn)
 	}
+	var computeInstancesClient privatev1.ComputeInstancesClient
+	if grpcConn != nil {
+		computeInstancesClient = privatev1.NewComputeInstancesClient(grpcConn)
+	}
 	reconciler := controller.NewExternalIPAttachmentReconciler(
 		mgr, networkingNamespace, computeInstanceNamespace,
 		clusterOrderNamespace, baremetalInstanceNamespace,
 		provider, statusPollInterval, maxJobHistory, targetCluster,
-		resolver, networkClassesClient, bareMetalInstancesClient,
+		resolver, networkClassesClient, bareMetalInstancesClient, computeInstancesClient,
 	)
 	reconciler.NetworkProvisioningEnabled = networkProvisioningEnabled
 	reconciler.BareMetalInstanceEnabled = enableBareMetalInstance

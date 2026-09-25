@@ -14,7 +14,7 @@ require (
 	github.com/osac-project/osac/proto v0.0.0-00010101000000-000000000000
 	github.com/ovn-org/ovn-kubernetes/go-controller v0.0.0-20251211123925-6d83b2b6e183
 	github.com/stoewer/go-strcase v1.3.1
-	golang.org/x/oauth2 v0.36.0
+	golang.org/x/oauth2 v0.37.0
 	golang.org/x/sync v0.23.0
 	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.12

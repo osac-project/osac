@@ -194,6 +194,12 @@ func (c *Console) Stderr() io.Writer {
 	return c.stderr
 }
 
+// Stdout returns the writer used for normal output. This is the writer
+// configured via SetStdout on the builder, defaulting to os.Stdout.
+func (c *Console) Stdout() io.Writer {
+	return c.stdout
+}
+
 // Render renders the given template with the given data to stdout. The template should be a template file name that
 // was added via AddTemplatesFS. If no template file systems have been added, this method will log an error.
 func (c *Console) Render(ctx context.Context, template string, data any) {
@@ -279,22 +285,26 @@ func (c *Console) RenderYaml(ctx context.Context, data any) {
 	}
 }
 
+// ColorEnabled reports whether stdout is a real terminal that supports color. Callers that render their own colored
+// output (rather than going through Render/RenderJson/RenderYaml) should gate their color codes on this, so a
+// redirected or piped command still produces plain text that other tools can process.
+func (c *Console) ColorEnabled() bool {
+	file, ok := c.stdout.(*os.File)
+	if !ok {
+		return false
+	}
+	return isatty.IsTerminal(file.Fd())
+}
+
 // renderColored renders the given text to stdout with syntax highlighting using the specified lexer. If the terminal
 // doesn't support color or an error occurs, it falls back to plain text output.
 func (c *Console) renderColored(ctx context.Context, text string, format string) error {
-	// If the writer isn't a file then we can't decide if it supports color, so we just print the text:
-	file, ok := c.stdout.(*os.File)
-	if !ok {
+	if !c.ColorEnabled() {
 		_, err := c.stdout.Write([]byte(text))
 		return err
 	}
-
-	// If the file isn't a terminal, then we don't want to use color to not interfere with other tools
-	// thayt may want to process the output.
-	if !isatty.IsTerminal(file.Fd()) {
-		_, err := file.Write([]byte(text))
-		return err
-	}
+	// ColorEnabled already confirmed this type assertion succeeds:
+	file := c.stdout.(*os.File)
 
 	// If we are here then we can use color:
 	lexer := lexers.Get(format)

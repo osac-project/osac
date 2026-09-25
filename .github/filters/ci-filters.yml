@@ -372,13 +372,19 @@ darwin-keychain:
 #
 # unit-tests.yml consumers:
 unit-tests-fulfillment-service:
-  - '{fulfillment-service/**,bare-metal-fulfillment-operator/**,osac-operator/api/**,proto/**,go.work,go.work.sum,.github/workflows/unit-tests.yml}'
+  - '{fulfillment-service/**,bare-metal-fulfillment-operator/**,osac-operator/api/**,osac-installer/pkg/install/**,proto/**,go.work,go.work.sum,.github/workflows/unit-tests.yml}'
 unit-tests-osac-metering:
   - '{osac-metering/metering-service/**,osac-metering/schema/**,proto/**,go.work,go.work.sum,.github/workflows/unit-tests.yml}'
 unit-tests-osac-metering-adapters:
   - '{osac-metering/adapters/**,osac-metering/schema/**,go.work,go.work.sum,.github/workflows/unit-tests.yml}'
 unit-tests-osac-metering-schema:
   - '{osac-metering/schema/**,go.work,go.work.sum,.github/workflows/unit-tests.yml}'
+# osac-installer/pkg/install is fulfillment-service's dependency (via the
+# go.mod replace directive), same relationship as osac-operator/api above --
+# included in unit-tests-fulfillment-service so a change here also re-runs
+# fulfillment-service's tests, and gets its own job so its own 34 specs run.
+unit-tests-osac-installer-pkg-install:
+  - '{osac-installer/pkg/install/**,go.work,go.work.sum,.github/workflows/unit-tests.yml}'
 
 # integration-tests.yml consumers. osac-installer/** is included on the
 # first three: their jobs all run setup/tests via `make -C osac-installer

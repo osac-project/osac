@@ -15,6 +15,10 @@ COPY --chown=1001:1001 fulfillment-service/go.mod fulfillment-service/go.sum ful
 COPY --chown=1001:1001 bare-metal-fulfillment-operator/go.mod bare-metal-fulfillment-operator/go.sum bare-metal-fulfillment-operator/
 COPY --chown=1001:1001 osac-operator/go.mod osac-operator/go.sum osac-operator/
 COPY --chown=1001:1001 osac-operator/api/go.mod osac-operator/api/go.sum osac-operator/api/
+# osac-installer/pkg/install/ is referenced by go.work; go commands in the
+# workspace need its go.mod present even though this component does not
+# import it.
+COPY --chown=1001:1001 osac-installer/pkg/install/go.mod osac-installer/pkg/install/go.sum osac-installer/pkg/install/
 COPY --chown=1001:1001 osac-metering/schema/go.mod osac-metering/schema/go.sum osac-metering/schema/
 COPY --chown=1001:1001 osac-metering/metering-service/go.mod osac-metering/metering-service/go.sum osac-metering/metering-service/
 COPY --chown=1001:1001 osac-metering/adapters/go.mod osac-metering/adapters/go.sum osac-metering/adapters/

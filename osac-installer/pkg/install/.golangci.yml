@@ -1,0 +1,59 @@
+version: "2"
+
+formatters:
+  enable:
+    - gofmt
+
+run:
+  timeout: 10m
+
+issues:
+  uniq-by-line: true
+
+output:
+  formats:
+    text:
+      path: stdout
+      print-linter-name: true
+      print-issued-lines: true
+      colors: true
+
+linters:
+  default: standard
+  enable:
+    - depguard
+    - errorlint
+    - ginkgolinter
+    - gocyclo
+    - gosec
+    - misspell
+    - nolintlint
+  settings:
+    gosec:
+      excludes:
+        # G104 (unhandled errors) is redundant with errcheck.
+        - G104
+    depguard:
+      rules:
+        main:
+          deny:
+            - pkg: ^math/rand$
+              desc: Use math/rand/v2 instead
+    staticcheck:
+      dot-import-whitelist:
+        - "github.com/onsi/ginkgo/v2/dsl/core"
+        - "github.com/onsi/gomega"
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - std-error-handling
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+    rules:
+      - linters:
+          - gosec
+          - errcheck
+        path: _test\.go

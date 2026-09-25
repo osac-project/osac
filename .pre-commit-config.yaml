@@ -67,6 +67,20 @@ repos:
     language: system
     files: ^osac-operator/.*\.go$
     entry: make -C osac-operator lint-fix
+  - id: osac-installer-pkg-install-golangci-lint
+    pass_filenames: false
+    name: osac-installer/pkg/install golangci-lint
+    language: system
+    # Its own module nested under osac-installer/ (a non-Go directory), not
+    # under osac-operator-golangci-lint's files glob above -- and must run
+    # with its own directory as cwd, not osac-installer's: `make -C
+    # osac-operator lint-fix` silently never lints osac-operator/api (a
+    # nested module inside a Go module) because golangci-lint invoked from
+    # the parent respects Go module boundaries. This hook avoids that by
+    # using this module's own Makefile, which changes into its own
+    # directory before invoking golangci-lint.
+    files: ^osac-installer/pkg/install/(.*\.go|\.golangci\.yml|Makefile|go\.(mod|sum))$
+    entry: make -C osac-installer/pkg/install lint-fix
   - id: bare-metal-fulfillment-operator-golangci-lint
     pass_filenames: false
     name: bare-metal-fulfillment-operator golangci-lint

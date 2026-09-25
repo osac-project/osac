@@ -117,6 +117,24 @@ Uses .Values.cliImage for the container image.
 {{- end }}
 
 {{/*
+Comma-separated list of enabled OSAC services, passed as the --services flag
+to `osac install validate` (pre-install-validate.yaml). Mirrors
+global.services.* and metering.enabled directly -- a new service only needs
+a values key here, never new prerequisite-check code (that lives in
+osac-installer/pkg/install/data/prerequisites.yaml, which osac install
+validate already knows how to filter by service).
+*/}}
+{{- define "osac.enabledServices" -}}
+{{- $services := list -}}
+{{- if .Values.global.services.vmaas.enabled -}}{{- $services = append $services "vmaas" -}}{{- end -}}
+{{- if .Values.global.services.caas.enabled -}}{{- $services = append $services "caas" -}}{{- end -}}
+{{- if .Values.global.services.bmaas.enabled -}}{{- $services = append $services "bmaas" -}}{{- end -}}
+{{- if .Values.global.services.maas.enabled -}}{{- $services = append $services "maas" -}}{{- end -}}
+{{- if .Values.metering.enabled -}}{{- $services = append $services "metering" -}}{{- end -}}
+{{- join "," $services -}}
+{{- end -}}
+
+{{/*
 The umbrella chart validates the values before rendering the AAP subchart.
 Keep this chart-local adapter because Helm subcharts cannot call templates
 defined by their parent chart; the AAP chart has the corresponding helper for

@@ -4,6 +4,7 @@ use (
 	./bare-metal-fulfillment-operator
 	./fulfillment-service
 	./osac-csi-driver
+	./osac-installer/pkg/install
 	./osac-metering/adapters
 	./osac-metering/metering-service
 	./osac-metering/schema

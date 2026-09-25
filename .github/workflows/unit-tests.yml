@@ -72,6 +72,7 @@ jobs:
       osac-metering-relevant: ${{ vars.CI_GATING_ENABLED == 'false' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || steps.filter.outputs.unit-tests-osac-metering == 'true' }}
       osac-metering-adapters-relevant: ${{ vars.CI_GATING_ENABLED == 'false' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || steps.filter.outputs.unit-tests-osac-metering-adapters == 'true' }}
       osac-metering-schema-relevant: ${{ vars.CI_GATING_ENABLED == 'false' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || steps.filter.outputs.unit-tests-osac-metering-schema == 'true' }}
+      osac-installer-pkg-install-relevant: ${{ vars.CI_GATING_ENABLED == 'false' || (github.event_name != 'pull_request' && github.event_name != 'merge_group') || steps.filter.outputs.unit-tests-osac-installer-pkg-install == 'true' }}
       concurrency-key: ${{ steps.concurrency-key.outputs.key }}
     steps:
       # dorny/paths-filter uses git diff on merge_group (not the PR Files API),
@@ -202,6 +203,25 @@ jobs:
       with:
         working-directory: osac-metering/schema
     - working-directory: osac-metering/schema
+      run: |
+        ginkgo run -r .
+
+  run-osac-installer-pkg-install-tests:
+    name: Run unit tests (osac-installer/pkg/install)
+    needs: changes
+    if: needs.changes.outputs.should-run == 'true' && needs.changes.outputs.osac-installer-pkg-install-relevant == 'true'
+    concurrency:
+      group: run-osac-installer-pkg-install-tests-${{ needs.changes.outputs.concurrency-key }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      with:
+        persist-credentials: false
+    - uses: ./.github/actions/setup-go
+      with:
+        working-directory: osac-installer/pkg/install
+    - working-directory: osac-installer/pkg/install
       run: |
         ginkgo run -r .
 

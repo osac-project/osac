@@ -1,0 +1,131 @@
+# Prerequisite matrix for `osac install discover`/`validate`/`status`.
+#
+# This is the single source of truth for what OSAC needs on a Hub cluster
+# before it installs: every Operator name, namespace, OLM package name, and
+# minimum version lives here, not as Go constants. registry.go loads this
+# file (embedded via go:embed) and dispatches each entry to the matching
+# generic check engine (engine_*.go) by "kind". matrix_test.go validates
+# every entry against that closed vocabulary, so a typo here fails CI
+# instead of silently no-op'ing or panicking at runtime.
+#
+# Namespaces and OLM package names were cross-checked against
+# osac-installer/charts/osac-deps/templates/*.yaml (the Subscription
+# resources actually installed for each Operator); channels and minimum
+# versions against docs/guides/installation/customer-install-guide.md
+# (Tables 2.1 and 3.1).
+#
+# requiredFor: which OSAC service(s) need this prerequisite. "all" means
+# every install needs it regardless of which services are enabled.
+# toggle: an additional, cluster-state-undiscoverable gate -- mirrors a
+# Helm value that decides whether this prerequisite is even in play (e.g.
+# Metal3 is one of several possible BMaaS backends).
+# category: "operator" for an OLM-managed Operator (csv-succeeded checks),
+# "resource" for anything else (a CRD, a StorageClass, the cluster version,
+# a Metal3 CR) -- purely a display grouping (`osac install status`'s
+# Resources/Operators sections), no effect on which checks run.
+
+- id: ocp-version
+  kind: ocp-version-range
+  severity: warning
+  category: resource
+  requiredFor: [all]
+  minVersion: "4.22.4"
+
+- id: cert-manager-crds
+  kind: crd-exists
+  severity: required
+  category: resource
+  requiredFor: [all]
+  crd: certificates.cert-manager.io
+  remediation: "install the cert-manager Operator for Red Hat OpenShift before deploying OSAC"
+
+- id: cert-manager-operator
+  kind: csv-succeeded
+  severity: required
+  category: operator
+  requiredFor: [all]
+  displayName: "cert-manager Operator for Red Hat OpenShift"
+  namespace: cert-manager-operator
+  packagePrefix: openshift-cert-manager-operator
+  minVersion: "1.20.0"
+  docsURL: "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/security_and_compliance/cert-manager-operator-for-red-hat-openshift"
+
+- id: aap-operator
+  kind: csv-succeeded
+  severity: required
+  category: operator
+  requiredFor: [all]
+  displayName: "Red Hat Ansible Automation Platform Operator"
+  namespace: ansible-aap
+  packagePrefix: ansible-automation-platform-operator
+  minVersion: "2.6.0"
+  docsURL: "https://docs.redhat.com/en/documentation/red_hat_ansible_automation_platform/2.6/html/installing_on_openshift_container_platform/index"
+
+- id: kafka-operator
+  kind: csv-succeeded
+  severity: required
+  category: operator
+  requiredFor: [metering]
+  displayName: "Streams for Apache Kafka"
+  namespace: osac-kafka
+  packagePrefix: amq-streams
+  docsURL: "https://access.redhat.com/articles/6644711"
+
+- id: cnv-operator
+  kind: csv-succeeded
+  severity: required
+  category: operator
+  requiredFor: [vmaas]
+  displayName: "OpenShift Virtualization"
+  namespace: openshift-cnv
+  packagePrefix: kubevirt-hyperconverged
+  docsURL: "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/virtualization/installing"
+
+- id: metallb-operator
+  kind: csv-succeeded
+  severity: required
+  category: operator
+  requiredFor: [vmaas, caas]
+  displayName: "MetalLB Operator"
+  namespace: metallb-system
+  packagePrefix: metallb-operator
+  docsURL: "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/networking_operators/metallb-operator"
+
+- id: mce-operator
+  kind: csv-succeeded
+  severity: required
+  category: operator
+  requiredFor: [caas]
+  displayName: "multicluster engine for Kubernetes Operator"
+  namespace: multicluster-engine
+  packagePrefix: multicluster-engine
+  docsURL: "https://docs.redhat.com/en/documentation/red_hat_advanced_cluster_management_for_kubernetes/2.13/html/clusters/cluster_mce_overview"
+
+- id: default-storageclass
+  kind: storageclass-default
+  severity: required
+  category: resource
+  requiredFor: [all]
+
+- id: metal3-baremetalhost-crd
+  kind: crd-exists
+  severity: required
+  category: resource
+  requiredFor: [bmaas]
+  toggle: metal3
+  crd: baremetalhosts.metal3.io
+  remediation: "install BareMetalOperator before deploying OSAC with the Metal3 backend"
+
+- id: metal3-provisioning-watch-all-namespaces
+  kind: resource-field-equals
+  severity: required
+  category: resource
+  requiredFor: [bmaas]
+  toggle: metal3
+  group: metal3.io
+  version: v1alpha1
+  resource: provisionings
+  field: [spec, watchAllNamespaces]
+  expected: true
+  notFoundMessage: "no Provisioning CR found; Metal3 backend requires a Provisioning CR with watchAllNamespaces: true"
+  mismatchMessage: "Provisioning CR does not have spec.watchAllNamespaces: true; set it so BMO can discover BareMetalHost resources across namespaces"

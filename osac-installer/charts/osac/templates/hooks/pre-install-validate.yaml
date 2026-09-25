@@ -1,4 +1,11 @@
 {{- if .Values.validation.enabled }}
+{{- $secretNames := list }}
+{{- if .Values.aap.configAsCode.manifestSecret }}
+{{- $secretNames = append $secretNames .Values.aap.configAsCode.manifestSecret }}
+{{- end }}
+{{- range .Values.service.database.connection }}
+{{- $secretNames = append $secretNames .secret.name }}
+{{- end }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -20,66 +27,29 @@ spec:
       serviceAccountName: {{ include "osac.fullname" . }}-validate
       containers:
       - name: validate
-        image: {{ .Values.cliImage }}
+        # The fulfillment-service image bundles the osac CLI alongside the
+        # server binary (see fulfillment-service/Containerfile), always
+        # version-matched to this chart release -- so this hook runs the
+        # exact same `osac install validate` a human runs locally, instead
+        # of a second, hand-maintained implementation of the same checks in
+        # shell.
+        image: {{ .Values.service.images.service }}
         command:
-        - /bin/sh
-        - -c
-        - |
-          set -e
-          echo "=== OSAC Pre-install Validation ==="
-
-          # Check that cert-manager CRDs exist
-          echo "Checking for cert-manager CRDs..."
-          if kubectl get crd certificates.cert-manager.io >/dev/null; then
-            echo "  cert-manager CRDs found."
-          else
-            echo "ERROR: cert-manager CRDs not found."
-            echo "Please install cert-manager before deploying OSAC."
-            exit 1
-          fi
-
-          # Check that a default StorageClass exists
-          echo "Checking for default StorageClass..."
-          DEFAULT_SC=$(kubectl get sc -o jsonpath='{.items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")].metadata.name}')
-          if [ -n "$DEFAULT_SC" ]; then
-            echo "  Default StorageClass found: $DEFAULT_SC"
-          else
-            echo "WARNING: No default StorageClass found."
-            echo "Some components (PostgreSQL, Keycloak) may fail to create PVCs."
-          fi
-
-          {{- if .Values.bmf.metal3.enabled }}
-          # Check that Metal3 BareMetalHost CRD exists
-          echo "Checking for Metal3 BareMetalHost CRD..."
-          if kubectl get crd baremetalhosts.metal3.io >/dev/null; then
-            echo "  BareMetalHost CRD found."
-          else
-            echo "ERROR: BareMetalHost CRD (baremetalhosts.metal3.io) not found."
-            echo "Metal3 backend is configured but BareMetalOperator is not installed."
-            echo "Install BareMetalOperator before deploying OSAC with Metal3 backend."
-            exit 1
-          fi
-
-          # Check that the Provisioning CR has watchAllNamespaces enabled
-          echo "Checking Provisioning CR watchAllNamespaces setting..."
-          WATCH_ALL=$(kubectl get provisioning -o jsonpath='{.items[0].spec.watchAllNamespaces}' 2>/dev/null || true)
-          if [ -z "$WATCH_ALL" ]; then
-            echo "ERROR: No Provisioning CR found."
-            echo "Metal3 backend requires a Provisioning CR with watchAllNamespaces: true."
-            echo "Configure BareMetalOperator to watch all namespaces for BareMetalHost resources."
-            exit 1
-          elif [ "$WATCH_ALL" != "true" ]; then
-            echo "ERROR: Provisioning CR has watchAllNamespaces: ${WATCH_ALL}."
-            echo "Metal3 backend requires watchAllNamespaces: true on the Provisioning CR."
-            echo "Set spec.watchAllNamespaces to true so BMO can discover BareMetalHost resources across namespaces."
-            exit 1
-          else
-            echo "  Provisioning CR watchAllNamespaces: true."
-          fi
-          {{- end }}
-
-          echo "=== Validation passed ==="
-  backoffLimit: 0
+        - osac
+        args:
+        - install
+        - validate
+        - --services={{ include "osac.enabledServices" . }}
+        {{- if .Values.bmf.metal3.enabled }}
+        - --metal3
+        {{- end }}
+        {{- if .Values.aap.configAsCode.manifestSecret }}
+        - --require-secret={{ .Release.Namespace }}/{{ .Values.aap.configAsCode.manifestSecret }}:license.zip
+        {{- end }}
+        {{- range .Values.service.database.connection }}
+        - --require-secret={{ $.Release.Namespace }}/{{ .secret.name }}
+        {{- end }}
+      backoffLimit: 0
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -104,17 +74,28 @@ metadata:
     "helm.sh/hook-weight": "-11"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 rules:
+# Static and unconditional: every GVR any prerequisite check the osac
+# binary knows about can read, regardless of which services/toggles this
+# particular install enables. Adding a new Operator check to
+# osac-installer/pkg/install/data/prerequisites.yaml therefore never
+# requires a chart/RBAC change. All read-only, and none of these resource
+# types carry secret material -- unlike Secrets (below), which get their
+# own tightly-scoped Role instead of a blanket grant here.
 - apiGroups: ["apiextensions.k8s.io"]
   resources: ["customresourcedefinitions"]
   verbs: ["get"]
 - apiGroups: ["storage.k8s.io"]
   resources: ["storageclasses"]
   verbs: ["list"]
-{{- if .Values.bmf.metal3.enabled }}
+- apiGroups: ["operators.coreos.com"]
+  resources: ["clusterserviceversions"]
+  verbs: ["list"]
+- apiGroups: ["config.openshift.io"]
+  resources: ["clusterversions"]
+  verbs: ["get"]
 - apiGroups: ["metal3.io"]
   resources: ["provisionings"]
   verbs: ["list"]
-{{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -134,4 +115,53 @@ subjects:
 - kind: ServiceAccount
   name: {{ include "osac.fullname" . }}-validate
   namespace: {{ .Release.Namespace }}
+{{- if $secretNames }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "osac.fullname" . }}-validate-secrets
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-11"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+rules:
+# Unlike the ClusterRole above, this is deliberately narrow: get-only
+# (never list, so the hook can't enumerate every Secret in the namespace)
+# on exactly the Secret names this install's own values reference
+# (aap.configAsCode.manifestSecret, service.database.connection[].secret.name)
+# -- computed from the same values Helm already renders the Job's
+# --require-secret args from, so this list can never drift from what's
+# actually checked.
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get"]
+  resourceNames:
+  {{- range $secretNames }}
+  - {{ . | quote }}
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "osac.fullname" . }}-validate-secrets
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-11"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "osac.fullname" . }}-validate-secrets
+subjects:
+- kind: ServiceAccount
+  name: {{ include "osac.fullname" . }}-validate
+  namespace: {{ .Release.Namespace }}
+{{- end }}
 {{- end }}

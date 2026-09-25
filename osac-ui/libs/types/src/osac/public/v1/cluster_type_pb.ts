@@ -47,7 +47,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/public/v1/cluster_type.proto.
  */
 export const file_osac_public_v1_cluster_type: GenFile = /*@__PURE__*/
-  fileDesc("CiFvc2FjL3B1YmxpYy92MS9jbHVzdGVyX3R5cGUucHJvdG8SDm9zYWMucHVibGljLnYxIpsBCgdDbHVzdGVyEgoKAmlkGAEgASgJEioKCG1ldGFkYXRhGAIgASgLMhgub3NhYy5wdWJsaWMudjEuTWV0YWRhdGESKQoEc3BlYxgDIAEoCzIbLm9zYWMucHVibGljLnYxLkNsdXN0ZXJTcGVjEi0KBnN0YXR1cxgEIAEoCzIdLm9zYWMucHVibGljLnYxLkNsdXN0ZXJTdGF0dXMiowcKC0NsdXN0ZXJTcGVjEjoKCHRlbXBsYXRlGAEgASgLMigub3NhYy5wdWJsaWMudjEuQ2x1c3RlclRlbXBsYXRlUmVmZXJlbmNlElAKE3RlbXBsYXRlX3BhcmFtZXRlcnMYAiADKAsyMy5vc2FjLnB1YmxpYy52MS5DbHVzdGVyU3BlYy5UZW1wbGF0ZVBhcmFtZXRlcnNFbnRyeRI8Cglub2RlX3NldHMYAyADKAsyKS5vc2FjLnB1YmxpYy52MS5DbHVzdGVyU3BlYy5Ob2RlU2V0c0VudHJ5EhsKDnNzaF9wdWJsaWNfa2V5GAUgASgJSACIAQESOAoHdmVyc2lvbhgGIAEoCzInLm9zYWMucHVibGljLnYxLkNsdXN0ZXJWZXJzaW9uUmVmZXJlbmNlEjQKB25ldHdvcmsYByABKAsyHi5vc2FjLnB1YmxpYy52MS5DbHVzdGVyTmV0d29ya0gBiAEBEkEKDGNhdGFsb2dfaXRlbRgIIAEoCzIrLm9zYWMucHVibGljLnYxLkNsdXN0ZXJDYXRhbG9nSXRlbVJlZmVyZW5jZRJEChJuZXR3b3JrX2F0dGFjaG1lbnQYCSABKAsyKC5vc2FjLnB1YmxpYy52MS5DbHVzdGVyTmV0d29ya0F0dGFjaG1lbnQSLQobYXV0b19leHRlcm5hbF9pcF9hdHRhY2htZW50GAogASgIQgPgQQVIAogBARJAChJwdWxsX3NlY3JldF9zZWNyZXQYCyABKAsyJC5vc2FjLnB1YmxpYy52MS5TZWNyZXRMb2NhbFJlZmVyZW5jZRJNChBhZGRfb25fb3BlcmF0b3JzGAwgAygLMiYub3NhYy5wdWJsaWMudjEuQWRkT25PcGVyYXRvclJlZmVyZW5jZUIL4EEFukgFkgECECAaTwoXVGVtcGxhdGVQYXJhbWV0ZXJzRW50cnkSCwoDa2V5GAEgASgJEiMKBXZhbHVlGAIgASgLMhQuZ29vZ2xlLnByb3RvYnVmLkFueToCOAEaTwoNTm9kZVNldHNFbnRyeRILCgNrZXkYASABKAkSLQoFdmFsdWUYAiABKAsyHi5vc2FjLnB1YmxpYy52MS5DbHVzdGVyTm9kZVNldDoCOAFCEQoPX3NzaF9wdWJsaWNfa2V5QgoKCF9uZXR3b3JrQh4KHF9hdXRvX2V4dGVybmFsX2lwX2F0dGFjaG1lbnRKBAgEEAVSC3B1bGxfc2VjcmV0IrMECg1DbHVzdGVyU3RhdHVzEisKBXN0YXRlGAEgASgOMhwub3NhYy5wdWJsaWMudjEuQ2x1c3RlclN0YXRlEjQKCmNvbmRpdGlvbnMYAiADKAsyIC5vc2FjLnB1YmxpYy52MS5DbHVzdGVyQ29uZGl0aW9uEg8KB2FwaV91cmwYAyABKAkSEwoLY29uc29sZV91cmwYBCABKAkSPgoJbm9kZV9zZXRzGAUgAygLMisub3NhYy5wdWJsaWMudjEuQ2x1c3RlclN0YXR1cy5Ob2RlU2V0c0VudHJ5EhQKDGFwaV9lbmRwb2ludBgGIAEoCRIYChBpbmdyZXNzX2VuZHBvaW50GAcgASgJEj4KFXN0YXRlX3RyYW5zaXRpb25fdGltZRgIIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXBIAIgBARI/ChFrdWJlY29uZmlnX3NlY3JldBgJIAEoCzIkLm9zYWMucHVibGljLnYxLlNlY3JldExvY2FsUmVmZXJlbmNlEj0KD3Bhc3N3b3JkX3NlY3JldBgKIAEoCzIkLm9zYWMucHVibGljLnYxLlNlY3JldExvY2FsUmVmZXJlbmNlGk8KDU5vZGVTZXRzRW50cnkSCwoDa2V5GAEgASgJEi0KBXZhbHVlGAIgASgLMh4ub3NhYy5wdWJsaWMudjEuQ2x1c3Rlck5vZGVTZXQ6AjgBQhgKFl9zdGF0ZV90cmFuc2l0aW9uX3RpbWUi8wEKEENsdXN0ZXJDb25kaXRpb24SMgoEdHlwZRgBIAEoDjIkLm9zYWMucHVibGljLnYxLkNsdXN0ZXJDb25kaXRpb25UeXBlEi8KBnN0YXR1cxgCIAEoDjIfLm9zYWMucHVibGljLnYxLkNvbmRpdGlvblN0YXR1cxI4ChRsYXN0X3RyYW5zaXRpb25fdGltZRgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASEwoGcmVhc29uGAQgASgJSACIAQESFAoHbWVzc2FnZRgFIAEoCUgBiAEBQgkKB19yZWFzb25CCgoIX21lc3NhZ2UiawoOQ2x1c3Rlck5vZGVTZXQSNAoJaG9zdF90eXBlGAEgASgLMiEub3NhYy5wdWJsaWMudjEuSG9zdFR5cGVSZWZlcmVuY2USGgoEc2l6ZRgCIAEoBUIHukgEGgIgAEgAiAEBQgcKBV9zaXplIjEKFUNsdXN0ZXJMb2NhbFJlZmVyZW5jZRIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJKrwBCgxDbHVzdGVyU3RhdGUSHQoZQ0xVU1RFUl9TVEFURV9VTlNQRUNJRklFRBAAEh0KGUNMVVNURVJfU1RBVEVfUFJPR1JFU1NJTkcQARIXChNDTFVTVEVSX1NUQVRFX1JFQURZEAISGAoUQ0xVU1RFUl9TVEFURV9GQUlMRUQQAxIaChZDTFVTVEVSX1NUQVRFX0RFTEVUSU5HEAQSHwobQ0xVU1RFUl9TVEFURV9ERUxFVEVfRkFJTEVEEAUq0AEKFENsdXN0ZXJDb25kaXRpb25UeXBlEiYKIkNMVVNURVJfQ09ORElUSU9OX1RZUEVfVU5TUEVDSUZJRUQQABImCiJDTFVTVEVSX0NPTkRJVElPTl9UWVBFX1BST0dSRVNTSU5HEAESIAocQ0xVU1RFUl9DT05ESVRJT05fVFlQRV9SRUFEWRACEiEKHUNMVVNURVJfQ09ORElUSU9OX1RZUEVfRkFJTEVEEAMSIwofQ0xVU1RFUl9DT05ESVRJT05fVFlQRV9ERUdSQURFRBAEYgZwcm90bzM", [file_buf_validate_validate, file_google_api_field_behavior, file_google_protobuf_any, file_google_protobuf_timestamp, file_osac_public_v1_add_on_operator_type, file_osac_public_v1_cluster_catalog_item_type, file_osac_public_v1_cluster_common_type, file_osac_public_v1_cluster_template_type, file_osac_public_v1_cluster_version_type, file_osac_public_v1_condition_status_type, file_osac_public_v1_metadata_type, file_osac_public_v1_host_type_type, file_osac_public_v1_secret_type]);
+  fileDesc("CiFvc2FjL3B1YmxpYy92MS9jbHVzdGVyX3R5cGUucHJvdG8SDm9zYWMucHVibGljLnYxIpsBCgdDbHVzdGVyEgoKAmlkGAEgASgJEioKCG1ldGFkYXRhGAIgASgLMhgub3NhYy5wdWJsaWMudjEuTWV0YWRhdGESKQoEc3BlYxgDIAEoCzIbLm9zYWMucHVibGljLnYxLkNsdXN0ZXJTcGVjEi0KBnN0YXR1cxgEIAEoCzIdLm9zYWMucHVibGljLnYxLkNsdXN0ZXJTdGF0dXMiowcKC0NsdXN0ZXJTcGVjEjoKCHRlbXBsYXRlGAEgASgLMigub3NhYy5wdWJsaWMudjEuQ2x1c3RlclRlbXBsYXRlUmVmZXJlbmNlElAKE3RlbXBsYXRlX3BhcmFtZXRlcnMYAiADKAsyMy5vc2FjLnB1YmxpYy52MS5DbHVzdGVyU3BlYy5UZW1wbGF0ZVBhcmFtZXRlcnNFbnRyeRI8Cglub2RlX3NldHMYAyADKAsyKS5vc2FjLnB1YmxpYy52MS5DbHVzdGVyU3BlYy5Ob2RlU2V0c0VudHJ5EhsKDnNzaF9wdWJsaWNfa2V5GAUgASgJSACIAQESOAoHdmVyc2lvbhgGIAEoCzInLm9zYWMucHVibGljLnYxLkNsdXN0ZXJWZXJzaW9uUmVmZXJlbmNlEjQKB25ldHdvcmsYByABKAsyHi5vc2FjLnB1YmxpYy52MS5DbHVzdGVyTmV0d29ya0gBiAEBEkEKDGNhdGFsb2dfaXRlbRgIIAEoCzIrLm9zYWMucHVibGljLnYxLkNsdXN0ZXJDYXRhbG9nSXRlbVJlZmVyZW5jZRJEChJuZXR3b3JrX2F0dGFjaG1lbnQYCSABKAsyKC5vc2FjLnB1YmxpYy52MS5DbHVzdGVyTmV0d29ya0F0dGFjaG1lbnQSLQobYXV0b19leHRlcm5hbF9pcF9hdHRhY2htZW50GAogASgIQgPgQQVIAogBARJAChJwdWxsX3NlY3JldF9zZWNyZXQYCyABKAsyJC5vc2FjLnB1YmxpYy52MS5TZWNyZXRMb2NhbFJlZmVyZW5jZRJNChBhZGRfb25fb3BlcmF0b3JzGAwgAygLMiYub3NhYy5wdWJsaWMudjEuQWRkT25PcGVyYXRvclJlZmVyZW5jZUIL4EEFukgFkgECECAaTwoXVGVtcGxhdGVQYXJhbWV0ZXJzRW50cnkSCwoDa2V5GAEgASgJEiMKBXZhbHVlGAIgASgLMhQuZ29vZ2xlLnByb3RvYnVmLkFueToCOAEaTwoNTm9kZVNldHNFbnRyeRILCgNrZXkYASABKAkSLQoFdmFsdWUYAiABKAsyHi5vc2FjLnB1YmxpYy52MS5DbHVzdGVyTm9kZVNldDoCOAFCEQoPX3NzaF9wdWJsaWNfa2V5QgoKCF9uZXR3b3JrQh4KHF9hdXRvX2V4dGVybmFsX2lwX2F0dGFjaG1lbnRKBAgEEAVSC3B1bGxfc2VjcmV0Im4KE0FkZE9uT3BlcmF0b3JTdGF0dXMSDAoEbmFtZRgBIAEoCRI4CgVzdGF0ZRgCIAEoDjIpLm9zYWMucHVibGljLnYxLkFkZE9uT3BlcmF0b3JJbnN0YWxsU3RhdGUSDwoHbWVzc2FnZRgDIAEoCSLyBAoNQ2x1c3RlclN0YXR1cxIrCgVzdGF0ZRgBIAEoDjIcLm9zYWMucHVibGljLnYxLkNsdXN0ZXJTdGF0ZRI0Cgpjb25kaXRpb25zGAIgAygLMiAub3NhYy5wdWJsaWMudjEuQ2x1c3RlckNvbmRpdGlvbhIPCgdhcGlfdXJsGAMgASgJEhMKC2NvbnNvbGVfdXJsGAQgASgJEj4KCW5vZGVfc2V0cxgFIAMoCzIrLm9zYWMucHVibGljLnYxLkNsdXN0ZXJTdGF0dXMuTm9kZVNldHNFbnRyeRIUCgxhcGlfZW5kcG9pbnQYBiABKAkSGAoQaW5ncmVzc19lbmRwb2ludBgHIAEoCRI+ChVzdGF0ZV90cmFuc2l0aW9uX3RpbWUYCCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wSACIAQESPwoRa3ViZWNvbmZpZ19zZWNyZXQYCSABKAsyJC5vc2FjLnB1YmxpYy52MS5TZWNyZXRMb2NhbFJlZmVyZW5jZRI9Cg9wYXNzd29yZF9zZWNyZXQYCiABKAsyJC5vc2FjLnB1YmxpYy52MS5TZWNyZXRMb2NhbFJlZmVyZW5jZRI9ChBhZGRfb25fb3BlcmF0b3JzGAwgAygLMiMub3NhYy5wdWJsaWMudjEuQWRkT25PcGVyYXRvclN0YXR1cxpPCg1Ob2RlU2V0c0VudHJ5EgsKA2tleRgBIAEoCRItCgV2YWx1ZRgCIAEoCzIeLm9zYWMucHVibGljLnYxLkNsdXN0ZXJOb2RlU2V0OgI4AUIYChZfc3RhdGVfdHJhbnNpdGlvbl90aW1lIvMBChBDbHVzdGVyQ29uZGl0aW9uEjIKBHR5cGUYASABKA4yJC5vc2FjLnB1YmxpYy52MS5DbHVzdGVyQ29uZGl0aW9uVHlwZRIvCgZzdGF0dXMYAiABKA4yHy5vc2FjLnB1YmxpYy52MS5Db25kaXRpb25TdGF0dXMSOAoUbGFzdF90cmFuc2l0aW9uX3RpbWUYAyABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEhMKBnJlYXNvbhgEIAEoCUgAiAEBEhQKB21lc3NhZ2UYBSABKAlIAYgBAUIJCgdfcmVhc29uQgoKCF9tZXNzYWdlImsKDkNsdXN0ZXJOb2RlU2V0EjQKCWhvc3RfdHlwZRgBIAEoCzIhLm9zYWMucHVibGljLnYxLkhvc3RUeXBlUmVmZXJlbmNlEhoKBHNpemUYAiABKAVCB7pIBBoCIABIAIgBAUIHCgVfc2l6ZSIxChVDbHVzdGVyTG9jYWxSZWZlcmVuY2USCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCSr6AQoZQWRkT25PcGVyYXRvckluc3RhbGxTdGF0ZRItCilBRERfT05fT1BFUkFUT1JfSU5TVEFMTF9TVEFURV9VTlNQRUNJRklFRBAAEikKJUFERF9PTl9PUEVSQVRPUl9JTlNUQUxMX1NUQVRFX1BFTkRJTkcQARIsCihBRERfT05fT1BFUkFUT1JfSU5TVEFMTF9TVEFURV9JTlNUQUxMSU5HEAISKwonQUREX09OX09QRVJBVE9SX0lOU1RBTExfU1RBVEVfSU5TVEFMTEVEEAMSKAokQUREX09OX09QRVJBVE9SX0lOU1RBTExfU1RBVEVfRkFJTEVEEAQqvAEKDENsdXN0ZXJTdGF0ZRIdChlDTFVTVEVSX1NUQVRFX1VOU1BFQ0lGSUVEEAASHQoZQ0xVU1RFUl9TVEFURV9QUk9HUkVTU0lORxABEhcKE0NMVVNURVJfU1RBVEVfUkVBRFkQAhIYChRDTFVTVEVSX1NUQVRFX0ZBSUxFRBADEhoKFkNMVVNURVJfU1RBVEVfREVMRVRJTkcQBBIfChtDTFVTVEVSX1NUQVRFX0RFTEVURV9GQUlMRUQQBSrQAQoUQ2x1c3RlckNvbmRpdGlvblR5cGUSJgoiQ0xVU1RFUl9DT05ESVRJT05fVFlQRV9VTlNQRUNJRklFRBAAEiYKIkNMVVNURVJfQ09ORElUSU9OX1RZUEVfUFJPR1JFU1NJTkcQARIgChxDTFVTVEVSX0NPTkRJVElPTl9UWVBFX1JFQURZEAISIQodQ0xVU1RFUl9DT05ESVRJT05fVFlQRV9GQUlMRUQQAxIjCh9DTFVTVEVSX0NPTkRJVElPTl9UWVBFX0RFR1JBREVEEARiBnByb3RvMw", [file_buf_validate_validate, file_google_api_field_behavior, file_google_protobuf_any, file_google_protobuf_timestamp, file_osac_public_v1_add_on_operator_type, file_osac_public_v1_cluster_catalog_item_type, file_osac_public_v1_cluster_common_type, file_osac_public_v1_cluster_template_type, file_osac_public_v1_cluster_version_type, file_osac_public_v1_condition_status_type, file_osac_public_v1_metadata_type, file_osac_public_v1_host_type_type, file_osac_public_v1_secret_type]);
 
 /**
  * Contains the details of the cluster.
@@ -299,6 +299,37 @@ export const ClusterSpecSchema: GenMessage<ClusterSpec> = /*@__PURE__*/
   messageDesc(file_osac_public_v1_cluster_type, 1);
 
 /**
+ * The per-operator status contains the installation state of one add-on operator.
+ *
+ * @generated from message osac.public.v1.AddOnOperatorStatus
+ */
+export type AddOnOperatorStatus = Message<"osac.public.v1.AddOnOperatorStatus"> & {
+  /**
+   * @generated from field: string name = 1;
+   */
+  name: string;
+
+  /**
+   * @generated from field: osac.public.v1.AddOnOperatorInstallState state = 2;
+   */
+  state: AddOnOperatorInstallState;
+
+  /**
+   * Empty on success; bounded error summary on failure.
+   *
+   * @generated from field: string message = 3;
+   */
+  message: string;
+};
+
+/**
+ * Describes the message osac.public.v1.AddOnOperatorStatus.
+ * Use `create(AddOnOperatorStatusSchema)` to create a new message.
+ */
+export const AddOnOperatorStatusSchema: GenMessage<AddOnOperatorStatus> = /*@__PURE__*/
+  messageDesc(file_osac_public_v1_cluster_type, 2);
+
+/**
  * The status contains the details of the cluster provided by the system.
  *
  * @generated from message osac.public.v1.ClusterStatus
@@ -435,6 +466,14 @@ export type ClusterStatus = Message<"osac.public.v1.ClusterStatus"> & {
    * @generated from field: osac.public.v1.SecretLocalReference password_secret = 10;
    */
   passwordSecret?: SecretLocalReference | undefined;
+
+  /**
+   * Per-operator installation state, synced from the ClusterOrder's
+   * AddOnOperatorJobs via the feedback controller.
+   *
+   * @generated from field: repeated osac.public.v1.AddOnOperatorStatus add_on_operators = 12;
+   */
+  addOnOperators: AddOnOperatorStatus[];
 };
 
 /**
@@ -442,7 +481,7 @@ export type ClusterStatus = Message<"osac.public.v1.ClusterStatus"> & {
  * Use `create(ClusterStatusSchema)` to create a new message.
  */
 export const ClusterStatusSchema: GenMessage<ClusterStatus> = /*@__PURE__*/
-  messageDesc(file_osac_public_v1_cluster_type, 2);
+  messageDesc(file_osac_public_v1_cluster_type, 3);
 
 /**
  * Contains the details of a condition that describes the status of a cluster.
@@ -495,7 +534,7 @@ export type ClusterCondition = Message<"osac.public.v1.ClusterCondition"> & {
  * Use `create(ClusterConditionSchema)` to create a new message.
  */
 export const ClusterConditionSchema: GenMessage<ClusterCondition> = /*@__PURE__*/
-  messageDesc(file_osac_public_v1_cluster_type, 3);
+  messageDesc(file_osac_public_v1_cluster_type, 4);
 
 /**
  * Defines a set of nodes that are part of the cluster, all of them of the same type of host.
@@ -545,7 +584,7 @@ export type ClusterNodeSet = Message<"osac.public.v1.ClusterNodeSet"> & {
  * Use `create(ClusterNodeSetSchema)` to create a new message.
  */
 export const ClusterNodeSetSchema: GenMessage<ClusterNodeSet> = /*@__PURE__*/
-  messageDesc(file_osac_public_v1_cluster_type, 4);
+  messageDesc(file_osac_public_v1_cluster_type, 5);
 
 /**
  * Local reference to a Cluster resource.
@@ -569,7 +608,45 @@ export type ClusterLocalReference = Message<"osac.public.v1.ClusterLocalReferenc
  * Use `create(ClusterLocalReferenceSchema)` to create a new message.
  */
 export const ClusterLocalReferenceSchema: GenMessage<ClusterLocalReference> = /*@__PURE__*/
-  messageDesc(file_osac_public_v1_cluster_type, 5);
+  messageDesc(file_osac_public_v1_cluster_type, 6);
+
+/**
+ * States used to describe add-on operator installation.
+ *
+ * @generated from enum osac.public.v1.AddOnOperatorInstallState
+ */
+export enum AddOnOperatorInstallState {
+  /**
+   * @generated from enum value: ADD_ON_OPERATOR_INSTALL_STATE_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: ADD_ON_OPERATOR_INSTALL_STATE_PENDING = 1;
+   */
+  PENDING = 1,
+
+  /**
+   * @generated from enum value: ADD_ON_OPERATOR_INSTALL_STATE_INSTALLING = 2;
+   */
+  INSTALLING = 2,
+
+  /**
+   * @generated from enum value: ADD_ON_OPERATOR_INSTALL_STATE_INSTALLED = 3;
+   */
+  INSTALLED = 3,
+
+  /**
+   * @generated from enum value: ADD_ON_OPERATOR_INSTALL_STATE_FAILED = 4;
+   */
+  FAILED = 4,
+}
+
+/**
+ * Describes the enum osac.public.v1.AddOnOperatorInstallState.
+ */
+export const AddOnOperatorInstallStateSchema: GenEnum<AddOnOperatorInstallState> = /*@__PURE__*/
+  enumDesc(file_osac_public_v1_cluster_type, 0);
 
 /**
  * Represents the overall state of a cluster.
@@ -629,7 +706,7 @@ export enum ClusterState {
  * Describes the enum osac.public.v1.ClusterState.
  */
 export const ClusterStateSchema: GenEnum<ClusterState> = /*@__PURE__*/
-  enumDesc(file_osac_public_v1_cluster_type, 0);
+  enumDesc(file_osac_public_v1_cluster_type, 1);
 
 /**
  * Types of conditions used to describe the status of cluster.
@@ -685,5 +762,5 @@ export enum ClusterConditionType {
  * Describes the enum osac.public.v1.ClusterConditionType.
  */
 export const ClusterConditionTypeSchema: GenEnum<ClusterConditionType> = /*@__PURE__*/
-  enumDesc(file_osac_public_v1_cluster_type, 1);
+  enumDesc(file_osac_public_v1_cluster_type, 2);
 

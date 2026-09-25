@@ -737,9 +737,31 @@ func (s *PrivateBareMetalInstancesServer) resolveCatalogItem(ctx context.Context
 	}
 	catalogItemRefStr := refKey(catalogItemRef)
 
-	item, err := resolveAndCanonicalizeLockedReference(ctx, s.catalogItemsDao, bmi.GetMetadata(), catalogItemRef, "catalog item", grpccodes.NotFound)
-	if err != nil {
-		return nil, err
+	// Name-only references use visibility-based lookup so that catalog items
+	// published in the shared tenant are found even when the instance belongs to a
+	// different tenant. Explicit scope selectors (ID, shared, project) keep the
+	// strict scoped resolution path.
+	var item *privatev1.BareMetalInstanceCatalogItem
+	if catalogItemRef.GetId() == "" && catalogItemRef.GetName() != "" && !catalogItemRef.GetShared() && catalogItemRef.GetProject() == "" {
+		resolved, err := resolveCatalogItemByName(ctx, s.catalogItemsDao, catalogItemRef.GetName(), bmi.GetMetadata().GetTenant(), "")
+		if err != nil {
+			return nil, err
+		}
+		locked, lockErr := getLockedReferenceResource(ctx, s.catalogItemsDao, resolved.GetId())
+		if lockErr != nil {
+			return nil, resourceLookupError(lockErr, "catalog item", catalogItemRef.GetName(), "", grpccodes.NotFound)
+		}
+		catalogItemRef.SetId(locked.GetId())
+		catalogItemRef.SetName(locked.GetMetadata().GetName())
+		catalogItemRef.SetShared(locked.GetMetadata().GetTenant() == auth.SharedTenant)
+		catalogItemRef.SetProject(locked.GetMetadata().GetProject())
+		item = locked
+	} else {
+		resolved, err := resolveAndCanonicalizeLockedReference(ctx, s.catalogItemsDao, bmi.GetMetadata(), catalogItemRef, "catalog item", grpccodes.NotFound)
+		if err != nil {
+			return nil, err
+		}
+		item = resolved
 	}
 
 	if err := validateCatalogItemForCreation(item, catalogItemRefStr); err != nil {

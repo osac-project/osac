@@ -45,6 +45,8 @@ spec:
         - envoy
         - --config-path
         - /etc/envoy/envoy.yaml
+        - --concurrency
+        - {{ .Values.ingressProxy.concurrency | quote }}
         ports:
         - name: external-api
           protocol: TCP

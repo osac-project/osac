@@ -135,7 +135,7 @@ var _ = Describe("Context", func() {
 		})
 
 		It("Falls back to public packages when context is nil", func() {
-			names := PackageNamesFromContext(nil)
+			names := PackageNamesFromContext(nil) //nolint:staticcheck // intentionally testing nil context fallback
 			Expect(names).To(ConsistOf(packages.Public))
 			Expect(names).To(ContainElement(packages.PublicV1))
 			Expect(names).NotTo(ContainElement(packages.PrivateV1))

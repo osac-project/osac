@@ -446,7 +446,9 @@ func (c *ControllerServer) pollVolumeUntilAvailable(ctx context.Context, volumeI
 		case fulfillment.VolumeStateAvailable:
 			return vol, nil
 		case fulfillment.VolumeStateError:
-			klog.Errorf("Volume %s entered error state: %s", volumeID, vol.Message)
+			// Keep detailed provisioning diagnostics in the control plane; the
+			// message may contain backend-specific information.
+			klog.Errorf("Volume %s entered error state", volumeID)
 			return nil, status.Error(codes.Internal, volumeProvisioningError)
 		case fulfillment.VolumeStateCreating:
 			// continue polling

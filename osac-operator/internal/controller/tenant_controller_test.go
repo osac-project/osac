@@ -127,6 +127,8 @@ var _ = Describe("Tenant Controller", func() {
 			tenant := &v1alpha1.Tenant{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, tenant)).To(Succeed())
 			tenant.Status.Namespace = resourceName
+			tenant.SetStatusCondition(v1alpha1.TenantConditionNamespaceReady, metav1.ConditionFalse, v1alpha1.TenantReasonNotFound, "Old workload namespace missing")
+			tenant.SetStatusCondition(v1alpha1.TenantConditionStorageBackendReady, metav1.ConditionTrue, v1alpha1.TenantReasonFound, "Storage available")
 			Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
 
 			r := NewTenantReconciler(testMcManager, "default")
@@ -144,6 +146,7 @@ var _ = Describe("Tenant Controller", func() {
 			Expect(tenant.Status.Phase).To(Equal(v1alpha1.TenantPhaseReady))
 			Expect(tenant.Status.Namespace).To(BeEmpty())
 			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionNamespaceReady)).To(BeNil())
+			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady).Status).To(Equal(metav1.ConditionTrue))
 			Expect(apierrors.IsNotFound(k8sClient.Get(ctx, types.NamespacedName{Name: resourceName}, &corev1.Namespace{}))).To(BeTrue())
 		})
 	})

@@ -104,7 +104,7 @@ func newClusterOrderFeedbackBridge(hubClient clnt.Client, clustersClient private
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
 					"status.conditions", feedbackStatusStatePath, "status.api_url", "status.console_url", "status.api_endpoint",
 					"status.ingress_endpoint", feedbackStatusStateTransitionTimePath, "status.kubeconfig_secret", "status.password_secret", "status.hub",
-					"status.node_sets",
+					"status.node_sets", "status.add_on_operators",
 				}},
 			}.Build())
 			return err
@@ -130,6 +130,7 @@ func newClusterOrderSyncUpdate(hubClient clnt.Client) func(context.Context, *ckv
 			return err
 		}
 		syncClusterOrderNodeRequests(ctx, clusterOrder, remote)
+		syncClusterOrderAddOnOperators(clusterOrder, remote)
 		syncClusterOrderVIPEndpoints(clusterOrder, remote)
 		return nil
 	}
@@ -144,6 +145,31 @@ func syncClusterOrderVIPEndpoints(clusterOrder *ckv1alpha1.ClusterOrder, remote 
 	}
 	if clusterOrder.Status.IngressEndpoint != "" {
 		remote.GetStatus().SetIngressEndpoint(clusterOrder.Status.IngressEndpoint)
+	}
+}
+
+func syncClusterOrderAddOnOperators(clusterOrder *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) {
+	statuses := make([]*privatev1.AddOnOperatorStatus, 0, len(clusterOrder.Status.AddOnOperatorJobs))
+	for _, job := range clusterOrder.Status.AddOnOperatorJobs {
+		statuses = append(statuses, privatev1.AddOnOperatorStatus_builder{
+			Name:    job.Name,
+			State:   addOnOperatorInstallState(job.State),
+			Message: sanitizeFeedbackText(job.Message),
+		}.Build())
+	}
+	remote.GetStatus().SetAddOnOperators(statuses)
+}
+
+func addOnOperatorInstallState(state ckv1alpha1.JobState) privatev1.AddOnOperatorInstallState {
+	switch state {
+	case ckv1alpha1.JobStatePending, ckv1alpha1.JobStateWaiting, ckv1alpha1.JobStateRunning:
+		return privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_INSTALLING
+	case ckv1alpha1.JobStateSucceeded:
+		return privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_INSTALLED
+	case ckv1alpha1.JobStateFailed, ckv1alpha1.JobStateCanceled, ckv1alpha1.JobStateUnknown:
+		return privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_FAILED
+	default:
+		return privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_UNSPECIFIED
 	}
 }
 
@@ -196,8 +222,9 @@ var clusterOrderProvisioningStages = []string{
 //   - Deleting is reported through the DELETING state (see syncClusterOrderPhase and
 //     syncClusterOrderDelete), not as a condition.
 var clusterOrderUnsurfacedConditions = map[string]struct{}{
-	ckv1alpha1.ConditionNamespaceCreated: {},
-	ckv1alpha1.ConditionDeleting:         {},
+	ckv1alpha1.ConditionNamespaceCreated:                        {},
+	ckv1alpha1.ConditionDeleting:                                {},
+	string(ckv1alpha1.ClusterOrderConditionAddOnOperatorsReady): {},
 }
 
 func syncClusterOrderConditions(ctx context.Context, clusterOrder *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) {

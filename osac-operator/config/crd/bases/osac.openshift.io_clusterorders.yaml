@@ -207,6 +207,7 @@ spec:
                         information
                       type: string
                     name:
+                      minLength: 1
                       type: string
                     state:
                       description: State is the current state of the job

@@ -22,6 +22,7 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -75,7 +76,8 @@ var _ = Describe("Private bare metal instance types server", func() {
 			response, err := server.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceType_builder{
 					Metadata: privatev1.Metadata_builder{
-						Name: "compute-large",
+						Name:   "compute-large",
+						Tenant: auth.SharedTenant,
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceTypeSpec_builder{
 						Hardware: privatev1.BareMetalHardwareSpec_builder{
@@ -116,7 +118,8 @@ var _ = Describe("Private bare metal instance types server", func() {
 				_, err := server.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
 					Object: privatev1.BareMetalInstanceType_builder{
 						Metadata: privatev1.Metadata_builder{
-							Name: fmt.Sprintf("type-%d", i),
+							Name:   fmt.Sprintf("type-%d", i),
+							Tenant: auth.SharedTenant,
 						}.Build(),
 						Spec: privatev1.BareMetalInstanceTypeSpec_builder{
 							Hardware: privatev1.BareMetalHardwareSpec_builder{
@@ -154,7 +157,8 @@ var _ = Describe("Private bare metal instance types server", func() {
 			createResponse, err := server.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceType_builder{
 					Metadata: privatev1.Metadata_builder{
-						Name: "gpu-server",
+						Name:   "gpu-server",
+						Tenant: auth.SharedTenant,
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceTypeSpec_builder{
 						Hardware: privatev1.BareMetalHardwareSpec_builder{
@@ -204,7 +208,8 @@ var _ = Describe("Private bare metal instance types server", func() {
 			createResponse, err := server.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceType_builder{
 					Metadata: privatev1.Metadata_builder{
-						Name: "updatable-type",
+						Name:   "updatable-type",
+						Tenant: auth.SharedTenant,
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceTypeSpec_builder{
 						Hardware: privatev1.BareMetalHardwareSpec_builder{
@@ -254,7 +259,8 @@ var _ = Describe("Private bare metal instance types server", func() {
 			createResponse, err := server.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceType_builder{
 					Metadata: privatev1.Metadata_builder{
-						Name: "deletable-type",
+						Name:   "deletable-type",
+						Tenant: auth.SharedTenant,
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceTypeSpec_builder{
 						Hardware: privatev1.BareMetalHardwareSpec_builder{
@@ -298,7 +304,8 @@ var _ = Describe("Private bare metal instance types server", func() {
 			createResponse, err := server.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceType_builder{
 					Metadata: privatev1.Metadata_builder{
-						Name: "signal-type",
+						Name:   "signal-type",
+						Tenant: auth.SharedTenant,
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceTypeSpec_builder{
 						Hardware: privatev1.BareMetalHardwareSpec_builder{
@@ -334,7 +341,8 @@ var _ = Describe("Private bare metal instance types server", func() {
 				createResponse, err := server.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
 					Object: privatev1.BareMetalInstanceType_builder{
 						Metadata: privatev1.Metadata_builder{
-							Name: "immutable-cores",
+							Name:   "immutable-cores",
+							Tenant: auth.SharedTenant,
 						}.Build(),
 						Spec: privatev1.BareMetalInstanceTypeSpec_builder{
 							Hardware: privatev1.BareMetalHardwareSpec_builder{
@@ -381,7 +389,8 @@ var _ = Describe("Private bare metal instance types server", func() {
 				createResponse, err := server.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
 					Object: privatev1.BareMetalInstanceType_builder{
 						Metadata: privatev1.Metadata_builder{
-							Name: "immutable-arch",
+							Name:   "immutable-arch",
+							Tenant: auth.SharedTenant,
 						}.Build(),
 						Spec: privatev1.BareMetalInstanceTypeSpec_builder{
 							Hardware: privatev1.BareMetalHardwareSpec_builder{
@@ -428,7 +437,8 @@ var _ = Describe("Private bare metal instance types server", func() {
 				createResponse, err := server.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
 					Object: privatev1.BareMetalInstanceType_builder{
 						Metadata: privatev1.Metadata_builder{
-							Name: "immutable-memory",
+							Name:   "immutable-memory",
+							Tenant: auth.SharedTenant,
 						}.Build(),
 						Spec: privatev1.BareMetalInstanceTypeSpec_builder{
 							Hardware: privatev1.BareMetalHardwareSpec_builder{
@@ -475,7 +485,8 @@ var _ = Describe("Private bare metal instance types server", func() {
 				createResponse, err := server.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
 					Object: privatev1.BareMetalInstanceType_builder{
 						Metadata: privatev1.Metadata_builder{
-							Name: "original-name",
+							Name:   "original-name",
+							Tenant: auth.SharedTenant,
 						}.Build(),
 						Spec: privatev1.BareMetalInstanceTypeSpec_builder{
 							Hardware: privatev1.BareMetalHardwareSpec_builder{
@@ -513,6 +524,148 @@ var _ = Describe("Private bare metal instance types server", func() {
 				Expect(status.Message()).To(ContainSubstring("name"))
 				Expect(status.Message()).To(ContainSubstring("immutable"))
 			})
+		})
+
+		It("Rejects creation in a non-shared tenant", func() {
+			_, err := server.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
+				Object: privatev1.BareMetalInstanceType_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:   "tenant-scoped-type",
+						Tenant: testTenant,
+					}.Build(),
+					Spec: privatev1.BareMetalInstanceTypeSpec_builder{
+						Hardware: privatev1.BareMetalHardwareSpec_builder{
+							Cpu: privatev1.BareMetalCPUSpec_builder{
+								Cores:          8,
+								Architecture:   "x86_64",
+								ThreadsPerCore: 2,
+							}.Build(),
+							Memory: privatev1.BareMetalMemorySpec_builder{
+								TotalGb: 32,
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(ContainSubstring("metadata.tenant"))
+			Expect(status.Message()).To(ContainSubstring(auth.SharedTenant))
+		})
+
+		It("Rejects update that changes tenant", func() {
+			createResponse, err := server.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
+				Object: privatev1.BareMetalInstanceType_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:   "immutable-tenant-type",
+						Tenant: auth.SharedTenant,
+					}.Build(),
+					Spec: privatev1.BareMetalInstanceTypeSpec_builder{
+						Hardware: privatev1.BareMetalHardwareSpec_builder{
+							Cpu: privatev1.BareMetalCPUSpec_builder{
+								Cores:          8,
+								Architecture:   "x86_64",
+								ThreadsPerCore: 2,
+							}.Build(),
+							Memory: privatev1.BareMetalMemorySpec_builder{
+								TotalGb: 32,
+							}.Build(),
+						}.Build(),
+						HostLabelSelector: privatev1.BareMetalLabelSelector_builder{
+							MatchLabels: map[string]string{"profile": "test"},
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = server.Update(ctx, privatev1.BareMetalInstanceTypesUpdateRequest_builder{
+				Object: privatev1.BareMetalInstanceType_builder{
+					Id: createResponse.GetObject().GetId(),
+					Metadata: privatev1.Metadata_builder{
+						Tenant: testTenant,
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(ContainSubstring("metadata.tenant"))
+			Expect(status.Message()).To(ContainSubstring("immutable"))
+		})
+
+		It("Rejects creation with a project set", func() {
+			_, err := server.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
+				Object: privatev1.BareMetalInstanceType_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:    "project-scoped-type",
+						Tenant:  auth.SharedTenant,
+						Project: "some-project",
+					}.Build(),
+					Spec: privatev1.BareMetalInstanceTypeSpec_builder{
+						Hardware: privatev1.BareMetalHardwareSpec_builder{
+							Cpu: privatev1.BareMetalCPUSpec_builder{
+								Cores:          8,
+								Architecture:   "x86_64",
+								ThreadsPerCore: 2,
+							}.Build(),
+							Memory: privatev1.BareMetalMemorySpec_builder{
+								TotalGb: 32,
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(ContainSubstring("metadata.project"))
+		})
+
+		It("Rejects update that changes project", func() {
+			createResponse, err := server.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
+				Object: privatev1.BareMetalInstanceType_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:   "immutable-project-type",
+						Tenant: auth.SharedTenant,
+					}.Build(),
+					Spec: privatev1.BareMetalInstanceTypeSpec_builder{
+						Hardware: privatev1.BareMetalHardwareSpec_builder{
+							Cpu: privatev1.BareMetalCPUSpec_builder{
+								Cores:          8,
+								Architecture:   "x86_64",
+								ThreadsPerCore: 2,
+							}.Build(),
+							Memory: privatev1.BareMetalMemorySpec_builder{
+								TotalGb: 32,
+							}.Build(),
+						}.Build(),
+						HostLabelSelector: privatev1.BareMetalLabelSelector_builder{
+							MatchLabels: map[string]string{"profile": "test"},
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = server.Update(ctx, privatev1.BareMetalInstanceTypesUpdateRequest_builder{
+				Object: privatev1.BareMetalInstanceType_builder{
+					Id: createResponse.GetObject().GetId(),
+					Metadata: privatev1.Metadata_builder{
+						Project: "some-project",
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(ContainSubstring("metadata.project"))
+			Expect(status.Message()).To(ContainSubstring("immutable"))
 		})
 	})
 })

@@ -265,8 +265,8 @@ func registerReferenceLookups(
 	if err != nil {
 		return fmt.Errorf("failed to create BareMetalInstanceType DAO for reference lookups: %w", err)
 	}
-	references.RegisterDAOLookup(validator, "osac.private.v1.BareMetalInstanceTypeLocalReference", bareMetalInstanceTypesDAO)
-	references.RegisterDAOLookup(validator, "osac.public.v1.BareMetalInstanceTypeLocalReference", bareMetalInstanceTypesDAO)
+	references.RegisterDAOLookup(validator, "osac.private.v1.BareMetalInstanceTypeReference", bareMetalInstanceTypesDAO)
+	references.RegisterDAOLookup(validator, "osac.public.v1.BareMetalInstanceTypeReference", bareMetalInstanceTypesDAO)
 
 	// IAM references
 	rolesDAO, err := dao.NewGenericDAO[*privatev1.Role]().

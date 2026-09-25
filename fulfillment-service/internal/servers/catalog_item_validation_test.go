@@ -162,7 +162,7 @@ var _ = Describe("Catalog Item typed field policies", func() {
 		Expect(localSecret.GetId()).To(Equal("secret-id"))
 		Expect(localSecret.GetName()).To(Equal("secret-name"))
 
-		localBareMetal := canonicalBareMetalInstanceTypeLocalReference(privatev1.BareMetalInstanceType_builder{Id: "bmi-type-id", Metadata: privatev1.Metadata_builder{Name: "bmi-type-name"}.Build()}.Build())
+		localBareMetal := canonicalBareMetalInstanceTypeReference(privatev1.BareMetalInstanceType_builder{Id: "bmi-type-id", Metadata: privatev1.Metadata_builder{Name: "bmi-type-name"}.Build()}.Build())
 		Expect(localBareMetal.GetId()).To(Equal("bmi-type-id"))
 		Expect(localBareMetal.GetName()).To(Equal("bmi-type-name"))
 

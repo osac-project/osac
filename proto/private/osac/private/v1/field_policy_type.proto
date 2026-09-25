@@ -150,18 +150,18 @@ message EditableSecretReferenceField {
 }
 
 // Defines whether a bare metal instance type reference is locked or editable.
-message BareMetalInstanceTypeLocalReferenceFieldPolicy {
+message BareMetalInstanceTypeReferenceFieldPolicy {
   oneof behavior {
     option (buf.validate.oneof).required = true;
 
-    BareMetalInstanceTypeLocalReference locked = 1;
-    EditableBareMetalInstanceTypeLocalReferenceField editable = 2;
+    BareMetalInstanceTypeReference locked = 1;
+    EditableBareMetalInstanceTypeReferenceField editable = 2;
   }
 }
 
 // Configures an editable bare metal instance type reference.
-message EditableBareMetalInstanceTypeLocalReferenceField {
-  BareMetalInstanceTypeLocalReference default_value = 1;
+message EditableBareMetalInstanceTypeReferenceField {
+  BareMetalInstanceTypeReference default_value = 1;
 }
 
 // Defines whether a cluster network attachment is locked or editable.

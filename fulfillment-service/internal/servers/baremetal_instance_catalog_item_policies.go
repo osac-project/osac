@@ -20,6 +20,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -49,7 +50,7 @@ func validateAndCanonicalizeBareMetalInstanceCatalogItemPolicies(
 	}
 
 	scope := catalogItemScope(item)
-	if err := validateBareMetalInstanceCatalogItemInstanceTypePolicy(ctx, scope, fields.GetInstanceType(), bareMetalInstanceTypesDao); err != nil {
+	if err := validateBareMetalInstanceCatalogItemInstanceTypePolicy(ctx, fields.GetInstanceType(), bareMetalInstanceTypesDao); err != nil {
 		return nil, err
 	}
 
@@ -91,7 +92,7 @@ func applyBareMetalInstanceCatalogItemPolicies(
 	if err := applyPolicy(fields.GetAutoExternalIpAttachment(), spec.HasAutoExternalIpAttachment(), spec.SetAutoExternalIpAttachment, decodeBoolPolicy, identity[bool]); err != nil {
 		return fmt.Errorf("auto_external_ip_attachment: %w", err)
 	}
-	if err := applyPolicy(fields.GetInstanceType(), spec.GetInstanceType() != nil, spec.SetInstanceType, decodeBareMetalInstanceTypeReferencePolicy, cloneMessage[*privatev1.BareMetalInstanceTypeLocalReference]); err != nil {
+	if err := applyPolicy(fields.GetInstanceType(), spec.GetInstanceType() != nil, spec.SetInstanceType, decodeBareMetalInstanceTypeReferencePolicy, cloneMessage[*privatev1.BareMetalInstanceTypeReference]); err != nil {
 		return fmt.Errorf("instance_type: %w", err)
 	}
 	if err := applyPolicy(fields.GetDiskImage(), spec.GetDiskImage() != nil, spec.SetDiskImage, decodeDiskImageReferencePolicy, cloneMessage[*privatev1.DiskImageReference]); err != nil {
@@ -125,12 +126,12 @@ func validateBareMetalInstanceCatalogItemScalarPolicies(fields *privatev1.BareMe
 }
 
 // validateBareMetalInstanceCatalogItemInstanceTypePolicy checks a locked instance type or
-// editable default in the Catalog Item's exact tenant/project and stores its ID/name. A shared
-// offering cannot fix a tenant-local type.
+// editable default in the Catalog Item's fields and stores its ID/name.
+// BareMetalInstanceType is always platform-scoped (shared tenant), so it is resolved against
+// the shared scope regardless of the Catalog Item's own tenant.
 func validateBareMetalInstanceCatalogItemInstanceTypePolicy(
 	ctx context.Context,
-	scope referenceScope,
-	policy *privatev1.BareMetalInstanceTypeLocalReferenceFieldPolicy,
+	policy *privatev1.BareMetalInstanceTypeReferenceFieldPolicy,
 	resourceDao *dao.GenericDAO[*privatev1.BareMetalInstanceType],
 ) error {
 	if policy == nil {
@@ -140,14 +141,15 @@ func validateBareMetalInstanceCatalogItemInstanceTypePolicy(
 	if err != nil {
 		return catalogItemPolicyError("fields.instance_type", err.Error())
 	}
-	if err := validateSharedCatalogItemLocalReferencePolicy(scope, "fields.instance_type", state.hasLocked, state.hasDefault); err != nil {
-		return err
-	}
-	resolve := func(ref *privatev1.BareMetalInstanceTypeLocalReference) (*privatev1.BareMetalInstanceTypeLocalReference, error) {
+	platformScope := referenceScope{tenant: auth.SharedTenant}
+	resolve := func(ref *privatev1.BareMetalInstanceTypeReference) (*privatev1.BareMetalInstanceTypeReference, error) {
 		if ref == nil {
 			return nil, nil
 		}
-		resolved, resolveErr := resolveLockedResourceInScope(ctx, resourceDao, scope, ref.GetId(), ref.GetName(),
+		if err := validatePlatformReference(ref, "bare metal instance type", " in fields.instance_type"); err != nil {
+			return nil, err
+		}
+		resolved, resolveErr := resolveLockedResourceInScope(ctx, resourceDao, platformScope, ref.GetId(), ref.GetName(),
 			"bare metal instance type", " in fields.instance_type", grpccodes.NotFound)
 		if resolveErr != nil {
 			return nil, resolveErr
@@ -155,7 +157,7 @@ func validateBareMetalInstanceCatalogItemInstanceTypePolicy(
 		if err := validateResourceNotDeleted("bare metal instance type", refKey(ref), " in fields.instance_type", resolved.GetMetadata()); err != nil {
 			return nil, err
 		}
-		return canonicalBareMetalInstanceTypeLocalReference(resolved), nil
+		return canonicalBareMetalInstanceTypeReference(resolved), nil
 	}
 	if state.hasLocked {
 		canonical, resolveErr := resolve(state.lockedValue)
@@ -266,29 +268,29 @@ func decodeBareMetalInstanceRunStrategyPolicy(
 // An absent policy yields no governed value; malformed behavior returns an error.
 // Returned message/list values may alias the policy and must be copied before resource assignment.
 func decodeBareMetalInstanceTypeReferencePolicy(
-	policy *privatev1.BareMetalInstanceTypeLocalReferenceFieldPolicy,
-) (policyState[*privatev1.BareMetalInstanceTypeLocalReference], error) {
+	policy *privatev1.BareMetalInstanceTypeReferenceFieldPolicy,
+) (policyState[*privatev1.BareMetalInstanceTypeReference], error) {
 	if policy == nil {
-		return policyState[*privatev1.BareMetalInstanceTypeLocalReference]{}, nil
+		return policyState[*privatev1.BareMetalInstanceTypeReference]{}, nil
 	}
 	if policy.HasLocked() {
 		locked := policy.GetLocked()
 		if locked == nil {
-			return policyState[*privatev1.BareMetalInstanceTypeLocalReference]{}, fmt.Errorf("locked bare metal instance type policy is empty")
+			return policyState[*privatev1.BareMetalInstanceTypeReference]{}, fmt.Errorf("locked bare metal instance type policy is empty")
 		}
-		return policyState[*privatev1.BareMetalInstanceTypeLocalReference]{hasLocked: true, lockedValue: locked}, nil
+		return policyState[*privatev1.BareMetalInstanceTypeReference]{hasLocked: true, lockedValue: locked}, nil
 	}
 	if policy.HasEditable() {
 		editable := policy.GetEditable()
 		if editable == nil {
-			return policyState[*privatev1.BareMetalInstanceTypeLocalReference]{}, fmt.Errorf("editable bare metal instance type policy is empty")
+			return policyState[*privatev1.BareMetalInstanceTypeReference]{}, fmt.Errorf("editable bare metal instance type policy is empty")
 		}
-		return policyState[*privatev1.BareMetalInstanceTypeLocalReference]{
+		return policyState[*privatev1.BareMetalInstanceTypeReference]{
 			hasDefault:   editable.GetDefaultValue() != nil,
 			defaultValue: editable.GetDefaultValue(),
 		}, nil
 	}
-	return policyState[*privatev1.BareMetalInstanceTypeLocalReference]{}, fmt.Errorf("bare metal instance type policy has no behavior")
+	return policyState[*privatev1.BareMetalInstanceTypeReference]{}, fmt.Errorf("bare metal instance type policy has no behavior")
 }
 
 // decodeBareMetalInstanceNetworkAttachmentListPolicy decodes the selected locked/default policy value without mutating the policy.

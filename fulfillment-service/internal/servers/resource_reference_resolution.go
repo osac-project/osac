@@ -369,6 +369,21 @@ func validateDependencyOwnerScope(owner referenceScope, target *privatev1.Metada
 	return nil
 }
 
+// validatePlatformReference rejects a reference to a platform-scoped resource that does not
+// target the shared tenant. Platform-scoped resources (for example bare metal instance types)
+// always live in the shared tenant, so callers must set shared=true and must not set a project;
+// the reference then resolves against the shared scope through the generic resolver.
+// kind names the referenced type in errors; source adds the referencing field, or is empty.
+func validatePlatformReference(reference fullResourceReference, kind, source string) error {
+	if !reference.GetShared() {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "%s reference%s must set shared=true", kind, source)
+	}
+	if reference.GetProject() != "" {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "%s reference%s must not set project", kind, source)
+	}
+	return nil
+}
+
 // getReferenceResource reads a stored object by ID using caller visibility and the
 // request transaction. It does not check ownership, deletion, or readiness.
 func getReferenceResource[O dao.Object](ctx context.Context, resourceDao *dao.GenericDAO[O], id string) (O, error) {
@@ -495,10 +510,15 @@ func canonicalSecretLocalReference(resolved *privatev1.Secret) *privatev1.Secret
 	return privatev1.SecretLocalReference_builder{Id: resolved.GetId(), Name: resolved.GetMetadata().GetName()}.Build()
 }
 
-// canonicalBareMetalInstanceTypeLocalReference copies the resolved object's ID and name
-// into a new local reference.
-func canonicalBareMetalInstanceTypeLocalReference(resolved *privatev1.BareMetalInstanceType) *privatev1.BareMetalInstanceTypeLocalReference {
-	return privatev1.BareMetalInstanceTypeLocalReference_builder{Id: resolved.GetId(), Name: resolved.GetMetadata().GetName()}.Build()
+// canonicalBareMetalInstanceTypeReference copies the resolved object's ID, name, project,
+// and shared-tenant selector into a new reference.
+func canonicalBareMetalInstanceTypeReference(resolved *privatev1.BareMetalInstanceType) *privatev1.BareMetalInstanceTypeReference {
+	return privatev1.BareMetalInstanceTypeReference_builder{
+		Id:      resolved.GetId(),
+		Name:    resolved.GetMetadata().GetName(),
+		Project: resolved.GetMetadata().GetProject(),
+		Shared:  resolved.GetMetadata().GetTenant() == auth.SharedTenant,
+	}.Build()
 }
 
 // canonicalSubnetLocalReference copies the resolved object's ID and name into a new local reference.

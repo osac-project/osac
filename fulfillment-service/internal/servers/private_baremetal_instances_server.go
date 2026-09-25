@@ -355,7 +355,10 @@ func (s *PrivateBareMetalInstancesServer) prepareCreate(ctx context.Context, can
 		return
 	}
 	if ref := candidate.GetSpec().GetInstanceType(); ref != nil {
-		if _, err = resolveAndCanonicalizeReference(ctx, s.instanceTypesDao, candidate.GetMetadata(), ref, "bare metal instance type", grpccodes.InvalidArgument); err != nil {
+		if err = validatePlatformReference(ref, "bare metal instance type", " in spec.instance_type"); err != nil {
+			return
+		}
+		if _, err = resolveAndCanonicalizeReference(ctx, s.instanceTypesDao, candidate.GetMetadata(), ref, "bare metal instance type", grpccodes.NotFound); err != nil {
 			return
 		}
 	}

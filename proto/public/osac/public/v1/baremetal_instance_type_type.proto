@@ -126,10 +126,15 @@ message BareMetalAcceleratorSpec {
   optional int32 memory_gb = 4 [(buf.validate.field).int32.gt = 0];
 }
 
-// Local reference to a BareMetalInstanceType resource.
-message BareMetalInstanceTypeLocalReference {
+// Reference to a BareMetalInstanceType resource.
+//
+// BareMetalInstanceType is platform-scoped and always lives in the shared tenant, so callers
+// must set shared = true and must not set project; the server rejects any other combination.
+message BareMetalInstanceTypeReference {
   string id = 1;
   string name = 2;
+  string project = 3;
+  bool shared = 4;
 }
 
 // Describes a network port in a bare metal instance type.

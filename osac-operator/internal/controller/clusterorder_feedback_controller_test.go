@@ -1050,7 +1050,7 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 					Spec: &privatev1.ClusterSpec{
 						NodeSets: map[string]*privatev1.ClusterNodeSet{
 							"workers": {
-								HostType: privatev1.HostTypeReference_builder{Name: "m5.xlarge"}.Build(),
+								BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Name: "m5.xlarge"}.Build(),
 							},
 						},
 					},
@@ -1058,6 +1058,16 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 				},
 			}
 			mockClient.updateResponse = &privatev1.ClustersUpdateResponse{}
+		})
+
+		AfterEach(func() {
+			clusterOrder := &osacv1alpha1.ClusterOrder{}
+			err := k8sClient.Get(testCtx, typeNamespacedName, clusterOrder)
+			if err == nil {
+				clusterOrder.Finalizers = nil
+				_ = k8sClient.Update(testCtx, clusterOrder)
+				_ = k8sClient.Delete(testCtx, clusterOrder)
+			}
 		})
 
 		It("should propagate node set sizes to fulfillment", func() {
@@ -1075,6 +1085,30 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 				}
 			}
 			Expect(hasNodeSetsPath).To(BeTrue())
+		})
+
+		It("should match node sets by HostType when BMIT is absent", func() {
+			mockClient.getResponse = &privatev1.ClustersGetResponse{
+				Object: &privatev1.Cluster{
+					Id: clusterID,
+					Spec: &privatev1.ClusterSpec{
+						NodeSets: map[string]*privatev1.ClusterNodeSet{
+							"workers": {
+								HostType: privatev1.HostTypeReference_builder{Name: "m5.xlarge"}.Build(),
+							},
+						},
+					},
+					Status: &privatev1.ClusterStatus{},
+				},
+			}
+			mockClient.updateResponse = &privatev1.ClustersUpdateResponse{}
+
+			request := reconcile.Request{NamespacedName: typeNamespacedName}
+			result, err := reconciler.Reconcile(testCtx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.IsZero()).To(BeTrue())
+			Expect(mockClient.updateCalled).To(BeTrue())
+			Expect(mockClient.lastUpdate.GetStatus().GetNodeSets()["workers"].GetSize()).To(Equal(int32(3)))
 		})
 	})
 })

@@ -956,7 +956,7 @@ var _ = Describe("Reconciler", func() {
 					Template: &privatev1.ClusterTemplateReference{Name: "ocp-ci-small"},
 					Version:  &privatev1.ClusterVersionReference{Id: "4.17.0", Name: "4.17.0"},
 					NodeSets: map[string]*privatev1.ClusterNodeSet{
-						"gpu-workers": {HostType: &privatev1.HostTypeReference{Name: "gpu-h100"}, Size: proto.Int32(2)},
+						"gpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeLocalReference{Name: "gpu-h100"}, Size: proto.Int32(2)},
 					},
 				},
 				Status: &privatev1.ClusterStatus{State: state},

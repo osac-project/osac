@@ -29,12 +29,12 @@ import (
 
 var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 	Context("Provisioning and field governance", func() {
-		It("resolves typed fields and atomic node maps without changing Template HostType authority", func(ctx context.Context) {
+		It("resolves typed fields and atomic node maps with locked governance policies", func(ctx context.Context) {
 			By("authoring a tenant offering with network and node-set policies")
 			network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 			secret := createCatalogItemPullSecretFixture(ctx, usersGroup)
 			host := createCatalogItemHostTypeFixture(ctx)
-			extraHost := createCatalogItemHostTypeFixture(ctx)
+			extraBmit := createCatalogItemBareMetalInstanceTypeFixture(ctx, "shared")
 			version := createCatalogItemClusterVersionFixture(ctx, "4.20.0")
 			overrideVersion := createCatalogItemClusterVersionFixture(ctx, "4.21.0")
 			template := createCatalogItemClusterTemplateFixture(ctx, host, privatev1.ClusterTemplateSpecDefaults_builder{
@@ -81,7 +81,6 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 				TemplateParameters: catalogItemParameterPolicies(),
 			}.Build())
 			Expect(item.GetFields().GetNetwork().GetPodCidr().GetLocked()).To(Equal("10.132.0.0/14"))
-			Expect(item.GetFields().GetNodeSets().GetEditable().GetDefaultValue().GetItems()["workers"].GetHostType().GetId()).To(Equal(host))
 
 			By("creating a cluster with caller-selected version and node set")
 			request := publicv1.ClusterSpec_builder{
@@ -90,8 +89,8 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 				Network:     publicv1.ClusterNetwork_builder{ServiceCidr: new("172.32.0.0/16")}.Build(),
 				NodeSets: map[string]*publicv1.ClusterNodeSet{
 					"extra": publicv1.ClusterNodeSet_builder{
-						HostType: publicv1.HostTypeReference_builder{Id: extraHost}.Build(),
-						Size:     new(int32(3)),
+						BaremetalInstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: extraBmit}.Build(),
+						Size:                  new(int32(3)),
 					}.Build(),
 				},
 				TemplateParameters: map[string]*anypb.Any{"size": catalogItemParameterValue(wrapperspb.Int32(0))},
@@ -113,7 +112,6 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			Expect(spec.GetNetworkAttachment().GetSubnet().GetId()).To(Equal(network.subnetID))
 			Expect(spec.GetNetworkAttachment().GetSecurityGroups()[0].GetId()).To(Equal(network.securityGroupID))
 			Expect(spec.GetNodeSets()).To(HaveLen(1))
-			Expect(spec.GetNodeSets()["extra"].GetHostType().GetId()).To(Equal(extraHost))
 			Expect(spec.GetNodeSets()).NotTo(HaveKey("workers"))
 			Expect(spec.HasAutoExternalIpAttachment()).To(BeTrue())
 			Expect(spec.GetAutoExternalIpAttachment()).To(BeFalse())
@@ -121,7 +119,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			Expect(proto.Equal(spec.GetTemplateParameters()["enabled"], catalogItemParameterValue(wrapperspb.Bool(false)))).To(BeTrue())
 			Expect(proto.Equal(spec.GetTemplateParameters()["size"], catalogItemParameterValue(wrapperspb.Int32(0)))).To(BeTrue())
 			Expect(proto.Equal(spec.GetTemplateParameters()["ordinary"], catalogItemParameterValue(wrapperspb.String("template")))).To(BeTrue())
-			By("materializing the omitted map default with inherited HostType")
+			By("materializing the omitted map default")
 			defaulted, e := createClusterFixture(ctx, tool.ExternalView().UserConn(), publicv1.ClusterSpec_builder{
 				CatalogItem: publicv1.ClusterCatalogItemReference_builder{Id: item.GetId()}.Build(),
 				NodeSets:    map[string]*publicv1.ClusterNodeSet{},
@@ -133,9 +131,8 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			Expect(defaulted.GetSpec().GetVersion().GetId()).To(Equal(version))
 			Expect(proto.Equal(defaulted.GetSpec().GetTemplateParameters()["size"], catalogItemParameterValue(wrapperspb.Int32(20)))).To(BeTrue())
 			Expect(defaulted.GetSpec().GetNodeSets()["workers"].GetSize()).To(Equal(int32(4)))
-			Expect(defaulted.GetSpec().GetNodeSets()["workers"].GetHostType().GetId()).To(Equal(host))
 
-			By("rejecting caller inputs that conflict with locked policies or Template HostTypes")
+			By("rejecting caller inputs that conflict with locked policies")
 			type invalidInput struct {
 				name string
 				set  func(*publicv1.ClusterSpec)
@@ -163,25 +160,6 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 					name: "explicit false",
 					set: func(s *publicv1.ClusterSpec) {
 						s.SetAutoExternalIpAttachment(false)
-					},
-				},
-				{
-					name: "Template HostType conflict",
-					set: func(s *publicv1.ClusterSpec) {
-						s.SetNodeSets(map[string]*publicv1.ClusterNodeSet{
-							"workers": publicv1.ClusterNodeSet_builder{
-								HostType: publicv1.HostTypeReference_builder{Id: extraHost}.Build(),
-								Size:     new(int32(3)),
-							}.Build(),
-						})
-					},
-				},
-				{
-					name: "new key missing HostType",
-					set: func(s *publicv1.ClusterSpec) {
-						s.SetNodeSets(map[string]*publicv1.ClusterNodeSet{
-							"extra": publicv1.ClusterNodeSet_builder{Size: new(int32(3))}.Build(),
-						})
 					},
 				},
 				{
@@ -641,18 +619,6 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 					Locked: publicv1.ClusterNodeSetMap_builder{
 						Items: map[string]*publicv1.ClusterTemplateNodeSet{
 							"workers": publicv1.ClusterTemplateNodeSet_builder{Size: 0}.Build(),
-						},
-					}.Build(),
-				}.Build()
-			}),
-			Entry("HostType conflict with Template", func(ctx context.Context) *publicv1.ClusterNodeSetMapPolicy {
-				return publicv1.ClusterNodeSetMapPolicy_builder{
-					Locked: publicv1.ClusterNodeSetMap_builder{
-						Items: map[string]*publicv1.ClusterTemplateNodeSet{
-							"workers": publicv1.ClusterTemplateNodeSet_builder{
-								Size:     3,
-								HostType: publicv1.HostTypeReference_builder{Id: createCatalogItemHostTypeFixture(ctx)}.Build(),
-							}.Build(),
 						},
 					}.Build(),
 				}.Build()

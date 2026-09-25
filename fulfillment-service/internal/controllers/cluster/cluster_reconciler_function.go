@@ -509,8 +509,19 @@ func (t *task) prepareNodeRequests() []osacv1alpha1.NodeRequest {
 }
 
 func (t *task) prepareNodeRequest(nodeSet *privatev1.ClusterNodeSet) osacv1alpha1.NodeRequest {
+	// Prefer BareMetalInstanceType; fall back to the deprecated HostType so that
+	// clusters that pre-date BMIT still get a valid ResourceClass.
+	rc := ""
+	if bmit := nodeSet.GetBaremetalInstanceType(); bmit != nil {
+		rc = controllers.RefKeyStr(bmit)
+	}
+	if rc == "" {
+		if ht := nodeSet.GetHostType(); ht != nil {
+			rc = controllers.RefKeyStr(ht)
+		}
+	}
 	return osacv1alpha1.NodeRequest{
-		ResourceClass: controllers.RefKeyStr(nodeSet.GetHostType()),
+		ResourceClass: rc,
 		NumberOfNodes: int(nodeSet.GetSize()),
 	}
 }

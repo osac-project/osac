@@ -203,6 +203,22 @@ message ClusterSpec {
   ];
 }
 
+// The per-operator status contains the installation state of one add-on operator.
+message AddOnOperatorStatus {
+  string name = 1;
+  AddOnOperatorInstallState state = 2;
+  string message = 3;  // Empty on success; bounded error summary on failure.
+}
+
+// States used to describe add-on operator installation.
+enum AddOnOperatorInstallState {
+  ADD_ON_OPERATOR_INSTALL_STATE_UNSPECIFIED = 0;
+  ADD_ON_OPERATOR_INSTALL_STATE_PENDING = 1;
+  ADD_ON_OPERATOR_INSTALL_STATE_INSTALLING = 2;
+  ADD_ON_OPERATOR_INSTALL_STATE_INSTALLED = 3;
+  ADD_ON_OPERATOR_INSTALL_STATE_FAILED = 4;
+}
+
 // The status contains the details of the cluster provided by the system.
 message ClusterStatus {
   // Indicates the overall state of the cluster.
@@ -296,6 +312,10 @@ message ClusterStatus {
   //
   // System-populated after cluster provisioning.
   SecretLocalReference password_secret = 10;
+
+  // Per-operator installation state, synced from the ClusterOrder's
+  // AddOnOperatorJobs via the feedback controller.
+  repeated AddOnOperatorStatus add_on_operators = 12;
 }
 
 // Represents the overall state of a cluster.

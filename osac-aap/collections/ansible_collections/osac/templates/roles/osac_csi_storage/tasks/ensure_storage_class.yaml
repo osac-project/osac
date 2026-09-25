@@ -136,5 +136,3 @@
     - name: Set StorageClass names output
       ansible.builtin.set_fact:
         storage_provider_storage_class_names: "{{ _osac_csi_expected_sc_entries }}"
-
-

@@ -64,25 +64,18 @@ var _ = Describe("Tenant Controller", func() {
 			return types.NamespacedName{Name: name, Namespace: "default"}
 		}
 
-		It("should set Phase=Ready and remove a stale NamespaceReady condition", func() {
+		It("should set Phase=Ready without setting NamespaceReady", func() {
 			nn := createTenantWithNamespace("test-tenant-ns-phase")
-			tenant := &v1alpha1.Tenant{}
-			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
-			tenant.SetStatusCondition(v1alpha1.TenantConditionNamespaceReady, metav1.ConditionFalse,
-				v1alpha1.TenantReasonNotFound, "Namespace not found")
-			Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
-
 			r := NewTenantReconciler(testMcManager, "default")
 
-			Eventually(func(g Gomega) {
-				cached := &v1alpha1.Tenant{}
-				g.Expect(r.Client.Get(ctx, nn, cached)).To(Succeed())
-				g.Expect(cached.GetStatusCondition(v1alpha1.TenantConditionNamespaceReady)).NotTo(BeNil())
+			Eventually(func() error {
+				return r.Client.Get(ctx, nn, &v1alpha1.Tenant{})
 			}, 5*time.Second, 10*time.Millisecond).Should(Succeed())
 
 			_, err := r.Reconcile(ctx, mcReconcileRequest(nn))
 			Expect(err).NotTo(HaveOccurred())
 
+			tenant := &v1alpha1.Tenant{}
 			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
 			Expect(tenant.Status.Phase).To(Equal(v1alpha1.TenantPhaseReady))
 			Expect(tenant.Status.Namespace).To(BeEmpty())

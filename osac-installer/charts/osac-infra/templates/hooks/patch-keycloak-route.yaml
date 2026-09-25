@@ -50,7 +50,7 @@ rules:
   verbs: [get, patch]
 - apiGroups: [route.openshift.io]
   resources: [routes/custom-host]
-  verbs: [create, update]
+  verbs: [create, update, patch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

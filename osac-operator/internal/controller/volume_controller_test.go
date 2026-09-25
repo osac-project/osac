@@ -93,7 +93,7 @@ var _ = Describe("VolumeReconciler", func() {
 		},
 		Entry("no vendor provisioners", VendorProvisionerRegistry{}, false),
 		Entry("a network provider only", VendorProvisionerRegistry{"vast-primary": NewMockVendorProvisioner()}, false),
-		Entry("LVMS registered", VendorProvisionerRegistry{lvmsProvider: NewLvmsVendorProvisioner(nil)}, true),
+		Entry("LVMS registered", VendorProvisionerRegistry{lvmsProvider: NewLvmsVendorProvisioner(nil, nil)}, true),
 		Entry("LVMS entry without an implementation", VendorProvisionerRegistry{lvmsProvider: nil}, false),
 	)
 

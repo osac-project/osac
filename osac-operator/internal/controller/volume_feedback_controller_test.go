@@ -294,7 +294,9 @@ var _ = Describe("VolumeFeedbackController", func() {
 
 	Context("deletion handling", func() {
 		It("should sync Phase=Deleting to state=DELETING during deletion", func() {
-			mockServer.addVolume(newRemoteVolume(volID, privatev1.VolumeState_VOLUME_STATE_AVAILABLE))
+			remote := newRemoteVolume(volID, privatev1.VolumeState_VOLUME_STATE_AVAILABLE)
+			remote.GetStatus().SetMessage("stale provisioning error")
+			mockServer.addVolume(remote)
 
 			cr := newVolumeFeedbackCR(volName, volNamespace, volID, v1alpha1.VolumePhaseDeleting,
 				[]string{osacVolumeFeedbackFinalizer, osacVolumeFinalizer})
@@ -308,6 +310,7 @@ var _ = Describe("VolumeFeedbackController", func() {
 
 			Expect(mockServer.updates).To(HaveLen(1))
 			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.VolumeState_VOLUME_STATE_DELETING))
+			Expect(mockServer.updates[0].GetStatus().GetMessage()).To(BeEmpty())
 
 			// Signal should NOT be called when other finalizers remain
 			Expect(mockServer.signals).To(BeEmpty())
@@ -333,6 +336,7 @@ var _ = Describe("VolumeFeedbackController", func() {
 
 			Expect(mockServer.updates).To(HaveLen(1))
 			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.VolumeState_VOLUME_STATE_FAILED))
+			Expect(mockServer.updates[0].GetStatus().GetMessage()).To(Equal("volume provisioning failed"))
 		})
 
 		It("should remove finalizer and signal when feedback finalizer is the last one", func() {

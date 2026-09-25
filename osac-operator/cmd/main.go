@@ -693,8 +693,9 @@ func newVendorProvisionerRegistry(
 	}
 	if _, ok := endpoints["lvms"]; ok {
 		// LVMS is in-cluster and uses Kubernetes resources directly; the
-		// configured endpoint value is only an enablement marker.
-		registry["lvms"] = controller.NewLvmsVendorProvisioner(writer)
+		// configured endpoint value is only an enablement marker. Reads use the
+		// uncached API reader to avoid a second cache racing the metadata-only watch.
+		registry["lvms"] = controller.NewLvmsVendorProvisioner(writer, reader)
 	}
 
 	vastEndpoint, ok := endpoints["vast"]

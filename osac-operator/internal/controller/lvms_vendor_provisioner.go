@@ -54,22 +54,28 @@ var logicalVolumeGVK = schema.GroupVersionKind{
 	Kind:    logicalVolumeKind,
 }
 
-type logicalVolumeClient interface {
-	Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error
+type logicalVolumeWriter interface {
 	Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error
 	Delete(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error
+}
+
+type logicalVolumeReader interface {
+	Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error
 }
 
 // LvmsVendorProvisioner provisions node-local volumes through TopoLVM's
 // cluster-scoped LogicalVolume API.
 type LvmsVendorProvisioner struct {
-	client logicalVolumeClient
+	writer logicalVolumeWriter
+	reader logicalVolumeReader
 }
 
 // NewLvmsVendorProvisioner creates an LVMS provisioner backed by a Kubernetes
-// client that can manage topolvm.io/v1 LogicalVolume resources.
-func NewLvmsVendorProvisioner(kubeClient logicalVolumeClient) *LvmsVendorProvisioner {
-	return &LvmsVendorProvisioner{client: kubeClient}
+// writer and an uncached reader for topolvm.io/v1 LogicalVolume resources.
+// The uncached reader avoids a second, unsynchronized cache alongside the
+// metadata-only LogicalVolume watch.
+func NewLvmsVendorProvisioner(writer logicalVolumeWriter, uncachedReader logicalVolumeReader) *LvmsVendorProvisioner {
+	return &LvmsVendorProvisioner{writer: writer, reader: uncachedReader}
 }
 
 // CreateVolume creates a LogicalVolume and checks whether TopoLVM has assigned
@@ -77,8 +83,11 @@ func NewLvmsVendorProvisioner(kubeClient logicalVolumeClient) *LvmsVendorProvisi
 // in VendorContext so the next reconcile can resume the operation without
 // creating a duplicate resource or blocking a reconcile worker.
 func (p *LvmsVendorProvisioner) CreateVolume(ctx context.Context, req VendorCreateVolumeRequest) (VendorCreateVolumeResponse, error) {
-	if p.client == nil {
+	if p.writer == nil {
 		return VendorCreateVolumeResponse{}, fmt.Errorf("LogicalVolume client is not configured")
+	}
+	if p.reader == nil {
+		return VendorCreateVolumeResponse{}, fmt.Errorf("LogicalVolume reader is not configured")
 	}
 	if req.Provider != lvmsProvider {
 		return VendorCreateVolumeResponse{}, fmt.Errorf("LVMS provisioner cannot handle provider %q", req.Provider)
@@ -111,7 +120,7 @@ func (p *LvmsVendorProvisioner) CreateVolume(ctx context.Context, req VendorCrea
 	if generatedName == "" {
 		volume = buildLogicalVolume(req, nodeName)
 		generatedName = volume.GetName()
-		if err := p.client.Create(ctx, volume); err != nil {
+		if err := p.writer.Create(ctx, volume); err != nil {
 			if !apierrors.IsAlreadyExists(err) {
 				return VendorCreateVolumeResponse{}, fmt.Errorf("create LogicalVolume: %w", err)
 			}
@@ -122,7 +131,7 @@ func (p *LvmsVendorProvisioner) CreateVolume(ctx context.Context, req VendorCrea
 			volume = &unstructured.Unstructured{}
 			volume.SetGroupVersionKind(logicalVolumeGVK)
 			volume.SetName(generatedName)
-			if getErr := p.client.Get(ctx, client.ObjectKey{Name: generatedName}, volume); getErr != nil {
+			if getErr := p.reader.Get(ctx, client.ObjectKey{Name: generatedName}, volume); getErr != nil {
 				return VendorCreateVolumeResponse{}, fmt.Errorf("get existing LogicalVolume %q after create conflict: %w", generatedName, getErr)
 			}
 			if ownershipErr := validateLogicalVolumeOwnership(volume, req); ownershipErr != nil {
@@ -178,8 +187,11 @@ func (p *LvmsVendorProvisioner) CreateVolume(ctx context.Context, req VendorCrea
 // DeleteVolume deletes the generated LogicalVolume name recorded during
 // creation. A missing object is already deleted and is therefore successful.
 func (p *LvmsVendorProvisioner) DeleteVolume(ctx context.Context, req VendorDeleteVolumeRequest) error {
-	if p.client == nil {
+	if p.writer == nil {
 		return fmt.Errorf("LogicalVolume client is not configured")
+	}
+	if p.reader == nil {
+		return fmt.Errorf("LogicalVolume reader is not configured")
 	}
 	if req.Provider != lvmsProvider {
 		return fmt.Errorf("LVMS provisioner cannot handle provider %q", req.Provider)
@@ -294,7 +306,7 @@ func (p *LvmsVendorProvisioner) getLogicalVolumeByUID(ctx context.Context, name,
 	volume := &unstructured.Unstructured{}
 	volume.SetGroupVersionKind(logicalVolumeGVK)
 	volume.SetName(name)
-	if err := p.client.Get(ctx, client.ObjectKey{Name: name}, volume); err != nil {
+	if err := p.reader.Get(ctx, client.ObjectKey{Name: name}, volume); err != nil {
 		return nil, err
 	}
 	if string(volume.GetUID()) != logicalVolumeUID {
@@ -319,7 +331,7 @@ func (p *LvmsVendorProvisioner) deleteOwnedLogicalVolume(ctx context.Context, vo
 		return fmt.Errorf("LogicalVolume UID is missing")
 	}
 	deleteOptions := []client.DeleteOption{client.Preconditions{UID: &uid}}
-	if err := p.client.Delete(ctx, volume, deleteOptions...); err != nil && !apierrors.IsNotFound(err) {
+	if err := p.writer.Delete(ctx, volume, deleteOptions...); err != nil && !apierrors.IsNotFound(err) {
 		return err
 	}
 	return nil

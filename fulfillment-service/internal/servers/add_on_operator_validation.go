@@ -23,7 +23,6 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
-	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -64,18 +63,6 @@ type addOnOperatorGraphResolver struct {
 	cache    map[addOnOperatorReferenceCacheKey]*privatev1.AddOnOperator
 }
 
-type addOnOperatorNotFoundError struct {
-	identifier string
-}
-
-func (e *addOnOperatorNotFoundError) Error() string {
-	return fmt.Sprintf("add-on operator %q not found", e.identifier)
-}
-
-func (e *addOnOperatorNotFoundError) IsNotFound() bool {
-	return true
-}
-
 func (r *addOnOperatorGraphResolver) resolve(
 	ctx context.Context,
 	ref resourceReference,
@@ -95,7 +82,7 @@ func (r *addOnOperatorGraphResolver) resolve(
 		key.shared = fullReference.GetShared()
 	}
 	if cached, ok := r.cache[key]; ok {
-		canonicalizeAddOnOperatorReference(ref, cached)
+		canonicalizeResourceReference(ref, cached)
 		return cached, nil
 	}
 	resolved, err := r.resource.resolve(ctx, ref, ownerMetadata, field)
@@ -134,7 +121,7 @@ func getPublishedAddOnOperator(
 		return nil, err
 	}
 	if !operator.GetPublished() || operator.GetMetadata().GetDeletionTimestamp() != nil {
-		return nil, &addOnOperatorNotFoundError{identifier: id}
+		return nil, &dao.ErrNotFound{IDs: []string{id}}
 	}
 	return operator, nil
 }
@@ -188,15 +175,6 @@ func addOnOperatorOwnerMetadata(ownerMetadata *privatev1.Metadata, ref resourceR
 		ownerMetadata.SetProject("")
 	}
 	return ownerMetadata
-}
-
-func canonicalizeAddOnOperatorReference(ref resourceReference, operator *privatev1.AddOnOperator) {
-	ref.SetId(operator.GetId())
-	ref.SetName(operator.GetMetadata().GetName())
-	if fullReference, ok := ref.(fullResourceReference); ok {
-		fullReference.SetProject(operator.GetMetadata().GetProject())
-		fullReference.SetShared(operator.GetMetadata().GetTenant() == auth.SharedTenant)
-	}
 }
 
 func (s *PrivateClustersServer) validateAndExpandAddOnOperators(
@@ -360,7 +338,7 @@ func validateAddOnOperatorVersion(
 ) error {
 	minimum := operator.GetMinOcpVersion()
 	if minimum != "" {
-		minimumVersion, err := semver.NewVersion(minimum)
+		minimumVersion, err := parseOCPVersion(minimum)
 		if err != nil {
 			return grpcstatus.Errorf(grpccodes.Internal,
 				"add-on operator '%s' has an invalid minimum OCP version '%s': %v",
@@ -375,7 +353,7 @@ func validateAddOnOperatorVersion(
 
 	maximum := operator.GetMaxOcpVersion()
 	if maximum != "" {
-		maximumVersion, err := semver.NewVersion(maximum)
+		maximumVersion, err := parseOCPVersion(maximum)
 		if err != nil {
 			return grpcstatus.Errorf(grpccodes.Internal,
 				"add-on operator '%s' has an invalid maximum OCP version '%s': %v",

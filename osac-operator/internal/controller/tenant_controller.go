@@ -22,7 +22,6 @@ import (
 	ovnv1 "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/crd/userdefinednetwork/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
-	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -117,7 +116,6 @@ func (r *TenantReconciler) handleUpdate(ctx context.Context, req reconcile.Reque
 		}
 	}
 
-	apimeta.RemoveStatusCondition(&instance.Status.Conditions, string(v1alpha1.TenantConditionNamespaceReady))
 	instance.Status.Namespace = ""
 	instance.Status.Phase = v1alpha1.TenantPhaseReady
 	return ctrl.Result{}, nil

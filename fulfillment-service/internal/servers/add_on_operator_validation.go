@@ -23,6 +23,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -49,9 +50,18 @@ type addOnOperatorResourceResolver struct {
 	get referenceGetFunc[*privatev1.AddOnOperator]
 }
 
+type addOnOperatorReferenceCacheKey struct {
+	id           string
+	name         string
+	ownerTenant  string
+	ownerProject string
+	project      string
+	shared       bool
+}
+
 type addOnOperatorGraphResolver struct {
-	ctx      context.Context
 	resource *addOnOperatorResourceResolver
+	cache    map[addOnOperatorReferenceCacheKey]*privatev1.AddOnOperator
 }
 
 type addOnOperatorNotFoundError struct {
@@ -67,11 +77,33 @@ func (e *addOnOperatorNotFoundError) IsNotFound() bool {
 }
 
 func (r *addOnOperatorGraphResolver) resolve(
+	ctx context.Context,
 	ref resourceReference,
 	ownerMetadata *privatev1.Metadata,
 	field string,
 ) (*privatev1.AddOnOperator, error) {
-	return r.resource.resolve(r.ctx, ref, ownerMetadata, field)
+	defaultAddOnOperatorReferenceScope(ref)
+	ownerMetadata = addOnOperatorOwnerMetadata(ownerMetadata, ref)
+	key := addOnOperatorReferenceCacheKey{
+		id:           ref.GetId(),
+		name:         ref.GetName(),
+		ownerTenant:  ownerMetadata.GetTenant(),
+		ownerProject: ownerMetadata.GetProject(),
+	}
+	if fullReference, ok := ref.(fullResourceReference); ok {
+		key.project = fullReference.GetProject()
+		key.shared = fullReference.GetShared()
+	}
+	if cached, ok := r.cache[key]; ok {
+		canonicalizeAddOnOperatorReference(ref, cached)
+		return cached, nil
+	}
+	resolved, err := r.resource.resolve(ctx, ref, ownerMetadata, field)
+	if err != nil {
+		return nil, err
+	}
+	r.cache[key] = resolved
+	return resolved, nil
 }
 
 func newScopedAddOnOperatorResourceResolver(
@@ -158,40 +190,27 @@ func addOnOperatorOwnerMetadata(ownerMetadata *privatev1.Metadata, ref resourceR
 	return ownerMetadata
 }
 
-func (s *PrivateClustersServer) resolveClusterVersionForAddOnOperators(
-	ctx context.Context,
-	cluster *privatev1.Cluster,
-) (*privatev1.ClusterVersion, error) {
-	versionReference := cluster.GetSpec().GetVersion()
-	if versionReference == nil || versionReference.GetId() == "" {
-		return nil, grpcstatus.Error(grpccodes.Internal, "cluster version was not canonicalized before add-on operator validation")
+func canonicalizeAddOnOperatorReference(ref resourceReference, operator *privatev1.AddOnOperator) {
+	ref.SetId(operator.GetId())
+	ref.SetName(operator.GetMetadata().GetName())
+	if fullReference, ok := ref.(fullResourceReference); ok {
+		fullReference.SetProject(operator.GetMetadata().GetProject())
+		fullReference.SetShared(operator.GetMetadata().GetTenant() == auth.SharedTenant)
 	}
-	response, err := s.clusterVersionsDao.Get().SetId(versionReference.GetId()).Do(ctx)
-	if err != nil {
-		if _, ok := grpcstatus.FromError(err); ok {
-			return nil, err
-		}
-		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to retrieve cluster version '%s'", versionReference.GetId())
-	}
-	clusterVersion := response.GetObject()
-	if clusterVersion == nil {
-		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to retrieve cluster version '%s'", versionReference.GetId())
-	}
-	if err := validateResolvedClusterVersion(clusterVersion, versionReference.GetId(), ""); err != nil {
-		return nil, err
-	}
-	return clusterVersion, nil
 }
 
-func (s *PrivateClustersServer) validateAndExpandAddOnOperators(ctx context.Context, cluster *privatev1.Cluster) error {
+func (s *PrivateClustersServer) validateAndExpandAddOnOperators(
+	ctx context.Context,
+	cluster *privatev1.Cluster,
+	clusterVersion *privatev1.ClusterVersion,
+) error {
 	requested := cluster.GetSpec().GetAddOnOperators()
 	if len(requested) == 0 {
 		return nil
 	}
 
-	clusterVersion, err := s.resolveClusterVersionForAddOnOperators(ctx, cluster)
-	if err != nil {
-		return err
+	if clusterVersion == nil {
+		return grpcstatus.Error(grpccodes.Internal, "cluster version was not resolved before add-on operator validation")
 	}
 	clusterVersionValue, err := semver.NewVersion(clusterVersion.GetSpec().GetVersion())
 	if err != nil {
@@ -226,8 +245,8 @@ func (s *PrivateClustersServer) resolveAndExpandAddOnOperators(
 	requested []*privatev1.AddOnOperatorReference,
 ) (map[string]*privatev1.AddOnOperator, map[string]string, []string, error) {
 	resolver := &addOnOperatorGraphResolver{
-		ctx:      ctx,
 		resource: s.addOnOperators,
+		cache:    make(map[addOnOperatorReferenceCacheKey]*privatev1.AddOnOperator),
 	}
 	// selected contains the unique operators already expanded, keyed by ID.
 	selected := make(map[string]*privatev1.AddOnOperator)
@@ -272,7 +291,7 @@ func (s *PrivateClustersServer) resolveAndExpandAddOnOperators(
 				return addOnOperatorFieldError("spec.add_on_operators",
 					fmt.Sprintf("add-on operator dependency graph exceeds %d relationships", maxAddOnOperatorRelationshipEdges))
 			}
-			resolved, err := resolver.resolve(dependency, operator.GetMetadata(), field)
+			resolved, err := resolver.resolve(ctx, dependency, operator.GetMetadata(), field)
 			if err != nil {
 				return err
 			}
@@ -289,7 +308,7 @@ func (s *PrivateClustersServer) resolveAndExpandAddOnOperators(
 
 	for index, reference := range requested {
 		field := fmt.Sprintf("spec.add_on_operators[%d]", index)
-		operator, err := resolver.resolve(reference, cluster.GetMetadata(), field)
+		operator, err := resolver.resolve(ctx, reference, cluster.GetMetadata(), field)
 		if err != nil {
 			return nil, nil, nil, err
 		}

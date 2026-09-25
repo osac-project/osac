@@ -34,8 +34,8 @@ respective areas.
 
 ## Generated files
 
-- Proto changes are regenerated ONCE, in the top-level `proto/` module: `make -C ../proto generate` (= `uv run dev.py build protos` for `proto/public/` + `buf generate` for `proto/gen/`). `make -C ../proto lint` runs `buf lint`. No more per-consumer `buf generate`.
-- Commit the `proto/private/` (or `proto/tests/`) source, the regenerated `proto/public/`, and the regenerated `proto/gen/`. CI (`Check generated code (proto)`) fails the PR if `proto/gen/` or `proto/public/` is stale.
+- Proto changes are regenerated ONCE, in the top-level `proto/` module: `make -C ../proto generate` (= `uv run dev.py build protos` for `proto/public/` + `buf generate` for `proto/gen/` and the UI bindings). `make -C ../proto lint` runs `buf lint`. No more per-consumer `buf generate`.
+- Commit the `proto/private/` (or `proto/tests/`) source, the regenerated `proto/public/`, the regenerated `proto/gen/`, and changed files under `osac-ui/libs/types/src/`. CI (`Check generated code (proto)`) fails the PR if `proto/gen/` or `proto/public/` is stale.
 - Test-only proto changes under `proto/tests/` still regenerate `proto/gen/` but not `proto/public/`.
 - Run `go generate ./...` here for mocks and other `go:generate` outputs; run `go mod tidy` after module changes.
 - Never hand-edit `proto/public/`, `proto/gen/`, `*_mock.go`, or `go.sum`.

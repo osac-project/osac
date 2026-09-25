@@ -48,7 +48,7 @@ generated and must never be edited manually.
 For any proto change, regenerate ONCE from `proto/`:
 
 ```bash
-make -C ../proto generate   # dev.py build protos (public) + buf generate (Go)
+make -C ../proto generate   # dev.py build protos (public) + buf generate (Go + TypeScript)
 make -C ../proto lint       # buf lint
 ```
 
@@ -61,6 +61,7 @@ The single generated Go tree at `proto/gen/` is imported by every module as
 1. Your edits to `.proto` files in `proto/private/` (or `proto/tests/`)
 2. The regenerated `proto/public/` (not needed for test-only changes)
 3. The regenerated `proto/gen/`
+4. The regenerated `osac-ui/libs/types/src/` UI bindings
 
 CI (`Check generated code (proto)`) fails the PR if `proto/gen/` or
 `proto/public/` is stale. Run `go generate ./...` here afterward if a proto

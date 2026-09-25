@@ -57,7 +57,7 @@ The nearest component `AGENTS.md` adds rules for files under that component.
 ## Cross-component boundaries
 
 - The Fulfillment API is the shared top-level `proto/` module: sources under `proto/private/`, one committed generated Go tree at `proto/gen/`, imported by every consumer (fulfillment-service, operator, metering-service, CSI driver) as `github.com/osac-project/osac/proto/gen/...`.
-- After changing protos, regenerate ONCE: `make -C proto generate`, then commit `proto/private/` (or `proto/tests/`), `proto/public/`, and `proto/gen/`. See [`proto/AGENTS.md`](proto/AGENTS.md). Never hand-edit `proto/public/` or `proto/gen/`.
+- After changing protos, regenerate ONCE: `make -C proto generate`, then commit `proto/private/` (or `proto/tests/`), `proto/public/`, `proto/gen/`, and changed generated files under `osac-ui/libs/types/src/`. See [`proto/AGENTS.md`](proto/AGENTS.md). Never hand-edit generated output.
 - Cross-component architecture and dependency conventions are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`docs/CONVENTIONS.md`](docs/CONVENTIONS.md).
 - E2E tests belong under [`tests/e2e/`](tests/e2e/) and follow [`tests/e2e/AGENTS.md`](tests/e2e/AGENTS.md).
 - Bootstrap-created sibling checkouts are separate repositories; do not include their changes in a mono-repo PR. The `osac-ux/` checkout is read-only. The tracked `osac-ui/` component is part of this mono-repo.

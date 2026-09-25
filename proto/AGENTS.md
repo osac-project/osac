@@ -24,12 +24,15 @@ four places or CI/e2e would fail downstream.
 2. From this directory: `make generate`
    - regenerates `public/` from `private/` (via `fulfillment-service/dev.py`,
      which owns the cleanapi toolchain), then
-   - regenerates the Go tree under `gen/` (`buf generate`).
+   - regenerates the Go tree under `gen/` (`buf generate`), and
+   - regenerates the UI TypeScript bindings under `osac-ui/libs/types/src/`
+     through the UI generator.
 3. `make lint` runs `buf lint` (uses the `buf-plugin-osac-lint` plugin built
    from `fulfillment-service/cmd/buf-plugin-osac-lint`).
 4. Commit **all** of: the `private/` (or `tests/`) source, the regenerated
-   `public/`, and the regenerated `gen/`. CI (`Check generated code (proto)`)
-   fails the PR if `gen/` or `public/` is stale.
+   `public/`, the regenerated `gen/`, and any changed files under
+   `osac-ui/libs/types/src/`. CI (`Check generated code (proto)`) fails the PR
+   if generated output is stale.
 
 ## Consumers
 

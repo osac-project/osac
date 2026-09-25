@@ -344,7 +344,8 @@ func (s *PrivateClustersServer) prepareCreate(ctx context.Context, candidate *pr
 	if err != nil {
 		return err
 	}
-	if err = s.applyClusterTemplate(ctx, candidate, template); err != nil {
+	clusterVersion, err := s.applyClusterTemplate(ctx, candidate, template)
+	if err != nil {
 		return
 	}
 	if key := spec.GetSshPublicKey(); key != "" {
@@ -353,7 +354,7 @@ func (s *PrivateClustersServer) prepareCreate(ctx context.Context, candidate *pr
 		}
 	}
 
-	if err = s.validateAndExpandAddOnOperators(ctx, candidate); err != nil {
+	if err = s.validateAndExpandAddOnOperators(ctx, candidate, clusterVersion); err != nil {
 		return
 	}
 
@@ -609,21 +610,27 @@ func (s *PrivateClustersServer) lookupHostType(ctx context.Context,
 // ensureClusterVersion makes sure the cluster spec has a usable version reference: if the user didn't provide one, it
 // resolves the system default. Either way, it validates that the resulting ClusterVersion isn't deleted, disabled,
 // or obsolete.
-func (s *PrivateClustersServer) ensureClusterVersion(ctx context.Context, cluster *privatev1.Cluster) error {
+func (s *PrivateClustersServer) ensureClusterVersion(
+	ctx context.Context,
+	cluster *privatev1.Cluster,
+) (*privatev1.ClusterVersion, error) {
 	versionRef := cluster.GetSpec().GetVersion()
 	if versionRef != nil {
 		version, err := resolveAndCanonicalizeReference(ctx, s.clusterVersionsDao, cluster.GetMetadata(), versionRef, "version", grpccodes.InvalidArgument)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		return validateResolvedClusterVersion(version, version.GetMetadata().GetName(), "")
+		if err := validateResolvedClusterVersion(version, version.GetMetadata().GetName(), ""); err != nil {
+			return nil, err
+		}
+		return version, nil
 	}
-	ref, err := resolveDefaultClusterVersion(ctx, s.logger, s.clusterVersionsDao)
+	ref, version, err := resolveDefaultClusterVersion(ctx, s.logger, s.clusterVersionsDao)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	cluster.GetSpec().SetVersion(ref)
-	return nil
+	return version, nil
 }
 
 func (s *PrivateClustersServer) validateNoDuplicateConditions(object *privatev1.Cluster) error {
@@ -1238,12 +1245,16 @@ func (s *PrivateClustersServer) autoProvisionExternalIPs(ctx context.Context, cl
 	return nil
 }
 
-func (s *PrivateClustersServer) applyClusterTemplate(ctx context.Context, cluster *privatev1.Cluster, template *privatev1.ClusterTemplate) (err error) {
+func (s *PrivateClustersServer) applyClusterTemplate(
+	ctx context.Context,
+	cluster *privatev1.Cluster,
+	template *privatev1.ClusterTemplate,
+) (*privatev1.ClusterVersion, error) {
 	actualClusterParameters, err := utils.ApplyTemplateParameterDefaultsAndValidate(
 		utils.ClusterTemplateAdapter{ClusterTemplate: template}, cluster.GetSpec().GetTemplateParameters(),
 	)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	cluster.GetSpec().SetTemplateParameters(actualClusterParameters)
 
@@ -1261,21 +1272,22 @@ func (s *PrivateClustersServer) applyClusterTemplate(ctx context.Context, cluste
 	}
 
 	// Validate pull_secret_secret reference exists:
-	if err = s.validatePullSecretSecret(ctx, cluster, inheritsPullSecretSecret); err != nil {
-		return err
+	if err := s.validatePullSecretSecret(ctx, cluster, inheritsPullSecretSecret); err != nil {
+		return nil, err
 	}
 
-	if err = s.ensureClusterVersion(ctx, cluster); err != nil {
-		return err
+	clusterVersion, err := s.ensureClusterVersion(ctx, cluster)
+	if err != nil {
+		return nil, err
 	}
 
 	// Validate cluster spec fields (CIDR format, etc.) after defaults have been applied:
-	if err = utils.ValidateClusterSpecFields(cluster.GetSpec()); err != nil {
-		return err
+	if err := utils.ValidateClusterSpecFields(cluster.GetSpec()); err != nil {
+		return nil, err
 	}
 
 	if err := s.resolveClusterNodeSets(ctx, cluster, template); err != nil {
-		return err
+		return nil, err
 	}
 
 	// Make sure that the template and the host types of the node sets are referenced by their identifiers and
@@ -1283,7 +1295,7 @@ func (s *PrivateClustersServer) applyClusterTemplate(ctx context.Context, cluste
 	// display and billing dimensions (metering reads the name).
 	cluster.GetSpec().SetTemplate(canonicalClusterTemplateReference(template))
 
-	return nil
+	return clusterVersion, nil
 }
 
 // convertTemplateNodeSets copies Template node sets into resource node sets, preserving names and nil entries.

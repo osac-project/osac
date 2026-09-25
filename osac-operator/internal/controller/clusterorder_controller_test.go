@@ -558,13 +558,18 @@ var _ = Describe("ClusterOrder Controller", func() {
 			instance := &v1alpha1.ClusterOrder{
 				Status: v1alpha1.ClusterOrderStatus{
 					Phase: v1alpha1.ClusterOrderPhaseProgressing,
+					Conditions: []metav1.Condition{{
+						Type:   string(v1alpha1.ClusterOrderConditionAddOnOperatorsReady),
+						Status: metav1.ConditionFalse,
+					}},
 					ProvisioningJobs: []v1alpha1.JobStatus{{
 						Type:  v1alpha1.JobTypeProvision,
 						State: v1alpha1.JobStateSucceeded,
 					}},
 				},
 				Spec: v1alpha1.ClusterOrderSpec{
-					NodeRequests: []v1alpha1.NodeRequest{{ResourceClass: "worker", NumberOfNodes: 1}},
+					AddOnOperators: []string{"operator-one"},
+					NodeRequests:   []v1alpha1.NodeRequest{{ResourceClass: "worker", NumberOfNodes: 1}},
 				},
 			}
 			hc := &hypershiftv1beta1.HostedCluster{Status: hypershiftv1beta1.HostedClusterStatus{Conditions: []metav1.Condition{
@@ -581,6 +586,9 @@ var _ = Describe("ClusterOrder Controller", func() {
 			Expect(progressing).NotTo(BeNil())
 			Expect(progressing.Status).To(Equal(metav1.ConditionFalse))
 			Expect(progressing.Reason).To(Equal(v1alpha1.ReasonAsExpected))
+			operatorCondition := apimeta.FindStatusCondition(instance.Status.Conditions, string(v1alpha1.ClusterOrderConditionAddOnOperatorsReady))
+			Expect(operatorCondition).NotTo(BeNil())
+			Expect(operatorCondition.Status).To(Equal(metav1.ConditionFalse))
 		})
 
 		It("should finalize Ready through handleHostedCluster", func() {

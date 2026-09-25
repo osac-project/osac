@@ -50,6 +50,43 @@
           - compute_instance_target_namespace == 'test-subnet'
         fail_msg: "Subnet target namespace not set correctly"
 
+    - name: Exercise namespaced resource creation in the resolved subnet namespace
+      block:
+        - name: Create a test ConfigMap in the VM target namespace
+          kubernetes.core.k8s:
+            kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+            state: present
+            definition:
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: test-vm-placement
+                namespace: "{{ compute_instance_target_namespace }}"
+
+        - name: Read the test ConfigMap from the VM target namespace
+          kubernetes.core.k8s_info:
+            kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+            api_version: v1
+            kind: ConfigMap
+            name: test-vm-placement
+            namespace: "{{ compute_instance_target_namespace }}"
+          register: placement_configmap
+
+        - name: Verify resource placement
+          ansible.builtin.assert:
+            that:
+              - placement_configmap.resources | length == 1
+              - placement_configmap.resources[0].metadata.namespace == 'test-subnet'
+      always:
+        - name: Remove the test ConfigMap
+          kubernetes.core.k8s:
+            kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+            state: absent
+            api_version: v1
+            kind: ConfigMap
+            name: test-vm-placement
+            namespace: "{{ compute_instance_target_namespace }}"
+
     - name: Verify template ID extracted
       ansible.builtin.assert:
         that:

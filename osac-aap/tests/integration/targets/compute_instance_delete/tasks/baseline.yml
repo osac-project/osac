@@ -47,3 +47,50 @@
           - template_id is defined
           - template_id == "osac.templates.ocp_virt_vm"
         fail_msg: "Template ID not extracted correctly"
+
+- name: Verify legacy ComputeInstance placement during deletion
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../common_vars.yml
+  tasks:
+    - name: Verify legacy deletion namespace resolution
+      block:
+        - name: Create a legacy Tenant
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: osac.openshift.io/v1alpha1
+              kind: Tenant
+              metadata:
+                name: test-legacy-tenant
+                namespace: osac-system
+
+        - name: Resolve deletion namespace for an unannotated legacy instance
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: delete
+          vars:
+            compute_instance_name: test-legacy-vm
+            delete_step_resources_override:
+              name: osac.workflows.workflow_helpers
+              tasks_from: noop.yml
+            compute_instance:
+              metadata:
+                name: test-legacy-vm
+              status:
+                tenantReference:
+                  name: test-legacy-tenant
+                  namespace: osac-system
+
+        - name: Verify legacy tenant-name fallback
+          ansible.builtin.assert:
+            that: compute_instance_target_namespace == 'test-legacy-tenant'
+      always:
+        - name: Remove legacy Tenant
+          kubernetes.core.k8s:
+            state: absent
+            api_version: osac.openshift.io/v1alpha1
+            kind: Tenant
+            name: test-legacy-tenant
+            namespace: osac-system

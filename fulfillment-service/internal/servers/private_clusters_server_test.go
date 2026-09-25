@@ -20,6 +20,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -45,12 +46,11 @@ func seedClusterVersion(ctx context.Context, cv *privatev1.ClusterVersion) {
 
 func seedAddOnOperator(ctx context.Context, id, name string, published bool) {
 	GinkgoHelper()
-	operatorDao, err := dao.NewGenericDAO[*privatev1.AddOnOperator]().
-		SetLogger(logger).
-		SetTenancyLogic(tenancy).
-		Build()
-	Expect(err).ToNot(HaveOccurred())
-	_, err = operatorDao.Create().SetObject(privatev1.AddOnOperator_builder{
+	seedAddOnOperatorObject(ctx, newTestAddOnOperator(id, name, published))
+}
+
+func newTestAddOnOperator(id, name string, published bool) *privatev1.AddOnOperator {
+	return privatev1.AddOnOperator_builder{
 		Id: id,
 		Metadata: privatev1.Metadata_builder{
 			Name:   name,
@@ -58,8 +58,54 @@ func seedAddOnOperator(ctx context.Context, id, name string, published bool) {
 		}.Build(),
 		Title:     name,
 		Published: proto.Bool(published),
-	}.Build()).Do(ctx)
+	}.Build()
+}
+
+func seedAddOnOperatorObject(ctx context.Context, object *privatev1.AddOnOperator) {
+	GinkgoHelper()
+	operatorDao, err := dao.NewGenericDAO[*privatev1.AddOnOperator]().
+		SetLogger(logger).
+		SetTenancyLogic(tenancy).
+		Build()
 	Expect(err).ToNot(HaveOccurred())
+	_, err = operatorDao.Create().SetObject(object).Do(ctx)
+	Expect(err).ToNot(HaveOccurred())
+}
+
+func createClusterWithAddOnOperators(ctx context.Context, server *PrivateClustersServer,
+	operators []*privatev1.AddOnOperatorReference) (*privatev1.Cluster, error) {
+	response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+		Object: privatev1.Cluster_builder{
+			Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.New()[24:32])}.Build(),
+			Spec: privatev1.ClusterSpec_builder{
+				Template:       privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+				AddOnOperators: operators,
+			}.Build(),
+		}.Build(),
+	}.Build())
+	if err != nil {
+		return nil, err
+	}
+	return response.GetObject(), nil
+}
+
+func expectAddOnOperatorFieldViolation(err error, field string) {
+	GinkgoHelper()
+	status, ok := grpcstatus.FromError(err)
+	Expect(ok).To(BeTrue())
+	Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+	for _, detail := range status.Details() {
+		badRequest, ok := detail.(*errdetails.BadRequest)
+		if !ok {
+			continue
+		}
+		for _, violation := range badRequest.GetFieldViolations() {
+			if violation.GetField() == field {
+				return
+			}
+		}
+	}
+	Fail(fmt.Sprintf("expected a field violation for %q, got %q", field, status.Message()))
 }
 
 var _ = Describe("Private clusters server", func() {
@@ -409,6 +455,266 @@ var _ = Describe("Private clusters server", func() {
 			operator := createResponse.GetObject().GetSpec().GetAddOnOperators()[0]
 			Expect(operator.GetId()).To(Equal("operator-1"))
 			Expect(operator.GetName()).To(Equal("operator-one"))
+		})
+
+		It("resolves transitive dependencies and deduplicates shared dependencies", func() {
+			dependency := newTestAddOnOperator("operator-dependency", "operator-dependency", true)
+			seedAddOnOperatorObject(ctx, dependency)
+
+			first := newTestAddOnOperator("operator-first", "operator-first", true)
+			first.SetDependencies([]*privatev1.AddOnOperatorLocalReference{
+				privatev1.AddOnOperatorLocalReference_builder{Id: dependency.GetId()}.Build(),
+			})
+			seedAddOnOperatorObject(ctx, first)
+
+			second := newTestAddOnOperator("operator-second", "operator-second", true)
+			second.SetDependencies([]*privatev1.AddOnOperatorLocalReference{
+				privatev1.AddOnOperatorLocalReference_builder{Id: dependency.GetId()}.Build(),
+			})
+			seedAddOnOperatorObject(ctx, second)
+
+			object, err := createClusterWithAddOnOperators(ctx, server, []*privatev1.AddOnOperatorReference{
+				privatev1.AddOnOperatorReference_builder{Id: first.GetId()}.Build(),
+				privatev1.AddOnOperatorReference_builder{Id: second.GetId()}.Build(),
+			})
+			Expect(err).ToNot(HaveOccurred())
+
+			ids := make([]string, 0, len(object.GetSpec().GetAddOnOperators()))
+			for _, operator := range object.GetSpec().GetAddOnOperators() {
+				ids = append(ids, operator.GetId())
+			}
+			Expect(ids).To(ConsistOf(first.GetId(), second.GetId(), dependency.GetId()))
+		})
+
+		It("rejects circular dependencies", func() {
+			first := newTestAddOnOperator("operator-cycle-a", "operator-cycle-a", true)
+			first.SetDependencies([]*privatev1.AddOnOperatorLocalReference{
+				privatev1.AddOnOperatorLocalReference_builder{Id: "operator-cycle-b"}.Build(),
+			})
+			second := newTestAddOnOperator("operator-cycle-b", "operator-cycle-b", true)
+			second.SetDependencies([]*privatev1.AddOnOperatorLocalReference{
+				privatev1.AddOnOperatorLocalReference_builder{Id: first.GetId()}.Build(),
+			})
+			seedAddOnOperatorObject(ctx, first)
+			seedAddOnOperatorObject(ctx, second)
+
+			_, err := createClusterWithAddOnOperators(ctx, server, []*privatev1.AddOnOperatorReference{
+				privatev1.AddOnOperatorReference_builder{Id: first.GetId()}.Build(),
+			})
+			Expect(err).To(HaveOccurred())
+			expectAddOnOperatorFieldViolation(err, "spec.add_on_operators[0]")
+			Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("cycle"))
+		})
+
+		It("rejects mutually exclusive operators", func() {
+			first := newTestAddOnOperator("operator-exclusion-a", "operator-exclusion-a", true)
+			first.SetExclusions([]*privatev1.AddOnOperatorLocalReference{
+				privatev1.AddOnOperatorLocalReference_builder{Id: "operator-exclusion-b"}.Build(),
+			})
+			second := newTestAddOnOperator("operator-exclusion-b", "operator-exclusion-b", true)
+			seedAddOnOperatorObject(ctx, first)
+			seedAddOnOperatorObject(ctx, second)
+
+			_, err := createClusterWithAddOnOperators(ctx, server, []*privatev1.AddOnOperatorReference{
+				privatev1.AddOnOperatorReference_builder{Id: first.GetId()}.Build(),
+				privatev1.AddOnOperatorReference_builder{Id: second.GetId()}.Build(),
+			})
+			Expect(err).To(HaveOccurred())
+			expectAddOnOperatorFieldViolation(err, "spec.add_on_operators[0]")
+			Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring(first.GetId()))
+			Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring(second.GetId()))
+		})
+
+		It("rejects an exclusion declared by either selected operator", func() {
+			first := newTestAddOnOperator("operator-reverse-exclusion-a", "operator-reverse-exclusion-a", true)
+			second := newTestAddOnOperator("operator-reverse-exclusion-b", "operator-reverse-exclusion-b", true)
+			second.SetExclusions([]*privatev1.AddOnOperatorLocalReference{
+				privatev1.AddOnOperatorLocalReference_builder{Id: first.GetId()}.Build(),
+			})
+			seedAddOnOperatorObject(ctx, first)
+			seedAddOnOperatorObject(ctx, second)
+
+			_, err := createClusterWithAddOnOperators(ctx, server, []*privatev1.AddOnOperatorReference{
+				privatev1.AddOnOperatorReference_builder{Id: first.GetId()}.Build(),
+				privatev1.AddOnOperatorReference_builder{Id: second.GetId()}.Build(),
+			})
+			Expect(err).To(HaveOccurred())
+			expectAddOnOperatorFieldViolation(err, "spec.add_on_operators[1]")
+		})
+
+		It("rejects an operator below its minimum cluster version", func() {
+			operator := newTestAddOnOperator("operator-versioned", "operator-versioned", true)
+			operator.SetMinOcpVersion("4.18.0")
+			seedAddOnOperatorObject(ctx, operator)
+
+			_, err := createClusterWithAddOnOperators(ctx, server, []*privatev1.AddOnOperatorReference{
+				privatev1.AddOnOperatorReference_builder{Id: operator.GetId()}.Build(),
+			})
+			Expect(err).To(HaveOccurred())
+			expectAddOnOperatorFieldViolation(err, "spec.add_on_operators[0]")
+			Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("4.18.0"))
+		})
+
+		It("rejects an operator above its maximum cluster version", func() {
+			operator := newTestAddOnOperator("operator-versioned-max", "operator-versioned-max", true)
+			operator.SetMaxOcpVersion("4.16.0")
+			seedAddOnOperatorObject(ctx, operator)
+
+			_, err := createClusterWithAddOnOperators(ctx, server, []*privatev1.AddOnOperatorReference{
+				privatev1.AddOnOperatorReference_builder{Id: operator.GetId()}.Build(),
+			})
+			Expect(err).To(HaveOccurred())
+			expectAddOnOperatorFieldViolation(err, "spec.add_on_operators[0]")
+			Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("4.16.0"))
+		})
+
+		It("accepts an operator at inclusive cluster version bounds", func() {
+			operator := newTestAddOnOperator("operator-version-bound", "operator-version-bound", true)
+			operator.SetMinOcpVersion("4.17.0")
+			operator.SetMaxOcpVersion("4.17.0")
+			seedAddOnOperatorObject(ctx, operator)
+
+			_, err := createClusterWithAddOnOperators(ctx, server, []*privatev1.AddOnOperatorReference{
+				privatev1.AddOnOperatorReference_builder{Id: operator.GetId()}.Build(),
+			})
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("accepts and canonicalizes an unpublished operator", func() {
+			operator := newTestAddOnOperator("operator-unpublished", "operator-unpublished", false)
+			seedAddOnOperatorObject(ctx, operator)
+
+			object, err := createClusterWithAddOnOperators(ctx, server, []*privatev1.AddOnOperatorReference{
+				privatev1.AddOnOperatorReference_builder{Id: operator.GetId()}.Build(),
+			})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(object.GetSpec().GetAddOnOperators()).To(HaveLen(1))
+			Expect(object.GetSpec().GetAddOnOperators()[0].GetId()).To(Equal(operator.GetId()))
+			Expect(object.GetSpec().GetAddOnOperators()[0].GetName()).To(Equal(operator.GetMetadata().GetName()))
+		})
+
+		It("accepts and canonicalizes an unpublished dependency", func() {
+			dependency := newTestAddOnOperator("operator-unpublished-dependency", "operator-unpublished-dependency", false)
+			seedAddOnOperatorObject(ctx, dependency)
+			root := newTestAddOnOperator("operator-with-unpublished-dependency", "operator-with-unpublished-dependency", true)
+			root.SetDependencies([]*privatev1.AddOnOperatorLocalReference{
+				privatev1.AddOnOperatorLocalReference_builder{Id: dependency.GetId()}.Build(),
+			})
+			seedAddOnOperatorObject(ctx, root)
+
+			object, err := createClusterWithAddOnOperators(ctx, server, []*privatev1.AddOnOperatorReference{
+				privatev1.AddOnOperatorReference_builder{Id: root.GetId()}.Build(),
+			})
+			Expect(err).ToNot(HaveOccurred())
+			operators := object.GetSpec().GetAddOnOperators()
+			Expect(operators).To(HaveLen(2))
+			Expect(operators[0].GetId()).To(Equal(dependency.GetId()))
+			Expect(operators[0].GetName()).To(Equal(dependency.GetMetadata().GetName()))
+			Expect(operators[1].GetId()).To(Equal(root.GetId()))
+			Expect(operators[1].GetName()).To(Equal(root.GetMetadata().GetName()))
+		})
+
+		It("rejects an operator reference whose id and name disagree", func() {
+			operator := newTestAddOnOperator("operator-id-name", "operator-id-name", true)
+			seedAddOnOperatorObject(ctx, operator)
+
+			_, err := createClusterWithAddOnOperators(ctx, server, []*privatev1.AddOnOperatorReference{
+				privatev1.AddOnOperatorReference_builder{
+					Id:   operator.GetId(),
+					Name: "different-name",
+				}.Build(),
+			})
+			Expect(err).To(HaveOccurred())
+			expectAddOnOperatorFieldViolation(err, "spec.add_on_operators[0]")
+			Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("id and name"))
+		})
+
+		It("honors an explicit shared scope for an operator name", func() {
+			shared := newTestAddOnOperator("operator-shared", "same-operator-name", true)
+			seedAddOnOperatorObject(ctx, shared)
+
+			local := newTestAddOnOperator("operator-local", "same-operator-name", true)
+			local.GetMetadata().SetTenant(testTenant)
+			seedAddOnOperatorObject(ctx, local)
+
+			object, err := createClusterWithAddOnOperators(ctx, server, []*privatev1.AddOnOperatorReference{
+				privatev1.AddOnOperatorReference_builder{Name: "same-operator-name", Shared: true}.Build(),
+			})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(object.GetSpec().GetAddOnOperators()).To(HaveLen(1))
+			Expect(object.GetSpec().GetAddOnOperators()[0].GetId()).To(Equal(shared.GetId()))
+		})
+
+		It("resolves an unscoped shared operator name from a non-default project", func() {
+			operator := newTestAddOnOperator("operator-project-scope", "operator-project-scope", true)
+			seedAddOnOperatorObject(ctx, operator)
+			projectsDAO, err := dao.NewGenericDAO[*privatev1.Project]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = projectsDAO.Create().SetObject(privatev1.Project_builder{
+				Metadata: privatev1.Metadata_builder{Name: "workloads", Tenant: testTenant}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+				Object: privatev1.Cluster_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:    fmt.Sprintf("test-%s", uuid.New()[24:32]),
+						Project: "workloads",
+					}.Build(),
+					Spec: privatev1.ClusterSpec_builder{
+						Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+						AddOnOperators: []*privatev1.AddOnOperatorReference{
+							privatev1.AddOnOperatorReference_builder{Name: operator.GetMetadata().GetName()}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetObject().GetSpec().GetAddOnOperators()).To(HaveLen(1))
+			Expect(response.GetObject().GetSpec().GetAddOnOperators()[0].GetId()).To(Equal(operator.GetId()))
+		})
+
+		It("rejects a deleted operator", func() {
+			operator := newTestAddOnOperator("operator-deleted", "operator-deleted", true)
+			seedAddOnOperatorObject(ctx, operator)
+			operatorDao, err := dao.NewGenericDAO[*privatev1.AddOnOperator]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = operatorDao.Delete().SetId(operator.GetId()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = createClusterWithAddOnOperators(ctx, server, []*privatev1.AddOnOperatorReference{
+				privatev1.AddOnOperatorReference_builder{Id: operator.GetId()}.Build(),
+			})
+			Expect(err).To(HaveOccurred())
+			expectAddOnOperatorFieldViolation(err, "spec.add_on_operators[0]")
+			Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("deleted"))
+		})
+
+		It("rejects an expanded operator set over the maximum size", func() {
+			operators := make([]*privatev1.AddOnOperatorReference, 0, 32)
+			for i := range 32 {
+				dependencyID := fmt.Sprintf("operator-limit-dependency-%d", i)
+				seedAddOnOperatorObject(ctx, newTestAddOnOperator(dependencyID, dependencyID, true))
+
+				operatorID := fmt.Sprintf("operator-limit-%d", i)
+				operator := newTestAddOnOperator(operatorID, operatorID, true)
+				operator.SetDependencies([]*privatev1.AddOnOperatorLocalReference{
+					privatev1.AddOnOperatorLocalReference_builder{Id: dependencyID}.Build(),
+				})
+				seedAddOnOperatorObject(ctx, operator)
+				operators = append(operators, privatev1.AddOnOperatorReference_builder{Id: operatorID}.Build())
+			}
+
+			_, err := createClusterWithAddOnOperators(ctx, server, operators)
+			Expect(err).To(HaveOccurred())
+			expectAddOnOperatorFieldViolation(err, "spec.add_on_operators")
+			Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("32"))
 		})
 
 		It("Rejects changing add-on operators with a field mask", func() {

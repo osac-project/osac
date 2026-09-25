@@ -34,18 +34,17 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/osac/fulfillment-service/internal/references"
 	"github.com/osac-project/osac/fulfillment-service/internal/utils"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 type PrivateClustersServerBuilder struct {
-	logger              *slog.Logger
-	attributionLogic    auth.AttributionLogic
-	tenancyLogic        auth.TenancyLogic
-	metricsRegisterer   prometheus.Registerer
-	filterDesc          protoreflect.MessageDescriptor
-	addOnOperatorLookup references.ReferenceLookupFunc
+	logger                       *slog.Logger
+	attributionLogic             auth.AttributionLogic
+	tenancyLogic                 auth.TenancyLogic
+	metricsRegisterer            prometheus.Registerer
+	filterDesc                   protoreflect.MessageDescriptor
+	addOnOperatorResolverFactory addOnOperatorResolverFactory
 }
 
 var _ privatev1.ClustersServer = (*PrivateClustersServer)(nil)
@@ -64,7 +63,7 @@ type PrivateClustersServer struct {
 	externalIPDao           *dao.GenericDAO[*privatev1.ExternalIP]
 	externalIPAttachmentDao *dao.GenericDAO[*privatev1.ExternalIPAttachment]
 	secretsDao              *dao.GenericDAO[*privatev1.Secret]
-	addOnOperatorLookup     references.ReferenceLookupFunc
+	addOnOperators          *addOnOperatorResourceResolver
 	generic                 *GenericServer[*privatev1.Cluster]
 	lifecycle               *externalIPLifecycle
 }
@@ -102,11 +101,13 @@ func (b *PrivateClustersServerBuilder) SetFilterDesc(value protoreflect.MessageD
 	return b
 }
 
-// SetAddOnOperatorLookup sets the resolver used for add-on operator references.
-func (b *PrivateClustersServerBuilder) SetAddOnOperatorLookup(value references.ReferenceLookupFunc) *PrivateClustersServerBuilder {
-	b.addOnOperatorLookup = value
+// SetAddOnOperatorResolverFactory sets the resolver policy used with the server-owned DAO.
+func (b *PrivateClustersServerBuilder) SetAddOnOperatorResolverFactory(value addOnOperatorResolverFactory) *PrivateClustersServerBuilder {
+	b.addOnOperatorResolverFactory = value
 	return b
 }
+
+type addOnOperatorResolverFactory func(*dao.GenericDAO[*privatev1.AddOnOperator]) *addOnOperatorResourceResolver
 
 func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, err error) {
 	// Check parameters:
@@ -138,21 +139,21 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 		return
 	}
 
-	addOnOperatorLookup := b.addOnOperatorLookup
-	if addOnOperatorLookup == nil {
-		// Create the private add-on operators DAO:
-		addOnOperatorsDao, daoErr := dao.NewGenericDAO[*privatev1.AddOnOperator]().
-			SetLogger(b.logger).
-			SetTenancyLogic(b.tenancyLogic).
-			SetMetricsRegisterer(b.metricsRegisterer).
-			Build()
-		if daoErr != nil {
-			err = daoErr
-			return
-		}
-		addOnOperatorLookup = references.NewDAOLookupFunc(addOnOperatorsDao)
+	// Create the private add-on operators DAO:
+	addOnOperatorsDao, err := dao.NewGenericDAO[*privatev1.AddOnOperator]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
 	}
-
+	var addOnOperators *addOnOperatorResourceResolver
+	if b.addOnOperatorResolverFactory != nil {
+		addOnOperators = b.addOnOperatorResolverFactory(addOnOperatorsDao)
+	} else {
+		addOnOperators = newScopedAddOnOperatorResourceResolver(addOnOperatorsDao)
+	}
 	// Create the host types DAO:
 	hostTypesDao, err := dao.NewGenericDAO[*privatev1.HostType]().
 		SetLogger(b.logger).
@@ -263,7 +264,7 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 		externalIPDao:           externalIPDao,
 		externalIPAttachmentDao: externalIPAttachmentDao,
 		secretsDao:              secretsDao,
-		addOnOperatorLookup:     addOnOperatorLookup,
+		addOnOperators:          addOnOperators,
 		generic:                 generic,
 	}
 	result.lifecycle = newExternalIPLifecycle(
@@ -316,9 +317,6 @@ func (s *PrivateClustersServer) Create(ctx context.Context, request *privatev1.C
 func (s *PrivateClustersServer) prepareCreate(ctx context.Context, candidate *privatev1.Cluster) (err error) {
 	// Ensure sane defaults:
 	s.setDefaults(candidate)
-	if err = s.resolveAddOnOperators(ctx, candidate); err != nil {
-		return
-	}
 
 	// Get the spec:
 	spec := candidate.GetSpec()
@@ -333,13 +331,18 @@ func (s *PrivateClustersServer) prepareCreate(ctx context.Context, candidate *pr
 	if err != nil {
 		return err
 	}
-	if err = s.applyClusterTemplate(ctx, candidate, template); err != nil {
+	clusterVersion, err := s.applyClusterTemplate(ctx, candidate, template)
+	if err != nil {
 		return
 	}
 	if key := spec.GetSshPublicKey(); key != "" {
 		if err = validateOpenSSHPublicKey(key); err != nil {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument, "spec.ssh_public_key: %s", err)
 		}
+	}
+
+	if err = s.validateAndExpandAddOnOperators(ctx, candidate, clusterVersion); err != nil {
+		return
 	}
 
 	if candidate.GetSpec().GetNetworkAttachment() == nil {
@@ -362,36 +365,6 @@ func (s *PrivateClustersServer) prepareCreate(ctx context.Context, candidate *pr
 	}
 
 	return
-}
-
-func (s *PrivateClustersServer) resolveAddOnOperators(ctx context.Context, cluster *privatev1.Cluster) error {
-	metadata := cluster.GetMetadata()
-	for index, ref := range cluster.GetSpec().GetAddOnOperators() {
-		if ref == nil || (ref.GetId() == "" && ref.GetName() == "") {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"spec.add_on_operators[%d] must specify id or name", index)
-		}
-
-		resolved, err := s.addOnOperatorLookup(ctx, metadata.GetTenant(), metadata.GetProject(), ref.GetId(), ref.GetName())
-		if err != nil {
-			var notFound interface{ IsNotFound() bool }
-			if errors.As(err, &notFound) && notFound.IsNotFound() {
-				return grpcstatus.Errorf(grpccodes.InvalidArgument,
-					"add-on operator %q referenced by spec.add_on_operators[%d] was not found",
-					refKey(ref), index)
-			}
-			return grpcstatus.Errorf(grpccodes.Internal,
-				"failed to resolve spec.add_on_operators[%d]", index)
-		}
-		if resolved == nil {
-			return grpcstatus.Errorf(grpccodes.Internal,
-				"failed to resolve spec.add_on_operators[%d]", index)
-		}
-
-		ref.SetId(resolved.ID)
-		ref.SetName(resolved.Name)
-	}
-	return nil
 }
 
 // resolveCreationSource accepts exactly one provisioning source: spec.catalog_item or
@@ -624,21 +597,27 @@ func (s *PrivateClustersServer) lookupHostType(ctx context.Context,
 // ensureClusterVersion makes sure the cluster spec has a usable version reference: if the user didn't provide one, it
 // resolves the system default. Either way, it validates that the resulting ClusterVersion isn't deleted, disabled,
 // or obsolete.
-func (s *PrivateClustersServer) ensureClusterVersion(ctx context.Context, cluster *privatev1.Cluster) error {
+func (s *PrivateClustersServer) ensureClusterVersion(
+	ctx context.Context,
+	cluster *privatev1.Cluster,
+) (*privatev1.ClusterVersion, error) {
 	versionRef := cluster.GetSpec().GetVersion()
 	if versionRef != nil {
 		version, err := resolveAndCanonicalizeReference(ctx, s.clusterVersionsDao, cluster.GetMetadata(), versionRef, "version", grpccodes.InvalidArgument)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		return validateResolvedClusterVersion(version, version.GetMetadata().GetName(), "")
+		if err := validateResolvedClusterVersion(version, version.GetMetadata().GetName(), ""); err != nil {
+			return nil, err
+		}
+		return version, nil
 	}
-	ref, err := resolveDefaultClusterVersion(ctx, s.logger, s.clusterVersionsDao)
+	ref, version, err := resolveDefaultClusterVersion(ctx, s.logger, s.clusterVersionsDao)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	cluster.GetSpec().SetVersion(ref)
-	return nil
+	return version, nil
 }
 
 func (s *PrivateClustersServer) validateNoDuplicateConditions(object *privatev1.Cluster) error {
@@ -1253,12 +1232,16 @@ func (s *PrivateClustersServer) autoProvisionExternalIPs(ctx context.Context, cl
 	return nil
 }
 
-func (s *PrivateClustersServer) applyClusterTemplate(ctx context.Context, cluster *privatev1.Cluster, template *privatev1.ClusterTemplate) (err error) {
+func (s *PrivateClustersServer) applyClusterTemplate(
+	ctx context.Context,
+	cluster *privatev1.Cluster,
+	template *privatev1.ClusterTemplate,
+) (*privatev1.ClusterVersion, error) {
 	actualClusterParameters, err := utils.ApplyTemplateParameterDefaultsAndValidate(
 		utils.ClusterTemplateAdapter{ClusterTemplate: template}, cluster.GetSpec().GetTemplateParameters(),
 	)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	cluster.GetSpec().SetTemplateParameters(actualClusterParameters)
 
@@ -1276,21 +1259,22 @@ func (s *PrivateClustersServer) applyClusterTemplate(ctx context.Context, cluste
 	}
 
 	// Validate pull_secret_secret reference exists:
-	if err = s.validatePullSecretSecret(ctx, cluster, inheritsPullSecretSecret); err != nil {
-		return err
+	if err := s.validatePullSecretSecret(ctx, cluster, inheritsPullSecretSecret); err != nil {
+		return nil, err
 	}
 
-	if err = s.ensureClusterVersion(ctx, cluster); err != nil {
-		return err
+	clusterVersion, err := s.ensureClusterVersion(ctx, cluster)
+	if err != nil {
+		return nil, err
 	}
 
 	// Validate cluster spec fields (CIDR format, etc.) after defaults have been applied:
-	if err = utils.ValidateClusterSpecFields(cluster.GetSpec()); err != nil {
-		return err
+	if err := utils.ValidateClusterSpecFields(cluster.GetSpec()); err != nil {
+		return nil, err
 	}
 
 	if err := s.resolveClusterNodeSets(ctx, cluster, template); err != nil {
-		return err
+		return nil, err
 	}
 
 	// Make sure that the template and the host types of the node sets are referenced by their identifiers and
@@ -1298,7 +1282,7 @@ func (s *PrivateClustersServer) applyClusterTemplate(ctx context.Context, cluste
 	// display and billing dimensions (metering reads the name).
 	cluster.GetSpec().SetTemplate(canonicalClusterTemplateReference(template))
 
-	return nil
+	return clusterVersion, nil
 }
 
 // convertTemplateNodeSets copies Template node sets into resource node sets, preserving names and nil entries.

@@ -24,8 +24,6 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/osac/fulfillment-service/internal/references"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
@@ -117,22 +115,13 @@ func (b *ClustersServerBuilder) Build() (result *ClustersServer, err error) {
 	}
 
 	// Create the private server to delegate to:
-	addOnOperatorsDao, err := dao.NewGenericDAO[*privatev1.AddOnOperator]().
-		SetLogger(b.logger).
-		SetTenancyLogic(b.tenancyLogic).
-		SetMetricsRegisterer(b.metricsRegisterer).
-		Build()
-	if err != nil {
-		return
-	}
-	publishedAddOnOperatorLookup := references.NewPublishedDAOLookupFunc(addOnOperatorsDao)
 	delegate, err := NewPrivateClustersServer().
 		SetLogger(b.logger).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		SetAddOnOperatorResolverFactory(newPublishedScopedAddOnOperatorResourceResolver).
 		SetFilterDesc(objectDesc).
-		SetAddOnOperatorLookup(publishedAddOnOperatorLookup).
 		Build()
 	if err != nil {
 		return

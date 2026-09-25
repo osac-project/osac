@@ -540,13 +540,7 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 		return ctrl.Result{}, err
 	}
 
-	// When a networkAttachment is set, the VM is created in the subnet target namespace
-	// (by the AAP playbook), not in the tenant target namespace.  Reuse the
-	// value resolved by syncMetadataPreflight to avoid a redundant API call.
-	targetNamespace := tenant.Status.Namespace
-	if subnetTargetNamespace != "" {
-		targetNamespace = subnetTargetNamespace
-	}
+	targetNamespace := computeInstanceTargetNamespace(tenant, subnetTargetNamespace)
 
 	kv, err := r.findKubeVirtVMs(ctx, targetClient, instance, targetNamespace)
 	if err != nil {
@@ -707,6 +701,16 @@ func (r *ComputeInstanceReconciler) initializeStatusCondition(instance *v1alpha1
 		return
 	}
 	instance.SetStatusCondition(conditionType, status, "", reason)
+}
+
+func computeInstanceTargetNamespace(tenant *v1alpha1.Tenant, subnetTargetNamespace string) string {
+	if subnetTargetNamespace != "" {
+		return subnetTargetNamespace
+	}
+	if tenant.Status.Namespace != "" {
+		return tenant.Status.Namespace
+	}
+	return tenant.GetName()
 }
 
 func (r *ComputeInstanceReconciler) findKubeVirtVMs(ctx context.Context, targetClient client.Client, instance *v1alpha1.ComputeInstance, nsName string) (*kubevirtv1.VirtualMachine, error) {

@@ -413,6 +413,21 @@ var _ = Describe("newVendorProvisionerRegistry", func() {
 		Expect(registry["lvms"]).To(BeAssignableToTypeOf(&controller.LvmsVendorProvisioner{}))
 	})
 
+	It("keeps LVMS registered when VAST initialization fails", func() {
+		client := fake.NewClientBuilder().Build()
+		registry, err := newVendorProvisionerRegistry(
+			client,
+			client,
+			"",
+			map[string]string{"lvms": "none", "vast": "vast.svc:50051"},
+		)
+
+		Expect(err).To(MatchError(ContainSubstring("storage config namespace is required")))
+		Expect(registry).To(HaveLen(2))
+		Expect(registry["lvms"]).To(BeAssignableToTypeOf(&controller.LvmsVendorProvisioner{}))
+		Expect(registry["vast"]).To(BeNil())
+	})
+
 	It("marks future provider keys as unimplemented", func() {
 		client := fake.NewClientBuilder().Build()
 		registry, err := newVendorProvisionerRegistry(

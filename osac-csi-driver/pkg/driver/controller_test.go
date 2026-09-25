@@ -1,9 +1,12 @@
 package driver
 
 import (
+	"bytes"
 	"context"
 	"net"
+	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -13,6 +16,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"k8s.io/klog/v2"
 
 	"github.com/osac-project/osac/osac-csi-driver/pkg/fulfillment"
 	"github.com/osac-project/osac/osac-csi-driver/pkg/proxy"
@@ -417,6 +421,14 @@ func TestCreateVolume_AlreadyExistsNotFoundViaList(t *testing.T) {
 }
 
 func TestCreateVolume_ErrorState(t *testing.T) {
+	var logOutput bytes.Buffer
+	klog.SetOutput(&logOutput)
+	klog.LogToStderr(false)
+	defer func() {
+		klog.SetOutput(os.Stderr)
+		klog.LogToStderr(true)
+	}()
+
 	vc := &mockVolumeClient{
 		createVolumeFn: func(_ context.Context, _ fulfillment.CreateVolumeParams) (*fulfillment.VolumeInfo, error) {
 			return &fulfillment.VolumeInfo{
@@ -442,6 +454,10 @@ func TestCreateVolume_ErrorState(t *testing.T) {
 	assertCode(t, err, codes.Internal)
 	if got, want := status.Convert(err).Message(), "volume provisioning failed"; got != want {
 		t.Fatalf("error message = %q, want %q", got, want)
+	}
+	klog.Flush()
+	if strings.Contains(logOutput.String(), "insufficient vg1 capacity") {
+		t.Fatalf("CSI driver logged the detailed fulfillment message: %s", logOutput.String())
 	}
 }
 

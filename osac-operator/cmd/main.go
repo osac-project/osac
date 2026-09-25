@@ -631,12 +631,10 @@ func setupVolumeControllers(mgr mcmanager.Manager, grpcConn *grpc.ClientConn) er
 	}
 
 	// Construct the provider registry from OSAC_VENDOR_CONTROLLERS. A missing or
-	// invalid configuration is deliberately NOT fatal: the operator runs with
-	// volume provisioning disabled (an empty registry) rather than crashing, so
-	// an unconfigured or misconfigured vendor backend can never take down the
-	// operator or the other controllers. Most setups (including LVMS/dev) have
-	// no vendor backend configured; their Volumes stay in Progressing until one
-	// is.
+	// invalid configuration is deliberately NOT fatal: an unconfigured or
+	// misconfigured vendor backend can never take down the operator or the other
+	// controllers. When one provider fails to initialize, keep any providers
+	// that initialized successfully available.
 	var provisioners controller.VendorProvisionerRegistry
 	endpoints, err := parseVendorControllers(os.Getenv(envVendorControllers))
 	switch {
@@ -656,7 +654,7 @@ func setupVolumeControllers(mgr mcmanager.Manager, grpcConn *grpc.ClientConn) er
 			localMgr.GetAPIReader(), localMgr.GetClient(), configNamespace, endpoints,
 		)
 		if perr != nil {
-			setupLog.Error(perr, "vendor provisioner registry init failed; volume provisioning disabled")
+			setupLog.Error(perr, "vendor provisioner registry init failed; some configured providers may be unavailable")
 		}
 	}
 
@@ -709,7 +707,7 @@ func newVendorProvisionerRegistry(
 		map[string]string{"vast": vastEndpoint},
 	)
 	if err != nil {
-		return nil, err
+		return registry, err
 	}
 	registry["vast"] = provisioner
 

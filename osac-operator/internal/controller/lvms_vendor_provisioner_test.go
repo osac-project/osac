@@ -22,6 +22,7 @@ import (
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -327,6 +328,92 @@ func TestLvmsCreateVolumeAdoptsExistingLogicalVolume(t *testing.T) {
 	}
 	if second.VendorContext[logicalVolumeNameContextKey] != first.VendorContext[logicalVolumeNameContextKey] {
 		t.Fatalf("adopted LogicalVolume name = %q, want %q", second.VendorContext[logicalVolumeNameContextKey], first.VendorContext[logicalVolumeNameContextKey])
+	}
+}
+
+func TestLvmsCreateVolumeWaitsForTerminatingExistingLogicalVolume(t *testing.T) {
+	api := newRecordingLogicalVolumeClient()
+	request := lvmsCreateRequest()
+	terminating := buildLogicalVolume(request, "worker-1")
+	terminating.SetUID(types.UID("terminating-logical-volume-uid"))
+	deletionTimestamp := metav1.Now()
+	terminating.SetDeletionTimestamp(&deletionTimestamp)
+	setNestedField(t, terminating.Object, "lv-being-deleted", "status", "volumeID")
+	api.objects[terminating.GetName()] = terminating
+
+	provisioner := newTestLvmsProvisioner(t, api)
+	response, err := provisioner.CreateVolume(context.Background(), request)
+	if err != nil {
+		t.Fatalf("CreateVolume error: %v", err)
+	}
+	if !response.Pending {
+		t.Fatal("CreateVolume returned a terminating LogicalVolume as ready")
+	}
+	if response.VendorVolumeID != "" {
+		t.Fatalf("VendorVolumeID = %q for a terminating LogicalVolume, want empty", response.VendorVolumeID)
+	}
+	if len(response.VendorContext) != 0 {
+		t.Fatalf("VendorContext = %v for a terminating LogicalVolume, want empty so it can be recreated", response.VendorContext)
+	}
+
+	delete(api.objects, terminating.GetName())
+	request.VendorContext = response.VendorContext
+	retry, err := provisioner.CreateVolume(context.Background(), request)
+	if err != nil {
+		t.Fatalf("CreateVolume after deletion error: %v", err)
+	}
+	if !retry.Pending || len(api.created) != 1 {
+		t.Fatalf("CreateVolume after deletion = (pending %t, creates %d), want pending with one replacement", retry.Pending, len(api.created))
+	}
+}
+
+func TestLvmsCreateVolumeDoesNotResumeTerminatingLogicalVolume(t *testing.T) {
+	api := newRecordingLogicalVolumeClient()
+	provisioner := newTestLvmsProvisioner(t, api)
+	request := lvmsCreateRequest()
+
+	initial, err := provisioner.CreateVolume(context.Background(), request)
+	if err != nil {
+		t.Fatalf("initial CreateVolume error: %v", err)
+	}
+	if !initial.Pending {
+		t.Fatal("initial CreateVolume response is not pending")
+	}
+	name := initial.VendorContext[logicalVolumeNameContextKey]
+	if name == "" {
+		t.Fatal("initial CreateVolume response has no LogicalVolume name in VendorContext")
+	}
+	terminating := api.objects[name]
+	setNestedField(t, terminating.Object, "lv-being-deleted", "status", "volumeID")
+	deletionTimestamp := metav1.Now()
+	terminating.SetDeletionTimestamp(&deletionTimestamp)
+
+	request.VendorContext = initial.VendorContext
+	response, err := provisioner.CreateVolume(context.Background(), request)
+	if err != nil {
+		t.Fatalf("CreateVolume for terminating LogicalVolume error: %v", err)
+	}
+	if !response.Pending {
+		t.Fatal("CreateVolume resumed a terminating LogicalVolume instead of waiting for deletion")
+	}
+	if response.VendorVolumeID != "" {
+		t.Fatalf("VendorVolumeID = %q for a terminating LogicalVolume, want empty", response.VendorVolumeID)
+	}
+	if len(response.VendorContext) != 0 {
+		t.Fatalf("VendorContext = %v for a terminating LogicalVolume, want empty so it can be recreated", response.VendorContext)
+	}
+
+	delete(api.objects, name)
+	request.VendorContext = response.VendorContext
+	retry, err := provisioner.CreateVolume(context.Background(), request)
+	if err != nil {
+		t.Fatalf("CreateVolume after deletion error: %v", err)
+	}
+	if !retry.Pending {
+		t.Fatal("CreateVolume after deletion is not pending for the replacement LogicalVolume")
+	}
+	if len(api.created) != 2 {
+		t.Fatalf("created %d LogicalVolumes after retry, want the original and one replacement", len(api.created))
 	}
 }
 

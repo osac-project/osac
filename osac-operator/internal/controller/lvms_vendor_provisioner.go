@@ -137,6 +137,14 @@ func (p *LvmsVendorProvisioner) CreateVolume(ctx context.Context, req VendorCrea
 			if ownershipErr := validateLogicalVolumeOwnership(volume, req); ownershipErr != nil {
 				return VendorCreateVolumeResponse{}, ownershipErr
 			}
+			if !volume.GetDeletionTimestamp().IsZero() {
+				// Drop the deleting object's identity so a later reconcile can
+				// create a fresh LogicalVolume after Kubernetes removes this one.
+				return VendorCreateVolumeResponse{
+					Protocol: string(v1alpha1.VolumeProtocolBlock),
+					Pending:  true,
+				}, nil
+			}
 		}
 		generatedName = volume.GetName()
 		if generatedName == "" {
@@ -161,6 +169,14 @@ func (p *LvmsVendorProvisioner) CreateVolume(ctx context.Context, req VendorCrea
 		}
 		if err := validateLogicalVolumeOwnership(volume, req); err != nil {
 			return VendorCreateVolumeResponse{}, err
+		}
+		if !volume.GetDeletionTimestamp().IsZero() {
+			// Do not resume from a resource that is being deleted; clearing the
+			// context lets the next reconcile create a replacement after deletion.
+			return VendorCreateVolumeResponse{
+				Protocol: string(v1alpha1.VolumeProtocolBlock),
+				Pending:  true,
+			}, nil
 		}
 	}
 

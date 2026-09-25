@@ -119,7 +119,17 @@ func resolveCatalogItemByName[O catalogItemResource](
 		return zero, grpcstatus.Errorf(grpccodes.NotFound,
 			"catalog item '%s'%s not found", key, source)
 	case 1:
-		return response.GetItems()[0], nil
+		item := response.GetItems()[0]
+		// The DAO list uses caller visibility, which for an admin includes
+		// every tenant. Restrict the result to the preferred tenant or
+		// shared so that a name (or ID) from an unrelated tenant is never
+		// returned.
+		itemTenant := item.GetMetadata().GetTenant()
+		if itemTenant != preferredTenant && itemTenant != auth.SharedTenant {
+			return zero, grpcstatus.Errorf(grpccodes.NotFound,
+				"catalog item '%s'%s not found", key, source)
+		}
+		return item, nil
 	default:
 		// The name resolved to multiple catalog items; break the tie by tenant precedence.
 		return resolvePreferredCatalogItem(ctx, catalogItemDao, key, preferredTenant, source)
@@ -165,4 +175,40 @@ func resolvePreferredCatalogItem[O catalogItemResource](
 
 	return zero, grpcstatus.Errorf(grpccodes.InvalidArgument,
 		"there are multiple catalog items with identifier or name '%s'%s", name, source)
+}
+
+// resolveAndLockCatalogItemReference detects whether the reference uses only a name
+// (no ID, no explicit shared flag, no explicit project) and, when it does, resolves
+// via the visibility-based resolveCatalogItemByName helper so that shared-tenant
+// catalog items are found from any tenant. For all other reference shapes (ID,
+// explicit shared, explicit project) it falls back to the existing scoped
+// resolveAndCanonicalizeLockedReference path.
+//
+// After resolution the reference is canonicalized (id, name, shared, project filled)
+// and the returned object is held under an exclusive row lock until the request
+// transaction ends.
+func resolveAndLockCatalogItemReference[O catalogItemResource](
+	ctx context.Context,
+	catalogItemDao *dao.GenericDAO[O],
+	ownerMetadata *privatev1.Metadata,
+	ref fullResourceReference,
+) (O, error) {
+	if ref.GetId() == "" && ref.GetName() != "" && !ref.GetShared() && ref.GetProject() == "" {
+		resolved, err := resolveCatalogItemByName(ctx, catalogItemDao, ref.GetName(), ownerMetadata.GetTenant(), "")
+		if err != nil {
+			var zero O
+			return zero, err
+		}
+		locked, lockErr := getLockedReferenceResource(ctx, catalogItemDao, resolved.GetId())
+		if lockErr != nil {
+			var zero O
+			return zero, resourceLookupError(lockErr, "catalog item", ref.GetName(), "", grpccodes.NotFound)
+		}
+		ref.SetId(locked.GetId())
+		ref.SetName(locked.GetMetadata().GetName())
+		ref.SetShared(locked.GetMetadata().GetTenant() == auth.SharedTenant)
+		ref.SetProject(locked.GetMetadata().GetProject())
+		return locked, nil
+	}
+	return resolveAndCanonicalizeLockedReference(ctx, catalogItemDao, ownerMetadata, ref, "catalog item", grpccodes.NotFound)
 }

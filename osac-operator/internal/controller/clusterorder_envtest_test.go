@@ -95,6 +95,24 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 		Expect(stored.Spec.AddOnOperators).To(BeEmpty())
 	})
 
+	It("should reject an empty add-on operator job name", func() {
+		const name = "cluster-order-empty-add-on-operator"
+		instance := newTestClusterOrder(name)
+		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, instance) })
+
+		instance.Status.AddOnOperatorJobs = []osacv1alpha1.AddOnOperatorJobStatus{{
+			Name: "",
+			JobStatus: osacv1alpha1.JobStatus{
+				JobID:     "addon-job-1",
+				Type:      osacv1alpha1.JobTypeProvision,
+				Timestamp: metav1.Now(),
+				State:     osacv1alpha1.JobStatePending,
+			},
+		}}
+		Expect(k8sClient.Status().Update(ctx, instance)).NotTo(Succeed())
+	})
+
 	countProvisionJobs := func(instance *osacv1alpha1.ClusterOrder) int {
 		count := 0
 		for _, j := range instance.Status.ProvisioningJobs {

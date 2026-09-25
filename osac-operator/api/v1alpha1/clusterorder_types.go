@@ -237,6 +237,7 @@ type WorkerStatus struct {
 // AddOnOperatorJobStatus tracks one add-on operator installation attempt.
 // Name is the stable Ansible role name for the operator.
 type AddOnOperatorJobStatus struct {
+	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
 
 	JobStatus `json:",inline"`

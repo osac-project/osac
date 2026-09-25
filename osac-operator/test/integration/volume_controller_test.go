@@ -17,6 +17,7 @@ limitations under the License.
 package integration
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -29,12 +30,13 @@ import (
 )
 
 const topoLVMLogicalVolumesCRD = "logicalvolumes.topolvm.io"
+const kubectlCommandTimeout = 10 * time.Second
 
 var _ = Describe("Volume controller startup", func() {
 	It("runs without the TopoLVM CRD when LVMS is not configured", func() {
-		crdOutput, err := utils.Run(exec.Command(
-			"kubectl", "get", "crd", topoLVMLogicalVolumesCRD, "--ignore-not-found", "-o", "name",
-		))
+		crdOutput, err := runKubectl(
+			"get", "crd", topoLVMLogicalVolumesCRD, "--ignore-not-found", "-o", "name",
+		)
 		Expect(err).NotTo(HaveOccurred())
 		if strings.TrimSpace(string(crdOutput)) != "" {
 			Skip("TopoLVM CRD is installed; this case covers the LVMS-disabled configuration")
@@ -47,12 +49,12 @@ var _ = Describe("Volume controller startup", func() {
 		Expect(operatorDeploymentEnv("OSAC_ENABLE_VOLUME_CONTROLLER")).To(Equal("true"))
 
 		Eventually(func() error {
-			output, err := utils.Run(exec.Command(
-				"kubectl", "get", "pods",
+			output, err := runKubectl(
+				"get", "pods",
 				"-l", "control-plane=controller-manager,app.kubernetes.io/name=operator",
 				"-n", operatorNamespace,
 				"-o", "jsonpath={.items[0].status.containerStatuses[0].ready}",
-			))
+			)
 			if err != nil {
 				return err
 			}
@@ -66,12 +68,18 @@ var _ = Describe("Volume controller startup", func() {
 
 func operatorDeploymentEnv(name string) string {
 	path := fmt.Sprintf(`{.items[0].spec.template.spec.containers[0].env[?(@.name=="%s")].value}`, name)
-	output, err := utils.Run(exec.Command(
-		"kubectl", "get", "deployments",
+	output, err := runKubectl(
+		"get", "deployments",
 		"-l", "app.kubernetes.io/name=operator",
 		"-n", operatorNamespace,
 		"-o", "jsonpath="+path,
-	))
+	)
 	Expect(err).NotTo(HaveOccurred())
 	return strings.TrimSpace(string(output))
+}
+
+func runKubectl(args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), kubectlCommandTimeout)
+	defer cancel()
+	return utils.Run(exec.CommandContext(ctx, "kubectl", args...))
 }

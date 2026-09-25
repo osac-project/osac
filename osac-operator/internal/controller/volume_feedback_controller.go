@@ -148,6 +148,7 @@ func syncVolumeDelete(_ context.Context, obj *v1alpha1.Volume, remote *privatev1
 	default:
 		return fmt.Errorf("invalid volume phase %q during deletion", obj.Status.Phase)
 	}
+	syncVolumeStatusMessage(obj, remote)
 	return nil
 }
 

@@ -112,7 +112,7 @@ func lvmsCreateRequest() VendorCreateVolumeRequest {
 
 func newTestLvmsProvisioner(t *testing.T, client *recordingLogicalVolumeClient) *LvmsVendorProvisioner {
 	t.Helper()
-	return NewLvmsVendorProvisioner(client)
+	return NewLvmsVendorProvisioner(client, client)
 }
 
 func setNestedField(t *testing.T, object map[string]interface{}, value interface{}, fields ...string) {
@@ -185,6 +185,35 @@ func TestLvmsCreateVolumeBuildsAndWaitsForLogicalVolume(t *testing.T) {
 	}
 	if got := response.VendorContext[logicalVolumeNameContextKey]; got != volume.GetName() {
 		t.Errorf("VendorContext[%q] = %q, want LogicalVolume name %q", logicalVolumeNameContextKey, got, volume.GetName())
+	}
+}
+
+func TestLvmsCreateVolumeReadsReadyStatusFromUncachedReader(t *testing.T) {
+	request := lvmsCreateRequest()
+	name := logicalVolumeResourceName(request)
+	logicalVolumeUID := "logical-volume-uid-42"
+
+	staleClient := newRecordingLogicalVolumeClient()
+	staleVolume := buildLogicalVolume(request, "worker-1")
+	staleVolume.SetUID(types.UID(logicalVolumeUID))
+	staleClient.objects[name] = staleVolume
+
+	apiReader := newRecordingLogicalVolumeClient()
+	readyVolume := staleVolume.DeepCopy()
+	setNestedField(t, readyVolume.Object, "lv-ready-42", "status", "volumeID")
+	apiReader.objects[name] = readyVolume
+
+	request.VendorContext = logicalVolumeVendorContext(request.UID, name, logicalVolumeUID)
+	provisioner := NewLvmsVendorProvisioner(staleClient, apiReader)
+	response, err := provisioner.CreateVolume(context.Background(), request)
+	if err != nil {
+		t.Fatalf("CreateVolume error: %v", err)
+	}
+	if response.Pending {
+		t.Fatal("CreateVolume returned pending from the stale cached object; want the ready API object")
+	}
+	if response.VendorVolumeID != "lv-ready-42" {
+		t.Fatalf("VendorVolumeID = %q, want lv-ready-42", response.VendorVolumeID)
 	}
 }
 

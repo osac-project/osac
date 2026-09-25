@@ -133,7 +133,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 			Object: privatev1.BareMetalInstanceType_builder{
 				Metadata: privatev1.Metadata_builder{
 					Name:   fmt.Sprintf("test-instance-type-%s", uuid.New()[24:32]),
-					Tenant: usersGroup,
+					Tenant: "shared",
 				}.Build(),
 				Spec: privatev1.BareMetalInstanceTypeSpec_builder{
 					Hardware: privatev1.BareMetalHardwareSpec_builder{

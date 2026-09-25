@@ -195,6 +195,14 @@ func (b *GenericServerBuilder[O]) AddAllowedTenants(values ...string) *GenericSe
 	return b
 }
 
+// SetAllowedTenants replaces the allowed-tenant set with exactly the supplied tenants. Use this
+// for platform-scoped servers whose objects must live in one specific tenant (e.g. shared-only
+// resources), rather than unioning onto the default which also allows all normal tenants.
+func (b *GenericServerBuilder[O]) SetAllowedTenants(values ...string) *GenericServerBuilder[O] {
+	b.allowedTenants = collections.NewSet(values...)
+	return b
+}
+
 // SetMetricsRegisterer sets the Prometheus registerer used to register the metrics. This is optional. If not set, no
 // metrics will be recorded.
 func (b *GenericServerBuilder[O]) SetMetricsRegisterer(value prometheus.Registerer) *GenericServerBuilder[O] {

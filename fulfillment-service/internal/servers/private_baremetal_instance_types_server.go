@@ -106,7 +106,7 @@ func (b *PrivateBareMetalInstanceTypesServerBuilder) Build() (result *PrivateBar
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
 		SetFilterDesc(b.filterDesc).
-		AddAllowedTenants(auth.SharedTenant).
+		SetAllowedTenants(auth.SharedTenant).
 		Build()
 	if err != nil {
 		return
@@ -134,6 +134,12 @@ func (s *PrivateBareMetalInstanceTypesServer) Get(ctx context.Context,
 
 func (s *PrivateBareMetalInstanceTypesServer) Create(ctx context.Context,
 	request *privatev1.BareMetalInstanceTypesCreateRequest) (response *privatev1.BareMetalInstanceTypesCreateResponse, err error) {
+	if tenant := request.GetObject().GetMetadata().GetTenant(); tenant != "" && tenant != auth.SharedTenant {
+		err = grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'metadata.tenant' must be '%s' or empty for bare metal instance types",
+			auth.SharedTenant)
+		return
+	}
 	request.GetObject().SetId(request.GetObject().GetMetadata().GetName())
 	err = s.generic.Create(ctx, request, &response)
 	return
@@ -225,6 +231,11 @@ func validateBareMetalInstanceTypeImmutability(merged, existing *privatev1.BareM
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"field 'name' is immutable and cannot be changed from '%s' to '%s'",
 			existing.GetMetadata().GetName(), merged.GetMetadata().GetName())
+	}
+	if merged.GetMetadata().GetTenant() != existing.GetMetadata().GetTenant() {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'metadata.tenant' is immutable and cannot be changed from '%s' to '%s'",
+			existing.GetMetadata().GetTenant(), merged.GetMetadata().GetTenant())
 	}
 
 	// Hardware is immutable after creation:

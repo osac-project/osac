@@ -21,6 +21,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -55,7 +56,7 @@ func validateAndCanonicalizeBareMetalInstanceCatalogItemPolicies(
 	}
 
 	scope := catalogItemScope(item)
-	if err := validateBareMetalInstanceCatalogItemInstanceTypePolicy(ctx, scope, fields.GetInstanceType(), bareMetalInstanceTypesDao); err != nil {
+	if err := validateBareMetalInstanceCatalogItemInstanceTypePolicy(ctx, fields.GetInstanceType(), bareMetalInstanceTypesDao); err != nil {
 		return nil, err
 	}
 
@@ -124,11 +125,11 @@ func validateBareMetalInstanceCatalogItemScalarPolicies(fields *privatev1.BareMe
 }
 
 // validateBareMetalInstanceCatalogItemInstanceTypePolicy checks a locked instance type or
-// editable default in the Catalog Item's exact tenant/project and stores its ID/name. A shared
-// offering cannot fix a tenant-local type.
+// editable default in the Catalog Item's fields and stores its ID/name.
+// BareMetalInstanceType is always platform-scoped (shared tenant), so it is resolved against
+// the shared scope regardless of the Catalog Item's own tenant.
 func validateBareMetalInstanceCatalogItemInstanceTypePolicy(
 	ctx context.Context,
-	scope referenceScope,
 	policy *privatev1.BareMetalInstanceTypeLocalReferenceFieldPolicy,
 	resourceDao *dao.GenericDAO[*privatev1.BareMetalInstanceType],
 ) error {
@@ -139,14 +140,12 @@ func validateBareMetalInstanceCatalogItemInstanceTypePolicy(
 	if err != nil {
 		return catalogItemPolicyError("fields.instance_type", err.Error())
 	}
-	if err := validateSharedCatalogItemLocalReferencePolicy(scope, "fields.instance_type", state.hasLocked, state.hasDefault); err != nil {
-		return err
-	}
+	platformScope := referenceScope{tenant: auth.SharedTenant}
 	resolve := func(ref *privatev1.BareMetalInstanceTypeLocalReference) (*privatev1.BareMetalInstanceTypeLocalReference, error) {
 		if ref == nil {
 			return nil, nil
 		}
-		resolved, resolveErr := resolveLockedResourceInScope(ctx, resourceDao, scope, ref.GetId(), ref.GetName(),
+		resolved, resolveErr := resolveLockedResourceInScope(ctx, resourceDao, platformScope, ref.GetId(), ref.GetName(),
 			"bare metal instance type", " in fields.instance_type", grpccodes.NotFound)
 		if resolveErr != nil {
 			return nil, resolveErr

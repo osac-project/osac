@@ -22,6 +22,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -92,6 +93,24 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 
 		stored := getClusterOrder(name)
 		Expect(stored.Spec.AddOnOperators).To(BeEmpty())
+	})
+
+	It("should reject an empty add-on operator job name", func() {
+		const name = "cluster-order-empty-add-on-operator"
+		instance := newTestClusterOrder(name)
+		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, instance) })
+
+		instance.Status.AddOnOperatorJobs = []osacv1alpha1.AddOnOperatorJobStatus{{
+			Name: "",
+			JobStatus: osacv1alpha1.JobStatus{
+				JobID:     "addon-job-1",
+				Type:      osacv1alpha1.JobTypeProvision,
+				Timestamp: metav1.Now(),
+				State:     osacv1alpha1.JobStatePending,
+			},
+		}}
+		Expect(k8sClient.Status().Update(ctx, instance)).NotTo(Succeed())
 	})
 
 	countProvisionJobs := func(instance *osacv1alpha1.ClusterOrder) int {
@@ -381,7 +400,7 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 	})
 
 	Context("Status patch safety", func() {
-		It("should preserve storage controller fields when patching status", func() {
+		It("should preserve controller-owned fields when patching status", func() {
 			const name = "cluster-order-patch-preserves-storage"
 			instance := newTestClusterOrder(name)
 			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
@@ -391,6 +410,23 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 			instance.Status.ClusterStorageJobs = []osacv1alpha1.JobStatus{
 				{JobID: "storage-job-1", Type: osacv1alpha1.JobTypeProvision, State: osacv1alpha1.JobStateSucceeded, Timestamp: metav1.Now()},
 			}
+			instance.Status.Conditions = []metav1.Condition{{
+				Type:               string(osacv1alpha1.ClusterOrderConditionAddOnOperatorsReady),
+				Status:             metav1.ConditionFalse,
+				LastTransitionTime: metav1.Now(),
+				Reason:             "OperatorInstallFailed",
+				Message:            "operator-one failed to install",
+			}}
+			instance.Status.AddOnOperatorJobs = []osacv1alpha1.AddOnOperatorJobStatus{{
+				Name: "operator-one",
+				JobStatus: osacv1alpha1.JobStatus{
+					JobID:     "addon-job-1",
+					Type:      osacv1alpha1.JobTypeProvision,
+					Timestamp: metav1.Now(),
+					State:     osacv1alpha1.JobStateFailed,
+					Message:   "operator-one failed to install",
+				},
+			}}
 			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
 
 			nn := types.NamespacedName{Name: name, Namespace: clusterOrderTestNamespace}
@@ -400,6 +436,11 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 			instance = getClusterOrder(name)
 			Expect(instance.Status.ClusterStorageJobs).To(HaveLen(1))
 			Expect(instance.Status.ClusterStorageJobs[0].JobID).To(Equal("storage-job-1"))
+			Expect(instance.Status.AddOnOperatorJobs).To(HaveLen(1))
+			Expect(instance.Status.AddOnOperatorJobs[0].Name).To(Equal("operator-one"))
+			operatorCondition := apimeta.FindStatusCondition(instance.Status.Conditions, string(osacv1alpha1.ClusterOrderConditionAddOnOperatorsReady))
+			Expect(operatorCondition).NotTo(BeNil())
+			Expect(operatorCondition.Status).To(Equal(metav1.ConditionFalse))
 		})
 	})
 

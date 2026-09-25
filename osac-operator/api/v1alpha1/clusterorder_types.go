@@ -164,6 +164,11 @@ const (
 	// and CSI drivers are installed on the CaaS cluster for this tenant.
 	// Owned by the OSAC Storage Controller. Does not gate Phase=Ready.
 	ClusterOrderConditionClusterStorageReady ClusterOrderConditionType = "ClusterStorageReady"
+
+	// ClusterOrderConditionAddOnOperatorsReady indicates whether all add-on
+	// operators have been successfully installed on the provisioned cluster.
+	// Owned by the AddOnOperatorReconciler. Does not gate Phase=Ready.
+	ClusterOrderConditionAddOnOperatorsReady ClusterOrderConditionType = "AddOnOperatorsReady"
 )
 
 // ClusterOrderClusterReferenceType contains a reference to the namespace created by this ClusterOrder
@@ -229,6 +234,15 @@ type WorkerStatus struct {
 	AttemptStartTime *metav1.Time `json:"attemptStartTime,omitempty"`
 }
 
+// AddOnOperatorJobStatus tracks one add-on operator installation attempt.
+// Name is the stable Ansible role name for the operator.
+type AddOnOperatorJobStatus struct {
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+
+	JobStatus `json:",inline"`
+}
+
 // ClusterOrderStatus defines the observed state of ClusterOrder
 type ClusterOrderStatus struct {
 	// Phase provides a single-value overview of the state of the ClusterOrder
@@ -257,6 +271,11 @@ type ClusterOrderStatus struct {
 	// ClusterStorageJobs holds the history of cluster storage provisioning/deprovisioning jobs
 	// +kubebuilder:validation:Optional
 	ClusterStorageJobs []JobStatus `json:"clusterStorageJobs,omitempty"`
+
+	// AddOnOperatorJobs holds the per-operator installation job history.
+	// One entry is recorded for each operator attempt.
+	// +kubebuilder:validation:Optional
+	AddOnOperatorJobs []AddOnOperatorJobStatus `json:"addOnOperatorJobs,omitempty"`
 
 	// DesiredConfigVersion is a hash of the current spec, used to detect spec changes
 	// that require re-provisioning.

@@ -179,6 +179,74 @@ spec:
           status:
             description: ClusterOrderStatus defines the observed state of ClusterOrder
             properties:
+              addOnOperatorJobs:
+                description: |-
+                  AddOnOperatorJobs holds the per-operator installation job history.
+                  One entry is recorded for each operator attempt.
+                items:
+                  description: |-
+                    AddOnOperatorJobStatus tracks one add-on operator installation attempt.
+                    Name is the stable Ansible role name for the operator.
+                  properties:
+                    blockDeletionOnFailure:
+                      description: |-
+                        BlockDeletionOnFailure indicates whether CR deletion should be blocked if this job fails.
+                        AAP sets this to true to prevent orphaned cloud resources when deprovisioning fails.
+                      type: boolean
+                    configVersion:
+                      description: |-
+                        ConfigVersion is the DesiredConfigVersion at the time this job was triggered.
+                        Used to determine retry behavior on failure: if ConfigVersion differs from
+                        the current DesiredConfigVersion, a new job is triggered immediately.
+                        If they match, the controller retries with exponential backoff.
+                      type: string
+                    jobID:
+                      description: JobID is the AAP job identifier from the provisioning
+                        provider API response.
+                      type: string
+                    message:
+                      description: Message provides human-readable status or error
+                        information
+                      type: string
+                    name:
+                      minLength: 1
+                      type: string
+                    state:
+                      description: State is the current state of the job
+                      enum:
+                      - Pending
+                      - Waiting
+                      - Running
+                      - Succeeded
+                      - Failed
+                      - Canceled
+                      - Unknown
+                      type: string
+                    target:
+                      description: |-
+                        Target identifies which manager this job was dispatched to, for resources
+                        that provision through multiple managers concurrently (e.g. a Subnet
+                        dispatching to both a fabric manager and a k8s manager). Empty for
+                        resources with a single provisioning target.
+                      type: string
+                    timestamp:
+                      description: Timestamp when this job was created/triggered
+                      format: date-time
+                      type: string
+                    type:
+                      description: Type indicates the operation type
+                      enum:
+                      - provision
+                      - deprovision
+                      type: string
+                  required:
+                  - jobID
+                  - name
+                  - state
+                  - timestamp
+                  - type
+                  type: object
+                type: array
               apiEndpoint:
                 description: |-
                   ApiEndpoint is the internal API server VIP allocated by MetalLB.

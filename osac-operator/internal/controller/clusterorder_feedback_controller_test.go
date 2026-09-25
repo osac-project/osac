@@ -979,6 +979,7 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 			osacv1alpha1.ConditionControlPlaneAvailable,
 			osacv1alpha1.ConditionClusterAvailable,
 			string(osacv1alpha1.ClusterOrderConditionClusterStorageReady),
+			string(osacv1alpha1.ClusterOrderConditionAddOnOperatorsReady),
 			osacv1alpha1.ConditionProgressing,
 			osacv1alpha1.ConditionDeleting,
 		}
@@ -1060,6 +1061,15 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 			mockClient.updateResponse = &privatev1.ClustersUpdateResponse{}
 		})
 
+		AfterEach(func() {
+			clusterOrder := &osacv1alpha1.ClusterOrder{}
+			if err := k8sClient.Get(testCtx, typeNamespacedName, clusterOrder); err == nil {
+				clusterOrder.Finalizers = nil
+				_ = k8sClient.Update(testCtx, clusterOrder)
+				_ = k8sClient.Delete(testCtx, clusterOrder)
+			}
+		})
+
 		It("should propagate node set sizes to fulfillment", func() {
 			request := reconcile.Request{NamespacedName: typeNamespacedName}
 			result, err := reconciler.Reconcile(testCtx, request)
@@ -1075,6 +1085,38 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 				}
 			}
 			Expect(hasNodeSetsPath).To(BeTrue())
+		})
+
+		It("should propagate add-on operator job states to fulfillment", func() {
+			clusterOrder := &osacv1alpha1.ClusterOrder{}
+			Expect(k8sClient.Get(testCtx, typeNamespacedName, clusterOrder)).To(Succeed())
+			clusterOrder.Status.AddOnOperatorJobs = []osacv1alpha1.AddOnOperatorJobStatus{
+				{Name: "pending", JobStatus: osacv1alpha1.JobStatus{Type: osacv1alpha1.JobTypeProvision, Timestamp: metav1.Now(), State: osacv1alpha1.JobStatePending}},
+				{Name: "running", JobStatus: osacv1alpha1.JobStatus{Type: osacv1alpha1.JobTypeProvision, Timestamp: metav1.Now(), State: osacv1alpha1.JobStateRunning}},
+				{Name: "installed", JobStatus: osacv1alpha1.JobStatus{Type: osacv1alpha1.JobTypeProvision, Timestamp: metav1.Now(), State: osacv1alpha1.JobStateSucceeded}},
+				{Name: "failed", JobStatus: osacv1alpha1.JobStatus{Type: osacv1alpha1.JobTypeProvision, Timestamp: metav1.Now(), State: osacv1alpha1.JobStateFailed, Message: "installation failed"}},
+			}
+			Expect(k8sClient.Status().Update(testCtx, clusterOrder)).To(Succeed())
+
+			result, err := reconciler.Reconcile(testCtx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.IsZero()).To(BeTrue())
+			Expect(mockClient.updateCalled).To(BeTrue())
+			statuses := mockClient.lastUpdate.GetStatus().GetAddOnOperators()
+			Expect(statuses).To(HaveLen(4))
+			Expect(statuses[0].GetState()).To(Equal(privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_INSTALLING))
+			Expect(statuses[1].GetState()).To(Equal(privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_INSTALLING))
+			Expect(statuses[2].GetState()).To(Equal(privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_INSTALLED))
+			Expect(statuses[3].GetState()).To(Equal(privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_FAILED))
+			Expect(statuses[3].GetMessage()).To(Equal("installation failed"))
+
+			hasAddOnOperatorsPath := false
+			for _, path := range mockClient.lastUpdateMask.GetPaths() {
+				if path == "status.add_on_operators" {
+					hasAddOnOperatorsPath = true
+				}
+			}
+			Expect(hasAddOnOperatorsPath).To(BeTrue())
 		})
 	})
 })

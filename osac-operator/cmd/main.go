@@ -483,15 +483,13 @@ func setupComputeInstanceControllers(
 	return nil
 }
 
-// setupTenantController registers the Tenant controller (namespace + UDN only).
+// setupTenantController registers the Tenant lifecycle controller.
 func setupTenantController(mgr mcmanager.Manager) error {
-	targetCluster := targetClusterFromManager(mgr)
 	tenantNamespace := os.Getenv(envTenantNamespace)
 
 	if err := (controller.NewTenantReconciler(
 		mgr,
 		tenantNamespace,
-		targetCluster,
 	)).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("tenant controller: %w", err)
 	}

@@ -13,9 +13,10 @@ custom resources and reconciles them to their desired state:
   Planes](https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/hosted_control_planes/hosted-control-planes-overview).
 - **ComputeInstance** (`ci`) — provisions virtual machines via
   [KubeVirt](https://kubevirt.io/).
-- **Tenant** — creates a namespace and an [OVN-Kubernetes
-  UserDefinedNetwork](https://github.com/ovn-org/ovn-kubernetes/blob/master/go-controller/pkg/crd/userdefinednetwork/v1/network.go)
-  (layer-2, persistent IPAM) for tenant isolation.
+- **Tenant** — tracks the tenant lifecycle without requiring a tenant namespace
+  on the workload cluster; leaves `status.namespace` unset rather than reporting
+  a namespace that may not exist. VMs with a subnet use the subnet namespace;
+  VMs without one fall back to the tenant name when locating a VM.
 - **VirtualNetwork** (`vnet`) — represents a cloud virtual network / VPC with
   IPv4/IPv6 CIDR blocks and a NetworkClass.
 - **Subnet** (`subnet`) — represents a subnet within a VirtualNetwork.
@@ -36,8 +37,9 @@ and networking resources) integrate with Ansible Automation Platform over the RE
 API. The operator launches job/workflow templates and polls AAP for job status.
 
 Tenant storage provisioning is optional when AAP credentials or templates are not
-configured; the Tenant reconciler still manages namespace and UDN lifecycle. Feedback
-controllers sync state to the fulfillment service over gRPC only (no AAP integration).
+configured; the Tenant reconciler tracks tenant lifecycle without checking for a
+workload-cluster tenant namespace. Feedback controllers sync state to the
+fulfillment service over gRPC only (no AAP integration).
 
 - `OSAC_AAP_URL` — AAP server URL (required).
 - `OSAC_AAP_TOKEN` — AAP authentication token (required).

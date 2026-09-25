@@ -421,6 +421,23 @@ var _ = Describe("ComputeInstance Controller", func() {
 	})
 
 	Context("Helper functions", func() {
+		Describe("computeInstanceTargetNamespace", func() {
+			It("uses the tenant name when status.namespace is unset", func() {
+				tenant := &osacv1alpha1.Tenant{ObjectMeta: metav1.ObjectMeta{Name: "tenant"}}
+				Expect(computeInstanceTargetNamespace(tenant, "")).To(Equal("tenant"))
+			})
+
+			It("retains an existing tenant namespace", func() {
+				tenant := &osacv1alpha1.Tenant{Status: osacv1alpha1.TenantStatus{Namespace: "existing"}}
+				Expect(computeInstanceTargetNamespace(tenant, "")).To(Equal("existing"))
+			})
+
+			It("prefers the subnet namespace", func() {
+				tenant := &osacv1alpha1.Tenant{Status: osacv1alpha1.TenantStatus{Namespace: "existing"}}
+				Expect(computeInstanceTargetNamespace(tenant, "subnet")).To(Equal("subnet"))
+			})
+		})
+
 		Describe("provisioning.FindJobByID", func() {
 			It("should return nil when jobs slice is empty", func() {
 				jobs := []osacv1alpha1.JobStatus{}

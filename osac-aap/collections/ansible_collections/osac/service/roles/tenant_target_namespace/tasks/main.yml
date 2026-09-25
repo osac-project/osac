@@ -17,4 +17,6 @@
 
   - name: Set tenant target namespace as result
     ansible.builtin.set_fact:
-      tenant_target_namespace: "{{ tenant_target_namespace_tenant.resources[0].status.namespace }}"
+      tenant_target_namespace: >-
+        {{ tenant_target_namespace_tenant.resources[0].get('status', {}).get('namespace')
+           | default(tenant_target_namespace_tenant.resources[0].metadata.name, true) }}

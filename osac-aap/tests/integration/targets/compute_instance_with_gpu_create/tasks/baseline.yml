@@ -14,7 +14,6 @@
       ansible.builtin.set_fact:
         osac_job_vars:
           resource: "{{ test_compute_instance }}"
-        tenant_target_namespace: "computeinstance-test-vm-gpu-work"
         tenant_storage_class_storage_classes:
           - name: "test-storage-class"
             tier: "local"

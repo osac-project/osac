@@ -64,10 +64,6 @@ ROLE_SCENARIO_TESTS=(
   "cluster_working_namespace:test_not_found"
   "cluster_working_namespace:test_predefined"
   "cluster_working_namespace:test_found"
-  "tenant_target_namespace:test_not_found"
-  "tenant_target_namespace:test_predefined"
-  "tenant_target_namespace:test_found"
-  "tenant_target_namespace:test_no_status_namespace"
 )
 
 echo "=== Running Workflow Integration Tests ==="

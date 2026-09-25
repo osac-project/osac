@@ -14,7 +14,6 @@
       ansible.builtin.set_fact:
         osac_job_vars:
           resource: "{{ test_compute_instance }}"
-        tenant_target_namespace: "computeinstance-test-vm-work"
         # Note: delete.yaml doesn't have override hooks yet, so we use noop_template
         # TODO: Refactor ocp_virt_vm delete.yaml to add override points
         template_id_override: "osac.test_overrides.noop_template"
@@ -36,12 +35,11 @@
           - compute_instance_name == "test-vm"
         fail_msg: "Compute instance name not extracted correctly"
 
-    - name: Verify tenant target namespace determined
+    - name: Verify subnet target namespace supplied
       ansible.builtin.assert:
         that:
-          - tenant_target_namespace is defined
-          - tenant_target_namespace == "computeinstance-test-vm-work"
-        fail_msg: "Tenant target namespace not set correctly"
+          - test_compute_instance.metadata.annotations['osac.openshift.io/subnet-target-namespace'] == 'test-subnet'
+        fail_msg: "Subnet target namespace not set correctly"
 
     - name: Verify template ID extracted
       ansible.builtin.assert:

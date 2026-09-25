@@ -21,6 +21,7 @@
         annotations:
           osac.openshift.io/tenant: "{{ test_namespace }}"
           osac.openshift.io/guest-os-family: "windows"
+          osac.openshift.io/subnet-target-namespace: "{{ test_namespace }}"
       spec:
         vcpus: 4
         memoryGiB: 8
@@ -50,7 +51,6 @@
             tasks_from: create
           vars:
             compute_instance_name: "{{ test_vm_name }}"
-            tenant_target_namespace: "{{ test_namespace }}"
             tenant_storage_class_name: "lvms-vg1"
             tenant_storage_class_storage_classes:
               - name: "lvms-vg1"
@@ -112,7 +112,6 @@
                 tasks_from: delete
               vars:
                 compute_instance_name: "{{ test_vm_name }}"
-                tenant_target_namespace: "{{ test_namespace }}"
                 template_parameters: {}
                 template_id: "ocp_virt_vm"
                 compute_instance_label: "osac.openshift.io/compute-instance"

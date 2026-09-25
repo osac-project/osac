@@ -34,7 +34,7 @@ func NewLifecycleClientFromConfig(
 	lifecycle LifecycleConfig,
 	caPool *trust.CertPool,
 ) (LifecycleClient, error) {
-	if err := ValidateBaseKeycloakConfig(base); err != nil {
+	if err := ValidateBaseConfig(base); err != nil {
 		return nil, err
 	}
 	if err := ValidateLifecycleConfig(lifecycle); err != nil {

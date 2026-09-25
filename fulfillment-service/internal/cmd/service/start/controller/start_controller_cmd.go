@@ -264,6 +264,38 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		return fmt.Errorf("failed to load trusted CA certificates: %w", err)
 	}
 
+	// Read the vault flags:
+	r.args.vaultBase, err = vault.BaseConfigFromFlags(r.flags)
+	if err != nil {
+		return fmt.Errorf("failed to read vault flags: %w", err)
+	}
+	if err = vault.ValidateBaseConfig(r.args.vaultBase); err != nil {
+		return fmt.Errorf("invalid vault configuration: %w", err)
+	}
+
+	// Create the vault lifecycle client:
+	r.args.vaultLifecycle, err = vault.LifecycleConfigFromFlags(r.flags)
+	if err != nil {
+		return fmt.Errorf("failed to read vault lifecycle flags: %w", err)
+	}
+	vaultCaPool := caPool
+	if r.args.vaultBase.CaCertFile != "" {
+		vaultCaPool, err = trust.NewCertPool().
+			SetLogger(r.logger).
+			AddFiles(r.args.caFiles...).
+			AddFile(r.args.vaultBase.CaCertFile).
+			Build()
+		if err != nil {
+			return fmt.Errorf("failed to load vault CA certificates: %w", err)
+		}
+	}
+	vaultLifecycleClient, err := vault.NewLifecycleClientFromConfig(
+		r.logger, r.args.vaultBase, r.args.vaultLifecycle, vaultCaPool,
+	)
+	if err != nil {
+		return err
+	}
+
 	// Create the token source:
 	r.logger.InfoContext(ctx, "Creating token source")
 	tokenSource, err := r.createTokenSource(ctx, caPool)
@@ -867,39 +899,6 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 			)
 		}
 	}()
-
-	// Read the vault flags:
-	r.args.vaultBase, err = vault.BaseConfigFromFlags(r.flags)
-	if err != nil {
-		return fmt.Errorf("failed to read vault flags: %w", err)
-	}
-
-	// Create the vault lifecycle client:
-	var vaultLifecycleClient vault.LifecycleClient
-	if r.args.vaultBase.Endpoint != "" {
-		r.args.vaultLifecycle, err = vault.LifecycleConfigFromFlags(r.flags)
-		if err != nil {
-			return fmt.Errorf("failed to read vault lifecycle flags: %w", err)
-		}
-		vaultCaPool := caPool
-		if r.args.vaultBase.CaCertFile != "" {
-			var loadErr error
-			vaultCaPool, loadErr = trust.NewCertPool().
-				SetLogger(r.logger).
-				AddFiles(r.args.caFiles...).
-				AddFile(r.args.vaultBase.CaCertFile).
-				Build()
-			if loadErr != nil {
-				return fmt.Errorf("failed to load vault CA certificates: %w", loadErr)
-			}
-		}
-		vaultLifecycleClient, err = vault.NewLifecycleClientFromConfig(
-			r.logger, r.args.vaultBase, r.args.vaultLifecycle, vaultCaPool,
-		)
-		if err != nil {
-			return err
-		}
-	}
 
 	// Create the tenant reconciler:
 	r.logger.InfoContext(ctx, "Creating tenant reconciler")

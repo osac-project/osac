@@ -131,4 +131,42 @@ var _ = Describe("Catalog item name resolution", func() {
 		Expect(err).To(HaveOccurred())
 		Expect(status.Code(err)).To(Equal(codes.NotFound))
 	})
+
+	It("returns NotFound when a name-only match belongs to an unrelated tenant", func() {
+		// Create a second tenant that is neither the caller's tenant nor shared.
+		const unrelatedTenant = "other-org"
+		tenantsDao, err := dao.NewGenericDAO[*privatev1.Tenant]().
+			SetLogger(logger).
+			SetTenancyLogic(tenancy).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+		_, err = tenantsDao.Create().
+			SetObject(privatev1.Tenant_builder{
+				Id: unrelatedTenant,
+				Metadata: privatev1.Metadata_builder{
+					Name:   unrelatedTenant,
+					Tenant: unrelatedTenant,
+				}.Build(),
+			}.Build()).
+			Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+
+		// Seed a catalog item visible to the admin but owned by the unrelated tenant.
+		_, err = catalogItemsDao.Create().SetObject(privatev1.ComputeInstanceCatalogItem_builder{
+			Id: "other-org-item",
+			Metadata: privatev1.Metadata_builder{
+				Name:   "exclusive-offering",
+				Tenant: unrelatedTenant,
+			}.Build(),
+			Title:     "Other Org Offering",
+			Published: true,
+		}.Build()).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+
+		// An admin with total visibility resolves by name from testTenant.
+		// The item belongs to an unrelated tenant, so it must not be returned.
+		_, err = resolveCatalogItemByName(ctx, catalogItemsDao, "exclusive-offering", testTenant, "")
+		Expect(err).To(HaveOccurred())
+		Expect(status.Code(err)).To(Equal(codes.NotFound))
+	})
 })

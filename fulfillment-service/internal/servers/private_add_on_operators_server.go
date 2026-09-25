@@ -206,7 +206,7 @@ func validateOCPVersionRange(minVersion, maxVersion string) error {
 	var min, max *semver.Version
 	if minVersion != "" {
 		var err error
-		min, err = semver.NewVersion(minVersion)
+		min, err = parseOCPVersion(minVersion)
 		if err != nil {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"field 'min_ocp_version' is not a valid version: %v", err)
@@ -214,7 +214,7 @@ func validateOCPVersionRange(minVersion, maxVersion string) error {
 	}
 	if maxVersion != "" {
 		var err error
-		max, err = semver.NewVersion(maxVersion)
+		max, err = parseOCPVersion(maxVersion)
 		if err != nil {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"field 'max_ocp_version' is not a valid version: %v", err)
@@ -225,6 +225,13 @@ func validateOCPVersionRange(minVersion, maxVersion string) error {
 			"min_ocp_version '%s' must be <= max_ocp_version '%s'", minVersion, maxVersion)
 	}
 	return nil
+}
+
+func parseOCPVersion(version string) (*semver.Version, error) {
+	if version == "" {
+		return nil, nil
+	}
+	return semver.NewVersion(version)
 }
 
 func ensureSharedOwnership(object *privatev1.AddOnOperator) error {

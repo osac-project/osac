@@ -57,6 +57,15 @@ type fullResourceReference interface {
 	SetProject(string)
 }
 
+func canonicalizeResourceReference(reference resourceReference, object referenceResource) {
+	reference.SetId(object.GetId())
+	reference.SetName(object.GetMetadata().GetName())
+	if fullReference, ok := reference.(fullResourceReference); ok {
+		fullReference.SetProject(object.GetMetadata().GetProject())
+		fullReference.SetShared(object.GetMetadata().GetTenant() == auth.SharedTenant)
+	}
+}
+
 func validateImmutableReferenceIdentity[T interface {
 	fullResourceReference
 	proto.Message
@@ -164,12 +173,7 @@ func resolveAndCanonicalizeReferenceWithGet[O referenceResource](
 		return object, err
 	}
 
-	reference.SetId(object.GetId())
-	reference.SetName(object.GetMetadata().GetName())
-	if fullReference, ok := reference.(fullResourceReference); ok {
-		fullReference.SetProject(object.GetMetadata().GetProject())
-		fullReference.SetShared(object.GetMetadata().GetTenant() == auth.SharedTenant)
-	}
+	canonicalizeResourceReference(reference, object)
 	return object, nil
 }
 

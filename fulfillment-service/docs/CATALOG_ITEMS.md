@@ -337,9 +337,10 @@ only for policies; resource lists do not use it.
 
 Cluster `node_sets` policies apply to the complete map, also under `items`. A locked map rejects an
 explicit user map; a nonempty user map replaces an editable default in full. Every node set must
-have a positive size and a resolvable BareMetalInstanceType reference. Catalog policy references
-are validated in the catalog item's scope; the effective cluster map is resolved in the cluster's
-scope after applying policies. A concrete catalog network-attachment policy also requires a fabric
+have a positive size and a resolvable BareMetalInstanceType reference. Catalog node-set hardware references and the effective Cluster map are both resolved from
+**shared** BareMetalInstanceTypes after applying policies; a tenant-owned catalog item does not
+make a tenant-only hardware type selectable for CaaS. Tenant-scoped hardware types remain valid
+for non-CaaS BMIs, and CaaS tenant/shared precedence is not defined. A concrete catalog network-attachment policy also requires a fabric
 port on every catalog-selected BareMetalInstanceType. For a request-supplied network attachment,
 fulfillment checks the effective types for fabric ports during cluster creation.
 
@@ -492,12 +493,14 @@ commands support `--template`, though the option currently emits a deprecation w
 
 ```bash
 osac create cluster --template sandbox \
-  --node-set name=workers,size=1,baremetal-instance-type=<tenant-bmit-name>
+  --node-set name=workers,size=1,baremetal-instance-type=<shared-bmit-name>
 osac create computeinstance --template osac.templates.ocp_virt_vm
 ```
 
-For direct-template creation, use a BareMetalInstanceType accessible in the cluster's scope;
-the shared `fc430` reference above belongs to the catalog policy, not the template.
+For Cluster creation (including direct-template creation), select a shared BareMetalInstanceType
+by name. The shared `fc430` reference above belongs to the catalog policy, not the template.
+The private CaaS worker BMI path uses the fixed shared `osac.templates.bm_host_provisioning`
+template directly, not an unrestricted `system` passthrough catalog item.
 
 The bare metal CLI subcommand requires `--catalog-item`. To create directly from a template, use
 the API or `osac create -f` with `spec.template`.

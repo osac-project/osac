@@ -116,7 +116,7 @@ func (r *Reconciler) removeFailedExcess(
 	log := ctrllog.FromContext(ctx)
 
 	if w.ResourceID != "" {
-		if err := r.fulfillment.DeleteBareMetalInstance(ctx, w.ResourceID); err != nil {
+		if err := r.checkedDeleteBMI(ctx, co, w); err != nil {
 			log.Error(err, "deleting excess failed BMI", "worker", w.Name)
 			return append(workers, w)
 		}
@@ -236,7 +236,7 @@ func (r *Reconciler) handleDeletingWorkers(
 			kept = append(kept, *w)
 			continue
 		}
-		if delErr := r.fulfillment.DeleteBareMetalInstance(ctx, w.ResourceID); delErr != nil {
+		if delErr := r.checkedDeleteBMI(ctx, co, *w); delErr != nil {
 			log.Error(delErr, "retrying BMI deletion", "worker", w.Name)
 		}
 		kept = append(kept, *w)

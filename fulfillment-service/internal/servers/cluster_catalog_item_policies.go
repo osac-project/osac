@@ -334,7 +334,7 @@ func validateClusterCatalogItemNodeSetPolicy(
 	}
 	for name, node := range nodeMap.GetItems() {
 		ref := node.GetBaremetalInstanceType()
-		resolved, err := resolveAndCanonicalizeLockedReference(ctx, instanceTypes, item.GetMetadata(), ref, "bare metal instance type", grpccodes.InvalidArgument)
+		resolved, err := resolveCaaSBareMetalInstanceType(ctx, instanceTypes, item.GetMetadata(), ref, "bare metal instance type", true)
 		if err != nil {
 			if grpcstatus.Code(err) != grpccodes.InvalidArgument {
 				return err

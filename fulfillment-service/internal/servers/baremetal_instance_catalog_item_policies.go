@@ -98,7 +98,9 @@ func applyBareMetalInstanceCatalogItemPolicies(
 	if err := applyPolicy(fields.GetAutoExternalIpAttachment(), spec.HasAutoExternalIpAttachment(), spec.SetAutoExternalIpAttachment, decodeBoolPolicy, identity[bool]); err != nil {
 		return fmt.Errorf("auto_external_ip_attachment: %w", err)
 	}
-	if err := applyPolicy(fields.GetInstanceType(), spec.GetInstanceType() != nil, spec.SetInstanceType, decodeBareMetalInstanceTypeReferencePolicy, cloneMessage[*privatev1.BareMetalInstanceTypeLocalReference]); err != nil {
+	if err := applyPolicy(fields.GetInstanceType(), spec.GetInstanceType() != nil, func(ref *privatev1.BareMetalInstanceTypeLocalReference) {
+		spec.SetInstanceType(privatev1.BareMetalInstanceTypeReference_builder{Id: ref.GetId(), Name: ref.GetName()}.Build())
+	}, decodeBareMetalInstanceTypeReferencePolicy, cloneMessage[*privatev1.BareMetalInstanceTypeLocalReference]); err != nil {
 		return fmt.Errorf("instance_type: %w", err)
 	}
 	if err := applyPolicy(fields.GetDiskImage(), spec.GetDiskImage() != nil, spec.SetDiskImage, decodeDiskImageReferencePolicy, cloneMessage[*privatev1.DiskImageReference]); err != nil {

@@ -138,7 +138,8 @@ var _ = Describe("Bare-metal worker provisioning", func() {
 		// Preload the disk-image chain (Cluster -> ClusterVersion -> DiskImage) and the instance type
 		// carrying a fabric-role port, so the reconciler can resolve everything a BMI create needs.
 		fc.AddCluster(privatev1.Cluster_builder{
-			Id: clusterUUID,
+			Id:       clusterUUID,
+			Metadata: privatev1.Metadata_builder{Tenant: "tenant1"}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
 				Version: privatev1.ClusterVersionReference_builder{Id: cvID}.Build(),
 			}.Build(),
@@ -163,9 +164,10 @@ var _ = Describe("Bare-metal worker provisioning", func() {
 		// precisely the OSAC-1436 seam; the reconciler passes the names through onto each BMI.
 		co := &osacv1alpha1.ClusterOrder{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      coName,
-				Namespace: testNamespace,
-				Labels:    map[string]string{clusterIDLabel: clusterUUID},
+				Name:        coName,
+				Namespace:   testNamespace,
+				Labels:      map[string]string{clusterIDLabel: clusterUUID},
+				Annotations: map[string]string{"osac.openshift.io/tenant": "tenant1"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
 				TemplateID:   "test",
@@ -249,12 +251,12 @@ var _ = Describe("Bare-metal worker provisioning", func() {
 			Expect(w.ResourceID).ToNot(BeEmpty())
 		}
 
-		// Two worker BMIs were created, tenant-invisible (system tenant) and carrying the
+		// Two tenant-owned worker BMIs were created and carry the
 		// unresolved network attachment names — provisioning has genuinely started.
 		calls := fc.CreateCalls()
 		Expect(calls).To(HaveLen(2))
 		for _, bmi := range calls {
-			Expect(bmi.GetMetadata().GetTenant()).To(Equal("system"))
+			Expect(bmi.GetMetadata().GetTenant()).To(Equal("tenant1"))
 			na := bmi.GetSpec().GetNetworkAttachments()
 			Expect(na).To(HaveLen(1))
 			Expect(na[0].GetSubnet().GetName()).To(Equal("my-subnet"))
@@ -327,7 +329,7 @@ var _ = Describe("Bare-metal worker provisioning", func() {
 		// Given: a bare-metal node set + system-owned catalog item.
 		// When:  the reconciler creates BMIs via the fake private API.
 		// Then:  each recorded BMI carries instance_type, disk_image, user_data (ignition),
-		//   network_attachments, and tenant="system"; they are invisible to tenant queries.
+		//   network_attachments, and the authoritative Cluster tenant.
 	})
 
 	PIt("cleans up all BMIs on cluster delete [OSAC-4176]", func() {
@@ -349,7 +351,8 @@ var _ = Describe("Bare-metal worker provisioning", func() {
 			fc, baremetalworker.NewIgnitionFetcher(nil), rec, testNamespace)
 
 		fc.AddCluster(privatev1.Cluster_builder{
-			Id: clusterUUID,
+			Id:       clusterUUID,
+			Metadata: privatev1.Metadata_builder{Tenant: "tenant1"}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
 				Version: privatev1.ClusterVersionReference_builder{Id: cvID}.Build(),
 			}.Build(),
@@ -371,10 +374,11 @@ var _ = Describe("Bare-metal worker provisioning", func() {
 
 		co := &osacv1alpha1.ClusterOrder{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:       "bmw-rebuild",
-				Namespace:  testNamespace,
-				Labels:     map[string]string{clusterIDLabel: clusterUUID},
-				Finalizers: []string{"baremetalworker.osac.openshift.io/finalizer"},
+				Name:        "bmw-rebuild",
+				Namespace:   testNamespace,
+				Labels:      map[string]string{clusterIDLabel: clusterUUID},
+				Annotations: map[string]string{"osac.openshift.io/tenant": "tenant1"},
+				Finalizers:  []string{"baremetalworker.osac.openshift.io/finalizer"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
 				TemplateID:   "test",
@@ -414,17 +418,19 @@ var _ = Describe("Bare-metal worker provisioning", func() {
 		// Create BMIs in the fake for two workers. The fake defaults resource ID to name.
 		_, err := fc.CreateBareMetalInstance(ctx, privatev1.BareMetalInstance_builder{
 			Metadata: privatev1.Metadata_builder{
-				Tenant: "system",
-				Name:   "bmw-rebuild-worker-0",
-				Labels: map[string]string{"osac.openshift.io/cluster-order": "bmw-rebuild"},
+				Tenant:      "tenant1",
+				Name:        "bmw-rebuild-worker-0",
+				Labels:      map[string]string{"osac.openshift.io/cluster-order": "bmw-rebuild"},
+				Annotations: map[string]string{"osac.openshift.io/owner-reference": "ClusterOrder/bmw-rebuild"},
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		_, err = fc.CreateBareMetalInstance(ctx, privatev1.BareMetalInstance_builder{
 			Metadata: privatev1.Metadata_builder{
-				Tenant: "system",
-				Name:   "bmw-rebuild-worker-1",
-				Labels: map[string]string{"osac.openshift.io/cluster-order": "bmw-rebuild"},
+				Tenant:      "tenant1",
+				Name:        "bmw-rebuild-worker-1",
+				Labels:      map[string]string{"osac.openshift.io/cluster-order": "bmw-rebuild"},
+				Annotations: map[string]string{"osac.openshift.io/owner-reference": "ClusterOrder/bmw-rebuild"},
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())

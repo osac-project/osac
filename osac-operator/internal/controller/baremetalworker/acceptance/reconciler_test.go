@@ -92,7 +92,8 @@ var _ = Describe("BareMetalWorkerReconciler ensureInfraEnv", func() {
 
 	preloadDiskImageChain := func() {
 		fc.AddCluster(privatev1.Cluster_builder{
-			Id: clusterUUID,
+			Id:       clusterUUID,
+			Metadata: privatev1.Metadata_builder{Tenant: "tenant1"}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
 				Version: privatev1.ClusterVersionReference_builder{Id: cvID}.Build(),
 			}.Build(),
@@ -116,9 +117,10 @@ var _ = Describe("BareMetalWorkerReconciler ensureInfraEnv", func() {
 	newBareMetalClusterOrder := func(name string) *osacv1alpha1.ClusterOrder {
 		return &osacv1alpha1.ClusterOrder{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      name,
-				Namespace: testNamespace,
-				Labels:    map[string]string{clusterIDLabel: clusterUUID},
+				Name:        name,
+				Namespace:   testNamespace,
+				Labels:      map[string]string{clusterIDLabel: clusterUUID},
+				Annotations: map[string]string{"osac.openshift.io/tenant": "tenant1"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
 				TemplateID:   "test",
@@ -215,6 +217,7 @@ var _ = Describe("BareMetalWorkerReconciler ensureInfraEnv", func() {
 	})
 
 	It("is idempotent: re-reconcile does not create a duplicate InfraEnv", func() {
+		preloadDiskImageChain()
 		create(newBareMetalClusterOrder("bmw-idem"))
 
 		_, err := runReconcile("bmw-idem")
@@ -293,6 +296,7 @@ var _ = Describe("BareMetalWorkerReconciler ensureInfraEnv", func() {
 	})
 
 	It("returns an error when the discovery ignition fetch fails", func() {
+		preloadDiskImageChain()
 		create(newBareMetalClusterOrder("bmw-fetcherr"))
 
 		_, err := runReconcile("bmw-fetcherr")
@@ -307,7 +311,7 @@ var _ = Describe("BareMetalWorkerReconciler ensureInfraEnv", func() {
 	})
 })
 
-var _ = Describe("BareMetalWorkerReconciler ensureSystemCatalogItem", func() {
+var _ = Describe("BareMetalWorkerReconciler direct shared worker template", func() {
 	var (
 		fc  *fake.FulfillmentClient
 		sim *envsim.Simulator
@@ -330,9 +334,10 @@ var _ = Describe("BareMetalWorkerReconciler ensureSystemCatalogItem", func() {
 	newBareMetalClusterOrder := func(name string) *osacv1alpha1.ClusterOrder {
 		return &osacv1alpha1.ClusterOrder{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      name,
-				Namespace: testNamespace,
-				Labels:    map[string]string{"osac.openshift.io/clusterorder-uuid": "ci-cluster"},
+				Name:        name,
+				Namespace:   testNamespace,
+				Labels:      map[string]string{"osac.openshift.io/clusterorder-uuid": "ci-cluster"},
+				Annotations: map[string]string{"osac.openshift.io/tenant": "tenant1"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
 				TemplateID: "test",
@@ -349,7 +354,8 @@ var _ = Describe("BareMetalWorkerReconciler ensureSystemCatalogItem", func() {
 
 	preloadDiskImageChain := func() {
 		fc.AddCluster(privatev1.Cluster_builder{
-			Id: "ci-cluster",
+			Id:       "ci-cluster",
+			Metadata: privatev1.Metadata_builder{Tenant: "tenant1"}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
 				Version: privatev1.ClusterVersionReference_builder{Id: "ci-version"}.Build(),
 			}.Build(),
@@ -406,7 +412,7 @@ var _ = Describe("BareMetalWorkerReconciler ensureSystemCatalogItem", func() {
 		Expect(sim.MarkInfraEnvReady(ctx, name+"-infraenv", testNamespace, ign.URL())).To(Succeed())
 	}
 
-	It("creates the system catalog item when absent", func() {
+	It("creates a worker directly from the shared template without a system catalog item", func() {
 		co := newBareMetalClusterOrder("bmw-ci-create")
 		create(co)
 		makeInfraEnvReady("bmw-ci-create")
@@ -414,17 +420,15 @@ var _ = Describe("BareMetalWorkerReconciler ensureSystemCatalogItem", func() {
 		_, err := runReconcile("bmw-ci-create")
 		Expect(err).ToNot(HaveOccurred())
 
-		calls := fc.CreateCatalogItemCalls()
-		Expect(calls).To(HaveLen(1))
-		ci := calls[0]
-		Expect(ci.GetMetadata().GetName()).To(Equal("system-bmi-passthrough"))
-		Expect(ci.GetMetadata().GetTenant()).To(Equal("system"))
-		Expect(ci.GetTitle()).To(Equal("System BMI Pass-through"))
-		Expect(ci.GetPublished()).To(BeTrue())
-		Expect(ci.GetTemplate().GetId()).To(Equal("osac.templates.bm_host_provisioning"))
+		Expect(fc.CreateCatalogItemCalls()).To(BeEmpty())
+		Expect(fc.CreateCalls()).To(HaveLen(1))
+		Expect(fc.CreateCalls()[0].GetMetadata().GetTenant()).To(Equal("tenant1"))
+		Expect(fc.CreateCalls()[0].GetSpec().GetCatalogItem()).To(BeNil())
+		Expect(fc.CreateCalls()[0].GetSpec().GetTemplate().GetId()).To(Equal("osac.templates.bm_host_provisioning"))
+		Expect(fc.CreateCalls()[0].GetSpec().GetTemplate().GetShared()).To(BeTrue())
 	})
 
-	It("is a no-op when the system catalog item already exists", func() {
+	It("ignores a pre-existing system catalog item", func() {
 		co := newBareMetalClusterOrder("bmw-ci-noop")
 		create(co)
 		makeInfraEnvReady("bmw-ci-noop")
@@ -438,28 +442,24 @@ var _ = Describe("BareMetalWorkerReconciler ensureSystemCatalogItem", func() {
 		_, err = runReconcile("bmw-ci-noop")
 		Expect(err).ToNot(HaveOccurred())
 
-		// Only the pre-create call, no additional create from the reconciler.
+		// The operator must not use or recreate the obsolete passthrough item.
 		Expect(fc.CreateCatalogItemCalls()).To(HaveLen(1))
-		Expect(fc.ListCatalogItemCalls()).To(HaveLen(1))
+		Expect(fc.ListCatalogItemCalls()).To(BeEmpty())
+		Expect(fc.CreateCalls()).To(HaveLen(1))
+		Expect(fc.CreateCalls()[0].GetSpec().GetCatalogItem()).To(BeNil())
 	})
 
-	It("handles AlreadyExists gracefully (concurrent create race)", func() {
+	It("does not recreate a system catalog item on repeated reconciliation", func() {
 		co := newBareMetalClusterOrder("bmw-ci-race")
 		create(co)
 		makeInfraEnvReady("bmw-ci-race")
 
-		// First reconcile creates the catalog item.
 		_, err := runReconcile("bmw-ci-race")
 		Expect(err).ToNot(HaveOccurred())
-		Expect(fc.CreateCatalogItemCalls()).To(HaveLen(1))
-
-		// Remove it from list but leave it stored (simulates race: list returns empty,
-		// but Create returns AlreadyExists). We achieve this by running a second reconcile —
-		// list will find it and skip create.
 		_, err = runReconcile("bmw-ci-race")
 		Expect(err).ToNot(HaveOccurred())
-		// No additional create call — list found it.
-		Expect(fc.CreateCatalogItemCalls()).To(HaveLen(1))
+		Expect(fc.CreateCatalogItemCalls()).To(BeEmpty())
+		Expect(fc.CreateCalls()).To(HaveLen(1))
 	})
 })
 
@@ -493,9 +493,10 @@ var _ = Describe("BareMetalWorkerReconciler resolveDiskImage", func() {
 	newBareMetalClusterOrder := func(name string, labels map[string]string) *osacv1alpha1.ClusterOrder {
 		return &osacv1alpha1.ClusterOrder{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      name,
-				Namespace: testNamespace,
-				Labels:    labels,
+				Name:        name,
+				Namespace:   testNamespace,
+				Labels:      labels,
+				Annotations: map[string]string{"osac.openshift.io/tenant": "tenant1"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
 				TemplateID:   "test",
@@ -567,7 +568,8 @@ var _ = Describe("BareMetalWorkerReconciler resolveDiskImage", func() {
 
 	It("resolves DiskImage ID from a ClusterVersion with disk_image set", func() {
 		fc.AddCluster(privatev1.Cluster_builder{
-			Id: clusterUUID,
+			Id:       clusterUUID,
+			Metadata: privatev1.Metadata_builder{Tenant: "tenant1"}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
 				Version: privatev1.ClusterVersionReference_builder{Id: cvID}.Build(),
 			}.Build(),
@@ -602,7 +604,8 @@ var _ = Describe("BareMetalWorkerReconciler resolveDiskImage", func() {
 	It("sets RHCOSImageNotFound when ClusterVersion has no disk_image", func() {
 		addInstanceType("bm-standard")
 		fc.AddCluster(privatev1.Cluster_builder{
-			Id: clusterUUID,
+			Id:       clusterUUID,
+			Metadata: privatev1.Metadata_builder{Tenant: "tenant1"}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
 				Version: privatev1.ClusterVersionReference_builder{Id: cvID}.Build(),
 			}.Build(),
@@ -627,20 +630,21 @@ var _ = Describe("BareMetalWorkerReconciler resolveDiskImage", func() {
 		Expect(cond.Status).To(Equal(metav1.ConditionTrue))
 	})
 
-	It("requeues when the clusterorder-uuid label is absent", func() {
+	It("fails closed when the clusterorder-uuid label is absent", func() {
 		co := newBareMetalClusterOrder("bmw-nolabel", nil)
 		create(co)
-		makeInfraEnvReady("bmw-nolabel")
 
-		res, err := runReconcile("bmw-nolabel")
-		Expect(err).ToNot(HaveOccurred())
-		Expect(res.RequeueAfter).To(BeNumerically(">", 0))
+		_, err := runReconcile("bmw-nolabel")
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("missing Cluster ID"))
+		Expect(fc.CreateCalls()).To(BeEmpty())
 	})
 
 	It("clears RHCOSImageNotFound when disk_image is later set on the ClusterVersion", func() {
 		addInstanceType("bm-standard")
 		fc.AddCluster(privatev1.Cluster_builder{
-			Id: clusterUUID,
+			Id:       clusterUUID,
+			Metadata: privatev1.Metadata_builder{Tenant: "tenant1"}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
 				Version: privatev1.ClusterVersionReference_builder{Id: cvID}.Build(),
 			}.Build(),
@@ -721,7 +725,8 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", func() {
 
 	preloadDiskImageChain := func() {
 		fc.AddCluster(privatev1.Cluster_builder{
-			Id: clusterUUID,
+			Id:       clusterUUID,
+			Metadata: privatev1.Metadata_builder{Tenant: "tenant1"}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
 				Version: privatev1.ClusterVersionReference_builder{Id: cvID}.Build(),
 			}.Build(),
@@ -745,9 +750,10 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", func() {
 	newBareMetalClusterOrder := func(name string, numWorkers int) *osacv1alpha1.ClusterOrder {
 		co := &osacv1alpha1.ClusterOrder{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      name,
-				Namespace: testNamespace,
-				Labels:    map[string]string{clusterIDLabel: clusterUUID},
+				Name:        name,
+				Namespace:   testNamespace,
+				Labels:      map[string]string{clusterIDLabel: clusterUUID},
+				Annotations: map[string]string{"osac.openshift.io/tenant": "tenant1"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
 				TemplateID:   "test",
@@ -814,6 +820,35 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", func() {
 			getClusterOrder(name).Status.Conditions, osacv1alpha1.ConditionInfraEnvReady)).To(BeTrue())
 	}
 
+	It("creates a tenant-owned fulfillment worker BMI with owner annotation", func() {
+		preloadDiskImageChain()
+		fc.AddCluster(privatev1.Cluster_builder{
+			Id:       clusterUUID,
+			Metadata: privatev1.Metadata_builder{Tenant: "tenant1"}.Build(),
+			Spec: privatev1.ClusterSpec_builder{
+				Version: privatev1.ClusterVersionReference_builder{Id: cvID}.Build(),
+			}.Build(),
+		}.Build())
+		co := newBareMetalClusterOrder("bmw-tenant-owned", 1)
+		co.Annotations = map[string]string{"osac.openshift.io/tenant": "tenant1"}
+		create(co)
+		makeInfraEnvReady(co.Name)
+
+		_, err := runReconcile(co.Name)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(fc.CreateCalls()).To(HaveLen(1))
+		bmi := fc.CreateCalls()[0]
+		Expect(bmi.GetMetadata().GetTenant()).To(Equal("tenant1"))
+		Expect(bmi.GetMetadata().GetAnnotations()).To(HaveKeyWithValue(
+			"osac.openshift.io/owner-reference", "ClusterOrder/bmw-tenant-owned"))
+		Expect(bmi.GetMetadata().GetLabels()).To(HaveKeyWithValue("osac.openshift.io/cluster-order", co.Name))
+		Expect(bmi.GetSpec().GetCatalogItem()).To(BeNil())
+		Expect(bmi.GetSpec().GetTemplate().GetId()).To(Equal("osac.templates.bm_host_provisioning"))
+		Expect(bmi.GetSpec().GetTemplate().GetShared()).To(BeTrue())
+		Expect(bmi.GetSpec().GetInstanceType().GetShared()).To(BeTrue())
+		Expect(fc.CreateCatalogItemCalls()).To(BeEmpty())
+	})
+
 	It("creates BMIs with correct fields for a single-worker node set", func() {
 		preloadDiskImageChain()
 		co := newBareMetalClusterOrder("bmw-create", 1)
@@ -827,12 +862,14 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", func() {
 		Expect(calls).To(HaveLen(1))
 
 		bmi := calls[0]
-		Expect(bmi.GetMetadata().GetTenant()).To(Equal("system"))
+		Expect(bmi.GetMetadata().GetTenant()).To(Equal("tenant1"))
 		Expect(bmi.GetMetadata().GetName()).To(Equal("bmw-create-worker-0"))
 		Expect(bmi.GetMetadata().GetLabels()).To(HaveKeyWithValue("osac.openshift.io/cluster-order", "bmw-create"))
 		Expect(bmi.GetMetadata().GetAnnotations()).To(HaveKeyWithValue(
 			"osac.openshift.io/owner-reference", "ClusterOrder/bmw-create"))
-		Expect(bmi.GetSpec().GetCatalogItem().GetName()).To(Equal("system-bmi-passthrough"))
+		Expect(bmi.GetSpec().GetCatalogItem()).To(BeNil())
+		Expect(bmi.GetSpec().GetTemplate().GetShared()).To(BeTrue())
+		Expect(bmi.GetSpec().GetInstanceType().GetShared()).To(BeTrue())
 		Expect(bmi.GetSpec().GetDiskImage().GetId()).To(Equal(diskImageID))
 		Expect(bmi.GetSpec().GetInstanceType().GetName()).To(Equal("bm-standard"))
 
@@ -849,7 +886,8 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", func() {
 
 	It("does not create catalog item or BMI when the requested BMIT is not found", func() {
 		fc.AddCluster(privatev1.Cluster_builder{
-			Id: clusterUUID,
+			Id:       clusterUUID,
+			Metadata: privatev1.Metadata_builder{Tenant: "tenant1"}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
 				Version: privatev1.ClusterVersionReference_builder{Id: cvID}.Build(),
 			}.Build(),
@@ -888,7 +926,7 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", func() {
 		Expect(getClusterOrder("bmw-bmit-missing").Status.Workers).To(BeEmpty())
 	})
 
-	It("creates the catalog item and BMI after resolving a usable BMIT", func() {
+	It("creates a BMI without a catalog item after resolving a usable BMIT", func() {
 		preloadDiskImageChain()
 		co := newBareMetalClusterOrder("bmw-bmit-usable", 1)
 		create(co)
@@ -896,7 +934,7 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", func() {
 
 		_, err := runReconcile("bmw-bmit-usable")
 		Expect(err).ToNot(HaveOccurred())
-		Expect(fc.CreateCatalogItemCalls()).To(HaveLen(1))
+		Expect(fc.CreateCatalogItemCalls()).To(BeEmpty())
 		Expect(fc.CreateCalls()).To(HaveLen(1))
 		Expect(getClusterOrder("bmw-bmit-usable").Status.Workers).To(HaveLen(1))
 	})
@@ -906,7 +944,8 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", func() {
 		// must resolve it the same way the ComputeInstance path does (OSAC-3724 / RefKeyStr:
 		// prefer id, fall back to name), so the BMI still lands the resolved OCI ref.
 		fc.AddCluster(privatev1.Cluster_builder{
-			Id: clusterUUID,
+			Id:       clusterUUID,
+			Metadata: privatev1.Metadata_builder{Tenant: "tenant1"}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
 				Version: privatev1.ClusterVersionReference_builder{Id: cvID}.Build(),
 			}.Build(),
@@ -990,9 +1029,10 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", func() {
 		// reconcile in makeInfraEnvReady reaches reconcileWorkers.
 		_, err := fc.CreateBareMetalInstance(ctx, privatev1.BareMetalInstance_builder{
 			Metadata: privatev1.Metadata_builder{
-				Tenant: "system",
-				Name:   "bmw-idem-worker-0",
-				Labels: map[string]string{"osac.openshift.io/cluster-order": "bmw-idem"},
+				Tenant:      "tenant1",
+				Name:        "bmw-idem-worker-0",
+				Labels:      map[string]string{"osac.openshift.io/cluster-order": "bmw-idem"},
+				Annotations: map[string]string{"osac.openshift.io/owner-reference": "ClusterOrder/bmw-idem"},
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
@@ -1014,24 +1054,25 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", func() {
 		Expect(co.Status.Workers[0].Phase).To(Equal("WaitingForAgent"))
 	})
 
-	It("self-heals the catalog item when a BMI already exists", func() {
+	It("does not create a catalog item when an owned BMI already exists", func() {
 		preloadDiskImageChain()
 		co := newBareMetalClusterOrder("bmw-catalog-heal", 1)
 		create(co)
 
-		// Pre-create the BMI while leaving the system CatalogItem absent.
+		// Pre-create the tenant-owned BMI; no catalog item should be needed.
 		_, err := fc.CreateBareMetalInstance(ctx, privatev1.BareMetalInstance_builder{
 			Metadata: privatev1.Metadata_builder{
-				Tenant: "system",
-				Name:   "bmw-catalog-heal-worker-0",
-				Labels: map[string]string{"osac.openshift.io/cluster-order": "bmw-catalog-heal"},
+				Tenant:      "tenant1",
+				Name:        "bmw-catalog-heal-worker-0",
+				Labels:      map[string]string{"osac.openshift.io/cluster-order": "bmw-catalog-heal"},
+				Annotations: map[string]string{"osac.openshift.io/owner-reference": "ClusterOrder/bmw-catalog-heal"},
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 
 		makeInfraEnvReady("bmw-catalog-heal")
 
-		Expect(fc.CreateCatalogItemCalls()).To(HaveLen(1))
+		Expect(fc.CreateCatalogItemCalls()).To(BeEmpty())
 		Expect(fc.CreateCalls()).To(HaveLen(1), "the existing BMI must not be recreated")
 	})
 
@@ -1130,9 +1171,10 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", func() {
 
 		co := &osacv1alpha1.ClusterOrder{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      "bmw-multi-type",
-				Namespace: testNamespace,
-				Labels:    map[string]string{clusterIDLabel: clusterUUID},
+				Name:        "bmw-multi-type",
+				Namespace:   testNamespace,
+				Labels:      map[string]string{clusterIDLabel: clusterUUID},
+				Annotations: map[string]string{"osac.openshift.io/tenant": "tenant1"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
 				TemplateID:   "test",
@@ -1170,9 +1212,10 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", func() {
 		preloadDiskImageChain()
 		co := &osacv1alpha1.ClusterOrder{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      "bmw-no-net",
-				Namespace: testNamespace,
-				Labels:    map[string]string{clusterIDLabel: clusterUUID},
+				Name:        "bmw-no-net",
+				Namespace:   testNamespace,
+				Labels:      map[string]string{clusterIDLabel: clusterUUID},
+				Annotations: map[string]string{"osac.openshift.io/tenant": "tenant1"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
 				TemplateID:   "test",
@@ -1230,7 +1273,8 @@ var _ = Describe("BareMetalWorkerReconciler correlateAgents", func() {
 
 	preloadDiskImageChain := func() {
 		fc.AddCluster(privatev1.Cluster_builder{
-			Id: clusterUUID,
+			Id:       clusterUUID,
+			Metadata: privatev1.Metadata_builder{Tenant: "tenant1"}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
 				Version: privatev1.ClusterVersionReference_builder{Id: cvID}.Build(),
 			}.Build(),
@@ -1254,9 +1298,10 @@ var _ = Describe("BareMetalWorkerReconciler correlateAgents", func() {
 	newBareMetalClusterOrder := func(name string, numWorkers int) *osacv1alpha1.ClusterOrder {
 		return &osacv1alpha1.ClusterOrder{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      name,
-				Namespace: testNamespace,
-				Labels:    map[string]string{clusterIDLabel: clusterUUID},
+				Name:        name,
+				Namespace:   testNamespace,
+				Labels:      map[string]string{clusterIDLabel: clusterUUID},
+				Annotations: map[string]string{"osac.openshift.io/tenant": "tenant1"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
 				TemplateID:   "test",
@@ -1533,7 +1578,8 @@ var _ = Describe("BareMetalWorkerReconciler workerRetry", func() {
 
 	preloadDiskImageChain := func() {
 		fc.AddCluster(privatev1.Cluster_builder{
-			Id: clusterUUID,
+			Id:       clusterUUID,
+			Metadata: privatev1.Metadata_builder{Tenant: "tenant1"}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
 				Version: privatev1.ClusterVersionReference_builder{Id: cvID}.Build(),
 			}.Build(),
@@ -1557,9 +1603,10 @@ var _ = Describe("BareMetalWorkerReconciler workerRetry", func() {
 	newBareMetalClusterOrder := func(name string) *osacv1alpha1.ClusterOrder {
 		return &osacv1alpha1.ClusterOrder{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      name,
-				Namespace: testNamespace,
-				Labels:    map[string]string{clusterIDLabel: clusterUUID},
+				Name:        name,
+				Namespace:   testNamespace,
+				Labels:      map[string]string{clusterIDLabel: clusterUUID},
+				Annotations: map[string]string{"osac.openshift.io/tenant": "tenant1"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
 				TemplateID:   "test",
@@ -1811,7 +1858,8 @@ var _ = Describe("BareMetalWorkerReconciler scale-up", func() {
 
 	preloadDiskImageChain := func() {
 		fc.AddCluster(privatev1.Cluster_builder{
-			Id: clusterUUID,
+			Id:       clusterUUID,
+			Metadata: privatev1.Metadata_builder{Tenant: "tenant1"}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
 				Version: privatev1.ClusterVersionReference_builder{Id: cvID}.Build(),
 			}.Build(),
@@ -1835,9 +1883,10 @@ var _ = Describe("BareMetalWorkerReconciler scale-up", func() {
 	newBareMetalClusterOrder := func(name string, numWorkers int) *osacv1alpha1.ClusterOrder {
 		return &osacv1alpha1.ClusterOrder{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      name,
-				Namespace: testNamespace,
-				Labels:    map[string]string{clusterIDLabel: clusterUUID},
+				Name:        name,
+				Namespace:   testNamespace,
+				Labels:      map[string]string{clusterIDLabel: clusterUUID},
+				Annotations: map[string]string{"osac.openshift.io/tenant": "tenant1"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
 				TemplateID:   "test",
@@ -2085,7 +2134,8 @@ var _ = Describe("BareMetalWorkerReconciler stale ignition", func() {
 
 	preloadDiskImageChain := func() {
 		fc.AddCluster(privatev1.Cluster_builder{
-			Id: clusterUUID,
+			Id:       clusterUUID,
+			Metadata: privatev1.Metadata_builder{Tenant: "tenant1"}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
 				Version: privatev1.ClusterVersionReference_builder{Id: cvID}.Build(),
 			}.Build(),
@@ -2109,9 +2159,10 @@ var _ = Describe("BareMetalWorkerReconciler stale ignition", func() {
 	newBareMetalClusterOrder := func(name string) *osacv1alpha1.ClusterOrder {
 		return &osacv1alpha1.ClusterOrder{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      name,
-				Namespace: testNamespace,
-				Labels:    map[string]string{clusterIDLabel: clusterUUID},
+				Name:        name,
+				Namespace:   testNamespace,
+				Labels:      map[string]string{clusterIDLabel: clusterUUID},
+				Annotations: map[string]string{"osac.openshift.io/tenant": "tenant1"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
 				TemplateID:   "test",
@@ -2322,7 +2373,8 @@ var _ = Describe("BareMetalWorkerReconciler scale-down", func() {
 
 	preloadDiskImageChain := func() {
 		fc.AddCluster(privatev1.Cluster_builder{
-			Id: clusterUUID,
+			Id:       clusterUUID,
+			Metadata: privatev1.Metadata_builder{Tenant: "tenant1"}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
 				Version: privatev1.ClusterVersionReference_builder{Id: cvID}.Build(),
 			}.Build(),
@@ -2346,9 +2398,10 @@ var _ = Describe("BareMetalWorkerReconciler scale-down", func() {
 	newBareMetalClusterOrder := func(name string, numWorkers int) *osacv1alpha1.ClusterOrder {
 		return &osacv1alpha1.ClusterOrder{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      name,
-				Namespace: testNamespace,
-				Labels:    map[string]string{clusterIDLabel: clusterUUID},
+				Name:        name,
+				Namespace:   testNamespace,
+				Labels:      map[string]string{clusterIDLabel: clusterUUID},
+				Annotations: map[string]string{"osac.openshift.io/tenant": "tenant1"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
 				TemplateID:   "test",
@@ -2738,7 +2791,8 @@ var _ = Describe("BareMetalWorkerReconciler cluster deletion", func() {
 
 	preloadDiskImageChain := func() {
 		fc.AddCluster(privatev1.Cluster_builder{
-			Id: clusterUUID,
+			Id:       clusterUUID,
+			Metadata: privatev1.Metadata_builder{Tenant: "tenant1"}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
 				Version: privatev1.ClusterVersionReference_builder{Id: cvID}.Build(),
 			}.Build(),
@@ -2762,9 +2816,10 @@ var _ = Describe("BareMetalWorkerReconciler cluster deletion", func() {
 	newBareMetalClusterOrder := func(name string, numWorkers int) *osacv1alpha1.ClusterOrder {
 		return &osacv1alpha1.ClusterOrder{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      name,
-				Namespace: testNamespace,
-				Labels:    map[string]string{clusterIDLabel: clusterUUID},
+				Name:        name,
+				Namespace:   testNamespace,
+				Labels:      map[string]string{clusterIDLabel: clusterUUID},
+				Annotations: map[string]string{"osac.openshift.io/tenant": "tenant1"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
 				TemplateID:   "test",

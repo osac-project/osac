@@ -238,12 +238,41 @@ def test_cluster_create(
         assert "osac.openshift.io/resource_class" not in selector.get("matchLabels", {})
 
         bmi_filter = f'this.metadata.labels["osac.openshift.io/cluster-order"] == "{co_name}"'
-        run_owned_bmi_ids = set(private_grpc.list_baremetal_instance_ids(filter_expr=bmi_filter))
-        assert run_owned_bmi_ids, "Expected the primary CaaS lifecycle to create at least one worker BMI"
+        candidate_bmi_ids = set(private_grpc.list_baremetal_instance_ids(filter_expr=bmi_filter))
+        assert candidate_bmi_ids, "Expected the primary CaaS lifecycle to create at least one worker BMI"
+        cluster_tenant = cluster["object"]["metadata"]["tenant"]
+        co = k8s_hub_client.get_json(resource="clusterorder", name=co_name)
+        assert co["metadata"]["annotations"]["osac.openshift.io/tenant"] == cluster_tenant
+        expected_owner = f"ClusterOrder/{co_name}"
+        for bmi_id in candidate_bmi_ids:
+            bmi = private_grpc.call(service="osac.private.v1.BareMetalInstances/Get", data={"id": bmi_id})["object"]
+            metadata = bmi["metadata"]
+            assert metadata["tenant"] == cluster_tenant
+            assert metadata["labels"]["osac.openshift.io/cluster-order"] == co_name
+            assert metadata["annotations"]["osac.openshift.io/owner-reference"] == expected_owner
+            spec = bmi["spec"]
+            assert spec.get("catalogItem", spec.get("catalog_item")) is None
+            assert spec["template"]["id"] == "osac.templates.bm_host_provisioning"
+            assert spec["template"]["shared"] is True
+            instance_type = spec.get("instanceType", spec.get("instance_type", {}))
+            assert instance_type["name"] == "ci-worker-bm"
+            assert instance_type["shared"] is True
+            cr_name = poll_until(
+                fn=lambda bmi_id=bmi_id: k8s_hub_client.get_baremetal_instance_name(uuid=bmi_id, checked=False),
+                until=bool,
+                retries=30,
+                delay=2,
+                description=f"{bmi_id} Kubernetes BMI CR",
+            )
+            cr = k8s_hub_client.get_json(resource="baremetalinstance", name=cr_name)
+            assert cr["metadata"]["labels"]["osac.openshift.io/baremetalinstance-uuid"] == bmi_id
+            assert cr["metadata"]["annotations"]["osac.openshift.io/tenant"] == cluster_tenant
+            assert cr["metadata"]["annotations"]["osac.openshift.io/owner-reference"] == expected_owner
+            run_owned_bmi_ids.add(bmi_id)  # Only verified test-owned IDs may be used in deletion assertions.
         tenant_visible_bmi_ids = set(grpc.list_baremetal_instance_ids())
-        assert run_owned_bmi_ids.isdisjoint(tenant_visible_bmi_ids), (
-            f"Tenant-authenticated BMI list exposed CaaS worker IDs: "
-            f"{sorted(run_owned_bmi_ids & tenant_visible_bmi_ids)}"
+        assert run_owned_bmi_ids.issubset(tenant_visible_bmi_ids), (
+            f"Tenant-authenticated BMI list cannot see tenant-owned CaaS worker IDs: "
+            f"{sorted(run_owned_bmi_ids - tenant_visible_bmi_ids)}"
         )
 
         infra_env_name = poll_until(
@@ -574,11 +603,12 @@ def test_cluster_create_rejected_for_invalid_version(
             service="osac.public.v1.Clusters/Create",
             data={
                 "object": {
+                    "metadata": {"name": unique_name("e2e-cluster-invalid-version")},
                     "spec": {
                         "template": {"name": cluster_template},
                         "version": {"name": version_name},
                         "nodeSets": {"workers": {"size": 1, "baremetalInstanceType": {"name": "ci-worker-bm"}}},
-                    }
+                    },
                 }
             },
         )

@@ -70,8 +70,6 @@ const (
 	reasonDiskImageNotFound        = "DiskImageNotFound"
 	reasonDiskImageResolved        = "DiskImageResolved"
 
-	systemTenant                 = "system"
-	systemCatalogItemName        = "system-bmi-passthrough"
 	systemBMITemplateID          = "osac.templates.bm_host_provisioning"
 	clusterOrderLabel            = "osac.openshift.io/cluster-order"
 	infraEnvAgentLabel           = "infraenvs.agent-install.openshift.io"
@@ -168,18 +166,20 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if !co.DeletionTimestamp.IsZero() {
-		return r.handleClusterDeletion(ctx, co)
+		return r.handleVerifiedClusterDeletion(ctx, co)
 	}
 	if v, ok := co.Annotations[managementStateAnnotation]; ok && v == managementStateUnmanaged {
 		return ctrl.Result{}, nil
 	}
-	for i, request := range co.Spec.NodeRequests {
-		if request.BareMetal == nil || request.BareMetal.InstanceType == "" {
-			return ctrl.Result{}, fmt.Errorf("spec.nodeRequests[%d].bareMetal.instanceType is required", i)
-		}
+	if err := validateBareMetalNodeSets(co); err != nil {
+		return ctrl.Result{}, err
 	}
 	if !co.HasBareMetalNodeSet() {
 		return ctrl.Result{}, nil
+	}
+	tenant, err := r.verifyOrderWorkerOwnership(ctx, co)
+	if err != nil {
+		return ctrl.Result{}, err
 	}
 
 	// Refresh the worker gauges from the full ClusterOrder set at the end of every
@@ -221,7 +221,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return res, err
 	}
 
-	res, err = r.reconcileWorkers(ctx, co, image, ignition)
+	res, err = r.reconcileWorkers(ctx, co, tenant, image, ignition)
 	if err != nil || !res.IsZero() {
 		return res, err
 	}
@@ -256,6 +256,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{RequeueAfter: teardownRequeueInterval}, nil
 	}
 	return npRes, nil
+}
+
+func validateBareMetalNodeSets(co *v1alpha1.ClusterOrder) error {
+	for i, request := range co.Spec.NodeRequests {
+		if request.BareMetal == nil || request.BareMetal.InstanceType == "" {
+			return fmt.Errorf("spec.nodeRequests[%d].bareMetal.instanceType is required", i)
+		}
+	}
+	return nil
 }
 
 func (r *Reconciler) processTeardownWorkers(ctx context.Context, co *v1alpha1.ClusterOrder, key client.ObjectKey) error {
@@ -572,53 +581,6 @@ func (r *Reconciler) detectStaleIgnitionWorkers(
 	return marked
 }
 
-// ensureSystemCatalogItem creates the system-owned BareMetalInstanceCatalogItem
-// ("system-bmi-passthrough") if it doesn't already exist. Empty field_definitions means all
-// fields are unlocked — hardware profile is determined by BareMetalInstanceType, not by this
-// catalog item. AlreadyExists is handled gracefully for concurrent reconcile races.
-func (r *Reconciler) ensureSystemCatalogItem(ctx context.Context, co *v1alpha1.ClusterOrder) (ctrl.Result, error) {
-	log := ctrllog.FromContext(ctx)
-
-	filter := fmt.Sprintf(`this.metadata.name == "%s"`, systemCatalogItemName)
-	items, err := r.fulfillment.ListBareMetalInstanceCatalogItems(ctx, filter)
-	if res, handled := r.handleUnavailable(ctx, co, err); handled {
-		return res, nil
-	}
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("listing catalog items: %w", err)
-	}
-	if len(items) > 0 {
-		return ctrl.Result{}, nil
-	}
-
-	ci := privatev1.BareMetalInstanceCatalogItem_builder{
-		Metadata: privatev1.Metadata_builder{
-			Tenant: systemTenant,
-			Name:   systemCatalogItemName,
-		}.Build(),
-		Template: privatev1.BareMetalInstanceTemplateReference_builder{
-			Id: systemBMITemplateID,
-		}.Build(),
-	}.Build()
-	ci.SetTitle("System BMI Pass-through")
-	ci.SetPublished(true)
-
-	_, err = r.fulfillment.CreateBareMetalInstanceCatalogItem(ctx, ci)
-	if err != nil {
-		if res, handled := r.handleUnavailable(ctx, co, err); handled {
-			return res, nil
-		}
-		if st, ok := status.FromError(err); ok && st.Code() == codes.AlreadyExists {
-			log.Info("system catalog item created concurrently, continuing")
-			return ctrl.Result{}, nil
-		}
-		return ctrl.Result{}, fmt.Errorf("creating system catalog item: %w", err)
-	}
-
-	log.Info("created system catalog item", "name", systemCatalogItemName)
-	return ctrl.Result{}, nil
-}
-
 // resolveDiskImage reads the Cluster's ClusterVersion reference via the fulfillment-service
 // private API and validates the referenced DiskImage. It returns the canonical DiskImage
 // reference; fulfillment-service resolves its source URL when it materializes the provider CR.
@@ -709,7 +671,7 @@ func (r *Reconciler) setRHCOSImageNotFound(
 // Failed workers are retried with escalating backoff: the failed BMI is deleted, and a
 // replacement is created once NextRetryTime has passed.
 func (r *Reconciler) reconcileWorkers(
-	ctx context.Context, co *v1alpha1.ClusterOrder, image *privatev1.DiskImageReference, ignition []byte,
+	ctx context.Context, co *v1alpha1.ClusterOrder, tenant string, image *privatev1.DiskImageReference, ignition []byte,
 ) (ctrl.Result, error) {
 	filter := fmt.Sprintf(`this.metadata.labels["%s"] == "%s"`, clusterOrderLabel, co.Name)
 	existing, err := r.fulfillment.ListBareMetalInstances(ctx, filter)
@@ -725,7 +687,7 @@ func (r *Reconciler) reconcileWorkers(
 
 	r.handleFailedWorkers(ctx, co, existingByName)
 
-	workers, res, err := r.reconcileNodeSets(ctx, co, existingByName, image, ignitionRaw, filter)
+	workers, res, err := r.reconcileNodeSets(ctx, co, tenant, existingByName, image, ignitionRaw, filter)
 	if err != nil || !res.IsZero() {
 		return res, err
 	}
@@ -750,7 +712,7 @@ func (r *Reconciler) reconcileWorkers(
 // slot. Reuses existing WorkerStatus entries (preserving phase/failure fields) for workers that
 // already exist; only creates new entries for genuinely new workers.
 func (r *Reconciler) reconcileNodeSets(
-	ctx context.Context, co *v1alpha1.ClusterOrder,
+	ctx context.Context, co *v1alpha1.ClusterOrder, tenant string,
 	existingByName map[string]*privatev1.BareMetalInstance,
 	image *privatev1.DiskImageReference, ignitionRaw, filter string,
 ) ([]v1alpha1.WorkerStatus, ctrl.Result, error) {
@@ -780,16 +742,12 @@ func (r *Reconciler) reconcileNodeSets(
 			}
 		}
 
-		if res, err := r.ensureSystemCatalogItem(ctx, co); err != nil || !res.IsZero() {
-			return nil, res, err
-		}
-
 		for j := 0; j < nr.NumberOfNodes; j++ {
 			workerName := fmt.Sprintf("%s-worker-%d", co.Name, globalIndex)
 			globalIndex++
 
 			if prev, ok := existingWorkers[workerName]; ok {
-				res, err := r.retryFailedWorker(ctx, co, nr, &prev, image, ignitionRaw, filter, fabricInterface)
+				res, err := r.retryFailedWorker(ctx, co, tenant, nr, &prev, image, ignitionRaw, filter, fabricInterface)
 				if err != nil {
 					return nil, ctrl.Result{}, err
 				}
@@ -800,7 +758,7 @@ func (r *Reconciler) reconcileNodeSets(
 				continue
 			}
 
-			ws, res, err := r.ensureWorkerBMI(ctx, co, nr, workerName, existingByName, image, ignitionRaw, filter, fabricInterface)
+			ws, res, err := r.ensureWorkerBMI(ctx, co, tenant, nr, workerName, existingByName, image, ignitionRaw, filter, fabricInterface)
 			if err != nil {
 				return nil, ctrl.Result{}, err
 			}
@@ -823,7 +781,7 @@ func (r *Reconciler) reconcileNodeSets(
 // Returns a non-zero result if the fulfillment service is unavailable. If the worker is not
 // eligible for retry, this is a no-op.
 func (r *Reconciler) retryFailedWorker(
-	ctx context.Context, co *v1alpha1.ClusterOrder,
+	ctx context.Context, co *v1alpha1.ClusterOrder, tenant string,
 	nr *v1alpha1.NodeRequest, prev *v1alpha1.WorkerStatus,
 	image *privatev1.DiskImageReference, ignitionRaw, filter, fabricInterface string,
 ) (ctrl.Result, error) {
@@ -831,7 +789,7 @@ func (r *Reconciler) retryFailedWorker(
 		return ctrl.Result{}, nil
 	}
 	log := ctrllog.FromContext(ctx)
-	bmi, res, err := r.ensureBMI(ctx, co, *nr, prev.Name, image, ignitionRaw, filter, fabricInterface)
+	bmi, res, err := r.ensureBMI(ctx, co, tenant, *nr, prev.Name, image, ignitionRaw, filter, fabricInterface)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -850,18 +808,21 @@ func (r *Reconciler) retryFailedWorker(
 // ensureWorkerBMI creates a BMI for a new worker slot, skipping creation if a BMI with the
 // same name already exists (list-before-create idempotency after controller restart).
 func (r *Reconciler) ensureWorkerBMI(
-	ctx context.Context, co *v1alpha1.ClusterOrder,
+	ctx context.Context, co *v1alpha1.ClusterOrder, tenant string,
 	nr *v1alpha1.NodeRequest, workerName string,
 	existingByName map[string]*privatev1.BareMetalInstance,
 	image *privatev1.DiskImageReference, ignitionRaw, filter, fabricInterface string,
 ) (v1alpha1.WorkerStatus, ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 	if bmi, ok := existingByName[workerName]; ok {
+		if err := checkWorkerBMI(co, tenant, workerName, bmi); err != nil {
+			return v1alpha1.WorkerStatus{}, ctrl.Result{}, r.rejectWorkerIdentity(co, err.Error())
+		}
 		log.Info("worker BMI already exists, skipping create", "name", workerName)
 		return newWorkerStatus(nr.BareMetal.InstanceType, workerName, bmi.GetId()), ctrl.Result{}, nil
 	}
 
-	bmi, res, err := r.ensureBMI(ctx, co, *nr, workerName, image, ignitionRaw, filter, fabricInterface)
+	bmi, res, err := r.ensureBMI(ctx, co, tenant, *nr, workerName, image, ignitionRaw, filter, fabricInterface)
 	if err != nil {
 		return v1alpha1.WorkerStatus{}, ctrl.Result{}, err
 	}
@@ -888,7 +849,7 @@ func (r *Reconciler) handleFailedWorkers(
 		if w.Phase != workerPhaseFailed || w.ResourceID == "" {
 			continue
 		}
-		if err := r.fulfillment.DeleteBareMetalInstance(ctx, w.ResourceID); err != nil {
+		if err := r.checkedDeleteBMI(ctx, co, *w); err != nil {
 			log.Error(err, "deleting failed BMI", "worker", w.Name, "bmiID", w.ResourceID)
 			continue
 		}
@@ -972,10 +933,10 @@ func (r *Reconciler) resolveNodeSetInstanceType(
 // ensureBMI creates a single BareMetalInstance, handling the AlreadyExists race by re-listing.
 // Returns the BMI, a non-zero result on unavailability backoff, or an error.
 func (r *Reconciler) ensureBMI(
-	ctx context.Context, co *v1alpha1.ClusterOrder, nodeSet v1alpha1.NodeRequest,
+	ctx context.Context, co *v1alpha1.ClusterOrder, tenant string, nodeSet v1alpha1.NodeRequest,
 	workerName string, image *privatev1.DiskImageReference, ignitionRaw, filter, fabricInterface string,
 ) (*privatev1.BareMetalInstance, ctrl.Result, error) {
-	req := r.buildBMICreateRequest(co, nodeSet, workerName, image, ignitionRaw, fabricInterface)
+	req := r.buildBMICreateRequest(co, tenant, nodeSet, workerName, image, ignitionRaw, fabricInterface)
 	created, err := r.fulfillment.CreateBareMetalInstance(ctx, req)
 	if err == nil {
 		return created, ctrl.Result{}, nil
@@ -986,7 +947,7 @@ func (r *Reconciler) ensureBMI(
 	}
 
 	if st, ok := status.FromError(err); ok && st.Code() == codes.AlreadyExists {
-		bmi, listErr := r.findBMIByName(ctx, filter, workerName)
+		bmi, listErr := r.findBMIByName(ctx, co, tenant, filter, workerName)
 		if listErr != nil {
 			return nil, ctrl.Result{}, listErr
 		}
@@ -1011,7 +972,7 @@ func (r *Reconciler) handleUnavailable(ctx context.Context, co *v1alpha1.Cluster
 }
 
 // findBMIByName re-lists BMIs and returns the one matching the given name.
-func (r *Reconciler) findBMIByName(ctx context.Context, filter, name string) (*privatev1.BareMetalInstance, error) {
+func (r *Reconciler) findBMIByName(ctx context.Context, co *v1alpha1.ClusterOrder, tenant, filter, name string) (*privatev1.BareMetalInstance, error) {
 	ctrllog.FromContext(ctx).Info("BMI create returned AlreadyExists, re-listing", "name", name)
 	refreshed, err := r.fulfillment.ListBareMetalInstances(ctx, filter)
 	if err != nil {
@@ -1019,6 +980,9 @@ func (r *Reconciler) findBMIByName(ctx context.Context, filter, name string) (*p
 	}
 	for _, bmi := range refreshed {
 		if bmi.GetMetadata().GetName() == name {
+			if err := checkWorkerBMI(co, tenant, name, bmi); err != nil {
+				return nil, r.rejectWorkerIdentity(co, err.Error())
+			}
 			return bmi, nil
 		}
 	}
@@ -1057,7 +1021,7 @@ func bmisByName(bmis []*privatev1.BareMetalInstance) map[string]*privatev1.BareM
 }
 
 func (r *Reconciler) buildBMICreateRequest(
-	co *v1alpha1.ClusterOrder, nodeSet v1alpha1.NodeRequest, workerName string,
+	co *v1alpha1.ClusterOrder, tenant string, nodeSet v1alpha1.NodeRequest, workerName string,
 	image *privatev1.DiskImageReference, ignitionRaw, fabricInterface string,
 ) *privatev1.BareMetalInstance {
 	labels := map[string]string{clusterOrderLabel: co.Name}
@@ -1080,16 +1044,16 @@ func (r *Reconciler) buildBMICreateRequest(
 		}
 	}
 
-	var instanceType *privatev1.BareMetalInstanceTypeLocalReference
+	var instanceType *privatev1.BareMetalInstanceTypeReference
 	if nodeSet.BareMetal.InstanceType != "" {
-		instanceType = privatev1.BareMetalInstanceTypeLocalReference_builder{
-			Name: nodeSet.BareMetal.InstanceType,
+		instanceType = privatev1.BareMetalInstanceTypeReference_builder{
+			Name: nodeSet.BareMetal.InstanceType, Shared: true,
 		}.Build()
 	}
 
 	specBuilder := privatev1.BareMetalInstanceSpec_builder{
-		CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{
-			Name: systemCatalogItemName,
+		Template: privatev1.BareMetalInstanceTemplateReference_builder{
+			Id: systemBMITemplateID, Shared: true,
 		}.Build(),
 		DiskImage:          image,
 		UserData:           &ignitionRaw,
@@ -1102,7 +1066,7 @@ func (r *Reconciler) buildBMICreateRequest(
 
 	return privatev1.BareMetalInstance_builder{
 		Metadata: privatev1.Metadata_builder{
-			Tenant:      systemTenant,
+			Tenant:      tenant,
 			Name:        workerName,
 			Labels:      labels,
 			Annotations: annotations,

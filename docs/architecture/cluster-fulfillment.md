@@ -51,9 +51,11 @@ A cluster request includes:
 
 The caller supplies node sets directly or a catalog item supplies the whole map through a locked or
 editable default `fields.node_sets` policy. Templates never supply hardware selections. Fulfillment
-validates and canonicalizes each effective reference in the cluster's scope after catalog policy
-application; an absent map or invalid type fails before provisioning. Catalog policy hardware
-references are validated in the catalog item's own scope. A concrete network attachment requires
+validates and canonicalizes each effective CaaS hardware reference in the shared tenant after
+catalog policy application; an absent map or invalid shared type fails before provisioning.
+Catalog policy hardware references use the same shared-only rule, even when the catalog item
+belongs to a tenant. Tenant-local BMITs still work for other resources; CaaS tenant-scoped
+selection and same-name precedence remain undecided. A concrete network attachment requires
 each selected type to have a fabric port.
 
 **Public API Operations** (`proto/public/osac/public/v1/clusters_service.proto`):
@@ -91,14 +93,22 @@ appropriate Management Cluster for each request
    - Load balancing across hubs
    - Tenant affinity rules
 
-2. **ClusterOrder Creation**: Once a Management Cluster is selected, the Fulfillment Service creates a `ClusterOrder` custom resource in a tenant-specific namespace. This object contains:
+2. **ClusterOrder Creation**: Once a Management Cluster is selected, the Fulfillment Service creates a `ClusterOrder` custom resource in that Hub's configured namespace (not a tenant-specific namespace). This object contains:
    - The selected template ID
    - Template parameters
    - Node requests translated from the resolved node sets: `numberOfNodes` and
-     `bareMetal.instanceType` (the selected BareMetalInstanceType name)
+     `bareMetal.instanceType` (the selected shared BareMetalInstanceType name)
+   - A Cluster ID label and a tenant annotation checked against the private authoritative Cluster
 
 The ClusterOrder serves as the bridge between the Fulfillment Service and the
-OSAC Controller running on the Management Cluster.
+OSAC Controller running on the Management Cluster. Its worker controller fetches the authoritative
+Cluster to derive tenant ownership, and creates worker BMIs through the fixed shared
+`osac.templates.bm_host_provisioning` template with shared BMITs. The fulfillment BMI carries a
+`cluster-order` correlation label and `owner-reference=ClusterOrder/<name>` annotation, and its
+Kubernetes CR receives the tenant and owner-reference annotations plus BMI UUID label. Reuse,
+rebuild and deletion check the fetched BMI's tenant, expected name and owner association; old
+`system`-owned workers are not automatically adopted or deleted. BMI reconciliation currently
+chooses its Hub independently: **same-Hub placement in multi-Hub deployments is not yet ensured**.
 
 ### OSAC Controller - ClusterOrder Processing
 

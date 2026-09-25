@@ -49,6 +49,7 @@ type FulfillmentClient struct {
 	instanceTypes   map[string]*privatev1.BareMetalInstanceType
 	createErr       error
 	deleteErr       error
+	listEmptyOnce   bool
 
 	createCalls            []*privatev1.BareMetalInstance
 	deleteCalls            []string
@@ -193,6 +194,10 @@ func (f *FulfillmentClient) ListBareMetalInstances(
 	defer f.mu.Unlock()
 
 	f.listCalls = append(f.listCalls, filter)
+	if f.listEmptyOnce {
+		f.listEmptyOnce = false
+		return nil, nil
+	}
 	ids := make([]string, 0, len(f.bmis))
 	for id := range f.bmis {
 		ids = append(ids, id)
@@ -370,6 +375,13 @@ func (f *FulfillmentClient) HostMAC(bmiID string) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.hostMACs[bmiID]
+}
+
+// SetListEmptyOnce simulates a BMI appearing between list-before-create and AlreadyExists re-list.
+func (f *FulfillmentClient) SetListEmptyOnce() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.listEmptyOnce = true
 }
 
 // SetCreateError makes subsequent CreateBareMetalInstance calls return err (nil clears it).

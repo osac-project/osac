@@ -137,10 +137,11 @@ message BareMetalInstanceSpec {
   BareMetalInstanceTemplateReference template = 10 [(google.api.field_behavior) = IMMUTABLE];
 
   // Reference to a BareMetalInstanceType. Optional; immutable after creation.
-  // When set, the system resolves this to the instance type's host_label_selector and maps it
-  // to the CRD's Selector.HostSelector for host selection. When omitted, host selection falls
-  // back to the catalog item's template host_type.
-  BareMetalInstanceTypeLocalReference instance_type = 11 [(google.api.field_behavior) = IMMUTABLE];
+  // By default the type belongs to the instance's tenant and project. Set shared to
+  // select a type in the shared tenant instead. When set, the system maps the type's
+  // host_label_selector to the CRD's Selector.HostSelector for host selection. When
+  // omitted, host selection falls back to the catalog item's template host_type.
+  BareMetalInstanceTypeReference instance_type = 11 [(google.api.field_behavior) = IMMUTABLE];
 
   // Reference to a DiskImage resource. Immutable after creation.
   DiskImageReference disk_image = 12 [(google.api.field_behavior) = IMMUTABLE];

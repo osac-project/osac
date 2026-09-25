@@ -48,6 +48,9 @@ rules:
   resources: [routes]
   resourceNames: [keycloak]
   verbs: [get, patch]
+- apiGroups: [route.openshift.io]
+  resources: [routes/custom-host]
+  verbs: [create, update]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

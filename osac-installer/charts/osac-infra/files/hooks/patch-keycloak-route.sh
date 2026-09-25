@@ -6,8 +6,8 @@ LAST_CA_CERT=""
 
 reconcile() {
   # Check if Secret exists
-  if ! oc get secret default-ca -n cert-manager &>/dev/null; then
-    echo "default-ca secret not found, waiting..."
+  if ! err=$(oc get secret default-ca -n cert-manager 2>&1 >/dev/null); then
+    echo "default-ca secret not accessible: $err"
     return 1
   fi
 
@@ -22,8 +22,8 @@ reconcile() {
   echo "CA certificate changed, patching keycloak Route..."
 
   # Check if Route exists
-  if ! oc get route keycloak -n keycloak &>/dev/null; then
-    echo "keycloak Route not found, waiting..."
+  if ! err=$(oc get route keycloak -n keycloak 2>&1 >/dev/null); then
+    echo "keycloak Route not accessible: $err"
     return 1
   fi
 
@@ -38,24 +38,25 @@ reconcile() {
 
   # Patch Route with new CA cert (use python3 for JSON escaping, available in all hook images)
   CA_CERT_JSON=$(python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))" <<< "$CA_CERT")
-  if oc patch route keycloak -n keycloak --type=json -p "[{
+  if patch_err=$(oc patch route keycloak -n keycloak --type=json -p "[{
     \"op\": \"replace\",
     \"path\": \"/spec/tls/destinationCACertificate\",
     \"value\": $CA_CERT_JSON
-  }]" 2>/dev/null; then
+  }]" 2>&1); then
     echo "Successfully patched keycloak Route with updated destinationCACertificate"
     LAST_CA_CERT="$CA_CERT"
   else
+    echo "Patch (replace) failed: $patch_err"
     # If replace fails, try add (first time)
-    if oc patch route keycloak -n keycloak --type=json -p "[{
+    if patch_err=$(oc patch route keycloak -n keycloak --type=json -p "[{
       \"op\": \"add\",
       \"path\": \"/spec/tls/destinationCACertificate\",
       \"value\": $CA_CERT_JSON
-    }]"; then
+    }]" 2>&1); then
       echo "Added destinationCACertificate to keycloak Route"
       LAST_CA_CERT="$CA_CERT"
     else
-      echo "ERROR: Failed to patch keycloak Route"
+      echo "ERROR: Failed to patch keycloak Route: $patch_err"
       return 1
     fi
   fi

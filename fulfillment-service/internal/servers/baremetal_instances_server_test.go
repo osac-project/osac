@@ -34,7 +34,7 @@ var _ = Describe("Bare metal instances server", func() {
 		Expect(err).ToNot(HaveOccurred())
 		_, err = types.Create().SetObject(privatev1.BareMetalInstanceType_builder{
 			Id:       "default-type",
-			Metadata: privatev1.Metadata_builder{Name: "default-type", Tenant: testTenant}.Build(),
+			Metadata: privatev1.Metadata_builder{Name: "default-type", Tenant: "shared"}.Build(),
 			Spec:     privatev1.BareMetalInstanceTypeSpec_builder{}.Build(),
 		}.Build()).Do(ctx)
 		Expect(err).ToNot(HaveOccurred())

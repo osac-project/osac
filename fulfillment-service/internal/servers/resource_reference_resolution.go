@@ -369,6 +369,34 @@ func validateDependencyOwnerScope(owner referenceScope, target *privatev1.Metada
 	return nil
 }
 
+// resolveAndCanonicalizePlatformReference resolves a local reference to a platform-scoped
+// resource and fills the reference with the stored ID and name. Platform-scoped resources
+// (for example bare metal instance types) always live in the shared tenant, so the target is
+// looked up there regardless of which tenant owns the referencing object. Deleted targets are
+// rejected; readiness and other resource-specific checks belong to the caller.
+func resolveAndCanonicalizePlatformReference[O referenceResource](
+	ctx context.Context,
+	resourceDao *dao.GenericDAO[O],
+	reference resourceReference,
+	kind string,
+	notFoundCode grpccodes.Code,
+) (O, error) {
+	var zero O
+	scope := referenceScope{tenant: auth.SharedTenant}
+	object, err := resolveResourceInScopeWithGet(
+		ctx, resourceDao, scope, reference.GetId(), reference.GetName(), kind, "", notFoundCode, getReferenceResource[O],
+	)
+	if err != nil {
+		return zero, err
+	}
+	if err := validateResourceNotDeleted(kind, object.GetId(), "", object.GetMetadata()); err != nil {
+		return zero, err
+	}
+	reference.SetId(object.GetId())
+	reference.SetName(object.GetMetadata().GetName())
+	return object, nil
+}
+
 // getReferenceResource reads a stored object by ID using caller visibility and the
 // request transaction. It does not check ownership, deletion, or readiness.
 func getReferenceResource[O dao.Object](ctx context.Context, resourceDao *dao.GenericDAO[O], id string) (O, error) {

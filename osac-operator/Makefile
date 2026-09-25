@@ -100,13 +100,9 @@ sim-up: ## Create sim environment (kind + fulfillment-service + Postgres + self-
 sim-down: ## Tear down the sim environment.
 	hack/sim down
 
-.PHONY: test-integration-sim
-test-integration-sim: ## Run sim integration tests (requires 'make sim-up' first).
-	@if [ ! -f hack/sim.env ]; then \
-		echo "Error: sim environment not running. Run 'make sim-up' first."; \
-		exit 1; \
-	fi
-	go test ./test/integration/sim/ -v -ginkgo.v -timeout 10m
+.PHONY: test-integration-caas
+test-integration-caas: ## Run connected CaaS integration tests against the sim environment.
+	go test ./test/integration/caas/ -v -ginkgo.v -timeout 10m
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter

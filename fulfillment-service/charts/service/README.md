@@ -34,12 +34,14 @@ The following table lists the configurable parameters of the chart and their def
 | `log.bodies`               | Enable logging of HTTP/gRPC request and response bodies                           | `false`                                                        |
 | `images.service`           | Fulfillment service container image                                               | `ghcr.io/osac/fulfillment-service:main`                        |
 | `images.envoy`             | Envoy proxy container image                                                       | `docker.io/envoyproxy/envoy:v1.37.1`                           |
+| `eventPublisher.enabled`   | Deploy the Kafka-backed event publisher                                           | `true`                                                         |
 | `database.connection`      | List of sources for database connection parameters (see below)                    | `[]` (must be configured)                                      |
-| `kafka.connection`         | List of sources for Kafka connection parameters (see below)                       | `[]` (must be configured)                                      |
+| `kafka.connection`         | List of sources for Kafka connection parameters (see below)                       | `[]` (must be configured when the event publisher is enabled)  |
 
 Connection details are provided via `kafka.connection`, a list of ConfigMap and Secret sources that
-provide the connection parameters. The sources must provide `brokers`, which is required for the
-publisher to start. Each entry maps keys from a ConfigMap or Secret to Kafka configuration properties
+provide the connection parameters. When `eventPublisher.enabled` is true, the sources must provide
+`brokers`, which is required for the publisher to start. Set `eventPublisher.enabled: false` for an
+API-only deployment that deliberately omits Kafka. Each entry maps keys from a ConfigMap or Secret to Kafka configuration properties
 named `brokers`, `user` and `password`. SASL is optional: omit `user` and `password` when the cluster
 does not require it. TLS trust uses `certs.caBundle`; include the broker CA in that ConfigMap when it
 is not already trusted.

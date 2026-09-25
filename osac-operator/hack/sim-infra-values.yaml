@@ -1,0 +1,46 @@
+# Minimal osac-infra values for the connected CaaS sim backend.
+# cert-manager, trust-manager, and the self-signed CA are installed by hack/sim.
+# The real fulfillment reconciler authenticates with Keycloak; keep unrelated
+# infrastructure (Kafka, OpenBao, operators) disabled.
+osacNamespace: osac
+csiNamespace: osac-csi
+csiReleaseName: osac
+
+certManager:
+  enabled: false
+trustManager:
+  enabled: false
+caIssuer:
+  enabled: false
+envoygateway:
+  enabled: false
+keycloak:
+  enabled: true
+  realmOverwrite: false
+  hostname: keycloak.keycloak.svc.cluster.local
+  route:
+    hostname: ""
+    publicIngress: false
+aapOperator:
+  enabled: false
+lvms:
+  enabled: false
+metallb:
+  enabled: false
+cnv:
+  enabled: false
+mce:
+  enabled: false
+kafka:
+  enabled: false
+fakeCrds:
+  enabled: false
+coredns:
+  localhostRewrite: false
+bundledVault:
+  enabled: false
+bundledPostgres:
+  enabled: true
+  database:
+    name: service
+    user: service

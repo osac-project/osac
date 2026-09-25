@@ -1,40 +1,128 @@
 #!/usr/bin/env bash
 # Manage the sim (simulated integration) environment for osac-operator.
 #
-# Creates a kind cluster and deploys the OSAC umbrella chart with bundled
-# Postgres, cert-manager, trust-manager, and a self-signed CA — everything
-# the fulfillment-service needs to serve gRPC, in a single helm install.
+# Creates a kind cluster, installs cert-manager/trust-manager and the self-signed
+# CA, then deploys bundled Postgres from osac-infra and the OSAC umbrella chart.
 #
 # Usage:
 #   ./hack/sim up                              # Create cluster and deploy
 #   ./hack/sim down                            # Tear down
 #   CLUSTER_NAME=osac-dev ./hack/sim up        # Custom cluster name
 set -euo pipefail
+umask 077
 
 SCRIPT_DIR="$(realpath "$(dirname "${BASH_SOURCE[0]}")")"
 OPERATOR_DIR="$(realpath "${SCRIPT_DIR}/..")"
 REPO_ROOT="$(realpath "${OPERATOR_DIR}/..")"
 CHART_DIR="${REPO_ROOT}/osac-installer/charts/osac"
+INFRA_CHART_DIR="${REPO_ROOT}/osac-installer/charts/osac-infra"
 
 CLUSTER_NAME="${CLUSTER_NAME:-osac-sim}"
 NAMESPACE="${NAMESPACE:-osac}"
+SIM_ENV_FILE="${SCRIPT_DIR}/sim.env"
+CA_FILE="${SCRIPT_DIR}/sim-ca.pem"
+SIM_OWNER="osac-operator-hack-sim"
+SIM_SERVICE_ACCOUNT="admin"
+SIM_SERVICE_IMAGE=""
 
-log() { echo "==> $*"; }
+log() { printf '==> %s\n' "$*"; }
+die() { printf 'sim: error: %s\n' "$*" >&2; exit 1; }
+
+install_sim_crds() {
+  local crd
+  local -a crds=(
+    "${OPERATOR_DIR}/config/crd/fakes/agent-install.openshift.io_agents.yaml"
+    "${OPERATOR_DIR}/config/crd/fakes/agent-install.openshift.io_infraenvs.yaml"
+    "${OPERATOR_DIR}/config/crd/fakes/hive.openshift.io_clusterdeployments.yaml"
+    "${OPERATOR_DIR}/config/crd/fakes/hypershift.openshift.io_nodepools.yaml"
+  )
+
+  # The umbrella chart installs the OSAC and BMF CRDs. Apply only the external
+  # simulator CRDs here to avoid claiming chart-owned CRDs ahead of Helm.
+  log "Installing simulator CRDs..."
+  for crd in "${crds[@]}"; do
+    kubectl apply --server-side --field-manager=osac-sim -f "${crd}"
+  done
+  kubectl wait --for=condition=Established --timeout=60s \
+    crd/agents.agent-install.openshift.io \
+    crd/infraenvs.agent-install.openshift.io \
+    crd/clusterdeployments.hive.openshift.io \
+    crd/nodepools.hypershift.openshift.io
+}
+
+build_and_load_service_image() {
+  local commit
+  local archive
+  commit="$(git -C "${REPO_ROOT}" rev-parse --short=12 HEAD)"
+  SIM_SERVICE_IMAGE="localhost/fulfillment-service:sim-${commit}-$(date -u +%Y%m%d%H%M%S)-$$"
+
+  if command -v podman >/dev/null 2>&1; then
+    log "Building fulfillment-service image ${SIM_SERVICE_IMAGE} from this checkout..."
+    podman build -t "${SIM_SERVICE_IMAGE}" -f "${REPO_ROOT}/fulfillment-service/Containerfile" "${REPO_ROOT}"
+    archive="$(mktemp "${TMPDIR:-/tmp}/osac-fulfillment-image.XXXXXX.tar")"
+    if ! podman save "${SIM_SERVICE_IMAGE}" -o "${archive}"; then
+      rm -f -- "${archive}"
+      die "failed to save local fulfillment-service image"
+    fi
+    if ! kind load image-archive "${archive}" --name "${CLUSTER_NAME}"; then
+      rm -f -- "${archive}"
+      die "failed to load fulfillment-service image into Kind cluster ${CLUSTER_NAME}"
+    fi
+    rm -f -- "${archive}"
+  elif command -v docker >/dev/null 2>&1; then
+    log "Building fulfillment-service image ${SIM_SERVICE_IMAGE} from this checkout..."
+    docker build -t "${SIM_SERVICE_IMAGE}" -f "${REPO_ROOT}/fulfillment-service/Containerfile" "${REPO_ROOT}"
+    kind load docker-image "${SIM_SERVICE_IMAGE}" --name "${CLUSTER_NAME}"
+  else
+    die "podman or docker is required to build the checkout-specific fulfillment-service image"
+  fi
+}
 
 cmd_up() {
-  # Step 1: Kind cluster
-  if kind get clusters 2>/dev/null | grep -q "^${CLUSTER_NAME}$"; then
-    log "Kind cluster '${CLUSTER_NAME}' already exists, reusing"
-  else
-    log "Creating kind cluster '${CLUSTER_NAME}'..."
-    kind create cluster --name "${CLUSTER_NAME}" --config "${SCRIPT_DIR}/sim-kind-config.yaml" --wait 60s
+  # Step 1: Create a dedicated Kind cluster or verify that an existing one is ours.
+  local existing_clusters
+  local cluster_exists=false
+  existing_clusters="$(kind get clusters)"
+  if grep -Fxq -- "${CLUSTER_NAME}" <<<"${existing_clusters}"; then
+    cluster_exists=true
+    log "Kind cluster '${CLUSTER_NAME}' exists; verifying sim ownership"
   fi
 
-  # Point kubectl at the cluster
+  local kubeconfig_tmp
+  kubeconfig_tmp="$(mktemp "${TMPDIR:-/tmp}/osac-sim-kubeconfig.XXXXXX")"
+  chmod 600 "${kubeconfig_tmp}"
+  if [[ "${cluster_exists}" == true ]]; then
+    kind get kubeconfig --name "${CLUSTER_NAME}" > "${kubeconfig_tmp}"
+    local existing_owner
+    local existing_cluster
+    existing_owner="$(kubectl --kubeconfig "${kubeconfig_tmp}" get namespace kube-system \
+      -o jsonpath='{.metadata.labels.osac\.openshift\.io/sim-owner}' 2>/dev/null || true)"
+    existing_cluster="$(kubectl --kubeconfig "${kubeconfig_tmp}" get namespace kube-system \
+      -o jsonpath='{.metadata.annotations.osac\.openshift\.io/sim-cluster-name}' 2>/dev/null || true)"
+    if [[ "${existing_owner}" != "${SIM_OWNER}" || "${existing_cluster}" != "${CLUSTER_NAME}" ]]; then
+      rm -f -- "${kubeconfig_tmp}"
+      die "refusing to reuse Kind cluster ${CLUSTER_NAME}: sim ownership marker is missing or mismatched"
+    fi
+    log "Verified existing sim cluster ownership"
+  else
+    log "Creating kind cluster '${CLUSTER_NAME}'..."
+    rm -f -- "${kubeconfig_tmp}"
+    kind create cluster --name "${CLUSTER_NAME}" --kubeconfig "${kubeconfig_tmp}" \
+      --config "${SCRIPT_DIR}/sim-kind-config.yaml" --wait 60s
+    chmod 600 "${kubeconfig_tmp}"
+    kubectl --kubeconfig "${kubeconfig_tmp}" label namespace kube-system \
+      "osac.openshift.io/sim-owner=${SIM_OWNER}" --overwrite
+    kubectl --kubeconfig "${kubeconfig_tmp}" annotate namespace kube-system \
+      "osac.openshift.io/sim-cluster-name=${CLUSTER_NAME}" --overwrite
+  fi
+
   export KUBECONFIG="${HOME}/.kube/${CLUSTER_NAME}-kind.kubeconfig"
   mkdir -p "${HOME}/.kube"
-  kind get kubeconfig --name "${CLUSTER_NAME}" > "${KUBECONFIG}"
+  mv -- "${kubeconfig_tmp}" "${KUBECONFIG}"
   chmod 600 "${KUBECONFIG}"
+
+  install_sim_crds
+  build_and_load_service_image
 
   # Step 2: Install cert-manager + trust-manager (CRDs must exist before umbrella chart)
   log "Adding jetstack Helm repo..."
@@ -121,24 +209,50 @@ spec:
           values: [kube-node-lease, kube-public, kube-system, local-path-storage]
 BUNDLE
 
-  # Step 5: Build umbrella chart dependencies
+  # Step 5: Install bundled PostgreSQL and Keycloak from osac-infra. The real
+  # fulfillment controller needs its Keycloak-backed OAuth credentials.
+  log "Installing bundled PostgreSQL and Keycloak..."
+  helm upgrade --install osac-infra "${INFRA_CHART_DIR}" \
+    --namespace osac-infra \
+    --create-namespace \
+    --values "${SCRIPT_DIR}/sim-infra-values.yaml" \
+    --wait \
+    --timeout 5m
+  kubectl --namespace osac-infra wait \
+    --for=condition=Available deployment/postgres --timeout=2m
+  kubectl --namespace keycloak wait \
+    --for=condition=Available deployment/keycloak-service --timeout=5m
+  kubectl --namespace "${NAMESPACE}" get secret fulfillment-controller-credentials >/dev/null || \
+    die "Keycloak controller credentials were not provisioned by osac-infra"
+
+  # Step 6: Build umbrella chart dependencies
   log "Building chart dependencies..."
   helm dependency update "${CHART_DIR}" 2>&1 | tail -5
 
-  # Step 6: Deploy OSAC umbrella chart
-  log "Installing OSAC (fulfillment-service + Postgres + CA)..."
+  # Step 7: Deploy OSAC umbrella chart
+  log "Installing OSAC (fulfillment-service + CA)..."
   helm upgrade --install osac "${CHART_DIR}" \
     --namespace "${NAMESPACE}" \
     --create-namespace \
     --values "${SCRIPT_DIR}/sim-values.yaml" \
+    --set-string service.images.service="${SIM_SERVICE_IMAGE}" \
+    --set service.images.pullPolicy=IfNotPresent \
     --timeout 10m
 
-  # Wait for the pods we actually need (grpc server + ingress proxy)
+  # Wait for the API and its real cluster reconciler, not only the gRPC server.
   log "Waiting for fulfillment-service pods..."
   kubectl -n "${NAMESPACE}" wait --for=condition=Ready pod -l app=fulfillment-grpc-server --timeout=5m
   kubectl -n "${NAMESPACE}" wait --for=condition=Ready pod -l app=fulfillment-ingress-proxy --timeout=5m
+  kubectl -n "${NAMESPACE}" rollout status deployment/fulfillment-controller --timeout=5m || \
+    die "fulfillment reconciler failed readiness; inspect deployment/fulfillment-controller in ${NAMESPACE}"
 
-  # Step 7: Expose fulfillment-internal-api via NodePort (mapped to host port 8001 by kind)
+  local deployed_image
+  deployed_image="$(kubectl -n "${NAMESPACE}" get deployment fulfillment-grpc-server \
+    -o jsonpath='{.spec.template.spec.containers[?(@.name=="grpc-server")].image}')"
+  [[ "${deployed_image}" == "${SIM_SERVICE_IMAGE}" ]] || \
+    die "fulfillment deployment image mismatch: expected ${SIM_SERVICE_IMAGE}, got ${deployed_image}"
+
+  # Step 8: Expose fulfillment-internal-api via NodePort (mapped to host port 8001 by kind)
   log "Creating NodePort service for fulfillment-internal-api..."
   kubectl -n "${NAMESPACE}" apply -f - <<'NODEPORT_SVC'
 apiVersion: v1
@@ -155,11 +269,8 @@ spec:
       nodePort: 30001
 NODEPORT_SVC
 
-  # Step 8: Extract connection details for Go tests
+  # Step 9: Extract connection details for Go tests
   log "Extracting test credentials..."
-
-  SIM_ENV_FILE="${SCRIPT_DIR}/sim.env"
-  CA_FILE="${SCRIPT_DIR}/sim-ca.pem"
 
   # Wait for the ca-bundle ConfigMap (trust-manager distributes it)
   for _ in $(seq 1 30); do
@@ -172,29 +283,65 @@ NODEPORT_SVC
   kubectl -n "${NAMESPACE}" get configmap ca-bundle \
     -o jsonpath='{.data.bundle\.pem}' > "${CA_FILE}"
 
-  TOKEN=$(kubectl -n "${NAMESPACE}" create token osac-operator-controller-manager --duration=24h 2>/dev/null || \
-          kubectl -n "${NAMESPACE}" create token admin --duration=24h)
+  TOKEN="$(kubectl -n "${NAMESPACE}" create token "${SIM_SERVICE_ACCOUNT}" --duration=24h)"
 
-  cat > "${SIM_ENV_FILE}" <<EOF
+  local sim_env_tmp
+  sim_env_tmp="$(mktemp "${SIM_ENV_FILE}.XXXXXX")"
+  cat > "${sim_env_tmp}" <<EOF
 # Generated by sim — do not edit
 SIM_GRPC_ADDRESS=localhost:8001
 SIM_CA_FILE=${CA_FILE}
 SIM_TOKEN=${TOKEN}
 SIM_KUBECONFIG=${KUBECONFIG}
 SIM_NAMESPACE=${NAMESPACE}
+SIM_CLUSTER_NAME=${CLUSTER_NAME}
+SIM_EXPECTED_SERVICE_ACCOUNT=${SIM_SERVICE_ACCOUNT}
+SIM_SERVICE_IMAGE=${SIM_SERVICE_IMAGE}
 SIM_SERVER_NAME=fulfillment-internal-api.${NAMESPACE}.svc.cluster.local
 EOF
+  chmod 600 "${sim_env_tmp}"
+  mv -- "${sim_env_tmp}" "${SIM_ENV_FILE}"
+  unset TOKEN
 
   log "Sim environment ready"
-  log "Run tests:    make test-integration-sim"
+  log "Run tests:    make test-integration-caas"
   log "Teardown:     hack/sim down"
 }
 
 cmd_down() {
-  log "Deleting kind cluster '${CLUSTER_NAME}'..."
-  kind delete cluster --name "${CLUSTER_NAME}" || true
+  local existing_clusters
+  existing_clusters="$(kind get clusters)"
+  if ! grep -Fxq -- "${CLUSTER_NAME}" <<<"${existing_clusters}"; then
+    log "Kind cluster '${CLUSTER_NAME}' is absent; preserving sim.env and CA files for inspection"
+    return
+  fi
 
-  rm -f "${SCRIPT_DIR}/sim.env" "${SCRIPT_DIR}/sim-ca.pem"
+  local kubeconfig_tmp
+  local existing_owner
+  local existing_cluster
+  kubeconfig_tmp="$(mktemp "${TMPDIR:-/tmp}/osac-sim-kubeconfig.XXXXXX")"
+  chmod 600 "${kubeconfig_tmp}"
+  kind get kubeconfig --name "${CLUSTER_NAME}" > "${kubeconfig_tmp}"
+  existing_owner="$(kubectl --kubeconfig "${kubeconfig_tmp}" get namespace kube-system \
+    -o jsonpath='{.metadata.labels.osac\.openshift\.io/sim-owner}' 2>/dev/null || true)"
+  existing_cluster="$(kubectl --kubeconfig "${kubeconfig_tmp}" get namespace kube-system \
+    -o jsonpath='{.metadata.annotations.osac\.openshift\.io/sim-cluster-name}' 2>/dev/null || true)"
+  rm -f -- "${kubeconfig_tmp}"
+  [[ "${existing_owner}" == "${SIM_OWNER}" && "${existing_cluster}" == "${CLUSTER_NAME}" ]] || \
+    die "refusing to delete Kind cluster ${CLUSTER_NAME}: sim ownership marker is missing or mismatched"
+
+  log "Deleting owned Kind cluster '${CLUSTER_NAME}'..."
+  kind delete cluster --name "${CLUSTER_NAME}"
+
+  local configured_cluster=""
+  if [[ -f "${SIM_ENV_FILE}" ]]; then
+    configured_cluster="$(awk -F= '$1 == "SIM_CLUSTER_NAME" {sub(/^[^=]*=/, ""); print; exit}' "${SIM_ENV_FILE}")"
+  fi
+  if [[ "${configured_cluster}" == "${CLUSTER_NAME}" ]]; then
+    rm -f -- "${SIM_ENV_FILE}" "${CA_FILE}"
+  else
+    log "Preserving sim connection files because sim.env does not identify cluster '${CLUSTER_NAME}'"
+  fi
 
   log "Sim environment cleaned up"
 }

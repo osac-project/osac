@@ -31,6 +31,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/references"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 var _ = Describe("RegisterReferenceLookups", func() {
@@ -63,6 +64,65 @@ var _ = Describe("RegisterReferenceLookups", func() {
 		Expect(missing).To(BeEmpty(),
 			"no lookup registered for Create/Update reference types:\n  %s",
 			strings.Join(missing, "\n  "))
+	})
+
+	It("leaves BMI Create network references for the tenant-scoped handler to resolve", func() {
+		logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+		tenancy, err := auth.NewGuestTenancyLogic().SetLogger(logger).Build()
+		Expect(err).NotTo(HaveOccurred())
+		v, err := newReferenceValidator(logger, tenancy, prometheus.NewRegistry())
+		Expect(err).NotTo(HaveOccurred())
+
+		request := privatev1.BareMetalInstancesCreateRequest_builder{Object: privatev1.BareMetalInstance_builder{
+			Metadata: privatev1.Metadata_builder{Tenant: "tenant-b"}.Build(),
+			Spec: privatev1.BareMetalInstanceSpec_builder{NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
+				privatev1.BareMetalNetworkAttachment_builder{
+					Subnet: privatev1.SubnetLocalReference_builder{Name: "default-ipv4"}.Build(),
+					SecurityGroups: []*privatev1.SecurityGroupLocalReference{
+						privatev1.SecurityGroupLocalReference_builder{Name: "default"}.Build(),
+					},
+				}.Build(),
+			}}.Build(),
+		}.Build()}.Build()
+		called := false
+		_, err = v.UnaryServer(context.Background(), request,
+			&grpc.UnaryServerInfo{FullMethod: privatev1.BareMetalInstances_Create_FullMethodName},
+			func(_ context.Context, actual any) (any, error) {
+				called = true
+				attachment := actual.(*privatev1.BareMetalInstancesCreateRequest).GetObject().GetSpec().GetNetworkAttachments()[0]
+				Expect(attachment.GetSubnet().GetId()).To(BeEmpty(), "interceptor must not resolve a same-named subnet in another tenant")
+				Expect(attachment.GetSubnet().GetName()).To(Equal("default-ipv4"))
+				Expect(attachment.GetSecurityGroups()[0].GetId()).To(BeEmpty(), "security group must also be resolved after tenant assignment")
+				Expect(attachment.GetSecurityGroups()[0].GetName()).To(Equal("default"))
+				return "ok", nil
+			})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(called).To(BeTrue(), "network references must reach handler for post-ownership scoped resolution")
+	})
+
+	It("leaves public BMI Create network references for the private handler to resolve", func() {
+		logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+		tenancy, err := auth.NewGuestTenancyLogic().SetLogger(logger).Build()
+		Expect(err).NotTo(HaveOccurred())
+		v, err := newReferenceValidator(logger, tenancy, prometheus.NewRegistry())
+		Expect(err).NotTo(HaveOccurred())
+		request := publicv1.BareMetalInstancesCreateRequest_builder{Object: publicv1.BareMetalInstance_builder{
+			Spec: publicv1.BareMetalInstanceSpec_builder{NetworkAttachments: []*publicv1.BareMetalNetworkAttachment{
+				publicv1.BareMetalNetworkAttachment_builder{
+					Subnet: publicv1.SubnetLocalReference_builder{Name: "default-ipv4"}.Build(),
+				}.Build(),
+			}}.Build(),
+		}.Build()}.Build()
+		called := false
+		_, err = v.UnaryServer(context.Background(), request,
+			&grpc.UnaryServerInfo{FullMethod: publicv1.BareMetalInstances_Create_FullMethodName},
+			func(_ context.Context, actual any) (any, error) {
+				called = true
+				Expect(actual.(*publicv1.BareMetalInstancesCreateRequest).GetObject().GetSpec().GetNetworkAttachments()[0].GetSubnet().GetId()).To(BeEmpty())
+				return "ok", nil
+			})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(called).To(BeTrue())
 	})
 
 	It("does not reject identity provider client_secret_secret as unregistered", func() {

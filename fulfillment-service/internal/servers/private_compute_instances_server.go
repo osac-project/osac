@@ -789,8 +789,8 @@ func validateComputeTemplateImmutability(
 	return nil
 }
 
-// validateComputeNetworkAttachmentsImmutability ensures subnet references cannot be changed
-// in networkAttachments array after creation. Security groups can be modified.
+// validateComputeNetworkAttachmentsImmutability rejects changes to the complete
+// network attachment spec after creation.
 func validateComputeNetworkAttachmentsImmutability(
 	current, candidate *privatev1.ComputeInstance,
 	updateMask *fieldmaskpb.FieldMask,
@@ -821,8 +821,6 @@ func validateComputeNetworkAttachmentsImmutability(
 		)
 	}
 
-	// Check that subnet references haven't changed within each attachment
-	// Security groups can change freely (no validation)
 	for i := range existingAttachments {
 		existingSubnet := existingAttachments[i].GetSubnet()
 		newSubnet := newAttachments[i].GetSubnet()
@@ -832,6 +830,13 @@ func validateComputeNetworkAttachmentsImmutability(
 				"cannot change network_attachments[%d].subnet from '%s' to '%s': subnet is immutable",
 				i, refKey(existingSubnet), refKey(newSubnet),
 			)
+		}
+		if err := validateImmutableSecurityGroups(
+			existingAttachments[i].GetSecurityGroups(),
+			newAttachments[i].GetSecurityGroups(),
+			fmt.Sprintf("network_attachments[%d].security_groups", i),
+		); err != nil {
+			return err
 		}
 	}
 

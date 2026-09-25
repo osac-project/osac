@@ -2180,7 +2180,7 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		It("Accepts update that changes only security_groups", func() {
+		It("Rejects update that changes only security_groups", func() {
 			createResp, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -2204,7 +2204,7 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			id := createResp.GetObject().GetId()
 
-			_, err = server.Update(ctx, privatev1.BareMetalInstancesUpdateRequest_builder{
+			updateResponse, err := server.Update(ctx, privatev1.BareMetalInstancesUpdateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
 					Id: id,
 					Spec: privatev1.BareMetalInstanceSpec_builder{
@@ -2221,7 +2221,108 @@ var _ = Describe("Private bare metal instances server", func() {
 					Paths: []string{"spec.network_attachments"},
 				},
 			}.Build())
+			Expect(updateResponse).To(BeNil())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			stored, err := server.Get(ctx, privatev1.BareMetalInstancesGetRequest_builder{Id: id}.Build())
 			Expect(err).ToNot(HaveOccurred())
+			attachments := stored.GetObject().GetSpec().GetNetworkAttachments()
+			Expect(attachments).To(HaveLen(1))
+			Expect(attachments[0].GetSubnet().GetId()).To(Equal(subnetID1))
+			Expect(attachments[0].GetInterface()).To(Equal("data-0"))
+			Expect(attachments[0].GetSecurityGroups()).To(HaveLen(1))
+			Expect(attachments[0].GetSecurityGroups()[0].GetId()).To(Equal("sg-1"))
+		})
+
+		It("Accepts an identical network attachment update", func() {
+			created, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{Name: "baremetal-instance-1"}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithHT}.Build(),
+						InstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Id: "default-type"}.Build(),
+						SshPublicKey: new(testSSHPublicKey),
+						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
+							privatev1.BareMetalNetworkAttachment_builder{
+								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
+								Interface: strPtr("data-0"),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{
+									privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build(),
+								},
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			updated, err := server.Update(ctx, privatev1.BareMetalInstancesUpdateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Id: created.GetObject().GetId(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
+							privatev1.BareMetalNetworkAttachment_builder{
+								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
+								Interface: strPtr("data-0"),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{
+									privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build(),
+								},
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.network_attachments"}},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			attachments := updated.GetObject().GetSpec().GetNetworkAttachments()
+			Expect(attachments).To(HaveLen(1))
+			Expect(attachments[0].GetSecurityGroups()[0].GetId()).To(Equal("sg-1"))
+		})
+
+		It("Rejects reordering network attachments", func() {
+			first := privatev1.BareMetalNetworkAttachment_builder{
+				Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
+				Interface: strPtr("data-0"),
+				Primary:   boolPtr(true),
+			}.Build()
+			second := privatev1.BareMetalNetworkAttachment_builder{
+				Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID2}.Build(),
+				Interface: strPtr("data-1"),
+			}.Build()
+			created, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{Name: "baremetal-instance-1"}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						DiskImage:          privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:        privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithHT}.Build(),
+						InstanceType:       privatev1.BareMetalInstanceTypeLocalReference_builder{Id: "default-type"}.Build(),
+						SshPublicKey:       new(testSSHPublicKey),
+						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{first, second},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			id := created.GetObject().GetId()
+			response, err := server.Update(ctx, privatev1.BareMetalInstancesUpdateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Id: id,
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{second, first},
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.network_attachments"}},
+			}.Build())
+			Expect(response).To(BeNil())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			stored, err := server.Get(ctx, privatev1.BareMetalInstancesGetRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			attachments := stored.GetObject().GetSpec().GetNetworkAttachments()
+			Expect(attachments).To(HaveLen(2))
+			Expect(attachments[0].GetSubnet().GetId()).To(Equal(subnetID1))
+			Expect(attachments[1].GetSubnet().GetId()).To(Equal(subnetID2))
+			original := created.GetObject().GetSpec().GetNetworkAttachments()
+			Expect(original).To(HaveLen(2))
+			Expect(proto.Equal(attachments[0], original[0])).To(BeTrue())
+			Expect(proto.Equal(attachments[1], original[1])).To(BeTrue())
 		})
 
 		It("Accepts update that does not touch network_attachments", func() {
@@ -2305,6 +2406,9 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 			Expect(status.Message()).To(ContainSubstring("cannot change number of network attachments"))
+			stored, err := server.Get(ctx, privatev1.BareMetalInstancesGetRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(proto.Equal(stored.GetObject().GetSpec(), createResp.GetObject().GetSpec())).To(BeTrue())
 		})
 
 		It("Rejects update that changes subnet", func() {
@@ -2350,6 +2454,9 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 			Expect(status.Message()).To(ContainSubstring("subnet is immutable"))
+			stored, err := server.Get(ctx, privatev1.BareMetalInstancesGetRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(proto.Equal(stored.GetObject().GetSpec(), createResp.GetObject().GetSpec())).To(BeTrue())
 		})
 
 		It("Rejects update that changes interface", func() {
@@ -2395,6 +2502,9 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 			Expect(status.Message()).To(ContainSubstring("interface is immutable"))
+			stored, err := server.Get(ctx, privatev1.BareMetalInstancesGetRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(proto.Equal(stored.GetObject().GetSpec(), createResp.GetObject().GetSpec())).To(BeTrue())
 		})
 
 		It("Rejects update that changes primary", func() {
@@ -2450,6 +2560,9 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 			Expect(status.Message()).To(ContainSubstring("primary is immutable"))
+			stored, err := server.Get(ctx, privatev1.BareMetalInstancesGetRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(proto.Equal(stored.GetObject().GetSpec(), createResp.GetObject().GetSpec())).To(BeTrue())
 		})
 	})
 

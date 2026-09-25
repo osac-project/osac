@@ -24,6 +24,7 @@ import (
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -263,6 +264,61 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		status, ok := grpcstatus.FromError(err)
 		Expect(ok).To(BeTrue())
 		Expect(status.Code()).To(Equal(grpccodes.NotFound))
+	})
+
+	It("rejects public updates that change network attachments", func(ctx context.Context) {
+		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
+		createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
+			Object: publicv1.BareMetalInstance_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
+				}.Build(),
+				Spec: publicv1.BareMetalInstanceSpec_builder{
+					CatalogItem:        publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
+					InstanceType:       publicv1.BareMetalInstanceTypeLocalReference_builder{Id: instanceTypeId}.Build(),
+					SshPublicKey:       new(bmiTestSSHPublicKey),
+					DiskImage:          publicv1.DiskImageReference_builder{Id: defaultDiskImageId}.Build(),
+					NetworkAttachments: []*publicv1.BareMetalNetworkAttachment{network.bareMetalInstanceAttachment()},
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		object := createResp.GetObject()
+		bareMetalInstanceId := object.GetId()
+		DeferCleanup(func(ctx context.Context) {
+			_, err := privateBareMetalInstancesClient.Delete(ctx, privatev1.BareMetalInstancesDeleteRequest_builder{
+				Id: bareMetalInstanceId,
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Eventually(func(g Gomega) {
+				_, err := privateBareMetalInstancesClient.Get(ctx, privatev1.BareMetalInstancesGetRequest_builder{
+					Id: bareMetalInstanceId,
+				}.Build())
+				g.Expect(err).To(HaveOccurred())
+				g.Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
+			}, 2*time.Minute, time.Second).Should(Succeed())
+		})
+
+		originalAttachment := proto.Clone(object.GetSpec().GetNetworkAttachments()[0]).(*publicv1.BareMetalNetworkAttachment)
+		changed := proto.Clone(originalAttachment).(*publicv1.BareMetalNetworkAttachment)
+		changed.SetSecurityGroups(nil)
+		candidate := proto.Clone(object).(*publicv1.BareMetalInstance)
+		candidate.GetSpec().SetNetworkAttachments([]*publicv1.BareMetalNetworkAttachment{changed})
+		mask := catalogItemUpdateMask("spec.network_attachments")
+		_, err = bareMetalInstancesClient.Update(ctx, publicv1.BareMetalInstancesUpdateRequest_builder{
+			Object: candidate, UpdateMask: mask,
+		}.Build())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+
+		persisted, err := bareMetalInstancesClient.Get(ctx, publicv1.BareMetalInstancesGetRequest_builder{Id: bareMetalInstanceId}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(proto.Equal(persisted.GetObject().GetSpec().GetNetworkAttachments()[0], originalAttachment)).To(BeTrue())
+
+		_, err = bareMetalInstancesClient.Update(ctx, publicv1.BareMetalInstancesUpdateRequest_builder{
+			Object:     persisted.GetObject(),
+			UpdateMask: mask,
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
 	})
 
 	It("Rejects Create with network_attachments when the Subnet's NetworkClass has no fabric_manager", func(ctx context.Context) {

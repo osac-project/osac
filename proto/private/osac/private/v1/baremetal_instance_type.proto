@@ -120,9 +120,9 @@ message BareMetalInstanceSpec {
   reserved "image";
 
   // Network attachments for the bare metal instance. One entry per physical NIC.
-  // The list structure is immutable after creation (entries cannot be added or removed),
-  // but security_groups within each entry can be updated.
-  repeated BareMetalNetworkAttachment network_attachments = 8;
+  // The complete attachment list, including subnet and security group references,
+  // physical interface, and primary designation, is immutable after creation.
+  repeated BareMetalNetworkAttachment network_attachments = 8 [(google.api.field_behavior) = IMMUTABLE];
 
   // When true, the system auto-selects an ExternalIPPool and creates an ExternalIP
   // with an ExternalIPAttachment for this instance atomically during creation.

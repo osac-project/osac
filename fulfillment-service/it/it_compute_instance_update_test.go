@@ -64,6 +64,37 @@ func setComputeInstanceTestFinalizer(ctx context.Context, client privatev1.Compu
 }
 
 var _ = Describe("Compute instance updates", Label("compute-updates"), func() {
+	It("rejects public updates that change network attachments", func(ctx context.Context) {
+		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
+		template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
+		instance, err := createComputeInstanceFixture(ctx, tool.ExternalView().UserConn(), publicv1.ComputeInstanceSpec_builder{
+			Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+			NetworkAttachments: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()},
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+
+		client := publicv1.NewComputeInstancesClient(tool.ExternalView().UserConn())
+		originalAttachment := proto.Clone(instance.GetSpec().GetNetworkAttachments()[0]).(*publicv1.ComputeNetworkAttachment)
+		changed := proto.Clone(originalAttachment).(*publicv1.ComputeNetworkAttachment)
+		changed.SetSecurityGroups(nil)
+		candidate := proto.Clone(instance).(*publicv1.ComputeInstance)
+		candidate.GetSpec().SetNetworkAttachments([]*publicv1.ComputeNetworkAttachment{changed})
+		mask := catalogItemUpdateMask("spec.network_attachments")
+
+		_, err = client.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{Object: candidate, UpdateMask: mask}.Build())
+		expectCatalogItemStatusCode(err, codes.InvalidArgument)
+
+		persisted, err := client.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: instance.GetId()}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(proto.Equal(persisted.GetObject().GetSpec().GetNetworkAttachments()[0], originalAttachment)).To(BeTrue())
+
+		_, err = client.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
+			Object:     persisted.GetObject(),
+			UpdateMask: mask,
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+	})
+
 	DescribeTable("validates networking against persisted deletion state", func(ctx context.Context, deleteFirst, maskDeletionTimestamp bool) {
 		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 		template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
@@ -98,8 +129,11 @@ var _ = Describe("Compute instance updates", Label("compute-updates"), func() {
 			Expect(stored.GetObject().GetMetadata().GetFinalizers()).To(ContainElement(computeInstanceTestFinalizer))
 		}
 		setCatalogItemSubnetFixtureState(ctx, network.subnetID, privatev1.SubnetState_SUBNET_STATE_PENDING)
+		originalAttachment := proto.Clone(stored.GetObject().GetSpec().GetNetworkAttachments()[0]).(*privatev1.ComputeNetworkAttachment)
 		candidate := proto.Clone(stored.GetObject()).(*privatev1.ComputeInstance)
-		candidate.GetSpec().GetNetworkAttachments()[0].SetSecurityGroups(nil)
+		if deleteFirst {
+			candidate.GetSpec().GetNetworkAttachments()[0].SetSecurityGroups(nil)
+		}
 		if !deleteFirst {
 			By("supplying a deletion timestamp on a resource that is still live")
 			candidate.GetMetadata().SetDeletionTimestamp(timestamppb.Now())
@@ -110,21 +144,24 @@ var _ = Describe("Compute instance updates", Label("compute-updates"), func() {
 		}
 		_, err = client.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{Object: candidate, UpdateMask: mask}.Build())
 		if deleteFirst {
-			Expect(err).NotTo(HaveOccurred())
+			expectCatalogItemStatusCode(err, codes.InvalidArgument)
 		} else {
 			expectCatalogItemStatusCode(err, codes.FailedPrecondition)
 		}
 		persisted, err := client.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: resource.GetId()}.Build())
 		Expect(err).NotTo(HaveOccurred())
 		Expect(persisted.GetObject().GetMetadata().HasDeletionTimestamp()).To(Equal(deleteFirst))
+		Expect(proto.Equal(persisted.GetObject().GetSpec().GetNetworkAttachments()[0], originalAttachment)).To(BeTrue())
 		if deleteFirst {
-			Expect(persisted.GetObject().GetSpec().GetNetworkAttachments()[0].GetSecurityGroups()).To(BeEmpty())
-		} else {
-			Expect(persisted.GetObject().GetSpec().GetNetworkAttachments()[0].GetSecurityGroups()).To(HaveLen(1))
+			_, err = client.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+				Object:     persisted.GetObject(),
+				UpdateMask: catalogItemUpdateMask("spec.network_attachments"),
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
 		}
 	},
 		Entry("live resource: an unmasked deletion timestamp cannot bypass readiness", false, false),
 		Entry("live resource: a masked deletion timestamp cannot bypass readiness", false, true),
-		Entry("deleting resource: an ordinary update can release security groups while the subnet is pending", true, false),
+		Entry("deleting resource: rejects security-group changes while the subnet is pending", true, false),
 	)
 })

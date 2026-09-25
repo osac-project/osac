@@ -13,6 +13,11 @@ language governing permissions and limitations under the License.
 
 package servers
 
+import (
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
+)
+
 // resourceRef is the common interface for typed resource reference messages.
 type resourceRef interface {
 	GetId() string
@@ -26,4 +31,18 @@ func refKey(ref resourceRef) string {
 		return id
 	}
 	return ref.GetName()
+}
+
+func validateImmutableSecurityGroups[T resourceRef](existing, updated []T, fieldPath string) error {
+	if len(existing) != len(updated) {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"cannot change %s: security groups are immutable", fieldPath)
+	}
+	for i := range existing {
+		if refKey(existing[i]) != refKey(updated[i]) {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"cannot change %s[%d]: security groups are immutable", fieldPath, i)
+		}
+	}
+	return nil
 }

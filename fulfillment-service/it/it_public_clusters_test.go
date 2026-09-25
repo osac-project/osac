@@ -55,6 +55,9 @@ var _ = Describe("Public clusters", func() {
 					Name: fmt.Sprintf("test-ht-%s", uuid.New()[24:32]),
 				}.Build(),
 				Id: hostTypeId,
+				Interfaces: []*privatev1.NetworkInterface{
+					privatev1.NetworkInterface_builder{Name: "data-0", Role: "fabric"}.Build(),
+				},
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
@@ -246,6 +249,44 @@ var _ = Describe("Public clusters", func() {
 		nodeSet = object.GetSpec().GetNodeSets()["my-node-set"]
 		Expect(nodeSet).ToNot(BeNil())
 		Expect(nodeSet.GetSize()).To(BeNumerically("==", 4))
+	})
+
+	It("rejects public updates that change the network attachment", func() {
+		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
+		createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
+			Object: publicv1.Cluster_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
+				}.Build(),
+				Spec: publicv1.ClusterSpec_builder{
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NetworkAttachment: network.clusterAttachment(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		object := createResponse.GetObject()
+		DeferCleanup(func() {
+			_, err := clustersClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{Id: object.GetId()}.Build())
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		originalAttachment := proto.Clone(object.GetSpec().GetNetworkAttachment()).(*publicv1.ClusterNetworkAttachment)
+		candidate := proto.Clone(object).(*publicv1.Cluster)
+		candidate.GetSpec().GetNetworkAttachment().SetSecurityGroups(nil)
+		mask := catalogItemUpdateMask("spec.network_attachment")
+		_, err = clustersClient.Update(ctx, publicv1.ClustersUpdateRequest_builder{Object: candidate, UpdateMask: mask}.Build())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+
+		persisted, err := clustersClient.Get(ctx, publicv1.ClustersGetRequest_builder{Id: object.GetId()}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(proto.Equal(persisted.GetObject().GetSpec().GetNetworkAttachment(), originalAttachment)).To(BeTrue())
+
+		_, err = clustersClient.Update(ctx, publicv1.ClustersUpdateRequest_builder{
+			Object:     persisted.GetObject(),
+			UpdateMask: mask,
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
 	})
 
 	It("Can delete a cluster", func() {

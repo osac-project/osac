@@ -179,8 +179,8 @@ message ClusterSpec {
   // When not provided, the system will populate this field with the tenant's default subnet and security groups during
   // cluster creation.
   //
-  // The `subnet` field is immutable after creation. The `security_groups` field can be updated.
-  ClusterNetworkAttachment network_attachment = 9;
+  // The complete attachment, including subnet and security group references, is immutable after creation.
+  ClusterNetworkAttachment network_attachment = 9 [(google.api.field_behavior) = IMMUTABLE];
 
   // When true, the system automatically creates two ExternalIPs and two ExternalIPAttachments
   // (one for the API server endpoint, one for the ingress endpoint) during cluster creation.

@@ -776,7 +776,7 @@ func (s *PrivateBareMetalInstancesServer) applyBareMetalTemplate(bmi *privatev1.
 }
 
 // validateBareMetalImmutability ensures template, catalog_item, disk_image, ssh_public_key, user_data, template_parameters,
-// and auto_external_ip_attachment cannot be changed after creation.
+// auto_external_ip_attachment, and network_attachments cannot be changed after creation.
 func validateBareMetalImmutability(
 	current, candidate *privatev1.BareMetalInstance,
 	mask *fieldmaskpb.FieldMask,
@@ -891,6 +891,13 @@ func compareNetworkAttachmentsImmutability(existing, updated []*privatev1.BareMe
 		if existing[i].GetPrimary() != updated[i].GetPrimary() {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"cannot change network_attachments[%d].primary: primary is immutable after creation", i)
+		}
+		if err := validateImmutableSecurityGroups(
+			existing[i].GetSecurityGroups(),
+			updated[i].GetSecurityGroups(),
+			fmt.Sprintf("network_attachments[%d].security_groups", i),
+		); err != nil {
+			return err
 		}
 	}
 	return nil

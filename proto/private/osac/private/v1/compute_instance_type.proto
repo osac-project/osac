@@ -138,8 +138,9 @@ message ComputeInstanceSpec {
   reserved 12, 13;
   reserved "subnet", "security_groups";
 
-  // Network attachments: one entry per NIC.
-  repeated ComputeNetworkAttachment network_attachments = 14;
+  // Network attachments: one entry per NIC. The complete attachment list, including
+  // subnet and security group references, is immutable after creation.
+  repeated ComputeNetworkAttachment network_attachments = 14 [(google.api.field_behavior) = IMMUTABLE];
 
   // Reference to a compute instance catalog item. Mutually exclusive with template on Create; retained as immutable provenance afterward.
   // When set, the server fetches the catalog item and applies its typed field policies.

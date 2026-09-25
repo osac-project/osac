@@ -20,6 +20,11 @@ import type {
   DiskImagesUpdateRequest,
   DiskImagesUpdateResponse,
   ExternalIP,
+  ExternalIPAttachment,
+  ExternalIPAttachmentsCreateRequest,
+  ExternalIPAttachmentsCreateResponse,
+  ExternalIPsCreateRequest,
+  ExternalIPsCreateResponse,
   ExternalIPsListRequest,
   HostType,
   IdentityProvider,
@@ -37,6 +42,7 @@ import type {
   NATGatewaysListResponse,
   Project,
   ProjectMembership,
+  ExternalIPPool as PublicExternalIPPool,
   StorageTier as PublicStorageTier,
   StorageTiersGetRequest as PublicStorageTiersGetRequest,
   StorageTiersListRequest as PublicStorageTiersListRequest,
@@ -60,6 +66,7 @@ import {
   DiskImages,
   DiskImagesGetResponseSchema,
   DiskImagesListResponseSchema,
+  ExternalIPAttachments,
   ExternalIPState,
   ExternalIPs,
   HostTypes,
@@ -69,6 +76,7 @@ import {
   NATGateways,
   ProjectMemberships,
   Projects,
+  ExternalIPPools as PublicExternalIPPools,
   StorageTiers as PublicStorageTiers,
   StorageTiersGetResponseSchema as PublicStorageTiersGetResponseSchema,
   StorageTiersListResponseSchema as PublicStorageTiersListResponseSchema,
@@ -166,6 +174,7 @@ export type MockApiFixtures = {
   privateBaremetalInstanceTypes?: PrivateBareMetalInstanceType[];
   storageBackends?: StorageBackend[];
   privateExternalIpPools?: ExternalIPPool[];
+  externalIpPools?: PublicExternalIPPool[];
   storageTiers?: StorageTier[];
   publicStorageTiers?: PublicStorageTier[];
   roles?: Role[];
@@ -174,6 +183,7 @@ export type MockApiFixtures = {
   users?: User[];
   natGateways?: NATGateway[];
   externalIps?: ExternalIP[];
+  externalIpAttachments?: ExternalIPAttachment[];
 };
 
 export const wrapWithAuthInterceptor = (transport: Transport): Transport => {
@@ -240,15 +250,24 @@ const matchesUnallocatedExternalIpFilter = (
   return true;
 };
 
-const matchesExternalIpIdsFilter = (
-  filter: string | undefined,
-  id: string | undefined,
-): boolean => {
+const matchesIdInFilter = (filter: string | undefined, id: string | undefined): boolean => {
   if (!filter?.startsWith('this.id in ')) {
     return true;
   }
   const ids = JSON.parse(filter.slice('this.id in '.length)) as string[];
   return id !== undefined && ids.includes(id);
+};
+
+const matchesSpecExternalIpIdInFilter = (
+  filter: string | undefined,
+  externalIpId: string | undefined,
+): boolean => {
+  const prefix = 'this.spec.external_ip.id in ';
+  if (!filter?.startsWith(prefix)) {
+    return true;
+  }
+  const ids = JSON.parse(filter.slice(prefix.length)) as string[];
+  return externalIpId !== undefined && ids.includes(externalIpId);
 };
 
 const matchesInstanceTypeActiveFilter = (
@@ -410,6 +429,12 @@ export type MockTransportOverrides = {
     req: NATGatewaysDeleteRequest,
   ) => NATGatewaysDeleteResponse | Promise<NATGatewaysDeleteResponse>;
   onExternalIpList?: (req: ExternalIPsListRequest) => void;
+  onExternalIpCreate?: (
+    req: ExternalIPsCreateRequest,
+  ) => ExternalIPsCreateResponse | Promise<ExternalIPsCreateResponse>;
+  onExternalIpAttachmentCreate?: (
+    req: ExternalIPAttachmentsCreateRequest,
+  ) => ExternalIPAttachmentsCreateResponse | Promise<ExternalIPAttachmentsCreateResponse>;
 };
 
 export const createMockConnectTransport = (
@@ -435,6 +460,7 @@ export const createMockConnectTransport = (
   const privateBaremetalInstanceTypes = fixtures.privateBaremetalInstanceTypes ?? [];
   const storageBackends = [...(fixtures.storageBackends ?? [])];
   const privateExternalIpPools = [...(fixtures.privateExternalIpPools ?? [])];
+  const externalIpPools = [...(fixtures.externalIpPools ?? [])];
   const storageTiers = fixtures.storageTiers ?? [];
   const publicStorageTiers = fixtures.publicStorageTiers ?? [];
   const roles = fixtures.roles ?? [];
@@ -443,6 +469,7 @@ export const createMockConnectTransport = (
   const usersFixtures = fixtures.users ?? [];
   const natGateways = [...(fixtures.natGateways ?? [])];
   const externalIps = [...(fixtures.externalIps ?? [])];
+  const externalIpAttachments = [...(fixtures.externalIpAttachments ?? [])];
 
   return wrapWithAuthInterceptor(
     createRouterTransport((router) => {
@@ -662,6 +689,20 @@ export const createMockConnectTransport = (
           }
           return {};
         },
+      });
+
+      router.service(PublicExternalIPPools, {
+        list: (req) => {
+          const items = externalIpPools.filter((pool) => matchesIdInFilter(req.filter, pool.id));
+          return {
+            items,
+            size: items.length,
+            total: items.length,
+          };
+        },
+        get: (req) => ({
+          object: externalIpPools.find((pool) => pool.id === req.id),
+        }),
       });
 
       router.service(ExternalIPPools, {
@@ -954,8 +995,10 @@ export const createMockConnectTransport = (
         list: (req) => {
           overrides.onNatGatewayList?.(req);
           return {
-            items: natGateways.filter((item) =>
-              matchesVirtualNetworkScopeFilter(req.filter, item.spec?.virtualNetwork?.id),
+            items: natGateways.filter(
+              (item) =>
+                matchesVirtualNetworkScopeFilter(req.filter, item.spec?.virtualNetwork?.id) &&
+                matchesSpecExternalIpIdInFilter(req.filter, item.spec?.externalIp?.id),
             ),
           } satisfies Pick<NATGatewaysListResponse, 'items'>;
         },
@@ -991,7 +1034,7 @@ export const createMockConnectTransport = (
           return {
             items: externalIps.filter(
               (item) =>
-                matchesExternalIpIdsFilter(req.filter, item.id) &&
+                matchesIdInFilter(req.filter, item.id) &&
                 matchesUnallocatedExternalIpFilter(
                   req.filter,
                   item.status?.state,
@@ -1004,6 +1047,9 @@ export const createMockConnectTransport = (
           object: externalIps.find((item) => item.id === req.id),
         }),
         create: (req) => {
+          if (overrides.onExternalIpCreate) {
+            return overrides.onExternalIpCreate(req);
+          }
           const created = {
             ...req.object,
             id: req.object?.id || `eip-${externalIps.length + 1}`,
@@ -1017,6 +1063,33 @@ export const createMockConnectTransport = (
             externalIps.splice(index, 1);
           }
           return {};
+        },
+      });
+
+      router.service(ExternalIPAttachments, {
+        list: (req) => {
+          const items = externalIpAttachments.filter((item) =>
+            matchesSpecExternalIpIdInFilter(req.filter, item.spec?.externalIp?.id),
+          );
+          return {
+            items,
+            size: items.length,
+            total: items.length,
+          };
+        },
+        get: (req) => ({
+          object: externalIpAttachments.find((item) => item.id === req.id),
+        }),
+        create: async (req) => {
+          if (overrides.onExternalIpAttachmentCreate) {
+            return overrides.onExternalIpAttachmentCreate(req);
+          }
+          const created = {
+            ...req.object,
+            id: req.object?.id || `attachment-${externalIpAttachments.length + 1}`,
+          } as ExternalIPAttachment;
+          externalIpAttachments.push(created);
+          return { object: created };
         },
       });
 

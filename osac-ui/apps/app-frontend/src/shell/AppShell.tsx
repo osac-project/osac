@@ -4,6 +4,7 @@ import { Page, SkipToContent } from '@patternfly/react-core';
 
 import { CatalogItemDetailPage } from '@osac/ui-components/components/catalog/details/CatalogItemDetailPage.tsx';
 import ErrorBoundary from '@osac/ui-components/components/ErrorBoundary/ErrorBoundary';
+import ExternalIpRoutes from '@osac/ui-components/components/ExternalIp/ExternalIpRoutes';
 import { ExternalIpPoolRoutes } from '@osac/ui-components/components/ExternalIpPool/ExternalIpPoolRoutes';
 import IdentityProviderRoutes from '@osac/ui-components/components/IdentityProvider/IdentityProviderRoutes';
 import ProjectRoutes from '@osac/ui-components/components/Project/ProjectRoutes';
@@ -217,6 +218,14 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
           element={
             <ShellRoute>
               <SecurityGroupDetailPage />
+            </ShellRoute>
+          }
+        />
+        <Route
+          path="/networking/external-ips/*"
+          element={
+            <ShellRoute>
+              <ExternalIpRoutes />
             </ShellRoute>
           }
         />

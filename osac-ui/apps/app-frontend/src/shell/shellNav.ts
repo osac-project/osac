@@ -130,6 +130,12 @@ const getNetworkNav = (t: TFunction): NavRow => ({
       label: t('Security groups'),
       path: '/networking/security-groups',
     },
+    {
+      kind: 'link',
+      id: 'external-ips',
+      label: t('External IPs'),
+      path: '/networking/external-ips',
+    },
   ],
 });
 

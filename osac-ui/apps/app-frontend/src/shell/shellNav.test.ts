@@ -62,6 +62,12 @@ describe('navRowsForRole', () => {
           label: 'Security groups',
           path: '/networking/security-groups',
         },
+        {
+          kind: 'link',
+          id: 'external-ips',
+          label: 'External IPs',
+          path: '/networking/external-ips',
+        },
       ]);
     }
     const networking = findSection('tenant-idp-manager', 'nav-tenant-networking');

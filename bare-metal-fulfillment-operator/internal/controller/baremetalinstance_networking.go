@@ -20,6 +20,7 @@ import (
 	"context"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -167,10 +168,36 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkingDeletion(
 		ctx, r.NetworkingProvider, bareMetalInstance,
 		&bareMetalInstance.Status.NetworkingJobs,
 		provisioning.DefaultMaxJobHistory, r.ProvisionPollIntervalDuration,
+		func() bool {
+			return provisioning.CheckAPIServerForNonTerminalDeprovisionJob(
+				ctx, r.apiReaderOrClient(), client.ObjectKeyFromObject(bareMetalInstance),
+				&v1alpha1.BareMetalInstance{},
+				func(obj client.Object) []opv1alpha1.JobStatus {
+					return obj.(*v1alpha1.BareMetalInstance).Status.NetworkingJobs
+				},
+			)
+		},
+		func() error {
+			return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(bareMetalInstance), bareMetalInstance.Status)
+		},
 	)
-	// Persist NetworkingJobs changes made by RunDeprovisioningLifecycle.
-	// The CRD has a status subresource, so r.Update does not write status fields.
-	if statusErr := r.Status().Update(ctx, bareMetalInstance); statusErr != nil {
+	// Persist NetworkingJobs changes made by RunDeprovisioningLifecycle. A job
+	// trigger may already have flushed status, advancing the resource version, so
+	// read the latest object and retry conflicts while preserving other status.
+	key := client.ObjectKeyFromObject(bareMetalInstance)
+	statusErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		latest := &v1alpha1.BareMetalInstance{}
+		if err := r.apiReaderOrClient().Get(ctx, key, latest); err != nil {
+			return err
+		}
+		latest.Status.NetworkingJobs = bareMetalInstance.Status.NetworkingJobs
+		if err := r.Status().Update(ctx, latest); err != nil {
+			return err
+		}
+		*bareMetalInstance = *latest
+		return nil
+	})
+	if statusErr != nil {
 		return ctrl.Result{}, false, statusErr
 	}
 	// DeprovisionSkipped: no deprovision template configured — treat as done.

@@ -108,6 +108,33 @@ func CheckAPIServerForNonTerminalProvisionJobAndTarget(ctx context.Context, apiR
 	return false
 }
 
+// CheckAPIServerForNonTerminalDeprovisionJob reads the resource directly from the API server
+// and returns true if a non-terminal deprovision job exists. The extract parameter (a JobsExtractor)
+// determines which jobs array to check — each controller passes a typed extractor for its CRD.
+func CheckAPIServerForNonTerminalDeprovisionJob(ctx context.Context, apiReader client.Reader, key client.ObjectKey, fresh client.Object, extract JobsExtractor) bool {
+	return CheckAPIServerForNonTerminalDeprovisionJobAndTarget(ctx, apiReader, key, fresh, extract, "")
+}
+
+// CheckAPIServerForNonTerminalDeprovisionJobAndTarget is
+// CheckAPIServerForNonTerminalDeprovisionJob scoped to a single job target —
+// required when populating DeprovisionTarget.CheckAPIServer for a non-""
+// target, since the untargeted form only ever checks untagged (target == "")
+// job history.
+func CheckAPIServerForNonTerminalDeprovisionJobAndTarget(ctx context.Context, apiReader client.Reader, key client.ObjectKey, fresh client.Object, extract JobsExtractor, target string) bool {
+	log := ctrllog.FromContext(ctx)
+	if err := apiReader.Get(ctx, key, fresh); err != nil {
+		log.Error(err, "failed to read resource from API server; proceeding without duplicate-deprovision-job check", "target", target)
+		return false
+	}
+	freshJobs := extract(fresh)
+	freshJob := FindLatestJobByTypeAndTarget(freshJobs, v1alpha1.JobTypeDeprovision, target)
+	if HasJobID(freshJob) && !freshJob.State.IsTerminal() {
+		log.Info("skipping deprovision trigger: non-terminal job found via API server", "jobID", freshJob.JobID, "target", target, "state", freshJob.State)
+		return true
+	}
+	return false
+}
+
 // TriggerJob triggers a new provision job and updates the jobs slice in place via State.
 func TriggerJob(ctx context.Context, provider ProvisioningProvider, resource client.Object, provState *State, maxHistory int, pollInterval time.Duration) (ctrl.Result, error) {
 	return triggerJobForTarget(ctx, provider, resource, provState, "", maxHistory, pollInterval)
@@ -559,24 +586,57 @@ func updateProvisionJobFromDeprovisionResultForTarget(jobs *[]v1alpha1.JobStatus
 // exists, poll/retry if one does. Controllers call this instead of duplicating the
 // trigger-or-poll logic. Returns (result, done, error) where done=true means the
 // controller can proceed with finalizer removal.
+//
+// checkAPIServer is called before triggering a deprovision job to detect a
+// non-terminal deprovision job via a fresh API server read, preventing
+// duplicate jobs from concurrent reconciliations.
+//
+// statusFlush is called after a deprovision job is successfully triggered to
+// persist the job status immediately, preventing duplicate jobs from
+// concurrent reconciliations. Errors are logged but non-fatal — the
+// end-of-reconcile status update serves as fallback.
 func RunDeprovisioningLifecycle(ctx context.Context, provider ProvisioningProvider, resource client.Object,
-	jobs *[]v1alpha1.JobStatus, maxHistory int, pollInterval time.Duration) (ctrl.Result, bool, error) {
-	return runDeprovisioningLifecycleForTarget(ctx, provider, resource, jobs, "", maxHistory, pollInterval)
+	jobs *[]v1alpha1.JobStatus, maxHistory int, pollInterval time.Duration,
+	checkAPIServer func() bool, statusFlush func() error) (ctrl.Result, bool, error) {
+	result, done, triggered, err := runDeprovisioningLifecycleForTarget(ctx, provider, resource, jobs, "", maxHistory, pollInterval, checkAPIServer)
+	if err != nil {
+		return result, done, err
+	}
+	if triggered && statusFlush != nil {
+		if flushErr := statusFlush(); flushErr != nil {
+			ctrllog.FromContext(ctx).Error(flushErr, "failed to flush status after deprovision job trigger; end-of-reconcile update will retry")
+		}
+	}
+	return result, done, nil
 }
 
 // runDeprovisioningLifecycleForTarget is RunDeprovisioningLifecycle scoped to
 // a single job target, driven from only that target's own deprovision job
-// history.
+// history. The returned triggered bool reports whether a new deprovision job
+// was triggered on this target during this call, letting callers decide when
+// to flush status.
 func runDeprovisioningLifecycleForTarget(ctx context.Context, provider ProvisioningProvider, resource client.Object,
-	jobs *[]v1alpha1.JobStatus, target string, maxHistory int, pollInterval time.Duration) (ctrl.Result, bool, error) {
+	jobs *[]v1alpha1.JobStatus, target string, maxHistory int, pollInterval time.Duration,
+	checkAPIServer func() bool) (result ctrl.Result, done bool, triggered bool, err error) {
 	latestDeprovisionJob := FindLatestJobByTypeAndTarget(*jobs, v1alpha1.JobTypeDeprovision, target)
 
 	if !HasJobID(latestDeprovisionJob) {
-		result, err := triggerDeprovisionJobForTarget(ctx, provider, resource, jobs, target, maxHistory, pollInterval)
-		return result, false, err
+		if checkAPIServer != nil && checkAPIServer() {
+			return ctrl.Result{RequeueAfter: pollInterval}, false, false, nil
+		}
+		res, triggerErr := triggerDeprovisionJobForTarget(ctx, provider, resource, jobs, target, maxHistory, pollInterval)
+		if triggerErr != nil {
+			return res, false, false, triggerErr
+		}
+		// A new deprovision job is only appended for DeprovisionTriggered;
+		// DeprovisionSkipped and DeprovisionWaiting leave the job list unchanged,
+		// so check whether a deprovision job actually appeared before reporting
+		// triggered (which gates the statusFlush call).
+		newJob := FindLatestJobByTypeAndTarget(*jobs, v1alpha1.JobTypeDeprovision, target)
+		return res, false, HasJobID(newJob), nil
 	}
 
-	return pollDeprovisionJobForTarget(ctx, provider, resource, jobs, target, latestDeprovisionJob, maxHistory, pollInterval)
+	return pollDeprovisionJobForTarget(ctx, provider, resource, jobs, target, latestDeprovisionJob, maxHistory, pollInterval, checkAPIServer)
 }
 
 // PollDeprovisionJob polls the status of an existing deprovision job.
@@ -586,19 +646,21 @@ func runDeprovisioningLifecycleForTarget(ctx context.Context, provider Provision
 // after exponential backoff rather than blocking forever.
 func PollDeprovisionJob(ctx context.Context, provider ProvisioningProvider, resource client.Object,
 	jobs *[]v1alpha1.JobStatus, latestDeprovisionJob *v1alpha1.JobStatus, maxHistory int, pollInterval time.Duration) (ctrl.Result, bool, error) {
-	return pollDeprovisionJobForTarget(ctx, provider, resource, jobs, "", latestDeprovisionJob, maxHistory, pollInterval)
+	result, done, _, err := pollDeprovisionJobForTarget(ctx, provider, resource, jobs, "", latestDeprovisionJob, maxHistory, pollInterval, nil)
+	return result, done, err
 }
 
 // pollDeprovisionJobForTarget is PollDeprovisionJob scoped to a single job target.
 func pollDeprovisionJobForTarget(ctx context.Context, provider ProvisioningProvider, resource client.Object,
-	jobs *[]v1alpha1.JobStatus, target string, latestDeprovisionJob *v1alpha1.JobStatus, maxHistory int, pollInterval time.Duration) (ctrl.Result, bool, error) {
+	jobs *[]v1alpha1.JobStatus, target string, latestDeprovisionJob *v1alpha1.JobStatus, maxHistory int, pollInterval time.Duration,
+	checkAPIServer func() bool) (ctrl.Result, bool, bool, error) {
 	log := ctrllog.FromContext(ctx)
 
 	if latestDeprovisionJob.State.IsTerminal() {
 		if !latestDeprovisionJob.State.IsSuccessful() && latestDeprovisionJob.BlockDeletionOnFailure {
-			return handleDeprovisionBackoffForTarget(ctx, provider, resource, jobs, target, latestDeprovisionJob, maxHistory, pollInterval)
+			return handleDeprovisionBackoffForTarget(ctx, provider, resource, jobs, target, latestDeprovisionJob, maxHistory, pollInterval, checkAPIServer)
 		}
-		return ctrl.Result{}, true, nil
+		return ctrl.Result{}, true, false, nil
 	}
 
 	log.Info("polling deprovision job status", "jobID", latestDeprovisionJob.JobID, "target", target, "currentState", latestDeprovisionJob.State)
@@ -608,7 +670,7 @@ func pollDeprovisionJobForTarget(ctx context.Context, provider ProvisioningProvi
 		updatedJob := *latestDeprovisionJob
 		updatedJob.Message = fmt.Sprintf("Failed to get deprovision status: %v", err)
 		UpdateJob(*jobs, updatedJob)
-		return ctrl.Result{RequeueAfter: pollInterval}, false, nil
+		return ctrl.Result{RequeueAfter: pollInterval}, false, false, nil
 	}
 
 	if status.State != latestDeprovisionJob.State || status.Message != latestDeprovisionJob.Message {
@@ -621,30 +683,39 @@ func pollDeprovisionJobForTarget(ctx context.Context, provider ProvisioningProvi
 	}
 
 	if !status.State.IsTerminal() {
-		return ctrl.Result{RequeueAfter: pollInterval}, false, nil
+		return ctrl.Result{RequeueAfter: pollInterval}, false, false, nil
 	}
 
 	if !status.State.IsSuccessful() && latestDeprovisionJob.BlockDeletionOnFailure {
-		return handleDeprovisionBackoffForTarget(ctx, provider, resource, jobs, target, latestDeprovisionJob, maxHistory, pollInterval)
+		return handleDeprovisionBackoffForTarget(ctx, provider, resource, jobs, target, latestDeprovisionJob, maxHistory, pollInterval, checkAPIServer)
 	}
 
-	return ctrl.Result{}, true, nil
+	return ctrl.Result{}, true, false, nil
 }
 
 func handleDeprovisionBackoffForTarget(ctx context.Context, provider ProvisioningProvider, resource client.Object,
-	jobs *[]v1alpha1.JobStatus, target string, latestJob *v1alpha1.JobStatus, maxHistory int, pollInterval time.Duration) (ctrl.Result, bool, error) {
+	jobs *[]v1alpha1.JobStatus, target string, latestJob *v1alpha1.JobStatus, maxHistory int, pollInterval time.Duration,
+	checkAPIServer func() bool) (ctrl.Result, bool, bool, error) {
 	log := ctrllog.FromContext(ctx)
 	backoff := computeDeprovisionBackoffForTarget(*jobs, target)
 	elapsed := time.Since(latestJob.Timestamp.Time)
 	if elapsed >= backoff {
+		if checkAPIServer != nil && checkAPIServer() {
+			log.Info("skipping deprovision retry: non-terminal job found via API server", "target", target)
+			return ctrl.Result{RequeueAfter: pollInterval}, false, false, nil
+		}
 		log.Info("deprovision backoff elapsed, retrying", "jobID", latestJob.JobID, "target", target, "backoff", backoff)
 		result, err := triggerDeprovisionJobForTarget(ctx, provider, resource, jobs, target, maxHistory, pollInterval)
-		return result, false, err
+		if err != nil {
+			return result, false, false, err
+		}
+		newJob := FindLatestJobByTypeAndTarget(*jobs, v1alpha1.JobTypeDeprovision, target)
+		return result, false, newJob != nil && newJob.JobID != latestJob.JobID, nil
 	}
 	remaining := backoff - elapsed
 	log.Info("deprovision job failed, retrying after backoff",
 		"jobID", latestJob.JobID, "target", target, "backoff", backoff, "remaining", remaining)
-	return ctrl.Result{RequeueAfter: remaining}, false, nil
+	return ctrl.Result{RequeueAfter: remaining}, false, false, nil
 }
 
 // DeprovisionTarget scopes one manager target within a multi-target
@@ -660,6 +731,15 @@ type DeprovisionTarget struct {
 
 	// Provider triggers/polls deprovision jobs for this target only.
 	Provider ProvisioningProvider
+
+	// CheckAPIServer detects a non-terminal deprovision job for this target
+	// via a fresh API server read, mirroring JobTarget.CheckAPIServer.
+	// Required (non-nil) — matches the existing single-target contract where
+	// every caller supplies one. Use
+	// CheckAPIServerForNonTerminalDeprovisionJobAndTarget (not the untargeted
+	// CheckAPIServerForNonTerminalDeprovisionJob) to populate this for a
+	// non-"" target.
+	CheckAPIServer func() bool
 
 	// AbsorbsLegacyHistory marks this target as the successor to a resource's
 	// pre-multi-target job history — see JobTarget.AbsorbsLegacyHistory for
@@ -686,6 +766,10 @@ type DeprovisionTarget struct {
 // any job with Target == "" is backfilled to the Name of whichever target set
 // AbsorbsLegacyHistory before targets are evaluated, so a resource deprovisioned
 // via its old single-target job history isn't torn down a second time.
+// statusFlush is called at most once per call, only if at least one target
+// triggered a new deprovision job, to persist the job status immediately and
+// prevent duplicate jobs from concurrent reconciliations. Errors are logged
+// but non-fatal — the end-of-reconcile status update serves as fallback.
 func RunMultiTargetDeprovisioningLifecycle(
 	ctx context.Context,
 	targets []DeprovisionTarget,
@@ -693,6 +777,7 @@ func RunMultiTargetDeprovisioningLifecycle(
 	jobs *[]v1alpha1.JobStatus,
 	maxHistory int,
 	pollInterval time.Duration,
+	statusFlush func() error,
 ) (ctrl.Result, bool, error) {
 	if err := validateDeprovisionTargets(targets); err != nil {
 		return ctrl.Result{}, false, err
@@ -700,21 +785,31 @@ func RunMultiTargetDeprovisioningLifecycle(
 	backfillLegacyJobTargets(jobs, legacyHistoryOwnerForDeprovision(targets))
 
 	var (
-		errs    []error
-		result  ctrl.Result
-		allDone = true
+		errs         []error
+		anyTriggered bool
+		result       ctrl.Result
+		allDone      = true
 	)
 
 	for _, t := range targets {
-		res, done, err := runDeprovisioningLifecycleForTarget(ctx, t.Provider, resource, jobs, t.Name, maxHistory, pollInterval)
+		res, done, triggered, err := runDeprovisioningLifecycleForTarget(ctx, t.Provider, resource, jobs, t.Name, maxHistory, pollInterval, t.CheckAPIServer)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("target %q: %w", t.Name, err))
 		}
 		if !done {
 			allDone = false
 		}
+		if triggered {
+			anyTriggered = true
+		}
 		if res.RequeueAfter > 0 && (result.RequeueAfter == 0 || res.RequeueAfter < result.RequeueAfter) {
 			result.RequeueAfter = res.RequeueAfter
+		}
+	}
+
+	if anyTriggered && statusFlush != nil {
+		if flushErr := statusFlush(); flushErr != nil {
+			ctrllog.FromContext(ctx).Error(flushErr, "failed to flush status after multi-target deprovision job trigger; end-of-reconcile update will retry")
 		}
 	}
 
@@ -724,8 +819,9 @@ func RunMultiTargetDeprovisioningLifecycle(
 // validateDeprovisionTargets rejects target lists that would make
 // RunMultiTargetDeprovisioningLifecycle's per-target dispatch ambiguous or
 // impossible: at least one target, every target with a non-empty and unique
-// Name, a non-nil Provider, and at most one target with AbsorbsLegacyHistory
-// set (see legacyHistoryOwnerForDeprovision).
+// Name, a non-nil Provider and CheckAPIServer for each (both are
+// unconditionally invoked while evaluating that target's action), and at
+// most one target with AbsorbsLegacyHistory set (see legacyHistoryOwnerForDeprovision).
 func validateDeprovisionTargets(targets []DeprovisionTarget) error {
 	if len(targets) == 0 {
 		return errors.New("at least one DeprovisionTarget is required")
@@ -742,6 +838,9 @@ func validateDeprovisionTargets(targets []DeprovisionTarget) error {
 		seen[t.Name] = struct{}{}
 		if t.Provider == nil {
 			return fmt.Errorf("DeprovisionTarget %q: Provider must not be nil", t.Name)
+		}
+		if t.CheckAPIServer == nil {
+			return fmt.Errorf("DeprovisionTarget %q: CheckAPIServer must not be nil", t.Name)
 		}
 		if t.AbsorbsLegacyHistory {
 			if legacyOwnerSeen {

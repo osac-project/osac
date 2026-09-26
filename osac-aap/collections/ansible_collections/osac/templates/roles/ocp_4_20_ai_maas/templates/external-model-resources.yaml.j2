@@ -59,7 +59,11 @@ metadata:
   name: {{ model.name }}
   namespace: {{ ocp_4_20_ai_maas_external_model_namespace }}
 spec:
-  modelName: "{{ model.model_id }}"
+{# modelName is the CLIENT-facing id (request body `model`, GET /v1/models); targetModel  #}
+{# is the PROVIDER-side id. On RHOAI 3.5.1+ (current GA), the IPP matches the HTTPRoute  #}
+{# on the CR name, so client_model_id MUST equal this entry's `name` — otherwise          #}
+{# inference returns 404. The default (model_id) is backward compat with 3.5.0 only.     #}
+  modelName: "{{ model.client_model_id | default(model.model_id) }}"
   externalProviderRefs:
   - ref:
       name: {{ model.name }}-provider

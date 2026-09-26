@@ -192,8 +192,13 @@
       - _m.upstream_endpoint is defined
       - _m.upstream_endpoint | string is match(_vi_re_fqdn)
       - _m.upstream_endpoint | length <= 253
-      # ExternalModel modelName/targetModel: 1-253.
+      # ExternalModel targetModel: 1-253.
       - _m.model_id is defined and _m.model_id | length > 0 and _m.model_id | length <= 253
+      # Optional ExternalModel.spec.modelName override (defaults to model_id). Length
+      # only — NOT DNS-1123: the field exists precisely for client-facing names that a
+      # k8s object name cannot express (dots, colons, slashes, uppercase).
+      - (_m.client_model_id is not defined)
+        or (_m.client_model_id | length > 0 and _m.client_model_id | length <= 253)
       # Secret stringData.api-key: non-empty (value never printed).
       - _m.upstream_credential is defined and _m.upstream_credential | length > 0
       # External MaaSSubscription rate-limit (same rules as tiers).
@@ -210,7 +215,8 @@
       http(s)://, port, or path — ExternalProvider.spec.endpoint), model_id,
       upstream_credential, token_limit (1-1000000000), window
       (^[1-9]\d{0,3}(s|m|h)$), priority (>=0). When secured=true, upstream_model_ns
-      and upstream_model_name are also required.
+      and upstream_model_name are also required. Optional: client_model_id (1-253)
+      overrides ExternalModel.spec.modelName; it must not be an empty string.
   loop: "{{ range(ocp_4_20_ai_maas_external_models | length) | list }}"
   loop_control:
     label: "{{ ocp_4_20_ai_maas_external_models[item | int].name | default('unnamed') }}"

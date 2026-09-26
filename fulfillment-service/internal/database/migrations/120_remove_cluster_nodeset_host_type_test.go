@@ -35,7 +35,7 @@ var _ = DescribeMigration("Remove cluster node-set host type", func() {
 			_, err := conn.Exec(ctx, fmt.Sprintf("insert into %s (id, name, tenant, data) values ($1, $1, 'system', $2::jsonb)", row.table), row.id, row.data)
 			Expect(err).NotTo(HaveOccurred())
 		}
-		Expect(tool.Migrate(ctx, 119)).To(Succeed())
+		Expect(tool.Migrate(ctx, 120)).To(Succeed())
 		for _, row := range rows {
 			var hasOld bool
 			var typeID string
@@ -57,7 +57,7 @@ var _ = DescribeMigration("Remove cluster node-set host type", func() {
 	})
 
 	It("protects node-set instance types and preserves unrelated host type protection", func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 119)).To(Succeed())
+		Expect(tool.Migrate(ctx, 120)).To(Succeed())
 		cases := []struct{ table, data string }{
 			{"clusters", `{"spec":{"node_sets":{"workers":{"baremetal_instance_type":{"id":"type"}}}}}`},
 			{"cluster_templates", `{"node_sets":{"workers":{"baremetal_instance_type":{"id":"type"}}}}`},

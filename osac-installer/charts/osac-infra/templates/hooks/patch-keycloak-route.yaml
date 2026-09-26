@@ -22,10 +22,6 @@ metadata:
   namespace: cert-manager
   labels:
     {{- include "osac-infra.hookLabels" . | nindent 4 }}
-  annotations:
-    "helm.sh/hook": post-install,pre-upgrade
-    "helm.sh/hook-delete-policy": before-hook-creation
-    "helm.sh/hook-weight": "15"
 rules:
 - apiGroups: [""]
   resources: [secrets]
@@ -39,15 +35,14 @@ metadata:
   namespace: keycloak
   labels:
     {{- include "osac-infra.hookLabels" . | nindent 4 }}
-  annotations:
-    "helm.sh/hook": post-install,pre-upgrade
-    "helm.sh/hook-delete-policy": before-hook-creation
-    "helm.sh/hook-weight": "15"
 rules:
 - apiGroups: [route.openshift.io]
   resources: [routes]
   resourceNames: [keycloak]
   verbs: [get, patch]
+- apiGroups: [route.openshift.io]
+  resources: [routes/custom-host]
+  verbs: [create, update, patch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -56,10 +51,6 @@ metadata:
   namespace: cert-manager
   labels:
     {{- include "osac-infra.hookLabels" . | nindent 4 }}
-  annotations:
-    "helm.sh/hook": post-install,pre-upgrade
-    "helm.sh/hook-delete-policy": before-hook-creation
-    "helm.sh/hook-weight": "15"
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -76,10 +67,6 @@ metadata:
   namespace: keycloak
   labels:
     {{- include "osac-infra.hookLabels" . | nindent 4 }}
-  annotations:
-    "helm.sh/hook": post-install,pre-upgrade
-    "helm.sh/hook-delete-policy": before-hook-creation
-    "helm.sh/hook-weight": "15"
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role

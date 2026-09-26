@@ -449,11 +449,6 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			bmi := resp.GetObject()
 			state := bmi.GetStatus().GetState()
-			hub := bmi.GetStatus().GetHub()
-			finalizers := bmi.GetMetadata().GetFinalizers()
-			// Debug: print BMI state on each poll so we can see controller progress
-			fmt.Fprintf(GinkgoWriter, "[DEBUG] BMI id=%s state=%s hub=%q finalizers=%v\n",
-				bareMetalInstanceId, state, hub, finalizers)
 			g.Expect(state).ToNot(
 				Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_UNSPECIFIED),
 				"controller should reconcile the BMI and set state")
@@ -468,7 +463,6 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 					labels.BareMetalInstanceUuid: bareMetalInstanceId,
 				})
 				g.Expect(err).ToNot(HaveOccurred())
-				fmt.Fprintf(GinkgoWriter, "[DEBUG] BMFO CR count=%d\n", len(bmiList.Items))
 				g.Expect(bmiList.Items).To(HaveLen(1))
 				kubeObject = &bmiList.Items[0]
 			},
@@ -543,7 +537,6 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 			}.Build())
 			g.Expect(err).ToNot(HaveOccurred())
 			state := resp.GetObject().GetStatus().GetState()
-			fmt.Fprintf(GinkgoWriter, "[DEBUG] BMI id=%s state=%s\n", bareMetalInstanceId, state)
 			g.Expect(state).ToNot(
 				Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_UNSPECIFIED),
 				"controller should reconcile the BMI and set state")
@@ -558,7 +551,6 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				labels.BareMetalInstanceUuid: bareMetalInstanceId,
 			})
 			g.Expect(err).ToNot(HaveOccurred())
-			fmt.Fprintf(GinkgoWriter, "[DEBUG] BMFO CR count=%d\n", len(bmiList.Items))
 			g.Expect(bmiList.Items).To(HaveLen(1))
 			kubeObject = &bmiList.Items[0]
 		}, time.Minute, time.Second).Should(Succeed())
@@ -594,7 +586,6 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(bmiList.Items).To(HaveLen(1))
 			trigger := bmiList.Items[0].Spec.RestartTrigger
-			fmt.Fprintf(GinkgoWriter, "[DEBUG] BMFO CR RestartTrigger=%d\n", trigger)
 			g.Expect(trigger).To(Equal(int64(1)),
 				"controller should propagate restart_trigger=1 to CR spec")
 		}, time.Minute, time.Second).Should(Succeed())
@@ -876,7 +867,6 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				}.Build())
 				g.Expect(err).ToNot(HaveOccurred())
 				state := resp.GetObject().GetStatus().GetState()
-				fmt.Fprintf(GinkgoWriter, "[DEBUG] BMI id=%s state=%s\n", bareMetalInstanceId, state)
 				g.Expect(state).ToNot(
 					Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_UNSPECIFIED),
 					"controller should reconcile the BMI and set state")
@@ -890,7 +880,6 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 					labels.BareMetalInstanceUuid: bareMetalInstanceId,
 				})
 				g.Expect(err).ToNot(HaveOccurred())
-				fmt.Fprintf(GinkgoWriter, "[DEBUG] BMFO CR count=%d\n", len(bmiList.Items))
 				g.Expect(bmiList.Items).To(HaveLen(1))
 				kubeObject = &bmiList.Items[0]
 			}, time.Minute, time.Second).Should(Succeed())

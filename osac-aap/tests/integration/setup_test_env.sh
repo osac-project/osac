@@ -88,6 +88,7 @@ kubectl create namespace osac-workflows-test || true
 kubectl create namespace cluster-test-cluster-work || true
 kubectl create namespace computeinstance-test-vm-work || true
 kubectl create namespace computeinstance-test-vm-gpu-work || true
+kubectl create namespace test-subnet || true
 kubectl create namespace openshift-cnv || true
 
 # 4. Create minimal HyperConverged CR for GPU passthrough tests

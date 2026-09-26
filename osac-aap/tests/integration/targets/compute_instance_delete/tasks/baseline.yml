@@ -14,7 +14,6 @@
       ansible.builtin.set_fact:
         osac_job_vars:
           resource: "{{ test_compute_instance }}"
-        tenant_target_namespace: "computeinstance-test-vm-work"
         # Note: delete.yaml doesn't have override hooks yet, so we use noop_template
         # TODO: Refactor ocp_virt_vm delete.yaml to add override points
         template_id_override: "osac.test_overrides.noop_template"
@@ -36,12 +35,11 @@
           - compute_instance_name == "test-vm"
         fail_msg: "Compute instance name not extracted correctly"
 
-    - name: Verify tenant target namespace determined
+    - name: Verify subnet target namespace supplied
       ansible.builtin.assert:
         that:
-          - tenant_target_namespace is defined
-          - tenant_target_namespace == "computeinstance-test-vm-work"
-        fail_msg: "Tenant target namespace not set correctly"
+          - test_compute_instance.metadata.annotations['osac.openshift.io/subnet-target-namespace'] == 'test-subnet'
+        fail_msg: "Subnet target namespace not set correctly"
 
     - name: Verify template ID extracted
       ansible.builtin.assert:
@@ -49,3 +47,50 @@
           - template_id is defined
           - template_id == "osac.templates.ocp_virt_vm"
         fail_msg: "Template ID not extracted correctly"
+
+- name: Verify legacy ComputeInstance placement during deletion
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../common_vars.yml
+  tasks:
+    - name: Verify legacy deletion namespace resolution
+      block:
+        - name: Create a legacy Tenant
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: osac.openshift.io/v1alpha1
+              kind: Tenant
+              metadata:
+                name: test-legacy-tenant
+                namespace: osac-system
+
+        - name: Resolve deletion namespace for an unannotated legacy instance
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: delete
+          vars:
+            compute_instance_name: test-legacy-vm
+            delete_step_resources_override:
+              name: osac.workflows.workflow_helpers
+              tasks_from: noop.yml
+            compute_instance:
+              metadata:
+                name: test-legacy-vm
+              status:
+                tenantReference:
+                  name: test-legacy-tenant
+                  namespace: osac-system
+
+        - name: Verify legacy tenant-name fallback
+          ansible.builtin.assert:
+            that: compute_instance_target_namespace == 'test-legacy-tenant'
+      always:
+        - name: Remove legacy Tenant
+          kubernetes.core.k8s:
+            state: absent
+            api_version: osac.openshift.io/v1alpha1
+            kind: Tenant
+            name: test-legacy-tenant
+            namespace: osac-system

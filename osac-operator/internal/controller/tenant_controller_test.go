@@ -28,7 +28,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
@@ -65,9 +64,9 @@ var _ = Describe("Tenant Controller", func() {
 			return types.NamespacedName{Name: name, Namespace: "default"}
 		}
 
-		It("should set Phase=Ready and NamespaceReady=True", func() {
+		It("should set Phase=Ready without setting NamespaceReady", func() {
 			nn := createTenantWithNamespace("test-tenant-ns-phase")
-			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster)
+			r := NewTenantReconciler(testMcManager, "default")
 
 			Eventually(func() error {
 				return r.Client.Get(ctx, nn, &v1alpha1.Tenant{})
@@ -79,16 +78,13 @@ var _ = Describe("Tenant Controller", func() {
 			tenant := &v1alpha1.Tenant{}
 			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
 			Expect(tenant.Status.Phase).To(Equal(v1alpha1.TenantPhaseReady))
-			Expect(tenant.Status.Namespace).To(Equal(nn.Name))
-
-			cond := tenant.GetStatusCondition(v1alpha1.TenantConditionNamespaceReady)
-			Expect(cond).NotTo(BeNil())
-			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(tenant.Status.Namespace).To(BeEmpty())
+			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionNamespaceReady)).To(BeNil())
 		})
 
 		It("should not modify storage fields", func() {
 			nn := createTenantWithNamespace("test-tenant-ns-storage")
-			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster)
+			r := NewTenantReconciler(testMcManager, "default")
 
 			Eventually(func() error {
 				return r.Client.Get(ctx, nn, &v1alpha1.Tenant{})
@@ -127,23 +123,31 @@ var _ = Describe("Tenant Controller", func() {
 			}
 		})
 
-		It("should set NamespaceReady=False and stay Progressing", func() {
-			r := NewTenantReconciler(testMcManager, "default", mcmanager.LocalCluster)
+		It("should be Ready without creating a namespace on the target cluster", func() {
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, tenant)).To(Succeed())
+			tenant.Status.Namespace = resourceName
+			tenant.SetStatusCondition(v1alpha1.TenantConditionNamespaceReady, metav1.ConditionFalse, v1alpha1.TenantReasonNotFound, "Old workload namespace missing")
+			tenant.SetStatusCondition(v1alpha1.TenantConditionStorageBackendReady, metav1.ConditionTrue, v1alpha1.TenantReasonFound, "Storage available")
+			Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
 
-			Eventually(func() error {
-				return r.Client.Get(ctx, typeNamespacedName, &v1alpha1.Tenant{})
+			r := NewTenantReconciler(testMcManager, "default")
+
+			Eventually(func(g Gomega) {
+				cached := &v1alpha1.Tenant{}
+				g.Expect(r.Client.Get(ctx, typeNamespacedName, cached)).To(Succeed())
+				g.Expect(cached.Status.Namespace).To(Equal(resourceName))
 			}, 5*time.Second, 10*time.Millisecond).Should(Succeed())
 
 			_, err := r.Reconcile(ctx, mcReconcileRequest(typeNamespacedName))
-			Expect(err).To(HaveOccurred())
+			Expect(err).NotTo(HaveOccurred())
 
-			tenant := &v1alpha1.Tenant{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, tenant)).To(Succeed())
-			Expect(tenant.Status.Phase).To(Equal(v1alpha1.TenantPhaseProgressing))
-
-			cond := tenant.GetStatusCondition(v1alpha1.TenantConditionNamespaceReady)
-			Expect(cond).NotTo(BeNil())
-			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(tenant.Status.Phase).To(Equal(v1alpha1.TenantPhaseReady))
+			Expect(tenant.Status.Namespace).To(BeEmpty())
+			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionNamespaceReady)).To(BeNil())
+			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady).Status).To(Equal(metav1.ConditionTrue))
+			Expect(apierrors.IsNotFound(k8sClient.Get(ctx, types.NamespacedName{Name: resourceName}, &corev1.Namespace{}))).To(BeTrue())
 		})
 	})
 })

@@ -4,6 +4,8 @@ kind: ComputeInstance
 metadata:
   name: test-vm
   namespace: osac-system
+  annotations:
+    osac.openshift.io/subnet-target-namespace: test-subnet
 spec:
   templateID: osac.templates.ocp_virt_vm
   networkAttachments:

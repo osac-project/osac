@@ -62,11 +62,6 @@
       ansible.builtin.set_fact:
         template_parameters: {}
 
-    # CRITICAL: Determine namespace (NOT overrideable)
-    - name: Determine tenant target namespace
-      ansible.builtin.include_role:
-        name: osac.service.tenant_target_namespace
-
   tasks:
     # Guard: surfaces the ocp_virt_vm assertion (create_resources.yaml) earlier with a clearer message.
     # This workflow is an internal implementation detail invoked via import_playbook — JIT storage
@@ -86,7 +81,6 @@
       ansible.builtin.debug:
         msg:
           - "Compute instance name: {{ compute_instance_name }}"
-          - "Tenant target namespace: {{ tenant_target_namespace }}"
           - "Template ID: {{ template_id_override | default(template_id) }}"
           - "Template parameters: {{ template_parameters }}"
 

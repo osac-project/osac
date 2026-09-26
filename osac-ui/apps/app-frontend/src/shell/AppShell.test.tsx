@@ -27,54 +27,58 @@ const renderAppShell = (entry: string, role: UserRole = 'admin') =>
   );
 
 describe('AppShell', () => {
-  it('renders the storage route through the admin shell', () => {
+  it('renders the storage route through the admin shell', async () => {
     renderAppShell('/admin/infrastructure/storage/backends');
 
-    expect(screen.getByRole('heading', { name: 'Storage routes' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Storage routes' })).toBeInTheDocument();
   });
 
   it('renders the instance type list route through the admin shell', async () => {
     renderAppShell('/admin/infrastructure/instance-types');
 
-    expect(screen.getByRole('heading', { name: 'Instance types' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Instance types' })).toBeInTheDocument();
     await waitFor(() => {
       expect(screen.getByText('No instance types yet.')).toBeInTheDocument();
     });
   });
 
-  it('renders the instance type create shell through the admin shell', () => {
+  it('renders the instance type create shell through the admin shell', async () => {
     renderAppShell('/admin/infrastructure/instance-types/create');
 
-    expect(screen.getByRole('heading', { name: 'Create instance type' })).toBeInTheDocument();
+    expect(
+      await screen.findByRole('heading', { name: 'Create instance type' }),
+    ).toBeInTheDocument();
   });
 
   it('renders the bare metal instance type list route through the admin shell', async () => {
     renderAppShell('/admin/infrastructure/baremetal-instance-types');
 
-    expect(screen.getByRole('heading', { name: 'Bare metal instance types' })).toBeInTheDocument();
+    expect(
+      await screen.findByRole('heading', { name: 'Bare metal instance types' }),
+    ).toBeInTheDocument();
     await waitFor(() => {
       expect(screen.getByText('No bare metal instance types yet.')).toBeInTheDocument();
     });
   });
 
-  it('does not render VM routes for admin — falls through to default', () => {
+  it('does not render VM routes for admin — falls through to default', async () => {
     renderAppShell('/vms', 'admin');
 
     expect(screen.queryByRole('heading', { name: /virtual machines/i })).toBeNull();
-    expect(screen.getByRole('heading', { name: 'Tenants' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Tenants' })).toBeInTheDocument();
   });
 
-  it('does not render cluster routes for admin — falls through to default', () => {
+  it('does not render cluster routes for admin — falls through to default', async () => {
     renderAppShell('/clusters', 'admin');
 
     expect(screen.queryByRole('heading', { name: /clusters/i })).toBeNull();
-    expect(screen.getByRole('heading', { name: 'Tenants' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Tenants' })).toBeInTheDocument();
   });
 
-  it('does not render bare metal routes for admin — falls through to default', () => {
+  it('does not render bare metal routes for admin — falls through to default', async () => {
     renderAppShell('/bare-metal', 'admin');
 
     expect(screen.queryByRole('heading', { name: /bare metal/i })).toBeNull();
-    expect(screen.getByRole('heading', { name: 'Tenants' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Tenants' })).toBeInTheDocument();
   });
 });

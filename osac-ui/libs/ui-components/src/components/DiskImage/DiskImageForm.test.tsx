@@ -7,6 +7,7 @@ import {
   Architecture,
   DiskImagesCreateResponseSchema,
   GuestOSFamily,
+  ServiceTier,
   SourceType,
 } from '@osac/types';
 import type { Tenant } from '@osac/types/private';
@@ -17,7 +18,12 @@ import type { MockTransportOverrides } from '../../test-utils/createMockConnectT
 import { renderWithProviders } from '../../test-utils/TestProviders';
 
 vi.mock('../../hooks/use-session', () => ({
-  useSession: vi.fn(() => ({ role: 'tenant-user', username: 'testuser', tenantId: 'tenant-1' })),
+  useSession: vi.fn(() => ({
+    role: 'tenant-user',
+    username: 'testuser',
+    tenantId: 'tenant-1',
+    enabledServices: [ServiceTier.CAAS, ServiceTier.VMAAS, ServiceTier.BMAAS],
+  })),
 }));
 
 const { useSession } = await import('../../hooks/use-session');
@@ -26,6 +32,7 @@ const makeSession = (role: UserRole) => ({
   role,
   username: 'testuser',
   tenantId: 'tenant-1',
+  enabledServices: [ServiceTier.CAAS, ServiceTier.VMAAS, ServiceTier.BMAAS],
   userTheme: 'system' as const,
   resolvedTheme: 'light' as const,
   setUserTheme: vi.fn(),

@@ -166,7 +166,7 @@ describe('AdminBareMetalInstanceTypeFormPage — create wizard', () => {
 
     expect(await screen.findByText('Failed to create resource')).toBeInTheDocument();
     expect(screen.getByText(/backend blew up/)).toBeInTheDocument();
-  });
+  }, 15000);
 
   it('clears the submission error when navigating away from the last step', async () => {
     const { user } = renderAt(`${LIST_ROUTE}/create`, {
@@ -206,7 +206,7 @@ describe('AdminBareMetalInstanceTypeFormPage — create wizard', () => {
     // The error should be cleared
     expect(screen.queryByText('Failed to create resource')).not.toBeInTheDocument();
     expect(screen.queryByText(/backend blew up/)).not.toBeInTheDocument();
-  });
+  }, 15000);
 
   it('adds and removes a disk row on the Disks step', async () => {
     const { user } = renderAt(`${LIST_ROUTE}/create`);

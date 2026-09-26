@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
 import {
   EmptyState,
   EmptyStateBody,
@@ -11,10 +11,15 @@ import {
   ToggleGroup,
   ToggleGroupItem,
 } from '@patternfly/react-core';
+import type { TFunction } from 'i18next';
 
-import { useBareMetalInstanceCatalogItems } from '@osac/ui-components/api/v1/baremetal-instance';
-import { useClusterCatalogItems } from '@osac/ui-components/api/v1/cluster-catalog-item';
-import { useComputeInstanceCatalogItems } from '@osac/ui-components/api/v1/compute-instance-catalog-item';
+import {
+  BareMetalInstanceCatalogItems,
+  ClusterCatalogItems,
+  ComputeInstanceCatalogItems,
+  ServiceTier,
+} from '@osac/types';
+import { useListResource } from '@osac/ui-components/api/use-resource';
 import {
   CatalogItemKind,
   filterCatalogItemsBySearch,
@@ -27,32 +32,109 @@ import {
   useArrayPageFilter,
   usePageFilter,
 } from '@osac/ui-components/hooks/use-page-filter';
+import { useSession } from '@osac/ui-components/hooks/use-session';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
+
+const getPageDescription = (t: TFunction, enabledServices: ServiceTier[]) => {
+  const hasBareMetal = enabledServices.includes(ServiceTier.BMAAS);
+  const hasClusters = enabledServices.includes(ServiceTier.CAAS);
+  const hasVirtualMachines = enabledServices.includes(ServiceTier.VMAAS);
+  if (hasVirtualMachines && hasClusters && hasBareMetal) {
+    return t(
+      'Browse catalog items and launch virtual machines, clusters, or bare metal machines from published offerings.',
+    );
+  }
+
+  if (hasVirtualMachines && hasClusters) {
+    return t(
+      'Browse catalog items and launch virtual machines or clusters from published offerings.',
+    );
+  }
+
+  if (hasVirtualMachines && hasBareMetal) {
+    return t(
+      'Browse catalog items and launch virtual machines or bare metal machines from published offerings.',
+    );
+  }
+
+  if (hasClusters && hasBareMetal) {
+    return t(
+      'Browse catalog items and launch clusters or bare metal machines from published offerings.',
+    );
+  }
+
+  if (hasVirtualMachines) {
+    return t('Browse catalog items and launch virtual machines from published offerings.');
+  }
+
+  if (hasClusters) {
+    return t('Browse catalog items and launch clusters from published offerings.');
+  }
+
+  if (hasBareMetal) {
+    return t('Browse catalog items and launch bare metal machines from published offerings.');
+  }
+
+  return t('No catalog services are enabled.');
+};
 
 const TYPE_FILTER_PARAM = 'types';
 
+const serviceForCatalogItemKind: Record<CatalogItemKind, ServiceTier> = {
+  bm: ServiceTier.BMAAS,
+  cluster: ServiceTier.CAAS,
+  vm: ServiceTier.VMAAS,
+};
+
+const isEnabledCatalogItemKind = (
+  value: string | undefined,
+  enabledServices: ServiceTier[],
+): value is CatalogItemKind =>
+  isCatalogItemKind(value) && enabledServices.includes(serviceForCatalogItemKind[value]);
+
 const useCatalogItems = () => {
-  const vms = useComputeInstanceCatalogItems();
-  const clusters = useClusterCatalogItems();
-  const bms = useBareMetalInstanceCatalogItems();
+  const { enabledServices } = useSession();
+  const vms = useListResource(
+    ComputeInstanceCatalogItems,
+    {},
+    { enabled: enabledServices.includes(ServiceTier.VMAAS) },
+  );
+  const clusters = useListResource(
+    ClusterCatalogItems,
+    {},
+    { enabled: enabledServices.includes(ServiceTier.CAAS) },
+  );
+  const bms = useListResource(
+    BareMetalInstanceCatalogItems,
+    {},
+    { enabled: enabledServices.includes(ServiceTier.BMAAS) },
+  );
 
   const isLoading = vms.isLoading || clusters.isLoading || bms.isLoading;
   const error = vms.error || clusters.error || bms.error;
-  const hasSuccessfulQuery = [vms, clusters, bms].some((query) => !query.isLoading && !query.error);
+  const hasSuccessfulQuery = [vms, clusters, bms].some(
+    (query) => query.isEnabled && !query.isLoading && !query.error,
+  );
 
   return {
     error,
     isLoading,
     hasSuccessfulQuery,
-    vms: vms.data,
-    clusters: clusters.data,
-    bms: bms.data,
+    vms: vms.data?.items,
+    clusters: clusters.data?.items,
+    bms: bms.data?.items,
   };
 };
 
 const CatalogPage = () => {
+  const { enabledServices } = useSession();
   const { t } = useTranslation();
-  const [typeFilter, setTypeFilter] = useArrayPageFilter(TYPE_FILTER_PARAM, isCatalogItemKind);
+  const typeFilterGuard = useCallback(
+    (value: string | undefined): value is CatalogItemKind =>
+      isEnabledCatalogItemKind(value, enabledServices),
+    [enabledServices],
+  );
+  const [typeFilter, setTypeFilter] = useArrayPageFilter(TYPE_FILTER_PARAM, typeFilterGuard);
   const [searchFilter, setSearchFilter] = usePageFilter(SEARCH_PARAM);
 
   const {
@@ -64,11 +146,13 @@ const CatalogPage = () => {
     hasSuccessfulQuery,
   } = useCatalogItems();
 
-  const catalogTypeFilters = useMemo<ReadonlyArray<{ value: CatalogItemKind; label: string }>>(
+  const catalogTypeFilters = useMemo<
+    ReadonlyArray<{ value: CatalogItemKind; label: string; service: ServiceTier }>
+  >(
     () => [
-      { value: 'bm', label: t('Bare Metal Machines') },
-      { value: 'cluster', label: t('Clusters') },
-      { value: 'vm', label: t('Virtual Machines') },
+      { value: 'bm', label: t('Bare Metal Machines'), service: ServiceTier.BMAAS },
+      { value: 'cluster', label: t('Clusters'), service: ServiceTier.CAAS },
+      { value: 'vm', label: t('Virtual Machines'), service: ServiceTier.VMAAS },
     ],
     [t],
   );
@@ -91,9 +175,7 @@ const CatalogPage = () => {
   const isCatalogEmpty = vms.length === 0 && bms.length === 0 && clusters.length === 0;
   const showEmptyState = !isLoading && !error && data.length === 0;
 
-  const pageDescription = t(
-    'Browse catalog items and launch virtual machines, clusters, or bare metal machines from published offerings.',
-  );
+  const pageDescription = getPageDescription(t, enabledServices);
 
   return (
     <ListPage label={t('Global marketplace')} title={t('Catalog')} description={pageDescription}>
@@ -106,40 +188,42 @@ const CatalogPage = () => {
           >
             <FlexItem>
               <ToggleGroup aria-label={t('Filter catalog by resource type')}>
-                {catalogTypeFilters.map((option) => {
-                  let count = 0;
-                  switch (option.value) {
-                    case 'vm':
-                      count = vms.length;
-                      break;
-                    case 'bm':
-                      count = bms.length;
-                      break;
-                    case 'cluster':
-                      count = clusters.length;
-                      break;
-                  }
+                {catalogTypeFilters
+                  .filter(({ service }) => enabledServices.includes(service))
+                  .map((option) => {
+                    let count = 0;
+                    switch (option.value) {
+                      case 'vm':
+                        count = vms.length;
+                        break;
+                      case 'bm':
+                        count = bms.length;
+                        break;
+                      case 'cluster':
+                        count = clusters.length;
+                        break;
+                    }
 
-                  return (
-                    <ToggleGroupItem
-                      key={option.value}
-                      text={
-                        <Flex
-                          spaceItems={{ default: 'spaceItemsSm' }}
-                          flexWrap={{ default: 'nowrap' }}
-                        >
-                          <FlexItem>{option.label}</FlexItem>
-                          <FlexItem>
-                            <Label isCompact>{count}</Label>
-                          </FlexItem>
-                        </Flex>
-                      }
-                      buttonId={`catalog-type-filter-${option.value}`}
-                      isSelected={typeFilter.includes(option.value)}
-                      onChange={() => setTypeFilter(option.value)}
-                    />
-                  );
-                })}
+                    return (
+                      <ToggleGroupItem
+                        key={option.value}
+                        text={
+                          <Flex
+                            spaceItems={{ default: 'spaceItemsSm' }}
+                            flexWrap={{ default: 'nowrap' }}
+                          >
+                            <FlexItem>{option.label}</FlexItem>
+                            <FlexItem>
+                              <Label isCompact>{count}</Label>
+                            </FlexItem>
+                          </Flex>
+                        }
+                        buttonId={`catalog-type-filter-${option.value}`}
+                        isSelected={typeFilter.includes(option.value)}
+                        onChange={() => setTypeFilter(option.value)}
+                      />
+                    );
+                  })}
               </ToggleGroup>
             </FlexItem>
             <FlexItem>

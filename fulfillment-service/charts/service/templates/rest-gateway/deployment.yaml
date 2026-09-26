@@ -69,6 +69,10 @@ spec:
         - --http-listener-address=0.0.0.0:8000
         - --http-listener-tls-crt=/etc/fulfillment-rest-gateway/tls/tls.crt
         - --http-listener-tls-key=/etc/fulfillment-rest-gateway/tls/tls.key
+        - --http-cors-allowed-origins=https://{{ include "fulfillment-api.hostname" . }}
+        {{- range .Values.httpCorsAllowedOrigins }}
+        - --http-cors-allowed-origins={{ . }}
+        {{- end }}
         - --grpc-server-address=fulfillment-internal-api:8001
         - --grpc-keep-alive=5m
         - --metrics-listener-address=0.0.0.0:8002
@@ -84,7 +88,6 @@ spec:
         {{- if include "fulfillment-service.serviceEnabled" (list . "maas") }}
         - --enable-maas
         {{- end }}
-        - --http-cors-allowed-origins=https://{{ include "fulfillment-api.hostname" . }}
         ports:
         - name: api
           containerPort: 8000

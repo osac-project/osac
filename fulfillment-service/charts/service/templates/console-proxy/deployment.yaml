@@ -81,6 +81,9 @@ spec:
         - --console-listener-tls-crt=/etc/fulfillment-console-proxy/tls/tls.crt
         - --console-listener-tls-key=/etc/fulfillment-console-proxy/tls/tls.key
         - --console-cors-allowed-origins=https://{{ include "fulfillment-api.hostname" . }}
+        {{- range .Values.httpCorsAllowedOrigins }}
+        - --console-cors-allowed-origins={{ . }}
+        {{- end }}
         - --metrics-listener-address=0.0.0.0:8002
         ports:
         - name: grpc

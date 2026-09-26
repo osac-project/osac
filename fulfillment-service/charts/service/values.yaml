@@ -106,6 +106,16 @@ log:
   # environments.
   bodies: false
 
+# Additional CORS allowed origins for the REST gateway and console proxy. The externalHostname
+# (https://externalHostname) is always included by default. Add additional origins here when the UI or other
+# clients are hosted on different domains.
+#
+# Example:
+#   httpCorsAllowedOrigins:
+#   - "https://osac-ui-osac.apps.osac.local.lab"
+#   - "https://another-origin.example.com"
+httpCorsAllowedOrigins: []
+
 # Image configuration:
 images:
   service: ghcr.io/osac/fulfillment-service:main  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml

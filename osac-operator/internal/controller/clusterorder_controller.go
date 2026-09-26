@@ -781,14 +781,14 @@ func (r *ClusterOrderReconciler) handleNodePool(ctx context.Context, instance *v
 
 	// Find the matching item inside the `nodeRequests` field of the status, or create a new one if there is no
 	// matching item yet.
-	var nodeRequestStatus *v1alpha1.NodeRequest
+	var nodeRequestStatus *v1alpha1.NodeRequestStatus
 	for i, nodeRequestsItem := range instance.Status.NodeRequests {
 		if nodeRequestsItem.BareMetal != nil && nodeRequestsItem.BareMetal.InstanceType == instanceType {
 			nodeRequestStatus = &instance.Status.NodeRequests[i]
 		}
 	}
 	if nodeRequestStatus == nil {
-		instance.Status.NodeRequests = append(instance.Status.NodeRequests, v1alpha1.NodeRequest{
+		instance.Status.NodeRequests = append(instance.Status.NodeRequests, v1alpha1.NodeRequestStatus{
 			BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: instanceType},
 		})
 		nodeRequestStatus = &instance.Status.NodeRequests[len(instance.Status.NodeRequests)-1]

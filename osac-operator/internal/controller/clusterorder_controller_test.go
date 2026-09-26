@@ -1389,7 +1389,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 			nodePool := readyClusterOrderNodePool("bm.large", 2)
 
 			Expect(reconciler.handleNodePool(ctx, instance, &nodePool)).To(Succeed())
-			Expect(instance.Status.NodeRequests).To(ConsistOf(v1alpha1.NodeRequest{
+			Expect(instance.Status.NodeRequests).To(ConsistOf(v1alpha1.NodeRequestStatus{
 				NumberOfNodes: 2, BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "bm.large"},
 			}))
 		})
@@ -1433,7 +1433,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 					},
 				},
 				Status: v1alpha1.ClusterOrderStatus{
-					NodeRequests: []v1alpha1.NodeRequest{
+					NodeRequests: []v1alpha1.NodeRequestStatus{
 						{BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "m1.large"}, NumberOfNodes: 2},
 					},
 				},
@@ -1479,7 +1479,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 					},
 				},
 			}}
-			status := []v1alpha1.NodeRequest{
+			status := []v1alpha1.NodeRequestStatus{
 				{BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "m1.large"}, NumberOfNodes: 0},
 				{BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "m1.small"}, NumberOfNodes: 0},
 			}
@@ -1489,8 +1489,8 @@ var _ = Describe("ClusterOrder Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			Expect(instance.Status.NodeRequests).To(ConsistOf(
-				v1alpha1.NodeRequest{BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "m1.large"}, NumberOfNodes: 4},
-				v1alpha1.NodeRequest{BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "m1.small"}, NumberOfNodes: 2},
+				v1alpha1.NodeRequestStatus{BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "m1.large"}, NumberOfNodes: 4},
+				v1alpha1.NodeRequestStatus{BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "m1.small"}, NumberOfNodes: 2},
 			))
 		})
 
@@ -1502,7 +1502,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 					},
 				},
 				Status: v1alpha1.ClusterOrderStatus{
-					NodeRequests: []v1alpha1.NodeRequest{
+					NodeRequests: []v1alpha1.NodeRequestStatus{
 						{BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "m1.large"}, NumberOfNodes: 5},
 					},
 				},
@@ -1686,7 +1686,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 					},
 				},
 				Status: v1alpha1.ClusterOrderStatus{
-					NodeRequests: []v1alpha1.NodeRequest{
+					NodeRequests: []v1alpha1.NodeRequestStatus{
 						{BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "m1.large"}, NumberOfNodes: 2},
 					},
 				},
@@ -1724,7 +1724,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 					Replicas: 2,
 				},
 			}
-			instance.Status.NodeRequests = []v1alpha1.NodeRequest{
+			instance.Status.NodeRequests = []v1alpha1.NodeRequestStatus{
 				{BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "m1.large"}, NumberOfNodes: 0},
 				{BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "m1.small"}, NumberOfNodes: 0},
 			}
@@ -1733,8 +1733,8 @@ var _ = Describe("ClusterOrder Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			Expect(instance.Status.NodeRequests).To(ConsistOf(
-				v1alpha1.NodeRequest{BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "m1.large"}, NumberOfNodes: 0},
-				v1alpha1.NodeRequest{BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "m1.small"}, NumberOfNodes: 2},
+				v1alpha1.NodeRequestStatus{BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "m1.large"}, NumberOfNodes: 0},
+				v1alpha1.NodeRequestStatus{BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "m1.small"}, NumberOfNodes: 2},
 			))
 		})
 
@@ -1746,7 +1746,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 					},
 				},
 				Status: v1alpha1.ClusterOrderStatus{
-					NodeRequests: []v1alpha1.NodeRequest{
+					NodeRequests: []v1alpha1.NodeRequestStatus{
 						{BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "m1.large"}, NumberOfNodes: 5},
 					},
 				},

@@ -110,7 +110,7 @@ type ClusterNetworkAttachment struct {
 }
 
 type NodeRequest struct {
-	// NumberOfNodes describes the number of nodes of this instance type.
+	// NumberOfNodes describes the desired number of nodes of this instance type.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Minimum=1
 	NumberOfNodes int `json:"numberOfNodes"`
@@ -122,6 +122,18 @@ type NodeRequest struct {
 	// When set, IP discovery filters Agent inventory interfaces by this name,
 	// preventing the provisioning NIC address from being returned.
 	// Resolved from the instance type's fabric network port; may also be set explicitly.
+	// +kubebuilder:validation:Optional
+	FabricInterface string `json:"fabricInterface,omitempty"`
+}
+
+// NodeRequestStatus records the observed node count for an instance type.
+// Unlike the desired count in NodeRequest, the observed count can be zero.
+type NodeRequestStatus struct {
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Minimum=0
+	NumberOfNodes int `json:"numberOfNodes"`
+	// +kubebuilder:validation:Required
+	BareMetal *BareMetalNodeSpec `json:"bareMetal,omitempty"`
 	// +kubebuilder:validation:Optional
 	FabricInterface string `json:"fabricInterface,omitempty"`
 }
@@ -215,7 +227,7 @@ type ClusterOrderStatus struct {
 	ClusterReference *ClusterOrderClusterReferenceType `json:"clusterReference,omitempty"`
 
 	// NodeRequests reflects how many nodes are currently associated with the ClusterOrder
-	NodeRequests []NodeRequest `json:"nodeRequests,omitempty"`
+	NodeRequests []NodeRequestStatus `json:"nodeRequests,omitempty"`
 
 	// ProvisioningJobs tracks the history of provision and deprovision operations
 	// Ordered chronologically, with latest operations at the end

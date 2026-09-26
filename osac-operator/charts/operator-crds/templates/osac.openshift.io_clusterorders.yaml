@@ -136,8 +136,8 @@ spec:
                         Resolved from the instance type's fabric network port; may also be set explicitly.
                       type: string
                     numberOfNodes:
-                      description: NumberOfNodes describes the number of nodes of
-                        this instance type.
+                      description: NumberOfNodes describes the desired number of nodes
+                        of this instance type.
                       minimum: 1
                       type: integer
                   required:
@@ -358,11 +358,13 @@ spec:
                 description: NodeRequests reflects how many nodes are currently associated
                   with the ClusterOrder
                 items:
+                  description: |-
+                    NodeRequestStatus records the observed node count for an instance type.
+                    Unlike the desired count in NodeRequest, the observed count can be zero.
                   properties:
                     bareMetal:
-                      description: |-
-                        BareMetal holds bare-metal-specific configuration for this node set.
-                        This node request targets bare-metal workers.
+                      description: BareMetalNodeSpec holds configuration specific
+                        to bare-metal node requests.
                       properties:
                         instanceType:
                           description: |-
@@ -374,16 +376,9 @@ spec:
                       - instanceType
                       type: object
                     fabricInterface:
-                      description: |-
-                        FabricInterface is the host NIC name used for tenant network traffic.
-                        When set, IP discovery filters Agent inventory interfaces by this name,
-                        preventing the provisioning NIC address from being returned.
-                        Resolved from the instance type's fabric network port; may also be set explicitly.
                       type: string
                     numberOfNodes:
-                      description: NumberOfNodes describes the number of nodes of
-                        this instance type.
-                      minimum: 1
+                      minimum: 0
                       type: integer
                   required:
                   - bareMetal

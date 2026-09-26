@@ -93,6 +93,59 @@ render_success \
   --set-string global.networking.netris.tenantId=1 \
   --set-string global.networking.netris.tenantName=test
 
+# The facade forwards the TLS-verification opt-out to enabled AAP instance
+# groups while keeping certificate verification enabled by default.
+render_success \
+  netris-validate-certs-disabled \
+  'NETRIS_VALIDATE_CERTS: "false"' \
+  --set global.networking.fabricManager=netris \
+  --set global.networking.k8sManager= \
+  --set global.networking.netris.validateCerts=false \
+  --set-string global.networking.netris.controllerUrl=https://netris.example.com \
+  --set-string global.networking.netris.credentials.username=test-user \
+  --set global.networking.netris.credentials.externalSecret=true \
+  --set-string global.networking.netris.siteId=1 \
+  --set-string global.networking.netris.tenantId=1 \
+  --set-string global.networking.netris.tenantName=test \
+  --set aap.instanceGroups.clusterFulfillment.enabled=true \
+  --set aap.instanceGroups.networkFulfillment.enabled=true
+if [[ $(grep -Fc 'NETRIS_VALIDATE_CERTS: "false"' "${TMP_DIR}/netris-validate-certs-disabled.yaml") -ne 2 ]]; then
+  echo "ERROR: TLS verification opt-out was not rendered to both AAP instance groups" >&2
+  exit 1
+fi
+
+render_success \
+  netris-validate-certs-default \
+  'NETRIS_VALIDATE_CERTS: "true"' \
+  --set global.networking.fabricManager=netris \
+  --set global.networking.k8sManager= \
+  --set-string global.networking.netris.controllerUrl=https://netris.example.com \
+  --set-string global.networking.netris.credentials.username=test-user \
+  --set global.networking.netris.credentials.externalSecret=true \
+  --set-string global.networking.netris.siteId=1 \
+  --set-string global.networking.netris.tenantId=1 \
+  --set-string global.networking.netris.tenantName=test \
+  --set aap.instanceGroups.clusterFulfillment.enabled=true \
+  --set aap.instanceGroups.networkFulfillment.enabled=true
+if [[ $(grep -Fc 'NETRIS_VALIDATE_CERTS: "true"' "${TMP_DIR}/netris-validate-certs-default.yaml") -ne 2 ]]; then
+  echo "ERROR: TLS verification default was not rendered to both AAP instance groups" >&2
+  exit 1
+fi
+
+# Expert AAP overrides can still set the underlying ConfigMap environment key.
+render_success \
+  netris-expert-validate-certs-disabled \
+  'NETRIS_VALIDATE_CERTS: "false"' \
+  --set global.expertOverrides.aap=true \
+  --set aap.instanceGroups.clusterFulfillment.enabled=true \
+  --set aap.instanceGroups.networkFulfillment.enabled=true \
+  --set-string aap.instanceGroups.clusterFulfillment.config.NETRIS_VALIDATE_CERTS=false \
+  --set-string aap.instanceGroups.networkFulfillment.config.NETRIS_VALIDATE_CERTS=false
+if [[ $(grep -Fc 'NETRIS_VALIDATE_CERTS: "false"' "${TMP_DIR}/netris-expert-validate-certs-disabled.yaml") -ne 2 ]]; then
+  echo "ERROR: expert TLS verification opt-out was not rendered to both AAP instance groups" >&2
+  exit 1
+fi
+
 # Facade auto-enables the netris fabric manager ConfigMap.
 render_success \
   netris-manager-configmap \

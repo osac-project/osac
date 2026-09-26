@@ -17,6 +17,7 @@ global:
     k8sManager: ""
     netris:
       controllerUrl: "https://test-ctl.netris.io"
+      validateCerts: false
       credentials:
         username: "netris"
         # NETRIS_PASSWORD is supplied by the externally managed Secret

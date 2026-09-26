@@ -26,6 +26,9 @@ global:
     k8sManager: k8s_only
     netris:
       controllerUrl: ""
+      # Verify the Netris HTTPS certificate. Set false only for trusted
+      # non-production endpoints with self-signed certificates.
+      validateCerts: true
       credentials:
         username: ""
         externalSecret: true

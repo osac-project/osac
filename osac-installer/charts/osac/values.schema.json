@@ -2054,6 +2054,11 @@
           "description": "Netris controller API URL (HTTPS only).",
           "pattern": "^$|^https://[^/\\s:]+(:[0-9]+)?(/[^\\s]*)?$"
         },
+        "validateCerts": {
+          "type": "boolean",
+          "default": true,
+          "description": "Verify Netris HTTPS certificates. Disable only for trusted non-production endpoints with self-signed certificates."
+        },
         "credentials": {
           "type": "object",
           "properties": {
@@ -2238,6 +2243,11 @@
           "type": "string",
           "pattern": "^$|^https://[^/\\s:]+(:[0-9]+)?(/[^\\s]*)?$",
           "description": "Netris controller API URL. Must match between AAP instance groups."
+        },
+        "NETRIS_VALIDATE_CERTS": {
+          "type": "string",
+          "enum": ["true", "false"],
+          "description": "Verify Netris HTTPS certificates; defaults to enabled."
         },
         "NETRIS_USERNAME": {
           "type": "string",

@@ -29,33 +29,11 @@ import (
 
 	"github.com/go-logr/stdr"
 
-	"github.com/osac-project/osac-metering/adapters"
-	"github.com/osac-project/osac-metering/adapters/envutil"
+	"github.com/osac-project/osac-metering/adapters/internal/envutil"
+	"github.com/osac-project/osac-metering/adapters/internal/kafka"
+	"github.com/osac-project/osac-metering/adapters/internal/runner"
+	"github.com/osac-project/osac-metering/adapters/m360"
 )
-
-type m360Adapter struct {
-	client *m360Client
-}
-
-func (a *m360Adapter) Name() string { return "m360" }
-
-func (a *m360Adapter) Submit(ctx context.Context, event adapters.MeteringEvent) error {
-	endpoint, payload, err := translateEvent(event.CloudEvent)
-	if err != nil {
-		return err
-	}
-	return a.client.post(ctx, endpoint, payload)
-}
-
-func (a *m360Adapter) Flush(_ context.Context) (adapters.SubmitResult, error) {
-	return adapters.SubmitResult{Idempotent: true}, nil
-}
-
-func (a *m360Adapter) HealthCheck(ctx context.Context) error {
-	return a.client.healthCheck(ctx)
-}
-
-func (a *m360Adapter) Close() error { return nil }
 
 func main() {
 	brokers := envutil.RequireEnv("KAFKA_BROKERS")
@@ -65,7 +43,7 @@ func main() {
 	apiKey := envutil.ReadFileOrFatal(apiKeyFile)
 	apiVersion := envutil.EnvOrDefault("M360_API_VERSION", "v1")
 
-	topics := adapters.AllTopics
+	topics := kafka.AllTopics
 	if v := os.Getenv("KAFKA_TOPICS"); v != "" {
 		topics = envutil.SplitAndTrim(v, ",")
 		if len(topics) == 0 {
@@ -91,9 +69,9 @@ func main() {
 
 	logger := stdr.New(log.New(os.Stderr, "", log.LstdFlags))
 
-	kafkaCfg := adapters.KafkaConfigFromEnv()
+	kafkaCfg := kafka.KafkaConfigFromEnv()
 
-	dlqOpt, dlqClose, err := adapters.DLQOptionFromEnv(brokers, kafkaCfg)
+	dlqOpt, dlqClose, err := runner.DLQOptionFromEnv(brokers, kafkaCfg)
 	if err != nil {
 		log.Fatalf("setting up DLQ: %v", err)
 	}
@@ -102,17 +80,14 @@ func main() {
 			log.Printf("DLQ producer close failed: %v", err)
 		}
 	}()
-	var opts []adapters.RunnerOption
+	var opts []runner.RunnerOption
 	if dlqOpt != nil {
 		opts = append(opts, dlqOpt)
-		log.Printf("DLQ enabled: topic=%s", envutil.EnvOrDefault("DLQ_TOPIC", adapters.TopicDLQ))
+		log.Printf("DLQ enabled: topic=%s", envutil.EnvOrDefault("DLQ_TOPIC", kafka.TopicDLQ))
 	}
 
-	client := newM360Client(m360URL, apiVersion, apiKey)
-	client.logger = logger
-
-	adapter := &m360Adapter{client: client}
-	runner := adapters.NewRunner(adapter, adapters.RunnerConfig{
+	adapter := m360.NewAdapter(m360URL, apiVersion, apiKey, logger)
+	r := runner.NewRunner(adapter, runner.RunnerConfig{
 		Brokers:       brokers,
 		ConsumerGroup: group,
 		Topics:        topics,
@@ -121,7 +96,7 @@ func main() {
 	}, logger, opts...)
 
 	mux := http.NewServeMux()
-	mux.Handle("/metrics", runner.MetricsHandler())
+	mux.Handle("/metrics", r.MetricsHandler())
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
@@ -154,7 +129,7 @@ func main() {
 	log.Printf("starting m360 adapter: topics=%v group=%s api_version=%s flush=%s",
 		topics, group, apiVersion, flushInterval)
 
-	runErr := runner.Run(ctx)
+	runErr := r.Run(ctx)
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()

@@ -44,6 +44,7 @@ options:
             - If V(true), performs a C(/sbin/sysctl -p) if the O(sysctl_file) is
               updated. If V(false), does not reload C(sysctl) even if the
               O(sysctl_file) is updated.
+            - For FreeBSD, can not be used with O(sysctl_file) other than C(/etc/sysctl.conf) or C(/etc/sysctl.conf.local).
         type: bool
         default: true
     sysctl_file:
@@ -56,6 +57,17 @@ options:
             - Verify token value with the sysctl command and set with C(-w) if necessary.
         type: bool
         default: false
+attributes:
+  check_mode:
+    support: full
+    description: Can run in check_mode and return changed status prediction without modifying target.
+  diff_mode:
+    support: none
+    description: Does not support differences output.
+  platform:
+    platforms: posix
+    support: full
+    description: Supported on POSIX-compliant systems.
 author:
 - David CHANIAL (@davixx)
 '''
@@ -154,6 +166,11 @@ class SysctlModule(object):
     def process(self):
 
         self.platform = platform.system().lower()
+
+        # system specific tests
+        freebsd_sysctl_files = ['/etc/sysctl.conf', '/etc/sysctl.conf.local']
+        if self.platform == 'freebsd' and self.sysctl_file not in freebsd_sysctl_files and self.args['reload']:
+            self.module.fail_json(msg="%s can not be reloaded. Set reload=False." % self.sysctl_file)
 
         # Whitespace is bad
         self.args['name'] = self.args['name'].strip()

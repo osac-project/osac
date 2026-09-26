@@ -1434,7 +1434,7 @@ func (s *PrivateClustersServer) resolveCatalogItem(ctx context.Context,
 	}
 	catalogItemRefStr := refKey(catalogItemRef)
 
-	catalogItem, err := resolveAndCanonicalizeLockedReference(ctx, s.catalogItemsDao, cluster.GetMetadata(), catalogItemRef, "catalog item", grpccodes.NotFound)
+	catalogItem, err := resolveAndLockCatalogItemReference(ctx, s.catalogItemsDao, cluster.GetMetadata(), catalogItemRef)
 	if err != nil {
 		return nil, err
 	}

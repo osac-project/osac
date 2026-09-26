@@ -1104,7 +1104,7 @@ func (s *PrivateComputeInstancesServer) resolveCatalogItem(
 	}
 	catalogItemRefStr := refKey(catalogItemRef)
 
-	catalogItem, err := resolveAndCanonicalizeLockedReference(ctx, s.catalogItemsDao, ci.GetMetadata(), catalogItemRef, "catalog item", grpccodes.NotFound)
+	catalogItem, err := resolveAndLockCatalogItemReference(ctx, s.catalogItemsDao, ci.GetMetadata(), catalogItemRef)
 	if err != nil {
 		return nil, err
 	}

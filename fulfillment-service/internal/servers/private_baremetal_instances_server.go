@@ -724,7 +724,7 @@ func (s *PrivateBareMetalInstancesServer) resolveCatalogItem(ctx context.Context
 	}
 	catalogItemRefStr := refKey(catalogItemRef)
 
-	item, err := resolveAndCanonicalizeLockedReference(ctx, s.catalogItemsDao, bmi.GetMetadata(), catalogItemRef, "catalog item", grpccodes.NotFound)
+	item, err := resolveAndLockCatalogItemReference(ctx, s.catalogItemsDao, bmi.GetMetadata(), catalogItemRef)
 	if err != nil {
 		return nil, err
 	}

@@ -6,15 +6,20 @@
 global:
   osacDeploymentId: "ci/osac"
   # Keep clusterFulfillment NETWORK_STEPS_COLLECTION=ci.steps authoritative.
-  # Without this, the agentless networking facade overwrites it with
-  # agentless_net.steps (see docs/aap-configuration.md).
+  # The CUDN CaaS profile requires the explicit ci.steps pairing.
+  # Do not derive Netris/agentless AAP steps (see docs/aap-configuration.md).
   expertOverrides:
     aap: true
+  networking:
+    fabricManager: cudn_net
+    k8sManager: ""
   services:
     caas:
       enabled: true
+    # CaaS-over-BMaaS registers the RHCOS DiskImage through the VMaaS-owned
+    # DiskImages API even though it does not provision VMaaS instances.
     vmaas:
-      enabled: false
+      enabled: true
     bmaas:
       enabled: true
     maas:
@@ -37,11 +42,22 @@ operator:
     serverAddress: "fulfillment-internal-api:8001"
     tokenFile: "/var/run/secrets/kubernetes.io/serviceaccount/token"
   controllers:
+    computeInstance: false
     tenant: true
     networking: true
     storage: true
+    bareMetalInstance: true
+  # MCE's Assisted Service ignition URL uses the OpenShift ingress Route;
+  # trust its cluster-managed CA instead of bypassing TLS verification.
+  ignition:
+    trustIngressCA: true
   hubAccess:
     enabled: true
+  networkManagers:
+    enabled: true
+    fabricManagers:
+      cudn_net:
+        enabled: true
   tenants:
   - name: shared
   - name: osac-e2e-ci
@@ -140,6 +156,9 @@ aap:
   configAsCode:
     manifestSecret: "config-as-code-manifest-ig"
     secret: "config-as-code-ig"
+    # CaaS workers are provisioned on demand. The deprecated import-agent and
+    # BCM pool toggles are intentionally not set in this profile; standalone
+    # BMaaS profiles retain those controls for host-inventory registration.
     # NOTE: e2e's COMPONENT_BUILD_RESULTS image-override step overrides
     # bootstrap.image with this PR's own built image but does not touch
     # eeImage, so the two can diverge at e2e runtime even though they're
@@ -153,6 +172,7 @@ aap:
     clusterFulfillment:
       enabled: true
       config:
+        NETWORK_CLASS: "ci"
         NETWORK_STEPS_COLLECTION: "ci.steps"
         HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY: "SingleReplica"
         HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: "SingleReplica"
@@ -164,15 +184,20 @@ validation:
   enabled: true
 
 # --- Bare Metal Fulfillment Operator ---
-# BMaaS is enabled (so CaaS satisfies the "requires VMaaS or BMaaS" constraint
-# and BMaaS API endpoints register), but the BMF operator runs with zero
-# replicas because the CaaS CI cluster has no Metal3 infrastructure.
 bmf:
-  replicaCount: 0
+  enabled: true
   image:
     repository: ghcr.io/osac-project/bare-metal-fulfillment-operator
     tag: latest
     pullPolicy: Always
+  env:
+    aapUrl: "http://osac-aap/api/controller"
+    aapInsecureSkipVerify: "true"
+    enableNetworkingProvisioning: "false"
+  metal3:
+    enabled: true
+    namespace: host-inventory
+    hostClass: metal3
 
 # --- Cluster Versions ---
 clusterVersions:

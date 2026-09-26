@@ -425,6 +425,19 @@ func (t *task) addExplicitFields(ctx context.Context, spec *osacv1alpha1.Cluster
 			spec.Network = network
 		}
 	}
+	if clusterSpec.HasNetworkAttachment() {
+		na := clusterSpec.GetNetworkAttachment()
+		cna := &osacv1alpha1.ClusterNetworkAttachment{}
+		if subnet := na.GetSubnet(); subnet != nil {
+			cna.SubnetRef = subnet.GetName()
+		}
+		for _, sg := range na.GetSecurityGroups() {
+			cna.SecurityGroupRefs = append(cna.SecurityGroupRefs, sg.GetName())
+		}
+		if cna.SubnetRef != "" {
+			spec.NetworkAttachment = cna
+		}
+	}
 	return nil
 }
 
@@ -509,29 +522,17 @@ func (t *task) prepareNodeRequests() []osacv1alpha1.NodeRequest {
 }
 
 func (t *task) prepareNodeRequest(nodeSet *privatev1.ClusterNodeSet) osacv1alpha1.NodeRequest {
-	// Prefer BareMetalInstanceType; fall back to the deprecated HostType so that
-	// clusters that pre-date BMIT still get a valid ResourceClass.
-	rc := ""
-	if bmit := nodeSet.GetBaremetalInstanceType(); bmit != nil {
-		rc = controllers.RefKeyStr(bmit)
-	}
-	if rc == "" {
-		if ht := nodeSet.GetHostType(); ht != nil {
-			rc = controllers.RefKeyStr(ht)
-		}
-	}
+	bmitName := nodeSet.GetBaremetalInstanceType().GetName()
 	return osacv1alpha1.NodeRequest{
-		ResourceClass: rc,
 		NumberOfNodes: int(nodeSet.GetSize()),
+		BareMetal:     &osacv1alpha1.BareMetalNodeSpec{InstanceType: bmitName},
 	}
 }
 
 func (t *task) delete(ctx context.Context) (err error) {
-	// If no hub was assigned, no Kubernetes resources or hub secrets could have
-	// been created, so there is nothing external to clean up.
+	// Do nothing if we don't know the hub yet:
 	t.hubId = t.cluster.GetStatus().GetHub()
 	if t.hubId == "" {
-		t.removeFinalizer()
 		return
 	}
 

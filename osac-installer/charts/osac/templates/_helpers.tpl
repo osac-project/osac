@@ -192,6 +192,7 @@ facade vs low-level surface mismatches).
 {{- $netris := $networking.netris | default dict -}}
 {{- $netrisEnabled := eq $networking.fabricManager "netris" -}}
 {{- $agentlessEnabled := eq $networking.k8sManager "k8s_only" -}}
+{{- $cudnEnabled := eq $networking.fabricManager "cudn_net" -}}
 {{- $netExpertAap := $expert.aap | default false -}}
 {{- $netExpertNetworkClass := $expert.networkClass | default false -}}
 {{- $netExpertNetworkManagers := $expert.networkManagers | default false -}}
@@ -253,9 +254,31 @@ facade vs low-level surface mismatches).
 {{- $networkManagersEnabled := $nm.enabled | default false -}}
 {{- $fabricManagers := $nm.fabricManagers | default dict -}}
 {{- $k8sManagers := $nm.k8sManagers | default dict -}}
-{{- if and (not $netExpertNetworkManagers) (or $netrisEnabled $agentlessEnabled) (not $networkManagersEnabled) }}
+{{- if and (not $netExpertNetworkManagers) (or $netrisEnabled $agentlessEnabled $cudnEnabled) (not $networkManagersEnabled) }}
   {{- fail "global.networking requires operator.networkManagers.enabled=true" }}
 {{- end }}
+{{- if $cudnEnabled -}}
+  {{- if not (and .Values.global.services.caas.enabled .Values.global.services.bmaas.enabled) -}}
+    {{- fail "fabricManager=cudn_net requires CaaS and BMaaS services" -}}
+  {{- end -}}
+  {{- if or (ne $fabricManager "cudn_net") (ne $k8sManager "") (not $networkClass.enabled) (not $networkClass.isDefault) -}}
+    {{- fail "fabricManager=cudn_net requires an enabled default CUDN-only NetworkClass" -}}
+  {{- end -}}
+  {{- $cudnMgr := index $fabricManagers "cudn_net" | default dict -}}
+  {{- if not ($cudnMgr.enabled | default false) -}}
+    {{- fail "fabricManager=cudn_net requires registered operator.networkManagers.fabricManagers.cudn_net.enabled=true" -}}
+  {{- end -}}
+  {{- if .Values.operator.enabled -}}
+    {{- if not (and $netExpertAap .Values.aap.aap.instance.enabled .Values.aap.bootstrap.enabled $cf.enabled $nf.enabled) -}}
+      {{- fail "fabricManager=cudn_net requires expert ci.steps AAP with both instance groups" -}}
+    {{- end -}}
+    {{- if or (ne (index $cfCfg "NETWORK_CLASS" | default "") "ci") (ne (index $cfCfg "NETWORK_STEPS_COLLECTION" | default "") "ci.steps") -}}
+      {{- fail "fabricManager=cudn_net requires NETWORK_CLASS=ci and NETWORK_STEPS_COLLECTION=ci.steps" -}}
+    {{- end -}}
+  {{- else if or (ne .Values.service.variant "kind") (not .Values.hubAccess.enabled) .Values.aap.aap.instance.enabled .Values.aap.bootstrap.enabled -}}
+    {{- fail "fabricManager=cudn_net without an operator is supported only by the AAP-disabled Kind connected simulator with hub access" -}}
+  {{- end -}}
+{{- end -}}
 {{- $netClass := index $cfCfg "NETWORK_CLASS" | default "" | toString -}}
 {{- $netSteps := index $cfCfg "NETWORK_STEPS_COLLECTION" | default "" | toString -}}
 {{- if eq $netClass "netris" -}}

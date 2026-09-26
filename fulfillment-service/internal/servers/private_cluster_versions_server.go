@@ -51,8 +51,9 @@ var _ privatev1.ClusterVersionsServer = (*PrivateClusterVersionsServer)(nil)
 type PrivateClusterVersionsServer struct {
 	privatev1.UnimplementedClusterVersionsServer
 
-	logger  *slog.Logger
-	generic *GenericServer[*privatev1.ClusterVersion]
+	logger        *slog.Logger
+	generic       *GenericServer[*privatev1.ClusterVersion]
+	diskImagesDao *dao.GenericDAO[*privatev1.DiskImage]
 }
 
 func NewPrivateClusterVersionsServer() *PrivateClusterVersionsServerBuilder {
@@ -109,9 +110,19 @@ func (b *PrivateClusterVersionsServerBuilder) Build() (*PrivateClusterVersionsSe
 		return nil, err
 	}
 
+	diskImagesDao, err := dao.NewGenericDAO[*privatev1.DiskImage]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, err
+	}
+
 	return &PrivateClusterVersionsServer{
-		logger:  b.logger,
-		generic: generic,
+		logger:        b.logger,
+		generic:       generic,
+		diskImagesDao: diskImagesDao,
 	}, nil
 }
 
@@ -137,6 +148,10 @@ func (s *PrivateClusterVersionsServer) Create(ctx context.Context,
 	}
 
 	applyClusterVersionDefaults(cv)
+
+	if err := s.validateClusterVersionDiskImage(ctx, cv); err != nil {
+		return nil, err
+	}
 
 	// Clear caller-provided ID so the DAO always generates a UUID:
 	cv.SetId("")
@@ -179,6 +194,12 @@ func (s *PrivateClusterVersionsServer) Update(ctx context.Context,
 
 	if err := validateClusterVersionImmutability(existing, request); err != nil {
 		return nil, err
+	}
+
+	if updateIncludesField(request.GetUpdateMask(), "spec.disk_image") {
+		if err := s.validateClusterVersionDiskImage(ctx, request.GetObject()); err != nil {
+			return nil, err
+		}
 	}
 
 	// Reject explicit is_default=true on ineligible versions (OBSOLETE or disabled).
@@ -547,6 +568,32 @@ func generateNameFromVersion(version string) string {
 	h := fnv.New32a()
 	h.Write([]byte(version))
 	return fmt.Sprintf("%s-%04x", result, h.Sum32()%0x10000)
+}
+
+func (s *PrivateClusterVersionsServer) validateClusterVersionDiskImage(
+	ctx context.Context,
+	cv *privatev1.ClusterVersion,
+) error {
+	ref := cv.GetSpec().GetDiskImage()
+	if ref == nil {
+		return nil
+	}
+
+	key := refKey(ref)
+	if key == "" {
+		return nil
+	}
+
+	diskImage, _, err := validateDiskImageState(ctx, s.diskImagesDao, key, "", "")
+	if err != nil {
+		return err
+	}
+
+	ref.Id = diskImage.GetId()
+	ref.Name = diskImage.GetMetadata().GetName()
+	ref.Shared = diskImage.GetMetadata().GetTenant() == auth.SharedTenant
+
+	return nil
 }
 
 // listAllMatching returns all ClusterVersions matching the given CEL filter,

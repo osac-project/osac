@@ -1,0 +1,20 @@
+{{- if .Values.mce.imageOverrides }}
+{{- range $index, $image := .Values.mce.imageOverrides }}
+{{- range $field := list "image-name" "image-remote" "image-digest" "image-key" }}
+{{- if not (index $image $field) }}{{ fail (printf "mce.imageOverrides[%d] is missing %s" $index $field) }}{{ end }}
+{{- end }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: osac-infra-mce-image-overrides
+  namespace: multicluster-engine
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+  annotations:
+    osac.openshift.io/tenant: platform
+    osac.openshift.io/owner-reference: MultiClusterEngine/multiclusterengine
+data:
+  manifest.json: |
+    {{ toJson .Values.mce.imageOverrides | indent 4 }}
+{{- end }}

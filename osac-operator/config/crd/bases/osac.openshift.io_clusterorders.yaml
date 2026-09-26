@@ -81,7 +81,7 @@ spec:
                 description: |-
                   NetworkAttachment connects this cluster to a tenant subnet.
                   All node sets share the same subnet; the fabric interface for each
-                  node set is resolved from the node set's host type.
+                  node set is resolved from the selected BareMetalInstanceType.
                   When omitted, the system populates the field from the tenant's
                   default subnet and security groups during creation.
                 properties:
@@ -109,30 +109,38 @@ spec:
               nodeRequests:
                 description: |-
                   NodeRequests defines the types of nodes and number of each type of node that will be used
-                  to build the cluster. This value is optional and if not provided will be filled in with template-provided
-                  defaults. The selected template may limit what node types you can request.
+                  to build the cluster. Each request selects a BareMetalInstanceType.
                 items:
                   properties:
+                    bareMetal:
+                      description: |-
+                        BareMetal holds bare-metal-specific configuration for this node set.
+                        This node request targets bare-metal workers.
+                      properties:
+                        instanceType:
+                          description: |-
+                            InstanceType names the BareMetalInstanceType (hardware profile) for the
+                            nodes in this request.
+                          minLength: 1
+                          type: string
+                      required:
+                      - instanceType
+                      type: object
                     fabricInterface:
                       description: |-
                         FabricInterface is the host NIC name used for tenant network traffic.
                         When set, IP discovery filters Agent inventory interfaces by this name,
                         preventing the provisioning NIC address from being returned.
-                        Resolved from the host type's NetworkInterface list during template
-                        expansion; may also be set explicitly.
+                        Resolved from the instance type's fabric network port; may also be set explicitly.
                       type: string
                     numberOfNodes:
-                      description: NumberOfNodes describes the number of nodes you
-                        want of the given resource class
+                      description: NumberOfNodes describes the desired number of nodes
+                        of this instance type.
                       minimum: 1
                       type: integer
-                    resourceClass:
-                      description: ResourceClass describes the type of node you are
-                        requesting
-                      type: string
                   required:
+                  - bareMetal
                   - numberOfNodes
-                  - resourceClass
                   type: object
                 type: array
               pullSecret:
@@ -321,11 +329,24 @@ spec:
                   - type
                   type: object
                 type: array
+              currentWorkers:
+                description: |-
+                  CurrentWorkers is the number of workers in a non-terminal phase
+                  (Provisioning, WaitingForAgent, Binding, or Ready).
+                  Populated by the BareMetalWorkerReconciler.
+                format: int32
+                type: integer
               desiredConfigVersion:
                 description: |-
                   DesiredConfigVersion is a hash of the current spec, used to detect spec changes
                   that require re-provisioning.
                 type: string
+              desiredWorkers:
+                description: |-
+                  DesiredWorkers is the total number of workers requested across all node sets.
+                  Populated by the BareMetalWorkerReconciler from Workers.
+                format: int32
+                type: integer
               ingressEndpoint:
                 description: |-
                   IngressEndpoint is the internal ingress VIP allocated by MetalLB.
@@ -335,88 +356,33 @@ spec:
                 description: NodeRequests reflects how many nodes are currently associated
                   with the ClusterOrder
                 items:
+                  description: |-
+                    NodeRequestStatus records the observed node count for an instance type.
+                    Unlike the desired count in NodeRequest, the observed count can be zero.
                   properties:
+                    bareMetal:
+                      description: BareMetalNodeSpec holds configuration specific
+                        to bare-metal node requests.
+                      properties:
+                        instanceType:
+                          description: |-
+                            InstanceType names the BareMetalInstanceType (hardware profile) for the
+                            nodes in this request.
+                          minLength: 1
+                          type: string
+                      required:
+                      - instanceType
+                      type: object
                     fabricInterface:
-                      description: |-
-                        FabricInterface is the host NIC name used for tenant network traffic.
-                        When set, IP discovery filters Agent inventory interfaces by this name,
-                        preventing the provisioning NIC address from being returned.
-                        Resolved from the host type's NetworkInterface list during template
-                        expansion; may also be set explicitly.
                       type: string
                     numberOfNodes:
-                      description: NumberOfNodes describes the number of nodes you
-                        want of the given resource class
-                      minimum: 1
+                      minimum: 0
                       type: integer
-                    resourceClass:
-                      description: ResourceClass describes the type of node you are
-                        requesting
-                      type: string
                   required:
+                  - bareMetal
                   - numberOfNodes
-                  - resourceClass
                   type: object
                 type: array
-              nodeSets:
-                description: |-
-                  NodeSets holds per-node-set networking status, populated by the
-                  operator during agent selection and networking reconciliation.
-                items:
-                  description: NodeSetStatus holds networking status for a single
-                    node set.
-                  properties:
-                    agents:
-                      description: Agents holds per-agent networking status within
-                        this node set.
-                      items:
-                        description: |-
-                          AgentStatus holds networking status for a single agent (bare-metal host)
-                          within a node set.
-                        properties:
-                          agentName:
-                            description: AgentName is the name of the Agent CR, used
-                              for NodePool targeting.
-                            minLength: 1
-                            type: string
-                          hostName:
-                            description: |-
-                              HostName is the bare-metal server name used by the network dispatcher.
-                              Absent when the agent does not carry the netris.server/name label (e.g. CI environments).
-                            type: string
-                          ipAddress:
-                            description: |-
-                              IPAddress is the agent's IPv4 address on the tenant subnet,
-                              discovered from the Agent CR status after DHCP assignment.
-                            type: string
-                          subnetRef:
-                            description: SubnetRef is the name of the Subnet CR the
-                              agent is connected to.
-                            type: string
-                        required:
-                        - agentName
-                        type: object
-                      type: array
-                      x-kubernetes-list-map-keys:
-                      - agentName
-                      x-kubernetes-list-type: map
-                    fabricInterface:
-                      description: |-
-                        FabricInterface is the host NIC used for tenant network traffic,
-                        resolved from the node set's HostType NetworkInterface list.
-                      type: string
-                    name:
-                      description: Name is the node set identifier (matches the ClusterNodeSet
-                        key).
-                      minLength: 1
-                      type: string
-                  required:
-                  - name
-                  type: object
-                type: array
-                x-kubernetes-list-map-keys:
-                - name
-                x-kubernetes-list-type: map
               phase:
                 description: Phase provides a single-value overview of the state of
                   the ClusterOrder
@@ -490,69 +456,99 @@ spec:
                   - type
                   type: object
                 type: array
+              readyWorkers:
+                description: |-
+                  ReadyWorkers is the number of workers in the Ready phase.
+                  Populated by the BareMetalWorkerReconciler.
+                format: int32
+                type: integer
               workers:
                 description: |-
-                  Workers tracks per-worker provisioning state for failure handling and retry.
-                  Each entry corresponds to a bare-metal worker slot in the cluster.
+                  Workers holds per-worker lifecycle state for CaaS-managed worker resources.
+                  Populated by and owned by the BareMetalWorkerReconciler, which also owns the
+                  aggregate counts above.
                 items:
-                  description: |-
-                    WorkerStatus tracks the provisioning state of a single bare-metal worker
-                    within a ClusterOrder, enabling failure handling and retry logic.
+                  description: WorkerStatus holds the lifecycle state of a single
+                    CaaS-managed worker resource.
                   properties:
                     attemptCount:
-                      description: |-
-                        AttemptCount tracks how many provisioning attempts have been made
-                        for this worker slot. Transient gRPC errors do not increment this counter.
+                      description: AttemptCount tracks how many times this worker
+                        slot has been provisioned.
+                      format: int32
                       type: integer
-                    attemptStartTime:
-                      description: |-
-                        AttemptStartTime records when the current provisioning attempt was first
-                        observed. This is set on the first reconciliation of a new or replaced
-                        worker to anchor the agent-registration timeout. Once a replacement is
-                        triggered (which sets NextRetryTime), this field is cleared because the
-                        replacement's NextRetryTime becomes the new timeout anchor.
+                    creationTimestamp:
+                      description: CreationTimestamp is when this worker entry was
+                        first created.
                       format: date-time
                       type: string
-                    bmiName:
-                      description: BMIName is the name of the BareMetalInstance CR
-                        for this worker.
+                    instanceType:
+                      description: |-
+                        InstanceType is the BareMetalInstanceType (hardware profile) this worker was
+                        provisioned from. Exposed as the instance_type metric label; sourced from
+                        spec.nodeRequests[].bareMetal.instanceType.
                       type: string
-                    bmiNamespace:
-                      description: BMINamespace is the namespace of the BareMetalInstance
-                        CR.
-                      minLength: 1
+                    kind:
+                      description: Kind of the backing resource (e.g. BareMetalInstance).
+                      type: string
+                    lastFailureMessage:
+                      description: LastFailureMessage is a human-readable description
+                        of the last failure.
                       type: string
                     lastFailureReason:
-                      description: LastFailureReason is a machine-readable reason
-                        for the most recent failure.
+                      description: |-
+                        LastFailureReason is a machine-readable reason for the last failure
+                        (e.g. AgentRegistrationTimeout).
                       type: string
                     lastFailureTime:
-                      description: LastFailureTime is the timestamp of the most recent
-                        failure.
+                      description: LastFailureTime is when the last failure occurred.
                       format: date-time
                       type: string
-                    nextRetryTime:
-                      description: |-
-                        NextRetryTime is the earliest time at which the next retry may be attempted,
-                        computed from the escalating backoff schedule.
-                      format: date-time
-                      type: string
-                    workerID:
-                      description: |-
-                        WorkerID is a stable identifier for this worker slot (e.g. "worker-0",
-                        "worker-1"). It is assigned when the worker entry is created and never
-                        changes, even when the underlying BareMetalInstance is replaced. This
-                        stability makes it safe to use as the list-map key so that BMI
-                        replacements update the existing entry instead of orphaning it.
+                    name:
+                      description: Name is the worker slot name (e.g. "bm-cluster-a-worker-0"),
+                        unique within the cluster.
                       minLength: 1
                       type: string
+                    nextRetryTime:
+                      description: NextRetryTime is when the controller will attempt
+                        the next retry.
+                      format: date-time
+                      type: string
+                    nodeSet:
+                      description: NodeSet identifies which node set this worker belongs
+                        to (e.g. "compute", "gpu").
+                      type: string
+                    phase:
+                      description: Phase of the worker lifecycle.
+                      enum:
+                      - Provisioning
+                      - WaitingForAgent
+                      - Binding
+                      - Ready
+                      - Failed
+                      - Unbinding
+                      - Deleting
+                      type: string
+                    readySince:
+                      description: |-
+                        ReadySince is when the worker first transitioned to Ready after the most recent retry.
+                        Used to determine when attemptCount can be reset after MinHealthyDuration.
+                      format: date-time
+                      type: string
+                    resourceID:
+                      description: ResourceID is the fulfillment-service resource
+                        ID of the backing object.
+                      type: string
                   required:
-                  - bmiNamespace
-                  - workerID
+                  - attemptCount
+                  - creationTimestamp
+                  - kind
+                  - name
+                  - nodeSet
+                  - phase
                   type: object
                 type: array
                 x-kubernetes-list-map-keys:
-                - workerID
+                - name
                 x-kubernetes-list-type: map
             type: object
         type: object

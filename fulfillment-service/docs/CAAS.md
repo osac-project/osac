@@ -3,10 +3,13 @@
 This guide describes how tenants can create, manage, and delete OpenShift clusters through the
 OSAC CLI and API.
 
+For a live CaaS-over-BMaaS walkthrough, see the [demo runbook](CAAS_BMAAS_DEMO.md).
+
 ## Prerequisites
 
 - `osac` installed and authenticated (`osac login`)
-- A cluster catalog item published by your provider
+- A published cluster catalog item or an available cluster template
+- A BareMetalInstanceType worker hardware profile in the **shared** tenant
 
 ## Workflow Overview
 
@@ -69,11 +72,36 @@ and `image` fields are immutable after creation.
 
 ## Create a Cluster
 
-Create a cluster using a catalog item:
+Create a cluster using a catalog item whose node-set policy supplies the worker map:
 
 ```bash
 osac create cluster \
   --catalog-item hosted_cluster_offering
+```
+
+Every cluster needs at least one node set. Supply `--node-set` with a positive size and a
+BareMetalInstanceType name for each worker group, or use a catalog item whose locked or editable
+default `fields.node_sets` policy supplies the complete map. Cluster templates describe provisioning
+behavior and parameters; they do not supply node sets or hardware. The fulfillment service resolves
+the effective BareMetalInstanceType references in the shared tenant and writes each selected type
+and size to `ClusterOrder.spec.nodeRequests[].bareMetal.instanceType` and `numberOfNodes`. An absent
+map or a set without a valid shared type is rejected before provisioning. The user selects a
+hardware **name**, not a scope flag. Tenant-scoped BareMetalInstanceTypes remain available for
+other resources; CaaS tenant-scoped selection, collisions and workspace policy are not yet defined.
+The privileged worker controller creates fulfillment BareMetalInstances owned by the Cluster's
+tenant through the fixed shared `osac.templates.bm_host_provisioning` template with a shared
+hardware type. Its gRPC BMI retains `osac.openshift.io/cluster-order` for correlation and
+`osac.openshift.io/owner-reference=ClusterOrder/<name>`; the Kubernetes BMI CR receives the
+actual tenant and owner-reference annotations and its BMI UUID label. Neither annotation is a
+substitute for the controller's authoritative Cluster/worker ownership checks. Worker CRs use the
+configured Hub namespace, **not a per-tenant namespace**; enforcing same-Hub placement across
+multiple Hubs remains a separate rollout gate.
+
+For a catalog item with an editable node-set policy, specify a different worker configuration:
+
+```bash
+osac create cluster --catalog-item hosted_cluster_offering \
+  --node-set name=workers,size=2,baremetal-instance-type=ci-worker-bm
 ```
 
 To specify an OpenShift version explicitly, the catalog's version policy must be editable or absent:
@@ -96,6 +124,8 @@ Optional flags:
   2. Catalog item editable default (`fields.version.editable.default_value`).
   3. Template default (`spec_defaults.version`).
   4. System default ClusterVersion (`is_default = true`).
+- `--node-set name=<group>,size=<positive-integer>,baremetal-instance-type=<name>` - Repeat for
+  multiple worker groups. Omit only when the catalog item supplies a locked or default node-set map.
 
 The command outputs the cluster ID upon successful creation.
 
@@ -198,7 +228,7 @@ Use this when you want to review or change multiple fields at once.
 
 ### Constraints
 
-- The `host_type` of an existing node set cannot be changed (immutable after creation)
+- The `baremetal_instance_type` of an existing node set cannot be changed (immutable after creation)
 - At least one node set must remain; node sets can be scaled to zero (the control
   plane continues to run on the hub)
 

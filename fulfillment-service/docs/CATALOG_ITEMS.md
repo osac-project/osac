@@ -9,11 +9,11 @@ Template → Catalog Item → Resource
 Template ───────────────→ Resource (direct API creation)
 ```
 
-**Templates** describe how OSAC provisions a cluster, virtual machine (VM), or bare metal instance. For
-example, a template can specify the number and type of machines in a cluster, a VM's boot-disk size,
-or the hardware type for a bare metal instance. Templates can also define inputs that users provide
-when creating a resource; these are called template parameters. Users can list and inspect the
-templates available to them.
+**Templates** describe how OSAC provisions a cluster, virtual machine (VM), or bare metal instance. Cluster
+templates define provisioning behavior and parameters, not worker node sets or hardware. Other template
+types may specify VM boot-disk sizes or bare-metal hardware types. Templates can also define inputs
+that users provide when creating a resource; these are called template parameters. Users can list
+and inspect the templates available to them.
 
 **Catalog items** are curated offerings for creating resources. Each references a template and can
 fix selected inputs or provide defaults that users may change. Policies for these inputs appear in
@@ -50,14 +50,15 @@ Ansible job; you can list the ones available in your environment:
 ```bash
 osac get clustertemplates
 osac get clustertemplates <id> -o yaml
-osac get hosttypes
+osac get baremetalinstancetypes
 osac get clusterversions
 ```
 
 For the cluster example below, assume the administrator has installed a `sandbox` template and
-its provisioning workflow. It defines optional `vpc_id` and `vlan` parameters with defaults. Its
-`fc430` HostType (hardware type) must already exist in the shared tenant. A node set groups machines
-of the same hardware type; the `workers` node set below starts with one `fc430` machine:
+its provisioning workflow. It defines optional `vpc_id` and `vlan` parameters with defaults. The
+`fc430` BareMetalInstanceType (hardware profile) used by the catalog policy below must already exist
+in the shared tenant. A node set groups machines of the same hardware type; the catalog policy
+supplies a `workers` set starting with one `fc430` machine:
 
 ```yaml
 '@type': type.googleapis.com/osac.private.v1.ClusterTemplate
@@ -67,12 +68,6 @@ metadata:
   tenant: shared
 title: Sandbox Cluster
 description: Small sandbox cluster template with networking parameters.
-node_sets:
-  workers:
-    host_type:
-      name: fc430
-      shared: true
-    size: 1
 parameters:
   - name: vpc_id
     title: VPC ID
@@ -118,7 +113,7 @@ fields:
       default_value:
         items:
           workers:
-            host_type:
+            baremetal_instance_type:
               name: fc430
               shared: true
             size: 1
@@ -284,7 +279,7 @@ fields; in YAML, write them as nested mappings.
 | `version` | `--version` | ClusterVersion reference for the OpenShift release |
 | `network.pod_cidr` | `--pod-cidr` | Pod network CIDR (system default: `10.128.0.0/14`) |
 | `network.service_cidr` | `--service-cidr` | Service network CIDR (system default: `172.30.0.0/16`) |
-| `node_sets` | — | Policy for the complete node-set map, including sizes and HostType references |
+| `node_sets` | — | Policy for the complete node-set map, including sizes and BareMetalInstanceType references |
 | `network_attachment` | — | Subnet and security-group attachment |
 | `auto_external_ip_attachment` | — | Whether to provision external IP attachments automatically |
 
@@ -340,15 +335,17 @@ resource behavior applies, including compute default-network selection.
 A catalog cannot set an empty locked or default network-attachment list. The `items` wrapper is
 only for policies; resource lists do not use it.
 
-Cluster `node_sets` policies apply to the complete map, also under `items`. If the user supplies a
-nonempty map, omitted template node sets are not added. Each supplied node set needs a positive size.
+Cluster `node_sets` policies apply to the complete map, also under `items`. A locked map rejects an
+explicit user map; a nonempty user map replaces an editable default in full. Every node set must
+have a positive size and a resolvable BareMetalInstanceType reference. Catalog node-set hardware references and the effective Cluster map are both resolved from
+**shared** BareMetalInstanceTypes after applying policies; a tenant-owned catalog item does not
+make a tenant-only hardware type selectable for CaaS. Tenant-scoped hardware types remain valid
+for non-CaaS BMIs, and CaaS tenant/shared precedence is not defined. A concrete catalog network-attachment policy also requires a fabric
+port on every catalog-selected BareMetalInstanceType. For a request-supplied network attachment,
+fulfillment checks the effective types for fabric ports during cluster creation.
 
-For a node set that exists in the template, users can omit the HostType to inherit it. They cannot
-choose a different HostType for that node set. New node sets are allowed if they specify a valid
-HostType.
-
-When the user omits the map or supplies an empty one, the catalog's locked map or default is used.
-If neither is set, the template's node sets are used.
+When the user omits the map or supplies an empty one, the catalog's locked map or editable default
+is used. Without a catalog value, creation fails: cluster templates never supply node sets.
 
 ### Template parameter policies
 
@@ -495,9 +492,15 @@ template creation uses normal validation and skips catalog policies. The cluster
 commands support `--template`, though the option currently emits a deprecation warning:
 
 ```bash
-osac create cluster --template sandbox
+osac create cluster --template sandbox \
+  --node-set name=workers,size=1,baremetal-instance-type=<shared-bmit-name>
 osac create computeinstance --template osac.templates.ocp_virt_vm
 ```
+
+For Cluster creation (including direct-template creation), select a shared BareMetalInstanceType
+by name. The shared `fc430` reference above belongs to the catalog policy, not the template.
+The private CaaS worker BMI path uses the fixed shared `osac.templates.bm_host_provisioning`
+template directly, not an unrestricted `system` passthrough catalog item.
 
 The bare metal CLI subcommand requires `--catalog-item`. To create directly from a template, use
 the API or `osac create -f` with `spec.template`.

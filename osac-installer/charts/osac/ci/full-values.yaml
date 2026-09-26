@@ -78,8 +78,6 @@ aap:
   bootstrap:
     enabled: true
     image: ghcr.io/osac-project/osac-aap:latest
-  configAsCode:
-    importBcmAgentsEnabled: false
   instanceGroups:
     clusterFulfillment:
       enabled: true
@@ -92,13 +90,6 @@ aap:
         HOSTED_CLUSTER_BASE_DOMAIN: "test.example.com"
         HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY: "SingleReplica"
         HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: "SingleReplica"
-        IMPORT_AGENTS_NAMESPACE: "hardware-inventory"
-        IMPORT_AGENTS_INFRAENV_NAME: "infraenv"
-        IMPORT_AGENTS_PULL_SECRET_NAME: "pull-secret"
-        IMPORT_AGENTS_DISABLE_BMC_CERT_VERIFICATION: "true"
-        BCM_API_URL: "https://bcm-head.example.com:8081"
-        BCM_VALIDATE_CERTS: "false"
-        BCM_DISABLE_BMC_CERT_VERIFICATION: "true"
       secret: {}
     networkFulfillment:
       enabled: true

@@ -1,0 +1,42 @@
+---
+- name: Cluster settings never supply missing node requests
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Provide credentials without node requests
+      ansible.builtin.set_fact:
+        cluster_order:
+          spec:
+            templateParameters: '{"pull_secret": "test-secret", "ssh_public_key": "ssh-rsa AAAA"}'
+
+    - name: Resolve cluster settings without node requests
+      ansible.builtin.include_role:
+        name: osac.service.cluster_settings
+
+    - name: Verify missing node requests stay missing
+      ansible.builtin.assert:
+        that:
+          - cluster_order.spec.nodeRequests is not defined
+
+- name: Cluster settings preserve requested instance types
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Provide order with selected hardware
+      ansible.builtin.set_fact:
+        cluster_order:
+          spec:
+            templateParameters: '{"pull_secret": "test-secret", "ssh_public_key": "ssh-rsa AAAA"}'
+            nodeRequests:
+              - numberOfNodes: 2
+                bareMetal:
+                  instanceType: bm.large
+
+    - name: Resolve cluster settings with node requests
+      ansible.builtin.include_role:
+        name: osac.service.cluster_settings
+
+    - name: Verify requested hardware remains unchanged
+      ansible.builtin.assert:
+        that:
+          - "cluster_order.spec.nodeRequests == [{'numberOfNodes': 2, 'bareMetal': {'instanceType': 'bm.large'}}]"

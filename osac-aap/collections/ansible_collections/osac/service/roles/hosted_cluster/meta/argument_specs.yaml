@@ -20,9 +20,13 @@ argument_specs:
           numberOfNodes:
             type: int
             required: true
-          resourceClass:
-            type: str
+          bareMetal:
+            type: dict
             required: true
+            options:
+              instanceType:
+                type: str
+                required: true
       hosted_cluster_settings:
         type: dict
         required: true
@@ -35,6 +39,9 @@ argument_specs:
             required: true
           ssh_public_key:
             type: str
+            required: false
+          ovn_kubernetes_mtu:
+            type: int
             required: false
       hosted_cluster_controller_availability_policy:
         type: str

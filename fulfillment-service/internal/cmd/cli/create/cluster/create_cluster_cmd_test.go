@@ -22,8 +22,11 @@ import (
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/exit"
+	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
+	testutils "github.com/osac-project/osac/fulfillment-service/internal/testing"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
@@ -35,6 +38,20 @@ type mockClusterVersionsClient struct {
 
 func (m *mockClusterVersionsClient) List(ctx context.Context, req *publicv1.ClusterVersionsListRequest, opts ...grpc.CallOption) (*publicv1.ClusterVersionsListResponse, error) {
 	return m.listFunc(ctx, req, opts...)
+}
+
+type mockClusterCatalogItemsServer struct {
+	publicv1.UnimplementedClusterCatalogItemsServer
+}
+
+func (mockClusterCatalogItemsServer) List(context.Context, *publicv1.ClusterCatalogItemsListRequest) (*publicv1.ClusterCatalogItemsListResponse, error) {
+	return publicv1.ClusterCatalogItemsListResponse_builder{
+		Items: []*publicv1.ClusterCatalogItem{
+			publicv1.ClusterCatalogItem_builder{Id: "catalog-item-id"}.Build(),
+		},
+		Size:  1,
+		Total: 1,
+	}.Build(), nil
 }
 
 var _ = Describe("Create cluster flag registration", func() {
@@ -71,6 +88,55 @@ var _ = Describe("Create cluster flag registration", func() {
 		flag := cmd.Flags().Lookup("template")
 		Expect(flag).NotTo(BeNil())
 		Expect(flag.Shorthand).To(Equal("t"))
+	})
+
+	It("should register --node-set flag", func() {
+		cmd := Cmd()
+		cmd.SetOut(GinkgoWriter)
+		cmd.SetErr(GinkgoWriter)
+		flag := cmd.Flags().Lookup("node-set")
+		Expect(flag).NotTo(BeNil())
+		Expect(flag.Usage).To(ContainSubstring("Node set configuration"))
+	})
+})
+
+var _ = Describe("Parse cluster node set flag", func() {
+	It("should parse comma-separated key=value assignments", func() {
+		name, ns, err := parseClusterNodeSetFlag("name=workers,size=4,baremetal-instance-type=ci-worker-bm")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(name).To(Equal("workers"))
+		Expect(ns.GetSize()).To(Equal(int32(4)))
+		Expect(ns.GetBaremetalInstanceType().GetName()).To(Equal("ci-worker-bm"))
+	})
+
+	It("should require an explicit node set name", func() {
+		_, _, err := parseClusterNodeSetFlag("size=2,baremetal-instance-type=ci-worker-bm")
+		Expect(err).To(MatchError("--node-set name is required"))
+	})
+
+	It("should reject the underscore spelling of the bare metal instance type key", func() {
+		_, _, err := parseClusterNodeSetFlag("name=workers,baremetal_instance_type=ci-worker-bm")
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("should reject a misspelled node set key", func() {
+		_, _, err := parseClusterNodeSetFlag("name=workers,szie=4")
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("should reject a node set assignment without a value", func() {
+		_, _, err := parseClusterNodeSetFlag("name=workers,size=")
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("should reject a non-integer node set size", func() {
+		_, _, err := parseClusterNodeSetFlag("name=workers,size=two")
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("should reject a node set size outside the 32-bit range", func() {
+		_, _, err := parseClusterNodeSetFlag("name=workers,size=2147483648")
+		Expect(err).To(HaveOccurred())
 	})
 })
 
@@ -344,5 +410,71 @@ var _ = Describe("parseClusterNetworkAttachmentFlag", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(na.GetSecurityGroups()[0].GetName()).To(Equal("named-sg"))
 		Expect(na.GetSecurityGroups()[0].GetId()).To(BeEmpty())
+	})
+})
+
+var _ = Describe("Create cluster node sets", func() {
+	It("creates a cluster with multiple explicitly named node sets", func() {
+		logger := slog.New(slog.NewTextHandler(GinkgoWriter, nil))
+		console, err := terminal.NewConsole().
+			SetLogger(logger).
+			SetStdout(GinkgoWriter).
+			SetStderr(GinkgoWriter).
+			Build()
+		Expect(err).NotTo(HaveOccurred())
+
+		settings, err := config.NewSettings().
+			SetLogger(logger).
+			SetDir(GinkgoT().TempDir()).
+			Build()
+		Expect(err).NotTo(HaveOccurred())
+		settings.SetTenant("tenant-a")
+		settings.SetPlaintext(true)
+
+		server := testutils.NewServer()
+		DeferCleanup(server.Stop)
+		publicv1.RegisterClusterCatalogItemsServer(server.Registrar(), mockClusterCatalogItemsServer{})
+		createRequests := make(chan *publicv1.ClustersCreateRequest, 1)
+		publicv1.RegisterClustersServer(server.Registrar(), &testutils.ClustersServerFuncs{
+			CreateFunc: func(_ context.Context, request *publicv1.ClustersCreateRequest) (*publicv1.ClustersCreateResponse, error) {
+				createRequests <- request
+				return publicv1.ClustersCreateResponse_builder{
+					Object: publicv1.Cluster_builder{Id: "created-cluster"}.Build(),
+				}.Build(), nil
+			},
+		})
+		server.Start()
+		settings.SetAddress(server.Address())
+
+		ctx := logging.LoggerIntoContext(context.Background(), logger)
+		ctx = terminal.ConsoleIntoContext(ctx, console)
+		ctx = config.SettingsIntoContext(ctx, settings)
+		ctx = config.TenantIntoContext(ctx, settings.Tenant())
+
+		cmd := Cmd()
+		cmd.SetArgs([]string{
+			"--catalog-item", "catalog-item-id",
+			"--name", "test-cluster",
+			"--node-set", "name=compute,size=2,baremetal-instance-type=compute-bm",
+			"--node-set", "name=accelerator,size=1,baremetal-instance-type=accelerator-bm",
+		})
+		cmd.SetOut(GinkgoWriter)
+		cmd.SetErr(GinkgoWriter)
+		Expect(cmd.ExecuteContext(ctx)).To(Succeed())
+
+		request := <-createRequests
+		cluster := request.GetObject()
+		Expect(cluster.GetMetadata().GetName()).To(Equal("test-cluster"))
+		Expect(cluster.GetMetadata().GetTenant()).To(Equal("tenant-a"))
+		Expect(cluster.GetSpec().GetCatalogItem().GetId()).To(Equal("catalog-item-id"))
+
+		nodeSets := cluster.GetSpec().GetNodeSets()
+		Expect(nodeSets).To(HaveLen(2))
+		Expect(nodeSets).To(HaveKey("compute"))
+		Expect(nodeSets).To(HaveKey("accelerator"))
+		Expect(nodeSets["compute"].GetSize()).To(Equal(int32(2)))
+		Expect(nodeSets["compute"].GetBaremetalInstanceType().GetName()).To(Equal("compute-bm"))
+		Expect(nodeSets["accelerator"].GetSize()).To(Equal(int32(1)))
+		Expect(nodeSets["accelerator"].GetBaremetalInstanceType().GetName()).To(Equal("accelerator-bm"))
 	})
 })

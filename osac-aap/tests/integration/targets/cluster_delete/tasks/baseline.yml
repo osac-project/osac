@@ -23,9 +23,6 @@
         delete_step_external_access_override:
           name: osac.workflows.workflow_helpers
           tasks_from: noop.yml
-        delete_step_cluster_infra_override:
-          name: osac.workflows.workflow_helpers
-          tasks_from: noop.yml
 
 - name: Import cluster delete workflow (baseline)
   ansible.builtin.import_playbook: osac.workflows.cluster.delete

@@ -20,9 +20,9 @@
         install_step_hosted_cluster_override:
           name: osac.workflows.workflow_helpers
           tasks_from: noop.yml
-        install_step_cluster_infra_override:
-          name: osac.workflows.workflow_helpers
-          tasks_from: noop.yml
+        # OSAC-4172: no cluster_infra override — the ocp_small template no longer
+        # dispatches a cluster_infra step (CaaS pool creation removed; workers are
+        # provisioned on-demand by the BareMetalWorkerReconciler). Asserted below.
         install_step_external_access_override:
           name: osac.workflows.workflow_helpers
           tasks_from: noop.yml
@@ -64,3 +64,19 @@
           - template_id is defined
           - template_id == "osac.templates.ocp_small"
         fail_msg: "Template ID not extracted correctly"
+
+    # OSAC-4172: the CaaS pre-boot pool is removed — ocp_small must not dispatch a
+    # cluster_infra step, so no BareMetalPool CR is ever created for a CaaS cluster.
+    # The step is gated on install_step_cluster_infra_default (set by the template's
+    # "Set install step defaults" task); its absence proves the step was removed.
+    # This is a cluster-independent guard: the BareMetalPool CRD is not installed in
+    # the kind test env, so a k8s_info query is not viable here (real behavioral
+    # verification is owned by e2e OSAC-4175, blocked on OSAC-1436 networking).
+    - name: Verify cluster_infra step is not dispatched by ocp_small
+      ansible.builtin.assert:
+        that:
+          - install_step_cluster_infra_default is not defined
+        fail_msg: >-
+          ocp_small still defines install_step_cluster_infra_default — the
+          cluster_infra (BareMetalPool) step must be removed from the CaaS
+          provisioning path (OSAC-4172).

@@ -1,0 +1,17 @@
+---
+apiVersion: osac.openshift.io/v1alpha1
+kind: ClusterOrder
+metadata:
+  name: test-cluster
+  namespace: osac-system
+spec:
+  templateID: osac.templates.ocp_ci_small
+  templateParameters: |
+    {
+      "pull_secret": "test-pull-secret-content",
+      "ssh_public_key": "ssh-rsa test-key test@example.com"
+    }
+  nodeRequests:
+    - numberOfNodes: 1
+      bareMetal:
+        instanceType: ci-worker

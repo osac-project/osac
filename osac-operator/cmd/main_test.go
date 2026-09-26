@@ -18,7 +18,10 @@ package main
 
 import (
 	"context"
+	"encoding/pem"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
@@ -27,6 +30,9 @@ import (
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 
 	"github.com/osac-project/osac/osac-operator/internal/controller"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/cluster"
@@ -68,6 +74,69 @@ type mockManager struct {
 func (m *mockManager) Start(ctx context.Context) error {
 	return m.startFunc(ctx)
 }
+
+var _ = Describe("discovery ignition TLS", func() {
+	BeforeEach(func() {
+		old, set := os.LookupEnv(envIgnitionTrustIngressCA)
+		Expect(os.Unsetenv(envIgnitionTrustIngressCA)).To(Succeed())
+		DeferCleanup(func() {
+			if set {
+				Expect(os.Setenv(envIgnitionTrustIngressCA, old)).To(Succeed())
+			} else {
+				Expect(os.Unsetenv(envIgnitionTrustIngressCA)).To(Succeed())
+			}
+		})
+	})
+
+	It("rejects an untrusted HTTPS endpoint", func() {
+		srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{"ignition":true}`))
+		}))
+		defer srv.Close()
+
+		fetcher, err := newDiscoveryIgnitionFetcher(nil)
+		Expect(err).NotTo(HaveOccurred())
+		_, err = fetcher.FetchIgnition(context.Background(), srv.URL)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("certificate"))
+	})
+
+	It("trusts the ingress CA from the OpenShift ConfigMap", func() {
+		srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{"ignition":true}`))
+		}))
+		defer srv.Close()
+		Expect(os.Setenv(envIgnitionTrustIngressCA, "true")).To(Succeed())
+		bundle := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+		reader := fake.NewClientBuilder().WithScheme(clientgoscheme.Scheme).WithObjects(&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "default-ingress-cert", Namespace: "openshift-config-managed"},
+			Data:       map[string]string{"ca-bundle.crt": string(bundle)},
+		}).Build()
+
+		fetcher, err := newDiscoveryIgnitionFetcher(reader)
+		Expect(err).NotTo(HaveOccurred())
+		body, err := fetcher.FetchIgnition(context.Background(), srv.URL)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(body)).To(Equal(`{"ignition":true}`))
+	})
+
+	It("fails closed when the ingress CA ConfigMap is missing", func() {
+		Expect(os.Setenv(envIgnitionTrustIngressCA, "true")).To(Succeed())
+		_, err := newDiscoveryIgnitionFetcher(fake.NewClientBuilder().WithScheme(clientgoscheme.Scheme).Build())
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("fails closed when the ingress CA bundle has no valid certificate", func() {
+		Expect(os.Setenv(envIgnitionTrustIngressCA, "true")).To(Succeed())
+		reader := fake.NewClientBuilder().WithScheme(clientgoscheme.Scheme).WithObjects(&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "default-ingress-cert", Namespace: "openshift-config-managed"},
+			Data:       map[string]string{"ca-bundle.crt": "invalid"},
+		}).Build()
+		_, err := newDiscoveryIgnitionFetcher(reader)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("certificate"))
+	})
+})
 
 var _ = Describe("ignoreCanceled", func() {
 	It("should return nil for context.Canceled", func() {
@@ -138,7 +207,7 @@ var _ = Describe("clusterOrderStallThresholdsFromEnv", func() {
 		Expect(thresholds.PreparingInfrastructure).To(Equal(10 * time.Minute))
 		Expect(thresholds.ControlPlaneStarting).To(Equal(25 * time.Minute))
 		Expect(thresholds.WorkersJoining).To(Equal(15 * time.Minute))
-		Expect(thresholds.WorkersJoiningByHostType).To(Equal(map[string]time.Duration{
+		Expect(thresholds.WorkersJoiningByInstanceType).To(Equal(map[string]time.Duration{
 			"fast": 5 * time.Minute,
 			"slow": 40 * time.Minute,
 		}))

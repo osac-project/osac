@@ -166,9 +166,63 @@ render_failure \
   --set global.networking.fabricManager=netris \
   --set global.networking.k8sManager=
 
-# CUDN has no facade implementation yet and must fail at render time.
+# CaaS on virtual BareMetalHosts uses the CUDN overlay manager with ci.steps
+# (operator-bound Agent waits), not a physical Netris fabric.
+render_success \
+  caas-cudn-profile \
+  'fabric_manager\":\"cudn_net' \
+  --values "${SCRIPT_DIR}/../values/caas-ci/instance.yaml" \
+  --set-string global.clusterDomain=apps.example.test \
+  --set-string service.externalHostname=api.example.test \
+  --set-string service.internalHostname=api-internal.example.test
+# Parse only whitelisted, non-secret documents/fields. Never print the render:
+# it may include credential-bearing Secrets from other chart components.
+python3 - "${TMP_DIR}/caas-cudn-profile.yaml" <<'PY'
+import json
+import sys
+import yaml
+
+docs = [d for d in yaml.safe_load_all(open(sys.argv[1], encoding='utf-8')) if isinstance(d, dict)]
+def resource(kind, name):
+    matches = [d for d in docs if d.get('kind') == kind and d.get('metadata', {}).get('name') == name]
+    assert len(matches) == 1, f'expected one {kind}/{name}, got {len(matches)}'
+    return matches[0]
+
+job = resource('Job', 'create-network-class')
+env = {e['name']: e['value'] for c in job['spec']['template']['spec']['containers']
+       if c['name'] == 'create-network-class' for e in c['env']}
+body = json.loads(env['NETWORK_CLASS_BODY'])
+assert body.get('fabric_manager') == 'cudn_net', 'default class must select CUDN'
+assert not body.get('k8s_manager'), 'default class must have no k8s manager'
+assert body['is_default'] is True
+manager = resource('ConfigMap', 'osac-network-fabric-manager-cudn-net')
+assert manager['data']['name'] == 'cudn_net'
+cluster = resource('ConfigMap', 'cluster-fulfillment-ig')['data']
+assert cluster['NETWORK_CLASS'] == 'ci'
+assert cluster['NETWORK_STEPS_COLLECTION'] == 'ci.steps'
+resource('ConfigMap', 'network-fulfillment-ig')
+PY
+
+# A CUDN profile without CaaS, with wrong AAP pairing, a conflicting class,
+# or without registered manager must fail before any deployable render.
+for name in cudn-without-caas cudn-wrong-steps cudn-wrong-class cudn-disabled-manager cudn-k8s-conflict cudn-operatorless-openshift; do
+  case "${name}" in
+    cudn-without-caas) overrides=(--set global.services.caas.enabled=false) ;;
+    cudn-wrong-steps) overrides=(--set-string aap.instanceGroups.clusterFulfillment.config.NETWORK_STEPS_COLLECTION=agentless_net.steps) ;;
+    cudn-wrong-class) overrides=(--set global.networking.networkClass.fabricManager=netris) ;;
+    cudn-disabled-manager) overrides=(--set operator.networkManagers.fabricManagers.cudn_net.enabled=false) ;;
+    cudn-k8s-conflict) overrides=(--set global.networking.k8sManager=k8s_only) ;;
+    cudn-operatorless-openshift) overrides=(--set operator.enabled=false --set aap.aap.instance.enabled=false --set aap.bootstrap.enabled=false) ;;
+  esac
+  render_failure "${name}" \
+    --values "${SCRIPT_DIR}/../values/caas-ci/instance.yaml" \
+    --set-string global.clusterDomain=apps.example.test \
+    --set-string service.externalHostname=api.example.test \
+    --set-string service.internalHostname=api-internal.example.test \
+    "${overrides[@]}"
+done
 render_failure \
-  cudn-not-implemented \
+  cudn-unscoped \
   --set global.networking.fabricManager=cudn_net \
   --set global.networking.k8sManager=
 

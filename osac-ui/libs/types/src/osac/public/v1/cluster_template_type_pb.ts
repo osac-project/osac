@@ -25,8 +25,6 @@ import type { ClusterVersionReference } from "./cluster_version_type_pb";
 import { file_osac_public_v1_cluster_version_type } from "./cluster_version_type_pb";
 import type { Metadata } from "./metadata_type_pb";
 import { file_osac_public_v1_metadata_type } from "./metadata_type_pb";
-import type { HostTypeReference } from "./host_type_type_pb";
-import { file_osac_public_v1_host_type_type } from "./host_type_type_pb";
 import type { SecretLocalReference } from "./secret_type_pb";
 import { file_osac_public_v1_secret_type } from "./secret_type_pb";
 import type { Message } from "@bufbuild/protobuf";
@@ -35,7 +33,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/public/v1/cluster_template_type.proto.
  */
 export const file_osac_public_v1_cluster_template_type: GenFile = /*@__PURE__*/
-  fileDesc("Cipvc2FjL3B1YmxpYy92MS9jbHVzdGVyX3RlbXBsYXRlX3R5cGUucHJvdG8SDm9zYWMucHVibGljLnYxIpQDCg9DbHVzdGVyVGVtcGxhdGUSCgoCaWQYASABKAkSKgoIbWV0YWRhdGEYAiABKAsyGC5vc2FjLnB1YmxpYy52MS5NZXRhZGF0YRINCgV0aXRsZRgDIAEoCRITCgtkZXNjcmlwdGlvbhgEIAEoCRJGCgpwYXJhbWV0ZXJzGAUgAygLMjIub3NhYy5wdWJsaWMudjEuQ2x1c3RlclRlbXBsYXRlUGFyYW1ldGVyRGVmaW5pdGlvbhJACglub2RlX3NldHMYBiADKAsyLS5vc2FjLnB1YmxpYy52MS5DbHVzdGVyVGVtcGxhdGUuTm9kZVNldHNFbnRyeRJCCg1zcGVjX2RlZmF1bHRzGAcgASgLMisub3NhYy5wdWJsaWMudjEuQ2x1c3RlclRlbXBsYXRlU3BlY0RlZmF1bHRzGlcKDU5vZGVTZXRzRW50cnkSCwoDa2V5GAEgASgJEjUKBXZhbHVlGAIgASgLMiYub3NhYy5wdWJsaWMudjEuQ2x1c3RlclRlbXBsYXRlTm9kZVNldDoCOAEinQEKIkNsdXN0ZXJUZW1wbGF0ZVBhcmFtZXRlckRlZmluaXRpb24SDAoEbmFtZRgBIAEoCRINCgV0aXRsZRgCIAEoCRITCgtkZXNjcmlwdGlvbhgDIAEoCRIQCghyZXF1aXJlZBgEIAEoCBIMCgR0eXBlGAUgASgJEiUKB2RlZmF1bHQYBiABKAsyFC5nb29nbGUucHJvdG9idWYuQW55IlwKFkNsdXN0ZXJUZW1wbGF0ZU5vZGVTZXQSNAoJaG9zdF90eXBlGAEgASgLMiEub3NhYy5wdWJsaWMudjEuSG9zdFR5cGVSZWZlcmVuY2USDAoEc2l6ZRgCIAEoBSKeAgobQ2x1c3RlclRlbXBsYXRlU3BlY0RlZmF1bHRzEhsKDnNzaF9wdWJsaWNfa2V5GAIgASgJSACIAQESNAoHbmV0d29yaxgEIAEoCzIeLm9zYWMucHVibGljLnYxLkNsdXN0ZXJOZXR3b3JrSAGIAQESOAoHdmVyc2lvbhgFIAEoCzInLm9zYWMucHVibGljLnYxLkNsdXN0ZXJWZXJzaW9uUmVmZXJlbmNlEkAKEnB1bGxfc2VjcmV0X3NlY3JldBgGIAEoCzIkLm9zYWMucHVibGljLnYxLlNlY3JldExvY2FsUmVmZXJlbmNlQhEKD19zc2hfcHVibGljX2tleUIKCghfbmV0d29ya0oECAEQAlILcHVsbF9zZWNyZXQiVQoYQ2x1c3RlclRlbXBsYXRlUmVmZXJlbmNlEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSDwoHcHJvamVjdBgDIAEoCRIOCgZzaGFyZWQYBCABKAhiBnByb3RvMw", [file_google_protobuf_any, file_osac_public_v1_cluster_common_type, file_osac_public_v1_cluster_version_type, file_osac_public_v1_metadata_type, file_osac_public_v1_host_type_type, file_osac_public_v1_secret_type]);
+  fileDesc("Cipvc2FjL3B1YmxpYy92MS9jbHVzdGVyX3RlbXBsYXRlX3R5cGUucHJvdG8SDm9zYWMucHVibGljLnYxIooCCg9DbHVzdGVyVGVtcGxhdGUSCgoCaWQYASABKAkSKgoIbWV0YWRhdGEYAiABKAsyGC5vc2FjLnB1YmxpYy52MS5NZXRhZGF0YRINCgV0aXRsZRgDIAEoCRITCgtkZXNjcmlwdGlvbhgEIAEoCRJGCgpwYXJhbWV0ZXJzGAUgAygLMjIub3NhYy5wdWJsaWMudjEuQ2x1c3RlclRlbXBsYXRlUGFyYW1ldGVyRGVmaW5pdGlvbhJCCg1zcGVjX2RlZmF1bHRzGAcgASgLMisub3NhYy5wdWJsaWMudjEuQ2x1c3RlclRlbXBsYXRlU3BlY0RlZmF1bHRzSgQIBhAHUglub2RlX3NldHMinQEKIkNsdXN0ZXJUZW1wbGF0ZVBhcmFtZXRlckRlZmluaXRpb24SDAoEbmFtZRgBIAEoCRINCgV0aXRsZRgCIAEoCRITCgtkZXNjcmlwdGlvbhgDIAEoCRIQCghyZXF1aXJlZBgEIAEoCBIMCgR0eXBlGAUgASgJEiUKB2RlZmF1bHQYBiABKAsyFC5nb29nbGUucHJvdG9idWYuQW55Ip4CChtDbHVzdGVyVGVtcGxhdGVTcGVjRGVmYXVsdHMSGwoOc3NoX3B1YmxpY19rZXkYAiABKAlIAIgBARI0CgduZXR3b3JrGAQgASgLMh4ub3NhYy5wdWJsaWMudjEuQ2x1c3Rlck5ldHdvcmtIAYgBARI4Cgd2ZXJzaW9uGAUgASgLMicub3NhYy5wdWJsaWMudjEuQ2x1c3RlclZlcnNpb25SZWZlcmVuY2USQAoScHVsbF9zZWNyZXRfc2VjcmV0GAYgASgLMiQub3NhYy5wdWJsaWMudjEuU2VjcmV0TG9jYWxSZWZlcmVuY2VCEQoPX3NzaF9wdWJsaWNfa2V5QgoKCF9uZXR3b3JrSgQIARACUgtwdWxsX3NlY3JldCJVChhDbHVzdGVyVGVtcGxhdGVSZWZlcmVuY2USCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCRIPCgdwcm9qZWN0GAMgASgJEg4KBnNoYXJlZBgEIAEoCGIGcHJvdG8z", [file_google_protobuf_any, file_osac_public_v1_cluster_common_type, file_osac_public_v1_cluster_version_type, file_osac_public_v1_metadata_type, file_osac_public_v1_secret_type]);
 
 /**
  * A cluster template defines a type of cluster that can be created by the user. Note that the user doesn't create these
@@ -82,13 +80,6 @@ export type ClusterTemplate = Message<"osac.public.v1.ClusterTemplate"> & {
    * @generated from field: repeated osac.public.v1.ClusterTemplateParameterDefinition parameters = 5;
    */
   parameters: ClusterTemplateParameterDefinition[];
-
-  /**
-   * Initial node sets of the cluster.
-   *
-   * @generated from field: map<string, osac.public.v1.ClusterTemplateNodeSet> node_sets = 6;
-   */
-  nodeSets: { [key: string]: ClusterTemplateNodeSet };
 
   /**
    * Default values for cluster spec fields. When a user creates a cluster
@@ -193,34 +184,6 @@ export const ClusterTemplateParameterDefinitionSchema: GenMessage<ClusterTemplat
   messageDesc(file_osac_public_v1_cluster_template_type, 1);
 
 /**
- * Defines a set of nodes that will be part of cluster, all of them of the same type of host.
- *
- * @generated from message osac.public.v1.ClusterTemplateNodeSet
- */
-export type ClusterTemplateNodeSet = Message<"osac.public.v1.ClusterTemplateNodeSet"> & {
-  /**
-   * Reference to the type of hosts that are part of the set.
-   *
-   * @generated from field: osac.public.v1.HostTypeReference host_type = 1;
-   */
-  hostType?: HostTypeReference | undefined;
-
-  /**
-   * Number of nodes of the set.
-   *
-   * @generated from field: int32 size = 2;
-   */
-  size: number;
-};
-
-/**
- * Describes the message osac.public.v1.ClusterTemplateNodeSet.
- * Use `create(ClusterTemplateNodeSetSchema)` to create a new message.
- */
-export const ClusterTemplateNodeSetSchema: GenMessage<ClusterTemplateNodeSet> = /*@__PURE__*/
-  messageDesc(file_osac_public_v1_cluster_template_type, 2);
-
-/**
  * Default values for cluster spec fields. These are applied when a user creates a cluster without
  * providing explicit values. User-provided values always override these defaults.
  *
@@ -267,7 +230,7 @@ export type ClusterTemplateSpecDefaults = Message<"osac.public.v1.ClusterTemplat
  * Use `create(ClusterTemplateSpecDefaultsSchema)` to create a new message.
  */
 export const ClusterTemplateSpecDefaultsSchema: GenMessage<ClusterTemplateSpecDefaults> = /*@__PURE__*/
-  messageDesc(file_osac_public_v1_cluster_template_type, 3);
+  messageDesc(file_osac_public_v1_cluster_template_type, 2);
 
 /**
  * Reference to a ClusterTemplate resource.
@@ -301,5 +264,5 @@ export type ClusterTemplateReference = Message<"osac.public.v1.ClusterTemplateRe
  * Use `create(ClusterTemplateReferenceSchema)` to create a new message.
  */
 export const ClusterTemplateReferenceSchema: GenMessage<ClusterTemplateReference> = /*@__PURE__*/
-  messageDesc(file_osac_public_v1_cluster_template_type, 4);
+  messageDesc(file_osac_public_v1_cluster_template_type, 3);
 

@@ -18,6 +18,7 @@ package osac.private.v1;
 import "buf/validate/validate.proto";
 import "cleanapi/cleanapi.proto";
 import "google/api/field_behavior.proto";
+import "osac/private/v1/baremetal_instance_type_type.proto";
 import "osac/private/v1/cluster_template_type.proto";
 import "osac/private/v1/field_policy_type.proto";
 import "osac/private/v1/metadata_type.proto";
@@ -84,7 +85,19 @@ message ClusterNodeSetMapPolicy {
 
 // Wraps the cluster node-set map for use in a field policy.
 message ClusterNodeSetMap {
-  map<string, ClusterTemplateNodeSet> items = 1;
+  map<string, ClusterCatalogNodeSet> items = 1;
+}
+
+// Defines one node set in a cluster catalog item's locked or default policy.
+message ClusterCatalogNodeSet {
+  reserved 1;
+  reserved "host_type";
+
+  // Number of nodes in the set.
+  int32 size = 2;
+
+  // Bare metal instance type selected by this catalog policy.
+  BareMetalInstanceTypeReference baremetal_instance_type = 3;
 }
 
 // Configures an editable cluster node-set map.

@@ -16,7 +16,6 @@ package it
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"time"
 
@@ -446,27 +445,6 @@ func catalogItemParameterPolicies() map[string]*publicv1.TemplateParameterPolicy
 	}
 }
 
-func createCatalogItemHostTypeFixture(ctx context.Context) string {
-	GinkgoHelper()
-	client := privatev1.NewHostTypesClient(tool.InternalView().AdminConn())
-	response, err := client.Create(ctx, privatev1.HostTypesCreateRequest_builder{
-		Object: privatev1.HostType_builder{
-			Metadata: catalogItemFixtureMetadata("shared", ""),
-			Id:       fmt.Sprintf("catalog_item_host_%s", uuid.New()[24:]),
-			Interfaces: []*privatev1.NetworkInterface{
-				privatev1.NetworkInterface_builder{Name: "data-0", Role: "fabric"}.Build(),
-			},
-		}.Build(),
-	}.Build())
-	Expect(err).NotTo(HaveOccurred())
-	id := response.GetObject().GetId()
-	deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
-		_, err := client.Delete(ctx, privatev1.HostTypesDeleteRequest_builder{Id: id}.Build())
-		return err
-	}, nil)
-	return id
-}
-
 // Keycloak break-glass administration does not imply OSAC tenant-admin permissions.
 // Grant that realm role before logging in so the public API exercises genuine tenant scope.
 func createCatalogItemTenantAdminFixture(ctx context.Context) (string, *grpc.ClientConn) {
@@ -567,16 +545,9 @@ func createCatalogItemComputeInstanceTemplateFixture(ctx context.Context, defaul
 	return id
 }
 
-func createCatalogItemClusterTemplateFixture(ctx context.Context, host string, defaults *privatev1.ClusterTemplateSpecDefaults, parameters []*privatev1.ClusterTemplateParameterDefinition) string {
+func createCatalogItemClusterTemplateFixture(ctx context.Context, defaults *privatev1.ClusterTemplateSpecDefaults, parameters []*privatev1.ClusterTemplateParameterDefinition) string {
 	GinkgoHelper()
 	client := privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
-	nodes := map[string]*privatev1.ClusterTemplateNodeSet{}
-	if host != "" {
-		nodes["workers"] = privatev1.ClusterTemplateNodeSet_builder{
-			HostType: privatev1.HostTypeReference_builder{Id: host}.Build(),
-			Size:     2,
-		}.Build()
-	}
 	response, err := client.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 		Object: privatev1.ClusterTemplate_builder{
 			Id:           "catalog_item_cluster_" + uuid.New()[24:],
@@ -584,7 +555,6 @@ func createCatalogItemClusterTemplateFixture(ctx context.Context, host string, d
 			Title:        "Catalog item integration Template",
 			SpecDefaults: defaults,
 			Parameters:   parameters,
-			NodeSets:     nodes,
 		}.Build(),
 	}.Build())
 	Expect(err).NotTo(HaveOccurred())

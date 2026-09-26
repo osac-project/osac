@@ -29,6 +29,7 @@ spec:
         args:
           - --leader-elect
           - --health-probe-bind-address=:8081
+          - --metrics-bind-address=:8443
           - --grpc-insecure
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
         imagePullPolicy: {{ .Values.image.pullPolicy }}
@@ -74,9 +75,9 @@ spec:
           - name: OSAC_CLUSTER_WORKERS_JOINING_STALL_THRESHOLD
             value: {{ .Values.stall.workersJoiningThreshold | quote }}
           {{- end }}
-          {{- if .Values.stall.workersJoiningByHostType }}
+          {{- if .Values.stall.workersJoiningByInstanceType }}
           - name: OSAC_CLUSTER_WORKERS_JOINING_STALL_THRESHOLD_OVERRIDES
-            value: {{ .Values.stall.workersJoiningByHostType | toJson | quote }}
+            value: {{ .Values.stall.workersJoiningByInstanceType | toJson | quote }}
           {{- end }}
           {{- if .Values.networkManagers.capabilitiesSyncInterval }}
           - name: OSAC_NETWORK_CLASS_SYNC_INTERVAL
@@ -99,6 +100,10 @@ spec:
                 name: {{ .Values.fulfillment.configMap.name }}
                 key: OSAC_FULFILLMENT_ISSUER_URL
                 optional: {{ .Values.fulfillment.configMap.optional }}
+          {{- end }}
+          {{- if .Values.ignition.trustIngressCA }}
+          - name: OSAC_IGNITION_TRUST_INGRESS_CA
+            value: "true"
           {{- end }}
           - name: OSAC_CLUSTER_ORDER_NAMESPACE
             valueFrom:

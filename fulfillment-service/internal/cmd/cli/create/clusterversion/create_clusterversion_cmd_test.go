@@ -65,6 +65,12 @@ var _ = Describe("Create clusterversion flag registration", func() {
 		Expect(flag.Usage).To(ContainSubstring("ACTIVE"))
 	})
 
+	It("should register --disk-image flag", func() {
+		cmd := Cmd()
+		flag := cmd.Flags().Lookup("disk-image")
+		Expect(flag).NotTo(BeNil())
+	})
+
 })
 
 var _ = Describe("State parsing", func() {

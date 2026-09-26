@@ -14,7 +14,6 @@ import {
 import {
   ClusterTemplateReferenceSchema,
   ComputeInstanceTemplateReferenceSchema,
-  HostTypeReferenceSchema,
   InstanceTypeState,
   SecurityGroupState,
   StorageTierSchema,
@@ -276,13 +275,6 @@ const apiFixtures: MockApiFixtures = {
         project: 'foo',
         tenant: 'foo',
         version: 1,
-      },
-      nodeSets: {
-        compute: {
-          $typeName: 'osac.public.v1.ClusterTemplateNodeSet',
-          hostType: create(HostTypeReferenceSchema, { id: 'acme_1tb' }),
-          size: 3,
-        },
       },
       description: '',
       parameters: [],

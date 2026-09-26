@@ -46,7 +46,7 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 		provider = newControllableProvider()
 		reconciler = NewClusterOrderReconciler(
 			k8sClient, k8sClient, k8sClient.Scheme(),
-			clusterOrderTestNamespace, "", "",
+			clusterOrderTestNamespace, "",
 			provider, statusPollInterval, provisioning.DefaultMaxJobHistory,
 		)
 	})
@@ -72,6 +72,34 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 		}, instance)).To(Succeed())
 		return instance
 	}
+
+	It("allows zero observed NodePool replicas while requiring a positive desired worker count", func() {
+		const name = "cluster-order-zero-observed-workers"
+		instance := newTestClusterOrder(name)
+		instance.Spec.NodeRequests = []osacv1alpha1.NodeRequest{{
+			NumberOfNodes: 1,
+			BareMetal:     &osacv1alpha1.BareMetalNodeSpec{InstanceType: "worker"},
+		}}
+		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, instance) })
+
+		pool := readyClusterOrderNodePool("worker", 0)
+		Expect(reconciler.handleNodePool(ctx, instance, &pool)).To(Succeed())
+		Expect(instance.Status.NodeRequests).To(HaveLen(1))
+		Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed(),
+			"a newly created NodePool reports zero observed replicas")
+		stored := getClusterOrder(name)
+		Expect(stored.Spec.NodeRequests[0].NumberOfNodes).To(Equal(1))
+		Expect(stored.Status.NodeRequests[0].NumberOfNodes).To(Equal(0))
+
+		invalid := newTestClusterOrder("cluster-order-zero-desired-workers")
+		invalid.Spec.NodeRequests = []osacv1alpha1.NodeRequest{{
+			NumberOfNodes: 0,
+			BareMetal:     &osacv1alpha1.BareMetalNodeSpec{InstanceType: "worker"},
+		}}
+		Expect(k8sClient.Create(ctx, invalid)).To(MatchError(ContainSubstring("spec.nodeRequests[0].numberOfNodes")),
+			"desired worker count must remain positive")
+	})
 
 	It("should round-trip add-on operator names through the ClusterOrder CRD", func() {
 		const name = "cluster-order-add-on-operators"

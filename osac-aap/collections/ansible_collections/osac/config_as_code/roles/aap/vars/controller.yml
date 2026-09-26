@@ -298,18 +298,6 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     allow_simultaneous: true
     ask_variables_on_launch: true
     verbosity: 0
-  - name: "{{ aap_prefix }}-import-agents"
-    project: "{{ aap_prefix }}"
-    organization: "{{ aap_organization_name }}"
-    job_type: run
-    playbook: "osac-aap/playbook_osac_import_agents.yml"
-    inventory: "{{ aap_prefix }}-cluster-fulfillment"
-    execution_environment: "{{ aap_prefix }}-ee"
-    instance_groups:
-      - "{{ aap_prefix }}-cluster-fulfillment-ig"
-    allow_simultaneous: false
-    ask_variables_on_launch: true
-    verbosity: 0
   - name: "{{ aap_prefix }}-create-bare-metal-pool"
     project: "{{ aap_prefix }}"
     organization: "{{ aap_organization_name }}"
@@ -407,18 +395,6 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     execution_environment: "{{ aap_prefix }}-ee"
     instance_groups:
       - "{{ aap_prefix }}-storage-operations-ig"
-    allow_simultaneous: false
-    ask_variables_on_launch: true
-    verbosity: 0
-  - name: "{{ aap_prefix }}-import-bcm-agents"
-    project: "{{ aap_prefix }}"
-    organization: "{{ aap_organization_name }}"
-    job_type: run
-    playbook: "osac-aap/playbook_osac_import_bcm_agents.yml"
-    inventory: "{{ aap_prefix }}-cluster-fulfillment"
-    execution_environment: "{{ aap_prefix }}-ee"
-    instance_groups:
-      - "{{ aap_prefix }}-cluster-fulfillment-ig"
     allow_simultaneous: false
     ask_variables_on_launch: true
     verbosity: 0
@@ -638,18 +614,6 @@ controller_schedules: # noqa: var-naming[no-role-prefix]
     unified_job_template: "{{ aap_prefix }}-publish-templates"
     rrule: "DTSTART:20250513T111500Z RRULE:FREQ=MINUTELY;INTERVAL=30"
     enabled: "{{ osac_publish_templates_enabled }}"
-  - name: "{{ aap_prefix }}-import-agents"
-    description: "Periodic agent import reconciliation"
-    organization: "{{ aap_organization_name }}"
-    unified_job_template: "{{ aap_prefix }}-import-agents"
-    rrule: "DTSTART:20250331T144500Z RRULE:FREQ=MINUTELY;INTERVAL=10"
-    enabled: "{{ osac_import_agents_enabled }}"
-  - name: "{{ aap_prefix }}-import-bcm-agents"
-    description: "Periodic BCM agent import reconciliation"
-    organization: "{{ aap_organization_name }}"
-    unified_job_template: "{{ aap_prefix }}-import-bcm-agents"
-    rrule: "DTSTART:20250519T120000Z RRULE:FREQ=MINUTELY;INTERVAL=10"
-    enabled: "{{ osac_import_bcm_agents_enabled }}"
 
 # Create custom execution environments
 controller_execution_environments: # noqa: var-naming[no-role-prefix]
@@ -699,14 +663,8 @@ controller_instance_groups: # noqa: var-naming[no-role-prefix]
               - name: kube-api-access
                 mountPath: /var/run/secrets/kubernetes.io/serviceaccount
                 readOnly: true
-              - name: import-agents-inventory
-                mountPath: /var/config/import-agents
-                readOnly: true
               - name: agentless-net-inventory
                 mountPath: /var/config/agentless-net
-                readOnly: true
-              - name: bcm-certs
-                mountPath: /var/secrets/bcm-certs
                 readOnly: true
             env:
               - name: POD_NAMESPACE
@@ -733,10 +691,6 @@ controller_instance_groups: # noqa: var-naming[no-role-prefix]
                   name: netris-credentials
                   optional: true
         volumes:
-        - name: bcm-certs
-          secret:
-            secretName: bcm-certs
-            optional: true
         - name: kube-api-access
           projected:
             sources:
@@ -760,10 +714,6 @@ controller_instance_groups: # noqa: var-naming[no-role-prefix]
                     - key: service-ca.crt
                       path: service-ca.crt
             defaultMode: 420
-        - name: import-agents-inventory
-          configMap:
-            name: import-agents-inventory
-            optional: true
         - name: agentless-net-inventory
           configMap:
             name: agentless-net-inventory

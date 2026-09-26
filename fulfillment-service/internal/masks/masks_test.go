@@ -227,7 +227,8 @@ var _ = Describe("Calculator", func() {
 				Spec: privatev1.ClusterSpec_builder{
 					NodeSets: map[string]*privatev1.ClusterNodeSet{
 						"workers": privatev1.ClusterNodeSet_builder{
-							Size: proto.Int32(3),
+							BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "worker-type"}.Build(),
+							Size:                  proto.Int32(3),
 						}.Build(),
 					},
 				}.Build(),
@@ -237,7 +238,8 @@ var _ = Describe("Calculator", func() {
 				Spec: privatev1.ClusterSpec_builder{
 					NodeSets: map[string]*privatev1.ClusterNodeSet{
 						"workers": privatev1.ClusterNodeSet_builder{
-							Size: proto.Int32(5),
+							BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "worker-type"}.Build(),
+							Size:                  proto.Int32(5),
 						}.Build(),
 					},
 				}.Build(),
@@ -252,7 +254,8 @@ var _ = Describe("Calculator", func() {
 				Spec: privatev1.ClusterSpec_builder{
 					NodeSets: map[string]*privatev1.ClusterNodeSet{
 						"workers": privatev1.ClusterNodeSet_builder{
-							Size: proto.Int32(3),
+							BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "worker-type"}.Build(),
+							Size:                  proto.Int32(3),
 						}.Build(),
 					},
 				}.Build(),
@@ -262,10 +265,12 @@ var _ = Describe("Calculator", func() {
 				Spec: privatev1.ClusterSpec_builder{
 					NodeSets: map[string]*privatev1.ClusterNodeSet{
 						"workers": privatev1.ClusterNodeSet_builder{
-							Size: proto.Int32(3),
+							BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "worker-type"}.Build(),
+							Size:                  proto.Int32(3),
 						}.Build(),
 						"storage": privatev1.ClusterNodeSet_builder{
-							Size: proto.Int32(2),
+							BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "storage-type"}.Build(),
+							Size:                  proto.Int32(2),
 						}.Build(),
 					},
 				}.Build(),
@@ -280,10 +285,12 @@ var _ = Describe("Calculator", func() {
 				Spec: privatev1.ClusterSpec_builder{
 					NodeSets: map[string]*privatev1.ClusterNodeSet{
 						"workers": privatev1.ClusterNodeSet_builder{
-							Size: proto.Int32(3),
+							BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "worker-type"}.Build(),
+							Size:                  proto.Int32(3),
 						}.Build(),
 						"storage": privatev1.ClusterNodeSet_builder{
-							Size: proto.Int32(2),
+							BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "storage-type"}.Build(),
+							Size:                  proto.Int32(2),
 						}.Build(),
 					},
 				}.Build(),
@@ -293,7 +300,8 @@ var _ = Describe("Calculator", func() {
 				Spec: privatev1.ClusterSpec_builder{
 					NodeSets: map[string]*privatev1.ClusterNodeSet{
 						"workers": privatev1.ClusterNodeSet_builder{
-							Size: proto.Int32(3),
+							BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "worker-type"}.Build(),
+							Size:                  proto.Int32(3),
 						}.Build(),
 					},
 				}.Build(),

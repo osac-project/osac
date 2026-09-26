@@ -36,6 +36,9 @@ def test_cluster_create_with_version(
 ) -> None:
     """Verify explicit version resolution and reference protection."""
     version = private_grpc.ensure_cluster_version(version="4.20.0-e2e", image=TEST_RELEASE_IMAGE)
+    private_grpc.ensure_bare_metal_instance_type(
+        name="ci-worker-bm", host_label_selector={"osac.openshift.io/host-type": "default"}
+    )
 
     uuid: str | None = None
     co_name: str | None = None
@@ -45,6 +48,7 @@ def test_cluster_create_with_version(
             name=name,
             template=cluster_template,
             version=version["name"],
+            node_sets={"workers": {"size": 1, "baremetal_instance_type": {"name": "ci-worker-bm"}}},
             template_parameter_files={"pull_secret": pull_secret_path},
             template_parameters={"ssh_public_key": Path(ssh_public_key_path).read_text().strip()},
         )
@@ -96,6 +100,9 @@ def test_cluster_create_rejected_for_invalid_version(
     grpc: GRPCClient, private_grpc: GRPCClient, cluster_template: str
 ) -> None:
     """Verify creation is rejected for disabled, obsolete, and missing versions."""
+    private_grpc.ensure_bare_metal_instance_type(
+        name="ci-worker-bm", host_label_selector={"osac.openshift.io/host-type": "default"}
+    )
 
     def _create_with_version(version_name: str) -> tuple[str, int]:
         return grpc.call_unchecked(
@@ -106,6 +113,7 @@ def test_cluster_create_rejected_for_invalid_version(
                     "spec": {
                         "template": {"name": cluster_template, "shared": True},
                         "version": {"name": version_name, "shared": True},
+                        "nodeSets": {"workers": {"size": 1, "baremetalInstanceType": {"name": "ci-worker-bm"}}},
                     },
                 }
             },

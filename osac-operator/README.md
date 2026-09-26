@@ -63,6 +63,18 @@ Networking controllers derive template names from the prefix:
 `{prefix}-{action}-{kind}` (e.g. `osac-create-subnet`,
 `osac-delete-security-group`).
 
+### Assisted Service discovery ignition TLS
+
+- `OSAC_IGNITION_TRUST_INGRESS_CA` — when `true`, load
+  `openshift-config-managed/default-ingress-cert` (`ca-bundle.crt`) at startup
+  and add its certificates to the system trust store for discovery ignition
+  downloads. The Helm value `ignition.trustIngressCA` enables this and grants
+  read-only access to that ConfigMap. Use it on OpenShift clusters whose
+  Assisted Service HTTPS Route uses the cluster-generated ingress CA; leave it
+  disabled elsewhere. Missing or invalid bundles prevent controller startup
+  rather than disabling TLS verification. Restart the operator after an ingress
+  CA rotation so it loads the new bundle.
+
 ### Namespaces
 
 - `OSAC_CLUSTER_ORDER_NAMESPACE` — namespace for ClusterOrder resources

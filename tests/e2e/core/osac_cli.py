@@ -218,6 +218,7 @@ class OsacCLI:
         pull_secret: str | None = None,
         ssh_public_key_file: str | None = None,
         version: str | None = None,
+        node_sets: dict[str, dict[str, Any]] | list[str] | None = None,
         template_parameters: dict[str, str] | None = None,
         template_parameter_files: dict[str, str] | None = None,
     ) -> str:
@@ -230,6 +231,18 @@ class OsacCLI:
             args.extend(["--ssh-public-key-file", ssh_public_key_file])
         if version is not None:
             args.extend(["--version", version])
+        if node_sets is not None:
+            if isinstance(node_sets, dict):
+                for key, val in node_sets.items():
+                    args.extend(
+                        [
+                            "--node-set",
+                            f"name={key},size={val['size']},baremetal-instance-type={val['baremetal_instance_type']['name']}",
+                        ]
+                    )
+            elif isinstance(node_sets, list):
+                for item in node_sets:
+                    args.extend(["--node-set", item])
         if template_parameters is not None:
             for key, value in template_parameters.items():
                 args.extend(["-p", f"{key}={value}"])

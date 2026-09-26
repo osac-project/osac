@@ -147,6 +147,12 @@ func Cmd() *cobra.Command {
 		false,
 		externalIPAttachmentFlagHelp,
 	)
+	flags.StringArrayVar(
+		&runner.args.nodeSets,
+		"node-set",
+		nil,
+		nodeSetFlagHelp,
+	)
 	result.MarkFlagsMutuallyExclusive("catalog-item", "template")
 	result.MarkFlagsOneRequired("catalog-item", "template")
 	return result
@@ -167,6 +173,7 @@ type runnerContext struct {
 		podCIDR                 string
 		serviceCIDR             string
 		networkAttachment       string
+		nodeSets                []string
 		externalIPAttachment    bool
 	}
 	logger                *slog.Logger
@@ -278,7 +285,9 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		specBuilder := publicv1.ClusterSpec_builder{
 			CatalogItem: &publicv1.ClusterCatalogItemReference{Id: catalogItem.GetId()},
 		}
-		c.applyOptionalSpecFields(&specBuilder, sshPublicKey)
+		if err := c.applyOptionalSpecFields(&specBuilder, sshPublicKey); err != nil {
+			return err
+		}
 		if cmd.Flags().Changed("external-ip-attachment") {
 			specBuilder.AutoExternalIpAttachment = proto.Bool(c.args.externalIPAttachment)
 		}
@@ -320,7 +329,9 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		Template:           &publicv1.ClusterTemplateReference{Id: template.GetId()},
 		TemplateParameters: templateParameterValues,
 	}
-	c.applyOptionalSpecFields(&specBuilder, sshPublicKey)
+	if err := c.applyOptionalSpecFields(&specBuilder, sshPublicKey); err != nil {
+		return err
+	}
 	if cmd.Flags().Changed("external-ip-attachment") {
 		specBuilder.AutoExternalIpAttachment = proto.Bool(c.args.externalIPAttachment)
 	}
@@ -344,11 +355,11 @@ func (c *runnerContext) resolveSSHPublicKey() (sshPublicKey string, err error) {
 	return
 }
 
-// applyOptionalSpecFields sets pull secret, SSH public key, version, and network CIDRs
+// applyOptionalSpecFields sets pull secret, SSH public key, version, network CIDRs, and node sets
 // on the spec builder when their corresponding flags are provided.
 func (c *runnerContext) applyOptionalSpecFields(
 	specBuilder *publicv1.ClusterSpec_builder, sshPublicKey string,
-) {
+) error {
 	if c.args.pullSecret != "" {
 		specBuilder.PullSecretSecret = publicv1.SecretLocalReference_builder{
 			Name: c.args.pullSecret,
@@ -370,6 +381,19 @@ func (c *runnerContext) applyOptionalSpecFields(
 		}
 		specBuilder.Network = networkBuilder.Build()
 	}
+	if len(c.args.nodeSets) > 0 {
+		if specBuilder.NodeSets == nil {
+			specBuilder.NodeSets = map[string]*publicv1.ClusterNodeSet{}
+		}
+		for _, nsArg := range c.args.nodeSets {
+			name, ns, err := parseClusterNodeSetFlag(nsArg)
+			if err != nil {
+				return err
+			}
+			specBuilder.NodeSets[name] = ns
+		}
+	}
+	return nil
 }
 
 // createCluster creates a cluster with the given spec and prints the result.
@@ -936,6 +960,61 @@ func parseClusterSubnetRef(s string) (string, error) {
 	}
 	return s, nil
 }
+
+// parseClusterNodeSetFlag parses one --node-set value as comma-separated key=value assignments.
+func parseClusterNodeSetFlag(s string) (string, *publicv1.ClusterNodeSet, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", nil, fmt.Errorf("empty --node-set value")
+	}
+
+	values := make(map[string]string)
+	for _, pair := range strings.Split(s, ",") {
+		key, value, ok := strings.Cut(strings.TrimSpace(pair), "=")
+		key = strings.ToLower(strings.TrimSpace(key))
+		value = strings.TrimSpace(value)
+		if !ok || strings.Count(pair, "=") != 1 || key == "" || value == "" {
+			return "", nil, fmt.Errorf("invalid --node-set assignment %q: expected key=value", strings.TrimSpace(pair))
+		}
+		switch key {
+		case "name", "size", "baremetal-instance-type":
+			values[key] = value
+		default:
+			return "", nil, fmt.Errorf("unknown --node-set key %q", key)
+		}
+	}
+
+	name := values["name"]
+	if name == "" {
+		return "", nil, fmt.Errorf("--node-set name is required")
+	}
+
+	builder := publicv1.ClusterNodeSet_builder{}
+	if sizeValue, ok := values["size"]; ok {
+		size, err := strconv.ParseInt(sizeValue, 10, 32)
+		if err != nil {
+			return "", nil, fmt.Errorf("node set size must be a 32-bit integer in %q", s)
+		}
+		builder.Size = proto.Int32(int32(size))
+	}
+
+	if bmitName := values["baremetal-instance-type"]; bmitName != "" {
+		builder.BaremetalInstanceType = publicv1.BareMetalInstanceTypeReference_builder{
+			Name: bmitName,
+		}.Build()
+	}
+
+	return name, builder.Build(), nil
+}
+
+const nodeSetFlagHelp = `
+_NODE_SET_ - Node set configuration for worker pools as comma-separated key=value pairs.
+Supported keys are {{ bt }}name{{ bt }}, {{ bt }}size{{ bt }}, and {{ bt }}baremetal-instance-type{{ bt }}.
+The {{ bt }}name{{ bt }} key is required.
+Can be specified multiple times for multiple worker pools.
+Example:
+  {{ bt }}--node-set name=workers,size=2,baremetal-instance-type=ci-worker-bm{{ bt }}
+`
 
 const shortHelp = `Create a cluster`
 

@@ -56,10 +56,10 @@ else
   oc wait --for=condition=Available deploy/strimzi-cluster-operator -n "${KAFKA_NS}" --timeout=300s
 fi
 
-wait_for_listener_tls
-
 echo "Applying Kafka cluster..."
 oc apply -f /config/kafka-cluster.yaml
+
+wait_for_listener_tls
 
 echo "Waiting for Kafka cluster to be ready..."
 until oc wait kafka/osac-kafka -n "${KAFKA_NS}" --for=condition=Ready --timeout=600s 2>/dev/null; do

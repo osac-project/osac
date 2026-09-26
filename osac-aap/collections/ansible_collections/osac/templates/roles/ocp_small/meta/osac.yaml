@@ -6,11 +6,5 @@ description: >
 
 template_type: cluster
 
-default_node_request:
-- resourceClass: fc430
-  numberOfNodes: 2
-
-allowed_resource_classes: []
-
 spec_defaults:
   version_name: "4.22.0"

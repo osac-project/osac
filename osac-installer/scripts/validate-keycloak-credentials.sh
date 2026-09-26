@@ -66,6 +66,8 @@ sys.exit(1)
 }
 
 echo "=== Test 1: defaults preserve today's literals (via the keycloak-admin-credentials Secret) ==="
+# The password-setup Job is a dev/CI fixture; explicitly enable it for
+# these tests without changing the chart's production default.
 DEFAULT_RENDER=$(helm template "${CHART_DIR}" --set keycloak.devFixtures.enabled=true)
 assert_contains "${DEFAULT_RENDER}" 'admin-username: "admin"' "Default admin-username in keycloak-admin-credentials Secret"
 assert_contains "${DEFAULT_RENDER}" 'admin-password: "admin"' "Default admin-password in keycloak-admin-credentials Secret"

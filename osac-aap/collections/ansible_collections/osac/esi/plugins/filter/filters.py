@@ -54,11 +54,11 @@ def get_agent_metadata(node_info_list, agents):
         topology_labels = {"topology.nerc.mghpcc.org/%s" % label: str(val)
                            for label, val in topology.items()
                            if val is not None}
-        resource_class_label = {
-            'osac.openshift.io/resource_class':
+        instance_type_label = {
+            'osac.openshift.io/instance_type':
                 node_info.get('resource_class', '')
         }
-        labels = {**topology_labels, **resource_class_label}
+        labels = {**topology_labels, **instance_type_label}
 
         agent_metadata.append({
             "name": agent_name,

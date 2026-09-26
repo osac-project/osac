@@ -1,0 +1,38 @@
+---
+- name: CI cluster deletion passes only requested instance types to cleanup
+  hosts: localhost
+  gather_facts: false
+  vars:
+    cluster_order:
+      metadata:
+        name: test-cluster
+      spec:
+        nodeRequests:
+          - numberOfNodes: 2
+            bareMetal:
+              instanceType: bm.large
+    cluster_working_namespace: test-work
+    ocp_release_image: example.test/release:latest
+    template_parameters:
+      pull_secret: test-secret
+      ssh_public_key: ssh-rsa
+    delete_step_hosted_cluster_override:
+      name: osac.test_overrides.cluster_hooks
+      tasks_from: assert_delete_node_requests.yml
+    delete_step_cluster_network_override:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+    delete_step_external_access_override:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+  tasks:
+    - name: Run CI cluster delete without external calls
+      ansible.builtin.include_role:
+        name: osac.templates.ocp_ci_small
+        tasks_from: delete.yaml
+
+    - name: Verify instance type requests are not translated to resource classes
+      ansible.builtin.assert:
+        that:
+          - normalized_node_requests == cluster_order.spec.nodeRequests
+          - normalized_node_requests[0].resourceClass is not defined

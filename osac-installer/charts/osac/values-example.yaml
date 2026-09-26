@@ -142,6 +142,11 @@ service:
     service: ghcr.io/osac-project/fulfillment-service:latest
     envoy: ghcr.io/osac-project/envoy:v1.33.0
 
+  # The Kafka-backed event publisher is enabled by default. Disable it only
+  # for API-only environments that do not provision or connect to Kafka.
+  eventPublisher:
+    enabled: true
+
   # TLS certificate configuration. All service components use cert-manager
   # to generate certificates signed by this issuer.
   certs:
@@ -297,50 +302,6 @@ aap:
     # Helm mode; see docs/helm-deployment-guide.md for manual creation.
     manifestSecret: "config-as-code-manifest-ig"
     secret: "config-as-code-ig"
-    # Enable ConfigMap-based bare metal agent import. Sets
-    # OSAC_IMPORT_AGENTS_ENABLED=true in the config-as-code-ig Secret
-    # and gates the import-agents-inventory ConfigMap.
-    importAgentsEnabled: false
-    # Enable BCM (NVIDIA Base Command Manager) inventory backend. Sets
-    # OSAC_IMPORT_BCM_AGENTS_ENABLED=true in the config-as-code-ig Secret
-    # and gates the bcm-certs Secret.
-    importBcmAgentsEnabled: false
-
-  # Server inventory for bare metal agent import.
-  # Each entry provisions a BareMetalHost CR via the import-agents playbook.
-  # The playbook auto-creates a BMC Secret named {name}-bmc-secret for each server.
-  # See osac-aap/docs/import-agents.md for the server inventory format.
-  importAgents:
-    servers: []
-    # Example:
-    # servers:
-    #   - name: node001
-    #     bmc_url: "redfish-virtualmedia+https://192.168.1.21:8000/redfish/v1/Systems/<uuid>"
-    #     bmc_username: "<BMC_USERNAME>"
-    #     bmc_password: "<BMC_PASSWORD>"
-    #     boot_mac: "AA:BB:CC:DD:EE:01"
-    #     netris_server_name: "server-01"
-    #     resource_class: "fc430"
-    #   - name: node002
-    #     bmc_url: "redfish-virtualmedia+https://192.168.1.22:8000/redfish/v1/Systems/<uuid>"
-    #     bmc_username: "<BMC_USERNAME>"
-    #     bmc_password: "<BMC_PASSWORD>"
-    #     boot_mac: "AA:BB:CC:DD:EE:02"
-    #     netris_server_name: "server-02"
-    #     resource_class: "fc430"
-    #     disable_bmc_cert_verification: false
-
-  # BCM (NVIDIA Base Command Manager) mTLS client credentials.
-  # When importBcmAgentsEnabled is true, these are written to the bcm-certs Secret.
-  # BCM API connection settings are configured in
-  # aap.instanceGroups.clusterFulfillment.config below.
-  # See osac-aap/docs/bcm-inventory-integration.md for setup details.
-  importBcmAgents:
-    # PEM-encoded client certificate for BCM mTLS authentication.
-    cert: ""
-    # PEM-encoded client private key for BCM mTLS authentication.
-    key: ""
-
   # AAP instance groups. The global.networking facade supplies the network
   # fields; use these blocks for enablement and expert-only overrides.
   instanceGroups:
@@ -360,13 +321,6 @@ aap:
         HOSTED_CLUSTER_BASE_DOMAIN: ""
         HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY: ""
         HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: ""
-        IMPORT_AGENTS_NAMESPACE: ""
-        IMPORT_AGENTS_INFRAENV_NAME: ""
-        IMPORT_AGENTS_PULL_SECRET_NAME: ""
-        IMPORT_AGENTS_DISABLE_BMC_CERT_VERIFICATION: ""
-        BCM_API_URL: ""
-        BCM_VALIDATE_CERTS: "true"
-        BCM_DISABLE_BMC_CERT_VERIFICATION: "false"
       secret:
         NETRIS_PASSWORD: ""
         AWS_ACCESS_KEY_ID: ""

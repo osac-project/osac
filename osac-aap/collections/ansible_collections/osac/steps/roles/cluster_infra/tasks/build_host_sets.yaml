@@ -1,0 +1,9 @@
+---
+- name: Translate instance types to BareMetalPool host sets
+  ansible.builtin.set_fact:
+    baremetalpool_host_sets: >-
+      {{ baremetalpool_host_sets | default([]) + [{
+        'hostType': item.bareMetal.instanceType,
+        'replicas': item.numberOfNodes | int
+      }] }}
+  loop: "{{ cluster_infra_node_requests }}"

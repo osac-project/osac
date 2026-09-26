@@ -18,7 +18,7 @@ NetworkClass manager names and select the AAP backend:
 | `netris` | `""` | `netris` / `netris.steps` | Supported |
 | `""` | `k8s_only` | `agentless_net` / `agentless_net.steps` | Supported (default) |
 | `""` | `""` | Must set managers via `global.networking.networkClass` or expert overrides | Expert only |
-| `cudn_net` | * | — | Reserved; Helm render fails |
+| `cudn_net` | `""` | `ci` / `ci.steps` (explicit AAP override) | Virtual-BMH CaaS only |
 | `vlan` | * | — | Reserved; Helm render fails |
 
 Setting both managers non-empty fails during render. The removed
@@ -36,6 +36,24 @@ When `global.networking.fabricManager` is `netris`, Helm automatically:
 When `fabricManager` is empty and `k8sManager` is `k8s_only`, Helm enables
 `operator.networkManagers.k8sManagers.k8s_only`, sets the agentless AAP backend,
 and points the NetworkClass at `k8sManager: k8s_only`.
+
+For virtual-BMH CaaS, `values/caas-ci/instance.yaml` selects `cudn_net`, no
+k8s manager, explicitly registers the existing operator CUDN fabric-manager
+ConfigMap, and retains `global.expertOverrides.aap: true` with
+`NETWORK_CLASS=ci` / `NETWORK_STEPS_COLLECTION=ci.steps`. Rendering fails if
+CaaS/BMaaS is disabled, the default NetworkClass conflicts, the CUDN manager
+is not registered, or an enabled operator lacks the two enabled AAP groups and
+matching `ci.steps` keys. AAP-disabled Kind sim is permitted only with the
+operator disabled; it manually advances tenant default VN/Subnet/SG readiness.
+The sim validates the real fulfillment API and BMI worker contract, **not**
+OpenShift ClusterUserDefinedNetwork provisioning.
+
+The CUDN operator manager handles VN/Subnet overlay provisioning on OpenShift;
+Kind simulates their readiness. The `ci.steps` cluster roles still wait for
+operator-bound Agents and read Agent IPs for external-access ingress DNS. They
+have not been disabled or replaced: verify these steps in fresh full-install CI
+before choosing any new ingress address source. This path does not claim
+physical fabric provisioning by Netris.
 
 The facade does **not** enable the AAP instance groups themselves. Set both
 `aap.instanceGroups.clusterFulfillment.enabled` and

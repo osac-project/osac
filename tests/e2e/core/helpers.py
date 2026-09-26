@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import base64
 import re
 import subprocess
 import time
-from typing import Any
+from collections.abc import Callable
+from typing import Any, TypeVar
 from uuid import uuid4
 
 import pytest
@@ -15,6 +17,21 @@ from tests.e2e.core.runner import poll_until, run_unchecked
 _POOL_READY_STATE = "EXTERNAL_IP_POOL_STATE_READY"
 _BMI_RUNNING_RETRIES = 180
 _BMI_RUNNING_DELAY = 10
+_WORKLOAD_HEALTH_RETRIES = 120
+_WORKLOAD_HEALTH_DELAY = 30
+_RETRYABLE_KUBECTL_ERRORS = (
+    "connection refused",
+    "connection reset",
+    "connection timed out",
+    "context deadline exceeded",
+    "i/o timeout",
+    "service unavailable",
+    "serviceunavailable",
+    "temporarily unavailable",
+    "tls handshake timeout",
+    "unexpected eof",
+)
+T = TypeVar("T")
 
 
 def unique_name(prefix: str) -> str:
@@ -40,9 +57,17 @@ def assert_grpc_method_unavailable(
     exc = exc_info.value
     combined: str = (exc.stderr or "") + (exc.stdout or "")
     descriptor_error = f'service "{service}" does not include a method named "{method}"'
-    assert descriptor_error in combined, (
-        f"Expected {service}/{method} to be unavailable, got: {combined.strip()}"
-    )
+    assert descriptor_error in combined, f"Expected {service}/{method} to be unavailable, got: {combined.strip()}"
+
+
+def _call_kubectl_with_retry_policy(fn: Callable[[], T]) -> T:
+    try:
+        return fn()
+    except subprocess.CalledProcessError as exc:
+        error_output = f"{exc.stdout or ''}\n{exc.stderr or ''}".strip()
+        if not any(error in error_output.lower() for error in _RETRYABLE_KUBECTL_ERRORS):
+            raise RuntimeError(f"workload cluster kubectl access failed: {error_output}") from exc
+        raise
 
 
 def assert_grpc_field_violation(
@@ -393,13 +418,131 @@ def wait_for_cluster_ready(*, k8s: K8sClient, name: str) -> None:
     # budget (60 min) plus earlier steps in the same AAP job (create hosted
     # cluster, retrieve kubeconfig, etc.), or this times out first with a
     # less useful error while the ClusterOrder is still legitimately Progressing.
-    poll_until(
-        fn=lambda: k8s.get_cluster_order_phase(name=name, checked=False),
-        until=lambda v: v == "Ready",
-        retries=480,
-        delay=15,
-        description=f"{name} ClusterOrder Ready",
+    def _check() -> str:
+        phase = k8s.get_cluster_order_phase(name=name, checked=False)
+        if phase == "Failed":
+            raise AssertionError(f"{name} entered Failed phase before becoming Ready")
+        return phase
+
+    poll_until(fn=_check, until=lambda v: v == "Ready", retries=480, delay=15, description=f"{name} ClusterOrder Ready")
+
+
+def wait_for_hosted_cluster_kubeconfig(
+    *, k8s: K8sClient, hosted_cluster_namespace: str, hosted_cluster_name: str
+) -> bytes:
+    hcp_namespace = f"{hosted_cluster_namespace}-{hosted_cluster_name}"
+
+    def _get_kubeconfig() -> bytes:
+        hcp = k8s.get_json(resource="hostedcontrolplane", name=hosted_cluster_name, namespace=hcp_namespace)
+        kubeconfig_ref = hcp.get("status", {}).get("kubeConfig", {})
+        secret_name = kubeconfig_ref.get("name", "")
+        secret_key = kubeconfig_ref.get("key", "")
+        if not secret_name or not secret_key:
+            return b""
+
+        secret = k8s.get_json(resource="secret", name=secret_name, namespace=hcp_namespace)
+        encoded_kubeconfig = secret.get("data", {}).get(secret_key, "")
+        if not encoded_kubeconfig:
+            return b""
+        return base64.b64decode(encoded_kubeconfig, validate=True)
+
+    return poll_until(
+        fn=lambda: _call_kubectl_with_retry_policy(_get_kubeconfig),
+        until=lambda value: bool(value),
+        retries=60,
+        delay=5,
+        description=f"{hosted_cluster_name} workload kubeconfig",
+        retry_on_error=True,
     )
+
+
+def _condition_status(resource: dict[str, Any], condition_type: str) -> str:
+    conditions = resource.get("status", {}).get("conditions", [])
+    for condition in conditions:
+        if condition.get("type") == condition_type:
+            return condition.get("status", "")
+    return ""
+
+
+def node_pool_ready_node_count(node_pool: dict[str, Any]) -> int:
+    """Return the ready node count reported by a HyperShift NodePool."""
+    node_versions = node_pool.get("status", {}).get("nodesInfo", {}).get("nodeVersions", [])
+    return sum(version.get("readyNodeCount", 0) for version in node_versions)
+
+
+def node_pool_ready(node_pool: dict[str, Any], *, expected_ready_nodes: int) -> bool:
+    """Require observed replicas and ready-node aggregates to match the expected pool size."""
+    status = node_pool.get("status", {})
+    return (
+        status.get("replicas") == expected_ready_nodes and node_pool_ready_node_count(node_pool) == expected_ready_nodes
+    )
+
+
+def workload_cluster_health_ready(
+    *, nodes: list[dict[str, Any]], operators: list[dict[str, Any]], expected_workers: int
+) -> bool:
+    worker_nodes = [
+        node for node in nodes if "node-role.kubernetes.io/worker" in node.get("metadata", {}).get("labels", {})
+    ]
+    ready_workers = [node for node in worker_nodes if _condition_status(node, "Ready") == "True"]
+    if len(ready_workers) < expected_workers or len(ready_workers) != len(worker_nodes):
+        return False
+
+    if not operators:
+        return False
+
+    required_operator_conditions = {"Available": "True", "Progressing": "False", "Degraded": "False"}
+    for operator in operators:
+        if any(
+            _condition_status(operator, condition) != expected
+            for condition, expected in required_operator_conditions.items()
+        ):
+            return False
+
+    return True
+
+
+def wait_for_workload_cluster_health(*, k8s: K8sClient, expected_workers: int) -> None:
+    def _check() -> bool:
+        def _get_health_resources() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+            nodes = k8s.list_json(resource="nodes").get("items", [])
+            operators = k8s.list_json(resource="clusteroperators.config.openshift.io").get("items", [])
+
+            return nodes, operators
+
+        nodes, operators = _call_kubectl_with_retry_policy(_get_health_resources)
+        return workload_cluster_health_ready(nodes=nodes, operators=operators, expected_workers=expected_workers)
+
+    poll_until(
+        fn=_check,
+        until=lambda value: value is True,
+        retries=_WORKLOAD_HEALTH_RETRIES,
+        delay=_WORKLOAD_HEALTH_DELAY,
+        description="workload cluster worker and ClusterOperator health",
+        retry_on_error=True,
+    )
+
+
+def wait_for_cluster_guest_readiness(
+    *,
+    k8s: K8sClient,
+    name: str,
+    workload_k8s: K8sClient,
+    expected_workers: int,
+    get_node_pool: Callable[[], dict[str, Any] | None],
+    expected_ready_nodes: int,
+    node_pool_description: str,
+) -> dict[str, Any]:
+    wait_for_workload_cluster_health(k8s=workload_k8s, expected_workers=expected_workers)
+    node_pool = poll_until(
+        fn=get_node_pool,
+        until=lambda value: value is not None and node_pool_ready(value, expected_ready_nodes=expected_ready_nodes),
+        retries=60,
+        delay=10,
+        description=node_pool_description,
+    )
+    wait_for_cluster_ready(k8s=k8s, name=name)
+    return node_pool
 
 
 def wait_for_cluster_deletion(*, k8s: K8sClient, name: str) -> None:

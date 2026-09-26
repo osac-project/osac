@@ -30,6 +30,9 @@ import (
 // assignment and update-mask merging. Cluster handlers resolve add-on operators and preserve the
 // immutable list during updates. Resource Create handlers resolve their Catalog Item or Template
 // source; Resource Update preserves the stored Catalog Item reference without fetching it again.
+// BMI Create network attachments are resolved by the private handler after tenant
+// assignment; resolving their names here can pick another tenant's same-named
+// default subnet/security group before the handler can enforce owner scope.
 // Other references continue through the interceptor's registered lookups.
 func newReferenceValidator(logger *slog.Logger, tenancy auth.TenancyLogic, registerer prometheus.Registerer) (*references.ReferenceValidator, error) {
 	validator, err := references.NewReferenceValidator().SetLogger(logger).SetMetricsRegisterer(registerer).
@@ -37,6 +40,7 @@ func newReferenceValidator(logger *slog.Logger, tenancy auth.TenancyLogic, regis
 		SetExcludedReferencePaths(catalogAuthoringMethods(), "object.template", "object.fields").
 		SetExcludedReferencePaths(catalogCreationSourceMethods(), "object.spec.catalog_item", "object.spec.template").
 		SetExcludedReferencePaths(clusterAddOnOperatorMethods(), "object.spec.add_on_operators").
+		SetExcludedReferencePaths(bareMetalInstanceCreationMethods(), "object.spec.network_attachments").
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create reference validator: %w", err)
@@ -45,6 +49,13 @@ func newReferenceValidator(logger *slog.Logger, tenancy auth.TenancyLogic, regis
 		return nil, err
 	}
 	return validator, nil
+}
+
+func bareMetalInstanceCreationMethods() []string {
+	return []string{
+		publicv1.BareMetalInstances_Create_FullMethodName,
+		privatev1.BareMetalInstances_Create_FullMethodName,
+	}
 }
 
 func clusterAddOnOperatorMethods() []string {

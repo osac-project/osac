@@ -1,6 +1,6 @@
 module github.com/osac-project/osac/osac-operator/api
 
-go 1.26.3
+go 1.27
 
 require (
 	github.com/onsi/ginkgo/v2 v2.32.2

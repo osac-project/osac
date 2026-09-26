@@ -5,6 +5,7 @@ import { EllipsisVIcon } from '@patternfly/react-icons/dist/esm/icons/ellipsis-v
 
 import { type RoleBinding, RoleBindings } from '@osac/types';
 import { useDeleteResource } from '@osac/ui-components/api/use-resource';
+import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 import DeleteResourceModal from '@osac/ui-components/components/Resource/DeleteResourceModal';
 
 import { useTranslation } from '../../hooks/useTranslation';
@@ -54,14 +55,13 @@ const RoleBindingActionsMenu = ({ roleBinding }: RoleBindingActionsMenuProps) =>
           <DropdownItem onClick={() => navigate(`${roleBinding.id}/edit`)}>
             {t('Edit')}
           </DropdownItem>
-          <DropdownItem
+          <DeleteResourceButton
+            isDropdown
             onClick={() => {
               setDeleteOpen(true);
               setOpen(false);
             }}
-          >
-            {t('Delete')}
-          </DropdownItem>
+          />
         </DropdownList>
       </Dropdown>
     </>

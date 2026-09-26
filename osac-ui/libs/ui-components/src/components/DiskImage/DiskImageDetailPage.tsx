@@ -21,6 +21,7 @@ import {
 import type { TFunction } from 'i18next';
 
 import { type DiskImage, DiskImageLifecycle, SourceType } from '@osac/types';
+import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 
 import DiskImageDeleteConfirmModal from './DiskImageDeleteConfirmModal';
 import DiskImageLifecycleLabel from './DiskImageLifecycleLabel';
@@ -93,9 +94,7 @@ const DiskImageDetailActions = ({ diskImage, onDeleted }: DiskImageDetailActions
           )}
           {canDelete && (
             <ActionListItem>
-              <Button variant="danger" onClick={() => setDeleteOpen(true)}>
-                {t('Delete')}
-              </Button>
+              <DeleteResourceButton onClick={() => setDeleteOpen(true)} />
             </ActionListItem>
           )}
         </ActionListGroup>

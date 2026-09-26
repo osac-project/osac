@@ -110,6 +110,7 @@ const AdminBareMetalInstanceTypeTable = ({
                         {
                           title: t('Delete'),
                           onClick: () => setDeleteTarget(bareMetalInstanceType),
+                          isDanger: true,
                         },
                       ]}
                       actionsToggle={({ onToggle, isOpen, toggleRef }) => (

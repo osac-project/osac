@@ -3,6 +3,7 @@ import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 import type { TFunction } from 'i18next';
 
 import { Protocol, type SecurityRule } from '@osac/types';
+import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 
 import { useTranslation } from '../../hooks/useTranslation';
 import { SubtleContent } from '../SubtleContent/SubtleContent';
@@ -96,9 +97,7 @@ export const SecurityGroupRulesTable = ({
                   {t('Edit')}
                 </Button>
                 {' | '}
-                <Button variant="link" isInline isDanger onClick={() => onDeleteRule(index)}>
-                  {t('Delete')}
-                </Button>
+                <DeleteResourceButton variant="link" isInline onClick={() => onDeleteRule(index)} />
               </Td>
             </Tr>
           ))}

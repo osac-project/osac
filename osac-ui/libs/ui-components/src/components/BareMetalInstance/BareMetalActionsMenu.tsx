@@ -3,6 +3,7 @@ import { Dropdown, DropdownItem, DropdownList, MenuToggle } from '@patternfly/re
 import { EllipsisVIcon } from '@patternfly/react-icons/dist/esm/icons/ellipsis-v-icon';
 
 import type { BareMetalInstance } from '@osac/types';
+import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 
 import BareMetalDeleteConfirmModal from './BareMetalDeleteConfirmModal';
 import { useBareMetalActions } from './useBareMetalActions';
@@ -76,17 +77,16 @@ export const BareMetalActionsMenu = ({ instance, onDeleted }: BareMetalActionsMe
           >
             {t('Restart')}
           </DropdownItem>
-          <DropdownItem
-            isDisabled={!canDelete}
+          <DeleteResourceButton
+            isDropdown
+            canDelete={canDelete}
             onClick={() => {
               if (canDelete) {
                 setDeleteOpen(true);
                 setOpen(false);
               }
             }}
-          >
-            {t('Delete')}
-          </DropdownItem>
+          />
         </DropdownList>
       </Dropdown>
     </>

@@ -1,11 +1,10 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Button, Flex } from '@patternfly/react-core';
-import DumpsterIcon from '@patternfly/react-icons/dist/esm/icons/dumpster-icon';
+import { Flex } from '@patternfly/react-core';
 
 import type { Project } from '@osac/types';
+import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 
-import { useTranslation } from '../../../hooks/useTranslation';
 import ProjectDeleteModal from '../ProjectDeleteModal';
 
 interface ProjectDetailsActionButtonsProps {
@@ -13,7 +12,6 @@ interface ProjectDetailsActionButtonsProps {
 }
 
 const ProjectDetailsActionButtons = ({ project }: ProjectDetailsActionButtonsProps) => {
-  const { t } = useTranslation();
   const navigate = useNavigate();
   const [deleteOpen, setDeleteOpen] = useState(false);
 
@@ -31,9 +29,7 @@ const ProjectDetailsActionButtons = ({ project }: ProjectDetailsActionButtonsPro
         spaceItems={{ default: 'spaceItemsSm' }}
         flexWrap={{ default: 'wrap' }}
       >
-        <Button variant="danger" icon={<DumpsterIcon />} onClick={() => setDeleteOpen(true)}>
-          {t('Delete')}
-        </Button>
+        <DeleteResourceButton showIcon onClick={() => setDeleteOpen(true)} />
       </Flex>
     </>
   );

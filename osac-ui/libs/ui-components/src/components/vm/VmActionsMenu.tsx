@@ -4,6 +4,7 @@ import { EllipsisVIcon } from '@patternfly/react-icons/dist/esm/icons/ellipsis-v
 
 import type { ComputeInstance } from '@osac/types';
 import { ComputeInstanceState } from '@osac/types';
+import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 
 import VmDeleteConfirmModal from './DetailsPage/VmDeleteConfirmModal';
 import { useVmPowerAction } from './useVmPowerAction';
@@ -89,9 +90,9 @@ export const VmActionsMenu = ({ vm }: VmActionsMenuProps) => {
           >
             Restart
           </DropdownItem>
-          <DropdownItem
-            value="delete"
-            isDisabled={!canDelete}
+          <DeleteResourceButton
+            isDropdown
+            canDelete={canDelete}
             onClick={() => {
               if (!canDelete) {
                 return;
@@ -99,9 +100,7 @@ export const VmActionsMenu = ({ vm }: VmActionsMenuProps) => {
               setDeleteOpen(true);
               setOpen(false);
             }}
-          >
-            Delete
-          </DropdownItem>
+          />
         </DropdownList>
       </Dropdown>
     </>

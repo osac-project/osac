@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { Dropdown, DropdownItem, DropdownList, MenuToggle } from '@patternfly/react-core';
+import { Dropdown, DropdownList, MenuToggle } from '@patternfly/react-core';
 import { EllipsisVIcon } from '@patternfly/react-icons/dist/esm/icons/ellipsis-v-icon';
 
 import type { Project } from '@osac/types';
+import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 
 import ProjectDeleteModal from './ProjectDeleteModal';
 import { getProjectName } from './utils';
@@ -42,15 +43,13 @@ const ProjectActionsMenu = ({ project }: ProjectActionsMenuProps) => {
         popperProps={{ position: 'right' }}
       >
         <DropdownList>
-          <DropdownItem
-            value="delete"
+          <DeleteResourceButton
+            isDropdown
             onClick={() => {
               setDeleteOpen(true);
               setOpen(false);
             }}
-          >
-            {t('Delete')}
-          </DropdownItem>
+          />
         </DropdownList>
       </Dropdown>
     </>

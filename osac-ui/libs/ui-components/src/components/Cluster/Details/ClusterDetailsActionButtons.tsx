@@ -2,10 +2,10 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Alert, AlertActionLink, Button, Flex, Modal } from '@patternfly/react-core';
 import DownloadIcon from '@patternfly/react-icons/dist/esm/icons/download-icon';
-import DumpsterIcon from '@patternfly/react-icons/dist/esm/icons/dumpster-icon';
 import KeyIcon from '@patternfly/react-icons/dist/esm/icons/key-icon';
 
 import { type Cluster, ClusterState } from '@osac/types';
+import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 import { getErrorMessage } from '@osac/ui-components/utils/error';
 
 import ClusterPasswordModal from './ClusterPasswordModal';
@@ -88,18 +88,15 @@ const ClusterDetailsActionButtons = ({ cluster }: ClusterDetailsActionButtonsPro
         >
           {t('View password')}
         </Button>
-        <Button
-          variant="danger"
-          icon={<DumpsterIcon />}
-          isDisabled={!canDelete}
+        <DeleteResourceButton
+          showIcon
+          canDelete={canDelete}
           onClick={() => {
             if (canDelete) {
               setDeleteOpen(true);
             }
           }}
-        >
-          {t('Delete')}
-        </Button>
+        />
       </Flex>
     </>
   );

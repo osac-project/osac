@@ -75,6 +75,9 @@ CHARTS         := charts
 DEPS_CHART     := $(CHARTS)/osac-deps
 INFRA_CHART    := $(CHARTS)/osac-infra
 OSAC_CHART     := $(CHARTS)/osac
+# Runtime supplies hostnames and credentials; use the minimal CI fixture for
+# local chart checks without loosening the required-values schema.
+HELM_VALIDATION_VALUES := $(OSAC_CHART)/ci/default-values.yaml
 
 # Values file selection: kind uses kind-specific files, OpenShift uses profile files.
 # dev-full reuses the identical dev control-plane values, plus a small overlay that
@@ -394,13 +397,13 @@ helm-deps: ## Build Helm chart dependencies
 helm-lint: helm-deps ## Lint all charts
 	helm lint $(DEPS_CHART)
 	helm lint $(INFRA_CHART)
-	helm lint $(OSAC_CHART) --values $(OSAC_CHART)/ci/default-values.yaml
+	helm lint $(OSAC_CHART) --values $(HELM_VALIDATION_VALUES)
 
 .PHONY: helm-template
 helm-template: ## Dry-run render all templates
 	helm template osac-deps $(DEPS_CHART)
 	helm template osac-infra $(INFRA_CHART)
-	helm template osac $(OSAC_CHART) --values $(OSAC_CHART)/ci/default-values.yaml
+	helm template osac $(OSAC_CHART) --values $(HELM_VALIDATION_VALUES)
 
 .PHONY: csi-render-test
 csi-render-test: helm-deps ## Verify CSI namespace and ConfigMap rendering modes

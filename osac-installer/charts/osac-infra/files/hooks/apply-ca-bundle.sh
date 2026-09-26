@@ -100,9 +100,17 @@ fi
 INGRESS_CA_SOURCE=""
 if [[ "${USE_DEFAULT_CAS}" == "true" ]]; then
   echo "Extracting OpenShift ingress CA from openshift-ingress-operator/router-ca..."
-  INGRESS_CA_DATA=$(oc_run get secret router-ca \
+  if ! INGRESS_CA_DATA=$(oc_run get secret router-ca \
     -n openshift-ingress-operator \
-    -o jsonpath='{.data.tls\.crt}' 2>/dev/null || true)
+    -o jsonpath='{.data.tls\.crt}' 2>&1); then
+    if echo "${INGRESS_CA_DATA}" | grep -qi "not found"; then
+      echo "  router-ca secret not found — skipping ingress CA (non-OpenShift cluster)"
+      INGRESS_CA_DATA=""
+    else
+      echo "ERROR: failed to read router-ca secret: ${INGRESS_CA_DATA}" >&2
+      exit 1
+    fi
+  fi
   if [[ -n "${INGRESS_CA_DATA}" ]]; then
     echo "  creating ingress-ca secret in ${CERT_MANAGER_NAMESPACE}"
     cat <<EOF | oc_run apply -f -
@@ -118,7 +126,7 @@ EOF
     INGRESS_CA_SOURCE="yes"
     echo "  ingress-ca secret created"
   else
-    echo "  router-ca secret not found or empty — skipping ingress CA"
+    echo "  router-ca data is empty — skipping ingress CA"
   fi
 fi
 

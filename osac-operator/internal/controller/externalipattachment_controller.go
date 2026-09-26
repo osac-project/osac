@@ -18,6 +18,9 @@ import (
 	"fmt"
 	"time"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -45,7 +48,33 @@ import (
 
 const (
 	osacExternalIPAttachmentFinalizer = "osac.openshift.io/externalipattachment-finalizer"
+
+	// fulfillmentLookupTimeout bounds the gRPC Get call to the fulfillment-service
+	// when verifying whether a missing Kubernetes CR still exists at the source.
+	// A generous timeout avoids masking transient network hiccups as permanent errors
+	// while preventing a hung gRPC call from blocking the reconciler indefinitely.
+	fulfillmentLookupTimeout = 10 * time.Second
 )
+
+// bareMetalInstanceGetter is a subset of privatev1.BareMetalInstancesClient used
+// to verify BMI existence in the fulfillment-service when the Kubernetes CR is absent.
+type bareMetalInstanceGetter interface {
+	Get(
+		context.Context,
+		*privatev1.BareMetalInstancesGetRequest,
+		...grpc.CallOption,
+	) (*privatev1.BareMetalInstancesGetResponse, error)
+}
+
+// computeInstanceGetter is a subset of privatev1.ComputeInstancesClient used
+// to verify ComputeInstance existence in the fulfillment-service when the Kubernetes CR is absent.
+type computeInstanceGetter interface {
+	Get(
+		context.Context,
+		*privatev1.ComputeInstancesGetRequest,
+		...grpc.CallOption,
+	) (*privatev1.ComputeInstancesGetResponse, error)
+}
 
 // ExternalIPAttachmentReconciler reconciles ExternalIPAttachment CRs.
 //
@@ -76,6 +105,12 @@ type ExternalIPAttachmentReconciler struct {
 	// networkClassesClient lists NetworkClasses to find the default/singleton used
 	// as the dispatcher input. Nil when gRPC is not configured.
 	networkClassesClient privatev1.NetworkClassesClient
+	// bareMetalInstancesClient is the fulfillment-service source of truth used
+	// when a BMI CR has not yet been projected into Kubernetes.
+	bareMetalInstancesClient bareMetalInstanceGetter
+	// computeInstancesClient is the fulfillment-service source of truth used
+	// when a ComputeInstance CR has not yet been projected into Kubernetes.
+	computeInstancesClient computeInstanceGetter
 	// NetworkProvisioningEnabled controls whether the controller dispatches AAP
 	// provisioning jobs. When false, resources are set to Ready immediately.
 	NetworkProvisioningEnabled bool
@@ -98,6 +133,8 @@ func NewExternalIPAttachmentReconciler(
 	targetCluster mc.ClusterName,
 	resolver *dispatcher.Resolver,
 	networkClassesClient privatev1.NetworkClassesClient,
+	bareMetalInstancesClient privatev1.BareMetalInstancesClient,
+	computeInstancesClient privatev1.ComputeInstancesClient,
 ) *ExternalIPAttachmentReconciler {
 	if mgr == nil {
 		panic("mgr must not be nil")
@@ -132,6 +169,8 @@ func NewExternalIPAttachmentReconciler(
 		targetCluster:              targetCluster,
 		Resolver:                   resolver,
 		networkClassesClient:       networkClassesClient,
+		bareMetalInstancesClient:   bareMetalInstancesClient,
+		computeInstancesClient:     computeInstancesClient,
 	}
 }
 
@@ -474,11 +513,41 @@ func (r *ExternalIPAttachmentReconciler) resolveComputeInstance(
 		return nil, ctrl.Result{}, err
 	}
 	if len(ciList.Items) == 0 {
-		log.Info("auto-detaching: ComputeInstance no longer exists", "computeInstanceUUID", *attachment.Spec.ComputeInstance)
-		if err := r.Delete(ctx, attachment); err != nil {
-			return nil, ctrl.Result{}, client.IgnoreNotFound(err)
+		ciUUID := *attachment.Spec.ComputeInstance
+		if r.computeInstancesClient == nil {
+			return nil, ctrl.Result{}, fmt.Errorf("ComputeInstance source client is not configured for %s", ciUUID)
 		}
-		return nil, ctrl.Result{RequeueAfter: time.Second}, nil
+
+		lookupCtx, lookupCancel := context.WithTimeout(ctx, fulfillmentLookupTimeout)
+		defer lookupCancel()
+		sourceResponse, err := r.computeInstancesClient.Get(lookupCtx, privatev1.ComputeInstancesGetRequest_builder{
+			Id: ciUUID,
+		}.Build())
+		if err != nil {
+			if status.Code(err) == codes.NotFound {
+				log.Info("auto-detaching: ComputeInstance not found in fulfillment-service", "computeInstanceUUID", ciUUID)
+				if deleteErr := r.Delete(ctx, attachment); deleteErr != nil {
+					return nil, ctrl.Result{}, client.IgnoreNotFound(deleteErr)
+				}
+				return nil, ctrl.Result{RequeueAfter: time.Second}, nil
+			}
+			log.Error(err, "failed to resolve ComputeInstance in fulfillment-service", "computeInstanceUUID", ciUUID)
+			return nil, ctrl.Result{}, err
+		}
+
+		if sourceResponse == nil || sourceResponse.GetObject() == nil {
+			return nil, ctrl.Result{}, fmt.Errorf("fulfillment-service returned an empty ComputeInstance for %s", ciUUID)
+		}
+		if sourceResponse.GetObject().GetMetadata().GetDeletionTimestamp() != nil {
+			log.Info("auto-detaching: ComputeInstance is being deleted in fulfillment-service", "computeInstanceUUID", ciUUID)
+			if deleteErr := r.Delete(ctx, attachment); deleteErr != nil {
+				return nil, ctrl.Result{}, client.IgnoreNotFound(deleteErr)
+			}
+			return nil, ctrl.Result{RequeueAfter: time.Second}, nil
+		}
+
+		log.Info("ComputeInstance CR not yet projected, waiting", "computeInstanceUUID", ciUUID)
+		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
 	ci := &ciList.Items[0]
 
@@ -599,11 +668,41 @@ func (r *ExternalIPAttachmentReconciler) resolveBaremetalInstance(
 		return nil, ctrl.Result{}, err
 	}
 	if len(bmiList.Items) == 0 {
-		log.Info("auto-detaching: BareMetalInstance no longer exists", "baremetalInstanceUUID", *attachment.Spec.BaremetalInstance)
-		if err := r.Delete(ctx, attachment); err != nil {
-			return nil, ctrl.Result{}, client.IgnoreNotFound(err)
+		bmiUUID := *attachment.Spec.BaremetalInstance
+		if r.bareMetalInstancesClient == nil {
+			return nil, ctrl.Result{}, fmt.Errorf("BareMetalInstance source client is not configured for %s", bmiUUID)
 		}
-		return nil, ctrl.Result{RequeueAfter: time.Second}, nil
+
+		lookupCtx, lookupCancel := context.WithTimeout(ctx, fulfillmentLookupTimeout)
+		defer lookupCancel()
+		sourceResponse, err := r.bareMetalInstancesClient.Get(lookupCtx, privatev1.BareMetalInstancesGetRequest_builder{
+			Id: bmiUUID,
+		}.Build())
+		if err != nil {
+			if status.Code(err) == codes.NotFound {
+				log.Info("auto-detaching: BareMetalInstance not found in fulfillment-service", "baremetalInstanceUUID", bmiUUID)
+				if deleteErr := r.Delete(ctx, attachment); deleteErr != nil {
+					return nil, ctrl.Result{}, client.IgnoreNotFound(deleteErr)
+				}
+				return nil, ctrl.Result{RequeueAfter: time.Second}, nil
+			}
+			log.Error(err, "failed to resolve BareMetalInstance in fulfillment-service", "baremetalInstanceUUID", bmiUUID)
+			return nil, ctrl.Result{}, err
+		}
+
+		if sourceResponse == nil || sourceResponse.GetObject() == nil {
+			return nil, ctrl.Result{}, fmt.Errorf("fulfillment-service returned an empty BareMetalInstance for %s", bmiUUID)
+		}
+		if sourceResponse.GetObject().GetMetadata().GetDeletionTimestamp() != nil {
+			log.Info("auto-detaching: BareMetalInstance is being deleted in fulfillment-service", "baremetalInstanceUUID", bmiUUID)
+			if deleteErr := r.Delete(ctx, attachment); deleteErr != nil {
+				return nil, ctrl.Result{}, client.IgnoreNotFound(deleteErr)
+			}
+			return nil, ctrl.Result{RequeueAfter: time.Second}, nil
+		}
+
+		log.Info("BareMetalInstance CR not yet projected, waiting", "baremetalInstanceUUID", bmiUUID)
+		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
 	bmi := &bmiList.Items[0]
 

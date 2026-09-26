@@ -1,4 +1,4 @@
-package reconciliation_test
+package reconciliation
 
 import (
 	"context"
@@ -12,7 +12,6 @@ import (
 
 	"github.com/osac-project/osac-metering/internal/events"
 	"github.com/osac-project/osac-metering/internal/projection"
-	"github.com/osac-project/osac-metering/internal/reconciliation"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -307,7 +306,7 @@ var _ = Describe("ExternalIP pool loader", func() {
 	})
 
 	It("returns immutable pool identities", func() {
-		pools, err := reconciliation.LoadExternalIPPools(context.Background(), networkPoolClient{
+		pools, err := LoadExternalIPPools(context.Background(), networkPoolClient{
 			response: &privatev1.ExternalIPPoolsListResponse{
 				Total: 1,
 				Items: []*privatev1.ExternalIPPool{{
@@ -324,7 +323,7 @@ var _ = Describe("ExternalIP pool loader", func() {
 	})
 
 	It("preserves an IPv6 pool family", func() {
-		pools, err := reconciliation.LoadExternalIPPools(context.Background(), networkPoolClient{
+		pools, err := LoadExternalIPPools(context.Background(), networkPoolClient{
 			response: &privatev1.ExternalIPPoolsListResponse{
 				Total: 1,
 				Items: []*privatev1.ExternalIPPool{{

@@ -215,6 +215,8 @@ func run(ctx context.Context, logger logr.Logger, cfg *config) error {
 	natGatewayClient := privatev1.NewNATGatewaysClient(grpcConn)
 	externalIPPoolClient := privatev1.NewExternalIPPoolsClient(grpcConn)
 	volumeClient := privatev1.NewVolumesClient(grpcConn)
+	bareMetalClient := privatev1.NewBareMetalInstancesClient(grpcConn)
+	bmaasPresence := heartbeat.NewBMaaSPresence()
 	reconciler := reconciliation.NewReconciler(
 		computeClient,
 		clusterClient,
@@ -222,11 +224,13 @@ func run(ctx context.Context, logger logr.Logger, cfg *config) error {
 		natGatewayClient,
 		externalIPPoolClient,
 		volumeClient,
+		bareMetalClient,
 		store,
 		publisher,
 		logger,
 		cfg.heartbeatInterval,
 		cfg.deploymentID,
+		bmaasPresence,
 	)
 	pools, err := reconciliation.LoadExternalIPPools(ctx, externalIPPoolClient)
 	if err != nil {
@@ -247,7 +251,7 @@ func run(ctx context.Context, logger logr.Logger, cfg *config) error {
 	health.ready.Store(true)
 	logger.Info("service ready")
 
-	hbGen := heartbeat.NewGenerator(store, publisher, logger, cfg.heartbeatInterval)
+	hbGen := heartbeat.NewGenerator(store, publisher, logger, cfg.heartbeatInterval, bmaasPresence)
 
 	var wg sync.WaitGroup
 

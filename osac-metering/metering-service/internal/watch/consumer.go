@@ -262,6 +262,9 @@ func projectionIsAhead(existing *projection.ResourceState, version int32, curren
 	if existing == nil {
 		return false
 	}
+	if existing.Deleted {
+		return true
+	}
 	if existing.FulfillmentVersion > version {
 		return true
 	}
@@ -448,6 +451,9 @@ func (c *Consumer) handleBareMetalDeletion(
 	dims map[string]any,
 	transitionTime time.Time,
 ) error {
+	if existing != nil && existing.Deleted {
+		return nil
+	}
 	previousState := ""
 	if existing != nil {
 		previousState = existing.CurrentState
@@ -483,8 +489,13 @@ func (c *Consumer) handleBareMetalDeletion(
 		return err
 	}
 	if existing != nil {
-		if err := c.store.Delete(ctx, mapper.ResourceID()); err != nil {
+		deleted, err := c.store.DeleteIfVersion(ctx, mapper.ResourceID(), mapper.FulfillmentVersion())
+		if err != nil {
 			return fmt.Errorf("deleting projection for %s: %w", mapper.ResourceID(), err)
+		}
+		if !deleted {
+			c.logger.Info("skipping stale BMaaS delete after projection changed",
+				"resource_id", mapper.ResourceID(), "event_version", mapper.FulfillmentVersion())
 		}
 	}
 	return nil

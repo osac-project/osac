@@ -42,6 +42,7 @@ type Generator struct {
 	publisher kafkapub.EventPublisher
 	logger    logr.Logger
 	interval  time.Duration
+	presence  *BMaaSPresence
 }
 
 func NewGenerator(
@@ -49,12 +50,14 @@ func NewGenerator(
 	publisher kafkapub.EventPublisher,
 	logger logr.Logger,
 	interval time.Duration,
+	presence *BMaaSPresence,
 ) *Generator {
 	return &Generator{
 		store:     store,
 		publisher: publisher,
 		logger:    logger,
 		interval:  interval,
+		presence:  presence,
 	}
 }
 
@@ -82,6 +85,7 @@ func (g *Generator) tick(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("querying billable resources: %w", err)
 	}
+	billable = g.filterBillable(billable)
 
 	g.updateGauges(billable)
 
@@ -122,6 +126,21 @@ func (g *Generator) tick(ctx context.Context) error {
 	return nil
 }
 
+func (g *Generator) filterBillable(billable []projection.ResourceState) []projection.ResourceState {
+	if g.presence == nil {
+		return billable
+	}
+	filtered := make([]projection.ResourceState, 0, len(billable))
+	for _, state := range billable {
+		if state.ResourceType == events.ResourceTypeBareMetalInstance && !g.presence.Contains(state.ResourceID) {
+			g.logger.Info("skipping heartbeat for BMaaS projection absent from fulfillment snapshot", "resource_id", state.ResourceID)
+			continue
+		}
+		filtered = append(filtered, state)
+	}
+	return filtered
+}
+
 // publishResourceHeartbeats publishes every event in one resource's N+1
 // fan-out. A failure partway through means the resource is not checkpointed
 // this tick, but it does not prevent other resources from heartbeating.
@@ -152,15 +171,25 @@ func (g *Generator) buildHeartbeatEvents(state *projection.ResourceState, now ti
 		}
 		baseID = fmt.Sprintf("%s/%s", baseID, identity)
 	}
-	return BuildHeartbeatEvents(state, baseID, now, "osac-metering")
+	mute := BMaaSMeterMute{}
+	if state.ResourceType == events.ResourceTypeBareMetalInstance && g.presence != nil {
+		mute = g.presence.MeterMute(state.ResourceID)
+	}
+	return BuildHeartbeatEventsWithMutes(state, baseID, now, "osac-metering", mute)
 }
 
 // BuildHeartbeatEvents builds the heartbeat event fan-out for one resource.
 // BMaaS has independent allocation and consumption meters; all other resource
 // types retain the existing resource decomposition behavior.
 func BuildHeartbeatEvents(state *projection.ResourceState, baseID string, now time.Time, source string) ([]cloudevents.Event, error) {
+	return BuildHeartbeatEventsWithMutes(state, baseID, now, source, BMaaSMeterMute{})
+}
+
+// BuildHeartbeatEventsWithMutes builds heartbeat events while suppressing the
+// BMaaS meters muted by the latest fulfillment snapshot.
+func BuildHeartbeatEventsWithMutes(state *projection.ResourceState, baseID string, now time.Time, source string, mute BMaaSMeterMute) ([]cloudevents.Event, error) {
 	if state.ResourceType == events.ResourceTypeBareMetalInstance {
-		return buildBMaaSHeartbeatEvents(state, baseID, now, source)
+		return buildBMaaSHeartbeatEvents(state, baseID, now, source, mute)
 	}
 
 	buildFn := func(dims map[string]any, eventID string) (cloudevents.Event, error) {
@@ -169,18 +198,19 @@ func BuildHeartbeatEvents(state *projection.ResourceState, baseID string, now ti
 	return events.BuildResourceEvents(state.ResourceType, state.BillingDimensions, baseID, buildFn)
 }
 
-func buildBMaaSHeartbeatEvents(state *projection.ResourceState, baseID string, now time.Time, source string) ([]cloudevents.Event, error) {
+func buildBMaaSHeartbeatEvents(state *projection.ResourceState, baseID string, now time.Time, source string, mute BMaaSMeterMute) ([]cloudevents.Event, error) {
 	if !events.IsAllocationBillableState(state.CurrentState) {
 		return nil, nil
 	}
 
-	intervals := events.BMaaSMeterIntervals{AllocationSince: state.BMaaSMeterState.Allocation.ActiveSince}
+	intervals := events.BMaaSMeterIntervals{}
 	allocationType := ""
-	if intervals.AllocationSince != nil {
+	if !mute.Allocation && state.BMaaSMeterState.Allocation.ActiveSince != nil {
+		intervals.AllocationSince = state.BMaaSMeterState.Allocation.ActiveSince
 		allocationType = events.EventHeartbeat
 	}
 	consumptionType := ""
-	if events.IsConsumptionBillableState(state.CurrentState) {
+	if !mute.Consumption && events.IsConsumptionBillableState(state.CurrentState) {
 		if state.BMaaSMeterState.Consumption.ActiveSince != nil {
 			intervals.ConsumptionSince = state.BMaaSMeterState.Consumption.ActiveSince
 			consumptionType = events.EventHeartbeat
@@ -220,9 +250,13 @@ func buildHeartbeatEvent(state *projection.ResourceState, eventID string, dims m
 
 	events.SetOSACExtensions(&ce, state.ResourceID, state.ResourceType, state.TenantID, state.ProjectID)
 
-	duration := float64(0)
-	if durationSeconds != nil {
-		duration = *durationSeconds
+	var duration *float64
+	if state.ResourceType != events.ResourceTypeBareMetalInstance {
+		seconds := float64(0)
+		if durationSeconds != nil {
+			seconds = *durationSeconds
+		}
+		duration = &seconds
 	}
 
 	data := heartbeatData{
@@ -282,7 +316,7 @@ type heartbeatData struct {
 	TenantID          string         `json:"tenant_id"`
 	ProjectID         *string        `json:"project_id"`
 	CurrentState      string         `json:"current_state"`
-	DurationSeconds   float64        `json:"duration_seconds"`
+	DurationSeconds   *float64       `json:"duration_seconds,omitempty"`
 	Usage             *schema.Usage  `json:"usage,omitempty"`
 	BillingDimensions map[string]any `json:"billing_dimensions"`
 	SchemaVersion     string         `json:"schema_version"`

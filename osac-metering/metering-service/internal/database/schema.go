@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS metering_resource_state (
     fulfillment_version INT       NOT NULL,
     billing_dimensions JSONB      NOT NULL DEFAULT '{}'::JSONB,
     component_billable_since JSONB NOT NULL DEFAULT '{}'::JSONB,
+    deleted_at        TIMESTAMPTZ,
     created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -50,6 +51,9 @@ CREATE TABLE IF NOT EXISTS metering_resource_meter_state (
     first_started_at TIMESTAMPTZ,
     PRIMARY KEY (resource_id, meter_type)
 );
+-- CREATE TABLE IF NOT EXISTS does not alter an existing table created before
+-- deleted_at was introduced, so keep the upgrade idempotent too.
+ALTER TABLE metering_resource_state ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS idx_metering_resource_state_billable
     ON metering_resource_state (is_billable, last_heartbeat_at)

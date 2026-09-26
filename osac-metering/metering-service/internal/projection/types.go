@@ -30,6 +30,7 @@ type ResourceState struct {
 	ResourceType  string
 	TenantID      string
 	ProjectID     string
+	Deleted       bool
 	CurrentState  string
 	PreviousState string
 	IsBillable    bool

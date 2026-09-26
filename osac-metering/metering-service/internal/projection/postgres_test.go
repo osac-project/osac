@@ -322,22 +322,98 @@ var _ = Describe("PostgresStore", func() {
 	})
 
 	Describe("Delete", func() {
-		It("Deletes an existing resource", func() {
+		It("does not delete after the projection advances and retains its watermark", func() {
+			ctx := context.Background()
+			state := makeState("vm-delete-version", 2)
+			Expect(store.Upsert(ctx, state)).To(Succeed())
+
+			newer := state
+			newer.FulfillmentVersion = 3
+			newer.CurrentState = "STOPPED"
+			Expect(store.Upsert(ctx, newer)).To(Succeed())
+
+			deleted, err := store.DeleteIfVersion(ctx, state.ResourceID, state.FulfillmentVersion)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(deleted).To(BeFalse())
+			got, err := store.Get(ctx, state.ResourceID)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(got.Deleted).To(BeFalse())
+			Expect(got.FulfillmentVersion).To(Equal(newer.FulfillmentVersion))
+
+			deleted, err = store.DeleteIfVersion(ctx, state.ResourceID, newer.FulfillmentVersion)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(deleted).To(BeTrue())
+
+			got, err = store.Get(ctx, state.ResourceID)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(got).ToNot(BeNil())
+			Expect(got.FulfillmentVersion).To(Equal(newer.FulfillmentVersion))
+			Expect(got.Deleted).To(BeTrue())
+
+			results, err := store.ListAll(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(results).To(BeEmpty())
+
+			Expect(store.Upsert(ctx, newer)).To(MatchError(projection.ErrStaleVersion))
+
+			newest := newer
+			newest.FulfillmentVersion++
+			Expect(store.Upsert(ctx, newest)).To(MatchError(projection.ErrStaleVersion))
+		})
+
+		It("clears active BMaaS meter intervals when tombstoning", func() {
+			ctx := context.Background()
+			state := makeState("bmi-delete-meters", 4)
+			state.ResourceType = schema.ResourceTypeBareMetalInstance
+			allocationSince := state.TransitionTime.Add(-2 * time.Hour)
+			consumptionSince := state.TransitionTime.Add(-time.Hour)
+			state.BMaaSMeterState = projection.BMaaSMeterState{
+				Allocation: projection.MeterState{
+					ActiveSince:    &allocationSince,
+					FirstStartedAt: &allocationSince,
+				},
+				Consumption: projection.MeterState{
+					ActiveSince:    &consumptionSince,
+					FirstStartedAt: &consumptionSince,
+				},
+			}
+			Expect(store.Upsert(ctx, state)).To(Succeed())
+
+			deleted, err := store.DeleteIfVersion(ctx, state.ResourceID, state.FulfillmentVersion)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(deleted).To(BeTrue())
+
+			got, err := store.Get(ctx, state.ResourceID)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(got.Deleted).To(BeTrue())
+			Expect(got.IsBillable).To(BeFalse())
+			Expect(got.BillableSince).To(BeNil())
+			Expect(got.BMaaSMeterState.Allocation.ActiveSince).To(BeNil())
+			Expect(got.BMaaSMeterState.Consumption.ActiveSince).To(BeNil())
+			Expect(got.BMaaSMeterState.Allocation.FirstStartedAt).ToNot(BeNil())
+			Expect(got.BMaaSMeterState.Consumption.FirstStartedAt).ToNot(BeNil())
+		})
+
+		It("retains a deletion tombstone for an existing resource", func() {
 			ctx := context.Background()
 			state := makeState("vm-del", 1)
 			Expect(store.Upsert(ctx, state)).To(Succeed())
 
-			Expect(store.Delete(ctx, "vm-del")).To(Succeed())
+			deleted, err := store.DeleteIfVersion(ctx, "vm-del", state.FulfillmentVersion)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(deleted).To(BeTrue())
 
 			got, err := store.Get(ctx, "vm-del")
 			Expect(err).ToNot(HaveOccurred())
-			Expect(got).To(BeNil())
+			Expect(got).ToNot(BeNil())
+			Expect(got.FulfillmentVersion).To(Equal(int32(1)))
 		})
 
 		It("Returns nil for non-existent resource", func() {
 			ctx := context.Background()
-			err := store.Delete(ctx, "nonexistent")
+			deleted, err := store.DeleteIfVersion(ctx, "nonexistent", 1)
 			Expect(err).NotTo(HaveOccurred())
+			Expect(deleted).To(BeFalse())
 		})
 	})
 

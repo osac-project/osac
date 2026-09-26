@@ -140,7 +140,7 @@ func (s *mockStore) Upsert(_ context.Context, state projection.ResourceState) er
 		return err
 	}
 	if existing, ok := s.states[state.ResourceID]; ok {
-		if existing.FulfillmentVersion > state.FulfillmentVersion {
+		if existing.Deleted || existing.FulfillmentVersion > state.FulfillmentVersion {
 			return projection.ErrStaleVersion
 		}
 	}
@@ -148,11 +148,24 @@ func (s *mockStore) Upsert(_ context.Context, state projection.ResourceState) er
 	return nil
 }
 
-func (s *mockStore) Delete(_ context.Context, resourceID string) error {
+func (s *mockStore) DeleteIfVersion(_ context.Context, resourceID string, version int32) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.states, resourceID)
-	return nil
+	state, ok := s.states[resourceID]
+	if !ok || state.Deleted || state.FulfillmentVersion > version {
+		return false, nil
+	}
+	state.Deleted = true
+	if state.FulfillmentVersion < version {
+		state.FulfillmentVersion = version
+	}
+	state.IsBillable = false
+	state.BillableSince = nil
+	state.ComponentBillableSince = nil
+	state.BMaaSMeterState.Allocation.ActiveSince = nil
+	state.BMaaSMeterState.Consumption.ActiveSince = nil
+	s.states[resourceID] = state
+	return true, nil
 }
 
 func (s *mockStore) ListBillable(_ context.Context) ([]projection.ResourceState, error) {
@@ -160,7 +173,7 @@ func (s *mockStore) ListBillable(_ context.Context) ([]projection.ResourceState,
 	defer s.mu.Unlock()
 	var result []projection.ResourceState
 	for _, state := range s.states {
-		if state.IsBillable {
+		if state.IsBillable && !state.Deleted {
 			result = append(result, state)
 		}
 	}
@@ -172,7 +185,9 @@ func (s *mockStore) ListAll(_ context.Context) ([]projection.ResourceState, erro
 	defer s.mu.Unlock()
 	var result []projection.ResourceState
 	for _, state := range s.states {
-		result = append(result, state)
+		if !state.Deleted {
+			result = append(result, state)
+		}
 	}
 	return result, nil
 }
@@ -1157,7 +1172,7 @@ var _ = Describe("Consumer", func() {
 			Expect(pub.published[0].Type()).To(Equal(events.EventResumed))
 		})
 
-		It("deletes projection on OBJECT_DELETED and publishes event", func() {
+		It("tombstones projection on OBJECT_DELETED and publishes event", func() {
 			store := newMockStore()
 			now := time.Now().UTC().Truncate(time.Microsecond)
 			store.states["vm-del"] = projection.ResourceState{
@@ -1199,7 +1214,8 @@ var _ = Describe("Consumer", func() {
 
 			store.mu.Lock()
 			defer store.mu.Unlock()
-			Expect(store.states).ToNot(HaveKey("vm-del"))
+			Expect(store.states).To(HaveKey("vm-del"))
+			Expect(store.states["vm-del"].Deleted).To(BeTrue())
 		})
 
 		It("does not publish a stale Watch snapshot after a newer snapshot advanced the projection", func() {
@@ -2591,7 +2607,8 @@ var _ = Describe("Consumer", func() {
 
 			store.mu.Lock()
 			defer store.mu.Unlock()
-			Expect(store.states).ToNot(HaveKey("cl-del"))
+			Expect(store.states).To(HaveKey("cl-del"))
+			Expect(store.states["cl-del"].Deleted).To(BeTrue())
 		})
 
 		It("publishes created.v1 and seeds a billable projection for a RUNNING BMaaS object", func() {
@@ -3249,7 +3266,8 @@ var _ = Describe("Consumer", func() {
 			pub.mu.Unlock()
 
 			store.mu.Lock()
-			Expect(store.states).NotTo(HaveKey("bmi-delete"))
+			Expect(store.states).To(HaveKey("bmi-delete"))
+			Expect(store.states["bmi-delete"].Deleted).To(BeTrue())
 			store.mu.Unlock()
 		})
 

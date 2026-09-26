@@ -42,6 +42,7 @@ func TestScanResourceStateIncludesMeterState(t *testing.T) {
 		int32(4),
 		[]byte(`{"bm_instance_type":"large"}`),
 		[]byte(`{}`),
+		(*time.Time)(nil),
 		&allocationActive,
 		&allocationFirst,
 		&consumptionActive,

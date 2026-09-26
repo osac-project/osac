@@ -18,6 +18,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/osac-project/osac-metering/adapters"
+	"github.com/osac-project/osac-metering/schema"
 )
 
 // helper to build a CloudEvent from the canonical format
@@ -64,6 +65,44 @@ func withUsage(ce cloudevents.Event, quantity, unit string) cloudevents.Event {
 		"quantity":  quantity,
 		"unit":      unit,
 		"precision": "microsecond",
+	}
+	ExpectWithOffset(1, ce.SetData(cloudevents.ApplicationJSON, data)).To(Succeed())
+	return ce
+}
+
+func buildBMaaSCloudEvent(
+	id, ceType, meterType, currentState string,
+	eventTime, transitionTime time.Time, durationSeconds float64,
+	includeLifecycleFields bool,
+) cloudevents.Event {
+	ce := cloudevents.NewEvent()
+	ce.SetSpecVersion("1.0")
+	ce.SetID(id)
+	ce.SetType(ceType)
+	ce.SetSource("osac-metering")
+	ce.SetSubject(schema.ResourceTypeBareMetalInstance + "/bmi-001")
+	ce.SetTime(eventTime)
+	ce.SetDataContentType("application/json")
+
+	data := map[string]any{
+		"resource_id":      "bmi-001",
+		"resource_type":    schema.ResourceTypeBareMetalInstance,
+		"tenant_id":        "tenant-1",
+		"project_id":       "project-1",
+		"current_state":    currentState,
+		"duration_seconds": durationSeconds,
+		"schema_version":   schema.SchemaVersion,
+		"billing_dimensions": map[string]any{
+			"meter_type":       meterType,
+			"bm_instance_type": "bmi-type-gpu-large",
+			"catalog_item":     "bmi-gpu-workstation",
+		},
+	}
+	if includeLifecycleFields {
+		data["catalog_item_id"] = "bmi-gpu-workstation"
+		data["template_id"] = "tmpl-bmaas"
+		data["previous_state"] = "PROVISIONING"
+		data["transition_time"] = transitionTime.Format(time.RFC3339Nano)
 	}
 	ExpectWithOffset(1, ce.SetData(cloudevents.ApplicationJSON, data)).To(Succeed())
 	return ce
@@ -387,6 +426,89 @@ var _ = Describe("translateEvent", func() {
 			Expect(payload).NotTo(HaveKey("usage"))
 		})
 
+	})
+
+	Describe("BMaaS events", func() {
+		It("translates lifecycle, heartbeat, and suspension events with authoritative timing", func() {
+			eventTime := time.Date(2026, 9, 14, 12, 0, 5, 0, time.UTC)
+			transitionTime := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
+			cases := []struct {
+				name                   string
+				id                     string
+				ceType                 string
+				meterType              string
+				currentState           string
+				durationSeconds        float64
+				includeLifecycleFields bool
+				expectedTransitionTime any
+			}{
+				{
+					name:                   "allocation started",
+					id:                     "ce-bmaas-allocation",
+					ceType:                 "osac.resource.started.v1",
+					meterType:              "allocation",
+					currentState:           "RUNNING",
+					expectedTransitionTime: "2026-09-14T12:00:00Z",
+					includeLifecycleFields: true,
+				},
+				{
+					name:                   "consumption started",
+					id:                     "ce-bmaas-consumption",
+					ceType:                 "osac.resource.started.v1",
+					meterType:              "consumption",
+					currentState:           "RUNNING",
+					expectedTransitionTime: "2026-09-14T12:00:00Z",
+					includeLifecycleFields: true,
+				},
+				{
+					name:                   "allocation heartbeat",
+					id:                     "hb/bmi-001/1726315200/allocation",
+					ceType:                 "osac.resource.heartbeat.v1",
+					meterType:              "allocation",
+					currentState:           "STOPPED",
+					durationSeconds:        3600,
+					expectedTransitionTime: " ",
+				},
+				{
+					name:                   "consumption suspended",
+					id:                     "ce-bmaas-consumption-suspended",
+					ceType:                 "osac.resource.suspended.v1",
+					meterType:              "consumption",
+					currentState:           "STOPPING",
+					durationSeconds:        1800,
+					expectedTransitionTime: "2026-09-14T12:00:00Z",
+					includeLifecycleFields: true,
+				},
+			}
+
+			for _, tc := range cases {
+				By(tc.name)
+				ce := buildBMaaSCloudEvent(
+					tc.id, tc.ceType, tc.meterType, tc.currentState,
+					eventTime, transitionTime, tc.durationSeconds, tc.includeLifecycleFields,
+				)
+
+				endpoint, payload, err := translateEvent(ce)
+
+				Expect(err).NotTo(HaveOccurred())
+				Expect(endpoint).To(Equal("/bmaas/event"))
+				Expect(payload["meter_type"]).To(Equal(tc.meterType))
+				Expect(payload["bm_instance_type"]).To(Equal("bmi-type-gpu-large"))
+				Expect(payload["catalog_item"]).To(Equal("bmi-gpu-workstation"))
+				Expect(payload["resource_id"]).To(Equal("bmi-001"))
+				Expect(payload["resource_type"]).To(Equal(schema.ResourceTypeBareMetalInstance))
+				Expect(payload["tenant_id"]).To(Equal("tenant-1"))
+				Expect(payload["project_id"]).To(Equal("project-1"))
+				Expect(payload["event_id"]).To(Equal(tc.id))
+				Expect(payload["event_time"]).To(Equal("2026-09-14T12:00:05Z"))
+				Expect(payload["duration_seconds"]).To(BeNumerically("==", tc.durationSeconds))
+				Expect(payload["transition_time"]).To(Equal(tc.expectedTransitionTime))
+
+				if tc.ceType != "osac.resource.heartbeat.v1" {
+					Expect(payload["event_time"]).NotTo(Equal(payload["transition_time"]))
+				}
+			}
+		})
 	})
 
 	Describe("error cases", func() {

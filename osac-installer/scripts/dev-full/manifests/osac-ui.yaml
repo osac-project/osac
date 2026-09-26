@@ -1,3 +1,6 @@
+# dev-full UI resources are pinned to the osac namespace. This must match
+# osac-infra values.osacNamespace (default: osac), where the
+# create-ui-backend-credentials hook creates osac-ui-backend-credentials.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -17,6 +20,7 @@ data:
   OIDC_TLS_INSECURE: "1"
   OIDC_CLIENT_ID: "osac-ui"
   OIDC_ISSUER_URL: "https://keycloak.osac.localhost:8443/realms/osac"
+  OIDC_SERVICE_CLIENT_ID: "osac-ui-backend"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -35,6 +39,7 @@ spec:
       labels:
         app: osac-ui
     spec:
+      automountServiceAccountToken: false
       containers:
       - name: osac-ui
         image: ghcr.io/osac-project/osac-ui:latest
@@ -45,6 +50,21 @@ spec:
         envFrom:
         - configMapRef:
             name: osac-ui
+        env:
+        # Same-namespace ref: secret is created in osac by osac-infra hook
+        # create-ui-backend-credentials (see deploy-ui.sh namespace guard).
+        - name: OIDC_SERVICE_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: osac-ui-backend-credentials
+              key: client-secret
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
         readinessProbe:
           httpGet:
             path: /health

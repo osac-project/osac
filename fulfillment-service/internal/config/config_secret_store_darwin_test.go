@@ -71,6 +71,8 @@ func TestKeychainAvailable_NoDefaultKeychain(t *testing.T) {
 }
 
 func TestKeychainAvailable_RealKeychainPresent(t *testing.T) {
+	t.Skip("disabled pending investigation of macOS 26.6 keychain behavior")
+
 	setupDefaultKeychain(t, "test-only-password")
 
 	// This verifies the full keychainAvailable() plumbing (stage-1 default-keychain detection under sandboxed

@@ -16,7 +16,6 @@ package vault
 import (
 	"bytes"
 	"context"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +24,7 @@ import (
 	"time"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/tlsconfig"
+	"github.com/osac-project/osac/fulfillment-service/internal/trust"
 )
 
 const (
@@ -33,7 +33,7 @@ const (
 	contentTypeHeader    = "Content-Type"
 )
 
-func newHTTPClient(caPool *x509.CertPool) (*http.Client, error) {
+func newHTTPClient(caPool *trust.CertPool) (*http.Client, error) {
 	transport, ok := http.DefaultTransport.(*http.Transport)
 	if !ok {
 		return nil, errors.New("unexpected default transport type")
@@ -41,7 +41,7 @@ func newHTTPClient(caPool *x509.CertPool) (*http.Client, error) {
 	cloned := transport.Clone()
 	tlsConfig := tlsconfig.NewClientTLSConfig()
 	if caPool != nil {
-		tlsConfig.RootCAs = caPool
+		tlsConfig.RootCAs = caPool.Pool()
 	}
 	cloned.TLSClientConfig = tlsConfig
 	return &http.Client{

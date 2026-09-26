@@ -43,7 +43,7 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
-		// Create server (without notifier for testing):
+		// Create server:
 		tenantsServer, err = NewPrivateTenantsServer().
 			SetLogger(logger).
 			SetAttributionLogic(attribution).

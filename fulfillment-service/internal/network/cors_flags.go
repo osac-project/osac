@@ -32,9 +32,7 @@ import (
 func AddCorsFlags(flags *pflag.FlagSet, name string) {
 	_ = flags.StringSlice(
 		corsFlagName(name, corsAllowedOriginsFlagSuffix),
-		[]string{
-			"*",
-		},
+		[]string{},
 		fmt.Sprintf(corsAllowedOriginsFlagHelp, name),
 	)
 }
@@ -51,5 +49,5 @@ func corsFlagName(name, suffix string) string {
 }
 
 const corsAllowedOriginsFlagHelp = `
-_[ORIGIN...]_ - %s CORS allowed origins.
+_[ORIGIN...]_ - %s CORS allowed origins (Required. No wildcard '*'. Use explicit origins to enable credentialed requests).
 `

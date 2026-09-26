@@ -224,8 +224,7 @@ var _ = Describe("Public clusters", func() {
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"my-node-set": {
-							HostType: publicv1.HostTypeReference_builder{Id: hostTypeId}.Build(),
-							Size:     proto.Int32(4),
+							Size: proto.Int32(4),
 						},
 					},
 				}.Build(),

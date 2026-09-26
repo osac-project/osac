@@ -25,7 +25,6 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -33,7 +32,6 @@ import (
 // PrivateProjectsServerBuilder contains the data and logic needed to create a private projects server.
 type PrivateProjectsServerBuilder struct {
 	logger            *slog.Logger
-	notifier          *database.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -59,12 +57,6 @@ func NewPrivateProjectsServer() *PrivateProjectsServerBuilder {
 // SetLogger sets the logger. This is mandatory.
 func (b *PrivateProjectsServerBuilder) SetLogger(value *slog.Logger) *PrivateProjectsServerBuilder {
 	b.logger = value
-	return b
-}
-
-// SetNotifier sets the database notifier.
-func (b *PrivateProjectsServerBuilder) SetNotifier(value *database.Notifier) *PrivateProjectsServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -126,7 +118,6 @@ func (b *PrivateProjectsServerBuilder) Build() (result *PrivateProjectsServer, e
 	s.generic, err = NewGenericServer[*privatev1.Project]().
 		SetLogger(b.logger).
 		SetService(privatev1.Projects_ServiceDesc.ServiceName).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).

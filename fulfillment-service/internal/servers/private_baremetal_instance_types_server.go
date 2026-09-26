@@ -26,13 +26,11 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 type PrivateBareMetalInstanceTypesServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -54,11 +52,6 @@ func NewPrivateBareMetalInstanceTypesServer() *PrivateBareMetalInstanceTypesServ
 
 func (b *PrivateBareMetalInstanceTypesServerBuilder) SetLogger(value *slog.Logger) *PrivateBareMetalInstanceTypesServerBuilder {
 	b.logger = value
-	return b
-}
-
-func (b *PrivateBareMetalInstanceTypesServerBuilder) SetNotifier(value events.Notifier) *PrivateBareMetalInstanceTypesServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -101,7 +94,6 @@ func (b *PrivateBareMetalInstanceTypesServerBuilder) Build() (result *PrivateBar
 	generic, err := NewGenericServer[*privatev1.BareMetalInstanceType]().
 		SetLogger(b.logger).
 		SetService(privatev1.BareMetalInstanceTypes_ServiceDesc.ServiceName).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).

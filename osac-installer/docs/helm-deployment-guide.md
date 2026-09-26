@@ -163,6 +163,60 @@ All targets require `PLATFORM=kind|openshift PROFILE=dev|vmaas-ci|... NS=<namesp
 | `make test` | Run integration tests (SUITE= required) |
 | `make helm-lint` | Lint all charts |
 
+## Updating Hub CSI Fulfillment Configuration
+
+When hub CSI is enabled, the OSAC chart creates an immutable runtime ConfigMap
+in the CSI namespace. Its default name is `osac-csi-fulfillment-config` in
+`osac-csi`. A normal `helm upgrade` cannot change the data of an existing
+immutable ConfigMap. Update it using this sequence:
+
+1. Edit the active profile's `instance.yaml` with the new fulfillment endpoint
+   and Keycloak issuer URL. The chart takes these from
+   `global.fulfillment.endpoint` and `service.auth.issuerUrl` (the endpoint can
+   also be derived from `service.externalHostname`). Keep any existing
+   `EXTRA_HELM_ARGS` overrides.
+2. During a maintenance window, delete the current CSI ConfigMap:
+
+   ```bash
+   oc delete configmap osac-csi-fulfillment-config -n osac-csi
+   ```
+
+3. Immediately apply the updated OSAC values so Helm recreates the ConfigMap:
+
+   ```bash
+   make install-osac PLATFORM=openshift PROFILE=<profile> NS=<namespace>
+   ```
+
+   Supply the same AAP license file used for installation if it is not at the
+   default `values/<profile>/license.zip` path. Until the ConfigMap is
+   recreated, a newly started CSI controller pod cannot resolve its required
+   ConfigMap keys.
+
+4. Restart the CSI controller so its environment variables use the new values,
+   then wait for rollout completion:
+
+   ```bash
+   CSI_DEPLOYMENT=$(oc get deployments -n osac-csi \
+     -l app.kubernetes.io/name=csi-driver,app.kubernetes.io/component=controller \
+     -o jsonpath='{.items[0].metadata.name}')
+   test -n "$CSI_DEPLOYMENT"
+   oc rollout restart "deployment/${CSI_DEPLOYMENT}" -n osac-csi
+   oc rollout status "deployment/${CSI_DEPLOYMENT}" -n osac-csi --timeout=5m
+   ```
+
+5. Verify the ConfigMap and controller rollout:
+
+   ```bash
+   oc get configmap osac-csi-fulfillment-config -n osac-csi -o yaml
+   oc get deployments -n osac-csi \
+     -l app.kubernetes.io/name=csi-driver,app.kubernetes.io/component=controller
+   ```
+
+Adjust the ConfigMap name and namespace if the installation overrides the
+chart defaults. This procedure applies to updates of the hub CSI endpoint or
+issuer; tenant CSI installs continue to receive those values directly through
+their Helm configuration.
+
 ## Uninstall
 
 ```bash

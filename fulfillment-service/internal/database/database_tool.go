@@ -488,7 +488,7 @@ func (t *tool) CheckSchema(ctx context.Context) error {
 }
 
 // listObjectTables returns the sorted list of object table names from the public schema, excluding active companion
-// tables, archive tables, and internal tables like notifications and schema_migrations.
+// tables, archive tables, and internal tables like changes and schema_migrations.
 func (t *tool) listObjectTables(ctx context.Context, pool *pgxpool.Pool) (result []string, err error) {
 	rows, err := pool.Query(
 		ctx,
@@ -505,7 +505,7 @@ func (t *tool) listObjectTables(ctx context.Context, pool *pgxpool.Pool) (result
 			c.relname not like 'active_%' and
 			c.relname not like 'archived_%' and
 			c.relname not in (
-				'notifications',
+				'changes',
 				'project_membership_subjects',
 				'schema_migrations',
 				'storage_tier_backends',
@@ -583,8 +583,8 @@ func (t *tool) listArchiveTables(ctx context.Context, pool *pgxpool.Pool) (resul
 }
 
 // checkObjectTable performs all consistency checks for a single object table: verifies that it has the expected columns
-// with the correct types, a primary key on 'id', a tenant foreign key, and a corresponding archive table. Returns the
-// number of issues found.
+// with the correct types, a primary key on 'id', a tenant foreign key, a corresponding archive table, and the
+// enqueue_change trigger. Returns the number of issues found.
 func (t *tool) checkObjectTable(ctx context.Context, pool *pgxpool.Pool, table string) int {
 	// Make a copy of the expected columns so that we can adjust it for special cases without interfering with the
 	// original map:
@@ -615,6 +615,7 @@ func (t *tool) checkObjectTable(ctx context.Context, pool *pgxpool.Pool, table s
 
 	issues += t.checkTenantForeignKey(ctx, pool, table)
 	issues += t.checkTableExists(ctx, pool, "archived_"+table)
+	issues += t.checkEnqueueChangeTrigger(ctx, pool, table)
 	return issues
 }
 
@@ -775,6 +776,51 @@ func (t *tool) checkTableExists(ctx context.Context, pool *pgxpool.Pool, table s
 	return 0
 }
 
+// checkEnqueueChangeTrigger verifies that the given object table has the 'enqueue_change' trigger. New object tables
+// created after the original changes migration will not get that trigger automatically, so this check fails the schema
+// unless a later migration attaches it. Returns the number of issues found.
+func (t *tool) checkEnqueueChangeTrigger(ctx context.Context, pool *pgxpool.Pool, table string) int {
+	var count int
+	err := pool.QueryRow(
+		ctx,
+		`
+		select
+			count(*)
+		from
+			pg_catalog.pg_trigger t
+		join
+			pg_catalog.pg_class c on c.oid = t.tgrelid
+		join
+			pg_catalog.pg_namespace n on n.oid = c.relnamespace
+		where
+			n.nspname = 'public' and
+			c.relname = $1 and
+			t.tgname = $2 and
+			not t.tgisinternal
+		`,
+		table,
+		enqueueChangeTriggerName,
+	).Scan(&count)
+	if err != nil {
+		t.logger.ErrorContext(
+			ctx,
+			"Failed to check enqueue_change trigger",
+			slog.String("table", table),
+			slog.Any("error", err),
+		)
+		return 1
+	}
+	if count != 1 {
+		t.logger.ErrorContext(
+			ctx,
+			"Object table is missing the enqueue_change trigger",
+			slog.String("table", table),
+		)
+		return 1
+	}
+	return 0
+}
+
 // checkTenantForeignKey verifies that the given table has a foreign key constraint on the 'tenant' column referencing
 // the 'id' column of the 'tenants' table. Returns the number of issues found.
 func (t *tool) checkTenantForeignKey(ctx context.Context, pool *pgxpool.Pool, table string) int {
@@ -909,6 +955,10 @@ var toolFilePathParameters = []string{
 	"sslcrl",
 	"sslcrldir",
 }
+
+// enqueueChangeTriggerName is the trigger that copies object-table writes into the changes table for the event
+// publisher.
+const enqueueChangeTriggerName = "enqueue_change"
 
 // toolObjectColumns maps each column name that the DAO expects in every object table to its expected PostgreSQL
 // full type, as reported by 'pg_catalog.format_type'.

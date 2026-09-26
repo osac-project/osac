@@ -15,7 +15,6 @@ package vault
 
 import (
 	"context"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -28,6 +27,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/oauth"
+	"github.com/osac-project/osac/fulfillment-service/internal/trust"
 )
 
 type ServiceTenantTokenSourceBuilder struct {
@@ -38,7 +38,7 @@ type ServiceTenantTokenSourceBuilder struct {
 	keycloakClientID     string
 	keycloakClientSecret string
 	keycloakAudience     string
-	caPool               *x509.CertPool
+	caPool               *trust.CertPool
 }
 
 type ServiceTenantTokenSource struct {
@@ -98,7 +98,7 @@ func (b *ServiceTenantTokenSourceBuilder) SetKeycloakAudience(value string) *Ser
 	return b
 }
 
-func (b *ServiceTenantTokenSourceBuilder) SetCaPool(value *x509.CertPool) *ServiceTenantTokenSourceBuilder {
+func (b *ServiceTenantTokenSourceBuilder) SetCaPool(value *trust.CertPool) *ServiceTenantTokenSourceBuilder {
 	b.caPool = value
 	return b
 }

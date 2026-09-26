@@ -71,6 +71,44 @@ identity changes across upgrades and reinstall attempts.
 {{- end -}}
 
 {{/*
+True when this release should create a Strimzi KafkaUser for the fulfillment
+service. That is only when the in-cluster Kafka named by kafka.clusterName is
+enabled. An external cluster requires kafka.enabled=false and is configured
+through service.kafka.connection.
+*/}}
+{{- define "osac.provisionFulfillmentKafkaUser" -}}
+{{- if and .Values.kafka.enabled .Values.service.enabled }}
+true
+{{- end }}
+{{- end }}
+
+{{/*
+Name of the Strimzi KafkaUser (and of the Secret it creates in the Kafka
+namespace) used by the fulfillment service.
+*/}}
+{{- define "osac.fulfillmentKafkaUserName" -}}
+fulfillment-service
+{{- end }}
+
+{{/*
+Name of the Secret in the release namespace that holds the fulfillment Kafka
+connection properties (brokers, user, and password).
+*/}}
+{{- define "osac.fulfillmentKafkaSecretName" -}}
+fulfillment-service-kafka
+{{- end }}
+
+{{/*
+Bootstrap servers for the in-cluster Kafka named by kafka.clusterName in
+kafka.clusterNamespace.
+*/}}
+{{- define "osac.fulfillmentKafkaBrokers" -}}
+{{- $ns := .Values.kafka.clusterNamespace | default "osac-kafka" }}
+{{- $name := .Values.kafka.clusterName | default "osac-kafka" }}
+{{- printf "%s-kafka-bootstrap.%s.svc:9093" $name $ns }}
+{{- end }}
+
+{{/*
 Wait-for-fulfillment init container.
 Uses .Values.cliImage for the container image.
 */}}

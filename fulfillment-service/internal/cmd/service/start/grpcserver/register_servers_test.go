@@ -66,7 +66,6 @@ var (
 	ctrl         *gomock.Controller
 	logger       *slog.Logger
 	dbContainer  *database.Container
-	dbNotifier   *database.Notifier
 	attribution  *auth.MockAttributionLogic
 	tenancy      *auth.MockTenancyLogic
 	conn         *grpc.ClientConn
@@ -151,18 +150,6 @@ var _ = BeforeSuite(func() {
 		Build()
 	Expect(err).ToNot(HaveOccurred())
 
-	// Create the notifier. ExternalIPPoolsServerBuilder, ProjectsServerBuilder, and PrivateProjectsServerBuilder
-	// require a concrete *database.Notifier (see register_servers.go), so this can't be nil or a different
-	// events.Notifier implementation.
-	dbNotifier, err = database.NewNotifier().
-		SetLogger(logger).
-		SetChannel("events").
-		SetPool(pool).
-		Build()
-	Expect(err).ToNot(HaveOccurred())
-	err = dbNotifier.Start(ctx)
-	Expect(err).ToNot(HaveOccurred())
-
 	hubScheme, err = hubscheme.NewHub()
 	Expect(err).ToNot(HaveOccurred())
 	metricsRegisterer := prometheus.NewRegistry()
@@ -186,7 +173,6 @@ var _ = BeforeSuite(func() {
 	// the interceptor chain is built — see ResourceServerDeps.PrivateUsersServer's doc comment.
 	privateUsersServer, err := servers.NewPrivateUsersServer().
 		SetLogger(logger).
-		SetNotifier(dbNotifier).
 		SetAttributionLogic(attribution).
 		SetTenancyLogic(tenancy).
 		SetMetricsRegisterer(metricsRegisterer).
@@ -205,7 +191,6 @@ var _ = BeforeSuite(func() {
 	DeferCleanup(server.Stop)
 	_, err = RegisterResourceServers(ctx, server.Registrar(), ResourceServerDeps{
 		Logger:                  logger,
-		Notifier:                dbNotifier,
 		PrivateAttributionLogic: attribution,
 		PublicAttributionLogic:  attribution,
 		TenancyLogic:            tenancy,
@@ -468,7 +453,6 @@ func registerWithFlags(svcFlags *services.Flags) (map[string]grpc.ServiceInfo, *
 	srv := grpc.NewServer()
 	rs, err := RegisterResourceServers(ctx, srv, ResourceServerDeps{
 		Logger:                  logger,
-		Notifier:                dbNotifier,
 		PrivateAttributionLogic: attribution,
 		PublicAttributionLogic:  attribution,
 		TenancyLogic:            tenancy,

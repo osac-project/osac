@@ -28,14 +28,12 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	"github.com/osac-project/osac/fulfillment-service/internal/utils"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 type PrivateBareMetalInstanceCatalogItemsServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -63,11 +61,6 @@ func NewPrivateBareMetalInstanceCatalogItemsServer() *PrivateBareMetalInstanceCa
 
 func (b *PrivateBareMetalInstanceCatalogItemsServerBuilder) SetLogger(value *slog.Logger) *PrivateBareMetalInstanceCatalogItemsServerBuilder {
 	b.logger = value
-	return b
-}
-
-func (b *PrivateBareMetalInstanceCatalogItemsServerBuilder) SetNotifier(value events.Notifier) *PrivateBareMetalInstanceCatalogItemsServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -179,7 +172,6 @@ func (b *PrivateBareMetalInstanceCatalogItemsServerBuilder) Build() (result *Pri
 	generic, err := NewGenericServer[*privatev1.BareMetalInstanceCatalogItem]().
 		SetLogger(b.logger).
 		SetService(privatev1.BareMetalInstanceCatalogItems_ServiceDesc.ServiceName).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).

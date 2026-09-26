@@ -141,6 +141,11 @@
       "type": "object",
       "description": "Kafka cluster coordinates for per-instance topic/user creation",
       "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Create Strimzi KafkaUser resources against the in-cluster Kafka named by clusterName",
+          "default": true
+        },
         "clusterName": {
           "type": "string",
           "description": "Strimzi Kafka cluster name",
@@ -638,6 +643,16 @@
             "credentials": {
               "type": "array",
               "description": "Volume sources for the Keycloak client secret used for Vault authentication"
+            }
+          }
+        },
+        "kafka": {
+          "type": "object",
+          "description": "Kafka connection used by the fulfillment service",
+          "properties": {
+            "connection": {
+              "type": "array",
+              "description": "Kafka connection volume sources (secret or configMap references). Each item maps keys to Kafka properties named brokers, user, and password."
             }
           }
         }
@@ -1314,6 +1329,60 @@
           "type": "boolean",
           "description": "Deploy the OSAC CSI driver (opt-in)",
           "default": false
+        },
+        "namespace": {
+          "type": "string",
+          "description": "Namespace for the shared hub CSI deployment",
+          "enum": [
+            "osac-csi"
+          ],
+          "default": "osac-csi"
+        },
+        "controller": {
+          "type": "object",
+          "description": "CSI controller configuration",
+          "properties": {
+            "fulfillment": {
+              "type": "object",
+              "properties": {
+                "configMap": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "description": "ConfigMap containing non-secret fulfillment endpoint and issuer values",
+                      "default": "osac-csi-fulfillment-config"
+                    },
+                    "endpointKey": {
+                      "type": "string",
+                      "description": "ConfigMap key containing the fulfillment endpoint",
+                      "default": "OSAC_FULFILLMENT_ENDPOINT"
+                    },
+                    "issuerUrlKey": {
+                      "type": "string",
+                      "description": "ConfigMap key containing the fulfillment issuer URL",
+                      "default": "OSAC_FULFILLMENT_ISSUER_URL"
+                    }
+                  }
+                },
+                "credentials": {
+                  "type": "object",
+                  "properties": {
+                    "secretName": {
+                      "type": "string",
+                      "description": "Secret containing the CSI OAuth client credentials",
+                      "default": "osac-csi-driver-credentials"
+                    }
+                  }
+                },
+                "allowStub": {
+                  "type": "boolean",
+                  "description": "Allow the CSI controller to use the in-memory volume stub when no fulfillment configuration is supplied",
+                  "default": false
+                }
+              }
+            }
+          }
         },
         "image": {
           "type": "object",

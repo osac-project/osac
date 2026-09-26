@@ -33,14 +33,16 @@ const computeInstanceTestFinalizer = "integration-test"
 
 func setComputeInstanceTestFinalizer(ctx context.Context, client privatev1.ComputeInstancesClient, id string, add bool) {
 	GinkgoHelper()
-	Eventually(func() error {
+	timeout := 10 * time.Second
+	if !add {
+		timeout = 2 * time.Minute
+	}
+	Eventually(func(g Gomega) bool {
 		response, err := client.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
 		if !add && status.Code(err) == codes.NotFound {
-			return nil
+			return true
 		}
-		if err != nil {
-			return err
-		}
+		g.Expect(err).NotTo(HaveOccurred())
 		object := response.GetObject()
 		values := slices.DeleteFunc(object.GetMetadata().GetFinalizers(), func(value string) bool { return value == computeInstanceTestFinalizer })
 		if add {
@@ -48,8 +50,17 @@ func setComputeInstanceTestFinalizer(ctx context.Context, client privatev1.Compu
 		}
 		object.GetMetadata().SetFinalizers(values)
 		_, err = client.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{Object: object, UpdateMask: catalogItemUpdateMask("metadata.finalizers"), Lock: true}.Build())
-		return err
-	}, 10*time.Second, 100*time.Millisecond).Should(Succeed())
+		g.Expect(err).NotTo(HaveOccurred())
+		if add {
+			return true
+		}
+		_, err = client.Signal(ctx, privatev1.ComputeInstancesSignalRequest_builder{Id: id}.Build())
+		if status.Code(err) == codes.NotFound {
+			return true
+		}
+		g.Expect(err).NotTo(HaveOccurred())
+		return false
+	}, timeout, 100*time.Millisecond).Should(BeTrue())
 }
 
 var _ = Describe("Compute instance updates", Label("compute-updates"), func() {

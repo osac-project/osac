@@ -26,14 +26,12 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 type PrivateSecretsServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -60,11 +58,6 @@ func NewPrivateSecretsServer() *PrivateSecretsServerBuilder {
 
 func (b *PrivateSecretsServerBuilder) SetLogger(value *slog.Logger) *PrivateSecretsServerBuilder {
 	b.logger = value
-	return b
-}
-
-func (b *PrivateSecretsServerBuilder) SetNotifier(value events.Notifier) *PrivateSecretsServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -122,13 +115,11 @@ func (b *PrivateSecretsServerBuilder) Build() (result *PrivateSecretsServer, err
 	s.generic, err = NewGenericServer[*privatev1.Secret]().
 		SetLogger(b.logger).
 		SetService(privatev1.Secrets_ServiceDesc.ServiceName).
-		SetNotifier(b.notifier).
-		SetRedactFunc(s.redact).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
 		SetFilterDesc(b.filterDesc).
-		AddAllowedTenants(auth.SharedTenant).
+		AddAllowedTenants(auth.SharedTenant, auth.SystemTenant).
 		Build()
 	if err != nil {
 		return
@@ -136,11 +127,6 @@ func (b *PrivateSecretsServerBuilder) Build() (result *PrivateSecretsServer, err
 
 	result = s
 	return
-}
-
-func (s *PrivateSecretsServer) redact(object *privatev1.Secret) *privatev1.Secret {
-	object.SetData(nil)
-	return object
 }
 
 // List fetches a list of secret objects from postgres.
@@ -160,7 +146,7 @@ func (s *PrivateSecretsServer) Get(ctx context.Context,
 	}
 
 	obj := response.GetObject()
-	if err = s.authorizeSharedSecretManagement(ctx, obj); err != nil {
+	if err = s.authorizePlatformSecretManagement(ctx, obj); err != nil {
 		return
 	}
 	if s.secretStore != nil && obj.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT {
@@ -223,16 +209,16 @@ func (s *PrivateSecretsServer) Create(ctx context.Context,
 			return createErr
 		}
 		created := response.GetObject()
-		if authErr := s.authorizeSharedSecretManagement(opCtx, created); authErr != nil {
+		if authErr := s.authorizePlatformSecretManagement(opCtx, created); authErr != nil {
 			return authErr
 		}
-		if created.GetMetadata().GetTenant() == auth.SharedTenant {
+		if tenant := created.GetMetadata().GetTenant(); tenant == auth.SharedTenant || tenant == auth.SystemTenant {
 			if created.GetBackend() != privatev1.SecretBackend_SECRET_BACKEND_VAULT {
-				return grpcstatus.Errorf(grpccodes.InvalidArgument, "shared Secrets must use the Vault backend")
+				return grpcstatus.Errorf(grpccodes.InvalidArgument, "%s Secrets must use the Vault backend", tenant)
 			}
 			if s.secretStore == nil {
 				return grpcstatus.Errorf(grpccodes.FailedPrecondition,
-					"shared Secrets require a configured Vault backend")
+					"%s Secrets require a configured Vault backend", tenant)
 			}
 		}
 		if !persistInVault || isDryRun(opCtx) {
@@ -272,7 +258,7 @@ func (s *PrivateSecretsServer) Update(ctx context.Context,
 	}
 
 	existingSecret := getResponse.GetObject()
-	if err = s.authorizeSharedSecretManagement(ctx, existingSecret); err != nil {
+	if err = s.authorizePlatformSecretManagement(ctx, existingSecret); err != nil {
 		return
 	}
 
@@ -330,7 +316,7 @@ func (s *PrivateSecretsServer) Delete(ctx context.Context,
 		return
 	}
 	obj := getResponse.GetObject()
-	if err = s.authorizeSharedSecretManagement(ctx, obj); err != nil {
+	if err = s.authorizePlatformSecretManagement(ctx, obj); err != nil {
 		return
 	}
 
@@ -354,30 +340,34 @@ func (s *PrivateSecretsServer) Delete(ctx context.Context,
 	return
 }
 
-// authorizeSharedSecretManagement restricts decrypted reads and mutations of shared Secrets to
-// platform administrators and controllers. Both identities have universal tenant scope. Metadata
-// remains listable so shared template references can be resolved without exposing credential data.
-func (s *PrivateSecretsServer) authorizeSharedSecretManagement(ctx context.Context, secret *privatev1.Secret) error {
-	if secret == nil || secret.GetMetadata().GetTenant() != auth.SharedTenant {
+// authorizePlatformSecretManagement restricts reads and mutations of shared and system Secrets to
+// platform administrators and controllers. Shared metadata remains listable for template references;
+// system metadata is hidden by tenant visibility filtering.
+func (s *PrivateSecretsServer) authorizePlatformSecretManagement(ctx context.Context, secret *privatev1.Secret) error {
+	if secret == nil {
 		return nil
 	}
-	allowed, err := s.canManageSharedSecrets(ctx)
+	tenant := secret.GetMetadata().GetTenant()
+	if tenant != auth.SharedTenant && tenant != auth.SystemTenant {
+		return nil
+	}
+	allowed, err := s.canManagePlatformSecrets(ctx)
 	if err != nil {
 		return err
 	}
 	if !allowed {
 		return grpcstatus.Errorf(
 			grpccodes.PermissionDenied,
-			"shared Secrets can only be read or managed by platform administrators and controllers",
+			"%s Secrets can only be read or managed by platform administrators and controllers", tenant,
 		)
 	}
 	return nil
 }
 
-func (s *PrivateSecretsServer) canManageSharedSecrets(ctx context.Context) (bool, error) {
+func (s *PrivateSecretsServer) canManagePlatformSecrets(ctx context.Context) (bool, error) {
 	assignable, err := s.tenancyLogic.DetermineAssignableTenants(ctx)
 	if err != nil {
-		return false, grpcstatus.Errorf(grpccodes.Internal, "failed to determine shared Secret access")
+		return false, grpcstatus.Errorf(grpccodes.Internal, "failed to determine platform Secret access")
 	}
 	return assignable.Universal(), nil
 }
@@ -398,7 +388,7 @@ func (s *PrivateSecretsServer) Signal(ctx context.Context,
 	if err = s.generic.Get(ctx, getRequest, &getResponse); err != nil {
 		return
 	}
-	if err = s.authorizeSharedSecretManagement(ctx, getResponse.GetObject()); err != nil {
+	if err = s.authorizePlatformSecretManagement(ctx, getResponse.GetObject()); err != nil {
 		return
 	}
 	err = s.generic.Signal(ctx, request, &response)

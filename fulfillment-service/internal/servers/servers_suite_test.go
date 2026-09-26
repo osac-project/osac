@@ -44,6 +44,7 @@ var (
 	logger      *slog.Logger
 	server      *database.Container
 	tm          database.TxManager
+	suiteTx     database.Tx
 	attribution *auth.MockAttributionLogic
 	tenancy     *auth.MockTenancyLogic
 )
@@ -119,13 +120,17 @@ var _ = BeforeEach(func() {
 	Expect(err).ToNot(HaveOccurred())
 
 	// Start a transaction and add it to the context:
-	tx, err := tm.Begin(ctx)
+	suiteTx, err = tm.Begin(ctx)
 	Expect(err).ToNot(HaveOccurred())
 	DeferCleanup(func() {
-		err := tx.End(ctx)
+		if suiteTx == nil {
+			return
+		}
+		err := suiteTx.End(ctx)
 		Expect(err).ToNot(HaveOccurred())
+		suiteTx = nil
 	})
-	ctx = database.TxIntoContext(ctx, tx)
+	ctx = database.TxIntoContext(ctx, suiteTx)
 
 	// Create the testTenant in the database so foreign key constraints are satisfied
 	// when resources are created with the default tenant mock.

@@ -29,7 +29,6 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -94,7 +93,6 @@ func (s *PrivateNetworkClassesServer) checkSingleNetworkClass(ctx context.Contex
 
 type PrivateNetworkClassesServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -116,11 +114,6 @@ func NewPrivateNetworkClassesServer() *PrivateNetworkClassesServerBuilder {
 
 func (b *PrivateNetworkClassesServerBuilder) SetLogger(value *slog.Logger) *PrivateNetworkClassesServerBuilder {
 	b.logger = value
-	return b
-}
-
-func (b *PrivateNetworkClassesServerBuilder) SetNotifier(value events.Notifier) *PrivateNetworkClassesServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -163,7 +156,6 @@ func (b *PrivateNetworkClassesServerBuilder) Build() (result *PrivateNetworkClas
 	generic, err := NewGenericServer[*privatev1.NetworkClass]().
 		SetLogger(b.logger).
 		SetService(privatev1.NetworkClasses_ServiceDesc.ServiceName).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).

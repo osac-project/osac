@@ -58,7 +58,7 @@ var _ = Describe("Private projects server", func() {
 		createTenant("my-tenant")
 		createTenant("your-tenant")
 
-		// Create server (without notifier for testing):
+		// Create server:
 		privateServer, err = NewPrivateProjectsServer().
 			SetLogger(logger).
 			SetAttributionLogic(attribution).

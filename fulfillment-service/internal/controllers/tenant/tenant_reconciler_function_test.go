@@ -2455,37 +2455,6 @@ var _ = Describe("Vault namespace provisioning", func() {
 		Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
 	})
 
-	It("skips vault provisioning for the system tenant", func() {
-		reconciler := &function{
-			logger:         logger,
-			idpManager:     idpManager,
-			vaultLifecycle: mockVaultClient,
-		}
-
-		tenant := privatev1.Tenant_builder{
-			Id: "org-system",
-			Metadata: privatev1.Metadata_builder{
-				Name:       auth.SystemTenant,
-				Finalizers: []string{finalizers.Controller},
-				Tenant:     auth.SystemTenant,
-			}.Build(),
-			Status: privatev1.TenantStatus_builder{
-				State:         privatev1.TenantState_TENANT_STATE_SYNCED,
-				IdpTenantName: auth.SystemTenant,
-			}.Build(),
-		}.Build()
-
-		mockIDPClient.EXPECT().
-			GetTenant(gomock.Any(), auth.SystemTenant).
-			Return(&idp.Tenant{Name: auth.SystemTenant}, nil)
-
-		t := &task{r: reconciler, tenant: tenant}
-		err := t.update(ctx)
-		Expect(err).ToNot(HaveOccurred())
-		cond := findCondition(tenant)
-		Expect(cond).ToNot(BeNil())
-		Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
-	})
 })
 
 var _ = Describe("Vault namespace cleanup during deletion", func() {

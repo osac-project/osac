@@ -16,8 +16,6 @@ package it
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -54,6 +52,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/network"
 	"github.com/osac-project/osac/fulfillment-service/internal/oauth"
 	"github.com/osac-project/osac/fulfillment-service/internal/tlsconfig"
+	"github.com/osac-project/osac/fulfillment-service/internal/trust"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 
 	bmfov1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
@@ -93,7 +92,7 @@ type Tool struct {
 	clusterName   string
 	kubeClient    crclient.Client
 	kubeClientSet *kubernetes.Clientset
-	caPool        *x509.CertPool
+	caPool        *trust.CertPool
 	kcFile        string
 	internalView  *ToolView
 	externalView  *ToolView
@@ -501,7 +500,7 @@ func (t *Tool) loadCaBundle(ctx context.Context) error {
 	}
 
 	// Create the CA pool:
-	t.caPool, err = network.NewCertPool().
+	t.caPool, err = trust.NewCertPool().
 		SetLogger(t.logger).
 		AddFiles(caFiles...).
 		Build()
@@ -1166,7 +1165,7 @@ func (t *Tool) KeycloakAdminRequest(ctx context.Context, method, path string, in
 		return
 	}
 	tlsConfig := tlsconfig.NewClientTLSConfig()
-	tlsConfig.RootCAs = t.caPool
+	tlsConfig.RootCAs = t.caPool.Pool()
 	httpClient := &http.Client{
 		Transport: &http.Transport{
 			TLSClientConfig: tlsConfig,
@@ -1246,12 +1245,11 @@ func (t *Tool) KeycloakAdminRequestForRealm(ctx context.Context, realm, method, 
 		err = fmt.Errorf("failed to create Keycloak admin token source: %w", err)
 		return
 	}
+	tlsConfig := tlsconfig.NewClientTLSConfig()
+	tlsConfig.RootCAs = t.caPool.Pool()
 	httpClient := &http.Client{
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				RootCAs:    t.caPool,
-				MinVersion: tls.VersionTLS12,
-			},
+			TLSClientConfig: tlsConfig,
 		},
 	}
 	var body io.Reader
@@ -1310,7 +1308,7 @@ func (t *Tool) makeGrpcConn(addr string, tokenSource auth.TokenSource) (result *
 // client only need to provide the URL path, and other headers as needed.
 func (t *Tool) makeHttpClient(addr string, tokenSource auth.TokenSource) *http.Client {
 	tlsConfig := tlsconfig.NewClientTLSConfig()
-	tlsConfig.RootCAs = t.caPool
+	tlsConfig.RootCAs = t.caPool.Pool()
 	transport := &http.Transport{
 		TLSClientConfig: tlsConfig,
 	}

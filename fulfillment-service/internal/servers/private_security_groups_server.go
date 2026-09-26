@@ -25,13 +25,11 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 type PrivateSecurityGroupsServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -55,11 +53,6 @@ func NewPrivateSecurityGroupsServer() *PrivateSecurityGroupsServerBuilder {
 
 func (b *PrivateSecurityGroupsServerBuilder) SetLogger(value *slog.Logger) *PrivateSecurityGroupsServerBuilder {
 	b.logger = value
-	return b
-}
-
-func (b *PrivateSecurityGroupsServerBuilder) SetNotifier(value events.Notifier) *PrivateSecurityGroupsServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -116,7 +109,6 @@ func (b *PrivateSecurityGroupsServerBuilder) Build() (result *PrivateSecurityGro
 	generic, err := NewGenericServer[*privatev1.SecurityGroup]().
 		SetLogger(b.logger).
 		SetService(privatev1.SecurityGroups_ServiceDesc.ServiceName).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).

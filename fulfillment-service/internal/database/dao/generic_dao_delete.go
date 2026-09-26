@@ -184,16 +184,12 @@ func (r *DeleteRequest[O]) do(ctx context.Context) (response *DeleteResponse, er
 	object.SetId(r.args.id)
 	r.setMetadata(object, metadata)
 
-	// If there are finalizers we need to fire the update event instead of the delete event:
+	// If there are finalizers the object remains in the table with its deletion timestamp set:
 	if len(finalizers) > 0 {
-		err = r.fireEvent(ctx, Event{
-			Type:   EventTypeUpdated,
-			Object: object,
-		})
 		return
 	}
 
-	// If there are no finalizers we can now archive the object and fire the delete event:
+	// If there are no finalizers we can now archive the object:
 	err = r.archive(ctx, archiveArgs{
 		id:              r.args.id,
 		creationTs:      creationTs,
@@ -210,14 +206,6 @@ func (r *DeleteRequest[O]) do(ctx context.Context) (response *DeleteResponse, er
 	if err != nil {
 		return
 	}
-	err = r.fireEvent(ctx, Event{
-		Type:   EventTypeDeleted,
-		Object: object,
-	})
-	if err != nil {
-		return
-	}
-
 	// Create and return the response:
 	response = &DeleteResponse{}
 	return

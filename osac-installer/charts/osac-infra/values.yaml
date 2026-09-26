@@ -7,13 +7,16 @@ cliImage: quay.io/openshift/origin-cli:4.20.0
 #   runAsUser: 1000
 #   fsGroup: 1000
 osacNamespace: osac
+# Keep this value aligned with the osac chart's csiDriver.enabled setting. It
+# gates creation of the shared CSI credential Secret during infra install.
+csiDriver:
+  enabled: false
+# Fixed hub CSI namespace. The osac chart and CSI credential hook must use the
+# same namespace so the controller can read its ConfigMap and Secret.
 csiNamespace: osac-csi
-# Name of the "osac" umbrella chart's Helm release. The csi-driver subchart
-# (a dependency of that release) owns a Namespace template for csiNamespace,
-# so the create-csi-driver-credentials hook must pre-stamp that namespace
-# with this release's identity (name + osacNamespace) before it's created --
-# otherwise the later `helm upgrade --install osac` fails to adopt it
-# ("invalid ownership metadata").
+# Name of the "osac" umbrella chart's Helm release. The credential hook
+# pre-creates and labels csiNamespace with this release's identity before the
+# umbrella chart renders CSI resources there.
 csiReleaseName: osac
 
 certManager:

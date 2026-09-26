@@ -28,13 +28,11 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 type PrivateAddOnOperatorsServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -56,12 +54,6 @@ func NewPrivateAddOnOperatorsServer() *PrivateAddOnOperatorsServerBuilder {
 
 func (b *PrivateAddOnOperatorsServerBuilder) SetLogger(value *slog.Logger) *PrivateAddOnOperatorsServerBuilder {
 	b.logger = value
-	return b
-}
-
-func (b *PrivateAddOnOperatorsServerBuilder) SetNotifier(
-	value events.Notifier) *PrivateAddOnOperatorsServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -114,7 +106,6 @@ func (b *PrivateAddOnOperatorsServerBuilder) Build() (result *PrivateAddOnOperat
 	generic, err := NewGenericServer[*privatev1.AddOnOperator]().
 		SetLogger(b.logger).
 		SetService(privatev1.AddOnOperators_ServiceDesc.ServiceName).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).

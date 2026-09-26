@@ -1,4 +1,6 @@
 # CaaS CI environment -- infrastructure values for osac-deps + osac-infra charts.
+# Keep the hub CSI credential hook disabled. Tenant CSI installation is handled
+# by the AAP storage-provider workflow on each remote tenant cluster.
 
 # --- OLM Subscriptions (osac-deps) ---
 certManager:

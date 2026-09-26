@@ -1,8 +1,29 @@
+{{- $fulfillment := .Values.controller.fulfillment -}}
+{{- $endpoint := $fulfillment.endpoint | default "" -}}
+{{- $issuerURL := $fulfillment.issuerUrl | default "" -}}
+{{- $configMapName := $fulfillment.configMap.name | default "" -}}
+{{- $secretName := $fulfillment.credentials.secretName | default "" -}}
+{{- if and $configMapName (or $endpoint $issuerURL) -}}
+{{- fail "controller.fulfillment.configMap cannot be combined with direct endpoint or issuerUrl values" -}}
+{{- end -}}
+{{- if and (or $endpoint $issuerURL) (not (and $endpoint $issuerURL)) -}}
+{{- fail "controller.fulfillment.endpoint and issuerUrl must be provided together" -}}
+{{- end -}}
+{{- if and $secretName (not (or $configMapName (and $endpoint $issuerURL))) -}}
+{{- fail "controller.fulfillment.credentials.secretName requires fulfillment configuration" -}}
+{{- end -}}
+{{- if and (or $configMapName (and $endpoint $issuerURL)) (not $secretName) -}}
+{{- fail "controller.fulfillment.credentials.secretName is required when fulfillment is configured" -}}
+{{- end -}}
+{{- if and (not $configMapName) (not $endpoint) (not $issuerURL) (not $fulfillment.allowStub) -}}
+{{- fail "fulfillment configuration is required when controller.fulfillment.allowStub is false" -}}
+{{- end -}}
+{{- $configured := or $configMapName (and $endpoint $issuerURL) -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "csi-driver.fullname" . }}-controller
-  namespace: {{ .Release.Namespace }}
+  namespace: {{ include "csi-driver.namespace" . }}
   labels:
     {{- include "csi-driver.labels" . | nindent 4 }}
     app.kubernetes.io/component: controller
@@ -29,16 +50,22 @@ spec:
             {{- if .Values.controller.clusterID }}
             - "--cluster-id={{ .Values.controller.clusterID }}"
             {{- end }}
-            {{- with .Values.controller.fulfillment }}
-            {{- if and .endpoint .credentials.secretName .issuerUrl }}
-            - "--fulfillment-endpoint={{ .endpoint }}"
+            {{- if $configMapName }}
+            - "--fulfillment-endpoint=$(OSAC_FULFILLMENT_ENDPOINT)"
+            - "--fulfillment-issuer-url=$(OSAC_FULFILLMENT_ISSUER_URL)"
+            {{- else if and $endpoint $issuerURL }}
+            - "--fulfillment-endpoint={{ $endpoint }}"
+            - "--fulfillment-issuer-url={{ $issuerURL }}"
+            {{- end }}
+            {{- if $configured }}
             - "--fulfillment-client-id=$(FULFILLMENT_CLIENT_ID)"
             - "--fulfillment-client-secret-file=/etc/osac-csi/credentials/client-secret"
-            - "--fulfillment-issuer-url={{ .issuerUrl }}"
-            {{- if .tls.insecureSkipVerify }}
+            {{- if $fulfillment.tls.insecureSkipVerify }}
             - "--grpc-insecure"
             {{- end }}
             {{- end }}
+            {{- if $fulfillment.allowStub }}
+            - "--allow-stub"
             {{- end }}
             {{- if .Values.controller.vendorSockets }}
             - "--vendor-sockets={{ .Values.controller.vendorSockets }}"
@@ -47,20 +74,32 @@ spec:
             - "--vendor-controllers={{ .Values.controller.vendorControllers }}"
             {{- end }}
             - "--v=2"
-          {{- with .Values.controller.fulfillment }}
-          {{- if and .endpoint .credentials.secretName .issuerUrl }}
+          {{- if $configured }}
           env:
+            {{- if $configMapName }}
+            - name: OSAC_FULFILLMENT_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ $configMapName }}
+                  key: {{ $fulfillment.configMap.endpointKey }}
+                  optional: false
+            - name: OSAC_FULFILLMENT_ISSUER_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ $configMapName }}
+                  key: {{ $fulfillment.configMap.issuerUrlKey }}
+                  optional: false
+            {{- end }}
             - name: FULFILLMENT_CLIENT_ID
               valueFrom:
                 secretKeyRef:
-                  name: {{ .credentials.secretName }}
-                  key: {{ .credentials.clientIdKey }}
-          {{- end }}
+                  name: {{ $secretName }}
+                  key: {{ $fulfillment.credentials.clientIdKey }}
           {{- end }}
           volumeMounts:
             - name: osac-socket-dir
               mountPath: /csi/osac
-            {{- if and .Values.controller.fulfillment.endpoint .Values.controller.fulfillment.credentials.secretName .Values.controller.fulfillment.issuerUrl }}
+            {{- if $configured }}
             - name: fulfillment-credentials
               mountPath: /etc/osac-csi/credentials
               readOnly: true
@@ -108,11 +147,11 @@ spec:
       volumes:
         - name: osac-socket-dir
           emptyDir: {}
-        {{- if and .Values.controller.fulfillment.endpoint .Values.controller.fulfillment.credentials.secretName .Values.controller.fulfillment.issuerUrl }}
+        {{- if $configured }}
         - name: fulfillment-credentials
           secret:
-            secretName: {{ .Values.controller.fulfillment.credentials.secretName }}
+            secretName: {{ $secretName }}
             items:
-              - key: {{ .Values.controller.fulfillment.credentials.clientSecretKey }}
+              - key: {{ $fulfillment.credentials.clientSecretKey }}
                 path: client-secret
         {{- end }}

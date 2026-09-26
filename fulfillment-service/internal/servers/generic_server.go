@@ -31,15 +31,11 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/collections"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	"github.com/osac-project/osac/fulfillment-service/internal/masks"
-	"github.com/osac-project/osac/fulfillment-service/internal/util"
-	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -55,8 +51,6 @@ type GenericServerBuilder[O dao.Object] struct {
 	service           string
 	table             string
 	ignoredFields     []any
-	notifier          events.Notifier
-	redactFunc        func(O) O
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	allowedTenants    collections.Set[string]
@@ -87,13 +81,18 @@ type GenericServer[O dao.Object] struct {
 	deleteResponse   proto.Message
 	signalRequest    proto.Message
 	signalResponse   proto.Message
-	notifier         events.Notifier
-	redactFunc       func(O) O
-	payloadField     protoreflect.FieldDescriptor
 	pathCompiler     *masks.PathCompiler[O]
 	pathCache        map[string]*masks.Path[O]
 	pathCacheLock    *sync.Mutex
 	validator        protovalidate.Validator
+}
+
+type objectIface interface {
+	proto.Message
+	GetId() string
+	SetId(string)
+	GetMetadata() *privatev1.Metadata
+	SetMetadata(*privatev1.Metadata)
 }
 
 type metadataIface interface {
@@ -149,20 +148,6 @@ func (b *GenericServerBuilder[O]) SetTableName(value string) *GenericServerBuild
 // the 'status' field of other types will not be ignored.
 func (b *GenericServerBuilder[O]) AddIgnoredFields(values ...any) *GenericServerBuilder[O] {
 	b.ignoredFields = append(b.ignoredFields, values...)
-	return b
-}
-
-// SetNotifier sets the notifier that the server will use to send change notifications. This is optional.
-func (b *GenericServerBuilder[O]) SetNotifier(value events.Notifier) *GenericServerBuilder[O] {
-	b.notifier = util.NormalizeNil(value)
-	return b
-}
-
-// SetRedactFunc sets a function that will be called to redact sensitive fields from objects before they are included in
-// event notification payloads. The function receives a clone of the object and should return it with the sensitive
-// fields cleared. This is optional.
-func (b *GenericServerBuilder[O]) SetRedactFunc(value func(O) O) *GenericServerBuilder[O] {
-	b.redactFunc = value
 	return b
 }
 
@@ -245,15 +230,11 @@ func (b *GenericServerBuilder[O]) Build() (result *GenericServer[O], err error) 
 		attributionLogic: b.attributionLogic,
 		tenancyLogic:     b.tenancyLogic,
 		allowedTenants:   b.allowedTenants,
-		notifier:         b.notifier,
 		pathCompiler:     pathCompiler,
 		pathCache:        map[string]*masks.Path[O]{},
 		pathCacheLock:    &sync.Mutex{},
 		validator:        validator,
 	}
-
-	// Set the redact function:
-	s.redactFunc = b.redactFunc
 
 	// Create the DAO:
 	daoBuilder := dao.NewGenericDAO[O]()
@@ -263,9 +244,6 @@ func (b *GenericServerBuilder[O]) Build() (result *GenericServer[O], err error) 
 	}
 	daoBuilder.SetFilterDesc(b.filterDesc)
 	daoBuilder.SetTenancyLogic(b.tenancyLogic)
-	if b.notifier != nil {
-		daoBuilder.AddEventCallback(s.notifyEvent)
-	}
 	if b.metricsRegisterer != nil {
 		daoBuilder.SetMetricsRegisterer(b.metricsRegisterer)
 	}
@@ -321,12 +299,6 @@ func (b *GenericServerBuilder[O]) Build() (result *GenericServer[O], err error) 
 		return
 	}
 
-	// Find the payload field in the event message:
-	s.payloadField, err = b.findPayloadField()
-	if err != nil {
-		return
-	}
-
 	result = s
 	return
 }
@@ -377,30 +349,6 @@ func (b *GenericServerBuilder[O]) findRequestAndResponse(service protoreflect.Se
 		}
 	}
 	err = fmt.Errorf("failed to find method '%s' in service '%s'", methodName, service.FullName())
-	return
-}
-
-// findPayloadField finds the field in the event message that corresponds to this object type. This is used later to
-// set the payload of event notifications without having to iterate the oneof fields every time. Returns nil if there
-// is no such field.
-func (b *GenericServerBuilder[O]) findPayloadField() (result protoreflect.FieldDescriptor, err error) {
-	var objectTempl O
-	objectDesc := objectTempl.ProtoReflect().Descriptor()
-	var eventTempl *privatev1.Event
-	eventDesc := eventTempl.ProtoReflect().Descriptor()
-	oneofDesc := eventDesc.Oneofs().ByName(eventPayloadField)
-	if oneofDesc == nil {
-		err = fmt.Errorf("failed to find the 'payload' field of the event type '%s'", eventDesc.FullName())
-		return
-	}
-	oneofFields := oneofDesc.Fields()
-	for i := range oneofFields.Len() {
-		payloadField := oneofFields.Get(i)
-		if payloadField.Message() != nil && payloadField.Message() == objectDesc {
-			result = payloadField
-			break
-		}
-	}
 	return
 }
 
@@ -1064,25 +1012,22 @@ func (s *GenericServer[O]) Signal(ctx context.Context, request any, response any
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "identifier is mandatory")
 	}
 
-	// Fetch the current representation of the object:
-	daoResponse, err := s.dao.Get().
+	// Signal the object:
+	_, err := s.dao.Signal().
 		SetId(requestId).
 		Do(ctx)
 	if err != nil {
-		var notFoundErr *dao.ErrNotFound
-		if errors.As(err, &notFoundErr) {
+		if _, ok := errors.AsType[*dao.ErrNotFound](err); ok {
 			return grpcstatus.Errorf(
 				grpccodes.NotFound,
 				"object with identifier '%s' not found",
 				requestId,
 			)
 		}
-		var deniedErr *dao.ErrDenied
-		if errors.As(err, &deniedErr) {
-			return grpcstatus.Errorf(grpccodes.PermissionDenied, "%s", deniedErr.Reason)
+		if deniedErr, ok := errors.AsType[*dao.ErrDenied](err); ok {
+			return grpcstatus.Errorf(grpccodes.PermissionDenied, "%s", deniedErr.Error())
 		}
-		var deadlockErr *dao.ErrDeadlock
-		if errors.As(err, &deadlockErr) {
+		if deadlockErr, ok := errors.AsType[*dao.ErrDeadlock](err); ok {
 			return grpcstatus.Errorf(grpccodes.Aborted, "%s", deadlockErr.Error())
 		}
 		s.logger.ErrorContext(
@@ -1097,73 +1042,11 @@ func (s *GenericServer[O]) Signal(ctx context.Context, request any, response any
 			requestId,
 		)
 	}
-	object := daoResponse.GetObject()
-
-	// Send the signal event:
-	if s.notifier != nil {
-		event := newEvent(privatev1.EventType_EVENT_TYPE_OBJECT_SIGNALED)
-		err = s.setPayload(event, object)
-		if err != nil {
-			return err
-		}
-		err = s.notifier.Notify(ctx, event)
-		if err != nil {
-			s.logger.ErrorContext(
-				ctx,
-				"Failed to send signal notification",
-				slog.String("id", requestId),
-				slog.Any("error", err),
-			)
-		}
-	}
 
 	// Create the response:
 	responseMsg := proto.Clone(s.signalResponse)
 	s.setPointer(response, responseMsg)
 
-	return nil
-}
-
-// notifyEvent converts the DAO event into an API event and publishes it using the PostgreSQL NOTIFY command.
-func (s *GenericServer[O]) notifyEvent(ctx context.Context, e dao.Event) error {
-	var eventType privatev1.EventType
-	switch e.Type {
-	case dao.EventTypeCreated:
-		eventType = privatev1.EventType_EVENT_TYPE_OBJECT_CREATED
-	case dao.EventTypeUpdated:
-		eventType = privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED
-	case dao.EventTypeDeleted:
-		eventType = privatev1.EventType_EVENT_TYPE_OBJECT_DELETED
-	default:
-		return fmt.Errorf("unknown event kind '%s'", e.Type)
-	}
-	event := newEvent(eventType)
-	err := s.setPayload(event, e.Object)
-	if err != nil {
-		return err
-	}
-	return s.notifier.Notify(ctx, event)
-}
-
-// newEvent creates an event with the identity and generation timestamp shared by all event producers.
-func newEvent(eventType privatev1.EventType) *privatev1.Event {
-	return privatev1.Event_builder{
-		Id:        uuid.New(),
-		Type:      eventType,
-		Timestamp: timestamppb.Now(),
-	}.Build()
-}
-
-// setPayload sets the payload of the event message. If the payload field is not found the event is left unchanged. If a
-// redact function has been configured, the object is cloned and redacted before being set.
-func (s *GenericServer[O]) setPayload(event *privatev1.Event, object proto.Message) error {
-	if s.payloadField == nil {
-		return nil
-	}
-	if s.redactFunc != nil {
-		object = s.redactFunc(proto.Clone(object).(O))
-	}
-	event.ProtoReflect().Set(s.payloadField, protoreflect.ValueOfMessage(object.ProtoReflect()))
 	return nil
 }
 
@@ -1590,9 +1473,4 @@ const (
 	updateMethod = "Update"
 	deleteMethod = "Delete"
 	signalMethod = "Signal"
-)
-
-// Names of fields:
-const (
-	eventPayloadField = "payload"
 )

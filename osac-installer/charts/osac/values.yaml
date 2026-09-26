@@ -67,7 +67,8 @@ cliImage: quay.io/openshift/origin-cli:4.20.0
 dbInit:
   host: "postgres.osac-infra.svc.cluster.local"
 
-# Kafka cluster coordinates for per-instance topic/user creation.
+# Kafka cluster coordinates for per-instance topic/user creation. Set enabled
+# to false when service.kafka.connection targets an external Kafka cluster.
 kafka:
   enabled: true
   clusterName: osac-kafka
@@ -193,6 +194,24 @@ service:
     caBundle:
       configMap: ""
     credentials: []
+  # Kafka connection used by the fulfillment service. The defaults target the
+  # in-cluster cluster named by kafka.clusterName in kafka.clusterNamespace
+  # and the Secret copied from the fulfillment KafkaUser. To use an external
+  # Kafka cluster, set the top-level kafka.enabled to false and override
+  # service.kafka.connection with sources for that cluster. TLS trust uses
+  # service.certs.caBundle; include the broker CA in that bundle when it is not
+  # already trusted.
+  kafka:
+    connection:
+    - secret:
+        name: fulfillment-service-kafka
+        items:
+        - key: brokers
+          param: brokers
+        - key: user
+          param: user
+        - key: password
+          param: password
 
 # --- AAP ---
 aap:
@@ -331,6 +350,20 @@ metering:
 # --- CSI Driver ---
 csiDriver:
   enabled: false
+  # The shared hub CSI deployment runs in its own namespace. Tenant
+  # installations use their Helm release namespace instead.
+  namespace: osac-csi
+  controller:
+    fulfillment:
+      # Shared hub CSI credentials. Tenant-cluster credentials are a separate
+      # AAP/OSAC-4197 concern and are not created by this chart.
+      configMap:
+        name: osac-csi-fulfillment-config
+        endpointKey: OSAC_FULFILLMENT_ENDPOINT
+        issuerUrlKey: OSAC_FULFILLMENT_ISSUER_URL
+      credentials:
+        secretName: osac-csi-driver-credentials
+      allowStub: false
   image:
     repository: ghcr.io/osac-project/osac-csi-driver
     tag: latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml

@@ -1,0 +1,66 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "buf/validate/validate.proto";
+import "cleanapi/cleanapi.proto";
+import "osac/private/v1/metadata_type.proto";
+
+option (cleanapi.file).package = "osac.public.v1";
+
+// SelfSubjectAccessReview checks whether the current user can perform an action.
+message SelfSubjectAccessReview {
+  // Metadata contains the tenant context for the hypothetical operation.
+  Metadata metadata = 1;
+
+  // Spec describes information about the request being evaluated.
+  SelfSubjectAccessReviewSpec spec = 2 [(buf.validate.field).required = true];
+
+  // Status is filled in by the server and indicates whether the request is allowed or not.
+  SelfSubjectAccessReviewStatus status = 3;
+}
+
+// SelfSubjectAccessReviewSpec describes the hypothetical operation to check.
+message SelfSubjectAccessReviewSpec {
+  // service is the full OSAC service name to check permission for
+  // (e.g., "osac.public.v1.Clusters", "osac.public.v1.ComputeInstances", "osac.public.v1.VirtualNetworks").
+  // Must be a valid fully-qualified OSAC service name.
+  string service = 1 [(buf.validate.field).string = {
+    min_len: 1,
+    max_len: 128,
+    pattern: "^osac\\.public\\.v1\\.[A-Z][a-zA-Z]*$"
+  }];
+
+  // method is the operation to check (e.g., Create, Get, List, Update, Delete).
+  // Method names must match gRPC method naming conventions (capitalized).
+  // Valid methods are determined by the service definition and validated at runtime
+  // using protobuf reflection.
+  string method = 2 [(buf.validate.field).string = {
+    min_len: 1,
+    max_len: 64
+  }];
+}
+
+// SelfSubjectAccessReviewStatus describes the result of the permission check.
+message SelfSubjectAccessReviewStatus {
+  // Allowed is true if the user would be authorized to perform the requested operation.
+  bool allowed = 1;
+
+  // Reason describes why the request was denied (reserved for future use).
+  // v1 implementation: always empty — current OPA policy does not export denial reasons.
+  // Future enhancement: extract structured denial reasons from OPA policy output.
+  string reason = 2;
+}

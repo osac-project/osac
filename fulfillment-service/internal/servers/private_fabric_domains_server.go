@@ -21,13 +21,11 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 type PrivateFabricDomainsServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -48,11 +46,6 @@ func NewPrivateFabricDomainsServer() *PrivateFabricDomainsServerBuilder {
 
 func (b *PrivateFabricDomainsServerBuilder) SetLogger(value *slog.Logger) *PrivateFabricDomainsServerBuilder {
 	b.logger = value
-	return b
-}
-
-func (b *PrivateFabricDomainsServerBuilder) SetNotifier(value events.Notifier) *PrivateFabricDomainsServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -82,7 +75,6 @@ func (b *PrivateFabricDomainsServerBuilder) Build() (result *PrivateFabricDomain
 	generic, err := NewGenericServer[*privatev1.FabricDomain]().
 		SetLogger(b.logger).
 		SetService(privatev1.FabricDomains_ServiceDesc.ServiceName).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).

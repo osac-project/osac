@@ -220,6 +220,27 @@ service:
   #       - key: url
   #         param: url
 
+  # Kafka used by the fulfillment service. Omit this block to use the chart
+  # defaults (the in-cluster cluster named by kafka.clusterName). To use a
+  # pre-existing external Kafka cluster, set the top-level kafka.enabled to
+  # false and set service.kafka.connection to ConfigMap and Secret sources that
+  # provide the brokers, user, and password properties. Include the broker CA
+  # in service.certs.caBundle when it is not already trusted.
+  # kafka:
+  #   connection:
+  #   - configMap:
+  #       name: fulfillment-service-kafka-config
+  #       items:
+  #       - key: bootstrap.servers
+  #         param: brokers
+  #       - key: username
+  #         param: user
+  #   - secret:
+  #       name: fulfillment-service-kafka
+  #       items:
+  #       - key: password
+  #         param: password
+
   # Logging configuration.
   log:
     # Log level: debug, info, warn, error

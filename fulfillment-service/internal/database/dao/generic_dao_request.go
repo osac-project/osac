@@ -324,17 +324,6 @@ func (r *request[O]) unmarshalData(data []byte, object O) error {
 	return r.dao.unmarshalOptions.Unmarshal(data, object)
 }
 
-func (r *request[O]) fireEvent(ctx context.Context, event Event) error {
-	event.Table = r.dao.table
-	for _, eventCallback := range r.dao.eventCallbacks {
-		err := eventCallback(ctx, event)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (r *request[O]) getFinalizers(metadata metadataIface) []string {
 	if metadata == nil {
 		return []string{}

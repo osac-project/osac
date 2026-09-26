@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -26,6 +27,8 @@ var (
 	gitCommit = "unknown"
 )
 
+const tokenHTTPTimeout = 30 * time.Second
+
 func main() {
 	klog.InitFlags(nil)
 
@@ -40,6 +43,7 @@ func main() {
 		"Path to a file containing the OAuth2 client secret for fulfillment-service authentication")
 	fulfillmentIssuerURL := flag.String("fulfillment-issuer-url", "",
 		"Keycloak issuer URL for client_credentials token exchange (e.g. https://keycloak.example.com/realms/myrealm)")
+	allowStub := flag.Bool("allow-stub", false, "Allow the in-memory volume stub when fulfillment endpoint is empty")
 	grpcInsecure := flag.Bool("grpc-insecure", false, "Skip TLS server certificate verification")
 	vendorSocketsFlag := flag.String("vendor-sockets", "",
 		"Comma-separated backend=socketpath pairs for vendor node CSI sockets (e.g. ontap=/csi/trident/csi.sock)")
@@ -71,12 +75,13 @@ func main() {
 	klog.Infof("Starting OSAC CSI driver %s version %s (commit %s)", *driverName, version, gitCommit)
 	klog.Infof("CSI endpoint: %s", *csiEndpoint)
 	klog.Infof("Node ID: %s", *nodeID)
-	klog.Infof("Vendor sockets: %v", vendorSockets)
-	klog.Infof("Vendor controllers: %v", vendorControllers)
+	klog.Infof("Vendor sockets configured for %d backends", len(vendorSockets))
+	klog.Infof("Vendor controllers configured for %d backends", len(vendorControllers))
 
 	if err := validateFulfillmentFlags(
 		*fulfillmentEndpoint,
 		*fulfillmentClientID, *fulfillmentClientSecretFile, *fulfillmentIssuerURL,
+		*allowStub,
 	); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
@@ -98,7 +103,7 @@ func main() {
 				klog.Warningf("error closing fulfillment-service connection: %v", cerr)
 			}
 		}()
-		klog.Infof("Fulfillment endpoint: %s (connected)", *fulfillmentEndpoint)
+		klog.Info("Connected to fulfillment service")
 		volumeClient = fulfillment.NewVolumeClient(conn)
 	} else {
 		klog.Infof("No fulfillment endpoint configured, using in-memory volume stub")
@@ -122,7 +127,7 @@ func main() {
 // set or all empty, and that --fulfillment-endpoint is not set without
 // credentials. Partial configuration is a user error.
 func validateFulfillmentFlags(
-	endpoint, clientID, clientSecretFile, issuerURL string,
+	endpoint, clientID, clientSecretFile, issuerURL string, allowStub bool,
 ) error {
 	set := 0
 	if clientID != "" {
@@ -140,11 +145,17 @@ func validateFulfillmentFlags(
 				"and --fulfillment-issuer-url must all be set or all be empty",
 		)
 	}
+	if endpoint == "" && set != 0 {
+		return fmt.Errorf("fulfillment credentials require --fulfillment-endpoint")
+	}
 	if endpoint != "" && set == 0 {
 		return fmt.Errorf(
 			"--fulfillment-endpoint requires --fulfillment-client-id, " +
 				"--fulfillment-client-secret-file, and --fulfillment-issuer-url",
 		)
+	}
+	if endpoint == "" && !allowStub {
+		return fmt.Errorf("--fulfillment-endpoint is required unless --allow-stub is set")
 	}
 	return nil
 }
@@ -153,10 +164,7 @@ func dialFulfillment(
 	endpoint string, insecureSkipVerify bool,
 	clientID, clientSecretFile, issuerURL string,
 ) (*grpc.ClientConn, error) {
-	tlsCfg := &tls.Config{
-		MinVersion:         tls.VersionTLS12,
-		InsecureSkipVerify: insecureSkipVerify, //nolint:gosec // user-controlled flag
-	}
+	tlsCfg := newTLSConfig(insecureSkipVerify)
 	// The OpenShift router does not support ALPN, so we use the
 	// experimental credentials package that disables the ALPN check.
 	// See https://github.com/grpc/grpc-go/issues/434
@@ -199,17 +207,12 @@ func newClientCredentialsTokenSource(
 		return nil, fmt.Errorf("client secret file %s is empty", clientSecretFile)
 	}
 
-	tokenURL := buildTokenURL(issuerURL)
+	tokenURL, err := buildTokenURL(issuerURL)
+	if err != nil {
+		return nil, fmt.Errorf("building token URL: %w", err)
+	}
 
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.TLSClientConfig = &tls.Config{
-		MinVersion:         tls.VersionTLS12,
-		InsecureSkipVerify: insecureSkipVerify, //nolint:gosec // user-controlled flag
-	}
-	httpClient := &http.Client{
-		Transport: transport,
-		Timeout:   30 * time.Second,
-	}
+	httpClient := newTokenHTTPClient(insecureSkipVerify)
 	ctx = context.WithValue(ctx, oauth2.HTTPClient, httpClient)
 
 	cfg := &clientcredentials.Config{
@@ -220,10 +223,51 @@ func newClientCredentialsTokenSource(
 	return cfg.TokenSource(ctx), nil
 }
 
+func newTokenHTTPClient(insecureSkipVerify bool) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = newTLSConfig(insecureSkipVerify)
+	return &http.Client{
+		Transport: transport,
+		Timeout:   tokenHTTPTimeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) == 0 {
+				return nil
+			}
+			if req.URL.Scheme != "https" || req.URL.Host != via[0].URL.Host {
+				return fmt.Errorf("refusing token redirect to %s", req.URL)
+			}
+			return nil
+		},
+	}
+}
+
+func newTLSConfig(insecureSkipVerify bool) *tls.Config {
+	return &tls.Config{
+		MinVersion:         tls.VersionTLS12,
+		InsecureSkipVerify: insecureSkipVerify, //nolint:gosec // user-controlled flag
+	}
+}
+
 // buildTokenURL constructs the Keycloak token endpoint URL from the issuer URL.
-// It normalizes a trailing slash so callers don't have to.
-func buildTokenURL(issuerURL string) string {
-	return strings.TrimRight(issuerURL, "/") + "/protocol/openid-connect/token"
+// It normalizes a trailing slash so callers don't have to. Only HTTPS issuer
+// URLs with an authority are accepted because this URL is used for credentials.
+func buildTokenURL(issuerURL string) (string, error) {
+	parsed, err := url.Parse(issuerURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid issuer URL: %w", err)
+	}
+	if parsed.Scheme != "https" || parsed.Host == "" {
+		return "", fmt.Errorf("issuer URL must be an absolute HTTPS URL")
+	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", fmt.Errorf("issuer URL must not contain a query or fragment")
+	}
+
+	tokenURL, err := url.JoinPath(parsed.String(), "protocol/openid-connect/token")
+	if err != nil {
+		return "", fmt.Errorf("building token URL path: %w", err)
+	}
+	return tokenURL, nil
 }
 
 // parseBackendMap parses a comma-separated list of backend=value pairs into a

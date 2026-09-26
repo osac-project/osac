@@ -84,6 +84,7 @@ spec:
         {{- if include "fulfillment-service.serviceEnabled" (list . "maas") }}
         - --enable-maas
         {{- end }}
+        - --http-cors-allowed-origins=https://{{ include "fulfillment-api.hostname" . }}
         ports:
         - name: api
           containerPort: 8000

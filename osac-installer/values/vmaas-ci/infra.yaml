@@ -17,6 +17,9 @@ mce:
   enabled: false
 
 # --- Infrastructure (osac-infra) ---
+csiDriver:
+  enabled: true
+
 caIssuer:
   enabled: true
 keycloak:

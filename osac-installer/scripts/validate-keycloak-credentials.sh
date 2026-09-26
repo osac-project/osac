@@ -66,7 +66,7 @@ sys.exit(1)
 }
 
 echo "=== Test 1: defaults preserve today's literals (via the keycloak-admin-credentials Secret) ==="
-DEFAULT_RENDER=$(helm template "${CHART_DIR}")
+DEFAULT_RENDER=$(helm template "${CHART_DIR}" --set keycloak.devFixtures.enabled=true)
 assert_contains "${DEFAULT_RENDER}" 'admin-username: "admin"' "Default admin-username in keycloak-admin-credentials Secret"
 assert_contains "${DEFAULT_RENDER}" 'admin-password: "admin"' "Default admin-password in keycloak-admin-credentials Secret"
 assert_contains "${DEFAULT_RENDER}" 'default-user-password: "foobar"' "Default default-user-password in keycloak-admin-credentials Secret"
@@ -80,6 +80,7 @@ assert_secret_key_ref "${DEFAULT_RENDER}" Job keycloak-set-passwords set-passwor
 
 echo "=== Test 2: --set overrides propagate into the Secret (the actual regression) ==="
 OVERRIDE_RENDER=$(helm template "${CHART_DIR}" \
+    --set keycloak.devFixtures.enabled=true \
     --set keycloak.adminUsername=demo-admin \
     --set keycloak.adminPassword=SuperSecret123 \
     --set keycloak.defaultUserPassword=DemoUserPass456)
@@ -112,7 +113,8 @@ EOF
 
 # Stub `oc` so the hook script's client-secret bootstrap path is exercised
 # without a real cluster: existence check reports "not found" once (forcing
-# the generate branch), then jsonpath lookups return fixed base64 values.
+# the generate branch), then jsonpath lookups return fixed base64 values for
+# all four client secrets.
 mkdir -p "${TMP_DIR}/bin"
 cat >"${TMP_DIR}/bin/oc" <<'EOF'
 #!/usr/bin/env bash
@@ -120,6 +122,8 @@ args="$*"
 case "${args}" in
   *"-o jsonpath="*osac-controller*) printf '%s' "$(printf 'controller-secret' | base64)" ;;
   *"-o jsonpath="*osac-admin*)      printf '%s' "$(printf 'admin-secret' | base64)" ;;
+  *"-o jsonpath="*osac-csi-driver*) printf '%s' "$(printf 'csi-driver-secret' | base64)" ;;
+  *"-o jsonpath="*osac-ui-backend*) printf '%s' "$(printf 'ui-backend-secret' | base64)" ;;
   *"create secret"*)                exit 0 ;;
   *"get secret"*)                   exit 1 ;;  # existence check: force the "generate" branch
   *)                                exit 0 ;;

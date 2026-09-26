@@ -24,13 +24,11 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 type PrivateExternalIPPoolsServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -52,11 +50,6 @@ func NewPrivateExternalIPPoolsServer() *PrivateExternalIPPoolsServerBuilder {
 
 func (b *PrivateExternalIPPoolsServerBuilder) SetLogger(value *slog.Logger) *PrivateExternalIPPoolsServerBuilder {
 	b.logger = value
-	return b
-}
-
-func (b *PrivateExternalIPPoolsServerBuilder) SetNotifier(value events.Notifier) *PrivateExternalIPPoolsServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -95,7 +88,6 @@ func (b *PrivateExternalIPPoolsServerBuilder) Build() (result *PrivateExternalIP
 	generic, err := NewGenericServer[*privatev1.ExternalIPPool]().
 		SetLogger(b.logger).
 		SetService(privatev1.ExternalIPPools_ServiceDesc.ServiceName).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).

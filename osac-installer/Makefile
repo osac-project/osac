@@ -389,20 +389,100 @@ helm-deps: ## Build Helm chart dependencies
 	helm dependency build $(OSAC_CHART)
 
 .PHONY: helm-lint
-helm-lint: ## Lint all charts
+helm-lint: helm-deps ## Lint all charts
 	helm lint $(DEPS_CHART)
 	helm lint $(INFRA_CHART)
-	helm dependency build $(OSAC_CHART)
-	helm lint $(OSAC_CHART)
+	helm lint $(OSAC_CHART) --values $(OSAC_CHART)/ci/default-values.yaml
 
 .PHONY: helm-template
 helm-template: ## Dry-run render all templates
 	helm template osac-deps $(DEPS_CHART)
 	helm template osac-infra $(INFRA_CHART)
-	helm template osac $(OSAC_CHART)
+	helm template osac $(OSAC_CHART) --values $(OSAC_CHART)/ci/default-values.yaml
+
+.PHONY: csi-render-test
+csi-render-test: helm-deps ## Verify CSI namespace and ConfigMap rendering modes
+	@set -euo pipefail; \
+		caas_render="$$(mktemp)"; \
+		csi_render="$$(mktemp)"; \
+		full_render="$$(mktemp)"; \
+		custom_render="$$(mktemp)"; \
+		infra_render="$$(mktemp)"; \
+		infra_enabled_render="$$(mktemp)"; \
+		error_render="$$(mktemp)"; \
+		trap 'rm -f "$$caas_render" "$$csi_render" "$$full_render" "$$custom_render" "$$infra_render" "$$infra_enabled_render" "$$error_render"' EXIT; \
+		assert_helm_failure() { \
+			expected="$$1"; shift; \
+			if "$$@" >/dev/null 2>"$$error_render"; then \
+				printf 'Helm unexpectedly accepted invalid values; expected error: %s\n' "$$expected" >&2; \
+				exit 1; \
+			fi; \
+			if ! rg -Fq "$$expected" "$$error_render"; then \
+				printf 'Helm failed without the expected error: %s\n' "$$expected" >&2; \
+				cat "$$error_render" >&2; \
+				exit 1; \
+			fi; \
+		}; \
+		helm template osac $(OSAC_CHART) \
+			--values values/caas-ci/instance.yaml \
+			--set operator.networkManagers.enabled=true \
+			--set service.externalHostname=fulfillment-api.example.com \
+			--set service.internalHostname=fulfillment-internal-api.example.com \
+			--set global.clusterDomain=example.com > "$$caas_render"; \
+		! rg -q '^  OSAC_FULFILLMENT_ENDPOINT:' "$$caas_render"; \
+		helm template osac $(OSAC_CHART) \
+			--values charts/osac/ci/default-values.yaml \
+			--set operator.enabled=false \
+			--set operator.networkManagers.enabled=true \
+			--set csiDriver.enabled=true \
+			--set csiDriver.controller.fulfillment.credentials.secretName=osac-csi-driver-credentials \
+			--set csiDriver.controller.fulfillment.allowStub=false > "$$csi_render"; \
+		test "$$(rg -c '^  OSAC_FULFILLMENT_ENDPOINT:' "$$csi_render")" -eq 1; \
+		rg -q 'namespace: osac-csi' "$$csi_render"; \
+		rg -q '^immutable: true$$' "$$csi_render"; \
+		helm template osac $(OSAC_CHART) \
+			--values charts/osac/ci/full-values.yaml \
+			--set operator.networkManagers.enabled=true > "$$full_render"; \
+		test "$$(rg -c '^  OSAC_FULFILLMENT_ENDPOINT:' "$$full_render")" -eq 2; \
+		helm template osac $(OSAC_CHART) \
+			--values charts/osac/ci/full-values.yaml \
+			--set operator.networkManagers.enabled=true \
+			--set csiDriver.controller.fulfillment.configMap.endpointKey=CUSTOM_FULFILLMENT_ENDPOINT \
+			--set csiDriver.controller.fulfillment.configMap.issuerUrlKey=CUSTOM_FULFILLMENT_ISSUER_URL > "$$custom_render"; \
+		rg -q '^  CUSTOM_FULFILLMENT_ENDPOINT:' "$$custom_render"; \
+		rg -q '^  CUSTOM_FULFILLMENT_ISSUER_URL:' "$$custom_render"; \
+		rg -q 'key: CUSTOM_FULFILLMENT_ENDPOINT' "$$custom_render"; \
+		rg -q 'key: CUSTOM_FULFILLMENT_ISSUER_URL' "$$custom_render"; \
+		helm template osac-infra $(INFRA_CHART) \
+			--values values/caas-ci/infra.yaml > "$$infra_render"; \
+		! rg -q 'name: osac-infra-create-csi-creds' "$$infra_render"; \
+		helm template osac-infra $(INFRA_CHART) \
+			--values values/caas-ci/infra.yaml \
+			--set csiDriver.enabled=true > "$$infra_enabled_render"; \
+		rg -q 'name: osac-infra-create-csi-creds' "$$infra_enabled_render"; \
+		assert_helm_failure "at '/csiDriver/namespace': value must be 'osac-csi'" \
+			helm template osac $(OSAC_CHART) \
+			--values charts/osac/ci/full-values.yaml \
+			--set operator.networkManagers.enabled=true \
+			--set csiDriver.namespace=not-osac-csi; \
+		assert_helm_failure 'csiNamespace must be osac-csi when csiDriver.enabled is true' \
+			helm template osac-infra $(INFRA_CHART) \
+			--values values/caas-ci/infra.yaml \
+			--set csiDriver.enabled=true \
+			--set csiNamespace=not-osac-csi; \
+		assert_helm_failure 'operator and CSI ConfigMaps must use different names when they share a namespace' \
+			helm template osac $(OSAC_CHART) \
+			--values charts/osac/ci/full-values.yaml \
+			--set operator.networkManagers.enabled=true \
+			--namespace osac-csi \
+			--set csiDriver.controller.fulfillment.configMap.name=osac-fulfillment-config; \
+		assert_helm_failure "value must be one of '', 'osac-csi'" \
+			helm template csi-driver ../osac-csi-driver/charts/csi-driver \
+			--set namespace=not-osac-csi; \
+		echo 'CSI render checks passed.'
 
 .PHONY: helm-validate
-helm-validate: helm-lint helm-networking-test ## Validate all charts (lint + template)
+helm-validate: helm-lint csi-render-test helm-networking-test ## Validate all charts (lint + template)
 	@for d in values/*/; do \
 		infra="$${d}infra.yaml"; \
 		[ -f "$$infra" ] && echo "Validating $$infra..." && \

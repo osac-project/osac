@@ -23,7 +23,6 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	"github.com/osac-project/osac/fulfillment-service/internal/services"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -31,7 +30,6 @@ import (
 
 type HostTypesServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -56,12 +54,6 @@ func NewHostTypesServer() *HostTypesServerBuilder {
 // SetLogger sets the logger to use. This is mandatory.
 func (b *HostTypesServerBuilder) SetLogger(value *slog.Logger) *HostTypesServerBuilder {
 	b.logger = value
-	return b
-}
-
-// SetNotifier sets the notifier to use. This is optional.
-func (b *HostTypesServerBuilder) SetNotifier(value events.Notifier) *HostTypesServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -120,7 +112,6 @@ func (b *HostTypesServerBuilder) Build() (result *HostTypesServer, err error) {
 	// Create the private server to delegate to:
 	delegate, err := NewPrivateHostTypesServer().
 		SetLogger(b.logger).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).

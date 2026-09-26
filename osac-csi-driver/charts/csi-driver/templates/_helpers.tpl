@@ -60,3 +60,12 @@ Node service account name.
 {{- include "csi-driver.fullname" . }}-node
 {{- end }}
 {{- end }}
+
+{{/*
+Namespace used by namespaced CSI resources. Direct chart installations use the
+Helm release namespace; the umbrella chart overrides this for the shared hub
+CSI namespace.
+*/}}
+{{- define "csi-driver.namespace" -}}
+{{- default .Release.Namespace .Values.namespace -}}
+{{- end }}

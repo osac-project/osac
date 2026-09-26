@@ -45,6 +45,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/console"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	"github.com/osac-project/osac/fulfillment-service/internal/kafka"
 	hubscheme "github.com/osac-project/osac/fulfillment-service/internal/kubernetes/scheme"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 	"github.com/osac-project/osac/fulfillment-service/internal/metrics"
@@ -54,6 +55,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/servers"
 	"github.com/osac-project/osac/fulfillment-service/internal/services"
 	shtdwn "github.com/osac-project/osac/fulfillment-service/internal/shutdown"
+	"github.com/osac-project/osac/fulfillment-service/internal/trust"
 	"github.com/osac-project/osac/fulfillment-service/internal/validation"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 	_ "github.com/osac-project/osac/proto/gen/cleanapi"
@@ -98,6 +100,7 @@ func Cmd() *cobra.Command {
 	network.AddListenerFlags(flags, network.GrpcListenerName, network.DefaultGrpcAddress)
 	network.AddListenerFlags(flags, network.MetricsListenerName, network.DefaultMetricsAddress)
 	database.AddFlags(flags)
+	kafka.AddFlags(flags)
 	flags.StringVar(
 		&runner.args.authType,
 		"grpc-authn-type",
@@ -131,6 +134,12 @@ func Cmd() *cobra.Command {
 		"ca-file",
 		[]string{},
 		caFileFlagHelp,
+	)
+	flags.StringVar(
+		&runner.args.kafkaTopicPrefix,
+		"kafka-topic-prefix",
+		servers.DefaultEventTopicPrefix,
+		kafkaTopicPrefixFlagHelp,
 	)
 	flags.StringSliceVar(
 		&runner.args.trustedTokenIssuers,
@@ -199,6 +208,7 @@ type runnerContext struct {
 	flags  *pflag.FlagSet
 	args   struct {
 		caFiles                  []string
+		kafkaTopicPrefix         string
 		authType                 string
 		externalAuthAddress      string
 		trustedTokenIssuers      []string
@@ -253,7 +263,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	}
 
 	// Load the trusted CA certificates:
-	caPool, err := network.NewCertPool().
+	caPool, err := trust.NewCertPool().
 		SetLogger(c.logger).
 		AddSystemFiles(true).
 		AddKubernetesFiles(true).
@@ -262,6 +272,24 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	if err != nil {
 		return fmt.Errorf("failed to load trusted CA certificates: %w", err)
 	}
+
+	// Create the Kafka client:
+	c.logger.InfoContext(ctx, "Creating Kafka client")
+	kafkaTool, err := kafka.NewTool().
+		SetLogger(c.logger).
+		SetFlags(c.flags).
+		SetCAPool(caPool).
+		Build()
+	if err != nil {
+		return err
+	}
+	kafkaClient, err := kafkaTool.Client()
+	if err != nil {
+		return err
+	}
+	shutdown.AddFunction("kafka", 0, func(context.Context) error {
+		return kafkaClient.Close()
+	})
 
 	// Wait till the database is available:
 	dbTool, err := database.NewTool().
@@ -401,21 +429,6 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		return fmt.Errorf("failed to create Rego authorization interceptor: %w", err)
 	}
 
-	// Create the notifier:
-	c.logger.InfoContext(ctx, "Creating notifier")
-	notifier, err := database.NewNotifier().
-		SetLogger(c.logger).
-		SetChannel("events").
-		SetPool(dbPool).
-		Build()
-	if err != nil {
-		return fmt.Errorf("failed to create notifier: %w", err)
-	}
-	err = notifier.Start(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to start notifier: %w", err)
-	}
-
 	// Create the private attribution logic:
 	c.logger.InfoContext(ctx, "Creating private attribution logic")
 	privateAttributionLogic, err := auth.NewSystemAttributionLogic().
@@ -429,7 +442,6 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	c.logger.InfoContext(ctx, "Creating private users server")
 	privateUsersServer, err := servers.NewPrivateUsersServer().
 		SetLogger(c.logger).
-		SetNotifier(notifier).
 		SetAttributionLogic(privateAttributionLogic).
 		SetTenancyLogic(tenancyLogic).
 		SetMetricsRegisterer(metricsRegisterer).
@@ -628,19 +640,15 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		c.logger.InfoContext(ctx, "Performing vault health check")
 		vaultCaPool := caPool
 		if c.args.vaultBase.CaCertFile != "" {
-			certPEM, readErr := os.ReadFile(c.args.vaultBase.CaCertFile)
-			if readErr != nil {
-				return fmt.Errorf(
-					"failed to read vault CA cert from file '%s': %w",
-					c.args.vaultBase.CaCertFile, readErr,
-				)
-			}
-			vaultCaPool = caPool.Clone()
-			if !vaultCaPool.AppendCertsFromPEM(certPEM) {
-				return fmt.Errorf(
-					"vault CA cert file '%s' contains no valid certificates",
-					c.args.vaultBase.CaCertFile,
-				)
+			vaultCaPool, err = trust.NewCertPool().
+				SetLogger(c.logger).
+				AddSystemFiles(true).
+				AddKubernetesFiles(true).
+				AddFiles(c.args.caFiles...).
+				AddFile(c.args.vaultBase.CaCertFile).
+				Build()
+			if err != nil {
+				return fmt.Errorf("failed to load vault CA certificates: %w", err)
 			}
 		}
 		healthChecker, healthErr := vault.NewHealthChecker().
@@ -699,7 +707,6 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	// Register all filterable resources' public and private servers:
 	resourceServers, err := RegisterResourceServers(ctx, grpcServer, ResourceServerDeps{
 		Logger:                  c.logger,
-		Notifier:                notifier,
 		PrivateAttributionLogic: privateAttributionLogic,
 		PublicAttributionLogic:  publicAttributionLogic,
 		TenancyLogic:            tenancyLogic,
@@ -784,66 +791,28 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 
 	// Create the events server:
 	c.logger.InfoContext(ctx, "Creating events server")
-	eventsListener, err := database.NewListener().
-		SetLogger(c.logger).
-		SetUrl(dbTool.URL()).
-		SetChannel("events").
-		Build()
-	if err != nil {
-		return fmt.Errorf("failed to create events listener: %w", err)
-	}
 	eventsServer, err := servers.NewEventsServer().
 		SetLogger(c.logger).
-		SetListener(eventsListener).
+		SetKafkaClient(kafkaClient).
+		SetKafkaTopicPrefix(c.args.kafkaTopicPrefix).
 		SetTenancyLogic(tenancyLogic).
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create events server: %w", err)
 	}
-	go func() {
-		err := eventsServer.Start(ctx)
-		if err == nil || errors.Is(err, context.Canceled) {
-			c.logger.InfoContext(ctx, "Events server finished")
-		} else {
-			c.logger.ErrorContext(
-				ctx,
-				"Events server finished",
-				slog.Any("error", err),
-			)
-		}
-	}()
 	// filterable-resource-exempt: streaming Watch RPC, no List RPC or CEL filter field
 	publicv1.RegisterEventsServer(grpcServer, eventsServer)
 
 	// Create the private events server:
 	c.logger.InfoContext(ctx, "Creating private events server")
-	privateEventsListener, err := database.NewListener().
-		SetLogger(c.logger).
-		SetUrl(dbTool.URL()).
-		SetChannel("events").
-		Build()
-	if err != nil {
-		return fmt.Errorf("failed to create private events listener: %w", err)
-	}
 	privateEventsServer, err := servers.NewPrivateEventsServer().
 		SetLogger(c.logger).
-		SetListener(privateEventsListener).
+		SetKafkaClient(kafkaClient).
+		SetKafkaTopicPrefix(c.args.kafkaTopicPrefix).
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create private events server: %w", err)
 	}
-	go func() {
-		err := privateEventsServer.Start(ctx)
-		if err == nil || errors.Is(err, context.Canceled) {
-			c.logger.InfoContext(ctx, "Private events server finished")
-		} else {
-			c.logger.ErrorContext(
-				ctx,
-				"Private events server finished",
-				slog.Any("error", err),
-			)
-		}
-	}()
 	// filterable-resource-exempt: streaming Watch RPC, no List RPC or CEL filter field
 	privatev1.RegisterEventsServer(grpcServer, privateEventsServer)
 
@@ -932,6 +901,10 @@ no effect.
 const caFileFlagHelp = `
 _FILE_ - Files or directories containing trusted CA certificates in PEM format. Used for TLS connections to the external
 services.
+`
+
+const kafkaTopicPrefixFlagHelp = `
+_PREFIX_ - Prefix of the Kafka topics that contain fulfillment events.
 `
 
 const grpcAuthnTrustedTokenIssuersFlagHelp = `

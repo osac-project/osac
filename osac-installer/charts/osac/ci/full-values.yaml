@@ -70,7 +70,6 @@ service:
         items:
         - key: url
           param: url
-
 aap:
   aap:
     instance:

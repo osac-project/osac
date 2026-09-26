@@ -11,7 +11,7 @@ Unless required by applicable law or agreed to in writing, software distributed 
 language governing permissions and limitations under the License.
 */
 
-package network
+package trust
 
 import (
 	"crypto/rand"
@@ -182,6 +182,22 @@ var _ = Describe("Certificate pool", func() {
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 			Expect(pool).ToNot(BeNil())
+			Expect(pool.Pool()).ToNot(BeNil())
+			Expect(pool.Files()).To(BeEmpty())
+			Expect(pool.KubernetesFiles()).To(BeFalse())
+			Expect(pool.SystemFiles()).To(BeFalse())
+		})
+
+		It("Reports the certificate sources included by the builder", func() {
+			pool, err := NewCertPool().
+				SetLogger(logger).
+				SetRoot(tmpDir).
+				AddKubernetesFiles(true).
+				AddSystemFiles(true).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(pool.KubernetesFiles()).To(BeTrue())
+			Expect(pool.SystemFiles()).To(BeTrue())
 		})
 
 		It("Can be created with one file", func() {
@@ -195,6 +211,12 @@ var _ = Describe("Certificate pool", func() {
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 			Expect(pool).ToNot(BeNil())
+			Expect(pool.Files()).To(Equal([]string{myCerts.caCertFile}))
+
+			// The returned list is a copy, so changing it doesn't modify the pool:
+			files := pool.Files()
+			files[0] = "changed"
+			Expect(pool.Files()).To(Equal([]string{myCerts.caCertFile}))
 		})
 
 		It("Can be created with multiple files", func() {
@@ -209,6 +231,7 @@ var _ = Describe("Certificate pool", func() {
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 			Expect(pool).ToNot(BeNil())
+			Expect(pool.Files()).To(Equal([]string{myCerts.caCertFile, yourCerts.caCertFile}))
 		})
 
 		It("Can't be created with files that don't exist", func() {
@@ -255,6 +278,7 @@ var _ = Describe("Certificate pool", func() {
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 			Expect(pool).ToNot(BeNil())
+			Expect(pool.Files()).To(BeEmpty())
 		})
 
 		It("Can be created with a single certificate from a string", func() {
@@ -384,7 +408,7 @@ var _ = Describe("Certificate pool", func() {
 
 			// Verify the TLS certificate using the pool:
 			opts := x509.VerifyOptions{
-				Roots: pool,
+				Roots: pool.Pool(),
 			}
 			chains, err := myCerts.tlsCert.Verify(opts)
 			Expect(err).ToNot(HaveOccurred())
@@ -407,7 +431,7 @@ var _ = Describe("Certificate pool", func() {
 
 			// Verify both TLS certificates using the pool:
 			opts := x509.VerifyOptions{
-				Roots: pool,
+				Roots: pool.Pool(),
 			}
 			_, err = myCerts.tlsCert.Verify(opts)
 			Expect(err).ToNot(HaveOccurred())
@@ -451,10 +475,11 @@ var _ = Describe("Certificate pool", func() {
 				AddFile(certDir).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
+			Expect(pool.Files()).To(ConsistOf(mainCertPath, subCertPath))
 
 			// Verify both TLS certificates using the pool:
 			opts := x509.VerifyOptions{
-				Roots: pool,
+				Roots: pool.Pool(),
 			}
 			_, err = myCerts.tlsCert.Verify(opts)
 			Expect(err).ToNot(HaveOccurred())
@@ -494,10 +519,11 @@ var _ = Describe("Certificate pool", func() {
 				AddFile(certDir).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
+			Expect(pool.Files()).To(Equal([]string{validCertPath}))
 
 			// Verify the first TLS certificate (should succeed - CA was loaded):
 			opts := x509.VerifyOptions{
-				Roots: pool,
+				Roots: pool.Pool(),
 			}
 			_, err = myCerts.tlsCert.Verify(opts)
 			Expect(err).ToNot(HaveOccurred())
@@ -532,10 +558,11 @@ var _ = Describe("Certificate pool", func() {
 				AddKubernetesFiles(true).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
+			Expect(pool.Files()).To(Equal([]string{caPath}))
 
 			// Verify the TLS certificate using the pool:
 			opts := x509.VerifyOptions{
-				Roots: pool,
+				Roots: pool.Pool(),
 			}
 			_, err = kubeCerts.tlsCert.Verify(opts)
 			Expect(err).ToNot(HaveOccurred())
@@ -565,10 +592,11 @@ var _ = Describe("Certificate pool", func() {
 				AddKubernetesFiles(true).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
+			Expect(pool.Files()).To(Equal([]string{caPath}))
 
 			// Verify the TLS certificate using the pool:
 			opts := x509.VerifyOptions{
-				Roots: pool,
+				Roots: pool.Pool(),
 			}
 			_, err = serviceCerts.tlsCert.Verify(opts)
 			Expect(err).ToNot(HaveOccurred())
@@ -591,7 +619,7 @@ var _ = Describe("Certificate pool", func() {
 
 			// Verify the TLS certificate using the pool:
 			opts := x509.VerifyOptions{
-				Roots: pool,
+				Roots: pool.Pool(),
 			}
 			chains, err := myCerts.tlsCert.Verify(opts)
 			Expect(err).ToNot(HaveOccurred())
@@ -615,7 +643,7 @@ var _ = Describe("Certificate pool", func() {
 
 			// Verify the TLS certificate using the pool:
 			opts := x509.VerifyOptions{
-				Roots: pool,
+				Roots: pool.Pool(),
 			}
 			chains, err := myCerts.tlsCert.Verify(opts)
 			Expect(err).ToNot(HaveOccurred())
@@ -637,7 +665,7 @@ var _ = Describe("Certificate pool", func() {
 
 			// Verify the TLS certificate using the pool:
 			opts := x509.VerifyOptions{
-				Roots: pool,
+				Roots: pool.Pool(),
 			}
 			chains, err := myCerts.tlsCert.Verify(opts)
 			Expect(err).ToNot(HaveOccurred())
@@ -664,7 +692,7 @@ var _ = Describe("Certificate pool", func() {
 
 			// Verify the TLS certificates using the pool:
 			opts := x509.VerifyOptions{
-				Roots: pool,
+				Roots: pool.Pool(),
 			}
 			_, err = myCerts.tlsCert.Verify(opts)
 			Expect(err).ToNot(HaveOccurred())
@@ -688,7 +716,7 @@ var _ = Describe("Certificate pool", func() {
 
 			// Verify the TLS certificates using the pool:
 			opts := x509.VerifyOptions{
-				Roots: pool,
+				Roots: pool.Pool(),
 			}
 			_, err = myCerts.tlsCert.Verify(opts)
 			Expect(err).ToNot(HaveOccurred())
@@ -714,7 +742,7 @@ var _ = Describe("Certificate pool", func() {
 
 			// Verify the TLS certificates using the pool:
 			opts := x509.VerifyOptions{
-				Roots: pool,
+				Roots: pool.Pool(),
 			}
 			_, err = myCerts.tlsCert.Verify(opts)
 			Expect(err).ToNot(HaveOccurred())
@@ -735,7 +763,7 @@ var _ = Describe("Certificate pool", func() {
 			client := http.Client{
 				Transport: &http.Transport{
 					TLSClientConfig: &tls.Config{
-						RootCAs: pool,
+						RootCAs: pool.Pool(),
 					},
 				},
 			}

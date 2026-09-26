@@ -26,13 +26,11 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 type PrivateStorageTiersServerBuilder struct {
 	logger             *slog.Logger
-	notifier           events.Notifier
 	attributionLogic   auth.AttributionLogic
 	tenancyLogic       auth.TenancyLogic
 	metricsRegisterer  prometheus.Registerer
@@ -56,11 +54,6 @@ func NewPrivateStorageTiersServer() *PrivateStorageTiersServerBuilder {
 
 func (b *PrivateStorageTiersServerBuilder) SetLogger(value *slog.Logger) *PrivateStorageTiersServerBuilder {
 	b.logger = value
-	return b
-}
-
-func (b *PrivateStorageTiersServerBuilder) SetNotifier(value events.Notifier) *PrivateStorageTiersServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -108,7 +101,6 @@ func (b *PrivateStorageTiersServerBuilder) Build() (result *PrivateStorageTiersS
 	generic, err := NewGenericServer[*privatev1.StorageTier]().
 		SetLogger(b.logger).
 		SetService(privatev1.StorageTiers_ServiceDesc.ServiceName).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).

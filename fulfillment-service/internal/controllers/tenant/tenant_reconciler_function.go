@@ -681,11 +681,6 @@ func (t *task) ensureVaultNamespace(ctx context.Context) error {
 	if t.r.vaultLifecycle == nil {
 		return nil
 	}
-	// The shared tenant stores platform-managed Secrets used by shared templates, so it needs a
-	// Vault namespace. The system tenant remains internal-only and must not get one.
-	if t.tenant.GetMetadata().GetName() == auth.SystemTenant {
-		return nil
-	}
 	if t.isConditionTrue(condType) {
 		return nil
 	}

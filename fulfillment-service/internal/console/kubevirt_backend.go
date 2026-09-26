@@ -15,7 +15,6 @@ package console
 
 import (
 	"context"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -26,12 +25,13 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/tlsconfig"
+	"github.com/osac-project/osac/fulfillment-service/internal/trust"
 )
 
 // KubeVirtBackendBuilder builds a KubeVirtBackend.
 type KubeVirtBackendBuilder struct {
 	logger     *slog.Logger
-	caPool     *x509.CertPool
+	caPool     *trust.CertPool
 	pingConfig PingConfig
 }
 
@@ -39,7 +39,7 @@ type KubeVirtBackendBuilder struct {
 // WebSocket URIs embedded in encrypted console tickets.
 type kubeVirtBackend struct {
 	logger     *slog.Logger
-	caPool     *x509.CertPool
+	caPool     *trust.CertPool
 	pingConfig PingConfig
 }
 
@@ -54,7 +54,7 @@ func (b *KubeVirtBackendBuilder) SetLogger(value *slog.Logger) *KubeVirtBackendB
 }
 
 // SetCAPool sets a CA pool for TLS when dialing backend WebSocket endpoints.
-func (b *KubeVirtBackendBuilder) SetCAPool(value *x509.CertPool) *KubeVirtBackendBuilder {
+func (b *KubeVirtBackendBuilder) SetCAPool(value *trust.CertPool) *KubeVirtBackendBuilder {
 	b.caPool = value
 	return b
 }
@@ -108,7 +108,7 @@ func (b *kubeVirtBackend) Connect(ctx context.Context, target Target) (io.ReadWr
 
 	tlsConfig := tlsconfig.NewClientTLSConfig()
 	if b.caPool != nil {
-		tlsConfig.RootCAs = b.caPool
+		tlsConfig.RootCAs = b.caPool.Pool()
 	}
 	dialOpts.HTTPClient = &http.Client{
 		Transport: &http.Transport{

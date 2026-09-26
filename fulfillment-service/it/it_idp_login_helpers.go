@@ -628,7 +628,7 @@ func (t *Tool) SimulateOIDCLogin(ctx context.Context, idpAlias, username, passwo
 		Jar: jar,
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{
-				RootCAs:    t.caPool,
+				RootCAs:    t.caPool.Pool(),
 				MinVersion: tls.VersionTLS12,
 			},
 		},

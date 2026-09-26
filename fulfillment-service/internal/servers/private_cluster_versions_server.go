@@ -32,7 +32,6 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -41,7 +40,6 @@ const maxImageLength = 512
 
 type PrivateClusterVersionsServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -63,11 +61,6 @@ func NewPrivateClusterVersionsServer() *PrivateClusterVersionsServerBuilder {
 
 func (b *PrivateClusterVersionsServerBuilder) SetLogger(value *slog.Logger) *PrivateClusterVersionsServerBuilder {
 	b.logger = value
-	return b
-}
-
-func (b *PrivateClusterVersionsServerBuilder) SetNotifier(value events.Notifier) *PrivateClusterVersionsServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -106,7 +99,6 @@ func (b *PrivateClusterVersionsServerBuilder) Build() (*PrivateClusterVersionsSe
 	generic, err := NewGenericServer[*privatev1.ClusterVersion]().
 		SetLogger(b.logger).
 		SetService(privatev1.ClusterVersions_ServiceDesc.ServiceName).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).

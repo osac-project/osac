@@ -21,3 +21,5 @@ caIssuer:
   enabled: true
 keycloak:
   enabled: true
+kafka:
+  enabled: true

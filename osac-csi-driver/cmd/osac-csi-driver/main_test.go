@@ -2,55 +2,64 @@ package main
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 func TestValidateFulfillmentFlags(t *testing.T) {
 	t.Run("all empty is valid", func(t *testing.T) {
-		if err := validateFulfillmentFlags("", "", "", ""); err != nil {
+		if err := validateFulfillmentFlags("", "", "", "", true); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 
+	t.Run("all empty without stub permission returns error", func(t *testing.T) {
+		if err := validateFulfillmentFlags("", "", "", "", false); err == nil {
+			t.Fatal("expected error when stub mode is not allowed")
+		}
+	})
+
 	t.Run("all set is valid", func(t *testing.T) {
-		err := validateFulfillmentFlags("ep", "id", "/path", "https://issuer")
+		err := validateFulfillmentFlags("ep", "id", "/path", "https://issuer", false)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 
 	t.Run("only client-id set returns error", func(t *testing.T) {
-		err := validateFulfillmentFlags("", "id", "", "")
+		err := validateFulfillmentFlags("", "id", "", "", true)
 		if err == nil {
 			t.Fatal("expected error when only client-id is set")
 		}
 	})
 
 	t.Run("only secret-file set returns error", func(t *testing.T) {
-		err := validateFulfillmentFlags("", "", "/path", "")
+		err := validateFulfillmentFlags("", "", "/path", "", true)
 		if err == nil {
 			t.Fatal("expected error when only secret-file is set")
 		}
 	})
 
 	t.Run("only issuer-url set returns error", func(t *testing.T) {
-		err := validateFulfillmentFlags("", "", "", "https://issuer")
+		err := validateFulfillmentFlags("", "", "", "https://issuer", true)
 		if err == nil {
 			t.Fatal("expected error when only issuer-url is set")
 		}
 	})
 
 	t.Run("missing issuer-url returns error", func(t *testing.T) {
-		err := validateFulfillmentFlags("", "id", "/path", "")
+		err := validateFulfillmentFlags("", "id", "/path", "", true)
 		if err == nil {
 			t.Fatal("expected error when issuer-url is missing")
 		}
 	})
 
 	t.Run("endpoint without credentials returns error", func(t *testing.T) {
-		err := validateFulfillmentFlags("fulfillment.svc:8000", "", "", "")
+		err := validateFulfillmentFlags("fulfillment.svc:8000", "", "", "", true)
 		if err == nil {
 			t.Fatal("expected error when endpoint is set without credentials")
 		}
@@ -59,25 +68,27 @@ func TestValidateFulfillmentFlags(t *testing.T) {
 	t.Run("endpoint with credentials is valid", func(t *testing.T) {
 		err := validateFulfillmentFlags(
 			"fulfillment.svc:8000", "id", "/path", "https://issuer",
+			false,
 		)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 
-	t.Run("credentials without endpoint is valid", func(t *testing.T) {
-		// Credentials set but no endpoint — valid (credentials are unused
-		// but not an error; the driver simply won't dial).
-		err := validateFulfillmentFlags("", "id", "/path", "https://issuer")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+	t.Run("credentials without endpoint returns error", func(t *testing.T) {
+		err := validateFulfillmentFlags("", "id", "/path", "https://issuer", false)
+		if err == nil {
+			t.Fatal("expected error when credentials are set without endpoint")
 		}
 	})
 }
 
 func TestBuildTokenURL(t *testing.T) {
 	t.Run("without trailing slash", func(t *testing.T) {
-		got := buildTokenURL("https://keycloak.example.com/realms/myrealm")
+		got, err := buildTokenURL("https://keycloak.example.com/realms/myrealm")
+		if err != nil {
+			t.Fatalf("buildTokenURL() returned error: %v", err)
+		}
 		want := "https://keycloak.example.com/realms/myrealm/protocol/openid-connect/token"
 		if got != want {
 			t.Fatalf("buildTokenURL() = %q, want %q", got, want)
@@ -85,12 +96,78 @@ func TestBuildTokenURL(t *testing.T) {
 	})
 
 	t.Run("with trailing slash", func(t *testing.T) {
-		got := buildTokenURL("https://keycloak.example.com/realms/myrealm/")
+		got, err := buildTokenURL("https://keycloak.example.com/realms/myrealm/")
+		if err != nil {
+			t.Fatalf("buildTokenURL() returned error: %v", err)
+		}
 		want := "https://keycloak.example.com/realms/myrealm/protocol/openid-connect/token"
 		if got != want {
 			t.Fatalf("buildTokenURL() = %q, want %q", got, want)
 		}
 	})
+
+	for _, issuerURL := range []string{
+		"http://keycloak.example.com/realms/myrealm",
+		"https://",
+		"https://keycloak.example.com/realms/myrealm?query=value",
+	} {
+		t.Run("rejects "+issuerURL, func(t *testing.T) {
+			if _, err := buildTokenURL(issuerURL); err == nil {
+				t.Fatalf("buildTokenURL(%q) returned no error", issuerURL)
+			}
+		})
+	}
+}
+
+func TestNewTokenHTTPClient(t *testing.T) {
+	if got := newTokenHTTPClient(false).Timeout; got != tokenHTTPTimeout {
+		t.Fatalf("token HTTP timeout = %s, want %s", got, tokenHTTPTimeout)
+	}
+	if got := newTokenHTTPClient(true).Timeout; got != tokenHTTPTimeout {
+		t.Fatalf("insecure token HTTP timeout = %s, want %s", got, tokenHTTPTimeout)
+	}
+}
+
+func TestTokenHTTPClientRejectsCredentialRedirects(t *testing.T) {
+	for _, status := range []int{http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			var targetRequests int
+			target := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				targetRequests++
+			}))
+			defer target.Close()
+
+			source := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Location", target.URL)
+				w.WriteHeader(status)
+			}))
+			defer source.Close()
+
+			req, err := http.NewRequest(
+				http.MethodPost,
+				source.URL,
+				strings.NewReader("client_id=client&client_secret=secret"),
+			)
+			if err != nil {
+				t.Fatalf("creating request: %v", err)
+			}
+			req.Header.Set("Authorization", "Basic credentials")
+
+			resp, err := newTokenHTTPClient(true).Do(req)
+			if err == nil {
+				if resp != nil {
+					resp.Body.Close()
+				}
+				t.Fatalf("expected redirect to be rejected")
+			}
+			if resp != nil {
+				resp.Body.Close()
+			}
+			if targetRequests != 0 {
+				t.Fatalf("redirect target received %d requests", targetRequests)
+			}
+		})
+	}
 }
 
 func TestNewClientCredentialsTokenSource(t *testing.T) {

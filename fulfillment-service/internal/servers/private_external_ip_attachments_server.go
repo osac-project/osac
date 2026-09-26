@@ -28,13 +28,11 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 type PrivateExternalIPAttachmentsServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -63,11 +61,6 @@ func NewPrivateExternalIPAttachmentsServer() *PrivateExternalIPAttachmentsServer
 
 func (b *PrivateExternalIPAttachmentsServerBuilder) SetLogger(value *slog.Logger) *PrivateExternalIPAttachmentsServerBuilder {
 	b.logger = value
-	return b
-}
-
-func (b *PrivateExternalIPAttachmentsServerBuilder) SetNotifier(value events.Notifier) *PrivateExternalIPAttachmentsServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -105,7 +98,6 @@ func (b *PrivateExternalIPAttachmentsServerBuilder) Build() (*PrivateExternalIPA
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer)
-	addDAOEventCallback(externalIPDaoBuilder, b.notifier)
 	externalIPDao, err := externalIPDaoBuilder.Build()
 	if err != nil {
 		return nil, err
@@ -142,7 +134,6 @@ func (b *PrivateExternalIPAttachmentsServerBuilder) Build() (*PrivateExternalIPA
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer)
-	addDAOEventCallback(externalIPAttachmentDaoBuilder, b.notifier)
 	externalIPAttachmentDao, err := externalIPAttachmentDaoBuilder.Build()
 	if err != nil {
 		return nil, err
@@ -159,7 +150,6 @@ func (b *PrivateExternalIPAttachmentsServerBuilder) Build() (*PrivateExternalIPA
 	generic, err := NewGenericServer[*privatev1.ExternalIPAttachment]().
 		SetLogger(b.logger).
 		SetService(privatev1.ExternalIPAttachments_ServiceDesc.ServiceName).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).

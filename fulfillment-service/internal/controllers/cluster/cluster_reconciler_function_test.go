@@ -88,6 +88,52 @@ var _ = Describe("validateTenant", func() {
 	})
 })
 
+var _ = Describe("prepareNodeRequest", func() {
+	It("uses BareMetalInstanceType name as ResourceClass when present", func() {
+		t := &task{}
+		nodeSet := privatev1.ClusterNodeSet_builder{
+			BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Name: "gpu.gb200"}.Build(),
+			Size:                  proto.Int32(3),
+		}.Build()
+		nr := t.prepareNodeRequest(nodeSet)
+		Expect(nr.ResourceClass).To(Equal("gpu.gb200"))
+		Expect(nr.NumberOfNodes).To(Equal(3))
+	})
+
+	It("falls back to HostType name when BareMetalInstanceType is absent", func() {
+		t := &task{}
+		nodeSet := privatev1.ClusterNodeSet_builder{
+			HostType: privatev1.HostTypeReference_builder{Name: "legacy-host"}.Build(),
+			Size:     proto.Int32(5),
+		}.Build()
+		nr := t.prepareNodeRequest(nodeSet)
+		Expect(nr.ResourceClass).To(Equal("legacy-host"))
+		Expect(nr.NumberOfNodes).To(Equal(5))
+	})
+
+	It("prefers BareMetalInstanceType over HostType when both are present", func() {
+		t := &task{}
+		nodeSet := privatev1.ClusterNodeSet_builder{
+			BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Name: "new-bmit"}.Build(),
+			HostType:              privatev1.HostTypeReference_builder{Name: "old-host"}.Build(),
+			Size:                  proto.Int32(2),
+		}.Build()
+		nr := t.prepareNodeRequest(nodeSet)
+		Expect(nr.ResourceClass).To(Equal("new-bmit"))
+		Expect(nr.NumberOfNodes).To(Equal(2))
+	})
+
+	It("returns empty ResourceClass when neither reference is present", func() {
+		t := &task{}
+		nodeSet := privatev1.ClusterNodeSet_builder{
+			Size: proto.Int32(1),
+		}.Build()
+		nr := t.prepareNodeRequest(nodeSet)
+		Expect(nr.ResourceClass).To(BeEmpty())
+		Expect(nr.NumberOfNodes).To(Equal(1))
+	})
+})
+
 var _ = Describe("update tenant annotation", func() {
 	const (
 		clusterID    = "test-cluster-id"
@@ -217,8 +263,8 @@ var _ = Describe("update tenant annotation", func() {
 				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
 					"gpu.gb200": privatev1.ClusterNodeSet_builder{
-						HostType: &privatev1.HostTypeReference{Name: "gpu.gb200"},
-						Size:     proto.Int32(5),
+						Size:                  proto.Int32(5),
+						BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Name: "gpu.gb200"}.Build(),
 					}.Build(),
 				},
 			}.Build(),
@@ -303,8 +349,8 @@ var _ = Describe("update tenant annotation", func() {
 				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
 					"gpu.gb200": privatev1.ClusterNodeSet_builder{
-						HostType: &privatev1.HostTypeReference{Name: "gpu.gb200"},
-						Size:     proto.Int32(5),
+						Size:                  proto.Int32(5),
+						BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Name: "gpu.gb200"}.Build(),
 					}.Build(),
 				},
 			}.Build(),
@@ -383,8 +429,8 @@ var _ = Describe("update tenant annotation", func() {
 				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
 					"gpu.gb200": privatev1.ClusterNodeSet_builder{
-						HostType: &privatev1.HostTypeReference{Name: "gpu.gb200"},
-						Size:     proto.Int32(5),
+						Size:                  proto.Int32(5),
+						BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Name: "gpu.gb200"}.Build(),
 					}.Build(),
 				},
 			}.Build(),
@@ -640,8 +686,8 @@ var _ = Describe("update tenant annotation", func() {
 				Version:  &privatev1.ClusterVersionReference{Name: versionName},
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
 					"gpu.gb200": privatev1.ClusterNodeSet_builder{
-						HostType: &privatev1.HostTypeReference{Name: "gpu.gb200"},
-						Size:     proto.Int32(5),
+						Size:                  proto.Int32(5),
+						BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Name: "gpu.gb200"}.Build(),
 					}.Build(),
 				},
 			}.Build(),
@@ -748,8 +794,8 @@ var _ = Describe("update tenant annotation", func() {
 				Version:  &privatev1.ClusterVersionReference{Name: newVersionName},
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
 					"gpu.gb200": privatev1.ClusterNodeSet_builder{
-						HostType: &privatev1.HostTypeReference{Name: "gpu.gb200"},
-						Size:     proto.Int32(3),
+						Size:                  proto.Int32(3),
+						BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Name: "gpu.gb200"}.Build(),
 					}.Build(),
 				},
 			}.Build(),
@@ -1085,6 +1131,15 @@ var _ = Describe("delete", func() {
 		ctx = context.Background()
 		ctrl = gomock.NewController(GinkgoT())
 		DeferCleanup(ctrl.Finish)
+	})
+
+	It("should remove finalizer when no hub was assigned", func() {
+		t := newTaskForDelete(clusterID, "", nil)
+		Expect(hasFinalizer(t.cluster)).To(BeTrue())
+
+		err := t.delete(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(hasFinalizer(t.cluster)).To(BeFalse())
 	})
 
 	It("should remove finalizer when hub cache returns ErrHubNotFound", func() {

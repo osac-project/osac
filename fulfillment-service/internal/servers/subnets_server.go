@@ -23,14 +23,12 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 type SubnetsServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -54,12 +52,6 @@ func NewSubnetsServer() *SubnetsServerBuilder {
 // SetLogger sets the logger to use. This is mandatory.
 func (b *SubnetsServerBuilder) SetLogger(value *slog.Logger) *SubnetsServerBuilder {
 	b.logger = value
-	return b
-}
-
-// SetNotifier sets the notifier to use. This is optional.
-func (b *SubnetsServerBuilder) SetNotifier(value events.Notifier) *SubnetsServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -112,7 +104,6 @@ func (b *SubnetsServerBuilder) Build() (result *SubnetsServer, err error) {
 	// Create the private server to delegate to:
 	delegate, err := NewPrivateSubnetsServer().
 		SetLogger(b.logger).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).

@@ -15,7 +15,6 @@ package controller
 
 import (
 	"context"
-	"crypto/x509"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -66,6 +65,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/network"
 	"github.com/osac-project/osac/fulfillment-service/internal/oauth"
 	shtdwn "github.com/osac-project/osac/fulfillment-service/internal/shutdown"
+	"github.com/osac-project/osac/fulfillment-service/internal/trust"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 	"github.com/osac-project/osac/fulfillment-service/internal/version"
 	_ "github.com/osac-project/osac/proto/gen/cleanapi"
@@ -256,7 +256,7 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 
 	// Load the trusted CA certificates:
 	r.logger.InfoContext(ctx, "Loading trusted CA certificates")
-	caPool, err := network.NewCertPool().
+	caPool, err := trust.NewCertPool().
 		SetLogger(r.logger).
 		AddFiles(r.args.caFiles...).
 		Build()
@@ -883,13 +883,14 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		}
 		vaultCaPool := caPool
 		if r.args.vaultBase.CaCertFile != "" {
-			vaultCaPool, err = network.NewCertPool().
+			var loadErr error
+			vaultCaPool, loadErr = trust.NewCertPool().
 				SetLogger(r.logger).
 				AddFiles(r.args.caFiles...).
 				AddFile(r.args.vaultBase.CaCertFile).
 				Build()
-			if err != nil {
-				return fmt.Errorf("failed to load vault CA certificates: %w", err)
+			if loadErr != nil {
+				return fmt.Errorf("failed to load vault CA certificates: %w", loadErr)
 			}
 		}
 		vaultLifecycleClient, err = vault.NewLifecycleClientFromConfig(
@@ -1208,7 +1209,7 @@ func (r *runnerContext) waitForServer(ctx context.Context) error {
 
 // createTokenSource creates the token source used to authenticate the controller when it acts as a client of other
 // services.
-func (r *runnerContext) createTokenSource(ctx context.Context, caPool *x509.CertPool) (result auth.TokenSource,
+func (r *runnerContext) createTokenSource(ctx context.Context, caPool *trust.CertPool) (result auth.TokenSource,
 	err error) {
 	// Get the values of the flags:
 	issuerUrl := r.args.authIssuerUrl
@@ -1279,7 +1280,7 @@ func (r *runnerContext) createTokenSource(ctx context.Context, caPool *x509.Cert
 }
 
 // createIDPClient creates the IDP client. The IDP URL and credentials are mandatory.
-func (r *runnerContext) createIDPClient(ctx context.Context, caPool *x509.CertPool) (*idp.Client, error) {
+func (r *runnerContext) createIDPClient(ctx context.Context, caPool *trust.CertPool) (*idp.Client, error) {
 	if r.args.idpURL == "" {
 		return nil, fmt.Errorf("flag '--idp-url' is required")
 	}

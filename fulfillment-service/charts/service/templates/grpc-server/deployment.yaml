@@ -103,6 +103,31 @@ spec:
           {{ else }}
           []
           {{ end }}
+      - name: kafka
+        projected:
+          sources:{{ if not .Values.kafka.connection }} []{{ end }}
+          {{ if .Values.kafka.connection }}
+          {{ range .Values.kafka.connection }}
+          {{ if .configMap }}
+          - configMap:
+              name: {{ .configMap.name }}
+              items:
+              {{ range .configMap.items }}
+              - key: {{ .key }}
+                path: {{ .param }}
+              {{ end }}
+          {{ end }}
+          {{ if .secret }}
+          - secret:
+              name: {{ .secret.name }}
+              items:
+              {{ range .secret.items }}
+              - key: {{ .key }}
+                path: {{ .param }}
+              {{ end }}
+          {{ end }}
+          {{ end }}
+          {{ end }}
       securityContext:
         runAsNonRoot: true
         seccompProfile:
@@ -133,6 +158,9 @@ spec:
         - name: database
           mountPath: /etc/fulfillment-grpc-server/db
           readOnly: true
+        - name: kafka
+          mountPath: /etc/fulfillment-grpc-server/kafka
+          readOnly: true
         - name: tls
           mountPath: /etc/fulfillment-grpc-server/tls
         - name: token-signer
@@ -162,6 +190,7 @@ spec:
         - --log-bodies={{ .Values.log.bodies }}
         - --ca-file=/etc/fulfillment-grpc-server/tls/cas
         - --db-url-file=/etc/fulfillment-grpc-server/db
+        - --kafka-properties-file=/etc/fulfillment-grpc-server/kafka
         - --grpc-listener-address=0.0.0.0:8000
         - --grpc-listener-tls-crt=/etc/fulfillment-grpc-server/tls/tls.crt
         - --grpc-listener-tls-key=/etc/fulfillment-grpc-server/tls/tls.key

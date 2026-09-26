@@ -20,7 +20,9 @@ import (
 	"log/slog"
 	"slices"
 	"sync"
+	"time"
 
+	"github.com/IBM/sarama"
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	"google.golang.org/grpc"
@@ -31,7 +33,6 @@ import (
 	"google.golang.org/protobuf/reflect/protoregistry"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	"github.com/osac-project/osac/fulfillment-service/internal/packages"
 	"github.com/osac-project/osac/fulfillment-service/internal/util"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
@@ -41,9 +42,10 @@ import (
 
 // EventsServerBuilder contains the data and logic needed to create an EventsServer.
 type EventsServerBuilder struct {
-	logger       *slog.Logger
-	listener     events.Listener
-	tenancyLogic auth.TenancyLogic
+	logger           *slog.Logger
+	kafkaClient      sarama.Client
+	kafkaTopicPrefix string
+	tenancyLogic     auth.TenancyLogic
 }
 
 var _ publicv1.EventsServer = (*EventsServer)(nil)
@@ -51,26 +53,38 @@ var _ publicv1.EventsServer = (*EventsServer)(nil)
 type EventsServer struct {
 	publicv1.UnimplementedEventsServer
 
-	logger       *slog.Logger
-	listener     events.Listener
-	subs         map[string]eventsServerSubInfo
-	subsLock     *sync.RWMutex
-	celEnv       *cel.Env
-	mapper       *GenericMapper[*privatev1.Event, *publicv1.Event]
-	tenancyLogic auth.TenancyLogic
-	payloadOneof protoreflect.OneofDescriptor
+	logger           *slog.Logger
+	kafkaClient      sarama.Client
+	kafkaTopicPrefix string
+	celEnv           *cel.Env
+	mapper           *GenericMapper[*privatev1.Event, *publicv1.Event]
+	tenancyLogic     auth.TenancyLogic
+	payloadOneof     protoreflect.OneofDescriptor
+
+	subscriptionsMutex sync.Mutex
+	subscriptions      map[*eventsSubscription]struct{}
 }
 
-type eventsServerSubInfo struct {
-	stream     grpc.ServerStreamingServer[publicv1.EventsWatchResponse]
-	visibility *auth.Visibility
-	filterSrc  string
-	filterPrg  cel.Program
-	eventsChan chan *publicv1.Event
+type eventsSubscription struct {
+	server        *EventsServer
+	ctx           context.Context
+	cancel        context.CancelFunc
+	logger        *slog.Logger
+	consumer      sarama.Consumer
+	consumers     map[kafkaTopicPartition]sarama.PartitionConsumer
+	messages      chan *sarama.ConsumerMessage
+	topics        []string
+	allowedTopics map[string]struct{}
+	visibility    *auth.Visibility
+	filterSrc     string
+	filterPrg     cel.Program
+	stream        grpc.ServerStreamingServer[publicv1.EventsWatchResponse]
 }
 
 func NewEventsServer() *EventsServerBuilder {
-	return &EventsServerBuilder{}
+	return &EventsServerBuilder{
+		kafkaTopicPrefix: DefaultEventTopicPrefix,
+	}
 }
 
 func (b *EventsServerBuilder) SetLogger(value *slog.Logger) *EventsServerBuilder {
@@ -78,9 +92,16 @@ func (b *EventsServerBuilder) SetLogger(value *slog.Logger) *EventsServerBuilder
 	return b
 }
 
-// SetListener sets the listener that will be used to receive event notifications. This is mandatory.
-func (b *EventsServerBuilder) SetListener(value events.Listener) *EventsServerBuilder {
-	b.listener = util.NormalizeNil(value)
+// SetKafkaClient sets the client used to consume events from Kafka. This is mandatory.
+func (b *EventsServerBuilder) SetKafkaClient(value sarama.Client) *EventsServerBuilder {
+	b.kafkaClient = value
+	return b
+}
+
+// SetKafkaTopicPrefix sets the prefix of the Kafka topics that contain events. This is optional and defaults to
+// DefaultEventTopicPrefix.
+func (b *EventsServerBuilder) SetKafkaTopicPrefix(value string) *EventsServerBuilder {
+	b.kafkaTopicPrefix = value
 	return b
 }
 
@@ -90,13 +111,16 @@ func (b *EventsServerBuilder) SetTenancyLogic(value auth.TenancyLogic) *EventsSe
 }
 
 func (b *EventsServerBuilder) Build() (result *EventsServer, err error) {
-	// Check parameters:
 	if b.logger == nil {
 		err = errors.New("logger is mandatory")
 		return
 	}
-	if b.listener == nil {
-		err = errors.New("listener is mandatory")
+	if b.kafkaClient == nil {
+		err = errors.New("kafka client is mandatory")
+		return
+	}
+	if b.kafkaTopicPrefix == "" {
+		err = errors.New("kafka topic prefix is mandatory")
 		return
 	}
 	if b.tenancyLogic == nil {
@@ -104,14 +128,11 @@ func (b *EventsServerBuilder) Build() (result *EventsServer, err error) {
 		return
 	}
 
-	// Create  the CEL environment:
 	celEnv, err := b.createCelEnv()
 	if err != nil {
 		err = fmt.Errorf("failed to create CEL environment: %w", err)
 		return
 	}
-
-	// Create the mappers:
 	mapper, err := NewGenericMapper[*privatev1.Event, *publicv1.Event]().
 		SetLogger(b.logger).
 		Build()
@@ -119,23 +140,20 @@ func (b *EventsServerBuilder) Build() (result *EventsServer, err error) {
 		err = fmt.Errorf("failed to create mapper: %w", err)
 		return
 	}
-
-	// Look up the payload oneof and metadata field descriptors:
 	payloadOneof, err := b.findPayloadOneof()
 	if err != nil {
 		return
 	}
 
-	// Create the object early so that we can use its methods as callback functions:
 	result = &EventsServer{
-		logger:       b.logger,
-		listener:     b.listener,
-		subs:         map[string]eventsServerSubInfo{},
-		subsLock:     &sync.RWMutex{},
-		celEnv:       celEnv,
-		mapper:       mapper,
-		tenancyLogic: b.tenancyLogic,
-		payloadOneof: payloadOneof,
+		logger:           b.logger,
+		kafkaClient:      b.kafkaClient,
+		kafkaTopicPrefix: b.kafkaTopicPrefix,
+		celEnv:           celEnv,
+		mapper:           mapper,
+		tenancyLogic:     b.tenancyLogic,
+		payloadOneof:     payloadOneof,
+		subscriptions:    map[*eventsSubscription]struct{}{},
 	}
 	return
 }
@@ -158,7 +176,6 @@ func (b *EventsServerBuilder) findPayloadOneof() (result protoreflect.OneofDescr
 }
 
 func (b *EventsServerBuilder) createCelEnv() (result *cel.Env, err error) {
-	// Declare constants for the enum types of the package:
 	var options []cel.EnvOption
 	protoregistry.GlobalTypes.RangeEnums(func(enumType protoreflect.EnumType) bool {
 		enumDesc := enumType.Descriptor()
@@ -183,118 +200,293 @@ func (b *EventsServerBuilder) createCelEnv() (result *cel.Env, err error) {
 		return true
 	})
 
-	// Declare the event type:
 	var eventModel *publicv1.Event
 	options = append(options, cel.Types(eventModel))
-
-	// Declare the event variable:
 	eventDesc := eventModel.ProtoReflect().Descriptor()
 	eventType := cel.ObjectType(string(eventDesc.FullName()))
 	options = append(options, cel.Variable("event", eventType))
-
-	// Create the CEL environment:
 	result, err = cel.NewEnv(options...)
 	return
 }
 
-// Starts starts the background components of the server, in particular the notification listener. This is a blocking
-// operation, and will return only when the context is canceled.
-func (s *EventsServer) Start(ctx context.Context) error {
-	return s.listener.Listen(ctx, s.processPayload)
-}
-
 // Subscriptions returns the number of active subscriptions. This is intended for use in tests, where it is important
-// to wait for a subscription to be registered before sending events.
+// to wait for a subscription to be ready before sending events.
 func (s *EventsServer) Subscriptions() int {
-	s.subsLock.RLock()
-	defer s.subsLock.RUnlock()
-	return len(s.subs)
+	s.subscriptionsMutex.Lock()
+	defer s.subscriptionsMutex.Unlock()
+	return len(s.subscriptions)
 }
 
 func (s *EventsServer) Watch(request *publicv1.EventsWatchRequest,
-	stream grpc.ServerStreamingServer[publicv1.EventsWatchResponse]) (err error) {
-	// Get the context:
-	ctx := stream.Context()
+	stream grpc.ServerStreamingServer[publicv1.EventsWatchResponse]) error {
+	subscription, err := s.newSubscription(request, stream)
+	if err != nil {
+		return err
+	}
+	defer subscription.close()
+	return subscription.run()
+}
 
-	// Determine the visibility:
+func (s *EventsServer) newSubscription(
+	request *publicv1.EventsWatchRequest,
+	stream grpc.ServerStreamingServer[publicv1.EventsWatchResponse],
+) (result *eventsSubscription, err error) {
+	ctx, cancel := context.WithCancel(stream.Context())
+	logger := s.logger.With(slog.String("subscription", uuid.New()))
+
+	tenant, err := s.tenancyLogic.DetermineDefaultTenant(ctx)
+	if err != nil || tenant == "" {
+		cancel()
+		logger.ErrorContext(ctx, "Failed to determine tenant", slog.Any("error", err))
+		err = grpcstatus.Error(grpccodes.Internal, "failed to determine tenant")
+		return
+	}
 	visibility, err := s.tenancyLogic.DetermineVisibility(ctx)
 	if err != nil {
-		s.logger.ErrorContext(
-			ctx,
-			"Failed to determine visibility",
-			slog.Any("error", err),
-		)
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to determine visibility")
+		cancel()
+		logger.ErrorContext(ctx, "Failed to determine visibility", slog.Any("error", err))
+		err = grpcstatus.Error(grpccodes.Internal, "failed to determine visibility")
+		return
 	}
 
-	// Compile the filter expression:
-	var (
-		filterSrc string
-		filterPrg cel.Program
-	)
-	if request.Filter != nil {
-		filterSrc = *request.Filter
-		if filterSrc != "" {
-			filterPrg, err = s.compileFilter(ctx, filterSrc)
-			if err != nil {
-				s.logger.ErrorContext(
-					ctx,
-					"Failed to compile filter",
-					slog.String("filter", filterSrc),
-					slog.Any("error", err),
-				)
-				return grpcstatus.Errorf(
-					grpccodes.InvalidArgument,
-					"failed to compile filter '%s'",
-					filterSrc,
-				)
-			}
+	var filterSrc string
+	if request.HasFilter() {
+		filterSrc = request.GetFilter()
+	}
+	var filterPrg cel.Program
+	if filterSrc != "" {
+		filterPrg, err = s.compileFilter(ctx, filterSrc)
+		if err != nil {
+			cancel()
+			logger.ErrorContext(
+				ctx,
+				"Failed to compile filter",
+				slog.String("filter", filterSrc),
+				slog.Any("error", err),
+			)
+			err = grpcstatus.Errorf(grpccodes.InvalidArgument, "failed to compile filter '%s'", filterSrc)
+			return
 		}
 	}
 
-	// Create a subscription and remember to remove it when done:
-	subId := uuid.New()
-	logger := s.logger.With(
-		slog.String("subscription", subId),
-	)
-	subInfo := eventsServerSubInfo{
-		stream:     stream,
-		visibility: visibility,
-		filterSrc:  filterSrc,
-		filterPrg:  filterPrg,
-		eventsChan: make(chan *publicv1.Event),
+	consumer, err := sarama.NewConsumerFromClient(s.kafkaClient)
+	if err != nil {
+		cancel()
+		err = fmt.Errorf("failed to create Kafka consumer: %w", err)
+		return
 	}
-	s.subsLock.Lock()
-	s.subs[subId] = subInfo
-	s.subsLock.Unlock()
-	logger.DebugContext(ctx, "Created subscription")
-	defer func() {
-		s.subsLock.Lock()
-		defer s.subsLock.Unlock()
-		delete(s.subs, subId)
-		close(subInfo.eventsChan)
-		logger.DebugContext(ctx, "Canceled subcription")
-	}()
+	topics := []string{s.kafkaTopicPrefix + tenant}
+	if tenant != auth.SharedTenant {
+		topics = append(topics, s.kafkaTopicPrefix+auth.SharedTenant)
+	}
+	allowedTopics := make(map[string]struct{}, len(topics))
+	for _, topic := range topics {
+		allowedTopics[topic] = struct{}{}
+	}
+	result = &eventsSubscription{
+		server:        s,
+		ctx:           ctx,
+		cancel:        cancel,
+		logger:        logger,
+		consumer:      consumer,
+		consumers:     map[kafkaTopicPartition]sarama.PartitionConsumer{},
+		messages:      make(chan *sarama.ConsumerMessage),
+		topics:        topics,
+		allowedTopics: allowedTopics,
+		visibility:    visibility,
+		filterSrc:     filterSrc,
+		filterPrg:     filterPrg,
+		stream:        stream,
+	}
+	logger.DebugContext(ctx, "Created subscription", slog.Any("topics", topics))
+	return
+}
 
-	// Wait to receive events on the channel of the subscription and forward them to the client:
+func (s *eventsSubscription) run() error {
+	// Existing partitions start at the newest offset, because events written before the Watch request must not be
+	// replayed. A topic or partition discovered later starts at the oldest offset so its first event isn't missed.
+	err := s.refreshPartitions(sarama.OffsetNewest)
+	if err != nil {
+		return err
+	}
+	s.server.addSubscription(s)
+	defer s.server.removeSubscription(s)
+
+	ticker := time.NewTicker(eventsTopicRefreshInterval)
+	defer ticker.Stop()
 	for {
 		select {
-		case event, ok := <-subInfo.eventsChan:
-			if !ok {
-				logger.DebugContext(ctx, "Subscription channel closed")
-				return nil
-			}
-			err = stream.Send(publicv1.EventsWatchResponse_builder{
-				Event: event,
-			}.Build())
+		case message := <-s.messages:
+			err = s.processMessage(message)
 			if err != nil {
 				return err
 			}
-		case <-stream.Context().Done():
-			s.logger.DebugContext(ctx, "Subscription context canceled")
+		case <-ticker.C:
+			err = s.refreshPartitions(sarama.OffsetOldest)
+			if err != nil {
+				s.logger.ErrorContext(
+					s.ctx,
+					"Failed to refresh Kafka event topics",
+					slog.String("error", err.Error()),
+				)
+			}
+		case <-s.ctx.Done():
+			s.logger.DebugContext(s.ctx, "Subscription context canceled")
 			return nil
 		}
 	}
+}
+
+func (s *EventsServer) addSubscription(subscription *eventsSubscription) {
+	s.subscriptionsMutex.Lock()
+	s.subscriptions[subscription] = struct{}{}
+	s.subscriptionsMutex.Unlock()
+}
+
+func (s *EventsServer) removeSubscription(subscription *eventsSubscription) {
+	s.subscriptionsMutex.Lock()
+	delete(s.subscriptions, subscription)
+	s.subscriptionsMutex.Unlock()
+}
+
+func (s *eventsSubscription) close() {
+	s.cancel()
+	for _, consumer := range s.consumers {
+		err := consumer.Close()
+		if err != nil {
+			s.logger.ErrorContext(
+				s.ctx,
+				"Failed to close Kafka partition consumer",
+				slog.String("error", err.Error()),
+			)
+		}
+	}
+	err := s.consumer.Close()
+	if err != nil {
+		s.logger.ErrorContext(s.ctx, "Failed to close Kafka consumer", slog.String("error", err.Error()))
+	}
+	s.logger.DebugContext(s.ctx, "Canceled subscription")
+}
+
+func (s *eventsSubscription) refreshPartitions(offset int64) error {
+	for _, topic := range s.topics {
+		err := s.server.kafkaClient.RefreshMetadata(topic)
+		if isKafkaTopicUnavailable(err) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("failed to refresh Kafka topic '%s': %w", topic, err)
+		}
+		partitions, err := s.server.kafkaClient.Partitions(topic)
+		if isKafkaTopicUnavailable(err) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("failed to list partitions of Kafka topic '%s': %w", topic, err)
+		}
+		for _, partition := range partitions {
+			key := kafkaTopicPartition{topic: topic, partition: partition}
+			if s.consumers[key] != nil {
+				continue
+			}
+			consumer, err := s.consumer.ConsumePartition(topic, partition, offset)
+			if err != nil {
+				return fmt.Errorf("failed to consume Kafka topic '%s' partition %d: %w", topic, partition, err)
+			}
+			s.consumers[key] = consumer
+			s.logger.DebugContext(
+				s.ctx,
+				"Started consuming Kafka partition",
+				slog.String("topic", topic),
+				slog.Int("partition", int(partition)),
+				slog.Int64("offset", offset),
+			)
+			go s.forwardMessages(consumer)
+		}
+	}
+	return nil
+}
+
+func isKafkaTopicUnavailable(err error) bool {
+	return errors.Is(err, sarama.ErrUnknownTopicOrPartition) || errors.Is(err, sarama.ErrLeaderNotAvailable)
+}
+
+func (s *eventsSubscription) forwardMessages(consumer sarama.PartitionConsumer) {
+	for {
+		select {
+		case message, ok := <-consumer.Messages():
+			if !ok {
+				return
+			}
+			select {
+			case s.messages <- message:
+			case <-s.ctx.Done():
+				return
+			}
+		case consumerErr, ok := <-consumer.Errors():
+			if !ok {
+				return
+			}
+			s.logger.ErrorContext(
+				s.ctx,
+				"Failed to consume Kafka message",
+				slog.String("error", consumerErr.Error()),
+			)
+		case <-s.ctx.Done():
+			return
+		}
+	}
+}
+
+func (s *eventsSubscription) processMessage(message *sarama.ConsumerMessage) error {
+	if message == nil {
+		return nil
+	}
+	if _, ok := s.allowedTopics[message.Topic]; !ok {
+		return fmt.Errorf("received event from unexpected Kafka topic '%s'", message.Topic)
+	}
+	private := &privatev1.Event{}
+	err := proto.Unmarshal(message.Value, private)
+	if err != nil {
+		return fmt.Errorf(
+			"failed to unmarshal event from Kafka topic '%s' partition %d offset %d: %w",
+			message.Topic, message.Partition, message.Offset, err,
+		)
+	}
+
+	// Signal events and objects without a public representation are private-only.
+	if private.GetType() == privatev1.EventType_EVENT_TYPE_OBJECT_SIGNALED || private.HasHub() {
+		return nil
+	}
+	metadata := s.server.extractMetadata(s.ctx, private)
+	if metadata == nil || !s.visibility.IsProjectVisible(metadata.GetTenant(), metadata.GetProject()) {
+		return nil
+	}
+	public := &publicv1.Event{}
+	err = s.server.mapper.Copy(s.ctx, private, public)
+	if err != nil {
+		return fmt.Errorf("failed to translate event: %w", err)
+	}
+
+	accepted := true
+	if s.filterPrg != nil {
+		accepted, err = s.server.evalFilter(s.ctx, s.filterPrg, public)
+		if err != nil {
+			s.logger.DebugContext(
+				s.ctx,
+				"Failed to evaluate filter",
+				slog.String("filter", s.filterSrc),
+				slog.String("error", err.Error()),
+			)
+			accepted = false
+		}
+	}
+	if !accepted {
+		s.logger.DebugContext(s.ctx, "Event rejected by filter", slog.String("filter", s.filterSrc))
+		return nil
+	}
+	s.logger.DebugContext(s.ctx, "Event accepted by filter", slog.String("filter", s.filterSrc))
+	return s.stream.Send(publicv1.EventsWatchResponse_builder{Event: public}.Build())
 }
 
 func (s *EventsServer) compileFilter(ctx context.Context, filterSrc string) (result cel.Program, err error) {
@@ -309,9 +501,7 @@ func (s *EventsServer) compileFilter(ctx context.Context, filterSrc string) (res
 
 func (s *EventsServer) evalFilter(ctx context.Context, filterPrg cel.Program, event *publicv1.Event) (result bool,
 	err error) {
-	activation, err := cel.NewActivation(map[string]any{
-		"event": event,
-	})
+	activation, err := cel.NewActivation(map[string]any{"event": event})
 	if err != nil {
 		return
 	}
@@ -325,38 +515,6 @@ func (s *EventsServer) evalFilter(ctx context.Context, filterPrg cel.Program, ev
 		return
 	}
 	return
-}
-
-func (s *EventsServer) processPayload(ctx context.Context, payload proto.Message) error {
-	// Get the object:
-	private, ok := payload.(*privatev1.Event)
-	if !ok {
-		s.logger.ErrorContext(
-			ctx,
-			"Unexpected payload type",
-			slog.String("expected", fmt.Sprintf("%T", private)),
-			slog.String("actual", fmt.Sprintf("%T", payload)),
-		)
-		return nil
-	}
-
-	// Skip signal events:
-	if private.GetType() == privatev1.EventType_EVENT_TYPE_OBJECT_SIGNALED {
-		return nil
-	}
-
-	// Skip objects that don't have a public representation:
-	if private.HasHub() {
-		return nil
-	}
-
-	// Translate the private event to a public event and process it:
-	public := &publicv1.Event{}
-	err := s.mapper.Copy(ctx, private, public)
-	if err != nil {
-		return fmt.Errorf("failed to translate event: %w", err)
-	}
-	return s.processEvent(ctx, public, private)
 }
 
 // extractMetadata extracts the metadata from the event payload. Returns nil if the metadata is not found.
@@ -380,73 +538,21 @@ func (s *EventsServer) extractMetadata(ctx context.Context, event *privatev1.Eve
 	return payload.GetMetadata()
 }
 
-// extractPayload extracts the payload from the event message. For example, if the event is about a cluster, it will
-// get the value of the 'cluster' field of the payload oneof. Returns nil if there is no payload.
+// extractPayload extracts the payload from the event message. For example, if the event is about a cluster, it gets
+// the value of the 'cluster' field of the payload oneof. Returns nil if there is no payload.
 func (s *EventsServer) extractPayload(ctx context.Context, event *privatev1.Event) (result proto.Message, err error) {
 	eventReflect := event.ProtoReflect()
 	payloadDesc := eventReflect.WhichOneof(s.payloadOneof)
 	if payloadDesc == nil {
-		s.logger.ErrorContext(
-			ctx,
-			"Event has no payload field",
-		)
+		s.logger.ErrorContext(ctx, "Event has no payload field")
 		return
 	}
 	payloadValue := eventReflect.Get(payloadDesc)
-	payloadReflect := payloadValue.Message()
-	result = payloadReflect.Interface()
+	result = payloadValue.Message().Interface()
 	return
 }
 
-func (s *EventsServer) processEvent(ctx context.Context, public *publicv1.Event, private *privatev1.Event) error {
-	s.subsLock.RLock()
-	defer s.subsLock.RUnlock()
-	for subId, sub := range s.subs {
-		logger := s.logger.With(
-			slog.String("filter", sub.filterSrc),
-			slog.String("sub", subId),
-			slog.Any("public", public),
-			slog.Any("private", private),
-		)
-		accepted := true
-
-		// Check if the user has permission to see the event:
-		metadata := s.extractMetadata(ctx, private)
-		if metadata == nil {
-			continue
-		}
-		tenant := metadata.GetTenant()
-		project := metadata.GetProject()
-		if !sub.visibility.IsProjectVisible(tenant, project) {
-			continue
-		}
-
-		// Apply user-defined filter:
-		if sub.filterPrg != nil {
-			var err error
-			accepted, err = s.evalFilter(ctx, sub.filterPrg, public)
-			if err != nil {
-				logger.DebugContext(
-					ctx,
-					"Failed to evaluate filter",
-					slog.Any("error", err),
-				)
-				accepted = false
-			}
-		}
-
-		// Forward the event to the subscription:
-		if accepted {
-			logger.DebugContext(ctx, "Event accepted by filter")
-			sub.eventsChan <- public
-		} else {
-			logger.DebugContext(ctx, "Event rejected by filter")
-		}
-	}
-	return nil
-}
-
-// Names of fields:
 const (
 	eventsServerPayloadOneofField = "payload"
+	eventsTopicRefreshInterval    = time.Second
 )

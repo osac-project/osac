@@ -15,7 +15,6 @@ package idp
 
 import (
 	"context"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,6 +27,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/apiclient"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/trust"
 )
 
 // Client is a Keycloak admin client for managing identity provider resources.
@@ -50,7 +50,7 @@ type ClientBuilder struct {
 	logger      *slog.Logger
 	baseURL     string
 	tokenSource auth.TokenSource
-	caPool      *x509.CertPool
+	caPool      *trust.CertPool
 	httpClient  *http.Client
 	realmName   string
 }
@@ -87,7 +87,7 @@ func (b *ClientBuilder) SetRealmName(value string) *ClientBuilder {
 }
 
 // SetCaPool sets the CA certificate pool.
-func (b *ClientBuilder) SetCaPool(value *x509.CertPool) *ClientBuilder {
+func (b *ClientBuilder) SetCaPool(value *trust.CertPool) *ClientBuilder {
 	b.caPool = value
 	return b
 }

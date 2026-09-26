@@ -23,14 +23,12 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 type ExternalIPAttachmentsServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -53,11 +51,6 @@ func NewExternalIPAttachmentsServer() *ExternalIPAttachmentsServerBuilder {
 
 func (b *ExternalIPAttachmentsServerBuilder) SetLogger(value *slog.Logger) *ExternalIPAttachmentsServerBuilder {
 	b.logger = value
-	return b
-}
-
-func (b *ExternalIPAttachmentsServerBuilder) SetNotifier(value events.Notifier) *ExternalIPAttachmentsServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -107,7 +100,6 @@ func (b *ExternalIPAttachmentsServerBuilder) Build() (result *ExternalIPAttachme
 
 	delegate, err := NewPrivateExternalIPAttachmentsServer().
 		SetLogger(b.logger).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).

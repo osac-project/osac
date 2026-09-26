@@ -26,7 +26,6 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -44,7 +43,6 @@ type TierResolverFunc func(ctx context.Context, tierName string) (*TierResolutio
 
 type PrivateVolumesServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -68,11 +66,6 @@ func NewPrivateVolumesServer() *PrivateVolumesServerBuilder {
 
 func (b *PrivateVolumesServerBuilder) SetLogger(value *slog.Logger) *PrivateVolumesServerBuilder {
 	b.logger = value
-	return b
-}
-
-func (b *PrivateVolumesServerBuilder) SetNotifier(value events.Notifier) *PrivateVolumesServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -120,7 +113,6 @@ func (b *PrivateVolumesServerBuilder) Build() (result *PrivateVolumesServer, err
 	generic, err := NewGenericServer[*privatev1.Volume]().
 		SetLogger(b.logger).
 		SetService(privatev1.Volumes_ServiceDesc.ServiceName).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).

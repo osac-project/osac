@@ -15,7 +15,6 @@ package vault
 
 import (
 	"context"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -24,6 +23,8 @@ import (
 	"strings"
 
 	vaultapi "github.com/hashicorp/vault/api"
+
+	"github.com/osac-project/osac/fulfillment-service/internal/trust"
 )
 
 const (
@@ -56,7 +57,7 @@ type VaultLifecycleClientBuilder struct {
 	keycloakIssuerURL string
 	keycloakAudience  string
 	serviceClientID   string
-	caPool            *x509.CertPool
+	caPool            *trust.CertPool
 	caPEM             string
 }
 
@@ -114,7 +115,7 @@ func (b *VaultLifecycleClientBuilder) SetKeycloakAudience(value string) *VaultLi
 	return b
 }
 
-func (b *VaultLifecycleClientBuilder) SetCaPool(value *x509.CertPool) *VaultLifecycleClientBuilder {
+func (b *VaultLifecycleClientBuilder) SetCaPool(value *trust.CertPool) *VaultLifecycleClientBuilder {
 	b.caPool = value
 	return b
 }
@@ -168,7 +169,7 @@ func (b *VaultLifecycleClientBuilder) Build() (result *VaultLifecycleClient, err
 			return
 		}
 		cloned := transport.Clone()
-		cloned.TLSClientConfig.RootCAs = b.caPool
+		cloned.TLSClientConfig.RootCAs = b.caPool.Pool()
 		config.HttpClient.Transport = cloned
 	}
 

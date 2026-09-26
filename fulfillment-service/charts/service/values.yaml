@@ -227,3 +227,43 @@ vault:
 
 consoleProxy:
   disabled: false
+
+# Kafka connection configuration. Connection details are provided via `kafka.connection`, a list of
+# ConfigMap and Secret sources that provide the connection parameters.
+kafka:
+
+  # List of sources for Kafka connection parameters. Each entry maps keys from a ConfigMap or Secret
+  # to named Kafka configuration properties. Each item has a 'key' field that indicates the name of
+  # the key in the ConfigMap (or Secret) and a 'param' field indicating the name of the Kafka
+  # configuration property.
+  #
+  # The supported property names are:
+  #
+  # - `brokers`  - Comma separated list of Kafka bootstrap servers (`host:port`).
+  # - `user`     - SASL user name. When empty, SASL is not used.
+  # - `password` - SASL password. Required when `user` is set.
+  #
+  # For example, if the bootstrap servers and user name are stored in a ConfigMap named
+  # `kafka-config` in keys named `bootstrap.servers` and `username`, and the password is stored in a
+  # Secret named `kafka-secret` in a key named `password`, the connection configuration would look
+  # like this:
+  #
+  #   connection:
+  #   - configMap:
+  #       name: kafka-config
+  #       items:
+  #       - key: bootstrap.servers
+  #         param: brokers
+  #       - key: username
+  #         param: user
+  #   - secret:
+  #       name: kafka-secret
+  #       items:
+  #       - key: password
+  #         param: password
+  #
+  # The keys of the ConfigMap and Secret don't need to match the property names. In the above
+  # example the bootstrap servers are in a `bootstrap.servers` key but the Kafka property name is
+  # `brokers`. TLS trust uses `certs.caBundle`; include the broker CA in that ConfigMap when it is
+  # not already trusted.
+  connection: []

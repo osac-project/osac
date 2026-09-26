@@ -24,7 +24,6 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
@@ -47,7 +46,6 @@ var clusterVersionFilterDefaults = []filterDefault{
 
 type ClusterVersionsServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -71,12 +69,6 @@ func NewClusterVersionsServer() *ClusterVersionsServerBuilder {
 // SetLogger sets the logger to use. This is mandatory.
 func (b *ClusterVersionsServerBuilder) SetLogger(value *slog.Logger) *ClusterVersionsServerBuilder {
 	b.logger = value
-	return b
-}
-
-// SetNotifier sets the notifier to use. This is optional.
-func (b *ClusterVersionsServerBuilder) SetNotifier(value events.Notifier) *ClusterVersionsServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -128,7 +120,6 @@ func (b *ClusterVersionsServerBuilder) Build() (*ClusterVersionsServer, error) {
 
 	delegate, err := NewPrivateClusterVersionsServer().
 		SetLogger(b.logger).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).

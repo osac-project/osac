@@ -108,11 +108,7 @@ spec:
         {{- include "osac-infra.hookLabels" . | nindent 8 }}
     spec:
       securityContext:
-        {{- if .Values.cliJobPodSecurityContext }}
-        {{- toYaml .Values.cliJobPodSecurityContext | nindent 8 }}
-        {{- else }}
-        runAsNonRoot: true
-        {{- end }}
+        {{- include "osac-infra.cliJobPodSecurityContext" . | nindent 8 }}
       serviceAccountName: osac-infra-apply-ca-bundle
       restartPolicy: Never
       volumes:
@@ -312,11 +308,7 @@ spec:
         {{- include "osac-infra.hookLabels" . | nindent 8 }}
     spec:
       securityContext:
-        {{- if .Values.cliJobPodSecurityContext }}
-        {{- toYaml .Values.cliJobPodSecurityContext | nindent 8 }}
-        {{- else }}
-        runAsNonRoot: true
-        {{- end }}
+        {{- include "osac-infra.cliJobPodSecurityContext" . | nindent 8 }}
       serviceAccountName: osac-infra-delete-ca-bundle
       restartPolicy: Never
       volumes:

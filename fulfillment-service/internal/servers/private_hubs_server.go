@@ -26,13 +26,11 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 type PrivateHubsServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -55,11 +53,6 @@ func NewPrivateHubsServer() *PrivateHubsServerBuilder {
 
 func (b *PrivateHubsServerBuilder) SetLogger(value *slog.Logger) *PrivateHubsServerBuilder {
 	b.logger = value
-	return b
-}
-
-func (b *PrivateHubsServerBuilder) SetNotifier(value events.Notifier) *PrivateHubsServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -118,8 +111,6 @@ func (b *PrivateHubsServerBuilder) Build() (result *PrivateHubsServer, err error
 	s.generic, err = NewGenericServer[*privatev1.Hub]().
 		SetLogger(b.logger).
 		SetService(privatev1.Hubs_ServiceDesc.ServiceName).
-		SetNotifier(b.notifier).
-		SetRedactFunc(s.redact).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
@@ -133,15 +124,6 @@ func (b *PrivateHubsServerBuilder) Build() (result *PrivateHubsServer, err error
 	// Return the server:
 	result = s
 	return
-}
-
-// redact clears sensitive fields from the hub before it is included in event notification payloads.
-func (s *PrivateHubsServer) redact(object *privatev1.Hub) *privatev1.Hub {
-	spec := object.GetSpec()
-	if spec != nil {
-		spec.SetKubeconfig(nil)
-	}
-	return object
 }
 
 func (s *PrivateHubsServer) List(ctx context.Context,

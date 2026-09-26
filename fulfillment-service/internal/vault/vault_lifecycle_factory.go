@@ -14,12 +14,13 @@ language governing permissions and limitations under the License.
 package vault
 
 import (
-	"crypto/x509"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/osac-project/osac/fulfillment-service/internal/trust"
 )
 
 // NewLifecycleClientFromConfig creates a fully wired LifecycleClient from the
@@ -31,7 +32,7 @@ func NewLifecycleClientFromConfig(
 	logger *slog.Logger,
 	base BaseConfig,
 	lifecycle LifecycleConfig,
-	caPool *x509.CertPool,
+	caPool *trust.CertPool,
 ) (LifecycleClient, error) {
 	if err := ValidateBaseKeycloakConfig(base); err != nil {
 		return nil, err

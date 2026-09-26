@@ -227,7 +227,7 @@ func ClusterBillingDimensions(cl *privatev1.Cluster) map[string]any {
 			components = append(components, map[string]any{
 				"node_set":   k,
 				"component":  "worker",
-				"host_type":  ns.GetHostType().GetName(),
+				"host_type":  nodeSetHostType(ns),
 				"node_count": ns.GetSize(),
 			})
 		}
@@ -235,6 +235,16 @@ func ClusterBillingDimensions(cl *privatev1.Cluster) map[string]any {
 
 	dims["components"] = components
 	return dims
+}
+
+// nodeSetHostType returns the billing host_type value for a node set.
+// It prefers BareMetalInstanceType (the new canonical source) and falls
+// back to the deprecated HostType field for clusters not yet migrated.
+func nodeSetHostType(ns *privatev1.ClusterNodeSet) string {
+	if name := ns.GetBaremetalInstanceType().GetName(); name != "" {
+		return name
+	}
+	return ns.GetHostType().GetName() //nolint:staticcheck // intentional fallback for pre-BMIT clusters
 }
 
 // ComponentRecord represents one billing record in the N+1 decomposition.

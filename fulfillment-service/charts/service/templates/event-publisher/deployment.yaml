@@ -1,0 +1,184 @@
+{{/*
+Copyright (c) 2026 Red Hat Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+the License. You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific
+language governing permissions and limitations under the License.
+*/}}
+
+{{- $caBundleConfigMap := required "certs.caBundle.configMap is required" .Values.certs.caBundle.configMap }}
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: fulfillment-event-publisher
+spec:
+  selector:
+    matchLabels:
+      app: fulfillment-event-publisher
+  replicas: 1
+  strategy:
+    # Keep a single publisher during upgrades, as overlapping pods can publish events out of serial order.
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: fulfillment-event-publisher
+    spec:
+      automountServiceAccountToken: false
+      volumes:
+      - name: ca-bundle
+        configMap:
+          name: {{ $caBundleConfigMap }}
+      - name: tls
+        secret:
+          secretName: fulfillment-event-publisher-tls
+      - name: database
+        projected:
+          sources:
+          {{ if .Values.database.connection }}
+          {{ range .Values.database.connection }}
+          {{ if .configMap }}
+          - configMap:
+              name: {{ .configMap.name }}
+              items:
+              {{ range .configMap.items }}
+              - key: {{ .key }}
+                path: {{ .param }}
+              {{ end }}
+          {{ end }}
+          {{ if .secret }}
+          - secret:
+              name: {{ .secret.name }}
+              items:
+              {{ range .secret.items }}
+              - key: {{ .key }}
+                path: {{ .param }}
+              {{ end }}
+          {{ end }}
+          {{ end }}
+          {{ else }}
+          []
+          {{ end }}
+      - name: kafka
+        projected:
+          sources:
+          {{ if .Values.kafka.connection }}
+          {{ range .Values.kafka.connection }}
+          {{ if .configMap }}
+          - configMap:
+              name: {{ .configMap.name }}
+              items:
+              {{ range .configMap.items }}
+              - key: {{ .key }}
+                path: {{ .param }}
+              {{ end }}
+          {{ end }}
+          {{ if .secret }}
+          - secret:
+              name: {{ .secret.name }}
+              items:
+              {{ range .secret.items }}
+              - key: {{ .key }}
+                path: {{ .param }}
+              {{ end }}
+          {{ end }}
+          {{ end }}
+          {{ else }}
+          []
+          {{ end }}
+      containers:
+      - name: event-publisher
+        image: {{ .Values.images.service }}
+        imagePullPolicy: {{ .Values.images.pullPolicy }}
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: ca-bundle
+          mountPath: /etc/ca-bundle
+          readOnly: true
+        - name: tls
+          mountPath: /etc/fulfillment-event-publisher/tls
+          readOnly: true
+        - name: database
+          mountPath: /etc/fulfillment-event-publisher/db
+          readOnly: true
+        - name: kafka
+          mountPath: /etc/fulfillment-event-publisher/kafka
+          readOnly: true
+        command:
+        {{ if .Values.debug }}
+        - dlv
+        - exec
+        - /usr/local/bin/fulfillment-service
+        - --headless
+        - --api-version=2
+        - --listen=:30004
+        - --accept-multiclient
+        - --continue
+        - --
+        {{ else }}
+        - /usr/local/bin/fulfillment-service
+        {{ end }}
+        - start
+        - event-publisher
+        - --log-level={{ .Values.log.level }}
+        - --db-url-file=/etc/fulfillment-event-publisher/db
+        - --grpc-listener-address=0.0.0.0:8000
+        - --grpc-listener-tls-crt=/etc/fulfillment-event-publisher/tls/tls.crt
+        - --grpc-listener-tls-key=/etc/fulfillment-event-publisher/tls/tls.key
+        - --metrics-listener-address=0.0.0.0:8002
+        - --kafka-properties-file=/etc/fulfillment-event-publisher/kafka
+        - --ca-file=/etc/ca-bundle/bundle.pem
+        ports:
+        - name: grpc
+          containerPort: 8000
+          protocol: TCP
+        - name: metrics
+          containerPort: 8002
+          protocol: TCP
+        {{ if .Values.debug }}
+        - name: debug
+          containerPort: 30004
+          hostPort: 30004
+          protocol: TCP
+        {{ end }}
+        {{ if not .Values.debug }}
+        livenessProbe:
+          exec:
+            command:
+            - /usr/local/bin/fulfillment-service
+            - probe
+            - grpc-server
+            - --ca-file=/etc/ca-bundle/bundle.pem
+            - --grpc-server-address=localhost:8000
+            - --grpc-server-timeout=1s
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 5
+        readinessProbe:
+          exec:
+            command:
+            - /usr/local/bin/fulfillment-service
+            - probe
+            - grpc-server
+            - --ca-file=/etc/ca-bundle/bundle.pem
+            - --grpc-server-address=localhost:8000
+            - --grpc-server-timeout=1s
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 5
+        {{ end }}

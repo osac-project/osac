@@ -27,5 +27,5 @@ volumes:
   - secret
   - configMap
 users:
-  - system:serviceaccount:{{ .Release.Namespace }}:{{ include "csi-driver.nodeServiceAccountName" . }}
+  - system:serviceaccount:{{ include "csi-driver.namespace" . }}:{{ include "csi-driver.nodeServiceAccountName" . }}
 {{- end }}

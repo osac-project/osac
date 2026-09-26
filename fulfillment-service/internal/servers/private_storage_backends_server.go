@@ -25,13 +25,11 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 type PrivateStorageBackendsServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -54,11 +52,6 @@ func NewPrivateStorageBackendsServer() *PrivateStorageBackendsServerBuilder {
 
 func (b *PrivateStorageBackendsServerBuilder) SetLogger(value *slog.Logger) *PrivateStorageBackendsServerBuilder {
 	b.logger = value
-	return b
-}
-
-func (b *PrivateStorageBackendsServerBuilder) SetNotifier(value events.Notifier) *PrivateStorageBackendsServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -104,8 +97,6 @@ func (b *PrivateStorageBackendsServerBuilder) Build() (result *PrivateStorageBac
 	s.generic, err = NewGenericServer[*privatev1.StorageBackend]().
 		SetLogger(b.logger).
 		SetService(privatev1.StorageBackends_ServiceDesc.ServiceName).
-		SetNotifier(b.notifier).
-		SetRedactFunc(s.redact).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
@@ -128,20 +119,6 @@ func (b *PrivateStorageBackendsServerBuilder) Build() (result *PrivateStorageBac
 	// Return the server:
 	result = s
 	return
-}
-
-// redact clears sensitive fields from the storage backend before it is included in event notification payloads.
-func (s *PrivateStorageBackendsServer) redact(object *privatev1.StorageBackend) *privatev1.StorageBackend {
-	spec := object.GetSpec()
-	if spec == nil {
-		return object
-	}
-	credentials := spec.GetCredentials()
-	if credentials == nil {
-		return object
-	}
-	credentials.SetPassword("")
-	return object
 }
 
 func (s *PrivateStorageBackendsServer) List(ctx context.Context,

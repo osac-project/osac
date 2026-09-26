@@ -3,19 +3,44 @@ This ConfigMap bridges Helm-time service values to the operator's runtime
 environment. Endpoint and issuer are intentionally non-secret; CSI credentials
 remain in the separate credential Secret.
 */}}
-{{- if and .Values.operator.enabled .Values.csiDriver.enabled }}
+{{- if .Values.csiDriver.enabled }}
 {{- $endpoint := .Values.global.fulfillment.endpoint }}
 {{- if not $endpoint }}
 {{- $externalHostname := required "service.externalHostname is required when csiDriver.enabled is true" .Values.service.externalHostname }}
 {{- $endpoint = printf "%s:443" $externalHostname }}
 {{- end }}
 {{- $issuer := tpl (required "service.auth.issuerUrl is required when csiDriver.enabled is true" .Values.service.auth.issuerUrl) . }}
+{{- $csiNamespace := .Values.csiDriver.namespace | default .Release.Namespace }}
+{{- $csiConfigMapName := required "csiDriver.controller.fulfillment.configMap.name is required when csiDriver.enabled is true" .Values.csiDriver.controller.fulfillment.configMap.name }}
+{{- $csiEndpointKey := required "csiDriver.controller.fulfillment.configMap.endpointKey is required when csiDriver.enabled is true" .Values.csiDriver.controller.fulfillment.configMap.endpointKey }}
+{{- $csiIssuerKey := required "csiDriver.controller.fulfillment.configMap.issuerUrlKey is required when csiDriver.enabled is true" .Values.csiDriver.controller.fulfillment.configMap.issuerUrlKey }}
+{{- $operatorConfigMapName := "" }}
+{{- if .Values.operator.enabled }}
+{{- $operatorConfigMapName = required "operator.fulfillment.configMap.name is required when operator.enabled and csiDriver.enabled are true" .Values.operator.fulfillment.configMap.name }}
+{{- end }}
+{{- if and .Values.operator.enabled (eq $csiNamespace .Release.Namespace) (eq $csiConfigMapName $operatorConfigMapName) }}
+{{- fail "operator and CSI ConfigMaps must use different names when they share a namespace" }}
+{{- end }}
+{{- if .Values.operator.enabled }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ required "operator.fulfillment.configMap.name is required when csiDriver.enabled is true" .Values.operator.fulfillment.configMap.name }}
+  name: {{ $operatorConfigMapName }}
   namespace: {{ .Release.Namespace }}
 data:
   OSAC_FULFILLMENT_ENDPOINT: {{ $endpoint | quote }}
   OSAC_FULFILLMENT_ISSUER_URL: {{ $issuer | quote }}
+{{- end }}
+{{- if or (not .Values.operator.enabled) (ne $csiNamespace .Release.Namespace) (ne $csiConfigMapName $operatorConfigMapName) }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $csiConfigMapName }}
+  namespace: {{ $csiNamespace }}
+immutable: true
+data:
+  {{ $csiEndpointKey }}: {{ $endpoint | quote }}
+  {{ $csiIssuerKey }}: {{ $issuer | quote }}
+{{- end }}
 {{- end }}

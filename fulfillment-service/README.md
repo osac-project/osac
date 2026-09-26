@@ -134,7 +134,8 @@ To run the the gRPC server use a command like this:
     --log-headers=true \
     --log-bodies=true \
     --grpc-listener-address=localhost:8000 \
-    --db-url=postgres://user:pass@localhost:5432/db
+    --db-url=postgres://user:pass@localhost:5432/db \
+    --kafka-properties-file=/path/to/kafka/properties
 
 To run the the REST gateway use a command like this:
 
@@ -146,7 +147,8 @@ To run the the REST gateway use a command like this:
     --grpc-server-address=localhost:8000 \
     --grpc-server-plaintext
 
-You may need to adjust the commands to use your database details.
+You may need to adjust the commands to use your database and Kafka details. The Kafka properties
+file can also be a directory containing `brokers`, `user`, and `password` files.
 
 To verify that the gRPC server is working use `grpcurl`. For example, to list the available gRPC services:
 

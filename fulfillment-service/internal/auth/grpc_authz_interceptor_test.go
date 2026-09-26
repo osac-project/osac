@@ -17,6 +17,8 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -28,6 +30,7 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
+	k8sfiles "github.com/osac-project/osac/fulfillment-service/internal/kubernetes/files"
 	"github.com/osac-project/osac/fulfillment-service/internal/testing"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -66,6 +69,15 @@ var _ = Describe("Rego authorization interceptor", func() {
 
 	Describe("Permission checks", func() {
 		var interceptor *GrpcAuthzInterceptor
+
+		// Determine the namespace the interceptor will use, following the same logic as Build():
+		// read from the Kubernetes namespace file, falling back to the default.
+		testNamespace := grpcAuthzDefaultNamespace
+		if nsBytes, err := os.ReadFile(k8sfiles.ServiceAccountNamespace); err == nil {
+			if ns := strings.TrimSpace(string(nsBytes)); ns != "" {
+				testNamespace = ns
+			}
+		}
 
 		// createKubernetesToken creates a token resembling the ones issued by the Kubernetes service account
 		// token issuer.
@@ -267,19 +279,19 @@ var _ = Describe("Rego authorization interceptor", func() {
 			},
 			Entry(
 				"Administrator",
-				"osac", "admin",
+				testNamespace, "admin",
 			),
 			Entry(
 				"Template publisher",
-				"osac", "template-publisher",
+				testNamespace, "template-publisher",
 			),
 			Entry(
 				"Controller manager",
-				"osac", "osac-operator",
+				testNamespace, "osac-operator",
 			),
 			Entry(
 				"Alternative controller manager",
-				"osac", "osac-operator-controller-manager",
+				testNamespace, "osac-operator-controller-manager",
 			),
 		)
 
@@ -308,15 +320,15 @@ var _ = Describe("Rego authorization interceptor", func() {
 			},
 			Entry(
 				"Administrator",
-				"osac", "admin",
+				testNamespace, "admin",
 			),
 			Entry(
 				"Template publisher",
-				"osac", "template-publisher",
+				testNamespace, "template-publisher",
 			),
 			Entry(
 				"Controller manager",
-				"osac", "osac-operator-controller-manager",
+				testNamespace, "osac-operator-controller-manager",
 			),
 		)
 
@@ -358,7 +370,7 @@ var _ = Describe("Rego authorization interceptor", func() {
 			),
 			Entry(
 				"Right namespace, but wrong name",
-				"osac", "junk",
+				testNamespace, "junk",
 			),
 		)
 

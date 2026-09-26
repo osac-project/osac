@@ -31,7 +31,18 @@ import (
 
 	kubefiles "github.com/osac-project/osac/fulfillment-service/internal/kubernetes/files"
 	. "github.com/osac-project/osac/fulfillment-service/internal/testing"
+	"github.com/osac-project/osac/fulfillment-service/internal/trust"
 )
+
+func newTestCertPool(certs ...*x509.Certificate) *trust.CertPool {
+	builder := trust.NewCertPool().SetLogger(logger)
+	for _, cert := range certs {
+		builder.AddCertificate(cert)
+	}
+	pool, err := builder.Build()
+	ExpectWithOffset(1, err).ToNot(HaveOccurred())
+	return pool
+}
 
 var _ = Describe("JSON web key set cache creation", func() {
 	It("Can't be built without a logger", func() {
@@ -124,7 +135,7 @@ var _ = Describe("JSON web key set cache creation", func() {
 	})
 
 	It("Can be built with custom CA pool", func() {
-		caPool := x509.NewCertPool()
+		caPool := newTestCertPool()
 		cache, err := NewJwksCache().
 			SetLogger(logger).
 			AddIssuer("https://my-issuer.example.com").
@@ -186,7 +197,7 @@ var _ = Describe("JWKS cache behaviour with a working issuer server", func() {
 	var (
 		issuerServer *ghttp.Server
 		issuerUrl    string
-		caPool       *x509.CertPool
+		caPool       *trust.CertPool
 	)
 
 	BeforeEach(func() {
@@ -215,8 +226,7 @@ var _ = Describe("JWKS cache behaviour with a working issuer server", func() {
 		)
 
 		// Create a CA pool that trusts the server's certificate:
-		caPool = x509.NewCertPool()
-		caPool.AddCert(issuerServer.HTTPTestServer.Certificate())
+		caPool = newTestCertPool(issuerServer.HTTPTestServer.Certificate())
 	})
 
 	It("Returns a key for a trusted issuer and valid key identifier", func(ctx context.Context) {
@@ -372,9 +382,10 @@ var _ = Describe("JWKS cache behaviour with a working issuer server", func() {
 		)
 
 		// Create a CA pool that trusts both servers:
-		multiCaPool := x509.NewCertPool()
-		multiCaPool.AddCert(issuerServer.HTTPTestServer.Certificate())
-		multiCaPool.AddCert(issuerServer2.HTTPTestServer.Certificate())
+		multiCaPool := newTestCertPool(
+			issuerServer.HTTPTestServer.Certificate(),
+			issuerServer2.HTTPTestServer.Certificate(),
+		)
 
 		// Create a cache with a high minimum TTL so that the throttle would prevent a second refresh if it were
 		// global:
@@ -441,9 +452,10 @@ var _ = Describe("JWKS cache behaviour with a working issuer server", func() {
 		)
 
 		// Create a CA pool that trusts both servers:
-		caPool := x509.NewCertPool()
-		caPool.AddCert(issuerServer.HTTPTestServer.Certificate())
-		caPool.AddCert(secondIssuerServer.HTTPTestServer.Certificate())
+		caPool := newTestCertPool(
+			issuerServer.HTTPTestServer.Certificate(),
+			secondIssuerServer.HTTPTestServer.Certificate(),
+		)
 
 		// Create the cache:
 		cache, err := NewJwksCache().
@@ -508,8 +520,7 @@ var _ = Describe("JWKS cache behaviour with bad issuer servers", func() {
 			"/.well-known/openid-configuration",
 			ghttp.RespondWith(http.StatusInternalServerError, ""),
 		)
-		caPool := x509.NewCertPool()
-		caPool.AddCert(issuerServer.HTTPTestServer.Certificate())
+		caPool := newTestCertPool(issuerServer.HTTPTestServer.Certificate())
 
 		// Create the cache:
 		cache, err := NewJwksCache().
@@ -549,8 +560,7 @@ var _ = Describe("JWKS cache behaviour with bad issuer servers", func() {
 			"/.well-known/jwks.json",
 			ghttp.RespondWith(http.StatusInternalServerError, ""),
 		)
-		caPool := x509.NewCertPool()
-		caPool.AddCert(issuerServer.HTTPTestServer.Certificate())
+		caPool := newTestCertPool(issuerServer.HTTPTestServer.Certificate())
 
 		// Create the cache:
 		cache, err := NewJwksCache().
@@ -583,8 +593,7 @@ var _ = Describe("JWKS cache behaviour with bad issuer servers", func() {
 				},
 			),
 		)
-		caPool := x509.NewCertPool()
-		caPool.AddCert(issuerServer.HTTPTestServer.Certificate())
+		caPool := newTestCertPool(issuerServer.HTTPTestServer.Certificate())
 
 		// Create the cache:
 		cache, err := NewJwksCache().
@@ -620,8 +629,7 @@ var _ = Describe("JWKS cache behaviour with bad issuer servers", func() {
 				},
 			),
 		)
-		failCaPool := x509.NewCertPool()
-		failCaPool.AddCert(issuerServer.HTTPTestServer.Certificate())
+		failCaPool := newTestCertPool(issuerServer.HTTPTestServer.Certificate())
 
 		// Create the cache:
 		cache, err := NewJwksCache().
@@ -668,8 +676,7 @@ var _ = Describe("JWKS cache behaviour with bad issuer servers", func() {
 				},
 			}),
 		)
-		caPool := x509.NewCertPool()
-		caPool.AddCert(issuerServer.HTTPTestServer.Certificate())
+		caPool := newTestCertPool(issuerServer.HTTPTestServer.Certificate())
 
 		cache, err := NewJwksCache().
 			SetLogger(logger).
@@ -715,8 +722,7 @@ var _ = Describe("JWKS cache behaviour with bad issuer servers", func() {
 				},
 			}),
 		)
-		caPool := x509.NewCertPool()
-		caPool.AddCert(issuerServer.HTTPTestServer.Certificate())
+		caPool := newTestCertPool(issuerServer.HTTPTestServer.Certificate())
 
 		// Create the cache:
 		cache, err := NewJwksCache().
@@ -745,8 +751,7 @@ var _ = Describe("JWKS cache behaviour with bad issuer servers", func() {
 			"/.well-known/openid-configuration",
 			ghttp.RespondWith(http.StatusOK, "not valid json{{{"),
 		)
-		caPool := x509.NewCertPool()
-		caPool.AddCert(issuerServer.HTTPTestServer.Certificate())
+		caPool := newTestCertPool(issuerServer.HTTPTestServer.Certificate())
 
 		// Create the cache:
 		cache, err := NewJwksCache().
@@ -786,8 +791,7 @@ var _ = Describe("JWKS cache behaviour with bad issuer servers", func() {
 			"/.well-known/jwks.json",
 			ghttp.RespondWith(http.StatusOK, "not valid json{{{"),
 		)
-		caPool := x509.NewCertPool()
-		caPool.AddCert(issuerServer.HTTPTestServer.Certificate())
+		caPool := newTestCertPool(issuerServer.HTTPTestServer.Certificate())
 
 		// Create the cache:
 		cache, err := NewJwksCache().
@@ -810,8 +814,7 @@ var _ = Describe("JWKS cache behaviour with bad issuer servers", func() {
 		issuerServer.HTTPTestServer.StartTLS()
 		DeferCleanup(issuerServer.Close)
 		issuerUrl := issuerServer.URL()
-		caPool := x509.NewCertPool()
-		caPool.AddCert(issuerServer.HTTPTestServer.Certificate())
+		caPool := newTestCertPool(issuerServer.HTTPTestServer.Certificate())
 
 		// Create a temporary directory with a valid Kubernetes service account token:
 		tmpDir, err := os.MkdirTemp("", "*.test")
@@ -855,8 +858,7 @@ var _ = Describe("JWKS cache behaviour with bad issuer servers", func() {
 		issuerServer.HTTPTestServer.StartTLS()
 		DeferCleanup(issuerServer.Close)
 		issuerUrl := issuerServer.URL()
-		issuerCaPool := x509.NewCertPool()
-		issuerCaPool.AddCert(issuerServer.HTTPTestServer.Certificate())
+		issuerCaPool := newTestCertPool(issuerServer.HTTPTestServer.Certificate())
 
 		// Create a temporary directory containing a valid Kubernetes service account token:
 		tmpDir, err := os.MkdirTemp("", "*.test")

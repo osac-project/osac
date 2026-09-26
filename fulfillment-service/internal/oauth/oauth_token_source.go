@@ -17,7 +17,6 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/x509"
 	"embed"
 	"encoding/base64"
 	"encoding/json"
@@ -36,9 +35,9 @@ import (
 	"github.com/skratchdot/open-golang/open"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/network"
 	"github.com/osac-project/osac/fulfillment-service/internal/templating"
 	"github.com/osac-project/osac/fulfillment-service/internal/tlsconfig"
+	"github.com/osac-project/osac/fulfillment-service/internal/trust"
 )
 
 //go:embed templates
@@ -70,7 +69,7 @@ type TokenSourceBuilder struct {
 	scopes       []string
 	audience     string
 	insecure     bool
-	caPool       *x509.CertPool
+	caPool       *trust.CertPool
 	interactive  bool
 	timeout      time.Duration
 	httpClient   *http.Client
@@ -92,7 +91,7 @@ type TokenSource struct {
 	scopes           []string
 	audience         string
 	insecure         bool
-	caPool           *x509.CertPool
+	caPool           *trust.CertPool
 	interactive      bool
 	timeout          time.Duration
 	discoverOnce     sync.Once
@@ -241,7 +240,7 @@ func (b *TokenSourceBuilder) SetInsecure(value bool) *TokenSourceBuilder {
 // SetCaPool sets the certificate pool that contains the certificates of the certificate authorities that are trusted
 // when connecting using TLS. This is optional, and the default is to use trust the certificate authorities trusted by
 // the operating system.
-func (b *TokenSourceBuilder) SetCaPool(value *x509.CertPool) *TokenSourceBuilder {
+func (b *TokenSourceBuilder) SetCaPool(value *trust.CertPool) *TokenSourceBuilder {
 	b.caPool = value
 	return b
 }
@@ -354,7 +353,7 @@ func (b *TokenSourceBuilder) Build() (result *TokenSource, err error) {
 type resolvedConfig struct {
 	scopes           []string
 	timeout          time.Duration
-	caPool           *x509.CertPool
+	caPool           *trust.CertPool
 	httpClient       *http.Client
 	openFunc         func(context.Context, string) error
 	redirectUri      string
@@ -422,7 +421,7 @@ func (b *TokenSourceBuilder) resolveDefaults() (cfg resolvedConfig, err error) {
 	// Set the default CA pool if needed:
 	cfg.caPool = b.caPool
 	if cfg.caPool == nil {
-		cfg.caPool, err = network.NewCertPool().
+		cfg.caPool, err = trust.NewCertPool().
 			SetLogger(b.logger).
 			AddSystemFiles(true).
 			AddKubernetesFiles(true).
@@ -443,7 +442,7 @@ func (b *TokenSourceBuilder) resolveDefaults() (cfg resolvedConfig, err error) {
 	cfg.httpClient = b.httpClient
 	if cfg.httpClient == nil {
 		tlsConfig := tlsconfig.NewClientTLSConfig()
-		tlsConfig.RootCAs = cfg.caPool
+		tlsConfig.RootCAs = cfg.caPool.Pool()
 		if b.insecure {
 			tlsConfig.InsecureSkipVerify = true
 		}

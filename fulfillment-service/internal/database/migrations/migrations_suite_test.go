@@ -88,13 +88,16 @@ func DescribeMigration(description string, body func()) bool {
 	// running the tests.
 	return Describe(description, Ordered, func() {
 		// File and number of the previous migration. These are used to pass information between the 'BeforeAll'
-		// and the 'BeforeEach' blocks.
+		// and the 'BeforeEach' blocks. The templateDB is a single database migrated to the previous version that
+		// is created once per DescribeMigration group and then cloned for each spec, which is significantly
+		// faster than replaying all migrations from scratch for every spec.
 		var (
 			previousFile   string
 			previousNumber uint
+			templateDB     *database.Instance
 		)
 
-		BeforeAll(func() {
+		BeforeAll(func(ctx context.Context) {
 			// Check that the migration file exists.
 			_, err := os.Stat(migrationFile)
 			Expect(err).ToNot(
@@ -135,14 +138,29 @@ func DescribeMigration(description string, body func()) bool {
 				migrationFile,
 			)
 			previousNumber = migrationNumber(previousFile)
+
+			// Create a single database migrated to the previous version. This database is used as a
+			// template: each spec clones it instead of replaying all earlier migrations from scratch.
+			templateDB, err = server.NewInstance().
+				SetVersion(previousNumber).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(templateDB.Close)
+
+			// Eagerly initialize the template so the database exists in PostgreSQL before specs
+			// try to clone it.
+			_, err = templateDB.Url(ctx)
+			Expect(err).ToNot(HaveOccurred())
 		})
 
 		BeforeEach(func(ctx context.Context) {
 			var err error
 
-			// Create the database migrated up to the previous migration:
+			// Clone the group template database instead of replaying all migrations from scratch.
+			// Each spec gets its own isolated copy so fixture data and migration side-effects
+			// cannot leak between specs.
 			db, err = server.NewInstance().
-				SetVersion(previousNumber).
+				SetSource(templateDB).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 			DeferCleanup(db.Close)

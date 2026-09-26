@@ -26,7 +26,6 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -38,7 +37,6 @@ var validExternalIPTransitions = map[privatev1.ExternalIPState][]privatev1.Exter
 
 type PrivateExternalIPsServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -63,11 +61,6 @@ func NewPrivateExternalIPsServer() *PrivateExternalIPsServerBuilder {
 
 func (b *PrivateExternalIPsServerBuilder) SetLogger(value *slog.Logger) *PrivateExternalIPsServerBuilder {
 	b.logger = value
-	return b
-}
-
-func (b *PrivateExternalIPsServerBuilder) SetNotifier(value events.Notifier) *PrivateExternalIPsServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -111,7 +104,6 @@ func (b *PrivateExternalIPsServerBuilder) Build() (result *PrivateExternalIPsSer
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer)
-	addDAOEventCallback(externalIPPoolDaoBuilder, b.notifier)
 	externalIPPoolDao, err := externalIPPoolDaoBuilder.Build()
 	if err != nil {
 		return
@@ -169,7 +161,6 @@ func (b *PrivateExternalIPsServerBuilder) Build() (result *PrivateExternalIPsSer
 	generic, err := NewGenericServer[*privatev1.ExternalIP]().
 		SetLogger(b.logger).
 		SetService(privatev1.ExternalIPs_ServiceDesc.ServiceName).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).

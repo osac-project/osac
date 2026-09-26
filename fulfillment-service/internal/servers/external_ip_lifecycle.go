@@ -29,7 +29,6 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -82,12 +81,6 @@ func newExternalIPLifecycle(
 		clusterDao:              clusterDao,
 		bareMetalInstanceDao:    bareMetalInstanceDao,
 		virtualNetworkDao:       virtualNetworkDao,
-	}
-}
-
-func addDAOEventCallback[O dao.Object](builder *dao.GenericDAOBuilder[O], notifier events.Notifier) {
-	if notifier != nil {
-		builder.AddEventCallback(makeNotifyCallback[O](notifier))
 	}
 }
 

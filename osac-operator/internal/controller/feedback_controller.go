@@ -386,7 +386,11 @@ func syncClusterOrderNodeRequests(ctx context.Context, clusterOrder *ckv1alpha1.
 
 		var nodeSetID string
 		for candidateNodeSetID, candidateNodeSet := range remote.GetSpec().GetNodeSets() {
-			if candidateNodeSet.GetHostType().GetName() == nodeRequest.ResourceClass {
+			rc := candidateNodeSet.GetBaremetalInstanceType().GetName()
+			if rc == "" {
+				rc = candidateNodeSet.GetHostType().GetName()
+			}
+			if rc == nodeRequest.ResourceClass {
 				nodeSetID = candidateNodeSetID
 				break
 			}
@@ -404,7 +408,7 @@ func syncClusterOrderNodeRequests(ctx context.Context, clusterOrder *ckv1alpha1.
 		nodeSet := nodeSets[nodeSetID]
 		if nodeSet == nil {
 			nodeSet = privatev1.ClusterNodeSet_builder{
-				HostType: privatev1.HostTypeReference_builder{
+				BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{
 					Name: nodeRequest.ResourceClass,
 				}.Build(),
 			}.Build()

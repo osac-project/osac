@@ -23,14 +23,12 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 // PrivateRolesServerBuilder is a builder for creating instances of PrivateRolesServer.
 type PrivateRolesServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -55,12 +53,6 @@ func NewPrivateRolesServer() *PrivateRolesServerBuilder {
 // SetLogger sets the logger to use. This is mandatory.
 func (b *PrivateRolesServerBuilder) SetLogger(value *slog.Logger) *PrivateRolesServerBuilder {
 	b.logger = value
-	return b
-}
-
-// SetNotifier sets the notifier to use. This is optional.
-func (b *PrivateRolesServerBuilder) SetNotifier(value events.Notifier) *PrivateRolesServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -104,7 +96,6 @@ func (b *PrivateRolesServerBuilder) Build() (result *PrivateRolesServer, err err
 	generic, err := NewGenericServer[*privatev1.Role]().
 		SetLogger(b.logger).
 		SetService(privatev1.Roles_ServiceDesc.ServiceName).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).

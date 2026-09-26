@@ -18,220 +18,71 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc/codes"
 	grpcmetadata "google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
-	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
-	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
 var _ = Describe("Generic server", func() {
-	var ctrl *gomock.Controller
-
-	BeforeEach(func() {
-		ctrl = gomock.NewController(GinkgoT())
-		DeferCleanup(ctrl.Finish)
-	})
-
-	It("Sets the payload via reflection for a simple object type", func() {
-		// Create a mock notifier that captures the event:
-		var event *privatev1.Event
-		notifier := events.NewMockNotifier(ctrl)
-		notifier.EXPECT().
-			Notify(gomock.Any(), gomock.Any()).
-			DoAndReturn(
-				func(ctx context.Context, payload proto.Message) error {
-					event = payload.(*privatev1.Event)
-					return nil
-				},
-			)
-
-		// Create the server:
+	It("signals objects through a flagged no-op update", func() {
 		server, err := NewGenericServer[*privatev1.HostType]().
 			SetLogger(logger).
 			SetService(privatev1.HostTypes_ServiceDesc.ServiceName).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
-			SetNotifier(notifier).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
-		// Create the object:
-		response := &privatev1.HostTypesCreateResponse{}
-		err = server.Create(
-			ctx,
-			privatev1.HostTypesCreateRequest_builder{
-				Object: privatev1.HostType_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: "my-object",
-					}.Build(),
-				}.Build(),
-			}.Build(),
-			&response,
-		)
-		Expect(err).ToNot(HaveOccurred())
-
-		// Verify the event:
-		Expect(event).ToNot(BeNil())
-		Expect(event.GetType()).To(Equal(privatev1.EventType_EVENT_TYPE_OBJECT_CREATED))
-		Expect(event.GetTimestamp()).ToNot(BeNil())
-		object := event.GetHostType()
-		Expect(object).ToNot(BeNil())
-		metadata := object.GetMetadata()
-		Expect(metadata).ToNot(BeNil())
-		Expect(metadata.GetName()).To(Equal("my-object"))
-	})
-
-	It("Adds a timestamp to every database event type", func() {
-		notifier := events.NewMockNotifier(ctrl)
-		notifier.EXPECT().
-			Notify(gomock.Any(), gomock.Any()).
-			DoAndReturn(
-				func(ctx context.Context, payload proto.Message) error {
-					event := payload.(*privatev1.Event)
-					field := event.ProtoReflect().Descriptor().Fields().ByName("timestamp")
-					Expect(field).ToNot(BeNil())
-					Expect(event.ProtoReflect().Has(field)).To(BeTrue())
-					return nil
-				},
-			).
-			Times(3)
-
-		server, err := NewGenericServer[*privatev1.HostType]().
-			SetLogger(logger).
-			SetService(privatev1.HostTypes_ServiceDesc.ServiceName).
-			SetAttributionLogic(attribution).
-			SetTenancyLogic(tenancy).
-			SetNotifier(notifier).
-			Build()
-		Expect(err).ToNot(HaveOccurred())
-
-		object := privatev1.HostType_builder{
-			Metadata: privatev1.Metadata_builder{Name: "event-timestamp"}.Build(),
-		}.Build()
-		for _, eventType := range []dao.EventType{
-			dao.EventTypeCreated,
-			dao.EventTypeUpdated,
-			dao.EventTypeDeleted,
-		} {
-			err = server.notifyEvent(ctx, dao.Event{Type: eventType, Object: object})
-			Expect(err).ToNot(HaveOccurred())
-		}
-	})
-
-	It("Adds a timestamp to signal events", func() {
-		var signalEvent *privatev1.Event
-		notifier := events.NewMockNotifier(ctrl)
-		notifier.EXPECT().
-			Notify(gomock.Any(), gomock.Any()).
-			Do(func(ctx context.Context, payload proto.Message) {
-				event := payload.(*privatev1.Event)
-				if event.GetType() == privatev1.EventType_EVENT_TYPE_OBJECT_SIGNALED {
-					signalEvent = event
-				}
-			}).
-			AnyTimes()
-
-		server, err := NewGenericServer[*privatev1.HostType]().
-			SetLogger(logger).
-			SetService(privatev1.HostTypes_ServiceDesc.ServiceName).
-			SetAttributionLogic(attribution).
-			SetTenancyLogic(tenancy).
-			SetNotifier(notifier).
-			Build()
-		Expect(err).ToNot(HaveOccurred())
-
-		response := &privatev1.HostTypesCreateResponse{}
+		createResponse := &privatev1.HostTypesCreateResponse{}
 		err = server.Create(ctx, privatev1.HostTypesCreateRequest_builder{
 			Object: privatev1.HostType_builder{
-				Metadata: privatev1.Metadata_builder{Name: "signal-timestamp"}.Build(),
+				Metadata:    privatev1.Metadata_builder{Name: "signal-event"}.Build(),
+				Description: "sensitive",
 			}.Build(),
-		}.Build(), &response)
+		}.Build(), &createResponse)
 		Expect(err).ToNot(HaveOccurred())
 
-		objectID := response.GetObject().GetId()
 		signalResponse := &privatev1.HostTypesSignalResponse{}
-		err = server.Signal(ctx, privatev1.HostTypesSignalRequest_builder{Id: objectID}.Build(), &signalResponse)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(signalEvent).ToNot(BeNil())
-		Expect(signalEvent.GetTimestamp()).ToNot(BeNil())
-	})
-
-	It("Redacts the payload", func() {
-		// Create a mock notifier that captures the event:
-		var event *privatev1.Event
-		notifier := events.NewMockNotifier(ctrl)
-		notifier.EXPECT().
-			Notify(gomock.Any(), gomock.Any()).
-			DoAndReturn(
-				func(ctx context.Context, payload proto.Message) error {
-					event = payload.(*privatev1.Event)
-					return nil
-				},
-			)
-
-		// Create the server with a redact function that clears some field from the object:
-		server, err := NewGenericServer[*privatev1.HostType]().
-			SetLogger(logger).
-			SetService(privatev1.HostTypes_ServiceDesc.ServiceName).
-			SetAttributionLogic(attribution).
-			SetTenancyLogic(tenancy).
-			SetNotifier(notifier).
-			SetRedactFunc(
-				func(object *privatev1.HostType) *privatev1.HostType {
-					object.SetDescription("***")
-					return object
-				},
-			).
-			Build()
+		err = server.Signal(ctx, privatev1.HostTypesSignalRequest_builder{
+			Id: createResponse.GetObject().GetId(),
+		}.Build(), &signalResponse)
 		Expect(err).ToNot(HaveOccurred())
 
-		// Create the object:
-		object := privatev1.HostType_builder{
-			Metadata: privatev1.Metadata_builder{
-				Name: "my-object",
-			}.Build(),
-			Description: "My description.",
-		}.Build()
-		request := privatev1.HostTypesCreateRequest_builder{
-			Object: object,
-		}.Build()
-		response := &privatev1.HostTypesCreateResponse{}
-		err = server.Create(ctx, request, &response)
+		tx, err := database.TxFromContext(ctx)
 		Expect(err).ToNot(HaveOccurred())
+		var table, id string
+		var version int32
+		err = tx.QueryRow(ctx, `
+			select "table", data->>'id', (data->>'version')::integer
+			from changes
+			where op = 'SIGNAL'
+		`).Scan(&table, &id, &version)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(table).To(Equal("host_types"))
+		Expect(id).To(Equal(createResponse.GetObject().GetId()))
+		Expect(version).To(Equal(int32(0)))
 
-		// Verify the the payload has been redacted:
-		Expect(event).ToNot(BeNil())
-		Expect(event.GetType()).To(Equal(privatev1.EventType_EVENT_TYPE_OBJECT_CREATED))
-		Expect(event.GetHostType()).ToNot(BeNil())
-		Expect(event.GetHostType().GetDescription()).To(Equal("***"))
-
-		// Verify that the original object has not been modified:
-		Expect(object.GetDescription()).To(Equal("My description."))
+		getResponse := &privatev1.HostTypesGetResponse{}
+		err = server.Get(ctx, privatev1.HostTypesGetRequest_builder{
+			Id: createResponse.GetObject().GetId(),
+		}.Build(), &getResponse)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(getResponse.GetObject().GetMetadata().GetVersion()).To(Equal(int32(0)))
+		Expect(getResponse.GetObject().GetDescription()).To(Equal("sensitive"))
 	})
 
 	It("clones the prepared create candidate and invokes the callback before persistence", func() {
 		var order []string
-		notifier := events.NewMockNotifier(ctrl)
-		notifier.EXPECT().Notify(gomock.Any(), gomock.Any()).DoAndReturn(
-			func(context.Context, proto.Message) error {
-				order = append(order, "event")
-				return nil
-			},
-		)
 		server, err := NewGenericServer[*privatev1.HostType]().
 			SetLogger(logger).
 			SetService(privatev1.HostTypes_ServiceDesc.ServiceName).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
-			SetNotifier(notifier).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
@@ -256,7 +107,7 @@ var _ = Describe("Generic server", func() {
 			},
 		)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(order).To(Equal([]string{"callback", "event"}))
+		Expect(order).To(Equal([]string{"callback"}))
 		Expect(requestObject.GetDescription()).To(Equal("request-description"))
 		Expect(requestObject.GetMetadata().GetCreator()).To(BeEmpty())
 		Expect(requestObject.GetMetadata().GetTenant()).To(BeEmpty())
@@ -264,13 +115,11 @@ var _ = Describe("Generic server", func() {
 	})
 
 	It("rejects a create callback that clears metadata before persistence", func() {
-		notifier := events.NewMockNotifier(ctrl)
 		server, err := NewGenericServer[*privatev1.HostType]().
 			SetLogger(logger).
 			SetService(privatev1.HostTypes_ServiceDesc.ServiceName).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
-			SetNotifier(notifier).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
@@ -293,13 +142,11 @@ var _ = Describe("Generic server", func() {
 	})
 
 	It("rejects a create callback that sets a disallowed tenant before persistence", func() {
-		notifier := events.NewMockNotifier(ctrl)
 		server, err := NewGenericServer[*privatev1.HostType]().
 			SetLogger(logger).
 			SetService(privatev1.HostTypes_ServiceDesc.ServiceName).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
-			SetNotifier(notifier).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
@@ -429,14 +276,12 @@ var _ = Describe("Generic server", func() {
 		Expect(getResponse.GetObject().GetMetadata().GetLabels()).To(Equal(map[string]string{"phase": "updated"}))
 	})
 
-	It("does not persist or emit an event when a create callback fails", func() {
-		notifier := events.NewMockNotifier(ctrl)
+	It("does not persist when a create callback fails", func() {
 		server, err := NewGenericServer[*privatev1.HostType]().
 			SetLogger(logger).
 			SetService(privatev1.HostTypes_ServiceDesc.ServiceName).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
-			SetNotifier(notifier).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 		response := &privatev1.HostTypesCreateResponse{}
@@ -456,14 +301,11 @@ var _ = Describe("Generic server", func() {
 	})
 
 	It("does not persist a failed update callback and leaves the stored object unchanged", func() {
-		notifier := events.NewMockNotifier(ctrl)
-		notifier.EXPECT().Notify(gomock.Any(), gomock.Any()).Times(1).Return(nil)
 		server, err := NewGenericServer[*privatev1.HostType]().
 			SetLogger(logger).
 			SetService(privatev1.HostTypes_ServiceDesc.ServiceName).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
-			SetNotifier(notifier).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 		createResponse := &privatev1.HostTypesCreateResponse{}
@@ -531,15 +373,12 @@ var _ = Describe("Generic server", func() {
 		Expect(getResponse.GetObject().GetDescription()).To(Equal("original-description"))
 	})
 
-	It("rejects an update callback that clears metadata without emitting an event", func() {
-		notifier := events.NewMockNotifier(ctrl)
-		notifier.EXPECT().Notify(gomock.Any(), gomock.Any()).Times(1).Return(nil)
+	It("rejects an update callback that clears metadata", func() {
 		server, err := NewGenericServer[*privatev1.HostType]().
 			SetLogger(logger).
 			SetService(privatev1.HostTypes_ServiceDesc.ServiceName).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
-			SetNotifier(notifier).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
@@ -576,15 +415,12 @@ var _ = Describe("Generic server", func() {
 		Expect(getResponse.GetObject().GetMetadata().GetTenant()).To(Equal(testTenant))
 	})
 
-	It("rejects an update callback that sets a disallowed tenant without emitting an event", func() {
-		notifier := events.NewMockNotifier(ctrl)
-		notifier.EXPECT().Notify(gomock.Any(), gomock.Any()).Times(1).Return(nil)
+	It("rejects an update callback that sets a disallowed tenant", func() {
 		server, err := NewGenericServer[*privatev1.HostType]().
 			SetLogger(logger).
 			SetService(privatev1.HostTypes_ServiceDesc.ServiceName).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
-			SetNotifier(notifier).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
@@ -621,15 +457,12 @@ var _ = Describe("Generic server", func() {
 		Expect(getResponse.GetObject().GetMetadata().GetTenant()).To(Equal(testTenant))
 	})
 
-	It("does not emit an event or add a row when persistence fails", func() {
-		notifier := events.NewMockNotifier(ctrl)
-		notifier.EXPECT().Notify(gomock.Any(), gomock.Any()).Times(1).Return(nil)
+	It("does not add a row when persistence fails", func() {
 		server, err := NewGenericServer[*privatev1.HostType]().
 			SetLogger(logger).
 			SetService(privatev1.HostTypes_ServiceDesc.ServiceName).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
-			SetNotifier(notifier).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 		request := privatev1.HostTypesCreateRequest_builder{
@@ -651,14 +484,12 @@ var _ = Describe("Generic server", func() {
 		Expect(listResponse.GetTotal()).To(Equal(int32(1)))
 	})
 
-	It("runs dry-run callbacks without persisting or emitting events", func() {
-		notifier := events.NewMockNotifier(ctrl)
+	It("runs dry-run callbacks without persisting", func() {
 		server, err := NewGenericServer[*privatev1.HostType]().
 			SetLogger(logger).
 			SetService(privatev1.HostTypes_ServiceDesc.ServiceName).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
-			SetNotifier(notifier).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 		requestObject := privatev1.HostType_builder{
@@ -713,13 +544,11 @@ var _ = Describe("Generic server dry run", func() {
 
 	BeforeEach(func() {
 		var err error
-		notifier := events.NewMockNotifier(gomock.NewController(GinkgoT()))
 		server, err = NewGenericServer[*privatev1.HostType]().
 			SetLogger(logger).
 			SetService(privatev1.HostTypes_ServiceDesc.ServiceName).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
-			SetNotifier(notifier).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 	})
@@ -786,7 +615,7 @@ var _ = Describe("Generic server dry run", func() {
 		Expect(listResponse.GetTotal()).To(Equal(int32(0)))
 	})
 
-	It("Does not emit events", func() {
+	It("Does not persist objects", func() {
 		response := &privatev1.HostTypesCreateResponse{}
 		err := server.Create(
 			dryRunCtx(),
@@ -803,15 +632,11 @@ var _ = Describe("Generic server dry run", func() {
 	})
 
 	It("Persists normally when header value is false", func() {
-		ctrl := gomock.NewController(GinkgoT())
-		notifier := events.NewMockNotifier(ctrl)
-		notifier.EXPECT().Notify(gomock.Any(), gomock.Any()).Return(nil)
 		srv, err := NewGenericServer[*privatev1.HostType]().
 			SetLogger(logger).
 			SetService(privatev1.HostTypes_ServiceDesc.ServiceName).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
-			SetNotifier(notifier).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 

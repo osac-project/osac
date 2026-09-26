@@ -56,3 +56,15 @@ database:
       items:
       - key: uri
         param: url
+
+kafka:
+  connection:
+  - secret:
+      name: ci-kafka
+      items:
+      - key: brokers
+        param: brokers
+      - key: user
+        param: user
+      - key: password
+        param: password

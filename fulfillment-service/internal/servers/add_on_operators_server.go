@@ -24,7 +24,6 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	"github.com/osac-project/osac/fulfillment-service/internal/references"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -32,7 +31,6 @@ import (
 
 type AddOnOperatorsServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -55,11 +53,6 @@ func NewAddOnOperatorsServer() *AddOnOperatorsServerBuilder {
 
 func (b *AddOnOperatorsServerBuilder) SetLogger(value *slog.Logger) *AddOnOperatorsServerBuilder {
 	b.logger = value
-	return b
-}
-
-func (b *AddOnOperatorsServerBuilder) SetNotifier(value events.Notifier) *AddOnOperatorsServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -105,7 +98,6 @@ func (b *AddOnOperatorsServerBuilder) Build() (result *AddOnOperatorsServer, err
 
 	delegate, err := NewPrivateAddOnOperatorsServer().
 		SetLogger(b.logger).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).

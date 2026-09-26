@@ -1,4 +1,6 @@
 # CaaS CI environment -- instance values for osac chart.
+# Hub CSI remains disabled in this profile. CaaS tenant CSI is installed by the
+# AAP storage-provider workflow on each remote tenant cluster (PR #832).
 
 # --- Service Enablement ---
 global:

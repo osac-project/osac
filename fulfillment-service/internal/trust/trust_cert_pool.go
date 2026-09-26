@@ -11,7 +11,7 @@ Unless required by applicable law or agreed to in writing, software distributed 
 language governing permissions and limitations under the License.
 */
 
-package network
+package trust
 
 import (
 	"crypto/x509"
@@ -25,7 +25,7 @@ import (
 )
 
 // CertPoolBuilder contains the data and logic needed to create a certificate pool. Don't create instances of
-// this object directly, use the NewCertPoolBuilder function instead.
+// this object directly, use the NewCertPool function instead.
 type CertPoolBuilder struct {
 	logger          *slog.Logger
 	systemFiles     bool
@@ -34,6 +34,22 @@ type CertPoolBuilder struct {
 	files           []string
 	exts            []string
 	certs           []any
+}
+
+// CertPool contains an X.509 certificate pool and the CA files that were loaded into it.
+type CertPool struct {
+	pool            *x509.CertPool
+	files           []string
+	kubernetesFiles bool
+	systemFiles     bool
+}
+
+// Pool returns the underlying X.509 certificate pool.
+func (p *CertPool) Pool() *x509.CertPool {
+	if p == nil {
+		return nil
+	}
+	return p.pool
 }
 
 // NewCertPool creates a builder that can then used to configure and create a certificate pool.
@@ -126,7 +142,7 @@ func (b *CertPoolBuilder) AddCertificates(values ...any) *CertPoolBuilder {
 }
 
 // Build uses the data stored in the builder to create a new certificate pool.
-func (b *CertPoolBuilder) Build() (result *x509.CertPool, err error) {
+func (b *CertPoolBuilder) Build() (result *CertPool, err error) {
 	// Check parameters:
 	if b.logger == nil {
 		err = errors.New("logger is mandatory")
@@ -146,17 +162,18 @@ func (b *CertPoolBuilder) Build() (result *x509.CertPool, err error) {
 
 	// Sort the extensions so that we can use a binary search to check if an extension is allowed:
 	sort.Strings(b.exts)
+	var files []string
 
 	// Add Kubernetes CA files if enabled:
 	if b.kubernetesFiles {
-		err = b.loadKubernetesFiles(pool)
+		err = b.loadKubernetesFiles(pool, &files)
 		if err != nil {
 			return
 		}
 	}
 
 	// Load configured files:
-	err = b.loadConfiguredFiles(pool)
+	err = b.loadConfiguredFiles(pool, &files)
 	if err != nil {
 		return
 	}
@@ -187,7 +204,12 @@ func (b *CertPoolBuilder) Build() (result *x509.CertPool, err error) {
 		}
 	}
 
-	result = pool
+	result = &CertPool{
+		pool:            pool,
+		files:           files,
+		kubernetesFiles: b.kubernetesFiles,
+		systemFiles:     b.systemFiles,
+	}
 	return
 }
 
@@ -203,10 +225,10 @@ func (b *CertPoolBuilder) resolvePath(path string) string {
 	return filepath.Join(b.root, path)
 }
 
-func (b *CertPoolBuilder) loadKubernetesFiles(pool *x509.CertPool) error {
+func (b *CertPoolBuilder) loadKubernetesFiles(pool *x509.CertPool, files *[]string) error {
 	for _, caFile := range certPoolKubernetesCaFiles {
 		resolvedPath := b.resolvePath(caFile)
-		err := b.loadFile(pool, resolvedPath)
+		err := b.loadFile(pool, resolvedPath, files)
 		if errors.Is(err, os.ErrNotExist) {
 			b.logger.Info(
 				"Kubernetes CA file doesn't exist",
@@ -221,10 +243,10 @@ func (b *CertPoolBuilder) loadKubernetesFiles(pool *x509.CertPool) error {
 	return nil
 }
 
-func (b *CertPoolBuilder) loadConfiguredFiles(pool *x509.CertPool) error {
+func (b *CertPoolBuilder) loadConfiguredFiles(pool *x509.CertPool, files *[]string) error {
 	for _, caFile := range b.files {
 		resolvedPath := b.resolvePath(caFile)
-		err := b.loadFile(pool, resolvedPath)
+		err := b.loadFile(pool, resolvedPath, files)
 		if err != nil {
 			return err
 		}
@@ -232,7 +254,7 @@ func (b *CertPoolBuilder) loadConfiguredFiles(pool *x509.CertPool) error {
 	return nil
 }
 
-func (b *CertPoolBuilder) loadFile(pool *x509.CertPool, caFile string) error {
+func (b *CertPoolBuilder) loadFile(pool *x509.CertPool, caFile string, files *[]string) error {
 	info, err := os.Stat(caFile)
 	if err != nil {
 		return err
@@ -250,7 +272,7 @@ func (b *CertPoolBuilder) loadFile(pool *x509.CertPool, caFile string) error {
 			fileName := dirEntry.Name()
 			fullPath := filepath.Join(caFile, fileName)
 			if dirEntry.IsDir() {
-				err := b.loadFile(pool, fullPath)
+				err := b.loadFile(pool, fullPath, files)
 				if err != nil {
 					return err
 				}
@@ -267,7 +289,7 @@ func (b *CertPoolBuilder) loadFile(pool *x509.CertPool, caFile string) error {
 				)
 				continue
 			}
-			err := b.loadFile(pool, fullPath)
+			err := b.loadFile(pool, fullPath, files)
 			if err != nil {
 				return err
 			}
@@ -285,6 +307,9 @@ func (b *CertPoolBuilder) loadFile(pool *x509.CertPool, caFile string) error {
 		if !ok {
 			return fmt.Errorf("file exists, but it '%s' doesn't contain any CA certificate", caFile)
 		}
+		if !slices.Contains(*files, caFile) {
+			*files = append(*files, caFile)
+		}
 	}
 	return nil
 }
@@ -292,6 +317,26 @@ func (b *CertPoolBuilder) loadFile(pool *x509.CertPool, caFile string) error {
 func (b *CertPoolBuilder) validExt(ext string) bool {
 	_, found := slices.BinarySearch(b.exts, ext)
 	return found
+}
+
+// Files returns the CA files that were loaded into the certificate pool. It doesn't include certificates loaded
+// from the system pool or added directly with AddCertificate or AddCertificates. The returned slice is a copy and
+// can be modified by the caller.
+func (p *CertPool) Files() []string {
+	if p == nil {
+		return nil
+	}
+	return slices.Clone(p.files)
+}
+
+// KubernetesFiles returns true if the certificate pool was built including Kubernetes CA files.
+func (p *CertPool) KubernetesFiles() bool {
+	return p != nil && p.kubernetesFiles
+}
+
+// SystemFiles returns true if the certificate pool was built including system CA files.
+func (p *CertPool) SystemFiles() bool {
+	return p != nil && p.systemFiles
 }
 
 // certPoolDefaultExts is the default list of file name extensions that are allowed when loading files from directories.

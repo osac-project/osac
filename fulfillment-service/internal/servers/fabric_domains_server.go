@@ -19,14 +19,12 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 type FabricDomainsServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -47,18 +45,17 @@ func (b *FabricDomainsServerBuilder) SetLogger(value *slog.Logger) *FabricDomain
 	b.logger = value
 	return b
 }
-func (b *FabricDomainsServerBuilder) SetNotifier(value events.Notifier) *FabricDomainsServerBuilder {
-	b.notifier = value
-	return b
-}
+
 func (b *FabricDomainsServerBuilder) SetAttributionLogic(value auth.AttributionLogic) *FabricDomainsServerBuilder {
 	b.attributionLogic = value
 	return b
 }
+
 func (b *FabricDomainsServerBuilder) SetTenancyLogic(value auth.TenancyLogic) *FabricDomainsServerBuilder {
 	b.tenancyLogic = value
 	return b
 }
+
 func (b *FabricDomainsServerBuilder) SetMetricsRegisterer(value prometheus.Registerer) *FabricDomainsServerBuilder {
 	b.metricsRegisterer = value
 	return b
@@ -80,7 +77,7 @@ func (b *FabricDomainsServerBuilder) Build() (*FabricDomainsServer, error) {
 		return nil, err
 	}
 	delegate, err := NewPrivateFabricDomainsServer().
-		SetLogger(b.logger).SetNotifier(b.notifier).SetAttributionLogic(b.attributionLogic).
+		SetLogger(b.logger).SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).SetMetricsRegisterer(b.metricsRegisterer).Build()
 	if err != nil {
 		return nil, err

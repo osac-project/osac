@@ -34,6 +34,47 @@ spec:
       labels:
         app: osac-ui
     spec:
+      automountServiceAccountToken: false
+      volumes:
+      - name: ui-backend-credentials
+        secret:
+          secretName: osac-ui-backend-credentials
+      - name: tmp
+        emptyDir: {}
+      initContainers:
+      - name: wait-for-credentials
+        image: {{ .Values.cliImage }}
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -euo pipefail
+          echo "Waiting for osac-ui-backend client-secret to be populated..."
+          until [[ "$(cat /credentials/client-secret)" != "pending" ]]; do
+            echo "client-secret is still pending, retrying in 5s..."
+            sleep 5
+          done
+          echo "client-secret ready"
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - "ALL"
+        volumeMounts:
+        - name: ui-backend-credentials
+          mountPath: /credentials
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
       containers:
       - name: osac-ui
         image: "{{ .Values.ui.image.repository }}:{{ .Values.ui.image.tag }}"
@@ -45,6 +86,12 @@ spec:
         envFrom:
         - configMapRef:
             name: osac-ui
+        env:
+        - name: OIDC_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: osac-ui-backend-credentials
+              key: client-secret
         readinessProbe:
           httpGet:
             path: /health

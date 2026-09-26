@@ -1,3 +1,7 @@
+# Leave empty to use the Helm release namespace. The umbrella chart sets this
+# explicitly for its shared hub deployment.
+namespace: ""
+
 driverName: csi.osac.openshift.io
 
 image:
@@ -26,8 +30,8 @@ controller:
   # Connection to the OSAC fulfillment-service (runs on the hub / control plane cluster).
   # The CSI driver runs on tenant clusters and authenticates to the
   # fulfillment-service using OAuth2 client_credentials via Keycloak. The
-  # credentials Secret must be provisioned in the release namespace before
-  # the chart is installed.
+    # credentials Secret must be provisioned in the CSI namespace before the
+    # chart is installed.
   fulfillment:
     # gRPC endpoint of the fulfillment-service (e.g. "fulfillment-api.osac.svc:8000").
     # Leave empty to use in-memory stubs.
@@ -35,9 +39,18 @@ controller:
     # OIDC issuer URL for token endpoint discovery
     # (e.g. "https://keycloak.example.com/realms/myrealm").
     issuerUrl: ""
+    # Read endpoint and issuer from a ConfigMap in the CSI namespace. This is
+    # the hub deployment path; tenant installations can continue to provide
+    # endpoint and issuer directly.
+    configMap:
+      name: ""
+      endpointKey: OSAC_FULFILLMENT_ENDPOINT
+      issuerUrlKey: OSAC_FULFILLMENT_ISSUER_URL
     # Secret containing OAuth2 client credentials for fulfillment-service
-    # authentication via the client_credentials grant. The Secret must exist
-    # in the release namespace before the chart is installed.
+    # authentication via the client_credentials grant. The shared hub Secret
+    # is created by osac-infra; tenant-cluster credentials are a separate
+    # AAP/OSAC-4197 concern. The Secret must exist in the CSI namespace before
+    # the chart is installed.
     credentials:
       # Name of the Kubernetes Secret (required when endpoint is set).
       secretName: ""
@@ -48,6 +61,10 @@ controller:
     tls:
       # Skip server certificate verification (use for self-signed certs).
       insecureSkipVerify: false
+    # The in-memory volume stub is useful for local development. Hub and
+    # production values must set this to false when real fulfillment config is
+    # required.
+    allowStub: true
   resources:
     limits:
       cpu: 500m

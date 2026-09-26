@@ -24,13 +24,11 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 type PrivateClusterTemplatesServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -53,12 +51,6 @@ func NewPrivateClusterTemplatesServer() *PrivateClusterTemplatesServerBuilder {
 
 func (b *PrivateClusterTemplatesServerBuilder) SetLogger(value *slog.Logger) *PrivateClusterTemplatesServerBuilder {
 	b.logger = value
-	return b
-}
-
-func (b *PrivateClusterTemplatesServerBuilder) SetNotifier(
-	value events.Notifier) *PrivateClusterTemplatesServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -120,7 +112,6 @@ func (b *PrivateClusterTemplatesServerBuilder) Build() (result *PrivateClusterTe
 	generic, err := NewGenericServer[*privatev1.ClusterTemplate]().
 		SetLogger(b.logger).
 		SetService(privatev1.ClusterTemplates_ServiceDesc.ServiceName).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).

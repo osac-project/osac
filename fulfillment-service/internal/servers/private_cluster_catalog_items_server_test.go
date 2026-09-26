@@ -883,7 +883,6 @@ var _ = Describe("Cluster Catalog Item policy application", func() {
 		Expect(spec.GetNodeSets()).To(HaveLen(2))
 		Expect(spec.GetNodeSets()["workers"].GetSize()).To(Equal(workerSize))
 		Expect(spec.GetNodeSets()["empty"]).To(BeNil())
-		Expect(spec.GetNodeSets()["workers"].GetHostType()).To(BeNil())
 
 		spec.GetVersion().SetName("changed")
 		spec.GetNetworkAttachment().GetSubnet().SetName("changed")

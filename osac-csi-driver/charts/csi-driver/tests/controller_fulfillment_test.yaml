@@ -16,6 +16,9 @@ tests:
           path: spec.template.spec.containers[0].args
           content: "--fulfillment-client-id=$(FULFILLMENT_CLIENT_ID)"
         any: true
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--allow-stub"
 
   - it: should include fulfillment args when endpoint is set
     set:
@@ -38,14 +41,48 @@ tests:
           path: spec.template.spec.containers[0].args
           content: "--fulfillment-issuer-url=https://keycloak.example.com/realms/myrealm"
 
-  - it: should not include fulfillment args when endpoint set without credentials
+  - it: should read fulfillment endpoint and issuer from a ConfigMap
+    set:
+      namespace: osac-csi
+      controller.fulfillment.configMap.name: osac-fulfillment-config
+      controller.fulfillment.credentials.secretName: osac-csi-driver-credentials
+      controller.fulfillment.allowStub: false
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: osac-csi
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--fulfillment-endpoint=$(OSAC_FULFILLMENT_ENDPOINT)"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--fulfillment-issuer-url=$(OSAC_FULFILLMENT_ISSUER_URL)"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OSAC_FULFILLMENT_ENDPOINT
+            valueFrom:
+              configMapKeyRef:
+                name: osac-fulfillment-config
+                key: OSAC_FULFILLMENT_ENDPOINT
+                optional: false
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OSAC_FULFILLMENT_ISSUER_URL
+            valueFrom:
+              configMapKeyRef:
+                name: osac-fulfillment-config
+                key: OSAC_FULFILLMENT_ISSUER_URL
+                optional: false
+
+  - it: should reject endpoint without issuerUrl
     set:
       controller.fulfillment.endpoint: "fulfillment-api.osac.svc:8000"
       controller.fulfillment.credentials.secretName: ""
     asserts:
-      - notContains:
-          path: spec.template.spec.containers[0].args
-          content: "--fulfillment-endpoint=fulfillment-api.osac.svc:8000"
+      - failedTemplate:
+          errorMessage: "controller.fulfillment.endpoint and issuerUrl must be provided together"
 
   - it: should include grpc-insecure flag when insecureSkipVerify is true
     set:
@@ -92,21 +129,13 @@ tests:
                 - key: client-secret
                   path: client-secret
 
-  - it: should not mount credentials volume when endpoint is empty
+  - it: should reject credentials without fulfillment configuration
     set:
       controller.fulfillment.endpoint: ""
       controller.fulfillment.credentials.secretName: "osac-csi-credentials"
     asserts:
-      - notContains:
-          path: spec.template.spec.containers[0].volumeMounts
-          content:
-            name: fulfillment-credentials
-        any: true
-      - notContains:
-          path: spec.template.spec.volumes
-          content:
-            name: fulfillment-credentials
-        any: true
+      - failedTemplate:
+          errorMessage: "controller.fulfillment.credentials.secretName requires fulfillment configuration"
 
   - it: should set FULFILLMENT_CLIENT_ID env var from secret
     set:

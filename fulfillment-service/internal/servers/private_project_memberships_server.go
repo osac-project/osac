@@ -23,14 +23,12 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 // PrivateProjectMembershipsServerBuilder is a builder for creating instances of PrivateProjectMembershipsServer.
 type PrivateProjectMembershipsServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -55,12 +53,6 @@ func NewPrivateProjectMembershipsServer() *PrivateProjectMembershipsServerBuilde
 // SetLogger sets the logger to use. This is mandatory.
 func (b *PrivateProjectMembershipsServerBuilder) SetLogger(value *slog.Logger) *PrivateProjectMembershipsServerBuilder {
 	b.logger = value
-	return b
-}
-
-// SetNotifier sets the notifier to use. This is optional.
-func (b *PrivateProjectMembershipsServerBuilder) SetNotifier(value events.Notifier) *PrivateProjectMembershipsServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -104,7 +96,6 @@ func (b *PrivateProjectMembershipsServerBuilder) Build() (result *PrivateProject
 	generic, err := NewGenericServer[*privatev1.ProjectMembership]().
 		SetLogger(b.logger).
 		SetService(privatev1.ProjectMemberships_ServiceDesc.ServiceName).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).

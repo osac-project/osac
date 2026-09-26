@@ -19,8 +19,8 @@ operator:
 
 # --- CSI Driver & Backends ---
 # Enable the OSAC CSI driver for persistent volume provisioning via storage tiers.
-# For dev-full, we leave fulfillment.endpoint empty so it uses in-memory stubs
-# (no real vendor backend integration needed for local dev).
+# The hub runtime ConfigMap and shared credential Secret configure fulfillment;
+# vendor backends remain disabled for local dev.
 #
 # CSI backends (VAST, Pure, NetApp) are available but not enabled for local dev.
 # The driver uses vendorControllers="local=none" for node-local storage (hostPath,

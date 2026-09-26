@@ -16,6 +16,10 @@ below, then read and follow them. These documents are authoritative for their
 respective areas.
 
 - API or proto work: [`docs/API.md`](docs/API.md) and [`docs/CLEANAPI.md`](docs/CLEANAPI.md)
+- API or CLI request input changes:
+  [`docs/REQUEST_PATH_TRACING.md`](docs/REQUEST_PATH_TRACING.md). Trace the path
+  from the user-facing entry point through routing, filtering, and
+  transformation layers to the handler.
 - Authentication/authorization: [`docs/AUTH.md`](docs/AUTH.md)
 - Database or request lifecycle: [`docs/CODEWALK.md`](docs/CODEWALK.md)
 - Deployment and local setup: [`docs/INSTALL.md`](docs/INSTALL.md) and [`README.md`](README.md)

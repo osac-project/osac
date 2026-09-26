@@ -334,6 +334,8 @@ class Metadata(Base):
     catalog_source_namespace: str | None = None
     default_node_request: list[NodeRequest] = pydantic.Field(default_factory=list)
     allowed_resource_classes: list[str] | None = None
+    # Capabilities declared by network template roles.
+    capabilities: dict[str, Any] = pydantic.Field(default_factory=dict)
     parameters: list[TemplateParameterDefinition] = pydantic.Field(default_factory=list)
 
     # spec_defaults is used to set optional default values for the related spec fields associated

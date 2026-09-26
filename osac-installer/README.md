@@ -148,7 +148,7 @@ make install-osac  PLATFORM=openshift PROFILE=<profile> NS=<namespace>   # OSAC 
 | Variable | Description |
 | ---------- | ------------- |
 | `PLATFORM` | `kind` or `openshift` (required) |
-| `PROFILE` | `dev`, `dev-full`, `vmaas-ci`, `bmaas-ci`, `caas-ci`, or `full-ci` (required; `dev-full` is kind only) |
+| `PROFILE` | `dev`, `dev-full`, `vmaas-ci`, `bmaas-ci`, `caas-ci`, `full-ci`, or `cudn-evpn-netris-test` (required; `dev-full` is kind only) |
 | `NS` | Target namespace (required) |
 | `EXTRA_HELM_ARGS` | Extra `--set`/`--set-string` args appended to helm commands |
 
@@ -164,6 +164,7 @@ the end-to-end "create a VM from the UI" experience:
 make install PLATFORM=kind PROFILE=dev-full NS=osac
 ```
 
+<<<<<<< HEAD
 To use source-built images, use the existing component build targets and then
 load the resulting image tags into Kind. Use the same `CONTAINER_TOOL` value for
 building and loading; the image names must remain registry-qualified so they
@@ -196,6 +197,31 @@ After changing source code, rerun the relevant component `image-build` target
 and then `kind-load-images`. Loaded images are restarted only for workloads that
 use one of the local image references. Each Go component also exposes a
 single-image `kind-load-image` target when loading only that component is useful.
+#### CUDN EVPN/Netris E2E environment
+
+`PROFILE=cudn-evpn-netris-test` is an explicit OpenShift-only profile. It
+contains the normal VMaaS + BMaaS instance and infrastructure values, registers
+both `netris` (fabric) and `cudn_evpn` (k8s) through the operator's nested
+`networkManagers` map, and selects them on the default NetworkClass. It does
+not install the FRR operator, create the Phase 1 EVPN
+`FRRConfiguration`, create the external EVPN/BGP/VTEP fabric, or provide the
+`cudn_evpn` implementation; those prerequisites must be prepared before
+installation.
+
+Install it with:
+
+```bash
+make install PLATFORM=openshift PROFILE=cudn-evpn-netris-test NS=osac
+```
+
+The profile includes the non-secret Netris controller/site/tenant settings.
+Supply the controller password and any site-specific Netris or SSH values in
+a private values file and pass it through `INSTANCE_VALUES_EXTRA`, for example:
+
+```bash
+make install PLATFORM=openshift PROFILE=cudn-evpn-netris-test NS=osac \
+  INSTANCE_VALUES_EXTRA="-f cudn-evpn-netris-test-secrets.local.yaml"
+```
 
 On top of `dev`, `dev-full` adds (via `scripts/dev-full/`, orchestrated by the
 `install-devstack` target):

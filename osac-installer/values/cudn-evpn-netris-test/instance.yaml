@@ -1,0 +1,287 @@
+# CUDN EVPN/Netris VMaaS + BMaaS E2E profile -- complete OSAC instance values.
+#
+# This profile is intentionally opt-in. It assumes that the cluster has the
+# Phase 1 IPv4 EVPN/BGP/VTEP prerequisites, an EVPN FRRConfiguration, and the
+# cudn_evpn implementation installed or otherwise available. The installer
+# registers the managers and selects them for the default NetworkClass; it does
+# not create the FRRConfiguration or external EVPN fabric.
+
+# --- Service Enablement ---
+global:
+  osacDeploymentId: "ci/osac"
+  networking:
+    # Netris remains the AAP/fabric backend. The profile's expert NetworkClass
+    # below additionally selects cudn_evpn as the Kubernetes manager.
+    fabricManager: "netris"
+    k8sManager: ""
+    netris:
+      controllerUrl: "https://redhat-ctl.netris.io"
+      credentials:
+        username: "netris"
+        externalSecret: true
+      siteId: "5"
+      tenantId: "1"
+      tenantName: "Admin"
+  expertOverrides:
+    networkClass: true
+  services:
+    caas:
+      enabled: false
+    vmaas:
+      enabled: true
+    bmaas:
+      enabled: true
+    maas:
+      enabled: false
+
+# --- CSI Driver ---
+csiDriver:
+  enabled: true
+
+# --- Operator ---
+operator:
+  image:
+    repository: ghcr.io/osac-project/osac-operator
+    tag: latest
+    pullPolicy: Always
+  aap:
+    insecureSkipVerify: "true"
+    tokenSecret:
+      name: osac-aap-api-token
+      key: token
+  fulfillment:
+    serverAddress: "fulfillment-internal-api:8001"
+    tokenFile: "/var/run/secrets/kubernetes.io/serviceaccount/token"
+  controllers:
+    tenant: true
+    networking: true
+    networkingProvisioning: true
+    storage: true
+  networkManagers:
+    enabled: true
+    fabricManagers:
+      cudn_net:
+        enabled: false
+      netris:
+        enabled: true
+        description: "Netris SDN fabric manager"
+        capabilities:
+        - ipv4
+    k8sManagers:
+      k8s_only:
+        enabled: false
+      cudn_evpn:
+        enabled: true
+        description: "OVN EVPN k8s manager for VM-to-fabric bridging (Phase 1: IPv4-only)"
+        capabilities:
+        - ipv4
+  hubAccess:
+    enabled: true
+  tenants:
+  - name: shared
+  - name: osac-e2e-ci
+
+# --- Fulfillment Service ---
+service:
+  variant: openshift
+  externalHostname: ""  # Set dynamically by make install-osac
+  internalHostname: ""  # Set dynamically by make install-osac
+  images:
+    service: ghcr.io/osac-project/fulfillment-service:main
+    envoy: ghcr.io/osac-project/envoy:v1.33.0
+  certs:
+    issuerRef:
+      kind: ClusterIssuer
+      name: default-ca
+    caBundle:
+      configMap: ca-bundle
+  auth:
+    # issuerUrl defaults to a global.clusterDomain-backed route URL.
+    emergencyServiceAccounts:
+    - admin
+    - osac-operator
+    - osac-operator-controller-manager
+    - template-publisher
+    - osac-metering
+    controllerCredentials:
+    - secret:
+        name: fulfillment-controller-credentials
+        items:
+        - key: client-id
+          param: client-id
+        - key: client-secret
+          param: client-secret
+  idp:
+    provider: keycloak
+    credentials:
+    - secret:
+        name: fulfillment-controller-credentials
+        items:
+        - key: client-id
+          param: client-id
+        - key: client-secret
+          param: client-secret
+  database:
+    connection:
+    - secret:
+        name: osac-db-config
+        items:
+        - key: url
+          param: url
+    - secret:
+        name: osac-db-client-cert
+        items:
+        - key: tls.crt
+          param: sslcert
+        - key: tls.key
+          param: sslkey
+        - key: ca.crt
+          param: sslrootcert
+  log:
+    level: debug
+  vault:
+    namespace: osac
+    kvMountPath: secret
+    lifecycleRole: lifecycle
+    lifecycleMountPath: jwt
+    keycloakClientId: osac-controller
+    keycloakAudience: osac-api
+    caBundle:
+      configMap: ca-bundle
+    credentials:
+    - secret:
+        name: fulfillment-controller-credentials
+        items:
+        - key: client-secret
+          param: client-secret
+
+# --- AAP ---
+aap:
+  aap:
+    instance:
+      enabled: true
+      name: "osac-aap"
+  bootstrap:
+    enabled: true
+    image: ghcr.io/osac-project/osac-aap:latest
+    backoffLimit: 15
+  configAsCode:
+    manifestSecret: "config-as-code-manifest-ig"
+    secret: "config-as-code-ig"
+    eeImage: "ghcr.io/osac-project/osac-aap:latest"
+    projectGitUri: "https://github.com/osac-project/osac"
+    projectGitBranch: "main"
+  instanceGroups:
+    clusterFulfillment:
+      enabled: true
+      config:
+        # Netris is the physical fabric manager for this profile. Supply the
+        # site/tenant-specific values through a local values override when the
+        # shared test controller is not being used.
+        NETWORK_CLASS: "netris"
+        NETWORK_STEPS_COLLECTION: "netris.steps"
+        NETRIS_CONTROLLER_URL: "https://redhat-ctl.netris.io"
+        NETRIS_USERNAME: "netris"
+        NETRIS_SITE_ID: "5"
+        NETRIS_TENANT_ID: "1"
+        NETRIS_TENANT_NAME: "Admin"
+        HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY: "SingleReplica"
+        HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: "SingleReplica"
+    networkFulfillment:
+      enabled: true
+      config:
+        NETRIS_CONTROLLER_URL: "https://redhat-ctl.netris.io"
+        NETRIS_USERNAME: "netris"
+        NETRIS_SITE_ID: "5"
+        NETRIS_TENANT_ID: "1"
+        NETRIS_TENANT_NAME: "Admin"
+
+# --- EVPN NetworkClass selection ---
+# The two manager names must match the operator registrations above. This is
+# the only profile that selects cudn_evpn; normal profiles retain their values.
+networkClass:
+  enabled: true
+  title: "CUDN EVPN with Netris"
+  description: >-
+    Provisions IPv4 networking through the CUDN EVPN k8s manager and the Netris
+    physical fabric manager.
+  k8sManager: "cudn_evpn"
+  fabricManager: "netris"
+  isDefault: true
+
+# --- Validation ---
+validation:
+  enabled: true
+
+# --- Bare Metal Fulfillment Operator ---
+# VMaaS and BMaaS share the EVPN/Netris NetworkClass. The target cluster must
+# provide Metal3/BareMetalHost inventory for the BMaaS side of the E2E test.
+bmf:
+  image:
+    repository: ghcr.io/osac-project/bare-metal-fulfillment-operator
+    tag: latest
+    pullPolicy: Always
+  env:
+    aapUrl: "http://osac-aap/api/controller"
+    aapInsecureSkipVerify: "true"
+    enableNetworkingProvisioning: "true"
+  metal3:
+    enabled: true
+    namespace: host-inventory
+    hostClass: metal3
+
+# --- Cluster Versions ---
+clusterVersions:
+  enabled: true
+  versions:
+  - version: "4.20.0"
+    image: "quay.io/openshift-release-dev/ocp-release:4.20.0-multi"
+  - version: "4.22.0"
+    image: "quay.io/openshift-release-dev/ocp-release:4.22.0-multi"
+    default: true
+
+# --- Hub Access ---
+hubAccess:
+  enabled: true
+
+# --- Metering ---
+metering:
+  enabled: true
+  reconciliation:
+    interval: "5m"
+  echoAdapter:
+    enabled: true
+    image:
+      repository: ghcr.io/osac-project/metering-echo-adapter
+      tag: latest
+      pullPolicy: Always
+  m360Adapter:
+    enabled: false
+    image:
+      repository: ghcr.io/osac-project/metering-m360-adapter
+      tag: latest
+      pullPolicy: Always
+    m360:
+      apiUrl: "api-url"
+      apiKeySecret: "m360-api-key"
+      apiVersion: "v1"
+  database:
+    connection:
+    - secret:
+        name: osac-db-metering-config
+        items:
+        - key: url
+          param: url
+    - secret:
+        name: osac-db-metering-client-cert
+        items:
+        - key: tls.crt
+          param: sslcert
+        - key: tls.key
+          param: sslkey
+        - key: ca.crt
+          param: sslrootcert
+
+# --- LVMS StorageBackend registration ---
+lvms:
+  enabled: true

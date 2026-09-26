@@ -79,6 +79,7 @@ var _ = Describe("Bare metal instances server", func() {
 			var err error
 			createDiskImageWithLifecycle("default-bmi-disk-image",
 				privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE, nil)
+			seedTenantDefaultNetworking(testTenant, "", new("netris"))
 
 			// Seed a published catalog item.
 			catalogServer, err := NewPrivateBareMetalInstanceCatalogItemsServer().

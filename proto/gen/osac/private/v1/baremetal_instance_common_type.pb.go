@@ -96,8 +96,8 @@ type BareMetalNetworkAttachment struct {
 	// Physical interface name from the HostType's NetworkInterface list.
 	// When omitted on a single-attachment instance, the system selects the first fabric-role interface.
 	Interface *string `protobuf:"bytes,3,opt,name=interface,proto3,oneof" json:"interface,omitempty"`
-	// Designates this attachment as the default gateway for multi-NIC instances.
-	// When omitted on a single-attachment instance, that attachment is implicitly primary.
+	// Designates this attachment as the default gateway.
+	// With a single attachment, omit primary or set primary: true; primary: false is rejected.
 	Primary       *bool `protobuf:"varint,4,opt,name=primary,proto3,oneof" json:"primary,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -216,8 +216,8 @@ type BareMetalNetworkAttachment_builder struct {
 	// Physical interface name from the HostType's NetworkInterface list.
 	// When omitted on a single-attachment instance, the system selects the first fabric-role interface.
 	Interface *string
-	// Designates this attachment as the default gateway for multi-NIC instances.
-	// When omitted on a single-attachment instance, that attachment is implicitly primary.
+	// Designates this attachment as the default gateway.
+	// With a single attachment, omit primary or set primary: true; primary: false is rejected.
 	Primary *bool
 }
 

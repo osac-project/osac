@@ -827,11 +827,15 @@ func (t *task) mutateBMI(ctx context.Context, object *bmfov1alpha1.BareMetalInst
 			for _, sg := range att.GetSecurityGroups() {
 				secGroupRefs = append(secGroupRefs, controllers.RefKeyStr(sg))
 			}
+			primary := att.GetPrimary()
+			if len(protoAttachments) == 1 {
+				primary = true
+			}
 			networkAttachments = append(networkAttachments, bmfov1alpha1.BareMetalNetworkAttachment{
 				SubnetRef:         controllers.RefKeyStr(att.GetSubnet()),
 				SecurityGroupRefs: secGroupRefs,
 				Interface:         att.GetInterface(),
-				Primary:           att.GetPrimary(),
+				Primary:           primary,
 			})
 		}
 		object.Spec.NetworkAttachments = networkAttachments

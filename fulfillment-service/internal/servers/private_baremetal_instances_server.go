@@ -339,12 +339,17 @@ func (s *PrivateBareMetalInstancesServer) prepareCreate(ctx context.Context, can
 	if err = s.validateSpec(candidate); err != nil {
 		return
 	}
-	if err = s.applyDefaultNetworkAttachments(ctx, candidate); err != nil {
+	hostType, err := s.loadHostTypeForNetworkAttachments(ctx, template)
+	if err != nil {
 		return
 	}
-	if err = s.validateNetworkAttachments(ctx, candidate); err != nil {
+	if err = s.applyDefaultNetworkAttachments(ctx, candidate, hostType); err != nil {
 		return
 	}
+	if err = s.validateNetworkAttachments(ctx, candidate, hostType); err != nil {
+		return
+	}
+	normalizeSoleBareMetalAttachmentPrimary(candidate.GetSpec().GetNetworkAttachments())
 	if ref := candidate.GetSpec().GetInstanceType(); ref != nil {
 		if _, err = resolveAndCanonicalizeReference(ctx, s.instanceTypesDao, candidate.GetMetadata(), ref, "bare metal instance type", grpccodes.InvalidArgument); err != nil {
 			return
@@ -563,12 +568,20 @@ func (s *PrivateBareMetalInstancesServer) validateSpec(bmi *privatev1.BareMetalI
 	return nil
 }
 
-// applyDefaultNetworkAttachments populates network_attachments with tenant defaults when
-// omitted at create time: default IPv4 Subnet, default SecurityGroup, first fabric-role
-// interface from the HostType.
+// applyDefaultNetworkAttachments completes network_attachments at Create time.
+// len==0 injects a sole tenant-default attachment; len==1 fills missing subnet /
+// empty security_groups / interface without overwriting supplied values; len>1 is a no-op.
+// hostType is the HostType for candidate's template when present (may be nil).
 func (s *PrivateBareMetalInstancesServer) applyDefaultNetworkAttachments(
-	ctx context.Context, bmi *privatev1.BareMetalInstance) error {
-	if len(bmi.GetSpec().GetNetworkAttachments()) > 0 {
+	ctx context.Context, bmi *privatev1.BareMetalInstance, hostType *privatev1.HostType) error {
+	attachments := bmi.GetSpec().GetNetworkAttachments()
+	if len(attachments) > 1 {
+		return nil
+	}
+	if len(attachments) == 1 && attachments[0] != nil &&
+		refKey(attachments[0].GetSubnet()) != "" &&
+		!securityGroupsMissing(attachments[0]) &&
+		attachments[0].GetInterface() != "" {
 		return nil
 	}
 
@@ -582,132 +595,178 @@ func (s *PrivateBareMetalInstancesServer) applyDefaultNetworkAttachments(
 			return grpcstatus.Errorf(grpccodes.Internal, "failed to determine tenant")
 		}
 	}
+	project := bmi.GetMetadata().GetProject()
 
-	subnet, err := s.findDefaultSubnet(ctx, tenantName, bmi.GetMetadata().GetProject())
-	if err != nil {
-		return err
+	var defaultSubnet *privatev1.Subnet
+	if len(attachments) == 0 || needsDefaultSubnetLookup(attachments[0]) {
+		var err error
+		defaultSubnet, err = findDefaultSubnet(ctx, s.logger, s.subnetsDao, tenantName, project)
+		if err != nil {
+			s.logger.ErrorContext(ctx, "Failed to look up default subnet",
+				slog.String("tenant", tenantName), slog.Any("error", err))
+			return grpcstatus.Errorf(grpccodes.Internal, "failed to find default subnet")
+		}
 	}
-	if subnet == nil {
-		return nil
+	defaultVN := ""
+	if defaultSubnet != nil {
+		defaultVN = refKey(defaultSubnet.GetSpec().GetVirtualNetwork())
 	}
 
-	sg, err := s.findDefaultSecurityGroup(ctx, tenantName, bmi.GetMetadata().GetProject())
+	if len(attachments) == 0 {
+		return s.injectFullDefaultNetworkAttachment(ctx, bmi, tenantName, project, defaultSubnet, hostType)
+	}
+
+	attachment := attachments[0]
+	if attachment == nil {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "network_attachments[0]: attachment cannot be null")
+	}
+
+	var resolvedSubnet *privatev1.Subnet
+	var err error
+	if attachment.GetSubnet() == nil || refKey(attachment.GetSubnet()) == "" {
+		if defaultSubnet == nil {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"spec.network_attachments: subnet is required and no tenant default subnet is available")
+		}
+		attachment.SetSubnet(privatev1.SubnetLocalReference_builder{Id: defaultSubnet.GetId()}.Build())
+		resolvedSubnet = defaultSubnet
+	} else if securityGroupsMissing(attachment) {
+		resolvedSubnet, err = resolveAndCanonicalizeReference(ctx, s.subnetsDao, bmi.GetMetadata(),
+			attachment.GetSubnet(), "subnet", grpccodes.InvalidArgument)
+		if err != nil {
+			return err
+		}
+	}
+
+	if securityGroupsMissing(attachment) {
+		subnetVN := refKey(resolvedSubnet.GetSpec().GetVirtualNetwork())
+		if !subnetOnDefaultVirtualNetwork(subnetVN, defaultVN) {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"spec.network_attachments[0]: security_groups are required when the subnet is not on the tenant default virtual network")
+		}
+		sg, sgErr := findDefaultSecurityGroup(ctx, s.logger, s.securityGroupsDao, subnetVN, tenantName, project)
+		if sgErr != nil {
+			s.logger.ErrorContext(ctx, "Failed to look up default security group",
+				slog.String("tenant", tenantName), slog.Any("error", sgErr))
+			return grpcstatus.Errorf(grpccodes.Internal, "failed to find default security group")
+		}
+		if sg == nil {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"spec.network_attachments[0]: security_groups are required and no tenant default security group is available")
+		}
+		attachment.SetSecurityGroups([]*privatev1.SecurityGroupLocalReference{
+			privatev1.SecurityGroupLocalReference_builder{Id: sg.GetId()}.Build(),
+		})
+	}
+
+	if attachment.GetInterface() == "" {
+		ifaceName, ifaceErr := s.resolveDefaultInterface(hostType)
+		if ifaceErr != nil {
+			return ifaceErr
+		}
+		if ifaceName != "" {
+			attachment.SetInterface(ifaceName)
+		}
+	}
+
+	bmi.GetSpec().SetNetworkAttachments([]*privatev1.BareMetalNetworkAttachment{attachment})
+	return nil
+}
+
+func needsDefaultSubnetLookup(a *privatev1.BareMetalNetworkAttachment) bool {
+	if a == nil {
+		return true
+	}
+	if a.GetSubnet() == nil || refKey(a.GetSubnet()) == "" {
+		return true
+	}
+	return securityGroupsMissing(a)
+}
+
+func (s *PrivateBareMetalInstancesServer) injectFullDefaultNetworkAttachment(
+	ctx context.Context, bmi *privatev1.BareMetalInstance, tenantName, project string,
+	defaultSubnet *privatev1.Subnet, hostType *privatev1.HostType) error {
+	if defaultSubnet == nil {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"spec.network_attachments: at least one network attachment is required and no tenant default subnet is available")
+	}
+	subnetVN := refKey(defaultSubnet.GetSpec().GetVirtualNetwork())
+	sg, err := findDefaultSecurityGroup(ctx, s.logger, s.securityGroupsDao, subnetVN, tenantName, project)
 	if err != nil {
-		return err
+		s.logger.ErrorContext(ctx, "Failed to look up default security group",
+			slog.String("tenant", tenantName), slog.Any("error", err))
+		return grpcstatus.Errorf(grpccodes.Internal, "failed to find default security group")
 	}
 	if sg == nil {
-		return nil
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"spec.network_attachments: no tenant default security group is available")
 	}
 
-	ifaceName, err := s.resolveDefaultInterface(ctx, bmi)
+	ifaceName, err := s.resolveDefaultInterface(hostType)
 	if err != nil {
 		return err
 	}
 
 	attachment := privatev1.BareMetalNetworkAttachment_builder{
-		Subnet: privatev1.SubnetLocalReference_builder{Id: subnet.GetId()}.Build(),
+		Subnet: privatev1.SubnetLocalReference_builder{Id: defaultSubnet.GetId()}.Build(),
 		SecurityGroups: []*privatev1.SecurityGroupLocalReference{
 			privatev1.SecurityGroupLocalReference_builder{Id: sg.GetId()}.Build(),
 		},
-	}
+	}.Build()
 	if ifaceName != "" {
-		attachment.Interface = &ifaceName
+		attachment.SetInterface(ifaceName)
 	}
 
-	bmi.GetSpec().SetNetworkAttachments([]*privatev1.BareMetalNetworkAttachment{
-		attachment.Build(),
-	})
-
+	bmi.GetSpec().SetNetworkAttachments([]*privatev1.BareMetalNetworkAttachment{attachment})
 	return nil
 }
 
-func (s *PrivateBareMetalInstancesServer) findDefaultSubnet(
-	ctx context.Context, tenantName, project string) (*privatev1.Subnet, error) {
-	filter := fmt.Sprintf(
-		"this.metadata.labels['%s'] == 'true' && this.metadata.tenant == %q",
-		defaultLabel, tenantName,
-	)
-	filter += fmt.Sprintf(" && this.metadata.project == %q", project)
-	listResp, err := s.subnetsDao.List().SetFilter(filter).Do(ctx)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to list default subnets",
-			slog.String("tenant", tenantName), slog.Any("error", err))
-		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to find default subnet")
-	}
-	for _, subnet := range listResp.GetItems() {
-		if subnet.GetMetadata().HasDeletionTimestamp() {
-			continue
-		}
-		if subnet.GetSpec().HasIpv4Cidr() {
-			return subnet, nil
-		}
-	}
-	return nil, nil
+func securityGroupsMissing(a *privatev1.BareMetalNetworkAttachment) bool {
+	return a == nil || len(a.GetSecurityGroups()) == 0
 }
 
-func (s *PrivateBareMetalInstancesServer) findDefaultSecurityGroup(
-	ctx context.Context, tenantName, project string) (*privatev1.SecurityGroup, error) {
-	filter := fmt.Sprintf(
-		"this.metadata.labels['%s'] == 'true' && this.metadata.tenant == %q",
-		defaultLabel, tenantName,
-	)
-	filter += fmt.Sprintf(" && this.metadata.project == %q", project)
-	listResp, err := s.securityGroupsDao.List().SetFilter(filter).Do(ctx)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to list default security groups",
-			slog.String("tenant", tenantName), slog.Any("error", err))
-		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to find default security group")
-	}
-	for _, sg := range listResp.GetItems() {
-		if sg.GetMetadata().HasDeletionTimestamp() {
-			continue
-		}
-		return sg, nil
-	}
-	return nil, nil
+func subnetOnDefaultVirtualNetwork(subnetVN, defaultSubnetVN string) bool {
+	return subnetVN != "" && defaultSubnetVN != "" && subnetVN == defaultSubnetVN
 }
 
-// resolveDefaultInterface returns the first fabric-role interface name from the HostType
-// resolved via the spec.template → host_type chain. Returns ("", nil) if the chain cannot
-// be resolved (no template or no host_type). Returns an error if a HostType is found but
-// has no fabric-role interface.
-func (s *PrivateBareMetalInstancesServer) resolveDefaultInterface(
-	ctx context.Context, bmi *privatev1.BareMetalInstance) (string, error) {
-	templateID := refKey(bmi.GetSpec().GetTemplate())
-	if templateID == "" {
-		return "", nil
+// loadHostTypeForNetworkAttachments returns the HostType referenced by template, or nil when
+// the template has no host_type. Missing HostType rows yield InvalidArgument.
+func (s *PrivateBareMetalInstancesServer) loadHostTypeForNetworkAttachments(
+	ctx context.Context, template *privatev1.BareMetalInstanceTemplate) (*privatev1.HostType, error) {
+	if template == nil {
+		return nil, nil
 	}
-	tmplResp, err := s.templatesDao.Get().SetId(templateID).Do(ctx)
-	if err != nil {
-		var notFoundErr *dao.ErrNotFound
-		if errors.As(err, &notFoundErr) {
-			return "", nil
-		}
-		s.logger.ErrorContext(ctx, "Failed to lookup template for default interface resolution",
-			slog.String("template_id", templateID), slog.Any("error", err))
-		return "", grpcstatus.Errorf(grpccodes.Internal, "failed to resolve default interface")
-	}
-	hostTypeID := tmplResp.GetObject().GetHostType()
+	hostTypeID := template.GetHostType()
 	if hostTypeID == "" {
-		return "", nil
+		return nil, nil
 	}
 	htResp, err := s.hostTypesDao.Get().SetId(hostTypeID).Do(ctx)
 	if err != nil {
 		var notFoundErr *dao.ErrNotFound
 		if errors.As(err, &notFoundErr) {
-			return "", nil
+			return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"host type '%s' referenced by template '%s' not found", hostTypeID, template.GetId())
 		}
-		s.logger.ErrorContext(ctx, "Failed to lookup host type for default interface resolution",
+		s.logger.ErrorContext(ctx, "Failed to lookup host type",
 			slog.String("host_type_id", hostTypeID), slog.Any("error", err))
-		return "", grpcstatus.Errorf(grpccodes.Internal, "failed to resolve default interface")
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to lookup host type")
 	}
-	for _, ni := range htResp.GetObject().GetInterfaces() {
+	return htResp.GetObject(), nil
+}
+
+// resolveDefaultInterface returns the first fabric-role interface name from hostType.
+// Returns ("", nil) when hostType is nil. Returns an error when hostType has no fabric-role interface.
+func (s *PrivateBareMetalInstancesServer) resolveDefaultInterface(hostType *privatev1.HostType) (string, error) {
+	if hostType == nil {
+		return "", nil
+	}
+	for _, ni := range hostType.GetInterfaces() {
 		if strings.EqualFold(ni.GetRole(), "fabric") {
 			return ni.GetName(), nil
 		}
 	}
 	return "", grpcstatus.Errorf(grpccodes.FailedPrecondition,
-		"host type '%s' has no fabric-role interface for default network attachment", hostTypeID)
+		"host type '%s' has no fabric-role interface for default network attachment", hostType.GetId())
 }
 
 // resolveCatalogItem finds the instance's published Catalog Item in the selected tenant/project
@@ -896,8 +955,8 @@ func compareNetworkAttachmentsImmutability(existing, updated []*privatev1.BareMe
 	return nil
 }
 
-func (s *PrivateBareMetalInstancesServer) validateNetworkAttachments(ctx context.Context,
-	bmi *privatev1.BareMetalInstance) error {
+func (s *PrivateBareMetalInstancesServer) validateNetworkAttachments(
+	ctx context.Context, bmi *privatev1.BareMetalInstance, hostType *privatev1.HostType) error {
 	attachments := bmi.GetSpec().GetNetworkAttachments()
 	if err := validateBareMetalNetworkAttachmentStructure("", attachments); err != nil {
 		return err
@@ -905,40 +964,14 @@ func (s *PrivateBareMetalInstancesServer) validateNetworkAttachments(ctx context
 	if len(attachments) == 0 {
 		return nil
 	}
-
-	// Interface-against-HostType validation (only when template has host_type).
-	templateID := refKey(bmi.GetSpec().GetTemplate())
-	if templateID == "" {
+	if hostType == nil {
+		if templateID := refKey(bmi.GetSpec().GetTemplate()); templateID != "" {
+			s.logger.WarnContext(ctx, "Template has no host_type, skipping interface validation",
+				slog.String("template_id", templateID))
+		}
 		return nil
 	}
-	tmplResp, err := s.templatesDao.Get().SetId(templateID).Do(ctx)
-	if err != nil {
-		var notFoundErr *dao.ErrNotFound
-		if errors.As(err, &notFoundErr) {
-			return nil
-		}
-		s.logger.ErrorContext(ctx, "Failed to lookup template for interface validation",
-			slog.String("template_id", templateID), slog.Any("error", err))
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to validate network attachments")
-	}
-	hostTypeID := tmplResp.GetObject().GetHostType()
-	if hostTypeID == "" {
-		s.logger.WarnContext(ctx, "Template has no host_type, skipping interface validation",
-			slog.String("template_id", templateID))
-		return nil
-	}
-	htResp, err := s.hostTypesDao.Get().SetId(hostTypeID).Do(ctx)
-	if err != nil {
-		var notFoundErr *dao.ErrNotFound
-		if errors.As(err, &notFoundErr) {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"host type '%s' referenced by template '%s' not found", hostTypeID, templateID)
-		}
-		s.logger.ErrorContext(ctx, "Failed to lookup host type",
-			slog.String("host_type_id", hostTypeID), slog.Any("error", err))
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to lookup host type")
-	}
-	return validateBareMetalAttachmentsForHostType("", attachments, htResp.GetObject())
+	return validateBareMetalAttachmentsForHostType("", attachments, hostType)
 }
 
 func validateBareMetalNetworkAttachmentStructure(source string, attachments []*privatev1.BareMetalNetworkAttachment) error {
@@ -947,8 +980,11 @@ func validateBareMetalNetworkAttachmentStructure(source string, attachments []*p
 		prefix = fmt.Sprintf("field '%s': ", source)
 	}
 
-	// Structural validation: duplicates and multi-NIC interface requirement.
-	seenInterfaces := make(map[string]bool)
+	if len(attachments) > 1 {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"%sat most one network attachment is supported", prefix)
+	}
+
 	for i, a := range attachments {
 		if a == nil {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument, "%snetwork_attachments[%d]: attachment cannot be null", prefix, i)
@@ -956,35 +992,19 @@ func validateBareMetalNetworkAttachmentStructure(source string, attachments []*p
 		if a.GetSubnet() == nil {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument, "%snetwork_attachments[%d]: subnet is required", prefix, i)
 		}
-		iface := a.GetInterface()
-		if len(attachments) > 1 && iface == "" {
+		if a.HasPrimary() && !a.GetPrimary() {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"%snetwork_attachments[%d]: interface is required when multiple attachments are specified", prefix, i)
-		}
-		if iface == "" {
-			continue
-		}
-		if seenInterfaces[iface] {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"%snetwork_attachments[%d]: duplicate interface '%s'", prefix, i, iface)
-		}
-		seenInterfaces[iface] = true
-	}
-
-	// Primary selection for multiple attachments.
-	if len(attachments) > 1 {
-		primaryCount := 0
-		for _, a := range attachments {
-			if a.GetPrimary() {
-				primaryCount++
-			}
-		}
-		if primaryCount != 1 {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"%swhen multiple network attachments are specified, exactly one must have primary set to true", prefix)
+				"%snetwork_attachments[%d]: primary: false is not supported; omit primary or set primary: true", prefix, i)
 		}
 	}
 	return nil
+}
+
+func normalizeSoleBareMetalAttachmentPrimary(attachments []*privatev1.BareMetalNetworkAttachment) {
+	if len(attachments) != 1 || attachments[0] == nil {
+		return
+	}
+	attachments[0].SetPrimary(true)
 }
 
 func validateBareMetalAttachmentsForHostType(source string, attachments []*privatev1.BareMetalNetworkAttachment, hostType *privatev1.HostType) error {

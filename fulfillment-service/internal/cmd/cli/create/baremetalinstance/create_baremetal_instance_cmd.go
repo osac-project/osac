@@ -293,6 +293,9 @@ func (c *runnerContext) applyNetworkingFlags(spec *publicv1.BareMetalInstanceSpe
 	if len(c.args.networkAttachments) == 0 {
 		return nil
 	}
+	if len(c.args.networkAttachments) > 1 {
+		return fmt.Errorf("at most one --network-attachment is supported")
+	}
 	attachments := make([]*publicv1.BareMetalNetworkAttachment, 0, len(c.args.networkAttachments))
 	for _, raw := range c.args.networkAttachments {
 		na, err := parseBareMetalNetworkAttachmentFlag(raw)

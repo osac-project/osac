@@ -235,7 +235,7 @@ func (i *GrpcAuthzInterceptor) authorizeWithToken(ctx context.Context, method st
 	logger := i.logger.With(slog.String("method", method))
 
 	// Extract authentication context from the JWT token
-	authContext, err := i.extractAuthContext(token)
+	authContext, err := ExtractAuthContext(token)
 	if err != nil {
 		logger.ErrorContext(
 			ctx,
@@ -353,53 +353,6 @@ func (i *GrpcAuthzInterceptor) isAnonymousMethod(method string) bool {
 	return false
 }
 
-// extractAuthContext extracts an AuthContext from the validated JWT token.
-// This preserves all identity claims needed for OPA policy evaluation.
-func (i *GrpcAuthzInterceptor) extractAuthContext(token *jwt.Token) (*AuthContext, error) {
-	// Get the claims from the token:
-	claims, ok := token.Claims.(jwt.MapClaims)
-	if !ok {
-		return nil, fmt.Errorf("unexpected claims type")
-	}
-
-	// Check if this the token corresponds to a Kubernetes service account:
-	_, kube := claims["kubernetes.io"]
-
-	authContext := &AuthContext{}
-
-	if kube {
-		authContext.AuthMethod = "serviceaccount"
-		authContext.Username, _ = claims["sub"].(string)
-		authContext.Groups = claimAsAnySlice(claims, "groups")
-	} else {
-		authContext.AuthMethod = "jwt"
-
-		username, _ := claims["preferred_username"].(string)
-		if username == "" {
-			username, _ = claims["username"].(string)
-		}
-		authContext.Username = username
-		authContext.Groups = claimAsAnySlice(claims, "groups")
-
-		// Handle organization claim - can be array or object
-		if orgValue := claims["organization"]; orgValue != nil {
-			if orgArray := claimAsAnySlice(claims, "organization"); orgArray != nil {
-				authContext.Organization = orgArray
-			} else if orgObj, ok := orgValue.(map[string]any); ok {
-				authContext.Organization = orgObj
-			}
-		}
-
-		authContext.Organizations = claimAsAnySlice(claims, "organizations")
-
-		if realmAccess, ok := claims["realm_access"].(map[string]any); ok {
-			authContext.RealmAccess = realmAccess
-		}
-	}
-
-	return authContext, nil
-}
-
 // buildContextExtensions builds the ContextExtensions from the request and method.
 // This includes extracting IDs, fetching metadata from the database for certain operations,
 // and extracting project names from request bodies.
@@ -468,24 +421,6 @@ func (i *GrpcAuthzInterceptor) extractProjectFromRequest(request any) string {
 
 // claimAsAnySlice extracts a claim value and returns it as []any, which is the type that JSON-decoded arrays produce
 // and what OPA expects.
-func claimAsAnySlice(claims jwt.MapClaims, name string) []any {
-	value, ok := claims[name]
-	if !ok || value == nil {
-		return nil
-	}
-	switch v := value.(type) {
-	case []any:
-		return v
-	case []string:
-		result := make([]any, len(v))
-		for i, s := range v {
-			result[i] = s
-		}
-		return result
-	default:
-		return nil
-	}
-}
 
 // buildSubjectFromDecision constructs a Subject from an AuthzDecision.
 func (i *GrpcAuthzInterceptor) buildSubjectFromDecision(decision *AuthzDecision) (result *Subject, err error) {

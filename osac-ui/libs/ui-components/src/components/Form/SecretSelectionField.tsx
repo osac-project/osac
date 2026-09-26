@@ -27,10 +27,20 @@ const SecretSelectionField = ({ name, label, filter, isRequired }: SecretSelecti
         isRequired={isRequired}
         isLoading={isLoading}
         isDisabled={!!error}
-        options={(data?.items || []).map((d) => ({
-          value: d.metadata?.name || '',
-          label: d.metadata?.name || '',
-        }))}
+        options={
+          data?.items.length
+            ? data.items.map((d) => ({
+                value: d.metadata?.name || '',
+                label: d.metadata?.name || '',
+              }))
+            : [
+                {
+                  value: '',
+                  label: t('No secret available'),
+                  isDisabled: true,
+                },
+              ]
+        }
       />
       {error && (
         <Alert variant="danger" isInline title={t('Failed to fetch secrets')}>

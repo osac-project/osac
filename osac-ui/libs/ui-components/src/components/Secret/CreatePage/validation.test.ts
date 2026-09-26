@@ -1,12 +1,21 @@
 import { describe, expect, it } from 'vitest';
 
+import { SecretType } from '@osac/types';
+
 import { getSecretValidationSchema } from './validation';
 import { SECRET_FILE_MAX_BYTES } from './values';
 import { tIdentity as t } from '../../../test-utils/i18n';
 
+const emptyEntry = (key: string) => ({ key, value: new Uint8Array() });
+
 const validValues = {
   metadata: { name: 'my-secret', project: 'my-project' },
-  dataEntries: [{ key: 'username', value: 'admin', valueType: 'text' }],
+  type: SecretType.OPAQUE,
+  kubeconfig: emptyEntry('kubeconfig'),
+  pullsecret: emptyEntry('.dockerconfigjson'),
+  userData: emptyEntry('userdata'),
+  opaque: [{ key: 'username', value: new TextEncoder().encode('admin') }],
+  value: emptyEntry('value'),
 };
 
 describe('getSecretValidationSchema', () => {
@@ -16,9 +25,9 @@ describe('getSecretValidationSchema', () => {
     await expect(
       schema.isValid({
         ...validValues,
-        dataEntries: [
-          { key: 'username', value: 'admin', valueType: 'text' },
-          { key: 'password', value: 's3cret', valueType: 'text' },
+        opaque: [
+          { key: 'username', value: new TextEncoder().encode('admin') },
+          { key: 'password', value: new TextEncoder().encode('s3cret') },
         ],
       }),
     ).resolves.toBe(true);
@@ -28,9 +37,9 @@ describe('getSecretValidationSchema', () => {
     await expect(
       schema.isValid({
         ...validValues,
-        dataEntries: [
-          { key: 'username', value: 'admin', valueType: 'text' },
-          { key: 'username', value: 'replacement', valueType: 'text' },
+        opaque: [
+          { key: 'username', value: new TextEncoder().encode('admin') },
+          { key: 'username', value: new TextEncoder().encode('replacement') },
         ],
       }),
     ).resolves.toBe(false);
@@ -40,62 +49,54 @@ describe('getSecretValidationSchema', () => {
     await expect(
       schema.isValid({
         ...validValues,
-        dataEntries: [{ key: '', value: 'admin', valueType: 'text' }],
+        opaque: [{ key: '', value: new TextEncoder().encode('admin') }],
       }),
     ).resolves.toBe(false);
   });
 
-  it('accepts file entries with uploaded bytes', async () => {
+  it('accepts binary values', async () => {
     await expect(
       schema.isValid({
         ...validValues,
-        dataEntries: [
-          {
-            key: 'certificate',
-            valueType: 'file',
-            value: new Uint8Array([0xff]),
-          },
-        ],
+        opaque: [{ key: 'certificate', value: new Uint8Array([0xff]) }],
       }),
     ).resolves.toBe(true);
   });
 
-  it('rejects file entries without uploaded bytes', async () => {
+  it('rejects entries without bytes', async () => {
     await expect(
       schema.isValid({
         ...validValues,
-        dataEntries: [{ key: 'certificate', valueType: 'file' }],
+        opaque: [emptyEntry('certificate')],
       }),
     ).resolves.toBe(false);
   });
 
-  it('rejects file entries larger than the upload limit', async () => {
+  it('rejects entries larger than the upload limit', async () => {
     await expect(
       schema.isValid({
         ...validValues,
-        dataEntries: [
-          {
-            key: 'certificate',
-            valueType: 'file',
-            value: new Uint8Array(SECRET_FILE_MAX_BYTES + 1),
-          },
-        ],
+        opaque: [{ key: 'certificate', value: new Uint8Array(SECRET_FILE_MAX_BYTES + 1) }],
       }),
     ).resolves.toBe(false);
   });
 
-  it('accepts file entries at the upload limit', async () => {
+  it('validates the selected typed entry', async () => {
     await expect(
       schema.isValid({
         ...validValues,
-        dataEntries: [
-          {
-            key: 'certificate',
-            valueType: 'file',
-            value: new Uint8Array(SECRET_FILE_MAX_BYTES),
-          },
-        ],
+        type: SecretType.VALUE,
+        value: { key: 'value', value: new Uint8Array([0xff]) },
       }),
     ).resolves.toBe(true);
+  });
+
+  it('requires the selected typed entry', async () => {
+    await expect(
+      schema.isValid({
+        ...validValues,
+        type: SecretType.VALUE,
+      }),
+    ).resolves.toBe(false);
   });
 });

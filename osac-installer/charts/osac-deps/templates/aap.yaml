@@ -36,6 +36,6 @@ spec:
   installPlanApproval: Manual
   startingCSV: aap-operator.v2.6.0-0.1787258256
   name: ansible-automation-platform-operator
-  source: redhat-operators
-  sourceNamespace: openshift-marketplace
+  source: {{ .Values.catalogSource }}
+  sourceNamespace: {{ .Values.catalogSourceNamespace }}
 {{- end }}

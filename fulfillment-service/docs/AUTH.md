@@ -575,12 +575,14 @@ The authorization policy distinguishes between the following subject categories:
 
 The authorization policy allows:
 
-1. **Everyone** (authenticated users):
+1. **Anonymous users**:
    - Metadata endpoints (`/metadata.*`)
-   - gRPC reflection endpoints (`/grpc.reflection.*`)
    - Health check endpoints (`/grpc.health.*`)
 
-2. **Client Users** (and tenant admins / IdP managers who inherit client permissions):
+2. **All authenticated users** (JWT tokens and service accounts):
+   - gRPC reflection endpoints (`/grpc.reflection.*`)
+
+3. **Client Users** (and tenant admins / IdP managers who inherit client permissions):
    - Specific gRPC methods for:
      - Clusters: `Create`, `Delete`, `Get`, `List`, `Update`
      - Cluster Templates: `Get`, `List`
@@ -601,10 +603,10 @@ The authorization policy allows:
      - Subnets: `Create`, `Delete`, `Get`, `List`, `Update`
      - Virtual Networks: `Create`, `Delete`, `Get`, `List`, `Update`
 
-3. **Tenant Admins** (in addition to client permissions):
+4. **Tenant Admins** (in addition to client permissions):
    - Users: `Create`, `Get`, `List`, `Update`, `Delete`
 
-4. **Admin Users**:
+5. **Admin Users**:
    - All methods (full access)
 
 ### Authorization Levels

@@ -117,20 +117,20 @@ def test_caas_cluster_storage_lifecycle(
             except AssertionError as exc:
                 teardown_assertion_error = exc
             except Exception:
-                logger.warning("ClusterOrder teardown verification failed for %s", co_name, exc_info=True)
+                logger.warning("ClusterOrder teardown verification failed")
 
         try:
             if k8s_hub_client.is_present(resource="tenant", name=tenant_name):
                 k8s_hub_client.delete(resource="tenant", name=tenant_name, wait=False)
                 wait_for_tenant_deletion(k8s=k8s_hub_client, name=tenant_name)
         except Exception:
-            logger.warning("Tenant teardown failed for %s", tenant_name, exc_info=True)
+            logger.warning("Tenant teardown failed")
 
         try:
             if k8s_hub_client.is_present(resource="namespace", name=tenant_name):
                 k8s_hub_client.delete(resource="namespace", name=tenant_name, wait=False)
         except Exception:
-            logger.warning("Namespace teardown failed for %s", tenant_name, exc_info=True)
+            logger.warning("Namespace teardown failed")
 
         if teardown_assertion_error is not None:
             raise teardown_assertion_error

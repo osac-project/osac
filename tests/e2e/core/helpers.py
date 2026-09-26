@@ -57,9 +57,9 @@ def assert_grpc_method_unavailable(
     exc = exc_info.value
     combined: str = (exc.stderr or "") + (exc.stdout or "")
     descriptor_error = f'service "{service}" does not include a method named "{method}"'
-    assert descriptor_error in combined, (
-        f"Expected {service}/{method} to be unavailable, got: {combined.strip()}"
-    )
+    assert descriptor_error in combined, f"Expected {service}/{method} to be unavailable, got: {combined.strip()}"
+
+
 def _call_kubectl_with_retry_policy(fn: Callable[[], T]) -> T:
     try:
         return fn()

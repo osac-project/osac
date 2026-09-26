@@ -67,21 +67,21 @@ def default_networking(grpc: GRPCClient, k8s_hub_client: K8sClient, test_run_id:
     try:
         # Create virtual network with unique name
         vn_name = f"test-vn-{test_run_id}"
-        print(f"\nCreating VirtualNetwork: {vn_name}")
+        print("\nCreating VirtualNetwork")
         vn_id = grpc.create_virtual_network(name=vn_name, ipv4_cidr="10.200.0.0/16")
         vn_cr_name = wait_for_virtual_network_cr(k8s=k8s_hub_client, uuid=vn_id)
-        print(f"Waiting for VirtualNetwork {vn_cr_name} to become Ready...")
+        print("Waiting for VirtualNetwork to become Ready...")
         wait_for_virtual_network_ready(k8s=k8s_hub_client, name=vn_cr_name)
-        print(f"VirtualNetwork {vn_cr_name} is Ready")
+        print("VirtualNetwork is Ready")
 
         # Create subnet with unique name
         subnet_name = f"test-subnet-{test_run_id}"
-        print(f"Creating Subnet: {subnet_name}")
+        print("Creating Subnet")
         subnet_id = grpc.create_subnet(name=subnet_name, virtual_network=vn_id, ipv4_cidr="10.200.100.0/24")
         subnet_cr_name = wait_for_subnet_cr(k8s=k8s_hub_client, uuid=subnet_id)
-        print(f"Waiting for Subnet {subnet_cr_name} to become Ready...")
+        print("Waiting for Subnet to become Ready...")
         wait_for_subnet_ready(k8s=k8s_hub_client, name=subnet_cr_name)
-        print(f"Subnet {subnet_cr_name} is Ready")
+        print("Subnet is Ready")
 
         yield {
             "virtual_network_id": vn_id,
@@ -90,23 +90,23 @@ def default_networking(grpc: GRPCClient, k8s_hub_client: K8sClient, test_run_id:
             "subnet_cr_name": subnet_cr_name,
         }
     finally:
-        print(f"\nCleaning up test networking resources: {test_run_id}")
+        print("\nCleaning up test networking resources")
         if subnet_id and subnet_cr_name:
             try:
-                print(f"Deleting Subnet {subnet_id}...")
+                print("Deleting Subnet...")
                 grpc.delete_subnet(subnet_id=subnet_id)
                 wait_for_subnet_deletion(k8s=k8s_hub_client, name=subnet_cr_name)
-                print(f"Subnet {subnet_id} deleted")
-            except Exception as e:
-                print(f"WARNING: Failed to delete subnet {subnet_id}: {e}")
+                print("Subnet deleted")
+            except Exception:
+                print("WARNING: Failed to delete subnet")
         if vn_id and vn_cr_name:
             try:
-                print(f"Deleting VirtualNetwork {vn_id}...")
+                print("Deleting VirtualNetwork...")
                 grpc.delete_virtual_network(vn_id=vn_id)
                 wait_for_virtual_network_deletion(k8s=k8s_hub_client, name=vn_cr_name)
-                print(f"VirtualNetwork {vn_id} deleted")
-            except Exception as e:
-                print(f"WARNING: Failed to delete virtual network {vn_id}: {e}")
+                print("VirtualNetwork deleted")
+            except Exception:
+                print("WARNING: Failed to delete virtual network")
 
 
 @pytest.fixture(scope="session")

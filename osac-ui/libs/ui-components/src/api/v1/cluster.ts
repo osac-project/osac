@@ -5,7 +5,9 @@ import { keepPreviousData, useMutation } from '@tanstack/react-query';
 import { Cluster, ClusterSchema, Clusters, Secrets } from '@osac/types';
 import { useProjectFilterQuery } from '@osac/ui-components/hooks/use-project-filter-query';
 
+import { useExternalIPAttachments, useExternalIPs } from './external-ip';
 import { useApiFetch } from '../api-context';
+import { type CelFilter, escapeCelStringLiteral } from '../cel';
 import { apiQueryKey } from '../types';
 import { type ApiQueryClient, useApiQuery, useApiQueryClient } from '../use-api-query';
 
@@ -137,4 +139,21 @@ export const useFetchClusterPassword = (passwordSecretId: string) => {
   }, []);
 
   return { password, isPending, error, retry };
+};
+
+const autoCreatedForFilter = (clusterId: string): CelFilter =>
+  `this.metadata.labels["auto-created-for"] == "${escapeCelStringLiteral(clusterId)}"` as CelFilter;
+
+export const useClusterAutoProvisionedResources = (clusterId: string, enabled: boolean) => {
+  const filter = autoCreatedForFilter(clusterId);
+
+  const externalIpsQuery = useExternalIPs({ filter, limit: 2 }, { enabled });
+  const externalIpAttachmentsQuery = useExternalIPAttachments({ filter, limit: 2 }, { enabled });
+
+  return {
+    externalIps: externalIpsQuery.data ?? [],
+    externalIpAttachments: externalIpAttachmentsQuery.data ?? [],
+    isLoading: externalIpsQuery.isLoading || externalIpAttachmentsQuery.isLoading,
+    error: externalIpsQuery.error ?? externalIpAttachmentsQuery.error,
+  };
 };

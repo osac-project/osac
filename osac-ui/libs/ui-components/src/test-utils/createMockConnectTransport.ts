@@ -20,6 +20,8 @@ import type {
   DiskImagesUpdateRequest,
   DiskImagesUpdateResponse,
   ExternalIP,
+  ExternalIPAttachment,
+  ExternalIPAttachmentsListRequest,
   ExternalIPsListRequest,
   HostType,
   IdentityProvider,
@@ -60,6 +62,7 @@ import {
   DiskImages,
   DiskImagesGetResponseSchema,
   DiskImagesListResponseSchema,
+  ExternalIPAttachments,
   ExternalIPState,
   ExternalIPs,
   HostTypes,
@@ -174,6 +177,7 @@ export type MockApiFixtures = {
   users?: User[];
   natGateways?: NATGateway[];
   externalIps?: ExternalIP[];
+  externalIpAttachments?: ExternalIPAttachment[];
 };
 
 export const wrapWithAuthInterceptor = (transport: Transport): Transport => {
@@ -306,6 +310,20 @@ const matchesStorageBackendReadyFilter = (
     return true;
   }
   return state === StorageBackendState.READY;
+};
+
+const matchesAutoCreatedForLabelFilter = (
+  filter: string | undefined,
+  labels: Record<string, string> | undefined,
+): boolean => {
+  if (!filter) {
+    return true;
+  }
+  const match = filter.match(/this\.metadata\.labels\["auto-created-for"\] == "([^"]+)"/);
+  if (!match) {
+    return true;
+  }
+  return labels?.['auto-created-for'] === match[1];
 };
 
 const matchesStorageTierActiveFilter = (
@@ -443,6 +461,7 @@ export const createMockConnectTransport = (
   const usersFixtures = fixtures.users ?? [];
   const natGateways = [...(fixtures.natGateways ?? [])];
   const externalIps = [...(fixtures.externalIps ?? [])];
+  const externalIpAttachments = [...(fixtures.externalIpAttachments ?? [])];
 
   return wrapWithAuthInterceptor(
     createRouterTransport((router) => {
@@ -996,7 +1015,8 @@ export const createMockConnectTransport = (
                   req.filter,
                   item.status?.state,
                   item.status?.attached,
-                ),
+                ) &&
+                matchesAutoCreatedForLabelFilter(req.filter, item.metadata?.labels),
             ),
           };
         },
@@ -1018,6 +1038,17 @@ export const createMockConnectTransport = (
           }
           return {};
         },
+      });
+
+      router.service(ExternalIPAttachments, {
+        list: (req: ExternalIPAttachmentsListRequest) => ({
+          items: externalIpAttachments.filter((item) =>
+            matchesAutoCreatedForLabelFilter(req.filter, item.metadata?.labels),
+          ),
+        }),
+        get: (req) => ({
+          object: externalIpAttachments.find((item) => item.id === req.id),
+        }),
       });
 
       router.service(Users, {

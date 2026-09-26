@@ -46,6 +46,35 @@ UI_BACKEND_SECRET=$(oc get secret "${SECRET_NAME}" -n "${NAMESPACE}" -o jsonpath
 REALM_ADMIN_USERNAME="${REALM_ADMIN_USERNAME:-admin}"
 REALM_ADMIN_PASSWORD="${REALM_ADMIN_PASSWORD:?REALM_ADMIN_PASSWORD must be set}"
 
+# OSAC-3884: the osac-ui client's rootUrl/redirectUris/webOrigins must be
+# absolute and match the browser-facing UI URL. Keycloak does not resolve a
+# relative redirectUri (e.g. "/*") against the Route hostname, so an absolute
+# callback from the UI is rejected with "Invalid parameter: redirect_uri".
+# The value comes from .Values.keycloak.uiUrl via the initContainer's env.
+OSAC_UI_URL="${OSAC_UI_URL:?OSAC_UI_URL must be set (Helm value keycloak.uiUrl)}"
+OSAC_UI_URL="${OSAC_UI_URL%/}"
+# Restricted to scheme://host[:port]: anything outside this charset would
+# either need JSON escaping before landing in realm.json, or silently produce
+# a redirectUri Keycloak will not match.
+[[ "${OSAC_UI_URL}" =~ ^https?://[A-Za-z0-9._-]+(:[0-9]+)?$ ]] || {
+    echo "ERROR: OSAC_UI_URL must be an absolute scheme://host[:port] URL with no path, got '${OSAC_UI_URL}'" >&2
+    exit 1
+}
+# Over plain HTTP the authorization code travels back to the UI unencrypted, so
+# http:// is accepted only for the local-development hosts documented on
+# .Values.keycloak.uiUrl (the kind dev-full UI is http://ui.osac.localhost:8080).
+if [[ "${OSAC_UI_URL}" == http://* ]]; then
+    OSAC_UI_HOST="${OSAC_UI_URL#http://}"
+    OSAC_UI_HOST="${OSAC_UI_HOST%%:*}"
+    case "${OSAC_UI_HOST}" in
+        localhost | *.localhost | 127.0.0.1) ;;
+        *)
+            echo "ERROR: OSAC_UI_URL must use https:// for '${OSAC_UI_HOST}'; http:// is allowed only for local development (localhost, *.localhost, 127.0.0.1)" >&2
+            exit 1
+            ;;
+    esac
+fi
+
 # REALM_ADMIN_USERNAME/PASSWORD are user-supplied Helm values (unlike the
 # auto-generated base64 client secrets above) substituted into JSON string
 # values, so each needs two escaping passes: first full JSON string escaping
@@ -69,6 +98,7 @@ sed \
     -e "s#__OSAC_UI_BACKEND_CLIENT_SECRET__#${UI_BACKEND_SECRET}#" \
     -e "s#__OSAC_REALM_ADMIN_USERNAME__#$(escape_sed_replacement "$(json_escape_string "${REALM_ADMIN_USERNAME}")")#" \
     -e "s#__OSAC_REALM_ADMIN_PASSWORD__#$(escape_sed_replacement "$(json_escape_string "${REALM_ADMIN_PASSWORD}")")#" \
+    -e "s#__OSAC_UI_URL__#$(escape_sed_replacement "${OSAC_UI_URL}")#g" \
     "${RAW_REALM}" > "${RESOLVED_REALM}"
 
 echo "Realm secrets resolved -> ${RESOLVED_REALM}"

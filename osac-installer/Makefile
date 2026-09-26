@@ -76,6 +76,13 @@ DEPS_CHART     := $(CHARTS)/osac-deps
 INFRA_CHART    := $(CHARTS)/osac-infra
 OSAC_CHART     := $(CHARTS)/osac
 
+# Browser-facing hostname of the OSAC UI Route. The osac-ui chart names its
+# Route "osac-ui" in the instance namespace, so OpenShift would auto-assign
+# exactly this host; pinning it makes the value knowable at install-infra time,
+# where Keycloak needs it for the osac-ui client's redirectUris (OSAC-3884).
+# Recursively expanded on purpose -- DOMAIN is $(eval)'d inside the recipes.
+UI_HOSTNAME     = osac-ui-$(NS).$(DOMAIN)
+
 # Values file selection: kind uses kind-specific files, OpenShift uses profile files.
 # dev-full reuses the identical dev control-plane values, plus a small overlay that
 # disables AAP-based networking provisioning (no fabric on kind).
@@ -257,6 +264,7 @@ else
 		--set lvms.channel=stable-$(OCP_VERSION) \
 		--set keycloak.hostname=https://keycloak-keycloak.$(DOMAIN) \
 		--set keycloak.route.hostname=keycloak-keycloak.$(DOMAIN) \
+		--set keycloak.uiUrl=https://$(UI_HOSTNAME) \
 		--set "bundledVault.keycloakIssuerUrl=https://keycloak-keycloak.$(DOMAIN)/realms/osac" \
 		--timeout 30m --wait-for-jobs \
 	|| { echo "=== osac-infra hook jobs ==="; oc get jobs,pods,cm -n osac-infra || true; oc logs -n osac-infra -l job-name=osac-infra-apply-ca-bundle --tail=200 || true; oc get deploy,endpoints,certificate -n cert-manager || true; exit 1; }
@@ -307,7 +315,7 @@ endif
 		-f $(INSTANCE_VALUES) $(INSTANCE_VALUES_EXTRA) \
 		--namespace $(NS) --create-namespace \
 		--set-string global.osacDeploymentId=$(NS)/osac \
-		$(if $(DOMAIN),--set service.externalHostname=fulfillment-api-$(NS).$(DOMAIN) --set service.internalHostname=fulfillment-internal-api-$(NS).$(DOMAIN) --set global.clusterDomain=$(DOMAIN)) \
+		$(if $(DOMAIN),--set service.externalHostname=fulfillment-api-$(NS).$(DOMAIN) --set service.internalHostname=fulfillment-internal-api-$(NS).$(DOMAIN) --set global.clusterDomain=$(DOMAIN) --set ui.externalHostname=$(UI_HOSTNAME)) \
 		$(EXTRA_HELM_ARGS) \
 		--wait --timeout 40m
 
@@ -492,6 +500,7 @@ helm-validate: helm-lint csi-render-test helm-networking-test ## Validate all ch
 	@echo "Validating values/dev/kind-infra.yaml..."
 	helm template osac-infra $(INFRA_CHART) --values values/dev/kind-infra.yaml
 	./scripts/validate-keycloak-credentials.sh
+	./scripts/validate-keycloak-ui-redirect-uris.sh
 	@echo "Validation passed."
 
 .PHONY: helm-networking-test

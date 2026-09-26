@@ -7,7 +7,9 @@ Kubernetes API. It invokes the production bare-metal worker `Reconcile` in the
 test process, using the real fulfillment gRPC client. The production operator,
 AAP, BMF/Metal3, discovery, HyperShift and fabric controllers do **not** run.
 Private API calls use a short-lived emergency service-account token and do not
-exercise public tenant authorization.
+exercise public tenant authorization. The chart installs a CUDN-only default
+NetworkClass, but Kind does not provision real OpenShift CUDN; the suite
+explicitly simulates the tenant's default networking readiness.
 
 ## Setup and run
 
@@ -66,11 +68,12 @@ for inspection; the files alone do not imply a running backend. Never use
    unresolved. The marked tenant and its API-protected default networking stay
    until explicit `sim-down`.
 3. Simulate only the named boundaries: `advanceDefaultNetworking` moves this
-   tenant's default VN, subnet and SG to READY via the API. The user also
-   approved setting the default NetworkClass's initially absent
-   `fabric_manager=netris` once in the disposable sim DB; this class is
-   deployment-wide. Simulated InfraEnv ignition uses `envsim`. Keep tenant and
-   owner-reference metadata and identify any further simulator changes.
+   tenant's default VN, subnet and SG to READY via the API. Helm installs the
+   deployment-wide default NetworkClass with `fabric_manager=cudn_net` and no
+   k8s manager. The suite verifies it through the real API; it never updates it.
+   Recreate the owned sim (only after explicit teardown approval) when changing
+   this immutable class. Simulated InfraEnv ignition uses `envsim`. Keep tenant
+   and owner-reference metadata and identify any further simulator changes.
 4. Verify a focused spec with `go test ./test/integration/caas/ -v
    -ginkgo.focus='your spec name' -timeout 10m`; then run
    `make test-integration-caas` twice against the matching backend. Compile

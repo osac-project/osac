@@ -8,6 +8,12 @@ ca:
     enabled: true
 
 # --- Fulfillment Service ---
+# Exercise the CUDN-backed BMI API contract; Kind does not provision CUDN.
+global:
+  networking:
+    fabricManager: cudn_net
+    k8sManager: ""
+
 kafka:
   enabled: false
 
@@ -82,8 +88,11 @@ operator:
     serverAddress: "fulfillment-internal-api:8001"
     tokenFile: "/var/run/secrets/kubernetes.io/serviceaccount/token"
   networkManagers:
-    # Keep umbrella chart networking validation satisfied; operator.enabled stays false.
+    # Register the Helm-created CUDN class; operator.enabled stays false.
     enabled: true
+    fabricManagers:
+      cudn_net:
+        enabled: true
   controllers:
     clusterOrder: false
     computeInstance: false

@@ -82,6 +82,15 @@ var _ = Describe("production worker against real fulfillment", func() {
 		Expect(err).NotTo(HaveOccurred())
 		clusterSubnet := latestCluster.GetSpec().GetNetworkAttachment().GetSubnet()
 		defaultSubnet := subnets.GetItems()[0]
+		Expect(defaultSubnet.GetMetadata().GetTenant()).To(Equal(simTenantName))
+		Expect(defaultSubnet.GetMetadata().GetLabels()).To(HaveKeyWithValue("osac.openshift.io/default", "true"))
+		vnID := defaultSubnet.GetSpec().GetVirtualNetwork().GetId()
+		Expect(vnID).NotTo(BeEmpty())
+		vnResponse, err := privatev1.NewVirtualNetworksClient(fulfillmentConn).Get(ctx,
+			privatev1.VirtualNetworksGetRequest_builder{Id: vnID}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		classID := verifySimDefaultFabricManager(ctx, vnResponse.GetObject())
+		Expect(clusterSubnet.GetId()).To(Equal(defaultSubnet.GetId()))
 		GinkgoWriter.Printf("network boundary: cluster subnet ID=%q name=%q, order subnetRef=%q, "+
 			"default subnet ID=%q name=%q state=%s\n",
 			clusterSubnet.GetId(), clusterSubnet.GetName(), order.Spec.NetworkAttachment.SubnetRef,
@@ -224,6 +233,9 @@ var _ = Describe("production worker against real fulfillment", func() {
 				"osac.openshift.io/owner-reference", "ClusterOrder/"+key.Name))
 			Expect(bmi.GetMetadata().GetLabels()).To(HaveKeyWithValue("osac.openshift.io/cluster-order", key.Name))
 			Expect(bmi.GetSpec().GetInstanceType().GetName()).To(Equal(worker.InstanceType))
+			Expect(bmi.GetSpec().GetNetworkAttachments()).To(HaveLen(1))
+			Expect(bmi.GetSpec().GetNetworkAttachments()[0].GetSubnet().GetId()).To(Equal(defaultSubnet.GetId()),
+				"worker BMI must use the tenant default subnet on CUDN class %s", classID)
 			Expect(bmi.GetSpec().GetDiskImage().GetId()).NotTo(BeEmpty())
 			Expect(bmi.GetSpec().GetUserData()).To(ContainSubstring("\"ignition\""))
 		}

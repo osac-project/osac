@@ -881,11 +881,12 @@
                   "properties": {
                     "NETWORK_CLASS": {
                       "type": "string",
-                      "description": "Supported values: netris, agentless_net. Legacy backends (esi, nico) are removed from the standard schema; direct AAP configuration via expertOverrides.aap accepts any free-form string.",
+                      "description": "Supported values: netris, agentless_net, ci (CUDN CaaS only). Legacy backends (esi, nico) are removed from the standard schema.",
                       "enum": [
                         "",
                         "netris",
-                        "agentless_net"
+                        "agentless_net",
+                        "ci"
                       ]
                     },
                     "NETWORK_STEPS_COLLECTION": {
@@ -1840,7 +1841,7 @@
       "properties": {
         "fabricManager": {
           "type": "string",
-          "description": "Fabric manager profile. Supported: empty string or netris. Reserved names cudn_net and vlan fail during Helm rendering.",
+          "description": "Fabric manager profile. Supported: empty string or netris, plus cudn_net for CaaS with ci.steps. vlan is reserved and fails Helm rendering.",
           "enum": [
             "",
             "netris",

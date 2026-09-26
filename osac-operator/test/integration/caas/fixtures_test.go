@@ -117,14 +117,10 @@ func ensureWorkerTemplate(ctx context.Context) {
 
 const simTenantName = "caas-connected-sim"
 
-// enableSimDefaultFabricManager supplies the bare-metal API's NetworkClass
-// prerequisite in the owned, disposable sim database. This is not a networking
-// controller or real fabric provisioning. NetworkClass is deployment-wide, so
-// verify that this is the default class reached from our marked tenant's VN
-// before making the one-time, API-validated change. It persists until sim-down.
-func enableSimDefaultFabricManager(ctx context.Context, vn *privatev1.VirtualNetwork) {
-	Expect(connectedConfig.clusterName).To(Equal("osac-sim"),
-		"refuse to update a NetworkClass outside the dedicated sim cluster")
+// verifySimDefaultFabricManager checks the Helm-created singleton through the real API.
+// Kind simulates readiness, not CUDN provisioning; never rewrite an existing class.
+func verifySimDefaultFabricManager(ctx context.Context, vn *privatev1.VirtualNetwork) string {
+	Expect(connectedConfig.clusterName).To(Equal("osac-sim"))
 	Expect(vn.GetMetadata().GetTenant()).To(Equal(simTenantName))
 	Expect(vn.GetMetadata().GetLabels()).To(HaveKeyWithValue("osac.openshift.io/default", "true"))
 	classID := vn.GetSpec().GetNetworkClass().GetId()
@@ -133,18 +129,10 @@ func enableSimDefaultFabricManager(ctx context.Context, vn *privatev1.VirtualNet
 	response, err := client.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: classID}.Build())
 	Expect(err).NotTo(HaveOccurred(), "read marked VN's NetworkClass")
 	class := response.GetObject()
-	Expect(class.GetIsDefault()).To(BeTrue(), "refuse to update a non-default NetworkClass")
-	if class.HasFabricManager() {
-		Expect(class.GetFabricManager()).To(Equal("netris"), "refuse to replace an existing fabric manager")
-		return
-	}
-	Expect(class.GetK8SManager()).To(Equal("k8s_only"), "expected sim's k8s-only default class")
-	class.SetFabricManager("netris")
-	updated, err := client.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
-		Object: class, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"fabric_manager"}},
-	}.Build())
-	Expect(err).NotTo(HaveOccurred(), "set sim default NetworkClass fabric_manager for first time")
-	Expect(updated.GetObject().GetFabricManager()).To(Equal("netris"))
+	Expect(class.GetIsDefault()).To(BeTrue())
+	Expect(class.GetFabricManager()).To(Equal("cudn_net"), "Helm must install CUDN as the default fabric manager")
+	Expect(class.GetK8SManager()).To(BeEmpty(), "CUDN must not be paired with a k8s manager")
+	return classID
 }
 
 // advanceDefaultNetworking simulates ONLY the external networking controller's
@@ -166,7 +154,7 @@ func advanceDefaultNetworking(ctx context.Context) {
 		g.Expect(response.GetItems()).To(HaveLen(1), "only this tenant's marked default VN may be advanced")
 		vn = response.GetItems()[0]
 	}, 45*time.Second, time.Second).Should(Succeed())
-	enableSimDefaultFabricManager(ctx, vn)
+	verifySimDefaultFabricManager(ctx, vn)
 	if vn.GetStatus().GetState() != privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY {
 		Expect(vn.GetStatus().GetState()).To(Equal(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING))
 		vn.SetStatus(privatev1.VirtualNetworkStatus_builder{
@@ -184,6 +172,8 @@ func advanceDefaultNetworking(ctx context.Context) {
 		g.Expect(response.GetItems()).To(HaveLen(1), "only this tenant's marked default subnet may be advanced")
 		subnet = response.GetItems()[0]
 	}, 45*time.Second, time.Second).Should(Succeed())
+	Expect(subnet.GetSpec().GetVirtualNetwork().GetId()).To(Equal(vn.GetId()),
+		"default subnet must belong to the CUDN default VN")
 	if subnet.GetStatus().GetState() != privatev1.SubnetState_SUBNET_STATE_READY {
 		Expect(subnet.GetStatus().GetState()).To(Equal(privatev1.SubnetState_SUBNET_STATE_PENDING))
 		subnet.SetStatus(privatev1.SubnetStatus_builder{

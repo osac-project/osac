@@ -2,7 +2,7 @@
 Expand global.networking into the effective NetworkClass fields and AAP knobs.
 
 Public API is manager-first:
-  fabricManager: "" | netris  (cudn_net / vlan reserved, fail closed)
+  fabricManager: "" | netris | cudn_net (CaaS/ci.steps only; vlan reserved)
   k8sManager: "" | k8s_only
 
 Defaults when keys are omitted: fabricManager "" + k8sManager k8s_only (agentless).
@@ -10,6 +10,7 @@ Setting fabricManager to netris without an explicit k8sManager leaves k8sManager
 
 Validated combinations:
   - fabricManager=netris + k8sManager="" → netris AAP + NetworkClass fabricManager=netris
+  - fabricManager=cudn_net + k8sManager="" → CaaS ci.steps + CUDN NetworkClass
   - fabricManager="" + k8sManager=k8s_only → agentless AAP + NetworkClass k8sManager=k8s_only
   - fabricManager="" + k8sManager="" → expert empty profile; networkClass must supply a manager
 
@@ -17,7 +18,7 @@ Rejected combinations:
   - any use of removed keys provider / overlay
   - both fabricManager and k8sManager set (non-empty)
   - fabricManager netris without a netris config block
-  - fabricManager cudn_net or vlan (reserved)
+  - fabricManager vlan (reserved); cudn_net without CaaS/ci.steps is rejected by validateValues
   - unknown fabricManager / k8sManager values
   - empty profile with no manager on the effective NetworkClass
 
@@ -40,15 +41,15 @@ Returns a dict with:
   {{- $k8sManager = "k8s_only" -}}
 {{- end -}}
 
-{{- $allowedFabric := list "" "netris" -}}
-{{- $reservedFabric := list "cudn_net" "vlan" -}}
+{{- $allowedFabric := list "" "netris" "cudn_net" -}}
+{{- $reservedFabric := list "vlan" -}}
 {{- $allowedK8s := list "" "k8s_only" -}}
 
 {{- if has $fabricManager $reservedFabric -}}
-  {{- fail (printf "global.networking.fabricManager %q is reserved and not yet supported; use netris or leave empty with k8sManager=k8s_only" $fabricManager) -}}
+  {{- fail (printf "global.networking.fabricManager %q is reserved and not yet supported" $fabricManager) -}}
 {{- end -}}
 {{- if not (has $fabricManager $allowedFabric) -}}
-  {{- fail (printf "global.networking.fabricManager must be \"\" or netris (got %q)" $fabricManager) -}}
+  {{- fail (printf "global.networking.fabricManager must be \"\", netris, or cudn_net (got %q)" $fabricManager) -}}
 {{- end -}}
 {{- if not (has $k8sManager $allowedK8s) -}}
   {{- fail (printf "global.networking.k8sManager must be \"\" or k8s_only (got %q)" $k8sManager) -}}
@@ -67,8 +68,10 @@ Returns a dict with:
 {{- if $aapNetrisEnabled -}}
   {{- $aapNetworkClass = "netris" -}}
   {{- $aapNetworkSteps = "netris.steps" -}}
+{{- else if eq $fabricManager "cudn_net" -}}
+  {{- $aapNetworkClass = "ci" -}}
+  {{- $aapNetworkSteps = "ci.steps" -}}
 {{- else if $aapAgentlessEnabled -}}
-  {{- $aapNetworkClass = "agentless_net" -}}
   {{- $aapNetworkSteps = "agentless_net.steps" -}}
 {{- end -}}
 
@@ -77,6 +80,9 @@ Returns a dict with:
 {{- if eq $fabricManager "netris" -}}
   {{- $defaultTitle = "Netris Network Implementation" -}}
   {{- $defaultDescription = "Provisions networking resources using Netris Controller API." -}}
+{{- else if eq $fabricManager "cudn_net" -}}
+  {{- $defaultTitle = "CUDN Network Implementation" -}}
+  {{- $defaultDescription = "CUDN overlay for virtual bare-metal CaaS." -}}
 {{- else if and (eq $fabricManager "") (eq $k8sManager "") -}}
   {{- $defaultTitle = "Custom Network Implementation" -}}
   {{- $defaultDescription = "NetworkClass managers are supplied via networkClass overrides." -}}
@@ -114,13 +120,16 @@ Returns a dict with:
   {{- fail (printf "NetworkClass fabricManager %q is reserved and not yet supported" $effectiveFabric) -}}
 {{- end -}}
 {{- if and (ne $effectiveFabric "") (not (has $effectiveFabric $allowedFabric)) -}}
-  {{- fail (printf "NetworkClass fabricManager must be \"\" or netris (got %q)" $effectiveFabric) -}}
+  {{- fail (printf "NetworkClass fabricManager must be \"\", netris, or cudn_net (got %q)" $effectiveFabric) -}}
 {{- end -}}
 {{- if and (ne $effectiveK8s "") (not (has $effectiveK8s $allowedK8s)) -}}
   {{- fail (printf "NetworkClass k8sManager must be \"\" or k8s_only (got %q)" $effectiveK8s) -}}
 {{- end -}}
-{{- if and (eq $fabricManager "netris") (ne $effectiveFabric "netris") -}}
-  {{- fail (printf "global.networking.networkClass.fabricManager must be netris when fabricManager=netris (got %q)" $effectiveFabric) -}}
+{{- if and (ne $fabricManager "") (ne $effectiveFabric $fabricManager) -}}
+  {{- fail (printf "global.networking.networkClass.fabricManager must be %s when fabricManager=%s (got %q)" $fabricManager $fabricManager $effectiveFabric) -}}
+{{- end -}}
+{{- if and (eq $effectiveFabric "cudn_net") (ne $fabricManager "cudn_net") -}}
+  {{- fail "networkClass.fabricManager=cudn_net requires global.networking.fabricManager=cudn_net" -}}
 {{- end -}}
 
 {{- $netris := $networking.netris | default dict -}}

@@ -20,6 +20,10 @@ import (
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -40,6 +44,21 @@ import (
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
+
+type mockBareMetalInstanceGetter struct {
+	response *privatev1.BareMetalInstancesGetResponse
+	err      error
+	getID    string
+}
+
+func (m *mockBareMetalInstanceGetter) Get(
+	_ context.Context,
+	in *privatev1.BareMetalInstancesGetRequest,
+	_ ...grpc.CallOption,
+) (*privatev1.BareMetalInstancesGetResponse, error) {
+	m.getID = in.GetId()
+	return m.response, m.err
+}
 
 var _ = Describe("ExternalIPAttachmentReconciler", func() {
 	const (
@@ -73,6 +92,7 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 		pool         *osacv1alpha1.ExternalIPPool
 		ci           *osacv1alpha1.ComputeInstance
 		key          types.NamespacedName
+		sourceClient *mockBareMetalInstanceGetter
 	)
 
 	buildClient := func(objs ...client.Object) client.Client {
@@ -157,6 +177,9 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 		key = types.NamespacedName{Name: testAttachmentName, Namespace: testNetworkingNamespace}
 
 		mockProvider = &mockProvisioningProvider{name: "mock-aap"}
+		sourceClient = &mockBareMetalInstanceGetter{
+			err: status.Error(codes.NotFound, "bare metal instance not found"),
+		}
 	})
 
 	setupReconciler := func(c client.Client) {
@@ -172,6 +195,7 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 			StatusPollInterval:         1 * time.Second,
 			MaxJobHistory:              10,
 			NetworkProvisioningEnabled: true,
+			bareMetalInstancesClient:   sourceClient,
 		}
 	}
 
@@ -1388,6 +1412,64 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 				Namespace: bmiAttachment.Namespace, Name: bmiAttachment.Name,
 			}, fetched)
 			Expect(apierrors.IsNotFound(err)).To(BeTrue())
+			Expect(sourceClient.getID).To(Equal(testBMIUUID))
+		})
+
+		It("should requeue when the fulfillment BMI exists but its CR is not projected", func() {
+			fakeClient = buildClient(bmiAttachment, publicIP, pool)
+			sourceClient.err = nil
+			sourceClient.response = privatev1.BareMetalInstancesGetResponse_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Id: testBMIUUID,
+				}.Build(),
+			}.Build()
+			setupReconciler(fakeClient)
+
+			_, err := bmiReconcileOnce() // finalizer
+			Expect(err).NotTo(HaveOccurred())
+
+			result, err := bmiReconcileOnce()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(sourceClient.getID).To(Equal(testBMIUUID))
+
+			updated := &osacv1alpha1.ExternalIPAttachment{}
+			Expect(fakeClient.Get(testCtx, bmiKey, updated)).To(Succeed())
+			Expect(updated.DeletionTimestamp).To(BeNil())
+		})
+
+		It("should auto-detach when the fulfillment BMI is being deleted", func() {
+			fakeClient = buildClient(bmiAttachment, publicIP, pool)
+			sourceClient.err = nil
+			sourceClient.response = privatev1.BareMetalInstancesGetResponse_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Id: testBMIUUID,
+					Metadata: privatev1.Metadata_builder{
+						DeletionTimestamp: timestamppb.Now(),
+					}.Build(),
+				}.Build(),
+			}.Build()
+			setupReconciler(fakeClient)
+
+			_, err := bmiReconcileOnce()
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &osacv1alpha1.ExternalIPAttachment{}
+			Expect(fakeClient.Get(testCtx, bmiKey, updated)).To(Succeed())
+			Expect(updated.DeletionTimestamp).NotTo(BeNil())
+		})
+
+		It("should retain the attachment when the fulfillment lookup fails transiently", func() {
+			fakeClient = buildClient(bmiAttachment, publicIP, pool)
+			sourceClient.err = status.Error(codes.Unavailable, "fulfillment unavailable")
+			setupReconciler(fakeClient)
+
+			_, err := bmiReconcileOnce()
+			Expect(status.Code(err)).To(Equal(codes.Unavailable))
+
+			updated := &osacv1alpha1.ExternalIPAttachment{}
+			Expect(fakeClient.Get(testCtx, bmiKey, updated)).To(Succeed())
+			Expect(updated.DeletionTimestamp).To(BeNil())
 		})
 
 		It("should add detach finalizer to BareMetalInstance", func() {

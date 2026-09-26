@@ -18,6 +18,9 @@ import (
 	"fmt"
 	"time"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -46,6 +49,14 @@ import (
 const (
 	osacExternalIPAttachmentFinalizer = "osac.openshift.io/externalipattachment-finalizer"
 )
+
+type bareMetalInstanceGetter interface {
+	Get(
+		context.Context,
+		*privatev1.BareMetalInstancesGetRequest,
+		...grpc.CallOption,
+	) (*privatev1.BareMetalInstancesGetResponse, error)
+}
 
 // ExternalIPAttachmentReconciler reconciles ExternalIPAttachment CRs.
 //
@@ -76,6 +87,9 @@ type ExternalIPAttachmentReconciler struct {
 	// networkClassesClient lists NetworkClasses to find the default/singleton used
 	// as the dispatcher input. Nil when gRPC is not configured.
 	networkClassesClient privatev1.NetworkClassesClient
+	// bareMetalInstancesClient is the fulfillment-service source of truth used
+	// when a BMI CR has not yet been projected into Kubernetes.
+	bareMetalInstancesClient bareMetalInstanceGetter
 	// NetworkProvisioningEnabled controls whether the controller dispatches AAP
 	// provisioning jobs. When false, resources are set to Ready immediately.
 	NetworkProvisioningEnabled bool
@@ -98,6 +112,7 @@ func NewExternalIPAttachmentReconciler(
 	targetCluster mc.ClusterName,
 	resolver *dispatcher.Resolver,
 	networkClassesClient privatev1.NetworkClassesClient,
+	bareMetalInstancesClient privatev1.BareMetalInstancesClient,
 ) *ExternalIPAttachmentReconciler {
 	if mgr == nil {
 		panic("mgr must not be nil")
@@ -132,6 +147,7 @@ func NewExternalIPAttachmentReconciler(
 		targetCluster:              targetCluster,
 		Resolver:                   resolver,
 		networkClassesClient:       networkClassesClient,
+		bareMetalInstancesClient:   bareMetalInstancesClient,
 	}
 }
 
@@ -599,11 +615,39 @@ func (r *ExternalIPAttachmentReconciler) resolveBaremetalInstance(
 		return nil, ctrl.Result{}, err
 	}
 	if len(bmiList.Items) == 0 {
-		log.Info("auto-detaching: BareMetalInstance no longer exists", "baremetalInstanceUUID", *attachment.Spec.BaremetalInstance)
-		if err := r.Delete(ctx, attachment); err != nil {
-			return nil, ctrl.Result{}, client.IgnoreNotFound(err)
+		bmiUUID := *attachment.Spec.BaremetalInstance
+		if r.bareMetalInstancesClient == nil {
+			return nil, ctrl.Result{}, fmt.Errorf("BareMetalInstance source client is not configured for %s", bmiUUID)
 		}
-		return nil, ctrl.Result{RequeueAfter: time.Second}, nil
+
+		sourceResponse, err := r.bareMetalInstancesClient.Get(ctx, privatev1.BareMetalInstancesGetRequest_builder{
+			Id: bmiUUID,
+		}.Build())
+		if err != nil {
+			if status.Code(err) == codes.NotFound {
+				log.Info("auto-detaching: BareMetalInstance not found in fulfillment-service", "baremetalInstanceUUID", bmiUUID)
+				if deleteErr := r.Delete(ctx, attachment); deleteErr != nil {
+					return nil, ctrl.Result{}, client.IgnoreNotFound(deleteErr)
+				}
+				return nil, ctrl.Result{RequeueAfter: time.Second}, nil
+			}
+			log.Error(err, "failed to resolve BareMetalInstance in fulfillment-service", "baremetalInstanceUUID", bmiUUID)
+			return nil, ctrl.Result{}, err
+		}
+
+		if sourceResponse == nil || sourceResponse.GetObject() == nil {
+			return nil, ctrl.Result{}, fmt.Errorf("fulfillment-service returned an empty BareMetalInstance for %s", bmiUUID)
+		}
+		if sourceResponse.GetObject().GetMetadata().GetDeletionTimestamp() != nil {
+			log.Info("auto-detaching: BareMetalInstance is being deleted in fulfillment-service", "baremetalInstanceUUID", bmiUUID)
+			if deleteErr := r.Delete(ctx, attachment); deleteErr != nil {
+				return nil, ctrl.Result{}, client.IgnoreNotFound(deleteErr)
+			}
+			return nil, ctrl.Result{RequeueAfter: time.Second}, nil
+		}
+
+		log.Info("BareMetalInstance CR not yet projected, waiting", "baremetalInstanceUUID", bmiUUID)
+		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
 	bmi := &bmiList.Items[0]
 

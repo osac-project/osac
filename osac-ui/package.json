@@ -36,5 +36,10 @@
   "engines": {
     "node": ">=20",
     "pnpm": ">=9"
+  },
+  "pnpm": {
+    "overrides": {
+      "@bufbuild/protobuf": "2.12.0"
+    }
   }
 }

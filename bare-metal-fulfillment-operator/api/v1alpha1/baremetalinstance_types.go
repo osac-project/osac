@@ -60,8 +60,8 @@ type BareMetalNetworkAttachment struct {
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="interface is immutable"
 	Interface string `json:"interface,omitempty"`
 
-	// Primary designates this attachment as the default gateway for multi-NIC instances.
-	// When omitted on a single-attachment instance, that attachment is implicitly primary.
+	// Primary designates this attachment as the default gateway.
+	// With a single attachment, omit primary or set true; false is rejected by the API.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="primary is immutable"
 	Primary bool `json:"primary,omitempty"`
@@ -114,15 +114,15 @@ type BareMetalInstanceSpec struct {
 	// The value itself is not important; only the change matters.
 	// +kubebuilder:validation:Optional
 	RestartTrigger int64 `json:"restartTrigger"`
-	// NetworkAttachments for the bare metal instance. One entry per physical NIC.
+	// NetworkAttachments for the bare metal instance. At most one tenant attachment is supported.
 	// The list structure is immutable after creation (entries cannot be added or removed),
 	// but securityGroupRefs within each entry can be updated.
 	//
 	// MaxItems is required for CEL cost budget calculation.
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:MaxItems=8
+	// +kubebuilder:validation:MaxItems=1
 	// +kubebuilder:validation:XValidation:rule="size(oldSelf) == 0 || (size(self) == size(oldSelf) && self.all(na, oldSelf.exists(old, old.subnetRef == na.subnetRef)))",message="cannot change or add/remove network attachments after initial assignment"
-	// +kubebuilder:validation:XValidation:rule="self.size() <= 1 || self.filter(x, x.primary == true).size() == 1",message="when multiple network attachments exist, exactly one must have primary set to true"
+	// +kubebuilder:validation:XValidation:rule="self.size() <= 1",message="at most one network attachment is supported"
 	// +listType=map
 	// +listMapKey=subnetRef
 	NetworkAttachments []BareMetalNetworkAttachment `json:"networkAttachments,omitempty"`

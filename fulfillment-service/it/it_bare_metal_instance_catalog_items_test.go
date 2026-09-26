@@ -161,6 +161,49 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 			Expect(defaulted.GetSpec().GetDiskImage().GetId()).To(Equal(image.GetId()))
 			Expect(defaulted.GetSpec().GetNetworkAttachments()[0].GetSubnet().GetId()).To(Equal(network.subnetID))
 		})
+
+		It("rejects Create with more than one network attachment", func(ctx context.Context) {
+			network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
+			otherNetwork := createCatalogItemNetworkInClassFixture(ctx, usersGroup, "", network.networkClassID)
+			instanceType := createCatalogItemBareMetalInstanceTypeFixture(ctx, usersGroup)
+			image := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
+			template := createCatalogItemBareMetalInstanceTemplateFixture(ctx, nil, bareMetalInstanceCatalogItemParameterDefinitions())
+			item := createBareMetalInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.BareMetalInstanceCatalogItem_builder{
+				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
+				Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: template}.Build(),
+				Published: true,
+				Fields: publicv1.BareMetalInstanceCatalogItemFields_builder{
+					InstanceType: publicv1.BareMetalInstanceTypeLocalReferenceFieldPolicy_builder{
+						Locked: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: instanceType}.Build(),
+					}.Build(),
+					DiskImage: publicv1.DiskImageReferenceFieldPolicy_builder{
+						Locked: publicv1.DiskImageReference_builder{Id: image.GetId()}.Build(),
+					}.Build(),
+					SshPublicKey: publicv1.StringFieldPolicy_builder{
+						Editable: publicv1.EditableStringField_builder{DefaultValue: new(catalogItemFixtureSSHPublicKey)}.Build(),
+					}.Build(),
+					NetworkAttachments: publicv1.BareMetalNetworkAttachmentListFieldPolicy_builder{
+						Editable: publicv1.EditableBareMetalNetworkAttachmentList_builder{
+							DefaultValue: publicv1.BareMetalNetworkAttachmentList_builder{
+								Items: []*publicv1.BareMetalNetworkAttachment{network.bareMetalInstanceAttachment()},
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build(),
+				TemplateParameters: catalogItemParameterPolicies(),
+			}.Build())
+
+			_, err := createBareMetalInstanceFixture(ctx, tool.ExternalView().UserConn(), publicv1.BareMetalInstanceSpec_builder{
+				CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: item.GetId()}.Build(),
+				NetworkAttachments: []*publicv1.BareMetalNetworkAttachment{
+					network.bareMetalInstanceAttachment(),
+					otherNetwork.bareMetalInstanceAttachment(),
+				},
+			}.Build())
+			expectCatalogItemStatusCode(err, codes.InvalidArgument)
+			Expect(err.Error()).To(ContainSubstring("at most one network attachment"))
+		})
+
 		It("applies editable DiskImage and Template defaults and validates dry-run authentication", func(ctx context.Context) {
 			By("authoring a shared offering with editable image and external-IP defaults")
 			instanceType := createCatalogItemBareMetalInstanceTypeFixture(ctx, usersGroup)

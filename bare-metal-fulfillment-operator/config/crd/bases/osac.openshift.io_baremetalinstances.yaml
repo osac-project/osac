@@ -87,7 +87,7 @@ spec:
                   rule: self == oldSelf
               networkAttachments:
                 description: |-
-                  NetworkAttachments for the bare metal instance. One entry per physical NIC.
+                  NetworkAttachments for the bare metal instance. At most one tenant attachment is supported.
                   The list structure is immutable after creation (entries cannot be added or removed),
                   but securityGroupRefs within each entry can be updated.
 
@@ -107,8 +107,8 @@ spec:
                         rule: self == oldSelf
                     primary:
                       description: |-
-                        Primary designates this attachment as the default gateway for multi-NIC instances.
-                        When omitted on a single-attachment instance, that attachment is implicitly primary.
+                        Primary designates this attachment as the default gateway.
+                        With a single attachment, omit primary or set true; false is rejected by the API.
                       type: boolean
                       x-kubernetes-validations:
                       - message: primary is immutable
@@ -132,7 +132,7 @@ spec:
                   required:
                   - subnetRef
                   type: object
-                maxItems: 8
+                maxItems: 1
                 type: array
                 x-kubernetes-list-map-keys:
                 - subnetRef
@@ -142,10 +142,8 @@ spec:
                     assignment
                   rule: size(oldSelf) == 0 || (size(self) == size(oldSelf) && self.all(na,
                     oldSelf.exists(old, old.subnetRef == na.subnetRef)))
-                - message: when multiple network attachments exist, exactly one must
-                    have primary set to true
-                  rule: self.size() <= 1 || self.filter(x, x.primary == true).size()
-                    == 1
+                - message: at most one network attachment is supported
+                  rule: self.size() <= 1
               restartTrigger:
                 description: |-
                   RestartTrigger is used to trigger a restart of the physical machine.

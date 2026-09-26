@@ -345,6 +345,7 @@ func (s *PrivateBareMetalInstancesServer) prepareCreate(ctx context.Context, can
 	if err = s.validateNetworkAttachments(ctx, candidate); err != nil {
 		return
 	}
+	normalizeSoleBareMetalAttachmentPrimary(candidate.GetSpec().GetNetworkAttachments())
 	if ref := candidate.GetSpec().GetInstanceType(); ref != nil {
 		if _, err = resolveAndCanonicalizeReference(ctx, s.instanceTypesDao, candidate.GetMetadata(), ref, "bare metal instance type", grpccodes.InvalidArgument); err != nil {
 			return
@@ -947,8 +948,11 @@ func validateBareMetalNetworkAttachmentStructure(source string, attachments []*p
 		prefix = fmt.Sprintf("field '%s': ", source)
 	}
 
-	// Structural validation: duplicates and multi-NIC interface requirement.
-	seenInterfaces := make(map[string]bool)
+	if len(attachments) > 1 {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"%sat most one network attachment is supported", prefix)
+	}
+
 	for i, a := range attachments {
 		if a == nil {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument, "%snetwork_attachments[%d]: attachment cannot be null", prefix, i)
@@ -956,35 +960,19 @@ func validateBareMetalNetworkAttachmentStructure(source string, attachments []*p
 		if a.GetSubnet() == nil {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument, "%snetwork_attachments[%d]: subnet is required", prefix, i)
 		}
-		iface := a.GetInterface()
-		if len(attachments) > 1 && iface == "" {
+		if a.HasPrimary() && !a.GetPrimary() {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"%snetwork_attachments[%d]: interface is required when multiple attachments are specified", prefix, i)
-		}
-		if iface == "" {
-			continue
-		}
-		if seenInterfaces[iface] {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"%snetwork_attachments[%d]: duplicate interface '%s'", prefix, i, iface)
-		}
-		seenInterfaces[iface] = true
-	}
-
-	// Primary selection for multiple attachments.
-	if len(attachments) > 1 {
-		primaryCount := 0
-		for _, a := range attachments {
-			if a.GetPrimary() {
-				primaryCount++
-			}
-		}
-		if primaryCount != 1 {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"%swhen multiple network attachments are specified, exactly one must have primary set to true", prefix)
+				"%snetwork_attachments[%d]: primary: false is not supported; omit primary or set primary: true", prefix, i)
 		}
 	}
 	return nil
+}
+
+func normalizeSoleBareMetalAttachmentPrimary(attachments []*privatev1.BareMetalNetworkAttachment) {
+	if len(attachments) != 1 || attachments[0] == nil {
+		return
+	}
+	attachments[0].SetPrimary(true)
 }
 
 func validateBareMetalAttachmentsForHostType(source string, attachments []*privatev1.BareMetalNetworkAttachment, hostType *privatev1.HostType) error {

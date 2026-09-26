@@ -36,8 +36,8 @@ message BareMetalNetworkAttachment {
   // When omitted on a single-attachment instance, the system selects the first fabric-role interface.
   optional string interface = 3 [(google.api.field_behavior) = IMMUTABLE];
 
-  // Designates this attachment as the default gateway for multi-NIC instances.
-  // When omitted on a single-attachment instance, that attachment is implicitly primary.
+  // Designates this attachment as the default gateway.
+  // With a single attachment, omit primary or set primary: true; primary: false is rejected.
   optional bool primary = 4 [(google.api.field_behavior) = IMMUTABLE];
 }
 

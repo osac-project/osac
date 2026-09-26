@@ -113,6 +113,13 @@ networkManagers:
         which delegates overlay work here. Capabilities: ipv4 only.
       capabilities:
       - ipv4
+    agentless_net:
+      enabled: false
+      description: >-
+        AgentlessNet unified networking stub. Available resource operations
+        return NotImplemented.
+      capabilities:
+      - ipv4
   k8sManagers:
     k8s_only:
       enabled: false

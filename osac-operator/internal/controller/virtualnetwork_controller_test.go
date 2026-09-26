@@ -847,6 +847,55 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("netris"))
 		})
 
+		It("records the AgentlessNet stub failure through the normal reconcile status path", func() {
+			Expect(fakeDiscoveryClient.Create(ctx, newFabricManagerConfigMap("fm-agentless-net", "osac", "agentless_net"))).To(Succeed())
+			disc, err := networkmanager.NewDiscovery(fakeDiscoveryClient, "osac")
+			Expect(err).NotTo(HaveOccurred())
+			reconciler.Resolver = dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+				[]*privatev1.NetworkClass{{Id: "nc-agentless", FabricManager: ptr.To("agentless_net")}}, &[]*privatev1.NetworkClass{},
+			)), disc)
+
+			vnet.Spec.NetworkClass = "nc-agentless"
+			var strategySeen string
+			mockProvider.triggerProvisionFunc = func(_ context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+				strategySeen = resource.GetAnnotations()[osacImplementationStrategyAnnotation]
+				return &provisioning.ProvisionResult{
+					JobID:        "agentless-stub-job",
+					InitialState: osacv1alpha1.JobStatePending,
+					Message:      "Provisioning triggered",
+				}, nil
+			}
+			mockProvider.getProvisionStatusFunc = func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID:   jobID,
+					State:   osacv1alpha1.JobStateFailed,
+					Message: "failed",
+				}, nil
+			}
+
+			Expect(k8sClient.Create(ctx, vnet)).To(Succeed())
+			req := mcreconcile.Request{Request: reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: vnet.Name, Namespace: vnet.Namespace},
+			}}
+
+			_, err = reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			_, err = reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(strategySeen).To(Equal("agentless_net"))
+			_, err = reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &osacv1alpha1.VirtualNetwork{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: vnet.Name, Namespace: vnet.Namespace}, updated)).To(Succeed())
+			Expect(updated.Status.Phase).To(Equal(osacv1alpha1.VirtualNetworkPhaseFailed))
+			cond := apimeta.FindStatusCondition(updated.Status.Conditions, osacv1alpha1.ConditionReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal(osacv1alpha1.ReasonProvisioningFailed))
+			Expect(provisioning.FindJobByID(updated.Status.ProvisioningJobs, "agentless-stub-job")).NotTo(BeNil())
+		})
+
 		It("requeues and sets a blocked condition when the NetworkClass has no manager configured (no legacy fallback)", func() {
 			disc, err := networkmanager.NewDiscovery(fakeDiscoveryClient, "osac")
 			Expect(err).NotTo(HaveOccurred())

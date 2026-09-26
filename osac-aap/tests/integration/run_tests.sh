@@ -58,6 +58,7 @@ ROLE_TESTS=(
   "config_as_code_pod_specs"
   "finalizer"
   "lease"
+  "agentless_net_stub"
 )
 
 ROLE_SCENARIO_TESTS=(

@@ -1,0 +1,30 @@
+networkManagers: []
+
+operator:
+  enabled: true
+  controllers:
+    networking: true
+    networkingProvisioning: true
+  networkManagers:
+    enabled: true
+    fabricManagers:
+      netris:
+        enabled: false
+      cudn_net:
+        enabled: false
+      agentless_net:
+        enabled: true
+    k8sManagers:
+      k8s_only:
+        enabled: false
+
+networkClass:
+  enabled: true
+  title: AgentlessNet networking stub
+  description: >-
+    AgentlessNet is registered for unified networking. Available resource
+    operations return NotImplemented. Physical attachment, DHCP discovery, and
+    ExternalIPAttachment are outside this stub.
+  fabricManager: agentless_net
+  k8sManager: ""
+  isDefault: true

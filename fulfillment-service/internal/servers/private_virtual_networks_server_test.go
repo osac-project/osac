@@ -90,39 +90,6 @@ var _ = Describe("Private virtual networks server", func() {
 		return response.GetObject()
 	}
 
-	// createDefaultNetworkClassViaDAO creates a NetworkClass with is_default=true via the DAO.
-	createDefaultNetworkClassViaDAO := func(ctx context.Context, state privatev1.NetworkClassState) *privatev1.NetworkClass {
-		ncDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
-			SetLogger(logger).
-			SetTenancyLogic(tenancy).
-			Build()
-		Expect(err).ToNot(HaveOccurred())
-
-		nc := privatev1.NetworkClass_builder{
-			FabricManager: new("test-strategy"),
-			IsDefault:     new(true),
-			Metadata: privatev1.Metadata_builder{
-				Tenant: auth.SharedTenant,
-				Name:   fmt.Sprintf("test-network-class-%s", uuid.NewString()[:8]),
-			}.Build(),
-			Capabilities: privatev1.NetworkClassCapabilities_builder{
-				SupportsIpv4:      true,
-				SupportsIpv6:      true,
-				SupportsDualStack: true,
-			}.Build(),
-			Status: privatev1.NetworkClassStatus_builder{
-				State: state,
-			}.Build(),
-		}.Build()
-
-		response, err := ncDao.Create().
-			SetObject(nc).
-			Do(ctx)
-		Expect(err).ToNot(HaveOccurred())
-
-		return response.GetObject()
-	}
-
 	Describe("Creation", func() {
 		It("Can be built if all the required parameters are set", func() {
 			server, err := NewPrivateVirtualNetworksServer().
@@ -469,73 +436,7 @@ var _ = Describe("Private virtual networks server", func() {
 				Expect(err).ToNot(HaveOccurred())
 			})
 
-			It("resolves by id rather than an unrelated NetworkClass whose name collides with the id", func() {
-				// Drop the network_classes_singleton unique index (OSAC-4073, migration 106): this
-				// test predates the one-NetworkClass-per-deployment invariant and needs "target" and
-				// "collider" to coexist to exercise id-vs-name collision resolution.
-				tx, txErr := database.TxFromContext(ctx)
-				Expect(txErr).ToNot(HaveOccurred())
-				_, txErr = tx.Exec(ctx, "drop index if exists network_classes_singleton")
-				Expect(txErr).ToNot(HaveOccurred())
-
-				ncDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
-					SetLogger(logger).
-					SetTenancyLogic(tenancy).
-					Build()
-				Expect(err).ToNot(HaveOccurred())
-
-				// target has an id that happens to equal collider's metadata.name. An id-or-name
-				// OR filter with SetLimit(1) would be order-dependent and could resolve to either
-				// NetworkClass; the lookup must honor the caller-specified field (id) only.
-				target := privatev1.NetworkClass_builder{
-					Id:            "colliding-identifier",
-					FabricManager: new("target-strategy"),
-					Metadata: privatev1.Metadata_builder{
-						Tenant: auth.SharedTenant,
-						Name:   fmt.Sprintf("target-network-class-%s", uuid.NewString()[:8]),
-					}.Build(),
-					Capabilities: privatev1.NetworkClassCapabilities_builder{
-						SupportsIpv4: true,
-					}.Build(),
-					Status: privatev1.NetworkClassStatus_builder{
-						State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
-					}.Build(),
-				}.Build()
-				_, err = ncDao.Create().SetObject(target).Do(ctx)
-				Expect(err).ToNot(HaveOccurred())
-
-				collider := privatev1.NetworkClass_builder{
-					FabricManager: new("collider-strategy"),
-					Metadata: privatev1.Metadata_builder{
-						Tenant: auth.SharedTenant,
-						Name:   "colliding-identifier",
-					}.Build(),
-					Capabilities: privatev1.NetworkClassCapabilities_builder{
-						SupportsIpv4: true,
-					}.Build(),
-					Status: privatev1.NetworkClassStatus_builder{
-						State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_FAILED,
-					}.Build(),
-				}.Build()
-				_, err = ncDao.Create().SetObject(collider).Do(ctx)
-				Expect(err).ToNot(HaveOccurred())
-
-				vn := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: "colliding-identifier"}.Build(),
-						Region:       "us-west-1",
-					}.Build(),
-				}.Build()
-
-				// target (matched by id) is READY, so this must succeed. If the lookup instead
-				// matched collider (FAILED, matched only by the colliding name), it would fail
-				// VN-VAL-05 instead.
-				err = server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(err).ToNot(HaveOccurred())
-			})
-
-			It("rejects empty NetworkClass when no default exists", func() {
+			It("rejects an empty NetworkClass reference when no singleton exists", func() {
 				vn := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr: new("10.0.0.0/16"),
@@ -545,11 +446,11 @@ var _ = Describe("Private virtual networks server", func() {
 
 				err := server.validateVirtualNetwork(ctx, vn, nil)
 				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("no default NetworkClass is configured"))
+				Expect(err.Error()).To(ContainSubstring("no NetworkClass is configured"))
 			})
 		})
 
-		Context("VN-VAL-05: NetworkClass READY state validation", func() {
+		Context("NetworkClass readiness is controller-owned", func() {
 			It("accepts NetworkClass in READY state", func() {
 				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
 
@@ -565,7 +466,7 @@ var _ = Describe("Private virtual networks server", func() {
 				Expect(err).ToNot(HaveOccurred())
 			})
 
-			It("rejects NetworkClass in PENDING state", func() {
+			It("accepts NetworkClass in PENDING state and leaves readiness to reconciliation", func() {
 				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING)
 
 				vn := privatev1.VirtualNetwork_builder{
@@ -577,14 +478,10 @@ var _ = Describe("Private virtual networks server", func() {
 				}.Build()
 
 				err := server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(err).To(HaveOccurred())
-				status, ok := grpcstatus.FromError(err)
-				Expect(ok).To(BeTrue())
-				Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
-				Expect(err.Error()).To(ContainSubstring("not in READY state"))
+				Expect(err).ToNot(HaveOccurred())
 			})
 
-			It("rejects NetworkClass in FAILED state", func() {
+			It("accepts NetworkClass in FAILED state and leaves recovery to reconciliation", func() {
 				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_FAILED)
 
 				vn := privatev1.VirtualNetwork_builder{
@@ -596,11 +493,7 @@ var _ = Describe("Private virtual networks server", func() {
 				}.Build()
 
 				err := server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(err).To(HaveOccurred())
-				status, ok := grpcstatus.FromError(err)
-				Expect(ok).To(BeTrue())
-				Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
-				Expect(err.Error()).To(ContainSubstring("not in READY state"))
+				Expect(err).ToNot(HaveOccurred())
 			})
 		})
 
@@ -1416,7 +1309,7 @@ var _ = Describe("Private virtual networks server", func() {
 		})
 	})
 
-	Describe("Default NetworkClass auto-population", func() {
+	Describe("Singleton NetworkClass resolution", func() {
 		var vnServer *PrivateVirtualNetworksServer
 
 		BeforeEach(func() {
@@ -1429,9 +1322,8 @@ var _ = Describe("Private virtual networks server", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		It("Create VN without network_class auto-populates from default NC", func() {
-			// Create a default NC in READY state:
-			defaultNC := createDefaultNetworkClassViaDAO(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
+		It("Create VN without network_class persists the singleton NetworkClass reference", func() {
+			networkClass := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
 
 			// Create VN without network_class:
 			createResponse, err := vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
@@ -1446,14 +1338,10 @@ var _ = Describe("Private virtual networks server", func() {
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			Expect(createResponse.GetObject().GetSpec().GetNetworkClass().GetId()).To(Equal(defaultNC.GetId()))
+			Expect(createResponse.GetObject().GetSpec().GetNetworkClass().GetId()).To(Equal(networkClass.GetId()))
 		})
 
-		It("Create VN without network_class when no default exists returns error", func() {
-			// Create NC without is_default=true:
-			createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
-
-			// Create VN without network_class (no default configured):
+		It("Create VN without network_class when no singleton exists returns an error", func() {
 			_, err := vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 				Object: privatev1.VirtualNetwork_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -1466,24 +1354,11 @@ var _ = Describe("Private virtual networks server", func() {
 				}.Build(),
 			}.Build())
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("no default NetworkClass is configured"))
+			Expect(err.Error()).To(ContainSubstring("no NetworkClass is configured"))
 		})
 
-		It("Explicit network_class ignores default", func() {
-			// Drop the network_classes_singleton unique index (OSAC-4073, migration 106): this
-			// test predates the one-NetworkClass-per-deployment invariant and needs NC-A and NC-B
-			// to coexist to exercise explicit-selection-overrides-default logic. Mirrors the
-			// "Multiple defaults fallback" test's approach in network_classes_server_test.go.
-			tx, txErr := database.TxFromContext(ctx)
-			Expect(txErr).ToNot(HaveOccurred())
-			_, txErr = tx.Exec(ctx, "drop index if exists network_classes_singleton")
-			Expect(txErr).ToNot(HaveOccurred())
-
-			// Create NC-A as default:
-			_ = createDefaultNetworkClassViaDAO(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
-
-			// Create NC-B as non-default:
-			ncB := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
+		It("accepts an explicit reference to the singleton NetworkClass", func() {
+			networkClass := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
 
 			// Create VN with explicit network_class=NC-B:
 			createResponse, err := vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
@@ -1494,19 +1369,17 @@ var _ = Describe("Private virtual networks server", func() {
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr:     new("10.0.0.0/16"),
 						Region:       "us-west-1",
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: ncB.GetId()}.Build(),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClass.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			Expect(createResponse.GetObject().GetSpec().GetNetworkClass().GetId()).To(Equal(ncB.GetId()))
+			Expect(createResponse.GetObject().GetSpec().GetNetworkClass().GetId()).To(Equal(networkClass.GetId()))
 		})
 
-		It("Default NC must be READY: PENDING default returns FailedPrecondition", func() {
-			// Create a default NC in PENDING state:
-			createDefaultNetworkClassViaDAO(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING)
+		It("does not require NetworkClass readiness during API admission", func() {
+			createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING)
 
-			// Create VN without network_class (default is not READY):
 			_, err := vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 				Object: privatev1.VirtualNetwork_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -1518,15 +1391,11 @@ var _ = Describe("Private virtual networks server", func() {
 					}.Build(),
 				}.Build(),
 			}.Build())
-			Expect(err).To(HaveOccurred())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
-			Expect(err.Error()).To(ContainSubstring("not in READY state"))
+			Expect(err).ToNot(HaveOccurred())
 		})
 
 		It("Default NC capability mismatch is rejected", func() {
-			// Create a default NC that supports only IPv4 (not IPv6):
+			// Create the singleton NC that supports only IPv4 (not IPv6):
 			ncDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
 				SetLogger(logger).
 				SetTenancyLogic(tenancy).
@@ -1535,7 +1404,6 @@ var _ = Describe("Private virtual networks server", func() {
 
 			nc := privatev1.NetworkClass_builder{
 				FabricManager: new("test-strategy"),
-				IsDefault:     new(true),
 				Metadata: privatev1.Metadata_builder{
 					Tenant: auth.SharedTenant,
 				}.Build(),
@@ -1550,7 +1418,7 @@ var _ = Describe("Private virtual networks server", func() {
 			_, err = ncDao.Create().SetObject(nc).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 
-			// Create VN without network_class but with an IPv6 CIDR, which the default NC above
+			// Create VN without network_class but with an IPv6 CIDR, which the singleton above
 			// doesn't support:
 			_, err = vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 				Object: privatev1.VirtualNetwork_builder{
@@ -1570,18 +1438,17 @@ var _ = Describe("Private virtual networks server", func() {
 			Expect(err.Error()).To(ContainSubstring("IPv6 and dual-stack networking are not supported"))
 		})
 
-		It("Create VN without network_class after default NC is deleted", func() {
-			// Create a default NC in READY state, then delete it via DAO:
-			defaultNC := createDefaultNetworkClassViaDAO(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
+		It("Create VN without network_class after the singleton is deleted", func() {
+			networkClass := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
 			ncDao, ncErr := dao.NewGenericDAO[*privatev1.NetworkClass]().
 				SetLogger(logger).
 				SetTenancyLogic(tenancy).
 				Build()
 			Expect(ncErr).ToNot(HaveOccurred())
-			_, ncErr = ncDao.Delete().SetId(defaultNC.GetId()).Do(ctx)
+			_, ncErr = ncDao.Delete().SetId(networkClass.GetId()).Do(ctx)
 			Expect(ncErr).ToNot(HaveOccurred())
 
-			// Attempt to create VN without network_class (no default exists now):
+			// Attempt to create VN without network_class (no singleton exists now):
 			_, err := vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 				Object: privatev1.VirtualNetwork_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -1594,24 +1461,23 @@ var _ = Describe("Private virtual networks server", func() {
 				}.Build(),
 			}.Build())
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("no default NetworkClass is configured"))
+			Expect(err.Error()).To(ContainSubstring("no NetworkClass is configured"))
 		})
 
-		It("Create VN without network_class rejects soft-deleted default NC", func() {
-			// Create a default NC in READY state:
-			defaultNC := createDefaultNetworkClassViaDAO(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
+		It("Create VN without network_class ignores a soft-deleted singleton", func() {
+			networkClass := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
 
-			// Soft-delete the default NC by setting deletion_timestamp via SQL:
+			// Soft-delete the singleton NC by setting deletion_timestamp via SQL:
 			tx, err := database.TxFromContext(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			_, sqlErr := tx.Exec(ctx,
 				"UPDATE network_classes SET deletion_timestamp = now() WHERE id = $1",
-				defaultNC.GetId(),
+				networkClass.GetId(),
 			)
 			Expect(sqlErr).ToNot(HaveOccurred())
 
-			// Create VN without network_class. findDefaultNetworkClass excludes
-			// soft-deleted rows, so no active default is found and creation fails.
+			// Create VN without network_class. The singleton lookup excludes
+			// soft-deleted rows, so no active NetworkClass is found and creation fails.
 			_, err = vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 				Object: privatev1.VirtualNetwork_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -1624,23 +1490,13 @@ var _ = Describe("Private virtual networks server", func() {
 				}.Build(),
 			}.Build())
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("no default NetworkClass is configured"))
+			Expect(err.Error()).To(ContainSubstring("no NetworkClass is configured"))
 		})
 
-		It("Auto-populated network_class is immutable on Update", func() {
-			// Drop the network_classes_singleton unique index (OSAC-4073, migration 106): this
-			// test predates the one-NetworkClass-per-deployment invariant and needs a second NC
-			// (ncB below) to attempt (and be rejected from) switching to. Mirrors the "Multiple
-			// defaults fallback" test's approach in network_classes_server_test.go.
-			tx, txErr := database.TxFromContext(ctx)
-			Expect(txErr).ToNot(HaveOccurred())
-			_, txErr = tx.Exec(ctx, "drop index if exists network_classes_singleton")
-			Expect(txErr).ToNot(HaveOccurred())
+		It("keeps the persisted singleton reference immutable on Update", func() {
+			networkClass := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
 
-			// Create a default NC in READY state:
-			defaultNC := createDefaultNetworkClassViaDAO(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
-
-			// Create VN without network_class (auto-populated):
+			// Create VN without network_class (resolved to the singleton):
 			createResponse, err := vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 				Object: privatev1.VirtualNetwork_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -1654,10 +1510,7 @@ var _ = Describe("Private virtual networks server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			vn := createResponse.GetObject()
-			Expect(vn.GetSpec().GetNetworkClass().GetId()).To(Equal(defaultNC.GetId()))
-
-			// Create a second NC to attempt switching to:
-			ncB := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
+			Expect(vn.GetSpec().GetNetworkClass().GetId()).To(Equal(networkClass.GetId()))
 
 			// Attempt Update changing network_class:
 			_, err = vnServer.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
@@ -1666,7 +1519,7 @@ var _ = Describe("Private virtual networks server", func() {
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr:     new("10.0.0.0/16"),
 						Region:       "us-west-1",
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: ncB.GetId()}.Build(),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: "another-network-class"}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())

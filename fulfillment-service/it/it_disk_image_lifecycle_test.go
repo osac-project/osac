@@ -154,6 +154,7 @@ var _ = Describe("DiskImage lifecycle", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		networkClassId = ncResp.GetObject().GetId()
+		waitForNetworkClassReady(ctx, networkClassesClient, networkClassId)
 
 		// Create VirtualNetwork
 		virtualNetworkId = fmt.Sprintf("test-vnet-%s", uuid.New())

@@ -20,7 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/rand/v2"
 	"slices"
 
 	"google.golang.org/grpc"
@@ -52,7 +51,7 @@ type function struct {
 	logger                *slog.Logger
 	hubCache              controllers.HubCache
 	virtualNetworksClient privatev1.VirtualNetworksClient
-	hubsClient            privatev1.HubsClient
+	networkingHubReader   controllers.NetworkingHubReader
 	maskCalculator        *masks.Calculator
 }
 
@@ -103,12 +102,22 @@ func (b *FunctionBuilder) Build() (result controllers.ReconcilerFunction[*privat
 		return
 	}
 
+	// Create the read-only canonical networking Hub reader. NetworkClass status is owned by the
+	// NetworkClass reconciler; VirtualNetwork reconciliation only consumes the persisted binding.
+	networkingHubReader, err := controllers.NewNetworkingHubReader().
+		SetNetworkClassesClient(privatev1.NewNetworkClassesClient(b.connection)).
+		SetHubCache(b.hubCache).
+		Build()
+	if err != nil {
+		return nil, err
+	}
+
 	// Create and populate the object:
 	object := &function{
 		logger:                b.logger,
 		virtualNetworksClient: privatev1.NewVirtualNetworksClient(b.connection),
-		hubsClient:            privatev1.NewHubsClient(b.connection),
 		hubCache:              b.hubCache,
+		networkingHubReader:   networkingHubReader,
 		maskCalculator:        masks.NewCalculator().Build(),
 	}
 	result = object.run
@@ -354,28 +363,22 @@ func (t *task) delete(ctx context.Context) (err error) {
 }
 
 func (t *task) selectHub(ctx context.Context) error {
-	t.hubId = t.virtualNetwork.GetStatus().GetHub()
-	if t.hubId == "" {
-		response, err := t.r.hubsClient.List(ctx, privatev1.HubsListRequest_builder{}.Build())
-		if err != nil {
-			return err
-		}
-		if len(response.Items) == 0 {
-			return errors.New("there are no hubs")
-		}
-		t.hubId = response.Items[rand.IntN(len(response.Items))].GetId()
+	if t.virtualNetwork.GetStatus().GetHub() != "" {
+		return t.getHub(ctx)
 	}
-	t.r.logger.DebugContext(
-		ctx,
-		"Selected hub",
-		slog.String("id", t.hubId),
-	)
-	hubEntry, err := t.r.hubCache.Get(ctx, t.hubId)
+
+	resolution, err := t.r.networkingHubReader.Resolve(ctx)
 	if err != nil {
 		return err
 	}
-	t.hubNamespace = hubEntry.Namespace
-	t.hubClient = hubEntry.Client
+	t.hubId = resolution.ID
+	t.r.logger.DebugContext(
+		ctx,
+		"Resolved canonical networking hub",
+		slog.String("id", t.hubId),
+	)
+	t.hubNamespace = resolution.Namespace
+	t.hubClient = resolution.Client
 	return nil
 }
 

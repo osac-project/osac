@@ -6,14 +6,9 @@ import uuid
 import pytest
 
 from tests.e2e.core.grpc_client import PUBLIC_API, GRPCClient
-from tests.e2e.core.helpers import (
-    assert_grpc_rejected,
-    grpc_error_message,
-    wait_for_virtual_network_cr,
-    wait_for_virtual_network_deletion,
-    wait_for_virtual_network_ready,
-)
+from tests.e2e.core.helpers import assert_grpc_rejected, grpc_error_message, wait_for_virtual_network_deletion
 from tests.e2e.core.k8s_client import K8sClient
+from tests.e2e.vmaas.networking_lifecycle_helpers import create_and_wait_for_virtual_network
 
 pytestmark = pytest.mark.regression
 
@@ -39,12 +34,9 @@ class TestVirtualNetworkProjectScopedUniqueness:
         self, jwt_grpc_tenant1: GRPCClient, k8s_hub_client: K8sClient
     ) -> None:
         vn_name = f"del-dup-{uuid.uuid4().hex[:8]}"
-        vn_id: str | None = jwt_grpc_tenant1.create_virtual_network(name=vn_name, ipv4_cidr="10.122.0.0/16")
+        vn_id, cr_name = create_and_wait_for_virtual_network(jwt_grpc_tenant1, k8s_hub_client, vn_name, "10.122.0.0/16")
         duplicate_vn_id: str | None = None
         try:
-            cr_name = wait_for_virtual_network_cr(k8s=k8s_hub_client, uuid=vn_id)
-            wait_for_virtual_network_ready(k8s=k8s_hub_client, name=cr_name)
-
             jwt_grpc_tenant1.delete_virtual_network(vn_id=vn_id)
             vn_id = None
 

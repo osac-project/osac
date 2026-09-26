@@ -283,7 +283,7 @@ func (s *PrivateNATGatewaysServer) Delete(ctx context.Context,
 		err = translateLifecycleError(err)
 		return
 	}
-	if err = validateNotDefault(natGateway.GetMetadata().GetLabels(), "NAT gateway"); err != nil {
+	if err = validateNotDefault(ctx, natGateway.GetMetadata().GetLabels(), "NAT gateway"); err != nil {
 		return
 	}
 	if natGateway.GetMetadata().GetDeletionTimestamp() != nil {

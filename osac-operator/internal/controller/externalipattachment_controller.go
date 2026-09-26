@@ -73,7 +73,7 @@ type ExternalIPAttachmentReconciler struct {
 	// two-manager model isn't configured (no gRPC connection / networking namespace),
 	// in which case the controller always uses the legacy implementation-strategy path.
 	Resolver *dispatcher.Resolver
-	// networkClassesClient lists NetworkClasses to find the default/singleton used
+	// networkClassesClient lists NetworkClasses to find the deployment singleton used
 	// as the dispatcher input. Nil when gRPC is not configured.
 	networkClassesClient privatev1.NetworkClassesClient
 	// NetworkProvisioningEnabled controls whether the controller dispatches AAP

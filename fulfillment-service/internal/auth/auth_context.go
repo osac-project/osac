@@ -17,6 +17,7 @@ package auth
 
 import (
 	"context"
+	"strings"
 
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -44,6 +45,16 @@ func SubjectFromContext(ctx context.Context) *Subject {
 	default:
 		panic("failed to get subject from context")
 	}
+}
+
+// IsControllerServiceAccount reports whether the authenticated caller is the
+// fulfillment controller service account. This is intentionally narrower than
+// IsAdmin: it is used only for controller-owned lifecycle operations that must
+// remain unavailable to ordinary administrators and users.
+func IsControllerServiceAccount(ctx context.Context) bool {
+	subject, ok := ctx.Value(subjectContextKey).(*Subject)
+	return ok && (subject.User == "service-account-osac-controller" ||
+		strings.HasSuffix(subject.User, ":service-account-osac-controller"))
 }
 
 // ContextWithToken creates a new context containing the given validated JWT token.

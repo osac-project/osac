@@ -231,29 +231,7 @@ var _ = Describe("lookupDefaultNetworkClassID", func() {
 		Expect(id).To(BeEmpty())
 	})
 
-	It("returns the NetworkClass marked is_default", func() {
-		stub := newListingNetworkClassClient([]*privatev1.NetworkClass{
-			{Id: "nc-other"},
-			{Id: "nc-default", IsDefault: ptr.To(true)},
-		}, &[]*privatev1.NetworkClass{})
-		id, err := lookupDefaultNetworkClassID(ctx, stub)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(id).To(Equal("nc-default"))
-	})
-
-	It("returns the first default in list order when multiple live NetworkClasses are marked default", func() {
-		// fulfillment-service enforces at most one active default via a unique partial index;
-		// this documents operator behavior if that invariant is ever violated.
-		stub := newListingNetworkClassClient([]*privatev1.NetworkClass{
-			{Id: "nc-default-a", IsDefault: ptr.To(true)},
-			{Id: "nc-default-b", IsDefault: ptr.To(true)},
-		}, &[]*privatev1.NetworkClass{})
-		id, err := lookupDefaultNetworkClassID(ctx, stub)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(id).To(Equal("nc-default-a"))
-	})
-
-	It("returns the only live NetworkClass when none is marked default", func() {
+	It("returns the only live NetworkClass", func() {
 		stub := newListingNetworkClassClient([]*privatev1.NetworkClass{
 			{Id: "nc-singleton"},
 		}, &[]*privatev1.NetworkClass{})
@@ -262,11 +240,20 @@ var _ = Describe("lookupDefaultNetworkClassID", func() {
 		Expect(id).To(Equal("nc-singleton"))
 	})
 
-	It("skips soft-deleted NetworkClasses when selecting the default", func() {
+	It("returns an empty ID when multiple live NetworkClasses exist", func() {
+		stub := newListingNetworkClassClient([]*privatev1.NetworkClass{
+			{Id: "nc-a"},
+			{Id: "nc-b"},
+		}, &[]*privatev1.NetworkClass{})
+		id, err := lookupDefaultNetworkClassID(ctx, stub)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(id).To(BeEmpty())
+	})
+
+	It("skips soft-deleted NetworkClasses when selecting the singleton", func() {
 		deleted := &privatev1.NetworkClass{
-			Id:        "nc-deleted-default",
-			IsDefault: ptr.To(true),
-			Metadata:  &privatev1.Metadata{DeletionTimestamp: timestamppb.Now()},
+			Id:       "nc-deleted",
+			Metadata: &privatev1.Metadata{DeletionTimestamp: timestamppb.Now()},
 		}
 		stub := newListingNetworkClassClient([]*privatev1.NetworkClass{
 			deleted,
@@ -275,16 +262,6 @@ var _ = Describe("lookupDefaultNetworkClassID", func() {
 		id, err := lookupDefaultNetworkClassID(ctx, stub)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(id).To(Equal("nc-live"))
-	})
-
-	It("returns an empty ID when multiple live NetworkClasses exist and none is default", func() {
-		stub := newListingNetworkClassClient([]*privatev1.NetworkClass{
-			{Id: "nc-a"},
-			{Id: "nc-b"},
-		}, &[]*privatev1.NetworkClass{})
-		id, err := lookupDefaultNetworkClassID(ctx, stub)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(id).To(BeEmpty())
 	})
 
 	It("returns a reconcile error when List fails", func() {
@@ -301,7 +278,7 @@ var _ = Describe("lookupDefaultNetworkClassID", func() {
 	It("pages through List results until every NetworkClass is considered", func() {
 		all := []*privatev1.NetworkClass{
 			{Id: "nc-page-1"}, {Id: "nc-page-2"}, {Id: "nc-page-3"},
-			{Id: "nc-page-4", IsDefault: ptr.To(true)}, {Id: "nc-page-5"},
+			{Id: "nc-page-4"}, {Id: "nc-page-5"},
 		}
 		var offsetsSeen []int32
 		pageSize := 2
@@ -321,7 +298,7 @@ var _ = Describe("lookupDefaultNetworkClassID", func() {
 
 		id, err := lookupDefaultNetworkClassID(ctx, stub)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(id).To(Equal("nc-page-4"))
+		Expect(id).To(BeEmpty())
 		Expect(offsetsSeen).To(Equal([]int32{0, 2, 4}))
 	})
 })

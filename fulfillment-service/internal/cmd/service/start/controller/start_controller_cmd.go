@@ -42,11 +42,13 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/baremetalinstance"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/cluster"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/computeinstance"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/defaultnetworking"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/externalip"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/externalipattachment"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/externalippool"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/identityprovider"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/natgateway"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/networkclass"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/onboarding"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/project"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/projectmembership"
@@ -362,6 +364,18 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		return fmt.Errorf("failed to create hub cache: %w", err)
 	}
 
+	// Create the shared default-networking manager. Tenant reconciliation uses
+	// it to ensure resources asynchronously; project reconciliation uses the
+	// same manager to clean them up during root-project deletion.
+	r.logger.InfoContext(ctx, "Creating default networking manager")
+	defaultNetworking, err := defaultnetworking.NewManager().
+		SetLogger(r.logger).
+		SetConnection(r.client).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create default networking manager: %w", err)
+	}
+
 	// Create the IDP client:
 	idpClient, err := r.createIDPClient(ctx, caPool)
 	if err != nil {
@@ -499,6 +513,43 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		}
 	}()
 
+	// Create the NetworkClass reconciler:
+	r.logger.InfoContext(ctx, "Creating NetworkClass reconciler")
+	networkClassReconcilerFunction, err := networkclass.NewFunction().
+		SetLogger(r.logger).
+		SetConnection(r.client).
+		SetHubCache(hubCache).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create NetworkClass reconciler function: %w", err)
+	}
+	networkClassReconciler, err := controllers.NewReconciler[*privatev1.NetworkClass]().
+		SetLogger(r.logger).
+		SetName("network_class").
+		SetClient(r.client).
+		SetFunction(networkClassReconcilerFunction).
+		SetEventFilter("has(event.network_class) || has(event.hub)").
+		SetHealthReporter(healthAggregator).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create NetworkClass reconciler: %w", err)
+	}
+
+	// Start the NetworkClass reconciler:
+	r.logger.InfoContext(ctx, "Starting NetworkClass reconciler")
+	go func() {
+		err := networkClassReconciler.Start(ctx)
+		if err == nil || errors.Is(err, context.Canceled) {
+			r.logger.InfoContext(ctx, "NetworkClass reconciler finished")
+		} else {
+			r.logger.InfoContext(
+				ctx,
+				"NetworkClass reconciler failed",
+				slog.Any("error", err),
+			)
+		}
+	}()
+
 	// Create the subnet reconciler:
 	r.logger.InfoContext(ctx, "Creating subnet reconciler")
 	subnetReconcilerFunction, err := subnet.NewFunction().
@@ -551,7 +602,7 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		SetName("virtual_network").
 		SetClient(r.client).
 		SetFunction(virtualNetworkReconcilerFunction).
-		SetEventFilter("has(event.virtual_network) || (has(event.hub) && event.type == EVENT_TYPE_OBJECT_CREATED)").
+		SetEventFilter("has(event.virtual_network) || has(event.network_class) || has(event.hub)").
 		SetHealthReporter(healthAggregator).
 		Build()
 	if err != nil {
@@ -908,11 +959,12 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		SetConnection(r.client).
 		SetIdpManager(idpManager).
 		SetVaultLifecycle(vaultLifecycleClient).
+		SetDefaultNetworking(defaultNetworking).
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create tenant reconciler function: %w", err)
 	}
-	tenantEventFilter := "has(event.tenant)"
+	tenantEventFilter := "has(event.tenant) || has(event.network_class) || has(event.hub)"
 	for _, resource := range []string{"virtual_network", "subnet", "security_group", "nat_gateway", "external_ip"} {
 		// Subscribe only to non-CREATE events for default-labeled resources. The tenant
 		// reconciler needs these events to detect when default networking resources
@@ -1033,6 +1085,7 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		SetLogger(r.logger).
 		SetConnection(r.client).
 		SetProjectGroupManager(projectGroupManager).
+		SetDefaultNetworking(defaultNetworking).
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create project reconciler function: %w", err)

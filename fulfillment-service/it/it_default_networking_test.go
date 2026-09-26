@@ -51,23 +51,16 @@ var _ = Describe("Default networking provisioning", func() {
 		subnetsClient = privatev1.NewSubnetsClient(tool.InternalView().AdminConn())
 		securityGroupsClient = privatev1.NewSecurityGroupsClient(tool.InternalView().AdminConn())
 
-		// Create a default NetworkClass with defaults so ensureDefaultNetworking fires.
-		ncResp, err := networkClassesClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
-			Object: privatev1.NetworkClass_builder{
-				Metadata:      privatev1.Metadata_builder{Name: fmt.Sprintf("test-default-nc-%s", uuid.New())}.Build(),
-				Title:         "Test Default Network Class",
-				FabricManager: new("cudn_net"),
-				IsDefault:     new(true),
-				Spec: privatev1.NetworkClassSpec_builder{
-					Defaults: privatev1.NetworkDefaults_builder{
-						VirtualNetworkIpv4Cidr: "10.200.0.0/16",
-						SubnetIpv4Cidr:         "10.200.0.0/20",
-					}.Build(),
-				}.Build(),
-			}.Build(),
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		networkClassId = ncResp.GetObject().GetId()
+		// Create the deployment singleton NetworkClass. The tenant controller
+		// asynchronously consumes it after its Hub status becomes READY.
+		networkClassId = createDefaultNetworkClass(
+			ctx,
+			networkClassesClient,
+			"test-default-nc",
+			"Test Default Network Class",
+			"10.200.0.0/16",
+			"10.200.0.0/20",
+		)
 		DeferCleanup(func(cleanupCtx context.Context) {
 			if networkClassId == "" {
 				return
@@ -89,39 +82,13 @@ var _ = Describe("Default networking provisioning", func() {
 	})
 
 	It("creates K8s CRs for default VN/Subnet/SG and transitions DefaultNetworkingReady to True", func(ctx context.Context) {
-		tenantName := fmt.Sprintf("test-defnet-%s", uuid.New())
-
-		By("Creating tenant and waiting for SYNCED")
-		tenantId := createTenant(ctx, tenantsClient, tenantName)
-		waitForTenantSynced(ctx, tenantsClient, tenantId)
+		By("Creating tenant and waiting for the default VirtualNetwork")
+		tenantId, tenantName, vnId := createTenantAndDefaultVirtualNetwork(ctx, virtualNetworksClient)
 
 		defaultLabelFilter := fmt.Sprintf(
 			"this.metadata.labels['osac.openshift.io/default'] == 'true' && this.metadata.tenant == %q",
 			tenantName,
 		)
-
-		By("Waiting for DefaultNetworkingReady=False/ResourcesPending (ensureDefaultNetworking ran)")
-		Eventually(func(g Gomega) {
-			resp, err := tenantsClient.Get(ctx, privatev1.TenantsGetRequest_builder{Id: tenantId}.Build())
-			g.Expect(err).ToNot(HaveOccurred())
-			cond := findTenantCondition(resp.GetObject().GetStatus().GetConditions(),
-				privatev1.TenantConditionType_TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY)
-			g.Expect(cond).ToNot(BeNil())
-			g.Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
-			g.Expect(cond.HasReason()).To(BeTrue())
-			g.Expect(cond.GetReason()).To(Equal("ResourcesPending"))
-		}, time.Minute, time.Second).Should(Succeed())
-
-		By("Waiting for default VirtualNetwork to appear in FS DB")
-		var vnId string
-		Eventually(func(g Gomega) {
-			resp, err := virtualNetworksClient.List(ctx, privatev1.VirtualNetworksListRequest_builder{
-				Filter: &defaultLabelFilter,
-			}.Build())
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(resp.GetItems()).ToNot(BeEmpty())
-			vnId = resp.GetItems()[0].GetId()
-		}, time.Minute, time.Second).Should(Succeed())
 
 		// logVNState logs the current VN state from the FS DB for tracing reconciler progress.
 		logVNState := func() {
@@ -147,6 +114,15 @@ var _ = Describe("Default networking provisioning", func() {
 			resp, err := virtualNetworksClient.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: vnId}.Build())
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(resp.GetObject().GetStatus().GetHub()).ToNot(BeEmpty())
+		}, time.Minute, time.Second).Should(Succeed())
+
+		By("Waiting for the NetworkClass canonical Hub to be persisted")
+		Eventually(func(g Gomega) {
+			resp, err := networkClassesClient.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: networkClassId}.Build())
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(resp.GetObject().GetStatus().GetHub()).To(Equal(hubId))
+			g.Expect(resp.GetObject().GetStatus().GetState()).To(
+				Equal(privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY))
 		}, time.Minute, time.Second).Should(Succeed())
 
 		By("Waiting for VN K8s CR to appear (pass 3: hubClient.Create done)")
@@ -305,4 +281,231 @@ func findTenantCondition(conditions []*privatev1.TenantCondition, condType priva
 		}
 	}
 	return nil
+}
+
+func createDefaultNetworkClass(
+	ctx context.Context,
+	client privatev1.NetworkClassesClient,
+	namePrefix string,
+	title string,
+	virtualNetworkCIDR string,
+	subnetCIDR string,
+) string {
+	response, err := client.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
+		Object: privatev1.NetworkClass_builder{
+			Metadata:      privatev1.Metadata_builder{Name: fmt.Sprintf("%s-%s", namePrefix, uuid.New())}.Build(),
+			Title:         title,
+			FabricManager: new("cudn_net"),
+			Spec: privatev1.NetworkClassSpec_builder{
+				Defaults: privatev1.NetworkDefaults_builder{
+					VirtualNetworkIpv4Cidr: virtualNetworkCIDR,
+					SubnetIpv4Cidr:         subnetCIDR,
+				}.Build(),
+			}.Build(),
+		}.Build(),
+	}.Build())
+	Expect(err).ToNot(HaveOccurred())
+	return response.GetObject().GetId()
+}
+
+var _ = Describe("Canonical networking Hub resolution", func() {
+	var (
+		ctx                   context.Context
+		networkClassesClient  privatev1.NetworkClassesClient
+		virtualNetworksClient privatev1.VirtualNetworksClient
+		hubsClient            privatev1.HubsClient
+		networkClassID        string
+	)
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		networkClassesClient = privatev1.NewNetworkClassesClient(tool.InternalView().AdminConn())
+		virtualNetworksClient = privatev1.NewVirtualNetworksClient(tool.InternalView().AdminConn())
+		hubsClient = privatev1.NewHubsClient(tool.InternalView().AdminConn())
+
+		networkClassID = createDefaultNetworkClass(
+			ctx,
+			networkClassesClient,
+			"test-canonical-nc",
+			"Test Canonical Network Class",
+			"10.220.0.0/16",
+			"10.220.0.0/20",
+		)
+		DeferCleanup(func() {
+			_, _ = networkClassesClient.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{Id: networkClassID}.Build())
+		})
+	})
+
+	It("keeps a multiple-Hub deployment pending without selecting a Hub", func(ctx context.Context) {
+		createTestHub(ctx, hubsClient, fmt.Sprintf("additional-hub-%s", uuid.New()))
+
+		expectNetworkClassStatus(
+			ctx,
+			networkClassesClient,
+			networkClassID,
+			privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING,
+			"",
+			"expected exactly one active networking hub, found multiple",
+		)
+		_, _, vnID := createTenantAndDefaultVirtualNetwork(ctx, virtualNetworksClient)
+		expectVirtualNetworkWithoutHub(ctx, virtualNetworksClient, vnID)
+	})
+
+	It("retries a pending tenant resource when the canonical Hub becomes available", func(ctx context.Context) {
+		additionalHubID := fmt.Sprintf("additional-hub-%s", uuid.New())
+		createTestHub(ctx, hubsClient, additionalHubID)
+
+		expectNetworkClassStatus(
+			ctx,
+			networkClassesClient,
+			networkClassID,
+			privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING,
+			"",
+			"expected exactly one active networking hub, found multiple",
+		)
+		_, _, vnID := createTenantAndDefaultVirtualNetwork(ctx, virtualNetworksClient)
+		expectVirtualNetworkWithoutHub(ctx, virtualNetworksClient, vnID)
+
+		By("Removing the extra Hub and waiting for NetworkClass reconciliation")
+		_, err := hubsClient.Delete(ctx, privatev1.HubsDeleteRequest_builder{Id: additionalHubID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Eventually(func(g Gomega) {
+			filter := "!has(this.metadata.deletion_timestamp)"
+			response, listErr := hubsClient.List(ctx, privatev1.HubsListRequest_builder{
+				Filter: &filter,
+				Limit:  new(int32(2)),
+			}.Build())
+			g.Expect(listErr).ToNot(HaveOccurred())
+			g.Expect(response.GetItems()).To(HaveLen(1))
+			g.Expect(response.GetItems()[0].GetId()).To(Equal(hubId))
+		}, time.Minute, time.Second).Should(Succeed())
+
+		expectNetworkClassStatus(
+			ctx,
+			networkClassesClient,
+			networkClassID,
+			privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+			hubId,
+			"",
+		)
+		Eventually(func(g Gomega) {
+			response, getErr := virtualNetworksClient.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: vnID}.Build())
+			g.Expect(getErr).ToNot(HaveOccurred())
+			g.Expect(response.GetObject().GetStatus().GetHub()).To(Equal(hubId))
+		}, time.Minute, time.Second).Should(Succeed())
+	})
+
+	It("keeps a tenant resource pending when the canonical reference is invalid", func(ctx context.Context) {
+		setNetworkClassCanonicalHub(ctx, networkClassesClient, networkClassID, "missing-canonical-hub")
+
+		expectNetworkClassStatus(
+			ctx,
+			networkClassesClient,
+			networkClassID,
+			privatev1.NetworkClassState_NETWORK_CLASS_STATE_FAILED,
+			"missing-canonical-hub",
+			`canonical networking hub "missing-canonical-hub" is not registered`,
+		)
+		_, _, vnID := createTenantAndDefaultVirtualNetwork(ctx, virtualNetworksClient)
+		expectVirtualNetworkWithoutHub(ctx, virtualNetworksClient, vnID)
+	})
+
+	It("keeps a tenant resource pending when the canonical Hub is unavailable", func(ctx context.Context) {
+		unavailableHubID := fmt.Sprintf("unavailable-hub-%s", uuid.New())
+		createTestHub(ctx, hubsClient, unavailableHubID)
+
+		setNetworkClassCanonicalHub(ctx, networkClassesClient, networkClassID, unavailableHubID)
+
+		expectNetworkClassStatus(
+			ctx,
+			networkClassesClient,
+			networkClassID,
+			privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING,
+			unavailableHubID,
+			fmt.Sprintf(`canonical networking hub %q is unavailable`, unavailableHubID),
+		)
+		_, _, vnID := createTenantAndDefaultVirtualNetwork(ctx, virtualNetworksClient)
+		expectVirtualNetworkWithoutHub(ctx, virtualNetworksClient, vnID)
+	})
+})
+
+func expectNetworkClassStatus(
+	ctx context.Context,
+	client privatev1.NetworkClassesClient,
+	id string,
+	state privatev1.NetworkClassState,
+	hubID string,
+	message string,
+) {
+	Eventually(func(g Gomega) {
+		response, err := client.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: id}.Build())
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(response.GetObject().GetStatus().GetHub()).To(Equal(hubID))
+		g.Expect(response.GetObject().GetStatus().GetState()).To(Equal(state))
+		g.Expect(response.GetObject().GetStatus().GetMessage()).To(Equal(message))
+	}, time.Minute, time.Second).Should(Succeed())
+}
+
+func expectVirtualNetworkWithoutHub(ctx context.Context, client privatev1.VirtualNetworksClient, id string) {
+	Eventually(func(g Gomega) {
+		response, err := client.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: id}.Build())
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(response.GetObject().GetStatus().GetHub()).To(BeEmpty())
+	}, time.Minute, time.Second).Should(Succeed())
+}
+
+func createTestHub(ctx context.Context, hubsClient privatev1.HubsClient, id string) {
+	_, err := hubsClient.Create(ctx, privatev1.HubsCreateRequest_builder{
+		Object: privatev1.Hub_builder{
+			Id:       id,
+			Metadata: privatev1.Metadata_builder{Name: id}.Build(),
+			Spec: privatev1.HubSpec_builder{
+				Kubeconfig: []byte("not-a-kubeconfig"),
+				Namespace:  hubNamespace,
+			}.Build(),
+		}.Build(),
+	}.Build())
+	Expect(err).ToNot(HaveOccurred())
+	DeferCleanup(func(cleanupCtx context.Context) {
+		_, _ = hubsClient.Delete(cleanupCtx, privatev1.HubsDeleteRequest_builder{Id: id}.Build())
+	})
+}
+
+func setNetworkClassCanonicalHub(ctx context.Context, client privatev1.NetworkClassesClient, id, hubID string) {
+	Eventually(func(g Gomega) {
+		response, err := client.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: id}.Build())
+		g.Expect(err).ToNot(HaveOccurred())
+		networkClass := response.GetObject()
+		if !networkClass.HasStatus() {
+			networkClass.SetStatus(&privatev1.NetworkClassStatus{})
+		}
+		networkClass.GetStatus().SetHub(hubID)
+		_, err = client.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
+			Object: networkClass,
+			UpdateMask: &fieldmaskpb.FieldMask{
+				Paths: []string{"status.hub"},
+			},
+			Lock: true,
+		}.Build())
+		g.Expect(err).ToNot(HaveOccurred())
+	}, time.Minute, time.Second).Should(Succeed())
+}
+
+func createTenantAndDefaultVirtualNetwork(
+	ctx context.Context,
+	virtualNetworksClient privatev1.VirtualNetworksClient,
+) (string, string, string) {
+	tenantsClient := privatev1.NewTenantsClient(tool.InternalView().AdminConn())
+	tenantName := fmt.Sprintf("test-canonical-tenant-%s", uuid.New())
+	tenantID := createTenant(ctx, tenantsClient, tenantName)
+	waitForTenantSynced(ctx, tenantsClient, tenantID)
+	filter := fmt.Sprintf("this.metadata.tenant == %q", tenantName)
+	var virtualNetworkID string
+	Eventually(func(g Gomega) {
+		response, err := virtualNetworksClient.List(ctx, privatev1.VirtualNetworksListRequest_builder{Filter: &filter}.Build())
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(response.GetItems()).ToNot(BeEmpty())
+		virtualNetworkID = response.GetItems()[0].GetId()
+	}, time.Minute, time.Second).Should(Succeed())
+	return tenantID, tenantName, virtualNetworkID
 }

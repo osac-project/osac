@@ -25,9 +25,6 @@ columns:
 - header: TITLE
   value: this.title
 
-- header: DEFAULT
-  value: "has(this.is_default) && this.is_default? 'yes': '-'"
-
 - header: FABRIC-MANAGER
   value: "has(this.fabric_manager)? this.fabric_manager: '-'"
 

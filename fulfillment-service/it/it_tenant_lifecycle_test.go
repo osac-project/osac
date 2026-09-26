@@ -828,19 +828,22 @@ var _ = Describe("Multi-tenant resource isolation", func() {
 		networkClassClient = privatev1.NewNetworkClassesClient(tool.InternalView().AdminConn())
 
 		// The public VirtualNetworks API no longer accepts a network_class, so creation
-		// falls back to the default NetworkClass. Seed one for the duration of each test.
+		// resolves the deployment singleton. Seed one for the duration of each test.
 		ncResp, err := networkClassClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 			Object: privatev1.NetworkClass_builder{
 				Metadata: privatev1.Metadata_builder{
 					Name: fmt.Sprintf("test-default-nc-%s", uuid.New()),
 				}.Build(),
-				Title:         "Default Network Class",
+				Title:         "Deployment Network Class",
 				FabricManager: new("netris"),
-				IsDefault:     new(true),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		networkClassID := ncResp.GetObject().GetId()
+		waitForNetworkClassReady(ctx, networkClassClient, networkClassID)
+		// Use a fresh context for cleanup: the ctx from this BeforeEach is cancelled by Ginkgo as soon as this
+		// node returns, so reusing it here would make the Delete call fail with "context canceled" and leak the
+		// NetworkClass — which is fatal now that only one NetworkClass may exist per deployment (OSAC-4073).
 		DeferCleanup(func(cleanupCtx context.Context) {
 			deleteAndWaitForComputeInstanceFixtureResource(cleanupCtx,
 				func(deleteCtx context.Context) error {

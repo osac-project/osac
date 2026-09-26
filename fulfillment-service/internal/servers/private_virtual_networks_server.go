@@ -166,7 +166,7 @@ func (s *PrivateVirtualNetworksServer) Delete(ctx context.Context,
 	if err != nil {
 		return
 	}
-	if err = validateNotDefault(getResponse.GetObject().GetMetadata().GetLabels(), "virtual network"); err != nil {
+	if err = validateNotDefault(ctx, getResponse.GetObject().GetMetadata().GetLabels(), "virtual network"); err != nil {
 		return
 	}
 	err = s.generic.Delete(ctx, request, &response)
@@ -289,7 +289,8 @@ func validateImmutableFields(newVN *privatev1.VirtualNetwork, existingVN *privat
 	return nil
 }
 
-// validateNetworkClassReference validates that the referenced NetworkClass exists and is in READY state.
+// validateNetworkClassReference validates that the referenced NetworkClass exists. Readiness and Hub
+// binding are controller-owned status, so asynchronous reconciliation decides when the network is usable.
 func (s *PrivateVirtualNetworksServer) validateNetworkClassReference(ctx context.Context,
 	spec *privatev1.VirtualNetworkSpec) (err error) {
 
@@ -297,23 +298,21 @@ func (s *PrivateVirtualNetworksServer) validateNetworkClassReference(ctx context
 	var networkClass *privatev1.NetworkClass
 	var networkClassKey string
 	if networkClassRef == nil {
-		var defaultNC *privatev1.NetworkClass
-		defaultNC, err = findDefaultNetworkClass(ctx, s.logger, s.networkClassDao)
+		networkClass, err = findSingletonNetworkClass(ctx, s.networkClassDao)
 		if err != nil {
-			s.logger.ErrorContext(ctx, "Failed to query default NetworkClass",
+			s.logger.ErrorContext(ctx, "Failed to query singleton NetworkClass",
 				slog.Any("error", err),
 			)
-			return grpcstatus.Errorf(grpccodes.Internal, "failed to validate network_class")
+			return grpcstatus.Errorf(grpccodes.FailedPrecondition, "failed to resolve the deployment NetworkClass: %v", err)
 		}
-		if defaultNC == nil {
+		if networkClass == nil {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"field 'spec.network_class' is required (no default NetworkClass is configured)")
+				"field 'spec.network_class' is required (no NetworkClass is configured)")
 		}
 		resolvedRef := &privatev1.NetworkClassReference{}
-		resolvedRef.SetId(defaultNC.GetId())
+		resolvedRef.SetId(networkClass.GetId())
 		spec.SetNetworkClass(resolvedRef)
-		networkClassKey = defaultNC.GetId()
-		networkClass = defaultNC
+		networkClassKey = networkClass.GetId()
 	} else {
 		networkClassKey = refKey(networkClassRef)
 		id := networkClassRef.GetId()
@@ -368,14 +367,7 @@ func (s *PrivateVirtualNetworksServer) validateNetworkClassReference(ctx context
 			"network_class '%s' does not exist", networkClassKey)
 	}
 
-	// VN-VAL-05: Check NetworkClass is READY
-	if networkClass.GetStatus().GetState() != privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY {
-		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
-			"network_class '%s' is not in READY state (current state: %s)",
-			networkClassKey, networkClass.GetStatus().GetState().String())
-	}
-
-	// VN-VAL-06: Validate the addressing mode implied by ipv4_cidr/ipv6_cidr against the
+	// VN-VAL-05/06: Validate the addressing mode implied by ipv4_cidr/ipv6_cidr against the
 	// NetworkClass's capabilities.
 	ncCaps := networkClass.GetCapabilities()
 	if ncCaps != nil {

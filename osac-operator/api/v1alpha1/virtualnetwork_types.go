@@ -46,7 +46,7 @@ type VirtualNetworkSpec struct {
 	IPv6CIDR string `json:"ipv6Cidr,omitempty"`
 
 	// NetworkClass is the name of the NetworkClass that defines implementation strategy.
-	// When omitted, the platform default NetworkClass is used.
+	// When omitted, the deployment NetworkClass singleton is used.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="networkClass is immutable"

@@ -31,9 +31,9 @@ option (cleanapi.file).private = true;
 // This is similar to the _storage class_ concept used by Kubernetes for persistent volumes, or the _instance type_
 // concept used by cloud providers for compute resources.
 //
-// Users query available NetworkClasses to discover which network implementation strategies they can choose when
-// creating VirtualNetworks. The `fabric_manager` and `k8s_manager` fields are the routing keys that determine which
-// manager handles provisioning for VirtualNetwork resources that reference this class.
+// A deployment has exactly one active NetworkClass. The `fabric_manager` and `k8s_manager` fields are the routing keys
+// that determine which managers handle provisioning for networking resources in the deployment. Tenants do not select
+// a NetworkClass.
 //
 // buf:lint:ignore OSAC_OBJECT_SHAPE
 message NetworkClass {
@@ -67,9 +67,9 @@ message NetworkClass {
   // Current operational status of the network class.
   NetworkClassStatus status = 8;
 
-  // Whether this NetworkClass is the default. Only one NetworkClass can be the default at a time.
-  // When a VirtualNetwork is created without specifying network_class, the default NetworkClass is used.
-  optional bool is_default = 9;
+  // Field 9 previously held the removed is_default flag. It must not be reused.
+  reserved 9;
+  reserved "is_default";
 
   // Identifier of the fabric manager that handles physical network operations for this class. The fabric manager
   // controls all fabric-level operations: virtual network segments, security groups, external IPs, and NAT gateways.
@@ -115,7 +115,7 @@ message NetworkClassSpec {
 
 // Default networking configuration used during tenant onboarding.
 //
-// When a tenant is created, the system reads these defaults from the NetworkClass and auto-creates
+// When a tenant is reconciled, the tenant controller reads these defaults from the NetworkClass and asynchronously creates
 // a default VirtualNetwork, IPv4 Subnet, IPv6 Subnet, SecurityGroup, and optionally a NATGateway
 // for the tenant. All fields are optional — defaults can be partially populated.
 message NetworkDefaults {

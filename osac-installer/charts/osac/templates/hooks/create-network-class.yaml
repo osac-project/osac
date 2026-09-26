@@ -21,7 +21,6 @@
 {{- $identity := $fabricManager | default $k8sManager -}}
 {{- $body := dict
       "title" (required "networkClass.title is required when networkClass.enabled is true" $title)
-      "is_default" $networkClass.isDefault
       "spec" (dict "defaults" (dict
         "virtual_network_ipv4_cidr" $networkClass.defaults.virtualNetworkIPv4CIDR
         "subnet_ipv4_cidr" $networkClass.defaults.subnetIPv4CIDR
@@ -75,10 +74,6 @@ spec:
             # fabric_manager/k8s_manager when not set explicitly (see
             # PrivateNetworkClassesServer.Create), so POSTing the same body again
             # on every install/upgrade hits a name collision on the second run.
-            # That collision surfaces as a misleading FailedPrecondition/HTTP 400
-            # ("concurrent default NetworkClass change detected") rather than a
-            # plain 409, since the server's is_default default-swap logic assumes
-            # any AlreadyExists there is a concurrent race, not a repeat create.
             # Check for an existing NetworkClass for this identity first instead
             # of relying on the create call's error code, and PATCH it if found so
             # values.yaml changes are applied on upgrade instead of silently ignored.

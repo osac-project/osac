@@ -469,7 +469,6 @@ networkClass:
   description: ""
   k8sManager: ""
   fabricManager: ""
-  isDefault: true
   defaults:
     # Tenant-onboarding defaults used when this expert block is enabled.
     virtualNetworkIPv4CIDR: "10.200.0.0/16"

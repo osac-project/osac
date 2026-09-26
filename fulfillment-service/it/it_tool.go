@@ -1446,8 +1446,9 @@ func (t *Tool) registerHub(ctx context.Context) error {
 	hubsClient := privatev1.NewHubsClient(t.internalView.adminConn)
 
 	// Wait for the API to be ready:
+	var hubsResponse *privatev1.HubsListResponse
 	for range 30 {
-		_, err = hubsClient.List(ctx, privatev1.HubsListRequest_builder{}.Build())
+		hubsResponse, err = hubsClient.List(ctx, privatev1.HubsListRequest_builder{}.Build())
 		if err == nil {
 			break
 		}
@@ -1455,6 +1456,31 @@ func (t *Tool) registerHub(ctx context.Context) error {
 	}
 	if err != nil {
 		return fmt.Errorf("API not ready after waiting: %w", err)
+	}
+
+	// The installer registers the in-cluster hub as "hub" before the
+	// integration suite starts. Reuse that hub instead of creating a second
+	// active hub: NetworkClass reconciliation requires exactly one active hub
+	// to resolve the canonical hub reference.
+	activeHubs := make([]*privatev1.Hub, 0, len(hubsResponse.GetItems()))
+	for _, hub := range hubsResponse.GetItems() {
+		if hub.GetMetadata().GetDeletionTimestamp() == nil {
+			activeHubs = append(activeHubs, hub)
+		}
+	}
+	switch len(activeHubs) {
+	case 1:
+		hubId = activeHubs[0].GetId()
+		if namespace := activeHubs[0].GetSpec().GetNamespace(); namespace != "" {
+			hubNamespace = namespace
+		}
+		t.logger.InfoContext(ctx, "Reusing existing hub", "hub_id", hubId, "namespace", hubNamespace)
+		return nil
+	case 0:
+		// Continue below and create the local hub for standalone integration
+		// environments that do not provision one through the installer.
+	default:
+		return fmt.Errorf("cannot register integration hub: found %d active hubs", len(activeHubs))
 	}
 
 	// Create the hub:
@@ -1732,8 +1758,8 @@ func (t *Tool) ProjectDir() string {
 const kubectlCmd = "kubectl"
 
 // Name and namespace of the hub:
-const hubId = "local"
-const hubNamespace = "osac"
+var hubId = "local"
+var hubNamespace = "osac"
 
 // userAgent is the user agent string for the integration test tool.
 const userAgent = "fulfillment-it-tool"

@@ -77,7 +77,7 @@ spec:
               networkClass:
                 description: |-
                   NetworkClass is the name of the NetworkClass that defines implementation strategy.
-                  When omitted, the platform default NetworkClass is used.
+                  When omitted, the deployment NetworkClass singleton is used.
                 type: string
                 x-kubernetes-validations:
                 - message: networkClass is immutable

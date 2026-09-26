@@ -1736,11 +1736,6 @@
           "description": "fabricManager name to set on the NetworkClass (must match a manager already registered via operator.networkManagers.fabricManagers)",
           "default": ""
         },
-        "isDefault": {
-          "type": "boolean",
-          "description": "Mark this as the default NetworkClass used when a VirtualNetwork doesn't specify one",
-          "default": true
-        },
         "defaults": {
           "type": "object",
           "description": "Tenant-onboarding defaults. Required for this NetworkClass to auto-create a default VirtualNetwork/Subnet/SecurityGroup for new tenants.",

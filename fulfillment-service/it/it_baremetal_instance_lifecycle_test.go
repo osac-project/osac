@@ -284,6 +284,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 		})
+		waitForNetworkClassReady(ctx, networkClassesClient, networkClassId)
 
 		virtualNetworkId := fmt.Sprintf("test-vnet-%s", uuid.New())
 		_, err = virtualNetworksClient.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{

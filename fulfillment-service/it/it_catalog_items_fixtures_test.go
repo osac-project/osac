@@ -209,6 +209,7 @@ func createCatalogItemNetworkClassFixture(ctx context.Context) string {
 		_, err := classes.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{Id: classID}.Build())
 		return err
 	}, nil)
+	waitForNetworkClassReady(ctx, classes, classID)
 	return classID
 }
 

@@ -892,18 +892,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		return nil, fmt.Errorf("failed to create public tenants server: %w", err)
 	}
 	publicv1.RegisterTenantsServer(registrar, publicTenantsServer)
-
-	// Create the default networking provisioner:
-	deps.Logger.InfoContext(ctx, "Creating default networking provisioner")
-	defaultNetworkingProvisioner, err := servers.NewDefaultNetworkingProvisioner().
-		SetLogger(deps.Logger).
-		SetTenancyLogic(deps.TenancyLogic).
-		SetMetricsRegisterer(deps.MetricsRegisterer).
-		Build()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create default networking provisioner: %w", err)
-	}
-
 	// Create the private tenants server:
 	deps.Logger.InfoContext(ctx, "Creating private tenants server")
 	privateTenantsServer, err := servers.NewPrivateTenantsServer().
@@ -911,7 +899,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		SetAttributionLogic(deps.PrivateAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
-		SetDefaultNetworkingProvisioner(defaultNetworkingProvisioner).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create private tenants server: %w", err)
@@ -965,7 +952,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		SetAttributionLogic(deps.PrivateAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
-		SetDefaultNetworkingProvisioner(defaultNetworkingProvisioner).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create private projects server: %w", err)

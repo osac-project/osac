@@ -28,6 +28,8 @@ caIssuer:
   enabled: true
 keycloak:
   enabled: true
+  route:
+    publicIngress: true
   # Optional local credentials override; keep credentials out of Git:
   # adminUsername: ${KC_ADMIN_USER}
   # adminPassword: ${KC_ADMIN_PASSWORD}

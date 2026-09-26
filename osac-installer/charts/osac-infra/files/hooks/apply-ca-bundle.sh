@@ -103,8 +103,8 @@ if [[ "${USE_DEFAULT_CAS}" == "true" ]]; then
   if ! INGRESS_CA_DATA=$(oc_run get secret router-ca \
     -n openshift-ingress-operator \
     -o jsonpath='{.data.tls\.crt}' 2>&1); then
-    if echo "${INGRESS_CA_DATA}" | grep -qi "not found"; then
-      echo "  router-ca secret not found — skipping ingress CA (non-OpenShift cluster)"
+    if echo "${INGRESS_CA_DATA}" | grep -qiE "not found|forbidden"; then
+      echo "  router-ca secret not accessible — skipping ingress CA (non-OpenShift cluster or missing RBAC)"
       INGRESS_CA_DATA=""
     else
       echo "ERROR: failed to read router-ca secret: ${INGRESS_CA_DATA}" >&2

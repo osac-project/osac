@@ -73,6 +73,7 @@ rules:
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["create"]
+{{- if and .Values.keycloak.enabled .Values.keycloak.route.publicIngress }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -110,6 +111,7 @@ subjects:
   - kind: ServiceAccount
     name: osac-infra-apply-ca-bundle
     namespace: {{ .Release.Namespace }}
+{{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -314,6 +316,7 @@ rules:
     resources: ["secrets"]
     verbs: ["get", "delete"]
     resourceNames: ["ingress-ca"]
+{{- if and .Values.keycloak.enabled .Values.keycloak.route.publicIngress }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -351,6 +354,7 @@ subjects:
   - kind: ServiceAccount
     name: osac-infra-delete-ca-bundle
     namespace: {{ .Release.Namespace }}
+{{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

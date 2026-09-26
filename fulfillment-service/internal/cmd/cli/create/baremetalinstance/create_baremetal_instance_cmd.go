@@ -184,6 +184,9 @@ func (c *runnerContext) run(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("failed to create bare metal instance: %w", err)
 	}
 
+	for _, warning := range response.GetWarnings() {
+		console.Errorf(ctx, "Warning: %s\n", warning)
+	}
 	console.Infof(ctx, "Created bare metal instance '%s'.\n", response.GetObject().GetId())
 	return nil
 }

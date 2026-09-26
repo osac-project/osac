@@ -86,7 +86,7 @@ def test_baremetal_instance_inventory_exhausted(
     try:
         # Kick off all claim BMIs first so provisioning can proceed in parallel.
         for idx in range(1, available_count + 1):
-            bmi_id = cli.create_baremetal_instance(
+            bmi_id, _ = cli.create_baremetal_instance(
                 name=f"e2e-bmi-inv-{test_run_id}-{idx}", catalog_item=catalog_item, ssh_key=ssh_public_key
             )
             bmi_ids.append(bmi_id)
@@ -112,7 +112,7 @@ def test_baremetal_instance_inventory_exhausted(
         )
 
         overflow_idx = available_count + 1
-        overflow_id: str = cli.create_baremetal_instance(
+        overflow_id, _ = cli.create_baremetal_instance(
             name=f"e2e-bmi-inv-{test_run_id}-{overflow_idx}", catalog_item=catalog_item, ssh_key=ssh_public_key
         )
         bmi_ids.append(overflow_id)

@@ -100,7 +100,7 @@ def test_baremetal_instance_lifecycle(
     disk_images: dict[str, Any] = jwt_grpc_tenant1.call(service=f"{PUBLIC_API}.DiskImages/List")
     assert bmi_disk_image in {item["metadata"]["name"] for item in disk_images.get("items", [])}
 
-    bmi_id: str = jwt_cli_user.create_baremetal_instance(
+    bmi_id, _ = jwt_cli_user.create_baremetal_instance(
         name=name, catalog_item=catalog_item, ssh_key=ssh_public_key, disk_image=bmi_disk_image
     )
     bmh_ns = ""
@@ -217,22 +217,11 @@ def test_baremetal_instance_restart(
         private_grpc.update_disk_image_lifecycle(
             disk_image_id=deprecated_disk_image_id, lifecycle="DISK_IMAGE_LIFECYCLE_DEPRECATED", api=PRIVATE_API
         )
-        response = jwt_grpc_tenant1.call(
-            service=f"{PUBLIC_API}.BareMetalInstances/Create",
-            data={
-                "object": {
-                    "metadata": {"name": name},
-                    "spec": {
-                        "catalog_item": {"id": catalog_item},
-                        "disk_image": {"name": deprecated_disk_image_name},
-                        "ssh_public_key": ssh_public_key,
-                    },
-                }
-            },
+        bmi_id, warnings = jwt_cli_user.create_baremetal_instance(
+            name=name, catalog_item=catalog_item, disk_image=deprecated_disk_image_name, ssh_key=ssh_public_key
         )
-        bmi_id = response["object"]["id"]
-        assert any("deprecated" in warning.lower() for warning in response.get("warnings", [])), (
-            f"Expected a deprecated DiskImage warning, got: {response.get('warnings', [])}"
+        assert any("deprecated" in warning.lower() for warning in warnings), (
+            f"Expected a deprecated DiskImage warning, got: {warnings}"
         )
         assert bmi_id in jwt_grpc_tenant1.list_baremetal_instance_ids()
 

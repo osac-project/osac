@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import subprocess
 import tempfile
 from typing import Any
 
@@ -289,7 +290,7 @@ class OsacCLI:
         user_data: str | None = None,
         network_attachments: list[str] | None = None,
         external_ip_attachment: bool = False,
-    ) -> str:
+    ) -> tuple[str, list[str]]:
         args: list[str] = ["create", "baremetalinstance", "--name", name, "--catalog-item", catalog_item]
         if ssh_key is not None:
             args.extend(["--ssh-key", ssh_key])
@@ -301,7 +302,13 @@ class OsacCLI:
             args.extend(["--external-ip-attachment"])
         for na in network_attachments or []:
             args.extend(["--network-attachment", na])
-        return self._parse_uuid(self._run(*args))
+        result = subprocess.run(
+            [self.binary, "--config", self._config_dir, *args], capture_output=True, text=True, timeout=300, check=True
+        )
+        warnings = [
+            line.removeprefix("Warning: ") for line in result.stderr.splitlines() if line.startswith("Warning: ")
+        ]
+        return self._parse_uuid(result.stdout.strip()), warnings
 
     def describe_baremetal_instance(self, *, name: str) -> str:
         return self._run("describe", "baremetalinstance", name)

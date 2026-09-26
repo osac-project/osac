@@ -186,7 +186,7 @@ class TestBmaasNetworking:
             bmi_name = f"{name_suffix}-{net_test_run_id}"
             is_auto_eip = i == 2
             catalog = auto_eip_catalog_item_name if is_auto_eip else catalog_item_name
-            bmi_id = cli.create_baremetal_instance(
+            bmi_id, _ = cli.create_baremetal_instance(
                 name=bmi_name,
                 catalog_item=catalog,
                 ssh_key=net_ssh_public_key,

@@ -60,10 +60,17 @@ server run, use `ginkgo run internal/servers`.
 
 ### Integration tests
 
+See the [fulfillment-service test tiers and coverage notes](../docs/INTEGRATION-TESTING.md#fulfillment-service).
+
 The installer test target builds, loads, and deploys the current service image.
 It reuses the existing cluster and database. For a full suite run, use a fresh
 environment unless the user agrees to reuse the database. See `README.md` for
 prerequisites and host entries.
+
+The `it/` suite includes CLI workflows that exercise only Fulfillment Service
+APIs. Its harness builds the CLI from this checkout and runs it against the
+deployed service. Keep cross-component provisioning journeys under
+`tests/e2e/`.
 
 To prepare a fresh environment, recreate the dedicated `osac-dev` Kind
 cluster. Collect useful diagnostics before deleting it.

@@ -153,9 +153,11 @@ func parseSecretType(value string) (publicv1.SecretType, error) {
 		return publicv1.SecretType_SECRET_TYPE_USER_DATA, nil
 	case "value":
 		return publicv1.SecretType_SECRET_TYPE_VALUE, nil
+	case "ssh-public-key":
+		return publicv1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY, nil
 	default:
 		return publicv1.SecretType_SECRET_TYPE_UNSPECIFIED, fmt.Errorf(
-			"invalid secret type %q: must be one of opaque, pull-secret, kubeconfig, user-data, or value",
+			"invalid secret type %q: must be one of opaque, pull-secret, kubeconfig, user-data, value, or ssh-public-key",
 			value,
 		)
 	}
@@ -307,5 +309,6 @@ _KEY=VALUE_ - Label to set on the secret. Can be specified multiple times.
 
 const typeFlagHelp = `
 _TYPE_ - Secret type. One of {{ bt }}opaque{{ bt }}, {{ bt }}pull-secret{{ bt }},
-{{ bt }}kubeconfig{{ bt }}, {{ bt }}user-data{{ bt }}, or {{ bt }}value{{ bt }}.
+{{ bt }}kubeconfig{{ bt }}, {{ bt }}user-data{{ bt }}, {{ bt }}value{{ bt }}, or
+{{ bt }}ssh-public-key{{ bt }}.
 `

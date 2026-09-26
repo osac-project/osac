@@ -985,6 +985,62 @@ var _ = Describe("Private secrets server", func() {
 				Expect(getResponse.GetObject().GetBackend()).To(Equal(
 					privatev1.SecretBackend_SECRET_BACKEND_HUB))
 			})
+
+			It("Rejects invalid SSH public key data fetched from the hub", func() {
+				created, err := server.Create(ctx, privatev1.SecretsCreateRequest_builder{
+					Object: privatev1.Secret_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: "hub-ssh-key-invalid",
+						}.Build(),
+						Type:    privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+						Backend: privatev1.SecretBackend_SECRET_BACKEND_HUB,
+						Coordinates: map[string]string{
+							"hub_id":      "hub-1",
+							"namespace":   "default",
+							"secret_name": "my-ssh-key",
+						},
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+
+				mockHubSecretFetcher.EXPECT().
+					Fetch(gomock.Any(), map[string]string{"hub_id": "hub-1", "namespace": "default", "secret_name": "my-ssh-key"}).
+					Return(map[string][]byte{"public_key": []byte("not-an-ssh-key")}, nil)
+
+				_, err = server.Get(ctx, privatev1.SecretsGetRequest_builder{
+					Id: created.GetObject().GetId(),
+				}.Build())
+				Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+			})
+
+			It("Returns valid SSH public key data fetched from the hub", func() {
+				created, err := server.Create(ctx, privatev1.SecretsCreateRequest_builder{
+					Object: privatev1.Secret_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: "hub-ssh-key-valid",
+						}.Build(),
+						Type:    privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+						Backend: privatev1.SecretBackend_SECRET_BACKEND_HUB,
+						Coordinates: map[string]string{
+							"hub_id":      "hub-1",
+							"namespace":   "default",
+							"secret_name": "my-ssh-key",
+						},
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+
+				publicKey := []byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG8K1ZuSC7tmzxD5LJJXwkCfStVEjzXWYCFhJaLBxWAn test@example.com")
+				mockHubSecretFetcher.EXPECT().
+					Fetch(gomock.Any(), map[string]string{"hub_id": "hub-1", "namespace": "default", "secret_name": "my-ssh-key"}).
+					Return(map[string][]byte{"public_key": publicKey}, nil)
+
+				getResponse, err := server.Get(ctx, privatev1.SecretsGetRequest_builder{
+					Id: created.GetObject().GetId(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(getResponse.GetObject().GetData()).To(HaveKeyWithValue("public_key", publicKey))
+			})
 		})
 
 		Describe("Update", func() {

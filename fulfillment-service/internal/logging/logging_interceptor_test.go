@@ -29,6 +29,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	grpcstatus "google.golang.org/grpc/status"
 
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	testsv1 "github.com/osac-project/osac/proto/gen/osac/tests/v1"
 )
 
@@ -353,6 +354,35 @@ var _ = Describe("Interceptor", func() {
 			messages := Parse(buffer)
 			Expect(messages).To(BeEmpty())
 		})
+	})
+
+	It("Redacts Secret data from body logs", func() {
+		redactedInterceptor, err := NewInterceptor().
+			SetLogger(logger).
+			SetBodies(true).
+			SetRedact(true).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		request := privatev1.SecretsCreateRequest_builder{
+			Object: privatev1.Secret_builder{
+				Type: privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+				Data: map[string][]byte{"public_key": []byte("ssh-ed25519 AAAAsecret")},
+			}.Build(),
+		}.Build()
+
+		field, ok := redactedInterceptor.dumpMessage(ctx, "request", request)
+		Expect(ok).To(BeTrue())
+		logger.LogAttrs(ctx, slog.LevelDebug, "body", field.(slog.Attr))
+
+		messages := Parse(buffer)
+		Expect(messages).To(HaveLen(1))
+		body := messages[0]["request"].(map[string]any)
+		object := body["object"].(map[string]any)
+		data := object["data"].(map[string]any)
+		Expect(data).To(HaveKeyWithValue("public_key", "Kioq"))
+		Expect(buffer.String()).ToNot(ContainSubstring("ssh-ed25519 AAAAsecret"))
+		Expect(string(request.GetObject().GetData()["public_key"])).To(Equal("ssh-ed25519 AAAAsecret"))
 	})
 })
 

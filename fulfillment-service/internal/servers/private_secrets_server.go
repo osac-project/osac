@@ -174,6 +174,11 @@ func (s *PrivateSecretsServer) Get(ctx context.Context,
 			err = fetchErr
 			return
 		}
+		if obj.GetType() == privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY {
+			if err = validateSecretData(obj.GetType(), data); err != nil {
+				return
+			}
+		}
 		obj.SetData(data)
 	}
 
@@ -484,12 +489,20 @@ func validateSecretData(secretType privatev1.SecretType, data map[string][]byte)
 		key = "userdata"
 	case privatev1.SecretType_SECRET_TYPE_VALUE:
 		key = "value"
+	case privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY:
+		key = "public_key"
 	default:
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'type' has unknown value %d", secretType)
 	}
 	if len(data[key]) == 0 {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"secret type %s requires a non-empty data[%q] entry", secretType, key)
+	}
+	if secretType == privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY {
+		if err := validateOpenSSHPublicKey(string(data[key])); err != nil {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"secret type %s has invalid data[%q]: %s", secretType, key, err)
+		}
 	}
 	return nil
 }

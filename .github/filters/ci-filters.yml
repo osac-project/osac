@@ -308,7 +308,7 @@ helm-osac-installer:
 
 # Exact copy of check-generated-code.yaml's own `proto` filter.
 proto-check:
-  - '{proto/**,fulfillment-service/dev/**,fulfillment-service/dev.py,fulfillment-service/cmd/buf-plugin-osac-lint/**}'
+  - '{proto/**,fulfillment-service/dev/**,fulfillment-service/dev.py,fulfillment-service/cmd/buf-plugin-osac-lint/**,osac-ui/libs/types/buf.gen.yaml,osac-ui/libs/types/src/**}'
 
 # Exact copy of check-pull-request.yaml's own `service` filter.
 fulfillment-service-checks:

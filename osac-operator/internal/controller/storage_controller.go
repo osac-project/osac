@@ -407,33 +407,23 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1
 		}
 		condMsg = r.appendMissingTierWarnings(instance, tierDefinitions, scResult.resolved, scResult.ambiguousTiers, condMsg)
 
-		// When tier definitions are available and some tiers are still
-		// missing their StorageClass, keep ClusterStorageReady=False so
-		// provisioning is reattempted for the missing tier(s) after
-		// Stage 3 (CaaS update) completes. The retry is deferred (no
-		// early return) so that handleCaaSUpdate still runs — an early
-		// return here would block CaaS ClusterOrder lifecycle
-		// management (finalizer addition, provisioning).
+		// Detect tiers that still lack a StorageClass. The hasMissingTiers
+		// flag drives the Stage 4 retry (handleClusterStorageProvisioning)
+		// without setting ClusterStorageReady=False. Keeping the condition
+		// True is critical: handleCaaSUpdate (Stage 3) and its callers skip
+		// ClusterOrders whose Tenant has ClusterStorageReady=False, which
+		// would block finalizer removal on deleting ClusterOrders and cause
+		// them to stick in the Deleting phase (OSAC-4855).
 		missing := missingTierNames(tierDefinitions, scResult.resolved, scResult.ambiguousTiers)
 		hasMissingTiers = len(missing) > 0 && len(tierDefinitions) > 0
-		if hasMissingTiers {
-			instance.SetStatusCondition(v1alpha1.TenantConditionClusterStorageReady,
-				metav1.ConditionFalse,
-				v1alpha1.TenantReasonNotFound,
-				condMsg)
-			instance.Status.StorageClasses = scResult.resolved
-			instance.Status.ClusterStorage = []v1alpha1.ClusterStorageStatus{
-				{ClusterName: clusterName, Ready: false, Reason: v1alpha1.TenantReasonNotFound},
-			}
-		} else {
-			instance.SetStatusCondition(v1alpha1.TenantConditionClusterStorageReady,
-				metav1.ConditionTrue,
-				v1alpha1.TenantReasonFound,
-				condMsg)
-			instance.Status.StorageClasses = scResult.resolved
-			instance.Status.ClusterStorage = []v1alpha1.ClusterStorageStatus{
-				{ClusterName: clusterName, Ready: true, Reason: v1alpha1.TenantReasonFound},
-			}
+
+		instance.SetStatusCondition(v1alpha1.TenantConditionClusterStorageReady,
+			metav1.ConditionTrue,
+			v1alpha1.TenantReasonFound,
+			condMsg)
+		instance.Status.StorageClasses = scResult.resolved
+		instance.Status.ClusterStorage = []v1alpha1.ClusterStorageStatus{
+			{ClusterName: clusterName, Ready: true, Reason: v1alpha1.TenantReasonFound},
 		}
 	} else {
 		// When no provisioning provider is configured, resolve StorageClasses

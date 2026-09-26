@@ -1940,8 +1940,8 @@ var _ = Describe("Storage Controller", func() {
 
 			clusterCond := tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady)
 			Expect(clusterCond).NotTo(BeNil())
-			Expect(clusterCond.Status).To(Equal(metav1.ConditionFalse),
-				"should not be True when some tiers are missing")
+			Expect(clusterCond.Status).To(Equal(metav1.ConditionTrue),
+				"should stay True so CaaS ClusterOrder lifecycle (including finalizer removal) is never blocked (OSAC-4855)")
 			Expect(clusterCond.Message).To(ContainSubstring(`tier "block" has no StorageClass`))
 
 			// Resolved tier should still be present in status
@@ -2042,7 +2042,7 @@ var _ = Describe("Storage Controller", func() {
 			Expect(triggers).To(BeZero())
 			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
 			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady).Status).To(Equal(metav1.ConditionTrue))
-			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady).Status).To(Equal(metav1.ConditionFalse))
+			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady).Status).To(Equal(metav1.ConditionTrue))
 
 			// Advance the stored job age without sleeping through the backoff.
 			tenant.Status.ClusterStorageJobs[0].Timestamp = metav1.NewTime(time.Now().Add(-provisioning.BackoffMaxDelay))
@@ -2056,7 +2056,7 @@ var _ = Describe("Storage Controller", func() {
 			Expect(tenant.Status.ClusterStorageJobs[0].State).To(Equal(v1alpha1.JobStateFailed))
 			Expect(tenant.Status.ClusterStorageJobs[1].JobID).To(Equal("replacement-cluster-storage"))
 			Expect(tenant.Status.StorageClasses).To(HaveLen(1))
-			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady).Status).To(Equal(metav1.ConditionFalse))
+			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady).Status).To(Equal(metav1.ConditionTrue))
 
 			// Poll the replacement instead of launching another job.
 			result, err = r.Reconcile(ctx, storageReconcileRequest(nn))

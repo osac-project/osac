@@ -1,6 +1,9 @@
+export type TimestampFormat = 'Full' | 'Date' | 'Time';
+
 export interface TimestampProps {
   value?: ProtoTimestamp | string | Date | null;
   fallback?: string;
+  format?: TimestampFormat;
 }
 
 type ProtoTimestamp = {
@@ -15,6 +18,19 @@ const DISPLAY_FORMAT = new Intl.DateTimeFormat('en-US', {
   hour: '2-digit',
   minute: '2-digit',
   hour12: false,
+});
+
+const DATE_FORMAT = new Intl.DateTimeFormat('en-US', {
+  month: 'short',
+  day: 'numeric',
+  year: 'numeric',
+});
+
+const TIME_FORMAT = new Intl.DateTimeFormat('en-US', {
+  hour: 'numeric',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: true,
 });
 
 const isProtoTimestamp = (value: unknown): value is ProtoTimestamp => {
@@ -47,7 +63,18 @@ const toDate = (value: ProtoTimestamp | string | Date): Date | undefined => {
   return undefined;
 };
 
-export const Timestamp = ({ value, fallback = '—' }: TimestampProps) => {
+const getTimestampValue = (date: Date, format?: TimestampFormat) => {
+  switch (format) {
+    case 'Date':
+      return DATE_FORMAT.format(date);
+    case 'Time':
+      return TIME_FORMAT.format(date);
+    default:
+      return DISPLAY_FORMAT.format(date);
+  }
+};
+
+export const Timestamp = ({ value, format, fallback = '—' }: TimestampProps) => {
   if (!value) {
     return <>{fallback}</>;
   }
@@ -57,5 +84,5 @@ export const Timestamp = ({ value, fallback = '—' }: TimestampProps) => {
     return <>{fallback}</>;
   }
 
-  return <time dateTime={date.toISOString()}>{DISPLAY_FORMAT.format(date)}</time>;
+  return <time dateTime={date.toISOString()}>{getTimestampValue(date, format)}</time>;
 };

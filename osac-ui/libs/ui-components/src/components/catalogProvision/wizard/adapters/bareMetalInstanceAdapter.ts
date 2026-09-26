@@ -32,7 +32,7 @@ export const useBareMetalInstanceAdapter = (): CatalogProvisionAdapter<
       useCatalogItems: () => {
         const query = useBareMetalInstanceCatalogItems();
         return {
-          data: query.data ?? [],
+          data: query.data?.items ?? [],
           isPending: query.isPending,
           isError: query.isError,
           refetch: () => {

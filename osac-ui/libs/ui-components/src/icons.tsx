@@ -1,25 +1,35 @@
-import CloudIcon from '@patternfly/react-icons/dist/esm/icons/cloud-icon';
-import ServerIcon from '@patternfly/react-icons/dist/esm/icons/server-icon';
-import VirtualMachineIcon from '@patternfly/react-icons/dist/esm/icons/virtual-machine-icon';
+import { Icon } from '@patternfly/react-core';
+import { RhUiClusterIcon } from '@patternfly/react-icons/dist/esm/icons/rh-ui-cluster-icon';
+import { RhUiServerStackIcon } from '@patternfly/react-icons/dist/esm/icons/rh-ui-server-stack-icon';
+import { RhUiVirtualServerIcon } from '@patternfly/react-icons/dist/esm/icons/rh-ui-virtual-server-icon';
+
+import './icons.css';
 
 interface CatalogItemIconProps {
   kind:
     | 'osac.public.v1.ClusterCatalogItem'
     | 'osac.public.v1.BareMetalInstanceCatalogItem'
     | 'osac.public.v1.ComputeInstanceCatalogItem';
+  isActive?: boolean;
 }
 
 export const CatalogItemIcon = ({ kind }: CatalogItemIconProps) => {
-  let Icon = VirtualMachineIcon;
+  let ItemIcon;
   switch (kind) {
     case 'osac.public.v1.ClusterCatalogItem':
-      Icon = CloudIcon;
+      ItemIcon = RhUiClusterIcon;
       break;
     case 'osac.public.v1.BareMetalInstanceCatalogItem':
-      Icon = ServerIcon;
+      ItemIcon = RhUiServerStackIcon;
       break;
     default:
-      Icon = VirtualMachineIcon;
+      ItemIcon = RhUiVirtualServerIcon;
   }
-  return <Icon aria-hidden className="pf-v6-u-font-size-lg" />;
+  return (
+    <span className="catalog-item-icon" aria-hidden>
+      <Icon size="xl">
+        <ItemIcon />
+      </Icon>
+    </span>
+  );
 };

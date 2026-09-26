@@ -32,7 +32,7 @@ export const useClusterAdapter = (): CatalogProvisionAdapter<
       useCatalogItems: () => {
         const query = useClusterCatalogItems();
         return {
-          data: query.data ?? [],
+          data: query.data?.items ?? [],
           isPending: query.isPending,
           isError: query.isError,
           refetch: () => {

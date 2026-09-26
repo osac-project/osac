@@ -95,3 +95,10 @@ export type ListParams = {
   offset?: number;
   order?: string;
 };
+
+/** Normalized list response from paginated list RPCs (`items`, `size`, `total`). */
+export type ApiListResult<T> = {
+  items: T[];
+  size: number;
+  total: number;
+};

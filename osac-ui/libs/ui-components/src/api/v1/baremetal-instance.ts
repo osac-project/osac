@@ -3,6 +3,7 @@ import { keepPreviousData, useMutation } from '@tanstack/react-query';
 
 import {
   type BareMetalInstance,
+  type BareMetalInstanceCatalogItem,
   BareMetalInstanceCatalogItems,
   BareMetalInstanceRunStrategy,
   BareMetalInstanceSchema,
@@ -11,7 +12,7 @@ import {
 import { useProjectFilterQuery } from '@osac/ui-components/hooks/use-project-filter-query';
 
 import { useApiFetch } from '../api-context';
-import { apiQueryKey } from '../types';
+import { type ApiListResult, type ListParams, apiQueryKey } from '../types';
 import { buildUpdateMaskPaths } from './update-mask';
 import { type ApiQueryClient, useApiQuery, useApiQueryClient } from '../use-api-query';
 
@@ -36,12 +37,20 @@ export const useBareMetalInstance = (id: string) => {
   });
 };
 
-export const useBareMetalInstanceCatalogItems = (enabled = true) => {
+export const useBareMetalInstanceCatalogItems = (params: ListParams = {}, enabled = true) => {
   const client = useApiFetch(BareMetalInstanceCatalogItems);
-  return useApiQuery({
-    queryKey: apiQueryKey('v1/baremetal_instance_catalog_items'),
-    queryFn: () => client.list({}),
-    select: (data) => data.items,
+  return useApiQuery<
+    Awaited<ReturnType<typeof client.list>>,
+    ApiListResult<BareMetalInstanceCatalogItem>
+  >({
+    queryKey: apiQueryKey('v1/baremetal_instance_catalog_items', undefined, params),
+    queryFn: () => client.list(params),
+    placeholderData: keepPreviousData,
+    select: (data) => ({
+      items: data.items,
+      size: data.size,
+      total: data.total,
+    }),
     enabled,
   });
 };

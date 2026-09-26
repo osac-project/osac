@@ -38,7 +38,7 @@ export const useComputeInstanceAdapter = (): CatalogProvisionAdapter<
       useCatalogItems: () => {
         const query = useComputeInstanceCatalogItems();
         return {
-          data: query.data ?? [],
+          data: query.data?.items ?? [],
           isPending: query.isPending,
           isError: query.isError,
           refetch: () => {

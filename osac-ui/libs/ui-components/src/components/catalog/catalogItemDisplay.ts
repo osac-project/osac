@@ -18,7 +18,6 @@ import {
   normalizeCatalogFieldPath,
   resolvedFieldDefault,
 } from '../catalogProvision/catalogFieldDefinition';
-import { findCatalogFieldDefinition } from '../catalogProvision/wizard/catalogOverlay';
 
 export const isCatalogItemKind = (value: string | undefined): value is CatalogItemKind =>
   value === 'vm' || value === 'cluster' || value === 'bm';
@@ -43,19 +42,6 @@ export const catalogItemTypeBadgeLabel = (kind: CatalogItem, t: TFunction): stri
   }
 };
 
-export const catalogFieldDefault = (item: CatalogItem, path: string): unknown => {
-  const def = findCatalogFieldDefinition(path, catalogItemFieldDefinitions(item));
-  return def ? resolvedFieldDefault(def) : undefined;
-};
-
-export const catalogItemSubtitle = (item: CatalogItem): string => {
-  const description = item.description?.trim();
-  if (description) {
-    return description.length <= 120 ? description : `${description.slice(0, 119)}…`;
-  }
-  return item.metadata?.name ?? item.id;
-};
-
 export const catalogItemMetadataLabelEntries = (
   item: CatalogItem,
 ): Array<{ key: string; value: string }> => {
@@ -67,13 +53,6 @@ export const catalogItemMetadataLabelEntries = (
     .map(([key, value]) => ({ key, value: value.trim() }))
     .filter(({ value }) => value.length > 0)
     .sort((a, b) => a.key.localeCompare(b.key));
-};
-
-export const catalogFieldDefinitionForPath = (
-  item: CatalogItem,
-  path: string,
-): CatalogFieldDefinition | undefined => {
-  return findCatalogFieldDefinition(path, catalogItemFieldDefinitions(item));
 };
 
 const FALLBACK_RESOURCE_LABELS: Record<CatalogItemResourceFieldPath, string> = {
@@ -109,7 +88,7 @@ export const catalogItemConfigurationFieldDefinitions = (
   );
 };
 
-const formatCatalogResourcePart = (def: CatalogFieldDefinition): string | null => {
+export const formatCatalogResourcePart = (def: CatalogFieldDefinition): string | null => {
   if (!isCatalogCardResourceFieldPath(def.path)) {
     return null;
   }
@@ -152,7 +131,6 @@ export const searchableCatalogItemText = (item: CatalogItem): string => {
     .join(' ');
 
   return [
-    item.title,
     item.description,
     item.metadata?.name,
     fieldText,
@@ -171,6 +149,13 @@ export const filterCatalogItemsBySearch = (items: CatalogItem[], search: string)
   return items.filter((item) => searchableCatalogItemText(item).includes(searchTerm));
 };
 
+export type CatalogPublishedFilter = 'published' | 'unpublished';
+
+export const isCatalogPublishedFilter = (value: string): value is CatalogPublishedFilter =>
+  value === 'published' || value === 'unpublished';
+
+export const GLOBAL_TENANT_VALUE = 'shared';
+
 export const formatCatalogFieldDefault = (def: CatalogFieldDefinition): string => {
   const defaultValue = resolvedFieldDefault(def);
   if (defaultValue === undefined) {
@@ -179,27 +164,28 @@ export const formatCatalogFieldDefault = (def: CatalogFieldDefinition): string =
   return fieldDefinitionDefaultToInputString(defaultValue) || '—';
 };
 
-export const getCatalogCreateAction = (item: CatalogItem, t: TFunction) => {
+export const getCatalogCreateActionPath = (item: CatalogItem) => {
   switch (item.$typeName) {
     case 'osac.public.v1.ComputeInstanceCatalogItem':
-      return {
-        label: t('Create virtual machine'),
-        path: `/vms/create/${item.id}`,
-      };
+      return `/vms/create/${item.id}`;
     case 'osac.public.v1.ClusterCatalogItem':
-      return {
-        label: t('Create cluster'),
-        path: `/clusters/create/${item.id}`,
-      };
+      return `/clusters/create/${item.id}`;
     case 'osac.public.v1.BareMetalInstanceCatalogItem':
-      return {
-        label: t('Provision bare metal'),
-        path: `/bare-metal/create/${item.id}`,
-      };
+      return `/bare-metal/create/${item.id}`;
     default:
-      return {
-        label: '',
-        path: '#',
-      };
+      return '#';
+  }
+};
+
+export const catalogItemDetailsPath = (item: CatalogItem): string => {
+  switch (item.$typeName) {
+    case 'osac.public.v1.ComputeInstanceCatalogItem':
+      return `/catalog/vm/${item.id}`;
+    case 'osac.public.v1.BareMetalInstanceCatalogItem':
+      return `/catalog/bm/${item.id}`;
+    case 'osac.public.v1.ClusterCatalogItem':
+      return `/catalog/cluster/${item.id}`;
+    default:
+      return '#';
   }
 };

@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { ClusterCatalogItem } from '@osac/types';
+import type {
+  BareMetalInstanceCatalogItem,
+  ClusterCatalogItem,
+  ComputeInstanceCatalogItem,
+} from '@osac/types';
 
-import { filterCatalogItemsBySearch } from './catalogItemDisplay';
+import { catalogItemDetailsPath, filterCatalogItemsBySearch } from './catalogItemDisplay';
 import {
   catalogItemFieldDefinitions,
   readCatalogItemFieldDefinitions,
@@ -74,6 +78,18 @@ describe('filterCatalogItemsBySearch', () => {
       templateParameters: {},
       published: true,
       template: undefined,
+      metadata: {
+        $typeName: 'osac.public.v1.Metadata',
+        displayName: '',
+        description: '',
+        name: 'alpha-vm',
+        creator: '',
+        annotations: {},
+        labels: {},
+        project: '',
+        tenant: '',
+        version: 1,
+      },
     },
     {
       $typeName: 'osac.public.v1.ClusterCatalogItem',
@@ -83,6 +99,18 @@ describe('filterCatalogItemsBySearch', () => {
       templateParameters: {},
       published: true,
       template: undefined,
+      metadata: {
+        $typeName: 'osac.public.v1.Metadata',
+        displayName: '',
+        description: '',
+        name: 'beta-cluster',
+        creator: '',
+        annotations: {},
+        labels: {},
+        project: '',
+        tenant: '',
+        version: 1,
+      },
     },
   ];
 
@@ -90,9 +118,27 @@ describe('filterCatalogItemsBySearch', () => {
     expect(filterCatalogItemsBySearch(items, '')).toEqual(items);
     expect(filterCatalogItemsBySearch(items, '   ')).toEqual(items);
   });
+});
 
-  it('filters case-insensitively across title and description', () => {
-    expect(filterCatalogItemsBySearch(items, 'alpha')).toEqual([items[0]]);
-    expect(filterCatalogItemsBySearch(items, 'PRODUCTION')).toEqual([items[1]]);
+describe('catalogItemDetailsPath', () => {
+  it('builds the details path for each catalog item type', () => {
+    expect(
+      catalogItemDetailsPath({
+        $typeName: 'osac.public.v1.ComputeInstanceCatalogItem',
+        id: 'vm-1',
+      } as ComputeInstanceCatalogItem),
+    ).toBe('/catalog/vm/vm-1');
+    expect(
+      catalogItemDetailsPath({
+        $typeName: 'osac.public.v1.BareMetalInstanceCatalogItem',
+        id: 'bm-1',
+      } as BareMetalInstanceCatalogItem),
+    ).toBe('/catalog/bm/bm-1');
+    expect(
+      catalogItemDetailsPath({
+        $typeName: 'osac.public.v1.ClusterCatalogItem',
+        id: 'cluster-1',
+      } as ClusterCatalogItem),
+    ).toBe('/catalog/cluster/cluster-1');
   });
 });

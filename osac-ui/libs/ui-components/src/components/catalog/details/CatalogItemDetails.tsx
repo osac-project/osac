@@ -1,10 +1,10 @@
 import { useNavigate } from 'react-router-dom';
 import { Button, Flex, FlexItem, PageSection, Stack, StackItem } from '@patternfly/react-core';
 
-import { CatalogItemDetailContent } from './CatalogItemDetailContent.tsx';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { ResourceDetailHeader } from '../../Resource/ResourceDetailHeader';
-import { CatalogItem, getCatalogCreateAction } from '../catalogItemDisplay';
+import { CatalogItem, getCatalogCreateActionPath } from '../catalogItemDisplay';
+import { CatalogItemDetailContent } from './CatalogItemDetailContent';
 
 interface CatalogItemDetailsProps {
   item: CatalogItem;
@@ -13,7 +13,6 @@ interface CatalogItemDetailsProps {
 const CatalogItemDetails = ({ item }: CatalogItemDetailsProps) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const createAction = getCatalogCreateAction(item, t);
 
   return (
     <>
@@ -30,12 +29,16 @@ const CatalogItemDetails = ({ item }: CatalogItemDetailsProps) => {
                 <ResourceDetailHeader
                   parentTo="/catalog"
                   parentLabel={t('Catalog')}
-                  resourceName={item.title}
+                  resourceName={item.metadata?.name || item.title}
                 />
               </FlexItem>
               <FlexItem>
-                <Button variant="primary" onClick={() => navigate(createAction.path)}>
-                  {createAction.label}
+                <Button
+                  variant="primary"
+                  isDisabled={!item.published}
+                  onClick={() => navigate(getCatalogCreateActionPath(item))}
+                >
+                  {t('Launch instance')}
                 </Button>
               </FlexItem>
             </Flex>

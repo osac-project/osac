@@ -18,6 +18,7 @@ import { useFormikContext } from 'formik';
 import { useTranslation } from '../../../../hooks/useTranslation';
 import CatalogItemCard from '../../../catalog/CatalogItemCard';
 import { CatalogItem, filterCatalogItemsBySearch } from '../../../catalog/catalogItemDisplay';
+import { useCatalogItemResourceLookups } from '../../../catalog/catalogItemResourceLookups';
 import { getVisibleFieldError } from '../../../Form/fieldError';
 import { useShowFieldValidationErrors } from '../../../Form/FieldValidationContext';
 import { FormFieldHelper } from '../../../Form/FormFieldHelper';
@@ -46,6 +47,10 @@ export const CatalogStep = <TValues extends { catalogItemId: string }, TPayload>
     () => filterCatalogItemsBySearch(catalogItems, search),
     [catalogItems, search],
   );
+
+  const resourceLookups = useCatalogItemResourceLookups({
+    enabled: !catalogLoading && !catalogError && filtered.length > 0,
+  });
 
   const count = filtered.length;
   const countPhrase = t('catalogProvision.catalog.count', { count });
@@ -108,7 +113,7 @@ export const CatalogStep = <TValues extends { catalogItemId: string }, TPayload>
       <StackItem>
         <Gallery
           hasGutter
-          minWidths={{ default: '200px' }}
+          minWidths={{ default: '300px' }}
           role="radiogroup"
           aria-label={t('catalogProvision.steps.catalog.title')}
         >
@@ -132,6 +137,7 @@ export const CatalogStep = <TValues extends { catalogItemId: string }, TPayload>
                 <GalleryItem key={item.id}>
                   <CatalogItemCard
                     item={item}
+                    resourceLookups={resourceLookups}
                     selection={{
                       selected,
                       onSelect: () => {

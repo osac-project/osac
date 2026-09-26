@@ -315,6 +315,27 @@ fields; in YAML, write them as nested mappings.
 | `network_attachments` | Policy for the complete list of network attachments |
 | `auto_external_ip_attachment` | Whether to provision an external IP attachment automatically |
 
+#### BareMetalInstance DiskImage policy validation
+
+The current API names the policy container `fields` (the older
+`field_definitions` name is not accepted). `fields.disk_image` takes a typed
+`DiskImageReference` in either `locked` or `editable.default_value`. The
+catalog service resolves and canonicalizes that reference when the CatalogItem
+is created or when its `fields` are updated.
+
+At BareMetalInstance creation, a locked value is applied, or an editable
+default is applied when the caller omitted `spec.disk_image`, before normal BMI
+DiskImage validation. A caller-provided value overrides an editable default.
+
+The referenced DiskImage must belong to the CatalogItem's tenant or the shared
+tenant. A cross-tenant reference is rejected with `InvalidArgument` when it
+resolves; a reference that cannot be resolved returns `NotFound`. An `OBSOLETE`
+image is rejected. A `DEPRECATED` image is accepted but emits a warning from
+the gRPC CatalogItem Create response or an Update that revalidates the policy,
+including one that changes `fields` or publishes the CatalogItem. REST Create
+and Update responses return only the CatalogItem object, so they do not include
+those warnings.
+
 ### List and node-set policies
 
 List policies put their values under `items`. This example offers a default additional disk that

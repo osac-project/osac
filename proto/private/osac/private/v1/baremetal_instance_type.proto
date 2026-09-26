@@ -115,7 +115,7 @@ message BareMetalInstanceSpec {
   // These parameters can't be modified after the bare metal instance is created.
   map<string, google.protobuf.Any> template_parameters = 6 [(google.api.field_behavior) = IMMUTABLE];
 
-  // Reserved field numbers for removed fields (do not reuse).
+  // Reserved field numbers and names for removed fields. Callers must use `disk_image` instead of `image`.
   reserved 7;
   reserved "image";
 
@@ -142,7 +142,10 @@ message BareMetalInstanceSpec {
   // back to the catalog item's template host_type.
   BareMetalInstanceTypeLocalReference instance_type = 11 [(google.api.field_behavior) = IMMUTABLE];
 
-  // Reference to a DiskImage resource. Immutable after creation.
+  // Reference to a DiskImage resource, selected by ID or name. The reference is immutable after creation.
+  // Catalog items can provide a default when callers omit it. The reference must resolve to an image in the instance
+  // tenant or shared tenant. Available images are accepted, deprecated images are accepted with a warning, and
+  // obsolete images are rejected.
   DiskImageReference disk_image = 12 [(google.api.field_behavior) = IMMUTABLE];
 
   // Reference to a Secret containing user data for the bare metal instance.

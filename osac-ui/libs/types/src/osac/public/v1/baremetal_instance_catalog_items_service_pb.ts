@@ -152,7 +152,8 @@ export type BareMetalInstanceCatalogItemsCreateResponse = Message<"osac.public.v
   object?: BareMetalInstanceCatalogItem | undefined;
 
   /**
-   * Deprecation or validation warnings for typed catalog policies.
+   * Non-fatal validation warnings returned by the gRPC response for accepted field policies. For example, a deprecated
+   * `fields.disk_image` default is accepted and reported here so catalog authors can migrate to a replacement.
    *
    * @generated from field: repeated string warnings = 2;
    */
@@ -207,7 +208,8 @@ export type BareMetalInstanceCatalogItemsUpdateResponse = Message<"osac.public.v
   object?: BareMetalInstanceCatalogItem | undefined;
 
   /**
-   * Deprecation or validation warnings for typed catalog policies.
+   * Non-fatal validation warnings returned by the gRPC response for accepted field policies. For example, a deprecated
+   * `fields.disk_image` default is accepted and reported here so catalog authors can migrate to a replacement.
    *
    * @generated from field: repeated string warnings = 2;
    */

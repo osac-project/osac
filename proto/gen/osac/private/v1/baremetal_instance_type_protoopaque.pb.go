@@ -677,7 +677,10 @@ type BareMetalInstanceSpec_builder struct {
 	// to the CRD's Selector.HostSelector for host selection. When omitted, host selection falls
 	// back to the catalog item's template host_type.
 	InstanceType *BareMetalInstanceTypeLocalReference
-	// Reference to a DiskImage resource. Immutable after creation.
+	// Reference to a DiskImage resource, selected by ID or name. The reference is immutable after creation.
+	// Catalog items can provide a default when callers omit it. The reference must resolve to an image in the instance
+	// tenant or shared tenant. Available images are accepted, deprecated images are accepted with a warning, and
+	// obsolete images are rejected.
 	DiskImage *DiskImageReference
 	// Reference to a Secret containing user data for the bare metal instance.
 	// The Secret must contain a non-empty `userdata` entry. Mutually exclusive with `user_data`.

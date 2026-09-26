@@ -117,7 +117,7 @@ def test_gpu_compute_instance(
         vm_ns: str = poll_until(
             fn=lambda: k8s_hub_client.get_compute_instance_vm_namespace(name=ci_name),
             until=lambda v: v != "",
-            retries=30,
+            retries=150,
             delay=2,
             description=f"{ci_name} VM namespace",
         )

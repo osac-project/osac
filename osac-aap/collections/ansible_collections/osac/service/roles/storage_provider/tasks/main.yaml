@@ -154,7 +154,7 @@
 
 - name: Extract unique providers from tier list
   ansible.builtin.set_fact:
-    _unique_providers: "{{ _storage_provider_tiers | map(attribute='provider') | unique | sort | list }}"
+    _unique_providers: "{{ _storage_provider_tiers | map(attribute='provider') | map('replace', '-', '_') | unique | sort | list }}"
 
 - name: Set dispatch action
   ansible.builtin.set_fact:

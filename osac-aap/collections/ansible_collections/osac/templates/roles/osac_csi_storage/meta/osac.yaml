@@ -1,0 +1,18 @@
+---
+name: osac-csi-storage
+title: OSAC CSI Storage Provider
+description: >
+  Deploys the OSAC CSI meta-driver (csi.osac.openshift.io) to a CaaS tenant cluster via
+  Helm, propagates the tenant-scoped OAuth2 client credentials from the hub Secret
+  (written by OSAC-4197), and creates per-tier opaque StorageClasses that route volume
+  requests through the hub-side OSAC fulfillment service.  Does not deploy any vendor CSI
+  controller on the tenant cluster — controller operations are handled hub-side.
+
+template_type: storage_provider
+implementation_strategy: osac_csi
+capabilities:
+  supported_protocols:
+    - nfs    # NOTE: NFS volumes will provision but metering and policy enforcement are not yet implemented
+    - block
+  provisioning_targets:
+    - caas

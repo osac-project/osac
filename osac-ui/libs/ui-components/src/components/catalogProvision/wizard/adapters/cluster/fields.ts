@@ -23,6 +23,13 @@ export interface ClusterWizardValues {
       podCidr: string;
       serviceCidr: string;
     };
+    useDefaultNetwork: boolean;
+    networkAttachment: {
+      virtualNetwork: string;
+      subnet: string;
+      securityGroups: string[];
+    };
+    autoExternalIpAttachment: boolean;
   };
 }
 

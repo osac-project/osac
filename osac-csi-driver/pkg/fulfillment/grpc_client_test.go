@@ -82,6 +82,7 @@ func TestCreateVolumeMapsRequestAndResponse(t *testing.T) {
 	resp := &privatev1.VolumesCreateResponse{}
 	resp.SetObject(newTestVolume("vol-1", "pvc-abc", privatev1.VolumeState_VOLUME_STATE_CREATING,
 		"vast", "", privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS, 5))
+	resp.GetObject().GetStatus().SetMessage("insufficient vg1 capacity")
 	fake := &fakeVolumesClient{createResp: resp}
 	c := &grpcVolumeClient{client: fake}
 
@@ -130,6 +131,9 @@ func TestCreateVolumeMapsRequestAndResponse(t *testing.T) {
 	}
 	if info.CapacityBytes != 5*bytesPerGiB {
 		t.Errorf("info.CapacityBytes = %d, want %d", info.CapacityBytes, 5*bytesPerGiB)
+	}
+	if info.Message != "insufficient vg1 capacity" {
+		t.Errorf("info.Message = %q, want insufficient vg1 capacity", info.Message)
 	}
 }
 

@@ -86,6 +86,17 @@ var _ = Describe("VolumeReconciler", func() {
 		}
 	})
 
+	DescribeTable("adds the TopoLVM watch only when an LVMS provisioner is registered",
+		func(provisioners VendorProvisionerRegistry, expected bool) {
+			reconciler.VendorProvisioners = provisioners
+			Expect(reconciler.hasLVMSProvisioner()).To(Equal(expected))
+		},
+		Entry("no vendor provisioners", VendorProvisionerRegistry{}, false),
+		Entry("a network provider only", VendorProvisionerRegistry{"vast-primary": NewMockVendorProvisioner()}, false),
+		Entry("LVMS registered", VendorProvisionerRegistry{lvmsProvider: NewLvmsVendorProvisioner(nil, nil)}, true),
+		Entry("LVMS entry without an implementation", VendorProvisionerRegistry{lvmsProvider: nil}, false),
+	)
+
 	It("should add finalizer on first reconcile", func() {
 		Expect(k8sClient.Create(testCtx, vol)).To(Succeed())
 
@@ -99,6 +110,43 @@ var _ = Describe("VolumeReconciler", func() {
 		updated := &osacv1alpha1.Volume{}
 		Expect(k8sClient.Get(testCtx, types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace}, updated)).To(Succeed())
 		Expect(updated.Finalizers).To(ContainElement(osacVolumeFinalizer))
+	})
+
+	It("should ignore unmanaged volumes", func() {
+		vol.Annotations = map[string]string{osacManagementStateAnnotation: ManagementStateUnmanaged}
+		Expect(k8sClient.Create(testCtx, vol)).To(Succeed())
+
+		_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{
+			Request: reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace},
+			},
+		})
+		Expect(err).ToNot(HaveOccurred())
+
+		updated := &osacv1alpha1.Volume{}
+		Expect(k8sClient.Get(testCtx, types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace}, updated)).To(Succeed())
+		Expect(updated.Finalizers).To(BeEmpty())
+		Expect(updated.Status.Phase).To(BeEmpty())
+	})
+
+	It("should persist pending vendor state and requeue", func() {
+		mockProv.Pending = true
+		Expect(k8sClient.Create(testCtx, vol)).To(Succeed())
+		stampProviderProtocol(vol)
+
+		result, err := reconciler.Reconcile(testCtx, mcreconcile.Request{
+			Request: reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace},
+			},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.RequeueAfter).To(BeZero())
+
+		updated := &osacv1alpha1.Volume{}
+		Expect(k8sClient.Get(testCtx, types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace}, updated)).To(Succeed())
+		Expect(updated.Status.Phase).To(Equal(osacv1alpha1.VolumePhaseProgressing))
+		Expect(updated.Status.VendorContext).To(Equal(map[string]string{"pending": "true"}))
+		Expect(updated.Status.VendorVolumeID).To(BeEmpty())
 	})
 
 	It("should reach Ready on first reconcile when the mock provisioner succeeds", func() {
@@ -477,6 +525,8 @@ var _ = Describe("VolumeReconciler", func() {
 		provisioned := &osacv1alpha1.Volume{}
 		Expect(k8sClient.Get(testCtx, types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace}, provisioned)).To(Succeed())
 		Expect(provisioned.Status.VendorVolumeID).To(HavePrefix("mock-"))
+		provisioned.Status.VendorContext = map[string]string{"logicalvolume": "pvc-test-vol-abc"}
+		Expect(k8sClient.Status().Update(testCtx, provisioned)).To(Succeed())
 
 		Expect(k8sClient.Delete(testCtx, vol)).To(Succeed())
 
@@ -498,6 +548,7 @@ var _ = Describe("VolumeReconciler", func() {
 		Expect(req.Tenant).To(Equal("acme"))
 		Expect(req.Provider).To(Equal(provisioned.Status.Provider))
 		Expect(req.VendorVolumeID).To(Equal(provisioned.Status.VendorVolumeID))
+		Expect(req.VendorContext).To(Equal(provisioned.Status.VendorContext))
 	})
 
 	It("dispatches by provider and does not call another registered provider", func() {

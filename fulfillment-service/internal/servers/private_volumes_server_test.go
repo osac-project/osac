@@ -246,6 +246,82 @@ var _ = Describe("Private volumes server", func() {
 			}))
 		})
 
+		It("rejects a node-local volume without a node topology segment", func() {
+			server.tierResolver = func(_ context.Context, _ string) (*TierResolution, error) {
+				return &TierResolution{
+					Provider: "lvms",
+					Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
+				}, nil
+			}
+
+			_, err := server.Create(ctx, privatev1.VolumesCreateRequest_builder{
+				Object: privatev1.Volume_builder{
+					Metadata: privatev1.Metadata_builder{Name: "missing-node"}.Build(),
+					Spec: privatev1.VolumeSpec_builder{
+						StorageTier: "local",
+						SizeGib:     100,
+						AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
+			Expect(err).To(MatchError(ContainSubstring(`topology.segments["osac.io/node"]`)))
+
+			listResponse, listErr := server.List(ctx, privatev1.VolumesListRequest_builder{}.Build())
+			Expect(listErr).ToNot(HaveOccurred())
+			Expect(listResponse.GetItems()).To(BeEmpty())
+		})
+
+		It("accepts a node-local volume and preserves all topology segments", func() {
+			server.tierResolver = func(_ context.Context, _ string) (*TierResolution, error) {
+				return &TierResolution{
+					Provider: "lvms",
+					Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
+				}, nil
+			}
+
+			segments := map[string]string{
+				"osac.io/node":                "worker-1",
+				"topology.kubernetes.io/zone": "zone-a",
+			}
+			response, err := server.Create(ctx, privatev1.VolumesCreateRequest_builder{
+				Object: privatev1.Volume_builder{
+					Metadata: privatev1.Metadata_builder{Name: "node-local"}.Build(),
+					Spec: privatev1.VolumeSpec_builder{
+						StorageTier: "local",
+						SizeGib:     100,
+						AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+						Topology:    privatev1.VolumeTopology_builder{Segments: segments}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetObject().GetStatus().GetProvider()).To(Equal("lvms"))
+			Expect(response.GetObject().GetSpec().GetTopology().GetSegments()).To(Equal(segments))
+		})
+
+		It("allows a network volume without a node topology segment", func() {
+			server.tierResolver = func(_ context.Context, _ string) (*TierResolution, error) {
+				return &TierResolution{
+					Provider: "vast",
+					Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
+				}, nil
+			}
+
+			response, err := server.Create(ctx, privatev1.VolumesCreateRequest_builder{
+				Object: privatev1.Volume_builder{
+					Metadata: privatev1.Metadata_builder{Name: "network-volume"}.Build(),
+					Spec: privatev1.VolumeSpec_builder{
+						StorageTier: "network",
+						SizeGib:     100,
+						AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetObject().GetStatus().GetProvider()).To(Equal("vast"))
+		})
+
 		It("List volumes", func() {
 			const count = 5
 			for i := range count {

@@ -107,7 +107,9 @@ var _ = Describe("VolumeFeedbackController", func() {
 
 	Context("phase-to-state mapping", func() {
 		It("should sync Phase=Ready to state=AVAILABLE", func() {
-			mockServer.addVolume(newRemoteVolume(volID, privatev1.VolumeState_VOLUME_STATE_CREATING))
+			remote := newRemoteVolume(volID, privatev1.VolumeState_VOLUME_STATE_CREATING)
+			remote.GetStatus().SetMessage("stale provisioning error")
+			mockServer.addVolume(remote)
 
 			cr := newVolumeFeedbackCR(volName, volNamespace, volID, v1alpha1.VolumePhaseReady, nil)
 			cr.Status.VendorVolumeID = "vast-001"
@@ -123,6 +125,7 @@ var _ = Describe("VolumeFeedbackController", func() {
 			Expect(mockServer.updates).To(HaveLen(1))
 			updated := mockServer.updates[0]
 			Expect(updated.GetStatus().GetState()).To(Equal(privatev1.VolumeState_VOLUME_STATE_AVAILABLE))
+			Expect(updated.GetStatus().GetMessage()).To(BeEmpty())
 			Expect(updated.GetStatus().GetVendorVolumeId()).To(Equal("vast-001"))
 			Expect(updated.GetStatus().GetProvider()).To(Equal("vast"))
 
@@ -168,6 +171,12 @@ var _ = Describe("VolumeFeedbackController", func() {
 			mockServer.addVolume(newRemoteVolume(volID, privatev1.VolumeState_VOLUME_STATE_CREATING))
 
 			cr := newVolumeFeedbackCR(volName, volNamespace, volID, v1alpha1.VolumePhaseFailed, nil)
+			cr.Status.Conditions = []metav1.Condition{{
+				Type:    string(v1alpha1.VolumeConditionVendorProvisioned),
+				Status:  metav1.ConditionFalse,
+				Reason:  "ProvisioningFailed",
+				Message: "insufficient vg1 capacity",
+			}}
 			Expect(fakeK8s.Create(ctx, cr)).To(Succeed())
 
 			_, err := reconciler.Reconcile(ctx, reconcile.Request{
@@ -177,6 +186,9 @@ var _ = Describe("VolumeFeedbackController", func() {
 
 			Expect(mockServer.updates).To(HaveLen(1))
 			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.VolumeState_VOLUME_STATE_FAILED))
+			Expect(mockServer.updates[0].GetStatus().GetMessage()).To(Equal("volume provisioning failed"))
+			Expect(mockServer.updateMasks).To(HaveLen(1))
+			Expect(mockServer.updateMasks[0]).To(ContainElement("status.message"))
 			Expect(mockServer.signals).To(BeEmpty())
 		})
 
@@ -282,7 +294,9 @@ var _ = Describe("VolumeFeedbackController", func() {
 
 	Context("deletion handling", func() {
 		It("should sync Phase=Deleting to state=DELETING during deletion", func() {
-			mockServer.addVolume(newRemoteVolume(volID, privatev1.VolumeState_VOLUME_STATE_AVAILABLE))
+			remote := newRemoteVolume(volID, privatev1.VolumeState_VOLUME_STATE_AVAILABLE)
+			remote.GetStatus().SetMessage("stale provisioning error")
+			mockServer.addVolume(remote)
 
 			cr := newVolumeFeedbackCR(volName, volNamespace, volID, v1alpha1.VolumePhaseDeleting,
 				[]string{osacVolumeFeedbackFinalizer, osacVolumeFinalizer})
@@ -296,6 +310,7 @@ var _ = Describe("VolumeFeedbackController", func() {
 
 			Expect(mockServer.updates).To(HaveLen(1))
 			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.VolumeState_VOLUME_STATE_DELETING))
+			Expect(mockServer.updates[0].GetStatus().GetMessage()).To(BeEmpty())
 
 			// Signal should NOT be called when other finalizers remain
 			Expect(mockServer.signals).To(BeEmpty())
@@ -321,6 +336,7 @@ var _ = Describe("VolumeFeedbackController", func() {
 
 			Expect(mockServer.updates).To(HaveLen(1))
 			Expect(mockServer.updates[0].GetStatus().GetState()).To(Equal(privatev1.VolumeState_VOLUME_STATE_FAILED))
+			Expect(mockServer.updates[0].GetStatus().GetMessage()).To(Equal("volume provisioning failed"))
 		})
 
 		It("should remove finalizer and signal when feedback finalizer is the last one", func() {
@@ -537,11 +553,12 @@ func newRemoteVolume(id string, state privatev1.VolumeState) *privatev1.Volume {
 // mockVolumesServer implements privatev1.VolumesServer for testing.
 type mockVolumesServer struct {
 	privatev1.UnimplementedVolumesServer
-	mu        sync.Mutex
-	volumes   map[string]*privatev1.Volume
-	updates   []*privatev1.Volume
-	signals   []string
-	signalErr error
+	mu          sync.Mutex
+	volumes     map[string]*privatev1.Volume
+	updates     []*privatev1.Volume
+	updateMasks [][]string
+	signals     []string
+	signalErr   error
 }
 
 func (m *mockVolumesServer) addVolume(vol *privatev1.Volume) {
@@ -571,6 +588,7 @@ func (m *mockVolumesServer) Update(_ context.Context, req *privatev1.VolumesUpda
 	vol := req.GetObject()
 	m.volumes[vol.GetId()] = vol
 	m.updates = append(m.updates, vol)
+	m.updateMasks = append(m.updateMasks, append([]string(nil), req.GetUpdateMask().GetPaths()...))
 
 	return privatev1.VolumesUpdateResponse_builder{
 		Object: vol,

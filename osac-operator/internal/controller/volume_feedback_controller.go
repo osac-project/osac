@@ -34,7 +34,8 @@ import (
 // VolumeFeedbackReconciler syncs Volume CR status from the hub cluster back
 // to the fulfillment-service via the private Volumes gRPC API. It maps CRD
 // phases to proto states and copies vendor-assigned fields (vendorVolumeID,
-// provider, protocol) so the fulfillment-service inventory stays current.
+// provider, protocol, and a tenant-safe failure message) so the
+// fulfillment-service inventory stays current.
 type VolumeFeedbackReconciler struct {
 	bridge          *feedback.Bridge[*v1alpha1.Volume, *privatev1.Volume]
 	volumeNamespace string
@@ -77,7 +78,7 @@ func NewVolumeFeedbackReconciler(hubClient clnt.Client, grpcConn *grpc.ClientCon
 			_, err := volClient.Update(ctx, privatev1.VolumesUpdateRequest_builder{
 				Object: remote,
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
-					feedbackStatusStatePath, "status.vendor_volume_id", "status.vendor_context", "status.protocol", "status.provider", "status.state_transition_time", "status.provisioned_size_gib",
+					feedbackStatusStatePath, "status.message", "status.vendor_volume_id", "status.vendor_context", "status.protocol", "status.provider", "status.state_transition_time", "status.provisioned_size_gib",
 				}},
 			}.Build())
 			return err
@@ -115,12 +116,13 @@ func (r *VolumeFeedbackReconciler) Reconcile(ctx context.Context, request ctrl.R
 }
 
 // syncVolumeUpdate maps Volume CR status to the fulfillment-service proto on
-// the non-delete path. It syncs the phase, vendor-assigned identifiers, and
-// the PVC/PV references that the operator populates after provisioning.
+// the non-delete path, including phase, failure message, vendor fields, and
+// state transition time.
 func syncVolumeUpdate(_ context.Context, obj *v1alpha1.Volume, remote *privatev1.Volume) error {
 	if err := syncVolumePhase(obj, remote); err != nil {
 		return err
 	}
+	syncVolumeStatusMessage(obj, remote)
 	if err := syncVolumeVendorFields(obj, remote); err != nil {
 		return err
 	}
@@ -146,6 +148,7 @@ func syncVolumeDelete(_ context.Context, obj *v1alpha1.Volume, remote *privatev1
 	default:
 		return fmt.Errorf("invalid volume phase %q during deletion", obj.Status.Phase)
 	}
+	syncVolumeStatusMessage(obj, remote)
 	return nil
 }
 
@@ -187,6 +190,18 @@ func syncVolumePhase(obj *v1alpha1.Volume, remote *privatev1.Volume) error {
 		return fmt.Errorf("unknown volume phase %q", obj.Status.Phase)
 	}
 	return nil
+}
+
+// syncVolumeStatusMessage exposes only a stable, tenant-safe failure message
+// through the fulfillment API. Detailed vendor errors remain in the operator
+// condition and logs, rather than being copied into a client-visible API
+// response. Clear stale messages once a volume is no longer failed.
+func syncVolumeStatusMessage(obj *v1alpha1.Volume, remote *privatev1.Volume) {
+	if obj.Status.Phase == v1alpha1.VolumePhaseFailed {
+		remote.GetStatus().SetMessage("volume provisioning failed")
+		return
+	}
+	remote.GetStatus().ClearMessage()
 }
 
 // syncVolumeVendorFields copies the vendor-assigned identifiers (and vendor

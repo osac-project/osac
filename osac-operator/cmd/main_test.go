@@ -385,8 +385,10 @@ var _ = Describe("parseVendorControllers", func() {
 
 var _ = Describe("newVendorProvisionerRegistry", func() {
 	It("registers VAST and marks unsupported providers as unimplemented", func() {
+		client := fake.NewClientBuilder().Build()
 		registry, err := newVendorProvisionerRegistry(
-			fake.NewClientBuilder().Build(),
+			client,
+			client,
 			"osac-system",
 			map[string]string{"vast": "vast.svc:50051", "netapp": "netapp.svc:50052"},
 		)
@@ -398,9 +400,39 @@ var _ = Describe("newVendorProvisionerRegistry", func() {
 		Expect(registry["netapp"]).To(BeNil())
 	})
 
-	It("marks future provider keys as unimplemented", func() {
+	It("registers LVMS from its configured provider key", func() {
+		client := fake.NewClientBuilder().Build()
 		registry, err := newVendorProvisionerRegistry(
-			fake.NewClientBuilder().Build(),
+			client,
+			client,
+			"osac-system",
+			map[string]string{"lvms": "none"},
+		)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(registry).To(HaveLen(1))
+		Expect(registry["lvms"]).To(BeAssignableToTypeOf(&controller.LvmsVendorProvisioner{}))
+	})
+
+	It("keeps LVMS registered when VAST initialization fails", func() {
+		client := fake.NewClientBuilder().Build()
+		registry, err := newVendorProvisionerRegistry(
+			client,
+			client,
+			"",
+			map[string]string{"lvms": "none", "vast": "vast.svc:50051"},
+		)
+
+		Expect(err).To(MatchError(ContainSubstring("storage config namespace is required")))
+		Expect(registry).To(HaveLen(2))
+		Expect(registry["lvms"]).To(BeAssignableToTypeOf(&controller.LvmsVendorProvisioner{}))
+		Expect(registry["vast"]).To(BeNil())
+	})
+
+	It("marks future provider keys as unimplemented", func() {
+		client := fake.NewClientBuilder().Build()
+		registry, err := newVendorProvisionerRegistry(
+			client,
+			client,
 			"osac-system",
 			map[string]string{"netapp": "netapp.svc:50052"},
 		)

@@ -858,6 +858,18 @@ func (r *StorageReconciler) handleCaaSDelete(ctx context.Context, instance *v1al
 			// without attempting cleanup (OSAC-4340).
 			log.Info("no cluster storage provider configured, skipping CaaS cluster-side cleanup",
 				"clusterOrder", co.Name, "tenant", tenantName)
+		} else if len(provisioning.StorageBackendConnectionsFromContext(ctx)) == 0 {
+			// Backend connections are unavailable (fulfillment service down,
+			// tier resolution failed, or clients not configured). The AAP
+			// deprovisioning job would receive no credentials and fail, and
+			// BlockDeletionOnFailure would prevent finalizer removal,
+			// leaving the ClusterOrder stuck in Deleting. Skip the job and
+			// fall through to finalizer removal — the CaaS cluster is being
+			// torn down anyway (OSAC-4855).
+			log.Info("backend connections unavailable during CaaS teardown, skipping deprovisioning job",
+				"clusterOrder", co.Name, "tenant", tenantName)
+			r.Recorder.Eventf(co, nil, corev1.EventTypeWarning, "BackendConnectionsUnavailable", "Teardown",
+				"Storage backend connections could not be resolved during teardown, skipping deprovisioning job")
 		} else {
 			provCtx := provisioning.WithAdminKubeconfig(ctx, string(kubeconfig))
 

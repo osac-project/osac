@@ -35,8 +35,11 @@ message FabricDomainSpec {
   // Hostnames of servers that belong to the domain.
   repeated string servers = 2;
 
-  // Virtual networks associated with the domain. Phase 1 requires exactly one.
-  repeated string virtual_networks = 3 [(google.api.field_behavior) = IMMUTABLE];
+  // OSAC VirtualNetwork ID associated with the domain. Required for the supported EthernetEW type and immutable.
+  string virtual_network = 3 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE
+  ];
 }
 
 message FabricDomainStatus {

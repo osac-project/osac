@@ -38,7 +38,6 @@ export const BareMetalListPage = () => {
   return (
     <ListPage
       title={t('Bare Metal')}
-      label={t('Services')}
       description={t('View and manage your bare metal instances.')}
       error={error}
       actions={<CreateButton to="/bare-metal/create">{t('Provision bare metal')}</CreateButton>}

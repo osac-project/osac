@@ -84,7 +84,6 @@ describe('VmListPage', () => {
 
     expect(screen.getByText('Could not load instance types')).toBeInTheDocument();
     expect(screen.getByText('Instance types unavailable')).toBeInTheDocument();
-    expect(screen.getByText('Services').closest('.pf-v6-c-label')).not.toBeNull();
     expect(screen.getByRole('link', { name: 'Create virtual machine' })).toHaveAttribute(
       'href',
       '/vms/create',

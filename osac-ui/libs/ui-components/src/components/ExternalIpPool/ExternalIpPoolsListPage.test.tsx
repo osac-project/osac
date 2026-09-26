@@ -77,7 +77,6 @@ describe('ExternalIpPoolsListPage', () => {
   it('renders the page header', () => {
     renderPage();
 
-    expect(screen.getByText('Infrastructure').closest('.pf-v6-c-label')).not.toBeNull();
     expect(screen.getByRole('heading', { name: 'External IP pools' })).toBeInTheDocument();
     expect(
       screen.getByText('Manage external IP address pools for this cloud platform.'),

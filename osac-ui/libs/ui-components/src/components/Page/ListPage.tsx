@@ -1,10 +1,9 @@
 import * as React from 'react';
-import { Content, Flex, FlexItem, Label, PageSection, Stack, Title } from '@patternfly/react-core';
+import { Content, Flex, FlexItem, PageSection, Stack, Title } from '@patternfly/react-core';
 
 type ListPageProps = {
   title: string;
   description?: string;
-  label?: string;
   actions?: React.ReactNode;
   breadcrumb?: React.ReactNode;
   error?: unknown;
@@ -14,7 +13,6 @@ type ListPageProps = {
 const ListPage: React.FC<ListPageProps> = ({
   title,
   description,
-  label,
   actions,
   breadcrumb,
   error,
@@ -24,17 +22,12 @@ const ListPage: React.FC<ListPageProps> = ({
     <Stack>
       <Flex
         gap={{ default: 'gapMd' }}
-        alignItems={{ default: breadcrumb || label ? 'alignItemsFlexStart' : 'alignItemsCenter' }}
+        alignItems={{ default: breadcrumb ? 'alignItemsFlexStart' : 'alignItemsCenter' }}
         justifyContent={{ default: 'justifyContentSpaceBetween' }}
       >
         <FlexItem>
           <Flex direction={{ default: 'column' }} spaceItems={{ default: 'spaceItemsSm' }}>
             {breadcrumb ? <FlexItem>{breadcrumb}</FlexItem> : null}
-            {label ? (
-              <FlexItem>
-                <Label>{label}</Label>
-              </FlexItem>
-            ) : null}
             <FlexItem>
               <Title headingLevel="h1" size="3xl">
                 {title}

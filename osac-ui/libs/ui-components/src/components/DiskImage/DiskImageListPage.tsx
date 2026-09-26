@@ -223,7 +223,6 @@ const DiskImageListPage = () => {
   return (
     <ListPage
       title={t('Disk images')}
-      label={t('Infrastructure')}
       description={t('Manage disk images available for provisioning virtual machines.')}
       error={error}
       actions={

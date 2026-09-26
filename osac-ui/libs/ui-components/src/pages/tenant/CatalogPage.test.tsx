@@ -173,7 +173,6 @@ describe('CatalogPage', () => {
       expect(screen.getByText('Unauthorized')).toBeInTheDocument();
     });
 
-    expect(screen.getByText('Global marketplace').closest('.pf-v6-c-label')).not.toBeNull();
     expect(
       screen.getByRole('group', { name: 'Filter catalog by resource type' }),
     ).toBeInTheDocument();

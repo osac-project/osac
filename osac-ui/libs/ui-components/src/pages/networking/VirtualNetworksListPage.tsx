@@ -54,7 +54,6 @@ export const VirtualNetworksListPage = () => {
   return (
     <>
       <ListPage
-        label={t('Networking')}
         title={t('Virtual networks')}
         description={t('Manage virtual networks for your compute instances.')}
         actions={

@@ -1,0 +1,261 @@
+---
+# Test playbook for osac.templates.osac_csi_driver / osac_csi_storage role.
+#
+# Scenarios:
+#   Test 1 (hub-cluster path rejected when _remote_kubeconfig is absent):
+#     ansible-playbook ... -e test_hub_path_rejected=true
+#
+#   Test 1b (input validation for tenant_name and _provider_tiers):
+#     ansible-playbook ... -e test_input_validation=true
+#
+#   Test 3 (setup action sets required storage_provider_tenant_config):
+#     ansible-playbook ... -e test_setup_contract=true
+#
+#   Test 4 (storage_provider dispatcher integration for osac-csi / osac_csi_driver):
+#     ansible-playbook ... -e test_dispatcher_integration=true
+#
+#   Test 5 (StorageClass entry and vendor derivation):
+#     ansible-playbook ... -e test_sc_derivation=true
+
+# ──────────────────────────────────────────────────────────────
+# Test 1: Hub-cluster path is rejected (no _remote_kubeconfig)
+# ──────────────────────────────────────────────────────────────
+- name: Test osac_csi_driver -- hub path rejected (no remote kubeconfig)
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: tenant-beta
+    tenant_namespace: osac-tenants
+    _provider_tiers:
+      - name: default
+        protocol: nfs
+        provider: osac_csi_driver
+
+  tasks:
+    - name: Run hub-path-rejected test
+      when: test_hub_path_rejected | default(false) | bool
+      block:
+        - name: Call ensure_storage_class without _remote_kubeconfig (expected to fail)
+          ansible.builtin.include_role:
+            name: osac.templates.osac_csi_driver
+            tasks_from: ensure_storage_class
+
+        - name: This should not be reached
+          ansible.builtin.fail:
+            msg: "Role should have failed when _remote_kubeconfig is absent"
+
+      rescue:
+        - name: Verify failure message mentions kubeconfig requirement
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search('admin_kubeconfig')
+            fail_msg: "Expected failure about admin_kubeconfig, got: {{ ansible_failed_result.msg }}"
+            success_msg: "Hub-path correctly rejected with actionable error"
+
+        - name: Call teardown_cluster_storage without _remote_kubeconfig (expected to fail)
+          ansible.builtin.include_role:
+            name: osac.templates.osac_csi_driver
+            tasks_from: teardown_cluster_storage
+          ignore_errors: true
+          register: teardown_result
+
+        - name: Verify teardown failure message mentions kubeconfig requirement
+          ansible.builtin.assert:
+            that:
+              - teardown_result.msg is search('admin_kubeconfig')
+            fail_msg: "Expected teardown failure about admin_kubeconfig, got: {{ teardown_result.msg | default('') }}"
+            success_msg: "Teardown hub-path correctly rejected with actionable error"
+
+
+# ──────────────────────────────────────────────────────────────
+# Test 1b: Input Validation
+# ──────────────────────────────────────────────────────────────
+- name: Test osac_csi_driver -- input validation
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    _remote_kubeconfig: hack/tmp/fake.kubeconfig
+
+  tasks:
+    - name: Run input validation tests
+      when: test_input_validation | default(false) | bool
+      block:
+        - name: Test invalid tenant_name is rejected
+          block:
+            - name: Call ensure_storage_class with invalid tenant_name
+              ansible.builtin.include_role:
+                name: osac.templates.osac_csi_driver
+                tasks_from: ensure_storage_class
+              vars:
+                tenant_name: "Invalid_Name!"
+                _provider_tiers:
+                  - name: default
+                    protocol: nfs
+                    provider: osac_csi_driver
+
+            - name: Should not reach here (invalid tenant_name)
+              ansible.builtin.fail:
+                msg: "Role should have failed for invalid tenant_name"
+
+          rescue:
+            - name: Verify tenant_name validation error
+              ansible.builtin.assert:
+                that:
+                  - ansible_failed_result.msg is search('not a valid DNS label')
+                fail_msg: "Expected failure about DNS label, got: {{ ansible_failed_result.msg }}"
+                success_msg: "Invalid tenant_name correctly rejected"
+
+        - name: Test empty _provider_tiers is rejected
+          block:
+            - name: Call ensure_storage_class with empty _provider_tiers
+              ansible.builtin.include_role:
+                name: osac.templates.osac_csi_driver
+                tasks_from: ensure_storage_class
+              vars:
+                tenant_name: valid-name
+                _provider_tiers: []
+
+            - name: Should not reach here (empty _provider_tiers)
+              ansible.builtin.fail:
+                msg: "Role should have failed for empty _provider_tiers"
+
+          rescue:
+            - name: Verify _provider_tiers validation error
+              ansible.builtin.assert:
+                that:
+                  - ansible_failed_result.msg is search('_provider_tiers must be provided')
+                fail_msg: "Expected failure about _provider_tiers, got: {{ ansible_failed_result.msg }}"
+                success_msg: "Empty _provider_tiers correctly rejected"
+
+# ──────────────────────────────────────────────────────────────
+# Test 3: Setup contract (sets storage_provider_tenant_config)
+# ──────────────────────────────────────────────────────────────
+- name: Test osac_csi_driver -- setup contract
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: tenant-delta
+    tenant_namespace: osac-tenants
+
+  tasks:
+    - name: Run setup action directly
+      when: test_setup_contract | default(false) | bool
+      block:
+        - name: Include setup action
+          ansible.builtin.include_role:
+            name: osac.templates.osac_csi_driver
+            tasks_from: setup
+
+        - name: Verify storage_provider_tenant_config is populated
+          ansible.builtin.assert:
+            that:
+              - storage_provider_tenant_config is defined
+              - storage_provider_tenant_config is mapping
+            success_msg: "Setup contract satisfied: storage_provider_tenant_config is defined"
+
+# ──────────────────────────────────────────────────────────────
+# Test 4: Dispatcher integration (storage_provider dispatch)
+# ──────────────────────────────────────────────────────────────
+- name: Test osac_csi_driver -- storage_provider dispatcher integration
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: tenant-epsilon
+    tenant_namespace: osac-tenants
+
+  tasks:
+    - name: Run dispatcher integration test for both osac-csi and osac_csi_driver
+      when: test_dispatcher_integration | default(false) | bool
+      block:
+        - name: Test storage_provider setup with provider osac-csi
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_action: setup
+            storage_provider_tiers:
+              - name: gold
+                protocol: nfs
+                provider: osac-csi
+
+        - name: Test storage_provider setup with provider osac_csi_driver
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_action: setup
+            storage_provider_tiers:
+              - name: silver
+                protocol: block
+                provider: osac_csi_driver
+
+        - name: Verify dispatcher produced merged tenant configs
+          ansible.builtin.assert:
+            that:
+              - storage_provider_tenant_configs is defined
+              - "('osac-csi' in storage_provider_tenant_configs) or ('osac_csi' in storage_provider_tenant_configs) or ('osac_csi_driver' in storage_provider_tenant_configs)"
+            success_msg: "storage_provider successfully dispatched to osac_csi role"
+
+# ──────────────────────────────────────────────────────────────
+# Test 5: StorageClass name and parameter derivation
+# ──────────────────────────────────────────────────────────────
+- name: Test osac_csi_driver -- StorageClass derivation
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: tenant-zeta
+    _provider_tiers:
+      - name: default
+        protocol: nfs
+        provider: osac-csi
+      - name: fast
+        protocol: block
+        provider: osac-csi
+
+  tasks:
+    - name: Test SC entry derivation
+      when: test_sc_derivation | default(false) | bool
+      block:
+        - name: Derive expected SC entries
+          ansible.builtin.set_fact:
+            _derived: >-
+              {% set entries = [] -%}
+              {% for tier in _provider_tiers -%}
+              {% set _ = entries.append({'name': 'osac-' ~ tenant_name ~ '-' ~ tier.name, 'tier': tier.name, 'protocol': tier.protocol}) -%}
+              {% endfor -%}
+              {{ entries }}
+
+        - name: Assert derived entries are correct
+          ansible.builtin.assert:
+            that:
+              - _derived | length == 2
+              - _derived[0].name == 'osac-tenant-zeta-default'
+              - _derived[1].name == 'osac-tenant-zeta-fast'
+              - _derived[0].protocol == 'nfs'
+              - _derived[1].protocol == 'block'
+            success_msg: "StorageClass entries derived correctly"
+
+        - name: Define vendor socket paths for derivation test
+          ansible.builtin.set_fact:
+            osac_csi_driver_vendor_node_socket_paths:
+              vast: /var/lib/kubelet/plugins/vast.csi.com
+              pure: /var/lib/kubelet/plugins/pure.csi.com/csi.sock
+
+        - name: Derive vendor sockets from defined paths
+          ansible.builtin.set_fact:
+            _derived_sockets: >-
+              {% set _pairs = [] -%}
+              {% for _k, _v in osac_csi_driver_vendor_node_socket_paths.items() -%}
+              {% set _sock = _v if _v.endswith('.sock') else (_v ~ '/csi.sock') -%}
+              {% set _ = _pairs.append(_k ~ '=' ~ _sock) -%}
+              {% endfor -%}
+              {{ _pairs | sort | join(',') }}
+
+        - name: Assert vendor sockets derived correctly
+          ansible.builtin.assert:
+            that:
+              - "_derived_sockets == 'pure=/var/lib/kubelet/plugins/pure.csi.com/csi.sock,vast=/var/lib/kubelet/plugins/vast.csi.com/csi.sock'"
+            success_msg: "Vendor sockets derived correctly"

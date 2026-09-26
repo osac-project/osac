@@ -23,7 +23,7 @@
 - name: "Compute filtered tiers for current provider"
   ansible.builtin.set_fact:
     _computed_provider_tiers: >-
-      {{ _storage_provider_tiers | selectattr('provider', 'equalto', _current_provider) | list }}
+      {{ _storage_provider_tiers | selectattr('provider', 'in', [_current_provider, _current_provider | replace('_', '-')]) | list }}
 
 - name: "Compute filtered backend connections for current provider's dispatched tiers"
   ansible.builtin.set_fact:
@@ -55,7 +55,9 @@
   block:
     - name: "Include provider storage role"
       ansible.builtin.include_role:
-        name: "osac.templates.{{ _current_provider }}_storage"
+        name: >-
+          {% set _clean = _current_provider | replace('-', '_') -%}
+          osac.templates.{{ _clean if _clean.endswith('_storage') else (_clean ~ '_storage') }}
         tasks_from: "{{ _dispatch_action }}"
         public: true
       vars:

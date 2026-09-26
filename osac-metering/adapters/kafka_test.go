@@ -10,6 +10,7 @@ in compliance with the License. You may obtain a copy of the License at
 package adapters
 
 import (
+	"github.com/IBM/sarama"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -32,7 +33,19 @@ var _ = Describe("newConsumerConfig", func() {
 		sc, err := newConsumerConfig(KafkaConfig{})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(sc.Consumer.Return.Errors).To(BeTrue())
+		Expect(sc.Consumer.Offsets.Initial).To(Equal(int64(sarama.OffsetOldest)))
 		Expect(sc.Consumer.Offsets.AutoCommit.Enable).To(BeFalse())
+	})
+
+	It("supports a newest initial offset", func() {
+		sc, err := newConsumerConfig(KafkaConfig{InitialOffset: "newest"})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(sc.Consumer.Offsets.Initial).To(Equal(int64(sarama.OffsetNewest)))
+	})
+
+	It("rejects an invalid initial offset", func() {
+		_, err := newConsumerConfig(KafkaConfig{InitialOffset: "middle"})
+		Expect(err).To(MatchError(ContainSubstring("must be oldest or newest")))
 	})
 })
 

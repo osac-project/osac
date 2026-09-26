@@ -21,11 +21,13 @@ import "os"
 //   - KAFKA_TLS_CA_CERT       — path to CA certificate file (default: system CAs)
 //   - KAFKA_SASL_USERNAME     — SASL/SCRAM username (default: disabled)
 //   - KAFKA_SASL_PASSWORD_FILE — path to file containing SASL password
+//   - KAFKA_START_OFFSET      — oldest (default) or newest
 func KafkaConfigFromEnv() KafkaConfig {
 	return KafkaConfig{
-		TLSEnabled:   os.Getenv("KAFKA_TLS_ENABLED") != "false",
-		TLSCACert:    os.Getenv("KAFKA_TLS_CA_CERT"),
-		SASLUser:     os.Getenv("KAFKA_SASL_USERNAME"),
-		SASLPassFile: os.Getenv("KAFKA_SASL_PASSWORD_FILE"),
+		TLSEnabled:    os.Getenv("KAFKA_TLS_ENABLED") != "false",
+		TLSCACert:     os.Getenv("KAFKA_TLS_CA_CERT"),
+		SASLUser:      os.Getenv("KAFKA_SASL_USERNAME"),
+		SASLPassFile:  os.Getenv("KAFKA_SASL_PASSWORD_FILE"),
+		InitialOffset: os.Getenv("KAFKA_START_OFFSET"),
 	}
 }

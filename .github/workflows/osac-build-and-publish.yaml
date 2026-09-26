@@ -382,7 +382,7 @@ jobs:
           ["fulfillment-service"]="fulfillment-service/charts/service"
           ["osac-aap"]="osac-aap/charts/aap"
           ["bare-metal-fulfillment-operator"]="bare-metal-fulfillment-operator/charts/operator bare-metal-fulfillment-operator/charts/operator-crds"
-          ["osac-metering"]="osac-metering/charts/osac-metering"
+          ["osac-metering"]="osac-metering/charts/osac-metering osac-metering/charts/cost-management-adapter"
           ["osac-csi-driver"]="osac-csi-driver/charts/csi-driver osac-csi-driver/charts/csi-backends"
           ["osac-ui"]="osac-ui/charts/ui"
         )
@@ -1029,7 +1029,7 @@ jobs:
           fulfillment-service) CHART_DIRS=(fulfillment-service/charts/service) ;;
           osac-aap) CHART_DIRS=(osac-aap/charts/aap) ;;
           bare-metal-fulfillment-operator) CHART_DIRS=(bare-metal-fulfillment-operator/charts/operator bare-metal-fulfillment-operator/charts/operator-crds) ;;
-          osac-metering) CHART_DIRS=(osac-metering/charts/osac-metering) ;;
+          osac-metering) CHART_DIRS=(osac-metering/charts/osac-metering osac-metering/charts/cost-management-adapter) ;;
           osac-csi-driver) CHART_DIRS=(osac-csi-driver/charts/csi-driver osac-csi-driver/charts/csi-backends) ;;
           osac-ui) CHART_DIRS=(osac-ui/charts/ui) ;;
         esac

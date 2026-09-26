@@ -25,7 +25,14 @@ func newConsumerConfig(cfg KafkaConfig) (*sarama.Config, error) {
 	sc := sarama.NewConfig()
 	sc.Version = sarama.V3_9_0_0
 	sc.Consumer.Return.Errors = true
-	sc.Consumer.Offsets.Initial = sarama.OffsetOldest
+	switch strings.ToLower(strings.TrimSpace(cfg.InitialOffset)) {
+	case "", "oldest":
+		sc.Consumer.Offsets.Initial = sarama.OffsetOldest
+	case "newest":
+		sc.Consumer.Offsets.Initial = sarama.OffsetNewest
+	default:
+		return nil, fmt.Errorf("invalid Kafka initial offset %q: must be oldest or newest", cfg.InitialOffset)
+	}
 	sc.Consumer.Offsets.AutoCommit.Enable = false
 	sc.Consumer.Group.Rebalance.GroupStrategies = []sarama.BalanceStrategy{
 		sarama.NewBalanceStrategyRange(),

@@ -1321,6 +1321,94 @@
         }
       }
     },
+    "costManagementAdapter": {
+      "type": "object",
+      "description": "Standalone OSAC Cost Management provider adapter",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Deploy the Cost Management adapter (opt-in)",
+          "default": false
+        },
+        "nameOverride": {
+          "type": "string",
+          "description": "DNS-safe resource name used by the adapter chart"
+        },
+        "image": {
+          "type": "object",
+          "properties": {
+            "repository": {
+              "type": "string"
+            },
+            "tag": {
+              "type": "string"
+            },
+            "pullPolicy": {
+              "type": "string",
+              "enum": [
+                "Always",
+                "IfNotPresent",
+                "Never"
+              ]
+            }
+          }
+        },
+        "costManagement": {
+          "type": "object",
+          "properties": {
+            "apiUrl": {
+              "type": "string"
+            },
+            "apiTokenSecret": {
+              "type": "string"
+            },
+            "consumerGroup": {
+              "type": "string"
+            },
+            "startOffset": {
+              "type": "string",
+              "enum": [
+                "oldest",
+                "newest"
+              ]
+            }
+          }
+        },
+        "kafka": {
+          "type": "object",
+          "properties": {
+            "brokers": {
+              "type": "string"
+            },
+            "clusterName": {
+              "type": "string"
+            },
+            "clusterNamespace": {
+              "type": "string"
+            }
+          }
+        },
+        "certs": {
+          "type": "object",
+          "properties": {
+            "caBundle": {
+              "type": "object",
+              "properties": {
+                "configMap": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "cliImage": {
+          "type": "string"
+        },
+        "resources": {
+          "type": "object"
+        }
+      }
+    },
     "csiDriver": {
       "type": "object",
       "description": "OSAC CSI driver configuration",

@@ -343,6 +343,45 @@ var _ = Describe("Protovalidate interceptor", func() {
 			Expect(response).To(Equal("response"))
 		})
 
+		It("reports an invalid ExternalIPAttachment target at the target field", func() {
+			request := publicv1.ExternalIPAttachmentsCreateRequest_builder{
+				Object: publicv1.ExternalIPAttachment_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "ref-att-bad",
+					}.Build(),
+					Spec: publicv1.ExternalIPAttachmentSpec_builder{
+						ExternalIp: publicv1.ExternalIPLocalReference_builder{
+							Id: "fake-eip-id",
+						}.Build(),
+						ComputeInstance: publicv1.ComputeInstanceLocalReference_builder{
+							Name: "nonexistent-ci",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build()
+
+			handler := func(ctx context.Context, req any) (any, error) {
+				Fail("handler should not be called for an invalid request")
+				return nil, nil
+			}
+
+			_, err := interceptor.UnaryServer(
+				context.Background(),
+				request,
+				&grpc.UnaryServerInfo{
+					FullMethod: "/osac.public.v1.ExternalIPAttachments/Create",
+				},
+				handler,
+			)
+
+			Expect(err).To(HaveOccurred())
+
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(ContainSubstring("object.spec.compute_instance"))
+		})
+
 		DescribeTable("Accepts display_name and description within length limits",
 			func(msg proto.Message) {
 				handlerCalled := false

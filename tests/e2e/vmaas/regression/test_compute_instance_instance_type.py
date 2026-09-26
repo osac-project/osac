@@ -178,7 +178,9 @@ def test_compute_instance_deprecated_warning(
             f"Expected deprecation warning in output, got: {dep_output}"
         )
 
-        uuid_match: re.Match[str] | None = re.search(r"'([^']+)'", dep_output)
+        uuid_match: re.Match[str] | None = re.search(
+            r"'([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})'", dep_output
+        )
         assert uuid_match is not None, f"Failed to parse UUID from CLI output: {dep_output}"
         deprecated_ci_uuid = uuid_match.group(1)
         deprecated_ci_name = wait_for_cr(k8s=k8s_hub_client, uuid=deprecated_ci_uuid)
@@ -198,7 +200,7 @@ def test_compute_instance_nonexistent_instance_type(
         *_build_create_ci_args(cli, vm_template, default_subnet, missing_it_name, default_disk_image, ci_name=ci_name)
     )
     if rc == 0:
-        uuid_match = re.search(r"'([^']+)'", output)
+        uuid_match = re.search(r"'([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})'", output)
         if uuid_match:
             ci_uuid = uuid_match.group(1)
             cr_name = wait_for_cr(k8s=k8s_hub_client, uuid=ci_uuid)
@@ -232,7 +234,7 @@ def test_compute_instance_obsolete_instance_type(
         )
     )
     if rc == 0:
-        uuid_match = re.search(r"'([^']+)'", output)
+        uuid_match = re.search(r"'([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})'", output)
         if uuid_match:
             ci_uuid = uuid_match.group(1)
             cr_name = wait_for_cr(k8s=k8s_hub_client, uuid=ci_uuid)

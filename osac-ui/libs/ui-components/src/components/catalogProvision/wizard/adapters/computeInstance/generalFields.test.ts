@@ -1,114 +1,75 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ComputeInstanceCatalogItem } from '@osac/types';
-import { tIdentity } from '@osac/ui-components/test-utils/i18n';
 
 import { applyVmCatalogGeneralDefaults } from './applyCatalogGeneralDefaults';
 import { buildComputeInstanceCreatePayload, createEmptyComputeInstanceValues } from './payload';
 
+const catalogItemWithSshKeyPolicy = (behavior: unknown): ComputeInstanceCatalogItem =>
+  ({
+    id: 'catalog-item',
+    fields: { sshKey: { behavior } },
+  }) as unknown as ComputeInstanceCatalogItem;
+
 describe('applyVmCatalogGeneralDefaults', () => {
-  it('prefills ssh default from catalog when defined', () => {
+  it('prefills a locked SSH Secret reference from the catalog', () => {
     const setFieldValue = vi.fn();
-    const helpers = { setFieldValue } as never;
 
     applyVmCatalogGeneralDefaults(
-      {
-        id: 'cat-locked',
-        fieldDefinitions: [
-          {
-            path: 'ssh_public_key',
-            editable: false,
-            default: { string_value: 'ssh-ed25519 locked' },
-          },
-        ],
-      } as unknown as ComputeInstanceCatalogItem,
-      helpers,
-      tIdentity,
+      catalogItemWithSshKeyPolicy({
+        case: 'locked',
+        value: { id: 'ssh-secret-id', name: 'locked-key' },
+      }),
+      { setFieldValue } as never,
     );
-    expect(setFieldValue).toHaveBeenCalledWith('spec.sshPublicKey', 'ssh-ed25519 locked');
 
-    setFieldValue.mockClear();
+    expect(setFieldValue).toHaveBeenCalledWith('spec.sshKey.name', 'locked-key');
+  });
+
+  it('prefills an editable SSH Secret default from the catalog', () => {
+    const setFieldValue = vi.fn();
+
     applyVmCatalogGeneralDefaults(
-      {
-        id: 'cat-editable',
-        fieldDefinitions: [
-          {
-            path: 'ssh_public_key',
-            editable: true,
-            default: { string_value: 'ssh-ed25519 default' },
-          },
-        ],
-      } as unknown as ComputeInstanceCatalogItem,
-      helpers,
-      tIdentity,
+      catalogItemWithSshKeyPolicy({
+        case: 'editable',
+        value: { defaultValue: { id: 'ssh-secret-id', name: 'default-key' } },
+      }),
+      { setFieldValue } as never,
     );
-    expect(setFieldValue).toHaveBeenCalledWith('spec.sshPublicKey', 'ssh-ed25519 default');
+
+    expect(setFieldValue).toHaveBeenCalledWith('spec.sshKey.name', 'default-key');
   });
 });
 
-describe('buildComputeInstanceCreatePayload ssh key', () => {
-  it('includes read-only ssh key value in client payload', () => {
-    const values = {
-      ...createEmptyComputeInstanceValues(),
-      catalogItemId: 'cat-locked',
-      metadata: { name: 'web-01', project: '' },
-      spec: {
-        ...createEmptyComputeInstanceValues().spec,
-        sshPublicKey: 'ssh-ed25519 locked',
-        networking: {
-          virtualNetwork: 'vn-1',
-          subnet: 'subnet-1',
-          securityGroups: ['sg-1'],
-        },
+describe('buildComputeInstanceCreatePayload SSH key', () => {
+  const buildValues = (sshKeyName: string) => ({
+    ...createEmptyComputeInstanceValues(),
+    catalogItemId: 'catalog-item',
+    metadata: { name: 'web-01', project: 'project-a' },
+    spec: {
+      ...createEmptyComputeInstanceValues().spec,
+      sshKey: { name: sshKeyName },
+      networking: {
+        virtualNetwork: 'vn-1',
+        subnet: 'subnet-1',
+        securityGroups: ['sg-1'],
       },
-    };
-
-    const vm = buildComputeInstanceCreatePayload(values, {
-      id: 'cat-locked',
-    } as ComputeInstanceCatalogItem);
-    expect(vm.spec?.sshPublicKey).toBe('ssh-ed25519 locked');
+    },
   });
 
-  it('includes prefilled catalog ssh default in client payload', () => {
-    const values = {
-      ...createEmptyComputeInstanceValues(),
-      catalogItemId: 'cat-editable',
-      metadata: { name: 'web-02', project: '' },
-      spec: {
-        ...createEmptyComputeInstanceValues().spec,
-        sshPublicKey: 'ssh-ed25519 default',
-        networking: {
-          virtualNetwork: 'vn-1',
-          subnet: 'subnet-1',
-          securityGroups: ['sg-1'],
-        },
-      },
-    };
-
-    const vm = buildComputeInstanceCreatePayload(values, {
-      id: 'cat-editable',
+  it('sends the selected SSH Secret reference', () => {
+    const vm = buildComputeInstanceCreatePayload(buildValues('tenant-ssh-key'), {
+      id: 'catalog-item',
     } as ComputeInstanceCatalogItem);
-    expect(vm.spec?.sshPublicKey).toBe('ssh-ed25519 default');
+
+    expect(vm.spec?.sshKey).toEqual({ name: 'tenant-ssh-key' });
   });
 
-  it('omits ssh key when tenant clears prefilled default', () => {
-    const values = {
-      ...createEmptyComputeInstanceValues(),
-      catalogItemId: 'cat-editable',
-      metadata: { name: 'web-02', project: '' },
-      spec: {
-        ...createEmptyComputeInstanceValues().spec,
-        networking: {
-          virtualNetwork: 'vn-1',
-          subnet: 'subnet-1',
-          securityGroups: ['sg-1'],
-        },
-      },
-    };
-
-    const vm = buildComputeInstanceCreatePayload(values, {
-      id: 'cat-editable',
+  it('omits the SSH Secret reference when none is selected', () => {
+    const vm = buildComputeInstanceCreatePayload(buildValues(''), {
+      id: 'catalog-item',
     } as ComputeInstanceCatalogItem);
-    expect(vm.spec?.sshPublicKey).toBeUndefined();
+
+    expect(vm.spec?.sshKey).toBeUndefined();
   });
 });

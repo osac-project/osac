@@ -182,7 +182,7 @@ var _ = Describe("Compute instance catalog items server", func() {
 				Object: publicv1.ComputeInstanceCatalogItem_builder{
 					Id: createResponse.GetObject().GetId(),
 					Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
-						SshPublicKey: publicv1.StringFieldPolicy_builder{}.Build(),
+						RunStrategy: publicv1.ComputeInstanceRunStrategyFieldPolicy_builder{}.Build(),
 					}.Build(),
 				}.Build(),
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"fields"}},

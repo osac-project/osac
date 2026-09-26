@@ -51,9 +51,6 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 						DefaultValue: publicv1.DiskImageReference_builder{Name: image.GetMetadata().GetName(), Shared: true}.Build(),
 					}.Build(),
 				}.Build(),
-				SshPublicKey: publicv1.StringFieldPolicy_builder{
-					Editable: publicv1.EditableStringField_builder{DefaultValue: new(catalogItemFixtureSSHPublicKey)}.Build(),
-				}.Build(),
 				UserData: publicv1.StringFieldPolicy_builder{Locked: new("")}.Build(),
 				RunStrategy: publicv1.ComputeInstanceRunStrategyFieldPolicy_builder{
 					Editable: publicv1.EditableComputeInstanceRunStrategyField_builder{}.Build(),
@@ -120,7 +117,6 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			Expect(spec.GetInstanceType().GetShared()).To(BeTrue())
 			Expect(spec.GetDiskImage().GetId()).To(Equal(overrideImage.GetId()))
 			Expect(spec.GetDiskImage().GetShared()).To(BeTrue())
-			Expect(spec.GetSshPublicKey()).To(Equal(catalogItemFixtureSSHPublicKey))
 			Expect(spec.HasUserData()).To(BeTrue())
 			Expect(spec.GetUserData()).To(BeEmpty())
 			Expect(spec.HasAutoExternalIpAttachment()).To(BeTrue())

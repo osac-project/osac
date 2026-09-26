@@ -119,8 +119,8 @@ message ComputeInstanceSpec {
   reserved 4, 5, 6;
   reserved "image", "cores", "memory_gib";
 
-  // SSH public key.
-  optional string ssh_public_key = 7;
+  reserved 7;
+  reserved "ssh_public_key";
 
   // Boot disk configuration.
   optional ComputeInstanceDisk boot_disk = 8;
@@ -169,6 +169,11 @@ message ComputeInstanceSpec {
   // while clearing `user_data` in the same update, but the reference itself cannot be changed
   // afterwards.
   SecretLocalReference user_data_secret = 20 [(google.api.field_behavior) = IMMUTABLE];
+
+  // Reference to a tenant-scoped Secret containing an OpenSSH public key used to configure cloud-init access.
+  // The referenced Secret must have type SECRET_TYPE_SSH_PUBLIC_KEY and a non-empty data["public_key"] entry.
+  // The reference is resolved to its canonical ID and name during creation and cannot be changed afterwards.
+  SecretLocalReference ssh_key = 21 [(google.api.field_behavior) = IMMUTABLE];
 }
 
 

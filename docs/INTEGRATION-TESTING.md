@@ -121,6 +121,23 @@ Report behavioral coverage, execution readiness, and test execution results
 separately. A case with a proposed harness or unresolved command is planned but
 not execution-ready; static checks passing does not change that status.
 
+## fulfillment-service
+
+Touched-area requirements: [component guide](../fulfillment-service/AGENTS.md#integration-tests).
+
+### Test tiers and commands
+
+| Tier | Location / command | Exercises for real | Faked or omitted |
+|---|---|---|---|
+| Unit | `internal/`; `ginkgo run -r internal` | Fulfillment logic and adapters covered by package tests | External services are mocked where the package tests use mocks. |
+| Component integration | `it/`; `make -C ../osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment` | Deployed Fulfillment Service, its database, and the CLI binary built from this checkout | CaaS, VMaaS, BMaaS, and external provider workflows unless a specific test exercises them. |
+| E2E | `../tests/e2e/` | Cross-component OSAC user journeys | Depends on the deployed test environment and its configured providers. |
+
+### Coverage notes
+
+- **CLI commands that only call Fulfillment APIs:** Cover them in `fulfillment-service/it/`.
+- **Provisioning journeys that cross into operators or providers:** Keep them in `tests/e2e/` and exercise those boundaries explicitly.
+
 ## osac-operator
 
 Touched-area requirements: [component guide](../osac-operator/AGENTS.md#integration-testing).

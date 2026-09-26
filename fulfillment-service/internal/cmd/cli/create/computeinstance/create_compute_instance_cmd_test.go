@@ -65,6 +65,16 @@ var _ = Describe("parseNetworkAttachmentFlag", func() {
 // Legacy subnet and security-groups tests removed - these fields are no longer supported
 
 var _ = Describe("buildSpec", func() {
+	It("should populate a registered SSH key reference from the flag", func() {
+		c := &runnerContext{}
+		c.args.sshKey = "login-key"
+
+		spec, err := c.buildSpec("tmpl", nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(spec.GetSshKey().GetName()).To(Equal("login-key"))
+		Expect(spec.GetSshKey().GetId()).To(BeEmpty())
+	})
+
 	It("should send the resolved instance type ID", func() {
 		c := &runnerContext{}
 		c.args.instanceType = "instance-type-id"
@@ -238,6 +248,12 @@ var _ = Describe("Create computeinstance flag registration", func() {
 		cmd.SetErr(GinkgoWriter)
 		flag := cmd.Flags().Lookup("disk-image")
 		Expect(flag).NotTo(BeNil())
+	})
+
+	It("should register --ssh-key and not the removed inline key flag", func() {
+		cmd := Cmd()
+		Expect(cmd.Flags().Lookup("ssh-key")).NotTo(BeNil())
+		Expect(cmd.Flags().Lookup("ssh-public-key")).To(BeNil())
 	})
 })
 

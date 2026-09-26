@@ -250,6 +250,11 @@ subnet/security-group attachments, and Bare Metal instance types.
 A shared catalog cannot lock or default local references. Use `editable: {}` to let each tenant
 supply its own value. StorageTier references use the platform scope.
 
+For ComputeInstance catalog items, `ssh_key` is an optional reference to an SSH public key Secret.
+A shared item can leave it editable with no default so each tenant can supply its own key. A
+tenant-scoped item can default or lock a key from its own scope. Omitting the key is valid; it only
+means SSH public-key access is not configured by the catalog item.
+
 ## Field Policies
 
 Each policy selects exactly one behavior. Reference policies carry typed reference objects, as
@@ -292,7 +297,7 @@ fields; in YAML, write them as nested mappings.
 
 | Field | Description |
 |-------|-------------|
-| `ssh_public_key` | SSH public key |
+| `ssh_key` | Optional reference to an SSH public key Secret |
 | `instance_type` | InstanceType reference defining CPU cores, memory, and optional GPUs |
 | `run_strategy` | VM run strategy (`COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS`, `COMPUTE_INSTANCE_RUN_STRATEGY_HALTED`) |
 | `user_data` | Cloud-init or ignition user data |

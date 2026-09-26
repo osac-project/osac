@@ -44,7 +44,7 @@ const VmDetailsCard = ({ vm }: Props) => {
           <DescriptionListGroup>
             <DescriptionListTerm>{t('SSH public key')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {displayValue(vm.spec?.sshPublicKey)}
+              {displayValue(vm.spec?.sshKey?.name)}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>

@@ -86,6 +86,18 @@ def wait_for_running(*, k8s: K8sClient, name: str) -> None:
     )
 
 
+def wait_for_vmi_ip(*, k8s: K8sClient, vmi_namespace: str, compute_instance_name: str) -> str:
+    return poll_until(
+        fn=lambda: k8s.get_vmi_ip(
+            vmi_namespace=vmi_namespace, compute_instance_name=compute_instance_name, checked=False
+        ),
+        until=lambda v: v != "",
+        retries=60,
+        delay=5,
+        description=f"VMI IP for {compute_instance_name}",
+    )
+
+
 def wait_for_restart(*, k8s: K8sClient, name: str, initial: str, restart_ts: str) -> None:
     poll_until(
         fn=lambda: k8s.get_compute_instance_last_restarted_at(name=name),

@@ -111,10 +111,10 @@ func Cmd() *cobra.Command {
 		diskImageFlagHelp,
 	)
 	flags.StringVar(
-		&runner.args.sshPublicKey,
-		"ssh-public-key",
+		&runner.args.sshKey,
+		"ssh-key",
 		"",
-		sshPublicKeyFlagHelp,
+		sshKeyFlagHelp,
 	)
 	flags.Int32Var(
 		&runner.args.bootDiskSizeGiB,
@@ -187,7 +187,7 @@ type runnerContext struct {
 		setFields               []string
 		instanceType            string
 		diskImage               string
-		sshPublicKey            string
+		sshKey                  string
 		bootDiskSizeGiB         int32
 		bootDiskStorageTier     string
 		additionalDisks         []string
@@ -761,8 +761,8 @@ func (c *runnerContext) buildSpec(templateID string,
 	if c.args.instanceType != "" {
 		spec.InstanceType = &publicv1.InstanceTypeReference{Id: c.args.instanceType}
 	}
-	if c.args.sshPublicKey != "" {
-		spec.SshPublicKey = proto.String(c.args.sshPublicKey)
+	if c.args.sshKey != "" {
+		spec.SshKey = publicv1.SecretLocalReference_builder{Name: c.args.sshKey}.Build()
 	}
 	disk, err := c.buildBootDisk()
 	if err != nil {
@@ -911,8 +911,8 @@ func (c *runnerContext) buildSpecFromCatalogItem(catalogItemID string) (*publicv
 	if c.args.instanceType != "" {
 		spec.InstanceType = &publicv1.InstanceTypeReference{Id: c.args.instanceType}
 	}
-	if c.args.sshPublicKey != "" {
-		spec.SshPublicKey = proto.String(c.args.sshPublicKey)
+	if c.args.sshKey != "" {
+		spec.SshKey = publicv1.SecretLocalReference_builder{Name: c.args.sshKey}.Build()
 	}
 	disk, err := c.buildBootDisk()
 	if err != nil {
@@ -1113,8 +1113,8 @@ const diskImageFlagHelp = `
 _NAME_ - DiskImage resource name to use for this compute instance.
 `
 
-const sshPublicKeyFlagHelp = `
-_KEY_ - SSH public key.
+const sshKeyFlagHelp = `
+_NAME_ - Secret name containing an SSH public key.
 `
 
 const bootDiskSizeFlagHelp = `

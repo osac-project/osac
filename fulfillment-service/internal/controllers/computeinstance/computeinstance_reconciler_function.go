@@ -27,6 +27,8 @@ import (
 	"slices"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	corev1 "k8s.io/api/core/v1"
@@ -61,6 +63,22 @@ const userDataSecretKey = "userdata"
 // setReconciliationFailed, but transient errors should just be retried, leaving the compute
 // instance's state untouched so it doesn't look like a permanent failure while it is retried.
 var errTransientK8sError = errors.New("transient kubernetes error")
+
+// SecretResolutionError classifies a failure while resolving the Secret referenced
+// by the ComputeInstance SSH key field.
+type SecretResolutionError struct {
+	Permanent bool
+	Reason    string
+	Err       error
+}
+
+func (e *SecretResolutionError) Error() string {
+	return fmt.Sprintf("failed to resolve SSH public key Secret: %v", e.Err)
+}
+
+func (e *SecretResolutionError) Unwrap() error {
+	return e.Err
+}
 
 // FunctionBuilder contains the data and logic needed to build a function that reconciles compute instances.
 type FunctionBuilder struct {
@@ -155,7 +173,18 @@ func (r *function) run(ctx context.Context, computeInstance *privatev1.ComputeIn
 	} else {
 		reconcileErr = t.update(ctx)
 	}
-	if reconcileErr != nil && !errors.Is(reconcileErr, errTransientK8sError) {
+	var secretErr *SecretResolutionError
+	if errors.As(reconcileErr, &secretErr) {
+		if secretErr.Permanent {
+			t.setReconciliationFailedWithReason(secretErr.Err, secretErr.Reason)
+		} else {
+			// Resolution failures are retried without changing API status or creating
+			// a Kubernetes object. Restore the input so defaults and hub selection do
+			// not turn a transient lookup failure into a persisted mutation.
+			proto.Reset(computeInstance)
+			proto.Merge(computeInstance, oldComputeInstance)
+		}
+	} else if reconcileErr != nil && !errors.Is(reconcileErr, errTransientK8sError) {
 		t.setReconciliationFailed(reconcileErr)
 	}
 	// Calculate which fields the reconciler actually modified and use a field mask
@@ -571,6 +600,10 @@ func (t *task) updateCondition(conditionType privatev1.ComputeInstanceConditionT
 }
 
 func (t *task) setReconciliationFailed(err error) {
+	t.setReconciliationFailedWithReason(err, "ReconciliationFailed")
+}
+
+func (t *task) setReconciliationFailedWithReason(err error, reason string) {
 	if !t.computeInstance.HasStatus() {
 		t.computeInstance.SetStatus(&privatev1.ComputeInstanceStatus{})
 	}
@@ -582,7 +615,7 @@ func (t *task) setReconciliationFailed(err error) {
 	t.updateCondition(
 		privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_PROVISIONED,
 		privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
-		"ReconciliationFailed",
+		reason,
 		err.Error(),
 	)
 }
@@ -727,8 +760,57 @@ func (t *task) addExplicitFields(ctx context.Context, spec *osacv1alpha1.Compute
 			spec.RunStrategy = osacv1alpha1.RunStrategyHalted
 		}
 	}
-	if ciSpec.HasSshPublicKey() {
-		spec.SSHKey = ciSpec.GetSshPublicKey()
+	if sshKeyRef := ciSpec.GetSshKey(); sshKeyRef != nil {
+		if sshKeyRef.GetId() == "" {
+			return &SecretResolutionError{
+				Permanent: true,
+				Reason:    "SecretInvalid",
+				Err:       status.Error(codes.InvalidArgument, "ComputeInstance SSH key Secret reference has no id"),
+			}
+		}
+		response, secretErr := t.r.secretsClient.Get(ctx, privatev1.SecretsGetRequest_builder{
+			Id: sshKeyRef.GetId(),
+		}.Build())
+		if secretErr != nil {
+			code := status.Code(secretErr)
+			resolutionErr := &SecretResolutionError{Err: secretErr}
+			switch code {
+			case codes.NotFound:
+				resolutionErr.Permanent = true
+				resolutionErr.Reason = "SecretNotFound"
+			case codes.InvalidArgument:
+				resolutionErr.Permanent = true
+				resolutionErr.Reason = "SecretInvalid"
+			}
+			return resolutionErr
+		}
+		if response == nil || response.GetObject() == nil {
+			return &SecretResolutionError{
+				Err: status.Error(codes.Unknown, "Secrets.Get returned no object"),
+			}
+		}
+		secret := response.GetObject()
+		if secret.GetType() != privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY {
+			return &SecretResolutionError{
+				Permanent: true,
+				Reason:    "SecretInvalid",
+				Err: status.Errorf(
+					codes.InvalidArgument,
+					"ComputeInstance SSH key Secret has type %s; expected %s",
+					secret.GetType(),
+					privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+				),
+			}
+		}
+		publicKey := secret.GetData()["public_key"]
+		if len(publicKey) == 0 {
+			return &SecretResolutionError{
+				Permanent: true,
+				Reason:    "SecretInvalid",
+				Err:       status.Error(codes.InvalidArgument, "ComputeInstance SSH key Secret has no public_key data"),
+			}
+		}
+		spec.SSHKey = string(publicKey)
 	}
 	if t.userDataSecretName != "" {
 		spec.UserDataSecretRef = &corev1.LocalObjectReference{

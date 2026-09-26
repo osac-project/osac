@@ -47,6 +47,7 @@ type PrivateComputeInstanceCatalogItemsServer struct {
 	templatesDao      *dao.GenericDAO[*privatev1.ComputeInstanceTemplate]
 	instanceTypesDao  *dao.GenericDAO[*privatev1.InstanceType]
 	diskImagesDao     *dao.GenericDAO[*privatev1.DiskImage]
+	secretsDao        *dao.GenericDAO[*privatev1.Secret]
 	storageTiersDao   *dao.GenericDAO[*privatev1.StorageTier]
 	subnetsDao        *dao.GenericDAO[*privatev1.Subnet]
 	securityGroupsDao *dao.GenericDAO[*privatev1.SecurityGroup]
@@ -119,6 +120,15 @@ func (b *PrivateComputeInstanceCatalogItemsServerBuilder) Build() (result *Priva
 		return
 	}
 
+	secretsDao, err := dao.NewGenericDAO[*privatev1.Secret]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
 	storageTiersDao, err := dao.NewGenericDAO[*privatev1.StorageTier]().
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
@@ -164,6 +174,7 @@ func (b *PrivateComputeInstanceCatalogItemsServerBuilder) Build() (result *Priva
 		templatesDao:      templatesDao,
 		instanceTypesDao:  instanceTypesDao,
 		diskImagesDao:     diskImagesDao,
+		secretsDao:        secretsDao,
 		storageTiersDao:   storageTiersDao,
 		subnetsDao:        subnetsDao,
 		securityGroupsDao: securityGroupsDao,
@@ -237,7 +248,7 @@ func (s *PrivateComputeInstanceCatalogItemsServer) prepareCatalogItemCandidate(
 		return nil, err
 	}
 	return validateAndCanonicalizeComputeInstanceCatalogItemPolicies(
-		ctx, candidate, s.instanceTypesDao, s.diskImagesDao, s.storageTiersDao, s.subnetsDao, s.securityGroupsDao,
+		ctx, candidate, s.instanceTypesDao, s.diskImagesDao, s.secretsDao, s.storageTiersDao, s.subnetsDao, s.securityGroupsDao,
 	)
 }
 

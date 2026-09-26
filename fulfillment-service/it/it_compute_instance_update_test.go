@@ -98,6 +98,9 @@ var _ = Describe("Compute instance updates", Label("compute-updates"), func() {
 			Expect(stored.GetObject().GetMetadata().GetFinalizers()).To(ContainElement(computeInstanceTestFinalizer))
 		}
 		setCatalogItemSubnetFixtureState(ctx, network.subnetID, privatev1.SubnetState_SUBNET_STATE_PENDING)
+		DeferCleanup(func(ctx context.Context) {
+			setCatalogItemSubnetFixtureState(ctx, network.subnetID, privatev1.SubnetState_SUBNET_STATE_READY)
+		})
 		candidate := proto.Clone(stored.GetObject()).(*privatev1.ComputeInstance)
 		candidate.GetSpec().GetNetworkAttachments()[0].SetSecurityGroups(nil)
 		if !deleteFirst {

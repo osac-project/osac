@@ -23,8 +23,6 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
-func catalogPolicyStringPtr(value string) *string { return &value }
-
 var _ = Describe("Catalog Item typed field policies", func() {
 	DescribeTable("validates concrete SSH policy values",
 		func(validate func(*privatev1.StringFieldPolicy) error) {
@@ -42,10 +40,6 @@ var _ = Describe("Catalog Item typed field policies", func() {
 				Editable: privatev1.EditableStringField_builder{}.Build(),
 			}.Build())).To(Succeed())
 		},
-		Entry("for ComputeInstance Catalog Items", func(policy *privatev1.StringFieldPolicy) error {
-			return validateComputeInstanceCatalogItemScalarPolicies(
-				privatev1.ComputeInstanceCatalogItemFields_builder{SshPublicKey: policy}.Build())
-		}),
 		Entry("for Cluster Catalog Items", func(policy *privatev1.StringFieldPolicy) error {
 			return validateClusterCatalogItemScalarPolicies(
 				privatev1.ClusterCatalogItemFields_builder{SshPublicKey: policy}.Build())
@@ -64,25 +58,22 @@ var _ = Describe("Catalog Item typed field policies", func() {
 				DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{
 					Editable: privatev1.EditableDiskImageReferenceField_builder{DefaultValue: defaultImage}.Build(),
 				}.Build(),
-				SshPublicKey: privatev1.StringFieldPolicy_builder{
-					Editable: privatev1.EditableStringField_builder{DefaultValue: catalogPolicyStringPtr("ssh-ed25519 default")}.Build(),
-				}.Build(),
 			}.Build(),
 		}.Build()
 
 		Expect(applyComputeInstanceCatalogItemPolicies(spec, item.GetFields())).To(Succeed())
 		Expect(spec.GetDiskImage().GetName()).To(Equal("default-image"))
-		Expect(spec.GetSshPublicKey()).To(Equal("ssh-ed25519 default"))
 		spec.GetDiskImage().SetName("mutated")
 		Expect(item.GetFields().GetDiskImage().GetEditable().GetDefaultValue().GetName()).To(Equal("default-image"))
 	})
 
 	It("rejects supplied values for locked compute fields", func() {
-		locked := "ssh-ed25519 catalog"
-		spec := privatev1.ComputeInstanceSpec_builder{SshPublicKey: catalogPolicyStringPtr("ssh-ed25519 user")}.Build()
+		locked := privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS
+		spec := privatev1.ComputeInstanceSpec_builder{RunStrategy: &locked}.Build()
+		lockedPolicy := locked
 		item := privatev1.ComputeInstanceCatalogItem_builder{
 			Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
-				SshPublicKey: privatev1.StringFieldPolicy_builder{Locked: &locked}.Build(),
+				RunStrategy: privatev1.ComputeInstanceRunStrategyFieldPolicy_builder{Locked: &lockedPolicy}.Build(),
 			}.Build(),
 		}.Build()
 

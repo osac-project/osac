@@ -7,6 +7,7 @@ import {
   ComputeInstanceCatalogItemReferenceSchema,
   ComputeInstanceTemplateReferenceSchema,
   InstanceTypeReferenceSchema,
+  SecretLocalReferenceSchema,
   StorageTierReferenceSchema,
 } from '@osac/types';
 
@@ -39,7 +40,7 @@ const catalogVm: ComputeInstance = {
       id: 'catalog-rhel-9',
       name: 'RHEL 9 catalog',
     }),
-    sshPublicKey: 'ssh-rsa AAAA...',
+    sshKey: create(SecretLocalReferenceSchema, { name: 'tenant-ssh-key' }),
     instanceType: create(InstanceTypeReferenceSchema, { id: 'standard-4-8' }),
     bootDisk: {
       $typeName: 'osac.public.v1.ComputeInstanceDisk',
@@ -59,14 +60,14 @@ const renderCard = (vm: ComputeInstance = catalogVm) =>
   renderWithProviders(<VmDetailsCard vm={vm} />);
 
 describe('VmDetailsCard', () => {
-  it('shows catalog fields with full SSH key', () => {
+  it('shows catalog fields with the SSH Secret reference', () => {
     renderCard();
 
     expect(screen.getByText('Details')).toBeInTheDocument();
     expect(screen.getByText('RHEL 9 catalog')).toBeInTheDocument();
     expect(screen.getByText('standard-4-8')).toBeInTheDocument();
     expect(screen.getByText('web-01')).toBeInTheDocument();
-    expect(screen.getByText('ssh-rsa AAAA...')).toBeInTheDocument();
+    expect(screen.getByText('tenant-ssh-key')).toBeInTheDocument();
     expect(screen.getByText('40 GB, balanced')).toBeInTheDocument();
     expect(screen.getByText('alice')).toBeInTheDocument();
     expect(screen.queryByText('User Data')).not.toBeInTheDocument();
@@ -81,13 +82,13 @@ describe('VmDetailsCard', () => {
     renderCard({
       id: 'vm-2',
       metadata: { name: 'legacy-vm' },
-      spec: { sshPublicKey: 'ssh-rsa LEGACY' },
+      spec: { sshKey: { name: 'legacy-key' } },
     } as ComputeInstance);
     expect(
       screen.queryByText('Catalog configuration is unavailable for this virtual machine.'),
     ).not.toBeInTheDocument();
     expect(screen.getByText('legacy-vm')).toBeInTheDocument();
-    expect(screen.getByText('ssh-rsa LEGACY')).toBeInTheDocument();
+    expect(screen.getByText('legacy-key')).toBeInTheDocument();
     expect(screen.getByText('SSH public key')).toBeInTheDocument();
   });
 

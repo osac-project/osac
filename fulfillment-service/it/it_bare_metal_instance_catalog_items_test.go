@@ -52,6 +52,14 @@ var _ = Describe("Bare Metal Instance Catalog Items", Ordered, Label("catalog-it
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 
+		// Register cleanup immediately so the tenant is deleted even if
+		// a later setup step (e.g. the SYNCED wait) fails.
+		DeferCleanup(func(ctx context.Context) {
+			_, _ = tenantsClient.Delete(ctx, privatev1.TenantsDeleteRequest_builder{
+				Id: bmTenant,
+			}.Build())
+		})
+
 		// Wait for the tenant to reach SYNCED state:
 		bo := backoff.NewExponentialBackOff()
 		bo.InitialInterval = 1 * time.Second
@@ -75,12 +83,6 @@ var _ = Describe("Bare Metal Instance Catalog Items", Ordered, Label("catalog-it
 		// user token source includes the tenant in its JWT organization claim.
 		err = tool.ensureUserInOrg(ctx, userUsername, bmTenant)
 		Expect(err).ToNot(HaveOccurred())
-
-		DeferCleanup(func(ctx context.Context) {
-			_, _ = tenantsClient.Delete(ctx, privatev1.TenantsDeleteRequest_builder{
-				Id: bmTenant,
-			}.Build())
-		})
 	})
 
 	Context("Provisioning and field governance", func() {

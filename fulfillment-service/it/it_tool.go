@@ -93,6 +93,7 @@ type Tool struct {
 	kubeClient    crclient.Client
 	kubeClientSet *kubernetes.Clientset
 	caPool        *trust.CertPool
+	caFiles       []string
 	kcFile        string
 	internalView  *ToolView
 	externalView  *ToolView
@@ -498,6 +499,7 @@ func (t *Tool) loadCaBundle(ctx context.Context) error {
 		}
 		caFiles = append(caFiles, caFile)
 	}
+	t.caFiles = caFiles
 
 	// Create the CA pool:
 	t.caPool, err = trust.NewCertPool().
@@ -1794,16 +1796,7 @@ type SharedConfig struct {
 
 // MarshalSharedConfig serializes the data that other Ginkgo parallel processes need
 // to set up their own gRPC connections and HTTP clients.
-func (t *Tool) MarshalSharedConfig() []byte {
-	// Collect CA files from the tmpDir
-	var caFiles []string
-	entries, _ := os.ReadDir(t.tmpDir)
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			caFiles = append(caFiles, filepath.Join(t.tmpDir, entry.Name()))
-		}
-	}
-
+func (t *Tool) MarshalSharedConfig() ([]byte, error) {
 	config := SharedConfig{
 		ProjectDir:    t.projectDir,
 		TmpDir:        t.tmpDir,
@@ -1811,13 +1804,13 @@ func (t *Tool) MarshalSharedConfig() []byte {
 		ClusterName:   t.clusterName,
 		KcFile:        t.kcFile,
 		CLIBinaryPath: t.cliBinaryPath,
-		CaFiles:       caFiles,
+		CaFiles:       append([]string(nil), t.caFiles...),
 	}
 	data, err := json.Marshal(config)
 	if err != nil {
-		panic(fmt.Sprintf("failed to marshal shared config: %v", err))
+		return nil, fmt.Errorf("failed to marshal shared config: %w", err)
 	}
-	return data
+	return data, nil
 }
 
 // SetupLocalClients creates process-local gRPC connections and HTTP clients from a

@@ -72,6 +72,14 @@ var _ = Describe("Volume lifecycle", Ordered, func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 
+		// Register cleanup immediately so the tenant is deleted even if
+		// a later setup step (e.g. the SYNCED wait) fails.
+		DeferCleanup(func(ctx context.Context) {
+			_, _ = tenantsClient.Delete(ctx, privatev1.TenantsDeleteRequest_builder{
+				Id: testTenant,
+			}.Build())
+		})
+
 		// Wait for the tenant to reach SYNCED state:
 		bo := backoff.NewExponentialBackOff()
 		bo.InitialInterval = 1 * time.Second
@@ -90,12 +98,6 @@ var _ = Describe("Volume lifecycle", Ordered, func() {
 			return nil
 		}, backoff.WithContext(bo, ctx))
 		Expect(err).ToNot(HaveOccurred())
-
-		DeferCleanup(func(ctx context.Context) {
-			_, _ = tenantsClient.Delete(ctx, privatev1.TenantsDeleteRequest_builder{
-				Id: testTenant,
-			}.Build())
-		})
 	})
 
 	BeforeEach(func() {

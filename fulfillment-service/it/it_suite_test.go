@@ -84,12 +84,20 @@ var _ = SynchronizedBeforeSuite(
 			slog.String("!secret", config.Secret),
 		)
 
-		// Create and setup the tool (full infrastructure setup):
+		// Create and setup the tool (full infrastructure setup).
+		// Register cleanup immediately after Build so that partially
+		// initialized state (tmpDir, gRPC views) is cleaned up even
+		// if Setup fails partway through.
 		tool, err = NewTool().
 			SetLogger(logger).
 			SetSecret(config.Secret).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
+		setupTool := tool
+		DeferCleanup(func() {
+			err := setupTool.Cleanup(context.Background())
+			Expect(err).ToNot(HaveOccurred())
+		})
 		err = tool.Setup(ctx)
 		Expect(err).ToNot(HaveOccurred())
 
@@ -117,7 +125,9 @@ var _ = SynchronizedBeforeSuite(
 		}
 
 		// Serialize the shared config for other processes:
-		return tool.MarshalSharedConfig()
+		data, err := tool.MarshalSharedConfig()
+		Expect(err).ToNot(HaveOccurred())
+		return data
 	},
 
 	// All processes (including process 1): deserialize the shared config and
@@ -155,9 +165,8 @@ var _ = SynchronizedBeforeSuite(
 		Expect(err).ToNot(HaveOccurred())
 
 		DeferCleanup(func() {
-			// Only close gRPC connections; process 1 handles cluster-level
-			// cleanup (log export, tmp dir removal) via SynchronizedAfterSuite
-			// or its own cleanup path.
+			// Close process-local gRPC connections. The process-1 setup
+			// callback handles cluster-level cleanup via its own DeferCleanup.
 			if tool.InternalView() != nil {
 				_ = tool.InternalView().Close()
 			}
@@ -165,19 +174,5 @@ var _ = SynchronizedBeforeSuite(
 				_ = tool.ExternalView().Close()
 			}
 		})
-	},
-)
-
-var _ = SynchronizedAfterSuite(
-	// All processes: no-op (per-process cleanup is in DeferCleanup above).
-	func() {},
-
-	// Process 1 only: run cluster-level cleanup (export logs, remove tmpDir).
-	func() {
-		if tool != nil {
-			ctx := context.Background()
-			err := tool.Cleanup(ctx)
-			Expect(err).ToNot(HaveOccurred())
-		}
 	},
 )

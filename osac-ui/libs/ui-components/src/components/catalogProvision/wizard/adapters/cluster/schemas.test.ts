@@ -6,6 +6,7 @@ import type { ClusterCatalogItem } from '@osac/types';
 import type { ClusterWizardValues } from './fields';
 import { createEmptyNodeSetRow } from './fields';
 import { buildClusterStepSchema } from './schemas';
+import { emptyResourceSelectValue } from '../../../../Form/resourceSelectValue';
 import { tIdentity as t } from '../../../../../test-utils/i18n';
 
 const clusterCatalogItem: ClusterCatalogItem = {
@@ -52,13 +53,8 @@ const emptyValues: ClusterWizardValues = {
     },
     useDefaultNetwork: true,
     networkAttachment: {
-      virtualNetwork: '',
-      subnet: '',
-      securityGroups: [],
-    },
-    networkAttachmentDisplayNames: {
-      virtualNetwork: '',
-      subnet: '',
+      virtualNetwork: emptyResourceSelectValue(),
+      subnet: emptyResourceSelectValue(),
       securityGroups: [],
     },
     autoExternalIpAttachment: false,
@@ -462,8 +458,8 @@ describe('buildClusterStepSchema', () => {
           ...emptyValues.spec,
           useDefaultNetwork: true,
           networkAttachment: {
-            virtualNetwork: '',
-            subnet: '',
+            virtualNetwork: emptyResourceSelectValue(),
+            subnet: emptyResourceSelectValue(),
             securityGroups: [],
           },
         },
@@ -483,8 +479,8 @@ describe('buildClusterStepSchema', () => {
           ...emptyValues.spec,
           useDefaultNetwork: false,
           networkAttachment: {
-            virtualNetwork: '',
-            subnet: '',
+            virtualNetwork: emptyResourceSelectValue(),
+            subnet: emptyResourceSelectValue(),
             securityGroups: [],
           },
         },
@@ -494,7 +490,9 @@ describe('buildClusterStepSchema', () => {
     expect(errors).toEqual({
       spec: {
         networkAttachment: {
-          subnet: 'Subnet is required',
+          subnet: {
+            id: 'Subnet is required',
+          },
         },
       },
     });

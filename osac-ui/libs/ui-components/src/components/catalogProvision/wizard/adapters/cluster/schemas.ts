@@ -140,12 +140,15 @@ const buildClusterFieldDefinitions = (catalogItem: unknown, t: TFunction) => {
     }),
     specUseDefaultNetwork: yup.boolean(),
     specNetworkAttachment: yup.object({
-      virtualNetwork: yup.string(),
-      subnet: yup.string().test('subnet-required', t('Subnet is required'), function (value) {
-        const spec = this.from?.[1]?.value as { useDefaultNetwork?: boolean } | undefined;
-        return spec?.useDefaultNetwork !== false || Boolean(value?.trim());
+      virtualNetwork: yup.object({ id: yup.string(), name: yup.string() }),
+      subnet: yup.object({
+        id: yup.string().test('subnet-required', t('Subnet is required'), function (value) {
+          const spec = this.from?.[2]?.value as { useDefaultNetwork?: boolean } | undefined;
+          return spec?.useDefaultNetwork !== false || Boolean(value?.trim());
+        }),
+        name: yup.string(),
       }),
-      securityGroups: yup.array().of(yup.string()),
+      securityGroups: yup.array().of(yup.object({ id: yup.string(), name: yup.string() })),
     }),
     specAutoExternalIpAttachment: yup.boolean(),
   };

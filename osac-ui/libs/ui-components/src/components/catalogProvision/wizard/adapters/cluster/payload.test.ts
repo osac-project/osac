@@ -160,9 +160,9 @@ describe('buildClusterCreatePayload', () => {
         pullSecretSecret: { name: 'secret' },
         useDefaultNetwork: true,
         networkAttachment: {
-          virtualNetwork: 'vn-1',
-          subnet: 'subnet-1',
-          securityGroups: ['sg-1'],
+          virtualNetwork: { id: 'vn-1', name: 'vn-1' },
+          subnet: { id: 'subnet-1', name: 'subnet-1' },
+          securityGroups: [{ id: 'sg-1', name: 'sg-1' }],
         },
       },
     };
@@ -181,8 +181,8 @@ describe('buildClusterCreatePayload', () => {
         pullSecretSecret: { name: 'secret' },
         useDefaultNetwork: false,
         networkAttachment: {
-          virtualNetwork: '',
-          subnet: '',
+          virtualNetwork: { id: '', name: '' },
+          subnet: { id: '', name: '' },
           securityGroups: [],
         },
       },
@@ -202,9 +202,12 @@ describe('buildClusterCreatePayload', () => {
         pullSecretSecret: { name: 'secret' },
         useDefaultNetwork: false,
         networkAttachment: {
-          virtualNetwork: 'vn-1',
-          subnet: 'my-subnet',
-          securityGroups: ['sg-1', 'sg-2'],
+          virtualNetwork: { id: 'vn-1', name: 'tenant-vn' },
+          subnet: { id: 'my-subnet', name: 'tenant-subnet' },
+          securityGroups: [
+            { id: 'sg-1', name: 'default-sg-1' },
+            { id: 'sg-2', name: 'default-sg-2' },
+          ],
         },
       },
     };

@@ -1,3 +1,5 @@
+import type { ResourceSelectValue } from '../../../../Form/resourceSelectValue';
+
 export interface ClusterNodeSetRow {
   rowId: string;
   name: string;
@@ -25,15 +27,9 @@ export interface ClusterWizardValues {
     };
     useDefaultNetwork: boolean;
     networkAttachment: {
-      virtualNetwork: string;
-      subnet: string;
-      securityGroups: string[];
-    };
-    /** Display names resolved at selection time; avoids re-fetching in the review step. */
-    networkAttachmentDisplayNames: {
-      virtualNetwork: string;
-      subnet: string;
-      securityGroups: string[];
+      virtualNetwork: ResourceSelectValue;
+      subnet: ResourceSelectValue;
+      securityGroups: ResourceSelectValue[];
     };
     autoExternalIpAttachment: boolean;
   };

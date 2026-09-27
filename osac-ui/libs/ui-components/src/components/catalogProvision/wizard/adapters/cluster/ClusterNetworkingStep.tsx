@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef } from 'react';
-import { Alert, Button, FormSection, Stack, StackItem } from '@patternfly/react-core';
-import { useFormikContext } from 'formik';
+import { Alert, Button, FormGroup, FormSection, Stack, StackItem } from '@patternfly/react-core';
+import { MultiTypeaheadSelect, type MultiTypeaheadSelectOption } from '@patternfly/react-templates';
+import { useField, useFormikContext } from 'formik';
 
-import type { ClusterCatalogItem } from '@osac/types';
+import { type ClusterCatalogItem, Subnets, VirtualNetworks } from '@osac/types';
 
 import type { ClusterWizardValues } from './fields';
 import {
@@ -10,15 +11,16 @@ import {
   resourceDisplayName,
   securityGroupFilterForVirtualNetworkList,
   useSecurityGroups,
-  useSubnets,
-  useVirtualNetworks,
   virtualNetworkFilterForSubnetList,
 } from '../../../../../api/v1/networking';
 import { useTranslation } from '../../../../../hooks/useTranslation';
 import { InputField } from '../../../../Form/InputField';
-import { MultiSelectField } from '../../../../Form/MultiSelectField';
 import OsacForm from '../../../../Form/OsacForm';
-import { SelectField } from '../../../../Form/SelectField';
+import {
+  ResourceSelectField,
+  type ResourceSelectValue,
+} from '../../../../Form/ResourceSelectField';
+import { emptyResourceSelectValue } from '../../../../Form/resourceSelectValue';
 import { SwitchField } from '../../../../Form/SwitchField';
 import { getCatalogFieldOverlay, readCatalogFieldDefinitions } from '../../catalogOverlay';
 import { useWizardValidation } from '../../WizardValidationContext';
@@ -34,7 +36,7 @@ export const ClusterNetworkingStep = ({ catalogItem }: Props) => {
     useFormikContext<ClusterWizardValues>();
 
   const useDefaultNetwork = values.spec.useDefaultNetwork;
-  const virtualNetworkId = values.spec.networkAttachment.virtualNetwork;
+  const virtualNetworkId = values.spec.networkAttachment.virtualNetwork.id;
 
   const definitions = useMemo(() => readCatalogFieldDefinitions(catalogItem), [catalogItem]);
   const podCidrOverlay = useMemo(
@@ -46,28 +48,7 @@ export const ClusterNetworkingStep = ({ catalogItem }: Props) => {
     [definitions, t],
   );
 
-  const {
-    data: virtualNetworks = [],
-    isPending: virtualNetworksLoading,
-    isError: virtualNetworksError,
-    refetch: refetchVirtualNetworks,
-  } = useVirtualNetworks(
-    { filter: VIRTUAL_NETWORK_READY_LIST_FILTER },
-    { enabled: !useDefaultNetwork },
-  );
-
-  const subnetFilter = virtualNetworkId
-    ? virtualNetworkFilterForSubnetList(virtualNetworkId)
-    : undefined;
-  const {
-    data: subnets = [],
-    isPending: subnetsLoading,
-    isError: subnetsError,
-    refetch: refetchSubnets,
-  } = useSubnets(subnetFilter ? { filter: subnetFilter } : {}, {
-    enabled: !useDefaultNetwork && Boolean(virtualNetworkId),
-  });
-
+  // ── Security groups (manual hooks — no ResourceMultiSelectField exists) ──
   const securityGroupFilter = virtualNetworkId
     ? securityGroupFilterForVirtualNetworkList(virtualNetworkId)
     : undefined;
@@ -80,24 +61,6 @@ export const ClusterNetworkingStep = ({ catalogItem }: Props) => {
     enabled: !useDefaultNetwork && Boolean(virtualNetworkId),
   });
 
-  const virtualNetworkOptions = useMemo(
-    () =>
-      virtualNetworks.map((vn) => ({
-        value: vn.id,
-        label: resourceDisplayName(vn.metadata, vn.id),
-      })),
-    [virtualNetworks],
-  );
-
-  const subnetOptions = useMemo(
-    () =>
-      subnets.map((subnet) => ({
-        value: subnet.id,
-        label: resourceDisplayName(subnet.metadata, subnet.id),
-      })),
-    [subnets],
-  );
-
   const securityGroupOptions = useMemo(
     () =>
       securityGroups.map((group) => ({
@@ -107,54 +70,36 @@ export const ClusterNetworkingStep = ({ catalogItem }: Props) => {
     [securityGroups],
   );
 
-  // Cascade reset: clear subnet and SGs (values + display names) when VN changes
+  const [sgField, , sgHelpers] = useField<ResourceSelectValue[]>(
+    'spec.networkAttachment.securityGroups',
+  );
+  const selectedSgIds = useMemo(
+    () => (sgField.value ?? []).map((sg) => sg.id),
+    [sgField.value],
+  );
+
+  const sgMultiSelectOptions = useMemo<MultiTypeaheadSelectOption[]>(
+    () =>
+      securityGroupOptions.map((o) => ({
+        content: o.label,
+        value: o.value,
+        selected: selectedSgIds.includes(o.value as string),
+      })),
+    [securityGroupOptions, selectedSgIds],
+  );
+
+  const securityGroupListLoading = Boolean(virtualNetworkId) && securityGroupsLoading;
+
+  // ── Cascade reset: clear subnet and SGs when VN changes ──
   const previousVirtualNetworkIdRef = useRef(virtualNetworkId);
   useEffect(() => {
     const previous = previousVirtualNetworkIdRef.current;
     previousVirtualNetworkIdRef.current = virtualNetworkId;
     if (previous && previous !== virtualNetworkId) {
-      void setFieldValue('spec.networkAttachment.subnet', '');
+      void setFieldValue('spec.networkAttachment.subnet', emptyResourceSelectValue());
       void setFieldValue('spec.networkAttachment.securityGroups', []);
-      void setFieldValue('spec.networkAttachmentDisplayNames.subnet', '');
-      void setFieldValue('spec.networkAttachmentDisplayNames.securityGroups', []);
     }
   }, [setFieldValue, virtualNetworkId]);
-
-  // Sync display names into form values so the review step can show them without fetching
-  useEffect(() => {
-    const vnId = values.spec.networkAttachment.virtualNetwork;
-    if (!vnId) {
-      return;
-    }
-    const match = virtualNetworkOptions.find((o) => o.value === vnId);
-    if (match) {
-      void setFieldValue('spec.networkAttachmentDisplayNames.virtualNetwork', match.label);
-    }
-  }, [values.spec.networkAttachment.virtualNetwork, virtualNetworkOptions, setFieldValue]);
-
-  useEffect(() => {
-    const subnetId = values.spec.networkAttachment.subnet;
-    if (!subnetId) {
-      return;
-    }
-    const match = subnetOptions.find((o) => o.value === subnetId);
-    if (match) {
-      void setFieldValue('spec.networkAttachmentDisplayNames.subnet', match.label);
-    }
-  }, [values.spec.networkAttachment.subnet, subnetOptions, setFieldValue]);
-
-  useEffect(() => {
-    const sgIds = values.spec.networkAttachment.securityGroups;
-    if (sgIds.length === 0) {
-      void setFieldValue('spec.networkAttachmentDisplayNames.securityGroups', []);
-      return;
-    }
-    const names = sgIds.map((id) => {
-      const match = securityGroupOptions.find((o) => o.value === id);
-      return match?.label ?? String(id);
-    });
-    void setFieldValue('spec.networkAttachmentDisplayNames.securityGroups', names);
-  }, [values.spec.networkAttachment.securityGroups, securityGroupOptions, setFieldValue]);
 
   // Clear validation alerts when toggling back to defaults
   const previousUseDefaultRef = useRef(useDefaultNetwork);
@@ -177,11 +122,6 @@ export const ClusterNetworkingStep = ({ catalogItem }: Props) => {
     return null;
   }
 
-  const listError = virtualNetworksError || subnetsError || securityGroupsError;
-  const loadingPlaceholder = t('Loading...');
-  const subnetListLoading = Boolean(virtualNetworkId) && subnetsLoading;
-  const securityGroupListLoading = Boolean(virtualNetworkId) && securityGroupsLoading;
-
   return (
     <Stack hasGutter>
       <StackItem>
@@ -195,54 +135,81 @@ export const ClusterNetworkingStep = ({ catalogItem }: Props) => {
             />
             {!useDefaultNetwork && (
               <>
-                {listError ? (
-                  <Alert variant="danger" isInline title={t('Could not load networking resources')}>
+                <ResourceSelectField
+                  name="spec.networkAttachment.virtualNetwork"
+                  label={t('Virtual network')}
+                  fieldId="cluster-virtual-network"
+                  service={VirtualNetworks}
+                  request={{ filter: VIRTUAL_NETWORK_READY_LIST_FILTER }}
+                  autoSelectSingleOption
+                  placeholder={t('Select virtual network')}
+                  loadErrorTitle={t('Could not load virtual networks')}
+                />
+                <ResourceSelectField
+                  name="spec.networkAttachment.subnet"
+                  label={t('Subnet')}
+                  fieldId="cluster-subnet"
+                  service={Subnets}
+                  request={
+                    virtualNetworkId
+                      ? { filter: virtualNetworkFilterForSubnetList(virtualNetworkId) }
+                      : {}
+                  }
+                  isDisabled={!virtualNetworkId}
+                  autoSelectSingleOption
+                  placeholder={t('Select subnet')}
+                  loadErrorTitle={t('Could not load subnets')}
+                />
+
+                {securityGroupsError ? (
+                  <Alert
+                    variant="danger"
+                    isInline
+                    title={t('Could not load security groups')}
+                  >
                     <Button
                       variant="link"
                       isInline
                       onClick={() => {
-                        void refetchVirtualNetworks();
-                        if (virtualNetworkId) {
-                          void refetchSubnets();
-                          void refetchSecurityGroups();
-                        }
+                        void refetchSecurityGroups();
                       }}
                     >
                       {t('Retry')}
                     </Button>
                   </Alert>
                 ) : null}
-                <SelectField
-                  name="spec.networkAttachment.virtualNetwork"
-                  label={t('Virtual network')}
-                  fieldId="cluster-virtual-network"
-                  autoSelectSingleOption
-                  isLoading={virtualNetworksLoading}
-                  loadingPlaceholder={loadingPlaceholder}
-                  placeholder={t('Select virtual network')}
-                  options={virtualNetworkOptions}
-                />
-                <SelectField
-                  name="spec.networkAttachment.subnet"
-                  label={t('Subnet')}
-                  fieldId="cluster-subnet"
-                  autoSelectSingleOption
-                  isLoading={subnetListLoading}
-                  isDisabled={!virtualNetworkId}
-                  loadingPlaceholder={loadingPlaceholder}
-                  placeholder={t('Select subnet')}
-                  options={subnetOptions}
-                />
-                <MultiSelectField
-                  name="spec.networkAttachment.securityGroups"
+                <FormGroup
                   label={t('Security groups')}
                   fieldId="cluster-security-groups"
-                  isLoading={securityGroupListLoading}
-                  isDisabled={!virtualNetworkId}
-                  loadingPlaceholder={loadingPlaceholder}
-                  placeholder={t('Select security groups')}
-                  options={securityGroupOptions}
-                />
+                >
+                  <MultiTypeaheadSelect
+                    id="cluster-security-groups"
+                    initialOptions={sgMultiSelectOptions}
+                    placeholder={
+                      securityGroupListLoading
+                        ? t('Loading...')
+                        : t('Select security groups')
+                    }
+                    isDisabled={!virtualNetworkId || securityGroupListLoading}
+                    noOptionsFoundMessage={(filter) => `No options found for "${filter}"`}
+                    onSelectionChange={(_event, selections) => {
+                      const newValues: ResourceSelectValue[] = (
+                        selections as string[]
+                      ).map((id) => {
+                        const option = securityGroupOptions.find((o) => o.value === id);
+                        return { id, name: option?.label ?? id };
+                      });
+                      void sgHelpers.setValue(newValues, true);
+                      void sgHelpers.setTouched(true);
+                    }}
+                    toggleProps={{
+                      id: 'cluster-security-groups',
+                      'aria-label': t('Security groups'),
+                      isFullWidth: true,
+                      'aria-busy': securityGroupListLoading || undefined,
+                    }}
+                  />
+                </FormGroup>
               </>
             )}
             <SwitchField

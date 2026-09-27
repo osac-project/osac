@@ -76,7 +76,8 @@ export const ClusterReviewStep = ({ catalogItem }: Props) => {
   } = useProjects({ filter: fullProjectPathToQueryFilter(values.metadata.project) });
 
   const isCustomNetwork =
-    !values.spec.useDefaultNetwork && Boolean(values.spec.networkAttachment.subnet.trim());
+    !values.spec.useDefaultNetwork &&
+    Boolean(values.spec.networkAttachment.subnet.id.trim());
 
   const versionDisplay = versionDisplayName(
     findVersionByName(versions, values.spec.versionName),
@@ -170,24 +171,28 @@ export const ClusterReviewStep = ({ catalogItem }: Props) => {
               <DescriptionListGroup>
                 <DescriptionListTerm>{t('Virtual network')}</DescriptionListTerm>
                 <DescriptionListDescription>
-                  {values.spec.networkAttachmentDisplayNames.virtualNetwork ||
-                    values.spec.networkAttachment.virtualNetwork ||
-                    '—'}
+                  {formatReviewScalar(
+                    values.spec.networkAttachment.virtualNetwork.name ||
+                      values.spec.networkAttachment.virtualNetwork.id,
+                  )}
                 </DescriptionListDescription>
               </DescriptionListGroup>
               <DescriptionListGroup>
                 <DescriptionListTerm>{t('Subnet')}</DescriptionListTerm>
                 <DescriptionListDescription>
-                  {values.spec.networkAttachmentDisplayNames.subnet ||
-                    values.spec.networkAttachment.subnet ||
-                    '—'}
+                  {formatReviewScalar(
+                    values.spec.networkAttachment.subnet.name ||
+                      values.spec.networkAttachment.subnet.id,
+                  )}
                 </DescriptionListDescription>
               </DescriptionListGroup>
               <DescriptionListGroup>
                 <DescriptionListTerm>{t('Security groups')}</DescriptionListTerm>
                 <DescriptionListDescription>
-                  {values.spec.networkAttachmentDisplayNames.securityGroups.length > 0
-                    ? values.spec.networkAttachmentDisplayNames.securityGroups.join(', ')
+                  {values.spec.networkAttachment.securityGroups.length > 0
+                    ? values.spec.networkAttachment.securityGroups
+                        .map((sg) => sg.name || sg.id)
+                        .join(', ')
                     : '—'}
                 </DescriptionListDescription>
               </DescriptionListGroup>

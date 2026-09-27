@@ -29,6 +29,12 @@ export interface ClusterWizardValues {
       subnet: string;
       securityGroups: string[];
     };
+    /** Display names resolved at selection time; avoids re-fetching in the review step. */
+    networkAttachmentDisplayNames: {
+      virtualNetwork: string;
+      subnet: string;
+      securityGroups: string[];
+    };
     autoExternalIpAttachment: boolean;
   };
 }

@@ -107,7 +107,7 @@ export const ClusterNetworkingStep = ({ catalogItem }: Props) => {
     [securityGroups],
   );
 
-  // Cascade reset: clear subnet and SGs when VN changes
+  // Cascade reset: clear subnet and SGs (values + display names) when VN changes
   const previousVirtualNetworkIdRef = useRef(virtualNetworkId);
   useEffect(() => {
     const previous = previousVirtualNetworkIdRef.current;
@@ -115,8 +115,45 @@ export const ClusterNetworkingStep = ({ catalogItem }: Props) => {
     if (previous && previous !== virtualNetworkId) {
       void setFieldValue('spec.networkAttachment.subnet', '');
       void setFieldValue('spec.networkAttachment.securityGroups', []);
+      void setFieldValue('spec.networkAttachmentDisplayNames.subnet', '');
+      void setFieldValue('spec.networkAttachmentDisplayNames.securityGroups', []);
     }
   }, [setFieldValue, virtualNetworkId]);
+
+  // Sync display names into form values so the review step can show them without fetching
+  useEffect(() => {
+    const vnId = values.spec.networkAttachment.virtualNetwork;
+    if (!vnId) {
+      return;
+    }
+    const match = virtualNetworkOptions.find((o) => o.value === vnId);
+    if (match) {
+      void setFieldValue('spec.networkAttachmentDisplayNames.virtualNetwork', match.label);
+    }
+  }, [values.spec.networkAttachment.virtualNetwork, virtualNetworkOptions, setFieldValue]);
+
+  useEffect(() => {
+    const subnetId = values.spec.networkAttachment.subnet;
+    if (!subnetId) {
+      return;
+    }
+    const match = subnetOptions.find((o) => o.value === subnetId);
+    if (match) {
+      void setFieldValue('spec.networkAttachmentDisplayNames.subnet', match.label);
+    }
+  }, [values.spec.networkAttachment.subnet, subnetOptions, setFieldValue]);
+
+  useEffect(() => {
+    const sgIds = values.spec.networkAttachment.securityGroups;
+    if (sgIds.length === 0) {
+      return;
+    }
+    const names = sgIds.map((id) => {
+      const match = securityGroupOptions.find((o) => o.value === id);
+      return match?.label ?? String(id);
+    });
+    void setFieldValue('spec.networkAttachmentDisplayNames.securityGroups', names);
+  }, [values.spec.networkAttachment.securityGroups, securityGroupOptions, setFieldValue]);
 
   // Clear validation alerts when toggling back to defaults
   const previousUseDefaultRef = useRef(useDefaultNetwork);

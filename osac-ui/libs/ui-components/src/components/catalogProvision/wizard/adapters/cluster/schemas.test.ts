@@ -56,6 +56,11 @@ const emptyValues: ClusterWizardValues = {
       subnet: '',
       securityGroups: [],
     },
+    networkAttachmentDisplayNames: {
+      virtualNetwork: '',
+      subnet: '',
+      securityGroups: [],
+    },
     autoExternalIpAttachment: false,
   },
 };

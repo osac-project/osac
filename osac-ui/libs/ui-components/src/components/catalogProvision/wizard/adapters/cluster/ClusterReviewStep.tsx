@@ -18,14 +18,6 @@ import {
   useClusterVersions,
 } from '@osac/ui-components/api/v1/cluster-versions';
 import { useHostTypes } from '@osac/ui-components/api/v1/host-types';
-import {
-  VIRTUAL_NETWORK_READY_LIST_FILTER,
-  formatResourceIdForReview,
-  formatResourceIdsForReview,
-  useSecurityGroups,
-  useSubnets,
-  useVirtualNetworks,
-} from '@osac/ui-components/api/v1/networking';
 import { useProjects } from '@osac/ui-components/api/v1/project';
 import { CatalogItem } from '@osac/ui-components/components/catalog/catalogItemDisplay';
 import {
@@ -85,13 +77,6 @@ export const ClusterReviewStep = ({ catalogItem }: Props) => {
 
   const isCustomNetwork =
     !values.spec.useDefaultNetwork && Boolean(values.spec.networkAttachment.subnet.trim());
-
-  const { data: virtualNetworks = [] } = useVirtualNetworks(
-    { filter: VIRTUAL_NETWORK_READY_LIST_FILTER },
-    { enabled: isCustomNetwork },
-  );
-  const { data: allSubnets = [] } = useSubnets({}, { enabled: isCustomNetwork });
-  const { data: allSecurityGroups = [] } = useSecurityGroups({}, { enabled: isCustomNetwork });
 
   const versionDisplay = versionDisplayName(
     findVersionByName(versions, values.spec.versionName),
@@ -185,25 +170,25 @@ export const ClusterReviewStep = ({ catalogItem }: Props) => {
               <DescriptionListGroup>
                 <DescriptionListTerm>{t('Virtual network')}</DescriptionListTerm>
                 <DescriptionListDescription>
-                  {formatResourceIdForReview(
-                    values.spec.networkAttachment.virtualNetwork,
-                    virtualNetworks,
-                  )}
+                  {values.spec.networkAttachmentDisplayNames.virtualNetwork ||
+                    values.spec.networkAttachment.virtualNetwork ||
+                    '—'}
                 </DescriptionListDescription>
               </DescriptionListGroup>
               <DescriptionListGroup>
                 <DescriptionListTerm>{t('Subnet')}</DescriptionListTerm>
                 <DescriptionListDescription>
-                  {formatResourceIdForReview(values.spec.networkAttachment.subnet, allSubnets)}
+                  {values.spec.networkAttachmentDisplayNames.subnet ||
+                    values.spec.networkAttachment.subnet ||
+                    '—'}
                 </DescriptionListDescription>
               </DescriptionListGroup>
               <DescriptionListGroup>
                 <DescriptionListTerm>{t('Security groups')}</DescriptionListTerm>
                 <DescriptionListDescription>
-                  {formatResourceIdsForReview(
-                    values.spec.networkAttachment.securityGroups,
-                    allSecurityGroups,
-                  )}
+                  {values.spec.networkAttachmentDisplayNames.securityGroups.length > 0
+                    ? values.spec.networkAttachmentDisplayNames.securityGroups.join(', ')
+                    : '—'}
                 </DescriptionListDescription>
               </DescriptionListGroup>
             </>

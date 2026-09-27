@@ -25,6 +25,11 @@ export const createEmptyClusterValues = (): ClusterWizardValues => ({
       subnet: '',
       securityGroups: [],
     },
+    networkAttachmentDisplayNames: {
+      virtualNetwork: '',
+      subnet: '',
+      securityGroups: [],
+    },
     autoExternalIpAttachment: false,
   },
 });

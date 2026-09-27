@@ -56,7 +56,7 @@ describe('ClusterNetworkingStep', () => {
       </Formik>,
     );
 
-    expect(screen.getByRole('switch', { name: 'Use tenant default network' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Use tenant default network' })).toBeChecked();
     expect(screen.queryByLabelText('Virtual network')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Subnet')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Security groups')).not.toBeInTheDocument();
@@ -70,7 +70,7 @@ describe('ClusterNetworkingStep', () => {
       </Formik>,
     );
 
-    await user.click(screen.getByRole('switch', { name: 'Use tenant default network' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Use tenant default network' }));
 
     expect(screen.getByText('Virtual network')).toBeInTheDocument();
     expect(screen.getByText('Subnet')).toBeInTheDocument();
@@ -86,11 +86,11 @@ describe('ClusterNetworkingStep', () => {
     );
 
     // Toggle OFF
-    await user.click(screen.getByRole('switch', { name: 'Use tenant default network' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Use tenant default network' }));
     expect(screen.getByText('Virtual network')).toBeInTheDocument();
 
     // Toggle back ON
-    await user.click(screen.getByRole('switch', { name: 'Use tenant default network' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Use tenant default network' }));
     expect(screen.queryByLabelText('Virtual network')).not.toBeInTheDocument();
   });
 
@@ -101,7 +101,7 @@ describe('ClusterNetworkingStep', () => {
       </Formik>,
     );
 
-    const autoExternalIpSwitch = screen.getByRole('switch', {
+    const autoExternalIpSwitch = screen.getByRole('checkbox', {
       name: 'Auto External IP Attachment',
     });
     expect(autoExternalIpSwitch).not.toBeChecked();
@@ -120,14 +120,14 @@ describe('ClusterNetworkingStep', () => {
       </Formik>,
     );
 
-    const autoExternalIpSwitch = screen.getByRole('switch', {
+    const autoExternalIpSwitch = screen.getByRole('checkbox', {
       name: 'Auto External IP Attachment',
     });
     await user.click(autoExternalIpSwitch);
 
     expect(autoExternalIpSwitch).toBeChecked();
     // Default network toggle remains ON
-    expect(screen.getByRole('switch', { name: 'Use tenant default network' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Use tenant default network' })).toBeChecked();
   });
 
   it('renders Pod CIDR and Service CIDR fields in Cluster Networking section', () => {

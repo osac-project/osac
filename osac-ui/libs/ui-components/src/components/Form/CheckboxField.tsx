@@ -10,9 +10,16 @@ interface CheckboxFieldProps {
   label: string;
   fieldId: string;
   isDisabled?: boolean;
+  helperText?: string;
 }
 
-export const CheckboxField = ({ name, label, fieldId, isDisabled = false }: CheckboxFieldProps) => {
+export const CheckboxField = ({
+  name,
+  label,
+  fieldId,
+  isDisabled = false,
+  helperText,
+}: CheckboxFieldProps) => {
   const [field, meta, helpers] = useField<boolean>(name);
   const showValidationErrors = useShowFieldValidationErrors();
   const error = getVisibleFieldError(meta, showValidationErrors);
@@ -28,7 +35,7 @@ export const CheckboxField = ({ name, label, fieldId, isDisabled = false }: Chec
         onChange={(_event, checked) => void helpers.setValue(checked)}
         onBlur={field.onBlur}
       />
-      <FormFieldHelper error={error} fieldId={fieldId} />
+      <FormFieldHelper error={error} description={helperText} fieldId={fieldId} />
     </FormGroup>
   );
 };

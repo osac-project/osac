@@ -14,6 +14,7 @@ import {
   virtualNetworkFilterForSubnetList,
 } from '../../../../../api/v1/networking';
 import { useTranslation } from '../../../../../hooks/useTranslation';
+import { CheckboxField } from '../../../../Form/CheckboxField';
 import { InputField } from '../../../../Form/InputField';
 import OsacForm from '../../../../Form/OsacForm';
 import {
@@ -21,7 +22,6 @@ import {
   type ResourceSelectValue,
 } from '../../../../Form/ResourceSelectField';
 import { emptyResourceSelectValue } from '../../../../Form/resourceSelectValue';
-import { SwitchField } from '../../../../Form/SwitchField';
 import { getCatalogFieldOverlay, readCatalogFieldDefinitions } from '../../catalogOverlay';
 import { useWizardValidation } from '../../WizardValidationContext';
 
@@ -83,7 +83,7 @@ export const ClusterNetworkingStep = ({ catalogItem }: Props) => {
       securityGroupOptions.map((o) => ({
         content: o.label,
         value: o.value,
-        selected: selectedSgIds.includes(o.value as string),
+        selected: selectedSgIds.includes(String(o.value)),
       })),
     [securityGroupOptions, selectedSgIds],
   );
@@ -127,11 +127,10 @@ export const ClusterNetworkingStep = ({ catalogItem }: Props) => {
       <StackItem>
         <OsacForm>
           <FormSection title={t('Infrastructure Networking')} titleElement="h2">
-            <SwitchField
+            <CheckboxField
               name="spec.useDefaultNetwork"
               label={t('Use tenant default network')}
               fieldId="cluster-use-default-network"
-              isReversed
             />
             {!useDefaultNetwork && (
               <>
@@ -212,14 +211,13 @@ export const ClusterNetworkingStep = ({ catalogItem }: Props) => {
                 </FormGroup>
               </>
             )}
-            <SwitchField
+            <CheckboxField
               name="spec.autoExternalIpAttachment"
               label={t('Auto External IP Attachment')}
               fieldId="cluster-auto-external-ip"
               helperText={t(
                 'Automatically provision external IPs for the cluster API and ingress endpoints.',
               )}
-              isReversed
             />
           </FormSection>
           <FormSection title={t('Cluster Networking')} titleElement="h2">

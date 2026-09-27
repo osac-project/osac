@@ -146,6 +146,7 @@ export const ClusterNetworkingStep = ({ catalogItem }: Props) => {
   useEffect(() => {
     const sgIds = values.spec.networkAttachment.securityGroups;
     if (sgIds.length === 0) {
+      void setFieldValue('spec.networkAttachmentDisplayNames.securityGroups', []);
       return;
     }
     const names = sgIds.map((id) => {
@@ -201,8 +202,10 @@ export const ClusterNetworkingStep = ({ catalogItem }: Props) => {
                       isInline
                       onClick={() => {
                         void refetchVirtualNetworks();
-                        void refetchSubnets();
-                        void refetchSecurityGroups();
+                        if (virtualNetworkId) {
+                          void refetchSubnets();
+                          void refetchSecurityGroups();
+                        }
                       }}
                     >
                       {t('Retry')}
@@ -234,7 +237,6 @@ export const ClusterNetworkingStep = ({ catalogItem }: Props) => {
                   name="spec.networkAttachment.securityGroups"
                   label={t('Security groups')}
                   fieldId="cluster-security-groups"
-                  autoSelectSingleOption
                   isLoading={securityGroupListLoading}
                   isDisabled={!virtualNetworkId}
                   loadingPlaceholder={loadingPlaceholder}

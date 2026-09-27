@@ -61,6 +61,7 @@
   "Authorization URL is required": "Authorization URL is required",
   "Auto External IP": "Auto External IP",
   "Auto External IP Attachment": "Auto External IP Attachment",
+  "Auto attach external IP": "Auto attach external IP",
   "Auto-provisioned": "Auto-provisioned",
   "Automatically provision external IPs for the cluster API and ingress endpoints.": "Automatically provision external IPs for the cluster API and ingress endpoints.",
   "Available": "Available",

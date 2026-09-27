@@ -199,12 +199,12 @@ export const ClusterReviewStep = ({ catalogItem }: Props) => {
             </>
           )}
 
-          {values.spec.autoExternalIpAttachment && (
-            <DescriptionListGroup>
-              <DescriptionListTerm>{t('Auto External IP')}</DescriptionListTerm>
-              <DescriptionListDescription>{t('Enabled')}</DescriptionListDescription>
-            </DescriptionListGroup>
-          )}
+          <DescriptionListGroup>
+            <DescriptionListTerm>{t('Auto attach external IP')}</DescriptionListTerm>
+            <DescriptionListDescription>
+              {values.spec.autoExternalIpAttachment ? t('Yes') : t('No')}
+            </DescriptionListDescription>
+          </DescriptionListGroup>
 
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Pod CIDR')}</DescriptionListTerm>

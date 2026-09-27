@@ -153,6 +153,13 @@ const getProjectsNav = (t: TFunction): NavRow => ({
   path: '/projects',
 });
 
+const getStorageNav = (t: TFunction): NavRow => ({
+  kind: 'section',
+  id: 'nav-tenant-storage',
+  label: t('Storage'),
+  children: [{ kind: 'link', id: 'volumes', label: t('Volumes'), path: '/storage/volumes' }],
+});
+
 const getNetworkNav = (t: TFunction): NavRow => ({
   kind: 'section',
   id: 'nav-tenant-networking',
@@ -182,6 +189,7 @@ const getNetworkNav = (t: TFunction): NavRow => ({
 const getBaseNav = (t: TFunction): NavRow[] => [
   getCatalogNav(t),
   getServicesNav(t),
+  getStorageNav(t),
   getProjectsNav(t),
 ];
 

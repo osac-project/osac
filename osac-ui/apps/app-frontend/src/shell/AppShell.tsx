@@ -22,6 +22,7 @@ import { BareMetalRoutes } from '@osac/ui-components/pages/tenant/BareMetalRoute
 import CatalogPage from '@osac/ui-components/pages/tenant/CatalogPage';
 import { ClusterRoutes } from '@osac/ui-components/pages/tenant/ClusterRoutes';
 import { VmRoutes } from '@osac/ui-components/pages/tenant/VmRoutes';
+import { VolumeRoutes } from '@osac/ui-components/pages/tenant/VolumeRoutes';
 
 import { BareMetalInstanceTypeRoutes } from './BareMetalInstanceTypeRoutes';
 import { DiskImageRoutes } from './DiskImageRoutes';
@@ -176,6 +177,14 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
               element={
                 <ShellRoute>
                   <BareMetalRoutes />
+                </ShellRoute>
+              }
+            />
+            <Route
+              path="/storage/volumes/*"
+              element={
+                <ShellRoute>
+                  <VolumeRoutes />
                 </ShellRoute>
               }
             />

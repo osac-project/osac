@@ -192,6 +192,24 @@ describe('navRowsForRole', () => {
     }
   });
 
+  it('includes Storage section with Volumes link for tenant roles', () => {
+    for (const role of nonIdpRoles) {
+      const storage = findSection(role, 'nav-tenant-storage');
+      expect(storage).toBeDefined();
+      expect(storage?.children).toEqual([
+        { kind: 'link', id: 'volumes', label: 'Volumes', path: '/storage/volumes' },
+      ]);
+    }
+  });
+
+  it('excludes tenant Storage section for admin role', () => {
+    expect(findSection('admin', 'nav-tenant-storage')).toBeUndefined();
+  });
+
+  it('excludes tenant Storage section for IDP manager', () => {
+    expect(findSection('tenant-idp-manager', 'nav-tenant-storage')).toBeUndefined();
+  });
+
   it('IDP sections show for tenant-idp-manager and tenant-admin', () => {
     for (const role of ['tenant-idp-manager', 'tenant-admin'] as UserRole[]) {
       expect(findLink(role, 'idp')).toBeDefined();

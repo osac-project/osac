@@ -6,6 +6,10 @@ vi.mock('@osac/ui-components/components/Volume/VolumeWizardPage', () => ({
   VolumeWizardPage: () => <h1>Volume wizard</h1>,
 }));
 
+vi.mock('./VolumesListPage', () => ({
+  VolumesListPage: () => <h1>Volumes list</h1>,
+}));
+
 import { VolumeRoutes } from './VolumeRoutes';
 
 const renderRoutes = (initialEntry: string) => (
@@ -17,6 +21,12 @@ const renderRoutes = (initialEntry: string) => (
 );
 
 describe('VolumeRoutes', () => {
+  it('renders VolumesListPage on the index route', () => {
+    render(renderRoutes('/storage/volumes'));
+
+    expect(screen.getByRole('heading', { name: 'Volumes list' })).toBeInTheDocument();
+  });
+
   it('renders VolumeWizardPage on the create route', () => {
     render(renderRoutes('/storage/volumes/create'));
 

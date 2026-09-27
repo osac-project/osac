@@ -32,6 +32,13 @@ CALLER_CREATE_FILES = {
     "ci": COLLECTIONS / "ci" / "steps" / "roles" / "external_access" / "tasks" / "create.yaml",
     "netris": COLLECTIONS / "netris" / "steps" / "roles" / "external_access" / "tasks" / "create.yaml",
     "nico": COLLECTIONS / "nico" / "steps" / "roles" / "external_access" / "tasks" / "create.yaml",
+    "ocp_ci_small": COLLECTIONS
+    / "osac"
+    / "service"
+    / "roles"
+    / "external_access"
+    / "tasks"
+    / "caas_create.yaml",
     "agentless_net": COLLECTIONS
     / "agentless_net"
     / "steps"

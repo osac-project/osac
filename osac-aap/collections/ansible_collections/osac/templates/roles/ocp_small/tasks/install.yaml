@@ -41,7 +41,7 @@
     hosted_cluster_node_requests: "{{ cluster_order.spec.nodeRequests }}"
     hosted_cluster_state: present
 
-- name: Step - Configure port forwarding
+- name: Step - Configure external access
   ansible.builtin.include_role:
     name: "{{ (install_step_external_access_override | default(install_step_external_access_default)).name }}"
     tasks_from: "{{ (install_step_external_access_override | default(install_step_external_access_default)).tasks_from }}"

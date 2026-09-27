@@ -79,9 +79,7 @@ def test_create_and_delete_shared_baremetal_instance_type(monkeypatch: pytest.Mo
 
     monkeypatch.setattr(client, "call", capture_call)
 
-    type_id = client.create_baremetal_instance_type(
-        name="e2e-bmi-type", host_type_label="default", fabric_port="data-0"
-    )
+    type_id = client.create_baremetal_instance_type(name="e2e-bmi-type", fabric_port="data-0")
     client.delete_baremetal_instance_type(type_id=type_id)
 
     assert type_id == "bmit-123"
@@ -106,3 +104,20 @@ def test_create_and_delete_shared_baremetal_instance_type(monkeypatch: pytest.Mo
         },
         {"service": f"{PRIVATE_API}.BareMetalInstanceTypes/Delete", "data": {"id": "bmit-123"}},
     ]
+
+
+def test_create_bare_metal_instance_type_defaults_to_host_type(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = GRPCClient(address="fulfillment-api.example.test:443", token="test-token")
+    captured: dict[str, Any] = {}
+
+    def capture_call(*, service: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
+        captured.update({"service": service, "data": data})
+        return {"object": {"id": "bmit-ci-worker"}}
+
+    monkeypatch.setattr(client, "call", capture_call)
+
+    assert client.create_bare_metal_instance_type(name="ci-worker-bm") == "bmit-ci-worker"
+    assert captured["service"] == f"{PRIVATE_API}.BareMetalInstanceTypes/Create"
+    assert captured["data"]["object"]["spec"]["host_label_selector"] == {
+        "match_labels": {"osac.openshift.io/host-type": "default"}
+    }

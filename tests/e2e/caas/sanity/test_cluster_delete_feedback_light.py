@@ -34,9 +34,7 @@ def test_cluster_delete_reports_deleting_state_without_provisioning(
     """Verify that cluster deletion transitions through DELETING state
     without waiting for full provisioning. Runs on kind without HyperShift
     (OSAC-1586)."""
-    private_grpc.ensure_bare_metal_instance_type(
-        name="ci-worker-bm", host_label_selector={"osac.openshift.io/host-type": "default"}
-    )
+    private_grpc.ensure_bare_metal_instance_type(name="ci-worker-bm")
     node_sets = {"workers": {"size": 1, "baremetal_instance_type": {"name": "ci-worker-bm"}}}
     name = unique_name("e2e-cluster")
     uuid = cli.create_cluster(

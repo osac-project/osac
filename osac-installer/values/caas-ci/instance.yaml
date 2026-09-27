@@ -7,17 +7,9 @@ global:
   osacDeploymentId: "ci/osac"
   fulfillmentTrust:
     enabled: false
-  # Keep clusterFulfillment NETWORK_STEPS_COLLECTION=ci.steps authoritative.
-  # The CUDN CaaS profile requires the explicit ci.steps pairing.
-  # Do not derive Netris/agentless AAP steps (see docs/aap-configuration.md).
-  expertOverrides:
-    aap: true
   networking:
-    fabricManager: cudn_net
+    fabricManager: agentless_net
     k8sManager: ""
-    netris:
-      # Keep CI safe for any shared Netris configuration.
-      validateCerts: false
   services:
     caas:
       enabled: true
@@ -25,6 +17,8 @@ global:
     # DiskImages API even though it does not provision VMaaS instances.
     vmaas:
       enabled: true
+    # CaaS requires BMaaS API endpoints, and this profile runs the BMF
+    # operator with the Metal3 provider configured below.
     bmaas:
       enabled: true
     maas:
@@ -53,19 +47,22 @@ operator:
     computeInstance: false
     tenant: true
     networking: true
+    networkingProvisioning: false
     storage: true
-    bareMetalInstance: true
   # MCE's Assisted Service ignition URL uses the OpenShift ingress Route;
   # trust its cluster-managed CA instead of bypassing TLS verification.
   ignition:
     trustIngressCA: true
   hubAccess:
     enabled: true
+  # Network manager ConfigMaps are required for the Networking API dispatcher.
+  # The operator subchart defaults networkManagers.enabled=true, but the CaaS
+  # CI profile states it explicitly so CI values are self-documenting.
+  # Individual agentless_net manager enablement is auto-derived by the Helm
+  # facade from global.networking. The logical fabric manager is required for
+  # CaaS BMI validation even though provider networking is disabled.
   networkManagers:
     enabled: true
-    fabricManagers:
-      cudn_net:
-        enabled: true
   tenants:
   - name: shared
   - name: osac-e2e-ci
@@ -168,9 +165,6 @@ aap:
   configAsCode:
     manifestSecret: "config-as-code-manifest-ig"
     secret: "config-as-code-ig"
-    # CaaS workers are provisioned on demand. The deprecated import-agent and
-    # BCM pool toggles are intentionally not set in this profile; standalone
-    # BMaaS profiles retain those controls for host-inventory registration.
     # NOTE: e2e's COMPONENT_BUILD_RESULTS image-override step overrides
     # bootstrap.image with this PR's own built image but does not touch
     # eeImage, so the two can diverge at e2e runtime even though they're
@@ -184,8 +178,6 @@ aap:
     clusterFulfillment:
       enabled: true
       config:
-        NETWORK_CLASS: "ci"
-        NETWORK_STEPS_COLLECTION: "ci.steps"
         HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY: "SingleReplica"
         HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: "SingleReplica"
     networkFulfillment:
@@ -196,6 +188,10 @@ validation:
   enabled: true
 
 # --- Bare Metal Fulfillment Operator ---
+# BMaaS is enabled; the BMF operator manages virtual BareMetalHost resources
+# created by osac-test-infra setup-virtual-bmh.sh in the host-inventory
+# namespace.  The operator allocates BMHs from the pool when the
+# baremetalworker controller creates BareMetalInstance CRs.
 bmf:
   image:
     repository: ghcr.io/osac-project/bare-metal-fulfillment-operator

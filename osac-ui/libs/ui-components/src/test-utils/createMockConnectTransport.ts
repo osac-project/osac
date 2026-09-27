@@ -54,6 +54,9 @@ import {
   Subnet,
   User,
   VirtualNetwork,
+  Volume,
+  VolumesDeleteRequest,
+  VolumesDeleteResponse,
 } from '@osac/types';
 import {
   Capabilities,
@@ -91,6 +94,7 @@ import {
   Users,
   VirtualNetworkState,
   VirtualNetworks,
+  Volumes,
 } from '@osac/types';
 import type {
   BareMetalInstanceTypesCreateRequest,
@@ -188,6 +192,7 @@ export type MockApiFixtures = {
   natGateways?: NATGateway[];
   externalIps?: ExternalIP[];
   externalIpAttachments?: ExternalIPAttachment[];
+  volumes?: Volume[];
 };
 
 export const wrapWithAuthInterceptor = (transport: Transport): Transport => {
@@ -439,6 +444,7 @@ export type MockTransportOverrides = {
   onExternalIpAttachmentCreate?: (
     req: ExternalIPAttachmentsCreateRequest,
   ) => ExternalIPAttachmentsCreateResponse | Promise<ExternalIPAttachmentsCreateResponse>;
+  onVolumeDelete?: (req: VolumesDeleteRequest) => VolumesDeleteResponse;
 };
 
 export const createMockConnectTransport = (
@@ -479,6 +485,8 @@ export const createMockConnectTransport = (
   const natGateways = [...(fixtures.natGateways ?? [])];
   const externalIps = [...(fixtures.externalIps ?? [])];
   const externalIpAttachments = [...(fixtures.externalIpAttachments ?? [])];
+  const volumes = [...(fixtures.volumes ?? [])];
+
 
   return wrapWithAuthInterceptor(
     createRouterTransport((router) => {
@@ -1120,6 +1128,33 @@ export const createMockConnectTransport = (
         get: (req) => ({
           object: usersFixtures.find((u) => u.id === req.id),
         }),
+      });
+
+      router.service(Volumes, {
+        list: () => ({
+          items: volumes,
+          size: volumes.length,
+          total: volumes.length,
+        }),
+        get: (req) => ({
+          object: volumes.find((v) => v.id === req.id),
+        }),
+        create: (req) => ({
+          object: { id: 'new-volume-1', ...req.object },
+        }),
+        update: (req) => ({
+          object: req.object,
+        }),
+        delete: (req) => {
+          if (overrides.onVolumeDelete) {
+            return overrides.onVolumeDelete(req);
+          }
+          const index = volumes.findIndex((v) => v.id === req.id);
+          if (index !== -1) {
+            volumes.splice(index, 1);
+          }
+          return {};
+        },
       });
     }),
   );

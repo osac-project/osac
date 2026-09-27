@@ -179,7 +179,6 @@ its two instance-group manifests.
 -}}
 {{- if .cluster -}}
 {{- $_ := set $derived "NETWORK_CLASS" "netris" -}}
-{{- $_ := set $derived "NETWORK_STEPS_COLLECTION" "netris.steps" -}}
 {{- $_ := set $derived "NETRIS_MGMT_VPC_ID" ($netris.mgmtVpcId | default "" | toString) -}}
 {{- $_ := set $derived "NETRIS_MGMT_VPC_NAME" ($netris.mgmtVpcName | default "") -}}
 {{- $_ := set $derived "NETRIS_RESOURCE_CLASS_MAP" ($netris.resourceClassMap | default "") -}}
@@ -222,7 +221,7 @@ facade vs low-level surface mismatches).
 {{- $nfSec = merge (dict "NETRIS_PASSWORD" $creds.password) $nfSec -}}
 {{- end }}
 {{- else if $agentlessEnabled -}}
-{{- $derived := dict "NETWORK_CLASS" "agentless_net" "NETWORK_STEPS_COLLECTION" "agentless_net.steps" -}}
+{{- $derived := dict "NETWORK_CLASS" "agentless_net" -}}
 {{- $cfCfg = merge $derived $cfCfg -}}
 {{- end }}
 {{- end }}
@@ -288,11 +287,7 @@ facade vs low-level surface mismatches).
   {{- end -}}
 {{- end -}}
 {{- $netClass := index $cfCfg "NETWORK_CLASS" | default "" | toString -}}
-{{- $netSteps := index $cfCfg "NETWORK_STEPS_COLLECTION" | default "" | toString -}}
 {{- if eq $netClass "netris" -}}
-{{- if ne $netSteps "netris.steps" }}
-  {{- fail (printf "NETWORK_CLASS=netris requires NETWORK_STEPS_COLLECTION=netris.steps (got %q)" $netSteps) }}
-{{- end }}
 {{- $netrisMgr := index $fabricManagers "netris" | default dict -}}
 {{- $netrisRegistered := $netrisMgr.enabled | default false -}}
 {{- if and (not $netExpertNetworkManagers) $netrisEnabled }}
@@ -309,13 +304,10 @@ facade vs low-level surface mismatches).
 {{- end }}
 {{- end }}
 {{- if eq $netClass "agentless_net" -}}
-{{- if ne $netSteps "agentless_net.steps" }}
-  {{- fail (printf "NETWORK_CLASS=agentless_net requires NETWORK_STEPS_COLLECTION=agentless_net.steps (got %q)" $netSteps) }}
-{{- end }}
 {{- if and $agentlessStubEnabled (ne $fabricManager "agentless_net") }}
   {{- fail "AgentlessNet stub requires NetworkClass fabricManager=agentless_net" }}
 {{- else if and (not $agentlessStubEnabled) (ne $fabricManager "") }}
-  {{- fail "agentless_net.steps with the k8s_only manager requires networkClass.fabricManager to be empty" }}
+  {{- fail "NETWORK_CLASS=agentless_net with the k8s_only manager requires networkClass.fabricManager to be empty" }}
 {{- end }}
 {{- end }}
 {{- if and $networkClass.enabled $fabricManager -}}

@@ -65,18 +65,14 @@ Returns a dict with:
 {{- $aapNetrisEnabled := eq $fabricManager "netris" -}}
 {{- $aapAgentlessEnabled := or (eq $fabricManager "agentless_net") (eq $k8sManager "k8s_only") -}}
 {{- $aapNetworkClass := "" -}}
-{{- $aapNetworkSteps := "" -}}
 {{- if $aapNetrisEnabled -}}
   {{- $aapNetworkClass = "netris" -}}
-  {{- $aapNetworkSteps = "netris.steps" -}}
 {{- else if eq $fabricManager "agentless_net" -}}
   {{- $aapNetworkClass = "agentless_net" -}}
-  {{- $aapNetworkSteps = "agentless_net.steps" -}}
 {{- else if eq $fabricManager "cudn_net" -}}
   {{- $aapNetworkClass = "ci" -}}
-  {{- $aapNetworkSteps = "ci.steps" -}}
 {{- else if $aapAgentlessEnabled -}}
-  {{- $aapNetworkSteps = "agentless_net.steps" -}}
+  {{- $aapNetworkClass = "agentless_net" -}}
 {{- end -}}
 
 {{- $defaultTitle := "K8s-only networking" -}}
@@ -154,6 +150,6 @@ Returns a dict with:
       "aapAgentlessEnabled" $aapAgentlessEnabled
       "netris" $netris
       "networkClass" $effectiveNetworkClass
-      "aap" (dict "networkClass" $aapNetworkClass "networkStepsCollection" $aapNetworkSteps)
+      "aap" (dict "networkClass" $aapNetworkClass)
     | toYaml -}}
 {{- end -}}

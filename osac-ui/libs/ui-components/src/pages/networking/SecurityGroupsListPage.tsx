@@ -1,5 +1,4 @@
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   SearchInput,
   Toolbar,
@@ -18,7 +17,6 @@ import {
   useSecurityGroups,
   useVirtualNetworks,
 } from '../../api/v1/networking';
-import { SecurityGroupCreateModal } from '../../components/networking/SecurityGroupCreateModal';
 import { SecurityGroupStatusLabel } from '../../components/networking/SecurityGroupStatusLabel';
 import ListPage from '../../components/Page/ListPage';
 import ListPageBody from '../../components/Page/ListPageBody';
@@ -27,7 +25,7 @@ import { useTranslation } from '../../hooks/useTranslation';
 
 export const SecurityGroupsListPage = () => {
   const { t } = useTranslation();
-  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const navigate = useNavigate();
   const [search, setSearch] = usePageFilter(SEARCH_PARAM);
 
   const { data: securityGroups = [], isLoading, error } = useSecurityGroups();
@@ -46,7 +44,7 @@ export const SecurityGroupsListPage = () => {
         description={t('Manage firewall rules for your virtual networks.')}
         error={error}
         actions={
-          <CreateButton onClick={() => setIsCreateModalOpen(true)}>
+          <CreateButton onClick={() => navigate('/networking/security-groups/create')}>
             {t('Create security group')}
           </CreateButton>
         }
@@ -120,9 +118,6 @@ export const SecurityGroupsListPage = () => {
         </ListPageBody>
       </ListPage>
 
-      {isCreateModalOpen && (
-        <SecurityGroupCreateModal onClose={() => setIsCreateModalOpen(false)} />
-      )}
     </>
   );
 };

@@ -32,7 +32,6 @@ import {
 } from '../../api/v1/networking';
 import { DetachNatGatewayModal } from '../../components/networking/DetachNatGatewayModal';
 import NatGatewayCard from '../../components/networking/NatGatewayCard';
-import { SecurityGroupCreateModal } from '../../components/networking/SecurityGroupCreateModal';
 import { SecurityGroupStatusLabel } from '../../components/networking/SecurityGroupStatusLabel';
 import { SubnetCreateModal } from '../../components/networking/SubnetCreateModal';
 import { SubnetStatusLabel } from '../../components/networking/SubnetStatusLabel';
@@ -48,7 +47,6 @@ export const VirtualNetworkDetailPage = () => {
   const navigate = useNavigate();
   const { id = '' } = useParams<{ id: string }>();
   const [isSubnetModalOpen, setIsSubnetModalOpen] = useState(false);
-  const [isSecurityGroupModalOpen, setIsSecurityGroupModalOpen] = useState(false);
   const [detachTarget, setDetachTarget] = useState<NATGateway>();
 
   const { data: vn, isLoading, error } = useVirtualNetwork(id);
@@ -201,7 +199,7 @@ export const VirtualNetworkDetailPage = () => {
                       actions: (
                         <CreateButton
                           variant="secondary"
-                          onClick={() => setIsSecurityGroupModalOpen(true)}
+                          onClick={() => navigate(`/networking/security-groups/create?virtualNetworkId=${id}`)}
                         >
                           {t('Create security group')}
                         </CreateButton>
@@ -274,12 +272,6 @@ export const VirtualNetworkDetailPage = () => {
         </ListPageBody>
       </ListPage>
 
-      {isSecurityGroupModalOpen && (
-        <SecurityGroupCreateModal
-          onClose={() => setIsSecurityGroupModalOpen(false)}
-          virtualNetworkId={id}
-        />
-      )}
 
       {isSubnetModalOpen && vn && (
         <SubnetCreateModal

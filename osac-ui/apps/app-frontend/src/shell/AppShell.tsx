@@ -13,6 +13,7 @@ import SecretRoutes from '@osac/ui-components/components/Secret/SecretRoutes';
 import { useSession } from '@osac/ui-components/hooks/use-session';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 import AttachNatGatewayWizardPage from '@osac/ui-components/pages/networking/AttachNatGatewayWizardPage';
+import SecurityGroupCreatePage from '@osac/ui-components/pages/networking/SecurityGroupCreatePage';
 import { SecurityGroupDetailPage } from '@osac/ui-components/pages/networking/SecurityGroupDetailPage';
 import { SecurityGroupsListPage } from '@osac/ui-components/pages/networking/SecurityGroupsListPage';
 import { VirtualNetworkDetailPage } from '@osac/ui-components/pages/networking/VirtualNetworkDetailPage';
@@ -47,6 +48,7 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
 
   return (
     <Page
+      isContentFilled
       masthead={<ShellMasthead onLogout={logout} />}
       sidebar={<ShellSidebar />}
       isManagedSidebar
@@ -209,6 +211,14 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
           element={
             <ShellRoute>
               <SecurityGroupsListPage />
+            </ShellRoute>
+          }
+        />
+        <Route
+          path="/networking/security-groups/create"
+          element={
+            <ShellRoute>
+              <SecurityGroupCreatePage />
             </ShellRoute>
           }
         />

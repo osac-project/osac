@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   MenuToggle,
   Pagination,
@@ -23,6 +23,7 @@ import ProjectFilter from '@osac/ui-components/components/Page/ProjectFilter';
 import { VolumeTable } from '@osac/ui-components/components/Volume/VolumeTable';
 import { SEARCH_PARAM, usePageFilter } from '@osac/ui-components/hooks/use-page-filter';
 import { useProjectFilterQuery } from '@osac/ui-components/hooks/use-project-filter-query';
+import { useSession } from '@osac/ui-components/hooks/use-session';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
 const DEFAULT_PAGE_SIZE = 20;
@@ -76,8 +77,20 @@ export const VolumesListPage = () => {
   const [page, setPage] = useState(1);
   const [perPage, setPerPage] = useState(DEFAULT_PAGE_SIZE);
 
+  const { projects } = useSession();
   const stateFilters = useMemo(() => parseStateFilter(stateFilterRaw), [stateFilterRaw]);
   const projectFilter = useProjectFilterQuery<Volume>();
+
+  // Reset page to 1 when the project filter changes. Name and state filters
+  // already call setPage(1) in their event handlers; the project filter is
+  // changed externally via useSession, so we track it here.
+  const prevProjectsRef = useRef(projects);
+  useEffect(() => {
+    if (prevProjectsRef.current !== projects) {
+      prevProjectsRef.current = projects;
+      setPage(1);
+    }
+  }, [projects]);
 
   const filter = useMemo(
     () => buildVolumeCelFilter(projectFilter, stateFilters, nameSearch.trim()),
@@ -94,6 +107,15 @@ export const VolumesListPage = () => {
 
   const volumes = data?.items ?? [];
   const totalItems = data?.total ?? 0;
+
+  // Clamp page so it never exceeds the last page after data loads (e.g. when a
+  // filter change reduces the result set while the user was on a later page).
+  const lastPage = Math.max(1, Math.ceil(totalItems / perPage));
+  useEffect(() => {
+    if (page > lastPage) {
+      setPage(lastPage);
+    }
+  }, [page, lastPage]);
 
   const toggleStateFilter = (value: VolumeState) => {
     const current = stateFilters;

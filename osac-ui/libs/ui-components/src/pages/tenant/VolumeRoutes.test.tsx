@@ -39,6 +39,12 @@ describe('VolumeRoutes', () => {
     expect(screen.getByRole('heading', { name: 'Volume wizard' })).toBeInTheDocument();
   });
 
+  it('renders VolumeDetailPlaceholder on the detail route', () => {
+    render(renderRoutes('/storage/volumes/vol-123'));
+
+    expect(screen.getByText('Volume detail — coming soon')).toBeInTheDocument();
+  });
+
   it('does not match "create" as a volume ID for the edit route', () => {
     render(renderRoutes('/storage/volumes/create'));
 

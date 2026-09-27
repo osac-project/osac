@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"strconv"
 	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -569,7 +570,7 @@ func (s *PrivateBareMetalInstancesServer) validateSpec(bmi *privatev1.BareMetalI
 
 // applyDefaultNetworkAttachments populates network_attachments with tenant defaults when
 // omitted at create time: default IPv4 Subnet, default SecurityGroup, first fabric-role
-// interface from the HostType.
+// network port from the BareMetalInstanceType.
 func (s *PrivateBareMetalInstancesServer) applyDefaultNetworkAttachments(
 	ctx context.Context, bmi *privatev1.BareMetalInstance) error {
 	if len(bmi.GetSpec().GetNetworkAttachments()) > 0 {
@@ -671,47 +672,37 @@ func (s *PrivateBareMetalInstancesServer) findDefaultSecurityGroup(
 	return nil, nil
 }
 
-// resolveDefaultInterface returns the first fabric-role interface name from the HostType
-// resolved via the spec.template → host_type chain. Returns ("", nil) if the chain cannot
-// be resolved (no template or no host_type). Returns an error if a HostType is found but
-// has no fabric-role interface.
+// resolveDefaultInterface returns the first fabric-role network port name from the
+// BareMetalInstanceType referenced by the instance's spec.instance_type. Returns ("", nil) if
+// no instance type is set. Returns an error if a BareMetalInstanceType is found but has no
+// network port with role "fabric".
 func (s *PrivateBareMetalInstancesServer) resolveDefaultInterface(
 	ctx context.Context, bmi *privatev1.BareMetalInstance) (string, error) {
-	templateID := refKey(bmi.GetSpec().GetTemplate())
-	if templateID == "" {
+	bmitRef := refKey(bmi.GetSpec().GetInstanceType())
+	if bmitRef == "" {
 		return "", nil
 	}
-	tmplResp, err := s.templatesDao.Get().SetId(templateID).Do(ctx)
+	response, err := s.instanceTypesDao.List().
+		SetFilter(fmt.Sprintf("this.id == %[1]s || this.metadata.name == %[1]s", strconv.Quote(bmitRef))).
+		SetLimit(1).
+		Do(ctx)
 	if err != nil {
-		var notFoundErr *dao.ErrNotFound
-		if errors.As(err, &notFoundErr) {
-			return "", nil
-		}
-		s.logger.ErrorContext(ctx, "Failed to lookup template for default interface resolution",
-			slog.String("template_id", templateID), slog.Any("error", err))
+		s.logger.ErrorContext(ctx, "Failed to lookup bare metal instance type for default interface resolution",
+			slog.String("instance_type", bmitRef), slog.Any("error", err))
 		return "", grpcstatus.Errorf(grpccodes.Internal, "failed to resolve default interface")
 	}
-	hostTypeID := tmplResp.GetObject().GetHostType()
-	if hostTypeID == "" {
+	items := response.GetItems()
+	if len(items) == 0 {
 		return "", nil
 	}
-	htResp, err := s.hostTypesDao.Get().SetId(hostTypeID).Do(ctx)
-	if err != nil {
-		var notFoundErr *dao.ErrNotFound
-		if errors.As(err, &notFoundErr) {
-			return "", nil
-		}
-		s.logger.ErrorContext(ctx, "Failed to lookup host type for default interface resolution",
-			slog.String("host_type_id", hostTypeID), slog.Any("error", err))
-		return "", grpcstatus.Errorf(grpccodes.Internal, "failed to resolve default interface")
-	}
-	for _, ni := range htResp.GetObject().GetInterfaces() {
-		if strings.EqualFold(ni.GetRole(), "fabric") {
-			return ni.GetName(), nil
+	bmit := items[0]
+	for _, port := range bmit.GetSpec().GetHardware().GetNetworkPorts() {
+		if strings.EqualFold(port.GetRole(), "fabric") {
+			return port.GetName(), nil
 		}
 	}
 	return "", grpcstatus.Errorf(grpccodes.FailedPrecondition,
-		"host type '%s' has no fabric-role interface for default network attachment", hostTypeID)
+		"bare metal instance type '%s' has no network port with role 'fabric'", bmitRef)
 }
 
 // resolveCatalogItem finds the instance's published Catalog Item in the selected tenant/project

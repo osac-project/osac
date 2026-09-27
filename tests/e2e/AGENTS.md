@@ -1,6 +1,6 @@
 # OSAC E2E tests
 
-Cross-component pytest suites for VMaaS, CaaS, BMaaS, catalog, storage, and
+Cross-component pytest suites for VMaaS, CaaS, BMaaS, storage, and
 resource-reference workflows.
 
 This test suite is part of the OSAC monorepo, not an isolated project. Its

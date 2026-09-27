@@ -30,7 +30,7 @@ def default_storage_tier() -> str:
     """Reference installer-provided storage tier.
 
     Defaults to "local" tier created by osac-installer when lvms.enabled=true.
-    Available to all suites that create ComputeInstances (vmaas, catalog, references).
+    Available to all suites that create ComputeInstances (VMaaS and references).
     """
     return env("OSAC_STORAGE_TIER", "local")
 

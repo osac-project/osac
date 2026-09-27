@@ -34,7 +34,7 @@ import (
 var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), func() {
 	Context("Provisioning and field governance", func() {
 		It("materializes bare metal instance typed policies and replaces editable attachments", func(ctx context.Context) {
-			By("authoring a tenant offering with hardware, image, and network policies")
+			By("creating a tenant catalog item with hardware, image, and network policies")
 			network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 			otherNetwork := createCatalogItemNetworkInClassFixture(ctx, usersGroup, "", network.networkClassID)
 			instanceType := createCatalogItemBareMetalInstanceTypeFixture(ctx, usersGroup)
@@ -162,7 +162,7 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 			Expect(defaulted.GetSpec().GetNetworkAttachments()[0].GetSubnet().GetId()).To(Equal(network.subnetID))
 		})
 		It("applies editable DiskImage and Template defaults and validates dry-run authentication", func(ctx context.Context) {
-			By("authoring a shared offering with editable image and external-IP defaults")
+			By("creating a shared catalog item with image and external-IP defaults")
 			instanceType := createCatalogItemBareMetalInstanceTypeFixture(ctx, usersGroup)
 			defaultImage := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
 			overrideImage := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
@@ -223,7 +223,7 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 			persisted, e := client.Get(ctx, publicv1.BareMetalInstancesGetRequest_builder{Id: override.GetId()}.Build())
 			Expect(e).NotTo(HaveOccurred())
 			Expect(persisted.GetObject().GetSpec().GetDiskImage().GetId()).To(Equal(overrideImage.GetId()))
-			By("rejecting a request that names both the offering and its Template")
+			By("rejecting a request that names both the catalog item and its Template")
 			spec.SetTemplate(publicv1.BareMetalInstanceTemplateReference_builder{Id: template}.Build())
 			_, e = client.Create(dry, publicv1.BareMetalInstancesCreateRequest_builder{
 				Object: publicv1.BareMetalInstance_builder{
@@ -369,7 +369,7 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 	})
 	Context("Template parameters", func() {
 		It("distinguishes editable required input from Template defaults and invalid values", func(ctx context.Context) {
-			By("publishing a bare metal instance offering with a required editable parameter")
+			By("publishing a bare metal instance catalog item that requires the enabled parameter in each request")
 			image := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
 			template := createCatalogItemBareMetalInstanceTemplateFixture(ctx, nil, bareMetalInstanceCatalogItemParameterDefinitions())
 			network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
@@ -443,7 +443,7 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 
 	Context("Authoring and publication", func() {
 		It("lets a Tenant Admin publish governed items for members of that tenant", func(ctx context.Context) {
-			By("creating a tenant-owned draft through the Tenant Admin public API")
+			By("creating an unpublished catalog item as a tenant admin")
 			image := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
 			template := createCatalogItemBareMetalInstanceTemplateFixture(ctx, nil, nil)
 			tenant, conn := createCatalogItemTenantAdminFixture(ctx)
@@ -452,7 +452,7 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 				Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
 				Template: publicv1.BareMetalInstanceTemplateReference_builder{Id: template}.Build(),
 			}.Build())
-			Expect(owned.GetMetadata().GetTenant()).To(Equal(tenant), "tenant authoring scope")
+			Expect(owned.GetMetadata().GetTenant()).To(Equal(tenant), "catalog item should belong to the tenant admin's tenant")
 			memberConn := createCatalogItemMemberFixture(ctx, tenant)
 			memberItems := publicv1.NewBareMetalInstanceCatalogItemsClient(memberConn)
 
@@ -491,7 +491,7 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 			Expect(stored.GetObject().GetSpec().HasAutoExternalIpAttachment()).To(BeTrue())
 			Expect(stored.GetObject().GetSpec().GetAutoExternalIpAttachment()).To(BeFalse())
 
-			By("hiding the tenant offering from another tenant")
+			By("hiding the tenant catalog item from another tenant")
 			outsider := publicv1.NewBareMetalInstanceCatalogItemsClient(tool.ExternalView().UserConn())
 			_, err = outsider.Get(ctx, publicv1.BareMetalInstanceCatalogItemsGetRequest_builder{Id: owned.GetId()}.Build())
 			expectCatalogItemStatusCode(err, codes.NotFound)
@@ -503,11 +503,11 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 			}.Build())
 			expectCatalogItemStatusCode(err, codes.NotFound)
 
-			By("preventing a member from deleting the tenant offering")
+			By("preventing a member from deleting the tenant catalog item")
 			_, err = memberItems.Delete(ctx, publicv1.BareMetalInstanceCatalogItemsDeleteRequest_builder{Id: owned.GetId()}.Build())
 			expectCatalogItemStatusCode(err, codes.PermissionDenied)
 
-			By("unpublishing the offering to stop new member provisioning")
+			By("unpublishing the catalog item so members cannot create new bare metal instances from it")
 			_, err = items.Update(ctx, publicv1.BareMetalInstanceCatalogItemsUpdateRequest_builder{
 				Object:     publicv1.BareMetalInstanceCatalogItem_builder{Id: owned.GetId(), Published: false}.Build(),
 				UpdateMask: catalogItemUpdateMask("published"),
@@ -517,7 +517,7 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 			expectCatalogItemStatusCode(err, codes.NotFound)
 		})
 
-		It("lists shared published items and protects provider authoring", func(ctx context.Context) {
+		It("shows published shared catalog items to tenants without letting them edit the items", func(ctx context.Context) {
 			template := createCatalogItemBareMetalInstanceTemplateFixture(ctx, nil, nil)
 			_, conn := createCatalogItemTenantAdminFixture(ctx)
 			items := publicv1.NewBareMetalInstanceCatalogItemsClient(conn)
@@ -547,8 +547,8 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 			Expect(err).NotTo(HaveOccurred())
 			Expect(listed.GetItems()).To(HaveLen(1))
 		})
-		It("keeps unmasked policies and atomically rejects invalid merged candidates", func(ctx context.Context) {
-			By("authoring an offering with two field policies")
+		It("keeps unchanged policies and rejects invalid updates without saving partial changes", func(ctx context.Context) {
+			By("creating a catalog item with two field policies")
 			template := createCatalogItemBareMetalInstanceTemplateFixture(ctx, nil, nil)
 			item := createBareMetalInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.BareMetalInstanceCatalogItem_builder{
 				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
@@ -581,7 +581,7 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 			Expect(before.GetObject().GetFields().GetUserData().HasLocked()).To(BeFalse())
 			Expect(before.GetObject().GetFields().GetUserData().GetEditable().GetDefaultValue()).To(Equal("edited"))
 
-			By("rejecting an invalid policy without changing the offering title")
+			By("rejecting an invalid policy without changing the catalog item title")
 			_, err = client.Update(ctx, publicv1.BareMetalInstanceCatalogItemsUpdateRequest_builder{
 				Object: publicv1.BareMetalInstanceCatalogItem_builder{
 					Id:    item.GetId(),
@@ -611,7 +611,7 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 			Expect(after.GetObject().GetFields().GetUserData()).To(BeNil())
 			Expect(after.GetObject().GetFields().GetAutoExternalIpAttachment()).To(BeNil())
 		})
-		DescribeTable("rejects authored empty network collections without creating an offering", func(ctx context.Context, policy func() *publicv1.BareMetalNetworkAttachmentListFieldPolicy) {
+		DescribeTable("rejects catalog items that specify an empty network list", func(ctx context.Context, policy func() *publicv1.BareMetalNetworkAttachmentListFieldPolicy) {
 			template := createCatalogItemBareMetalInstanceTemplateFixture(ctx, nil, nil)
 			client := publicv1.NewBareMetalInstanceCatalogItemsClient(tool.ExternalView().AdminConn())
 			name := catalogItemFixtureName()
@@ -642,7 +642,7 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 		)
 	})
 	Context("Referenced objects", func() {
-		It("protects its immutable Template in a draft and releases it on catalog item deletion", func(ctx context.Context) {
+		It("prevents deleting a Template until its unpublished catalog item is deleted", func(ctx context.Context) {
 			template := createCatalogItemBareMetalInstanceTemplateFixture(ctx, nil, nil)
 			item := createBareMetalInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.BareMetalInstanceCatalogItem_builder{
 				Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
@@ -656,8 +656,8 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 			_, err = templates.Delete(ctx, privatev1.BareMetalInstanceTemplatesDeleteRequest_builder{Id: template}.Build())
 			Expect(err).NotTo(HaveOccurred())
 		})
-		It("protects referenced objects through publication and policy changes", func(ctx context.Context) {
-			By("authoring a published bare metal offering with a locked dependency")
+		It("prevents deleting an instance type until the catalog item stops using it", func(ctx context.Context) {
+			By("creating a published bare metal catalog item that uses an instance type")
 			template := createCatalogItemBareMetalInstanceTemplateFixture(ctx, nil, nil)
 			id := createCatalogItemBareMetalInstanceTypeFixture(ctx, usersGroup)
 			items := publicv1.NewBareMetalInstanceCatalogItemsClient(tool.ExternalView().AdminConn())

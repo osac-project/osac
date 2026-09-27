@@ -137,6 +137,7 @@ Touched-area requirements: [component guide](../fulfillment-service/AGENTS.md#in
 
 - **CLI commands that only call Fulfillment APIs:** Cover them in `fulfillment-service/it/`.
 - **Provisioning journeys that cross into operators or providers:** Keep them in `tests/e2e/` and exercise those boundaries explicitly.
+- **Catalog Items:** `it/` checks creation and update behavior, publication visibility, CLI creation, and the ClusterOrder release image written by Fulfillment. Catalog-backed provisioning journeys that exercise other components remain in the CaaS, VMaaS, BMaaS, and reference E2E suites.
 
 ## osac-operator
 

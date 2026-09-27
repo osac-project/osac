@@ -69,8 +69,9 @@ prerequisites and host entries.
 
 The `it/` suite includes CLI workflows that exercise only Fulfillment Service
 APIs. Its harness builds the CLI from this checkout and runs it against the
-deployed service. Keep cross-component provisioning journeys under
-`tests/e2e/`.
+deployed service. Catalog Item API behavior, CLI creation, and the ClusterOrder
+release image written by Fulfillment are checked in `it/`. Keep cross-component
+provisioning journeys under `tests/e2e/`.
 
 To prepare a fresh environment, recreate the dedicated `osac-dev` Kind
 cluster. Collect useful diagnostics before deleting it.

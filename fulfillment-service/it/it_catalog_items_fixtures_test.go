@@ -720,24 +720,30 @@ func createComputeInstanceFixture(ctx context.Context, conn *grpc.ClientConn, sp
 		return nil, err
 	}
 	result := response.GetObject()
+	deferComputeInstanceDeletion(result.GetId(), conn)
+	return result, nil
+}
+
+func deferComputeInstanceDeletion(id string, conn *grpc.ClientConn) {
+	GinkgoHelper()
+	client := publicv1.NewComputeInstancesClient(conn)
 	deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
-		_, err := client.Delete(ctx, publicv1.ComputeInstancesDeleteRequest_builder{Id: result.GetId()}.Build())
+		_, err := client.Delete(ctx, publicv1.ComputeInstancesDeleteRequest_builder{Id: id}.Build())
 		return err
 	}, func(ctx context.Context) (bool, error) {
-		_, err := client.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: result.GetId()}.Build())
+		_, err := client.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: id}.Build())
 		if status.Code(err) == codes.NotFound {
 			return true, nil
 		}
 		if err != nil {
 			return false, err
 		}
-		_, err = privatev1.NewComputeInstancesClient(tool.InternalView().AdminConn()).Signal(ctx, privatev1.ComputeInstancesSignalRequest_builder{Id: result.GetId()}.Build())
+		_, err = privatev1.NewComputeInstancesClient(tool.InternalView().AdminConn()).Signal(ctx, privatev1.ComputeInstancesSignalRequest_builder{Id: id}.Build())
 		if status.Code(err) == codes.NotFound {
 			return true, nil
 		}
 		return false, err
 	})
-	return result, nil
 }
 
 func createClusterFixture(ctx context.Context, conn *grpc.ClientConn, spec *publicv1.ClusterSpec) (*publicv1.Cluster, error) {
@@ -753,24 +759,30 @@ func createClusterFixture(ctx context.Context, conn *grpc.ClientConn, spec *publ
 		return nil, err
 	}
 	result := response.GetObject()
+	deferClusterDeletion(result.GetId(), conn)
+	return result, nil
+}
+
+func deferClusterDeletion(id string, conn *grpc.ClientConn) {
+	GinkgoHelper()
+	client := publicv1.NewClustersClient(conn)
 	deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
-		_, err := client.Delete(ctx, publicv1.ClustersDeleteRequest_builder{Id: result.GetId()}.Build())
+		_, err := client.Delete(ctx, publicv1.ClustersDeleteRequest_builder{Id: id}.Build())
 		return err
 	}, func(ctx context.Context) (bool, error) {
-		_, err := client.Get(ctx, publicv1.ClustersGetRequest_builder{Id: result.GetId()}.Build())
+		_, err := client.Get(ctx, publicv1.ClustersGetRequest_builder{Id: id}.Build())
 		if status.Code(err) == codes.NotFound {
 			return true, nil
 		}
 		if err != nil {
 			return false, err
 		}
-		_, err = privatev1.NewClustersClient(tool.InternalView().AdminConn()).Signal(ctx, privatev1.ClustersSignalRequest_builder{Id: result.GetId()}.Build())
+		_, err = privatev1.NewClustersClient(tool.InternalView().AdminConn()).Signal(ctx, privatev1.ClustersSignalRequest_builder{Id: id}.Build())
 		if status.Code(err) == codes.NotFound {
 			return true, nil
 		}
 		return false, err
 	})
-	return result, nil
 }
 
 func createBareMetalInstanceFixture(ctx context.Context, conn *grpc.ClientConn, spec *publicv1.BareMetalInstanceSpec) (*publicv1.BareMetalInstance, error) {

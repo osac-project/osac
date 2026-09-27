@@ -408,22 +408,29 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1
 		condMsg = r.appendMissingTierWarnings(instance, tierDefinitions, scResult.resolved, scResult.ambiguousTiers, condMsg)
 
 		// Detect tiers that still lack a StorageClass. The hasMissingTiers
-		// flag drives the Stage 4 retry (handleClusterStorageProvisioning)
-		// without setting ClusterStorageReady=False. Keeping the condition
-		// True is critical: handleCaaSUpdate (Stage 3) and its callers skip
-		// ClusterOrders whose Tenant has ClusterStorageReady=False, which
-		// would block finalizer removal on deleting ClusterOrders and cause
-		// them to stick in the Deleting phase (OSAC-4855).
+		// flag drives the Stage 4 retry (handleClusterStorageProvisioning).
+		// When tiers are still missing, ClusterStorageReady stays False so
+		// handleCaaSUpdate (Stage 3) does not attempt to provision
+		// cluster-side storage with an incomplete tier set. This is safe
+		// because handleCaaSDelete runs BEFORE this point (line ~339),
+		// so finalizer removal on deleting ClusterOrders is never blocked.
 		missing := missingTierNames(tierDefinitions, scResult.resolved, scResult.ambiguousTiers)
 		hasMissingTiers = len(missing) > 0 && len(tierDefinitions) > 0
 
-		instance.SetStatusCondition(v1alpha1.TenantConditionClusterStorageReady,
-			metav1.ConditionTrue,
-			v1alpha1.TenantReasonFound,
-			condMsg)
+		if hasMissingTiers {
+			instance.SetStatusCondition(v1alpha1.TenantConditionClusterStorageReady,
+				metav1.ConditionFalse,
+				v1alpha1.TenantReasonNotFound,
+				condMsg)
+		} else {
+			instance.SetStatusCondition(v1alpha1.TenantConditionClusterStorageReady,
+				metav1.ConditionTrue,
+				v1alpha1.TenantReasonFound,
+				condMsg)
+		}
 		instance.Status.StorageClasses = scResult.resolved
 		instance.Status.ClusterStorage = []v1alpha1.ClusterStorageStatus{
-			{ClusterName: clusterName, Ready: true, Reason: v1alpha1.TenantReasonFound},
+			{ClusterName: clusterName, Ready: !hasMissingTiers, Reason: v1alpha1.TenantReasonFound},
 		}
 	} else {
 		// When no provisioning provider is configured, resolve StorageClasses
@@ -772,9 +779,15 @@ func (r *StorageReconciler) handleBackendProvisioning(ctx context.Context, insta
 // for an external trigger before retrying.
 func (r *StorageReconciler) handleClusterStorageProvisioning(ctx context.Context, instance *v1alpha1.Tenant, hubSecretReady bool) (ctrl.Result, error) {
 	latestJob := provisioning.FindLatestJobByType(instance.Status.ClusterStorageJobs, v1alpha1.JobTypeProvision)
-	// Ready backends can recover through the shared lifecycle's capped backoff.
-	// Keep failed jobs in history so repeated failures increase the delay.
-	if latestJob != nil && latestJob.State == v1alpha1.JobStateFailed && !hubSecretReady {
+	if latestJob != nil && latestJob.State == v1alpha1.JobStateFailed {
+		if hubSecretReady {
+			// Hub Secret exists: the storage backend is provisioned. Requeue
+			// periodically so the controller picks up when the failed job is
+			// externally cleared or the AAP template becomes available.
+			ctrllog.FromContext(ctx).Info("latest cluster storage provision job failed, requeueing",
+				"message", latestJob.Message)
+			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+		}
 		ctrllog.FromContext(ctx).Info("latest cluster storage provision job failed, waiting for external trigger to retry",
 			"message", latestJob.Message)
 		return ctrl.Result{}, nil

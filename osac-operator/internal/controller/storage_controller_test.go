@@ -1940,8 +1940,8 @@ var _ = Describe("Storage Controller", func() {
 
 			clusterCond := tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady)
 			Expect(clusterCond).NotTo(BeNil())
-			Expect(clusterCond.Status).To(Equal(metav1.ConditionTrue),
-				"should stay True so CaaS ClusterOrder lifecycle (including finalizer removal) is never blocked (OSAC-4855)")
+			Expect(clusterCond.Status).To(Equal(metav1.ConditionFalse),
+				"should be False when tiers are missing; handleCaaSDelete runs before this check so finalizer removal is safe (OSAC-4855)")
 			Expect(clusterCond.Message).To(ContainSubstring(`tier "block" has no StorageClass`))
 
 			// Resolved tier should still be present in status
@@ -1952,7 +1952,7 @@ var _ = Describe("Storage Controller", func() {
 			Expect(tenant.Status.ClusterStorageJobs).To(HaveLen(1))
 		})
 
-		It("should replace a failed job after backoff and recover the missing tier", func() {
+		It("should requeue without creating new jobs when failed job exists and hub Secret appears", func() {
 			name := "storage-test-failed-tier-retry"
 			createReadyTenantForStorage(ctx, name, testNamespace)
 			createHubSecret(ctx, name, secretsNamespace)
@@ -2034,36 +2034,20 @@ var _ = Describe("Storage Controller", func() {
 				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, vastSecret))).To(Succeed())
 			})
 
-			// Backend readiness enables retries, but a recent failure must back off.
+			// Backend readiness enables retries: failed job + hubSecretReady →
+			// requeue at StatusPollInterval without creating a new job.
 			result, err = r.Reconcile(ctx, storageReconcileRequest(nn))
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
-			Expect(result.RequeueAfter).To(BeNumerically("<=", provisioning.BackoffBaseDelay))
-			Expect(triggers).To(BeZero())
+			Expect(result.RequeueAfter).To(Equal(pollInterval),
+				"should requeue at StatusPollInterval, not spawn a new job")
+			Expect(triggers).To(BeZero(), "no new provisioning jobs should be triggered")
 			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
 			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady).Status).To(Equal(metav1.ConditionTrue))
-			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady).Status).To(Equal(metav1.ConditionTrue))
+			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady).Status).To(Equal(metav1.ConditionFalse),
+				"should be False when tiers are still missing")
 
-			// Advance the stored job age without sleeping through the backoff.
-			tenant.Status.ClusterStorageJobs[0].Timestamp = metav1.NewTime(time.Now().Add(-provisioning.BackoffMaxDelay))
-			Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
-			result, err = r.Reconcile(ctx, storageReconcileRequest(nn))
-			Expect(err).NotTo(HaveOccurred())
-			Expect(result.RequeueAfter).To(Equal(pollInterval))
-			Expect(triggers).To(Equal(1))
-			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
-			Expect(tenant.Status.ClusterStorageJobs).To(HaveLen(2))
-			Expect(tenant.Status.ClusterStorageJobs[0].State).To(Equal(v1alpha1.JobStateFailed))
-			Expect(tenant.Status.ClusterStorageJobs[1].JobID).To(Equal("replacement-cluster-storage"))
-			Expect(tenant.Status.StorageClasses).To(HaveLen(1))
-			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady).Status).To(Equal(metav1.ConditionTrue))
-
-			// Poll the replacement instead of launching another job.
-			result, err = r.Reconcile(ctx, storageReconcileRequest(nn))
-			Expect(err).NotTo(HaveOccurred())
-			Expect(result.RequeueAfter).To(Equal(pollInterval))
-			Expect(triggers).To(Equal(1))
-
+			// Once the missing StorageClass appears, the condition flips to True
+			// without needing a new provisioning job.
 			createLabeledStorageClass(ctx, name+"-block-sc", name, "block")
 			waitForStorageClass(name + "-block-sc")
 			_, err = r.Reconcile(ctx, storageReconcileRequest(nn))
@@ -2071,7 +2055,7 @@ var _ = Describe("Storage Controller", func() {
 			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
 			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady).Status).To(Equal(metav1.ConditionTrue))
 			Expect(tenant.Status.StorageClasses).To(HaveLen(2))
-			Expect(triggers).To(Equal(1))
+			Expect(triggers).To(BeZero(), "no provisioning jobs should have been triggered at any point")
 		})
 
 		It("should set ClusterStorageReady=True when all defined tiers have StorageClasses and provider is configured", func() {
@@ -2399,7 +2383,7 @@ var _ = Describe("Storage Controller", func() {
 			Expect(tenant.Status.StorageBackendJobs).To(BeEmpty())
 		})
 
-		It("should back off when cluster storage job failed and hub Secret exists", func() {
+		It("should requeue at poll interval when cluster storage job failed and hub Secret exists", func() {
 			name := "storage-test-cs-retry"
 			createReadyTenantForStorage(ctx, name, testNamespace)
 			createHubSecret(ctx, name, secretsNamespace)
@@ -2426,11 +2410,12 @@ var _ = Describe("Storage Controller", func() {
 			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
 			Expect(err).NotTo(HaveOccurred())
 
-			// Second reconcile: failed job found, hub Secret exists → requeue with backoff.
+			// Second reconcile: failed job found, hub Secret exists → requeue at
+			// StatusPollInterval. The job stays terminal; no new job is created.
 			result, err := r.Reconcile(ctx, storageReconcileRequest(nn))
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.RequeueAfter).To(BeNumerically(">", pollInterval))
-			Expect(result.RequeueAfter).To(BeNumerically("<=", provisioning.BackoffBaseDelay))
+			Expect(result.RequeueAfter).To(Equal(pollInterval),
+				"should requeue at StatusPollInterval without spawning a new job")
 		})
 
 		It("should propagate error when BackendsClient.List returns a gRPC error", func() {

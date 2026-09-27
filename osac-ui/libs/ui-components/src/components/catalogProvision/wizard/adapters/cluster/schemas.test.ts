@@ -468,7 +468,7 @@ describe('buildClusterStepSchema', () => {
     expect(errors).toEqual({});
   });
 
-  it('validates networking step when useDefaultNetwork is false and pickers are empty', async () => {
+  it('rejects missing subnet when useDefaultNetwork is false', async () => {
     const errors = await validateStep(
       'networking',
       {
@@ -486,7 +486,13 @@ describe('buildClusterStepSchema', () => {
       },
       clusterCatalogItem,
     );
-    expect(errors).toEqual({});
+    expect(errors).toEqual({
+      spec: {
+        networkAttachment: {
+          subnet: 'Subnet is required',
+        },
+      },
+    });
   });
 
   it('validates networking step with autoExternalIpAttachment set to true', async () => {

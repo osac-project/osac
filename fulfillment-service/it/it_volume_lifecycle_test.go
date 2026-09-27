@@ -18,7 +18,8 @@ import (
 	"fmt"
 	"time"
 
-	. "github.com/onsi/ginkgo/v2/dsl/core"
+	"github.com/cenkalti/backoff/v4"
+	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
@@ -31,7 +32,7 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
-var _ = Describe("Volume lifecycle", func() {
+var _ = Describe("Volume lifecycle", Ordered, func() {
 	var (
 		ctx context.Context
 
@@ -49,13 +50,53 @@ var _ = Describe("Volume lifecycle", func() {
 		backendId string
 		tierId    string
 		tierName  string
+
+		// testTenant is a per-test-group tenant with a unique name to avoid
+		// collisions when running specs in parallel.
+		testTenant string
 	)
 
-	// "users" is a tenant the test tool provisions and waits for SYNCED
-	// (see createTenants/usersGroup in it_tool.go). Admin has universal ("*")
-	// tenant access, so it may create objects in this tenant.
-	const testTenant = "users"
 	const testBackendPassword = "test-password"
+
+	BeforeAll(func(ctx context.Context) {
+		// Create a per-test-group tenant with a unique name:
+		testTenant = fmt.Sprintf("vol-%s", uuid.New()[:8])
+		tenantsClient := privatev1.NewTenantsClient(tool.InternalView().AdminConn())
+		_, err := tenantsClient.Create(ctx, privatev1.TenantsCreateRequest_builder{
+			Object: privatev1.Tenant_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   testTenant,
+					Tenant: testTenant,
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		// Wait for the tenant to reach SYNCED state:
+		bo := backoff.NewExponentialBackOff()
+		bo.InitialInterval = 1 * time.Second
+		bo.MaxInterval = 5 * time.Second
+		bo.MaxElapsedTime = 120 * time.Second
+		err = backoff.Retry(func() error {
+			resp, getErr := tenantsClient.Get(ctx, privatev1.TenantsGetRequest_builder{
+				Id: testTenant,
+			}.Build())
+			if getErr != nil {
+				return fmt.Errorf("failed to get tenant %q: %w", testTenant, getErr)
+			}
+			if resp.GetObject().GetStatus().GetState() != privatev1.TenantState_TENANT_STATE_SYNCED {
+				return fmt.Errorf("tenant %q not yet synced", testTenant)
+			}
+			return nil
+		}, backoff.WithContext(bo, ctx))
+		Expect(err).ToNot(HaveOccurred())
+
+		DeferCleanup(func(ctx context.Context) {
+			_, _ = tenantsClient.Delete(ctx, privatev1.TenantsDeleteRequest_builder{
+				Id: testTenant,
+			}.Build())
+		})
+	})
 
 	BeforeEach(func() {
 		ctx = context.Background()

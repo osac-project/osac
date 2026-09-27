@@ -1771,6 +1771,108 @@ const (
 	usersGroup    = "users"
 )
 
+// SharedConfig contains the data that process 1 serializes and broadcasts to all
+// Ginkgo parallel processes via SynchronizedBeforeSuite. Each process deserializes
+// this and calls SetupLocalClients to create its own gRPC connections and HTTP clients
+// without repeating Keycloak / tenant / service-account setup.
+type SharedConfig struct {
+	// ProjectDir is the root directory of the project (contains go.mod).
+	ProjectDir string `json:"project_dir"`
+	// TmpDir is the temporary directory created by process 1.
+	TmpDir string `json:"tmp_dir"`
+	// Secret is the shared secret used for passwords and credentials.
+	Secret string `json:"secret"`
+	// ClusterName is the Kind cluster name.
+	ClusterName string `json:"cluster_name"`
+	// KcFile is the path to the kubeconfig file.
+	KcFile string `json:"kc_file"`
+	// CLIBinaryPath is the path to the built osac CLI binary.
+	CLIBinaryPath string `json:"cli_binary_path"`
+	// CaFiles is the list of CA certificate file paths written to TmpDir.
+	CaFiles []string `json:"ca_files"`
+}
+
+// MarshalSharedConfig serializes the data that other Ginkgo parallel processes need
+// to set up their own gRPC connections and HTTP clients.
+func (t *Tool) MarshalSharedConfig() []byte {
+	// Collect CA files from the tmpDir
+	var caFiles []string
+	entries, _ := os.ReadDir(t.tmpDir)
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			caFiles = append(caFiles, filepath.Join(t.tmpDir, entry.Name()))
+		}
+	}
+
+	config := SharedConfig{
+		ProjectDir:    t.projectDir,
+		TmpDir:        t.tmpDir,
+		Secret:        t.secret,
+		ClusterName:   t.clusterName,
+		KcFile:        t.kcFile,
+		CLIBinaryPath: t.cliBinaryPath,
+		CaFiles:       caFiles,
+	}
+	data, err := json.Marshal(config)
+	if err != nil {
+		panic(fmt.Sprintf("failed to marshal shared config: %v", err))
+	}
+	return data
+}
+
+// SetupLocalClients creates process-local gRPC connections and HTTP clients from a
+// deserialized SharedConfig. It skips Keycloak user creation, tenant creation,
+// service-account creation, and other one-time infrastructure setup that process 1
+// already performed via Setup().
+func (t *Tool) SetupLocalClients(ctx context.Context, data []byte) error {
+	var sc SharedConfig
+	if err := json.Unmarshal(data, &sc); err != nil {
+		return fmt.Errorf("failed to unmarshal shared config: %w", err)
+	}
+
+	t.projectDir = sc.ProjectDir
+	t.tmpDir = sc.TmpDir
+	t.secret = sc.Secret
+	t.clusterName = sc.ClusterName
+	t.kcFile = sc.KcFile
+	t.cliBinaryPath = sc.CLIBinaryPath
+
+	// Create the Kubernetes clients from the kubeconfig:
+	restConfig, err := clientcmd.BuildConfigFromFlags("", t.kcFile)
+	if err != nil {
+		return fmt.Errorf("failed to build rest config from kubeconfig: %w", err)
+	}
+	scheme := runtime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(osacv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(bmfov1alpha1.AddToScheme(scheme))
+	t.kubeClient, err = crclient.New(restConfig, crclient.Options{Scheme: scheme})
+	if err != nil {
+		return fmt.Errorf("failed to create kubernetes client: %w", err)
+	}
+	t.kubeClientSet, err = kubernetes.NewForConfig(restConfig)
+	if err != nil {
+		return fmt.Errorf("failed to create kubernetes clientset: %w", err)
+	}
+
+	// Load the CA bundle from files written by process 1:
+	t.caPool, err = trust.NewCertPool().
+		SetLogger(t.logger).
+		AddFiles(sc.CaFiles...).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create CA pool: %w", err)
+	}
+
+	// Create the gRPC and HTTP clients (process-local connections):
+	err = t.createClients(ctx)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // ExtractOrganizationNames extracts organization names from a JWT organization claim.
 // The claim can be in two formats:
 // - Array format: ["org1", "org2"]

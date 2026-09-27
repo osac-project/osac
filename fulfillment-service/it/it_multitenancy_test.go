@@ -18,7 +18,7 @@ import (
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
-var _ = Describe("Multitenancy authentication error handling", Label("multitenancy", "autherrors"), func() {
+var _ = Describe("Multitenancy authentication error handling", Serial, Label("multitenancy", "autherrors"), func() {
 	DescribeTable(
 		"Returns error when authenticating with invalid token",
 		func(ctx context.Context, endpoint string) {
@@ -77,7 +77,7 @@ var _ = Describe("Multitenancy authentication error handling", Label("multitenan
 	)
 })
 
-var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multitenancy", "isolation"), func() {
+var _ = Describe("Multitenancy basic tenant isolation", Serial, Ordered, Label("multitenancy", "isolation"), func() {
 	Describe("serviceaccount tenants", func() {
 		var tenantUserMapping map[string][]string
 

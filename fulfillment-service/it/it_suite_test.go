@@ -20,7 +20,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/kelseyhightower/envconfig"
-	. "github.com/onsi/ginkgo/v2/dsl/core"
+	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
@@ -53,66 +53,131 @@ func TestIntegration(t *testing.T) {
 	RunSpecs(t, "Integration")
 }
 
-var _ = BeforeSuite(func() {
-	var err error
+var _ = SynchronizedBeforeSuite(
+	// Process 1: run full infrastructure setup (Keycloak users, tenants, service
+	// accounts, ClusterVersion) and return a serialized SharedConfig blob that
+	// all processes can use to create their own gRPC/HTTP clients.
+	func() []byte {
+		var err error
 
-	// Create a context:
-	ctx := context.Background()
+		// Create a context:
+		ctx := context.Background()
 
-	// Create the logger:
-	logger, err = logging.NewLogger().
-		SetWriter(GinkgoWriter).
-		SetLevel(slog.LevelDebug.String()).
-		Build()
-	Expect(err).ToNot(HaveOccurred())
-
-	// Configure the Kubernetes libraries to use our logger:
-	logrLogger := logr.FromSlogHandler(logger.Handler())
-	crlog.SetLogger(logrLogger)
-	klog.SetLogger(logrLogger)
-
-	// Load configuration from environment variables:
-	config = &Config{}
-	err = envconfig.Process("it", config)
-	Expect(err).ToNot(HaveOccurred())
-	logger.Info(
-		"Configuration",
-		slog.String("!secret", config.Secret),
-	)
-
-	// Create and setup the tool:
-	tool, err = NewTool().
-		SetLogger(logger).
-		SetSecret(config.Secret).
-		Build()
-	Expect(err).ToNot(HaveOccurred())
-	err = tool.Setup(ctx)
-	Expect(err).ToNot(HaveOccurred())
-	DeferCleanup(func() {
-		err := tool.Cleanup(ctx)
+		// Create the logger:
+		logger, err = logging.NewLogger().
+			SetWriter(GinkgoWriter).
+			SetLevel(slog.LevelDebug.String()).
+			Build()
 		Expect(err).ToNot(HaveOccurred())
-	})
 
-	// Create a default cluster version for version resolution during cluster creation.
-	// Tolerate AlreadyExists so the suite can be re-run against a live cluster without
-	// needing to tear it down first.
-	cvClient := privatev1.NewClusterVersionsClient(tool.InternalView().AdminConn())
-	_, err = cvClient.Create(ctx, privatev1.ClusterVersionsCreateRequest_builder{
-		Object: privatev1.ClusterVersion_builder{
-			Metadata: privatev1.Metadata_builder{
-				Name: "default",
-			}.Build(),
-			Spec: privatev1.ClusterVersionSpec_builder{
-				Version:   "4.17.0",
-				Image:     "quay.io/openshift-release-dev/ocp-release:4.17.0-multi",
-				IsDefault: new(true),
-			}.Build(),
-		}.Build(),
-	}.Build())
-	if err != nil {
-		st, ok := grpcstatus.FromError(err)
-		Expect(ok && st.Code() == grpccodes.AlreadyExists).To(
-			BeTrue(), "BeforeSuite ClusterVersion create failed: %v", err,
+		// Configure the Kubernetes libraries to use our logger:
+		logrLogger := logr.FromSlogHandler(logger.Handler())
+		crlog.SetLogger(logrLogger)
+		klog.SetLogger(logrLogger)
+
+		// Load configuration from environment variables:
+		config = &Config{}
+		err = envconfig.Process("it", config)
+		Expect(err).ToNot(HaveOccurred())
+		logger.Info(
+			"Configuration",
+			slog.String("!secret", config.Secret),
 		)
-	}
-})
+
+		// Create and setup the tool (full infrastructure setup):
+		tool, err = NewTool().
+			SetLogger(logger).
+			SetSecret(config.Secret).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+		err = tool.Setup(ctx)
+		Expect(err).ToNot(HaveOccurred())
+
+		// Create a default cluster version for version resolution during cluster creation.
+		// Tolerate AlreadyExists so the suite can be re-run against a live cluster without
+		// needing to tear it down first.
+		cvClient := privatev1.NewClusterVersionsClient(tool.InternalView().AdminConn())
+		_, err = cvClient.Create(ctx, privatev1.ClusterVersionsCreateRequest_builder{
+			Object: privatev1.ClusterVersion_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: "default",
+				}.Build(),
+				Spec: privatev1.ClusterVersionSpec_builder{
+					Version:   "4.17.0",
+					Image:     "quay.io/openshift-release-dev/ocp-release:4.17.0-multi",
+					IsDefault: new(true),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		if err != nil {
+			st, ok := grpcstatus.FromError(err)
+			Expect(ok && st.Code() == grpccodes.AlreadyExists).To(
+				BeTrue(), "BeforeSuite ClusterVersion create failed: %v", err,
+			)
+		}
+
+		// Serialize the shared config for other processes:
+		return tool.MarshalSharedConfig()
+	},
+
+	// All processes (including process 1): deserialize the shared config and
+	// build process-local gRPC connections and HTTP clients.
+	func(data []byte) {
+		var err error
+
+		// Create a context:
+		ctx := context.Background()
+
+		// Create the logger (each process needs its own):
+		logger, err = logging.NewLogger().
+			SetWriter(GinkgoWriter).
+			SetLevel(slog.LevelDebug.String()).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		// Configure the Kubernetes libraries to use our logger:
+		logrLogger := logr.FromSlogHandler(logger.Handler())
+		crlog.SetLogger(logrLogger)
+		klog.SetLogger(logrLogger)
+
+		// Load configuration from environment variables:
+		config = &Config{}
+		err = envconfig.Process("it", config)
+		Expect(err).ToNot(HaveOccurred())
+
+		// Create a tool and set up process-local clients from the shared config:
+		tool, err = NewTool().
+			SetLogger(logger).
+			SetSecret(config.Secret).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+		err = tool.SetupLocalClients(ctx, data)
+		Expect(err).ToNot(HaveOccurred())
+
+		DeferCleanup(func() {
+			// Only close gRPC connections; process 1 handles cluster-level
+			// cleanup (log export, tmp dir removal) via SynchronizedAfterSuite
+			// or its own cleanup path.
+			if tool.InternalView() != nil {
+				_ = tool.InternalView().Close()
+			}
+			if tool.ExternalView() != nil {
+				_ = tool.ExternalView().Close()
+			}
+		})
+	},
+)
+
+var _ = SynchronizedAfterSuite(
+	// All processes: no-op (per-process cleanup is in DeferCleanup above).
+	func() {},
+
+	// Process 1 only: run cluster-level cleanup (export logs, remove tmpDir).
+	func() {
+		if tool != nil {
+			ctx := context.Background()
+			err := tool.Cleanup(ctx)
+			Expect(err).ToNot(HaveOccurred())
+		}
+	},
+)

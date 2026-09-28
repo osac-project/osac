@@ -1,3 +1,6 @@
+# Agentic-CI sandbox toolchain directory (downloaded by .agentic-ci/config.yml setup)
+.agentic-ci-tools/
+
 # AI workflows and skills (installed by tools/bootstrap.sh)
 skills/
 .ai-workflows/

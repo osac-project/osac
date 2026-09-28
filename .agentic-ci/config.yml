@@ -1,0 +1,94 @@
+# .agentic-ci/config.yml
+#
+# Prepares Go + project tooling for the agentic-ci sandbox.
+# Setup steps run on the host (full network) before the workdir
+# is uploaded into the sandbox.
+#
+# All versions are extracted at runtime from repo source-of-truth
+# files — nothing is hardcoded here.
+#
+# Already in the sandbox image: git, make, curl, jq, python3, gh
+# Skipped (not useful in sandbox): kind, jira-cli, podman, claude-code
+
+setup:
+  # ── Go toolchain + module cache ─────────────────────────────
+  - name: Go toolchain
+    run: |
+      set -euo pipefail
+      T=.agentic-ci-tools
+      mkdir -p "$T"
+
+      # Go version from go.work (repo-wide source of truth)
+      GO_VERSION=$(grep '^go ' go.work | awk '{print $2}')
+      echo "Installing Go ${GO_VERSION}"
+      curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" \
+        | tar -xz -C "$T"
+
+      export PATH="$PWD/$T/go/bin:$PATH"
+      export GOPATH="$PWD/$T/gopath"
+      export GOMODCACHE="$PWD/$T/gomodcache"
+      cd osac-operator && go mod download
+
+  # ── Go dev tools ────────────────────────────────────────────
+  - name: Go dev tools
+    run: |
+      set -euo pipefail
+      T=.agentic-ci-tools
+      export PATH="$PWD/$T/go/bin:$PATH"
+      export GOPATH="$PWD/$T/gopath"
+      export GOMODCACHE="$PWD/$T/gomodcache"
+      export GOBIN="$PWD/$T/bin"
+      mkdir -p "$GOBIN"
+
+      # Versions from osac-operator/Makefile
+      CTL_VER=$(awk -F'[?:]?= *' '/CONTROLLER_TOOLS_VERSION/ {print $2; exit}' osac-operator/Makefile)
+      ENV_VER=$(awk -F'[?:]?= *' '/ENVTEST_VERSION/ {print $2; exit}' osac-operator/Makefile)
+
+      # Version from tools/golangci-lint.mk
+      LINT_VER=$(awk -F'[?:]?= *' '/GOLANGCI_LINT_VERSION/ {print $2; exit}' tools/golangci-lint.mk)
+
+      # Ginkgo version from go.mod dependency
+      GINKGO_VER=$(grep 'onsi/ginkgo/v2 ' osac-operator/go.mod \
+        | awk '{print $2}')
+
+      echo "controller-gen=${CTL_VER} envtest=${ENV_VER}"
+      echo "golangci-lint=${LINT_VER} ginkgo=${GINKGO_VER}"
+
+      go install "sigs.k8s.io/controller-tools/cmd/controller-gen@${CTL_VER}"
+      go install "sigs.k8s.io/controller-runtime/tools/setup-envtest@${ENV_VER}"
+      go install "github.com/onsi/ginkgo/v2/ginkgo@${GINKGO_VER}"
+      go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${LINT_VER}"
+
+  # ── Binary tools (versions from Containerfile ARGs) ─────────
+  - name: buf, kubectl, grpcurl
+    run: |
+      set -euo pipefail
+      T=.agentic-ci-tools/bin
+      CF=tools/distrobox/Containerfile
+      mkdir -p "$T"
+
+      # Parse ARG lines from the Containerfile
+      ver() { grep "^ARG ${1}=" "$CF" | cut -d= -f2; }
+
+      BUF_VERSION=$(ver BUF_VERSION)
+      KUBECTL_VERSION=$(ver KUBECTL_VERSION)
+      GRPCURL_VERSION=$(ver GRPCURL_VERSION)
+
+      echo "buf=${BUF_VERSION} kubectl=${KUBECTL_VERSION} grpcurl=${GRPCURL_VERSION}"
+
+      curl -fsSL "https://github.com/bufbuild/buf/releases/download/v${BUF_VERSION}/buf-Linux-x86_64.tar.gz" \
+        | tar -xz -C "$PWD/.agentic-ci-tools" --strip-components=1 \
+            buf/bin/buf buf/bin/protoc-gen-buf-breaking buf/bin/protoc-gen-buf-lint
+
+      curl -fsSLo "$T/kubectl" \
+        "https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+      chmod +x "$T/kubectl"
+
+      curl -fsSL "https://github.com/fullstorydev/grpcurl/releases/download/v${GRPCURL_VERSION}/grpcurl_${GRPCURL_VERSION}_linux_x86_64.tar.gz" \
+        | tar -xz -C "$T" grpcurl
+
+  # ── Python packages ─────────────────────────────────────────
+  - name: Python packages
+    run: |
+      set -euo pipefail
+      pip3 install --target=.agentic-ci-tools/python --no-cache-dir pytest ansible pyyaml

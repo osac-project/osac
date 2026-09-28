@@ -265,8 +265,10 @@ def setup_organization_memberships(ensure_tenants: None, keycloak_url: str, keyc
     org_users = {"tenant1": ["tenant1_user", "tenant1_admin"], "tenant2": ["tenant2_user", "tenant2_admin"]}
 
     for org_name, usernames in org_users.items():
+        admin_token = get_admin_token(keycloak_url=keycloak_url, username="admin", password=keycloak_admin_password)
         # Wait for the organization to be synced to Keycloak by the tenant controller
         org_id = wait_for_organization(keycloak_url=keycloak_url, admin_token=admin_token, org_name=org_name)
+        admin_token = get_admin_token(keycloak_url=keycloak_url, username="admin", password=keycloak_admin_password)
 
         # Add each user to the organization
         for username in usernames:

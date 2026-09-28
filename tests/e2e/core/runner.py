@@ -42,7 +42,8 @@ def poll_until(
     last_error: subprocess.CalledProcessError | None = None
     start = time.monotonic()
     last_logged = start
-    logger.info("Waiting for %s...", description)
+    # Descriptions and polled values may contain API responses or credentials.
+    logger.info("Waiting for resource condition...")
     for attempt in range(retries):
         # retry_on_error is opt-in: most callers' fn() raising CalledProcessError
         # indicates a real bug (bad namespace, typo'd resource, auth
@@ -59,32 +60,25 @@ def poll_until(
             else:
                 last_error = None
                 if until(value):
-                    logger.info("%s — done after %.0fs", description, time.monotonic() - start)
+                    logger.info("Resource condition met after %.0fs", time.monotonic() - start)
                     return value
         else:
             value = fn()
             if until(value):
-                logger.info("%s — done after %.0fs", description, time.monotonic() - start)
+                logger.info("Resource condition met after %.0fs", time.monotonic() - start)
                 return value
         now = time.monotonic()
         if now - last_logged >= _PROGRESS_LOG_INTERVAL_S:
-            logger.info(
-                "Still waiting for %s (attempt %d/%d, %.0fs elapsed, last value: %r%s)",
-                description,
-                attempt + 1,
-                retries,
-                now - start,
-                value,
-                f", last error: {last_error}" if last_error else "",
-            )
+            logger.info("Still waiting (attempt %d/%d, %.0fs elapsed)", attempt + 1, retries, now - start)
             last_logged = now
         if attempt + 1 < retries:
             time.sleep(delay)
     if last_error is not None:
+        # Suppress the subprocess exception: its command and output may contain secrets.
         raise TimeoutError(
-            f"{description} — timeout after {max(retries - 1, 0) * delay}s, last call failed: {last_error}"
-        ) from last_error
-    raise TimeoutError(f"{description} — timeout after {max(retries - 1, 0) * delay}s, last value: {value!r}")
+            f"Resource condition timed out after {max(retries - 1, 0) * delay}s (last call failed)"
+        ) from None
+    raise TimeoutError(f"Resource condition timed out after {max(retries - 1, 0) * delay}s")
 
 
 def env(name: str, default: str | None = None) -> str:

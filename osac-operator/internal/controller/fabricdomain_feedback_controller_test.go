@@ -18,10 +18,13 @@ package controller
 
 import (
 	"context"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -73,8 +76,56 @@ var _ = Describe("FabricDomain feedback mapping", func() {
 
 		Expect(syncFabricDomainUpdate(context.Background(), object, remote)).To(Succeed())
 		Expect(remote.GetStatus().GetConditions()[0].GetType()).To(Equal(privatev1.FabricDomainConditionType_FABRIC_DOMAIN_CONDITION_TYPE_FAILED))
-		Expect(remote.GetStatus().GetConditions()[0].GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		Expect(remote.GetStatus().GetConditions()[0].GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
 		Expect(remote.GetStatus().GetConditions()[0].GetMessage()).To(Equal("Netris rejected the request"))
 		Expect(remote.GetStatus().GetMembers()[0].GetMessage()).To(Equal("Netris rejected the request"))
+	})
+
+	It("reports Progressing as an active condition and reuses the remote transition time", func() {
+		transitionTime := time.Date(2026, time.September, 20, 12, 0, 0, 0, time.UTC)
+		remoteStatus := privatev1.FabricDomainStatus_builder{}.Build()
+		remoteStatus.SetConditions([]*privatev1.FabricDomainCondition{privatev1.FabricDomainCondition_builder{
+			Type:               privatev1.FabricDomainConditionType_FABRIC_DOMAIN_CONDITION_TYPE_PROGRESSING,
+			Status:             privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+			LastTransitionTime: timestamppb.New(transitionTime),
+		}.Build()})
+		remote := privatev1.FabricDomain_builder{Status: remoteStatus}.Build()
+		object := &v1alpha1.FabricDomain{Status: v1alpha1.FabricDomainStatus{Phase: v1alpha1.FabricDomainPhaseProgressing}}
+
+		Expect(syncFabricDomainUpdate(context.Background(), object, remote)).To(Succeed())
+		condition := remote.GetStatus().GetConditions()[0]
+		Expect(condition.GetType()).To(Equal(privatev1.FabricDomainConditionType_FABRIC_DOMAIN_CONDITION_TYPE_PROGRESSING))
+		Expect(condition.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+		Expect(condition.GetLastTransitionTime().AsTime()).To(Equal(transitionTime))
+	})
+
+	It("reports an unset phase as an unspecified condition", func() {
+		object := &v1alpha1.FabricDomain{}
+		remote := privatev1.FabricDomain_builder{Status: privatev1.FabricDomainStatus_builder{}.Build()}.Build()
+
+		Expect(syncFabricDomainUpdate(context.Background(), object, remote)).To(Succeed())
+		condition := remote.GetStatus().GetConditions()[0]
+		Expect(condition.GetType()).To(Equal(privatev1.FabricDomainConditionType_FABRIC_DOMAIN_CONDITION_TYPE_UNSPECIFIED))
+		Expect(condition.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_UNSPECIFIED))
+	})
+
+	It("preserves the deletion transition time while the condition is unchanged", func() {
+		transitionTime := time.Date(2026, time.September, 21, 9, 30, 0, 0, time.UTC)
+		remoteStatus := privatev1.FabricDomainStatus_builder{}.Build()
+		remoteStatus.SetConditions([]*privatev1.FabricDomainCondition{privatev1.FabricDomainCondition_builder{
+			Type:               privatev1.FabricDomainConditionType_FABRIC_DOMAIN_CONDITION_TYPE_PROGRESSING,
+			Status:             privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+			LastTransitionTime: timestamppb.New(transitionTime),
+			Reason:             ptr.To("Deleting"),
+		}.Build()})
+		remote := privatev1.FabricDomain_builder{Status: remoteStatus}.Build()
+		object := &v1alpha1.FabricDomain{Status: v1alpha1.FabricDomainStatus{Phase: v1alpha1.FabricDomainPhaseDeleting}}
+
+		Expect(syncFabricDomainDelete(context.Background(), object, remote)).To(Succeed())
+		condition := remote.GetStatus().GetConditions()[0]
+		Expect(condition.GetType()).To(Equal(privatev1.FabricDomainConditionType_FABRIC_DOMAIN_CONDITION_TYPE_PROGRESSING))
+		Expect(condition.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+		Expect(condition.GetReason()).To(Equal("Deleting"))
+		Expect(condition.GetLastTransitionTime().AsTime()).To(Equal(transitionTime))
 	})
 })

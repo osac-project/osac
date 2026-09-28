@@ -286,6 +286,13 @@ func (r *FabricDomainReconciler) runFabricDomainProvisioning(
 	vnet *v1alpha1.VirtualNetwork,
 	templateID, desiredVersion string,
 ) (ctrl.Result, error) {
+	if !domain.Status.ProvisioningIntent {
+		domain.Status.ProvisioningIntent = true
+		if err := r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(domain), domain.Status); err != nil {
+			return ctrl.Result{}, fmt.Errorf("persisting FabricDomain provisioning intent: %w", err)
+		}
+	}
+
 	aapCtx := provisioning.WithAAPExtraVars(ctx, fabricDomainAAPExtraVars(domain, vnet, templateID))
 	result, err := provisioning.RunProvisioningLifecycle(aapCtx, r.ProvisioningProvider, domain,
 		&provisioning.State{Jobs: &domain.Status.ProvisioningJobs, DesiredConfigVersion: desiredVersion},
@@ -352,7 +359,7 @@ func (r *FabricDomainReconciler) handleDelete(ctx context.Context, domain *v1alp
 		return ctrl.Result{}, nil
 	}
 
-	if r.ProvisioningProvider != nil && (len(domain.Status.ProvisioningJobs) > 0 || domain.Status.BackendID != "") {
+	if r.ProvisioningProvider != nil && (domain.Status.ProvisioningIntent || len(domain.Status.ProvisioningJobs) > 0 || domain.Status.BackendID != "") {
 		aapCtx := provisioning.WithAAPExtraVars(ctx, fabricDomainAAPExtraVars(domain, nil, ""))
 		result, done, err := provisioning.RunDeprovisioningLifecycle(aapCtx, r.ProvisioningProvider, domain,
 			&domain.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval)

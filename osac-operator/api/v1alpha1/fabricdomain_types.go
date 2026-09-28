@@ -118,6 +118,11 @@ type FabricDomainStatus struct {
 	// +kubebuilder:validation:Optional
 	DesiredConfigVersion string `json:"desiredConfigVersion,omitempty"`
 
+	// ProvisioningIntent records that an AAP provisioning job may have been launched.
+	// It is persisted before launch so deletion still attempts cleanup if job status cannot be saved.
+	// +kubebuilder:validation:Optional
+	ProvisioningIntent bool `json:"provisioningIntent,omitempty"`
+
 	// ProvisioningJobs tracks AAP provisioning and cleanup jobs across reconciles.
 	// +kubebuilder:validation:Optional
 	ProvisioningJobs []JobStatus `json:"provisioningJobs,omitempty"`

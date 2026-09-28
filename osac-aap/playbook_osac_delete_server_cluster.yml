@@ -1,0 +1,17 @@
+---
+- name: Delete a ServerCluster resource
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    server_cluster: "{{ ansible_eda.event.payload }}"
+    implementation_strategy: >-
+      {{ ansible_eda.event.payload.metadata.annotations
+         ['osac.openshift.io/implementation-strategy']
+         | default('netris', true) }}
+
+  tasks:
+    - name: Call the selected ServerCluster role
+      ansible.builtin.include_role:
+        name: "osac.templates.{{ implementation_strategy }}"
+        tasks_from: delete_server_cluster

@@ -14,6 +14,9 @@ argument_specs:
         type: str
         required: true
         description: "Name of the server cluster."
+      server_cluster_backend_id:
+        type: str
+        description: "Existing Netris server cluster ID. When set, this ID is preferred over name lookup."
       server_cluster_site_id:
         type: int
         required: true
@@ -50,6 +53,9 @@ argument_specs:
         type: str
         required: true
         description: "Name of the server cluster to delete."
+      server_cluster_backend_id:
+        type: str
+        description: "Existing Netris server cluster ID. When set, this ID is preferred over name lookup."
       server_cluster_site_id:
         type: int
         required: true

@@ -2,6 +2,7 @@ package provisioning_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -832,6 +833,43 @@ var _ = Describe("AAPProvider", func() {
 			}
 			_, err := provider.TriggerProvision(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
+		})
+	})
+
+	Describe("Additional AAP extra vars", func() {
+		BeforeEach(func() {
+			provider = provisioning.NewAAPProvider(aapClient, "provision-job", "deprovision-job")
+		})
+
+		It("merges event payload variables with the standard resource variables", func() {
+			payload := map[string]any{"metadata": map[string]any{"name": "fabric-domain-a"}}
+			ctx = provisioning.WithAAPExtraVars(ctx, map[string]any{
+				"ansible_eda": map[string]any{"event": map[string]any{"payload": payload}},
+			})
+			aapClient.launchJobTemplateFunc = func(_ context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
+				Expect(req.ExtraVars).To(HaveKey("osac_job_vars"))
+				eda := req.ExtraVars["ansible_eda"].(map[string]any)
+				event := eda["event"].(map[string]any)
+				Expect(event["payload"]).To(Equal(payload))
+				return &aap.LaunchJobTemplateResponse{JobID: 101}, nil
+			}
+
+			_, err := provider.TriggerProvision(ctx, &v1alpha1.FabricDomain{ObjectMeta: metav1.ObjectMeta{Name: "fd", Namespace: "default"}})
+			Expect(err).NotTo(HaveOccurred())
+		})
+	})
+
+	Describe("AAP job artifacts", func() {
+		It("returns successful job artifacts as provisioning outputs", func() {
+			provider = provisioning.NewAAPProvider(aapClient, "provision-job", "deprovision-job")
+			aapClient.getJobFunc = func(_ context.Context, _ string) (*aap.Job, error) {
+				return &aap.Job{ID: 42, Status: "successful", Artifacts: json.RawMessage(`{"server_cluster_id":42,"server_cluster_vpc_id":"vpc-7"}`)}, nil
+			}
+
+			status, err := provider.GetProvisionStatus(ctx, &v1alpha1.FabricDomain{}, "42")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(status.Outputs).To(HaveKeyWithValue("server_cluster_id", BeNumerically("==", 42)))
+			Expect(status.Outputs).To(HaveKeyWithValue("server_cluster_vpc_id", "vpc-7"))
 		})
 	})
 

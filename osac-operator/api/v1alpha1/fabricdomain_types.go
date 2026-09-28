@@ -24,11 +24,11 @@ const (
 	// FabricDomainTypeEthernetEW identifies an Ethernet east-west fabric.
 	FabricDomainTypeEthernetEW FabricDomainType = "EthernetEW"
 
-// FabricDomainTypeInfiniBandEW identifies an InfiniBand east-west fabric, reserved for Phase 2.
-FabricDomainTypeInfiniBandEW FabricDomainType = "InfiniBandEW"
+	// FabricDomainTypeInfiniBandEW identifies an InfiniBand east-west fabric, reserved for Phase 2.
+	FabricDomainTypeInfiniBandEW FabricDomainType = "InfiniBandEW"
 
-// FabricDomainTypeNVLink identifies an NVIDIA NVLink fabric, reserved for Phase 3.
-FabricDomainTypeNVLink FabricDomainType = "NVLink"
+	// FabricDomainTypeNVLink identifies an NVIDIA NVLink fabric, reserved for Phase 3.
+	FabricDomainTypeNVLink FabricDomainType = "NVLink"
 )
 
 // FabricDomainSpec defines the desired state of FabricDomain.
@@ -85,8 +85,27 @@ type FabricDomainMemberStatus struct {
 	Message string `json:"message,omitempty"`
 }
 
+// FabricDomainPhase is a high-level summary of FabricDomain provisioning.
+// +kubebuilder:validation:Enum=Progressing;Ready;Failed;Deleting
+type FabricDomainPhase string
+
+const (
+	// FabricDomainPhaseProgressing means provisioning or an update is in progress.
+	FabricDomainPhaseProgressing FabricDomainPhase = "Progressing"
+	// FabricDomainPhaseReady means the backend server cluster matches the desired configuration.
+	FabricDomainPhaseReady FabricDomainPhase = "Ready"
+	// FabricDomainPhaseFailed means the most recent provisioning attempt failed.
+	FabricDomainPhaseFailed FabricDomainPhase = "Failed"
+	// FabricDomainPhaseDeleting means cleanup is in progress.
+	FabricDomainPhaseDeleting FabricDomainPhase = "Deleting"
+)
+
 // FabricDomainStatus defines the observed state of FabricDomain.
 type FabricDomainStatus struct {
+	// Phase provides a single-value overview of FabricDomain provisioning.
+	// +kubebuilder:validation:Optional
+	Phase FabricDomainPhase `json:"phase,omitempty"`
+
 	// Conditions describes the current state of the FabricDomain.
 	// +kubebuilder:validation:Optional
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,1,rep,name=conditions"`
@@ -94,6 +113,14 @@ type FabricDomainStatus struct {
 	// BackendID is the provider-specific identifier of the server cluster.
 	// +kubebuilder:validation:Optional
 	BackendID string `json:"backendId,omitempty"`
+
+	// DesiredConfigVersion hashes the applied FabricDomain and resolved backend configuration.
+	// +kubebuilder:validation:Optional
+	DesiredConfigVersion string `json:"desiredConfigVersion,omitempty"`
+
+	// ProvisioningJobs tracks AAP provisioning and cleanup jobs across reconciles.
+	// +kubebuilder:validation:Optional
+	ProvisioningJobs []JobStatus `json:"provisioningJobs,omitempty"`
 
 	// VPCID is the provider-specific identifier of the VPC containing the fabric domain.
 	// +kubebuilder:validation:Optional

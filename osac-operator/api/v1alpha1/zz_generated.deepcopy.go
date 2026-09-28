@@ -913,6 +913,13 @@ func (in *FabricDomainStatus) DeepCopyInto(out *FabricDomainStatus) {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
+	if in.ProvisioningJobs != nil {
+		in, out := &in.ProvisioningJobs, &out.ProvisioningJobs
+		*out = make([]JobStatus, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
 	if in.Members != nil {
 		in, out := &in.Members, &out.Members
 		*out = make([]FabricDomainMemberStatus, len(*in))

@@ -814,6 +814,18 @@ func setupNetworkingControllers(
 	); err != nil {
 		return err
 	}
+	serverClusterProvider := provisioning.NewAAPProvider(
+		aapClient,
+		fmt.Sprintf("%s-create-server-cluster", templatePrefix),
+		fmt.Sprintf("%s-delete-server-cluster", templatePrefix),
+	)
+	if err := setupFabricDomainControllers(
+		mgr, localMgr, grpcConn, networkingNamespace, serverClusterProvider,
+		networkClassesClient, statusPollInterval, maxJobHistory,
+		networkProvisioningEnabled,
+	); err != nil {
+		return err
+	}
 
 	if err := setupSubnetControllers(
 		mgr, localMgr, grpcConn, networkingNamespace,
@@ -909,6 +921,31 @@ func setupVirtualNetworkControllers(
 	reconciler.NetworkProvisioningEnabled = networkProvisioningEnabled
 	if err := reconciler.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("virtualnetwork controller: %w", err)
+	}
+	return nil
+}
+
+func setupFabricDomainControllers(
+	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn *grpc.ClientConn,
+	networkingNamespace string, provider provisioning.ProvisioningProvider,
+	networkClassesClient privatev1.NetworkClassesClient,
+	statusPollInterval time.Duration, maxJobHistory int,
+	networkProvisioningEnabled bool,
+) error {
+	if grpcConn != nil {
+		if err := controller.NewFabricDomainFeedbackReconciler(
+			localMgr.GetClient(), grpcConn, networkingNamespace,
+		).SetupWithManager(mgr); err != nil {
+			return fmt.Errorf("fabricdomain feedback controller: %w", err)
+		}
+	}
+	reconciler := controller.NewFabricDomainReconciler(
+		mgr, networkingNamespace, provider, networkClassesClient,
+		statusPollInterval, maxJobHistory,
+	)
+	reconciler.NetworkProvisioningEnabled = networkProvisioningEnabled
+	if err := reconciler.SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("fabricdomain controller: %w", err)
 	}
 	return nil
 }

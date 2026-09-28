@@ -16,10 +16,30 @@
   register: server_cluster_list_resp
   no_log: true
 
+- name: Find existing server cluster by backend ID
+  ansible.builtin.set_fact:
+    _existing_server_cluster: >-
+      {{
+        (server_cluster_list_resp.json.data | default([]))
+        | selectattr('id', 'equalto', server_cluster_backend_id | int)
+        | list | first | default(none)
+      }}
+  when:
+    - server_cluster_list_resp.json is mapping
+    - server_cluster_backend_id is defined
+    - server_cluster_backend_id | string | length > 0
+
 - name: Find existing server cluster by name
   ansible.builtin.set_fact:
-    _existing_server_cluster: "{{ (server_cluster_list_resp.json.data | default([])) | selectattr('name', 'equalto', server_cluster_name) | list | first | default(none) }}"
-  when: server_cluster_list_resp.json is mapping
+    _existing_server_cluster: >-
+      {{
+        (server_cluster_list_resp.json.data | default([]))
+        | selectattr('name', 'equalto', server_cluster_name)
+        | list | first | default(none)
+      }}
+  when:
+    - server_cluster_list_resp.json is mapping
+    - _existing_server_cluster is not defined or _existing_server_cluster is none
 
 - name: Delete server cluster
   when: _existing_server_cluster is defined and _existing_server_cluster is not none

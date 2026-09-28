@@ -29,3 +29,10 @@
       ansible.builtin.include_role:
         name: "osac.templates.{{ implementation_strategy }}"
         tasks_from: create_virtual_network
+
+    - name: Publish VirtualNetwork backend ID as an AAP artifact
+      ansible.builtin.set_stats:
+        data:
+          vpc_id: "{{ vpc_id | string }}"
+        per_host: false
+      when: vpc_id is defined and vpc_id | string | length > 0

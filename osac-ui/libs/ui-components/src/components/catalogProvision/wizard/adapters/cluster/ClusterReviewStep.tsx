@@ -76,8 +76,7 @@ export const ClusterReviewStep = ({ catalogItem }: Props) => {
   } = useProjects({ filter: fullProjectPathToQueryFilter(values.metadata.project) });
 
   const isCustomNetwork =
-    !values.spec.useDefaultNetwork &&
-    Boolean(values.spec.networkAttachment.subnet.id.trim());
+    !values.spec.useDefaultNetwork && Boolean(values.spec.networkAttachment.subnet.id.trim());
 
   const versionDisplay = versionDisplayName(
     findVersionByName(versions, values.spec.versionName),

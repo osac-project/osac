@@ -6,8 +6,8 @@ import type { ClusterCatalogItem } from '@osac/types';
 import type { ClusterWizardValues } from './fields';
 import { createEmptyNodeSetRow } from './fields';
 import { buildClusterStepSchema } from './schemas';
-import { emptyResourceSelectValue } from '../../../../Form/resourceSelectValue';
 import { tIdentity as t } from '../../../../../test-utils/i18n';
+import { emptyResourceSelectValue } from '../../../../Form/resourceSelectValue';
 
 const clusterCatalogItem: ClusterCatalogItem = {
   $typeName: 'osac.public.v1.ClusterCatalogItem',

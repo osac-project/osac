@@ -20,8 +20,7 @@ interface Props {
 export const ClusterNetworkingStep = ({ catalogItem }: Props) => {
   const { t } = useTranslation();
   const { clearValidationAlert } = useWizardValidation();
-  const { values, setFieldTouched, validateForm } =
-    useFormikContext<ClusterWizardValues>();
+  const { values, setFieldTouched, validateForm } = useFormikContext<ClusterWizardValues>();
 
   const useDefaultNetwork = values.spec.useDefaultNetwork;
 
@@ -67,10 +66,7 @@ export const ClusterNetworkingStep = ({ catalogItem }: Props) => {
               fieldId="cluster-use-default-network"
             />
             {!useDefaultNetwork && (
-              <NetworkPickerFields
-                fieldPrefix="spec.networkAttachment"
-                fieldIdPrefix="cluster"
-              />
+              <NetworkPickerFields fieldPrefix="spec.networkAttachment" fieldIdPrefix="cluster" />
             )}
             <CheckboxField
               name="spec.autoExternalIpAttachment"

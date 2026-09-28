@@ -5,6 +5,8 @@ import { useField, useFormikContext } from 'formik';
 
 import { Subnets, VirtualNetworks } from '@osac/types';
 
+import { ResourceSelectField, type ResourceSelectValue } from './ResourceSelectField';
+import { emptyResourceSelectValue } from './resourceSelectValue';
 import {
   VIRTUAL_NETWORK_READY_LIST_FILTER,
   resourceDisplayName,
@@ -13,8 +15,6 @@ import {
   virtualNetworkFilterForSubnetList,
 } from '../../api/v1/networking';
 import { useTranslation } from '../../hooks/useTranslation';
-import { ResourceSelectField, type ResourceSelectValue } from './ResourceSelectField';
-import { emptyResourceSelectValue } from './resourceSelectValue';
 
 export interface NetworkPickerFieldsProps {
   /** Formik field-path prefix, e.g. "spec.networkAttachment". */
@@ -33,17 +33,14 @@ export interface NetworkPickerFieldsProps {
  * Cascade behaviour: selecting a new VN resets the subnet and SG fields.
  * Subnet and SG queries are scoped to the selected VN.
  */
-export const NetworkPickerFields = ({
-  fieldPrefix,
-  fieldIdPrefix,
-}: NetworkPickerFieldsProps) => {
+export const NetworkPickerFields = ({ fieldPrefix, fieldIdPrefix }: NetworkPickerFieldsProps) => {
   const { t } = useTranslation();
   const { values, setFieldValue } = useFormikContext<Record<string, unknown>>();
 
   // Read the current VN id from the form values.
-  const virtualNetworkId = (
-    getNestedValue(values, `${fieldPrefix}.virtualNetwork`) as ResourceSelectValue | undefined
-  )?.id ?? '';
+  const virtualNetworkId =
+    (getNestedValue(values, `${fieldPrefix}.virtualNetwork`) as ResourceSelectValue | undefined)
+      ?.id ?? '';
 
   // ── Security groups (manual hooks — no ResourceMultiSelectField exists) ──
   const securityGroupFilter = virtualNetworkId
@@ -67,13 +64,8 @@ export const NetworkPickerFields = ({
     [securityGroups],
   );
 
-  const [sgField, , sgHelpers] = useField<ResourceSelectValue[]>(
-    `${fieldPrefix}.securityGroups`,
-  );
-  const selectedSgIds = useMemo(
-    () => (sgField.value ?? []).map((sg) => sg.id),
-    [sgField.value],
-  );
+  const [sgField, , sgHelpers] = useField<ResourceSelectValue[]>(`${fieldPrefix}.securityGroups`);
+  const selectedSgIds = useMemo(() => (sgField.value ?? []).map((sg) => sg.id), [sgField.value]);
 
   const sgMultiSelectOptions = useMemo<MultiTypeaheadSelectOption[]>(
     () =>
@@ -116,9 +108,7 @@ export const NetworkPickerFields = ({
         fieldId={`${fieldIdPrefix}-subnet`}
         service={Subnets}
         request={
-          virtualNetworkId
-            ? { filter: virtualNetworkFilterForSubnetList(virtualNetworkId) }
-            : {}
+          virtualNetworkId ? { filter: virtualNetworkFilterForSubnetList(virtualNetworkId) } : {}
         }
         isDisabled={!virtualNetworkId}
         autoSelectSingleOption
@@ -143,18 +133,14 @@ export const NetworkPickerFields = ({
         <MultiTypeaheadSelect
           id={`${fieldIdPrefix}-security-groups`}
           initialOptions={sgMultiSelectOptions}
-          placeholder={
-            securityGroupListLoading ? t('Loading...') : t('Select security groups')
-          }
+          placeholder={securityGroupListLoading ? t('Loading...') : t('Select security groups')}
           isDisabled={!virtualNetworkId || securityGroupListLoading}
           noOptionsFoundMessage={(filter) => `No options found for "${filter}"`}
           onSelectionChange={(_event, selections) => {
-            const newValues: ResourceSelectValue[] = (selections as string[]).map(
-              (id) => {
-                const option = securityGroupOptions.find((o) => o.value === id);
-                return { id, name: option?.label ?? id };
-              },
-            );
+            const newValues: ResourceSelectValue[] = (selections as string[]).map((id) => {
+              const option = securityGroupOptions.find((o) => o.value === id);
+              return { id, name: option?.label ?? id };
+            });
             void sgHelpers.setValue(newValues, true);
             void sgHelpers.setTouched(true);
           }}

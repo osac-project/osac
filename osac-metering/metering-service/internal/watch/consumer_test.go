@@ -1745,8 +1745,8 @@ var _ = Describe("Consumer", func() {
 
 		defaultNodeSets := func() map[string]*privatev1.ClusterNodeSet {
 			return map[string]*privatev1.ClusterNodeSet{
-				"gpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeLocalReference{Name: "gpu-h100"}, Size: proto.Int32(2)},
-				"cpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeLocalReference{Name: "cpu-only"}, Size: proto.Int32(3)},
+				"gpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "gpu-h100"}, Size: proto.Int32(2)},
+				"cpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "cpu-only"}, Size: proto.Int32(3)},
 			}
 		}
 
@@ -1755,9 +1755,9 @@ var _ = Describe("Consumer", func() {
 				"cluster_template": "ocp-ci-small",
 				"release_image":    "4.17.0",
 				"components": []any{
-					map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
-					map[string]any{"node_set": "cpu-workers", "component": "worker", "host_type": "cpu-only", "node_count": int32(3)},
-					map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": int32(2)},
+					map[string]any{"node_set": "_control_plane", "component": "control_plane", "baremetal_instance_type": "_control_plane", "node_count": int32(1)},
+					map[string]any{"node_set": "cpu-workers", "component": "worker", "baremetal_instance_type": "cpu-only", "node_count": int32(3)},
+					map[string]any{"node_set": "gpu-workers", "component": "worker", "baremetal_instance_type": "gpu-h100", "node_count": int32(2)},
 				},
 			}
 		}
@@ -1970,7 +1970,7 @@ var _ = Describe("Consumer", func() {
 				var data map[string]any
 				Expect(json.Unmarshal(e.Data(), &data)).To(Succeed())
 				bd := data["billing_dimensions"].(map[string]any)
-				comp := bd["component"].(string) + ":" + bd["host_type"].(string)
+				comp := bd["component"].(string) + ":" + bd["baremetal_instance_type"].(string)
 				components[comp] = true
 				Expect(bd).To(HaveKey("cluster_template"))
 				Expect(bd).To(HaveKey("node_count"))
@@ -2127,8 +2127,8 @@ var _ = Describe("Consumer", func() {
 
 			// Scale gpu-h100 from 2 to 4, cpu-only stays at 3
 			scaledNodeSets := map[string]*privatev1.ClusterNodeSet{
-				"gpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeLocalReference{Name: "gpu-h100"}, Size: proto.Int32(4)},
-				"cpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeLocalReference{Name: "cpu-only"}, Size: proto.Int32(3)},
+				"gpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "gpu-h100"}, Size: proto.Int32(4)},
+				"cpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "cpu-only"}, Size: proto.Int32(3)},
 			}
 			cl := makeCluster("cl-scale", "tenant-1", privatev1.ClusterState_CLUSTER_STATE_READY, scaledNodeSets)
 			event := &privatev1.Event{
@@ -2156,7 +2156,7 @@ var _ = Describe("Consumer", func() {
 			var data map[string]any
 			Expect(json.Unmarshal(pub.published[0].Data(), &data)).To(Succeed())
 			bd := data["billing_dimensions"].(map[string]any)
-			Expect(bd["host_type"]).To(Equal("gpu-h100"))
+			Expect(bd["baremetal_instance_type"]).To(Equal("gpu-h100"))
 			Expect(bd["node_count"]).To(BeNumerically("==", 4))
 			Expect(data["duration_seconds"]).ToNot(BeNil())
 		})
@@ -2176,14 +2176,14 @@ var _ = Describe("Consumer", func() {
 					"cluster_template": "ocp-ci-small",
 					"release_image":    "4.17.0",
 					"components": []any{
-						map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
+						map[string]any{"node_set": "_control_plane", "component": "control_plane", "baremetal_instance_type": "_control_plane", "node_count": int32(1)},
 					},
 				},
 				TransitionTime: billableStart,
 			}
 
 			addedNodeSets := map[string]*privatev1.ClusterNodeSet{
-				"tpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeLocalReference{Name: "tpu-v5"}, Size: proto.Int32(2)},
+				"tpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "tpu-v5"}, Size: proto.Int32(2)},
 			}
 			cl := makeCluster("cl-add", "tenant-1", privatev1.ClusterState_CLUSTER_STATE_READY, addedNodeSets)
 			event := &privatev1.Event{
@@ -2230,8 +2230,8 @@ var _ = Describe("Consumer", func() {
 					"cluster_template": "ocp-ci-small",
 					"release_image":    "4.17.0",
 					"components": []any{
-						map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
-						map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": int32(2)},
+						map[string]any{"node_set": "_control_plane", "component": "control_plane", "baremetal_instance_type": "_control_plane", "node_count": int32(1)},
+						map[string]any{"node_set": "gpu-workers", "component": "worker", "baremetal_instance_type": "gpu-h100", "node_count": int32(2)},
 					},
 				},
 				ComponentBillableSince: map[string]time.Time{
@@ -2242,8 +2242,8 @@ var _ = Describe("Consumer", func() {
 			}
 
 			mixedNodeSets := map[string]*privatev1.ClusterNodeSet{
-				"gpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeLocalReference{Name: "gpu-h100"}, Size: proto.Int32(4)},
-				"tpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeLocalReference{Name: "tpu-v5"}, Size: proto.Int32(2)},
+				"gpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "gpu-h100"}, Size: proto.Int32(4)},
+				"tpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "tpu-v5"}, Size: proto.Int32(2)},
 			}
 			cl := makeCluster("cl-mixed", "tenant-1", privatev1.ClusterState_CLUSTER_STATE_READY, mixedNodeSets)
 			event := &privatev1.Event{
@@ -2309,8 +2309,8 @@ var _ = Describe("Consumer", func() {
 
 			// T1: cpu-workers scales 3->5, gpu-workers stays at 2 (unchanged since T0).
 			clAtT1 := makeCluster("cl-staggered", "tenant-1", privatev1.ClusterState_CLUSTER_STATE_READY, map[string]*privatev1.ClusterNodeSet{
-				"cpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeLocalReference{Name: "cpu-only"}, Size: proto.Int32(5)},
-				"gpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeLocalReference{Name: "gpu-h100"}, Size: proto.Int32(2)},
+				"cpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "cpu-only"}, Size: proto.Int32(5)},
+				"gpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "gpu-h100"}, Size: proto.Int32(2)},
 			})
 			clAtT1.Status.StateTransitionTime = timestamppb.New(t1)
 			eventT1 := &privatev1.Event{
@@ -2321,8 +2321,8 @@ var _ = Describe("Consumer", func() {
 
 			// T2: gpu-workers scales 2->4, cpu-workers stays at 5 (unchanged since T1).
 			clAtT2 := makeCluster("cl-staggered", "tenant-1", privatev1.ClusterState_CLUSTER_STATE_READY, map[string]*privatev1.ClusterNodeSet{
-				"cpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeLocalReference{Name: "cpu-only"}, Size: proto.Int32(5)},
-				"gpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeLocalReference{Name: "gpu-h100"}, Size: proto.Int32(4)},
+				"cpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "cpu-only"}, Size: proto.Int32(5)},
+				"gpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "gpu-h100"}, Size: proto.Int32(4)},
 			})
 			clAtT2.Metadata.Version = 3
 			clAtT2.Status.StateTransitionTime = timestamppb.New(t2)

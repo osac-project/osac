@@ -202,16 +202,16 @@ var _ = Describe("BuildResourceEvents", func() {
 			"cluster_template": "ocp-ci-small",
 			"components": []any{
 				map[string]any{
-					"node_set":   "_control_plane",
-					"component":  "control_plane",
-					"host_type":  "_control_plane",
-					"node_count": int32(1),
+					"node_set":                "_control_plane",
+					"component":               "control_plane",
+					"baremetal_instance_type": "_control_plane",
+					"node_count":              int32(1),
 				},
 				map[string]any{
-					"node_set":   "gpu-workers",
-					"component":  "worker",
-					"host_type":  "gpu-h100",
-					"node_count": int32(2),
+					"node_set":                "gpu-workers",
+					"component":               "worker",
+					"baremetal_instance_type": "gpu-h100",
+					"node_count":              int32(2),
 				},
 			},
 		}

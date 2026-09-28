@@ -4,11 +4,14 @@ kind: ClusterRole
 metadata:
   name: manager-role
 rules:
+- nonResourceURLs:
+  - /metrics
+  verbs:
+  - get
 - apiGroups:
   - ""
   resources:
   - configmaps
-  - secrets
   verbs:
   - get
   - list
@@ -29,6 +32,15 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - secrets
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
   - services
   verbs:
   - get
@@ -37,6 +49,18 @@ rules:
   resources:
   - agents
   verbs:
+  - delete
+  - get
+  - list
+  - patch
+  - watch
+- apiGroups:
+  - agent-install.openshift.io
+  resources:
+  - infraenvs
+  verbs:
+  - create
+  - delete
   - get
   - list
   - patch
@@ -61,7 +85,7 @@ rules:
   - hypershift.openshift.io
   resources:
   - hostedclusters
-  - nodepools
+  - hostedcontrolplanes
   verbs:
   - get
   - list
@@ -69,9 +93,13 @@ rules:
 - apiGroups:
   - hypershift.openshift.io
   resources:
-  - hostedcontrolplanes
+  - nodepools
   verbs:
   - get
+  - list
+  - patch
+  - update
+  - watch
 - apiGroups:
   - k8s.ovn.org
   resources:

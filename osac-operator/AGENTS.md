@@ -53,16 +53,73 @@ See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#osac-ope
 | Generated CRDs or manifests | Envtest plus applicable Kind suite | `make manifests generate helm-crds check-helm-crds`, then the required test command |
 
 Envtest runs via `make test`; Kind tests require the current operator deployment.
+The existing Controller Suite (`internal/controller/suite_test.go`) owns all
+worker persistence coverage alongside the other operator controllers. Worker
+specs are co-located as `internal/controller/baremetalworker_*_test.go`, labelled
+`baremetalworker`; there is no separate worker test harness. Dependency doubles
+and explicit CR fixture writes live only in `*_test.go`, not importable packages.
+Kubernetes/etcd and OSAC CRDs are real; fulfillment responses, ignition HTTP and
+external Agent/InfraEnv progression are test-controlled. Keep the minimal
+InfraEnv/ClusterDeployment and existing Agent/NodePool test CRDs: the controller
+Envtest assertions consume them, not an environment bootstrap.
+
+Worker coverage is owned by **osac-operator [DEV]**:
+
+- Unit tests under `internal/controller/baremetalworker/` cover reservation and
+  identity recovery, one observation per invocation, optimistic status writes,
+  authoritative destructive checks, per-NodeSet capacity, retry/cleanup,
+  InfraEnv evidence, strict Agent association and CAP-Agent handoff, per-call
+  availability classification, fixed attempt/continuous-ready clocks and
+  intent-derived counts. `metrics_test.go` checks the exact two-instance-type
+  desired/zero-ready series before reservations without creating missing series
+  through metric accessors.
+- `baremetalworker_reconciler_test.go` and `baremetalworker_lifecycle_test.go`
+  drive public Reconcile through InfraEnv ownership/artifact changes, BMI
+  creation/recovery, Agent binding/demotion/handoff, scale-up/down and finalization.
+- `baremetalworker_convergence_test.go` preserves R01–R10 persistence and
+  fault traces: interrupted/lost Create acknowledgement, delayed List/NotFound/
+  outage evidence, conflicts and restart recovery, prerequisite-free progress,
+  delayed cleanup and real Agent Delete UID-precondition rejection, selector
+  union/ambiguity, stale-ignition classification before UID recording, separate
+  order availability, attempt-clock/backfill and continuous readiness, and
+  NodeSet-partitioned counts. Each case uses explicit calls; legacy fixture
+  convergence is bounded by `16 + 8*N`, not a latency SLA or fallback polling.
+- `baremetalworker_tenant_safety_test.go` preserves tenant/owner rejection and
+  immutable ownership assertions. The fixture client models scoped-name
+  uniqueness but does not establish the real fulfillment/Postgres guarantee.
+- `test/integration/baremetalworker_test.go`, run by `make integration-tests`,
+  checks the installed service account's worker permissions through real
+  Kubernetes authorization. It does not allocate hosts or exercise providers.
+
+Focused validation from `osac-operator/`:
+
+```bash
+go test ./internal/controller/baremetalworker -count=1
+go test -race ./internal/controller/baremetalworker -count=1
+KUBEBUILDER_ASSETS="$PWD/bin/k8s/1.31.0-linux-amd64" \
+  go test ./internal/controller -count=1 -ginkgo.label-filter=baremetalworker
+```
+
+The complete `make test` runs Unit, the shared Controller Envtest Suite and
+Contract checks. `make integration-tests` uses the existing deployed Kind suite;
+no extra environment or CaaS-only test command is required. Real fulfillment
+API fixture validation, fulfillment-generated ClusterOrders, Postgres
+same-name uniqueness/recovery and provider deletion are not established by
+these local doubles or the RBAC check. Those **[DEV] Contract** gaps, manager
+Agent-watch delivery and real Assisted Service behavior remain under
+[OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843); deployed
+create/scale/delete, CAP-Agent/drain and hardware journeys remain **[QE] E2E**.
+Production archived-Cluster ownership lookup still requires an approved fix
+and a dedicated owner/ticket (unresolved); cleanup waits for owner-driven detach
+rather than forcing CAP-Agent/Machine hooks or NodePool replicas.
+
 The LVMS envtest lifecycle cases exercise generated LogicalVolume names,
-persisted UID-safe resumes, terminating-resource replacement, and deletion
+persisted UID-safe resumes, terminating-resource replacement and deletion
 through the public Volume reconciler for RWO and RWOP. They use a minimal
-TopoLVM CRD and simulated status; they also inject stale parent snapshots to
-verify authoritative reads preserve the recorded LogicalVolume identity.
-Status-conflict cases verify newer vendor context, deletion and replacement
-UIDs are not overwritten. These tests do not provision or mount real devices.
-The Kind suite's LVMS-disabled case verifies the Volume controller remains
-ready without the TopoLVM `LogicalVolume` CRD; it does not exercise LVMS
-provisioning or the CSI data path.
+TopoLVM CRD and test-controlled status; stale parent snapshots and status
+conflicts verify authoritative identity preservation. They do not provision or
+mount real devices. The Kind LVMS-disabled case checks that the Volume
+controller remains ready without the TopoLVM CRD, not LVMS provisioning or CSI I/O.
 
 ## Validation
 

@@ -358,6 +358,112 @@ When a cluster deletion is requested:
    - Removes the cluster namespace
 4. **OSAC Controller**: Finalizes ClusterOrder deletion after all resources are cleaned up
 
+### Bare-metal worker cleanup boundaries
+
+The independent bare-metal worker reconciler uses one ownership-safe cleanup
+path for failed-worker retry, failed/ordinary scale-down and parent deletion.
+Scale-down persists `Unbinding` retirement intent first. Cleanup observes the
+complete Agent namespace through an authoritative reader, rejects ambiguous or
+malformed associations, waits for owner-driven detachment, then deletes a safe
+Agent with UID/resourceVersion preconditions. It waits for actual old Agent
+removal before requesting infrastructure deletion; it never clears Machine or
+CAP-Agent hooks or decrements NodePool replicas to force a particular worker out.
+
+Agent association is one scoped policy shared by phase projection, late binding
+and cleanup. Each observation stages the union of the InfraEnv registration and
+cluster-order selectors, deduplicated by Kubernetes UID, so a mixed population is
+never truncated to one selector. Readiness and bound deletion use only a unique
+compatible established worker-name binding; initial discovery matches an unbound
+compatible Agent and an eligible BMI by inventory NIC MACs only when the match is
+unique in both directions. An already-labelled or bound Agent is never a MAC
+fallback, an incompatible candidate fails closed as an observable error, and
+ambiguity or unreadable inventory never authorizes an Agent patch or deletion.
+
+After initial OSAC correlation, CAP-Agent owns the installation binding and may
+replace `spec.clusterDeploymentName` with its ClusterDeployment reference. That
+deployment has `status.clusterReference.hostedClusterName` as its name and lives
+in the hosted-control-plane namespace formed as
+`status.clusterReference.namespace + "-" + hostedClusterName`, not the Agent's
+namespace. OSAC accepts only this exact reference for an Agent already carrying
+matching OSAC worker-name and cluster-order labels; it never uses the reference
+alone to adopt an Agent by MAC. Foreign Agent namespaces, cluster/worker labels
+and deployment references still fail closed. Observation and stale discovery do
+not rewrite the CAP-Agent binding, and cleanup still requires owner-driven
+detachment before deleting the Agent or its BMI.
+
+A BMI Delete response is only a request. Deletion metadata causes a wait, and
+only fresh Get NotFound confirms the recorded incarnation is absent. Until then,
+retry retains the Failed phase and old ID; retirement retains the slot and ID.
+Confirmed retry cleanup increments the attempt and sets a deadline once, clears
+the old ID, attempt origin and ReadySince, and keeps the reserved name for a
+distinct successor incarnation. Interrupted Create recovery checks current
+ownership and liveness; foreign, ambiguous or deleting name-recovery candidates
+cannot become replacements.
+
+Each provisioning attempt has one durable registration clock.
+`status.workers[].attemptStartedAt` is persisted with the reservation, and before
+the `Create` of a legacy ID-less attempt or a due retry, then never refreshed by
+an error, Get or re-observation. The agent registration timeout is measured from
+that origin, not from the parent ClusterOrder's age or a failure timestamp, so a
+worker added to an old order and a retry attempt each get their full interval.
+A pre-existing worker is migrated once from the backing BareMetalInstance's
+creation timestamp when usable, otherwise from one observation-time origin.
+`readySince` is a continuous interval: entering Ready starts it, and every
+demotion, failure or cleanup transition clears it, so the healthy-history reset
+requires uninterrupted readiness.
+
+Finalization never provisions. It recovers exact ID-less reservations in every
+phase and retains the worker/finalizer if name ownership or absence is uncertain.
+The finalizer is removed only after a fresh optimistic parent read confirms no
+authoritative worker references remain. Full worker-status loss is not a supported
+allocation-recovery contract.
+
+Local Unit and R03-E1–E5 public Envtest traces verify these retention and
+incarnation boundaries, including authoritative Agent observation and real API
+UID-precondition rejection. They are not proof of deployed hardware release.
+Sim-backed R03-C1 is explicitly skipped because the sim is slated for removal;
+its added fixture has been removed and is not a local completion gate. The
+pre-existing connected/R01 suites are preserved. Real fulfillment/Postgres
+retention and name reuse have not been established by this refactor's local
+checks, and no replacement deployed integration harness is required here.
+Production deletion still has an archived-Cluster ownership lookup blocker;
+a dedicated fix owner/ticket remains unresolved. Bound-worker remediation also
+requires a supported owner mechanism, so the current implementation waits closed
+and emits `WorkerCleanupBlocked`. Remaining deployed provider/drain/hardware
+journeys are tracked under
+[OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843); see
+[testing boundaries](../INTEGRATION-TESTING.md#r03-unified-worker-cleanup-implementation-checkpoint).
+CaaS remains a BMaaS consumer; this change does not alter DHCP, fabric port moves
+or networking-attachment contracts.
+
+### Bare-metal worker count semantics
+
+`status.desiredWorkers`, `status.currentWorkers` and `status.readyWorkers`
+describe one intent-and-evidence summary rather than the length of the worker
+journal:
+
+- `desiredWorkers` is the sum of the positive `numberOfNodes` values of the
+  requested bare-metal node sets. It is the user's requested capacity, so it is
+  visible before reservations, images or Agents exist, and it ignores retiring
+  workers and surplus journal entries.
+- `currentWorkers` counts retained requested slots that hold a verified
+  BareMetalInstance identity in an active phase (Provisioning, WaitingForAgent,
+  Binding or Ready). Identity-less reservations, `Failed`, retiring, surplus and
+  non-bare-metal entries never count.
+- `readyWorkers` is the `Ready` subset of `currentWorkers`, limited to the
+  requested node-set membership.
+
+Retention is partitioned per node set, so ready surplus in one node set cannot
+compensate for a missing node set even when both share one instance type. An
+observation that cannot be completed (for example a fulfillment-service outage)
+retains the last-known summary and its `FulfillmentServiceUnavailable` condition
+instead of publishing a fabricated zero. Parent readiness additionally requires
+that `desiredWorkers` matches the current spec, so a summary that lags a spec
+change cannot promote the order. The `osac_caas_worker_desired` gauge is derived
+from spec requests; `osac_caas_worker_ready` uses the same retained eligibility
+and keeps the provisioned instance type, so a hardware change does not relabel
+existing capacity.
+
 ## Scalability and Performance
 
 The cluster fulfillment system is designed for scale:

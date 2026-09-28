@@ -212,6 +212,25 @@ Touched-area requirements: [component guide](../osac-operator/AGENTS.md#integrat
 - **AAP, dispatcher, provisioning-provider, KubeVirt, or fulfillment boundary:** A controllable provider in envtest is not coverage of the real provider boundary.
 - **Generated CRDs or manifests:** Do not hand-edit generated output.
 
+- **Bare-metal worker Agent convergence ([DEV], Unit/Envtest):** `internal/controller/baremetalworker/agent_reconcile_test.go` and `correlation_test.go` cover all eligible worker phases and protected states, early capacity/stale-ignition observation, unique MAC matching, authoritative binding isolation/conflicts, registration timeout, interrupted status recovery, ReadySince retention, and transition event/metric counts. The `reconcileAgent` scenarios in `acceptance/reconciler_test.go` invoke public `Reconcile` manually and read back real persisted phases/counts after Installed-condition changes or Agent removal. They also verify bound-Agent/stale-Waiting recovery without another BMI or Agent patch, lifecycle-state preservation while provider deletion is pending, and ambiguous binding refusal. Kubernetes/etcd and CRDs are real; fulfillment and Agent state are simulated. These tests do not run a manager or establish watch delivery/restart latency, deployed Assisted Service, or hardware behavior; provider gaps remain under [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843).
+
+Focused commands from `osac-operator/` (also included by `make test`):
+
+```bash
+go test ./internal/controller/baremetalworker -count=1
+KUBEBUILDER_ASSETS="$PWD/bin/k8s/1.31.0-linux-amd64" \
+  go test ./internal/controller/baremetalworker/acceptance -count=1
+```
+
+The focused Envtest command requires the existing Kubernetes 1.31.0 binaries at
+that path; `make test` obtains the platform-appropriate assets through setup-envtest.
+Phase repair/demotion is asserted after one successful explicit reconciliation
+with prerequisites ready, not after fallback polling. Protected Failed workers
+with a pending retry can cause the existing early return before final aggregation;
+the lifecycle case keeps deletion pending without a retry deadline to exercise
+the final Agent stage. No controller watch, RBAC, or deployment wiring changes
+are involved.
+
 ### Coverage gaps
 
 The current component integration suite does not exercise real AAP,

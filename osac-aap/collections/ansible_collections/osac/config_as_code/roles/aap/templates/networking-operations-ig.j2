@@ -28,6 +28,9 @@ spec:
         - name: kube-api-access
           mountPath: /var/run/secrets/kubernetes.io/serviceaccount
           readOnly: true
+        - name: agentless-net-inventory
+          mountPath: /var/config/agentless-net
+          readOnly: true
 {% if remote_cluster_kubeconfig_secret_name %}
         - name: remote-cluster-kubeconfig
           mountPath: /etc/osac
@@ -75,6 +78,10 @@ spec:
                 - key: service-ca.crt
                   path: service-ca.crt
         defaultMode: 420
+    - name: agentless-net-inventory
+      configMap:
+        name: agentless-net-inventory
+        optional: true
 {% if remote_cluster_kubeconfig_secret_name %}
     - name: remote-cluster-kubeconfig
       secret:

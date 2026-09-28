@@ -15,7 +15,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+LEGACY_SCHEMA_VERSION = 2
 STATE_KEYS = {"schema_version", "virtual_networks"}
 VIRTUAL_NETWORK_KEYS = {
     "uid",
@@ -25,6 +26,8 @@ VIRTUAL_NETWORK_KEYS = {
     "external_reachability",
     "default_forward_policy",
 }
+TRANSIT_KEYS = {"cidr", "namespace_ip", "host_ip", "next_hop", "gateway"}
+LEGACY_TRANSIT_KEYS = TRANSIT_KEYS | {"external_interface"}
 
 
 class StateError(Exception):
@@ -84,8 +87,12 @@ class StateStore:
     def _validate(state: Any) -> None:
         if not isinstance(state, dict):
             raise StateCorrupt("state root must be an object")
-        if type(state.get("schema_version")) is not int or state["schema_version"] != SCHEMA_VERSION:
-            raise StateCorrupt(f"unsupported state schema: {state.get('schema_version')!r}")
+        schema_version = state.get("schema_version")
+        if type(schema_version) is not int or schema_version not in (
+            LEGACY_SCHEMA_VERSION,
+            SCHEMA_VERSION,
+        ):
+            raise StateCorrupt(f"unsupported state schema: {schema_version!r}")
         if set(state) != STATE_KEYS:
             raise StateCorrupt("state must contain only schema_version and virtual_networks")
         entries = state["virtual_networks"]
@@ -97,7 +104,12 @@ class StateStore:
         seen_interfaces: set[str] = set()
         seen_transit: set[str] = set()
         for entry in entries:
-            if not isinstance(entry, dict) or set(entry) != VIRTUAL_NETWORK_KEYS:
+            allowed_entry_keys = (
+                (VIRTUAL_NETWORK_KEYS,)
+                if schema_version == LEGACY_SCHEMA_VERSION
+                else (VIRTUAL_NETWORK_KEYS, VIRTUAL_NETWORK_KEYS | {"virtual_network_cidr"})
+            )
+            if not isinstance(entry, dict) or set(entry) not in allowed_entry_keys:
                 raise StateCorrupt("VirtualNetwork state entry has an invalid shape")
             uid = entry["uid"]
             namespace = entry["namespace_name"]
@@ -121,14 +133,12 @@ class StateStore:
                 "host_interface": f"v{digest[:11]}h",
             }:
                 raise StateCorrupt("VirtualNetwork uplink does not match its UID")
-            if not isinstance(transit, dict) or set(transit) != {
-                "cidr",
-                "namespace_ip",
-                "host_ip",
-                "next_hop",
-                "gateway",
-                "external_interface",
-            }:
+            allowed_transit_keys = (
+                LEGACY_TRANSIT_KEYS
+                if schema_version == LEGACY_SCHEMA_VERSION
+                else TRANSIT_KEYS
+            )
+            if not isinstance(transit, dict) or set(transit) != allowed_transit_keys:
                 raise StateCorrupt("VirtualNetwork transit state is invalid")
             try:
                 transit_cidr = ipaddress.ip_network(transit["cidr"], strict=True)
@@ -136,6 +146,17 @@ class StateStore:
                 raise StateCorrupt("VirtualNetwork transit CIDR is invalid") from error
             if not isinstance(transit_cidr, ipaddress.IPv4Network) or transit_cidr.prefixlen != 30:
                 raise StateCorrupt("VirtualNetwork transit CIDR must be an IPv4 /30")
+            if "virtual_network_cidr" in entry:
+                try:
+                    virtual_network_cidr = ipaddress.ip_network(
+                        entry["virtual_network_cidr"], strict=True
+                    )
+                except (TypeError, ValueError) as error:
+                    raise StateCorrupt("VirtualNetwork CIDR is invalid") from error
+                if not isinstance(virtual_network_cidr, ipaddress.IPv4Network):
+                    raise StateCorrupt("VirtualNetwork CIDR must be IPv4")
+                if not transit_cidr.subnet_of(virtual_network_cidr):
+                    raise StateCorrupt("VirtualNetwork transit CIDR is outside its CR CIDR")
             if transit["cidr"] in seen_transit:
                 raise StateCorrupt("duplicate VirtualNetwork transit CIDR")
             for key in ("namespace_ip", "host_ip"):
@@ -153,8 +174,11 @@ class StateStore:
                 raise StateCorrupt("VirtualNetwork namespace IP is invalid")
             if transit["host_ip"] != f"{transit_cidr.network_address + 2}/{transit_cidr.prefixlen}":
                 raise StateCorrupt("VirtualNetwork host IP is invalid")
-            if not isinstance(transit["external_interface"], str) or not re.fullmatch(
-                r"[A-Za-z0-9_.:-]{1,15}", transit["external_interface"]
+            if "external_interface" in transit and (
+                not isinstance(transit["external_interface"], str)
+                or not re.fullmatch(
+                    r"[A-Za-z0-9_.:-]{1,15}", transit["external_interface"]
+                )
             ):
                 raise StateCorrupt("VirtualNetwork external interface is invalid")
             if entry["external_reachability"] != {
@@ -220,91 +244,114 @@ class StateStore:
         with self._locked():
             state, previous = self._read_locked()
             next_state = copy.deepcopy(state)
+            migrated = state["schema_version"] != SCHEMA_VERSION
+            if migrated:
+                next_state["schema_version"] = SCHEMA_VERSION
+                for entry in next_state["virtual_networks"]:
+                    entry["transit"].pop("external_interface", None)
+
             result, changed = update(next_state)
-            if changed:
+            state_changed = changed or migrated
+            if state_changed:
                 self._validate(next_state)
             if before_write is not None:
                 before_write(copy.deepcopy(result))
-            if changed:
+            if state_changed:
                 self._write_locked(next_state, previous)
             effect_result = None
             if after_write is not None:
                 effect_result = after_write(copy.deepcopy(result))
-            return copy.deepcopy(result), changed, effect_result
+            return copy.deepcopy(result), state_changed, effect_result
 
     def _ensure_virtual_network(
         self,
         uid: str,
-        transit_cidr_pool: str,
-        external_interface: str,
         virtual_network_cidr: str,
         *,
         after_write=None,
     ) -> tuple[dict[str, Any], bool, Any]:
         if not isinstance(uid, str) or not uid.strip():
             raise StateError("VirtualNetwork UID is required")
+        try:
+            network = ipaddress.ip_network(virtual_network_cidr, strict=True)
+        except (TypeError, ValueError) as error:
+            raise StateError(f"invalid VirtualNetwork IPv4 CIDR: {error}") from error
+        if not isinstance(network, ipaddress.IPv4Network):
+            raise StateError("AgentlessNet VirtualNetworks require IPv4 CIDRs")
+        network_cidr = str(network)
+        provider_entry_to_delete: dict[str, Any] | None = None
+
+        def allocate_transit(state: dict[str, Any], excluded_uid: str | None = None):
+            slot_count = network.num_addresses // 4
+            if slot_count < 1:
+                raise StateError("VirtualNetwork CIDR is too small for a /30 transit link")
+            used_transit = [
+                ipaddress.ip_network(entry["transit"]["cidr"])
+                for entry in state["virtual_networks"]
+                if entry["uid"] != excluded_uid
+            ]
+            seed = int.from_bytes(
+                hashlib.sha256(f"{uid}:{network_cidr}".encode()).digest()[:8],
+                "big",
+            ) % slot_count
+            for offset in range(slot_count):
+                slot = (seed + offset) % slot_count
+                address = network.network_address + (slot * 4)
+                candidate = ipaddress.ip_network((address, 30))
+                if any(candidate.overlaps(used) for used in used_transit):
+                    continue
+                return candidate
+            raise StateError("no free /30 transit block remains in the VirtualNetwork CIDR")
+
+        def transit_state(transit_network: ipaddress.IPv4Network) -> dict[str, str]:
+            namespace_ip = transit_network.network_address + 1
+            host_ip = transit_network.network_address + 2
+            return {
+                "cidr": str(transit_network),
+                "namespace_ip": f"{namespace_ip}/{transit_network.prefixlen}",
+                "host_ip": f"{host_ip}/{transit_network.prefixlen}",
+                "next_hop": str(namespace_ip),
+                "gateway": str(host_ip),
+            }
 
         def update(state: dict[str, Any]):
+            nonlocal provider_entry_to_delete
             for entry in state["virtual_networks"]:
-                if entry["uid"] == uid:
-                    return entry, False
+                if entry["uid"] != uid:
+                    continue
 
-            if (
-                not isinstance(external_interface, str)
-                or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,15}", external_interface)
-            ):
-                raise StateError("external interface name is invalid")
-            try:
-                pool = ipaddress.ip_network(transit_cidr_pool, strict=True)
-                network = ipaddress.ip_network(virtual_network_cidr, strict=True)
-            except (TypeError, ValueError) as error:
-                raise StateError(f"invalid IPv4 CIDR: {error}") from error
-            if not isinstance(pool, ipaddress.IPv4Network) or not isinstance(
-                network, ipaddress.IPv4Network
-            ):
-                raise StateError("AgentlessNet VirtualNetworks require IPv4 CIDRs")
-            if pool.prefixlen > 30:
-                raise StateError("transit CIDR pool must contain at least one /30")
-            if pool.overlaps(network):
-                raise StateError("transit pool overlaps the VirtualNetwork CIDR")
+                saved_cidr = entry.get("virtual_network_cidr")
+                if saved_cidr is not None and saved_cidr != network_cidr:
+                    raise StateError("VirtualNetwork CIDR does not match saved state")
 
+                old_transit = ipaddress.ip_network(entry["transit"]["cidr"])
+                changed = False
+                if not old_transit.subnet_of(network):
+                    provider_entry_to_delete = copy.deepcopy(entry)
+                    entry["transit"] = transit_state(allocate_transit(state, excluded_uid=uid))
+                    changed = True
+                if saved_cidr is None:
+                    entry["virtual_network_cidr"] = network_cidr
+                    changed = True
+                if "external_interface" in entry["transit"]:
+                    del entry["transit"]["external_interface"]
+                    changed = True
+                return entry, changed
+
+            transit_network = allocate_transit(state)
             digest = hashlib.sha256(uid.encode()).hexdigest()
             namespace_name = f"n{digest[:14]}"
             namespace_interface = f"v{digest[:11]}n"
             host_interface = f"v{digest[:11]}h"
-            used = [
-                ipaddress.ip_network(entry["transit"]["cidr"])
-                for entry in state["virtual_networks"]
-            ]
-            transit_network = next(
-                (
-                    candidate
-                    for candidate in pool.subnets(new_prefix=30)
-                    if not any(candidate.overlaps(existing) for existing in used)
-                    and not candidate.overlaps(network)
-                ),
-                None,
-            )
-            if transit_network is None:
-                raise StateError("transit CIDR pool is exhausted")
-
-            namespace_ip = transit_network.network_address + 1
-            host_ip = transit_network.network_address + 2
             entry = {
                 "uid": uid,
+                "virtual_network_cidr": network_cidr,
                 "namespace_name": namespace_name,
                 "uplink": {
                     "namespace_interface": namespace_interface,
                     "host_interface": host_interface,
                 },
-                "transit": {
-                    "cidr": str(transit_network),
-                    "namespace_ip": f"{namespace_ip}/{transit_network.prefixlen}",
-                    "host_ip": f"{host_ip}/{transit_network.prefixlen}",
-                    "next_hop": str(namespace_ip),
-                    "gateway": str(host_ip),
-                    "external_interface": external_interface,
-                },
+                "transit": transit_state(transit_network),
                 "external_reachability": {
                     "mode": "bgp",
                     "route_prefix_length": 32,
@@ -314,31 +361,31 @@ class StateStore:
             state["virtual_networks"].append(entry)
             return entry, True
 
-        return self._transact(update, after_write=after_write)
+        def remove_old_provider_state(_entry):
+            if provider_entry_to_delete is not None and after_write is not None:
+                delete_virtual_network(provider_entry_to_delete)
+
+        return self._transact(
+            update,
+            before_write=remove_old_provider_state,
+            after_write=after_write,
+        )
 
     def ensure_virtual_network(
         self,
         uid: str,
-        transit_cidr_pool: str,
-        external_interface: str,
         virtual_network_cidr: str,
     ) -> dict[str, Any]:
-        entry, _, _ = self._ensure_virtual_network(
-            uid, transit_cidr_pool, external_interface, virtual_network_cidr
-        )
+        entry, _, _ = self._ensure_virtual_network(uid, virtual_network_cidr)
         return entry
 
     def ensure_and_reconcile_virtual_network(
         self,
         uid: str,
-        transit_cidr_pool: str,
-        external_interface: str,
         virtual_network_cidr: str,
     ) -> tuple[dict[str, Any], bool, bool]:
         return self._ensure_virtual_network(
             uid,
-            transit_cidr_pool,
-            external_interface,
             virtual_network_cidr,
             after_write=reconcile_virtual_network,
         )

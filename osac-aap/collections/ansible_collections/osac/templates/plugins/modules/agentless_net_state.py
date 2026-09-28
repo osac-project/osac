@@ -32,12 +32,6 @@ options:
     description: Stable VirtualNetwork UID.
     type: str
     required: true
-  transit_cidr_pool:
-    description: Provider-configured IPv4 pool from which a transit /30 is allocated.
-    type: str
-  external_interface:
-    description: Provider-facing network-node interface.
-    type: str
   virtual_network_cidr:
     description: VirtualNetwork IPv4 supernet.
     type: str
@@ -52,8 +46,6 @@ EXAMPLES = r"""
     action: ensure_virtual_network
     state_file: /etc/osac/agentless_network_state.json
     uid: 01234567-89ab-cdef-0123-456789abcdef
-    transit_cidr_pool: 198.51.100.0/24
-    external_interface: eth0
     virtual_network_cidr: 10.20.0.0/16
 """
 
@@ -75,15 +67,13 @@ def main() -> None:
             },
             "state_file": {"type": "path", "required": True},
             "uid": {"type": "str", "required": True},
-            "transit_cidr_pool": {"type": "str"},
-            "external_interface": {"type": "str"},
             "virtual_network_cidr": {"type": "str"},
         },
         required_if=[
             (
                 "action",
                 "ensure_virtual_network",
-                ["transit_cidr_pool", "external_interface", "virtual_network_cidr"],
+                ["virtual_network_cidr"],
             )
         ],
         supports_check_mode=True,
@@ -101,8 +91,6 @@ def main() -> None:
                 )
             _, state_changed, network_changed = store.ensure_and_reconcile_virtual_network(
                 params["uid"],
-                params["transit_cidr_pool"],
-                params["external_interface"],
                 params["virtual_network_cidr"],
             )
             module.exit_json(

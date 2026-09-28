@@ -179,7 +179,7 @@ func (b0 BareMetalInstanceType_builder) Build() *BareMetalInstanceType {
 	return m0
 }
 
-// Defines the hardware specifications for a BareMetalInstanceType.
+// Defines the hardware specifications and host label selector for a BareMetalInstanceType.
 type BareMetalInstanceTypeSpec struct {
 	state protoimpl.MessageState `protogen:"hybrid.v1"`
 	// Hardware specifications for this bare metal instance type.

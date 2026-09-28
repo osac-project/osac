@@ -24,6 +24,10 @@ controller:
   # Enable startup and periodic synchronization. Event-driven reconciliation remains enabled when false.
   sync: true
 
+# The event publisher requires a Kafka backend. Disable it for API-only deployments.
+eventPublisher:
+  enabled: true
+
 # Certificate configuration:
 certs:
 

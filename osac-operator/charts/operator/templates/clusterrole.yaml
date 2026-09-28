@@ -148,6 +148,16 @@ rules:
 - apiGroups:
   - osac.openshift.io
   resources:
+  - fabricdomains
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - osac.openshift.io
+  resources:
   - baremetalinstances/finalizers
   - clusterorders/finalizers
   - computeinstances/finalizers
@@ -165,6 +175,12 @@ rules:
 - apiGroups:
   - osac.openshift.io
   resources:
+  - fabricdomains/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - osac.openshift.io
+  resources:
   - baremetalinstances/status
   - clusterorders/status
   - computeinstances/status
@@ -177,6 +193,14 @@ rules:
   - tenants/status
   - virtualnetworks/status
   - volumes/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - fabricdomains/status
   verbs:
   - get
   - patch

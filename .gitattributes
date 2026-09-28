@@ -2,3 +2,4 @@
 /osac-operator/internal/api/** linguist-generated=true
 /bare-metal-fulfillment-operator/api/v1alpha1/zz_generated.deepcopy.go linguist-generated=true
 /bare-metal-fulfillment-operator/config/crd/** linguist-generated=true
+/osac-ui/libs/types/src/osac/** linguist-generated=true

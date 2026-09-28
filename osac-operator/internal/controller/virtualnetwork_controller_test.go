@@ -347,6 +347,7 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 					JobID:   jobID,
 					State:   osacv1alpha1.JobStateSucceeded,
 					Message: "Job succeeded",
+					Outputs: map[string]any{"vpc_id": "vpc-42"},
 				}, nil
 			}
 
@@ -714,6 +715,48 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			gateVnet.Finalizers = nil
 			_ = k8sClient.Update(ctx, gateVnet)
 			_ = k8sClient.Delete(ctx, gateVnet)
+		})
+
+		It("should wait for FabricDomain protection to be released before deprovisioning", func() {
+			protectedVNet := vnet.DeepCopy()
+			protectedVNet.Finalizers = []string{osacVirtualNetworkFinalizer, osacFabricDomainProtectionFinalizer}
+
+			result, err := reconciler.handleDelete(ctx, protectedVNet)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(protectedVNet.Finalizers).To(ContainElement(osacFabricDomainProtectionFinalizer))
+		})
+
+		It("should wait for a referencing FabricDomain even if the protection finalizer is missing", func() {
+			const referencedVNetID = "gate-vnet-fabricdomain-uuid"
+			gateVNet := &osacv1alpha1.VirtualNetwork{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "gate-vnet-fabricdomain",
+					Namespace:  "default",
+					Finalizers: []string{osacVirtualNetworkFinalizer},
+					Labels:     map[string]string{osacVirtualNetworkIDLabel: referencedVNetID},
+				},
+				Spec: osacv1alpha1.VirtualNetworkSpec{Region: "us-west-1", IPv4CIDR: "10.4.0.0/16"},
+			}
+			Expect(k8sClient.Create(ctx, gateVNet)).To(Succeed())
+			fabricDomain := &osacv1alpha1.FabricDomain{
+				ObjectMeta: metav1.ObjectMeta{Name: "gate-fabricdomain", Namespace: "default"},
+				Spec: osacv1alpha1.FabricDomainSpec{
+					Type:           osacv1alpha1.FabricDomainTypeEthernetEW,
+					Servers:        []string{"server-a"},
+					VirtualNetwork: referencedVNetID,
+				},
+			}
+			Expect(k8sClient.Create(ctx, fabricDomain)).To(Succeed())
+
+			result, err := reconciler.handleDelete(ctx, gateVNet)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+
+			Expect(k8sClient.Delete(ctx, fabricDomain)).To(Succeed())
+			gateVNet.Finalizers = nil
+			_ = k8sClient.Update(ctx, gateVNet)
+			_ = k8sClient.Delete(ctx, gateVNet)
 		})
 
 		It("should remove finalizer after successful deprovision", func() {

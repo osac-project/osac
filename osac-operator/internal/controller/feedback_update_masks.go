@@ -14,6 +14,7 @@ language governing permissions and limitations under the License.
 package controller
 
 const (
+	feedbackStatusConditionsPath          = "status.conditions"
 	feedbackStatusStatePath               = "status.state"
 	feedbackStatusMessagePath             = "status.message"
 	feedbackStatusStateTransitionTimePath = "status.state_transition_time"

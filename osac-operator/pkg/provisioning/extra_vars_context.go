@@ -30,6 +30,7 @@ const (
 	storageTierDefinitionsKey
 	storageBackendConnectionsKey
 	networkAttachmentMACsKey
+	aapExtraVarsKey
 )
 
 // TierDefinition is the flat, AAP-schema-shaped representation of a storage tier
@@ -125,4 +126,16 @@ func WithNetworkAttachmentMACs(ctx context.Context, macs map[string]string) cont
 func NetworkAttachmentMACsFromContext(ctx context.Context) map[string]string {
 	macs, _ := ctx.Value(networkAttachmentMACsKey).(map[string]string)
 	return macs
+}
+
+// WithAAPExtraVars returns a context carrying additional top-level AAP extra
+// variables. The AAP provider merges these with its standard osac_job_vars.
+func WithAAPExtraVars(ctx context.Context, extraVars map[string]any) context.Context {
+	return context.WithValue(ctx, aapExtraVarsKey, extraVars)
+}
+
+// AAPExtraVarsFromContext retrieves additional top-level AAP extra variables.
+func AAPExtraVarsFromContext(ctx context.Context) map[string]any {
+	extraVars, _ := ctx.Value(aapExtraVarsKey).(map[string]any)
+	return extraVars
 }

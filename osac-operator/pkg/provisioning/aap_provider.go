@@ -321,6 +321,9 @@ func (p *AAPProvider) extractExtraVars(ctx context.Context, resource client.Obje
 	if err != nil {
 		return nil, err
 	}
+	for key, value := range AAPExtraVarsFromContext(ctx) {
+		extraVars[key] = value
+	}
 	if p.fulfillmentEndpoint == "" {
 		return extraVars, nil
 	}
@@ -358,6 +361,11 @@ func provisionStatusFromAAPJob(jobID string, job *aap.Job) ProvisionStatus {
 		Message:   job.Status,
 		StartTime: job.Started,
 		EndTime:   job.Finished,
+	}
+	if len(job.Artifacts) > 0 {
+		if err := json.Unmarshal(job.Artifacts, &status.Outputs); err != nil {
+			ctrllog.FromContext(ctx).Error(err, "AAP job returned non-object artifacts", "jobID", jobID)
+		}
 	}
 
 	// Populate error details if job failed

@@ -121,6 +121,10 @@ type ProvisionStatus struct {
 
 	// ErrorDetails contains detailed error information when State is JobStateFailed.
 	ErrorDetails string
+
+	// Outputs contains structured artifacts returned by the provisioning job.
+	// Provider-specific controllers use these values to populate backend identifiers.
+	Outputs map[string]any
 }
 
 // ProvisionStatusWithExtraVars contains the provisioning status and returned output variables.

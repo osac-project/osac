@@ -148,18 +148,37 @@ func syncClusterOrderVIPEndpoints(clusterOrder *ckv1alpha1.ClusterOrder, remote 
 	}
 }
 
+// syncClusterOrderAddOnOperators publishes one status for each requested operator.
+// The latest recorded attempt is used when an operator has multiple jobs; operators
+// without a job are reported as pending.
 func syncClusterOrderAddOnOperators(clusterOrder *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) {
-	statuses := make([]*privatev1.AddOnOperatorStatus, 0, len(clusterOrder.Status.AddOnOperatorJobs))
-	for _, job := range clusterOrder.Status.AddOnOperatorJobs {
+	latestJobs := make(map[string]*ckv1alpha1.AddOnOperatorJobStatus, len(clusterOrder.Status.AddOnOperatorJobs))
+	for i := range clusterOrder.Status.AddOnOperatorJobs {
+		job := &clusterOrder.Status.AddOnOperatorJobs[i]
+		latest, ok := latestJobs[job.Name]
+		if !ok || job.Timestamp.Time.After(latest.Timestamp.Time) {
+			latestJobs[job.Name] = job
+		}
+	}
+
+	statuses := make([]*privatev1.AddOnOperatorStatus, 0, len(clusterOrder.Spec.AddOnOperators))
+	for _, name := range clusterOrder.Spec.AddOnOperators {
+		state := privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_PENDING
+		message := ""
+		if job, ok := latestJobs[name]; ok {
+			state = addOnOperatorInstallState(job.State)
+			message = sanitizeFeedbackText(job.Message)
+		}
 		statuses = append(statuses, privatev1.AddOnOperatorStatus_builder{
-			Name:    job.Name,
-			State:   addOnOperatorInstallState(job.State),
-			Message: sanitizeFeedbackText(job.Message),
+			Name:    name,
+			State:   state,
+			Message: message,
 		}.Build())
 	}
 	remote.GetStatus().SetAddOnOperators(statuses)
 }
 
+// addOnOperatorInstallState converts an AAP job state to the public operator state.
 func addOnOperatorInstallState(state ckv1alpha1.JobState) privatev1.AddOnOperatorInstallState {
 	switch state {
 	case ckv1alpha1.JobStatePending, ckv1alpha1.JobStateWaiting, ckv1alpha1.JobStateRunning:

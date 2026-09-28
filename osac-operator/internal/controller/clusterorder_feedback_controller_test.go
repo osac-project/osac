@@ -1034,7 +1034,8 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 					Finalizers: []string{osacClusterOrderFeedbackFinalizer},
 				},
 				Spec: osacv1alpha1.ClusterOrderSpec{
-					TemplateID: "test_template",
+					TemplateID:     "test_template",
+					AddOnOperators: []string{"pending", "running", "installed", "failed", "not-started"},
 				},
 			}
 			Expect(k8sClient.Create(testCtx, clusterOrder)).To(Succeed())
@@ -1117,11 +1118,13 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 		It("should propagate add-on operator job states to fulfillment", func() {
 			clusterOrder := &osacv1alpha1.ClusterOrder{}
 			Expect(k8sClient.Get(testCtx, typeNamespacedName, clusterOrder)).To(Succeed())
+			now := time.Now().UTC()
 			clusterOrder.Status.AddOnOperatorJobs = []osacv1alpha1.AddOnOperatorJobStatus{
-				{Name: "pending", JobStatus: osacv1alpha1.JobStatus{Type: osacv1alpha1.JobTypeProvision, Timestamp: metav1.Now(), State: osacv1alpha1.JobStatePending}},
-				{Name: "running", JobStatus: osacv1alpha1.JobStatus{Type: osacv1alpha1.JobTypeProvision, Timestamp: metav1.Now(), State: osacv1alpha1.JobStateRunning}},
-				{Name: "installed", JobStatus: osacv1alpha1.JobStatus{Type: osacv1alpha1.JobTypeProvision, Timestamp: metav1.Now(), State: osacv1alpha1.JobStateSucceeded}},
-				{Name: "failed", JobStatus: osacv1alpha1.JobStatus{Type: osacv1alpha1.JobTypeProvision, Timestamp: metav1.Now(), State: osacv1alpha1.JobStateFailed, Message: "installation failed"}},
+				{Name: "pending", JobStatus: osacv1alpha1.JobStatus{Type: osacv1alpha1.JobTypeProvision, Timestamp: metav1.NewTime(now), State: osacv1alpha1.JobStatePending}},
+				{Name: "running", JobStatus: osacv1alpha1.JobStatus{Type: osacv1alpha1.JobTypeProvision, Timestamp: metav1.NewTime(now.Add(-time.Minute)), State: osacv1alpha1.JobStateFailed}},
+				{Name: "running", JobStatus: osacv1alpha1.JobStatus{Type: osacv1alpha1.JobTypeProvision, Timestamp: metav1.NewTime(now), State: osacv1alpha1.JobStateRunning}},
+				{Name: "installed", JobStatus: osacv1alpha1.JobStatus{Type: osacv1alpha1.JobTypeProvision, Timestamp: metav1.NewTime(now), State: osacv1alpha1.JobStateSucceeded}},
+				{Name: "failed", JobStatus: osacv1alpha1.JobStatus{Type: osacv1alpha1.JobTypeProvision, Timestamp: metav1.NewTime(now), State: osacv1alpha1.JobStateFailed, Message: "installation failed"}},
 			}
 			Expect(k8sClient.Status().Update(testCtx, clusterOrder)).To(Succeed())
 
@@ -1130,12 +1133,14 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 			Expect(result.IsZero()).To(BeTrue())
 			Expect(mockClient.updateCalled).To(BeTrue())
 			statuses := mockClient.lastUpdate.GetStatus().GetAddOnOperators()
-			Expect(statuses).To(HaveLen(4))
+			Expect(statuses).To(HaveLen(5))
 			Expect(statuses[0].GetState()).To(Equal(privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_INSTALLING))
 			Expect(statuses[1].GetState()).To(Equal(privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_INSTALLING))
 			Expect(statuses[2].GetState()).To(Equal(privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_INSTALLED))
 			Expect(statuses[3].GetState()).To(Equal(privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_FAILED))
 			Expect(statuses[3].GetMessage()).To(Equal("installation failed"))
+			Expect(statuses[4].GetName()).To(Equal("not-started"))
+			Expect(statuses[4].GetState()).To(Equal(privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_PENDING))
 
 			hasAddOnOperatorsPath := false
 			for _, path := range mockClient.lastUpdateMask.GetPaths() {

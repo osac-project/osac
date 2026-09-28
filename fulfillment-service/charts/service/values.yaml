@@ -18,6 +18,10 @@ variant: kind
 # and is intended only for development environments.
 debug: false
 
+# The event publisher requires a Kafka backend. Disable it for API-only deployments.
+eventPublisher:
+  enabled: true
+
 # Certificate configuration:
 certs:
 

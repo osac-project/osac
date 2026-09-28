@@ -20,7 +20,6 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
-	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/computeinstancespec"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/utils"
@@ -202,7 +201,7 @@ func validateComputeInstanceCatalogItemBootDiskPolicy(
 		if ref == nil {
 			return nil, nil
 		}
-		resolved, resolveErr := resolveLockedResourceInScope(ctx, storageTiersDao, referenceScope{tenant: auth.SharedTenant}, ref.GetId(), ref.GetName(),
+		resolved, resolveErr := resolveLockedPlatformResource(ctx, storageTiersDao, ref.GetId(), ref.GetName(),
 			"storage tier", " in fields.boot_disk.storage_tier", grpccodes.NotFound)
 		if resolveErr != nil {
 			return nil, resolveErr
@@ -250,7 +249,7 @@ func validateComputeInstanceCatalogItemAdditionalDisksPolicy(
 					"field 'fields.additional_disks[%d]' is incomplete: %s", i, err)
 			}
 			ref := disk.GetStorageTier()
-			resolved, resolveErr := resolveLockedResourceInScope(ctx, storageTiersDao, referenceScope{tenant: auth.SharedTenant}, ref.GetId(), ref.GetName(),
+			resolved, resolveErr := resolveLockedPlatformResource(ctx, storageTiersDao, ref.GetId(), ref.GetName(),
 				"storage tier", fmt.Sprintf(" in fields.additional_disks[%d].storage_tier", i), grpccodes.NotFound)
 			if resolveErr != nil {
 				return resolveErr

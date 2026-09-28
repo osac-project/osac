@@ -311,7 +311,7 @@ func makeBMI(id, tenant string, state privatev1.BareMetalInstanceState, version 
 		},
 		Spec: &privatev1.BareMetalInstanceSpec{
 			CatalogItem:  &privatev1.BareMetalInstanceCatalogItemReference{Name: "catalog-1"},
-			InstanceType: &privatev1.BareMetalInstanceTypeLocalReference{Id: "bm.large"},
+			InstanceType: &privatev1.BareMetalInstanceTypeReference{Id: "bm.large"},
 		},
 		Status: &privatev1.BareMetalInstanceStatus{
 			State:               state,
@@ -1560,7 +1560,7 @@ var _ = Describe("Reconciler", func() {
 				makeBMI("bmi-running", "tenant-running", privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING, 7, timestamppb.New(transitionTime)),
 				makeBMI("bmi-stopped", "tenant-stopped", privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_STOPPED, 8, timestamppb.New(transitionTime)),
 				makeBMI("bmi-failed", "tenant-failed", privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_FAILED, 9, timestamppb.New(transitionTime)),
-				{Id: "bmi-no-status", Metadata: &privatev1.Metadata{Tenant: "tenant-none", Project: "project-none", Version: 10}, Spec: &privatev1.BareMetalInstanceSpec{InstanceType: &privatev1.BareMetalInstanceTypeLocalReference{Id: "bm.small"}}},
+				{Id: "bmi-no-status", Metadata: &privatev1.Metadata{Tenant: "tenant-none", Project: "project-none", Version: 10}, Spec: &privatev1.BareMetalInstanceSpec{InstanceType: &privatev1.BareMetalInstanceTypeReference{Id: "bm.small"}}},
 			}
 			for i := 0; i < 496; i++ {
 				items = append(items, makeBMI(fmt.Sprintf("bmi-padding-%d", i), "tenant-padding", privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING, 1, timestamppb.New(transitionTime)))

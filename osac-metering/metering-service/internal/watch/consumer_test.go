@@ -221,7 +221,7 @@ func makeBareMetalInstance(id, tenant string) *privatev1.BareMetalInstance {
 		},
 		Spec: &privatev1.BareMetalInstanceSpec{
 			CatalogItem: &privatev1.BareMetalInstanceCatalogItemReference{Name: "catalog-item-1"},
-			InstanceType: &privatev1.BareMetalInstanceTypeLocalReference{
+			InstanceType: &privatev1.BareMetalInstanceTypeReference{
 				Id:   "bmi-type-gpu-large",
 				Name: "GPU large",
 			},

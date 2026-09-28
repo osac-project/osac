@@ -41,8 +41,8 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 			image := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
 			template := createCatalogItemBareMetalInstanceTemplateFixture(ctx, nil, bareMetalInstanceCatalogItemParameterDefinitions())
 			fields := publicv1.BareMetalInstanceCatalogItemFields_builder{
-				InstanceType: publicv1.BareMetalInstanceTypeLocalReferenceFieldPolicy_builder{
-					Locked: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: instanceType}.Build(),
+				InstanceType: publicv1.BareMetalInstanceTypeReferenceFieldPolicy_builder{
+					Locked: publicv1.BareMetalInstanceTypeReference_builder{Id: instanceType, Shared: true}.Build(),
 				}.Build(),
 				DiskImage: publicv1.DiskImageReferenceFieldPolicy_builder{
 					Locked: publicv1.DiskImageReference_builder{Id: image.GetId()}.Build(),
@@ -112,7 +112,7 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 				{
 					name: "identical locked type",
 					set: func(s *publicv1.BareMetalInstanceSpec) {
-						s.SetInstanceType(publicv1.BareMetalInstanceTypeLocalReference_builder{Id: instanceType}.Build())
+						s.SetInstanceType(publicv1.BareMetalInstanceTypeReference_builder{Id: instanceType, Shared: true}.Build())
 					},
 				},
 				{
@@ -194,7 +194,7 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 			dry := metadata.AppendToOutgoingContext(ctx, "x-dry-run", "true")
 			spec := publicv1.BareMetalInstanceSpec_builder{
 				CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: item.GetId()}.Build(),
-				InstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: instanceType}.Build(),
+				InstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: instanceType, Shared: true}.Build(),
 				SshPublicKey: new(catalogItemFixtureSSHPublicKey),
 			}.Build()
 			name := catalogItemFixtureName()
@@ -284,7 +284,7 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 			spec := publicv1.BareMetalInstanceSpec_builder{
 				CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: item.GetId()}.Build(),
 				DiskImage:    publicv1.DiskImageReference_builder{Id: image.GetId()}.Build(),
-				InstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: createCatalogItemBareMetalInstanceTypeFixture(ctx, usersGroup)}.Build(),
+				InstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: createCatalogItemBareMetalInstanceTypeFixture(ctx, usersGroup), Shared: true}.Build(),
 				SshPublicKey: new(catalogItemFixtureSSHPublicKey),
 			}.Build()
 			client := publicv1.NewBareMetalInstancesClient(tool.ExternalView().UserConn())
@@ -340,7 +340,7 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 						CatalogItem:    publicv1.BareMetalInstanceCatalogItemReference_builder{Id: item.GetId()}.Build(),
 						DiskImage:      publicv1.DiskImageReference_builder{Id: image.GetId()}.Build(),
 						UserDataSecret: publicv1.SecretLocalReference_builder{Id: secret}.Build(),
-						InstanceType:   publicv1.BareMetalInstanceTypeLocalReference_builder{Id: createCatalogItemBareMetalInstanceTypeFixture(ctx, usersGroup)}.Build(),
+						InstanceType:   publicv1.BareMetalInstanceTypeReference_builder{Id: createCatalogItemBareMetalInstanceTypeFixture(ctx, usersGroup), Shared: true}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build()
@@ -479,7 +479,7 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 				DiskImage:          publicv1.DiskImageReference_builder{Id: image.GetId()}.Build(),
 				UserData:           new("#cloud-config\n# member"),
 				NetworkAttachments: []*publicv1.BareMetalNetworkAttachment{network.bareMetalInstanceAttachment()},
-				InstanceType:       publicv1.BareMetalInstanceTypeLocalReference_builder{Id: createCatalogItemBareMetalInstanceTypeFixture(ctx, tenant)}.Build(),
+				InstanceType:       publicv1.BareMetalInstanceTypeReference_builder{Id: createCatalogItemBareMetalInstanceTypeFixture(ctx, tenant), Shared: true}.Build(),
 			}.Build()
 			created, err := createBareMetalInstanceFixture(ctx, memberConn, spec)
 			Expect(err).NotTo(HaveOccurred())
@@ -667,8 +667,8 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 				Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: template}.Build(),
 				Published: true,
 				Fields: publicv1.BareMetalInstanceCatalogItemFields_builder{
-					InstanceType: publicv1.BareMetalInstanceTypeLocalReferenceFieldPolicy_builder{
-						Locked: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: id}.Build(),
+					InstanceType: publicv1.BareMetalInstanceTypeReferenceFieldPolicy_builder{
+						Locked: publicv1.BareMetalInstanceTypeReference_builder{Id: id, Shared: true}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -683,9 +683,9 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 					Id:        item.GetId(),
 					Published: false,
 					Fields: publicv1.BareMetalInstanceCatalogItemFields_builder{
-						InstanceType: publicv1.BareMetalInstanceTypeLocalReferenceFieldPolicy_builder{
-							Editable: publicv1.EditableBareMetalInstanceTypeLocalReferenceField_builder{
-								DefaultValue: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: id}.Build(),
+						InstanceType: publicv1.BareMetalInstanceTypeReferenceFieldPolicy_builder{
+							Editable: publicv1.EditableBareMetalInstanceTypeReferenceField_builder{
+								DefaultValue: publicv1.BareMetalInstanceTypeReference_builder{Id: id, Shared: true}.Build(),
 							}.Build(),
 						}.Build(),
 					}.Build(),
@@ -729,7 +729,7 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 			request := publicv1.BareMetalInstanceSpec_builder{
 				CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: item.GetId()}.Build(),
 				DiskImage:    publicv1.DiskImageReference_builder{Id: image.GetId()}.Build(),
-				InstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: instanceType}.Build(),
+				InstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: instanceType, Shared: true}.Build(),
 			}.Build()
 			first, e := createBareMetalInstanceFixture(ctx, tool.ExternalView().UserConn(), request)
 			Expect(e).NotTo(HaveOccurred())

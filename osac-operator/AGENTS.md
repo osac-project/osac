@@ -59,6 +59,21 @@ TopoLVM CRD and simulated status; they also inject stale parent snapshots to
 verify authoritative reads preserve the recorded LogicalVolume identity.
 Status-conflict cases verify newer vendor context, deletion and replacement
 UIDs are not overwritten. These tests do not provision or mount real devices.
+The bare-metal worker unit tests cover bounded opaque names, authoritative
+status reservations from stale snapshots, retry backoff, and per-NodeSet
+capacity selection, including distinct NodeSets sharing a hardware profile. The acceptance envtest suite covers persisted BMI name/ID
+references, interrupted creation, existing-worker recovery, independent request
+scaling/reordering, recovery of unrecorded BMI IDs before finalization, and
+retention of workers/finalizers when the recorded BMI name is missing.
+Kubernetes/etcd and the generated CRDs are real; fulfillment and Agents are
+simulated, so these cases do not prove deployed BMaaS or hardware behavior.
+Agent reconciliation unit tests cover phase convergence/protected workers,
+registration timeout, binding conflicts and isolation, interrupted-status recovery,
+and transition event/metric counts. The acceptance envtest suite drives public
+`Reconcile` manually to verify persisted Ready demotion after Agent disappearance
+or Installed-condition changes, bound-Agent status repair without another BMI or
+Agent patch, protected Failed/Unbinding/Deleting entries, and ambiguous-match
+refusal. These cases do not test manager watch delivery or deployed Assisted Service.
 The Kind suite's LVMS-disabled case verifies the Volume controller remains
 ready without the TopoLVM `LogicalVolume` CRD; it does not exercise LVMS
 provisioning or the CSI data path.

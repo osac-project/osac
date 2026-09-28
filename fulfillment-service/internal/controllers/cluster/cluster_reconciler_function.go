@@ -516,14 +516,15 @@ func (t *task) prepareNodeRequests() []osacv1alpha1.NodeRequest {
 
 	nodeRequests := make([]osacv1alpha1.NodeRequest, 0, len(keys))
 	for _, key := range keys {
-		nodeRequests = append(nodeRequests, t.prepareNodeRequest(nodeSets[key]))
+		nodeRequests = append(nodeRequests, t.prepareNodeRequest(key, nodeSets[key]))
 	}
 	return nodeRequests
 }
 
-func (t *task) prepareNodeRequest(nodeSet *privatev1.ClusterNodeSet) osacv1alpha1.NodeRequest {
+func (t *task) prepareNodeRequest(key string, nodeSet *privatev1.ClusterNodeSet) osacv1alpha1.NodeRequest {
 	bmitName := nodeSet.GetBaremetalInstanceType().GetName()
 	return osacv1alpha1.NodeRequest{
+		NodeSet:       key,
 		NumberOfNodes: int(nodeSet.GetSize()),
 		BareMetal:     &osacv1alpha1.BareMetalNodeSpec{InstanceType: bmitName},
 	}

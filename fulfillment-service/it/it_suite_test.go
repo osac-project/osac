@@ -24,6 +24,7 @@ import (
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"k8s.io/klog/v2"
 	crlog "sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -93,26 +94,61 @@ var _ = BeforeSuite(func() {
 		Expect(err).ToNot(HaveOccurred())
 	})
 
-	// Create a default cluster version for version resolution during cluster creation.
-	// Tolerate AlreadyExists so the suite can be re-run against a live cluster without
-	// needing to tear it down first.
-	cvClient := privatev1.NewClusterVersionsClient(tool.InternalView().AdminConn())
-	_, err = cvClient.Create(ctx, privatev1.ClusterVersionsCreateRequest_builder{
-		Object: privatev1.ClusterVersion_builder{
-			Metadata: privatev1.Metadata_builder{
-				Name: "default",
-			}.Build(),
-			Spec: privatev1.ClusterVersionSpec_builder{
-				Version:   "4.17.0",
-				Image:     "quay.io/openshift-release-dev/ocp-release:4.17.0-multi",
-				IsDefault: new(true),
+	// The system default is used by bare-metal cluster tests, so it must reference a
+	// DiskImage. Leave both fixtures in place to support reruns against a live cluster.
+	imageClient := privatev1.NewDiskImagesClient(tool.InternalView().AdminConn())
+	_, err = imageClient.Create(ctx, privatev1.DiskImagesCreateRequest_builder{
+		Object: privatev1.DiskImage_builder{
+			Metadata: privatev1.Metadata_builder{Name: "it-default-cluster-image", Tenant: "shared"}.Build(),
+			Spec: privatev1.DiskImageSpec_builder{
+				SourceType:    privatev1.SourceType_SOURCE_TYPE_REGISTRY,
+				SourceRef:     "quay.io/containerdisks/fedora:41",
+				GuestOsFamily: privatev1.GuestOSFamily_GUEST_OS_FAMILY_LINUX,
+				Architecture:  []privatev1.Architecture{privatev1.Architecture_ARCHITECTURE_AMD64},
 			}.Build(),
 		}.Build(),
 	}.Build())
 	if err != nil {
-		st, ok := grpcstatus.FromError(err)
-		Expect(ok && st.Code() == grpccodes.AlreadyExists).To(
-			BeTrue(), "BeforeSuite ClusterVersion create failed: %v", err,
-		)
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.AlreadyExists), "BeforeSuite DiskImage create failed: %v", err)
+	}
+	images, err := imageClient.List(ctx, privatev1.DiskImagesListRequest_builder{
+		Filter: new(`this.metadata.name == "it-default-cluster-image" && this.metadata.tenant == "shared"`),
+	}.Build())
+	Expect(err).NotTo(HaveOccurred())
+	Expect(images.GetItems()).To(HaveLen(1))
+	imageID := images.GetItems()[0].GetId()
+
+	cvClient := privatev1.NewClusterVersionsClient(tool.InternalView().AdminConn())
+	_, err = cvClient.Create(ctx, privatev1.ClusterVersionsCreateRequest_builder{
+		Object: privatev1.ClusterVersion_builder{
+			Metadata: privatev1.Metadata_builder{Name: "default"}.Build(),
+			Spec: privatev1.ClusterVersionSpec_builder{
+				Version:   "4.17.0",
+				Image:     "quay.io/openshift-release-dev/ocp-release:4.17.0-multi",
+				IsDefault: new(true),
+				DiskImage: privatev1.DiskImageReference_builder{Id: imageID}.Build(),
+			}.Build(),
+		}.Build(),
+	}.Build())
+	if err != nil {
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.AlreadyExists), "BeforeSuite ClusterVersion create failed: %v", err)
+		versions, listErr := cvClient.List(ctx, privatev1.ClusterVersionsListRequest_builder{
+			Filter: new(`this.metadata.name == "default"`),
+		}.Build())
+		Expect(listErr).NotTo(HaveOccurred())
+		Expect(versions.GetItems()).To(HaveLen(1))
+		version := versions.GetItems()[0]
+		if version.GetSpec().GetDiskImage().GetId() == "" && version.GetSpec().GetDiskImage().GetName() == "" {
+			_, err = cvClient.Update(ctx, privatev1.ClusterVersionsUpdateRequest_builder{
+				Object: privatev1.ClusterVersion_builder{
+					Id: version.GetId(),
+					Spec: privatev1.ClusterVersionSpec_builder{
+						DiskImage: privatev1.DiskImageReference_builder{Id: imageID}.Build(),
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.disk_image"}},
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+		}
 	}
 })

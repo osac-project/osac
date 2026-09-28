@@ -96,26 +96,44 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 
 		Describe("cluster resources", func() {
 			var tenantClusterMapping map[string][]string
+			var clusterBMIT string
 
 			BeforeAll(func(ctx context.Context) {
 				// Create map to track which clusters belong to which tenants
 				tenantClusterMapping = make(map[string][]string)
 
-				// Create host type for testing
-				hostTypesClient := privatev1.NewHostTypesClient(tool.InternalView().AdminConn())
-				hostTypeId := fmt.Sprintf("sa-isolation-hosttype-%s", uuid.New())
-				_, err := hostTypesClient.Create(ctx, privatev1.HostTypesCreateRequest_builder{
-					Object: privatev1.HostType_builder{
-						Id: hostTypeId,
+				// Create a bare metal instance type for testing
+				instanceTypesClient := privatev1.NewBareMetalInstanceTypesClient(tool.InternalView().AdminConn())
+				bmitName := fmt.Sprintf("test-bmit-%s", uuid.New()[24:32])
+				clusterBMIT = bmitName
+				_, err := instanceTypesClient.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
+					Object: privatev1.BareMetalInstanceType_builder{
 						Metadata: privatev1.Metadata_builder{
-							Name: fmt.Sprintf("test-hosttype-%s", uuid.New()[24:32]),
+							Name: bmitName,
+						}.Build(),
+						Spec: privatev1.BareMetalInstanceTypeSpec_builder{
+							Hardware: privatev1.BareMetalHardwareSpec_builder{
+								Cpu:    privatev1.BareMetalCPUSpec_builder{Cores: 32, Architecture: "x86_64", ThreadsPerCore: 2}.Build(),
+								Memory: privatev1.BareMetalMemorySpec_builder{TotalGb: 128}.Build(),
+								NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
+									privatev1.BareMetalNetworkPortSpec_builder{
+										Name:  "eth0",
+										Role:  "fabric",
+										Type:  "Ethernet",
+										Speed: "10Gbps",
+									}.Build(),
+								},
+							}.Build(),
+							HostLabelSelector: privatev1.BareMetalLabelSelector_builder{
+								MatchLabels: map[string]string{"hardware.profile": "compute"},
+							}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 				DeferCleanup(func(ctx context.Context) {
-					_, err := hostTypesClient.Delete(ctx, privatev1.HostTypesDeleteRequest_builder{
-						Id: hostTypeId,
+					_, err := instanceTypesClient.Delete(ctx, privatev1.BareMetalInstanceTypesDeleteRequest_builder{
+						Id: bmitName,
 					}.Build())
 					Expect(err).ToNot(HaveOccurred())
 				})
@@ -146,12 +164,6 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 						Metadata: privatev1.Metadata_builder{
 							Name: fmt.Sprintf("test-template-%s", uuid.New()[24:32]),
 						}.Build(),
-						NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
-							"my-node-set": privatev1.ClusterTemplateNodeSet_builder{
-								HostType: privatev1.HostTypeReference_builder{Id: hostTypeId}.Build(),
-								Size:     3,
-							}.Build(),
-						},
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -177,6 +189,7 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 							}.Build(),
 							Spec: publicv1.ClusterSpec_builder{
 								Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+								NodeSets: testClusterNodeSets(clusterBMIT, 3),
 							}.Build(),
 						}.Build(),
 					}.Build())
@@ -349,6 +362,7 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 			var (
 				tenantClusterMapping map[string][]string
 				clusterTenantMapping map[string][]string
+				clusterBMIT          string
 			)
 
 			BeforeAll(func(ctx context.Context) {
@@ -381,21 +395,38 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 					Expect(err).ToNot(HaveOccurred())
 				}
 
-				// Create host type for testing
-				hostTypeId := fmt.Sprintf("oidc-isolation-hosttype-%s", uuid.New())
-				hostTypesClient := privatev1.NewHostTypesClient(tool.InternalView().AdminConn())
-				_, err := hostTypesClient.Create(ctx, privatev1.HostTypesCreateRequest_builder{
-					Object: privatev1.HostType_builder{
-						Id: hostTypeId,
+				// Create a bare metal instance type for testing
+				bmitName := fmt.Sprintf("test-bmit-%s", uuid.New()[24:32])
+				clusterBMIT = bmitName
+				instanceTypesClient := privatev1.NewBareMetalInstanceTypesClient(tool.InternalView().AdminConn())
+				_, err := instanceTypesClient.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
+					Object: privatev1.BareMetalInstanceType_builder{
 						Metadata: privatev1.Metadata_builder{
-							Name: fmt.Sprintf("test-hosttype-%s", uuid.New()[24:32]),
+							Name: bmitName,
+						}.Build(),
+						Spec: privatev1.BareMetalInstanceTypeSpec_builder{
+							Hardware: privatev1.BareMetalHardwareSpec_builder{
+								Cpu:    privatev1.BareMetalCPUSpec_builder{Cores: 32, Architecture: "x86_64", ThreadsPerCore: 2}.Build(),
+								Memory: privatev1.BareMetalMemorySpec_builder{TotalGb: 128}.Build(),
+								NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
+									privatev1.BareMetalNetworkPortSpec_builder{
+										Name:  "eth0",
+										Role:  "fabric",
+										Type:  "Ethernet",
+										Speed: "10Gbps",
+									}.Build(),
+								},
+							}.Build(),
+							HostLabelSelector: privatev1.BareMetalLabelSelector_builder{
+								MatchLabels: map[string]string{"hardware.profile": "compute"},
+							}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 				DeferCleanup(func(ctx context.Context) {
-					_, err := hostTypesClient.Delete(ctx, privatev1.HostTypesDeleteRequest_builder{
-						Id: hostTypeId,
+					_, err := instanceTypesClient.Delete(ctx, privatev1.BareMetalInstanceTypesDeleteRequest_builder{
+						Id: bmitName,
 					}.Build())
 					Expect(err).ToNot(HaveOccurred())
 				})
@@ -409,12 +440,6 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 						Metadata: privatev1.Metadata_builder{
 							Name: fmt.Sprintf("test-template-%s", uuid.New()[24:32]),
 						}.Build(),
-						NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
-							"my-node-set": privatev1.ClusterTemplateNodeSet_builder{
-								HostType: privatev1.HostTypeReference_builder{Id: hostTypeId}.Build(),
-								Size:     3,
-							}.Build(),
-						},
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -440,6 +465,7 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 							}.Build(),
 							Spec: publicv1.ClusterSpec_builder{
 								Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+								NodeSets: testClusterNodeSets(clusterBMIT, 3),
 							}.Build(),
 						}.Build(),
 					}.Build())

@@ -81,9 +81,9 @@ var _ = Describe("Catalog Item CLI", Label("catalog-items", "cli"), func() {
 		_, stderr, code := tool.LoginCLI(ctx, home, userUsername, usersPassword)
 		Expect(code).To(Equal(0), stderr)
 
-		host := createCatalogItemHostTypeFixture(ctx)
+		bmit := createCatalogItemBareMetalInstanceTypeFixture(ctx, "shared")
 		version := createCatalogItemClusterVersionFixture(ctx, "4.20.0")
-		template := createCatalogItemClusterTemplateFixture(ctx, host, privatev1.ClusterTemplateSpecDefaults_builder{
+		template := createCatalogItemClusterTemplateFixture(ctx, privatev1.ClusterTemplateSpecDefaults_builder{
 			Version: privatev1.ClusterVersionReference_builder{Id: version}.Build(),
 		}.Build(), nil)
 		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
@@ -93,6 +93,13 @@ var _ = Describe("Catalog Item CLI", Label("catalog-items", "cli"), func() {
 			Published: true,
 			Fields: publicv1.ClusterCatalogItemFields_builder{
 				NetworkAttachment: publicv1.ClusterNetworkAttachmentFieldPolicy_builder{Locked: network.clusterAttachment()}.Build(),
+				NodeSets: publicv1.ClusterNodeSetMapPolicy_builder{Locked: publicv1.ClusterNodeSetMap_builder{
+					Items: map[string]*publicv1.ClusterCatalogNodeSet{
+						"workers": publicv1.ClusterCatalogNodeSet_builder{Size: 2,
+							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit}.Build(),
+						}.Build(),
+					},
+				}.Build()}.Build(),
 			}.Build(),
 		}.Build())
 		name := catalogItemFixtureName()

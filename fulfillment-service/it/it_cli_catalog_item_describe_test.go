@@ -54,7 +54,7 @@ var _ = Describe("CLI Catalog Item descriptions", Label("cli", "catalog-items"),
 		Expect(code).To(Equal(0), "describe compute by ID failed: %s", stderr)
 		Expect(output).To(ContainSubstring("\x1b["))
 
-		clusterTemplate := createCatalogItemClusterTemplateFixture(ctx, "", nil, nil)
+		clusterTemplate := createCatalogItemClusterTemplateFixture(ctx, nil, nil)
 		cluster := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
 			Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
 			Template: publicv1.ClusterTemplateReference_builder{Id: clusterTemplate}.Build(),

@@ -92,19 +92,8 @@ var _ = Describe("Default networking provisioning", func() {
 			tenantName,
 		)
 
-		// logVNState logs the current VN state from the FS DB for tracing reconciler progress.
-		logVNState := func() {
-			if resp, getErr := virtualNetworksClient.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: vnId}.Build()); getErr == nil {
-				vn := resp.GetObject()
-				GinkgoWriter.Printf("[vn-state] state=%v hub=%q finalizers=%v message=%q\n",
-					vn.GetStatus().GetState(), vn.GetStatus().GetHub(),
-					vn.GetMetadata().GetFinalizers(), vn.GetStatus().GetMessage())
-			}
-		}
-
 		By("Waiting for VN finalizer set in DB (pass 1: addFinalizer + Update done)")
 		Eventually(func(g Gomega) {
-			logVNState()
 			resp, err := virtualNetworksClient.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: vnId}.Build())
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(resp.GetObject().GetMetadata().GetFinalizers()).ToNot(BeEmpty())
@@ -112,7 +101,6 @@ var _ = Describe("Default networking provisioning", func() {
 
 		By("Waiting for VN hub set in DB (pass 2: selectHub + Update done)")
 		Eventually(func(g Gomega) {
-			logVNState()
 			resp, err := virtualNetworksClient.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: vnId}.Build())
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(resp.GetObject().GetStatus().GetHub()).ToNot(BeEmpty())
@@ -131,7 +119,6 @@ var _ = Describe("Default networking provisioning", func() {
 		kubeClient := tool.KubeClient()
 		vnList := &osacv1alpha1.VirtualNetworkList{}
 		Eventually(func(g Gomega) {
-			logVNState()
 			err := kubeClient.List(ctx, vnList, crclient.MatchingLabels{
 				labels.VirtualNetworkUuid: vnId,
 			})

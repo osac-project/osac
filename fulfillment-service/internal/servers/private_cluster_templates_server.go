@@ -153,9 +153,6 @@ func (s *PrivateClusterTemplatesServer) Create(ctx context.Context,
 		if err = s.validateSpecDefaultsPullSecret(ctx, object); err != nil {
 			return
 		}
-		if err = validateNodeSetNames(object.GetNodeSets()); err != nil {
-			return
-		}
 		if object.GetMetadata().GetName() == "" && object.GetId() != "" {
 			if object.GetMetadata() == nil {
 				object.SetMetadata(&privatev1.Metadata{})
@@ -175,11 +172,6 @@ func (s *PrivateClusterTemplatesServer) Update(ctx context.Context,
 				return
 			}
 			if err = s.validateSpecDefaultsPullSecret(ctx, object); err != nil {
-				return
-			}
-		}
-		if updateIncludesField(request.GetUpdateMask(), "node_sets") {
-			if err = validateNodeSetNames(object.GetNodeSets()); err != nil {
 				return
 			}
 		}
@@ -213,7 +205,8 @@ func (s *PrivateClusterTemplatesServer) validateSpecDefaultsVersion(
 	if versionRef == nil || versionRef.GetName() == "" {
 		return nil
 	}
-	return lookupAndValidateClusterVersion(ctx, s.logger, s.clusterVersionsDao, versionRef.GetName())
+	_, err := lookupAndValidateClusterVersion(ctx, s.logger, s.clusterVersionsDao, versionRef.GetName())
+	return err
 }
 
 func (s *PrivateClusterTemplatesServer) Delete(ctx context.Context,

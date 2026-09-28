@@ -15,8 +15,8 @@ NetworkClass manager names and select the AAP backend:
 
 | `fabricManager` | `k8sManager` | Derived AAP backend | Status |
 |-----------------|--------------|---------------------|--------|
-| `netris` | `""` | `netris` / `netris.steps` | Supported |
-| `""` | `k8s_only` | `agentless_net` / `agentless_net.steps` | Supported (default) |
+| `netris` | `""` | `netris` | Supported |
+| `""` | `k8s_only` | `agentless_net` | Supported (default) |
 | `""` | `""` | Must set managers via `global.networking.networkClass` or expert overrides | Expert only |
 | `cudn_net` | * | — | Reserved; Helm render fails |
 | `vlan` | * | — | Reserved; Helm render fails |
@@ -29,7 +29,7 @@ Setting both managers non-empty fails during render. The removed
 When `global.networking.fabricManager` is `netris`, Helm automatically:
 
 - Enables `operator.networkManagers.fabricManagers.netris`
-- Sets `NETWORK_CLASS`, `NETWORK_STEPS_COLLECTION`, and shared `NETRIS_*` fields on
+- Sets `NETWORK_CLASS` and shared `NETRIS_*` fields on
   both AAP instance groups when they are enabled (no manual duplication)
 - Points the generated NetworkClass at `fabricManager: netris`
 
@@ -41,8 +41,8 @@ The facade does **not** enable the AAP instance groups themselves. Set both
 `aap.instanceGroups.clusterFulfillment.enabled` and
 `aap.instanceGroups.networkFulfillment.enabled` to `true` for Netris-backed
 provisioning. Cluster fulfillment receives `NETWORK_CLASS` /
-`NETWORK_STEPS_COLLECTION` plus cluster-specific Netris fields; network
-fulfillment receives the shared Netris connection fields only.
+cluster-specific Netris fields; network fulfillment receives the shared
+Netris connection fields only.
 
 ## Netris example
 
@@ -104,11 +104,11 @@ Prefer the facade above. When not using it, set variables on
 
 ### Derived AAP backends
 
-| `NETWORK_CLASS` | `NETWORK_STEPS_COLLECTION` | Description |
-|-----------------|---------------------------|-------------|
-| `netris` | `netris.steps` | Netris controller API |
-| `agentless_net` | `agentless_net.steps` | Agentless network backend (no physical fabric) |
-| (empty) | (empty) | No AAP network backend selected |
+| `NETWORK_CLASS` | Description |
+|-----------------|-------------|
+| `netris` | Netris controller API |
+| `agentless_net` | Agentless network backend (no physical fabric) |
+| (empty) | No AAP network backend selected |
 
 ### ConfigMap variables
 
@@ -179,7 +179,6 @@ aap:
       enabled: true
       config:
         NETWORK_CLASS: "netris"
-        NETWORK_STEPS_COLLECTION: "netris.steps"
         NETRIS_CONTROLLER_URL: "https://redhat-ctl.netris.io"
         NETRIS_USERNAME: "netris"
         NETRIS_SITE_ID: "5"

@@ -9,8 +9,7 @@ ESI-based step implementations for cluster infrastructure and external access pr
 
 ## Usage
 
-This collection is selected at runtime via the `network_steps_collection` variable (default: `osac.steps`).
-It is used as the ESI network backend by the `osac.service` roles `cluster_infra` and `external_access`.
+This collection provides the ESI network backend roles `cluster_infra` and `external_access`.
 
 ## License
 

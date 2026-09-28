@@ -7,9 +7,9 @@ variable during playbook execution.
 
 For network backends, prefer the `global.networking` facade — see
 [Network Backend Configuration](network-backend.md). Helm derives
-`NETWORK_CLASS`, `NETWORK_STEPS_COLLECTION`, and Netris connection fields when
+`NETWORK_CLASS` and Netris connection fields when
 `global.expertOverrides.aap` is false. Set those keys manually only for expert
-overrides or CI-specific backends (for example `ci.steps`).
+overrides.
 
 Cluster-fulfillment and network-fulfillment instance groups both mount their
 ConfigMaps and Secrets. Network-fulfillment receives the shared Netris
@@ -27,7 +27,6 @@ file and they are applied during `make install-osac`.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `NETWORK_CLASS` | (empty) | AAP network backend (`netris` or `agentless_net`). Derived by the facade for normal installs. |
-| `NETWORK_STEPS_COLLECTION` | (empty) | Ansible collection for network steps (`netris.steps`, `ci.steps`, or `agentless_net.steps`). Derived by the facade for normal installs. |
 | `EXTERNAL_ACCESS_BASE_DOMAIN` | `box.massopen.cloud` | Base domain for cluster DNS records |
 | `EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS` | `box.massopen.cloud` | Comma-separated list of allowed domains |
 | `EXTERNAL_ACCESS_API_INTERNAL_NETWORK` | `hypershift` | Internal network for API access |

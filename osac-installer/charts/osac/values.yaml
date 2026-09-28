@@ -256,7 +256,6 @@ aap:
       enabled: false
       config:
         NETWORK_CLASS: ""
-        NETWORK_STEPS_COLLECTION: ""
         DNS_CLASS: ""
         DNS_ZONE: ""
         # Netris connection fields below must also be set on networkFulfillment

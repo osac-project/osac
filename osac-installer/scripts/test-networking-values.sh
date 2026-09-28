@@ -195,12 +195,6 @@ render_failure \
   --set-string aap.instanceGroups.clusterFulfillment.config.NETWORK_CLASS=esi
 
 render_failure \
-  legacy-network-steps-collection \
-  --set global.expertOverrides.aap=true \
-  --set aap.instanceGroups.clusterFulfillment.enabled=true \
-  --set-string aap.instanceGroups.clusterFulfillment.config.NETWORK_STEPS_COLLECTION=nico.steps
-
-render_failure \
   netris-with-k8s-only \
   --set global.networking.fabricManager=netris \
   --set global.networking.k8sManager=k8s_only \

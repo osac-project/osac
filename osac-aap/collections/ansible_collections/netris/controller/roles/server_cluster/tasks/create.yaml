@@ -4,6 +4,11 @@
     name: netris.controller.auth
   when: netris_session_cookie is not defined
 
+- name: Reset server cluster lookup results
+  ansible.builtin.set_fact:
+    _existing_server_cluster: null
+    _existing_server_clusters: []
+
 - name: Get existing server clusters
   ansible.builtin.uri:
     url: "{{ netris_controller_url }}/api/v2/server-cluster"
@@ -52,12 +57,12 @@
     - server_cluster_backend_id is not defined or server_cluster_backend_id | string | length == 0
     - _existing_server_cluster is not defined or _existing_server_cluster is none
 
-- name: Find existing server cluster by name
+- name: Find existing server cluster by name when VPC is unspecified
   ansible.builtin.set_fact:
     _existing_server_cluster: "{{ _existing_server_clusters | first | default(none) }}"
   when:
     - _existing_server_clusters is defined
-    - server_cluster_vpc_id is not defined or server_cluster_vpc_id | int <= 0
+    - server_cluster_vpc_id is not defined
     - _existing_server_cluster is not defined or _existing_server_cluster is none
 
 - name: Find existing server cluster by name and VPC

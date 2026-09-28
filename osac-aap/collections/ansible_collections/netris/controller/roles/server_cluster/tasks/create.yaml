@@ -63,7 +63,19 @@
   when:
     - _existing_server_clusters is defined
     - server_cluster_vpc_id is not defined
+    - server_cluster_allow_name_only_lookup | default(false) | bool
+    - _existing_server_clusters | length <= 1
     - _existing_server_cluster is not defined or _existing_server_cluster is none
+
+- name: Refuse unsafe name-only server cluster reuse
+  ansible.builtin.assert:
+    that:
+      - server_cluster_allow_name_only_lookup | default(false) | bool
+      - _existing_server_clusters | length <= 1
+    fail_msg: "ServerCluster reuse without a VPC ID needs explicit permission and an unambiguous name at this site"
+  when:
+    - server_cluster_backend_id is not defined or server_cluster_backend_id | string | length == 0
+    - server_cluster_vpc_id is not defined
 
 - name: Find existing server cluster by name and VPC
   ansible.builtin.set_fact:
@@ -76,6 +88,15 @@
     - server_cluster_vpc_id is defined
     - server_cluster_vpc_id | int > 0
     - _existing_server_cluster is not defined or _existing_server_cluster is none
+
+- name: Refuse ambiguous server clusters within one VPC
+  ansible.builtin.assert:
+    that: _existing_server_clusters | selectattr('vpc.id', 'equalto', server_cluster_vpc_id | int) | list | length <= 1
+    fail_msg: "Multiple ServerClusters match name {{ server_cluster_name }} in VPC {{ server_cluster_vpc_id }}"
+  when:
+    - server_cluster_backend_id is not defined or server_cluster_backend_id | string | length == 0
+    - server_cluster_vpc_id is defined
+    - server_cluster_vpc_id | int > 0
 
 - name: Set server names list
   ansible.builtin.set_fact:

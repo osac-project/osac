@@ -45,7 +45,8 @@ global:
     # Supported facade profiles:
     #   - fabricManager: netris, k8sManager: ""     → fabricManager netris
     #   - fabricManager: "", k8sManager: k8s_only   → k8sManager k8s_only (default)
-    # Reserved fabric managers (cudn_net, vlan) fail during render.
+    # CUDN is supported only for CaaS/BMaaS with an enabled operator and
+    # ci.steps; vlan remains reserved and fails during render.
     fabricManager: ""
     k8sManager: k8s_only
     netris:
@@ -105,11 +106,13 @@ operator:
     insecureSkipVerify: "true"
     statusPollInterval: "30s"
     templatePrefix: "osac"
+  ignition:
+    trustIngressCA: false
   stall:
     preparingInfrastructureThreshold: "15m"
     controlPlaneStartingThreshold: "30m"
     workersJoiningThreshold: "20m"
-    workersJoiningByHostType: {}
+    workersJoiningByInstanceType: {}
   fulfillment:
     serverAddress: "fulfillment-internal-api:8001"
     tokenFile: "/var/run/secrets/kubernetes.io/serviceaccount/token"
@@ -161,6 +164,8 @@ service:
       repository: ghcr.io/osac-project/envoy
       tag: v1.33.0
       pullPolicy: IfNotPresent
+  eventPublisher:
+    enabled: true
   certs:
     issuerRef:
       kind: ClusterIssuer
@@ -267,13 +272,6 @@ aap:
     eeImage: ""
     projectGitUri: ""
     projectGitBranch: ""
-    importAgentsEnabled: false
-    importBcmAgentsEnabled: false
-  importAgents:
-    servers: []
-  importBcmAgents:
-    cert: ""
-    key: ""
   instanceGroups:
     clusterFulfillment:
       enabled: false
@@ -304,13 +302,6 @@ aap:
         HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY: ""
         HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: ""
         PARKING_VNET_NAME: ""
-        IMPORT_AGENTS_NAMESPACE: ""
-        IMPORT_AGENTS_INFRAENV_NAME: ""
-        IMPORT_AGENTS_PULL_SECRET_NAME: ""
-        IMPORT_AGENTS_DISABLE_BMC_CERT_VERIFICATION: ""
-        BCM_API_URL: ""
-        BCM_VALIDATE_CERTS: "true"
-        BCM_DISABLE_BMC_CERT_VERIFICATION: "false"
       secret:
         NETRIS_PASSWORD: ""
         AWS_ACCESS_KEY_ID: ""

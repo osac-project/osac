@@ -10,10 +10,18 @@ import ipaddress
 import json
 import os
 import re
-import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any
+
+from ansible_collections.osac.templates.plugins.module_utils.agentless_net_network import (
+    configure_uplink,
+    delete_uplink,
+    ensure_ipv4_forwarding,
+    ensure_veth_pair,
+    NetworkCommandError,
+    run_command,
+)
 
 SCHEMA_VERSION = 3
 LEGACY_SCHEMA_VERSION = 2
@@ -36,6 +44,33 @@ class StateError(Exception):
 
 class StateCorrupt(StateError):
     """The state file is missing or does not contain a supported generation."""
+
+
+def _fsync_directory(directory: Path) -> None:
+    directory_fd = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
+def _atomic_write(path: Path, payload: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    state_fd, state_tmp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", dir=path.parent
+    )
+    try:
+        os.fchmod(state_fd, 0o600)
+        with os.fdopen(state_fd, "wb", closefd=True) as state_file:
+            state_file.write(payload)
+            state_file.flush()
+            os.fsync(state_file.fileno())
+        os.replace(state_tmp_name, path)
+        _fsync_directory(path.parent)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(state_tmp_name)
+        raise
 
 
 class StateStore:
@@ -196,49 +231,11 @@ class StateStore:
         if len(seen_interfaces) != sum(len(entry["uplink"]) for entry in entries):
             raise StateCorrupt("duplicate VirtualNetwork uplink interface")
 
-    def _fsync_directory(self) -> None:
-        directory_fd = os.open(self.path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
-
     def _write_locked(self, state: dict[str, Any], previous: bytes | None) -> None:
         payload = (json.dumps(state, indent=2, sort_keys=True) + "\n").encode()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-
         if previous is not None:
-            backup_fd, backup_tmp_name = tempfile.mkstemp(
-                prefix=f".{self.backup_path.name}.", dir=self.path.parent
-            )
-            try:
-                os.fchmod(backup_fd, 0o600)
-                with os.fdopen(backup_fd, "wb", closefd=True) as backup_file:
-                    backup_file.write(previous)
-                    backup_file.flush()
-                    os.fsync(backup_file.fileno())
-                os.replace(backup_tmp_name, self.backup_path)
-                self._fsync_directory()
-            except BaseException:
-                with contextlib.suppress(FileNotFoundError):
-                    os.unlink(backup_tmp_name)
-                raise
-
-        state_fd, state_tmp_name = tempfile.mkstemp(
-            prefix=f".{self.path.name}.", dir=self.path.parent
-        )
-        try:
-            os.fchmod(state_fd, 0o600)
-            with os.fdopen(state_fd, "wb", closefd=True) as state_file:
-                state_file.write(payload)
-                state_file.flush()
-                os.fsync(state_file.fileno())
-            os.replace(state_tmp_name, self.path)
-            self._fsync_directory()
-        except BaseException:
-            with contextlib.suppress(FileNotFoundError):
-                os.unlink(state_tmp_name)
-            raise
+            _atomic_write(self.backup_path, previous)
+        _atomic_write(self.path, payload)
 
     def _transact(self, update, *, before_write=None, after_write=None):
         with self._locked():
@@ -285,11 +282,11 @@ class StateStore:
             slot_count = network.num_addresses // 4
             if slot_count < 1:
                 raise StateError("VirtualNetwork CIDR is too small for a /30 transit link")
-            used_transit = [
+            used_transit = {
                 ipaddress.ip_network(entry["transit"]["cidr"])
                 for entry in state["virtual_networks"]
                 if entry["uid"] != excluded_uid
-            ]
+            }
             seed = int.from_bytes(
                 hashlib.sha256(f"{uid}:{network_cidr}".encode()).digest()[:8],
                 "big",
@@ -298,7 +295,7 @@ class StateStore:
                 slot = (seed + offset) % slot_count
                 address = network.network_address + (slot * 4)
                 candidate = ipaddress.ip_network((address, 30))
-                if any(candidate.overlaps(used) for used in used_transit):
+                if candidate in used_transit:
                     continue
                 return candidate
             raise StateError("no free /30 transit block remains in the VirtualNetwork CIDR")
@@ -361,13 +358,15 @@ class StateStore:
             state["virtual_networks"].append(entry)
             return entry, True
 
-        def remove_old_provider_state(_entry):
+        def prepare_provider_state(entry):
             if provider_entry_to_delete is not None and after_write is not None:
                 delete_virtual_network(provider_entry_to_delete)
+            if after_write is not None:
+                _assert_transit_route_available(entry)
 
         return self._transact(
             update,
-            before_write=remove_old_provider_state,
+            before_write=prepare_provider_state,
             after_write=after_write,
         )
 
@@ -419,15 +418,156 @@ class StateStore:
         return changed
 
 
-def _run(command: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
+def _run(command: list[str], check: bool = True):
     try:
-        result = subprocess.run(command, capture_output=True, text=True, check=False)
-    except OSError as error:
-        raise StateError(f"{command[0]} could not run: {error}") from error
-    if check and result.returncode != 0:
-        message = result.stderr.strip() or result.stdout.strip() or "command failed"
-        raise StateError(f"{command[0]} failed: {message}")
-    return result
+        return run_command(command, check=check)
+    except NetworkCommandError as error:
+        raise StateError(str(error)) from error
+
+
+def _assert_transit_route_available(entry: dict[str, Any]) -> None:
+    transit = ipaddress.ip_network(entry["transit"]["cidr"])
+    host_interface = entry["uplink"]["host_interface"]
+    routes = _run(["ip", "-j", "-4", "route", "show", "table", "all"]).stdout
+    try:
+        route_entries = json.loads(routes or "[]")
+    except (json.JSONDecodeError, TypeError) as error:
+        raise StateError(f"could not inspect network-node IPv4 routes: {error}") from error
+    if not isinstance(route_entries, list):
+        raise StateError("network-node IPv4 route output is not a list")
+
+    for route in route_entries:
+        if not isinstance(route, dict):
+            raise StateError("network-node IPv4 route entry is invalid")
+        if route.get("dev") == host_interface:
+            continue
+
+        destination = route.get("dst", "default")
+        if destination in ("default", "0.0.0.0/0"):
+            continue
+        try:
+            route_network = ipaddress.ip_network(destination, strict=False)
+        except (TypeError, ValueError):
+            source = route.get("prefsrc")
+            if not isinstance(source, str):
+                continue
+            try:
+                route_network = ipaddress.ip_network(source, strict=False)
+            except ValueError as error:
+                raise StateError("network-node IPv4 route has an invalid source address") from error
+        if route_network.version == 4 and transit.overlaps(route_network):
+            raise StateError(
+                f"VirtualNetwork transit CIDR {transit} overlaps existing host route "
+                f"{route_network}"
+            )
+
+
+def _host_forwarding_rules() -> list[str]:
+    output = _run(
+        ["iptables", "-w", "-t", "filter", "-S", "FORWARD"]
+    ).stdout.splitlines()
+    return [line.strip() for line in output if line.startswith("-A FORWARD ")]
+
+
+def _is_unconditional_forward_drop(rule: str) -> bool:
+    parts = rule.split()
+    return parts == ["-A", "FORWARD", "-j", "DROP"] or (
+        len(parts) == 6
+        and parts[:2] == ["-A", "FORWARD"]
+        and parts[2] in ("-i", "-o")
+        and parts[4:] == ["-j", "DROP"]
+    )
+
+
+def _verify_host_forwarding_isolation(host_interface: str) -> None:
+    rules = _host_forwarding_rules()
+    for direction in ("-i", "-o"):
+        expected = f"-A FORWARD {direction} {host_interface} -j DROP"
+        try:
+            index = rules.index(expected)
+        except ValueError as error:
+            raise StateError("host VirtualNetwork forwarding isolation rule is absent") from error
+        if any(not _is_unconditional_forward_drop(rule) for rule in rules[:index]):
+            raise StateError("host VirtualNetwork forwarding isolation rule is below an allow rule")
+
+
+def _ensure_host_forwarding_isolation(host_interface: str) -> bool:
+    changed = False
+    rules = _host_forwarding_rules()
+    for direction in ("-i", "-o"):
+        expected = f"-A FORWARD {direction} {host_interface} -j DROP"
+        needs_reorder = expected not in rules
+        if not needs_reorder:
+            index = rules.index(expected)
+            needs_reorder = any(
+                not _is_unconditional_forward_drop(rule) for rule in rules[:index]
+            )
+        if needs_reorder:
+            check_rule = [
+                "iptables",
+                "-w",
+                "-t",
+                "filter",
+                "-C",
+                "FORWARD",
+                direction,
+                host_interface,
+                "-j",
+                "DROP",
+            ]
+            delete_rule = check_rule.copy()
+            delete_rule[4] = "-D"
+            while _run(check_rule, check=False).returncode == 0:
+                _run(delete_rule)
+            insert_rule = [
+                "iptables",
+                "-w",
+                "-t",
+                "filter",
+                "-I",
+                "FORWARD",
+                "1",
+                direction,
+                host_interface,
+                "-j",
+                "DROP",
+            ]
+            _run(insert_rule)
+            changed = True
+            rules = [rule for rule in rules if rule != expected]
+            rules.insert(0, expected)
+    _verify_host_forwarding_isolation(host_interface)
+    return changed
+
+
+def _remove_host_forwarding_isolation(host_interface: str) -> None:
+    for direction in ("-i", "-o"):
+        check_rule = [
+            "iptables",
+            "-w",
+            "-t",
+            "filter",
+            "-C",
+            "FORWARD",
+            direction,
+            host_interface,
+            "-j",
+            "DROP",
+        ]
+        delete_rule = [
+            "iptables",
+            "-w",
+            "-t",
+            "filter",
+            "-D",
+            "FORWARD",
+            direction,
+            host_interface,
+            "-j",
+            "DROP",
+        ]
+        while _run(check_rule, check=False).returncode == 0:
+            _run(delete_rule)
 
 
 def reconcile_virtual_network(entry: dict[str, Any]) -> bool:
@@ -435,107 +575,29 @@ def reconcile_virtual_network(entry: dict[str, Any]) -> bool:
     namespace_interface = entry["uplink"]["namespace_interface"]
     host_interface = entry["uplink"]["host_interface"]
     transit = entry["transit"]
-    changed = False
+    try:
+        changed = ensure_veth_pair(namespace, namespace_interface, host_interface)
+    except NetworkCommandError as error:
+        raise StateError(str(error)) from error
 
-    namespace_list = _run(["ip", "netns", "list"]).stdout.splitlines()
-    namespace_names = {line.split()[0] for line in namespace_list if line.split()}
-    if namespace not in namespace_names:
-        _run(["ip", "netns", "add", namespace])
-        changed = True
-
-    host_link = _run(["ip", "-o", "link", "show", "dev", host_interface], check=False)
-    namespace_link = _run(
-        ["ip", "netns", "exec", namespace, "ip", "-o", "link", "show", "dev", namespace_interface],
-        check=False,
-    )
-    if host_link.returncode == 0 and namespace_link.returncode != 0:
-        _run(["ip", "link", "delete", "dev", host_interface])
-        host_link = _run(["ip", "-o", "link", "show", "dev", host_interface], check=False)
-        changed = True
-    if host_link.returncode != 0 and namespace_link.returncode == 0:
-        raise StateError("namespace uplink exists without its host peer")
-    if host_link.returncode != 0:
-        _run(["ip", "link", "add", host_interface, "type", "veth", "peer", "name", namespace_interface])
-        _run(["ip", "link", "set", namespace_interface, "netns", namespace])
-        changed = True
-
-    host_address = transit["host_ip"]
-    namespace_address = transit["namespace_ip"]
-    host_addresses = _run(["ip", "-o", "-4", "address", "show", "dev", host_interface]).stdout
-    namespace_addresses = _run(
-        ["ip", "netns", "exec", namespace, "ip", "-o", "-4", "address", "show", "dev", namespace_interface]
-    ).stdout
-    host_link = _run(["ip", "-o", "link", "show", "dev", host_interface]).stdout
-    namespace_link = _run(
-        ["ip", "netns", "exec", namespace, "ip", "-o", "link", "show", "dev", namespace_interface]
-    ).stdout
-    if (
-        host_address not in host_addresses
-        or namespace_address not in namespace_addresses
-        or "UP" not in host_link
-        or "UP" not in namespace_link
-    ):
-        changed = True
-    _run(["ip", "address", "replace", host_address, "dev", host_interface])
-    _run(["ip", "link", "set", "dev", host_interface, "up"])
-    _run(["ip", "netns", "exec", namespace, "ip", "link", "set", "dev", "lo", "up"])
-    _run(
-        [
-            "ip",
-            "netns",
-            "exec",
-            namespace,
-            "ip",
-            "address",
-            "replace",
-            namespace_address,
-            "dev",
-            namespace_interface,
-        ]
-    )
-    _run(
-        [
-            "ip",
-            "netns",
-            "exec",
-            namespace,
-            "ip",
-            "link",
-            "set",
-            "dev",
-            namespace_interface,
-            "up",
-        ]
-    )
-
-    route = _run(["ip", "netns", "exec", namespace, "ip", "-4", "route", "show", "default"]).stdout
-    if f"via {transit['gateway']}" not in route:
-        changed = True
-    _run(
-        [
-            "ip",
-            "netns",
-            "exec",
-            namespace,
-            "ip",
-            "route",
-            "replace",
-            "default",
-            "via",
-            transit["gateway"],
-            "dev",
-            namespace_interface,
-        ]
-    )
-
-    host_forwarding = _run(["sysctl", "-n", "net.ipv4.ip_forward"]).stdout.strip()
-    namespace_forwarding = _run(
-        ["ip", "netns", "exec", namespace, "sysctl", "-n", "net.ipv4.ip_forward"]
-    ).stdout.strip()
-    if host_forwarding != "1" or namespace_forwarding != "1":
-        changed = True
-    _run(["sysctl", "-w", "net.ipv4.ip_forward=1"])
-    _run(["ip", "netns", "exec", namespace, "sysctl", "-w", "net.ipv4.ip_forward=1"])
+    # Keep this namespace isolated even when the node already has forwarding
+    # enabled for other workloads. Do not change the host-wide forwarding sysctl.
+    changed = _ensure_host_forwarding_isolation(host_interface) or changed
+    try:
+        changed = (
+            configure_uplink(
+                namespace,
+                namespace_interface,
+                host_interface,
+                transit["namespace_ip"],
+                transit["host_ip"],
+                transit["gateway"],
+            )
+            or changed
+        )
+        changed = ensure_ipv4_forwarding(namespace) or changed
+    except NetworkCommandError as error:
+        raise StateError(str(error)) from error
 
     forward_policy = _run(
         ["ip", "netns", "exec", namespace, "iptables", "-w", "-t", "filter", "-S", "FORWARD"]
@@ -618,20 +680,14 @@ def _verify_virtual_network(entry: dict[str, Any]) -> None:
     )
     if rule.returncode != 0:
         raise StateError("VirtualNetwork established/related forwarding rule is absent")
+    _verify_host_forwarding_isolation(host_interface)
 
 
 def delete_virtual_network(entry: dict[str, Any]) -> None:
     namespace = entry["namespace_name"]
     host_interface = entry["uplink"]["host_interface"]
-    namespaces = _run(["ip", "netns", "list"]).stdout.splitlines()
-    if namespace in {line.split()[0] for line in namespaces if line.split()}:
-        _run(["ip", "netns", "delete", namespace])
-
-    host_link = _run(["ip", "-o", "link", "show", "dev", host_interface], check=False)
-    if host_link.returncode == 0:
-        _run(["ip", "link", "delete", "dev", host_interface])
-
-    namespaces = _run(["ip", "netns", "list"]).stdout.splitlines()
-    host_link = _run(["ip", "-o", "link", "show", "dev", host_interface], check=False)
-    if namespace in {line.split()[0] for line in namespaces if line.split()} or host_link.returncode == 0:
-        raise StateError("VirtualNetwork namespace or uplink remains after deletion")
+    try:
+        delete_uplink(namespace, host_interface)
+    except NetworkCommandError as error:
+        raise StateError(str(error)) from error
+    _remove_host_forwarding_isolation(host_interface)

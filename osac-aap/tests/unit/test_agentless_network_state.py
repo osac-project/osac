@@ -2,6 +2,7 @@ import fcntl
 import ipaddress
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -17,6 +18,7 @@ MODULE_UTILS = (
     / "module_utils"
 )
 sys.path.insert(0, str(MODULE_UTILS))
+sys.path.insert(0, str(MODULE_UTILS.parents[4]))
 
 import agentless_net_state
 from agentless_net_state import StateCorrupt, StateError, StateStore  # noqa: E402
@@ -64,6 +66,164 @@ def test_overlapping_virtual_networks_get_independent_names_and_transit(tmp_path
     assert first["namespace_name"] != second["namespace_name"]
     assert first["uplink"] != second["uplink"]
     assert first["transit"]["cidr"] != second["transit"]["cidr"]
+    assert not ipaddress.ip_network(first["transit"]["cidr"]).overlaps(
+        ipaddress.ip_network(second["transit"]["cidr"])
+    )
+
+
+def test_transit_allocation_rejects_existing_host_route_before_writing_state(
+    tmp_path, monkeypatch
+):
+    store = store_for(tmp_path)
+
+    def existing_host_route(command, check=True):
+        assert command == ["ip", "-j", "-4", "route", "show", "table", "all"]
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout='[{"dst":"10.0.0.0/8","dev":"eth0"}]',
+            stderr="",
+        )
+
+    monkeypatch.setattr(agentless_net_state, "_run", existing_host_route)
+
+    with pytest.raises(StateError, match="overlaps existing host route"):
+        store.ensure_and_reconcile_virtual_network("vn-one", "10.0.0.0/16")
+
+    assert not store.path.exists()
+
+
+def test_transit_retry_allows_its_own_host_veth_route(tmp_path, monkeypatch):
+    store = store_for(tmp_path)
+    entry = store.ensure_virtual_network("vn-one", "10.0.0.0/16")
+
+    def own_host_route(command, check=True):
+        assert command == ["ip", "-j", "-4", "route", "show", "table", "all"]
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps(
+                [
+                    {
+                        "dst": entry["transit"]["cidr"],
+                        "dev": entry["uplink"]["host_interface"],
+                    }
+                ]
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(agentless_net_state, "_run", own_host_route)
+    monkeypatch.setattr(agentless_net_state, "reconcile_virtual_network", lambda _: False)
+
+    retry, state_changed, network_changed = store.ensure_and_reconcile_virtual_network(
+        "vn-one", "10.0.0.0/16"
+    )
+
+    assert retry == entry
+    assert state_changed is False
+    assert network_changed is False
+
+
+def test_host_forwarding_isolation_rules_are_interface_scoped(monkeypatch):
+    commands = []
+    rules = []
+
+    def iptables(command, check=True):
+        commands.append(command)
+        if "-S" in command:
+            output = "-P FORWARD ACCEPT\n" + "".join(f"{rule}\n" for rule in rules)
+            return subprocess.CompletedProcess(command, 0, stdout=output, stderr="")
+        direction = next((part for part in ("-i", "-o") if part in command), None)
+        if "-C" in command:
+            return subprocess.CompletedProcess(
+                command,
+                0
+                if f"-A FORWARD {direction} vnet-host -j DROP" in rules
+                else 1,
+                stdout="",
+                stderr="",
+            )
+        if "-I" in command:
+            rules.insert(0, f"-A FORWARD {direction} vnet-host -j DROP")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(agentless_net_state, "_run", iptables)
+
+    changed = agentless_net_state._ensure_host_forwarding_isolation("vnet-host")
+
+    inserted = [command for command in commands if "-I" in command]
+    assert changed is True
+    assert "-A FORWARD -i vnet-host -j DROP" in rules
+    assert "-A FORWARD -o vnet-host -j DROP" in rules
+    assert all(
+        command[4:11] == ["-I", "FORWARD", "1", direction, "vnet-host", "-j", "DROP"]
+        for command, direction in zip(inserted, ("-i", "-o"), strict=True)
+    )
+
+
+def test_host_forwarding_is_blocked_before_host_ip_forwarding_is_enabled(
+    tmp_path, monkeypatch
+):
+    entry = store_for(tmp_path).ensure_virtual_network("vn-one", "10.0.0.0/16")
+    events = []
+    rules = []
+
+    monkeypatch.setattr(
+        agentless_net_state,
+        "ensure_veth_pair",
+        lambda *args: events.append("veth-pair") or False,
+    )
+    monkeypatch.setattr(
+        agentless_net_state,
+        "configure_uplink",
+        lambda *args: events.append("address-and-route") or False,
+    )
+
+    def enable_forwarding(*args, **kwargs):
+        events.append("forwarding")
+        assert kwargs == {}
+        return True
+
+    def iptables(command, check=True):
+        if "-S" in command:
+            output = "-P FORWARD ACCEPT\n" + "".join(f"{rule}\n" for rule in rules)
+            return subprocess.CompletedProcess(
+                command, 0, stdout=output, stderr=""
+            )
+        if "-C" in command:
+            direction = next((part for part in ("-i", "-o") if part in command), None)
+            if direction is None:
+                return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+            return subprocess.CompletedProcess(
+                command,
+                0
+                if (
+                    f"-A FORWARD {direction} {entry['uplink']['host_interface']} -j DROP"
+                    in rules
+                )
+                else 1,
+                stdout="",
+                stderr="",
+            )
+        if "-I" in command:
+            direction = next(part for part in ("-i", "-o") if part in command)
+            rules.insert(
+                0,
+                f"-A FORWARD {direction} {entry['uplink']['host_interface']} -j DROP",
+            )
+            events.append("host-filter")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(agentless_net_state, "ensure_ipv4_forwarding", enable_forwarding)
+    monkeypatch.setattr(agentless_net_state, "_run", iptables)
+    monkeypatch.setattr(agentless_net_state, "_verify_virtual_network", lambda _: None)
+
+    agentless_net_state.reconcile_virtual_network(entry)
+
+    assert events.index("veth-pair") < events.index("host-filter")
+    assert events.index("host-filter") < events.index("address-and-route")
+    assert events.index("host-filter") < events.index("forwarding")
 
 
 def test_remove_virtual_network_releases_only_its_saved_transit_entry(
@@ -126,6 +286,13 @@ def test_create_and_retry_reconcile_inside_locked_transaction(tmp_path, monkeypa
         return len(reconciled) == 1
 
     monkeypatch.setattr(agentless_net_state, "reconcile_virtual_network", reconcile_on_node)
+    monkeypatch.setattr(
+        agentless_net_state,
+        "_run",
+        lambda command, check=True: subprocess.CompletedProcess(
+            command, 0, stdout="[]", stderr=""
+        ),
+    )
 
     entry, state_changed, network_changed = store.ensure_and_reconcile_virtual_network("vn-uid", "10.0.0.0/16")
     assert state_changed is True

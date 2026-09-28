@@ -3,6 +3,7 @@
   ansible.builtin.include_vars:
     file: "{{ agentless_net_inventory_file }}"
     name: _agentless_net_inventory
+  no_log: true
 
 - name: Validate AgentlessNet network-node inventory
   ansible.builtin.assert:
@@ -23,3 +24,4 @@
   loop: "{{ _agentless_net_inventory.all.children.net_nodes.hosts | dict2items }}"
   loop_control:
     label: "{{ item.key }}"
+  no_log: true

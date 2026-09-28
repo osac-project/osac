@@ -1913,10 +1913,11 @@
       "properties": {
         "fabricManager": {
           "type": "string",
-          "description": "Fabric manager profile. Supported: empty string or netris. Reserved names cudn_net and vlan fail during Helm rendering.",
+          "description": "Fabric manager profile. Supported: empty string, netris, or agentless_net. Reserved names cudn_net and vlan fail during Helm rendering.",
           "enum": [
             "",
             "netris",
+            "agentless_net",
             "cudn_net",
             "vlan"
           ],

@@ -120,8 +120,10 @@ make install-osac \
   EXTRA_HELM_ARGS="-f values/agentless-net-stub.yaml"
 ```
 
-The overlay registers `agentless_net` as the fabric manager and creates a
-default NetworkClass that selects it. NetworkClass registration can succeed
+The overlay selects `agentless_net` through `global.networking`, which registers
+the fabric manager and creates a default NetworkClass that selects it. It also
+allows the facade to derive the AAP backend for profiles that preserve their
+existing AAP settings by default. NetworkClass registration can succeed
 while networking resources fail. The twelve resource-operation entrypoints for
 VirtualNetwork, Subnet, SecurityGroup, ExternalIPPool, ExternalIP, and
 NATGateway deliberately return `NotImplemented` before provider-side work.

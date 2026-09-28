@@ -16,6 +16,7 @@ NetworkClass manager names and select the AAP backend:
 | `fabricManager` | `k8sManager` | Derived AAP backend | Status |
 |-----------------|--------------|---------------------|--------|
 | `netris` | `""` | `netris` / `netris.steps` | Supported |
+| `agentless_net` | `""` | `agentless_net` / `agentless_net.steps` | Supported (NotImplemented resource-operation stub) |
 | `""` | `k8s_only` | `agentless_net` / `agentless_net.steps` | Supported (default) |
 | `""` | `""` | Must set managers via `global.networking.networkClass` or expert overrides | Expert only |
 | `cudn_net` | * | — | Reserved; Helm render fails |
@@ -36,6 +37,13 @@ When `global.networking.fabricManager` is `netris`, Helm automatically:
 When `fabricManager` is empty and `k8sManager` is `k8s_only`, Helm enables
 `operator.networkManagers.k8sManagers.k8s_only`, sets the agentless AAP backend,
 and points the NetworkClass at `k8sManager: k8s_only`.
+
+When `fabricManager` is `agentless_net`, Helm enables the AgentlessNet fabric
+manager, selects the AgentlessNet AAP collection, and points the NetworkClass
+at `fabricManager: agentless_net`. Its resource-operation tasks intentionally
+return `NotImplemented`; use this profile to verify dispatch and failure-status
+handling without provider-side changes. This is separate from the default
+`k8s_only` profile, which provisions Kubernetes-native networking.
 
 The facade does **not** enable the AAP instance groups themselves. Set both
 `aap.instanceGroups.clusterFulfillment.enabled` and
@@ -81,6 +89,11 @@ global:
     fabricManager: ""
     k8sManager: k8s_only
 ```
+
+Use `fabricManager: agentless_net` and `k8sManager: ""` to select the
+fail-fast unified-resource stub. The `agentless-net-stub` installer overlay
+sets this profile and clears AAP expert overrides so the selected backend
+reaches the fulfillment instance group.
 
 ## Expert overrides
 

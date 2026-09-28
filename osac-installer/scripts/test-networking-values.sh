@@ -79,6 +79,30 @@ render_success \
   --set global.networking.fabricManager= \
   --set global.networking.k8sManager=k8s_only
 
+# AgentlessNet is a distinct fabric-manager profile for the fail-fast
+# unified-resource operations; its NetworkClass and AAP backend must agree.
+render_success \
+  agentless-net-stub \
+  'fabric_manager\":\"agentless_net' \
+  --set global.networking.fabricManager=agentless_net \
+  --set global.networking.k8sManager=
+
+render_success \
+  agentless-net-stub-manager-configmap \
+  'name: osac-network-fabric-manager-agentless-net' \
+  --set global.networking.fabricManager=agentless_net \
+  --set global.networking.k8sManager=
+
+# The disposable CaaS test profile normally preserves ci.steps through the AAP
+# expert override. The overlay clears it so the facade installs AgentlessNet.
+render_success \
+  agentless-net-stub-caas-overlay \
+  'fabric_manager\":\"agentless_net' \
+  --values "${SCRIPT_DIR}/../values/caas-ci/instance.yaml" \
+  --values "${SCRIPT_DIR}/../values/agentless-net-stub.yaml" \
+  --set-string service.externalHostname=fulfillment-api.test.example.com \
+  --set-string service.internalHostname=fulfillment-internal-api.test.example.com
+
 # Netris requires the fabric-specific connection details and derives its
 # manager and NetworkClass. These are test-only placeholders, never credentials.
 render_success \
@@ -250,5 +274,12 @@ render_operator_success \
   --set networkManagers.enabled=true \
   --set global.networking.fabricManager= \
   --set global.networking.k8sManager=k8s_only
+
+render_operator_success \
+  facade-auto-enable-agentless-net \
+  'name: osac-network-fabric-manager-agentless-net' \
+  --set networkManagers.enabled=true \
+  --set global.networking.fabricManager=agentless_net \
+  --set global.networking.k8sManager=
 
 echo "networking values validation passed"

@@ -34,14 +34,12 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	"github.com/osac-project/osac/fulfillment-service/internal/utils"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 type PrivateClustersServerBuilder struct {
 	logger                       *slog.Logger
-	notifier                     events.Notifier
 	attributionLogic             auth.AttributionLogic
 	tenancyLogic                 auth.TenancyLogic
 	metricsRegisterer            prometheus.Registerer
@@ -54,7 +52,6 @@ var _ privatev1.ClustersServer = (*PrivateClustersServer)(nil)
 type PrivateClustersServer struct {
 	privatev1.UnimplementedClustersServer
 	logger                    *slog.Logger
-	notifier                  events.Notifier
 	tenancyLogic              auth.TenancyLogic
 	templatesDao              *dao.GenericDAO[*privatev1.ClusterTemplate]
 	catalogItemsDao           *dao.GenericDAO[*privatev1.ClusterCatalogItem]
@@ -78,11 +75,6 @@ func NewPrivateClustersServer() *PrivateClustersServerBuilder {
 
 func (b *PrivateClustersServerBuilder) SetLogger(value *slog.Logger) *PrivateClustersServerBuilder {
 	b.logger = value
-	return b
-}
-
-func (b *PrivateClustersServerBuilder) SetNotifier(value events.Notifier) *PrivateClustersServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -208,7 +200,6 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer)
-	addDAOEventCallback(externalIPPoolDaoBuilder, b.notifier)
 	externalIPPoolDao, err := externalIPPoolDaoBuilder.Build()
 	if err != nil {
 		return
@@ -228,7 +219,6 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer)
-	addDAOEventCallback(externalIPDaoBuilder, b.notifier)
 	externalIPDao, err := externalIPDaoBuilder.Build()
 	if err != nil {
 		return
@@ -238,7 +228,6 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer)
-	addDAOEventCallback(externalIPAttachmentDaoBuilder, b.notifier)
 	externalIPAttachmentDao, err := externalIPAttachmentDaoBuilder.Build()
 	if err != nil {
 		return
@@ -262,7 +251,6 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 	generic, err := NewGenericServer[*privatev1.Cluster]().
 		SetLogger(b.logger).
 		SetService(privatev1.Clusters_ServiceDesc.ServiceName).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
@@ -276,7 +264,6 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 	// Create and populate the object:
 	result = &PrivateClustersServer{
 		logger:                    b.logger,
-		notifier:                  b.notifier,
 		tenancyLogic:              b.tenancyLogic,
 		templatesDao:              templatesDao,
 		catalogItemsDao:           catalogItemsDao,
@@ -660,11 +647,11 @@ func (s *PrivateClustersServer) ensureClusterVersion(
 		}
 		return version, nil
 	}
-	ref, version, err := resolveDefaultClusterVersion(ctx, s.logger, s.clusterVersionsDao)
+	version, err := resolveDefaultClusterVersion(ctx, s.logger, s.clusterVersionsDao)
 	if err != nil {
 		return nil, err
 	}
-	cluster.GetSpec().SetVersion(ref)
+	cluster.GetSpec().SetVersion(buildClusterVersionReference(version))
 	return version, nil
 }
 

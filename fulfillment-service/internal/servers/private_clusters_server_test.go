@@ -506,7 +506,10 @@ var _ = Describe("Private clusters server", func() {
 			storedOperators := getResponse.GetObject().GetSpec().GetAddOnOperators()
 			Expect(storedOperators).To(HaveLen(len(operators)))
 			for i, operator := range operators {
-				Expect(proto.Equal(storedOperators[i], operator)).To(BeTrue())
+				Expect(storedOperators[i].GetId()).To(Equal(operator.GetId()))
+				Expect(storedOperators[i].GetName()).To(Equal(operator.GetName()))
+				Expect(storedOperators[i].GetShared()).To(BeTrue())
+				Expect(storedOperators[i].GetProject()).To(BeEmpty())
 			}
 		})
 
@@ -714,7 +717,29 @@ var _ = Describe("Private clusters server", func() {
 			})
 			Expect(err).ToNot(HaveOccurred())
 			Expect(object.GetSpec().GetAddOnOperators()).To(HaveLen(1))
-			Expect(object.GetSpec().GetAddOnOperators()[0].GetId()).To(Equal(shared.GetId()))
+			resolved := object.GetSpec().GetAddOnOperators()[0]
+			Expect(resolved.GetId()).To(Equal(shared.GetId()))
+			Expect(resolved.GetName()).To(Equal(shared.GetMetadata().GetName()))
+			Expect(resolved.GetShared()).To(BeTrue())
+			Expect(resolved.GetProject()).To(Equal(shared.GetMetadata().GetProject()))
+
+			updateResponse, err := server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+				Object: privatev1.Cluster_builder{
+					Id: object.GetId(),
+					Spec: privatev1.ClusterSpec_builder{
+						AddOnOperators: []*privatev1.AddOnOperatorReference{
+							privatev1.AddOnOperatorReference_builder{
+								Name:   shared.GetMetadata().GetName(),
+								Shared: true,
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.add_on_operators"}},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updateResponse.GetObject().GetSpec().GetAddOnOperators()).To(HaveLen(1))
+			Expect(updateResponse.GetObject().GetSpec().GetAddOnOperators()[0].GetShared()).To(BeTrue())
 		})
 
 		It("resolves an unscoped shared operator name from a non-default project", func() {

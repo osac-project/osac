@@ -208,10 +208,12 @@ func (s *PrivateClustersServer) validateAndExpandAddOnOperators(
 	resolvedReferences := make([]*privatev1.AddOnOperatorReference, 0, len(selectedOrder))
 	for _, operatorID := range selectedOrder {
 		operator := selected[operatorID]
-		resolvedReferences = append(resolvedReferences, privatev1.AddOnOperatorReference_builder{
+		ref := privatev1.AddOnOperatorReference_builder{
 			Id:   operator.GetId(),
 			Name: operator.GetMetadata().GetName(),
-		}.Build())
+		}.Build()
+		canonicalizeResourceReference(ref, operator)
+		resolvedReferences = append(resolvedReferences, ref)
 	}
 	cluster.GetSpec().SetAddOnOperators(resolvedReferences)
 	return nil

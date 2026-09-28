@@ -94,13 +94,13 @@ func buildClusterVersionReference(cv *privatev1.ClusterVersion) *privatev1.Clust
 	return ref
 }
 
-// resolveDefaultClusterVersion looks up the system default ClusterVersion (spec.is_default == true),
-// validates it is usable, and returns both its reference and object.
+// resolveDefaultClusterVersion looks up and validates the system default ClusterVersion
+// (spec.is_default == true).
 func resolveDefaultClusterVersion(
 	ctx context.Context,
 	logger *slog.Logger,
 	clusterVersionsDao *dao.GenericDAO[*privatev1.ClusterVersion],
-) (*privatev1.ClusterVersionReference, *privatev1.ClusterVersion, error) {
+) (*privatev1.ClusterVersion, error) {
 	response, err := clusterVersionsDao.List().
 		SetFilter("this.spec.is_default == true && !has(this.metadata.deletion_timestamp)").
 		SetLimit(1).
@@ -109,11 +109,11 @@ func resolveDefaultClusterVersion(
 		logger.ErrorContext(ctx, "Failed to look up default cluster version",
 			slog.Any("error", err),
 		)
-		return nil, nil, grpcstatus.Errorf(grpccodes.Internal,
+		return nil, grpcstatus.Errorf(grpccodes.Internal,
 			"failed to look up default cluster version")
 	}
 	if len(response.GetItems()) == 0 {
-		return nil, nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
+		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"no version specified and no system default version is configured")
 	}
 	if response.GetTotal() > 1 {
@@ -124,7 +124,7 @@ func resolveDefaultClusterVersion(
 	cv := response.GetItems()[0]
 	versionName := cv.GetMetadata().GetName()
 	if err := validateResolvedClusterVersion(cv, versionName, ""); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return buildClusterVersionReference(cv), cv, nil
+	return cv, nil
 }

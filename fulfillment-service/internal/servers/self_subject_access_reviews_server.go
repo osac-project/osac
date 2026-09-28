@@ -24,8 +24,9 @@ import (
 )
 
 type SelfSubjectAccessReviewsServerBuilder struct {
-	logger    *slog.Logger
-	evaluator auth.AuthorizationEvaluator
+	logger       *slog.Logger
+	evaluator    auth.AuthorizationEvaluator
+	tenancyLogic auth.TenancyLogic
 }
 
 var _ publicv1.SelfSubjectAccessReviewsServer = (*SelfSubjectAccessReviewsServer)(nil)
@@ -57,6 +58,12 @@ func (b *SelfSubjectAccessReviewsServerBuilder) SetEvaluator(value auth.Authoriz
 	return b
 }
 
+// SetTenancyLogic sets the tenancy logic. This is mandatory.
+func (b *SelfSubjectAccessReviewsServerBuilder) SetTenancyLogic(value auth.TenancyLogic) *SelfSubjectAccessReviewsServerBuilder {
+	b.tenancyLogic = value
+	return b
+}
+
 // Build builds the self subject access reviews server.
 func (b *SelfSubjectAccessReviewsServerBuilder) Build() (result *SelfSubjectAccessReviewsServer, err error) {
 	if b.logger == nil {
@@ -64,6 +71,9 @@ func (b *SelfSubjectAccessReviewsServerBuilder) Build() (result *SelfSubjectAcce
 	}
 	if b.evaluator == nil {
 		return nil, errors.New("evaluator is mandatory")
+	}
+	if b.tenancyLogic == nil {
+		return nil, errors.New("tenancy logic is mandatory")
 	}
 
 	inMapper, err := NewGenericMapper[*publicv1.SelfSubjectAccessReview, *privatev1.SelfSubjectAccessReview]().
@@ -84,6 +94,7 @@ func (b *SelfSubjectAccessReviewsServerBuilder) Build() (result *SelfSubjectAcce
 	delegate, err := NewPrivateSelfSubjectAccessReviewsServer().
 		SetLogger(b.logger).
 		SetEvaluator(b.evaluator).
+		SetTenancyLogic(b.tenancyLogic).
 		Build()
 	if err != nil {
 		return nil, err

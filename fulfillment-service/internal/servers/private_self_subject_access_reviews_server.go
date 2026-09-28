@@ -31,8 +31,9 @@ import (
 
 // PrivateSelfSubjectAccessReviewsServerBuilder contains the data and logic needed to create a private self subject access reviews server.
 type PrivateSelfSubjectAccessReviewsServerBuilder struct {
-	logger    *slog.Logger
-	evaluator auth.AuthorizationEvaluator
+	logger       *slog.Logger
+	evaluator    auth.AuthorizationEvaluator
+	tenancyLogic auth.TenancyLogic
 }
 
 var _ privatev1.SelfSubjectAccessReviewsServer = (*PrivateSelfSubjectAccessReviewsServer)(nil)
@@ -45,9 +46,10 @@ type privateSelfSubjectAccessReviewsServerServiceInfo struct {
 type PrivateSelfSubjectAccessReviewsServer struct {
 	privatev1.UnimplementedSelfSubjectAccessReviewsServer
 
-	logger    *slog.Logger
-	evaluator auth.AuthorizationEvaluator
-	services  map[string]*privateSelfSubjectAccessReviewsServerServiceInfo
+	logger       *slog.Logger
+	evaluator    auth.AuthorizationEvaluator
+	tenancyLogic auth.TenancyLogic
+	services     map[string]*privateSelfSubjectAccessReviewsServerServiceInfo
 }
 
 // NewPrivateSelfSubjectAccessReviewsServer creates a new builder for the private self subject access reviews server.
@@ -67,12 +69,21 @@ func (b *PrivateSelfSubjectAccessReviewsServerBuilder) SetEvaluator(value auth.A
 	return b
 }
 
+// SetTenancyLogic sets the tenancy logic. This is mandatory.
+func (b *PrivateSelfSubjectAccessReviewsServerBuilder) SetTenancyLogic(value auth.TenancyLogic) *PrivateSelfSubjectAccessReviewsServerBuilder {
+	b.tenancyLogic = value
+	return b
+}
+
 func (b *PrivateSelfSubjectAccessReviewsServerBuilder) Build() (*PrivateSelfSubjectAccessReviewsServer, error) {
 	if b.logger == nil {
 		return nil, errors.New("logger is mandatory")
 	}
 	if b.evaluator == nil {
 		return nil, errors.New("evaluator is mandatory")
+	}
+	if b.tenancyLogic == nil {
+		return nil, errors.New("tenancy logic is mandatory")
 	}
 
 	// Pre-build service info map for fast lookups
@@ -106,9 +117,10 @@ func (b *PrivateSelfSubjectAccessReviewsServerBuilder) Build() (*PrivateSelfSubj
 	})
 
 	result := &PrivateSelfSubjectAccessReviewsServer{
-		logger:    b.logger,
-		evaluator: b.evaluator,
-		services:  services,
+		logger:       b.logger,
+		evaluator:    b.evaluator,
+		tenancyLogic: b.tenancyLogic,
+		services:     services,
 	}
 
 	return result, nil
@@ -145,13 +157,65 @@ func (s *PrivateSelfSubjectAccessReviewsServer) Create(ctx context.Context, requ
 		return nil, status.Error(codes.Internal, "failed to process authentication")
 	}
 
-	// Extract tenant from request metadata if provided
-	// The OPA policy will validate that the user is actually a member of this tenant
+	// Determine the tenant that would be assigned, using the same logic as GenericServer.
+	// This ensures SelfSubjectAccessReview accurately reflects what would happen in a real operation.
+	requestedTenant := ""
 	if metadata := review.GetMetadata(); metadata != nil {
-		authContext.Tenant = metadata.GetTenant()
+		requestedTenant = metadata.GetTenant()
 	}
 
-	// Evaluate authorization using the shared evaluator
+	// For Get, List, and Delete methods, use the requested tenant directly without validation
+	// For other methods (Create, Update, etc.), use shared tenant determination logic
+	method := spec.GetMethod()
+	var determinedTenant string
+	if method == "Get" || method == "List" || method == "Delete" {
+		determinedTenant = requestedTenant
+	} else {
+		// Use shared tenant determination logic (same as GenericServer)
+		// Note: currentTenant is "" because SelfSubjectAccessReview is always a hypothetical "create" check
+		var err error
+		determinedTenant, err = auth.DetermineTenantForOperation(ctx, s.tenancyLogic, requestedTenant, "")
+		if err != nil {
+			// Convert to gRPC error using shared mapper to ensure consistent error messages
+			grpcErr := convertTenantErrorToGRPC(ctx, err, s.logger, requestedTenant)
+
+			// For tenant denial errors (TenantInvisibleError and TenantUnassignableError),
+			// return an Allowed: false response. For other errors, return the gRPC error.
+			var tenantInvisibleErr *auth.TenantInvisibleError
+			var tenantUnassignableErr *auth.TenantUnassignableError
+			if errors.As(err, &tenantInvisibleErr) || errors.As(err, &tenantUnassignableErr) {
+				return &privatev1.SelfSubjectAccessReviewsCreateResponse{
+					Object: &privatev1.SelfSubjectAccessReview{
+						Metadata: review.Metadata,
+						Spec:     review.Spec,
+						Status: &privatev1.SelfSubjectAccessReviewStatus{
+							Allowed: false,
+							Reason:  status.Convert(grpcErr).Message(),
+						},
+					},
+				}, nil
+			}
+			// For other errors, return the gRPC error directly
+			return nil, grpcErr
+		}
+
+		// For Create method, reject empty determinedTenant
+		if method == "Create" && determinedTenant == "" {
+			return &privatev1.SelfSubjectAccessReviewsCreateResponse{
+				Object: &privatev1.SelfSubjectAccessReview{
+					Metadata: review.Metadata,
+					Spec:     review.Spec,
+					Status: &privatev1.SelfSubjectAccessReviewStatus{
+						Allowed: false,
+						Reason:  "there is no default tenant",
+					},
+				},
+			}, nil
+		}
+	}
+	authContext.Tenant = determinedTenant
+
+	// Evaluate authorization using the shared evaluator with the determined tenant
 	decision, err := s.evaluator.Evaluate(ctx, authContext, methodPath)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to evaluate authorization", slog.Any("error", err))

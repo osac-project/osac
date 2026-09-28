@@ -791,6 +791,31 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		publicv1.RegisterConsoleSessionsServer(grpcServer, consoleServer)
 	}
 
+	// Create the self subject access reviews servers:
+	c.logger.InfoContext(ctx, "Creating self subject access reviews server")
+	selfSubjectAccessReviewsServer, err := servers.NewSelfSubjectAccessReviewsServer().
+		SetLogger(c.logger).
+		SetEvaluator(evaluator).
+		SetTenancyLogic(tenancyLogic).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create self subject access reviews server: %w", err)
+	}
+	// filterable-resource-exempt: create-only permission check API, no List RPC or CEL filter field
+	publicv1.RegisterSelfSubjectAccessReviewsServer(grpcServer, selfSubjectAccessReviewsServer)
+
+	c.logger.InfoContext(ctx, "Creating private self subject access reviews server")
+	privateSelfSubjectAccessReviewsServer, err := servers.NewPrivateSelfSubjectAccessReviewsServer().
+		SetLogger(c.logger).
+		SetEvaluator(evaluator).
+		SetTenancyLogic(tenancyLogic).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create private self subject access reviews server: %w", err)
+	}
+	// filterable-resource-exempt: create-only permission check API, no List RPC or CEL filter field
+	privatev1.RegisterSelfSubjectAccessReviewsServer(grpcServer, privateSelfSubjectAccessReviewsServer)
+
 	// Create the events server:
 	c.logger.InfoContext(ctx, "Creating events server")
 	eventsServer, err := servers.NewEventsServer().

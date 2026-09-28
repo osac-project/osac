@@ -64,6 +64,13 @@ isolation coverage remains a QE gap under
 [OSAC-4850](https://redhat.atlassian.net/browse/OSAC-4850); no qualifying VN
 runner is tracked here.
 
+The isolated HostedCluster role regression runs with
+`uv run --group development ansible-playbook collections/ansible_collections/osac/service/roles/hosted_cluster/tests/test.yml`.
+It executes NodePool definition transforms for distinct NodeSets sharing an
+instance type and independent scaling. It does not create Kubernetes resources
+or exercise AAP/provider endpoints; the applicable component-integration and
+provider-boundary validations remain required.
+
 ## Generated and vendored files
 
 - There is no source-code generator for roles. Do not hand-edit third-party content under `vendor/`.

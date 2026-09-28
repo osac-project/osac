@@ -43,6 +43,8 @@ PASSED=()
 WORKFLOWS=(
   "cluster_create"
   "cluster_delete"
+  "cluster_create_caas"
+  "cluster_delete_caas"
   "cluster_post_install"
   "compute_instance_create"
   "compute_instance_with_gpu_create"

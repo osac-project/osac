@@ -91,13 +91,23 @@ def fabric_domain_resources(
     k8s_hub_client: K8sClient,
 ) -> Iterator[FabricDomainResources]:
     """Create tenant-owned VirtualNetworks on an Ethernet east-west capable class."""
-    network_classes = private_grpc.list_network_classes()
-    if not any(
-        network_class.get("capabilities", {}).get("supportsEastWestEthernet")
-        and network_class.get("spec", {}).get("eastWestConfig", {}).get("ethernetEw", {}).get("templateId")
-        for network_class in network_classes
+    # Public VirtualNetwork creation cannot select a NetworkClass; it uses the default.
+    default_network_class = next(
+        (
+            network_class
+            for network_class in private_grpc.list_network_classes()
+            if network_class.get("isDefault") and not network_class.get("metadata", {}).get("deletionTimestamp")
+        ),
+        None,
+    )
+    if not default_network_class or not (
+        default_network_class.get("status", {}).get("state") == "NETWORK_CLASS_STATE_READY"
+        and default_network_class.get("capabilities", {}).get("supportsEastWestEthernet")
+        and default_network_class.get("spec", {}).get("eastWestConfig", {}).get("ethernetEw", {}).get("templateId")
     ):
-        pytest.skip("FabricDomain E2E requires an Ethernet east-west capable NetworkClass with a template ID")
+        pytest.skip(
+            "FabricDomain E2E requires a ready default NetworkClass with Ethernet east-west support and a template ID"
+        )
 
     resources = FabricDomainResources(clients={"tenant1": jwt_grpc_tenant1_admin, "tenant2": jwt_grpc_tenant2})
     octet = int(uuid4().hex[:2], 16)
@@ -113,15 +123,26 @@ def fabric_domain_resources(
 
         yield resources
     finally:
+        cleanup_errors: list[Exception] = []
         for client, fabric_domain_id in reversed(resources.fabric_domains):
-            _delete_fabric_domain(client, fabric_domain_id)
+            try:
+                _delete_fabric_domain(client, fabric_domain_id)
+            except Exception as exc:
+                exc.add_note(f"FabricDomain {fabric_domain_id} cleanup")
+                cleanup_errors.append(exc)
         for tenant, virtual_network_id in reversed(list(resources.virtual_networks.items())):
-            _delete_virtual_network(
-                resources.clients[tenant],
-                virtual_network_id=virtual_network_id,
-                k8s=k8s_hub_client,
-                cr_name=resources.virtual_network_crs.get(tenant),
-            )
+            try:
+                _delete_virtual_network(
+                    resources.clients[tenant],
+                    virtual_network_id=virtual_network_id,
+                    k8s=k8s_hub_client,
+                    cr_name=resources.virtual_network_crs.get(tenant),
+                )
+            except Exception as exc:
+                exc.add_note(f"VirtualNetwork {virtual_network_id} cleanup")
+                cleanup_errors.append(exc)
+        if cleanup_errors:
+            raise ExceptionGroup("FabricDomain fixture cleanup failed", cleanup_errors)
 
 
 @pytest.mark.parametrize(

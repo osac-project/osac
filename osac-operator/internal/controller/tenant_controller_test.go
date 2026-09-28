@@ -123,7 +123,7 @@ var _ = Describe("Tenant Controller", func() {
 			}
 		})
 
-		It("should be Ready without creating a namespace on the target cluster", func() {
+		It("should be Ready without creating a namespace or changing existing conditions", func() {
 			tenant := &v1alpha1.Tenant{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, tenant)).To(Succeed())
 			tenant.Status.Namespace = resourceName
@@ -145,7 +145,8 @@ var _ = Describe("Tenant Controller", func() {
 			Expect(k8sClient.Get(ctx, typeNamespacedName, tenant)).To(Succeed())
 			Expect(tenant.Status.Phase).To(Equal(v1alpha1.TenantPhaseReady))
 			Expect(tenant.Status.Namespace).To(BeEmpty())
-			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionNamespaceReady)).To(BeNil())
+			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionNamespaceReady)).NotTo(BeNil())
+			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionNamespaceReady).Status).To(Equal(metav1.ConditionFalse))
 			Expect(tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady).Status).To(Equal(metav1.ConditionTrue))
 			Expect(apierrors.IsNotFound(k8sClient.Get(ctx, types.NamespacedName{Name: resourceName}, &corev1.Namespace{}))).To(BeTrue())
 		})

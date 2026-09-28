@@ -359,7 +359,11 @@ func (r *FabricDomainReconciler) handleDelete(ctx context.Context, domain *v1alp
 		return ctrl.Result{}, nil
 	}
 
-	if r.ProvisioningProvider != nil && (domain.Status.ProvisioningIntent || len(domain.Status.ProvisioningJobs) > 0 || domain.Status.BackendID != "") {
+	hasProvisioningState := domain.Status.ProvisioningIntent || len(domain.Status.ProvisioningJobs) > 0 || domain.Status.BackendID != ""
+	if hasProvisioningState {
+		if r.ProvisioningProvider == nil {
+			return ctrl.Result{}, fmt.Errorf("cannot clean up FabricDomain %q: AAP provisioning provider is unavailable", domain.Name)
+		}
 		aapCtx := provisioning.WithAAPExtraVars(ctx, fabricDomainAAPExtraVars(domain, nil, ""))
 		result, done, err := provisioning.RunDeprovisioningLifecycle(aapCtx, r.ProvisioningProvider, domain,
 			&domain.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval)

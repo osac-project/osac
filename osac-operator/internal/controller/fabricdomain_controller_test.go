@@ -294,6 +294,24 @@ var _ = Describe("FabricDomainReconciler", func() {
 		Expect(deprovisionCalls).To(Equal(1))
 	})
 
+	It("retains the finalizer when provisioning state exists but the provider is unavailable", func() {
+		deletingDomain := &v1alpha1.FabricDomain{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(domain), deletingDomain)).To(Succeed())
+		deletingDomain.Finalizers = append(deletingDomain.Finalizers, osacFabricDomainFinalizer)
+		Expect(k8sClient.Update(ctx, deletingDomain)).To(Succeed())
+		deletingDomain.Status.ProvisioningIntent = true
+		Expect(k8sClient.Status().Update(ctx, deletingDomain)).To(Succeed())
+		reconciler.ProvisioningProvider = nil
+
+		_, err := reconciler.handleDelete(ctx, deletingDomain)
+		Expect(err).To(MatchError(ContainSubstring("AAP provisioning provider is unavailable")))
+		Expect(deletingDomain.Finalizers).To(ContainElement(osacFabricDomainFinalizer))
+
+		persisted := &v1alpha1.FabricDomain{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(domain), persisted)).To(Succeed())
+		Expect(persisted.Finalizers).To(ContainElement(osacFabricDomainFinalizer))
+	})
+
 	It("reports AAP failures as failed Ready conditions and failed members", func() {
 		mockProvider.getProvisionStatusFunc = func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatus, error) {
 			return provisioning.ProvisionStatus{JobID: jobID, State: v1alpha1.JobStateFailed, Message: "Netris rejected the request"}, nil

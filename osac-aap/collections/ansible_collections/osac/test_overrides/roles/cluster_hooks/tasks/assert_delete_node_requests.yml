@@ -1,0 +1,6 @@
+---
+- name: Verify hosted-cluster deletion receives requested instance types
+  ansible.builtin.assert:
+    that:
+      - hosted_cluster_node_requests == cluster_order.spec.nodeRequests
+      - hosted_cluster_node_requests[0].bareMetal.instanceType == 'bm.large'

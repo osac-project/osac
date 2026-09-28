@@ -1,0 +1,8 @@
+---
+- name: Create cluster network
+  ansible.builtin.include_tasks: create.yaml
+  when: cluster_network_state == 'present'
+
+- name: Delete cluster network
+  ansible.builtin.include_tasks: delete.yaml
+  when: cluster_network_state == 'absent'

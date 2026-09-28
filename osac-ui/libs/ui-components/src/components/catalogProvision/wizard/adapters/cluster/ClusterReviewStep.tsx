@@ -8,6 +8,7 @@ import {
   Spinner,
   Stack,
   StackItem,
+  Title,
 } from '@patternfly/react-core';
 import { useFormikContext } from 'formik';
 
@@ -157,7 +158,14 @@ export const ClusterReviewStep = ({ catalogItem }: Props) => {
               {formatNodeSetsForReview(data, values.spec.nodeSetRows)}
             </DescriptionListDescription>
           </DescriptionListGroup>
+        </DescriptionList>
+      </StackItem>
 
+      <StackItem>
+        <Title headingLevel="h3">{t('Infrastructure Networking')}</Title>
+      </StackItem>
+      <StackItem>
+        <DescriptionList isHorizontal isCompact>
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Network')}</DescriptionListTerm>
             <DescriptionListDescription>
@@ -204,7 +212,14 @@ export const ClusterReviewStep = ({ catalogItem }: Props) => {
               {values.spec.autoExternalIpAttachment ? t('Yes') : t('No')}
             </DescriptionListDescription>
           </DescriptionListGroup>
+        </DescriptionList>
+      </StackItem>
 
+      <StackItem>
+        <Title headingLevel="h3">{t('Cluster Networking')}</Title>
+      </StackItem>
+      <StackItem>
+        <DescriptionList isHorizontal isCompact>
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Pod CIDR')}</DescriptionListTerm>
             <DescriptionListDescription>

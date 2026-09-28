@@ -1,3 +1,5 @@
+import { Alert, List, ListItem, Stack, StackItem } from '@patternfly/react-core';
+
 import type { Cluster } from '@osac/types';
 import DeleteResourceModal from '@osac/ui-components/components/Resource/DeleteResourceModal.tsx';
 
@@ -22,9 +24,31 @@ const ClusterDeleteConfirmModal = ({
   return (
     <DeleteResourceModal
       resourceName={clusterName}
-      label={t(
-        'This permanently deletes the cluster and all its resources. This action cannot be undone.',
-      )}
+      label={
+        <Stack hasGutter>
+          <StackItem>
+            {t(
+              'This permanently deletes the cluster and all its resources. This action cannot be undone.',
+            )}
+          </StackItem>
+          <StackItem>
+            <Alert variant="info" isInline isPlain title={t('Resource cleanup')}>
+              <List>
+                <ListItem>
+                  {t(
+                    'Auto-provisioned External IPs and External IP Attachments will be permanently deleted.',
+                  )}
+                </ListItem>
+                <ListItem>
+                  {t(
+                    'Manually created External IP Attachments will be detached and returned to Pending status.',
+                  )}
+                </ListItem>
+              </List>
+            </Alert>
+          </StackItem>
+        </Stack>
+      }
       errorLabel={t('Failed to delete cluster')}
       onClose={onClose}
       onSuccess={onSuccess}

@@ -235,6 +235,9 @@ func (r *VirtualNetworkReconciler) handleProvisioning(ctx context.Context, vnet 
 				setReadyConditionFailed(&vnet.Status.Conditions, message)
 			},
 			OnSuccess: func(_ provisioning.ProvisionStatus) {
+				if vnet.Annotations[osacImplementationStrategyAnnotation] == "agentless_net" {
+					vnet.Status.BackendNetworkID = string(vnet.UID)
+				}
 				vnet.Status.Phase = v1alpha1.VirtualNetworkPhaseReady
 				setReadyConditionTrue(&vnet.Status.Conditions)
 			},

@@ -1,4 +1,21 @@
 ---
-- name: Report unimplemented AgentlessNet operation
-  ansible.builtin.fail:
-    msg: "NotImplemented: agentless_net resource operations are not implemented."
+- name: Load the AgentlessNet provider inventory
+  ansible.builtin.include_tasks: _load_network_node_inventory.yaml
+
+- name: Read the VirtualNetwork UID
+  ansible.builtin.set_fact:
+    agentless_net_vn_uid: "{{ virtual_network.metadata.uid | default('') }}"
+
+- name: Validate VirtualNetwork deletion input
+  ansible.builtin.assert:
+    that:
+      - agentless_net_vn_uid | length > 0
+    fail_msg: AgentlessNet VirtualNetwork deletion requires the resource UID.
+
+- name: Remove the VirtualNetwork namespace and release its saved transit state
+  osac.templates.agentless_net_state:
+    action: delete_virtual_network
+    state_file: "{{ agentless_net_network_state_file }}"
+    uid: "{{ agentless_net_vn_uid }}"
+  delegate_to: "{{ groups['net_nodes'][0] }}"
+  become: true

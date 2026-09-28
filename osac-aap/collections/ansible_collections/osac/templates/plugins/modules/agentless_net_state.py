@@ -1,0 +1,123 @@
+#!/usr/bin/python
+"""Provision and remove AgentlessNet VirtualNetwork state."""
+
+from __future__ import annotations
+
+from ansible.module_utils.basic import AnsibleModule
+
+from ansible_collections.osac.templates.plugins.module_utils.agentless_net_state import (
+    StateError,
+    StateStore,
+)
+
+
+DOCUMENTATION = r"""
+---
+module: agentless_net_state
+short_description: Provision or remove an AgentlessNet VirtualNetwork
+description:
+  - Records the UID-keyed VirtualNetwork mapping before applying network state.
+  - Protects the state file with a stable sidecar lock and atomic replacement.
+options:
+  action:
+    description: State operation to perform.
+    type: str
+    required: true
+    choices: [ensure_virtual_network, delete_virtual_network]
+  state_file:
+    description: Path to the AgentlessNet API state file on the managed node.
+    type: path
+    required: true
+  uid:
+    description: Stable VirtualNetwork UID.
+    type: str
+    required: true
+  transit_cidr_pool:
+    description: Provider-configured IPv4 pool from which a transit /30 is allocated.
+    type: str
+  external_interface:
+    description: Provider-facing network-node interface.
+    type: str
+  virtual_network_cidr:
+    description: VirtualNetwork IPv4 supernet.
+    type: str
+author:
+  - OSAC project
+version_added: "1.0.0"
+"""
+
+EXAMPLES = r"""
+- name: Provision a VirtualNetwork
+  osac.templates.agentless_net_state:
+    action: ensure_virtual_network
+    state_file: /etc/osac/agentless_network_state.json
+    uid: 01234567-89ab-cdef-0123-456789abcdef
+    transit_cidr_pool: 198.51.100.0/24
+    external_interface: eth0
+    virtual_network_cidr: 10.20.0.0/16
+"""
+
+RETURN = r"""
+backend_network_id:
+  description: Stable provider identifier, equal to the OSAC resource UID.
+  returned: when action is ensure_virtual_network
+  type: str
+"""
+
+
+def main() -> None:
+    module = AnsibleModule(
+        argument_spec={
+            "action": {
+                "type": "str",
+                "required": True,
+                "choices": ["ensure_virtual_network", "delete_virtual_network"],
+            },
+            "state_file": {"type": "path", "required": True},
+            "uid": {"type": "str", "required": True},
+            "transit_cidr_pool": {"type": "str"},
+            "external_interface": {"type": "str"},
+            "virtual_network_cidr": {"type": "str"},
+        },
+        required_if=[
+            (
+                "action",
+                "ensure_virtual_network",
+                ["transit_cidr_pool", "external_interface", "virtual_network_cidr"],
+            )
+        ],
+        supports_check_mode=True,
+    )
+    params = module.params
+    store = StateStore(params["state_file"])
+
+    try:
+        if params["action"] == "ensure_virtual_network":
+            if module.check_mode:
+                existing = store.get_virtual_network(params["uid"])
+                module.exit_json(
+                    changed=existing is None,
+                    backend_network_id=params["uid"],
+                )
+            _, state_changed, network_changed = store.ensure_and_reconcile_virtual_network(
+                params["uid"],
+                params["transit_cidr_pool"],
+                params["external_interface"],
+                params["virtual_network_cidr"],
+            )
+            module.exit_json(
+                changed=state_changed or network_changed,
+                backend_network_id=params["uid"],
+            )
+
+        if module.check_mode:
+            module.exit_json(changed=store.get_virtual_network(params["uid"]) is not None)
+        module.exit_json(
+            changed=store.delete_and_remove_virtual_network(params["uid"])
+        )
+    except StateError as error:
+        module.fail_json(msg=str(error))
+
+
+if __name__ == "__main__":
+    main()

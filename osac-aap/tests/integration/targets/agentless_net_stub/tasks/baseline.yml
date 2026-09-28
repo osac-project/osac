@@ -5,8 +5,6 @@
   vars:
     expected_error: "NotImplemented: agentless_net resource operations are not implemented."
     agentless_operations:
-      - create_virtual_network
-      - delete_virtual_network
       - create_subnet
       - delete_subnet
       - create_security_group
@@ -18,8 +16,6 @@
       - create_nat_gateway
       - delete_nat_gateway
     resource_playbooks:
-      - playbook_osac_create_virtual_network.yml
-      - playbook_osac_delete_virtual_network.yml
       - playbook_osac_create_subnet.yml
       - playbook_osac_delete_subnet.yml
       - playbook_osac_create_security_group.yml
@@ -39,6 +35,34 @@
             annotations:
               osac.openshift.io/implementation-strategy: agentless_net
   tasks:
+    - name: Validate the AgentlessNet VirtualNetwork lifecycle playbooks
+      ansible.builtin.command:
+        argv:
+          - ansible-playbook
+          - --syntax-check
+          - --inventory
+          - localhost,
+          - "{{ playbook_dir }}/../../../../../{{ item }}"
+          - -e
+          - "{{ resource_extra_vars | to_json }}"
+        chdir: "{{ playbook_dir }}/../../../../../"
+      register: virtual_network_syntax_result
+      changed_when: false
+      loop:
+        - playbook_osac_create_virtual_network.yml
+        - playbook_osac_delete_virtual_network.yml
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Verify VirtualNetwork lifecycle playbooks parse successfully
+      ansible.builtin.assert:
+        that:
+          - item.rc == 0
+        fail_msg: >-
+          {{ item.item }} failed syntax validation:
+          {{ item.stdout + item.stderr }}
+      loop: "{{ virtual_network_syntax_result.results }}"
+
     - name: Invoke every AgentlessNet resource-operation entrypoint
       ansible.builtin.include_tasks: ../expect_failure.yaml
       loop: "{{ agentless_operations }}"

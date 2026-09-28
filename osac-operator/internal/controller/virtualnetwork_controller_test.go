@@ -328,6 +328,10 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 		})
 
 		It("should set phase to Ready when job succeeds", func() {
+			vnet.UID = types.UID("virtual-network-uid")
+			vnet.Annotations = map[string]string{
+				osacImplementationStrategyAnnotation: "agentless_net",
+			}
 			vnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
 				{
 					JobID:     "success-job-101",
@@ -350,6 +354,7 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(0 * time.Second))
 			Expect(vnet.Status.Phase).To(Equal(osacv1alpha1.VirtualNetworkPhaseReady))
+			Expect(vnet.Status.BackendNetworkID).To(Equal(string(vnet.UID)))
 		})
 
 		It("should set phase to Failed when job fails", func() {

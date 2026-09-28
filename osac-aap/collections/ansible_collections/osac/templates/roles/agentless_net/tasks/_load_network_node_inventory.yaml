@@ -1,0 +1,25 @@
+---
+- name: Load AgentlessNet network-node inventory
+  ansible.builtin.include_vars:
+    file: "{{ agentless_net_inventory_file }}"
+    name: _agentless_net_inventory
+
+- name: Validate AgentlessNet network-node inventory
+  ansible.builtin.assert:
+    that:
+      - _agentless_net_inventory.all.children.net_nodes.hosts | default({}) | length > 0
+    fail_msg: AgentlessNet inventory must contain at least one network node.
+
+- name: Register AgentlessNet network nodes
+  ansible.builtin.add_host:
+    name: "{{ item.key }}"
+    groups: net_nodes
+    ansible_host: "{{ item.value.ansible_host }}"
+    ansible_user: "{{ item.value.ansible_user }}"
+    ansible_password: "{{ item.value.ansible_password | default(omit) }}"
+    ansible_ssh_common_args: >-
+      {{ item.value.ansible_ssh_common_args
+         | default(_agentless_net_inventory.all.vars.ansible_ssh_common_args | default(omit)) }}
+  loop: "{{ _agentless_net_inventory.all.children.net_nodes.hosts | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"

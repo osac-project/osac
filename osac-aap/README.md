@@ -40,14 +40,18 @@ pluggable backends:
 |----------------|------|---------|
 | `cudn_net` | ClusterUserDefinedNetwork (CUDN) on OpenShift | OVN-Kubernetes |
 | `netris` | Netris Controller API | Netris |
-| `agentless_net` | Unified networking stub for resource-operation testing | AgentlessNet (NotImplemented) |
+| `agentless_net` | UID-keyed VirtualNetwork namespace, transit uplink, and forwarding baseline | AgentlessNet |
 | `openstack` | OpenStack Neutron | Neutron |
 
-The `agentless_net` role currently provides twelve deliberate fail-fast
-entrypoints for VirtualNetwork, Subnet, SecurityGroup, ExternalIPPool,
-ExternalIP, and NATGateway create/delete operations. It performs no provider
-side work. Physical attachment, DHCP lease discovery, and ExternalIPAttachment
-operations are reserved for later API and CRD changes.
+The `agentless_net` role provisions and removes VirtualNetwork namespaces and
+their transit uplinks. Subnet, SecurityGroup, ExternalIPPool, ExternalIP, and
+NATGateway operations still fail fast. The unified Networking API stores its
+schema-v2 VirtualNetwork state at `AGENTLESS_NET_STATE_FILE` on the network
+node; the older `AGENTLESS_NET_IPAM_STATE_FILE` remains separate for the
+existing CaaS step workflows. The provider inventory supplies
+`transit_cidr_pool` and `external_interface` values, or they can be configured
+through `AGENTLESS_NET_TRANSIT_CIDR_POOL` and
+`AGENTLESS_NET_EXTERNAL_INTERFACE`.
 
 Plus MetalLB-based ExternalIPPool / ExternalIP management (`metallb_l2`).
 

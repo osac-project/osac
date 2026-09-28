@@ -1,4 +1,41 @@
 ---
-- name: Report unimplemented AgentlessNet operation
-  ansible.builtin.fail:
-    msg: "NotImplemented: agentless_net resource operations are not implemented."
+- name: Load the AgentlessNet provider inventory
+  ansible.builtin.include_tasks: _load_network_node_inventory.yaml
+
+- name: Read VirtualNetwork provider settings
+  ansible.builtin.set_fact:
+    agentless_net_vn_inventory_vars: >-
+      {{ (_agentless_net_inventory.all | default({})).get('vars', {}) }}
+    agentless_net_vn_uid: "{{ virtual_network.metadata.uid | default('') }}"
+    agentless_net_vn_cidr: "{{ virtual_network.spec.ipv4Cidr | default('') }}"
+
+- name: Resolve VirtualNetwork transit pool and external interface
+  ansible.builtin.set_fact:
+    agentless_net_vn_transit_pool: >-
+      {{ agentless_net_vn_inventory_vars.transit_cidr_pool
+         | default(agentless_net_transit_cidr_pool) }}
+    agentless_net_vn_external_interface: >-
+      {{ agentless_net_vn_inventory_vars.external_interface
+         | default(agentless_net_external_interface) }}
+
+- name: Validate VirtualNetwork provisioning inputs
+  ansible.builtin.assert:
+    that:
+      - agentless_net_vn_uid | length > 0
+      - agentless_net_vn_cidr | length > 0
+      - agentless_net_vn_transit_pool | length > 0
+      - agentless_net_vn_external_interface | length > 0
+    fail_msg: >-
+      AgentlessNet requires a VirtualNetwork UID and IPv4 CIDR, a provider
+      transit_cidr_pool, and a provider-facing external_interface.
+
+- name: Reconcile the VirtualNetwork namespace and forwarding baseline
+  osac.templates.agentless_net_state:
+    action: ensure_virtual_network
+    state_file: "{{ agentless_net_network_state_file }}"
+    uid: "{{ agentless_net_vn_uid }}"
+    transit_cidr_pool: "{{ agentless_net_vn_transit_pool }}"
+    external_interface: "{{ agentless_net_vn_external_interface }}"
+    virtual_network_cidr: "{{ agentless_net_vn_cidr }}"
+  delegate_to: "{{ groups['net_nodes'][0] }}"
+  become: true

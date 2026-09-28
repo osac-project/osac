@@ -6,7 +6,7 @@
         name: osac.templates.agentless_net
         tasks_from: "{{ operation_name }}"
   rescue:
-    - name: Assert {{ operation_name }} fails before changing state
+    - name: Assert failure before changing state for {{ operation_name }}
       ansible.builtin.assert:
         that:
           - ansible_failed_result.msg == expected_error

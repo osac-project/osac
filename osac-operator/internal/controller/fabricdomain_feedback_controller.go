@@ -112,22 +112,24 @@ func syncFabricDomainUpdate(_ context.Context, obj *v1alpha1.FabricDomain, remot
 	status.SetBackendId(obj.Status.BackendID)
 	status.SetVpcId(obj.Status.VPCID)
 
-	conditionType := privatev1.FabricDomainConditionType_FABRIC_DOMAIN_CONDITION_TYPE_PROGRESSING
-	conditionStatus := privatev1.ConditionStatus_CONDITION_STATUS_FALSE
-	switch obj.Status.Phase {
-	case v1alpha1.FabricDomainPhaseReady:
-		conditionType = privatev1.FabricDomainConditionType_FABRIC_DOMAIN_CONDITION_TYPE_READY
-		conditionStatus = privatev1.ConditionStatus_CONDITION_STATUS_TRUE
-	case v1alpha1.FabricDomainPhaseFailed:
-		conditionType = privatev1.FabricDomainConditionType_FABRIC_DOMAIN_CONDITION_TYPE_FAILED
-	}
+	conditionType, conditionStatus := fabricDomainConditionForPhase(obj.Status.Phase)
 
 	var reason, message string
-	var lastTransitionTime = metav1.Now()
+	var lastTransitionTime metav1.Time
 	if condition := apimeta.FindStatusCondition(obj.Status.Conditions, v1alpha1.ConditionReady); condition != nil {
 		reason = condition.Reason
 		message = condition.Message
 		lastTransitionTime = condition.LastTransitionTime
+	}
+	if lastTransitionTime.IsZero() {
+		if condition := matchingRemoteFabricDomainCondition(status.GetConditions(), conditionType, conditionStatus, "", false); condition != nil {
+			if transitionTime := condition.GetLastTransitionTime(); transitionTime != nil {
+				lastTransitionTime = metav1.NewTime(transitionTime.AsTime())
+			}
+		}
+	}
+	if lastTransitionTime.IsZero() {
+		lastTransitionTime = metav1.Now()
 	}
 	status.SetConditions([]*privatev1.FabricDomainCondition{privatev1.FabricDomainCondition_builder{
 		Type:               conditionType,
@@ -161,12 +163,57 @@ func syncFabricDomainDelete(ctx context.Context, obj *v1alpha1.FabricDomain, rem
 		return syncFabricDomainUpdate(ctx, obj, remote)
 	}
 	status := remote.GetStatus()
+	conditionType := privatev1.FabricDomainConditionType_FABRIC_DOMAIN_CONDITION_TYPE_PROGRESSING
+	conditionStatus := privatev1.ConditionStatus_CONDITION_STATUS_TRUE
+	const reason = "Deleting"
+	lastTransitionTime := timestamppb.Now()
+	if condition := matchingRemoteFabricDomainCondition(status.GetConditions(), conditionType, conditionStatus, reason, true); condition != nil {
+		if transitionTime := condition.GetLastTransitionTime(); transitionTime != nil {
+			lastTransitionTime = transitionTime
+		}
+	}
 	status.SetConditions([]*privatev1.FabricDomainCondition{privatev1.FabricDomainCondition_builder{
-		Type:               privatev1.FabricDomainConditionType_FABRIC_DOMAIN_CONDITION_TYPE_PROGRESSING,
-		Status:             privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
-		LastTransitionTime: timestamppb.Now(),
-		Reason:             ptr.To("Deleting"),
+		Type:               conditionType,
+		Status:             conditionStatus,
+		LastTransitionTime: lastTransitionTime,
+		Reason:             ptr.To(reason),
 		Message:            ptr.To("FabricDomain cleanup is in progress"),
 	}.Build()})
+	return nil
+}
+
+func fabricDomainConditionForPhase(phase v1alpha1.FabricDomainPhase) (privatev1.FabricDomainConditionType, privatev1.ConditionStatus) {
+	switch phase {
+	case v1alpha1.FabricDomainPhaseReady:
+		return privatev1.FabricDomainConditionType_FABRIC_DOMAIN_CONDITION_TYPE_READY,
+			privatev1.ConditionStatus_CONDITION_STATUS_TRUE
+	case v1alpha1.FabricDomainPhaseProgressing, v1alpha1.FabricDomainPhaseDeleting:
+		return privatev1.FabricDomainConditionType_FABRIC_DOMAIN_CONDITION_TYPE_PROGRESSING,
+			privatev1.ConditionStatus_CONDITION_STATUS_TRUE
+	case v1alpha1.FabricDomainPhaseFailed:
+		return privatev1.FabricDomainConditionType_FABRIC_DOMAIN_CONDITION_TYPE_FAILED,
+			privatev1.ConditionStatus_CONDITION_STATUS_TRUE
+	default:
+		return privatev1.FabricDomainConditionType_FABRIC_DOMAIN_CONDITION_TYPE_UNSPECIFIED,
+			privatev1.ConditionStatus_CONDITION_STATUS_UNSPECIFIED
+	}
+}
+
+func matchingRemoteFabricDomainCondition(
+	conditions []*privatev1.FabricDomainCondition,
+	conditionType privatev1.FabricDomainConditionType,
+	conditionStatus privatev1.ConditionStatus,
+	reason string,
+	matchReason bool,
+) *privatev1.FabricDomainCondition {
+	for _, condition := range conditions {
+		if condition.GetType() != conditionType || condition.GetStatus() != conditionStatus {
+			continue
+		}
+		if matchReason && condition.GetReason() != reason {
+			continue
+		}
+		return condition
+	}
 	return nil
 }

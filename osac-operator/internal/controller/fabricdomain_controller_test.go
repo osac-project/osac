@@ -65,7 +65,14 @@ var _ = Describe("FabricDomainReconciler", func() {
 			WithStatusSubresource(&v1alpha1.FabricDomain{}, &v1alpha1.VirtualNetwork{}).Build()
 
 		mockProvider = &mockVirtualNetworkProvider{
-			triggerProvisionFunc: func(ctx context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
+			triggerProvisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+				persisted := &v1alpha1.FabricDomain{}
+				if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(resource), persisted); err != nil {
+					return nil, err
+				}
+				if !persisted.Status.ProvisioningIntent {
+					return nil, fmt.Errorf("FabricDomain provisioning intent was not persisted before launching AAP")
+				}
 				triggerCount++
 				extraVars := provisioning.AAPExtraVarsFromContext(ctx)
 				eda := extraVars["ansible_eda"].(map[string]any)
@@ -261,6 +268,30 @@ var _ = Describe("FabricDomainReconciler", func() {
 		Expect(reconciler.releaseVirtualNetworkProtection(ctx, domain)).To(Succeed())
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(vnet), protectedVNet)).To(Succeed())
 		Expect(protectedVNet.Finalizers).To(ContainElement(osacFabricDomainProtectionFinalizer))
+	})
+
+	It("attempts cleanup when provisioning intent exists without saved job status or backend ID", func() {
+		deletingDomain := &v1alpha1.FabricDomain{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(domain), deletingDomain)).To(Succeed())
+		deletingDomain.Finalizers = append(deletingDomain.Finalizers, osacFabricDomainFinalizer)
+		Expect(k8sClient.Update(ctx, deletingDomain)).To(Succeed())
+		deletingDomain.Status.ProvisioningIntent = true
+		Expect(k8sClient.Status().Update(ctx, deletingDomain)).To(Succeed())
+
+		var deprovisionCalls int
+		mockProvider.triggerDeprovisionFunc = func(_ context.Context, _ client.Object, _ []v1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {
+			deprovisionCalls++
+			return &provisioning.DeprovisionResult{
+				Action:                 provisioning.DeprovisionTriggered,
+				JobID:                  "delete-intent",
+				BlockDeletionOnFailure: true,
+			}, nil
+		}
+
+		result, err := reconciler.handleDelete(ctx, deletingDomain)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(Equal(time.Second))
+		Expect(deprovisionCalls).To(Equal(1))
 	})
 
 	It("reports AAP failures as failed Ready conditions and failed members", func() {

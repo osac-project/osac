@@ -243,6 +243,16 @@ func (r *VirtualNetworkReconciler) handleProvisioning(ctx context.Context, vnet 
 					vnet.Status.BackendNetworkID = string(vnet.UID)
 				} else if backendID := outputString(status.Outputs, "vpc_id", "backend_network_id", "backendNetworkId"); backendID != "" {
 					vnet.Status.BackendNetworkID = backendID
+				} else if vnet.Status.BackendNetworkID == "" && vnet.Annotations[osacImplementationStrategyAnnotation] == "netris" {
+					message := "AAP job succeeded but returned no vpc_id artifact for the Netris VirtualNetwork"
+					vnet.Status.Phase = v1alpha1.VirtualNetworkPhaseFailed
+					if job := provisioning.FindLatestJobByType(vnet.Status.ProvisioningJobs, v1alpha1.JobTypeProvision); job != nil {
+						job.State = v1alpha1.JobStateFailed
+						job.Message = message
+						job.ConfigVersion = vnet.Status.DesiredConfigVersion
+					}
+					setReadyConditionFailed(&vnet.Status.Conditions, message)
+					return
 				}
 				vnet.Status.Phase = v1alpha1.VirtualNetworkPhaseReady
 				setReadyConditionTrue(&vnet.Status.Conditions)
@@ -274,11 +284,11 @@ func (r *VirtualNetworkReconciler) handleDelete(ctx context.Context, vnet *v1alp
 	// FabricDomains depend on this VPC. The protection finalizer is the normal
 	// guard; listing references also closes the race where a FabricDomain is
 	// created immediately before this VirtualNetwork starts deletion.
-	if controllerutil.ContainsFinalizer(vnet, osacFabricDomainProtectionFinalizer) {
-		log.Info("waiting for FabricDomains to release VirtualNetwork protection", "virtualNetwork", vnet.Name)
+	vnetUUID := vnet.Labels[osacVirtualNetworkIDLabel]
+	if controllerutil.ContainsFinalizer(vnet, osacFabricDomainProtectionFinalizer) && vnetUUID == "" {
+		log.Info("waiting for VirtualNetwork UUID before checking FabricDomain references", "virtualNetwork", vnet.Name)
 		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
-	vnetUUID := vnet.Labels[osacVirtualNetworkIDLabel]
 	if vnetUUID != "" {
 		fabricDomains := &v1alpha1.FabricDomainList{}
 		if err := r.List(ctx, fabricDomains, client.InNamespace(vnet.Namespace)); err != nil {
@@ -289,6 +299,11 @@ func (r *VirtualNetworkReconciler) handleDelete(ctx context.Context, vnet *v1alp
 				log.Info("waiting for referencing FabricDomain to be deleted before deprovisioning VirtualNetwork",
 					"fabricDomain", fabricDomains.Items[i].Name)
 				return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+			}
+		}
+		if controllerutil.RemoveFinalizer(vnet, osacFabricDomainProtectionFinalizer) {
+			if err := r.Update(ctx, vnet); err != nil {
+				return ctrl.Result{}, fmt.Errorf("releasing stale FabricDomain protection from VirtualNetwork %q: %w", vnet.Name, err)
 			}
 		}
 	}

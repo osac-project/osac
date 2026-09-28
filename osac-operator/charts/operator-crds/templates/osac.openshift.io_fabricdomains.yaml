@@ -191,6 +191,11 @@ spec:
                 - Failed
                 - Deleting
                 type: string
+              provisioningIntent:
+                description: |-
+                  ProvisioningIntent records that an AAP provisioning job may have been launched.
+                  It is persisted before launch so deletion still attempts cleanup if job status cannot be saved.
+                type: boolean
               provisioningJobs:
                 description: ProvisioningJobs tracks AAP provisioning and cleanup
                   jobs across reconciles.

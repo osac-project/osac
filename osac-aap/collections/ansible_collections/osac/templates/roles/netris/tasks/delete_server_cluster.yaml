@@ -1,0 +1,9 @@
+---
+- name: Delete ServerCluster from Netris
+  ansible.builtin.include_role:
+    name: netris.controller.server_cluster
+    tasks_from: delete
+  vars:
+    server_cluster_name: "{{ server_cluster.metadata.name }}"
+    server_cluster_site_id: "{{ server_cluster.spec.siteId | default(netris_site_id) | int }}"
+    server_cluster_backend_id: "{{ server_cluster.spec.backendId | default('') }}"

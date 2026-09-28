@@ -415,7 +415,7 @@ osac create computeinstance --catalog-item <standard-vm-id> \
 For the cluster example, supply a pull secret and SSH key and optionally override the pod CIDR:
 
 ```bash
-osac create secret --name cluster-pull-secret \
+osac create secret --name cluster-pull-secret --type=pull-secret \
   --from-file=.dockerconfigjson=pull-secret.json
 
 osac create cluster --catalog-item sandbox \
@@ -456,7 +456,7 @@ Platform administrators can create a Vault-backed pull Secret in the `shared` te
 it from a shared cluster template:
 
 ```bash
-osac --tenant shared create secret --name shared-pull-secret \
+osac --tenant shared create secret --name shared-pull-secret --type=pull-secret \
   --from-file=.dockerconfigjson=pull-secret.json
 ```
 

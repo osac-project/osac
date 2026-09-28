@@ -5,6 +5,9 @@ Vault deployment. **For production, deploy and operate Vault before installing
 OSAC.** OSAC does not install, initialize, unseal, back up, or upgrade Vault.
 As with an external PostgreSQL database, Vault must be available when OSAC starts.
 
+For creating and using OSAC Secrets after deployment, see
+[Managing Secrets](../secrets-guide.md).
+
 ## Vault options and versions
 
 This guide uses HashiCorp Vault terminology and CLI commands. OpenBao is also

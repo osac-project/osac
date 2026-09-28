@@ -8,6 +8,9 @@ OSAC CLI and API.
 - `osac` installed and authenticated (`osac login`)
 - A cluster catalog item published by your provider
 
+For a tenant-owned pull Secret or an inherited provider pull Secret, see
+[Managing Secrets](../../docs/guides/secrets-guide.md).
+
 ## Workflow Overview
 
 1. Browse available cluster catalog items

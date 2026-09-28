@@ -11,6 +11,9 @@ together, and the design decisions that have been made.
 [Guides](guides/): Step-by-step configuration and usage guides for
 administrators and developers.
 
+To get started with tenant and provider credentials, see
+[Managing Secrets](guides/secrets-guide.md).
+
 This directory also contains concise, hand-maintained guidance for
 architecture and conventions that span component or repository boundaries
 within this mono-repo. Component `AGENTS.md` files own component-scoped agent

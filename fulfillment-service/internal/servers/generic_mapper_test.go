@@ -119,10 +119,12 @@ var _ = Describe("Generic mapper", func() {
 				Spec: privatev1.ClusterSpec_builder{
 					NodeSets: map[string]*privatev1.ClusterNodeSet{
 						"my_node_set": privatev1.ClusterNodeSet_builder{
-							Size: proto.Int32(123),
+							BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "my_bmit"}.Build(),
+							Size:                  proto.Int32(123),
 						}.Build(),
 						"your_node_set": privatev1.ClusterNodeSet_builder{
-							Size: proto.Int32(456),
+							BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "your_bmit"}.Build(),
+							Size:                  proto.Int32(456),
 						}.Build(),
 					},
 				}.Build(),
@@ -132,10 +134,12 @@ var _ = Describe("Generic mapper", func() {
 				Spec: publicv1.ClusterSpec_builder{
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"my_node_set": publicv1.ClusterNodeSet_builder{
-							Size: proto.Int32(123),
+							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "my_bmit"}.Build(),
+							Size:                  proto.Int32(123),
 						}.Build(),
 						"your_node_set": publicv1.ClusterNodeSet_builder{
-							Size: proto.Int32(456),
+							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "your_bmit"}.Build(),
+							Size:                  proto.Int32(456),
 						}.Build(),
 					},
 				}.Build(),
@@ -313,7 +317,8 @@ var _ = Describe("Generic mapper", func() {
 				Spec: privatev1.ClusterSpec_builder{
 					NodeSets: map[string]*privatev1.ClusterNodeSet{
 						"new_node_set": privatev1.ClusterNodeSet_builder{
-							Size: proto.Int32(789),
+							BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "new_bmit"}.Build(),
+							Size:                  proto.Int32(789),
 						}.Build(),
 					},
 				}.Build(),
@@ -322,7 +327,8 @@ var _ = Describe("Generic mapper", func() {
 				Spec: publicv1.ClusterSpec_builder{
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"existing_node_set": publicv1.ClusterNodeSet_builder{
-							Size: proto.Int32(456),
+							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "existing_bmit"}.Build(),
+							Size:                  proto.Int32(456),
 						}.Build(),
 					},
 				}.Build(),
@@ -331,10 +337,12 @@ var _ = Describe("Generic mapper", func() {
 				Spec: publicv1.ClusterSpec_builder{
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"existing_node_set": publicv1.ClusterNodeSet_builder{
-							Size: proto.Int32(456),
+							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "existing_bmit"}.Build(),
+							Size:                  proto.Int32(456),
 						}.Build(),
 						"new_node_set": publicv1.ClusterNodeSet_builder{
-							Size: proto.Int32(789),
+							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "new_bmit"}.Build(),
+							Size:                  proto.Int32(789),
 						}.Build(),
 					},
 				}.Build(),
@@ -346,7 +354,8 @@ var _ = Describe("Generic mapper", func() {
 				Spec: privatev1.ClusterSpec_builder{
 					NodeSets: map[string]*privatev1.ClusterNodeSet{
 						"node_set": privatev1.ClusterNodeSet_builder{
-							Size: proto.Int32(999),
+							BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "updated_bmit"}.Build(),
+							Size:                  proto.Int32(999),
 						}.Build(),
 					},
 				}.Build(),
@@ -355,7 +364,8 @@ var _ = Describe("Generic mapper", func() {
 				Spec: publicv1.ClusterSpec_builder{
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"node_set": publicv1.ClusterNodeSet_builder{
-							Size: proto.Int32(123),
+							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "original_bmit"}.Build(),
+							Size:                  proto.Int32(123),
 						}.Build(),
 					},
 				}.Build(),
@@ -364,7 +374,8 @@ var _ = Describe("Generic mapper", func() {
 				Spec: publicv1.ClusterSpec_builder{
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"node_set": publicv1.ClusterNodeSet_builder{
-							Size: proto.Int32(999),
+							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "updated_bmit"}.Build(),
+							Size:                  proto.Int32(999),
 						}.Build(),
 					},
 				}.Build(),

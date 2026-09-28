@@ -32,7 +32,7 @@ for cluster provisioning:
 The Fulfillment Service provides gRPC and REST APIs for managing cluster
 lifecycle operations:
 
-**Private API Operations** (`fulfillment-service/proto/private/osac/private/v1/clusters_service.proto`):
+**Private API Operations** (`proto/private/osac/private/v1/clusters_service.proto`):
 - `Create`: Request a new cluster deployment
 - `Get`: Retrieve cluster details and status
 - `List`: List all clusters for a tenant
@@ -40,16 +40,25 @@ lifecycle operations:
 - `Delete`: Request cluster deletion
 - `Signal`: Indicate that something changed and may require reconciliation (gRPC only, no HTTP endpoint)
 
-**Cluster Request Model** (`fulfillment-service/proto/private/osac/private/v1/cluster_type.proto`):
+**Cluster Request Model** (`proto/private/osac/private/v1/cluster_type.proto`):
 
 A cluster request includes:
-- `template`: The cluster template ID (e.g., "ocp_4_17_small")
+- `template` or `catalog_item`: The provisioning template or published catalog offering
 - `template_parameters`: A map of parameters specific to the selected template
-- `node_sets`: A map of worker node groups, keyed by node set identifier, each containing:
-  - `host_type`: The type of hosts in the set (determines hardware characteristics)
-  - `size`: Number of nodes in the node set
+- `node_sets`: A required effective map of worker groups, keyed by node set identifier, each containing:
+  - `baremetal_instance_type`: Reference to a BareMetalInstanceType hardware profile
+  - `size`: Positive number of nodes in the set
 
-**Public API Operations** (`fulfillment-service/proto/public/osac/public/v1/clusters_service.proto`):
+The caller supplies node sets directly or a catalog item supplies the whole map through a locked or
+editable default `fields.node_sets` policy. Templates never supply hardware selections. Fulfillment
+validates and canonicalizes each effective CaaS hardware reference in the shared tenant after
+catalog policy application; an absent map or invalid shared type fails before provisioning.
+Catalog policy hardware references use the same shared-only rule, even when the catalog item
+belongs to a tenant. Tenant-local BMITs still work for other resources; CaaS tenant-scoped
+selection and same-name precedence remain undecided. A concrete network attachment requires
+each selected type to have a fabric port.
+
+**Public API Operations** (`proto/public/osac/public/v1/clusters_service.proto`):
 
 The public API exposes tenant-facing operations at `/api/fulfillment/v1/clusters`:
 - `List`: List clusters visible to the current tenant
@@ -84,13 +93,22 @@ appropriate Management Cluster for each request
    - Load balancing across hubs
    - Tenant affinity rules
 
-2. **ClusterOrder Creation**: Once a Management Cluster is selected, the Fulfillment Service creates a `ClusterOrder` custom resource in a tenant-specific namespace. This object contains:
+2. **ClusterOrder Creation**: Once a Management Cluster is selected, the Fulfillment Service creates a `ClusterOrder` custom resource in that Hub's configured namespace (not a tenant-specific namespace). This object contains:
    - The selected template ID
    - Template parameters
-   - Node requests translated from the node sets specification
+   - Node requests translated from the resolved node sets: `numberOfNodes` and
+     `bareMetal.instanceType` (the selected shared BareMetalInstanceType name)
+   - A Cluster ID label and a tenant annotation checked against the private authoritative Cluster
 
 The ClusterOrder serves as the bridge between the Fulfillment Service and the
-OSAC Controller running on the Management Cluster.
+OSAC Controller running on the Management Cluster. Its worker controller fetches the authoritative
+Cluster to derive tenant ownership, and creates worker BMIs through the fixed shared
+`osac.templates.bm_host_provisioning` template with shared BMITs. The fulfillment BMI carries a
+`cluster-order` correlation label and `owner-reference=ClusterOrder/<name>` annotation, and its
+Kubernetes CR receives the tenant and owner-reference annotations plus BMI UUID label. Reuse,
+rebuild and deletion check the fetched BMI's tenant, expected name and owner association; old
+`system`-owned workers are not automatically adopted or deleted. BMI reconciliation currently
+chooses its Hub independently: **same-Hub placement in multi-Hub deployments is not yet ensured**.
 
 ### OSAC Controller - ClusterOrder Processing
 
@@ -103,7 +121,8 @@ Cluster that reconciles ClusterOrder resources
 The ClusterOrder CRD spec defines:
 - `templateID`: Identifies which cluster template to use
 - `templateParameters`: JSON-encoded string of template-specific parameters
-- `nodeRequests`: Array of node request objects, each with `resourceClass` (host type) and `numberOfNodes` (count)
+- `nodeRequests`: Array of node request objects, each with `bareMetal.instanceType` (selected
+  BareMetalInstanceType name) and `numberOfNodes` (count)
 - `pullSecret`: Credentials for container image repositories (optional, defaults to provider's)
 - `sshPublicKey`: SSH public key installed on worker nodes (optional, defaults to provider's)
 - `releaseImage`: OCP release image URL controlling the OpenShift version (optional, defaults to template's)
@@ -174,7 +193,7 @@ The main cluster creation workflow consists of these phases:
 
 3. **Cluster Infrastructure Creation**:
    - Creates or updates a HostedCluster resource
-   - Provisions worker nodes according to the node requests specification
+   - Provisions worker nodes according to each `nodeRequests[].bareMetal.instanceType`
    - Configures networking, ingress, and external access
 
 ## Cluster Templates
@@ -194,7 +213,7 @@ Each template defines metadata that helps users understand the template and its
 requirements:
 - `title`: Human-readable name
 - `description`: Explanation of what the template provides
-- `default_node_requirements`: Default worker node configuration
+- `parameters`: Provisioning inputs and defaults, without node sets or hardware selections
 
 CSPs can create custom templates to offer differentiated cluster configurations, such as:
 - Clusters with specific software pre-installed (monitoring, security tools, etc.)
@@ -208,24 +227,22 @@ Cluster catalog items are the primary user-facing abstraction for ordering
 clusters. A catalog item wraps an underlying cluster template with additional
 controls that determine what end users see and can configure.
 
-**Definition** (`fulfillment-service/proto/private/osac/private/v1/cluster_catalog_item_type.proto`):
+**Definition** (`proto/private/osac/private/v1/cluster_catalog_item_type.proto`):
 
 A cluster catalog item includes:
 - `title`: Human-friendly short description suitable for display in a UI or CLI
 - `description`: Longer description in Markdown format
 - `template`: Reference to the underlying cluster template ID
 - `published`: Whether this item is visible in the public API (only published items appear in public List/Get responses)
-- `tenant`: Tenant scope (empty string = global, visible to all tenants; non-empty = scoped to a specific tenant). The `tenant` field is only available in the private API
-- `field_definitions`: Controls for individual fields on the cluster spec
+- `metadata.tenant` and `metadata.project`: Ownership and visibility scope
+- `fields`: Typed locked/editable policies, including a complete `node_sets` map with BMIT references
 
-**Field Definitions** (`fulfillment-service/proto/public/osac/public/v1/field_definition_type.proto`):
+**Field Policies**:
 
-Each field definition controls a specific field on the cluster resource spec:
-- `path`: Dot-notation path referencing a spec field (e.g., `spec.network.pod_cidr`, `spec.node_sets.workers.size`)
-- `display_name`: Human-friendly label for UI display
-- `editable`: Whether the user is allowed to set this field
-- `default`: Default value for the field
-- `validation_schema`: Optional JSON Schema (draft 2020-12) for validating user-provided values
+Each typed policy controls a supported cluster field. A locked node-set map forbids a user-supplied
+map; an editable default supplies a complete map only when the caller omits one. There is no merging
+with template hardware. See [Catalog Items](../../fulfillment-service/docs/CATALOG_ITEMS.md#list-and-node-set-policies)
+for policy semantics and reference scopes.
 
 **APIs:**
 
@@ -235,8 +252,8 @@ Catalog items are managed through both private and public APIs:
 
 **Relationship to Templates:**
 
-Cluster templates define the infrastructure provisioning logic (Ansible roles,
-parameters, node configurations). Catalog items sit above templates in the
+Cluster templates define the infrastructure provisioning logic (Ansible roles and
+parameters). Catalog items sit above templates in the
 abstraction layer: they reference a template and add field-level access
 controls, defaults, and validation that shape the end-user experience. Multiple
 catalog items can reference the same underlying template with different field
@@ -251,9 +268,16 @@ on the CSP's infrastructure:
 
 **Bare Metal Workers**:
 When worker nodes are provisioned on bare metal:
-1. The template includes tasks to allocate physical servers from inventory
-2. Network isolation is applied (L2/L3 networking, VLANs, etc.)
-3. Nodes are joined to the hosted control plane
+1. AAP consumes the selected `bareMetal.instanceType` from each ClusterOrder node request
+   to select Agents and NodePools by `osac.openshift.io/instance_type` (value: BMIT name).
+   Imported Agents must advertise that same BMIT name; provider-native `resource_class`
+   values must be configured to match before import.
+2. The template includes tasks to allocate physical servers from inventory
+3. Network isolation is applied (L2/L3 networking, VLANs, etc.)
+4. Nodes are joined to the hosted control plane
+
+The independent BareMetalPool API still uses `hostSets[].hostType`; only the AAP pool adapter
+translates the selected instance type into that field.
 
 **Virtual Machine Workers**:
 This workflow is still being created.

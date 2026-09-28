@@ -105,8 +105,8 @@ var _ = Describe("Catalog item views", func() {
 					PodCidr:     publicv1.StringFieldPolicy_builder{Locked: new("10.0.0.0/16")}.Build(),
 					ServiceCidr: publicv1.StringFieldPolicy_builder{Editable: publicv1.EditableStringField_builder{DefaultValue: new("172.30.0.0/16")}.Build()}.Build(),
 				}.Build(),
-				NodeSets: publicv1.ClusterNodeSetMapPolicy_builder{Locked: publicv1.ClusterNodeSetMap_builder{Items: map[string]*publicv1.ClusterTemplateNodeSet{
-					"workers": publicv1.ClusterTemplateNodeSet_builder{Size: 3, HostType: publicv1.HostTypeReference_builder{Name: "compute", Shared: true}.Build()}.Build(),
+				NodeSets: publicv1.ClusterNodeSetMapPolicy_builder{Locked: publicv1.ClusterNodeSetMap_builder{Items: map[string]*publicv1.ClusterCatalogNodeSet{
+					"workers": publicv1.ClusterCatalogNodeSet_builder{Size: 3, BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Name: "compute", Shared: true}.Build()}.Build(),
 				}}.Build()}.Build(),
 				AutoExternalIpAttachment: publicv1.BoolFieldPolicy_builder{Editable: publicv1.EditableBoolField_builder{DefaultValue: new(false)}.Build()}.Build(),
 				NetworkAttachment:        publicv1.ClusterNetworkAttachmentFieldPolicy_builder{Locked: publicv1.ClusterNetworkAttachment_builder{Subnet: publicv1.SubnetLocalReference_builder{Name: "net"}.Build()}.Build()}.Build(),
@@ -114,10 +114,31 @@ var _ = Describe("Catalog item views", func() {
 		}.Build()
 		output := printView(clusterView(item), false)
 		requireContains(output, "Scope:      Tenant (project: platform)", "template-id (shared, project: infra)", "default: 4-20 (shared)",
-			"LOCKED    pull", `"10.0.0.0/16"`, `default: "172.30.0.0/16"`, "workers: 3 nodes; host type: compute (shared)",
+			"LOCKED    pull", `"10.0.0.0/16"`, `default: "172.30.0.0/16"`, "workers: 3 nodes; bare metal instance type: compute (shared)",
 			"default: false", "subnet: net", "Published:  No",
 			"Full catalog item definition: osac get clustercatalogitem cluster-item -o yaml")
 		Expect(output).NotTo(ContainSubstring("--tenant shared"))
+	})
+
+	It("renders editable cluster node sets in sorted order with unresolved references", func() {
+		var rows []row
+		addNodeSets(&rows, publicv1.ClusterNodeSetMapPolicy_builder{
+			Editable: publicv1.EditableClusterNodeSetMap_builder{
+				DefaultValue: publicv1.ClusterNodeSetMap_builder{Items: map[string]*publicv1.ClusterCatalogNodeSet{
+					"workers": publicv1.ClusterCatalogNodeSet_builder{
+						Size: 3, BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "type-id", Project: "infra"}.Build(),
+					}.Build(),
+					"accelerators": publicv1.ClusterCatalogNodeSet_builder{Size: 0}.Build(),
+				}}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(rows).To(HaveLen(1))
+		Expect(rows[0].state).To(Equal("EDITABLE"))
+		Expect(rows[0].value).To(Equal("default: 2 items"))
+		Expect(rows[0].details).To(Equal([]string{
+			"accelerators: 0 nodes; bare metal instance type: -",
+			"workers: 3 nodes; bare metal instance type: type-id (project: infra)",
+		}))
 	})
 
 	It("renders bare metal policies", func() {

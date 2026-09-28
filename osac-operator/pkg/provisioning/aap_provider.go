@@ -284,6 +284,9 @@ func (p *AAPProvider) extractExtraVars(ctx context.Context, resource client.Obje
 		return nil, err
 	}
 	for key, value := range AAPExtraVarsFromContext(ctx) {
+		if key == "osac_job_vars" {
+			continue
+		}
 		extraVars[key] = value
 	}
 	if p.fulfillmentEndpoint == "" {

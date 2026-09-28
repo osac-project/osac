@@ -354,6 +354,26 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			Expect(vnet.Status.BackendNetworkID).To(Equal("vpc-42"))
 		})
 
+		It("should fail Netris provisioning when the backend VPC ID is missing", func() {
+			vnet.Annotations = map[string]string{osacImplementationStrategyAnnotation: "netris"}
+			vnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{{
+				JobID: "success-without-vpc", Type: osacv1alpha1.JobTypeProvision,
+				State: osacv1alpha1.JobStateRunning, ConfigVersion: testConfigVersion,
+			}}
+			mockProvider.getProvisionStatusFunc = func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{JobID: jobID, State: osacv1alpha1.JobStateSucceeded}, nil
+			}
+
+			_, err := reconciler.handleProvisioning(ctx, vnet)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(vnet.Status.Phase).To(Equal(osacv1alpha1.VirtualNetworkPhaseFailed))
+			condition := apimeta.FindStatusCondition(vnet.Status.Conditions, osacv1alpha1.ConditionReady)
+			Expect(condition).NotTo(BeNil())
+			Expect(condition.Status).To(Equal(metav1.ConditionFalse))
+			Expect(condition.Message).To(ContainSubstring("no vpc_id artifact"))
+			Expect(provisioning.FindLatestJobByType(vnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision).State).To(Equal(osacv1alpha1.JobStateFailed))
+		})
+
 		It("should set phase to Failed when job fails", func() {
 			vnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
 				{
@@ -408,6 +428,7 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 		})
 
 		It("should set Ready=True condition when job succeeds", func() {
+			vnet.Annotations = map[string]string{osacImplementationStrategyAnnotation: "cudn-net"}
 			vnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
 				{
 					JobID:     "success-job-cond",
@@ -740,8 +761,29 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 
 			Expect(k8sClient.Delete(ctx, fabricDomain)).To(Succeed())
 			gateVNet.Finalizers = nil
-			_ = k8sClient.Update(ctx, gateVNet)
-			_ = k8sClient.Delete(ctx, gateVNet)
+			Expect(k8sClient.Update(ctx, gateVNet)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, gateVNet)).To(Succeed())
+		})
+
+		It("should clear stale FabricDomain protection after the last reference disappears", func() {
+			const staleProtectionVNetID = "stale-protection-vnet-uuid"
+			staleVNet := &osacv1alpha1.VirtualNetwork{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "stale-protection-vnet",
+					Namespace:  "default",
+					Finalizers: []string{osacVirtualNetworkFinalizer, osacFabricDomainProtectionFinalizer},
+					Labels:     map[string]string{osacVirtualNetworkIDLabel: staleProtectionVNetID},
+				},
+				Spec: osacv1alpha1.VirtualNetworkSpec{Region: "us-west-1", IPv4CIDR: "10.5.0.0/16"},
+			}
+			Expect(k8sClient.Create(ctx, staleVNet)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, staleVNet)).To(Succeed())
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(staleVNet), staleVNet)).To(Succeed())
+
+			result, err := reconciler.handleDelete(ctx, staleVNet)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeZero())
+			Expect(staleVNet.Finalizers).NotTo(ContainElement(osacFabricDomainProtectionFinalizer))
 		})
 
 		It("should remove finalizer after successful deprovision", func() {

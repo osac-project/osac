@@ -30,16 +30,46 @@
     - server_cluster_backend_id is defined
     - server_cluster_backend_id | string | length > 0
 
-- name: Find existing server cluster by name
+- name: Fail when the requested server cluster backend ID was not found
+  ansible.builtin.fail:
+    msg: "Server cluster with backend ID {{ server_cluster_backend_id }} was not found; refusing to fall back to a name lookup"
+  when:
+    - server_cluster_backend_id is defined
+    - server_cluster_backend_id | string | length > 0
+    - _existing_server_cluster is not defined or _existing_server_cluster is none
+
+- name: Find same-name server clusters at the target site
   ansible.builtin.set_fact:
-    _existing_server_cluster: >-
+    _existing_server_clusters: >-
       {{
         (_sc_list_resp.json.data | default([]))
         | selectattr('name', 'equalto', server_cluster_name)
-        | list | first | default(none)
+        | selectattr('site.id', 'equalto', server_cluster_site_id | int)
+        | list
       }}
   when:
     - _sc_list_resp.json is mapping
+    - server_cluster_backend_id is not defined or server_cluster_backend_id | string | length == 0
+    - _existing_server_cluster is not defined or _existing_server_cluster is none
+
+- name: Find existing server cluster by name
+  ansible.builtin.set_fact:
+    _existing_server_cluster: "{{ _existing_server_clusters | first | default(none) }}"
+  when:
+    - _existing_server_clusters is defined
+    - server_cluster_vpc_id is not defined or server_cluster_vpc_id | int <= 0
+    - _existing_server_cluster is not defined or _existing_server_cluster is none
+
+- name: Find existing server cluster by name and VPC
+  ansible.builtin.set_fact:
+    _existing_server_cluster: >-
+      {{
+        (_existing_server_clusters | selectattr('vpc.id', 'equalto', server_cluster_vpc_id | int) | list | first | default(none))
+      }}
+  when:
+    - _existing_server_clusters is defined
+    - server_cluster_vpc_id is defined
+    - server_cluster_vpc_id | int > 0
     - _existing_server_cluster is not defined or _existing_server_cluster is none
 
 - name: Set server names list

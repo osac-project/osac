@@ -857,6 +857,21 @@ var _ = Describe("AAPProvider", func() {
 			_, err := provider.TriggerProvision(ctx, &v1alpha1.FabricDomain{ObjectMeta: metav1.ObjectMeta{Name: "fd", Namespace: "default"}})
 			Expect(err).NotTo(HaveOccurred())
 		})
+
+		It("does not allow context variables to replace reserved osac_job_vars", func() {
+			ctx = provisioning.WithAAPExtraVars(ctx, map[string]any{
+				"osac_job_vars":   "caller override",
+				"custom_variable": "preserved",
+			})
+			aapClient.launchJobTemplateFunc = func(_ context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
+				Expect(extractJobVarsResource(req.ExtraVars)).To(HaveKey("metadata"))
+				Expect(req.ExtraVars).To(HaveKeyWithValue("custom_variable", "preserved"))
+				return &aap.LaunchJobTemplateResponse{JobID: 102}, nil
+			}
+
+			_, err := provider.TriggerProvision(ctx, &v1alpha1.FabricDomain{ObjectMeta: metav1.ObjectMeta{Name: "fd", Namespace: "default"}})
+			Expect(err).NotTo(HaveOccurred())
+		})
 	})
 
 	Describe("AAP job artifacts", func() {

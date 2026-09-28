@@ -23,6 +23,7 @@ from tests.e2e.core.helpers import (
     wait_for_external_ip_pool_deletion,
     wait_for_external_ip_pool_grpc_ready,
     wait_for_external_ip_pool_ready,
+    wait_for_grpc_subnet_ready,
     wait_for_security_group_cr,
     wait_for_security_group_deletion,
     wait_for_security_group_ready,
@@ -91,6 +92,7 @@ class TestBmaasNetworking:
         )
         subnet_a_cr = wait_for_subnet_cr(k8s=k8s_hub_client, uuid=subnet_a_id)
         wait_for_subnet_ready(k8s=k8s_hub_client, name=subnet_a_cr)
+        wait_for_grpc_subnet_ready(grpc=grpc, subnet_id=subnet_a_id)
 
         subnet_b_name = f"sub-b-{net_test_run_id}"
         subnet_b_id = grpc.create_subnet(
@@ -98,6 +100,7 @@ class TestBmaasNetworking:
         )
         subnet_b_cr = wait_for_subnet_cr(k8s=k8s_hub_client, uuid=subnet_b_id)
         wait_for_subnet_ready(k8s=k8s_hub_client, name=subnet_b_cr)
+        wait_for_grpc_subnet_ready(grpc=grpc, subnet_id=subnet_b_id)
 
         self.__class__.state.update(
             subnet_a_id=subnet_a_id, subnet_a_cr=subnet_a_cr, subnet_b_id=subnet_b_id, subnet_b_cr=subnet_b_cr

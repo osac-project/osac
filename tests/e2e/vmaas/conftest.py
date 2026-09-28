@@ -9,7 +9,7 @@ from collections.abc import Iterator
 import pytest
 
 from tests.e2e.core.grpc_client import GRPCClient
-from tests.e2e.core.helpers import delete_instance_type_if_present, wait_for_tenant_condition
+from tests.e2e.core.helpers import delete_instance_type_if_present, wait_for_grpc_subnet_ready, wait_for_tenant_condition
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import env
@@ -74,6 +74,7 @@ def default_networking(grpc: GRPCClient, k8s_hub_client: K8sClient, test_run_id:
         subnet_id, subnet_cr_name = create_and_wait_for_subnet(
             grpc, k8s_hub_client, vn_id, "10.200.100.0/24", name_prefix=f"test-subnet-{test_run_id}"
         )
+        wait_for_grpc_subnet_ready(grpc=grpc, subnet_id=subnet_id)
         print(f"Subnet {subnet_cr_name} is Ready")
 
         yield {

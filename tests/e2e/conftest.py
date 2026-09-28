@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
+from tests.e2e.core.helpers import wait_for_grpc_subnet_ready
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.keycloak import get_jwt
 from tests.e2e.core.keycloak_admin import (
@@ -22,7 +23,7 @@ from tests.e2e.core.keycloak_admin import (
 )
 from tests.e2e.core.metering import MeteringCollector
 from tests.e2e.core.osac_cli import OsacCLI
-from tests.e2e.core.runner import env, run
+from tests.e2e.core.runner import env, poll_until, run
 
 
 @pytest.fixture(scope="session")
@@ -173,6 +174,42 @@ def private_grpc(fulfillment_private_address: str, namespace: str, service_accou
 def ensure_tenants(ensure_k8s_only_network_class: None, private_grpc: GRPCClient) -> None:
     for name in ("tenant1", "tenant2"):
         private_grpc.ensure_tenant(name=name)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _wait_for_default_subnets_ready(
+    ensure_jwt_users: None, setup_organization_memberships: None, grpc: GRPCClient
+) -> None:
+    """Wait for tenant-default subnets to reach READY in the fulfillment database.
+
+    Tenant creation triggers the DefaultNetworkingProvisioner which creates a
+    default VirtualNetwork, Subnet, and SecurityGroup in SUBNET_STATE_PENDING.
+    The osac-operator marks the K8s CRs Ready, then the subnet feedback
+    controller syncs that state back to PostgreSQL.  Tests that implicitly
+    reference these subnets (e.g. BareMetalInstance creation inherits the
+    tenant's default subnet) hit FailedPrecondition if the DB update hasn't
+    landed yet.
+
+    Depends on ``ensure_jwt_users`` (which itself depends on ``ensure_tenants``)
+    so that the ``grpc`` client's first call does not trigger JIT user
+    provisioning before ``ensure_jwt_users`` creates the RoleBinding.
+
+    Depends on ``setup_organization_memberships`` so that the Keycloak
+    organization membership is in place before the first JWT is obtained;
+    without it the token may lack the tenant claim and
+    ``list_subnet_ids()`` returns an empty list (``WHERE tenant = $1``
+    receives an empty string).
+    """
+    subnet_ids: list[str] = poll_until(
+        fn=lambda: grpc.list_subnet_ids(),
+        until=lambda ids: len(ids) > 0,
+        retries=30,
+        delay=2,
+        description="at least one subnet to appear in gRPC",
+        retry_on_error=True,
+    )
+    for subnet_id in subnet_ids:
+        wait_for_grpc_subnet_ready(grpc=grpc, subnet_id=subnet_id)
 
 
 @pytest.fixture(scope="session", autouse=True)

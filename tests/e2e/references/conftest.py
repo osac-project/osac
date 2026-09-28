@@ -17,6 +17,7 @@ from tests.e2e.core.helpers import (
     wait_for_external_ip_pool_deletion,
     wait_for_external_ip_pool_grpc_ready,
     wait_for_external_ip_pool_ready,
+    wait_for_grpc_subnet_ready,
     wait_for_security_group_cr,
     wait_for_security_group_deletion,
     wait_for_security_group_ready,
@@ -185,6 +186,7 @@ def ref_subnet(
         subnet_id = response["object"]["id"]
         subnet_cr_name = wait_for_subnet_cr(k8s=k8s_hub_client, uuid=subnet_id)
         wait_for_subnet_ready(k8s=k8s_hub_client, name=subnet_cr_name)
+        wait_for_grpc_subnet_ready(grpc=grpc, subnet_id=subnet_id)
         yield {"id": subnet_id, "name": subnet_name, "cr_name": subnet_cr_name}
     except Exception:
         if subnet_id:

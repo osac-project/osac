@@ -15,6 +15,7 @@ from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.runner import poll_until, run_unchecked
 
 _POOL_READY_STATE = "EXTERNAL_IP_POOL_STATE_READY"
+_SUBNET_READY_STATE = "SUBNET_STATE_READY"
 _BMI_RUNNING_RETRIES = 180
 _BMI_RUNNING_DELAY = 10
 
@@ -213,6 +214,31 @@ def wait_for_subnet_ready(*, k8s: K8sClient, name: str) -> None:
         retries=60,
         delay=5,
         description=f"{name} Subnet Ready",
+    )
+
+
+def wait_for_grpc_subnet_ready(*, grpc: GRPCClient, subnet_id: str) -> None:
+    """Poll the gRPC API until the subnet state is READY.
+
+    The K8s CR status may report Ready before the fulfillment-service database
+    has been updated by the controller feedback loop.  Polling via gRPC closes
+    this race so that subsequent resource creation referencing the subnet does
+    not hit FailedPrecondition.
+    """
+
+    def _state() -> str:
+        try:
+            subnet = grpc.get_subnet(subnet_id=subnet_id)
+        except subprocess.CalledProcessError:
+            return ""
+        return subnet.get("object", {}).get("status", {}).get("state", "")
+
+    poll_until(
+        fn=_state,
+        until=lambda v: v == _SUBNET_READY_STATE,
+        retries=30,
+        delay=2,
+        description=f"Subnet {subnet_id} gRPC READY",
     )
 
 

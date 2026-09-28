@@ -3,14 +3,10 @@ argument_specs:
   main:
     short_description: OSAC CSI driver Helm chart install
     description: >
-      Idempotently installs the OSAC CSI driver (csi-driver Helm chart) once
-      per hub-targeting storage dispatch that includes at least
-      one CSI-driver-supported provider (regardless of how many such providers
-      are configured in the dispatched tier list) -- a dispatch with zero
-      supported providers is a no-op. Called directly
-      from every hub-targeting storage dispatch point —
-      playbook_osac_create_tenant_storage_backend.yml and the Tenant (hub) call
-      site of playbook_osac_create_tenant_cluster_storage.yml —
+      Optionally installs the OSAC CSI driver Helm chart for supported network
+      providers and creates local LVMS StorageClasses when explicitly enabled.
+      The Helm install is a no-op when disabled or when no supported network
+      provider is dispatched. Called from hub-targeting storage dispatch points,
       deliberately not from osac.service.storage_provider's own dispatcher, to
       keep storage_provider/tests/test.yml's zero-live-I/O validation
       guarantee intact.
@@ -24,6 +20,21 @@ argument_specs:
           the hub cluster. Defaults to false so standard clusters where the
           osac-installer umbrella chart deploys the driver do not encounter
           Helm ownership collisions or VM-creation lock contention.
+      csi_driver_install_lvms_storage_class_enabled:
+        type: bool
+        required: false
+        default: false
+        description: >
+          Whether to create OSAC CSI StorageClasses for local LVMS tiers in
+          this dispatch. Independent of csi_driver_install_enabled; defaults
+          to false to preserve the direct TopoLVM StorageClass path.
+      csi_driver_install_skip_lvms_storage_class:
+        type: bool
+        required: false
+        default: false
+        description: >
+          Internal caller control that suppresses local LVMS StorageClass
+          creation for dispatches that only prepare storage backends.
       csi_driver_install_tiers:
         type: list
         required: true

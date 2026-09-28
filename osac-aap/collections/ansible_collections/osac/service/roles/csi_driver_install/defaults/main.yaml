@@ -37,6 +37,10 @@ csi_driver_install_vendor_node_socket_paths:
 # PR #361. These defaults are intentionally independent of the chart's
 # network-vendor enablement list: LVMS needs a StorageClass, not a vendor
 # controller Service.
+csi_driver_install_lvms_storage_class_enabled: false
+# Internal Stage 1 guard: backend setup must defer local StorageClass creation
+# until Stage 2 confirms the tenant's storage backend is ready.
+csi_driver_install_skip_lvms_storage_class: false
 csi_driver_install_local_provider: lvms
 csi_driver_install_storage_class_provisioner: csi.osac.openshift.io
 csi_driver_install_storage_class_reclaim_policy: Delete

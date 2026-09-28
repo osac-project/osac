@@ -115,10 +115,14 @@
     # internal/controller/storage_controller_test.go ("Stage 1: Backend
     # provisioning" and "Stage 2: Cluster storage provisioning" contexts),
     # which drive handleBackendReadiness against a real envtest control plane.
-    # Gated by csi_driver_install_enabled (default false).
-    - name: Install OSAC CSI driver on the hub (once per dispatch, regardless of provider count)
+    # The role may install the CSI Helm release, create an opt-in local-tier
+    # StorageClass, or both. Each operation has an independent flag; the CSI
+    # role remains limited to Tenant (hub) dispatches.
+    - name: Install OSAC CSI driver or create local-tier StorageClasses on the hub
       when:
-        - csi_driver_install_enabled | default(false) | bool
+        - >-
+          (csi_driver_install_enabled | default(false) | bool) or
+          (csi_driver_install_lvms_storage_class_enabled | default(false) | bool)
         - osac_job_vars.resource.kind == 'Tenant'
       ansible.builtin.include_role:
         name: "{{ (csi_driver_install_override | default(csi_driver_install_default)).name }}"
@@ -126,6 +130,10 @@
       vars:
         csi_driver_install_tiers: "{{ osac_job_vars.storage_tier_definitions }}"
 
+    # Keep the provider dispatch even when the CSI role created the LVMS class:
+    # it provisions network classes and publishes the common class-name output.
+    # The LVMS ensure task checks the tenant-managed class name and creates only
+    # missing classes, so it leaves the CSI provisioner intact for an opted-in tier.
     - name: Provision StorageClasses for all configured tiers
       block:
         - name: Create StorageClasses on target cluster

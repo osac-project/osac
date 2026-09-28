@@ -51,6 +51,13 @@ See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#osac-aap
 
 Storage integration requires `STORAGE_TESTS_ENABLED=true`; image builds are separate build/package validation.
 
+The isolated HostedCluster role regression runs with
+`uv run --group development ansible-playbook collections/ansible_collections/osac/service/roles/hosted_cluster/tests/test.yml`.
+It executes NodePool definition transforms for distinct NodeSets sharing an
+instance type and independent scaling. It does not create Kubernetes resources
+or exercise AAP/provider endpoints; the applicable component-integration and
+provider-boundary validations remain required.
+
 ## Generated and vendored files
 
 - There is no source-code generator for roles. Do not hand-edit third-party content under `vendor/`.

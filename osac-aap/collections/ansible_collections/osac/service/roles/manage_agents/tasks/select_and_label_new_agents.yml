@@ -6,32 +6,32 @@
     namespace: "{{ default_agent_namespace }}"
     label_selectors:
       - "{{ cluster_order_label }}={{ manage_agents_cluster_order_name }}"
-      - "{{ agent_resource_class_label }}={{ manage_agents_resource_class }}"
+      - "{{ agent_instance_type_label }}={{ manage_agents_instance_type }}"
   register: manage_agents_allocated
 
 - name: Add agents to the cluster
   when: (manage_agents_desired_count | int) > (manage_agents_allocated.resources | length)
   block:
     # Since there is only one global pool of agents, we need to make sure that
-    # the selection of new agents is serialized by resource class
+    # the selection of new agents is serialized by instance type
     - name: Acquire agent lock
       ansible.builtin.include_role:
         name: osac.service.lease
       vars:
         lease_state: present
-        lease_name: "agent-{{ manage_agents_resource_class }}-lock"
+        lease_name: "agent-{{ manage_agents_instance_type }}-lock"
         lease_holder: "{{ cluster_order_holder_id }}"
         lease_retries: 20
         lease_delay: 5
 
-    - name: Retrieve the list of available agents with a matching machine resource class
+    - name: Retrieve the list of available agents with a matching instance type
       kubernetes.core.k8s_info:
         kind: Agent
         api_version: agent-install.openshift.io/v1beta1
         namespace: "{{ default_agent_namespace }}"
         label_selectors:
           - "!{{ cluster_order_label }}"
-          - "{{ agent_resource_class_label }}={{ manage_agents_resource_class }}"
+          - "{{ agent_instance_type_label }}={{ manage_agents_instance_type }}"
       register: manage_agents_available
 
     # Agents may be picked-up outside of the fulfillment API, so we need to exclude them
@@ -89,5 +89,5 @@
         name: osac.service.lease
       vars:
         lease_state: absent
-        lease_name: "agent-{{ manage_agents_resource_class }}-lock"
+        lease_name: "agent-{{ manage_agents_instance_type }}-lock"
         lease_holder: "{{ cluster_order_holder_id }}"

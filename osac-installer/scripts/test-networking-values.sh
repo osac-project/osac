@@ -166,6 +166,43 @@ render_success \
   --set global.networking.k8sManager=k8s_only \
   --set-string global.networking.networkClass.title=Custom\ network
 
+# East-west NetworkClass configuration is schema-validated and sent in the
+# private API's spec using the protobuf JSON field names.
+render_success \
+  network-class-east-west-config \
+  'east_west_config\":{\"ethernet_ew\":{\"template_id\":\"fabric-domain-template\"' \
+  --set global.networking.fabricManager=netris \
+  --set global.networking.k8sManager= \
+  --set-string global.networking.netris.controllerUrl=https://netris.example.com \
+  --set-string global.networking.netris.credentials.username=test-user \
+  --set global.networking.netris.credentials.externalSecret=true \
+  --set-string global.networking.netris.siteId=1 \
+  --set-string global.networking.netris.tenantId=1 \
+  --set-string global.networking.netris.tenantName=test \
+  --set-string global.networking.networkClass.east_west_config.ethernet_ew.template_id=fabric-domain-template
+
+render_success \
+  legacy-network-class-east-west-config \
+  'east_west_config\":{\"ethernet_ew\":{\"template_id\":\"legacy-template\"' \
+  --set global.expertOverrides.networkClass=true \
+  --set networkClass.enabled=true \
+  --set-string networkClass.title=Legacy\ networking \
+  --set networkClass.k8sManager=k8s_only \
+  --set networkClass.fabricManager= \
+  --set-string networkClass.east_west_config.ethernet_ew.template_id=legacy-template
+
+# The umbrella chart already installs the operator's generated CRD subchart;
+# assert that FabricDomain remains part of the rendered deployment.
+render_success \
+  fabricdomain-crd \
+  'name: fabricdomains.osac.openshift.io'
+
+render_failure \
+  network-class-east-west-missing-template \
+  --set global.networking.fabricManager= \
+  --set global.networking.k8sManager=k8s_only \
+  --set-string global.networking.networkClass.east_west_config.ethernet_ew.template_id=
+
 # Port ranges are meaningful only for TCP and UDP rules.
 render_failure \
   icmp-with-ports \

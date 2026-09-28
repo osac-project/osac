@@ -36,6 +36,11 @@ global:
       mgmtVpcName: ""
       resourceClassMap: ""
     # Empty means Helm generates the manager-specific default NetworkClass.
+    # To configure a Netris Ethernet east-west template, use:
+    # networkClass:
+    #   east_west_config:
+    #     ethernet_ew:
+    #       template_id: "<Netris template ID>"
     networkClass: {}
 
 # ---------------------

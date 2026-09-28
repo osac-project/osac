@@ -55,6 +55,10 @@ global:
       resourceClassMap: ""
     # An empty block causes Helm to generate the default NetworkClass from
     # fabricManager/k8sManager. Explicit fields override generated values.
+    # East-west backend configuration is forwarded to NetworkClass spec, e.g.:
+    # east_west_config:
+    #   ethernet_ew:
+    #     template_id: "<Netris template ID>"
     networkClass: {}
   expertOverrides:
     aap: false
@@ -458,6 +462,8 @@ networkClass:
   # global.networking (and optional global.networking.networkClass overrides)
   # instead — the create-network-class hook derives the NetworkClass from the
   # facade.
+  # For east-west fabric domains, set east_west_config under this block using
+  # the NetworkClass API shape (for example ethernet_ew.template_id).
   #
   # When enabling this expert path, set title and at least one of
   # k8sManager/fabricManager. The corresponding manager must already be

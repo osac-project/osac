@@ -19,14 +19,18 @@
 {{- $egressRules = append $egressRules $rule -}}
 {{- end }}
 {{- $identity := $fabricManager | default $k8sManager -}}
-{{- $body := dict
-      "title" (required "networkClass.title is required when networkClass.enabled is true" $title)
-      "spec" (dict "defaults" (dict
+{{- $spec := dict "defaults" (dict
         "virtual_network_ipv4_cidr" $networkClass.defaults.virtualNetworkIPv4CIDR
         "subnet_ipv4_cidr" $networkClass.defaults.subnetIPv4CIDR
         "enable_nat_gateway" $networkClass.defaults.enableNatGateway
         "egress_rules" $egressRules
-      ))
+      ) -}}
+{{- with $networkClass.east_west_config }}
+{{- $_ := set $spec "east_west_config" . -}}
+{{- end -}}
+{{- $body := dict
+      "title" (required "networkClass.title is required when networkClass.enabled is true" $title)
+      "spec" $spec
     -}}
 {{- if $networkClass.description }}{{ $_ := set $body "description" $networkClass.description }}{{ end -}}
 {{- if $k8sManager }}{{ $_ := set $body "k8s_manager" $k8sManager }}{{ end -}}

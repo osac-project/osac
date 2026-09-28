@@ -1736,6 +1736,10 @@
           "description": "fabricManager name to set on the NetworkClass (must match a manager already registered via operator.networkManagers.fabricManagers)",
           "default": ""
         },
+        "east_west_config": {
+          "$ref": "#/$defs/eastWestConfig",
+          "description": "Backend configuration for east-west fabric domains."
+        },
         "defaults": {
           "type": "object",
           "description": "Tenant-onboarding defaults. Required for this NetworkClass to auto-create a default VirtualNetwork/Subnet/SecurityGroup for new tenants.",
@@ -2114,6 +2118,10 @@
           "type": "boolean",
           "default": true
         },
+        "east_west_config": {
+          "$ref": "#/$defs/eastWestConfig",
+          "description": "Backend configuration for east-west fabric domains."
+        },
         "defaults": {
           "type": "object",
           "properties": {
@@ -2226,6 +2234,55 @@
           }
         }
       ]
+    },
+    "eastWestConfig": {
+      "type": "object",
+      "description": "Backend configuration for east-west fabric domains, matching NetworkClass spec.east_west_config.",
+      "properties": {
+        "ethernet_ew": {
+          "type": "object",
+          "description": "Ethernet east-west fabric configuration.",
+          "properties": {
+            "template_id": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Netris Server Cluster template ID."
+            }
+          },
+          "required": [
+            "template_id"
+          ],
+          "additionalProperties": false
+        },
+        "infiniband_ew": {
+          "type": "object",
+          "description": "InfiniBand east-west fabric configuration.",
+          "properties": {
+            "mode": {
+              "type": "string"
+            },
+            "pkey_policy": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "nvlink": {
+          "type": "object",
+          "description": "NVLink fabric configuration.",
+          "properties": {
+            "backend": {
+              "type": "string"
+            },
+            "endpoint": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "minProperties": 1,
+      "additionalProperties": false
     },
     "aapNetrisConfig": {
       "type": "object",

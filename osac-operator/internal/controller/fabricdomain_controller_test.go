@@ -89,7 +89,7 @@ var _ = Describe("FabricDomainReconciler", func() {
 					JobID:   jobID,
 					State:   v1alpha1.JobStateSucceeded,
 					Message: "create completed",
-					Outputs: map[string]any{"server_cluster_id": "cluster-42", "server_cluster_vpc_id": "vpc-7"},
+					Outputs: map[string]any{"server_cluster_id": "42", "server_cluster_vpc_id": "7"},
 				}, nil
 			},
 		}
@@ -125,10 +125,10 @@ var _ = Describe("FabricDomainReconciler", func() {
 				Namespace: namespace,
 				Labels:    map[string]string{osacVirtualNetworkIDLabel: vnetID},
 			},
-			Spec: v1alpha1.VirtualNetworkSpec{NetworkClass: "nc-1"},
+			Spec: v1alpha1.VirtualNetworkSpec{NetworkClass: "nc-1", Region: "region-a"},
 			Status: v1alpha1.VirtualNetworkStatus{
 				Phase:            v1alpha1.VirtualNetworkPhaseReady,
-				BackendNetworkID: "vpc-7",
+				BackendNetworkID: "7",
 			},
 		}
 		domain = &v1alpha1.FabricDomain{
@@ -170,7 +170,8 @@ var _ = Describe("FabricDomainReconciler", func() {
 		Expect(annotations).To(HaveKeyWithValue("osac.openshift.io/owner-reference", "owner-1"))
 		spec := lastPayload["spec"].(map[string]any)
 		Expect(spec["templateId"]).To(Equal("42"))
-		Expect(spec["vpcId"]).To(Equal("vpc-7"))
+		Expect(spec["vpcId"]).To(Equal("7"))
+		Expect(spec["region"]).To(Equal("region-a"))
 		Expect(spec["servers"]).To(Equal([]string{"server-a", "server-b"}))
 
 		_, err := reconciler.Reconcile(ctx, request())
@@ -178,8 +179,8 @@ var _ = Describe("FabricDomainReconciler", func() {
 		updated := &v1alpha1.FabricDomain{}
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(domain), updated)).To(Succeed())
 		Expect(updated.Status.Phase).To(Equal(v1alpha1.FabricDomainPhaseReady))
-		Expect(updated.Status.BackendID).To(Equal("cluster-42"))
-		Expect(updated.Status.VPCID).To(Equal("vpc-7"))
+		Expect(updated.Status.BackendID).To(Equal("42"))
+		Expect(updated.Status.VPCID).To(Equal("7"))
 		Expect(updated.Status.Members).To(ConsistOf(
 			v1alpha1.FabricDomainMemberStatus{Server: "server-a", State: v1alpha1.FabricDomainMemberStateActive},
 			v1alpha1.FabricDomainMemberStatus{Server: "server-b", State: v1alpha1.FabricDomainMemberStateActive},
@@ -208,8 +209,8 @@ var _ = Describe("FabricDomainReconciler", func() {
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(domain), deletingDomain)).To(Succeed())
 		deletingDomain.Finalizers = append(deletingDomain.Finalizers, osacFabricDomainFinalizer)
 		Expect(k8sClient.Update(ctx, deletingDomain)).To(Succeed())
-		deletingDomain.Status.BackendID = "cluster-42"
-		deletingDomain.Status.VPCID = "vpc-7"
+		deletingDomain.Status.BackendID = "42"
+		deletingDomain.Status.VPCID = "7"
 		deletingDomain.Status.ProvisioningJobs = []v1alpha1.JobStatus{{
 			JobID: "create-1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateSucceeded,
 		}}
@@ -240,8 +241,8 @@ var _ = Describe("FabricDomainReconciler", func() {
 		Expect(deletingDomain.Status.Phase).To(Equal(v1alpha1.FabricDomainPhaseDeleting))
 		Expect(deletePayload["kind"]).To(Equal("ServerCluster"))
 		deleteSpec := deletePayload["spec"].(map[string]any)
-		Expect(deleteSpec["backendId"]).To(Equal("cluster-42"))
-		Expect(deleteSpec["vpcId"]).To(Equal("vpc-7"))
+		Expect(deleteSpec["backendId"]).To(Equal("42"))
+		Expect(deleteSpec["vpcId"]).To(Equal("7"))
 
 		_, err = reconciler.handleDelete(ctx, deletingDomain)
 		Expect(err).NotTo(HaveOccurred())
@@ -270,7 +271,7 @@ var _ = Describe("FabricDomainReconciler", func() {
 		Expect(protectedVNet.Finalizers).To(ContainElement(osacFabricDomainProtectionFinalizer))
 	})
 
-	It("attempts cleanup when provisioning intent exists without saved job status or backend ID", func() {
+	It("retains the finalizer when provisioning intent has no saved job or backend ID", func() {
 		deletingDomain := &v1alpha1.FabricDomain{}
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(domain), deletingDomain)).To(Succeed())
 		deletingDomain.Finalizers = append(deletingDomain.Finalizers, osacFabricDomainFinalizer)
@@ -288,10 +289,77 @@ var _ = Describe("FabricDomainReconciler", func() {
 			}, nil
 		}
 
+		_, err := reconciler.handleDelete(ctx, deletingDomain)
+		Expect(err).To(MatchError(ContainSubstring("cannot safely delete FabricDomain")))
+		Expect(deprovisionCalls).To(Equal(0))
+		Expect(deletingDomain.Finalizers).To(ContainElement(osacFabricDomainFinalizer))
+		Expect(deletingDomain.Status.Phase).To(Equal(v1alpha1.FabricDomainPhaseFailed))
+	})
+
+	It("uses the VirtualNetwork region for scoped cleanup after a recorded provision job", func() {
+		deletingDomain := &v1alpha1.FabricDomain{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(domain), deletingDomain)).To(Succeed())
+		deletingDomain.Finalizers = append(deletingDomain.Finalizers, osacFabricDomainFinalizer)
+		Expect(k8sClient.Update(ctx, deletingDomain)).To(Succeed())
+		deletingDomain.Status.ProvisioningIntent = true
+		deletingDomain.Status.VPCID = "7"
+		deletingDomain.Status.ProvisioningJobs = []v1alpha1.JobStatus{{
+			JobID: "create-1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateSucceeded,
+		}}
+		Expect(k8sClient.Status().Update(ctx, deletingDomain)).To(Succeed())
+
+		mockProvider.triggerDeprovisionFunc = func(ctx context.Context, _ client.Object, _ []v1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {
+			extraVars := provisioning.AAPExtraVarsFromContext(ctx)
+			payload := extraVars["ansible_eda"].(map[string]any)["event"].(map[string]any)["payload"].(map[string]any)
+			spec := payload["spec"].(map[string]any)
+			Expect(spec["backendId"]).To(BeEmpty())
+			Expect(spec["vpcId"]).To(Equal("7"))
+			Expect(spec["region"]).To(Equal("region-a"))
+			return &provisioning.DeprovisionResult{Action: provisioning.DeprovisionTriggered, JobID: "delete-1", BlockDeletionOnFailure: true}, nil
+		}
 		result, err := reconciler.handleDelete(ctx, deletingDomain)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.RequeueAfter).To(Equal(time.Second))
-		Expect(deprovisionCalls).To(Equal(1))
+		Expect(deletingDomain.Finalizers).To(ContainElement(osacFabricDomainFinalizer))
+	})
+
+	It("does not launch AAP with an invalid Netris VPC ID", func() {
+		updatedVNet := &v1alpha1.VirtualNetwork{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(vnet), updatedVNet)).To(Succeed())
+		updatedVNet.Status.BackendNetworkID = "vpc-7"
+		Expect(k8sClient.Status().Update(ctx, updatedVNet)).To(Succeed())
+		for i := 0; i < 3; i++ {
+			_, err := reconciler.Reconcile(ctx, request())
+			Expect(err).NotTo(HaveOccurred())
+		}
+		Expect(triggerCount).To(BeZero())
+		updated := &v1alpha1.FabricDomain{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(domain), updated)).To(Succeed())
+		Expect(updated.Status.Phase).To(Equal(v1alpha1.FabricDomainPhaseFailed))
+	})
+
+	It("rejects a ServerCluster reported in another VPC", func() {
+		domain.Status.VPCID = "7"
+		domain.Status.ProvisioningJobs = []v1alpha1.JobStatus{{
+			JobID: "create-1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateSucceeded,
+		}}
+		fabricDomainPollCallbacks(domain, "desired").OnSuccess(provisioning.ProvisionStatus{
+			Outputs: map[string]any{"server_cluster_id": "42", "server_cluster_vpc_id": "8"},
+		})
+		Expect(domain.Status.Phase).To(Equal(v1alpha1.FabricDomainPhaseFailed))
+		Expect(domain.Status.BackendID).To(Equal("42"), "retain the exact ID for safe cleanup")
+		Expect(domain.Status.VPCID).To(Equal("7"))
+		Expect(domain.Status.ProvisioningJobs[0].State).To(Equal(v1alpha1.JobStateFailed))
+	})
+
+	It("wakes only FabricDomains that reference a changed VirtualNetwork", func() {
+		other := &v1alpha1.FabricDomain{
+			ObjectMeta: metav1.ObjectMeta{Name: "other-domain", Namespace: namespace},
+			Spec:       v1alpha1.FabricDomainSpec{VirtualNetwork: "another-network"},
+		}
+		Expect(k8sClient.Create(ctx, other)).To(Succeed())
+		requests := reconciler.mapVirtualNetworkToFabricDomains(ctx, vnet)
+		Expect(requests).To(ConsistOf(reconcile.Request{NamespacedName: client.ObjectKeyFromObject(domain)}))
 	})
 
 	It("retains the finalizer when provisioning state exists but the provider is unavailable", func() {

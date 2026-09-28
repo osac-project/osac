@@ -4,6 +4,11 @@
     name: netris.controller.auth
   when: netris_session_cookie is not defined
 
+- name: Reset server cluster lookup results
+  ansible.builtin.set_fact:
+    _existing_server_cluster: null
+    _matching_server_clusters: []
+
 - name: Get existing server clusters
   ansible.builtin.uri:
     url: "{{ netris_controller_url }}/api/v2/server-cluster"
@@ -29,17 +34,43 @@
     - server_cluster_backend_id is defined
     - server_cluster_backend_id | string | length > 0
 
-- name: Find existing server cluster by name
+- name: Require an explicit scope for name-based server cluster deletion
+  ansible.builtin.assert:
+    that:
+      - server_cluster_vpc_id is defined or server_cluster_allow_name_only_lookup | default(false) | bool
+    fail_msg: "Deleting a ServerCluster without a backend ID requires a VPC ID; legacy name-only lookup must be explicitly enabled"
+  when: server_cluster_backend_id is not defined or server_cluster_backend_id | string | length == 0
+
+- name: Find same-name server clusters at the target site
   ansible.builtin.set_fact:
-    _existing_server_cluster: >-
+    _matching_server_clusters: >-
       {{
         (server_cluster_list_resp.json.data | default([]))
         | selectattr('name', 'equalto', server_cluster_name)
-        | list | first | default(none)
+        | selectattr('site.id', 'equalto', server_cluster_site_id | int)
+        | list
       }}
   when:
     - server_cluster_list_resp.json is mapping
-    - _existing_server_cluster is not defined or _existing_server_cluster is none
+    - server_cluster_backend_id is not defined or server_cluster_backend_id | string | length == 0
+
+- name: Restrict name lookup to the requested VPC
+  ansible.builtin.set_fact:
+    _matching_server_clusters: "{{ _matching_server_clusters | selectattr('vpc.id', 'equalto', server_cluster_vpc_id | int) | list }}"
+  when:
+    - server_cluster_backend_id is not defined or server_cluster_backend_id | string | length == 0
+    - server_cluster_vpc_id is defined
+
+- name: Refuse ambiguous name-based server cluster deletion
+  ansible.builtin.assert:
+    that: _matching_server_clusters | length <= 1
+    fail_msg: "Multiple ServerClusters match name {{ server_cluster_name }} at the requested site and VPC; refusing to delete an arbitrary one"
+  when: server_cluster_backend_id is not defined or server_cluster_backend_id | string | length == 0
+
+- name: Select uniquely matched server cluster
+  ansible.builtin.set_fact:
+    _existing_server_cluster: "{{ _matching_server_clusters | first | default(none) }}"
+  when: server_cluster_backend_id is not defined or server_cluster_backend_id | string | length == 0
 
 - name: Delete server cluster
   when: _existing_server_cluster is defined and _existing_server_cluster is not none

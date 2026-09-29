@@ -1,0 +1,92 @@
+#
+# Copyright (c) 2025 Red Hat, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
+# in compliance with the License. You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software distributed under the License
+# is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+# or implied. See the License for the specific language governing permissions and limitations under
+# the License.
+#
+
+# Replaces the Copr webhook that was configured on the old standalone
+# fulfillment-service repository. That repo had a GitHub webhook pointing
+# at Copr's ingestion endpoint; Copr cloned the repo and ran
+# .copr/Makefile -> srpm.sh to produce an SRPM, then built the RPM.
+#
+# The monorepo has no such webhook, so this workflow simulates the same
+# trigger by POSTing to the Copr webhook URL whenever fulfillment-service
+# code lands on main or a new fulfillment-service release tag is pushed.
+#
+# Required repository secrets:
+#   COPR_WEBHOOK_URL  -- the full Copr webhook endpoint, e.g.
+#       https://copr.fedorainfracloud.org/webhooks/github/<id>/<uuid>/
+#
+# The Copr project's SCM source settings must point at osac-project/osac
+# (the monorepo) with subdirectory fulfillment-service/.copr so that
+# `make -f <clone>/.copr/Makefile srpm` works after clone.
+
+name: Trigger Copr RPM build
+
+on:
+  push:
+    branches:
+      - main
+    # paths is evaluated only for branch pushes, not tag pushes -- so tag
+    # events matching the tags filter below always fire regardless of which
+    # files changed, which is the correct behavior (a release tag should
+    # always trigger an RPM build).
+    paths:
+      - 'fulfillment-service/**'
+    tags:
+      - 'fulfillment-service/v*'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  trigger-copr:
+    name: Trigger Copr build
+    runs-on: ubuntu-latest
+    # No checkout needed -- the workflow only sends an HTTP request.
+    steps:
+      - name: Notify Copr
+        env:
+          COPR_WEBHOOK_URL: ${{ secrets.COPR_WEBHOOK_URL }}
+        run: |
+          if [[ -z "${COPR_WEBHOOK_URL}" ]]; then
+            echo "::error::COPR_WEBHOOK_URL secret is not set"
+            exit 1
+          fi
+
+          # POST a minimal GitHub-push-event payload to the Copr webhook
+          # endpoint.  Copr's handler uses the clone_url to fetch sources
+          # and the ref/after fields to check out the correct commit before
+          # running .copr/Makefile.
+          response=$(curl --fail-with-body -s -o response.txt -w "%{http_code}" \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -H "X-GitHub-Event: push" \
+            -d '{
+              "ref": "'"${GITHUB_REF}"'",
+              "after": "'"${GITHUB_SHA}"'",
+              "repository": {
+                "clone_url": "'"${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"'",
+                "full_name": "'"${GITHUB_REPOSITORY}"'",
+                "html_url": "'"${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"'"
+              }
+            }' \
+            "${COPR_WEBHOOK_URL}")
+
+          echo "Copr responded with HTTP ${response}"
+          cat response.txt 2>/dev/null || true
+
+          if [[ "${response}" -lt 200 ]] || [[ "${response}" -ge 300 ]]; then
+            echo "::error::Copr webhook returned HTTP ${response}"
+            exit 1
+          fi
+
+          echo "Copr build triggered successfully"

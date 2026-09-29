@@ -172,7 +172,7 @@ func (c *runnerContext) run(cmd *cobra.Command, _ []string) error {
 	bmi := publicv1.BareMetalInstance_builder{
 		Metadata: publicv1.Metadata_builder{
 			Name:   c.args.name,
-			Tenant: cfg.Tenant(),
+			Tenant: config.TenantFromContext(ctx),
 		}.Build(),
 		Spec: builtSpec,
 	}.Build()

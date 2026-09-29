@@ -200,9 +200,12 @@ print(json.dumps({
     warn "Failed to create or find the OSAC AAP execution environment"
     return 1
   fi
-  curl -s -X PATCH "${api}/execution_environments/${ee_id}/" -H "Authorization: Bearer ${awx_token}" \
-    -H "Content-Type: application/json" \
-    -d "$(execution_environment_image_json)" >/dev/null
+  if ! curl -sS -f -X PATCH "${api}/execution_environments/${ee_id}/" \
+    -H "Authorization: Bearer ${awx_token}" -H "Content-Type: application/json" \
+    -d "$(execution_environment_image_json)" >/dev/null; then
+    warn "Failed to configure execution environment ${ee_id}"
+    return 1
+  fi
   log "OSAC AAP execution environment configured: ${OSAC_EE_IMAGE} (pull: ${OSAC_EE_PULL})"
 
   # Project from the osac mono-repo.
@@ -252,8 +255,14 @@ print(json.dumps({
   declare -A inventory_ids
 
   local template_specs
-  template_specs=$(controller_template_specs)
-  [[ -n "${template_specs}" ]] || { warn "Production AAP controller.yml contains no job templates"; return 1; }
+  if ! template_specs=$(controller_template_specs); then
+    warn "Failed to load production controller template definitions"
+    return 1
+  fi
+  if [[ -z "${template_specs}" ]]; then
+    warn "Production controller template definitions are empty"
+    return 1
+  fi
   while IFS='|' read -r name playbook template_inventory workflow_status; do
     [[ -n "${name}" ]] || continue
     if [[ -z "${inventory_ids[${template_inventory}]:-}" ]]; then

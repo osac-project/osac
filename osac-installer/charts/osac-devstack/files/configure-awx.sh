@@ -12,6 +12,8 @@
 set -euo pipefail
 
 NS="${1:-${NS:-osac}}"
+OSAC_EE_IMAGE="${OSAC_EE_IMAGE:-ghcr.io/osac-project/osac-aap:latest}"
+OSAC_EE_PULL="${OSAC_EE_PULL:-missing}"
 
 log()  { echo "[+] $*"; }
 warn() { echo "[!] $*" >&2; }
@@ -90,6 +92,16 @@ print(next((str(item["id"]) for item in templates if item.get("name") == name), 
   log "  template ${method,,}: ${name} (id ${template_id})"
 }
 
+execution_environment_json() {
+  OSAC_EE_IMAGE="${OSAC_EE_IMAGE}" OSAC_EE_PULL="${OSAC_EE_PULL}" \
+    python3 -c 'import json, os; print(json.dumps({"name": "osac-aap-ee", "organization": 1, "image": os.environ["OSAC_EE_IMAGE"], "pull": os.environ["OSAC_EE_PULL"]}))'
+}
+
+execution_environment_image_json() {
+  OSAC_EE_IMAGE="${OSAC_EE_IMAGE}" OSAC_EE_PULL="${OSAC_EE_PULL}" \
+    python3 -c 'import json, os; print(json.dumps({"image": os.environ["OSAC_EE_IMAGE"], "pull": os.environ["OSAC_EE_PULL"]}))'
+}
+
 configure_awx() {
   log "Configuring AWX for OSAC..."
 
@@ -127,7 +139,9 @@ configure_awx() {
     -H "Content-Type: application/json" \
     -d '{"name": "localhost", "variables": "ansible_connection: local"}' >/dev/null 2>&1 || true
 
-  # Disable collection/role sync and set ANSIBLE_JINJA2_NATIVE=true for osac-aap playbooks.
+  # Disable project collection/role sync: OSAC's collections are installed in
+  # its dedicated execution environment from osac-aap/collections/requirements.yml.
+  # Set ANSIBLE_JINJA2_NATIVE=true for osac-aap playbooks.
   # Local AWX workers may lack a service-account namespace file. Use the
   # release namespace for storage config Secrets through the supported override.
   local settings_payload
@@ -143,10 +157,30 @@ print(json.dumps({
         "OSAC_STORAGE_CONFIG_NAMESPACE": sys.argv[1],
     },
 }))
-' "${NS}")
+ ' "${NS}")
   curl -fsS -X PATCH "${api}/settings/jobs/" -H "Authorization: Bearer ${awx_token}" \
     -H "Content-Type: application/json" \
     -d "${settings_payload}" >/dev/null
+
+  # Register the OSAC AAP execution environment. It is built from the same
+  # collection requirements as AAP deployments, including vastdata.vms.
+  local ee_id
+  ee_id=$(curl -s -X POST "${api}/execution_environments/" -H "Authorization: Bearer ${awx_token}" \
+    -H "Content-Type: application/json" \
+    -d "$(execution_environment_json)" | \
+    python3 -c "import json,sys; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || true)
+  if [[ -z "${ee_id}" ]]; then
+    ee_id=$(curl -s -H "Authorization: Bearer ${awx_token}" "${api}/execution_environments/?name=osac-aap-ee" | \
+      python3 -c "import json,sys; d=json.load(sys.stdin); print(d['results'][0]['id'] if d.get('results') else '')")
+  fi
+  if [[ -z "${ee_id}" ]]; then
+    warn "Failed to create or find the OSAC AAP execution environment"
+    return 1
+  fi
+  curl -s -X PATCH "${api}/execution_environments/${ee_id}/" -H "Authorization: Bearer ${awx_token}" \
+    -H "Content-Type: application/json" \
+    -d "$(execution_environment_image_json)" >/dev/null
+  log "OSAC AAP execution environment configured: ${OSAC_EE_IMAGE} (pull: ${OSAC_EE_PULL})"
 
   # Project from the osac mono-repo.
   # Remove the cached checkout before syncing: the repo's graph-latest tag moves,
@@ -221,6 +255,17 @@ print(json.dumps({
     ensure_job_template "${name}" "${playbook}"
   done
 
+  # Existing job templates are not changed by POST-on-create above, so assign
+  # the OSAC execution environment explicitly on every OSAC template as well.
+  local templates jt_id
+  templates=$(curl -s -H "Authorization: Bearer ${awx_token}" "${api}/job_templates/" | \
+    python3 -c "import json,sys; print(' '.join(str(t['id']) for t in json.load(sys.stdin)['results'] if t.get('name','').startswith('osac-')))")
+  for jt_id in ${templates}; do
+    curl -s -X PATCH "${api}/job_templates/${jt_id}/" -H "Authorization: Bearer ${awx_token}" \
+      -H "Content-Type: application/json" -d "{\"execution_environment\": ${ee_id}}" >/dev/null
+  done
+  log "OSAC job templates assigned to osac-aap-ee"
+
   # Kubernetes credential for job templates.
   kubectl -n "${NS}" create serviceaccount awx-runner 2>/dev/null || true
   kubectl create clusterrolebinding awx-runner-admin --clusterrole=cluster-admin \
@@ -245,7 +290,6 @@ print(json.dumps({
     }" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id',''))")
 
   # Attach credential to all job templates.
-  local templates jt_id
   templates=$(curl -s -H "Authorization: Bearer ${awx_token}" "${api}/job_templates/" | \
     python3 -c "import json,sys; print(' '.join(str(t['id']) for t in json.load(sys.stdin)['results']))")
   for jt_id in ${templates}; do

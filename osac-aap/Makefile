@@ -1,7 +1,7 @@
 # Integration tests for osac.workflows collection
 # Note: Must be run from repository root directory
 
-.PHONY: test lint execution-environment-build execution-environment-push
+.PHONY: test lint execution-environment-build execution-environment-push kind-load-image
 
 test:
 	uv run --group development pytest tests/unit
@@ -36,3 +36,8 @@ execution-environment-build:
 
 execution-environment-push:
 	$(CONTAINER_TOOL) push "$(IMG)"
+
+kind-load-image: ## Load the built execution-environment image into dev-full Kind.
+	$(call kind-load-image,$(IMG))
+
+include $(shell git rev-parse --show-toplevel)/osac-installer/scripts/dev-full/kind-load-image.mk

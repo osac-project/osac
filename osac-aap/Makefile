@@ -31,20 +31,23 @@ EE_PLATFORM_ARGS = $(if $(EE_CONTAINER_PLATFORM),--extra-build-cli-args="--platf
 
 execution-environment-build:
 	uv sync --locked --all-extras --group development
-	@if [[ "$(EE_CONTAINER_PLATFORM)" == *,* ]]; then \
-		uv tool run ansible-builder create -vvv \
-			-f "./execution-environment/execution-environment.yaml"; \
-		$(CONTAINER_TOOL) build \
-			--platform "$(EE_CONTAINER_PLATFORM)" \
-			--manifest "$(EE_LOCAL_TAG)" \
-			-f context/Containerfile context; \
-	else \
-		uv tool run ansible-builder build -vvv \
-			--container-runtime $(CONTAINER_TOOL) \
-			--tag "$(EE_LOCAL_TAG)" \
-			$(EE_PLATFORM_ARGS) \
-			-f "./execution-environment/execution-environment.yaml"; \
-	fi
+	@case "$(EE_CONTAINER_PLATFORM)" in \
+		*,*) \
+			uv tool run ansible-builder create -vvv \
+				-f "./execution-environment/execution-environment.yaml"; \
+			$(CONTAINER_TOOL) build \
+				--platform "$(EE_CONTAINER_PLATFORM)" \
+				--manifest "$(EE_LOCAL_TAG)" \
+				-f context/Containerfile context; \
+			;; \
+		*) \
+			uv tool run ansible-builder build -vvv \
+				--container-runtime $(CONTAINER_TOOL) \
+				--tag "$(EE_LOCAL_TAG)" \
+				$(EE_PLATFORM_ARGS) \
+				-f "./execution-environment/execution-environment.yaml"; \
+			;; \
+	esac
 	$(CONTAINER_TOOL) tag "$(EE_LOCAL_TAG)" "$(IMG)"
 
 execution-environment-push:

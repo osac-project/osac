@@ -591,21 +591,44 @@
           "type": "object",
           "properties": {
             "service": {
-              "type": "string",
-              "description": "Fulfillment service container image"
+              "type": "object",
+              "description": "Fulfillment service container image",
+              "properties": {
+                "repository": {
+                  "type": "string",
+                  "description": "Container image repository"
+                },
+                "tag": {
+                  "type": "string",
+                  "description": "Container image tag"
+                },
+                "pullPolicy": {
+                  "type": "string",
+                  "description": "Image pull policy",
+                  "enum": ["Always", "IfNotPresent", "Never"]
+                }
+              },
+              "additionalProperties": false
             },
             "envoy": {
-              "type": "string",
-              "description": "Envoy proxy container image"
-            },
-            "pullPolicy": {
-              "type": "string",
-              "description": "Default image pull policy for service containers",
-              "enum": [
-                "Always",
-                "IfNotPresent",
-                "Never"
-              ]
+              "type": "object",
+              "description": "Envoy proxy container image",
+              "properties": {
+                "repository": {
+                  "type": "string",
+                  "description": "Container image repository"
+                },
+                "tag": {
+                  "type": "string",
+                  "description": "Container image tag"
+                },
+                "pullPolicy": {
+                  "type": "string",
+                  "description": "Image pull policy",
+                  "enum": ["Always", "IfNotPresent", "Never"]
+                }
+              },
+              "additionalProperties": false
             }
           },
           "additionalProperties": false

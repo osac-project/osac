@@ -35,7 +35,8 @@ spec:
           secretName: fulfillment-api-tls
       containers:
       - name: envoy
-        image: {{ .Values.images.envoy }}
+        image: {{ .Values.images.envoy.repository }}:{{ .Values.images.envoy.tag }}
+        imagePullPolicy: {{ .Values.images.envoy.pullPolicy }}
         volumeMounts:
         - name: config
           mountPath: /etc/envoy

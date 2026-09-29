@@ -39,8 +39,8 @@ spec:
           secretName: fulfillment-rest-gateway-tls
       containers:
       - name: rest-gateway
-        image: {{ .Values.images.service }}
-        imagePullPolicy: {{ .Values.images.pullPolicy }}
+        image: {{ .Values.images.service.repository }}:{{ .Values.images.service.tag }}
+        imagePullPolicy: {{ .Values.images.service.pullPolicy }}
         volumeMounts:
         - name: cas
           mountPath: /etc/fulfillment-rest-gateway/tls/cas

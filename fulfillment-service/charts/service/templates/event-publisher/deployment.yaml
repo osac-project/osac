@@ -95,8 +95,8 @@ spec:
           {{ end }}
       containers:
       - name: event-publisher
-        image: {{ .Values.images.service }}
-        imagePullPolicy: {{ .Values.images.pullPolicy }}
+        image: {{ .Values.images.service.repository }}:{{ .Values.images.service.tag }}
+        imagePullPolicy: {{ .Values.images.service.pullPolicy }}
         securityContext:
           runAsNonRoot: true
           allowPrivilegeEscalation: false

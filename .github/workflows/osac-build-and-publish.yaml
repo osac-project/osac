@@ -465,7 +465,11 @@ jobs:
           fi
           if [[ -n "${FULFILLMENT_VER}" ]]; then
             NB=$(needs_build_for fulfillment-service)
-            stamp_ci_overlay_if_present "${overlay}" '.service.images.service' "$(ref_for ghcr.io/osac-project/fulfillment-service fulfillment-service "${NB}" "${FULFILLMENT_VER}")"
+            if [[ "${NB}" == "true" ]]; then
+              stamp_ci_overlay_if_present "${overlay}" '.service.images.service.tag' "${PROVISIONAL_TAG}"
+            else
+              stamp_ci_overlay_if_present "${overlay}" '.service.images.service.tag' "${FULFILLMENT_VER}"
+            fi
           fi
           if [[ -n "${AAP_VER}" ]]; then
             NB=$(needs_build_for osac-aap)
@@ -1196,7 +1200,7 @@ jobs:
           stamp_ci_overlay_if_present "${DEV_OVERLAY}" '.operator.image.tag' "${OPERATOR_VER}"
         fi
         if [[ -n "${FULFILLMENT_VER}" ]]; then
-          stamp_ci_overlay_if_present "${DEV_OVERLAY}" '.service.images.service' "ghcr.io/osac-project/fulfillment-service:${FULFILLMENT_VER}"
+          stamp_ci_overlay_if_present "${DEV_OVERLAY}" '.service.images.service.tag' "${FULFILLMENT_VER}"
         fi
         if [[ -n "${AAP_VER}" ]]; then
           stamp_ci_overlay_if_present "${DEV_OVERLAY}" '.aap.bootstrap.image' "ghcr.io/osac-project/osac-aap:${AAP_VER}"

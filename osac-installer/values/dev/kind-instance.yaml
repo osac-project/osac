@@ -46,7 +46,10 @@ service:
   externalHostname: fulfillment-api.osac.svc.cluster.local
   internalHostname: fulfillment-internal-api.osac.svc.cluster.local
   images:
-    service: ghcr.io/osac-project/fulfillment-service:latest
+    service:
+      repository: ghcr.io/osac-project/fulfillment-service
+      tag: latest
+      pullPolicy: IfNotPresent
   certs:
     issuerRef:
       kind: ClusterIssuer

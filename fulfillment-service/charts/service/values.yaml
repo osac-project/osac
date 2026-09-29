@@ -118,9 +118,14 @@ httpCorsAllowedOrigins: []
 
 # Image configuration:
 images:
-  service: ghcr.io/osac/fulfillment-service:main  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
-  pullPolicy: IfNotPresent
-  envoy: docker.io/envoyproxy/envoy:v1.37.1
+  service:
+    repository: ghcr.io/osac-project/fulfillment-service
+    tag: latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
+    pullPolicy: Always
+  envoy:
+    repository: docker.io/envoyproxy/envoy
+    tag: v1.37.1
+    pullPolicy: IfNotPresent
 
 # Database connection configuration. The service expects an external PostgreSQL database to be available. The database
 # should be created before installing this chart.

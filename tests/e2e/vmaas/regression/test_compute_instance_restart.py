@@ -5,7 +5,14 @@ from datetime import UTC, datetime
 import pytest
 
 from tests.e2e.core.grpc_client import GRPCClient
-from tests.e2e.core.helpers import unique_name, wait_for_cr, wait_for_deletion, wait_for_restart, wait_for_running
+from tests.e2e.core.helpers import (
+    unique_name,
+    wait_for_cr,
+    wait_for_deletion,
+    wait_for_grpc_removal,
+    wait_for_restart,
+    wait_for_running,
+)
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.metering import MeteringCollector
 from tests.e2e.core.osac_cli import OsacCLI
@@ -79,6 +86,4 @@ def test_compute_instance_restart(
     finally:
         cli.delete_compute_instance(uuid=uuid)
         wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
-        assert uuid not in grpc.list_compute_instance_ids(), (
-            f"ComputeInstance {uuid} still present in gRPC list after deletion"
-        )
+        wait_for_grpc_removal(grpc=grpc, uuid=uuid)

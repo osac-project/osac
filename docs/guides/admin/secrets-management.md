@@ -11,15 +11,10 @@ For creating and using OSAC Secrets after deployment, see
 ## Vault options and versions
 
 This guide uses HashiCorp Vault terminology and CLI commands. OpenBao is also
-an option because it provides the Vault-compatible API that OSAC needs. OpenBao
-users can replace `vault` with `bao` and use `BAO_ADDR` and `BAO_TOKEN` in place
-of the Vault environment variables. The OSAC Helm settings are the same.
+an option because it provides the Vault-compatible API that OSAC needs.
 
-- **HashiCorp Vault Enterprise 0.11 or later.** Namespaces were introduced in
-  [Vault 0.11](https://www.hashicorp.com/blog/vault-0-11-feature-preview-namespaces).
-  A self-managed Vault deployment needs an appropriate
-  [Enterprise license](https://developer.hashicorp.com/vault/docs/enterprise/namespaces);
-  the Community edition does not provide namespaces.
+- **HashiCorp Vault Enterprise 1.1 or later.** A self-managed Vault deployment needs to 
+  provide namespace support which requires an [Enterprise license](https://developer.hashicorp.com/vault/docs/enterprise/namespaces).
 - **OpenBao 2.3.1 or later.** This was the first released version with
   [namespace support](https://openbao.org/docs/2.3.x/release-notes/2-3-0/).
 
@@ -194,8 +189,7 @@ that the services started and Vault responded.
 ## Troubleshooting
 
 - No `Vault health check passed` log entry: check Vault's endpoint, DNS, TLS
-  trust, and whether Vault is initialized and unsealed. A failed startup health
-  check is logged but does not necessarily stop the deployment.
+  trust, and whether Vault is initialized and unsealed.
 - No child namespace appears for a tenant: check the
   `fulfillment-controller` logs for `Failed to provision vault namespace for tenant`.
   Confirm the parent namespace and lifecycle policy, then compare the Keycloak

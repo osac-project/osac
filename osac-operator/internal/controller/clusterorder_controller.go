@@ -216,13 +216,18 @@ func (r *ClusterOrderReconciler) persistStatusAndRecordTransitionEvents(
 	instance *v1alpha1.ClusterOrder,
 	oldStatus *v1alpha1.ClusterOrderStatus,
 ) error {
+	var transition *statusTransition
 	if !equality.Semantic.DeepEqual(instance.Status, *oldStatus) {
 		ctrllog.FromContext(ctx).Info("status requires update")
-		if err := r.patchStatusWithRetry(ctx, key, instance.Status); err != nil {
+		var err error
+		transition, err = r.patchStatusWithRetry(ctx, key, instance.Status)
+		if err != nil {
 			return err
 		}
 	}
-	r.recordTransitionEvents(instance, oldStatus)
+	if transition != nil {
+		r.recordTransitionEventsForStatus(instance, &transition.oldStatus, &transition.newStatus)
+	}
 	return nil
 }
 
@@ -250,16 +255,16 @@ var clusterOrderWarningEventReasons = map[string]struct{}{
 	v1alpha1.ReasonStalled:      {},
 }
 
-func (r *ClusterOrderReconciler) recordTransitionEvents(instance *v1alpha1.ClusterOrder,
-	oldStatus *v1alpha1.ClusterOrderStatus) {
+func (r *ClusterOrderReconciler) recordTransitionEventsForStatus(instance *v1alpha1.ClusterOrder,
+	oldStatus, newStatus *v1alpha1.ClusterOrderStatus) {
 	if r.Recorder == nil {
 		return
 	}
 
 	oldProgressing := apimeta.FindStatusCondition(oldStatus.Conditions, v1alpha1.ConditionProgressing)
-	newProgressing := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
+	newProgressing := apimeta.FindStatusCondition(newStatus.Conditions, v1alpha1.ConditionProgressing)
 	if oldStatus.Phase == "" && len(oldStatus.Conditions) == 0 &&
-		(instance.Status.Phase != "" || len(instance.Status.Conditions) > 0) {
+		(newStatus.Phase != "" || len(newStatus.Conditions) > 0) {
 		r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, clusterOrderCreatedEventReason,
 			clusterOrderCreatedEventAction, "ClusterOrder created")
 	}
@@ -277,7 +282,7 @@ func (r *ClusterOrderReconciler) recordTransitionEvents(instance *v1alpha1.Clust
 	}
 
 	if oldStatus.Phase != v1alpha1.ClusterOrderPhaseFailed &&
-		instance.Status.Phase == v1alpha1.ClusterOrderPhaseFailed {
+		newStatus.Phase == v1alpha1.ClusterOrderPhaseFailed {
 		reason := v1alpha1.ReasonFailed
 		message := "ClusterOrder provisioning failed"
 		if newProgressing != nil {
@@ -294,22 +299,29 @@ func (r *ClusterOrderReconciler) recordTransitionEvents(instance *v1alpha1.Clust
 
 	oldReady := oldStatus.Phase == v1alpha1.ClusterOrderPhaseReady && oldProgressing != nil &&
 		oldProgressing.Status == metav1.ConditionFalse
-	newReady := instance.Status.Phase == v1alpha1.ClusterOrderPhaseReady && newProgressing != nil &&
+	newReady := newStatus.Phase == v1alpha1.ClusterOrderPhaseReady && newProgressing != nil &&
 		newProgressing.Status == metav1.ConditionFalse
 	if newReady && !oldReady {
 		r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, clusterOrderReadyEventReason,
 			clusterOrderReadyEventAction, "ClusterOrder is ready")
 	}
 
-	if oldStatus.Phase != v1alpha1.ClusterOrderPhaseDeleting &&
-		instance.Status.Phase == v1alpha1.ClusterOrderPhaseDeleting {
+	oldDeleting := apimeta.IsStatusConditionTrue(oldStatus.Conditions, v1alpha1.ConditionDeleting)
+	newDeleting := apimeta.IsStatusConditionTrue(newStatus.Conditions, v1alpha1.ConditionDeleting)
+	if newDeleting && !oldDeleting {
 		r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, clusterOrderDeletingEventReason,
 			clusterOrderDeletingEventAction, "ClusterOrder entered deleting phase")
 	}
 }
 
-func (r *ClusterOrderReconciler) patchStatusWithRetry(ctx context.Context, key client.ObjectKey, computed v1alpha1.ClusterOrderStatus) error {
-	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+type statusTransition struct {
+	oldStatus v1alpha1.ClusterOrderStatus
+	newStatus v1alpha1.ClusterOrderStatus
+}
+
+func (r *ClusterOrderReconciler) patchStatusWithRetry(ctx context.Context, key client.ObjectKey, computed v1alpha1.ClusterOrderStatus) (*statusTransition, error) {
+	var transition *statusTransition
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		latest := &v1alpha1.ClusterOrder{}
 		if err := r.apiReader.Get(ctx, key, latest); err != nil {
 			return err
@@ -327,8 +339,16 @@ func (r *ClusterOrderReconciler) patchStatusWithRetry(ctx context.Context, key c
 		for _, c := range computed.Conditions {
 			apimeta.SetStatusCondition(&latest.Status.Conditions, c)
 		}
-		return r.Status().Patch(ctx, latest, client.MergeFrom(base))
+		if equality.Semantic.DeepEqual(base.Status, latest.Status) {
+			return nil
+		}
+		if err := r.Status().Patch(ctx, latest, client.MergeFrom(base)); err != nil {
+			return err
+		}
+		transition = &statusTransition{oldStatus: base.Status, newStatus: latest.Status}
+		return nil
 	})
+	return transition, err
 }
 
 func NamespacePredicate(namespace string) predicate.Predicate {
@@ -932,6 +952,8 @@ func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ reconcile.R
 	log.Info("deleting clusterorder")
 
 	instance.Status.Phase = v1alpha1.ClusterOrderPhaseDeleting
+	instance.SetStatusCondition(v1alpha1.ConditionDeleting, metav1.ConditionTrue,
+		"ClusterOrder is being deleted", v1alpha1.ReasonDeleting)
 
 	// Delete auto-provisioned ExternalIPAttachments then ExternalIPs before deprovisioning.
 	done, cleanupResult, err := r.reconcileAutoExternalIPCleanup(ctx, instance)
@@ -1106,7 +1128,8 @@ func (r *ClusterOrderReconciler) handleProvisioning(ctx context.Context, instanc
 			})
 		},
 		func() error {
-			return r.patchStatusWithRetry(ctx, client.ObjectKeyFromObject(instance), instance.Status)
+			_, err := r.patchStatusWithRetry(ctx, client.ObjectKeyFromObject(instance), instance.Status)
+			return err
 		},
 	)
 }

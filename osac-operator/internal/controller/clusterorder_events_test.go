@@ -60,7 +60,7 @@ var _ = Describe("ClusterOrder transition events", func() {
 		oldStatus := statusWithProgressingReason(v1alpha1.ReasonPreparingInfrastructure)
 		instance.Status = statusWithProgressingReason(v1alpha1.ReasonControlPlaneStarting)
 
-		reconciler.recordTransitionEvents(instance, &oldStatus)
+		reconciler.recordTransitionEventsForStatus(instance, &oldStatus, &instance.Status)
 
 		Eventually(recorder.Events).Should(Receive(And(
 			ContainSubstring(corev1.EventTypeNormal),
@@ -75,7 +75,7 @@ var _ = Describe("ClusterOrder transition events", func() {
 		instance := &v1alpha1.ClusterOrder{}
 		instance.Status = statusWithProgressingReason(v1alpha1.ReasonPreparingInfrastructure)
 
-		reconciler.recordTransitionEvents(instance, &v1alpha1.ClusterOrderStatus{})
+		reconciler.recordTransitionEventsForStatus(instance, &v1alpha1.ClusterOrderStatus{}, &instance.Status)
 
 		Eventually(recorder.Events).Should(Receive(And(
 			ContainSubstring(corev1.EventTypeNormal),
@@ -91,7 +91,7 @@ var _ = Describe("ClusterOrder transition events", func() {
 		oldStatus := statusWithProgressingReason(v1alpha1.ReasonWorkersJoining)
 		instance.Status = statusWithProgressingReason(v1alpha1.ReasonWorkersJoining)
 
-		reconciler.recordTransitionEvents(instance, &oldStatus)
+		reconciler.recordTransitionEventsForStatus(instance, &oldStatus, &instance.Status)
 
 		Consistently(recorder.Events, 200*time.Millisecond).ShouldNot(Receive())
 	})
@@ -103,7 +103,7 @@ var _ = Describe("ClusterOrder transition events", func() {
 		oldStatus := statusWithProgressingReason(v1alpha1.ReasonWorkersJoining)
 		instance.Status = statusWithProgressingReason(v1alpha1.ReasonStalled)
 
-		reconciler.recordTransitionEvents(instance, &oldStatus)
+		reconciler.recordTransitionEventsForStatus(instance, &oldStatus, &instance.Status)
 
 		Eventually(recorder.Events).Should(Receive(And(
 			ContainSubstring(corev1.EventTypeWarning),
@@ -118,7 +118,7 @@ var _ = Describe("ClusterOrder transition events", func() {
 		oldStatus := statusWithProgressingReason(v1alpha1.ReasonWorkersJoining)
 		instance.Status = statusWithProgressingReason(v1alpha1.ReasonStageUnknown)
 
-		reconciler.recordTransitionEvents(instance, &oldStatus)
+		reconciler.recordTransitionEventsForStatus(instance, &oldStatus, &instance.Status)
 
 		Eventually(recorder.Events).Should(Receive(And(
 			ContainSubstring(corev1.EventTypeWarning),
@@ -134,14 +134,65 @@ var _ = Describe("ClusterOrder transition events", func() {
 		oldStatus := statusWithProgressingReason(v1alpha1.ReasonWorkersJoining)
 		instance.Status = oldStatus
 		instance.Status.Phase = v1alpha1.ClusterOrderPhaseDeleting
+		instance.SetStatusCondition(v1alpha1.ConditionDeleting, metav1.ConditionTrue,
+			"ClusterOrder is being deleted", v1alpha1.ReasonDeleting)
 
-		reconciler.recordTransitionEvents(instance, &oldStatus)
+		reconciler.recordTransitionEventsForStatus(instance, &oldStatus, &instance.Status)
 
 		Eventually(recorder.Events).Should(Receive(And(
 			ContainSubstring(corev1.EventTypeNormal),
 			ContainSubstring(v1alpha1.ReasonDeleting),
 			ContainSubstring("ClusterOrder entered deleting phase"),
 		)))
+	})
+
+	It("does not duplicate the Deleting event on repeated reconciliation", func() {
+		recorder := newRecorder()
+		reconciler := &ClusterOrderReconciler{Recorder: recorder}
+		oldStatus := statusWithProgressingReason(v1alpha1.ReasonWorkersJoining)
+		newStatus := oldStatus
+		newStatus.Phase = v1alpha1.ClusterOrderPhaseDeleting
+		newInstance := &v1alpha1.ClusterOrder{Status: newStatus}
+		newInstance.SetStatusCondition(v1alpha1.ConditionDeleting, metav1.ConditionTrue,
+			"ClusterOrder is being deleted", v1alpha1.ReasonDeleting)
+		newStatus = newInstance.Status
+		instance := &v1alpha1.ClusterOrder{Status: newStatus}
+
+		reconciler.recordTransitionEventsForStatus(instance, &oldStatus, &instance.Status)
+		Expect(recorder.Events).To(Receive(ContainSubstring("ClusterOrder entered deleting phase")))
+
+		reconciler.recordTransitionEventsForStatus(instance, &newStatus, &instance.Status)
+		Consistently(recorder.Events, 200*time.Millisecond).ShouldNot(Receive())
+	})
+
+	It("emits Deleting only for the status patch that persists the transition", func() {
+		recorder := newRecorder()
+		scheme := runtime.NewScheme()
+		Expect(v1alpha1.AddToScheme(scheme)).To(Succeed())
+		instance := &v1alpha1.ClusterOrder{
+			ObjectMeta: metav1.ObjectMeta{Name: "order", Namespace: "default"},
+			Status:     statusWithProgressingReason(v1alpha1.ReasonWorkersJoining),
+		}
+		reader := fake.NewClientBuilder().WithScheme(scheme).
+			WithStatusSubresource(&v1alpha1.ClusterOrder{}).
+			WithObjects(instance.DeepCopy()).Build()
+		reconciler := &ClusterOrderReconciler{Client: reader, apiReader: reader, Recorder: recorder}
+		instance.Status.Phase = v1alpha1.ClusterOrderPhaseDeleting
+		instance.SetStatusCondition(v1alpha1.ConditionDeleting, metav1.ConditionTrue,
+			"ClusterOrder is being deleted", v1alpha1.ReasonDeleting)
+		oldStatus := statusWithProgressingReason(v1alpha1.ReasonWorkersJoining)
+
+		Expect(reconciler.persistStatusAndRecordTransitionEvents(
+			context.Background(), client.ObjectKeyFromObject(instance), instance, &oldStatus,
+		)).To(Succeed())
+		Expect(recorder.Events).To(Receive(ContainSubstring("ClusterOrder entered deleting phase")))
+
+		// A second reconcile still has the stale pre-delete status locally, but the
+		// persisted status already contains Deleting. It must not emit a duplicate.
+		Expect(reconciler.persistStatusAndRecordTransitionEvents(
+			context.Background(), client.ObjectKeyFromObject(instance), instance, &oldStatus,
+		)).To(Succeed())
+		Consistently(recorder.Events, 200*time.Millisecond).ShouldNot(Receive())
 	})
 
 	It("records a Warning event when a ClusterOrder enters Failed", func() {
@@ -153,7 +204,7 @@ var _ = Describe("ClusterOrder transition events", func() {
 		instance.Status.Phase = v1alpha1.ClusterOrderPhaseFailed
 		instance.Status.Conditions[0].Message = "No agents available"
 
-		reconciler.recordTransitionEvents(instance, &oldStatus)
+		reconciler.recordTransitionEventsForStatus(instance, &oldStatus, &instance.Status)
 
 		Eventually(recorder.Events).Should(Receive(And(
 			ContainSubstring(corev1.EventTypeWarning),
@@ -170,7 +221,7 @@ var _ = Describe("ClusterOrder transition events", func() {
 		}}
 		oldStatus := statusWithProgressingReason(v1alpha1.ReasonWorkersJoining)
 
-		reconciler.recordTransitionEvents(instance, &oldStatus)
+		reconciler.recordTransitionEventsForStatus(instance, &oldStatus, &instance.Status)
 
 		Eventually(recorder.Events).Should(Receive(And(
 			ContainSubstring(corev1.EventTypeWarning),
@@ -194,7 +245,7 @@ var _ = Describe("ClusterOrder transition events", func() {
 			}},
 		}
 
-		reconciler.recordTransitionEvents(instance, &oldStatus)
+		reconciler.recordTransitionEventsForStatus(instance, &oldStatus, &instance.Status)
 
 		Eventually(recorder.Events).Should(Receive(And(
 			ContainSubstring(corev1.EventTypeNormal),
@@ -215,7 +266,7 @@ var _ = Describe("ClusterOrder transition events", func() {
 		}}
 
 		oldStatus := statusWithProgressingReason(v1alpha1.ReasonWorkersJoining)
-		reconciler.recordTransitionEvents(instance, &oldStatus)
+		reconciler.recordTransitionEventsForStatus(instance, &oldStatus, &instance.Status)
 
 		Consistently(recorder.Events, 200*time.Millisecond).ShouldNot(Receive())
 	})
@@ -228,7 +279,7 @@ var _ = Describe("ClusterOrder transition events", func() {
 		}}
 
 		oldStatus := statusWithProgressingReason(v1alpha1.ReasonWorkersJoining)
-		reconciler.recordTransitionEvents(instance, &oldStatus)
+		reconciler.recordTransitionEventsForStatus(instance, &oldStatus, &instance.Status)
 
 		Consistently(recorder.Events, 200*time.Millisecond).ShouldNot(Receive())
 	})
@@ -245,7 +296,7 @@ var _ = Describe("ClusterOrder transition events", func() {
 		}
 		instance := &v1alpha1.ClusterOrder{Status: status}
 
-		reconciler.recordTransitionEvents(instance, &status)
+		reconciler.recordTransitionEventsForStatus(instance, &status, &instance.Status)
 
 		Consistently(recorder.Events, 200*time.Millisecond).ShouldNot(Receive())
 	})
@@ -287,7 +338,7 @@ var _ = Describe("ClusterOrder transition events", func() {
 		instance.Status = statusWithProgressingReason(v1alpha1.ReasonControlPlaneStarting)
 
 		Expect(func() {
-			reconciler.recordTransitionEvents(instance, &v1alpha1.ClusterOrderStatus{})
+			reconciler.recordTransitionEventsForStatus(instance, &v1alpha1.ClusterOrderStatus{}, &instance.Status)
 		}).NotTo(Panic())
 	})
 })

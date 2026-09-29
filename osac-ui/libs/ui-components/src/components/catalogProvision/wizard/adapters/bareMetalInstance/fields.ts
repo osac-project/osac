@@ -4,6 +4,10 @@ import { TFunction } from 'i18next';
 import { BareMetalInstanceCatalogItem } from '@osac/types';
 
 import {
+  type ResourceSelectValue,
+  emptyResourceSelectValue,
+} from '../../../../Form/ResourceSelectField';
+import {
   getCatalogFieldOverlay,
   overlayDefaultToFormValue,
   readCatalogFieldDefinitions,
@@ -46,6 +50,7 @@ export interface BareMetalInstanceWizardValues {
     instanceType: {
       name: string;
     };
+    diskImage: ResourceSelectValue;
     networking: BareMetalNetworkingFormValues;
   };
 }
@@ -83,6 +88,7 @@ export const createEmptyBareMetalInstanceValues = (): BareMetalInstanceWizardVal
     instanceType: {
       name: '',
     },
+    diskImage: emptyResourceSelectValue(),
     networking: createEmptyBareMetalNetworkingValues(),
   },
 });

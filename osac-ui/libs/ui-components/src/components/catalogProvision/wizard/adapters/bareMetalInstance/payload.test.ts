@@ -18,10 +18,19 @@ describe('buildBareMetalInstanceCreatePayload', () => {
       spec: {
         catalogItem: { id: 'catalog-bm-1' },
         runStrategy: BareMetalInstanceRunStrategy.ALWAYS,
-        instanceType: {
-          name: '',
+        diskImage: {
+          id: '',
         },
       },
+    });
+  });
+
+  it('includes the selected instance type', () => {
+    const values = buildValues('');
+    values.spec.instanceType.name = 'bare-metal.large';
+
+    expect(buildBareMetalInstanceCreatePayload(values).spec?.instanceType).toEqual({
+      name: 'bare-metal.large',
     });
   });
 
@@ -33,6 +42,15 @@ describe('buildBareMetalInstanceCreatePayload', () => {
     expect(buildBareMetalInstanceCreatePayload(buildValues(project)).metadata).toEqual({
       name: 'my-bmi',
       project,
+    });
+  });
+
+  it('includes the selected disk image reference', () => {
+    const values = buildValues('');
+    values.spec.diskImage = { id: 'disk-image-1', name: 'rhel' };
+
+    expect(buildBareMetalInstanceCreatePayload(values).spec?.diskImage).toEqual({
+      id: 'disk-image-1',
     });
   });
 });

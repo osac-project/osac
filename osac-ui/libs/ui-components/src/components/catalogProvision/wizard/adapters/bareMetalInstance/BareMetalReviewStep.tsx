@@ -145,7 +145,9 @@ export const BareMetalReviewStep = ({ catalogItem }: Props) => {
           </DescriptionListGroup>
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Disk image')}</DescriptionListTerm>
-            <DescriptionListDescription>{'-'}</DescriptionListDescription>
+            <DescriptionListDescription>
+              {values.spec.diskImage.name || values.spec.diskImage.id || '-'}
+            </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Instance type')}</DescriptionListTerm>

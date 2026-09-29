@@ -23,8 +23,13 @@ export const buildBareMetalInstanceCreatePayload = (
       runStrategy: BareMetalInstanceRunStrategy.ALWAYS,
       ...(sshKey && { sshPublicKey: sshKey }),
       ...(userData && { userData }),
-      instanceType: {
-        name: values.spec.instanceType.name,
+      ...(values.spec.instanceType.name && {
+        instanceType: {
+          name: values.spec.instanceType.name,
+        },
+      }),
+      diskImage: {
+        id: values.spec.diskImage.id,
       },
     },
   };

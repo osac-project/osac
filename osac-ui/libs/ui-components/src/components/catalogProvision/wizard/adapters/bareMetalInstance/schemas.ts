@@ -115,7 +115,10 @@ export const buildBareMetalInstanceStepSchema = (
         spec: yup.object({
           userData: fields.specUserData,
           instanceType: yup.object({
-            name: yup.string().required(t('Instance type is required')),
+            name: yup.string(),
+          }),
+          diskImage: yup.object({
+            id: yup.string().required(t('Disk image is required')),
           }),
         }),
       });

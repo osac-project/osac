@@ -446,6 +446,39 @@
           },
           "additionalProperties": false
         },
+        "stall": {
+          "type": "object",
+          "description": "Stall detection thresholds for CaaS cluster provisioning stages. Each value is a Go duration string (e.g. 15m, 30m, 1h).",
+          "properties": {
+            "preparingInfrastructureThreshold": {
+              "type": "string",
+              "description": "Maximum duration allowed for the PreparingInfrastructure stage before the operator marks the cluster as stalled",
+              "default": "15m",
+              "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$"
+            },
+            "controlPlaneStartingThreshold": {
+              "type": "string",
+              "description": "Maximum duration allowed for the ControlPlaneStarting stage before the operator marks the cluster as stalled",
+              "default": "30m",
+              "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$"
+            },
+            "workersJoiningThreshold": {
+              "type": "string",
+              "description": "Maximum duration allowed for the WorkersJoining stage before the operator marks the cluster as stalled",
+              "default": "20m",
+              "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$"
+            },
+            "workersJoiningByHostType": {
+              "type": "object",
+              "description": "Per-host-type overrides for the WorkersJoining stall threshold. Keys are host-type labels, values are Go duration strings.",
+              "additionalProperties": {
+                "type": "string",
+                "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
         "tenants": {
           "type": "array",
           "description": "Tenant namespace seed list",
@@ -1830,12 +1863,22 @@
           "type": "object",
           "description": "Environment variable overrides for the BMF operator pod",
           "properties": {
+            "aapUrl": {
+              "type": "string",
+              "description": "AAP controller API URL used by the BMF operator for provisioning callbacks"
+            },
             "aapInsecureSkipVerify": {
               "type": "string",
               "description": "Skip TLS certificate verification for AAP API calls (set to 'true' for self-signed certs)",
               "default": ""
+            },
+            "enableNetworkingProvisioning": {
+              "type": "string",
+              "description": "Enable networking resource provisioning in the BMF operator (set to 'true' or 'false')",
+              "default": ""
             }
-          }
+          },
+          "additionalProperties": false
         },
         "bcm": {
           "type": "object",
@@ -2201,6 +2244,14 @@
           "type": "boolean",
           "description": "Run database migrations during install/upgrade",
           "default": true
+        },
+        "image": {
+          "type": "string",
+          "description": "Container image for the database migration job"
+        },
+        "dbUrlFile": {
+          "type": "string",
+          "description": "Path to the file containing the database connection URL inside the migration container"
         }
       },
       "additionalProperties": false
@@ -2540,6 +2591,7 @@
     },
     "aapNetrisConfig": {
       "type": "object",
+      "description": "Shared Netris properties composed into AAP instance group config objects via allOf. Do not set additionalProperties here — the consuming schema controls that.",
       "properties": {
         "NETRIS_CONTROLLER_URL": {
           "type": "string",
@@ -2562,8 +2614,7 @@
           "type": "string",
           "description": "Netris tenant name. Must match between AAP instance groups."
         }
-      },
-      "additionalProperties": false
+      }
     },
     "globalExpertOverrides": {
       "type": "object",

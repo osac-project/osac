@@ -11,6 +11,7 @@ on:
       - "tools/generate-site-index.py"
       - "tools/pr-notify/**"
       - ".github/workflows/pr-dashboard.yml"
+      - "fulfillment-service/**"
   workflow_dispatch:
 
 concurrency:
@@ -31,6 +32,24 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      # --- OpenAPI generation (merged from publish-openapi.yaml) ---
+      - uses: ./.github/actions/setup-go
+        with:
+          working-directory: fulfillment-service
+      - uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3 # v1
+        with:
+          setup_only: true
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+      - name: Generate OpenAPI spec and Swagger UI
+        working-directory: fulfillment-service
+        run: |
+          go build ./cmd/osac-dev
+          ./osac-dev generate openapi --project-dir . --output-dir pages/openapi
+      # --- End OpenAPI generation ---
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -93,6 +112,7 @@ jobs:
           if [ -d presentations/themes ]; then
             cp -r presentations/themes _site/presentations/
           fi
+          cp -r fulfillment-service/pages/openapi _site/openapi
 
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:

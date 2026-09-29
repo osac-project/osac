@@ -735,7 +735,7 @@ spec:
 **Note**: For clusters with publicly-trusted ingress certificates (e.g., production clusters with
 Let's Encrypt), you can use `reencrypt` termination instead of `passthrough`. This presents the
 cluster's public ingress certificate to browsers while re-encrypting traffic to Keycloak's internal
-TLS endpoint. See `osac-installer/docs/helm-deployment-guide.md` for the Helm-based configuration
+TLS endpoint. See `docs/guides/installation/helm-deployment-guide.md` for the Helm-based configuration
 using `keycloak.route.publicIngress: true`.
 
 ## Configure the Keycloak realm

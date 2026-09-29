@@ -143,6 +143,10 @@
           "type": "boolean",
           "description": "Install OSAC CRDs",
           "default": true
+        },
+        "global": {
+          "type": "object",
+          "description": "Helm-injected global values (passed automatically to subcharts)"
         }
       },
       "additionalProperties": false
@@ -515,6 +519,36 @@
             }
           },
           "additionalProperties": false
+        },
+        "serviceAccount": {
+          "type": "object",
+          "description": "Operator ServiceAccount configuration (subchart default)",
+          "properties": {
+            "create": {
+              "type": "boolean",
+              "default": true
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "consoleProxy": {
+          "type": "object",
+          "description": "Console proxy sidecar configuration (subchart default)"
+        },
+        "vendorControllers": {
+          "type": "object",
+          "description": "Vendor-specific controller configuration (subchart default)"
+        },
+        "remoteClusterKubeconfig": {
+          "type": "string",
+          "description": "Path to kubeconfig for remote cluster access (subchart default)"
+        },
+        "global": {
+          "type": "object",
+          "description": "Helm-injected global values (passed automatically to subcharts)"
         }
       },
       "additionalProperties": false
@@ -779,6 +813,22 @@
             }
           },
           "additionalProperties": false
+        },
+        "httpCorsAllowedOrigins": {
+          "type": "array",
+          "description": "Allowed CORS origins for the fulfillment service HTTP API (subchart default)",
+          "items": {
+            "type": "string"
+          }
+        },
+        "debug": {
+          "type": "boolean",
+          "description": "Enable debug mode for the fulfillment service (subchart default)",
+          "default": false
+        },
+        "global": {
+          "type": "object",
+          "description": "Helm-injected global values (passed automatically to subcharts)"
         }
       },
       "additionalProperties": false
@@ -831,6 +881,18 @@
                     "disabled": {
                       "type": "boolean",
                       "description": "Disable Ansible Lightspeed",
+                      "default": true
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "eda": {
+                  "type": "object",
+                  "description": "Event-Driven Ansible configuration",
+                  "properties": {
+                    "disabled": {
+                      "type": "boolean",
+                      "description": "Disable Event-Driven Ansible",
                       "default": true
                     }
                   },
@@ -958,6 +1020,26 @@
               "type": "boolean",
               "description": "Enable BCM inventory backend. Sets OSAC_IMPORT_BCM_AGENTS_ENABLED=true in the config-as-code-ig Secret and gates the bcm-certs Secret.",
               "default": false
+            },
+            "eeImagePull": {
+              "type": "string",
+              "description": "Execution environment image pull specification for config-as-code"
+            },
+            "manifest": {
+              "type": "object",
+              "description": "Manifest instance group config-as-code settings",
+              "properties": {
+                "create": {
+                  "type": "boolean",
+                  "description": "Create the manifest config-as-code instance group",
+                  "default": true
+                },
+                "data": {
+                  "type": "object",
+                  "description": "Additional data entries for the manifest config-as-code instance group"
+                }
+              },
+              "additionalProperties": false
             }
           },
           "additionalProperties": false
@@ -1367,6 +1449,25 @@
             }
           },
           "additionalProperties": false
+        },
+        "serviceAccounts": {
+          "type": "object",
+          "description": "Service accounts used by AAP jobs (subchart default)",
+          "properties": {
+            "osacSa": {
+              "type": "string",
+              "description": "Service account for OSAC AAP jobs"
+            },
+            "templatePublisher": {
+              "type": "string",
+              "description": "Service account for template publishing"
+            }
+          },
+          "additionalProperties": false
+        },
+        "global": {
+          "type": "object",
+          "description": "Helm-injected global values (passed automatically to subcharts)"
         }
       },
       "additionalProperties": false
@@ -1468,6 +1569,10 @@
             }
           },
           "additionalProperties": false
+        },
+        "global": {
+          "type": "object",
+          "description": "Helm-injected global values (passed automatically to subcharts)"
         }
       },
       "additionalProperties": false
@@ -1599,6 +1704,26 @@
             }
           },
           "additionalProperties": false
+        },
+        "heartbeat": {
+          "type": "object",
+          "description": "Metering heartbeat configuration (subchart default)"
+        },
+        "kafka": {
+          "type": "object",
+          "description": "Kafka connection for metering events (subchart default)"
+        },
+        "certs": {
+          "type": "object",
+          "description": "TLS certificate configuration for the metering service (subchart default)"
+        },
+        "resources": {
+          "type": "object",
+          "description": "Container resource requests and limits for the metering service (subchart default)"
+        },
+        "global": {
+          "type": "object",
+          "description": "Helm-injected global values (passed automatically to subcharts)"
         }
       },
       "additionalProperties": false
@@ -1655,6 +1780,14 @@
                       "type": "string",
                       "description": "Secret containing the CSI OAuth client credentials",
                       "default": "osac-csi-driver-credentials"
+                    },
+                    "clientIdKey": {
+                      "type": "string",
+                      "description": "Key within the credentials Secret for the OAuth client ID"
+                    },
+                    "clientSecretKey": {
+                      "type": "string",
+                      "description": "Key within the credentials Secret for the OAuth client secret"
                     }
                   },
                   "additionalProperties": false
@@ -1663,9 +1796,45 @@
                   "type": "boolean",
                   "description": "Allow the CSI controller to use the in-memory volume stub when no fulfillment configuration is supplied",
                   "default": false
+                },
+                "endpoint": {
+                  "type": "string",
+                  "description": "Direct fulfillment endpoint override (subchart default)"
+                },
+                "issuerUrl": {
+                  "type": "string",
+                  "description": "Direct fulfillment issuer URL override (subchart default)"
+                },
+                "tls": {
+                  "type": "object",
+                  "description": "TLS configuration for fulfillment connection (subchart default)"
                 }
               },
               "additionalProperties": false
+            },
+            "leaderElection": {
+              "type": "boolean",
+              "description": "Enable leader election for the CSI controller (subchart default)"
+            },
+            "replicas": {
+              "type": "integer",
+              "description": "Number of CSI controller replicas (subchart default)"
+            },
+            "resources": {
+              "type": "object",
+              "description": "CSI controller resource requests and limits (subchart default)"
+            },
+            "vendorControllers": {
+              "type": "string",
+              "description": "Comma-separated list of vendor controllers to enable (subchart default)"
+            },
+            "vendorSockets": {
+              "type": "string",
+              "description": "Comma-separated list of vendor socket paths (subchart default)"
+            },
+            "clusterID": {
+              "type": "string",
+              "description": "Cluster identifier for CSI volume topology (subchart default)"
             }
           },
           "additionalProperties": false
@@ -1695,6 +1864,30 @@
             }
           },
           "additionalProperties": false
+        },
+        "serviceAccount": {
+          "type": "object",
+          "description": "CSI driver ServiceAccount configuration (subchart default)"
+        },
+        "sidecars": {
+          "type": "object",
+          "description": "CSI sidecar container images (subchart default)"
+        },
+        "node": {
+          "type": "object",
+          "description": "CSI node plugin configuration (subchart default)"
+        },
+        "vendors": {
+          "type": "object",
+          "description": "Vendor-specific CSI backend configuration (subchart default)"
+        },
+        "driverName": {
+          "type": "string",
+          "description": "CSI driver name (subchart default)"
+        },
+        "global": {
+          "type": "object",
+          "description": "Helm-injected global values (passed automatically to subcharts)"
         }
       },
       "additionalProperties": false
@@ -1805,6 +1998,10 @@
               "type": "string",
               "description": "Secret name for OpenStack clouds.yaml",
               "default": "osac-os-clouds"
+            },
+            "bcmCerts": {
+              "type": "string",
+              "description": "Secret name for BCM mTLS client certificates"
             }
           },
           "additionalProperties": false
@@ -1876,6 +2073,14 @@
               "type": "string",
               "description": "Enable networking resource provisioning in the BMF operator (set to 'true' or 'false')",
               "default": ""
+            },
+            "aapTokenSecretName": {
+              "type": "string",
+              "description": "Name of the Kubernetes Secret containing the AAP API token"
+            },
+            "aapTokenSecretKey": {
+              "type": "string",
+              "description": "Key within the AAP token Secret"
             }
           },
           "additionalProperties": false
@@ -1942,6 +2147,14 @@
             }
           },
           "additionalProperties": false
+        },
+        "fullnameOverride": {
+          "type": "string",
+          "description": "Override the full resource name for the BMF operator (subchart default)"
+        },
+        "global": {
+          "type": "object",
+          "description": "Helm-injected global values (passed automatically to subcharts)"
         }
       },
       "additionalProperties": false

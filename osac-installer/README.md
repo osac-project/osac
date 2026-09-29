@@ -182,6 +182,9 @@ make -C ../osac-operator image-build \
 make -C ../osac-csi-driver image-build \
   IMG=ghcr.io/osac-project/osac-csi-driver:latest \
   CONTAINER_TOOL="$CONTAINER_TOOL"
+make -C ../osac-aap execution-environment-build \
+  IMG=ghcr.io/osac-project/osac-aap:latest \
+  CONTAINER_TOOL="$CONTAINER_TOOL"
 "$CONTAINER_TOOL" build -t ghcr.io/osac-project/osac-ui:latest \
   -f ../../osac-ui/Containerfile ../../osac-ui
 
@@ -204,8 +207,11 @@ On top of `dev`, `dev-full` adds (via `scripts/dev-full/`, orchestrated by the
   binding), CDI
 - **AWX** — the open-source AAP backend the operator drives: awx-operator + instance,
   configured with an inventory, a project (`github.com/osac-project/osac.git`,
-  playbooks under `osac-aap/`), job templates, a Kubernetes credential, and the
-  `awx-token` secret the operator reads
+  playbooks under `osac-aap/`), job templates assigned to the OSAC AAP execution
+  environment, a Kubernetes credential, and the `awx-token` secret the operator reads.
+  That execution environment is built from `osac-aap/collections/requirements.yml`,
+  including `vastdata.vms`; dev-full pulls `ghcr.io/osac-project/osac-aap:latest`
+  unless a locally built image with that tag has been loaded into Kind.
 - **OSAC UI** — deployed directly (the chart's `ui.enabled` uses an OpenShift Route,
   unusable on kind) and routed through the shared Envoy Gateway
 - **Seeded catalog** — a `fedora` disk image, `u1-small/medium/large` instance types,

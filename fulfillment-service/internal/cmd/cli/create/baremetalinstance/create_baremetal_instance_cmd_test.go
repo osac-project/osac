@@ -43,8 +43,8 @@ func (catalogItemsServer) List(context.Context, *publicv1.BareMetalInstanceCatal
 
 type bareMetalInstancesServer struct {
 	publicv1.UnimplementedBareMetalInstancesServer
-	warnings      []string
-	createErr     error
+	warnings       []string
+	createErr      error
 	createdTenants chan<- string
 }
 

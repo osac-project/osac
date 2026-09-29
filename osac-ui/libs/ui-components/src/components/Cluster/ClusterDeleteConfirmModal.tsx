@@ -1,4 +1,4 @@
-import { Alert, List, ListItem, Stack, StackItem } from '@patternfly/react-core';
+import { Alert, Stack, StackItem } from '@patternfly/react-core';
 
 import type { Cluster } from '@osac/types';
 import DeleteResourceModal from '@osac/ui-components/components/Resource/DeleteResourceModal.tsx';
@@ -35,18 +35,9 @@ const ClusterDeleteConfirmModal = ({
           {hasAutoExternalIp && (
             <StackItem>
               <Alert variant="info" isInline isPlain title={t('Resource cleanup')}>
-                <List>
-                  <ListItem>
-                    {t(
-                      'Auto-provisioned External IPs and External IP Attachments will be permanently deleted.',
-                    )}
-                  </ListItem>
-                  <ListItem>
-                    {t(
-                      'Manually created External IP Attachments will be detached and returned to Pending status.',
-                    )}
-                  </ListItem>
-                </List>
+                {t(
+                  'Auto-provisioned External IPs and External IP Attachments will be permanently deleted.',
+                )}
               </Alert>
             </StackItem>
           )}

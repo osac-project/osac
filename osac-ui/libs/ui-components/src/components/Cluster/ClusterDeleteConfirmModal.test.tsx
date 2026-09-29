@@ -68,11 +68,6 @@ describe('ClusterDeleteConfirmModal', () => {
         'Auto-provisioned External IPs and External IP Attachments will be permanently deleted.',
       ),
     ).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        'Manually created External IP Attachments will be detached and returned to Pending status.',
-      ),
-    ).toBeInTheDocument();
   });
 
   it('does not show resource cleanup warning when autoExternalIpAttachment is not set', () => {

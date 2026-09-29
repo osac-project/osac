@@ -513,7 +513,6 @@
   "Manage tenants for this cloud platform.": "Manage tenants for this cloud platform.",
   "Manage virtual networks for your compute instances.": "Manage virtual networks for your compute instances.",
   "Manager": "Manager",
-  "Manually created External IP Attachments will be detached and returned to Pending status.": "Manually created External IP Attachments will be detached and returned to Pending status.",
   "Matches your operating system's contrast setting.": "Matches your operating system's contrast setting.",
   "Max read bandwidth": "Max read bandwidth",
   "Max write bandwidth": "Max write bandwidth",

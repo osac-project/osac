@@ -141,10 +141,10 @@ describe('VolumesListPage', () => {
     expect(screen.getByTestId('project-filter')).toBeInTheDocument();
   });
 
-  it('passes refetchInterval to useListResource', () => {
+  it('does not pass a custom refetchInterval to useListResource', () => {
     renderPage();
 
     const options = vi.mocked(useListResource).mock.calls[0][2];
-    expect(options).toMatchObject({ refetchInterval: 30_000 });
+    expect(options).toBeUndefined();
   });
 });

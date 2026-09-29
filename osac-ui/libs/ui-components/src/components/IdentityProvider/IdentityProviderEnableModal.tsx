@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import {
   Alert,
   Button,
@@ -10,7 +11,9 @@ import {
 } from '@patternfly/react-core';
 
 import { IdentityProvider, IdentityProviders } from '@osac/types';
+import { useApiFetch } from '@osac/ui-components/api/api-context';
 import { useUpdateResource } from '@osac/ui-components/api/use-resource';
+import { pollIdentityProviderUntilSynced } from '@osac/ui-components/api/v1/identity-provider';
 
 import { getIdpName } from './utils';
 import { useTranslation } from '../../hooks/useTranslation';
@@ -29,15 +32,20 @@ const IdentityProviderEnableModal = ({
 }: IdentityProviderEnableModalProps) => {
   const { t } = useTranslation();
   const { mutate, isPending, error } = useUpdateResource(IdentityProviders);
+  const idpClient = useApiFetch(IdentityProviders);
+  const [isPolling, setIsPolling] = useState(false);
+  const [pollError, setPollError] = useState<Error | null>(null);
 
   const isEnabled = !!idp.spec?.enabled;
   const idpName = getIdpName(idp);
+  const isLoading = isPending || isPolling;
+  const displayError = pollError || error;
 
   return (
     <Modal
       variant="small"
       isOpen
-      onClose={isPending ? undefined : onClose}
+      onClose={isLoading ? undefined : onClose}
       aria-labelledby="idp-enable-confirm-title"
     >
       <ModalHeader
@@ -53,7 +61,7 @@ const IdentityProviderEnableModal = ({
               ? t('Are you sure you want to disable Identity provider {{idpName}}', { idpName })
               : t('Are you sure you want to enable Identity provider {{idpName}}', { idpName })}
           </StackItem>
-          {error && (
+          {displayError && (
             <StackItem>
               <Alert
                 variant="danger"
@@ -64,7 +72,7 @@ const IdentityProviderEnableModal = ({
                 }
                 isInline
               >
-                {getErrorMessage(error)}
+                {getErrorMessage(displayError)}
               </Alert>
             </StackItem>
           )}
@@ -73,7 +81,8 @@ const IdentityProviderEnableModal = ({
       <ModalFooter>
         <Button
           variant="primary"
-          onClick={() =>
+          onClick={() => {
+            setPollError(null);
             mutate(
               {
                 object: {
@@ -81,15 +90,27 @@ const IdentityProviderEnableModal = ({
                   spec: { enabled: !isEnabled },
                 },
               },
-              { onSuccess },
-            )
-          }
-          isDisabled={isPending}
-          isLoading={isPending}
+              {
+                onSuccess: async () => {
+                  setIsPolling(true);
+                  try {
+                    await pollIdentityProviderUntilSynced(idpClient, idp.id);
+                    onSuccess();
+                  } catch (err) {
+                    setPollError(err instanceof Error ? err : new Error(String(err)));
+                  } finally {
+                    setIsPolling(false);
+                  }
+                },
+              },
+            );
+          }}
+          isDisabled={isLoading}
+          isLoading={isLoading}
         >
           {isEnabled ? t('Disable') : t('Enable')}
         </Button>
-        <Button variant="link" onClick={onClose} isDisabled={isPending}>
+        <Button variant="link" onClick={onClose} isDisabled={isLoading}>
           {t('Cancel')}
         </Button>
       </ModalFooter>

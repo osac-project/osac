@@ -25,12 +25,16 @@ lint:
 EE_LOCAL_TAG ?= osac-ee
 IMG ?= ghcr.io/osac-project/osac-aap:latest
 CONTAINER_TOOL ?= podman
+EE_CONTAINER_PLATFORM ?=
+
+EE_PLATFORM_ARGS = $(if $(EE_CONTAINER_PLATFORM),--extra-build-cli-args="--platform=$(EE_CONTAINER_PLATFORM)",)
 
 execution-environment-build:
 	uv sync --locked --all-extras --group development
 	uv tool run ansible-builder build -vvv \
 		--container-runtime $(CONTAINER_TOOL) \
 		--tag "$(EE_LOCAL_TAG)" \
+		$(EE_PLATFORM_ARGS) \
 		-f "./execution-environment/execution-environment.yaml"
 	$(CONTAINER_TOOL) tag "$(EE_LOCAL_TAG)" "$(IMG)"
 

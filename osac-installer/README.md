@@ -195,6 +195,10 @@ make install-devstack PLATFORM=kind PROFILE=dev-full NS=osac
 ```
 
 `kind-load-images` only loads already-built images; it does not rebuild them.
+On Apple Silicon, the OSAC AAP execution environment builds natively as
+`linux/arm64`; use `EE_CONTAINER_PLATFORM=linux/amd64,linux/arm64` when a
+multi-architecture image is required. Kubernetes images remain Linux images;
+Kind selects the image matching the node architecture.
 After changing source code, rerun the relevant component `image-build` target
 and then `kind-load-images`. Loaded images are restarted only for workloads that
 use one of the local image references. Each Go component also exposes a

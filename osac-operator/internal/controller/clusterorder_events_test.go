@@ -150,13 +150,11 @@ var _ = Describe("ClusterOrder transition events", func() {
 		recorder := newRecorder()
 		reconciler := &ClusterOrderReconciler{Recorder: recorder}
 		oldStatus := statusWithProgressingReason(v1alpha1.ReasonWorkersJoining)
-		newStatus := oldStatus
-		newStatus.Phase = v1alpha1.ClusterOrderPhaseDeleting
-		newInstance := &v1alpha1.ClusterOrder{Status: newStatus}
-		newInstance.SetStatusCondition(v1alpha1.ConditionDeleting, metav1.ConditionTrue,
+		instance := &v1alpha1.ClusterOrder{Status: oldStatus}
+		instance.Status.Phase = v1alpha1.ClusterOrderPhaseDeleting
+		instance.SetStatusCondition(v1alpha1.ConditionDeleting, metav1.ConditionTrue,
 			"ClusterOrder is being deleted", v1alpha1.ReasonDeleting)
-		newStatus = newInstance.Status
-		instance := &v1alpha1.ClusterOrder{Status: newStatus}
+		newStatus := instance.Status
 
 		reconciler.recordTransitionEventsForStatus(instance, &oldStatus, &instance.Status)
 		Expect(recorder.Events).To(Receive(ContainSubstring("ClusterOrder entered deleting phase")))

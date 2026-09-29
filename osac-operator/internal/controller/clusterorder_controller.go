@@ -308,6 +308,7 @@ func (r *ClusterOrderReconciler) recordTransitionEventsForStatus(instance *v1alp
 
 	oldDeleting := apimeta.IsStatusConditionTrue(oldStatus.Conditions, v1alpha1.ConditionDeleting)
 	newDeleting := apimeta.IsStatusConditionTrue(newStatus.Conditions, v1alpha1.ConditionDeleting)
+	// ConditionDeleting must be set alongside Phase=Deleting (see handleDelete).
 	if newDeleting && !oldDeleting {
 		r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, clusterOrderDeletingEventReason,
 			clusterOrderDeletingEventAction, "ClusterOrder entered deleting phase")

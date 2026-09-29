@@ -62,8 +62,8 @@ func (s bareMetalInstancesServer) Create(_ context.Context, request *publicv1.Ba
 }
 
 var _ = Describe("Create baremetalinstance tenant", func() {
-	DescribeTable("uses the effective tenant in the create request",
-		func(savedTenant, effectiveTenant string) {
+	DescribeTable("uses the tenant provided in command context",
+		func(effectiveTenant string) {
 			createdTenants := make(chan string, 1)
 			server := testing.NewServer()
 			DeferCleanup(server.Stop)
@@ -78,7 +78,6 @@ var _ = Describe("Create baremetalinstance tenant", func() {
 			Expect(err).NotTo(HaveOccurred())
 			settings.SetAddress(server.Address())
 			settings.SetPlaintext(true)
-			settings.SetTenant(savedTenant)
 
 			var stdout, stderr bytes.Buffer
 			console, err := terminal.NewConsole().SetLogger(logger).SetStdout(&stdout).SetStderr(&stderr).Build()
@@ -96,11 +95,8 @@ var _ = Describe("Create baremetalinstance tenant", func() {
 			Expect(cmd.Execute()).To(Succeed())
 			Expect(<-createdTenants).To(Equal(effectiveTenant))
 		},
-		Entry("saved tenant", "saved", "saved"),
-		Entry("flag overrides saved tenant", "saved", "selected"),
-		Entry("flag selects a tenant without a saved tenant", "", "selected"),
-		Entry("flag clears a saved tenant", "saved", ""),
-		Entry("no tenant selected", "", ""),
+		Entry("selected tenant", "selected"),
+		Entry("no tenant selected", ""),
 	)
 })
 

@@ -24,7 +24,7 @@ awx:
   executionEnvironment:
     # Same image used by the OSAC AAP chart; includes every collection from
     # osac-aap/collections/requirements.yml, including vastdata.vms.
-    image: ghcr.io/osac-project/osac-aap:latest
+    image: ghcr.io/osac-project/osac-aap:latest  # PLACEHOLDER -- overwritten at release time
     pull: missing
   instance:
     name: awx

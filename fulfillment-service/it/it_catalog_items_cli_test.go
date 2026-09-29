@@ -71,18 +71,17 @@ var _ = Describe("Catalog Item CLI", Label("catalog-items", "cli"), func() {
 			return err
 		}, func(ctx context.Context) (bool, error) {
 			_, err := client.Get(ctx, publicv1.BareMetalInstancesGetRequest_builder{Id: created.GetId()}.Build())
-			if status.Code(err) == codes.NotFound {
-				return true, nil
-			}
-			if err != nil {
+			publicGone := status.Code(err) == codes.NotFound
+			if err != nil && !publicGone {
 				return false, err
 			}
 			_, err = privatev1.NewBareMetalInstancesClient(tool.InternalView().AdminConn()).Signal(ctx,
 				privatev1.BareMetalInstancesSignalRequest_builder{Id: created.GetId()}.Build())
-			if status.Code(err) == codes.NotFound {
-				return true, nil
+			privateGone := status.Code(err) == codes.NotFound
+			if err != nil && !privateGone {
+				return false, err
 			}
-			return false, err
+			return publicGone && privateGone, nil
 		})
 		persisted, err := client.Get(ctx, publicv1.BareMetalInstancesGetRequest_builder{Id: created.GetId()}.Build())
 		Expect(err).NotTo(HaveOccurred())

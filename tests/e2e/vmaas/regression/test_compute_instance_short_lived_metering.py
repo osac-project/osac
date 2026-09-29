@@ -3,7 +3,14 @@ from __future__ import annotations
 import pytest
 
 from tests.e2e.core.grpc_client import GRPCClient
-from tests.e2e.core.helpers import unique_name, wait_for_cr, wait_for_deletion, wait_for_grpc_removal
+from tests.e2e.core.helpers import (
+    unique_name,
+    wait_for_cr,
+    wait_for_deletion,
+    wait_for_grpc_removal,
+    wait_for_provision,
+    wait_for_running,
+)
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.metering import MeteringCollector
 from tests.e2e.core.osac_cli import OsacCLI
@@ -20,11 +27,12 @@ def test_short_lived_vm_metering(
     default_subnet: str,
     metering: MeteringCollector,
 ) -> None:
-    """Verify metering captures events for a VM created and deleted within 30s (CAP-4).
+    """Verify metering captures created, started, and deleted events across the full lifecycle.
 
-    A resource existing for 30 seconds must appear in usage data. This validates
-    sub-minute billing granularity by creating a VM and immediately deleting it
-    without waiting for it to reach Running.
+    Waits for the ComputeInstance to reach Running before deleting so the
+    controller can emit all expected metering events (created, started,
+    deleted).  The quick-delete edge case (deleting before Running) is
+    tracked separately.
     """
     uuid: str = cli.create_compute_instance(
         name=unique_name("e2e-ci"), template=vm_template, network_attachments=[{"subnet": default_subnet}]
@@ -32,6 +40,10 @@ def test_short_lived_vm_metering(
     metering.expect("osac.resource.created.v1", resource_id=uuid)
 
     ci_name: str = wait_for_cr(k8s=k8s_hub_client, uuid=uuid)
+    wait_for_provision(k8s=k8s_hub_client, name=ci_name)
+    wait_for_running(k8s=k8s_hub_client, name=ci_name)
+
+    metering.expect("osac.resource.started.v1", resource_id=uuid)
 
     cli.delete_compute_instance(uuid=uuid)
     metering.expect("osac.resource.deleted.v1", resource_id=uuid, timeout=180)

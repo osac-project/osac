@@ -1,7 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   MenuToggle,
-  Pagination,
   SearchInput,
   Select,
   SelectList,
@@ -13,6 +12,7 @@ import {
   ToolbarGroup,
   ToolbarItem,
 } from '@patternfly/react-core';
+import type { TFunction } from 'i18next';
 
 import { type Volume, VolumeState, Volumes } from '@osac/types';
 import { type CelFilter, cel } from '@osac/ui-components/api/cel';
@@ -23,13 +23,25 @@ import ProjectFilter from '@osac/ui-components/components/Page/ProjectFilter';
 import { VolumeTable } from '@osac/ui-components/components/Volume/VolumeTable';
 import { SEARCH_PARAM, usePageFilter } from '@osac/ui-components/hooks/use-page-filter';
 import { useProjectFilterQuery } from '@osac/ui-components/hooks/use-project-filter-query';
-import { useSession } from '@osac/ui-components/hooks/use-session';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
-const DEFAULT_PAGE_SIZE = 20;
 const REFETCH_INTERVAL_MS = 30_000;
 
-const VALID_VOLUME_STATES: readonly VolumeState[] = [
+/**
+ * Map from every VolumeState to its translated label. Using Record<VolumeState, string>
+ * ensures TypeScript flags any missing state when the enum is extended.
+ */
+const getVolumeStateLabels = (t: TFunction): Record<VolumeState, string> => ({
+  [VolumeState.UNSPECIFIED]: t('Unknown'),
+  [VolumeState.CREATING]: t('Creating'),
+  [VolumeState.AVAILABLE]: t('Available'),
+  [VolumeState.FAILED]: t('Failed'),
+  [VolumeState.DELETING]: t('Deleting'),
+  [VolumeState.DELETED]: t('Deleted'),
+});
+
+/** States shown in the filter dropdown — UNSPECIFIED is excluded. */
+const FILTERABLE_VOLUME_STATES: readonly VolumeState[] = [
   VolumeState.CREATING,
   VolumeState.AVAILABLE,
   VolumeState.FAILED,
@@ -44,7 +56,7 @@ const parseStateFilter = (raw: string): VolumeState[] => {
   return raw
     .split(',')
     .map((s) => Number(s.trim()))
-    .filter((n): n is VolumeState => VALID_VOLUME_STATES.includes(n as VolumeState));
+    .filter((n): n is VolumeState => FILTERABLE_VOLUME_STATES.includes(n as VolumeState));
 };
 
 const buildVolumeCelFilter = (
@@ -63,75 +75,40 @@ const buildVolumeCelFilter = (
 export const VolumesListPage = () => {
   const { t } = useTranslation();
 
-  const volumeStateOptions = [
-    { value: VolumeState.CREATING, label: t('Creating') },
-    { value: VolumeState.AVAILABLE, label: t('Available') },
-    { value: VolumeState.FAILED, label: t('Failed') },
-    { value: VolumeState.DELETING, label: t('Deleting') },
-    { value: VolumeState.DELETED, label: t('Deleted') },
-  ];
+  const stateLabels = useMemo(() => getVolumeStateLabels(t), [t]);
 
   const [nameSearch, setNameSearch] = usePageFilter(SEARCH_PARAM);
   const [stateFilterRaw, setStateFilterRaw] = usePageFilter('state');
   const [isStateSelectOpen, setIsStateSelectOpen] = useState(false);
-  const [page, setPage] = useState(1);
-  const [perPage, setPerPage] = useState(DEFAULT_PAGE_SIZE);
 
-  const { projects } = useSession();
   const stateFilters = useMemo(() => parseStateFilter(stateFilterRaw), [stateFilterRaw]);
   const projectFilter = useProjectFilterQuery<Volume>();
-
-  // Reset page to 1 when the project filter changes. Name and state filters
-  // already call setPage(1) in their event handlers; the project filter is
-  // changed externally via useSession, so we track it here.
-  const prevProjectsRef = useRef(projects);
-  useEffect(() => {
-    if (prevProjectsRef.current !== projects) {
-      prevProjectsRef.current = projects;
-      setPage(1);
-    }
-  }, [projects]);
 
   const filter = useMemo(
     () => buildVolumeCelFilter(projectFilter, stateFilters, nameSearch.trim()),
     [projectFilter, stateFilters, nameSearch],
   );
 
-  const offset = (page - 1) * perPage;
-
   const { data, isLoading, error } = useListResource(
     Volumes,
-    { filter, limit: perPage, offset },
+    { filter },
     { refetchInterval: REFETCH_INTERVAL_MS },
   );
 
   const volumes = data?.items ?? [];
-  const totalItems = data?.total ?? 0;
-
-  // Clamp page so it never exceeds the last page after data loads (e.g. when a
-  // filter change reduces the result set while the user was on a later page).
-  const lastPage = Math.max(1, Math.ceil(totalItems / perPage));
-  useEffect(() => {
-    if (page > lastPage) {
-      setPage(lastPage);
-    }
-  }, [page, lastPage]);
 
   const toggleStateFilter = (value: VolumeState) => {
-    const current = stateFilters;
-    const next = current.includes(value) ? current.filter((v) => v !== value) : [...current, value];
+    const next = stateFilters.includes(value)
+      ? stateFilters.filter((v) => v !== value)
+      : [...stateFilters, value];
     setStateFilterRaw(next.join(','));
-    setPage(1);
   };
 
   const stateToggleLabel =
     stateFilters.length === 0
       ? t('All states')
       : stateFilters
-          .map((v) => {
-            const opt = volumeStateOptions.find((o) => o.value === v);
-            return opt?.label ?? '';
-          })
+          .map((v) => stateLabels[v])
           .filter(Boolean)
           .join(', ');
 
@@ -173,14 +150,14 @@ export const VolumesListPage = () => {
                     shouldFocusToggleOnSelect
                   >
                     <SelectList>
-                      {volumeStateOptions.map((opt) => (
+                      {FILTERABLE_VOLUME_STATES.map((state) => (
                         <SelectOption
-                          key={opt.value}
-                          value={opt.value}
+                          key={state}
+                          value={state}
                           hasCheckbox
-                          isSelected={stateFilters.includes(opt.value)}
+                          isSelected={stateFilters.includes(state)}
                         >
-                          {opt.label}
+                          {stateLabels[state]}
                         </SelectOption>
                       ))}
                     </SelectList>
@@ -190,14 +167,8 @@ export const VolumesListPage = () => {
                   <SearchInput
                     placeholder={t('Search volumes by name…')}
                     value={nameSearch}
-                    onChange={(_event, value) => {
-                      setNameSearch(value);
-                      setPage(1);
-                    }}
-                    onClear={() => {
-                      setNameSearch('');
-                      setPage(1);
-                    }}
+                    onChange={(_event, value) => setNameSearch(value)}
+                    onClear={() => setNameSearch('')}
                     aria-label={t('Filter volumes by name')}
                   />
                 </ToolbarItem>
@@ -207,20 +178,6 @@ export const VolumesListPage = () => {
           <StackItem>
             <VolumeTable volumes={volumes} />
           </StackItem>
-          {totalItems > perPage && (
-            <StackItem>
-              <Pagination
-                itemCount={totalItems}
-                perPage={perPage}
-                page={page}
-                onSetPage={(_event, newPage) => setPage(newPage)}
-                onPerPageSelect={(_event, newPerPage) => {
-                  setPerPage(newPerPage);
-                  setPage(1);
-                }}
-              />
-            </StackItem>
-          )}
         </Stack>
       </ListPageBody>
     </ListPage>

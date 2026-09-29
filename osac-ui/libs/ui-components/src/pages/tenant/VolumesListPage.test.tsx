@@ -147,11 +147,4 @@ describe('VolumesListPage', () => {
     const options = vi.mocked(useListResource).mock.calls[0][2];
     expect(options).toMatchObject({ refetchInterval: 30_000 });
   });
-
-  it('passes limit of 20 to useListResource', () => {
-    renderPage();
-
-    const request = vi.mocked(useListResource).mock.calls[0][1];
-    expect(request).toMatchObject({ limit: 20 });
-  });
 });

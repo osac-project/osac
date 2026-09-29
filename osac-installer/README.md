@@ -211,8 +211,9 @@ On top of `dev`, `dev-full` adds (via `scripts/dev-full/`, orchestrated by the
   binding), CDI
 - **AWX** — the open-source AAP backend the operator drives: awx-operator + instance,
   configured with an inventory, a project (`github.com/osac-project/osac.git`,
-  playbooks under `osac-aap/`), job templates assigned to the OSAC AAP execution
-  environment, a Kubernetes credential, and the `awx-token` secret the operator reads.
+  playbooks under `osac-aap/`), all 35 production job templates assigned to the
+  OSAC AAP execution environment, production-named inventory groups backed by
+  localhost on Kind, a Kubernetes credential, and the `awx-token` secret the operator reads.
   That execution environment is built from `osac-aap/collections/requirements.yml`,
   including `vastdata.vms`; dev-full pulls `ghcr.io/osac-project/osac-aap:latest`
   unless a locally built image with that tag has been loaded into Kind.

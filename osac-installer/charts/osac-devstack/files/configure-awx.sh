@@ -109,9 +109,12 @@ configure_awx() {
     warn "Failed to create or find the OSAC AAP execution environment"
     return 1
   fi
-  curl -s -X PATCH "${api}/execution_environments/${ee_id}/" -H "Authorization: Bearer ${awx_token}" \
-    -H "Content-Type: application/json" \
-    -d "$(execution_environment_image_json)" >/dev/null
+  if ! curl -sS -f -X PATCH "${api}/execution_environments/${ee_id}/" \
+    -H "Authorization: Bearer ${awx_token}" -H "Content-Type: application/json" \
+    -d "$(execution_environment_image_json)" >/dev/null; then
+    warn "Failed to configure execution environment ${ee_id}"
+    return 1
+  fi
   log "OSAC AAP execution environment configured: ${OSAC_EE_IMAGE} (pull: ${OSAC_EE_PULL})"
 
   # Project from the osac mono-repo.
@@ -154,7 +157,15 @@ configure_awx() {
   - name: standard
     tier: local"
   local name playbook template_inventory workflow_status
-  local template_id extra_vars extra_vars_json template_payload
+  local template_id extra_vars extra_vars_json template_payload template_specs
+  if ! template_specs=$(controller_template_specs); then
+    warn "Failed to load production controller template definitions"
+    return 1
+  fi
+  if [[ -z "${template_specs}" ]]; then
+    warn "Production controller template definitions are empty"
+    return 1
+  fi
   while IFS='|' read -r name playbook template_inventory workflow_status; do
     extra_vars=""
     if [[ "${name}" == "osac-create-compute-instance" || "${name}" == "osac-delete-compute-instance" ]]; then
@@ -185,10 +196,14 @@ EOF
         python3 -c "import json,sys; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || true)
     fi
     [[ -n "${template_id}" ]] || { warn "Failed to create or find template ${name}"; return 1; }
-    curl -s -X PATCH "${api}/job_templates/${template_id}/" -H "Authorization: Bearer ${awx_token}" \
-      -H "Content-Type: application/json" -d "${template_payload}" >/dev/null
+    if ! curl -sS -f -X PATCH "${api}/job_templates/${template_id}/" \
+      -H "Authorization: Bearer ${awx_token}" -H "Content-Type: application/json" \
+      -d "${template_payload}" >/dev/null; then
+      warn "Failed to update job template ${template_id} (${name})"
+      return 1
+    fi
     log "  template: ${name}"
-  done < <(controller_template_specs)
+  done <<< "${template_specs}"
   log "Production OSAC job templates derived from controller.yml"
 
   # Kubernetes credential for job templates.

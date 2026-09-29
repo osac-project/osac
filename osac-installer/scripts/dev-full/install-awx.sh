@@ -153,9 +153,12 @@ configure_awx() {
     warn "Failed to create or find the OSAC AAP execution environment"
     return 1
   fi
-  curl -s -X PATCH "${api}/execution_environments/${ee_id}/" -H "Authorization: Bearer ${awx_token}" \
-    -H "Content-Type: application/json" \
-    -d "$(execution_environment_image_json)" >/dev/null
+  if ! curl -sS -f -X PATCH "${api}/execution_environments/${ee_id}/" \
+    -H "Authorization: Bearer ${awx_token}" -H "Content-Type: application/json" \
+    -d "$(execution_environment_image_json)" >/dev/null; then
+    warn "Failed to configure execution environment ${ee_id}"
+    return 1
+  fi
   log "OSAC AAP execution environment configured: ${OSAC_EE_IMAGE} (pull: ${OSAC_EE_PULL})"
 
   # Project from the osac mono-repo. osac-aap playbooks live under osac-aap/, and
@@ -222,7 +225,15 @@ configure_awx() {
   # Complete the production template catalog from controller.yml. The same
   # source drives the production AAP configuration.
   local name playbook template_inventory workflow_status
-  local template_id extra_vars extra_vars_json template_payload
+  local template_id extra_vars extra_vars_json template_payload template_specs
+  if ! template_specs=$(controller_template_specs); then
+    warn "Failed to load production controller template definitions"
+    return 1
+  fi
+  if [[ -z "${template_specs}" ]]; then
+    warn "Production controller template definitions are empty"
+    return 1
+  fi
   while IFS='|' read -r name playbook template_inventory workflow_status; do
     [[ -n "${name}" ]] || continue
     extra_vars=""
@@ -254,20 +265,14 @@ EOF
         python3 -c "import json,sys; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || true)
     fi
     [[ -n "${template_id}" ]] || { warn "Failed to create or find template ${name}"; return 1; }
-    curl -s -X PATCH "${api}/job_templates/${template_id}/" -H "Authorization: Bearer ${awx_token}" \
-      -H "Content-Type: application/json" -d "${template_payload}" >/dev/null
-  done < <(controller_template_specs)
+    if ! curl -sS -f -X PATCH "${api}/job_templates/${template_id}/" \
+      -H "Authorization: Bearer ${awx_token}" -H "Content-Type: application/json" \
+      -d "${template_payload}" >/dev/null; then
+      warn "Failed to update job template ${template_id} (${name})"
+      return 1
+    fi
+  done <<< "${template_specs}"
   log "Production OSAC job templates derived from controller.yml"
-
-  # Keep existing templates assigned to the OSAC EE when the setup is rerun.
-  local templates jt_id
-  templates=$(curl -s -H "Authorization: Bearer ${awx_token}" "${api}/job_templates/" | \
-    python3 -c "import json,sys; print(' '.join(str(t['id']) for t in json.load(sys.stdin)['results'] if t.get('name','').startswith('osac-')))")
-  for jt_id in ${templates}; do
-    curl -s -X PATCH "${api}/job_templates/${jt_id}/" -H "Authorization: Bearer ${awx_token}" \
-      -H "Content-Type: application/json" -d "{\"execution_environment\": ${ee_id}}" >/dev/null
-  done
-  log "OSAC job templates assigned to osac-aap-ee"
 
   # Kubernetes credential so job templates can act on the cluster.
   kubectl -n "${NS}" create serviceaccount awx-runner 2>/dev/null || true

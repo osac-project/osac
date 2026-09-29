@@ -2,10 +2,10 @@
 
 ## Introduction
 
-There is a worldwide trend towards local and specialized clouds, where countries
-and service providers want to offer their own cloud services under local
-jurisdiction and specific compliance regimes. Use cases include traditional
-VMaaS clouds, neoclouds, and sovereign clouds.
+There is a worldwide trend towards local and specialized clouds, where
+governments and service providers want to offer their own cloud services under
+local jurisdiction and specific compliance regimes. Use cases include
+traditional VMaaS clouds, neoclouds, and sovereign clouds.
 
 Open Sovereign AI Cloud (OSAC) is an open-source project for organizations
 standing up their own clouds. It offers multi-tenant self-service provisioning

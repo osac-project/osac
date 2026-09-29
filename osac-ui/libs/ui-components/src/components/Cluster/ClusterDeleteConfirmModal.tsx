@@ -20,6 +20,7 @@ const ClusterDeleteConfirmModal = ({
   const { t } = useTranslation();
   const deleteCluster = useDeleteCluster();
   const clusterName = cluster.metadata?.name ?? cluster.id;
+  const hasAutoExternalIp = cluster.spec?.autoExternalIpAttachment === true;
 
   return (
     <DeleteResourceModal
@@ -31,22 +32,24 @@ const ClusterDeleteConfirmModal = ({
               'This permanently deletes the cluster and all its resources. This action cannot be undone.',
             )}
           </StackItem>
-          <StackItem>
-            <Alert variant="info" isInline isPlain title={t('Resource cleanup')}>
-              <List>
-                <ListItem>
-                  {t(
-                    'Auto-provisioned External IPs and External IP Attachments will be permanently deleted.',
-                  )}
-                </ListItem>
-                <ListItem>
-                  {t(
-                    'Manually created External IP Attachments will be detached and returned to Pending status.',
-                  )}
-                </ListItem>
-              </List>
-            </Alert>
-          </StackItem>
+          {hasAutoExternalIp && (
+            <StackItem>
+              <Alert variant="info" isInline isPlain title={t('Resource cleanup')}>
+                <List>
+                  <ListItem>
+                    {t(
+                      'Auto-provisioned External IPs and External IP Attachments will be permanently deleted.',
+                    )}
+                  </ListItem>
+                  <ListItem>
+                    {t(
+                      'Manually created External IP Attachments will be detached and returned to Pending status.',
+                    )}
+                  </ListItem>
+                </List>
+              </Alert>
+            </StackItem>
+          )}
         </Stack>
       }
       errorLabel={t('Failed to delete cluster')}

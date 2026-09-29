@@ -16,6 +16,13 @@ vi.mock('../../api/v1/cluster', async (importOriginal) => {
 const mockCluster = {
   id: 'cluster-1',
   metadata: { name: 'my-cluster' },
+  spec: { autoExternalIpAttachment: true },
+  status: { state: 1 },
+};
+
+const mockClusterWithoutAutoIp = {
+  id: 'cluster-2',
+  metadata: { name: 'no-auto-ip-cluster' },
   status: { state: 1 },
 };
 
@@ -66,6 +73,29 @@ describe('ClusterDeleteConfirmModal', () => {
         'Manually created External IP Attachments will be detached and returned to Pending status.',
       ),
     ).toBeInTheDocument();
+  });
+
+  it('does not show resource cleanup warning when autoExternalIpAttachment is not set', () => {
+    render(
+      <ClusterDeleteConfirmModal
+        cluster={mockClusterWithoutAutoIp as never}
+        onClose={vi.fn()}
+        onSuccess={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'This permanently deletes the cluster and all its resources. This action cannot be undone.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Resource cleanup')).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        'Auto-provisioned External IPs and External IP Attachments will be permanently deleted.',
+      ),
+    ).not.toBeInTheDocument();
   });
 
   it('calls delete mutation with cluster ID on Delete click', async () => {

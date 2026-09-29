@@ -95,6 +95,14 @@ func (p *LvmsVendorProvisioner) CreateVolume(ctx context.Context, req VendorCrea
 	if req.Protocol != v1alpha1.VolumeProtocolBlock {
 		return VendorCreateVolumeResponse{}, fmt.Errorf("LVMS provisioner supports only block volumes; protocol %q is not implemented", req.Protocol)
 	}
+	// The OSAC LVMS path currently guarantees only ReadWriteOnce semantics.
+	// Reject other access modes before creating a LogicalVolume rather than
+	// advertising capabilities that the node-local backend may not provide.
+	if req.AccessMode != v1alpha1.VolumeAccessModeReadWriteOnce {
+		return VendorCreateVolumeResponse{}, grpcstatus.Errorf(codes.InvalidArgument,
+			"LVMS provisioner supports only %q access mode; got %q",
+			v1alpha1.VolumeAccessModeReadWriteOnce, req.AccessMode)
+	}
 	if req.Name == "" {
 		return VendorCreateVolumeResponse{}, fmt.Errorf("volume name is required")
 	}

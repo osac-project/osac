@@ -252,6 +252,38 @@ func TestLvmsCreateVolumeRequiresNodeTopology(t *testing.T) {
 	}
 }
 
+func TestLvmsCreateVolumeRejectsUnsupportedAccessModes(t *testing.T) {
+	tests := []struct {
+		name string
+		mode v1alpha1.VolumeAccessMode
+	}{
+		{name: "unspecified"},
+		{name: "read-only-many", mode: v1alpha1.VolumeAccessModeReadOnlyMany},
+		{name: "read-write-many", mode: v1alpha1.VolumeAccessModeReadWriteMany},
+		{name: "read-write-once-pod", mode: v1alpha1.VolumeAccessModeReadWriteOncePod},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			api := newRecordingLogicalVolumeClient()
+			provisioner := newTestLvmsProvisioner(t, api)
+			request := lvmsCreateRequest()
+			request.AccessMode = tt.mode
+
+			_, err := provisioner.CreateVolume(context.Background(), request)
+			if grpcstatus.Code(err) != codes.InvalidArgument {
+				t.Fatalf("CreateVolume error code = %s, want InvalidArgument: %v", grpcstatus.Code(err), err)
+			}
+			if !strings.Contains(err.Error(), "supports only \"ReadWriteOnce\" access mode") {
+				t.Errorf("CreateVolume error = %q, want unsupported access-mode detail", err)
+			}
+			if len(api.created) != 0 {
+				t.Fatalf("created %d LogicalVolumes for unsupported access mode, want 0", len(api.created))
+			}
+		})
+	}
+}
+
 func TestLvmsCreateVolumeResourceExhaustedRollsBack(t *testing.T) {
 	api := newRecordingLogicalVolumeClient()
 	api.afterCreate = func(volume *unstructured.Unstructured) {

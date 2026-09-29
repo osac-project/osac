@@ -108,11 +108,13 @@ describe('ExternalIpListPage', () => {
     mockNavigate.mockReset();
   });
 
-  it('renders the page header', () => {
+  it('renders the page header', async () => {
     renderPage();
 
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'External IPs' })).toBeInTheDocument();
+    });
     expect(screen.queryByText('Networking')).not.toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'External IPs' })).toBeInTheDocument();
     expect(
       screen.getByText(
         'Review provider-assigned IP pools and allocate external addresses for edge exposure.',
@@ -175,9 +177,12 @@ describe('ExternalIpListPage', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('links Create external IP to the create route', () => {
+  it('links Create external IP to the create route', async () => {
     renderPage();
 
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: 'Create external IP' })).toBeInTheDocument();
+    });
     expect(screen.getByRole('link', { name: 'Create external IP' })).toHaveAttribute(
       'href',
       '/networking/external-ips/create',

@@ -1,5 +1,5 @@
 import { create } from '@bufbuild/protobuf';
-import { screen } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -65,17 +65,17 @@ describe('VolumesListPage', () => {
     );
   });
 
-  it('renders the page title and label', () => {
+  it('renders the page title and label', async () => {
     renderPage();
 
-    expect(screen.getByRole('heading', { name: 'Volumes' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Volumes' })).toBeInTheDocument();
     expect(screen.getByText('Storage').closest('.pf-v6-c-label')).not.toBeNull();
   });
 
-  it('renders the volume table with data', () => {
+  it('renders the volume table with data', async () => {
     renderPage();
 
-    expect(screen.getByRole('link', { name: 'web-vol' })).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: 'web-vol' })).toBeInTheDocument();
     expect(screen.getByText('50 GiB')).toBeInTheDocument();
     expect(screen.getByText('Available')).toBeInTheDocument();
   });
@@ -94,7 +94,7 @@ describe('VolumesListPage', () => {
     expect(screen.getByRole('progressbar')).toBeInTheDocument();
   });
 
-  it('renders error state on API failure', () => {
+  it('renders error state on API failure', async () => {
     vi.mocked(useListResource).mockReturnValue(
       mockQueryResult<VolumesListResponse>({
         data: undefined,
@@ -105,11 +105,11 @@ describe('VolumesListPage', () => {
 
     renderPage();
 
-    expect(screen.getByText('An error occurred')).toBeInTheDocument();
+    expect(await screen.findByText('An error occurred')).toBeInTheDocument();
     expect(screen.getByText('Network error')).toBeInTheDocument();
   });
 
-  it('renders empty state when no volumes are returned', () => {
+  it('renders empty state when no volumes are returned', async () => {
     vi.mocked(useListResource).mockReturnValue(
       mockQueryResult<VolumesListResponse>({
         data: makeListResponse([]),
@@ -120,30 +120,39 @@ describe('VolumesListPage', () => {
 
     renderPage();
 
-    expect(screen.getByText('No volumes found')).toBeInTheDocument();
+    expect(await screen.findByText('No volumes found')).toBeInTheDocument();
   });
 
-  it('renders the name search input', () => {
+  it('renders the name search input', async () => {
     renderPage();
 
-    expect(screen.getByPlaceholderText('Search volumes by name…')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('Search volumes by name…')).toBeInTheDocument();
+    });
   });
 
-  it('renders the state filter dropdown', () => {
+  it('renders the state filter dropdown', async () => {
     renderPage();
 
-    expect(screen.getByRole('button', { name: 'All states' })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'All states' })).toBeInTheDocument();
+    });
   });
 
-  it('renders the project filter', () => {
+  it('renders the project filter', async () => {
     renderPage();
 
-    expect(screen.getByTestId('project-filter')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByTestId('project-filter')).toBeInTheDocument();
+    });
   });
 
-  it('does not pass a custom refetchInterval to useListResource', () => {
+  it('does not pass a custom refetchInterval to useListResource', async () => {
     renderPage();
 
+    await waitFor(() => {
+      expect(vi.mocked(useListResource).mock.calls.length).toBeGreaterThan(0);
+    });
     const options = vi.mocked(useListResource).mock.calls[0][2];
     expect(options).toBeUndefined();
   });

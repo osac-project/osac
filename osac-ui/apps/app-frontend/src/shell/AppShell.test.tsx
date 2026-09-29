@@ -82,10 +82,10 @@ describe('AppShell', () => {
     expect(await screen.findByRole('heading', { name: 'Tenants' })).toBeInTheDocument();
   });
 
-  it('does not render volume routes for admin — falls through to default', () => {
+  it('does not render volume routes for admin — falls through to default', async () => {
     renderAppShell('/storage/volumes', 'admin');
 
     expect(screen.queryByRole('heading', { name: /volumes/i })).toBeNull();
-    expect(screen.getByRole('heading', { name: 'Tenants' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Tenants' })).toBeInTheDocument();
   });
 });

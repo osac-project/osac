@@ -47,6 +47,26 @@ ensure_inventory() {
   printf '%s' "${inventory_id}"
 }
 
+controller_template_specs() {
+  local controller_url="${OSAC_CONTROLLER_VARS_URL:-https://raw.githubusercontent.com/osac-project/osac/main/osac-aap/collections/ansible_collections/osac/config_as_code/roles/aap/vars/controller.yml}"
+  curl -fsSL "${controller_url}" | python3 -c '
+import re
+import sys
+
+text = sys.stdin.read()
+section = text.split("controller_templates:", 1)[1].split("controller_job_template_surveys:", 1)[0]
+entry_pattern = re.compile(r"(?ms)^\s+- name: \"\{\{ aap_prefix \}\}-(?P<name>[^\"]+)\"\s*\n(?P<body>.*?)(?=^\s+- name:|\Z)")
+for entry in entry_pattern.finditer(section):
+    body = entry.group("body")
+    playbook = re.search(r"^\s+playbook:\s+\"([^\"]+)\"", body, re.MULTILINE)
+    inventory = re.search(r"^\s+inventory:\s+\"\{\{ aap_prefix \}\}-([^\"]+)\"", body, re.MULTILINE)
+    if not playbook or not inventory:
+        continue
+    workflow_status = re.search(r"^\s+workflow_status:\s+(\w+)", body, re.MULTILINE)
+    print("|".join(("osac-" + entry.group("name"), playbook.group(1), "osac-" + inventory.group(1), workflow_status.group(1) if workflow_status else "")))
+'
+}
+
 configure_awx() {
   log "Configuring AWX for OSAC..."
 
@@ -126,58 +146,16 @@ configure_awx() {
   # Create the same 35 templates as the production AAP configuration. Kind
   # uses localhost in each production inventory group; backend-specific jobs
   # remain available but require their corresponding Kind backend to run.
-  local inventory_name inventory_id
+  local inventory_id
   declare -A inventory_ids
-  for inventory_name in \
-    osac-cluster-fulfillment osac-config-as-code osac-publish-templates \
-    osac-compute-instance-operations osac-networking-operations \
-    osac-bare-metal-fulfillment osac-storage-operations; do
-    inventory_ids["${inventory_name}"]=$(ensure_inventory "${inventory_name}" "${api}" "${awx_token}")
-  done
 
   local compute_extra_vars
   compute_extra_vars="tenant_storage_classes:
   - name: standard
     tier: local"
-  local entry name playbook template_inventory workflow_status
+  local name playbook template_inventory workflow_status
   local template_id extra_vars extra_vars_json template_payload
-  for entry in \
-    "osac-create-hosted-cluster|osac-aap/playbook_osac_create_hosted_cluster.yml|osac-cluster-fulfillment" \
-    "osac-delete-hosted-cluster|osac-aap/playbook_osac_delete_hosted_cluster.yml|osac-cluster-fulfillment" \
-    "osac-config-as-code|osac-aap/playbook_osac_config_as_code.yml|osac-config-as-code" \
-    "osac-publish-templates|osac-aap/collections/ansible_collections/osac/service/playbooks/publish_templates.yaml|osac-publish-templates" \
-    "osac-create-hosted-cluster-post-install|osac-aap/playbook_osac_create_hosted_cluster_post_install.yml|osac-cluster-fulfillment" \
-    "osac-create-compute-instance|osac-aap/playbook_osac_create_compute_instance.yml|osac-compute-instance-operations" \
-    "osac-delete-compute-instance|osac-aap/playbook_osac_delete_compute_instance.yml|osac-compute-instance-operations" \
-    "osac-report-hosted-cluster-status-success|osac-aap/playbook_osac_report_hosted_cluster_status.yml|osac-cluster-fulfillment|succeeded" \
-    "osac-report-hosted-cluster-status-failure|osac-aap/playbook_osac_report_hosted_cluster_status.yml|osac-cluster-fulfillment|failed" \
-    "osac-create-virtual-network|osac-aap/playbook_osac_create_virtual_network.yml|osac-networking-operations" \
-    "osac-delete-virtual-network|osac-aap/playbook_osac_delete_virtual_network.yml|osac-networking-operations" \
-    "osac-create-subnet|osac-aap/playbook_osac_create_subnet.yml|osac-networking-operations" \
-    "osac-delete-subnet|osac-aap/playbook_osac_delete_subnet.yml|osac-networking-operations" \
-    "osac-create-external-ip-pool|osac-aap/playbook_osac_create_external_ip_pool.yml|osac-networking-operations" \
-    "osac-delete-external-ip-pool|osac-aap/playbook_osac_delete_external_ip_pool.yml|osac-networking-operations" \
-    "osac-create-external-ip|osac-aap/playbook_osac_create_external_ip.yml|osac-networking-operations" \
-    "osac-delete-external-ip|osac-aap/playbook_osac_delete_external_ip.yml|osac-networking-operations" \
-    "osac-attach-external-ip|osac-aap/playbook_osac_attach_external_ip.yml|osac-networking-operations" \
-    "osac-detach-external-ip|osac-aap/playbook_osac_detach_external_ip.yml|osac-networking-operations" \
-    "osac-create-nat-gateway|osac-aap/playbook_osac_create_nat_gateway.yml|osac-networking-operations" \
-    "osac-delete-nat-gateway|osac-aap/playbook_osac_delete_nat_gateway.yml|osac-networking-operations" \
-    "osac-create-security-group|osac-aap/playbook_osac_create_security_group.yml|osac-networking-operations" \
-    "osac-delete-security-group|osac-aap/playbook_osac_delete_security_group.yml|osac-networking-operations" \
-    "osac-import-agents|osac-aap/playbook_osac_import_agents.yml|osac-cluster-fulfillment" \
-    "osac-create-bare-metal-pool|osac-aap/playbook_osac_create_bare_metal_pool.yml|osac-bare-metal-fulfillment" \
-    "osac-delete-bare-metal-pool|osac-aap/playbook_osac_delete_bare_metal_pool.yml|osac-bare-metal-fulfillment" \
-    "osac-create-bare-metal-instance|osac-aap/playbook_osac_create_bare_metal_instance.yml|osac-bare-metal-fulfillment" \
-    "osac-delete-bare-metal-instance|osac-aap/playbook_osac_delete_bare_metal_instance.yml|osac-bare-metal-fulfillment" \
-    "osac-create-tenant-storage-backend|osac-aap/playbook_osac_create_tenant_storage_backend.yml|osac-storage-operations" \
-    "osac-create-tenant-cluster-storage|osac-aap/playbook_osac_create_tenant_cluster_storage.yml|osac-storage-operations" \
-    "osac-delete-tenant-cluster-storage|osac-aap/playbook_osac_delete_tenant_cluster_storage.yml|osac-storage-operations" \
-    "osac-delete-tenant-storage-backend|osac-aap/playbook_osac_delete_tenant_storage_backend.yml|osac-storage-operations" \
-    "osac-import-bcm-agents|osac-aap/playbook_osac_import_bcm_agents.yml|osac-cluster-fulfillment" \
-    "osac-move-network-attachment|osac-aap/playbook_osac_move_network_attachment.yml|osac-networking-operations" \
-    "osac-query-dhcp-lease|osac-aap/playbook_osac_query_dhcp_lease.yml|osac-networking-operations"; do
-    IFS='|' read -r name playbook template_inventory workflow_status <<< "${entry}"
+  while IFS='|' read -r name playbook template_inventory workflow_status; do
     extra_vars=""
     if [[ "${name}" == "osac-create-compute-instance" || "${name}" == "osac-delete-compute-instance" ]]; then
       extra_vars="${compute_extra_vars}"
@@ -186,6 +164,9 @@ configure_awx() {
     fi
     extra_vars_json='""'
     [[ -n "${extra_vars}" ]] && extra_vars_json=$(printf '%s' "${extra_vars}" | json_string)
+    if [[ -z "${inventory_ids[${template_inventory}]:-}" ]]; then
+      inventory_ids["${template_inventory}"]=$(ensure_inventory "${template_inventory}" "${api}" "${awx_token}")
+    fi
     inventory_id="${inventory_ids[${template_inventory}]}"
     template_payload=$(cat <<EOF
 {
@@ -196,19 +177,19 @@ configure_awx() {
 }
 EOF
 )
-    template_id=$(curl -s -X POST "${api}/job_templates/" -H "Authorization: Bearer ${awx_token}" \
-      -H "Content-Type: application/json" -d "${template_payload}" | \
-      python3 -c "import json,sys; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || true)
+    template_id=$(curl -s -H "Authorization: Bearer ${awx_token}" "${api}/job_templates/?name=${name}" | \
+      python3 -c "import json,sys; d=json.load(sys.stdin); print(d['results'][0]['id'] if d.get('results') else '')")
     if [[ -z "${template_id}" ]]; then
-      template_id=$(curl -s -H "Authorization: Bearer ${awx_token}" "${api}/job_templates/?name=${name}" | \
-        python3 -c "import json,sys; d=json.load(sys.stdin); print(d['results'][0]['id'] if d.get('results') else '')")
+      template_id=$(curl -s -X POST "${api}/job_templates/" -H "Authorization: Bearer ${awx_token}" \
+        -H "Content-Type: application/json" -d "${template_payload}" | \
+        python3 -c "import json,sys; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || true)
     fi
     [[ -n "${template_id}" ]] || { warn "Failed to create or find template ${name}"; return 1; }
     curl -s -X PATCH "${api}/job_templates/${template_id}/" -H "Authorization: Bearer ${awx_token}" \
       -H "Content-Type: application/json" -d "${template_payload}" >/dev/null
     log "  template: ${name}"
-  done
-  log "All 35 production OSAC job templates configured"
+  done < <(controller_template_specs)
+  log "Production OSAC job templates derived from controller.yml"
 
   # Kubernetes credential for job templates.
   kubectl -n "${NS}" create serviceaccount awx-runner 2>/dev/null || true

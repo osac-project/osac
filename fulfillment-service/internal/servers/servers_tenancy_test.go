@@ -545,7 +545,7 @@ var _ = Describe("Tenancy logic", func() {
 		status, ok := grpcstatus.FromError(err)
 		Expect(ok).To(BeTrue())
 		Expect(status.Code()).To(Equal(grpccodes.PermissionDenied))
-		Expect(status.Message()).To(Equal("tenant 'your-tenant' doesn't exist"))
+		Expect(status.Message()).To(Equal("you are not authorized to use the specified tenant"))
 	})
 
 	It("Rejects object creation when tenant is visible to the user, but doesn't exist in the database", func() {

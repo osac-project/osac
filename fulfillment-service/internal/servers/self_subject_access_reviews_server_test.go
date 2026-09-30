@@ -24,19 +24,22 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/collections"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 var _ = Describe("SelfSubjectAccessReviews Server", func() {
 	var (
-		mockCtrl      *gomock.Controller
-		mockEvaluator *auth.MockAuthorizationEvaluator
+		mockCtrl         *gomock.Controller
+		mockEvaluator    *auth.MockAuthorizationEvaluator
+		mockTenancyLogic *auth.MockTenancyLogic
 	)
 
 	BeforeEach(func() {
 		mockCtrl = gomock.NewController(GinkgoT())
 		mockEvaluator = auth.NewMockAuthorizationEvaluator(mockCtrl)
+		mockTenancyLogic = auth.NewMockTenancyLogic(mockCtrl)
 	})
 
 	AfterEach(func() {
@@ -49,6 +52,7 @@ var _ = Describe("SelfSubjectAccessReviews Server", func() {
 				server, err := NewSelfSubjectAccessReviewsServer().
 					SetLogger(logger).
 					SetEvaluator(mockEvaluator).
+					SetTenancyLogic(mockTenancyLogic).
 					Build()
 				Expect(err).ToNot(HaveOccurred())
 				Expect(server).ToNot(BeNil())
@@ -57,6 +61,7 @@ var _ = Describe("SelfSubjectAccessReviews Server", func() {
 			It("Fails if logger is not set", func() {
 				server, err := NewSelfSubjectAccessReviewsServer().
 					SetEvaluator(mockEvaluator).
+					SetTenancyLogic(mockTenancyLogic).
 					Build()
 				Expect(err).To(MatchError("logger is mandatory"))
 				Expect(server).To(BeNil())
@@ -65,8 +70,18 @@ var _ = Describe("SelfSubjectAccessReviews Server", func() {
 			It("Fails if evaluator is not set", func() {
 				server, err := NewSelfSubjectAccessReviewsServer().
 					SetLogger(logger).
+					SetTenancyLogic(mockTenancyLogic).
 					Build()
 				Expect(err).To(MatchError("evaluator is mandatory"))
+				Expect(server).To(BeNil())
+			})
+
+			It("Fails if tenancy logic is not set", func() {
+				server, err := NewSelfSubjectAccessReviewsServer().
+					SetLogger(logger).
+					SetEvaluator(mockEvaluator).
+					Build()
+				Expect(err).To(MatchError("tenancy logic is mandatory"))
 				Expect(server).To(BeNil())
 			})
 		})
@@ -83,6 +98,7 @@ var _ = Describe("SelfSubjectAccessReviews Server", func() {
 				publicServer, err = NewSelfSubjectAccessReviewsServer().
 					SetLogger(logger).
 					SetEvaluator(mockEvaluator).
+					SetTenancyLogic(mockTenancyLogic).
 					Build()
 				Expect(err).ToNot(HaveOccurred())
 
@@ -94,6 +110,23 @@ var _ = Describe("SelfSubjectAccessReviews Server", func() {
 					},
 				}
 				testCtx = auth.ContextWithToken(context.Background(), token)
+
+				// Set up default tenancy mock expectations
+				testVisibility, err := auth.NewVisibility().AddVisibleTenants("default-tenant", "my-tenant").Build()
+				Expect(err).ToNot(HaveOccurred())
+
+				mockTenancyLogic.EXPECT().
+					DetermineDefaultTenant(gomock.Any()).
+					Return("default-tenant", nil).
+					AnyTimes()
+				mockTenancyLogic.EXPECT().
+					DetermineAssignableTenants(gomock.Any()).
+					Return(collections.NewSet("default-tenant", "my-tenant"), nil).
+					AnyTimes()
+				mockTenancyLogic.EXPECT().
+					DetermineVisibility(gomock.Any()).
+					Return(testVisibility, nil).
+					AnyTimes()
 			})
 
 			It("Returns allowed decision for authorized action", func() {
@@ -178,6 +211,7 @@ var _ = Describe("SelfSubjectAccessReviews Server", func() {
 				server, err := NewPrivateSelfSubjectAccessReviewsServer().
 					SetLogger(logger).
 					SetEvaluator(mockEvaluator).
+					SetTenancyLogic(mockTenancyLogic).
 					Build()
 				Expect(err).ToNot(HaveOccurred())
 				Expect(server).ToNot(BeNil())
@@ -186,6 +220,7 @@ var _ = Describe("SelfSubjectAccessReviews Server", func() {
 			It("Fails if logger is not set", func() {
 				server, err := NewPrivateSelfSubjectAccessReviewsServer().
 					SetEvaluator(mockEvaluator).
+					SetTenancyLogic(mockTenancyLogic).
 					Build()
 				Expect(err).To(MatchError("logger is mandatory"))
 				Expect(server).To(BeNil())
@@ -194,8 +229,18 @@ var _ = Describe("SelfSubjectAccessReviews Server", func() {
 			It("Fails if evaluator is not set", func() {
 				server, err := NewPrivateSelfSubjectAccessReviewsServer().
 					SetLogger(logger).
+					SetTenancyLogic(mockTenancyLogic).
 					Build()
 				Expect(err).To(MatchError("evaluator is mandatory"))
+				Expect(server).To(BeNil())
+			})
+
+			It("Fails if tenancy logic is not set", func() {
+				server, err := NewPrivateSelfSubjectAccessReviewsServer().
+					SetLogger(logger).
+					SetEvaluator(mockEvaluator).
+					Build()
+				Expect(err).To(MatchError("tenancy logic is mandatory"))
 				Expect(server).To(BeNil())
 			})
 		})
@@ -212,6 +257,7 @@ var _ = Describe("SelfSubjectAccessReviews Server", func() {
 				privateServer, err = NewPrivateSelfSubjectAccessReviewsServer().
 					SetLogger(logger).
 					SetEvaluator(mockEvaluator).
+					SetTenancyLogic(mockTenancyLogic).
 					Build()
 				Expect(err).ToNot(HaveOccurred())
 
@@ -223,6 +269,23 @@ var _ = Describe("SelfSubjectAccessReviews Server", func() {
 					},
 				}
 				testCtx = auth.ContextWithToken(context.Background(), token)
+
+				// Set up default tenancy mock expectations
+				testVisibility, err := auth.NewVisibility().AddVisibleTenants("default-tenant", "my-tenant").Build()
+				Expect(err).ToNot(HaveOccurred())
+
+				mockTenancyLogic.EXPECT().
+					DetermineDefaultTenant(gomock.Any()).
+					Return("default-tenant", nil).
+					AnyTimes()
+				mockTenancyLogic.EXPECT().
+					DetermineAssignableTenants(gomock.Any()).
+					Return(collections.NewSet("default-tenant", "my-tenant"), nil).
+					AnyTimes()
+				mockTenancyLogic.EXPECT().
+					DetermineVisibility(gomock.Any()).
+					Return(testVisibility, nil).
+					AnyTimes()
 			})
 
 			It("Returns allowed decision for authorized action", func() {

@@ -1,6 +1,7 @@
 import { screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
+import { ServiceTier } from '@osac/types';
 import { SessionProvider } from '@osac/ui-components/hooks/use-session';
 import type { UserRole } from '@osac/ui-components/shellTypes';
 import { renderWithProviders } from '@osac/ui-components/test-utils/TestProviders';
@@ -15,13 +16,21 @@ vi.mock('react-svg', () => ({
 
 import { AppShell } from './AppShell';
 
-const renderAppShell = (entry: string, role: UserRole = 'admin') =>
+const renderAppShell = (
+  entry: string,
+  role: UserRole = 'admin',
+  enabledServices: ServiceTier[] = [ServiceTier.CAAS, ServiceTier.VMAAS, ServiceTier.BMAAS],
+) =>
   renderWithProviders(
     <SessionProvider role={role} username="test-user" tenantId="tenant-1">
       <AppShell logout={vi.fn().mockResolvedValue(undefined)} />
     </SessionProvider>,
     {
-      apiFixtures: { privateInstanceTypes: [], privateBaremetalInstanceTypes: [] },
+      apiFixtures: {
+        enabledServices,
+        privateInstanceTypes: [],
+        privateBaremetalInstanceTypes: [],
+      },
       routerEntries: [entry],
     },
   );
@@ -88,4 +97,41 @@ describe('AppShell', () => {
     expect(screen.queryByRole('heading', { name: /volumes/i })).toBeNull();
     expect(await screen.findByRole('heading', { name: 'Tenants' })).toBeInTheDocument();
   });
+
+  it.each([
+    {
+      path: '/vms/vm-1',
+      service: ServiceTier.VMAAS,
+      label: 'Virtual Machine',
+    },
+    {
+      path: '/clusters/cluster-1',
+      service: ServiceTier.CAAS,
+      label: 'Cluster',
+    },
+    {
+      path: '/bare-metal/instance-1',
+      service: ServiceTier.BMAAS,
+      label: 'Bare Metal',
+    },
+  ])(
+    'shows a service-unavailable page for a disabled $label route',
+    async ({ path, service, label }) => {
+      renderAppShell(
+        path,
+        'tenant-user',
+        [ServiceTier.CAAS, ServiceTier.VMAAS, ServiceTier.BMAAS].filter(
+          (enabledService) => enabledService !== service,
+        ),
+      );
+
+      expect(
+        await screen.findByRole('heading', { name: 'Service unavailable' }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(`The ${label} service is not enabled on this server.`),
+      ).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Go to catalog' })).toBeInTheDocument();
+    },
+  );
 });

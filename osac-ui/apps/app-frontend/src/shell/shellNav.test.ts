@@ -166,6 +166,7 @@ describe('navRowsForRole', () => {
           id: 'instance-types',
           label: 'Instance types',
           path: '/admin/infrastructure/instance-types',
+          service: ServiceTier.VMAAS,
         },
         {
           kind: 'link',
@@ -178,6 +179,7 @@ describe('navRowsForRole', () => {
           id: 'baremetal-instance-types',
           label: 'Bare metal instance types',
           path: '/admin/infrastructure/baremetal-instance-types',
+          service: ServiceTier.BMAAS,
         },
         {
           kind: 'link',

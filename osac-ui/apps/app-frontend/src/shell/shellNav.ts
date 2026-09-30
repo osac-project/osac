@@ -71,6 +71,7 @@ const getAdminNav = (t: TFunction): NavRow[] => [
         id: 'instance-types',
         label: t('Instance types'),
         path: '/admin/infrastructure/instance-types',
+        service: ServiceTier.VMAAS,
       },
       {
         kind: 'link',
@@ -83,6 +84,7 @@ const getAdminNav = (t: TFunction): NavRow[] => [
         id: 'baremetal-instance-types',
         label: t('Bare metal instance types'),
         path: '/admin/infrastructure/baremetal-instance-types',
+        service: ServiceTier.BMAAS,
       },
       {
         kind: 'link',

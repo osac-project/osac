@@ -3714,6 +3714,7 @@ var _ = Describe("BareMetalInstance auto-EIP atomic provisioning", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(eipList.GetItems()).To(HaveLen(1))
 		eip := eipList.GetItems()[0]
+		Expect(eip.GetMetadata().GetName()).To(Equal("auto-eip-" + bmiID))
 		Expect(eip.GetMetadata().GetTenant()).To(Equal(testTenant))
 		Expect(eip.GetMetadata().GetLabels()[autoCreatedLabel]).To(Equal("true"))
 		Expect(eip.GetMetadata().GetAnnotations()[ownerReferenceAnnotation]).To(Equal(bmiID))
@@ -3726,6 +3727,7 @@ var _ = Describe("BareMetalInstance auto-EIP atomic provisioning", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(attList.GetItems()).To(HaveLen(1))
 		att := attList.GetItems()[0]
+		Expect(att.GetMetadata().GetName()).To(Equal("auto-eipa-" + bmiID))
 		Expect(att.GetMetadata().GetTenant()).To(Equal(testTenant))
 		Expect(att.GetMetadata().GetLabels()[autoCreatedLabel]).To(Equal("true"))
 		Expect(att.GetMetadata().GetAnnotations()[ownerReferenceAnnotation]).To(Equal(bmiID))
@@ -3737,6 +3739,34 @@ var _ = Describe("BareMetalInstance auto-EIP atomic provisioning", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(poolResp.GetObject().GetStatus().GetAvailable()).To(Equal(int64(9)))
 		Expect(poolResp.GetObject().GetStatus().GetAllocated()).To(Equal(int64(1)))
+	})
+
+	It("creates distinct automatic resources for instances with the same UUID prefix", func() {
+		poolID := createPool(2)
+		for range 2 {
+			request := createBMIRequest()
+			request.GetObject().SetId("019abcde" + uuid.NewString()[8:])
+			response, err := server.Create(ctx, request)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetObject().GetId()).To(Equal(request.GetObject().GetId()))
+		}
+
+		ipList, err := externalIPDao.List().Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(ipList.GetItems()).To(HaveLen(2))
+		for _, ip := range ipList.GetItems() {
+			Expect(ip.GetMetadata().GetName()).To(Equal("auto-eip-" + ip.GetMetadata().GetAnnotations()[ownerReferenceAnnotation]))
+		}
+		attachmentList, err := externalIPAttDao.List().Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(attachmentList.GetItems()).To(HaveLen(2))
+		for _, attachment := range attachmentList.GetItems() {
+			Expect(attachment.GetMetadata().GetName()).To(Equal("auto-eipa-" + attachment.GetMetadata().GetAnnotations()[ownerReferenceAnnotation]))
+		}
+		poolResp, err := externalIPPoolDao.Get().SetId(poolID).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(poolResp.GetObject().GetStatus().GetAvailable()).To(Equal(int64(0)))
+		Expect(poolResp.GetObject().GetStatus().GetAllocated()).To(Equal(int64(2)))
 	})
 
 	It("cascade-deletes auto-created resources and restores pool capacity on BMI delete", func() {

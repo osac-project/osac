@@ -4,7 +4,7 @@ templates:
 tests:
   - it: mounts the TopoLVM host socket at the driver socket path
     asserts:
-      - contains:
+      - notContains:
           path: spec.template.spec.containers[0].env
           content:
             name: OSAC_LVMS_NODE_SOCKET
@@ -23,8 +23,19 @@ tests:
               path: /var/lib/kubelet/plugins/topolvm.io/node
               type: DirectoryOrCreate
 
+  - it: preserves an explicit LVMS vendor socket without an environment override
+    set:
+      node.vendorSockets: lvms=/run/custom/topolvm.sock
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --vendor-sockets=lvms=/run/custom/topolvm.sock
+      - notExists:
+          path: spec.template.spec.containers[0].env[?(@.name == 'OSAC_LVMS_NODE_SOCKET')]
+
   - it: allows the host and container socket paths to differ
     set:
+      node.vendorSockets: lvms=/run/other/topolvm.sock
       node.lvmsNodeSocket: /run/custom-topolvm/csi.sock
       node.lvmsNodeSocketDir: /run/custom-topolvm
       node.lvmsNodeSocketHostPath: /var/lib/kubelet/plugins/custom-topolvm

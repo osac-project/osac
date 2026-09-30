@@ -49,7 +49,12 @@ make image-push   # Push container image
 
 The node DaemonSet supplies `NODE_NAME` from the Kubernetes downward API. The
 LVMS socket is routed through the existing vendor socket map and defaults to
-`/run/topolvm/csi-topolvm.sock`; set `OSAC_LVMS_NODE_SOCKET` to override it.
+`/run/topolvm/csi-topolvm.sock`. An explicit `lvms` entry in `--vendor-sockets`
+replaces that default; `OSAC_LVMS_NODE_SOCKET` takes precedence over both.
+The chart leaves `node.lvmsNodeSocket` empty by default, so it preserves
+`node.vendorSockets`. Set `node.lvmsNodeSocket` to supply an explicit environment
+override. For custom paths, also align `node.lvmsNodeSocketDir` and
+`node.lvmsNodeSocketHostPath` so the socket is accessible inside the container.
 
 ## License
 

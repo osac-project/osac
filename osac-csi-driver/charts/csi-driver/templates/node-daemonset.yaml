@@ -62,8 +62,10 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
+            {{- if .Values.node.lvmsNodeSocket }}
             - name: OSAC_LVMS_NODE_SOCKET
               value: {{ .Values.node.lvmsNodeSocket | quote }}
+            {{- end }}
             {{- if $configured }}
             {{- if $configMapName }}
             - name: OSAC_FULFILLMENT_ENDPOINT

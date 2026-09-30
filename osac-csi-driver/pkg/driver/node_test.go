@@ -683,7 +683,7 @@ func TestNodeGetInfoMissingNodeName(t *testing.T) {
 func TestNewNodeServerResolvesLVMSSocket(t *testing.T) {
 	t.Run("environment override", func(t *testing.T) {
 		t.Setenv(lvmsNodeSocketEnv, "/run/custom/topolvm.sock")
-		ns := NewNodeServer("node", proxy.NewManager(nil), nil)
+		ns := NewNodeServer("node", proxy.NewManager(nil), map[string]string{lvmsProvider: "/run/other/topolvm.sock"})
 
 		got, err := ns.resolveVendorSocket(map[string]string{"osac.backend": lvmsProvider})
 		if err != nil {
@@ -691,6 +691,24 @@ func TestNewNodeServerResolvesLVMSSocket(t *testing.T) {
 		}
 		if got != "/run/custom/topolvm.sock" {
 			t.Errorf("LVMS socket = %q, want /run/custom/topolvm.sock", got)
+		}
+	})
+
+	t.Run("configured vendor socket without environment override", func(t *testing.T) {
+		t.Setenv(lvmsNodeSocketEnv, "")
+		socketPath, plugin, cleanup := startFakeNodePlugin(t)
+		defer cleanup()
+		ns := newTestNodeServer(t, lvmsProvider, socketPath)
+		_, err := ns.NodePublishVolume(context.Background(), &csi.NodePublishVolumeRequest{
+			VolumeId: "osac-volume", TargetPath: "/target",
+			VolumeCapability: blockCap(),
+			VolumeContext:    map[string]string{"osac.backend": lvmsProvider, topolvmVolumeIDContextKey: "vendor-volume"},
+		})
+		if err != nil {
+			t.Fatalf("custom LVMS socket was not used: %v", err)
+		}
+		if !plugin.publishCalled || plugin.publishVolumeID != "vendor-volume" {
+			t.Fatalf("publish did not reach the configured LVMS socket: %+v", plugin)
 		}
 	})
 

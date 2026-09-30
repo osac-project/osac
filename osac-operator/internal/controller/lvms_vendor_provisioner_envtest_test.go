@@ -75,6 +75,7 @@ var _ = Describe("LVMS Volume lifecycle", Ordered, func() {
 				ObjectMeta: metav1.ObjectMeta{
 					GenerateName: "lvms-envtest-", Namespace: "default",
 					Annotations: map[string]string{osacTenantKey: "tenant-a"},
+					Finalizers:  []string{osacVolumeFinalizer},
 				},
 				Spec: v1alpha1.VolumeSpec{
 					StorageTier: "local", SizeGiB: 1, AccessMode: accessMode,
@@ -119,8 +120,10 @@ var _ = Describe("LVMS Volume lifecycle", Ordered, func() {
 			volume.Status.Provider = lvmsProvider
 			volume.Status.Protocol = v1alpha1.VolumeProtocolBlock
 			Expect(k8sClient.Status().Update(testCtx, volume)).To(Succeed())
+			staleVolume := volume.DeepCopy()
 			reconciler := &VolumeReconciler{
 				Client: k8sClient, Scheme: k8sClient.Scheme(), VolumeNamespace: key.Namespace,
+				mgr:                testMcManager,
 				VendorProvisioners: VendorProvisionerRegistry{lvmsProvider: NewLvmsVendorProvisioner(k8sClient, k8sClient)},
 			}
 			reconcileVolume := func() {
@@ -142,8 +145,11 @@ var _ = Describe("LVMS Volume lifecycle", Ordered, func() {
 			_, hasDeviceClass, err := unstructured.NestedString(original.Object, "spec", "deviceClass")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(hasDeviceClass).To(BeFalse())
+			reconciler.Client = &staleVolumeClient{Client: k8sClient, volume: staleVolume}
 			reconcileVolume()
 			Expect(listLogicalVolumes()).To(HaveLen(1))
+			Expect(getVolume().Status.VendorContext[logicalVolumeNameContextKey]).To(Equal(originalName))
+			reconciler.Client = k8sClient
 
 			original.SetFinalizers([]string{"topolvm.io/logicalvolume"})
 			Expect(k8sClient.Update(testCtx, original)).To(Succeed())

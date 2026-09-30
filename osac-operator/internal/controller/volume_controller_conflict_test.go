@@ -8,6 +8,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
 
 // conflictOnceStatusClient injects the finalizer/status resource-version race
@@ -15,7 +17,8 @@ import (
 // status write conflicts; later writes use the real client.
 type conflictOnceStatusClient struct {
 	client.Client
-	statusUpdates atomic.Int32
+	statusUpdates  atomic.Int32
+	beforeConflict func(context.Context, client.Object)
 }
 
 func (c *conflictOnceStatusClient) Status() client.SubResourceWriter {
@@ -32,6 +35,9 @@ type conflictOnceStatusWriter struct {
 
 func (w conflictOnceStatusWriter) Update(ctx context.Context, obj client.Object, opts ...client.SubResourceUpdateOption) error {
 	if w.client.statusUpdates.Add(1) == 1 {
+		if w.client.beforeConflict != nil {
+			w.client.beforeConflict(ctx, obj)
+		}
 		return apierrors.NewConflict(
 			schema.GroupResource{Group: "osac.openshift.io", Resource: "volumes"},
 			obj.GetName(),
@@ -39,4 +45,17 @@ func (w conflictOnceStatusWriter) Update(ctx context.Context, obj client.Object,
 		)
 	}
 	return w.SubResourceWriter.Update(ctx, obj, opts...)
+}
+
+type staleVolumeClient struct {
+	client.Client
+	volume *v1alpha1.Volume
+}
+
+func (c *staleVolumeClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if vol, ok := obj.(*v1alpha1.Volume); ok && key == client.ObjectKeyFromObject(c.volume) {
+		c.volume.DeepCopyInto(vol)
+		return nil
+	}
+	return c.Client.Get(ctx, key, obj, opts...)
 }

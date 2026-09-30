@@ -26,6 +26,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
@@ -281,6 +282,71 @@ var _ = Describe("VolumeReconciler", func() {
 		Expect(updated.Status.VendorVolumeID).To(Equal("mock-1"))
 		Expect(mockProv.CreateCallCount()).To(Equal(int64(1)))
 	})
+
+	It("preserves vendor state persisted during a conflicting status update", func() {
+		mockProv.Pending = true
+		Expect(k8sClient.Create(testCtx, vol)).To(Succeed())
+		stampProviderProtocol(vol)
+		reconciler.Client = &conflictOnceStatusClient{
+			Client: k8sClient,
+			beforeConflict: func(ctx context.Context, obj client.Object) {
+				current := &osacv1alpha1.Volume{}
+				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(obj), current)).To(Succeed())
+				current.Status.VendorContext = map[string]string{"pending": "newer"}
+				Expect(k8sClient.Status().Update(ctx, current)).To(Succeed())
+			},
+		}
+
+		_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: reconcile.Request{
+			NamespacedName: client.ObjectKeyFromObject(vol),
+		}})
+		Expect(err).To(HaveOccurred())
+		current := &osacv1alpha1.Volume{}
+		Expect(k8sClient.Get(testCtx, client.ObjectKeyFromObject(vol), current)).To(Succeed())
+		Expect(current.Status.VendorContext).To(Equal(map[string]string{"pending": "newer"}))
+	})
+
+	DescribeTable("refuses a provisioning result for a changed Volume lifecycle", func(recreate bool) {
+		mockProv.Pending = true
+		Expect(k8sClient.Create(testCtx, vol)).To(Succeed())
+		stampProviderProtocol(vol)
+		reconciler.Client = &conflictOnceStatusClient{
+			Client: k8sClient,
+			beforeConflict: func(ctx context.Context, obj client.Object) {
+				current := &osacv1alpha1.Volume{}
+				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(obj), current)).To(Succeed())
+				if recreate {
+					current.Finalizers = nil
+					Expect(k8sClient.Update(ctx, current)).To(Succeed())
+				}
+				Expect(k8sClient.Delete(ctx, current)).To(Succeed())
+				if recreate {
+					replacement := &osacv1alpha1.Volume{
+						ObjectMeta: metav1.ObjectMeta{Name: vol.Name, Namespace: vol.Namespace},
+						Spec:       vol.Spec,
+					}
+					Expect(k8sClient.Create(ctx, replacement)).To(Succeed())
+					stampProviderProtocol(replacement)
+				}
+			},
+		}
+
+		_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: reconcile.Request{
+			NamespacedName: client.ObjectKeyFromObject(vol),
+		}})
+		Expect(err).To(HaveOccurred())
+		current := &osacv1alpha1.Volume{}
+		Expect(k8sClient.Get(testCtx, client.ObjectKeyFromObject(vol), current)).To(Succeed())
+		Expect(current.Status.VendorContext).To(BeEmpty())
+		if recreate {
+			Expect(current.UID).NotTo(Equal(vol.UID))
+		} else {
+			Expect(current.DeletionTimestamp.IsZero()).To(BeFalse())
+		}
+	},
+		Entry("deletion starts during provisioning", false),
+		Entry("a same-name resource has a different UID", true),
+	)
 
 	It("should set phase to Failed when vendor provisioning fails", func() {
 		mockProv.CreateErr = fmt.Errorf("vendor array unreachable")

@@ -1,0 +1,37 @@
+enabled: true
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: ghcr.io/osac-project/metering-cost-management-adapter
+  tag: latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
+  pullPolicy: Always
+
+cliImage: quay.io/openshift/origin-cli:4.20.0
+
+global:
+  osacDeploymentId: ""
+
+certs:
+  caBundle:
+    configMap: ca-bundle
+
+kafka:
+  brokers: ""
+  clusterName: "osac-kafka"
+  clusterNamespace: "osac-kafka"
+
+costManagement:
+  apiUrl: ""
+  apiTokenSecret: "" # name of a Secret with key "api-token"
+  consumerGroup: "cost-management-adapter"
+  startOffset: "oldest" # oldest or newest
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi

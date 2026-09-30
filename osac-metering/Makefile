@@ -11,6 +11,7 @@ all: test lint
 
 helm-lint:
 	helm lint charts/osac-metering/
+	helm lint charts/cost-management-adapter/
 
 test:
 	$(MAKE) -C schema test

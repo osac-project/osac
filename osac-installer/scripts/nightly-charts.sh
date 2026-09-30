@@ -36,6 +36,7 @@ readonly MONO_REPO_UMBRELLA_DEPENDENCIES=(
     "bare-metal-fulfillment-operator-crds:bare-metal-fulfillment-operator"
     "bare-metal-fulfillment-operator:bare-metal-fulfillment-operator"
     "osac-metering:osac-metering"
+    "cost-management-adapter:osac-metering"
     "csi-driver:osac-csi-driver"
     "csi-backends:osac-csi-driver"
     "osac-ui:osac-ui"
@@ -153,6 +154,8 @@ stamp_component_image_refs() {
         osac-metering)
             TAG_VALUE="${tag_value}" yq -i '.image.tag = strenv(TAG_VALUE)' "osac-metering/charts/osac-metering/values.yaml"
             stamp_umbrella_nested_field "${umbrella_values}" metering image tag "${tag_value}"
+            TAG_VALUE="${tag_value}" yq -i '.image.tag = strenv(TAG_VALUE)' "osac-metering/charts/cost-management-adapter/values.yaml"
+            stamp_umbrella_nested_field "${umbrella_values}" costManagementAdapter image tag "${tag_value}"
             # m360Adapter has no umbrella-level override field -- stamp only
             # the subchart's own values.yaml. Stamped unconditionally even
             # though disabled by default: cheap, and avoids a stale

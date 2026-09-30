@@ -41,4 +41,9 @@ make lint     # Run golangci-lint
 
 ## Deployment
 
-The metering subsystem is deployed via the osac-installer umbrella chart with `metering.enabled: true`. Prerequisites: AMQ Streams operator and Kafka cluster (installed by osac-installer phases 1 and 2 with `kafka.enabled: true`).
+The metering subsystem is deployed via the osac-installer umbrella chart with
+`metering.enabled: true`. The Cost Management adapter is a separate chart at
+`charts/cost-management-adapter` and is enabled independently with
+`costManagementAdapter.enabled: true`. Prerequisites: AMQ Streams operator
+and Kafka cluster (installed by osac-installer phases 1 and 2 with
+`kafka.enabled: true`).

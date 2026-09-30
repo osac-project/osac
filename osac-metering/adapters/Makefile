@@ -16,11 +16,11 @@ IMG_ECHO_ADAPTER ?= ghcr.io/osac-project/metering-echo-adapter:latest
 
 include $(shell git rev-parse --show-toplevel)/tools/golangci-lint.mk
 
-.PHONY: all build-echo-adapter build-m360-adapter test lint clean \
+.PHONY: all build-echo-adapter build-m360-adapter build-cost-management-adapter test lint clean \
 	image-build-m360-adapter image-push-m360-adapter \
 	image-build-echo-adapter image-push-echo-adapter
 
-all: build-echo-adapter build-m360-adapter
+all: build-echo-adapter build-m360-adapter build-cost-management-adapter
 
 build-echo-adapter:
 	@mkdir -p bin
@@ -29,6 +29,10 @@ build-echo-adapter:
 build-m360-adapter:
 	@mkdir -p bin
 	go build -o bin/m360-adapter ./cmd/m360-adapter
+
+build-cost-management-adapter:
+	@mkdir -p bin
+	go build -o bin/cost-management-adapter ./cmd/cost-management-adapter
 
 test:
 	$(GINKGO) run -r .

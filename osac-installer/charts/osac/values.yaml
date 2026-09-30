@@ -347,6 +347,22 @@ metering:
     tag: latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
     pullPolicy: Always
 
+# --- Cost Management adapter ---
+# This is a separate chart and can be enabled independently of the metering
+# producer. Its Kafka settings must point at the same cluster as metering.
+costManagementAdapter:
+  enabled: false
+  nameOverride: cost-management-adapter
+  image:
+    repository: ghcr.io/osac-project/metering-cost-management-adapter
+    tag: latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
+    pullPolicy: Always
+  costManagement:
+    apiUrl: ""
+    apiTokenSecret: ""  # name of a K8s Secret with key "api-token"
+    consumerGroup: "cost-management-adapter"
+    startOffset: "oldest"
+
 # --- CSI Driver ---
 csiDriver:
   enabled: false

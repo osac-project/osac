@@ -252,6 +252,28 @@ func TestLvmsCreateVolumeRequiresNodeTopology(t *testing.T) {
 	}
 }
 
+func TestLvmsCreateVolumeAcceptsSingleNodeAccessModes(t *testing.T) {
+	for _, mode := range []v1alpha1.VolumeAccessMode{
+		v1alpha1.VolumeAccessModeReadWriteOnce,
+		v1alpha1.VolumeAccessModeReadWriteOncePod,
+	} {
+		t.Run(string(mode), func(t *testing.T) {
+			api := newRecordingLogicalVolumeClient()
+			provisioner := newTestLvmsProvisioner(t, api)
+			request := lvmsCreateRequest()
+			request.AccessMode = mode
+
+			response, err := provisioner.CreateVolume(context.Background(), request)
+			if err != nil {
+				t.Fatalf("CreateVolume error for %s: %v", mode, err)
+			}
+			if !response.Pending || len(api.created) != 1 {
+				t.Fatalf("CreateVolume = (pending %t, creates %d), want pending with one LogicalVolume", response.Pending, len(api.created))
+			}
+		})
+	}
+}
+
 func TestLvmsCreateVolumeRejectsUnsupportedAccessModes(t *testing.T) {
 	tests := []struct {
 		name string
@@ -260,7 +282,6 @@ func TestLvmsCreateVolumeRejectsUnsupportedAccessModes(t *testing.T) {
 		{name: "unspecified"},
 		{name: "read-only-many", mode: v1alpha1.VolumeAccessModeReadOnlyMany},
 		{name: "read-write-many", mode: v1alpha1.VolumeAccessModeReadWriteMany},
-		{name: "read-write-once-pod", mode: v1alpha1.VolumeAccessModeReadWriteOncePod},
 	}
 
 	for _, tt := range tests {
@@ -274,7 +295,7 @@ func TestLvmsCreateVolumeRejectsUnsupportedAccessModes(t *testing.T) {
 			if grpcstatus.Code(err) != codes.InvalidArgument {
 				t.Fatalf("CreateVolume error code = %s, want InvalidArgument: %v", grpcstatus.Code(err), err)
 			}
-			if !strings.Contains(err.Error(), "supports only \"ReadWriteOnce\" access mode") {
+			if !strings.Contains(err.Error(), fmt.Sprintf("got %q", tt.mode)) {
 				t.Errorf("CreateVolume error = %q, want unsupported access-mode detail", err)
 			}
 			if len(api.created) != 0 {

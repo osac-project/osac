@@ -109,6 +109,22 @@ credentials; changing it requires deliberate replacement and a rollout. Tenant
 cluster credentials are managed separately by the AAP storage-provider
 workflow.
 
+### LVMS development/CI volumes
+
+The LVMS CSI path supports single-node development/CI environments and accepts
+`ReadWriteOnce` and `ReadWriteOncePod`. Multi-node access modes are rejected.
+
+The provisioner uses LVMS/TopoLVM's configured default device class by omitting
+`LogicalVolume.spec.deviceClass`. OSAC's infrastructure chart configures `vg1`
+with `default: true`. Preinstalled LVMS must have one device class marked
+`default: true` in its `LVMCluster`; its name need not be `vg1`. This setting is
+distinct from the Kubernetes default StorageClass annotation.
+
+All OSAC local-tier CSI volumes use that default pool. Keep the default class
+unchanged while these volumes exist. Device-class selection is not exposed in
+the OSAC Volume API or tenant CSI StorageClass parameters. The legacy direct
+TopoLVM path retains its explicit device-class configuration.
+
 ### Controller enable flags
 
 Each controller can be enabled or disabled. If none of these are set, all

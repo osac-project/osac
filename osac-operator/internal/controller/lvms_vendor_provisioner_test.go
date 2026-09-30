@@ -174,15 +174,17 @@ func TestLvmsCreateVolumeBuildsAndWaitsForLogicalVolume(t *testing.T) {
 		t.Fatalf("LogicalVolume spec missing: found=%t err=%v", found, err)
 	}
 	expectations := map[string]string{
-		"name":        "pvc-volume-uid",
-		"nodeName":    "worker-1",
-		"deviceClass": "vg1",
-		"size":        "10Gi",
+		"name":     "pvc-volume-uid",
+		"nodeName": "worker-1",
+		"size":     "10Gi",
 	}
 	for key, want := range expectations {
 		if got := spec[key]; got != want {
 			t.Errorf("spec.%s = %v, want %q", key, got, want)
 		}
+	}
+	if deviceClass, exists := spec["deviceClass"]; exists {
+		t.Errorf("spec.deviceClass = %v, want omitted to use the LVMS default", deviceClass)
 	}
 	if got := response.VendorContext[logicalVolumeNameContextKey]; got != volume.GetName() {
 		t.Errorf("VendorContext[%q] = %q, want LogicalVolume name %q", logicalVolumeNameContextKey, got, volume.GetName())
@@ -322,6 +324,26 @@ func TestLvmsCreateVolumeResourceExhaustedRollsBack(t *testing.T) {
 	}
 	if len(api.objects) != 0 {
 		t.Fatalf("%d LogicalVolumes remain after rollback, want 0", len(api.objects))
+	}
+}
+
+func TestLvmsCreateVolumeMissingDefaultDeviceClassRollsBack(t *testing.T) {
+	api := newRecordingLogicalVolumeClient()
+	api.afterCreate = func(volume *unstructured.Unstructured) {
+		setNestedField(t, volume.Object, int64(codes.NotFound), "status", "code")
+		setNestedField(t, volume.Object, "device-class not found: no default device class", "status", "message")
+	}
+	provisioner := newTestLvmsProvisioner(t, api)
+
+	_, err := provisioner.CreateVolume(context.Background(), lvmsCreateRequest())
+	if grpcstatus.Code(err) != codes.NotFound {
+		t.Fatalf("CreateVolume error code = %s, want NotFound: %v", grpcstatus.Code(err), err)
+	}
+	if !strings.Contains(err.Error(), "no default device class") {
+		t.Fatalf("CreateVolume error = %v, want default device-class diagnostic", err)
+	}
+	if len(api.deleted) != 1 || len(api.objects) != 0 {
+		t.Fatalf("rollback left %d LogicalVolumes after %d deletes, want no resources and one delete", len(api.objects), len(api.deleted))
 	}
 }
 

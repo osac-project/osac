@@ -43,7 +43,6 @@ const (
 	logicalVolumeResourceUIDContextKey = "osac.topolvm-logicalvolume-uid"
 	logicalVolumeOwnerAnnotation       = "osac.openshift.io/owner-reference"
 	logicalVolumeSourceUIDAnnotation   = "osac.openshift.io/volume-uid"
-	lvmsDeviceClass                    = "vg1"
 
 	logicalVolumeCleanupTimeout = 10 * time.Second
 )
@@ -266,10 +265,10 @@ func buildLogicalVolume(req VendorCreateVolumeRequest, nodeName string) *unstruc
 			"name": logicalVolumeResourceName(req),
 		},
 		"spec": map[string]interface{}{
-			"name":        volumeName,
-			"nodeName":    nodeName,
-			"deviceClass": lvmsDeviceClass,
-			"size":        fmt.Sprintf("%dGi", req.SizeGiB),
+			"name":     volumeName,
+			"nodeName": nodeName,
+			// An omitted deviceClass selects TopoLVM's configured default.
+			"size": fmt.Sprintf("%dGi", req.SizeGiB),
 		},
 	}}
 	volume.SetGroupVersionKind(logicalVolumeGVK)

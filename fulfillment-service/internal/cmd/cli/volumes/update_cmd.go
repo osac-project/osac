@@ -26,6 +26,8 @@ import (
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
+// updateCmd creates the "volumes update" subcommand for modifying mutable volume metadata fields
+// such as display name and description.
 func updateCmd() *cobra.Command {
 	runner := &updateRunner{}
 	result := &cobra.Command{
@@ -58,7 +60,7 @@ type updateRunner struct {
 	description string
 }
 
-func (c *updateRunner) run(cmd *cobra.Command, args []string) error {
+func (c *updateRunner) run(cmd *cobra.Command, args []string) (err error) {
 	ref := args[0]
 
 	ctx := cmd.Context()
@@ -85,7 +87,11 @@ func (c *updateRunner) run(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create gRPC connection: %w", err)
 	}
-	defer conn.Close()
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("failed to close gRPC connection: %w", closeErr)
+		}
+	}()
 
 	client := publicv1.NewVolumesClient(conn)
 
@@ -105,13 +111,8 @@ func (c *updateRunner) run(cmd *cobra.Command, args []string) error {
 	}
 
 	// Clone and apply changes:
-	updated := proto.Clone(volume).(*publicv1.Volume)
-	if cmd.Flags().Changed("display-name") {
-		updated.GetMetadata().SetDisplayName(c.displayName)
-	}
-	if cmd.Flags().Changed("description") {
-		updated.GetMetadata().SetDescription(c.description)
-	}
+	updated := applyVolumeMetadataUpdate(volume, cmd.Flags().Changed("display-name"), c.displayName,
+		cmd.Flags().Changed("description"), c.description)
 
 	_, err = client.Update(ctx, publicv1.VolumesUpdateRequest_builder{
 		Object: updated,
@@ -126,6 +127,26 @@ func (c *updateRunner) run(cmd *cobra.Command, args []string) error {
 	c.console.Infof(ctx, "Updated volume '%s'.\n", volume.GetId())
 
 	return nil
+}
+
+// applyVolumeMetadataUpdate clones the given volume and applies the specified metadata changes.
+// It initializes metadata on the clone if absent to prevent nil-pointer panics.
+func applyVolumeMetadataUpdate(
+	volume *publicv1.Volume,
+	setDisplayName bool, displayName string,
+	setDescription bool, description string,
+) *publicv1.Volume {
+	updated := proto.Clone(volume).(*publicv1.Volume)
+	if !updated.HasMetadata() {
+		updated.SetMetadata(&publicv1.Metadata{})
+	}
+	if setDisplayName {
+		updated.GetMetadata().SetDisplayName(displayName)
+	}
+	if setDescription {
+		updated.GetMetadata().SetDescription(description)
+	}
+	return updated
 }
 
 const updateShortHelp = `Update volume properties`

@@ -22,9 +22,11 @@ import (
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
+// formatVolume renders a volume detail view and returns the output as a string.
 func formatVolume(v *publicv1.Volume) string {
 	var buf bytes.Buffer
-	renderVolume(&buf, v)
+	err := renderVolume(&buf, v)
+	Expect(err).ToNot(HaveOccurred())
 	return buf.String()
 }
 

@@ -25,6 +25,7 @@ import (
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
+// deleteCmd creates the "volumes delete" subcommand for removing a volume by ID or name.
 func deleteCmd() *cobra.Command {
 	runner := &deleteRunner{}
 	result := &cobra.Command{
@@ -42,7 +43,7 @@ type deleteRunner struct {
 	console *terminal.Console
 }
 
-func (c *deleteRunner) run(cmd *cobra.Command, args []string) error {
+func (c *deleteRunner) run(cmd *cobra.Command, args []string) (err error) {
 	ref := args[0]
 
 	ctx := cmd.Context()
@@ -57,7 +58,11 @@ func (c *deleteRunner) run(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create gRPC connection: %w", err)
 	}
-	defer conn.Close()
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("failed to close gRPC connection: %w", closeErr)
+		}
+	}()
 
 	client := publicv1.NewVolumesClient(conn)
 

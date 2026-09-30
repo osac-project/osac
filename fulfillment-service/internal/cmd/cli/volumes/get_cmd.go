@@ -28,6 +28,7 @@ import (
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
+// getCmd creates the "volumes get" subcommand for displaying detailed volume information.
 func getCmd() *cobra.Command {
 	runner := &getRunner{}
 	result := &cobra.Command{
@@ -45,7 +46,7 @@ type getRunner struct {
 	console *terminal.Console
 }
 
-func (c *getRunner) run(cmd *cobra.Command, args []string) error {
+func (c *getRunner) run(cmd *cobra.Command, args []string) (err error) {
 	ref := args[0]
 
 	ctx := cmd.Context()
@@ -60,7 +61,11 @@ func (c *getRunner) run(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create gRPC connection: %w", err)
 	}
-	defer conn.Close()
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("failed to close gRPC connection: %w", closeErr)
+		}
+	}()
 
 	client := publicv1.NewVolumesClient(conn)
 
@@ -78,13 +83,11 @@ func (c *getRunner) run(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	renderVolume(c.console, matched)
-
-	return nil
+	return renderVolume(c.console, matched)
 }
 
-// renderVolume writes a detailed key-value description of a volume to w.
-func renderVolume(w io.Writer, v *publicv1.Volume) {
+// renderVolume writes a detailed key-value description of a volume to w and returns any write error.
+func renderVolume(w io.Writer, v *publicv1.Volume) error {
 	writer := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 
 	name := "-"
@@ -112,16 +115,27 @@ func renderVolume(w io.Writer, v *publicv1.Volume) {
 		}
 	}
 
-	fmt.Fprintf(writer, "ID:\t%s\n", v.GetId())
-	fmt.Fprintf(writer, "Name:\t%s\n", name)
-	fmt.Fprintf(writer, "Project:\t%s\n", project)
-	fmt.Fprintf(writer, "Storage Tier:\t%s\n", storageTier)
-	fmt.Fprintf(writer, "Size (GiB):\t%d\n", v.GetSpec().GetSizeGib())
-	fmt.Fprintf(writer, "Access Mode:\t%s\n", accessMode)
-	fmt.Fprintf(writer, "State:\t%s\n", state)
-	fmt.Fprintf(writer, "Message:\t%s\n", message)
+	fields := []struct {
+		label string
+		value any
+	}{
+		{"ID", v.GetId()},
+		{"Name", name},
+		{"Project", project},
+		{"Storage Tier", storageTier},
+		{"Size (GiB)", v.GetSpec().GetSizeGib()},
+		{"Access Mode", accessMode},
+		{"State", state},
+		{"Message", message},
+	}
 
-	writer.Flush()
+	for _, f := range fields {
+		if _, err := fmt.Fprintf(writer, "%s:\t%v\n", f.label, f.value); err != nil {
+			return fmt.Errorf("failed to render volume detail: %w", err)
+		}
+	}
+
+	return writer.Flush()
 }
 
 const getShortHelp = `Get volume details`

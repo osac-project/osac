@@ -24,6 +24,8 @@ import (
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
+// createCmd creates the "volumes create" subcommand for creating a new volume with the required
+// storage tier, size, and access mode parameters.
 func createCmd() *cobra.Command {
 	runner := &createRunner{}
 	result := &cobra.Command{
@@ -78,7 +80,7 @@ type createRunner struct {
 	project     string
 }
 
-func (c *createRunner) run(cmd *cobra.Command, args []string) error {
+func (c *createRunner) run(cmd *cobra.Command, args []string) (err error) {
 	ctx := cmd.Context()
 
 	c.console = terminal.ConsoleFromContext(ctx)
@@ -109,7 +111,11 @@ func (c *createRunner) run(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create gRPC connection: %w", err)
 	}
-	defer conn.Close()
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("failed to close gRPC connection: %w", closeErr)
+		}
+	}()
 
 	client := publicv1.NewVolumesClient(conn)
 

@@ -14,6 +14,7 @@ language governing permissions and limitations under the License.
 package volumes
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -27,6 +28,7 @@ import (
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
+// listCmd creates the "volumes list" subcommand for listing volumes with optional project filtering.
 func listCmd() *cobra.Command {
 	runner := &listRunner{}
 	result := &cobra.Command{
@@ -51,7 +53,7 @@ type listRunner struct {
 	project string
 }
 
-func (c *listRunner) run(cmd *cobra.Command, args []string) error {
+func (c *listRunner) run(cmd *cobra.Command, args []string) (err error) {
 	ctx := cmd.Context()
 
 	c.console = terminal.ConsoleFromContext(ctx)
@@ -65,34 +67,66 @@ func (c *listRunner) run(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create gRPC connection: %w", err)
 	}
-	defer conn.Close()
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("failed to close gRPC connection: %w", closeErr)
+		}
+	}()
 
 	client := publicv1.NewVolumesClient(conn)
 
-	reqBuilder := publicv1.VolumesListRequest_builder{}
+	var filter *string
 	if c.project != "" {
-		filter := fmt.Sprintf("this.metadata.project == %s", strconv.Quote(c.project))
-		reqBuilder.Filter = proto.String(filter)
+		f := fmt.Sprintf("this.metadata.project == %s", strconv.Quote(c.project))
+		filter = &f
 	}
 
-	resp, err := client.List(ctx, reqBuilder.Build())
+	allItems, err := listAllVolumes(ctx, client, filter)
 	if err != nil {
-		return fmt.Errorf("failed to list volumes: %w", err)
+		return err
 	}
 
-	if len(resp.GetItems()) == 0 {
+	if len(allItems) == 0 {
 		c.console.Infof(ctx, "No volumes found.\n")
 		return nil
 	}
 
-	renderVolumeTable(c.console, resp.GetItems())
-	return nil
+	return renderVolumeTable(c.console, allItems)
 }
 
-// renderVolumeTable writes a compact table of volumes.
-func renderVolumeTable(w *terminal.Console, volumes []*publicv1.Volume) {
+// listAllVolumes paginates through all results using offset-based paging. The server uses a default
+// limit (typically 100) when none is specified; this function collects all pages so the output is
+// complete.
+func listAllVolumes(ctx context.Context, client publicv1.VolumesClient, filter *string) ([]*publicv1.Volume, error) {
+	var allItems []*publicv1.Volume
+	var offset int32
+	for {
+		resp, err := client.List(ctx, publicv1.VolumesListRequest_builder{
+			Filter: filter,
+			Offset: proto.Int32(offset),
+		}.Build())
+		if err != nil {
+			return nil, fmt.Errorf("failed to list volumes: %w", err)
+		}
+
+		allItems = append(allItems, resp.GetItems()...)
+
+		// Stop when we have collected all matching items or when the server returned no items.
+		// resp.GetSize() and resp.GetTotal() are int32, matching the proto field types.
+		offset += resp.GetSize()
+		if offset >= resp.GetTotal() || resp.GetSize() == 0 {
+			break
+		}
+	}
+	return allItems, nil
+}
+
+// renderVolumeTable writes a compact table of volumes to the console and returns any write error.
+func renderVolumeTable(w *terminal.Console, volumes []*publicv1.Volume) error {
 	writer := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(writer, "ID\tNAME\tSTORAGE TIER\tSIZE (GiB)\tACCESS MODE\tSTATE")
+	if _, err := fmt.Fprintln(writer, "ID\tNAME\tSTORAGE TIER\tSIZE (GiB)\tACCESS MODE\tSTATE"); err != nil {
+		return fmt.Errorf("failed to render volume table header: %w", err)
+	}
 	for _, v := range volumes {
 		name := v.GetMetadata().GetName()
 		if name == "" {
@@ -105,10 +139,12 @@ func renderVolumeTable(w *terminal.Console, volumes []*publicv1.Volume) {
 		sizeGib := strconv.FormatInt(v.GetSpec().GetSizeGib(), 10)
 		accessMode := strings.TrimPrefix(v.GetSpec().GetAccessMode().String(), "VOLUME_ACCESS_MODE_")
 		state := strings.TrimPrefix(v.GetStatus().GetState().String(), "VOLUME_STATE_")
-		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\n",
-			v.GetId(), name, storageTier, sizeGib, accessMode, state)
+		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			v.GetId(), name, storageTier, sizeGib, accessMode, state); err != nil {
+			return fmt.Errorf("failed to render volume table row: %w", err)
+		}
 	}
-	writer.Flush()
+	return writer.Flush()
 }
 
 const listShortHelp = `List volumes`

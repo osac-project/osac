@@ -16,6 +16,8 @@ package volumes
 import (
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
+
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 var _ = Describe("volumes update", func() {
@@ -45,6 +47,79 @@ var _ = Describe("volumes update", func() {
 			flag := cmd.Flags().Lookup("description")
 			Expect(flag).NotTo(BeNil())
 			Expect(flag.Usage).To(ContainSubstring("TEXT"))
+		})
+	})
+
+	Context("applyVolumeMetadataUpdate", func() {
+		It("should initialize metadata and apply display name on a volume without metadata", func() {
+			volume := publicv1.Volume_builder{
+				Id: "vol-no-meta",
+				Spec: publicv1.VolumeSpec_builder{
+					StorageTier: "gold",
+					SizeGib:     50,
+				}.Build(),
+			}.Build()
+
+			Expect(volume.HasMetadata()).To(BeFalse())
+
+			updated := applyVolumeMetadataUpdate(volume, true, "Test Display", false, "")
+
+			Expect(updated.HasMetadata()).To(BeTrue())
+			Expect(updated.GetMetadata().GetDisplayName()).To(Equal("Test Display"))
+		})
+
+		It("should initialize metadata and apply description on a volume without metadata", func() {
+			volume := publicv1.Volume_builder{
+				Id: "vol-no-meta",
+			}.Build()
+
+			updated := applyVolumeMetadataUpdate(volume, false, "", true, "A description")
+
+			Expect(updated.HasMetadata()).To(BeTrue())
+			Expect(updated.GetMetadata().GetDescription()).To(Equal("A description"))
+		})
+
+		It("should apply both display name and description simultaneously", func() {
+			volume := publicv1.Volume_builder{
+				Id: "vol-both",
+			}.Build()
+
+			updated := applyVolumeMetadataUpdate(volume, true, "Display", true, "Desc")
+
+			Expect(updated.GetMetadata().GetDisplayName()).To(Equal("Display"))
+			Expect(updated.GetMetadata().GetDescription()).To(Equal("Desc"))
+		})
+
+		It("should preserve existing metadata when present", func() {
+			volume := publicv1.Volume_builder{
+				Id: "vol-with-meta",
+				Metadata: publicv1.Metadata_builder{
+					Name: "existing-name",
+				}.Build(),
+			}.Build()
+
+			Expect(volume.HasMetadata()).To(BeTrue())
+
+			updated := applyVolumeMetadataUpdate(volume, true, "New Display", false, "")
+
+			// The original name must be preserved:
+			Expect(updated.GetMetadata().GetName()).To(Equal("existing-name"))
+			Expect(updated.GetMetadata().GetDisplayName()).To(Equal("New Display"))
+		})
+
+		It("should not modify the original volume", func() {
+			volume := publicv1.Volume_builder{
+				Id: "vol-original",
+				Metadata: publicv1.Metadata_builder{
+					Name: "keep-me",
+				}.Build(),
+			}.Build()
+
+			_ = applyVolumeMetadataUpdate(volume, true, "Changed", true, "Changed desc")
+
+			// The original must be untouched:
+			Expect(volume.GetMetadata().GetDisplayName()).To(Equal(""))
+			Expect(volume.GetMetadata().GetDescription()).To(Equal(""))
 		})
 	})
 

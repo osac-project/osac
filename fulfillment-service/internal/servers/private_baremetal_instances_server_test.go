@@ -17,9 +17,11 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"buf.build/go/protovalidate"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
@@ -32,12 +34,42 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 // A real ed25519 public key in OpenSSH authorized_keys format for testing.
 const testSSHPublicKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG8K1ZuSC7tmzxD5LJJXwkCfStVEjzXWYCFhJaLBxWAn test@example.com"
+
+type autoEIPTestTx struct {
+	database.Tx
+	failQuery      func(string) bool
+	beforeFailure  func(context.Context)
+	beforePoolLock func()
+	failureHit     bool
+}
+
+func (tx *autoEIPTestTx) QueryRow(requestCtx context.Context, query string, args ...any) pgx.Row {
+	normalized := strings.Join(strings.Fields(strings.ToLower(query)), " ")
+	if tx.beforePoolLock != nil && strings.Contains(normalized, "from external_ip_pools") && strings.HasSuffix(normalized, "for update") {
+		tx.beforePoolLock()
+	}
+	if tx.failQuery != nil && tx.failQuery(normalized) {
+		tx.failureHit = true
+		if tx.beforeFailure != nil {
+			tx.beforeFailure(requestCtx)
+		}
+		return autoEIPFailureRow{}
+	}
+	return tx.Tx.QueryRow(requestCtx, query, args...)
+}
+
+type autoEIPFailureRow struct{}
+
+func (autoEIPFailureRow) Scan(...any) error {
+	return fmt.Errorf("injected auto-EIP database failure")
+}
 
 var _ = Describe("Private bare metal instances server", func() {
 	BeforeEach(func() {
@@ -3555,58 +3587,117 @@ var _ = Describe("BareMetalInstance auto-EIP atomic provisioning", func() {
 		}.Build()
 	}
 
-	createFailedBMI := func() error {
-		return suiteTx.Savepoint(ctx, func(savepointCtx context.Context) error {
-			_, err := server.Create(savepointCtx, createBMIRequest())
-			return err
+	commitFixtures := func() {
+		Expect(suiteTx.End(ctx)).To(Succeed())
+		suiteTx = nil
+	}
+
+	createFailedBMI := func(failQuery func(string) bool, beforeFailure func(context.Context)) (error, bool) {
+		requestCtx := context.Background()
+		requestTx, err := tm.Begin(requestCtx)
+		Expect(err).ToNot(HaveOccurred())
+		injectedTx := &autoEIPTestTx{Tx: requestTx, failQuery: failQuery, beforeFailure: beforeFailure}
+		_, createErr := server.Create(database.TxIntoContext(requestCtx, injectedTx), createBMIRequest())
+		Expect(requestTx.End(requestCtx)).To(Succeed())
+		return createErr, injectedTx.failureHit
+	}
+
+	assertPersistedState := func(poolID string, available, allocated int64, bmiCount, ipCount, attachmentCount int) {
+		err := tm.Run(context.Background(), func(verifyCtx context.Context) error {
+			bmiList, err := server.List(verifyCtx, privatev1.BareMetalInstancesListRequest_builder{}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(bmiList.GetItems()).To(HaveLen(bmiCount))
+			ipList, err := externalIPDao.List().Do(verifyCtx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(ipList.GetItems()).To(HaveLen(ipCount))
+			attachmentList, err := externalIPAttDao.List().Do(verifyCtx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(attachmentList.GetItems()).To(HaveLen(attachmentCount))
+			if poolID != "" {
+				poolResp, err := externalIPPoolDao.Get().SetId(poolID).Do(verifyCtx)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(poolResp.GetObject().GetStatus().GetAvailable()).To(Equal(available))
+				Expect(poolResp.GetObject().GetStatus().GetAllocated()).To(Equal(allocated))
+			}
+			return nil
 		})
+		Expect(err).ToNot(HaveOccurred())
 	}
 
 	It("rolls back BMI when no pool has capacity", func() {
-		createPool(0)
+		poolID := createPool(0)
+		commitFixtures()
 
-		err := createFailedBMI()
+		err, _ := createFailedBMI(nil, nil)
 		Expect(err).To(HaveOccurred())
 		status, ok := grpcstatus.FromError(err)
 		Expect(ok).To(BeTrue())
 		Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
-
-		bmiList, err := server.List(ctx, privatev1.BareMetalInstancesListRequest_builder{}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		Expect(bmiList.GetItems()).To(BeEmpty())
+		assertPersistedState(poolID, 0, 0, 0, 0, 0)
 	})
 
 	It("rolls back BMI when no pool exists", func() {
-		err := createFailedBMI()
+		commitFixtures()
+		err, _ := createFailedBMI(nil, nil)
 		Expect(err).To(HaveOccurred())
 		status, ok := grpcstatus.FromError(err)
 		Expect(ok).To(BeTrue())
 		Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
-
-		bmiList, err := server.List(ctx, privatev1.BareMetalInstancesListRequest_builder{}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		Expect(bmiList.GetItems()).To(BeEmpty())
+		assertPersistedState("", 0, 0, 0, 0, 0)
 	})
 
 	It("leaves no leaked ExternalIP or capacity change on pool exhaustion", func() {
 		poolID := createPool(0)
+		commitFixtures()
 
-		err := createFailedBMI()
+		err, _ := createFailedBMI(nil, nil)
 		Expect(err).To(HaveOccurred())
-
-		eipList, err := externalIPDao.List().Do(ctx)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(eipList.GetItems()).To(BeEmpty())
-
-		attList, err := externalIPAttDao.List().Do(ctx)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(attList.GetItems()).To(BeEmpty())
-
-		poolResp, err := externalIPPoolDao.Get().SetId(poolID).Do(ctx)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(poolResp.GetObject().GetStatus().GetAvailable()).To(Equal(int64(0)))
-		Expect(poolResp.GetObject().GetStatus().GetAllocated()).To(Equal(int64(0)))
+		assertPersistedState(poolID, 0, 0, 0, 0, 0)
 	})
+
+	for _, failure := range []struct {
+		name      string
+		prefix    string
+		contains  string
+		message   string
+		ipCount   int
+		available int64
+		allocated int64
+	}{
+		{"ExternalIP creation", "insert into external_ips ", "", "failed to create ExternalIP", 0, 2, 0},
+		{"attachment reference lock", "select ", "from external_ips", "failed to lock attachment references", 1, 2, 0},
+		{"capacity row lock", "select ", "from external_ip_pools", "failed to get ExternalIPPool", 1, 2, 0},
+		{"capacity update", "update external_ip_pools ", "", "failed to update ExternalIPPool capacity", 1, 2, 0},
+		{"ExternalIPAttachment creation", "insert into external_ip_attachments ", "", "failed to create ExternalIPAttachment", 1, 1, 1},
+	} {
+		It("rolls back all writes on "+failure.name+" failure", func() {
+			poolID := createPool(2)
+			commitFixtures()
+			createErr, hit := createFailedBMI(func(query string) bool {
+				return strings.HasPrefix(query, failure.prefix) &&
+					strings.Contains(query, failure.contains) &&
+					(failure.prefix != "select " || strings.HasSuffix(query, "for update"))
+			}, func(requestCtx context.Context) {
+				bmiList, err := server.List(requestCtx, privatev1.BareMetalInstancesListRequest_builder{}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(bmiList.GetItems()).To(HaveLen(1))
+				ipList, err := externalIPDao.List().Do(requestCtx)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(ipList.GetItems()).To(HaveLen(failure.ipCount))
+				attachmentList, err := externalIPAttDao.List().Do(requestCtx)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(attachmentList.GetItems()).To(BeEmpty())
+				poolResp, err := externalIPPoolDao.Get().SetId(poolID).Do(requestCtx)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(poolResp.GetObject().GetStatus().GetAvailable()).To(Equal(failure.available))
+				Expect(poolResp.GetObject().GetStatus().GetAllocated()).To(Equal(failure.allocated))
+			})
+			Expect(hit).To(BeTrue())
+			Expect(createErr).To(HaveOccurred())
+			Expect(createErr.Error()).To(ContainSubstring(failure.message))
+			assertPersistedState(poolID, 2, 0, 0, 0, 0)
+		})
+	}
 
 	It("successful create produces expected Pending resources and metadata", func() {
 		poolID := createPool(10)
@@ -3615,6 +3706,7 @@ var _ = Describe("BareMetalInstance auto-EIP atomic provisioning", func() {
 		Expect(err).ToNot(HaveOccurred())
 		bmiID := response.GetObject().GetId()
 		Expect(response.GetObject().GetSpec().GetAutoExternalIpAttachment()).To(BeTrue())
+		Expect(response.GetObject().GetMetadata().GetTenant()).To(Equal(testTenant))
 
 		eipList, err := externalIPDao.List().
 			SetFilter(fmt.Sprintf("this.metadata.labels['%s'] == '%s'", autoCreatedForLabel, bmiID)).
@@ -3622,6 +3714,7 @@ var _ = Describe("BareMetalInstance auto-EIP atomic provisioning", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(eipList.GetItems()).To(HaveLen(1))
 		eip := eipList.GetItems()[0]
+		Expect(eip.GetMetadata().GetTenant()).To(Equal(testTenant))
 		Expect(eip.GetMetadata().GetLabels()[autoCreatedLabel]).To(Equal("true"))
 		Expect(eip.GetMetadata().GetAnnotations()[ownerReferenceAnnotation]).To(Equal(bmiID))
 		Expect(eip.GetStatus().GetState()).To(Equal(privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING))
@@ -3633,6 +3726,7 @@ var _ = Describe("BareMetalInstance auto-EIP atomic provisioning", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(attList.GetItems()).To(HaveLen(1))
 		att := attList.GetItems()[0]
+		Expect(att.GetMetadata().GetTenant()).To(Equal(testTenant))
 		Expect(att.GetMetadata().GetLabels()[autoCreatedLabel]).To(Equal("true"))
 		Expect(att.GetMetadata().GetAnnotations()[ownerReferenceAnnotation]).To(Equal(bmiID))
 		Expect(att.GetSpec().GetBaremetalInstance().GetId()).To(Equal(bmiID))
@@ -3673,25 +3767,75 @@ var _ = Describe("BareMetalInstance auto-EIP atomic provisioning", func() {
 
 	It("concurrent allocations do not over-allocate a pool", func() {
 		poolID := createPool(1)
+		commitFixtures()
 
-		resp1, err1 := server.Create(ctx, createBMIRequest())
-		resp2, err2 := server.Create(ctx, createBMIRequest())
-
-		successes := 0
-		if err1 == nil {
-			successes++
-			Expect(resp1.GetObject().GetId()).ToNot(BeEmpty())
+		arrived := make(chan struct{}, 2)
+		release := make(chan struct{})
+		defer func() {
+			select {
+			case <-release:
+			default:
+				close(release)
+			}
+		}()
+		type allocationResult struct {
+			id      string
+			err     error
+			reached bool
 		}
-		if err2 == nil {
-			successes++
-			Expect(resp2.GetObject().GetId()).ToNot(BeEmpty())
+		results := make(chan allocationResult, 2)
+		for range 2 {
+			go func() {
+				requestCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				requestTx, err := tm.Begin(requestCtx)
+				if err != nil {
+					results <- allocationResult{err: err}
+					return
+				}
+				lockReached := false
+				injectedTx := &autoEIPTestTx{
+					Tx: requestTx,
+					beforePoolLock: func() {
+						lockReached = true
+						arrived <- struct{}{}
+						<-release
+					},
+				}
+				response, createErr := server.Create(database.TxIntoContext(requestCtx, injectedTx), createBMIRequest())
+				endErr := requestTx.End(requestCtx)
+				if endErr != nil {
+					results <- allocationResult{err: endErr, reached: lockReached}
+					return
+				}
+				if createErr != nil {
+					results <- allocationResult{err: createErr, reached: lockReached}
+					return
+				}
+				results <- allocationResult{id: response.GetObject().GetId(), reached: lockReached}
+			}()
+		}
+		Eventually(arrived).WithTimeout(20 * time.Second).Should(Receive())
+		Eventually(arrived).WithTimeout(20 * time.Second).Should(Receive())
+		close(release)
+
+		var first, second allocationResult
+		Eventually(results).WithTimeout(30 * time.Second).Should(Receive(&first))
+		Eventually(results).WithTimeout(30 * time.Second).Should(Receive(&second))
+		Expect(first.reached).To(BeTrue())
+		Expect(second.reached).To(BeTrue())
+		successes := 0
+		for _, result := range []allocationResult{first, second} {
+			if result.err == nil {
+				successes++
+				Expect(result.id).ToNot(BeEmpty())
+			} else {
+				Expect(grpcstatus.Code(result.err)).To(Equal(grpccodes.FailedPrecondition))
+				Expect(result.err.Error()).To(ContainSubstring("no available capacity"))
+			}
 		}
 		Expect(successes).To(Equal(1))
-
-		poolResp, err := externalIPPoolDao.Get().SetId(poolID).Do(ctx)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(poolResp.GetObject().GetStatus().GetAvailable()).To(Equal(int64(0)))
-		Expect(poolResp.GetObject().GetStatus().GetAllocated()).To(Equal(int64(1)))
+		assertPersistedState(poolID, 0, 1, 1, 1, 1)
 	})
 })
 

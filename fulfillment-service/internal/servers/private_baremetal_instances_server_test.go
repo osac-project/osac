@@ -3803,6 +3803,13 @@ var _ = Describe("BareMetalInstance auto-EIP atomic provisioning", func() {
 
 		arrived := make(chan struct{}, 2)
 		release := [2]chan struct{}{make(chan struct{}), make(chan struct{})}
+		type allocationResult struct {
+			id      string
+			err     error
+			reached bool
+		}
+		results := make(chan allocationResult, 2)
+		received := 0
 		defer func() {
 			for _, gate := range release {
 				select {
@@ -3811,13 +3818,11 @@ var _ = Describe("BareMetalInstance auto-EIP atomic provisioning", func() {
 					close(gate)
 				}
 			}
+			for received < len(requests) {
+				<-results
+				received++
+			}
 		}()
-		type allocationResult struct {
-			id      string
-			err     error
-			reached bool
-		}
-		results := make(chan allocationResult, 2)
 		for index, request := range requests {
 			go func() {
 				requestCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -3854,8 +3859,10 @@ var _ = Describe("BareMetalInstance auto-EIP atomic provisioning", func() {
 		close(release[0])
 		var first, second allocationResult
 		Eventually(results).WithTimeout(30 * time.Second).Should(Receive(&first))
+		received++
 		close(release[1])
 		Eventually(results).WithTimeout(30 * time.Second).Should(Receive(&second))
+		received++
 		Expect(first.reached).To(BeTrue())
 		Expect(second.reached).To(BeTrue())
 		Expect(first.err).ToNot(HaveOccurred())

@@ -52,6 +52,10 @@ See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#osac-ope
 | Generated CRDs or manifests | Envtest plus applicable Kind suite | `make manifests generate helm-crds check-helm-crds`, then the required test command |
 
 Envtest runs via `make test`; Kind tests require the current operator deployment.
+The LVMS envtest lifecycle cases exercise generated LogicalVolume names,
+persisted UID-safe resumes, terminating-resource replacement, and deletion
+through the public Volume reconciler for RWO and RWOP. They use a minimal
+TopoLVM CRD and simulated status; they do not provision or mount real devices.
 The Kind suite's LVMS-disabled case verifies the Volume controller remains
 ready without the TopoLVM `LogicalVolume` CRD; it does not exercise LVMS
 provisioning or the CSI data path.

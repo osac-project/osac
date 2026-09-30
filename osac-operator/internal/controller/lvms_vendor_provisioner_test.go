@@ -32,11 +32,12 @@ import (
 )
 
 type recordingLogicalVolumeClient struct {
-	objects     map[string]*unstructured.Unstructured
-	created     []*unstructured.Unstructured
-	deleted     []string
-	createErr   error
-	afterCreate func(*unstructured.Unstructured)
+	objects        map[string]*unstructured.Unstructured
+	createRequests []*unstructured.Unstructured
+	created        []*unstructured.Unstructured
+	deleted        []string
+	createErr      error
+	afterCreate    func(*unstructured.Unstructured)
 }
 
 func newRecordingLogicalVolumeClient() *recordingLogicalVolumeClient {
@@ -63,12 +64,13 @@ func (c *recordingLogicalVolumeClient) Create(_ context.Context, obj client.Obje
 	if !ok {
 		return fmt.Errorf("expected unstructured LogicalVolume, got %T", obj)
 	}
+	c.createRequests = append(c.createRequests, volume.DeepCopy())
 	if c.createErr != nil {
 		return c.createErr
 	}
 
 	if volume.GetName() == "" {
-		volume.SetName(fmt.Sprintf("%s%02d", strings.TrimSuffix(volume.GetGenerateName(), "-"), len(c.created)+1))
+		volume.SetName(fmt.Sprintf("%s%02d", volume.GetGenerateName(), len(c.created)+1))
 	}
 	if _, exists := c.objects[volume.GetName()]; exists {
 		return apierrors.NewAlreadyExists(schema.GroupResource{Group: logicalVolumeGroup, Resource: logicalVolumeResource}, volume.GetName())
@@ -148,11 +150,14 @@ func TestLvmsCreateVolumeBuildsAndWaitsForLogicalVolume(t *testing.T) {
 		t.Fatalf("created %d LogicalVolumes, want 1", len(api.created))
 	}
 	volume := api.created[0]
-	if got := volume.GetName(); got != "pvc-source-volume-uid" {
-		t.Errorf("name = %q, want pvc-source-volume-uid", got)
+	if got := api.createRequests[0].GetName(); got != "" {
+		t.Errorf("create request name = %q, want empty for API-generated naming", got)
 	}
-	if got := volume.GetGenerateName(); got != "" {
-		t.Errorf("generateName = %q, want empty", got)
+	if got := volume.GetGenerateName(); got != "pvc-" {
+		t.Errorf("generateName = %q, want pvc-", got)
+	}
+	if got := volume.GetName(); !strings.HasPrefix(got, "pvc-") || got == "pvc-" {
+		t.Errorf("name = %q, want a generated name with pvc- prefix", got)
 	}
 	if got := volume.GetLabels()[logicalVolumeUUIDLabel]; got != "source-volume-uid" {
 		t.Errorf("volume UUID label = %q, want source-volume-uid", got)
@@ -193,11 +198,12 @@ func TestLvmsCreateVolumeBuildsAndWaitsForLogicalVolume(t *testing.T) {
 
 func TestLvmsCreateVolumeReadsReadyStatusFromUncachedReader(t *testing.T) {
 	request := lvmsCreateRequest()
-	name := logicalVolumeResourceName(request)
+	name := "pvc-existing-42"
 	logicalVolumeUID := "logical-volume-uid-42"
 
 	staleClient := newRecordingLogicalVolumeClient()
 	staleVolume := buildLogicalVolume(request, "worker-1")
+	staleVolume.SetName(name)
 	staleVolume.SetUID(types.UID(logicalVolumeUID))
 	staleClient.objects[name] = staleVolume
 
@@ -376,9 +382,12 @@ func TestLvmsCreateVolumeReturnsPendingUntilReady(t *testing.T) {
 	if response.VendorVolumeID != "lv-ready" {
 		t.Fatalf("VendorVolumeID = %q, want lv-ready", response.VendorVolumeID)
 	}
+	if len(api.created) != 1 {
+		t.Fatalf("resumed create produced %d LogicalVolumes, want 1", len(api.created))
+	}
 }
 
-func TestLvmsCreateVolumeAdoptsExistingLogicalVolume(t *testing.T) {
+func TestLvmsCreateVolumeWithoutContextCreatesFreshLogicalVolume(t *testing.T) {
 	api := newRecordingLogicalVolumeClient()
 	provisioner := newTestLvmsProvisioner(t, api)
 	request := lvmsCreateRequest()
@@ -398,25 +407,32 @@ func TestLvmsCreateVolumeAdoptsExistingLogicalVolume(t *testing.T) {
 	if !second.Pending {
 		t.Fatal("duplicate CreateVolume response is not pending")
 	}
-	if len(api.created) != 1 || len(api.objects) != 1 {
-		t.Fatalf("duplicate create produced %d API creates and %d LogicalVolumes, want 1 each", len(api.created), len(api.objects))
+	if len(api.created) != 2 || len(api.objects) != 2 {
+		t.Fatalf("create without context produced %d API creates and %d LogicalVolumes, want 2 each", len(api.created), len(api.objects))
 	}
-	if second.VendorContext[logicalVolumeNameContextKey] != first.VendorContext[logicalVolumeNameContextKey] {
-		t.Fatalf("adopted LogicalVolume name = %q, want %q", second.VendorContext[logicalVolumeNameContextKey], first.VendorContext[logicalVolumeNameContextKey])
+	if second.VendorContext[logicalVolumeNameContextKey] == first.VendorContext[logicalVolumeNameContextKey] {
+		t.Fatal("create without context reused an existing LogicalVolume name")
+	}
+	if second.VendorContext[logicalVolumeResourceUIDContextKey] == first.VendorContext[logicalVolumeResourceUIDContextKey] {
+		t.Fatal("create without context reused an existing LogicalVolume UID")
 	}
 }
 
-func TestLvmsCreateVolumeWaitsForTerminatingExistingLogicalVolume(t *testing.T) {
+func TestLvmsCreateVolumeWithoutContextDoesNotWaitForTerminatingLogicalVolume(t *testing.T) {
 	api := newRecordingLogicalVolumeClient()
 	request := lvmsCreateRequest()
-	terminating := buildLogicalVolume(request, "worker-1")
-	terminating.SetUID(types.UID("terminating-logical-volume-uid"))
+	provisioner := newTestLvmsProvisioner(t, api)
+	initial, err := provisioner.CreateVolume(context.Background(), request)
+	if err != nil {
+		t.Fatalf("initial CreateVolume error: %v", err)
+	}
+	name := initial.VendorContext[logicalVolumeNameContextKey]
+	terminating := api.objects[name]
 	deletionTimestamp := metav1.Now()
+	terminating.SetFinalizers([]string{"topolvm.io/logicalvolume"})
 	terminating.SetDeletionTimestamp(&deletionTimestamp)
 	setNestedField(t, terminating.Object, "lv-being-deleted", "status", "volumeID")
-	api.objects[terminating.GetName()] = terminating
 
-	provisioner := newTestLvmsProvisioner(t, api)
 	response, err := provisioner.CreateVolume(context.Background(), request)
 	if err != nil {
 		t.Fatalf("CreateVolume error: %v", err)
@@ -427,18 +443,14 @@ func TestLvmsCreateVolumeWaitsForTerminatingExistingLogicalVolume(t *testing.T) 
 	if response.VendorVolumeID != "" {
 		t.Fatalf("VendorVolumeID = %q for a terminating LogicalVolume, want empty", response.VendorVolumeID)
 	}
-	if len(response.VendorContext) != 0 {
-		t.Fatalf("VendorContext = %v for a terminating LogicalVolume, want empty so it can be recreated", response.VendorContext)
+	if replacementName := response.VendorContext[logicalVolumeNameContextKey]; replacementName == "" || replacementName == name {
+		t.Fatalf("replacement name = %q, want a fresh name distinct from %q", replacementName, name)
 	}
-
-	delete(api.objects, terminating.GetName())
-	request.VendorContext = response.VendorContext
-	retry, err := provisioner.CreateVolume(context.Background(), request)
-	if err != nil {
-		t.Fatalf("CreateVolume after deletion error: %v", err)
+	if len(api.created) != 2 || len(api.objects) != 2 {
+		t.Fatalf("create produced %d LogicalVolumes and left %d objects, want terminating original and pending replacement", len(api.created), len(api.objects))
 	}
-	if !retry.Pending || len(api.created) != 1 {
-		t.Fatalf("CreateVolume after deletion = (pending %t, creates %d), want pending with one replacement", retry.Pending, len(api.created))
+	if len(api.deleted) != 0 {
+		t.Fatal("create deleted the terminating LogicalVolume")
 	}
 }
 
@@ -469,7 +481,7 @@ func TestLvmsCreateVolumeDoesNotResumeTerminatingLogicalVolume(t *testing.T) {
 		t.Fatalf("CreateVolume for terminating LogicalVolume error: %v", err)
 	}
 	if !response.Pending {
-		t.Fatal("CreateVolume resumed a terminating LogicalVolume instead of waiting for deletion")
+		t.Fatal("CreateVolume resumed a terminating LogicalVolume instead of dropping its context")
 	}
 	if response.VendorVolumeID != "" {
 		t.Fatalf("VendorVolumeID = %q for a terminating LogicalVolume, want empty", response.VendorVolumeID)
@@ -478,29 +490,33 @@ func TestLvmsCreateVolumeDoesNotResumeTerminatingLogicalVolume(t *testing.T) {
 		t.Fatalf("VendorContext = %v for a terminating LogicalVolume, want empty so it can be recreated", response.VendorContext)
 	}
 
-	delete(api.objects, name)
 	request.VendorContext = response.VendorContext
 	retry, err := provisioner.CreateVolume(context.Background(), request)
 	if err != nil {
-		t.Fatalf("CreateVolume after deletion error: %v", err)
+		t.Fatalf("replacement CreateVolume error: %v", err)
 	}
 	if !retry.Pending {
-		t.Fatal("CreateVolume after deletion is not pending for the replacement LogicalVolume")
+		t.Fatal("replacement CreateVolume is not pending")
 	}
 	if len(api.created) != 2 {
 		t.Fatalf("created %d LogicalVolumes after retry, want the original and one replacement", len(api.created))
 	}
+	if replacementName := retry.VendorContext[logicalVolumeNameContextKey]; replacementName == "" || replacementName == name {
+		t.Fatalf("replacement name = %q, want a fresh name distinct from %q", replacementName, name)
+	}
 }
 
-func TestLvmsCreateVolumeRejectsExistingLogicalVolumeWithWrongOwner(t *testing.T) {
+func TestLvmsCreateVolumeRejectsResumedLogicalVolumeWithWrongOwner(t *testing.T) {
 	api := newRecordingLogicalVolumeClient()
 	request := lvmsCreateRequest()
 	foreign := buildLogicalVolume(request, "worker-1")
+	foreign.SetName("pvc-foreign")
 	foreign.SetUID("foreign-logical-volume")
 	labels := foreign.GetLabels()
 	labels[logicalVolumeUUIDLabel] = "different-volume-uid"
 	foreign.SetLabels(labels)
 	api.objects[foreign.GetName()] = foreign
+	request.VendorContext = logicalVolumeVendorContext(request.UID, foreign.GetName(), string(foreign.GetUID()))
 
 	provisioner := newTestLvmsProvisioner(t, api)
 	if _, err := provisioner.CreateVolume(context.Background(), request); err == nil {
@@ -510,6 +526,26 @@ func TestLvmsCreateVolumeRejectsExistingLogicalVolumeWithWrongOwner(t *testing.T
 	}
 	if len(api.created) != 0 {
 		t.Fatalf("created %d LogicalVolumes while rejecting foreign object, want 0", len(api.created))
+	}
+}
+
+func TestLvmsCreateVolumeReturnsCreateErrorWithoutAdoptingLogicalVolume(t *testing.T) {
+	api := newRecordingLogicalVolumeClient()
+	request := lvmsCreateRequest()
+	existing := buildLogicalVolume(request, "worker-1")
+	existing.SetName("pvc-source-volume-uid")
+	existing.SetUID("existing-logical-volume")
+	setNestedField(t, existing.Object, "lv-existing", "status", "volumeID")
+	api.objects[existing.GetName()] = existing
+	api.createErr = apierrors.NewAlreadyExists(schema.GroupResource{Group: logicalVolumeGroup, Resource: logicalVolumeResource}, existing.GetName())
+	provisioner := newTestLvmsProvisioner(t, api)
+
+	_, err := provisioner.CreateVolume(context.Background(), request)
+	if !apierrors.IsAlreadyExists(err) {
+		t.Fatalf("CreateVolume error = %v, want the API create conflict", err)
+	}
+	if len(api.deleted) != 0 || len(api.created) != 0 || len(api.objects) != 1 {
+		t.Fatal("failed create mutated an existing LogicalVolume")
 	}
 }
 
@@ -555,8 +591,8 @@ func TestLvmsCreateVolumeImmediateRetryLeavesOneLogicalVolume(t *testing.T) {
 	if len(api.objects) != 1 {
 		t.Fatalf("%d LogicalVolumes remain after retry, want 1", len(api.objects))
 	}
-	if len(api.created) != 2 || api.created[0].GetName() != api.created[1].GetName() {
-		t.Fatalf("retry did not reuse the stable name: %#v", api.created)
+	if len(api.created) != 2 || api.created[0].GetName() == api.created[1].GetName() {
+		t.Fatalf("retry did not create a fresh generated name: %#v", api.created)
 	}
 }
 

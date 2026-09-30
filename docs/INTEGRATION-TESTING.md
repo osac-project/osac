@@ -158,6 +158,7 @@ Touched-area requirements: [component guide](../osac-operator/AGENTS.md#integrat
 
 - **Pure helpers, validation, or state calculations:** Add error and edge-case coverage.
 - **Controller reconciliation, finalizers, status, or CRD interactions:** The envtest suite must exercise the changed lifecycle through the public reconciler behavior.
+- **LVMS Volume lifecycle:** `lvms_vendor_provisioner_envtest_test.go` exercises RWO/RWOP provisioning, API-generated LogicalVolume names, persisted name/UID resumes, replacement while an old CR is terminating, and deletion through the public Volume reconciler. Kubernetes and etcd are real; the TopoLVM CRD is a minimal fixture and its status is simulated. Default-device-class selection, LVMD provisioning, and CSI mounting remain real-provider/E2E coverage under [OSAC-3711](https://redhat.atlassian.net/browse/OSAC-3711).
 - **Controller deployment, watches, RBAC, console proxy, networking, or Helm wiring:** Unit/envtest coverage alone does not prove deployed wiring.
 - **AAP, dispatcher, provisioning-provider, KubeVirt, or fulfillment boundary:** A controllable provider in envtest is not coverage of the real provider boundary.
 - **Generated CRDs or manifests:** Do not hand-edit generated output.

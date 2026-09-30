@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import contextlib
 import subprocess
+import time
+from pathlib import Path
 
 import pytest
 
@@ -9,7 +11,7 @@ from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import (
     unique_name,
     wait_for_cluster_deleting,
-    wait_for_cluster_deletion,
+    wait_for_cluster_deletion_with_deadline,
     wait_for_cluster_grpc_deleting_or_archived,
     wait_for_cluster_grpc_removal,
     wait_for_cluster_order_cr,
@@ -24,29 +26,25 @@ pytestmark = pytest.mark.sanity
 def test_cluster_delete_reports_deleting_state_without_provisioning(
     cli: OsacCLI,
     grpc: GRPCClient,
-    private_grpc: GRPCClient,
     k8s_hub_client: K8sClient,
     cluster_template: str,
-    caas_disk_image_version: str,
-    pull_secret_name: str,
+    pull_secret_path: str,
     ssh_public_key_path: str,
 ) -> None:
     """Verify that cluster deletion transitions through DELETING state
     without waiting for full provisioning. Runs on kind without HyperShift
     (OSAC-1586)."""
-    private_grpc.ensure_bare_metal_instance_type(
-        name="ci-worker-bm", host_label_selector={"osac.openshift.io/host-type": "default"}
-    )
-    node_sets = {"workers": {"size": 1, "baremetal_instance_type": {"name": "ci-worker-bm"}}}
     name = unique_name("e2e-cluster")
     uuid = cli.create_cluster(
         name=name,
         template=cluster_template,
-        version=caas_disk_image_version,
-        node_sets=node_sets,
-        pull_secret=pull_secret_name,
-        ssh_public_key_file=ssh_public_key_path,
+        template_parameter_files={"pull_secret": pull_secret_path},
+        template_parameters={"ssh_public_key": Path(ssh_public_key_path).read_text().strip()},
     )
+
+    # Single deletion deadline shared between normal wait and cleanup.
+    deletion_deadline = time.monotonic() + 1200
+    co_name: str | None = None
 
     try:
         co_name = wait_for_cluster_order_cr(k8s=k8s_hub_client, uuid=uuid)
@@ -58,8 +56,13 @@ def test_cluster_delete_reports_deleting_state_without_provisioning(
 
         wait_for_cluster_deleting(k8s=k8s_hub_client, name=co_name)
         wait_for_cluster_grpc_deleting_or_archived(grpc=grpc, uuid=uuid)
-        wait_for_cluster_deletion(k8s=k8s_hub_client, name=co_name)
+        wait_for_cluster_deletion_with_deadline(k8s=k8s_hub_client, name=co_name, deadline=deletion_deadline)
         wait_for_cluster_grpc_removal(grpc=grpc, uuid=uuid)
     finally:
         with contextlib.suppress(subprocess.CalledProcessError):
             cli.delete_cluster(uuid=uuid)
+        if co_name:
+            try:
+                wait_for_cluster_deletion_with_deadline(k8s=k8s_hub_client, name=co_name, deadline=deletion_deadline)
+            except Exception as cleanup_err:
+                print(f"WARNING: Cluster cleanup wait failed for {co_name}: {cleanup_err}")

@@ -1,18 +1,13 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from typing import Any
 
 import pytest
 
 from tests.e2e.core.grpc_client import GRPCClient
-from tests.e2e.core.helpers import (
-    delete_instance_type_if_present,
-    unique_name,
-    wait_for_cr,
-    wait_for_deletion,
-    wait_for_grpc_removal,
-)
+from tests.e2e.core.helpers import unique_name, wait_for_cr, wait_for_deletion, wait_for_grpc_removal
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until
@@ -28,6 +23,15 @@ def _create_gpu_instance_type(private_grpc: GRPCClient, name: str) -> None:
     private_grpc.create_instance_type(
         name=name, vcpus=GPU_IT_VCPUS, memory_gib=GPU_IT_MEMORY_GIB, description="E2E GPU test type", gpu=GPU_SPEC
     )
+
+
+def _delete_instance_type_safe(private_grpc: GRPCClient, name: str) -> None:
+    try:
+        private_grpc.delete_instance_type(name=name)
+    except subprocess.CalledProcessError as e:
+        output = ((e.stdout or "") + (e.stderr or "")).lower()
+        if "not found" not in output:
+            raise
 
 
 def _get_vm_host_devices(k8s_virt: K8sClient, *, name: str, vm_namespace: str) -> list[dict[str, Any]]:
@@ -142,4 +146,4 @@ def test_gpu_compute_instance(
             if ci_name is not None:
                 wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
             wait_for_grpc_removal(grpc=grpc, uuid=ci_uuid)
-        delete_instance_type_if_present(grpc=private_grpc, name=it_name)
+        _delete_instance_type_safe(private_grpc, it_name)

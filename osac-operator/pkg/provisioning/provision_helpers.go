@@ -73,11 +73,11 @@ func handleBackoffForTarget(ctx context.Context, provState *State, target string
 	backoff := computeBackoffFromJobsForTarget(*provState.Jobs, provState.DesiredConfigVersion, target)
 	elapsed := time.Since(latestJob.Timestamp.Time)
 	if elapsed >= backoff {
-		log.Info("backoff elapsed, retrying provision", "jobID", latestJob.JobID, "target", target, "backoff", backoff, "elapsed", elapsed)
+		log.Info("backoff elapsed, retrying provision", logKeyJobID, latestJob.JobID, "target", target, "backoff", backoff, "elapsed", elapsed)
 		return triggerFn()
 	}
 	remaining := backoff - elapsed
-	log.Info("provision failed, backing off", "jobID", latestJob.JobID, "target", target, "backoff", backoff, "remaining", remaining)
+	log.Info("provision failed, backing off", logKeyJobID, latestJob.JobID, "target", target, "backoff", backoff, "remaining", remaining)
 	return ctrl.Result{RequeueAfter: remaining}, nil
 }
 

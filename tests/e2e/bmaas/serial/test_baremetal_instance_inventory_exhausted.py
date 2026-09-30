@@ -64,6 +64,7 @@ def test_baremetal_instance_inventory_exhausted(
     bmh_namespace: str,
     test_run_id: str,
     ssh_public_key: str,
+    bmaas_default_networking_ready: None,
 ) -> None:
     """Exhaust BMH inventory, assert overflow stalls/fails, then recover after free capacity.
 

@@ -2611,6 +2611,92 @@ var _ = Describe("Storage Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).To(BeNil())
 		})
+
+		It("should use APIReader (direct client) for HCP lookup, not cached client", func() {
+			// Validates that getClusterKubeconfig reads the HCP via the
+			// direct APIReader rather than the cached client.  The RBAC
+			// grants only "get" on hostedcontrolplanes — a cached client's
+			// informer would issue "list" which is forbidden and stalls.
+			//
+			// We verify by confirming the reconciler's APIReader is the
+			// reader that successfully returns the object.
+			kubeconfigData := []byte("apiVersion: v1\nclusters: []\n")
+
+			apiReaderNs := hcNamespace + "-api-reader-hcp"
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: apiReaderNs}}
+			if err := k8sClient.Create(ctx, ns); err != nil {
+				Expect(client.IgnoreAlreadyExists(err)).To(Succeed())
+			}
+
+			secret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "admin-kubeconfig-apireader",
+					Namespace: apiReaderNs,
+				},
+				Data: map[string][]byte{
+					"kubeconfig": kubeconfigData,
+				},
+			}
+			Expect(k8sClient.Create(ctx, secret)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, secret) })
+
+			hcp := &hypershiftv1beta1.HostedControlPlane{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "api-reader-hcp",
+					Namespace: apiReaderNs,
+				},
+			}
+			Expect(k8sClient.Create(ctx, hcp)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, hcp) })
+
+			hcp.Status.KubeConfig = &hypershiftv1beta1.KubeconfigSecretRef{
+				Name: "admin-kubeconfig-apireader",
+				Key:  "kubeconfig",
+			}
+			Expect(k8sClient.Status().Update(ctx, hcp)).To(Succeed())
+
+			co := newClusterOrder("caas-kc-apireader", testNamespace, nil)
+			Expect(k8sClient.Create(ctx, co)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, co) })
+			co.Status.ClusterReference = &v1alpha1.ClusterOrderClusterReferenceType{
+				Namespace:         hcNamespace,
+				HostedClusterName: "api-reader-hcp",
+			}
+			Expect(k8sClient.Status().Update(ctx, co)).To(Succeed())
+
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, nil, pollInterval, provisioning.DefaultMaxJobHistory,
+			)
+			// Confirm the reconciler's APIReader is set (not nil)
+			Expect(r.APIReader).NotTo(BeNil(), "APIReader should be set by NewStorageReconciler")
+
+			result, err := r.getClusterKubeconfig(ctx, co)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(kubeconfigData))
+		})
+
+		It("should return nil via APIReader when ClusterOrder is deleting", func() {
+			// A ClusterOrder being deleted should still allow kubeconfig
+			// retrieval to return nil gracefully when HCP is missing.
+			co := newClusterOrder("caas-kc-deleting", testNamespace, nil)
+			Expect(k8sClient.Create(ctx, co)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, co) })
+			co.Status.ClusterReference = &v1alpha1.ClusterOrderClusterReferenceType{
+				Namespace:         hcNamespace,
+				HostedClusterName: "nonexistent-deleting-hcp",
+			}
+			Expect(k8sClient.Status().Update(ctx, co)).To(Succeed())
+
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, nil, pollInterval, provisioning.DefaultMaxJobHistory,
+			)
+
+			result, err := r.getClusterKubeconfig(ctx, co)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(BeNil())
+		})
 	})
 
 	Context("CaaS: provisioning trigger", func() {

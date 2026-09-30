@@ -70,15 +70,6 @@ class GRPCClient:
             },
         )
 
-    def update_compute_instance_instance_type(self, *, ci_id: str, instance_type: str) -> dict[str, Any]:
-        return self.call(
-            service=f"{PUBLIC_API}.ComputeInstances/Update",
-            data={
-                "object": {"id": ci_id, "spec": {"instance_type": {"id": instance_type}}},
-                "updateMask": {"paths": ["spec.instance_type"]},
-            },
-        )
-
     def delete_compute_instance(self, *, ci_id: str) -> None:
         self.call(service=f"{PUBLIC_API}.ComputeInstances/Delete", data={"id": ci_id})
 

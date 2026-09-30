@@ -1,0 +1,17 @@
+---
+# Test Agent CRD fixture for agent reclaim integration test.
+# The assisted-service Agent CRD uses spec.clusterDeploymentName as a
+# ClusterReference object (name + namespace), not a plain string.
+apiVersion: agent-install.openshift.io/v1beta1
+kind: Agent
+metadata:
+  name: test-agent-reclaim
+  namespace: default
+spec:
+  approved: true
+  clusterDeploymentName:
+    name: test-cluster
+    namespace: clusters-test-cluster
+status:
+  debugInfo:
+    state: binding

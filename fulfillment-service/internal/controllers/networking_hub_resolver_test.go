@@ -395,6 +395,87 @@ var _ = Describe("NetworkingHubReader", func() {
 		Expect(networkClasses.updates).To(BeEmpty())
 		Expect(cache.calls).To(BeEmpty())
 	})
+
+	It("detects a stale cached Hub when the canonical reference changes to a missing Hub", func() {
+		networkClass := testNetworkClass("nc-a", "hub-a", privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY, "")
+		networkClasses := &fakeNetworkClassesClient{objects: []*privatev1.NetworkClass{networkClass}}
+		cache := &fakeNetworkingHubCache{
+			entries: map[string]*HubEntry{
+				"hub-a": {Namespace: "networking", Client: nil},
+			},
+			errors: map[string]error{
+				"hub-missing": ErrHubNotFound,
+			},
+		}
+
+		reader := mustBuildNetworkingHubReader(networkClasses, cache)
+
+		// First resolution succeeds with hub-a
+		result, err := reader.Resolve(context.Background())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.ID).To(Equal("hub-a"))
+		Expect(result.Namespace).To(Equal("networking"))
+
+		// Change the canonical reference to a missing hub while hub-a is still available
+		networkClass.GetStatus().SetHub("hub-missing")
+
+		// Next resolution should report the missing reference, not return cached hub-a
+		result, err = reader.Resolve(context.Background())
+		Expect(errors.Is(err, ErrCanonicalHubNotFound)).To(BeTrue())
+		Expect(result.HubID).To(Equal("hub-missing"))
+		Expect(result.State).To(Equal(privatev1.NetworkClassState_NETWORK_CLASS_STATE_FAILED))
+		Expect(networkClasses.updates).To(BeEmpty())
+	})
+
+	It("switches to a different Hub when the canonical reference changes", func() {
+		networkClass := testNetworkClass("nc-a", "hub-a", privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY, "")
+		networkClasses := &fakeNetworkClassesClient{objects: []*privatev1.NetworkClass{networkClass}}
+		cache := &fakeNetworkingHubCache{entries: map[string]*HubEntry{
+			"hub-a": {Namespace: "ns-a", Client: nil},
+			"hub-b": {Namespace: "ns-b", Client: nil},
+		}}
+
+		reader := mustBuildNetworkingHubReader(networkClasses, cache)
+
+		// Resolve hub-a
+		first, err := reader.Resolve(context.Background())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(first.ID).To(Equal("hub-a"))
+		Expect(first.Namespace).To(Equal("ns-a"))
+
+		// Change canonical reference to hub-b
+		networkClass.GetStatus().SetHub("hub-b")
+
+		// Should resolve hub-b, not cached hub-a
+		second, err := reader.Resolve(context.Background())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(second.ID).To(Equal("hub-b"))
+		Expect(second.Namespace).To(Equal("ns-b"))
+		Expect(networkClasses.updates).To(BeEmpty())
+	})
+
+	It("reports not-ready when the canonical reference is cleared", func() {
+		networkClass := testNetworkClass("nc-a", "hub-a", privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY, "")
+		networkClasses := &fakeNetworkClassesClient{objects: []*privatev1.NetworkClass{networkClass}}
+		cache := &fakeNetworkingHubCache{entries: map[string]*HubEntry{
+			"hub-a": {Namespace: "networking", Client: nil},
+		}}
+
+		reader := mustBuildNetworkingHubReader(networkClasses, cache)
+
+		// Resolve hub-a
+		result, err := reader.Resolve(context.Background())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.ID).To(Equal("hub-a"))
+
+		// Clear the canonical reference
+		networkClass.GetStatus().SetHub("")
+
+		// Should report canonical hub not ready
+		_, err = reader.Resolve(context.Background())
+		Expect(errors.Is(err, ErrCanonicalHubNotReady)).To(BeTrue())
+		Expect(networkClasses.updates).To(BeEmpty())
+	})
 })
 
 var _ = Describe("ResolveResourceNetworkingHub", func() {

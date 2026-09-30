@@ -44,7 +44,6 @@ See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#osac-aap
 | Touched area | Required validation | Command / follow-up |
 |---|---|---|
 | Filters, variable transforms, and isolated plugin logic | Unit | `uv run pytest tests/unit` |
-<<<<<<< HEAD
 | Template publishing certificate validation | Local protocol integration | Run the `test_cert_validation` play in `collections/ansible_collections/osac/service/roles/publish_templates/tests/test.yml` with `uv run ansible-playbook`; the mock HTTPS server tests the client transport only |
 | AgentlessNet VirtualNetwork allocation, locked SQLite state, and Linux command helpers | Unit | `tests/unit/test_agentless_network_state.py` and `tests/unit/test_agentless_net_network.py`; run `uv run pytest tests/unit` |
 | AgentlessNet VN environment inventory, host registration, and password rejection | Contract | `agentless_net_stub` baseline target runs `files/validate_vn_inventory.yml` in fresh Ansible processes; no SSH/provider commands |

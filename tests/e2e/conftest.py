@@ -6,12 +6,11 @@ import subprocess
 import textwrap
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from tests.e2e.core.caas_versions import ensure_caas_disk_image_version
-from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
-from tests.e2e.core.helpers import unique_name, wait_for_grpc_subnet_ready
+from tests.e2e.core.grpc_client import PRIVATE_API, PUBLIC_API, GRPCClient
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.keycloak import get_jwt
 from tests.e2e.core.keycloak_admin import (
@@ -40,7 +39,9 @@ def default_storage_tier() -> str:
 def _requires_serial_xdist(args: list[str]) -> bool:
     """True when CLI targets a suite that must run sequentially.
 
-    CaaS, BMaaS serial/full, and enablement suites require ``-n 0``.
+    BMaaS serial/full, CaaS (all sub-suites), and enablement suites
+    require ``-n 0``.  CaaS tests share a single ci-worker agent and
+    silently contend when run in parallel, causing timeouts.
     Broader invocations like ``pytest tests/`` are not detected.
     """
     normalized = [str(a).replace("\\", "/").rstrip("/") for a in args]
@@ -52,10 +53,13 @@ def _requires_serial_xdist(args: list[str]) -> bool:
         or a.endswith("tests/e2e/bmaas")
         or a.endswith("/e2e/bmaas")
         or a == "e2e/bmaas"
-        or a.endswith("e2e/caas")
-        or "/e2e/caas/" in (a + "/")
         or a.endswith("e2e/enablement")
         or "/e2e/enablement/" in (a + "/")
+        # CaaS tests must be serial: multiple tests compete for 1 ci-worker agent
+        or a.endswith("tests/e2e/caas")
+        or a.endswith("/e2e/caas")
+        or a == "e2e/caas"
+        or "/e2e/caas/" in (a + "/")
         for a in normalized
     )
 
@@ -87,7 +91,6 @@ def pytest_configure(config: pytest.Config) -> None:
     e2e.log artifact.
     """
     config.addinivalue_line("markers", "metering: test verifies metering events via the test adapter HTTP API")
-    config.addinivalue_line("markers", "caas_cluster_create_focus: temporarily isolate the primary CaaS PR E2E")
     config.addinivalue_line("markers", "requires_caas: test requires the CaaS service to be enabled")
     config.addinivalue_line("markers", "requires_bmaas: test requires the BMaaS service to be enabled")
     config.addinivalue_line("markers", "requires_vmaas: test requires the VMaaS service to be enabled")
@@ -174,54 +177,10 @@ def private_grpc(fulfillment_private_address: str, namespace: str, service_accou
     return GRPCClient(address=fulfillment_private_address, token=token)
 
 
-@pytest.fixture(scope="session")
-def caas_disk_image_version(private_grpc: GRPCClient) -> str:
-    """Explicit backed version for positive bare-metal CaaS scenarios."""
-    return ensure_caas_disk_image_version(private_grpc)
-
-
 @pytest.fixture(scope="session", autouse=True)
 def ensure_tenants(ensure_k8s_only_network_class: None, private_grpc: GRPCClient) -> None:
     for name in ("tenant1", "tenant2"):
         private_grpc.ensure_tenant(name=name)
-
-
-@pytest.fixture(scope="session", autouse=True)
-def _wait_for_default_subnets_ready(
-    ensure_jwt_users: None, setup_organization_memberships: None, grpc: GRPCClient
-) -> None:
-    """Wait for tenant-default subnets to reach READY in the fulfillment database.
-
-    Tenant creation triggers the DefaultNetworkingProvisioner which creates a
-    default VirtualNetwork, Subnet, and SecurityGroup in SUBNET_STATE_PENDING.
-    The osac-operator marks the K8s CRs Ready, then the subnet feedback
-    controller syncs that state back to PostgreSQL.  Tests that implicitly
-    reference these subnets (e.g. BareMetalInstance creation inherits the
-    tenant's default subnet) hit FailedPrecondition if the DB update hasn't
-    landed yet.
-
-    Depends on ``ensure_jwt_users`` (which itself depends on ``ensure_tenants``)
-    so that the ``grpc`` client's first call does not trigger JIT user
-    provisioning before ``ensure_jwt_users`` creates the RoleBinding.
-
-    Depends on ``setup_organization_memberships`` so that the Keycloak
-    organization membership is in place before the first JWT is obtained;
-    without it the token may lack the tenant claim and
-    ``list_subnet_ids()`` returns an empty list (``WHERE tenant = $1``
-    receives an empty string).
-    """
-    # Timeout must exceed 2x the operator's statusPollInterval (30s) to
-    # accommodate two sequential polling cycles (VirtualNetwork -> Subnet).
-    subnet_ids: list[str] = poll_until(
-        fn=lambda: grpc.list_subnet_ids(),
-        until=lambda ids: len(ids) > 0,
-        retries=60,
-        delay=2,
-        description="at least one subnet to appear in gRPC",
-        retry_on_error=True,
-    )
-    for subnet_id in subnet_ids:
-        wait_for_grpc_subnet_ready(grpc=grpc, subnet_id=subnet_id)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -265,10 +224,8 @@ def setup_organization_memberships(ensure_tenants: None, keycloak_url: str, keyc
     org_users = {"tenant1": ["tenant1_user", "tenant1_admin"], "tenant2": ["tenant2_user", "tenant2_admin"]}
 
     for org_name, usernames in org_users.items():
-        admin_token = get_admin_token(keycloak_url=keycloak_url, username="admin", password=keycloak_admin_password)
         # Wait for the organization to be synced to Keycloak by the tenant controller
         org_id = wait_for_organization(keycloak_url=keycloak_url, admin_token=admin_token, org_name=org_name)
-        admin_token = get_admin_token(keycloak_url=keycloak_url, username="admin", password=keycloak_admin_password)
 
         # Add each user to the organization
         for username in usernames:
@@ -354,17 +311,6 @@ def cli(
     )
     yield instance
     instance.close()
-
-
-@pytest.fixture
-def pull_secret_name(cli: OsacCLI, pull_secret_path: str) -> Iterator[str]:
-    """Create a tenant-scoped pull Secret for a CaaS cluster, then remove it."""
-    name = unique_name("e2e-pull-secret")
-    cli.create_secret(name=name, from_files={".dockerconfigjson": pull_secret_path}, secret_type="pull-secret")
-    try:
-        yield name
-    finally:
-        cli.delete_secret(name=name)
 
 
 @pytest.fixture(scope="session")
@@ -493,3 +439,88 @@ def metering() -> Iterator[MeteringCollector]:
         collector.verify()
     finally:
         collector.stop()
+
+
+# ---------------------------------------------------------------------------
+# BMaaS readiness gate: default networking ready via Fulfillment API
+# ---------------------------------------------------------------------------
+
+_SUBNET_STATE_READY = "SUBNET_STATE_READY"
+_SG_STATE_READY = "SECURITY_GROUP_STATE_READY"
+
+
+@pytest.fixture(scope="session")
+def bmaas_default_networking_ready(grpc: GRPCClient) -> None:
+    """Wait until the tenant's default IPv4 subnet and default security group
+    are reported as READY by the Fulfillment API.
+
+    This is a non-autouse fixture — request it explicitly in BMaaS tests
+    that depend on networking infrastructure being provisioned before the
+    test creates instances.
+
+    Polls the Fulfillment API (not just K8s CRs) every 2 seconds for up
+    to 120 seconds.  On timeout, reports tenant, resource IDs, states,
+    and status messages.
+    """
+
+    def _find_ready_subnet() -> dict[str, Any] | None:
+        response: dict[str, Any] = grpc.call(service=f"{PUBLIC_API}.Subnets/List")
+        for item in response.get("items", []):
+            if item.get("spec", {}).get("ipv4Cidr") or item.get("spec", {}).get("ipv4_cidr"):
+                state = item.get("status", {}).get("state", "")
+                if state == _SUBNET_STATE_READY:
+                    return item
+        return None
+
+    def _find_ready_sg() -> dict[str, Any] | None:
+        response: dict[str, Any] = grpc.call(service=f"{PUBLIC_API}.SecurityGroups/List")
+        for item in response.get("items", []):
+            state = item.get("status", {}).get("state", "")
+            if state == _SG_STATE_READY:
+                return item
+        return None
+
+    # Wait for a READY IPv4 subnet
+    subnet = poll_until(
+        fn=_find_ready_subnet,
+        until=lambda s: s is not None,
+        retries=60,
+        delay=2,
+        description="default IPv4 subnet to reach READY via Fulfillment API",
+    )
+    if subnet is None:
+        # Gather diagnostics for the timeout message
+        all_subnets: dict[str, Any] = grpc.call(service=f"{PUBLIC_API}.Subnets/List")
+        details = [
+            f"  id={s.get('id')}, name={s.get('metadata', {}).get('name')}, "
+            f"tenant={s.get('metadata', {}).get('tenant')}, "
+            f"state={s.get('status', {}).get('state')}, "
+            f"message={s.get('status', {}).get('statusMessage', '')}"
+            for s in all_subnets.get("items", [])
+        ]
+        pytest.fail(
+            "Timed out waiting for a READY IPv4 subnet via Fulfillment API.\n"
+            f"Subnets found ({len(details)}):\n" + "\n".join(details or ["  (none)"])
+        )
+
+    # Wait for a READY security group
+    sg = poll_until(
+        fn=_find_ready_sg,
+        until=lambda s: s is not None,
+        retries=60,
+        delay=2,
+        description="default security group to reach READY via Fulfillment API",
+    )
+    if sg is None:
+        all_sgs: dict[str, Any] = grpc.call(service=f"{PUBLIC_API}.SecurityGroups/List")
+        details = [
+            f"  id={s.get('id')}, name={s.get('metadata', {}).get('name')}, "
+            f"tenant={s.get('metadata', {}).get('tenant')}, "
+            f"state={s.get('status', {}).get('state')}, "
+            f"message={s.get('status', {}).get('statusMessage', '')}"
+            for s in all_sgs.get("items", [])
+        ]
+        pytest.fail(
+            "Timed out waiting for a READY security group via Fulfillment API.\n"
+            f"SecurityGroups found ({len(details)}):\n" + "\n".join(details or ["  (none)"])
+        )

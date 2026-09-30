@@ -38,3 +38,5 @@ tests/integration/targets/cluster_post_install/tasks/overrides.yml risky-file-pe
 tests/integration/targets/cluster_status_reporting/tasks/overrides.yml risky-file-permissions
 tests/integration/targets/compute_instance_create/tasks/overrides.yml risky-file-permissions
 tests/integration/targets/compute_instance_delete/tasks/overrides.yml risky-file-permissions
+# Agent reclaim test uses shell tasks for controller simulation (fire-and-forget async)
+tests/integration/targets/agent_reclaim/tasks/baseline.yml no-changed-when

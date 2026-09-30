@@ -58,8 +58,10 @@ spec:
                 description: AddOnOperators lists the stable names of operators requested
                   for the cluster.
                 items:
+                  minLength: 1
                   type: string
                 maxItems: 32
+                minItems: 1
                 type: array
               network:
                 description: Network contains cluster networking configuration.

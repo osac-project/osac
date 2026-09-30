@@ -113,6 +113,13 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 		Expect(k8sClient.Status().Update(ctx, instance)).NotTo(Succeed())
 	})
 
+	It("should reject an empty requested add-on operator name", func() {
+		instance := newTestClusterOrder("cluster-order-empty-requested-operator")
+		instance.Spec.AddOnOperators = []string{""}
+
+		Expect(k8sClient.Create(ctx, instance)).NotTo(Succeed())
+	})
+
 	countProvisionJobs := func(instance *osacv1alpha1.ClusterOrder) int {
 		count := 0
 		for _, j := range instance.Status.ProvisioningJobs {

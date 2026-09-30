@@ -44,7 +44,9 @@ type ClusterOrderSpec struct {
 	NodeRequests []NodeRequest `json:"nodeRequests,omitempty"`
 	// AddOnOperators lists the stable names of operators requested for the cluster.
 	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=32
+	// +kubebuilder:validation:items:MinLength=1
 	AddOnOperators []string `json:"addOnOperators,omitempty"`
 
 	// PullSecret contains credentials for authenticating to container image repositories.

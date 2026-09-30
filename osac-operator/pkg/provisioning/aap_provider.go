@@ -168,40 +168,40 @@ func (p *AAPProvider) isReadyForDeprovision(ctx context.Context, resource client
 		return true, nil, nil
 	}
 
-	log.Info("checking provision job before deprovision", "jobID", latestProvisionJob.JobID, "currentState", latestProvisionJob.State)
+	log.Info("checking provision job before deprovision", logKeyJobID, latestProvisionJob.JobID, "currentState", latestProvisionJob.State)
 
 	status, err := p.GetProvisionStatus(ctx, resource, latestProvisionJob.JobID)
 	if err != nil {
 		var notFoundErr *aap.NotFoundError
 		if errors.As(err, &notFoundErr) {
-			log.Info("AAP job not found (purged), treating as terminal", "jobID", latestProvisionJob.JobID)
+			log.Info("AAP job not found (purged), treating as terminal", logKeyJobID, latestProvisionJob.JobID)
 			return true, nil, nil
 		}
 		return false, nil, fmt.Errorf("failed to get provision job status: %w", err)
 	}
 
-	log.Info("provision job status retrieved", "jobID", latestProvisionJob.JobID, "state", status.State, "isTerminal", status.State.IsTerminal())
+	log.Info("provision job status retrieved", logKeyJobID, latestProvisionJob.JobID, "state", status.State, "isTerminal", status.State.IsTerminal())
 
 	// Job already terminal - ready to proceed
 	if status.State.IsTerminal() {
-		log.Info("provision job is terminal, ready to deprovision", "jobID", latestProvisionJob.JobID, "state", status.State)
+		log.Info("provision job is terminal, ready to deprovision", logKeyJobID, latestProvisionJob.JobID, "state", status.State)
 		return true, &status, nil
 	}
 
 	// Job still running - cancel it
-	log.Info("provision job is running, attempting to cancel", "jobID", latestProvisionJob.JobID, "state", status.State)
+	log.Info("provision job is running, attempting to cancel", logKeyJobID, latestProvisionJob.JobID, "state", status.State)
 	if err := p.cancelProvisionJob(ctx, latestProvisionJob.JobID); err != nil {
 		var methodNotAllowedErr *aap.MethodNotAllowedError
 		if !errors.As(err, &methodNotAllowedErr) {
 			return false, &status, fmt.Errorf("failed to cancel provision job: %w", err)
 		}
 		// 405 means already terminal, proceed
-		log.Info("job cancel returned 405 (already terminal), ready to deprovision", "jobID", latestProvisionJob.JobID)
+		log.Info("job cancel returned 405 (already terminal), ready to deprovision", logKeyJobID, latestProvisionJob.JobID)
 		return true, &status, nil
 	}
 
 	// Cancellation initiated - need to wait, return current status for CR update
-	log.Info("provision job cancellation initiated, waiting for termination", "jobID", latestProvisionJob.JobID)
+	log.Info("provision job cancellation initiated, waiting for termination", logKeyJobID, latestProvisionJob.JobID)
 	return false, &status, nil
 }
 
@@ -305,6 +305,8 @@ func (p *AAPProvider) Name() string {
 
 // getJobStatus retrieves job status from AAP and converts it to ProvisionStatus.
 func (p *AAPProvider) getJobStatus(ctx context.Context, jobID string) (ProvisionStatus, error) {
+	log := ctrllog.FromContext(ctx)
+
 	job, err := p.client.GetJob(ctx, jobID)
 	if err != nil {
 		return ProvisionStatus{}, fmt.Errorf("failed to get job: %w", err)
@@ -323,7 +325,37 @@ func (p *AAPProvider) getJobStatus(ctx context.Context, jobID string) (Provision
 		status.ErrorDetails = job.ResultTraceback
 	}
 
+	// Log terminal AAP job states with bounded failure context for
+	// observability. The result_traceback is truncated to avoid flooding
+	// the log aggregator while preserving a useful diagnostic prefix.
+	if status.State.IsTerminal() {
+		logKVs := []any{
+			logKeyJobID, jobID,
+			"aapStatus", job.Status,
+			"state", status.State,
+		}
+		if job.ResultTraceback != "" {
+			logKVs = append(logKVs, "resultTraceback", boundLogField(job.ResultTraceback, maxAAPLogFieldLen))
+		}
+		log.Info("AAP job reached terminal state", logKVs...)
+	}
+
 	return status, nil
+}
+
+// maxAAPLogFieldLen caps individual AAP-sourced fields (result_traceback,
+// messages) logged by the provider. Kept separate from the lifecycle's
+// maxLogMessageLen because AAP tracebacks tend to be longer and less
+// structured, so we allow slightly more context.
+const maxAAPLogFieldLen = 512
+
+// boundLogField truncates s to maxLen and appends a marker when truncation
+// occurs. Safe for empty strings.
+func boundLogField(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "[…truncated]"
 }
 
 // mapAAPStatusToJobState converts AAP job status to JobState.
@@ -358,7 +390,7 @@ func extractExtraVars(ctx context.Context, resource client.Object) (map[string]a
 	}
 
 	vars := map[string]any{
-		"resource": resourceMap,
+		logKeyResource: resourceMap,
 	}
 
 	if scs := TenantStorageClassesFromContext(ctx); len(scs) > 0 {

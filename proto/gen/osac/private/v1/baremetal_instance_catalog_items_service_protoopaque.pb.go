@@ -560,8 +560,7 @@ type BareMetalInstanceCatalogItemsCreateResponse_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
 	Object *BareMetalInstanceCatalogItem
-	// Non-fatal validation warnings returned by the gRPC response for accepted field policies. For example, a deprecated
-	// `fields.disk_image` default is accepted and reported here so catalog authors can migrate to a replacement.
+	// Deprecation or validation warnings for typed catalog policies.
 	Warnings []string
 }
 
@@ -754,8 +753,7 @@ type BareMetalInstanceCatalogItemsUpdateResponse_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
 	Object *BareMetalInstanceCatalogItem
-	// Non-fatal validation warnings returned by the gRPC response for accepted field policies. For example, a deprecated
-	// `fields.disk_image` default is accepted and reported here so catalog authors can migrate to a replacement.
+	// Deprecation or validation warnings for typed catalog policies.
 	Warnings []string
 }
 

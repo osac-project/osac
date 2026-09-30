@@ -95,6 +95,7 @@ def test_baremetal_instance_lifecycle(
     bmh_namespace: str,
     test_run_id: str,
     ssh_public_key: str,
+    bmaas_default_networking_ready: None,
 ) -> None:
     name = f"e2e-bmi-{test_run_id}"
     disk_images: dict[str, Any] = jwt_grpc_tenant1.call(service=f"{PUBLIC_API}.DiskImages/List")
@@ -203,6 +204,7 @@ def test_baremetal_instance_restart(
     private_grpc: GRPCClient,
     test_run_id: str,
     ssh_public_key: str,
+    bmaas_default_networking_ready: None,
 ) -> None:
     name: str = f"e2e-bmi-restart-{test_run_id}"
     deprecated_disk_image_name = f"e2e-bmi-deprecated-di-{test_run_id}"

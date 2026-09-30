@@ -28,6 +28,14 @@ echo "Installing OSAC CRDs..."
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 kubectl apply -f "${REPO_ROOT}/osac-operator/config/crd/bases/"
 
+# 2.0.1. Install minimal Agent CRD for agent_reclaim integration tests.
+# The real CRD comes from assisted-service; this test-only definition covers
+# the fields exercised by the manage_agents role (spec.clusterDeploymentName,
+# status.debugInfo.state, metadata.labels).
+echo "Installing minimal Agent CRD for agent_reclaim tests..."
+kubectl apply -f "${SCRIPT_DIR}/fixtures/agent-crd.yaml"
+kubectl wait --for=condition=Established crd/agents.agent-install.openshift.io --timeout=30s
+
 # 2.1. Install external CRDs needed by workflows
 echo "Installing KubeVirt operator..."
 kubectl apply -f https://github.com/kubevirt/kubevirt/releases/download/v1.1.0/kubevirt-operator.yaml

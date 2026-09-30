@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -10,7 +11,7 @@ from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import (
     unique_name,
     wait_for_cluster_deleting,
-    wait_for_cluster_deletion,
+    wait_for_cluster_deletion_with_deadline,
     wait_for_cluster_grpc_deleting_or_archived,
     wait_for_cluster_grpc_removal,
     wait_for_cluster_order_cr,
@@ -46,6 +47,9 @@ def test_cluster_create(
         template_parameters={"ssh_public_key": Path(ssh_public_key_path).read_text().strip()},
     )
     metering.expect("osac.resource.created.v1", resource_id=uuid)
+
+    # Single deletion deadline shared between normal wait and cleanup.
+    deletion_deadline = time.monotonic() + 1200
 
     try:
         co_name = wait_for_cluster_order_cr(k8s=k8s_hub_client, uuid=uuid)
@@ -138,9 +142,17 @@ def test_cluster_create(
         wait_for_cluster_deleting(k8s=k8s_hub_client, name=co_name)
         wait_for_cluster_grpc_deleting_or_archived(grpc=grpc, uuid=uuid)
 
-        wait_for_cluster_deletion(k8s=k8s_hub_client, name=co_name)
+        wait_for_cluster_deletion_with_deadline(k8s=k8s_hub_client, name=co_name, deadline=deletion_deadline)
         wait_for_cluster_grpc_removal(grpc=grpc, uuid=uuid)
         metering.verify()
     finally:
+        # Cleanup uses the same deletion deadline — does NOT repeat the
+        # full 20-minute timeout.  Reports remaining finalizers and Agent
+        # state on timeout.
         with contextlib.suppress(subprocess.SubprocessError):
             cli.delete_cluster(uuid=uuid)
+        if co_name:
+            try:
+                wait_for_cluster_deletion_with_deadline(k8s=k8s_hub_client, name=co_name, deadline=deletion_deadline)
+            except Exception as cleanup_err:
+                print(f"WARNING: Cluster cleanup wait failed for {co_name}: {cleanup_err}")

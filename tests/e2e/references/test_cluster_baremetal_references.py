@@ -168,7 +168,12 @@ class TestClusterBareMetalReferences:
 
     @pytest.mark.requires_bmaas
     def test_baremetal_instance_chain_by_name(
-        self, private_grpc: GRPCClient, grpc: GRPCClient, bmi_template: str, ref_bmi_disk_image: str
+        self,
+        private_grpc: GRPCClient,
+        grpc: GRPCClient,
+        bmi_template: str,
+        ref_bmi_disk_image: str,
+        bmaas_default_networking_ready: None,
     ):
         tag = uuid4().hex[:8]
         cat_name = f"ref-bmi-cat-{tag}"

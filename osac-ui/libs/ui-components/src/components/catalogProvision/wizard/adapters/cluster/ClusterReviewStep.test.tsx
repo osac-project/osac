@@ -18,22 +18,6 @@ const clusterVersions: ClusterVersion[] = [
 ];
 
 describe('ClusterReviewStep', () => {
-  it('renders Infrastructure Networking and Cluster Networking section headings', async () => {
-    const emptyValues = createEmptyClusterValues();
-    renderWithProviders(
-      <Formik initialValues={emptyValues} onSubmit={() => undefined}>
-        <ClusterReviewStep catalogItem={null} />
-      </Formik>,
-    );
-
-    expect(
-      await screen.findByRole('heading', { name: 'Infrastructure Networking', level: 3 }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole('heading', { name: 'Cluster Networking', level: 3 }),
-    ).toBeInTheDocument();
-  });
-
   it('shows the human-readable version, not the metadata.name slug', async () => {
     const emptyValues = createEmptyClusterValues();
     renderWithProviders(

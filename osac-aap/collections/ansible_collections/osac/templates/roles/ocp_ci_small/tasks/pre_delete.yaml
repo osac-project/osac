@@ -5,3 +5,5 @@
     tasks_from: unbind_agents_for_reclaim
   vars:
     manage_agents_cluster_order_name: "{{ cluster_order.metadata.name }}"
+    manage_agents_hosted_cluster_namespace: "{{ cluster_working_namespace }}"
+    manage_agents_reclaim_expect_bound: true

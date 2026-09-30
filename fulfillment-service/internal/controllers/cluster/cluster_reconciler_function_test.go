@@ -548,6 +548,136 @@ var _ = Describe("update tenant annotation", func() {
 		Expect(createdCR.Spec.Network.ServiceCIDR).To(Equal(serviceCIDR))
 	})
 
+	It("should map explicit network_attachment to ClusterOrder networkAttachment", func() {
+		subnetUUID := "subnet-uuid-001"
+		sgUUID := "sg-uuid-001"
+
+		scheme := runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+
+		// Pre-populate hub with Subnet and SecurityGroup CRs labelled by UUID
+		subnetCR := &osacv1alpha1.Subnet{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "my-subnet-cr",
+				Namespace: hubNamespace,
+				Labels:    map[string]string{labels.SubnetUuid: subnetUUID},
+			},
+		}
+		sgCR := &osacv1alpha1.SecurityGroup{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "my-sg-cr",
+				Namespace: hubNamespace,
+				Labels:    map[string]string{labels.SecurityGroupUuid: sgUUID},
+			},
+		}
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(subnetCR, sgCR).
+			Build()
+
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().
+			Get(gomock.Any(), hubID).
+			Return(&controllers.HubEntry{
+				Namespace: hubNamespace,
+				Client:    fakeClient,
+			}, nil)
+
+		cluster := privatev1.Cluster_builder{
+			Id: clusterID,
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.Controller},
+				Tenant:     tenantName,
+			}.Build(),
+			Spec: privatev1.ClusterSpec_builder{
+				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
+				NetworkAttachment: privatev1.ClusterNetworkAttachment_builder{
+					Subnet:         &privatev1.SubnetLocalReference{Id: subnetUUID},
+					SecurityGroups: []*privatev1.SecurityGroupLocalReference{{Id: sgUUID}},
+				}.Build(),
+			}.Build(),
+			Status: privatev1.ClusterStatus_builder{
+				State: privatev1.ClusterState_CLUSTER_STATE_PROGRESSING,
+				Hub:   hubID,
+			}.Build(),
+		}.Build()
+
+		t := &task{
+			r: &function{
+				logger:         logger,
+				hubCache:       hubCache,
+				maskCalculator: nil,
+			},
+			cluster: cluster,
+		}
+
+		err := t.update(ctx)
+		Expect(err).ToNot(HaveOccurred())
+
+		coList := &osacv1alpha1.ClusterOrderList{}
+		err = fakeClient.List(ctx, coList)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(coList.Items).To(HaveLen(1))
+
+		createdCR := coList.Items[0]
+		Expect(createdCR.Spec.NetworkAttachment).ToNot(BeNil())
+		Expect(createdCR.Spec.NetworkAttachment.SubnetRef).To(Equal("my-subnet-cr"))
+		Expect(createdCR.Spec.NetworkAttachment.SecurityGroupRefs).To(ConsistOf("my-sg-cr"))
+	})
+
+	It("should leave networkAttachment nil when cluster has no network_attachment", func() {
+		scheme := runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			Build()
+
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().
+			Get(gomock.Any(), hubID).
+			Return(&controllers.HubEntry{
+				Namespace: hubNamespace,
+				Client:    fakeClient,
+			}, nil)
+
+		cluster := privatev1.Cluster_builder{
+			Id: clusterID,
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.Controller},
+				Tenant:     tenantName,
+			}.Build(),
+			Spec: privatev1.ClusterSpec_builder{
+				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
+			}.Build(),
+			Status: privatev1.ClusterStatus_builder{
+				State: privatev1.ClusterState_CLUSTER_STATE_PROGRESSING,
+				Hub:   hubID,
+			}.Build(),
+		}.Build()
+
+		t := &task{
+			r: &function{
+				logger:         logger,
+				hubCache:       hubCache,
+				maskCalculator: nil,
+			},
+			cluster: cluster,
+		}
+
+		err := t.update(ctx)
+		Expect(err).ToNot(HaveOccurred())
+
+		coList := &osacv1alpha1.ClusterOrderList{}
+		err = fakeClient.List(ctx, coList)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(coList.Items).To(HaveLen(1))
+
+		createdCR := coList.Items[0]
+		Expect(createdCR.Spec.NetworkAttachment).To(BeNil())
+	})
+
 	It("should resolve pull_secret_secret into ClusterOrder spec.pullSecret", func() {
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())

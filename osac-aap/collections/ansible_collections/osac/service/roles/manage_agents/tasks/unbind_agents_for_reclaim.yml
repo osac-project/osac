@@ -13,6 +13,18 @@
 # reclaim DaemonSet on the spoke, the agent kexec-reboots into the discovery environment,
 # and re-registers as known-unbound.
 #
+# Agent CRD note: spec.clusterDeploymentName is a ClusterReference object
+# with name and namespace fields, NOT a plain string.  The selection filter
+# below matches on the namespace field of that reference (the HostedCluster
+# namespace) because the cluster-order label is the stable OSAC association.
+#
+# Retry-safe discovery: the first unbind clears spec.clusterDeploymentName,
+# but the agent-install.openshift.io/clusterdeployment-namespace label
+# persists until the reclaim controller finishes.  When a retry runs (e.g.
+# after a timeout), the Agent is found through the persistent label even
+# though its spec reference is already gone.  This avoids the bug where a
+# retry skips a still-pending Agent because the spec-based selector misses it.
+#
 # This task should only be called from templates that use non-BMH agents (e.g. ocp_ci_small).
 # BMH agents are handled by Ironic via BMC and do not need this.
 
@@ -23,19 +35,100 @@
     namespace: "{{ default_agent_namespace }}"
   register: _all_agents
 
-- name: Find agents bound to this cluster order
+# Step 1: Select agents by spec.clusterDeploymentName (name match).
+- name: Select agents matching cluster order name
+  ansible.builtin.set_fact:
+    _reclaim_by_name: >-
+      {{ _all_agents.resources
+         | selectattr('spec.clusterDeploymentName', 'defined')
+         | selectattr('spec.clusterDeploymentName', 'mapping')
+         | selectattr('spec.clusterDeploymentName.name', 'defined')
+         | selectattr('spec.clusterDeploymentName.name', 'equalto', manage_agents_cluster_order_name)
+         | list }}
+
+# Step 2: Narrow by namespace when provided (prevents cross-tenant collision).
+- name: Apply namespace filter to selected agents
+  ansible.builtin.set_fact:
+    _reclaim_selected: >-
+      {{ (_reclaim_by_name
+          | selectattr('spec.clusterDeploymentName.namespace', 'defined')
+          | selectattr('spec.clusterDeploymentName.namespace', 'equalto', manage_agents_hosted_cluster_namespace)
+          | list)
+         if (manage_agents_hosted_cluster_namespace | default('') | length > 0)
+         else _reclaim_by_name }}
+
+# Step 3: Find agents whose spec ref was already cleared (retry path)
+# but whose persistent label still points to this cluster namespace.
+- name: Find agents via persistent clusterdeployment-namespace label (retry path)
+  ansible.builtin.set_fact:
+    _reclaim_label_agents: >-
+      {{ (_all_agents.resources
+          | rejectattr('spec.clusterDeploymentName', 'defined')
+          | selectattr('metadata.labels', 'defined')
+          | selectattr('metadata.labels', 'mapping')
+          | list
+          | selectattr('metadata.labels["agent-install.openshift.io/clusterdeployment-namespace"]', 'defined')
+          | selectattr('metadata.labels["agent-install.openshift.io/clusterdeployment-namespace"]', 'equalto',
+                        manage_agents_hosted_cluster_namespace | default(''))
+          | list)
+         if (manage_agents_hosted_cluster_namespace | default('') | length > 0)
+         else [] }}
+
+# Step 4: Merge spec-selected and label-discovered agents, dedup by name.
+- name: Build merged reclaim list
   ansible.builtin.set_fact:
     manage_agents_reclaim_list:
       resources: >-
-        {{ _all_agents.resources
-           | selectattr('spec.clusterDeploymentName', 'defined')
-           | selectattr('spec.clusterDeploymentName', 'equalto', manage_agents_cluster_order_name)
+        {{ (_reclaim_selected + _reclaim_label_agents)
+           | unique(attribute='metadata.name')
            | list }}
+
+# Step 5: Save agent names (guard the empty case before mapping metadata.name).
+- name: Save agent names before clearing binding
+  ansible.builtin.set_fact:
+    _reclaim_agent_names: >-
+      {{ manage_agents_reclaim_list.resources | map(attribute='metadata.name') | list
+         if manage_agents_reclaim_list.resources | length > 0
+         else [] }}
+
+- name: Fail if template requires agents but none were found
+  ansible.builtin.fail:
+    msg: >-
+      Agent reclaim for ClusterOrder '{{ manage_agents_cluster_order_name }}' found 0 bound agents.
+      All agents in namespace '{{ default_agent_namespace }}':
+      {{ _all_agents.resources | map(attribute='metadata.name') | list }}.
+      Agent clusterDeploymentName references:
+      {{ _all_agents.resources
+         | selectattr('spec.clusterDeploymentName', 'defined')
+         | map(attribute='spec.clusterDeploymentName')
+         | list }}.
+  when:
+    - manage_agents_reclaim_expect_bound | default(false) | bool
+    - manage_agents_reclaim_list.resources | length == 0
+
+- name: Log agent state BEFORE unbinding (diagnostic)
+  ansible.builtin.debug:
+    msg:
+      agent_name: "{{ agent.metadata.name }}"
+      cluster_deployment_name: "{{ agent.spec.clusterDeploymentName | default('unset') }}"
+      state: "{{ agent.status.debugInfo.state | default('unknown') }}"
+      conditions: >-
+        {{ agent.status.conditions | default([])
+           | map(attribute='type')
+           | zip(agent.status.conditions | default([]) | map(attribute='status'))
+           | map('join', '=')
+           | list }}
+      labels: "{{ agent.metadata.labels | default({}) }}"
+  loop: "{{ manage_agents_reclaim_list.resources }}"
+  loop_control:
+    loop_var: agent
+    label: "{{ agent.metadata.name }}"
+  when: manage_agents_reclaim_list.resources | length > 0
 
 - name: Unbind agents to trigger software reclaim
   when: manage_agents_reclaim_list.resources | length > 0
   block:
-    - name: Clear clusterDeploymentName on each agent
+    - name: Clear clusterDeploymentName on each agent (skip if already cleared)
       kubernetes.core.k8s_json_patch:
         api_version: agent-install.openshift.io/v1beta1
         kind: Agent
@@ -45,36 +138,86 @@
           - op: remove
             path: /spec/clusterDeploymentName
       register: _unbind_patch_result
-      loop: "{{ manage_agents_reclaim_list.resources }}"
+      failed_when: >-
+        _unbind_patch_result.failed | default(false)
+        and 'does not exist' not in (_unbind_patch_result.msg | default(''))
+        and 'not found' not in (_unbind_patch_result.msg | default('') | lower)
+      loop: >-
+        {{ manage_agents_reclaim_list.resources
+           | selectattr('spec.clusterDeploymentName', 'defined')
+           | list }}
       loop_control:
         loop_var: agent
         label: "Unbind agent {{ agent.metadata.name }}"
-      failed_when: false
 
-    - name: Report unbind failures
-      ansible.builtin.debug:
-        msg: "Failed to unbind agent {{ item.agent.metadata.name }}: {{ item.msg | default('unknown error') }}"
-      loop: "{{ _unbind_patch_result.results | selectattr('failed', 'defined') | selectattr('failed') | list }}"
-      loop_control:
-        label: "{{ item.agent.metadata.name }}"
-      when: _unbind_patch_result.results | selectattr('failed', 'defined') | selectattr('failed') | list | length > 0
-
-    - name: Wait for agents to return to available state
+    - name: Wait for agent reclaim to complete
       kubernetes.core.k8s_info:
         kind: Agent
         api_version: agent-install.openshift.io/v1beta1
         namespace: "{{ default_agent_namespace }}"
         field_selectors:
-          - "metadata.name={{ agent.metadata.name }}"
+          - "metadata.name={{ agent_name }}"
       register: manage_agents_reclaim_status
       until: >-
         manage_agents_reclaim_status.resources | length == 0
-        or (manage_agents_reclaim_status.resources[0].status.debugInfo.state | default(''))
+        or (
+          (manage_agents_reclaim_status.resources[0].status.debugInfo.state | default(''))
            in ['known-unbound', 'known', 'discovering-unbound']
-      retries: 60
-      delay: 10
-      failed_when: false
-      loop: "{{ manage_agents_reclaim_list.resources }}"
+          and (manage_agents_reclaim_status.resources[0].metadata.labels
+               ['agent-install.openshift.io/clusterdeployment-namespace'] | default('')) == ''
+        )
+      retries: "{{ manage_agents_reclaim_poll_retries | default(60) }}"
+      delay: "{{ manage_agents_reclaim_poll_delay | default(10) }}"
+      loop: "{{ _reclaim_agent_names }}"
       loop_control:
-        loop_var: agent
-        label: "Wait for agent {{ agent.metadata.name }}"
+        loop_var: agent_name
+        label: "Wait for agent {{ agent_name }}"
+
+    - name: Log agent state AFTER reclaim polling (diagnostic)
+      ansible.builtin.debug:
+        msg:
+          agent_name: "{{ item.agent_name }}"
+          reclaim_completed: "{{ item.attempts <= (manage_agents_reclaim_poll_retries | default(60) | int) }}"
+          cluster_deployment_name: >-
+            {{ item.resources[0].spec.clusterDeploymentName | default('unset')
+               if item.resources | length > 0 else 'agent-not-found' }}
+          state: >-
+            {{ item.resources[0].status.debugInfo.state | default('unknown')
+               if item.resources | length > 0 else 'agent-not-found' }}
+          clusterdeployment_namespace_label: >-
+            {{ item.resources[0].metadata.labels
+               ['agent-install.openshift.io/clusterdeployment-namespace'] | default('absent')
+               if item.resources | length > 0 else 'agent-not-found' }}
+          conditions: >-
+            {{ item.resources[0].status.conditions | default([])
+               | map(attribute='type')
+               | zip(item.resources[0].status.conditions | default([]) | map(attribute='status'))
+               | map('join', '=')
+               | list
+               if item.resources | length > 0 else [] }}
+          labels: >-
+            {{ item.resources[0].metadata.labels | default({})
+               if item.resources | length > 0 else {} }}
+      loop: "{{ manage_agents_reclaim_status.results | default([]) }}"
+      loop_control:
+        loop_var: item
+        label: "{{ item.agent_name }}"
+
+    - name: Fail if any agent did not complete reclaim before HostedCluster destruction
+      ansible.builtin.fail:
+        msg: >-
+          Agent reclaim did not complete within
+          {{ manage_agents_reclaim_poll_retries | default(60) }} ×
+          {{ manage_agents_reclaim_poll_delay | default(10) }}s budget.
+          Agents still not in available state:
+          {{ manage_agents_reclaim_status.results | default([])
+             | selectattr('attempts', 'gt', manage_agents_reclaim_poll_retries | default(60) | int)
+             | map(attribute='agent_name')
+             | list
+             | default(_reclaim_agent_names) }}.
+          Failing BEFORE HostedCluster destruction to preserve the spoke API
+          for manual recovery.
+      when: >-
+        manage_agents_reclaim_status.results | default([])
+        | selectattr('attempts', 'gt', manage_agents_reclaim_poll_retries | default(60) | int)
+        | list | length > 0

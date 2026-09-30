@@ -149,7 +149,7 @@ Touched-area requirements: [component guide](../osac-operator/AGENTS.md#integrat
 |---|---|---|---|
 | Unit | Co-located `*_test.go`; `make test` | Controller helpers, validation, provisioning state logic | External APIs and providers are mocked. |
 | Envtest | Controller tests under `internal/controller/*_envtest_test.go`; run by `make test` | Kubernetes API server, etcd, loaded CRDs, and in-process reconciliation | The controller is not deployed to Kind; provisioning uses controllable or noop providers. |
-| Component integration | `test/integration/`; deploy the current operator into a Kind cluster, then run `make integration-tests` | Installed operator, Kubernetes API, CRDs, controller-manager, console proxy, networking behavior, and startup with the Volume controller enabled but no LVMS endpoint or TopoLVM CRD | AAP/provider provisioning and external infrastructure are not real in the current suite; the LVMS-disabled case does not exercise LogicalVolume provisioning. Some tests remove finalizers to bypass external-provider boundaries. |
+| Component integration | `test/integration/`; deploy the current operator into a Kind cluster, then run `make integration-tests` | Installed operator, Kubernetes API, CRDs, controller-manager, console proxy, and networking behavior | AAP/provider provisioning and external infrastructure are not real in the current suite; some tests remove finalizers to bypass that boundary. |
 | Component integration (CI) | `make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=operator` (from repository root) | The thin Kind deployment used by the PR workflow | The same external-provider limitations as the local Kind suite. |
 | Contract | `test/contract/`; included by `make test` | Helm chart RBAC templates against the operator permission contract | No deployed operator or external provider is exercised. |
 | E2E | `../tests/e2e/` | Cross-component fulfillment journeys | Depends on the deployed test environment and its configured providers. |
@@ -246,7 +246,7 @@ Touched-area requirements: [component guide](../osac-csi-driver/AGENTS.md#integr
 | Unit (CSI sanity) | `test/sanity/`; included by `make test` | CSI protocol calls over Unix sockets and the meta-driver's routing behavior | The vendor controller/node implementation is `fakeVendor`; fulfillment volume operations use a stub. |
 | Component integration | No dedicated real-backend suite currently exists | — | No real storage vendor, attach/detach, mount, or fulfillment deployment is exercised by `make test`. |
 | Contract | No dedicated contract suite; track [OSAC-4845](https://redhat.atlassian.net/browse/OSAC-4845) for vendor and fulfillment-boundary coverage | No deployed fulfillment or real vendor endpoint is exercised | Fulfillment and vendor calls use stubs and `fakeVendor`. |
-| E2E | `../tests/e2e/storage/` when enabled | Tenant/CaaS storage-controller lifecycle and StorageClass setup | These flows do not currently create a PVC through the OSAC CSI driver or verify CSI `CreateVolume`, node publish/mount, or pod I/O. They depend on the selected storage tier and environment gates. |
+| E2E | `../tests/e2e/` storage flows when enabled | Deployed storage lifecycle through OSAC and its configured backend | Depends on the selected storage tier and environment gates. |
 
 ### Coverage notes
 
@@ -262,9 +262,6 @@ The current sanity suite intentionally stops at a fake vendor and a fulfillment
 stub. Changes to a real storage backend, attach/detach, mount, or deployed
 fulfillment boundary require the real-backend coverage tracked by [OSAC-4845](https://redhat.atlassian.net/browse/OSAC-4845);
 do not label fake-vendor sanity coverage as component integration coverage.
-The current storage E2Es validate orchestration and StorageClass setup, not the
-full CSI delivery path from PVC creation through LVMS/TopoLVM to a mounted
-workload. That end-to-end user journey still needs an explicitly owned QE test.
 
 ## osac-metering
 
@@ -295,14 +292,88 @@ There is no component-level suite that runs the full fulfillment Watch → Kafka
 coverage from mock-based tests; add or extend the real-Kafka coverage under
 [OSAC-4846](https://redhat.atlassian.net/browse/OSAC-4846).
 
-## tests/e2e
+## CaaS E2E (tests/e2e/caas)
 
-Touched-area requirements: [component guide](../tests/e2e/AGENTS.md#touched-area-map).
+Cross-component E2E tests for CaaS (Cluster-as-a-Service) user journeys
+including cluster lifecycle, networking, agent reuse, and deletion feedback.
+
+### Prerequisites
+
+- A deployed OSAC stack (fulfillment-service, osac-operator, AAP) with the
+  CaaS workflow configured and at least one available Agent in
+  `hardware-inventory`.
+- Python dependencies: `uv sync --all-groups` (from repository root).
+- Environment variables:
+  - `OSAC_GRPC_ENDPOINT` — fulfillment-service gRPC endpoint.
+  - `OSAC_API_TOKEN` — authentication token for the API.
+  - `KUBECONFIG` — kubeconfig with access to the hub cluster.
+  - `OSAC_NAMESPACE` — the OSAC tenant namespace.
+  - `METERING_ADAPTER_URL` — (optional) required only for metering-tagged
+    tests; exclude with `-m 'not metering'` when unset.
+
+### Test tiers and commands
 
 | Tier | Location / command | Exercises for real | Faked or omitted |
 |---|---|---|---|
-| E2E (VMaaS regression) | From the repository root: `uv run pytest tests/e2e/vmaas/regression/test_compute_instance_instance_type.py` | InstanceType resize through CLI/API, CatalogItem provisioning, and Kubernetes/KubeVirt resources | Requires a configured single-node VMaaS environment; no services are mocked. |
+| E2E (sanity) | `tests/e2e/caas/sanity/`; `uv run pytest tests/e2e/caas/sanity/ -m 'not metering'` | ClusterOrder creation through fulfillment API, operator reconciliation, and delete feedback without provisioning | AAP provisioning is not exercised; the delete-feedback test validates the Deleting phase without waiting for a full provision cycle. |
+| E2E (regression) | `tests/e2e/caas/regression/`; `uv run pytest tests/e2e/caas/regression/ -m 'not metering'` | Full cluster lifecycle with networking (VirtualNetwork, Subnet, SecurityGroup, ClusterNetworkAttachment), agent binding/reclaim/reuse, and version selection | Requires real AAP, assisted-service Agent pool, and HyperShift infrastructure. Network tests require a configured network backend. |
 
-Resize lifecycle tests expect `RestartRequired`. Multi-node live hot-plug
-coverage is tracked under
-[OSAC-5335](https://redhat.atlassian.net/browse/OSAC-5335).
+### Running CaaS E2E tests
+
+From the repository root:
+
+```bash
+# Collect tests (dry run) — verify environment and imports
+uv run pytest --collect-only tests/e2e/caas/ -m 'not metering'
+
+# Run sanity suite only (no provisioning required)
+uv run pytest tests/e2e/caas/sanity/ -m 'not metering' -v
+
+# Run full CaaS regression suite (requires deployed OSAC + Agent pool)
+uv run pytest tests/e2e/caas/regression/ -m 'not metering' -v
+
+# Run a specific test class
+uv run pytest tests/e2e/caas/regression/networking/test_caas_networking.py::TestCaasAgentReuse -v
+```
+
+### Coverage notes
+
+- **Cluster lifecycle (create → ready → delete):**
+  `test_cluster_lifecycle_with_network_attachment` exercises the full
+  ClusterOrder journey including networking resource attachment, provisioning
+  event assertions, and deletion with force-cleanup of HyperShift teardown
+  artifacts (AgentCluster finalizers, Agent labels, Machine pre-terminate
+  hooks).
+- **Agent reuse after deletion:** `test_agent_reuse_after_cluster_deletion`
+  verifies that Agents reach available state after ClusterOrder deletion and
+  can be reused for a subsequent cluster without pool exhaustion.
+- **Terminal delete failure detection:** The deletion helpers
+  (`wait_for_cluster_deletion`, `wait_for_cluster_deletion_with_deadline`)
+  detect when the most recent delete provisioning job has terminally failed
+  and raise immediately with job ID, state, message, and diagnostics instead
+  of burning the full poll budget.
+- **Negative networking tests:** `test_reject_nonexistent_subnet` and
+  `test_reject_sg_from_wrong_vn` verify that invalid networking
+  configurations are rejected by the fulfillment API.
+
+### Real-versus-simulated boundaries
+
+| Boundary | Real | Simulated |
+|---|---|---|
+| Fulfillment gRPC API | ✓ (deployed service) | — |
+| osac-operator reconciliation | ✓ (deployed controller) | — |
+| AAP provisioning jobs | ✓ (deployed AAP + job templates) | — |
+| HyperShift / HostedCluster | ✓ (deployed HyperShift operator) | — |
+| Assisted-service Agent pool | ✓ (real Agents in hardware-inventory) | — |
+| Network backend (CUDN) | ✓ when configured | Skipped when no network backend |
+| Agent reclaim (unbind flow) | ✓ (assisted-service agent controller) | Component integration uses Kind simulation |
+| Storage provider | — | Not exercised by CaaS networking tests |
+
+### Coverage gaps
+
+The CaaS E2E suite requires a fully deployed OSAC environment with AAP and
+an Agent pool. The component-level agent reclaim integration test
+(`osac-aap/tests/integration/targets/agent_reclaim/`) uses Kind with
+simulated controller behavior; it does not exercise the real assisted-service
+reclaim flow. Changes to the reclaim boundary must be validated in the
+deployed E2E environment.

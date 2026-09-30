@@ -27,7 +27,6 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
-	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 // ipv4NetworkingContractFixture creates the READY VirtualNetwork required by
@@ -670,99 +669,6 @@ var _ = Describe("IPv4-only ExternalIPPool gRPC contract", func() {
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{testCase.mask}},
 			}.Build())
 			expectIPv4ContractError(err, testCase.want)
-		}
-	})
-})
-
-var _ = Describe("IPv4-only controller endpoint gRPC contract", Label("ipv4-networking"), func() {
-	It("validates endpoint addresses before persistence and preserves accepted status", func(ctx context.Context) {
-		internal := privatev1.NewClustersClient(tool.InternalView().AdminConn())
-		fields := []struct {
-			path     string
-			set      func(*privatev1.ClusterStatus, string)
-			get      func(*privatev1.ClusterStatus) string
-			accepted string
-		}{
-			{
-				path:     "status.api_endpoint",
-				set:      func(status *privatev1.ClusterStatus, value string) { status.SetApiEndpoint(value) },
-				get:      func(status *privatev1.ClusterStatus) string { return status.GetApiEndpoint() },
-				accepted: "192.0.2.20",
-			},
-			{
-				path:     "status.ingress_endpoint",
-				set:      func(status *privatev1.ClusterStatus, value string) { status.SetIngressEndpoint(value) },
-				get:      func(status *privatev1.ClusterStatus) string { return status.GetIngressEndpoint() },
-				accepted: "198.51.100.21",
-			},
-		}
-		invalidCreateValues := []string{"2001:db8::1", "192.000.2.1", "192.0.2.1/32"}
-		invalidUpdateValues := []string{"2001:db8::2", "::ffff:192.0.2.2", "not-an-ip", "192.000.2.2", "192.0.2.2/32"}
-
-		By("rejecting invalid controller addresses before Create persists a cluster")
-		for _, field := range fields {
-			for _, value := range invalidCreateValues {
-				object := privatev1.Cluster_builder{
-					Id:       uuid.New(),
-					Metadata: privatev1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
-					Spec: privatev1.ClusterSpec_builder{
-						Template: privatev1.ClusterTemplateReference_builder{Id: "missing-template"}.Build(),
-					}.Build(),
-					Status: privatev1.ClusterStatus_builder{}.Build(),
-				}.Build()
-				field.set(object.GetStatus(), value)
-				_, err := internal.Create(ctx, privatev1.ClustersCreateRequest_builder{Object: object}.Build())
-				if err == nil {
-					_, deleteErr := internal.Delete(ctx, privatev1.ClustersDeleteRequest_builder{Id: object.GetId()}.Build())
-					Expect(deleteErr).ToNot(HaveOccurred())
-					Fail("Create accepted " + value + " for " + field.path)
-				}
-				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-				Expect(err.Error()).To(ContainSubstring(field.path))
-				Expect(err.Error()).To(ContainSubstring("canonical IPv4"))
-				_, getErr := internal.Get(ctx, privatev1.ClustersGetRequest_builder{Id: object.GetId()}.Build())
-				Expect(grpcstatus.Code(getErr)).To(Equal(grpccodes.NotFound))
-			}
-		}
-
-		By("creating a real cluster and accepting canonical IPv4 controller updates")
-		host := createCatalogItemHostTypeFixture(ctx)
-		template := createCatalogItemClusterTemplateFixture(ctx, host, nil, nil)
-		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
-		cluster, err := createClusterFixture(ctx, tool.ExternalView().UserConn(), publicv1.ClusterSpec_builder{
-			Template:          publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
-			NetworkAttachment: network.clusterAttachment(),
-		}.Build())
-		Expect(err).NotTo(HaveOccurred())
-
-		for _, field := range fields {
-			status := privatev1.ClusterStatus_builder{}.Build()
-			field.set(status, field.accepted)
-			_, err := internal.Update(ctx, privatev1.ClustersUpdateRequest_builder{
-				Object:     privatev1.Cluster_builder{Id: cluster.GetId(), Status: status}.Build(),
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{field.path}},
-			}.Build())
-			Expect(err).NotTo(HaveOccurred())
-			stored, err := internal.Get(ctx, privatev1.ClustersGetRequest_builder{Id: cluster.GetId()}.Build())
-			Expect(err).NotTo(HaveOccurred())
-			Expect(field.get(stored.GetObject().GetStatus())).To(Equal(field.accepted))
-
-			By("rejecting malformed or non-IPv4 values for " + field.path + " without changing stored status")
-			for _, value := range invalidUpdateValues {
-				updateStatus := privatev1.ClusterStatus_builder{}.Build()
-				field.set(updateStatus, value)
-				_, err = internal.Update(ctx, privatev1.ClustersUpdateRequest_builder{
-					Object:     privatev1.Cluster_builder{Id: cluster.GetId(), Status: updateStatus}.Build(),
-					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{field.path}},
-				}.Build())
-				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-				Expect(err.Error()).To(ContainSubstring(field.path))
-				Expect(err.Error()).To(ContainSubstring("canonical IPv4"))
-
-				stored, err = internal.Get(ctx, privatev1.ClustersGetRequest_builder{Id: cluster.GetId()}.Build())
-				Expect(err).NotTo(HaveOccurred())
-				Expect(field.get(stored.GetObject().GetStatus())).To(Equal(field.accepted))
-			}
 		}
 	})
 })

@@ -387,6 +387,11 @@ func (t *task) buildSpec(ctx context.Context) (osacv1alpha1.ClusterOrderSpec, er
 		return osacv1alpha1.ClusterOrderSpec{}, err
 	}
 
+	// Handle network_attachment
+	if err = t.buildSpecNetworkAttachment(ctx, &spec); err != nil {
+		return osacv1alpha1.ClusterOrderSpec{}, err
+	}
+
 	return spec, nil
 }
 
@@ -642,6 +647,127 @@ func (t *task) getKubeObject(ctx context.Context) (result *osacv1alpha1.ClusterO
 		result = &items[0]
 	}
 	return
+}
+
+// buildSpecNetworkAttachment resolves the cluster's network_attachment (singular) from
+// fulfillment UUID references to Kubernetes CR names and populates the ClusterOrder spec.
+// The Fulfillment server already injects a default attachment when none is supplied by
+// the user, so this mapping covers both explicit and default networking.
+func (t *task) buildSpecNetworkAttachment(ctx context.Context, spec *osacv1alpha1.ClusterOrderSpec) error {
+	att := t.cluster.GetSpec().GetNetworkAttachment()
+	if att == nil {
+		return nil
+	}
+
+	subnetRef := att.GetSubnet()
+	if subnetRef == nil || subnetRef.GetId() == "" {
+		return fmt.Errorf("cluster network_attachment has no subnet reference")
+	}
+
+	subnetCR, err := t.getSubnetCR(ctx, subnetRef.GetId())
+	if err != nil {
+		return fmt.Errorf(
+			"failed to look up Subnet CR for network_attachment subnet %s: %w",
+			subnetRef.GetId(), err)
+	}
+	if subnetCR == nil {
+		return fmt.Errorf( //nolint:staticcheck // ST1005: Subnet is an API resource name
+			"Subnet CR not found for network_attachment subnet %s",
+			subnetRef.GetId())
+	}
+	t.r.logger.DebugContext(
+		ctx,
+		"Resolved subnetRef from Subnet CR",
+		slog.String("subnet_id", subnetRef.GetId()),
+		slog.String("subnet_ref", subnetCR.GetName()),
+	)
+
+	sgRefs := make([]string, 0, len(att.GetSecurityGroups()))
+	for _, sgID := range att.GetSecurityGroups() {
+		if sgID == nil {
+			continue
+		}
+		sgCR, sgErr := t.getSecurityGroupCR(ctx, sgID.GetId())
+		if sgErr != nil {
+			return fmt.Errorf(
+				"failed to look up SecurityGroup CR for network_attachment security group %s: %w",
+				sgID.GetId(), sgErr)
+		}
+		if sgCR == nil {
+			return fmt.Errorf(
+				"SecurityGroup CR not found for network_attachment security group %s",
+				sgID.GetId())
+		}
+		sgRefs = append(sgRefs, sgCR.GetName())
+		t.r.logger.DebugContext(
+			ctx,
+			"Resolved securityGroupRef from SecurityGroup CR",
+			slog.String("security_group_id", sgID.GetId()),
+			slog.String("security_group_ref", sgCR.GetName()),
+		)
+	}
+
+	spec.NetworkAttachment = &osacv1alpha1.ClusterNetworkAttachment{
+		SubnetRef:         subnetCR.GetName(),
+		SecurityGroupRefs: sgRefs,
+	}
+
+	return nil
+}
+
+// getSubnetCR looks up a Subnet CR in the hub cluster by its fulfillment UUID label.
+// Returns the Subnet CR if exactly one is found, nil if none found, or an error if multiple found.
+func (t *task) getSubnetCR(ctx context.Context, subnetID string) (*osacv1alpha1.Subnet, error) {
+	list := &osacv1alpha1.SubnetList{}
+	err := t.hubClient.List(
+		ctx, list,
+		clnt.InNamespace(t.hubNamespace),
+		clnt.MatchingLabels{
+			labels.SubnetUuid: subnetID,
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	items := list.Items
+	count := len(items)
+	if count > 1 {
+		return nil, fmt.Errorf(
+			"expected at most one subnet with identifier '%s' but found %d",
+			subnetID, count,
+		)
+	}
+	if count == 0 {
+		return nil, nil
+	}
+	return &items[0], nil
+}
+
+// getSecurityGroupCR looks up a SecurityGroup CR in the hub cluster by its fulfillment UUID label.
+func (t *task) getSecurityGroupCR(ctx context.Context, securityGroupID string) (*osacv1alpha1.SecurityGroup, error) {
+	list := &osacv1alpha1.SecurityGroupList{}
+	err := t.hubClient.List(
+		ctx, list,
+		clnt.InNamespace(t.hubNamespace),
+		clnt.MatchingLabels{
+			labels.SecurityGroupUuid: securityGroupID,
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	items := list.Items
+	count := len(items)
+	if count > 1 {
+		return nil, fmt.Errorf(
+			"expected at most one security group with identifier '%s' but found %d",
+			securityGroupID, count,
+		)
+	}
+	if count == 0 {
+		return nil, nil
+	}
+	return &items[0], nil
 }
 
 func (t *task) setFailed(err error) {

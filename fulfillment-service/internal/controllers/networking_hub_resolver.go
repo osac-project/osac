@@ -106,6 +106,7 @@ type networkingHubResolver struct {
 	mu                   sync.Mutex
 	resolveGroup         singleflight.Group
 	cachedHub            *NetworkingHub
+	cachedRef            string // Hub ID the current cache entry (success or failure) was keyed to
 	cachedError          error
 	errorExpiresAt       time.Time
 	readOnly             bool
@@ -220,7 +221,7 @@ func (r *networkingHubResolver) Resolve(ctx context.Context) (NetworkingHubResol
 
 		result, err := r.resolve(ctx)
 		if r.readOnly {
-			r.cacheResult(result.NetworkingHub, err)
+			r.cacheResult(result.HubID, result.NetworkingHub, err)
 		}
 		return result, err
 	})
@@ -234,6 +235,31 @@ func (r *networkingHubResolver) Resolve(ctx context.Context) (NetworkingHubResol
 }
 
 func (r *networkingHubResolver) cachedResolution(ctx context.Context) (NetworkingHub, bool) {
+	// Re-read the persisted canonical reference to detect hub reassignment.
+	// The NetworkClass reconciler may update status.hub between reader
+	// reconciliations; stale cached results must never be served afterward.
+	// This check is lightweight (one gRPC list) compared to the Hub client
+	// connection that the cache avoids re-creating.
+	if r.readOnly {
+		networkClass, err := r.findNetworkClass(ctx)
+		if err != nil {
+			r.invalidateCaches()
+			return NetworkingHub{}, false
+		}
+		currentRef := networkClass.GetStatus().GetHub()
+
+		r.mu.Lock()
+		if r.cachedRef != currentRef {
+			r.cachedHub = nil
+			r.cachedRef = ""
+			r.cachedError = nil
+			r.errorExpiresAt = time.Time{}
+			r.mu.Unlock()
+			return NetworkingHub{}, false
+		}
+		r.mu.Unlock()
+	}
+
 	r.mu.Lock()
 	var cached NetworkingHub
 	if r.cachedHub != nil {
@@ -257,6 +283,15 @@ func (r *networkingHubResolver) cachedResolution(ctx context.Context) (Networkin
 	return NetworkingHub{}, false
 }
 
+func (r *networkingHubResolver) invalidateCaches() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.cachedHub = nil
+	r.cachedRef = ""
+	r.cachedError = nil
+	r.errorExpiresAt = time.Time{}
+}
+
 func (r *networkingHubResolver) cachedFailure() (error, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -271,9 +306,10 @@ func (r *networkingHubResolver) cachedFailure() (error, bool) {
 	return nil, false
 }
 
-func (r *networkingHubResolver) cacheResult(result NetworkingHub, err error) {
+func (r *networkingHubResolver) cacheResult(ref string, result NetworkingHub, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.cachedRef = ref
 	if err == nil {
 		r.cachedHub = &result
 		r.cachedError = nil

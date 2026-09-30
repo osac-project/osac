@@ -629,10 +629,12 @@ func setupVolumeControllers(mgr mcmanager.Manager, grpcConn *grpc.ClientConn) er
 	}
 
 	// Construct the provider registry from OSAC_VENDOR_CONTROLLERS. A missing or
-	// invalid configuration is deliberately NOT fatal: an unconfigured or
-	// misconfigured vendor backend can never take down the operator or the other
-	// controllers. When one provider fails to initialize, keep any providers
-	// that initialized successfully available.
+	// invalid configuration is deliberately NOT fatal: the operator runs with
+	// volume provisioning disabled (an empty registry) rather than crashing, so
+	// an unconfigured or misconfigured vendor backend can never take down the
+	// operator or the other controllers. Most setups (including LVMS/dev) have
+	// no vendor backend configured; their Volumes stay in Progressing until one
+	// is.
 	var provisioners controller.VendorProvisionerRegistry
 	endpoints, err := parseVendorControllers(os.Getenv(envVendorControllers))
 	switch {
@@ -649,10 +651,10 @@ func setupVolumeControllers(mgr mcmanager.Manager, grpcConn *grpc.ClientConn) er
 		}
 		var perr error
 		provisioners, perr = newVendorProvisionerRegistry(
-			localMgr.GetAPIReader(), localMgr.GetClient(), configNamespace, endpoints,
+			localMgr.GetAPIReader(), configNamespace, endpoints,
 		)
 		if perr != nil {
-			setupLog.Error(perr, "vendor provisioner registry init failed; some configured providers may be unavailable")
+			setupLog.Error(perr, "vendor provisioner registry init failed; volume provisioning disabled")
 		}
 	}
 
@@ -674,7 +676,6 @@ func setupVolumeControllers(mgr mcmanager.Manager, grpcConn *grpc.ClientConn) er
 // provisioner.
 func newVendorProvisionerRegistry(
 	reader client.Reader,
-	writer client.Client,
 	configNamespace string,
 	endpoints map[string]string,
 ) (controller.VendorProvisionerRegistry, error) {
@@ -686,12 +687,6 @@ func newVendorProvisionerRegistry(
 	// Progressing).
 	for key := range endpoints {
 		registry[key] = nil
-	}
-	if _, ok := endpoints["lvms"]; ok {
-		// LVMS is in-cluster and uses Kubernetes resources directly; the
-		// configured endpoint value is only an enablement marker. Reads use the
-		// uncached API reader to avoid a second cache racing the metadata-only watch.
-		registry["lvms"] = controller.NewLvmsVendorProvisioner(writer, reader)
 	}
 
 	vastEndpoint, ok := endpoints["vast"]
@@ -705,18 +700,16 @@ func newVendorProvisionerRegistry(
 		map[string]string{"vast": vastEndpoint},
 	)
 	if err != nil {
-		return registry, err
+		return nil, err
 	}
 	registry["vast"] = provisioner
-
 	return registry, nil
 }
 
-// parseVendorControllers parses a comma-separated list of provider=endpoint
-// pairs (e.g. "vast=vast-csi-controller.osac-csi-backends.svc:50051") into a
-// map from provider name to vendor CSI controller gRPC endpoint. The in-cluster
-// LVMS provider uses "lvms=none" as an enablement marker. An empty input yields
-// an empty map, which leaves volume provisioning disabled.
+// parseVendorControllers parses a comma-separated list of provider=endpoint pairs
+// (e.g. "vast=vast-csi-controller.osac-csi-backends.svc:50051") into a map from
+// provider name to vendor CSI controller gRPC endpoint. An empty input
+// yields an empty map, which leaves volume provisioning disabled.
 func parseVendorControllers(s string) (map[string]string, error) {
 	result := make(map[string]string)
 	if s == "" {

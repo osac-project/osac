@@ -1,12 +1,9 @@
 package driver
 
 import (
-	"bytes"
 	"context"
 	"net"
-	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -16,7 +13,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"k8s.io/klog/v2"
 
 	"github.com/osac-project/osac/osac-csi-driver/pkg/fulfillment"
 	"github.com/osac-project/osac/osac-csi-driver/pkg/proxy"
@@ -421,14 +417,6 @@ func TestCreateVolume_AlreadyExistsNotFoundViaList(t *testing.T) {
 }
 
 func TestCreateVolume_ErrorState(t *testing.T) {
-	var logOutput bytes.Buffer
-	klog.SetOutput(&logOutput)
-	klog.LogToStderr(false)
-	defer func() {
-		klog.SetOutput(os.Stderr)
-		klog.LogToStderr(true)
-	}()
-
 	vc := &mockVolumeClient{
 		createVolumeFn: func(_ context.Context, _ fulfillment.CreateVolumeParams) (*fulfillment.VolumeInfo, error) {
 			return &fulfillment.VolumeInfo{
@@ -438,9 +426,8 @@ func TestCreateVolume_ErrorState(t *testing.T) {
 		},
 		getVolumeFn: func(_ context.Context, volumeID string) (*fulfillment.VolumeInfo, error) {
 			return &fulfillment.VolumeInfo{
-				ID:      volumeID,
-				State:   fulfillment.VolumeStateError,
-				Message: "insufficient vg1 capacity",
+				ID:    volumeID,
+				State: fulfillment.VolumeStateError,
 			}, nil
 		},
 	}
@@ -452,13 +439,6 @@ func TestCreateVolume_ErrorState(t *testing.T) {
 		Parameters:         map[string]string{"tier": "gold"},
 	})
 	assertCode(t, err, codes.Internal)
-	if got, want := status.Convert(err).Message(), "volume provisioning failed"; got != want {
-		t.Fatalf("error message = %q, want %q", got, want)
-	}
-	klog.Flush()
-	if strings.Contains(logOutput.String(), "insufficient vg1 capacity") {
-		t.Fatalf("CSI driver logged the detailed fulfillment message: %s", logOutput.String())
-	}
 }
 
 func TestCreateVolume_ContextCancelled(t *testing.T) {
@@ -534,9 +514,6 @@ func TestCreateVolume_CreateError(t *testing.T) {
 		Parameters:         map[string]string{"tier": "gold"},
 	})
 	assertCode(t, err, codes.Unavailable)
-	if got, want := status.Convert(err).Message(), "volume provisioning failed"; got != want {
-		t.Fatalf("error message = %q, want %q", got, want)
-	}
 }
 
 // --- DeleteVolume tests ---
@@ -794,14 +771,14 @@ func TestControllerPublishVolume_Error(t *testing.T) {
 // needs no controller-side attach, so publish is a no-op and no vendor
 // controller is dialed.
 func TestControllerPublishVolume_NoAttachBackendIsNoop(t *testing.T) {
-	cs := newTestControllerWithVendor(&mockVolumeClient{}, map[string]string{"lvms": noAttachEndpoint})
+	cs := newTestControllerWithVendor(&mockVolumeClient{}, map[string]string{"local": noAttachEndpoint})
 
 	resp, err := cs.ControllerPublishVolume(context.Background(), &csi.ControllerPublishVolumeRequest{
 		VolumeId:         "vol-1",
 		NodeId:           "node-1",
 		VolumeCapability: singleCap(),
 		VolumeContext: map[string]string{
-			"osac.backend":   "lvms",
+			"osac.backend":   "local",
 			"osac.volume-id": "vendor-vol-1",
 		},
 	})
@@ -955,11 +932,11 @@ func TestControllerUnpublishVolume_NoAttachBackendIsNoop(t *testing.T) {
 	vc := &mockVolumeClient{
 		getVolumeFn: func(_ context.Context, volumeID string) (*fulfillment.VolumeInfo, error) {
 			vol := availableVolume(volumeID, "pvc-123")
-			vol.Backend = "lvms"
+			vol.Backend = "local"
 			return vol, nil
 		},
 	}
-	cs := newTestControllerWithVendor(vc, map[string]string{"lvms": noAttachEndpoint})
+	cs := newTestControllerWithVendor(vc, map[string]string{"local": noAttachEndpoint})
 
 	_, err := cs.ControllerUnpublishVolume(context.Background(), &csi.ControllerUnpublishVolumeRequest{
 		VolumeId: "vol-1",

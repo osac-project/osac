@@ -185,23 +185,6 @@ class K8sClient:
             "jsonpath={.items[0].metadata.creationTimestamp}",
         )
 
-    def get_vmi_json(self, *, vmi_namespace: str, compute_instance_name: str, checked: bool = True) -> dict[str, Any]:
-        output, rc = self._get(
-            "get",
-            "virtualmachineinstance",
-            "-n",
-            vmi_namespace,
-            "-l",
-            f"osac.openshift.io/computeinstance={compute_instance_name}",
-            "-o",
-            "json",
-            checked=checked,
-        )
-        if rc != 0:
-            return {}
-        items = json.loads(output).get("items", [])
-        return items[0] if items else {}
-
     def get_vm_printable_status(self, *, name: str, vm_namespace: str, checked: bool = True) -> str:
         output, rc = self._get(
             "get",

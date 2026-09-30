@@ -1187,8 +1187,13 @@ func (r *StorageReconciler) getClusterKubeconfig(ctx context.Context, clusterOrd
 	// HyperShift places the HostedControlPlane in {HostedCluster-namespace}-{HostedCluster-name}.
 	hcpNamespace := ref.Namespace + "-" + ref.HostedClusterName
 
+	// Use APIReader (direct client) instead of the cached client for the HCP
+	// lookup.  The RBAC grants only "get" on hostedcontrolplanes — the cached
+	// client's informer issues a "list" which is forbidden, causing the read to
+	// stall indefinitely.  The APIReader performs a direct GET against the API
+	// server, matching the get-only permission.
 	hcp := &hypershiftv1beta1.HostedControlPlane{}
-	if err := r.Get(ctx, types.NamespacedName{
+	if err := r.APIReader.Get(ctx, types.NamespacedName{
 		Namespace: hcpNamespace,
 		Name:      ref.HostedClusterName,
 	}, hcp); err != nil {

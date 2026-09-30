@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+import logging
 import os
 import re
 import subprocess
@@ -13,6 +14,8 @@ import pytest
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.runner import poll_until, run_unchecked
+
+logger = logging.getLogger(__name__)
 
 _POOL_READY_STATE = "EXTERNAL_IP_POOL_STATE_READY"
 _BMI_RUNNING_RETRIES = 180
@@ -123,19 +126,6 @@ def wait_for_restart(*, k8s: K8sClient, name: str, initial: str, restart_ts: str
     )
 
 
-def wait_for_new_vmi(*, k8s: K8sClient, vmi_namespace: str, compute_instance_name: str, initial_timestamp: str) -> str:
-    return poll_until(
-        fn=lambda: k8s.get_vmi_creation_timestamp(
-            vmi_namespace=vmi_namespace, compute_instance_name=compute_instance_name
-        ),
-        until=lambda timestamp: timestamp != "" and timestamp != initial_timestamp,
-        retries=60,
-        delay=5,
-        description=f"{compute_instance_name} VMI recreation",
-        retry_on_error=True,
-    )
-
-
 def wait_for_deletion(*, k8s: K8sClient, name: str) -> None:
     poll_until(
         fn=lambda: not k8s.is_present(resource="computeinstance", name=name),
@@ -154,16 +144,6 @@ def wait_for_grpc_removal(*, grpc: GRPCClient, uuid: str) -> None:
         delay=2,
         description=f"{uuid} removed from gRPC list",
     )
-
-
-def delete_instance_type_if_present(*, grpc: GRPCClient, name: str) -> None:
-    """Delete a test InstanceType, tolerating cleanup after an earlier delete."""
-    try:
-        grpc.delete_instance_type(name=name)
-    except subprocess.CalledProcessError as exc:
-        output = ((exc.stdout or "") + (exc.stderr or "")).lower()
-        if "not found" not in output:
-            raise
 
 
 def wait_for_virtual_network_cr(*, k8s: K8sClient, uuid: str) -> str:
@@ -439,17 +419,116 @@ def assert_cluster_order_deleting_event(*, k8s: K8sClient, name: str) -> None:
 
 
 def wait_for_cluster_ready(*, k8s: K8sClient, name: str) -> None:
-    # Must stay safely above osac-aap's own wait_for_clusteroperators_retries
-    # budget (60 min) plus earlier steps in the same AAP job (create hosted
-    # cluster, retrieve kubeconfig, etc.), or this times out first with a
-    # less useful error while the ClusterOrder is still legitimately Progressing.
-    poll_until(
-        fn=lambda: k8s.get_cluster_order_phase(name=name, checked=False),
-        until=lambda v: v == "Ready",
-        retries=480,
-        delay=15,
-        description=f"{name} ClusterOrder Ready",
-    )
+    """Wait for ClusterOrder to reach Ready, failing fast on Failed phase.
+
+    On **Failed**: raises immediately with phase, relevant conditions,
+    recent provisioning-job IDs/states/timestamps, and messages.
+
+    On **timeout while Progressing**: includes the same status summary plus
+    elapsed time and last transition timestamp.
+
+    Must stay safely above osac-aap's own wait_for_clusteroperators_retries
+    budget (60 min) plus earlier steps in the same AAP job (create hosted
+    cluster, retrieve kubeconfig, etc.), or this times out first with a
+    less useful error while the ClusterOrder is still legitimately Progressing.
+
+    No credentials or sensitive AAP output are included in the raised message;
+    only the phase, condition reasons/messages, and job metadata are surfaced.
+    """
+    retries = 480
+    delay = 15
+    start = time.monotonic()
+
+    try:
+        poll_until(
+            fn=lambda: k8s.get_cluster_order_phase(name=name, checked=False),
+            until=lambda phase: phase in ("Ready", "Failed"),
+            retries=retries,
+            delay=delay,
+            description=f"{name} ClusterOrder Ready (fail-fast)",
+        )
+    except TimeoutError:
+        # Timeout while Progressing — build a detailed summary
+        elapsed = time.monotonic() - start
+        summary = _cluster_order_status_summary(k8s=k8s, name=name)
+        raise TimeoutError(
+            f"ClusterOrder {name} timed out after {elapsed:.0f}s while still Progressing.\n{summary}"
+        ) from None
+
+    phase = k8s.get_cluster_order_phase(name=name, checked=False)
+    if phase == "Failed":
+        summary = _cluster_order_status_summary(k8s=k8s, name=name)
+        raise AssertionError(f"ClusterOrder {name} entered Failed phase.\n{summary}")
+
+
+def _cluster_order_status_summary(*, k8s: K8sClient, name: str) -> str:
+    """Build a bounded, credential-free status summary for diagnostics.
+
+    Includes phase, relevant conditions (Progressing, Accepted), recent
+    provisioning-job IDs/states/timestamps/messages, and warning events.
+    """
+    parts: list[str] = []
+
+    # Phase
+    phase = k8s.get_cluster_order_phase(name=name, checked=False)
+    parts.append(f"  phase: {phase}")
+
+    # Full status JSON for structured extraction
+    try:
+        status = k8s.get_cluster_order_status(name=name)
+    except Exception:
+        status = {}
+
+    # Conditions (show Progressing and Accepted)
+    conditions = status.get("conditions", [])
+    for cond in conditions:
+        ctype = cond.get("type", "")
+        if ctype in ("Progressing", "Accepted", "ControlPlaneAvailable", "ClusterAvailable"):
+            parts.append(
+                f"  condition {ctype}: status={cond.get('status')}, "
+                f"reason={cond.get('reason', '')}, "
+                f"message={cond.get('message', '')!r}, "
+                f"lastTransition={cond.get('lastTransitionTime', '')}"
+            )
+
+    # Provisioning jobs (most recent 3)
+    jobs = status.get("provisioningJobs", [])
+    if jobs:
+        # Sort by timestamp descending
+        sorted_jobs = sorted(jobs, key=lambda j: j.get("timestamp", ""), reverse=True)[:3]
+        parts.append("  recent provisioning jobs:")
+        for j in sorted_jobs:
+            parts.append(
+                f"    jobID={j.get('jobID', '?')}, "
+                f"type={j.get('type', '?')}, "
+                f"state={j.get('state', '?')}, "
+                f"message={j.get('message', '')!r}, "
+                f"timestamp={j.get('timestamp', '')}"
+            )
+
+    # Warning events (last 5)
+    try:
+        events = k8s.get_cluster_order_events(name=name)
+        warnings = [e for e in events if e.get("type") == "Warning"][-5:]
+        if warnings:
+            parts.append("  recent warning events:")
+            for ev in warnings:
+                parts.append(f"    reason={ev.get('reason', '?')}, message={ev.get('message', '')!r}")
+    except Exception:
+        pass
+
+    # Agent inventory on Failed phase — diagnose "0 agents" / pool exhaustion
+    if phase == "Failed":
+        _report_agent_inventory(k8s=k8s, context=f"create-failure for ClusterOrder {name}")
+
+        # Surface agent-allocation failures from conditions for the better message
+        for cond in conditions:
+            msg = cond.get("message", "")
+            if "agent" in msg.lower() and ("0" in msg or "added" in msg.lower()):
+                parts.append(f"  agent-allocation-failure: {msg!r}")
+                break
+
+    return "\n".join(parts)
 
 
 def wait_for_cluster_deletion(*, k8s: K8sClient, name: str) -> None:
@@ -473,11 +552,245 @@ def wait_for_cluster_deletion(*, k8s: K8sClient, name: str) -> None:
         _force_cleanup_agentcluster_finalizers(k8s=k8s, name=name)
         _force_cleanup_agent_labels(k8s=k8s, name=name)
         _force_cleanup_machine_preterminate_hooks(k8s=k8s, name=name)
-        return k8s.get_cluster_order_phase(name=name, checked=False) is None
+        phase = k8s.get_cluster_order_phase(name=name, checked=False)
+        if phase is None:
+            return True
+        if phase == "Failed":
+            _check_terminal_delete_failure(k8s=k8s, name=name)
+        return False
 
     poll_until(
         fn=_check_deleted, until=lambda v: v is True, retries=120, delay=10, description=f"{name} ClusterOrder deletion"
     )
+
+
+def wait_for_cluster_deletion_with_deadline(*, k8s: K8sClient, name: str, deadline: float) -> None:
+    """Wait for ClusterOrder deletion using the remaining time from a shared deadline.
+
+    Unlike ``wait_for_cluster_deletion``, this avoids repeating the full
+    20-minute timeout when called from a ``finally`` cleanup block.  The
+    caller computes a single ``deadline`` (``time.monotonic() + budget``)
+    at the start and passes it through; the ``finally`` block reuses the
+    same deadline so the total wall-clock stays bounded.
+
+    On timeout, reports remaining finalizers and relevant Agent state to
+    aid debugging.
+    """
+    remaining = max(deadline - time.monotonic(), 0)
+    if remaining < 10:
+        logger.warning("%s cleanup skipped — only %.0fs left on shared deadline", name, remaining)
+        _report_deletion_diagnostics(k8s=k8s, name=name)
+        return
+
+    retries = max(int(remaining / 10), 1)
+
+    def _check_deleted() -> bool:
+        _force_cleanup_agentcluster_finalizers(k8s=k8s, name=name)
+        _force_cleanup_agent_labels(k8s=k8s, name=name)
+        _force_cleanup_machine_preterminate_hooks(k8s=k8s, name=name)
+        phase = k8s.get_cluster_order_phase(name=name, checked=False)
+        if phase is None:
+            return True
+        if phase == "Failed":
+            _check_terminal_delete_failure(k8s=k8s, name=name)
+        return False
+
+    try:
+        poll_until(
+            fn=_check_deleted,
+            until=lambda v: v is True,
+            retries=retries,
+            delay=10,
+            description=f"{name} ClusterOrder deletion (deadline-aware)",
+        )
+    except TimeoutError:
+        _report_deletion_diagnostics(k8s=k8s, name=name)
+        raise
+
+
+def _check_terminal_delete_failure(*, k8s: K8sClient, name: str) -> None:
+    """Fail immediately when a delete provisioning job has terminally failed.
+
+    During deletion the operator retries the delete AAP job with backoff.
+    A transient failure (one ``Failed`` job followed by a newer ``Pending``
+    or ``Running`` attempt) is **not** terminal — the operator is still
+    retrying.  A terminal failure is when the **most recent** delete job
+    is ``Failed`` and the ClusterOrder itself is in ``Failed`` phase,
+    meaning the operator has given up.
+
+    Raises ``AssertionError`` with the job ID, state, message, and
+    standard deletion diagnostics so CI gets an actionable failure
+    instead of burning through the full 20-minute poll budget.
+    """
+    try:
+        status = k8s.get_cluster_order_status(name=name)
+    except Exception:
+        return  # Can't read status — not terminal, let the poller continue
+
+    jobs = status.get("provisioningJobs", [])
+    if not jobs:
+        return
+
+    # Find the most recent delete-type job
+    delete_jobs = [j for j in jobs if j.get("type") == "delete"]
+    if not delete_jobs:
+        return
+
+    latest = max(delete_jobs, key=lambda j: j.get("timestamp", ""))
+    latest_state = latest.get("state", "")
+
+    # Only terminal if the latest delete job is Failed — a newer
+    # Pending/Running attempt means the operator is still retrying.
+    if latest_state != "Failed":
+        return
+
+    # Build diagnostic summary
+    _report_deletion_diagnostics(k8s=k8s, name=name)
+    summary = _cluster_order_status_summary(k8s=k8s, name=name)
+    raise AssertionError(
+        f"ClusterOrder {name} delete failed terminally.\n"
+        f"  latest delete job: ID={latest.get('jobID', '?')}, "
+        f"state={latest_state}, message={latest.get('message', '')!r}, "
+        f"timestamp={latest.get('timestamp', '')}\n"
+        f"{summary}"
+    )
+
+
+def _report_deletion_diagnostics(*, k8s: K8sClient, name: str) -> None:
+    """Log remaining finalizers and Agent state for a stalled deletion."""
+    log = logging.getLogger(__name__)
+
+    # Remaining finalizers
+    try:
+        finalizers = k8s.get_cluster_order_finalizers(name=name, checked=False)
+        if finalizers:
+            log.warning("ClusterOrder %s deletion stalled — remaining finalizers: %s", name, finalizers)
+    except Exception:
+        pass
+
+    # Agent state in hardware-inventory — labeled agents for this ClusterOrder
+    agent_ns = "hardware-inventory"
+    clusterorder_label = "osac.openshift.io/clusterorder"
+    base_args = [*k8s._base(), "--as", "system:admin"]
+    try:
+        output, rc = run_unchecked(
+            *base_args,
+            "get",
+            "agents.agent-install.openshift.io",
+            "-n",
+            agent_ns,
+            "-l",
+            f"{clusterorder_label}={name}",
+            "-o",
+            "jsonpath={range .items[*]}{.metadata.name}={.status.debugInfo.state} {end}",
+        )
+        if rc == 0 and output.strip():
+            log.warning("Agents still labeled for ClusterOrder %s: %s", name, output.strip())
+    except Exception:
+        pass
+
+    # Full Agent inventory in hardware-inventory — diagnostic for stuck reclaim
+    _report_agent_inventory(k8s=k8s, context=f"deletion-diagnostics for ClusterOrder {name}")
+
+    # HostedCluster and ClusterDeployment evidence for reclaim stall diagnosis.
+    # Preserve HostedCluster (do NOT delete it) and capture status/conditions.
+    hc_ns = f"{k8s.namespace}-{name}"
+    try:
+        hc_output, rc = run_unchecked(
+            *base_args, "get", "hostedcluster", name, "-n", hc_ns, "-o", "jsonpath={.status.conditions}"
+        )
+        if rc == 0 and hc_output.strip():
+            log.warning("HostedCluster %s/%s conditions: %s", hc_ns, name, hc_output[:2000])
+    except Exception:
+        pass
+
+    # ClusterDeployment status
+    try:
+        cd_output, rc = run_unchecked(
+            *base_args,
+            "get",
+            "clusterdeployments.hive.openshift.io",
+            "-n",
+            hc_ns,
+            "-o",
+            "custom-columns=NAME:.metadata.name,INSTALLED:.spec.installed",
+        )
+        if rc == 0 and cd_output.strip():
+            log.warning("ClusterDeployments in %s: %s", hc_ns, cd_output.strip()[:500])
+    except Exception:
+        pass
+
+
+def _report_agent_inventory(*, k8s: K8sClient, context: str) -> None:
+    """Log all Agents in hardware-inventory with state, binding, and labels.
+
+    Provides a full snapshot of the Agent pool for diagnosing:
+    - Pool exhaustion (all agents bound)
+    - Stuck reclaim (agents in unbinding-pending-user-action)
+    - Mismatched resource class or exclusion
+    No credentials or secrets are included — only metadata and status fields.
+    """
+    log = logging.getLogger(__name__)
+    agent_ns = "hardware-inventory"
+    base_args = [*k8s._base(), "--as", "system:admin"]
+
+    try:
+        import json as _json
+
+        output, rc = run_unchecked(*base_args, "get", "agents.agent-install.openshift.io", "-n", agent_ns, "-o", "json")
+        if rc != 0:
+            log.warning("Agent inventory query failed (rc=%d) [%s]: %s", rc, context, output[:500])
+            return
+
+        data = _json.loads(output)
+        items = data.get("items", [])
+        if not items:
+            log.warning("Agent inventory is EMPTY in namespace %s [%s]", agent_ns, context)
+            return
+
+        log.warning("=== Agent inventory (%d agents) [%s] ===", len(items), context)
+        for agent in items:
+            meta = agent.get("metadata", {})
+            spec = agent.get("spec", {})
+            status = agent.get("status", {})
+            debug_info = status.get("debugInfo", {})
+            labels = meta.get("labels", {})
+            conditions = status.get("conditions", [])
+
+            # Build compact condition summary
+            cond_summary = ", ".join(f"{c.get('type', '?')}={c.get('status', '?')}" for c in conditions[:5])
+
+            cluster_ref = spec.get("clusterDeploymentName", {})
+            if isinstance(cluster_ref, dict):
+                binding = f"{cluster_ref.get('namespace', '')}/{cluster_ref.get('name', '')}"
+            else:
+                binding = str(cluster_ref) if cluster_ref else "unbound"
+
+            state = debug_info.get("state", "unknown")
+            resource_class = labels.get("osac.openshift.io/resource-class", "")
+            clusterorder = labels.get("osac.openshift.io/clusterorder", "")
+
+            # Determine exclusion reason for pool exhaustion diagnosis
+            exclusion = ""
+            if state == "unbinding-pending-user-action":
+                exclusion = "stuck-in-unbinding"
+            elif cluster_ref:
+                exclusion = "already-bound"
+            elif state not in ("known-unbound", "known", ""):
+                exclusion = f"state-not-available({state})"
+
+            log.warning(
+                "  Agent %s: state=%s, binding=%s, resource_class=%s, clusterorder=%s, exclusion=%s, conditions=[%s]",
+                meta.get("name", "?"),
+                state,
+                binding,
+                resource_class,
+                clusterorder or "none",
+                exclusion or "none",
+                cond_summary,
+            )
+    except Exception as exc:
+        log.warning("Failed to query agent inventory [%s]: %s", context, exc)
 
 
 def _force_cleanup_agentcluster_finalizers(*, k8s: K8sClient, name: str) -> None:
@@ -564,6 +877,163 @@ def _force_cleanup_machine_preterminate_hooks(*, k8s: K8sClient, name: str) -> N
         return
     for machine_name in output.strip().split():
         run_unchecked(*base_args, "annotate", f"machines.cluster.x-k8s.io/{machine_name}", "-n", cp_ns, f"{hook}-")
+
+
+def wait_for_agent_available(*, k8s: K8sClient, co_name: str, timeout: int = 600, poll: int = 10) -> None:
+    """Wait for agents previously bound to a ClusterOrder to reach available state.
+
+    An agent is considered available when:
+    - Its ``status.debugInfo.state`` is in
+      (``known-unbound``, ``known``, ``discovering-unbound``), AND
+    - The ``agent-install.openshift.io/clusterdeployment-namespace`` label
+      is absent or empty.
+
+    On timeout, captures and logs all Agent status and labels for debugging.
+
+    Args:
+        k8s: Hub K8s client
+        co_name: ClusterOrder name used to find bound agents via the
+                 ``osac.openshift.io/clusterorder`` label.
+        timeout: Maximum seconds to wait (default 600 = 10 minutes).
+        poll: Seconds between checks (default 10).
+    """
+    import json as _json
+
+    log = logging.getLogger(__name__)
+    agent_ns = "hardware-inventory"
+    available_states = {"known-unbound", "known", "discovering-unbound"}
+    base_args = [*k8s._base(), "--as", "system:admin"]
+    deadline = time.monotonic() + timeout
+    attempt = 0
+
+    while True:
+        attempt += 1
+        output, rc = run_unchecked(
+            *base_args,
+            "get",
+            "agents.agent-install.openshift.io",
+            "-n",
+            agent_ns,
+            "-l",
+            f"osac.openshift.io/clusterorder={co_name}",
+            "-o",
+            "json",
+        )
+        if rc != 0:
+            log.warning("Agent query failed (rc=%d, attempt %d): %s", rc, attempt, output[:500])
+        else:
+            data = _json.loads(output)
+            items = data.get("items", [])
+            if not items:
+                # No agents labeled for this cluster order — they may have
+                # already been fully cleaned up by the controller.
+                log.info("No agents labeled for ClusterOrder %s — reclaim complete", co_name)
+                return
+
+            all_available = True
+            for agent in items:
+                meta = agent.get("metadata", {})
+                status = agent.get("status", {})
+                labels = meta.get("labels", {})
+                state = status.get("debugInfo", {}).get("state", "")
+                cd_ns_label = labels.get("agent-install.openshift.io/clusterdeployment-namespace", "")
+                if state not in available_states or cd_ns_label:
+                    all_available = False
+                    break
+
+            if all_available:
+                log.info(
+                    "All %d agents for ClusterOrder %s reached available state after %d attempts",
+                    len(items),
+                    co_name,
+                    attempt,
+                )
+                return
+
+        if time.monotonic() >= deadline:
+            # Timeout — capture full agent state for diagnostics
+            _report_agent_inventory(k8s=k8s, context=f"agent-reuse-timeout for ClusterOrder {co_name}")
+            raise TimeoutError(
+                f"Agents for ClusterOrder {co_name} did not reach available state "
+                f"within {timeout}s ({attempt} attempts). "
+                f"Check agent inventory log above for state and label details."
+            )
+        time.sleep(poll)
+
+
+def assert_agent_pool_available(*, k8s: K8sClient, expected_available: int = 1) -> None:
+    """Assert that enough Agents are available before provisioning.
+
+    FAILS the test immediately if the number of available (unbound,
+    ready-state) agents is below ``expected_available``.  This prevents
+    provisioning from starting when the Agent pool is exhausted, avoiding
+    a long wait that would end in a "0 agents" failure anyway.
+
+    Reports full Agent state, labels, conditions, and count in the failure
+    message for immediate diagnosis.
+    """
+    import json as _json
+
+    log = logging.getLogger(__name__)
+    agent_ns = "hardware-inventory"
+    base_args = [*k8s._base(), "--as", "system:admin"]
+    available_states = {"known-unbound", "known", "discovering-unbound"}
+
+    try:
+        output, rc = run_unchecked(*base_args, "get", "agents.agent-install.openshift.io", "-n", agent_ns, "-o", "json")
+        if rc != 0:
+            log.warning("Agent preflight query failed (rc=%d): %s", rc, output[:500])
+            return
+
+        data = _json.loads(output)
+        items = data.get("items", [])
+        available_agents: list[str] = []
+        unavailable_summary: list[str] = []
+
+        for agent in items:
+            meta = agent.get("metadata", {})
+            spec = agent.get("spec", {})
+            status = agent.get("status", {})
+            debug_info = status.get("debugInfo", {})
+            conditions = status.get("conditions", [])
+            state = debug_info.get("state", "unknown")
+            cluster_ref = spec.get("clusterDeploymentName", {})
+            agent_name = meta.get("name", "?")
+
+            if state in available_states and not cluster_ref:
+                available_agents.append(agent_name)
+            else:
+                if isinstance(cluster_ref, dict) and cluster_ref:
+                    binding = f"{cluster_ref.get('namespace', '')}/{cluster_ref.get('name', '')}"
+                elif cluster_ref:
+                    binding = str(cluster_ref)
+                else:
+                    binding = "unbound"
+                cond_summary = ", ".join(f"{c.get('type', '?')}={c.get('status', '?')}" for c in conditions[:3])
+                unavailable_summary.append(
+                    f"{agent_name}(state={state}, binding={binding}, conditions=[{cond_summary}])"
+                )
+
+        log.info(
+            "Agent pool preflight: %d/%d agents available (need %d)",
+            len(available_agents),
+            len(items),
+            expected_available,
+        )
+
+        if len(available_agents) < expected_available:
+            _report_agent_inventory(k8s=k8s, context="preflight-pool-shortage")
+            raise AssertionError(
+                f"Agent pool preflight FAILED: {len(available_agents)} available agents "
+                f"(need {expected_available}), {len(items)} total in {agent_ns}.\n"
+                f"Available: {available_agents or 'none'}\n"
+                f"Unavailable: {unavailable_summary or 'none'}"
+            )
+
+    except AssertionError:
+        raise
+    except Exception as exc:
+        log.warning("Agent preflight check failed (non-fatal): %s", exc)
 
 
 def wait_for_cluster_deleting(*, k8s: K8sClient, name: str) -> None:

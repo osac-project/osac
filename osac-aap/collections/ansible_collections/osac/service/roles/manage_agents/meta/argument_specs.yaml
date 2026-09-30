@@ -49,6 +49,34 @@ argument_specs:
       manage_agents_cluster_order_name:
         type: str
         required: true
+      manage_agents_hosted_cluster_namespace:
+        type: str
+        required: false
+        default: ""
+        description: >-
+          HostedCluster namespace (e.g. clusters-<order-name>).  Used as
+          a fallback selector: when a prior unbind already cleared
+          spec.clusterDeploymentName, the Agent can still be found through
+          the persistent agent-install.openshift.io/clusterdeployment-namespace
+          label that retains this value until the reclaim controller clears it.
+      manage_agents_reclaim_expect_bound:
+        type: bool
+        default: false
+        description: >-
+          When true, fail if no agents are found bound to the ClusterOrder.
+          Used by templates that always provision agents (e.g. ocp_ci_small).
+      manage_agents_reclaim_poll_retries:
+        type: int
+        default: 60
+        description: >-
+          Maximum number of poll attempts waiting for agent reclaim to
+          complete. Override with a lower value for fast integration tests.
+      manage_agents_reclaim_poll_delay:
+        type: int
+        default: 10
+        description: >-
+          Seconds between poll attempts when waiting for agent reclaim.
+          Override with a lower value for fast integration tests.
   import_agents:
     options:
       manage_agents_node_names:

@@ -33,6 +33,30 @@ import (
 	v1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
 
+// logKeyJobID is the structured-log key for AAP/provision job identifiers,
+// extracted as a constant to satisfy goconst and ensure consistent log
+// filtering across provision and deprovision paths.
+const logKeyJobID = "jobID"
+
+// logKeyResource is the structured-log key for the resource name,
+// shared with the AAP provider's extra-vars map key.
+const logKeyResource = "resource"
+
+// maxLogMessageLen caps the length of failure messages logged on terminal job
+// states. AAP result_traceback can be arbitrarily long; truncating prevents
+// flooding the log aggregator while preserving a useful diagnostic prefix.
+const maxLogMessageLen = 512
+
+// boundedString returns s truncated to maxLen characters with a trailing
+// "[…truncated]" marker when truncation occurs. It is safe for any string,
+// including empty ones.
+func boundedString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "[…truncated]"
+}
+
 // State points into the resource's status fields used by the provisioning lifecycle.
 // Jobs is a pointer so shared functions can modify the slice in place.
 // DesiredConfigVersion is a value snapshot captured at construction time — it is
@@ -102,7 +126,7 @@ func CheckAPIServerForNonTerminalProvisionJobAndTarget(ctx context.Context, apiR
 	freshJobs := extract(fresh)
 	freshJob := FindLatestJobByTypeAndTarget(freshJobs, v1alpha1.JobTypeProvision, target)
 	if HasJobID(freshJob) && !freshJob.State.IsTerminal() {
-		log.Info("skipping provision trigger: non-terminal job found via API server", "jobID", freshJob.JobID, "target", target, "state", freshJob.State)
+		log.Info("skipping provision trigger: non-terminal job found via API server", logKeyJobID, freshJob.JobID, "target", target, "state", freshJob.State)
 		return true
 	}
 	return false
@@ -140,7 +164,7 @@ func triggerJobForTarget(ctx context.Context, provider ProvisioningProvider, res
 	}, maxHistory)
 
 	latestJob := FindLatestJobByTypeAndTarget(*provState.Jobs, v1alpha1.JobTypeProvision, target)
-	log.Info("provision job triggered", "jobID", latestJob.JobID, "target", target, "configVersion", latestJob.ConfigVersion)
+	log.Info("provision job triggered", logKeyJobID, latestJob.JobID, "target", target, "configVersion", latestJob.ConfigVersion)
 	return ctrl.Result{RequeueAfter: pollInterval}, nil
 }
 
@@ -155,11 +179,11 @@ type PollCallbacks struct {
 // PollJob checks the status of an existing provision job and updates the jobs slice in place.
 func PollJob(ctx context.Context, provider ProvisioningProvider, resource client.Object, provState *State, latestJob *v1alpha1.JobStatus, pollInterval time.Duration, callbacks *PollCallbacks) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
-	log.Info("polling provision job status", "jobID", latestJob.JobID, "currentState", latestJob.State)
+	log.Info("polling provision job status", logKeyJobID, latestJob.JobID, "currentState", latestJob.State)
 
 	status, err := provider.GetProvisionStatus(ctx, resource, latestJob.JobID)
 	if err != nil {
-		log.Error(err, "failed to get provision status", "jobID", latestJob.JobID)
+		log.Error(err, "failed to get provision status", logKeyJobID, latestJob.JobID)
 		updatedJob := *latestJob
 		updatedJob.Message = fmt.Sprintf("Failed to get job status: %v", err)
 		UpdateJob(*provState.Jobs, updatedJob)
@@ -167,17 +191,31 @@ func PollJob(ctx context.Context, provider ProvisioningProvider, resource client
 	}
 
 	if status.State != latestJob.State || status.Message != latestJob.Message {
-		log.Info("provision job status changed", "jobID", latestJob.JobID, "oldState", latestJob.State, "newState", status.State)
+		logKVs := []any{
+			logKeyResource, resource.GetName(),
+			logKeyJobID, latestJob.JobID,
+			"oldState", latestJob.State,
+			"newState", status.State,
+		}
 		updatedJob := *latestJob
 		updatedJob.State = status.State
 		updatedJob.Message = status.MessageWithDetails()
 		UpdateJob(*provState.Jobs, updatedJob)
 
+		if status.State.IsTerminal() {
+			logKVs = append(logKVs, "message", boundedString(updatedJob.Message, maxLogMessageLen))
+			if status.ErrorDetails != "" {
+				logKVs = append(logKVs, "errorDetails", boundedString(status.ErrorDetails, maxLogMessageLen))
+			}
+		}
+
 		if status.State == v1alpha1.JobStateFailed {
-			log.Info("provision job failed", "jobID", latestJob.JobID)
+			log.Info("provision job failed", logKVs...)
 			if callbacks != nil && callbacks.OnFailed != nil {
 				callbacks.OnFailed(updatedJob.Message)
 			}
+		} else {
+			log.Info("provision job status changed", logKVs...)
 		}
 	}
 
@@ -520,7 +558,7 @@ func triggerDeprovisionJobForTarget(ctx context.Context, provider ProvisioningPr
 		return ctrl.Result{RequeueAfter: pollInterval}, nil
 
 	case DeprovisionTriggered:
-		log.Info("deprovision job triggered", "jobID", result.JobID, "target", target)
+		log.Info("deprovision job triggered", logKeyJobID, result.JobID, "target", target)
 		updateProvisionJobFromDeprovisionResultForTarget(jobs, target, result)
 		*jobs = AppendJob(*jobs, v1alpha1.JobStatus{
 			JobID:                  result.JobID,
@@ -601,10 +639,10 @@ func pollDeprovisionJobForTarget(ctx context.Context, provider ProvisioningProvi
 		return ctrl.Result{}, true, nil
 	}
 
-	log.Info("polling deprovision job status", "jobID", latestDeprovisionJob.JobID, "target", target, "currentState", latestDeprovisionJob.State)
+	log.Info("polling deprovision job status", logKeyJobID, latestDeprovisionJob.JobID, "target", target, "currentState", latestDeprovisionJob.State)
 	status, err := provider.GetDeprovisionStatus(ctx, resource, latestDeprovisionJob.JobID)
 	if err != nil {
-		log.Error(err, "failed to get deprovision status", "jobID", latestDeprovisionJob.JobID, "target", target)
+		log.Error(err, "failed to get deprovision status", logKeyJobID, latestDeprovisionJob.JobID, "target", target)
 		updatedJob := *latestDeprovisionJob
 		updatedJob.Message = fmt.Sprintf("Failed to get deprovision status: %v", err)
 		UpdateJob(*jobs, updatedJob)
@@ -612,12 +650,24 @@ func pollDeprovisionJobForTarget(ctx context.Context, provider ProvisioningProvi
 	}
 
 	if status.State != latestDeprovisionJob.State || status.Message != latestDeprovisionJob.Message {
-		log.Info("deprovision job status changed", "jobID", latestDeprovisionJob.JobID, "target", target,
-			"oldState", latestDeprovisionJob.State, "newState", status.State)
+		logKVs := []any{
+			logKeyResource, resource.GetName(),
+			logKeyJobID, latestDeprovisionJob.JobID,
+			"target", target,
+			"oldState", latestDeprovisionJob.State,
+			"newState", status.State,
+		}
 		updatedJob := *latestDeprovisionJob
 		updatedJob.State = status.State
 		updatedJob.Message = status.MessageWithDetails()
 		UpdateJob(*jobs, updatedJob)
+		if status.State.IsTerminal() {
+			logKVs = append(logKVs, "message", boundedString(updatedJob.Message, maxLogMessageLen))
+			if status.ErrorDetails != "" {
+				logKVs = append(logKVs, "errorDetails", boundedString(status.ErrorDetails, maxLogMessageLen))
+			}
+		}
+		log.Info("deprovision job status changed", logKVs...)
 	}
 
 	if !status.State.IsTerminal() {
@@ -637,13 +687,13 @@ func handleDeprovisionBackoffForTarget(ctx context.Context, provider Provisionin
 	backoff := computeDeprovisionBackoffForTarget(*jobs, target)
 	elapsed := time.Since(latestJob.Timestamp.Time)
 	if elapsed >= backoff {
-		log.Info("deprovision backoff elapsed, retrying", "jobID", latestJob.JobID, "target", target, "backoff", backoff)
+		log.Info("deprovision backoff elapsed, retrying", logKeyJobID, latestJob.JobID, "target", target, "backoff", backoff)
 		result, err := triggerDeprovisionJobForTarget(ctx, provider, resource, jobs, target, maxHistory, pollInterval)
 		return result, false, err
 	}
 	remaining := backoff - elapsed
 	log.Info("deprovision job failed, retrying after backoff",
-		"jobID", latestJob.JobID, "target", target, "backoff", backoff, "remaining", remaining)
+		logKeyJobID, latestJob.JobID, "target", target, "backoff", backoff, "remaining", remaining)
 	return ctrl.Result{RequeueAfter: remaining}, false, nil
 }
 

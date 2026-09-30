@@ -158,6 +158,7 @@ e2e-code:
   - '!**/it/**'
   - '!**/conftest.py'
   - '!**/fixtures/**'
+  - '!osac-ui/**'
   - '!tools/pr-notify/**'
 e2e-suite:
   - 'tests/e2e/**'

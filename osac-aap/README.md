@@ -71,6 +71,23 @@ Plus MetalLB-based ExternalIPPool / ExternalIP management (`metallb_l2`).
   backends (Netris, agentless_net).
 - Multi-step workflow playbooks for hosted cluster create / delete / post-install.
 
+### Local LVMS CSI StorageClasses
+
+Single-node VMaaS development/CI deployments can opt in with
+`csi_driver_install_lvms_storage_class_enabled: true`. Tenant Stage 2 creates
+`osac-<tenant>-<tier>` using the OSAC CSI provisioner. The default remains
+`false`, preserving direct TopoLVM classes; ClusterOrder/CaaS stays on its
+legacy storage path.
+
+The selector does not migrate existing classes or volumes. If a same-name
+class already exists with incompatible provisioner, parameters, reclaim policy
+or binding mode, the role fails before modifying any local classes and explains
+the prerequisite. Kubernetes makes these fields immutable. For an existing
+development installation, check its PVC/PV dependencies and explicitly remove
+and recreate the class before opting in, or keep the legacy selector setting.
+The role never deletes a class automatically; existing compatible CSI classes
+remain idempotent.
+
 ## Architecture
 
 ```

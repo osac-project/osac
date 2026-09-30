@@ -17,6 +17,37 @@
       got {{ tenant_name | default('undefined') }}.
   when: _csi_driver_install_local_tiers | length > 0
 
+- name: Read existing local-tier StorageClasses
+  kubernetes.core.k8s_info:
+    api_version: storage.k8s.io/v1
+    kind: StorageClass
+    name: "osac-{{ tenant_name }}-{{ item.name }}"
+  loop: "{{ _csi_driver_install_local_tiers }}"
+  loop_control:
+    label: "osac-{{ tenant_name }}-{{ item.name }}"
+  register: _csi_driver_install_existing_classes
+
+- name: Validate immutable fields of existing local-tier StorageClasses
+  ansible.builtin.assert:
+    that:
+      - item.resources[0].provisioner == csi_driver_install_storage_class_provisioner
+      - >-
+        (item.resources[0].parameters | default({})) ==
+        {'osac.tier': item.item.name, 'tenant': tenant_name}
+      - item.resources[0].reclaimPolicy == csi_driver_install_storage_class_reclaim_policy
+      - item.resources[0].volumeBindingMode == csi_driver_install_storage_class_volume_binding_mode
+    fail_msg: >-
+      StorageClass osac-{{ tenant_name }}-{{ item.item.name }} has incompatible
+      immutable fields and was not deleted or modified. Check existing PVC/PV
+      dependencies before explicitly removing and recreating this class for
+      the CSI path, or leave csi_driver_install_lvms_storage_class_enabled=false
+      to retain legacy provisioning. Changing the selector does not migrate
+      existing volumes.
+  loop: "{{ _csi_driver_install_existing_classes.results }}"
+  loop_control:
+    label: "osac-{{ tenant_name }}-{{ item.item.name }}"
+  when: item.resources | length > 0
+
 - name: Create local-tier OSAC CSI StorageClasses
   kubernetes.core.k8s:
     state: present

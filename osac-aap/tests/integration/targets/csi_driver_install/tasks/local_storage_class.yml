@@ -71,6 +71,40 @@
           legacy TopoLVM provider: {{ _legacy_local_storage_class.resources | to_json }}
         success_msg: "The default-off path created the direct TopoLVM StorageClass"
 
+    - name: Verify CSI opt-in refuses an existing legacy StorageClass
+      block:
+        - name: Opt into CSI while retaining the legacy class
+          ansible.builtin.include_role:
+            name: osac.service.csi_driver_install
+          vars:
+            csi_driver_install_enabled: false
+            csi_driver_install_lvms_storage_class_enabled: true
+
+        - name: Reject unexpected migration success
+          ansible.builtin.fail:
+            msg: The CSI role must refuse an incompatible existing StorageClass
+      rescue:
+        - name: Assert the failure explains the migration prerequisite
+          ansible.builtin.assert:
+            that:
+              - "'immutable' in (ansible_failed_result | to_json)"
+              - "'PVC/PV' in (ansible_failed_result | to_json)"
+              - "'not deleted' in (ansible_failed_result | to_json)"
+
+    - name: Read the retained legacy StorageClass
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: osac-test-local-tier-local
+      register: _retained_legacy_storage_class
+
+    - name: Assert the incompatible class was not changed or replaced
+      ansible.builtin.assert:
+        that:
+          - _retained_legacy_storage_class.resources[0].metadata.uid == _legacy_local_storage_class.resources[0].metadata.uid
+          - _retained_legacy_storage_class.resources[0].provisioner == 'topolvm.io'
+          - _retained_legacy_storage_class.resources[0].parameters == _legacy_local_storage_class.resources[0].parameters
+
     - name: Delete legacy local-tier StorageClass
       kubernetes.core.k8s:
         state: absent

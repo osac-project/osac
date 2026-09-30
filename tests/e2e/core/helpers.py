@@ -456,14 +456,18 @@ def assert_cluster_order_events(
 
 
 def assert_cluster_order_lifecycle_events(*, k8s: K8sClient, name: str) -> None:
+    # Each provisioning event is named after the ClusterOrder condition whose first
+    # transition to True it reports, so this list tracks provisioningStageConditions in
+    # osac-operator/internal/controller/clusterorder_controller.go. A ClusterOrder that
+    # reaches Ready has necessarily passed through all four.
     expected_events = {
         "Created": ("Normal", "Created", "ClusterOrder created"),
-        "PreparingInfrastructure": ("Normal", "Provisioning", "Preparing Infrastructure"),
-        "ControlPlaneStarting": ("Normal", "Provisioning", "Control Plane Starting"),
+        "Accepted": ("Normal", "Provisioning", "ClusterOrder reached Accepted"),
+        "ControlPlaneCreated": ("Normal", "Provisioning", "ClusterOrder reached Control Plane Created"),
+        "ControlPlaneAvailable": ("Normal", "Provisioning", "ClusterOrder reached Control Plane Available"),
+        "ClusterAvailable": ("Normal", "Provisioning", "ClusterOrder reached Cluster Available"),
         "Ready": ("Normal", "Ready", "ClusterOrder is ready"),
     }
-    if k8s.get_cluster_order_status(name=name).get("nodeSets"):
-        expected_events["WorkersJoining"] = ("Normal", "Provisioning", "Workers Joining")
 
     events = {event["reason"]: event for event in k8s.get_cluster_order_events(name=name) if event.get("reason")}
     assert_cluster_order_events(events=events, expected=expected_events)

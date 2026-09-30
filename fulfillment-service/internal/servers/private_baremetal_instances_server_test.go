@@ -44,16 +44,16 @@ const testSSHPublicKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG8K1ZuSC7tmzxD5LJ
 
 type autoEIPTestTx struct {
 	database.Tx
-	failQuery      func(string) bool
-	beforeFailure  func(context.Context)
-	beforePoolLock func()
-	failureHit     bool
+	failQuery              func(string) bool
+	beforeFailure          func(context.Context)
+	beforeExternalIPInsert func()
+	failureHit             bool
 }
 
 func (tx *autoEIPTestTx) QueryRow(requestCtx context.Context, query string, args ...any) pgx.Row {
 	normalized := strings.Join(strings.Fields(strings.ToLower(query)), " ")
-	if tx.beforePoolLock != nil && strings.Contains(normalized, "from external_ip_pools") && strings.HasSuffix(normalized, "for update") {
-		tx.beforePoolLock()
+	if tx.beforeExternalIPInsert != nil && strings.HasPrefix(normalized, "insert into external_ips ") {
+		tx.beforeExternalIPInsert()
 	}
 	if tx.failQuery != nil && tx.failQuery(normalized) {
 		tx.failureHit = true
@@ -3766,16 +3766,50 @@ var _ = Describe("BareMetalInstance auto-EIP atomic provisioning", func() {
 	})
 
 	It("concurrent allocations do not over-allocate a pool", func() {
+		const secondTemplateID = "race-bmi-template"
+		const secondDiskImageID = "race-bmi-disk-image"
+		templatesDao, err := dao.NewGenericDAO[*privatev1.BareMetalInstanceTemplate]().
+			SetLogger(logger).SetTenancyLogic(tenancy).Build()
+		Expect(err).ToNot(HaveOccurred())
+		_, err = templatesDao.Create().SetObject(privatev1.BareMetalInstanceTemplate_builder{
+			Id: secondTemplateID,
+			Metadata: privatev1.Metadata_builder{
+				Name: secondTemplateID, Tenant: testTenant,
+			}.Build(),
+			Title: "Race test template",
+		}.Build()).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		createDiskImageWithLifecycle(secondDiskImageID,
+			privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE, nil)
+		secondCatalog, err := catalogServer.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
+			Object: privatev1.BareMetalInstanceCatalogItem_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+				}.Build(),
+				Title:     "Race test catalog item",
+				Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: secondTemplateID}.Build(),
+				Published: true,
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		requests := []*privatev1.BareMetalInstancesCreateRequest{createBMIRequest(), createBMIRequest()}
+		requests[1].GetObject().GetSpec().SetCatalogItem(
+			privatev1.BareMetalInstanceCatalogItemReference_builder{Id: secondCatalog.GetObject().GetId()}.Build())
+		requests[1].GetObject().GetSpec().SetDiskImage(
+			privatev1.DiskImageReference_builder{Id: secondDiskImageID}.Build())
+
 		poolID := createPool(1)
 		commitFixtures()
 
 		arrived := make(chan struct{}, 2)
-		release := make(chan struct{})
+		release := [2]chan struct{}{make(chan struct{}), make(chan struct{})}
 		defer func() {
-			select {
-			case <-release:
-			default:
-				close(release)
+			for _, gate := range release {
+				select {
+				case <-gate:
+				default:
+					close(gate)
+				}
 			}
 		}()
 		type allocationResult struct {
@@ -3784,7 +3818,7 @@ var _ = Describe("BareMetalInstance auto-EIP atomic provisioning", func() {
 			reached bool
 		}
 		results := make(chan allocationResult, 2)
-		for range 2 {
+		for index, request := range requests {
 			go func() {
 				requestCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 				defer cancel()
@@ -3793,48 +3827,41 @@ var _ = Describe("BareMetalInstance auto-EIP atomic provisioning", func() {
 					results <- allocationResult{err: err}
 					return
 				}
-				lockReached := false
+				insertReached := false
 				injectedTx := &autoEIPTestTx{
 					Tx: requestTx,
-					beforePoolLock: func() {
-						lockReached = true
+					beforeExternalIPInsert: func() {
+						insertReached = true
 						arrived <- struct{}{}
-						<-release
+						<-release[index]
 					},
 				}
-				response, createErr := server.Create(database.TxIntoContext(requestCtx, injectedTx), createBMIRequest())
+				response, createErr := server.Create(database.TxIntoContext(requestCtx, injectedTx), request)
 				endErr := requestTx.End(requestCtx)
 				if endErr != nil {
-					results <- allocationResult{err: endErr, reached: lockReached}
+					results <- allocationResult{err: endErr, reached: insertReached}
 					return
 				}
 				if createErr != nil {
-					results <- allocationResult{err: createErr, reached: lockReached}
+					results <- allocationResult{err: createErr, reached: insertReached}
 					return
 				}
-				results <- allocationResult{id: response.GetObject().GetId(), reached: lockReached}
+				results <- allocationResult{id: response.GetObject().GetId(), reached: insertReached}
 			}()
 		}
 		Eventually(arrived).WithTimeout(20 * time.Second).Should(Receive())
 		Eventually(arrived).WithTimeout(20 * time.Second).Should(Receive())
-		close(release)
-
+		close(release[0])
 		var first, second allocationResult
 		Eventually(results).WithTimeout(30 * time.Second).Should(Receive(&first))
+		close(release[1])
 		Eventually(results).WithTimeout(30 * time.Second).Should(Receive(&second))
 		Expect(first.reached).To(BeTrue())
 		Expect(second.reached).To(BeTrue())
-		successes := 0
-		for _, result := range []allocationResult{first, second} {
-			if result.err == nil {
-				successes++
-				Expect(result.id).ToNot(BeEmpty())
-			} else {
-				Expect(grpcstatus.Code(result.err)).To(Equal(grpccodes.FailedPrecondition))
-				Expect(result.err.Error()).To(ContainSubstring("no available capacity"))
-			}
-		}
-		Expect(successes).To(Equal(1))
+		Expect(first.err).ToNot(HaveOccurred())
+		Expect(first.id).ToNot(BeEmpty())
+		Expect(grpcstatus.Code(second.err)).To(Equal(grpccodes.FailedPrecondition))
+		Expect(second.err.Error()).To(ContainSubstring("no available capacity"))
 		assertPersistedState(poolID, 0, 1, 1, 1, 1)
 	})
 })

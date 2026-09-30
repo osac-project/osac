@@ -1129,8 +1129,14 @@ func (r *ClusterOrderReconciler) handleProvisioning(ctx context.Context, instanc
 			})
 		},
 		func() error {
-			_, err := r.patchStatusWithRetry(ctx, client.ObjectKeyFromObject(instance), instance.Status)
-			return err
+			transition, err := r.patchStatusWithRetry(ctx, client.ObjectKeyFromObject(instance), instance.Status)
+			if err != nil {
+				return err
+			}
+			if transition != nil {
+				r.recordTransitionEventsForStatus(instance, &transition.oldStatus, &transition.newStatus)
+			}
+			return nil
 		},
 	)
 }

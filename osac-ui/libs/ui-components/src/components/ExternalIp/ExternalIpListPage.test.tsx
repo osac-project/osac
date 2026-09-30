@@ -111,8 +111,8 @@ describe('ExternalIpListPage', () => {
   it('renders the page header', async () => {
     renderPage();
 
-    expect(screen.queryByText('Networking')).not.toBeInTheDocument();
     expect(await screen.findByRole('heading', { name: 'External IPs' })).toBeInTheDocument();
+    expect(screen.queryByText('Networking')).not.toBeInTheDocument();
     expect(
       screen.getByText(
         'Review provider-assigned IP pools and allocate external addresses for edge exposure.',

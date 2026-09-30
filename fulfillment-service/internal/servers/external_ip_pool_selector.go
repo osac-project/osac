@@ -16,7 +16,6 @@ package servers
 import (
 	"context"
 	"fmt"
-	"sort"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -35,43 +34,40 @@ func SelectExternalIPPool(
 	poolDao *dao.GenericDAO[*privatev1.ExternalIPPool],
 	ipFamily privatev1.IPFamily,
 ) (*privatev1.ExternalIPPool, error) {
-	listResponse, err := poolDao.List().Do(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query ExternalIP pools: %w", err)
+	var best *privatev1.ExternalIPPool
+	var offset int32
+	for {
+		listResponse, err := poolDao.List().SetOffset(offset).Do(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to query ExternalIP pools: %w", err)
+		}
+
+		for _, pool := range listResponse.GetItems() {
+			if pool.GetStatus().GetState() != privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY ||
+				pool.GetStatus().GetAvailable() <= 0 ||
+				(ipFamily != privatev1.IPFamily_IP_FAMILY_UNSPECIFIED && pool.GetSpec().GetIpFamily() != ipFamily) {
+				continue
+			}
+			if best == nil || pool.GetStatus().GetAvailable() > best.GetStatus().GetAvailable() ||
+				(pool.GetStatus().GetAvailable() == best.GetStatus().GetAvailable() && pool.GetId() < best.GetId()) {
+				best = pool
+			}
+		}
+
+		offset += listResponse.GetSize()
+		if listResponse.GetSize() == 0 || offset >= listResponse.GetTotal() {
+			break
+		}
 	}
 
-	var candidates []*privatev1.ExternalIPPool
-	for _, pool := range listResponse.GetItems() {
-		if pool.GetStatus().GetState() != privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY {
-			continue
-		}
-		if pool.GetStatus().GetAvailable() <= 0 {
-			continue
-		}
-		if ipFamily != privatev1.IPFamily_IP_FAMILY_UNSPECIFIED &&
-			pool.GetSpec().GetIpFamily() != ipFamily {
-			continue
-		}
-		candidates = append(candidates, pool)
-	}
-
-	if len(candidates) == 0 {
+	if best == nil {
 		if ipFamily != privatev1.IPFamily_IP_FAMILY_UNSPECIFIED {
 			return nil, fmt.Errorf("no READY ExternalIP pool with available capacity found for IP family %s", ipFamily)
 		}
 		return nil, fmt.Errorf("no READY ExternalIP pool with available capacity found")
 	}
 
-	sort.Slice(candidates, func(i, j int) bool {
-		ai := candidates[i].GetStatus().GetAvailable()
-		aj := candidates[j].GetStatus().GetAvailable()
-		if ai != aj {
-			return ai > aj
-		}
-		return candidates[i].GetId() < candidates[j].GetId()
-	})
-
-	return candidates[0], nil
+	return best, nil
 }
 
 // UpdatePoolCapacity adjusts the allocated/available counters of an ExternalIPPool

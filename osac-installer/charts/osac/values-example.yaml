@@ -121,6 +121,12 @@ operator:
     # When true, the operator starts even if the secret doesn't exist yet.
     optional: true
 
+  # Remote VMaaS cluster configuration. Set the kubeconfig path and Secret
+  # name together; the Secret key defaults to kubeconfig.
+  remoteClusterKubeconfig: ""
+  remoteClusterKubeconfigSecretName: ""
+  remoteClusterKubeconfigSecretKey: kubeconfig
+
 # ---------------------
 # Fulfillment Service
 # ---------------------
@@ -312,6 +318,9 @@ aap:
     # Helm mode; see docs/helm-deployment-guide.md for manual creation.
     manifestSecret: "config-as-code-manifest-ig"
     secret: "config-as-code-ig"
+    remoteClusterKubeconfigSecretName: ""
+    remoteClusterKubeconfigSecretKey: kubeconfig
+
   # AAP instance groups. The global.networking facade supplies the network
   # fields; use these blocks for enablement and expert-only overrides.
   instanceGroups:

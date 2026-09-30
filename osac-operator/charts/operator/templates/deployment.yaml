@@ -5,6 +5,12 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "osac-operator.labels" . | nindent 4 }}
+{{- if and .Values.remoteClusterKubeconfig (not .Values.remoteClusterKubeconfigSecretName) }}
+{{- fail "remoteClusterKubeconfigSecretName is required when remoteClusterKubeconfig is set" }}
+{{- end }}
+{{- if and .Values.remoteClusterKubeconfigSecretName (not .Values.remoteClusterKubeconfig) }}
+{{- fail "remoteClusterKubeconfig is required when remoteClusterKubeconfigSecretName is set" }}
+{{- end }}
 spec:
   replicas: {{ .Values.replicaCount }}
   selector:
@@ -87,6 +93,10 @@ spec:
             value: {{ .Values.fulfillment.serverAddress | default "fulfillment-internal-api:8001" | quote }}
           - name: OSAC_FULFILLMENT_TOKEN_FILE
             value: {{ .Values.fulfillment.tokenFile | default "/var/run/secrets/kubernetes.io/serviceaccount/token" | quote }}
+          {{- with .Values.remoteClusterKubeconfig }}
+          - name: OSAC_REMOTE_CLUSTER_KUBECONFIG
+            value: {{ . | quote }}
+          {{- end }}
           {{- if .Values.fulfillment.configMap.name }}
           - name: OSAC_FULFILLMENT_ENDPOINT
             valueFrom:
@@ -185,6 +195,12 @@ spec:
           - name: fulfillment-ca-bundle
             mountPath: /etc/ca-bundle
             readOnly: true
+        {{- if .Values.remoteClusterKubeconfigSecretName }}
+          - name: remote-kubeconfig
+            mountPath: {{ .Values.remoteClusterKubeconfig | quote }}
+            subPath: {{ .Values.remoteClusterKubeconfigSecretKey | default "kubeconfig" | quote }}
+            readOnly: true
+        {{- end }}
       volumes:
         - name: fulfillment-ca-bundle
           configMap:
@@ -192,5 +208,11 @@ spec:
             items:
               - key: {{ .Values.fulfillment.tls.caBundle.key | required "fulfillment.tls.caBundle.key is required" }}
                 path: bundle.pem
+
+      {{- if .Values.remoteClusterKubeconfigSecretName }}
+        - name: remote-kubeconfig
+          secret:
+            secretName: {{ .Values.remoteClusterKubeconfigSecretName }}
+      {{- end }}
       serviceAccountName: {{ include "osac-operator.serviceAccountName" . }}
       terminationGracePeriodSeconds: 10

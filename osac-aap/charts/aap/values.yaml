@@ -36,6 +36,8 @@ configAsCode:
   eeImagePull: ""
   projectGitUri: ""
   projectGitBranch: ""
+  remoteClusterKubeconfigSecretName: ""
+  remoteClusterKubeconfigSecretKey: kubeconfig
   manifest:
     create: false
     data: {}

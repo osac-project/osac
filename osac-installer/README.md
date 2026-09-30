@@ -153,6 +153,63 @@ make install-osac  PLATFORM=openshift PROFILE=<profile> NS=<namespace>   # OSAC 
 | `NS` | Target namespace (required) |
 | `EXTRA_HELM_ARGS` | Extra `--set`/`--set-string` args appended to helm commands |
 
+#### Two-cluster VMaaS installation (OpenShift)
+
+Use `install-multicluster` when OSAC management services run on one cluster and
+VM workloads run on another. The target prepares LVMS, OpenShift Virtualization,
+and remote access on the workload cluster, then installs OSAC on management.
+During `install-osac`, the installer uses the supplied workload kubeconfig to
+create the remote-access Secret after the management namespace exists, then
+mounts it into the operator and configures AAP with its name and key.
+The `vmaas-ci` profile is required because remote mode cannot run the CaaS
+cluster controller in the same operator instance.
+
+```bash
+make install-multicluster \
+  PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
+  KUBECONFIG=/path/to/management.kubeconfig \
+  REMOTE_KUBECONFIG=/path/to/workload.kubeconfig \
+  REMOTE_API_ADDRESS=https://workload-api.example.com:6443
+```
+
+`KUBECONFIG` selects the management cluster and is forwarded to the regular
+installer targets; if it is already exported in your shell, omit that Make
+argument. `REMOTE_KUBECONFIG` selects the workload cluster. Both clusters must
+be distinct OpenShift clusters with cluster-admin access. The target requires
+the AAP license at
+`values/vmaas-ci/license.zip`. `REMOTE_STORAGE_CLASS` defaults to `lvms-vg1`;
+`REMOTE_KUBECONFIG_SECRET_NAME` and `REMOTE_KUBECONFIG_SECRET_KEY` default to
+`osac-remote-kubeconfig` and `kubeconfig`. Management skips the LVMS and CNV
+installations; those operators are installed on the workload cluster.
+
+Prepare the workload cluster independently when you want to separate that work
+from the management installation:
+
+```bash
+make prepare-remote-cluster NS=osac \
+  REMOTE_KUBECONFIG=/path/to/workload.kubeconfig
+
+make install-infra PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
+  KUBECONFIG=/path/to/management.kubeconfig \
+  INFRA_VALUES_EXTRA="-f values/vmaas-ci/multicluster-infra.yaml"
+
+make install-osac PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
+  KUBECONFIG=/path/to/management.kubeconfig \
+  REMOTE_KUBECONFIG=/path/to/workload.kubeconfig \
+  REMOTE_API_ADDRESS=https://workload-api.example.com:6443
+```
+
+`prepare-remote-cluster` only changes the workload cluster and needs no
+management kubeconfig. `install-osac` creates the management Secret after
+confirming the target namespace exists; it also sets the operator and AAP chart
+values for remote-cluster mode. The combined `install-multicluster` target runs
+these steps in order.
+
+The existing `make install ...` command continues to install a single-cluster
+OSAC deployment. `scripts/setup-remote-cluster.sh prepare` prepares only the
+workload cluster. Without arguments, the script retains the existing
+post-install configuration flow.
+
 #### Full local dev environment (`PROFILE=dev-full`, kind only)
 
 `PROFILE=dev` on kind stands up only the control plane (cert-manager,

@@ -137,6 +137,10 @@ operator:
   configSecret:
     name: "osac-config"
     optional: true
+  # Set together to configure the operator to use a remote VMaaS cluster.
+  remoteClusterKubeconfig: ""
+  remoteClusterKubeconfigSecretName: ""
+  remoteClusterKubeconfigSecretKey: kubeconfig
   hubAccess:
     enabled: false
   # Network manager ConfigMaps use the nested operator.networkManagers map
@@ -274,6 +278,8 @@ aap:
     eeImage: ""
     projectGitUri: ""
     projectGitBranch: ""
+    remoteClusterKubeconfigSecretName: ""
+    remoteClusterKubeconfigSecretKey: kubeconfig
   instanceGroups:
     clusterFulfillment:
       enabled: false

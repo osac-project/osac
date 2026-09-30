@@ -1,32 +1,53 @@
 #!/usr/bin/env bash
-# CI-only: assumes a fresh remote cluster, not idempotent.
+# Prepare a VMaaS workload cluster or connect it to an installed management cluster.
 
 set -o nounset
 set -o errexit
 set -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
 source "${SCRIPT_DIR}/lib.sh"
 
-HUB_KUBECONFIG=${HUB_KUBECONFIG:?"HUB_KUBECONFIG must be set"}
 REMOTE_KUBECONFIG=${REMOTE_KUBECONFIG:?"REMOTE_KUBECONFIG must be set"}
-REMOTE_API_ADDRESS=${REMOTE_API_ADDRESS:?"REMOTE_API_ADDRESS must be set (e.g. https://192.168.128.10:6443)"}
+REMOTE_API_ADDRESS=${REMOTE_API_ADDRESS:-}
 INSTALLER_NAMESPACE=${INSTALLER_NAMESPACE:-"osac"}
 OPERATOR_DEPLOYMENT_NAME=${OPERATOR_DEPLOYMENT_NAME:-"osac-operator"}
+REMOTE_STORAGE_CLASS=${REMOTE_STORAGE_CLASS:-"lvms-vg1"}
+REMOTE_KUBECONFIG_SECRET_NAME=${REMOTE_KUBECONFIG_SECRET_NAME:-"osac-remote-kubeconfig"}
+REMOTE_KUBECONFIG_SECRET_KEY=${REMOTE_KUBECONFIG_SECRET_KEY:-"kubeconfig"}
+MODE=${1:-"configure"}
 
-hub="--kubeconfig ${HUB_KUBECONFIG}"
-remote="--kubeconfig ${REMOTE_KUBECONFIG}"
+if [[ "${MODE}" != "prepare" && "${MODE}" != "configure" ]]; then
+    echo "Usage: $0 [prepare|configure]" >&2
+    exit 2
+fi
+if [[ "${MODE}" == "configure" ]]; then
+    HUB_KUBECONFIG=${HUB_KUBECONFIG:?"HUB_KUBECONFIG must be set"}
+    REMOTE_API_ADDRESS=${REMOTE_API_ADDRESS:?"REMOTE_API_ADDRESS must be set (e.g. https://192.168.128.10:6443)"}
+fi
+if [[ -n "${REMOTE_API_ADDRESS}" && "${REMOTE_API_ADDRESS}" != https://* ]]; then
+    echo "ERROR: REMOTE_API_ADDRESS must use https://" >&2
+    exit 2
+fi
+
+remote_args=(--kubeconfig "${REMOTE_KUBECONFIG}")
+remote_oc="oc --kubeconfig $(printf '%q' "${REMOTE_KUBECONFIG}")"
+if [[ "${MODE}" == "configure" ]]; then
+    hub_args=(--kubeconfig "${HUB_KUBECONFIG}")
+    hub_oc="oc --kubeconfig $(printf '%q' "${HUB_KUBECONFIG}")"
+fi
 
 SKIP_PREREQUISITES=${SKIP_PREREQUISITES:-"false"}
 
 if [[ "${SKIP_PREREQUISITES}" != "true" ]]; then
 
-OCP_VERSION=$(oc ${remote} version -o json | jq -r '.openshiftVersion' | cut -d. -f1-2)
+OCP_VERSION=$(oc "${remote_args[@]}" version -o json | jq -r '.openshiftVersion' | cut -d. -f1-2)
 
 # Remote cluster: install prerequisites
 
 # LVMS
-cat <<EOF | oc ${remote} apply -f -
+cat <<EOF | oc "${remote_args[@]}" apply -f -
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -54,11 +75,11 @@ spec:
   installPlanApproval: Automatic
 EOF
 echo "Waiting for LVMS CRD..."
-retry_until 180 5 "oc ${remote} get crd lvmclusters.lvm.topolvm.io 2>/dev/null" || { echo "Timed out waiting for LVMS CRD"; exit 1; }
+retry_until 180 5 "${remote_oc} get crd lvmclusters.lvm.topolvm.io 2>/dev/null" || { echo "Timed out waiting for LVMS CRD"; exit 1; }
 echo "Waiting for LVMS operator webhook..."
-retry_until 180 5 "oc ${remote} rollout status deployment/lvms-operator -n openshift-storage --timeout=5s 2>/dev/null" || { echo "Timed out waiting for LVMS operator"; exit 1; }
+retry_until 180 5 "${remote_oc} rollout status deployment/lvms-operator -n openshift-storage --timeout=5s 2>/dev/null" || { echo "Timed out waiting for LVMS operator"; exit 1; }
 
-cat <<EOF | oc ${remote} apply -f -
+cat <<EOF | oc "${remote_args[@]}" apply -f -
 apiVersion: lvm.topolvm.io/v1alpha1
 kind: LVMCluster
 metadata:
@@ -74,11 +95,11 @@ spec:
           overprovisionRatio: 10
 EOF
 echo "Waiting for LVMS StorageClass..."
-retry_until 300 5 "oc ${remote} get sc lvms-vg1 2>/dev/null" || { echo "Timed out waiting for LVMS StorageClass"; exit 1; }
-oc ${remote} annotate sc lvms-vg1 storageclass.kubernetes.io/is-default-class=true --overwrite
+retry_until 300 5 "${remote_oc} get sc lvms-vg1 2>/dev/null" || { echo "Timed out waiting for LVMS StorageClass"; exit 1; }
+oc "${remote_args[@]}" annotate sc lvms-vg1 storageclass.kubernetes.io/is-default-class=true --overwrite
 
 # CNV operator
-cat <<EOF | oc ${remote} apply -f -
+cat <<EOF | oc "${remote_args[@]}" apply -f -
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -107,10 +128,10 @@ spec:
   channel: "stable"
 EOF
 echo "Waiting for CNV CRD..."
-retry_until 300 10 "oc ${remote} get crd hyperconvergeds.hco.kubevirt.io 2>/dev/null" || { echo "Timed out waiting for CNV CRD"; exit 1; }
+retry_until 300 10 "${remote_oc} get crd hyperconvergeds.hco.kubevirt.io 2>/dev/null" || { echo "Timed out waiting for CNV CRD"; exit 1; }
 
 # HyperConverged instance
-cat <<EOF | oc ${remote} apply -f -
+cat <<EOF | oc "${remote_args[@]}" apply -f -
 apiVersion: hco.kubevirt.io/v1beta1
 kind: HyperConverged
 metadata:
@@ -118,7 +139,7 @@ metadata:
   namespace: openshift-cnv
 EOF
 echo "Waiting for CNV to be available..."
-retry_until 600 15 "oc ${remote} get hyperconverged kubevirt-hyperconverged -n openshift-cnv \
+retry_until 600 15 "${remote_oc} get hyperconverged kubevirt-hyperconverged -n openshift-cnv \
     -o jsonpath='{.status.conditions[?(@.type==\"Available\")].status}' 2>/dev/null | grep -q True" || { echo "Timed out waiting for CNV to be available"; exit 1; }
 echo "CNV ready"
 
@@ -128,17 +149,22 @@ fi
 
 # Remote cluster: prepare for OSAC
 
-REMOTE_STORAGE_CLASS=${REMOTE_STORAGE_CLASS:-"lvms-vg1"}
-
-oc ${remote} create namespace ${INSTALLER_NAMESPACE}
-oc ${remote} label sc "${REMOTE_STORAGE_CLASS}" "osac.openshift.io/tenant=${INSTALLER_NAMESPACE}" --overwrite
-oc ${remote} create serviceaccount osac-remote-access -n ${INSTALLER_NAMESPACE}
-oc ${remote} adm policy add-cluster-role-to-user cluster-admin \
+oc "${remote_args[@]}" create namespace "${INSTALLER_NAMESPACE}" --dry-run=client -o yaml | oc "${remote_args[@]}" apply -f -
+oc "${remote_args[@]}" label sc "${REMOTE_STORAGE_CLASS}" "osac.openshift.io/tenant=${INSTALLER_NAMESPACE}" --overwrite
+oc "${remote_args[@]}" create serviceaccount osac-remote-access -n "${INSTALLER_NAMESPACE}" --dry-run=client -o yaml | oc "${remote_args[@]}" apply -f -
+oc "${remote_args[@]}" adm policy add-cluster-role-to-user cluster-admin \
     "system:serviceaccount:${INSTALLER_NAMESPACE}:osac-remote-access"
 
-REMOTE_TOKEN=$(oc ${remote} create token osac-remote-access -n ${INSTALLER_NAMESPACE} --duration=8760h)
+if [[ "${MODE}" == "prepare" ]]; then
+    echo "Workload cluster prepared; run install-osac with REMOTE_KUBECONFIG and REMOTE_API_ADDRESS to install OSAC in remote-cluster mode"
+    exit 0
+fi
+
+REMOTE_TOKEN=$(oc "${remote_args[@]}" create token osac-remote-access -n "${INSTALLER_NAMESPACE}" --duration=8760h)
 
 REMOTE_KUBECONFIG_FILE=$(mktemp)
+chmod 600 "${REMOTE_KUBECONFIG_FILE}"
+trap 'rm -f "${REMOTE_KUBECONFIG_FILE}"' EXIT
 cat > "${REMOTE_KUBECONFIG_FILE}" <<EOF
 apiVersion: v1
 kind: Config
@@ -160,51 +186,57 @@ users:
     token: ${REMOTE_TOKEN}
 EOF
 
-# Hub cluster: configure operator for remote cluster
+# Legacy post-install mode: update credentials in the already-installed
+# management namespace. Workload preparation does not create management objects.
+oc "${hub_args[@]}" get namespace "${INSTALLER_NAMESPACE}" >/dev/null
 
-oc ${hub} create secret generic osac-remote-kubeconfig \
-    --from-file=kubeconfig="${REMOTE_KUBECONFIG_FILE}" \
-    -n ${INSTALLER_NAMESPACE}
-oc ${hub} label secret osac-remote-kubeconfig \
+oc "${hub_args[@]}" create secret generic "${REMOTE_KUBECONFIG_SECRET_NAME}" \
+    --from-file="${REMOTE_KUBECONFIG_SECRET_KEY}=${REMOTE_KUBECONFIG_FILE}" \
+    -n "${INSTALLER_NAMESPACE}" --dry-run=client -o yaml | oc "${hub_args[@]}" apply -f -
+oc "${hub_args[@]}" label secret "${REMOTE_KUBECONFIG_SECRET_NAME}" \
     osac.openshift.io/remote-cluster-kubeconfig=true \
-    -n ${INSTALLER_NAMESPACE}
+    -n "${INSTALLER_NAMESPACE}" --overwrite
 
-rm -f "${REMOTE_KUBECONFIG_FILE}"
+# Legacy post-install mode: configure an already-installed management cluster.
 
-oc ${hub} patch deployment ${OPERATOR_DEPLOYMENT_NAME} -n ${INSTALLER_NAMESPACE} --type=strategic -p '{
+OPERATOR_PATCH=$(cat <<EOF
+{
   "spec": {"template": {"spec": {
-    "volumes": [{"name": "remote-kubeconfig", "secret": {"secretName": "osac-remote-kubeconfig"}}],
+    "volumes": [{"name": "remote-kubeconfig", "secret": {"secretName": "${REMOTE_KUBECONFIG_SECRET_NAME}"}}],
     "containers": [{"name": "manager",
       "volumeMounts": [{"name": "remote-kubeconfig", "mountPath": "/var/run/secrets/remote", "readOnly": true}],
-      "env": [{"name": "OSAC_REMOTE_CLUSTER_KUBECONFIG", "value": "/var/run/secrets/remote/kubeconfig"}]
+      "env": [{"name": "OSAC_REMOTE_CLUSTER_KUBECONFIG", "value": "/var/run/secrets/remote/${REMOTE_KUBECONFIG_SECRET_KEY}"}]
     }]
   }}}
-}'
+}
+EOF
+)
+oc "${hub_args[@]}" patch deployment "${OPERATOR_DEPLOYMENT_NAME}" -n "${INSTALLER_NAMESPACE}" --type=strategic -p "${OPERATOR_PATCH}"
 
-oc ${hub} patch secret config-as-code-ig -n ${INSTALLER_NAMESPACE} --type=strategic -p "{
+oc "${hub_args[@]}" patch secret config-as-code-ig -n "${INSTALLER_NAMESPACE}" --type=strategic -p "{
   \"stringData\": {
-    \"REMOTE_CLUSTER_KUBECONFIG_SECRET_NAME\": \"osac-remote-kubeconfig\",
-    \"REMOTE_CLUSTER_KUBECONFIG_SECRET_KEY\": \"kubeconfig\"
+    \"REMOTE_CLUSTER_KUBECONFIG_SECRET_NAME\": \"${REMOTE_KUBECONFIG_SECRET_NAME}\",
+    \"REMOTE_CLUSTER_KUBECONFIG_SECRET_KEY\": \"${REMOTE_KUBECONFIG_SECRET_KEY}\"
   }
 }"
 
 # Re-run AAP config-as-code to pick up the remote cluster kubeconfig
-AAP_PASSWORD=$(oc ${hub} get secret osac-aap-admin-password -n ${INSTALLER_NAMESPACE} -o jsonpath='{.data.password}' | base64 -d)
+AAP_PASSWORD=$(oc "${hub_args[@]}" get secret osac-aap-admin-password -n "${INSTALLER_NAMESPACE}" -o jsonpath='{.data.password}' | base64 -d)
 [[ -z "${AAP_PASSWORD}" ]] && echo "ERROR: Failed to get AAP password from secret osac-aap-admin-password" && exit 1
 
-AAP_TOKEN=$(oc ${hub} exec deployment/fulfillment-grpc-server -n ${INSTALLER_NAMESPACE} -- \
+AAP_TOKEN=$(oc "${hub_args[@]}" exec deployment/fulfillment-grpc-server -n "${INSTALLER_NAMESPACE}" -- \
     sh -c "curl -sf -X POST http://osac-aap:80/api/controller/v2/tokens/ \
     -u admin:${AAP_PASSWORD} -H 'Content-Type: application/json' -d '{}'" | jq -r '.token')
 [[ -z "${AAP_TOKEN}" || "${AAP_TOKEN}" == "null" ]] && echo "ERROR: Failed to create AAP token" && exit 1
 
-JOB_ID=$(oc ${hub} exec deployment/fulfillment-grpc-server -n ${INSTALLER_NAMESPACE} -- \
+JOB_ID=$(oc "${hub_args[@]}" exec deployment/fulfillment-grpc-server -n "${INSTALLER_NAMESPACE}" -- \
     sh -c "curl -sf -X POST http://osac-aap:80/api/controller/v2/job_templates/osac-config-as-code/launch/ \
     -H 'Authorization: Bearer ${AAP_TOKEN}' -H 'Content-Type: application/json' -d '{}'" | jq -r '.id')
 [[ -z "${JOB_ID}" || "${JOB_ID}" == "null" ]] && echo "ERROR: Failed to launch config-as-code job" && exit 1
 
 echo "Waiting for config-as-code job ${JOB_ID}..."
 timeout 900 bash -c "
-    until STATUS=\$(oc ${hub} exec deployment/fulfillment-grpc-server -n ${INSTALLER_NAMESPACE} -- \
+    until STATUS=\$(${hub_oc} exec deployment/fulfillment-grpc-server -n ${INSTALLER_NAMESPACE} -- \
         sh -c \"curl -sk http://osac-aap:80/api/controller/v2/jobs/${JOB_ID}/ \
         -H 'Authorization: Bearer ${AAP_TOKEN}'\" 2>/dev/null | jq -r '.status') && \
         [[ \"\${STATUS}\" == 'successful' || \"\${STATUS}\" == 'failed' ]]; do

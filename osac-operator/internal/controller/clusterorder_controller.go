@@ -242,18 +242,6 @@ const (
 	clusterOrderFailedEventAction       = "Failed"
 )
 
-var clusterOrderProvisioningEventReasons = map[string]struct{}{
-	v1alpha1.ConditionAccepted:              {},
-	v1alpha1.ConditionControlPlaneCreated:   {},
-	v1alpha1.ConditionControlPlaneAvailable: {},
-	v1alpha1.ConditionClusterAvailable:      {},
-	v1alpha1.ReasonStalled:                  {},
-}
-
-var clusterOrderWarningEventReasons = map[string]struct{}{
-	v1alpha1.ReasonStalled: {},
-}
-
 func (r *ClusterOrderReconciler) recordTransitionEventsForStatus(instance *v1alpha1.ClusterOrder,
 	oldStatus, newStatus *v1alpha1.ClusterOrderStatus) {
 	if r.Recorder == nil {
@@ -268,16 +256,28 @@ func (r *ClusterOrderReconciler) recordTransitionEventsForStatus(instance *v1alp
 			clusterOrderCreatedEventAction, "ClusterOrder created")
 	}
 
-	if newProgressing != nil && (oldProgressing == nil || oldProgressing.Reason != newProgressing.Reason) {
-		if _, shouldRecord := clusterOrderProvisioningEventReasons[newProgressing.Reason]; shouldRecord {
-			eventType := corev1.EventTypeNormal
-			if _, shouldWarn := clusterOrderWarningEventReasons[newProgressing.Reason]; shouldWarn {
-				eventType = corev1.EventTypeWarning
-			}
-			r.Recorder.Eventf(instance, nil, eventType, newProgressing.Reason,
-				clusterOrderProvisioningEventAction, "ClusterOrder entered provisioning stage %s",
-				humanizeConditionName(newProgressing.Reason))
+	// Each provisioning stage condition emits exactly one event, on the status patch that
+	// first persists it as True. The persisted condition is the dedup key: a later reconcile
+	// that recomputes the same status produces no patch, so no transition and no event.
+	for _, stage := range provisioningStageConditions {
+		if apimeta.IsStatusConditionTrue(newStatus.Conditions, stage) &&
+			!apimeta.IsStatusConditionTrue(oldStatus.Conditions, stage) {
+			r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, stage,
+				clusterOrderProvisioningEventAction, "ClusterOrder reached %s",
+				humanizeConditionName(stage))
 		}
+	}
+
+	// A stall has no condition of its own -- it is surfaced as the Progressing condition's
+	// reason -- so it is detected by reason change rather than by the stage diff above.
+	if newProgressing != nil && newProgressing.Reason == v1alpha1.ReasonStalled &&
+		(oldProgressing == nil || oldProgressing.Reason != v1alpha1.ReasonStalled) {
+		message := newProgressing.Message
+		if message == "" {
+			message = "ClusterOrder provisioning stalled"
+		}
+		r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, v1alpha1.ReasonStalled,
+			clusterOrderProvisioningEventAction, "%s", message)
 	}
 
 	if oldStatus.Phase != v1alpha1.ClusterOrderPhaseFailed &&
@@ -557,15 +557,15 @@ func (r *ClusterOrderReconciler) handleHostedCluster(ctx context.Context, instan
 
 	name := hc.GetName()
 	instance.SetClusterReferenceHostedClusterName(name)
-	r.setConditionAndEmitEvent(instance, v1alpha1.ConditionControlPlaneCreated, metav1.ConditionTrue, v1alpha1.ReasonAsExpected)
+	instance.SetStatusCondition(v1alpha1.ConditionControlPlaneCreated, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
 
 	if hostedClusterControlPlaneIsAvailable(hc) {
 		log.Info("hosted control plane is available", "clusterorder", instance.GetName())
-		r.setConditionAndEmitEvent(instance, v1alpha1.ConditionControlPlaneAvailable, metav1.ConditionTrue, v1alpha1.ReasonAsExpected)
+		instance.SetStatusCondition(v1alpha1.ConditionControlPlaneAvailable, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
 
 		if hostedClusterIsReady(hc) {
 			log.Info("hosted cluster is ready", "clusterorder", instance.GetName())
-			r.setConditionAndEmitEvent(instance, v1alpha1.ConditionClusterAvailable, metav1.ConditionTrue, v1alpha1.ReasonAsExpected)
+			instance.SetStatusCondition(v1alpha1.ConditionClusterAvailable, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
 		}
 	}
 
@@ -604,25 +604,14 @@ func (r *ClusterOrderReconciler) initializeProgressingStage(instance *v1alpha1.C
 	}
 }
 
+// provisioningStageConditions are the ClusterOrder conditions that each mark a provisioning
+// milestone, in the order they are reached. They double as the provisioning event vocabulary:
+// reaching one emits a single event named after the condition.
 var provisioningStageConditions = []string{
 	v1alpha1.ConditionAccepted,
 	v1alpha1.ConditionControlPlaneCreated,
 	v1alpha1.ConditionControlPlaneAvailable,
 	v1alpha1.ConditionClusterAvailable,
-}
-
-func (r *ClusterOrderReconciler) setConditionAndEmitEvent(instance *v1alpha1.ClusterOrder,
-	conditionType string, status metav1.ConditionStatus, reason string) {
-
-	if apimeta.IsStatusConditionTrue(instance.Status.Conditions, conditionType) {
-		return
-	}
-	instance.SetStatusCondition(conditionType, status, "", reason)
-	if r.Recorder != nil {
-		r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, conditionType,
-			clusterOrderProvisioningEventAction, "ClusterOrder reached %s",
-			humanizeConditionName(conditionType))
-	}
 }
 
 func (r *ClusterOrderReconciler) advanceProgressingStage(instance *v1alpha1.ClusterOrder) {
@@ -916,7 +905,6 @@ func finalizeReadyIfProvisioned(log logr.Logger, instance *v1alpha1.ClusterOrder
 	instance.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionFalse, "", v1alpha1.ReasonAsExpected)
 	return true
 }
-
 
 func (r *ClusterOrderReconciler) findHostedCluster(ctx context.Context, instance *v1alpha1.ClusterOrder, nsName string) (*hypershiftv1beta1.HostedCluster, error) {
 	log := ctrllog.FromContext(ctx)

@@ -136,6 +136,7 @@ REALM_RAW_PATH="${TMP_DIR}/realm-raw.json" \
 REALM_OUTPUT_PATH="${TMP_DIR}/realm-resolved.json" \
 REALM_ADMIN_USERNAME="demo-admin" \
 REALM_ADMIN_PASSWORD=$'test-p@ss#word&with\\slash/chars\tand\ttabs\nand\nnewlines\n' \
+OSAC_UI_URL="https://osac-ui-osac.apps.example.com" \
     bash "${CHART_DIR}/files/hooks/resolve-realm-secrets.sh" >/dev/null 2>&1 || {
         fail "resolve-realm-secrets.sh exited non-zero"
     }
@@ -301,6 +302,7 @@ if [[ -n "${STATIC_RESOLVE_SCRIPT}" ]]; then
     PATH="${TMP_DIR}/bin:${PATH}" \
     REALM_ADMIN_USERNAME="demo-admin" \
     REALM_ADMIN_PASSWORD=$'test-p@ss#word&with\\slash/chars\tand\ttabs\nand\nnewlines\n' \
+    OSAC_UI_URL="https://osac-ui-osac.apps.example.com" \
         bash "${TMP_DIR}/extracted-static-resolve.sh" >/dev/null 2>&1 || {
             fail "Static reference manifest's resolve-realm-secrets init container script exited non-zero"
         }

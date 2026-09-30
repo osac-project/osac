@@ -268,7 +268,126 @@
         path: /tmp/osac_test_overrides.log
         state: absent
 
+# ── Selector-only case: the local-class opt-in invokes csi_driver_install ──
+# This case stubs csi_driver_install, so the TopoLVM class proves the subsequent
+# storage_provider dispatch still runs. The local StorageClass role test exercises
+# the real CSI class followed by the legacy LVMS no-overwrite behavior.
+- name: "Tenant Cluster Storage CSI Driver Install Gate - Setup (local selector only)"
+  hosts: localhost
+  gather_facts: true
+
+  tasks:
+    - name: Set CSI selector without enabling the generic Helm install
+      ansible.builtin.set_fact:
+        csi_driver_install_enabled: false
+        csi_driver_install_lvms_storage_class_enabled: true
+
+    - name: Remove any previous local StorageClass
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "osac-test-tcs-selector-local"
+      failed_when: false
+
+    - name: Reset the override log
+      ansible.builtin.file:
+        path: /tmp/osac_test_overrides.log
+        state: absent
+
+    - name: Create empty override log
+      ansible.builtin.file:
+        path: /tmp/osac_test_overrides.log
+        state: touch
+        mode: "0600"
+
+    - name: Set local-only Tenant dispatch variables
+      ansible.builtin.set_fact:
+        osac_job_vars:
+          resource:
+            apiVersion: osac.openshift.io/v1alpha1
+            kind: Tenant
+            metadata:
+              name: test-tcs-selector
+              namespace: osac-tenants
+              uid: test-uid-tcs-selector
+            spec: {}
+          storage_tier_definitions:
+            - name: local
+              protocol: block
+              provider: lvms
+          storage_backend_connections: {}
+        _cluster_name: "test-cluster"
+        csi_driver_install_override:
+          name: osac.test_overrides.csi_driver_install_hooks
+          tasks_from: install.yaml
+
+- name: Run tenant cluster storage playbook with only the local selector enabled
+  ansible.builtin.import_playbook: ../../../../../playbook_osac_create_tenant_cluster_storage.yml
+
+- name: "Tenant Cluster Storage CSI Driver Install Gate - Verify results (local selector only)"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Read override log
+      ansible.builtin.slurp:
+        path: /tmp/osac_test_overrides.log
+      register: _selector_override_log_content
+
+    - name: Parse override log
+      ansible.builtin.set_fact:
+        _selector_override_log: "{{ _selector_override_log_content.content | b64decode }}"
+
+    - name: Assert the local selector alone invokes csi_driver_install for Tenant storage
+      ansible.builtin.assert:
+        that:
+          - "'csi_driver_install' in _selector_override_log"
+          - "'local-storage-class=True' in _selector_override_log"
+          - >-
+            'providers=' ~ (osac_job_vars.storage_tier_definitions | map(attribute='provider') | sort | list | to_json) in _selector_override_log
+        fail_msg: >-
+          Enabling only csi_driver_install_lvms_storage_class_enabled must invoke
+          csi_driver_install for a Tenant dispatch. Log: {{ _selector_override_log }}
+        success_msg: "The local CSI selector independently invokes csi_driver_install"
+
+    - name: Read the local StorageClass created by the legacy dispatch in this stubbed test
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "osac-test-tcs-selector-local"
+      register: _selector_local_storage_class
+
+    - name: Assert the storage_provider dispatch still runs after the CSI selector hook
+      ansible.builtin.assert:
+        that:
+          - _selector_local_storage_class.resources | length == 1
+          - _selector_local_storage_class.resources[0].provisioner == 'topolvm.io'
+        fail_msg: >-
+          The stubbed CSI install hook must not prevent the legacy storage_provider
+          dispatch from running in this playbook-wiring test.
+        success_msg: "The legacy storage_provider dispatch still ran after the selector hook"
+
+- name: "Tenant Cluster Storage CSI Driver Install Gate - Cleanup (local selector only)"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Delete local StorageClass
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "osac-test-tcs-selector-local"
+      failed_when: false
+
+    - name: Delete override log
+      ansible.builtin.file:
+        path: /tmp/osac_test_overrides.log
+        state: absent
+
 # ── Negative case: ClusterOrder kind -- csi_driver_install must NEVER fire ──
+# Run the guest case last: its remote kubeconfig fact persists across plays.
 - name: "Tenant Cluster Storage CSI Driver Install Gate - Setup (ClusterOrder case)"
   hosts: localhost
   gather_facts: true
@@ -457,124 +576,6 @@
         kind: Secret
         name: "vast-tenant-config-test-tcs-clusterorder"
         namespace: "osac-system"
-      failed_when: false
-
-    - name: Delete override log
-      ansible.builtin.file:
-        path: /tmp/osac_test_overrides.log
-        state: absent
-
-# ── Selector-only case: the local-class opt-in invokes csi_driver_install ──
-# This case stubs csi_driver_install, so the TopoLVM class proves the subsequent
-# storage_provider dispatch still runs. The local StorageClass role test exercises
-# the real CSI class followed by the legacy LVMS no-overwrite behavior.
-- name: "Tenant Cluster Storage CSI Driver Install Gate - Setup (local selector only)"
-  hosts: localhost
-  gather_facts: true
-
-  tasks:
-    - name: Set CSI selector without enabling the generic Helm install
-      ansible.builtin.set_fact:
-        csi_driver_install_enabled: false
-        csi_driver_install_lvms_storage_class_enabled: true
-
-    - name: Remove any previous local StorageClass
-      kubernetes.core.k8s:
-        state: absent
-        api_version: storage.k8s.io/v1
-        kind: StorageClass
-        name: "osac-test-tcs-selector-local"
-      failed_when: false
-
-    - name: Reset the override log
-      ansible.builtin.file:
-        path: /tmp/osac_test_overrides.log
-        state: absent
-
-    - name: Create empty override log
-      ansible.builtin.file:
-        path: /tmp/osac_test_overrides.log
-        state: touch
-        mode: "0600"
-
-    - name: Set local-only Tenant dispatch variables
-      ansible.builtin.set_fact:
-        osac_job_vars:
-          resource:
-            apiVersion: osac.openshift.io/v1alpha1
-            kind: Tenant
-            metadata:
-              name: test-tcs-selector
-              namespace: osac-tenants
-              uid: test-uid-tcs-selector
-            spec: {}
-          storage_tier_definitions:
-            - name: local
-              protocol: block
-              provider: lvms
-          storage_backend_connections: {}
-        _cluster_name: "test-cluster"
-        csi_driver_install_override:
-          name: osac.test_overrides.csi_driver_install_hooks
-          tasks_from: install.yaml
-
-- name: Run tenant cluster storage playbook with only the local selector enabled
-  ansible.builtin.import_playbook: ../../../../../playbook_osac_create_tenant_cluster_storage.yml
-
-- name: "Tenant Cluster Storage CSI Driver Install Gate - Verify results (local selector only)"
-  hosts: localhost
-  gather_facts: false
-
-  tasks:
-    - name: Read override log
-      ansible.builtin.slurp:
-        path: /tmp/osac_test_overrides.log
-      register: _selector_override_log_content
-
-    - name: Parse override log
-      ansible.builtin.set_fact:
-        _selector_override_log: "{{ _selector_override_log_content.content | b64decode }}"
-
-    - name: Assert the local selector alone invokes csi_driver_install for Tenant storage
-      ansible.builtin.assert:
-        that:
-          - "'csi_driver_install' in _selector_override_log"
-          - "'local-storage-class=True' in _selector_override_log"
-          - >-
-            'providers=' ~ (osac_job_vars.storage_tier_definitions | map(attribute='provider') | sort | list | to_json) in _selector_override_log
-        fail_msg: >-
-          Enabling only csi_driver_install_lvms_storage_class_enabled must invoke
-          csi_driver_install for a Tenant dispatch. Log: {{ _selector_override_log }}
-        success_msg: "The local CSI selector independently invokes csi_driver_install"
-
-    - name: Read the local StorageClass created by the legacy dispatch in this stubbed test
-      kubernetes.core.k8s_info:
-        api_version: storage.k8s.io/v1
-        kind: StorageClass
-        name: "osac-test-tcs-selector-local"
-      register: _selector_local_storage_class
-
-    - name: Assert the storage_provider dispatch still runs after the CSI selector hook
-      ansible.builtin.assert:
-        that:
-          - _selector_local_storage_class.resources | length == 1
-          - _selector_local_storage_class.resources[0].provisioner == 'topolvm.io'
-        fail_msg: >-
-          The stubbed CSI install hook must not prevent the legacy storage_provider
-          dispatch from running in this playbook-wiring test.
-        success_msg: "The legacy storage_provider dispatch still ran after the selector hook"
-
-- name: "Tenant Cluster Storage CSI Driver Install Gate - Cleanup (local selector only)"
-  hosts: localhost
-  gather_facts: false
-
-  tasks:
-    - name: Delete local StorageClass
-      kubernetes.core.k8s:
-        state: absent
-        api_version: storage.k8s.io/v1
-        kind: StorageClass
-        name: "osac-test-tcs-selector-local"
       failed_when: false
 
     - name: Delete override log

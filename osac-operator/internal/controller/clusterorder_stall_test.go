@@ -119,6 +119,61 @@ var _ = Describe("ClusterOrder stall detection", func() {
 		Expect(progressing.Reason).To(Equal(v1alpha1.ConditionControlPlaneCreated))
 	})
 
+	// newOrderAtClusterAvailable builds an order whose furthest milestone is
+	// ClusterAvailable, reaching ControlPlaneAvailable and ClusterAvailable at distinct
+	// times so the two candidate clocks are distinguishable.
+	newOrderAtClusterAvailable := func(controlPlaneAvailableAt, clusterAvailableAt time.Time) *v1alpha1.ClusterOrder {
+		order := newOrder(v1alpha1.ConditionControlPlaneAvailable, controlPlaneAvailableAt)
+		order.SetStatusCondition(v1alpha1.ConditionClusterAvailable, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
+		findCondition(order, v1alpha1.ConditionClusterAvailable).LastTransitionTime = metav1.NewTime(clusterAvailableAt)
+		order.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionTrue,
+			humanizeConditionName(v1alpha1.ConditionClusterAvailable), v1alpha1.ConditionClusterAvailable)
+		return order
+	}
+
+	It("still stalls once ClusterAvailable is the furthest milestone", func() {
+		// ClusterAvailable means the control plane's version rollout finished, not that
+		// the cluster is done: the order stays Progressing until the node pools match.
+		// The workers-joining watchdog has to keep running through that window.
+		order := newOrderAtClusterAvailable(baseTime, baseTime.Add(19*time.Minute))
+		reconciler := newReconciler(baseTime.Add(workersJoiningThreshold))
+
+		result := reconciler.detectProvisioningStall(order)
+
+		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+		progressing := findCondition(order, v1alpha1.ConditionProgressing)
+		Expect(progressing.Reason).To(Equal(v1alpha1.ReasonStalled))
+		Expect(progressing.Message).To(ContainSubstring("Cluster Available"))
+	})
+
+	It("does not restart the workers-joining budget when ClusterAvailable is reached", func() {
+		// Workers begin joining at ControlPlaneAvailable and keep trying throughout, so
+		// the budget is measured from there. ClusterAvailable is a milestone on a
+		// parallel axis and must not push the deadline out.
+		order := newOrderAtClusterAvailable(baseTime, baseTime.Add(5*time.Minute))
+		reconciler := newReconciler(baseTime.Add(15 * time.Minute))
+
+		result := reconciler.detectProvisioningStall(order)
+
+		Expect(result.RequeueAfter).To(Equal(5 * time.Minute))
+		Expect(findCondition(order, v1alpha1.ConditionProgressing).Reason).
+			To(Equal(v1alpha1.ConditionClusterAvailable))
+	})
+
+	It("resolves a stall threshold for every provisioning stage condition", func() {
+		// A stage with no threshold silently disables stall detection from that point
+		// on, so adding one to provisioningStageConditions must not be possible without
+		// also giving it a clock.
+		order := newOrder(v1alpha1.ConditionControlPlaneAvailable, baseTime)
+		reconciler := newReconciler(baseTime)
+
+		for _, stage := range provisioningStageConditions {
+			_, threshold, found := reconciler.provisioningStageTiming(order, stage)
+			Expect(found).To(BeTrue(), "stage %q has no stall threshold", stage)
+			Expect(threshold).To(BeNumerically(">", 0), "stage %q has a zero stall threshold", stage)
+		}
+	})
+
 	It("does not stall when the current stage is unrecognized", func() {
 		order := &v1alpha1.ClusterOrder{
 			Status: v1alpha1.ClusterOrderStatus{

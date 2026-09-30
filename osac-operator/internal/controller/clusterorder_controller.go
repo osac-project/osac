@@ -678,19 +678,31 @@ func (r *ClusterOrderReconciler) provisioningStageTiming(instance *v1alpha1.Clus
 		thresholds.WorkersJoining = defaultWorkersJoiningStallThreshold
 	}
 
+	// A stage names the milestone reached; the condition below names the milestone the
+	// clock starts from. They are usually the same, but not always -- see the shared
+	// case for the workers-joining window.
+	conditionType := ""
 	threshold := time.Duration(0)
 	switch stage {
 	case v1alpha1.ConditionAccepted:
+		conditionType = v1alpha1.ConditionAccepted
 		threshold = thresholds.PreparingInfrastructure
 	case v1alpha1.ConditionControlPlaneCreated:
+		conditionType = v1alpha1.ConditionControlPlaneCreated
 		threshold = thresholds.ControlPlaneStarting
-	case v1alpha1.ConditionControlPlaneAvailable:
+	case v1alpha1.ConditionControlPlaneAvailable, v1alpha1.ConditionClusterAvailable:
+		// Both stages cover the same in-flight work: workers joining. That work starts
+		// when the API server becomes reachable (ControlPlaneAvailable), so the clock is
+		// anchored there for both. ClusterAvailable is the control plane's own version
+		// rollout completing -- a milestone on a parallel axis that restarts nothing, so
+		// it must not restart the budget either.
+		conditionType = v1alpha1.ConditionControlPlaneAvailable
 		threshold = thresholds.workersJoiningThreshold(instance.Spec.NodeRequests)
 	default:
 		return time.Time{}, 0, false
 	}
 
-	condition := apimeta.FindStatusCondition(instance.Status.Conditions, stage)
+	condition := apimeta.FindStatusCondition(instance.Status.Conditions, conditionType)
 	if condition == nil {
 		return time.Time{}, 0, false
 	}

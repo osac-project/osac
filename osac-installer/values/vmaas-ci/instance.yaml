@@ -33,6 +33,8 @@ operator:
     pullPolicy: Always
   provisioning:
     provider: "aap"
+  vendorControllers:
+    lvms: none
   aap:
     insecureSkipVerify: "true"
     tokenSecret:

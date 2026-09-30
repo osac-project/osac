@@ -405,9 +405,11 @@ helm-template: ## Dry-run render all templates
 	helm template osac $(OSAC_CHART) --values $(OSAC_CHART)/ci/default-values.yaml
 
 .PHONY: csi-render-test
-csi-render-test: helm-deps ## Verify CSI namespace and ConfigMap rendering modes
+csi-render-test: helm-deps ## Verify CSI and storage-provider chart rendering
 	@set -euo pipefail; \
 		caas_render="$$(mktemp)"; \
+		vmaas_render="$$(mktemp)"; \
+		default_operator_render="$$(mktemp)"; \
 		csi_render="$$(mktemp)"; \
 		full_render="$$(mktemp)"; \
 		custom_render="$$(mktemp)"; \
@@ -415,7 +417,7 @@ csi-render-test: helm-deps ## Verify CSI namespace and ConfigMap rendering modes
 		infra_render="$$(mktemp)"; \
 		infra_enabled_render="$$(mktemp)"; \
 		error_render="$$(mktemp)"; \
-		trap 'rm -f "$$caas_render" "$$csi_render" "$$full_render" "$$custom_render" "$$node_render" "$$infra_render" "$$infra_enabled_render" "$$error_render"' EXIT; \
+		trap 'rm -f "$$caas_render" "$$vmaas_render" "$$default_operator_render" "$$csi_render" "$$full_render" "$$custom_render" "$$node_render" "$$infra_render" "$$infra_enabled_render" "$$error_render"' EXIT; \
 		assert_helm_failure() { \
 			expected="$$1"; shift; \
 			if "$$@" >/dev/null 2>"$$error_render"; then \
@@ -435,6 +437,24 @@ csi-render-test: helm-deps ## Verify CSI namespace and ConfigMap rendering modes
 			--set service.internalHostname=fulfillment-internal-api.example.com \
 			--set global.clusterDomain=example.com > "$$caas_render"; \
 		! rg -q '^  OSAC_FULFILLMENT_ENDPOINT:' "$$caas_render"; \
+		helm template osac $(OSAC_CHART) \
+			--values values/vmaas-ci/instance.yaml \
+			--set operator.networkManagers.enabled=true \
+			--set service.externalHostname=fulfillment-api.example.com \
+			--set service.internalHostname=fulfillment-internal-api.example.com \
+			--set global.clusterDomain=example.com > "$$vmaas_render"; \
+		rg -Uq 'name: OSAC_VENDOR_CONTROLLERS\n[[:blank:]]+value: "lvms=none"' "$$vmaas_render"; \
+		helm template osac $(OSAC_CHART) \
+			--values $(OSAC_CHART)/ci/default-values.yaml > "$$default_operator_render"; \
+		! rg -q 'name: OSAC_VENDOR_CONTROLLERS' "$$default_operator_render"; \
+		assert_helm_failure "at '/operator/vendorControllers/lvms'" \
+			helm template osac $(OSAC_CHART) \
+			--values $(OSAC_CHART)/ci/default-values.yaml \
+			--set-string operator.vendorControllers.lvms=; \
+		assert_helm_failure "at '/operator/vendorControllers/lvms'" \
+			helm template osac $(OSAC_CHART) \
+			--values $(OSAC_CHART)/ci/default-values.yaml \
+			--set operator.vendorControllers.lvms=42; \
 		helm template osac $(OSAC_CHART) \
 			--values charts/osac/ci/default-values.yaml \
 			--set operator.enabled=false \

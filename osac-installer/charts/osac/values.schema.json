@@ -540,7 +540,12 @@
         },
         "vendorControllers": {
           "type": "object",
-          "description": "Vendor-specific controller configuration (subchart default)"
+          "description": "Map provider identifiers to vendor controller gRPC endpoints consumed by the Volume controller. Use 'none' for node-local providers such as LVMS.",
+          "default": {},
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          }
         },
         "remoteClusterKubeconfig": {
           "type": "string",

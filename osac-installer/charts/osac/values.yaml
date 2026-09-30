@@ -119,6 +119,9 @@ operator:
     # reconciles NetworkClass. Set false for local environments without a fabric.
     networkingProvisioning: true
     storage: true
+  # Provider-to-endpoint map consumed by the Volume controller. Node-local
+  # providers such as LVMS use "none" because they do not dial a vendor gRPC endpoint.
+  vendorControllers: {}
   configSecret:
     name: "osac-config"
     optional: true

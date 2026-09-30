@@ -110,6 +110,10 @@ operator:
     tenant: true
     networking: true
 
+  # Provider-to-endpoint map for the operator Volume controller. Node-local
+  # LVMS provisioning uses "none" because it has no vendor gRPC endpoint.
+  vendorControllers: {}
+
   # Secret containing operator configuration overrides. Mounted as
   # environment variables. Created by create-api-token Helm hook.
   configSecret:

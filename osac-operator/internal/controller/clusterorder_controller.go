@@ -243,16 +243,15 @@ const (
 )
 
 var clusterOrderProvisioningEventReasons = map[string]struct{}{
-	v1alpha1.ReasonPreparingInfrastructure: {},
-	v1alpha1.ReasonControlPlaneStarting:    {},
-	v1alpha1.ReasonWorkersJoining:          {},
-	v1alpha1.ReasonStageUnknown:            {},
-	v1alpha1.ReasonStalled:                 {},
+	v1alpha1.ConditionAccepted:              {},
+	v1alpha1.ConditionControlPlaneCreated:   {},
+	v1alpha1.ConditionControlPlaneAvailable: {},
+	v1alpha1.ConditionClusterAvailable:      {},
+	v1alpha1.ReasonStalled:                  {},
 }
 
 var clusterOrderWarningEventReasons = map[string]struct{}{
-	v1alpha1.ReasonStageUnknown: {},
-	v1alpha1.ReasonStalled:      {},
+	v1alpha1.ReasonStalled: {},
 }
 
 func (r *ClusterOrderReconciler) recordTransitionEventsForStatus(instance *v1alpha1.ClusterOrder,
@@ -558,21 +557,20 @@ func (r *ClusterOrderReconciler) handleHostedCluster(ctx context.Context, instan
 
 	name := hc.GetName()
 	instance.SetClusterReferenceHostedClusterName(name)
-	instance.SetStatusCondition(v1alpha1.ConditionControlPlaneCreated, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
-
-	if instance.Status.Phase == v1alpha1.ClusterOrderPhaseProgressing {
-		subStage := deriveProvisioningSubStage(hc)
-		r.setProgressingStage(instance, subStage)
-	}
+	r.setConditionAndEmitEvent(instance, v1alpha1.ConditionControlPlaneCreated, metav1.ConditionTrue, v1alpha1.ReasonAsExpected)
 
 	if hostedClusterControlPlaneIsAvailable(hc) {
 		log.Info("hosted control plane is available", "clusterorder", instance.GetName())
-		instance.SetStatusCondition(v1alpha1.ConditionControlPlaneAvailable, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
+		r.setConditionAndEmitEvent(instance, v1alpha1.ConditionControlPlaneAvailable, metav1.ConditionTrue, v1alpha1.ReasonAsExpected)
 
 		if hostedClusterIsReady(hc) {
 			log.Info("hosted cluster is ready", "clusterorder", instance.GetName())
-			instance.SetStatusCondition(v1alpha1.ConditionClusterAvailable, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
+			r.setConditionAndEmitEvent(instance, v1alpha1.ConditionClusterAvailable, metav1.ConditionTrue, v1alpha1.ReasonAsExpected)
 		}
+	}
+
+	if instance.Status.Phase == v1alpha1.ClusterOrderPhaseProgressing {
+		r.advanceProgressingStage(instance)
 	}
 
 	// Copy VIP endpoints from annotations (written by the CaaS template's
@@ -602,7 +600,40 @@ func (r *ClusterOrderReconciler) setProgressingStage(instance *v1alpha1.ClusterO
 func (r *ClusterOrderReconciler) initializeProgressingStage(instance *v1alpha1.ClusterOrder) {
 	progressing := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
 	if progressing == nil || progressing.Reason == "" || progressing.Reason == v1alpha1.ReasonProgressing {
-		r.setProgressingStage(instance, v1alpha1.ReasonPreparingInfrastructure)
+		r.setProgressingStage(instance, v1alpha1.ConditionAccepted)
+	}
+}
+
+var provisioningStageConditions = []string{
+	v1alpha1.ConditionAccepted,
+	v1alpha1.ConditionControlPlaneCreated,
+	v1alpha1.ConditionControlPlaneAvailable,
+	v1alpha1.ConditionClusterAvailable,
+}
+
+func (r *ClusterOrderReconciler) setConditionAndEmitEvent(instance *v1alpha1.ClusterOrder,
+	conditionType string, status metav1.ConditionStatus, reason string) {
+
+	if apimeta.IsStatusConditionTrue(instance.Status.Conditions, conditionType) {
+		return
+	}
+	instance.SetStatusCondition(conditionType, status, "", reason)
+	if r.Recorder != nil {
+		r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, conditionType,
+			clusterOrderProvisioningEventAction, "ClusterOrder reached %s",
+			humanizeConditionName(conditionType))
+	}
+}
+
+func (r *ClusterOrderReconciler) advanceProgressingStage(instance *v1alpha1.ClusterOrder) {
+	furthest := ""
+	for _, cond := range provisioningStageConditions {
+		if apimeta.IsStatusConditionTrue(instance.Status.Conditions, cond) {
+			furthest = cond
+		}
+	}
+	if furthest != "" {
+		r.setProgressingStage(instance, furthest)
 	}
 }
 
@@ -658,23 +689,19 @@ func (r *ClusterOrderReconciler) provisioningStageTiming(instance *v1alpha1.Clus
 		thresholds.WorkersJoining = defaultWorkersJoiningStallThreshold
 	}
 
-	conditionType := ""
 	threshold := time.Duration(0)
 	switch stage {
-	case v1alpha1.ReasonPreparingInfrastructure:
-		conditionType = v1alpha1.ConditionAccepted
+	case v1alpha1.ConditionAccepted:
 		threshold = thresholds.PreparingInfrastructure
-	case v1alpha1.ReasonControlPlaneStarting:
-		conditionType = v1alpha1.ConditionControlPlaneCreated
+	case v1alpha1.ConditionControlPlaneCreated:
 		threshold = thresholds.ControlPlaneStarting
-	case v1alpha1.ReasonWorkersJoining:
-		conditionType = v1alpha1.ConditionControlPlaneAvailable
+	case v1alpha1.ConditionControlPlaneAvailable:
 		threshold = thresholds.workersJoiningThreshold(instance.Spec.NodeRequests)
 	default:
 		return time.Time{}, 0, false
 	}
 
-	condition := apimeta.FindStatusCondition(instance.Status.Conditions, conditionType)
+	condition := apimeta.FindStatusCondition(instance.Status.Conditions, stage)
 	if condition == nil {
 		return time.Time{}, 0, false
 	}
@@ -890,23 +917,6 @@ func finalizeReadyIfProvisioned(log logr.Logger, instance *v1alpha1.ClusterOrder
 	return true
 }
 
-// deriveProvisioningSubStage returns a live sub-stage reason reflecting the current HC condition
-// snapshot. It is intentionally non-monotonic: if conditions transiently disappear the reason can
-// regress (e.g. WorkersJoining back to StageUnknown). The coarse stage conditions
-// (ControlPlaneCreated, ControlPlaneAvailable) remain sticky-True and provide monotonic progress.
-func deriveProvisioningSubStage(hc *hypershiftv1beta1.HostedCluster) string {
-	if len(hc.Status.Conditions) == 0 {
-		return v1alpha1.ReasonStageUnknown
-	}
-	if !apimeta.IsStatusConditionTrue(hc.Status.Conditions, string(hypershiftv1beta1.InfrastructureReady)) {
-		return v1alpha1.ReasonPreparingInfrastructure
-	}
-	if apimeta.IsStatusConditionTrue(hc.Status.Conditions, string(hypershiftv1beta1.KubeAPIServerAvailable)) &&
-		apimeta.IsStatusConditionTrue(hc.Status.Conditions, string(hypershiftv1beta1.HostedClusterAvailable)) {
-		return v1alpha1.ReasonWorkersJoining
-	}
-	return v1alpha1.ReasonControlPlaneStarting
-}
 
 func (r *ClusterOrderReconciler) findHostedCluster(ctx context.Context, instance *v1alpha1.ClusterOrder, nsName string) (*hypershiftv1beta1.HostedCluster, error) {
 	log := ctrllog.FromContext(ctx)

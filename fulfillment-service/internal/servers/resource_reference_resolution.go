@@ -559,6 +559,11 @@ func canonicalBareMetalInstanceTypeReference(resolved *privatev1.BareMetalInstan
 	}.Build()
 }
 
+// canonicalBareMetalInstanceTypeLocalReference copies the resolved object's ID and name into a new local reference.
+func canonicalBareMetalInstanceTypeLocalReference(resolved *privatev1.BareMetalInstanceType) *privatev1.BareMetalInstanceTypeLocalReference {
+	return privatev1.BareMetalInstanceTypeLocalReference_builder{Id: resolved.GetId(), Name: resolved.GetMetadata().GetName()}.Build()
+}
+
 // canonicalSubnetLocalReference copies the resolved object's ID and name into a new local reference.
 func canonicalSubnetLocalReference(resolved *privatev1.Subnet) *privatev1.SubnetLocalReference {
 	return privatev1.SubnetLocalReference_builder{Id: resolved.GetId(), Name: resolved.GetMetadata().GetName()}.Build()

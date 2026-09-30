@@ -1,0 +1,4 @@
+# VMaaS operators and CRs belong on the workload cluster in a multicluster
+# install. setup-remote-cluster.sh prepares them there before OSAC is installed.
+cnv:
+  enabled: false

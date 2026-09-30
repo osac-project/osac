@@ -22,6 +22,7 @@ const (
 	envTLSCertFile            = "OSAC_CONSOLE_PROXY_TLS_CERT_FILE"
 	envTLSKeyFile             = "OSAC_CONSOLE_PROXY_TLS_KEY_FILE"
 	envVMClusterMode          = "OSAC_CONSOLE_PROXY_VM_CLUSTER_MODE"
+	envRemoteKubeconfigKey    = "OSAC_REMOTE_CLUSTER_KUBECONFIG_SECRET_KEY"
 )
 
 func main() {
@@ -31,6 +32,7 @@ func main() {
 		tlsCertFile            string
 		tlsKeyFile             string
 		vmClusterMode          string
+		remoteKubeconfigKey    string
 	)
 	flag.IntVar(&port, "port", 8443,
 		"Port for the HTTPS API server that handles console WebSocket connections")
@@ -50,6 +52,9 @@ func main() {
              in the ComputeInstance's namespace (dedicated VM cluster)
   "local"  - use the proxy's own in-cluster config (VMs on the same cluster)
   "auto"   - try remote first, fall back to local if no Secret is found (default)`)
+	flag.StringVar(&remoteKubeconfigKey, "remote-kubeconfig-secret-key",
+		envOrDefault(envRemoteKubeconfigKey, consoleproxy.DefaultRemoteKubeconfigSecretKey),
+		"Secret data key containing the remote VM cluster kubeconfig")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
@@ -78,7 +83,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	resolver, err := buildConfigResolver(vmClusterMode, hubClient, hubConfig, logger)
+	resolver, err := buildConfigResolver(vmClusterMode, remoteKubeconfigKey, hubClient, hubConfig, logger)
 	if err != nil {
 		logger.Error("Failed to build config resolver", "error", err, "vmClusterMode", vmClusterMode)
 		os.Exit(1)
@@ -114,17 +119,17 @@ func main() {
 }
 
 func buildConfigResolver(
-	mode string, hubClient client.Client, hubConfig *rest.Config, logger *slog.Logger,
+	mode, remoteKubeconfigKey string, hubClient client.Client, hubConfig *rest.Config, logger *slog.Logger,
 ) (consoleproxy.ConfigResolver, error) {
 	switch mode {
 	case consoleproxy.VMClusterModeRemote:
-		return consoleproxy.NewRemoteConfigResolver(hubClient, logger), nil
+		return consoleproxy.NewRemoteConfigResolver(hubClient, remoteKubeconfigKey, logger), nil
 
 	case consoleproxy.VMClusterModeLocal:
 		return consoleproxy.NewLocalConfigResolver(hubConfig, logger), nil
 
 	case consoleproxy.VMClusterModeAuto, "":
-		remote := consoleproxy.NewRemoteConfigResolver(hubClient, logger)
+		remote := consoleproxy.NewRemoteConfigResolver(hubClient, remoteKubeconfigKey, logger)
 		local := consoleproxy.NewLocalConfigResolver(hubConfig, logger)
 		return consoleproxy.NewAutoConfigResolver(remote, local, logger), nil
 

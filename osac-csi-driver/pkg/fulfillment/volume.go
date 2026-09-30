@@ -19,8 +19,7 @@ type VolumeInfo struct {
 	Name  string
 	State VolumeState
 	// Provider is the provider selected by server-side StorageTier resolution.
-	// Backend is retained as the current CSI volume-context routing alias until
-	// the OSAC-5311 consumer transition changes that key to osac.provider.
+	// Backend is the provider alias used by the osac.backend CSI routing key.
 	Provider string
 	Backend  string
 	// Message contains the detailed fulfillment/operator failure reason, when

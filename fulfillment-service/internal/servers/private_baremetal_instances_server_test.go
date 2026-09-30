@@ -3469,12 +3469,12 @@ var _ = Describe("Private bare metal instances server", func() {
 
 var _ = Describe("BareMetalInstance auto-EIP atomic provisioning", func() {
 	var (
-		server              *PrivateBareMetalInstancesServer
-		catalogServer       *PrivateBareMetalInstanceCatalogItemsServer
-		externalIPPoolDao   *dao.GenericDAO[*privatev1.ExternalIPPool]
-		externalIPDao       *dao.GenericDAO[*privatev1.ExternalIP]
-		externalIPAttDao    *dao.GenericDAO[*privatev1.ExternalIPAttachment]
-		catalogItemID       string
+		server            *PrivateBareMetalInstancesServer
+		catalogServer     *PrivateBareMetalInstanceCatalogItemsServer
+		externalIPPoolDao *dao.GenericDAO[*privatev1.ExternalIPPool]
+		externalIPDao     *dao.GenericDAO[*privatev1.ExternalIP]
+		externalIPAttDao  *dao.GenericDAO[*privatev1.ExternalIPAttachment]
+		catalogItemID     string
 	)
 
 	BeforeEach(func() {

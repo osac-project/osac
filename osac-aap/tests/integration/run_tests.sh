@@ -48,6 +48,7 @@ WORKFLOWS=(
   "compute_instance_with_gpu_create"
   "compute_instance_delete"
   "cluster_status_reporting"
+  "addon_operator_install"
 )
 
 # Role-level integration tests.

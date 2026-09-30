@@ -76,6 +76,19 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     allow_simultaneous: true
     ask_variables_on_launch: true
     verbosity: 0
+  - name: "{{ aap_prefix }}-install-addon-operator"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_install_addon_operator.yml"
+    inventory: "{{ aap_prefix }}-cluster-fulfillment"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-addon-operators-ig"
+    prevent_instance_group_fallback: true
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    verbosity: 0
   - name: "{{ aap_prefix }}-create-compute-instance"
     project: "{{ aap_prefix }}"
     organization: "{{ aap_organization_name }}"
@@ -896,6 +909,10 @@ controller_instance_groups: # noqa: var-naming[no-role-prefix]
               name: ca-bundle
   - name: "{{ aap_prefix }}-create-hosted-cluster-post-install-ig"
     is_container_group: true
+
+  - name: "{{ aap_prefix }}-addon-operators-ig"
+    is_container_group: true
+    max_concurrent_jobs: "{{ addon_operator_max_concurrent_jobs }}"
 
   - name: "{{ aap_prefix }}-compute-instance-operations-ig"
     is_container_group: true

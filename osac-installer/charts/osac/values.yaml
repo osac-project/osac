@@ -250,6 +250,8 @@ aap:
   configAsCode:
     manifestSecret: "config-as-code-manifest-ig"
     secret: "config-as-code-ig"
+    # Maximum number of add-on operator jobs allowed to run concurrently.
+    addonOperatorMaxConcurrentJobs: 50
     eeImage: ""
     projectGitUri: ""
     projectGitBranch: ""

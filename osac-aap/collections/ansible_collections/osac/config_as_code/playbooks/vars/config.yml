@@ -32,3 +32,4 @@ remote_cluster_kubeconfig_secret_key: "{{ lookup('env', 'REMOTE_CLUSTER_KUBECONF
 osac_publish_templates_enabled: "{{ lookup('env', 'OSAC_PUBLISH_TEMPLATES_ENABLED', default='true') | bool }}"
 osac_import_agents_enabled: "{{ lookup('env', 'OSAC_IMPORT_AGENTS_ENABLED', default='false') | bool }}"
 osac_import_bcm_agents_enabled: "{{ lookup('env', 'OSAC_IMPORT_BCM_AGENTS_ENABLED', default='false') | bool }}"
+addon_operator_max_concurrent_jobs: "{{ lookup('env', 'AAP_ADDON_OPERATOR_MAX_CONCURRENT_JOBS', default='50') | int }}"

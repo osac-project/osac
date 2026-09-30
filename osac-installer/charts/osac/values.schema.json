@@ -1053,6 +1053,12 @@
               "type": "string",
               "description": "Execution environment image pull specification for config-as-code"
             },
+            "addonOperatorMaxConcurrentJobs": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 50,
+              "description": "Maximum number of add-on operator jobs allowed to run concurrently"
+            },
             "manifest": {
               "type": "object",
               "description": "Manifest instance group config-as-code settings",

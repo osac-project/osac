@@ -1302,19 +1302,7 @@ func (s *GenericServer[O]) setCreator(ctx context.Context, object O, creator str
 // being created or updated. In case of error it returns a gRPC error that can be directly returned to the client.
 func (s *GenericServer[O]) determineAssignedTenant(ctx context.Context,
 	requestObject, currentObject O) (result string, err error) {
-	// Determine the visibility:
-	visibility, err := s.tenancyLogic.DetermineVisibility(ctx)
-	if err != nil {
-		s.logger.ErrorContext(
-			ctx,
-			"Failed to determine visibility",
-			slog.Any("error", err),
-		)
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to determine visibility")
-		return
-	}
-
-	// Determine the tenants that can be assigned to the object:
+	// Perform upfront validation to ensure the user has at least one assignable tenant
 	assignableTenants, err := s.tenancyLogic.DetermineAssignableTenants(ctx)
 	if err != nil {
 		s.logger.ErrorContext(
@@ -1330,64 +1318,23 @@ func (s *GenericServer[O]) determineAssignedTenant(ctx context.Context,
 		return
 	}
 
-	// Determine the default tenant:
-	defaultTenant, err := s.tenancyLogic.DetermineDefaultTenant(ctx)
-	if err != nil {
-		s.logger.ErrorContext(
-			ctx,
-			"Failed to determine default tenant",
-			slog.Any("error", err),
-		)
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to determine default tenant")
+	// Get the tenant from the request and current object
+	requestTenant := s.getTenant(requestObject)
+	currentTenant := s.getTenant(currentObject)
+
+	// Use shared tenant determination logic
+	result, tenantErr := auth.DetermineTenantForOperation(ctx, s.tenancyLogic, requestTenant, currentTenant)
+	if tenantErr != nil {
+		err = convertTenantErrorToGRPC(ctx, tenantErr, s.logger, requestTenant)
 		return
 	}
-	if defaultTenant == "" {
+
+	// Validate that the determined tenant is not empty
+	if result == "" {
 		err = grpcstatus.Errorf(grpccodes.PermissionDenied, "there is no default tenant")
 		return
 	}
 
-	// Get the tenant from the request and current object:
-	requestTenant := s.getTenant(requestObject)
-	currentTenant := s.getTenant(currentObject)
-
-	// If the request specifies a tenant, check that it is visible and assignable:
-	if requestTenant != "" {
-		if !visibility.IsTenantVisible(requestTenant) {
-			s.logger.WarnContext(
-				ctx,
-				"User is trying to assign a tenant that is invisible to them",
-				slog.String("requested", requestTenant),
-			)
-			err = grpcstatus.Errorf(
-				grpccodes.PermissionDenied,
-				"tenant '%s' doesn't exist",
-				requestTenant,
-			)
-			return
-		}
-		if !assignableTenants.Contains(requestTenant) {
-			s.logger.WarnContext(
-				ctx,
-				"User is trying to assign a tenant that is unassignable",
-				slog.String("requested", requestTenant),
-			)
-			err = grpcstatus.Errorf(
-				grpccodes.PermissionDenied,
-				"tenant '%s' can't be assigned",
-				requestTenant,
-			)
-			return
-		}
-		result = requestTenant
-		return
-	}
-
-	// Fall back to the current tenant or the default:
-	if currentTenant != "" {
-		result = currentTenant
-	} else {
-		result = defaultTenant
-	}
 	return
 }
 

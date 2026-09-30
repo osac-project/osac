@@ -29,6 +29,13 @@ logger = logging.getLogger(__name__)
 
 _RESTART_IN_PROGRESS: str = "BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_IN_PROGRESS"
 _RESTART_FAILED: str = "BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_FAILED"
+_READY: str = "BARE_METAL_INSTANCE_CONDITION_TYPE_READY"
+_PROVISIONED: str = "BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED"
+_CONDITION_STATUS_TRUE: str = "CONDITION_STATUS_TRUE"
+# Terminal condition reasons stamped by the fulfillment reconciler at the Ready state:
+# the READY axis carries the "Ready" state, the PROVISIONED axis the "Provisioned" state.
+_READY_REASON: str = "Ready"
+_PROVISIONED_REASON: str = "Provisioned"
 _MAC_PATTERN: re.Pattern[str] = re.compile(r"^([0-9a-f]{2}:){5}[0-9a-f]{2}$")
 
 
@@ -75,12 +82,19 @@ def _assert_nic_metadata(
         assert mac in ni_section, f"osac describe baremetalinstance 'Network Interfaces:' section missing MAC '{mac}'"
 
 
-def _get_condition_status(grpc: GRPCClient, bmi_id: str, condition_type: str) -> str:
-    response: dict[str, Any] = grpc.get_baremetal_instance(bmi_id=bmi_id)
+def _find_condition(response: dict[str, Any], condition_type: str) -> dict[str, Any]:
     for condition in response.get("object", {}).get("status", {}).get("conditions", []):
         if condition.get("type") == condition_type:
-            return condition.get("status", "")
-    return ""
+            return condition
+    return {}
+
+
+def _get_condition(grpc: GRPCClient, bmi_id: str, condition_type: str) -> dict[str, Any]:
+    return _find_condition(grpc.get_baremetal_instance(bmi_id=bmi_id), condition_type)
+
+
+def _get_condition_status(grpc: GRPCClient, bmi_id: str, condition_type: str) -> str:
+    return _get_condition(grpc, bmi_id, condition_type).get("status", "")
 
 
 def _get_status_restart_trigger(grpc: GRPCClient, bmi_id: str) -> int:
@@ -115,6 +129,30 @@ def test_baremetal_instance_lifecycle(
         wait_for_bmi_running(grpc=jwt_grpc_tenant1, bmi_id=bmi_id)
         if os.environ.get("OSAC_FULFILLMENT_TRUST_E2E") == "true":
             assert_management_tls(k8s_hub_client)
+
+        # OSAC-5349: once the instance is RUNNING, the terminal provisioning stage must be
+        # observable through the public API: the READY condition True (reason "Ready") with
+        # the PROVISIONED axis coherent (True, reason "Provisioned"). Poll briefly to absorb
+        # a single reconcile lag between the RUNNING state and the condition write, then read
+        # both axes from one snapshot so they are asserted against a consistent view.
+        instance: dict[str, Any] = poll_until(
+            fn=lambda: jwt_grpc_tenant1.get_baremetal_instance(bmi_id=bmi_id),
+            until=lambda r: _find_condition(r, _READY).get("status") == _CONDITION_STATUS_TRUE,
+            retries=30,
+            delay=2,
+            description=f"{bmi_id} READY condition True",
+        )
+        ready_condition: dict[str, Any] = _find_condition(instance, _READY)
+        assert ready_condition.get("reason") == _READY_REASON, (
+            f"READY condition reason {ready_condition.get('reason')!r}, expected {_READY_REASON!r}"
+        )
+        provisioned_condition: dict[str, Any] = _find_condition(instance, _PROVISIONED)
+        assert provisioned_condition.get("status") == _CONDITION_STATUS_TRUE, (
+            f"PROVISIONED condition should be True at the terminal stage, got {provisioned_condition.get('status')!r}"
+        )
+        assert provisioned_condition.get("reason") == _PROVISIONED_REASON, (
+            f"PROVISIONED condition reason {provisioned_condition.get('reason')!r}, expected {_PROVISIONED_REASON!r}"
+        )
 
         external_host_id: str = k8s_hub_client.get_baremetal_instance_external_host_id(name=bmi_cr_name)
         assert "/" in external_host_id, f"Expected namespace/name format, got: {external_host_id}"

@@ -468,7 +468,7 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 
 var _ = Describe("Bare Metal Instance Catalog Item policy application", func() {
 	It("applies every Bare Metal policy and deep-clones lists and messages", func() {
-		instanceType := privatev1.BareMetalInstanceTypeReference_builder{Id: "host-id", Name: "host", Shared: true}.Build()
+		instanceType := privatev1.BareMetalInstanceTypeLocalReference_builder{Id: "host-id", Name: "host"}.Build()
 		diskImage := privatev1.DiskImageReference_builder{Id: "image-id", Name: "disk-image"}.Build()
 		attachment := privatev1.BareMetalNetworkAttachment_builder{
 			Subnet:         policyTestSubnet("bare-metal-subnet"),
@@ -487,7 +487,7 @@ var _ = Describe("Bare Metal Instance Catalog Item policy application", func() {
 				Locked: privatev1.BareMetalNetworkAttachmentList_builder{Items: []*privatev1.BareMetalNetworkAttachment{nil, attachment}}.Build(),
 			}.Build(),
 			AutoExternalIpAttachment: privatev1.BoolFieldPolicy_builder{Locked: &autoExternalIP}.Build(),
-			InstanceType:             privatev1.BareMetalInstanceTypeReferenceFieldPolicy_builder{Locked: instanceType}.Build(),
+			InstanceType:             privatev1.BareMetalInstanceTypeLocalReferenceFieldPolicy_builder{Locked: instanceType}.Build(),
 			DiskImage:                privatev1.DiskImageReferenceFieldPolicy_builder{Locked: diskImage}.Build(),
 		}.Build()
 		item := privatev1.BareMetalInstanceCatalogItem_builder{Fields: fields}.Build()

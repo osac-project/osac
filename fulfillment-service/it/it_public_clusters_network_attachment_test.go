@@ -92,12 +92,6 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 				Id:          templateId,
 				Title:       "My template",
 				Description: "My template.",
-				NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
-					"my-node-set": privatev1.ClusterTemplateNodeSet_builder{
-						HostType: privatev1.HostTypeReference_builder{Id: hostTypeId}.Build(),
-						Size:     3,
-					}.Build(),
-				},
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())

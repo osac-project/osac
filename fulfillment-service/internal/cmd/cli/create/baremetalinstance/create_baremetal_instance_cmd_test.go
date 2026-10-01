@@ -43,11 +43,15 @@ func (catalogItemsServer) List(context.Context, *publicv1.BareMetalInstanceCatal
 
 type bareMetalInstancesServer struct {
 	publicv1.UnimplementedBareMetalInstancesServer
-	warnings  []string
-	createErr error
+	warnings       []string
+	createErr      error
+	createdTenants chan<- string
 }
 
-func (s bareMetalInstancesServer) Create(context.Context, *publicv1.BareMetalInstancesCreateRequest) (*publicv1.BareMetalInstancesCreateResponse, error) {
+func (s bareMetalInstancesServer) Create(_ context.Context, request *publicv1.BareMetalInstancesCreateRequest) (*publicv1.BareMetalInstancesCreateResponse, error) {
+	if s.createdTenants != nil {
+		s.createdTenants <- request.GetObject().GetMetadata().GetTenant()
+	}
 	if s.createErr != nil {
 		return nil, s.createErr
 	}
@@ -56,6 +60,45 @@ func (s bareMetalInstancesServer) Create(context.Context, *publicv1.BareMetalIns
 		Warnings: s.warnings,
 	}, nil
 }
+
+var _ = Describe("Create baremetalinstance tenant", func() {
+	DescribeTable("uses the tenant provided in command context",
+		func(effectiveTenant string) {
+			createdTenants := make(chan string, 1)
+			server := testing.NewServer()
+			DeferCleanup(server.Stop)
+			publicv1.RegisterBareMetalInstanceCatalogItemsServer(server.Registrar(), catalogItemsServer{})
+			publicv1.RegisterBareMetalInstancesServer(server.Registrar(), bareMetalInstancesServer{
+				createdTenants: createdTenants,
+			})
+			server.Start()
+
+			logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+			settings, err := config.NewSettings().SetLogger(logger).SetDir(GinkgoT().TempDir()).Build()
+			Expect(err).NotTo(HaveOccurred())
+			settings.SetAddress(server.Address())
+			settings.SetPlaintext(true)
+
+			var stdout, stderr bytes.Buffer
+			console, err := terminal.NewConsole().SetLogger(logger).SetStdout(&stdout).SetStderr(&stderr).Build()
+			Expect(err).NotTo(HaveOccurred())
+			ctx := logging.LoggerIntoContext(context.Background(), logger)
+			ctx = config.SettingsIntoContext(ctx, settings)
+			ctx = terminal.ConsoleIntoContext(ctx, console)
+			if effectiveTenant != "" {
+				ctx = config.TenantIntoContext(ctx, effectiveTenant)
+			}
+
+			cmd := Cmd()
+			cmd.SetContext(ctx)
+			cmd.SetArgs([]string{"--catalog-item", "catalog-123", "--name", "example"})
+			Expect(cmd.Execute()).To(Succeed())
+			Expect(<-createdTenants).To(Equal(effectiveTenant))
+		},
+		Entry("selected tenant", "selected"),
+		Entry("no tenant selected", ""),
+	)
+})
 
 var _ = Describe("Create baremetalinstance response output", func() {
 	DescribeTable("renders successful creation and server warnings",

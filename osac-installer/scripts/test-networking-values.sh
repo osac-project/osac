@@ -222,16 +222,14 @@ manager = resource('ConfigMap', 'osac-network-fabric-manager-cudn-net')
 assert manager['data']['name'] == 'cudn_net'
 cluster = resource('ConfigMap', 'cluster-fulfillment-ig')['data']
 assert cluster['NETWORK_CLASS'] == 'ci'
-assert cluster['NETWORK_STEPS_COLLECTION'] == 'ci.steps'
 resource('ConfigMap', 'network-fulfillment-ig')
 PY
 
 # A CUDN profile without CaaS, with wrong AAP pairing, a conflicting class,
 # or without registered manager must fail before any deployable render.
-for name in cudn-without-caas cudn-wrong-steps cudn-wrong-class cudn-disabled-manager cudn-k8s-conflict cudn-operatorless-openshift cudn-operatorless-kind; do
+for name in cudn-without-caas cudn-wrong-class cudn-disabled-manager cudn-k8s-conflict cudn-operatorless-openshift cudn-operatorless-kind; do
   case "${name}" in
     cudn-without-caas) overrides=(--set global.services.caas.enabled=false) ;;
-    cudn-wrong-steps) overrides=(--set-string aap.instanceGroups.clusterFulfillment.config.NETWORK_STEPS_COLLECTION=agentless_net.steps) ;;
     cudn-wrong-class) overrides=(--set global.networking.networkClass.fabricManager=netris) ;;
     cudn-disabled-manager) overrides=(--set operator.networkManagers.fabricManagers.cudn_net.enabled=false) ;;
     cudn-k8s-conflict) overrides=(--set global.networking.k8sManager=k8s_only) ;;

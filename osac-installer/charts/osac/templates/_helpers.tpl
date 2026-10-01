@@ -277,10 +277,10 @@ facade vs low-level surface mismatches).
   {{- end -}}
   {{- if .Values.operator.enabled -}}
     {{- if not (and $netExpertAap .Values.aap.aap.instance.enabled .Values.aap.bootstrap.enabled $cf.enabled $nf.enabled) -}}
-      {{- fail "fabricManager=cudn_net requires expert ci.steps AAP with both instance groups" -}}
+      {{- fail "fabricManager=cudn_net requires expert AAP with both instance groups" -}}
     {{- end -}}
-    {{- if or (ne (index $cfCfg "NETWORK_CLASS" | default "") "ci") (ne (index $cfCfg "NETWORK_STEPS_COLLECTION" | default "") "ci.steps") -}}
-      {{- fail "fabricManager=cudn_net requires NETWORK_CLASS=ci and NETWORK_STEPS_COLLECTION=ci.steps" -}}
+    {{- if ne (index $cfCfg "NETWORK_CLASS" | default "") "ci" -}}
+      {{- fail "fabricManager=cudn_net requires NETWORK_CLASS=ci" -}}
     {{- end -}}
   {{- else -}}
     {{- fail "fabricManager=cudn_net requires an enabled operator" -}}

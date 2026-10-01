@@ -187,7 +187,6 @@ aap:
         # site/tenant-specific values through a local values override when the
         # shared test controller is not being used.
         NETWORK_CLASS: "netris"
-        NETWORK_STEPS_COLLECTION: "netris.steps"
         NETRIS_CONTROLLER_URL: "https://redhat-ctl.netris.io"
         NETRIS_USERNAME: "netris"
         NETRIS_SITE_ID: "5"

@@ -19,7 +19,7 @@ NetworkClass manager names and select the AAP backend:
 | `agentless_net` | `""` | `agentless_net` | VirtualNetwork namespace, /31 uplink, and forwarding baseline |
 | `""` | `k8s_only` | `agentless_net` | Supported (default) |
 | `""` | `""` | Must set managers via `global.networking.networkClass` or expert overrides | Expert only |
-| `cudn_net` | `""` | `ci` / `ci.steps` (explicit AAP override) | Virtual-BMH CaaS only |
+| `cudn_net` | * | — | Reserved; Helm render fails |
 | `vlan` | * | — | Reserved; Helm render fails |
 
 Setting both managers non-empty fails during render. The removed
@@ -48,25 +48,17 @@ remain fail-fast until their provider work is implemented. This is separate
 from the default `k8s_only` profile, which provisions Kubernetes-native
 networking.
 
-For virtual-BMH CaaS, `values/caas-ci/instance.yaml` selects `cudn_net`, no
-k8s manager, explicitly registers the existing operator CUDN fabric-manager
-ConfigMap, and retains `global.expertOverrides.aap: true` with
-`NETWORK_CLASS=ci` / `NETWORK_STEPS_COLLECTION=ci.steps`. Rendering fails if
-CaaS/BMaaS is disabled, the default NetworkClass conflicts, the CUDN manager
-is not registered, the operator is disabled, or the operator lacks the two
-enabled AAP groups and matching `ci.steps` keys.
-
-The CUDN operator manager handles VN/Subnet overlay provisioning on OpenShift. The `ci.steps` cluster roles still wait for
-operator-bound Agents and read Agent IPs for external-access ingress DNS. They
-have not been disabled or replaced: verify these steps in fresh full-install CI
-before choosing any new ingress address source. This path does not claim
-physical fabric provisioning by Netris.
+For CaaS CI, `values/caas-ci/instance.yaml` selects `k8s_only` as the
+k8s manager. Networking CRs (VirtualNetwork, Subnet, SecurityGroup,
+ExternalIP) are handled by the Networking API dispatcher. CI-specific
+agent-binding and DNS logic is inlined in the `ocp_ci_small` template's
+task files (`ci_cluster_infra_create.yaml`, `ci_external_access_create.yaml`).
 
 The facade does **not** enable the AAP instance groups themselves. Set both
 `aap.instanceGroups.clusterFulfillment.enabled` and
 `aap.instanceGroups.networkFulfillment.enabled` to `true` for Netris-backed
-provisioning. Cluster fulfillment receives `NETWORK_CLASS` /
-cluster-specific Netris fields; network fulfillment receives the shared
+provisioning. Cluster fulfillment receives `NETWORK_CLASS`
+plus cluster-specific Netris fields; network fulfillment receives the shared
 Netris connection fields only.
 
 ## Netris example

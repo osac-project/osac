@@ -45,8 +45,7 @@ global:
     # Supported facade profiles:
     #   - fabricManager: netris, k8sManager: ""     → fabricManager netris
     #   - fabricManager: "", k8sManager: k8s_only   → k8sManager k8s_only (default)
-    # CUDN is supported only for CaaS/BMaaS with an enabled operator and
-    # ci.steps; vlan remains reserved and fails during render.
+    # cudn_net and vlan are reserved and fail during render.
     fabricManager: ""
     k8sManager: k8s_only
     netris:

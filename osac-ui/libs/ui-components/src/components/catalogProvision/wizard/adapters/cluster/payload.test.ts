@@ -214,8 +214,8 @@ describe('buildClusterCreatePayload', () => {
 
     const payload = buildClusterCreatePayload(values, clusterCatalogItem);
     expect(payload.spec?.networkAttachment).toEqual({
-      subnet: { name: 'my-subnet' },
-      securityGroups: [{ name: 'sg-1' }, { name: 'sg-2' }],
+      subnet: { id: 'my-subnet' },
+      securityGroups: [{ id: 'sg-1' }, { id: 'sg-2' }],
     });
   });
 

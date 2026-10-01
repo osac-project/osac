@@ -88,7 +88,9 @@ describe('VolumeActionsMenu', () => {
     await user.click(screen.getByRole('menuitem', { name: 'Delete' }));
 
     expect(
-      screen.getByText('This permanently deletes the volume. This action cannot be undone.'),
+      screen.getByText(
+        'This permanently deletes the volume and all of its data. This action cannot be undone.',
+      ),
     ).toBeInTheDocument();
   });
 });

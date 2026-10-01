@@ -1,9 +1,14 @@
+import { useNavigate } from 'react-router-dom';
+
 import type { Volume } from '@osac/types';
 import { Volumes } from '@osac/types';
 
 import { useDeleteResource } from '../../api/use-resource';
 import { useTranslation } from '../../hooks/useTranslation';
 import DeleteResourceModal from '../Resource/DeleteResourceModal';
+import { useToast } from '../Toast/useToast';
+
+const VOLUMES_LIST_PATH = '/storage/volumes';
 
 interface VolumeDeleteConfirmModalProps {
   volume: Volume;
@@ -17,16 +22,26 @@ const VolumeDeleteConfirmModal = ({
   onSuccess,
 }: VolumeDeleteConfirmModalProps) => {
   const { t } = useTranslation();
+  const navigate = useNavigate();
+  const { addToast } = useToast();
   const deleteVolume = useDeleteResource(Volumes);
   const volumeName = volume.metadata?.name ?? volume.id;
+
+  const handleSuccess = () => {
+    addToast({ variant: 'success', title: t('Volume deleted') });
+    navigate(VOLUMES_LIST_PATH);
+    onSuccess();
+  };
 
   return (
     <DeleteResourceModal
       resourceName={volumeName}
-      label={t('This permanently deletes the volume. This action cannot be undone.')}
+      label={t(
+        'This permanently deletes the volume and all of its data. This action cannot be undone.',
+      )}
       errorLabel={t('Failed to delete volume')}
       onClose={onClose}
-      onSuccess={onSuccess}
+      onSuccess={handleSuccess}
       mutation={deleteVolume}
       variables={{ id: volume.id }}
     />

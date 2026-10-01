@@ -31,7 +31,9 @@ argument_specs:
       server_cluster_servers:
         type: list
         default: []
-        description: "List of server names (strings) or server dicts (with name or id). Names are resolved to full server objects from Netris inventory."
+        description: >-
+          List of unique hostnames or mappings with both a positive numeric id and a nonempty name.
+          Each hostname must resolve uniquely in the target site, or globally when inventory omits site metadata.
       server_cluster_tags:
         type: list
         elements: str

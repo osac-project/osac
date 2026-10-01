@@ -24,6 +24,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc"
+	corev1 "k8s.io/api/core/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -45,14 +46,16 @@ var _ = Describe("FabricDomainReconciler", func() {
 	)
 
 	var (
-		ctx          context.Context
-		k8sClient    client.Client
-		reconciler   *FabricDomainReconciler
-		mockProvider *mockVirtualNetworkProvider
-		domain       *v1alpha1.FabricDomain
-		vnet         *v1alpha1.VirtualNetwork
-		triggerCount int
-		lastPayload  map[string]any
+		ctx           context.Context
+		k8sClient     client.Client
+		reconciler    *FabricDomainReconciler
+		mockProvider  *mockVirtualNetworkProvider
+		domain        *v1alpha1.FabricDomain
+		vnet          *v1alpha1.VirtualNetwork
+		triggerCount  int
+		lastPayload   map[string]any
+		instanceTypes map[string]*privatev1.BareMetalInstanceType
+		networkClass  *privatev1.NetworkClass
 	)
 
 	BeforeEach(func() {
@@ -61,6 +64,7 @@ var _ = Describe("FabricDomainReconciler", func() {
 		lastPayload = nil
 		scheme := runtime.NewScheme()
 		Expect(v1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
 		k8sClient = fake.NewClientBuilder().WithScheme(scheme).
 			WithStatusSubresource(&v1alpha1.FabricDomain{}, &v1alpha1.VirtualNetwork{}).Build()
 
@@ -69,6 +73,9 @@ var _ = Describe("FabricDomainReconciler", func() {
 				persisted := &v1alpha1.FabricDomain{}
 				if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(resource), persisted); err != nil {
 					return nil, err
+				}
+				if persisted.Status.ProvisioningConfig == nil {
+					return nil, fmt.Errorf("hardware binding was not persisted before launching AAP")
 				}
 				if !persisted.Status.ProvisioningIntent {
 					return nil, fmt.Errorf("FabricDomain provisioning intent was not persisted before launching AAP")
@@ -94,14 +101,18 @@ var _ = Describe("FabricDomainReconciler", func() {
 			},
 		}
 
-		networkClass := privatev1.NetworkClass_builder{
-			Id: "nc-1",
-			Spec: privatev1.NetworkClassSpec_builder{
-				EastWestConfig: privatev1.EastWestConfig_builder{
-					EthernetEw: privatev1.EthernetEastWestConfig_builder{TemplateId: "42"}.Build(),
-				}.Build(),
-			}.Build(),
+		networkClass = privatev1.NetworkClass_builder{
+			Id:            "nc-1",
+			FabricManager: new("netris"),
+			Capabilities:  privatev1.NetworkClassCapabilities_builder{SupportsEastWestEthernet: true}.Build(),
 		}.Build()
+		instanceTypes = map[string]*privatev1.BareMetalInstanceType{
+			"gpu-type": fabricDomainTestInstanceType("gpu-type", "nc-1", "42"),
+		}
+		Expect(k8sClient.Create(ctx, &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: fabricDomainInventoryName, Namespace: namespace},
+			Data:       map[string]string{"server-a": "gpu-type", "server-b": "gpu-type", "server-c": "gpu-type"},
+		})).To(Succeed())
 		networkClassesClient := &stubNetworkClassesClient{
 			getFunc: func(_ context.Context, req *privatev1.NetworkClassesGetRequest, _ ...grpc.CallOption) (*privatev1.NetworkClassesGetResponse, error) {
 				Expect(req.GetId()).To(Equal("nc-1"))
@@ -110,20 +121,30 @@ var _ = Describe("FabricDomainReconciler", func() {
 		}
 
 		reconciler = &FabricDomainReconciler{
-			Client:                     k8sClient,
-			APIReader:                  k8sClient,
-			NetworkingNamespace:        namespace,
-			ProvisioningProvider:       mockProvider,
-			NetworkClassesClient:       networkClassesClient,
+			Client:               k8sClient,
+			APIReader:            k8sClient,
+			NetworkingNamespace:  namespace,
+			ProvisioningProvider: mockProvider,
+			NetworkClassesClient: networkClassesClient,
+			BareMetalInstanceTypesClient: &stubFabricDomainInstanceTypesClient{
+				getFunc: func(_ context.Context, request *privatev1.BareMetalInstanceTypesGetRequest, _ ...grpc.CallOption) (*privatev1.BareMetalInstanceTypesGetResponse, error) {
+					object, ok := instanceTypes[request.GetId()]
+					if !ok {
+						return nil, fmt.Errorf("type %q not found", request.GetId())
+					}
+					return privatev1.BareMetalInstanceTypesGetResponse_builder{Object: object}.Build(), nil
+				},
+			},
 			StatusPollInterval:         time.Second,
 			MaxJobHistory:              10,
 			NetworkProvisioningEnabled: true,
 		}
 		vnet = &v1alpha1.VirtualNetwork{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      "tenant-vnet",
-				Namespace: namespace,
-				Labels:    map[string]string{osacVirtualNetworkIDLabel: vnetID},
+				Name:        "tenant-vnet",
+				Namespace:   namespace,
+				Labels:      map[string]string{osacVirtualNetworkIDLabel: vnetID},
+				Annotations: map[string]string{osacTenantKey: "tenant-a"},
 			},
 			Spec: v1alpha1.VirtualNetworkSpec{NetworkClass: "nc-1", Region: "region-a"},
 			Status: v1alpha1.VirtualNetworkStatus{
@@ -157,7 +178,117 @@ var _ = Describe("FabricDomainReconciler", func() {
 		return mcreconcile.Request{Request: reconcile.Request{NamespacedName: types.NamespacedName{Name: domain.Name, Namespace: domain.Namespace}}}
 	}
 
-	It("resolves the NetworkClass and VPC, provisions, and records AAP outputs", func() {
+	reconcileTimes := func(count int) *v1alpha1.FabricDomain {
+		for i := 0; i < count; i++ {
+			_, err := reconciler.Reconcile(ctx, request())
+			Expect(err).NotTo(HaveOccurred())
+		}
+		updated := &v1alpha1.FabricDomain{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(domain), updated)).To(Succeed())
+		return updated
+	}
+
+	It("fails closed for an unknown inventory hostname", func() {
+		domain.Spec.Servers = []string{"not-onboarded"}
+		Expect(k8sClient.Update(ctx, domain)).To(Succeed())
+		updated := reconcileTimes(3)
+		Expect(triggerCount).To(BeZero())
+		Expect(updated.Status.ProvisioningIntent).To(BeFalse())
+		condition := apimeta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionReady)
+		Expect(condition.Reason).To(Equal("InvalidHardwareBinding"))
+		Expect(condition.Message).To(ContainSubstring("not-onboarded"))
+	})
+
+	It("does not infer a hardware type when the inventory ConfigMap is absent", func() {
+		Expect(k8sClient.Delete(ctx, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: fabricDomainInventoryName, Namespace: namespace}})).To(Succeed())
+		updated := reconcileTimes(3)
+		Expect(triggerCount).To(BeZero())
+		Expect(updated.Status.Phase).To(Equal(v1alpha1.FabricDomainPhaseFailed))
+	})
+
+	DescribeTable("rejects invalid instance type bindings without launching AAP",
+		func(classID, templateID string) {
+			instanceTypes["gpu-type"] = fabricDomainTestInstanceType("gpu-type", classID, templateID)
+			updated := reconcileTimes(3)
+			Expect(triggerCount).To(BeZero())
+			Expect(apimeta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionReady).Reason).To(Equal("InvalidHardwareBinding"))
+		},
+		Entry("another NetworkClass", "another-class", "42"),
+		Entry("no NetworkClass", "", "42"),
+		Entry("zero template", "nc-1", "0"),
+		Entry("non-numeric template", "nc-1", "template-42"),
+		Entry("non-canonical template", "nc-1", "042"),
+		Entry("missing template", "nc-1", ""),
+	)
+
+	It("accepts different hardware types using the same scoped template", func() {
+		inventory := &corev1.ConfigMap{}
+		Expect(k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: fabricDomainInventoryName}, inventory)).To(Succeed())
+		inventory.Data["server-b"] = "other-gpu-type"
+		Expect(k8sClient.Update(ctx, inventory)).To(Succeed())
+		instanceTypes["other-gpu-type"] = fabricDomainTestInstanceType("other-gpu-type", "nc-1", "42")
+		updated := reconcileTimes(4)
+		Expect(triggerCount).To(Equal(1))
+		Expect(updated.Status.Phase).To(Equal(v1alpha1.FabricDomainPhaseReady))
+	})
+
+	It("rejects mixed templates rather than selecting the first member", func() {
+		inventory := &corev1.ConfigMap{}
+		Expect(k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: fabricDomainInventoryName}, inventory)).To(Succeed())
+		inventory.Data["server-b"] = "other-gpu-type"
+		Expect(k8sClient.Update(ctx, inventory)).To(Succeed())
+		instanceTypes["other-gpu-type"] = fabricDomainTestInstanceType("other-gpu-type", "nc-1", "43")
+		updated := reconcileTimes(3)
+		Expect(triggerCount).To(BeZero())
+		Expect(apimeta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionReady).Message).To(ContainSubstring("incompatible Ethernet templates"))
+	})
+
+	It("pins the backend binding and recovers when an incompatible catalog edit is reverted", func() {
+		updated := reconcileTimes(4)
+		Expect(updated.Status.ProvisioningConfig).To(Equal(&v1alpha1.FabricDomainProvisioningConfig{
+			NetworkClass: "nc-1", TemplateID: "42", VPCID: "7", Region: "region-a",
+		}))
+		instanceTypes["gpu-type"] = fabricDomainTestInstanceType("gpu-type", "nc-1", "43")
+		updated = reconcileTimes(1)
+		Expect(triggerCount).To(Equal(1))
+		Expect(apimeta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionReady).Reason).To(Equal("BackendBindingChanged"))
+		Expect(updated.Status.ProvisioningConfig.TemplateID).To(Equal("42"))
+		instanceTypes["gpu-type"] = fabricDomainTestInstanceType("gpu-type", "nc-1", "42")
+		updated = reconcileTimes(1)
+		Expect(updated.Status.Phase).To(Equal(v1alpha1.FabricDomainPhaseReady))
+		Expect(triggerCount).To(Equal(1))
+	})
+
+	It("does not mark newly requested members active when an earlier job completes", func() {
+		updated := reconcileTimes(3)
+		updated.Spec.Servers = []string{"server-a", "server-c"}
+		Expect(k8sClient.Update(ctx, updated)).To(Succeed())
+		updated = reconcileTimes(1)
+		Expect(updated.Status.Phase).To(Equal(v1alpha1.FabricDomainPhaseProgressing))
+		Expect(updated.Status.Members).To(ConsistOf(
+			v1alpha1.FabricDomainMemberStatus{Server: "server-a", State: v1alpha1.FabricDomainMemberStatePending},
+			v1alpha1.FabricDomainMemberStatus{Server: "server-c", State: v1alpha1.FabricDomainMemberStatePending},
+		))
+		reconcileTimes(1)
+		Expect(triggerCount).To(Equal(2))
+	})
+
+	It("rejects cross-tenant VirtualNetworks before provisioning", func() {
+		vnet.Annotations[osacTenantKey] = "other-tenant"
+		Expect(k8sClient.Update(ctx, vnet)).To(Succeed())
+		updated := reconcileTimes(3)
+		Expect(triggerCount).To(BeZero())
+		Expect(apimeta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionReady).Reason).To(Equal("TenantMismatch"))
+	})
+
+	It("wakes domains when their administrator inventory changes", func() {
+		inventory := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: fabricDomainInventoryName, Namespace: namespace}}
+		Expect(reconciler.mapInventoryToFabricDomains(ctx, inventory)).To(ConsistOf(reconcile.Request{NamespacedName: client.ObjectKeyFromObject(domain)}))
+		inventory.Name = "unrelated-config"
+		Expect(reconciler.mapInventoryToFabricDomains(ctx, inventory)).To(BeEmpty())
+	})
+
+	It("resolves inventory hardware bindings and VPC, provisions, and records AAP outputs", func() {
 		for i := 0; i < 3; i++ {
 			_, err := reconciler.Reconcile(ctx, request())
 			Expect(err).NotTo(HaveOccurred())
@@ -401,3 +532,27 @@ var _ = Describe("FabricDomainReconciler", func() {
 		))
 	})
 })
+
+// Only Get is used by the resolver; embedding the generated interface keeps the stub focused.
+type stubFabricDomainInstanceTypesClient struct {
+	privatev1.BareMetalInstanceTypesClient
+	getFunc func(context.Context, *privatev1.BareMetalInstanceTypesGetRequest, ...grpc.CallOption) (*privatev1.BareMetalInstanceTypesGetResponse, error)
+}
+
+func (s *stubFabricDomainInstanceTypesClient) Get(ctx context.Context, request *privatev1.BareMetalInstanceTypesGetRequest, options ...grpc.CallOption) (*privatev1.BareMetalInstanceTypesGetResponse, error) {
+	return s.getFunc(ctx, request, options...)
+}
+
+func fabricDomainTestInstanceType(id, networkClass, templateID string) *privatev1.BareMetalInstanceType {
+	return privatev1.BareMetalInstanceType_builder{
+		Id:       id,
+		Metadata: privatev1.Metadata_builder{Tenant: "shared"}.Build(),
+		Spec: privatev1.BareMetalInstanceTypeSpec_builder{
+			FabricBindings: privatev1.BareMetalFabricBindings_builder{
+				EthernetEw: privatev1.BareMetalEthernetFabricBinding_builder{
+					Netris: privatev1.BareMetalNetrisFabricBinding_builder{NetworkClass: networkClass, TemplateId: templateID}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build(),
+	}.Build()
+}

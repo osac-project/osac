@@ -17,6 +17,9 @@ To get started with tenant and provider credentials, see
 For Kafka broker requirements, connection settings, and a Strimzi example,
 see [Configuring an external Kafka cluster](guides/installation/kafka-configuration.md).
 
+- [Ethernet FabricDomains](guides/admin/fabric-domains.md): hardware bindings,
+  inventory onboarding, membership changes, cleanup, and troubleshooting.
+
 This directory also contains concise, hand-maintained guidance for
 architecture and conventions that span component or repository boundaries
 within this mono-repo. Component `AGENTS.md` files own component-scoped agent

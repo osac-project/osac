@@ -303,7 +303,7 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     allow_simultaneous: true
     ask_variables_on_launch: true
     verbosity: 0
-  - name: "{{ aap_prefix }}-create-server-cluster"
+  - name: "{{ aap_prefix }}-create-fabric-domain"
     project: "{{ aap_prefix }}"
     organization: "{{ aap_organization_name }}"
     job_type: run
@@ -315,7 +315,7 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     allow_simultaneous: true
     ask_variables_on_launch: true
     verbosity: 0
-  - name: "{{ aap_prefix }}-delete-server-cluster"
+  - name: "{{ aap_prefix }}-delete-fabric-domain"
     project: "{{ aap_prefix }}"
     organization: "{{ aap_organization_name }}"
     job_type: run

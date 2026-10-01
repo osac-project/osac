@@ -50,6 +50,9 @@ message FabricDomainStatus {
   string backend_id = 2;
   string vpc_id = 3;
   repeated FabricDomainMemberStatus members = 4;
+
+  // Persisted hub placement used to manage the domain throughout its lifecycle.
+  string hub = 5 [(cleanapi.field).private = true];
 }
 
 message FabricDomainMemberStatus {

@@ -171,6 +171,19 @@
       "type": "object",
       "description": "OSAC Operator configuration",
       "properties": {
+        "fabricDomainInventory": {
+          "type": "object",
+          "description": "Admin-managed map of exact Netris hostnames to BareMetalInstanceType ID strings. Creates osac-fabric-domain-inventory in the operator networking (release) namespace only when nonempty. No credentials or template configuration.",
+          "default": {},
+          "patternProperties": {
+            "^[A-Za-z0-9._-]{1,253}$": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            }
+          },
+          "additionalProperties": false
+        },
         "enabled": {
           "type": "boolean",
           "description": "Deploy the OSAC operator",
@@ -468,11 +481,12 @@
                   },
                   "capabilities": {
                     "type": "array",
-                    "description": "Capability tokens advertised for this manager. Only ipv4 is supported in the current release.",
+                    "description": "Fabric manager capability tokens: ipv4 and eastWestEthernet (physical Ethernet east-west). eastWestEthernet publishes supports_east_west_ethernet independently of k8s manager capabilities, unless disabled by NetworkClass.spec.disable_capabilities.",
                     "items": {
                       "type": "string",
                       "enum": [
-                        "ipv4"
+                        "ipv4",
+                        "eastWestEthernet"
                       ]
                     },
                     "uniqueItems": true

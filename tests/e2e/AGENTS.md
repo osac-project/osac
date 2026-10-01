@@ -45,6 +45,7 @@ production SLAs; API calls and diagnostics add time. Sanitized snapshots are
 sampled approximately every sixty seconds and once on either stage's timeout.
 See [integration-testing boundaries](../../docs/INTEGRATION-TESTING.md#testse2e)
 for real dependencies and omitted hardware/storage coverage.
+| FabricDomain Phase 1 API authorization and tenant visibility | Auth Unit plus deployed API/component integration; not live fabric lifecycle E2E | `go test ./internal/auth` from `fulfillment-service/`; `uv run pytest -n 0 tests/e2e/vmaas/regression/test_fabric_domain_api.py` from the root | Requires explicit API-only opt-in, a fully rolled-out operator with networking provisioning disabled, and an Ethernet east-west capable Netris NetworkClass. See [prerequisites and pending lifecycle coverage](vmaas/regression/README.fabric-domain.md). |
 
 Multi-node live hot-plug resize remains outside this suite and is tracked by
 [OSAC-5335](https://redhat.atlassian.net/browse/OSAC-5335).

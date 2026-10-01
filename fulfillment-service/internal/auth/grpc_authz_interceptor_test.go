@@ -726,6 +726,48 @@ var _ = Describe("Rego authorization interceptor", func() {
 		)
 
 		DescribeTable(
+			"Restricts FabricDomain writes to platform admins and preserves tenant reads",
+			func(ctx context.Context, token *jwt.Token, admin bool) {
+				ctx = ContextWithToken(ctx, token)
+				for _, api := range []string{"public", "private"} {
+					for _, operation := range []string{"Create", "Get", "List", "Update", "Delete"} {
+						method := fmt.Sprintf("/osac.%s.v1.FabricDomains/%s", api, operation)
+						handled := false
+						_, err := interceptor.UnaryServer(ctx, nil,
+							&grpc.UnaryServerInfo{FullMethod: method},
+							func(ctx context.Context, req any) (any, error) {
+								handled = true
+								if !admin {
+									Expect(SubjectFromContext(ctx).Tenants.Inclusions()).To(ConsistOf("my-tenant"))
+								}
+								return nil, nil
+							})
+						allowed := admin || api == "public" && (operation == "Get" || operation == "List")
+						if allowed {
+							Expect(err).ToNot(HaveOccurred(), method)
+						} else {
+							Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied), method)
+						}
+						Expect(handled).To(Equal(allowed), method)
+					}
+				}
+			},
+			Entry("Tenant user", createKeycloakUserToken("my-tenant", "my-user", nil), false),
+			Entry("Tenant admin", createKeycloakUserToken("my-tenant", "tenant-admin", jwt.MapClaims{
+				"realm_access": map[string]any{"roles": []any{"tenant-admin"}},
+			}), false),
+			Entry("Tenant IdP manager", createKeycloakUserToken("my-tenant", "idp-manager", jwt.MapClaims{
+				"realm_access": map[string]any{"roles": []any{"tenant-idp-manager"}},
+			}), false),
+			Entry("Admin group", createKeycloakUserToken("my-tenant", "platform-admin", jwt.MapClaims{
+				"groups": []any{"admins"},
+			}), true),
+			Entry("Admin service account", createKeycloakServiceAccountToken("osac-admin", nil), true),
+			Entry("Controller service account", createKeycloakServiceAccountToken("osac-controller", nil), true),
+			Entry("Emergency service account", createKubernetesToken(testNamespace, "admin", nil), true),
+		)
+
+		DescribeTable(
 			"Denies Keycloak users on public networking Update APIs",
 			func(ctx context.Context, method string) {
 				token := createKeycloakUserToken("my-tenant", "my-user", nil)

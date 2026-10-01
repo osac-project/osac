@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode"
 
 	"charm.land/lipgloss/v2"
 
@@ -47,7 +48,11 @@ type view struct {
 
 // render shows stored Catalog Item policies without incorporating Template or creation defaults.
 func render(w io.Writer, v view, colored bool) error {
-	palette := newPalette(colored)
+	renderer, neutral, err := markdown.NewRenderer(w, colored)
+	if err != nil {
+		return err
+	}
+	palette := newPalette(!neutral)
 	title := v.title
 	if title == "" {
 		title = v.name
@@ -56,10 +61,6 @@ func render(w io.Writer, v view, colored bool) error {
 		return err
 	}
 	if v.description != "" {
-		renderer, err := markdown.NewDescriptionRenderer(w, colored)
-		if err != nil {
-			return err
-		}
 		lines := strings.Split(strings.TrimRight(v.description, "\n"), "\n")
 		for i, line := range lines {
 			lines[i] = clean(line)
@@ -69,7 +70,7 @@ func render(w io.Writer, v view, colored bool) error {
 			return err
 		}
 		text = strings.Trim(text, "\n") + "\n"
-		if colored {
+		if !neutral {
 			_, err = io.WriteString(w, text)
 		} else {
 			_, err = lipgloss.Fprint(w, text)
@@ -96,7 +97,7 @@ func render(w io.Writer, v view, colored bool) error {
 	if v.metadata.GetTenant() == auth.SharedTenant {
 		getCommand += " --tenant shared"
 	}
-	_, err := fmt.Fprintf(w, "\n%s\n",
+	_, err = fmt.Fprintf(w, "\n%s\n",
 		palette.note.Render(fmt.Sprintf("Full catalog item definition: %s -o yaml", getCommand)))
 	return err
 }
@@ -158,10 +159,10 @@ func scope(metadata *publicv1.Metadata) string {
 	return result
 }
 
-// clean replaces terminal controls in server-provided text with spaces before displaying it.
+// clean replaces terminal and invisible formatting controls in server-provided text with spaces.
 func clean(value string) string {
 	return strings.Map(func(r rune) rune {
-		if r < 32 || r == 127 || (r >= 0x80 && r <= 0x9f) {
+		if r < 32 || r == 127 || (r >= 0x80 && r <= 0x9f) || unicode.Is(unicode.Cf, r) {
 			return ' '
 		}
 		return r

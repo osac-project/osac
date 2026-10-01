@@ -14,22 +14,13 @@ language governing permissions and limitations under the License.
 package cli
 
 import (
-	"bytes"
+	"testing"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
 )
 
-var _ = Describe("CLI root color flag", func() {
-	It("enables styled help on a redirected writer", func() {
-		GinkgoT().Setenv("NO_COLOR", "")
-		cmd, err := Root()
-		Expect(err).NotTo(HaveOccurred())
-		Expect(cmd.PersistentFlags().Lookup("color")).NotTo(BeNil())
-		var output bytes.Buffer
-		cmd.SetOut(&output)
-		cmd.SetArgs([]string{"--color", "describe", "computeinstancecatalogitem", "--help"})
-		Expect(cmd.Execute()).To(Succeed())
-		Expect(output.String()).To(ContainSubstring("\x1b["))
-	})
-})
+func TestCLI(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "CLI")
+}

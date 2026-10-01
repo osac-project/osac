@@ -128,6 +128,17 @@ var _ = Describe("Help output", func() {
 		Expect(output.String()).To(ContainSubstring("sub"))
 	})
 
+	It("renders flag emphasis without Markdown markers in neutral help", func() {
+		saveAndSetEnv("NO_COLOR", "1")
+		cmd.Flags().Bool("log-headers", false, "_[BOOLEAN]_ - Include gRPC/HTTP headers in log messages.")
+		cmd.SetArgs([]string{"--help"})
+		Expect(cmd.Execute()).To(Succeed())
+		Expect(output.String()).To(ContainSubstring("--log-headers [BOOLEAN] - Include gRPC/HTTP headers"))
+		Expect(output.String()).NotTo(ContainSubstring("**"))
+		Expect(output.String()).NotTo(ContainSubstring("*["))
+		Expect(ansiPattern.FindString(output.String())).To(BeEmpty())
+	})
+
 	It("Does not emit ANSI escape codes for subcommand help", func() {
 		cmd.SetArgs([]string{"sub", "--help"})
 		err := cmd.Execute()

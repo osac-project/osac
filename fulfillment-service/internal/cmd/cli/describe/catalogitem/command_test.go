@@ -16,9 +16,9 @@ package catalogitem
 import (
 	"context"
 	"net"
-	"strings"
-	"testing"
 
+	. "github.com/onsi/ginkgo/v2/dsl/core"
+	. "github.com/onsi/gomega"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -82,8 +82,8 @@ func (s *bareMetalServer) Get(_ context.Context, r *publicv1.BareMetalInstanceCa
 	return publicv1.BareMetalInstanceCatalogItemsGetResponse_builder{Object: s.item}.Build(), nil
 }
 
-func testConnection(t *testing.T, compute *computeServer, cluster *clusterServer, bare *bareMetalServer) *grpc.ClientConn {
-	t.Helper()
+func testConnection(compute *computeServer, cluster *clusterServer, bare *bareMetalServer) *grpc.ClientConn {
+	GinkgoHelper()
 	listener := bufconn.Listen(1024 * 1024)
 	server := grpc.NewServer()
 	publicv1.RegisterComputeInstanceCatalogItemsServer(server, compute)
@@ -95,69 +95,82 @@ func testConnection(t *testing.T, compute *computeServer, cluster *clusterServer
 	conn, err := grpc.NewClient("passthrough:///catalog-test", grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
 		return listener.Dial()
 	}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_ = conn.Close()
+	Expect(err).NotTo(HaveOccurred())
+	DeferCleanup(func() {
+		Expect(conn.Close()).To(Succeed())
 		server.Stop()
-		_ = listener.Close()
+		Expect(listener.Close()).To(Succeed())
 	})
 	return conn
 }
 
-func TestFetchCatalogItemViews(t *testing.T) {
-	compute := &computeServer{items: []*publicv1.ComputeInstanceCatalogItem{{Id: "compute-id"}}}
-	cluster := &clusterServer{item: publicv1.ClusterCatalogItem_builder{Id: "cluster-id"}.Build()}
-	bare := &bareMetalServer{item: publicv1.BareMetalInstanceCatalogItem_builder{Id: "bare-id"}.Build()}
-	conn := testConnection(t, compute, cluster, bare)
-	for _, tt := range []struct {
-		name  string
-		fetch fetchFunc
-		id    string
-		getID *string
-	}{
-		{"compute", fetchCompute, "compute-id", &compute.getID},
-		{"cluster", fetchCluster, "cluster-id", &cluster.getID},
-		{"bare metal", fetchBareMetal, "bare-id", &bare.getID},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			v, err := tt.fetch(context.Background(), conn, "friendly-name")
-			if err != nil {
-				t.Fatal(err)
-			}
-			if v.id != tt.id || *tt.getID != tt.id {
-				t.Fatalf("got view ID %q, Get ID %q, want %q", v.id, *tt.getID, tt.id)
-			}
-		})
-	}
-	if want := `this.id == "friendly-name" || this.metadata.name == "friendly-name"`; compute.filter != want {
-		t.Fatalf("name-or-ID filter = %q, want %q", compute.filter, want)
-	}
-}
+var _ = Describe("Describe catalog item command", func() {
+	Describe("fetching catalog items", func() {
+		var (
+			compute *computeServer
+			cluster *clusterServer
+			bare    *bareMetalServer
+			conn    *grpc.ClientConn
+		)
 
-func TestFetchErrors(t *testing.T) {
-	compute := &computeServer{}
-	conn := testConnection(t, compute, &clusterServer{}, &bareMetalServer{})
-	if _, err := fetchCompute(context.Background(), conn, "missing"); err == nil || !strings.Contains(err.Error(), "not found") {
-		t.Fatalf("missing item error = %v", err)
-	}
-	compute.items = []*publicv1.ComputeInstanceCatalogItem{{Id: "a"}, {Id: "b"}}
-	if _, err := fetchCompute(context.Background(), conn, "duplicate"); err == nil || !strings.Contains(err.Error(), "use the ID") {
-		t.Fatalf("ambiguous item error = %v", err)
-	}
-	compute.listErr = status.Error(codes.PermissionDenied, "list blocked")
-	if _, err := fetchCompute(context.Background(), conn, "a"); err == nil || !strings.Contains(err.Error(), "list blocked") {
-		t.Fatalf("List error = %v", err)
-	}
-	compute.listErr = nil
-	compute.items = compute.items[:1]
-	compute.getErr = status.Error(codes.NotFound, "removed")
-	if _, err := fetchCompute(context.Background(), conn, "a"); err == nil || !strings.Contains(err.Error(), "removed") {
-		t.Fatalf("Get error = %v", err)
-	}
-	cmd := ComputeCmd()
-	if err := cmd.Args(cmd, nil); err == nil {
-		t.Fatal("describe command must require an item name or ID")
-	}
-}
+		BeforeEach(func() {
+			compute = &computeServer{items: []*publicv1.ComputeInstanceCatalogItem{{Id: "compute-id"}}}
+			cluster = &clusterServer{item: publicv1.ClusterCatalogItem_builder{Id: "cluster-id"}.Build()}
+			bare = &bareMetalServer{item: publicv1.BareMetalInstanceCatalogItem_builder{Id: "bare-id"}.Build()}
+			conn = testConnection(compute, cluster, bare)
+		})
+
+		It("resolves a compute item name to its ID", func() {
+			v, err := fetchCompute(context.Background(), conn, "friendly-name")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(v.id).To(Equal("compute-id"))
+			Expect(compute.getID).To(Equal("compute-id"))
+			Expect(compute.filter).To(Equal(`this.id == "friendly-name" || this.metadata.name == "friendly-name"`))
+		})
+
+		It("resolves a cluster item name to its ID", func() {
+			v, err := fetchCluster(context.Background(), conn, "friendly-name")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(v.id).To(Equal("cluster-id"))
+			Expect(cluster.getID).To(Equal("cluster-id"))
+		})
+
+		It("resolves a bare metal item name to its ID", func() {
+			v, err := fetchBareMetal(context.Background(), conn, "friendly-name")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(v.id).To(Equal("bare-id"))
+			Expect(bare.getID).To(Equal("bare-id"))
+		})
+
+		Describe("compute item errors", func() {
+			It("reports a missing item", func() {
+				compute.items = nil
+				_, err := fetchCompute(context.Background(), conn, "missing")
+				Expect(err).To(MatchError(ContainSubstring("not found")))
+			})
+
+			It("reports an ambiguous name", func() {
+				compute.items = []*publicv1.ComputeInstanceCatalogItem{{Id: "a"}, {Id: "b"}}
+				_, err := fetchCompute(context.Background(), conn, "duplicate")
+				Expect(err).To(MatchError(ContainSubstring("use the ID")))
+			})
+
+			It("propagates a List error", func() {
+				compute.listErr = status.Error(codes.PermissionDenied, "list blocked")
+				_, err := fetchCompute(context.Background(), conn, "compute-id")
+				Expect(err).To(MatchError(ContainSubstring("list blocked")))
+			})
+
+			It("propagates a Get error", func() {
+				compute.getErr = status.Error(codes.NotFound, "removed")
+				_, err := fetchCompute(context.Background(), conn, "compute-id")
+				Expect(err).To(MatchError(ContainSubstring("removed")))
+			})
+		})
+	})
+
+	It("requires a catalog item name or ID", func() {
+		cmd := ComputeCmd()
+		Expect(cmd.Args(cmd, nil)).To(HaveOccurred())
+	})
+})

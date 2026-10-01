@@ -16,9 +16,9 @@ package terminal
 import (
 	"bytes"
 	"os"
-	"strings"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
+	. "github.com/onsi/ginkgo/v2/dsl/table"
 	. "github.com/onsi/gomega"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/text"
@@ -55,35 +55,34 @@ var _ = Describe("Console", func() {
 			Expect(string(content)).To(ContainSubstring("\x1b["))
 		})
 
-		for _, format := range []string{"json", "yaml"} {
-			It("respects the color decision for "+format, func() {
+		DescribeTable("respects the color decision",
+			func(format string, override *bool, colored bool) {
 				var output bytes.Buffer
-				for _, tc := range []struct {
-					name     string
-					override *bool
-					colored  bool
-				}{
-					{name: "non-terminal default"},
-					{name: "forced color", override: new(true), colored: true},
-					{name: "forced plain", override: new(false)},
-				} {
-					output.Reset()
-					builder := NewConsole().SetLogger(logger).SetStdout(&output)
-					if tc.override != nil {
-						builder.SetColorEnabled(*tc.override)
-					}
-					console, err := builder.Build()
-					Expect(err).NotTo(HaveOccurred())
-					if format == "json" {
-						console.RenderJson(ctx, map[string]string{"name": "test"})
-					} else {
-						console.RenderYaml(ctx, map[string]string{"name": "test"})
-					}
-					Expect(strings.Contains(output.String(), "\x1b[")).To(Equal(tc.colored), tc.name)
-					Expect(output.String()).To(ContainSubstring("test"))
+				builder := NewConsole().SetLogger(logger).SetStdout(&output)
+				if override != nil {
+					builder.SetColorEnabled(*override)
 				}
-			})
-		}
+				console, err := builder.Build()
+				Expect(err).NotTo(HaveOccurred())
+				if format == "json" {
+					console.RenderJson(ctx, map[string]string{"name": "test"})
+				} else {
+					console.RenderYaml(ctx, map[string]string{"name": "test"})
+				}
+				if colored {
+					Expect(output.String()).To(ContainSubstring("\x1b["))
+				} else {
+					Expect(output.String()).NotTo(ContainSubstring("\x1b["))
+				}
+				Expect(output.String()).To(ContainSubstring("test"))
+			},
+			Entry("JSON without override", "json", nil, false),
+			Entry("JSON with color enabled", "json", new(true), true),
+			Entry("JSON with color disabled", "json", new(false), false),
+			Entry("YAML without override", "yaml", nil, false),
+			Entry("YAML with color enabled", "yaml", new(true), true),
+			Entry("YAML with color disabled", "yaml", new(false), false),
+		)
 	})
 
 	Describe("Render YAML", func() {

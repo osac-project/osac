@@ -22,46 +22,29 @@ import (
 	"charm.land/glamour/v2/ansi"
 	"charm.land/glamour/v2/styles"
 	"charm.land/lipgloss/v2"
+	uv "github.com/charmbracelet/ultraviolet"
 	"golang.org/x/term"
 )
 
 const maxReadableWidth = 100
 
-// NewHelpRenderer creates a Markdown renderer for CLI help, adapting to the output terminal.
-func NewHelpRenderer(out io.Writer, colored bool) (*glamour.TermRenderer, error) {
-	return newRenderer(out, colored, false)
-}
-
-// NewDescriptionRenderer creates a renderer that omits Markdown emphasis markers in plain descriptions.
-func NewDescriptionRenderer(out io.Writer, colored bool) (*glamour.TermRenderer, error) {
-	return newRenderer(out, colored, true)
-}
-
-func newRenderer(out io.Writer, colored, stripPlainEmphasis bool) (*glamour.TermRenderer, error) {
+// NewRenderer creates a Markdown renderer for CLI output and reports whether its style is neutral.
+func NewRenderer(out io.Writer, colored bool) (*glamour.TermRenderer, bool, error) {
 	width := 0
 	if file, ok := out.(*os.File); ok && term.IsTerminal(int(file.Fd())) {
 		var err error
 		width, _, err = term.GetSize(int(file.Fd()))
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
 	width = min(width, maxReadableWidth)
 
-	var style ansi.StyleConfig
-	if colored {
-		if lipgloss.HasDarkBackground(os.Stdin, os.Stdout) {
-			style = styles.DarkStyleConfig
-		} else {
-			style = styles.LightStyleConfig
-		}
-	} else {
-		style = styles.ASCIIStyleConfig
-		if stripPlainEmphasis {
-			style.Strong.BlockPrefix, style.Strong.BlockSuffix = "", ""
-			style.Emph.BlockPrefix, style.Emph.BlockSuffix = "", ""
-			style.Strikethrough.BlockPrefix, style.Strikethrough.BlockSuffix = "", ""
-		}
+	style, neutral := styleForOutput(out, colored)
+	if neutral {
+		style.Strong.BlockPrefix, style.Strong.BlockSuffix = "", ""
+		style.Emph.BlockPrefix, style.Emph.BlockSuffix = "", ""
+		style.Strikethrough.BlockPrefix, style.Strikethrough.BlockSuffix = "", ""
 	}
 
 	zero := new(uint)
@@ -77,8 +60,31 @@ func newRenderer(out io.Writer, colored, stripPlainEmphasis bool) (*glamour.Term
 	style.Code.Prefix = ""
 	style.Code.Suffix = ""
 
-	return glamour.NewTermRenderer(
+	renderer, err := glamour.NewTermRenderer(
 		glamour.WithStyles(style),
 		glamour.WithWordWrap(width),
 	)
+	return renderer, neutral, err
+}
+
+// styleForOutput chooses a Glamour palette; the boolean reports whether the neutral
+// ASCII style needs its visible emphasis markers removed.
+func styleForOutput(out io.Writer, colored bool) (ansi.StyleConfig, bool) {
+	if !colored {
+		return styles.ASCIIStyleConfig, true
+	}
+	file, ok := out.(*os.File)
+	if !ok || !term.IsTerminal(int(file.Fd())) {
+		// Forced color to a file or buffer keeps the existing dark palette;
+		// this is a fallback, not a detected background.
+		return styles.DarkStyleConfig, false
+	}
+	background, err := lipgloss.BackgroundColor(os.Stdin, file)
+	if err != nil || background == nil {
+		return styles.ASCIIStyleConfig, true
+	}
+	if (uv.BackgroundColorEvent{Color: background}).IsDark() {
+		return styles.DarkStyleConfig, false
+	}
+	return styles.LightStyleConfig, false
 }

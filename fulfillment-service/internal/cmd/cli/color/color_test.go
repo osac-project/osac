@@ -15,49 +15,48 @@ package color
 
 import (
 	"bytes"
+	"io"
 	"os"
-	"testing"
 
+	. "github.com/onsi/ginkgo/v2/dsl/core"
+	. "github.com/onsi/ginkgo/v2/dsl/table"
+	. "github.com/onsi/gomega"
 	"github.com/spf13/cobra"
 )
 
-func TestEnabled(t *testing.T) {
-	root := &cobra.Command{Use: "osac"}
-	AddFlag(root)
-	file, err := os.CreateTemp(t.TempDir(), "stdout")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer file.Close()
-	terminal := func(int) bool { return true }
-	redirected := func(int) bool { return false }
-	t.Setenv("NO_COLOR", "")
-	t.Setenv("FORCE_COLOR", "")
-
-	if !enabled(root, file, terminal) {
-		t.Fatal("TTY should have color")
-	}
-	if enabled(root, file, redirected) || enabled(root, &bytes.Buffer{}, terminal) {
-		t.Fatal("redirected output should be plain")
-	}
-	t.Setenv("FORCE_COLOR", "1")
-	if !enabled(root, &bytes.Buffer{}, redirected) {
-		t.Fatal("FORCE_COLOR should color redirected output")
-	}
-	if err := root.PersistentFlags().Set("color", "false"); err != nil {
-		t.Fatal(err)
-	}
-	if enabled(root, file, terminal) {
-		t.Fatal("--color=false should override FORCE_COLOR")
-	}
-	if err := root.PersistentFlags().Set("color", "true"); err != nil {
-		t.Fatal(err)
-	}
-	if !enabled(root, &bytes.Buffer{}, redirected) {
-		t.Fatal("--color should color redirected output")
-	}
-	t.Setenv("NO_COLOR", "1")
-	if enabled(root, file, terminal) {
-		t.Fatal("NO_COLOR should override --color")
-	}
+type colorCase struct {
+	noColor, forceColor, flag string
+	tty, buffer, want         bool
 }
+
+var _ = Describe("CLI color", func() {
+	DescribeTable("enabled",
+		func(tc colorCase) {
+			GinkgoT().Setenv("NO_COLOR", tc.noColor)
+			GinkgoT().Setenv("FORCE_COLOR", tc.forceColor)
+			root := &cobra.Command{Use: "osac"}
+			AddFlag(root)
+			if tc.flag != "" {
+				Expect(root.PersistentFlags().Set("color", tc.flag)).To(Succeed())
+			}
+
+			var out io.Writer
+			if tc.buffer {
+				out = &bytes.Buffer{}
+			} else {
+				file, err := os.CreateTemp(GinkgoT().TempDir(), "stdout")
+				Expect(err).NotTo(HaveOccurred())
+				DeferCleanup(func() { Expect(file.Close()).To(Succeed()) })
+				out = file
+			}
+			Expect(enabled(root, out, func(int) bool { return tc.tty })).To(Equal(tc.want))
+		},
+		Entry("terminal output", colorCase{tty: true, want: true}),
+		Entry("redirected file", colorCase{}),
+		Entry("buffer even with a terminal predicate", colorCase{tty: true, buffer: true}),
+		Entry("FORCE_COLOR redirects color to a buffer", colorCase{forceColor: "1", buffer: true, want: true}),
+		Entry("--color=false overrides FORCE_COLOR", colorCase{forceColor: "1", flag: "false", tty: true}),
+		Entry("--color enables redirected output", colorCase{flag: "true", buffer: true, want: true}),
+		Entry("NO_COLOR overrides --color", colorCase{noColor: "1", flag: "true", tty: true}),
+	)
+})

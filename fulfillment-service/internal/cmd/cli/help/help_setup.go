@@ -66,7 +66,7 @@ func Setup(cmd *cobra.Command) {
 			c.PrintErrln("Error executing help template:", err)
 			return
 		}
-		renderer, err := markdown.NewHelpRenderer(out, useColor)
+		renderer, _, err := markdown.NewRenderer(out, useColor)
 		if err != nil {
 			c.PrintErrln("Error creating renderer:", err)
 			return

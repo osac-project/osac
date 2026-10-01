@@ -24,52 +24,52 @@ const openMenu = async (
 };
 
 describe('VolumeActionsMenu', () => {
-  it('shows Edit and Delete for an AVAILABLE volume', async () => {
+  it('enables Edit and Delete for an AVAILABLE volume', async () => {
     const { user } = renderMenu(makeVolume(VolumeState.AVAILABLE));
     await openMenu(user);
 
-    expect(screen.getByRole('menuitem', { name: 'Edit' })).toBeInTheDocument();
-    expect(screen.getByRole('menuitem', { name: 'Delete' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Edit' })).not.toBeDisabled();
+    expect(screen.getByRole('menuitem', { name: 'Delete' })).not.toBeDisabled();
   });
 
-  it('shows Edit but not Delete for a CREATING volume', async () => {
+  it('enables Edit but disables Delete for a CREATING volume', async () => {
     const { user } = renderMenu(makeVolume(VolumeState.CREATING));
     await openMenu(user);
 
-    expect(screen.getByRole('menuitem', { name: 'Edit' })).toBeInTheDocument();
-    expect(screen.queryByRole('menuitem', { name: 'Delete' })).not.toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Edit' })).not.toBeDisabled();
+    expect(screen.getByRole('menuitem', { name: 'Delete' })).toBeDisabled();
   });
 
-  it('shows Edit and Delete for a FAILED volume', async () => {
+  it('enables Edit and Delete for a FAILED volume', async () => {
     const { user } = renderMenu(makeVolume(VolumeState.FAILED));
     await openMenu(user);
 
-    expect(screen.getByRole('menuitem', { name: 'Edit' })).toBeInTheDocument();
-    expect(screen.getByRole('menuitem', { name: 'Delete' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Edit' })).not.toBeDisabled();
+    expect(screen.getByRole('menuitem', { name: 'Delete' })).not.toBeDisabled();
   });
 
-  it('renders nothing for a DELETING volume', () => {
-    renderMenu(makeVolume(VolumeState.DELETING));
+  it('shows the kebab with both actions disabled for a DELETING volume', async () => {
+    const { user } = renderMenu(makeVolume(VolumeState.DELETING));
+    await openMenu(user);
 
-    expect(
-      screen.queryByRole('button', { name: 'Actions for test-volume' }),
-    ).not.toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Edit' })).toBeDisabled();
+    expect(screen.getByRole('menuitem', { name: 'Delete' })).toBeDisabled();
   });
 
-  it('renders nothing for a DELETED volume', () => {
-    renderMenu(makeVolume(VolumeState.DELETED));
+  it('shows the kebab with both actions disabled for a DELETED volume', async () => {
+    const { user } = renderMenu(makeVolume(VolumeState.DELETED));
+    await openMenu(user);
 
-    expect(
-      screen.queryByRole('button', { name: 'Actions for test-volume' }),
-    ).not.toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Edit' })).toBeDisabled();
+    expect(screen.getByRole('menuitem', { name: 'Delete' })).toBeDisabled();
   });
 
-  it('renders nothing for an UNSPECIFIED volume', () => {
-    renderMenu(makeVolume(VolumeState.UNSPECIFIED));
+  it('shows the kebab with both actions disabled for an UNSPECIFIED volume', async () => {
+    const { user } = renderMenu(makeVolume(VolumeState.UNSPECIFIED));
+    await openMenu(user);
 
-    expect(
-      screen.queryByRole('button', { name: 'Actions for test-volume' }),
-    ).not.toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Edit' })).toBeDisabled();
+    expect(screen.getByRole('menuitem', { name: 'Delete' })).toBeDisabled();
   });
 
   it('closes the menu after Edit is clicked, confirming navigation was triggered', async () => {

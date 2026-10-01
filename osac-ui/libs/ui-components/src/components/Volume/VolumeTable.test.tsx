@@ -107,10 +107,10 @@ describe('VolumeTable', () => {
     expect(screen.getByRole('button', { name: 'Actions for my-vol' })).toBeInTheDocument();
   });
 
-  it('does not render the actions menu for a DELETING volume', () => {
+  it('renders the actions menu for a DELETING volume', () => {
     renderTable([makeVolume({ id: 'v-1', name: 'my-vol', state: VolumeState.DELETING })]);
 
-    expect(screen.queryByRole('button', { name: 'Actions for my-vol' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Actions for my-vol' })).toBeInTheDocument();
   });
 
   it('shows em-dash for missing fields when spec is absent', () => {

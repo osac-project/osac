@@ -10,6 +10,10 @@ vi.mock('./VolumesListPage', () => ({
   VolumesListPage: () => <h1>Volumes list</h1>,
 }));
 
+vi.mock('./VolumeDetailsPage', () => ({
+  VolumeDetailsPage: () => <h1>Volume details</h1>,
+}));
+
 import { VolumeRoutes } from './VolumeRoutes';
 
 const renderRoutes = (initialEntry: string) => (
@@ -39,10 +43,10 @@ describe('VolumeRoutes', () => {
     expect(screen.getByRole('heading', { name: 'Volume wizard' })).toBeInTheDocument();
   });
 
-  it('renders VolumeDetailPlaceholder on the detail route', () => {
+  it('renders VolumeDetailsPage on the detail route', () => {
     render(renderRoutes('/storage/volumes/vol-123'));
 
-    expect(screen.getByText('Volume detail — coming soon')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Volume details' })).toBeInTheDocument();
   });
 
   it('does not match "create" as a volume ID for the edit route', () => {

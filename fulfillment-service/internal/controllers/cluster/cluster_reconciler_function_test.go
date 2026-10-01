@@ -262,7 +262,7 @@ var _ = Describe("update tenant annotation", func() {
 			Spec: privatev1.ClusterSpec_builder{
 				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
-					"gpu.gb200": privatev1.ClusterNodeSet_builder{
+					"gpu-gb200": privatev1.ClusterNodeSet_builder{
 						Size:                  proto.Int32(5),
 						BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Name: "gpu.gb200"}.Build(),
 					}.Build(),
@@ -348,7 +348,7 @@ var _ = Describe("update tenant annotation", func() {
 			Spec: privatev1.ClusterSpec_builder{
 				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
-					"gpu.gb200": privatev1.ClusterNodeSet_builder{
+					"gpu-gb200": privatev1.ClusterNodeSet_builder{
 						Size:                  proto.Int32(5),
 						BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Name: "gpu.gb200"}.Build(),
 					}.Build(),
@@ -428,7 +428,7 @@ var _ = Describe("update tenant annotation", func() {
 			Spec: privatev1.ClusterSpec_builder{
 				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
-					"gpu.gb200": privatev1.ClusterNodeSet_builder{
+					"gpu-gb200": privatev1.ClusterNodeSet_builder{
 						Size:                  proto.Int32(5),
 						BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Name: "gpu.gb200"}.Build(),
 					}.Build(),
@@ -685,7 +685,7 @@ var _ = Describe("update tenant annotation", func() {
 				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
 				Version:  &privatev1.ClusterVersionReference{Name: versionName},
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
-					"gpu.gb200": privatev1.ClusterNodeSet_builder{
+					"gpu-gb200": privatev1.ClusterNodeSet_builder{
 						Size:                  proto.Int32(5),
 						BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Name: "gpu.gb200"}.Build(),
 					}.Build(),
@@ -793,7 +793,7 @@ var _ = Describe("update tenant annotation", func() {
 				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
 				Version:  &privatev1.ClusterVersionReference{Name: newVersionName},
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
-					"gpu.gb200": privatev1.ClusterNodeSet_builder{
+					"gpu-gb200": privatev1.ClusterNodeSet_builder{
 						Size:                  proto.Int32(3),
 						BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Name: "gpu.gb200"}.Build(),
 					}.Build(),

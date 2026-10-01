@@ -150,7 +150,7 @@ var _ = Describe("Cluster reconciler", func() {
 					}.Build(),
 				},
 				NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
-					"my_node_set": privatev1.ClusterTemplateNodeSet_builder{
+					"my-node-set": privatev1.ClusterTemplateNodeSet_builder{
 						HostType: privatev1.HostTypeReference_builder{Id: hostTypeId}.Build(),
 						Size:     3,
 					}.Build(),
@@ -204,7 +204,7 @@ var _ = Describe("Cluster reconciler", func() {
 						"my": makeAny(wrapperspb.String("my_value")),
 					},
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
-						"my_node_set": publicv1.ClusterNodeSet_builder{
+						"my-node-set": publicv1.ClusterNodeSet_builder{
 							BaremetalInstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: bmitId}.Build(),
 							Size:                  proto.Int32(3),
 						}.Build(),
@@ -371,7 +371,7 @@ var _ = Describe("Cluster reconciler", func() {
 						"my": makeAny(wrapperspb.String("my_value")),
 					},
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
-						"my_node_set": publicv1.ClusterNodeSet_builder{
+						"my-node-set": publicv1.ClusterNodeSet_builder{
 							BaremetalInstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: bmitId}.Build(),
 							Size:                  proto.Int32(3),
 						}.Build(),
@@ -423,7 +423,7 @@ var _ = Describe("Cluster reconciler", func() {
 						"my": makeAny(wrapperspb.String("my_value")),
 					},
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
-						"my_node_set": publicv1.ClusterNodeSet_builder{
+						"my-node-set": publicv1.ClusterNodeSet_builder{
 							BaremetalInstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: bmitId}.Build(),
 							Size:                  proto.Int32(5),
 						}.Build(),

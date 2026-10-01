@@ -118,10 +118,10 @@ var _ = Describe("Generic mapper", func() {
 			privatev1.Cluster_builder{
 				Spec: privatev1.ClusterSpec_builder{
 					NodeSets: map[string]*privatev1.ClusterNodeSet{
-						"my_node_set": privatev1.ClusterNodeSet_builder{
+						"my-node-set": privatev1.ClusterNodeSet_builder{
 							Size: proto.Int32(123),
 						}.Build(),
-						"your_node_set": privatev1.ClusterNodeSet_builder{
+						"your-node-set": privatev1.ClusterNodeSet_builder{
 							Size: proto.Int32(456),
 						}.Build(),
 					},
@@ -131,10 +131,10 @@ var _ = Describe("Generic mapper", func() {
 			publicv1.Cluster_builder{
 				Spec: publicv1.ClusterSpec_builder{
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
-						"my_node_set": publicv1.ClusterNodeSet_builder{
+						"my-node-set": publicv1.ClusterNodeSet_builder{
 							Size: proto.Int32(123),
 						}.Build(),
-						"your_node_set": publicv1.ClusterNodeSet_builder{
+						"your-node-set": publicv1.ClusterNodeSet_builder{
 							Size: proto.Int32(456),
 						}.Build(),
 					},
@@ -312,7 +312,7 @@ var _ = Describe("Generic mapper", func() {
 			privatev1.Cluster_builder{
 				Spec: privatev1.ClusterSpec_builder{
 					NodeSets: map[string]*privatev1.ClusterNodeSet{
-						"new_node_set": privatev1.ClusterNodeSet_builder{
+						"new-node-set": privatev1.ClusterNodeSet_builder{
 							Size: proto.Int32(789),
 						}.Build(),
 					},
@@ -321,7 +321,7 @@ var _ = Describe("Generic mapper", func() {
 			publicv1.Cluster_builder{
 				Spec: publicv1.ClusterSpec_builder{
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
-						"existing_node_set": publicv1.ClusterNodeSet_builder{
+						"existing-node-set": publicv1.ClusterNodeSet_builder{
 							Size: proto.Int32(456),
 						}.Build(),
 					},
@@ -330,10 +330,10 @@ var _ = Describe("Generic mapper", func() {
 			publicv1.Cluster_builder{
 				Spec: publicv1.ClusterSpec_builder{
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
-						"existing_node_set": publicv1.ClusterNodeSet_builder{
+						"existing-node-set": publicv1.ClusterNodeSet_builder{
 							Size: proto.Int32(456),
 						}.Build(),
-						"new_node_set": publicv1.ClusterNodeSet_builder{
+						"new-node-set": publicv1.ClusterNodeSet_builder{
 							Size: proto.Int32(789),
 						}.Build(),
 					},
@@ -345,7 +345,7 @@ var _ = Describe("Generic mapper", func() {
 			privatev1.Cluster_builder{
 				Spec: privatev1.ClusterSpec_builder{
 					NodeSets: map[string]*privatev1.ClusterNodeSet{
-						"node_set": privatev1.ClusterNodeSet_builder{
+						"node-set": privatev1.ClusterNodeSet_builder{
 							Size: proto.Int32(999),
 						}.Build(),
 					},
@@ -354,7 +354,7 @@ var _ = Describe("Generic mapper", func() {
 			publicv1.Cluster_builder{
 				Spec: publicv1.ClusterSpec_builder{
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
-						"node_set": publicv1.ClusterNodeSet_builder{
+						"node-set": publicv1.ClusterNodeSet_builder{
 							Size: proto.Int32(123),
 						}.Build(),
 					},
@@ -363,7 +363,7 @@ var _ = Describe("Generic mapper", func() {
 			publicv1.Cluster_builder{
 				Spec: publicv1.ClusterSpec_builder{
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
-						"node_set": publicv1.ClusterNodeSet_builder{
+						"node-set": publicv1.ClusterNodeSet_builder{
 							Size: proto.Int32(999),
 						}.Build(),
 					},

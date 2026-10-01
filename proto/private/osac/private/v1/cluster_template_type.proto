@@ -15,6 +15,7 @@ syntax = "proto3";
 
 package osac.private.v1;
 
+import "buf/validate/validate.proto";
 import "cleanapi/cleanapi.proto";
 import "google/protobuf/any.proto";
 import "osac/private/v1/cluster_common_type.proto";
@@ -49,7 +50,11 @@ message ClusterTemplate {
   repeated ClusterTemplateParameterDefinition parameters = 5;
 
   // Initial node sets of the cluster.
-  map<string, ClusterTemplateNodeSet> node_sets = 6;
+  map<string, ClusterTemplateNodeSet> node_sets = 6 [(buf.validate.field).map.keys.string = {
+    min_len: 1,
+    max_len: 63,
+    pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+  }];
 
   // Default values for cluster spec fields. When a user creates a cluster
   // without setting these fields, these values are applied.

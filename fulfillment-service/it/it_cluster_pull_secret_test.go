@@ -116,7 +116,7 @@ var _ = Describe("Cluster pull_secret_secret", Label("secrets", "cluster"), func
 					}.Build(),
 				},
 				NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
-					"my_node_set": privatev1.ClusterTemplateNodeSet_builder{
+					"my-node-set": privatev1.ClusterTemplateNodeSet_builder{
 						HostType: privatev1.HostTypeReference_builder{Id: hostTypeId}.Build(),
 						Size:     3,
 					}.Build(),

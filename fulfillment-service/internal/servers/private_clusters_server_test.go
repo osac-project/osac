@@ -125,6 +125,45 @@ var _ = Describe("Private clusters server", func() {
 				"workers": privatev1.ClusterNodeSet_builder{Size: &zero}.Build(),
 			})).To(MatchError("size for node set 'workers' should be greater than zero, but it is 0"))
 		})
+
+		DescribeTable("accepts valid DNS label node-set names",
+			func(name string) {
+				size := int32(2)
+				Expect(validateClusterNodeSetMap(map[string]*privatev1.ClusterNodeSet{
+					name: privatev1.ClusterNodeSet_builder{Size: &size}.Build(),
+				})).To(Succeed())
+			},
+			Entry("simple name", "workers"),
+			Entry("hyphenated name", "my-workers"),
+			Entry("single character", "a"),
+			Entry("name with digits", "worker1"),
+		)
+
+		DescribeTable("rejects invalid node-set names",
+			func(name string) {
+				size := int32(2)
+				Expect(validateClusterNodeSetMap(map[string]*privatev1.ClusterNodeSet{
+					name: privatev1.ClusterNodeSet_builder{Size: &size}.Build(),
+				})).To(MatchError(ContainSubstring("node set name '" + name + "' is not a valid DNS label")))
+			},
+			Entry("uppercase", "WORKERS"),
+			Entry("leading hyphen", "-workers"),
+			Entry("trailing hyphen", "workers-"),
+			Entry("underscore", "my_workers"),
+			Entry("empty string", ""),
+			Entry("exceeds 63 characters", "a234567890123456789012345678901234567890123456789012345678901234"),
+		)
+
+		It("validates node-set names via validateNodeSetNames", func() {
+			Expect(validateNodeSetNames(map[string]*privatev1.ClusterNodeSet{
+				"workers": nil,
+			})).To(Succeed())
+			err := validateNodeSetNames(map[string]*privatev1.ClusterNodeSet{
+				"INVALID": nil,
+			})
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("node set name 'INVALID' is not a valid DNS label"))
+		})
 	})
 
 	Describe("Creation", func() {

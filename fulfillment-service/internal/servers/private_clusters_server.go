@@ -31,6 +31,8 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
+	"k8s.io/apimachinery/pkg/util/validation"
+
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
@@ -706,6 +708,9 @@ func (s *PrivateClustersServer) validateNodeSetsUpdate(ctx context.Context,
 	if err := s.validateAtLeastOneNodeSet(newNodeSets); err != nil {
 		return err
 	}
+	if err := validateNodeSetNames(newNodeSets); err != nil {
+		return err
+	}
 	if err := s.validateNodeSetHostTypeImmutability(existingNodeSets, newNodeSets); err != nil {
 		return err
 	}
@@ -812,6 +817,9 @@ func validateClusterNodeSetMap(nodeSets map[string]*privatev1.ClusterNodeSet) er
 		return fmt.Errorf("must contain at least one node set")
 	}
 	for name, nodeSet := range nodeSets {
+		if errs := validation.IsDNS1123Label(name); len(errs) > 0 {
+			return fmt.Errorf("node set name '%s' is not a valid DNS label: %s", name, strings.Join(errs, ", "))
+		}
 		if nodeSet == nil {
 			return fmt.Errorf("node set '%s' must not be null", name)
 		}
@@ -820,6 +828,19 @@ func validateClusterNodeSetMap(nodeSets map[string]*privatev1.ClusterNodeSet) er
 		}
 		if nodeSet.GetSize() <= 0 {
 			return fmt.Errorf("size for node set '%s' should be greater than zero, but it is %d", name, nodeSet.GetSize())
+		}
+	}
+	return nil
+}
+
+// validateNodeSetNames checks that every key in the node-set map is a valid RFC 1123 DNS label.
+func validateNodeSetNames[V any](nodeSets map[string]V) error {
+	for name := range nodeSets {
+		if errs := validation.IsDNS1123Label(name); len(errs) > 0 {
+			return grpcstatus.Errorf(
+				grpccodes.InvalidArgument,
+				"node set name '%s' is not a valid DNS label: %s", name, strings.Join(errs, ", "),
+			)
 		}
 	}
 	return nil

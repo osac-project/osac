@@ -3,7 +3,7 @@ import type { NetworkInterface } from '@osac/types';
 export const LIFECYCLE_INTERFACE_ROLE = 'lifecycle';
 
 /**
- * Filters out lifecycle interfaces from a HostType's interface list.
+ * Filters out lifecycle interfaces from a BareMetalInstanceType's interface list.
  * Only interfaces with roles other than 'lifecycle' are tenant-attachable.
  */
 export const getAttachableInterfaces = (

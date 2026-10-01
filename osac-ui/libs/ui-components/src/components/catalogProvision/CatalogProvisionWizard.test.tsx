@@ -289,9 +289,9 @@ const apiFixtures: MockApiFixtures = {
       title: '',
     },
   ],
-  hostTypes: [
+  baremetalInstanceTypes: [
     {
-      $typeName: 'osac.public.v1.HostType',
+      $typeName: 'osac.public.v1.BareMetalInstanceType',
       id: 'acme_1tb',
       metadata: {
         $typeName: 'osac.public.v1.Metadata',
@@ -305,12 +305,9 @@ const apiFixtures: MockApiFixtures = {
         tenant: 'foo',
         version: 1,
       },
-      title: 'ACME 1TB',
-      description: '',
-      interfaces: [],
     },
     {
-      $typeName: 'osac.public.v1.HostType',
+      $typeName: 'osac.public.v1.BareMetalInstanceType',
       id: 'acme_1tb_h100',
       metadata: {
         $typeName: 'osac.public.v1.Metadata',
@@ -324,9 +321,6 @@ const apiFixtures: MockApiFixtures = {
         tenant: 'foo',
         version: 1,
       },
-      title: 'ACME 1TB H100',
-      description: '',
-      interfaces: [],
     },
   ],
   virtualNetworks: [

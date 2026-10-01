@@ -189,7 +189,7 @@ describe('buildClusterStepSchema', () => {
             name: 'foo',
           },
           versionName: '',
-          nodeSetRows: [{ ...row, name: 'workers', hostType: 'acme_1tb', size: '3' }],
+          nodeSetRows: [{ ...row, name: 'workers', baremetalInstanceType: { id: 'acme_1tb', name: '' }, size: '3' }],
         },
       },
       clusterCatalogItem,
@@ -240,7 +240,7 @@ describe('buildClusterStepSchema', () => {
             {
               ...row,
               name: 'workers',
-              hostType: 'acme_1tb',
+              baremetalInstanceType: { id: 'acme_1tb', name: '' },
               size: '0',
             },
           ],
@@ -255,7 +255,7 @@ describe('buildClusterStepSchema', () => {
     });
   });
 
-  it('allows duplicate host types when node set IDs are distinct', async () => {
+  it('allows duplicate instance types when node set IDs are distinct', async () => {
     const row = createEmptyNodeSetRow();
     const errors = await validateStep(
       'configuration',
@@ -274,14 +274,14 @@ describe('buildClusterStepSchema', () => {
               ...row,
               rowId: 'row-1',
               name: 'production',
-              hostType: 'acme_1tb',
+              baremetalInstanceType: { id: 'acme_1tb', name: '' },
               size: '3',
             },
             {
               ...row,
               rowId: 'row-2',
               name: 'development',
-              hostType: 'acme_1tb',
+              baremetalInstanceType: { id: 'acme_1tb', name: '' },
               size: '2',
             },
           ],
@@ -305,8 +305,8 @@ describe('buildClusterStepSchema', () => {
           pullSecretSecret: { name: 'foo' },
           versionName: '4-17-0',
           nodeSetRows: [
-            { ...row, rowId: 'row-1', name: 'production', hostType: 'acme_1tb', size: '3' },
-            { ...row, rowId: 'row-2', name: 'production', hostType: 'acme_1tb', size: '2' },
+            { ...row, rowId: 'row-1', name: 'production', baremetalInstanceType: { id: 'acme_1tb', name: '' }, size: '3' },
+            { ...row, rowId: 'row-2', name: 'production', baremetalInstanceType: { id: 'acme_1tb', name: '' }, size: '2' },
           ],
         },
       },
@@ -332,7 +332,7 @@ describe('buildClusterStepSchema', () => {
           ...emptyValues.spec,
           pullSecretSecret: { name: 'foo' },
           versionName: '4-17-0',
-          nodeSetRows: [{ ...row, name: '', hostType: 'acme_1tb', size: '3' }],
+          nodeSetRows: [{ ...row, name: '', baremetalInstanceType: { id: 'acme_1tb', name: '' }, size: '3' }],
         },
       },
       clusterCatalogItem,
@@ -357,7 +357,7 @@ describe('buildClusterStepSchema', () => {
           ...emptyValues.spec,
           pullSecretSecret: { name: 'foo' },
           versionName: '4-17-0',
-          nodeSetRows: [{ ...row, name: 'Workers_1', hostType: 'acme_1tb', size: '3' }],
+          nodeSetRows: [{ ...row, name: 'Workers_1', baremetalInstanceType: { id: 'acme_1tb', name: '' }, size: '3' }],
         },
       },
       clusterCatalogItem,

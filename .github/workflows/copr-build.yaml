@@ -51,7 +51,6 @@ permissions: {}
 jobs:
   trigger-copr:
     if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/fulfillment-service/v')
-    environment: copr-production
     name: Trigger Copr build
     runs-on: ubuntu-latest
     timeout-minutes: 5

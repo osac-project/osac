@@ -6,10 +6,6 @@ import { BareMetalInstanceCatalogItem } from '@osac/types';
 import type { ResourceSelectValue } from '../../../../Form/resourceSelectValue';
 import { emptyResourceSelectValue } from '../../../../Form/resourceSelectValue';
 import {
-  type ResourceSelectValue,
-  emptyResourceSelectValue,
-} from '../../../../Form/ResourceSelectField';
-import {
   getCatalogFieldOverlay,
   overlayDefaultToFormValue,
   readCatalogFieldDefinitions,

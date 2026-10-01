@@ -24,7 +24,11 @@ export interface ComputeInstanceWizardValues {
       name: string;
     };
     instanceType: string;
+    userDataSource: 'inline' | 'secret';
     userData: string;
+    userDataSecret: {
+      name: string;
+    };
     bootDisk: ComputeInstanceDiskValues;
     additionalDisks: ComputeInstanceDiskValues[];
     networking: ComputeInstanceNetworkingValues;
@@ -32,6 +36,9 @@ export interface ComputeInstanceWizardValues {
 }
 
 export const VM_SSH_KEY_FORM_PATH = 'spec.sshKey.name';
+export const VM_USER_DATA_SOURCE_FORM_PATH = 'spec.userDataSource';
+export const VM_USER_DATA_FORM_PATH = 'spec.userData';
+export const VM_USER_DATA_SECRET_FORM_PATH = 'spec.userDataSecret.name';
 
 export const CONFIGURATION_CATALOG_PATHS = [
   'spec.user_data',

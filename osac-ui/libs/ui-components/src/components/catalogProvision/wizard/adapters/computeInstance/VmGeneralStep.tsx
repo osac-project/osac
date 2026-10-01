@@ -5,7 +5,11 @@ import { cel } from '@osac/ui-components/api/cel';
 import ProjectField from '@osac/ui-components/components/Form/ProjectField';
 import SecretSelectionField from '@osac/ui-components/components/Form/SecretSelectionField';
 
-import { ComputeInstanceWizardValues, VM_SSH_KEY_FORM_PATH } from './fields';
+import {
+  ComputeInstanceWizardValues,
+  VM_SSH_KEY_FORM_PATH,
+  VM_USER_DATA_SECRET_FORM_PATH,
+} from './fields';
 import { useTranslation } from '../../../../../hooks/useTranslation';
 import OsacForm from '../../../../Form/OsacForm';
 import NameField from '../../fields/NameField';
@@ -21,7 +25,12 @@ const VmGeneralStep = ({ catalogItem }: VmGeneralStepProps) => {
 
   return (
     <OsacForm>
-      <ProjectField onSelect={() => setFieldValue(VM_SSH_KEY_FORM_PATH, '')} />
+      <ProjectField
+        onSelect={() => {
+          void setFieldValue(VM_SSH_KEY_FORM_PATH, '');
+          void setFieldValue(VM_USER_DATA_SECRET_FORM_PATH, '');
+        }}
+      />
       <NameField />
       <SecretSelectionField
         filter={cel<Secret>((filter) =>

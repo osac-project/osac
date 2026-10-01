@@ -13,6 +13,7 @@ export const buildBareMetalInstanceCreatePayload = (
 ): MessageInitShape<typeof BareMetalInstanceSchema> => {
   const sshKey = values.spec.sshKey.trim();
   const userData = values.spec.userData.trim();
+  const userDataSecretName = values.spec.userDataSecret.name.trim();
 
   const bmi: MessageInitShape<typeof BareMetalInstanceSchema> = {
     metadata: { name: values.metadata.name.trim(), project: values.metadata.project },
@@ -22,7 +23,9 @@ export const buildBareMetalInstanceCreatePayload = (
       },
       runStrategy: BareMetalInstanceRunStrategy.ALWAYS,
       ...(sshKey && { sshPublicKey: sshKey }),
-      ...(userData && { userData }),
+      ...(values.spec.userDataSource === 'secret'
+        ? userDataSecretName && { userDataSecret: { name: userDataSecretName } }
+        : userData && { userData }),
       ...(values.spec.instanceType.name && {
         instanceType: {
           name: values.spec.instanceType.name,

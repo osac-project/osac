@@ -51,3 +51,16 @@ describe('VmReviewStep — Storage section', () => {
     expect(screen.getAllByText('Boot disk')).toHaveLength(1);
   });
 });
+
+describe('VmReviewStep — user data source', () => {
+  it('shows the selected Secret reference instead of inline user data', async () => {
+    renderReviewStep({
+      userDataSource: 'secret',
+      userData: 'stale inline data',
+      userDataSecret: { name: 'user-data-secret' },
+    });
+
+    expect(await screen.findByText('user-data-secret')).toBeInTheDocument();
+    expect(screen.queryByText('stale inline data')).not.toBeInTheDocument();
+  });
+});

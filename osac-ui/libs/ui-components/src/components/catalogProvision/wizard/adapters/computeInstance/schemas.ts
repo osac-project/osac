@@ -88,7 +88,18 @@ const buildComputeInstanceFieldDefinitions = (catalogItem: unknown, t: TFunction
         .test('subnet-selected', t('catalogProvision.validation.subnetRequired'), (value) =>
           Boolean(value?.id),
         ),
-      securityGroups: yup.array().min(1, t('catalogProvision.validation.securityGroupRequired')),
+      securityGroups: yup
+        .array()
+        .of(
+          yup
+            .object({ id: yup.string(), name: yup.string() })
+            .test(
+              'security-group-selected',
+              t('catalogProvision.validation.securityGroupRequired'),
+              (value) => Boolean(value?.id),
+            ),
+        )
+        .min(1, t('catalogProvision.validation.securityGroupRequired')),
     }),
   };
 };

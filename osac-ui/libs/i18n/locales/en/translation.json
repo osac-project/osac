@@ -771,6 +771,7 @@
   "Secret value for {{key}}": "Secret value for {{key}}",
   "Secret value is required": "Secret value is required",
   "Secrets": "Secrets",
+  "Security group must be selected": "Security group must be selected",
   "Security groups": "Security groups",
   "Select a backend": "Select a backend",
   "Select a catalog item": "Select a catalog item",

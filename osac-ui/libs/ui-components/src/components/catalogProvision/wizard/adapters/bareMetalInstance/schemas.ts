@@ -140,7 +140,16 @@ const buildAttachmentRowSchema = (t: TFunction) =>
     subnet: yup
       .object({ id: yup.string(), name: yup.string() })
       .test('subnet-selected', t('Subnet is required'), (value) => Boolean(value?.id)),
-    securityGroups: yup.array().min(1, t('At least one security group is required')),
+    securityGroups: yup
+      .array()
+      .of(
+        yup
+          .object({ id: yup.string(), name: yup.string() })
+          .test('security-group-selected', t('Security group must be selected'), (value) =>
+            Boolean(value?.id),
+          ),
+      )
+      .min(1, t('At least one security group is required')),
   });
 
 const buildCustomAttachmentsSchema = (t: TFunction) =>

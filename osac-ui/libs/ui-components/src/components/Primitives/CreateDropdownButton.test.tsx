@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import CreateDropdownButton from './CreateDropdownButton';
@@ -26,6 +26,8 @@ describe('CreateDropdownButton', () => {
 
     await user.click(item);
 
-    expect(screen.queryByRole('menuitem', { name: 'Project' })).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByRole('menuitem', { name: 'Project' })).not.toBeInTheDocument();
+    });
   });
 });

@@ -47,12 +47,12 @@ describe('NetworkAttachmentPickers', () => {
     expect(screen.getByText('Security groups')).toBeInTheDocument();
   });
 
-  it('accepts empty initial values without errors', () => {
+  it('does not display validation errors on initial render', () => {
     renderPickers();
 
-    expect(screen.getByText('Virtual network')).toBeInTheDocument();
-    expect(screen.getByText('Subnet')).toBeInTheDocument();
-    expect(screen.getByText('Security groups')).toBeInTheDocument();
+    expect(screen.queryByText('Virtual network is required')).not.toBeInTheDocument();
+    expect(screen.queryByText('Subnet is required')).not.toBeInTheDocument();
+    expect(screen.queryByText('At least one security group is required')).not.toBeInTheDocument();
   });
 
   it('exports the deprecated NetworkPickerFields alias', async () => {

@@ -454,8 +454,9 @@ func syncClusterOrderNodeRequests(ctx context.Context, clusterOrder *ckv1alpha1.
 		nodeSet := nodeSets[nodeSetID]
 		if nodeSet == nil {
 			nodeSet = privatev1.ClusterNodeSet_builder{
-				BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{
-					Name: nodeRequest.ResourceClass,
+				BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{
+					Name:   nodeRequest.ResourceClass,
+					Shared: true,
 				}.Build(),
 			}.Build()
 			nodeSets[nodeSetID] = nodeSet

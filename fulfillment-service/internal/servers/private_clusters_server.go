@@ -1410,8 +1410,8 @@ func (s *PrivateClustersServer) resolveClusterNodeSets(ctx context.Context, clus
 					return err
 				}
 				if bmit != nil {
-					node.SetBaremetalInstanceType(privatev1.BareMetalInstanceTypeLocalReference_builder{
-						Id: bmit.GetId(), Name: bmit.GetMetadata().GetName(),
+					node.SetBaremetalInstanceType(privatev1.BareMetalInstanceTypeReference_builder{
+						Id: bmit.GetId(), Name: bmit.GetMetadata().GetName(), Shared: true,
 					}.Build())
 				}
 			}

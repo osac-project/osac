@@ -1052,7 +1052,7 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 					Spec: &privatev1.ClusterSpec{
 						NodeSets: map[string]*privatev1.ClusterNodeSet{
 							"workers": {
-								BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Name: "m5.xlarge"}.Build(),
+								BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Name: "m5.xlarge", Shared: true}.Build(),
 							},
 						},
 					},

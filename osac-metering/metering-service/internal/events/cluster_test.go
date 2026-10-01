@@ -32,8 +32,8 @@ var _ = Describe("CaaS Cluster Mapper", func() {
 				CatalogItem: &privatev1.ClusterCatalogItemReference{Id: "cluster-catalog-1", Name: "cluster-catalog-1"},
 				Version:     &privatev1.ClusterVersionReference{Id: "4.17.0", Name: "4.17.0"},
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
-					"gpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeLocalReference{Name: "gpu-h100"}, Size: proto.Int32(2)},
-					"cpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeLocalReference{Name: "cpu-only"}, Size: proto.Int32(3)},
+					"gpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "gpu-h100", Shared: true}, Size: proto.Int32(2)},
+					"cpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "cpu-only", Shared: true}, Size: proto.Int32(3)},
 				},
 			},
 			Status: &privatev1.ClusterStatus{
@@ -387,7 +387,7 @@ var _ = Describe("CaaS Cluster Mapper", func() {
 		It("uses BareMetalInstanceType name when only BMIT is set", func() {
 			cl.Spec.NodeSets = map[string]*privatev1.ClusterNodeSet{
 				"workers": {
-					BaremetalInstanceType: &privatev1.BareMetalInstanceTypeLocalReference{Name: "bmit-large"},
+					BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "bmit-large", Shared: true},
 					Size:                  proto.Int32(4),
 				},
 			}
@@ -415,7 +415,7 @@ var _ = Describe("CaaS Cluster Mapper", func() {
 		It("prefers BareMetalInstanceType over HostType when both are set", func() {
 			cl.Spec.NodeSets = map[string]*privatev1.ClusterNodeSet{
 				"workers": {
-					BaremetalInstanceType: &privatev1.BareMetalInstanceTypeLocalReference{Name: "bmit-preferred"},
+					BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "bmit-preferred", Shared: true},
 					HostType:              &privatev1.HostTypeReference{Name: "legacy-fallback"},
 					Size:                  proto.Int32(3),
 				},

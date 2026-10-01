@@ -92,7 +92,7 @@ var _ = Describe("prepareNodeRequest", func() {
 	It("uses BareMetalInstanceType name as ResourceClass when present", func() {
 		t := &task{}
 		nodeSet := privatev1.ClusterNodeSet_builder{
-			BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Name: "gpu.gb200"}.Build(),
+			BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Name: "gpu.gb200", Shared: true}.Build(),
 			Size:                  proto.Int32(3),
 		}.Build()
 		nr := t.prepareNodeRequest(nodeSet)
@@ -114,7 +114,7 @@ var _ = Describe("prepareNodeRequest", func() {
 	It("prefers BareMetalInstanceType over HostType when both are present", func() {
 		t := &task{}
 		nodeSet := privatev1.ClusterNodeSet_builder{
-			BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Name: "new-bmit"}.Build(),
+			BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Name: "new-bmit", Shared: true}.Build(),
 			HostType:              privatev1.HostTypeReference_builder{Name: "old-host"}.Build(),
 			Size:                  proto.Int32(2),
 		}.Build()
@@ -264,7 +264,7 @@ var _ = Describe("update tenant annotation", func() {
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
 					"gpu.gb200": privatev1.ClusterNodeSet_builder{
 						Size:                  proto.Int32(5),
-						BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Name: "gpu.gb200"}.Build(),
+						BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Name: "gpu.gb200", Shared: true}.Build(),
 					}.Build(),
 				},
 			}.Build(),
@@ -350,7 +350,7 @@ var _ = Describe("update tenant annotation", func() {
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
 					"gpu.gb200": privatev1.ClusterNodeSet_builder{
 						Size:                  proto.Int32(5),
-						BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Name: "gpu.gb200"}.Build(),
+						BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Name: "gpu.gb200", Shared: true}.Build(),
 					}.Build(),
 				},
 			}.Build(),
@@ -430,7 +430,7 @@ var _ = Describe("update tenant annotation", func() {
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
 					"gpu.gb200": privatev1.ClusterNodeSet_builder{
 						Size:                  proto.Int32(5),
-						BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Name: "gpu.gb200"}.Build(),
+						BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Name: "gpu.gb200", Shared: true}.Build(),
 					}.Build(),
 				},
 			}.Build(),
@@ -687,7 +687,7 @@ var _ = Describe("update tenant annotation", func() {
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
 					"gpu.gb200": privatev1.ClusterNodeSet_builder{
 						Size:                  proto.Int32(5),
-						BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Name: "gpu.gb200"}.Build(),
+						BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Name: "gpu.gb200", Shared: true}.Build(),
 					}.Build(),
 				},
 			}.Build(),
@@ -795,7 +795,7 @@ var _ = Describe("update tenant annotation", func() {
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
 					"gpu.gb200": privatev1.ClusterNodeSet_builder{
 						Size:                  proto.Int32(3),
-						BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Name: "gpu.gb200"}.Build(),
+						BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Name: "gpu.gb200", Shared: true}.Build(),
 					}.Build(),
 				},
 			}.Build(),

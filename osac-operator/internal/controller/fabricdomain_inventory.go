@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -54,9 +55,9 @@ func (r *FabricDomainReconciler) resolveFabricDomainHardware(
 	if len(domain.Spec.Servers) == 0 {
 		return "", nil, fmt.Errorf("the servers list must not be empty")
 	}
-	templates := make(map[string]string)
 	memberTypes := make(map[string]string, len(domain.Spec.Servers))
-	var selectedTemplate string
+	typeIDs := make([]string, 0, len(domain.Spec.Servers))
+	firstServerByType := make(map[string]string, len(domain.Spec.Servers))
 	for _, server := range domain.Spec.Servers {
 		if server == "" || strings.TrimSpace(server) != server {
 			return "", nil, fmt.Errorf("invalid inventory hostname %q", server)
@@ -69,29 +70,54 @@ func (r *FabricDomainReconciler) resolveFabricDomainHardware(
 			return "", nil, fmt.Errorf("server %q has no valid BareMetalInstanceType binding in ConfigMap %s/%s", server, domain.Namespace, fabricDomainInventoryName)
 		}
 		memberTypes[server] = typeID
-		templateID, found := templates[typeID]
-		if !found {
-			response, err := r.BareMetalInstanceTypesClient.Get(ctx, privatev1.BareMetalInstanceTypesGetRequest_builder{Id: typeID}.Build())
-			if err != nil {
-				return "", nil, fmt.Errorf("resolving instance type %q for server %q: %w", typeID, server, err)
-			}
-			instanceType := response.GetObject()
-			if instanceType == nil || instanceType.GetMetadata().GetDeletionTimestamp() != nil {
-				return "", nil, fmt.Errorf("instance type %q for server %q is missing or deleting", typeID, server)
-			}
-			if instanceType.GetMetadata().GetTenant() != "shared" {
-				return "", nil, fmt.Errorf("instance type %q must belong to the shared catalog", typeID)
-			}
-			binding := instanceType.GetSpec().GetFabricBindings().GetEthernetEw().GetNetris()
-			if binding == nil || binding.GetNetworkClass() != networkClassID {
-				return "", nil, fmt.Errorf("instance type %q has no Netris Ethernet binding for NetworkClass %q", typeID, networkClassID)
-			}
-			templateID = binding.GetTemplateId()
-			if !validNetrisID(templateID) {
-				return "", nil, fmt.Errorf("instance type %q has invalid Netris template ID %q", typeID, templateID)
-			}
-			templates[typeID] = templateID
+		if _, found := firstServerByType[typeID]; !found {
+			typeIDs = append(typeIDs, typeID)
+			firstServerByType[typeID] = server
 		}
+	}
+
+	// Resolve every distinct type in one filtered catalog request. Reconciliation
+	// periodically rechecks bindings, so issuing one Get per type here would turn
+	// each resync into an N+1 gRPC pattern for larger domains.
+	quotedTypeIDs := make([]string, 0, len(typeIDs))
+	for _, typeID := range typeIDs {
+		quotedTypeIDs = append(quotedTypeIDs, strconv.Quote(typeID))
+	}
+	filter := fmt.Sprintf("this.id in [%s]", strings.Join(quotedTypeIDs, ", "))
+	response, err := r.BareMetalInstanceTypesClient.List(ctx, privatev1.BareMetalInstanceTypesListRequest_builder{Filter: &filter}.Build())
+	if err != nil {
+		return "", nil, fmt.Errorf("resolving instance types %q: %w", typeIDs, err)
+	}
+	instancesByID := make(map[string]*privatev1.BareMetalInstanceType, len(response.GetItems()))
+	for _, instanceType := range response.GetItems() {
+		if instanceType != nil {
+			instancesByID[instanceType.GetId()] = instanceType
+		}
+	}
+
+	templates := make(map[string]string, len(typeIDs))
+	for _, typeID := range typeIDs {
+		instanceType := instancesByID[typeID]
+		if instanceType == nil || instanceType.GetMetadata().GetDeletionTimestamp() != nil {
+			return "", nil, fmt.Errorf("instance type %q for server %q is missing or deleting", typeID, firstServerByType[typeID])
+		}
+		if instanceType.GetMetadata().GetTenant() != "shared" {
+			return "", nil, fmt.Errorf("instance type %q must belong to the shared catalog", typeID)
+		}
+		binding := instanceType.GetSpec().GetFabricBindings().GetEthernetEw().GetNetris()
+		if binding == nil || binding.GetNetworkClass() != networkClassID {
+			return "", nil, fmt.Errorf("instance type %q has no Netris Ethernet binding for NetworkClass %q", typeID, networkClassID)
+		}
+		templateID := binding.GetTemplateId()
+		if !validNetrisID(templateID) {
+			return "", nil, fmt.Errorf("instance type %q has invalid Netris template ID %q", typeID, templateID)
+		}
+		templates[typeID] = templateID
+	}
+
+	var selectedTemplate string
+	for _, server := range domain.Spec.Servers {
+		templateID := templates[memberTypes[server]]
 		if selectedTemplate != "" && selectedTemplate != templateID {
 			return "", nil, fmt.Errorf("incompatible Ethernet templates: server %q resolves to %q, other members resolve to %q", server, templateID, selectedTemplate)
 		}

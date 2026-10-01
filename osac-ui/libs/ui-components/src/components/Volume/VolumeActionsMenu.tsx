@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { Dropdown, DropdownItem, DropdownList, MenuToggle } from '@patternfly/react-core';
 import { EllipsisVIcon } from '@patternfly/react-icons/dist/esm/icons/ellipsis-v-icon';
 
@@ -15,16 +14,10 @@ interface VolumeActionsMenuProps {
 
 const VolumeActionsMenu = ({ volume }: VolumeActionsMenuProps) => {
   const { t } = useTranslation();
-  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
 
-  const state = volume.status?.state;
-  const canEdit =
-    state === VolumeState.AVAILABLE ||
-    state === VolumeState.CREATING ||
-    state === VolumeState.FAILED;
-  const canDelete = state === VolumeState.AVAILABLE || state === VolumeState.FAILED;
+  const isDeleting = volume.status?.state === VolumeState.DELETING;
 
   const name = volume.metadata?.name ?? volume.id;
 
@@ -54,23 +47,10 @@ const VolumeActionsMenu = ({ volume }: VolumeActionsMenuProps) => {
       >
         <DropdownList>
           <DropdownItem
-            value="edit"
-            isDisabled={!canEdit}
-            onClick={() => {
-              if (!canEdit) {
-                return;
-              }
-              navigate(`/storage/volumes/${volume.id}/edit`);
-              setOpen(false);
-            }}
-          >
-            {t('Edit')}
-          </DropdownItem>
-          <DropdownItem
             value="delete"
-            isDisabled={!canDelete}
+            isDisabled={isDeleting}
             onClick={() => {
-              if (!canDelete) {
+              if (isDeleting) {
                 return;
               }
               setDeleteOpen(true);

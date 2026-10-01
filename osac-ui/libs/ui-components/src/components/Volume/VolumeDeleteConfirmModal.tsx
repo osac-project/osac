@@ -1,13 +1,9 @@
-import { useNavigate } from 'react-router-dom';
-
 import type { Volume } from '@osac/types';
 import { Volumes } from '@osac/types';
 
 import { useDeleteResource } from '../../api/use-resource';
 import { useTranslation } from '../../hooks/useTranslation';
 import DeleteResourceModal from '../Resource/DeleteResourceModal';
-
-const VOLUMES_LIST_PATH = '/storage/volumes';
 
 interface VolumeDeleteConfirmModalProps {
   volume: Volume;
@@ -21,14 +17,8 @@ const VolumeDeleteConfirmModal = ({
   onSuccess,
 }: VolumeDeleteConfirmModalProps) => {
   const { t } = useTranslation();
-  const navigate = useNavigate();
   const deleteVolume = useDeleteResource(Volumes);
   const volumeName = volume.metadata?.name ?? volume.id;
-
-  const handleSuccess = () => {
-    navigate(VOLUMES_LIST_PATH);
-    onSuccess();
-  };
 
   return (
     <DeleteResourceModal
@@ -38,7 +28,7 @@ const VolumeDeleteConfirmModal = ({
       )}
       errorLabel={t('Failed to delete volume')}
       onClose={onClose}
-      onSuccess={handleSuccess}
+      onSuccess={onSuccess}
       mutation={deleteVolume}
       variables={{ id: volume.id }}
     />

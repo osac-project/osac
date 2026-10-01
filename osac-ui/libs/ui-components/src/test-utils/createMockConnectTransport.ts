@@ -166,12 +166,12 @@ import { UnauthorizedError } from '../utils/unauthorizedError';
 
 export type MockApiFixtures = {
   enabledServices?: ServiceTier[];
+  baremetalInstanceTypes?: BareMetalInstanceType[];
   catalogItems?: ComputeInstanceCatalogItem[];
   clusters?: Cluster[];
   clusterCatalogItems?: ClusterCatalogItem[];
   clusterTemplates?: ClusterTemplate[];
   clusterVersions?: ClusterVersion[];
-  bareMetalInstanceTypes?: BareMetalInstanceType[];
   tenants?: PrivateTenant[];
   virtualNetworks?: VirtualNetwork[];
   subnets?: Subnet[];
@@ -468,7 +468,7 @@ export const createMockConnectTransport = (
   const clusterCatalogItems = fixtures.clusterCatalogItems ?? [];
   const clusterTemplates = fixtures.clusterTemplates ?? [];
   const clusterVersions = fixtures.clusterVersions ?? [];
-  const bareMetalInstanceTypes = fixtures.bareMetalInstanceTypes ?? [];
+  const baremetalInstanceTypes = fixtures.baremetalInstanceTypes ?? [];
   const tenants = fixtures.tenants ?? [];
   const identityProviders = fixtures.identityProviders ?? [];
   const projects = fixtures.projects ?? [];
@@ -862,11 +862,17 @@ export const createMockConnectTransport = (
 
       router.service(PublicBareMetalInstanceTypes, {
         list: () => ({
-          items: bareMetalInstanceTypes,
-          size: bareMetalInstanceTypes.length,
-          total: bareMetalInstanceTypes.length,
+          items: baremetalInstanceTypes,
+          size: baremetalInstanceTypes.length,
+          total: baremetalInstanceTypes.length,
         }),
-        get: (req) => ({ object: bareMetalInstanceTypes.find((item) => item.id === req.id) }),
+        get: (req) => {
+          const item = baremetalInstanceTypes.find((i) => i.id === req.id);
+          if (!item) {
+            throw new ConnectError('not found', Code.NotFound);
+          }
+          return { object: item };
+        },
       });
 
       router.service(PrivateBareMetalInstanceTypes, {

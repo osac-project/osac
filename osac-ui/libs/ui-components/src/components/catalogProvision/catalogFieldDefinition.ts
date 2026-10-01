@@ -161,7 +161,7 @@ export const isCatalogItemResourceFieldPath = (
   return catalogItemResourceFieldPathSet.has(normalizeCatalogFieldPath(path));
 };
 
-/** Node-set bare-metal instance type and worker count paths on cluster catalog cards (node set id varies). */
+/** Node-set instance type and worker count paths on cluster catalog cards (node set id varies). */
 export const CLUSTER_CATALOG_ITEM_RESOURCE_FIELD_PATH_PATTERN =
   /^node_sets\.[^.]+\.(baremetal_instance_type|size)$/;
 

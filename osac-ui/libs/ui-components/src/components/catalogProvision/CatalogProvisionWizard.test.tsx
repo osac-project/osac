@@ -279,7 +279,7 @@ const apiFixtures: MockApiFixtures = {
       title: '',
     },
   ],
-  bareMetalInstanceTypes: [
+  baremetalInstanceTypes: [
     {
       $typeName: 'osac.public.v1.BareMetalInstanceType',
       id: 'acme_1tb',

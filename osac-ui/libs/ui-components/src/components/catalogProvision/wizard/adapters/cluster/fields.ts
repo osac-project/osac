@@ -1,4 +1,7 @@
-import { type ResourceSelectValue, emptyResourceSelectValue } from '../../../../Form/resourceSelectValue';
+import {
+  type ResourceSelectValue,
+  emptyResourceSelectValue,
+} from '../../../../Form/resourceSelectValue';
 
 export interface ClusterNodeSetRow {
   rowId: string;

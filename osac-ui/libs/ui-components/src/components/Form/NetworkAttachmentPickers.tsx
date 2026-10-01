@@ -16,7 +16,7 @@ import {
 } from '../../api/v1/networking';
 import { useTranslation } from '../../hooks/useTranslation';
 
-export interface NetworkAttachmentPickersProps {
+interface NetworkAttachmentPickersProps {
   /** Formik field-path prefix, e.g. "spec.networkAttachment". */
   fieldPrefix: string;
   /** HTML id prefix for unique element IDs, e.g. "cluster" or "vm". */

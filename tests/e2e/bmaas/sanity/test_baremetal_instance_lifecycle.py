@@ -83,6 +83,7 @@ def _assert_nic_metadata(
 
 
 def _find_condition(response: dict[str, Any], condition_type: str) -> dict[str, Any]:
+    """Return the status condition of the given type from a BMI API response, or {} if absent."""
     for condition in response.get("object", {}).get("status", {}).get("conditions", []):
         if condition.get("type") == condition_type:
             return condition
@@ -90,10 +91,12 @@ def _find_condition(response: dict[str, Any], condition_type: str) -> dict[str, 
 
 
 def _get_condition(grpc: GRPCClient, bmi_id: str, condition_type: str) -> dict[str, Any]:
+    """Fetch the BMI via the API and return its condition of the given type, or {} if absent."""
     return _find_condition(grpc.get_baremetal_instance(bmi_id=bmi_id), condition_type)
 
 
 def _get_condition_status(grpc: GRPCClient, bmi_id: str, condition_type: str) -> str:
+    """Return the status string of the BMI's condition of the given type, or "" if absent."""
     return _get_condition(grpc, bmi_id, condition_type).get("status", "")
 
 
@@ -112,6 +115,7 @@ def test_baremetal_instance_lifecycle(
     test_run_id: str,
     ssh_public_key: str,
 ) -> None:
+    """Provision a BMI end-to-end and assert its terminal stage, NIC metadata, power cycle, and deprovision."""
     name = f"e2e-bmi-{test_run_id}"
     disk_images: dict[str, Any] = jwt_grpc_tenant1.call(service=f"{PUBLIC_API}.DiskImages/List")
     assert bmi_disk_image in {item["metadata"]["name"] for item in disk_images.get("items", [])}
@@ -132,16 +136,18 @@ def test_baremetal_instance_lifecycle(
 
         # OSAC-5349: once the instance is RUNNING, the terminal provisioning stage must be
         # observable through the public API: the READY condition True (reason "Ready") with
-        # the PROVISIONED axis coherent (True, reason "Provisioned"). Poll briefly to absorb
-        # a single reconcile lag between the RUNNING state and the condition write, then read
-        # both axes from one snapshot so they are asserted against a consistent view.
-        instance: dict[str, Any] = poll_until(
-            fn=lambda: jwt_grpc_tenant1.get_baremetal_instance(bmi_id=bmi_id),
-            until=lambda r: _find_condition(r, _READY).get("status") == _CONDITION_STATUS_TRUE,
+        # the PROVISIONED axis coherent (True, reason "Provisioned"). Poll on the lightweight
+        # READY status string (not the whole response) so the runner's progress/timeout
+        # logging never dumps the full API payload, which can carry tenant data. Once READY
+        # is True, read both axes from one fresh snapshot so they are asserted consistently.
+        poll_until(
+            fn=lambda: _get_condition_status(jwt_grpc_tenant1, bmi_id, _READY),
+            until=lambda s: s == _CONDITION_STATUS_TRUE,
             retries=30,
             delay=2,
             description=f"{bmi_id} READY condition True",
         )
+        instance: dict[str, Any] = jwt_grpc_tenant1.get_baremetal_instance(bmi_id=bmi_id)
         ready_condition: dict[str, Any] = _find_condition(instance, _READY)
         assert ready_condition.get("reason") == _READY_REASON, (
             f"READY condition reason {ready_condition.get('reason')!r}, expected {_READY_REASON!r}"

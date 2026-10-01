@@ -1225,15 +1225,23 @@ func (s *PrivateClustersServer) autoProvisionExternalIPs(ctx context.Context, cl
 
 	tenant := cluster.GetMetadata().GetTenant()
 	clusterID := cluster.GetId()
+	shortID := clusterID
+	if len(shortID) > 8 {
+		shortID = shortID[:8]
+	}
 
-	endpoints := []privatev1.ExternalIPAttachmentEndpoint{
-		privatev1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_API,
-		privatev1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_INGRESS,
+	endpoints := []struct {
+		endpoint privatev1.ExternalIPAttachmentEndpoint
+		suffix   string
+	}{
+		{privatev1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_API, "api"},
+		{privatev1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_INGRESS, "ingress"},
 	}
 
 	for _, endpoint := range endpoints {
 		eip := privatev1.ExternalIP_builder{
 			Metadata: privatev1.Metadata_builder{
+				Name:   fmt.Sprintf("auto-eip-%s-%s", shortID, endpoint.suffix),
 				Tenant: tenant,
 				Labels: map[string]string{
 					autoCreatedLabel:    "true",
@@ -1263,6 +1271,7 @@ func (s *PrivateClustersServer) autoProvisionExternalIPs(ctx context.Context, cl
 
 		attachment := privatev1.ExternalIPAttachment_builder{
 			Metadata: privatev1.Metadata_builder{
+				Name:   fmt.Sprintf("auto-eipa-%s-%s", shortID, endpoint.suffix),
 				Tenant: tenant,
 				Labels: map[string]string{
 					autoCreatedLabel:    "true",
@@ -1276,7 +1285,7 @@ func (s *PrivateClustersServer) autoProvisionExternalIPs(ctx context.Context, cl
 			Spec: privatev1.ExternalIPAttachmentSpec_builder{
 				ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: eipID}.Build(),
 				Cluster:        privatev1.ClusterLocalReference_builder{Id: clusterID}.Build(),
-				TargetEndpoint: endpoint,
+				TargetEndpoint: endpoint.endpoint,
 			}.Build(),
 			Status: privatev1.ExternalIPAttachmentStatus_builder{
 				State: privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_PENDING,

@@ -31,7 +31,6 @@ export const BareMetalNetworkAttachmentsField = () => {
                   <NetworkAttachmentPickers
                     fieldPrefix="spec.networking.attachments.0"
                     fieldIdPrefix="bm-attachment-0"
-                    sgRequired
                   />
                 </OsacForm>
               </FormFieldGroup>

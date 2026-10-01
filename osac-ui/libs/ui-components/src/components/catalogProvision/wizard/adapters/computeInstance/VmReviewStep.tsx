@@ -12,14 +12,7 @@ import {
 } from '@patternfly/react-core';
 import { useFormikContext } from 'formik';
 
-import { type SecurityGroup } from '@osac/types';
-import { cel } from '@osac/ui-components/api/cel';
 import { useInstanceType } from '@osac/ui-components/api/v1/instance-types';
-import {
-  useSecurityGroups,
-  useSubnet,
-  useVirtualNetwork,
-} from '@osac/ui-components/api/v1/networking';
 import { useProjects } from '@osac/ui-components/api/v1/project';
 import { CatalogItem } from '@osac/ui-components/components/catalog/catalogItemDisplay';
 import {
@@ -49,34 +42,12 @@ export const VmReviewStep = ({ catalogItem }: Props) => {
   } = useInstanceType(values.spec.instanceType);
 
   const {
-    data: virtualNetwork,
-    isLoading: virtNetLoading,
-    error: virtNetErr,
-  } = useVirtualNetwork(values.spec.networking.virtualNetwork.id);
-
-  const {
-    data: subnet,
-    isLoading: subnetLoading,
-    error: subnetError,
-  } = useSubnet(values.spec.networking.subnet.id);
-
-  const sgIds = values.spec.networking.securityGroups.map((sg) => sg.id);
-
-  const {
-    data: securityGroups,
-    isLoading: scLoading,
-    error: scError,
-  } = useSecurityGroups({
-    filter: cel<SecurityGroup>((filter) => filter.field('id').isIn(sgIds)),
-  });
-
-  const {
     data: projects,
     isLoading: projectsLoading,
     error: projectsError,
   } = useProjects({ filter: fullProjectPathToQueryFilter(values.metadata.project) });
 
-  if (instanceLoading || virtNetLoading || subnetLoading || scLoading || projectsLoading) {
+  if (instanceLoading || projectsLoading) {
     return (
       <Bullseye>
         <Spinner />
@@ -86,33 +57,15 @@ export const VmReviewStep = ({ catalogItem }: Props) => {
 
   const storageRows = getVmStorageRows(t, values.spec.bootDisk, values.spec.additionalDisks);
 
+  // Read networking names directly from formik values (ResourceSelectValue stores name).
+  const networking = values.spec.networking;
+
   return (
     <Stack hasGutter>
       {!!instanceErr && (
         <StackItem>
           <Alert variant="warning" isInline title={t('Failed to fetch instance type')}>
             {getErrorMessage(instanceErr)}
-          </Alert>
-        </StackItem>
-      )}
-      {!!virtNetErr && (
-        <StackItem>
-          <Alert variant="warning" isInline title={t('Failed to fetch virtual network')}>
-            {getErrorMessage(virtNetErr)}
-          </Alert>
-        </StackItem>
-      )}
-      {!!subnetError && (
-        <StackItem>
-          <Alert variant="warning" isInline title={t('Failed to fetch subnet')}>
-            {getErrorMessage(subnetError)}
-          </Alert>
-        </StackItem>
-      )}
-      {!!scError && (
-        <StackItem>
-          <Alert variant="warning" isInline title={t('Failed to fetch security groups')}>
-            {getErrorMessage(scError)}
           </Alert>
         </StackItem>
       )}
@@ -175,30 +128,21 @@ export const VmReviewStep = ({ catalogItem }: Props) => {
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Virtual network')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {virtualNetwork?.metadata?.name ||
-                values.spec.networking.virtualNetwork.name ||
-                values.spec.networking.virtualNetwork.id}
+              {networking.virtualNetwork.name || networking.virtualNetwork.id || '—'}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Subnet')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {subnet?.metadata?.name ||
-                values.spec.networking.subnet.name ||
-                values.spec.networking.subnet.id}
+              {networking.subnet.name || networking.subnet.id || '—'}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Security groups')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {values.spec.networking.securityGroups
-                .map(
-                  (sg) =>
-                    securityGroups?.find(({ id }) => id === sg.id)?.metadata?.name ||
-                    sg.name ||
-                    sg.id,
-                )
-                .join(', ')}
+              {networking.securityGroups.length > 0
+                ? networking.securityGroups.map((sg) => sg.name || sg.id).join(', ')
+                : '—'}
             </DescriptionListDescription>
           </DescriptionListGroup>
         </DescriptionList>

@@ -23,13 +23,6 @@ import {
 import { getErrorMessage } from '@osac/ui-components/utils/error';
 
 import { type BareMetalInstanceWizardValues, hasBareMetalAuthentication } from './fields';
-import {
-  formatResourceIdsForReview,
-  resourceDisplayName,
-  useSecurityGroups,
-  useSubnets,
-  useVirtualNetworks,
-} from '../../../../../api/v1/networking';
 import { useTranslation } from '../../../../../hooks/useTranslation';
 import { formatReviewScalar } from '../../catalogOverlay';
 
@@ -56,11 +49,6 @@ export const BareMetalReviewStep = ({ catalogItem }: Props) => {
     ),
   });
 
-  // Fetch networking resources for review display
-  const { data: virtualNetworks = [] } = useVirtualNetworks();
-  const { data: subnets = [] } = useSubnets();
-  const { data: securityGroups = [] } = useSecurityGroups();
-
   if (isLoading || instanceTypesLoading) {
     return (
       <Bullseye>
@@ -71,18 +59,20 @@ export const BareMetalReviewStep = ({ catalogItem }: Props) => {
 
   const instanceType = instanceTypes?.items.length ? instanceTypes.items[0] : undefined;
 
-  // Format networking summary
+  // Format networking summary from formik values (ResourceSelectValue stores name).
   const networking = values.spec.networking;
   const networkingSummary = networking.useDefaults
     ? t('Using tenant default network')
     : networking.attachments
         .slice(0, 1)
         .map((attachment) => {
-          const vn = virtualNetworks.find((v) => v.id === attachment.virtualNetwork.id);
-          const subnet = subnets.find((s) => s.id === attachment.subnet.id);
-          const sgIds = attachment.securityGroups.map((sg) => sg.id);
-          const sgNames = formatResourceIdsForReview(sgIds, securityGroups);
-          return `${resourceDisplayName(vn?.metadata, vn?.id)} / ${resourceDisplayName(subnet?.metadata, subnet?.id)} / ${sgNames}`;
+          const vnName = attachment.virtualNetwork.name || attachment.virtualNetwork.id || '—';
+          const subnetName = attachment.subnet.name || attachment.subnet.id || '—';
+          const sgNames =
+            attachment.securityGroups.length > 0
+              ? attachment.securityGroups.map((sg) => sg.name || sg.id).join(', ')
+              : '—';
+          return `${vnName} / ${subnetName} / ${sgNames}`;
         })
         .join('\n');
 

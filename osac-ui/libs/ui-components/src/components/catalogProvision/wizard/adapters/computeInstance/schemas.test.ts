@@ -206,7 +206,6 @@ describe('buildComputeInstanceStepSchema', () => {
         networking: {
           virtualNetwork: 'catalogProvision.validation.virtualNetworkRequired',
           subnet: 'catalogProvision.validation.subnetRequired',
-          securityGroups: 'catalogProvision.validation.securityGroupRequired',
         },
       },
     });

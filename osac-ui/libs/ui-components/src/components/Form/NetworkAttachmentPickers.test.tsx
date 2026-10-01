@@ -39,27 +39,10 @@ describe('NetworkAttachmentPickers', () => {
     expect(screen.getByText('Security groups')).toBeInTheDocument();
   });
 
-  it('renders with allOptional prop — no required markers', () => {
-    renderPickers({ allOptional: true });
-
-    expect(screen.getByText('Virtual network')).toBeInTheDocument();
-    expect(screen.getByText('Subnet')).toBeInTheDocument();
-    expect(screen.getByText('Security groups')).toBeInTheDocument();
-  });
-
   it('does not display validation errors on initial render', () => {
     renderPickers();
 
     expect(screen.queryByText('Virtual network is required')).not.toBeInTheDocument();
     expect(screen.queryByText('Subnet is required')).not.toBeInTheDocument();
-    expect(screen.queryByText('At least one security group is required')).not.toBeInTheDocument();
-  });
-
-  it('exports the deprecated NetworkPickerFields alias', async () => {
-    const { NetworkPickerFields } = await import('./NetworkAttachmentPickers');
-    expect(NetworkPickerFields).toBeDefined();
-    expect(NetworkPickerFields).toBe(
-      (await import('./NetworkAttachmentPickers')).NetworkAttachmentPickers,
-    );
   });
 });

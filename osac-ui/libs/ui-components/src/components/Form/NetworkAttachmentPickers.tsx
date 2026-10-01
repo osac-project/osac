@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useMemo } from 'react';
 import { Alert, Button, FormGroup } from '@patternfly/react-core';
 import { MultiTypeaheadSelect, type MultiTypeaheadSelectOption } from '@patternfly/react-templates';
-import { useField, useFormikContext } from 'formik';
+import { useField } from 'formik';
 
 import { Subnets, VirtualNetworks } from '@osac/types';
 
@@ -21,16 +21,6 @@ export interface NetworkAttachmentPickersProps {
   fieldPrefix: string;
   /** HTML id prefix for unique element IDs, e.g. "cluster" or "vm". */
   fieldIdPrefix: string;
-  /**
-   * When true, security groups are required (at least one must be selected).
-   * Defaults to false (validation is delegated to the parent schema).
-   */
-  sgRequired?: boolean;
-  /**
-   * When true, all pickers are optional (no inline required markers).
-   * Defaults to false.
-   */
-  allOptional?: boolean;
 }
 
 /**
@@ -40,22 +30,20 @@ export interface NetworkAttachmentPickersProps {
  * with both id and name), and MultiTypeaheadSelect for security groups
  * (stores ResourceSelectValue[]).
  *
- * Cascade behaviour: selecting a new VN resets the subnet and SG fields.
- * Subnet and SG queries are scoped to the selected VN.
+ * Cascade behaviour: selecting a new VN resets the subnet and SG fields
+ * via the onSelectResource callback.
  */
 export const NetworkAttachmentPickers = ({
   fieldPrefix,
   fieldIdPrefix,
-  sgRequired = false,
-  allOptional = false,
 }: NetworkAttachmentPickersProps) => {
   const { t } = useTranslation();
-  const { values, setFieldValue } = useFormikContext<Record<string, unknown>>();
 
-  // Read the current VN id from the form values.
-  const virtualNetworkId =
-    (getNestedValue(values, `${fieldPrefix}.virtualNetwork`) as ResourceSelectValue | undefined)
-      ?.id ?? '';
+  const [vnField] = useField<ResourceSelectValue>(`${fieldPrefix}.virtualNetwork`);
+  const [, , subnetHelpers] = useField<ResourceSelectValue>(`${fieldPrefix}.subnet`);
+  const [sgField, , sgHelpers] = useField<ResourceSelectValue[]>(`${fieldPrefix}.securityGroups`);
+
+  const virtualNetworkId = vnField.value?.id ?? '';
 
   // ── Security groups (manual hooks — no ResourceMultiSelectField exists) ──
   const securityGroupFilter = virtualNetworkId
@@ -63,8 +51,8 @@ export const NetworkAttachmentPickers = ({
     : undefined;
   const {
     data: securityGroups = [],
-    isPending: securityGroupsLoading,
-    isError: securityGroupsError,
+    isLoading: securityGroupsLoading,
+    error: securityGroupsError,
     refetch: refetchSecurityGroups,
   } = useSecurityGroups(securityGroupFilter ? { filter: securityGroupFilter } : {}, {
     enabled: Boolean(virtualNetworkId),
@@ -79,7 +67,6 @@ export const NetworkAttachmentPickers = ({
     [securityGroups],
   );
 
-  const [sgField, , sgHelpers] = useField<ResourceSelectValue[]>(`${fieldPrefix}.securityGroups`);
   const selectedSgIds = useMemo(() => (sgField.value ?? []).map((sg) => sg.id), [sgField.value]);
 
   const sgMultiSelectOptions = useMemo<MultiTypeaheadSelectOption[]>(
@@ -94,37 +81,6 @@ export const NetworkAttachmentPickers = ({
 
   const securityGroupListLoading = Boolean(virtualNetworkId) && securityGroupsLoading;
 
-  // ── Auto-select single security group ──
-  useEffect(() => {
-    if (
-      securityGroupListLoading ||
-      !virtualNetworkId ||
-      securityGroupOptions.length !== 1 ||
-      selectedSgIds.length > 0
-    ) {
-      return;
-    }
-    const option = securityGroupOptions[0];
-    void sgHelpers.setValue([{ id: option.value, name: option.label }], false);
-  }, [
-    securityGroupListLoading,
-    securityGroupOptions,
-    selectedSgIds.length,
-    sgHelpers,
-    virtualNetworkId,
-  ]);
-
-  // ── Cascade reset: clear subnet and SGs when VN changes ──
-  const previousVirtualNetworkIdRef = useRef(virtualNetworkId);
-  useEffect(() => {
-    const previous = previousVirtualNetworkIdRef.current;
-    previousVirtualNetworkIdRef.current = virtualNetworkId;
-    if (previous && previous !== virtualNetworkId) {
-      void setFieldValue(`${fieldPrefix}.subnet`, emptyResourceSelectValue());
-      void setFieldValue(`${fieldPrefix}.securityGroups`, []);
-    }
-  }, [fieldPrefix, setFieldValue, virtualNetworkId]);
-
   return (
     <>
       <ResourceSelectField
@@ -133,10 +89,14 @@ export const NetworkAttachmentPickers = ({
         fieldId={`${fieldIdPrefix}-virtual-network`}
         service={VirtualNetworks}
         request={{ filter: VIRTUAL_NETWORK_READY_LIST_FILTER }}
-        isRequired={!allOptional}
+        isRequired
         autoSelectSingleOption
         placeholder={t('Select virtual network')}
         loadErrorTitle={t('Could not load virtual networks')}
+        onSelectResource={() => {
+          void subnetHelpers.setValue(emptyResourceSelectValue());
+          void sgHelpers.setValue([]);
+        }}
       />
       <ResourceSelectField
         name={`${fieldPrefix}.subnet`}
@@ -146,7 +106,7 @@ export const NetworkAttachmentPickers = ({
         request={
           virtualNetworkId ? { filter: virtualNetworkFilterForSubnetList(virtualNetworkId) } : {}
         }
-        isRequired={!allOptional}
+        isRequired
         isDisabled={!virtualNetworkId}
         autoSelectSingleOption
         placeholder={t('Select subnet')}
@@ -166,11 +126,7 @@ export const NetworkAttachmentPickers = ({
           </Button>
         </Alert>
       ) : null}
-      <FormGroup
-        label={t('Security groups')}
-        fieldId={`${fieldIdPrefix}-security-groups`}
-        isRequired={sgRequired && !allOptional}
-      >
+      <FormGroup label={t('Security groups')} fieldId={`${fieldIdPrefix}-security-groups`}>
         <MultiTypeaheadSelect
           id={`${fieldIdPrefix}-security-groups`}
           initialOptions={sgMultiSelectOptions}
@@ -196,15 +152,3 @@ export const NetworkAttachmentPickers = ({
     </>
   );
 };
-
-/** @deprecated Use `NetworkAttachmentPickers` instead. */
-export const NetworkPickerFields = NetworkAttachmentPickers;
-
-/** Resolve a dot-separated path against a nested object. */
-const getNestedValue = (obj: Record<string, unknown>, path: string): unknown =>
-  path.split('.').reduce<unknown>((current, key) => {
-    if (current !== null && typeof current === 'object') {
-      return (current as Record<string, unknown>)[key];
-    }
-    return undefined;
-  }, obj);

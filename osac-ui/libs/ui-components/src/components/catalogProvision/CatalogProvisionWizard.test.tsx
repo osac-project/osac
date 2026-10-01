@@ -156,11 +156,6 @@ const selectNetworkingPickers = async (_user: UserEvent) => {
     expect(screen.getByLabelText(/^Virtual network/)).toHaveTextContent('tenant-vn');
     expect(screen.getByLabelText(/^Subnet/)).toHaveTextContent('tenant-subnet');
   });
-
-  // SG auto-select fires via useEffect — wait for the chip to appear
-  await waitFor(() => {
-    expect(screen.getByText('default-sg')).toBeInTheDocument();
-  });
 };
 
 const advanceToReviewStep = async (user: UserEvent, catalogItemTitle: string) => {
@@ -853,14 +848,13 @@ describe('CatalogProvisionWizard', () => {
     });
   });
 
-  it('shows security group names on the review step', async () => {
+  it('shows empty security groups on the review step when none are selected', async () => {
     const { user } = renderWizard();
 
     await advanceToReviewStep(user, vmCatalogItem.metadata?.name ?? '');
 
-    await waitFor(() => {
-      expect(screen.getByText('default-sg')).toBeInTheDocument();
-    });
+    expect(screen.getByText('Security groups')).toBeInTheDocument();
+    expect(screen.queryByText('default-sg')).not.toBeInTheDocument();
   });
 
   it('shows instance type on the review step', async () => {
@@ -894,7 +888,7 @@ describe('CatalogProvisionWizard', () => {
     expect(onProvision.mock.calls[0][0]).not.toHaveProperty('spec.vcpus');
     expect(onProvision.mock.calls[0][0]).not.toHaveProperty('spec.memoryGib');
     expect(onProvision.mock.calls[0][0]).toHaveProperty('spec.networkAttachments', [
-      { subnet: { id: 'subnet-1' }, securityGroups: [{ id: 'sg-1' }] },
+      { subnet: { id: 'subnet-1' }, securityGroups: [] },
     ]);
   });
 

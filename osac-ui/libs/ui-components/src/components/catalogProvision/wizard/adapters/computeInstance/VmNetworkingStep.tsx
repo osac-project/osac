@@ -18,7 +18,7 @@ export const VmNetworkingStep = ({ catalogItem }: Props) => {
     <Stack hasGutter>
       <StackItem>
         <OsacForm>
-          <NetworkAttachmentPickers fieldPrefix="spec.networking" fieldIdPrefix="vm" sgRequired />
+          <NetworkAttachmentPickers fieldPrefix="spec.networking" fieldIdPrefix="vm" />
         </OsacForm>
       </StackItem>
     </Stack>

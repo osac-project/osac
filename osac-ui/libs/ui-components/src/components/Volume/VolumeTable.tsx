@@ -6,11 +6,12 @@ import type { Volume } from '@osac/types';
 import ResourceNameField from '@osac/ui-components/components/Resource/ResourceNameField.tsx';
 
 import { VolumeAccessModeLabel } from './VolumeAccessModeLabel';
+import VolumeActionsMenu from './VolumeActionsMenu';
 import { VolumeStatusLabel } from './VolumeStatusLabel';
 import { useTranslation } from '../../hooks/useTranslation';
 import { Timestamp } from '../Primitives/Timestamp';
 
-const EMPTY_STATE_COLUMN_SPAN = 7;
+const EMPTY_STATE_COLUMN_SPAN = 8;
 
 interface VolumeTableProps {
   volumes: Volume[];
@@ -37,6 +38,7 @@ export const VolumeTable = ({ volumes }: VolumeTableProps) => {
           <Th>{t('Size')}</Th>
           <Th>{t('Access Mode')}</Th>
           <Th>{t('Created')}</Th>
+          <Th aria-label={t('Actions')} />
         </Tr>
       </Thead>
       <Tbody>
@@ -72,6 +74,9 @@ export const VolumeTable = ({ volumes }: VolumeTableProps) => {
               </Td>
               <Td dataLabel={t('Created')}>
                 <Timestamp value={volume.metadata?.creationTimestamp} />
+              </Td>
+              <Td dataLabel={t('Actions')} isActionCell>
+                <VolumeActionsMenu volume={volume} />
               </Td>
             </Tr>
           ))

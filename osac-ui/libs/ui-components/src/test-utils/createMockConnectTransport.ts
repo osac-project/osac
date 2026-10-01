@@ -487,7 +487,6 @@ export const createMockConnectTransport = (
   const externalIpAttachments = [...(fixtures.externalIpAttachments ?? [])];
   const volumes = [...(fixtures.volumes ?? [])];
 
-
   return wrapWithAuthInterceptor(
     createRouterTransport((router) => {
       router.service(Capabilities, {

@@ -20,6 +20,7 @@ import { useListResource } from '@osac/ui-components/api/use-resource';
 import ListPage from '@osac/ui-components/components/Page/ListPage';
 import ListPageBody from '@osac/ui-components/components/Page/ListPageBody';
 import ProjectFilter from '@osac/ui-components/components/Page/ProjectFilter';
+import CreateButton from '@osac/ui-components/components/Primitives/CreateButton';
 import { VolumeTable } from '@osac/ui-components/components/Volume/VolumeTable';
 import {
   SEARCH_PARAM,
@@ -127,6 +128,7 @@ export const VolumesListPage = () => {
       label={t('Storage')}
       description={t('View and manage your storage volumes.')}
       error={error}
+      actions={<CreateButton to="/storage/volumes/create">{t('Create volume')}</CreateButton>}
     >
       <ListPageBody isLoading={isLoading} error={error}>
         <Stack hasGutter>

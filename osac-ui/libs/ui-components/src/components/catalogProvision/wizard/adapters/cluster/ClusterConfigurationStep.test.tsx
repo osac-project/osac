@@ -224,8 +224,18 @@ describe('ClusterConfigurationStep', () => {
               ...emptyValues.spec,
               versionName: '4-17-0',
               nodeSetRows: [
-                { ...createEmptyNodeSetRow(), name: 'workers', baremetalInstanceType: { id: 'acme_1tb', name: '' }, size: '3' },
-                { ...createEmptyNodeSetRow(), name: 'workers', baremetalInstanceType: { id: 'acme_1tb', name: '' }, size: '2' },
+                {
+                  ...createEmptyNodeSetRow(),
+                  name: 'workers',
+                  baremetalInstanceType: { id: 'acme_1tb', name: '' },
+                  size: '3',
+                },
+                {
+                  ...createEmptyNodeSetRow(),
+                  name: 'workers',
+                  baremetalInstanceType: { id: 'acme_1tb', name: '' },
+                  size: '2',
+                },
               ],
             },
           }}

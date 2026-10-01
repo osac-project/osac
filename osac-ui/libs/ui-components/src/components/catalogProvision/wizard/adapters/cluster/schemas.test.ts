@@ -469,7 +469,7 @@ describe('buildClusterStepSchema', () => {
     expect(errors).toEqual({});
   });
 
-  it('does not require subnet when useDefaultNetwork is false', async () => {
+  it('requires virtual network and subnet when useDefaultNetwork is false', async () => {
     const errors = await validateStep(
       'networking',
       {
@@ -481,6 +481,34 @@ describe('buildClusterStepSchema', () => {
           networkAttachment: {
             virtualNetwork: emptyResourceSelectValue(),
             subnet: emptyResourceSelectValue(),
+            securityGroups: [],
+          },
+        },
+      },
+      clusterCatalogItem,
+    );
+    expect(errors).toEqual({
+      spec: {
+        networkAttachment: {
+          virtualNetwork: { id: 'Virtual network is required' },
+          subnet: { id: 'Subnet is required' },
+        },
+      },
+    });
+  });
+
+  it('accepts valid custom networking when useDefaultNetwork is false', async () => {
+    const errors = await validateStep(
+      'networking',
+      {
+        ...emptyValues,
+        catalogItemId: clusterCatalogItem.id,
+        spec: {
+          ...emptyValues.spec,
+          useDefaultNetwork: false,
+          networkAttachment: {
+            virtualNetwork: { id: 'vn-1', name: 'vn-1' },
+            subnet: { id: 'subnet-1', name: 'subnet-1' },
             securityGroups: [],
           },
         },

@@ -50,6 +50,7 @@ describe('buildComputeInstanceCreatePayload SSH key', () => {
       ...createEmptyComputeInstanceValues().spec,
       sshKey: { name: sshKeyName },
       networking: {
+        useDefaultNetwork: false,
         virtualNetwork: { id: 'vn-1', name: 'vn-1' },
         subnet: { id: 'subnet-1', name: 'subnet-1' },
         securityGroups: [{ id: 'sg-1', name: 'sg-1' }],

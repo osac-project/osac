@@ -188,7 +188,24 @@ export const buildClusterStepSchema = (
         spec: yup.object({
           network: fields.specNetwork,
           useDefaultNetwork: fields.specUseDefaultNetwork,
-          networkAttachment: fields.specNetworkAttachment,
+          networkAttachment: yup.object().when('useDefaultNetwork', {
+            is: false,
+            then: () =>
+              yup.object({
+                virtualNetwork: yup.object({
+                  id: yup.string().required(t('Virtual network is required')),
+                  name: yup.string(),
+                }),
+                subnet: yup.object({
+                  id: yup.string().required(t('Subnet is required')),
+                  name: yup.string(),
+                }),
+                securityGroups: yup
+                  .array()
+                  .of(yup.object({ id: yup.string(), name: yup.string() })),
+              }),
+            otherwise: () => fields.specNetworkAttachment,
+          }),
           autoExternalIpAttachment: fields.specAutoExternalIpAttachment,
         }),
       });

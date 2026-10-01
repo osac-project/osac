@@ -14,6 +14,7 @@ import { CatalogItem } from '@osac/ui-components/components/catalog/catalogItemD
 import { type BareMetalInstanceWizardValues, hasBareMetalAuthentication } from './fields';
 import { useTranslation } from '../../../../../hooks/useTranslation';
 import { formatReviewScalar } from '../../catalogOverlay';
+import { NetworkAttachmentReviewFields } from '../NetworkAttachmentReviewFields';
 
 interface Props {
   catalogItem: CatalogItem | null;
@@ -24,22 +25,8 @@ export const BareMetalReviewStep = ({ catalogItem }: Props) => {
   const { values } = useFormikContext<BareMetalInstanceWizardValues>();
   const hasAuthentication = hasBareMetalAuthentication(values.spec.sshKey, values.spec.userData);
 
-  // Format networking summary from formik values (ResourceSelectValue stores name).
   const networking = values.spec.networking;
-  const networkingSummary = networking.useDefaults
-    ? t('Using tenant default network')
-    : networking.attachments
-        .slice(0, 1)
-        .map((attachment) => {
-          const vnName = attachment.virtualNetwork.name || attachment.virtualNetwork.id || '—';
-          const subnetName = attachment.subnet.name || attachment.subnet.id || '—';
-          const sgNames =
-            attachment.securityGroups.length > 0
-              ? attachment.securityGroups.map((sg) => sg.name || sg.id).join(', ')
-              : '—';
-          return `${vnName} / ${subnetName} / ${sgNames}`;
-        })
-        .join('\n');
+  const isCustomNetwork = !networking.useDefaults;
 
   return (
     <Stack hasGutter>
@@ -104,11 +91,20 @@ export const BareMetalReviewStep = ({ catalogItem }: Props) => {
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
-            <DescriptionListTerm>{t('Networking')}</DescriptionListTerm>
-            <DescriptionListDescription style={{ whiteSpace: 'pre-line' }}>
-              {networkingSummary}
+            <DescriptionListTerm>{t('Network')}</DescriptionListTerm>
+            <DescriptionListDescription>
+              {isCustomNetwork ? t('Custom') : t('Tenant default')}
             </DescriptionListDescription>
           </DescriptionListGroup>
+
+          {isCustomNetwork && networking.attachments.length > 0 && (
+            <NetworkAttachmentReviewFields
+              virtualNetwork={networking.attachments[0].virtualNetwork}
+              subnet={networking.attachments[0].subnet}
+              securityGroups={networking.attachments[0].securityGroups}
+            />
+          )}
+
           <DescriptionListGroup>
             <DescriptionListTerm>{t('External access')}</DescriptionListTerm>
             <DescriptionListDescription>

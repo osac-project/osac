@@ -45,6 +45,7 @@ const emptyValues: ComputeInstanceWizardValues = {
     bootDisk: { sizeGib: '', storageTier: emptyResourceSelectValue() },
     additionalDisks: [],
     networking: {
+      useDefaultNetwork: true,
       virtualNetwork: emptyResourceSelectValue(),
       subnet: emptyResourceSelectValue(),
       securityGroups: [],
@@ -374,6 +375,79 @@ describe('buildComputeInstanceStepSchema', () => {
           ...emptyValues.spec,
           instanceType: 'standard-4-8',
           additionalDisks: [{ sizeGib: '100', storageTier: emptyResourceSelectValue() }],
+        },
+      },
+      vmCatalogItem,
+    );
+    expect(errors).toEqual({});
+  });
+
+  it('does not require networking pickers when useDefaultNetwork is true', async () => {
+    const errors = await validateStep(
+      'networking',
+      {
+        ...emptyValues,
+        catalogItemId: vmCatalogItem.id,
+        metadata: { name: 'web-01', project: '' },
+        spec: {
+          ...emptyValues.spec,
+          networking: {
+            useDefaultNetwork: true,
+            virtualNetwork: emptyResourceSelectValue(),
+            subnet: emptyResourceSelectValue(),
+            securityGroups: [],
+          },
+        },
+      },
+      vmCatalogItem,
+    );
+    expect(errors).toEqual({});
+  });
+
+  it('requires virtual network and subnet when useDefaultNetwork is false', async () => {
+    const errors = await validateStep(
+      'networking',
+      {
+        ...emptyValues,
+        catalogItemId: vmCatalogItem.id,
+        metadata: { name: 'web-01', project: '' },
+        spec: {
+          ...emptyValues.spec,
+          networking: {
+            useDefaultNetwork: false,
+            virtualNetwork: emptyResourceSelectValue(),
+            subnet: emptyResourceSelectValue(),
+            securityGroups: [],
+          },
+        },
+      },
+      vmCatalogItem,
+    );
+    expect(errors).toEqual({
+      spec: {
+        networking: {
+          virtualNetwork: { id: 'Virtual network is required' },
+          subnet: { id: 'Subnet is required' },
+        },
+      },
+    });
+  });
+
+  it('accepts valid custom networking when useDefaultNetwork is false', async () => {
+    const errors = await validateStep(
+      'networking',
+      {
+        ...emptyValues,
+        catalogItemId: vmCatalogItem.id,
+        metadata: { name: 'web-01', project: '' },
+        spec: {
+          ...emptyValues.spec,
+          networking: {
+            useDefaultNetwork: false,
+            virtualNetwork: { id: 'vn-1', name: 'vn-1' },
+            subnet: { id: 'subnet-1', name: 'subnet-1' },
+            securityGroups: [],
+          },
         },
       },
       vmCatalogItem,

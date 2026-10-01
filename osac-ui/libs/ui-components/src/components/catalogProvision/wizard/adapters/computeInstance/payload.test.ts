@@ -55,6 +55,7 @@ const buildValues = (project: string) => ({
     ...createEmptyComputeInstanceValues().spec,
     instanceType: 'standard-4-8',
     networking: {
+      useDefaultNetwork: false,
       virtualNetwork: { id: 'vnet-1', name: 'vnet-1' },
       subnet: { id: 'subnet-1', name: 'subnet-1' },
       securityGroups: [{ id: 'sg-1', name: 'sg-1' }],
@@ -72,6 +73,7 @@ const baseValues = () => {
       ...values.spec,
       instanceType: 'standard-4-8',
       networking: {
+        useDefaultNetwork: false,
         virtualNetwork: { id: 'vnet', name: 'vnet' },
         subnet: { id: 'subnet-1', name: 'subnet-1' },
         securityGroups: [{ id: 'sg-1', name: 'sg-1' }],
@@ -202,6 +204,60 @@ describe('buildComputeInstanceCreatePayload — disk storage tiers', () => {
 
     expect(payload.spec?.additionalDisks).toEqual([
       { sizeGib: 100, storageTier: { id: 'id-bulk', name: 'bulk' } },
+    ]);
+  });
+});
+
+describe('buildComputeInstanceCreatePayload — useDefaultNetwork', () => {
+  it('omits networkAttachments when useDefaultNetwork is true', () => {
+    const values = baseValues();
+    values.spec.networking.useDefaultNetwork = true;
+
+    const payload = buildComputeInstanceCreatePayload(values, vmCatalogItem);
+
+    expect(payload.spec).not.toHaveProperty('networkAttachments');
+  });
+
+  it('includes networkAttachments when useDefaultNetwork is false and subnet is set', () => {
+    const values = baseValues();
+    values.spec.networking.useDefaultNetwork = false;
+
+    const payload = buildComputeInstanceCreatePayload(values, vmCatalogItem);
+
+    expect(payload.spec?.networkAttachments).toEqual([
+      {
+        subnet: { id: 'subnet-1' },
+        securityGroups: [{ id: 'sg-1' }],
+      },
+    ]);
+  });
+
+  it('omits networkAttachments when useDefaultNetwork is false but subnet is empty', () => {
+    const values = baseValues();
+    values.spec.networking.useDefaultNetwork = false;
+    values.spec.networking.subnet = emptyResourceSelectValue();
+
+    const payload = buildComputeInstanceCreatePayload(values, vmCatalogItem);
+
+    expect(payload.spec).not.toHaveProperty('networkAttachments');
+  });
+
+  it('filters out security groups with empty IDs', () => {
+    const values = baseValues();
+    values.spec.networking.useDefaultNetwork = false;
+    values.spec.networking.securityGroups = [
+      { id: 'sg-1', name: 'sg-1' },
+      { id: '', name: '' },
+      { id: 'sg-2', name: 'sg-2' },
+    ];
+
+    const payload = buildComputeInstanceCreatePayload(values, vmCatalogItem);
+
+    expect(payload.spec?.networkAttachments).toEqual([
+      {
+        subnet: { id: 'subnet-1' },
+        securityGroups: [{ id: 'sg-1' }, { id: 'sg-2' }],
+      },
     ]);
   });
 });

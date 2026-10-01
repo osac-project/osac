@@ -60,6 +60,7 @@ export const VmReviewStep = ({ catalogItem }: Props) => {
 
   // Read networking names directly from formik values (ResourceSelectValue stores name).
   const networking = values.spec.networking;
+  const isCustomNetwork = !networking.useDefaultNetwork;
 
   return (
     <Stack hasGutter>
@@ -126,11 +127,20 @@ export const VmReviewStep = ({ catalogItem }: Props) => {
             </DescriptionListDescription>
           </DescriptionListGroup>
 
-          <NetworkAttachmentReviewFields
-            virtualNetwork={networking.virtualNetwork}
-            subnet={networking.subnet}
-            securityGroups={networking.securityGroups}
-          />
+          <DescriptionListGroup>
+            <DescriptionListTerm>{t('Network')}</DescriptionListTerm>
+            <DescriptionListDescription>
+              {isCustomNetwork ? t('Custom') : t('Tenant default')}
+            </DescriptionListDescription>
+          </DescriptionListGroup>
+
+          {isCustomNetwork && (
+            <NetworkAttachmentReviewFields
+              virtualNetwork={networking.virtualNetwork}
+              subnet={networking.subnet}
+              securityGroups={networking.securityGroups}
+            />
+          )}
         </DescriptionList>
       </StackItem>
       <StackItem>

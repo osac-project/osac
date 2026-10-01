@@ -145,6 +145,13 @@ const advanceToNetworkingStep = async (user: UserEvent, catalogItemTitle: string
   await fillStorageStep(user);
   await clickWizardNext(user);
   await waitFor(() => {
+    expect(screen.getByLabelText(/Use tenant default network/)).toBeInTheDocument();
+  });
+};
+
+const enableCustomNetworking = async (user: UserEvent) => {
+  await user.click(screen.getByLabelText(/Use tenant default network/));
+  await waitFor(() => {
     expect(screen.getByLabelText(/^Virtual network/)).toBeInTheDocument();
   });
 };
@@ -160,6 +167,7 @@ const selectNetworkingPickers = async (_user: UserEvent) => {
 
 const advanceToReviewStep = async (user: UserEvent, catalogItemTitle: string) => {
   await advanceToNetworkingStep(user, catalogItemTitle);
+  await enableCustomNetworking(user);
   await selectNetworkingPickers(user);
   await clickWizardNext(user);
   await waitFor(() => {
@@ -823,6 +831,7 @@ describe('CatalogProvisionWizard', () => {
       },
     });
     await advanceToNetworkingStep(user, vmCatalogItem.metadata?.name ?? '');
+    await enableCustomNetworking(user);
 
     await waitFor(() => {
       expect(screen.getByLabelText(/^Virtual network/)).toHaveTextContent('tenant-vn');

@@ -76,8 +76,25 @@ const buildComputeInstanceFieldDefinitions = (catalogItem: unknown, t: TFunction
       }),
     ),
     specNetworking: yup.object({
-      virtualNetwork: yup.object({ id: yup.string(), name: yup.string() }),
-      subnet: yup.object({ id: yup.string(), name: yup.string() }),
+      useDefaultNetwork: yup.boolean(),
+      virtualNetwork: yup.object().when('useDefaultNetwork', {
+        is: false,
+        then: () =>
+          yup.object({
+            id: yup.string().required(t('Virtual network is required')),
+            name: yup.string(),
+          }),
+        otherwise: () => yup.object({ id: yup.string(), name: yup.string() }),
+      }),
+      subnet: yup.object().when('useDefaultNetwork', {
+        is: false,
+        then: () =>
+          yup.object({
+            id: yup.string().required(t('Subnet is required')),
+            name: yup.string(),
+          }),
+        otherwise: () => yup.object({ id: yup.string(), name: yup.string() }),
+      }),
       securityGroups: yup.array().of(yup.object({ id: yup.string(), name: yup.string() })),
     }),
   };

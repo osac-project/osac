@@ -22,6 +22,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/annotate"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/color"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/console"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/delete"
@@ -76,6 +77,7 @@ func Root() (result *cobra.Command, err error) {
 	// Add flags:
 	flags := result.PersistentFlags()
 	logging.AddFlags(flags)
+	color.AddFlag(result)
 	flags.StringVar(
 		&runner.args.configDir,
 		configFlag,
@@ -202,9 +204,10 @@ func (c *runnerContext) persistentPreRun(cmd *cobra.Command, args []string) erro
 		return fmt.Errorf("failed to load settings: %w", err)
 	}
 
-	// Create the console:
+	// Apply the command's color preference to Console's standard output.
 	console, err := terminal.NewConsole().
 		SetLogger(logger).
+		SetColorEnabled(color.Enabled(cmd, os.Stdout)).
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create console: %w", err)

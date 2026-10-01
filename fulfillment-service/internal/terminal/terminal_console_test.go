@@ -14,7 +14,9 @@ language governing permissions and limitations under the License.
 package terminal
 
 import (
+	"bytes"
 	"os"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
@@ -38,6 +40,50 @@ var _ = Describe("Console", func() {
 			Expect(err).To(MatchError("logger is mandatory"))
 			Expect(console).To(BeNil())
 		})
+	})
+
+	Describe("Structured output color", func() {
+		It("can force color to a redirected file", func() {
+			file, err := os.CreateTemp(GinkgoT().TempDir(), "output")
+			Expect(err).NotTo(HaveOccurred())
+			console, err := NewConsole().SetLogger(logger).SetStdout(file).SetColorEnabled(true).Build()
+			Expect(err).NotTo(HaveOccurred())
+			console.RenderJson(ctx, map[string]string{"name": "test"})
+			Expect(file.Close()).To(Succeed())
+			content, err := os.ReadFile(file.Name())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(content)).To(ContainSubstring("\x1b["))
+		})
+
+		for _, format := range []string{"json", "yaml"} {
+			It("respects the color decision for "+format, func() {
+				var output bytes.Buffer
+				for _, tc := range []struct {
+					name     string
+					override *bool
+					colored  bool
+				}{
+					{name: "non-terminal default"},
+					{name: "forced color", override: new(true), colored: true},
+					{name: "forced plain", override: new(false)},
+				} {
+					output.Reset()
+					builder := NewConsole().SetLogger(logger).SetStdout(&output)
+					if tc.override != nil {
+						builder.SetColorEnabled(*tc.override)
+					}
+					console, err := builder.Build()
+					Expect(err).NotTo(HaveOccurred())
+					if format == "json" {
+						console.RenderJson(ctx, map[string]string{"name": "test"})
+					} else {
+						console.RenderYaml(ctx, map[string]string{"name": "test"})
+					}
+					Expect(strings.Contains(output.String(), "\x1b[")).To(Equal(tc.colored), tc.name)
+					Expect(output.String()).To(ContainSubstring("test"))
+				}
+			})
+		}
 	})
 
 	Describe("Render YAML", func() {

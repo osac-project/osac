@@ -22,6 +22,8 @@ import (
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
 	"github.com/spf13/cobra"
+
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/color"
 )
 
 // ansiPattern matches ANSI escape sequences (CSI sequences for colors, styles, etc.).
@@ -90,6 +92,7 @@ var _ = Describe("Help output", func() {
 		}
 
 		cmd = newTestCommand()
+		color.AddFlag(cmd)
 		Setup(cmd)
 		output = &bytes.Buffer{}
 		cmd.SetOut(output)

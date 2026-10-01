@@ -22,39 +22,17 @@ import (
 	"os"
 	"path/filepath"
 
-	"charm.land/glamour/v2"
-	"charm.land/glamour/v2/ansi"
-	"charm.land/glamour/v2/styles"
 	"charm.land/lipgloss/v2"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
-	"golang.org/x/term"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/color"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/markdown"
 	"github.com/osac-project/osac/fulfillment-service/internal/templating"
 )
 
 //go:embed templates
 var templatesFS embed.FS
-
-const colorFlag = "color"
-
-func colorEnabled(c *cobra.Command) bool {
-	// NO_COLOR always wins (https://no-color.org/), including over FORCE_COLOR and --color.
-	if os.Getenv("NO_COLOR") != "" {
-		return false
-	}
-
-	flags := c.Root().PersistentFlags()
-	if flags.Changed(colorFlag) {
-		enabled, err := flags.GetBool(colorFlag)
-		if err == nil {
-			return enabled
-		}
-	}
-
-	// FORCE_COLOR enables color for environment-based callers when the flag is not set.
-	return os.Getenv("FORCE_COLOR") != ""
-}
 
 // Setup configures the given command and all its subcommands to render their help output as styled Markdown.
 func Setup(cmd *cobra.Command) {
@@ -73,77 +51,22 @@ func Setup(cmd *cobra.Command) {
 		return
 	}
 
-	cmd.PersistentFlags().Bool(
-		colorFlag,
-		false,
-		"Enable colored help output. NO_COLOR and --color=false override FORCE_COLOR.",
-	)
-
 	// Set the help function for the command and all its subcommands. The renderer is created each time the
 	// help is displayed, so that it can adapt to the current terminal width and color capabilities.
 	cmd.SetHelpFunc(func(c *cobra.Command, args []string) {
-		// If the output is a terminal, we want to adjust the width of the terminal, but never more than the
-		// maximun width that we consider readable:
 		out := c.OutOrStdout()
-		var width int
-		if file, ok := out.(*os.File); ok {
-			fd := int(file.Fd())
-			if term.IsTerminal(fd) {
-				width, _, err = term.GetSize(fd)
-				if err != nil {
-					c.PrintErrln("Error getting terminal size:", err)
-					return
-				}
-			}
-		}
-		width = min(width, maxReadableWidth)
-
-		// Color is opt-in by default. Enable with --color, FORCE_COLOR, or both; NO_COLOR always wins.
-		useColor := colorEnabled(c)
-
-		// Select the style: detect terminal background and use a colored style only when color is requested,
-		// otherwise use a plain ASCII style that still renders Markdown structure (headings, code spans, etc.)
-		// without ANSI color codes.
-		var style ansi.StyleConfig
-		if useColor {
-			if lipgloss.HasDarkBackground(os.Stdin, os.Stdout) {
-				style = styles.DarkStyleConfig
-			} else {
-				style = styles.LightStyleConfig
-			}
-		} else {
-			style = styles.ASCIIStyleConfig
-		}
-
-		// Remove the default document margin and leading newline, so the output is flush with the left edge
-		// of the terminal. Also remove heading prefixes and code background/prefix/suffix styling.
-		zero := new(uint)
-		style.Document.Margin = zero
-		style.Document.BlockPrefix = ""
-		style.H1.Prefix = ""
-		style.H2.Prefix = ""
-		style.H3.Prefix = ""
-		style.H4.Prefix = ""
-		style.H5.Prefix = ""
-		style.H6.Prefix = ""
-		style.Code.BackgroundColor = nil
-		style.Code.Prefix = ""
-		style.Code.Suffix = ""
+		useColor := color.Enabled(c, out)
 
 		// Hide private-API subcommands when the user is not in private mode:
 		hidePrivateSubcommands(c)
 
 		// Render the help output:
 		var buffer bytes.Buffer
-		err = engine.Execute(&buffer, "command_help.md", c)
-		if err != nil {
+		if err := engine.Execute(&buffer, "command_help.md", c); err != nil {
 			c.PrintErrln("Error executing help template:", err)
 			return
 		}
-		renderer, err := glamour.NewTermRenderer(
-			glamour.WithStyles(style),
-			glamour.WithWordWrap(width),
-		)
+		renderer, err := markdown.NewHelpRenderer(out, useColor)
 		if err != nil {
 			c.PrintErrln("Error creating renderer:", err)
 			return
@@ -241,6 +164,3 @@ func hidePrivateSubcommands(c *cobra.Command) {
 		}
 	}
 }
-
-// maxReadableWidth is the maximum width for help output that we consider readable.
-const maxReadableWidth = 100

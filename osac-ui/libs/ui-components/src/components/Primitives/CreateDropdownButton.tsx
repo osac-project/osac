@@ -38,7 +38,7 @@ const CreateDropdownButton = ({
     >
       <DropdownList>
         {items.map(({ to, title }) => (
-          <DropdownItem key={to} value={to} to={to}>
+          <DropdownItem key={to} value={to} to={to} onClick={() => setIsOpen(false)}>
             {title}
           </DropdownItem>
         ))}

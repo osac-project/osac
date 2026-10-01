@@ -391,6 +391,96 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(response.GetObject().GetSpec().GetCatalogItem().GetId()).To(Equal(catalogItemID))
 		})
 
+		Describe("Instance type reference scope", func() {
+			var types *dao.GenericDAO[*privatev1.BareMetalInstanceType]
+			BeforeEach(func() {
+				var err error
+				types, err = dao.NewGenericDAO[*privatev1.BareMetalInstanceType]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+				Expect(err).ToNot(HaveOccurred())
+				createTenant("other-bmi-tenant")
+				for _, item := range []struct{ id, tenant string }{
+					{"shared-bmi-type", auth.SharedTenant},
+					{"foreign-bmi-type", "other-bmi-tenant"},
+				} {
+					_, err := types.Create().SetObject(privatev1.BareMetalInstanceType_builder{
+						Id: item.id, Metadata: privatev1.Metadata_builder{Name: item.id, Tenant: item.tenant}.Build(),
+						Spec: privatev1.BareMetalInstanceTypeSpec_builder{}.Build(),
+					}.Build()).Do(ctx)
+					Expect(err).ToNot(HaveOccurred())
+				}
+			})
+
+			createWithReference := func(refJSON string) (*privatev1.BareMetalInstance, error) {
+				spec := &privatev1.BareMetalInstanceSpec{}
+				if err := protojson.Unmarshal([]byte(fmt.Sprintf(`{"catalogItem":{"id":%q},"diskImage":{"id":"default-bmi-disk-image"},"sshPublicKey":%q,"instanceType":%s}`, catalogItemID, testSSHPublicKey, refJSON)), spec); err != nil {
+					return nil, err
+				}
+				response, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+					Object: privatev1.BareMetalInstance_builder{
+						Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]), Tenant: testTenant}.Build(),
+						Spec:     spec,
+					}.Build(),
+				}.Build())
+				if err != nil {
+					return nil, err
+				}
+				return response.GetObject(), nil
+			}
+
+			It("decodes persisted local BMI references in JSON and protobuf wire", func() {
+				legacy := privatev1.BareMetalInstanceTypeLocalReference_builder{Id: "default-type", Name: "default-type"}.Build()
+				wire, err := proto.Marshal(legacy)
+				Expect(err).ToNot(HaveOccurred())
+				oldSpecWire := protowire.AppendBytes(protowire.AppendTag(nil, 11, protowire.BytesType), wire)
+				decoded := &privatev1.BareMetalInstanceSpec{}
+				Expect(proto.Unmarshal(oldSpecWire, decoded)).To(Succeed())
+				Expect(decoded.GetInstanceType().GetId()).To(Equal("default-type"))
+				Expect(decoded.GetInstanceType().GetName()).To(Equal("default-type"))
+				Expect(decoded.GetInstanceType().GetShared()).To(BeFalse())
+				Expect(decoded.GetInstanceType().GetProject()).To(BeEmpty())
+				decoded = &privatev1.BareMetalInstanceSpec{}
+				Expect(protojson.Unmarshal([]byte(`{"instance_type":{"id":"default-type","name":"default-type"}}`), decoded)).To(Succeed())
+				Expect(decoded.GetInstanceType().GetId()).To(Equal("default-type"))
+				Expect(decoded.GetInstanceType().GetShared()).To(BeFalse())
+			})
+
+			It("resolves shared BMI hardware for a tenant-owned instance", func() {
+				object, err := createWithReference(`{"name":"shared-bmi-type","shared":true}`)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(object.GetMetadata().GetTenant()).To(Equal(testTenant))
+				ref := object.GetSpec().GetInstanceType()
+				Expect(ref.GetId()).To(Equal("shared-bmi-type"))
+				Expect(ref.GetName()).To(Equal("shared-bmi-type"))
+				Expect(ref.GetShared()).To(BeTrue())
+				stored, err := server.Get(ctx, privatev1.BareMetalInstancesGetRequest_builder{Id: object.GetId()}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(proto.Equal(stored.GetObject().GetSpec().GetInstanceType(), ref)).To(BeTrue())
+			})
+
+			It("retains local BMI hardware resolution by default", func() {
+				object, err := createWithReference(`{"name":"default-type","shared":true}`)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(object.GetSpec().GetInstanceType().GetId()).To(Equal("default-type"))
+				Expect(object.GetSpec().GetInstanceType().GetName()).To(Equal("default-type"))
+			})
+
+			It("rejects another tenant's BMI hardware by ID even with shared scope", func() {
+				for _, ref := range []string{`{"id":"foreign-bmi-type"}`, `{"id":"foreign-bmi-type","shared":true}`} {
+					_, err := createWithReference(ref)
+					Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				}
+			})
+
+			It("rejects mismatched ID and name and deleted BMI hardware", func() {
+				_, err := createWithReference(`{"id":"default-type","name":"shared-bmi-type","shared":true}`)
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				_, err = types.Delete().SetId("shared-bmi-type").Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				_, err = createWithReference(`{"name":"shared-bmi-type","shared":true}`)
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
+			})
+		})
+
 		It("Creates object with valid SSH key", func() {
 			response, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
@@ -2284,6 +2374,53 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(attachments[0].GetSecurityGroups()[0].GetId()).To(Equal("sg-1"))
 		})
 
+		It("Rejects reordering network attachments", func() {
+			first := privatev1.BareMetalNetworkAttachment_builder{
+				Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
+				Interface: strPtr("data-0"),
+				Primary:   boolPtr(true),
+			}.Build()
+			second := privatev1.BareMetalNetworkAttachment_builder{
+				Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID2}.Build(),
+				Interface: strPtr("data-1"),
+			}.Build()
+			created, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{Name: "baremetal-instance-1"}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						DiskImage:          privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:        privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithHT}.Build(),
+						InstanceType:       privatev1.BareMetalInstanceTypeReference_builder{Id: "default-type", Shared: true}.Build(),
+						SshPublicKey:       new(testSSHPublicKey),
+						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{first, second},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			id := created.GetObject().GetId()
+			response, err := server.Update(ctx, privatev1.BareMetalInstancesUpdateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Id: id,
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{second, first},
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.network_attachments"}},
+			}.Build())
+			Expect(response).To(BeNil())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			stored, err := server.Get(ctx, privatev1.BareMetalInstancesGetRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			attachments := stored.GetObject().GetSpec().GetNetworkAttachments()
+			Expect(attachments).To(HaveLen(2))
+			Expect(attachments[0].GetSubnet().GetId()).To(Equal(subnetID1))
+			Expect(attachments[1].GetSubnet().GetId()).To(Equal(subnetID2))
+			original := created.GetObject().GetSpec().GetNetworkAttachments()
+			Expect(original).To(HaveLen(2))
+			Expect(proto.Equal(attachments[0], original[0])).To(BeTrue())
+			Expect(proto.Equal(attachments[1], original[1])).To(BeTrue())
+		})
+
 		It("Accepts update that does not touch network_attachments", func() {
 			createResp, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
@@ -2607,7 +2744,26 @@ var _ = Describe("Private bare metal instances server", func() {
 			}.Build()
 			err := validator.Validate(spec)
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("at most one network attachment"))
+			Expect(err.Error()).To(ContainSubstring("primary"))
+		})
+
+		It("Accepts multiple attachments with primary false on non-primary NICs", func() {
+			spec := privatev1.BareMetalInstanceSpec_builder{
+				CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: "some-catalog-item"}.Build(),
+				InstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "default-type", Shared: true}.Build(),
+				NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
+					privatev1.BareMetalNetworkAttachment_builder{
+						Subnet:  privatev1.SubnetLocalReference_builder{Id: "subnet-1"}.Build(),
+						Primary: boolPtr(true),
+					}.Build(),
+					privatev1.BareMetalNetworkAttachment_builder{
+						Subnet:  privatev1.SubnetLocalReference_builder{Id: "subnet-2"}.Build(),
+						Primary: boolPtr(false),
+					}.Build(),
+				},
+			}.Build()
+			err := validator.Validate(spec)
+			Expect(err).ToNot(HaveOccurred())
 		})
 	})
 
@@ -2911,7 +3067,7 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			bmitResp, err := bmitDao.Create().SetObject(privatev1.BareMetalInstanceType_builder{
 				Metadata: privatev1.Metadata_builder{
-					Tenant: testTenant,
+					Tenant: auth.SharedTenant,
 					Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 				}.Build(),
 				Spec: privatev1.BareMetalInstanceTypeSpec_builder{
@@ -3071,7 +3227,7 @@ var _ = Describe("Private bare metal instances server", func() {
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
 						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catID}.Build(),
-						InstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: defaultBMITID}.Build(),
+						InstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: defaultBMITID, Shared: true}.Build(),
 						SshPublicKey: new(testSSHPublicKey),
 					}.Build(),
 				}.Build(),
@@ -3202,7 +3358,7 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(bmitErr).ToNot(HaveOccurred())
 			noFabricResp, bmitErr := bmitDao.Create().SetObject(privatev1.BareMetalInstanceType_builder{
 				Metadata: privatev1.Metadata_builder{
-					Tenant: testTenant,
+					Tenant: auth.SharedTenant,
 					Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 				}.Build(),
 				Spec: privatev1.BareMetalInstanceTypeSpec_builder{
@@ -3224,7 +3380,7 @@ var _ = Describe("Private bare metal instances server", func() {
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
 						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catID}.Build(),
-						InstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: noFabricResp.GetObject().GetId()}.Build(),
+						InstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: noFabricResp.GetObject().GetId(), Shared: true}.Build(),
 						SshPublicKey: new(testSSHPublicKey),
 					}.Build(),
 				}.Build(),

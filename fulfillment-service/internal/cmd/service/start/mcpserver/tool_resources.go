@@ -105,6 +105,16 @@ func handleGetResource(resources resourceRegistry) mcp.ToolHandlerFor[GetResourc
 		if err != nil {
 			return nil, GetResourceOutput{}, fmt.Errorf("failed to encode %s: %w", operations.label, err)
 		}
+		switch input.ResourceType {
+		case ResourceTypeComputeInstance:
+			if spec, ok := resource["spec"].(map[string]any); ok {
+				delete(spec, "userData")
+			}
+		case ResourceTypeComputeInstanceCatalogItem:
+			if fields, ok := resource["fields"].(map[string]any); ok {
+				delete(fields, "userData")
+			}
+		}
 		return nil, GetResourceOutput{Resource: resource}, nil
 	}
 }

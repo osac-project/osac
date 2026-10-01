@@ -344,6 +344,9 @@ var _ = Describe("handleGetResource", func() {
 					Object: publicv1.ComputeInstanceCatalogItem_builder{
 						Id:    "catalog-item-1",
 						Title: "Small Fedora VM",
+						Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
+							UserData: publicv1.StringFieldPolicy_builder{Locked: proto.String("sensitive-cloud-init")}.Build(),
+						}.Build(),
 					}.Build(),
 				}.Build(), nil
 			},
@@ -357,6 +360,9 @@ var _ = Describe("handleGetResource", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(output.Resource).To(HaveKeyWithValue("id", "catalog-item-1"))
 		Expect(output.Resource).To(HaveKeyWithValue("title", "Small Fedora VM"))
+		fields, ok := output.Resource["fields"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		Expect(fields).ToNot(HaveKey("userData"))
 		Expect(capturedToken).To(Equal("Bearer raw-bearer-value"))
 	})
 
@@ -372,6 +378,10 @@ var _ = Describe("handleGetResource", func() {
 					Object: publicv1.ComputeInstance_builder{
 						Id:       "instance-1",
 						Metadata: publicv1.Metadata_builder{Name: "demo-vm"}.Build(),
+						Spec: publicv1.ComputeInstanceSpec_builder{
+							UserData:     proto.String("sensitive-cloud-init"),
+							InstanceType: publicv1.InstanceTypeReference_builder{Id: "small"}.Build(),
+						}.Build(),
 					}.Build(),
 				}.Build(), nil
 			},
@@ -387,6 +397,10 @@ var _ = Describe("handleGetResource", func() {
 		metadata, ok := output.Resource["metadata"].(map[string]any)
 		Expect(ok).To(BeTrue())
 		Expect(metadata).To(HaveKeyWithValue("name", "demo-vm"))
+		spec, ok := output.Resource["spec"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		Expect(spec).ToNot(HaveKey("userData"))
+		Expect(spec).To(HaveKey("instanceType"))
 		Expect(capturedToken).To(Equal("Bearer raw-bearer-value"))
 	})
 

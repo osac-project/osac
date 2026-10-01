@@ -25,6 +25,59 @@ def test_wait_for_cluster_ready_fails_immediately_on_failed_order(monkeypatch: p
         helpers.wait_for_cluster_ready(k8s=k8s, name="order-test")
 
 
+def test_wait_for_agent_available_polls_until_agents_are_unbound_and_unlabeled(monkeypatch: pytest.MonkeyPatch) -> None:
+    k8s = Mock()
+    k8s.list_json.side_effect = [
+        {
+            "items": [
+                {
+                    "metadata": {
+                        "labels": {
+                            "osac.openshift.io/clusterorder": "order-test",
+                            "agent-install.openshift.io/clusterdeployment-namespace": "osac-order-test",
+                        }
+                    },
+                    "spec": {"clusterDeploymentName": {"namespace": "osac-order-test", "name": "order-test"}},
+                    "status": {"debugInfo": {"state": "unbinding-pending-user-action"}},
+                }
+            ]
+        },
+        {
+            "items": [
+                {
+                    "metadata": {"labels": {"osac.openshift.io/clusterorder": "order-test"}},
+                    "spec": {},
+                    "status": {"debugInfo": {"state": "known-unbound"}},
+                }
+            ]
+        },
+    ]
+    monkeypatch.setattr(helpers.time, "sleep", lambda _delay: None)
+
+    helpers.wait_for_agent_available(k8s=k8s, co_name="order-test", timeout=10, poll=5)
+
+    assert k8s.list_json.call_count == 2
+    assert all(
+        call.kwargs == {"resource": "agents.agent-install.openshift.io", "namespace": "hardware-inventory"}
+        for call in k8s.list_json.call_args_list
+    )
+
+
+def test_wait_for_cluster_deletion_with_deadline_waits_for_cluster_order_removal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    k8s = Mock()
+    k8s.namespace = "osac-e2e"
+    k8s._base.return_value = ["kubectl"]
+    k8s.get_cluster_order_phase.side_effect = ["Deleting", None]
+    monkeypatch.setattr(helpers, "run_unchecked", lambda *_args, **_kwargs: ("", 1))
+    monkeypatch.setattr(helpers.time, "sleep", lambda _delay: None)
+
+    helpers.wait_for_cluster_deletion_with_deadline(k8s=k8s, name="order-test", deadline=helpers.time.monotonic() + 20)
+
+    assert k8s.get_cluster_order_phase.call_count == 2
+
+
 def test_node_pool_ready_node_count_uses_node_versions() -> None:
     node_pool = {"status": {"nodesInfo": {"nodeVersions": [{"readyNodeCount": 1}, {"readyNodeCount": 2}]}}}
 

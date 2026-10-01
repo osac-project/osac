@@ -706,9 +706,6 @@ class TestCaasAgentReuse:
             deletion_requested_a = True
             wait_for_cluster_deleting(k8s=k8s_hub_client, name=co_name_a)
             wait_for_cluster_grpc_deleting_or_archived(grpc=grpc, uuid=uuid_a)
-            wait_for_cluster_deletion_with_deadline(k8s=k8s_hub_client, name=co_name_a, deadline=deletion_deadline_a)
-            wait_for_cluster_grpc_removal(grpc=grpc, uuid=uuid_a)
-            print(f"First cluster {name_a} deleted")
 
             # ── Phase 3: wait for agent reclaim ──
             print(f"Waiting for agent reclaim (up to {self._RECLAIM_TIMEOUT}s)...")
@@ -716,6 +713,9 @@ class TestCaasAgentReuse:
                 k8s=k8s_hub_client, co_name=co_name_a, timeout=self._RECLAIM_TIMEOUT, poll=self._RECLAIM_POLL
             )
             print("Agents reclaimed and available")
+            wait_for_cluster_deletion_with_deadline(k8s=k8s_hub_client, name=co_name_a, deadline=deletion_deadline_a)
+            wait_for_cluster_grpc_removal(grpc=grpc, uuid=uuid_a)
+            print(f"First cluster {name_a} deleted")
 
         except Exception:
             _report_agent_diagnostics(k8s=k8s_hub_client, co_name=co_name_a, context=f"phase1-failure for {name_a}")

@@ -149,6 +149,7 @@ var _ = Describe("Labels", func() {
 			"example.com/updated": "new-value",
 			"another":             "second",
 		}
+		// Mask metadata only so a Create-time defaulted network_attachment is not cleared.
 		updateResponse, err := clustersClient.Update(ctx, publicv1.ClustersUpdateRequest_builder{
 			Object: publicv1.Cluster_builder{
 				Id: object.GetId(),
@@ -156,10 +157,8 @@ var _ = Describe("Labels", func() {
 					Name:   object.GetMetadata().GetName(),
 					Labels: labels,
 				}.Build(),
-				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
-				}.Build(),
 			}.Build(),
+			UpdateMask: catalogItemUpdateMask("metadata.labels"),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		metadata := updateResponse.GetObject().GetMetadata()
@@ -225,10 +224,8 @@ var _ = Describe("Labels", func() {
 							key: value,
 						},
 					}.Build(),
-					Spec: publicv1.ClusterSpec_builder{
-						Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
-					}.Build(),
 				}.Build(),
+				UpdateMask: catalogItemUpdateMask("metadata.labels"),
 			}.Build())
 			Expect(err).To(HaveOccurred())
 			status, ok = grpcstatus.FromError(err)

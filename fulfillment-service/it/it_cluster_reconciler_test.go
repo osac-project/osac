@@ -410,7 +410,8 @@ var _ = Describe("Cluster reconciler", func() {
 		Expect(clusterOrderObj.Spec.NodeRequests[0].ResourceClass).To(Equal(bmitId))
 		Expect(clusterOrderObj.Spec.NodeRequests[0].NumberOfNodes).To(BeNumerically("==", 3))
 
-		// Update the cluster to change the node set size
+		// Update the cluster to change the node set size. Preserve Create-time network_attachment
+		// (tenant defaults) so a full Spec rebuild does not clear the immutable subnet.
 		_, err = clustersClient.Update(ctx, publicv1.ClustersUpdateRequest_builder{
 			Object: publicv1.Cluster_builder{
 				Id: object.GetId(),
@@ -428,6 +429,7 @@ var _ = Describe("Cluster reconciler", func() {
 							Size:                  proto.Int32(5),
 						}.Build(),
 					},
+					NetworkAttachment: object.GetSpec().GetNetworkAttachment(),
 				}.Build(),
 			}.Build(),
 		}.Build())

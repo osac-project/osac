@@ -47,9 +47,9 @@ message BareMetalInstance {
 // The spec contains the details of a bare metal instance as desired by the user.
 message BareMetalInstanceSpec {
   option (buf.validate.message).cel = {
-    id: "baremetal_instance_primary_attachment"
-    message: "when multiple network attachments are specified, exactly one must have primary set to true"
-    expression: "this.network_attachments.size() <= 1 || this.network_attachments.filter(a, a.primary == true).size() == 1"
+    id: "baremetal_instance_single_attachment"
+    message: "at most one network attachment is supported"
+    expression: "this.network_attachments.size() <= 1"
   };
 
   // Reference to the BareMetalInstanceCatalogItem. Either `catalog_item` or `template` is required on create.

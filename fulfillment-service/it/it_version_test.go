@@ -149,6 +149,7 @@ var _ = Describe("Version", func() {
 		// Update the object and verify that the version has been incremeted. Note that it may have been
 		// incremented multiple times, by the controller that is running in the background, so we only can
 		// assert that it is greater than the initial version.
+		// Mask metadata only so a Create-time defaulted network_attachment is not cleared.
 		updateResponse, err := clustersClient.Update(ctx, publicv1.ClustersUpdateRequest_builder{
 			Object: publicv1.Cluster_builder{
 				Id: object.GetId(),
@@ -158,10 +159,8 @@ var _ = Describe("Version", func() {
 						"step": "one",
 					},
 				}.Build(),
-				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
-				}.Build(),
 			}.Build(),
+			UpdateMask: catalogItemUpdateMask("metadata.labels"),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		object = updateResponse.GetObject()
@@ -182,10 +181,8 @@ var _ = Describe("Version", func() {
 						"step": "one",
 					},
 				}.Build(),
-				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
-				}.Build(),
 			}.Build(),
+			UpdateMask: catalogItemUpdateMask("metadata.labels"),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		object = updateResponse.GetObject()
@@ -231,7 +228,8 @@ var _ = Describe("Version", func() {
 								},
 							}.Build(),
 						}.Build(),
-						Lock: true,
+						UpdateMask: catalogItemUpdateMask("metadata.annotations", "metadata.version"),
+						Lock:       true,
 					}.Build())
 					g.Expect(err).ToNot(HaveOccurred())
 					object = updateResponse.GetObject()
@@ -257,11 +255,9 @@ var _ = Describe("Version", func() {
 							"should": "fail",
 						},
 					}.Build(),
-					Spec: publicv1.ClusterSpec_builder{
-						Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
-					}.Build(),
 				}.Build(),
-				Lock: true,
+				UpdateMask: catalogItemUpdateMask("metadata.labels", "metadata.version"),
+				Lock:       true,
 			}.Build())
 			Expect(err).To(HaveOccurred())
 			status, ok := grpcstatus.FromError(err)
@@ -294,10 +290,8 @@ var _ = Describe("Version", func() {
 							"should": "succeed",
 						},
 					}.Build(),
-					Spec: publicv1.ClusterSpec_builder{
-						Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
-					}.Build(),
 				}.Build(),
+				UpdateMask: catalogItemUpdateMask("metadata.labels", "metadata.version"),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			object = updateResponse.GetObject()

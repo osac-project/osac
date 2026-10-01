@@ -64,6 +64,10 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		bareMetalInstanceTypesClient = privatev1.NewBareMetalInstanceTypesClient(tool.InternalView().AdminConn())
 		diskImagesClient = privatev1.NewDiskImagesClient(tool.InternalView().AdminConn())
 
+		// Lifecycle Creates omit network_attachments and use shared catalog items without
+		// network field policies; hard-fail defaulting needs a tenant-default Subnet/SG.
+		ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
+
 		// Create BareMetalInstanceTemplate with an explicit ID that matches the BMFO CRD
 		// validation pattern (^[a-zA-Z_][a-zA-Z0-9._]*$). Auto-generated UUIDs start with
 		// a digit and are rejected by the CRD when the controller creates the CR.
@@ -415,6 +419,64 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
+		// Force subnet READY (IT has no fabric feedback path for this disposable VN).
+		Eventually(func(g Gomega) {
+			resp, err := subnetsClient.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: subnetId}.Build())
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(resp.GetObject().GetStatus().GetState()).To(
+				Equal(privatev1.SubnetState_SUBNET_STATE_PENDING))
+		}, time.Minute, time.Second).Should(Succeed())
+		subnetGet, err := subnetsClient.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: subnetId}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		subnetObj := subnetGet.GetObject()
+		subnetObj.SetStatus(privatev1.SubnetStatus_builder{
+			State: privatev1.SubnetState_SUBNET_STATE_READY,
+		}.Build())
+		_, err = subnetsClient.Update(ctx, privatev1.SubnetsUpdateRequest_builder{
+			Object:     subnetObj,
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		// Non-default VN requires caller-supplied SecurityGroups before fabric_manager checks run.
+		securityGroupsClient := privatev1.NewSecurityGroupsClient(tool.InternalView().AdminConn())
+		sgResp, err := securityGroupsClient.Create(ctx, privatev1.SecurityGroupsCreateRequest_builder{
+			Object: privatev1.SecurityGroup_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   fmt.Sprintf("test-sg-%s", uuid.New()[24:32]),
+					Tenant: usersGroup,
+				}.Build(),
+				Spec: privatev1.SecurityGroupSpec_builder{
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetworkId}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		sgId := sgResp.GetObject().GetId()
+		DeferCleanup(func(ctx context.Context) {
+			_, err := securityGroupsClient.Delete(ctx, privatev1.SecurityGroupsDeleteRequest_builder{
+				Id: sgId,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		})
+		Eventually(func(g Gomega) {
+			resp, err := securityGroupsClient.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: sgId}.Build())
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(resp.GetObject().GetStatus().GetState()).To(
+				Equal(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_PENDING))
+		}, time.Minute, time.Second).Should(Succeed())
+		sgGet, err := securityGroupsClient.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: sgId}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		sgObj := sgGet.GetObject()
+		sgObj.SetStatus(privatev1.SecurityGroupStatus_builder{
+			State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
+		}.Build())
+		_, err = securityGroupsClient.Update(ctx, privatev1.SecurityGroupsUpdateRequest_builder{
+			Object:     sgObj,
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
 		_, err = bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
 				Metadata: publicv1.Metadata_builder{
@@ -424,9 +486,13 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					InstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
 					SshPublicKey: new(bmiTestSSHPublicKey),
+					DiskImage:    publicv1.DiskImageReference_builder{Id: defaultDiskImageId}.Build(),
 					NetworkAttachments: []*publicv1.BareMetalNetworkAttachment{
 						publicv1.BareMetalNetworkAttachment_builder{
 							Subnet: publicv1.SubnetLocalReference_builder{Id: subnetId}.Build(),
+							SecurityGroups: []*publicv1.SecurityGroupLocalReference{
+								publicv1.SecurityGroupLocalReference_builder{Id: sgId}.Build(),
+							},
 						}.Build(),
 					},
 				}.Build(),
@@ -434,6 +500,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		}.Build())
 		Expect(err).To(HaveOccurred())
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+		Expect(err.Error()).To(ContainSubstring("fabric_manager"))
 	})
 
 	It("Creates BareMetalInstance with disk_image and persists it", func(ctx context.Context) {

@@ -143,6 +143,7 @@ var _ = Describe("Annotations", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
+		// Mask metadata only so a Create-time defaulted network_attachment is not cleared.
 		updateResponse, err := clustersClient.Update(ctx, publicv1.ClustersUpdateRequest_builder{
 			Object: publicv1.Cluster_builder{
 				Id: object.GetId(),
@@ -153,10 +154,8 @@ var _ = Describe("Annotations", func() {
 						"another":             "second",
 					},
 				}.Build(),
-				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
-				}.Build(),
 			}.Build(),
+			UpdateMask: catalogItemUpdateMask("metadata.annotations"),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		object = updateResponse.GetObject()
@@ -226,10 +225,8 @@ var _ = Describe("Annotations", func() {
 								key: "",
 							},
 						}.Build(),
-						Spec: publicv1.ClusterSpec_builder{
-							Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
-						}.Build(),
 					}.Build(),
+					UpdateMask: catalogItemUpdateMask("metadata.annotations"),
 				}.Build())
 				Expect(err).To(HaveOccurred())
 				status, ok := grpcstatus.FromError(err)

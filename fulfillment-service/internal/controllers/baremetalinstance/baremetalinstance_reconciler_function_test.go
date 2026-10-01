@@ -773,7 +773,7 @@ var _ = Describe("mutateBMI", func() {
 		Expect(obj.Spec.NetworkAttachments[0].Primary).To(BeTrue())
 	})
 
-	It("should copy multiple network attachments preserving order", func() {
+	It("should normalize omitted primary to true on sole network attachment", func() {
 
 		t := &task{
 			r: &function{
@@ -792,18 +792,6 @@ var _ = Describe("mutateBMI", func() {
 								Id: "subnet-data",
 							}.Build(),
 							Interface: new("data-0"),
-							Primary:   new(true),
-						}.Build(),
-						privatev1.BareMetalNetworkAttachment_builder{
-							Subnet: privatev1.SubnetLocalReference_builder{
-								Id: "subnet-storage",
-							}.Build(),
-							SecurityGroups: []*privatev1.SecurityGroupLocalReference{
-								privatev1.SecurityGroupLocalReference_builder{
-									Id: "sg-storage",
-								}.Build(),
-							},
-							Interface: new("data-1"),
 						}.Build(),
 					},
 				}.Build(),
@@ -813,14 +801,10 @@ var _ = Describe("mutateBMI", func() {
 		var obj bmfov1alpha1.BareMetalInstance
 		err := t.mutateBMI(ctx, &obj)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(obj.Spec.NetworkAttachments).To(HaveLen(2))
+		Expect(obj.Spec.NetworkAttachments).To(HaveLen(1))
 		Expect(obj.Spec.NetworkAttachments[0].SubnetRef).To(Equal("subnet-data"))
 		Expect(obj.Spec.NetworkAttachments[0].Interface).To(Equal("data-0"))
 		Expect(obj.Spec.NetworkAttachments[0].Primary).To(BeTrue())
-		Expect(obj.Spec.NetworkAttachments[1].SubnetRef).To(Equal("subnet-storage"))
-		Expect(obj.Spec.NetworkAttachments[1].SecurityGroupRefs).To(Equal([]string{"sg-storage"}))
-		Expect(obj.Spec.NetworkAttachments[1].Interface).To(Equal("data-1"))
-		Expect(obj.Spec.NetworkAttachments[1].Primary).To(BeFalse())
 	})
 
 	It("should leave NetworkAttachments empty when proto has none", func() {
@@ -877,7 +861,7 @@ var _ = Describe("mutateBMI", func() {
 		Expect(obj.Spec.NetworkAttachments[0].SubnetRef).To(Equal("subnet-1"))
 		Expect(obj.Spec.NetworkAttachments[0].SecurityGroupRefs).To(BeEmpty())
 		Expect(obj.Spec.NetworkAttachments[0].Interface).To(BeEmpty())
-		Expect(obj.Spec.NetworkAttachments[0].Primary).To(BeFalse())
+		Expect(obj.Spec.NetworkAttachments[0].Primary).To(BeTrue())
 	})
 
 	It("should not include imageSourceType when disk_image is set and no user override is provided", func() {

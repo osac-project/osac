@@ -216,7 +216,8 @@ var _ = Describe("Public clusters", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		// Update the cluster:
+		// Update the cluster. Preserve Create-time network_attachment (tenant defaults) so a
+		// full Spec rebuild does not clear the immutable subnet.
 		updateResponse, err := clustersClient.Update(ctx, publicv1.ClustersUpdateRequest_builder{
 			Object: publicv1.Cluster_builder{
 				Id: object.GetId(),
@@ -230,6 +231,7 @@ var _ = Describe("Public clusters", func() {
 							Size: proto.Int32(4),
 						},
 					},
+					NetworkAttachment: object.GetSpec().GetNetworkAttachment(),
 				}.Build(),
 			}.Build(),
 		}.Build())

@@ -412,6 +412,7 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			createDiskImageWithLifecycle("default-bmi-disk-image",
 				privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE, nil)
+			seedTenantDefaultNetworking(testTenant, "", new("netris"))
 			_, err = instancesServer.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{

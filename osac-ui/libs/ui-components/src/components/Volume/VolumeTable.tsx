@@ -11,7 +11,7 @@ import { VolumeStatusLabel } from './VolumeStatusLabel';
 import { useTranslation } from '../../hooks/useTranslation';
 import { Timestamp } from '../Primitives/Timestamp';
 
-const EMPTY_STATE_COLUMN_SPAN = 8;
+const EMPTY_STATE_COLUMN_SPAN = 7;
 
 interface VolumeTableProps {
   volumes: Volume[];
@@ -33,7 +33,6 @@ export const VolumeTable = ({ volumes }: VolumeTableProps) => {
         <Tr>
           <Th>{t('Name')}</Th>
           <Th>{t('State')}</Th>
-          <Th>{t('Project')}</Th>
           <Th>{t('Storage Tier')}</Th>
           <Th>{t('Size')}</Th>
           <Th>{t('Access Mode')}</Th>
@@ -66,7 +65,6 @@ export const VolumeTable = ({ volumes }: VolumeTableProps) => {
               <Td dataLabel={t('State')}>
                 <VolumeStatusLabel state={volume.status?.state} />
               </Td>
-              <Td dataLabel={t('Project')}>{volume.metadata?.project || t('Default')}</Td>
               <Td dataLabel={t('Storage Tier')}>{volume.spec?.storageTier ?? '—'}</Td>
               <Td dataLabel={t('Size')}>{formatSizeGib(volume.spec?.sizeGib)}</Td>
               <Td dataLabel={t('Access Mode')}>

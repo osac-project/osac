@@ -71,7 +71,7 @@ const VolumeDetails = ({ volume }: VolumeDetailsProps) => {
                 <ResourceDetailHeader
                   parentTo={VOLUMES_LIST_PATH}
                   parentLabel={t('Volumes')}
-                  resourceName={volume.metadata?.name ?? volume.id}
+                  resourceName={volume.metadata?.name?.trim() || volume.id}
                   titleAddon={<VolumeStatusLabel state={volume.status?.state} />}
                 />
               </FlexItem>

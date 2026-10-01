@@ -518,6 +518,17 @@ spec:
 apiVersion: v1
 kind: ConfigMap
 metadata:
+  name: keycloak-mcp-client
+  namespace: keycloak
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+data:
+  client.json: |
+{{ .Files.Get "files/mcp-client.json" | indent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
   name: keycloak-password-setup
   namespace: keycloak
   labels:
@@ -529,13 +540,44 @@ data:
 
     echo "Waiting for Keycloak to be ready..."
     for i in $(seq 1 120); do
-      if curl -k -sf https://keycloak:443/realms/osac; then
+      if curl -k -sf https://keycloak:443/realms/osac >/dev/null; then
         echo "Keycloak is ready!"
         break
       fi
       [[ $i -eq 120 ]] && { echo "ERROR: Keycloak not ready after 600s"; exit 1; }
       sleep 5
     done
+
+    ensure_mcp_client() {
+      local token client_uuid payload scope_uuid
+      token="$(curl -k -sf -X POST https://keycloak:443/realms/master/protocol/openid-connect/token \
+        -H 'Content-Type: application/x-www-form-urlencoded' \
+        -d 'grant_type=password' -d 'client_id=admin-cli' \
+        --data-urlencode "username=${ADMIN_USERNAME}" \
+        --data-urlencode "password=${ADMIN_PASSWORD}" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")"
+      client_uuid="$(curl -k -sf 'https://keycloak:443/admin/realms/osac/clients?clientId=osac-mcp-client' \
+        -H "Authorization: Bearer ${token}" | \
+        python3 -c "import sys,json; print(next((x['id'] for x in json.load(sys.stdin) if x['clientId']=='osac-mcp-client'), ''))")"
+      payload="$(cat /mcp-client/client.json)"
+      if [[ -n "${client_uuid}" ]]; then
+        curl -k -sf -X PUT "https://keycloak:443/admin/realms/osac/clients/${client_uuid}" \
+          -H "Authorization: Bearer ${token}" -H 'Content-Type: application/json' -d "${payload}"
+      else
+        curl -k -sf -X POST https://keycloak:443/admin/realms/osac/clients \
+          -H "Authorization: Bearer ${token}" -H 'Content-Type: application/json' -d "${payload}"
+        client_uuid="$(curl -k -sf 'https://keycloak:443/admin/realms/osac/clients?clientId=osac-mcp-client' \
+          -H "Authorization: Bearer ${token}" | \
+          python3 -c "import sys,json; print(next((x['id'] for x in json.load(sys.stdin) if x['clientId']=='osac-mcp-client'), ''))")"
+      fi
+      [[ -n "${client_uuid}" ]] || { echo "MCP client registration failed"; return 1; }
+      scope_uuid="$(curl -k -sf https://keycloak:443/admin/realms/osac/client-scopes \
+        -H "Authorization: Bearer ${token}" | \
+        python3 -c "import sys,json; print(next((x['id'] for x in json.load(sys.stdin) if x['name']=='offline_access'), ''))")"
+      [[ -n "${scope_uuid}" ]] || { echo "offline_access scope missing"; return 1; }
+      curl -k -sf -X PUT \
+        "https://keycloak:443/admin/realms/osac/clients/${client_uuid}/optional-client-scopes/${scope_uuid}" \
+        -H "Authorization: Bearer ${token}"
+    }
 
     set_password() {
       local username=$1
@@ -565,6 +607,8 @@ data:
 
       echo "Set password for $username"
     }
+
+    ensure_mcp_client
 
     # Set all passwords
     echo "Setting passwords for all tenant users..."
@@ -638,6 +682,9 @@ spec:
         volumeMounts:
         - name: scripts
           mountPath: /scripts
+        - name: mcp-client
+          mountPath: /mcp-client
+          readOnly: true
         - name: tmp
           mountPath: /tmp
       volumes:
@@ -645,6 +692,9 @@ spec:
         configMap:
           name: keycloak-password-setup
           defaultMode: 0755
+      - name: mcp-client
+        configMap:
+          name: keycloak-mcp-client
       - name: tmp
         emptyDir: {}
 {{- end }}

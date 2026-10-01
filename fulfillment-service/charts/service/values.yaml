@@ -55,6 +55,12 @@ externalHostname:
 # additional layer of defense.
 internalHostname:
 
+# MCP is an opt-in integration endpoint.
+mcp:
+  enabled: false
+  externalHostname: ""
+  externalPort: 443
+
 # Authentication and authorization configuration:
 auth:
 

@@ -1,0 +1,26 @@
+{
+  "clientId": "osac-mcp-client",
+  "name": "OSAC MCP PoC client",
+  "description": "Development client for the fulfillment MCP endpoint",
+  "baseUrl": "http://localhost:8091",
+  "enabled": true,
+  "redirectUris": [
+    "http://localhost:8091/callback",
+    "http://127.0.0.1:6274/oauth/callback",
+    "http://localhost:6274/oauth/callback"
+  ],
+  "standardFlowEnabled": true,
+  "implicitFlowEnabled": false,
+  "directAccessGrantsEnabled": false,
+  "serviceAccountsEnabled": false,
+  "publicClient": true,
+  "protocol": "openid-connect",
+  "attributes": {
+    "pkce.code.challenge.method": "S256"
+  },
+  "fullScopeAllowed": true,
+  "defaultClientScopes": [
+    "groups", "basic", "username", "organization", "roles", "osac-api"
+  ],
+  "optionalClientScopes": ["offline_access"]
+}

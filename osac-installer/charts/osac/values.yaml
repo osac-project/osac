@@ -155,6 +155,10 @@ service:
   externalHostname: ""
   # [REQUIRED] Hostname for the internal API Route (e.g. fulfillment-internal-api-osac.apps.mycluster.example.com)
   internalHostname: ""
+  mcp:
+    enabled: false
+    externalHostname: ""
+    externalPort: 443
   images:
     service:
       repository: ghcr.io/osac-project/fulfillment-service

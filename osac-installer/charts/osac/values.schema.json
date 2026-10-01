@@ -669,6 +669,36 @@
           "minLength": 1,
           "description": "Hostname for the internal API Route"
         },
+        "mcp": {
+          "type": "object",
+          "description": "Optional fulfillment MCP endpoint",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Deploy the fulfillment MCP server",
+              "default": false
+            },
+            "externalHostname": {
+              "type": "string",
+              "description": "DNS hostname advertised by the MCP server"
+            },
+            "externalPort": {
+              "type": "integer",
+              "description": "Externally reachable TLS port for the MCP server",
+              "minimum": 1,
+              "maximum": 65535,
+              "default": 443
+            }
+          },
+          "allOf": [{
+            "if": {"properties": {"enabled": {"const": true}}},
+            "then": {
+              "required": ["externalHostname"],
+              "properties": {"externalHostname": {"minLength": 1}}
+            }
+          }],
+          "additionalProperties": false
+        },
         "variant": {
           "type": "string",
           "description": "Deployment variant",

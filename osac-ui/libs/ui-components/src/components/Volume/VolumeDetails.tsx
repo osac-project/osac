@@ -155,7 +155,7 @@ const VolumeDetails = ({ volume }: VolumeDetailsProps) => {
               <DescriptionListGroup>
                 <DescriptionListTerm>{t('Project')}</DescriptionListTerm>
                 <DescriptionListDescription>
-                  {displayValue(volume.metadata?.project)}
+                  {volume.metadata?.project || t('Default')}
                 </DescriptionListDescription>
               </DescriptionListGroup>
 

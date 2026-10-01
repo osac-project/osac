@@ -105,6 +105,20 @@ describe('VolumeDetails', () => {
       expect(screen.queryByText('Message')).not.toBeInTheDocument();
     });
 
+    it('renders "Default" when project is an empty string', () => {
+      const volume = {
+        ...makeVolume(VolumeState.AVAILABLE),
+        metadata: {
+          ...makeVolume(VolumeState.AVAILABLE).metadata,
+          project: '',
+        },
+      } as Volume;
+
+      renderDetails(volume);
+
+      expect(screen.getByText('Default')).toBeInTheDocument();
+    });
+
     it('renders dash fallbacks when optional fields are missing', () => {
       const minimalVolume = {
         $typeName: 'osac.public.v1.Volume',

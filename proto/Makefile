@@ -12,9 +12,12 @@
 #         Still driven by fulfillment-service/dev.py, which owns the cleanapi
 #         toolchain (protoc plugin install, version pinning).
 # Step 2: regenerate the single Go tree under proto/gen/ (buf.gen.yaml).
+# Step 3: regenerate the UI TypeScript bindings under osac-ui/libs/types/src/.
 generate:
 	cd ../fulfillment-service && uv run dev.py build protos
 	buf generate
+	find ../osac-ui/libs/types/src -type f -name '*_pb.ts' -delete
+	cd ../osac-ui/libs/types && buf generate
 
 lint:
 	cd ../fulfillment-service && uv run dev.py lint proto

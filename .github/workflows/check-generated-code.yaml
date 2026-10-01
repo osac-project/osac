@@ -79,13 +79,14 @@ jobs:
       name: Regenerate the shared proto module
       working-directory: proto
       # `make generate` = `dev.py build protos` (private -> public) + `buf generate`
-      # (the single Go tree under proto/gen/ that every module imports).
+      # (the single Go tree under proto/gen/ that every module imports) + UI
+      # TypeScript generation under osac-ui/libs/types/src/.
       run: make generate
     - if: steps.should-run.outputs.run
       name: Check for uncommitted changes
       run: |
-        if ! git diff --exit-code -- proto/ || [ -n "$(git ls-files --others --exclude-standard -- proto/)" ]; then
-          echo "::error::Generated proto code is out of date. Run 'make generate' in proto/ and commit proto/public/ + proto/gen/."
-          git status --porcelain -- proto/
+        if ! git diff --exit-code -- proto/ osac-ui/libs/types/src/ || [ -n "$(git ls-files --others --exclude-standard -- proto/ osac-ui/libs/types/src/)" ]; then
+          echo "::error::Generated proto code is out of date. Run 'make generate' in proto/ and commit the generated proto and UI type files."
+          git status --porcelain -- proto/ osac-ui/libs/types/src/
           exit 1
         fi

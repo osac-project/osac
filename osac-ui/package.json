@@ -4,7 +4,6 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "gen-types": "pnpm --filter @osac/types run gen-types",
     "i18n": "pnpm --filter @osac/i18n run i18n",
     "dev": "concurrently \"pnpm dev:proxy\" \"pnpm dev:frontend\"",
     "dev:proxy": "cd proxy && BASE_UI_URL=http://localhost:5173 nodemon --watch 'proxy/**/*' --exec 'go run' main.go --signal SIGTERM",

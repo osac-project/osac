@@ -8,13 +8,9 @@
     "./private": "./src/index-private.ts"
   },
   "scripts": {
-    "gen-types": "node scripts/gen-types.mjs",
     "lint": "echo 'no lint target'"
   },
   "dependencies": {
     "@bufbuild/protobuf": "2.12.0"
-  },
-  "devDependencies": {
-    "@bufbuild/buf": "1.73.0"
   }
 }

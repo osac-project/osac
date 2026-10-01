@@ -170,15 +170,12 @@ export type ApiQueryClient = {
 Define the protobuf service and messages in the proto schema, then run:
 
 ```bash
-pnpm gen-types
+make -C ../proto generate
 ```
 
-This generates the service descriptor and TypeScript types in `@osac/types`.
-To generate against a specific `osac` commit instead of `main`, pass its commit SHA:
-
-```bash
-pnpm gen-types <commit-sha>
-```
+This generates the service descriptor and TypeScript types in `@osac/types`,
+alongside the corresponding backend generated code so all generated outputs
+remain in sync.
 
 ### 2. Register the route
 

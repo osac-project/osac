@@ -32,7 +32,7 @@ FULFILLMENT_API_URL=https://... pnpm dev  # Go proxy + Vite on :5173
 - `pnpm test` — app-frontend Vitest tests, including ui-components tests via include globs; **does not substitute for typecheck**
 - `pnpm build` — app-frontend production `tsc -b` (excludes test files) + Vite build + Go binary
 - `pnpm format` — Auto-fix linting and formatting issues
-- `pnpm gen-types` — Regenerate TypeScript from protobuf (libs/types)
+- `make -C ../proto generate` — Regenerate backend and UI types from protobuf
 - `pnpm i18n` — Extract t() keys to libs/i18n/locales/en/translation.json
 
 ### Pre-submit validation (CI parity)
@@ -69,7 +69,7 @@ Multi-stage build images: `nodejs-22-minimal:9.8`, `go-toolset:1.25`, `ubi-minim
 |---------|---------------------|
 | `@osac/app-frontend` | React SPA — Connect transport, `ApiProvider`, routing |
 | `@osac/ui-components` | Shared components consumed at source (no build) — typed gRPC hooks live here |
-| `@osac/types` | Generated protobuf types and service descriptors — **never edit**, regenerate with `pnpm gen-types` |
+| `@osac/types` | Generated protobuf types and service descriptors — **never edit**, regenerate with `make -C ../proto generate` |
 | `@osac/i18n` | Translation extraction — `locales/en/translation.json` is generated, not hand-edited |
 | `@osac/playwright` | Playwright harness for manual verification against a **live deployed cluster** — not a CI suite, not persisted test coverage. See [Manual verification against a live cluster](#manual-verification-against-a-live-cluster) |
 
@@ -249,8 +249,8 @@ pnpm build  # Builds frontend + proxy binary
 ```
 
 **Type generation**:
-- libs/types uses @bufbuild/buf to generate TS types and Connect service descriptors from protobuf
-- Run `pnpm gen-types` after proto changes
+- libs/types uses the shared Buf CLI configuration to generate TS types and Connect service descriptors from protobuf
+- Run `make -C ../proto generate` after proto changes
 - Never edit libs/types/src/*.ts manually
 
 **i18n build**:
@@ -289,8 +289,8 @@ pnpm build  # Builds frontend + proxy binary
 - CI enforces sync: `pnpm run i18n --ci` (fails if out of date)
 
 **Type generation**:
-- Protobuf → TypeScript + service descriptors via @bufbuild/buf
-- Never edit libs/types/src/*.ts manually — regenerate with `pnpm gen-types`
+- Protobuf → TypeScript + service descriptors via the shared Buf CLI configuration
+- Never edit libs/types/src/*.ts manually — regenerate with `make -C ../proto generate`
 
 **Component organization** (libs/ui-components/src):
 - `components/`: catalog, catalogProvision, Cluster, dashboard, Form, Page, Primitives, Resource, vm, shared

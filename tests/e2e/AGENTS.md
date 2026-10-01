@@ -21,6 +21,7 @@ effects, and follow the instructions for every affected component.
 | Area | Required coverage | Location and command | Boundary and prerequisites |
 |---|---|---|---|
 | VMaaS ComputeInstance InstanceType resize, including CatalogItem-created instances | Regression E2E for CLI/API outcomes, applied ComputeInstance configuration, and VMI resources | `tests/e2e/vmaas/regression/test_compute_instance_instance_type.py`; from the repository root, run `uv run pytest tests/e2e/vmaas/regression/test_compute_instance_instance_type.py` | Uses the deployed VMaaS API and Kubernetes endpoints, VM kubeconfig, image, storage tier, subnet, and VM template. Restart-required behavior assumes the single-node VMaaS profile. |
+| FabricDomain Phase 1 API authorization and tenant visibility | Auth Unit plus deployed API/component integration; not live fabric lifecycle E2E | `go test ./internal/auth` from `fulfillment-service/`; `uv run pytest -n 0 tests/e2e/vmaas/regression/test_fabric_domain_api.py` from the root | Requires explicit API-only opt-in, a fully rolled-out operator with networking provisioning disabled, and an Ethernet east-west capable Netris NetworkClass. See [prerequisites and pending lifecycle coverage](vmaas/regression/README.fabric-domain.md). |
 
 Multi-node live hot-plug resize remains outside this suite and is tracked by
 [OSAC-5335](https://redhat.atlassian.net/browse/OSAC-5335).

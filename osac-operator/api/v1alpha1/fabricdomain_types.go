@@ -46,7 +46,7 @@ type FabricDomainSpec struct {
 
 	// VirtualNetwork is the ID of the OSAC VirtualNetwork associated with the domain.
 	// For Netris EthernetEW, this VirtualNetwork is the source of truth for the VPC where the Server
-	// Cluster is created; its NetworkClass supplies backend configuration such as the cluster template.
+	// Cluster is created. Hardware instance types supply the Server Cluster template binding.
 	// InfiniBandEW and NVLink are reserved for later phases and may define different connectivity.
 	// This reference is immutable after creation.
 	// +kubebuilder:validation:Required
@@ -102,6 +102,11 @@ const (
 
 // FabricDomainStatus defines the observed state of FabricDomain.
 type FabricDomainStatus struct {
+	// ProvisionedAt records the first persisted Ready transition. It survives
+	// membership updates and recovery so provisioning duration is observed once.
+	// +kubebuilder:validation:Optional
+	ProvisionedAt *metav1.Time `json:"provisionedAt,omitempty"`
+
 	// Phase provides a single-value overview of FabricDomain provisioning.
 	// +kubebuilder:validation:Optional
 	Phase FabricDomainPhase `json:"phase,omitempty"`
@@ -113,6 +118,12 @@ type FabricDomainStatus struct {
 	// BackendID is the provider-specific identifier of the server cluster.
 	// +kubebuilder:validation:Optional
 	BackendID string `json:"backendId,omitempty"`
+
+	// ProvisioningConfig records the resolved backend binding before the first provisioning job.
+	// A live Server Cluster cannot change its template, VPC, or site. Catalog and inventory
+	// updates must remain compatible with this binding; deletion does not depend on those lookups.
+	// +kubebuilder:validation:Optional
+	ProvisioningConfig *FabricDomainProvisioningConfig `json:"provisioningConfig,omitempty"`
 
 	// DesiredConfigVersion hashes the applied FabricDomain and resolved backend configuration.
 	// +kubebuilder:validation:Optional
@@ -134,6 +145,22 @@ type FabricDomainStatus struct {
 	// Members contains the observed state of each server in the domain.
 	// +kubebuilder:validation:Optional
 	Members []FabricDomainMemberStatus `json:"members,omitempty"`
+}
+
+// FabricDomainProvisioningConfig identifies the backend configuration selected for a domain.
+type FabricDomainProvisioningConfig struct {
+	// NetworkClass is the ID of the class that scopes the hardware template binding.
+	// +kubebuilder:validation:MinLength=1
+	NetworkClass string `json:"networkClass"`
+	// TemplateID is the Netris Server Cluster template selected from the members' instance types.
+	// +kubebuilder:validation:Pattern=`^[1-9][0-9]*$`
+	TemplateID string `json:"templateId"`
+	// VPCID is the VirtualNetwork's Netris VPC at initial provisioning.
+	// +kubebuilder:validation:Pattern=`^[1-9][0-9]*$`
+	VPCID string `json:"vpcId"`
+	// Region selects the configured Netris site for this domain.
+	// +kubebuilder:validation:Optional
+	Region string `json:"region,omitempty"`
 }
 
 // +kubebuilder:object:root=true

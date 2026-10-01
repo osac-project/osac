@@ -18,7 +18,7 @@
         install_step_hosted_cluster_override:
           name: osac.workflows.workflow_helpers
           tasks_from: noop.yml
-        install_step_cluster_network_override:
+        install_step_cluster_infra_override:
           name: osac.workflows.workflow_helpers
           tasks_from: noop.yml
         install_step_external_access_override:
@@ -60,8 +60,14 @@
           - template_id == "osac.templates.ocp_ci_small"
         fail_msg: "CaaS template ID not extracted correctly"
 
-    - name: Verify CaaS does not dispatch the pool infrastructure phase
+    - name: Verify CaaS dispatches the CI cluster infrastructure step
       ansible.builtin.assert:
         that:
-          - install_step_cluster_infra_default is not defined
-          - install_step_cluster_network_default is defined
+          - install_step_cluster_infra_default is defined
+          - install_step_cluster_infra_default.name == "osac.templates.ocp_ci_small"
+          - install_step_cluster_infra_default.tasks_from == "ci_cluster_infra_create.yaml"
+          - install_step_cluster_network_default is not defined
+        fail_msg: >-
+          ocp_ci_small must define install_step_cluster_infra_default pointing
+          to ci_cluster_infra_create.yaml and must not define the old
+          install_step_cluster_network_default (OSAC-5697).

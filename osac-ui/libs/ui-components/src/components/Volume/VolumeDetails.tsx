@@ -22,7 +22,7 @@ const VolumeDetails = ({ volume }: VolumeDetailsProps) => {
             <ResourceDetailHeader
               parentTo="/storage/volumes"
               parentLabel={t('Volumes')}
-              resourceName={volume.metadata?.name ?? volume.id}
+              resourceName={volume.metadata?.name?.trim() || volume.id}
               titleAddon={<VolumeStatusLabel state={volume.status?.state} />}
             />
           </StackItem>

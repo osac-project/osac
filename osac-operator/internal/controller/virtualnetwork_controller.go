@@ -243,7 +243,7 @@ func (r *VirtualNetworkReconciler) handleProvisioning(ctx context.Context, vnet 
 					vnet.Status.BackendNetworkID = string(vnet.UID)
 				} else if backendID := outputString(status.Outputs, "vpc_id", "backend_network_id", "backendNetworkId"); backendID != "" {
 					vnet.Status.BackendNetworkID = backendID
-				} else if vnet.Status.BackendNetworkID == "" && vnet.Annotations[osacImplementationStrategyAnnotation] == "netris" {
+				} else if vnet.Status.BackendNetworkID == "" && vnet.Annotations[osacImplementationStrategyAnnotation] == netrisFabricManager {
 					message := "AAP job succeeded but returned no vpc_id artifact for the Netris VirtualNetwork"
 					vnet.Status.Phase = v1alpha1.VirtualNetworkPhaseFailed
 					if job := provisioning.FindLatestJobByType(vnet.Status.ProvisioningJobs, v1alpha1.JobTypeProvision); job != nil {

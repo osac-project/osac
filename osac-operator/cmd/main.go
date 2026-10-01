@@ -934,13 +934,13 @@ func setupNetworkingControllers(
 	); err != nil {
 		return err
 	}
-	serverClusterProvider := provisioning.NewAAPProvider(
+	fabricDomainProvider := provisioning.NewAAPProvider(
 		aapClient,
-		fmt.Sprintf("%s-create-server-cluster", templatePrefix),
-		fmt.Sprintf("%s-delete-server-cluster", templatePrefix),
+		fmt.Sprintf("%s-create-fabric-domain", templatePrefix),
+		fmt.Sprintf("%s-delete-fabric-domain", templatePrefix),
 	)
 	if err := setupFabricDomainControllers(
-		mgr, localMgr, grpcConn, networkingNamespace, serverClusterProvider,
+		mgr, localMgr, grpcConn, networkingNamespace, fabricDomainProvider,
 		networkClassesClient, statusPollInterval, maxJobHistory,
 		networkProvisioningEnabled,
 	); err != nil {
@@ -1052,7 +1052,9 @@ func setupFabricDomainControllers(
 	statusPollInterval time.Duration, maxJobHistory int,
 	networkProvisioningEnabled bool,
 ) error {
+	var instanceTypesClient privatev1.BareMetalInstanceTypesClient
 	if grpcConn != nil {
+		instanceTypesClient = privatev1.NewBareMetalInstanceTypesClient(grpcConn)
 		if err := controller.NewFabricDomainFeedbackReconciler(
 			localMgr.GetClient(), grpcConn, networkingNamespace,
 		).SetupWithManager(mgr); err != nil {
@@ -1060,7 +1062,7 @@ func setupFabricDomainControllers(
 		}
 	}
 	reconciler := controller.NewFabricDomainReconciler(
-		mgr, networkingNamespace, provider, networkClassesClient,
+		mgr, networkingNamespace, provider, networkClassesClient, instanceTypesClient,
 		statusPollInterval, maxJobHistory,
 	)
 	reconciler.NetworkProvisioningEnabled = networkProvisioningEnabled

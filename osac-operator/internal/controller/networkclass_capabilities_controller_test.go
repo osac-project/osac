@@ -85,16 +85,42 @@ var _ = Describe("computeCapabilities", func() {
 	})
 
 	It("clears disabled capabilities without enabling unsupported families", func() {
+		fabric := fabricDualStack
+		fabric.Capabilities = append(fabric.Capabilities, networkmanager.CapabilityEastWestEthernet)
 		disabled := &privatev1.NetworkClassCapabilities{
-			SupportsIpv6:      true,
-			SupportsDualStack: true,
+			SupportsIpv6:             true,
+			SupportsDualStack:        true,
+			SupportsEastWestEthernet: true,
 		}
 
-		caps := computeCapabilities(&dispatcher.ResolvedManagers{FabricManager: &fabricDualStack}, disabled)
+		caps := computeCapabilities(&dispatcher.ResolvedManagers{FabricManager: &fabric}, disabled)
 
 		Expect(caps.GetSupportsIpv4()).To(BeTrue())
 		Expect(caps.GetSupportsIpv6()).To(BeFalse())
 		Expect(caps.GetSupportsDualStack()).To(BeFalse())
+		Expect(caps.GetSupportsEastWestEthernet()).To(BeFalse())
+	})
+
+	DescribeTable("derives Ethernet east-west support from the fabric manager",
+		func(k8s *networkmanager.Manager) {
+			fabric := fabricDualStack
+			fabric.Capabilities = append(fabric.Capabilities, networkmanager.CapabilityEastWestEthernet)
+			caps := computeCapabilities(&dispatcher.ResolvedManagers{FabricManager: &fabric, K8sManager: k8s}, nil)
+			Expect(caps.GetSupportsEastWestEthernet()).To(BeTrue())
+			Expect(caps.GetSupportsIpv4()).To(BeTrue())
+			Expect(caps.GetSupportsIpv6()).To(Equal(k8s == nil))
+			Expect(caps.GetSupportsDualStack()).To(Equal(k8s == nil))
+		},
+		Entry("without a k8s manager", nil),
+		Entry("with an IPv4-only k8s manager", &k8sIPv4Only),
+	)
+
+	It("does not infer Ethernet east-west support from the k8s manager", func() {
+		k8s := k8sIPv4Only
+		k8s.Capabilities = append(k8s.Capabilities, networkmanager.CapabilityEastWestEthernet)
+		caps := computeCapabilities(&dispatcher.ResolvedManagers{FabricManager: &fabricIPv4Only, K8sManager: &k8s}, nil)
+		Expect(caps.GetSupportsEastWestEthernet()).To(BeFalse())
+		Expect(caps.GetSupportsIpv4()).To(BeTrue())
 	})
 })
 
@@ -109,9 +135,16 @@ var _ = Describe("capabilitiesEqual", func() {
 		Expect(capabilitiesEqual(a, b)).To(BeFalse())
 	})
 
+	It("returns false when only Ethernet east-west support differs", func() {
+		a := &privatev1.NetworkClassCapabilities{SupportsIpv4: true, SupportsEastWestEthernet: true}
+		b := &privatev1.NetworkClassCapabilities{SupportsIpv4: true}
+		Expect(capabilitiesEqual(a, b)).To(BeFalse())
+		Expect(capabilitiesEqual(b, a)).To(BeFalse())
+	})
+
 	It("returns true when all fields match", func() {
-		a := &privatev1.NetworkClassCapabilities{SupportsIpv4: true, SupportsDualStack: true}
-		b := &privatev1.NetworkClassCapabilities{SupportsIpv4: true, SupportsDualStack: true}
+		a := &privatev1.NetworkClassCapabilities{SupportsIpv4: true, SupportsDualStack: true, SupportsEastWestEthernet: true}
+		b := &privatev1.NetworkClassCapabilities{SupportsIpv4: true, SupportsDualStack: true, SupportsEastWestEthernet: true}
 		Expect(capabilitiesEqual(a, b)).To(BeTrue())
 	})
 })
@@ -156,6 +189,63 @@ var _ = Describe("managerConfigMapPredicate", func() {
 
 var _ = Describe("NetworkClassCapabilitiesReconciler", func() {
 	const namespace = "default"
+
+	DescribeTable("publishes effective Ethernet east-west capabilities",
+		func(fabricCaps, k8sCaps string, disabled *privatev1.NetworkClassCapabilities, previousEW, expectedEW bool, expectedUpdates int) {
+			fabricCM := newFabricManagerConfigMap("fm-caps-ew", namespace, "netris-ew")
+			fabricCM.Data[networkmanager.DataKeyCapabilities] = fabricCaps
+			Expect(k8sClient.Create(ctx, fabricCM)).To(Succeed())
+			defer func() { _ = k8sClient.Delete(ctx, fabricCM) }()
+
+			k8sCM := newK8sManagerConfigMap("k8s-caps-ew", namespace, "k8s-ew", k8sCaps)
+			Expect(k8sClient.Create(ctx, k8sCM)).To(Succeed())
+			defer func() { _ = k8sClient.Delete(ctx, k8sCM) }()
+
+			disc, err := networkmanager.NewDiscovery(k8sClient, namespace)
+			Expect(err).NotTo(HaveOccurred())
+			nc := &privatev1.NetworkClass{
+				Id:            "nc-caps-ew",
+				FabricManager: ptr.To("netris-ew"),
+				K8SManager:    ptr.To("k8s-ew"),
+				Capabilities: &privatev1.NetworkClassCapabilities{
+					SupportsIpv4:             true,
+					SupportsEastWestEthernet: previousEW,
+				},
+			}
+			if disabled != nil {
+				nc.Spec = &privatev1.NetworkClassSpec{DisableCapabilities: disabled}
+			}
+			var updates []*privatev1.NetworkClass
+			stubClient := newListingNetworkClassClient([]*privatev1.NetworkClass{nc}, &updates)
+			resolver := dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(stubClient), disc)
+			reconciler := NewNetworkClassCapabilitiesReconciler(stubClient, resolver, namespace)
+
+			_, err = reconciler.Reconcile(ctx, ctrl.Request{})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(updates).To(HaveLen(expectedUpdates))
+			Expect(nc.GetCapabilities().GetSupportsEastWestEthernet()).To(Equal(expectedEW))
+			Expect(nc.GetCapabilities().GetSupportsIpv4()).To(BeTrue())
+			Expect(nc.GetCapabilities().GetSupportsIpv6()).To(BeFalse())
+
+			_, err = reconciler.Reconcile(ctx, ctrl.Request{})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(updates).To(HaveLen(expectedUpdates))
+		},
+		Entry("updates when only EW becomes supported with an IPv4-only k8s manager",
+			"ipv4,eastWestEthernet", "ipv4", nil, false, true, 1),
+		Entry("withdraws EW when Netris does not advertise it",
+			"ipv4", "ipv4", nil, true, false, 1),
+		Entry("ignores EW advertised only by the k8s manager",
+			"ipv4", "ipv4,eastWestEthernet", nil, true, false, 1),
+		Entry("disables advertised EW via the NetworkClass mask",
+			"ipv4,eastWestEthernet", "ipv4", &privatev1.NetworkClassCapabilities{SupportsEastWestEthernet: true}, true, false, 1),
+		Entry("publishes advertised EW when the disable mask is false",
+			"ipv4,eastWestEthernet", "ipv4", &privatev1.NetworkClassCapabilities{}, false, true, 1),
+		Entry("skips unchanged EW support",
+			"ipv4,eastWestEthernet", "ipv4", nil, true, true, 0),
+		Entry("leaves EW false when Netris does not advertise it",
+			"ipv4", "ipv4", nil, false, false, 0),
+	)
 
 	It("computes the intersection and updates the NetworkClass when capabilities changed", func() {
 		fabricCM := newFabricManagerConfigMap("fm-caps-fabric", namespace, "fabric-caps-1")

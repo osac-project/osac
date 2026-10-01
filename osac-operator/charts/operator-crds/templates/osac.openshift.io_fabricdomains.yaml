@@ -76,7 +76,7 @@ spec:
                 description: |-
                   VirtualNetwork is the ID of the OSAC VirtualNetwork associated with the domain.
                   For Netris EthernetEW, this VirtualNetwork is the source of truth for the VPC where the Server
-                  Cluster is created; its NetworkClass supplies backend configuration such as the cluster template.
+                  Cluster is created. Hardware instance types supply the Server Cluster template binding.
                   InfiniBandEW and NVLink are reserved for later phases and may define different connectivity.
                   This reference is immutable after creation.
                 minLength: 1
@@ -191,6 +191,42 @@ spec:
                 - Failed
                 - Deleting
                 type: string
+              provisionedAt:
+                description: |-
+                  ProvisionedAt records the first persisted Ready transition. It survives
+                  membership updates and recovery so provisioning duration is observed once.
+                format: date-time
+                type: string
+              provisioningConfig:
+                description: |-
+                  ProvisioningConfig records the resolved backend binding before the first provisioning job.
+                  A live Server Cluster cannot change its template, VPC, or site. Catalog and inventory
+                  updates must remain compatible with this binding; deletion does not depend on those lookups.
+                properties:
+                  networkClass:
+                    description: NetworkClass is the ID of the class that scopes the
+                      hardware template binding.
+                    minLength: 1
+                    type: string
+                  region:
+                    description: Region selects the configured Netris site for this
+                      domain.
+                    type: string
+                  templateId:
+                    description: TemplateID is the Netris Server Cluster template
+                      selected from the members' instance types.
+                    pattern: ^[1-9][0-9]*$
+                    type: string
+                  vpcId:
+                    description: VPCID is the VirtualNetwork's Netris VPC at initial
+                      provisioning.
+                    pattern: ^[1-9][0-9]*$
+                    type: string
+                required:
+                - networkClass
+                - templateId
+                - vpcId
+                type: object
               provisioningIntent:
                 description: |-
                   ProvisioningIntent records that an AAP provisioning job may have been launched.

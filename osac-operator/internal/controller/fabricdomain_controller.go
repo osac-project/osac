@@ -22,10 +22,12 @@ import (
 	"strconv"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -46,7 +48,6 @@ const (
 	osacFabricDomainFinalizer           = "osac.openshift.io/fabricdomain-finalizer"
 	osacFabricDomainProtectionFinalizer = "osac.openshift.io/fabricdomain-protection"
 	fabricDomainConfigResyncInterval    = 5 * time.Minute
-	fabricDomainInvalidTemplateReason   = "InvalidTemplate"
 	fabricDomainUnsupportedTypeReason   = "UnsupportedType"
 	fabricDomainMissingBackendIDReason  = "MissingBackendID"
 	fabricDomainNetworkClassUnavailable = "NetworkClassUnavailable"
@@ -56,14 +57,17 @@ const (
 // FabricDomainReconciler reconciles FabricDomain resources into Netris server clusters.
 type FabricDomainReconciler struct {
 	client.Client
-	APIReader                  client.Reader
-	Scheme                     *runtime.Scheme
-	NetworkingNamespace        string
-	ProvisioningProvider       provisioning.ProvisioningProvider
-	NetworkClassesClient       privatev1.NetworkClassesClient
-	StatusPollInterval         time.Duration
-	MaxJobHistory              int
-	NetworkProvisioningEnabled bool
+	APIReader                    client.Reader
+	Scheme                       *runtime.Scheme
+	NetworkingNamespace          string
+	ProvisioningProvider         provisioning.ProvisioningProvider
+	NetworkClassesClient         privatev1.NetworkClassesClient
+	BareMetalInstanceTypesClient privatev1.BareMetalInstanceTypesClient
+	StatusPollInterval           time.Duration
+	MaxJobHistory                int
+	NetworkProvisioningEnabled   bool
+	Recorder                     events.EventRecorder
+	observability                *fabricDomainObservability
 }
 
 // NewFabricDomainReconciler creates a reconciler for FabricDomain resources.
@@ -72,6 +76,7 @@ func NewFabricDomainReconciler(
 	networkingNamespace string,
 	provider provisioning.ProvisioningProvider,
 	networkClassesClient privatev1.NetworkClassesClient,
+	instanceTypesClient privatev1.BareMetalInstanceTypesClient,
 	statusPollInterval time.Duration,
 	maxJobHistory int,
 ) *FabricDomainReconciler {
@@ -86,18 +91,21 @@ func NewFabricDomainReconciler(
 	}
 	localMgr := mgr.GetLocalManager()
 	return &FabricDomainReconciler{
-		Client:                     localMgr.GetClient(),
-		APIReader:                  localMgr.GetAPIReader(),
-		Scheme:                     localMgr.GetScheme(),
-		NetworkingNamespace:        networkingNamespace,
-		ProvisioningProvider:       provider,
-		NetworkClassesClient:       networkClassesClient,
-		StatusPollInterval:         statusPollInterval,
-		MaxJobHistory:              maxJobHistory,
-		NetworkProvisioningEnabled: true,
+		Client:                       localMgr.GetClient(),
+		APIReader:                    localMgr.GetAPIReader(),
+		Scheme:                       localMgr.GetScheme(),
+		NetworkingNamespace:          networkingNamespace,
+		ProvisioningProvider:         provider,
+		NetworkClassesClient:         networkClassesClient,
+		BareMetalInstanceTypesClient: instanceTypesClient,
+		StatusPollInterval:           statusPollInterval,
+		MaxJobHistory:                maxJobHistory,
+		NetworkProvisioningEnabled:   true,
+		Recorder:                     localMgr.GetEventRecorder("fabricdomain-controller"),
 	}
 }
 
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=fabricdomains,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=fabricdomains/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=fabricdomains/finalizers,verbs=update
@@ -118,7 +126,11 @@ func (r *FabricDomainReconciler) Reconcile(ctx context.Context, req mcreconcile.
 		return ctrl.Result{}, nil
 	}
 
+	if err := r.restoreFabricDomainProvisionedAt(ctx, domain); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
 	oldStatus := domain.Status.DeepCopy()
+	hadFinalizer := controllerutil.ContainsFinalizer(domain, osacFabricDomainFinalizer)
 	var result ctrl.Result
 	var err error
 	if domain.DeletionTimestamp.IsZero() {
@@ -130,11 +142,16 @@ func (r *FabricDomainReconciler) Reconcile(ctx context.Context, req mcreconcile.
 	// Once the resource finalizer is removed, Kubernetes may delete the object
 	// immediately. Intermediate deprovisioning status is persisted while cleanup
 	// is pending; the final terminal job record is not needed after deletion.
-	if !equality.Semantic.DeepEqual(domain.Status, *oldStatus) &&
+	if (!equality.Semantic.DeepEqual(domain.Status, *oldStatus) ||
+		oldStatus.ProvisionedAt == nil && fabricDomainReady(domain.Status)) &&
 		(domain.DeletionTimestamp.IsZero() || controllerutil.ContainsFinalizer(domain, osacFabricDomainFinalizer)) {
-		if updateErr := r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(domain), domain.Status); updateErr != nil {
+		if updateErr := r.persistFabricDomainStatusAndObserve(ctx, domain); updateErr != nil {
 			return result, updateErr
 		}
+	}
+	if err == nil && hadFinalizer && !domain.DeletionTimestamp.IsZero() &&
+		!controllerutil.ContainsFinalizer(domain, osacFabricDomainFinalizer) {
+		r.recordFabricDomainDeleted(domain)
 	}
 	return result, err
 }
@@ -153,28 +170,49 @@ func (r *FabricDomainReconciler) handleUpdate(ctx context.Context, domain *v1alp
 	}
 
 	if !r.NetworkProvisioningEnabled {
-		domain.Status.Phase = v1alpha1.FabricDomainPhaseReady
-		setReadyConditionTrue(&domain.Status.Conditions)
+		domain.Status.Phase = v1alpha1.FabricDomainPhaseProgressing
+		setFabricDomainCondition(domain, metav1.ConditionFalse, "ProvisioningDisabled",
+			"FabricDomain provisioning requires networking provisioning to be enabled on the operator")
 		domain.Status.Members = pendingFabricDomainMembers(domain.Spec.Servers)
-		return ctrl.Result{}, nil
+		return ctrl.Result{RequeueAfter: fabricDomainConfigResyncInterval}, nil
 	}
 
-	networkClassID, templateID, result, err := r.resolveFabricDomainProvisioningConfig(ctx, domain, vnet)
+	config, result, err := r.resolveFabricDomainProvisioningConfig(ctx, domain, vnet)
 	if err != nil || result.RequeueAfter > 0 {
 		return result, err
 	}
 
+	if domain.Status.ProvisioningConfig == nil {
+		if domain.Status.ProvisioningIntent || domain.Status.BackendID != "" || len(domain.Status.ProvisioningJobs) > 0 {
+			domain.Status.Phase = v1alpha1.FabricDomainPhaseFailed
+			setFabricDomainCondition(domain, metav1.ConditionFalse, "UnresolvedBackendBinding",
+				"existing provisioning has no recorded hardware binding; verify the backend before restoring provisioningConfig")
+			return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+		}
+		domain.Status.ProvisioningConfig = &config.Binding
+	} else if *domain.Status.ProvisioningConfig != config.Binding {
+		domain.Status.Phase = v1alpha1.FabricDomainPhaseFailed
+		setFabricDomainCondition(domain, metav1.ConditionFalse, "BackendBindingChanged",
+			"the NetworkClass, template, VPC, and region must match the recorded provisioning binding; recreate the domain to change it")
+		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+	}
+	domain.Status.VPCID = config.Binding.VPCID
+
 	desiredVersion, err := provisioning.ComputeDesiredConfigVersion(struct {
-		Spec         v1alpha1.FabricDomainSpec
-		NetworkClass string
-		TemplateID   string
-		VPCID        string
-	}{domain.Spec, networkClassID, templateID, vnet.Status.BackendNetworkID})
+		Spec   v1alpha1.FabricDomainSpec
+		Config resolvedFabricDomainConfig
+	}{domain.Spec, *config})
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("computing FabricDomain desired config version: %w", err)
 	}
 	previousVersion := domain.Status.DesiredConfigVersion
 	domain.Status.DesiredConfigVersion = desiredVersion
+	if provisioning.IsConfigApplied(&domain.Status.ProvisioningJobs, desiredVersion) && validNetrisID(domain.Status.BackendID) {
+		domain.Status.Phase = v1alpha1.FabricDomainPhaseReady
+		domain.Status.Members = activeFabricDomainMembers(domain.Spec.Servers)
+		setReadyConditionTrue(&domain.Status.Conditions)
+		return ctrl.Result{RequeueAfter: fabricDomainConfigResyncInterval}, nil
+	}
 	if domain.Status.Phase == "" || domain.Status.Phase == v1alpha1.FabricDomainPhaseReady &&
 		!provisioning.IsConfigApplied(&domain.Status.ProvisioningJobs, desiredVersion) ||
 		domain.Status.Phase == v1alpha1.FabricDomainPhaseFailed && previousVersion != desiredVersion {
@@ -183,7 +221,7 @@ func (r *FabricDomainReconciler) handleUpdate(ctx context.Context, domain *v1alp
 		setFabricDomainCondition(domain, metav1.ConditionFalse, "Provisioning", "FabricDomain provisioning is in progress")
 	}
 
-	return r.runFabricDomainProvisioning(ctx, domain, vnet, templateID, desiredVersion)
+	return r.runFabricDomainProvisioning(ctx, domain, vnet, config.Binding.TemplateID, desiredVersion)
 }
 
 func (r *FabricDomainReconciler) resolveFabricDomainVirtualNetwork(ctx context.Context, domain *v1alpha1.FabricDomain) (*v1alpha1.VirtualNetwork, ctrl.Result, error) {
@@ -194,6 +232,11 @@ func (r *FabricDomainReconciler) resolveFabricDomainVirtualNetwork(ctx context.C
 	if !vnet.DeletionTimestamp.IsZero() {
 		message := fmt.Sprintf("VirtualNetwork %q is deleting", vnet.Name)
 		setFabricDomainCondition(domain, metav1.ConditionFalse, fabricDomainVirtualNetworkNotReady, message)
+		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+	}
+	if tenant := domain.Annotations[osacTenantKey]; tenant == "" || vnet.Annotations[osacTenantKey] != tenant {
+		domain.Status.Phase = v1alpha1.FabricDomainPhaseFailed
+		setFabricDomainCondition(domain, metav1.ConditionFalse, "TenantMismatch", "FabricDomain and VirtualNetwork must have the same nonempty tenant annotation")
 		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
 	if controllerutil.AddFinalizer(vnet, osacFabricDomainProtectionFinalizer) {
@@ -209,32 +252,31 @@ func (r *FabricDomainReconciler) resolveFabricDomainProvisioningConfig(
 	ctx context.Context,
 	domain *v1alpha1.FabricDomain,
 	vnet *v1alpha1.VirtualNetwork,
-) (string, string, ctrl.Result, error) {
+) (*resolvedFabricDomainConfig, ctrl.Result, error) {
 	if vnet.Status.Phase != v1alpha1.VirtualNetworkPhaseReady || vnet.Status.BackendNetworkID == "" {
 		message := fmt.Sprintf("waiting for VirtualNetwork %q to be Ready with a Netris VPC ID", vnet.Name)
 		domain.Status.Phase = v1alpha1.FabricDomainPhaseProgressing
 		setFabricDomainCondition(domain, metav1.ConditionFalse, fabricDomainVirtualNetworkNotReady, message)
-		return "", "", ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
 	if !validNetrisID(vnet.Status.BackendNetworkID) {
 		message := fmt.Sprintf("VirtualNetwork %q has invalid Netris VPC ID %q", vnet.Name, vnet.Status.BackendNetworkID)
 		domain.Status.Phase = v1alpha1.FabricDomainPhaseFailed
 		setFabricDomainCondition(domain, metav1.ConditionFalse, "InvalidVPCID", message)
-		return "", "", ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
-	domain.Status.VPCID = vnet.Status.BackendNetworkID
 
 	if domain.Spec.Type != v1alpha1.FabricDomainTypeEthernetEW {
 		message := fmt.Sprintf("FabricDomain type %q is not supported by the Ethernet east-west provisioner", domain.Spec.Type)
 		domain.Status.Phase = v1alpha1.FabricDomainPhaseFailed
 		setFabricDomainCondition(domain, metav1.ConditionFalse, fabricDomainUnsupportedTypeReason, message)
-		return "", "", ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
 	if r.NetworkClassesClient == nil {
 		message := "the VirtualNetwork has no resolvable NetworkClass"
 		domain.Status.Phase = v1alpha1.FabricDomainPhaseProgressing
 		setFabricDomainCondition(domain, metav1.ConditionFalse, fabricDomainNetworkClassUnavailable, message)
-		return "", "", ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
 
 	networkClassID := vnet.Spec.NetworkClass
@@ -242,50 +284,47 @@ func (r *FabricDomainReconciler) resolveFabricDomainProvisioningConfig(
 		var err error
 		networkClassID, err = lookupDefaultNetworkClassID(ctx, r.NetworkClassesClient)
 		if err != nil {
-			return "", "", ctrl.Result{}, fmt.Errorf("resolving default NetworkClass: %w", err)
+			return nil, ctrl.Result{}, fmt.Errorf("resolving default NetworkClass: %w", err)
 		}
 	}
 	if networkClassID == "" {
 		message := "the VirtualNetwork has no resolvable NetworkClass"
 		domain.Status.Phase = v1alpha1.FabricDomainPhaseProgressing
 		setFabricDomainCondition(domain, metav1.ConditionFalse, fabricDomainNetworkClassUnavailable, message)
-		return "", "", ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
 
 	ncResponse, err := r.NetworkClassesClient.Get(ctx, &privatev1.NetworkClassesGetRequest{Id: networkClassID})
 	if err != nil {
-		return "", "", ctrl.Result{}, fmt.Errorf("fetching NetworkClass %q: %w", networkClassID, err)
+		return nil, ctrl.Result{}, fmt.Errorf("fetching NetworkClass %q: %w", networkClassID, err)
 	}
 	networkClass := ncResponse.GetObject()
-	templateID, hasEthernetEW := ethernetEwTemplateID(networkClass)
-	if !hasEthernetEW {
-		message := fmt.Sprintf("NetworkClass %q has no east_west_config.ethernet_ew configuration", networkClassID)
+	if networkClass.GetMetadata().GetDeletionTimestamp() != nil || networkClass.GetFabricManager() != netrisFabricManager ||
+		!networkClass.GetCapabilities().GetSupportsEastWestEthernet() {
 		domain.Status.Phase = v1alpha1.FabricDomainPhaseFailed
-		setFabricDomainCondition(domain, metav1.ConditionFalse, fabricDomainInvalidTemplateReason, message)
-		return "", "", ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+		setFabricDomainCondition(domain, metav1.ConditionFalse, "UnsupportedNetworkClass",
+			fmt.Sprintf("NetworkClass %q must be active and advertise Netris Ethernet east-west support", networkClassID))
+		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
-	parsedTemplateID, parseErr := strconv.Atoi(templateID)
-	if parseErr != nil || parsedTemplateID <= 0 {
-		message := fmt.Sprintf("NetworkClass %q has invalid Ethernet east-west template_id %q", networkClassID, templateID)
+	templateID, instanceTypes, err := r.resolveFabricDomainHardware(ctx, domain, networkClassID)
+	if err != nil {
 		domain.Status.Phase = v1alpha1.FabricDomainPhaseFailed
-		setFabricDomainCondition(domain, metav1.ConditionFalse, fabricDomainInvalidTemplateReason, message)
-		return "", "", ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+		setFabricDomainCondition(domain, metav1.ConditionFalse, "InvalidHardwareBinding", err.Error())
+		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
 	if r.ProvisioningProvider == nil {
 		message := "no AAP provisioning provider is configured"
 		domain.Status.Phase = v1alpha1.FabricDomainPhaseProgressing
 		setFabricDomainCondition(domain, metav1.ConditionFalse, "ProvisionerUnavailable", message)
-		return "", "", ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
-	return networkClassID, templateID, ctrl.Result{}, nil
-}
-
-func ethernetEwTemplateID(networkClass *privatev1.NetworkClass) (string, bool) {
-	if networkClass == nil || networkClass.GetSpec() == nil || networkClass.GetSpec().GetEastWestConfig() == nil ||
-		networkClass.GetSpec().GetEastWestConfig().GetEthernetEw() == nil {
-		return "", false
-	}
-	return networkClass.GetSpec().GetEastWestConfig().GetEthernetEw().GetTemplateId(), true
+	return &resolvedFabricDomainConfig{
+		Binding: v1alpha1.FabricDomainProvisioningConfig{
+			NetworkClass: networkClassID, TemplateID: templateID,
+			VPCID: vnet.Status.BackendNetworkID, Region: vnet.Spec.Region,
+		},
+		InstanceTypes: instanceTypes,
+	}, ctrl.Result{}, nil
 }
 
 func (r *FabricDomainReconciler) runFabricDomainProvisioning(
@@ -320,9 +359,12 @@ func (r *FabricDomainReconciler) runFabricDomainProvisioning(
 		return result, err
 	}
 	if result.RequeueAfter == 0 {
-		// NetworkClass configuration is fetched over gRPC rather than watched as a
-		// Kubernetes object, so periodically re-evaluate it for template changes.
+		// Catalog configuration is fetched over gRPC. Periodically verify that the
+		// members remain compatible with the recorded backend binding.
 		result.RequeueAfter = fabricDomainConfigResyncInterval
+		if !provisioning.IsConfigApplied(&domain.Status.ProvisioningJobs, desiredVersion) {
+			result.RequeueAfter = r.StatusPollInterval
+		}
 	}
 	return result, nil
 }
@@ -352,6 +394,13 @@ func fabricDomainPollCallbacks(domain *v1alpha1.FabricDomain, desiredVersion str
 				domain.Status.Phase = v1alpha1.FabricDomainPhaseFailed
 				markFabricDomainProvisionJobFailed(domain, desiredVersion, message)
 				setFabricDomainCondition(domain, metav1.ConditionFalse, "MismatchedVPCID", message)
+				return
+			}
+			if job := provisioning.FindLatestJobByType(domain.Status.ProvisioningJobs, v1alpha1.JobTypeProvision); job != nil &&
+				job.ConfigVersion != "" && job.ConfigVersion != desiredVersion {
+				domain.Status.Phase = v1alpha1.FabricDomainPhaseProgressing
+				domain.Status.Members = pendingFabricDomainMembers(domain.Spec.Servers)
+				setFabricDomainCondition(domain, metav1.ConditionFalse, "Provisioning", "previous membership update completed; the current server list is still pending")
 				return
 			}
 			domain.Status.Phase = v1alpha1.FabricDomainPhaseReady
@@ -393,7 +442,7 @@ func (r *FabricDomainReconciler) handleDelete(ctx context.Context, domain *v1alp
 			return ctrl.Result{}, fmt.Errorf("cannot safely delete FabricDomain %q: %s", domain.Name, message)
 		}
 		var vnet *v1alpha1.VirtualNetwork
-		if domain.Status.BackendID == "" {
+		if domain.Status.BackendID == "" && domain.Status.ProvisioningConfig == nil {
 			if domain.Status.VPCID == "" {
 				return ctrl.Result{}, fmt.Errorf("cannot safely delete FabricDomain %q without a ServerCluster ID or VPC ID", domain.Name)
 			}
@@ -489,6 +538,9 @@ func (r *FabricDomainReconciler) updateStatusWithRetry(ctx context.Context, key 
 }
 
 func (r *FabricDomainReconciler) SetupWithManager(mgr mcmanager.Manager) error {
+	if err := r.setupFabricDomainObservability(); err != nil {
+		return err
+	}
 	return mcbuilder.ControllerManagedBy(mgr).
 		For(&v1alpha1.FabricDomain{},
 			mcbuilder.WithPredicates(NetworkingNamespacePredicate(r.NetworkingNamespace)),
@@ -496,6 +548,11 @@ func (r *FabricDomainReconciler) SetupWithManager(mgr mcmanager.Manager) error {
 			mcbuilder.WithEngageWithProviderClusters(false)).
 		Watches(&v1alpha1.VirtualNetwork{},
 			mchandler.EnqueueRequestsFromMapFunc(r.mapVirtualNetworkToFabricDomains),
+			mcbuilder.WithPredicates(NetworkingNamespacePredicate(r.NetworkingNamespace)),
+			mcbuilder.WithEngageWithLocalCluster(true),
+			mcbuilder.WithEngageWithProviderClusters(false)).
+		Watches(&corev1.ConfigMap{},
+			mchandler.EnqueueRequestsFromMapFunc(r.mapInventoryToFabricDomains),
 			mcbuilder.WithPredicates(NetworkingNamespacePredicate(r.NetworkingNamespace)),
 			mcbuilder.WithEngageWithLocalCluster(true),
 			mcbuilder.WithEngageWithProviderClusters(false)).
@@ -526,7 +583,7 @@ func fabricDomainAAPExtraVars(domain *v1alpha1.FabricDomain, vnet *v1alpha1.Virt
 	for key, value := range domain.Annotations {
 		annotations[key] = value
 	}
-	annotations[osacImplementationStrategyAnnotation] = "netris"
+	annotations[osacImplementationStrategyAnnotation] = netrisFabricManager
 	labels := make(map[string]string, len(domain.Labels))
 	for key, value := range domain.Labels {
 		labels[key] = value
@@ -551,6 +608,10 @@ func fabricDomainAAPExtraVars(domain *v1alpha1.FabricDomain, vnet *v1alpha1.Virt
 	if vnet != nil {
 		spec["virtualNetworkName"] = vnet.Name
 		spec["region"] = vnet.Spec.Region
+	}
+	if domain.Status.ProvisioningConfig != nil {
+		spec["region"] = domain.Status.ProvisioningConfig.Region
+		spec["vpcId"] = domain.Status.ProvisioningConfig.VPCID
 	}
 	return map[string]any{
 		"ansible_eda": map[string]any{

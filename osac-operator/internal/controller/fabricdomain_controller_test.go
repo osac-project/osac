@@ -46,22 +46,26 @@ var _ = Describe("FabricDomainReconciler", func() {
 	)
 
 	var (
-		ctx           context.Context
-		k8sClient     client.Client
-		reconciler    *FabricDomainReconciler
-		mockProvider  *mockVirtualNetworkProvider
-		domain        *v1alpha1.FabricDomain
-		vnet          *v1alpha1.VirtualNetwork
-		triggerCount  int
-		lastPayload   map[string]any
-		instanceTypes map[string]*privatev1.BareMetalInstanceType
-		networkClass  *privatev1.NetworkClass
+		ctx                    context.Context
+		k8sClient              client.Client
+		reconciler             *FabricDomainReconciler
+		mockProvider           *mockVirtualNetworkProvider
+		domain                 *v1alpha1.FabricDomain
+		vnet                   *v1alpha1.VirtualNetwork
+		triggerCount           int
+		lastPayload            map[string]any
+		instanceTypeListCalls  int
+		lastInstanceTypeFilter string
+		instanceTypes          map[string]*privatev1.BareMetalInstanceType
+		networkClass           *privatev1.NetworkClass
 	)
 
 	BeforeEach(func() {
 		ctx = context.Background()
 		triggerCount = 0
 		lastPayload = nil
+		instanceTypeListCalls = 0
+		lastInstanceTypeFilter = ""
 		scheme := runtime.NewScheme()
 		Expect(v1alpha1.AddToScheme(scheme)).To(Succeed())
 		Expect(corev1.AddToScheme(scheme)).To(Succeed())
@@ -127,12 +131,14 @@ var _ = Describe("FabricDomainReconciler", func() {
 			ProvisioningProvider: mockProvider,
 			NetworkClassesClient: networkClassesClient,
 			BareMetalInstanceTypesClient: &stubFabricDomainInstanceTypesClient{
-				getFunc: func(_ context.Context, request *privatev1.BareMetalInstanceTypesGetRequest, _ ...grpc.CallOption) (*privatev1.BareMetalInstanceTypesGetResponse, error) {
-					object, ok := instanceTypes[request.GetId()]
-					if !ok {
-						return nil, fmt.Errorf("type %q not found", request.GetId())
+				listFunc: func(_ context.Context, request *privatev1.BareMetalInstanceTypesListRequest, _ ...grpc.CallOption) (*privatev1.BareMetalInstanceTypesListResponse, error) {
+					instanceTypeListCalls++
+					lastInstanceTypeFilter = request.GetFilter()
+					items := make([]*privatev1.BareMetalInstanceType, 0, len(instanceTypes))
+					for _, object := range instanceTypes {
+						items = append(items, object)
 					}
-					return privatev1.BareMetalInstanceTypesGetResponse_builder{Object: object}.Build(), nil
+					return privatev1.BareMetalInstanceTypesListResponse_builder{Items: items}.Build(), nil
 				},
 			},
 			StatusPollInterval:         time.Second,
@@ -230,6 +236,23 @@ var _ = Describe("FabricDomainReconciler", func() {
 		updated := reconcileTimes(4)
 		Expect(triggerCount).To(Equal(1))
 		Expect(updated.Status.Phase).To(Equal(v1alpha1.FabricDomainPhaseReady))
+	})
+
+	It("resolves all distinct member types with one filtered catalog request", func() {
+		inventory := &corev1.ConfigMap{}
+		Expect(k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: fabricDomainInventoryName}, inventory)).To(Succeed())
+		inventory.Data["server-b"] = "other-gpu-type"
+		Expect(k8sClient.Update(ctx, inventory)).To(Succeed())
+		instanceTypes["other-gpu-type"] = fabricDomainTestInstanceType("other-gpu-type", "nc-1", "42")
+
+		templateID, memberTypes, err := reconciler.resolveFabricDomainHardware(ctx, domain, "nc-1")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(templateID).To(Equal("42"))
+		Expect(memberTypes).To(HaveKeyWithValue("server-a", "gpu-type"))
+		Expect(memberTypes).To(HaveKeyWithValue("server-b", "other-gpu-type"))
+		Expect(instanceTypeListCalls).To(Equal(1))
+		Expect(lastInstanceTypeFilter).To(ContainSubstring(`"gpu-type"`))
+		Expect(lastInstanceTypeFilter).To(ContainSubstring(`"other-gpu-type"`))
 	})
 
 	It("rejects mixed templates rather than selecting the first member", func() {
@@ -533,14 +556,14 @@ var _ = Describe("FabricDomainReconciler", func() {
 	})
 })
 
-// Only Get is used by the resolver; embedding the generated interface keeps the stub focused.
+// Only List is used by the resolver; embedding the generated interface keeps the stub focused.
 type stubFabricDomainInstanceTypesClient struct {
 	privatev1.BareMetalInstanceTypesClient
-	getFunc func(context.Context, *privatev1.BareMetalInstanceTypesGetRequest, ...grpc.CallOption) (*privatev1.BareMetalInstanceTypesGetResponse, error)
+	listFunc func(context.Context, *privatev1.BareMetalInstanceTypesListRequest, ...grpc.CallOption) (*privatev1.BareMetalInstanceTypesListResponse, error)
 }
 
-func (s *stubFabricDomainInstanceTypesClient) Get(ctx context.Context, request *privatev1.BareMetalInstanceTypesGetRequest, options ...grpc.CallOption) (*privatev1.BareMetalInstanceTypesGetResponse, error) {
-	return s.getFunc(ctx, request, options...)
+func (s *stubFabricDomainInstanceTypesClient) List(ctx context.Context, request *privatev1.BareMetalInstanceTypesListRequest, options ...grpc.CallOption) (*privatev1.BareMetalInstanceTypesListResponse, error) {
+	return s.listFunc(ctx, request, options...)
 }
 
 func fabricDomainTestInstanceType(id, networkClass, templateID string) *privatev1.BareMetalInstanceType {

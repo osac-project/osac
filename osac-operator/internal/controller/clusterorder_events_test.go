@@ -254,6 +254,53 @@ var _ = Describe("ClusterOrder transition events", func() {
 		)))
 	})
 
+	It("records a Warning event when the provisioning stage becomes unknown", func() {
+		recorder := newRecorder()
+		reconciler := &ClusterOrderReconciler{Recorder: recorder}
+		instance := &v1alpha1.ClusterOrder{}
+		oldStatus := statusWithProgressingReason(v1alpha1.ConditionControlPlaneAvailable)
+		instance.Status = statusWithProgressingReason(v1alpha1.ReasonStageUnknown)
+		instance.Status.Conditions[0].Message = stageUnknownMessage
+
+		reconciler.recordTransitionEventsForStatus(instance, &oldStatus, &instance.Status)
+
+		Eventually(recorder.Events).Should(Receive(And(
+			ContainSubstring(corev1.EventTypeWarning),
+			ContainSubstring(v1alpha1.ReasonStageUnknown),
+			ContainSubstring("signals are unavailable"),
+		)))
+	})
+
+	It("emits StageUnknown only for the status patch that persists it", func() {
+		recorder := newRecorder()
+		scheme := runtime.NewScheme()
+		Expect(v1alpha1.AddToScheme(scheme)).To(Succeed())
+		instance := &v1alpha1.ClusterOrder{
+			ObjectMeta: metav1.ObjectMeta{Name: "order", Namespace: "default"},
+			Status: withStages(statusWithProgressingReason(v1alpha1.ConditionControlPlaneCreated),
+				v1alpha1.ConditionAccepted, v1alpha1.ConditionControlPlaneCreated),
+		}
+		reader := fake.NewClientBuilder().WithScheme(scheme).
+			WithStatusSubresource(&v1alpha1.ClusterOrder{}).
+			WithObjects(instance.DeepCopy()).Build()
+		reconciler := &ClusterOrderReconciler{Client: reader, apiReader: reader, Recorder: recorder}
+
+		oldStatus := *instance.Status.DeepCopy()
+		reconciler.setProgressingStageUnknown(instance)
+
+		Expect(reconciler.persistStatusAndRecordTransitionEvents(
+			context.Background(), client.ObjectKeyFromObject(instance), instance, &oldStatus,
+		)).To(Succeed())
+		Expect(drain(recorder)).To(ConsistOf(ContainSubstring(v1alpha1.ReasonStageUnknown)))
+
+		// A second reconcile with signals still missing recomputes the same reason. The
+		// persisted reason suppresses the duplicate.
+		Expect(reconciler.persistStatusAndRecordTransitionEvents(
+			context.Background(), client.ObjectKeyFromObject(instance), instance, &oldStatus,
+		)).To(Succeed())
+		Consistently(recorder.Events, 200*time.Millisecond).ShouldNot(Receive())
+	})
+
 	It("records a Normal event when the ClusterOrder enters Deleting", func() {
 		recorder := newRecorder()
 		reconciler := &ClusterOrderReconciler{Recorder: recorder}

@@ -697,7 +697,10 @@ var _ = Describe("ClusterOrder Controller", func() {
 			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseProgressing))
 		})
 
-		It("should set Progressing reason to ControlPlaneCreated when HC exists with no conditions", func() {
+		It("should set Progressing reason to StageUnknown when HC exists with no conditions", func() {
+			// The HostedCluster object existing proves the control plane was created, so that
+			// milestone condition is still set. It does not tell us which stage is in flight,
+			// so the reason must say so rather than name the sticky milestone.
 			instance := &v1alpha1.ClusterOrder{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-hc-no-conditions",
@@ -719,10 +722,41 @@ var _ = Describe("ClusterOrder Controller", func() {
 
 			progressing := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
 			Expect(progressing).NotTo(BeNil())
-			Expect(progressing.Reason).To(Equal(v1alpha1.ConditionControlPlaneCreated))
+			Expect(progressing.Reason).To(Equal(v1alpha1.ReasonStageUnknown))
+			Expect(progressing.Message).To(ContainSubstring("signals are unavailable"))
 
 			Expect(apimeta.IsStatusConditionTrue(instance.Status.Conditions, v1alpha1.ConditionControlPlaneCreated)).To(BeTrue())
 			Expect(apimeta.IsStatusConditionTrue(instance.Status.Conditions, v1alpha1.ConditionControlPlaneAvailable)).To(BeFalse())
+		})
+
+		It("should restore the furthest milestone once HC signals return", func() {
+			instance := &v1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-hc-signal-recovery",
+					Namespace: "default",
+				},
+				Status: v1alpha1.ClusterOrderStatus{
+					Phase: v1alpha1.ClusterOrderPhaseProgressing,
+				},
+			}
+			instance.SetStatusCondition(v1alpha1.ConditionAccepted, metav1.ConditionTrue, "", v1alpha1.ReasonInitialized)
+			instance.SetStatusCondition(v1alpha1.ConditionControlPlaneCreated, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
+			instance.SetStatusCondition(v1alpha1.ConditionControlPlaneAvailable, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
+			reconciler.setProgressingStageUnknown(instance)
+
+			hc := &hypershiftv1beta1.HostedCluster{
+				Status: hypershiftv1beta1.HostedClusterStatus{
+					Conditions: []metav1.Condition{
+						{Type: string(hypershiftv1beta1.HostedClusterAvailable), Status: metav1.ConditionFalse,
+							LastTransitionTime: metav1.NewTime(time.Now().UTC()), Reason: "NotReady"},
+					},
+				},
+			}
+
+			Expect(reconciler.handleHostedCluster(ctx, instance, hc)).To(Succeed())
+
+			progressing := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
+			Expect(progressing.Reason).To(Equal(v1alpha1.ConditionControlPlaneAvailable))
 		})
 
 		It("should set Progressing reason to ControlPlaneCreated when control plane is not yet available", func() {
@@ -823,7 +857,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 			Expect(apimeta.IsStatusConditionTrue(instance.Status.Conditions, v1alpha1.ConditionClusterAvailable)).To(BeTrue())
 		})
 
-		It("should not regress sticky conditions when HC conditions transiently disappear", func() {
+		It("should keep sticky conditions but report StageUnknown when HC conditions transiently disappear", func() {
 			instance := &v1alpha1.ClusterOrder{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-hc-no-regression",
@@ -847,12 +881,15 @@ var _ = Describe("ClusterOrder Controller", func() {
 			err := reconciler.handleHostedCluster(ctx, instance, hc)
 			Expect(err).NotTo(HaveOccurred())
 
+			// The milestones are facts already observed, so they stay True. The reason is a
+			// live reading, so it regresses to StageUnknown rather than implying the
+			// control plane is still being watched.
 			Expect(apimeta.IsStatusConditionTrue(instance.Status.Conditions, v1alpha1.ConditionControlPlaneCreated)).To(BeTrue())
 			Expect(apimeta.IsStatusConditionTrue(instance.Status.Conditions, v1alpha1.ConditionControlPlaneAvailable)).To(BeTrue())
 
 			progressing := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
 			Expect(progressing).NotTo(BeNil())
-			Expect(progressing.Reason).To(Equal(v1alpha1.ConditionControlPlaneAvailable))
+			Expect(progressing.Reason).To(Equal(v1alpha1.ReasonStageUnknown))
 		})
 
 		It("should keep stage conditions with ReasonAsExpected unchanged", func() {

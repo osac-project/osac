@@ -242,6 +242,17 @@ const (
 	clusterOrderFailedEventAction       = "Failed"
 )
 
+// progressingReasonEvents are the Progressing reasons that warrant a Warning event in their
+// own right. Unlike the provisioning milestones they have no backing condition, so they are
+// detected by a change of reason on the persisted Progressing condition.
+var progressingReasonEvents = []struct {
+	reason         string
+	defaultMessage string
+}{
+	{v1alpha1.ReasonStalled, "ClusterOrder provisioning stalled"},
+	{v1alpha1.ReasonStageUnknown, stageUnknownMessage},
+}
+
 func (r *ClusterOrderReconciler) recordTransitionEventsForStatus(instance *v1alpha1.ClusterOrder,
 	oldStatus, newStatus *v1alpha1.ClusterOrderStatus) {
 	if r.Recorder == nil {
@@ -268,15 +279,20 @@ func (r *ClusterOrderReconciler) recordTransitionEventsForStatus(instance *v1alp
 		}
 	}
 
-	// A stall has no condition of its own -- it is surfaced as the Progressing condition's
-	// reason -- so it is detected by reason change rather than by the stage diff above.
-	if newProgressing != nil && newProgressing.Reason == v1alpha1.ReasonStalled &&
-		(oldProgressing == nil || oldProgressing.Reason != v1alpha1.ReasonStalled) {
+	// Stalled and StageUnknown have no condition of their own -- each is surfaced only as the
+	// Progressing condition's reason -- so they are detected by reason change rather than by
+	// the stage diff above. The persisted reason is the dedup key, so re-entering the same
+	// reason without an intervening change produces no patch and no repeat event.
+	for _, reasonEvent := range progressingReasonEvents {
+		if newProgressing == nil || newProgressing.Reason != reasonEvent.reason ||
+			(oldProgressing != nil && oldProgressing.Reason == reasonEvent.reason) {
+			continue
+		}
 		message := newProgressing.Message
 		if message == "" {
-			message = "ClusterOrder provisioning stalled"
+			message = reasonEvent.defaultMessage
 		}
-		r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, v1alpha1.ReasonStalled,
+		r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, reasonEvent.reason,
 			clusterOrderProvisioningEventAction, "%s", message)
 	}
 
@@ -570,7 +586,15 @@ func (r *ClusterOrderReconciler) handleHostedCluster(ctx context.Context, instan
 	}
 
 	if instance.Status.Phase == v1alpha1.ClusterOrderPhaseProgressing {
-		r.advanceProgressingStage(instance)
+		// The milestone conditions above are sticky, so they keep describing the furthest
+		// point ever observed. The Progressing reason is deliberately not sticky: when the
+		// HostedCluster reports nothing we cannot claim any stage is in flight, so the
+		// reason reports StageUnknown until a signal comes back.
+		if hostedClusterSignalsAreUnavailable(hc) {
+			r.setProgressingStageUnknown(instance)
+		} else {
+			r.advanceProgressingStage(instance)
+		}
 	}
 
 	// Copy VIP endpoints from annotations (written by the CaaS template's
@@ -612,6 +636,27 @@ var provisioningStageConditions = []string{
 	v1alpha1.ConditionControlPlaneCreated,
 	v1alpha1.ConditionControlPlaneAvailable,
 	v1alpha1.ConditionClusterAvailable,
+}
+
+// stageUnknownMessage explains why no provisioning stage can be named. It is the
+// Progressing condition message and the body of the StageUnknown event.
+const stageUnknownMessage = "Provisioning stage unknown: HostedCluster signals are unavailable"
+
+// hostedClusterSignalsAreUnavailable reports whether the HostedCluster carries no status
+// signal at all, which happens while the management cluster is unreachable or before
+// HyperShift has published any condition. An empty condition set is not evidence that
+// provisioning is at an early stage -- it is evidence that the stage cannot be read.
+func hostedClusterSignalsAreUnavailable(hc *hypershiftv1beta1.HostedCluster) bool {
+	return len(hc.Status.Conditions) == 0
+}
+
+// setProgressingStageUnknown overrides the current stage reason while the provider signals
+// are unreadable. It overrides rather than preserves the prior stage so an observability
+// outage is never reported as continued progress; recovery happens on the next reconcile
+// that sees signals, when advanceProgressingStage restores the furthest milestone.
+func (r *ClusterOrderReconciler) setProgressingStageUnknown(instance *v1alpha1.ClusterOrder) {
+	instance.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionTrue,
+		stageUnknownMessage, v1alpha1.ReasonStageUnknown)
 }
 
 func (r *ClusterOrderReconciler) advanceProgressingStage(instance *v1alpha1.ClusterOrder) {

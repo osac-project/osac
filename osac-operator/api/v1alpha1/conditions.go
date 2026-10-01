@@ -93,6 +93,10 @@ const (
 	ReasonNoManagerConfigured = "NoManagerConfigured"
 	// ReasonStalled indicates the resource has not progressed within the expected threshold.
 	ReasonStalled = "Stalled"
+	// ReasonStageUnknown indicates the provisioning stage could not be determined because the
+	// underlying provider signals are unavailable. It is distinct from ReasonStalled, which
+	// means a known stage is not advancing.
+	ReasonStageUnknown = "StageUnknown"
 )
 
 // Worker failure reason constants

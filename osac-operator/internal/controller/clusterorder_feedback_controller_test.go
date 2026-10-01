@@ -819,6 +819,27 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 			Expect(progressing.GetMessage()).To(Equal("Stalled at Accepted"))
 		})
 
+		It("should forward StageUnknown reason from Progressing CR condition to proto", func() {
+			// A tenant must be able to tell "we cannot read the stage" apart from a healthy
+			// in-flight stage, so StageUnknown has to survive the overlay rather than be
+			// replaced by the furthest sticky milestone.
+			setCRCondition(osacv1alpha1.ConditionAccepted, metav1.ConditionTrue,
+				osacv1alpha1.ReasonInitialized, "order accepted")
+			setCRCondition(osacv1alpha1.ConditionControlPlaneCreated, metav1.ConditionTrue,
+				osacv1alpha1.ReasonAsExpected, "")
+			setCRCondition(osacv1alpha1.ConditionProgressing, metav1.ConditionTrue,
+				osacv1alpha1.ReasonStageUnknown, "Provisioning stage unknown: HostedCluster signals are unavailable")
+
+			reconcileOnce()
+			Expect(mockClient.updateCalled).To(BeTrue())
+
+			progressing := findRemoteCondition(privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_PROGRESSING)
+			Expect(progressing).NotTo(BeNil())
+			Expect(progressing.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+			Expect(progressing.GetReason()).To(Equal(osacv1alpha1.ReasonStageUnknown))
+			Expect(progressing.GetMessage()).To(ContainSubstring("signals are unavailable"))
+		})
+
 		It("should keep PROGRESSING's own reason/message when it is True but no installation stage is reached yet", func() {
 			// Progressing is True but none of the installation-step conditions is set
 			// (furthest stage is empty). The overlay must leave PROGRESSING's reason/message

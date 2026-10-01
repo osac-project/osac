@@ -174,6 +174,18 @@ var _ = Describe("ClusterOrder stall detection", func() {
 		}
 	})
 
+	It("does not stall when the current stage is unknown", func() {
+		// StageUnknown means the signal is missing, not that a known stage is late. Starting
+		// a stall clock on it would report Stalled for an outage the cluster is not having.
+		order := newOrder(v1alpha1.ReasonStageUnknown, baseTime)
+		reconciler := newReconciler(baseTime.Add(24 * time.Hour))
+
+		result := reconciler.detectProvisioningStall(order)
+
+		Expect(result.RequeueAfter).To(BeZero())
+		Expect(findCondition(order, v1alpha1.ConditionProgressing).Reason).To(Equal(v1alpha1.ReasonStageUnknown))
+	})
+
 	It("does not stall when the current stage is unrecognized", func() {
 		order := &v1alpha1.ClusterOrder{
 			Status: v1alpha1.ClusterOrderStatus{

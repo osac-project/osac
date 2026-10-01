@@ -85,7 +85,6 @@ jobs:
             "${COPR_WEBHOOK_URL}")
 
           echo "Copr responded with HTTP ${response}"
-          cat response.txt 2>/dev/null || true
 
           if [[ "${response}" -lt 200 ]] || [[ "${response}" -ge 300 ]]; then
             echo "::error::Copr webhook returned HTTP ${response}"

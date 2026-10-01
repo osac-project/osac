@@ -1,18 +1,12 @@
 import { create } from '@bufbuild/protobuf';
 import { Code, ConnectError } from '@connectrpc/connect';
 import { screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { type Volume, VolumeSchema, VolumesDeleteResponseSchema } from '@osac/types';
 
 import VolumeDeleteConfirmModal from './VolumeDeleteConfirmModal';
 import { renderWithProviders } from '../../test-utils/TestProviders';
-
-const mockNavigate = vi.fn();
-vi.mock('react-router-dom', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('react-router-dom')>();
-  return { ...actual, useNavigate: () => mockNavigate };
-});
 
 const mockVolume: Volume = create(VolumeSchema, {
   id: 'vol-1',
@@ -20,10 +14,6 @@ const mockVolume: Volume = create(VolumeSchema, {
 });
 
 describe('VolumeDeleteConfirmModal', () => {
-  beforeEach(() => {
-    mockNavigate.mockReset();
-  });
-
   it('renders the warning text including "and all of its data"', () => {
     renderWithProviders(
       <VolumeDeleteConfirmModal volume={mockVolume} onClose={vi.fn()} onSuccess={vi.fn()} />,
@@ -36,7 +26,7 @@ describe('VolumeDeleteConfirmModal', () => {
     ).toBeInTheDocument();
   });
 
-  it('navigates to the volumes list on successful delete', async () => {
+  it('calls onSuccess on successful delete', async () => {
     let deleteCalled = false;
     const onSuccess = vi.fn();
     const { user } = renderWithProviders(
@@ -56,7 +46,6 @@ describe('VolumeDeleteConfirmModal', () => {
 
     await waitFor(() => expect(onSuccess).toHaveBeenCalled());
     expect(deleteCalled).toBe(true);
-    expect(mockNavigate).toHaveBeenCalledWith('/storage/volumes');
   });
 
   it('shows an inline error alert when delete fails', async () => {

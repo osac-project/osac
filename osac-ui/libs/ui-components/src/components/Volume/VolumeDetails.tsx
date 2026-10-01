@@ -33,12 +33,8 @@ interface VolumeDetailsProps {
 
 const VOLUMES_LIST_PATH = '/storage/volumes';
 
-const formatSizeGib = (sizeGib: bigint | undefined): string => {
-  if (sizeGib === undefined) {
-    return '—';
-  }
-  return `${Number(sizeGib)} GiB`;
-};
+const formatSizeGib = (sizeGib: bigint | undefined): string =>
+  sizeGib === undefined ? '—' : `${sizeGib} GiB`;
 
 const VolumeDetails = ({ volume }: VolumeDetailsProps) => {
   const { t } = useTranslation();
@@ -75,7 +71,7 @@ const VolumeDetails = ({ volume }: VolumeDetailsProps) => {
                 <ResourceDetailHeader
                   parentTo={VOLUMES_LIST_PATH}
                   parentLabel={t('Volumes')}
-                  resourceName={volume.metadata?.name?.trim() || volume.id}
+                  resourceName={volume.metadata?.name ?? volume.id}
                   titleAddon={<VolumeStatusLabel state={volume.status?.state} />}
                 />
               </FlexItem>
@@ -149,13 +145,6 @@ const VolumeDetails = ({ volume }: VolumeDetailsProps) => {
                 <DescriptionListTerm>{t('Tenant')}</DescriptionListTerm>
                 <DescriptionListDescription>
                   {displayValue(volume.metadata?.tenant)}
-                </DescriptionListDescription>
-              </DescriptionListGroup>
-
-              <DescriptionListGroup>
-                <DescriptionListTerm>{t('Project')}</DescriptionListTerm>
-                <DescriptionListDescription>
-                  {volume.metadata?.project || t('Default')}
                 </DescriptionListDescription>
               </DescriptionListGroup>
 

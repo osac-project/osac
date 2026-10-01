@@ -74,7 +74,7 @@ describe('VolumeDetails', () => {
   });
 
   describe('detail fields', () => {
-    it('renders name, storage tier, size, access mode, tenant, project, and created', () => {
+    it('renders name, storage tier, size, access mode, tenant, and created', () => {
       renderDetails(makeVolume(VolumeState.AVAILABLE));
 
       expect(screen.getAllByText('test-volume').length).toBeGreaterThanOrEqual(1);
@@ -82,7 +82,6 @@ describe('VolumeDetails', () => {
       expect(screen.getByText('50 GiB')).toBeInTheDocument();
       expect(screen.getByText('ReadWriteOnce')).toBeInTheDocument();
       expect(screen.getByText('test-tenant')).toBeInTheDocument();
-      expect(screen.getByText('test-project')).toBeInTheDocument();
       expect(screen.getByText('Created')).toBeInTheDocument();
     });
 
@@ -105,20 +104,6 @@ describe('VolumeDetails', () => {
       expect(screen.queryByText('Message')).not.toBeInTheDocument();
     });
 
-    it('renders "Default" when project is an empty string', () => {
-      const volume = {
-        ...makeVolume(VolumeState.AVAILABLE),
-        metadata: {
-          ...makeVolume(VolumeState.AVAILABLE).metadata,
-          project: '',
-        },
-      } as Volume;
-
-      renderDetails(volume);
-
-      expect(screen.getByText('Default')).toBeInTheDocument();
-    });
-
     it('renders dash fallbacks when optional fields are missing', () => {
       const minimalVolume = {
         $typeName: 'osac.public.v1.Volume',
@@ -132,7 +117,7 @@ describe('VolumeDetails', () => {
       renderDetails(minimalVolume);
 
       const dashes = screen.getAllByText('—');
-      expect(dashes.length).toBeGreaterThanOrEqual(4);
+      expect(dashes.length).toBeGreaterThanOrEqual(3);
     });
   });
 

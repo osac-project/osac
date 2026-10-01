@@ -294,9 +294,9 @@ func transitionTimeIsStale(
 	}
 
 	if eventType == privatev1.EventType_EVENT_TYPE_OBJECT_DELETED {
-		return !transitionTime.After(existing.TransitionTime)
+		return transitionTime.Truncate(time.Second).Before(existing.TransitionTime.Truncate(time.Second))
 	}
-	return transitionTime.Before(existing.TransitionTime)
+	return transitionTime.Truncate(time.Second).Before(existing.TransitionTime.Truncate(time.Second))
 }
 
 // handleTransientState updates only FulfillmentVersion and TransitionTime

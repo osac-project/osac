@@ -28,7 +28,7 @@ respective areas.
 - Every value in `charts/osac/values.yaml` must have a matching schema definition; use closed enums for fixed value sets.
 - Preserve deployment order: `install-infra` handles `osac-deps` and `osac-infra` before `install-osac` installs the platform chart.
 - Sibling component charts use source directories in this mono-repo; edit the owning component, not a copied packaged dependency.
-- `osac-ui` is an external OCI dependency and follows the chart's pinned release reference.
+- The umbrella chart sources `osac-ui` from the tracked `../osac-ui/charts/ui` chart; release packaging may rewrite that dependency to its OCI chart reference.
 - Shell scripts use `set -euo pipefail` and shared helpers from `scripts/lib.sh`.
 - Always pass an explicit namespace to `oc` and `kubectl` on shared clusters.
 - Do not modify cluster-scoped prerequisites on shared clusters; coordinate with cluster administrators before changing them.

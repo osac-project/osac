@@ -158,7 +158,34 @@ make install-osac  PLATFORM=openshift PROFILE=<profile> NS=<namespace>   # OSAC 
 | `PLATFORM` | `kind` or `openshift` (required) |
 | `PROFILE` | `dev`, `dev-full`, `vmaas-ci`, `bmaas-ci`, `caas-ci`, `full-ci`, or `cudn-evpn-netris-test` (required; `dev-full` is kind only) |
 | `NS` | Target namespace (required) |
-| `EXTRA_HELM_ARGS` | Extra `--set`/`--set-string` args appended to helm commands |
+| `EXTRA_HELM_ARGS` | Extra `--set`/`--set-string` args for the OSAC chart only |
+| `DRY_RUN=1` | Render all releases from `make install` with `helm template`; no cluster connections or cluster commands are used |
+| `DRY_RUN_CLUSTER_DOMAIN` | Cluster ingress domain required for an OpenShift dry run |
+| `DRY_RUN_OCP_VERSION` | OpenShift major.minor version required for an OpenShift dry run, e.g. `4.20` |
+
+To preview the full Kind install and enable the CSI driver without making cluster
+changes:
+
+```bash
+make install PLATFORM=kind PROFILE=dev NS=osac DRY_RUN=1 \
+  EXTRA_HELM_ARGS='--set csiDriver.enabled=true'
+```
+
+For OpenShift, provide the cluster-specific values explicitly because dry-run
+mode does not query the cluster:
+
+```bash
+make install PLATFORM=openshift PROFILE=vmaas-ci NS=osac DRY_RUN=1 \
+  DRY_RUN_CLUSTER_DOMAIN=apps.example.com DRY_RUN_OCP_VERSION=4.20 \
+  EXTRA_HELM_ARGS='--set csiDriver.enabled=true'
+```
+
+`DRY_RUN=1` routes the composite target through `helm template` for every
+release. It skips Kind cluster creation, `oc`/`kubectl` operations, and the
+dev-full host setup script. Since `helm template` does not connect to a cluster,
+no Kubernetes resources are changed. The generated manifests are printed to
+the terminal; `EXTRA_HELM_ARGS` still applies to the OSAC chart. Do not include a
+Helm `--dry-run` flag in `EXTRA_HELM_ARGS`; rendering is intrinsic to this mode.
 
 #### Full local dev environment (`PROFILE=dev-full`, kind only)
 
@@ -198,6 +225,7 @@ make -C ../fulfillment-service image-build \
   CONTAINER_TOOL="$CONTAINER_TOOL"
 make -C ../osac-operator image-build \
   IMG=ghcr.io/osac-project/osac-operator:latest \
+sac-csi
   CONTAINER_TOOL="$CONTAINER_TOOL"
 make -C ../osac-aap execution-environment-build \
   IMG=ghcr.io/osac-project/osac-aap:latest \

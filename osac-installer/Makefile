@@ -27,7 +27,7 @@
 SHELL := /usr/bin/env bash -o pipefail
 .SHELLFLAGS := -ec
 
-# Extra helm --set/--set-string args appended to install commands.
+# Extra helm --set/--set-string args appended to the OSAC chart command.
 EXTRA_HELM_ARGS ?=
 FULFILLMENT_GINKGO_ARGS ?=
 MCP_TEST_ENABLED ?= false
@@ -36,6 +36,9 @@ ifeq ($(MCP_TEST_ENABLED),true)
 MCP_TEST_HELM_ARGS := --set service.mcp.enabled=true --set-string service.mcp.externalHostname=mcp.osac.localhost --set service.mcp.externalPort=8443
 MCP_TEST_URL := https://mcp.osac.localhost:8443
 endif
+DRY_RUN ?= 0
+DRY_RUN_HELM_FLAGS := $(filter --%,$(EXTRA_HELM_ARGS))
+DRY_RUN_INVALID_HELM_FLAGS := $(filter-out --set --set-string --set=% --set-string=%,$(DRY_RUN_HELM_FLAGS))
 
 # Work around HTTP/2 stream resets from proxy.golang.org during container
 # builds (see osac-test-infra#543).  Override with `make test GODEBUG=` to
@@ -66,6 +69,23 @@ endif
 ifeq ($(PLATFORM),kind)
 ifeq ($(filter $(PROFILE),dev dev-full),)
 $(error PLATFORM=kind only supports PROFILE=dev or PROFILE=dev-full)
+endif
+endif
+ifneq ($(filter install,$(MAKECMDGOALS)),)
+ifeq ($(DRY_RUN),1)
+ifneq ($(strip $(DRY_RUN_INVALID_HELM_FLAGS)),)
+$(error DRY_RUN=1 only accepts --set/--set-string overrides in EXTRA_HELM_ARGS; unsupported: $(DRY_RUN_INVALID_HELM_FLAGS))
+endif
+ifeq ($(PLATFORM),openshift)
+ifeq ($(strip $(DRY_RUN_CLUSTER_DOMAIN)),)
+$(error DRY_RUN_CLUSTER_DOMAIN is required for PLATFORM=openshift DRY_RUN=1)
+endif
+ifeq ($(strip $(DRY_RUN_OCP_VERSION)),)
+$(error DRY_RUN_OCP_VERSION is required for PLATFORM=openshift DRY_RUN=1 (major.minor, e.g. 4.20))
+endif
+endif
+else ifneq ($(DRY_RUN),0)
+$(error DRY_RUN must be 0 or 1)
 endif
 endif
 endif
@@ -401,10 +421,57 @@ endif
 ##@ Composite
 
 .PHONY: install
-ifeq ($(PROFILE),dev-full)
+ifeq ($(DRY_RUN),1)
+install: install-dry-run ## Render full install manifests without cluster changes (DRY_RUN=1)
+else ifeq ($(PROFILE),dev-full)
 install: install-infra install-osac install-devstack ## Full install: infra + osac (+ dev stack for dev-full)
 else
 install: install-infra install-osac ## Full install: infra + osac (PLATFORM= PROFILE= required)
+endif
+
+.PHONY: install-dry-run
+install-dry-run: helm-deps ## Render every release in make install without connecting to a cluster
+ifeq ($(PLATFORM),kind)
+	helm template cert-manager oci://quay.io/jetstack/charts/cert-manager \
+		--version v1.20.0 --namespace cert-manager \
+		--set crds.enabled=true
+	helm template trust-manager oci://quay.io/jetstack/charts/trust-manager \
+		--version v0.22.0 --namespace cert-manager \
+		--set defaultPackage.enabled=false
+	helm template envoy-gateway oci://docker.io/envoyproxy/gateway-helm \
+		--version v1.6.5 --namespace envoy-gateway
+	helm template strimzi-cluster-operator oci://quay.io/strimzi-helm/strimzi-kafka-operator \
+		--version 1.1.0 --namespace osac-kafka
+	helm template osac-infra $(INFRA_CHART) \
+		--namespace osac-infra \
+		-f $(INFRA_VALUES) $(INFRA_VALUES_EXTRA) \
+		--set osacNamespace=$(NS)
+else
+	helm template osac-deps $(DEPS_CHART) \
+		--namespace osac-deps \
+		--values $(INFRA_VALUES) \
+		--set lvms.channel=stable-$(DRY_RUN_OCP_VERSION)
+	helm template osac-infra $(INFRA_CHART) \
+		--namespace osac-infra \
+		--values $(INFRA_VALUES) \
+		--set osacNamespace=$(NS) \
+		--set lvms.channel=stable-$(DRY_RUN_OCP_VERSION) \
+		--set keycloak.hostname=https://keycloak-keycloak.$(DRY_RUN_CLUSTER_DOMAIN) \
+		--set keycloak.route.hostname=keycloak-keycloak.$(DRY_RUN_CLUSTER_DOMAIN) \
+		--set "bundledVault.keycloakIssuerUrl=https://keycloak-keycloak.$(DRY_RUN_CLUSTER_DOMAIN)/realms/osac"
+endif
+	helm template osac $(OSAC_CHART) \
+		-f $(INSTANCE_VALUES) $(INSTANCE_VALUES_EXTRA) \
+		--namespace $(NS) \
+		--set-string global.osacDeploymentId=$(NS)/osac \
+		$(if $(filter openshift,$(PLATFORM)),--set service.externalHostname=fulfillment-api-$(NS).$(DRY_RUN_CLUSTER_DOMAIN) --set service.internalHostname=fulfillment-internal-api-$(NS).$(DRY_RUN_CLUSTER_DOMAIN) --set global.clusterDomain=$(DRY_RUN_CLUSTER_DOMAIN)) \
+		$(EXTRA_HELM_ARGS)
+ifeq ($(PROFILE),dev-full)
+	helm dependency build charts/osac-devstack
+	helm template osac-devstack charts/osac-devstack \
+		--namespace $(NS) \
+		--set osacNamespace=$(NS) \
+		--set kindClusterName=$(KIND_CLUSTER_NAME)
 endif
 
 .PHONY: uninstall

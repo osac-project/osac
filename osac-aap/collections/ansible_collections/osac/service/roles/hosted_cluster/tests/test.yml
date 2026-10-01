@@ -1,5 +1,5 @@
 ---
-- name: NodePools keep same-instance-type NodeSets separate
+- name: NodePools select agents using the requested instance type
   hosts: localhost
   gather_facts: false
   vars_files:
@@ -12,60 +12,111 @@
       osac.openshift.io/clusterorder: test
     ocp_release_image: example.test/release:latest
     hosted_cluster_node_requests:
-      - nodeSet: compute
-        numberOfNodes: 2
-        bareMetal:
-          instanceType: bm.large
-      - nodeSet: batch
-        numberOfNodes: 3
+      - numberOfNodes: 2
         bareMetal:
           instanceType: bm.large
   tasks:
-    - name: Build NodePools from two independent NodeSets
+    - name: Build NodePools from instance types
       ansible.builtin.include_role:
         name: osac.service.hosted_cluster
         tasks_from: build_nodepools.yaml
 
-    - name: Verify separate names, selectors and replica counts
+    - name: Verify NodePool name and selectors
       ansible.builtin.assert:
         that:
-          - nodepool_definitions | length == 2
-          - nodepool_definitions[0].metadata.name == 'nodepool-test-compute'
-          - nodepool_definitions[1].metadata.name == 'nodepool-test-batch'
-          - nodepool_definitions[0].spec.replicas == 2
-          - nodepool_definitions[1].spec.replicas == 3
-          - nodepool_definitions[0].metadata.labels['osac.openshift.io/node-set'] == 'compute'
-          - nodepool_definitions[1].metadata.labels['osac.openshift.io/node-set'] == 'batch'
+          - nodepool_definitions | length == 1
+          - nodepool_definitions[0].metadata.name == 'nodepool-test-bm.large'
           - nodepool_definitions[0].metadata.labels['osac.openshift.io/instance_type'] == 'bm.large'
-          - nodepool_definitions[1].metadata.labels['osac.openshift.io/instance_type'] == 'bm.large'
-          - nodepool_definitions[0].spec.platform.agent.agentLabelSelector.matchLabels['osac.openshift.io/node-set'] == 'compute'
-          - nodepool_definitions[1].spec.platform.agent.agentLabelSelector.matchLabels['osac.openshift.io/node-set'] == 'batch'
-          - nodepool_definitions[0].spec.platform.agent.agentLabelSelector.matchLabels['osac.openshift.io/clusterorder'] == 'test'
-          - nodepool_definitions[1].spec.platform.agent.agentLabelSelector.matchLabels['osac.openshift.io/clusterorder'] == 'test'
+          - nodepool_definitions[0].spec.platform.agent.agentLabelSelector.matchLabels['osac.openshift.io/instance_type'] == 'bm.large'
+          - "'osac.openshift.io/resource_class' not in nodepool_definitions[0].metadata.labels"
+          - "'osac.openshift.io/resource_class' not in nodepool_definitions[0].spec.platform.agent.agentLabelSelector.matchLabels"
+          - nodepool_definitions[0].spec.replicas == 2
 
-    - name: Reset definitions before independently scaling compute
+- name: NodePools aggregate multiple node sets using the same instance type
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../../../../../group_vars/all/osac_common_labels.yaml
+  vars:
+    nodepool_prefix: nodepool-test
+    hosted_cluster_name: test
+    hosted_cluster_namespace: test-work
+    hosted_cluster_default_cluster_order_label:
+      osac.openshift.io/clusterorder: test
+    ocp_release_image: example.test/release:latest
+    hosted_cluster_node_requests:
+      - numberOfNodes: 2
+        bareMetal:
+          instanceType: bm.large
+      - numberOfNodes: 3
+        bareMetal:
+          instanceType: bm.large
+  tasks:
+    - name: Clear NodePools from the previous test play
       ansible.builtin.set_fact:
         nodepool_definitions: []
-        hosted_cluster_node_requests:
-          - nodeSet: compute
-            numberOfNodes: 4
-            bareMetal:
-              instanceType: bm.large
-          - nodeSet: batch
-            numberOfNodes: 3
-            bareMetal:
-              instanceType: bm.large
 
-    - name: Rebuild NodePools after independent scale-up
+    - name: Build NodePools from two node sets
       ansible.builtin.include_role:
         name: osac.service.hosted_cluster
         tasks_from: build_nodepools.yaml
 
-    - name: Verify scaling one NodeSet preserves the other
+    - name: Verify shared instance type has the sum of requested nodes
       ansible.builtin.assert:
         that:
-          - nodepool_definitions | length == 2
-          - nodepool_definitions[0].metadata.name == 'nodepool-test-compute'
-          - nodepool_definitions[1].metadata.name == 'nodepool-test-batch'
-          - nodepool_definitions[0].spec.replicas == 4
-          - nodepool_definitions[1].spec.replicas == 3
+          - nodepool_definitions | length == 1
+          - nodepool_definitions[0].metadata.name == 'nodepool-test-bm.large'
+          - nodepool_definitions[0].spec.replicas == 5
+
+- name: NodePools isolate replicas and selectors across instance types
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../../../../../group_vars/all/osac_common_labels.yaml
+  vars:
+    nodepool_prefix: nodepool-test
+    hosted_cluster_name: test
+    hosted_cluster_namespace: test-work
+    hosted_cluster_default_cluster_order_label:
+      osac.openshift.io/clusterorder: test
+    ocp_release_image: example.test/release:latest
+    hosted_cluster_node_requests:
+      - numberOfNodes: 2
+        bareMetal:
+          instanceType: bm.compute
+      - numberOfNodes: 1
+        bareMetal:
+          instanceType: bm.gpu
+  tasks:
+    - name: Clear NodePools from the previous test play
+      ansible.builtin.set_fact:
+        nodepool_definitions: []
+
+    - name: Build NodePools for distinct instance types
+      ansible.builtin.include_role:
+        name: osac.service.hosted_cluster
+        tasks_from: build_nodepools.yaml
+
+    - name: Sort NodePools by name for deterministic assertions
+      ansible.builtin.set_fact:
+        ordered_nodepools: "{{ nodepool_definitions | sort(attribute='metadata.name') }}"
+
+    - name: Verify each instance type has its own NodePool and Agent selector
+      ansible.builtin.assert:
+        that:
+          - ordered_nodepools | length == 2
+          - ordered_nodepools | map(attribute='metadata.name') | list == ['nodepool-test-bm.compute', 'nodepool-test-bm.gpu']
+          - ordered_nodepools[0].metadata.labels['osac.openshift.io/clusterorder'] == 'test'
+          - ordered_nodepools[0].metadata.labels['osac.openshift.io/instance_type'] == 'bm.compute'
+          - ordered_nodepools[0].spec.platform.agent.agentLabelSelector.matchLabels['osac.openshift.io/clusterorder'] == 'test'
+          - ordered_nodepools[0].spec.platform.agent.agentLabelSelector.matchLabels['osac.openshift.io/instance_type'] == 'bm.compute'
+          - ordered_nodepools[0].spec.replicas == 2
+          - ordered_nodepools[1].metadata.labels['osac.openshift.io/clusterorder'] == 'test'
+          - ordered_nodepools[1].metadata.labels['osac.openshift.io/instance_type'] == 'bm.gpu'
+          - ordered_nodepools[1].spec.platform.agent.agentLabelSelector.matchLabels['osac.openshift.io/clusterorder'] == 'test'
+          - ordered_nodepools[1].spec.platform.agent.agentLabelSelector.matchLabels['osac.openshift.io/instance_type'] == 'bm.gpu'
+          - ordered_nodepools[1].spec.replicas == 1
+          - "'osac.openshift.io/resource_class' not in ordered_nodepools[0].metadata.labels"
+          - "'osac.openshift.io/resource_class' not in ordered_nodepools[1].metadata.labels"
+          - "'osac.openshift.io/resource_class' not in ordered_nodepools[0].spec.platform.agent.agentLabelSelector.matchLabels"
+          - "'osac.openshift.io/resource_class' not in ordered_nodepools[1].spec.platform.agent.agentLabelSelector.matchLabels"

@@ -160,6 +160,7 @@ Touched-area requirements: [component guide](../osac-operator/AGENTS.md#integrat
 - **Pure helpers, validation, or state calculations:** Add error and edge-case coverage.
 - **Controller reconciliation, finalizers, status, or CRD interactions:** The envtest suite must exercise the changed lifecycle through the public reconciler behavior.
 - **Controller deployment, watches, RBAC, console proxy, networking, or Helm wiring:** Unit/envtest coverage alone does not prove deployed wiring.
+- **CaaS orders with multiple BMaaS instance types:** The opt-in connected CaaS suite verifies Fulfillment creates a two-type ClusterOrder and the production worker reconciler creates tenant-owned BMIs and per-type worker status/metrics. `osac-aap/.../hosted_cluster/tests/test.yml` verifies that AAP builds matching per-type NodePools and Agent selectors. These checks stop before real AAP, Assisted Service, Agent binding, and HyperShift provisioning.
 - **AAP, dispatcher, provisioning-provider, KubeVirt, or fulfillment boundary:** A controllable provider in envtest is not coverage of the real provider boundary.
 - **Generated CRDs or manifests:** Do not hand-edit generated output.
 
@@ -210,6 +211,7 @@ Touched-area requirements: [component guide](../osac-aap/AGENTS.md#integration-t
 | Tier | Location / command | Exercises for real | Faked or omitted |
 |---|---|---|---|
 | Unit | `tests/unit/`; `uv run pytest tests/unit` | Filter and isolated plugin behavior | Kubernetes, AAP, cloud, and storage services are mocked or fixture-driven. |
+| Focused Ansible role logic | `collections/ansible_collections/osac/service/roles/hosted_cluster/tests/test.yml`; run by `make test` and directly with `uv run ansible-playbook collections/ansible_collections/osac/service/roles/hosted_cluster/tests/test.yml` from `osac-aap/` | Executes the production NodePool builder task locally with fixture inputs | No Kubernetes API, BMaaS, Assisted Service, or HyperShift is contacted. |
 | Component integration | `tests/integration/`; `make test` (creates Kind, runs playbooks, and tears it down) | Ansible roles/playbooks against a real Kind API, CRDs, leases, finalizers, and test-runner pod | AAP, OpenStack, KubeVirt/RHACM, and other provider APIs are not generally real; the VMS storage target uses a mock server. |
 | Component integration (focused) | A target under `tests/integration/targets/`; run the corresponding playbook from `tests/integration/` | The specific role workflow and its documented fixtures | Only the dependencies declared by that target; inspect its setup and overrides before claiming a real boundary. |
 | Contract | No dedicated contract suite; use the qualifying [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) task for AAP/provider coverage | No AAP or provider endpoint is exercised as a contract | The Kind API, mock VMS server, and fixture-driven provider behavior do not prove an AAP or provider contract. |
@@ -225,6 +227,8 @@ applicable integration tests separately to validate workflow behavior.
 
 - **Filters, variable transforms, and isolated plugin logic:** Include invalid input and default handling.
 - **Ansible roles, workflow tasks, hooks, leases, finalizers, or Kubernetes resources:** The test must exercise the role/playbook through Ansible. Use Kind when the behavior depends on the Kubernetes API; focused targets may use localhost for isolated task logic.
+- **CaaS worker NodePool selection:** `hosted_cluster/tests/test.yml` builds NodePools for two distinct instance types and verifies their separate replica counts, labels, and Agent selectors. The operator's `baremetalworker/correlation_test.go` covers type-specific correlation with two mocked BMIs and Agents.
+- **CaaS worker provisioning by instance type:** The opt-in connected CaaS integration suite creates an order with two types and verifies type-specific tenant-owned BMIs, worker status, and metrics. Together with the AAP role test, this covers the per-type flow through ClusterOrder, worker allocation, and NodePool definition. It does not provision real hosts or install two worker pools through Assisted Service and HyperShift.
 - **Netris subnet DHCP/VIP range:** Unit coverage checks CIDR boundary validation; `tests/integration/targets/netris_dhcp_range/tasks/baseline.yml` executes the production addressing tasks and asserts reserved-range exclusion. It uses Ansible locally and does not call Kubernetes or Netris.
 - **Execution-environment definition or dependency inputs:** Image success does not prove the workflow boundary.
 - **AAP, OpenStack, KubeVirt/RHACM, or provider provisioning:** Kind-only tests with mocks cannot claim provider coverage.
@@ -349,6 +353,13 @@ uv run pytest tests/e2e/caas/regression/networking/test_caas_networking.py::Test
   hooks). For every Ready CaaS worker, it checks that the primary attachment
   references the requested tenant Subnet and its discovered address is in that
   Subnet CIDR.
+- **Worker instance-type isolation:** The hosted-cluster role test verifies that
+  different instance types produce separate NodePools with type-specific
+  replicas and Agent selectors. Operator unit and connected integration tests
+  exercise type-specific BMI correlation and allocation with simulated BMaaS
+  resources. The live E2E suite exercises the real provisioning flow with one
+  worker type; it does not currently validate two independently provisionable
+  Agent pools together.
 - **Agent reuse after deletion:** `test_agent_reuse_after_cluster_deletion`
   verifies that Agents reach available state after ClusterOrder deletion and
   can be reused for a subsequent cluster without pool exhaustion.

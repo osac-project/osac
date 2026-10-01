@@ -31,6 +31,12 @@ import (
 // must map to a typed private event before the reconciler can receive them.
 func TestFabricDomainEventDispatch(t *testing.T) {
 	g := NewWithT(t)
+	publicStatusFields := (&publicv1.FabricDomainStatus{}).ProtoReflect().Descriptor().Fields()
+	g.Expect(publicStatusFields.ByName("backend_id")).To(BeNil(), "Netris identifiers are private implementation details")
+	g.Expect(publicStatusFields.ByName("vpc_id")).To(BeNil(), "Netris identifiers are private implementation details")
+	privateStatusFields := (&privatev1.FabricDomainStatus{}).ProtoReflect().Descriptor().Fields()
+	g.Expect(privateStatusFields.ByName("backend_id")).NotTo(BeNil())
+	g.Expect(privateStatusFields.ByName("vpc_id")).NotTo(BeNil())
 	builder := NewEventPublisher()
 	oneof, err := builder.calculatePayloadOneof((&privatev1.Event{}).ProtoReflect().Descriptor())
 	g.Expect(err).NotTo(HaveOccurred())

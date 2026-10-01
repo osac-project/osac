@@ -2,8 +2,7 @@
 - name: Find inventory entries with the exact requested name
   ansible.builtin.set_fact:
     _server_cluster_matches: >-
-      {{ _inv_resp.json.data | selectattr('name', 'defined')
-         | selectattr('name', 'equalto', _server_cluster_requested_name) | list }}
+      {{ _server_cluster_inventory_by_name[_server_cluster_requested_name] | default([]) }}
 
 # Inventory GET uses site: IDName in Netris's SDK (v4.14.0):
 # https://github.com/netrisai/netriswebapi/blob/v4.14.0/v2/types/inventory/types.go
@@ -41,8 +40,3 @@
   ansible.builtin.assert:
     that: _server_cluster_matches[0].id | default('') | string is match('^[1-9][0-9]*$')
     fail_msg: "Invalid inventory server ID for hostname {{ _server_cluster_requested_name }}"
-
-- name: Append the uniquely resolved server
-  ansible.builtin.set_fact:
-    _server_cluster_servers: >-
-      {{ _server_cluster_servers + [{'id': _server_cluster_matches[0].id, 'name': _server_cluster_matches[0].name}] }}

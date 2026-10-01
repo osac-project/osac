@@ -1,0 +1,48 @@
+---
+- name: Assert the workload kubeconfig reaches a distinct Kubernetes API
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Create a marker namespace on the workload API
+      kubernetes.core.k8s:
+        kubeconfig: "{{ routing_test_kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ routing_test_marker_namespace }}"
+
+    - name: Check the marker namespace is absent from management
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: "{{ routing_test_marker_namespace }}"
+      register: _routing_management_marker
+
+    - name: Check the marker namespace exists on workload
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ routing_test_kubeconfig_path }}"
+        api_version: v1
+        kind: Namespace
+        name: "{{ routing_test_marker_namespace }}"
+      register: _routing_workload_marker
+
+    - name: Assert the API endpoints are distinct
+      ansible.builtin.assert:
+        that:
+          - _routing_management_marker.resources | length == 0
+          - _routing_workload_marker.resources | length == 1
+        fail_msg: >-
+          Workload marker namespace must exist only on the workload API; observed
+          management/workload counts {{ _routing_management_marker.resources | length }}/
+          {{ _routing_workload_marker.resources | length }}.
+
+    - name: Remove the workload marker namespace
+      kubernetes.core.k8s:
+        kubeconfig: "{{ routing_test_kubeconfig_path }}"
+        state: absent
+        api_version: v1
+        kind: Namespace
+        name: "{{ routing_test_marker_namespace }}"

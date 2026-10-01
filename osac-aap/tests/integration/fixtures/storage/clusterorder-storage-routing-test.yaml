@@ -1,0 +1,15 @@
+osac_job_vars:
+  resource:
+    apiVersion: osac.openshift.io/v1alpha1
+    kind: ClusterOrder
+    metadata:
+      name: storage-routing-clusterorder
+      namespace: osac-devel
+      uid: storage-routing-clusterorder
+      annotations:
+        osac.openshift.io/tenant: "{{ routing_test_tenant_name }}"
+  admin_kubeconfig: "{{ lookup('ansible.builtin.file', routing_test_kubeconfig_path) }}"
+  storage_tier_definitions:
+    - name: fast
+      protocol: block
+      provider: lvms

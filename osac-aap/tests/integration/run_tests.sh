@@ -225,6 +225,22 @@ fi
 
 echo ""
 
+# Storage target routing is independent of the mock VMS provider suite. The target
+# creates and removes its own second Kind cluster, then exercises the real Tenant
+# create/delete playbooks with and without OSAC_REMOTE_CLUSTER_KUBECONFIG and the
+# ClusterOrder teardown path with a job-provided admin_kubeconfig.
+STORAGE_TARGET_ROUTING_LOG="${SCRIPT_DIR}/.storage_target_routing.log"
+echo "=== Running Tenant Storage Target Routing Integration Test ==="
+if bash "${SCRIPT_DIR}/run_storage_target_routing_tests.sh" > "${STORAGE_TARGET_ROUTING_LOG}" 2>&1; then
+  echo "  ✓ storage target routing passed"
+  PASSED+=("storage_target_routing:baseline")
+else
+  echo "  ✗ storage target routing failed (see ${STORAGE_TARGET_ROUTING_LOG})"
+  tail -80 "${STORAGE_TARGET_ROUTING_LOG}" 2>/dev/null || true
+  FAILED+=("storage_target_routing:baseline")
+fi
+echo ""
+
 # Storage provider tests (conditional)
 if [ "${STORAGE_TESTS_ENABLED:-}" = "true" ]; then
   # Source env vars written by setup_test_env.sh (Make runs each recipe line in a separate shell)

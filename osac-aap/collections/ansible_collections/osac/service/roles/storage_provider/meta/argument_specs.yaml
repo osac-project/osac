@@ -64,3 +64,17 @@ argument_specs:
           its dispatched tier subset. Optional because teardown_cluster_storage never
           needs backend connection details (it only touches cluster-side K8s resources).
           Example: {be-001: {endpoint: vast.example.com:443, username: admin, password: "***"}}
+      storage_provider_target_kubeconfig:
+        type: str
+        required: false
+        description: >
+          Optional kubeconfig path for cluster-side storage resources. When omitted,
+          Kubernetes modules use the execution environment's default context.
+      storage_provider_target_kubeconfig_insecure:
+        type: bool
+        required: false
+        default: false
+        description: >
+          Disable TLS certificate validation for the target kubeconfig. Used for
+          ClusterOrder guest clusters reached through routes whose certificate
+          does not match the kubeconfig CA.

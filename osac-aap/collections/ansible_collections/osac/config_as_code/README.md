@@ -34,7 +34,7 @@ where applicable):
 | `AAP_PROJECT_ARCHIVE_URI` | Optional archive URL instead of git (e.g. tarball) | — |
 | `AAP_EE_IMAGE` | Registry URL of the execution environment image | `ghcr.io/osac/osac-aap:latest` |
 | `LICENSE_MANIFEST_PATH` | Path to the license manifest file to register the AAP instance ([Red Hat account](https://access.redhat.com/management/subscription_allocations)) | `/var/secrets/config-as-code-manifest/license.zip` |
-| `REMOTE_CLUSTER_KUBECONFIG_SECRET_NAME` | Name of the secret holding the kubeconfig for the remote cluster (cluster fulfillment only) | — |
+| `REMOTE_CLUSTER_KUBECONFIG_SECRET_NAME` | Name of the secret holding the kubeconfig for the remote cluster (compute, networking, and storage operations) | — |
 | `REMOTE_CLUSTER_KUBECONFIG_SECRET_KEY` | Key within that secret for the kubeconfig file | `kubeconfig` |
 | `OSAC_PUBLISH_TEMPLATES_ENABLED` | Whether the periodic **publish-templates** schedule is enabled in Controller (`true`/`false`) | `true` |
 
@@ -83,6 +83,16 @@ cluster/ESI floating-IP workflows use `cluster-fulfillment-ig`.
 The compute instance instance group also optionally mounts `storage-operations-ig`
 for JIT tenant storage during VM provisioning, and may mount a remote cluster
 kubeconfig when `REMOTE_CLUSTER_KUBECONFIG_SECRET_NAME` is configured.
+
+### Storage operations environment variables
+
+Storage jobs use the isolated `storage-operations-ig` secret and config map. The
+worker optionally mounts the same remote-cluster kubeconfig secret configured by
+`REMOTE_CLUSTER_KUBECONFIG_SECRET_NAME` and exports its path as
+`OSAC_REMOTE_CLUSTER_KUBECONFIG`. Tenant StorageClass provisioning and teardown
+use this kubeconfig when it is configured; without it, they use the worker's
+default cluster context. ClusterOrder storage continues to use the per-job
+`admin_kubeconfig`.
 
 ## Deploy a local AAP installation using CRC
 

@@ -72,3 +72,80 @@
           - "_pod_spec_remote is search('remote-cluster-kubeconfig')"
           - "_pod_spec_remote is search('OSAC_REMOTE_CLUSTER_KUBECONFIG')"
         fail_msg: Expected remote cluster kubeconfig mount when secret name is set
+
+- name: Storage operations pod spec without remote kubeconfig
+  hosts: localhost
+  gather_facts: false
+  vars:
+    aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    remote_cluster_kubeconfig_secret_name: ""
+    remote_cluster_kubeconfig_secret_key: kubeconfig
+    _template_path: >-
+      {{ playbook_dir }}/../../../../../collections/ansible_collections/osac/config_as_code/roles/aap/templates/storage-operations-ig.j2
+
+  tasks:
+    - name: Render storage-operations pod spec without remote cluster
+      ansible.builtin.set_fact:
+        _storage_pod_spec: "{{ lookup('ansible.builtin.template', _template_path) }}"
+
+    - name: Parse storage-operations pod spec
+      ansible.builtin.set_fact:
+        _storage_pod: "{{ _storage_pod_spec | from_yaml }}"
+
+    - name: Assert storage credentials remain isolated
+      ansible.builtin.assert:
+        that:
+          - >-
+            _storage_pod.spec.containers[0].envFrom
+            | selectattr('secretRef', 'defined')
+            | map(attribute='secretRef')
+            | selectattr('name', 'equalto', 'storage-operations-ig')
+            | selectattr('optional', 'defined')
+            | list | length == 1
+          - "_storage_pod_spec is not search('compute-instance-operations-ig')"
+          - "_storage_pod_spec is not search('remote-cluster-kubeconfig')"
+        fail_msg: >-
+          Storage operations must keep their isolated optional credentials and
+          omit the remote kubeconfig mount when no secret is configured.
+
+- name: Storage operations pod spec with remote kubeconfig
+  hosts: localhost
+  gather_facts: false
+  vars:
+    aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    remote_cluster_kubeconfig_secret_name: remote-cluster-kubeconfig
+    remote_cluster_kubeconfig_secret_key: kubeconfig
+    _template_path: >-
+      {{ playbook_dir }}/../../../../../collections/ansible_collections/osac/config_as_code/roles/aap/templates/storage-operations-ig.j2
+
+  tasks:
+    - name: Render storage-operations pod spec with remote cluster
+      ansible.builtin.set_fact:
+        _storage_pod_spec_remote: "{{ lookup('ansible.builtin.template', _template_path) }}"
+
+    - name: Parse remote storage-operations pod spec
+      ansible.builtin.set_fact:
+        _storage_pod_remote: "{{ _storage_pod_spec_remote | from_yaml }}"
+
+    - name: Assert remote kubeconfig is mounted and exported
+      ansible.builtin.assert:
+        that:
+          - >-
+            _storage_pod_remote.spec.containers[0].volumeMounts
+            | selectattr('name', 'equalto', 'remote-cluster-kubeconfig')
+            | selectattr('mountPath', 'equalto', '/etc/osac')
+            | list | length == 1
+          - >-
+            _storage_pod_remote.spec.volumes
+            | selectattr('name', 'equalto', 'remote-cluster-kubeconfig')
+            | selectattr('secret.secretName', 'equalto', 'remote-cluster-kubeconfig')
+            | list | length == 1
+          - >-
+            _storage_pod_remote.spec.containers[0].env
+            | selectattr('name', 'equalto', 'OSAC_REMOTE_CLUSTER_KUBECONFIG')
+            | selectattr('value', 'equalto', '/etc/osac/remote-cluster-kubeconfig')
+            | list | length == 1
+          - "_storage_pod_spec_remote is not search('compute-instance-operations-ig')"
+        fail_msg: >-
+          Storage operations must mount and export the configured remote kubeconfig
+          without including compute-instance credentials.

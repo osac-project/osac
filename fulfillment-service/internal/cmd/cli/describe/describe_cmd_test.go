@@ -22,6 +22,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/baremetalinstancetype"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/catalogitem"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/cluster"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/clusterversion"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/computeinstance"
@@ -39,6 +40,9 @@ var _ = Describe("Describe command", func() {
 			Expect(cmd.Aliases).To(ContainElement(expectedAlias))
 		},
 		Entry("baremetalinstancetype", baremetalinstancetype.Cmd, "baremetalinstancetypes"),
+		Entry("baremetalinstancecatalogitem", catalogitem.BareMetalCmd, "baremetalinstancecatalogitems"),
+		Entry("clustercatalogitem", catalogitem.ClusterCmd, "clustercatalogitems"),
+		Entry("computeinstancecatalogitem", catalogitem.ComputeCmd, "computeinstancecatalogitems"),
 		Entry("cluster", cluster.Cmd, "clusters"),
 		Entry("clusterversion", clusterversion.Cmd, "clusterversions"),
 		Entry("computeinstance", computeinstance.Cmd, "computeinstances"),
@@ -59,7 +63,7 @@ var _ = Describe("Describe command", func() {
 				subcommandNames = append(subcommandNames, subcmd.Name())
 			}
 
-			Expect(subcommandNames).To(ContainElements("baremetalinstancetype", "cluster", "clusterversion", "computeinstance", "fabricdomain", "secret", "virtualnetwork", "subnet", "securitygroup"))
+			Expect(subcommandNames).To(ContainElements("baremetalinstancetype", "baremetalinstancecatalogitem", "cluster", "clustercatalogitem", "clusterversion", "computeinstance", "computeinstancecatalogitem", "fabricdomain", "secret", "virtualnetwork", "subnet", "securitygroup"))
 			Expect(subcommandNames).ToNot(ContainElement("networkclass"))
 		})
 	})

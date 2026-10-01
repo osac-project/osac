@@ -55,9 +55,9 @@ const buildValues = (project: string) => ({
     ...createEmptyComputeInstanceValues().spec,
     instanceType: 'standard-4-8',
     networking: {
-      virtualNetwork: 'vnet-1',
-      subnet: 'subnet-1',
-      securityGroups: ['sg-1'],
+      virtualNetwork: { id: 'vnet-1', name: 'vnet-1' },
+      subnet: { id: 'subnet-1', name: 'subnet-1' },
+      securityGroups: [{ id: 'sg-1', name: 'sg-1' }],
     },
   },
 });
@@ -71,7 +71,11 @@ const baseValues = () => {
     spec: {
       ...values.spec,
       instanceType: 'standard-4-8',
-      networking: { virtualNetwork: 'vnet', subnet: 'subnet-1', securityGroups: ['sg-1'] },
+      networking: {
+        virtualNetwork: { id: 'vnet', name: 'vnet' },
+        subnet: { id: 'subnet-1', name: 'subnet-1' },
+        securityGroups: [{ id: 'sg-1', name: 'sg-1' }],
+      },
     },
   };
 };

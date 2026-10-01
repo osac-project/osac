@@ -132,12 +132,15 @@ export const buildBareMetalInstanceStepSchema = (
 const buildAttachmentRowSchema = (t: TFunction) =>
   yup.object({
     id: yup.string().required(),
-    virtualNetwork: yup.string().required(t('Virtual network is required')),
-    subnet: yup.string().required(t('Subnet is required')),
-    securityGroups: yup
-      .array()
-      .of(yup.string().required())
-      .min(1, t('At least one security group is required')),
+    virtualNetwork: yup
+      .object({ id: yup.string(), name: yup.string() })
+      .test('virtual-network-selected', t('Virtual network is required'), (value) =>
+        Boolean(value?.id),
+      ),
+    subnet: yup
+      .object({ id: yup.string(), name: yup.string() })
+      .test('subnet-selected', t('Subnet is required'), (value) => Boolean(value?.id)),
+    securityGroups: yup.array().min(1, t('At least one security group is required')),
   });
 
 const buildCustomAttachmentsSchema = (t: TFunction) =>

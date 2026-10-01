@@ -45,8 +45,8 @@ const emptyValues: ComputeInstanceWizardValues = {
     bootDisk: { sizeGib: '', storageTier: emptyResourceSelectValue() },
     additionalDisks: [],
     networking: {
-      virtualNetwork: '',
-      subnet: '',
+      virtualNetwork: emptyResourceSelectValue(),
+      subnet: emptyResourceSelectValue(),
       securityGroups: [],
     },
   },

@@ -78,9 +78,10 @@ export const BareMetalReviewStep = ({ catalogItem }: Props) => {
     : networking.attachments
         .slice(0, 1)
         .map((attachment) => {
-          const vn = virtualNetworks.find((v) => v.id === attachment.virtualNetwork);
-          const subnet = subnets.find((s) => s.id === attachment.subnet);
-          const sgNames = formatResourceIdsForReview(attachment.securityGroups, securityGroups);
+          const vn = virtualNetworks.find((v) => v.id === attachment.virtualNetwork.id);
+          const subnet = subnets.find((s) => s.id === attachment.subnet.id);
+          const sgIds = attachment.securityGroups.map((sg) => sg.id);
+          const sgNames = formatResourceIdsForReview(sgIds, securityGroups);
           return `${resourceDisplayName(vn?.metadata, vn?.id)} / ${resourceDisplayName(subnet?.metadata, subnet?.id)} / ${sgNames}`;
         })
         .join('\n');

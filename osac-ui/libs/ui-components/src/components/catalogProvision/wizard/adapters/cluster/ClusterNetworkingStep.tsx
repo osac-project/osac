@@ -8,7 +8,7 @@ import type { ClusterWizardValues } from './fields';
 import { useTranslation } from '../../../../../hooks/useTranslation';
 import { CheckboxField } from '../../../../Form/CheckboxField';
 import { InputField } from '../../../../Form/InputField';
-import { NetworkPickerFields } from '../../../../Form/NetworkPickerFields';
+import { NetworkAttachmentPickers } from '../../../../Form/NetworkAttachmentPickers';
 import OsacForm from '../../../../Form/OsacForm';
 import { getCatalogFieldOverlay, readCatalogFieldDefinitions } from '../../catalogOverlay';
 import { useWizardValidation } from '../../WizardValidationContext';
@@ -66,7 +66,10 @@ export const ClusterNetworkingStep = ({ catalogItem }: Props) => {
               fieldId="cluster-use-default-network"
             />
             {!useDefaultNetwork && (
-              <NetworkPickerFields fieldPrefix="spec.networkAttachment" fieldIdPrefix="cluster" />
+              <NetworkAttachmentPickers
+                fieldPrefix="spec.networkAttachment"
+                fieldIdPrefix="cluster"
+              />
             )}
             <CheckboxField
               name="spec.autoExternalIpAttachment"

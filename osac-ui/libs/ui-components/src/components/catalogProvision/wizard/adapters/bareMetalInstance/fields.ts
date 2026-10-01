@@ -3,6 +3,8 @@ import { TFunction } from 'i18next';
 
 import { BareMetalInstanceCatalogItem } from '@osac/types';
 
+import type { ResourceSelectValue } from '../../../../Form/resourceSelectValue';
+import { emptyResourceSelectValue } from '../../../../Form/resourceSelectValue';
 import {
   type ResourceSelectValue,
   emptyResourceSelectValue,
@@ -27,9 +29,9 @@ export const BM_AUTO_EXTERNAL_IP_WIRE_PATH = 'auto_external_ip_attachment';
 
 export interface BareMetalNetworkAttachmentRow {
   id: string;
-  virtualNetwork: string;
-  subnet: string;
-  securityGroups: string[];
+  virtualNetwork: ResourceSelectValue;
+  subnet: ResourceSelectValue;
+  securityGroups: ResourceSelectValue[];
 }
 
 export interface BareMetalNetworkingFormValues {
@@ -68,8 +70,8 @@ export const createNetworkAttachmentRowId = (): string => {
 
 export const createEmptyNetworkAttachmentRow = (): BareMetalNetworkAttachmentRow => ({
   id: createNetworkAttachmentRowId(),
-  virtualNetwork: '',
-  subnet: '',
+  virtualNetwork: emptyResourceSelectValue(),
+  subnet: emptyResourceSelectValue(),
   securityGroups: [],
 });
 

@@ -52,22 +52,22 @@ export const VmReviewStep = ({ catalogItem }: Props) => {
     data: virtualNetwork,
     isLoading: virtNetLoading,
     error: virtNetErr,
-  } = useVirtualNetwork(values.spec.networking.virtualNetwork);
+  } = useVirtualNetwork(values.spec.networking.virtualNetwork.id);
 
   const {
     data: subnet,
     isLoading: subnetLoading,
     error: subnetError,
-  } = useSubnet(values.spec.networking.subnet);
+  } = useSubnet(values.spec.networking.subnet.id);
+
+  const sgIds = values.spec.networking.securityGroups.map((sg) => sg.id);
 
   const {
     data: securityGroups,
     isLoading: scLoading,
     error: scError,
   } = useSecurityGroups({
-    filter: cel<SecurityGroup>((filter) =>
-      filter.field('id').isIn(values.spec.networking.securityGroups),
-    ),
+    filter: cel<SecurityGroup>((filter) => filter.field('id').isIn(sgIds)),
   });
 
   const {
@@ -175,20 +175,29 @@ export const VmReviewStep = ({ catalogItem }: Props) => {
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Virtual network')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {virtualNetwork?.metadata?.name || values.spec.networking.virtualNetwork}
+              {virtualNetwork?.metadata?.name ||
+                values.spec.networking.virtualNetwork.name ||
+                values.spec.networking.virtualNetwork.id}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Subnet')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {subnet?.metadata?.name || values.spec.networking.subnet}
+              {subnet?.metadata?.name ||
+                values.spec.networking.subnet.name ||
+                values.spec.networking.subnet.id}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Security groups')}</DescriptionListTerm>
             <DescriptionListDescription>
               {values.spec.networking.securityGroups
-                .map((sc) => securityGroups?.find(({ id }) => id === sc)?.metadata?.name || sc)
+                .map(
+                  (sg) =>
+                    securityGroups?.find(({ id }) => id === sg.id)?.metadata?.name ||
+                    sg.name ||
+                    sg.id,
+                )
                 .join(', ')}
             </DescriptionListDescription>
           </DescriptionListGroup>

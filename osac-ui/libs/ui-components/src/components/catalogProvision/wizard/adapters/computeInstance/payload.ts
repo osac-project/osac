@@ -20,8 +20,8 @@ export const createEmptyComputeInstanceValues = (): ComputeInstanceWizardValues 
     bootDisk: { sizeGib: '', storageTier: emptyResourceSelectValue() },
     additionalDisks: [],
     networking: {
-      virtualNetwork: '',
-      subnet: '',
+      virtualNetwork: emptyResourceSelectValue(),
+      subnet: emptyResourceSelectValue(),
       securityGroups: [],
     },
   },
@@ -58,9 +58,9 @@ export const buildComputeInstanceCreatePayload = (
     networkAttachments: [
       {
         subnet: {
-          id: values.spec.networking.subnet,
+          id: values.spec.networking.subnet.id,
         },
-        securityGroups: values.spec.networking.securityGroups.map((id) => ({ id })),
+        securityGroups: values.spec.networking.securityGroups.map((sg) => ({ id: sg.id })),
       },
     ],
   };

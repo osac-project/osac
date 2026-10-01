@@ -1,9 +1,9 @@
 import type { ResourceSelectValue } from '../../../../Form/resourceSelectValue';
 
 export interface ComputeInstanceNetworkingValues {
-  virtualNetwork: string;
-  subnet: string;
-  securityGroups: string[];
+  virtualNetwork: ResourceSelectValue;
+  subnet: ResourceSelectValue;
+  securityGroups: ResourceSelectValue[];
 }
 
 export interface ComputeInstanceDiskValues {

@@ -149,24 +149,17 @@ const advanceToNetworkingStep = async (user: UserEvent, catalogItemTitle: string
   });
 };
 
-const selectNetworkingPickers = async (user: UserEvent) => {
+const selectNetworkingPickers = async (_user: UserEvent) => {
+  // Wait for VN and Subnet to be auto-selected (single-option auto-select)
   await waitFor(() => {
     expect(screen.getByLabelText(/^Virtual network/)).not.toBeDisabled();
     expect(screen.getByLabelText(/^Virtual network/)).toHaveTextContent('tenant-vn');
     expect(screen.getByLabelText(/^Subnet/)).toHaveTextContent('tenant-subnet');
-    expect(screen.getByText('default-sg')).toBeInTheDocument();
   });
 
-  const sgToggle = screen.getByLabelText(/^Security groups/);
-  if (sgToggle.textContent === 'Select security groups') {
-    await user.click(sgToggle);
-    await user.click(screen.getByRole('menuitemcheckbox', { name: /default-sg/ }));
-  }
-
+  // SG auto-select fires via useEffect — wait for the chip to appear
   await waitFor(() => {
-    expect(screen.getByLabelText(/^Security groups/)).not.toHaveTextContent(
-      'Select security groups',
-    );
+    expect(screen.getByText('default-sg')).toBeInTheDocument();
   });
 };
 

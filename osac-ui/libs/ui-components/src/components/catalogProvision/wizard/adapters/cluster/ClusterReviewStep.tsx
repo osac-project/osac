@@ -31,6 +31,7 @@ import { ClusterWizardValues } from './fields';
 import { findVersionByName, versionDisplayName } from './versionUtils';
 import { useTranslation } from '../../../../../hooks/useTranslation';
 import { formatReviewScalar } from '../../catalogOverlay';
+import { NetworkAttachmentReviewFields } from '../NetworkAttachmentReviewFields';
 
 const formatNodeSetsForReview = (
   hostTypes: HostType[],
@@ -76,8 +77,7 @@ export const ClusterReviewStep = ({ catalogItem }: Props) => {
     error: projectsError,
   } = useProjects({ filter: fullProjectPathToQueryFilter(values.metadata.project) });
 
-  const isCustomNetwork =
-    !values.spec.useDefaultNetwork && Boolean(values.spec.networkAttachment.subnet.id.trim());
+  const isCustomNetwork = !values.spec.useDefaultNetwork;
 
   const versionDisplay = versionDisplayName(
     findVersionByName(versions, values.spec.versionName),
@@ -174,36 +174,11 @@ export const ClusterReviewStep = ({ catalogItem }: Props) => {
           </DescriptionListGroup>
 
           {isCustomNetwork && (
-            <>
-              <DescriptionListGroup>
-                <DescriptionListTerm>{t('Virtual network')}</DescriptionListTerm>
-                <DescriptionListDescription>
-                  {formatReviewScalar(
-                    values.spec.networkAttachment.virtualNetwork.name ||
-                      values.spec.networkAttachment.virtualNetwork.id,
-                  )}
-                </DescriptionListDescription>
-              </DescriptionListGroup>
-              <DescriptionListGroup>
-                <DescriptionListTerm>{t('Subnet')}</DescriptionListTerm>
-                <DescriptionListDescription>
-                  {formatReviewScalar(
-                    values.spec.networkAttachment.subnet.name ||
-                      values.spec.networkAttachment.subnet.id,
-                  )}
-                </DescriptionListDescription>
-              </DescriptionListGroup>
-              <DescriptionListGroup>
-                <DescriptionListTerm>{t('Security groups')}</DescriptionListTerm>
-                <DescriptionListDescription>
-                  {values.spec.networkAttachment.securityGroups.length > 0
-                    ? values.spec.networkAttachment.securityGroups
-                        .map((sg) => sg.name || sg.id)
-                        .join(', ')
-                    : '—'}
-                </DescriptionListDescription>
-              </DescriptionListGroup>
-            </>
+            <NetworkAttachmentReviewFields
+              virtualNetwork={values.spec.networkAttachment.virtualNetwork}
+              subnet={values.spec.networkAttachment.subnet}
+              securityGroups={values.spec.networkAttachment.securityGroups}
+            />
           )}
 
           <DescriptionListGroup>

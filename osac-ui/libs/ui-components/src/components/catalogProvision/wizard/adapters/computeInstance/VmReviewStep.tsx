@@ -26,6 +26,7 @@ import { ComputeInstanceWizardValues } from './fields';
 import { useTranslation } from '../../../../../hooks/useTranslation';
 import { formatReviewScalar } from '../../catalogOverlay';
 import { getVmStorageRows } from '../../storageRows';
+import { NetworkAttachmentReviewFields } from '../NetworkAttachmentReviewFields';
 
 interface Props {
   catalogItem: CatalogItem | null;
@@ -125,26 +126,11 @@ export const VmReviewStep = ({ catalogItem }: Props) => {
             </DescriptionListDescription>
           </DescriptionListGroup>
 
-          <DescriptionListGroup>
-            <DescriptionListTerm>{t('Virtual network')}</DescriptionListTerm>
-            <DescriptionListDescription>
-              {networking.virtualNetwork.name || networking.virtualNetwork.id || '—'}
-            </DescriptionListDescription>
-          </DescriptionListGroup>
-          <DescriptionListGroup>
-            <DescriptionListTerm>{t('Subnet')}</DescriptionListTerm>
-            <DescriptionListDescription>
-              {networking.subnet.name || networking.subnet.id || '—'}
-            </DescriptionListDescription>
-          </DescriptionListGroup>
-          <DescriptionListGroup>
-            <DescriptionListTerm>{t('Security groups')}</DescriptionListTerm>
-            <DescriptionListDescription>
-              {networking.securityGroups.length > 0
-                ? networking.securityGroups.map((sg) => sg.name || sg.id).join(', ')
-                : '—'}
-            </DescriptionListDescription>
-          </DescriptionListGroup>
+          <NetworkAttachmentReviewFields
+            virtualNetwork={networking.virtualNetwork}
+            subnet={networking.subnet}
+            securityGroups={networking.securityGroups}
+          />
         </DescriptionList>
       </StackItem>
       <StackItem>

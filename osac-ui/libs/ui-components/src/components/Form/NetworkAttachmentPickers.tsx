@@ -89,7 +89,6 @@ export const NetworkAttachmentPickers = ({
         fieldId={`${fieldIdPrefix}-virtual-network`}
         service={VirtualNetworks}
         request={{ filter: VIRTUAL_NETWORK_READY_LIST_FILTER }}
-        isRequired
         autoSelectSingleOption
         placeholder={t('Select virtual network')}
         loadErrorTitle={t('Could not load virtual networks')}
@@ -106,7 +105,6 @@ export const NetworkAttachmentPickers = ({
         request={
           virtualNetworkId ? { filter: virtualNetworkFilterForSubnetList(virtualNetworkId) } : {}
         }
-        isRequired
         isDisabled={!virtualNetworkId}
         autoSelectSingleOption
         placeholder={t('Select subnet')}

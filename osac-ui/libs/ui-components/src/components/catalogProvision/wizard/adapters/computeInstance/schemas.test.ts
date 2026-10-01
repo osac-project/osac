@@ -188,7 +188,7 @@ describe('buildComputeInstanceStepSchema', () => {
     expect(errors).toEqual({});
   });
 
-  it('requires networking pickers on networking step', async () => {
+  it('does not require networking pickers on networking step', async () => {
     const errors = await validateStep(
       'networking',
       {
@@ -201,14 +201,7 @@ describe('buildComputeInstanceStepSchema', () => {
       },
       vmCatalogItem,
     );
-    expect(errors).toEqual({
-      spec: {
-        networking: {
-          virtualNetwork: 'catalogProvision.validation.virtualNetworkRequired',
-          subnet: 'catalogProvision.validation.subnetRequired',
-        },
-      },
-    });
+    expect(errors).toEqual({});
   });
 
   it('requires instance type on configuration step', async () => {

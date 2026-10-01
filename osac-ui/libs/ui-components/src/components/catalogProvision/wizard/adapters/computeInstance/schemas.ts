@@ -76,18 +76,8 @@ const buildComputeInstanceFieldDefinitions = (catalogItem: unknown, t: TFunction
       }),
     ),
     specNetworking: yup.object({
-      virtualNetwork: yup
-        .object({ id: yup.string(), name: yup.string() })
-        .test(
-          'virtual-network-selected',
-          t('catalogProvision.validation.virtualNetworkRequired'),
-          (value) => Boolean(value?.id),
-        ),
-      subnet: yup
-        .object({ id: yup.string(), name: yup.string() })
-        .test('subnet-selected', t('catalogProvision.validation.subnetRequired'), (value) =>
-          Boolean(value?.id),
-        ),
+      virtualNetwork: yup.object({ id: yup.string(), name: yup.string() }),
+      subnet: yup.object({ id: yup.string(), name: yup.string() }),
       securityGroups: yup.array().of(yup.object({ id: yup.string(), name: yup.string() })),
     }),
   };

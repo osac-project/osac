@@ -70,7 +70,7 @@ export const BareMetalReviewStep = ({ catalogItem }: Props) => {
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Project')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {values.metadata.project || '—'}
+              {values.metadata.project || t('Default')}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>

@@ -129,17 +129,11 @@ export const buildBareMetalInstanceStepSchema = (
   }
 };
 
-const buildAttachmentRowSchema = (t: TFunction) =>
+const buildAttachmentRowSchema = (_t: TFunction) =>
   yup.object({
     id: yup.string().required(),
-    virtualNetwork: yup
-      .object({ id: yup.string(), name: yup.string() })
-      .test('virtual-network-selected', t('Virtual network is required'), (value) =>
-        Boolean(value?.id),
-      ),
-    subnet: yup
-      .object({ id: yup.string(), name: yup.string() })
-      .test('subnet-selected', t('Subnet is required'), (value) => Boolean(value?.id)),
+    virtualNetwork: yup.object({ id: yup.string(), name: yup.string() }),
+    subnet: yup.object({ id: yup.string(), name: yup.string() }),
     securityGroups: yup.array().of(yup.object({ id: yup.string(), name: yup.string() })),
   });
 

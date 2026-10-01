@@ -42,6 +42,9 @@ const makeVolume = (state: VolumeState, overrides: Partial<{ message: string }> 
 
 const renderDetails = (volume: Volume) => renderWithProviders(<VolumeDetails volume={volume} />);
 
+const getEditButton = () => screen.getByRole('button', { name: 'Edit' });
+const getDeleteButton = () => screen.getByRole('button', { name: 'Delete' });
+
 describe('VolumeDetails', () => {
   describe('header and breadcrumb', () => {
     it('renders the header with volume name and breadcrumb', () => {
@@ -119,41 +122,47 @@ describe('VolumeDetails', () => {
     });
   });
 
-  describe('delete action button', () => {
-    it('shows a delete button when volume state is AVAILABLE', () => {
+  describe('action buttons', () => {
+    it('enables both Edit and Delete when state is AVAILABLE', () => {
       renderDetails(makeVolume(VolumeState.AVAILABLE));
 
-      expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument();
+      expect(getEditButton()).not.toBeDisabled();
+      expect(getDeleteButton()).not.toBeDisabled();
     });
 
-    it('shows a delete button when volume state is FAILED', () => {
+    it('enables both Edit and Delete when state is FAILED', () => {
       renderDetails(makeVolume(VolumeState.FAILED));
 
-      expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument();
+      expect(getEditButton()).not.toBeDisabled();
+      expect(getDeleteButton()).not.toBeDisabled();
     });
 
-    it('hides the delete button when volume state is CREATING', () => {
+    it('enables Edit but disables Delete when state is CREATING', () => {
       renderDetails(makeVolume(VolumeState.CREATING));
 
-      expect(screen.queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument();
+      expect(getEditButton()).not.toBeDisabled();
+      expect(getDeleteButton()).toBeDisabled();
     });
 
-    it('hides the delete button when volume state is DELETING', () => {
+    it('disables both Edit and Delete when state is DELETING', () => {
       renderDetails(makeVolume(VolumeState.DELETING));
 
-      expect(screen.queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument();
+      expect(getEditButton()).toBeDisabled();
+      expect(getDeleteButton()).toBeDisabled();
     });
 
-    it('hides the delete button when volume state is DELETED', () => {
+    it('disables both Edit and Delete when state is DELETED', () => {
       renderDetails(makeVolume(VolumeState.DELETED));
 
-      expect(screen.queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument();
+      expect(getEditButton()).toBeDisabled();
+      expect(getDeleteButton()).toBeDisabled();
     });
 
-    it('hides the delete button when volume state is UNSPECIFIED', () => {
+    it('disables both Edit and Delete when state is UNSPECIFIED', () => {
       renderDetails(makeVolume(VolumeState.UNSPECIFIED));
 
-      expect(screen.queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument();
+      expect(getEditButton()).toBeDisabled();
+      expect(getDeleteButton()).toBeDisabled();
     });
   });
 });

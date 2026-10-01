@@ -340,6 +340,10 @@ ui:
           configMap: ca-bundle
   auth:
     oidcClientId: osac-ui
+    # OIDC issuer URL for gRPC reflection authentication. Must match service.auth.issuerUrl.
+    # tpl is NOT applied at render time for subcharts -- set this explicitly in each
+    # environment's values file or via --set in the install-osac Makefile target.
+    oidcIssuerURL: ""
     certs:
       caBundle:
         configMap: ca-bundle

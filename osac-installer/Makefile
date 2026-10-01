@@ -311,7 +311,7 @@ endif
 		-f $(INSTANCE_VALUES) $(INSTANCE_VALUES_EXTRA) \
 		--namespace $(NS) --create-namespace \
 		--set-string global.osacDeploymentId=$(NS)/osac \
-		$(if $(DOMAIN),--set service.externalHostname=fulfillment-api-$(NS).$(DOMAIN) --set service.internalHostname=fulfillment-internal-api-$(NS).$(DOMAIN) --set global.clusterDomain=$(DOMAIN)) \
+		$(if $(DOMAIN),--set service.externalHostname=fulfillment-api-$(NS).$(DOMAIN) --set service.internalHostname=fulfillment-internal-api-$(NS).$(DOMAIN) --set global.clusterDomain=$(DOMAIN) --set ui.auth.oidcIssuerURL=https://keycloak-keycloak.$(DOMAIN)/realms/osac) \
 		$(EXTRA_HELM_ARGS) \
 		--wait --timeout 40m
 
@@ -441,14 +441,16 @@ csi-render-test: helm-deps ## Verify CSI and storage-provider chart rendering
 			--set operator.networkManagers.enabled=true \
 			--set service.externalHostname=fulfillment-api.example.com \
 			--set service.internalHostname=fulfillment-internal-api.example.com \
-			--set global.clusterDomain=example.com > "$$caas_render"; \
+			--set global.clusterDomain=example.com \
+			--set ui.auth.oidcIssuerURL=https://keycloak-keycloak.example.com/realms/osac > "$$caas_render"; \
 		! rg -q '^  OSAC_FULFILLMENT_ENDPOINT:' "$$caas_render"; \
 		helm template osac $(OSAC_CHART) \
 			--values values/vmaas-ci/instance.yaml \
 			--set operator.networkManagers.enabled=true \
 			--set service.externalHostname=fulfillment-api.example.com \
 			--set service.internalHostname=fulfillment-internal-api.example.com \
-			--set global.clusterDomain=example.com > "$$vmaas_render"; \
+			--set global.clusterDomain=example.com \
+			--set ui.auth.oidcIssuerURL=https://keycloak-keycloak.example.com/realms/osac > "$$vmaas_render"; \
 		rg -Uq 'name: OSAC_VENDOR_CONTROLLERS\n[[:blank:]]+value: "lvms=none"' "$$vmaas_render"; \
 		helm template osac $(OSAC_CHART) \
 			--values $(OSAC_CHART)/ci/default-values.yaml > "$$default_operator_render"; \

@@ -122,6 +122,7 @@ ui:
         caBundle:
           configMap: ca-bundle
   auth:
+    oidcIssuerURL: https://keycloak.keycloak.svc.cluster.local/realms/osac
     certs:
       caBundle:
         configMap: ca-bundle

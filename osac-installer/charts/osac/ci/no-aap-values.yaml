@@ -9,6 +9,7 @@ ui:
         caBundle:
           configMap: ca-bundle
   auth:
+    oidcIssuerURL: https://keycloak.example.com/realms/osac
     certs:
       caBundle:
         configMap: ca-bundle

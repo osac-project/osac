@@ -1556,6 +1556,21 @@
               "description": "OIDC client ID for the UI",
               "default": "osac-ui"
             },
+            "oidcIssuerURL": {
+              "type": "string",
+              "description": "OIDC issuer URL for gRPC reflection authentication. Must match service.auth.issuerUrl."
+            },
+            "serviceAccount": {
+              "type": "object",
+              "description": "Service account credentials for backend OIDC authentication",
+              "properties": {
+                "credentialsSecret": {
+                  "type": "string",
+                  "description": "Name of the Secret containing the osac-ui-backend Keycloak client credentials"
+                }
+              },
+              "additionalProperties": false
+            },
             "certs": {
               "type": "object",
               "properties": {

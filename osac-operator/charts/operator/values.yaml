@@ -127,8 +127,9 @@ networkManagers:
     agentless_net:
       enabled: false
       description: >-
-        AgentlessNet unified networking stub. Available resource operations
-        return NotImplemented.
+        AgentlessNet VirtualNetwork baseline. Implements UID-keyed namespaces,
+        /31 transit links, and the namespace forwarding policy. Other
+        networking resource operations return NotImplemented.
       capabilities:
       - ipv4
   k8sManagers:

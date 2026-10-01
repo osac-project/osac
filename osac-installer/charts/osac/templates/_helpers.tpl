@@ -199,7 +199,7 @@ facade vs low-level surface mismatches).
 {{- $netris := $networking.netris | default dict -}}
 {{- $netrisEnabled := eq $networking.fabricManager "netris" -}}
 {{- $agentlessEnabled := or (eq $networking.k8sManager "k8s_only") (eq $networking.fabricManager "agentless_net") -}}
-{{- $agentlessStubEnabled := eq $networking.fabricManager "agentless_net" -}}
+{{- $agentlessFabricEnabled := eq $networking.fabricManager "agentless_net" -}}
 {{- $netExpertAap := $expert.aap | default false -}}
 {{- $netExpertNetworkClass := $expert.networkClass | default false -}}
 {{- $netExpertNetworkManagers := $expert.networkManagers | default false -}}
@@ -289,9 +289,9 @@ facade vs low-level surface mismatches).
 {{- if ne $netSteps "agentless_net.steps" }}
   {{- fail (printf "NETWORK_CLASS=agentless_net requires NETWORK_STEPS_COLLECTION=agentless_net.steps (got %q)" $netSteps) }}
 {{- end }}
-{{- if and $agentlessStubEnabled (ne $fabricManager "agentless_net") }}
-  {{- fail "AgentlessNet stub requires NetworkClass fabricManager=agentless_net" }}
-{{- else if and (not $agentlessStubEnabled) (ne $fabricManager "") }}
+{{- if and $agentlessFabricEnabled (ne $fabricManager "agentless_net") }}
+  {{- fail "AgentlessNet provider operations require NetworkClass fabricManager=agentless_net" }}
+{{- else if and (not $agentlessFabricEnabled) (ne $fabricManager "") }}
   {{- fail "agentless_net.steps with the k8s_only manager requires networkClass.fabricManager to be empty" }}
 {{- end }}
 {{- end }}
@@ -301,7 +301,7 @@ facade vs low-level surface mismatches).
 {{- if and (not $netExpertNetworkManagers) $netrisEnabled (eq $fabricManager "netris") }}
 {{- $mgrEnabled = true -}}
 {{- end }}
-{{- if and (not $netExpertNetworkManagers) $agentlessStubEnabled (eq $fabricManager "agentless_net") }}
+{{- if and (not $netExpertNetworkManagers) $agentlessFabricEnabled (eq $fabricManager "agentless_net") }}
 {{- $mgrEnabled = true -}}
 {{- end }}
 {{- if not $mgrEnabled }}

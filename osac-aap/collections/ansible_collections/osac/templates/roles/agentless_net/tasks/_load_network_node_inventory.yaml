@@ -1,27 +1,145 @@
 ---
+- name: Check for AgentlessNet network-node inventory
+  ansible.builtin.stat:
+    path: "{{ agentless_net_inventory_file }}"
+  register: _agentless_net_inventory_file_stat
+
+- name: Require AgentlessNet network-node inventory for provider operations
+  ansible.builtin.assert:
+    that:
+      - _agentless_net_inventory_file_stat.stat.exists | default(false)
+      - _agentless_net_inventory_file_stat.stat.isreg | default(false)
+    fail_msg: >-
+      AgentlessNet provider operations require the inventory file configured by
+      agentless_net_inventory_file to be mounted in the AAP worker.
+
 - name: Load AgentlessNet network-node inventory
   ansible.builtin.include_vars:
     file: "{{ agentless_net_inventory_file }}"
     name: _agentless_net_inventory
   no_log: true
 
-- name: Validate AgentlessNet network-node inventory
+- name: Normalize AgentlessNet inventory sections
+  ansible.builtin.set_fact:
+    _agentless_net_inventory_all: >-
+      {{ _agentless_net_inventory.get('all', {}) if _agentless_net_inventory is mapping else {} }}
+    _agentless_net_inventory_vars: >-
+      {{ (_agentless_net_inventory.get('all', {}).get('vars', {}))
+         if _agentless_net_inventory is mapping
+         and _agentless_net_inventory.get('all', {}) is mapping else {} }}
+    _agentless_net_inventory_children: >-
+      {{ (_agentless_net_inventory.get('all', {}).get('children', {}))
+         if _agentless_net_inventory is mapping
+         and _agentless_net_inventory.get('all', {}) is mapping else {} }}
+    _agentless_net_inventory_net_nodes: >-
+      {{ _agentless_net_inventory_children.get('net_nodes', {})
+         if _agentless_net_inventory_children is mapping else {} }}
+    _agentless_net_inventory_net_node_hosts: >-
+      {{ _agentless_net_inventory_net_nodes.get('hosts', {})
+         if _agentless_net_inventory_net_nodes is mapping else {} }}
+    _agentless_net_inventory_net_node_vars: >-
+      {{ _agentless_net_inventory_net_nodes.get('vars', {})
+         if _agentless_net_inventory_net_nodes is mapping else {} }}
+  no_log: true
+
+- name: Require one authoritative AgentlessNet network node
   ansible.builtin.assert:
     that:
-      - _agentless_net_inventory.all.children.net_nodes.hosts | default({}) | length > 0
-    fail_msg: AgentlessNet inventory must contain at least one network node.
+      - _agentless_net_inventory is mapping
+      - _agentless_net_inventory_all is mapping
+      - _agentless_net_inventory_vars is mapping
+      - _agentless_net_inventory_children is mapping
+      - _agentless_net_inventory_net_nodes is mapping
+      - _agentless_net_inventory_net_node_hosts is mapping
+      - _agentless_net_inventory_net_node_hosts | length == 1
+      - _agentless_net_inventory_net_node_vars is mapping
+      - >-
+        (_agentless_net_inventory | to_json |
+        regex_search('"(ansible_password|ansible_ssh_pass|ansible_become_password|ansible_sudo_pass)"\\s*:')) is none
+    fail_msg: >-
+      AgentlessNet VirtualNetwork operations require exactly one host under
+      all.children.net_nodes.hosts in the provider inventory.
+  no_log: true
 
-- name: Register AgentlessNet network nodes
+- name: Select the authoritative AgentlessNet network node
+  ansible.builtin.set_fact:
+    _agentless_net_inventory_host: >-
+      {{ _agentless_net_inventory_net_node_hosts | dict2items | first }}
+  no_log: true
+
+- name: Read the mounted AgentlessNet SSH private key
+  ansible.builtin.set_fact:
+    _agentless_net_ssh_private_key: "{{ lookup('ansible.builtin.env', 'AGENTLESS_NET_SSH_PRIVATE_KEY') }}"
+  no_log: true
+
+- name: Create a private temporary file for the mounted AgentlessNet SSH key
+  ansible.builtin.tempfile:
+    state: file
+    prefix: osac-agentless-net-
+  register: _agentless_net_ssh_private_key_file
+  when: _agentless_net_ssh_private_key | length > 0
+  delegate_to: localhost
+  no_log: true
+
+- name: Write the mounted AgentlessNet SSH key with restrictive permissions
+  ansible.builtin.copy:
+    content: "{{ _agentless_net_ssh_private_key }}"
+    dest: "{{ _agentless_net_ssh_private_key_file.path }}"
+    mode: "0600"
+  when: _agentless_net_ssh_private_key | length > 0
+  delegate_to: localhost
+  no_log: true
+
+- name: Validate AgentlessNet network-node connection fields
+  ansible.builtin.assert:
+    that:
+      - _agentless_net_inventory_host.value is mapping
+      - _agentless_net_inventory_host.value.get('ansible_host', '') is string
+      - _agentless_net_inventory_host.value.get('ansible_host', '') | trim | length > 0
+      - _agentless_net_inventory_host.value.get('ansible_user', '') is string
+      - _agentless_net_inventory_host.value.get('ansible_user', '') | trim | length > 0
+      - >-
+        (_agentless_net_inventory_host.value.get('ansible_port', 22) | string
+        | regex_search('^[0-9]{1,5}$')) is not none
+      - _agentless_net_inventory_host.value.get('ansible_port', 22) | int > 0
+      - _agentless_net_inventory_host.value.get('ansible_port', 22) | int <= 65535
+      - "'ansible_password' not in _agentless_net_inventory_host.value"
+      - "'ansible_ssh_pass' not in _agentless_net_inventory_host.value"
+      - "'ansible_become_password' not in _agentless_net_inventory_host.value"
+      - "'ansible_sudo_pass' not in _agentless_net_inventory_host.value"
+      - "'ansible_password' not in _agentless_net_inventory_vars"
+      - "'ansible_ssh_pass' not in _agentless_net_inventory_vars"
+      - "'ansible_become_password' not in _agentless_net_inventory_vars"
+      - "'ansible_sudo_pass' not in _agentless_net_inventory_vars"
+      - "'ansible_password' not in _agentless_net_inventory_net_node_vars"
+      - "'ansible_ssh_pass' not in _agentless_net_inventory_net_node_vars"
+      - "'ansible_become_password' not in _agentless_net_inventory_net_node_vars"
+      - "'ansible_sudo_pass' not in _agentless_net_inventory_net_node_vars"
+      - >-
+        _agentless_net_inventory_host.value.get('ansible_ssh_private_key_file', '') is string
+      - >-
+        _agentless_net_inventory_host.value.get('ansible_ssh_common_args',
+        _agentless_net_inventory_vars.get('ansible_ssh_common_args', '')) is string
+    fail_msg: >-
+      AgentlessNet network-node inventory requires ansible_host, ansible_user,
+      a valid optional ansible_port, and text SSH arguments; it must not contain
+      passwords. Configure
+      authentication through an AAP machine credential or a Secret. A private
+      key file path must refer to a key mounted in the worker. No credential
+      may be stored in this ConfigMap.
+  no_log: true
+
+- name: Register the authoritative AgentlessNet network node
   ansible.builtin.add_host:
-    name: "{{ item.key }}"
-    groups: net_nodes
-    ansible_host: "{{ item.value.ansible_host }}"
-    ansible_user: "{{ item.value.ansible_user }}"
-    ansible_password: "{{ item.value.ansible_password | default(omit) }}"
+    name: "{{ _agentless_net_inventory_host.key }}"
+    groups: agentless_net_vn_network_node
+    ansible_host: "{{ _agentless_net_inventory_host.value.ansible_host }}"
+    ansible_user: "{{ _agentless_net_inventory_host.value.ansible_user }}"
+    ansible_port: "{{ _agentless_net_inventory_host.value.get('ansible_port', 22) }}"
+    ansible_ssh_private_key_file: >-
+      {{ _agentless_net_inventory_host.value.get('ansible_ssh_private_key_file',
+      _agentless_net_ssh_private_key_file.path | default(omit)) }}
     ansible_ssh_common_args: >-
-      {{ item.value.ansible_ssh_common_args
-         | default(_agentless_net_inventory.all.vars.ansible_ssh_common_args | default(omit)) }}
-  loop: "{{ _agentless_net_inventory.all.children.net_nodes.hosts | dict2items }}"
-  loop_control:
-    label: "{{ item.key }}"
+      {{ _agentless_net_inventory_host.value.get('ansible_ssh_common_args',
+      _agentless_net_inventory_vars.get('ansible_ssh_common_args', omit)) }}
   no_log: true

@@ -49,34 +49,34 @@ by CI and local dev, never for a real deployment:
 | `values/dev/` | Local dev (Kind) |
 | `values/cudn-evpn-netris-test/` | Explicit CUDN EVPN + Netris VMaaS/BMaaS E2E profile (OpenShift only) |
 
-## AgentlessNet resource-operation stub
+## AgentlessNet VirtualNetwork namespace profile
 
-To deploy with the unified Networking API selecting the AgentlessNet stub, apply
-the overlay after the profile values:
+To deploy the AgentlessNet VirtualNetwork namespace and forwarding baseline,
+apply the overlay after the profile values:
 
 ```bash
 make install-osac \
   PLATFORM=openshift \
   PROFILE=bmaas-ci \
   NS=<disposable-osac-namespace> \
-  EXTRA_HELM_ARGS="-f values/agentless-net-stub.yaml"
+  EXTRA_HELM_ARGS="-f values/agentless-net-vn-smoke.yaml"
 ```
 
 The overlay selects `agentless_net` through `global.networking`, which registers
 the fabric manager and creates a default NetworkClass that selects it. It also
 allows the facade to derive the AAP backend for profiles that preserve their
-existing AAP settings by default. NetworkClass registration can succeed
-while networking resources fail. The twelve resource-operation entrypoints for
-VirtualNetwork, Subnet, SecurityGroup, ExternalIPPool, ExternalIP, and
-NATGateway deliberately return `NotImplemented` before provider-side work.
-Existing operator retries, provisioning job history, finalizers, and failed
-resource status continue to apply.
+existing AAP settings by default. A VirtualNetwork job requires one
+authoritative network node in the `agentless-net-inventory` ConfigMap and SSH
+access through an AAP credential or `AGENTLESS_NET_SSH_PRIVATE_KEY` from the
+`network-fulfillment-ig` Secret. The role creates the namespace, `/31` transit
+link, and forwarding baseline.
 
-Physical attachment, DHCP lease discovery, and ExternalIPAttachment are outside
-this stub and await their planned API/CRD changes. Existing inline CaaS
-workflows using `agentless_net.steps` are unchanged. AAP must run the project
-content and execution environment containing the AgentlessNet role; a stale
-project revision will not contain the fail-fast entrypoints.
+Subnet, SecurityGroup, ExternalIPPool, ExternalIP, ExternalIPAttachment, and
+NATGateway operations remain unsupported. The namespace profile does not
+provide physical attachment, DHCP lease discovery, BGP, NAT, or external
+connectivity. Existing inline CaaS workflows using `agentless_net.steps` are
+unchanged. AAP must run the project content and execution environment
+containing the AgentlessNet role.
 
 ## The `make` wrapper fails with `[[: not found`
 

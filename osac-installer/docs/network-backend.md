@@ -16,7 +16,7 @@ NetworkClass manager names and select the AAP backend:
 | `fabricManager` | `k8sManager` | Derived AAP backend | Status |
 |-----------------|--------------|---------------------|--------|
 | `netris` | `""` | `netris` / `netris.steps` | Supported |
-| `agentless_net` | `""` | `agentless_net` / `agentless_net.steps` | Supported (NotImplemented resource-operation stub) |
+| `agentless_net` | `""` | `agentless_net` / `agentless_net.steps` | VirtualNetwork namespace, /31 uplink, and forwarding baseline |
 | `""` | `k8s_only` | `agentless_net` / `agentless_net.steps` | Supported (default) |
 | `""` | `""` | Must set managers via `global.networking.networkClass` or expert overrides | Expert only |
 | `cudn_net` | * | — | Reserved; Helm render fails |
@@ -40,10 +40,13 @@ and points the NetworkClass at `k8sManager: k8s_only`.
 
 When `fabricManager` is `agentless_net`, Helm enables the AgentlessNet fabric
 manager, selects the AgentlessNet AAP collection, and points the NetworkClass
-at `fabricManager: agentless_net`. Its resource-operation tasks intentionally
-return `NotImplemented`; use this profile to verify dispatch and failure-status
-handling without provider-side changes. This is separate from the default
-`k8s_only` profile, which provisions Kubernetes-native networking.
+at `fabricManager: agentless_net`. VirtualNetwork create/delete provisions a
+UID-keyed Linux namespace, `/31` transit uplink, and namespace forwarding
+baseline on the single configured network node. Subnet, SecurityGroup,
+ExternalIPPool, ExternalIP, ExternalIPAttachment, and NATGateway operations
+remain fail-fast until their provider work is implemented. This is separate
+from the default `k8s_only` profile, which provisions Kubernetes-native
+networking.
 
 The facade does **not** enable the AAP instance groups themselves. Set both
 `aap.instanceGroups.clusterFulfillment.enabled` and
@@ -81,7 +84,7 @@ When Netris is selected, the schema requires `controllerUrl` (HTTPS), credential
 password or `externalSecret: true` when the `netris-credentials` Secret is
 managed outside Helm.
 
-## Agentless example
+## AgentlessNet VirtualNetwork baseline
 
 ```yaml
 global:
@@ -91,9 +94,17 @@ global:
 ```
 
 Use `fabricManager: agentless_net` and `k8sManager: ""` to select the
-fail-fast unified-resource stub. The `agentless-net-stub` installer overlay
+AgentlessNet fabric manager. The `agentless-net-vn-smoke` installer overlay
 sets this profile and clears AAP expert overrides so the selected backend
-reaches the fulfillment instance group.
+reaches the fulfillment instance group. An AgentlessNet VirtualNetwork job
+requires the optional `agentless-net-inventory` ConfigMap to describe exactly
+one authoritative network node, plus SSH access through an AAP machine
+credential or the `AGENTLESS_NET_SSH_PRIVATE_KEY` value supplied by the
+`network-fulfillment-ig` Secret. Credentials are not stored in the inventory.
+
+The VirtualNetwork job establishes only the namespace, transit link, and
+forwarding baseline. Its Ready state does not claim Subnet, VLAN, DHCP, BGP,
+NAT, workload attachment, or external connectivity.
 
 ## Expert overrides
 

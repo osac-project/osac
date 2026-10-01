@@ -43,15 +43,57 @@ pluggable backends:
 | `agentless_net` | UID-keyed VirtualNetwork namespace, transit uplink, and forwarding baseline | AgentlessNet |
 | `openstack` | OpenStack Neutron | Neutron |
 
-The `agentless_net` role provisions and removes VirtualNetwork namespaces and
-their transit uplinks. Subnet, SecurityGroup, ExternalIPPool, ExternalIP, and
-NATGateway operations still fail fast. The unified Networking API stores its
-schema-v2 VirtualNetwork state at `AGENTLESS_NET_STATE_FILE` on the network
-node; the older `AGENTLESS_NET_IPAM_STATE_FILE` remains separate for the
-existing CaaS step workflows. The provider inventory supplies
-`transit_cidr_pool` and `external_interface` values, or they can be configured
-through `AGENTLESS_NET_TRANSIT_CIDR_POOL` and
-`AGENTLESS_NET_EXTERNAL_INTERFACE`.
+The current `agentless_net` unified-resource path provisions and removes the
+VirtualNetwork namespace, transit uplink, and forwarding baseline. Subnet,
+SecurityGroup, ExternalIPPool, ExternalIP, ExternalIPAttachment, and NATGateway
+operations still fail fast. A successful VirtualNetwork means this namespace
+baseline was verified; it does not mean that tenant traffic has external
+reachability.
+
+VirtualNetwork provider state uses schema v1 at
+`AGENTLESS_NET_STATE_FILE` (default `/etc/osac/agentless_network_state.json`).
+This is the first deployed format, so unsupported versions fail closed rather
+than migrating. The state file stores the immutable VirtualNetwork CR CIDR and
+one UID-keyed `/31` transit link carved from that CIDR. Both addresses are
+endpoints: the host uses the base address and acts as the namespace default
+gateway; the namespace uses the next address. The `/31` link reserves no
+network or broadcast address and is not an OSAC Subnet. A future Subnet
+allocator must exclude this transit block.
+
+The state-file flock is held only while reading, allocating, or committing the
+atomic JSON snapshot and backup. A second lock serializes operations for the
+same resource UID while provider commands run; a short firewall lock protects
+the shared host `FORWARD` rules. Failed creates retain their allocation for
+retry. Deletes retain the entry until the UID-owned namespace, uplink, and host
+isolation rules have been removed and verified. The module rejects a missing
+state file when a backup exists, malformed JSON, unsupported versions, and
+unsafe owner or file modes; do not delete the state file or backup to clear an
+error.
+
+Each selected AgentlessNet VirtualNetwork job requires the optional
+`agentless-net-inventory` ConfigMap mounted at
+`/var/config/agentless-net/inventory.yml`. It must describe exactly one
+authoritative host under `all.children.net_nodes.hosts`, with `ansible_host`
+and `ansible_user`, plus an optional numeric `ansible_port` (default `22`). Do
+not put password fields anywhere in the ConfigMap. Configure SSH
+with an AAP machine credential or the `AGENTLESS_NET_SSH_PRIVATE_KEY` value
+from the `network-fulfillment-ig` Secret. When the Secret key is used, the role
+writes it to a mode-0600 temporary file on the AAP worker and removes that file
+after the provider operation.
+The ConfigMap mount remains optional so unrelated AAP jobs can start; an
+AgentlessNet VirtualNetwork job fails before mutation when the file, host, or
+connection data is missing or invalid.
+
+The managed node must be reachable by SSH and provide Python 3, `iproute2`,
+`iptables` with conntrack support, and privilege escalation. The role enables
+IPv4 forwarding and a permit-all `FORWARD` policy inside the namespace. It
+does not change the host forwarding sysctl; interface-scoped host drops keep
+traffic isolated between VirtualNetworks. BGP, Subnet/VLAN/DHCP, NAT, and full
+external connectivity remain separate work.
+
+The older `AGENTLESS_NET_IPAM_STATE_FILE` and
+`AGENTLESS_NET_EXTERNAL_INTERFACE` settings remain separate for embedded CaaS
+step workflows; they do not configure VirtualNetwork transit links.
 
 Plus MetalLB-based ExternalIPPool / ExternalIP management (`metallb_l2`).
 
@@ -131,7 +173,7 @@ capabilities:
 
 Network roles declare their dispatcher identity for the operator. The installer
 owns NetworkClass creation; `agentless_net` is selected through the installer
-[overlay instructions](../osac-installer/docs/helm-deployment-guide.md#agentlessnet-resource-operation-stub)
+[overlay instructions](../osac-installer/docs/network-backend.md#agentlessnet-virtualnetwork-baseline)
 and is not published as a ComputeClass. The generic
 resource playbooks then include the selected role without changing the API.
 

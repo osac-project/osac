@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -20,48 +21,57 @@ MODULE_UTILS = (
 sys.path.insert(0, str(MODULE_UTILS))
 sys.path.insert(0, str(MODULE_UTILS.parents[4]))
 
-import agentless_net_state
+import agentless_net_network  # noqa: E402
+import agentless_net_state  # noqa: E402
 from agentless_net_state import StateCorrupt, StateError, StateStore  # noqa: E402
 
-
-def assert_store_lock_is_held(store):
-    lock_fd = os.open(store.lock_path, os.O_CREAT | os.O_RDWR, 0o600)
-    try:
-        with pytest.raises(BlockingIOError):
-            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    finally:
-        os.close(lock_fd)
+UID_ONE = "11111111-1111-4111-8111-111111111111"
+UID_TWO = "22222222-2222-4222-8222-222222222222"
+UID_THREE = "33333333-3333-4333-8333-333333333333"
 
 
 def store_for(tmp_path):
     return StateStore(tmp_path / "agentless_network_state.json")
 
 
-def test_virtual_network_retry_reuses_uid_mapping_and_transit(tmp_path):
+def assert_store_lock_is_free(store):
+    lock_fd = os.open(store.lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+    finally:
+        os.close(lock_fd)
+
+
+def write_state(path, state):
+    path.write_text(json.dumps(state))
+    path.chmod(0o600)
+
+
+def test_virtual_network_retry_reuses_uid_mapping_and_canonical_slash_31(tmp_path):
     store = store_for(tmp_path)
-    first = store.ensure_virtual_network("vn-uid", "10.0.0.0/16")
+    first = store.ensure_virtual_network(UID_ONE, "10.0.0.0/16")
+    retry = store.ensure_virtual_network(UID_ONE, "10.0.0.0/16")
 
-    retry = store.ensure_virtual_network("vn-uid", "10.0.0.0/16")
-
+    transit = ipaddress.ip_network(first["transit"]["cidr"])
     assert retry == first
-    transit_cidr = ipaddress.ip_network(first["transit"]["cidr"])
-    assert transit_cidr.subnet_of(ipaddress.ip_network(first["virtual_network_cidr"]))
-    assert transit_cidr.prefixlen == 30
+    assert transit.subnet_of(ipaddress.ip_network(first["virtual_network_cidr"]))
+    assert transit.prefixlen == 31
+    assert set(first["transit"]) == {"cidr", "namespace_ip", "host_ip", "gateway"}
+    assert first["transit"]["namespace_ip"] == f"{transit.network_address + 1}/31"
+    assert first["transit"]["host_ip"] == f"{transit.network_address}/31"
+    assert first["transit"]["gateway"] == str(transit.network_address)
     assert first["virtual_network_cidr"] == "10.0.0.0/16"
-    assert "external_interface" not in first["transit"]
-    assert first["external_reachability"] == {
-        "mode": "bgp",
-        "route_prefix_length": 32,
-    }
     assert first["default_forward_policy"] == "permit_all"
-    assert json.loads(store.path.read_text())["schema_version"] == 3
+    assert json.loads(store.path.read_text())["schema_version"] == 1
+    assert store.path.stat().st_mode & 0o777 == 0o600
     assert store.lock_path.exists()
 
 
 def test_overlapping_virtual_networks_get_independent_names_and_transit(tmp_path):
     store = store_for(tmp_path)
-    first = store.ensure_virtual_network("vn-one", "10.0.0.0/16")
-    second = store.ensure_virtual_network("vn-two", "10.0.0.0/16")
+    first = store.ensure_virtual_network(UID_ONE, "10.0.0.0/16")
+    second = store.ensure_virtual_network(UID_TWO, "10.0.0.0/16")
 
     assert first["namespace_name"] != second["namespace_name"]
     assert first["uplink"] != second["uplink"]
@@ -71,13 +81,33 @@ def test_overlapping_virtual_networks_get_independent_names_and_transit(tmp_path
     )
 
 
-def test_transit_allocation_rejects_existing_host_route_before_writing_state(
-    tmp_path, monkeypatch
-):
+@pytest.mark.parametrize(
+    ("uid", "cidr", "message"),
+    [
+        ("not-a-uuid", "10.0.0.0/16", "canonical UUID"),
+        ("AAAAAAAA-1111-4111-8111-111111111111", "10.0.0.0/16", "canonical UUID"),
+        (UID_ONE, "10.0.0.1/16", "invalid VirtualNetwork IPv4 CIDR"),
+        (UID_ONE, "10.0.0.0/016", "canonical"),
+        (UID_ONE, "10.0.0.0/16 ", "invalid VirtualNetwork IPv4 CIDR"),
+        (UID_ONE, "fd00::/64", "IPv4 CIDRs"),
+    ],
+)
+def test_invalid_uid_or_virtual_network_cidr_is_rejected(tmp_path, uid, cidr, message):
     store = store_for(tmp_path)
 
-    def existing_host_route(command, check=True):
-        assert command == ["ip", "-j", "-4", "route", "show", "table", "all"]
+    with pytest.raises(StateError, match=message):
+        store.ensure_virtual_network(uid, cidr)
+
+    assert not store.path.exists()
+
+
+def test_transit_route_conflict_keeps_saved_allocation_for_retry(tmp_path, monkeypatch):
+    store = store_for(tmp_path)
+    route_command = ["ip", "-j", "-4", "route", "show", "table", "all"]
+
+    def conflicting_route(command, check=True):
+        assert_store_lock_is_free(store)
+        assert command == route_command
         return subprocess.CompletedProcess(
             command,
             0,
@@ -85,47 +115,188 @@ def test_transit_allocation_rejects_existing_host_route_before_writing_state(
             stderr="",
         )
 
-    monkeypatch.setattr(agentless_net_state, "_run", existing_host_route)
-
+    monkeypatch.setattr(agentless_net_state, "_run", conflicting_route)
     with pytest.raises(StateError, match="overlaps existing host route"):
-        store.ensure_and_reconcile_virtual_network("vn-one", "10.0.0.0/16")
+        store.ensure_and_reconcile_virtual_network(UID_ONE, "10.0.0.0/16")
 
-    assert not store.path.exists()
-
-
-def test_transit_retry_allows_its_own_host_veth_route(tmp_path, monkeypatch):
-    store = store_for(tmp_path)
-    entry = store.ensure_virtual_network("vn-one", "10.0.0.0/16")
+    saved = store.get_virtual_network(UID_ONE)
+    assert saved is not None
+    assert saved["virtual_network_cidr"] == "10.0.0.0/16"
 
     def own_host_route(command, check=True):
-        assert command == ["ip", "-j", "-4", "route", "show", "table", "all"]
+        assert command == route_command
         return subprocess.CompletedProcess(
             command,
             0,
             stdout=json.dumps(
-                [
-                    {
-                        "dst": entry["transit"]["cidr"],
-                        "dev": entry["uplink"]["host_interface"],
-                    }
-                ]
+                [{"dst": saved["transit"]["cidr"], "dev": saved["uplink"]["host_interface"]}]
             ),
             stderr="",
         )
 
     monkeypatch.setattr(agentless_net_state, "_run", own_host_route)
-    monkeypatch.setattr(agentless_net_state, "reconcile_virtual_network", lambda _: False)
-
+    monkeypatch.setattr(
+        agentless_net_state,
+        "reconcile_virtual_network",
+        lambda entry, **kwargs: False,
+    )
     retry, state_changed, network_changed = store.ensure_and_reconcile_virtual_network(
-        "vn-one", "10.0.0.0/16"
+        UID_ONE, "10.0.0.0/16"
     )
 
-    assert retry == entry
+    assert retry == saved
     assert state_changed is False
     assert network_changed is False
 
 
-def test_host_forwarding_isolation_rules_are_interface_scoped(monkeypatch):
+def test_stalled_provider_work_does_not_block_another_uid_allocation(tmp_path, monkeypatch):
+    store = store_for(tmp_path)
+    provider_started = threading.Event()
+    finish_provider = threading.Event()
+    provider_errors = []
+
+    monkeypatch.setattr(
+        agentless_net_state,
+        "_run",
+        lambda command, check=True: subprocess.CompletedProcess(
+            command, 0, stdout="[]", stderr=""
+        ),
+    )
+
+    def reconcile(entry, **kwargs):
+        assert_store_lock_is_free(store)
+        provider_started.set()
+        assert finish_provider.wait(5)
+        return False
+
+    monkeypatch.setattr(agentless_net_state, "reconcile_virtual_network", reconcile)
+
+    def create_first():
+        try:
+            store.ensure_and_reconcile_virtual_network(UID_ONE, "10.0.0.0/16")
+        except Exception as error:  # surfaced in the main test thread
+            provider_errors.append(error)
+
+    first_thread = threading.Thread(target=create_first)
+    first_thread.start()
+    assert provider_started.wait(2)
+
+    second = store.ensure_virtual_network(UID_TWO, "10.0.0.0/16")
+    assert second["uid"] == UID_TWO
+    assert store.get_virtual_network(UID_ONE) is not None
+
+    finish_provider.set()
+    first_thread.join(5)
+    assert not first_thread.is_alive()
+    assert provider_errors == []
+
+
+def test_same_uid_delete_waits_for_ensure_provider_work(tmp_path, monkeypatch):
+    store = store_for(tmp_path)
+    provider_started = threading.Event()
+    finish_provider = threading.Event()
+    delete_started = threading.Event()
+    delete_finished = threading.Event()
+    failures = []
+
+    monkeypatch.setattr(
+        agentless_net_state,
+        "_run",
+        lambda command, check=True: subprocess.CompletedProcess(
+            command, 0, stdout="[]", stderr=""
+        ),
+    )
+
+    def reconcile(entry, **kwargs):
+        provider_started.set()
+        assert finish_provider.wait(5)
+        return False
+
+    def delete_provider(entry, **kwargs):
+        assert_store_lock_is_free(store)
+        return True
+
+    monkeypatch.setattr(agentless_net_state, "reconcile_virtual_network", reconcile)
+    monkeypatch.setattr(agentless_net_state, "delete_virtual_network", delete_provider)
+
+    def create_first():
+        try:
+            store.ensure_and_reconcile_virtual_network(UID_ONE, "10.0.0.0/16")
+        except Exception as error:
+            failures.append(error)
+
+    def delete_first():
+        delete_started.set()
+        try:
+            store.delete_and_remove_virtual_network(UID_ONE)
+        except Exception as error:
+            failures.append(error)
+        finally:
+            delete_finished.set()
+
+    create_thread = threading.Thread(target=create_first)
+    create_thread.start()
+    assert provider_started.wait(2)
+    delete_thread = threading.Thread(target=delete_first)
+    delete_thread.start()
+    assert delete_started.wait(1)
+    assert not delete_finished.wait(0.1)
+
+    finish_provider.set()
+    create_thread.join(5)
+    delete_thread.join(5)
+    assert not create_thread.is_alive()
+    assert not delete_thread.is_alive()
+    assert failures == []
+    assert store.get_virtual_network(UID_ONE) is None
+
+
+def test_conntrack_insert_uses_chain_before_position(tmp_path, monkeypatch):
+    entry = store_for(tmp_path).ensure_virtual_network(UID_ONE, "10.0.0.0/16")
+    commands = []
+
+    monkeypatch.setattr(agentless_net_state, "ensure_veth_pair", lambda *args, **kwargs: False)
+    monkeypatch.setattr(agentless_net_state, "configure_uplink", lambda *args: False)
+    monkeypatch.setattr(agentless_net_state, "ensure_ipv4_forwarding", lambda *args: False)
+    monkeypatch.setattr(agentless_net_state, "_ensure_host_forwarding_isolation", lambda *args: False)
+    monkeypatch.setattr(agentless_net_state, "_verify_virtual_network", lambda *args: None)
+
+    def iptables(command, check=True):
+        commands.append(command.copy())
+        if command[-3:] == ["-S", "FORWARD"]:
+            return subprocess.CompletedProcess(command, 0, stdout="-P FORWARD DROP\n", stderr="")
+        if "-C" in command:
+            return subprocess.CompletedProcess(command, 1, stdout="", stderr="missing")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(agentless_net_state, "_run", iptables)
+    agentless_net_state.reconcile_virtual_network(entry)
+
+    insertions = [command for command in commands if "-I" in command]
+    assert insertions == [
+        [
+            "ip",
+            "netns",
+            "exec",
+            entry["namespace_name"],
+            "iptables",
+            "-w",
+            "-t",
+            "filter",
+            "-I",
+            "FORWARD",
+            "1",
+            "-m",
+            "conntrack",
+            "--ctstate",
+            "ESTABLISHED,RELATED",
+            "-j",
+            "ACCEPT",
+        ]
+    ], repr(insertions)
+
+
+def test_host_forwarding_drop_insertion_has_valid_iptables_argument_order(monkeypatch):
     commands = []
     rules = []
 
@@ -135,157 +306,34 @@ def test_host_forwarding_isolation_rules_are_interface_scoped(monkeypatch):
             output = "-P FORWARD ACCEPT\n" + "".join(f"{rule}\n" for rule in rules)
             return subprocess.CompletedProcess(command, 0, stdout=output, stderr="")
         direction = next((part for part in ("-i", "-o") if part in command), None)
+        expected = f"-A FORWARD {direction} vnet-host -j DROP"
         if "-C" in command:
             return subprocess.CompletedProcess(
-                command,
-                0
-                if f"-A FORWARD {direction} vnet-host -j DROP" in rules
-                else 1,
-                stdout="",
-                stderr="",
+                command, 0 if expected in rules else 1, stdout="", stderr=""
             )
         if "-I" in command:
-            rules.insert(0, f"-A FORWARD {direction} vnet-host -j DROP")
+            rules.insert(0, expected)
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
     monkeypatch.setattr(agentless_net_state, "_run", iptables)
+    assert agentless_net_state._ensure_host_forwarding_isolation("vnet-host") is True
 
-    changed = agentless_net_state._ensure_host_forwarding_isolation("vnet-host")
-
-    inserted = [command for command in commands if "-I" in command]
-    assert changed is True
-    assert "-A FORWARD -i vnet-host -j DROP" in rules
-    assert "-A FORWARD -o vnet-host -j DROP" in rules
-    assert all(
-        command[4:11] == ["-I", "FORWARD", "1", direction, "vnet-host", "-j", "DROP"]
-        for command, direction in zip(inserted, ("-i", "-o"), strict=True)
-    )
-
-
-def test_host_forwarding_is_blocked_before_host_ip_forwarding_is_enabled(
-    tmp_path, monkeypatch
-):
-    entry = store_for(tmp_path).ensure_virtual_network("vn-one", "10.0.0.0/16")
-    events = []
-    rules = []
-
-    monkeypatch.setattr(
-        agentless_net_state,
-        "ensure_veth_pair",
-        lambda *args: events.append("veth-pair") or False,
-    )
-    monkeypatch.setattr(
-        agentless_net_state,
-        "configure_uplink",
-        lambda *args: events.append("address-and-route") or False,
-    )
-
-    def enable_forwarding(*args, **kwargs):
-        events.append("forwarding")
-        assert kwargs == {}
-        return True
-
-    def iptables(command, check=True):
-        if "-S" in command:
-            output = "-P FORWARD ACCEPT\n" + "".join(f"{rule}\n" for rule in rules)
-            return subprocess.CompletedProcess(
-                command, 0, stdout=output, stderr=""
-            )
-        if "-C" in command:
-            direction = next((part for part in ("-i", "-o") if part in command), None)
-            if direction is None:
-                return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
-            return subprocess.CompletedProcess(
-                command,
-                0
-                if (
-                    f"-A FORWARD {direction} {entry['uplink']['host_interface']} -j DROP"
-                    in rules
-                )
-                else 1,
-                stdout="",
-                stderr="",
-            )
-        if "-I" in command:
-            direction = next(part for part in ("-i", "-o") if part in command)
-            rules.insert(
-                0,
-                f"-A FORWARD {direction} {entry['uplink']['host_interface']} -j DROP",
-            )
-            events.append("host-filter")
-        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
-
-    monkeypatch.setattr(agentless_net_state, "ensure_ipv4_forwarding", enable_forwarding)
-    monkeypatch.setattr(agentless_net_state, "_run", iptables)
-    monkeypatch.setattr(agentless_net_state, "_verify_virtual_network", lambda _: None)
-
-    agentless_net_state.reconcile_virtual_network(entry)
-
-    assert events.index("veth-pair") < events.index("host-filter")
-    assert events.index("host-filter") < events.index("address-and-route")
-    assert events.index("host-filter") < events.index("forwarding")
+    insertions = [command for command in commands if "-I" in command]
+    assert rules == [
+        "-A FORWARD -o vnet-host -j DROP",
+        "-A FORWARD -i vnet-host -j DROP",
+    ]
+    assert [command[4:] for command in insertions] == [
+        ["-I", "FORWARD", "1", "-i", "vnet-host", "-j", "DROP"],
+        ["-I", "FORWARD", "1", "-o", "vnet-host", "-j", "DROP"],
+    ]
 
 
-def test_remove_virtual_network_releases_only_its_saved_transit_entry(
+def test_create_and_retry_run_provider_outside_state_lock_and_preserve_allocation(
     tmp_path, monkeypatch
 ):
     store = store_for(tmp_path)
-    first = store.ensure_virtual_network("vn-one", "10.0.0.0/16")
-    second = store.ensure_virtual_network("vn-two", "10.0.0.0/16")
-
-    deleted = []
-
-    def delete_from_node(entry):
-        assert_store_lock_is_held(store)
-        assert entry in json.loads(store.path.read_text())["virtual_networks"]
-        deleted.append(entry)
-
-    monkeypatch.setattr(agentless_net_state, "delete_virtual_network", delete_from_node)
-    assert store.delete_and_remove_virtual_network("vn-one") is True
-    assert store.delete_and_remove_virtual_network("vn-one") is False
-    assert deleted == [first]
-    assert store.get_virtual_network("vn-one") is None
-    assert store.get_virtual_network("vn-two") == second
-    replacement = store.ensure_virtual_network("vn-one", "10.0.0.0/16")
-    assert replacement["transit"]["cidr"] == first["transit"]["cidr"]
-
-
-def test_small_virtual_network_cidr_fails_without_writing_state(tmp_path):
-    store = store_for(tmp_path)
-
-    with pytest.raises(StateError, match="too small for a /30"):
-        store.ensure_virtual_network("vn-one", "10.0.0.0/31")
-
-    assert not store.path.exists()
-
-
-def test_invalid_state_fails_closed_and_successful_write_keeps_backup(tmp_path):
-    store = store_for(tmp_path)
-    store.path.write_text('{"schema_version": 99}')
-
-    with pytest.raises(StateCorrupt, match="unsupported state schema"):
-        store.get_virtual_network("vn-one")
-    assert store.path.read_text() == '{"schema_version": 99}'
-
-    store.path.unlink()
-    store.ensure_virtual_network("vn-one", "10.0.0.0/16")
-    previous = json.loads(store.path.read_text())
-    store.ensure_virtual_network("vn-two", "10.0.0.0/16")
-
-    assert json.loads(store.backup_path.read_text()) == previous
-
-
-def test_create_and_retry_reconcile_inside_locked_transaction(tmp_path, monkeypatch):
-    store = store_for(tmp_path)
-    reconciled = []
-
-    def reconcile_on_node(entry):
-        assert_store_lock_is_held(store)
-        assert json.loads(store.path.read_text())["virtual_networks"] == [entry]
-        reconciled.append(entry)
-        return len(reconciled) == 1
-
-    monkeypatch.setattr(agentless_net_state, "reconcile_virtual_network", reconcile_on_node)
+    calls = []
     monkeypatch.setattr(
         agentless_net_state,
         "_run",
@@ -294,42 +342,206 @@ def test_create_and_retry_reconcile_inside_locked_transaction(tmp_path, monkeypa
         ),
     )
 
-    entry, state_changed, network_changed = store.ensure_and_reconcile_virtual_network("vn-uid", "10.0.0.0/16")
-    assert state_changed is True
-    assert network_changed is True
+    def reconcile(entry, **kwargs):
+        assert_store_lock_is_free(store)
+        calls.append(entry)
+        if len(calls) == 1:
+            raise StateError("injected provider setup failure")
+        return False
 
-    retry, state_changed, network_changed = store.ensure_and_reconcile_virtual_network("vn-uid", "10.0.0.0/16")
-    assert retry == entry
+    monkeypatch.setattr(agentless_net_state, "reconcile_virtual_network", reconcile)
+    with pytest.raises(StateError, match="injected provider setup failure"):
+        store.ensure_and_reconcile_virtual_network(UID_ONE, "10.0.0.0/16")
+
+    saved = store.get_virtual_network(UID_ONE)
+    assert saved == calls[0]
+    retry, state_changed, network_changed = store.ensure_and_reconcile_virtual_network(
+        UID_ONE, "10.0.0.0/16"
+    )
+    assert retry == saved
     assert state_changed is False
     assert network_changed is False
-    assert reconciled == [entry, entry]
+    assert calls == [saved, saved]
 
 
-def test_legacy_state_is_migrated_and_cr_cidr_is_recorded(tmp_path):
+def test_command_timeout_returns_error_and_keeps_create_retryable(tmp_path, monkeypatch):
     store = store_for(tmp_path)
-    store.ensure_virtual_network("vn-legacy", "10.0.0.0/16")
-    legacy = json.loads(store.path.read_text())
-    legacy["schema_version"] = 2
-    legacy_entry = legacy["virtual_networks"][0]
-    legacy_entry.pop("virtual_network_cidr")
-    legacy_entry["transit"] = {
-        "cidr": "198.51.100.0/30",
-        "namespace_ip": "198.51.100.1/30",
-        "host_ip": "198.51.100.2/30",
-        "next_hop": "198.51.100.1",
-        "gateway": "198.51.100.2",
-        "external_interface": "eth0",
-    }
-    legacy_payload = json.dumps(legacy, indent=2, sort_keys=True) + "\n"
-    store.path.write_text(legacy_payload)
 
-    migrated = store.ensure_virtual_network("vn-legacy", "10.0.0.0/16")
-    current = json.loads(store.path.read_text())
+    def timeout(command, **kwargs):
+        assert kwargs["timeout"] == agentless_net_network.COMMAND_TIMEOUT_SECONDS
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
 
-    assert migrated["virtual_network_cidr"] == "10.0.0.0/16"
-    assert ipaddress.ip_network(migrated["transit"]["cidr"]).subnet_of(
-        ipaddress.ip_network("10.0.0.0/16")
+    monkeypatch.setattr(agentless_net_network.subprocess, "run", timeout)
+    with pytest.raises(agentless_net_network.NetworkCommandError, match="timed out"):
+        agentless_net_network.run_command(["ip", "-j", "route"])
+
+    with pytest.raises(StateError, match="timed out"):
+        store.ensure_and_reconcile_virtual_network(UID_ONE, "10.0.0.0/16")
+    first = store.get_virtual_network(UID_ONE)
+    assert first is not None
+
+    monkeypatch.setattr(
+        agentless_net_network.subprocess,
+        "run",
+        lambda command, **kwargs: subprocess.CompletedProcess(command, 0, stdout="[]", stderr=""),
     )
-    assert "external_interface" not in migrated["transit"]
-    assert current["schema_version"] == 3
-    assert json.loads(store.backup_path.read_text()) == legacy
+    monkeypatch.setattr(agentless_net_state, "reconcile_virtual_network", lambda *args, **kwargs: False)
+    retry, state_changed, _ = store.ensure_and_reconcile_virtual_network(UID_ONE, "10.0.0.0/16")
+    assert retry == first
+    assert state_changed is False
+
+
+def test_delete_keeps_state_until_provider_cleanup_and_preserves_peer(tmp_path, monkeypatch):
+    store = store_for(tmp_path)
+    first = store.ensure_virtual_network(UID_ONE, "10.0.0.0/16")
+    second = store.ensure_virtual_network(UID_TWO, "10.0.0.0/16")
+    deleted = []
+
+    def delete_from_node(entry, **kwargs):
+        assert_store_lock_is_free(store)
+        assert entry == first
+        current = json.loads(store.path.read_text())
+        assert first in current["virtual_networks"]
+        assert second in current["virtual_networks"]
+        deleted.append(entry)
+        return True
+
+    monkeypatch.setattr(agentless_net_state, "delete_virtual_network", delete_from_node)
+    assert store.delete_and_remove_virtual_network(UID_ONE) is True
+    assert deleted == [first]
+    assert store.get_virtual_network(UID_ONE) is None
+    assert store.get_virtual_network(UID_TWO) == second
+
+    replacement = store.ensure_virtual_network(UID_ONE, "10.0.0.0/16")
+    assert replacement["transit"]["cidr"] == first["transit"]["cidr"]
+
+
+def test_failed_delete_preserves_its_entry_and_peer(tmp_path, monkeypatch):
+    store = store_for(tmp_path)
+    first = store.ensure_virtual_network(UID_ONE, "10.0.0.0/16")
+    second = store.ensure_virtual_network(UID_TWO, "10.0.0.0/16")
+
+    def failed_cleanup(entry, **kwargs):
+        assert_store_lock_is_free(store)
+        assert first in json.loads(store.path.read_text())["virtual_networks"]
+        raise StateError("injected cleanup failure")
+
+    monkeypatch.setattr(agentless_net_state, "delete_virtual_network", failed_cleanup)
+    with pytest.raises(StateError, match="injected cleanup failure"):
+        store.delete_and_remove_virtual_network(UID_ONE)
+
+    assert store.get_virtual_network(UID_ONE) == first
+    assert store.get_virtual_network(UID_TWO) == second
+
+
+def test_delete_cleans_deterministic_residue_even_when_state_entry_is_absent(
+    tmp_path, monkeypatch
+):
+    store = store_for(tmp_path)
+    observed = []
+
+    def cleanup_residue(entry, **kwargs):
+        assert entry["uid"] == UID_THREE
+        assert kwargs["require_alias"] is True
+        assert_store_lock_is_free(store)
+        observed.append(entry)
+        return True
+
+    monkeypatch.setattr(agentless_net_state, "delete_virtual_network", cleanup_residue)
+    assert store.delete_and_remove_virtual_network(UID_THREE) is True
+    assert len(observed) == 1
+    assert not store.path.exists()
+
+
+def test_absent_state_entry_without_provider_residue_is_idempotent(tmp_path, monkeypatch):
+    store = store_for(tmp_path)
+    monkeypatch.setattr(agentless_net_state, "delete_virtual_network", lambda *args, **kwargs: False)
+
+    assert store.delete_and_remove_virtual_network(UID_THREE) is False
+
+
+def test_corrupt_state_or_surviving_backup_fails_before_provider_cleanup(tmp_path, monkeypatch):
+    store = store_for(tmp_path)
+    write_state(store.path, {"schema_version": 99, "virtual_networks": []})
+    cleanup_called = False
+
+    def cleanup(entry, **kwargs):
+        nonlocal cleanup_called
+        cleanup_called = True
+        return True
+
+    monkeypatch.setattr(agentless_net_state, "delete_virtual_network", cleanup)
+    with pytest.raises(StateCorrupt, match="unsupported state schema"):
+        store.delete_and_remove_virtual_network(UID_ONE)
+    assert cleanup_called is False
+
+    store.path.unlink()
+    store.backup_path.write_text("{}")
+    store.backup_path.chmod(0o600)
+    with pytest.raises(StateCorrupt, match="backup exists"):
+        store.delete_and_remove_virtual_network(UID_ONE)
+    assert cleanup_called is False
+
+
+def test_state_file_rejects_unsafe_mode_and_unknown_schema(tmp_path):
+    store = store_for(tmp_path)
+    store.ensure_virtual_network(UID_ONE, "10.0.0.0/16")
+    store.path.chmod(0o644)
+    with pytest.raises(StateCorrupt, match="unsafe owner or mode"):
+        store.get_virtual_network(UID_ONE)
+
+    store.path.chmod(0o600)
+    write_state(store.path, {"schema_version": 2, "virtual_networks": []})
+    with pytest.raises(StateCorrupt, match="unsupported state schema: 2"):
+        store.get_virtual_network(UID_ONE)
+
+
+def test_smallest_virtual_network_cidr_allocates_one_transit_link(tmp_path):
+    entry = store_for(tmp_path).ensure_virtual_network(UID_ONE, "10.0.0.0/31")
+    assert entry["transit"]["cidr"] == "10.0.0.0/31"
+    assert entry["transit"]["host_ip"] == "10.0.0.0/31"
+    assert entry["transit"]["namespace_ip"] == "10.0.0.1/31"
+
+
+def test_virtual_network_cidr_smaller_than_transit_link_fails_without_state(tmp_path):
+    store = store_for(tmp_path)
+    with pytest.raises(StateError, match="too small for a /31"):
+        store.ensure_virtual_network(UID_ONE, "10.0.0.0/32")
+    assert not store.path.exists()
+
+
+def test_schema_rejects_non_slash_31_transit_and_noncanonical_cidr(tmp_path):
+    store = store_for(tmp_path)
+    store.ensure_virtual_network(UID_ONE, "10.0.0.0/16")
+    state = json.loads(store.path.read_text())
+    entry = state["virtual_networks"][0]
+    entry["transit"] = {
+        "cidr": "10.0.0.0/30",
+        "namespace_ip": "10.0.0.1/30",
+        "host_ip": "10.0.0.0/30",
+        "gateway": "10.0.0.0",
+    }
+    write_state(store.path, state)
+    with pytest.raises(StateCorrupt, match="transit CIDR must be an IPv4 /31"):
+        store.get_virtual_network(UID_ONE)
+
+    entry["transit"] = {
+        "cidr": "10.0.0.0/31",
+        "namespace_ip": "10.0.0.1/31",
+        "host_ip": "10.0.0.0/31",
+        "gateway": "10.0.0.0",
+    }
+    entry["virtual_network_cidr"] = "10.0.0.0/016"
+    write_state(store.path, state)
+    with pytest.raises(StateCorrupt, match="VirtualNetwork CIDR must be canonical"):
+        store.get_virtual_network(UID_ONE)
+
+
+def test_successful_write_keeps_last_valid_backup(tmp_path):
+    store = store_for(tmp_path)
+    store.ensure_virtual_network(UID_ONE, "10.0.0.0/16")
+    previous = json.loads(store.path.read_text())
+    store.ensure_virtual_network(UID_TWO, "10.0.0.0/16")
+
+    assert json.loads(store.backup_path.read_text()) == previous
+    assert store.backup_path.stat().st_mode & 0o777 == 0o600

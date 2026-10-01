@@ -16,8 +16,10 @@ DOCUMENTATION = r"""
 module: agentless_net_state
 short_description: Provision or remove an AgentlessNet VirtualNetwork
 description:
-  - Records the UID-keyed VirtualNetwork mapping before applying network state.
-  - Protects the state file with a stable sidecar lock and atomic replacement.
+  - Reserves the UID-keyed VirtualNetwork mapping before applying network state.
+  - Uses a short state-file transaction lock and a per-UID operation lock so
+    provider commands do not block unrelated state updates.
+  - Writes state atomically and retains an allocation until provider cleanup has completed.
 options:
   action:
     description: State operation to perform.

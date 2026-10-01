@@ -10,7 +10,7 @@ Setting fabricManager to netris without an explicit k8sManager leaves k8sManager
 
 Validated combinations:
   - fabricManager=netris + k8sManager="" → netris AAP + NetworkClass fabricManager=netris
-  - fabricManager=agentless_net + k8sManager="" → AgentlessNet stub + NetworkClass fabricManager=agentless_net
+  - fabricManager=agentless_net + k8sManager="" → AgentlessNet VirtualNetwork baseline + NetworkClass fabricManager=agentless_net
   - fabricManager="" + k8sManager=k8s_only → agentless AAP + NetworkClass k8sManager=k8s_only
   - fabricManager="" + k8sManager="" → expert empty profile; networkClass must supply a manager
 
@@ -82,8 +82,8 @@ Returns a dict with:
   {{- $defaultTitle = "Netris Network Implementation" -}}
   {{- $defaultDescription = "Provisions networking resources using Netris Controller API." -}}
 {{- else if eq $fabricManager "agentless_net" -}}
-  {{- $defaultTitle = "AgentlessNet networking stub" -}}
-  {{- $defaultDescription = "Registers AgentlessNet for unified networking. Available resource operations return NotImplemented." -}}
+  {{- $defaultTitle = "AgentlessNet VirtualNetwork baseline" -}}
+  {{- $defaultDescription = "Implements UID-keyed VirtualNetwork namespaces and /31 transit links. Other networking resource operations remain NotImplemented." -}}
 {{- else if and (eq $fabricManager "") (eq $k8sManager "") -}}
   {{- $defaultTitle = "Custom Network Implementation" -}}
   {{- $defaultDescription = "NetworkClass managers are supplied via networkClass overrides." -}}

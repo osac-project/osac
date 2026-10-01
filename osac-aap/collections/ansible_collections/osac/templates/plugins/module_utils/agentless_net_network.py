@@ -2,22 +2,123 @@
 
 from __future__ import annotations
 
+import ipaddress
+import json
 import subprocess
+from typing import Any
 
 
 class NetworkCommandError(Exception):
     """A Linux networking command could not complete."""
 
 
+COMMAND_TIMEOUT_SECONDS = 30
+
+
 def run_command(command: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
     try:
-        result = subprocess.run(command, capture_output=True, text=True, check=False)
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise NetworkCommandError(
+            f"{command[0]} timed out after {COMMAND_TIMEOUT_SECONDS:g} seconds"
+        ) from error
     except OSError as error:
         raise NetworkCommandError(f"{command[0]} could not run: {error}") from error
     if check and result.returncode != 0:
         message = result.stderr.strip() or result.stdout.strip() or "command failed"
         raise NetworkCommandError(f"{command[0]} failed: {message}")
     return result
+
+
+def _json_ip_output(command: list[str], *, description: str) -> list[dict[str, Any]]:
+    output = run_command(command).stdout
+    try:
+        entries = json.loads(output or "[]")
+    except (json.JSONDecodeError, TypeError) as error:
+        raise NetworkCommandError(f"could not parse {description} JSON: {error}") from error
+    if not isinstance(entries, list) or any(not isinstance(item, dict) for item in entries):
+        raise NetworkCommandError(f"{description} JSON must be a list of objects")
+    return entries
+
+
+def link_details(namespace: str | None, interface: str) -> dict[str, Any] | None:
+    command = ["ip", "-j", "-d", "link", "show", "dev", interface]
+    if namespace is not None:
+        command = ["ip", "netns", "exec", namespace, *command]
+    result = run_command(command, check=False)
+    if result.returncode != 0:
+        return None
+    try:
+        links = json.loads(result.stdout or "[]")
+    except (json.JSONDecodeError, TypeError) as error:
+        raise NetworkCommandError(f"could not parse link details JSON: {error}") from error
+    if not isinstance(links, list) or any(not isinstance(link, dict) for link in links):
+        raise NetworkCommandError("link details JSON must be a list of objects")
+    if len(links) != 1 or links[0].get("ifname") != interface:
+        raise NetworkCommandError(f"unexpected link details for interface {interface}")
+    if not isinstance(links[0].get("flags"), list) or any(
+        not isinstance(flag, str) for flag in links[0]["flags"]
+    ):
+        raise NetworkCommandError(f"interface {interface} has invalid link flags")
+    if not isinstance(links[0].get("ifalias", ""), str):
+        raise NetworkCommandError(f"interface {interface} has invalid ownership alias")
+    if "linkinfo" in links[0] and not isinstance(links[0]["linkinfo"], dict):
+        raise NetworkCommandError(f"interface {interface} has invalid link details")
+    return links[0]
+
+
+def _address_present(namespace: str | None, interface: str, expected: str) -> bool:
+    command = ["ip", "-j", "-4", "address", "show", "dev", interface]
+    if namespace is not None:
+        command = ["ip", "netns", "exec", namespace, *command]
+    entries = _json_ip_output(command, description="IPv4 address")
+    expected_interface = ipaddress.ip_interface(expected)
+    if not isinstance(expected_interface, ipaddress.IPv4Interface):
+        raise NetworkCommandError("expected uplink address must be IPv4")
+    for entry in entries:
+        if entry.get("ifname") != interface:
+            raise NetworkCommandError(f"unexpected IPv4 address interface for {interface}")
+        address_info = entry.get("addr_info")
+        if not isinstance(address_info, list):
+            raise NetworkCommandError("IPv4 address JSON has no addr_info list")
+        for address in address_info:
+            if not isinstance(address, dict):
+                raise NetworkCommandError("IPv4 address entry is invalid")
+            if (
+                address.get("family") == "inet"
+                and address.get("local") == str(expected_interface.ip)
+                and address.get("prefixlen") == expected_interface.network.prefixlen
+            ):
+                return True
+    return False
+
+
+def _link_is_up(namespace: str | None, interface: str) -> bool:
+    details = link_details(namespace, interface)
+    if details is None:
+        raise NetworkCommandError(f"interface {interface} is absent")
+    flags = details.get("flags")
+    if not isinstance(flags, list) or any(not isinstance(flag, str) for flag in flags):
+        raise NetworkCommandError(f"interface {interface} has invalid link flags")
+    return "UP" in flags
+
+
+def _default_route_present(namespace: str, gateway: str, interface: str) -> bool:
+    command = ["ip", "-j", "-4", "route", "show", "default"]
+    command = ["ip", "netns", "exec", namespace, *command]
+    routes = _json_ip_output(command, description="IPv4 default route")
+    return any(
+        route.get("dst") == "default"
+        and route.get("gateway") == gateway
+        and route.get("dev") == interface
+        for route in routes
+    )
 
 
 def ensure_namespace(namespace: str) -> bool:
@@ -43,7 +144,11 @@ def ensure_uplink(
 
 
 def ensure_veth_pair(
-    namespace: str, namespace_interface: str, host_interface: str
+    namespace: str,
+    namespace_interface: str,
+    host_interface: str,
+    *,
+    owner_alias: str | None = None,
 ) -> bool:
     changed = ensure_namespace(namespace)
     host_link = run_command(
@@ -65,6 +170,15 @@ def ensure_veth_pair(
         check=False,
     )
     if host_link.returncode == 0 and namespace_link.returncode != 0:
+        if owner_alias is not None:
+            details = link_details(None, host_interface)
+            if details is None or details.get("linkinfo", {}).get("info_kind") != "veth":
+                raise NetworkCommandError("host uplink exists but is not an owned veth")
+            existing_alias = details.get("ifalias", "")
+            if existing_alias not in ("", owner_alias):
+                raise NetworkCommandError("host uplink alias does not match its VirtualNetwork UID")
+            if existing_alias == "":
+                run_command(["ip", "link", "set", "dev", host_interface, "alias", owner_alias])
         run_command(["ip", "link", "delete", "dev", host_interface])
         host_link = run_command(
             ["ip", "-o", "link", "show", "dev", host_interface], check=False
@@ -87,7 +201,19 @@ def ensure_veth_pair(
             ]
         )
         run_command(["ip", "link", "set", namespace_interface, "netns", namespace])
+        if owner_alias is not None:
+            run_command(["ip", "link", "set", "dev", host_interface, "alias", owner_alias])
         changed = True
+    elif owner_alias is not None:
+        details = link_details(None, host_interface)
+        if details is None or details.get("linkinfo", {}).get("info_kind") != "veth":
+            raise NetworkCommandError("host uplink exists but is not an owned veth")
+        existing_alias = details.get("ifalias", "")
+        if existing_alias not in ("", owner_alias):
+            raise NetworkCommandError("host uplink alias does not match its VirtualNetwork UID")
+        if existing_alias == "":
+            run_command(["ip", "link", "set", "dev", host_interface, "alias", owner_alias])
+            changed = True
     return changed
 
 
@@ -100,46 +226,11 @@ def configure_uplink(
     gateway: str,
 ) -> bool:
     changed = False
-    host_addresses = run_command(
-        ["ip", "-o", "-4", "address", "show", "dev", host_interface]
-    ).stdout
-    namespace_addresses = run_command(
-        [
-            "ip",
-            "netns",
-            "exec",
-            namespace,
-            "ip",
-            "-o",
-            "-4",
-            "address",
-            "show",
-            "dev",
-            namespace_interface,
-        ]
-    ).stdout
-    host_link = run_command(
-        ["ip", "-o", "link", "show", "dev", host_interface]
-    ).stdout
-    namespace_link = run_command(
-        [
-            "ip",
-            "netns",
-            "exec",
-            namespace,
-            "ip",
-            "-o",
-            "link",
-            "show",
-            "dev",
-            namespace_interface,
-        ]
-    ).stdout
     if (
-        host_ip not in host_addresses
-        or namespace_ip not in namespace_addresses
-        or "UP" not in host_link
-        or "UP" not in namespace_link
+        not _address_present(None, host_interface, host_ip)
+        or not _address_present(namespace, namespace_interface, namespace_ip)
+        or not _link_is_up(None, host_interface)
+        or not _link_is_up(namespace, namespace_interface)
     ):
         changed = True
 
@@ -175,10 +266,7 @@ def configure_uplink(
         ]
     )
 
-    route = run_command(
-        ["ip", "netns", "exec", namespace, "ip", "-4", "route", "show", "default"]
-    ).stdout
-    if f"via {gateway}" not in route:
+    if not _default_route_present(namespace, gateway, namespace_interface):
         changed = True
     run_command(
         [

@@ -9,8 +9,10 @@ import hashlib
 import ipaddress
 import json
 import os
-import re
+import stat
 import tempfile
+import time
+import uuid as uuidlib
 from pathlib import Path
 from typing import Any
 
@@ -19,23 +21,25 @@ from ansible_collections.osac.templates.plugins.module_utils.agentless_net_netwo
     delete_uplink,
     ensure_ipv4_forwarding,
     ensure_veth_pair,
+    link_details,
     NetworkCommandError,
     run_command,
 )
 
-SCHEMA_VERSION = 3
-LEGACY_SCHEMA_VERSION = 2
+SCHEMA_VERSION = 1
+LOCK_WAIT_SECONDS = 60
+LOCK_POLL_SECONDS = 0.05
+MAX_RULE_DELETIONS = 64
 STATE_KEYS = {"schema_version", "virtual_networks"}
 VIRTUAL_NETWORK_KEYS = {
     "uid",
+    "virtual_network_cidr",
     "namespace_name",
     "uplink",
     "transit",
-    "external_reachability",
     "default_forward_policy",
 }
-TRANSIT_KEYS = {"cidr", "namespace_ip", "host_ip", "next_hop", "gateway"}
-LEGACY_TRANSIT_KEYS = TRANSIT_KEYS | {"external_interface"}
+TRANSIT_KEYS = {"cidr", "namespace_ip", "host_ip", "gateway"}
 
 
 class StateError(Exception):
@@ -73,10 +77,45 @@ def _atomic_write(path: Path, payload: bytes) -> None:
         raise
 
 
+@contextlib.contextmanager
+def _locked_path(path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        lock_fd = os.open(
+            path,
+            os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+    except OSError as error:
+        raise StateError(f"could not open AgentlessNet lock {path.name}: {error}") from error
+    try:
+        lock_stat = os.fstat(lock_fd)
+        if not stat.S_ISREG(lock_stat.st_mode):
+            raise StateError(f"AgentlessNet lock {path.name} is not a regular file")
+        if lock_stat.st_uid != os.geteuid() or lock_stat.st_mode & 0o077:
+            raise StateError(f"AgentlessNet lock {path.name} has unsafe owner or mode")
+        deadline = time.monotonic() + LOCK_WAIT_SECONDS
+        while True:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise StateError(f"timed out waiting for AgentlessNet lock {path.name}")
+                time.sleep(LOCK_POLL_SECONDS)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+    finally:
+        os.close(lock_fd)
+
+
 class StateStore:
     def __init__(self, path: str | os.PathLike[str]) -> None:
         self.path = Path(path)
         self.lock_path = Path(f"{self.path}.lock")
+        self.firewall_lock_path = Path(f"{self.path}.firewall.lock")
         self.backup_path = Path(f"{self.path}.bak")
 
     @staticmethod
@@ -86,13 +125,15 @@ class StateStore:
     @contextlib.contextmanager
     def _locked(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        lock_fd = os.open(self.lock_path, os.O_CREAT | os.O_RDWR, 0o600)
-        try:
-            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        with _locked_path(self.lock_path):
             yield
-        finally:
-            fcntl.flock(lock_fd, fcntl.LOCK_UN)
-            os.close(lock_fd)
+
+    @contextlib.contextmanager
+    def _resource_locked(self, uid: str):
+        digest = hashlib.sha256(uid.encode()).hexdigest()
+        resource_lock_path = Path(f"{self.path}.uid-{digest}.lock")
+        with _locked_path(resource_lock_path):
+            yield
 
     @staticmethod
     def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -105,11 +146,24 @@ class StateStore:
 
     def _read_locked(self) -> tuple[dict[str, Any], bytes | None]:
         try:
-            previous = self.path.read_bytes()
+            state_fd = os.open(
+                self.path,
+                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            )
         except FileNotFoundError:
             if self.backup_path.exists():
                 raise StateCorrupt("state file is missing while a backup exists")
             return self._empty_state(), None
+        except OSError as error:
+            raise StateCorrupt(f"could not safely open AgentlessNet state: {error}") from error
+
+        with os.fdopen(state_fd, "rb", closefd=True) as state_file:
+            file_stat = os.fstat(state_file.fileno())
+            if not stat.S_ISREG(file_stat.st_mode):
+                raise StateCorrupt("AgentlessNet state path is not a regular file")
+            if file_stat.st_uid != os.geteuid() or file_stat.st_mode & 0o077:
+                raise StateCorrupt("AgentlessNet state file has unsafe owner or mode")
+            previous = state_file.read()
 
         try:
             state = json.loads(previous, object_pairs_hook=self._reject_duplicate_keys)
@@ -123,10 +177,7 @@ class StateStore:
         if not isinstance(state, dict):
             raise StateCorrupt("state root must be an object")
         schema_version = state.get("schema_version")
-        if type(schema_version) is not int or schema_version not in (
-            LEGACY_SCHEMA_VERSION,
-            SCHEMA_VERSION,
-        ):
+        if type(schema_version) is not int or schema_version != SCHEMA_VERSION:
             raise StateCorrupt(f"unsupported state schema: {schema_version!r}")
         if set(state) != STATE_KEYS:
             raise StateCorrupt("state must contain only schema_version and virtual_networks")
@@ -139,19 +190,19 @@ class StateStore:
         seen_interfaces: set[str] = set()
         seen_transit: set[str] = set()
         for entry in entries:
-            allowed_entry_keys = (
-                (VIRTUAL_NETWORK_KEYS,)
-                if schema_version == LEGACY_SCHEMA_VERSION
-                else (VIRTUAL_NETWORK_KEYS, VIRTUAL_NETWORK_KEYS | {"virtual_network_cidr"})
-            )
-            if not isinstance(entry, dict) or set(entry) not in allowed_entry_keys:
+            if not isinstance(entry, dict) or set(entry) != VIRTUAL_NETWORK_KEYS:
                 raise StateCorrupt("VirtualNetwork state entry has an invalid shape")
             uid = entry["uid"]
             namespace = entry["namespace_name"]
             uplink = entry["uplink"]
             transit = entry["transit"]
-            if not isinstance(uid, str) or not uid or uid in seen_uids:
+            if not isinstance(uid, str) or uid in seen_uids:
                 raise StateCorrupt("duplicate or empty VirtualNetwork UID")
+            try:
+                if str(uuidlib.UUID(uid)) != uid:
+                    raise ValueError("non-canonical UUID")
+            except (ValueError, AttributeError) as error:
+                raise StateCorrupt("VirtualNetwork UID must be a canonical UUID") from error
             if not isinstance(namespace, str) or not namespace or namespace in seen_namespaces:
                 raise StateCorrupt("duplicate or invalid namespace name")
             digest = hashlib.sha256(uid.encode()).hexdigest()
@@ -168,30 +219,32 @@ class StateStore:
                 "host_interface": f"v{digest[:11]}h",
             }:
                 raise StateCorrupt("VirtualNetwork uplink does not match its UID")
-            allowed_transit_keys = (
-                LEGACY_TRANSIT_KEYS
-                if schema_version == LEGACY_SCHEMA_VERSION
-                else TRANSIT_KEYS
-            )
-            if not isinstance(transit, dict) or set(transit) != allowed_transit_keys:
+            if not isinstance(transit, dict) or set(transit) != TRANSIT_KEYS:
                 raise StateCorrupt("VirtualNetwork transit state is invalid")
             try:
+                if not isinstance(transit["cidr"], str):
+                    raise ValueError("not a string")
                 transit_cidr = ipaddress.ip_network(transit["cidr"], strict=True)
             except (TypeError, ValueError) as error:
                 raise StateCorrupt("VirtualNetwork transit CIDR is invalid") from error
-            if not isinstance(transit_cidr, ipaddress.IPv4Network) or transit_cidr.prefixlen != 30:
-                raise StateCorrupt("VirtualNetwork transit CIDR must be an IPv4 /30")
-            if "virtual_network_cidr" in entry:
-                try:
-                    virtual_network_cidr = ipaddress.ip_network(
-                        entry["virtual_network_cidr"], strict=True
-                    )
-                except (TypeError, ValueError) as error:
-                    raise StateCorrupt("VirtualNetwork CIDR is invalid") from error
-                if not isinstance(virtual_network_cidr, ipaddress.IPv4Network):
-                    raise StateCorrupt("VirtualNetwork CIDR must be IPv4")
-                if not transit_cidr.subnet_of(virtual_network_cidr):
-                    raise StateCorrupt("VirtualNetwork transit CIDR is outside its CR CIDR")
+            if (
+                not isinstance(transit_cidr, ipaddress.IPv4Network)
+                or transit_cidr.prefixlen != 31
+                or str(transit_cidr) != transit["cidr"]
+            ):
+                raise StateCorrupt("VirtualNetwork transit CIDR must be an IPv4 /31")
+            try:
+                if not isinstance(entry["virtual_network_cidr"], str):
+                    raise ValueError("not a string")
+                virtual_network_cidr = ipaddress.ip_network(entry["virtual_network_cidr"], strict=True)
+            except (TypeError, ValueError) as error:
+                raise StateCorrupt("VirtualNetwork CIDR is invalid") from error
+            if not isinstance(virtual_network_cidr, ipaddress.IPv4Network):
+                raise StateCorrupt("VirtualNetwork CIDR must be IPv4")
+            if str(virtual_network_cidr) != entry["virtual_network_cidr"]:
+                raise StateCorrupt("VirtualNetwork CIDR must be canonical")
+            if not transit_cidr.subnet_of(virtual_network_cidr):
+                raise StateCorrupt("VirtualNetwork transit CIDR is outside its CR CIDR")
             if transit["cidr"] in seen_transit:
                 raise StateCorrupt("duplicate VirtualNetwork transit CIDR")
             for key in ("namespace_ip", "host_ip"):
@@ -201,26 +254,12 @@ class StateStore:
                     raise StateCorrupt(f"VirtualNetwork transit {key} is invalid") from error
                 if address.network != transit_cidr:
                     raise StateCorrupt(f"VirtualNetwork transit {key} is outside its CIDR")
-            if transit["next_hop"] != transit["namespace_ip"].split("/", 1)[0]:
-                raise StateCorrupt("VirtualNetwork next hop does not match namespace IP")
             if transit["gateway"] != transit["host_ip"].split("/", 1)[0]:
                 raise StateCorrupt("VirtualNetwork gateway does not match host IP")
             if transit["namespace_ip"] != f"{transit_cidr.network_address + 1}/{transit_cidr.prefixlen}":
                 raise StateCorrupt("VirtualNetwork namespace IP is invalid")
-            if transit["host_ip"] != f"{transit_cidr.network_address + 2}/{transit_cidr.prefixlen}":
+            if transit["host_ip"] != f"{transit_cidr.network_address}/{transit_cidr.prefixlen}":
                 raise StateCorrupt("VirtualNetwork host IP is invalid")
-            if "external_interface" in transit and (
-                not isinstance(transit["external_interface"], str)
-                or not re.fullmatch(
-                    r"[A-Za-z0-9_.:-]{1,15}", transit["external_interface"]
-                )
-            ):
-                raise StateCorrupt("VirtualNetwork external interface is invalid")
-            if entry["external_reachability"] != {
-                "mode": "bgp",
-                "route_prefix_length": 32,
-            }:
-                raise StateCorrupt("VirtualNetwork external reachability is invalid")
             if entry["default_forward_policy"] != "permit_all":
                 raise StateCorrupt("VirtualNetwork forwarding policy is invalid")
 
@@ -237,138 +276,117 @@ class StateStore:
             _atomic_write(self.backup_path, previous)
         _atomic_write(self.path, payload)
 
-    def _transact(self, update, *, before_write=None, after_write=None):
-        with self._locked():
-            state, previous = self._read_locked()
-            next_state = copy.deepcopy(state)
-            migrated = state["schema_version"] != SCHEMA_VERSION
-            if migrated:
-                next_state["schema_version"] = SCHEMA_VERSION
-                for entry in next_state["virtual_networks"]:
-                    entry["transit"].pop("external_interface", None)
+    @staticmethod
+    def _validate_uid(uid: str) -> None:
+        if not isinstance(uid, str):
+            raise StateError("VirtualNetwork UID must be a canonical UUID")
+        try:
+            if str(uuidlib.UUID(uid)) != uid:
+                raise ValueError("non-canonical UUID")
+        except (ValueError, AttributeError) as error:
+            raise StateError("VirtualNetwork UID must be a canonical UUID") from error
 
-            result, changed = update(next_state)
-            state_changed = changed or migrated
-            if state_changed:
-                self._validate(next_state)
-            if before_write is not None:
-                before_write(copy.deepcopy(result))
-            if state_changed:
-                self._write_locked(next_state, previous)
-            effect_result = None
-            if after_write is not None:
-                effect_result = after_write(copy.deepcopy(result))
-            return copy.deepcopy(result), state_changed, effect_result
+    @staticmethod
+    def _identity_entry(uid: str) -> dict[str, Any]:
+        digest = hashlib.sha256(uid.encode()).hexdigest()
+        return {
+            "uid": uid,
+            "namespace_name": f"n{digest[:14]}",
+            "uplink": {
+                "namespace_interface": f"v{digest[:11]}n",
+                "host_interface": f"v{digest[:11]}h",
+            },
+        }
 
     def _ensure_virtual_network(
         self,
         uid: str,
         virtual_network_cidr: str,
         *,
-        after_write=None,
-    ) -> tuple[dict[str, Any], bool, Any]:
-        if not isinstance(uid, str) or not uid.strip():
-            raise StateError("VirtualNetwork UID is required")
+        reconcile: bool = False,
+    ) -> tuple[dict[str, Any], bool, bool]:
+        self._validate_uid(uid)
         try:
             network = ipaddress.ip_network(virtual_network_cidr, strict=True)
         except (TypeError, ValueError) as error:
             raise StateError(f"invalid VirtualNetwork IPv4 CIDR: {error}") from error
         if not isinstance(network, ipaddress.IPv4Network):
             raise StateError("AgentlessNet VirtualNetworks require IPv4 CIDRs")
+        if not isinstance(virtual_network_cidr, str) or str(network) != virtual_network_cidr:
+            raise StateError("VirtualNetwork IPv4 CIDR must be canonical")
         network_cidr = str(network)
-        provider_entry_to_delete: dict[str, Any] | None = None
 
-        def allocate_transit(state: dict[str, Any], excluded_uid: str | None = None):
-            slot_count = network.num_addresses // 4
-            if slot_count < 1:
-                raise StateError("VirtualNetwork CIDR is too small for a /30 transit link")
-            used_transit = {
-                ipaddress.ip_network(entry["transit"]["cidr"])
-                for entry in state["virtual_networks"]
-                if entry["uid"] != excluded_uid
-            }
-            seed = int.from_bytes(
-                hashlib.sha256(f"{uid}:{network_cidr}".encode()).digest()[:8],
-                "big",
-            ) % slot_count
-            for offset in range(slot_count):
-                slot = (seed + offset) % slot_count
-                address = network.network_address + (slot * 4)
-                candidate = ipaddress.ip_network((address, 30))
-                if candidate in used_transit:
-                    continue
-                return candidate
-            raise StateError("no free /30 transit block remains in the VirtualNetwork CIDR")
+        with self._resource_locked(uid):
+            with self._locked():
+                state, previous = self._read_locked()
+                entry = next(
+                    (item for item in state["virtual_networks"] if item["uid"] == uid),
+                    None,
+                )
+                if entry is not None:
+                    if entry["virtual_network_cidr"] != network_cidr:
+                        raise StateError("VirtualNetwork CIDR does not match saved state")
+                    state_changed = False
+                else:
+                    identity = self._identity_entry(uid)
+                    if any(
+                        item["namespace_name"] == identity["namespace_name"]
+                        or set(item["uplink"].values()) & set(identity["uplink"].values())
+                        for item in state["virtual_networks"]
+                    ):
+                        raise StateError("VirtualNetwork UID collides with an existing provider identity")
 
-        def transit_state(transit_network: ipaddress.IPv4Network) -> dict[str, str]:
-            namespace_ip = transit_network.network_address + 1
-            host_ip = transit_network.network_address + 2
-            return {
-                "cidr": str(transit_network),
-                "namespace_ip": f"{namespace_ip}/{transit_network.prefixlen}",
-                "host_ip": f"{host_ip}/{transit_network.prefixlen}",
-                "next_hop": str(namespace_ip),
-                "gateway": str(host_ip),
-            }
+                    slot_count = network.num_addresses // 2
+                    if slot_count < 1:
+                        raise StateError("VirtualNetwork CIDR is too small for a /31 transit link")
+                    used_transit = {
+                        ipaddress.ip_network(item["transit"]["cidr"])
+                        for item in state["virtual_networks"]
+                    }
+                    seed = int.from_bytes(
+                        hashlib.sha256(f"{uid}:{network_cidr}".encode()).digest()[:8],
+                        "big",
+                    ) % slot_count
+                    transit_network = None
+                    for offset in range(slot_count):
+                        slot = (seed + offset) % slot_count
+                        address = network.network_address + (slot * 2)
+                        candidate = ipaddress.ip_network((address, 31))
+                        if candidate not in used_transit:
+                            transit_network = candidate
+                            break
+                    if transit_network is None:
+                        raise StateError(
+                            "no free /31 transit block remains in the VirtualNetwork CIDR"
+                        )
 
-        def update(state: dict[str, Any]):
-            nonlocal provider_entry_to_delete
-            for entry in state["virtual_networks"]:
-                if entry["uid"] != uid:
-                    continue
+                    namespace_ip = transit_network.network_address + 1
+                    host_ip = transit_network.network_address
+                    entry = {
+                        **identity,
+                        "virtual_network_cidr": network_cidr,
+                        "transit": {
+                            "cidr": str(transit_network),
+                            "namespace_ip": f"{namespace_ip}/{transit_network.prefixlen}",
+                            "host_ip": f"{host_ip}/{transit_network.prefixlen}",
+                            "gateway": str(host_ip),
+                        },
+                        "default_forward_policy": "permit_all",
+                    }
+                    state["virtual_networks"].append(entry)
+                    self._write_locked(state, previous)
+                    state_changed = True
 
-                saved_cidr = entry.get("virtual_network_cidr")
-                if saved_cidr is not None and saved_cidr != network_cidr:
-                    raise StateError("VirtualNetwork CIDR does not match saved state")
-
-                old_transit = ipaddress.ip_network(entry["transit"]["cidr"])
-                changed = False
-                if not old_transit.subnet_of(network):
-                    provider_entry_to_delete = copy.deepcopy(entry)
-                    entry["transit"] = transit_state(allocate_transit(state, excluded_uid=uid))
-                    changed = True
-                if saved_cidr is None:
-                    entry["virtual_network_cidr"] = network_cidr
-                    changed = True
-                if "external_interface" in entry["transit"]:
-                    del entry["transit"]["external_interface"]
-                    changed = True
-                return entry, changed
-
-            transit_network = allocate_transit(state)
-            digest = hashlib.sha256(uid.encode()).hexdigest()
-            namespace_name = f"n{digest[:14]}"
-            namespace_interface = f"v{digest[:11]}n"
-            host_interface = f"v{digest[:11]}h"
-            entry = {
-                "uid": uid,
-                "virtual_network_cidr": network_cidr,
-                "namespace_name": namespace_name,
-                "uplink": {
-                    "namespace_interface": namespace_interface,
-                    "host_interface": host_interface,
-                },
-                "transit": transit_state(transit_network),
-                "external_reachability": {
-                    "mode": "bgp",
-                    "route_prefix_length": 32,
-                },
-                "default_forward_policy": "permit_all",
-            }
-            state["virtual_networks"].append(entry)
-            return entry, True
-
-        def prepare_provider_state(entry):
-            if provider_entry_to_delete is not None and after_write is not None:
-                delete_virtual_network(provider_entry_to_delete)
-            if after_write is not None:
+            network_changed = False
+            if reconcile:
+                # Reserve first so a route or provider failure is retryable with the
+                # same UID-to-/31 mapping. No provider command runs under the JSON lock.
                 _assert_transit_route_available(entry)
-
-        return self._transact(
-            update,
-            before_write=prepare_provider_state,
-            after_write=after_write,
-        )
+                network_changed = reconcile_virtual_network(
+                    entry,
+                    firewall_lock_path=self.firewall_lock_path,
+                )
+            return copy.deepcopy(entry), state_changed, network_changed
 
     def ensure_virtual_network(
         self,
@@ -383,11 +401,7 @@ class StateStore:
         uid: str,
         virtual_network_cidr: str,
     ) -> tuple[dict[str, Any], bool, bool]:
-        return self._ensure_virtual_network(
-            uid,
-            virtual_network_cidr,
-            after_write=reconcile_virtual_network,
-        )
+        return self._ensure_virtual_network(uid, virtual_network_cidr, reconcile=True)
 
     def get_virtual_network(self, uid: str) -> dict[str, Any] | None:
         with self._locked():
@@ -402,20 +416,37 @@ class StateStore:
             )
 
     def delete_and_remove_virtual_network(self, uid: str) -> bool:
-        def update(state: dict[str, Any]):
-            entries = state["virtual_networks"]
-            entry = next((item for item in entries if item["uid"] == uid), None)
+        self._validate_uid(uid)
+        with self._resource_locked(uid):
+            with self._locked():
+                state, _ = self._read_locked()
+                entry = next(
+                    (item for item in state["virtual_networks"] if item["uid"] == uid),
+                    None,
+                )
+                provider_entry = copy.deepcopy(entry) if entry is not None else self._identity_entry(uid)
+
+            provider_changed = delete_virtual_network(
+                provider_entry,
+                firewall_lock_path=self.firewall_lock_path,
+                require_alias=entry is None,
+            )
             if entry is None:
-                return None, False
-            state["virtual_networks"] = [item for item in entries if item["uid"] != uid]
-            return entry, True
+                return provider_changed
 
-        def remove_provider_state(entry):
-            if entry is not None:
-                delete_virtual_network(entry)
-
-        _, changed, _ = self._transact(update, before_write=remove_provider_state)
-        return changed
+            with self._locked():
+                state, previous = self._read_locked()
+                current = next(
+                    (item for item in state["virtual_networks"] if item["uid"] == uid),
+                    None,
+                )
+                if current != entry:
+                    raise StateError("VirtualNetwork state changed while provider cleanup was running")
+                state["virtual_networks"] = [
+                    item for item in state["virtual_networks"] if item["uid"] != uid
+                ]
+                self._write_locked(state, previous)
+            return True
 
 
 def _run(command: list[str], check: bool = True):
@@ -517,8 +548,12 @@ def _ensure_host_forwarding_isolation(host_interface: str) -> bool:
             ]
             delete_rule = check_rule.copy()
             delete_rule[4] = "-D"
+            deletions = 0
             while _run(check_rule, check=False).returncode == 0:
+                if deletions >= MAX_RULE_DELETIONS:
+                    raise StateError("too many duplicate host forwarding isolation rules")
                 _run(delete_rule)
+                deletions += 1
             insert_rule = [
                 "iptables",
                 "-w",
@@ -540,7 +575,8 @@ def _ensure_host_forwarding_isolation(host_interface: str) -> bool:
     return changed
 
 
-def _remove_host_forwarding_isolation(host_interface: str) -> None:
+def _remove_host_forwarding_isolation(host_interface: str) -> bool:
+    changed = False
     for direction in ("-i", "-o"):
         check_rule = [
             "iptables",
@@ -566,23 +602,41 @@ def _remove_host_forwarding_isolation(host_interface: str) -> None:
             "-j",
             "DROP",
         ]
+        deletions = 0
         while _run(check_rule, check=False).returncode == 0:
+            if deletions >= MAX_RULE_DELETIONS:
+                raise StateError("too many duplicate host forwarding isolation rules during deletion")
             _run(delete_rule)
+            changed = True
+            deletions += 1
+    return changed
 
 
-def reconcile_virtual_network(entry: dict[str, Any]) -> bool:
+def _with_firewall_lock(lock_path: Path | None):
+    return _locked_path(lock_path) if lock_path is not None else contextlib.nullcontext()
+
+
+def reconcile_virtual_network(
+    entry: dict[str, Any], *, firewall_lock_path: Path | None = None
+) -> bool:
     namespace = entry["namespace_name"]
     namespace_interface = entry["uplink"]["namespace_interface"]
     host_interface = entry["uplink"]["host_interface"]
     transit = entry["transit"]
     try:
-        changed = ensure_veth_pair(namespace, namespace_interface, host_interface)
+        changed = ensure_veth_pair(
+            namespace,
+            namespace_interface,
+            host_interface,
+            owner_alias=f"osac-vn:{entry['uid']}",
+        )
     except NetworkCommandError as error:
         raise StateError(str(error)) from error
 
     # Keep this namespace isolated even when the node already has forwarding
     # enabled for other workloads. Do not change the host-wide forwarding sysctl.
-    changed = _ensure_host_forwarding_isolation(host_interface) or changed
+    with _with_firewall_lock(firewall_lock_path):
+        changed = _ensure_host_forwarding_isolation(host_interface) or changed
     try:
         changed = (
             configure_uplink(
@@ -628,10 +682,14 @@ def reconcile_virtual_network(entry: dict[str, Any]) -> bool:
     if _run(established_rule, check=False).returncode != 0:
         changed = True
         established_rule[8] = "-I"
-        established_rule.insert(9, "1")
+        established_rule.insert(10, "1")
+        # The check command is `-C FORWARD ...`; insertion syntax is `-I FORWARD 1 ...`.
         _run(established_rule)
 
-    _verify_virtual_network(entry)
+    try:
+        _verify_virtual_network(entry)
+    except NetworkCommandError as error:
+        raise StateError(str(error)) from error
     return changed
 
 
@@ -643,19 +701,30 @@ def _verify_virtual_network(entry: dict[str, Any]) -> None:
     namespaces = _run(["ip", "netns", "list"]).stdout.splitlines()
     if namespace not in {line.split()[0] for line in namespaces if line.split()}:
         raise StateError("VirtualNetwork namespace is not present after reconciliation")
-    host_addresses = _run(["ip", "-o", "-4", "address", "show", "dev", host_interface]).stdout
-    namespace_addresses = _run(
-        ["ip", "netns", "exec", namespace, "ip", "-o", "-4", "address", "show", "dev", namespace_interface]
-    ).stdout
-    if transit["host_ip"] not in host_addresses or transit["namespace_ip"] not in namespace_addresses:
-        raise StateError("VirtualNetwork uplink addresses did not converge")
-    route = _run(["ip", "netns", "exec", namespace, "ip", "-4", "route", "show", "default"]).stdout
-    if f"via {transit['gateway']}" not in route:
-        raise StateError("VirtualNetwork default route did not converge")
+    host_link = link_details(None, host_interface)
+    namespace_link = link_details(namespace, namespace_interface)
+    if host_link is None or namespace_link is None:
+        raise StateError("VirtualNetwork uplink interface is absent")
+    if host_link.get("ifalias") != f"osac-vn:{entry['uid']}":
+        raise StateError("VirtualNetwork host uplink ownership alias is invalid")
+    if not _address_present(None, host_interface, transit["host_ip"]):
+        raise StateError("VirtualNetwork host uplink address did not converge")
+    if not _address_present(namespace, namespace_interface, transit["namespace_ip"]):
+        raise StateError("VirtualNetwork namespace uplink address did not converge")
+    if "UP" not in host_link.get("flags", []) or "UP" not in namespace_link.get("flags", []):
+        raise StateError("VirtualNetwork uplink interfaces are not up")
+    if not _default_route_present(namespace, transit["gateway"], namespace_interface):
+        raise StateError("VirtualNetwork default route did not converge on its uplink")
+    forwarding = _run(
+        ["ip", "netns", "exec", namespace, "sysctl", "-n", "net.ipv4.ip_forward"]
+    ).stdout.strip()
+    if forwarding != "1":
+        raise StateError("VirtualNetwork IPv4 forwarding is not enabled")
+
     policy = _run(
         ["ip", "netns", "exec", namespace, "iptables", "-w", "-t", "filter", "-S", "FORWARD"]
-    ).stdout
-    if "-P FORWARD ACCEPT" not in policy:
+    ).stdout.splitlines()
+    if "-P FORWARD ACCEPT" not in {line.strip() for line in policy}:
         raise StateError("VirtualNetwork FORWARD policy is not permit-all")
     rule = _run(
         [
@@ -683,11 +752,26 @@ def _verify_virtual_network(entry: dict[str, Any]) -> None:
     _verify_host_forwarding_isolation(host_interface)
 
 
-def delete_virtual_network(entry: dict[str, Any]) -> None:
+def delete_virtual_network(
+    entry: dict[str, Any],
+    *,
+    firewall_lock_path: Path | None = None,
+    require_alias: bool = False,
+) -> bool:
     namespace = entry["namespace_name"]
     host_interface = entry["uplink"]["host_interface"]
+    owner_alias = f"osac-vn:{entry['uid']}"
     try:
-        delete_uplink(namespace, host_interface)
+        host_link = link_details(None, host_interface)
+        if host_link is not None:
+            if host_link.get("linkinfo", {}).get("info_kind") != "veth":
+                raise StateError("deterministic host uplink exists but is not a veth")
+            alias = host_link.get("ifalias", "")
+            if alias != owner_alias and (require_alias or alias):
+                raise StateError("deterministic host uplink is not owned by this VirtualNetwork UID")
+        uplink_changed = delete_uplink(namespace, host_interface)
     except NetworkCommandError as error:
         raise StateError(str(error)) from error
-    _remove_host_forwarding_isolation(host_interface)
+    with _with_firewall_lock(firewall_lock_path):
+        firewall_changed = _remove_host_forwarding_isolation(host_interface)
+    return uplink_changed or firewall_changed

@@ -55,6 +55,24 @@ externalHostname:
 # additional layer of defense.
 internalHostname:
 
+# MCP is an opt-in integration endpoint.
+# Custom external ports are supported on Kind; OpenShift Routes use HTTPS port 443.
+mcp:
+  enabled: false
+  externalHostname: ""
+  externalPort: 443
+  # Dedicated confidential OAuth client registered for token exchange. Its
+  # credentials Secret must contain client-secret and live in this namespace.
+  exchangeClientId: ""
+  exchangeCredentialsSecret: ""
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
 # Authentication and authorization configuration:
 auth:
 

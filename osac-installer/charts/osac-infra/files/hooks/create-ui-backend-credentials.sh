@@ -28,3 +28,17 @@ oc create secret generic "${CRED_SECRET_NAME}" \
     --dry-run=client -o yaml | oc apply -f -
 
 echo "${CRED_SECRET_NAME} updated in ${OSAC_NAMESPACE}"
+
+if [[ "${MCP_DEV_FIXTURES:-false}" == "true" ]]; then
+    echo "Updating osac-mcp-exchange-credentials in ${OSAC_NAMESPACE}..."
+    oc get secret "${SECRET_NAME}" -n "${KEYCLOAK_NAMESPACE}" \
+        -o jsonpath='{.data.osac-mcp-exchange}' | base64 -d > "${TMPDIR_CREDS}/mcp-client-secret"
+    chmod 600 "${TMPDIR_CREDS}/mcp-client-secret"
+    [[ -s "${TMPDIR_CREDS}/mcp-client-secret" ]] || {
+        echo "ERROR: Could not read osac-mcp-exchange from ${SECRET_NAME}" >&2
+        exit 1
+    }
+    oc create secret generic osac-mcp-exchange-credentials \
+        --from-file=client-secret="${TMPDIR_CREDS}/mcp-client-secret" \
+        -n "${OSAC_NAMESPACE}" --dry-run=client -o yaml | oc apply -f -
+fi

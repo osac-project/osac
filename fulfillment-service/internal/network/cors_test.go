@@ -94,6 +94,58 @@ var _ = Describe("CORS middleware", func() {
 			verifyAllowedOrigin(middleware, "http://my.com", "http://my.com")
 			verifyAllowedOrigin(middleware, "http://your.com", "http://your.com")
 		})
+
+		It("Rejects a disallowed Origin while allowing an approved Origin and clients without one", func() {
+			middleware, err := NewCorsMiddleware().
+				SetLogger(logger).
+				AddAllowedOrigins("https://mcp.example.com").
+				RejectDisallowedOrigins().
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusNoContent)
+			}))
+
+			for _, tc := range []struct {
+				origins []string
+				status  int
+			}{
+				{origins: nil, status: http.StatusNoContent},
+				{origins: []string{"https://mcp.example.com"}, status: http.StatusNoContent},
+				{origins: []string{"https://disallowed.example.com"}, status: http.StatusForbidden},
+				{origins: []string{""}, status: http.StatusForbidden},
+				{origins: []string{"https://mcp.example.com", "https://disallowed.example.com"}, status: http.StatusForbidden},
+			} {
+				request := httptest.NewRequest(http.MethodPost, "/", nil)
+				for _, origin := range tc.origins {
+					request.Header.Add("Origin", origin)
+				}
+				recorder := httptest.NewRecorder()
+				handler.ServeHTTP(recorder, request)
+				Expect(recorder.Code).To(Equal(tc.status))
+			}
+		})
+
+		It("Allows the MCP protocol version header in an approved browser preflight", func() {
+			middleware, err := NewCorsMiddleware().
+				SetLogger(logger).
+				AddAllowedOrigins("https://mcp.example.com").
+				AddAllowedHeaders("MCP-Protocol-Version").
+				RejectDisallowedOrigins().
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			request := httptest.NewRequest(http.MethodOptions, "/", nil)
+			request.Header.Set("Origin", "https://mcp.example.com")
+			request.Header.Set("Access-Control-Request-Method", http.MethodPost)
+			request.Header.Set("Access-Control-Request-Headers", "MCP-Protocol-Version")
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, request)
+			Expect(recorder.Code).To(Equal(http.StatusOK))
+			Expect(recorder.Header().Get("Access-Control-Allow-Headers")).To(ContainSubstring("Mcp-Protocol-Version"))
+		})
 	})
 
 	Context("Using flags", func() {

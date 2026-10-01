@@ -1,0 +1,110 @@
+{{/*
+Copyright (c) 2026 Red Hat Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+the License. You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
+*/}}
+
+{{- if .Values.mcp.enabled }}
+{{- $caBundleConfigMap := required "certs.caBundle.configMap is required" .Values.certs.caBundle.configMap }}
+{{- $hostname := include "fulfillment-mcp-server.hostname" . }}
+{{- $externalPort := include "fulfillment-mcp-server.externalPort" . | int }}
+{{- $exchangeClientId := required "mcp.exchangeClientId is required when mcp.enabled=true" .Values.mcp.exchangeClientId }}
+{{- $exchangeSecret := required "mcp.exchangeCredentialsSecret is required when mcp.enabled=true" .Values.mcp.exchangeCredentialsSecret }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: fulfillment-mcp-server
+spec:
+  selector:
+    matchLabels:
+      app: fulfillment-mcp-server
+  replicas: 1
+  strategy:
+    type: {{ if .Values.debug }}Recreate{{ else }}RollingUpdate{{ end }}
+  template:
+    metadata:
+      labels:
+        app: fulfillment-mcp-server
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+      - name: cas
+        configMap:
+          name: {{ $caBundleConfigMap }}
+      - name: tls
+        secret:
+          secretName: fulfillment-mcp-server-tls
+      - name: exchange-credentials
+        secret:
+          secretName: {{ $exchangeSecret }}
+      containers:
+      - name: mcp-server
+        image: {{ .Values.images.service.repository }}:{{ .Values.images.service.tag }}
+        imagePullPolicy: {{ .Values.images.service.pullPolicy }}
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        resources:
+          {{- toYaml .Values.mcp.resources | nindent 10 }}
+        volumeMounts:
+        - name: cas
+          mountPath: /etc/fulfillment-mcp-server/tls/cas
+        - name: tls
+          mountPath: /etc/fulfillment-mcp-server/tls
+        - name: exchange-credentials
+          mountPath: /etc/fulfillment-mcp-server/oauth
+          readOnly: true
+        command:
+        - /usr/local/bin/fulfillment-service
+        - start
+        - mcp-server
+        - --log-level={{ .Values.log.level }}
+        # OAuth bearer tokens and tenant resource data must not be logged.
+        - --log-headers=false
+        - --log-bodies=false
+        - --ca-file=/etc/fulfillment-mcp-server/tls/cas
+        - --http-listener-address=0.0.0.0:8000
+        - --http-listener-tls-crt=/etc/fulfillment-mcp-server/tls/tls.crt
+        - --http-listener-tls-key=/etc/fulfillment-mcp-server/tls/tls.key
+        - --http-cors-allowed-origins=https://{{ $hostname }}{{ if ne $externalPort 443 }}:{{ $externalPort }}{{ end }}
+        - --grpc-server-address=fulfillment-api:8000
+        - --grpc-authn-trusted-token-issuers={{ tpl (required "auth.issuerUrl is required" .Values.auth.issuerUrl) . }}
+        - --oauth-authorization-server={{ tpl (required "auth.issuerUrl is required" .Values.auth.issuerUrl) . }}
+        - --oauth-resource-url=https://{{ $hostname }}{{ if ne $externalPort 443 }}:{{ $externalPort }}{{ end }}/
+        - --oauth-token-endpoint={{ trimSuffix "/" (tpl (required "auth.issuerUrl is required" .Values.auth.issuerUrl) .) }}/protocol/openid-connect/token
+        - --oauth-exchange-client-id={{ $exchangeClientId }}
+        - --oauth-exchange-client-secret-file=/etc/fulfillment-mcp-server/oauth/client-secret
+        ports:
+        - name: mcp
+          containerPort: 8000
+          protocol: TCP
+        livenessProbe:
+          tcpSocket:
+            port: mcp
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 5
+        readinessProbe:
+          tcpSocket:
+            port: mcp
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 5
+{{- end }}

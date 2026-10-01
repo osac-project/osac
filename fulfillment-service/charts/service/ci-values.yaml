@@ -24,6 +24,14 @@ certs:
 externalHostname: fulfillment-api.ci.example.com
 internalHostname: fulfillment-internal-api.ci.example.com
 
+# Exercise the opt-in MCP templates in the existing chart lint/render job.
+mcp:
+  enabled: true
+  externalHostname: mcp.default.localhost
+  externalPort: 443
+  exchangeClientId: https://mcp.default.localhost/
+  exchangeCredentialsSecret: ci-mcp-exchange-credentials
+
 auth:
   issuerUrl: https://issuer.ci.example.com
   controllerCredentials:

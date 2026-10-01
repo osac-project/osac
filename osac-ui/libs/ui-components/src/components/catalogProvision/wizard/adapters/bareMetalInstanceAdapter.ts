@@ -46,8 +46,7 @@ export const useBareMetalInstanceAdapter = (): CatalogProvisionAdapter<
       GeneralStep: BareMetalGeneralStep,
       NetworkingStep: BareMetalNetworkingStep,
       ReviewStep: BareMetalReviewStep,
-      getStepValidationSchema: (catalogItem, stepId) =>
-        buildBareMetalInstanceStepSchema(catalogItem, stepId, t),
+      getStepValidationSchema: (_, stepId) => buildBareMetalInstanceStepSchema(stepId, t),
       onCatalogItemSelected: (item, helpers) => {
         helpers.resetForm({
           values: {

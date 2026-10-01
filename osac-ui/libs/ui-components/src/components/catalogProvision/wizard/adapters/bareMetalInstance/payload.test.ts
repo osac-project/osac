@@ -54,4 +54,40 @@ describe('buildBareMetalInstanceCreatePayload', () => {
       id: 'disk-image-1',
     });
   });
+
+  it('sends inline user data when the inline source is selected', () => {
+    const values = buildValues('');
+    values.spec.userDataSource = 'inline';
+    values.spec.userData = '  #cloud-config\nusers: []  ';
+    values.spec.userDataSecret = { name: 'stale-secret' };
+
+    const payload = buildBareMetalInstanceCreatePayload(values);
+
+    expect(payload.spec?.userData).toBe('#cloud-config\nusers: []');
+    expect(payload.spec).not.toHaveProperty('userDataSecret');
+  });
+
+  it('sends a Secret reference when the Secret source is selected', () => {
+    const values = buildValues('');
+    values.spec.userDataSource = 'secret';
+    values.spec.userData = 'stale inline data';
+    values.spec.userDataSecret = { name: '  cloud-init  ' };
+
+    const payload = buildBareMetalInstanceCreatePayload(values);
+
+    expect(payload.spec?.userDataSecret).toEqual({ name: 'cloud-init' });
+    expect(payload.spec).not.toHaveProperty('userData');
+  });
+
+  it('omits user data when the selected source is empty', () => {
+    const values = buildValues('');
+    values.spec.userDataSource = 'secret';
+    values.spec.userData = 'stale inline data';
+    values.spec.userDataSecret = { name: '   ' };
+
+    const payload = buildBareMetalInstanceCreatePayload(values);
+
+    expect(payload.spec).not.toHaveProperty('userData');
+    expect(payload.spec).not.toHaveProperty('userDataSecret');
+  });
 });

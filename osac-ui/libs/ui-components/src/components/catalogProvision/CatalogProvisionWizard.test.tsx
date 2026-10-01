@@ -39,7 +39,7 @@ const fillClusterGeneralStep = async (user: UserEvent, name: string) => {
   const nameInput = screen.getByLabelText(/^Name/);
   await user.clear(nameInput);
   await user.type(nameInput, name);
-  await user.click(screen.getByLabelText(/Pull secret secret/));
+  await user.click(screen.getByLabelText(/Pull secret/));
   await user.click(screen.getByRole('option', { name: 'pull-secret' }));
 };
 

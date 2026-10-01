@@ -1002,8 +1002,8 @@ func (s *PrivateClustersServer) validateVersionUpdate(ctx context.Context,
 	return validateResolvedClusterVersion(version, version.GetMetadata().GetName(), "")
 }
 
-// validateClusterNetworkAttachmentImmutability rejects changes to the complete
-// network attachment after applying the update mask.
+// validateClusterNetworkAttachmentImmutability keeps the subnet fixed while
+// allowing a Cluster's security groups to be updated.
 func validateClusterNetworkAttachmentImmutability(current, candidate *privatev1.Cluster,
 	updateMask *fieldmaskpb.FieldMask) error {
 	if !updateIncludesField(updateMask, "spec.network_attachment") {
@@ -1021,14 +1021,6 @@ func validateClusterNetworkAttachmentImmutability(current, candidate *privatev1.
 			refKey(existingSubnet), refKey(newSubnet),
 		)
 	}
-	if err := validateImmutableSecurityGroups(
-		existingAttachment.GetSecurityGroups(),
-		newAttachment.GetSecurityGroups(),
-		"spec.network_attachment.security_groups",
-	); err != nil {
-		return err
-	}
-
 	return nil
 }
 

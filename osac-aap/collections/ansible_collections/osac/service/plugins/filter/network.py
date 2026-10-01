@@ -1,6 +1,40 @@
 import ipaddress
 
 
+def dhcp_range_excluding_cidr(subnet_cidr, reserved_cidr=""):
+    """Return the Netris DHCP start/end addresses, excluding a reserved CIDR.
+
+    The first usable subnet address is the gateway and the DHCP range starts at
+    the second usable address. A reserved VIP range must be contained in the
+    subnet and end at the subnet's broadcast address. Restricting the range to
+    the addresses before that CIDR prevents DHCP from handing out MetalLB VIPs.
+    """
+    subnet = ipaddress.ip_network(subnet_cidr, strict=False)
+    if subnet.version != 4:
+        raise ValueError(f"Netris DHCP range requires an IPv4 subnet, got {subnet_cidr}")
+
+    usable = iter(subnet.hosts())
+    try:
+        next(usable)  # The first usable address is the gateway.
+        dhcp_start = next(usable)
+    except StopIteration as exc:
+        raise ValueError(f"subnet {subnet_cidr} has no DHCP host range after its gateway") from exc
+
+    dhcp_end = subnet.broadcast_address - 1
+    if reserved_cidr:
+        reserved = ipaddress.ip_network(reserved_cidr, strict=False)
+        if reserved.version != subnet.version or not reserved.subnet_of(subnet):
+            raise ValueError(f"reserved CIDR {reserved_cidr} is not contained in subnet {subnet_cidr}")
+        if reserved.broadcast_address != subnet.broadcast_address:
+            raise ValueError(f"reserved CIDR {reserved_cidr} must end at subnet {subnet_cidr}'s broadcast address")
+        dhcp_end = reserved.network_address - 1
+
+    if dhcp_end < dhcp_start:
+        raise ValueError(f"subnet {subnet_cidr} has no DHCP host range before reserved CIDR {reserved_cidr}")
+
+    return str(dhcp_start), str(dhcp_end)
+
+
 def next_available_ip(cidr, allocated_ips):
     """Returns the first available host IP in a CIDR range.
 
@@ -28,5 +62,6 @@ def next_available_ip(cidr, allocated_ips):
 class FilterModule:
     def filters(self):
         return {
+            "dhcp_range_excluding_cidr": dhcp_range_excluding_cidr,
             "next_available_ip": next_available_ip,
         }

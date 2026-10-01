@@ -122,7 +122,8 @@ def caas_networking(grpc: GRPCClient, k8s_hub_client: K8sClient) -> Iterator[dic
 
         # Subnet
         print(f"Creating Subnet: {subnet_name}")
-        subnet_id = grpc.create_subnet(name=subnet_name, virtual_network=vn_id, ipv4_cidr="10.210.1.0/24")
+        subnet_cidr = "10.210.1.0/24"
+        subnet_id = grpc.create_subnet(name=subnet_name, virtual_network=vn_id, ipv4_cidr=subnet_cidr)
         subnet_cr = wait_for_subnet_cr(k8s=k8s_hub_client, uuid=subnet_id)
         wait_for_subnet_ready(k8s=k8s_hub_client, name=subnet_cr)
         print(f"Subnet {subnet_cr} is Ready")
@@ -141,6 +142,7 @@ def caas_networking(grpc: GRPCClient, k8s_hub_client: K8sClient) -> Iterator[dic
             "subnet_name": subnet_name,
             "subnet_id": subnet_id,
             "subnet_cr": subnet_cr,
+            "subnet_cidr": subnet_cidr,
             "sg_name": sg_name,
             "sg_id": sg_id,
             "sg_cr": sg_cr,

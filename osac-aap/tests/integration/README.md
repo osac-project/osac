@@ -67,6 +67,10 @@ Each workflow has 2 tests:
    - Override execution verified via log file
    - Workflow functions correctly with overrides
 
+The focused `netris_dhcp_range` role test executes the production subnet
+addressing tasks locally and verifies that DHCP stops before the subnet's
+reserved MetalLB VIP range. It does not contact Kubernetes or Netris.
+
 ## Override Coverage
 
 - **Total Extension Points**: 44

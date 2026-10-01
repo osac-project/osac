@@ -15,6 +15,7 @@ resources land in the same tenant scope.
 from __future__ import annotations
 
 import contextlib
+import ipaddress
 import logging
 import subprocess
 import time
@@ -34,6 +35,12 @@ from tests.e2e.core.helpers import (
     wait_for_cluster_order_cr,
     wait_for_cluster_progressing,
     wait_for_cluster_ready,
+    wait_for_external_ip_allocated,
+    wait_for_external_ip_attachment_cr,
+    wait_for_external_ip_attachment_deletion,
+    wait_for_external_ip_attachment_ready,
+    wait_for_external_ip_cr,
+    wait_for_external_ip_deletion,
     wait_for_security_group_cr,
     wait_for_security_group_deletion,
     wait_for_security_group_ready,
@@ -46,7 +53,7 @@ from tests.e2e.core.helpers import (
 )
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
-from tests.e2e.core.runner import run_unchecked
+from tests.e2e.core.runner import poll_until, run_unchecked
 
 pytestmark = [pytest.mark.regression, pytest.mark.requires_caas]
 
@@ -281,6 +288,42 @@ def _assert_agent_pool_available(*, k8s: K8sClient, expected_available: int = 1)
         log.warning("Agent preflight check failed (non-fatal): %s", exc)
 
 
+def _assert_caas_worker_ips_in_subnet(
+    *, grpc: GRPCClient, cluster_order_status: dict[str, object], subnet_cidr: str, subnet_ref: str
+) -> None:
+    """Verify each Ready CaaS worker has a discovered address in its tenant subnet."""
+    workers = [
+        worker for worker in cluster_order_status.get("workers", []) if worker.get("kind") == "BareMetalInstance"
+    ]
+    assert workers, "Ready ClusterOrder has no BareMetalInstance workers"
+
+    subnet = ipaddress.ip_network(subnet_cidr)
+    for worker in workers:
+        assert worker.get("phase") == "Ready", f"CaaS worker {worker.get('name')} is not Ready"
+        bmi_id = worker.get("resourceID", "")
+        assert bmi_id, f"CaaS worker {worker.get('name')} has no BareMetalInstance resource ID"
+
+        def network_statuses(bmi_id: str = bmi_id) -> list[dict[str, object]]:
+            instance = grpc.get_baremetal_instance(bmi_id=bmi_id).get("object", {})
+            return instance.get("status", {}).get("networkAttachmentStatuses", [])
+
+        statuses = poll_until(
+            fn=network_statuses,
+            until=lambda items: any(item.get("primary") and item.get("ipAddress") for item in items),
+            retries=30,
+            delay=2,
+            description=f"tenant-network IP feedback for CaaS worker {bmi_id}",
+        )
+        primary_statuses = [item for item in statuses if item.get("primary")]
+        assert len(primary_statuses) == 1, f"CaaS worker {bmi_id} should have exactly one primary network"
+        assert primary_statuses[0].get("subnetRef") == subnet_ref, (
+            f"CaaS worker {bmi_id} primary network uses subnet "
+            f"{primary_statuses[0].get('subnetRef')!r}, expected tenant subnet {subnet_ref!r}"
+        )
+        address = ipaddress.ip_address(primary_statuses[0]["ipAddress"])
+        assert address in subnet, f"CaaS worker {bmi_id} address {address} is outside tenant subnet {subnet}"
+
+
 def _cleanup_cluster(
     *,
     cli: OsacCLI,
@@ -376,14 +419,14 @@ class TestCaasClusterWithNetworkAttachment:
             # is validated early.
             co_spec = k8s_hub_client.get_cluster_order_spec(name=co_name)
             co_na = co_spec.get("networkAttachment", {})
-            assert co_na.get("subnetRef"), (
-                f"ClusterOrder {co_name} networkAttachment.subnetRef is empty "
-                "immediately after creation; expected the reconciler to map "
-                "the explicit attachment"
+            assert co_na.get("subnetRef") == caas_networking["subnet_cr"], (
+                f"ClusterOrder {co_name} networkAttachment.subnetRef is "
+                f"{co_na.get('subnetRef')!r}; expected {caas_networking['subnet_cr']!r}"
             )
-            assert co_na.get("securityGroupRefs"), (
-                f"ClusterOrder {co_name} networkAttachment.securityGroupRefs "
-                "is empty; expected at least one security group reference"
+            assert co_na.get("securityGroupRefs") == [caas_networking["sg_cr"]], (
+                f"ClusterOrder {co_name} networkAttachment.securityGroupRefs is "
+                f"{co_na.get('securityGroupRefs')!r}; expected the security group "
+                f"{caas_networking['sg_cr']!r} from the same VirtualNetwork"
             )
 
             # Wait for Progressing
@@ -392,10 +435,32 @@ class TestCaasClusterWithNetworkAttachment:
             # Wait for Ready with fail-fast on Failed
             wait_for_cluster_ready(k8s=k8s_hub_client, name=co_name)
 
-            # Verify cluster status has VIP endpoints
+            # Verify VIP discovery reaches ClusterOrder and is synchronized back
+            # to the Fulfillment Cluster resource.
             co_status = k8s_hub_client.get_cluster_order_status(name=co_name)
             cluster_ref = co_status.get("clusterReference", {})
             assert cluster_ref.get("hostedClusterName"), "ClusterOrder should have a hostedClusterName when Ready"
+            _assert_caas_worker_ips_in_subnet(
+                grpc=grpc,
+                cluster_order_status=co_status,
+                subnet_cidr=caas_networking["subnet_cidr"],
+                subnet_ref=caas_networking["subnet_cr"],
+            )
+            api_endpoint = co_status.get("apiEndpoint", "")
+            ingress_endpoint = co_status.get("ingressEndpoint", "")
+            assert api_endpoint, f"ClusterOrder {co_name} has no API VIP after reaching Ready"
+            assert ingress_endpoint, f"ClusterOrder {co_name} has no ingress VIP after reaching Ready"
+
+            cluster = grpc.get_cluster(cluster_id=uuid).get("object", {})
+            cluster_status = cluster.get("status", {})
+            assert cluster_status.get("apiEndpoint") == api_endpoint, (
+                f"Fulfillment Cluster API endpoint {cluster_status.get('apiEndpoint')!r} "
+                f"does not match ClusterOrder VIP {api_endpoint!r}"
+            )
+            assert cluster_status.get("ingressEndpoint") == ingress_endpoint, (
+                f"Fulfillment Cluster ingress endpoint {cluster_status.get('ingressEndpoint')!r} "
+                f"does not match ClusterOrder VIP {ingress_endpoint!r}"
+            )
 
             # Delete — set the shared deadline NOW, when deletion is requested,
             # so the full 20-minute budget covers only the deletion phase.
@@ -414,6 +479,156 @@ class TestCaasClusterWithNetworkAttachment:
         finally:
             # If deletion was never requested (e.g. provisioning failed),
             # start a fresh 20-minute deadline for cleanup.
+            if deletion_deadline is None:
+                deletion_deadline = time.monotonic() + 1200
+            _cleanup_cluster(
+                cli=cli,
+                grpc=grpc,
+                k8s=k8s_hub_client,
+                uuid=uuid,
+                co_name=co_name,
+                deadline=deletion_deadline,
+                deletion_requested=deletion_requested,
+            )
+
+
+# ---------------------------------------------------------------------------
+# Automatic ExternalIP lifecycle for a CaaS Cluster
+# ---------------------------------------------------------------------------
+@pytest.mark.serial
+class TestCaasClusterAutoExternalIP:
+    """Verify auto-provisioned API and ingress addresses follow Cluster lifecycle."""
+
+    @pytest.mark.xdist_group("caas-cluster-provision")
+    def test_auto_external_ip_attachment_and_cleanup(
+        self,
+        cli: OsacCLI,
+        grpc: GRPCClient,
+        private_grpc: GRPCClient,
+        k8s_hub_client: K8sClient,
+        cluster_template: str,
+        pull_secret_path: str,
+        ssh_public_key_path: str,
+        caas_networking: dict[str, str],
+    ) -> None:
+        """The test uses a preconfigured pool and creates no shared pool resources."""
+        ready_pool_with_capacity = False
+        for pool_id in private_grpc.list_external_ip_pool_ids():
+            pool = private_grpc.get_external_ip_pool(pool_id=pool_id).get("object", {})
+            pool_status = pool.get("status", {})
+            if (
+                pool_status.get("state") in {"EXTERNAL_IP_POOL_STATE_READY", "Ready"}
+                and pool_status.get("available", 0) >= 2
+            ):
+                ready_pool_with_capacity = True
+                break
+        if not ready_pool_with_capacity:
+            pytest.skip("CaaS auto-ExternalIP E2E requires a preconfigured Ready pool with at least two free addresses")
+
+        _assert_agent_pool_available(k8s=k8s_hub_client)
+        name = unique_name("e2e-caas-auto-eip")
+        uuid = cli.create_cluster(
+            name=name,
+            template=cluster_template,
+            template_parameter_files={"pull_secret": pull_secret_path},
+            template_parameters={"ssh_public_key": Path(ssh_public_key_path).read_text().strip()},
+            external_ip_attachment=True,
+        )
+        print(f"Created auto-ExternalIP cluster {name}: {uuid}")
+
+        deletion_deadline: float | None = None
+        deletion_requested = False
+        co_name: str | None = None
+        attachment_crs: list[str] = []
+        external_ip_crs: list[str] = []
+        try:
+            co_name = wait_for_cluster_order_cr(k8s=k8s_hub_client, uuid=uuid)
+            wait_for_cluster_progressing(k8s=k8s_hub_client, name=co_name)
+            wait_for_cluster_ready(k8s=k8s_hub_client, name=co_name)
+
+            co_spec = k8s_hub_client.get_cluster_order_spec(name=co_name)
+            network_attachment = co_spec.get("networkAttachment", {})
+            assert network_attachment.get("subnetRef") == caas_networking["subnet_cr"]
+            assert network_attachment.get("securityGroupRefs") == [caas_networking["sg_cr"]]
+
+            def cluster_attachments() -> list[dict[str, object]]:
+                items = grpc.call(service="osac.public.v1.ExternalIPAttachments/List").get("items", [])
+                return [item for item in items if item.get("spec", {}).get("cluster", {}).get("id") == uuid]
+
+            attachments = poll_until(
+                fn=cluster_attachments,
+                until=lambda items: len(items) == 2,
+                retries=60,
+                delay=5,
+                description=f"two auto-provisioned ExternalIPAttachments for Cluster {uuid}",
+            )
+            endpoint_names = {item.get("spec", {}).get("targetEndpoint") for item in attachments}
+            assert endpoint_names == {"EXTERNAL_IP_ATTACHMENT_ENDPOINT_API", "EXTERNAL_IP_ATTACHMENT_ENDPOINT_INGRESS"}
+
+            external_ip_ids = {item.get("spec", {}).get("externalIp", {}).get("id") for item in attachments}
+            assert len(external_ip_ids) == 2 and "" not in external_ip_ids
+            external_ips: list[dict[str, object]] = []
+            for external_ip_id in external_ip_ids:
+                attachment_id = next(
+                    item["id"]
+                    for item in attachments
+                    if item.get("spec", {}).get("externalIp", {}).get("id") == external_ip_id
+                )
+                attachment_cr = wait_for_external_ip_attachment_cr(k8s=k8s_hub_client, uuid=attachment_id)
+                attachment_crs.append(attachment_cr)
+                wait_for_external_ip_attachment_ready(k8s=k8s_hub_client, name=attachment_cr)
+
+                external_ip = grpc.get_external_ip(external_ip_id=external_ip_id).get("object", {})
+                labels = external_ip.get("metadata", {}).get("labels", {})
+                assert labels.get("osac.openshift.io/auto-created") == "true"
+                assert labels.get("osac.openshift.io/auto-created-for") == uuid
+                external_ip_cr = wait_for_external_ip_cr(k8s=k8s_hub_client, uuid=external_ip_id)
+                external_ip_crs.append(external_ip_cr)
+                wait_for_external_ip_allocated(k8s=k8s_hub_client, name=external_ip_cr)
+                external_ip = poll_until(
+                    fn=lambda external_ip_id=external_ip_id: grpc.get_external_ip(external_ip_id=external_ip_id).get(
+                        "object", {}
+                    ),
+                    until=lambda item: bool(item.get("status", {}).get("address")),
+                    retries=30,
+                    delay=2,
+                    description=f"allocated address feedback for ExternalIP {external_ip_id}",
+                )
+                external_ips.append(external_ip)
+            assert all(item.get("status", {}).get("address") for item in external_ips)
+
+            # The delete API removes DB records, and the ClusterOrder controller
+            # removes their Kubernetes CRs in attachment-then-IP order.
+            deletion_deadline = time.monotonic() + 1200
+            cli.delete_cluster(uuid=uuid)
+            deletion_requested = True
+            wait_for_cluster_deleting(k8s=k8s_hub_client, name=co_name)
+            wait_for_cluster_grpc_deleting_or_archived(grpc=grpc, uuid=uuid)
+            wait_for_cluster_deletion_with_deadline(k8s=k8s_hub_client, name=co_name, deadline=deletion_deadline)
+            wait_for_cluster_grpc_removal(grpc=grpc, uuid=uuid)
+
+            poll_until(
+                fn=lambda: not cluster_attachments(),
+                until=lambda removed: removed,
+                retries=60,
+                delay=5,
+                description=f"auto-provisioned ExternalIPAttachments for Cluster {uuid} to be deleted",
+            )
+            poll_until(
+                fn=lambda: all(external_ip_id not in grpc.list_external_ip_ids() for external_ip_id in external_ip_ids),
+                until=lambda removed: removed,
+                retries=60,
+                delay=5,
+                description=f"auto-provisioned ExternalIPs for Cluster {uuid} to be deleted",
+            )
+            for attachment_cr in attachment_crs:
+                wait_for_external_ip_attachment_deletion(k8s=k8s_hub_client, name=attachment_cr)
+            for external_ip_cr in external_ip_crs:
+                wait_for_external_ip_deletion(k8s=k8s_hub_client, name=external_ip_cr)
+        except Exception:
+            _report_agent_diagnostics(k8s=k8s_hub_client, co_name=co_name, context=f"test-failure for {name}")
+            raise
+        finally:
             if deletion_deadline is None:
                 deletion_deadline = time.monotonic() + 1200
             _cleanup_cluster(
@@ -447,7 +662,8 @@ class TestCaasNetworkAttachmentNegative:
                 network_attachment="subnet=nonexistent-subnet-12345",
             )
         combined = (exc_info.value.stdout or "") + (exc_info.value.stderr or "")
-        assert "not found" in combined.lower() or "does not exist" in combined.lower() or exc_info.value.returncode != 0
+        assert "nonexistent-subnet-12345" in combined.lower()
+        assert "does not exist" in combined.lower() or "not found" in combined.lower()
 
     def test_reject_sg_from_wrong_vn(
         self,
@@ -508,13 +724,7 @@ class TestCaasNetworkAttachmentNegative:
                     network_attachment=f"subnet={subnet_name},security-groups={second_sg_name}",
                 )
             combined = (exc_info.value.stdout or "") + (exc_info.value.stderr or "")
-            assert (
-                "not found" in combined.lower()
-                or "does not exist" in combined.lower()
-                or "different" in combined.lower()
-                or "mismatch" in combined.lower()
-                or exc_info.value.returncode != 0
-            )
+            assert "different virtual network" in combined.lower()
         finally:
             # Clean up second VN resources in reverse order: SG -> Subnet -> VN
             if second_sg_id and second_sg_cr:
@@ -599,10 +809,15 @@ class TestCaasDefaultNetworking:
                 "the platform should populate default networking references "
                 "when a ready tenant network exists"
             )
+            assert co_na.get("securityGroupRefs"), (
+                f"ClusterOrder {co_name} has no networkAttachment.securityGroupRefs; "
+                "the tenant default security group should be applied with its default subnet"
+            )
             # Verify the referenced Subnet CR exists and has a phase
             subnet_phase = k8s_hub_client.get_subnet_phase(name=co_subnet_ref, checked=False)
-            assert subnet_phase, (
-                f"Subnet CR {co_subnet_ref!r} referenced by ClusterOrder {co_name} does not exist or has no phase"
+            assert subnet_phase == "Ready", (
+                f"Subnet CR {co_subnet_ref!r} referenced by ClusterOrder {co_name} "
+                f"has phase {subnet_phase!r}, expected Ready"
             )
 
             # Verify cluster status has cluster reference

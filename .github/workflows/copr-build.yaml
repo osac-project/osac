@@ -50,8 +50,11 @@ permissions: {}
 
 jobs:
   trigger-copr:
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/fulfillment-service/v')
+    environment: copr-production
     name: Trigger Copr build
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     # No checkout needed -- the workflow only sends an HTTP request.
     steps:
       - name: Notify Copr
@@ -67,19 +70,18 @@ jobs:
           # endpoint.  Copr's handler uses the clone_url to fetch sources
           # and the ref/after fields to check out the correct commit before
           # running .copr/Makefile.
-          response=$(curl --fail-with-body -s -o response.txt -w "%{http_code}" \
+          payload=$(jq -n \
+            --arg ref "${GITHUB_REF}" \
+            --arg after "${GITHUB_SHA}" \
+            --arg clone_url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" \
+            --arg full_name "${GITHUB_REPOSITORY}" \
+            --arg html_url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            '{ref: $ref, after: $after, repository: {clone_url: $clone_url, full_name: $full_name, html_url: $html_url}}')
+          response=$(curl --fail-with-body --max-time 30 -s -o response.txt -w "%{http_code}" \
             -X POST \
             -H "Content-Type: application/json" \
             -H "X-GitHub-Event: push" \
-            -d '{
-              "ref": "'"${GITHUB_REF}"'",
-              "after": "'"${GITHUB_SHA}"'",
-              "repository": {
-                "clone_url": "'"${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"'",
-                "full_name": "'"${GITHUB_REPOSITORY}"'",
-                "html_url": "'"${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"'"
-              }
-            }' \
+            -d "${payload}" \
             "${COPR_WEBHOOK_URL}")
 
           echo "Copr responded with HTTP ${response}"

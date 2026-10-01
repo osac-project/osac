@@ -86,19 +86,20 @@ type ToolBuilder struct {
 // Tool is an instance of the integration test tool that sets up the test environment. Don't create instances of this
 // directly, use the NewTool function instead.
 type Tool struct {
-	logger        *slog.Logger
-	projectDir    string
-	tmpDir        string
-	clusterName   string
-	kubeClient    crclient.Client
-	kubeClientSet *kubernetes.Clientset
-	caPool        *trust.CertPool
-	kcFile        string
-	internalView  *ToolView
-	externalView  *ToolView
-	secret        string
-	jqTool        *jq.Tool
-	cliBinaryPath string
+	logger          *slog.Logger
+	projectDir      string
+	tmpDir          string
+	clusterName     string
+	kubeClient      crclient.Client
+	kubeClientSet   *kubernetes.Clientset
+	caPool          *trust.CertPool
+	kcFile          string
+	internalView    *ToolView
+	externalView    *ToolView
+	secret          string
+	jqTool          *jq.Tool
+	cliBinaryPath   string
+	userTokenSource auth.TokenSource
 }
 
 // ToolView contains the gRPC connections and HTTP clients that can be used to connect to the cluster. This is a
@@ -524,6 +525,7 @@ func (t *Tool) createClients(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	t.userTokenSource = userTokenSource
 
 	// Create gRPC clients:
 	t.internalView = &ToolView{}
@@ -1793,6 +1795,16 @@ func (v *ToolView) Close() error {
 // ProjectDir returns the project directory.
 func (t *Tool) ProjectDir() string {
 	return t.projectDir
+}
+
+// UserTokenSource returns the regular user's token source for another HTTP listener.
+func (t *Tool) UserTokenSource() auth.TokenSource {
+	return t.userTokenSource
+}
+
+// CaPool returns the CA pool used by the integration clients.
+func (t *Tool) CaPool() *trust.CertPool {
+	return t.caPool
 }
 
 // Names of the command line tools:

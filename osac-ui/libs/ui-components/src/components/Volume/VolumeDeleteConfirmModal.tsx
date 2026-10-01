@@ -6,7 +6,6 @@ import { Volumes } from '@osac/types';
 import { useDeleteResource } from '../../api/use-resource';
 import { useTranslation } from '../../hooks/useTranslation';
 import DeleteResourceModal from '../Resource/DeleteResourceModal';
-import { useToast } from '../Toast/useToast';
 
 const VOLUMES_LIST_PATH = '/storage/volumes';
 
@@ -23,12 +22,10 @@ const VolumeDeleteConfirmModal = ({
 }: VolumeDeleteConfirmModalProps) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { addToast } = useToast();
   const deleteVolume = useDeleteResource(Volumes);
   const volumeName = volume.metadata?.name ?? volume.id;
 
   const handleSuccess = () => {
-    addToast({ variant: 'success', title: t('Volume deleted') });
     navigate(VOLUMES_LIST_PATH);
     onSuccess();
   };

@@ -36,7 +36,7 @@ describe('VolumeDeleteConfirmModal', () => {
     ).toBeInTheDocument();
   });
 
-  it('navigates to the volumes list and shows a success toast on successful delete', async () => {
+  it('navigates to the volumes list on successful delete', async () => {
     let deleteCalled = false;
     const onSuccess = vi.fn();
     const { user } = renderWithProviders(
@@ -57,7 +57,6 @@ describe('VolumeDeleteConfirmModal', () => {
     await waitFor(() => expect(onSuccess).toHaveBeenCalled());
     expect(deleteCalled).toBe(true);
     expect(mockNavigate).toHaveBeenCalledWith('/storage/volumes');
-    expect(screen.getByText('Volume deleted')).toBeInTheDocument();
   });
 
   it('shows an inline error alert when delete fails', async () => {

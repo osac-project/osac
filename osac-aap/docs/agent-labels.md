@@ -8,9 +8,14 @@ pre-booted Agents or periodic BMH/BCM Agent importer.
 
 | Label | Owner | Purpose |
 |---|---|---|
-| `osac.openshift.io/instance_type` | Bare-metal worker controller | Selected BMIT name for NodePool matching. |
+| `osac.openshift.io/instance_type` | Bare-metal worker controller | Selected BMIT name, also recorded on NodePool metadata. |
 | `osac.openshift.io/clusterorder` | Bare-metal worker controller | Correlates the Agent to its ClusterOrder. |
+| `osac.openshift.io/node-set` | Bare-metal worker controller | Selects the Agent for its logical NodeSet's NodePool. |
 | `osac.openshift.io/worker-name` | Bare-metal worker controller | Prevents a worker Agent from being bound twice. |
+
+NodePool Agent selectors match `clusterorder` plus `node-set`, not
+`instance_type`. Distinct NodeSets may select the same BMIT and must still
+have isolated Agent pools and independent replica counts.
 
 Do not pre-label CaaS worker Agents with a ClusterOrder or manually approve
 them: the controller must first verify the authoritative tenant, BMI ownership,

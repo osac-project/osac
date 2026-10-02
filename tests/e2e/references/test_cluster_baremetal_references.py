@@ -247,15 +247,27 @@ class TestClusterBareMetalReferences:
                 logger.warning("Failed to cleanup cross-tenant catalog item %s", cat_id)
 
     @pytest.mark.requires_caas
-    def test_tenant_only_hardware_type_is_not_selectable_for_caas(
-        self, private_grpc: GRPCClient, jwt_grpc_tenant1: GRPCClient, cluster_template: str, cluster_version: str
+    def test_non_shared_hardware_type_creation_is_rejected(self, private_grpc: GRPCClient):
+        bmit_id: str | None = None
+        try:
+            with pytest.raises(subprocess.CalledProcessError) as exc_info:
+                bmit_id = private_grpc.create_bare_metal_instance_type(
+                    name=f"ref-tenant2-worker-{uuid4().hex[:8]}", tenant="tenant2"
+                )
+            assert_grpc_field_violation(exc_info, field_path="metadata.tenant")
+        finally:
+            if bmit_id:
+                private_grpc.call(service=f"{PRIVATE_API}.BareMetalInstanceTypes/Delete", data={"id": bmit_id})
+
+    @pytest.mark.requires_caas
+    def test_unknown_shared_hardware_type_is_not_selectable_for_caas(
+        self, jwt_grpc_tenant1: GRPCClient, cluster_template: str, cluster_version: str
     ):
         tag = uuid4().hex[:8]
-        type_name = f"ref-tenant2-worker-{tag}"
-        bmit_id = private_grpc.create_bare_metal_instance_type(name=type_name, tenant="tenant2")
+        type_name = f"ref-missing-worker-{tag}"
         cluster_id: str | None = None
         try:
-            # Even a direct template request from tenant1 must resolve CaaS hardware in shared.
+            # A direct tenant request must resolve hardware in shared; a missing type is invalid.
             with pytest.raises(subprocess.CalledProcessError) as exc_info:
                 response = jwt_grpc_tenant1.call(
                     service=f"{PUBLIC_API}.Clusters/Create",
@@ -275,7 +287,6 @@ class TestClusterBareMetalReferences:
         finally:
             if cluster_id:
                 jwt_grpc_tenant1.call(service=f"{PUBLIC_API}.Clusters/Delete", data={"id": cluster_id})
-            private_grpc.call(service=f"{PRIVATE_API}.BareMetalInstanceTypes/Delete", data={"id": bmit_id})
 
     @pytest.mark.requires_caas
     def test_invalid_cluster_template_name_returns_error(self, private_grpc: GRPCClient):

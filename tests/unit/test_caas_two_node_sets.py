@@ -35,7 +35,10 @@ def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
     workers = {}
     agents = []
     node_pools = []
-    for bmi_id, instance_type in (("cpu-id", "ci-worker-bm"), ("gpu-id", "ci-worker-bm-gpu")):
+    for bmi_id, node_set, instance_type in (
+        ("cpu-id", "compute", "ci-worker-bm"),
+        ("gpu-id", "gpu", "ci-worker-bm-gpu"),
+    ):
         workers[bmi_id] = {
             "object": {
                 "metadata": {
@@ -49,7 +52,8 @@ def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
                 },
             }
         }
-        labels = {"osac.openshift.io/clusterorder": "order-a", "osac.openshift.io/instance_type": instance_type}
+        selector = {"osac.openshift.io/clusterorder": "order-a", "osac.openshift.io/node-set": node_set}
+        labels = {**selector, "osac.openshift.io/instance_type": instance_type}
         agents.append(
             {
                 "metadata": {"name": f"{bmi_id}-agent", "namespace": "osac", "labels": labels},
@@ -59,7 +63,7 @@ def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
         node_pools.append(
             {
                 "metadata": {"labels": labels},
-                "spec": {"replicas": 1, "platform": {"agent": {"agentLabelSelector": {"matchLabels": labels}}}},
+                "spec": {"replicas": 1, "platform": {"agent": {"agentLabelSelector": {"matchLabels": selector}}}},
             }
         )
 
@@ -73,8 +77,8 @@ def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
         "metadata": {"namespace": "osac", "annotations": {"osac.openshift.io/tenant": "tenant1"}},
         "spec": {
             "nodeRequests": [
-                {"bareMetal": {"instanceType": instance_type}, "numberOfNodes": 1}
-                for instance_type in ("ci-worker-bm", "ci-worker-bm-gpu")
+                {"nodeSet": node_set, "bareMetal": {"instanceType": instance_type}, "numberOfNodes": 1}
+                for node_set, instance_type in (("compute", "ci-worker-bm"), ("gpu", "ci-worker-bm-gpu"))
             ]
         },
         "status": {"desiredWorkers": 2, "currentWorkers": 2, "readyWorkers": 2},

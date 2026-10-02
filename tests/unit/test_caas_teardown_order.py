@@ -290,11 +290,25 @@ def test_focused_scenario_uses_natural_waits_and_throttled_best_effort_snapshots
     monkeypatch.setattr(scenario, "run", Mock(return_value="release-image"))
     monkeypatch.setattr(scenario, "wait_for_hosted_cluster_kubeconfig", Mock(return_value=b"test-kubeconfig"))
     node_pool = {
+        "metadata": {
+            "labels": {
+                "osac.openshift.io/clusterorder": "order-a",
+                "osac.openshift.io/node-set": "workers",
+                "osac.openshift.io/instance_type": "ci-worker-bm",
+            }
+        },
         "spec": {
             "platform": {
-                "agent": {"agentLabelSelector": {"matchLabels": {"osac.openshift.io/instance_type": "ci-worker-bm"}}}
+                "agent": {
+                    "agentLabelSelector": {
+                        "matchLabels": {
+                            "osac.openshift.io/clusterorder": "order-a",
+                            "osac.openshift.io/node-set": "workers",
+                        }
+                    }
+                }
             }
-        }
+        },
     }
     monkeypatch.setattr(scenario, "wait_for_cluster_guest_readiness", Mock(return_value=node_pool))
     grpc_removal = Mock()

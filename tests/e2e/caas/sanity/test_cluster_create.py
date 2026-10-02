@@ -293,6 +293,7 @@ def _assert_guest_workers_ready(
     co_name: str,
     hosted_cluster_name: str,
     hosted_cluster_ns: str,
+    worker_node_set: str,
     worker_instance_type: str,
     expected_workers: int,
 ) -> None:
@@ -304,8 +305,8 @@ def _assert_guest_workers_ready(
             (
                 item
                 for item in node_pools
-                if item.get("metadata", {}).get("labels", {}).get("osac.openshift.io/instance_type")
-                == worker_instance_type
+                if item.get("metadata", {}).get("labels", {}).get("osac.openshift.io/clusterorder") == co_name
+                and item.get("metadata", {}).get("labels", {}).get("osac.openshift.io/node-set") == worker_node_set
             ),
             None,
         )
@@ -326,13 +327,17 @@ def _assert_guest_workers_ready(
             expected_workers=expected_workers,
             get_node_pool=_get_node_pool,
             expected_ready_nodes=expected_workers,
-            node_pool_description=f"{hosted_cluster_name} NodePool {worker_instance_type} ready nodes",
+            node_pool_description=f"{hosted_cluster_name} NodePool {worker_node_set} ready nodes",
         )
-    assert node_pool is not None, f"No NodePool found for instance type {worker_instance_type!r}"
-    assert "osac.openshift.io/resource_class" not in node_pool.get("metadata", {}).get("labels", {})
+    assert node_pool is not None, f"No NodePool found for NodeSet {worker_node_set!r}"
+    labels = node_pool.get("metadata", {}).get("labels", {})
+    assert labels.get("osac.openshift.io/instance_type") == worker_instance_type
+    assert "osac.openshift.io/resource_class" not in labels
     selector = node_pool.get("spec", {}).get("platform", {}).get("agent", {}).get("agentLabelSelector", {})
-    assert selector.get("matchLabels", {}).get("osac.openshift.io/instance_type") == worker_instance_type
-    assert "osac.openshift.io/resource_class" not in selector.get("matchLabels", {})
+    assert selector.get("matchLabels", {}) == {
+        "osac.openshift.io/clusterorder": co_name,
+        "osac.openshift.io/node-set": worker_node_set,
+    }
 
 
 def _assert_worker_bmi_resources(
@@ -427,6 +432,7 @@ def assert_cluster_available(
         co_name=co_name,
         hosted_cluster_name=hosted_cluster_name,
         hosted_cluster_ns=hosted_cluster_ns,
+        worker_node_set=worker_node_set,
         worker_instance_type=worker_instance_type,
         expected_workers=original_size,
     )
@@ -606,13 +612,13 @@ def _assert_two_node_set_requests(
     node_requests = cluster_order.get("spec", {}).get("nodeRequests", [])
     assert len(node_requests) == len(instance_types)
     assert all("resourceClass" not in request for request in node_requests)
-    expected_replicas = {
-        request["bareMetal"]["instanceType"]: int(request["numberOfNodes"]) for request in node_requests
-    }
-    assert expected_replicas == {instance_type: 1 for instance_type in instance_types.values()}
+    assert {request["nodeSet"]: request["bareMetal"]["instanceType"] for request in node_requests} == instance_types
     assert {
-        node_set["baremetalInstanceType"]["name"]: int(node_set["size"]) for node_set in cluster_node_sets.values()
-    } == expected_replicas
+        name: node_set["baremetalInstanceType"]["name"] for name, node_set in cluster_node_sets.items()
+    } == instance_types
+    expected_replicas = {request["nodeSet"]: int(request["numberOfNodes"]) for request in node_requests}
+    assert expected_replicas == dict.fromkeys(instance_types, 1)
+    assert {name: int(node_set["size"]) for name, node_set in cluster_node_sets.items()} == expected_replicas
     return expected_replicas
 
 
@@ -637,37 +643,47 @@ def _agent_is_installed(agent: dict[str, Any]) -> bool:
     )
 
 
-def _assert_installed_agents_by_instance_type(
-    *, k8s: K8sClient, co_name: str, expected_replicas: dict[str, int]
+def _assert_installed_agents_by_node_set(
+    *, k8s: K8sClient, co_name: str, expected_replicas: dict[str, int], instance_types: dict[str, str]
 ) -> dict[str, list[dict[str, Any]]]:
-    def _get_agents_by_instance_type() -> dict[str, list[dict[str, Any]]]:
+    def _get_agents_by_node_set() -> dict[str, list[dict[str, Any]]]:
         agents: dict[str, list[dict[str, Any]]] = {}
         items = k8s.list_json(resource="agents.agent-install.openshift.io", namespace=k8s.namespace).get("items", [])
         for item in items:
             labels = item.get("metadata", {}).get("labels", {})
             if labels.get("osac.openshift.io/clusterorder") != co_name:
                 continue
-            instance_type = labels.get("osac.openshift.io/instance_type")
-            if instance_type in expected_replicas:
+            node_set = labels.get("osac.openshift.io/node-set")
+            if node_set in expected_replicas:
+                assert labels.get("osac.openshift.io/instance_type") == instance_types[node_set]
                 assert "osac.openshift.io/resource_class" not in labels
-                agents.setdefault(instance_type, []).append(item)
+                agents.setdefault(node_set, []).append(item)
         return agents
 
     return poll_until(
-        fn=_get_agents_by_instance_type,
+        fn=_get_agents_by_node_set,
         until=lambda agents: (
             set(agents) == set(expected_replicas)
-            and all(len(items) == 1 and _agent_is_installed(items[0]) for items in agents.values())
+            and all(
+                len(items) == expected_replicas[node_set] and all(_agent_is_installed(item) for item in items)
+                for node_set, items in agents.items()
+            )
         ),
         retries=120,
         delay=10,
-        description=f"{co_name} installed Agents by instance type",
+        description=f"{co_name} installed Agents by NodeSet",
     )
 
 
 def _assert_isolated_node_pools(
-    *, k8s: K8sClient, co_name: str, hosted_cluster_ns: str, expected_replicas: dict[str, int]
+    *,
+    k8s: K8sClient,
+    co_name: str,
+    hosted_cluster_ns: str,
+    expected_replicas: dict[str, int],
+    instance_types: dict[str, str],
 ) -> None:
+    node_set_label = "osac.openshift.io/node-set"
     instance_type_label = "osac.openshift.io/instance_type"
     old_label = "osac.openshift.io/resource_class"
 
@@ -676,9 +692,10 @@ def _assert_isolated_node_pools(
             "items", []
         )
         return {
-            item.get("metadata", {}).get("labels", {}).get(instance_type_label, ""): item
+            item.get("metadata", {}).get("labels", {}).get(node_set_label, ""): item
             for item in items
-            if item.get("metadata", {}).get("labels", {}).get(instance_type_label) in expected_replicas
+            if item.get("metadata", {}).get("labels", {}).get("osac.openshift.io/clusterorder") == co_name
+            and item.get("metadata", {}).get("labels", {}).get(node_set_label) in expected_replicas
         }
 
     node_pools = poll_until(
@@ -686,25 +703,30 @@ def _assert_isolated_node_pools(
         until=lambda pools: (
             set(pools) == set(expected_replicas)
             and all(
-                int(pools[instance_type].get("spec", {}).get("replicas", -1)) == replicas
-                for instance_type, replicas in expected_replicas.items()
+                int(pools[node_set].get("spec", {}).get("replicas", -1)) == replicas
+                for node_set, replicas in expected_replicas.items()
             )
         ),
         retries=60,
         delay=10,
-        description=f"{co_name} per-instance-type NodePool replicas",
+        description=f"{co_name} per-NodeSet NodePool replicas",
     )
-    for instance_type, node_pool in node_pools.items():
+    for node_set, node_pool in node_pools.items():
         labels = node_pool.get("metadata", {}).get("labels", {})
-        assert labels.get("osac.openshift.io/clusterorder") == co_name
+        assert labels.get(instance_type_label) == instance_types[node_set]
         assert old_label not in labels
         selector = node_pool.get("spec", {}).get("platform", {}).get("agent", {}).get("agentLabelSelector", {})
-        assert selector.get("matchLabels", {}).get(instance_type_label) == instance_type
-        assert old_label not in selector.get("matchLabels", {})
+        assert selector.get("matchLabels", {}) == {"osac.openshift.io/clusterorder": co_name, node_set_label: node_set}
 
 
 def _assert_owned_workers_for_node_sets(
-    *, grpc: GRPCClient, k8s: K8sClient, co_name: str, tenant: str, expected_replicas: dict[str, int]
+    *,
+    grpc: GRPCClient,
+    k8s: K8sClient,
+    co_name: str,
+    tenant: str,
+    expected_replicas: dict[str, int],
+    instance_types: set[str],
 ) -> set[str]:
     candidate_bmis = poll_until(
         fn=lambda: _list_owned_worker_bmis(grpc=grpc, co_name=co_name, tenant=tenant),
@@ -714,7 +736,7 @@ def _assert_owned_workers_for_node_sets(
         description=f"{co_name} tenant-visible child BareMetalInstances",
     )
     return _assert_worker_bmi_resources(
-        k8s=k8s, co_name=co_name, tenant=tenant, candidate_bmis=candidate_bmis, instance_types=set(expected_replicas)
+        k8s=k8s, co_name=co_name, tenant=tenant, candidate_bmis=candidate_bmis, instance_types=instance_types
     )
 
 
@@ -735,20 +757,27 @@ def assert_cluster_with_two_node_sets_available(
     )
     hosted_cluster_ns = k8s.get_cluster_order_namespace(name=co_name)
     _assert_worker_aggregates(k8s=k8s, co_name=co_name, expected_workers=sum(expected_replicas.values()))
-    agents_by_instance_type = _assert_installed_agents_by_instance_type(
-        k8s=k8s, co_name=co_name, expected_replicas=expected_replicas
+    _assert_installed_agents_by_node_set(
+        k8s=k8s, co_name=co_name, expected_replicas=expected_replicas, instance_types=instance_types
     )
     _assert_isolated_node_pools(
-        k8s=k8s, co_name=co_name, hosted_cluster_ns=hosted_cluster_ns, expected_replicas=expected_replicas
+        k8s=k8s,
+        co_name=co_name,
+        hosted_cluster_ns=hosted_cluster_ns,
+        expected_replicas=expected_replicas,
+        instance_types=instance_types,
     )
-    surviving_agents = {item["metadata"]["name"] for item in agents_by_instance_type[instance_types["gpu"]]}
-    assert len(surviving_agents) == 1, f"Expected one GPU Agent, got {surviving_agents}"
 
     cluster_tenant = cluster["metadata"]["tenant"]
     assert cluster_order["metadata"]["annotations"]["osac.openshift.io/tenant"] == cluster_tenant
     assert cluster_order["metadata"]["namespace"] == k8s.namespace
     owned_bmi_ids = _assert_owned_workers_for_node_sets(
-        grpc=grpc, k8s=k8s, co_name=co_name, tenant=cluster_tenant, expected_replicas=expected_replicas
+        grpc=grpc,
+        k8s=k8s,
+        co_name=co_name,
+        tenant=cluster_tenant,
+        expected_replicas=expected_replicas,
+        instance_types=set(instance_types.values()),
     )
     infra_env_name = _wait_for_cluster_infra_env_name(k8s=k8s, co_name=co_name)
     return _ClusterResources(co_name=co_name, owned_bmi_ids=owned_bmi_ids, infra_env_name=infra_env_name)

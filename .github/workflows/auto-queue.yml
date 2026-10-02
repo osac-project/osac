@@ -21,10 +21,11 @@ jobs:
     permissions:
       contents: read  # checkout the base-branch script only
     steps:
-      # Base SHA, not the PR head: this job can run on pull_request_review.
+      # Base branch tip, not the PR head or github.sha: on pull_request_review,
+      # github.sha is the PR merge commit.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ github.event.pull_request.base.ref }}
           persist-credentials: false
       - name: Sync merge queue
         env:

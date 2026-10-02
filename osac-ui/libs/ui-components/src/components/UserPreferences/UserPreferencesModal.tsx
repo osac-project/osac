@@ -1,22 +1,21 @@
 import * as React from 'react';
+import { ReactNode } from 'react';
 import {
-  Button,
   FormGroup,
-  MenuToggle,
-  MenuToggleElement,
   Modal,
   ModalBody,
-  ModalFooter,
   ModalHeader,
-  Select,
-  SelectOption,
+  ToggleGroup,
+  ToggleGroupItem,
 } from '@patternfly/react-core';
+import { RhUiDarkModeFillIcon } from '@patternfly/react-icons/dist/esm/icons/rh-ui-dark-mode-fill-icon';
+import { RhUiDesktopIcon } from '@patternfly/react-icons/dist/esm/icons/rh-ui-desktop-icon';
+import { RhUiLightModeFillIcon } from '@patternfly/react-icons/dist/esm/icons/rh-ui-light-mode-fill-icon';
 
 import { useSession } from '../../hooks/use-session';
 import { Contrast, Theme } from '../../hooks/use-theme';
 import { useTranslation } from '../../hooks/useTranslation';
 import OsacForm from '../Form/OsacForm';
-
 type UserPreferencesModalProps = {
   onClose: VoidFunction;
 };
@@ -24,115 +23,79 @@ type UserPreferencesModalProps = {
 const UserPreferencesModal: React.FC<UserPreferencesModalProps> = ({ onClose }) => {
   const { t } = useTranslation();
   const { userTheme, setUserTheme, userContrast, setUserContrast } = useSession();
-  const [themeExpanded, setThemeExpanded] = React.useState(false);
-  const [contrastExpanded, setContrastExpanded] = React.useState(false);
 
-  const themeOptions: { value: Theme; label: string }[] = [
-    { value: 'system', label: t('System default') },
-    { value: 'light', label: t('Light') },
-    { value: 'dark', label: t('Dark') },
+  const colorSchemeOptions: { value: Theme; label: string; icon: ReactNode }[] = [
+    { value: 'system', label: t('System'), icon: <RhUiDesktopIcon /> },
+    { value: 'light', label: t('Light'), icon: <RhUiLightModeFillIcon /> },
+    { value: 'dark', label: t('Dark'), icon: <RhUiDarkModeFillIcon /> },
   ];
 
-  const contrastOptions: { value: Contrast; label: string; description: string }[] = [
+  const contrastOptions: { value: Contrast; label: string; icon?: ReactNode }[] = [
     {
       value: 'system',
-      label: t('System default'),
-      description: t("Matches your operating system's contrast setting."),
-    },
-    {
-      value: 'glass',
-      label: t('Glass'),
-      description: t('A modern, visually refreshed console appearance.'),
+      label: t('System'),
+      icon: <RhUiDesktopIcon />,
     },
     {
       value: 'default',
-      label: t('Traditional'),
-      description: t('The traditional console appearance.'),
+      label: t('Default'),
     },
     {
       value: 'contrast',
       label: t('High contrast'),
-      description: t('Enhances contrast between interface elements for readability.'),
+    },
+    {
+      value: 'glass',
+      label: t('Glass'),
     },
   ];
 
-  const selectedThemeLabel =
-    themeOptions.find((option) => option.value === userTheme)?.label ?? t('System default');
-  const selectedContrastLabel =
-    contrastOptions.find((option) => option.value === userContrast)?.label ?? t('System default');
-
   return (
     <Modal isOpen variant="small" onClose={onClose}>
-      <ModalHeader title={t('User preferences')} />
+      <ModalHeader
+        title={t('User preferences')}
+        description={t('Choose how this application looks for you. Changes apply immediately.')}
+      />
       <ModalBody>
         <OsacForm>
-          <FormGroup label={t('Theme')}>
-            <Select
-              toggle={(toggleRef: React.Ref<MenuToggleElement>) => (
-                <MenuToggle
-                  ref={toggleRef}
-                  className="pf-v6-u-w-100"
-                  onClick={() => setThemeExpanded((prev) => !prev)}
-                  isExpanded={themeExpanded}
-                >
-                  {selectedThemeLabel}
-                </MenuToggle>
-              )}
-              selected={userTheme}
-              onSelect={(_, value) => {
-                setUserTheme(value as Theme);
-                setThemeExpanded(false);
-              }}
-              aria-label={t('Theme')}
-              isOpen={themeExpanded}
-              onOpenChange={setThemeExpanded}
-            >
-              {themeOptions.map((option) => (
-                <SelectOption key={option.value} value={option.value}>
-                  {option.label}
-                </SelectOption>
+          <FormGroup label={t('Color scheme')}>
+            <ToggleGroup aria-label={t('Color scheme')}>
+              {colorSchemeOptions.map((option) => (
+                <ToggleGroupItem
+                  key={option.value}
+                  buttonId={`user-preferences-theme-${option.value}`}
+                  text={option.label}
+                  icon={option.icon}
+                  isSelected={userTheme === option.value}
+                  onChange={(_, selected) => {
+                    if (selected) {
+                      setUserTheme(option.value);
+                    }
+                  }}
+                />
               ))}
-            </Select>
+            </ToggleGroup>
           </FormGroup>
           <FormGroup label={t('Contrast mode')}>
-            <Select
-              toggle={(toggleRef: React.Ref<MenuToggleElement>) => (
-                <MenuToggle
-                  ref={toggleRef}
-                  className="pf-v6-u-w-100"
-                  onClick={() => setContrastExpanded((prev) => !prev)}
-                  isExpanded={contrastExpanded}
-                >
-                  {selectedContrastLabel}
-                </MenuToggle>
-              )}
-              selected={userContrast}
-              onSelect={(_, value) => {
-                setUserContrast(value as Contrast);
-                setContrastExpanded(false);
-              }}
-              aria-label={t('Contrast mode')}
-              isOpen={contrastExpanded}
-              onOpenChange={setContrastExpanded}
-            >
+            <ToggleGroup aria-label={t('Contrast mode')}>
               {contrastOptions.map((option) => (
-                <SelectOption
+                <ToggleGroupItem
                   key={option.value}
-                  value={option.value}
-                  description={option.description}
-                >
-                  {option.label}
-                </SelectOption>
+                  buttonId={`user-preferences-contrast-${option.value}`}
+                  text={option.label}
+                  icon={option.icon}
+                  isSelected={userContrast === option.value}
+                  onChange={(_, selected) => {
+                    if (selected) {
+                      setUserContrast(option.value);
+                    }
+                  }}
+                />
               ))}
-            </Select>
+            </ToggleGroup>
           </FormGroup>
         </OsacForm>
       </ModalBody>
-      <ModalFooter>
-        <Button variant="secondary" onClick={onClose}>
-          {t('Close')}
-        </Button>
-      </ModalFooter>
     </Modal>
   );
 };

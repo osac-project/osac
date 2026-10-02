@@ -59,6 +59,7 @@ const buildValues = (project: string) => ({
       virtualNetwork: { id: 'vnet-1', name: 'vnet-1' },
       subnet: { id: 'subnet-1', name: 'subnet-1' },
       securityGroups: [{ id: 'sg-1', name: 'sg-1' }],
+      autoExternalIpAttachment: false,
     },
   },
 });
@@ -77,6 +78,7 @@ const baseValues = () => {
         virtualNetwork: { id: 'vnet', name: 'vnet' },
         subnet: { id: 'subnet-1', name: 'subnet-1' },
         securityGroups: [{ id: 'sg-1', name: 'sg-1' }],
+        autoExternalIpAttachment: false,
       },
     },
   };
@@ -259,5 +261,25 @@ describe('buildComputeInstanceCreatePayload — useDefaultNetwork', () => {
         securityGroups: [{ id: 'sg-1' }, { id: 'sg-2' }],
       },
     ]);
+  });
+});
+
+describe('buildComputeInstanceCreatePayload — autoExternalIpAttachment', () => {
+  it('omits autoExternalIpAttachment when disabled', () => {
+    const values = baseValues();
+    values.spec.networking.autoExternalIpAttachment = false;
+
+    const payload = buildComputeInstanceCreatePayload(values, vmCatalogItem);
+
+    expect(payload.spec).not.toHaveProperty('autoExternalIpAttachment');
+  });
+
+  it('sets autoExternalIpAttachment when enabled', () => {
+    const values = baseValues();
+    values.spec.networking.autoExternalIpAttachment = true;
+
+    const payload = buildComputeInstanceCreatePayload(values, vmCatalogItem);
+
+    expect(payload.spec?.autoExternalIpAttachment).toBe(true);
   });
 });

@@ -96,6 +96,7 @@ const buildComputeInstanceFieldDefinitions = (catalogItem: unknown, t: TFunction
         otherwise: () => yup.object({ id: yup.string(), name: yup.string() }),
       }),
       securityGroups: yup.array().of(yup.object({ id: yup.string(), name: yup.string() })),
+      autoExternalIpAttachment: yup.boolean(),
     }),
   };
 };

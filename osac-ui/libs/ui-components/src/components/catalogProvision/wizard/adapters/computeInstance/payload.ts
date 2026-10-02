@@ -24,6 +24,7 @@ export const createEmptyComputeInstanceValues = (): ComputeInstanceWizardValues 
       virtualNetwork: emptyResourceSelectValue(),
       subnet: emptyResourceSelectValue(),
       securityGroups: [],
+      autoExternalIpAttachment: false,
     },
   },
 });
@@ -70,6 +71,10 @@ export const buildComputeInstanceCreatePayload = (
         },
       ];
     }
+  }
+
+  if (values.spec.networking.autoExternalIpAttachment) {
+    spec.autoExternalIpAttachment = true;
   }
 
   const sshKeyName = values.spec.sshKey.name.trim();

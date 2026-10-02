@@ -6,6 +6,10 @@ import { useTranslation } from '../../../../../hooks/useTranslation';
 import { NetworkAttachmentPickers } from '../../../../Form/NetworkAttachmentPickers';
 import OsacForm from '../../../../Form/OsacForm';
 
+/**
+ * @deprecated Prefer using NetworkAttachmentPickers directly with
+ * useDefaultNetworkName and autoExternalIpName props.
+ */
 export const BareMetalNetworkAttachmentsField = () => {
   const { t } = useTranslation();
   const { values } = useFormikContext<BareMetalInstanceWizardValues>();
@@ -31,6 +35,8 @@ export const BareMetalNetworkAttachmentsField = () => {
                   <NetworkAttachmentPickers
                     fieldPrefix="spec.networking.attachments.0"
                     fieldIdPrefix="bm-attachment-0"
+                    useDefaultNetworkName="spec.networking.useDefaults"
+                    autoExternalIpName="spec.networking.attachExternalIp"
                   />
                 </OsacForm>
               </FormFieldGroup>

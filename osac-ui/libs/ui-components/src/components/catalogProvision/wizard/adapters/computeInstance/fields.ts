@@ -5,6 +5,7 @@ export interface ComputeInstanceNetworkingValues {
   virtualNetwork: ResourceSelectValue;
   subnet: ResourceSelectValue;
   securityGroups: ResourceSelectValue[];
+  autoExternalIpAttachment: boolean;
 }
 
 export interface ComputeInstanceDiskValues {

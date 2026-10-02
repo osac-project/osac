@@ -141,6 +141,13 @@ export const VmReviewStep = ({ catalogItem }: Props) => {
               securityGroups={networking.securityGroups}
             />
           )}
+
+          <DescriptionListGroup>
+            <DescriptionListTerm>{t('Auto attach external IP')}</DescriptionListTerm>
+            <DescriptionListDescription>
+              {networking.autoExternalIpAttachment ? t('Yes') : t('No')}
+            </DescriptionListDescription>
+          </DescriptionListGroup>
         </DescriptionList>
       </StackItem>
       <StackItem>

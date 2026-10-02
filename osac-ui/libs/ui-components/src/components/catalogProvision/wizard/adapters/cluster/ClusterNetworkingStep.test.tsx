@@ -57,9 +57,9 @@ describe('ClusterNetworkingStep', () => {
     );
 
     expect(screen.getByRole('checkbox', { name: 'Use tenant default network' })).toBeChecked();
-    expect(screen.queryByLabelText('Virtual network')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Subnet')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Security groups')).not.toBeInTheDocument();
+    expect(screen.queryByText('Virtual network')).not.toBeInTheDocument();
+    expect(screen.queryByText('Subnet')).not.toBeInTheDocument();
+    expect(screen.queryByText('Security groups')).not.toBeInTheDocument();
   });
 
   it('shows pickers when default network toggle is OFF', async () => {
@@ -91,7 +91,7 @@ describe('ClusterNetworkingStep', () => {
 
     // Toggle back ON
     await user.click(screen.getByRole('checkbox', { name: 'Use tenant default network' }));
-    expect(screen.queryByLabelText('Virtual network')).not.toBeInTheDocument();
+    expect(screen.queryByText('Virtual network')).not.toBeInTheDocument();
   });
 
   it('renders Auto External IP toggle independently', () => {

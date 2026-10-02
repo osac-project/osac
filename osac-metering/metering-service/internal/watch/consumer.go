@@ -276,9 +276,13 @@ func projectionIsAhead(existing *projection.ResourceState, version int32, curren
 }
 
 // transitionTimeIsStale prevents a newer fulfillment snapshot from moving the
-// authoritative transition time backwards. State changes and deletes require a
-// strictly newer timestamp because their durations are calculated from it.
-// Metadata-only updates may reuse the same timestamp, but not an earlier one.
+// authoritative transition time backwards. Deletes require a strictly newer
+// timestamp because their durations are calculated from it. State changes
+// allow equal timestamps because handleTransientState may advance
+// TransitionTime within the same second (Kubernetes lastTransitionTime has
+// second precision, so a transient state like STARTING and the final state
+// like RUNNING often share the same timestamp). Metadata-only updates may
+// reuse the same timestamp, but not an earlier one.
 func transitionTimeIsStale(
 	existing *projection.ResourceState,
 	eventType privatev1.EventType,
@@ -290,9 +294,12 @@ func transitionTimeIsStale(
 		return false
 	}
 
-	stateChanging := existing.CurrentState != currentState
-	if eventType == privatev1.EventType_EVENT_TYPE_OBJECT_DELETED || stateChanging {
+	if eventType == privatev1.EventType_EVENT_TYPE_OBJECT_DELETED {
 		return !transitionTime.After(existing.TransitionTime)
+	}
+	stateChanging := existing.CurrentState != currentState
+	if stateChanging {
+		return transitionTime.Before(existing.TransitionTime)
 	}
 	return transitionTime.Before(existing.TransitionTime)
 }

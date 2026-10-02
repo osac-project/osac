@@ -200,10 +200,12 @@ def _wait_for_default_subnets_ready(
     ``list_subnet_ids()`` returns an empty list (``WHERE tenant = $1``
     receives an empty string).
     """
+    # Timeout must exceed 2x the operator's statusPollInterval (30s) to
+    # accommodate two sequential polling cycles (VirtualNetwork -> Subnet).
     subnet_ids: list[str] = poll_until(
         fn=lambda: grpc.list_subnet_ids(),
         until=lambda ids: len(ids) > 0,
-        retries=30,
+        retries=60,
         delay=2,
         description="at least one subnet to appear in gRPC",
         retry_on_error=True,

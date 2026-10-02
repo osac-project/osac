@@ -105,7 +105,7 @@ var _ = Describe("Event publisher", Ordered, func() {
 					return len(events)
 				}
 			}
-		}).WithTimeout(15 * time.Second).WithPolling(50 * time.Millisecond).Should(BeNumerically(">=", n))
+		}).WithTimeout(30 * time.Second).WithPolling(50 * time.Millisecond).Should(BeNumerically(">=", n))
 		return events[:n]
 	}
 

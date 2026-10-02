@@ -6,7 +6,6 @@ import { userDataSchema } from '@osac/ui-components/validation/user-data';
 
 import {
   getCatalogFieldOverlay,
-  hasCatalogFieldDefinition,
   mergeCatalogValidation,
   readCatalogFieldDefinitions,
 } from '../../catalogOverlay';
@@ -27,28 +26,13 @@ const storageTierSchema = (t: TFunction) =>
 const buildComputeInstanceFieldDefinitions = (catalogItem: unknown, t: TFunction) => {
   const definitions = readCatalogFieldDefinitions(catalogItem);
 
-  const userDataOverlay = getCatalogFieldOverlay(
-    'spec.user_data',
-    definitions,
-    t('catalogProvision.vm.fields.userData'),
-  );
   const bootDiskOverlay = getCatalogFieldOverlay(
     'spec.boot_disk.size_gib',
     definitions,
     t('catalogProvision.vm.fields.bootDisk'),
   );
-  const userDataRequired = hasCatalogFieldDefinition('spec.user_data', definitions);
 
   return {
-    catalogItemId: yup.string().required(t('catalogProvision.validation.catalogItemRequired')),
-    metadataName: resourceNameSchema(t),
-    specInstanceType: yup.string().required(t('catalogProvision.validation.instanceTypeRequired')),
-    specUserData: mergeCatalogValidation(
-      userDataSchema(t),
-      userDataOverlay,
-      userDataRequired,
-      t('catalogProvision.validation.required'),
-    ),
     specBootDisk: yup.object({
       sizeGib: mergeCatalogValidation(
         yup
@@ -108,12 +92,12 @@ export const buildComputeInstanceStepSchema = (
   switch (stepId) {
     case 'catalog':
       return yup.object({
-        catalogItemId: fields.catalogItemId,
+        catalogItemId: yup.string().required(t('Select a catalog item')),
       });
     case 'general':
       return yup.object({
         metadata: yup.object({
-          name: fields.metadataName,
+          name: resourceNameSchema(t),
         }),
         spec: yup.object({
           sshKey: yup.object({ name: yup.string() }),
@@ -122,8 +106,12 @@ export const buildComputeInstanceStepSchema = (
     case 'configuration':
       return yup.object({
         spec: yup.object({
-          instanceType: fields.specInstanceType,
-          userData: fields.specUserData,
+          instanceType: yup.string().required(t('Instance type is required')),
+          userData: yup.string().when('userDataSource', {
+            is: 'inline',
+            then: () => userDataSchema(t),
+            otherwise: (schema) => schema.notRequired(),
+          }),
         }),
       });
     case 'storage':

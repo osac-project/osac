@@ -41,7 +41,9 @@ const emptyValues: ComputeInstanceWizardValues = {
   spec: {
     sshKey: { name: '' },
     instanceType: '',
+    userDataSource: 'inline',
     userData: '',
+    userDataSecret: { name: '' },
     bootDisk: { sizeGib: '', storageTier: emptyResourceSelectValue() },
     additionalDisks: [],
     networking: {
@@ -91,7 +93,7 @@ const validateStep = async (
 describe('buildComputeInstanceStepSchema', () => {
   it('requires catalog item on catalog step', async () => {
     const errors = await validateStep('catalog', emptyValues);
-    expect(errors).toEqual({ catalogItemId: 'catalogProvision.validation.catalogItemRequired' });
+    expect(errors).toEqual({ catalogItemId: 'Select a catalog item' });
   });
 
   it('requires name on general step without validating configuration fields', async () => {
@@ -227,9 +229,65 @@ describe('buildComputeInstanceStepSchema', () => {
     );
     expect(errors).toEqual({
       spec: {
-        instanceType: 'catalogProvision.validation.instanceTypeRequired',
+        instanceType: 'Instance type is required',
       },
     });
+  });
+
+  it('validates inline user data with the shared 64 KB limit', async () => {
+    const errors = await validateStep(
+      'configuration',
+      {
+        ...emptyValues,
+        catalogItemId: vmCatalogItem.id,
+        metadata: { name: 'web-01', project: '' },
+        spec: {
+          ...emptyValues.spec,
+          instanceType: 'standard-4-8',
+          userData: 'a'.repeat(65537),
+        },
+      },
+      vmCatalogItem,
+    );
+    expect(errors).toEqual({
+      spec: { userData: 'User data must not exceed 64 KB.' },
+    });
+
+    await expect(
+      validateStep(
+        'configuration',
+        {
+          ...emptyValues,
+          catalogItemId: vmCatalogItem.id,
+          metadata: { name: 'web-01', project: '' },
+          spec: {
+            ...emptyValues.spec,
+            instanceType: 'standard-4-8',
+            userData: 'a'.repeat(65536),
+          },
+        },
+        vmCatalogItem,
+      ),
+    ).resolves.toEqual({});
+
+    await expect(
+      validateStep(
+        'configuration',
+        {
+          ...emptyValues,
+          catalogItemId: vmCatalogItem.id,
+          metadata: { name: 'web-01', project: '' },
+          spec: {
+            ...emptyValues.spec,
+            instanceType: 'standard-4-8',
+            userDataSource: 'secret',
+            userData: 'a'.repeat(65537),
+            userDataSecret: { name: 'user-data-secret' },
+          },
+        },
+        vmCatalogItem,
+      ),
+    ).resolves.toEqual({});
   });
 
   it('requires boot disk on storage step', async () => {

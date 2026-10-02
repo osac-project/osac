@@ -4,6 +4,7 @@ import {
   NumberInput,
   Split,
   SplitItem,
+  Stack,
   TextArea,
   TextInput,
 } from '@patternfly/react-core';
@@ -30,6 +31,7 @@ interface InputFieldProps {
   min?: number;
   max?: number;
   step?: number;
+  asFormGroup?: boolean;
 }
 
 export const InputField = ({
@@ -39,8 +41,8 @@ export const InputField = ({
   isRequired = false,
   isDisabled = false,
   multiline = false,
-  rows,
-  resizeOrientation,
+  rows = 8,
+  resizeOrientation = 'vertical',
   type = 'text',
   helperText,
   placeholder,
@@ -50,6 +52,7 @@ export const InputField = ({
   max,
   step,
   children,
+  asFormGroup = true,
 }: React.PropsWithChildren<InputFieldProps>) => {
   const [field, meta, helpers] = useField<string>(name);
   const showValidationErrors = useShowFieldValidationErrors();
@@ -102,8 +105,8 @@ export const InputField = ({
         ? Number(field.value)
         : '';
 
-  return (
-    <FormGroup label={label} fieldId={fieldId} isRequired={isRequired}>
+  const textComponent = (
+    <Stack>
       {multiline ? (
         <TextArea
           id={fieldId}
@@ -167,6 +170,7 @@ export const InputField = ({
                 validated={validated}
                 aria-invalid={error ? true : undefined}
                 aria-describedby={helperDescribedBy}
+                aria-label={label}
               />
             )}
           </SplitItem>
@@ -174,6 +178,14 @@ export const InputField = ({
         </Split>
       )}
       <FormFieldHelper error={error} description={helperText} fieldId={fieldId} />
+    </Stack>
+  );
+
+  return asFormGroup ? (
+    <FormGroup label={label} fieldId={fieldId} isRequired={isRequired}>
+      {textComponent}
     </FormGroup>
+  ) : (
+    textComponent
   );
 };

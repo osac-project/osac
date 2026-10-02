@@ -168,7 +168,12 @@ export const VmReviewStep = ({ catalogItem }: Props) => {
           <DescriptionListGroup>
             <DescriptionListTerm>{t('User Data')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {formatReviewScalar(values.spec.userData)}
+              {formatReviewScalar(
+                values.spec.userDataSource === 'secret'
+                  ? values.spec.userDataSecret.name
+                  : values.spec.userData,
+                values.spec.userDataSource === 'inline',
+              )}
             </DescriptionListDescription>
           </DescriptionListGroup>
 

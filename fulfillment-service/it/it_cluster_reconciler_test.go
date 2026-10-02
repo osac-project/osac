@@ -221,6 +221,86 @@ var _ = Describe("Cluster reconciler", func() {
 		}`))
 	})
 
+	It("Preserves multiple bare-metal instance types in the ClusterOrder", func() {
+		secondBmitName := fmt.Sprintf("test-bmit-%s", uuid.New()[24:32])
+		secondBmitResponse, err := instanceTypesClient.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
+			Object: privatev1.BareMetalInstanceType_builder{
+				Metadata: privatev1.Metadata_builder{Name: secondBmitName}.Build(),
+				Spec: privatev1.BareMetalInstanceTypeSpec_builder{
+					Hardware: privatev1.BareMetalHardwareSpec_builder{
+						Cpu:    privatev1.BareMetalCPUSpec_builder{Cores: 64, Architecture: "x86_64", ThreadsPerCore: 2}.Build(),
+						Memory: privatev1.BareMetalMemorySpec_builder{TotalGb: 256}.Build(),
+						NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
+							privatev1.BareMetalNetworkPortSpec_builder{
+								Name: "eth0", Role: "fabric", Type: "Ethernet", Speed: "25Gbps",
+							}.Build(),
+						},
+					}.Build(),
+					HostLabelSelector: privatev1.BareMetalLabelSelector_builder{
+						MatchLabels: map[string]string{"hardware.profile": "accelerator"},
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		secondBmitID := secondBmitResponse.GetObject().GetId()
+		DeferCleanup(func() {
+			_, err := instanceTypesClient.Delete(ctx, privatev1.BareMetalInstanceTypesDeleteRequest_builder{Id: secondBmitID}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		clusterResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
+			Object: publicv1.Cluster_builder{
+				Metadata: publicv1.Metadata_builder{Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32])}.Build(),
+				Spec: publicv1.ClusterSpec_builder{
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NodeSets: map[string]*publicv1.ClusterNodeSet{
+						"compute": publicv1.ClusterNodeSet_builder{
+							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName}.Build(),
+							Size:                  new(int32(3)),
+						}.Build(),
+						"accelerator": publicv1.ClusterNodeSet_builder{
+							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: secondBmitID}.Build(),
+							Size:                  new(int32(2)),
+						}.Build(),
+					},
+					TemplateParameters: map[string]*anypb.Any{"my": makeAny(wrapperspb.String("my_value"))},
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		cluster := clusterResponse.GetObject()
+		DeferCleanup(func() {
+			_, err := clustersClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{Id: cluster.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Eventually(func(g Gomega) {
+				_, err := clustersClient.Get(ctx, publicv1.ClustersGetRequest_builder{Id: cluster.GetId()}.Build())
+				verifyNotFound(g, err)
+			}, time.Minute, time.Second).Should(Succeed())
+		})
+
+		clusterOrderList := &osacv1alpha1.ClusterOrderList{}
+		var kubeObject *osacv1alpha1.ClusterOrder
+		Eventually(func(g Gomega) {
+			err := tool.KubeClient().List(ctx, clusterOrderList, crclient.MatchingLabels{
+				labels.ClusterOrderUuid: cluster.GetId(),
+			})
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(clusterOrderList.Items).To(HaveLen(1))
+			kubeObject = &clusterOrderList.Items[0]
+		}, time.Minute, time.Second).Should(Succeed())
+
+		Expect(kubeObject.Spec.NodeRequests).To(HaveLen(2))
+		actual := map[string]int{}
+		for _, request := range kubeObject.Spec.NodeRequests {
+			Expect(request.BareMetal).ToNot(BeNil())
+			actual[request.BareMetal.InstanceType] = request.NumberOfNodes
+		}
+		Expect(actual).To(HaveLen(2))
+		Expect(actual).To(HaveKeyWithValue(bmitName, 3))
+		Expect(actual).To(HaveKeyWithValue(secondBmitName, 2))
+	})
+
 	It("Rejects unpublished add-on operators through the public cluster API", func() {
 		operatorsClient := privatev1.NewAddOnOperatorsClient(tool.InternalView().AdminConn())
 		operatorID := fmt.Sprintf("test-unpublished-operator-%s", uuid.New())

@@ -130,12 +130,13 @@ Touched-area requirements: [component guide](../fulfillment-service/AGENTS.md#in
 | Tier | Location / command | Exercises for real | Faked or omitted |
 |---|---|---|---|
 | Unit | `internal/`; `ginkgo run -r internal` | Fulfillment logic and adapters covered by package tests | External services are mocked where the package tests use mocks. |
-| Component integration | `it/`; `make -C ../osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment` | Deployed Fulfillment Service, its database, and the CLI binary built from this checkout | CaaS, VMaaS, BMaaS, and external provider workflows unless a specific test exercises them. |
+| Component integration | `it/`; `make -C ../osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment` | Deployed Fulfillment Service, its database, Kubernetes API/ClusterOrder reconciliation, and the CLI binary built from this checkout | CaaS, VMaaS, BMaaS, and external provider workflows unless a specific test exercises them. |
 | E2E | `../tests/e2e/` | Cross-component OSAC user journeys | Depends on the deployed test environment and its configured providers. |
 
 ### Coverage notes
 
 - **CLI commands that only call Fulfillment APIs:** Cover them in `fulfillment-service/it/`.
+- **CaaS clusters with multiple BMaaS instance types:** `it_cluster_reconciler_test.go` verifies the public Cluster API produces a Fulfillment-created ClusterOrder with each requested type and count. It does not exercise BMaaS provisioning or tenant network handoff.
 - **Provisioning journeys that cross into operators or providers:** Keep them in `tests/e2e/` and exercise those boundaries explicitly.
 - **Catalog Items:** `it/` checks creation and update behavior, publication visibility, CLI creation, and the ClusterOrder release image written by Fulfillment. Catalog-backed provisioning journeys that exercise other components remain in the CaaS, VMaaS, BMaaS, and reference E2E suites.
 
@@ -323,7 +324,7 @@ including cluster lifecycle, networking, agent reuse, and deletion feedback.
 | Tier | Location / command | Exercises for real | Faked or omitted |
 |---|---|---|---|
 | E2E (sanity) | `tests/e2e/caas/sanity/`; `uv run pytest tests/e2e/caas/sanity/ -m 'not metering'` | ClusterOrder creation through fulfillment API, operator reconciliation, and delete feedback without provisioning | AAP provisioning is not exercised; the delete-feedback test validates the Deleting phase without waiting for a full provision cycle. |
-| E2E (regression) | `tests/e2e/caas/regression/`; `uv run pytest tests/e2e/caas/regression/ -m 'not metering'` | Full cluster lifecycle with networking (VirtualNetwork, Subnet, SecurityGroup, ClusterNetworkAttachment), agent binding/reclaim/reuse, and version selection | Requires real AAP, assisted-service Agent pool, and HyperShift infrastructure. Network tests require a configured network backend. |
+| E2E (regression) | `tests/e2e/caas/regression/`; `uv run pytest tests/e2e/caas/regression/ -m 'not metering'` | Full cluster lifecycle with networking (VirtualNetwork, Subnet, SecurityGroup, ClusterNetworkAttachment), two worker types with separate NodePools and Agent selectors, sequential reprovisioning after deletion, auto-ExternalIP attachment, and version selection | Requires deployed OSAC, operator-managed Assisted Service Agents, HyperShift, at least two BMaaS hosts, a network backend, and an ExternalIP pool provider. The multi-type test creates and removes temporary shared BMIT profiles; the auto-ExternalIP test creates and removes its own pool. |
 
 ### Running CaaS E2E tests
 
@@ -336,11 +337,14 @@ uv run pytest --collect-only tests/e2e/caas/ -m 'not metering'
 # Run sanity suite only (no provisioning required)
 uv run pytest tests/e2e/caas/sanity/ -m 'not metering' -v
 
-# Run full CaaS regression suite (requires deployed OSAC + Agent pool)
+# Run full CaaS regression suite (requires deployed OSAC and CaaS provisioning dependencies)
 uv run pytest tests/e2e/caas/regression/ -m 'not metering' -v
 
 # Run a specific test class
-uv run pytest tests/e2e/caas/regression/networking/test_caas_networking.py::TestCaasAgentReuse -v
+uv run pytest tests/e2e/caas/regression/networking/test_caas_networking.py::TestCaasSequentialProvisioning -v
+
+# Run the multi-type worker provisioning test
+uv run pytest tests/e2e/caas/regression/networking/test_caas_networking.py::TestCaasMultipleWorkerTypes -v
 ```
 
 ### Coverage notes
@@ -357,12 +361,22 @@ uv run pytest tests/e2e/caas/regression/networking/test_caas_networking.py::Test
   different instance types produce separate NodePools with type-specific
   replicas and Agent selectors. Operator unit and connected integration tests
   exercise type-specific BMI correlation and allocation with simulated BMaaS
-  resources. The live E2E suite exercises the real provisioning flow with one
-  worker type; it does not currently validate two independently provisionable
-  Agent pools together.
-- **Agent reuse after deletion:** `test_agent_reuse_after_cluster_deletion`
-  verifies that Agents reach available state after ClusterOrder deletion and
-  can be reused for a subsequent cluster without pool exhaustion.
+  resources. `test_cluster_lifecycle_with_multiple_worker_types` provisions two
+  distinct BMITs through the deployed CaaS flow, checks that each gets its own
+  Agent label and NodePool with one ready node, and verifies both workers
+  receive addresses on the tenant subnet. The test creates and deletes its
+  shared BMIT fixtures. Both profiles use the CI `host-type=default` selector,
+  so this proves separate type routing through real BMaaS/Assisted/HyperShift
+  services, not selection across two distinct BMaaS inventory classes; that
+  requires a second configured host class.
+- **Sequential reprovisioning:** `test_cluster_can_be_provisioned_after_deletion`
+  verifies that a second one-worker CaaS cluster can reach Ready after the
+  first ClusterOrder and its order-scoped resources have been deleted. It does
+  not assert reuse of the same BMaaS host or Agent.
+- **Auto-ExternalIP lifecycle:** `test_auto_external_ip_attachment_and_cleanup`
+  creates a temporary ExternalIP pool, verifies API and ingress attachments
+  use that pool, and checks that cluster deletion removes the allocated
+  addresses and attachments before the fixture deletes the pool.
 - **Terminal delete failure detection:** The deletion helpers
   (`wait_for_cluster_deletion`, `wait_for_cluster_deletion_with_deadline`)
   detect when the most recent delete provisioning job has terminally failed

@@ -11,13 +11,21 @@ pattern: create VN -> Subnet -> SG, wait Ready, yield, cleanup in reverse.
 from __future__ import annotations
 
 import os
+import subprocess
 from collections.abc import Iterator
 
 import pytest
 
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import (
+    allocate_worker_subnet,
     unique_name,
+    wait_for_external_ip_attachment_deletion,
+    wait_for_external_ip_deletion,
+    wait_for_external_ip_pool_cr,
+    wait_for_external_ip_pool_deletion,
+    wait_for_external_ip_pool_grpc_ready,
+    wait_for_external_ip_pool_ready,
     wait_for_security_group_cr,
     wait_for_security_group_deletion,
     wait_for_security_group_ready,
@@ -30,7 +38,7 @@ from tests.e2e.core.helpers import (
 )
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
-from tests.e2e.core.runner import env
+from tests.e2e.core.runner import env, poll_until
 
 
 # ---------------------------------------------------------------------------
@@ -73,6 +81,16 @@ def cluster_template() -> str:
 
 
 @pytest.fixture(scope="session")
+def caas_worker_node_sets(private_grpc: GRPCClient) -> dict[str, dict[str, object]]:
+    """Provide one worker set backed by the virtual Metal3 hosts in CaaS CI."""
+    instance_type = "ci-worker-bm"
+    private_grpc.ensure_baremetal_instance_type(
+        name=instance_type, host_label_selector={"osac.openshift.io/host-type": "default"}
+    )
+    return {"workers": {"size": 1, "baremetal_instance_type": {"name": instance_type}}}
+
+
+@pytest.fixture(scope="session")
 def pull_secret_path() -> str:
     """Filesystem path to the OCP pull secret (OSAC_PULL_SECRET_PATH)."""
     return env("OSAC_PULL_SECRET_PATH")
@@ -82,6 +100,71 @@ def pull_secret_path() -> str:
 def ssh_public_key_path() -> str:
     """Filesystem path to the SSH public key (OSAC_SSH_PUBLIC_KEY_PATH)."""
     return env("OSAC_SSH_PUBLIC_KEY_PATH", os.path.expanduser("~/.ssh/id_rsa.pub"))
+
+
+def _cleanup_external_ip_pool_children(*, grpc: GRPCClient, k8s: K8sClient, pool_id: str) -> None:
+    """Delete only ExternalIPs and attachments owned by the test-created pool."""
+    pool_ip_ids: set[str] = set()
+    for external_ip_id in grpc.list_external_ip_ids():
+        try:
+            external_ip = grpc.get_external_ip(external_ip_id=external_ip_id).get("object", {})
+        except subprocess.CalledProcessError:
+            continue
+        if external_ip.get("spec", {}).get("pool", {}).get("id") == pool_id:
+            pool_ip_ids.add(external_ip_id)
+
+    for attachment_id in grpc.list_external_ip_attachment_ids():
+        try:
+            attachment = grpc.get_external_ip_attachment(attachment_id=attachment_id).get("object", {})
+        except subprocess.CalledProcessError:
+            continue
+        external_ip_id = attachment.get("spec", {}).get("externalIp", {}).get("id")
+        if external_ip_id not in pool_ip_ids:
+            continue
+        grpc.delete_external_ip_attachment(attachment_id=attachment_id)
+        attachment_name = k8s.get_external_ip_attachment_name(uuid=attachment_id, checked=False)
+        if attachment_name:
+            wait_for_external_ip_attachment_deletion(k8s=k8s, name=attachment_name)
+
+    for external_ip_id in pool_ip_ids:
+        grpc.delete_external_ip(external_ip_id=external_ip_id)
+        external_ip_name = k8s.get_external_ip_name(uuid=external_ip_id, checked=False)
+        if external_ip_name:
+            wait_for_external_ip_deletion(k8s=k8s, name=external_ip_name)
+
+
+@pytest.fixture
+def caas_external_ip_pool(
+    grpc: GRPCClient, private_grpc: GRPCClient, k8s_hub_client: K8sClient
+) -> Iterator[dict[str, str]]:
+    """Create an isolated pool and wait until the CaaS auto-IP test can use it."""
+    pool_name = unique_name("caas-auto-eip")
+    pool_id: str | None = None
+    pool_cr_name: str | None = None
+    try:
+        pool_id = private_grpc.create_external_ip_pool(name=pool_name, cidrs=[str(allocate_worker_subnet())])
+        pool_cr_name = wait_for_external_ip_pool_cr(k8s=k8s_hub_client, uuid=pool_id)
+        wait_for_external_ip_pool_ready(k8s=k8s_hub_client, name=pool_cr_name)
+        wait_for_external_ip_pool_grpc_ready(private_grpc=private_grpc, pool_id=pool_id)
+
+        def available_addresses() -> int:
+            pool = private_grpc.get_external_ip_pool(pool_id=pool_id).get("object", {})
+            return int(pool.get("status", {}).get("available", 0))
+
+        poll_until(
+            fn=available_addresses,
+            until=lambda count: count >= 2,
+            retries=60,
+            delay=2,
+            description=f"ExternalIPPool {pool_id} to have two available addresses",
+        )
+        yield {"id": pool_id, "name": pool_name, "cr_name": pool_cr_name}
+    finally:
+        if pool_id:
+            _cleanup_external_ip_pool_children(grpc=grpc, k8s=k8s_hub_client, pool_id=pool_id)
+            private_grpc.delete_external_ip_pool(pool_id=pool_id)
+            if pool_cr_name:
+                wait_for_external_ip_pool_deletion(k8s=k8s_hub_client, name=pool_cr_name)
 
 
 # ---------------------------------------------------------------------------

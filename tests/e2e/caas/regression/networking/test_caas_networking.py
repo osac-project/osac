@@ -18,15 +18,17 @@ import contextlib
 import ipaddress
 import logging
 import subprocess
+import tempfile
 import time
+from collections import Counter
 from pathlib import Path
 
 import pytest
 
-from tests.e2e.core.grpc_client import GRPCClient
+from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
 from tests.e2e.core.helpers import (
+    node_pool_ready,
     unique_name,
-    wait_for_agent_available,
     wait_for_cluster_deleting,
     wait_for_cluster_deletion,
     wait_for_cluster_deletion_with_deadline,
@@ -41,6 +43,7 @@ from tests.e2e.core.helpers import (
     wait_for_external_ip_attachment_ready,
     wait_for_external_ip_cr,
     wait_for_external_ip_deletion,
+    wait_for_hosted_cluster_kubeconfig,
     wait_for_security_group_cr,
     wait_for_security_group_deletion,
     wait_for_security_group_ready,
@@ -50,6 +53,7 @@ from tests.e2e.core.helpers import (
     wait_for_virtual_network_cr,
     wait_for_virtual_network_deletion,
     wait_for_virtual_network_ready,
+    wait_for_workload_cluster_health,
 )
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
@@ -65,12 +69,12 @@ def _report_agent_diagnostics(*, k8s: K8sClient, co_name: str | None, context: s
 
     Reports:
     - Per-agent state, binding, labels (excluding secrets)
-    - Recent events for Agents in the hardware-inventory namespace
+    - Recent events for Agents in the ClusterOrder namespace
     - Conditions summary
     """
     import json as _json
 
-    agent_ns = "hardware-inventory"
+    agent_ns = k8s.namespace
     base_args = [*k8s._base(), "--as", "system:admin"]
 
     try:
@@ -116,7 +120,7 @@ def _report_agent_diagnostics(*, k8s: K8sClient, co_name: str | None, context: s
     except Exception as exc:
         log.warning("Agent diagnostics failed [%s]: %s", context, exc)
 
-    # Events for hardware-inventory namespace (Agents)
+    # Events for the ClusterOrder namespace (Agents)
     try:
         events_output, rc = run_unchecked(
             *base_args,
@@ -211,83 +215,6 @@ def _capture_reclaim_evidence(*, k8s: K8sClient, co_name: str, context: str) -> 
         pass
 
 
-def _assert_agent_pool_available(*, k8s: K8sClient, expected_available: int = 1) -> None:
-    """Assert that enough Agents are available before provisioning.
-
-    FAILS the test immediately if the number of available (unbound,
-    ready-state) agents is below ``expected_available``.  This prevents
-    provisioning from starting when the Agent pool is exhausted, avoiding
-    a long wait that would end in a "0 agents" failure anyway.
-
-    Reports full Agent state, labels, conditions, and count in the failure
-    message for immediate diagnosis.
-    """
-    import json as _json
-
-    agent_ns = "hardware-inventory"
-    base_args = [*k8s._base(), "--as", "system:admin"]
-    available_states = {"known-unbound", "known", "discovering-unbound"}
-
-    try:
-        output, rc = run_unchecked(*base_args, "get", "agents.agent-install.openshift.io", "-n", agent_ns, "-o", "json")
-        if rc != 0:
-            log.warning("Agent preflight query failed (rc=%d): %s", rc, output[:500])
-            return
-
-        data = _json.loads(output)
-        items = data.get("items", [])
-        available_agents: list[str] = []
-        unavailable_summary: list[str] = []
-
-        for agent in items:
-            meta = agent.get("metadata", {})
-            spec = agent.get("spec", {})
-            status = agent.get("status", {})
-            debug_info = status.get("debugInfo", {})
-            conditions = status.get("conditions", [])
-            state = debug_info.get("state", "unknown")
-            cluster_ref = spec.get("clusterDeploymentName", {})
-            agent_name = meta.get("name", "?")
-
-            if state in available_states and not cluster_ref:
-                available_agents.append(agent_name)
-            else:
-                # Build compact exclusion reason
-                if isinstance(cluster_ref, dict) and cluster_ref:
-                    binding = f"{cluster_ref.get('namespace', '')}/{cluster_ref.get('name', '')}"
-                elif cluster_ref:
-                    binding = str(cluster_ref)
-                else:
-                    binding = "unbound"
-
-                cond_summary = ", ".join(f"{c.get('type', '?')}={c.get('status', '?')}" for c in conditions[:3])
-                unavailable_summary.append(
-                    f"{agent_name}(state={state}, binding={binding}, conditions=[{cond_summary}])"
-                )
-
-        log.info(
-            "Agent pool preflight: %d/%d agents available (need %d)",
-            len(available_agents),
-            len(items),
-            expected_available,
-        )
-
-        if len(available_agents) < expected_available:
-            # Capture full diagnostics before failing
-            _report_agent_diagnostics(k8s=k8s, co_name=None, context="preflight-pool-shortage")
-            pytest.fail(
-                f"Agent pool preflight FAILED: {len(available_agents)} available agents "
-                f"(need {expected_available}), {len(items)} total in {agent_ns}.\n"
-                f"Available: {available_agents or 'none'}\n"
-                f"Unavailable: {unavailable_summary or 'none'}"
-            )
-
-    except pytest.fail.Exception:
-        raise
-    except Exception as exc:
-        log.warning("Agent preflight check failed (non-fatal): %s", exc)
-
-
 def _assert_caas_worker_ips_in_subnet(
     *, grpc: GRPCClient, cluster_order_status: dict[str, object], subnet_cidr: str, subnet_ref: str
 ) -> None:
@@ -379,14 +306,12 @@ class TestCaasClusterWithNetworkAttachment:
         cluster_template: str,
         pull_secret_path: str,
         ssh_public_key_path: str,
+        caas_worker_node_sets: dict[str, dict[str, object]],
         caas_networking: dict[str, str],
     ) -> None:
         subnet_name = caas_networking["subnet_name"]
         sg_name = caas_networking["sg_name"]
         name = unique_name("e2e-caas-net")
-
-        # Preflight: check Agent pool capacity
-        _assert_agent_pool_available(k8s=k8s_hub_client)
 
         # Build the --network-attachment value: subnet=<name>,security-groups=<sg>
         network_attachment = f"subnet={subnet_name},security-groups={sg_name}"
@@ -396,6 +321,7 @@ class TestCaasClusterWithNetworkAttachment:
             template=cluster_template,
             template_parameter_files={"pull_secret": pull_secret_path},
             template_parameters={"ssh_public_key": Path(ssh_public_key_path).read_text().strip()},
+            node_sets=caas_worker_node_sets,
             network_attachment=network_attachment,
         )
         print(f"Created cluster {name}: {uuid}")
@@ -492,6 +418,237 @@ class TestCaasClusterWithNetworkAttachment:
             )
 
 
+@pytest.mark.serial
+class TestCaasMultipleWorkerTypes:
+    """Exercise distinct worker instance types through real CaaS provisioning."""
+
+    @pytest.mark.xdist_group("caas-cluster-provision")
+    def test_cluster_lifecycle_with_multiple_worker_types(
+        self,
+        cli: OsacCLI,
+        grpc: GRPCClient,
+        private_grpc: GRPCClient,
+        k8s_hub_client: K8sClient,
+        cluster_template: str,
+        pull_secret_path: str,
+        ssh_public_key_path: str,
+        caas_networking: dict[str, str],
+    ) -> None:
+        """Install one worker of each type and verify type-specific pools and tenant networking."""
+        # Cluster NodeSets require shared BMIT references. Create uniquely named
+        # test profiles in that scope, then remove them after the ClusterOrder is gone.
+        instance_types = {
+            "compute": unique_name("e2e-caas-compute"),
+            "accelerator": unique_name("e2e-caas-accelerator"),
+        }
+        instance_type_ids: list[str] = []
+        cluster_uuid: str | None = None
+        co_name: str | None = None
+        deletion_deadline: float | None = None
+        deletion_requested = False
+
+        try:
+            for node_set, cores, memory_gb in (("compute", 4, 16), ("accelerator", 8, 32)):
+                instance_type_ids.append(
+                    private_grpc.create_bare_metal_instance_type(
+                        name=instance_types[node_set],
+                        cores=cores,
+                        memory_gb=memory_gb,
+                        host_label_selector={"osac.openshift.io/host-type": "default"},
+                        description="Temporary CaaS multi-type E2E profile",
+                        tenant="shared",
+                    )
+                )
+
+            node_sets = {
+                node_set: {"size": 1, "baremetal_instance_type": {"name": instance_type}}
+                for node_set, instance_type in instance_types.items()
+            }
+            cluster_name = unique_name("e2e-caas-multitype")
+            cluster_uuid = cli.create_cluster(
+                name=cluster_name,
+                template=cluster_template,
+                template_parameter_files={"pull_secret": pull_secret_path},
+                template_parameters={"ssh_public_key": Path(ssh_public_key_path).read_text().strip()},
+                node_sets=node_sets,
+                network_attachment=(
+                    f"subnet={caas_networking['subnet_name']},security-groups={caas_networking['sg_name']}"
+                ),
+            )
+            print(f"Created multi-type CaaS cluster {cluster_name}: {cluster_uuid}")
+
+            co_name = wait_for_cluster_order_cr(k8s=k8s_hub_client, uuid=cluster_uuid)
+            wait_for_cluster_progressing(k8s=k8s_hub_client, name=co_name)
+
+            co_spec = k8s_hub_client.get_cluster_order_spec(name=co_name)
+            node_requests = co_spec.get("nodeRequests", [])
+            actual_requests = {
+                request.get("bareMetal", {}).get("instanceType", ""): int(request.get("numberOfNodes", 0))
+                for request in node_requests
+            }
+            expected_requests = {instance_type: 1 for instance_type in instance_types.values()}
+            assert actual_requests == expected_requests, (
+                f"ClusterOrder node requests {actual_requests!r} do not preserve the two requested worker types"
+            )
+            assert len(node_requests) == 2
+            assert all("resourceClass" not in request for request in node_requests)
+            network_attachment = co_spec.get("networkAttachment", {})
+            assert network_attachment.get("subnetRef") == caas_networking["subnet_cr"]
+            assert network_attachment.get("securityGroupRefs") == [caas_networking["sg_cr"]]
+
+            wait_for_cluster_ready(k8s=k8s_hub_client, name=co_name)
+            co_status = k8s_hub_client.get_cluster_order_status(name=co_name)
+            cluster_ref = co_status.get("clusterReference", {})
+            hosted_cluster_name = cluster_ref.get("hostedClusterName", "")
+            assert hosted_cluster_name, f"ClusterOrder {co_name} has no HostedCluster reference when Ready"
+
+            hosted_cluster_namespace = k8s_hub_client.get_cluster_order_namespace(name=co_name)
+            workload_kubeconfig = wait_for_hosted_cluster_kubeconfig(
+                k8s=k8s_hub_client,
+                hosted_cluster_namespace=hosted_cluster_namespace,
+                hosted_cluster_name=hosted_cluster_name,
+            )
+            with tempfile.NamedTemporaryFile(prefix="osac-multitype-workload-", suffix=".kubeconfig") as kubeconfig:
+                kubeconfig.write(workload_kubeconfig)
+                kubeconfig.flush()
+                workload_k8s = K8sClient(
+                    namespace=hosted_cluster_namespace, kubeconfig=kubeconfig.name, as_system_admin=False
+                )
+                wait_for_workload_cluster_health(k8s=workload_k8s, expected_workers=2)
+
+                def _node_pools_by_instance_type() -> dict[str, dict[str, object]]:
+                    items = k8s_hub_client.list_json(
+                        resource="nodepools.hypershift.openshift.io", namespace=hosted_cluster_namespace
+                    ).get("items", [])
+                    matching = [
+                        item
+                        for item in items
+                        if item.get("metadata", {}).get("labels", {}).get("osac.openshift.io/clusterorder") == co_name
+                    ]
+                    return {
+                        item.get("metadata", {}).get("labels", {}).get("osac.openshift.io/instance_type", ""): item
+                        for item in matching
+                    }
+
+                node_pools = poll_until(
+                    fn=_node_pools_by_instance_type,
+                    until=lambda pools: (
+                        set(pools) == set(instance_types.values())
+                        and all(node_pool_ready(pool, expected_ready_nodes=1) for pool in pools.values())
+                    ),
+                    retries=60,
+                    delay=10,
+                    description=f"{co_name} per-type NodePools to have one ready node each",
+                )
+
+            assert len(node_pools) == 2
+            for instance_type in instance_types.values():
+                node_pool = node_pools[instance_type]
+                labels = node_pool.get("metadata", {}).get("labels", {})
+                assert labels.get("osac.openshift.io/instance_type") == instance_type
+                assert labels.get("osac.openshift.io/clusterorder") == co_name
+                assert node_pool.get("spec", {}).get("replicas") == 1
+                selector = (
+                    node_pool.get("spec", {})
+                    .get("platform", {})
+                    .get("agent", {})
+                    .get("agentLabelSelector", {})
+                    .get("matchLabels", {})
+                )
+                assert selector.get("osac.openshift.io/instance_type") == instance_type
+                assert selector.get("osac.openshift.io/clusterorder") == co_name
+
+            cluster_order = k8s_hub_client.get_json(resource="clusterorder", name=co_name)
+            agent_namespace = cluster_order.get("metadata", {}).get("namespace", k8s_hub_client.namespace)
+
+            def _bound_agent_types() -> Counter[str]:
+                agents = k8s_hub_client.list_json(
+                    resource="agents.agent-install.openshift.io", namespace=agent_namespace
+                ).get("items", [])
+                return Counter(
+                    labels.get("osac.openshift.io/instance_type", "")
+                    for agent in agents
+                    if (labels := agent.get("metadata", {}).get("labels", {})).get("osac.openshift.io/clusterorder")
+                    == co_name
+                )
+
+            agent_types = poll_until(
+                fn=_bound_agent_types,
+                until=lambda counts: counts == Counter(instance_types.values()),
+                retries=60,
+                delay=10,
+                description=f"{co_name} Agents to be labeled for both instance types",
+            )
+            assert agent_types == Counter(instance_types.values())
+
+            cluster = grpc.get_cluster(cluster_id=cluster_uuid).get("object", {})
+            cluster_tenant = cluster.get("metadata", {}).get("tenant", "")
+            workers = [worker for worker in co_status.get("workers", []) if worker.get("kind") == "BareMetalInstance"]
+            assert len(workers) == 2, f"Expected two CaaS worker BMIs, got {len(workers)}"
+            observed_instance_types: Counter[str] = Counter()
+            for worker in workers:
+                assert worker.get("phase") == "Ready", f"Worker {worker.get('name')} is not Ready"
+                bmi_id = worker.get("resourceID", "")
+                assert bmi_id, f"Worker {worker.get('name')} has no BareMetalInstance resource ID"
+                bmi = grpc.get_baremetal_instance(bmi_id=bmi_id).get("object", {})
+                metadata = bmi.get("metadata", {})
+                assert metadata.get("tenant") == cluster_tenant
+                assert metadata.get("labels", {}).get("osac.openshift.io/cluster-order") == co_name
+                assert metadata.get("annotations", {}).get("osac.openshift.io/owner-reference") == (
+                    f"ClusterOrder/{co_name}"
+                )
+                spec = bmi.get("spec", {})
+                type_ref = spec.get("instanceType", spec.get("instance_type", {}))
+                assert type_ref.get("shared") is True
+                observed_instance_types[type_ref.get("name", "")] += 1
+
+            assert observed_instance_types == Counter(instance_types.values())
+            _assert_caas_worker_ips_in_subnet(
+                grpc=grpc,
+                cluster_order_status=co_status,
+                subnet_cidr=caas_networking["subnet_cidr"],
+                subnet_ref=caas_networking["subnet_cr"],
+            )
+
+            deletion_deadline = time.monotonic() + 1200
+            cli.delete_cluster(uuid=cluster_uuid)
+            deletion_requested = True
+            wait_for_cluster_deleting(k8s=k8s_hub_client, name=co_name)
+            wait_for_cluster_grpc_deleting_or_archived(grpc=grpc, uuid=cluster_uuid)
+            wait_for_cluster_deletion_with_deadline(k8s=k8s_hub_client, name=co_name, deadline=deletion_deadline)
+            wait_for_cluster_grpc_removal(grpc=grpc, uuid=cluster_uuid)
+        except Exception:
+            _report_agent_diagnostics(k8s=k8s_hub_client, co_name=co_name, context="multi-type test failure")
+            raise
+        finally:
+            if cluster_uuid is not None:
+                if co_name is None:
+                    with contextlib.suppress(Exception):
+                        co_name = wait_for_cluster_order_cr(k8s=k8s_hub_client, uuid=cluster_uuid)
+                if deletion_deadline is None:
+                    deletion_deadline = time.monotonic() + 1200
+                _cleanup_cluster(
+                    cli=cli,
+                    grpc=grpc,
+                    k8s=k8s_hub_client,
+                    uuid=cluster_uuid,
+                    co_name=co_name,
+                    deadline=deletion_deadline,
+                    deletion_requested=deletion_requested,
+                )
+            for instance_type_id in reversed(instance_type_ids):
+                try:
+                    private_grpc.call(
+                        service=f"{PRIVATE_API}.BareMetalInstanceTypes/Delete", data={"id": instance_type_id}
+                    )
+                except subprocess.CalledProcessError as cleanup_error:
+                    log.warning(
+                        "Failed to delete temporary shared BMIT %s after CaaS cleanup: %s",
+                        instance_type_id,
+                        (cleanup_error.stderr or cleanup_error.stdout or str(cleanup_error)).strip(),
+                    )
+
+
 # ---------------------------------------------------------------------------
 # Automatic ExternalIP lifecycle for a CaaS Cluster
 # ---------------------------------------------------------------------------
@@ -504,34 +661,22 @@ class TestCaasClusterAutoExternalIP:
         self,
         cli: OsacCLI,
         grpc: GRPCClient,
-        private_grpc: GRPCClient,
         k8s_hub_client: K8sClient,
         cluster_template: str,
         pull_secret_path: str,
         ssh_public_key_path: str,
+        caas_worker_node_sets: dict[str, dict[str, object]],
         caas_networking: dict[str, str],
+        caas_external_ip_pool: dict[str, str],
     ) -> None:
-        """The test uses a preconfigured pool and creates no shared pool resources."""
-        ready_pool_with_capacity = False
-        for pool_id in private_grpc.list_external_ip_pool_ids():
-            pool = private_grpc.get_external_ip_pool(pool_id=pool_id).get("object", {})
-            pool_status = pool.get("status", {})
-            if (
-                pool_status.get("state") in {"EXTERNAL_IP_POOL_STATE_READY", "Ready"}
-                and pool_status.get("available", 0) >= 2
-            ):
-                ready_pool_with_capacity = True
-                break
-        if not ready_pool_with_capacity:
-            pytest.skip("CaaS auto-ExternalIP E2E requires a preconfigured Ready pool with at least two free addresses")
-
-        _assert_agent_pool_available(k8s=k8s_hub_client)
+        """Create and use a test-owned Ready pool for the auto-attachment flow."""
         name = unique_name("e2e-caas-auto-eip")
         uuid = cli.create_cluster(
             name=name,
             template=cluster_template,
             template_parameter_files={"pull_secret": pull_secret_path},
             template_parameters={"ssh_public_key": Path(ssh_public_key_path).read_text().strip()},
+            node_sets=caas_worker_node_sets,
             external_ip_attachment=True,
         )
         print(f"Created auto-ExternalIP cluster {name}: {uuid}")
@@ -582,6 +727,11 @@ class TestCaasClusterAutoExternalIP:
                 labels = external_ip.get("metadata", {}).get("labels", {})
                 assert labels.get("osac.openshift.io/auto-created") == "true"
                 assert labels.get("osac.openshift.io/auto-created-for") == uuid
+                assert external_ip.get("spec", {}).get("pool", {}).get("id") == caas_external_ip_pool["id"], (
+                    f"Auto-created ExternalIP {external_ip_id} came from pool "
+                    f"{external_ip.get('spec', {}).get('pool', {}).get('id')!r}; "
+                    f"expected the test pool {caas_external_ip_pool['id']!r}"
+                )
                 external_ip_cr = wait_for_external_ip_cr(k8s=k8s_hub_client, uuid=external_ip_id)
                 external_ip_crs.append(external_ip_cr)
                 wait_for_external_ip_allocated(k8s=k8s_hub_client, name=external_ip_cr)
@@ -649,7 +799,12 @@ class TestCaasNetworkAttachmentNegative:
     """Negative tests for --network-attachment flag validation."""
 
     def test_reject_nonexistent_subnet(
-        self, cli: OsacCLI, cluster_template: str, pull_secret_path: str, ssh_public_key_path: str
+        self,
+        cli: OsacCLI,
+        cluster_template: str,
+        pull_secret_path: str,
+        ssh_public_key_path: str,
+        caas_worker_node_sets: dict[str, dict[str, object]],
     ) -> None:
         """Creating a cluster with a nonexistent subnet should fail."""
         name = unique_name("e2e-caas-nosub")
@@ -659,6 +814,7 @@ class TestCaasNetworkAttachmentNegative:
                 template=cluster_template,
                 template_parameter_files={"pull_secret": pull_secret_path},
                 template_parameters={"ssh_public_key": Path(ssh_public_key_path).read_text().strip()},
+                node_sets=caas_worker_node_sets,
                 network_attachment="subnet=nonexistent-subnet-12345",
             )
         combined = (exc_info.value.stdout or "") + (exc_info.value.stderr or "")
@@ -673,6 +829,7 @@ class TestCaasNetworkAttachmentNegative:
         cluster_template: str,
         pull_secret_path: str,
         ssh_public_key_path: str,
+        caas_worker_node_sets: dict[str, dict[str, object]],
         caas_networking: dict[str, str],
     ) -> None:
         """A SecurityGroup from a different VN should be rejected by the API.
@@ -721,6 +878,7 @@ class TestCaasNetworkAttachmentNegative:
                     template=cluster_template,
                     template_parameter_files={"pull_secret": pull_secret_path},
                     template_parameters={"ssh_public_key": Path(ssh_public_key_path).read_text().strip()},
+                    node_sets=caas_worker_node_sets,
                     network_attachment=f"subnet={subnet_name},security-groups={second_sg_name}",
                 )
             combined = (exc_info.value.stdout or "") + (exc_info.value.stderr or "")
@@ -763,6 +921,7 @@ class TestCaasDefaultNetworking:
         cluster_template: str,
         pull_secret_path: str,
         ssh_public_key_path: str,
+        caas_worker_node_sets: dict[str, dict[str, object]],
         caas_networking: dict[str, str],
     ) -> None:
         """Create a cluster without --network-attachment using JWT auth.
@@ -774,14 +933,12 @@ class TestCaasDefaultNetworking:
         """
         name = unique_name("e2e-caas-dflt")
 
-        # Preflight: check Agent pool capacity
-        _assert_agent_pool_available(k8s=k8s_hub_client)
-
         uuid = cli.create_cluster(
             name=name,
             template=cluster_template,
             template_parameter_files={"pull_secret": pull_secret_path},
             template_parameters={"ssh_public_key": Path(ssh_public_key_path).read_text().strip()},
+            node_sets=caas_worker_node_sets,
         )
         print(f"Created default-networking cluster {name}: {uuid}")
 
@@ -853,30 +1010,23 @@ class TestCaasDefaultNetworking:
 
 
 # ---------------------------------------------------------------------------
-# Agent reuse: create → delete → wait reclaim → create again → verify
+# Sequential CaaS provisioning: create → delete → create again
 # ---------------------------------------------------------------------------
 @pytest.mark.serial
-class TestCaasAgentReuse:
-    """Verify that Agents are returned to the available pool after cluster deletion.
+class TestCaasSequentialProvisioning:
+    """Verify a new CaaS cluster can be provisioned after deleting the previous one.
 
     Journey:
-    1. Create a cluster (agents get allocated and bound)
-    2. Delete it
-    3. Wait for agents to reach available state: ``known-unbound``/``known``/
-       ``discovering-unbound`` with the old ``clusterdeployment-namespace``
-       label gone
-    4. Create another cluster
-    5. Verify agents are allocated to the new cluster
+    1. Create a cluster and wait for it to become Ready.
+    2. Delete it and wait for all ClusterOrder resources to be removed.
+    3. Create a second cluster and wait for it to become Ready.
 
-    Uses a 10-minute reclaim deadline with 10-second polling.
-    On timeout, captures Agent status and labels for diagnostics.
+    Agent resources are scoped to a ClusterOrder and deleted after unbinding,
+    so this test covers sequential provisioning rather than global Agent reuse.
     """
 
-    _RECLAIM_TIMEOUT = 600  # 10 minutes
-    _RECLAIM_POLL = 10  # seconds
-
     @pytest.mark.xdist_group("caas-cluster-provision")
-    def test_agent_reuse_after_cluster_deletion(
+    def test_cluster_can_be_provisioned_after_deletion(
         self,
         cli: OsacCLI,
         grpc: GRPCClient,
@@ -884,6 +1034,7 @@ class TestCaasAgentReuse:
         cluster_template: str,
         pull_secret_path: str,
         ssh_public_key_path: str,
+        caas_worker_node_sets: dict[str, dict[str, object]],
         caas_networking: dict[str, str],
     ) -> None:
         subnet_name = caas_networking["subnet_name"]
@@ -891,16 +1042,14 @@ class TestCaasAgentReuse:
         network_attachment = f"subnet={subnet_name},security-groups={sg_name}"
         ssh_key = Path(ssh_public_key_path).read_text().strip()
 
-        # Preflight: check Agent pool capacity (need agents for two clusters)
-        _assert_agent_pool_available(k8s=k8s_hub_client, expected_available=1)
-
         # ── Phase 1: create first cluster ──
-        name_a = unique_name("e2e-reuse-a")
+        name_a = unique_name("e2e-sequential-a")
         uuid_a = cli.create_cluster(
             name=name_a,
             template=cluster_template,
             template_parameter_files={"pull_secret": pull_secret_path},
             template_parameters={"ssh_public_key": ssh_key},
+            node_sets=caas_worker_node_sets,
             network_attachment=network_attachment,
         )
         print(f"Created first cluster {name_a}: {uuid_a}")
@@ -922,12 +1071,8 @@ class TestCaasAgentReuse:
             wait_for_cluster_deleting(k8s=k8s_hub_client, name=co_name_a)
             wait_for_cluster_grpc_deleting_or_archived(grpc=grpc, uuid=uuid_a)
 
-            # ── Phase 3: wait for agent reclaim ──
-            print(f"Waiting for agent reclaim (up to {self._RECLAIM_TIMEOUT}s)...")
-            wait_for_agent_available(
-                k8s=k8s_hub_client, co_name=co_name_a, timeout=self._RECLAIM_TIMEOUT, poll=self._RECLAIM_POLL
-            )
-            print("Agents reclaimed and available")
+            # Wait for deletion before issuing the next ClusterOrder. The
+            # operator deletes the old order-scoped Agent after unbinding it.
             wait_for_cluster_deletion_with_deadline(k8s=k8s_hub_client, name=co_name_a, deadline=deletion_deadline_a)
             wait_for_cluster_grpc_removal(grpc=grpc, uuid=uuid_a)
             print(f"First cluster {name_a} deleted")
@@ -949,12 +1094,13 @@ class TestCaasAgentReuse:
             )
 
         # ── Phase 4: create second cluster ──
-        name_b = unique_name("e2e-reuse-b")
+        name_b = unique_name("e2e-sequential-b")
         uuid_b = cli.create_cluster(
             name=name_b,
             template=cluster_template,
             template_parameter_files={"pull_secret": pull_secret_path},
             template_parameters={"ssh_public_key": ssh_key},
+            node_sets=caas_worker_node_sets,
             network_attachment=network_attachment,
         )
         print(f"Created second cluster {name_b}: {uuid_b}")
@@ -967,9 +1113,8 @@ class TestCaasAgentReuse:
             co_name_b = wait_for_cluster_order_cr(k8s=k8s_hub_client, uuid=uuid_b)
             wait_for_cluster_progressing(k8s=k8s_hub_client, name=co_name_b)
 
-            # ── Phase 5: verify agent allocated to second cluster ──
             wait_for_cluster_ready(k8s=k8s_hub_client, name=co_name_b)
-            print(f"Second cluster {name_b} is Ready — agent reuse verified")
+            print(f"Second cluster {name_b} is Ready")
 
             # Delete second cluster
             deletion_deadline_b = time.monotonic() + 1200

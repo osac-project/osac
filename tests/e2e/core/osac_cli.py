@@ -226,6 +226,7 @@ class OsacCLI:
         template_parameters: dict[str, str] | None = None,
         template_parameter_files: dict[str, str] | None = None,
         network_attachment: str | None = None,
+        external_ip_attachment: bool = False,
     ) -> str:
         args: list[str] = ["create", "cluster", "--template", template]
         if name is not None:
@@ -256,6 +257,8 @@ class OsacCLI:
                 args.extend(["-f", f"{key}={path}"])
         if network_attachment is not None:
             args.extend(["--network-attachment", network_attachment])
+        if external_ip_attachment:
+            args.append("--external-ip-attachment")
 
         return self._parse_uuid(self._run(*args))
 

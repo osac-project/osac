@@ -57,6 +57,7 @@ var _ = Describe("FabricDomainReconciler", func() {
 		vnet                      *v1alpha1.VirtualNetwork
 		triggerCount              int
 		lastPayload               map[string]any
+		networkClassGetCalls      int
 		instanceTypeListCalls     int
 		lastInstanceTypeFilter    string
 		instanceTypeOffsets       []int32
@@ -73,6 +74,7 @@ var _ = Describe("FabricDomainReconciler", func() {
 		ctx = context.Background()
 		triggerCount = 0
 		lastPayload = nil
+		networkClassGetCalls = 0
 		instanceTypeListCalls = 0
 		lastInstanceTypeFilter = ""
 		instanceTypeOffsets = nil
@@ -134,6 +136,7 @@ var _ = Describe("FabricDomainReconciler", func() {
 		})).To(Succeed())
 		networkClassesClient := &stubNetworkClassesClient{
 			getFunc: func(_ context.Context, req *privatev1.NetworkClassesGetRequest, _ ...grpc.CallOption) (*privatev1.NetworkClassesGetResponse, error) {
+				networkClassGetCalls++
 				Expect(req.GetId()).To(Equal("nc-1"))
 				return privatev1.NetworkClassesGetResponse_builder{Object: networkClass}.Build(), nil
 			},
@@ -294,11 +297,9 @@ var _ = Describe("FabricDomainReconciler", func() {
 		Expect(k8sClient.Update(ctx, inventory)).To(Succeed())
 		instanceTypes["other-gpu-type"] = fabricDomainTestInstanceType("other-gpu-type", "nc-1", "42")
 
-		templateID, memberTypes, err := reconciler.resolveFabricDomainHardware(ctx, domain, "nc-1")
+		templateID, err := reconciler.resolveFabricDomainHardware(ctx, domain, "nc-1")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(templateID).To(Equal("42"))
-		Expect(memberTypes).To(HaveKeyWithValue("server-a", "gpu-type"))
-		Expect(memberTypes).To(HaveKeyWithValue("server-b", "other-gpu-type"))
 		Expect(instanceTypeListCalls).To(Equal(1))
 		Expect(lastInstanceTypeFilter).To(ContainSubstring(`"gpu-type"`))
 		Expect(lastInstanceTypeFilter).To(ContainSubstring(`"other-gpu-type"`))
@@ -347,6 +348,22 @@ var _ = Describe("FabricDomainReconciler", func() {
 		Expect(triggerCount).To(Equal(2))
 	})
 
+	It("reuses the persisted backend binding while an AAP provisioning job is active", func() {
+		mockProvider.getProvisionStatusFunc = func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatus, error) {
+			return provisioning.ProvisionStatus{JobID: jobID, State: v1alpha1.JobStateRunning, Message: "still provisioning"}, nil
+		}
+		updated := reconcileTimes(3)
+		Expect(updated.Status.ProvisioningConfig).NotTo(BeNil())
+		Expect(instanceTypeListCalls).To(Equal(1))
+		Expect(networkClassGetCalls).To(Equal(1))
+
+		_, err := reconciler.Reconcile(ctx, request())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(triggerCount).To(Equal(1))
+		Expect(instanceTypeListCalls).To(Equal(1), "the in-flight job uses its persisted type/template binding")
+		Expect(networkClassGetCalls).To(Equal(1), "the in-flight job uses its persisted NetworkClass binding")
+	})
+
 	It("does not use tenant annotations as authority for VirtualNetwork resolution", func() {
 		vnet.Annotations[osacTenantKey] = "other-tenant"
 		Expect(k8sClient.Update(ctx, vnet)).To(Succeed())
@@ -390,10 +407,9 @@ var _ = Describe("FabricDomainReconciler", func() {
 		}
 		Expect(k8sClient.Update(ctx, inventory)).To(Succeed())
 
-		templateID, resolvedTypes, err := reconciler.resolveFabricDomainHardware(ctx, domain, "nc-1")
+		templateID, err := reconciler.resolveFabricDomainHardware(ctx, domain, "nc-1")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(templateID).To(Equal("42"))
-		Expect(resolvedTypes).To(HaveLen(101))
 		Expect(instanceTypeListCalls).To(Equal(4))
 		Expect(instanceTypeOffsets).To(Equal([]int32{0, 0, 0, 0}))
 		Expect(instanceTypeFilterCounts).To(Equal([]int{100, 50, 50, 1}))
@@ -545,6 +561,64 @@ var _ = Describe("FabricDomainReconciler", func() {
 		Expect(deletingDomain.Status.Phase).To(Equal(v1alpha1.FabricDomainPhaseFailed))
 	})
 
+	It("retains the finalizer while an unverified backend artifact remains", func() {
+		deletingDomain := &v1alpha1.FabricDomain{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(domain), deletingDomain)).To(Succeed())
+		deletingDomain.Finalizers = append(deletingDomain.Finalizers, osacFabricDomainFinalizer)
+		Expect(k8sClient.Update(ctx, deletingDomain)).To(Succeed())
+		deletingDomain.Status.ProvisioningIntent = true
+		deletingDomain.Status.VPCID = "7"
+		deletingDomain.Status.UnverifiedBackendArtifact = true
+		deletingDomain.Status.UnverifiedBackendID = "42"
+		deletingDomain.Status.ProvisioningJobs = []v1alpha1.JobStatus{{
+			JobID: "create-1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateFailed,
+		}}
+		deletingDomain.Status.Conditions = []metav1.Condition{{
+			Type: v1alpha1.ConditionReady, Status: metav1.ConditionFalse,
+			Reason: fabricDomainUnverifiedBackendReason, Message: "AAP reported another VPC",
+		}}
+		Expect(k8sClient.Status().Update(ctx, deletingDomain)).To(Succeed())
+
+		var deprovisionCalls int
+		mockProvider.triggerDeprovisionFunc = func(_ context.Context, _ client.Object, _ []v1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {
+			deprovisionCalls++
+			return &provisioning.DeprovisionResult{Action: provisioning.DeprovisionTriggered, JobID: "delete-1"}, nil
+		}
+
+		_, err := reconciler.handleDelete(ctx, deletingDomain)
+		Expect(err).To(MatchError(ContainSubstring("status.unverifiedBackendId")))
+		Expect(deprovisionCalls).To(BeZero())
+		Expect(deletingDomain.Finalizers).To(ContainElement(osacFabricDomainFinalizer))
+		Expect(deletingDomain.Status.Phase).To(Equal(v1alpha1.FabricDomainPhaseFailed))
+	})
+
+	It("blocks retry and deletion when AAP succeeds without a backend ID", func() {
+		domain.Finalizers = append(domain.Finalizers, osacFabricDomainFinalizer)
+		Expect(k8sClient.Update(ctx, domain)).To(Succeed())
+		domain.Status.ProvisioningIntent = true
+		domain.Status.VPCID = "7"
+		domain.Status.ProvisioningJobs = []v1alpha1.JobStatus{{
+			JobID: "create-no-id", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateSucceeded,
+		}}
+		fabricDomainPollCallbacks(ctx, domain, "desired").OnSuccess(provisioning.ProvisionStatus{
+			Outputs: map[string]any{"server_cluster_vpc_id": "7"},
+		})
+		Expect(domain.Status.UnverifiedBackendArtifact).To(BeTrue())
+		Expect(domain.Status.UnverifiedBackendID).To(BeEmpty())
+		Expect(domain.Status.BackendID).To(BeEmpty())
+		Expect(domain.Status.Members).To(HaveLen(len(domain.Spec.Servers)))
+		Expect(domain.Status.Members).To(HaveEach(HaveField("State", Equal(v1alpha1.FabricDomainMemberStateFailed))))
+
+		result, err := reconciler.handleUpdate(ctx, domain)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(BeNumerically(">", time.Duration(0)))
+		Expect(triggerCount).To(BeZero(), "do not retry while the artifact identity is unknown")
+
+		_, err = reconciler.handleDelete(ctx, domain)
+		Expect(err).To(MatchError(ContainSubstring("status.unverifiedBackendArtifact")))
+		Expect(domain.Finalizers).To(ContainElement(osacFabricDomainFinalizer))
+	})
+
 	It("uses the VirtualNetwork region for scoped cleanup after a recorded provision job", func() {
 		deletingDomain := &v1alpha1.FabricDomain{}
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(domain), deletingDomain)).To(Succeed())
@@ -612,12 +686,76 @@ var _ = Describe("FabricDomainReconciler", func() {
 			Outputs: map[string]any{"server_cluster_id": "42", "server_cluster_vpc_id": "8"},
 		})
 		Expect(domain.Status.Phase).To(Equal(v1alpha1.FabricDomainPhaseFailed))
-		Expect(domain.Status.BackendID).To(Equal("42"), "retain the exact ID for safe cleanup")
+		Expect(domain.Status.BackendID).To(BeEmpty(), "do not persist an ID from a mismatched VPC artifact")
+		Expect(domain.Status.UnverifiedBackendArtifact).To(BeTrue())
+		Expect(domain.Status.UnverifiedBackendID).To(Equal("42"))
 		Expect(domain.Status.VPCID).To(Equal("7"))
 		Expect(domain.Status.ProvisioningJobs[0].State).To(Equal(v1alpha1.JobStateFailed))
 		Expect(domain.Status.ProvisioningJobs[0].Message).NotTo(ContainSubstring("8"))
 		condition := apimeta.FindStatusCondition(domain.Status.Conditions, v1alpha1.ConditionReady)
 		Expect(condition.Message).NotTo(ContainSubstring("8"))
+	})
+
+	It("marks the artifact unverified when AAP omits the ServerCluster VPC ID", func() {
+		domain.Status.VPCID = "7"
+		domain.Status.ProvisioningJobs = []v1alpha1.JobStatus{{
+			JobID: "create-1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateSucceeded,
+		}}
+		fabricDomainPollCallbacks(ctx, domain, "desired").OnSuccess(provisioning.ProvisionStatus{
+			Outputs: map[string]any{"server_cluster_id": "42"},
+		})
+
+		Expect(domain.Status.Phase).To(Equal(v1alpha1.FabricDomainPhaseFailed))
+		Expect(domain.Status.BackendID).To(BeEmpty())
+		Expect(domain.Status.UnverifiedBackendArtifact).To(BeTrue())
+		Expect(domain.Status.UnverifiedBackendID).To(Equal("42"))
+		condition := apimeta.FindStatusCondition(domain.Status.Conditions, v1alpha1.ConditionReady)
+		Expect(condition.Message).To(ContainSubstring("did not confirm"))
+	})
+
+	It("preserves a previously verified ServerCluster ID after a mismatched VPC update", func() {
+		domain.Status.BackendID = "41"
+		domain.Status.VPCID = "7"
+		domain.Status.ProvisioningJobs = []v1alpha1.JobStatus{{
+			JobID: "update-1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateSucceeded,
+		}}
+		fabricDomainPollCallbacks(ctx, domain, "desired").OnSuccess(provisioning.ProvisionStatus{
+			Outputs: map[string]any{"server_cluster_id": "42", "server_cluster_vpc_id": "8"},
+		})
+		Expect(domain.Status.Phase).To(Equal(v1alpha1.FabricDomainPhaseFailed))
+		Expect(domain.Status.BackendID).To(Equal("41"))
+	})
+
+	It("keeps an unresolved artifact blocked across a successful retry", func() {
+		domain.Finalizers = append(domain.Finalizers, osacFabricDomainFinalizer)
+		domain.Status.VPCID = "7"
+		domain.Status.ProvisioningJobs = []v1alpha1.JobStatus{{
+			JobID: "create-1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateSucceeded,
+		}}
+		fabricDomainPollCallbacks(ctx, domain, "desired").OnSuccess(provisioning.ProvisionStatus{
+			Outputs: map[string]any{"server_cluster_id": "42", "server_cluster_vpc_id": "8"},
+		})
+		Expect(domain.Status.UnverifiedBackendArtifact).To(BeTrue())
+		Expect(domain.Status.UnverifiedBackendID).To(Equal("42"))
+
+		result, err := reconciler.handleUpdate(ctx, domain)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(BeNumerically(">", time.Duration(0)))
+		Expect(triggerCount).To(BeZero(), "do not retry while the mismatched artifact is unresolved")
+
+		domain.Status.ProvisioningJobs = []v1alpha1.JobStatus{{
+			JobID: "retry-1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateSucceeded,
+		}}
+		fabricDomainPollCallbacks(ctx, domain, "retry-version").OnSuccess(provisioning.ProvisionStatus{
+			Outputs: map[string]any{"server_cluster_id": "43", "server_cluster_vpc_id": "7"},
+		})
+		Expect(domain.Status.BackendID).To(Equal("43"))
+		Expect(domain.Status.UnverifiedBackendArtifact).To(BeTrue())
+		Expect(domain.Status.UnverifiedBackendID).To(Equal("42"))
+
+		_, err = reconciler.handleDelete(ctx, domain)
+		Expect(err).To(MatchError(ContainSubstring("status.unverifiedBackendId")))
+		Expect(domain.Finalizers).To(ContainElement(osacFabricDomainFinalizer))
 	})
 
 	It("wakes only FabricDomains that reference a changed VirtualNetwork", func() {

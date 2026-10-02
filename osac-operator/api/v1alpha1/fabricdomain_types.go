@@ -119,6 +119,18 @@ type FabricDomainStatus struct {
 	// +kubebuilder:validation:Optional
 	BackendID string `json:"backendId,omitempty"`
 
+	// UnverifiedBackendArtifact indicates that a successful AAP job may have created a
+	// ServerCluster that OSAC cannot safely identify or associate with the requested VPC.
+	// It blocks retries and deletion until an administrator resolves the artifact in Netris
+	// and clears this field and UnverifiedBackendID.
+	// +kubebuilder:validation:Optional
+	UnverifiedBackendArtifact bool `json:"unverifiedBackendArtifact,omitempty"`
+
+	// UnverifiedBackendID is the ServerCluster ID returned with an unverified artifact,
+	// when AAP provided one. It is never used as the trusted BackendID.
+	// +kubebuilder:validation:Optional
+	UnverifiedBackendID string `json:"unverifiedBackendId,omitempty"`
+
 	// ProvisioningConfig records the resolved backend binding before the first provisioning job.
 	// A live Server Cluster cannot change its template, VPC, or site. Catalog and inventory
 	// updates must remain compatible with this binding; deletion does not depend on those lookups.

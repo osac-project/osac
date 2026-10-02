@@ -933,8 +933,12 @@ func setupFabricDomainControllers(
 	networkProvisioningEnabled bool,
 ) error {
 	var instanceTypesClient privatev1.BareMetalInstanceTypesClient
+	var fabricDomainsClient privatev1.FabricDomainsClient
+	var virtualNetworksClient privatev1.VirtualNetworksClient
 	if grpcConn != nil {
 		instanceTypesClient = privatev1.NewBareMetalInstanceTypesClient(grpcConn)
+		fabricDomainsClient = privatev1.NewFabricDomainsClient(grpcConn)
+		virtualNetworksClient = privatev1.NewVirtualNetworksClient(grpcConn)
 		if err := controller.NewFabricDomainFeedbackReconciler(
 			localMgr.GetClient(), grpcConn, networkingNamespace,
 		).SetupWithManager(mgr); err != nil {
@@ -945,6 +949,8 @@ func setupFabricDomainControllers(
 		mgr, networkingNamespace, provider, networkClassesClient, instanceTypesClient,
 		statusPollInterval, maxJobHistory,
 	)
+	reconciler.FabricDomainsClient = fabricDomainsClient
+	reconciler.VirtualNetworksClient = virtualNetworksClient
 	reconciler.NetworkProvisioningEnabled = networkProvisioningEnabled
 	if err := reconciler.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("fabricdomain controller: %w", err)

@@ -184,6 +184,37 @@ def test_fabric_domain_delete_uses_virtual_network_region_site(tmp_path, netris_
     assert writes == [("DELETE", "/api/v2/server-cluster/22")]
 
 
+def test_fabric_domain_delete_uses_backend_id_without_vpc(tmp_path, netris_server):
+    url, clusters, writes = netris_server
+    clusters.extend([cluster(21, 2, 7), cluster(22, 2, 8)])
+    resource = {
+        "metadata": {"name": "shared-name"},
+        "spec": {"backendId": "22", "region": "region-b"},
+    }
+    result = run_role(
+        tmp_path, url, "delete_server_cluster", role_name="osac.templates.netris",
+        server_cluster=resource, netris_region_site_map={"region-b": 2}, netris_site_id=1,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert writes == [("DELETE", "/api/v2/server-cluster/22")]
+
+
+@pytest.mark.parametrize("backend_id", ["not-a-number", "0", "-1"])
+def test_fabric_domain_delete_rejects_malformed_backend_id(tmp_path, netris_server, backend_id):
+    url, clusters, writes = netris_server
+    clusters.append(cluster(23, 2, 7))
+    resource = {
+        "metadata": {"name": "shared-name"},
+        "spec": {"backendId": backend_id, "vpcId": "7", "region": "region-b"},
+    }
+    result = run_role(
+        tmp_path, url, "delete_server_cluster", role_name="osac.templates.netris",
+        server_cluster=resource, netris_region_site_map={"region-b": 2}, netris_site_id=1,
+    )
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert writes == []
+
+
 def test_fabric_domain_create_rejects_non_numeric_vpc_id(tmp_path, netris_server):
     url, _clusters, writes = netris_server
     resource = {
@@ -195,6 +226,24 @@ def test_fabric_domain_create_rejects_non_numeric_vpc_id(tmp_path, netris_server
         server_cluster=resource, netris_region_site_map={"region-b": 2}, netris_site_id=1,
     )
     assert result.returncode != 0
+    assert writes == []
+
+
+@pytest.mark.parametrize("backend_id", ["not-a-number", "0"])
+def test_fabric_domain_create_rejects_malformed_backend_id(tmp_path, netris_server, backend_id):
+    url, _clusters, writes = netris_server
+    resource = {
+        "metadata": {"name": "shared-name"},
+        "spec": {
+            "servers": ["server-a"], "templateId": "42", "vpcId": "7",
+            "region": "region-b", "backendId": backend_id,
+        },
+    }
+    result = run_role(
+        tmp_path, url, "create_server_cluster", role_name="osac.templates.netris",
+        server_cluster=resource, netris_region_site_map={"region-b": 2}, netris_site_id=1,
+    )
+    assert result.returncode != 0, result.stdout + result.stderr
     assert writes == []
 
 
@@ -211,7 +260,7 @@ def server(server_id, name="server-a", site_id=1):
     [server(1, "server-a"), server(2, "server-b", site_id=2)],
     [server(1, "server-a"), server(2, "server-b"), server(3, "server-b")],
     [{"id": 1, "name": "server-a"}, {"id": 2, "name": "server-b"}, {"id": 3, "name": "server-b"}],
-    [server(1, "server-a"), server(2, "server-b"), {"id": 3, "name": "server-b"}],
+    [server(1, "server-a"), {"id": 2, "name": "server-b"}, {"id": 3, "name": "server-b"}],
     [server(1, "server-a"), {"id": 2, "name": "server-b", "site": None}],
     [server(1, "server-a"), {"id": 2, "name": "server-b", "site": {"name": "site-1"}}],
     [server(1, "server-a"), server(0, "server-b")],

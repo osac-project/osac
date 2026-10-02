@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -34,6 +35,8 @@ import (
 // namespace. Each data key is an exact Netris inventory hostname and its value is a
 // shared BareMetalInstanceType ID. It describes hardware identity, not tenant allocation.
 const fabricDomainInventoryName = "osac-fabric-domain-inventory"
+
+const fabricDomainCatalogPageSize int32 = 100
 
 type resolvedFabricDomainConfig struct {
 	Binding       v1alpha1.FabricDomainProvisioningConfig
@@ -76,22 +79,27 @@ func (r *FabricDomainReconciler) resolveFabricDomainHardware(
 		}
 	}
 
-	// Resolve every distinct type in one filtered catalog request. Reconciliation
-	// periodically rechecks bindings, so issuing one Get per type here would turn
-	// each resync into an N+1 gRPC pattern for larger domains.
-	quotedTypeIDs := make([]string, 0, len(typeIDs))
-	for _, typeID := range typeIDs {
-		quotedTypeIDs = append(quotedTypeIDs, strconv.Quote(typeID))
-	}
-	filter := fmt.Sprintf("this.id in [%s]", strings.Join(quotedTypeIDs, ", "))
-	response, err := r.BareMetalInstanceTypesClient.List(ctx, privatev1.BareMetalInstanceTypesListRequest_builder{Filter: &filter}.Build())
-	if err != nil {
-		return "", nil, fmt.Errorf("resolving instance types %q: %w", typeIDs, err)
-	}
-	instancesByID := make(map[string]*privatev1.BareMetalInstanceType, len(response.GetItems()))
-	for _, instanceType := range response.GetItems() {
-		if instanceType != nil {
-			instancesByID[instanceType.GetId()] = instanceType
+	// The List API does not guarantee result ordering. Keep each filtered set
+	// below its 100-item page limit, and split any short page into smaller ID
+	// filters so no member depends on offset pagination.
+	sort.Strings(typeIDs)
+	instancesByID := make(map[string]*privatev1.BareMetalInstanceType, len(typeIDs))
+	for start := 0; start < len(typeIDs); start += int(fabricDomainCatalogPageSize) {
+		end := min(start+int(fabricDomainCatalogPageSize), len(typeIDs))
+		batch := typeIDs[start:end]
+		instanceTypeList, err := r.listFabricDomainInstanceTypes(ctx, batch)
+		if err != nil {
+			return "", nil, fmt.Errorf("resolving instance types %q: %w", batch, err)
+		}
+		for _, instanceType := range instanceTypeList {
+			if instanceType == nil {
+				return "", nil, fmt.Errorf("instance type search returned an empty item")
+			}
+			id := instanceType.GetId()
+			if _, duplicate := instancesByID[id]; duplicate {
+				return "", nil, fmt.Errorf("instance type search returned a duplicate item")
+			}
+			instancesByID[id] = instanceType
 		}
 	}
 
@@ -124,6 +132,62 @@ func (r *FabricDomainReconciler) resolveFabricDomainHardware(
 		selectedTemplate = templateID
 	}
 	return selectedTemplate, memberTypes, nil
+}
+
+func (r *FabricDomainReconciler) listFabricDomainInstanceTypes(ctx context.Context, typeIDs []string) ([]*privatev1.BareMetalInstanceType, error) {
+	quotedTypeIDs := make([]string, 0, len(typeIDs))
+	expectedIDs := make(map[string]struct{}, len(typeIDs))
+	for _, typeID := range typeIDs {
+		quotedTypeIDs = append(quotedTypeIDs, strconv.Quote(typeID))
+		expectedIDs[typeID] = struct{}{}
+	}
+	filter := fmt.Sprintf("this.id in [%s]", strings.Join(quotedTypeIDs, ", "))
+	offset := int32(0)
+	limit := fabricDomainCatalogPageSize
+	response, err := r.BareMetalInstanceTypesClient.List(ctx, privatev1.BareMetalInstanceTypesListRequest_builder{
+		Filter: &filter, Offset: &offset, Limit: &limit,
+	}.Build())
+	if err != nil {
+		return nil, err
+	}
+	if response == nil {
+		return nil, fmt.Errorf("instance type search returned an empty response")
+	}
+	items := response.GetItems()
+	total, size := response.GetTotal(), response.GetSize()
+	if total < 0 || total > int32(len(typeIDs)) || size < 0 || size > total || size != int32(len(items)) {
+		return nil, fmt.Errorf("instance type search returned an incomplete or inconsistent result")
+	}
+	seen := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		if item == nil {
+			return nil, fmt.Errorf("instance type search returned an empty item")
+		}
+		id := item.GetId()
+		if _, expected := expectedIDs[id]; !expected {
+			return nil, fmt.Errorf("instance type search returned an unexpected item")
+		}
+		if _, duplicate := seen[id]; duplicate {
+			return nil, fmt.Errorf("instance type search returned a duplicate item")
+		}
+		seen[id] = struct{}{}
+	}
+	if size == total {
+		return items, nil
+	}
+	if len(typeIDs) == 1 {
+		return nil, fmt.Errorf("instance type search returned an incomplete page for a single ID")
+	}
+	middle := len(typeIDs) / 2
+	firstHalf, err := r.listFabricDomainInstanceTypes(ctx, typeIDs[:middle])
+	if err != nil {
+		return nil, err
+	}
+	secondHalf, err := r.listFabricDomainInstanceTypes(ctx, typeIDs[middle:])
+	if err != nil {
+		return nil, err
+	}
+	return append(firstHalf, secondHalf...), nil
 }
 
 func (r *FabricDomainReconciler) mapInventoryToFabricDomains(ctx context.Context, obj client.Object) []reconcile.Request {

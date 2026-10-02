@@ -19,6 +19,9 @@ package controller
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -46,18 +49,24 @@ var _ = Describe("FabricDomainReconciler", func() {
 	)
 
 	var (
-		ctx                    context.Context
-		k8sClient              client.Client
-		reconciler             *FabricDomainReconciler
-		mockProvider           *mockVirtualNetworkProvider
-		domain                 *v1alpha1.FabricDomain
-		vnet                   *v1alpha1.VirtualNetwork
-		triggerCount           int
-		lastPayload            map[string]any
-		instanceTypeListCalls  int
-		lastInstanceTypeFilter string
-		instanceTypes          map[string]*privatev1.BareMetalInstanceType
-		networkClass           *privatev1.NetworkClass
+		ctx                       context.Context
+		k8sClient                 client.Client
+		reconciler                *FabricDomainReconciler
+		mockProvider              *mockVirtualNetworkProvider
+		domain                    *v1alpha1.FabricDomain
+		vnet                      *v1alpha1.VirtualNetwork
+		triggerCount              int
+		lastPayload               map[string]any
+		instanceTypeListCalls     int
+		lastInstanceTypeFilter    string
+		instanceTypeOffsets       []int32
+		instanceTypeFilterCounts  []int
+		instanceTypePageCap       int
+		instanceTypes             map[string]*privatev1.BareMetalInstanceType
+		networkClass              *privatev1.NetworkClass
+		authoritativeDomainTenant string
+		authoritativeVNetTenant   string
+		authoritativeDomainVNet   string
 	)
 
 	BeforeEach(func() {
@@ -66,6 +75,12 @@ var _ = Describe("FabricDomainReconciler", func() {
 		lastPayload = nil
 		instanceTypeListCalls = 0
 		lastInstanceTypeFilter = ""
+		instanceTypeOffsets = nil
+		instanceTypeFilterCounts = nil
+		instanceTypePageCap = int(fabricDomainCatalogPageSize)
+		authoritativeDomainTenant = "tenant-a"
+		authoritativeVNetTenant = "tenant-a"
+		authoritativeDomainVNet = vnetID
 		scheme := runtime.NewScheme()
 		Expect(v1alpha1.AddToScheme(scheme)).To(Succeed())
 		Expect(corev1.AddToScheme(scheme)).To(Succeed())
@@ -123,22 +138,55 @@ var _ = Describe("FabricDomainReconciler", func() {
 				return privatev1.NetworkClassesGetResponse_builder{Object: networkClass}.Build(), nil
 			},
 		}
+		fabricDomainsClient := &stubFabricDomainIdentityClient{
+			getFunc: func(_ context.Context, request *privatev1.FabricDomainsGetRequest, _ ...grpc.CallOption) (*privatev1.FabricDomainsGetResponse, error) {
+				Expect(request.GetId()).To(Equal("fabric-domain-uuid"))
+				return privatev1.FabricDomainsGetResponse_builder{Object: privatev1.FabricDomain_builder{
+					Id: "fabric-domain-uuid", Metadata: privatev1.Metadata_builder{Tenant: authoritativeDomainTenant}.Build(),
+					Spec: privatev1.FabricDomainSpec_builder{VirtualNetwork: authoritativeDomainVNet}.Build(),
+				}.Build()}.Build(), nil
+			},
+		}
+		virtualNetworksClient := &stubFabricDomainVirtualNetworkIdentityClient{
+			getFunc: func(_ context.Context, request *privatev1.VirtualNetworksGetRequest, _ ...grpc.CallOption) (*privatev1.VirtualNetworksGetResponse, error) {
+				Expect(request.GetId()).To(Equal(vnetID))
+				return privatev1.VirtualNetworksGetResponse_builder{Object: privatev1.VirtualNetwork_builder{
+					Id: vnetID, Metadata: privatev1.Metadata_builder{Tenant: authoritativeVNetTenant}.Build(),
+				}.Build()}.Build(), nil
+			},
+		}
 
 		reconciler = &FabricDomainReconciler{
-			Client:               k8sClient,
-			APIReader:            k8sClient,
-			NetworkingNamespace:  namespace,
-			ProvisioningProvider: mockProvider,
-			NetworkClassesClient: networkClassesClient,
+			Client:                k8sClient,
+			APIReader:             k8sClient,
+			NetworkingNamespace:   namespace,
+			ProvisioningProvider:  mockProvider,
+			NetworkClassesClient:  networkClassesClient,
+			FabricDomainsClient:   fabricDomainsClient,
+			VirtualNetworksClient: virtualNetworksClient,
 			BareMetalInstanceTypesClient: &stubFabricDomainInstanceTypesClient{
 				listFunc: func(_ context.Context, request *privatev1.BareMetalInstanceTypesListRequest, _ ...grpc.CallOption) (*privatev1.BareMetalInstanceTypesListResponse, error) {
 					instanceTypeListCalls++
 					lastInstanceTypeFilter = request.GetFilter()
+					instanceTypeOffsets = append(instanceTypeOffsets, request.GetOffset())
+					instanceTypeFilterCounts = append(instanceTypeFilterCounts, strings.Count(request.GetFilter(), `"type-`))
+					Expect(request.GetLimit()).To(Equal(fabricDomainCatalogPageSize))
+					Expect(request.GetOffset()).To(BeZero())
 					items := make([]*privatev1.BareMetalInstanceType, 0, len(instanceTypes))
-					for _, object := range instanceTypes {
-						items = append(items, object)
+					ids := make([]string, 0, len(instanceTypes))
+					for id := range instanceTypes {
+						ids = append(ids, id)
 					}
-					return privatev1.BareMetalInstanceTypesListResponse_builder{Items: items}.Build(), nil
+					sort.Strings(ids)
+					for _, id := range ids {
+						if strings.Contains(request.GetFilter(), strconv.Quote(id)) {
+							items = append(items, instanceTypes[id])
+						}
+					}
+					page := items[:min(len(items), instanceTypePageCap)]
+					return privatev1.BareMetalInstanceTypesListResponse_builder{
+						Items: page, Size: int32(len(page)), Total: int32(len(items)),
+					}.Build(), nil
 				},
 			},
 			StatusPollInterval:         time.Second,
@@ -202,7 +250,8 @@ var _ = Describe("FabricDomainReconciler", func() {
 		Expect(updated.Status.ProvisioningIntent).To(BeFalse())
 		condition := apimeta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionReady)
 		Expect(condition.Reason).To(Equal("InvalidHardwareBinding"))
-		Expect(condition.Message).To(ContainSubstring("not-onboarded"))
+		Expect(condition.Message).NotTo(ContainSubstring("not-onboarded"))
+		Expect(condition.Message).To(ContainSubstring("consult administrator logs"))
 	})
 
 	It("does not infer a hardware type when the inventory ConfigMap is absent", func() {
@@ -263,7 +312,9 @@ var _ = Describe("FabricDomainReconciler", func() {
 		instanceTypes["other-gpu-type"] = fabricDomainTestInstanceType("other-gpu-type", "nc-1", "43")
 		updated := reconcileTimes(3)
 		Expect(triggerCount).To(BeZero())
-		Expect(apimeta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionReady).Message).To(ContainSubstring("incompatible Ethernet templates"))
+		condition := apimeta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionReady)
+		Expect(condition.Message).NotTo(ContainSubstring("incompatible Ethernet templates"))
+		Expect(condition.Message).To(ContainSubstring("consult administrator logs"))
 	})
 
 	It("pins the backend binding and recovers when an incompatible catalog edit is reverted", func() {
@@ -296,12 +347,56 @@ var _ = Describe("FabricDomainReconciler", func() {
 		Expect(triggerCount).To(Equal(2))
 	})
 
-	It("rejects cross-tenant VirtualNetworks before provisioning", func() {
+	It("does not use tenant annotations as authority for VirtualNetwork resolution", func() {
 		vnet.Annotations[osacTenantKey] = "other-tenant"
 		Expect(k8sClient.Update(ctx, vnet)).To(Succeed())
-		updated := reconcileTimes(3)
+		updated := reconcileTimes(4)
+		Expect(triggerCount).To(Equal(1))
+		Expect(apimeta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionReady).Reason).NotTo(Equal("TenantMismatch"))
+	})
+
+	It("rejects cross-tenant VirtualNetworks using Fulfillment metadata", func() {
+		authoritativeVNetTenant = "tenant-b"
+		updated := reconcileTimes(4)
 		Expect(triggerCount).To(BeZero())
 		Expect(apimeta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionReady).Reason).To(Equal("TenantMismatch"))
+		Expect(updated.Status.Phase).To(Equal(v1alpha1.FabricDomainPhaseFailed))
+
+		protectedVNet := &v1alpha1.VirtualNetwork{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(vnet), protectedVNet)).To(Succeed())
+		Expect(protectedVNet.Finalizers).NotTo(ContainElement(osacFabricDomainProtectionFinalizer))
+	})
+
+	It("rejects a hub FabricDomain whose VirtualNetwork differs from Fulfillment", func() {
+		authoritativeDomainVNet = "different-virtual-network-uuid"
+		updated := reconcileTimes(4)
+		Expect(triggerCount).To(BeZero())
+		Expect(apimeta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionReady).Reason).To(Equal("TenantMismatch"))
+	})
+
+	It("paginates the filtered instance-type catalog when resolving large domains", func() {
+		inventory := &corev1.ConfigMap{}
+		Expect(k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: fabricDomainInventoryName}, inventory)).To(Succeed())
+		inventory.Data = make(map[string]string, 101)
+		domain.Spec.Servers = make([]string, 101)
+		instanceTypes = make(map[string]*privatev1.BareMetalInstanceType, 101)
+		instanceTypePageCap = 50
+		for i := range 101 {
+			serverName := fmt.Sprintf("server-%03d", i)
+			typeID := fmt.Sprintf("type-%03d", i)
+			domain.Spec.Servers[i] = serverName
+			inventory.Data[serverName] = typeID
+			instanceTypes[typeID] = fabricDomainTestInstanceType(typeID, "nc-1", "42")
+		}
+		Expect(k8sClient.Update(ctx, inventory)).To(Succeed())
+
+		templateID, resolvedTypes, err := reconciler.resolveFabricDomainHardware(ctx, domain, "nc-1")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(templateID).To(Equal("42"))
+		Expect(resolvedTypes).To(HaveLen(101))
+		Expect(instanceTypeListCalls).To(Equal(4))
+		Expect(instanceTypeOffsets).To(Equal([]int32{0, 0, 0, 0}))
+		Expect(instanceTypeFilterCounts).To(Equal([]int{100, 50, 50, 1}))
 	})
 
 	It("wakes domains when their administrator inventory changes", func() {
@@ -490,6 +585,22 @@ var _ = Describe("FabricDomainReconciler", func() {
 		updated := &v1alpha1.FabricDomain{}
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(domain), updated)).To(Succeed())
 		Expect(updated.Status.Phase).To(Equal(v1alpha1.FabricDomainPhaseFailed))
+		condition := apimeta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionReady)
+		Expect(condition.Message).NotTo(ContainSubstring("vpc-7"))
+	})
+
+	It("does not expose a Netris template identifier in hardware binding conditions", func() {
+		instanceTypes["gpu-type"] = fabricDomainTestInstanceType("gpu-type", "nc-1", "template-secret")
+		for i := 0; i < 3; i++ {
+			_, err := reconciler.Reconcile(ctx, request())
+			Expect(err).NotTo(HaveOccurred())
+		}
+		updated := &v1alpha1.FabricDomain{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(domain), updated)).To(Succeed())
+		condition := apimeta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionReady)
+		Expect(condition.Reason).To(Equal("InvalidHardwareBinding"))
+		Expect(condition.Message).NotTo(ContainSubstring("template-secret"))
+		Expect(condition.Message).To(ContainSubstring("consult administrator logs"))
 	})
 
 	It("rejects a ServerCluster reported in another VPC", func() {
@@ -497,13 +608,16 @@ var _ = Describe("FabricDomainReconciler", func() {
 		domain.Status.ProvisioningJobs = []v1alpha1.JobStatus{{
 			JobID: "create-1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateSucceeded,
 		}}
-		fabricDomainPollCallbacks(domain, "desired").OnSuccess(provisioning.ProvisionStatus{
+		fabricDomainPollCallbacks(ctx, domain, "desired").OnSuccess(provisioning.ProvisionStatus{
 			Outputs: map[string]any{"server_cluster_id": "42", "server_cluster_vpc_id": "8"},
 		})
 		Expect(domain.Status.Phase).To(Equal(v1alpha1.FabricDomainPhaseFailed))
 		Expect(domain.Status.BackendID).To(Equal("42"), "retain the exact ID for safe cleanup")
 		Expect(domain.Status.VPCID).To(Equal("7"))
 		Expect(domain.Status.ProvisioningJobs[0].State).To(Equal(v1alpha1.JobStateFailed))
+		Expect(domain.Status.ProvisioningJobs[0].Message).NotTo(ContainSubstring("8"))
+		condition := apimeta.FindStatusCondition(domain.Status.Conditions, v1alpha1.ConditionReady)
+		Expect(condition.Message).NotTo(ContainSubstring("8"))
 	})
 
 	It("wakes only FabricDomains that reference a changed VirtualNetwork", func() {
@@ -548,11 +662,14 @@ var _ = Describe("FabricDomainReconciler", func() {
 		condition := apimeta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionReady)
 		Expect(condition).NotTo(BeNil())
 		Expect(condition.Status).To(Equal(metav1.ConditionFalse))
-		Expect(condition.Message).To(ContainSubstring("Netris rejected"))
+		Expect(condition.Message).NotTo(ContainSubstring("Netris rejected"))
+		Expect(condition.Message).To(ContainSubstring("consult administrator logs"))
 		Expect(updated.Status.Members).To(ConsistOf(
-			v1alpha1.FabricDomainMemberStatus{Server: "server-a", State: v1alpha1.FabricDomainMemberStateFailed, Message: "Netris rejected the request"},
-			v1alpha1.FabricDomainMemberStatus{Server: "server-b", State: v1alpha1.FabricDomainMemberStateFailed, Message: "Netris rejected the request"},
+			v1alpha1.FabricDomainMemberStatus{Server: "server-a", State: v1alpha1.FabricDomainMemberStateFailed, Message: "provisioning failed; consult administrator logs for details"},
+			v1alpha1.FabricDomainMemberStatus{Server: "server-b", State: v1alpha1.FabricDomainMemberStateFailed, Message: "provisioning failed; consult administrator logs for details"},
 		))
+		provisionJob := provisioning.FindLatestJobByType(updated.Status.ProvisioningJobs, v1alpha1.JobTypeProvision)
+		Expect(provisionJob.Message).To(Equal("provisioning failed; consult administrator logs for details"))
 	})
 })
 
@@ -560,6 +677,24 @@ var _ = Describe("FabricDomainReconciler", func() {
 type stubFabricDomainInstanceTypesClient struct {
 	privatev1.BareMetalInstanceTypesClient
 	listFunc func(context.Context, *privatev1.BareMetalInstanceTypesListRequest, ...grpc.CallOption) (*privatev1.BareMetalInstanceTypesListResponse, error)
+}
+
+type stubFabricDomainIdentityClient struct {
+	privatev1.FabricDomainsClient
+	getFunc func(context.Context, *privatev1.FabricDomainsGetRequest, ...grpc.CallOption) (*privatev1.FabricDomainsGetResponse, error)
+}
+
+func (s *stubFabricDomainIdentityClient) Get(ctx context.Context, request *privatev1.FabricDomainsGetRequest, options ...grpc.CallOption) (*privatev1.FabricDomainsGetResponse, error) {
+	return s.getFunc(ctx, request, options...)
+}
+
+type stubFabricDomainVirtualNetworkIdentityClient struct {
+	privatev1.VirtualNetworksClient
+	getFunc func(context.Context, *privatev1.VirtualNetworksGetRequest, ...grpc.CallOption) (*privatev1.VirtualNetworksGetResponse, error)
+}
+
+func (s *stubFabricDomainVirtualNetworkIdentityClient) Get(ctx context.Context, request *privatev1.VirtualNetworksGetRequest, options ...grpc.CallOption) (*privatev1.VirtualNetworksGetResponse, error) {
+	return s.getFunc(ctx, request, options...)
 }
 
 func (s *stubFabricDomainInstanceTypesClient) List(ctx context.Context, request *privatev1.BareMetalInstanceTypesListRequest, options ...grpc.CallOption) (*privatev1.BareMetalInstanceTypesListResponse, error) {

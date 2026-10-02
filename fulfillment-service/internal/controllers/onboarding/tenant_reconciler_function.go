@@ -363,23 +363,11 @@ func (t *task) getKubeObject(ctx context.Context, hubEntry *controllers.HubEntry
 }
 
 func (t *task) listAllHubs(ctx context.Context) ([]*privatev1.Hub, error) {
-	var allHubs []*privatev1.Hub
-	var offset int32
-	for {
-		response, err := t.r.hubsClient.List(ctx, privatev1.HubsListRequest_builder{
-			Offset: &offset,
-		}.Build())
-		if err != nil {
-			return nil, fmt.Errorf("failed to list hubs: %w", err)
-		}
-		allHubs = append(allHubs, response.GetItems()...)
-		total := response.GetTotal()
-		if total <= 0 || offset+response.GetSize() >= total {
-			break
-		}
-		offset += response.GetSize()
+	hubs, err := controllers.ListAllHubs(ctx, t.r.hubsClient)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list hubs: %w", err)
 	}
-	return allHubs, nil
+	return hubs, nil
 }
 
 func (t *task) addFinalizer() bool {

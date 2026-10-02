@@ -509,13 +509,15 @@ var _ = Describe("FabricDomain fulfillment reconciler", func() {
 		Expect(listCRs()).To(HaveLen(2))
 	})
 
-	It("does not delete a matching UUID in another tenant", func() {
+	It("does not use a FabricDomain tenant annotation as identity for cleanup", func() {
 		allowHub()
 		domain.GetMetadata().SetDeletionTimestamp(timestamppb.Now())
-		object := newCR("foreign")
+		object := newCR("existing")
 		object.Annotations[annotations.Tenant] = "tenant-b"
 		Expect(client.Create(ctx, object)).To(Succeed())
-		Expect(r.run(ctx, domain)).To(MatchError(ContainSubstring("tenant does not match")))
+		Expect(r.run(ctx, domain)).To(Succeed())
+		Expect(client.Get(ctx, clnt.ObjectKeyFromObject(object), object)).To(Succeed())
+		Expect(object.DeletionTimestamp.IsZero()).To(BeFalse())
 		Expect(domain.GetMetadata().GetFinalizers()).To(ContainElement(finalizers.Controller))
 	})
 

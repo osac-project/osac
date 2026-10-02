@@ -2,8 +2,12 @@
 - name: Validate ServerCluster deletion identity
   ansible.builtin.assert:
     that:
-      - server_cluster.spec.backendId | default('') | string is match('^[1-9][0-9]*$') or
-        (server_cluster.spec.vpcId | default('') | string is match('^[1-9][0-9]*$') and server_cluster.spec.region | default('') | length > 0)
+      - >-
+        (server_cluster.spec.backendId | default('') | string is match('^[1-9][0-9]*$'))
+        or
+        (server_cluster.spec.backendId | default('') | string == ''
+        and server_cluster.spec.vpcId | default('') | string is match('^[1-9][0-9]*$')
+        and server_cluster.spec.region | default('') | string | length > 0)
     fail_msg: "ServerCluster deletion requires a positive numeric backendId, or a VPC ID and region for scoped lookup"
 
 - name: Delete ServerCluster from Netris
@@ -14,15 +18,4 @@
     server_cluster_name: "{{ server_cluster.metadata.name }}"
     server_cluster_site_id: "{{ server_cluster.spec.siteId | default((netris_region_site_map | default({}))[server_cluster.spec.region | default('')] | default(netris_site_id)) | int }}"
     server_cluster_backend_id: "{{ server_cluster.spec.backendId | default('') }}"
-    server_cluster_vpc_id: "{{ server_cluster.spec.vpcId | int }}"
-  when: server_cluster.spec.backendId | default('') | string | length == 0
-
-- name: Delete ServerCluster by backend ID
-  ansible.builtin.include_role:
-    name: netris.controller.server_cluster
-    tasks_from: delete
-  vars:
-    server_cluster_name: "{{ server_cluster.metadata.name }}"
-    server_cluster_site_id: "{{ netris_site_id | int }}"
-    server_cluster_backend_id: "{{ server_cluster.spec.backendId }}"
-  when: server_cluster.spec.backendId | default('') | string | length > 0
+    server_cluster_vpc_id: "{{ server_cluster.spec.vpcId | default(0) | int }}"

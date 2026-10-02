@@ -64,6 +64,8 @@
   ansible.builtin.set_fact:
     _server_cluster_inventory_by_name: >-
       {{ dict(_inv_resp.json.data | selectattr('name', 'defined') | groupby('name', case_sensitive=true)) }}
+    _server_cluster_inventory_has_site_metadata: >-
+      {{ _inv_resp.json.data | selectattr('site', 'defined') | list | length > 0 }}
   when:
     - server_cluster_servers | length > 0
     - server_cluster_servers[0] is string
@@ -73,23 +75,6 @@
   loop: "{{ _server_names }}"
   loop_control:
     loop_var: _server_cluster_requested_name
-  when:
-    - server_cluster_servers | length > 0
-    - server_cluster_servers[0] is string
-
-- name: Build resolved server list
-  ansible.builtin.set_fact:
-    _server_cluster_servers: >-
-      {%- set resolved = namespace(servers=[]) -%}
-      {%- for hostname in _server_names -%}
-      {%- set matches = _server_cluster_inventory_by_name[hostname] -%}
-      {%- if matches and matches[0].site is defined -%}
-      {%- set matches = matches | selectattr('site.id', 'equalto', server_cluster_site_id | int) | list -%}
-      {%- endif -%}
-      {%- set server = matches[0] -%}
-      {%- set _ = resolved.servers.append({'id': server.id, 'name': server.name}) -%}
-      {%- endfor -%}
-      {{ resolved.servers }}
   when:
     - server_cluster_servers | length > 0
     - server_cluster_servers[0] is string

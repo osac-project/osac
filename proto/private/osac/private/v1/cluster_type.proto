@@ -424,7 +424,7 @@ message ClusterNodeSet {
   //
   // Set by the system when the cluster is initially created, according to the template selected
   // by the user. The user will not have permission to change this field.
-  BareMetalInstanceTypeLocalReference baremetal_instance_type = 4;
+  BareMetalInstanceTypeReference baremetal_instance_type = 4;
 }
 
 // Local reference to a Cluster resource.

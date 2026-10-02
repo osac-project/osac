@@ -205,7 +205,7 @@ var _ = Describe("Cluster reconciler", func() {
 					},
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"my_node_set": publicv1.ClusterNodeSet_builder{
-							BaremetalInstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: bmitId}.Build(),
+							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitId, Shared: true}.Build(),
 							Size:                  proto.Int32(3),
 						}.Build(),
 					},
@@ -372,7 +372,7 @@ var _ = Describe("Cluster reconciler", func() {
 					},
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"my_node_set": publicv1.ClusterNodeSet_builder{
-							BaremetalInstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: bmitId}.Build(),
+							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitId, Shared: true}.Build(),
 							Size:                  proto.Int32(3),
 						}.Build(),
 					},
@@ -424,7 +424,7 @@ var _ = Describe("Cluster reconciler", func() {
 					},
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"my_node_set": publicv1.ClusterNodeSet_builder{
-							BaremetalInstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: bmitId}.Build(),
+							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitId, Shared: true}.Build(),
 							Size:                  proto.Int32(5),
 						}.Build(),
 					},

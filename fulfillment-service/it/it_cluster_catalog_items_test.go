@@ -93,7 +93,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 				Network:     publicv1.ClusterNetwork_builder{ServiceCidr: new("172.32.0.0/16")}.Build(),
 				NodeSets: map[string]*publicv1.ClusterNodeSet{
 					"extra": publicv1.ClusterNodeSet_builder{
-						BaremetalInstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: extraBmit}.Build(),
+						BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: extraBmit, Shared: true}.Build(),
 						Size:                  new(int32(3)),
 					}.Build(),
 				},

@@ -261,8 +261,11 @@ var _ = Describe("Private clusters server", func() {
 					privatev1.BareMetalInstanceType_builder{
 						Id: "bmit-fabric-id",
 						Metadata: privatev1.Metadata_builder{
-							Name:   "bmit-fabric-name",
-							Tenant: testTenant,
+							Name: "bmit-fabric-name",
+							// BareMetalInstanceType is platform-scoped: the write path
+							// forces the shared tenant, and resolution scopes lookups to
+							// it. Seed the fixture in the shared tenant to match.
+							Tenant: auth.SharedTenant,
 						}.Build(),
 						Spec: privatev1.BareMetalInstanceTypeSpec_builder{
 							Hardware: privatev1.BareMetalHardwareSpec_builder{
@@ -297,8 +300,9 @@ var _ = Describe("Private clusters server", func() {
 					privatev1.BareMetalInstanceType_builder{
 						Id: "bmit-no-fabric-id",
 						Metadata: privatev1.Metadata_builder{
-							Name:   "bmit-no-fabric-name",
-							Tenant: testTenant,
+							Name: "bmit-no-fabric-name",
+							// Platform-scoped, like bmit-fabric above: seed in the shared tenant.
+							Tenant: auth.SharedTenant,
 						}.Build(),
 						Spec: privatev1.BareMetalInstanceTypeSpec_builder{
 							Hardware: privatev1.BareMetalHardwareSpec_builder{
@@ -1609,7 +1613,7 @@ var _ = Describe("Private clusters server", func() {
 						Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 						NodeSets: map[string]*privatev1.ClusterNodeSet{
 							"compute": privatev1.ClusterNodeSet_builder{
-								BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Id: "bmit-fabric-id"}.Build(),
+								BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "bmit-fabric-id", Shared: true}.Build(),
 								Size:                  proto.Int32(3),
 							}.Build(),
 						},
@@ -1626,7 +1630,7 @@ var _ = Describe("Private clusters server", func() {
 					Spec: privatev1.ClusterSpec_builder{
 						NodeSets: map[string]*privatev1.ClusterNodeSet{
 							"compute": privatev1.ClusterNodeSet_builder{
-								BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Id: "bmit-no-fabric-id"}.Build(),
+								BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "bmit-no-fabric-id", Shared: true}.Build(),
 								Size:                  proto.Int32(3),
 							}.Build(),
 						},
@@ -1993,11 +1997,11 @@ var _ = Describe("Private clusters server", func() {
 							NodeSets: map[string]*privatev1.ClusterNodeSet{
 								"compute": privatev1.ClusterNodeSet_builder{
 									Size:                  proto.Int32(3),
-									BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Id: "bmit-fabric-id"}.Build(),
+									BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "bmit-fabric-id", Shared: true}.Build(),
 								}.Build(),
 								"gpu": privatev1.ClusterNodeSet_builder{
 									Size:                  proto.Int32(1),
-									BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Id: "bmit-fabric-id"}.Build(),
+									BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "bmit-fabric-id", Shared: true}.Build(),
 								}.Build(),
 							},
 							NetworkAttachment: privatev1.ClusterNetworkAttachment_builder{
@@ -3973,10 +3977,8 @@ var _ = Describe("Private clusters server", func() {
 							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 							NodeSets: map[string]*privatev1.ClusterNodeSet{
 								"compute": privatev1.ClusterNodeSet_builder{
-									BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{
-										Id: "bmit-fabric-id",
-									}.Build(),
-									Size: proto.Int32(3),
+									BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "bmit-fabric-id", Shared: true}.Build(),
+									Size:                  proto.Int32(3),
 								}.Build(),
 							},
 							NetworkAttachment: privatev1.ClusterNetworkAttachment_builder{
@@ -4002,10 +4004,8 @@ var _ = Describe("Private clusters server", func() {
 							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 							NodeSets: map[string]*privatev1.ClusterNodeSet{
 								"compute": privatev1.ClusterNodeSet_builder{
-									BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{
-										Id: "bmit-no-fabric-id",
-									}.Build(),
-									Size: proto.Int32(3),
+									BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "bmit-no-fabric-id", Shared: true}.Build(),
+									Size:                  proto.Int32(3),
 								}.Build(),
 							},
 							NetworkAttachment: privatev1.ClusterNetworkAttachment_builder{
@@ -4030,10 +4030,8 @@ var _ = Describe("Private clusters server", func() {
 							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 							NodeSets: map[string]*privatev1.ClusterNodeSet{
 								"compute": privatev1.ClusterNodeSet_builder{
-									BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{
-										Id: "bmit-no-fabric-id",
-									}.Build(),
-									Size: proto.Int32(3),
+									BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "bmit-no-fabric-id", Shared: true}.Build(),
+									Size:                  proto.Int32(3),
 								}.Build(),
 							},
 						}.Build(),
@@ -4055,10 +4053,8 @@ var _ = Describe("Private clusters server", func() {
 							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 							NodeSets: map[string]*privatev1.ClusterNodeSet{
 								"compute": privatev1.ClusterNodeSet_builder{
-									BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{
-										Id: "bmit-fabric-id",
-									}.Build(),
-									Size: proto.Int32(3),
+									BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "bmit-fabric-id", Shared: true}.Build(),
+									Size:                  proto.Int32(3),
 								}.Build(),
 							},
 							NetworkAttachment: privatev1.ClusterNetworkAttachment_builder{
@@ -4107,10 +4103,8 @@ var _ = Describe("Private clusters server", func() {
 							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 							NodeSets: map[string]*privatev1.ClusterNodeSet{
 								"compute": privatev1.ClusterNodeSet_builder{
-									BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{
-										Id: "bmit-fabric-id",
-									}.Build(),
-									Size: proto.Int32(3),
+									BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "bmit-fabric-id", Shared: true}.Build(),
+									Size:                  proto.Int32(3),
 								}.Build(),
 							},
 						}.Build(),

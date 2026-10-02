@@ -14,7 +14,12 @@ language governing permissions and limitations under the License.
 package baremetalworker
 
 import (
+	"context"
+	"time"
+
 	"github.com/prometheus/client_golang/prometheus"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
@@ -105,9 +110,18 @@ func init() {
 	)
 }
 
-// tenantOf returns the tenant a ClusterOrder belongs to, read from its tenant annotation.
-func tenantOf(co *v1alpha1.ClusterOrder) string {
-	return co.GetAnnotations()[tenantAnnotationKey]
+// syncWorkerGauges recomputes the desired/ready/failed worker gauges from all ClusterOrders in
+// the configured namespace, following the aggregate-gauge convention (see updateWorkerGauges).
+// Called at the end of each reconcile so the gauges converge as worker status changes and drop
+// series for deleted clusters. Errors are logged and swallowed — a failed metrics refresh must
+// not fail reconciliation.
+func (r *Reconciler) syncWorkerGauges(ctx context.Context) {
+	list := &v1alpha1.ClusterOrderList{}
+	if err := r.List(ctx, list, client.InNamespace(r.clusterOrderNamespace)); err != nil {
+		ctrllog.FromContext(ctx).Error(err, "listing ClusterOrders for worker metrics")
+		return
+	}
+	updateWorkerGauges(list.Items)
 }
 
 // updateWorkerGauges recomputes the desired/ready gauges from the full set of ClusterOrders.
@@ -141,6 +155,21 @@ func updateWorkerGauges(orders []v1alpha1.ClusterOrder) {
 		workerDesired.WithLabelValues(k.tenant, workerTypeBareMetal, k.instanceType).Set(c.desired)
 		workerReady.WithLabelValues(k.tenant, workerTypeBareMetal, k.instanceType).Set(c.ready)
 	}
+}
+
+// tenantOf returns the tenant a ClusterOrder belongs to, read from its tenant annotation.
+func tenantOf(co *v1alpha1.ClusterOrder) string {
+	return co.GetAnnotations()[tenantAnnotationKey]
+}
+
+func observeProvisioningDuration(tenant string, w v1alpha1.WorkerStatus) {
+	workerProvisioningDuration.WithLabelValues(tenant, workerTypeBareMetal, w.InstanceType).
+		Observe(time.Since(w.CreationTimestamp.Time).Seconds())
+}
+
+func observeCorrelationDuration(tenant string, w v1alpha1.WorkerStatus) {
+	workerCorrelationDuration.WithLabelValues(tenant, workerTypeBareMetal, w.InstanceType).
+		Observe(time.Since(w.CreationTimestamp.Time).Seconds())
 }
 
 // observeProvisioningFailure records one worker provisioning failure. Call it on each transition

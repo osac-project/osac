@@ -143,7 +143,7 @@ var _ = Describe("BareMetalWorkerReconciler ensureInfraEnv", func() {
 	}
 
 	runReconcile := func(name string) (reconcile.Result, error) {
-		return r.Reconcile(ctx, reconcile.Request{
+		return driveWorkerCheckpoints(r, fc, reconcile.Request{
 			NamespacedName: types.NamespacedName{Name: name, Namespace: testNamespace},
 		})
 	}
@@ -379,7 +379,7 @@ var _ = Describe("BareMetalWorkerReconciler direct shared worker template", func
 	}
 
 	runReconcile := func(name string) (reconcile.Result, error) {
-		return r.Reconcile(ctx, reconcile.Request{
+		return driveWorkerCheckpoints(r, fc, reconcile.Request{
 			NamespacedName: types.NamespacedName{Name: name, Namespace: testNamespace},
 		})
 	}
@@ -519,7 +519,7 @@ var _ = Describe("BareMetalWorkerReconciler resolveDiskImage", func() {
 	}
 
 	runReconcile := func(name string) (reconcile.Result, error) {
-		return r.Reconcile(ctx, reconcile.Request{
+		return driveWorkerCheckpoints(r, fc, reconcile.Request{
 			NamespacedName: types.NamespacedName{Name: name, Namespace: testNamespace},
 		})
 	}
@@ -777,7 +777,7 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", func() {
 	}
 
 	runReconcile := func(name string) (reconcile.Result, error) {
-		return r.Reconcile(ctx, reconcile.Request{
+		return driveWorkerCheckpoints(r, fc, reconcile.Request{
 			NamespacedName: types.NamespacedName{Name: name, Namespace: testNamespace},
 		})
 	}
@@ -1392,7 +1392,7 @@ var _ = Describe("BareMetalWorkerReconciler reconcileAgent", func() {
 	}
 
 	runReconcile := func(name string) (reconcile.Result, error) {
-		return r.Reconcile(ctx, reconcile.Request{
+		return driveWorkerCheckpoints(r, fc, reconcile.Request{
 			NamespacedName: types.NamespacedName{Name: name, Namespace: testNamespace},
 		})
 	}
@@ -1590,7 +1590,11 @@ var _ = Describe("BareMetalWorkerReconciler reconcileAgent", func() {
 			// Keep provider deletion pending. Installed Agents likewise hold Unbinding.
 			fc.SetDeleteError(fmt.Errorf("provider deletion pending"))
 			_, err := runReconcile(name)
-			Expect(err).ToNot(HaveOccurred())
+			if phase == "Failed" {
+				Expect(err).To(MatchError(ContainSubstring("provider deletion pending")), "retry deletion failure must stop capacity actions")
+			} else {
+				Expect(err).ToNot(HaveOccurred())
+			}
 			co = getClusterOrder(name)
 			Expect(co.Status.Workers).To(ContainElement(before))
 			Expect(*co.Status.ReadyWorkers).To(Equal(int32(0)))
@@ -1855,7 +1859,7 @@ var _ = Describe("BareMetalWorkerReconciler workerRetry", func() {
 	}
 
 	runReconcile := func(name string) (reconcile.Result, error) {
-		return r.Reconcile(ctx, reconcile.Request{
+		return driveWorkerCheckpoints(r, fc, reconcile.Request{
 			NamespacedName: types.NamespacedName{Name: name, Namespace: testNamespace},
 		})
 	}
@@ -2135,7 +2139,7 @@ var _ = Describe("BareMetalWorkerReconciler scale-up", func() {
 	}
 
 	runReconcile := func(name string) (reconcile.Result, error) {
-		return r.Reconcile(ctx, reconcile.Request{
+		return driveWorkerCheckpoints(r, fc, reconcile.Request{
 			NamespacedName: types.NamespacedName{Name: name, Namespace: testNamespace},
 		})
 	}
@@ -2433,7 +2437,7 @@ var _ = Describe("BareMetalWorkerReconciler stale ignition", func() {
 	}
 
 	runReconcile := func(name string) (reconcile.Result, error) {
-		return r.Reconcile(ctx, reconcile.Request{
+		return driveWorkerCheckpoints(r, fc, reconcile.Request{
 			NamespacedName: types.NamespacedName{Name: name, Namespace: testNamespace},
 		})
 	}
@@ -2525,15 +2529,23 @@ var _ = Describe("BareMetalWorkerReconciler stale ignition", func() {
 
 		Expect(sim.MarkInfraEnvReady(ctx, "bmw-stale-infraenv", testNamespace, ign.URL())).To(Succeed())
 
-		_, err = runReconcile("bmw-stale")
+		originalID := co.Status.Workers[0].BareMetalInstance.ID
+		res, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: "bmw-stale", Namespace: testNamespace}})
 		Expect(err).ToNot(HaveOccurred())
+		Expect(res.RequeueAfter).To(Equal(time.Second), "stale-ignition repair is a durable boundary")
 
 		co = getClusterOrder("bmw-stale")
+		Expect(co.Annotations["osac.openshift.io/infraenv-uid"]).To(Equal(oldUID), "must not advance past the worker repair")
+		Expect(co.Status.Workers[0].BareMetalInstance.ID).To(Equal(originalID))
+		Expect(fc.DeleteCalls()).To(BeEmpty(), "must not delete the newly failed worker in the same invocation")
 		Expect(co.Status.Workers).To(HaveLen(1))
 		Expect(co.Status.Workers[0].Phase).To(Equal("Failed"))
 		Expect(co.Status.Workers[0].LastFailureReason).To(Equal("AgentRegistrationTimeout"))
 		Expect(co.Status.Workers[0].LastFailureMessage).To(ContainSubstring("stale ignition"))
 
+		_, err = runReconcile("bmw-stale")
+		Expect(err).ToNot(HaveOccurred())
+		co = getClusterOrder("bmw-stale")
 		newUID := co.Annotations["osac.openshift.io/infraenv-uid"]
 		Expect(newUID).ToNot(Equal(oldUID))
 	})
@@ -2672,7 +2684,7 @@ var _ = Describe("BareMetalWorkerReconciler scale-down", func() {
 	}
 
 	runReconcile := func(name string) (reconcile.Result, error) {
-		return r.Reconcile(ctx, reconcile.Request{
+		return driveWorkerCheckpoints(r, fc, reconcile.Request{
 			NamespacedName: types.NamespacedName{Name: name, Namespace: testNamespace},
 		})
 	}
@@ -3094,7 +3106,7 @@ var _ = Describe("BareMetalWorkerReconciler cluster deletion", func() {
 	}
 
 	runReconcile := func(name string) (reconcile.Result, error) {
-		return r.Reconcile(ctx, reconcile.Request{
+		return driveWorkerCheckpoints(r, fc, reconcile.Request{
 			NamespacedName: types.NamespacedName{Name: name, Namespace: testNamespace},
 		})
 	}
@@ -3176,7 +3188,7 @@ var _ = Describe("BareMetalWorkerReconciler cluster deletion", func() {
 		// Delete the ClusterOrder — envtest doesn't enforce finalizers, so we delete directly.
 		Expect(k8sClient.Delete(ctx, co)).To(Succeed())
 
-		// The fake removes BMIs on Delete, so handleDeletingWorkers confirms deletion in the
+		// The fake removes BMIs on Delete, so processDeletingWorker confirms deletion in the
 		// same reconcile that marks workers Deleting. All workers are removed and the finalizer
 		// is cleared in a single pass.
 		_, err := runReconcile("bmw-del-all")
@@ -3385,7 +3397,7 @@ var _ = Describe("BareMetalWorkerReconciler cluster deletion", func() {
 		Expect(co.Status.Workers[0].Phase).To(Equal("Deleting"))
 
 		// Clear the error and reconcile again — the BMI was not removed from the fake
-		// because the first Delete returned an error, so handleDeletingWorkers retries.
+		// because the first Delete returned an error, so processDeletingWorker retries.
 		fc.SetDeleteError(nil)
 
 		_, err = runReconcile("bmw-del-retry")
@@ -3450,7 +3462,7 @@ var _ = Describe("BareMetalWorkerReconciler cluster deletion", func() {
 		Expect(k8sClient.Delete(ctx, co)).To(Succeed())
 
 		// First reconcile: the worker with no BMI ID is removed immediately by
-		// handleDeletingWorkers; the worker with a BMI ID is deleted from the
+		// processDeletingWorker; the worker with a BMI ID is deleted from the
 		// fake and confirmed in the same pass. Both workers cleared, finalizer
 		// removed, envtest completes the delete.
 		_, err := runReconcile("bmw-del-noid")

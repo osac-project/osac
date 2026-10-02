@@ -66,7 +66,7 @@ func workerOrder(ctx context.Context, client crclient.Client, cluster *privatev1
 }
 
 var _ = Describe("production worker against real fulfillment", func() {
-	It("creates tenant-owned BMIs and status for the real two-type order", func(ctx context.Context) {
+	DescribeTable("allocates the real two-type order", func(ctx context.Context, loseResponse bool) {
 		ensureWorkerTemplate(ctx)
 		advanceDefaultNetworking(ctx) // Explicit network-readiness simulation, not real networking coverage.
 		cluster := createCaaSClusterWithNodeSets(ctx, true)
@@ -97,9 +97,10 @@ var _ = Describe("production worker against real fulfillment", func() {
 			defaultSubnet.GetId(), defaultSubnet.GetMetadata().GetName(), defaultSubnet.GetStatus().GetState())
 		ignition := fake.NewIgnitionServer()
 		DeferCleanup(ignition.Close)
-		r := baremetalworker.NewReconciler(client, client, scheme,
-			baremetalworker.NewFulfillmentClientFromConn(fulfillmentConn),
-			baremetalworker.NewIgnitionFetcher(nil), events.NewFakeRecorder(50), connectedConfig.namespace)
+		provider := &connectedWorkerResponseClient{
+			FulfillmentClient: baremetalworker.NewFulfillmentClientFromConn(fulfillmentConn), loseNext: loseResponse,
+		}
+		r := connectedWorkerReconciler(client, scheme, provider)
 		key := crclient.ObjectKeyFromObject(order)
 		// Register cleanup after the Cluster fixture so it runs first. The real
 		// ownership check currently rejects a deleting order when GetCluster no
@@ -157,21 +158,27 @@ var _ = Describe("production worker against real fulfillment", func() {
 			Expect(err).NotTo(HaveOccurred(), "worker Reconcile for %s", key)
 			return result
 		}
-		reconcile()
+		reconcile() // Persist worker finalizer, then return.
+		reconcile() // Create the discovery InfraEnv; ignition is deliberately pending.
+		Expect(provider.creates).To(Equal(0))
 		infraEnv := &unstructured.Unstructured{}
 		infraEnv.SetAPIVersion("agent-install.openshift.io/v1beta1")
 		infraEnv.SetKind("InfraEnv")
 		Expect(client.Get(ctx, crclient.ObjectKey{Namespace: key.Namespace, Name: key.Name + "-infraenv"},
 			infraEnv)).To(Succeed(), "worker must create discovery InfraEnv")
 		Expect(envsim.New(client).MarkInfraEnvReady(ctx, infraEnv.GetName(), key.Namespace, ignition.URL())).To(Succeed())
-		// The first post-discovery reconcile is synchronous. Surface API contract
-		// failures immediately rather than polling a known permanent failure.
-		result := reconcile()
-		Eventually(func(g Gomega) {
-			latest := &v1alpha1.ClusterOrder{}
-			g.Expect(client.Get(ctx, key, latest)).To(Succeed())
-			g.Expect(latest.Status.Workers).To(HaveLen(3), "status=%+v result=%+v", latest.Status, result)
-		}, 10*time.Second, 500*time.Millisecond).Should(Succeed())
+		// Explicit reserve -> single create/recover -> fresh observation calls.
+		// Only the one deliberately lost response is tolerated; no API error is
+		// hidden by an Eventually loop or by sleeping through backoff.
+		driveConnectedWorkerCheckpoints(ctx, client, scheme, key, provider, 3)
+		Expect(provider.successful).To(HaveLen(3))
+		if loseResponse {
+			Expect(provider.lost).NotTo(BeNil())
+			Expect(provider.alreadyExists).To(Equal(1), "must exercise real Postgres same-scope uniqueness on recovery")
+			Expect(provider.creates).To(Equal(4))
+		} else {
+			Expect(provider.creates).To(Equal(3))
+		}
 		latest := &v1alpha1.ClusterOrder{}
 		Expect(client.Get(ctx, key, latest)).To(Succeed())
 		actualTenant, err := fulfillmentClient.GetCluster(ctx, cluster.GetId())
@@ -239,6 +246,20 @@ var _ = Describe("production worker against real fulfillment", func() {
 			Expect(bmi.GetSpec().GetDiskImage().GetId()).NotTo(BeEmpty())
 			Expect(bmi.GetSpec().GetUserData()).To(ContainSubstring("\"ignition\""))
 		}
+		filter := fmt.Sprintf(`this.metadata.labels["osac.openshift.io/cluster-order"] == %q`, key.Name)
+		persisted, err := fulfillmentClient.ListBareMetalInstances(ctx, filter)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(persisted).To(HaveLen(3), "count real persisted BMIs, not just successful wrapper responses")
+		for _, worker := range latest.Status.Workers {
+			matches := 0
+			for _, bmi := range persisted {
+				if bmi.GetMetadata().GetName() == worker.BareMetalInstance.Name {
+					matches++
+					Expect(bmi.GetId()).To(Equal(worker.BareMetalInstance.ID))
+				}
+			}
+			Expect(matches).To(Equal(1), "one real owned incarnation per reserved name")
+		}
 		// Retain the old sim suite's real-Postgres UNIQUE-constraint regression
 		// (OSAC-3266) on a worker created by the production reconciler.
 		first, err := fulfillmentClient.GetBareMetalInstance(ctx, latest.Status.Workers[0].BareMetalInstance.ID)
@@ -252,7 +273,7 @@ var _ = Describe("production worker against real fulfillment", func() {
 		}.Build())
 		Expect(status.Code(err)).To(Equal(codes.AlreadyExists),
 			"duplicate worker BMI name must be rejected by real DB: %v", err)
-	})
+	}, Entry("ordinary explicit checkpoints", false), Entry("R01-C1 lost acknowledgement and same-name recovery", true))
 
 	It("rejects a separate wrong-tenant order before creating a BMI", func(ctx context.Context) {
 		cluster := createCaaSCluster(ctx)

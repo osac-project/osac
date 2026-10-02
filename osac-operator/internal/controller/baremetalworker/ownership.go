@@ -17,96 +17,19 @@ import (
 	"context"
 	"fmt"
 
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
-func (r *Reconciler) handleVerifiedClusterDeletion(ctx context.Context, co *v1alpha1.ClusterOrder) (ctrl.Result, error) {
-	if !controllerutil.ContainsFinalizer(co, bmWorkerFinalizer) {
-		return ctrl.Result{}, nil
-	}
-	tenant, err := r.authoritativeWorkerTenant(ctx, co)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if err := r.recoverPendingBMIReferences(ctx, co, tenant); err != nil {
-		return ctrl.Result{}, err
-	}
-	if err := r.checkStatusWorkerOwnership(ctx, co, tenant); err != nil {
-		return ctrl.Result{}, err
-	}
-	return r.handleClusterDeletion(ctx, co)
-}
-
-// recoverPendingBMIReferences closes the create/status-write crash window during
-// finalization. A missing recorded ID must not cause an existing BMI to be orphaned.
-func (r *Reconciler) recoverPendingBMIReferences(ctx context.Context, co *v1alpha1.ClusterOrder, tenant string) error {
-	if err := validateWorkerBMIReferences(co); err != nil {
-		return err
-	}
-	pending := false
-	for _, w := range co.Status.Workers {
-		if w.Kind == workerKindBMI && w.BareMetalInstance.ID == "" {
-			pending = true
-			break
-		}
-	}
-	if !pending {
-		return nil
-	}
-	filter := fmt.Sprintf(`this.metadata.labels["%s"] == "%s"`, clusterOrderLabel, co.Name)
-	bmis, err := r.fulfillment.ListBareMetalInstances(ctx, filter)
-	if err != nil {
-		return fmt.Errorf("recovering pending BMI references: %w", err)
-	}
-	byName := bmisByName(bmis)
-	recovered := make(map[string]v1alpha1.BareMetalInstanceReference)
-	for _, w := range co.Status.Workers {
-		if w.Kind != workerKindBMI || w.BareMetalInstance.ID != "" {
-			continue
-		}
-		name := w.BareMetalInstance.Name
-		if bmi, ok := byName[name]; ok {
-			if err := checkWorkerBMI(co, tenant, name, bmi); err != nil {
-				return r.rejectWorkerIdentity(co, err.Error())
-			}
-			recovered[w.Name] = v1alpha1.BareMetalInstanceReference{Name: name, ID: bmi.GetId()}
-		}
-	}
-	if len(recovered) == 0 {
-		return nil
-	}
-	if err := r.patchStatusWithRetry(ctx, co, func(latest *v1alpha1.ClusterOrder) {
-		for i := range latest.Status.Workers {
-			w := &latest.Status.Workers[i]
-			if ref, ok := recovered[w.Name]; ok && w.BareMetalInstance.ID == "" &&
-				w.BareMetalInstance.Name == ref.Name {
-				w.BareMetalInstance = ref
-			}
-		}
-	}); err != nil {
-		return err
-	}
-	return r.apiReader.Get(ctx, client.ObjectKeyFromObject(co), co)
-}
-
-func (r *Reconciler) verifyClusterOrderOwnership(ctx context.Context, co *v1alpha1.ClusterOrder) (string, error) {
-	tenant, err := r.authoritativeWorkerTenant(ctx, co)
-	if err != nil {
-		return "", err
-	}
-	if err := r.checkStatusWorkerOwnership(ctx, co, tenant); err != nil {
-		return "", err
-	}
-	return tenant, nil
-}
+const (
+	// clusterOrderIDLabel is the label set by the fulfillment-service provisioning flow, carrying
+	// the fulfillment-service Cluster UUID. Same key as controller.osacClusterOrderIDLabel (unexported).
+	clusterOrderIDLabel      = "osac.openshift.io/clusterorder-uuid"
+	clusterOrderLabel        = "osac.openshift.io/cluster-order"
+	ownerReferenceAnnotation = "osac.openshift.io/owner-reference"
+)
 
 // authoritativeWorkerTenant uses order metadata only to locate/check the fulfillment Cluster.
 // Neither the label nor the order annotation is a source of BMI ownership.
@@ -155,44 +78,12 @@ func validateWorkerBMIReferences(co *v1alpha1.ClusterOrder) error {
 	return nil
 }
 
-// checkStatusWorkerOwnership must run before rebuild, retry or deletion, including the
-// deletion-first finalizer path. Retain unknown/foreign status for safe manual recovery.
-func (r *Reconciler) checkStatusWorkerOwnership(ctx context.Context, co *v1alpha1.ClusterOrder, tenant string) error {
-	if err := validateWorkerBMIReferences(co); err != nil {
+func checkRecordedWorkerBMI(co *v1alpha1.ClusterOrder, tenant string, w v1alpha1.WorkerStatus, bmi *privatev1.BareMetalInstance) error {
+	if err := checkWorkerBMI(co, tenant, w.BareMetalInstance.Name, bmi); err != nil {
 		return err
 	}
-	for _, w := range co.Status.Workers {
-		if w.Kind != workerKindBMI || w.BareMetalInstance.ID == "" {
-			continue
-		}
-		bmi, err := r.fulfillment.GetBareMetalInstance(ctx, w.BareMetalInstance.ID)
-		if err != nil {
-			if status.Code(err) == codes.NotFound {
-				continue
-			}
-			return fmt.Errorf("checking worker BMI %s: %w", w.BareMetalInstance.ID, err)
-		}
-		if err := checkWorkerBMI(co, tenant, w.BareMetalInstance.Name, bmi); err != nil {
-			return r.rejectWorkerIdentity(co, err.Error())
-		}
+	if bmi.GetId() != w.BareMetalInstance.ID {
+		return fmt.Errorf("BMI ID does not match the recorded reference")
 	}
 	return nil
-}
-
-func (r *Reconciler) checkedDeleteBMI(ctx context.Context, co *v1alpha1.ClusterOrder, w v1alpha1.WorkerStatus) error {
-	tenant, err := r.authoritativeWorkerTenant(ctx, co)
-	if err != nil {
-		return err
-	}
-	bmi, err := r.fulfillment.GetBareMetalInstance(ctx, w.BareMetalInstance.ID)
-	if status.Code(err) == codes.NotFound {
-		return nil // Already gone: allow retry/scale-down to clear the stale status ID.
-	}
-	if err != nil {
-		return err
-	}
-	if err := checkWorkerBMI(co, tenant, w.BareMetalInstance.Name, bmi); err != nil {
-		return r.rejectWorkerIdentity(co, err.Error())
-	}
-	return r.fulfillment.DeleteBareMetalInstance(ctx, w.BareMetalInstance.ID)
 }

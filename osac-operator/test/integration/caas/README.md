@@ -19,7 +19,7 @@ registries. **Do not point these commands at shared or unmarked clusters.**
 ```bash
 make sim-up                 # Creates/reuses only the marked osac-sim cluster;
                             # builds/loads fulfillment-service from this checkout
-make test-integration-caas  # Only ./test/integration/caas/; 10 specs at this checkpoint
+make test-integration-caas  # Only ./test/integration/caas/; 11 specs at this checkpoint
 ```
 
 `sim-up` installs cert-manager, trust-manager, CA, PostgreSQL, Keycloak, OSAC
@@ -95,6 +95,36 @@ deployed metrics HTTP, manager watches, AAP/Metal3 assignment or guest install.
 Task 6 binding and Task 7 CI/final validation remain pending; consult
 [the current status](../../../../docs/plans/2026-09-25-caas-connected-integration-status.md)
 and [plan](../../../../docs/plans/2026-09-25-caas-connected-integration.md).
+### R01 lost-acknowledgement coverage (execution-ready, live run blocked)
+
+`R01-C1` runs the real two-type worker fixture with a test-local transport
+wrapper. It delegates one Create to the real service, loses its successful
+acknowledgement, restarts the reconciler, and omits one initial List. The
+subsequent same-name Create must hit real `AlreadyExists`; the real re-list
+must recover the original ID. The case counts real persisted BMIs and requires
+exactly one owned incarnation per reserved name. No production fault-injection
+API is added. Both ordinary and faulted fixtures explicitly drive finalizer,
+reservation, single-Create/recovery and fresh-observation checkpoints within
+`16 + 8*N` calls for deliberately ready dependencies. Errors and dependency
+backoff are not swallowed; this bound is not a production latency guarantee.
+
+The R01 Unit/Envtest cases have executed successfully, including interrupted ID
+writes with another reserved slot, delayed visibility across two Lists, and
+foreign/ambiguous/deleting recovery rejection. The connected package compiles,
+but **R01-C1 has not been executed against a real backend**: the worktree lacks
+`hack/sim.env`, and the explicit sim kubeconfig endpoint refuses connections.
+The connected command fails in `BeforeSuite`, before fixtures; no cluster has
+been recreated or deleted. After restoring an approved marked environment:
+
+```bash
+go test ./test/integration/caas/ -v -ginkgo.focus='R01-C1' -timeout 10m
+make test-integration-caas   # Run twice against the matching backend.
+```
+
+Do not infer real uniqueness or provider cleanup from fake/Envtest results.
+The archived-Cluster deletion and deployed provider boundaries above remain
+unchanged, tracked under [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843).
+
 The separate envtest acceptance suite remains necessary for controller
 lifecycle, fault injection and tenant-safety cases that this real-DB contract
 suite does not exercise.

@@ -201,7 +201,7 @@ var _ = Describe("Bare-metal worker provisioning", func() {
 		})
 
 		runReconcile := func() (reconcile.Result, error) {
-			return r.Reconcile(ctx, reconcile.Request{
+			return driveWorkerCheckpoints(r, fc, reconcile.Request{
 				NamespacedName: types.NamespacedName{Name: coName, Namespace: testNamespace},
 			})
 		}
@@ -494,7 +494,7 @@ var _ = Describe("Bare-metal worker provisioning", func() {
 		Expect(sim.MarkInfraEnvReady(ctx, "bmw-rebuild-infraenv", testNamespace, ign.URL())).To(Succeed())
 
 		// Run reconcile — rebuild should re-derive phases from live state.
-		_, err = r.Reconcile(ctx, reconcile.Request{
+		_, err = driveWorkerCheckpoints(r, fc, reconcile.Request{
 			NamespacedName: types.NamespacedName{Name: "bmw-rebuild", Namespace: testNamespace},
 		})
 		Expect(err).ToNot(HaveOccurred())

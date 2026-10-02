@@ -91,12 +91,27 @@ func nodeRequest(instanceType string, count int) v1alpha1.NodeRequest {
 }
 func reconcileNodeSetTest(t *testing.T, r *Reconciler, co *v1alpha1.ClusterOrder) {
 	t.Helper()
-	if _, err := r.reconcileWorkers(context.Background(), co, "tenant", nil, nil); err != nil {
-		t.Fatal(err)
+	n := len(co.Status.Workers)
+	for _, nr := range co.Spec.NodeRequests {
+		n += nr.NumberOfNodes
 	}
-	if err := r.Get(context.Background(), client.ObjectKeyFromObject(co), co); err != nil {
-		t.Fatal(err)
+	for range 16 + 8*n {
+		before := co.DeepCopy()
+		res, err := r.reconcileWorkerCapacity(context.Background(), co, "tenant", nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := r.apiReader.Get(context.Background(), client.ObjectKeyFromObject(co), co); err != nil {
+			t.Fatal(err)
+		}
+		if res.RequeueAfter != time.Second {
+			return
+		}
+		if reflect.DeepEqual(before.Status.Workers, co.Status.Workers) {
+			t.Fatal("boundary requeue without persisted progress")
+		}
 	}
+	t.Fatal("capacity fixture exceeded finite reconciliation bound")
 }
 
 func TestValidateBareMetalNodeSets(t *testing.T) {
@@ -230,7 +245,7 @@ func TestNodeSetRejectsMissingRecordedBMIName(t *testing.T) {
 			if err := r.Status().Update(context.Background(), co); err != nil {
 				t.Fatal(err)
 			}
-			_, err := r.reconcileWorkers(context.Background(), stale, "tenant", nil, nil)
+			_, err := r.reconcileWorkerCapacity(context.Background(), stale, "tenant", nil, nil)
 			if err == nil || !strings.Contains(err.Error(), "bareMetalInstance.name") {
 				t.Fatalf("expected a missing-reference error, got %v", err)
 			}
@@ -261,7 +276,7 @@ func TestPendingBMIRecoveryRejectsMissingRecordedName(t *testing.T) {
 			Annotations: map[string]string{"osac.openshift.io/owner-reference": "ClusterOrder/" + co.Name},
 		}.Build(),
 	}.Build()}
-	if err := r.recoverPendingBMIReferences(context.Background(), co, "tenant"); err == nil || !strings.Contains(err.Error(), "bareMetalInstance.name") {
+	if err := runDeletionBMIStage(context.Background(), r, co); err == nil || !strings.Contains(err.Error(), "bareMetalInstance.name") {
 		t.Fatalf("expected a missing-reference error, got %v", err)
 	}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(co), co); err != nil {
@@ -288,10 +303,10 @@ func TestPendingBMIRecoveryUsesRecordedNameNotWorkerName(t *testing.T) {
 			Annotations: map[string]string{"osac.openshift.io/owner-reference": "ClusterOrder/" + co.Name},
 		}.Build(),
 	}.Build()}
-	if err := r.reserveWorkerSlots(context.Background(), co); err != nil {
+	if _, err := r.reserveWorkerSlots(context.Background(), co); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.recoverPendingBMIReferences(context.Background(), co, "tenant"); err != nil {
+	if err := runDeletionBMIStage(context.Background(), r, co); err != nil {
 		t.Fatal(err)
 	}
 	w := co.Status.Workers[0]
@@ -303,11 +318,11 @@ func TestPendingBMIRecoveryUsesRecordedNameNotWorkerName(t *testing.T) {
 func TestNodeSetStaleSnapshotReusesReservedNames(t *testing.T) {
 	r, _, co := nodeSetHarness(t, "stale-order", nodeRequest("standard", 2))
 	stale := co.DeepCopy()
-	if err := r.reserveWorkerSlots(context.Background(), co); err != nil {
+	if _, err := r.reserveWorkerSlots(context.Background(), co); err != nil {
 		t.Fatal(err)
 	}
 	first := append([]v1alpha1.WorkerStatus(nil), co.Status.Workers...)
-	if err := r.reserveWorkerSlots(context.Background(), stale); err != nil {
+	if _, err := r.reserveWorkerSlots(context.Background(), stale); err != nil {
 		t.Fatal(err)
 	}
 	if len(stale.Status.Workers) != 2 {
@@ -531,7 +546,10 @@ func TestNodeSetScaleDownPrefersHealthyOlderWorkers(t *testing.T) {
 func TestNodeSetInterruptedCreateReusesReservation(t *testing.T) {
 	r, fc, co := nodeSetHarness(t, "order", nodeRequest("standard", 1))
 	fc.failCreate = true
-	if _, err := r.reconcileWorkers(context.Background(), co, "tenant", nil, nil); err == nil {
+	if _, err := r.reserveWorkerSlots(context.Background(), co); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.reconcileWorkerCapacity(context.Background(), co, "tenant", nil, nil); err == nil {
 		t.Fatal("expected interrupted create")
 	}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(co), co); err != nil {

@@ -275,7 +275,7 @@ var _ = Describe("BareMetalWorker direct ClusterOrder validation", func() {
 		s := runtime.NewScheme()
 		Expect(v1alpha1.AddToScheme(s)).To(Succeed())
 		k8sClient := clientfake.NewClientBuilder().WithScheme(s).WithObjects(co).Build()
-		r := &Reconciler{Client: k8sClient}
+		r := &Reconciler{Client: k8sClient, apiReader: k8sClient}
 
 		_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: co.Name, Namespace: co.Namespace}})
 		Expect(err).To(MatchError(ContainSubstring("bareMetal.instanceType is required")))

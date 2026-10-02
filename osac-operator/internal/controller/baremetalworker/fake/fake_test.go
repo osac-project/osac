@@ -77,6 +77,36 @@ var _ = Describe("Fake FulfillmentClient", func() {
 		Expect(status.Code(err)).To(Equal(codes.AlreadyExists))
 	})
 
+	It("R01 rejects same-scope duplicate names even with different IDs", func() {
+		for _, id := range []string{"incarnation-one", "incarnation-two"} {
+			obj := privatev1.BareMetalInstance_builder{Id: id, Metadata: privatev1.Metadata_builder{
+				Name: "reserved", Tenant: "tenant", Project: "project",
+			}.Build()}.Build()
+			_, err := fc.CreateBareMetalInstance(ctx, obj)
+			if id == "incarnation-one" {
+				Expect(err).NotTo(HaveOccurred())
+			} else {
+				Expect(status.Code(err)).To(Equal(codes.AlreadyExists))
+			}
+		}
+		stored, err := fc.ListBareMetalInstances(ctx, "")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(stored).To(HaveLen(1))
+	})
+
+	It("R01 permits the same name in separate tenant/project scopes", func() {
+		ids := map[string]bool{}
+		for _, scope := range [][2]string{{"tenant-one", "project-one"}, {"tenant-two", "project-one"}, {"tenant-one", "project-two"}} {
+			obj := privatev1.BareMetalInstance_builder{Metadata: privatev1.Metadata_builder{
+				Name: "reserved", Tenant: scope[0], Project: scope[1],
+			}.Build()}.Build()
+			bmi, err := fc.CreateBareMetalInstance(ctx, obj)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(ids).NotTo(HaveKey(bmi.GetId()))
+			ids[bmi.GetId()] = true
+		}
+	})
+
 	It("does not leak the Create input into the store", func() {
 		in := bmiNamed("bm-worker-0")
 		_, err := fc.CreateBareMetalInstance(ctx, in)

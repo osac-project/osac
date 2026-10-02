@@ -96,7 +96,7 @@ var _ = Describe("BareMetalWorker tenant safety", func() {
 		return co
 	}
 	run := func(name string) (reconcile.Result, error) {
-		return r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: testNamespace, Name: name}})
+		return driveWorkerCheckpoints(r, fc, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: testNamespace, Name: name}})
 	}
 	createOrder := func(co *osacv1alpha1.ClusterOrder) {
 		GinkgoHelper()
@@ -314,6 +314,7 @@ var _ = Describe("BareMetalWorker tenant safety", func() {
 	It("checks an owned BMI during AlreadyExists re-list recovery", func() {
 		co := order("safety-owned-race", 1)
 		createOrder(co)
+		ready(co.Name)
 		bmi, err := fc.CreateBareMetalInstance(ctx, privatev1.BareMetalInstance_builder{
 			Metadata: privatev1.Metadata_builder{
 				Tenant: tenant, Name: co.Name + "-worker-0",
@@ -323,25 +324,29 @@ var _ = Describe("BareMetalWorker tenant safety", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		setStatus(co.Name, bmi.GetMetadata().GetName(), "", "Provisioning")
-		ready(co.Name)
-		fc.SetListEmptyOnce()
+		listsBefore := len(fc.ListCalls())
+		fc.SetListEmptyCalls(1)
 		fc.SetCreateError(status.Error(codes.AlreadyExists, "concurrent owned create"))
 		_, err = run(co.Name)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(fc.ListCalls()).To(HaveLen(2), "must re-list after AlreadyExists")
+		Expect(fc.ListCalls()).To(HaveLen(listsBefore+3), "create observation, AlreadyExists re-list, then fresh outer observation")
+		Expect(fc.CreateCalls()).To(HaveLen(2), "must exercise create-race recovery, not early adoption")
 		Expect(getOrder(co.Name).Status.Workers).To(ContainElement(HaveField("BareMetalInstance.ID", bmi.GetId())))
 	})
 
 	It("does not adopt a foreign BMI during AlreadyExists re-list recovery", func() {
 		co := order("safety-foreign-race", 1)
 		createOrder(co)
+		ready(co.Name)
 		id := foreign(co.Name, co.Name+"-worker-0")
 		setStatus(co.Name, co.Name+"-worker-0", "", "Provisioning")
-		ready(co.Name)
-		fc.SetListEmptyOnce()
+		listsBefore := len(fc.ListCalls())
+		fc.SetListEmptyCalls(1)
 		fc.SetCreateError(status.Error(codes.AlreadyExists, "concurrent foreign create"))
-		_, _ = run(co.Name)
-		Expect(fc.ListCalls()).To(HaveLen(2), "must re-list after AlreadyExists")
+		_, err := run(co.Name)
+		Expect(err).To(HaveOccurred())
+		Expect(fc.ListCalls()).To(HaveLen(listsBefore+2), "one shared observation and one AlreadyExists re-list")
+		Expect(fc.CreateCalls()).To(HaveLen(2), "must exercise create-race recovery, not early rejection")
 		Expect(fc.DeleteCalls()).ToNot(ContainElement(id))
 		stored, err := fc.GetBareMetalInstance(ctx, id)
 		Expect(err).ToNot(HaveOccurred())

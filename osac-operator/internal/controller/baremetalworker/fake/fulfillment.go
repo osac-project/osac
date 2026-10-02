@@ -28,6 +28,7 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -49,7 +50,9 @@ type FulfillmentClient struct {
 	instanceTypes   map[string]*privatev1.BareMetalInstanceType
 	createErr       error
 	deleteErr       error
-	listEmptyOnce   bool
+	listEmptyCalls  int
+	listErr         error
+	getErrors       map[string]error
 
 	createCalls            []*privatev1.BareMetalInstance
 	deleteCalls            []string
@@ -69,6 +72,7 @@ var _ baremetalworker.FulfillmentClient = (*FulfillmentClient)(nil)
 func NewFulfillmentClient() *FulfillmentClient {
 	return &FulfillmentClient{
 		bmis:            map[string]*privatev1.BareMetalInstance{},
+		getErrors:       map[string]error{},
 		hostMACs:        map[string]string{},
 		clusterVersions: map[string]*privatev1.ClusterVersion{},
 		clusters:        map[string]*privatev1.Cluster{},
@@ -110,14 +114,24 @@ func (f *FulfillmentClient) CreateBareMetalInstance(
 	if name == "" {
 		return nil, status.Error(codes.InvalidArgument, "baremetalinstance metadata.name is required")
 	}
+	// Mirror scoped name uniqueness independently of the external ID. In
+	// particular, a repeated Create must not allocate a second incarnation.
+	metadata := obj.GetMetadata()
+	for _, existing := range f.bmis {
+		other := existing.GetMetadata()
+		if other.GetName() == name && other.GetTenant() == metadata.GetTenant() && other.GetProject() == metadata.GetProject() {
+			return nil, status.Errorf(codes.AlreadyExists, "baremetalinstance %q already exists in scope", name)
+		}
+	}
 	stored := cloneBMI(obj)
 	id := stored.GetId()
 	if id == "" {
 		id = name
+		if _, exists := f.bmis[id]; exists {
+			id = uuid.NewString()
+		}
 		stored.SetId(id)
 	}
-	// Mirror the real private API's uniqueness constraint (OSAC-3266: UNIQUE(tenant,project,name)),
-	// so idempotency/list-before-create tests exercise the AlreadyExists path.
 	if _, exists := f.bmis[id]; exists {
 		return nil, status.Errorf(codes.AlreadyExists, "baremetalinstance %q already exists", id)
 	}
@@ -149,6 +163,9 @@ func (f *FulfillmentClient) GetBareMetalInstance(
 	defer f.mu.Unlock()
 
 	f.getCalls = append(f.getCalls, id)
+	if err := f.getErrors[id]; err != nil {
+		return nil, err
+	}
 	b, ok := f.bmis[id]
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "baremetalinstance %q not found", id)
@@ -194,8 +211,11 @@ func (f *FulfillmentClient) ListBareMetalInstances(
 	defer f.mu.Unlock()
 
 	f.listCalls = append(f.listCalls, filter)
-	if f.listEmptyOnce {
-		f.listEmptyOnce = false
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	if f.listEmptyCalls > 0 {
+		f.listEmptyCalls--
 		return nil, nil
 	}
 	ids := make([]string, 0, len(f.bmis))
@@ -205,7 +225,9 @@ func (f *FulfillmentClient) ListBareMetalInstances(
 	sort.Strings(ids)
 	out := make([]*privatev1.BareMetalInstance, 0, len(ids))
 	for _, id := range ids {
-		out = append(out, cloneBMI(f.bmis[id]))
+		bmi := cloneBMI(f.bmis[id])
+		f.injectHostMAC(bmi, id)
+		out = append(out, bmi)
 	}
 	return out, nil
 }
@@ -379,9 +401,34 @@ func (f *FulfillmentClient) HostMAC(bmiID string) string {
 
 // SetListEmptyOnce simulates a BMI appearing between list-before-create and AlreadyExists re-list.
 func (f *FulfillmentClient) SetListEmptyOnce() {
+	f.SetListEmptyCalls(1)
+}
+
+// SetListEmptyCalls omits BMIs for count consecutive lists, to exercise fallback
+// Gets and create races after the shared worker observation.
+func (f *FulfillmentClient) SetListEmptyCalls(count int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.listEmptyOnce = true
+	f.listEmptyCalls = count
+}
+
+// SetListError makes subsequent BMI Lists fail without turning an outage into
+// a successful empty observation. Nil clears the injection.
+func (f *FulfillmentClient) SetListError(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.listErr = err
+}
+
+// SetGetError injects per-ID unknown or NotFound evidence for fallback Gets.
+func (f *FulfillmentClient) SetGetError(id string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err == nil {
+		delete(f.getErrors, id)
+	} else {
+		f.getErrors[id] = err
+	}
 }
 
 // SetCreateError makes subsequent CreateBareMetalInstance calls return err (nil clears it).

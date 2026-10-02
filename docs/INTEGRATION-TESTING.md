@@ -169,21 +169,56 @@ Touched-area requirements: [component guide](../osac-operator/AGENTS.md#integrat
 
 - **Bare-metal worker Agent convergence ([DEV], Unit/Envtest):** `internal/controller/baremetalworker/agent_reconcile_test.go` and `correlation_test.go` cover all eligible worker phases and protected states, early capacity/stale-ignition observation, unique MAC matching, authoritative binding isolation/conflicts, registration timeout, interrupted status recovery, ReadySince retention, and transition event/metric counts. The `reconcileAgent` scenarios in `acceptance/reconciler_test.go` invoke public `Reconcile` manually and read back real persisted phases/counts after Installed-condition changes or Agent removal. They also verify bound-Agent/stale-Waiting recovery without another BMI or Agent patch, lifecycle-state preservation while provider deletion is pending, and ambiguous binding refusal. Kubernetes/etcd and CRDs are real; fulfillment and Agent state are simulated. These tests do not run a manager or establish watch delivery/restart latency, deployed Assisted Service, or hardware behavior; provider gaps remain under [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843).
 
+- **Unified bare-metal worker convergence ([DEV], Unit/Envtest):** The `worker_*_test.go` and BMI identity suites under `internal/controller/baremetalworker/` cover invocation-local BMI/Agent read reuse, pure per-worker identity/phase projection, guarded latest-status merges, authoritative reservation/capacity checks, interruption after a successful create, concurrent foreign-reference interruption, one fresh ownership/existence Get per destructive attempt, and finalizer retention for concurrently appended workers. `acceptance/worker_reconcile_test.go` drives public `Reconcile` through real CRD status persistence and optimistic-lock conflicts. It checks successful-create ID-write recovery without another create, authoritative NotFound replacement, list-omission fallback, unknown List/Get errors and service-unavailable requeues, repair before InfraEnv gates, rejection of stale-failure persistence before recording a recreated UID, preservation of concurrently appended status and latest aggregate counts, and finalization recovery without resetting history or allocating capacity. The older rebuild pipeline is removed; its mixed/protected worker, MAC fallback, and clock/history cases are covered by the combined observation tests. Explicit successful reconciliations establish the convergence assertions, not fallback polling. Kubernetes/etcd and generated CRDs are real; fulfillment, ignition and Agent status are simulated. These cases do not establish watch delivery, real fulfillment/BMaaS wire behavior, deployed Assisted Service, or hardware provisioning; missing boundary coverage remains owned by [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843).
+
 Focused commands from `osac-operator/` (also included by `make test`):
 
 ```bash
 go test ./internal/controller/baremetalworker -count=1
+go test -race ./internal/controller/baremetalworker -count=1
 KUBEBUILDER_ASSETS="$PWD/bin/k8s/1.31.0-linux-amd64" \
   go test ./internal/controller/baremetalworker/acceptance -count=1
 ```
 
 The focused Envtest command requires the existing Kubernetes 1.31.0 binaries at
 that path; `make test` obtains the platform-appropriate assets through setup-envtest.
-Phase repair/demotion is asserted after one successful explicit reconciliation
-with prerequisites ready, not after fallback polling. Protected Failed workers
-with a pending retry can cause the existing early return before final aggregation;
-the lifecycle case keeps deletion pending without a retry deadline to exercise
-the final Agent stage. No controller watch, RBAC, or deployment wiring changes
+Allocation convergence uses explicit finalizer, observation-repair, reservation,
+and single-Create checkpoints. R01 Unit cases and the R01-E1 acceptance spec
+assert stable opaque names, authoritative stale-snapshot resumes, independent
+NodeSets sharing a type, one Create and durable ID per invocation, waiting-retry
+selection, a single failed-worker retry Delete (including errors), stale-ignition
+repair before UID advancement/deletion, and no hot loop for unchanged capacity. Legacy stage fixtures drive
+finite sequences (bounded by `16 + 8*N` for ready fixture dependencies), assert
+persisted progress at each allocation checkpoint and at most one Create per
+call, and return errors/dependency/backoff results unchanged. This is a fixture
+termination bound, not a production latency promise. R01-E2 Envtest cases
+exercise a committed Create/lost transport acknowledgement, restart, delayed
+List visibility (including the AlreadyExists re-list), same-name recovery and
+rejection of foreign, ambiguous or deleting recovery candidates. The fake's
+scoped-name uniqueness is independent of ID, but does not establish the real
+fulfillment/Postgres contract.
+
+The [connected worker suite](../osac-operator/test/integration/caas/README.md)
+includes R01-C1, a [DEV] component-integration case with real fulfillment,
+Postgres uniqueness and Kubernetes, simulated ignition/networking readiness,
+and no hardware or manager watches. It deliberately loses one successful real
+Create response, restarts the reconciler, omits one List to force a real
+AlreadyExists re-list, and counts one persisted owned incarnation per reserved
+name. Connected fixtures use explicit calls within the same `16 + 8*N` bound.
+**Execution evidence:** R01 Unit/Envtest cases executed/passed; R01-C1 is
+implemented and compile-checked, not executed against a real backend. The
+connected command fails before fixtures because `hack/sim.env` is absent; the
+explicit sim kubeconfig endpoint also refuses connections. Do not count this
+preflight failure or fake uniqueness as passed real-boundary coverage. Restore
+an approved marked sim environment and run the focused R01-C1 case, then
+`make test-integration-caas` twice. Deployed provider/hardware gaps remain
+[OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843).
+Phase repair/demotion is persisted at its own successful explicit reconciliation;
+aggregate summaries can follow on a fresh invocation, not fallback polling.
+Pending retry deadlines can still return before final Agent convergence.
+A failed retry Delete publishes failure summaries, preserves the slot and stops
+further capacity actions; protected lifecycle fixtures assert no resurrection
+from installed Agents. No controller watch, RBAC, or deployment wiring changes
 are involved.
 
 ### Coverage gaps

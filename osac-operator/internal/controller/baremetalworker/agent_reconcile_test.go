@@ -344,19 +344,23 @@ func TestAgentTimeoutAndReadinessObservations(t *testing.T) {
 }
 
 func TestAgentObservationBeforeSlotSelectionAndStaleIgnition(t *testing.T) {
-	r, _, co := nodeSetHarness(t, "order", nodeRequest("standard", 1))
+	_, _, co := nodeSetHarness(t, "order", nodeRequest("standard", 1))
 	co.Annotations = map[string]string{infraEnvUIDAnnotation: "old"}
 	co.Status.Workers = []v1alpha1.WorkerStatus{
 		newWorkerStatus("standard", "standard", "installed", "id-1", workerPhaseWaitingForAgent),
 		newWorkerStatus("standard", "standard", "missing", "id-2", workerPhaseReady),
 	}
 	agents := &unstructured.UnstructuredList{Items: []unstructured.Unstructured{*agentPhaseFixture("installed", true)}}
-	co.Status.Workers, _ = rebuildWorkerPhases(context.Background(), co.Status.Workers, agents, func(context.Context, string) []string { return nil }, func(string) bool { return true })
+	co.Status.Workers = projectAgentWorkerPhases(context.Background(), co.Status.Workers, agents, func(context.Context, string) []string { return nil })
 	plan := planWorkerSlots(co)
 	if len(plan.selected) != 1 || plan.selected[0].Name != "installed" {
 		t.Fatalf("incorrect early retention: %+v", plan)
 	}
-	r.detectStaleIgnitionWorkers(context.Background(), co, "new")
+	for _, change := range classifyStaleIgnition(co, "new") {
+		if !applyWorkerChange(co, change) {
+			t.Fatal("stale ignition classifier produced incompatible evidence")
+		}
+	}
 	if co.Status.Workers[0].Phase != workerPhaseReady || co.Status.Workers[1].Phase != workerPhaseFailed {
 		t.Fatalf("incorrect stale ignition classification: %+v", co.Status.Workers)
 	}

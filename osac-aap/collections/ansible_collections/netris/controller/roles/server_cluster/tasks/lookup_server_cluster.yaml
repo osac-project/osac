@@ -3,30 +3,53 @@
   ansible.builtin.set_fact:
     _existing_server_cluster: null
     _matching_server_clusters: []
+    _server_cluster_lookup_items: []
 
-- name: Get existing ServerClusters for shared identity lookup
+- name: Select exact ServerCluster lookup endpoint
+  ansible.builtin.set_fact:
+    _server_cluster_lookup_by_id: >-
+      {{ server_cluster_backend_id is defined and server_cluster_backend_id | string | length > 0 }}
+    _server_cluster_lookup_url: >-
+      {{ netris_controller_url ~ '/api/v2/server-cluster' ~
+         ('/' ~ (server_cluster_backend_id | int | string)
+          if server_cluster_backend_id is defined and
+             server_cluster_backend_id | string | length > 0 else '') }}
+
+- name: Get the exact ServerCluster or the collection for name lookup
   ansible.builtin.uri:
-    url: "{{ netris_controller_url }}/api/v2/server-cluster"
+    url: "{{ _server_cluster_lookup_url }}"
     method: GET
     headers:
       Cookie: "connect.sid={{ netris_session_cookie }}"
     return_content: true
-    status_code: 200
+    status_code: "{{ [200, 404] if _server_cluster_lookup_by_id else [200] }}"
     timeout: "{{ netris_timeout | default(30) }}"
     validate_certs: "{{ netris_validate_certs | default(true) }}"
   register: _server_cluster_lookup_response
   no_log: true
 
+- name: Normalize exact ServerCluster response
+  ansible.builtin.set_fact:
+    _server_cluster_lookup_items: "{{ [_server_cluster_lookup_response.json.data] }}"
+  when: (_server_cluster_lookup_response.json | default({})).data | default([]) is mapping
+
+- name: Normalize ServerCluster collection response
+  ansible.builtin.set_fact:
+    _server_cluster_lookup_items: "{{ (_server_cluster_lookup_response.json | default({})).data | default([]) }}"
+  when: (_server_cluster_lookup_response.json | default({})).data | default([]) is sequence
+        and (_server_cluster_lookup_response.json | default({})).data | default([]) is not mapping
+        and (_server_cluster_lookup_response.json | default({})).data | default([]) is not string
+
 - name: Find ServerCluster by backend ID
   ansible.builtin.set_fact:
     _existing_server_cluster: >-
       {{
-        (_server_cluster_lookup_response.json.data | default([]))
+        _server_cluster_lookup_items
         | selectattr('id', 'equalto', server_cluster_backend_id | int)
         | list | first | default(none)
       }}
   when:
-    - _server_cluster_lookup_response.json is mapping
+    - _server_cluster_lookup_by_id
     - server_cluster_backend_id is defined
     - server_cluster_backend_id | string | length > 0
 
@@ -38,6 +61,29 @@
     - server_cluster_backend_id is defined
     - server_cluster_backend_id | string | length > 0
     - _existing_server_cluster is not defined or _existing_server_cluster is none
+
+- name: Verify exact-ID ServerCluster belongs to the requested site
+  ansible.builtin.assert:
+    that:
+      - (_existing_server_cluster.site | default({})).id | default(0) | int == server_cluster_site_id | int
+    fail_msg: "The ServerCluster backend ID resolves to a different site; refusing to mutate it"
+  when:
+    - _server_cluster_lookup_by_id
+    - _existing_server_cluster is defined
+    - _existing_server_cluster is not none
+    - server_cluster_site_id is defined
+
+- name: Verify exact-ID ServerCluster belongs to the requested VPC when known
+  ansible.builtin.assert:
+    that:
+      - (_existing_server_cluster.vpc | default({})).id | default(0) | int == server_cluster_vpc_id | int
+    fail_msg: "The ServerCluster backend ID resolves to a different VPC; refusing to mutate it"
+  when:
+    - _server_cluster_lookup_by_id
+    - _existing_server_cluster is defined
+    - _existing_server_cluster is not none
+    - server_cluster_vpc_id is defined
+    - server_cluster_vpc_id | int > 0
 
 - name: Require a VPC scope or explicit legacy permission for name-based deletion
   ansible.builtin.assert:
@@ -54,13 +100,13 @@
   ansible.builtin.set_fact:
     _matching_server_clusters: >-
       {{
-        (_server_cluster_lookup_response.json.data | default([]))
+        _server_cluster_lookup_items
         | selectattr('name', 'equalto', server_cluster_name)
         | selectattr('site.id', 'equalto', server_cluster_site_id | int)
         | list
       }}
   when:
-    - _server_cluster_lookup_response.json is mapping
+    - not _server_cluster_lookup_by_id
     - server_cluster_backend_id is not defined or server_cluster_backend_id | string | length == 0
 
 - name: Restrict shared ServerCluster candidates to the requested VPC

@@ -24,7 +24,12 @@ def request_bodies():
 
 
 @pytest.fixture
-def netris_server(inventory, request_bodies):
+def read_requests():
+    return []
+
+
+@pytest.fixture
+def netris_server(inventory, request_bodies, read_requests):
     clusters = []
     writes = []
 
@@ -38,6 +43,7 @@ def netris_server(inventory, request_bodies):
             self.wfile.write(body)
 
         def do_GET(self):
+            read_requests.append(self.path)
             if self.path == "/api/v2/server-cluster":
                 self.respond(clusters)
             elif self.path == "/api/v2/hw?type=server":
@@ -131,6 +137,33 @@ def test_delete_with_missing_backend_id_never_falls_back_to_name(tmp_path, netri
     clusters.append(cluster(99, 1, 7))
     result = run_role(tmp_path, url, "delete", server_cluster_backend_id="42", server_cluster_vpc_id=7)
     assert result.returncode == 0, result.stdout + result.stderr
+    assert writes == []
+
+
+def test_delete_with_backend_id_uses_exact_lookup(tmp_path, netris_server, read_requests):
+    url, clusters, writes = netris_server
+    clusters.append(cluster(22, 1, 7))
+    result = run_role(tmp_path, url, "delete", server_cluster_backend_id="22")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert writes == [("DELETE", "/api/v2/server-cluster/22")]
+    assert read_requests == ["/api/v2/server-cluster/22"]
+
+
+@pytest.mark.parametrize("tasks_from,site_id,vpc_id", [
+    ("delete", 2, 7),
+    ("delete", 1, 8),
+    ("create", 2, 7),
+    ("create", 1, 8),
+], ids=["wrong-delete-site", "wrong-delete-vpc", "wrong-update-site", "wrong-update-vpc"])
+def test_backend_id_scope_mismatch_never_mutates(tmp_path, netris_server, tasks_from, site_id, vpc_id):
+    url, clusters, writes = netris_server
+    clusters.append(cluster(22, site_id, vpc_id))
+    create_args = {"server_cluster_servers": []} if tasks_from == "create" else {}
+    result = run_role(
+        tmp_path, url, tasks_from, server_cluster_backend_id="22", server_cluster_site_id=1,
+        server_cluster_vpc_id=7, **create_args,
+    )
+    assert result.returncode != 0, result.stdout + result.stderr
     assert writes == []
 
 
@@ -325,6 +358,20 @@ def test_all_requested_hosts_are_sent(tmp_path, netris_server, inventory, reques
         assert request_bodies[0]["site"] == {"id": 1}
         assert request_bodies[0]["vpc"]["id"] == 7
         assert request_bodies[0]["srvClusterTemplate"] == {"id": 42}
+
+
+def test_create_with_backend_id_uses_exact_lookup(tmp_path, netris_server, inventory, read_requests):
+    url, clusters, writes = netris_server
+    clusters.append(cluster(22, 1, 7))
+    inventory.append(server(1))
+    result = run_role(
+        tmp_path, url, "create", server_cluster_backend_id="22", server_cluster_vpc_id=7,
+        server_cluster_servers=["server-a"],
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert writes == [("PUT", "/api/v2/server-cluster/22")]
+    assert "/api/v2/server-cluster" not in read_requests
+    assert read_requests.count("/api/v2/server-cluster/22") == 2
 
 
 def test_repeated_calls_replace_hosts_for_names_mappings_and_empty_sets(tmp_path, netris_server, inventory, request_bodies):

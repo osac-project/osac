@@ -50,6 +50,8 @@ const (
 	fabricDomainConfigResyncInterval       = 5 * time.Minute
 	fabricDomainUnsupportedTypeReason      = "UnsupportedType"
 	fabricDomainMissingBackendIDReason     = "MissingBackendID"
+	fabricDomainMismatchedVPCIDReason      = "MismatchedVPCID"
+	fabricDomainUnverifiedBackendReason    = "UnverifiedBackendArtifact"
 	fabricDomainNetworkClassUnavailable    = "NetworkClassUnavailable"
 	fabricDomainVirtualNetworkNotReady     = "VirtualNetworkNotReady"
 	fabricDomainProvisioningFailureMessage = "provisioning failed; consult administrator logs for details"
@@ -166,6 +168,13 @@ func (r *FabricDomainReconciler) handleUpdate(ctx context.Context, domain *v1alp
 		}
 		return ctrl.Result{}, nil
 	}
+	if hasUnverifiedFabricDomainArtifact(domain) {
+		message := unverifiedFabricDomainArtifactMessage(domain)
+		domain.Status.Phase = v1alpha1.FabricDomainPhaseFailed
+		domain.Status.Members = failedFabricDomainMembers(domain.Spec.Servers, fabricDomainProvisioningFailureMessage)
+		setFabricDomainCondition(domain, metav1.ConditionFalse, fabricDomainUnverifiedBackendReason, message)
+		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+	}
 
 	vnet, result, err := r.resolveFabricDomainVirtualNetwork(ctx, domain)
 	if err != nil || result.RequeueAfter > 0 || vnet == nil {
@@ -180,9 +189,18 @@ func (r *FabricDomainReconciler) handleUpdate(ctx context.Context, domain *v1alp
 		return ctrl.Result{RequeueAfter: fabricDomainConfigResyncInterval}, nil
 	}
 
-	config, result, err := r.resolveFabricDomainProvisioningConfig(ctx, domain, vnet)
-	if err != nil || result.RequeueAfter > 0 {
-		return result, err
+	var config *resolvedFabricDomainConfig
+	if binding, active := activeFabricDomainProvisioningBinding(domain); active {
+		// The running AAP job already has this immutable backend snapshot. Reuse
+		// it while polling; catalog lookups are refreshed after the job completes.
+		config = &resolvedFabricDomainConfig{Binding: binding}
+	} else {
+		var result ctrl.Result
+		var err error
+		config, result, err = r.resolveFabricDomainProvisioningConfig(ctx, domain, vnet)
+		if err != nil || result.RequeueAfter > 0 {
+			return result, err
+		}
 	}
 
 	if domain.Status.ProvisioningConfig == nil {
@@ -203,8 +221,8 @@ func (r *FabricDomainReconciler) handleUpdate(ctx context.Context, domain *v1alp
 
 	desiredVersion, err := provisioning.ComputeDesiredConfigVersion(struct {
 		Spec   v1alpha1.FabricDomainSpec
-		Config resolvedFabricDomainConfig
-	}{domain.Spec, *config})
+		Config v1alpha1.FabricDomainProvisioningConfig
+	}{domain.Spec, config.Binding})
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("computing FabricDomain desired config version: %w", err)
 	}
@@ -225,6 +243,21 @@ func (r *FabricDomainReconciler) handleUpdate(ctx context.Context, domain *v1alp
 	}
 
 	return r.runFabricDomainProvisioning(ctx, domain, vnet, config.Binding.TemplateID, desiredVersion)
+}
+
+func activeFabricDomainProvisioningBinding(domain *v1alpha1.FabricDomain) (v1alpha1.FabricDomainProvisioningConfig, bool) {
+	if domain.Status.ProvisioningConfig == nil {
+		return v1alpha1.FabricDomainProvisioningConfig{}, false
+	}
+	job := provisioning.FindLatestJobByType(domain.Status.ProvisioningJobs, v1alpha1.JobTypeProvision)
+	if !provisioning.HasJobID(job) || job.State.IsTerminal() {
+		return v1alpha1.FabricDomainProvisioningConfig{}, false
+	}
+	binding := *domain.Status.ProvisioningConfig
+	if binding.NetworkClass == "" || !validNetrisID(binding.TemplateID) || !validNetrisID(binding.VPCID) {
+		return v1alpha1.FabricDomainProvisioningConfig{}, false
+	}
+	return binding, true
 }
 
 func (r *FabricDomainReconciler) resolveFabricDomainVirtualNetwork(ctx context.Context, domain *v1alpha1.FabricDomain) (*v1alpha1.VirtualNetwork, ctrl.Result, error) {
@@ -356,7 +389,7 @@ func (r *FabricDomainReconciler) resolveFabricDomainProvisioningConfig(
 			fmt.Sprintf("NetworkClass %q must be active and advertise Netris Ethernet east-west support", networkClassID))
 		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
-	templateID, instanceTypes, err := r.resolveFabricDomainHardware(ctx, domain, networkClassID)
+	templateID, err := r.resolveFabricDomainHardware(ctx, domain, networkClassID)
 	if err != nil {
 		ctrllog.FromContext(ctx).Error(err, "failed to resolve FabricDomain hardware binding", "fabricDomain", client.ObjectKeyFromObject(domain))
 		domain.Status.Phase = v1alpha1.FabricDomainPhaseFailed
@@ -374,7 +407,6 @@ func (r *FabricDomainReconciler) resolveFabricDomainProvisioningConfig(
 			NetworkClass: networkClassID, TemplateID: templateID,
 			VPCID: vnet.Status.BackendNetworkID, Region: vnet.Spec.Region,
 		},
-		InstanceTypes: instanceTypes,
 	}, ctrl.Result{}, nil
 }
 
@@ -439,6 +471,8 @@ func fabricDomainPollCallbacks(ctx context.Context, domain *v1alpha1.FabricDomai
 			}
 			if !validNetrisID(backendID) {
 				domain.Status.Phase = v1alpha1.FabricDomainPhaseFailed
+				domain.Status.UnverifiedBackendArtifact = true
+				domain.Status.Members = failedFabricDomainMembers(domain.Spec.Servers, fabricDomainProvisioningFailureMessage)
 				ctrllog.FromContext(ctx).Error(fmt.Errorf("AAP returned invalid server_cluster_id artifact %q", backendID),
 					"FabricDomain provisioning completed without a valid backend identifier", "fabricDomain", client.ObjectKeyFromObject(domain))
 				markFabricDomainProvisionJobFailed(domain, desiredVersion, fabricDomainProvisioningFailureMessage)
@@ -446,16 +480,19 @@ func fabricDomainPollCallbacks(ctx context.Context, domain *v1alpha1.FabricDomai
 					"AAP completed without a valid backend identifier; consult administrator logs")
 				return
 			}
-			domain.Status.BackendID = backendID
-			if vpcID := outputString(status.Outputs, "server_cluster_vpc_id", "vpc_id", "vpcId"); vpcID != "" && vpcID != domain.Status.VPCID {
+			if vpcID := outputString(status.Outputs, "server_cluster_vpc_id", "vpc_id", "vpcId"); vpcID == "" || vpcID != domain.Status.VPCID {
 				ctrllog.FromContext(ctx).Error(fmt.Errorf("AAP job returned VPC ID %q, expected %q", vpcID, domain.Status.VPCID),
-					"FabricDomain provisioning returned a mismatched VPC", "fabricDomain", client.ObjectKeyFromObject(domain))
+					"FabricDomain provisioning did not confirm the requested VPC", "fabricDomain", client.ObjectKeyFromObject(domain))
 				domain.Status.Phase = v1alpha1.FabricDomainPhaseFailed
+				domain.Status.UnverifiedBackendArtifact = true
+				domain.Status.UnverifiedBackendID = backendID
+				domain.Status.Members = failedFabricDomainMembers(domain.Spec.Servers, fabricDomainProvisioningFailureMessage)
 				markFabricDomainProvisionJobFailed(domain, desiredVersion, fabricDomainProvisioningFailureMessage)
-				setFabricDomainCondition(domain, metav1.ConditionFalse, "MismatchedVPCID",
-					"AAP returned a backend identifier for a different VirtualNetwork; consult administrator logs")
+				setFabricDomainCondition(domain, metav1.ConditionFalse, fabricDomainMismatchedVPCIDReason,
+					"AAP did not confirm that the ServerCluster belongs to the requested VirtualNetwork; consult administrator logs")
 				return
 			}
+			domain.Status.BackendID = backendID
 			if job := provisioning.FindLatestJobByType(domain.Status.ProvisioningJobs, v1alpha1.JobTypeProvision); job != nil &&
 				job.ConfigVersion != "" && job.ConfigVersion != desiredVersion {
 				domain.Status.Phase = v1alpha1.FabricDomainPhaseProgressing
@@ -486,10 +523,28 @@ func validNetrisID(value string) bool {
 	return err == nil && id > 0 && strconv.FormatUint(id, 10) == value
 }
 
+func hasUnverifiedFabricDomainArtifact(domain *v1alpha1.FabricDomain) bool {
+	return domain.Status.UnverifiedBackendArtifact || domain.Status.UnverifiedBackendID != ""
+}
+
+func unverifiedFabricDomainArtifactMessage(domain *v1alpha1.FabricDomain) string {
+	resolution := "verify and resolve any ServerCluster artifact in Netris, then clear status.unverifiedBackendArtifact and status.unverifiedBackendId"
+	if domain.Status.UnverifiedBackendID == "" {
+		return "AAP completed without a valid ServerCluster ID, so an artifact may exist without a recorded identity; " + resolution
+	}
+	return "AAP did not confirm that the ServerCluster belongs to the requested VPC; " + resolution
+}
+
 func (r *FabricDomainReconciler) handleDelete(ctx context.Context, domain *v1alpha1.FabricDomain) (ctrl.Result, error) {
 	domain.Status.Phase = v1alpha1.FabricDomainPhaseDeleting
 	if !controllerutil.ContainsFinalizer(domain, osacFabricDomainFinalizer) {
 		return ctrl.Result{}, nil
+	}
+	if hasUnverifiedFabricDomainArtifact(domain) {
+		message := "cleanup is blocked because " + unverifiedFabricDomainArtifactMessage(domain)
+		domain.Status.Phase = v1alpha1.FabricDomainPhaseFailed
+		setFabricDomainCondition(domain, metav1.ConditionFalse, fabricDomainUnverifiedBackendReason, message)
+		return ctrl.Result{}, fmt.Errorf("cannot safely delete FabricDomain %q: %s", domain.Name, message)
 	}
 
 	hasProvisioningState := domain.Status.ProvisioningIntent || len(domain.Status.ProvisioningJobs) > 0 || domain.Status.BackendID != ""

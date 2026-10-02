@@ -294,6 +294,18 @@ spec:
                   - type
                   type: object
                 type: array
+              unverifiedBackendArtifact:
+                description: |-
+                  UnverifiedBackendArtifact indicates that a successful AAP job may have created a
+                  ServerCluster that OSAC cannot safely identify or associate with the requested VPC.
+                  It blocks retries and deletion until an administrator resolves the artifact in Netris
+                  and clears this field and UnverifiedBackendID.
+                type: boolean
+              unverifiedBackendId:
+                description: |-
+                  UnverifiedBackendID is the ServerCluster ID returned with an unverified artifact,
+                  when AAP provided one. It is never used as the trusted BackendID.
+                type: string
               vpcId:
                 description: VPCID is the provider-specific identifier of the VPC
                   containing the fabric domain.

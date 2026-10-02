@@ -1,21 +1,26 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useMemo } from 'react';
 import { Alert, Button, FormGroup } from '@patternfly/react-core';
 import { MultiTypeaheadSelect, type MultiTypeaheadSelectOption } from '@patternfly/react-templates';
 import { useField, useFormikContext } from 'formik';
 
-import { Subnets, VirtualNetworks } from '@osac/types';
+import { SecurityGroups, Subnets, VirtualNetworks } from '@osac/types';
 
 import { CheckboxField } from './CheckboxField';
 import { ResourceSelectField, type ResourceSelectValue } from './ResourceSelectField';
 import { emptyResourceSelectValue } from './resourceSelectValue';
+import { useListResource } from '../../api/use-resource';
 import {
   VIRTUAL_NETWORK_READY_LIST_FILTER,
   resourceDisplayName,
   securityGroupFilterForVirtualNetworkList,
-  useSecurityGroups,
   virtualNetworkFilterForSubnetList,
 } from '../../api/v1/networking';
 import { useTranslation } from '../../hooks/useTranslation';
+
+interface ResourceListItem {
+  id: string;
+  metadata?: { name?: string };
+}
 
 interface NetworkAttachmentPickersProps {
   /** Formik field-path prefix, e.g. "spec.networkAttachment". */
@@ -28,11 +33,6 @@ interface NetworkAttachmentPickersProps {
   autoExternalIpName: string;
   /** Helper text displayed below the auto external IP checkbox. */
   autoExternalIpHelperText?: string;
-  /**
-   * Callback invoked when the user toggles back to the default network.
-   * Parent steps can use this to clear wizard validation alerts.
-   */
-  onResetToDefaults?: () => void;
 }
 
 /**
@@ -55,10 +55,9 @@ export const NetworkAttachmentPickers = ({
   useDefaultNetworkName,
   autoExternalIpName,
   autoExternalIpHelperText,
-  onResetToDefaults,
 }: NetworkAttachmentPickersProps) => {
   const { t } = useTranslation();
-  const { setFieldTouched, validateForm } = useFormikContext();
+  const { setFieldTouched } = useFormikContext();
 
   const [useDefaultField] = useField<boolean>(useDefaultNetworkName);
   const useDefaultNetwork = useDefaultField.value;
@@ -69,35 +68,26 @@ export const NetworkAttachmentPickers = ({
 
   const virtualNetworkId = vnField.value?.id ?? '';
 
-  // ── Clear validation when toggling back to defaults ──
-  const previousUseDefaultRef = useRef(useDefaultNetwork);
-  useEffect(() => {
-    const wasCustom = previousUseDefaultRef.current === false;
-    previousUseDefaultRef.current = useDefaultNetwork;
-
-    if (!useDefaultNetwork || !wasCustom) {
-      return;
-    }
-
-    void setFieldTouched(`${fieldPrefix}.virtualNetwork`, false, false);
-    void setFieldTouched(`${fieldPrefix}.subnet`, false, false);
-    void setFieldTouched(`${fieldPrefix}.securityGroups`, false, false);
-    onResetToDefaults?.();
-    void validateForm();
-  }, [fieldPrefix, onResetToDefaults, setFieldTouched, useDefaultNetwork, validateForm]);
-
   // ── Security groups (manual hooks — no ResourceMultiSelectField exists) ──
   const securityGroupFilter = virtualNetworkId
     ? securityGroupFilterForVirtualNetworkList(virtualNetworkId)
     : undefined;
   const {
-    data: securityGroups = [],
+    data: securityGroupsData,
     isLoading: securityGroupsLoading,
     error: securityGroupsError,
     refetch: refetchSecurityGroups,
-  } = useSecurityGroups(securityGroupFilter ? { filter: securityGroupFilter } : {}, {
+  } = useListResource(SecurityGroups, securityGroupFilter ? { filter: securityGroupFilter } : {}, {
     enabled: Boolean(virtualNetworkId),
   });
+
+  const securityGroups = useMemo(
+    () =>
+      ((securityGroupsData as { items?: ResourceListItem[] } | undefined)?.items ?? []).filter(
+        (item) => item.id,
+      ),
+    [securityGroupsData],
+  );
 
   const securityGroupOptions = useMemo(
     () =>
@@ -128,6 +118,13 @@ export const NetworkAttachmentPickers = ({
         name={useDefaultNetworkName}
         label={t('Use tenant default network')}
         fieldId={`${fieldIdPrefix}-use-default-network`}
+        onChange={(checked) => {
+          if (checked) {
+            void setFieldTouched(`${fieldPrefix}.virtualNetwork`, false, false);
+            void setFieldTouched(`${fieldPrefix}.subnet`, false, false);
+            void setFieldTouched(`${fieldPrefix}.securityGroups`, false, false);
+          }
+        }}
       />
       {!useDefaultNetwork && (
         <>

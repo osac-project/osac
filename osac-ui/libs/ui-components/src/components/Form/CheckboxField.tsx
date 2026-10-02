@@ -11,6 +11,8 @@ interface CheckboxFieldProps {
   fieldId: string;
   isDisabled?: boolean;
   helperText?: string;
+  /** Called after the Formik value is set with the new checked state. */
+  onChange?: (checked: boolean) => void;
 }
 
 export const CheckboxField = ({
@@ -19,6 +21,7 @@ export const CheckboxField = ({
   fieldId,
   isDisabled = false,
   helperText,
+  onChange,
 }: CheckboxFieldProps) => {
   const [field, meta, helpers] = useField<boolean>(name);
   const showValidationErrors = useShowFieldValidationErrors();
@@ -32,7 +35,10 @@ export const CheckboxField = ({
         label={label}
         isChecked={field.value}
         isDisabled={isDisabled}
-        onChange={(_event, checked) => void helpers.setValue(checked)}
+        onChange={(_event, checked) => {
+          void helpers.setValue(checked);
+          onChange?.(checked);
+        }}
         onBlur={field.onBlur}
       />
       <FormFieldHelper error={error} description={helperText} fieldId={fieldId} />

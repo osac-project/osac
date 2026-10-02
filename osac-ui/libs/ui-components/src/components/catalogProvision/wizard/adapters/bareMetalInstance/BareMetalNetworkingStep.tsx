@@ -5,7 +5,6 @@ import type { BareMetalInstanceCatalogItem } from '@osac/types';
 import { useTranslation } from '../../../../../hooks/useTranslation';
 import { NetworkAttachmentPickers } from '../../../../Form/NetworkAttachmentPickers';
 import OsacForm from '../../../../Form/OsacForm';
-import { useWizardValidation } from '../../WizardValidationContext';
 
 interface Props {
   catalogItem: BareMetalInstanceCatalogItem | null;
@@ -13,7 +12,6 @@ interface Props {
 
 export const BareMetalNetworkingStep = ({ catalogItem }: Props) => {
   const { t } = useTranslation();
-  const { clearValidationAlert } = useWizardValidation();
 
   if (!catalogItem) {
     return null;
@@ -31,7 +29,6 @@ export const BareMetalNetworkingStep = ({ catalogItem }: Props) => {
             autoExternalIpHelperText={t(
               'The system will auto-create an ExternalIP and ExternalIPAttachment bound to the primary attachment. Auto-created resources are deleted when the instance is deleted.',
             )}
-            onResetToDefaults={clearValidationAlert}
           />
         </OsacForm>
       </StackItem>

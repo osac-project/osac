@@ -8,7 +8,6 @@ import { InputField } from '../../../../Form/InputField';
 import { NetworkAttachmentPickers } from '../../../../Form/NetworkAttachmentPickers';
 import OsacForm from '../../../../Form/OsacForm';
 import { getCatalogFieldOverlay, readCatalogFieldDefinitions } from '../../catalogOverlay';
-import { useWizardValidation } from '../../WizardValidationContext';
 
 interface Props {
   catalogItem: ClusterCatalogItem | null;
@@ -16,7 +15,6 @@ interface Props {
 
 export const ClusterNetworkingStep = ({ catalogItem }: Props) => {
   const { t } = useTranslation();
-  const { clearValidationAlert } = useWizardValidation();
 
   const definitions = useMemo(() => readCatalogFieldDefinitions(catalogItem), [catalogItem]);
   const podCidrOverlay = useMemo(
@@ -45,7 +43,6 @@ export const ClusterNetworkingStep = ({ catalogItem }: Props) => {
               autoExternalIpHelperText={t(
                 'Automatically provision external IPs for the cluster API and ingress endpoints.',
               )}
-              onResetToDefaults={clearValidationAlert}
             />
           </FormSection>
           <FormSection title={t('Cluster Networking')} titleElement="h2">

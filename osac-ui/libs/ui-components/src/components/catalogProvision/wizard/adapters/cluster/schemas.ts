@@ -2,6 +2,7 @@ import type { TFunction } from 'i18next';
 import * as yup from 'yup';
 
 import type { ClusterCatalogItem } from '@osac/types';
+import { buildNetworkAttachmentSchemas } from '@osac/ui-components/validation/network-attachment';
 import { resourceNameSchema } from '@osac/ui-components/validation/resource-name';
 
 import type { ClusterNodeSetRow } from './fields';
@@ -139,11 +140,6 @@ const buildClusterFieldDefinitions = (catalogItem: unknown, t: TFunction) => {
       ),
     }),
     specUseDefaultNetwork: yup.boolean(),
-    specNetworkAttachment: yup.object({
-      virtualNetwork: yup.object({ id: yup.string(), name: yup.string() }),
-      subnet: yup.object({ id: yup.string(), name: yup.string() }),
-      securityGroups: yup.array().of(yup.object({ id: yup.string(), name: yup.string() })),
-    }),
     specAutoExternalIpAttachment: yup.boolean(),
   };
 };
@@ -183,7 +179,8 @@ export const buildClusterStepSchema = (
           nodeSetRows: fields.specNodeSetRows,
         }),
       });
-    case 'networking':
+    case 'networking': {
+      const na = buildNetworkAttachmentSchemas(t);
       return yup.object({
         spec: yup.object({
           network: fields.specNetwork,
@@ -192,23 +189,21 @@ export const buildClusterStepSchema = (
             is: false,
             then: () =>
               yup.object({
-                virtualNetwork: yup.object({
-                  id: yup.string().required(t('Virtual network is required')),
-                  name: yup.string(),
-                }),
-                subnet: yup.object({
-                  id: yup.string().required(t('Subnet is required')),
-                  name: yup.string(),
-                }),
-                securityGroups: yup
-                  .array()
-                  .of(yup.object({ id: yup.string(), name: yup.string() })),
+                virtualNetwork: na.requiredVirtualNetwork,
+                subnet: na.requiredSubnet,
+                securityGroups: na.securityGroupsSchema,
               }),
-            otherwise: () => fields.specNetworkAttachment,
+            otherwise: () =>
+              yup.object({
+                virtualNetwork: na.optionalResourceSelect,
+                subnet: na.optionalResourceSelect,
+                securityGroups: na.securityGroupsSchema,
+              }),
           }),
           autoExternalIpAttachment: fields.specAutoExternalIpAttachment,
         }),
       });
+    }
     default:
       return undefined;
   }

@@ -1,7 +1,8 @@
 import type { TFunction } from 'i18next';
 import * as yup from 'yup';
 
-import { BareMetalInstanceCatalogItem } from '@osac/types';
+import type { BareMetalInstanceCatalogItem } from '@osac/types';
+import { buildNetworkAttachmentSchemas } from '@osac/ui-components/validation/network-attachment';
 import { resourceNameSchema } from '@osac/ui-components/validation/resource-name';
 import { userDataSchema } from '@osac/ui-components/validation/user-data';
 
@@ -129,19 +130,15 @@ export const buildBareMetalInstanceStepSchema = (
   }
 };
 
-const buildAttachmentRowSchema = (t: TFunction) =>
-  yup.object({
+const buildAttachmentRowSchema = (t: TFunction) => {
+  const na = buildNetworkAttachmentSchemas(t);
+  return yup.object({
     id: yup.string().required(),
-    virtualNetwork: yup.object({
-      id: yup.string().required(t('Virtual network is required')),
-      name: yup.string(),
-    }),
-    subnet: yup.object({
-      id: yup.string().required(t('Subnet is required')),
-      name: yup.string(),
-    }),
-    securityGroups: yup.array().of(yup.object({ id: yup.string(), name: yup.string() })),
+    virtualNetwork: na.requiredVirtualNetwork,
+    subnet: na.requiredSubnet,
+    securityGroups: na.securityGroupsSchema,
   });
+};
 
 const buildCustomAttachmentsSchema = (t: TFunction) =>
   yup

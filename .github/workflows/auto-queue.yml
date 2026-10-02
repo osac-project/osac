@@ -1,9 +1,9 @@
 ---
 name: auto-queue
 
-# Prow labels still required (label-gate). Human GitHub "Request changes"
-# also blocks until that reviewer approves or an admin dismisses. Bot
-# Request changes (CodeRabbit, etc.) are dismissed and do not block.
+# Queue policy lives in .github/scripts/auto-queue.sh. If lgtm is present,
+# every Request changes review is dismissed (OSAC-5507) and auto-merge is
+# enabled so required tests can run.
 on:
   pull_request_target:
     types: [opened, reopened, ready_for_review, synchronize, labeled, unlabeled]
@@ -18,306 +18,35 @@ jobs:
   enable-auto-merge:
     if: github.repository == 'osac-project/osac' && (github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review')
     runs-on: ubuntu-latest
-    permissions: {}
+    permissions:
+      contents: read  # checkout the base-branch script only
     steps:
-      - name: Remove lgtm on new push
-        if: github.event.action == 'synchronize'
+      # Base SHA, not the PR head: this job can run on pull_request_review.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - name: Sync merge queue
         env:
           GH_TOKEN: ${{ secrets.MERGE_QUEUE_TOKEN }}
-          PR: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
-        run: |
-          if gh pr view "$PR" --repo "$REPO" --json labels --jq '[.labels[].name]' | jq -e 'index("lgtm")' > /dev/null; then
-            echo "Removing lgtm label from PR #$PR after new push"
-            gh pr edit "$PR" --repo "$REPO" --remove-label lgtm
-          fi
-
-      - name: Dismiss bot changes-requested reviews
-        env:
-          GH_TOKEN: ${{ secrets.MERGE_QUEUE_TOKEN }}
           PR: ${{ github.event.pull_request.number }}
-          REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${GH_TOKEN:-}" ]]; then
-            echo "MERGE_QUEUE_TOKEN unavailable; skip bot review dismiss."
-            exit 0
-          fi
-          reviews=$(gh api --paginate --slurp "repos/${REPO}/pulls/${PR}/reviews" | jq 'add // []')
-          while read -r review_id; do
-            [[ -z "${review_id}" ]] && continue
-            echo "Dismissing bot review ${review_id} on PR #${PR}"
-            gh api "repos/${REPO}/pulls/${PR}/reviews/${review_id}/dismissals" \
-              -X PUT -f message="Auto-dismissed: bot Request changes do not block merge"
-          done < <(jq -r '
-            .[]
-            | select(.state == "CHANGES_REQUESTED")
-            | select(.user != null)
-            | select(((.user.login // "") | endswith("[bot]")) or ((.user.type // "") == "Bot"))
-            | .id
-          ' <<<"${reviews}")
-
-      - name: Check repo collaborator
-        id: org-check
-        env:
-          GH_TOKEN: ${{ secrets.MERGE_QUEUE_TOKEN }}
           AUTHOR: ${{ github.event.pull_request.user.login }}
-          DRAFT: ${{ github.event.pull_request.draft }}
-          REPO: ${{ github.repository }}
-        run: |
-          echo "author=$AUTHOR"
-          echo "draft=$DRAFT"
-          if gh api "repos/${REPO}/collaborators/${AUTHOR}"; then
-            echo "org_member=true"
-            echo "org_member=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "org_member=false"
-            echo "org_member=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Check merge blockers
-        if: steps.org-check.outputs.org_member == 'true'
-        id: label-check
-        env:
-          GH_TOKEN: ${{ secrets.MERGE_QUEUE_TOKEN }}
-          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
-          PR: ${{ github.event.pull_request.number }}
-          REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          echo "labels=$LABELS"
-          blocked=false
-          for label in "do-not-merge/hold" "do-not-merge/work-in-progress" "do-not-merge/invalid-owners-file" "needs-rebase"; do
-            if echo "$LABELS" | jq -e "index(\"$label\")" > /dev/null; then
-              echo "Blocking label found: $label"
-              blocked=true
-            fi
-          done
-
-          if [[ -z "${GH_TOKEN:-}" ]]; then
-            echo "MERGE_QUEUE_TOKEN unavailable; cannot evaluate human reviews. Treating as blocked."
-            blocked=true
-          else
-            reviews=$(gh api --paginate --slurp "repos/${REPO}/pulls/${PR}/reviews" | jq 'add // []')
-            set +e
-            jq -e '
-              [.[]
-                | select(.user != null)
-                | select(((.user.login // "") | endswith("[bot]")) | not)
-                | select((.user.type // "User") != "Bot")
-                | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED")
-              ]
-              | group_by(.user.login)
-              | map(max_by([(.submitted_at // ""), (.id // 0)]))
-              | map(select(.state == "CHANGES_REQUESTED"))
-              | length > 0
-            ' <<<"${reviews}" >/dev/null
-            rc=$?
-            set -e
-            if [[ ${rc} -eq 0 ]]; then
-              echo "Human CHANGES_REQUESTED still outstanding"
-              blocked=true
-            elif [[ ${rc} -ne 1 ]]; then
-              echo "Cannot evaluate human review state (jq rc=${rc}); treating as blocked."
-              blocked=true
-            fi
-          fi
-          eligible=true
-          for label in lgtm approved jira/valid-reference; do
-            if ! echo "$LABELS" | jq -e "index(\"$label\")" > /dev/null; then
-              echo "Missing required merge label: $label"
-              eligible=false
-            fi
-          done
-          echo "blocked=$blocked"
-          echo "blocked=$blocked" >> "$GITHUB_OUTPUT"
-          echo "eligible=$eligible"
-          echo "eligible=$eligible" >> "$GITHUB_OUTPUT"
-
-      - name: Enable auto-merge
-        if: >-
-          github.event.pull_request.draft == false
-          && steps.org-check.outputs.org_member == 'true'
-          && steps.label-check.outputs.blocked == 'false'
-          && steps.label-check.outputs.eligible == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.MERGE_QUEUE_TOKEN }}
-          PR: ${{ github.event.pull_request.number }}
-          REPO: ${{ github.repository }}
-        # No explicit strategy: the merge_queue ruleset on main already fixes
-        # the method (SQUASH). Passing --rebase here fails outright once a PR
-        # already has auto-merge enabled ("the merge strategy for main is set
-        # by the merge queue") -- harmless on first enable, but breaks the
-        # re-enable path used by requeue-eligible-prs below.
-        run: gh pr merge "$PR" --repo "$REPO" --auto
-
-      - name: Disable auto-merge
-        if: >-
-          steps.org-check.outputs.org_member == 'true'
-          && (
-            steps.label-check.outputs.blocked == 'true' ||
-            steps.label-check.outputs.eligible == 'false'
-          )
-        env:
-          GH_TOKEN: ${{ secrets.MERGE_QUEUE_TOKEN }}
-          PR: ${{ github.event.pull_request.number }}
-          REPO: ${{ github.repository }}
-        run: gh pr merge "$PR" --repo "$REPO" --disable-auto
+          ACTION: ${{ github.event.action }}
+        run: .github/scripts/auto-queue.sh sync
 
   requeue-eligible-prs:
     if: github.repository == 'osac-project/osac' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
-    permissions: {}
+    permissions:
+      contents: read  # checkout the base-branch script only
     steps:
-      - name: Re-enable auto-merge on eligible PRs
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Maintain merge queue
         env:
           GH_TOKEN: ${{ secrets.MERGE_QUEUE_TOKEN }}
           REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${GH_TOKEN:-}" ]]; then
-            echo "MERGE_QUEUE_TOKEN missing"
-            exit 1
-          fi
-          echo "Scanning for eligible PRs without auto-merge..."
-          prs=$(gh pr list --repo "${REPO}" --state open --limit 200 --json number,isDraft,labels,autoMergeRequest --jq '
-            [.[] | select(
-              .isDraft == false
-              and .autoMergeRequest == null
-              and ([.labels[].name] | contains(["lgtm","approved","jira/valid-reference"]))
-              and ([.labels[].name] | any(. == "do-not-merge/hold" or . == "do-not-merge/work-in-progress" or . == "do-not-merge/invalid-owners-file" or . == "needs-rebase") | not)
-            ) | .number]')
-          echo "Eligible PRs: $prs"
-          for pr in $(echo "$prs" | jq -r '.[]'); do
-            reviews=$(gh api --paginate --slurp "repos/${REPO}/pulls/${pr}/reviews" | jq 'add // []')
-            while read -r review_id; do
-              [[ -z "${review_id}" ]] && continue
-              echo "Dismissing bot review ${review_id} on PR #${pr}"
-              gh api "repos/${REPO}/pulls/${pr}/reviews/${review_id}/dismissals" \
-                -X PUT -f message="Auto-dismissed: bot Request changes do not block merge"
-            done < <(jq -r '
-              .[]
-              | select(.state == "CHANGES_REQUESTED")
-              | select(.user != null)
-              | select(((.user.login // "") | endswith("[bot]")) or ((.user.type // "") == "Bot"))
-              | .id
-            ' <<<"${reviews}")
-
-            set +e
-            jq -e '
-              [.[]
-                | select(.user != null)
-                | select(((.user.login // "") | endswith("[bot]")) | not)
-                | select((.user.type // "User") != "Bot")
-                | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED")
-              ]
-              | group_by(.user.login)
-              | map(max_by([(.submitted_at // ""), (.id // 0)]))
-              | map(select(.state == "CHANGES_REQUESTED"))
-              | length > 0
-            ' <<<"${reviews}" >/dev/null
-            rc=$?
-            set -e
-            if [[ ${rc} -eq 0 ]]; then
-              echo "Skipping PR #${pr}: human CHANGES_REQUESTED still outstanding"
-              continue
-            elif [[ ${rc} -ne 1 ]]; then
-              echo "Skipping PR #${pr}: cannot evaluate human review state (jq rc=${rc})"
-              continue
-            fi
-
-            echo "Re-enabling auto-merge on PR #$pr"
-            gh pr merge "$pr" --repo "${REPO}" --auto
-          done
-          echo "Scan complete."
-
-      # A PR can have auto-merge enabled and be fully green (mergeStateStatus
-      # CLEAN) yet never actually be sitting in the merge queue: GitHub only
-      # enqueues on specific triggers (new commit, review, label, or the
-      # enable-auto-merge call above), not on a passive change to *why* the
-      # PR became mergeable -- e.g. a branch-protection/ruleset update that
-      # drops a stale required check. The step above skips these PRs entirely
-      # (autoMergeRequest is already set), so they'd otherwise sit stuck
-      # indefinitely with no automation able to notice. Force them in
-      # directly via the enqueuePullRequest mutation, the same call GitHub's
-      # own "Merge when ready" button makes.
-      - name: Enqueue CLEAN PRs whose auto-merge never actually queued
-        env:
-          GH_TOKEN: ${{ secrets.MERGE_QUEUE_TOKEN }}
-          REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${GH_TOKEN:-}" ]]; then
-            echo "MERGE_QUEUE_TOKEN missing"
-            exit 1
-          fi
-          echo "Scanning CLEAN PRs with auto-merge already enabled..."
-          # mergeStateStatus alone is not enough: required_approving_review_count
-          # is 0 on this repo's pull_request ruleset rule, so CLEAN says nothing
-          # about outstanding human review state or do-not-merge/* labels --
-          # those are enforced only by this bot's own reactive logic elsewhere
-          # in this file (the enable-auto-merge job's Disable-auto-merge step),
-          # which could in principle miss an event. Reapply the same label and
-          # review checks used by the other two paths above before force-queueing.
-          prs=$(gh pr list --repo "${REPO}" --state open --limit 200 \
-            --json number,id,isDraft,mergeable,mergeStateStatus,autoMergeRequest,labels --jq '
-            [.[] | select(
-              .isDraft == false
-              and .autoMergeRequest != null
-              and .mergeable == "MERGEABLE"
-              and .mergeStateStatus == "CLEAN"
-              and ([.labels[].name] | contains(["lgtm","approved","jira/valid-reference"]))
-              and ([.labels[].name] | any(. == "do-not-merge/hold" or . == "do-not-merge/work-in-progress" or . == "do-not-merge/invalid-owners-file" or . == "needs-rebase") | not)
-            ) | {number, id}]')
-          echo "CLEAN with auto-merge already on, past label checks: $(echo "$prs" | jq -c '[.[].number]')"
-          echo "$prs" | jq -c '.[]' | while read -r pr; do
-            number=$(jq -r '.number' <<<"$pr")
-            id=$(jq -r '.id' <<<"$pr")
-
-            reviews=$(gh api --paginate --slurp "repos/${REPO}/pulls/${number}/reviews" | jq 'add // []')
-            set +e
-            jq -e '
-              [.[]
-                | select(.user != null)
-                | select(((.user.login // "") | endswith("[bot]")) | not)
-                | select((.user.type // "User") != "Bot")
-                | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED")
-              ]
-              | group_by(.user.login)
-              | map(max_by([(.submitted_at // ""), (.id // 0)]))
-              | map(select(.state == "CHANGES_REQUESTED"))
-              | length > 0
-            ' <<<"${reviews}" >/dev/null
-            rc=$?
-            set -e
-            if [[ ${rc} -eq 0 ]]; then
-              echo "Skipping PR #${number}: human CHANGES_REQUESTED still outstanding"
-              continue
-            elif [[ ${rc} -ne 1 ]]; then
-              echo "Skipping PR #${number}: cannot evaluate human review state (jq rc=${rc})"
-              continue
-            fi
-
-            if ! already_queued=$(gh api graphql -f query='
-              query($id: ID!) {
-                node(id: $id) {
-                  ... on PullRequest {
-                    mergeQueueEntry { id }
-                  }
-                }
-              }' -f id="$id" --jq '.data.node.mergeQueueEntry != null' 2>&1); then
-              echo "Failed to check merge-queue status for PR #${number}, skipping this run: ${already_queued}"
-              continue
-            fi
-            if [[ "${already_queued}" == "true" ]]; then
-              continue
-            fi
-            echo "PR #${number} is CLEAN with auto-merge on but not queued -- enqueuing"
-            gh api graphql -f query='
-              mutation($id: ID!) {
-                enqueuePullRequest(input: {pullRequestId: $id}) {
-                  mergeQueueEntry { position state }
-                }
-              }' -f id="$id" || echo "Failed to enqueue PR #${number}, will retry next run"
-          done
-          echo "Scan complete."
+        run: .github/scripts/auto-queue.sh maintain

@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { Alert, Button, FormGroup } from '@patternfly/react-core';
 import { MultiTypeaheadSelect, type MultiTypeaheadSelectOption } from '@patternfly/react-templates';
-import { useField, useFormikContext } from 'formik';
+import { useField } from 'formik';
 
 import { SecurityGroups, Subnets, VirtualNetworks } from '@osac/types';
 
@@ -11,16 +11,10 @@ import { emptyResourceSelectValue } from './resourceSelectValue';
 import { useListResource } from '../../api/use-resource';
 import {
   VIRTUAL_NETWORK_READY_LIST_FILTER,
-  resourceDisplayName,
   securityGroupFilterForVirtualNetworkList,
   virtualNetworkFilterForSubnetList,
 } from '../../api/v1/networking';
 import { useTranslation } from '../../hooks/useTranslation';
-
-interface ResourceListItem {
-  id: string;
-  metadata?: { name?: string };
-}
 
 interface NetworkAttachmentPickersProps {
   /** Formik field-path prefix, e.g. "spec.networkAttachment". */
@@ -57,10 +51,8 @@ export const NetworkAttachmentPickers = ({
   autoExternalIpHelperText,
 }: NetworkAttachmentPickersProps) => {
   const { t } = useTranslation();
-  const { setFieldTouched } = useFormikContext();
 
-  const [useDefaultField] = useField<boolean>(useDefaultNetworkName);
-  const useDefaultNetwork = useDefaultField.value;
+  const [{ value: defaultNetwork }] = useField<boolean>(useDefaultNetworkName);
 
   const [vnField] = useField<ResourceSelectValue>(`${fieldPrefix}.virtualNetwork`);
   const [, , subnetHelpers] = useField<ResourceSelectValue>(`${fieldPrefix}.subnet`);
@@ -81,19 +73,13 @@ export const NetworkAttachmentPickers = ({
     enabled: Boolean(virtualNetworkId),
   });
 
-  const securityGroups = useMemo(
-    () =>
-      ((securityGroupsData as { items?: ResourceListItem[] } | undefined)?.items ?? []).filter(
-        (item) => item.id,
-      ),
-    [securityGroupsData],
-  );
+  const securityGroups = useMemo(() => securityGroupsData?.items ?? [], [securityGroupsData]);
 
   const securityGroupOptions = useMemo(
     () =>
       securityGroups.map((group) => ({
         value: group.id,
-        label: resourceDisplayName(group.metadata, group.id),
+        label: group.metadata?.name ?? group.id,
       })),
     [securityGroups],
   );
@@ -118,15 +104,8 @@ export const NetworkAttachmentPickers = ({
         name={useDefaultNetworkName}
         label={t('Use tenant default network')}
         fieldId={`${fieldIdPrefix}-use-default-network`}
-        onChange={(checked) => {
-          if (checked) {
-            void setFieldTouched(`${fieldPrefix}.virtualNetwork`, false, false);
-            void setFieldTouched(`${fieldPrefix}.subnet`, false, false);
-            void setFieldTouched(`${fieldPrefix}.securityGroups`, false, false);
-          }
-        }}
       />
-      {!useDefaultNetwork && (
+      {!defaultNetwork && (
         <>
           <ResourceSelectField
             name={`${fieldPrefix}.virtualNetwork`}

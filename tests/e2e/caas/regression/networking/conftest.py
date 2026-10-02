@@ -84,7 +84,7 @@ def cluster_template() -> str:
 def caas_worker_node_sets(private_grpc: GRPCClient) -> dict[str, dict[str, object]]:
     """Provide one worker set backed by the virtual Metal3 hosts in CaaS CI."""
     instance_type = "ci-worker-bm"
-    private_grpc.ensure_baremetal_instance_type(
+    private_grpc.ensure_bare_metal_instance_type(
         name=instance_type, host_label_selector={"osac.openshift.io/host-type": "default"}
     )
     return {"workers": {"size": 1, "baremetal_instance_type": {"name": instance_type}}}

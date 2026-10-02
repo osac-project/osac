@@ -103,11 +103,8 @@ def fabric_domain_resources(
     if not default_network_class or not (
         default_network_class.get("status", {}).get("state") == "NETWORK_CLASS_STATE_READY"
         and default_network_class.get("capabilities", {}).get("supportsEastWestEthernet")
-        and default_network_class.get("spec", {}).get("eastWestConfig", {}).get("ethernetEw", {}).get("templateId")
     ):
-        pytest.skip(
-            "FabricDomain E2E requires a ready default NetworkClass with Ethernet east-west support and a template ID"
-        )
+        pytest.skip("FabricDomain E2E requires a ready default NetworkClass with Ethernet east-west support")
 
     resources = FabricDomainResources(clients={"tenant1": jwt_grpc_tenant1_admin, "tenant2": jwt_grpc_tenant2})
     octet = int(uuid4().hex[:2], 16)

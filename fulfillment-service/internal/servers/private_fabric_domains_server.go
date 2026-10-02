@@ -228,8 +228,5 @@ func (s *PrivateFabricDomainsServer) validateFabricDomain(ctx context.Context, o
 	if !nc.GetCapabilities().GetSupportsEastWestEthernet() {
 		return grpcstatus.Error(grpccodes.InvalidArgument, "type does not match NetworkClass capability")
 	}
-	if nc.GetSpec().GetEastWestConfig().GetEthernetEw().GetTemplateId() == "" {
-		return grpcstatus.Error(grpccodes.FailedPrecondition, "NetworkClass missing template_id for ethernet_ew")
-	}
 	return nil
 }

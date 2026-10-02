@@ -275,7 +275,7 @@ func (t *task) initHub(ctx context.Context) (bool, error) {
 	if t.fabricDomain.GetStatus().GetHub() != "" {
 		return false, nil
 	}
-	hubs, err := t.listHubs(ctx)
+	hubs, err := controllers.ListAllHubs(ctx, t.r.hubsClient)
 	if err != nil {
 		return false, err
 	}
@@ -309,35 +309,6 @@ func (t *task) initHub(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-func (t *task) listHubs(ctx context.Context) ([]*privatev1.Hub, error) {
-	const limit int32 = 100
-	var result []*privatev1.Hub
-	var offset int32
-	for {
-		response, err := t.r.hubsClient.List(ctx, privatev1.HubsListRequest_builder{
-			Offset: &offset, Limit: proto.Int32(limit),
-		}.Build())
-		if err != nil {
-			return nil, err
-		}
-		if response == nil {
-			return nil, errors.New("hub search returned an empty response")
-		}
-		items := response.GetItems()
-		result = append(result, items...)
-		if int64(len(result)) >= int64(response.GetTotal()) {
-			return result, nil
-		}
-		if len(items) == 0 {
-			return nil, errors.New("hub search returned an incomplete page")
-		}
-		if int64(response.GetSize()) != int64(len(items)) {
-			return nil, errors.New("hub search returned an inconsistent page size")
-		}
-		offset += response.GetSize()
-	}
-}
-
 func (t *task) getKubeObject(ctx context.Context) (*osacv1alpha1.FabricDomain, error) {
 	list := &osacv1alpha1.FabricDomainList{}
 	if err := t.hubClient.List(ctx, list, clnt.InNamespace(t.hubNamespace),
@@ -351,11 +322,7 @@ func (t *task) getKubeObject(ctx context.Context) (*osacv1alpha1.FabricDomain, e
 	if len(list.Items) == 0 {
 		return nil, nil
 	}
-	object := &list.Items[0]
-	if object.Annotations[annotations.Tenant] != t.fabricDomain.GetMetadata().GetTenant() {
-		return nil, errors.New("fabric domain CR tenant does not match the API object")
-	}
-	return object, nil
+	return &list.Items[0], nil
 }
 
 func (t *task) desiredAnnotations() map[string]string {

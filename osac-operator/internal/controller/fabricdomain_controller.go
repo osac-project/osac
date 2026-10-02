@@ -45,13 +45,14 @@ import (
 )
 
 const (
-	osacFabricDomainFinalizer           = "osac.openshift.io/fabricdomain-finalizer"
-	osacFabricDomainProtectionFinalizer = "osac.openshift.io/fabricdomain-protection"
-	fabricDomainConfigResyncInterval    = 5 * time.Minute
-	fabricDomainUnsupportedTypeReason   = "UnsupportedType"
-	fabricDomainMissingBackendIDReason  = "MissingBackendID"
-	fabricDomainNetworkClassUnavailable = "NetworkClassUnavailable"
-	fabricDomainVirtualNetworkNotReady  = "VirtualNetworkNotReady"
+	osacFabricDomainFinalizer              = "osac.openshift.io/fabricdomain-finalizer"
+	osacFabricDomainProtectionFinalizer    = "osac.openshift.io/fabricdomain-protection"
+	fabricDomainConfigResyncInterval       = 5 * time.Minute
+	fabricDomainUnsupportedTypeReason      = "UnsupportedType"
+	fabricDomainMissingBackendIDReason     = "MissingBackendID"
+	fabricDomainNetworkClassUnavailable    = "NetworkClassUnavailable"
+	fabricDomainVirtualNetworkNotReady     = "VirtualNetworkNotReady"
+	fabricDomainProvisioningFailureMessage = "provisioning failed; consult administrator logs for details"
 )
 
 // FabricDomainReconciler reconciles FabricDomain resources into Netris server clusters.
@@ -63,6 +64,8 @@ type FabricDomainReconciler struct {
 	ProvisioningProvider         provisioning.ProvisioningProvider
 	NetworkClassesClient         privatev1.NetworkClassesClient
 	BareMetalInstanceTypesClient privatev1.BareMetalInstanceTypesClient
+	FabricDomainsClient          privatev1.FabricDomainsClient
+	VirtualNetworksClient        privatev1.VirtualNetworksClient
 	StatusPollInterval           time.Duration
 	MaxJobHistory                int
 	NetworkProvisioningEnabled   bool
@@ -234,9 +237,20 @@ func (r *FabricDomainReconciler) resolveFabricDomainVirtualNetwork(ctx context.C
 		setFabricDomainCondition(domain, metav1.ConditionFalse, fabricDomainVirtualNetworkNotReady, message)
 		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
-	if tenant := domain.Annotations[osacTenantKey]; tenant == "" || vnet.Annotations[osacTenantKey] != tenant {
+	if r.FabricDomainsClient == nil || r.VirtualNetworksClient == nil {
+		domain.Status.Phase = v1alpha1.FabricDomainPhaseProgressing
+		setFabricDomainCondition(domain, metav1.ConditionFalse, "TenantVerificationUnavailable",
+			"authoritative tenant ownership could not be verified; waiting for Fulfillment API connectivity")
+		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+	}
+	mismatch, err := r.fabricDomainTenantMismatch(ctx, domain, vnet)
+	if err != nil {
+		return nil, ctrl.Result{}, fmt.Errorf("verifying FabricDomain tenant ownership: %w", err)
+	}
+	if mismatch {
 		domain.Status.Phase = v1alpha1.FabricDomainPhaseFailed
-		setFabricDomainCondition(domain, metav1.ConditionFalse, "TenantMismatch", "FabricDomain and VirtualNetwork must have the same nonempty tenant annotation")
+		setFabricDomainCondition(domain, metav1.ConditionFalse, "TenantMismatch",
+			"FabricDomain and VirtualNetwork ownership could not be verified against Fulfillment metadata")
 		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
 	if controllerutil.AddFinalizer(vnet, osacFabricDomainProtectionFinalizer) {
@@ -246,6 +260,41 @@ func (r *FabricDomainReconciler) resolveFabricDomainVirtualNetwork(ctx context.C
 		return nil, ctrl.Result{}, nil
 	}
 	return vnet, ctrl.Result{}, nil
+}
+
+func (r *FabricDomainReconciler) fabricDomainTenantMismatch(
+	ctx context.Context, domain *v1alpha1.FabricDomain, vnet *v1alpha1.VirtualNetwork,
+) (bool, error) {
+	fabricDomainID := domain.Labels[osacFabricDomainIDLabel]
+	virtualNetworkID := vnet.Labels[osacVirtualNetworkIDLabel]
+	if fabricDomainID == "" || virtualNetworkID == "" || domain.Spec.VirtualNetwork != virtualNetworkID {
+		return true, nil
+	}
+	domainResponse, err := r.FabricDomainsClient.Get(ctx, privatev1.FabricDomainsGetRequest_builder{Id: fabricDomainID}.Build())
+	if err != nil {
+		return false, err
+	}
+	if domainResponse == nil {
+		return true, nil
+	}
+	apiDomain := domainResponse.GetObject()
+	if apiDomain == nil || apiDomain.GetId() != fabricDomainID || apiDomain.GetSpec().GetVirtualNetwork() != virtualNetworkID {
+		return true, nil
+	}
+	vnetResponse, err := r.VirtualNetworksClient.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: virtualNetworkID}.Build())
+	if err != nil {
+		return false, err
+	}
+	if vnetResponse == nil {
+		return true, nil
+	}
+	apiVNet := vnetResponse.GetObject()
+	if apiVNet == nil || apiVNet.GetId() != virtualNetworkID {
+		return true, nil
+	}
+	domainTenant := apiDomain.GetMetadata().GetTenant()
+	vnetTenant := apiVNet.GetMetadata().GetTenant()
+	return domainTenant == "" || vnetTenant == "" || domainTenant != vnetTenant, nil
 }
 
 func (r *FabricDomainReconciler) resolveFabricDomainProvisioningConfig(
@@ -260,9 +309,10 @@ func (r *FabricDomainReconciler) resolveFabricDomainProvisioningConfig(
 		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
 	if !validNetrisID(vnet.Status.BackendNetworkID) {
-		message := fmt.Sprintf("VirtualNetwork %q has invalid Netris VPC ID %q", vnet.Name, vnet.Status.BackendNetworkID)
+		ctrllog.FromContext(ctx).Error(fmt.Errorf("VirtualNetwork %q has invalid Netris VPC ID %q", vnet.Name, vnet.Status.BackendNetworkID),
+			"FabricDomain VirtualNetwork has an invalid backend identifier")
 		domain.Status.Phase = v1alpha1.FabricDomainPhaseFailed
-		setFabricDomainCondition(domain, metav1.ConditionFalse, "InvalidVPCID", message)
+		setFabricDomainCondition(domain, metav1.ConditionFalse, "InvalidVPCID", "VirtualNetwork has an invalid backend identifier; consult administrator logs")
 		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
 
@@ -308,8 +358,9 @@ func (r *FabricDomainReconciler) resolveFabricDomainProvisioningConfig(
 	}
 	templateID, instanceTypes, err := r.resolveFabricDomainHardware(ctx, domain, networkClassID)
 	if err != nil {
+		ctrllog.FromContext(ctx).Error(err, "failed to resolve FabricDomain hardware binding", "fabricDomain", client.ObjectKeyFromObject(domain))
 		domain.Status.Phase = v1alpha1.FabricDomainPhaseFailed
-		setFabricDomainCondition(domain, metav1.ConditionFalse, "InvalidHardwareBinding", err.Error())
+		setFabricDomainCondition(domain, metav1.ConditionFalse, "InvalidHardwareBinding", "FabricDomain hardware configuration is invalid; consult administrator logs")
 		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
 	if r.ProvisioningProvider == nil {
@@ -344,7 +395,7 @@ func (r *FabricDomainReconciler) runFabricDomainProvisioning(
 	result, err := provisioning.RunProvisioningLifecycle(aapCtx, r.ProvisioningProvider, domain,
 		&provisioning.State{Jobs: &domain.Status.ProvisioningJobs, DesiredConfigVersion: desiredVersion},
 		r.MaxJobHistory, r.StatusPollInterval,
-		fabricDomainPollCallbacks(domain, desiredVersion),
+		fabricDomainPollCallbacks(ctx, domain, desiredVersion),
 		func() bool {
 			return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, r.APIReader,
 				client.ObjectKeyFromObject(domain), &v1alpha1.FabricDomain{}, func(obj client.Object) []v1alpha1.JobStatus {
@@ -369,12 +420,17 @@ func (r *FabricDomainReconciler) runFabricDomainProvisioning(
 	return result, nil
 }
 
-func fabricDomainPollCallbacks(domain *v1alpha1.FabricDomain, desiredVersion string) *provisioning.PollCallbacks {
+func fabricDomainPollCallbacks(ctx context.Context, domain *v1alpha1.FabricDomain, desiredVersion string) *provisioning.PollCallbacks {
 	return &provisioning.PollCallbacks{
 		OnFailed: func(message string) {
+			ctrllog.FromContext(ctx).Error(fmt.Errorf("AAP reported FabricDomain provisioning failure: %s", message),
+				"FabricDomain provisioning failed", "fabricDomain", client.ObjectKeyFromObject(domain))
 			domain.Status.Phase = v1alpha1.FabricDomainPhaseFailed
-			domain.Status.Members = failedFabricDomainMembers(domain.Spec.Servers, message)
-			setReadyConditionFailed(&domain.Status.Conditions, message)
+			domain.Status.Members = failedFabricDomainMembers(domain.Spec.Servers, fabricDomainProvisioningFailureMessage)
+			if job := provisioning.FindLatestJobByType(domain.Status.ProvisioningJobs, v1alpha1.JobTypeProvision); job != nil {
+				job.Message = fabricDomainProvisioningFailureMessage
+			}
+			setReadyConditionFailed(&domain.Status.Conditions, fabricDomainProvisioningFailureMessage)
 		},
 		OnSuccess: func(status provisioning.ProvisionStatus) {
 			backendID := outputString(status.Outputs, "server_cluster_id", "backend_id", "backendId")
@@ -383,17 +439,21 @@ func fabricDomainPollCallbacks(domain *v1alpha1.FabricDomain, desiredVersion str
 			}
 			if !validNetrisID(backendID) {
 				domain.Status.Phase = v1alpha1.FabricDomainPhaseFailed
-				message := fmt.Sprintf("AAP job succeeded but returned invalid server_cluster_id artifact %q", backendID)
-				markFabricDomainProvisionJobFailed(domain, desiredVersion, message)
-				setFabricDomainCondition(domain, metav1.ConditionFalse, fabricDomainMissingBackendIDReason, message)
+				ctrllog.FromContext(ctx).Error(fmt.Errorf("AAP returned invalid server_cluster_id artifact %q", backendID),
+					"FabricDomain provisioning completed without a valid backend identifier", "fabricDomain", client.ObjectKeyFromObject(domain))
+				markFabricDomainProvisionJobFailed(domain, desiredVersion, fabricDomainProvisioningFailureMessage)
+				setFabricDomainCondition(domain, metav1.ConditionFalse, fabricDomainMissingBackendIDReason,
+					"AAP completed without a valid backend identifier; consult administrator logs")
 				return
 			}
 			domain.Status.BackendID = backendID
 			if vpcID := outputString(status.Outputs, "server_cluster_vpc_id", "vpc_id", "vpcId"); vpcID != "" && vpcID != domain.Status.VPCID {
-				message := fmt.Sprintf("AAP job returned VPC ID %q, expected %q", vpcID, domain.Status.VPCID)
+				ctrllog.FromContext(ctx).Error(fmt.Errorf("AAP job returned VPC ID %q, expected %q", vpcID, domain.Status.VPCID),
+					"FabricDomain provisioning returned a mismatched VPC", "fabricDomain", client.ObjectKeyFromObject(domain))
 				domain.Status.Phase = v1alpha1.FabricDomainPhaseFailed
-				markFabricDomainProvisionJobFailed(domain, desiredVersion, message)
-				setFabricDomainCondition(domain, metav1.ConditionFalse, "MismatchedVPCID", message)
+				markFabricDomainProvisionJobFailed(domain, desiredVersion, fabricDomainProvisioningFailureMessage)
+				setFabricDomainCondition(domain, metav1.ConditionFalse, "MismatchedVPCID",
+					"AAP returned a backend identifier for a different VirtualNetwork; consult administrator logs")
 				return
 			}
 			if job := provisioning.FindLatestJobByType(domain.Status.ProvisioningJobs, v1alpha1.JobTypeProvision); job != nil &&
@@ -405,6 +465,9 @@ func fabricDomainPollCallbacks(domain *v1alpha1.FabricDomain, desiredVersion str
 			}
 			domain.Status.Phase = v1alpha1.FabricDomainPhaseReady
 			domain.Status.Members = activeFabricDomainMembers(domain.Spec.Servers)
+			if job := provisioning.FindLatestJobByType(domain.Status.ProvisioningJobs, v1alpha1.JobTypeProvision); job != nil {
+				job.Message = "AAP provisioning completed"
+			}
 			setReadyConditionTrue(&domain.Status.Conditions)
 		},
 	}

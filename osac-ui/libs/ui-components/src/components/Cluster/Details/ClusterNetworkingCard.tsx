@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import {
   Card,
   CardBody,
@@ -9,12 +10,46 @@ import {
   Flex,
   FlexItem,
   Label,
+  Spinner,
 } from '@patternfly/react-core';
 
-import { type Cluster, ClusterState } from '@osac/types';
+import { type Cluster, ClusterState, ExternalIPAttachmentEndpoint } from '@osac/types';
+import type { ExternalIPAttachment } from '@osac/types';
 
+import { useExternalIPAttachments } from '../../../api/v1/external-ip';
+import { clusterAttachmentFilter } from '../../../api/v1/external-ip-data';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { displayValue } from '../../../utils/detailFormatters';
+
+export interface EndpointAttachmentStatus {
+  attachment: ExternalIPAttachment | undefined;
+  externalIpAddress: string | undefined;
+}
+
+export interface ClusterEndpointAttachments {
+  api: EndpointAttachmentStatus;
+  ingress: EndpointAttachmentStatus;
+}
+
+export const groupAttachmentsByEndpoint = (
+  attachments: readonly ExternalIPAttachment[],
+): ClusterEndpointAttachments => {
+  let api: EndpointAttachmentStatus = { attachment: undefined, externalIpAddress: undefined };
+  let ingress: EndpointAttachmentStatus = { attachment: undefined, externalIpAddress: undefined };
+
+  for (const attachment of attachments) {
+    const endpoint = attachment.spec?.targetEndpoint;
+    const ipAddress = attachment.status?.externalIpAddress || undefined;
+
+    if (endpoint === ExternalIPAttachmentEndpoint.EXTERNAL_IP_ATTACHMENT_ENDPOINT_API) {
+      api = { attachment, externalIpAddress: ipAddress };
+    } else if (endpoint === ExternalIPAttachmentEndpoint.EXTERNAL_IP_ATTACHMENT_ENDPOINT_INGRESS) {
+      ingress = { attachment, externalIpAddress: ipAddress };
+    }
+  }
+
+  return { api, ingress };
+};
 
 interface ClusterNetworkingCardProps {
   cluster: Cluster;
@@ -45,6 +80,19 @@ const ClusterNetworkingCard = ({ cluster }: ClusterNetworkingCardProps) => {
   const isProvisioning = clusterState === ClusterState.PROGRESSING;
   const isFailed = isTerminalFailedState(clusterState);
 
+  const {
+    data: externalIpAttachments = [],
+    isLoading: isLoadingAttachments,
+  } = useExternalIPAttachments(
+    { filter: clusterAttachmentFilter(cluster.id) },
+    { enabled: Boolean(cluster.id) },
+  );
+
+  const endpointAttachments = useMemo(
+    () => groupAttachmentsByEndpoint(externalIpAttachments),
+    [externalIpAttachments],
+  );
+
   const renderEndpointValue = (value: string | undefined) => {
     if (value?.trim()) {
       return value.trim();
@@ -58,17 +106,39 @@ const ClusterNetworkingCard = ({ cluster }: ClusterNetworkingCardProps) => {
     return '—';
   };
 
-  const renderEndpointDescription = (value: string | undefined) => {
+  const renderExternalIpLabel = (status: EndpointAttachmentStatus) => {
+    if (isLoadingAttachments) {
+      return <Spinner size="sm" aria-label={t('Loading external IP')} />;
+    }
+    if (status.externalIpAddress) {
+      return (
+        <Label color="green" isCompact>
+          {status.externalIpAddress}
+        </Label>
+      );
+    }
+    return null;
+  };
+
+  const renderEndpointDescription = (
+    value: string | undefined,
+    attachmentStatus: EndpointAttachmentStatus,
+  ) => {
     const displayText = renderEndpointValue(value);
-    if (autoProvisioned) {
+    const externalIpLabel = renderExternalIpLabel(attachmentStatus);
+
+    if (autoProvisioned || externalIpLabel) {
       return (
         <Flex spaceItems={{ default: 'spaceItemsSm' }} alignItems={{ default: 'alignItemsCenter' }}>
           <FlexItem>{displayText}</FlexItem>
-          <FlexItem>
-            <Label color="blue" isCompact>
-              {t('Auto-provisioned')}
-            </Label>
-          </FlexItem>
+          {autoProvisioned && (
+            <FlexItem>
+              <Label color="blue" isCompact>
+                {t('Auto-provisioned')}
+              </Label>
+            </FlexItem>
+          )}
+          {externalIpLabel && <FlexItem>{externalIpLabel}</FlexItem>}
         </Flex>
       );
     }
@@ -101,13 +171,13 @@ const ClusterNetworkingCard = ({ cluster }: ClusterNetworkingCardProps) => {
           <DescriptionListGroup>
             <DescriptionListTerm>{t('API endpoint')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {renderEndpointDescription(apiEndpoint)}
+              {renderEndpointDescription(apiEndpoint, endpointAttachments.api)}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Ingress endpoint')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {renderEndpointDescription(ingressEndpoint)}
+              {renderEndpointDescription(ingressEndpoint, endpointAttachments.ingress)}
             </DescriptionListDescription>
           </DescriptionListGroup>
         </DescriptionList>

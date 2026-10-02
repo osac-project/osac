@@ -261,8 +261,11 @@ var _ = Describe("Private clusters server", func() {
 					privatev1.BareMetalInstanceType_builder{
 						Id: "bmit-fabric-id",
 						Metadata: privatev1.Metadata_builder{
-							Name:   "bmit-fabric-name",
-							Tenant: testTenant,
+							Name: "bmit-fabric-name",
+							// BareMetalInstanceType is platform-scoped: the write path
+							// forces the shared tenant, and resolution scopes lookups to
+							// it. Seed the fixture in the shared tenant to match.
+							Tenant: auth.SharedTenant,
 						}.Build(),
 						Spec: privatev1.BareMetalInstanceTypeSpec_builder{
 							Hardware: privatev1.BareMetalHardwareSpec_builder{
@@ -297,8 +300,9 @@ var _ = Describe("Private clusters server", func() {
 					privatev1.BareMetalInstanceType_builder{
 						Id: "bmit-no-fabric-id",
 						Metadata: privatev1.Metadata_builder{
-							Name:   "bmit-no-fabric-name",
-							Tenant: testTenant,
+							Name: "bmit-no-fabric-name",
+							// Platform-scoped, like bmit-fabric above: seed in the shared tenant.
+							Tenant: auth.SharedTenant,
 						}.Build(),
 						Spec: privatev1.BareMetalInstanceTypeSpec_builder{
 							Hardware: privatev1.BareMetalHardwareSpec_builder{

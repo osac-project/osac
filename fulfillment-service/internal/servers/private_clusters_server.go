@@ -18,7 +18,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strconv"
 	"strings"
 
 	"github.com/bits-and-blooms/bitset"
@@ -593,41 +592,6 @@ func (s *PrivateClustersServer) validatePullSecretSecret(
 		privatev1.SecretType_SECRET_TYPE_PULL_SECRET)
 }
 
-func (s *PrivateClustersServer) lookupBareMetalInstanceType(ctx context.Context,
-	key string) (result *privatev1.BareMetalInstanceType, err error) {
-	if key == "" {
-		return
-	}
-	response, err := s.bareMetalInstanceTypesDao.List().
-		SetFilter(fmt.Sprintf("this.id == %[1]s || this.metadata.name == %[1]s", strconv.Quote(key))).
-		SetLimit(1).
-		Do(ctx)
-	if err != nil {
-		var deniedErr *dao.ErrDenied
-		if errors.As(err, &deniedErr) {
-			err = grpcstatus.Errorf(grpccodes.PermissionDenied, "%s", deniedErr.Reason)
-		}
-		return
-	}
-	switch response.GetTotal() {
-	case 0:
-		err = grpcstatus.Errorf(
-			grpccodes.NotFound,
-			"there is no bare metal instance type with identifier or name '%s'",
-			key,
-		)
-	case 1:
-		result = response.GetItems()[0]
-	default:
-		err = grpcstatus.Errorf(
-			grpccodes.InvalidArgument,
-			"there are multiple bare metal instance types with identifier or name '%s'",
-			key,
-		)
-	}
-	return
-}
-
 // ensureClusterVersion makes sure the cluster spec has a usable version reference: if the user didn't provide one, it
 // resolves the system default. Either way, it validates that the resulting ClusterVersion isn't deleted, disabled,
 // or obsolete.
@@ -1139,19 +1103,19 @@ func (s *PrivateClustersServer) validateAutoExternalIPImmutability(ctx context.C
 // looking up the BareMetalInstanceType and selecting the first port with role "fabric".
 func (s *PrivateClustersServer) resolveFabricInterfaces(ctx context.Context, spec *privatev1.ClusterSpec) error {
 	for name, nodeSet := range spec.GetNodeSets() {
-		bmitKey := refKey(nodeSet.GetBaremetalInstanceType())
-		if bmitKey == "" {
+		bmitRef := nodeSet.GetBaremetalInstanceType()
+		if refKey(bmitRef) == "" {
 			// Template-derived node sets may have no BareMetalInstanceType yet;
 			// the fabric interface will be resolved once the caller supplies one.
 			continue
 		}
-		bmit, err := s.lookupBareMetalInstanceType(ctx, bmitKey)
+		bmit, err := resolveResourceInScope(ctx, s.bareMetalInstanceTypesDao,
+			referenceScope{tenant: auth.SharedTenant},
+			bmitRef.GetId(), bmitRef.GetName(),
+			"bare metal instance type", fmt.Sprintf(" in node_sets[%s]", name),
+			grpccodes.NotFound)
 		if err != nil {
 			return err
-		}
-		if bmit == nil {
-			return grpcstatus.Errorf(grpccodes.NotFound,
-				"node_sets[%s]: bare metal instance type '%s' not found", name, bmitKey)
 		}
 		fabricInterface := ""
 		for _, port := range bmit.GetSpec().GetHardware().GetNetworkPorts() {
@@ -1163,7 +1127,7 @@ func (s *PrivateClustersServer) resolveFabricInterfaces(ctx context.Context, spe
 		if fabricInterface == "" {
 			return grpcstatus.Errorf(grpccodes.FailedPrecondition,
 				"node_sets[%s]: bare metal instance type '%s' has no network port with role 'fabric'",
-				name, bmitKey)
+				name, refKey(bmitRef))
 		}
 		nodeSet.SetFabricInterface(fabricInterface)
 	}
@@ -1401,20 +1365,18 @@ func (s *PrivateClustersServer) resolveClusterNodeSets(ctx context.Context, clus
 		}
 
 		// Resolve baremetal_instance_type when present. Missing BMIT is not an error —
-		// legacy clusters may only carry a host_type reference.
-		if bmitRef := node.GetBaremetalInstanceType(); bmitRef != nil {
-			bmitKey := refKey(bmitRef)
-			if bmitKey != "" {
-				bmit, err := s.lookupBareMetalInstanceType(ctx, bmitKey)
-				if err != nil {
-					return err
-				}
-				if bmit != nil {
-					node.SetBaremetalInstanceType(privatev1.BareMetalInstanceTypeReference_builder{
-						Id: bmit.GetId(), Name: bmit.GetMetadata().GetName(), Shared: true,
-					}.Build())
-				}
+		// legacy clusters may only carry a host_type reference. BareMetalInstanceType is
+		// platform-scoped, so resolve it strictly in the shared tenant and canonicalize.
+		if bmitRef := node.GetBaremetalInstanceType(); bmitRef != nil && refKey(bmitRef) != "" {
+			bmit, err := resolveResourceInScope(ctx, s.bareMetalInstanceTypesDao,
+				referenceScope{tenant: auth.SharedTenant},
+				bmitRef.GetId(), bmitRef.GetName(),
+				"bare metal instance type", fmt.Sprintf(" in node set '%s'", name),
+				grpccodes.NotFound)
+			if err != nil {
+				return err
 			}
+			node.SetBaremetalInstanceType(canonicalBareMetalInstanceTypeReference(bmit))
 		}
 	}
 	cluster.GetSpec().SetNodeSets(nodes)

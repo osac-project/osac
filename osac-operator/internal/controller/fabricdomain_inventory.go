@@ -39,38 +39,37 @@ const fabricDomainInventoryName = "osac-fabric-domain-inventory"
 const fabricDomainCatalogPageSize int32 = 100
 
 type resolvedFabricDomainConfig struct {
-	Binding       v1alpha1.FabricDomainProvisioningConfig
-	InstanceTypes map[string]string
+	Binding v1alpha1.FabricDomainProvisioningConfig
 }
 
 // resolveFabricDomainHardware deliberately does not infer a type from label selectors:
 // more than one catalog type can match a host, and an unallocated host has no BMI yet.
 func (r *FabricDomainReconciler) resolveFabricDomainHardware(
 	ctx context.Context, domain *v1alpha1.FabricDomain, networkClassID string,
-) (string, map[string]string, error) {
+) (string, error) {
 	if r.BareMetalInstanceTypesClient == nil {
-		return "", nil, fmt.Errorf("the private BareMetalInstanceTypes client is not configured")
+		return "", fmt.Errorf("the private BareMetalInstanceTypes client is not configured")
 	}
 	inventory := &corev1.ConfigMap{}
 	if err := r.Get(ctx, client.ObjectKey{Namespace: domain.Namespace, Name: fabricDomainInventoryName}, inventory); err != nil {
-		return "", nil, fmt.Errorf("reading administrator inventory %s/%s: %w", domain.Namespace, fabricDomainInventoryName, err)
+		return "", fmt.Errorf("reading administrator inventory %s/%s: %w", domain.Namespace, fabricDomainInventoryName, err)
 	}
 	if len(domain.Spec.Servers) == 0 {
-		return "", nil, fmt.Errorf("the servers list must not be empty")
+		return "", fmt.Errorf("the servers list must not be empty")
 	}
 	memberTypes := make(map[string]string, len(domain.Spec.Servers))
 	typeIDs := make([]string, 0, len(domain.Spec.Servers))
 	firstServerByType := make(map[string]string, len(domain.Spec.Servers))
 	for _, server := range domain.Spec.Servers {
 		if server == "" || strings.TrimSpace(server) != server {
-			return "", nil, fmt.Errorf("invalid inventory hostname %q", server)
+			return "", fmt.Errorf("invalid inventory hostname %q", server)
 		}
 		if _, duplicate := memberTypes[server]; duplicate {
-			return "", nil, fmt.Errorf("duplicate inventory hostname %q", server)
+			return "", fmt.Errorf("duplicate inventory hostname %q", server)
 		}
 		typeID := inventory.Data[server]
 		if typeID == "" || strings.TrimSpace(typeID) != typeID {
-			return "", nil, fmt.Errorf("server %q has no valid BareMetalInstanceType binding in ConfigMap %s/%s", server, domain.Namespace, fabricDomainInventoryName)
+			return "", fmt.Errorf("server %q has no valid BareMetalInstanceType binding in ConfigMap %s/%s", server, domain.Namespace, fabricDomainInventoryName)
 		}
 		memberTypes[server] = typeID
 		if _, found := firstServerByType[typeID]; !found {
@@ -89,15 +88,15 @@ func (r *FabricDomainReconciler) resolveFabricDomainHardware(
 		batch := typeIDs[start:end]
 		instanceTypeList, err := r.listFabricDomainInstanceTypes(ctx, batch)
 		if err != nil {
-			return "", nil, fmt.Errorf("resolving instance types %q: %w", batch, err)
+			return "", fmt.Errorf("resolving instance types %q: %w", batch, err)
 		}
 		for _, instanceType := range instanceTypeList {
 			if instanceType == nil {
-				return "", nil, fmt.Errorf("instance type search returned an empty item")
+				return "", fmt.Errorf("instance type search returned an empty item")
 			}
 			id := instanceType.GetId()
 			if _, duplicate := instancesByID[id]; duplicate {
-				return "", nil, fmt.Errorf("instance type search returned a duplicate item")
+				return "", fmt.Errorf("instance type search returned a duplicate item")
 			}
 			instancesByID[id] = instanceType
 		}
@@ -107,18 +106,18 @@ func (r *FabricDomainReconciler) resolveFabricDomainHardware(
 	for _, typeID := range typeIDs {
 		instanceType := instancesByID[typeID]
 		if instanceType == nil || instanceType.GetMetadata().GetDeletionTimestamp() != nil {
-			return "", nil, fmt.Errorf("instance type %q for server %q is missing or deleting", typeID, firstServerByType[typeID])
+			return "", fmt.Errorf("instance type %q for server %q is missing or deleting", typeID, firstServerByType[typeID])
 		}
 		if instanceType.GetMetadata().GetTenant() != "shared" {
-			return "", nil, fmt.Errorf("instance type %q must belong to the shared catalog", typeID)
+			return "", fmt.Errorf("instance type %q must belong to the shared catalog", typeID)
 		}
 		binding := instanceType.GetSpec().GetFabricBindings().GetEthernetEw().GetNetris()
 		if binding == nil || binding.GetNetworkClass() != networkClassID {
-			return "", nil, fmt.Errorf("instance type %q has no Netris Ethernet binding for NetworkClass %q", typeID, networkClassID)
+			return "", fmt.Errorf("instance type %q has no Netris Ethernet binding for NetworkClass %q", typeID, networkClassID)
 		}
 		templateID := binding.GetTemplateId()
 		if !validNetrisID(templateID) {
-			return "", nil, fmt.Errorf("instance type %q has invalid Netris template ID %q", typeID, templateID)
+			return "", fmt.Errorf("instance type %q has invalid Netris template ID %q", typeID, templateID)
 		}
 		templates[typeID] = templateID
 	}
@@ -127,11 +126,11 @@ func (r *FabricDomainReconciler) resolveFabricDomainHardware(
 	for _, server := range domain.Spec.Servers {
 		templateID := templates[memberTypes[server]]
 		if selectedTemplate != "" && selectedTemplate != templateID {
-			return "", nil, fmt.Errorf("incompatible Ethernet templates: server %q resolves to %q, other members resolve to %q", server, templateID, selectedTemplate)
+			return "", fmt.Errorf("incompatible Ethernet templates: server %q resolves to %q, other members resolve to %q", server, templateID, selectedTemplate)
 		}
 		selectedTemplate = templateID
 	}
-	return selectedTemplate, memberTypes, nil
+	return selectedTemplate, nil
 }
 
 func (r *FabricDomainReconciler) listFabricDomainInstanceTypes(ctx context.Context, typeIDs []string) ([]*privatev1.BareMetalInstanceType, error) {

@@ -84,7 +84,7 @@ operator:
   enabled: true
   image:
     repository: ghcr.io/osac-project/osac-operator
-    tag: latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
+    tag: sha-7f1e45f
     pullPolicy: Always
   replicaCount: 1
   resources:
@@ -143,7 +143,7 @@ service:
   images:
     service:
       repository: ghcr.io/osac-project/fulfillment-service
-      tag: latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
+      tag: sha-7f1e45f
       pullPolicy: Always
     envoy:
       repository: ghcr.io/osac-project/envoy
@@ -240,7 +240,7 @@ aap:
       imagePullPolicy: IfNotPresent
   bootstrap:
     enabled: true
-    image: ghcr.io/osac-project/osac-aap:latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
+    image: ghcr.io/osac-project/osac-aap:sha-7f1e45f
     backoffLimit: 15
     readinessConsecutiveSuccesses: 3
     gateway:
@@ -252,9 +252,9 @@ aap:
     secret: "config-as-code-ig"
     # Maximum number of add-on operator jobs allowed to run concurrently.
     addonOperatorMaxConcurrentJobs: 50
-    eeImage: ""
-    projectGitUri: ""
-    projectGitBranch: ""
+    eeImage: ghcr.io/osac-project/osac-aap:sha-7f1e45f
+    projectGitUri: https://github.com/osac-project/osac
+    projectGitBranch: 7f1e45fcaacf4c22ef97745cbfac6647df94c9be
     importAgentsEnabled: false
     importBcmAgentsEnabled: false
   importAgents:
@@ -348,14 +348,14 @@ ui:
   log:
     level: info
   images:
-    ui: ghcr.io/osac-project/osac-ui:latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
+    ui: ghcr.io/osac-project/osac-ui:sha-7f1e45f
 
 # --- Metering ---
 metering:
   enabled: false
   image:
     repository: ghcr.io/osac-project/metering-service
-    tag: latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
+    tag: sha-7f1e45f
     pullPolicy: Always
 
 # --- CSI Driver ---
@@ -377,7 +377,7 @@ csiDriver:
       allowStub: false
   image:
     repository: ghcr.io/osac-project/osac-csi-driver
-    tag: latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
+    tag: sha-7f1e45f
     pullPolicy: Always
 
 # --- CSI Backends ---
@@ -390,7 +390,7 @@ bmfCrds: {}
 bmf:
   image:
     repository: ghcr.io/osac-project/bare-metal-fulfillment-operator
-    tag: latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
+    tag: sha-7f1e45f
     pullPolicy: Always
   replicaCount: 1
   resources:

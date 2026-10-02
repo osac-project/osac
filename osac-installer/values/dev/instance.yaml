@@ -8,12 +8,11 @@ global:
       enabled: true
     vmaas:
       enabled: true
-
 # --- Operator ---
 operator:
   image:
     repository: ghcr.io/osac-project/osac-operator
-    tag: latest
+    tag: sha-7f1e45f
     pullPolicy: Always
   provisioning:
     provider: "aap"
@@ -28,16 +27,15 @@ operator:
   controllers:
     tenant: true
     networking: true
-
 # --- Fulfillment Service ---
 service:
   variant: openshift
-  externalHostname: ""  # Set dynamically by make install-osac
-  internalHostname: ""  # Set dynamically by make install-osac
+  externalHostname: "" # Set dynamically by make install-osac
+  internalHostname: "" # Set dynamically by make install-osac
   images:
     service:
       repository: ghcr.io/osac-project/fulfillment-service
-      tag: latest
+      tag: sha-7f1e45f
       pullPolicy: Always
     envoy:
       repository: ghcr.io/osac-project/envoy
@@ -52,46 +50,46 @@ service:
   auth:
     issuerUrl: https://keycloak.keycloak.svc.cluster.local/realms/osac
     emergencyServiceAccounts:
-    - admin
-    - osac-operator
-    - osac-operator-controller-manager
-    - template-publisher
-    - osac-metering
+      - admin
+      - osac-operator
+      - osac-operator-controller-manager
+      - template-publisher
+      - osac-metering
     controllerCredentials:
-    - secret:
-        name: fulfillment-controller-credentials
-        items:
-        - key: client-id
-          param: client-id
-        - key: client-secret
-          param: client-secret
+      - secret:
+          name: fulfillment-controller-credentials
+          items:
+            - key: client-id
+              param: client-id
+            - key: client-secret
+              param: client-secret
   idp:
     provider: keycloak
     url: https://keycloak.keycloak.svc.cluster.local
     credentials:
-    - secret:
-        name: fulfillment-controller-credentials
-        items:
-        - key: client-id
-          param: client-id
-        - key: client-secret
-          param: client-secret
+      - secret:
+          name: fulfillment-controller-credentials
+          items:
+            - key: client-id
+              param: client-id
+            - key: client-secret
+              param: client-secret
   database:
     connection:
-    - secret:
-        name: osac-db-config
-        items:
-        - key: url
-          param: url
-    - secret:
-        name: osac-db-client-cert
-        items:
-        - key: tls.crt
-          param: sslcert
-        - key: tls.key
-          param: sslkey
-        - key: ca.crt
-          param: sslrootcert
+      - secret:
+          name: osac-db-config
+          items:
+            - key: url
+              param: url
+      - secret:
+          name: osac-db-client-cert
+          items:
+            - key: tls.crt
+              param: sslcert
+            - key: tls.key
+              param: sslkey
+            - key: ca.crt
+              param: sslrootcert
   log:
     level: info
   vault:
@@ -105,17 +103,16 @@ service:
     caBundle:
       configMap: ca-bundle
     credentials:
-    - secret:
-        name: fulfillment-controller-credentials
-        items:
-        - key: client-secret
-          param: client-secret
-
+      - secret:
+          name: fulfillment-controller-credentials
+          items:
+            - key: client-secret
+              param: client-secret
 # --- UI ---
 ui:
   enabled: true
   images:
-    ui: ghcr.io/osac-project/osac-ui:latest
+    ui: ghcr.io/osac-project/osac-ui:sha-7f1e45f
   api:
     fulfillment:
       certs:
@@ -125,7 +122,6 @@ ui:
     certs:
       caBundle:
         configMap: ca-bundle
-
 # --- AAP ---
 aap:
   aap:
@@ -134,7 +130,7 @@ aap:
       name: "osac-aap"
   bootstrap:
     enabled: true
-    image: ghcr.io/osac-project/osac-aap:latest
+    image: ghcr.io/osac-project/osac-aap:sha-7f1e45f
     backoffLimit: 15
   instanceGroups:
     clusterFulfillment:
@@ -149,17 +145,15 @@ aap:
     networkFulfillment:
       enabled: true
       config: {}
-
 # --- Validation ---
 validation:
   enabled: true
-
 # --- Cluster Versions ---
 clusterVersions:
   enabled: true
   versions:
-  - version: "4.20.0"
-    image: "quay.io/openshift-release-dev/ocp-release:4.20.0-multi"
-  - version: "4.22.0"
-    image: "quay.io/openshift-release-dev/ocp-release:4.22.0-multi"
-    default: true
+    - version: "4.20.0"
+      image: "quay.io/openshift-release-dev/ocp-release:4.20.0-multi"
+    - version: "4.22.0"
+      image: "quay.io/openshift-release-dev/ocp-release:4.22.0-multi"
+      default: true

@@ -80,13 +80,11 @@ const ClusterNetworkingCard = ({ cluster }: ClusterNetworkingCardProps) => {
   const isProvisioning = clusterState === ClusterState.PROGRESSING;
   const isFailed = isTerminalFailedState(clusterState);
 
-  const {
-    data: externalIpAttachments = [],
-    isLoading: isLoadingAttachments,
-  } = useExternalIPAttachments(
-    { filter: clusterAttachmentFilter(cluster.id) },
-    { enabled: Boolean(cluster.id) },
-  );
+  const { data: externalIpAttachments = [], isLoading: isLoadingAttachments } =
+    useExternalIPAttachments(
+      { filter: clusterAttachmentFilter(cluster.id) },
+      { enabled: Boolean(cluster.id) },
+    );
 
   const endpointAttachments = useMemo(
     () => groupAttachmentsByEndpoint(externalIpAttachments),

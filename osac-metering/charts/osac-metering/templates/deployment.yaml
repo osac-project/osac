@@ -58,7 +58,7 @@ spec:
             name: {{ .Values.certs.caBundle.configMap }}
       initContainers:
         - name: fetch-kafka-secrets
-          image: {{ .Values.cliImage | default "quay.io/openshift/origin-cli:4.20.0" }}
+          image: {{ .Values.cliImage | default "quay.io/openshift/origin-cli:4.22.0" }}
           env:
             - name: HOME
               value: /tmp

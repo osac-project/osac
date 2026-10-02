@@ -61,7 +61,7 @@ global:
     networkClass: false
     networkManagers: false
 
-cliImage: quay.io/openshift/origin-cli:4.20.0
+cliImage: quay.io/openshift/origin-cli:4.22.0
 
 # Shared PostgreSQL host for the db-init hook.
 dbInit:

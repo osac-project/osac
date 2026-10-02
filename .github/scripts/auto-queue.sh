@@ -18,14 +18,15 @@ fi
 
 # Dismiss every Request changes review. lgtm is the approval signal.
 dismiss_changes_requested() {
-  local pr="$1" id
+  local pr="$1" id reviews
+  reviews=$(gh api --paginate --slurp "repos/${REPO}/pulls/${pr}/reviews" \
+    | jq -r '[.[][]] | .[] | select(.state == "CHANGES_REQUESTED") | .id')
   while read -r id; do
     [[ -z "${id}" ]] && continue
     echo "Dismissing review ${id} on PR #${pr} because lgtm is present"
     gh api "repos/${REPO}/pulls/${pr}/reviews/${id}/dismissals" \
-      -X PUT -f message="Auto-dismissed because lgtm is present"
-  done < <(gh api --paginate --slurp "repos/${REPO}/pulls/${pr}/reviews" \
-    | jq -r '[.[][]] | .[] | select(.state == "CHANGES_REQUESTED") | .id')
+      -X PUT -f message="Auto-dismissed because lgtm is present" --silent
+  done <<<"${reviews}"
 }
 
 labels_ok() {
@@ -55,7 +56,28 @@ enqueue() {
       enqueuePullRequest(input: {pullRequestId: $id, expectedHeadOid: $head}) {
         mergeQueueEntry { position state }
       }
-    }' -f id="$id" -f head="$head"
+    }' -f id="$id" -f head="$head" \
+    --jq '.data.enqueuePullRequest.mergeQueueEntry | {position, state}'
+}
+
+dequeue() {
+  local pr="$1" id="$2" entry_id
+  entry_id=$(gh api graphql -f query='
+    query($id: ID!) {
+      node(id: $id) { ... on PullRequest { mergeQueueEntry { id } } }
+    }' -f id="$id" --jq '.data.node.mergeQueueEntry.id // empty')
+  if [[ -z "${entry_id}" ]]; then
+    echo "PR #${pr} is not in the merge queue"
+    return 0
+  fi
+  echo "Dequeuing PR #${pr}"
+  gh api graphql -f query='
+    mutation($id: ID!) {
+      dequeuePullRequest(input: {id: $id}) {
+        mergeQueueEntry { state }
+      }
+    }' -f id="${entry_id}" \
+    --jq '.data.dequeuePullRequest.mergeQueueEntry.state // "dequeued"'
 }
 
 # Read the PR, dismiss Request changes when lgtm is present, then enable
@@ -72,14 +94,13 @@ process_pr() {
     dismiss_changes_requested "$pr"
   fi
 
-  if [[ "$(jq -r '.isDraft' <<<"${json}")" == "true" ]]; then
-    echo "PR #${pr} is a draft"
-    return 0
-  fi
-  if [[ "$(labels_ok "${labels}")" != "true" ]]; then
+  if [[ "$(jq -r '.isDraft' <<<"${json}")" == "true" || "$(labels_ok "${labels}")" != "true" ]]; then
     echo "PR #${pr} is not eligible for the queue"
+    id=$(jq -r '.id' <<<"${json}")
+    dequeue "$pr" "$id"
     if [[ "$(jq -r '.autoMergeRequest != null' <<<"${json}")" == "true" ]]; then
-      gh pr merge "$pr" --repo "$REPO" --disable-auto || echo "Could not disable auto-merge on PR #${pr}"
+      echo "Disabling auto-merge on PR #${pr}"
+      gh pr merge "$pr" --repo "$REPO" --disable-auto
     fi
     return 0
   fi
@@ -106,7 +127,7 @@ sync_one() {
     fi
   fi
   echo "Checking collaborator ${AUTHOR}"
-  if ! gh api "repos/${REPO}/collaborators/${AUTHOR}"; then
+  if ! gh api "repos/${REPO}/collaborators/${AUTHOR}" --silent; then
     echo "Author ${AUTHOR} is not a repo collaborator; leaving PR #${PR} alone"
     return 0
   fi
@@ -114,8 +135,10 @@ sync_one() {
 }
 
 maintain() {
-  local row pr
+  local row pr prs
   echo "Maintaining open pull requests"
+  prs=$(gh pr list --repo "$REPO" --state open --limit 200 --json number,isDraft \
+    | jq -c '.[]')
   while read -r row; do
     [[ -z "${row}" ]] && continue
     if [[ "$(jq -r '.isDraft' <<<"${row}")" == "true" ]]; then
@@ -129,7 +152,7 @@ maintain() {
     if [[ "${rc}" -ne 0 ]]; then
       echo "PR #${pr} failed (rc=${rc}), will retry next run"
     fi
-  done < <(gh pr list --repo "$REPO" --state open --limit 200 --json number,isDraft | jq -c '.[]')
+  done <<<"${prs}"
   echo "Scan complete"
 }
 

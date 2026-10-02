@@ -250,15 +250,15 @@ var _ = Describe("Bare-metal worker provisioning", func() {
 			Expect(w.ResourceID).ToNot(BeEmpty())
 		}
 
-		// Two tenant-owned worker BMIs were created and carry the
-		// unresolved network attachment names — provisioning has genuinely started.
+		// Two tenant-owned worker BMIs were created with network references resolved
+		// to Fulfillment IDs — provisioning has genuinely started.
 		calls := fc.CreateCalls()
 		Expect(calls).To(HaveLen(2))
 		for _, bmi := range calls {
 			Expect(bmi.GetMetadata().GetTenant()).To(Equal("tenant1"))
 			na := bmi.GetSpec().GetNetworkAttachments()
 			Expect(na).To(HaveLen(1))
-			Expect(na[0].GetSubnet().GetName()).To(Equal("my-subnet"))
+			Expect(na[0].GetSubnet().GetId()).To(Equal("test-subnet-resource-id"))
 		}
 
 		// --- Phase B: an agent registers and binds ---

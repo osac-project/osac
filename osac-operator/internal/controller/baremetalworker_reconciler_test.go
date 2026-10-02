@@ -943,9 +943,9 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", Label("baremetalw
 
 		netAttachments := bmi.GetSpec().GetNetworkAttachments()
 		Expect(netAttachments).To(HaveLen(1))
-		Expect(netAttachments[0].GetSubnet().GetName()).To(Equal("my-subnet"))
+		Expect(netAttachments[0].GetSubnet().GetId()).To(Equal("test-subnet-resource-id"))
 		Expect(netAttachments[0].GetSecurityGroups()).To(HaveLen(1))
-		Expect(netAttachments[0].GetSecurityGroups()[0].GetName()).To(Equal("sg-default"))
+		Expect(netAttachments[0].GetSecurityGroups()[0].GetId()).To(Equal("test-security-group-resource-id"))
 	})
 
 	It("does not create catalog item or BMI when the requested BMIT is not found", func() {
@@ -1276,9 +1276,43 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", Label("baremetalw
 		Expect(co.Status.Workers[0].Name).ToNot(Equal(co.Status.Workers[1].Name))
 	})
 
-	It("enriches BMI network attachment with interface from first fabric port and primary=true", func() {
+	It("resolves network CR names to Fulfillment IDs when creating BMIs", func() {
 		preloadDiskImageChain()
 		co := newBareMetalClusterOrder("bmw-enrich", 1)
+		co.Spec.NetworkAttachment = &osacv1alpha1.ClusterNetworkAttachment{
+			SubnetRef:         "generated-subnet-cr",
+			SecurityGroupRefs: []string{"generated-security-group-cr"},
+		}
+		Expect(k8sClient.Create(ctx, &osacv1alpha1.Subnet{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "generated-subnet-cr",
+				Namespace: testNamespace,
+				Labels:    map[string]string{"osac.openshift.io/subnet-uuid": "fulfillment-subnet-id"},
+				Annotations: map[string]string{
+					"osac.openshift.io/tenant": "tenant1",
+				},
+			},
+			Spec: osacv1alpha1.SubnetSpec{VirtualNetwork: "test-vnet", IPv4CIDR: "198.51.100.0/24"},
+		})).To(Succeed())
+		generatedSubnet := &osacv1alpha1.Subnet{ObjectMeta: metav1.ObjectMeta{
+			Name: "generated-subnet-cr", Namespace: testNamespace,
+		}}
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, generatedSubnet) })
+		Expect(k8sClient.Create(ctx, &osacv1alpha1.SecurityGroup{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "generated-security-group-cr",
+				Namespace: testNamespace,
+				Labels:    map[string]string{"osac.openshift.io/securitygroup-uuid": "fulfillment-security-group-id"},
+				Annotations: map[string]string{
+					"osac.openshift.io/tenant": "tenant1",
+				},
+			},
+			Spec: osacv1alpha1.SecurityGroupSpec{VirtualNetwork: "test-vnet"},
+		})).To(Succeed())
+		generatedSecurityGroup := &osacv1alpha1.SecurityGroup{ObjectMeta: metav1.ObjectMeta{
+			Name: "generated-security-group-cr", Namespace: testNamespace,
+		}}
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, generatedSecurityGroup) })
 		create(co)
 		makeInfraEnvReady("bmw-enrich")
 
@@ -1290,11 +1324,43 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", Label("baremetalw
 
 		netAttachments := calls[0].GetSpec().GetNetworkAttachments()
 		Expect(netAttachments).To(HaveLen(1))
-		Expect(netAttachments[0].GetSubnet().GetName()).To(Equal("my-subnet"))
+		Expect(netAttachments[0].GetSubnet().GetId()).To(Equal("fulfillment-subnet-id"))
+		Expect(netAttachments[0].GetSubnet().GetName()).To(BeEmpty())
 		Expect(netAttachments[0].GetSecurityGroups()).To(HaveLen(1))
-		Expect(netAttachments[0].GetSecurityGroups()[0].GetName()).To(Equal("sg-default"))
+		Expect(netAttachments[0].GetSecurityGroups()[0].GetId()).To(Equal("fulfillment-security-group-id"))
+		Expect(netAttachments[0].GetSecurityGroups()[0].GetName()).To(BeEmpty())
 		Expect(netAttachments[0].GetInterface()).To(Equal("data-0"))
 		Expect(netAttachments[0].GetPrimary()).To(BeTrue())
+	})
+
+	It("rejects a network CR owned by another tenant before creating a BMI", func() {
+		preloadDiskImageChain()
+		foreignSubnet := &osacv1alpha1.Subnet{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "foreign-tenant-subnet",
+				Namespace: testNamespace,
+				Labels:    map[string]string{"osac.openshift.io/subnet-uuid": "foreign-subnet-id"},
+				Annotations: map[string]string{
+					"osac.openshift.io/tenant": "tenant2",
+				},
+			},
+			Spec: osacv1alpha1.SubnetSpec{VirtualNetwork: "test-vnet", IPv4CIDR: "203.0.113.0/24"},
+		}
+		Expect(k8sClient.Create(ctx, foreignSubnet)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, foreignSubnet) })
+
+		co := newBareMetalClusterOrder("bmw-foreign-network", 1)
+		co.Spec.NetworkAttachment = &osacv1alpha1.ClusterNetworkAttachment{SubnetRef: foreignSubnet.Name}
+		create(co)
+
+		_, err := runReconcile(co.Name)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(sim.MarkInfraEnvReady(ctx, co.Name+"-infraenv", testNamespace, ign.URL())).To(Succeed())
+
+		_, err = runReconcile(co.Name)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("does not match ClusterOrder tenant"))
+		Expect(fc.CreateCalls()).To(BeEmpty())
 	})
 
 	It("resolves different interfaces for different instance types across node sets", func() {

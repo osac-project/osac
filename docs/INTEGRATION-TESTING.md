@@ -160,6 +160,7 @@ Touched-area requirements: [component guide](../osac-operator/AGENTS.md#integrat
 
 - **Pure helpers, validation, or state calculations:** Add error and edge-case coverage.
 - **Controller reconciliation, finalizers, status, or CRD interactions:** The envtest suite must exercise the changed lifecycle through the public reconciler behavior.
+- **CaaS BMI network references:** The bare-metal worker acceptance envtest verifies ClusterOrder Subnet/SecurityGroup CR names are resolved to Fulfillment IDs and rejects cross-tenant CRs. Fulfillment persistence and BMI validation remain outside that fake-service boundary; the deployed CaaS E2E covers the attached tenant network journey.
 - **Controller deployment, watches, RBAC, console proxy, networking, or Helm wiring:** Unit/envtest coverage alone does not prove deployed wiring.
 - **CaaS orders with multiple BMaaS instance types:** The opt-in connected CaaS suite verifies Fulfillment creates a two-type ClusterOrder and the production worker reconciler creates tenant-owned BMIs and per-type worker status/metrics. `osac-aap/.../hosted_cluster/tests/test.yml` verifies that AAP builds matching per-type NodePools and Agent selectors. These checks stop before real AAP, Assisted Service, Agent binding, and HyperShift provisioning.
 - **AAP, dispatcher, provisioning-provider, KubeVirt, or fulfillment boundary:** A controllable provider in envtest is not coverage of the real provider boundary.

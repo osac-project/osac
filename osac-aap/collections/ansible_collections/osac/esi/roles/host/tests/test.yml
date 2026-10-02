@@ -1,0 +1,30 @@
+---
+- name: ESI Agent metadata carries the selectable instance type
+  hosts: localhost
+  gather_facts: false
+  vars:
+    esi_nodes:
+      - id: ironic-1
+        name: MOC-R4PAC24U35-S3A
+        resource_class: bm.large
+        ports:
+          - address: aa:bb:cc:dd:ee:ff
+    registered_agents:
+      - metadata:
+          name: agent-1
+        status:
+          inventory:
+            interfaces:
+              - macAddress: aa:bb:cc:dd:ee:ff
+  tasks:
+    - name: Convert Ironic hosts to Agent metadata
+      ansible.builtin.set_fact:
+        esi_agent_metadata: "{{ esi_nodes | osac.esi.get_agent_metadata(registered_agents) }}"
+
+    - name: Verify ESI instance type label
+      ansible.builtin.assert:
+        that:
+          - esi_agent_metadata | length == 1
+          - esi_agent_metadata[0].name == 'agent-1'
+          - esi_agent_metadata[0].labels['osac.openshift.io/instance_type'] == 'bm.large'
+          - "'osac.openshift.io/resource_class' not in esi_agent_metadata[0].labels"

@@ -242,7 +242,7 @@ def _validate_caas_billing(event: dict[str, Any], event_type: str) -> None:
         f"component should be control_plane or worker, got {bd.get('component')!r}"
     )
     assert bd.get("node_set"), "Missing node_set in billing_dimensions"
-    assert bd.get("host_type"), "Missing host_type in billing_dimensions"
+    assert bd.get("baremetal_instance_type"), "Missing baremetal_instance_type in billing_dimensions"
     assert isinstance(bd.get("node_count"), (int, float)) and bd["node_count"] > 0, (
         f"node_count should be positive number, got {bd.get('node_count')!r}"
     )

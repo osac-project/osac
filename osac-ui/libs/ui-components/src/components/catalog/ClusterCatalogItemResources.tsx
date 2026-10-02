@@ -11,6 +11,7 @@ import {
 import { ClusterCatalogItem } from '@osac/types';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
+import { findBareMetalInstanceTypeForReference } from './bareMetalCatalogItemResourceDisplay';
 import CatalogFieldEditabilityLabel from './CatalogFieldEditabilityLabel';
 import { catalogFieldPolicyBehavior } from './catalogFieldPolicyDisplay';
 import type { CatalogItemResourceLookups } from './catalogItemResourceLookups';
@@ -20,7 +21,6 @@ import {
   clusterNodeSetMapPolicy,
   clusterVersionReference,
   findClusterVersionForReference,
-  findHostTypeForReference,
   formatClusterCatalogHostTypeRow,
   formatClusterCatalogNodeSetRow,
   formatClusterCatalogVersionRow,
@@ -46,22 +46,30 @@ const ClusterCatalogItemResources = ({
   const versionPolicyBehavior = catalogFieldPolicyBehavior(fields?.version);
   const nodeSetsPolicyBehavior = catalogFieldPolicyBehavior(nodeSetsPolicy);
 
-  const { clusterVersions, hostTypes } = resourceLookups;
+  const { bareMetalInstanceTypes, clusterVersions } = resourceLookups;
 
   const clusterVersion = useMemo(
     () => findClusterVersionForReference(clusterVersions, versionReference),
     [clusterVersions, versionReference],
   );
 
-  const hostType = useMemo(
-    () => findHostTypeForReference(hostTypes, primaryNodeSet?.nodeSet.hostType),
-    [hostTypes, primaryNodeSet?.nodeSet.hostType],
+  const instanceType = useMemo(
+    () =>
+      findBareMetalInstanceTypeForReference(
+        bareMetalInstanceTypes,
+        primaryNodeSet?.nodeSet.baremetalInstanceType,
+      ),
+    [bareMetalInstanceTypes, primaryNodeSet?.nodeSet.baremetalInstanceType],
   );
 
   const versionLabel = formatClusterCatalogVersionRow(fields, clusterVersion, versionReference);
   const showClusterVersionIcon = Boolean(versionReference || clusterVersion);
   const nodeSetLabel = formatClusterCatalogNodeSetRow(nodeSetsPolicy, primaryNodeSet);
-  const hostTypeLabel = formatClusterCatalogHostTypeRow(nodeSetsPolicy, primaryNodeSet, hostType);
+  const hostTypeLabel = formatClusterCatalogHostTypeRow(
+    nodeSetsPolicy,
+    primaryNodeSet,
+    instanceType,
+  );
 
   return (
     <DescriptionList isHorizontal isCompact>

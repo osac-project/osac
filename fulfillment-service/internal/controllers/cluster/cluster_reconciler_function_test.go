@@ -88,52 +88,6 @@ var _ = Describe("validateTenant", func() {
 	})
 })
 
-var _ = Describe("prepareNodeRequest", func() {
-	It("uses BareMetalInstanceType name as ResourceClass when present", func() {
-		t := &task{}
-		nodeSet := privatev1.ClusterNodeSet_builder{
-			BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Name: "gpu.gb200"}.Build(),
-			Size:                  proto.Int32(3),
-		}.Build()
-		nr := t.prepareNodeRequest(nodeSet)
-		Expect(nr.ResourceClass).To(Equal("gpu.gb200"))
-		Expect(nr.NumberOfNodes).To(Equal(3))
-	})
-
-	It("falls back to HostType name when BareMetalInstanceType is absent", func() {
-		t := &task{}
-		nodeSet := privatev1.ClusterNodeSet_builder{
-			HostType: privatev1.HostTypeReference_builder{Name: "legacy-host"}.Build(),
-			Size:     proto.Int32(5),
-		}.Build()
-		nr := t.prepareNodeRequest(nodeSet)
-		Expect(nr.ResourceClass).To(Equal("legacy-host"))
-		Expect(nr.NumberOfNodes).To(Equal(5))
-	})
-
-	It("prefers BareMetalInstanceType over HostType when both are present", func() {
-		t := &task{}
-		nodeSet := privatev1.ClusterNodeSet_builder{
-			BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Name: "new-bmit"}.Build(),
-			HostType:              privatev1.HostTypeReference_builder{Name: "old-host"}.Build(),
-			Size:                  proto.Int32(2),
-		}.Build()
-		nr := t.prepareNodeRequest(nodeSet)
-		Expect(nr.ResourceClass).To(Equal("new-bmit"))
-		Expect(nr.NumberOfNodes).To(Equal(2))
-	})
-
-	It("returns empty ResourceClass when neither reference is present", func() {
-		t := &task{}
-		nodeSet := privatev1.ClusterNodeSet_builder{
-			Size: proto.Int32(1),
-		}.Build()
-		nr := t.prepareNodeRequest(nodeSet)
-		Expect(nr.ResourceClass).To(BeEmpty())
-		Expect(nr.NumberOfNodes).To(Equal(1))
-	})
-})
-
 var _ = Describe("update tenant annotation", func() {
 	const (
 		clusterID    = "test-cluster-id"
@@ -228,8 +182,8 @@ var _ = Describe("update tenant annotation", func() {
 			Spec: osacv1alpha1.ClusterOrderSpec{
 				TemplateID: "test-template",
 				NodeRequests: []osacv1alpha1.NodeRequest{
-					{
-						ResourceClass: "gpu.gb200",
+					{NodeSet: "gpu.gb200",
+						BareMetal:     &osacv1alpha1.BareMetalNodeSpec{InstanceType: "gpu.gb200"},
 						NumberOfNodes: 3,
 					},
 				},
@@ -263,8 +217,8 @@ var _ = Describe("update tenant annotation", func() {
 				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
 					"gpu.gb200": privatev1.ClusterNodeSet_builder{
+						BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "gpu.gb200"},
 						Size:                  proto.Int32(5),
-						BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Name: "gpu.gb200"}.Build(),
 					}.Build(),
 				},
 			}.Build(),
@@ -294,7 +248,7 @@ var _ = Describe("update tenant annotation", func() {
 
 		updatedCR := list.Items[0]
 		Expect(updatedCR.Spec.NodeRequests).To(HaveLen(1))
-		Expect(updatedCR.Spec.NodeRequests[0].ResourceClass).To(Equal("gpu.gb200"))
+		Expect(updatedCR.Spec.NodeRequests[0].BareMetal.InstanceType).To(Equal("gpu.gb200"))
 		Expect(updatedCR.Spec.NodeRequests[0].NumberOfNodes).To(Equal(5))
 	})
 
@@ -314,8 +268,8 @@ var _ = Describe("update tenant annotation", func() {
 			Spec: osacv1alpha1.ClusterOrderSpec{
 				TemplateID: "test-template",
 				NodeRequests: []osacv1alpha1.NodeRequest{
-					{
-						ResourceClass: "gpu.gb200",
+					{NodeSet: "gpu.gb200",
+						BareMetal:     &osacv1alpha1.BareMetalNodeSpec{InstanceType: "gpu.gb200"},
 						NumberOfNodes: 3,
 					},
 				},
@@ -349,8 +303,8 @@ var _ = Describe("update tenant annotation", func() {
 				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
 					"gpu.gb200": privatev1.ClusterNodeSet_builder{
+						BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "gpu.gb200"},
 						Size:                  proto.Int32(5),
-						BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Name: "gpu.gb200"}.Build(),
 					}.Build(),
 				},
 			}.Build(),
@@ -380,7 +334,7 @@ var _ = Describe("update tenant annotation", func() {
 
 		updatedCR := list.Items[0]
 		Expect(updatedCR.Spec.NodeRequests).To(HaveLen(1))
-		Expect(updatedCR.Spec.NodeRequests[0].ResourceClass).To(Equal("gpu.gb200"))
+		Expect(updatedCR.Spec.NodeRequests[0].BareMetal.InstanceType).To(Equal("gpu.gb200"))
 		Expect(updatedCR.Spec.NodeRequests[0].NumberOfNodes).To(Equal(5))
 	})
 
@@ -400,8 +354,8 @@ var _ = Describe("update tenant annotation", func() {
 			Spec: osacv1alpha1.ClusterOrderSpec{
 				TemplateID: "test-template",
 				NodeRequests: []osacv1alpha1.NodeRequest{
-					{
-						ResourceClass: "gpu.gb200",
+					{NodeSet: "gpu.gb200",
+						BareMetal:     &osacv1alpha1.BareMetalNodeSpec{InstanceType: "gpu.gb200"},
 						NumberOfNodes: 3,
 					},
 				},
@@ -429,8 +383,8 @@ var _ = Describe("update tenant annotation", func() {
 				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
 					"gpu.gb200": privatev1.ClusterNodeSet_builder{
+						BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "gpu.gb200"},
 						Size:                  proto.Int32(5),
-						BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Name: "gpu.gb200"}.Build(),
 					}.Build(),
 				},
 			}.Build(),
@@ -635,8 +589,8 @@ var _ = Describe("update tenant annotation", func() {
 				TemplateID:   "test-template",
 				ReleaseImage: resolvedImage,
 				NodeRequests: []osacv1alpha1.NodeRequest{
-					{
-						ResourceClass: "gpu.gb200",
+					{NodeSet: "gpu.gb200",
+						BareMetal:     &osacv1alpha1.BareMetalNodeSpec{InstanceType: "gpu.gb200"},
 						NumberOfNodes: 3,
 					},
 				},
@@ -686,8 +640,8 @@ var _ = Describe("update tenant annotation", func() {
 				Version:  &privatev1.ClusterVersionReference{Name: versionName},
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
 					"gpu.gb200": privatev1.ClusterNodeSet_builder{
+						BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "gpu.gb200"},
 						Size:                  proto.Int32(5),
-						BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Name: "gpu.gb200"}.Build(),
 					}.Build(),
 				},
 			}.Build(),
@@ -742,8 +696,8 @@ var _ = Describe("update tenant annotation", func() {
 				TemplateID:   "test-template",
 				ReleaseImage: oldImage,
 				NodeRequests: []osacv1alpha1.NodeRequest{
-					{
-						ResourceClass: "gpu.gb200",
+					{NodeSet: "gpu.gb200",
+						BareMetal:     &osacv1alpha1.BareMetalNodeSpec{InstanceType: "gpu.gb200"},
 						NumberOfNodes: 3,
 					},
 				},
@@ -794,8 +748,8 @@ var _ = Describe("update tenant annotation", func() {
 				Version:  &privatev1.ClusterVersionReference{Name: newVersionName},
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
 					"gpu.gb200": privatev1.ClusterNodeSet_builder{
+						BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "gpu.gb200"},
 						Size:                  proto.Int32(3),
-						BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Name: "gpu.gb200"}.Build(),
 					}.Build(),
 				},
 			}.Build(),
@@ -1133,12 +1087,120 @@ var _ = Describe("delete", func() {
 		DeferCleanup(ctrl.Finish)
 	})
 
-	It("should remove finalizer when no hub was assigned", func() {
+	It("should remove the finalizer when the cluster was deleted before hub assignment", func() {
+		// Without a persisted hub, there cannot be a ClusterOrder or hub secrets to delete.
 		t := newTaskForDelete(clusterID, "", nil)
 		Expect(hasFinalizer(t.cluster)).To(BeTrue())
 
-		err := t.delete(ctx)
-		Expect(err).ToNot(HaveOccurred())
+		Expect(t.delete(ctx)).To(Succeed())
+		Expect(hasFinalizer(t.cluster)).To(BeFalse())
+	})
+
+	It("should retain the Cluster until the ClusterOrder finalizers finish cleanup", func() {
+		scheme := runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		order := &osacv1alpha1.ClusterOrder{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:       "order-delete-id",
+				Namespace:  "test-ns",
+				Labels:     map[string]string{labels.ClusterOrderUuid: clusterID},
+				Finalizers: []string{"osac.openshift.io/baremetalworker-finalizer"},
+			},
+		}
+		hubClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(order).Build()
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().Get(gomock.Any(), hubID).AnyTimes().Return(&controllers.HubEntry{
+			Namespace: "test-ns",
+			Client:    hubClient,
+		}, nil)
+		t := newTaskForDelete(clusterID, hubID, hubCache)
+		t.cluster.GetStatus().SetKubeconfigSecret(&privatev1.SecretLocalReference{Id: "kubeconfig-id"})
+		t.cluster.GetStatus().SetPasswordSecret(&privatev1.SecretLocalReference{Id: "password-id"})
+		secretsClient := NewMockSecretsClient(ctrl)
+		t.r.secretsClient = secretsClient
+		var deleted []string
+		secretsClient.EXPECT().Delete(gomock.Any(), gomock.Any()).AnyTimes().
+			DoAndReturn(func(_ context.Context, req *privatev1.SecretsDeleteRequest, _ ...grpc.CallOption) (*privatev1.SecretsDeleteResponse, error) {
+				deleted = append(deleted, req.GetId())
+				return &privatev1.SecretsDeleteResponse{}, nil
+			})
+
+		Expect(t.delete(ctx)).To(Succeed())
+		Expect(deleted).To(BeEmpty(), "feedback still needs both Secret references while the order exists")
+		Expect(hasFinalizer(t.cluster)).To(BeTrue(), "the worker must still be able to verify its Cluster")
+		remaining := &osacv1alpha1.ClusterOrder{}
+		Expect(hubClient.Get(ctx, clnt.ObjectKeyFromObject(order), remaining)).To(Succeed())
+		Expect(remaining.DeletionTimestamp).NotTo(BeNil())
+
+		// Repeated reconciles while the order is terminating must also preserve the Secrets.
+		Expect(t.delete(ctx)).To(Succeed())
+		Expect(deleted).To(BeEmpty())
+
+		Expect(hubClient.Get(ctx, clnt.ObjectKeyFromObject(order), remaining)).To(Succeed())
+		remaining.Finalizers = nil
+		Expect(hubClient.Update(ctx, remaining)).To(Succeed())
+		Expect(t.delete(ctx)).To(Succeed())
+		Expect(deleted).To(Equal([]string{"kubeconfig-id", "password-id"}))
+		Expect(hasFinalizer(t.cluster)).To(BeFalse())
+	})
+
+	It("should retain the finalizer and retry Secret cleanup after the order disappears", func() {
+		scheme := runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		hubClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().Get(gomock.Any(), hubID).AnyTimes().Return(&controllers.HubEntry{
+			Namespace: "test-ns", Client: hubClient,
+		}, nil)
+		t := newTaskForDelete(clusterID, hubID, hubCache)
+		t.cluster.GetStatus().SetKubeconfigSecret(&privatev1.SecretLocalReference{Id: "kubeconfig-id"})
+		t.cluster.GetStatus().SetPasswordSecret(&privatev1.SecretLocalReference{Id: "password-id"})
+		secretsClient := NewMockSecretsClient(ctrl)
+		t.r.secretsClient = secretsClient
+		firstDelete := secretsClient.EXPECT().Delete(gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, req *privatev1.SecretsDeleteRequest, _ ...grpc.CallOption) (*privatev1.SecretsDeleteResponse, error) {
+				Expect(req.GetId()).To(Equal("kubeconfig-id"))
+				return nil, status.Error(codes.Unavailable, "temporary failure")
+			})
+		secondDelete := secretsClient.EXPECT().Delete(gomock.Any(), gomock.Any()).After(firstDelete).
+			DoAndReturn(func(_ context.Context, req *privatev1.SecretsDeleteRequest, _ ...grpc.CallOption) (*privatev1.SecretsDeleteResponse, error) {
+				Expect(req.GetId()).To(Equal("kubeconfig-id"))
+				return nil, status.Error(codes.NotFound, "already deleted")
+			})
+		secretsClient.EXPECT().Delete(gomock.Any(), gomock.Any()).After(secondDelete).
+			DoAndReturn(func(_ context.Context, req *privatev1.SecretsDeleteRequest, _ ...grpc.CallOption) (*privatev1.SecretsDeleteResponse, error) {
+				Expect(req.GetId()).To(Equal("password-id"))
+				return &privatev1.SecretsDeleteResponse{}, nil
+			})
+
+		Expect(t.delete(ctx)).To(MatchError(ContainSubstring("failed to delete hub secret")))
+		Expect(hasFinalizer(t.cluster)).To(BeTrue())
+		Expect(t.delete(ctx)).To(Succeed())
+		Expect(hasFinalizer(t.cluster)).To(BeFalse())
+	})
+
+	It("should clean up Secrets when the ClusterOrder is already absent", func() {
+		scheme := runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().Get(gomock.Any(), hubID).Return(&controllers.HubEntry{
+			Namespace: "test-ns", Client: fake.NewClientBuilder().WithScheme(scheme).Build(),
+		}, nil)
+		t := newTaskForDelete(clusterID, hubID, hubCache)
+		t.cluster.GetStatus().SetKubeconfigSecret(&privatev1.SecretLocalReference{Id: "kubeconfig-id"})
+		t.cluster.GetStatus().SetPasswordSecret(&privatev1.SecretLocalReference{Id: "password-id"})
+		secretsClient := NewMockSecretsClient(ctrl)
+		t.r.secretsClient = secretsClient
+		var deleted []string
+		secretsClient.EXPECT().Delete(gomock.Any(), gomock.Any()).Times(2).
+			DoAndReturn(func(_ context.Context, req *privatev1.SecretsDeleteRequest, _ ...grpc.CallOption) (*privatev1.SecretsDeleteResponse, error) {
+				Expect(hasFinalizer(t.cluster)).To(BeTrue())
+				deleted = append(deleted, req.GetId())
+				return &privatev1.SecretsDeleteResponse{}, nil
+			})
+
+		Expect(t.delete(ctx)).To(Succeed())
+		Expect(deleted).To(Equal([]string{"kubeconfig-id", "password-id"}))
 		Expect(hasFinalizer(t.cluster)).To(BeFalse())
 	})
 
@@ -1151,13 +1213,35 @@ var _ = Describe("delete", func() {
 			Return(nil, controllers.ErrHubNotFound)
 
 		t := newTaskForDelete(clusterID, hubID, hubCache)
-		Expect(hasFinalizer(t.cluster)).To(BeTrue())
+		t.cluster.GetStatus().SetKubeconfigSecret(&privatev1.SecretLocalReference{Id: "kubeconfig-id"})
+		t.cluster.GetStatus().SetPasswordSecret(&privatev1.SecretLocalReference{Id: "password-id"})
+		secretsClient := NewMockSecretsClient(ctrl)
+		t.r.secretsClient = secretsClient
+		var deleted []string
+		secretsClient.EXPECT().Delete(gomock.Any(), gomock.Any()).Times(2).
+			DoAndReturn(func(_ context.Context, req *privatev1.SecretsDeleteRequest, _ ...grpc.CallOption) (*privatev1.SecretsDeleteResponse, error) {
+				Expect(hasFinalizer(t.cluster)).To(BeTrue())
+				deleted = append(deleted, req.GetId())
+				return &privatev1.SecretsDeleteResponse{}, nil
+			})
 
-		err := t.delete(ctx)
-		// Should return nil (not propagate the error)
-		Expect(err).ToNot(HaveOccurred())
-		// Finalizer should be removed to allow archiving
+		Expect(t.delete(ctx)).To(Succeed())
+		Expect(deleted).To(Equal([]string{"kubeconfig-id", "password-id"}))
 		Expect(hasFinalizer(t.cluster)).To(BeFalse())
+	})
+
+	It("should retain the finalizer if Secret cleanup fails on a decommissioned hub", func() {
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().Get(gomock.Any(), hubID).Return(nil, controllers.ErrHubNotFound)
+		t := newTaskForDelete(clusterID, hubID, hubCache)
+		t.cluster.GetStatus().SetKubeconfigSecret(&privatev1.SecretLocalReference{Id: "kubeconfig-id"})
+		secretsClient := NewMockSecretsClient(ctrl)
+		t.r.secretsClient = secretsClient
+		secretsClient.EXPECT().Delete(gomock.Any(), gomock.Any()).
+			Return(nil, status.Error(codes.Unavailable, "temporary failure"))
+
+		Expect(t.delete(ctx)).To(MatchError(ContainSubstring("failed to delete hub secret")))
+		Expect(hasFinalizer(t.cluster)).To(BeTrue())
 	})
 })
 
@@ -2275,5 +2359,47 @@ var _ = Describe("ensureClusterSecrets", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(cluster.GetStatus().GetKubeconfigSecret().GetId()).To(Equal("existing-kubeconfig-id"))
 		Expect(cluster.GetStatus().GetPasswordSecret().GetId()).To(Equal("password-id"))
+	})
+
+	It("preserves distinct NodeSet keys sharing the same instance type", func() {
+		cluster := makeCluster(privatev1.ClusterState_CLUSTER_STATE_PROGRESSING)
+		cluster.GetSpec().SetNodeSets(map[string]*privatev1.ClusterNodeSet{
+			"compute": privatev1.ClusterNodeSet_builder{Size: proto.Int32(2), BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Name: "bm.large"}.Build()}.Build(),
+			"batch":   privatev1.ClusterNodeSet_builder{Size: proto.Int32(3), BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Name: "bm.large"}.Build()}.Build(),
+		})
+		t := &task{r: &function{logger: logger}, cluster: cluster}
+		requests := t.prepareNodeRequests()
+		Expect(requests).To(HaveLen(2))
+		Expect(requests[0].NodeSet).To(Equal("batch"))
+		Expect(requests[0].NumberOfNodes).To(Equal(3))
+		Expect(requests[1].NodeSet).To(Equal("compute"))
+		Expect(requests[1].NumberOfNodes).To(Equal(2))
+		Expect(requests[0].BareMetal.InstanceType).To(Equal("bm.large"))
+		Expect(requests[1].BareMetal.InstanceType).To(Equal("bm.large"))
+	})
+
+	It("should set only bareMetal.instanceType from BareMetalInstanceType", func() {
+		cluster := makeCluster(privatev1.ClusterState_CLUSTER_STATE_PROGRESSING)
+		cluster.GetSpec().SetNodeSets(map[string]*privatev1.ClusterNodeSet{
+			"workers": privatev1.ClusterNodeSet_builder{
+				Size: proto.Int32(2),
+				BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{
+					Name: "ci-worker-bm",
+				}.Build(),
+			}.Build(),
+		})
+
+		t := &task{
+			r: &function{
+				logger: logger,
+			},
+			cluster: cluster,
+		}
+
+		nrs := t.prepareNodeRequests()
+		Expect(nrs).To(HaveLen(1))
+		Expect(nrs[0].NumberOfNodes).To(Equal(2))
+		Expect(nrs[0].BareMetal).ToNot(BeNil())
+		Expect(nrs[0].BareMetal.InstanceType).To(Equal("ci-worker-bm"))
 	})
 })

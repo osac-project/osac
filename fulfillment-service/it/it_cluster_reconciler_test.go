@@ -48,14 +48,12 @@ func verifyNotFound(g Gomega, err error) {
 
 var _ = Describe("Cluster reconciler", func() {
 	var (
-		ctx                          context.Context
-		clustersClient               publicv1.ClustersClient
-		hostTypesClient              privatev1.HostTypesClient
-		hostTypeId                   string
-		bareMetalInstanceTypesClient privatev1.BareMetalInstanceTypesClient
-		bmitId                       string
-		templatesClient              privatev1.ClusterTemplatesClient
-		templateId                   string
+		ctx                 context.Context
+		clustersClient      publicv1.ClustersClient
+		instanceTypesClient privatev1.BareMetalInstanceTypesClient
+		bmitName            string
+		templatesClient     privatev1.ClusterTemplatesClient
+		templateId          string
 	)
 
 	makeAny := func(value proto.Message) *anypb.Any {
@@ -70,52 +68,31 @@ var _ = Describe("Cluster reconciler", func() {
 
 		// Create the clients:
 		clustersClient = publicv1.NewClustersClient(tool.ExternalView().UserConn())
-		hostTypesClient = privatev1.NewHostTypesClient(tool.InternalView().AdminConn())
-		bareMetalInstanceTypesClient = privatev1.NewBareMetalInstanceTypesClient(tool.InternalView().AdminConn())
+		instanceTypesClient = privatev1.NewBareMetalInstanceTypesClient(tool.InternalView().AdminConn())
 		templatesClient = privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
 
-		// Create a host type for testing:
-		hostTypeId = fmt.Sprintf("my_host_type_%s", uuid.New())
-		_, err := hostTypesClient.Create(ctx, privatev1.HostTypesCreateRequest_builder{
-			Object: privatev1.HostType_builder{
-				Id: hostTypeId,
-				Metadata: privatev1.Metadata_builder{
-					Name: fmt.Sprintf("test-ht-%s", uuid.New()[24:32]),
-				}.Build(),
-			}.Build(),
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-
 		// Create a bare metal instance type for testing:
-		bmitId = fmt.Sprintf("test-bmit-%s", uuid.New()[24:32])
-		_, err = bareMetalInstanceTypesClient.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
+		bmitName = fmt.Sprintf("test-bmit-%s", uuid.New()[24:32])
+		_, err := instanceTypesClient.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
 			Object: privatev1.BareMetalInstanceType_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name: bmitId,
+					Name: bmitName,
 				}.Build(),
 				Spec: privatev1.BareMetalInstanceTypeSpec_builder{
 					Hardware: privatev1.BareMetalHardwareSpec_builder{
-						Cpu: privatev1.BareMetalCPUSpec_builder{
-							Cores:          32,
-							Architecture:   "x86_64",
-							ThreadsPerCore: 2,
-						}.Build(),
-						Memory: privatev1.BareMetalMemorySpec_builder{
-							TotalGb: 128,
-						}.Build(),
+						Cpu:    privatev1.BareMetalCPUSpec_builder{Cores: 32, Architecture: "x86_64", ThreadsPerCore: 2}.Build(),
+						Memory: privatev1.BareMetalMemorySpec_builder{TotalGb: 128}.Build(),
 						NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
 							privatev1.BareMetalNetworkPortSpec_builder{
-								Name:  "data-0",
+								Name:  "eth0",
 								Role:  "fabric",
 								Type:  "Ethernet",
-								Speed: "25Gbps",
+								Speed: "10Gbps",
 							}.Build(),
 						},
 					}.Build(),
 					HostLabelSelector: privatev1.BareMetalLabelSelector_builder{
-						MatchLabels: map[string]string{
-							"node-role": "worker",
-						},
+						MatchLabels: map[string]string{"hardware.profile": "compute"},
 					}.Build(),
 				}.Build(),
 			}.Build(),
@@ -147,12 +124,6 @@ var _ = Describe("Cluster reconciler", func() {
 						Description: "Your optional parameter.",
 						Required:    false,
 						Default:     makeAny(wrapperspb.String("your_default")),
-					}.Build(),
-				},
-				NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
-					"my_node_set": privatev1.ClusterTemplateNodeSet_builder{
-						HostType: privatev1.HostTypeReference_builder{Id: hostTypeId}.Build(),
-						Size:     3,
 					}.Build(),
 				},
 			}.Build(),
@@ -197,17 +168,12 @@ var _ = Describe("Cluster reconciler", func() {
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NodeSets: testClusterNodeSets(bmitName, 3),
 					AddOnOperators: []*publicv1.AddOnOperatorReference{
 						publicv1.AddOnOperatorReference_builder{Id: operatorID}.Build(),
 					},
 					TemplateParameters: map[string]*anypb.Any{
 						"my": makeAny(wrapperspb.String("my_value")),
-					},
-					NodeSets: map[string]*publicv1.ClusterNodeSet{
-						"my_node_set": publicv1.ClusterNodeSet_builder{
-							BaremetalInstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: bmitId}.Build(),
-							Size:                  proto.Int32(3),
-						}.Build(),
 					},
 				}.Build(),
 			}.Build(),
@@ -241,9 +207,10 @@ var _ = Describe("Cluster reconciler", func() {
 		// Check that namespace is correct:
 		Expect(kubeObject.GetNamespace()).To(Equal(hubNamespace))
 
-		// Verify that the node sets are reflected in the Kubernetes object:
+		// Verify that the request NodeSets are reflected in the Kubernetes object:
 		Expect(kubeObject.Spec.NodeRequests).To(HaveLen(1))
-		Expect(kubeObject.Spec.NodeRequests[0].ResourceClass).To(Equal(bmitId))
+		Expect(kubeObject.Spec.NodeRequests[0].BareMetal).ToNot(BeNil())
+		Expect(kubeObject.Spec.NodeRequests[0].BareMetal.InstanceType).To(Equal(bmitName))
 		Expect(kubeObject.Spec.NodeRequests[0].NumberOfNodes).To(BeNumerically("==", 3))
 		Expect(kubeObject.Spec.AddOnOperators).To(Equal([]string{operatorName}))
 
@@ -307,6 +274,7 @@ var _ = Describe("Cluster reconciler", func() {
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NodeSets: testClusterNodeSets(bmitName, 3),
 					TemplateParameters: map[string]*anypb.Any{
 						"my": makeAny(wrapperspb.String("my_value")),
 					},
@@ -372,7 +340,7 @@ var _ = Describe("Cluster reconciler", func() {
 					},
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"my_node_set": publicv1.ClusterNodeSet_builder{
-							BaremetalInstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: bmitId}.Build(),
+							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName}.Build(),
 							Size:                  proto.Int32(3),
 						}.Build(),
 					},
@@ -407,7 +375,7 @@ var _ = Describe("Cluster reconciler", func() {
 
 		// Verify the initial node set size in the Kubernetes object:
 		Expect(clusterOrderObj.Spec.NodeRequests).To(HaveLen(1))
-		Expect(clusterOrderObj.Spec.NodeRequests[0].ResourceClass).To(Equal(bmitId))
+		Expect(clusterOrderObj.Spec.NodeRequests[0].BareMetal.InstanceType).To(Equal(bmitName))
 		Expect(clusterOrderObj.Spec.NodeRequests[0].NumberOfNodes).To(BeNumerically("==", 3))
 
 		// Update the cluster to change the node set size
@@ -424,7 +392,7 @@ var _ = Describe("Cluster reconciler", func() {
 					},
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"my_node_set": publicv1.ClusterNodeSet_builder{
-							BaremetalInstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: bmitId}.Build(),
+							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName}.Build(),
 							Size:                  proto.Int32(5),
 						}.Build(),
 					},
@@ -443,7 +411,7 @@ var _ = Describe("Cluster reconciler", func() {
 				err := kubeClient.Get(ctx, clusterOrderKey, clusterOrderObj)
 				g.Expect(err).ToNot(HaveOccurred())
 				g.Expect(clusterOrderObj.Spec.NodeRequests).To(HaveLen(1))
-				g.Expect(clusterOrderObj.Spec.NodeRequests[0].ResourceClass).To(Equal(bmitId))
+				g.Expect(clusterOrderObj.Spec.NodeRequests[0].BareMetal.InstanceType).To(Equal(bmitName))
 				g.Expect(clusterOrderObj.Spec.NodeRequests[0].NumberOfNodes).To(BeNumerically("==", 5))
 			},
 			time.Minute,
@@ -467,6 +435,7 @@ var _ = Describe("Cluster reconciler", func() {
 					}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
 						Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+						NodeSets: testClusterNodeSets(bmitName, 3),
 						TemplateParameters: map[string]*anypb.Any{
 							"my": makeAny(wrapperspb.String("my_value")),
 						}}.Build(),

@@ -24,7 +24,12 @@ stall:
   preparingInfrastructureThreshold: "15m"
   controlPlaneStartingThreshold: "30m"
   workersJoiningThreshold: "20m"
-  workersJoiningByHostType: {}
+  workersJoiningByInstanceType: {}
+
+# On OpenShift, trust the platform-managed ingress CA when fetching Assisted
+# Service discovery ignition through its HTTPS Route.
+ignition:
+  trustIngressCA: false
 
 fulfillment:
   serverAddress: ""

@@ -1,0 +1,11 @@
+# Kind cluster config for sim integration tests.
+# Maps NodePort 30001 on the container to host port 8001, so tests can
+# reach fulfillment-internal-api on localhost:8001 without port-forward.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30001
+        hostPort: 8001
+        protocol: TCP

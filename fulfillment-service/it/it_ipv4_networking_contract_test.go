@@ -726,11 +726,17 @@ var _ = Describe("IPv4-only controller endpoint gRPC contract", Label("ipv4-netw
 		}
 
 		By("creating a real cluster and accepting canonical IPv4 controller updates")
-		host := createCatalogItemHostTypeFixture(ctx)
-		template := createCatalogItemClusterTemplateFixture(ctx, host, nil, nil)
+		bmit := createCatalogItemBareMetalInstanceTypeFixture(ctx, "shared")
+		template := createCatalogItemClusterTemplateFixture(ctx, nil, nil)
 		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 		cluster, err := createClusterFixture(ctx, tool.ExternalView().UserConn(), publicv1.ClusterSpec_builder{
-			Template:          publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
+			Template: publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
+			NodeSets: map[string]*publicv1.ClusterNodeSet{
+				"workers": publicv1.ClusterNodeSet_builder{
+					Size:                  new(int32(1)),
+					BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit}.Build(),
+				}.Build(),
+			},
 			NetworkAttachment: network.clusterAttachment(),
 		}.Build())
 		Expect(err).NotTo(HaveOccurred())

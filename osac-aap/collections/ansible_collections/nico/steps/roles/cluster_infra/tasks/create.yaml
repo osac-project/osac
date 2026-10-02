@@ -126,32 +126,32 @@
 - name: Handle scale-down of existing cluster
   when: current_node_pools.resources | length > 0
   block:
-    - name: Set resource classes included in the request
+    - name: Set instance types included in the request
       ansible.builtin.set_fact:
-        requested_resource_classes: >
-          {{ cluster_infra_node_requests | map(attribute='resourceClass') | list }}
+        requested_instance_types: >
+          {{ cluster_infra_node_requests | map(attribute='bareMetal.instanceType') | list }}
 
-    - name: Determine which resource classes are no longer needed
+    - name: Determine which instance types are no longer needed
       ansible.builtin.set_fact:
-        removed_resource_classes: "{{ removed_resource_classes | default([]) + [item.metadata.labels[agent_resource_class_label]] }}"
+        removed_instance_types: "{{ removed_instance_types | default([]) + [item.metadata.labels[agent_instance_type_label]] }}"
       with_items: "{{ current_node_pools.resources }}"
       when:
         - item.metadata.labels is defined
-        - agent_resource_class_label in item.metadata.labels
-        - item.metadata.labels[agent_resource_class_label] not in requested_resource_classes
+        - agent_instance_type_label in item.metadata.labels
+        - item.metadata.labels[agent_instance_type_label] not in requested_instance_types
 
-    - name: Display additional resource classes to be removed
+    - name: Display additional instance types to be removed
       ansible.builtin.debug:
-        msg: "The following resource classes are no longer requested: {{ removed_resource_classes | default([]) }}"
+        msg: "The following instance types are no longer requested: {{ removed_instance_types | default([]) }}"
 
-    - name: Initialize updated cluster infra node requests that will include removed resource classes
+    - name: Initialize updated cluster infra node requests that will include removed instance types
       ansible.builtin.set_fact:
         updated_cluster_infra_node_requests: "{{ cluster_infra_node_requests }}"
 
-    - name: Add removed resource classes to updated cluster infra node requests
+    - name: Add removed instance types to updated cluster infra node requests
       ansible.builtin.set_fact:
-        updated_cluster_infra_node_requests: "{{ updated_cluster_infra_node_requests + [{'numberOfNodes': '0', 'resourceClass': item}] }}"
-      with_items: "{{ removed_resource_classes | default([]) }}"
+        updated_cluster_infra_node_requests: "{{ updated_cluster_infra_node_requests + [{'numberOfNodes': 0, 'bareMetal': {'instanceType': item}}] }}"
+      with_items: "{{ removed_instance_types | default([]) }}"
 
     - name: Wait for the Agents to be removed from the cluster
       ansible.builtin.include_role:
@@ -160,7 +160,7 @@
       vars:
         manage_agents_cluster_order_name: "{{ cluster_infra_name }}"
         manage_agents_desired_count: "{{ item.numberOfNodes | int }}"
-        manage_agents_resource_class: "{{ item.resourceClass }}"
+        manage_agents_instance_type: "{{ item.bareMetal.instanceType }}"
       loop: "{{ updated_cluster_infra_node_requests }}"
 
     # Capture instance IDs before detachment removes labels.
@@ -262,7 +262,7 @@
   vars:
     manage_agents_cluster_order_name: "{{ cluster_infra_name }}"
     manage_agents_desired_count: "{{ item.numberOfNodes | int }}"
-    manage_agents_resource_class: "{{ item.resourceClass }}"
+    manage_agents_instance_type: "{{ item.bareMetal.instanceType }}"
   loop: "{{ cluster_infra_node_requests }}"
 
 - name: Attach agents to cluster network and approve them

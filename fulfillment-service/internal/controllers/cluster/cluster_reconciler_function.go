@@ -425,6 +425,19 @@ func (t *task) addExplicitFields(ctx context.Context, spec *osacv1alpha1.Cluster
 			spec.Network = network
 		}
 	}
+	if clusterSpec.HasNetworkAttachment() {
+		na := clusterSpec.GetNetworkAttachment()
+		cna := &osacv1alpha1.ClusterNetworkAttachment{}
+		if subnet := na.GetSubnet(); subnet != nil {
+			cna.SubnetRef = subnet.GetName()
+		}
+		for _, sg := range na.GetSecurityGroups() {
+			cna.SecurityGroupRefs = append(cna.SecurityGroupRefs, sg.GetName())
+		}
+		if cna.SubnetRef != "" {
+			spec.NetworkAttachment = cna
+		}
+	}
 	return nil
 }
 
@@ -503,40 +516,25 @@ func (t *task) prepareNodeRequests() []osacv1alpha1.NodeRequest {
 
 	nodeRequests := make([]osacv1alpha1.NodeRequest, 0, len(keys))
 	for _, key := range keys {
-		nodeRequests = append(nodeRequests, t.prepareNodeRequest(nodeSets[key]))
+		nodeRequests = append(nodeRequests, t.prepareNodeRequest(key, nodeSets[key]))
 	}
 	return nodeRequests
 }
 
-func (t *task) prepareNodeRequest(nodeSet *privatev1.ClusterNodeSet) osacv1alpha1.NodeRequest {
-	// Prefer BareMetalInstanceType; fall back to the deprecated HostType so that
-	// clusters that pre-date BMIT still get a valid ResourceClass.
-	rc := ""
-	if bmit := nodeSet.GetBaremetalInstanceType(); bmit != nil {
-		rc = controllers.RefKeyStr(bmit)
-	}
-	if rc == "" {
-		if ht := nodeSet.GetHostType(); ht != nil {
-			rc = controllers.RefKeyStr(ht)
-		}
-	}
+func (t *task) prepareNodeRequest(key string, nodeSet *privatev1.ClusterNodeSet) osacv1alpha1.NodeRequest {
+	bmitName := nodeSet.GetBaremetalInstanceType().GetName()
 	return osacv1alpha1.NodeRequest{
-		ResourceClass: rc,
+		NodeSet:       key,
 		NumberOfNodes: int(nodeSet.GetSize()),
+		BareMetal:     &osacv1alpha1.BareMetalNodeSpec{InstanceType: bmitName},
 	}
 }
 
 func (t *task) delete(ctx context.Context) (err error) {
-	// If no hub was assigned, no Kubernetes resources or hub secrets could have
-	// been created, so there is nothing external to clean up.
+	// No hub was assigned, so no ClusterOrder or hub secrets could have been created.
 	t.hubId = t.cluster.GetStatus().GetHub()
 	if t.hubId == "" {
 		t.removeFinalizer()
-		return
-	}
-
-	err = t.deleteClusterSecrets(ctx)
-	if err != nil {
 		return
 	}
 
@@ -544,6 +542,9 @@ func (t *task) delete(ctx context.Context) (err error) {
 	if err != nil {
 		// Check if the hub has been decommissioned (deleted from database)
 		if errors.Is(err, controllers.ErrHubNotFound) {
+			if err = t.deleteClusterSecrets(ctx); err != nil {
+				return err
+			}
 			controllers.RemoveFinalizerOnDecommissionedHub(ctx, t.r.logger, t.hubId, "cluster_id", t.cluster.GetId(), t.removeFinalizer)
 			return nil
 		}
@@ -562,6 +563,9 @@ func (t *task) delete(ctx context.Context) (err error) {
 			"Cluster order doesn't exist",
 			slog.String("id", t.cluster.GetId()),
 		)
+		if err = t.deleteClusterSecrets(ctx); err != nil {
+			return err
+		}
 		t.removeFinalizer()
 		return
 	}
@@ -569,13 +573,24 @@ func (t *task) delete(ctx context.Context) (err error) {
 	if err != nil {
 		return
 	}
-	t.r.logger.DebugContext(
-		ctx,
-		"Deleted cluster order",
-		slog.String("namespace", object.GetNamespace()),
-		slog.String("name", object.GetName()),
-	)
+	// Kubernetes deletion is asynchronous when the ClusterOrder has finalizers. Keep
+	// the authoritative Cluster record until the baremetalworker has verified
+	// ownership and removed its workers. The ClusterOrder feedback controller
+	// signals us when its last finalizer is removed; a periodic sync also retries.
+	remaining, err := t.getKubeObject(ctx)
+	if err != nil {
+		return err
+	}
+	if remaining != nil {
+		t.r.logger.DebugContext(ctx, "Waiting for cluster order deletion",
+			slog.String("namespace", object.GetNamespace()),
+			slog.String("name", object.GetName()))
+		return nil
+	}
 
+	if err = t.deleteClusterSecrets(ctx); err != nil {
+		return err
+	}
 	t.removeFinalizer()
 	return
 }

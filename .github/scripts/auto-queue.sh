@@ -61,12 +61,12 @@ enqueue() {
 }
 
 dequeue() {
-  local pr="$1" id="$2" entry_id
-  entry_id=$(gh api graphql -f query='
+  local pr="$1" id="$2" queued
+  queued=$(gh api graphql -f query='
     query($id: ID!) {
       node(id: $id) { ... on PullRequest { mergeQueueEntry { id } } }
-    }' -f id="$id" --jq '.data.node.mergeQueueEntry.id // empty')
-  if [[ -z "${entry_id}" ]]; then
+    }' -f id="$id" --jq '.data.node.mergeQueueEntry != null')
+  if [[ "${queued}" != "true" ]]; then
     echo "PR #${pr} is not in the merge queue"
     return 0
   fi
@@ -76,7 +76,7 @@ dequeue() {
       dequeuePullRequest(input: {id: $id}) {
         mergeQueueEntry { state }
       }
-    }' -f id="${entry_id}" \
+    }' -f id="${id}" \
     --jq '.data.dequeuePullRequest.mergeQueueEntry.state // "dequeued"'
 }
 
@@ -118,7 +118,7 @@ process_pr() {
 }
 
 sync_one() {
-  local labels
+  local labels collaborator_status status
   if [[ "${ACTION:-}" == "synchronize" ]]; then
     labels=$(gh pr view "$PR" --repo "$REPO" --json labels --jq '[.labels[].name]')
     if [[ "$(jq -r 'index("lgtm") != null' <<<"${labels}")" == "true" ]]; then
@@ -127,9 +127,16 @@ sync_one() {
     fi
   fi
   echo "Checking collaborator ${AUTHOR}"
-  if ! gh api "repos/${REPO}/collaborators/${AUTHOR}" --silent; then
-    echo "Author ${AUTHOR} is not a repo collaborator; leaving PR #${PR} alone"
-    return 0
+  if collaborator_status=$(gh api "repos/${REPO}/collaborators/${AUTHOR}" --include --silent); then
+    :
+  else
+    status=$(awk '$1 ~ /^HTTP/ { code=$2 } END { print code }' <<<"${collaborator_status}")
+    if [[ "${status}" == "404" ]]; then
+      echo "Author ${AUTHOR} is not a repo collaborator; leaving PR #${PR} alone"
+      return 0
+    fi
+    echo "Collaborator check failed for ${AUTHOR} (HTTP ${status:-unknown})" >&2
+    return 1
   fi
   process_pr "$PR"
 }
@@ -137,8 +144,8 @@ sync_one() {
 maintain() {
   local row pr prs
   echo "Maintaining open pull requests"
-  prs=$(gh pr list --repo "$REPO" --state open --limit 200 --json number,isDraft \
-    | jq -c '.[]')
+  prs=$(gh api --paginate "repos/${REPO}/pulls?state=open&per_page=100" \
+    --jq '.[] | {number, isDraft: .draft}')
   while read -r row; do
     [[ -z "${row}" ]] && continue
     if [[ "$(jq -r '.isDraft' <<<"${row}")" == "true" ]]; then

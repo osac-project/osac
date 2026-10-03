@@ -173,7 +173,7 @@ and `osac-infra`. Keys a chart doesn't recognize are ignored.
 | `bundledPostgres.database.name` | Bundled database name. | `service` |
 | `bundledPostgres.database.user` | Bundled database owner. | `service` |
 | `bundledVault.enabled` | Deploys an ephemeral in-cluster OpenBao secret store. Set it to `false` for production and configure external Vault in the `osac` values file; see the [secrets management configuration guide](secrets-management-configuration.md). | `true` |
-| `cliImage` | The `oc` image that the chart hook jobs use. | `origin-cli:4.20.0` |
+| `cliImage` | The `oc` image that the chart hook jobs use. | `origin-cli:4.22.0` |
 
 ## When Prerequisites Already Exist
 

@@ -1,6 +1,6 @@
 # Build context: mono-repo root (not osac-operator/ alone).
 # Invoke with: podman build -f osac-operator/Containerfile .
-FROM registry.access.redhat.com/ubi10/go-toolset:1.26.7-1788946935 AS builder
+FROM registry.access.redhat.com/ubi10/go-toolset:1.26-1790644709 AS builder
 ARG TARGETOS
 ARG TARGETARCH
 
@@ -30,7 +30,7 @@ WORKDIR /opt/app-root/src/osac-operator
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o manager cmd/main.go
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o console-proxy cmd/console-proxy/main.go
 
-FROM registry.access.redhat.com/ubi10-minimal:10.2-1790075626
+FROM registry.access.redhat.com/ubi10-minimal:1790753356
 COPY --from=builder /opt/app-root/src/osac-operator/manager /usr/local/bin/
 COPY --from=builder /opt/app-root/src/osac-operator/console-proxy /usr/local/bin/
 USER 1001

@@ -293,6 +293,7 @@ def _cleanup_cluster(
 # ---------------------------------------------------------------------------
 # Lifecycle: create cluster with network attachment, verify, delete
 # ---------------------------------------------------------------------------
+@pytest.mark.requires_caas_fabric
 @pytest.mark.serial
 class TestCaasClusterWithNetworkAttachment:
     """Full lifecycle test: create with --network-attachment, wait Ready, verify, delete."""
@@ -420,6 +421,7 @@ class TestCaasClusterWithNetworkAttachment:
             )
 
 
+@pytest.mark.requires_caas_fabric
 @pytest.mark.serial
 class TestCaasMultipleWorkerTypes:
     """Exercise distinct worker instance types through real CaaS provisioning."""
@@ -656,6 +658,7 @@ class TestCaasMultipleWorkerTypes:
 # ---------------------------------------------------------------------------
 # Automatic ExternalIP lifecycle for a CaaS Cluster
 # ---------------------------------------------------------------------------
+@pytest.mark.requires_caas_fabric
 @pytest.mark.serial
 class TestCaasClusterAutoExternalIP:
     """Verify auto-provisioned API and ingress addresses follow Cluster lifecycle."""
@@ -918,6 +921,7 @@ class TestCaasNetworkAttachmentNegative:
 # ---------------------------------------------------------------------------
 # Default networking: cluster without explicit --network-attachment
 # ---------------------------------------------------------------------------
+@pytest.mark.requires_caas_fabric
 @pytest.mark.serial
 class TestCaasDefaultNetworking:
     """Cluster creation without explicit --network-attachment, relying on tenant defaults."""
@@ -1024,6 +1028,7 @@ class TestCaasDefaultNetworking:
 # ---------------------------------------------------------------------------
 # Sequential CaaS provisioning: create → delete → create again
 # ---------------------------------------------------------------------------
+@pytest.mark.requires_caas_fabric
 @pytest.mark.serial
 class TestCaasSequentialProvisioning:
     """Verify a new CaaS cluster can be provisioned after deleting the previous one.

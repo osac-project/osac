@@ -310,7 +310,8 @@ including cluster lifecycle, networking, agent reuse, and deletion feedback.
 
 - A deployed OSAC stack (fulfillment-service, osac-operator, AAP) with the
   CaaS workflow configured and at least one available Agent in
-  `hardware-inventory`.
+  `hardware-inventory`. Tests marked `requires_caas_fabric` also require a
+  tenant NetworkClass backed by a fabric manager, such as Netris.
 - Python dependencies: `uv sync --all-groups` (from repository root).
 - Environment variables:
   - `OSAC_GRPC_ENDPOINT` — fulfillment-service gRPC endpoint.
@@ -324,8 +325,9 @@ including cluster lifecycle, networking, agent reuse, and deletion feedback.
 
 | Tier | Location / command | Exercises for real | Faked or omitted |
 |---|---|---|---|
-| E2E (sanity) | `tests/e2e/caas/sanity/`; `uv run pytest tests/e2e/caas/sanity/ -m 'not metering'` | ClusterOrder creation through fulfillment API, operator reconciliation, and delete feedback without provisioning | AAP provisioning is not exercised; the delete-feedback test validates the Deleting phase without waiting for a full provision cycle. |
-| E2E (regression) | `tests/e2e/caas/regression/`; `uv run pytest tests/e2e/caas/regression/ -m 'not metering'` | Full cluster lifecycle with networking (VirtualNetwork, Subnet, SecurityGroup, ClusterNetworkAttachment), two worker types with separate NodePools and Agent selectors, sequential reprovisioning after deletion, auto-ExternalIP attachment, and version selection | Requires deployed OSAC, operator-managed Assisted Service Agents, HyperShift, at least two BMaaS hosts, a network backend, and an ExternalIP pool provider. The multi-type test creates and removes temporary shared BMIT profiles; the auto-ExternalIP test creates and removes its own pool. |
+| E2E (sanity) | `tests/e2e/caas/sanity/`; `uv run pytest tests/e2e/caas/sanity/ -m 'not metering and not requires_caas_fabric'` | ClusterOrder creation through fulfillment API, operator reconciliation, and delete feedback without provisioning | The shared `caas-ci` profile is k8s-only. `test_cluster_create` is fabric-dependent and is selected only in a fabric-backed environment. |
+| E2E (regression) | `tests/e2e/caas/regression/`; `uv run pytest tests/e2e/caas/regression/ -m 'not metering and not requires_caas_fabric'` | API validation, version selection, and other cases that do not provision BMaaS workers | Fabric-dependent worker lifecycle cases require deployed OSAC, operator-managed Assisted Service Agents, HyperShift, at least two BMaaS hosts, a fabric manager, and (for auto-ExternalIP) an ExternalIP pool provider. |
+| E2E (CaaS Netris) | Optional GitHub workflow triggered with the `e2e-caas-netris` label | Runs `tests/e2e/caas/ -m 'requires_caas_fabric'` against an ephemeral Netris-backed deployment, then verifies the baseline CaaS provisioning flow | Requires the Netris lab, available BMaaS agents, and the deployed metering test adapter. The auto-ExternalIP case creates and cleans up its own pool. |
 
 ### Running CaaS E2E tests
 
@@ -335,11 +337,11 @@ From the repository root:
 # Collect tests (dry run) — verify environment and imports
 uv run pytest --collect-only tests/e2e/caas/ -m 'not metering'
 
-# Run sanity suite only (no provisioning required)
-uv run pytest tests/e2e/caas/sanity/ -m 'not metering' -v
+# Run the k8s-only-compatible sanity cases
+uv run pytest tests/e2e/caas/sanity/ -m 'not metering and not requires_caas_fabric' -v
 
-# Run full CaaS regression suite (requires deployed OSAC and CaaS provisioning dependencies)
-uv run pytest tests/e2e/caas/regression/ -m 'not metering' -v
+# Run fabric-backed CaaS worker lifecycle tests in a configured Netris environment
+uv run pytest tests/e2e/caas/ -m 'requires_caas_fabric' -v
 
 # Run a specific test class
 uv run pytest tests/e2e/caas/regression/networking/test_caas_networking.py::TestCaasSequentialProvisioning -v
@@ -391,6 +393,14 @@ uv run pytest tests/e2e/caas/regression/networking/test_caas_networking.py::Test
   verifies the stage order. The CaaS E2E worker-IP assertions verify the real
   deployed outcome when run with hardware and a network backend. Unit tests
   mock provider calls; they do not verify the Netris API contract.
+- **Environment selection:** The shared CaaS full-install workflow deploys the
+  `caas-ci` profile with `k8s_only` networking and excludes tests marked
+  `requires_caas_fabric`. The optional `e2e-caas-netris` workflow uses the
+  same `caas-ci` base values with a Netris-backed NetworkClass override,
+  executes those marked pytest cases from this branch, then runs the baseline
+  CaaS cluster flow. The local `cudn-evpn-netris-test` profile is not a
+  drop-in replacement: it disables CaaS and requires existing CUDN EVPN and
+  Netris infrastructure.
 
 ### Real-versus-simulated boundaries
 

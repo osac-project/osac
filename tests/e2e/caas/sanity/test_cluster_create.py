@@ -123,8 +123,8 @@ def _agent_is_installing(agent: dict[str, Any]) -> bool:
     return agent.get("status", {}).get("debugInfo", {}).get("state") in _INSTALLING_AGENT_STATES
 
 
-@pytest.mark.caas_cluster_create_focus
 @pytest.mark.metering
+@pytest.mark.requires_caas_fabric
 def test_cluster_create(
     cli: OsacCLI,
     grpc: GRPCClient,

@@ -39,33 +39,35 @@ type storedEvent struct {
 	receivedAt time.Time
 }
 
-// eventStore is a bounded, thread-safe ring buffer of received events.
+// EventStore is a bounded, thread-safe ring buffer of received events.
 // It supports filtered queries for E2E test assertions.
-type eventStore struct {
+type EventStore struct {
 	mu     sync.RWMutex
 	events []storedEvent
 	max    int
 }
 
-func newEventStore(max int) *eventStore {
+// NewEventStore creates a ring buffer that keeps at most max events.
+// max <= 0 uses DefaultMaxEvents.
+func NewEventStore(max int) *EventStore {
 	if max <= 0 {
 		max = DefaultMaxEvents
 	}
-	return &eventStore{
+	return &EventStore{
 		events: make([]storedEvent, 0, max),
 		max:    max,
 	}
 }
 
 // clear removes all events from the store.
-func (s *eventStore) clear() {
+func (s *EventStore) clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.events = s.events[:0]
 }
 
 // getByID returns the enriched JSON for the event with the given CloudEvent ID.
-func (s *eventStore) getByID(id string) json.RawMessage {
+func (s *EventStore) getByID(id string) json.RawMessage {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for i := range s.events {
@@ -81,7 +83,7 @@ func (s *eventStore) getByID(id string) json.RawMessage {
 // kept in indexed fields for filtering but not merged into the JSON
 // to avoid overwriting CloudEvent attributes or introducing invalid
 // extension names.
-func (s *eventStore) add(event adapters.MeteringEvent) {
+func (s *EventStore) add(event adapters.MeteringEvent) {
 	ce := event.CloudEvent
 
 	raw, err := json.Marshal(ce)
@@ -115,7 +117,7 @@ func (s *eventStore) add(event adapters.MeteringEvent) {
 }
 
 // query returns events matching the given filters.
-func (s *eventStore) query(eventType, resourceID string, since time.Time, limit int) []json.RawMessage {
+func (s *EventStore) query(eventType, resourceID string, since time.Time, limit int) []json.RawMessage {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -139,7 +141,7 @@ func (s *eventStore) query(eventType, resourceID string, since time.Time, limit 
 }
 
 // count returns the number of events matching the given filters.
-func (s *eventStore) count(eventType, resourceID string, since time.Time) int {
+func (s *EventStore) count(eventType, resourceID string, since time.Time) int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -159,12 +161,12 @@ func (s *eventStore) count(eventType, resourceID string, since time.Time) int {
 	return n
 }
 
-// handleEvents serves GET /events with optional query parameters:
+// HandleEvents serves GET /events with optional query parameters:
 //   - type:        filter by CloudEvent type
 //   - resource_id: filter by resource ID (osacresourceid extension)
 //   - since:       RFC3339 timestamp, only events received after this time
 //   - limit:       max number of results
-func (s *eventStore) handleEvents(w http.ResponseWriter, r *http.Request) {
+func (s *EventStore) HandleEvents(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	eventType := q.Get("type")
 	resourceID := q.Get("resource_id")
@@ -198,8 +200,8 @@ func (s *eventStore) handleEvents(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(events) //nolint:errcheck
 }
 
-// handleEventByID serves GET /events/{id} — returns a single event by CloudEvent ID.
-func (s *eventStore) handleEventByID(w http.ResponseWriter, r *http.Request) {
+// HandleEventByID serves GET /events/{id} — returns a single event by CloudEvent ID.
+func (s *EventStore) HandleEventByID(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
 		http.Error(w, "missing event id", http.StatusBadRequest)
@@ -216,14 +218,14 @@ func (s *eventStore) handleEventByID(w http.ResponseWriter, r *http.Request) {
 	w.Write(raw) //nolint:errcheck
 }
 
-// handleDeleteEvents serves DELETE /events — clears all stored events.
-func (s *eventStore) handleDeleteEvents(w http.ResponseWriter, _ *http.Request) {
+// HandleDeleteEvents serves DELETE /events — clears all stored events.
+func (s *EventStore) HandleDeleteEvents(w http.ResponseWriter, _ *http.Request) {
 	s.clear()
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleCount serves GET /events/count with the same filters as /events.
-func (s *eventStore) handleCount(w http.ResponseWriter, r *http.Request) {
+// HandleCount serves GET /events/count with the same filters as /events.
+func (s *EventStore) HandleCount(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	eventType := q.Get("type")
 	resourceID := q.Get("resource_id")

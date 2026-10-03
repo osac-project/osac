@@ -425,6 +425,22 @@ func (t *task) addExplicitFields(ctx context.Context, spec *osacv1alpha1.Cluster
 			spec.Network = network
 		}
 	}
+	if clusterSpec.HasNetworkAttachment() {
+		attachment := clusterSpec.GetNetworkAttachment()
+		orderAttachment := &osacv1alpha1.ClusterNetworkAttachment{}
+		if attachment.HasSubnet() {
+			orderAttachment.SubnetRef = attachment.GetSubnet().GetName()
+		}
+		sgRefs := attachment.GetSecurityGroups()
+		if len(sgRefs) > 0 {
+			sgNames := make([]string, 0, len(sgRefs))
+			for _, sg := range sgRefs {
+				sgNames = append(sgNames, sg.GetName())
+			}
+			orderAttachment.SecurityGroupRefs = sgNames
+		}
+		spec.NetworkAttachment = orderAttachment
+	}
 	return nil
 }
 
@@ -521,8 +537,9 @@ func (t *task) prepareNodeRequest(nodeSet *privatev1.ClusterNodeSet) osacv1alpha
 		}
 	}
 	return osacv1alpha1.NodeRequest{
-		ResourceClass: rc,
-		NumberOfNodes: int(nodeSet.GetSize()),
+		ResourceClass:   rc,
+		NumberOfNodes:   int(nodeSet.GetSize()),
+		FabricInterface: nodeSet.GetFabricInterface(),
 	}
 }
 

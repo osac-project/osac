@@ -132,6 +132,29 @@ var _ = Describe("prepareNodeRequest", func() {
 		Expect(nr.ResourceClass).To(BeEmpty())
 		Expect(nr.NumberOfNodes).To(Equal(1))
 	})
+
+	It("copies FabricInterface from ClusterNodeSet when present", func() {
+		t := &task{}
+		nodeSet := privatev1.ClusterNodeSet_builder{
+			BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Name: "gpu.gb200"}.Build(),
+			Size:                  proto.Int32(2),
+			FabricInterface:       "data-0",
+		}.Build()
+		nr := t.prepareNodeRequest(nodeSet)
+		Expect(nr.FabricInterface).To(Equal("data-0"))
+		Expect(nr.ResourceClass).To(Equal("gpu.gb200"))
+		Expect(nr.NumberOfNodes).To(Equal(2))
+	})
+
+	It("leaves FabricInterface empty when not set on ClusterNodeSet", func() {
+		t := &task{}
+		nodeSet := privatev1.ClusterNodeSet_builder{
+			BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Name: "gpu.gb200"}.Build(),
+			Size:                  proto.Int32(1),
+		}.Build()
+		nr := t.prepareNodeRequest(nodeSet)
+		Expect(nr.FabricInterface).To(BeEmpty())
+	})
 })
 
 var _ = Describe("update tenant annotation", func() {
@@ -546,6 +569,193 @@ var _ = Describe("update tenant annotation", func() {
 		Expect(createdCR.Spec.Network).ToNot(BeNil())
 		Expect(createdCR.Spec.Network.PodCIDR).To(Equal(podCIDR))
 		Expect(createdCR.Spec.Network.ServiceCIDR).To(Equal(serviceCIDR))
+	})
+
+	It("should map network_attachment to ClusterOrder networkAttachment", func() {
+		scheme := runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			Build()
+
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().
+			Get(gomock.Any(), hubID).
+			Return(&controllers.HubEntry{
+				Namespace: hubNamespace,
+				Client:    fakeClient,
+			}, nil)
+
+		cluster := privatev1.Cluster_builder{
+			Id: clusterID,
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.Controller},
+				Tenant:     tenantName,
+			}.Build(),
+			Spec: privatev1.ClusterSpec_builder{
+				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
+				NetworkAttachment: privatev1.ClusterNetworkAttachment_builder{
+					Subnet: privatev1.SubnetLocalReference_builder{
+						Name: "my-subnet",
+					}.Build(),
+					SecurityGroups: []*privatev1.SecurityGroupLocalReference{
+						privatev1.SecurityGroupLocalReference_builder{Name: "sg-allow-ssh"}.Build(),
+						privatev1.SecurityGroupLocalReference_builder{Name: "sg-allow-http"}.Build(),
+					},
+				}.Build(),
+			}.Build(),
+			Status: privatev1.ClusterStatus_builder{
+				State: privatev1.ClusterState_CLUSTER_STATE_PROGRESSING,
+				Hub:   hubID,
+			}.Build(),
+		}.Build()
+
+		t := &task{
+			r: &function{
+				logger:         logger,
+				hubCache:       hubCache,
+				maskCalculator: nil,
+			},
+			cluster: cluster,
+		}
+
+		err := t.update(ctx)
+		Expect(err).ToNot(HaveOccurred())
+
+		list := &osacv1alpha1.ClusterOrderList{}
+		err = fakeClient.List(ctx, list)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(list.Items).To(HaveLen(1))
+
+		createdCR := list.Items[0]
+		Expect(createdCR.Spec.NetworkAttachment).ToNot(BeNil())
+		Expect(createdCR.Spec.NetworkAttachment.SubnetRef).To(Equal("my-subnet"))
+		Expect(createdCR.Spec.NetworkAttachment.SecurityGroupRefs).To(Equal([]string{"sg-allow-ssh", "sg-allow-http"}))
+	})
+
+	It("should use GetName() not ID for SubnetRef and SecurityGroupRefs when both are set", func() {
+		scheme := runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			Build()
+
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().
+			Get(gomock.Any(), hubID).
+			Return(&controllers.HubEntry{
+				Namespace: hubNamespace,
+				Client:    fakeClient,
+			}, nil)
+
+		cluster := privatev1.Cluster_builder{
+			Id: clusterID,
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.Controller},
+				Tenant:     tenantName,
+			}.Build(),
+			Spec: privatev1.ClusterSpec_builder{
+				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
+				NetworkAttachment: privatev1.ClusterNetworkAttachment_builder{
+					Subnet: privatev1.SubnetLocalReference_builder{
+						Id:   "subnet-uuid-1234",
+						Name: "my-subnet",
+					}.Build(),
+					SecurityGroups: []*privatev1.SecurityGroupLocalReference{
+						privatev1.SecurityGroupLocalReference_builder{
+							Id:   "sg-uuid-1111",
+							Name: "sg-allow-ssh",
+						}.Build(),
+						privatev1.SecurityGroupLocalReference_builder{
+							Id:   "sg-uuid-2222",
+							Name: "sg-allow-http",
+						}.Build(),
+					},
+				}.Build(),
+			}.Build(),
+			Status: privatev1.ClusterStatus_builder{
+				State: privatev1.ClusterState_CLUSTER_STATE_PROGRESSING,
+				Hub:   hubID,
+			}.Build(),
+		}.Build()
+
+		t := &task{
+			r: &function{
+				logger:         logger,
+				hubCache:       hubCache,
+				maskCalculator: nil,
+			},
+			cluster: cluster,
+		}
+
+		err := t.update(ctx)
+		Expect(err).ToNot(HaveOccurred())
+
+		list := &osacv1alpha1.ClusterOrderList{}
+		err = fakeClient.List(ctx, list)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(list.Items).To(HaveLen(1))
+
+		createdCR := list.Items[0]
+		Expect(createdCR.Spec.NetworkAttachment).ToNot(BeNil())
+		// Must use CR name, not UUID — the CRD documents these fields as CR names
+		Expect(createdCR.Spec.NetworkAttachment.SubnetRef).To(Equal("my-subnet"))
+		Expect(createdCR.Spec.NetworkAttachment.SecurityGroupRefs).To(Equal([]string{"sg-allow-ssh", "sg-allow-http"}))
+	})
+
+	It("should leave ClusterOrder networkAttachment nil when network_attachment is absent", func() {
+		scheme := runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			Build()
+
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().
+			Get(gomock.Any(), hubID).
+			Return(&controllers.HubEntry{
+				Namespace: hubNamespace,
+				Client:    fakeClient,
+			}, nil)
+
+		cluster := privatev1.Cluster_builder{
+			Id: clusterID,
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.Controller},
+				Tenant:     tenantName,
+			}.Build(),
+			Spec: privatev1.ClusterSpec_builder{
+				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
+				// No network_attachment set
+			}.Build(),
+			Status: privatev1.ClusterStatus_builder{
+				State: privatev1.ClusterState_CLUSTER_STATE_PROGRESSING,
+				Hub:   hubID,
+			}.Build(),
+		}.Build()
+
+		t := &task{
+			r: &function{
+				logger:         logger,
+				hubCache:       hubCache,
+				maskCalculator: nil,
+			},
+			cluster: cluster,
+		}
+
+		err := t.update(ctx)
+		Expect(err).ToNot(HaveOccurred())
+
+		list := &osacv1alpha1.ClusterOrderList{}
+		err = fakeClient.List(ctx, list)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(list.Items).To(HaveLen(1))
+
+		createdCR := list.Items[0]
+		Expect(createdCR.Spec.NetworkAttachment).To(BeNil())
 	})
 
 	It("should resolve pull_secret_secret into ClusterOrder spec.pullSecret", func() {

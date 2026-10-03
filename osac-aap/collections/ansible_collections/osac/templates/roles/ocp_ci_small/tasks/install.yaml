@@ -27,6 +27,10 @@
     name: "{{ (install_step_pre_install_hook_override | default(install_step_pre_install_hook_default)).name }}"
     tasks_from: "{{ (install_step_pre_install_hook_override | default(install_step_pre_install_hook_default)).tasks_from }}"
 
+- name: Extract network attachment (tolerates absence)
+  ansible.builtin.set_fact:
+    _network_attachment: "{{ cluster_order.spec.networkAttachment | default({}) }}"
+
 - name: Step - Create hosted cluster
   ansible.builtin.include_role:
     name: "{{ (install_step_hosted_cluster_override | default(install_step_hosted_cluster_default)).name }}"
@@ -39,6 +43,7 @@
       pull_secret: "{{ template_parameters.pull_secret }}"
       ssh_public_key: "{{ template_parameters.ssh_public_key }}"
     hosted_cluster_node_requests: "{{ cluster_order.spec.nodeRequests | unique(attribute='resourceClass') }}"
+    hosted_cluster_network_attachment: "{{ _network_attachment }}"
     hosted_cluster_state: present
     hosted_cluster_infrastructure_availability_policy: "{{ lookup('env', 'HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY', default='SingleReplica') }}"
 
@@ -51,6 +56,7 @@
     cluster_infra_name: "{{ cluster_order.metadata.name }}"
     cluster_infra_namespace: "{{ cluster_working_namespace }}"
     cluster_infra_node_requests: "{{ cluster_order.spec.nodeRequests | unique(attribute='resourceClass') }}"
+    cluster_infra_network_attachment: "{{ _network_attachment }}"
 
 - name: Step - Configure port forwarding
   ansible.builtin.include_role:
@@ -60,7 +66,7 @@
     external_access_name: "{{ cluster_order.metadata.name }}"
     external_access_state: present
     external_access_namespace: "{{ cluster_working_namespace }}"
-    external_access_ingress_internal_network: "network-{{ cluster_order.metadata.name }}"
+    external_access_ingress_internal_network: "{{ _network_attachment.subnetRef | default('network-' + cluster_order.metadata.name) }}"
 
 - name: Step - Retrieve kubeconfig
   ansible.builtin.include_role:

@@ -90,6 +90,7 @@ type FunctionBuilder struct {
 type function struct {
 	logger                 *slog.Logger
 	hubCache               controllers.HubCache
+	networkingHubReader    controllers.NetworkingHubReader
 	computeInstancesClient privatev1.ComputeInstancesClient
 	hubsClient             privatev1.HubsClient
 	instanceTypesClient    privatev1.InstanceTypesClient
@@ -157,6 +158,13 @@ func (b *FunctionBuilder) Build() (result controllers.ReconcilerFunction[*privat
 		hubCache:               b.hubCache,
 		maskCalculator:         masks.NewCalculator().Build(),
 	}
+	object.networkingHubReader, err = controllers.NewNetworkingHubReader().
+		SetNetworkClassesClient(privatev1.NewNetworkClassesClient(b.connection)).
+		SetHubCache(b.hubCache).
+		Build()
+	if err != nil {
+		return nil, err
+	}
 	result = object.run
 	return
 }
@@ -173,19 +181,31 @@ func (r *function) run(ctx context.Context, computeInstance *privatev1.ComputeIn
 	} else {
 		reconcileErr = t.update(ctx)
 	}
-	var secretErr *SecretResolutionError
-	if errors.As(reconcileErr, &secretErr) {
-		if secretErr.Permanent {
-			t.setReconciliationFailedWithReason(secretErr.Err, secretErr.Reason)
-		} else {
-			// Resolution failures are retried without changing API status or creating
-			// a Kubernetes object. Restore the input so defaults and hub selection do
-			// not turn a transient lookup failure into a persisted mutation.
-			proto.Reset(computeInstance)
-			proto.Merge(computeInstance, oldComputeInstance)
+	var hubResolutionRetryErr error
+	if reconcileErr != nil {
+		handled, retry := controllers.HandleResourceNetworkingHubResolutionError(reconcileErr, t.setPending, t.setFailed)
+		if handled {
+			if retry {
+				hubResolutionRetryErr = reconcileErr
+			}
+			reconcileErr = nil
 		}
-	} else if reconcileErr != nil && !errors.Is(reconcileErr, errTransientK8sError) {
-		t.setReconciliationFailed(reconcileErr)
+	}
+	if reconcileErr != nil {
+		var secretErr *SecretResolutionError
+		if errors.As(reconcileErr, &secretErr) {
+			if secretErr.Permanent {
+				t.setReconciliationFailedWithReason(secretErr.Err, secretErr.Reason)
+			} else {
+				// Resolution failures are retried without changing API status or creating
+				// a Kubernetes object. Restore the input so defaults and hub selection do
+				// not turn a transient lookup failure into a persisted mutation.
+				proto.Reset(computeInstance)
+				proto.Merge(computeInstance, oldComputeInstance)
+			}
+		} else if !errors.Is(reconcileErr, errTransientK8sError) {
+			t.setReconciliationFailed(reconcileErr)
+		}
 	}
 	// Calculate which fields the reconciler actually modified and use a field mask
 	// to update only those fields. This prevents overwriting concurrent user changes.
@@ -209,7 +229,10 @@ func (r *function) run(ctx context.Context, computeInstance *privatev1.ComputeIn
 		}
 		return reconcileErr
 	}
-	return updateErr
+	if updateErr != nil {
+		return updateErr
+	}
+	return hubResolutionRetryErr
 }
 
 func (t *task) update(ctx context.Context) error {
@@ -413,6 +436,20 @@ func (t *task) delete(ctx context.Context) (err error) {
 
 func (t *task) selectHub(ctx context.Context) error {
 	t.hubId = t.computeInstance.GetStatus().GetHub()
+	if len(t.computeInstance.GetSpec().GetNetworkAttachments()) > 0 {
+		if t.r.networkingHubReader == nil {
+			return controllers.ErrCanonicalHubUnavailable
+		}
+		resolution, err := controllers.ResolveResourceNetworkingHub(ctx, t.r.networkingHubReader, t.hubId)
+		if err != nil {
+			return err
+		}
+		t.hubId = resolution.HubID
+		t.hubNamespace = resolution.Namespace
+		t.hubClient = resolution.Client
+		t.r.logger.DebugContext(ctx, "Selected canonical networking hub", slog.String("id", t.hubId))
+		return nil
+	}
 	if t.hubId == "" {
 		response, err := t.r.hubsClient.List(ctx, privatev1.HubsListRequest_builder{}.Build())
 		if err != nil {
@@ -567,6 +604,18 @@ func (t *task) setFailed(err error) {
 		privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_CONFIGURATION_APPLIED,
 		privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
 		"ValidationFailed",
+		err.Error(),
+	)
+}
+
+func (t *task) setPending(err error) {
+	if !t.computeInstance.HasStatus() {
+		t.computeInstance.SetStatus(&privatev1.ComputeInstanceStatus{})
+	}
+	t.updateCondition(
+		privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_PROVISIONED,
+		privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+		"ResourcesUnavailable",
 		err.Error(),
 	)
 }

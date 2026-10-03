@@ -82,6 +82,20 @@ var _ = Describe("External IP attachments server", func() {
 		BeforeEach(func() {
 			var err error
 
+			networkClassesDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = networkClassesDao.Create().SetObject(privatev1.NetworkClass_builder{
+				Metadata: privatev1.Metadata_builder{Name: "test-network-class", Tenant: testTenant}.Build(),
+				Status: privatev1.NetworkClassStatus_builder{
+					State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+					Hub:   "network-hub-a",
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
 			externalIPDao, err = dao.NewGenericDAO[*privatev1.ExternalIP]().
 				SetLogger(logger).
 				SetTenancyLogic(tenancy).

@@ -24,6 +24,8 @@ import (
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -67,6 +69,7 @@ var _ = Describe("Canonical networking Hub cache-entry routing", func() {
 		hostTypesClient := privatev1.NewHostTypesClient(tool.InternalView().AdminConn())
 		clusterTemplatesClient := privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
 		clustersClient := publicv1.NewClustersClient(tool.ExternalView().UserConn())
+		privateClustersClient := privatev1.NewClustersClient(tool.InternalView().AdminConn())
 
 		networkClassName := fmt.Sprintf("test-hub-routing-nc-%s", uuid.New())
 		networkClassResponse, err := networkClassesClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
@@ -292,13 +295,89 @@ var _ = Describe("Canonical networking Hub cache-entry routing", func() {
 				Metadata: publicv1.Metadata_builder{Name: fmt.Sprintf("test-hub-a-cluster-%s", uuid.New()[24:])}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
 					Template: publicv1.ClusterTemplateReference_builder{Id: clusterTemplateID}.Build(),
+					NetworkAttachment: publicv1.ClusterNetworkAttachment_builder{
+						Subnet: publicv1.SubnetLocalReference_builder{Id: subnetID}.Build(),
+					}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		clusterID := clusterResponse.GetObject().GetId()
 		DeferCleanup(func(cleanupCtx context.Context) {
-			_, _ = clustersClient.Delete(cleanupCtx, publicv1.ClustersDeleteRequest_builder{Id: clusterID}.Build())
+			deleteAndWaitForComputeInstanceFixtureResource(cleanupCtx,
+				func(deleteCtx context.Context) error {
+					_, deleteErr := clustersClient.Delete(deleteCtx, publicv1.ClustersDeleteRequest_builder{Id: clusterID}.Build())
+					return deleteErr
+				},
+				func(getCtx context.Context) error {
+					_, getErr := privateClustersClient.Get(getCtx, privatev1.ClustersGetRequest_builder{Id: clusterID}.Build())
+					return getErr
+				})
+		})
+
+		By("creating a second networked Cluster target on the same networking Hub")
+		secondClusterResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
+			Object: publicv1.Cluster_builder{
+				Metadata: publicv1.Metadata_builder{Name: fmt.Sprintf("test-hub-a-cluster-%s", uuid.New()[24:])}.Build(),
+				Spec: publicv1.ClusterSpec_builder{
+					Template: publicv1.ClusterTemplateReference_builder{Id: clusterTemplateID}.Build(),
+					NetworkAttachment: publicv1.ClusterNetworkAttachment_builder{
+						Subnet: publicv1.SubnetLocalReference_builder{Id: subnetID}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		secondClusterID := secondClusterResponse.GetObject().GetId()
+		DeferCleanup(func(cleanupCtx context.Context) {
+			deleteAndWaitForComputeInstanceFixtureResource(cleanupCtx,
+				func(deleteCtx context.Context) error {
+					_, deleteErr := clustersClient.Delete(deleteCtx, publicv1.ClustersDeleteRequest_builder{Id: secondClusterID}.Build())
+					return deleteErr
+				},
+				func(getCtx context.Context) error {
+					_, getErr := privateClustersClient.Get(getCtx, privatev1.ClustersGetRequest_builder{Id: secondClusterID}.Build())
+					return getErr
+				})
+		})
+
+		for _, targetClusterID := range []string{clusterID, secondClusterID} {
+			expectNetworkingResourceHub(ctx, hubId, func(getCtx context.Context) (string, error) {
+				response, getErr := privateClustersClient.Get(getCtx, privatev1.ClustersGetRequest_builder{Id: targetClusterID}.Build())
+				if getErr != nil {
+					return "", getErr
+				}
+				return response.GetObject().GetStatus().GetHub(), nil
+			})
+			expectNetworkingCRInHub(ctx, hubANamespace, hubBNamespace, labels.ClusterOrderUuid, targetClusterID, func(namespace string) (int, error) {
+				list := &osacv1alpha1.ClusterOrderList{}
+				listErr := tool.KubeClient().List(ctx, list, crclient.InNamespace(namespace), crclient.MatchingLabels{labels.ClusterOrderUuid: targetClusterID})
+				return len(list.Items), listErr
+			})
+		}
+
+		By("reconciling an already-placed networked Cluster without creating a second CR")
+		_, err = clustersClient.Update(ctx, publicv1.ClustersUpdateRequest_builder{
+			Object: publicv1.Cluster_builder{
+				Id: clusterID,
+				Metadata: publicv1.Metadata_builder{
+					Labels: map[string]string{"integration-test-trigger": "repeat-canonical-placement"},
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		expectNetworkingResourceHub(ctx, hubId, func(getCtx context.Context) (string, error) {
+			response, getErr := privateClustersClient.Get(getCtx, privatev1.ClustersGetRequest_builder{Id: clusterID}.Build())
+			if getErr != nil {
+				return "", getErr
+			}
+			return response.GetObject().GetStatus().GetHub(), nil
+		})
+		expectNetworkingCRInHub(ctx, hubANamespace, hubBNamespace, labels.ClusterOrderUuid, clusterID, func(namespace string) (int, error) {
+			list := &osacv1alpha1.ClusterOrderList{}
+			listErr := tool.KubeClient().List(ctx, list, crclient.InNamespace(namespace), crclient.MatchingLabels{labels.ClusterOrderUuid: clusterID})
+			return len(list.Items), listErr
 		})
 
 		attachmentID := fmt.Sprintf("test-hub-a-attachment-%s", uuid.New())
@@ -315,7 +394,15 @@ var _ = Describe("Canonical networking Hub cache-entry routing", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func(cleanupCtx context.Context) {
-			_, _ = attachmentsClient.Delete(cleanupCtx, publicv1.ExternalIPAttachmentsDeleteRequest_builder{Id: attachmentID}.Build())
+			deleteAndWaitForComputeInstanceFixtureResource(cleanupCtx,
+				func(deleteCtx context.Context) error {
+					_, deleteErr := attachmentsClient.Delete(deleteCtx, publicv1.ExternalIPAttachmentsDeleteRequest_builder{Id: attachmentID}.Build())
+					return deleteErr
+				},
+				func(getCtx context.Context) error {
+					_, getErr := privateAttachmentsClient.Get(getCtx, privatev1.ExternalIPAttachmentsGetRequest_builder{Id: attachmentID}.Build())
+					return getErr
+				})
 		})
 		expectNetworkingResourceHub(ctx, hubId, func(getCtx context.Context) (string, error) {
 			response, getErr := privateAttachmentsClient.Get(getCtx, privatev1.ExternalIPAttachmentsGetRequest_builder{Id: attachmentID}.Build())
@@ -384,6 +471,30 @@ var _ = Describe("Canonical networking Hub cache-entry routing", func() {
 			g.Expect(countA).To(Equal(1))
 			g.Expect(countB).To(BeZero())
 		}, time.Minute, time.Second).Should(Succeed())
+
+		By("rejecting a cluster request that references resources on a noncanonical Hub without persisting state")
+		crossHubClusterID := fmt.Sprintf("test-cross-hub-cluster-%s", uuid.New())
+		_, err = clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
+			Object: publicv1.Cluster_builder{
+				Id:       crossHubClusterID,
+				Metadata: publicv1.Metadata_builder{Name: crossHubClusterID}.Build(),
+				Spec: publicv1.ClusterSpec_builder{
+					Template: publicv1.ClusterTemplateReference_builder{Id: clusterTemplateID}.Build(),
+					NetworkAttachment: publicv1.ClusterNetworkAttachment_builder{
+						Subnet: publicv1.SubnetLocalReference_builder{Id: subnetID}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
+		Expect(status.Convert(err).Message()).To(ContainSubstring("canonical networking Hub"))
+		_, err = privateClustersClient.Get(ctx, privatev1.ClustersGetRequest_builder{Id: crossHubClusterID}.Build())
+		Expect(status.Code(err)).To(Equal(codes.NotFound))
+		for _, namespace := range []string{hubANamespace, hubBNamespace} {
+			list := &osacv1alpha1.ClusterOrderList{}
+			Expect(tool.KubeClient().List(ctx, list, crclient.InNamespace(namespace), crclient.MatchingLabels{labels.ClusterOrderUuid: crossHubClusterID})).To(Succeed())
+			Expect(list.Items).To(BeEmpty())
+		}
 		setNetworkClassCanonicalHub(ctx, networkClassesClient, networkClassID, hubId)
 	})
 

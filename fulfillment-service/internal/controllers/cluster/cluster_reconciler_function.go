@@ -80,6 +80,7 @@ type FunctionBuilder struct {
 type function struct {
 	logger                *slog.Logger
 	hubCache              controllers.HubCache
+	networkingHubReader   controllers.NetworkingHubReader
 	clustersClient        privatev1.ClustersClient
 	hubsClient            privatev1.HubsClient
 	clusterVersionsClient privatev1.ClusterVersionsClient
@@ -144,6 +145,13 @@ func (b *FunctionBuilder) Build() (result controllers.ReconcilerFunction[*privat
 		hubCache:              b.hubCache,
 		maskCalculator:        masks.NewCalculator().Build(),
 	}
+	object.networkingHubReader, err = controllers.NewNetworkingHubReader().
+		SetNetworkClassesClient(privatev1.NewNetworkClassesClient(b.connection)).
+		SetHubCache(b.hubCache).
+		Build()
+	if err != nil {
+		return nil, err
+	}
 	result = object.run
 	return
 }
@@ -160,8 +168,16 @@ func (r *function) run(ctx context.Context, cluster *privatev1.Cluster) error {
 	} else {
 		err = t.update(ctx)
 	}
+	var hubResolutionRetryErr error
 	if err != nil {
-		return err
+		handled, retry := controllers.HandleResourceNetworkingHubResolutionError(err, t.setPending, t.setFailed)
+		if !handled {
+			return err
+		}
+		if retry {
+			hubResolutionRetryErr = err
+		}
+		err = nil
 	}
 	// Calculate which fields the reconciler actually modified and use a field mask
 	// to update only those fields. This prevents overwriting concurrent user changes
@@ -175,7 +191,10 @@ func (r *function) run(ctx context.Context, cluster *privatev1.Cluster) error {
 			UpdateMask: updateMask,
 		}.Build())
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	return hubResolutionRetryErr
 }
 
 func (t *task) update(ctx context.Context) error {
@@ -207,6 +226,9 @@ func (t *task) update(ctx context.Context) error {
 	hubJustSelected := t.cluster.GetStatus().GetHub() == ""
 	err := t.selectHub(ctx)
 	if err != nil {
+		if t.hasNetworkAttachments() {
+			return err
+		}
 		t.r.logger.ErrorContext(
 			ctx,
 			"Failed to select hub",
@@ -582,6 +604,20 @@ func (t *task) delete(ctx context.Context) (err error) {
 
 func (t *task) selectHub(ctx context.Context) error {
 	t.hubId = t.cluster.GetStatus().GetHub()
+	if t.hasNetworkAttachments() {
+		if t.r.networkingHubReader == nil {
+			return controllers.ErrCanonicalHubUnavailable
+		}
+		resolution, err := controllers.ResolveResourceNetworkingHub(ctx, t.r.networkingHubReader, t.hubId)
+		if err != nil {
+			return err
+		}
+		t.hubId = resolution.HubID
+		t.hubNamespace = resolution.Namespace
+		t.hubClient = resolution.Client
+		t.r.logger.DebugContext(ctx, "Selected canonical networking hub", slog.String("id", t.hubId))
+		return nil
+	}
 	if t.hubId == "" {
 		response, err := t.r.hubsClient.List(ctx, privatev1.HubsListRequest_builder{}.Build())
 		if err != nil {
@@ -604,6 +640,10 @@ func (t *task) selectHub(ctx context.Context) error {
 	t.hubNamespace = hubEntry.Namespace
 	t.hubClient = hubEntry.Client
 	return nil
+}
+
+func (t *task) hasNetworkAttachments() bool {
+	return t.cluster.GetSpec().GetNetworkAttachment() != nil
 }
 
 func (t *task) getHub(ctx context.Context) error {
@@ -653,6 +693,18 @@ func (t *task) setFailed(err error) {
 		privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_PROGRESSING,
 		privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
 		"ValidationFailed",
+		err.Error(),
+	)
+}
+
+func (t *task) setPending(err error) {
+	if !t.cluster.HasStatus() {
+		t.cluster.SetStatus(&privatev1.ClusterStatus{})
+	}
+	t.updateCondition(
+		privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_PROGRESSING,
+		privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+		"ResourcesUnavailable",
 		err.Error(),
 	)
 }

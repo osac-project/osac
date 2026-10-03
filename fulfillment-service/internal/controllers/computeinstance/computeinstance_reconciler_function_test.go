@@ -2226,6 +2226,7 @@ var _ = Describe("instance_type resolution in reconciler", func() {
 		f := &function{
 			logger:                 logger,
 			hubCache:               hubCache,
+			networkingHubReader:    readyComputeNetworkingHubReader("test-hub", hubNamespace, fakeClient),
 			computeInstancesClient: computeInstancesClient,
 			hubsClient:             hubsClient,
 			instanceTypesClient:    mockInstanceTypesClient,
@@ -2362,6 +2363,7 @@ var _ = Describe("Kubernetes validation error handling", func() {
 		f := &function{
 			logger:                 logger,
 			hubCache:               hubCache,
+			networkingHubReader:    readyComputeNetworkingHubReader(hubID, hubNamespace, fakeClient),
 			computeInstancesClient: computeInstancesClient,
 			hubsClient:             hubsClient,
 			instanceTypesClient:    mockInstanceTypesClient,

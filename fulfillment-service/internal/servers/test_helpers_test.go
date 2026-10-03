@@ -70,7 +70,12 @@ func createComputeInstanceInState(
 	ctx context.Context,
 	computeInstanceDao *dao.GenericDAO[*privatev1.ComputeInstance],
 	state privatev1.ComputeInstanceState,
+	hubIDs ...string,
 ) *privatev1.ComputeInstance {
+	hubID := "network-hub-a"
+	if len(hubIDs) > 0 {
+		hubID = hubIDs[0]
+	}
 	resp, err := computeInstanceDao.Create().SetObject(
 		privatev1.ComputeInstance_builder{
 			Metadata: privatev1.Metadata_builder{
@@ -82,6 +87,7 @@ func createComputeInstanceInState(
 			}.Build(),
 			Status: privatev1.ComputeInstanceStatus_builder{
 				State: state,
+				Hub:   hubID,
 			}.Build(),
 		}.Build(),
 	).Do(ctx)

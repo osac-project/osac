@@ -8,3 +8,51 @@ workflows:
     trigger: label
     label: e2e-bmaas-netris
     retestable: true
+
+  - command: regression-vmaas
+    workflow: e2e-vmaas-full-install.yml
+    name: E2E VMaaS Regression
+    description: Run the VMaaS regression suite against a PR
+    retestable: false
+    inputs:
+      test-suite: vmaas/regression
+
+  - command: serial-vmaas
+    workflow: e2e-vmaas-full-install.yml
+    name: E2E VMaaS Serial
+    description: Run the VMaaS serial suite against a PR
+    retestable: false
+    inputs:
+      test-suite: vmaas/serial
+
+  - command: regression-caas
+    workflow: e2e-caas-full-install.yml
+    name: E2E CaaS Regression
+    description: Run the CaaS regression suite against a PR
+    retestable: false
+    inputs:
+      test-suite: caas/regression
+
+  - command: serial-caas
+    workflow: e2e-caas-full-install.yml
+    name: E2E CaaS Serial
+    description: Run the CaaS serial suite against a PR
+    retestable: false
+    inputs:
+      test-suite: caas/serial
+
+  - command: regression-bmaas
+    workflow: e2e-bmaas-full-install.yml
+    name: E2E BMaaS Regression
+    description: Run the BMaaS regression suite against a PR
+    retestable: false
+    inputs:
+      test-suite: bmaas/regression
+
+  - command: serial-bmaas
+    workflow: e2e-bmaas-full-install.yml
+    name: E2E BMaaS Serial
+    description: Run the BMaaS serial suite against a PR
+    retestable: false
+    inputs:
+      test-suite: bmaas/serial

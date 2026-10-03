@@ -1246,14 +1246,17 @@ func (s *PrivateComputeInstancesServer) autoProvisionExternalIP(
 
 	tenant := ci.GetMetadata().GetTenant()
 	ciID := ci.GetId()
-	shortID := ciID
-	if len(shortID) > 8 {
-		shortID = shortID[:8]
-	}
+	// Use the full CI ID in auto names. Soft-deleted rows still occupy
+	// (tenant, project, name) uniqueness, so an 8-char UUID prefix collides
+	// across rapid sequential creates in the same tenant.
+	// Resource IDs are always uuid.New() strings (36 chars); auto-eipa-<id>
+	// is 46 chars, within metadata.name max_len 63 (DNS label).
+	autoEIPName := fmt.Sprintf("auto-eip-%s", ciID)
+	autoEIPAName := fmt.Sprintf("auto-eipa-%s", ciID)
 
 	eip := privatev1.ExternalIP_builder{
 		Metadata: privatev1.Metadata_builder{
-			Name:   fmt.Sprintf("auto-eip-%s", shortID),
+			Name:   autoEIPName,
 			Tenant: tenant,
 			Labels: map[string]string{
 				autoCreatedLabel:    "true",
@@ -1290,7 +1293,7 @@ func (s *PrivateComputeInstancesServer) autoProvisionExternalIP(
 
 	attachment := privatev1.ExternalIPAttachment_builder{
 		Metadata: privatev1.Metadata_builder{
-			Name:   fmt.Sprintf("auto-eipa-%s", shortID),
+			Name:   autoEIPAName,
 			Tenant: tenant,
 			Labels: map[string]string{
 				autoCreatedLabel:    "true",

@@ -9,8 +9,8 @@ mechanism, and the end-to-end path from a `Create` call to a Kubernetes custom r
 The API is defined using protocol buffers in the [`proto`](proto) directory. An OpenAPI
 specification is generated automatically from those definitions and published as raw YAML at
 [openapi/v3/public.yaml](https://osac-project.github.io/osac/openapi/v3/public.yaml).
-The same documentation is also available with a more convenient UI at
-[osac-project.github.io/osac](https://osac-project.github.io/osac/).
+The same documentation is also available with a more convenient Swagger UI at
+[osac-project.github.io/osac/openapi](https://osac-project.github.io/osac/openapi/).
 
 ## Required development tools
 

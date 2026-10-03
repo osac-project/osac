@@ -85,12 +85,14 @@ OSAC_CHART     := $(CHARTS)/osac
 # disables AAP-based networking provisioning (no fabric on kind).
 INSTANCE_VALUES_EXTRA :=
 INFRA_VALUES_EXTRA :=
+OSAC_HELM_WAIT := --wait --timeout 40m
 ifeq ($(PLATFORM),kind)
 INFRA_VALUES    := values/dev/kind-infra.yaml
 INSTANCE_VALUES := values/dev/kind-instance.yaml
 ifeq ($(PROFILE),dev-full)
 INSTANCE_VALUES_EXTRA := -f values/dev/kind-instance-devfull.yaml
 INFRA_VALUES_EXTRA := -f values/dev/kind-infra-devfull.yaml
+OSAC_HELM_WAIT := --wait=false --timeout 40m
 endif
 else ifdef PROFILE
 INFRA_VALUES    := values/$(PROFILE)/infra.yaml
@@ -307,13 +309,34 @@ ifneq ($(PLATFORM),kind)
 	$(eval DOMAIN := $(shell oc get ingresses.config/cluster -o jsonpath='{.spec.domain}'))
 	@[ -n "$(DOMAIN)" ] || { echo "ERROR: Could not determine cluster domain. Is oc logged in?" >&2; exit 1; }
 endif
+
+ifeq ($(PLATFORM)/$(PROFILE),kind/dev-full)
+	@set +e; \
+	status_file=$$(mktemp); \
+	hook_job_snapshot=$$(kubectl -n "$(NS)" get jobs -o jsonpath='{range .items[*]}{.metadata.name}{"|"}{.metadata.uid}{"|"}{.metadata.annotations.helm\.sh/hook}{"\n"}{end}' 2>/dev/null); \
+	(helm upgrade --install osac $(OSAC_CHART) \
+		-f $(INSTANCE_VALUES) $(INSTANCE_VALUES_EXTRA) \
+		--namespace $(NS) --create-namespace \
+		--set-string global.osacDeploymentId=$(NS)/osac \
+		$(if $(DOMAIN),--set service.externalHostname=fulfillment-api-$(NS).$(DOMAIN) --set service.internalHostname=fulfillment-internal-api-$(NS).$(DOMAIN) --set global.clusterDomain=$(DOMAIN)) \
+		$(EXTRA_HELM_ARGS) \
+		$(OSAC_HELM_WAIT); \
+		helm_status=$$?; printf '%s\n' "$$helm_status" > "$$status_file"; exit "$$helm_status") & helm_pid=$$!; \
+	scripts/dev-full/patch-grpc-probes.sh "$(NS)" "$$hook_job_snapshot" "$$status_file" & patch_pid=$$!; \
+	wait "$$helm_pid"; helm_status=$$?; \
+	wait "$$patch_pid"; patch_status=$$?; \
+	rm -f "$$status_file"; \
+	if [ "$$helm_status" -ne 0 ]; then exit "$$helm_status"; fi; \
+	exit "$$patch_status"
+else
 	helm upgrade --install osac $(OSAC_CHART) \
 		-f $(INSTANCE_VALUES) $(INSTANCE_VALUES_EXTRA) \
 		--namespace $(NS) --create-namespace \
 		--set-string global.osacDeploymentId=$(NS)/osac \
 		$(if $(DOMAIN),--set service.externalHostname=fulfillment-api-$(NS).$(DOMAIN) --set service.internalHostname=fulfillment-internal-api-$(NS).$(DOMAIN) --set global.clusterDomain=$(DOMAIN) --set ui.auth.oidcIssuerURL=https://keycloak-keycloak.$(DOMAIN)/realms/osac) \
 		$(EXTRA_HELM_ARGS) \
-		--wait --timeout 40m
+		$(OSAC_HELM_WAIT)
+endif
 
 .PHONY: uninstall-osac
 uninstall-osac: ## Uninstall OSAC instance (PLATFORM= PROFILE= NS= required)

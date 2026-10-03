@@ -12,6 +12,9 @@
 # fulfillment-service still reaches Keycloak's JWKS endpoint directly.
 #
 # The plain `dev`/IT profile keeps keycloak.keycloak.svc.cluster.local (kind-infra.yaml).
+bundledVault:
+  keycloakIssuerUrl: "https://keycloak.osac.localhost:8443/realms/osac"
+
 csiDriver:
   enabled: true
 

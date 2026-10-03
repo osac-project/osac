@@ -161,9 +161,9 @@ export const isCatalogItemResourceFieldPath = (
   return catalogItemResourceFieldPathSet.has(normalizeCatalogFieldPath(path));
 };
 
-/** Node-set host type and worker count paths on cluster catalog cards (node set id varies). */
+/** Node-set instance type and worker count paths on cluster catalog cards (node set id varies). */
 export const CLUSTER_CATALOG_ITEM_RESOURCE_FIELD_PATH_PATTERN =
-  /^node_sets\.[^.]+\.(host_type|size)$/;
+  /^node_sets\.[^.]+\.(baremetal_instance_type|size)$/;
 
 export const isClusterCatalogItemResourceFieldPath = (path: string): boolean => {
   return CLUSTER_CATALOG_ITEM_RESOURCE_FIELD_PATH_PATTERN.test(normalizeCatalogFieldPath(path));

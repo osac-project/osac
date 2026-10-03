@@ -1,6 +1,5 @@
 import {
   ActionGroup,
-  Alert,
   Button,
   FormFieldGroup,
   FormFieldGroupHeader,
@@ -11,29 +10,18 @@ import MinusCircleIcon from '@patternfly/react-icons/dist/esm/icons/minus-circle
 import PlusCircleIcon from '@patternfly/react-icons/dist/esm/icons/plus-circle-icon';
 import { useFormikContext } from 'formik';
 
+import { BareMetalInstanceTypes } from '@osac/types';
+
 import type { ClusterWizardValues } from './fields';
 import { createEmptyNodeSetRow } from './fields';
-import { hostTypeDisplayName, useHostTypes } from '../../../../../api/v1/host-types';
 import { useTranslation } from '../../../../../hooks/useTranslation';
-import { getErrorMessage } from '../../../../../utils/error';
-import { SelectField } from '../../../../Form/SelectField';
+import { ResourceSelectField } from '../../../../Form/ResourceSelectField';
 import ClusterPoolSizeField from '../../fields/ClusterPoolSizeField';
 import NameField from '../../fields/NameField';
 
 const ClusterNodeSetsArrayField = () => {
   const { t } = useTranslation();
   const { values, setFieldValue } = useFormikContext<ClusterWizardValues>();
-  const {
-    data: hostTypes = [],
-    isLoading: hostTypesLoading,
-    error: hostTypesError,
-    refetch: refetchHostTypes,
-  } = useHostTypes();
-
-  const hostTypeOptions = hostTypes.map((hostType) => ({
-    value: hostType.id,
-    label: hostTypeDisplayName(hostType),
-  }));
 
   const addRow = () => {
     void setFieldValue('spec.nodeSetRows', [...values.spec.nodeSetRows, createEmptyNodeSetRow()]);
@@ -48,16 +36,6 @@ const ClusterNodeSetsArrayField = () => {
 
   return (
     <Stack hasGutter>
-      {hostTypesError ? (
-        <StackItem>
-          <Alert variant="danger" isInline title={t('Could not load host types')}>
-            {getErrorMessage(hostTypesError)}
-            <Button variant="link" isInline onClick={() => void refetchHostTypes()}>
-              {t('catalogProvision.actions.retry')}
-            </Button>
-          </Alert>
-        </StackItem>
-      ) : null}
       {values.spec.nodeSetRows.length === 0 ? (
         <StackItem>{t('No node sets added yet.')}</StackItem>
       ) : null}
@@ -87,14 +65,14 @@ const ClusterNodeSetsArrayField = () => {
               name={`spec.nodeSetRows.${rowIndex}.name`}
               fieldId={`cluster-node-set-name-${row.rowId}`}
             />
-            <SelectField
-              name={`spec.nodeSetRows.${rowIndex}.hostType`}
-              label={t('Host type')}
-              fieldId={`cluster-host-type-${row.rowId}`}
-              options={hostTypeOptions}
+            <ResourceSelectField
+              name={`spec.nodeSetRows.${rowIndex}.baremetalInstanceType`}
+              label={t('Instance type')}
+              fieldId={`cluster-instance-type-${row.rowId}`}
+              service={BareMetalInstanceTypes}
               isRequired
-              isLoading={hostTypesLoading}
-              placeholder={t('Select host type')}
+              placeholder={t('Select instance type')}
+              loadErrorTitle={t('Could not load instance types')}
             />
             <ClusterPoolSizeField rowIndex={rowIndex} isRequired />
           </FormFieldGroup>
@@ -102,12 +80,7 @@ const ClusterNodeSetsArrayField = () => {
       ))}
       <StackItem>
         <ActionGroup>
-          <Button
-            variant="link"
-            icon={<PlusCircleIcon />}
-            onClick={addRow}
-            isDisabled={hostTypesLoading}
-          >
+          <Button variant="link" icon={<PlusCircleIcon />} onClick={addRow}>
             {t('Add node set')}
           </Button>
         </ActionGroup>

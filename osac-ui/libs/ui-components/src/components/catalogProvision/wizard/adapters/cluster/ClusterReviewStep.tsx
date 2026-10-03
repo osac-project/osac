@@ -12,13 +12,10 @@ import {
 } from '@patternfly/react-core';
 import { useFormikContext } from 'formik';
 
-import { type HostType } from '@osac/types';
-import { cel } from '@osac/ui-components/api/cel';
 import {
   CLUSTER_VERSION_ACTIVE_LIST_FILTER,
   useClusterVersions,
 } from '@osac/ui-components/api/v1/cluster-versions';
-import { useHostTypes } from '@osac/ui-components/api/v1/host-types';
 import { useProjects } from '@osac/ui-components/api/v1/project';
 import { CatalogItem } from '@osac/ui-components/components/catalog/catalogItemDisplay';
 import {
@@ -34,7 +31,6 @@ import { formatReviewScalar } from '../../catalogOverlay';
 import { NetworkAttachmentReviewFields } from '../NetworkAttachmentReviewFields';
 
 const formatNodeSetsForReview = (
-  hostTypes: HostType[],
   nodeSetRows: ClusterWizardValues['spec']['nodeSetRows'],
 ): string => {
   if (nodeSetRows.length === 0) {
@@ -42,9 +38,8 @@ const formatNodeSetsForReview = (
   }
   return nodeSetRows
     .map((row) => {
-      const hostType = hostTypes.find((h) => h.id === row.hostType);
-
-      return `${hostType?.title || hostType?.metadata?.name || row.hostType}: ${row.size}`;
+      const label = row.baremetalInstanceType.name || row.baremetalInstanceType.id;
+      return `${label}: ${row.size}`;
     })
     .join(', ');
 };
@@ -56,16 +51,6 @@ interface Props {
 export const ClusterReviewStep = ({ catalogItem }: Props) => {
   const { t } = useTranslation();
   const { values } = useFormikContext<ClusterWizardValues>();
-
-  const {
-    data = [],
-    isLoading,
-    error,
-  } = useHostTypes({
-    filter: cel<HostType>((filter) =>
-      filter.field('id').isIn(values.spec.nodeSetRows.map(({ hostType }) => hostType)),
-    ),
-  });
 
   const { data: versions = [] } = useClusterVersions({
     filter: CLUSTER_VERSION_ACTIVE_LIST_FILTER,
@@ -84,7 +69,7 @@ export const ClusterReviewStep = ({ catalogItem }: Props) => {
     values.spec.versionName,
   );
 
-  if (isLoading || projectsLoading) {
+  if (projectsLoading) {
     return (
       <Bullseye>
         <Spinner />
@@ -94,13 +79,6 @@ export const ClusterReviewStep = ({ catalogItem }: Props) => {
 
   return (
     <Stack hasGutter>
-      {!!error && (
-        <StackItem>
-          <Alert variant="warning" isInline title={t('Failed to fetch host types')}>
-            {getErrorMessage(error)}
-          </Alert>
-        </StackItem>
-      )}
       {!!projectsError && (
         <StackItem>
           <Alert variant="warning" isInline title={t('Failed to fetch project')}>
@@ -155,7 +133,7 @@ export const ClusterReviewStep = ({ catalogItem }: Props) => {
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Node sets')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {formatNodeSetsForReview(data, values.spec.nodeSetRows)}
+              {formatNodeSetsForReview(values.spec.nodeSetRows)}
             </DescriptionListDescription>
           </DescriptionListGroup>
         </DescriptionList>

@@ -24,7 +24,7 @@ const ClusterNodeSetsTab = ({ cluster }: ClusterNodeSetsTabProps) => {
             <Thead>
               <Tr>
                 <Th>{t('Name')}</Th>
-                <Th>{t('Host type')}</Th>
+                <Th>{t('Instance type')}</Th>
                 <Th>{t('Size')}</Th>
               </Tr>
             </Thead>
@@ -32,7 +32,9 @@ const ClusterNodeSetsTab = ({ cluster }: ClusterNodeSetsTabProps) => {
               {nodeSetEntries.map(([key, nodeSet]) => (
                 <Tr key={key}>
                   <Td dataLabel={t('Name')}>{key}</Td>
-                  <Td dataLabel={t('Host type')}>{displayValue(nodeSet.hostType?.name)}</Td>
+                  <Td dataLabel={t('Instance type')}>
+                    {displayValue(nodeSet.baremetalInstanceType?.name)}
+                  </Td>
                   <Td dataLabel={t('Size')}>{nodeSet.size}</Td>
                 </Tr>
               ))}

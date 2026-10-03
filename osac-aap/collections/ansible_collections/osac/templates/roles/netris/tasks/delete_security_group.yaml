@@ -2,6 +2,7 @@
 # SecurityGroup deletion - removes the corresponding Netris ACL rules.
 # Handles both old-style names (sg-ingress-N) and new per-subnet names
 # (sg-ingress-N-M) for backward compatibility during transition.
+# Desired-state prune of stale ACL rows is OSAC-4888 (out of scope here).
 
 - name: Extract SecurityGroup configuration
   ansible.builtin.set_fact:
@@ -9,6 +10,13 @@
     sg_virtual_network: "{{ security_group.spec.virtualNetwork | default('') }}"
     ingress_rules: "{{ security_group.spec.ingressRules | default([]) }}"
     egress_rules: "{{ security_group.spec.egressRules | default([]) }}"
+
+- name: Refuse delete of default SecurityGroup
+  ansible.builtin.include_tasks: _refuse_if_default.yaml
+  vars:
+    _default_refuse_resource: "{{ security_group }}"
+    _default_refuse_kind: SecurityGroup
+    _default_refuse_name: "{{ sg_name }}"
 
 - name: Display deletion information
   ansible.builtin.debug:

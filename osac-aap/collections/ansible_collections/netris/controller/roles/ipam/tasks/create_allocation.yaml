@@ -34,6 +34,26 @@
     ipam_already_existed: true
   when: _existing_ipam_alloc is defined and _existing_ipam_alloc is not none
 
+- name: Fail when existing IPAM allocation has immutable field mismatch
+  when:
+    - _existing_ipam_alloc is defined
+    - _existing_ipam_alloc is not none
+    - ipam_cidr is defined
+  block:
+    - name: Compute IPAM allocation immutable mismatches
+      ansible.builtin.set_fact:
+        _ipam_alloc_mismatches: >-
+          {{ _existing_ipam_alloc | netris.controller.netris_immutable_mismatch({
+               'prefix': ipam_cidr
+             }) }}
+
+    - name: Fail on IPAM allocation immutable mismatch
+      ansible.builtin.fail:
+        msg: >-
+          {{ 'IPAM allocation' | netris.controller.format_immutable_mismatch_message(
+               ipam_name, _ipam_alloc_mismatches) }}
+      when: (_ipam_alloc_mismatches | default([]) | length) > 0
+
 - name: Create IPAM allocation
   ansible.builtin.uri:
     url: "{{ netris_controller_url }}/api/v2/ipam/allocation"

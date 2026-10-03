@@ -60,6 +60,7 @@ ROLE_TESTS=(
   "finalizer"
   "lease"
   "agentless_net_stub"
+  "netris_idempotency"
 )
 
 ROLE_SCENARIO_TESTS=(

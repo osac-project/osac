@@ -130,6 +130,26 @@ var _ = Describe("Event publisher", Ordered, func() {
 
 	var kafkaBroker *kafka.Container
 
+	ensureKafkaTopic := func(client sarama.Client, topic string) {
+		adminClient, err := kafkaBroker.Client()
+		ExpectWithOffset(1, err).ToNot(HaveOccurred())
+		admin, err := sarama.NewClusterAdminFromClient(adminClient)
+		if err != nil {
+			_ = adminClient.Close()
+		}
+		ExpectWithOffset(1, err).ToNot(HaveOccurred())
+		DeferCleanup(admin.Close)
+
+		err = admin.CreateTopic(topic, &sarama.TopicDetail{
+			NumPartitions:     1,
+			ReplicationFactor: 1,
+		}, false)
+		ExpectWithOffset(1, err).To(Succeed())
+		EventuallyWithOffset(1, func() bool {
+			return kafkaHasTopic(client, topic)
+		}).WithTimeout(5 * time.Second).WithPolling(50 * time.Millisecond).Should(BeTrue())
+	}
+
 	BeforeAll(func() {
 		var err error
 		startCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -1011,6 +1031,7 @@ var _ = Describe("Event publisher", Ordered, func() {
 			badTopic := DefaultEventTopicPrefix + badTenant
 			tenant := "keep-" + uuid.New()
 			topic := DefaultEventTopicPrefix + tenant
+			ensureKafkaTopic(client, topic)
 			insertChange(badTenant, "obj-1", "TRUNCATE")
 			insertChange(tenant, "obj-1", "INSERT")
 
@@ -1034,6 +1055,7 @@ var _ = Describe("Event publisher", Ordered, func() {
 			badTopic := DefaultEventTopicPrefix + badTenant
 			tenant := "keep-" + uuid.New()
 			topic := DefaultEventTopicPrefix + tenant
+			ensureKafkaTopic(client, topic)
 			insertChange(badTenant, "", "INSERT")
 			insertChange(tenant, "obj-1", "INSERT")
 
@@ -1057,6 +1079,7 @@ var _ = Describe("Event publisher", Ordered, func() {
 			skipTopic := DefaultEventTopicPrefix + skipTenant
 			tenant := "keep-" + uuid.New()
 			topic := DefaultEventTopicPrefix + tenant
+			ensureKafkaTopic(client, topic)
 			_, err := pool.Exec(drainCtx, `
 				insert into changes ("table", op, data)
 				values (

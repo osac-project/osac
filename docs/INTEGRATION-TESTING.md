@@ -37,6 +37,32 @@ with their Jira URLs.
 Build/package validation checks image assembly and dependencies. It is separate
 from the test tiers and does not replace the applicable integration tests.
 
+### Parallel local runs on Kind
+
+When multiple agents or sessions run integration tests on the same host, each
+run must create and use its own Kind cluster. Worktrees share the host's Kind
+runtime, and the installer defaults `KIND_CLUSTER_NAME` to `osac-dev`; the
+default kubeconfig is also derived from the cluster name. Reusing a name can
+make one run use or delete another run's cluster, or overwrite its kubeconfig.
+
+Choose a unique `KIND_CLUSTER_NAME` for each concurrent run and keep it set for
+cluster setup, test, and cleanup commands. For example:
+
+```bash
+export KIND_CLUSTER_NAME="osac-it-$(date +%s)-$$"
+
+# Set these when using Podman as the Kind provider and image tool.
+export KIND_EXPERIMENTAL_PROVIDER=podman
+export CONTAINER_TOOL=podman
+
+make -C osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac
+make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment
+make -C osac-installer uninstall-infra PLATFORM=kind PROFILE=dev NS=osac
+```
+
+Use a different cluster name for each parallel run. Separate CI jobs already
+run on isolated hosted runners and can use the workflow's default name.
+
 ### Work ownership
 
 Use the test tier to route implementation work. Unit, Envtest,

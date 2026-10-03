@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
@@ -39,6 +40,8 @@ import (
 
 // objectPrefix is the prefix that will be used in the `generateName` field of the resources created in the hub.
 const objectPrefix = "virtualnetwork-"
+
+const hubResolutionRetryDelay = 2 * time.Second
 
 // FunctionBuilder contains the data and logic needed to build a function that reconciles virtual networks.
 type FunctionBuilder struct {
@@ -382,7 +385,7 @@ func (t *task) selectHub(ctx context.Context) error {
 		t.virtualNetwork.GetStatus().GetHub(),
 	)
 	if err != nil {
-		return err
+		return controllers.RequeueAfter(err, hubResolutionRetryDelay)
 	}
 	t.hubId = resolution.HubID
 	t.r.logger.DebugContext(

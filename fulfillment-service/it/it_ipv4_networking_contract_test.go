@@ -54,6 +54,43 @@ func newIPv4NetworkingContractFixture(ctx context.Context) *ipv4NetworkingContra
 		subnets:         privatev1.NewSubnetsClient(adminConn),
 		securityGroups:  privatev1.NewSecurityGroupsClient(adminConn),
 	}
+	DeferCleanup(func(cleanupCtx context.Context) {
+		var cleanupErrors []error
+		recordDeleteError := func(resourceType, id string, err error) {
+			if err != nil && grpcstatus.Code(err) != grpccodes.NotFound {
+				cleanupErrors = append(cleanupErrors, fmt.Errorf("delete %s %q: %w", resourceType, id, err))
+			}
+		}
+
+		// This integration environment has no networking operator feedback loop, so a deleted
+		// VirtualNetwork can remain visible while pending deletion. Waiting for NotFound here
+		// would abort cleanup before the singleton NetworkClass is deleted and block later specs.
+		if fixture.securityGroupID != "" {
+			_, err := fixture.securityGroups.Delete(cleanupCtx, privatev1.SecurityGroupsDeleteRequest_builder{
+				Id: fixture.securityGroupID,
+			}.Build())
+			recordDeleteError("security group", fixture.securityGroupID, err)
+		}
+		if fixture.subnetID != "" {
+			_, err := fixture.subnets.Delete(cleanupCtx, privatev1.SubnetsDeleteRequest_builder{
+				Id: fixture.subnetID,
+			}.Build())
+			recordDeleteError("subnet", fixture.subnetID, err)
+		}
+		if fixture.virtualNetworkID != "" {
+			_, err := fixture.virtualNetworks.Delete(cleanupCtx, privatev1.VirtualNetworksDeleteRequest_builder{
+				Id: fixture.virtualNetworkID,
+			}.Build())
+			recordDeleteError("virtual network", fixture.virtualNetworkID, err)
+		}
+		if fixture.networkClassID != "" {
+			_, err := fixture.networkClasses.Delete(cleanupCtx, privatev1.NetworkClassesDeleteRequest_builder{
+				Id: fixture.networkClassID,
+			}.Build())
+			recordDeleteError("NetworkClass", fixture.networkClassID, err)
+		}
+		Expect(cleanupErrors).To(BeEmpty())
+	})
 
 	networkClassName := fmt.Sprintf("ipv4-contract-nc-%s", uuid.New()[24:])
 	networkClassResponse, err := fixture.networkClasses.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
@@ -68,6 +105,7 @@ func newIPv4NetworkingContractFixture(ctx context.Context) *ipv4NetworkingContra
 	}.Build())
 	Expect(err).ToNot(HaveOccurred())
 	fixture.networkClassID = networkClassResponse.GetObject().GetId()
+	waitForNetworkClassReady(ctx, fixture.networkClasses, fixture.networkClassID)
 
 	fixture.virtualNetworkID = fmt.Sprintf("ipv4-contract-vn-%s", uuid.New())
 	virtualNetworkName := fmt.Sprintf("ipv4-contract-vn-%s", uuid.New()[24:])
@@ -112,29 +150,6 @@ func newIPv4NetworkingContractFixture(ctx context.Context) *ipv4NetworkingContra
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
 	}.Build())
 	Expect(err).ToNot(HaveOccurred())
-
-	DeferCleanup(func() {
-		if fixture.securityGroupID != "" {
-			_, _ = fixture.securityGroups.Delete(ctx, privatev1.SecurityGroupsDeleteRequest_builder{
-				Id: fixture.securityGroupID,
-			}.Build())
-		}
-		if fixture.subnetID != "" {
-			_, _ = fixture.subnets.Delete(ctx, privatev1.SubnetsDeleteRequest_builder{
-				Id: fixture.subnetID,
-			}.Build())
-		}
-		if fixture.virtualNetworkID != "" {
-			_, _ = fixture.virtualNetworks.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{
-				Id: fixture.virtualNetworkID,
-			}.Build())
-		}
-		if fixture.networkClassID != "" {
-			_, _ = fixture.networkClasses.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{
-				Id: fixture.networkClassID,
-			}.Build())
-		}
-	})
 
 	return fixture
 }

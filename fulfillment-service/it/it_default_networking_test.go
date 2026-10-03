@@ -249,6 +249,296 @@ var _ = Describe("Default networking provisioning", func() {
 		}, time.Minute, time.Second).Should(Succeed())
 	})
 
+	It("waits for every default networking dependency before creating NAT and reporting ready", func(ctx context.Context) {
+		By("Enabling NAT on the singleton NetworkClass")
+		ncResponse, err := networkClassesClient.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: networkClassId}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		nc := ncResponse.GetObject()
+		nc.GetSpec().GetDefaults().SetEnableNatGateway(true)
+		_, err = networkClassesClient.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
+			Object: nc, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.defaults"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		waitForNetworkClassReady(ctx, networkClassesClient, networkClassId)
+
+		poolsClient := privatev1.NewExternalIPPoolsClient(tool.InternalView().AdminConn())
+		externalIPsClient := privatev1.NewExternalIPsClient(tool.InternalView().AdminConn())
+		natGatewaysClient := privatev1.NewNATGatewaysClient(tool.InternalView().AdminConn())
+		poolID := fmt.Sprintf("test-default-nat-pool-%s", uuid.New())
+		var tenantID string
+		_, err = poolsClient.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
+			Object: privatev1.ExternalIPPool_builder{
+				Id: poolID,
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("test-default-nat-pool-%s", uuid.New()[24:32]),
+				}.Build(),
+				Spec: privatev1.ExternalIPPoolSpec_builder{
+					Cidrs: []string{uniqueCIDR()}, IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		// Registered before tenant creation: DeferCleanup removes tenant/default
+		// resources first, then this pool, then the outer NetworkClass.
+		DeferCleanup(func(cleanupCtx context.Context) {
+			if tenantID != "" {
+				Eventually(func(g Gomega) {
+					_, getErr := tenantsClient.Get(cleanupCtx, privatev1.TenantsGetRequest_builder{Id: tenantID}.Build())
+					g.Expect(grpcstatus.Code(getErr)).To(Equal(grpccodes.NotFound))
+				}, 2*time.Minute, time.Second).Should(Succeed())
+			}
+			deleteAndWaitForComputeInstanceFixtureResource(cleanupCtx,
+				func(deleteCtx context.Context) error {
+					_, deleteErr := poolsClient.Delete(deleteCtx, privatev1.ExternalIPPoolsDeleteRequest_builder{Id: poolID}.Build())
+					return deleteErr
+				},
+				func(getCtx context.Context) error {
+					_, getErr := poolsClient.Get(getCtx, privatev1.ExternalIPPoolsGetRequest_builder{Id: poolID}.Build())
+					return getErr
+				})
+		})
+		Eventually(func(g Gomega) {
+			response, getErr := poolsClient.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{Id: poolID}.Build())
+			g.Expect(getErr).ToNot(HaveOccurred())
+			g.Expect(response.GetObject().GetStatus().GetState()).To(Equal(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_PENDING))
+		}, time.Minute, time.Second).Should(Succeed())
+		poolResponse, err := poolsClient.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{Id: poolID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		pool := poolResponse.GetObject()
+		pool.SetStatus(privatev1.ExternalIPPoolStatus_builder{
+			State: privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY,
+			Total: pool.GetStatus().GetTotal(), Available: pool.GetStatus().GetAvailable(),
+			Allocated: pool.GetStatus().GetAllocated(),
+		}.Build())
+		_, err = poolsClient.Update(ctx, privatev1.ExternalIPPoolsUpdateRequest_builder{
+			Object: pool, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		var tenantName, vnID string
+		tenantID, tenantName, vnID = createTenantAndDefaultVirtualNetwork(ctx, virtualNetworksClient)
+		filter := fmt.Sprintf("this.metadata.labels['osac.openshift.io/default'] == 'true' && this.metadata.tenant == %q", tenantName)
+		listSubnets := func(g Gomega) []*privatev1.Subnet {
+			response, listErr := subnetsClient.List(ctx, privatev1.SubnetsListRequest_builder{Filter: &filter}.Build())
+			g.Expect(listErr).ToNot(HaveOccurred())
+			return response.GetItems()
+		}
+		listGroups := func(g Gomega) []*privatev1.SecurityGroup {
+			response, listErr := securityGroupsClient.List(ctx, privatev1.SecurityGroupsListRequest_builder{Filter: &filter}.Build())
+			g.Expect(listErr).ToNot(HaveOccurred())
+			return response.GetItems()
+		}
+		listIPs := func(g Gomega) []*privatev1.ExternalIP {
+			response, listErr := externalIPsClient.List(ctx, privatev1.ExternalIPsListRequest_builder{Filter: &filter}.Build())
+			g.Expect(listErr).ToNot(HaveOccurred())
+			return response.GetItems()
+		}
+		listGateways := func(g Gomega) []*privatev1.NATGateway {
+			response, listErr := natGatewaysClient.List(ctx, privatev1.NATGatewaysListRequest_builder{Filter: &filter}.Build())
+			g.Expect(listErr).ToNot(HaveOccurred())
+			return response.GetItems()
+		}
+		expectNotReady := func(g Gomega) {
+			response, getErr := tenantsClient.Get(ctx, privatev1.TenantsGetRequest_builder{Id: tenantID}.Build())
+			g.Expect(getErr).ToNot(HaveOccurred())
+			condition := findTenantCondition(response.GetObject().GetStatus().GetConditions(),
+				privatev1.TenantConditionType_TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY)
+			g.Expect(condition).ToNot(BeNil())
+			g.Expect(condition.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		}
+
+		By("Waiting for the default VN CR while Subnets and SecurityGroup remain absent")
+		Eventually(func(g Gomega) {
+			response, getErr := virtualNetworksClient.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: vnID}.Build())
+			g.Expect(getErr).ToNot(HaveOccurred())
+			g.Expect(response.GetObject().GetStatus().GetState()).To(Equal(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING))
+			vnList := &osacv1alpha1.VirtualNetworkList{}
+			g.Expect(tool.KubeClient().List(ctx, vnList, crclient.MatchingLabels{labels.VirtualNetworkUuid: vnID})).To(Succeed())
+			g.Expect(vnList.Items).To(HaveLen(1))
+		}, time.Minute, time.Second).Should(Succeed())
+		Eventually(expectNotReady, time.Minute, time.Second).Should(Succeed())
+		Consistently(func(g Gomega) {
+			g.Expect(listSubnets(g)).To(BeEmpty())
+			g.Expect(listGroups(g)).To(BeEmpty())
+			g.Expect(listIPs(g)).To(BeEmpty())
+			g.Expect(listGateways(g)).To(BeEmpty())
+			expectNotReady(g)
+		}, 5*time.Second, time.Second).Should(Succeed())
+
+		vnResponse, err := virtualNetworksClient.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: vnID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		vn := vnResponse.GetObject()
+		vn.SetStatus(privatev1.VirtualNetworkStatus_builder{State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY}.Build())
+		_, err = virtualNetworksClient.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
+			Object: vn, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		By("Waiting for the default Subnet and SecurityGroup, with no ExternalIP yet")
+		var subnetIDs map[string]string
+		var groupID string
+		Eventually(func(g Gomega) {
+			subnets := listSubnets(g)
+			g.Expect(subnets).To(HaveLen(1))
+			subnetIDs = make(map[string]string, 1)
+			for _, subnet := range subnets {
+				g.Expect(subnet.GetStatus().GetState()).To(Equal(privatev1.SubnetState_SUBNET_STATE_PENDING))
+				subnetIDs[subnet.GetMetadata().GetName()] = subnet.GetId()
+			}
+			g.Expect(subnetIDs).To(HaveKey("default-ipv4"))
+			groups := listGroups(g)
+			g.Expect(groups).To(HaveLen(1))
+			g.Expect(groups[0].GetStatus().GetState()).To(Equal(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_PENDING))
+			groupID = groups[0].GetId()
+		}, time.Minute, time.Second).Should(Succeed())
+		for _, subnetID := range subnetIDs {
+			Eventually(func(g Gomega) {
+				crs := &osacv1alpha1.SubnetList{}
+				g.Expect(tool.KubeClient().List(ctx, crs, crclient.MatchingLabels{labels.SubnetUuid: subnetID})).To(Succeed())
+				g.Expect(crs.Items).To(HaveLen(1))
+			}, time.Minute, time.Second).Should(Succeed())
+		}
+		Eventually(func(g Gomega) {
+			crs := &osacv1alpha1.SecurityGroupList{}
+			g.Expect(tool.KubeClient().List(ctx, crs, crclient.MatchingLabels{labels.SecurityGroupUuid: groupID})).To(Succeed())
+			g.Expect(crs.Items).To(HaveLen(1))
+		}, time.Minute, time.Second).Should(Succeed())
+		setSubnetReady := func(id string) {
+			response, getErr := subnetsClient.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: id}.Build())
+			Expect(getErr).ToNot(HaveOccurred())
+			object := response.GetObject()
+			object.SetStatus(privatev1.SubnetStatus_builder{State: privatev1.SubnetState_SUBNET_STATE_READY}.Build())
+			_, updateErr := subnetsClient.Update(ctx, privatev1.SubnetsUpdateRequest_builder{
+				Object: object, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+			}.Build())
+			Expect(updateErr).ToNot(HaveOccurred())
+		}
+		setSubnetReady(subnetIDs["default-ipv4"])
+		Consistently(func(g Gomega) {
+			g.Expect(listSubnets(g)).To(HaveLen(1))
+			g.Expect(listGroups(g)).To(HaveLen(1))
+			g.Expect(listIPs(g)).To(BeEmpty())
+			g.Expect(listGateways(g)).To(BeEmpty())
+			expectNotReady(g)
+		}, 5*time.Second, time.Second).Should(Succeed())
+		groupResponse, err := securityGroupsClient.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: groupID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		group := groupResponse.GetObject()
+		group.SetStatus(privatev1.SecurityGroupStatus_builder{State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY}.Build())
+		_, err = securityGroupsClient.Update(ctx, privatev1.SecurityGroupsUpdateRequest_builder{
+			Object: group, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		By("Waiting for one ExternalIP while NATGateway remains absent")
+		var externalIPID string
+		Eventually(func(g Gomega) {
+			ips := listIPs(g)
+			g.Expect(ips).To(HaveLen(1))
+			g.Expect(ips[0].GetStatus().GetState()).To(Equal(privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING))
+			g.Expect(ips[0].GetSpec().GetPool().GetId()).To(Equal(poolID))
+			externalIPID = ips[0].GetId()
+			g.Expect(listGateways(g)).To(BeEmpty())
+			expectNotReady(g)
+		}, time.Minute, time.Second).Should(Succeed())
+		Consistently(func(g Gomega) {
+			g.Expect(listIPs(g)).To(HaveLen(1))
+			g.Expect(listGateways(g)).To(BeEmpty())
+			expectNotReady(g)
+		}, 5*time.Second, time.Second).Should(Succeed())
+		ipResponse, err := externalIPsClient.Get(ctx, privatev1.ExternalIPsGetRequest_builder{Id: externalIPID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		ip := ipResponse.GetObject()
+		ip.SetStatus(privatev1.ExternalIPStatus_builder{State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED}.Build())
+		_, err = externalIPsClient.Update(ctx, privatev1.ExternalIPsUpdateRequest_builder{
+			Object: ip, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		By("Waiting for NATGateway and keeping readiness false until it is READY")
+		var gatewayID string
+		Eventually(func(g Gomega) {
+			gateways := listGateways(g)
+			g.Expect(gateways).To(HaveLen(1))
+			g.Expect(gateways[0].GetStatus().GetState()).To(Equal(privatev1.NATGatewayState_NAT_GATEWAY_STATE_PENDING))
+			g.Expect(gateways[0].GetSpec().GetExternalIp().GetId()).To(Equal(externalIPID))
+			gatewayID = gateways[0].GetId()
+			expectNotReady(g)
+		}, time.Minute, time.Second).Should(Succeed())
+
+		By("Signaling another tenant reconciliation while NATGateway remains PENDING")
+		tenantResponse, err := tenantsClient.Get(ctx, privatev1.TenantsGetRequest_builder{Id: tenantID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		tenant := tenantResponse.GetObject()
+		condition := findTenantCondition(tenant.GetStatus().GetConditions(),
+			privatev1.TenantConditionType_TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY)
+		Expect(condition).ToNot(BeNil())
+		condition.SetReason("ReconciliationRequested")
+		_, err = tenantsClient.Update(ctx, privatev1.TenantsUpdateRequest_builder{
+			Object: tenant, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.conditions"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		_, err = tenantsClient.Signal(ctx, privatev1.TenantsSignalRequest_builder{Id: tenantID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		expectPendingResources := func(g Gomega) {
+			response, getErr := tenantsClient.Get(ctx, privatev1.TenantsGetRequest_builder{Id: tenantID}.Build())
+			g.Expect(getErr).ToNot(HaveOccurred())
+			condition := findTenantCondition(response.GetObject().GetStatus().GetConditions(),
+				privatev1.TenantConditionType_TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY)
+			g.Expect(condition).ToNot(BeNil())
+			g.Expect(condition.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+			g.Expect(condition.GetReason()).To(Equal("ResourcesPending"))
+			vns, listErr := virtualNetworksClient.List(ctx, privatev1.VirtualNetworksListRequest_builder{Filter: &filter}.Build())
+			g.Expect(listErr).ToNot(HaveOccurred())
+			g.Expect(vns.GetItems()).To(HaveLen(1))
+			g.Expect(vns.GetItems()[0].GetId()).To(Equal(vnID))
+			subnets := listSubnets(g)
+			g.Expect(subnets).To(HaveLen(1))
+			for _, subnet := range subnets {
+				g.Expect(subnetIDs).To(HaveKeyWithValue(subnet.GetMetadata().GetName(), subnet.GetId()))
+			}
+			groups := listGroups(g)
+			g.Expect(groups).To(HaveLen(1))
+			g.Expect(groups[0].GetId()).To(Equal(groupID))
+			ips := listIPs(g)
+			g.Expect(ips).To(HaveLen(1))
+			g.Expect(ips[0].GetId()).To(Equal(externalIPID))
+			gateways := listGateways(g)
+			g.Expect(gateways).To(HaveLen(1))
+			g.Expect(gateways[0].GetId()).To(Equal(gatewayID))
+			g.Expect(gateways[0].GetStatus().GetState()).To(Equal(privatev1.NATGatewayState_NAT_GATEWAY_STATE_PENDING))
+		}
+		Eventually(expectPendingResources, time.Minute, time.Second).Should(Succeed())
+		Consistently(expectPendingResources, 5*time.Second, time.Second).Should(Succeed())
+
+		gatewayResponse, err := natGatewaysClient.Get(ctx, privatev1.NATGatewaysGetRequest_builder{Id: gatewayID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		gateway := gatewayResponse.GetObject()
+		gateway.SetStatus(privatev1.NATGatewayStatus_builder{State: privatev1.NATGatewayState_NAT_GATEWAY_STATE_READY}.Build())
+		_, err = natGatewaysClient.Update(ctx, privatev1.NATGatewaysUpdateRequest_builder{
+			Object: gateway, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Eventually(func(g Gomega) {
+			response, getErr := tenantsClient.Get(ctx, privatev1.TenantsGetRequest_builder{Id: tenantID}.Build())
+			g.Expect(getErr).ToNot(HaveOccurred())
+			condition := findTenantCondition(response.GetObject().GetStatus().GetConditions(),
+				privatev1.TenantConditionType_TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY)
+			g.Expect(condition).ToNot(BeNil())
+			g.Expect(condition.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+			g.Expect(condition.GetReason()).To(Equal("AllResourcesReady"))
+		}, time.Minute, time.Second).Should(Succeed())
+		Consistently(func(g Gomega) {
+			response, listErr := virtualNetworksClient.List(ctx, privatev1.VirtualNetworksListRequest_builder{Filter: &filter}.Build())
+			g.Expect(listErr).ToNot(HaveOccurred())
+			g.Expect(response.GetItems()).To(HaveLen(1))
+			g.Expect(listSubnets(g)).To(HaveLen(1))
+			g.Expect(listGroups(g)).To(HaveLen(1))
+			g.Expect(listIPs(g)).To(HaveLen(1))
+			g.Expect(listGateways(g)).To(HaveLen(1))
+		}, 5*time.Second, time.Second).Should(Succeed())
+	})
+
 	It("sets DefaultNetworkingReady=True/NoDefaultNetworking when no default NetworkClass has defaults", func(ctx context.Context) {
 		_, err := networkClassesClient.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{
 			Id: networkClassId,

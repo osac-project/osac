@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/spf13/pflag"
@@ -35,6 +36,32 @@ import (
 
 // ReconcilerFunction is a function that receives the current state of an object and reconciles it.
 type ReconcilerFunction[O dao.Object] func(ctx context.Context, object O) error
+
+// RequeueAfter marks an error as retryable and asks the reconciler to retry the
+// object after delay. The delay doubles after each failed retry, up to one
+// minute. The original error remains available through errors.Is and errors.As.
+func RequeueAfter(err error, delay time.Duration) error {
+	if err == nil || delay <= 0 {
+		return err
+	}
+	return &requeueAfterError{cause: err, delay: delay}
+}
+
+type requeueAfterError struct {
+	cause error
+	delay time.Duration
+}
+
+func (e *requeueAfterError) Error() string               { return e.cause.Error() }
+func (e *requeueAfterError) Unwrap() error               { return e.cause }
+func (e *requeueAfterError) RequeueAfter() time.Duration { return e.delay }
+
+type scheduledRetry struct {
+	timer  *time.Timer
+	cancel chan struct{}
+}
+
+const maxRequeueDelay = time.Minute
 
 // ReconcilerBuilder contains the data and logic needed to create a controller. Don't create instances f this directly,
 // use the NewReconciler function instead.
@@ -72,6 +99,9 @@ type Reconciler[O dao.Object] struct {
 	getResponse    proto.Message
 	objectChannel  chan O
 	eventsClient   privatev1.EventsClient
+	retryMu        sync.Mutex
+	retryTimers    map[string]*scheduledRetry
+	retryAttempts  map[string]uint8
 }
 
 // NewReconciler creates a builder that can then be used to configure and create a controller.
@@ -230,6 +260,8 @@ func (b *ReconcilerBuilder[O]) Build() (result *Reconciler[O], err error) {
 		getResponse:    getResponse,
 		objectChannel:  make(chan O),
 		eventsClient:   eventsClient,
+		retryTimers:    make(map[string]*scheduledRetry),
+		retryAttempts:  make(map[string]uint8),
 	}
 
 	// Create the sync loop:
@@ -426,6 +458,8 @@ func (c *Reconciler[O]) getObject(ctx context.Context, id string) (result O, err
 
 // Start starts the controller. To stop it cancel the context.
 func (c *Reconciler[O]) Start(ctx context.Context) error {
+	defer c.stopRetries()
+
 	// Start the watch and sync loops:
 	go func() {
 		if err := c.watchLoop.Run(ctx); err != nil {
@@ -465,8 +499,115 @@ func (c *Reconciler[O]) Start(ctx context.Context) error {
 					"Reconciliation failed",
 					slog.Any("error", err),
 				)
+				c.requeue(ctx, fresh, err)
+			} else {
+				c.cancelRetry(fresh.GetId())
 			}
 		}
+	}
+}
+
+func (c *Reconciler[O]) requeue(ctx context.Context, object O, err error) {
+	if ctx.Err() != nil {
+		return
+	}
+	var retryable interface{ RequeueAfter() time.Duration }
+	if !errors.As(err, &retryable) {
+		return
+	}
+	c.scheduleRetry(ctx, object, retryable.RequeueAfter())
+}
+
+func (c *Reconciler[O]) scheduleRetry(ctx context.Context, object O, requestedDelay time.Duration) {
+	if requestedDelay <= 0 || ctx.Err() != nil {
+		return
+	}
+	id := object.GetId()
+	c.retryMu.Lock()
+	if c.retryTimers == nil {
+		c.retryTimers = make(map[string]*scheduledRetry)
+	}
+	if c.retryAttempts == nil {
+		c.retryAttempts = make(map[string]uint8)
+	}
+	if _, exists := c.retryTimers[id]; exists {
+		c.retryMu.Unlock()
+		return
+	}
+	attempt := c.retryAttempts[id]
+	delay := requeueDelay(requestedDelay, attempt)
+	if attempt < ^uint8(0) {
+		c.retryAttempts[id] = attempt + 1
+	}
+	retry := &scheduledRetry{timer: time.NewTimer(delay), cancel: make(chan struct{})}
+	c.retryTimers[id] = retry
+	c.retryMu.Unlock()
+
+	go c.waitForRetry(ctx, id, object, retry)
+}
+
+func requeueDelay(requested time.Duration, attempt uint8) time.Duration {
+	delay := requested
+	for i := uint8(0); i < attempt && delay < maxRequeueDelay; i++ {
+		if delay > maxRequeueDelay/2 {
+			return maxRequeueDelay
+		}
+		delay *= 2
+	}
+	if delay > maxRequeueDelay {
+		return maxRequeueDelay
+	}
+	return delay
+}
+
+func (c *Reconciler[O]) waitForRetry(ctx context.Context, id string, object O, retry *scheduledRetry) {
+	select {
+	case <-retry.timer.C:
+		c.retryMu.Lock()
+		if c.retryTimers[id] != retry {
+			c.retryMu.Unlock()
+			return
+		}
+		delete(c.retryTimers, id)
+		c.retryMu.Unlock()
+		select {
+		case c.objectChannel <- object:
+		case <-ctx.Done():
+		}
+	case <-retry.cancel:
+		retry.timer.Stop()
+	case <-ctx.Done():
+		retry.timer.Stop()
+		c.retryMu.Lock()
+		if c.retryTimers[id] == retry {
+			delete(c.retryTimers, id)
+		}
+		c.retryMu.Unlock()
+	}
+}
+
+func (c *Reconciler[O]) cancelRetry(id string) {
+	c.retryMu.Lock()
+	retry := c.retryTimers[id]
+	delete(c.retryTimers, id)
+	delete(c.retryAttempts, id)
+	c.retryMu.Unlock()
+	if retry != nil {
+		close(retry.cancel)
+	}
+}
+
+func (c *Reconciler[O]) stopRetries() {
+	c.retryMu.Lock()
+	retries := make([]*scheduledRetry, 0, len(c.retryTimers))
+	for _, retry := range c.retryTimers {
+		retries = append(retries, retry)
+	}
+	c.retryTimers = make(map[string]*scheduledRetry)
+	c.retryAttempts = make(map[string]uint8)
+	c.retryMu.Unlock()
+	for _, retry := range retries {
+		close(retry.cancel)
 	}
 }
 

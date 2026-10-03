@@ -72,8 +72,15 @@ var _ = Describe("Networking tenant isolation", func() {
 
 		tenantAName = fmt.Sprintf("net-iso-a-%s", uuid.New()[24:32])
 		tenantBName = fmt.Sprintf("net-iso-b-%s", uuid.New()[24:32])
-		_ = createTenant(ctx, tenantsClient, tenantAName)
-		_ = createTenant(ctx, tenantsClient, tenantBName)
+		tenantAID := createTenant(ctx, tenantsClient, tenantAName)
+		tenantBID := createTenant(ctx, tenantsClient, tenantBName)
+		waitForTenantSynced(ctx, tenantsClient, tenantAID)
+		waitForTenantSynced(ctx, tenantsClient, tenantBID)
+		projectsClient := privatev1.NewProjectsClient(tool.InternalView().AdminConn())
+		DeferCleanup(func(cleanupCtx context.Context) {
+			deleteTenant(cleanupCtx, tenantsClient, projectsClient, tenantBID, tenantBName)
+			deleteTenant(cleanupCtx, tenantsClient, projectsClient, tenantAID, tenantAName)
+		})
 
 		ncResp, err := networkClassesClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 			Object: privatev1.NetworkClass_builder{

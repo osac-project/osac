@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -680,6 +681,9 @@ var _ = Describe("hub persistence", func() {
 		Expect(vn.GetStatus().GetState()).To(Equal(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING))
 		Expect(vn.GetStatus().GetHub()).To(BeEmpty())
 		Expect(vn.GetStatus().GetMessage()).To(ContainSubstring(controllers.ErrNoNetworkingHubs.Error()))
+		var retryable interface{ RequeueAfter() time.Duration }
+		Expect(errors.As(err, &retryable)).To(BeTrue())
+		Expect(retryable.RequeueAfter()).To(Equal(hubResolutionRetryDelay))
 
 		list := &osacv1alpha1.VirtualNetworkList{}
 		err = fakeClient.List(ctx, list)

@@ -210,6 +210,15 @@ var _ = Describe("Private events server", Ordered, func() {
 		}()
 
 		topic := servers.DefaultEventTopicPrefix + "private-watch-new-" + uuid.New()
+		admin, err := sarama.NewClusterAdminFromClient(client)
+		Expect(err).ToNot(HaveOccurred())
+		// The admin shares the client; its registered cleanup owns the underlying connection.
+		Expect(admin.CreateTopic(topic, &sarama.TopicDetail{
+			NumPartitions:     1,
+			ReplicationFactor: 1,
+		}, false)).To(Succeed())
+		Expect(client.RefreshMetadata(topic)).To(Succeed())
+
 		event := privatev1.Event_builder{
 			Cluster: privatev1.Cluster_builder{Id: "new-topic"}.Build(),
 		}.Build()

@@ -32,6 +32,16 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
+const (
+	systemCreator               = "system"
+	autoCreatedLabel            = "osac.openshift.io/auto-created"
+	autoCreatedForLabel         = "osac.openshift.io/auto-created-for"
+	autoAttachmentDeferredLabel = "osac.openshift.io/auto-attachment-deferred"
+	autoCreatedKindLabel        = "osac.openshift.io/auto-created-kind"
+	autoCreatedEndpointLabel    = "osac.openshift.io/auto-created-endpoint"
+	tenantAnnotation            = "osac.openshift.io/tenant"
+)
+
 var validExternalIPAttachmentTransitions = map[privatev1.ExternalIPAttachmentState][]privatev1.ExternalIPAttachmentState{
 	privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_PENDING: {
 		privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_READY,
@@ -176,39 +186,6 @@ func (l *externalIPLifecycle) lockAttachmentTarget(ctx context.Context, attachme
 	default:
 		return errors.New("external IP attachment has no target reference")
 	}
-}
-
-func (l *externalIPLifecycle) lockNewAttachmentReferences(ctx context.Context, externalIPID string, targetID string, targetDAO *dao.GenericDAO[*privatev1.ComputeInstance]) error {
-	if _, err := l.externalIPDao.Get().SetId(externalIPID).SetLock(true).Do(ctx); err != nil {
-		return err
-	}
-	if targetDAO == nil {
-		return errors.New("attachment target DAO is not configured")
-	}
-	_, err := targetDAO.Get().SetId(targetID).SetLock(true).Do(ctx)
-	return err
-}
-
-func (l *externalIPLifecycle) lockNewClusterAttachmentReferences(ctx context.Context, externalIPID, targetID string) error {
-	if _, err := l.externalIPDao.Get().SetId(externalIPID).SetLock(true).Do(ctx); err != nil {
-		return err
-	}
-	if l.clusterDao == nil {
-		return errors.New("cluster DAO is not configured")
-	}
-	_, err := l.clusterDao.Get().SetId(targetID).SetLock(true).Do(ctx)
-	return err
-}
-
-func (l *externalIPLifecycle) lockNewBareMetalAttachmentReferences(ctx context.Context, externalIPID, targetID string) error {
-	if _, err := l.externalIPDao.Get().SetId(externalIPID).SetLock(true).Do(ctx); err != nil {
-		return err
-	}
-	if l.bareMetalInstanceDao == nil {
-		return errors.New("bare metal instance DAO is not configured")
-	}
-	_, err := l.bareMetalInstanceDao.Get().SetId(targetID).SetLock(true).Do(ctx)
-	return err
 }
 
 func (l *externalIPLifecycle) lockNATGateway(ctx context.Context, id string) (*privatev1.ExternalIP, *privatev1.NATGateway, error) {
@@ -465,6 +442,39 @@ func (l *externalIPLifecycle) deleteAttachmentAndExternalIP(ctx context.Context,
 		return err
 	}
 	return l.deleteLockedExternalIP(ctx, parent)
+}
+
+func (l *externalIPLifecycle) deleteAutoCreatedExternalIPs(ctx context.Context, ownerID string) error {
+	filter := autoCreatedExternalIPFilter(ownerID)
+	eipList, err := l.externalIPDao.List().SetFilter(filter).Do(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list ExternalIPs: %w", err)
+	}
+	for _, externalIP := range eipList.GetItems() {
+		// Only the workload servers create automatic ExternalIPs with the system
+		// creator. Ignore tenant-created objects that copy the owner labels.
+		if externalIP.GetMetadata().GetCreator() != systemCreator {
+			continue
+		}
+		if err := l.deleteExternalIP(ctx, externalIP.GetId()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func autoCreatedExternalIPFilter(ownerID string) string {
+	return fmt.Sprintf(
+		"this.metadata.labels['%s'] == 'true' && this.metadata.labels['%s'] == %s",
+		autoCreatedLabel, autoCreatedForLabel, strconv.Quote(ownerID),
+	)
+}
+
+func autoCreatedExternalIPAttachmentFilter(ownerID string) string {
+	return fmt.Sprintf(
+		"this.metadata.labels['%s'] == %s",
+		autoCreatedForLabel, strconv.Quote(ownerID),
+	)
 }
 
 func (l *externalIPLifecycle) deleteExternalIP(ctx context.Context, id string) error {

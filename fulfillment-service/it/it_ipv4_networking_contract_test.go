@@ -54,65 +54,6 @@ func newIPv4NetworkingContractFixture(ctx context.Context) *ipv4NetworkingContra
 		subnets:         privatev1.NewSubnetsClient(adminConn),
 		securityGroups:  privatev1.NewSecurityGroupsClient(adminConn),
 	}
-
-	networkClassName := fmt.Sprintf("ipv4-contract-nc-%s", uuid.New()[24:])
-	networkClassResponse, err := fixture.networkClasses.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
-		Object: privatev1.NetworkClass_builder{
-			Metadata: privatev1.Metadata_builder{
-				Name:   networkClassName,
-				Tenant: usersGroup,
-			}.Build(),
-			Title:         "IPv4 networking contract test class",
-			FabricManager: new("netris"),
-		}.Build(),
-	}.Build())
-	Expect(err).ToNot(HaveOccurred())
-	fixture.networkClassID = networkClassResponse.GetObject().GetId()
-
-	fixture.virtualNetworkID = fmt.Sprintf("ipv4-contract-vn-%s", uuid.New())
-	virtualNetworkName := fmt.Sprintf("ipv4-contract-vn-%s", uuid.New()[24:])
-	_, err = fixture.virtualNetworks.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
-		Object: privatev1.VirtualNetwork_builder{
-			Id: fixture.virtualNetworkID,
-			Metadata: privatev1.Metadata_builder{
-				Name:   virtualNetworkName,
-				Tenant: usersGroup,
-			}.Build(),
-			Spec: privatev1.VirtualNetworkSpec_builder{
-				NetworkClass: privatev1.NetworkClassReference_builder{Id: fixture.networkClassID}.Build(),
-				Region:       "us-east-1",
-				Ipv4Cidr:     new("10.240.0.0/16"),
-			}.Build(),
-		}.Build(),
-	}.Build())
-	Expect(err).ToNot(HaveOccurred())
-
-	// The fulfillment service starts the resource in PENDING. The integration
-	// environment does not run the operator feedback loop, so promote it via the
-	// private handler after the initial reconciliation pass.
-	Eventually(func(g Gomega) {
-		response, getErr := fixture.virtualNetworks.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{
-			Id: fixture.virtualNetworkID,
-		}.Build())
-		g.Expect(getErr).ToNot(HaveOccurred())
-		g.Expect(response.GetObject().GetStatus().GetState()).To(
-			Equal(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING))
-	}, time.Minute, time.Second).Should(Succeed())
-
-	virtualNetworkResponse, err := fixture.virtualNetworks.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{
-		Id: fixture.virtualNetworkID,
-	}.Build())
-	Expect(err).ToNot(HaveOccurred())
-	virtualNetwork := virtualNetworkResponse.GetObject()
-	virtualNetwork.SetStatus(privatev1.VirtualNetworkStatus_builder{
-		State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
-	}.Build())
-	_, err = fixture.virtualNetworks.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
-		Object:     virtualNetwork,
-		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
-	}.Build())
-	Expect(err).ToNot(HaveOccurred())
-
 	DeferCleanup(func() {
 		if fixture.securityGroupID != "" {
 			_, _ = fixture.securityGroups.Delete(ctx, privatev1.SecurityGroupsDeleteRequest_builder{
@@ -135,6 +76,72 @@ func newIPv4NetworkingContractFixture(ctx context.Context) *ipv4NetworkingContra
 			}.Build())
 		}
 	})
+
+	networkClassName := fmt.Sprintf("ipv4-contract-nc-%s", uuid.New()[24:])
+	networkClassResponse, err := fixture.networkClasses.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
+		Object: privatev1.NetworkClass_builder{
+			Metadata: privatev1.Metadata_builder{
+				Name:   networkClassName,
+				Tenant: usersGroup,
+			}.Build(),
+			Title:         "IPv4 networking contract test class",
+			FabricManager: new("netris"),
+		}.Build(),
+	}.Build())
+	Expect(err).ToNot(HaveOccurred())
+	fixture.networkClassID = networkClassResponse.GetObject().GetId()
+	networkClass := networkClassResponse.GetObject()
+	networkClass.SetStatus(privatev1.NetworkClassStatus_builder{
+		State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+		Hub:   hubId,
+	}.Build())
+	_, err = fixture.networkClasses.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
+		Object:     networkClass,
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state", "status.hub"}},
+		Lock:       true,
+	}.Build())
+	Expect(err).ToNot(HaveOccurred())
+
+	fixture.virtualNetworkID = fmt.Sprintf("ipv4-contract-vn-%s", uuid.New())
+	virtualNetworkName := fmt.Sprintf("ipv4-contract-vn-%s", uuid.New()[24:])
+	_, err = fixture.virtualNetworks.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
+		Object: privatev1.VirtualNetwork_builder{
+			Id: fixture.virtualNetworkID,
+			Metadata: privatev1.Metadata_builder{
+				Name:   virtualNetworkName,
+				Tenant: usersGroup,
+			}.Build(),
+			Spec: privatev1.VirtualNetworkSpec_builder{
+				NetworkClass: privatev1.NetworkClassReference_builder{Id: fixture.networkClassID}.Build(),
+				Region:       "us-east-1",
+				Ipv4Cidr:     new("10.240.0.0/16"),
+			}.Build(),
+		}.Build(),
+	}.Build())
+	Expect(err).ToNot(HaveOccurred())
+
+	virtualNetworkResponse, err := fixture.virtualNetworks.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{
+		Id: fixture.virtualNetworkID,
+	}.Build())
+	Expect(err).ToNot(HaveOccurred())
+	virtualNetwork := virtualNetworkResponse.GetObject()
+	// This contract test exercises SecurityGroup validation, not asynchronous Hub selection.
+	// Seed the resource states directly so controller queue delay cannot consume the suite timeout.
+	virtualNetwork.SetStatus(privatev1.VirtualNetworkStatus_builder{
+		State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING,
+		Hub:   hubId,
+	}.Build())
+	_, err = fixture.virtualNetworks.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
+		Object:     virtualNetwork,
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state", "status.hub"}},
+	}.Build())
+	Expect(err).ToNot(HaveOccurred())
+	virtualNetwork.GetStatus().SetState(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY)
+	_, err = fixture.virtualNetworks.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
+		Object:     virtualNetwork,
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+	}.Build())
+	Expect(err).ToNot(HaveOccurred())
 
 	return fixture
 }

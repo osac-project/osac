@@ -485,10 +485,7 @@ func (s *PrivateBareMetalInstancesServer) Delete(ctx context.Context,
 }
 
 func (s *PrivateBareMetalInstancesServer) autoCleanupExternalIP(ctx context.Context, bmiID string) error {
-	filter := fmt.Sprintf(
-		"this.metadata.labels['%s'] == '%s'",
-		autoCreatedForLabel, bmiID,
-	)
+	filter := autoCreatedExternalIPAttachmentFilter(bmiID)
 	s.logger.InfoContext(ctx, "Auto-EIP cleanup: listing attachments",
 		slog.String("bmi_id", bmiID), slog.String("filter", filter))
 
@@ -522,9 +519,8 @@ func (s *PrivateBareMetalInstancesServer) autoCleanupExternalIP(ctx context.Cont
 		}
 	}
 
-	if len(items) == 0 {
-		s.logger.WarnContext(ctx, "Auto-EIP cleanup: no attachments found for BMI",
-			slog.String("bmi_id", bmiID), slog.String("label", autoCreatedForLabel))
+	if err := s.lifecycle.deleteAutoCreatedExternalIPs(ctx, bmiID); err != nil {
+		return fmt.Errorf("auto_external_ip_attachment cleanup: %w", err)
 	}
 
 	return nil
@@ -1086,18 +1082,22 @@ func (s *PrivateBareMetalInstancesServer) autoProvisionExternalIP(
 		shortID = shortID[:8]
 	}
 
+	eipLabels := map[string]string{
+		autoCreatedLabel:            "true",
+		autoCreatedForLabel:         bmiID,
+		autoAttachmentDeferredLabel: "true",
+		autoCreatedKindLabel:        "bare_metal_instance",
+	}
 	eip := privatev1.ExternalIP_builder{
 		Metadata: privatev1.Metadata_builder{
 			Name:   fmt.Sprintf("auto-eip-%s", shortID),
 			Tenant: tenant,
-			Labels: map[string]string{
-				autoCreatedLabel:    "true",
-				autoCreatedForLabel: bmiID,
-			},
+			Labels: eipLabels,
 			Annotations: map[string]string{
+				tenantAnnotation:         tenant,
 				ownerReferenceAnnotation: bmiID,
 			},
-			Creator: "system",
+			Creator: systemCreator,
 		}.Build(),
 		Spec: privatev1.ExternalIPSpec_builder{
 			Pool: privatev1.ExternalIPPoolReference_builder{Id: pool.GetId()}.Build(),
@@ -1107,47 +1107,14 @@ func (s *PrivateBareMetalInstancesServer) autoProvisionExternalIP(
 		}.Build(),
 	}.Build()
 
-	eipResp, err := s.externalIPDao.Create().SetObject(eip).Do(ctx)
+	_, err = s.externalIPDao.Create().SetObject(eip).Do(ctx)
 	if err != nil {
 		return fmt.Errorf("auto_external_ip_attachment: failed to create ExternalIP: %w", err)
-	}
-	eipID := eipResp.GetObject().GetId()
-
-	err = s.lifecycle.lockNewBareMetalAttachmentReferences(ctx, eipID, bmiID)
-	if err != nil {
-		return fmt.Errorf("auto_external_ip_attachment: failed to lock attachment references: %w", err)
 	}
 
 	err = UpdatePoolCapacity(ctx, s.externalIPPoolDao, pool.GetId(), 1)
 	if err != nil {
 		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "auto_external_ip_attachment: %s", err)
-	}
-
-	attachment := privatev1.ExternalIPAttachment_builder{
-		Metadata: privatev1.Metadata_builder{
-			Name:   fmt.Sprintf("auto-eipa-%s", shortID),
-			Tenant: tenant,
-			Labels: map[string]string{
-				autoCreatedLabel:    "true",
-				autoCreatedForLabel: bmiID,
-			},
-			Annotations: map[string]string{
-				ownerReferenceAnnotation: bmiID,
-			},
-			Creator: "system",
-		}.Build(),
-		Spec: privatev1.ExternalIPAttachmentSpec_builder{
-			ExternalIp:        privatev1.ExternalIPLocalReference_builder{Id: eipID}.Build(),
-			BaremetalInstance: privatev1.BareMetalInstanceLocalReference_builder{Id: bmiID}.Build(),
-		}.Build(),
-		Status: privatev1.ExternalIPAttachmentStatus_builder{
-			State: privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_PENDING,
-		}.Build(),
-	}.Build()
-
-	_, err = s.externalIPAttachmentDao.Create().SetObject(attachment).Do(ctx)
-	if err != nil {
-		return fmt.Errorf("auto_external_ip_attachment: failed to create ExternalIPAttachment: %w", err)
 	}
 
 	return nil

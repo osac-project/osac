@@ -23,6 +23,8 @@ specific language governing permissions and limitations under the License.
 {{- $vaultIssuerURL := tpl (required "vault.keycloakIssuerUrl is required" .Values.vault.keycloakIssuerUrl) . }}
 {{- $vaultClientID := required "vault.keycloakClientId is required" .Values.vault.keycloakClientId }}
 {{- $vaultLifecycleRole := required "vault.lifecycleRole is required" .Values.vault.lifecycleRole }}
+{{- $globalValues := index .Values "global" | default dict }}
+{{- $networkingValues := index $globalValues "networking" | default dict }}
 
 apiVersion: apps/v1
 kind: Deployment

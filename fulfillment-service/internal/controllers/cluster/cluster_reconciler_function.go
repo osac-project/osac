@@ -521,8 +521,9 @@ func (t *task) prepareNodeRequest(nodeSet *privatev1.ClusterNodeSet) osacv1alpha
 		}
 	}
 	return osacv1alpha1.NodeRequest{
-		ResourceClass: rc,
-		NumberOfNodes: int(nodeSet.GetSize()),
+		ResourceClass:   rc,
+		NumberOfNodes:   int(nodeSet.GetSize()),
+		FabricInterface: nodeSet.GetFabricInterface(),
 	}
 }
 

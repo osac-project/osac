@@ -132,6 +132,28 @@ var _ = Describe("prepareNodeRequest", func() {
 		Expect(nr.ResourceClass).To(BeEmpty())
 		Expect(nr.NumberOfNodes).To(Equal(1))
 	})
+
+	It("copies fabric_interface onto NodeRequest", func() {
+		t := &task{}
+		nodeSet := privatev1.ClusterNodeSet_builder{
+			BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Name: "gpu.gb200"}.Build(),
+			Size:                  proto.Int32(3),
+			FabricInterface:       "data-0",
+		}.Build()
+		nr := t.prepareNodeRequest(nodeSet)
+		Expect(nr.ResourceClass).To(Equal("gpu.gb200"))
+		Expect(nr.FabricInterface).To(Equal("data-0"))
+	})
+
+	It("leaves FabricInterface empty when fabric_interface is unset", func() {
+		t := &task{}
+		nodeSet := privatev1.ClusterNodeSet_builder{
+			BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Name: "gpu.gb200"}.Build(),
+			Size:                  proto.Int32(2),
+		}.Build()
+		nr := t.prepareNodeRequest(nodeSet)
+		Expect(nr.FabricInterface).To(BeEmpty())
+	})
 })
 
 var _ = Describe("update tenant annotation", func() {

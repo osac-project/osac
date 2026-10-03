@@ -356,8 +356,8 @@ func (c *Container) Brokers() string {
 	return net.JoinHostPort(c.host, c.port)
 }
 
-// Client creates a Sarama client connected to the broker. The caller must close the client.
-func (c *Container) Client() (sarama.Client, error) {
+// Config creates a Sarama configuration for connecting to the broker.
+func (c *Container) Config() (*sarama.Config, error) {
 	if c.host == "" || c.port == "" {
 		return nil, errors.New("container is not started")
 	}
@@ -369,7 +369,7 @@ func (c *Container) Client() (sarama.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return tool.Client()
+	return tool.Config(), nil
 }
 
 // containerTools is the list of container tools that we will try to use to start the Kafka broker container, in order

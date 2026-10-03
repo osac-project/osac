@@ -76,6 +76,22 @@ var _ = Describe("Kafka tool", func() {
 	})
 
 	Describe("Configuration via builder methods", func() {
+		It("Returns all bootstrap brokers without opening a connection", func() {
+			propertiesFile := writeFile("kafka.properties", "brokers=first.example.com:9093, second.example.com:9093\n")
+			tool, err := NewTool().
+				SetLogger(logger).
+				SetPropertiesFile(propertiesFile).
+				SetInsecure(true).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(tool.Brokers()).To(Equal([]string{"first.example.com:9093", "second.example.com:9093"}))
+			config := tool.Config()
+			Expect(config.Validate()).To(Succeed())
+			Expect(config.Producer.RequiredAcks).To(Equal(sarama.WaitForAll))
+			Expect(config.Producer.Idempotent).To(BeTrue())
+			Expect(config.Producer.Return.Successes).To(BeTrue())
+		})
+
 		It("Accepts properties set directly", func() {
 			tool, err := NewTool().
 				SetLogger(logger).
@@ -83,7 +99,7 @@ var _ = Describe("Kafka tool", func() {
 				SetCAPool(caPool).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
-			Expect(tool.Brokers()).To(Equal("kafka.example.com:9093"))
+			Expect(tool.Brokers()).To(Equal([]string{"kafka.example.com:9093"}))
 			Expect(tool.User()).To(Equal("my_user"))
 			Expect(tool.Password()).To(Equal("my_password"))
 		})
@@ -95,7 +111,7 @@ var _ = Describe("Kafka tool", func() {
 				SetCAPool(caPool).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
-			Expect(tool.Brokers()).To(Equal("kafka.example.com:9093"))
+			Expect(tool.Brokers()).To(Equal([]string{"kafka.example.com:9093"}))
 			Expect(tool.User()).To(Equal("my_user"))
 			Expect(tool.Password()).To(Equal("secret"))
 		})
@@ -113,7 +129,7 @@ var _ = Describe("Kafka tool", func() {
 				SetCAPool(caPool).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
-			Expect(tool.Brokers()).To(Equal("kafka.example.com:9093"))
+			Expect(tool.Brokers()).To(Equal([]string{"kafka.example.com:9093"}))
 			Expect(tool.User()).To(Equal("my_user"))
 			Expect(tool.Password()).To(Equal("my_password"))
 		})
@@ -132,7 +148,7 @@ var _ = Describe("Kafka tool", func() {
 				SetInsecure(true).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
-			Expect(tool.Brokers()).To(Equal("kafka.example.com:9093"))
+			Expect(tool.Brokers()).To(Equal([]string{"kafka.example.com:9093"}))
 			Expect(tool.User()).To(BeEmpty())
 			Expect(tool.Password()).To(BeEmpty())
 		})
@@ -149,7 +165,7 @@ var _ = Describe("Kafka tool", func() {
 				SetInsecure(true).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
-			Expect(tool.Brokers()).To(Equal("kafka.example.com:9093"))
+			Expect(tool.Brokers()).To(Equal([]string{"kafka.example.com:9093"}))
 		})
 
 		It("Overrides file properties with the properties list", func() {
@@ -166,7 +182,7 @@ var _ = Describe("Kafka tool", func() {
 				SetCAPool(caPool).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
-			Expect(tool.Brokers()).To(Equal("from-file:9093"))
+			Expect(tool.Brokers()).To(Equal([]string{"from-file:9093"}))
 			Expect(tool.User()).To(Equal("flag_user"))
 			Expect(tool.Password()).To(Equal("flag_password"))
 		})
@@ -248,7 +264,7 @@ var _ = Describe("Kafka tool", func() {
 				SetCAPool(caPool).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
-			Expect(tool.Brokers()).To(Equal("kafka.example.com:9093"))
+			Expect(tool.Brokers()).To(Equal([]string{"kafka.example.com:9093"}))
 			Expect(tool.User()).To(Equal("my_user"))
 			Expect(tool.Password()).To(Equal("my_password"))
 		})
@@ -262,7 +278,7 @@ var _ = Describe("Kafka tool", func() {
 				SetInsecure(true).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
-			Expect(tool.Brokers()).To(Equal("kafka.example.com:9093"))
+			Expect(tool.Brokers()).To(Equal([]string{"kafka.example.com:9093"}))
 		})
 
 		It("Ignores hidden files and subdirectories", func() {
@@ -276,7 +292,7 @@ var _ = Describe("Kafka tool", func() {
 				SetInsecure(true).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
-			Expect(tool.Brokers()).To(Equal("kafka.example.com:9093"))
+			Expect(tool.Brokers()).To(Equal([]string{"kafka.example.com:9093"}))
 		})
 
 		It("Returns an error for unknown file names in a directory", func() {
@@ -313,7 +329,7 @@ var _ = Describe("Kafka tool", func() {
 				SetCAPool(caPool).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
-			Expect(tool.Brokers()).To(Equal("kafka.example.com:9093"))
+			Expect(tool.Brokers()).To(Equal([]string{"kafka.example.com:9093"}))
 			Expect(tool.User()).To(Equal("my_user"))
 			Expect(tool.Password()).To(Equal("my_password"))
 		})
@@ -329,7 +345,7 @@ var _ = Describe("Kafka tool", func() {
 				SetInsecure(true).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
-			Expect(tool.Brokers()).To(Equal("kafka.example.com:9093"))
+			Expect(tool.Brokers()).To(Equal([]string{"kafka.example.com:9093"}))
 		})
 
 		It("Reads properties from a directory via the --kafka-properties-file flag", func() {
@@ -345,7 +361,7 @@ var _ = Describe("Kafka tool", func() {
 				SetCAPool(caPool).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
-			Expect(tool.Brokers()).To(Equal("kafka.example.com:9093"))
+			Expect(tool.Brokers()).To(Equal([]string{"kafka.example.com:9093"}))
 			Expect(tool.User()).To(Equal("my_user"))
 			Expect(tool.Password()).To(Equal("my_password"))
 		})
@@ -366,7 +382,7 @@ var _ = Describe("Kafka tool", func() {
 				SetCAPool(caPool).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
-			Expect(tool.Brokers()).To(Equal("from-file:9093"))
+			Expect(tool.Brokers()).To(Equal([]string{"from-file:9093"}))
 			Expect(tool.User()).To(Equal("flag_user"))
 			Expect(tool.Password()).To(Equal("flag_password"))
 		})
@@ -399,7 +415,7 @@ var _ = Describe("Kafka tool", func() {
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 
-			config := built.(*tool).config
+			config := built.Config()
 			Expect(config.Net.SASL.Enable).To(BeTrue())
 			Expect(config.Net.SASL.Mechanism).To(Equal(sarama.SASLMechanism(sarama.SASLTypeSCRAMSHA512)))
 			Expect(config.Net.SASL.User).To(Equal("my_user"))
@@ -415,7 +431,7 @@ var _ = Describe("Kafka tool", func() {
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 
-			config := built.(*tool).config
+			config := built.Config()
 			Expect(config.Net.TLS.Enable).To(BeFalse())
 			Expect(config.Net.SASL.Enable).To(BeFalse())
 		})
@@ -437,7 +453,7 @@ var _ = Describe("Kafka tool", func() {
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 
-			config := built.(*tool).config
+			config := built.Config()
 			Expect(config.Net.TLS.Enable).To(BeTrue())
 			Expect(config.Net.TLS.Config).ToNot(BeNil())
 			Expect(config.Net.TLS.Config.RootCAs).To(BeIdenticalTo(caPool.Pool()))

@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"time"
 
 	"github.com/spf13/pflag"
@@ -88,7 +89,9 @@ func (b *ReconcilerBuilder[O]) SetLogger(value *slog.Logger) *ReconcilerBuilder[
 	return b
 }
 
-// SetName sets the name of the reconciler. This is used for health reporting and logging.
+// SetName sets the name of the reconciler. This is used for health reporting, logging and the event consumer group.
+// It must be an RFC 1123 DNS label with at most 52 characters, leaving room for the event group's -reconciler suffix.
+// Replicas of the same reconciler must use the same name; reconcilers with different filters must use different names.
 func (b *ReconcilerBuilder[O]) SetName(value string) *ReconcilerBuilder[O] {
 	b.name = value
 	return b
@@ -157,6 +160,17 @@ func (b *ReconcilerBuilder[O]) Build() (result *Reconciler[O], err error) {
 	}
 	if b.name == "" {
 		err = errors.New("name is mandatory")
+		return
+	}
+	if !reconcilerNameRE.MatchString(b.name) {
+		err = errors.New("name must be a valid RFC 1123 DNS label")
+		return
+	}
+	maxNameLength := 63 - len(reconcilerGroupSuffix)
+	if len(b.name) > maxNameLength {
+		err = fmt.Errorf(
+			"name must be at most %d characters to allow the '%s' group suffix",
+			maxNameLength, reconcilerGroupSuffix)
 		return
 	}
 	if b.grpcClient == nil {
@@ -472,8 +486,10 @@ func (c *Reconciler[O]) Start(ctx context.Context) error {
 
 func (c *Reconciler[O]) watchEvents(ctx context.Context) error {
 	c.syncLoop.Kick()
+	group := c.name + reconcilerGroupSuffix
 	stream, err := c.eventsClient.Watch(ctx, &privatev1.EventsWatchRequest{
 		Filter: &c.eventFilter,
+		Group:  &group,
 	})
 	if err != nil {
 		c.reportHealth(ctx, healthv1.HealthCheckResponse_NOT_SERVING)
@@ -532,3 +548,10 @@ func (c *Reconciler[O]) reportHealth(ctx context.Context, status healthv1.Health
 		c.healthReporter.Report(ctx, c.healthName, status)
 	}
 }
+
+// reconcilerGroupSuffix is the suffix added to the reconciler names to build the 'group' parameter passed to the
+// events watch operation.
+const reconcilerGroupSuffix = "-reconciler"
+
+// reconcilerNameRE is the regular expression used to validate names of reconcilers, which must be valid DNS labels.
+var reconcilerNameRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)

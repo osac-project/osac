@@ -13,9 +13,8 @@ import (
 	context "context"
 	reflect "reflect"
 
-	gomock "go.uber.org/mock/gomock"
-
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	gomock "go.uber.org/mock/gomock"
 )
 
 // MockUsersServer is a mock of UsersServer interface.

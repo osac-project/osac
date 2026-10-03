@@ -483,7 +483,7 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	}
 	computeInstanceReconciler, err := controllers.NewReconciler[*privatev1.ComputeInstance]().
 		SetLogger(r.logger).
-		SetName("compute_instance").
+		SetName("compute-instance").
 		SetClient(r.client).
 		SetFunction(computeInstanceReconcilerFunction).
 		SetEventFilter("has(event.compute_instance) || (has(event.hub) && event.type == EVENT_TYPE_OBJECT_CREATED)").
@@ -520,7 +520,7 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	}
 	bareMetalInstanceReconciler, err := controllers.NewReconciler[*privatev1.BareMetalInstance]().
 		SetLogger(r.logger).
-		SetName("bare_metal_instance").
+		SetName("bare-metal-instance").
 		SetClient(r.client).
 		SetFunction(bareMetalInstanceReconcilerFunction).
 		SetEventFilter("has(event.bare_metal_instance) || (has(event.hub) && event.type == EVENT_TYPE_OBJECT_CREATED)").
@@ -557,7 +557,7 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	}
 	networkClassReconciler, err := controllers.NewReconciler[*privatev1.NetworkClass]().
 		SetLogger(r.logger).
-		SetName("network_class").
+		SetName("network-class").
 		SetClient(r.client).
 		SetFunction(networkClassReconcilerFunction).
 		SetEventFilter("has(event.network_class) || has(event.hub)").
@@ -631,7 +631,7 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	}
 	virtualNetworkReconciler, err := controllers.NewReconciler[*privatev1.VirtualNetwork]().
 		SetLogger(r.logger).
-		SetName("virtual_network").
+		SetName("virtual-network").
 		SetClient(r.client).
 		SetFunction(virtualNetworkReconcilerFunction).
 		SetEventFilter("has(event.virtual_network) || has(event.network_class) || has(event.hub)").
@@ -668,7 +668,7 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	}
 	securityGroupReconciler, err := controllers.NewReconciler[*privatev1.SecurityGroup]().
 		SetLogger(r.logger).
-		SetName("security_group").
+		SetName("security-group").
 		SetClient(r.client).
 		SetFunction(securityGroupReconcilerFunction).
 		SetEventFilter("has(event.security_group) || (has(event.hub) && event.type == EVENT_TYPE_OBJECT_CREATED) || (has(event.virtual_network) && event.type == EVENT_TYPE_OBJECT_UPDATED)").
@@ -705,7 +705,7 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	}
 	externalIPPoolReconciler, err := controllers.NewReconciler[*privatev1.ExternalIPPool]().
 		SetLogger(r.logger).
-		SetName("external_ip_pool").
+		SetName("external-ip-pool").
 		SetClient(r.client).
 		SetFunction(externalIPPoolReconcilerFunction).
 		SetEventFilter("has(event.external_ip_pool) || (has(event.hub) && event.type == EVENT_TYPE_OBJECT_CREATED)").
@@ -742,7 +742,7 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	}
 	externalIPReconciler, err := controllers.NewReconciler[*privatev1.ExternalIP]().
 		SetLogger(r.logger).
-		SetName("external_ip").
+		SetName("external-ip").
 		SetClient(r.client).
 		SetFunction(externalIPReconcilerFunction).
 		SetEventFilter("has(event.external_ip) || (has(event.hub) && event.type == EVENT_TYPE_OBJECT_CREATED)").
@@ -779,7 +779,7 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	}
 	externalIPAttachmentReconciler, err := controllers.NewReconciler[*privatev1.ExternalIPAttachment]().
 		SetLogger(r.logger).
-		SetName("external_ip_attachment").
+		SetName("external-ip-attachment").
 		SetClient(r.client).
 		SetFunction(externalIPAttachmentReconcilerFunction).
 		SetEventFilter("has(event.external_ip_attachment) || (has(event.hub) && event.type == EVENT_TYPE_OBJECT_CREATED)").
@@ -816,7 +816,7 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	}
 	natGatewayReconciler, err := controllers.NewReconciler[*privatev1.NATGateway]().
 		SetLogger(r.logger).
-		SetName("nat_gateway").
+		SetName("nat-gateway").
 		SetClient(r.client).
 		SetFunction(natGatewayReconcilerFunction).
 		SetEventFilter("has(event.nat_gateway) || (has(event.hub) && event.type == EVENT_TYPE_OBJECT_CREATED) || (has(event.virtual_network) && event.type == EVENT_TYPE_OBJECT_UPDATED)").
@@ -926,7 +926,7 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	}
 	roleBindingReconciler, err := controllers.NewReconciler[*privatev1.RoleBinding]().
 		SetLogger(r.logger).
-		SetName("role_binding").
+		SetName("role-binding").
 		SetClient(r.client).
 		SetFunction(roleBindingReconcilerFunction.Run).
 		SetEventFilter("has(event.role_binding)").
@@ -1128,7 +1128,7 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	}
 	projectMembershipReconciler, err := controllers.NewReconciler[*privatev1.ProjectMembership]().
 		SetLogger(r.logger).
-		SetName("project_membership").
+		SetName("project-membership").
 		SetClient(r.client).
 		SetFunction(projectMembershipReconcilerFunction.Run).
 		SetEventFilter("has(event.project_membership)").
@@ -1165,7 +1165,7 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	}
 	identityProviderReconciler, err := controllers.NewReconciler[*privatev1.IdentityProvider]().
 		SetLogger(r.logger).
-		SetName("identity_provider").
+		SetName("identity-provider").
 		SetClient(r.client).
 		SetFunction(identityProviderReconcilerFunction.Run).
 		SetEventFilter("has(event.identity_provider)").

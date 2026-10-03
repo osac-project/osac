@@ -38,57 +38,70 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
-// PrivateEventsServerBuilder contains the data and logic needed to create a PrivateEventsServer.
+// PrivateEventsServerBuilder configures and creates a PrivateEventsServer.
 type PrivateEventsServerBuilder struct {
 	logger           *slog.Logger
-	kafkaClient      sarama.Client
+	kafkaConfig      *sarama.Config
+	kafkaBrokers     []string
 	kafkaTopicPrefix string
 }
 
 var _ privatev1.EventsServer = (*PrivateEventsServer)(nil)
 
+// PrivateEventsServer implements the private events API, streaming filtered events to independent or grouped
+// subscriptions.
 type PrivateEventsServer struct {
 	privatev1.UnimplementedEventsServer
 
-	logger           *slog.Logger
-	kafkaClient      sarama.Client
-	kafkaTopicPrefix string
-	celEnv           *cel.Env
-
+	logger                  *slog.Logger
+	kafkaClient             sarama.Client
+	kafkaConfig             *sarama.Config
+	kafkaBrokers            []string
+	kafkaTopicPrefix        string
+	celEnv                  *cel.Env
 	kafkaSubscriptionsMutex sync.Mutex
-	kafkaSubscriptions      map[*privateEventsSubscription]struct{}
+	kafkaSubscriptions      map[*privateEventsServerSubscription]struct{}
 	kafkaTopicWatcherOnce   sync.Once
-	latestKafkaTopicUpdate  *privateEventsTopicUpdate
+	latestKafkaTopicUpdate  *privateEventsServerTopicUpdate
 }
 
-type privateEventsSubscription struct {
+type privateEventsServerSubscription struct {
 	server    *PrivateEventsServer
 	ctx       context.Context
 	cancel    context.CancelFunc
 	logger    *slog.Logger
 	consumer  sarama.Consumer
-	consumers map[kafkaTopicPartition]sarama.PartitionConsumer
+	group     sarama.ConsumerGroup
+	consumers map[privateEventsServerTopicPartition]sarama.PartitionConsumer
 	messages  chan *sarama.ConsumerMessage
-	topics    chan privateEventsTopicUpdate
+	topics    chan privateEventsServerTopicUpdate
 	filterSrc string
 	filterPrg cel.Program
 	stream    grpc.ServerStreamingServer[privatev1.EventsWatchResponse]
 }
 
+// NewPrivateEventsServer creates a builder for a private events server.
 func NewPrivateEventsServer() *PrivateEventsServerBuilder {
 	return &PrivateEventsServerBuilder{
 		kafkaTopicPrefix: DefaultEventTopicPrefix,
 	}
 }
 
+// SetLogger sets the logger used by the server. This is mandatory.
 func (b *PrivateEventsServerBuilder) SetLogger(value *slog.Logger) *PrivateEventsServerBuilder {
 	b.logger = value
 	return b
 }
 
-// SetKafkaClient sets the client used to consume events from Kafka. This is mandatory.
-func (b *PrivateEventsServerBuilder) SetKafkaClient(value sarama.Client) *PrivateEventsServerBuilder {
-	b.kafkaClient = value
+// SetKafkaConfig sets the configuration used to connect to Kafka. This is mandatory.
+func (b *PrivateEventsServerBuilder) SetKafkaConfig(value *sarama.Config) *PrivateEventsServerBuilder {
+	b.kafkaConfig = value
+	return b
+}
+
+// SetKafkaBrokers sets the Kafka bootstrap broker addresses. This is mandatory.
+func (b *PrivateEventsServerBuilder) SetKafkaBrokers(value ...string) *PrivateEventsServerBuilder {
+	b.kafkaBrokers = value
 	return b
 }
 
@@ -105,8 +118,12 @@ func (b *PrivateEventsServerBuilder) Build() (result *PrivateEventsServer, err e
 		err = errors.New("logger is mandatory")
 		return
 	}
-	if b.kafkaClient == nil {
-		err = errors.New("kafka client is mandatory")
+	if b.kafkaConfig == nil {
+		err = errors.New("kafka configuration is mandatory")
+		return
+	}
+	if len(b.kafkaBrokers) == 0 {
+		err = errors.New("kafka brokers are mandatory")
 		return
 	}
 	if b.kafkaTopicPrefix == "" {
@@ -114,20 +131,30 @@ func (b *PrivateEventsServerBuilder) Build() (result *PrivateEventsServer, err e
 		return
 	}
 
-	// Create  the CEL environment:
+	// Create the CEL environment:
 	celEnv, err := b.createCelEnv()
 	if err != nil {
 		err = fmt.Errorf("failed to create CEL environment: %w", err)
 		return
 	}
 
+	// Each server owns its client and keeps the original configuration unchanged.
+	config := *b.kafkaConfig
+	kafkaClient, err := sarama.NewClient(b.kafkaBrokers, &config)
+	if err != nil {
+		err = fmt.Errorf("failed to create Kafka client: %w", err)
+		return
+	}
+
 	// Create the object:
 	result = &PrivateEventsServer{
 		logger:             b.logger,
-		kafkaClient:        b.kafkaClient,
+		kafkaClient:        kafkaClient,
+		kafkaConfig:        b.kafkaConfig,
+		kafkaBrokers:       slices.Clone(b.kafkaBrokers),
 		kafkaTopicPrefix:   b.kafkaTopicPrefix,
 		celEnv:             celEnv,
-		kafkaSubscriptions: map[*privateEventsSubscription]struct{}{},
+		kafkaSubscriptions: map[*privateEventsServerSubscription]struct{}{},
 	}
 	return
 }
@@ -172,6 +199,11 @@ func (b *PrivateEventsServerBuilder) createCelEnv() (result *cel.Env, err error)
 	return
 }
 
+// Close releases the Kafka client owned by the server. Stop serving watch requests before calling it.
+func (s *PrivateEventsServer) Close() error {
+	return s.kafkaClient.Close()
+}
+
 func (s *PrivateEventsServer) Watch(request *privatev1.EventsWatchRequest,
 	stream grpc.ServerStreamingServer[privatev1.EventsWatchResponse]) (err error) {
 	subscription, err := s.newSubscription(request, stream)
@@ -185,7 +217,7 @@ func (s *PrivateEventsServer) Watch(request *privatev1.EventsWatchRequest,
 func (s *PrivateEventsServer) newSubscription(
 	request *privatev1.EventsWatchRequest,
 	stream grpc.ServerStreamingServer[privatev1.EventsWatchResponse],
-) (result *privateEventsSubscription, err error) {
+) (result *privateEventsServerSubscription, err error) {
 	ctx, cancel := context.WithCancel(stream.Context())
 	logger := s.logger.With(slog.String("subscription", uuid.New()))
 
@@ -213,22 +245,29 @@ func (s *PrivateEventsServer) newSubscription(
 		}
 	}
 
-	// Consumers aren't grouped because every watch request must receive every event that matches its filter.
-	consumer, err := sarama.NewConsumerFromClient(s.kafkaClient)
+	// Empty groups preserve independent delivery to every watch request.
+	var consumer sarama.Consumer
+	var group sarama.ConsumerGroup
+	if request.GetGroup() == "" {
+		consumer, err = sarama.NewConsumerFromClient(s.kafkaClient)
+	} else {
+		group, err = s.newConsumerGroup(request.GetGroup())
+	}
 	if err != nil {
 		cancel()
 		err = fmt.Errorf("failed to create Kafka consumer: %w", err)
 		return
 	}
-	result = &privateEventsSubscription{
+	result = &privateEventsServerSubscription{
 		server:    s,
 		ctx:       ctx,
 		cancel:    cancel,
 		logger:    logger,
 		consumer:  consumer,
-		consumers: map[kafkaTopicPartition]sarama.PartitionConsumer{},
+		group:     group,
+		consumers: map[privateEventsServerTopicPartition]sarama.PartitionConsumer{},
 		messages:  make(chan *sarama.ConsumerMessage),
-		topics:    make(chan privateEventsTopicUpdate, 1),
+		topics:    make(chan privateEventsServerTopicUpdate, 1),
 		filterSrc: filterSrc,
 		filterPrg: filterPrg,
 		stream:    stream,
@@ -237,7 +276,7 @@ func (s *PrivateEventsServer) newSubscription(
 	return
 }
 
-func (s *privateEventsSubscription) close() {
+func (s *privateEventsServerSubscription) close() {
 	s.cancel()
 	for _, consumer := range s.consumers {
 		err := consumer.Close()
@@ -249,7 +288,12 @@ func (s *privateEventsSubscription) close() {
 			)
 		}
 	}
-	err := s.consumer.Close()
+	var err error
+	if s.group != nil {
+		err = s.group.Close()
+	} else {
+		err = s.consumer.Close()
+	}
 	if err != nil {
 		s.logger.ErrorContext(
 			s.ctx,
@@ -263,9 +307,12 @@ func (s *privateEventsSubscription) close() {
 	)
 }
 
-func (s *privateEventsSubscription) run() (err error) {
+func (s *privateEventsServerSubscription) run() (err error) {
 	s.server.addSubscription(s)
 	defer s.server.removeSubscription(s)
+	if s.group != nil {
+		return s.runGroup()
+	}
 	started := false
 
 	for {
@@ -311,17 +358,18 @@ func (s *privateEventsSubscription) run() (err error) {
 	}
 }
 
-type kafkaTopicPartition struct {
+type privateEventsServerTopicPartition struct {
 	topic     string
 	partition int32
 }
 
-type privateEventsTopicUpdate struct {
-	partitions []kafkaTopicPartition
+type privateEventsServerTopicUpdate struct {
+	partitions []privateEventsServerTopicPartition
 	err        error
 }
 
-func (s *privateEventsSubscription) startPartitions(partitions []kafkaTopicPartition, offset int64) error {
+func (s *privateEventsServerSubscription) startPartitions(partitions []privateEventsServerTopicPartition,
+	offset int64) error {
 	for _, key := range partitions {
 		if s.consumers[key] != nil {
 			continue
@@ -346,7 +394,7 @@ func (s *privateEventsSubscription) startPartitions(partitions []kafkaTopicParti
 	return nil
 }
 
-func (s *PrivateEventsServer) addSubscription(subscription *privateEventsSubscription) {
+func (s *PrivateEventsServer) addSubscription(subscription *privateEventsServerSubscription) {
 	s.kafkaSubscriptionsMutex.Lock()
 	s.kafkaSubscriptions[subscription] = struct{}{}
 	if s.latestKafkaTopicUpdate != nil {
@@ -358,14 +406,14 @@ func (s *PrivateEventsServer) addSubscription(subscription *privateEventsSubscri
 	})
 }
 
-func (s *PrivateEventsServer) removeSubscription(subscription *privateEventsSubscription) {
+func (s *PrivateEventsServer) removeSubscription(subscription *privateEventsServerSubscription) {
 	s.kafkaSubscriptionsMutex.Lock()
 	delete(s.kafkaSubscriptions, subscription)
 	s.kafkaSubscriptionsMutex.Unlock()
 }
 
 func (s *PrivateEventsServer) watchTopics() {
-	ticker := time.NewTicker(privateEventsTopicRefreshInterval)
+	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 	for {
 		if s.hasSubscriptions() {
@@ -385,7 +433,7 @@ func (s *PrivateEventsServer) hasSubscriptions() bool {
 	return len(s.kafkaSubscriptions) > 0
 }
 
-func (s *PrivateEventsServer) readTopicUpdate() (result privateEventsTopicUpdate) {
+func (s *PrivateEventsServer) readTopicUpdate() (result privateEventsServerTopicUpdate) {
 	err := s.kafkaClient.RefreshMetadata()
 	if err != nil {
 		result.err = fmt.Errorf("failed to refresh Kafka metadata: %w", err)
@@ -406,7 +454,7 @@ func (s *PrivateEventsServer) readTopicUpdate() (result privateEventsTopicUpdate
 			return
 		}
 		for _, partition := range partitions {
-			result.partitions = append(result.partitions, kafkaTopicPartition{
+			result.partitions = append(result.partitions, privateEventsServerTopicPartition{
 				topic:     topic,
 				partition: partition,
 			})
@@ -415,7 +463,7 @@ func (s *PrivateEventsServer) readTopicUpdate() (result privateEventsTopicUpdate
 	return
 }
 
-func (s *PrivateEventsServer) publishTopicUpdate(update privateEventsTopicUpdate) {
+func (s *PrivateEventsServer) publishTopicUpdate(update privateEventsServerTopicUpdate) {
 	if update.err != nil {
 		s.logger.Error(
 			"Failed to refresh Kafka event topics",
@@ -432,14 +480,14 @@ func (s *PrivateEventsServer) publishTopicUpdate(update privateEventsTopicUpdate
 	s.kafkaSubscriptionsMutex.Unlock()
 }
 
-func (s *privateEventsSubscription) notifyTopicUpdate(update privateEventsTopicUpdate) {
+func (s *privateEventsServerSubscription) notifyTopicUpdate(update privateEventsServerTopicUpdate) {
 	select {
 	case s.topics <- update:
 	default:
 	}
 }
 
-func (s *privateEventsSubscription) forwardMessages(consumer sarama.PartitionConsumer) {
+func (s *privateEventsServerSubscription) forwardMessages(consumer sarama.PartitionConsumer) {
 	for {
 		select {
 		case message, ok := <-consumer.Messages():
@@ -466,7 +514,7 @@ func (s *privateEventsSubscription) forwardMessages(consumer sarama.PartitionCon
 	}
 }
 
-func (s *privateEventsSubscription) processMessage(message *sarama.ConsumerMessage) error {
+func (s *privateEventsServerSubscription) processMessage(message *sarama.ConsumerMessage) error {
 	if message == nil {
 		return nil
 	}
@@ -529,4 +577,145 @@ func (s *PrivateEventsServer) evalFilter(ctx context.Context, filterPrg cel.Prog
 	return
 }
 
-const privateEventsTopicRefreshInterval = time.Second
+func (s *PrivateEventsServer) newConsumerGroup(name string) (sarama.ConsumerGroup, error) {
+	// Each group owns its client, built from the original configuration and bootstrap brokers.
+	config := *s.kafkaConfig
+	config.Consumer.Group.Rebalance.GroupStrategies = []sarama.BalanceStrategy{sarama.NewBalanceStrategyRoundRobin()}
+	config.Consumer.Offsets.Initial = sarama.OffsetOldest
+	config.Consumer.Return.Errors = true
+	return sarama.NewConsumerGroup(s.kafkaBrokers, "osac.system."+name, &config)
+}
+
+// privateEventsServerGroupHandler forwards claims to the subscription's single stream writer. Waiting for the result
+// keeps the claim alive until the message has been sent (or filtered), before marking its offset for commit.
+type privateEventsServerGroupHandler struct {
+	messages chan privateEventsServerGroupMessage
+}
+
+type privateEventsServerGroupMessage struct {
+	ctx     context.Context
+	message *sarama.ConsumerMessage
+	result  chan error
+}
+
+func (h *privateEventsServerGroupHandler) Setup(sarama.ConsumerGroupSession) error {
+	return nil
+}
+
+func (h *privateEventsServerGroupHandler) Cleanup(sarama.ConsumerGroupSession) error {
+	return nil
+}
+
+func (h *privateEventsServerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession,
+	claim sarama.ConsumerGroupClaim) error {
+	ctx := session.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case message, ok := <-claim.Messages():
+			if !ok {
+				return nil
+			}
+			pending := privateEventsServerGroupMessage{
+				ctx:     ctx,
+				message: message,
+				result:  make(chan error, 1),
+			}
+			select {
+			case h.messages <- pending:
+			case <-ctx.Done():
+				return nil
+			}
+			select {
+			case err := <-pending.result:
+				if err != nil {
+					return err
+				}
+				session.MarkMessage(message, "")
+			case <-ctx.Done():
+				return nil
+			}
+		}
+	}
+}
+
+func (s *privateEventsServerSubscription) runGroup() error {
+	handler := &privateEventsServerGroupHandler{messages: make(chan privateEventsServerGroupMessage)}
+	var topics []string
+	var cancel context.CancelFunc
+	var done <-chan error
+	stop := func() {
+		if cancel != nil {
+			cancel()
+			<-done
+			cancel = nil
+			done = nil
+		}
+	}
+	defer stop()
+	for {
+		select {
+		case <-s.ctx.Done():
+			return nil
+		case err := <-s.group.Errors():
+			return fmt.Errorf("failed to consume Kafka group events: %w", err)
+		case err := <-done:
+			// The result was consumed here, so the deferred stop must not wait for it again.
+			cancel()
+			cancel = nil
+			return err
+		case pending := <-handler.messages:
+			err := pending.ctx.Err()
+			if err != nil {
+				pending.result <- err
+				continue
+			}
+			err = s.processMessage(pending.message)
+			pending.result <- err
+			if err != nil {
+				return err
+			}
+		case update := <-s.topics:
+			if update.err != nil {
+				if cancel == nil {
+					return update.err
+				}
+				continue
+			}
+			updated := make([]string, 0, len(update.partitions))
+			for _, partition := range update.partitions {
+				updated = append(updated, partition.topic)
+			}
+			slices.Sort(updated)
+			updated = slices.Compact(updated)
+			if slices.Equal(topics, updated) {
+				continue
+			}
+			// Restart Consume with the new subscription when tenants are added or removed. Unchanged metadata
+			// must not interrupt an active session. Kafka itself handles member and partition rebalances.
+			stop()
+			topics = updated
+			if len(topics) == 0 {
+				continue
+			}
+			cancel, done = s.startGroup(topics, handler)
+		}
+	}
+}
+
+func (s *privateEventsServerSubscription) startGroup(topics []string, handler sarama.ConsumerGroupHandler) (
+	context.CancelFunc, <-chan error) {
+	ctx, cancel := context.WithCancel(s.ctx)
+	done := make(chan error, 1)
+	go func() {
+		for ctx.Err() == nil {
+			if err := s.group.Consume(ctx, topics, handler); err != nil {
+				done <- err
+				return
+			}
+		}
+		done <- ctx.Err()
+	}()
+	return cancel, done
+}

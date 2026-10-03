@@ -26,10 +26,6 @@ const VolumeActionsMenu = ({ volume }: VolumeActionsMenuProps) => {
     state === VolumeState.FAILED;
   const canDelete = state === VolumeState.AVAILABLE || state === VolumeState.FAILED;
 
-  if (!canEdit && !canDelete) {
-    return null;
-  }
-
   const name = volume.metadata?.name ?? volume.id;
 
   return (
@@ -57,28 +53,32 @@ const VolumeActionsMenu = ({ volume }: VolumeActionsMenuProps) => {
         popperProps={{ position: 'right' }}
       >
         <DropdownList>
-          {canEdit && (
-            <DropdownItem
-              value="edit"
-              onClick={() => {
-                navigate(`/storage/volumes/${volume.id}/edit`);
-                setOpen(false);
-              }}
-            >
-              {t('Edit')}
-            </DropdownItem>
-          )}
-          {canDelete && (
-            <DropdownItem
-              value="delete"
-              onClick={() => {
-                setDeleteOpen(true);
-                setOpen(false);
-              }}
-            >
-              {t('Delete')}
-            </DropdownItem>
-          )}
+          <DropdownItem
+            value="edit"
+            isDisabled={!canEdit}
+            onClick={() => {
+              if (!canEdit) {
+                return;
+              }
+              navigate(`/storage/volumes/${volume.id}/edit`);
+              setOpen(false);
+            }}
+          >
+            {t('Edit')}
+          </DropdownItem>
+          <DropdownItem
+            value="delete"
+            isDisabled={!canDelete}
+            onClick={() => {
+              if (!canDelete) {
+                return;
+              }
+              setDeleteOpen(true);
+              setOpen(false);
+            }}
+          >
+            {t('Delete')}
+          </DropdownItem>
         </DropdownList>
       </Dropdown>
     </>

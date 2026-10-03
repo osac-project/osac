@@ -23,7 +23,9 @@ const VolumeDeleteConfirmModal = ({
   return (
     <DeleteResourceModal
       resourceName={volumeName}
-      label={t('This permanently deletes the volume. This action cannot be undone.')}
+      label={t(
+        'This permanently deletes the volume and all of its data. This action cannot be undone.',
+      )}
       errorLabel={t('Failed to delete volume')}
       onClose={onClose}
       onSuccess={onSuccess}

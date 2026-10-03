@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
@@ -153,11 +154,12 @@ func (r *function) updateStatus(
 	// explicitly configured canonical Hub always include its ID, including
 	// FAILED and PENDING results, so those assignments remain visible.
 	status.SetHub(resolution.HubID)
-	status.SetState(resolution.State)
-	if resolution.Message == "" {
+	state, message := desiredNetworkClassState(resolution, status.GetManagerState(), status.GetManagerMessage())
+	status.SetState(state)
+	if message == "" {
 		status.ClearMessage()
 	} else {
-		status.SetMessage(resolution.Message)
+		status.SetMessage(message)
 	}
 	if networkClass.HasStatus() && proto.Equal(networkClass.GetStatus(), status) {
 		return nil
@@ -173,4 +175,30 @@ func (r *function) updateStatus(
 		Lock: true,
 	}.Build())
 	return err
+}
+
+func desiredNetworkClassState(
+	resolution controllers.NetworkingHubResolution,
+	managerState privatev1.NetworkClassState,
+	managerMessage string,
+) (privatev1.NetworkClassState, string) {
+	state := resolution.State
+	if managerState == privatev1.NetworkClassState_NETWORK_CLASS_STATE_FAILED ||
+		resolution.State == privatev1.NetworkClassState_NETWORK_CLASS_STATE_FAILED {
+		state = privatev1.NetworkClassState_NETWORK_CLASS_STATE_FAILED
+	} else if managerState == privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING ||
+		resolution.State == privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING {
+		state = privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING
+	}
+
+	var messages []string
+	if resolution.State != privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY && resolution.Message != "" {
+		messages = append(messages, resolution.Message)
+	}
+	if (managerState == privatev1.NetworkClassState_NETWORK_CLASS_STATE_FAILED ||
+		managerState == privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING) && managerMessage != "" {
+		messages = append(messages, managerMessage)
+	}
+
+	return state, strings.Join(messages, "; ")
 }

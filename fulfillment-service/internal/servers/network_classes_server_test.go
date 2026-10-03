@@ -75,11 +75,12 @@ var _ = Describe("Network classes server", func() {
 	}
 
 	Describe("singleton admission", func() {
-		It("accepts the first NetworkClass and leaves readiness to the controller", func() {
+		It("clears caller status and initializes a manager-backed NetworkClass as pending", func() {
 			response, err := server.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 				Object: privatev1.NetworkClass_builder{
 					Title:         "Provider network",
 					FabricManager: new("netris"),
+					K8SManager:    new("cudn_evpn"),
 					Status: privatev1.NetworkClassStatus_builder{
 						Hub:     "caller-hub",
 						State:   privatev1.NetworkClassState_NETWORK_CLASS_STATE_FAILED,
@@ -88,7 +89,22 @@ var _ = Describe("Network classes server", func() {
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			Expect(response.GetObject().GetStatus()).To(BeNil())
+			status := response.GetObject().GetStatus()
+			Expect(status.GetState()).To(Equal(privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING))
+			Expect(status.GetHub()).To(BeEmpty())
+			Expect(status.HasMessage()).To(BeFalse())
+		})
+
+		It("initializes a fabric-only NetworkClass as ready", func() {
+			response, err := server.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
+				Object: privatev1.NetworkClass_builder{
+					Title:         "Provider network",
+					FabricManager: new("netris"),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetObject().GetStatus().GetState()).To(Equal(
+				privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY))
 		})
 
 		It("rejects a second active NetworkClass", func() {

@@ -159,9 +159,10 @@ func (s *PrivateNetworkClassesServer) Create(ctx context.Context,
 	}
 
 	nc := request.GetObject()
-	// NetworkClass status is controller-owned. The API persists desired configuration
-	// and lets reconciliation publish readiness and the canonical Hub binding.
+	// Status is controller-owned. Ignore any status supplied by the caller, then
+	// seed readiness while the operator resolves the configured managers.
 	nc.ClearStatus()
+	nc.SetStatus(&privatev1.NetworkClassStatus{State: initialNetworkClassState(nc)})
 
 	// Clear any caller-provided ID so the DAO always generates a UUID.
 	nc.SetId("")
@@ -179,6 +180,13 @@ func (s *PrivateNetworkClassesServer) Create(ctx context.Context,
 	// maps that constraint violation to a safe API error.
 	err = s.generic.Create(ctx, request, &response)
 	return
+}
+
+func initialNetworkClassState(nc *privatev1.NetworkClass) privatev1.NetworkClassState {
+	if nc.GetK8SManager() != "" {
+		return privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING
+	}
+	return privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY
 }
 
 func (s *PrivateNetworkClassesServer) Update(ctx context.Context,

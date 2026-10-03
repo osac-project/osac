@@ -599,6 +599,28 @@ func (t *Tool) createTenants(ctx context.Context) error {
 		}.Build())
 		status, ok := grpcstatus.FromError(err)
 		if ok && status.Code() == grpccodes.AlreadyExists {
+			existing, getErr := tenantsClient.Get(ctx, privatev1.TenantsGetRequest_builder{
+				Id: tenant,
+			}.Build())
+			if getErr != nil {
+				return fmt.Errorf("failed to get existing tenant %q: %w", tenant, getErr)
+			}
+			tenantStatus := existing.GetObject().GetStatus()
+			switch tenantStatus.GetState() {
+			case privatev1.TenantState_TENANT_STATE_SYNCED:
+			case privatev1.TenantState_TENANT_STATE_FAILED:
+				return fmt.Errorf("existing tenant %q is FAILED: %s", tenant, tenantStatus.GetMessage())
+			case privatev1.TenantState_TENANT_STATE_PENDING, privatev1.TenantState_TENANT_STATE_UNSPECIFIED:
+				_, signalErr := tenantsClient.Signal(ctx, privatev1.TenantsSignalRequest_builder{
+					Id: tenant,
+				}.Build())
+				if signalErr != nil {
+					return fmt.Errorf("failed to signal existing tenant %q: %w", tenant, signalErr)
+				}
+			default:
+				return fmt.Errorf("existing tenant %q has unexpected state %v: %s",
+					tenant, tenantStatus.GetState(), tenantStatus.GetMessage())
+			}
 			continue
 		}
 		if err != nil {
@@ -633,13 +655,22 @@ func (t *Tool) waitForTenantsSynced(ctx context.Context) error {
 			if getErr != nil {
 				return fmt.Errorf("failed to get tenant %q: %w", tenantName, getErr)
 			}
-			if resp.GetObject().GetStatus().GetState() != privatev1.TenantState_TENANT_STATE_SYNCED {
-				return fmt.Errorf("tenant %q not yet synced", tenantName)
+			tenantStatus := resp.GetObject().GetStatus()
+			state := tenantStatus.GetState()
+			switch state {
+			case privatev1.TenantState_TENANT_STATE_SYNCED:
+				return nil
+			case privatev1.TenantState_TENANT_STATE_FAILED:
+				return backoff.Permanent(fmt.Errorf("tenant %q is FAILED: %s", tenantName, tenantStatus.GetMessage()))
+			case privatev1.TenantState_TENANT_STATE_PENDING, privatev1.TenantState_TENANT_STATE_UNSPECIFIED:
+				return fmt.Errorf("tenant %q is %v: %s", tenantName, state, tenantStatus.GetMessage())
+			default:
+				return backoff.Permanent(fmt.Errorf("tenant %q has unexpected state %v: %s",
+					tenantName, state, tenantStatus.GetMessage()))
 			}
-			return nil
 		}, backoff.WithContext(bo, ctx))
 		if err != nil {
-			return fmt.Errorf("timed out waiting for tenant %q to reach SYNCED: %w", tenant, err)
+			return fmt.Errorf("failed waiting for tenant %q to reach SYNCED: %w", tenant, err)
 		}
 		t.logger.DebugContext(ctx, "Tenant synced", slog.String("tenant", tenant))
 	}

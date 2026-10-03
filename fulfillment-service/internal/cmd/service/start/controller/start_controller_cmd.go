@@ -560,6 +560,7 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		SetName("network_class").
 		SetClient(r.client).
 		SetFunction(networkClassReconcilerFunction).
+		SetSyncInterval(10 * time.Second).
 		SetEventFilter("has(event.network_class) || has(event.hub)").
 		SetHealthReporter(healthAggregator).
 		Build()

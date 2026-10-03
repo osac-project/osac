@@ -231,7 +231,7 @@ message NVLinkEastWestConfig {
 
 // Represents the current operational state of a NetworkClass.
 message NetworkClassStatus {
-  // Current lifecycle state of the network class.
+  // Overall lifecycle state, aggregated from manager availability and Hub readiness.
   NetworkClassState state = 1;
 
   // Human-readable message providing additional details about the current state. For example, if the state is
@@ -241,6 +241,12 @@ message NetworkClassStatus {
   // Identifier of the hub that was selected for this network class.
   // This is system-managed and used by the controller to track which hub cluster manages this class's resources.
   string hub = 3;
+
+  // Availability of the configured fabric and Kubernetes managers. The operator owns this field.
+  NetworkClassState manager_state = 4;
+
+  // Human-readable details when manager_state is not READY.
+  optional string manager_message = 5;
 }
 
 // Lifecycle states for NetworkClass resources.

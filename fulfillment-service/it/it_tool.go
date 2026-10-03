@@ -1291,6 +1291,16 @@ func (t *Tool) KeycloakAdminRequestForRealm(ctx context.Context, realm, method, 
 	return
 }
 
+// MakeUserConnection creates a gRPC connection authenticated as the specified user.
+// This is useful for creating connections for test users created during test execution.
+func (t *Tool) MakeUserConnection(ctx context.Context, username, password string) (*grpc.ClientConn, error) {
+	tokenSource, err := t.makeKeycloakTokenSource(ctx, username, password)
+	if err != nil {
+		return nil, err
+	}
+	return t.makeGrpcConn(externalServiceAddr, tokenSource)
+}
+
 // makeGrpcConn creates a gRPC connection that automatically adds the token to the request.
 func (t *Tool) makeGrpcConn(addr string, tokenSource auth.TokenSource) (result *grpc.ClientConn, err error) {
 	userAgent := fmt.Sprintf("%s/%s", userAgent, version.Get())

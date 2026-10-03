@@ -172,6 +172,7 @@ const SecretListPage = () => {
                           {
                             title: t('Delete'),
                             onClick: () => setDeleteTarget(secret),
+                            isDanger: true,
                           },
                         ]}
                         actionsToggle={({ onToggle, isOpen, toggleRef }) => (

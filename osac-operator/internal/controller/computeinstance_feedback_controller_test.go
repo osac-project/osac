@@ -995,6 +995,64 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			Expect(found).To(BeTrue())
 		})
 
+		It("should set state_transition_time when state changes", func() {
+			request := reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			}
+			_, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockClient.updateCalled).To(BeTrue())
+			Expect(mockClient.lastUpdate.GetStatus().GetState()).To(Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING))
+			Expect(mockClient.lastUpdate.GetStatus().HasStateTransitionTime()).To(BeTrue())
+		})
+
+		It("should not update state_transition_time when state is unchanged", func() {
+			// Set the remote state to already be RUNNING
+			mockClient.getResponse = &privatev1.ComputeInstancesGetResponse{
+				Object: &privatev1.ComputeInstance{
+					Id:   ciID,
+					Spec: &privatev1.ComputeInstanceSpec{},
+					Status: &privatev1.ComputeInstanceStatus{
+						State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
+					},
+				},
+			}
+
+			request := reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			}
+			_, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockClient.lastUpdate.GetStatus().HasStateTransitionTime()).To(BeFalse())
+		})
+
+		It("should set state_transition_time on transition to Stopped", func() {
+			vm := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, vm)).To(Succeed())
+			vm.Status.Phase = osacv1alpha1.ComputeInstancePhaseStopped
+			Expect(k8sClient.Status().Update(ctx, vm)).To(Succeed())
+
+			// Remote is currently RUNNING
+			mockClient.getResponse = &privatev1.ComputeInstancesGetResponse{
+				Object: &privatev1.ComputeInstance{
+					Id:   ciID,
+					Spec: &privatev1.ComputeInstanceSpec{},
+					Status: &privatev1.ComputeInstanceStatus{
+						State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
+					},
+				},
+			}
+
+			request := reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			}
+			_, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockClient.updateCalled).To(BeTrue())
+			Expect(mockClient.lastUpdate.GetStatus().GetState()).To(Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPED))
+			Expect(mockClient.lastUpdate.GetStatus().HasStateTransitionTime()).To(BeTrue())
+		})
+
 		It("should sync RestartRequired condition when False", func() {
 			computeInstance := &osacv1alpha1.ComputeInstance{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, computeInstance)).To(Succeed())

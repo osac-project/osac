@@ -10,7 +10,7 @@
     method: GET
     headers:
       Cookie: "connect.sid={{ netris_session_cookie }}"
-    validate_certs: "{{ netris_validate_certs }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
     timeout: "{{ netris_timeout }}"
     status_code: 200
   register: _ebgp_resp
@@ -20,4 +20,9 @@
   ansible.builtin.set_fact:
     netris_ebgp_sessions: "{{ _ebgp_resp.json.data }}"
     netris_ebgp_total: "{{ _ebgp_resp.json.data | length }}"
-    netris_ebgp_established: "{{ _ebgp_resp.json.data | selectattr('bgp_state', 'defined') | selectattr('bgp_state', 'equalto', 'Established') | list | length }}"
+    netris_ebgp_established: >-
+      {{ _ebgp_resp.json.data
+      | selectattr('bgp_state', 'defined')
+      | selectattr('bgp_state', 'equalto', 'Established')
+      | list
+      | length }}

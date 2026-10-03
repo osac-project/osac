@@ -14,6 +14,8 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
+	"fmt"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -24,7 +26,7 @@ import (
 var _ = Describe("ExternalIP pool selector", func() {
 	var poolDao *dao.GenericDAO[*privatev1.ExternalIPPool]
 
-	createPool := func(name string, ipFamily privatev1.IPFamily, state privatev1.ExternalIPPoolState, available int64) *privatev1.ExternalIPPool {
+	createPoolWithID := func(id, name string, ipFamily privatev1.IPFamily, state privatev1.ExternalIPPoolState, available int64) *privatev1.ExternalIPPool {
 		pool := privatev1.ExternalIPPool_builder{
 			Metadata: privatev1.Metadata_builder{
 				Name:   name,
@@ -40,9 +42,13 @@ var _ = Describe("ExternalIP pool selector", func() {
 				Allocated: 0,
 			}.Build(),
 		}.Build()
+		pool.SetId(id)
 		resp, err := poolDao.Create().SetObject(pool).Do(ctx)
 		Expect(err).ToNot(HaveOccurred())
 		return resp.GetObject()
+	}
+	createPool := func(name string, ipFamily privatev1.IPFamily, state privatev1.ExternalIPPoolState, available int64) *privatev1.ExternalIPPool {
+		return createPoolWithID("", name, ipFamily, state, available)
 	}
 
 	BeforeEach(func() {
@@ -61,6 +67,43 @@ var _ = Describe("ExternalIP pool selector", func() {
 		pool, err := SelectExternalIPPool(ctx, poolDao, privatev1.IPFamily_IP_FAMILY_UNSPECIFIED)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(pool.GetMetadata().GetName()).To(Equal("large"))
+	})
+
+	It("finds an available pool after the first page is exhausted", func() {
+		for index := 0; index < 100; index++ {
+			id := fmt.Sprintf("pool-%03d", index)
+			createPoolWithID(id, id, privatev1.IPFamily_IP_FAMILY_IPV4, privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY, 0)
+		}
+		createPoolWithID("pool-100", "available", privatev1.IPFamily_IP_FAMILY_IPV4, privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY, 1)
+
+		pool, err := SelectExternalIPPool(ctx, poolDao, privatev1.IPFamily_IP_FAMILY_IPV4)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(pool.GetId()).To(Equal("pool-100"))
+	})
+
+	It("selects the highest-capacity pool beyond the first page", func() {
+		for index := 0; index < 100; index++ {
+			id := fmt.Sprintf("pool-%03d", index)
+			createPoolWithID(id, id, privatev1.IPFamily_IP_FAMILY_IPV4, privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY, 1)
+		}
+		createPoolWithID("pool-100", "largest", privatev1.IPFamily_IP_FAMILY_IPV4, privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY, 10)
+
+		pool, err := SelectExternalIPPool(ctx, poolDao, privatev1.IPFamily_IP_FAMILY_IPV4)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(pool.GetId()).To(Equal("pool-100"))
+	})
+
+	It("breaks equal-capacity ties across pages by pool ID", func() {
+		createPoolWithID("pool-000", "first", privatev1.IPFamily_IP_FAMILY_IPV4, privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY, 10)
+		for index := 1; index < 100; index++ {
+			id := fmt.Sprintf("pool-%03d", index)
+			createPoolWithID(id, id, privatev1.IPFamily_IP_FAMILY_IPV4, privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY, 1)
+		}
+		createPoolWithID("pool-100", "tied", privatev1.IPFamily_IP_FAMILY_IPV4, privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY, 10)
+
+		pool, err := SelectExternalIPPool(ctx, poolDao, privatev1.IPFamily_IP_FAMILY_IPV4)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(pool.GetId()).To(Equal("pool-000"))
 	})
 
 	It("skips pools not in READY state", func() {

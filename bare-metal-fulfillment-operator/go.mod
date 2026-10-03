@@ -4,8 +4,8 @@ go 1.26.3
 
 require (
 	github.com/go-logr/logr v1.4.4
-	github.com/gophercloud/gophercloud/v2 v2.14.0
-	github.com/gophercloud/utils/v2 v2.0.0-20260824073324-42b9474d09d4
+	github.com/gophercloud/gophercloud/v2 v2.15.0
+	github.com/gophercloud/utils/v2 v2.0.0-20260922174841-b4759ea0529b
 	github.com/metal3-io/baremetal-operator/apis v0.13.3
 	github.com/onsi/ginkgo/v2 v2.32.2
 	github.com/onsi/gomega v1.42.1

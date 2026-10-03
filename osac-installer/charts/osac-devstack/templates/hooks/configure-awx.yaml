@@ -47,6 +47,8 @@ spec:
         env:
         - name: NS
           value: {{ .Values.osacNamespace | quote }}
+        - name: VAST_VALIDATE_CERTS
+          value: {{ .Values.awx.vastValidateCerts | quote }}
         volumeMounts:
         - name: scripts
           mountPath: /scripts

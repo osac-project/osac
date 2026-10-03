@@ -12,6 +12,15 @@
 set -euo pipefail
 
 NS="${1:-${NS:-osac}}"
+VAST_VALIDATE_CERTS="${VAST_VALIDATE_CERTS:-true}"
+
+case "${VAST_VALIDATE_CERTS}" in
+  true|false) ;;
+  *)
+    echo "VAST_VALIDATE_CERTS must be true or false, got: ${VAST_VALIDATE_CERTS}" >&2
+    exit 1
+    ;;
+esac
 
 log()  { echo "[+] $*"; }
 warn() { echo "[!] $*" >&2; }
@@ -49,10 +58,20 @@ configure_awx() {
     -H "Content-Type: application/json" \
     -d '{"name": "localhost", "variables": "ansible_connection: local"}' >/dev/null 2>&1 || true
 
-  # Disable collection/role sync and set ANSIBLE_JINJA2_NATIVE=true for osac-aap playbooks.
-  curl -s -X PATCH "${api}/settings/jobs/" -H "Authorization: Bearer ${awx_token}" \
+  # Preserve existing task environment entries and add the development-only
+  # VAST TLS setting used by the storage-provider role.
+  local jobs_settings existing_task_env task_env_payload
+  jobs_settings=$(curl -fsS -H "Authorization: Bearer ${awx_token}" "${api}/settings/jobs/")
+  existing_task_env=$(jq -c '.AWX_TASK_ENV // {}' <<<"${jobs_settings}")
+  task_env_payload=$(jq -cn \
+    --argjson existing "${existing_task_env}" \
+    --arg vast_validate_certs "${VAST_VALIDATE_CERTS}" \
+    '$existing + {"ANSIBLE_JINJA2_NATIVE": "true", "VAST_VALIDATE_CERTS": $vast_validate_certs}')
+  curl -sS -X PATCH "${api}/settings/jobs/" -H "Authorization: Bearer ${awx_token}" \
     -H "Content-Type: application/json" \
-    -d '{"AWX_COLLECTIONS_ENABLED": false, "AWX_ROLES_ENABLED": false, "AWX_TASK_ENV": {"ANSIBLE_JINJA2_NATIVE": "true"}}' >/dev/null
+    --data "$(jq -cn \
+      --argjson task_env "${task_env_payload}" \
+      '{"AWX_COLLECTIONS_ENABLED": false, "AWX_ROLES_ENABLED": false, "AWX_TASK_ENV": $task_env}')" >/dev/null
 
   # Project from the osac mono-repo.
   local project_id

@@ -4,6 +4,30 @@ set -e
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Wait for a CRD's API endpoint to be established without depending on GNU
+# timeout, which is not installed by default on macOS.
+wait_for_crd_established() {
+  local crd_name="$1"
+  local timeout_seconds="${2:-60}"
+  local interval_seconds="${3:-2}"
+  local deadline=$((SECONDS + timeout_seconds))
+  local established
+
+  echo "Waiting up to ${timeout_seconds}s for CRD ${crd_name} to be established..."
+  while (( SECONDS < deadline )); do
+    established="$(kubectl get crd "${crd_name}" \
+      -o jsonpath='{.status.conditions[?(@.type=="Established")].status}' 2>/dev/null || true)"
+    if [[ "${established}" == "True" ]]; then
+      echo "CRD ${crd_name} is established."
+      return 0
+    fi
+    sleep "${interval_seconds}"
+  done
+
+  echo "ERROR: CRD ${crd_name} was not established within ${timeout_seconds}s." >&2
+  return 1
+}
+
 echo "=== Setting up test environment ==="
 
 # 0. Delete existing cluster if it exists
@@ -38,8 +62,7 @@ kubectl wait --for=condition=Available --timeout=120s -n kubevirt deployment/vir
 echo "Installing KubeVirt CR to trigger CRD creation..."
 kubectl apply -f https://github.com/kubevirt/kubevirt/releases/download/v1.1.0/kubevirt-cr.yaml
 
-echo "Waiting for VirtualMachine CRD to be created..."
-timeout 60 bash -c 'until kubectl get crd virtualmachines.kubevirt.io 2>/dev/null; do echo "Waiting for VirtualMachine CRD..."; sleep 2; done' || echo "Timeout waiting for VirtualMachine CRD"
+wait_for_crd_established virtualmachines.kubevirt.io 60
 
 echo "Installing CDI operator for DataVolume support..."
 kubectl apply -f https://github.com/kubevirt/containerized-data-importer/releases/download/v1.58.0/cdi-operator.yaml
@@ -50,8 +73,7 @@ kubectl wait --for=condition=Available --timeout=120s -n cdi deployment/cdi-oper
 echo "Installing CDI CR to trigger DataVolume CRD creation..."
 kubectl apply -f https://github.com/kubevirt/containerized-data-importer/releases/download/v1.58.0/cdi-cr.yaml
 
-echo "Waiting for DataVolume CRD to be created..."
-timeout 60 bash -c 'until kubectl get crd datavolumes.cdi.kubevirt.io 2>/dev/null; do echo "Waiting for DataVolume CRD..."; sleep 2; done' || echo "Timeout waiting for DataVolume CRD"
+wait_for_crd_established datavolumes.cdi.kubevirt.io 60
 
 # 2.2. Scale down all deployments (keep CRs and CRDs)
 echo "Scaling down all KubeVirt and CDI deployments to save resources..."

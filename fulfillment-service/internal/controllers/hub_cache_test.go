@@ -16,7 +16,6 @@ package controllers
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"sync"
 	"time"
 
@@ -33,7 +32,6 @@ import (
 var _ = Describe("HubCache", func() {
 	var (
 		ctrl       *gomock.Controller
-		logger     *slog.Logger
 		scheme     *runtime.Scheme
 		ctx        context.Context
 		mockClient *MockHubsClient
@@ -43,7 +41,6 @@ var _ = Describe("HubCache", func() {
 		ctrl = gomock.NewController(GinkgoT())
 		DeferCleanup(ctrl.Finish)
 
-		logger = slog.Default()
 		scheme = runtime.NewScheme()
 		ctx = context.Background()
 		mockClient = NewMockHubsClient(ctrl)

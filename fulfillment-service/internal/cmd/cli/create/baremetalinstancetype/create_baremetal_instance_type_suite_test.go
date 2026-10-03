@@ -25,7 +25,7 @@ import (
 
 func TestCreateBareMetalInstanceType(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Create BareMetalInstanceType command")
+	RunSpecs(t, "Create bare metal instance type command")
 }
 
 var logger *slog.Logger

@@ -22,5 +22,5 @@ import (
 
 func TestCreateStorageTier(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Create StorageTier Suite")
+	RunSpecs(t, "Create storage tier command")
 }

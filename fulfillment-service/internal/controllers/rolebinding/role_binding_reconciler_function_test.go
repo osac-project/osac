@@ -16,7 +16,6 @@ package rolebinding
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"slices"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -31,8 +30,6 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/masks"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
-
-var logger = slog.Default()
 
 // mockRoleBindingsClient implements the minimal RoleBindingsClient interface for testing.
 type mockRoleBindingsClient struct {

@@ -16,7 +16,6 @@ package vnc
 import (
 	"context"
 	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -36,7 +35,7 @@ var _ = Describe("Viewer detection", func() {
 	BeforeEach(func() {
 		ctx = context.Background()
 		console, err := terminal.NewConsole().
-			SetLogger(slog.Default()).
+			SetLogger(logger).
 			SetStdout(io.Discard).
 			SetStderr(io.Discard).
 			Build()
@@ -44,7 +43,7 @@ var _ = Describe("Viewer detection", func() {
 		err = console.AddTemplates(templatesFS, "templates")
 		Expect(err).NotTo(HaveOccurred())
 		c = &runnerContext{
-			logger:  slog.Default(),
+			logger:  logger,
 			console: console,
 		}
 	})

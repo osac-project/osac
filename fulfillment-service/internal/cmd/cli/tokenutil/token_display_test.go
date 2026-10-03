@@ -17,7 +17,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"log/slog"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -80,11 +79,11 @@ var _ = Describe("DisplayTokenClaims", func() {
 	)
 
 	BeforeEach(func() {
-		ctx = logging.LoggerIntoContext(context.Background(), slog.Default())
+		ctx = logging.LoggerIntoContext(context.Background(), logger)
 		output = &bytes.Buffer{}
 		var err error
 		console, err = terminal.NewConsole().
-			SetLogger(slog.Default()).
+			SetLogger(logger).
 			SetStdout(output).
 			Build()
 		Expect(err).ToNot(HaveOccurred())

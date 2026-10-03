@@ -22,5 +22,5 @@ import (
 
 func TestDescribeInstancetype(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Describe instancetype command")
+	RunSpecs(t, "Describe instance type command")
 }

@@ -25,7 +25,7 @@ import (
 
 func TestTLS(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "TLS package")
+	RunSpecs(t, "Trust package")
 }
 
 var logger *slog.Logger

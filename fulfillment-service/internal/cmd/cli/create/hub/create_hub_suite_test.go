@@ -22,5 +22,5 @@ import (
 
 func TestCreateHub(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Create Hub Suite")
+	RunSpecs(t, "Create hub command")
 }

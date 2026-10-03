@@ -17,8 +17,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"log/slog"
-
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -59,14 +57,14 @@ var _ = Describe("Logout command execution", func() {
 
 	BeforeEach(func() {
 		ctx = context.Background()
-		ctx = logging.LoggerIntoContext(ctx, slog.Default())
+		ctx = logging.LoggerIntoContext(ctx, logger)
 		output = &bytes.Buffer{}
 		stderr = &bytes.Buffer{}
 	})
 
 	setupContext := func() (context.Context, *config.Settings) {
 		console, err := terminal.NewConsole().
-			SetLogger(slog.Default()).
+			SetLogger(logger).
 			SetStdout(output).
 			SetStderr(stderr).
 			Build()
@@ -80,7 +78,7 @@ var _ = Describe("Logout command execution", func() {
 		})
 
 		settings, err := config.NewSettings().
-			SetLogger(slog.Default()).
+			SetLogger(logger).
 			SetDir(filepath.Join(tempDir, "settings")).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
@@ -239,7 +237,7 @@ var _ = Describe("Logout command execution", func() {
 		done := make(chan error, 1)
 		start := time.Now()
 		go func() {
-			done <- runner.terminateSession(requestCtx, settings, slog.Default())
+			done <- runner.terminateSession(requestCtx, settings, logger)
 		}()
 
 		var sessionErr error

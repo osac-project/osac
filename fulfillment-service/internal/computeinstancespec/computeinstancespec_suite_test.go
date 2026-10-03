@@ -25,7 +25,7 @@ import (
 
 func TestComputeInstanceSpec(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "ComputeInstanceSpec package")
+	RunSpecs(t, "Compute instance spec package")
 }
 
 var (

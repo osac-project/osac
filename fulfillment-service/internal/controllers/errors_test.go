@@ -17,7 +17,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -124,7 +123,7 @@ var _ = Describe("HandleK8sWriteError", func() {
 		)
 
 		var captured error
-		result := HandleK8sWriteError(context.Background(), slog.Default(), invalidErr, func(err error) {
+		result := HandleK8sWriteError(context.Background(), logger, invalidErr, func(err error) {
 			captured = err
 		})
 
@@ -136,7 +135,7 @@ var _ = Describe("HandleK8sWriteError", func() {
 		transientErr := fmt.Errorf("connection refused")
 
 		called := false
-		result := HandleK8sWriteError(context.Background(), slog.Default(), transientErr, func(err error) {
+		result := HandleK8sWriteError(context.Background(), logger, transientErr, func(err error) {
 			called = true
 		})
 

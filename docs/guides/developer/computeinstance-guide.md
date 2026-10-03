@@ -5,6 +5,7 @@ or the gRPC / REST API.
 It assumes you already have a Tenant in `Ready` state (see [Tenant Setup Guide](tenant-setup.md))
 and networking resources set up (see [Networking Guide](networking-guide.md)).
 For per-disk storage tier selection, see [Storage tier selection](#storage-tier-selection).
+To change a VM's InstanceType after creation, see [Resizing a VM](computeinstance-resize-guide.md).
 
 ## Contents
 

@@ -682,7 +682,7 @@ var _ = Describe("Rego authorization interceptor", func() {
 		)
 
 		DescribeTable(
-			"Allows Keycloak users on public networking CRUD APIs",
+			"Allows Keycloak users on public networking and FabricDomain CRUD APIs",
 			func(ctx context.Context, method string) {
 				token := createKeycloakUserToken("my-tenant", "my-user", nil)
 				ctx = ContextWithToken(ctx, token)
@@ -719,6 +719,11 @@ var _ = Describe("Rego authorization interceptor", func() {
 			Entry("ExternalIPAttachments Get", "/osac.public.v1.ExternalIPAttachments/Get"),
 			Entry("ExternalIPAttachments List", "/osac.public.v1.ExternalIPAttachments/List"),
 			Entry("ExternalIPAttachments Delete", "/osac.public.v1.ExternalIPAttachments/Delete"),
+			Entry("FabricDomains Create", "/osac.public.v1.FabricDomains/Create"),
+			Entry("FabricDomains Get", "/osac.public.v1.FabricDomains/Get"),
+			Entry("FabricDomains List", "/osac.public.v1.FabricDomains/List"),
+			Entry("FabricDomains Update", "/osac.public.v1.FabricDomains/Update"),
+			Entry("FabricDomains Delete", "/osac.public.v1.FabricDomains/Delete"),
 			Entry("NATGateways Create", "/osac.public.v1.NATGateways/Create"),
 			Entry("NATGateways Get", "/osac.public.v1.NATGateways/Get"),
 			Entry("NATGateways List", "/osac.public.v1.NATGateways/List"),

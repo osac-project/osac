@@ -191,12 +191,28 @@ func (s *PrivateFabricDomainsServer) validateFabricDomain(ctx context.Context, o
 	if spec.GetVirtualNetwork() == "" {
 		return grpcstatus.Error(grpccodes.InvalidArgument, "virtual_network is required")
 	}
-	if spec.GetType() != privatev1.FabricDomainType_FABRIC_DOMAIN_TYPE_ETHERNET_EW {
+	switch spec.GetType() {
+	case privatev1.FabricDomainType_FABRIC_DOMAIN_TYPE_ETHERNET_EW:
+		// Ethernet east-west is the only supported type today.
+	case privatev1.FabricDomainType_FABRIC_DOMAIN_TYPE_INFINIBAND_EW,
+		privatev1.FabricDomainType_FABRIC_DOMAIN_TYPE_NVLINK:
 		return grpcstatus.Error(grpccodes.Unimplemented, "type not yet supported")
+	case privatev1.FabricDomainType_FABRIC_DOMAIN_TYPE_UNSPECIFIED:
+		return grpcstatus.Error(grpccodes.InvalidArgument, "type is required")
+	default:
+		return grpcstatus.Error(grpccodes.InvalidArgument, "type is invalid")
 	}
 
 	vnResponse, err := s.virtualNetworkDao.Get().SetId(spec.GetVirtualNetwork()).Do(ctx)
 	if err != nil {
+		var notFound *dao.ErrNotFound
+		if errors.As(err, &notFound) {
+			return grpcstatus.Error(grpccodes.NotFound, "VirtualNetwork not found")
+		}
+		var denied *dao.ErrDenied
+		if errors.As(err, &denied) {
+			return grpcstatus.Error(grpccodes.PermissionDenied, denied.Reason)
+		}
 		return err
 	}
 	vn := vnResponse.GetObject()
@@ -211,9 +227,6 @@ func (s *PrivateFabricDomainsServer) validateFabricDomain(ctx context.Context, o
 	nc := ncResponse.GetObject()
 	if !nc.GetCapabilities().GetSupportsEastWestEthernet() {
 		return grpcstatus.Error(grpccodes.InvalidArgument, "type does not match NetworkClass capability")
-	}
-	if nc.GetSpec().GetEastWestConfig().GetEthernetEw().GetTemplateId() == "" {
-		return grpcstatus.Error(grpccodes.FailedPrecondition, "NetworkClass missing template_id for ethernet_ew")
 	}
 	return nil
 }

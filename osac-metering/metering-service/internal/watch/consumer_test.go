@@ -1443,6 +1443,7 @@ var _ = Describe("Consumer", func() {
 		It("preserves billing context through RUNNING→STOPPING→STOPPED sequence", func() {
 			store := newMockStore()
 			billableStart := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+			lastHeartbeat := billableStart.Add(30 * time.Minute)
 			store.states["vm-stop-seq"] = projection.ResourceState{
 				ResourceID:         "vm-stop-seq",
 				ResourceType:       events.ResourceTypeComputeInstance,
@@ -1450,6 +1451,7 @@ var _ = Describe("Consumer", func() {
 				CurrentState:       "RUNNING",
 				IsBillable:         true,
 				BillableSince:      &billableStart,
+				LastHeartbeatAt:    &lastHeartbeat,
 				FulfillmentVersion: 1,
 				BillingDimensions:  map[string]any{},
 				TransitionTime:     billableStart,
@@ -1499,13 +1501,12 @@ var _ = Describe("Consumer", func() {
 			Expect(pub.published).To(HaveLen(1))
 			Expect(pub.published[0].Type()).To(Equal(events.EventSuspended))
 
-			// suspended.v1 should have duration_seconds = 3600 (1 hour from
-			// BillableSince to STOPPED transition time), proving billing context
-			// was preserved through STOPPING, not reset to STOPPING time.
+			// The final event reports only the tail since the last heartbeat,
+			// while transient STOPPING preserves the previous billing context.
 			var data map[string]any
 			Expect(json.Unmarshal(pub.published[0].Data(), &data)).To(Succeed())
 			Expect(data["previous_state"]).To(Equal("RUNNING"))
-			Expect(data["duration_seconds"]).To(BeNumerically("~", 3600.0, 0.1))
+			Expect(data["duration_seconds"]).To(BeNumerically("~", 1800.0, 0.1))
 
 			// Projection should show STOPPED, non-billable
 			store.mu.Lock()
@@ -1968,7 +1969,12 @@ var _ = Describe("Consumer", func() {
 
 		It("publishes N+1 suspended.v1 on READY→FAILED", func() {
 			store := newMockStore()
-			now := time.Now().UTC().Truncate(time.Microsecond)
+			now := time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC)
+			lastHeartbeat := now.Add(30 * time.Minute)
+			controlPlaneSince := now.Add(10 * time.Minute)
+			cpuSince := now.Add(45 * time.Minute)
+			gpuSince := now.Add(15 * time.Minute)
+			closingTime := now.Add(time.Hour)
 			store.states["cl-fail"] = projection.ResourceState{
 				ResourceID:         "cl-fail",
 				ResourceType:       events.ResourceTypeClusterOrder,
@@ -1976,12 +1982,19 @@ var _ = Describe("Consumer", func() {
 				CurrentState:       "READY",
 				IsBillable:         true,
 				BillableSince:      &now,
+				LastHeartbeatAt:    &lastHeartbeat,
 				FulfillmentVersion: 1,
 				BillingDimensions:  clusterBillingDims(),
-				TransitionTime:     now,
+				ComponentBillableSince: map[string]time.Time{
+					"_control_plane": controlPlaneSince,
+					"cpu-workers":    cpuSince,
+					"gpu-workers":    gpuSince,
+				},
+				TransitionTime: now,
 			}
 
 			cl := makeCluster("cl-fail", "tenant-1", privatev1.ClusterState_CLUSTER_STATE_FAILED, defaultNodeSets())
+			cl.Status.StateTransitionTime = timestamppb.New(closingTime)
 			event := &privatev1.Event{
 				Id:      "evt-fail",
 				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
@@ -2004,6 +2017,15 @@ var _ = Describe("Consumer", func() {
 			Expect(pub.published).To(HaveLen(3))
 			for _, e := range pub.published {
 				Expect(e.Type()).To(Equal(events.EventSuspended))
+				var data map[string]any
+				Expect(json.Unmarshal(e.Data(), &data)).To(Succeed())
+				dimensions := data["billing_dimensions"].(map[string]any)
+				want := float64(1800)
+				switch dimensions["node_set"] {
+				case "cpu-workers":
+					want = 900
+				}
+				Expect(data["duration_seconds"]).To(BeNumerically("==", want), dimensions["node_set"])
 			}
 
 			store.mu.Lock()
@@ -2014,7 +2036,10 @@ var _ = Describe("Consumer", func() {
 
 		It("publishes updated.v1 only for changed component on scaling", func() {
 			store := newMockStore()
-			now := time.Now().Add(-1 * time.Hour).UTC().Truncate(time.Microsecond)
+			now := time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC)
+			lastHeartbeat := now.Add(30 * time.Minute)
+			gpuSince := now.Add(45 * time.Minute)
+			scaleTime := now.Add(time.Hour)
 			store.states["cl-scale"] = projection.ResourceState{
 				ResourceID:         "cl-scale",
 				ResourceType:       events.ResourceTypeClusterOrder,
@@ -2022,12 +2047,13 @@ var _ = Describe("Consumer", func() {
 				CurrentState:       "READY",
 				IsBillable:         true,
 				BillableSince:      &now,
+				LastHeartbeatAt:    &lastHeartbeat,
 				FulfillmentVersion: 1,
 				BillingDimensions:  clusterBillingDims(),
 				ComponentBillableSince: map[string]time.Time{
 					"_control_plane": now,
 					"cpu-workers":    now,
-					"gpu-workers":    now,
+					"gpu-workers":    gpuSince,
 				},
 				TransitionTime: now,
 			}
@@ -2038,6 +2064,7 @@ var _ = Describe("Consumer", func() {
 				"cpu-workers": {BaremetalInstanceType: &privatev1.BareMetalInstanceTypeLocalReference{Name: "cpu-only"}, Size: proto.Int32(3)},
 			}
 			cl := makeCluster("cl-scale", "tenant-1", privatev1.ClusterState_CLUSTER_STATE_READY, scaledNodeSets)
+			cl.Status.StateTransitionTime = timestamppb.New(scaleTime)
 			event := &privatev1.Event{
 				Id:      "evt-scale",
 				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
@@ -2065,7 +2092,8 @@ var _ = Describe("Consumer", func() {
 			bd := data["billing_dimensions"].(map[string]any)
 			Expect(bd["host_type"]).To(Equal("gpu-h100"))
 			Expect(bd["node_count"]).To(BeNumerically("==", 4))
-			Expect(data["duration_seconds"]).ToNot(BeNil())
+			Expect(data["duration_seconds"]).To(BeNumerically("==", 900),
+				"component active start after the resource heartbeat must set the lower bound")
 		})
 
 		It("sets duration_seconds=nil for newly-added component (no prior billing interval)", func() {
@@ -3014,13 +3042,15 @@ var _ = Describe("Consumer", func() {
 			store := newMockStore()
 			t0 := time.Date(2026, 9, 14, 11, 0, 0, 0, time.UTC)
 			t1 := t0.Add(time.Hour)
+			lastHeartbeat := t0.Add(30 * time.Minute)
 			store.states["bmi-stopping"] = projection.ResourceState{
-				ResourceID:    "bmi-stopping",
-				ResourceType:  events.ResourceTypeBareMetalInstance,
-				TenantID:      "tenant-1",
-				CurrentState:  "RUNNING",
-				IsBillable:    true,
-				BillableSince: &t0,
+				ResourceID:      "bmi-stopping",
+				ResourceType:    events.ResourceTypeBareMetalInstance,
+				TenantID:        "tenant-1",
+				CurrentState:    "RUNNING",
+				IsBillable:      true,
+				BillableSince:   &t0,
+				LastHeartbeatAt: &lastHeartbeat,
 				BMaaSMeterState: projection.BMaaSMeterState{
 					Allocation: projection.MeterState{
 						ActiveSince: &t0, FirstStartedAt: &t0,
@@ -3064,7 +3094,7 @@ var _ = Describe("Consumer", func() {
 			Expect(pub.published[0].Type()).To(Equal(events.EventSuspended))
 			var data map[string]any
 			Expect(json.Unmarshal(pub.published[0].Data(), &data)).To(Succeed())
-			Expect(data["duration_seconds"]).To(BeNumerically("==", 3600))
+			Expect(data["duration_seconds"]).To(BeNumerically("==", 1800))
 			pub.mu.Unlock()
 
 			store.mu.Lock()

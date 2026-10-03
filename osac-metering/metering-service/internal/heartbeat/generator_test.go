@@ -356,6 +356,10 @@ var _ = Describe("Generator", func() {
 				CurrentState:  "READY",
 				IsBillable:    true,
 				BillableSince: &now,
+				ComponentBillableSince: map[string]time.Time{
+					"_control_plane": now,
+					"gpu-workers":    now,
+				},
 				BillingDimensions: map[string]any{
 					"cluster_template": "ocp-ci-small",
 					"release_image":    "4.17.0",

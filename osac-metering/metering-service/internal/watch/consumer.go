@@ -331,13 +331,41 @@ func (c *Consumer) handleTransientState(
 	return nil
 }
 
-func (c *Consumer) publishLifecycleEvents(ctx context.Context, baseCE *cloudevents.Event, mapper events.ResourceMapper, eventID string, billingDims map[string]any) error {
+func (c *Consumer) publishLifecycleEvents(
+	ctx context.Context,
+	baseCE *cloudevents.Event,
+	mapper events.ResourceMapper,
+	eventID string,
+	billingDims map[string]any,
+	existing *projection.ResourceState,
+	transitionTime time.Time,
+) error {
 	if baseCE.Type() == events.EventCreated || baseCE.Type() == events.EventDeleted {
 		return c.publishWithRetry(ctx, baseCE)
 	}
 
 	decomposed, err := events.BuildResourceEvents(mapper.ResourceType(), billingDims, eventID, func(dims map[string]any, compEventID string) (cloudevents.Event, error) {
-		return c.buildComponentEvent(baseCE, compEventID, dims)
+		ce, err := c.buildComponentEvent(baseCE, compEventID, dims)
+		if err != nil || mapper.ResourceType() != events.ResourceTypeClusterOrder || baseCE.Type() != events.EventSuspended {
+			return ce, err
+		}
+		nodeSet := dims["node_set"].(string)
+		if existing == nil {
+			return ce, fmt.Errorf("cluster %s node_set %q has no component billable-since timestamp", mapper.ResourceID(), nodeSet)
+		}
+		duration, err := c.componentDurationSeconds(existing, nodeSet, transitionTime)
+		if err != nil {
+			return ce, err
+		}
+		var data map[string]any
+		if err := ce.DataAs(&data); err != nil {
+			return ce, fmt.Errorf("reading component lifecycle event data: %w", err)
+		}
+		data["duration_seconds"] = duration
+		if err := ce.SetData(cloudevents.ApplicationJSON, data); err != nil {
+			return ce, fmt.Errorf("setting component lifecycle duration: %w", err)
+		}
+		return ce, nil
 	})
 	if err != nil {
 		return err
@@ -520,6 +548,7 @@ func (c *Consumer) buildBareMetalLifecycleEvents(
 		consumptionState = existing.BMaaSMeterState.Consumption
 		intervals.AllocationSince = allocationState.ActiveSince
 		intervals.ConsumptionSince = consumptionState.ActiveSince
+		intervals.LastHeartbeatAt = existing.LastHeartbeatAt
 	}
 
 	return events.DecomposeBMIEvents(
@@ -726,30 +755,24 @@ func (c *Consumer) buildProjectionState(mapper events.ResourceMapper, existing *
 	return projState
 }
 
-// componentDurationSeconds returns how long a component's prior billing
-// dimensions were in effect. Returns nil if no per-component timestamp is
-// recorded for nodeSet — an honest "unknown" (the same signal already used
-// for a genuinely new component) rather than guessing via the resource-wide
-// BillableSince, which would silently reintroduce a narrower version of the
-// cross-component bug this exists to fix. The only path that can leave an
-// entry missing is a Reconciler correction that hasn't been updated to
-// maintain ComponentBillableSince (see events.NextComponentBillableSince
-// callers in the reconciliation package) — logged so an unexpected rate of
-// occurrence is debuggable rather than silently absorbed.
-func (c *Consumer) componentDurationSeconds(existing *projection.ResourceState, nodeSet string, transitionTime time.Time) *float64 {
+// componentDurationSeconds returns the remaining interval for a component's
+// prior billing dimensions. A component start is required; LastHeartbeatAt is
+// only an optional lower bound on the interval.
+func (c *Consumer) componentDurationSeconds(existing *projection.ResourceState, nodeSet string, transitionTime time.Time) (*float64, error) {
 	since, ok := existing.ComponentBillableSince[nodeSet]
 	if !ok {
-		c.logger.V(1).Info("no per-component billable-since recorded, reporting nil duration_seconds",
-			"resource_id", existing.ResourceID, "node_set", nodeSet)
-		return nil
+		return nil, fmt.Errorf("cluster %s node_set %q has no component billable-since timestamp", existing.ResourceID, nodeSet)
 	}
-	duration := transitionTime.Sub(since).Seconds()
-	return &duration
+	duration, err := events.DurationSeconds(transitionTime, existing.LastHeartbeatAt, &since)
+	if err != nil {
+		return nil, fmt.Errorf("cluster %s node_set %q: %w", existing.ResourceID, nodeSet, err)
+	}
+	return duration, nil
 }
 
-func (c *Consumer) buildStateContext(existing *projection.ResourceState, nowBillable bool, transitionTime time.Time, newDims map[string]any) *events.StateContext {
+func (c *Consumer) buildStateContext(existing *projection.ResourceState, nowBillable bool, transitionTime time.Time, newDims map[string]any) (*events.StateContext, error) {
 	if existing == nil {
-		return &events.StateContext{}
+		return &events.StateContext{}, nil
 	}
 
 	sc := &events.StateContext{
@@ -757,15 +780,19 @@ func (c *Consumer) buildStateContext(existing *projection.ResourceState, nowBill
 		EverBillable:  existing.EverBillable,
 	}
 
-	if existing.IsBillable && existing.BillableSince != nil {
-		if !nowBillable || !events.DimensionsEqual(existing.BillingDimensions, newDims) {
-			duration := transitionTime.Sub(*existing.BillableSince).Seconds()
-			sc.DurationSeconds = &duration
-			sc.BillableSince = existing.BillableSince
+	if existing.IsBillable && (!nowBillable || !events.DimensionsEqual(existing.BillingDimensions, newDims)) {
+		if existing.BillableSince == nil {
+			return nil, fmt.Errorf("resource %s is billable but has no billable-since timestamp for close", existing.ResourceID)
 		}
+		duration, err := events.DurationSeconds(transitionTime, existing.LastHeartbeatAt, existing.BillableSince)
+		if err != nil {
+			return nil, fmt.Errorf("resource %s billable close: %w", existing.ResourceID, err)
+		}
+		sc.DurationSeconds = duration
+		sc.BillableSince = existing.BillableSince
 	}
 
-	return sc
+	return sc, nil
 }
 
 func (c *Consumer) logPublished(ce *cloudevents.Event) {

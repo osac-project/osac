@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/osac-project/osac-metering/internal/events"
+	"github.com/osac-project/osac-metering/internal/projection"
 )
 
 // This catches a regression to the generic correction fan-out, which cannot
@@ -79,6 +80,56 @@ func TestBuildBMaaSCorrectionEventsClosesActiveMetersIndependently(t *testing.T)
 	for i := range eventsOut {
 		if eventsOut[i].ID() != retry[i].ID() {
 			t.Errorf("retry correction %d ID changed: %q != %q", i, eventsOut[i].ID(), retry[i].ID())
+		}
+	}
+}
+
+func TestBMaaSReconciliationClosuresUseHeartbeatTailClampedByMeterStart(t *testing.T) {
+	allocationSince := time.Date(2026, 9, 14, 10, 0, 0, 0, time.UTC)
+	consumptionSince := time.Date(2026, 9, 14, 11, 55, 0, 0, time.UTC)
+	lastHeartbeat := time.Date(2026, 9, 14, 11, 45, 0, 0, time.UTC)
+	transitionTime := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
+	state := projection.ResourceState{
+		LastHeartbeatAt: &lastHeartbeat,
+		BMaaSMeterState: projection.BMaaSMeterState{
+			Allocation:  projection.MeterState{ActiveSince: &allocationSince},
+			Consumption: projection.MeterState{ActiveSince: &consumptionSince},
+		},
+	}
+
+	eventsOut, err := buildBMaaSCorrectionEvents(
+		"bmi-1", "tenant-1", "project-1", StateDrift, "RUNNING", "FAILED",
+		map[string]any{"bm_instance_type": "bm.large"}, bmaasIntervals(state),
+		events.BMaaSEffectSuspend, events.BMaaSEffectSuspend, true, true, transitionTime,
+	)
+	if err != nil {
+		t.Fatalf("build BMaaS reconciliation closures: %v", err)
+	}
+	if len(eventsOut) != 2 {
+		t.Fatalf("closure count = %d, want allocation and consumption", len(eventsOut))
+	}
+
+	for i, want := range []struct {
+		meter   string
+		from    time.Time
+		seconds float64
+	}{
+		{meter: events.BMaaSMeterAllocation, from: allocationSince, seconds: 900},
+		{meter: events.BMaaSMeterConsumption, from: consumptionSince, seconds: 300},
+	} {
+		var data correctionData
+		if err := eventsOut[i].DataAs(&data); err != nil {
+			t.Fatalf("read BMaaS closure %d: %v", i, err)
+		}
+		if data.BillingDimensions["meter_type"] != want.meter {
+			t.Errorf("closure %d meter_type = %v, want %q", i, data.BillingDimensions["meter_type"], want.meter)
+		}
+		if data.AffectedInterval == nil {
+			t.Errorf("closure %d has no affected interval", i)
+			continue
+		}
+		if !data.AffectedInterval.From.Equal(want.from) || data.AffectedInterval.OverbilledSeconds != want.seconds {
+			t.Errorf("closure %d interval = %#v, want from %s with %.0fs tail", i, data.AffectedInterval, want.from, want.seconds)
 		}
 	}
 }

@@ -1,0 +1,43 @@
+download_url: https://console.redhat.com/api/automation-hub/v3/plugin/ansible/content/published/collections/artifacts/ansible-posix-2.2.2.tar.gz
+format_version: 1.0.0
+name: posix
+namespace: ansible
+server: https://console.redhat.com/api/automation-hub/content/published/
+signatures:
+- pubkey_fingerprint: 39B5D759361A97464C564A8FE1A4BD708A828AAD
+  pulp_created: '2026-07-13T06:46:43.729019Z'
+  signature: '-----BEGIN PGP SIGNATURE-----
+
+
+    iQIcBAABCAAGBQJqVInSAAoJEOGkvXCKgoqtIr0QAIB4TdIpIDZAxLR4+Vdwcgb+
+
+    ozoVqZnJbQxovZs4WoRgeoQZE0VDAmjSLsRuqQgPEFLRsdE7zRlgOzNpinJdmrsM
+
+    drQEHg3gNkxQ3AAJCcm54g3aDDhNwPB2oYy4s3ChVYfJvNAocaBag0RupBelB6x3
+
+    iDzoMeoNBy2AEUtlmWY4ec9XKubwSiooJR5ybbMk5mWgqRV3d/9fE7MJmOYSHusi
+
+    Et+WHzI6FBARybDvPfViMJ24uU3h6fSlDFr3/+s9k2jfSnx1L/7ZbOteWjBADvnk
+
+    RbKJpTHEyLnLjKaXwD2p2xRaqmq+wvwXTEqDttmwc+i3jphsEQwrtnVrJ5x8t6e6
+
+    EVUIq7R+cs10mBmuaUtv0P/pw6Ns1EEkwSBmvBHNE6x7h9OaSE/vnychukSTE2mC
+
+    x39EtOWWUB3dD5XWvP9X/AqObx0HcHz3bmh1z4ME5LqOKxe42wuAMhYD8d0FTM98
+
+    yiFsHHwEcQQ8sx+BnRwWqxMA0wS/DEIrAhCxPeS69SzzRn2DXgF5XInFR1CEjGzp
+
+    HU2N5JjmqxmRpIYadusLqNG0qVZF75AAWGLih50LJUJ62xnwdN/FAkfloStmX4K+
+
+    oxLa89d8BmioDSW6iz/msA/jCCchOnHQqmhdURbXIA7lmqInyy5ZnFkQ5HJ0hm/4
+
+    xxBNmkI7Fv/J87FPWxcD
+
+    =jbb4
+
+    -----END PGP SIGNATURE-----
+
+    '
+  signing_service: null
+version: 2.2.2
+version_url: /api/automation-hub/content/published/v3/plugin/ansible/content/published/collections/index/ansible/posix/versions/2.2.2/

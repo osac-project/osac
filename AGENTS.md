@@ -107,3 +107,5 @@ user journeys to `[QE]` work. The test plan must identify the tier and owner for
 each case so the implementation and QE work do not duplicate or omit coverage.
 
 During test-plan generation and decomposition, follow the [planning evidence requirements](docs/INTEGRATION-TESTING.md#planning-evidence) and carry the applicable evidence into each implementation or QE task.
+
+Before opening a pull request, apply the [implementation evidence requirements](docs/INTEGRATION-TESTING.md#implementation-evidence): every required integration row for the touched areas must have an executed, passing test through its named boundary, and missing or wrong-tier coverage must be reported as a gap with its owning ticket — never as covered.

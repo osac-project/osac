@@ -286,6 +286,14 @@ func (s *PrivateExternalIPsServer) Update(ctx context.Context,
 			}
 		}
 	}
+	if updateIncludesField(mask, "metadata.finalizers") &&
+		existingExternalIP.GetMetadata().HasDeletionTimestamp() &&
+		len(existingExternalIP.GetMetadata().GetFinalizers()) > 0 &&
+		len(request.GetObject().GetMetadata().GetFinalizers()) == 0 {
+		if err = s.lifecycle.ensureExternalIPChildrenFinalized(ctx, id); err != nil {
+			return
+		}
+	}
 
 	err = s.generic.Update(ctx, request, &response)
 	return

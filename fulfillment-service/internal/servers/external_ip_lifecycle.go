@@ -314,30 +314,55 @@ func (l *externalIPLifecycle) lockExternalIPConsumers(ctx context.Context, exter
 	return nil
 }
 
-func (l *externalIPLifecycle) ensureExternalIPAvailable(ctx context.Context, externalIPID string) error {
+func (l *externalIPLifecycle) ensureExternalIPChildrenFinalized(ctx context.Context, externalIPID string) error {
+	return l.ensureExternalIPChildrenAbsent(ctx, externalIPID, true)
+}
+
+func (l *externalIPLifecycle) ensureExternalIPChildrenAbsent(
+	ctx context.Context,
+	externalIPID string,
+	includeDeletingChildren bool,
+) error {
 	filter := fmt.Sprintf(
-		"(this.spec.external_ip.id == %s || this.spec.external_ip.name == %s) && !has(this.metadata.deletion_timestamp)",
+		"this.spec.external_ip.id == %s || this.spec.external_ip.name == %s",
 		strconv.Quote(externalIPID), strconv.Quote(externalIPID),
 	)
+	if !includeDeletingChildren {
+		filter = fmt.Sprintf("(%s) && !has(this.metadata.deletion_timestamp)", filter)
+	}
 	if l.externalIPAttachmentDao != nil {
-		response, err := l.externalIPAttachmentDao.List().SetFilter(filter).SetLimit(1).Do(ctx)
+		response, err := l.externalIPAttachmentDao.Exists().SetFilter(filter).Do(ctx)
 		if err != nil {
 			return err
 		}
-		if response.GetTotal() > 0 {
-			return grpcstatus.Errorf(grpccodes.FailedPrecondition, "ExternalIP '%s' is already in use by an ExternalIPAttachment", externalIPID)
+		if response.GetExists() {
+			if includeDeletingChildren {
+				return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+					"ExternalIP '%s' still has an ExternalIPAttachment", externalIPID)
+			}
+			return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+				"ExternalIP '%s' is already in use by an ExternalIPAttachment", externalIPID)
 		}
 	}
 	if l.natGatewayDao != nil {
-		response, err := l.natGatewayDao.List().SetFilter(filter).SetLimit(1).Do(ctx)
+		response, err := l.natGatewayDao.Exists().SetFilter(filter).Do(ctx)
 		if err != nil {
 			return err
 		}
-		if response.GetTotal() > 0 {
-			return grpcstatus.Errorf(grpccodes.FailedPrecondition, "ExternalIP '%s' is already in use by a NATGateway", externalIPID)
+		if response.GetExists() {
+			if includeDeletingChildren {
+				return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+					"ExternalIP '%s' still has a NATGateway", externalIPID)
+			}
+			return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+				"ExternalIP '%s' is already in use by a NATGateway", externalIPID)
 		}
 	}
 	return nil
+}
+
+func (l *externalIPLifecycle) ensureExternalIPAvailable(ctx context.Context, externalIPID string) error {
+	return l.ensureExternalIPChildrenAbsent(ctx, externalIPID, false)
 }
 
 func (l *externalIPLifecycle) settleAttachmentParent(

@@ -1343,6 +1343,32 @@ var _ = Describe("Generic DAO", func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(response.GetExists()).To(BeFalse())
 			})
+
+			It("Returns whether any object matches the filter", func() {
+				_, err := generic.Create().
+					SetObject(
+						testsv1.Object_builder{
+							Metadata: testsv1.Metadata_builder{
+								Tenant: "my-tenant",
+								Name:   "my-object",
+							}.Build(),
+						}.Build(),
+					).
+					Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+
+				existsResponse, err := generic.Exists().
+					SetFilter(`this.metadata.name == "my-object"`).
+					Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(existsResponse.GetExists()).To(BeTrue())
+
+				existsResponse, err = generic.Exists().
+					SetFilter(`this.metadata.name == "missing-object"`).
+					Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(existsResponse.GetExists()).To(BeFalse())
+			})
 		})
 
 		It("Updates object", func() {

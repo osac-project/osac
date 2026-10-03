@@ -47,6 +47,20 @@ type request[O Object] struct {
 	}
 }
 
+func (r *request[O]) addFilter(ctx context.Context, filter string) error {
+	translatedFilter, err := r.dao.filterTranslator.Translate(ctx, filter)
+	if err != nil {
+		return &ErrInvalidFilter{Reason: err.Error()}
+	}
+	if r.sql.filter.Len() > 0 {
+		r.sql.filter.WriteString(` and `)
+	}
+	r.sql.filter.WriteString(`(`)
+	r.sql.filter.WriteString(translatedFilter)
+	r.sql.filter.WriteString(`)`)
+	return nil
+}
+
 type archiveArgs struct {
 	id              string
 	creationTs      time.Time

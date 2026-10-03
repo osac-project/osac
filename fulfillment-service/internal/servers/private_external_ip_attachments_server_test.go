@@ -27,6 +27,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -681,6 +682,77 @@ var _ = Describe("Private external IP attachments server", func() {
 				Id: createResponse.GetObject().GetId(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("keeps a deleting ExternalIP until its deleting attachment is finalized", func() {
+			eip := createExternalIPInState(ctx, externalIPDao, sharedPool.GetId(),
+				privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED, false)
+			eip.GetMetadata().SetFinalizers([]string{finalizers.Controller})
+			_, err := externalIPDao.Update().SetObject(eip).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			ci := createComputeInstanceInState(ctx, computeInstanceDao,
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING)
+			attachmentResponse, err := server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
+				Object: privatev1.ExternalIPAttachment_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:       "attachment-finalizer-order",
+						Finalizers: []string{finalizers.Controller},
+					}.Build(),
+					Spec: privatev1.ExternalIPAttachmentSpec_builder{
+						ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+						ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: ci.GetId()}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = server.Delete(ctx, privatev1.ExternalIPAttachmentsDeleteRequest_builder{
+				Id: attachmentResponse.GetObject().GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			externalIPsServer, err := NewPrivateExternalIPsServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = externalIPsServer.Delete(ctx, privatev1.ExternalIPsDeleteRequest_builder{
+				Id: eip.GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			removeExternalIPFinalizer := func() error {
+				_, updateErr := externalIPsServer.Update(ctx, privatev1.ExternalIPsUpdateRequest_builder{
+					Object: privatev1.ExternalIP_builder{
+						Id:       eip.GetId(),
+						Metadata: privatev1.Metadata_builder{Finalizers: []string{}}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.finalizers"}},
+				}.Build())
+				return updateErr
+			}
+
+			err = removeExternalIPFinalizer()
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+			_, err = externalIPDao.Get().SetId(eip.GetId()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = server.Update(ctx, privatev1.ExternalIPAttachmentsUpdateRequest_builder{
+				Object: privatev1.ExternalIPAttachment_builder{
+					Id: attachmentResponse.GetObject().GetId(),
+					Metadata: privatev1.Metadata_builder{
+						Finalizers: []string{},
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.finalizers"}},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			Expect(removeExternalIPFinalizer()).To(Succeed())
+			_, err = externalIPDao.Get().SetId(eip.GetId()).Do(ctx)
+			Expect(err).To(HaveOccurred())
 		})
 
 		It("Signals an external IP attachment", func() {

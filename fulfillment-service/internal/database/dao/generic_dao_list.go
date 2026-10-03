@@ -83,18 +83,10 @@ func (r *ListRequest[O]) do(ctx context.Context) (response *ListResponse[O], err
 
 	// Calculate the requested filter:
 	if r.filter != "" {
-		var filter string
-		filter, err = r.dao.filterTranslator.Translate(ctx, r.filter)
+		err = r.addFilter(ctx, r.filter)
 		if err != nil {
-			err = &ErrInvalidFilter{Reason: err.Error()}
 			return
 		}
-		if r.sql.filter.Len() > 0 {
-			r.sql.filter.WriteString(` and `)
-		}
-		r.sql.filter.WriteString(`(`)
-		r.sql.filter.WriteString(filter)
-		r.sql.filter.WriteString(`)`)
 	}
 
 	// Calculate the order clause:

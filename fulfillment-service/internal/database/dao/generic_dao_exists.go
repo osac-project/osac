@@ -23,15 +23,22 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 )
 
-// ExistsRequest represents a request to check if an object exists by its identifier.
+// ExistsRequest represents a request to check if an object exists by its identifier or filter.
 type ExistsRequest[O Object] struct {
 	request[O]
-	id string
+	id     string
+	filter string
 }
 
 // SetId sets the identifier of the object to check.
 func (r *ExistsRequest[O]) SetId(value string) *ExistsRequest[O] {
 	r.id = value
+	return r
+}
+
+// SetFilter sets the CEL expression used to check for matching objects.
+func (r *ExistsRequest[O]) SetFilter(value string) *ExistsRequest[O] {
+	r.filter = value
 	return r
 }
 
@@ -48,8 +55,8 @@ func (r *ExistsRequest[O]) Do(ctx context.Context) (response *ExistsResponse, er
 
 func (r *ExistsRequest[O]) do(ctx context.Context) (response *ExistsResponse, err error) {
 	// Check parameters:
-	if r.id == "" {
-		err = errors.New("object identifier is mandatory")
+	if r.id == "" && r.filter == "" {
+		err = errors.New("object identifier or filter is mandatory")
 		return
 	}
 
@@ -64,20 +71,28 @@ func (r *ExistsRequest[O]) do(ctx context.Context) (response *ExistsResponse, er
 		}
 		return
 	}
-
-	// Add the id parameter:
-	r.sql.params = append(r.sql.params, r.id)
-	if r.sql.filter.Len() > 0 {
-		r.sql.filter.WriteString(` and`)
+	if r.filter != "" {
+		err = r.addFilter(ctx, r.filter)
+		if err != nil {
+			return
+		}
 	}
-	fmt.Fprintf(&r.sql.filter, ` id = $%d`, len(r.sql.params))
 
-	// Build the SQL statement:
+	// Add the id parameter when checking a specific object:
+	if r.id != "" {
+		r.sql.params = append(r.sql.params, r.id)
+		if r.sql.filter.Len() > 0 {
+			r.sql.filter.WriteString(` and`)
+		}
+		fmt.Fprintf(&r.sql.filter, ` id = $%d`, len(r.sql.params))
+	}
+
+	// Build an existence query so PostgreSQL can stop at the first match:
 	sqlBuffer := &strings.Builder{}
 	fmt.Fprintf(
 		sqlBuffer,
 		`
-		select count(*) from %s where %s
+		select exists (select 1 from %s where %s)
 		`,
 		r.dao.table,
 		r.sql.filter.String(),
@@ -85,20 +100,20 @@ func (r *ExistsRequest[O]) do(ctx context.Context) (response *ExistsResponse, er
 
 	// Execute the SQL statement:
 	sql := sqlBuffer.String()
-	var count int
+	var exists bool
 	err = func() (err error) {
 		start := time.Now()
 		row := r.queryRow(ctx, existsOpType, sql, r.sql.params...)
 		defer func() {
 			r.recordOpDuration(existsOpType, start, err)
 		}()
-		return row.Scan(&count)
+		return row.Scan(&exists)
 	}()
 	if err != nil {
 		return
 	}
 	response = &ExistsResponse{
-		exists: count > 0,
+		exists: exists,
 	}
 	return
 }

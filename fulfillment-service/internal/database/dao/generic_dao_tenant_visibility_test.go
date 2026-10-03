@@ -438,6 +438,12 @@ var _ = Describe("Generic DAO visibility", func() {
 			Expect(listResponse.GetTotal()).To(Equal(int32(1)))
 			Expect(listResponse.GetItems()).To(HaveLen(1))
 			Expect(listResponse.GetItems()[0].GetMetadata().GetTenant()).To(Equal("tenant-a"))
+
+			existsResponse, err := daoRestricted.Exists().
+				SetFilter(`this.id == "nonexistent" || this.metadata.tenant == "tenant-b"`).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(existsResponse.GetExists()).To(BeFalse())
 		})
 
 		It("Rejects update of an object belonging to an invisible tenant as not found", func() {

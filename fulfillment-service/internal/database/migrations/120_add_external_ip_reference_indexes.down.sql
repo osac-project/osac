@@ -1,0 +1,4 @@
+drop index if exists nat_gateways_external_ip_ref_name_idx;
+drop index if exists nat_gateways_external_ip_ref_id_idx;
+drop index if exists external_ip_attachments_external_ip_ref_name_idx;
+drop index if exists external_ip_attachments_external_ip_ref_id_idx;

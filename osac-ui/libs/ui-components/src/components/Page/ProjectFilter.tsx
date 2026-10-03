@@ -1,88 +1,134 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Alert,
   Divider,
+  Flex,
+  FlexItem,
   MenuToggle,
   Select,
   SelectList,
   SelectOption,
   Skeleton,
 } from '@patternfly/react-core';
+import { RhUiFolderOpenFillIcon } from '@patternfly/react-icons/dist/esm/icons/rh-ui-folder-open-fill-icon';
 
 import { Project } from '@osac/types';
 import { useAllProjects } from '@osac/ui-components/api/v1/project';
 import { serializePageFilter } from '@osac/ui-components/hooks/use-page-filter';
-import { PROJECT_FILTER_PARAM, useSession } from '@osac/ui-components/hooks/use-session';
+import {
+  PROJECT_FILTER_PARAM,
+  getProjectFilterStorageKey,
+  useSession,
+} from '@osac/ui-components/hooks/use-session';
+import { useUserPreferences } from '@osac/ui-components/hooks/use-user-preferences';
 import { getErrorMessage } from '@osac/ui-components/utils/error';
 
 import { useTranslation } from '../../hooks/useTranslation';
-import { getFullProjectPath, getProjectName } from '../Project/utils';
+import {
+  DEFAULT_PROJECT_FILTER_VALUE,
+  getFullProjectPath,
+  getProjectFilterPath,
+  getProjectName,
+  getSelectableProjects,
+  isDefaultProject,
+  resolveProjectFromFilterPath,
+} from '../Project/utils';
+
+const ALL_OPTION_VALUE = '__all__';
+
+const toSessionProjects = (project: Project | undefined): string[] => {
+  if (!project) {
+    return [];
+  }
+
+  return [isDefaultProject(project) ? '' : getFullProjectPath(project)];
+};
+
+const serializeProjectFilterForUrl = (projects: string[]): string | null => {
+  if (projects.length === 0) {
+    return null;
+  }
+
+  if (projects.length === 1 && projects[0] === '') {
+    return DEFAULT_PROJECT_FILTER_VALUE;
+  }
+
+  return serializePageFilter(projects);
+};
 
 const ProjectFilter = () => {
   const { t } = useTranslation();
-  const { projects, setProjects } = useSession();
+  const { projects, setProjects, username } = useSession();
+  const [, setStoredProjects] = useUserPreferences(getProjectFilterStorageKey(username));
   const [isOpen, setIsOpen] = useState(false);
   const { data, isLoading, error } = useAllProjects();
   const [searchParams, setSearchParams] = useSearchParams();
 
-  useEffect(() => {
-    if (projects !== undefined) {
-      const serialized = serializePageFilter(projects);
-      if (!serialized) {
-        setSearchParams(
-          (prev) => {
-            const next = new URLSearchParams(prev);
-            next.delete(PROJECT_FILTER_PARAM);
-            return next;
-          },
-          { replace: true },
-        );
-        return;
+  const setProjectFilter = useCallback(
+    (next: string[]) => {
+      setProjects(next);
+
+      if (next.length === 1 && next[0] === '') {
+        setStoredProjects(DEFAULT_PROJECT_FILTER_VALUE);
       }
-
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev);
-          next.set(PROJECT_FILTER_PARAM, serialized);
-          return next;
-        },
-        { replace: true },
-      );
-    }
-  }, [searchParams, setSearchParams, projects]);
-
-  const selectedProjects: Project[] = [];
-
-  projects.forEach((p) => {
-    const project = data?.find((d) => getFullProjectPath(d) === p);
-    if (project) {
-      selectedProjects.push(project);
-    }
-  });
-
-  const hasAllProjects = projects.length === selectedProjects.length;
+    },
+    [setProjects, setStoredProjects],
+  );
 
   useEffect(() => {
-    if (!isLoading && !hasAllProjects) {
-      setProjects(selectedProjects.map(getFullProjectPath));
+    const serialized = serializeProjectFilterForUrl(projects);
+    const current = searchParams.get(PROJECT_FILTER_PARAM);
+
+    if ((!serialized && !current) || serialized === current) {
+      return;
     }
-    // trigger based on hasAllProjects + isLoading only
+
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (!serialized) {
+          next.delete(PROJECT_FILTER_PARAM);
+        } else {
+          next.set(PROJECT_FILTER_PARAM, serialized);
+        }
+        return next;
+      },
+      { replace: true },
+    );
+  }, [projects, searchParams, setSearchParams]);
+
+  const selectableProjects = data ? getSelectableProjects(data) : [];
+
+  const selectedProject =
+    projects.length > 0 ? resolveProjectFromFilterPath(selectableProjects, projects[0]) : undefined;
+  const selectedPath = selectedProject ? getProjectFilterPath(selectedProject) : undefined;
+  const selection = selectedPath ?? ALL_OPTION_VALUE;
+  const selectedLabel = selectedProject ? getProjectName(selectedProject, t) : t('All projects');
+  const expectedProjects = toSessionProjects(selectedProject);
+  const isNormalized =
+    projects.length === expectedProjects.length &&
+    (expectedProjects.length === 0 || projects[0] === expectedProjects[0]) &&
+    projects[0] !== DEFAULT_PROJECT_FILTER_VALUE;
+
+  useEffect(() => {
+    if (!isLoading && !error && data && !isNormalized) {
+      setProjectFilter(expectedProjects);
+    }
+    // don't trigger on expectedProjects change
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasAllProjects, isLoading]);
+  }, [data, error, isLoading, isNormalized]);
 
   let items = (
     <>
-      {data?.map((p) => (
-        <SelectOption
-          key={p.id}
-          hasCheckbox
-          isSelected={projects.includes(getFullProjectPath(p))}
-          value={getFullProjectPath(p)}
-        >
-          {getProjectName(p, t)}
-        </SelectOption>
-      ))}
+      {selectableProjects.map((p) => {
+        const path = getProjectFilterPath(p);
+        return (
+          <SelectOption key={p.id} value={path} isSelected={selectedPath === path}>
+            {getProjectName(p, t)}
+          </SelectOption>
+        );
+      })}
     </>
   );
 
@@ -113,28 +159,39 @@ const ProjectFilter = () => {
   return (
     <Select
       isOpen={isOpen}
-      onSelect={(_, val: string) => {
-        if (val === null) {
-          setProjects([]);
-          setIsOpen(false);
+      selected={selection}
+      onSelect={(_event, value) => {
+        if (value === ALL_OPTION_VALUE) {
+          setProjectFilter([]);
+        } else if (value === DEFAULT_PROJECT_FILTER_VALUE) {
+          setProjectFilter(['']);
         } else {
-          setProjects(
-            projects.includes(val) ? projects.filter((p) => p !== val) : [...projects, val],
-          );
+          setProjectFilter([value as string]);
         }
+        setIsOpen(false);
       }}
-      onOpenChange={() => setIsOpen((o) => !o)}
+      onOpenChange={setIsOpen}
+      shouldFocusToggleOnSelect
       toggle={(toggleRef) => (
-        <MenuToggle ref={toggleRef} onClick={() => setIsOpen((o) => !o)} isExpanded={isOpen}>
-          {selectedProjects.length
-            ? selectedProjects.map((p) => getProjectName(p, t)).join(', ')
-            : t('All projects')}
+        <MenuToggle
+          ref={toggleRef}
+          onClick={() => setIsOpen((open) => !open)}
+          isExpanded={isOpen}
+          aria-label={t('Filter by project')}
+        >
+          <Flex gap={{ default: 'gapXs' }} flexWrap={{ default: 'nowrap' }}>
+            <FlexItem>
+              <RhUiFolderOpenFillIcon />
+            </FlexItem>
+            <FlexItem>{t('Project: {{selectedLabel}}', { selectedLabel })}</FlexItem>
+          </Flex>
         </MenuToggle>
       )}
-      shouldFocusToggleOnSelect
     >
       <SelectList>
-        <SelectOption value={null}>{t('All projects')}</SelectOption>
+        <SelectOption value={ALL_OPTION_VALUE} isSelected={selectedPath === undefined}>
+          {t('All projects')}
+        </SelectOption>
         <Divider />
         {items}
       </SelectList>

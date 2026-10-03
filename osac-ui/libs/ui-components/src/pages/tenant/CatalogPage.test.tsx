@@ -643,7 +643,7 @@ describe('CatalogPage', () => {
     localStorage.setItem(catalogItemsViewPrefKey, 'list');
 
     const { user } = renderWithProviders(<CatalogPage />, {
-      transport: createCatalogPageTransport(),
+      transport: createCatalogPageTransport({ bmItems: [bareMetalCatalogItem] }),
       routerEntries: ['/catalog?types=cluster&published=unpublished&search=no-such-item'],
     });
 
@@ -671,6 +671,10 @@ describe('CatalogPage', () => {
       expect(screen.getByText(clusterCatalogItem.metadata?.name || 'N/A')).toBeInTheDocument();
     });
 
+    expect(screen.getByRole('button', { name: /Bare Metal Machines/ })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
     expect(screen.getByRole('button', { name: /Clusters/ })).toHaveAttribute(
       'aria-pressed',
       'true',

@@ -1,6 +1,7 @@
 import { TFunction } from 'i18next';
 
 import type {
+  BareMetalInstance,
   BareMetalInstanceCatalogItem,
   BareMetalInstanceCatalogItemFields,
   BareMetalInstanceType,
@@ -59,6 +60,30 @@ export const findBareMetalInstanceTypeForReference = (
   if (reference.name) {
     return instanceTypes.find((instanceType) => instanceType.metadata?.name === reference.name);
   }
+  return undefined;
+};
+
+export const findBareMetalInstanceTypeReference = (
+  instance: BareMetalInstance,
+  catalogItems?: BareMetalInstanceCatalogItem[],
+) => {
+  const reference = instance.spec?.instanceType;
+  if (reference) {
+    return reference;
+  }
+  const catalogReference = instance.spec?.catalogItem;
+  if (catalogReference) {
+    const catalogItem = catalogItems?.find(
+      (item) =>
+        (catalogReference.id && item.id === catalogReference.id) ||
+        (catalogReference.name && item.metadata?.name === catalogReference.name),
+    );
+
+    if (catalogItem) {
+      return bareMetalInstanceTypeReferenceFromPolicy(catalogItem.fields?.instanceType);
+    }
+  }
+
   return undefined;
 };
 

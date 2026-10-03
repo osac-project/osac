@@ -1,5 +1,5 @@
 import { type MessageInitShape } from '@bufbuild/protobuf';
-import { keepPreviousData, useMutation } from '@tanstack/react-query';
+import { useMutation } from '@tanstack/react-query';
 
 import {
   type BareMetalInstance,
@@ -8,22 +8,36 @@ import {
   BareMetalInstanceSchema,
   BareMetalInstances,
 } from '@osac/types';
+import { useListResource } from '@osac/ui-components/api/use-resource';
 import { useProjectFilterQuery } from '@osac/ui-components/hooks/use-project-filter-query';
 
 import { useApiFetch } from '../api-context';
+import { type CelFilter, cel } from '../cel';
 import { apiQueryKey } from '../types';
 import { buildUpdateMaskPaths } from './update-mask';
 import { type ApiQueryClient, useApiQuery, useApiQueryClient } from '../use-api-query';
 
-export const useBareMetalInstances = () => {
-  const client = useApiFetch(BareMetalInstances);
-  const filter = useProjectFilterQuery<BareMetalInstance>();
-  return useApiQuery({
-    queryKey: apiQueryKey('v1/baremetal_instances', undefined, filter ? { filter } : undefined),
-    queryFn: () => client.list({ filter }),
-    select: (data) => data.items,
-    placeholderData: keepPreviousData,
-  });
+export const useBareMetalInstances = (filters?: CelFilter<BareMetalInstance>, enabled = true) => {
+  const projectFilter = useProjectFilterQuery<BareMetalInstance>();
+  const filter = cel<BareMetalInstance>((builder) => builder.and(projectFilter, filters));
+  const totalsFilter = cel<BareMetalInstance>((builder) => builder.and(projectFilter));
+
+  const filteredBmsQuery = useListResource(BareMetalInstances, { filter }, { enabled });
+  const totalBmsQuery = useListResource(
+    BareMetalInstances,
+    { filter: totalsFilter, limit: 0 },
+    { enabled },
+  );
+
+  const isLoading = filteredBmsQuery.isLoading || totalBmsQuery.isLoading;
+  const error = filteredBmsQuery.error || totalBmsQuery.error;
+
+  return {
+    error,
+    isLoading,
+    instances: filteredBmsQuery.data?.items ?? [],
+    totalItems: totalBmsQuery.data?.total ?? 0,
+  };
 };
 
 export const useBareMetalInstance = (id: string) => {

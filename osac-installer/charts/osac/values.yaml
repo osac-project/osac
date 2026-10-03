@@ -136,6 +136,9 @@ operator:
 service:
   enabled: true
   variant: openshift
+  controller:
+    # Enable full synchronization in fulfillment controllers.
+    sync: true
   # [REQUIRED] Hostname for the external API Route (e.g. fulfillment-api-osac.apps.mycluster.example.com)
   externalHostname: ""
   # [REQUIRED] Hostname for the internal API Route (e.g. fulfillment-internal-api-osac.apps.mycluster.example.com)

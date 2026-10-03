@@ -161,6 +161,7 @@ spec:
         {{ end }}
         - start
         - controller
+        - --sync={{ .Values.controller.sync }}
         - --log-level={{ .Values.log.level }}
         - --log-headers={{ .Values.log.headers }}
         - --log-bodies={{ .Values.log.bodies }}

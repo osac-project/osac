@@ -573,6 +573,18 @@
           "description": "Deploy the fulfillment service",
           "default": true
         },
+        "controller": {
+          "type": "object",
+          "description": "Fulfillment controller configuration",
+          "properties": {
+            "sync": {
+              "type": "boolean",
+              "description": "Enable full synchronization for all fulfillment controllers",
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        },
         "externalHostname": {
           "type": "string",
           "minLength": 1,

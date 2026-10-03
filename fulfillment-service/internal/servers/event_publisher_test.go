@@ -36,6 +36,10 @@ import (
 )
 
 var _ = Describe("Event publisher", Ordered, func() {
+	var (
+		kafkaBroker *kafka.Container
+		kafkaConfig *sarama.Config
+	)
 	type consumedEvent struct {
 		topic   string
 		key     string
@@ -43,11 +47,12 @@ var _ = Describe("Event publisher", Ordered, func() {
 		event   *privatev1.Event
 	}
 
-	newTestEventPublisher := func(pool *pgxpool.Pool, client sarama.Client) (*EventPublisher, error) {
+	newTestEventPublisher := func(pool *pgxpool.Pool) (*EventPublisher, error) {
 		return NewEventPublisher().
 			SetLogger(logger).
 			SetDatabasePool(pool).
-			SetKafkaClient(client).
+			SetKafkaConfig(kafkaConfig).
+			SetKafkaBrokers(kafkaBroker.Brokers()).
 			SetMetricsRegisterer(prometheus.NewRegistry()).
 			Build()
 	}
@@ -128,8 +133,6 @@ var _ = Describe("Event publisher", Ordered, func() {
 		ExpectWithOffset(1, err).ToNot(HaveOccurred())
 	}
 
-	var kafkaBroker *kafka.Container
-
 	BeforeAll(func() {
 		var err error
 		startCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -140,6 +143,8 @@ var _ = Describe("Event publisher", Ordered, func() {
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 		err = kafkaBroker.Start(startCtx)
+		Expect(err).ToNot(HaveOccurred())
+		kafkaConfig, err = kafkaBroker.Config()
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func() {
 			stopCtx, stopCancel := context.WithTimeout(context.Background(), time.Minute)
@@ -161,11 +166,7 @@ var _ = Describe("Event publisher", Ordered, func() {
 
 	Describe("Creation", func() {
 		It("Can be created when all the required parameters are set", func() {
-			client, err := kafkaBroker.Client()
-			Expect(err).ToNot(HaveOccurred())
-			DeferCleanup(client.Close)
-
-			publisher, err := newTestEventPublisher(&pgxpool.Pool{}, client)
+			publisher, err := newTestEventPublisher(&pgxpool.Pool{})
 			Expect(err).ToNot(HaveOccurred())
 			Expect(publisher).ToNot(BeNil())
 			Expect(publisher.Close()).To(Succeed())
@@ -173,14 +174,11 @@ var _ = Describe("Event publisher", Ordered, func() {
 		})
 
 		It("Accepts a publish callback", func() {
-			client, err := kafkaBroker.Client()
-			Expect(err).ToNot(HaveOccurred())
-			DeferCleanup(client.Close)
-
 			publisher, err := NewEventPublisher().
 				SetLogger(logger).
 				SetDatabasePool(&pgxpool.Pool{}).
-				SetKafkaClient(client).
+				SetKafkaConfig(kafkaConfig).
+				SetKafkaBrokers(kafkaBroker.Brokers()).
 				SetMetricsRegisterer(prometheus.NewRegistry()).
 				SetPublishCallback(func(context.Context, *privatev1.Event) error {
 					return nil
@@ -207,12 +205,22 @@ var _ = Describe("Event publisher", Ordered, func() {
 			Expect(publisher).To(BeNil())
 		})
 
-		It("Can't be created without a Kafka client", func() {
+		It("Can't be created without a Kafka configuration", func() {
 			publisher, err := NewEventPublisher().
 				SetLogger(logger).
 				SetDatabasePool(&pgxpool.Pool{}).
 				Build()
-			Expect(err).To(MatchError("kafka client is mandatory"))
+			Expect(err).To(MatchError("kafka configuration is mandatory"))
+			Expect(publisher).To(BeNil())
+		})
+
+		It("Can't be created without Kafka bootstrap brokers", func() {
+			publisher, err := NewEventPublisher().
+				SetLogger(logger).
+				SetDatabasePool(&pgxpool.Pool{}).
+				SetKafkaConfig(kafkaConfig).
+				Build()
+			Expect(err).To(MatchError("kafka brokers are mandatory"))
 			Expect(publisher).To(BeNil())
 		})
 
@@ -321,14 +329,11 @@ var _ = Describe("Event publisher", Ordered, func() {
 		})
 
 		It("Converts table and channel names to lowercase", func() {
-			client, err := kafkaBroker.Client()
-			Expect(err).ToNot(HaveOccurred())
-			DeferCleanup(client.Close)
-
 			publisher, err := NewEventPublisher().
 				SetLogger(logger).
 				SetDatabasePool(&pgxpool.Pool{}).
-				SetKafkaClient(client).
+				SetKafkaConfig(kafkaConfig).
+				SetKafkaBrokers(kafkaBroker.Brokers()).
 				SetMetricsRegisterer(prometheus.NewRegistry()).
 				SetTable("Changes").
 				SetChannel("Changes_Channel").
@@ -361,11 +366,13 @@ var _ = Describe("Event publisher", Ordered, func() {
 			Expect(err).ToNot(HaveOccurred())
 			DeferCleanup(pool.Close)
 
-			client, err = kafkaBroker.Client()
+			config, err := kafkaBroker.Config()
+			Expect(err).ToNot(HaveOccurred())
+			client, err = sarama.NewClient([]string{kafkaBroker.Brokers()}, config)
 			Expect(err).ToNot(HaveOccurred())
 			DeferCleanup(client.Close)
 
-			pub, err = newTestEventPublisher(pool, client)
+			pub, err = newTestEventPublisher(pool)
 			Expect(err).ToNot(HaveOccurred())
 			DeferCleanup(pub.Close)
 		})
@@ -698,11 +705,13 @@ var _ = Describe("Event publisher", Ordered, func() {
 			Expect(err).ToNot(HaveOccurred())
 			DeferCleanup(pool.Close)
 
-			client, err = kafkaBroker.Client()
+			config, err := kafkaBroker.Config()
+			Expect(err).ToNot(HaveOccurred())
+			client, err = sarama.NewClient([]string{kafkaBroker.Brokers()}, config)
 			Expect(err).ToNot(HaveOccurred())
 			DeferCleanup(client.Close)
 
-			pub, err = newTestEventPublisher(pool, client)
+			pub, err = newTestEventPublisher(pool)
 			Expect(err).ToNot(HaveOccurred())
 			DeferCleanup(pub.Close)
 		})
@@ -798,11 +807,13 @@ var _ = Describe("Event publisher", Ordered, func() {
 			Expect(err).ToNot(HaveOccurred())
 			DeferCleanup(pool.Close)
 
-			client, err = kafkaBroker.Client()
+			config, err := kafkaBroker.Config()
+			Expect(err).ToNot(HaveOccurred())
+			client, err = sarama.NewClient([]string{kafkaBroker.Brokers()}, config)
 			Expect(err).ToNot(HaveOccurred())
 			DeferCleanup(client.Close)
 
-			pub, err = newTestEventPublisher(pool, client)
+			pub, err = newTestEventPublisher(pool)
 			Expect(err).ToNot(HaveOccurred())
 			DeferCleanup(pub.Close)
 		})
@@ -867,7 +878,8 @@ var _ = Describe("Event publisher", Ordered, func() {
 			pub, err = NewEventPublisher().
 				SetLogger(logger).
 				SetDatabasePool(pool).
-				SetKafkaClient(client).
+				SetKafkaConfig(kafkaConfig).
+				SetKafkaBrokers(kafkaBroker.Brokers()).
 				SetMetricsRegisterer(prometheus.NewRegistry()).
 				SetBatchSize(2).
 				Build()
@@ -950,7 +962,8 @@ var _ = Describe("Event publisher", Ordered, func() {
 			pub, err = NewEventPublisher().
 				SetLogger(logger).
 				SetDatabasePool(pool).
-				SetKafkaClient(client).
+				SetKafkaConfig(kafkaConfig).
+				SetKafkaBrokers(kafkaBroker.Brokers()).
 				SetMetricsRegisterer(prometheus.NewRegistry()).
 				SetPublishCallback(func(context.Context, *privatev1.Event) error {
 					return errors.New("simulated crash")
@@ -965,7 +978,7 @@ var _ = Describe("Event publisher", Ordered, func() {
 			stopPublisher(cancel, done)
 
 			Expect(pub.Close()).To(Succeed())
-			pub, err = newTestEventPublisher(pool, client)
+			pub, err = newTestEventPublisher(pool)
 			Expect(err).ToNot(HaveOccurred())
 			DeferCleanup(pub.Close)
 
@@ -991,7 +1004,8 @@ var _ = Describe("Event publisher", Ordered, func() {
 			pub, err = NewEventPublisher().
 				SetLogger(logger).
 				SetDatabasePool(pool).
-				SetKafkaClient(client).
+				SetKafkaConfig(kafkaConfig).
+				SetKafkaBrokers(kafkaBroker.Brokers()).
 				SetMetricsRegisterer(prometheus.NewRegistry()).
 				SetPublishCallback(func(context.Context, *privatev1.Event) error {
 					panic("simulated panic")
@@ -1096,7 +1110,8 @@ var _ = Describe("Event publisher", Ordered, func() {
 			pub, err = NewEventPublisher().
 				SetLogger(logger).
 				SetDatabasePool(pool).
-				SetKafkaClient(client).
+				SetKafkaConfig(kafkaConfig).
+				SetKafkaBrokers(kafkaBroker.Brokers()).
 				SetMetricsRegisterer(prometheus.NewRegistry()).
 				SetBatchSize(1).
 				Build()
@@ -1126,7 +1141,8 @@ var _ = Describe("Event publisher", Ordered, func() {
 			pub, err = NewEventPublisher().
 				SetLogger(logger).
 				SetDatabasePool(pool).
-				SetKafkaClient(client).
+				SetKafkaConfig(kafkaConfig).
+				SetKafkaBrokers(kafkaBroker.Brokers()).
 				SetMetricsRegisterer(prometheus.NewRegistry()).
 				SetKafkaTopicPrefix(prefix).
 				Build()
@@ -1254,7 +1270,8 @@ var _ = Describe("Event publisher", Ordered, func() {
 			pub, err = NewEventPublisher().
 				SetLogger(logger).
 				SetDatabasePool(pool).
-				SetKafkaClient(client).
+				SetKafkaConfig(kafkaConfig).
+				SetKafkaBrokers(kafkaBroker.Brokers()).
 				SetMetricsRegisterer(prometheus.NewRegistry()).
 				SetTable(table).
 				SetChannel(channel).

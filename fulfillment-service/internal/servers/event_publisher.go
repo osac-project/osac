@@ -71,7 +71,8 @@ type EventPublisherBuilder struct {
 	dbPool              *pgxpool.Pool
 	dbTable             string
 	dbChannel           string
-	kafkaClient         sarama.Client
+	kafkaConfig         *sarama.Config
+	kafkaBrokers        []string
 	kafkaTopicPrefix    string
 	listenWaitTimeout   time.Duration
 	listenRetryInterval time.Duration
@@ -174,9 +175,15 @@ func (b *EventPublisherBuilder) SetChannel(value string) *EventPublisherBuilder 
 	return b
 }
 
-// SetKafkaClient sets the client used to connect to Kafka to publish events. This is mandatory.
-func (b *EventPublisherBuilder) SetKafkaClient(value sarama.Client) *EventPublisherBuilder {
-	b.kafkaClient = value
+// SetKafkaConfig sets the configuration used to connect to Kafka. This is mandatory.
+func (b *EventPublisherBuilder) SetKafkaConfig(value *sarama.Config) *EventPublisherBuilder {
+	b.kafkaConfig = value
+	return b
+}
+
+// SetKafkaBrokers sets the Kafka bootstrap broker addresses. This is mandatory.
+func (b *EventPublisherBuilder) SetKafkaBrokers(value ...string) *EventPublisherBuilder {
+	b.kafkaBrokers = value
 	return b
 }
 
@@ -282,8 +289,12 @@ func (b *EventPublisherBuilder) Build() (result *EventPublisher, err error) {
 		err = fmt.Errorf("channel %w", err)
 		return
 	}
-	if b.kafkaClient == nil {
-		err = errors.New("kafka client is mandatory")
+	if b.kafkaConfig == nil {
+		err = errors.New("kafka configuration is mandatory")
+		return
+	}
+	if len(b.kafkaBrokers) == 0 {
+		err = errors.New("kafka brokers are mandatory")
 		return
 	}
 
@@ -294,12 +305,21 @@ func (b *EventPublisherBuilder) Build() (result *EventPublisher, err error) {
 	existsSQL := b.calculateExistsSQL(dbTable)
 	listenSQL := b.calculateListenSQL(dbChannel)
 
-	// Create the Kafka kafka message producer:
-	kafkaProducer, err := sarama.NewSyncProducerFromClient(b.kafkaClient)
+	// Create the Kafka message producer, which owns its client:
+	config := *b.kafkaConfig
+	kafkaProducer, err := sarama.NewSyncProducer(b.kafkaBrokers, &config)
 	if err != nil {
 		err = fmt.Errorf("failed to create Kafka producer: %w", err)
 		return
 	}
+
+	defer func() {
+		if err != nil {
+			if closeErr := kafkaProducer.Close(); closeErr != nil {
+				err = fmt.Errorf("%w; failed to close Kafka producer: %w", err, closeErr)
+			}
+		}
+	}()
 
 	// Find the descriptor of the event type:
 	eventDesc := (*privatev1.Event)(nil).ProtoReflect().Descriptor()
@@ -375,12 +395,8 @@ func (b *EventPublisherBuilder) Build() (result *EventPublisher, err error) {
 		SetWorkFunc(result.drainWorkFunc).
 		Build()
 	if err != nil {
-		closeErr := result.Close()
 		result = nil
 		err = fmt.Errorf("failed to create drain loop: %w", err)
-		if closeErr != nil {
-			err = fmt.Errorf("%w; failed to close publisher: %w", err, closeErr)
-		}
 		return
 	}
 	result.listenLoop, err = work.NewLoop().
@@ -390,12 +406,8 @@ func (b *EventPublisherBuilder) Build() (result *EventPublisher, err error) {
 		SetWorkFunc(result.listenWorkFunc).
 		Build()
 	if err != nil {
-		closeErr := result.Close()
 		result = nil
 		err = fmt.Errorf("failed to create listen loop: %w", err)
-		if closeErr != nil {
-			err = fmt.Errorf("%w; failed to close publisher: %w", err, closeErr)
-		}
 		return
 	}
 	result.metricsLoop, err = work.NewLoop().
@@ -405,12 +417,8 @@ func (b *EventPublisherBuilder) Build() (result *EventPublisher, err error) {
 		SetWorkFunc(result.metricsWorkFunc).
 		Build()
 	if err != nil {
-		closeErr := result.Close()
 		result = nil
 		err = fmt.Errorf("failed to create metrics loop: %w", err)
-		if closeErr != nil {
-			err = fmt.Errorf("%w; failed to close publisher: %w", err, closeErr)
-		}
 		return
 	}
 

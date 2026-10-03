@@ -333,8 +333,8 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		return fmt.Errorf("failed to create vault secret store: %w", err)
 	}
 
-	// Create the Kafka client:
-	c.logger.InfoContext(ctx, "Creating Kafka client")
+	// Create the Kafka configuration:
+	c.logger.InfoContext(ctx, "Creating Kafka configuration")
 	kafkaTool, err := kafka.NewTool().
 		SetLogger(c.logger).
 		SetFlags(c.flags).
@@ -343,13 +343,8 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	if err != nil {
 		return err
 	}
-	kafkaClient, err := kafkaTool.Client()
-	if err != nil {
-		return err
-	}
-	shutdown.AddFunction("kafka", 0, func(context.Context) error {
-		return kafkaClient.Close()
-	})
+	kafkaConfig := kafkaTool.Config()
+	kafkaBrokers := kafkaTool.Brokers()
 
 	// Wait till the database is available:
 	dbTool, err := database.NewTool().
@@ -820,13 +815,17 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	c.logger.InfoContext(ctx, "Creating events server")
 	eventsServer, err := servers.NewEventsServer().
 		SetLogger(c.logger).
-		SetKafkaClient(kafkaClient).
+		SetKafkaConfig(kafkaConfig).
+		SetKafkaBrokers(kafkaBrokers...).
 		SetKafkaTopicPrefix(c.args.kafkaTopicPrefix).
 		SetTenancyLogic(tenancyLogic).
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create events server: %w", err)
 	}
+	shutdown.AddFunction("events", 0, func(context.Context) error {
+		return eventsServer.Close()
+	})
 	// filterable-resource-exempt: streaming Watch RPC, no List RPC or CEL filter field
 	publicv1.RegisterEventsServer(grpcServer, eventsServer)
 
@@ -834,12 +833,16 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	c.logger.InfoContext(ctx, "Creating private events server")
 	privateEventsServer, err := servers.NewPrivateEventsServer().
 		SetLogger(c.logger).
-		SetKafkaClient(kafkaClient).
+		SetKafkaConfig(kafkaConfig).
+		SetKafkaBrokers(kafkaBrokers...).
 		SetKafkaTopicPrefix(c.args.kafkaTopicPrefix).
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create private events server: %w", err)
 	}
+	shutdown.AddFunction("private events", 0, func(context.Context) error {
+		return privateEventsServer.Close()
+	})
 	// filterable-resource-exempt: streaming Watch RPC, no List RPC or CEL filter field
 	privatev1.RegisterEventsServer(grpcServer, privateEventsServer)
 

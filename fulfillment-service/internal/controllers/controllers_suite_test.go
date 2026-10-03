@@ -11,16 +11,30 @@ Unless required by applicable law or agreed to in writing, software distributed 
 language governing permissions and limitations under the License.
 */
 
-package controllers
+package controllers_test
 
 import (
+	"log/slog"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 )
 
 func TestControllers(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "Controllers package")
 }
+
+var logger *slog.Logger
+
+var _ = BeforeSuite(func() {
+	var err error
+
+	logger, err = logging.NewLogger().
+		SetLevel(slog.LevelDebug.String()).
+		SetWriter(GinkgoWriter).
+		Build()
+	Expect(err).ToNot(HaveOccurred())
+})

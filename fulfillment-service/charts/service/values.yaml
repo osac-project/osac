@@ -18,6 +18,12 @@ variant: kind
 # and is intended only for development environments.
 debug: false
 
+# Controller configuration:
+controller:
+
+  # Enable startup and periodic synchronization. Event-driven reconciliation remains enabled when false.
+  sync: true
+
 # Certificate configuration:
 certs:
 

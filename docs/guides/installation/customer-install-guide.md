@@ -143,7 +143,7 @@ observed on OpenShift Container Platform 4.22.6 in September 2026 are listed in
 | `default-ca` `ClusterIssuer` | Not applicable | Cluster-scoped | `caIssuer.enabled` | All services |
 | Keycloak and the `osac` realm | Not applicable | `keycloak` | `keycloak.enabled` | All services |
 | [Red Hat Ansible Automation Platform Operator](https://docs.redhat.com/en/documentation/red_hat_ansible_automation_platform/2.6/html/installing_on_openshift_container_platform/index) | `stable-2.6-cluster-scoped` | `ansible-aap` | `aapOperator.enabled` | All services |
-| [Streams for Apache Kafka](https://access.redhat.com/articles/6644711) | `stable` | `osac-kafka` | `kafka.enabled` | Metering |
+| [Streams for Apache Kafka](https://access.redhat.com/articles/6644711) | `stable` | `osac-kafka` | `kafka.enabled` | Fulfillment events and optional metering; an external Kafka cluster can serve fulfillment. See [Kafka configuration](kafka-configuration.md). |
 | [OpenShift Virtualization](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/virtualization/installing) | `stable` | `openshift-cnv` | `cnv.enabled` | VMaaS |
 | [LVM Storage](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/storage/index#persistent-storage-using-lvms) | `stable-<cluster_minor>` | `openshift-storage` | `lvms.enabled` | VMaaS |
 | [MetalLB Operator](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/networking_operators/metallb-operator) | `stable` | `metallb-system` | `metallb.enabled` | VMaaS and CaaS |
@@ -183,6 +183,12 @@ Notes on individual components:
 
 Always required:
 
+- **Kafka access for the Fulfillment Service**, even when metering is
+  disabled. Supply broker addresses, a SCRAM-SHA-512 username and password,
+  certificate trust, and topic/group permissions. For an external broker,
+  complete the [Kafka configuration guide](kafka-configuration.md) before
+  installing OSAC. It includes a Strimzi example and the additional
+  requirements for metering.
 - **AAP subscription manifest (`license.zip`).** A Subscription Allocation
   export from the [Red Hat Customer Portal](https://access.redhat.com/). The AAP
   bootstrap job cannot start without it. You load it into the
@@ -542,7 +548,9 @@ subchart's own `values.yaml` file.
 | `bmf.secrets.inventoryConfig`, `bmf.secrets.managementConfig`, `bmf.secrets.osClouds`, `bmf.configMaps.profiles` | schema | Names of the inventory, management, and `clouds.yaml` Secrets and the profiles `ConfigMap`. | Default names |
 | `operatorCrds.install` | schema | Install the OSAC CRDs. Set it to `false` if a cluster administrator manages them. | `true` |
 | `csiDriver.enabled` | schema | Deploys the CSI routing driver. Enable it for VMaaS. | `false` |
-| `metering.enabled` | schema | Deploys the metering service. Requires Kafka, a database connection, and `global.osacDeploymentId` (see [Table 5.1](#table-51-service-enablement-my-valuesyaml)). | `false` |
+| `kafka.enabled` | schema | Creates the Fulfillment Service's Strimzi user and copies its credentials. Set to `false` for an external Kafka connection; this does not disable Kafka use or metering's Strimzi resources. See [Kafka configuration](kafka-configuration.md). | `true` |
+| `service.kafka.connection` | schema | ConfigMap/Secret mappings for the required `brokers`, `user`, and `password` parameters. Supply resources in the OSAC namespace. | `fulfillment-service-kafka` Secret |
+| `metering.enabled` | schema | Deploys the metering service. Requires Strimzi-managed Kafka, a database connection, and `global.osacDeploymentId` (see [Table 5.1](#table-51-service-enablement-my-valuesyaml) and [Kafka configuration](kafka-configuration.md#optional-metering)). | `false` |
 | `metering.reconciliation.interval`, `metering.m360Adapter.enabled`, `metering.m360Adapter.m360.apiUrl`, `metering.m360Adapter.apiKeySecret` | subchart | Reconcile period and the Monetize360 billing adapter. | Not applicable |
 | `validation.enabled` | schema | Runs the pre-installation validation hook. | `true` |
 | `metallb.enabled`, `metallb.addressCIDR` | schema | In the `osac` chart, creates an `IPAddressPool` and an `L2Advertisement`. Edit the pool after installation to match your network. | `false` and `192.168.40.0/24` |

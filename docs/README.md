@@ -14,6 +14,9 @@ administrators, tenants, and developers.
 To get started with tenant and provider credentials, see
 [Managing Secrets](guides/secrets-guide.md).
 
+For Kafka broker requirements, connection settings, and a Strimzi example,
+see [Configuring an external Kafka cluster](guides/installation/kafka-configuration.md).
+
 This directory also contains concise, hand-maintained guidance for
 architecture and conventions that span component or repository boundaries
 within this mono-repo. Component `AGENTS.md` files own component-scoped agent

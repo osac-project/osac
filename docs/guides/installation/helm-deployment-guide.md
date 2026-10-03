@@ -6,6 +6,11 @@ monorepo checkout. If your cluster already has the prerequisites, see the
 [customer install guide](https://github.com/osac-project/osac/blob/main/docs/guides/installation/customer-install-guide.md)
 to install just the published `osac` chart.
 
+The Fulfillment Service requires Kafka even when metering is disabled. To
+use an existing broker, complete the [external Kafka configuration
+guide](kafka-configuration.md), including its credentials, TLS trust, and
+permissions, before installing the platform chart.
+
 ## Requirements
 
 | Requirement | Details |
@@ -151,7 +156,7 @@ and `osac-infra`. Keys a chart doesn't recognize are ignored.
 | `mce.enabled` | Creates the multicluster engine `Subscription` and the agent configuration. Required for CaaS. | `false` |
 | `mce.channel` | Update channel for multicluster engine. | `stable-2.17` |
 | `mce.osImages` | RHCOS live-ISO entries for agent discovery. | `[]` |
-| `kafka.enabled` | Creates the Streams for Apache Kafka `Subscription` and the Kafka custom resource. Required for metering. | `false` |
+| `kafka.enabled` | Creates the Streams for Apache Kafka `Subscription` and the Kafka custom resource. Enable when the installer should provide Kafka for fulfillment and optional metering. Keep `false` for an existing broker and follow [Kafka configuration](kafka-configuration.md). | `false` |
 | `kafka.replicas` | Kafka broker replica count. | `3` |
 | `kafka.storage.size` | Kafka broker storage size. | `100Gi` |
 | `kafka.version` | Kafka version. | `4.2.0` |

@@ -88,6 +88,7 @@ target Hub cluster.
 | **Container Registry Access** | `registry.redhat.io` and `quay.io` | Verify credentials and pull secrets are valid in the target cluster namespace. |
 | **Network / DNS** | Ingress route configured for OSAC services | Required for external access to fulfillment API and AAP UI. |
 | **Authentication / IDM** | Organization Identity Provider (e.g., Keycloak, LDAP, RH-SSO) | Used for tenant and user identity mapping. |
+| **Kafka** | Broker access for fulfillment events, even when metering is disabled | See [external Kafka configuration](../docs/guides/installation/kafka-configuration.md) for connection settings, credentials, ACLs, TLS trust, and a Strimzi example. |
 | **Storage** | Dynamic storage class available (e.g., `ocs-storagecluster-cephfs`, `lvms-storage`) | Required for persistence of operator and AAP components. |
 | **Permissions** | Cluster-admin access to deploy operators and create CRDs | Limited access users can only deploy into namespaces configured by the admin. |
 | **License Files** | `license.zip` (AAP subscription) | Must be placed in your values directory (e.g., `values/<env>/license.zip`). |

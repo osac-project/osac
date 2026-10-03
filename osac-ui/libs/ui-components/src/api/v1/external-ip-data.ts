@@ -33,6 +33,9 @@ export const attachmentExternalIpIdsFilter = (ids: readonly string[]) =>
 export const computeInstanceAttachmentFilter = (computeInstanceId: string) =>
   `this.spec.compute_instance.id == "${escapeCelStringLiteral(computeInstanceId)}"` as CelFilter;
 
+export const clusterAttachmentFilter = (clusterId: string) =>
+  `this.spec.cluster.id == "${escapeCelStringLiteral(clusterId)}"` as CelFilter;
+
 export const natGatewayExternalIpIdsFilter = (ids: readonly string[]) =>
   cel<NATGateway>((filter) => filter.field('spec.externalIp.id').isIn(ids));
 

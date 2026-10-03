@@ -100,6 +100,12 @@ Optional flags:
   3. Template default (`spec_defaults.version`).
   4. System default ClusterVersion (`is_default = true`).
 
+If `spec.network_attachment` is omitted or only partially set, Create fills missing
+subnet and security-group fields from the tenant's labeled default networking. Create
+fails with `InvalidArgument` when those defaults are missing or when security groups
+are omitted for a subnet that is not on the tenant default VirtualNetwork. Explicit
+subnet and security-group references must resolve in the cluster's tenant/project.
+
 The command outputs the cluster ID upon successful creation.
 
 ## Check Cluster Status

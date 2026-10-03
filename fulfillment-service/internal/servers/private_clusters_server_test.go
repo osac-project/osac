@@ -472,6 +472,39 @@ var _ = Describe("Private clusters server", func() {
 			}.Build()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 
+			// Tenant-default networking used when Create omits/partially specifies network_attachment.
+			_, err = subnetsDao.Create().SetObject(privatev1.Subnet_builder{
+				Id: "tenant-default-subnet",
+				Metadata: privatev1.Metadata_builder{
+					Name:   "tenant-default-subnet",
+					Tenant: testTenant,
+					Labels: map[string]string{defaultLabel: "true"},
+				}.Build(),
+				Spec: privatev1.SubnetSpec_builder{
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "test-vnet"}.Build(),
+					Ipv4Cidr:       new("10.0.10.0/24"),
+				}.Build(),
+				Status: privatev1.SubnetStatus_builder{
+					State: privatev1.SubnetState_SUBNET_STATE_READY,
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = sgDao.Create().SetObject(privatev1.SecurityGroup_builder{
+				Id: "tenant-default-sg",
+				Metadata: privatev1.Metadata_builder{
+					Name:   "tenant-default-sg",
+					Tenant: testTenant,
+					Labels: map[string]string{defaultLabel: "true"},
+				}.Build(),
+				Spec: privatev1.SecurityGroupSpec_builder{
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "test-vnet"}.Build(),
+				}.Build(),
+				Status: privatev1.SecurityGroupStatus_builder{
+					State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
 			// Create numbered templates for list tests:
 			for i := range 10 {
 				_, err = templatesDao.Create().
@@ -793,6 +826,7 @@ var _ = Describe("Private clusters server", func() {
 				Metadata: privatev1.Metadata_builder{Name: "workloads", Tenant: testTenant}.Build(),
 			}.Build()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
+			seedTenantDefaultNetworking(ctx, testTenant, "workloads")
 
 			response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 				Object: privatev1.Cluster_builder{
@@ -952,6 +986,9 @@ var _ = Describe("Private clusters server", func() {
 						Labels: map[string]string{"example.com/my-label": "my-value"},
 					}.Build(),
 				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{
+					Paths: []string{"metadata.labels"},
+				},
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(updateResponse.GetObject().GetSpec().GetAddOnOperators()).To(HaveLen(1))
@@ -988,6 +1025,9 @@ var _ = Describe("Private clusters server", func() {
 						Labels: map[string]string{"example.com/my-label": "my-value"},
 					}.Build(),
 				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{
+					Paths: []string{"metadata.labels"},
+				},
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(updateResponse.GetObject().GetSpec().GetAddOnOperators()[0].GetId()).To(Equal("operator-1"))
@@ -2104,14 +2144,24 @@ var _ = Describe("Private clusters server", func() {
 			})
 
 			It("Rejects adding network_attachment when none existed", func() {
-				createResponse, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
-					Object: privatev1.Cluster_builder{
-						Metadata: privatev1.Metadata_builder{Name: "test-cluster"}.Build(),
+				// Create via DAO so the object has no network_attachment; server Create
+				// would inject tenant defaults and always leave an attachment present.
+				clustersDao, err := dao.NewGenericDAO[*privatev1.Cluster]().
+					SetLogger(logger).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+				createResponse, err := clustersDao.Create().
+					SetObject(privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name:   "test-cluster-no-na",
+							Tenant: testTenant,
+						}.Build(),
 						Spec: privatev1.ClusterSpec_builder{
 							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 						}.Build(),
-					}.Build(),
-				}.Build())
+					}.Build()).
+					Do(ctx)
 				Expect(err).ToNot(HaveOccurred())
 				object := createResponse.GetObject()
 
@@ -4003,6 +4053,225 @@ var _ = Describe("Private clusters server", func() {
 			})
 		})
 
+		Describe("Default network_attachment population", func() {
+			baseNodeSets := func() map[string]*privatev1.ClusterNodeSet {
+				return map[string]*privatev1.ClusterNodeSet{
+					"compute": privatev1.ClusterNodeSet_builder{
+						Size: proto.Int32(3),
+						BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{
+							Id: "bmit-fabric-id",
+						}.Build(),
+					}.Build(),
+				}
+			}
+
+			It("Populates omitted network_attachment from tenant defaults", func() {
+				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{Name: "na-omit"}.Build(),
+						Spec: privatev1.ClusterSpec_builder{
+							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+							NodeSets: baseNodeSets(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				attachment := response.GetObject().GetSpec().GetNetworkAttachment()
+				Expect(attachment).ToNot(BeNil())
+				Expect(attachment.GetSubnet().GetId()).To(Equal("tenant-default-subnet"))
+				Expect(attachment.GetSecurityGroups()).To(HaveLen(1))
+				Expect(attachment.GetSecurityGroups()[0].GetId()).To(Equal("tenant-default-sg"))
+			})
+
+			It("Populates empty network_attachment from tenant defaults", func() {
+				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{Name: "na-empty"}.Build(),
+						Spec: privatev1.ClusterSpec_builder{
+							Template:          privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+							NodeSets:          baseNodeSets(),
+							NetworkAttachment: privatev1.ClusterNetworkAttachment_builder{}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				attachment := response.GetObject().GetSpec().GetNetworkAttachment()
+				Expect(attachment).ToNot(BeNil())
+				Expect(attachment.GetSubnet().GetId()).To(Equal("tenant-default-subnet"))
+				Expect(attachment.GetSecurityGroups()).To(HaveLen(1))
+				Expect(attachment.GetSecurityGroups()[0].GetId()).To(Equal("tenant-default-sg"))
+			})
+
+			It("Fills missing subnet and preserves supplied security_groups", func() {
+				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{Name: "na-missing-subnet"}.Build(),
+						Spec: privatev1.ClusterSpec_builder{
+							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+							NodeSets: baseNodeSets(),
+							NetworkAttachment: privatev1.ClusterNetworkAttachment_builder{
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{
+									privatev1.SecurityGroupLocalReference_builder{Id: "sg-2"}.Build(),
+								},
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				attachment := response.GetObject().GetSpec().GetNetworkAttachment()
+				Expect(attachment.GetSubnet().GetId()).To(Equal("tenant-default-subnet"))
+				Expect(attachment.GetSecurityGroups()).To(HaveLen(1))
+				Expect(attachment.GetSecurityGroups()[0].GetId()).To(Equal("sg-2"))
+			})
+
+			It("Fills empty security_groups on default-VN subnet and preserves subnet", func() {
+				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{Name: "na-missing-sg"}.Build(),
+						Spec: privatev1.ClusterSpec_builder{
+							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+							NodeSets: baseNodeSets(),
+							NetworkAttachment: privatev1.ClusterNetworkAttachment_builder{
+								Subnet: privatev1.SubnetLocalReference_builder{Id: "subnet-1"}.Build(),
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				attachment := response.GetObject().GetSpec().GetNetworkAttachment()
+				Expect(attachment.GetSubnet().GetId()).To(Equal("subnet-1"))
+				Expect(attachment.GetSecurityGroups()).To(HaveLen(1))
+				Expect(attachment.GetSecurityGroups()[0].GetId()).To(Equal("tenant-default-sg"))
+			})
+
+			It("Does not overwrite fully specified network_attachment", func() {
+				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{Name: "na-full"}.Build(),
+						Spec: privatev1.ClusterSpec_builder{
+							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+							NodeSets: baseNodeSets(),
+							NetworkAttachment: privatev1.ClusterNetworkAttachment_builder{
+								Subnet: privatev1.SubnetLocalReference_builder{Id: "subnet-1"}.Build(),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{
+									privatev1.SecurityGroupLocalReference_builder{Id: "sg-2"}.Build(),
+								},
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				attachment := response.GetObject().GetSpec().GetNetworkAttachment()
+				Expect(attachment.GetSubnet().GetId()).To(Equal("subnet-1"))
+				Expect(attachment.GetSecurityGroups()).To(HaveLen(1))
+				Expect(attachment.GetSecurityGroups()[0].GetId()).To(Equal("sg-2"))
+			})
+
+			It("Rejects empty security_groups when subnet is not on the tenant default VirtualNetwork", func() {
+				vnDao, err := dao.NewGenericDAO[*privatev1.VirtualNetwork]().
+					SetLogger(logger).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+				_, err = vnDao.Create().SetObject(privatev1.VirtualNetwork_builder{
+					Id: "other-vnet",
+					Metadata: privatev1.Metadata_builder{
+						Name:   "other-vnet",
+						Tenant: testTenant,
+					}.Build(),
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+
+				subnetsDao, err := dao.NewGenericDAO[*privatev1.Subnet]().
+					SetLogger(logger).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+				_, err = subnetsDao.Create().SetObject(privatev1.Subnet_builder{
+					Id: "other-subnet",
+					Metadata: privatev1.Metadata_builder{
+						Name:   "other-subnet",
+						Tenant: testTenant,
+					}.Build(),
+					Spec: privatev1.SubnetSpec_builder{
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "other-vnet"}.Build(),
+						Ipv4Cidr:       new("10.1.0.0/24"),
+					}.Build(),
+					Status: privatev1.SubnetStatus_builder{
+						State: privatev1.SubnetState_SUBNET_STATE_READY,
+					}.Build(),
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+
+				_, err = server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{Name: "na-non-default-vn"}.Build(),
+						Spec: privatev1.ClusterSpec_builder{
+							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+							NodeSets: baseNodeSets(),
+							NetworkAttachment: privatev1.ClusterNetworkAttachment_builder{
+								Subnet: privatev1.SubnetLocalReference_builder{Id: "other-subnet"}.Build(),
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				status, ok := grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+				Expect(status.Message()).To(ContainSubstring("security_groups are required"))
+				Expect(status.Message()).To(ContainSubstring("default virtual network"))
+			})
+
+			It("Rejects omitted network_attachment when no tenant default subnet exists", func() {
+				_, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name:    "na-no-defaults",
+							Project: "project-without-defaults",
+						}.Build(),
+						Spec: privatev1.ClusterSpec_builder{
+							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+							NodeSets: baseNodeSets(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				status, ok := grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+				Expect(status.Message()).To(ContainSubstring("no tenant default subnet is available"))
+			})
+
+			It("Rejects cross-tenant subnet references", func() {
+				const otherTenant = "other-tenant-cluster-na"
+				createTenant(otherTenant)
+				seedTenantDefaultNetworking(ctx, otherTenant, "")
+				otherSubnetID := "tenant-default-subnet-" + otherTenant
+
+				_, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{Name: "na-cross-tenant"}.Build(),
+						Spec: privatev1.ClusterSpec_builder{
+							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+							NodeSets: baseNodeSets(),
+							NetworkAttachment: privatev1.ClusterNetworkAttachment_builder{
+								Subnet: privatev1.SubnetLocalReference_builder{Id: otherSubnetID}.Build(),
+								SecurityGroups: []*privatev1.SecurityGroupLocalReference{
+									privatev1.SecurityGroupLocalReference_builder{Id: "sg-2"}.Build(),
+								},
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				status, ok := grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+				Expect(status.Message()).To(ContainSubstring("does not exist"))
+			})
+		})
+
 		Describe("Fabric interface resolution from BareMetalInstanceType", func() {
 			It("Populates fabric_interface from the first fabric port", func() {
 				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
@@ -4061,28 +4330,23 @@ var _ = Describe("Private clusters server", func() {
 				Expect(st.Message()).To(ContainSubstring("no network port with role 'fabric'"))
 			})
 
-			It("Skips fabric resolution when cluster has no network attachment", func() {
+			It("Injects defaults when network_attachment is omitted and skips fabric without BMIT", func() {
 				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
 						Metadata: privatev1.Metadata_builder{Name: "fabric-no-net"}.Build(),
 						Spec: privatev1.ClusterSpec_builder{
 							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
-							NodeSets: map[string]*privatev1.ClusterNodeSet{
-								"compute": privatev1.ClusterNodeSet_builder{
-									BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{
-										Id: "bmit-no-fabric-id",
-									}.Build(),
-									Size: proto.Int32(3),
-								}.Build(),
-							},
 						}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 				Expect(response).ToNot(BeNil())
+				attachment := response.GetObject().GetSpec().GetNetworkAttachment()
+				Expect(attachment).ToNot(BeNil())
+				Expect(attachment.GetSubnet().GetId()).To(Equal("tenant-default-subnet"))
 				nodeSet := response.GetObject().GetSpec().GetNodeSets()["compute"]
 				Expect(nodeSet).ToNot(BeNil())
-				// Without network_attachment, fabric_interface should be empty
+				// Template-derived node sets have HostType but no BMIT, so fabric stays empty.
 				Expect(nodeSet.GetFabricInterface()).To(BeEmpty())
 			})
 

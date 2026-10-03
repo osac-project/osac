@@ -280,7 +280,7 @@ func syncClusterOrderConditions(ctx context.Context, clusterOrder *ckv1alpha1.Cl
 // "Progressing" itself carried, rather than a mid-installation stage.
 //
 // The reason is read from the CR's Progressing condition (set by the resource controller
-// to a sub-stage like PreparingInfrastructure or WorkersJoining). When at least one
+// to the furthest stage condition reached, e.g. ControlPlaneCreated). When at least one
 // provisioning stage condition is True and the CR's Progressing reason is non-empty, that
 // reason and its humanized form are forwarded to the proto PROGRESSING condition.
 func applyProgressingStageDetail(clusterOrder *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) {

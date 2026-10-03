@@ -27,7 +27,7 @@ metadata:
 spec:
   channel: {{ .Values.kafka.channel }}
   name: amq-streams
-  source: redhat-operators
-  sourceNamespace: openshift-marketplace
+  source: {{ .Values.catalogSource }}
+  sourceNamespace: {{ .Values.catalogSourceNamespace }}
   installPlanApproval: Manual
 {{- end }}

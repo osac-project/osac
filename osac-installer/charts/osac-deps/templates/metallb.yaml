@@ -27,7 +27,7 @@ metadata:
 spec:
   channel: {{ .Values.metallb.channel }}
   name: metallb-operator
-  source: redhat-operators
-  sourceNamespace: openshift-marketplace
+  source: {{ .Values.catalogSource }}
+  sourceNamespace: {{ .Values.catalogSourceNamespace }}
   installPlanApproval: Automatic
 {{- end }}

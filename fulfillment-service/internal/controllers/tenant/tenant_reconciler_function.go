@@ -35,6 +35,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/defaultnetworking"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/idp"
@@ -45,6 +46,7 @@ import (
 
 // FunctionBuilder contains the data needed to build instances of the reconciler function.
 type FunctionBuilder struct {
+	hubCache       controllers.HubCache
 	logger         *slog.Logger
 	connection     *grpc.ClientConn
 	idpManager     *idp.TenantManager
@@ -82,6 +84,12 @@ func (b *FunctionBuilder) SetVaultLifecycle(value vault.LifecycleClient) *Functi
 	return b
 }
 
+// SetHubCache sets the connections used to observe tenant infrastructure.
+func (b *FunctionBuilder) SetHubCache(value controllers.HubCache) *FunctionBuilder {
+	b.hubCache = value
+	return b
+}
+
 // SetDefaultNetworking sets the controller-owned manager for tenant default
 // networking. This is optional for focused controller tests and reserved
 // tenants, but is configured by the production controller process.
@@ -109,7 +117,14 @@ func (b *FunctionBuilder) Build() (result *function, err error) {
 		return
 	}
 
+	if b.hubCache == nil {
+		err = errors.New("hub cache is mandatory")
+		return
+	}
+
 	result = &function{
+		hubCache:              b.hubCache,
+		hubsClient:            privatev1.NewHubsClient(b.connection),
 		logger:                b.logger,
 		tenantsClient:         privatev1.NewTenantsClient(b.connection),
 		projectsClient:        privatev1.NewProjectsClient(b.connection),
@@ -128,6 +143,8 @@ func (b *FunctionBuilder) Build() (result *function, err error) {
 
 // function is the implementation of the reconciler function.
 type function struct {
+	hubCache              controllers.HubCache
+	hubsClient            privatev1.HubsClient
 	logger                *slog.Logger
 	tenantsClient         privatev1.TenantsClient
 	projectsClient        privatev1.ProjectsClient
@@ -151,26 +168,31 @@ func (r *function) Run(ctx context.Context, tenant *privatev1.Tenant) error {
 		tenant: tenant,
 	}
 
-	var err error
+	var reconcileErr error
 	if tenant.HasMetadata() && tenant.GetMetadata().HasDeletionTimestamp() {
-		err = task.delete(ctx)
+		if err := task.delete(ctx); err != nil {
+			return err
+		}
 	} else {
-		err = task.update(ctx)
-	}
-	if err != nil {
-		return err
+		reconcileErr = task.update(ctx)
+		if reconcileErr != nil {
+			// Failed lifecycle work must not leak partial mutations into the status update.
+			tenant = proto.Clone(oldTenant).(*privatev1.Tenant)
+			task.tenant = tenant
+		}
+		task.checkComputeInfrastructureReadiness(ctx)
 	}
 
 	updateMask := r.maskCalculator.Calculate(oldTenant, tenant)
-
-	if len(updateMask.GetPaths()) > 0 {
-		_, err = r.tenantsClient.Update(ctx, privatev1.TenantsUpdateRequest_builder{
-			Object:     tenant,
-			UpdateMask: updateMask,
-		}.Build())
+	if len(updateMask.GetPaths()) == 0 {
+		return reconcileErr
 	}
-
-	return err
+	_, updateErr := r.tenantsClient.Update(ctx, privatev1.TenantsUpdateRequest_builder{
+		Object:     tenant,
+		UpdateMask: updateMask,
+		Lock:       true,
+	}.Build())
+	return errors.Join(reconcileErr, updateErr)
 }
 
 // task contains the data needed to reconcile a single tenant.

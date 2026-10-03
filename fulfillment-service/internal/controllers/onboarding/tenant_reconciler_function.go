@@ -197,6 +197,7 @@ func (t *task) createOrUpdateOnHub(ctx context.Context, hubId string, hubEntry *
 			object.Labels = make(map[string]string)
 		}
 		object.Labels[labels.TenantUuid] = tenantName
+		object.Labels[labels.TenantID] = t.tenant.GetId()
 		return nil
 	})
 	if err != nil {

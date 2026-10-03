@@ -954,6 +954,7 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	// Create the tenant reconciler:
 	r.logger.InfoContext(ctx, "Creating tenant reconciler")
 	tenantReconcilerFunction, err := tenant.NewFunction().
+		SetHubCache(hubCache).
 		SetLogger(r.logger).
 		SetConnection(r.client).
 		SetIdpManager(idpManager).

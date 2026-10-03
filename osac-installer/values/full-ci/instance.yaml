@@ -3,11 +3,14 @@
 # --- Service Enablement ---
 global:
   osacDeploymentId: "ci/osac"
-  # Keep clusterFulfillment NETWORK_STEPS_COLLECTION=ci.steps authoritative.
-  # Without this, the agentless networking facade overwrites it with
-  # agentless_net.steps (see docs/aap-configuration.md).
-  expertOverrides:
-    aap: true
+  networking:
+    fabricManager: ""
+    k8sManager: k8s_only
+    networkClass:
+      title: "CI K8s-only networking"
+      description: >-
+        CI overlay without a physical fabric. VirtualNetwork/Subnet use CUDN,
+        SecurityGroup uses NetworkPolicy, ExternalIP uses MetalLB L2.
   services:
     caas:
       enabled: true
@@ -168,7 +171,6 @@ aap:
     clusterFulfillment:
       enabled: true
       config:
-        NETWORK_STEPS_COLLECTION: "ci.steps"
         HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY: "SingleReplica"
         HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: "SingleReplica"
     networkFulfillment:

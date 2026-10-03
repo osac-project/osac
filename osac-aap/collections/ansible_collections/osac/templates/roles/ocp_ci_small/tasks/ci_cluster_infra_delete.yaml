@@ -1,0 +1,35 @@
+---
+# CI-specific cluster infrastructure deletion.
+# Inlined from ci.steps.cluster_infra — handles agent detach and unlabeling
+# without requiring a physical network backend.
+
+- name: Set skip network flags for CI
+  ansible.builtin.set_fact:
+    manage_agents_skip_network_detach: true
+    manage_agents_skip_network_attach: true
+
+- name: Wait for clusterdeployment-namespace labels to clear from agents
+  kubernetes.core.k8s_info:
+    kind: Agent
+    api_version: agent-install.openshift.io/v1beta1
+    namespace: "{{ default_agent_namespace }}"
+    label_selectors:
+      - "{{ cluster_order_label }}={{ cluster_infra_name }}"
+  register: cluster_infra_delete_agents
+  until: >-
+    cluster_infra_delete_agents.resources | length == 0
+    or
+    (cluster_infra_delete_agents.resources
+     | json_query('[?metadata.labels."agent-install.openshift.io/clusterdeployment-namespace"==`null`
+       || metadata.labels."agent-install.openshift.io/clusterdeployment-namespace"==``]')
+     | length) == (cluster_infra_delete_agents.resources | length)
+  retries: 40
+  delay: 30
+
+- name: Detach and unlabel agents
+  ansible.builtin.include_role:
+    name: osac.service.manage_agents
+    tasks_from: detach_and_unlabel_all_removed_agents
+  vars:
+    manage_agents_cluster_order_name: "{{ cluster_infra_name }}"
+    manage_agents_idle_agents_network: "unused-in-ci"

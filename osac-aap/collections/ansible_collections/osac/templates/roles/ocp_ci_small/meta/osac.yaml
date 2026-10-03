@@ -1,8 +1,9 @@
 name: ocp-ci-small
 title: CI OpenShift Cluster
 description: >
-  OpenShift 4.17 cluster for CI testing. Uses ci.steps network backend.
-  Same as ocp_small but with 1 worker of class ci-worker.
+  OpenShift 4.17 cluster for CI testing. Uses the Networking API dispatcher
+  (k8s_only NetworkClass) for networking CRs. Agent management and DNS are
+  handled inline. Same as ocp_small but with 1 worker of class ci-worker.
 
 template_type: cluster
 

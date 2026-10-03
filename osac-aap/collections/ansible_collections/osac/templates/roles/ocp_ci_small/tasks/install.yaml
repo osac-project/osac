@@ -7,11 +7,11 @@
       name: osac.service.hosted_cluster
       tasks_from: main.yaml
     install_step_cluster_infra_default:
-      name: osac.service.cluster_infra
-      tasks_from: main.yaml
+      name: osac.templates.ocp_ci_small
+      tasks_from: ci_cluster_infra_create.yaml
     install_step_external_access_default:
-      name: osac.service.external_access
-      tasks_from: main.yaml
+      name: osac.templates.ocp_ci_small
+      tasks_from: ci_external_access_create.yaml
     install_step_retrieve_kubeconfig_default:
       name: osac.service.retrieve_kubeconfig
       tasks_from: main.yaml

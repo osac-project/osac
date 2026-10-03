@@ -192,6 +192,7 @@ kind-load-images: ## Load previously built dev-full images into Kind (PLATFORM=k
 	$(MAKE) -C ../fulfillment-service kind-load-image NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
 	$(MAKE) -C ../osac-operator kind-load-image NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
 	$(MAKE) -C ../osac-csi-driver kind-load-image NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
+	$(MAKE) -C ../osac-aap kind-load-image NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
 	$(call kind-load-ui-image,$(KIND_UI_IMAGE))
 ##@ Entity: Infra
 

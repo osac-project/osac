@@ -47,6 +47,10 @@ spec:
         env:
         - name: NS
           value: {{ .Values.osacNamespace | quote }}
+        - name: OSAC_EE_IMAGE
+          value: {{ .Values.awx.executionEnvironment.image | quote }}
+        - name: OSAC_EE_PULL
+          value: {{ .Values.awx.executionEnvironment.pull | quote }}
         volumeMounts:
         - name: scripts
           mountPath: /scripts

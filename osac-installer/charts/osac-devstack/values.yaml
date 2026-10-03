@@ -1,10 +1,11 @@
 # OSAC dev-full local development stack
 osacNamespace: osac
 kindClusterName: osac-dev
-# Multi-arch CLI image for hook Jobs (supports amd64, arm64, etc.).
-# The upstream quay.io/openshift/origin-cli:4.20.0 only supports amd64, blocking Mac ARM users.
-# Build the custom multi-arch image with: make -C charts/osac-devstack build-cli-tools
-cliImage: quay.io/openshift/origin-cli:4.20.0  # TODO: Replace with ghcr.io/osac-project/cli-tools:latest after first build
+# CLI image for hook Jobs. On Apple Silicon, the installer builds an arm64
+# replacement with the same tag before installing the chart. The AWX
+# configuration hook uses Python's standard JSON library, so it does not
+# require jq in this image.
+cliImage: quay.io/openshift/origin-cli:4.20.0
 
 # --- KubeVirt/CDI/Multus ---
 virt:
@@ -20,6 +21,11 @@ awx:
   enabled: true
   operatorChart: awx-operator/awx-operator
   operatorVersion: ""  # Empty = latest
+  executionEnvironment:
+    # Same image used by the OSAC AAP chart; includes every collection from
+    # osac-aap/collections/requirements.yml, including vastdata.vms.
+    image: ghcr.io/osac-project/osac-aap:latest  # PLACEHOLDER -- overwritten at release time
+    pull: missing
   instance:
     name: awx
     serviceType: ClusterIP

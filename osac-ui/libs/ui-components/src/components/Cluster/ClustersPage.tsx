@@ -16,7 +16,6 @@ export const ClustersPage = () => {
   return (
     <ListPage
       title={t('Clusters')}
-      label={t('Services')}
       description={t('OpenShift clusters provisioned for your organization.')}
       error={error}
       actions={<CreateButton to="/clusters/create">{t('Create cluster')}</CreateButton>}

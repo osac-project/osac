@@ -41,7 +41,6 @@ export const SecurityGroupsListPage = () => {
   return (
     <>
       <ListPage
-        label={t('Networking')}
         title={t('Security groups')}
         description={t('Manage firewall rules for your virtual networks.')}
         error={error}

@@ -42,7 +42,6 @@ const TenantListPage = () => {
   return (
     <ListPage
       title={t('Tenants')}
-      label={t('Administration')}
       description={t('Manage tenants for this cloud platform.')}
       error={error}
       actions={<CreateButton to="/admin/tenants/create">{t('Create tenant')}</CreateButton>}

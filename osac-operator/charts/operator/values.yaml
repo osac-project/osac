@@ -1,3 +1,8 @@
+global:
+  fulfillmentTrust:
+    enabled: false
+    tenantNamespace: osac-csi
+
 image:
   repository: ghcr.io/osac-project/osac-operator
   tag: latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
@@ -29,6 +34,10 @@ stall:
 fulfillment:
   serverAddress: ""
   tokenFile: ""
+  tls:
+    caBundle:
+      configMap: ca-bundle
+      key: bundle.pem
   configMap:
     name: ""
     optional: true

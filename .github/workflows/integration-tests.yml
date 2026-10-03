@@ -404,12 +404,24 @@ jobs:
         docker build --build-arg GODEBUG=http2client=0 -t localhost/fulfillment-service:it -f fulfillment-service/Containerfile .
         kind load docker-image localhost/fulfillment-service:it --name osac-dev
 
+    - name: Build osac-operator image from PR
+      env:
+        CONTAINER_TOOL: docker
+      run: |
+        docker build --build-arg GODEBUG=http2client=0 -t localhost/osac-operator:it -f osac-operator/Containerfile .
+        kind load docker-image localhost/osac-operator:it --name osac-dev
+
     - name: Deploy charts
       env:
         CONTAINER_TOOL: docker
       run: >-
         make -C osac-installer install-osac PLATFORM=kind PROFILE=dev NS=osac
-        EXTRA_HELM_ARGS="--set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never"
+        EXTRA_HELM_ARGS="--set service.images.service.repository=localhost/fulfillment-service
+        --set service.images.service.tag=it
+        --set service.images.service.pullPolicy=Never
+        --set operator.image.repository=localhost/osac-operator
+        --set operator.image.tag=it
+        --set operator.image.pullPolicy=IfNotPresent"
 
     - name: Collect diagnostic logs
       if: always()
@@ -463,4 +475,9 @@ jobs:
         CONTAINER_TOOL: docker
       run: >-
         make -C osac-installer install-osac PLATFORM=kind PROFILE=dev NS=osac
-        EXTRA_HELM_ARGS="--set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never"
+        EXTRA_HELM_ARGS="--set service.images.service.repository=localhost/fulfillment-service
+        --set service.images.service.tag=it
+        --set service.images.service.pullPolicy=Never
+        --set operator.image.repository=localhost/osac-operator
+        --set operator.image.tag=it
+        --set operator.image.pullPolicy=IfNotPresent"

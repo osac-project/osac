@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import subprocess
 from typing import Any
@@ -8,6 +9,7 @@ from typing import Any
 import pytest
 
 from tests.e2e.bmaas.conftest import BMI_DISK_IMAGE_SOURCE_REF
+from tests.e2e.core.fulfillment_trust import assert_management_tls
 from tests.e2e.core.grpc_client import PRIVATE_API, PUBLIC_API, GRPCClient
 from tests.e2e.core.helpers import (
     wait_for_bmh_available,
@@ -111,6 +113,8 @@ def test_baremetal_instance_lifecycle(
 
         bmi_cr_name: str = wait_for_bmi_cr(k8s=k8s_hub_client, uuid=bmi_id)
         wait_for_bmi_running(grpc=jwt_grpc_tenant1, bmi_id=bmi_id)
+        if os.environ.get("OSAC_FULFILLMENT_TRUST_E2E") == "true":
+            assert_management_tls(k8s_hub_client)
 
         external_host_id: str = k8s_hub_client.get_baremetal_instance_external_host_id(name=bmi_cr_name)
         assert "/" in external_host_id, f"Expected namespace/name format, got: {external_host_id}"

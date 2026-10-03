@@ -3,6 +3,23 @@
 {{- $issuerURL := $fulfillment.issuerUrl | default "" -}}
 {{- $configMapName := $fulfillment.configMap.name | default "" -}}
 {{- $configured := or $configMapName (and $endpoint $issuerURL) -}}
+{{- $trustEnabled := .Values.global.fulfillmentTrust.enabled | default false -}}
+{{- $trustNamespace := .Values.global.fulfillmentTrust.tenantNamespace | default "" -}}
+{{- $caBundle := $fulfillment.tls.caBundle -}}
+{{- $caBundleConfigMap := $caBundle.configMap | default "" -}}
+{{- $caBundleKey := $caBundle.key | default "" -}}
+{{- if and $trustEnabled (not $configured) -}}
+{{- fail "fulfillment configuration is required when global.fulfillmentTrust.enabled is true" -}}
+{{- end -}}
+{{- if and $trustEnabled $fulfillment.tls.insecureSkipVerify -}}
+{{- fail "controller.fulfillment.tls.insecureSkipVerify cannot be true when global.fulfillmentTrust.enabled is true" -}}
+{{- end -}}
+{{- if and $trustEnabled (not (and $caBundleConfigMap $caBundleKey)) -}}
+{{- fail "controller.fulfillment.tls.caBundle.configMap and key are required when global.fulfillmentTrust.enabled is true" -}}
+{{- end -}}
+{{- if and $trustEnabled (ne $trustNamespace (include "csi-driver.namespace" .)) -}}
+{{- fail "global.fulfillmentTrust.tenantNamespace must equal the CSI driver namespace when fulfillment trust is enabled" -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -40,11 +57,14 @@ spec:
             {{- if $configured }}
             - "--fulfillment-client-id=$(FULFILLMENT_CLIENT_ID)"
             - "--fulfillment-client-secret-file=/etc/osac-csi/credentials/client-secret"
+            {{- if $trustEnabled }}
+            - "--fulfillment-ca-file=/etc/osac-csi/fulfillment-ca/bundle.pem"
+            {{- end }}
             {{- if $fulfillment.tls.insecureSkipVerify }}
             - "--grpc-insecure"
             {{- end }}
             {{- end }}
-            {{- if $fulfillment.allowStub }}
+            {{- if and $fulfillment.allowStub (not $trustEnabled) }}
             - "--allow-stub"
             {{- end }}
             {{- if .Values.node.vendorSockets }}
@@ -100,6 +120,11 @@ spec:
             - name: fulfillment-credentials
               mountPath: /etc/osac-csi/credentials
               readOnly: true
+            {{- if $trustEnabled }}
+            - name: fulfillment-ca
+              mountPath: /etc/osac-csi/fulfillment-ca
+              readOnly: true
+            {{- end }}
             {{- end }}
           resources:
             {{- toYaml .Values.node.resources | nindent 12 }}
@@ -148,4 +173,12 @@ spec:
             items:
               - key: {{ $fulfillment.credentials.clientSecretKey }}
                 path: client-secret
+        {{- end }}
+        {{- if $trustEnabled }}
+        - name: fulfillment-ca
+          configMap:
+            name: {{ required "controller.fulfillment.tls.caBundle.configMap is required when trust is enabled" $caBundle.configMap }}
+            items:
+              - key: {{ required "controller.fulfillment.tls.caBundle.key is required when trust is enabled" $caBundle.key }}
+                path: bundle.pem
         {{- end }}

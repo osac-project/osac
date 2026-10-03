@@ -42,7 +42,7 @@ type ExternalIPAttachmentFeedbackReconciler struct {
 	networkingNamespace string
 }
 
-func NewExternalIPAttachmentFeedbackReconciler(hubClient clnt.Client, grpcConn *grpc.ClientConn, networkingNamespace string) *ExternalIPAttachmentFeedbackReconciler {
+func NewExternalIPAttachmentFeedbackReconciler(hubClient clnt.Client, grpcConn grpc.ClientConnInterface, networkingNamespace string) *ExternalIPAttachmentFeedbackReconciler {
 	attachClient := privatev1.NewExternalIPAttachmentsClient(grpcConn)
 	eipClient := privatev1.NewExternalIPsClient(grpcConn)
 	r := &ExternalIPAttachmentFeedbackReconciler{networkingNamespace: networkingNamespace}

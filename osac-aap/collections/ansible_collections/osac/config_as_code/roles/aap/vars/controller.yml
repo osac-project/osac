@@ -89,6 +89,22 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     allow_simultaneous: true
     ask_variables_on_launch: true
     verbosity: 0
+  - name: "{{ aap_prefix }}-sync-tenant-fulfillment-trust"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_sync_tenant_fulfillment_trust.yml"
+    inventory: "{{ aap_prefix }}-cluster-fulfillment"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-fulfillment-trust-sync-ig"
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    # The reconciler supplies a protected AAP credential at launch.  Its
+    # runtime injection provides K8S_AUTH_KUBECONFIG; neither a kubeconfig nor
+    # credential value belongs in osac_job_vars.
+    ask_credential_on_launch: true
+    verbosity: 0
   - name: "{{ aap_prefix }}-create-compute-instance"
     project: "{{ aap_prefix }}"
     organization: "{{ aap_organization_name }}"
@@ -913,6 +929,68 @@ controller_instance_groups: # noqa: var-naming[no-role-prefix]
   - name: "{{ aap_prefix }}-addon-operators-ig"
     is_container_group: true
     max_concurrent_jobs: "{{ addon_operator_max_concurrent_jobs }}"
+
+  # The protected tenant credential is attached to the job at launch.  This
+  # isolated group deliberately has no Secret or kubeconfig volume: Kubernetes
+  # injects only the trust-sync ServiceAccount and Controller injects the
+  # selected credential into the runner at runtime. The AAP Helm chart creates
+  # the dedicated ServiceAccount in this namespace.
+  - name: "{{ aap_prefix }}-fulfillment-trust-sync-ig"
+    is_container_group: true
+    pod_spec_override: |
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        labels:
+          ansible_job: ''
+      spec:
+        serviceAccountName: osac-fulfillment-trust-sync
+        affinity:
+          podAntiAffinity:
+            preferredDuringSchedulingIgnoredDuringExecution:
+              - weight: 100
+                podAffinityTerm:
+                  labelSelector:
+                    matchExpressions:
+                      - key: ansible_job
+                        operator: Exists
+                  topologyKey: kubernetes.io/hostname
+        containers:
+          - image: >-
+              {{ aap_ee_image }}
+            name: worker
+            args:
+              - ansible-runner
+              - worker
+              - '--private-data-dir=/runner'
+            volumeMounts:
+              - name: kube-api-access
+                mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+                readOnly: true
+        volumes:
+          - name: kube-api-access
+            projected:
+              sources:
+                - serviceAccountToken:
+                    path: token
+                    expirationSeconds: 3600
+                - configMap:
+                    name: kube-root-ca.crt
+                    items:
+                      - key: ca.crt
+                        path: ca.crt
+                - downwardAPI:
+                    items:
+                      - path: namespace
+                        fieldRef:
+                          apiVersion: v1
+                          fieldPath: metadata.namespace
+                - configMap:
+                    name: openshift-service-ca.crt
+                    items:
+                      - key: service-ca.crt
+                        path: service-ca.crt
+              defaultMode: 420
 
   - name: "{{ aap_prefix }}-compute-instance-operations-ig"
     is_container_group: true

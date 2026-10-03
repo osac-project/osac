@@ -1,0 +1,367 @@
+suite: fulfillment trust admission bootstrap
+templates:
+  - templates/fulfillment-trust-admission.yaml
+tests:
+  - it: should render nothing while fulfillment trust is disabled
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should render no tenant admission resources without an order identity
+    set:
+      global.fulfillmentTrust.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should render isolated trust identities with a static least-privilege sync binding
+    set:
+      namespace: osac-csi
+      global.fulfillmentTrust.enabled: true
+      global.fulfillmentTrust.tenantNamespace: osac-csi
+      global.fulfillmentTrust.admission.image.tag: test-version
+      global.fulfillmentTrust.clusterOrderUID: order-uid
+      global.fulfillmentTrust.tenant: tenant-a
+      controller.fulfillment.configMap.name: osac-csi-fulfillment-config
+      controller.fulfillment.credentials.secretName: osac-csi-driver-credentials
+    asserts:
+      - hasDocuments:
+          count: 25
+      - isKind:
+          of: Secret
+        documentIndex: 24
+      - equal:
+          path: metadata.name
+          value: osac-fulfillment-trust-expected-bundles
+        documentIndex: 24
+      - equal:
+          path: data["records.json"]
+          value: W10=
+        documentIndex: 24
+      - equal:
+          path: metadata.annotations["osac.openshift.io/tenant"]
+          value: tenant-a
+        documentIndex: 24
+      - equal:
+          path: metadata.annotations["osac.openshift.io/owner-reference"]
+          value: order-uid
+        documentIndex: 24
+      - isKind:
+          of: ServiceAccount
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: osac-fulfillment-trust-admission
+        documentIndex: 0
+      - equal:
+          path: metadata.annotations["osac.openshift.io/tenant"]
+          value: tenant-a
+        documentIndex: 0
+      - equal:
+          path: metadata.annotations["osac.openshift.io/owner-reference"]
+          value: order-uid
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: osac-fulfillment-trust-sync
+        documentIndex: 2
+      - equal:
+          path: metadata.name
+          value: osac-fulfillment-trust-observer
+        documentIndex: 3
+      - equal:
+          path: metadata.name
+          value: osac-trust-publisher-order-uid
+        documentIndex: 4
+      - equal:
+          path: metadata.annotations["osac.openshift.io/owner-reference"]
+          value: order-uid
+        documentIndex: 4
+      - equal:
+          path: metadata.annotations["osac.openshift.io/tenant"]
+          value: tenant-a
+        documentIndex: 4
+      - equal:
+          path: rules[0].resources[0]
+          value: secrets
+        documentIndex: 5
+      - equal:
+          path: rules[0].resourceNames[0]
+          value: osac-fulfillment-trust-expected-bundles
+        documentIndex: 5
+      - equal:
+          path: rules[0].verbs
+          value: [get, update]
+        documentIndex: 5
+      - equal:
+          path: rules[0].verbs
+          value: [create]
+        documentIndex: 7
+      - equal:
+          path: rules[1].resourceNames[0]
+          value: osac-fulfillment-ca
+        documentIndex: 7
+      - equal:
+          path: rules[2].verbs
+          value: [get, list]
+        documentIndex: 7
+      - equal:
+          path: rules[3].resourceNames
+          value: [release-name-csi-driver-controller]
+        documentIndex: 7
+      - equal:
+          path: rules[3].verbs
+          value: [patch]
+        documentIndex: 7
+      - equal:
+          path: subjects[0].name
+          value: osac-fulfillment-trust-sync
+        documentIndex: 8
+      - equal:
+          path: roleRef.name
+          value: release-name-csi-driver-fulfillment-trust-sync
+        documentIndex: 8
+      - equal:
+          path: metadata.annotations["osac.openshift.io/owner-reference"]
+          value: order-uid
+        documentIndex: 8
+      - equal:
+          path: rules[0].verbs
+          value: [get]
+        documentIndex: 9
+      - isKind:
+          of: RoleBinding
+        documentIndex: 10
+      - equal:
+          path: roleRef.name
+          value: release-name-csi-driver-fulfillment-trust-observer
+        documentIndex: 10
+      - equal:
+          path: subjects[0].name
+          value: osac-fulfillment-trust-observer
+        documentIndex: 10
+      - equal:
+          path: subjects[0].namespace
+          value: osac-csi
+        documentIndex: 10
+      - notExists:
+          path: rules[4]
+        documentIndex: 7
+      - equal:
+          path: rules[0].resources[0]
+          value: services/proxy
+        documentIndex: 11
+      - equal:
+          path: rules[0].resourceNames[0]
+          value: https:osac-fulfillment-trust-admission:https
+        documentIndex: 11
+      - equal:
+          path: rules[0].verbs
+          value: [create, delete]
+        documentIndex: 11
+      - equal:
+          path: rules[2].resourceNames
+          value: [osac-fulfillment-trust-expected-bundles, osac-fulfillment-trust-admission-tls]
+        documentIndex: 13
+      - equal:
+          path: rules[2].verbs
+          value: [delete, patch]
+        documentIndex: 13
+      - equal:
+          path: rules[3].resources
+          value: [rolebindings]
+        documentIndex: 13
+      - notExists:
+          path: rules[4]
+        documentIndex: 13
+      - equal:
+          path: rules[3].resourceNames
+          value: [release-name-csi-driver-fulfillment-trust-sync]
+        documentIndex: 13
+      - equal:
+          path: rules[3].verbs
+          value: [get]
+        documentIndex: 13
+      - equal:
+          path: rules[0].verbs
+          value: [get, list, watch]
+        documentIndex: 13
+      - equal:
+          path: rules[0].resources[0]
+          value: tokenreviews
+        documentIndex: 17
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-install,post-upgrade
+        documentIndex: 22
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: quay.io/openshift/origin-cli:4.20.0
+        documentIndex: 22
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value: [/bin/sh, -ec]
+        documentIndex: 22
+      - equal:
+          path: spec.template.spec.containers[0].env[0].name
+          value: HOME
+        documentIndex: 22
+      - equal:
+          path: spec.template.spec.containers[0].env[0].value
+          value: /tmp
+        documentIndex: 22
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts[0].mountPath
+          value: /tmp
+        documentIndex: 22
+      - equal:
+          path: spec.template.spec.volumes[0].name
+          value: tmp
+        documentIndex: 22
+      - equal:
+          path: spec.template.spec.volumes[0].emptyDir
+          value: {}
+        documentIndex: 22
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: quay.io/openshift/origin-cli:4.20.0
+        documentIndex: 23
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value: [/bin/sh, -ec]
+        documentIndex: 23
+      - equal:
+          path: spec.template.spec.containers[0].env[0].name
+          value: HOME
+        documentIndex: 23
+      - equal:
+          path: spec.template.spec.containers[0].env[0].value
+          value: /tmp
+        documentIndex: 23
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts[0].mountPath
+          value: /tmp
+        documentIndex: 23
+      - equal:
+          path: spec.template.spec.volumes[0].name
+          value: tmp
+        documentIndex: 23
+      - equal:
+          path: spec.template.spec.volumes[0].emptyDir
+          value: {}
+        documentIndex: 23
+      - equal:
+          path: webhooks[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]
+          value: osac-csi
+        documentIndex: 21
+      - equal:
+          path: webhooks[0].rules[0].resources
+          value: [configmaps]
+        documentIndex: 21
+      - equal:
+          path: webhooks[0].rules[0].operations
+          value: [CREATE, UPDATE, DELETE]
+        documentIndex: 21
+      - equal:
+          path: webhooks[0].matchConditions[0].name
+          value: target-fulfillment-ca-configmap
+        documentIndex: 21
+      - matchRegex:
+          path: webhooks[0].matchConditions[0].expression
+          pattern: "request.userInfo.username ==.*system:serviceaccount:osac-csi:osac-fulfillment-trust-sync.*object != null.*object.metadata.name ==.*osac-fulfillment-ca.*oldObject != null.*oldObject.metadata.name ==.*osac-fulfillment-ca"
+        documentIndex: 21
+      - equal:
+          path: webhooks[1].rules[0].resources
+          value: [deployments]
+        documentIndex: 21
+      - equal:
+          path: webhooks[1].matchConditions[0].name
+          value: target-trust-enabled-csi-deployments
+        documentIndex: 21
+      - matchRegex:
+          path: webhooks[1].matchConditions[0].expression
+          pattern: "(?s)request.userInfo.username ==.*system:serviceaccount:osac-csi:osac-fulfillment-trust-sync.*fulfillment-trust-admission"
+        documentIndex: 21
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: 100m
+        documentIndex: 20
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 256Mi
+        documentIndex: 20
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.memory
+          value: 128Mi
+        documentIndex: 22
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 256Mi
+        documentIndex: 23
+      - equal:
+          path: metadata.annotations["osac.openshift.io/tenant"]
+          value: tenant-a
+        documentIndex: 21
+      - equal:
+          path: spec.template.metadata.annotations["osac.openshift.io/owner-reference"]
+          value: order-uid
+        documentIndex: 20
+      - equal:
+          path: spec.template.metadata.annotations["osac.openshift.io/tenant"]
+          value: tenant-a
+        documentIndex: 22
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "(?s)annotate secret.*rollout status deployment.*validatingwebhookconfiguration.*expected-bundles.*annotate secret"
+        documentIndex: 22
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "create rolebinding|annotate rolebinding"
+        documentIndex: 22
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-delete
+        documentIndex: 23
+
+  - it: should reject a trust namespace that differs from the CSI namespace
+    set:
+      global.fulfillmentTrust.enabled: true
+      global.fulfillmentTrust.tenantNamespace: another-namespace
+      global.fulfillmentTrust.clusterOrderUID: order-uid
+      global.fulfillmentTrust.tenant: tenant-a
+    asserts:
+      - failedTemplate:
+          errorMessage: global.fulfillmentTrust.tenantNamespace must equal the CSI driver namespace when fulfillment trust is enabled
+
+  - it: should require a published admission image tag when trust is enabled
+    set:
+      namespace: osac-csi
+      global.fulfillmentTrust.enabled: true
+      global.fulfillmentTrust.tenantNamespace: osac-csi
+      global.fulfillmentTrust.clusterOrderUID: order-uid
+      global.fulfillmentTrust.tenant: tenant-a
+    asserts:
+      - failedTemplate:
+          errorMessage: global.fulfillmentTrust.admission.image.tag must be set to a published osac-operator version when fulfillment trust is enabled
+
+  - it: should require a per-order publisher identity
+    set:
+      namespace: osac-csi
+      global.fulfillmentTrust.enabled: true
+      global.fulfillmentTrust.tenantNamespace: osac-csi
+      global.fulfillmentTrust.admission.image.tag: test-version
+      global.fulfillmentTrust.tenant: tenant-a
+    asserts:
+      - failedTemplate:
+          errorMessage: global.fulfillmentTrust.clusterOrderUID is required when fulfillment trust is enabled
+
+  - it: should require a tenant attribution for the publisher identity
+    set:
+      namespace: osac-csi
+      global.fulfillmentTrust.enabled: true
+      global.fulfillmentTrust.tenantNamespace: osac-csi
+      global.fulfillmentTrust.admission.image.tag: test-version
+      global.fulfillmentTrust.clusterOrderUID: order-uid
+    asserts:
+      - failedTemplate:
+          errorMessage: global.fulfillmentTrust.tenant is required when fulfillment trust is enabled

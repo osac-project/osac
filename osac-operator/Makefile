@@ -145,12 +145,12 @@ tag-api: ## Tag a new release of the api/ Go module (e.g. make tag-api API_VERSI
 
 .PHONY: build
 build: test ## Build manager and console-proxy binaries (runs all tests first).
-	go build -o bin/manager cmd/main.go
+	go build -o bin/manager ./cmd
 	go build -o bin/console-proxy cmd/console-proxy/main.go
 
 .PHONY: run
 run: manifests generate fmt vet ## Run a controller from your host.
-	go run ./cmd/main.go
+	go run ./cmd
 
 # If you wish to build the manager image targeting other platforms you can use the --platform flag.
 # (i.e. docker build --platform linux/arm64). However, you must enable docker buildKit for it.

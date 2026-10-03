@@ -7,8 +7,7 @@ cliImage: quay.io/openshift/origin-cli:4.20.0
 #   runAsUser: 1000
 #   fsGroup: 1000
 osacNamespace: osac
-# Keep this value aligned with the osac chart's csiDriver.enabled setting. It
-# gates creation of the shared CSI credential Secret during infra install.
+# Gates creation of the shared CSI credential Secret during infra install.
 csiDriver:
   enabled: false
 # Fixed hub CSI namespace. The osac chart and CSI credential hook must use the

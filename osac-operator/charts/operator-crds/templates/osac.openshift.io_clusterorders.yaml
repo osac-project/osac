@@ -398,6 +398,10 @@ spec:
                   DesiredConfigVersion is a hash of the current spec, used to detect spec changes
                   that require re-provisioning.
                 type: string
+              fulfillmentTrustBundleHash:
+                description: FulfillmentTrustBundleHash is the hash of the last synchronized
+                  fulfillment trust bundle.
+                type: string
               ingressEndpoint:
                 description: |-
                   IngressEndpoint is the internal ingress VIP allocated by MetalLB.

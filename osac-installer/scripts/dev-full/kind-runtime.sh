@@ -198,7 +198,12 @@ create_cluster() {
     detect_podman_mode
   fi
 
-  if kind_cmd get clusters 2>/dev/null | grep -q "^${name}$"; then
+  # `kind get clusters` is broken with current Podman releases: kind 0.32
+  # treats Podman's JSON Labels array as a map while listing clusters. Listing
+  # the nodes for one cluster still works and is enough to make this
+  # idempotent.
+  local nodes
+  if nodes="$(kind_cmd get nodes --name "${name}" 2>/dev/null)" && [[ -n "${nodes}" ]]; then
     log "Kind cluster '${name}' already exists, reusing it"
   else
     log "Creating kind cluster '${name}' (${KIND_PROVIDER})..."

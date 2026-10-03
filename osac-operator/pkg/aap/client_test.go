@@ -63,6 +63,46 @@ var _ = Describe("Client", func() {
 				Expect(err).NotTo(HaveOccurred())
 				Expect(resp.JobID).To(Equal(123))
 			})
+
+			It("does not attach credentials when none are requested", func() {
+				request := aap.LaunchJobTemplateRequest{
+					TemplateName: "test-template",
+					ExtraVars:    map[string]any{"key": "value"},
+				}
+
+				server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					defer GinkgoRecover()
+					var payload map[string]any
+					Expect(json.NewDecoder(r.Body).Decode(&payload)).To(Succeed())
+					Expect(payload).To(HaveKeyWithValue("extra_vars", HaveKeyWithValue("key", "value")))
+					Expect(payload).NotTo(HaveKey("credentials"))
+					Expect(json.NewEncoder(w).Encode(map[string]any{"id": 123})).To(Succeed())
+				})
+
+				_, err := client.LaunchJobTemplate(ctx, request)
+				Expect(err).NotTo(HaveOccurred())
+			})
+
+			It("attaches only requested credential identifiers", func() {
+				request := aap.LaunchJobTemplateRequest{
+					TemplateName:  "test-template",
+					ExtraVars:     map[string]any{"key": "value"},
+					CredentialIDs: []int{42},
+				}
+
+				server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					defer GinkgoRecover()
+					var payload map[string]any
+					Expect(json.NewDecoder(r.Body).Decode(&payload)).To(Succeed())
+					Expect(payload).To(HaveKeyWithValue("credentials", ConsistOf(float64(42))))
+					Expect(payload).NotTo(HaveKey("kubeconfig"))
+					Expect(payload).NotTo(HaveKey("admin_kubeconfig"))
+					Expect(json.NewEncoder(w).Encode(map[string]any{"id": 123})).To(Succeed())
+				})
+
+				_, err := client.LaunchJobTemplate(ctx, request)
+				Expect(err).NotTo(HaveOccurred())
+			})
 		})
 
 		Context("when request fails", func() {
@@ -81,6 +121,35 @@ var _ = Describe("Client", func() {
 				Expect(err).To(HaveOccurred())
 				var notFoundErr *aap.NotFoundError
 				Expect(errors.As(err, &notFoundErr)).To(BeTrue())
+			})
+
+			It("does not return a sensitive response body", func() {
+				server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					defer GinkgoRecover()
+					w.WriteHeader(http.StatusBadRequest)
+					_, err := w.Write([]byte("bundle.pem: confidential-response"))
+					Expect(err).NotTo(HaveOccurred())
+				})
+				_, err := client.LaunchJobTemplate(ctx, aap.LaunchJobTemplateRequest{
+					TemplateName: "trust-template", Sensitive: true,
+				})
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).NotTo(ContainSubstring("confidential-response"))
+			})
+
+			It("redacts error bodies for credential-bearing launches by default", func() {
+				server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					defer GinkgoRecover()
+					w.WriteHeader(http.StatusBadRequest)
+					_, err := w.Write([]byte("credential launch response: confidential-response"))
+					Expect(err).NotTo(HaveOccurred())
+				})
+				_, err := client.LaunchJobTemplate(ctx, aap.LaunchJobTemplateRequest{
+					TemplateName:  "credential-template",
+					CredentialIDs: []int{42},
+				})
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).NotTo(ContainSubstring("confidential-response"))
 			})
 		})
 	})

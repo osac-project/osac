@@ -17,9 +17,11 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import os
 from pathlib import Path
 from uuid import uuid4
 
+from tests.e2e.core.fulfillment_trust import assert_cluster_trust
 from tests.e2e.core.helpers import (
     unique_name,
     wait_for_cluster_deletion,
@@ -86,6 +88,8 @@ def test_caas_cluster_storage_lifecycle(
 
         # --- Verify CaaS storage provisioning ---
         _verify_provisioning(k8s=k8s_hub_client, tenant_name=tenant_name, co_name=co_name)
+        if os.environ.get("OSAC_FULFILLMENT_TRUST_E2E") == "true":
+            assert_cluster_trust(k8s_hub_client, co_name, require_csi=True)
 
     finally:
         # --- Teardown: delete ClusterOrder and verify storage cleanup ---

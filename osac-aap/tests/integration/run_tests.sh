@@ -58,6 +58,7 @@ WORKFLOWS=(
 ROLE_TESTS=(
   "config_as_code_pod_specs"
   "finalizer"
+  "fulfillment_trust_sync"
   "lease"
   "agentless_net_stub"
 )
@@ -184,7 +185,7 @@ for scenario in test_discover_all test_nonexistent_collection test_invalid_colle
   fi
 done
 
-for scenario in test_empty test_populated test_no_items_key test_disabled test_not_found; do
+for scenario in test_empty test_populated test_no_items_key test_disabled test_not_found test_cert_validation; do
   echo "Testing publish_templates: ${scenario}"
   if run_config_as_code_playbook "${PUBLISH_TEMPLATES_TEST}" -e "${scenario}=true"; then
     PASSED+=("publish_templates:${scenario}")

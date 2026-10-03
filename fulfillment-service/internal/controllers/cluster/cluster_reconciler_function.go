@@ -274,6 +274,9 @@ func (t *task) update(ctx context.Context) error {
 
 	// Create or update the Kubernetes object:
 	if object == nil {
+		orderAnnotations := map[string]string{
+			annotations.Tenant: t.cluster.GetMetadata().GetTenant(),
+		}
 		object := &osacv1alpha1.ClusterOrder{
 			ObjectMeta: metav1.ObjectMeta{
 				Namespace:    t.hubNamespace,
@@ -281,9 +284,7 @@ func (t *task) update(ctx context.Context) error {
 				Labels: map[string]string{
 					labels.ClusterOrderUuid: t.cluster.GetId(),
 				},
-				Annotations: map[string]string{
-					annotations.Tenant: t.cluster.GetMetadata().GetTenant(),
-				},
+				Annotations: orderAnnotations,
 			},
 			Spec: spec,
 		}

@@ -9,6 +9,8 @@
 # --- Service Enablement ---
 global:
   osacDeploymentId: "ci/osac"
+  fulfillmentTrust:
+    enabled: false
   networking:
     # Netris remains the AAP/fabric backend. The profile's expert NetworkClass
     # below additionally selects cudn_evpn as the Kubernetes manager.

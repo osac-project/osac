@@ -44,7 +44,7 @@ type VolumeFeedbackReconciler struct {
 // NewVolumeFeedbackReconciler creates a feedback reconciler that syncs Volume
 // CR status to the fulfillment-service. The volumeNamespace controls which
 // namespace this controller watches, matching the resource controller's scope.
-func NewVolumeFeedbackReconciler(hubClient clnt.Client, grpcConn *grpc.ClientConn, volumeNamespace string) *VolumeFeedbackReconciler {
+func NewVolumeFeedbackReconciler(hubClient clnt.Client, grpcConn grpc.ClientConnInterface, volumeNamespace string) *VolumeFeedbackReconciler {
 	if volumeNamespace == "" {
 		volumeNamespace = defaultVolumeNamespace
 	}

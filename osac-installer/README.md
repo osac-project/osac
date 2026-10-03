@@ -164,7 +164,6 @@ the end-to-end "create a VM from the UI" experience:
 make install PLATFORM=kind PROFILE=dev-full NS=osac
 ```
 
-<<<<<<< HEAD
 To use source-built images, use the existing component build targets and then
 load the resulting image tags into Kind. Use the same `CONTAINER_TOOL` value for
 building and loading; the image names must remain registry-qualified so they
@@ -184,7 +183,7 @@ make -C ../osac-csi-driver image-build \
   IMG=ghcr.io/osac-project/osac-csi-driver:latest \
   CONTAINER_TOOL="$CONTAINER_TOOL"
 "$CONTAINER_TOOL" build -t ghcr.io/osac-project/osac-ui:latest \
-  -f ../../osac-ui/Containerfile ../../osac-ui
+  -f ../osac-ui/Containerfile ../osac-ui
 
 make kind-load-images PLATFORM=kind PROFILE=dev-full NS=osac \
   CONTAINER_TOOL="$CONTAINER_TOOL"
@@ -197,6 +196,7 @@ After changing source code, rerun the relevant component `image-build` target
 and then `kind-load-images`. Loaded images are restarted only for workloads that
 use one of the local image references. Each Go component also exposes a
 single-image `kind-load-image` target when loading only that component is useful.
+
 #### CUDN EVPN/Netris E2E environment
 
 `PROFILE=cudn-evpn-netris-test` is an explicit OpenShift-only profile. It

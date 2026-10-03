@@ -43,7 +43,7 @@ type BareMetalInstanceFeedbackReconciler struct {
 
 // NewBareMetalInstanceFeedbackReconciler creates a reconciler that signals the
 // fulfillment-service when BareMetalInstance CRs change.
-func NewBareMetalInstanceFeedbackReconciler(hubClient clnt.Client, grpcConn *grpc.ClientConn, bareMetalInstanceNamespace string) *BareMetalInstanceFeedbackReconciler {
+func NewBareMetalInstanceFeedbackReconciler(hubClient clnt.Client, grpcConn grpc.ClientConnInterface, bareMetalInstanceNamespace string) *BareMetalInstanceFeedbackReconciler {
 	return &BareMetalInstanceFeedbackReconciler{
 		hubClient:                  hubClient,
 		bareMetalInstancesClient:   privatev1.NewBareMetalInstancesClient(grpcConn),

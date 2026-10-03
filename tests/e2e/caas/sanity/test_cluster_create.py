@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import contextlib
+import os
 import subprocess
 from pathlib import Path
 
 import pytest
 
+from tests.e2e.core.fulfillment_trust import assert_cluster_trust, assert_management_tls
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import (
     unique_name,
@@ -56,6 +58,9 @@ def test_cluster_create(
         metering.verify()
 
         wait_for_cluster_ready(k8s=k8s_hub_client, name=co_name)
+        if os.environ.get("OSAC_FULFILLMENT_TRUST_E2E") == "true":
+            assert_management_tls(k8s_hub_client, require_metering=True)
+            assert_cluster_trust(k8s_hub_client, co_name)
 
         # Verify version resolved and propagated end-to-end:
         # fulfillment-service default resolution -> ClusterOrder releaseImage -> HostedCluster image

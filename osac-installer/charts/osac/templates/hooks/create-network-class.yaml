@@ -77,7 +77,7 @@ spec:
             # Check for an existing NetworkClass for this identity first instead
             # of relying on the create call's error code, and PATCH it if found so
             # values.yaml changes are applied on upgrade instead of silently ignored.
-            EXISTING=$(curl -skS --connect-timeout 5 --max-time 30 \
+            EXISTING=$(curl -sS {{ include "osac.fulfillmentCurlTLS" . }} --connect-timeout 5 --max-time 30 \
               -H "Authorization: Bearer ${AUTH_TOKEN}" \
               "${API}")
             EXISTING_ID=$(echo "${EXISTING}" | python3 -c "
@@ -97,7 +97,7 @@ spec:
               URL="${API}"
             fi
 
-            CODE=$(curl -skS \
+            CODE=$(curl -sS {{ include "osac.fulfillmentCurlTLS" . }} \
               --connect-timeout 5 --max-time 30 \
               -o "${RESPONSE}" -w '%{http_code}' \
               -X "${METHOD}" "${URL}" \
@@ -132,6 +132,9 @@ spec:
         volumeMounts:
         - name: tmp
           mountPath: /tmp
+        - name: ca-bundle
+          mountPath: /etc/ca-bundle
+          readOnly: true
         resources:
           requests:
             cpu: 50m
@@ -147,5 +150,11 @@ spec:
       volumes:
       - name: tmp
         emptyDir: {}
+      - name: ca-bundle
+        configMap:
+          name: {{ .Values.service.certs.caBundle.configMap | required "service.certs.caBundle.configMap is required" }}
+          items:
+          - key: bundle.pem
+            path: bundle.pem
       restartPolicy: OnFailure
 {{- end }}

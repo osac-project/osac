@@ -39,7 +39,7 @@ type ExternalIPPoolFeedbackReconciler struct {
 
 // NewExternalIPPoolFeedbackReconciler creates a reconciler that sends to the fulfillment service updates about
 // external IP pools.
-func NewExternalIPPoolFeedbackReconciler(hubClient clnt.Client, grpcConn *grpc.ClientConn, networkingNamespace string) *ExternalIPPoolFeedbackReconciler {
+func NewExternalIPPoolFeedbackReconciler(hubClient clnt.Client, grpcConn grpc.ClientConnInterface, networkingNamespace string) *ExternalIPPoolFeedbackReconciler {
 	poolClient := privatev1.NewExternalIPPoolsClient(grpcConn)
 	r := &ExternalIPPoolFeedbackReconciler{networkingNamespace: networkingNamespace}
 	r.bridge = &feedback.Bridge[*v1alpha1.ExternalIPPool, *privatev1.ExternalIPPool]{

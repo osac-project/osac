@@ -2,6 +2,8 @@
 
 # --- Service Enablement ---
 global:
+  fulfillmentTrust:
+    enabled: false
   services:
     caas:
       enabled: true

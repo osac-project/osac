@@ -42,3 +42,10 @@ make lint     # Run golangci-lint
 ## Deployment
 
 The metering subsystem is deployed via the osac-installer umbrella chart with `metering.enabled: true`. Prerequisites: AMQ Streams operator and Kafka cluster (installed by osac-installer phases 1 and 2 with `kafka.enabled: true`).
+
+The chart always mounts the fulfillment CA bundle as `TLS_CA_CERT` and verifies
+the gRPC connection with it. With `global.fulfillmentTrust.enabled=true`, the
+service also watches for bundle revisions and swaps its gRPC connection only
+after verifying the new bundle. A failed revision retains the prior client.
+The `osac_fulfillment_client_bundle_observed` metric exposes the last verified
+bundle SHA-256.

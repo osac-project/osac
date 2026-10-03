@@ -980,6 +980,7 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 			osacv1alpha1.ConditionClusterAvailable,
 			string(osacv1alpha1.ClusterOrderConditionClusterStorageReady),
 			string(osacv1alpha1.ClusterOrderConditionAddOnOperatorsReady),
+			string(osacv1alpha1.ClusterOrderConditionFulfillmentTrustReady),
 			osacv1alpha1.ConditionProgressing,
 			osacv1alpha1.ConditionDeleting,
 		}
@@ -1000,6 +1001,16 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 					"condition %q must be handled by exactly one of: mapping, provisioning stage, unsurfaced (got %d)",
 					condition, handledCount)
 			}
+		})
+
+		It("keeps fulfillment trust readiness unsurfaced", func() {
+			condition := string(osacv1alpha1.ClusterOrderConditionFulfillmentTrustReady)
+			_, unsurfaced := clusterOrderUnsurfacedConditions[condition]
+			Expect(unsurfaced).To(BeTrue())
+
+			_, mapped := clusterOrderConditionMappings[condition]
+			Expect(mapped).To(BeFalse())
+			Expect(slices.Contains(clusterOrderProvisioningStages, condition)).To(BeFalse())
 		})
 
 		It("does not reference any unknown ClusterOrder condition", func() {

@@ -29,7 +29,10 @@ spec:
         args:
           - --leader-elect
           - --health-probe-bind-address=:8081
-          - --grpc-insecure
+          {{- if .Values.global.fulfillmentTrust.enabled }}
+          - --metrics-bind-address=:8443
+          {{- end }}
+          - --fulfillment-ca-file=/etc/ca-bundle/bundle.pem
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         envFrom:
@@ -130,6 +133,10 @@ spec:
                 fieldPath: metadata.namespace
           - name: OSAC_ENABLE_CLUSTER_CONTROLLER
             value: {{ include "osac-operator.controllerEnabled" (list . "clusterOrder" "caas") | quote }}
+          - name: OSAC_ENABLE_FULFILLMENT_TRUST_RECONCILER
+            value: {{ .Values.global.fulfillmentTrust.enabled | default false | quote }}
+          - name: OSAC_FULFILLMENT_TRUST_TENANT_NAMESPACE
+            value: {{ .Values.global.fulfillmentTrust.tenantNamespace | quote }}
           - name: OSAC_ENABLE_COMPUTE_INSTANCE_CONTROLLER
             value: {{ include "osac-operator.controllerEnabled" (list . "computeInstance" "vmaas") | quote }}
           - name: OSAC_ENABLE_TENANT_CONTROLLER
@@ -172,5 +179,16 @@ spec:
           periodSeconds: 10
         resources:
           {{- toYaml .Values.resources | nindent 10 }}
+        volumeMounts:
+          - name: fulfillment-ca-bundle
+            mountPath: /etc/ca-bundle
+            readOnly: true
+      volumes:
+        - name: fulfillment-ca-bundle
+          configMap:
+            name: {{ .Values.fulfillment.tls.caBundle.configMap | required "fulfillment.tls.caBundle.configMap is required" }}
+            items:
+              - key: {{ .Values.fulfillment.tls.caBundle.key | required "fulfillment.tls.caBundle.key is required" }}
+                path: bundle.pem
       serviceAccountName: {{ include "osac-operator.serviceAccountName" . }}
       terminationGracePeriodSeconds: 10

@@ -2,6 +2,34 @@
 # explicitly for its shared hub deployment.
 namespace: ""
 
+global:
+  fulfillmentTrust:
+    enabled: false
+    tenantNamespace: osac-csi
+    # Set both from the new tenant ClusterOrder when enabling trust.
+    clusterOrderUID: ""
+    tenant: ""
+    admission:
+      image:
+        repository: ghcr.io/osac-project/osac-operator
+        # Set to a published osac-operator version when enabling tenant trust.
+        tag: ""
+        pullPolicy: Always
+      # The tenant admission service uses the OpenShift service CA to issue
+      # and inject the serving certificate. This keeps private key material
+      # in a Kubernetes Secret instead of Helm values.
+      tlsSecretName: osac-fulfillment-trust-admission-tls
+      # The bootstrap hooks run /bin/sh and kubectl; the minimal kubectl image
+      # does not include a shell. OpenShift assigns a non-root UID via SCC.
+      bootstrapImage: quay.io/openshift/origin-cli:4.20.0
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          cpu: 500m
+          memory: 256Mi
+
 driverName: csi.osac.openshift.io
 
 image:
@@ -59,8 +87,11 @@ controller:
       # Key inside the Secret that holds the OAuth2 client secret.
       clientSecretKey: "client-secret"
     tls:
-      # Skip server certificate verification (use for self-signed certs).
-      insecureSkipVerify: false
+      # Tenant trust bundle supplied by the fulfillment trust reconciler when
+      # global.fulfillmentTrust.enabled is true.
+      caBundle:
+        configMap: osac-fulfillment-ca
+        key: bundle.pem
     # The in-memory volume stub is useful for local development. Hub and
     # production values must set this to false when real fulfillment config is
     # required.

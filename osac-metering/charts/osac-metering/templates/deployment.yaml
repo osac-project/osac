@@ -56,6 +56,9 @@ spec:
         - name: ca-bundle
           configMap:
             name: {{ .Values.certs.caBundle.configMap }}
+            items:
+              - key: bundle.pem
+                path: bundle.pem
       initContainers:
         - name: fetch-kafka-secrets
           image: {{ .Values.cliImage | default "quay.io/openshift/origin-cli:4.20.0" }}
@@ -118,6 +121,8 @@ spec:
               value: {{ ((.Values.fulfillment).address) | default (printf "fulfillment-internal-api.%s.svc.cluster.local:8001" .Release.Namespace) | quote }}
             - name: TLS_CA_CERT
               value: /etc/ca-bundle/bundle.pem
+            - name: FULFILLMENT_TRUST_ENABLED
+              value: {{ .Values.global.fulfillmentTrust.enabled | default false | quote }}
             - name: DB_URL_FILE
               value: /etc/metering/db
             - name: HEARTBEAT_INTERVAL

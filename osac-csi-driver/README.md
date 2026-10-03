@@ -44,6 +44,7 @@ make image-push   # Push container image
 | `--fulfillment-client-id` | (empty) | OAuth2 client ID for fulfillment-service authentication |
 | `--fulfillment-client-secret-file` | (empty) | Path to file containing the OAuth2 client secret |
 | `--fulfillment-issuer-url` | (empty) | Keycloak issuer URL for `client_credentials` token exchange |
+| `--fulfillment-ca-file` | (empty) | PEM CA bundle for verified fulfillment-service and OAuth TLS connections |
 | `--grpc-insecure` | `false` | Skip TLS server certificate verification |
 | `--vendor-sockets` | (empty) | Comma-separated `backend=socketpath` pairs |
 
@@ -55,6 +56,30 @@ The chart leaves `node.lvmsNodeSocket` empty by default, so it preserves
 `node.vendorSockets`. Set `node.lvmsNodeSocket` to supply an explicit environment
 override. For custom paths, also align `node.lvmsNodeSocketDir` and
 `node.lvmsNodeSocketHostPath` so the socket is accessible inside the container.
+
+### Disabling fulfillment trust or rolling back
+
+The trust admission webhook uses `failurePolicy: Fail` and rejects updates that
+remove the `osac.openshift.io/fulfillment-trust-client` label while the webhook
+is active. Before changing `global.fulfillmentTrust.enabled` from `true` to
+`false`, or rolling back to a chart version without trust admission, remove the
+CSI release's `ValidatingWebhookConfiguration` first. Find it with the CSI
+release label and delete the `*-fulfillment-trust` resource:
+
+```bash
+CSI_RELEASE=your-csi-release
+kubectl get validatingwebhookconfigurations \
+  -l "app.kubernetes.io/instance=${CSI_RELEASE}" \
+  -o custom-columns=NAME:.metadata.name
+TRUST_WEBHOOK_NAME=copy-name-ending-in-fulfillment-trust-from-output
+kubectl delete validatingwebhookconfiguration "$TRUST_WEBHOOK_NAME"
+```
+
+Delete only the `*-fulfillment-trust` resource shown for that release. Its name
+uses the chart fullname plus `-fulfillment-trust`; the fullname defaults to
+`<release>-csi-driver` unless the release name already contains `csi-driver` or
+`fullnameOverride` is set. After deleting the webhook, upgrade or roll back the
+CSI release normally.
 
 ## License
 

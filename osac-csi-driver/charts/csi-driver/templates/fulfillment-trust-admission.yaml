@@ -1,0 +1,598 @@
+{{- $trust := .Values.global.fulfillmentTrust -}}
+{{- $orderUID := $trust.clusterOrderUID | default "" -}}
+{{- $tenant := $trust.tenant | default "" -}}
+{{- if and $trust.enabled (or $orderUID $tenant) }}
+{{- $namespace := $trust.tenantNamespace -}}
+{{- if ne $namespace (include "csi-driver.namespace" .) }}
+{{- fail "global.fulfillmentTrust.tenantNamespace must equal the CSI driver namespace when fulfillment trust is enabled" }}
+{{- end }}
+{{- $admissionImageTag := required "global.fulfillmentTrust.admission.image.tag must be set to a published osac-operator version when fulfillment trust is enabled" $trust.admission.image.tag -}}
+{{- $orderUID = required "global.fulfillmentTrust.clusterOrderUID is required when fulfillment trust is enabled" $orderUID -}}
+{{- $tenant = required "global.fulfillmentTrust.tenant is required when fulfillment trust is enabled" $tenant -}}
+{{- if or (gt (len $orderUID) 42) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $orderUID)) }}
+{{- fail "global.fulfillmentTrust.clusterOrderUID must be a valid publisher identity suffix" }}
+{{- end }}
+{{- $fullname := include "csi-driver.fullname" . }}
+{{- $controllerDeploymentName := printf "%s-controller" $fullname }}
+{{- $tlsSecretName := $trust.admission.tlsSecretName | default "osac-fulfillment-trust-admission-tls" }}
+{{- $bootstrapImage := $trust.admission.bootstrapImage | default "quay.io/openshift/origin-cli:4.20.0" }}
+{{- $admissionServiceAccount := "osac-fulfillment-trust-admission" }}
+{{- $bootstrapServiceAccount := "osac-fulfillment-trust-bootstrap" }}
+{{- $syncServiceAccount := "osac-fulfillment-trust-sync" }}
+{{- $observerServiceAccount := "osac-fulfillment-trust-observer" }}
+{{- $publisherServiceAccount := printf "osac-trust-publisher-%s" $orderUID }}
+{{- $admissionServiceName := "osac-fulfillment-trust-admission" }}
+{{- $storeName := "osac-fulfillment-trust-expected-bundles" }}
+{{- $webhookName := printf "%s-fulfillment-trust" $fullname | trunc 63 | trimSuffix "-" }}
+{{- $attribution := dict "osac.openshift.io/tenant" $tenant "osac.openshift.io/owner-reference" $orderUID }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $admissionServiceAccount }}
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "csi-driver.labels" . | nindent 4 }}
+    app.kubernetes.io/component: fulfillment-trust-admission
+  annotations:
+    {{- toYaml $attribution | nindent 4 }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $bootstrapServiceAccount }}
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "csi-driver.labels" . | nindent 4 }}
+    app.kubernetes.io/component: fulfillment-trust-bootstrap
+  annotations:
+    {{- toYaml $attribution | nindent 4 }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $syncServiceAccount }}
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "csi-driver.labels" . | nindent 4 }}
+    app.kubernetes.io/component: fulfillment-trust-sync
+  annotations:
+    {{- toYaml $attribution | nindent 4 }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $observerServiceAccount }}
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "csi-driver.labels" . | nindent 4 }}
+    app.kubernetes.io/component: fulfillment-trust-observer
+  annotations:
+    {{- toYaml $attribution | nindent 4 }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $publisherServiceAccount }}
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "csi-driver.labels" . | nindent 4 }}
+    app.kubernetes.io/component: fulfillment-trust-publisher
+  annotations:
+    {{- toYaml $attribution | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $fullname }}-fulfillment-trust-admission
+  namespace: {{ $namespace }}
+  annotations:
+    {{- toYaml $attribution | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: [{{ $storeName | quote }}]
+    verbs: ["get", "update"]
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $fullname }}-fulfillment-trust-admission
+  namespace: {{ $namespace }}
+  annotations:
+    {{- toYaml $attribution | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $fullname }}-fulfillment-trust-admission
+subjects:
+  - kind: ServiceAccount
+    name: {{ $admissionServiceAccount }}
+    namespace: {{ $namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $fullname }}-fulfillment-trust-sync
+  namespace: {{ $namespace }}
+  annotations:
+    {{- toYaml $attribution | nindent 4 }}
+rules:
+  # Kubernetes RBAC cannot scope ConfigMap create by resource name. The
+  # admission service enforces the object and field boundary at mutation time.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["osac-fulfillment-ca"]
+    verbs: ["get", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: [{{ $controllerDeploymentName | quote }}]
+    verbs: ["patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $fullname }}-fulfillment-trust-sync
+  namespace: {{ $namespace }}
+  annotations:
+    {{- toYaml $attribution | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $fullname }}-fulfillment-trust-sync
+subjects:
+  - kind: ServiceAccount
+    name: {{ $syncServiceAccount }}
+    namespace: {{ $namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $fullname }}-fulfillment-trust-observer
+  namespace: {{ $namespace }}
+  annotations:
+    {{- toYaml $attribution | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["osac-fulfillment-ca"]
+    verbs: ["get"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $fullname }}-fulfillment-trust-observer
+  namespace: {{ $namespace }}
+  annotations:
+    {{- toYaml $attribution | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $fullname }}-fulfillment-trust-observer
+subjects:
+  - kind: ServiceAccount
+    name: {{ $observerServiceAccount }}
+    namespace: {{ $namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $fullname }}-fulfillment-trust-publisher
+  namespace: {{ $namespace }}
+  annotations:
+    {{- toYaml $attribution | nindent 4 }}
+rules:
+  # The admission service re-authenticates the publisher token and checks
+  # the ClusterOrder UID; this Role grants no direct Secret or workload write.
+  - apiGroups: [""]
+    resources: ["services/proxy"]
+    resourceNames: [{{ printf "https:%s:https" $admissionServiceName | quote }}]
+    verbs: ["create", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $fullname }}-fulfillment-trust-publisher
+  namespace: {{ $namespace }}
+  annotations:
+    {{- toYaml $attribution | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $fullname }}-fulfillment-trust-publisher
+subjects:
+  - kind: ServiceAccount
+    name: {{ $publisherServiceAccount }}
+    namespace: {{ $namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $fullname }}-fulfillment-trust-bootstrap
+  namespace: {{ $namespace }}
+  annotations:
+    {{- toYaml $attribution | nindent 4 }}
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: [{{ printf "%s-fulfillment-trust-admission" $fullname | quote }}]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: [{{ $storeName | quote }}, {{ $tlsSecretName | quote }}]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: [{{ $storeName | quote }}, {{ $tlsSecretName | quote }}]
+    verbs: ["delete", "patch"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["rolebindings"]
+    resourceNames: [{{ printf "%s-fulfillment-trust-sync" $fullname | quote }}]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $fullname }}-fulfillment-trust-bootstrap
+  namespace: {{ $namespace }}
+  annotations:
+    {{- toYaml $attribution | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $fullname }}-fulfillment-trust-bootstrap
+subjects:
+  - kind: ServiceAccount
+    name: {{ $bootstrapServiceAccount }}
+    namespace: {{ $namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $fullname }}-fulfillment-trust-bootstrap
+  annotations:
+    {{- toYaml $attribution | nindent 4 }}
+rules:
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources: ["validatingwebhookconfigurations"]
+    resourceNames: [{{ $webhookName | quote }}]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $fullname }}-fulfillment-trust-bootstrap
+  annotations:
+    {{- toYaml $attribution | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $fullname }}-fulfillment-trust-bootstrap
+subjects:
+  - kind: ServiceAccount
+    name: {{ $bootstrapServiceAccount }}
+    namespace: {{ $namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $fullname }}-fulfillment-trust-tokenreview
+  annotations:
+    {{- toYaml $attribution | nindent 4 }}
+rules:
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $fullname }}-fulfillment-trust-tokenreview
+  annotations:
+    {{- toYaml $attribution | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $fullname }}-fulfillment-trust-tokenreview
+subjects:
+  - kind: ServiceAccount
+    name: {{ $admissionServiceAccount }}
+    namespace: {{ $namespace }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $admissionServiceName }}
+  namespace: {{ $namespace }}
+  annotations:
+    service.beta.openshift.io/serving-cert-secret-name: {{ $tlsSecretName | quote }}
+    {{- toYaml $attribution | nindent 4 }}
+  labels:
+    {{- include "csi-driver.labels" . | nindent 4 }}
+    app.kubernetes.io/component: fulfillment-trust-admission
+spec:
+  selector:
+    {{- include "csi-driver.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: fulfillment-trust-admission
+  ports:
+    - name: https
+      port: 443
+      targetPort: https
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-fulfillment-trust-admission
+  namespace: {{ $namespace }}
+  annotations:
+    {{- toYaml $attribution | nindent 4 }}
+  labels:
+    {{- include "csi-driver.labels" . | nindent 4 }}
+    app.kubernetes.io/component: fulfillment-trust-admission
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "csi-driver.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: fulfillment-trust-admission
+  template:
+    metadata:
+      annotations:
+        {{- toYaml $attribution | nindent 8 }}
+      labels:
+        {{- include "csi-driver.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: fulfillment-trust-admission
+    spec:
+      serviceAccountName: {{ $admissionServiceAccount }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: trust-admission
+          image: "{{ $trust.admission.image.repository }}:{{ $admissionImageTag }}"
+          imagePullPolicy: {{ $trust.admission.image.pullPolicy }}
+          command: ["/usr/local/bin/trust-admission"]
+          args:
+            - "--tenant-namespace={{ $namespace }}"
+            - "--tls-cert-file=/var/run/osac-trust-admission/tls/tls.crt"
+            - "--tls-key-file=/var/run/osac-trust-admission/tls/tls.key"
+          ports:
+            - name: https
+              containerPort: 8443
+          readinessProbe:
+            httpGet:
+              scheme: HTTPS
+              path: /readyz
+              port: https
+          livenessProbe:
+            httpGet:
+              scheme: HTTPS
+              path: /healthz
+              port: https
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml $trust.admission.resources | nindent 12 }}
+          volumeMounts:
+            - name: tls
+              mountPath: /var/run/osac-trust-admission/tls
+              readOnly: true
+      volumes:
+        - name: tls
+          secret:
+            secretName: {{ $tlsSecretName }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: {{ $webhookName }}
+  annotations:
+    service.beta.openshift.io/inject-cabundle: "true"
+    {{- toYaml $attribution | nindent 4 }}
+  labels:
+    {{- include "csi-driver.labels" . | nindent 4 }}
+webhooks:
+  - name: fulfillment-trust-configmaps.osac.openshift.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Fail
+    matchPolicy: Equivalent
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ $namespace | quote }}
+    matchConditions:
+      - name: target-fulfillment-ca-configmap
+        expression: {{ printf "request.userInfo.username == %q || (object != null && object.metadata.name == %q) || (oldObject != null && oldObject.metadata.name == %q)" (printf "system:serviceaccount:%s:%s" $namespace $syncServiceAccount) "osac-fulfillment-ca" "osac-fulfillment-ca" | quote }}
+    clientConfig:
+      service:
+        namespace: {{ $namespace }}
+        name: {{ $admissionServiceName }}
+        path: /validate
+        port: 443
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["configmaps"]
+        scope: Namespaced
+  - name: fulfillment-trust-csi-deployments.osac.openshift.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Fail
+    matchPolicy: Equivalent
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ $namespace | quote }}
+    matchConditions:
+      - name: target-trust-enabled-csi-deployments
+        expression: >-
+          request.userInfo.username == {{ printf "%q" (printf "system:serviceaccount:%s:%s" $namespace $syncServiceAccount) }} || (
+            object.metadata.name != {{ printf "%q" (printf "%s-fulfillment-trust-admission" $fullname) }} &&
+            (oldObject == null || oldObject.metadata.name != {{ printf "%q" (printf "%s-fulfillment-trust-admission" $fullname) }}) &&
+            ((has(object.metadata.labels) && object.metadata.labels.exists(k, k == "osac.openshift.io/fulfillment-trust-client" && object.metadata.labels[k] == "true")) ||
+            (oldObject != null && has(oldObject.metadata.labels) && oldObject.metadata.labels.exists(k, k == "osac.openshift.io/fulfillment-trust-client" && oldObject.metadata.labels[k] == "true"))))
+    clientConfig:
+      service:
+        namespace: {{ $namespace }}
+        name: {{ $admissionServiceName }}
+        path: /validate
+        port: 443
+    rules:
+      - apiGroups: ["apps"]
+        apiVersions: ["v1"]
+        operations: ["UPDATE"]
+        resources: ["deployments"]
+        scope: Namespaced
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $fullname }}-fulfillment-trust-bootstrap
+  namespace: {{ $namespace }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    {{- toYaml $attribution | nindent 4 }}
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      annotations:
+        {{- toYaml $attribution | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ $bootstrapServiceAccount }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      containers:
+        - name: bind-trust-sync
+          image: {{ $bootstrapImage | quote }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: HOME
+              value: /tmp
+            - name: TRUST_TENANT
+              value: {{ $tenant | quote }}
+            - name: TRUST_ORDER_UID
+              value: {{ $orderUID | quote }}
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |-
+              kubectl annotate secret/{{ $storeName }} -n {{ $namespace }} --overwrite \
+                "osac.openshift.io/tenant=${TRUST_TENANT}" \
+                "osac.openshift.io/owner-reference=${TRUST_ORDER_UID}"
+              kubectl rollout status deployment/{{ $fullname }}-fulfillment-trust-admission -n {{ $namespace }} --timeout=300s
+              kubectl get validatingwebhookconfiguration/{{ $webhookName }}
+              kubectl get secret/{{ $storeName }} -n {{ $namespace }} -o jsonpath='{.data.records\.json}' | grep -q .
+              kubectl get secret/{{ $tlsSecretName }} -n {{ $namespace }} -o jsonpath='{.data.tls\.crt}' | grep -q .
+              kubectl annotate secret/{{ $tlsSecretName }} -n {{ $namespace }} --overwrite \
+                "osac.openshift.io/tenant=${TRUST_TENANT}" \
+                "osac.openshift.io/owner-reference=${TRUST_ORDER_UID}"
+              kubectl get rolebinding/{{ $fullname }}-fulfillment-trust-sync -n {{ $namespace }} >/dev/null
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            {{- toYaml $trust.admission.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $fullname }}-fulfillment-trust-cleanup
+  namespace: {{ $namespace }}
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    {{- toYaml $attribution | nindent 4 }}
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      annotations:
+        {{- toYaml $attribution | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ $bootstrapServiceAccount }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      containers:
+        - name: remove-trust-sync-binding
+          image: {{ $bootstrapImage | quote }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: HOME
+              value: /tmp
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |-
+              kubectl delete secret/{{ $storeName }} -n {{ $namespace }} --ignore-not-found
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            {{- toYaml $trust.admission.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+{{/* Keep admission ready before post-install hooks, preserving records on upgrades. */}}
+{{- $expectedBundleStore := lookup "v1" "Secret" $namespace $storeName -}}
+{{- $recordsData := "W10=" -}}
+{{- with $expectedBundleStore -}}
+  {{- with .data -}}
+    {{- if hasKey . "records.json" -}}
+      {{- $recordsData = index . "records.json" -}}
+    {{- end -}}
+  {{- end -}}
+{{- end }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $storeName }}
+  namespace: {{ $namespace }}
+  annotations:
+    {{- toYaml $attribution | nindent 4 }}
+type: Opaque
+data:
+  records.json: {{ $recordsData | quote }}
+{{- end }}

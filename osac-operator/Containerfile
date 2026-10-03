@@ -27,11 +27,13 @@ COPY --chown=1001:1001 osac-operator/ osac-operator/
 COPY --chown=1001:1001 bare-metal-fulfillment-operator/ bare-metal-fulfillment-operator/
 
 WORKDIR /opt/app-root/src/osac-operator
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o manager cmd/main.go
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o manager ./cmd
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o console-proxy cmd/console-proxy/main.go
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o trust-admission cmd/trust-admission/main.go
 
 FROM registry.access.redhat.com/ubi10-minimal:10.2-1790075626
 COPY --from=builder /opt/app-root/src/osac-operator/manager /usr/local/bin/
 COPY --from=builder /opt/app-root/src/osac-operator/console-proxy /usr/local/bin/
+COPY --from=builder /opt/app-root/src/osac-operator/trust-admission /usr/local/bin/
 USER 1001
 ENTRYPOINT ["/usr/local/bin/manager"]

@@ -153,7 +153,7 @@ var _ = Describe("update tenant annotation", func() {
 		DeferCleanup(ctrl.Finish)
 	})
 
-	It("should set tenant annotation and operators when creating a new ClusterOrder CR", func() {
+	It("creates a new ClusterOrder with tenant identity and no trust opt-in annotation", func() {
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
 
@@ -208,6 +208,7 @@ var _ = Describe("update tenant annotation", func() {
 
 		createdCR := list.Items[0]
 		Expect(createdCR.GetAnnotations()).To(HaveKeyWithValue(annotations.Tenant, tenantName))
+		Expect(createdCR.GetAnnotations()).NotTo(HaveKey("osac.openshift.io/fulfillment-trust-enabled"))
 		Expect(createdCR.GetLabels()).To(HaveKeyWithValue(labels.ClusterOrderUuid, clusterID))
 		Expect(createdCR.Spec.AddOnOperators).To(Equal([]string{"operator-one", "operator-two"}))
 	})

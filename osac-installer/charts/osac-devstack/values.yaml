@@ -55,7 +55,7 @@ ui:
     fulfillmentApiUrl: "https://fulfillment-api.osac.localhost:8000"
     oidcClientId: osac-ui
     oidcIssuerUrl: "https://keycloak.osac.localhost:8443/realms/osac"
-    tlsInsecure: "1"
+    tlsInsecure: "0"
 
 # --- Catalog Seeding ---
 catalog:

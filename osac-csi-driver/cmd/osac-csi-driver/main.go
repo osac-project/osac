@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
+	"errors"
 	"flag"
 	"fmt"
 	"net/http"
@@ -43,6 +46,8 @@ func main() {
 		"Path to a file containing the OAuth2 client secret for fulfillment-service authentication")
 	fulfillmentIssuerURL := flag.String("fulfillment-issuer-url", "",
 		"Keycloak issuer URL for client_credentials token exchange (e.g. https://keycloak.example.com/realms/myrealm)")
+	fulfillmentCAFile := flag.String("fulfillment-ca-file", "",
+		"Path to a PEM CA bundle for verified fulfillment-service and OAuth TLS connections")
 	allowStub := flag.Bool("allow-stub", false, "Allow the in-memory volume stub when fulfillment endpoint is empty")
 	grpcInsecure := flag.Bool("grpc-insecure", false, "Skip TLS server certificate verification")
 	vendorSocketsFlag := flag.String("vendor-sockets", "",
@@ -80,6 +85,7 @@ func main() {
 
 	if err := validateFulfillmentFlags(
 		*fulfillmentEndpoint,
+		*fulfillmentCAFile, *grpcInsecure,
 		*fulfillmentClientID, *fulfillmentClientSecretFile, *fulfillmentIssuerURL,
 		*allowStub,
 	); err != nil {
@@ -93,7 +99,7 @@ func main() {
 		// Establish the gRPC connection to the fulfillment-service and back the
 		// real VolumeClient with it. The connection carries transport
 		// credentials and the per-RPC OAuth2 token (see dialFulfillment).
-		conn, err := dialFulfillment(*fulfillmentEndpoint, *grpcInsecure,
+		conn, err := dialFulfillment(*fulfillmentEndpoint, *fulfillmentCAFile, *grpcInsecure,
 			*fulfillmentClientID, *fulfillmentClientSecretFile, *fulfillmentIssuerURL)
 		if err != nil {
 			klog.Fatalf("Failed to connect to fulfillment-service: %v", err)
@@ -127,8 +133,16 @@ func main() {
 // set or all empty, and that --fulfillment-endpoint is not set without
 // credentials. Partial configuration is a user error.
 func validateFulfillmentFlags(
-	endpoint, clientID, clientSecretFile, issuerURL string, allowStub bool,
+	endpoint, caFile string, grpcInsecure bool,
+	clientID, clientSecretFile, issuerURL string, allowStub bool,
 ) error {
+	if caFile != "" && endpoint == "" {
+		return fmt.Errorf("--fulfillment-ca-file requires --fulfillment-endpoint")
+	}
+	if caFile != "" && grpcInsecure {
+		return fmt.Errorf("--fulfillment-ca-file cannot be combined with --grpc-insecure")
+	}
+
 	set := 0
 	if clientID != "" {
 		set++
@@ -161,10 +175,13 @@ func validateFulfillmentFlags(
 }
 
 func dialFulfillment(
-	endpoint string, insecureSkipVerify bool,
+	endpoint, caFile string, insecureSkipVerify bool,
 	clientID, clientSecretFile, issuerURL string,
 ) (*grpc.ClientConn, error) {
-	tlsCfg := newTLSConfig(insecureSkipVerify)
+	tlsCfg, err := fulfillmentTLSConfig(caFile, insecureSkipVerify)
+	if err != nil {
+		return nil, err
+	}
 	// The OpenShift router does not support ALPN, so we use the
 	// experimental credentials package that disables the ALPN check.
 	// See https://github.com/grpc/grpc-go/issues/434
@@ -174,7 +191,7 @@ func dialFulfillment(
 
 	if clientID != "" && clientSecretFile != "" && issuerURL != "" {
 		ts, err := newClientCredentialsTokenSource(
-			context.Background(), clientID, clientSecretFile, issuerURL, insecureSkipVerify,
+			context.Background(), clientID, clientSecretFile, issuerURL, tlsCfg,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("setting up client credentials: %w", err)
@@ -189,14 +206,11 @@ func dialFulfillment(
 
 // newClientCredentialsTokenSource reads the client secret from a file and
 // returns an oauth2.TokenSource that uses the OAuth2 client_credentials grant
-// to obtain access tokens from the issuer's token endpoint. insecureSkipVerify
-// applies to the token endpoint's TLS verification, matching the trust
-// decision already made for the fulfillment-service gRPC transport --
-// otherwise a self-signed issuer cert is trusted for gRPC but rejected here.
+// to obtain access tokens from the issuer's token endpoint.
 func newClientCredentialsTokenSource(
 	ctx context.Context,
 	clientID, clientSecretFile, issuerURL string,
-	insecureSkipVerify bool,
+	tlsConfig *tls.Config,
 ) (oauth2.TokenSource, error) {
 	data, err := os.ReadFile(clientSecretFile)
 	if err != nil {
@@ -212,7 +226,7 @@ func newClientCredentialsTokenSource(
 		return nil, fmt.Errorf("building token URL: %w", err)
 	}
 
-	httpClient := newTokenHTTPClient(insecureSkipVerify)
+	httpClient := newTokenHTTPClient(tlsConfig)
 	ctx = context.WithValue(ctx, oauth2.HTTPClient, httpClient)
 
 	cfg := &clientcredentials.Config{
@@ -223,22 +237,78 @@ func newClientCredentialsTokenSource(
 	return cfg.TokenSource(ctx), nil
 }
 
-func newTokenHTTPClient(insecureSkipVerify bool) *http.Client {
+func newTokenHTTPClient(tlsConfig *tls.Config) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.TLSClientConfig = newTLSConfig(insecureSkipVerify)
+	if tlsConfig == nil {
+		tlsConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	}
+	transport.TLSClientConfig = tlsConfig.Clone()
 	return &http.Client{
 		Transport: transport,
 		Timeout:   tokenHTTPTimeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) == 0 {
-				return nil
-			}
-			if req.URL.Scheme != "https" || req.URL.Host != via[0].URL.Host {
-				return fmt.Errorf("refusing token redirect to %s", req.URL)
-			}
-			return nil
+			return errors.New("refusing token redirect")
 		},
 	}
+}
+
+func fulfillmentTLSConfig(caFile string, insecureSkipVerify bool) (*tls.Config, error) {
+	if caFile == "" {
+		return newTLSConfig(insecureSkipVerify), nil
+	}
+	if insecureSkipVerify {
+		return nil, fmt.Errorf("--fulfillment-ca-file cannot be combined with --grpc-insecure")
+	}
+
+	pemData, err := os.ReadFile(caFile)
+	if err != nil {
+		return nil, fmt.Errorf("reading fulfillment CA file %s: %w", caFile, err)
+	}
+	if len(strings.TrimSpace(string(pemData))) == 0 {
+		return nil, fmt.Errorf("fulfillment CA file %s is empty", caFile)
+	}
+
+	rootCAs, err := fulfillmentCACertPool(pemData)
+	if err != nil {
+		return nil, fmt.Errorf("validating fulfillment CA file %s: %w", caFile, err)
+	}
+
+	return &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		RootCAs:    rootCAs,
+	}, nil
+}
+
+func fulfillmentCACertPool(pemData []byte) (*x509.CertPool, error) {
+	pool := x509.NewCertPool()
+	certificateCount := 0
+	for len(pemData) > 0 {
+		block, rest := pem.Decode(pemData)
+		if block == nil {
+			if len(strings.TrimSpace(string(pemData))) == 0 {
+				break
+			}
+			return nil, fmt.Errorf("contains malformed PEM data")
+		}
+		if block.Type != "CERTIFICATE" {
+			return nil, fmt.Errorf("contains a %q PEM block instead of a certificate", block.Type)
+		}
+		certificate, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("contains an invalid certificate: %w", err)
+		}
+		if (!certificate.IsCA && certificate.Version != 1) ||
+			(certificate.KeyUsage != 0 && certificate.KeyUsage&x509.KeyUsageCertSign == 0) {
+			return nil, fmt.Errorf("contains an invalid CA certificate")
+		}
+		pool.AddCert(certificate)
+		certificateCount++
+		pemData = rest
+	}
+	if certificateCount == 0 {
+		return nil, fmt.Errorf("does not contain a PEM certificate")
+	}
+	return pool, nil
 }
 
 func newTLSConfig(insecureSkipVerify bool) *tls.Config {

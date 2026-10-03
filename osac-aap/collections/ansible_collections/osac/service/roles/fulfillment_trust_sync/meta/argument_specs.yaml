@@ -1,0 +1,19 @@
+---
+argument_specs:
+  main:
+    short_description: Synchronize the approved fulfillment CA to a tenant CSI controller
+    options:
+      osac_job_vars:
+        type: dict
+        required: true
+        description: >-
+          Trust-sync launch input. It contains a protected credential reference,
+          a ClusterOrder resource, and the approved fulfillment trust bundle.
+      fulfillment_trust_sync_rollout_retries:
+        type: int
+        required: false
+        default: 60
+      fulfillment_trust_sync_rollout_delay:
+        type: int
+        required: false
+        default: 2

@@ -20,6 +20,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -116,6 +117,8 @@ const (
 	envClusterControlPlaneStartingStallThreshold    = "OSAC_CLUSTER_CONTROL_PLANE_STARTING_STALL_THRESHOLD"
 	envClusterWorkersJoiningStallThreshold          = "OSAC_CLUSTER_WORKERS_JOINING_STALL_THRESHOLD"
 	envClusterWorkersJoiningStallThresholdOverrides = "OSAC_CLUSTER_WORKERS_JOINING_STALL_THRESHOLD_OVERRIDES"
+	envEnableFulfillmentTrust                       = "OSAC_ENABLE_FULFILLMENT_TRUST_RECONCILER"
+	envFulfillmentTrustTenantNamespace              = "OSAC_FULFILLMENT_TRUST_TENANT_NAMESPACE"
 
 	// Storage controller AAP template overrides
 	envStorageBackendProvisionTemplate   = "OSAC_STORAGE_BACKEND_AAP_PROVISION_TEMPLATE"
@@ -366,7 +369,7 @@ func targetClusterFromManager(mgr mcmanager.Manager) multicluster.ClusterName {
 // setupClusterControllers registers the ClusterOrder controller and, when grpcConn is set,
 // the cluster Feedback controller.
 func setupClusterControllers(
-	mgr mcmanager.Manager, grpcConn *grpc.ClientConn,
+	mgr mcmanager.Manager, grpcConn grpc.ClientConnInterface,
 	maxJobHistory int,
 ) error {
 	localMgr := mgr.GetLocalManager()
@@ -441,7 +444,7 @@ func clusterOrderStallThresholdsFromEnv() controller.ClusterOrderStallThresholds
 // the ComputeInstance Feedback controller.
 func setupComputeInstanceControllers(
 	mgr mcmanager.Manager,
-	grpcConn *grpc.ClientConn,
+	grpcConn grpc.ClientConnInterface,
 	maxJobHistory int,
 ) error {
 	localMgr := mgr.GetLocalManager()
@@ -502,7 +505,7 @@ func setupTenantController(mgr mcmanager.Manager) error {
 // is registered before entering the AAP provisioning path, and wires the Tier
 // and Backend API clients used to validate and pass through storage tier
 // definitions.
-func setupStorageController(mgr mcmanager.Manager, grpcConn *grpc.ClientConn, maxJobHistory int) error {
+func setupStorageController(mgr mcmanager.Manager, grpcConn grpc.ClientConnInterface, maxJobHistory int) error {
 	targetCluster := targetClusterFromManager(mgr)
 	tenantNamespace := os.Getenv(envTenantNamespace)
 
@@ -570,12 +573,36 @@ func setupStorageController(mgr mcmanager.Manager, grpcConn *grpc.ClientConn, ma
 
 // setupControllers registers all enabled controllers with the manager.
 func setupControllers(
-	mgr mcmanager.Manager, grpcConn *grpc.ClientConn,
-	flags *controllerFlags, maxJobHistory int,
+	mgr mcmanager.Manager, grpcConn grpc.ClientConnInterface,
+	flags *controllerFlags, maxJobHistory int, fulfillmentTrustSourceName string,
 ) error {
 	if flags.Cluster {
 		if err := setupClusterControllers(mgr, grpcConn, maxJobHistory); err != nil {
 			return fmt.Errorf("cluster controllers: %w", err)
+		}
+		if helpers.GetEnvWithDefault(envEnableFulfillmentTrust, false) {
+			local := mgr.GetLocalManager()
+			namespace := os.Getenv(envClusterOrderNamespace)
+			if namespace == "" {
+				return fmt.Errorf("fulfillment trust requires a ClusterOrder namespace")
+			}
+			tenantNamespace := os.Getenv(envFulfillmentTrustTenantNamespace)
+			if tenantNamespace == "" {
+				return fmt.Errorf("fulfillment trust requires a tenant namespace")
+			}
+			reconciler := &controller.FulfillmentTrustReconciler{
+				Client: local.GetClient(), APIReader: local.GetAPIReader(), Enabled: true,
+				ClusterOrderNamespace: namespace, SourceNamespace: namespace,
+				SourceName:      fulfillmentTrustSourceName,
+				TenantNamespace: tenantNamespace,
+				Targets: &controller.HostedClusterTrustTargetResolver{
+					Kubeconfigs: &controller.HostedClusterKubeconfigResolver{Management: local.GetAPIReader()},
+					Namespace:   tenantNamespace,
+				},
+			}
+			if err := reconciler.SetupWithManager(mgr); err != nil {
+				return fmt.Errorf("fulfillment trust controller: %w", err)
+			}
 		}
 	}
 	if flags.ComputeInstance {
@@ -614,7 +641,7 @@ func setupControllers(
 // setupVolumeControllers registers the Volume resource controller and, when
 // grpcConn is set, the Volume feedback controller. Vendor implementations are
 // selected by the provider-keyed registry built from OSAC_VENDOR_CONTROLLERS.
-func setupVolumeControllers(mgr mcmanager.Manager, grpcConn *grpc.ClientConn) error {
+func setupVolumeControllers(mgr mcmanager.Manager, grpcConn grpc.ClientConnInterface) error {
 	localMgr := mgr.GetLocalManager()
 	volumeNamespace := os.Getenv(envVolumeNamespace)
 
@@ -745,7 +772,7 @@ func parseVendorControllers(s string) (map[string]string, error) {
 // feedback controllers when grpcConn is set.
 func setupNetworkingControllers(
 	mgr mcmanager.Manager,
-	grpcConn *grpc.ClientConn,
+	grpcConn grpc.ClientConnInterface,
 	maxJobHistory int,
 	enableBareMetalInstance bool,
 ) error {
@@ -891,7 +918,7 @@ func setupNetworkClassCapabilitiesController(
 }
 
 func setupVirtualNetworkControllers(
-	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn *grpc.ClientConn,
+	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn grpc.ClientConnInterface,
 	networkingNamespace string, provider provisioning.ProvisioningProvider,
 	statusPollInterval time.Duration, maxJobHistory int, targetCluster multicluster.ClusterName,
 	resolver *dispatcher.Resolver, networkProvisioningEnabled bool,
@@ -914,7 +941,7 @@ func setupVirtualNetworkControllers(
 }
 
 func setupSubnetControllers(
-	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn *grpc.ClientConn,
+	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn grpc.ClientConnInterface,
 	networkingNamespace string, provider provisioning.ProvisioningProvider,
 	statusPollInterval time.Duration, maxJobHistory int, targetCluster multicluster.ClusterName,
 	resolver *dispatcher.Resolver,
@@ -939,7 +966,7 @@ func setupSubnetControllers(
 }
 
 func setupSecurityGroupControllers(
-	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn *grpc.ClientConn,
+	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn grpc.ClientConnInterface,
 	networkingNamespace string, provider provisioning.ProvisioningProvider,
 	statusPollInterval time.Duration, maxJobHistory int, targetCluster multicluster.ClusterName,
 	resolver *dispatcher.Resolver, networkProvisioningEnabled bool,
@@ -962,7 +989,7 @@ func setupSecurityGroupControllers(
 }
 
 func setupExternalIPPoolControllers(
-	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn *grpc.ClientConn,
+	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn grpc.ClientConnInterface,
 	networkingNamespace string, provider provisioning.ProvisioningProvider,
 	statusPollInterval time.Duration, maxJobHistory int, targetCluster multicluster.ClusterName,
 	resolver *dispatcher.Resolver, networkClassesClient privatev1.NetworkClassesClient,
@@ -987,7 +1014,7 @@ func setupExternalIPPoolControllers(
 }
 
 func setupExternalIPControllers(
-	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn *grpc.ClientConn,
+	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn grpc.ClientConnInterface,
 	networkingNamespace string, provider provisioning.ProvisioningProvider,
 	statusPollInterval time.Duration, maxJobHistory int, targetCluster multicluster.ClusterName,
 	resolver *dispatcher.Resolver, networkClassesClient privatev1.NetworkClassesClient,
@@ -1012,7 +1039,7 @@ func setupExternalIPControllers(
 }
 
 func setupExternalIPAttachmentControllers(
-	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn *grpc.ClientConn,
+	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn grpc.ClientConnInterface,
 	networkingNamespace, computeInstanceNamespace, clusterOrderNamespace, baremetalInstanceNamespace string,
 	provider provisioning.ProvisioningProvider,
 	statusPollInterval time.Duration, maxJobHistory int, targetCluster multicluster.ClusterName,
@@ -1049,7 +1076,7 @@ func setupExternalIPAttachmentControllers(
 }
 
 func setupNATGatewayControllers(
-	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn *grpc.ClientConn,
+	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn grpc.ClientConnInterface,
 	networkingNamespace string, provider provisioning.ProvisioningProvider,
 	statusPollInterval time.Duration, maxJobHistory int, targetCluster multicluster.ClusterName,
 	resolver *dispatcher.Resolver, networkProvisioningEnabled bool,
@@ -1075,7 +1102,7 @@ func setupNATGatewayControllers(
 // when a gRPC connection to the fulfillment service is available.
 func setupBareMetalInstanceControllers(
 	mgr mcmanager.Manager,
-	grpcConn *grpc.ClientConn,
+	grpcConn grpc.ClientConnInterface,
 ) error {
 	localMgr := mgr.GetLocalManager()
 	bareMetalInstanceNamespace := os.Getenv(envBareMetalInstanceNamespace)
@@ -1108,6 +1135,7 @@ func main() {
 	var grpcPlaintext bool
 	var grpcInsecure bool
 	var grpcTokenFile string
+	var fulfillmentCAFile string
 	var fulfillmentServerAddress string
 	var remoteClusterKubeconfig string
 	var tlsOpts []func(*tls.Config)
@@ -1144,6 +1172,7 @@ func main() {
 		os.Getenv("OSAC_FULFILLMENT_SERVER_ADDRESS"),
 		"Address of the fulfillment server.",
 	)
+	flag.StringVar(&fulfillmentCAFile, "fulfillment-ca-file", "", "Management CA bundle for verified fulfillment TLS.")
 	flag.StringVar(
 		&remoteClusterKubeconfig,
 		"remote-cluster-kubeconfig",
@@ -1249,7 +1278,8 @@ func main() {
 
 	cfg := ctrl.GetConfigOrDie()
 
-	mgr, err := mcmanager.New(cfg, remoteProvider, manager.Options{
+	fulfillmentTrustSourceName := controller.DefaultFulfillmentTrustSourceName
+	managerOptions := manager.Options{
 		Scheme:                 localScheme,
 		Metrics:                metricsServerOptions,
 		WebhookServer:          webhookServer,
@@ -1267,22 +1297,62 @@ func main() {
 		// if you are doing or is intended to do any operation such as perform cleanups
 		// after the manager stops then its usage might be unsafe.
 		// LeaderElectionReleaseOnCancel: true,
-	})
+	}
+	if helpers.GetEnvWithDefault(envEnableFulfillmentTrust, false) && ctrlFlags.Cluster {
+		sourceNamespace := os.Getenv(envClusterOrderNamespace)
+		if sourceNamespace == "" {
+			setupLog.Error(
+				fmt.Errorf("fulfillment trust requires a ClusterOrder namespace"),
+				"invalid fulfillment trust cache configuration",
+			)
+			os.Exit(1)
+		}
+		managerOptions.Cache = fulfillmentTrustCacheOptions(
+			sourceNamespace, fulfillmentTrustSourceName, os.Getenv(envNetworkingNamespace),
+		)
+	}
+	mgr, err := mcmanager.New(cfg, remoteProvider, managerOptions)
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
 	}
 
 	// Create the gRPC connection:
-	var grpcConn *grpc.ClientConn
+	var grpcConn grpc.ClientConnInterface
 	if fulfillmentServerAddress != "" {
 		setupLog.Info("gRPC connection to fulfillment service is enabled")
-		grpcConn, err = createGrpcConn(grpcPlaintext, grpcInsecure, grpcTokenFile, fulfillmentServerAddress)
-		if err != nil {
-			setupLog.Error(err, "failed to create gRPC connection to fulfillment service")
-			os.Exit(1)
+		if helpers.GetEnvWithDefault(envEnableFulfillmentTrust, false) {
+			if fulfillmentCAFile == "" || grpcPlaintext || grpcInsecure {
+				setupLog.Error(
+					fmt.Errorf("verified fulfillment TLS requires --fulfillment-ca-file and forbids insecure transport"),
+					"invalid fulfillment TLS configuration",
+				)
+				os.Exit(1)
+			}
+			verified := &verifiedFulfillmentConn{
+				address: fulfillmentServerAddress, caFile: fulfillmentCAFile, tokenFile: grpcTokenFile,
+			}
+			if err := verified.validateCAFile(); err != nil {
+				setupLog.Error(err, "invalid fulfillment CA bundle")
+				os.Exit(1)
+			}
+			defer verified.close()
+			if err := mgr.GetLocalManager().Add(manager.RunnableFunc(verified.watch)); err != nil {
+				setupLog.Error(err, "failed to register fulfillment CA watcher")
+				os.Exit(1)
+			}
+			grpcConn = verified
+		} else {
+			legacy, dialErr := createGrpcConn(
+				grpcPlaintext, grpcInsecure, grpcTokenFile, fulfillmentServerAddress, fulfillmentCAFile,
+			)
+			if dialErr != nil {
+				setupLog.Error(dialErr, "failed to create gRPC connection to fulfillment service")
+				os.Exit(1)
+			}
+			defer legacy.Close() //nolint:errcheck
+			grpcConn = legacy
 		}
-		defer grpcConn.Close() //nolint:errcheck
 	} else {
 		setupLog.Info("gRPC connection to fulfillment service is disabled")
 	}
@@ -1292,7 +1362,7 @@ func main() {
 	})
 	setupLog.Info("job history configuration", "maxJobs", maxJobHistory)
 
-	if err := setupControllers(mgr, grpcConn, ctrlFlags, maxJobHistory); err != nil {
+	if err := setupControllers(mgr, grpcConn, ctrlFlags, maxJobHistory, fulfillmentTrustSourceName); err != nil {
 		setupLog.Error(err, "unable to setup controllers")
 		os.Exit(1)
 	}
@@ -1365,7 +1435,11 @@ func ignoreCanceled(err error) error {
 }
 
 //nolint:nakedret
-func createGrpcConn(plaintext, insecure bool, tokenFile, serverAddress string) (result *grpc.ClientConn, err error) {
+func createGrpcConn(
+	plaintext, insecure bool,
+	tokenFile, serverAddress string,
+	caFiles ...string,
+) (result *grpc.ClientConn, err error) {
 	// Configure use of TLS:
 	var dialOpts []grpc.DialOption
 	var transportCreds credentials.TransportCredentials
@@ -1375,6 +1449,11 @@ func createGrpcConn(plaintext, insecure bool, tokenFile, serverAddress string) (
 		tlsConfig := &tls.Config{}
 		if insecure {
 			tlsConfig.InsecureSkipVerify = true
+		} else if len(caFiles) > 0 && caFiles[0] != "" {
+			tlsConfig.RootCAs, err = loadFulfillmentCAPool(caFiles[0])
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		// TODO: This should have been the non-experimental package, but we need to use this one because
@@ -1408,6 +1487,14 @@ func createGrpcConn(plaintext, insecure bool, tokenFile, serverAddress string) (
 
 	result = conn
 	return
+}
+
+func loadFulfillmentCAPool(caFile string) (*x509.CertPool, error) {
+	bundle, err := os.ReadFile(caFile)
+	if err != nil {
+		return nil, fmt.Errorf("read fulfillment CA bundle: %w", err)
+	}
+	return verifiedCAPool(bundle)
 }
 
 // fileTokenSource is a token source that reads the token from a file whenever it is needed.

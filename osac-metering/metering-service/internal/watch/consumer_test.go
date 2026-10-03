@@ -1627,6 +1627,99 @@ var _ = Describe("Consumer", func() {
 			Expect(pub.published[3].Type()).To(Equal(events.EventResumed),
 				"reactivation must be resumed.v1 once the consumer has recorded EverBillable itself")
 		})
+
+		It("emits resumed.v1 when STARTING and RUNNING have the same second-precision timestamp", func() {
+			// Regression: handleTransientState advances TransitionTime to the
+			// STARTING event's timestamp. When the subsequent RUNNING event
+			// arrives with the same second-precision timestamp (common because
+			// Kubernetes lastTransitionTime has second precision),
+			// transitionTimeIsStale used to evaluate !T.After(T) == true and
+			// incorrectly drop the RUNNING event as stale. The resumed.v1
+			// CloudEvent was never emitted.
+			store := newMockStore()
+			baseTime := time.Date(2026, 3, 15, 12, 0, 0, 0, time.UTC)
+			stoppedTime := baseTime.Add(time.Hour)
+			// STARTING and RUNNING share the exact same second-precision timestamp.
+			resumeTime := baseTime.Add(2 * time.Hour)
+
+			// Seed the store with a compute instance that was previously
+			// running and then stopped (EverBillable=true).
+			store.states["vm-same-ts"] = projection.ResourceState{
+				ResourceID:         "vm-same-ts",
+				ResourceType:       events.ResourceTypeComputeInstance,
+				TenantID:           "tenant-1",
+				CurrentState:       "RUNNING",
+				IsBillable:         true,
+				EverBillable:       true,
+				FulfillmentVersion: 1,
+				TransitionTime:     baseTime,
+				BillingDimensions:  map[string]any{"instance_type": "gpu-h100"},
+				BillableSince:      &baseTime,
+			}
+
+			// v2: STOPPED — suspends billing.
+			stoppedCI := makeComputeInstance("vm-same-ts", "tenant-1")
+			stoppedCI.Metadata.CreationTimestamp = timestamppb.New(baseTime)
+			stoppedCI.Status.StateTransitionTime = timestamppb.New(stoppedTime)
+			stoppedCI.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPED
+			stoppedCI.Metadata.Version = 2
+			stoppedEvent := &privatev1.Event{
+				Id:      "evt-stop",
+				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+				Payload: &privatev1.Event_ComputeInstance{ComputeInstance: stoppedCI},
+			}
+
+			// v3: STARTING at resumeTime — transient, handleTransientState
+			// advances the projection's TransitionTime to resumeTime.
+			startingCI := makeComputeInstance("vm-same-ts", "tenant-1")
+			startingCI.Metadata.CreationTimestamp = timestamppb.New(baseTime)
+			startingCI.Status.StateTransitionTime = timestamppb.New(resumeTime)
+			startingCI.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING
+			startingCI.Metadata.Version = 3
+			startingEvent := &privatev1.Event{
+				Id:      "evt-starting",
+				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+				Payload: &privatev1.Event_ComputeInstance{ComputeInstance: startingCI},
+			}
+
+			// v4: RUNNING at SAME resumeTime — must not be dropped as stale.
+			runningCI := makeComputeInstance("vm-same-ts", "tenant-1")
+			runningCI.Metadata.CreationTimestamp = timestamppb.New(baseTime)
+			runningCI.Status.StateTransitionTime = timestamppb.New(resumeTime)
+			runningCI.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING
+			runningCI.Metadata.Version = 4
+			runningEvent := &privatev1.Event{
+				Id:      "evt-running-resume",
+				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+				Payload: &privatev1.Event_ComputeInstance{ComputeInstance: runningCI},
+			}
+
+			stream := &mockWatchStream{
+				responses: []*privatev1.EventsWatchResponse{
+					makeResponse(stoppedEvent),
+					makeResponse(startingEvent),
+					makeResponse(runningEvent),
+				},
+			}
+			client.results = []mockStreamResult{{stream: stream}}
+
+			testCtx, testCancel := context.WithTimeout(ctx, time.Second)
+			defer testCancel()
+
+			pub := &mockPublisher{published: make([]cloudevents.Event, 0, 2), cancelFunc: cancel}
+			consumer := newConsumerWithStore(pub, store)
+
+			err := consumer.Run(testCtx)
+			Expect(err).ToNot(HaveOccurred())
+
+			pub.mu.Lock()
+			defer pub.mu.Unlock()
+			Expect(pub.published).To(HaveLen(2),
+				"expected suspended.v1 + resumed.v1; STARTING is transient (no event)")
+			Expect(pub.published[0].Type()).To(Equal(events.EventSuspended))
+			Expect(pub.published[1].Type()).To(Equal(events.EventResumed),
+				"resumed.v1 must not be dropped when STARTING and RUNNING share the same second-precision timestamp")
+		})
 	})
 
 	Describe("CaaS Cluster events", func() {

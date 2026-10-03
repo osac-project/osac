@@ -814,6 +814,18 @@ func setupNetworkingControllers(
 	); err != nil {
 		return err
 	}
+	fabricDomainProvider := provisioning.NewAAPProvider(
+		aapClient,
+		fmt.Sprintf("%s-create-fabric-domain", templatePrefix),
+		fmt.Sprintf("%s-delete-fabric-domain", templatePrefix),
+	)
+	if err := setupFabricDomainControllers(
+		mgr, localMgr, grpcConn, networkingNamespace, fabricDomainProvider,
+		networkClassesClient, statusPollInterval, maxJobHistory,
+		networkProvisioningEnabled,
+	); err != nil {
+		return err
+	}
 
 	if err := setupSubnetControllers(
 		mgr, localMgr, grpcConn, networkingNamespace,
@@ -909,6 +921,39 @@ func setupVirtualNetworkControllers(
 	reconciler.NetworkProvisioningEnabled = networkProvisioningEnabled
 	if err := reconciler.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("virtualnetwork controller: %w", err)
+	}
+	return nil
+}
+
+func setupFabricDomainControllers(
+	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn *grpc.ClientConn,
+	networkingNamespace string, provider provisioning.ProvisioningProvider,
+	networkClassesClient privatev1.NetworkClassesClient,
+	statusPollInterval time.Duration, maxJobHistory int,
+	networkProvisioningEnabled bool,
+) error {
+	var instanceTypesClient privatev1.BareMetalInstanceTypesClient
+	var fabricDomainsClient privatev1.FabricDomainsClient
+	var virtualNetworksClient privatev1.VirtualNetworksClient
+	if grpcConn != nil {
+		instanceTypesClient = privatev1.NewBareMetalInstanceTypesClient(grpcConn)
+		fabricDomainsClient = privatev1.NewFabricDomainsClient(grpcConn)
+		virtualNetworksClient = privatev1.NewVirtualNetworksClient(grpcConn)
+		if err := controller.NewFabricDomainFeedbackReconciler(
+			localMgr.GetClient(), grpcConn, networkingNamespace,
+		).SetupWithManager(mgr); err != nil {
+			return fmt.Errorf("fabricdomain feedback controller: %w", err)
+		}
+	}
+	reconciler := controller.NewFabricDomainReconciler(
+		mgr, networkingNamespace, provider, networkClassesClient, instanceTypesClient,
+		statusPollInterval, maxJobHistory,
+	)
+	reconciler.FabricDomainsClient = fabricDomainsClient
+	reconciler.VirtualNetworksClient = virtualNetworksClient
+	reconciler.NetworkProvisioningEnabled = networkProvisioningEnabled
+	if err := reconciler.SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("fabricdomain controller: %w", err)
 	}
 	return nil
 }

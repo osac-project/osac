@@ -1,0 +1,32 @@
+---
+- name: Validate ServerCluster provisioning fields
+  ansible.builtin.assert:
+    that:
+      - server_cluster.metadata.name is defined
+      - server_cluster.spec.servers is defined
+      - server_cluster.spec.templateId is defined
+      - server_cluster.spec.vpcId is defined
+      - server_cluster.spec.region is defined
+      - server_cluster.spec.vpcId | string is match('^[1-9][0-9]*$')
+      - server_cluster.spec.backendId | default('') | string == '' or server_cluster.spec.backendId | string is match('^[1-9][0-9]*$')
+    fail_msg: "ServerCluster requires a name, servers, templateId, region, and a positive numeric vpcId/backendId"
+
+- name: Create or update ServerCluster in Netris
+  ansible.builtin.include_role:
+    name: netris.controller.server_cluster
+    tasks_from: create
+  vars:
+    server_cluster_name: "{{ server_cluster.metadata.name }}"
+    server_cluster_site_id: "{{ server_cluster.spec.siteId | default((netris_region_site_map | default({}))[server_cluster.spec.region] | default(netris_site_id)) | int }}"
+    server_cluster_servers: "{{ server_cluster.spec.servers }}"
+    server_cluster_template_id: "{{ server_cluster.spec.templateId | int }}"
+    server_cluster_vpc_id: "{{ server_cluster.spec.vpcId | int }}"
+    server_cluster_tags: "{{ server_cluster.spec.tags | default([]) }}"
+    server_cluster_backend_id: "{{ server_cluster.spec.backendId | default('') }}"
+
+- name: Publish ServerCluster identifiers as AAP artifacts
+  ansible.builtin.set_stats:
+    data:
+      server_cluster_id: "{{ server_cluster_id | default('') | string }}"
+      server_cluster_vpc_id: "{{ server_cluster_vpc_id | default(server_cluster.spec.vpcId) | string }}"
+    per_host: false

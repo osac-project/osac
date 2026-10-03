@@ -65,14 +65,17 @@ const (
 	CapabilityIPv6       Capability = "ipv6"
 	CapabilityDualStack  Capability = "dualStack"
 	CapabilityDPUSupport Capability = "dpuSupport"
+	// CapabilityEastWestEthernet advertises physical Ethernet east-west support from a fabric manager.
+	CapabilityEastWestEthernet Capability = "eastWestEthernet"
 )
 
 // validCapabilities is the fixed set of capability values the system recognizes.
 var validCapabilities = map[Capability]struct{}{
-	CapabilityIPv4:       {},
-	CapabilityIPv6:       {},
-	CapabilityDualStack:  {},
-	CapabilityDPUSupport: {},
+	CapabilityIPv4:             {},
+	CapabilityIPv6:             {},
+	CapabilityDualStack:        {},
+	CapabilityDPUSupport:       {},
+	CapabilityEastWestEthernet: {},
 }
 
 // Manager is the parsed representation of a network manager registration ConfigMap.

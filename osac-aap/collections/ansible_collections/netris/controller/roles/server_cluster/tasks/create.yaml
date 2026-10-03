@@ -4,35 +4,50 @@
     name: netris.controller.auth
   when: netris_session_cookie is not defined
 
-- name: Get existing server clusters
-  ansible.builtin.uri:
-    url: "{{ netris_controller_url }}/api/v2/server-cluster"
-    method: GET
-    headers:
-      Cookie: "connect.sid={{ netris_session_cookie }}"
-    return_content: true
-    status_code: 200
-    timeout: "{{ netris_timeout | default(30) }}"
-    validate_certs: "{{ netris_validate_certs | default(true) }}"
-  register: _sc_list_resp
-  no_log: true
-
-- name: Find existing server cluster by name
+- name: Reset server cluster lookup results
   ansible.builtin.set_fact:
-    _existing_server_cluster: "{{ (_sc_list_resp.json.data | default([])) | selectattr('name', 'equalto', server_cluster_name) | list | first | default(none) }}"
-  when: _sc_list_resp.json is mapping
+    _existing_server_cluster: null
+    _server_names: []
+    _server_cluster_servers: []
 
-- name: Set server names list
+- name: Resolve existing ServerCluster by stable identity
+  ansible.builtin.include_tasks: lookup_server_cluster.yaml
+  vars:
+    _server_cluster_lookup_require_scope: false
+    _server_cluster_lookup_missing_backend_id_is_error: true
+
+- name: Validate server entry shapes
+  ansible.builtin.assert:
+    that:
+      - >-
+        server_cluster_servers | select('string') | list | length == server_cluster_servers | length
+        or server_cluster_servers | select('mapping') | list | length == server_cluster_servers | length
+    fail_msg: "Servers must be a list of hostnames or a list of mappings with both id and name"
+
+- name: Validate requested server identities
+  ansible.builtin.assert:
+    that:
+      - (item if item is string else item.name | default(none)) is string
+      - (item if item is string else item.name) | trim | length > 0
+      - item is string or (item.id | default('') | string is match('^[1-9][0-9]*$'))
+    fail_msg: "Each server requires a nonempty name and mapping entries require a positive numeric id"
+  loop: "{{ server_cluster_servers }}"
+
+- name: Set requested server names
   ansible.builtin.set_fact:
-    _server_names: "{{ server_cluster_servers }}"
-  when:
-    - server_cluster_servers | length > 0
-    - server_cluster_servers[0] is string
+    _server_names: >-
+      {{ server_cluster_servers if server_cluster_servers | select('string') | list | length == server_cluster_servers | length
+         else server_cluster_servers | map(attribute='name') | list }}
+
+- name: Reject duplicate requested names
+  ansible.builtin.assert:
+    that: _server_names | unique(case_sensitive=true) | length == _server_names | length
+    fail_msg: "Duplicate requested server names are not allowed"
 
 - name: Get Netris inventory servers
   when:
     - server_cluster_servers | length > 0
-    - _server_names is defined
+    - server_cluster_servers[0] is string
   ansible.builtin.uri:
     url: "{{ netris_controller_url }}/api/v2/hw?type=server"
     method: GET
@@ -45,23 +60,37 @@
   register: _inv_resp
   no_log: true
 
-- name: Build servers list from inventory
+- name: Index Netris inventory by exact hostname
   ansible.builtin.set_fact:
-    _server_cluster_servers: "{{ _server_cluster_servers | default([]) + [{'id': item.id, 'name': item.name}] }}"
-  loop: "{{ _inv_resp.json.data | default([]) | selectattr('name', 'in', _server_names) | list }}"
+    _server_cluster_inventory_by_name: >-
+      {{ dict(_inv_resp.json.data | selectattr('name', 'defined') | groupby('name', case_sensitive=true)) }}
+    _server_cluster_inventory_has_site_metadata: >-
+      {{ _inv_resp.json.data | selectattr('site', 'defined') | list | length > 0 }}
   when:
     - server_cluster_servers | length > 0
-    - _inv_resp.json is mapping
-    - _server_names is defined
+    - server_cluster_servers[0] is string
+
+- name: Resolve every requested hostname
+  ansible.builtin.include_tasks: resolve_server.yaml
+  loop: "{{ _server_names }}"
+  loop_control:
+    loop_var: _server_cluster_requested_name
+  when:
+    - server_cluster_servers | length > 0
+    - server_cluster_servers[0] is string
 
 - name: Set servers list when already have id
   ansible.builtin.set_fact:
-    _server_cluster_servers: "{{ _server_cluster_servers | default([]) + [{'id': item.id, 'name': item.name}] }}"
+    _server_cluster_servers: "{{ _server_cluster_servers + [{'id': item.id, 'name': item.name}] }}"
   loop: "{{ server_cluster_servers }}"
   when:
     - server_cluster_servers | length > 0
     - server_cluster_servers[0] is mapping
-    - server_cluster_servers[0].id is defined
+
+- name: Reject duplicate resolved server IDs
+  ansible.builtin.assert:
+    that: _server_cluster_servers | map(attribute='id') | map('int') | unique | length == _server_cluster_servers | length
+    fail_msg: "Multiple requested names resolve to the same server ID"
 
 - name: Build update body (servers and tags only)
   ansible.builtin.set_fact:

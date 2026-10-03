@@ -14,6 +14,9 @@ argument_specs:
         type: str
         required: true
         description: "Name of the server cluster."
+      server_cluster_backend_id:
+        type: str
+        description: "Existing Netris server cluster ID. When set, only this ID is used."
       server_cluster_site_id:
         type: int
         required: true
@@ -28,7 +31,9 @@ argument_specs:
       server_cluster_servers:
         type: list
         default: []
-        description: "List of server names (strings) or server dicts (with name or id). Names are resolved to full server objects from Netris inventory."
+        description: >-
+          List of unique hostnames or mappings with both a positive numeric id and a nonempty name.
+          Each hostname must resolve uniquely in the target site, or globally when inventory omits site metadata.
       server_cluster_tags:
         type: list
         elements: str
@@ -43,6 +48,10 @@ argument_specs:
       server_cluster_vpc_id:
         type: int
         description: "VPC id. Use 0 for 'Create New' (creates server cluster in a new VPC)."
+      server_cluster_allow_name_only_lookup:
+        type: bool
+        default: false
+        description: "Allow legacy same-site name lookup when no VPC ID is known."
 
   delete:
     options:
@@ -50,7 +59,17 @@ argument_specs:
         type: str
         required: true
         description: "Name of the server cluster to delete."
+      server_cluster_backend_id:
+        type: str
+        description: "Existing Netris server cluster ID. When set, only this ID is used; a missing ID is already deleted."
       server_cluster_site_id:
         type: int
         required: true
         description: "Netris site ID."
+      server_cluster_vpc_id:
+        type: int
+        description: "VPC ID required for name-based deletion."
+      server_cluster_allow_name_only_lookup:
+        type: bool
+        default: false
+        description: "Allow legacy same-site name lookup when no VPC ID is known."

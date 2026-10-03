@@ -50,6 +50,40 @@ message BareMetalInstanceTypeSpec {
   // Label selector for matching inventory hosts. Required.
   // Labels are passed directly to the inventory backend using backend-native naming conventions.
   BareMetalLabelSelector host_label_selector = 3 [(cleanapi.field).private = true, (buf.validate.field).required = true];
+
+  // Backend fabric bindings for hosts selected by this instance type.
+  BareMetalFabricBindings fabric_bindings = 4 [(cleanapi.field).private = true];
+}
+
+// Backend-specific fabric bindings for a bare metal instance type.
+message BareMetalFabricBindings {
+  option (cleanapi.message).private = true;
+
+  // Ethernet east-west fabric binding.
+  BareMetalEthernetFabricBinding ethernet_ew = 1;
+}
+
+// Ethernet east-west fabric binding for a bare metal instance type.
+message BareMetalEthernetFabricBinding {
+  option (cleanapi.message).private = true;
+
+  // Netris Server Cluster template and its NetworkClass scope.
+  BareMetalNetrisFabricBinding netris = 1;
+}
+
+// Netris Server Cluster template for hosts selected by a bare metal instance type.
+message BareMetalNetrisFabricBinding {
+  option (cleanapi.message).private = true;
+
+  // Immutable identifier of the NetworkClass that scopes this binding, not its name.
+  string network_class = 1 [(buf.validate.field).string.min_len = 1];
+
+  // Positive Netris Server Cluster Template ID in canonical decimal uint64 form.
+  string template_id = 2 [(buf.validate.field).cel = {
+    id: "bare_metal_netris_fabric_binding.canonical_template_id"
+    message: "template_id must be a positive canonical decimal uint64 without leading zeros"
+    expression: "this.matches('^[1-9][0-9]{0,19}$') && uint(this) > 0u"
+  }];
 }
 
 // Contains the system-provided status of a BareMetalInstanceType.

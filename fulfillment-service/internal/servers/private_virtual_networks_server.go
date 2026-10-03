@@ -25,6 +25,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -159,15 +160,36 @@ func (s *PrivateVirtualNetworksServer) Update(ctx context.Context,
 
 func (s *PrivateVirtualNetworksServer) Delete(ctx context.Context,
 	request *privatev1.VirtualNetworksDeleteRequest) (response *privatev1.VirtualNetworksDeleteResponse, err error) {
-	getRequest := &privatev1.VirtualNetworksGetRequest{}
-	getRequest.SetId(request.GetId())
-	var getResponse *privatev1.VirtualNetworksGetResponse
-	err = s.generic.Get(ctx, getRequest, &getResponse)
+	if request.GetId() == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "identifier is mandatory")
+	}
+	// Serialize deletion with FabricDomains.Create, which locks this same row before
+	// validating the relationship and holds the lock through persistence.
+	getResponse, err := s.generic.dao.Get().SetId(request.GetId()).SetLock(true).Do(ctx)
 	if err != nil {
-		return
+		return nil, translateLifecycleError(err)
 	}
 	if err = validateNotDefault(ctx, getResponse.GetObject().GetMetadata().GetLabels(), "virtual network"); err != nil {
 		return
+	}
+	tx, err := database.TxFromContext(ctx)
+	if err != nil {
+		return
+	}
+	defer tx.ReportError(&err)
+	// Check all persisted domains, including domains awaiting finalization and those
+	// outside the caller's project visibility. Only archival releases the dependency.
+	var inUse bool
+	err = tx.QueryRow(ctx, `
+		select exists (
+			select 1 from fabric_domains where data->'spec'->>'virtual_network' = $1
+		)`, request.GetId()).Scan(&inUse)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to check FabricDomain dependencies", slog.Any("error", err))
+		return nil, grpcstatus.Error(grpccodes.Internal, "failed to check FabricDomain dependencies")
+	}
+	if inUse {
+		return nil, grpcstatus.Error(grpccodes.FailedPrecondition, "virtual network is referenced by a FabricDomain")
 	}
 	err = s.generic.Delete(ctx, request, &response)
 	return

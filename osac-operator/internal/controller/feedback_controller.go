@@ -102,7 +102,7 @@ func newClusterOrderFeedbackBridge(hubClient clnt.Client, clustersClient private
 			_, err := clustersClient.Update(ctx, privatev1.ClustersUpdateRequest_builder{
 				Object: remote,
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
-					"status.conditions", feedbackStatusStatePath, "status.api_url", "status.console_url", "status.api_endpoint",
+					feedbackStatusConditionsPath, feedbackStatusStatePath, "status.api_url", "status.console_url", "status.api_endpoint",
 					"status.ingress_endpoint", feedbackStatusStateTransitionTimePath, "status.kubeconfig_secret", "status.password_secret", "status.hub",
 					"status.node_sets", "status.add_on_operators",
 				}},

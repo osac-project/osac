@@ -38,9 +38,10 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
-// NetworkClassCapabilitiesReconciler computes NetworkClass.capabilities as the
-// intersection of the capabilities declared by its resolved fabric and k8s manager
-// ConfigMaps, and writes the result back to the fulfillment service.
+// NetworkClassCapabilitiesReconciler computes NetworkClass.capabilities from its
+// resolved manager ConfigMaps and writes the result back to the fulfillment service.
+// IP/DPU capabilities use the fabric/k8s intersection; physical Ethernet east-west
+// support comes from the fabric manager, subject to the NetworkClass disable mask.
 //
 // NetworkClass has no CRD in this operator, so it can't be watched directly. This
 // reconciler instead watches the manager registration ConfigMaps (a k8s-native event
@@ -138,7 +139,7 @@ func (r *NetworkClassCapabilitiesReconciler) resyncAllLocked(ctx context.Context
 	return errors.Join(errs...)
 }
 
-// syncOne resolves and applies the capability intersection for a single NetworkClass,
+// syncOne resolves and applies the effective capabilities for a single NetworkClass,
 // updating it via the fulfillment service only when the computed capabilities differ
 // from what's already stored.
 func (r *NetworkClassCapabilitiesReconciler) syncOne(ctx context.Context, nc *privatev1.NetworkClass) error {
@@ -167,6 +168,9 @@ func (r *NetworkClassCapabilitiesReconciler) syncOne(ctx context.Context, nc *pr
 	}
 
 	newCaps := computeCapabilities(resolved)
+	if nc.GetSpec().GetDisableCapabilities().GetSupportsEastWestEthernet() {
+		newCaps.SetSupportsEastWestEthernet(false)
+	}
 	if capabilitiesEqual(newCaps, nc.GetCapabilities()) {
 		return nil
 	}
@@ -183,13 +187,12 @@ func (r *NetworkClassCapabilitiesReconciler) syncOne(ctx context.Context, nc *pr
 	return nil
 }
 
-// computeCapabilities returns the capability intersection of the resolved fabric and
-// k8s managers: a capability is enabled only if the fabric manager declares it and,
-// when a k8s manager is configured, the k8s manager declares it too. When no k8s
-// manager is configured, the fabric manager's capabilities are used as-is.
+// computeCapabilities intersects IP/DPU capabilities of the resolved fabric and k8s
+// managers. When no k8s manager is configured, the fabric manager's capabilities are
+// used as-is. Physical Ethernet east-west support comes solely from the fabric manager.
 //
-// NOTE(OSAC-2030): once NetworkClassSpec.disable_capabilities is available in the
-// generated client, subtract those capabilities here before returning.
+// NOTE(OSAC-2030): applying disable_capabilities to IP/DPU capabilities remains to
+// be implemented. The Ethernet east-west mask is applied by syncOne.
 func computeCapabilities(resolved *dispatcher.ResolvedManagers) *privatev1.NetworkClassCapabilities {
 	fabric := resolved.FabricManager
 	k8s := resolved.K8sManager
@@ -206,6 +209,7 @@ func computeCapabilities(resolved *dispatcher.ResolvedManagers) *privatev1.Netwo
 	caps.SetSupportsIpv6(supports(networkmanager.CapabilityIPv6))
 	caps.SetSupportsDualStack(supports(networkmanager.CapabilityDualStack))
 	caps.SetDpuSupport(supports(networkmanager.CapabilityDPUSupport))
+	caps.SetSupportsEastWestEthernet(fabric.HasCapability(networkmanager.CapabilityEastWestEthernet))
 	return caps
 }
 
@@ -215,7 +219,8 @@ func capabilitiesEqual(a, b *privatev1.NetworkClassCapabilities) bool {
 	return a.GetSupportsIpv4() == b.GetSupportsIpv4() &&
 		a.GetSupportsIpv6() == b.GetSupportsIpv6() &&
 		a.GetSupportsDualStack() == b.GetSupportsDualStack() &&
-		a.GetDpuSupport() == b.GetDpuSupport()
+		a.GetDpuSupport() == b.GetDpuSupport() &&
+		a.GetSupportsEastWestEthernet() == b.GetSupportsEastWestEthernet()
 }
 
 // networkClassCapabilitiesSyncRunnable periodically re-syncs NetworkClass

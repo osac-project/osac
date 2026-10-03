@@ -268,6 +268,10 @@ allow if {
     "/osac.public.v1.ExternalIPs/Delete",
     "/osac.public.v1.ExternalIPs/Get",
     "/osac.public.v1.ExternalIPs/List",
+    # Phase 1 trusts platform admins to supply eligible Netris hostnames.
+    # Tenant visibility is allowed, but writes require the existing is_admin rule.
+    "/osac.public.v1.FabricDomains/Get",
+    "/osac.public.v1.FabricDomains/List",
     "/osac.public.v1.NATGateways/Create",
     "/osac.public.v1.NATGateways/Delete",
     "/osac.public.v1.NATGateways/Get",

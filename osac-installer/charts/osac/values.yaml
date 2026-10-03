@@ -82,6 +82,9 @@ operatorCrds:
 # --- Operator ---
 operator:
   enabled: true
+  # Exact Netris hostname -> BareMetalInstanceType ID (private API catalog).
+  # Nonempty maps create osac-fabric-domain-inventory in the release namespace.
+  fabricDomainInventory: {}
   image:
     repository: ghcr.io/osac-project/osac-operator
     tag: latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml

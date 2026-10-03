@@ -262,6 +262,41 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			Expect(mockClient.lastUpdate.GetStatus().GetState()).To(Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING))
 		})
 
+		It("should force DELETING state even when CR phase is still Running", func() {
+			// Update the CR phase to Running (simulating deletion before phase transitions)
+			vm := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, vm)).To(Succeed())
+			vm.Status.Phase = osacv1alpha1.ComputeInstancePhaseRunning
+			Expect(k8sClient.Status().Update(ctx, vm)).To(Succeed())
+
+			request := reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			}
+			result, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.IsZero()).To(BeTrue())
+			Expect(mockClient.updateCalled).To(BeTrue())
+			Expect(mockClient.lastUpdate).NotTo(BeNil())
+			Expect(mockClient.lastUpdate.GetStatus().GetState()).To(Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING))
+		})
+
+		It("should force DELETING state even when CR phase is Failed", func() {
+			vm := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, vm)).To(Succeed())
+			vm.Status.Phase = osacv1alpha1.ComputeInstancePhaseFailed
+			Expect(k8sClient.Status().Update(ctx, vm)).To(Succeed())
+
+			request := reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			}
+			result, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.IsZero()).To(BeTrue())
+			Expect(mockClient.updateCalled).To(BeTrue())
+			Expect(mockClient.lastUpdate).NotTo(BeNil())
+			Expect(mockClient.lastUpdate.GetStatus().GetState()).To(Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING))
+		})
+
 		It("should signal and remove finalizer when it's the last one", func() {
 			request := reconcile.Request{
 				NamespacedName: typeNamespacedName,

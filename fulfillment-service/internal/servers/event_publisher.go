@@ -25,7 +25,7 @@ import (
 	"unicode"
 
 	"github.com/IBM/sarama"
-	"github.com/cenkalti/backoff/v4"
+	"github.com/cenkalti/backoff/v7"
 	"github.com/gobuffalo/flect"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"

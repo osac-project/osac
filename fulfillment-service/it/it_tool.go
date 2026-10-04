@@ -31,7 +31,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cenkalti/backoff/v4"
+	"github.com/cenkalti/backoff/v7"
 	"github.com/onsi/gomega/ghttp"
 	"google.golang.org/grpc"
 	grpccodes "google.golang.org/grpc/codes"

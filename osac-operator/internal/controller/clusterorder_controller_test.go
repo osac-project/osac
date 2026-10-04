@@ -551,7 +551,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 				"handleHostedCluster must not set Phase to Ready — Phase is controlled by live resource observations")
 
 			Expect(instance.IsStatusConditionTrue(v1alpha1.ConditionControlPlaneAvailable)).To(BeTrue())
-			Expect(instance.IsStatusConditionTrue(v1alpha1.ConditionClusterAvailable)).To(BeTrue())
+			Expect(instance.IsStatusConditionTrue(v1alpha1.ConditionClusterAvailable)).To(BeFalse())
 		})
 
 		It("should finalize Ready after provisioning and live worker readiness", func() {
@@ -822,7 +822,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 			Expect(apimeta.IsStatusConditionTrue(instance.Status.Conditions, v1alpha1.ConditionControlPlaneAvailable)).To(BeTrue())
 		})
 
-		It("should set Progressing reason to ClusterAvailable when HC is fully ready", func() {
+		It("should keep Progressing at ControlPlaneAvailable until workers are ready", func() {
 			instance := &v1alpha1.ClusterOrder{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-hc-cluster-available",
@@ -850,11 +850,11 @@ var _ = Describe("ClusterOrder Controller", func() {
 
 			progressing := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
 			Expect(progressing).NotTo(BeNil())
-			Expect(progressing.Reason).To(Equal(v1alpha1.ConditionClusterAvailable))
+			Expect(progressing.Reason).To(Equal(v1alpha1.ConditionControlPlaneAvailable))
 
 			Expect(apimeta.IsStatusConditionTrue(instance.Status.Conditions, v1alpha1.ConditionControlPlaneCreated)).To(BeTrue())
 			Expect(apimeta.IsStatusConditionTrue(instance.Status.Conditions, v1alpha1.ConditionControlPlaneAvailable)).To(BeTrue())
-			Expect(apimeta.IsStatusConditionTrue(instance.Status.Conditions, v1alpha1.ConditionClusterAvailable)).To(BeTrue())
+			Expect(apimeta.IsStatusConditionTrue(instance.Status.Conditions, v1alpha1.ConditionClusterAvailable)).To(BeFalse())
 		})
 
 		It("should keep sticky conditions but report StageUnknown when HC conditions transiently disappear", func() {

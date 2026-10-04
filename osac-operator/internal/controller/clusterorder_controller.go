@@ -578,11 +578,6 @@ func (r *ClusterOrderReconciler) handleHostedCluster(ctx context.Context, instan
 	if hostedClusterControlPlaneIsAvailable(hc) {
 		log.Info("hosted control plane is available", "clusterorder", instance.GetName())
 		instance.SetStatusCondition(v1alpha1.ConditionControlPlaneAvailable, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
-
-		if hostedClusterIsReady(hc) {
-			log.Info("hosted cluster is ready", "clusterorder", instance.GetName())
-			instance.SetStatusCondition(v1alpha1.ConditionClusterAvailable, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
-		}
 	}
 
 	if instance.Status.Phase == v1alpha1.ClusterOrderPhaseProgressing {
@@ -966,6 +961,10 @@ func finalizeReadyIfProvisioned(log logr.Logger, instance *v1alpha1.ClusterOrder
 		return false
 	}
 
+	// ClusterAvailable is the full-cluster milestone. Do not derive it from
+	// HostedCluster control-plane/version conditions alone because workers may
+	// still be joining at that point.
+	instance.SetStatusCondition(v1alpha1.ConditionClusterAvailable, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
 	instance.Status.Phase = v1alpha1.ClusterOrderPhaseReady
 	instance.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionFalse, "", v1alpha1.ReasonAsExpected)
 	return true

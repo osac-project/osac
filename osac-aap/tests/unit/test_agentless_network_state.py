@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import threading
+import uuid
 from pathlib import Path
 
 import pytest
@@ -66,6 +67,18 @@ def test_virtual_network_retry_reuses_uid_mapping_and_canonical_slash_31(tmp_pat
     assert json.loads(store.path.read_text())["schema_version"] == 1
     assert store.path.stat().st_mode & 0o777 == 0o600
     assert store.lock_path.exists()
+
+
+def test_resource_lock_file_pool_is_bounded(tmp_path):
+    store = store_for(tmp_path)
+
+    for uid_number in range(1, agentless_net_state.RESOURCE_LOCK_SHARDS * 2 + 1):
+        uid = str(uuid.UUID(int=uid_number))
+        with store._resource_locked(uid):
+            pass
+
+    resource_locks = list(tmp_path.glob(f"{store.path.name}.uid-lock-*.lock"))
+    assert len(resource_locks) <= agentless_net_state.RESOURCE_LOCK_SHARDS
 
 
 def test_overlapping_virtual_networks_get_independent_names_and_transit(tmp_path):

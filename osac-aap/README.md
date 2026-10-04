@@ -61,11 +61,12 @@ network or broadcast address and is not an OSAC Subnet. A future Subnet
 allocator must exclude this transit block.
 
 The state-file flock is held only while reading, allocating, or committing the
-atomic JSON snapshot and backup. A second lock serializes operations for the
-same resource UID while provider commands run; a short firewall lock protects
-the shared host `FORWARD` rules. Failed creates retain their allocation for
-retry. Deletes retain the entry until the UID-owned namespace, uplink, and host
-isolation rules have been removed and verified. The module rejects a missing
+atomic JSON snapshot and backup. A bounded 256-file lock pool serializes
+operations for each resource UID while provider commands run; hash collisions
+can serialize unrelated UIDs. A short firewall lock protects the shared host
+`FORWARD` rules. Failed creates retain their allocation for retry. Deletes
+retain the entry until the UID-owned namespace, uplink, and host isolation rules
+have been removed and verified. The module rejects a missing
 state file when a backup exists, malformed JSON, unsupported versions, and
 unsafe owner or file modes; do not delete the state file or backup to clear an
 error.

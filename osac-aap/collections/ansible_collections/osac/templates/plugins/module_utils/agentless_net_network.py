@@ -143,6 +143,19 @@ def ensure_uplink(
     ) or changed
 
 
+def _ensure_host_veth_owner_alias(host_interface: str, owner_alias: str) -> bool:
+    details = link_details(None, host_interface)
+    if details is None or details.get("linkinfo", {}).get("info_kind") != "veth":
+        raise NetworkCommandError("host uplink exists but is not an owned veth")
+    existing_alias = details.get("ifalias", "")
+    if existing_alias not in ("", owner_alias):
+        raise NetworkCommandError("host uplink alias does not match its VirtualNetwork UID")
+    if existing_alias == "":
+        run_command(["ip", "link", "set", "dev", host_interface, "alias", owner_alias])
+        return True
+    return False
+
+
 def ensure_veth_pair(
     namespace: str,
     namespace_interface: str,
@@ -171,14 +184,7 @@ def ensure_veth_pair(
     )
     if host_link.returncode == 0 and namespace_link.returncode != 0:
         if owner_alias is not None:
-            details = link_details(None, host_interface)
-            if details is None or details.get("linkinfo", {}).get("info_kind") != "veth":
-                raise NetworkCommandError("host uplink exists but is not an owned veth")
-            existing_alias = details.get("ifalias", "")
-            if existing_alias not in ("", owner_alias):
-                raise NetworkCommandError("host uplink alias does not match its VirtualNetwork UID")
-            if existing_alias == "":
-                run_command(["ip", "link", "set", "dev", host_interface, "alias", owner_alias])
+            _ensure_host_veth_owner_alias(host_interface, owner_alias)
         run_command(["ip", "link", "delete", "dev", host_interface])
         host_link = run_command(
             ["ip", "-o", "link", "show", "dev", host_interface], check=False
@@ -205,15 +211,7 @@ def ensure_veth_pair(
             run_command(["ip", "link", "set", "dev", host_interface, "alias", owner_alias])
         changed = True
     elif owner_alias is not None:
-        details = link_details(None, host_interface)
-        if details is None or details.get("linkinfo", {}).get("info_kind") != "veth":
-            raise NetworkCommandError("host uplink exists but is not an owned veth")
-        existing_alias = details.get("ifalias", "")
-        if existing_alias not in ("", owner_alias):
-            raise NetworkCommandError("host uplink alias does not match its VirtualNetwork UID")
-        if existing_alias == "":
-            run_command(["ip", "link", "set", "dev", host_interface, "alias", owner_alias])
-            changed = True
+        changed = _ensure_host_veth_owner_alias(host_interface, owner_alias) or changed
     return changed
 
 

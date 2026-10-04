@@ -103,18 +103,6 @@
         | regex_search('^[0-9]{1,5}$')) is not none
       - _agentless_net_inventory_host.value.get('ansible_port', 22) | int > 0
       - _agentless_net_inventory_host.value.get('ansible_port', 22) | int <= 65535
-      - "'ansible_password' not in _agentless_net_inventory_host.value"
-      - "'ansible_ssh_pass' not in _agentless_net_inventory_host.value"
-      - "'ansible_become_password' not in _agentless_net_inventory_host.value"
-      - "'ansible_sudo_pass' not in _agentless_net_inventory_host.value"
-      - "'ansible_password' not in _agentless_net_inventory_vars"
-      - "'ansible_ssh_pass' not in _agentless_net_inventory_vars"
-      - "'ansible_become_password' not in _agentless_net_inventory_vars"
-      - "'ansible_sudo_pass' not in _agentless_net_inventory_vars"
-      - "'ansible_password' not in _agentless_net_inventory_net_node_vars"
-      - "'ansible_ssh_pass' not in _agentless_net_inventory_net_node_vars"
-      - "'ansible_become_password' not in _agentless_net_inventory_net_node_vars"
-      - "'ansible_sudo_pass' not in _agentless_net_inventory_net_node_vars"
       - >-
         _agentless_net_inventory_host.value.get('ansible_ssh_private_key_file', '') is string
       - >-

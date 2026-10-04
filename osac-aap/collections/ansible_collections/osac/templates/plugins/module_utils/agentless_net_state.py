@@ -30,6 +30,7 @@ SCHEMA_VERSION = 1
 LOCK_WAIT_SECONDS = 60
 LOCK_POLL_SECONDS = 0.05
 MAX_RULE_DELETIONS = 64
+RESOURCE_LOCK_SHARDS = 256
 STATE_KEYS = {"schema_version", "virtual_networks"}
 VIRTUAL_NETWORK_KEYS = {
     "uid",
@@ -48,6 +49,15 @@ class StateError(Exception):
 
 class StateCorrupt(StateError):
     """The state file is missing or does not contain a supported generation."""
+
+
+def _is_canonical_uuid(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        return str(uuidlib.UUID(value)) == value
+    except (ValueError, AttributeError):
+        return False
 
 
 def _fsync_directory(directory: Path) -> None:
@@ -130,8 +140,9 @@ class StateStore:
 
     @contextlib.contextmanager
     def _resource_locked(self, uid: str):
-        digest = hashlib.sha256(uid.encode()).hexdigest()
-        resource_lock_path = Path(f"{self.path}.uid-{digest}.lock")
+        digest = hashlib.sha256(uid.encode()).digest()
+        shard = int.from_bytes(digest[:4], "big") % RESOURCE_LOCK_SHARDS
+        resource_lock_path = Path(f"{self.path}.uid-lock-{shard:03d}.lock")
         with _locked_path(resource_lock_path):
             yield
 
@@ -198,11 +209,8 @@ class StateStore:
             transit = entry["transit"]
             if not isinstance(uid, str) or uid in seen_uids:
                 raise StateCorrupt("duplicate or empty VirtualNetwork UID")
-            try:
-                if str(uuidlib.UUID(uid)) != uid:
-                    raise ValueError("non-canonical UUID")
-            except (ValueError, AttributeError) as error:
-                raise StateCorrupt("VirtualNetwork UID must be a canonical UUID") from error
+            if not _is_canonical_uuid(uid):
+                raise StateCorrupt("VirtualNetwork UID must be a canonical UUID")
             if not isinstance(namespace, str) or not namespace or namespace in seen_namespaces:
                 raise StateCorrupt("duplicate or invalid namespace name")
             digest = hashlib.sha256(uid.encode()).hexdigest()
@@ -278,13 +286,8 @@ class StateStore:
 
     @staticmethod
     def _validate_uid(uid: str) -> None:
-        if not isinstance(uid, str):
+        if not _is_canonical_uuid(uid):
             raise StateError("VirtualNetwork UID must be a canonical UUID")
-        try:
-            if str(uuidlib.UUID(uid)) != uid:
-                raise ValueError("non-canonical UUID")
-        except (ValueError, AttributeError) as error:
-            raise StateError("VirtualNetwork UID must be a canonical UUID") from error
 
     @staticmethod
     def _identity_entry(uid: str) -> dict[str, Any]:

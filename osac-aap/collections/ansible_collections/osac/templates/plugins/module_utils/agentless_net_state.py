@@ -384,6 +384,13 @@ class StateStore:
             raise StateError("VirtualNetwork tenant ID is required")
 
     @staticmethod
+    def _require_tenant_ownership(
+        entry: dict[str, Any] | None, tenant_id: str
+    ) -> None:
+        if entry is not None and entry["tenant_id"] != tenant_id:
+            raise StateError("VirtualNetwork tenant does not match saved state")
+
+    @staticmethod
     def _identity_entry(uid: str) -> dict[str, Any]:
         digest = hashlib.sha256(uid.encode()).hexdigest()
         return {
@@ -426,8 +433,7 @@ class StateStore:
                 try:
                     entry = self._entry_for_uid(connection, uid)
                     if entry is not None:
-                        if entry["tenant_id"] != tenant_id:
-                            raise StateError("VirtualNetwork tenant does not match saved state")
+                        self._require_tenant_ownership(entry, tenant_id)
                         if entry["virtual_network_cidr"] != network_cidr:
                             raise StateError("VirtualNetwork CIDR does not match saved state")
                         state_changed = False
@@ -571,8 +577,7 @@ class StateStore:
             if connection is None:
                 return None
             entry = self._entry_for_uid(connection, uid)
-            if entry is not None and entry["tenant_id"] != tenant_id:
-                raise StateError("VirtualNetwork tenant does not match saved state")
+            self._require_tenant_ownership(entry, tenant_id)
             return entry
 
     def snapshot(self) -> dict[str, Any]:
@@ -589,28 +594,19 @@ class StateStore:
                     if connection is not None
                     else None
                 )
-                if entry is not None and entry["tenant_id"] != tenant_id:
-                    raise StateError("VirtualNetwork tenant does not match saved state")
+                self._require_tenant_ownership(entry, tenant_id)
                 provider_entry = (
                     entry if entry is not None else self._identity_entry(uid)
                 )
                 remaining_virtual_network = False
                 if connection is not None:
-                    if entry is None:
-                        remaining_virtual_network = (
-                            connection.execute(
-                                "SELECT 1 FROM virtual_networks LIMIT 1"
-                            ).fetchone()
-                            is not None
-                        )
-                    else:
-                        remaining_virtual_network = (
-                            connection.execute(
-                                "SELECT 1 FROM virtual_networks WHERE uid <> ? LIMIT 1",
-                                (uid,),
-                            ).fetchone()
-                            is not None
-                        )
+                    remaining_virtual_network = (
+                        connection.execute(
+                            "SELECT 1 FROM virtual_networks WHERE uid <> ? LIMIT 1",
+                            (uid,),
+                        ).fetchone()
+                        is not None
+                    )
 
             provider_changed = delete_virtual_network(
                 provider_entry,

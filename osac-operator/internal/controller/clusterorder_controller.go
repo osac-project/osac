@@ -815,6 +815,14 @@ func (r *ClusterOrderReconciler) handleNodePool(ctx context.Context, instance *v
 		return nil
 	}
 
+	// HyperShift creates the NodePool before it reports any replicas. Do not
+	// publish that transient zero into status: the CRD requires
+	// status.nodeRequests[].numberOfNodes to be at least one, and an invalid
+	// status update would prevent the ClusterOrder from progressing.
+	if nodePool.Status.Replicas < 1 {
+		return nil
+	}
+
 	// Find the matching item inside the `nodeRequests` field of the status, or create a new one if there is no
 	// matching item yet.
 	var nodeRequestStatus *v1alpha1.NodeRequest

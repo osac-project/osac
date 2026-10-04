@@ -1039,6 +1039,26 @@ var _ = Describe("ClusterOrder Controller", func() {
 				"spec must not be modified")
 		})
 
+		It("should ignore a node pool before it reports replicas", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{
+					NodeRequests: []v1alpha1.NodeRequest{
+						{ResourceClass: "m1.large", NumberOfNodes: 1},
+					},
+				},
+			}
+
+			nodePool := &hypershiftv1beta1.NodePool{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{agentResourceClassLabel: "m1.large"}},
+				Status:     hypershiftv1beta1.NodePoolStatus{Replicas: 0},
+			}
+
+			err := reconciler.handleNodePool(ctx, instance, nodePool)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(instance.Status.NodeRequests).To(BeEmpty())
+			Expect(instance.Spec.NodeRequests[0].NumberOfNodes).To(Equal(1))
+		})
+
 		It("should update the status entry matching the node pool resource class", func() {
 			instance := &v1alpha1.ClusterOrder{
 				Spec: v1alpha1.ClusterOrderSpec{

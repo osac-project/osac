@@ -258,7 +258,6 @@ Touched-area requirements: [component guide](../osac-aap/AGENTS.md#integration-t
 | Tier | Location / command | Exercises for real | Faked or omitted |
 |---|---|---|---|
 | Unit | `tests/unit/`; `uv run pytest tests/unit` | Filter and isolated plugin behavior | Kubernetes, AAP, cloud, and storage services are mocked or fixture-driven. |
-<<<<<<< HEAD
 | Component integration | `tests/integration/`; `make test` (creates Kind, runs playbooks, and tears it down) | Ansible roles/playbooks against real Kind APIs, including a second isolated API for storage target routing, plus CRDs, leases, finalizers, and test-runner pod | AAP, OpenStack, KubeVirt/RHACM, and other provider APIs are not generally real; the VMS storage target uses a mock server. |
 | Unit | `tests/unit/test_agentless_network_state.py`, `tests/unit/test_agentless_net_network.py`; included by `uv run pytest tests/unit` | UID/CIDR allocation, atomic state handling, per-UID operations, parsed Linux state, and bounded command failures | `ip`, `iptables`, the network namespace, and AAP are mocked; this does not prove provider execution. |
 | Component integration (focused) | A target under `tests/integration/targets/`; run the corresponding playbook from `tests/integration/` | The specific role workflow and its documented fixtures | Only the dependencies declared by that target; inspect its setup and overrides before claiming a real boundary. |

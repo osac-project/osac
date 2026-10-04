@@ -184,7 +184,7 @@ vendors:
     enabled: false
     image:
       repository: docker.io/portworx/px-pure-csi-driver
-      tag: "26.2.2"
+      tag: "26.3.0"
     config:
       credentialsSecret: ""
       clusterUuid: ""

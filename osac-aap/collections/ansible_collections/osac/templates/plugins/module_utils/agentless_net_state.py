@@ -23,6 +23,7 @@ from ansible_collections.osac.templates.plugins.module_utils.agentless_net_netwo
     ensure_veth_pair,
     link_details,
     NetworkCommandError,
+    parse_json_object_list,
     run_command,
 )
 
@@ -57,6 +58,17 @@ def _is_canonical_uuid(value: Any) -> bool:
         return str(uuidlib.UUID(value)) == value
     except (ValueError, AttributeError):
         return False
+
+
+def _parse_canonical_ipv4_network(value: Any) -> ipaddress.IPv4Network:
+    if not isinstance(value, str):
+        raise TypeError("VirtualNetwork CIDR must be a string")
+    network = ipaddress.ip_network(value, strict=True)
+    if not isinstance(network, ipaddress.IPv4Network):
+        raise ValueError("AgentlessNet VirtualNetworks require IPv4 CIDRs")
+    if str(network) != value:
+        raise ValueError("VirtualNetwork CIDR must be canonical")
+    return network
 
 
 def _fsync_directory(directory: Path) -> None:
@@ -237,15 +249,11 @@ class StateStore:
             ):
                 raise StateCorrupt("VirtualNetwork transit CIDR must be an IPv4 /31")
             try:
-                if not isinstance(entry["virtual_network_cidr"], str):
-                    raise ValueError("not a string")
-                virtual_network_cidr = ipaddress.ip_network(entry["virtual_network_cidr"], strict=True)
+                virtual_network_cidr = _parse_canonical_ipv4_network(
+                    entry["virtual_network_cidr"]
+                )
             except (TypeError, ValueError) as error:
-                raise StateCorrupt("VirtualNetwork CIDR is invalid") from error
-            if not isinstance(virtual_network_cidr, ipaddress.IPv4Network):
-                raise StateCorrupt("VirtualNetwork CIDR must be IPv4")
-            if str(virtual_network_cidr) != entry["virtual_network_cidr"]:
-                raise StateCorrupt("VirtualNetwork CIDR must be canonical")
+                raise StateCorrupt(f"VirtualNetwork CIDR is invalid: {error}") from error
             if not transit_cidr.subnet_of(virtual_network_cidr):
                 raise StateCorrupt("VirtualNetwork transit CIDR is outside its CR CIDR")
             if transit["cidr"] in seen_transit:
@@ -302,13 +310,9 @@ class StateStore:
     ) -> tuple[dict[str, Any], bool, bool]:
         self._validate_uid(uid)
         try:
-            network = ipaddress.ip_network(virtual_network_cidr, strict=True)
+            network = _parse_canonical_ipv4_network(virtual_network_cidr)
         except (TypeError, ValueError) as error:
             raise StateError(f"invalid VirtualNetwork IPv4 CIDR: {error}") from error
-        if not isinstance(network, ipaddress.IPv4Network):
-            raise StateError("AgentlessNet VirtualNetworks require IPv4 CIDRs")
-        if not isinstance(virtual_network_cidr, str) or str(network) != virtual_network_cidr:
-            raise StateError("VirtualNetwork IPv4 CIDR must be canonical")
         network_cidr = str(network)
 
         with self._resource_locked(uid):
@@ -455,15 +459,11 @@ def _assert_transit_route_available(entry: dict[str, Any]) -> None:
     host_interface = entry["uplink"]["host_interface"]
     routes = _run(["ip", "-j", "-4", "route", "show", "table", "all"]).stdout
     try:
-        route_entries = json.loads(routes or "[]")
-    except (json.JSONDecodeError, TypeError) as error:
+        route_entries = parse_json_object_list(routes, description="network-node IPv4 routes")
+    except NetworkCommandError as error:
         raise StateError(f"could not inspect network-node IPv4 routes: {error}") from error
-    if not isinstance(route_entries, list):
-        raise StateError("network-node IPv4 route output is not a list")
 
     for route in route_entries:
-        if not isinstance(route, dict):
-            raise StateError("network-node IPv4 route entry is invalid")
         if route.get("dev") == host_interface:
             continue
 

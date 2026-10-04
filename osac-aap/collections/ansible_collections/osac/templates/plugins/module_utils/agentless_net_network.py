@@ -36,8 +36,7 @@ def run_command(command: list[str], check: bool = True) -> subprocess.CompletedP
     return result
 
 
-def _json_ip_output(command: list[str], *, description: str) -> list[dict[str, Any]]:
-    output = run_command(command).stdout
+def parse_json_object_list(output: str, *, description: str) -> list[dict[str, Any]]:
     try:
         entries = json.loads(output or "[]")
     except (json.JSONDecodeError, TypeError) as error:
@@ -47,6 +46,10 @@ def _json_ip_output(command: list[str], *, description: str) -> list[dict[str, A
     return entries
 
 
+def _json_ip_output(command: list[str], *, description: str) -> list[dict[str, Any]]:
+    return parse_json_object_list(run_command(command).stdout, description=description)
+
+
 def link_details(namespace: str | None, interface: str) -> dict[str, Any] | None:
     command = ["ip", "-j", "-d", "link", "show", "dev", interface]
     if namespace is not None:
@@ -54,12 +57,7 @@ def link_details(namespace: str | None, interface: str) -> dict[str, Any] | None
     result = run_command(command, check=False)
     if result.returncode != 0:
         return None
-    try:
-        links = json.loads(result.stdout or "[]")
-    except (json.JSONDecodeError, TypeError) as error:
-        raise NetworkCommandError(f"could not parse link details JSON: {error}") from error
-    if not isinstance(links, list) or any(not isinstance(link, dict) for link in links):
-        raise NetworkCommandError("link details JSON must be a list of objects")
+    links = parse_json_object_list(result.stdout, description="link details")
     if len(links) != 1 or links[0].get("ifname") != interface:
         raise NetworkCommandError(f"unexpected link details for interface {interface}")
     if not isinstance(links[0].get("flags"), list) or any(

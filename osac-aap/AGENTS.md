@@ -45,7 +45,7 @@ See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#osac-aap
 |---|---|---|
 | Filters, variable transforms, and isolated plugin logic | Unit | `uv run pytest tests/unit` |
 | Template publishing certificate validation | Local protocol integration | Run the `test_cert_validation` play in `collections/ansible_collections/osac/service/roles/publish_templates/tests/test.yml` with `uv run ansible-playbook`; the mock HTTPS server tests the client transport only |
-| AgentlessNet VirtualNetwork allocation, SQLite state, and Linux command helpers | Unit | `tests/unit/test_agentless_network_state.py` and `tests/unit/test_agentless_net_network.py`; run `uv run pytest tests/unit` |
+| AgentlessNet VirtualNetwork allocation, tenant/node quotas, SQLite state, and Linux command helpers | Unit | `tests/unit/test_agentless_network_state.py` and `tests/unit/test_agentless_net_network.py`; run `uv run pytest tests/unit` |
 | Ansible roles, workflow tasks, hooks, leases, finalizers, or Kubernetes resources | Component integration | `make test` or the focused target command |
 | Execution-environment definition or dependency inputs | Build/package validation plus applicable integration tests | `make execution-environment-build`, then `make test` |
 | AAP, OpenStack, KubeVirt/RHACM, or provider provisioning | Contract or real-provider integration | Use the qualifying [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) suite |

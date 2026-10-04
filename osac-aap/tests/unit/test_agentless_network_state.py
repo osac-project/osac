@@ -30,10 +30,58 @@ from agentless_net_state import StateCorrupt, StateError, StateStore  # noqa: E4
 UID_ONE = "11111111-1111-4111-8111-111111111111"
 UID_TWO = "22222222-2222-4222-8222-222222222222"
 UID_THREE = "33333333-3333-4333-8333-333333333333"
+TENANT_ONE = "tenant-one"
+TENANT_TWO = "tenant-two"
+MAX_VNS_PER_TENANT = 16
+MAX_VNS_PER_NODE = 256
 
 
 def store_for(tmp_path):
     return StateStore(tmp_path / "agentless_network_state.sqlite3")
+
+
+def ensure_virtual_network(
+    store,
+    uid,
+    cidr,
+    tenant_id=TENANT_ONE,
+    *,
+    max_per_tenant=MAX_VNS_PER_TENANT,
+    max_per_node=MAX_VNS_PER_NODE,
+):
+    return store.ensure_virtual_network(
+        uid,
+        cidr,
+        tenant_id,
+        max_per_tenant,
+        max_per_node,
+    )
+
+
+def ensure_and_reconcile_virtual_network(
+    store,
+    uid,
+    cidr,
+    tenant_id=TENANT_ONE,
+    *,
+    max_per_tenant=MAX_VNS_PER_TENANT,
+    max_per_node=MAX_VNS_PER_NODE,
+):
+    return store.ensure_and_reconcile_virtual_network(
+        uid,
+        cidr,
+        tenant_id,
+        max_per_tenant,
+        max_per_node,
+    )
+
+
+def get_virtual_network(store, uid, tenant_id=TENANT_ONE):
+    return store.get_virtual_network(uid, tenant_id)
+
+
+def delete_virtual_network(store, uid, tenant_id=TENANT_ONE):
+    return store.delete_and_remove_virtual_network(uid, tenant_id)
 
 
 def assert_store_lock_is_free(store):
@@ -47,8 +95,8 @@ def assert_store_lock_is_free(store):
 
 def test_virtual_network_retry_reuses_uid_mapping_and_canonical_slash_31(tmp_path):
     store = store_for(tmp_path)
-    first = store.ensure_virtual_network(UID_ONE, "10.0.0.0/16")
-    retry = store.ensure_virtual_network(UID_ONE, "10.0.0.0/16")
+    first = ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
+    retry = ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
 
     transit = ipaddress.ip_network(first["transit"]["cidr"])
     assert retry == first
@@ -78,8 +126,8 @@ def test_resource_lock_file_pool_is_bounded(tmp_path):
 
 def test_overlapping_virtual_networks_get_independent_names_and_transit(tmp_path):
     store = store_for(tmp_path)
-    first = store.ensure_virtual_network(UID_ONE, "10.0.0.0/16")
-    second = store.ensure_virtual_network(UID_TWO, "10.0.0.0/16")
+    first = ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
+    second = ensure_virtual_network(store, UID_TWO, "10.0.0.0/16")
 
     assert first["namespace_name"] != second["namespace_name"]
     assert first["uplink"] != second["uplink"]
@@ -104,35 +152,35 @@ def test_invalid_uid_or_virtual_network_cidr_is_rejected(tmp_path, uid, cidr, me
     store = store_for(tmp_path)
 
     with pytest.raises(StateError, match=message):
-        store.ensure_virtual_network(uid, cidr)
+        ensure_virtual_network(store, uid, cidr)
 
     assert not store.path.exists()
 
 
 def test_transit_route_conflict_keeps_saved_allocation_for_retry(tmp_path, monkeypatch):
     store = store_for(tmp_path)
-    route_command = ["ip", "-j", "-4", "route", "show", "table", "all"]
+    route_command = ["ip", "-j", "-4", "route", "get", "fibmatch"]
 
     def conflicting_route(command, check=True):
         assert_store_lock_is_free(store)
-        assert command == route_command
+        assert command[:-1] == route_command
         return subprocess.CompletedProcess(
             command,
             0,
-            stdout='[{"dst":"10.0.0.0/8","dev":"eth0"}]',
+            stdout=json.dumps([{"dst": f"{command[-1]}/32", "dev": "eth0"}]),
             stderr="",
         )
 
     monkeypatch.setattr(agentless_net_state, "_run", conflicting_route)
     with pytest.raises(StateError, match="overlaps existing host route"):
-        store.ensure_and_reconcile_virtual_network(UID_ONE, "10.0.0.0/16")
+        ensure_and_reconcile_virtual_network(store, UID_ONE, "10.0.0.0/16")
 
-    saved = store.get_virtual_network(UID_ONE)
+    saved = get_virtual_network(store, UID_ONE)
     assert saved is not None
     assert saved["virtual_network_cidr"] == "10.0.0.0/16"
 
     def own_host_route(command, check=True):
-        assert command == route_command
+        assert command[:-1] == route_command
         return subprocess.CompletedProcess(
             command,
             0,
@@ -148,7 +196,8 @@ def test_transit_route_conflict_keeps_saved_allocation_for_retry(tmp_path, monke
         "reconcile_virtual_network",
         lambda entry, **kwargs: False,
     )
-    retry, state_changed, network_changed = store.ensure_and_reconcile_virtual_network(
+    retry, state_changed, network_changed = ensure_and_reconcile_virtual_network(
+        store,
         UID_ONE, "10.0.0.0/16"
     )
 
@@ -159,11 +208,11 @@ def test_transit_route_conflict_keeps_saved_allocation_for_retry(tmp_path, monke
 
 def test_transit_route_may_override_host_default_route(tmp_path, monkeypatch):
     store = store_for(tmp_path)
-    entry = store.ensure_virtual_network(UID_ONE, "1.1.1.0/31")
-    expected_command = ["ip", "-j", "-4", "route", "show", "table", "all"]
+    entry = ensure_virtual_network(store, UID_ONE, "1.1.1.0/31")
+    expected_command = ["ip", "-j", "-4", "route", "get", "fibmatch"]
 
     def default_route(command, check=True):
-        assert command == expected_command
+        assert command[:-1] == expected_command
         return subprocess.CompletedProcess(
             command,
             0,
@@ -172,6 +221,24 @@ def test_transit_route_may_override_host_default_route(tmp_path, monkeypatch):
         )
 
     monkeypatch.setattr(agentless_net_state, "_run", default_route)
+    agentless_net_state._assert_transit_route_available(entry)
+
+
+def test_transit_route_may_override_a_less_specific_host_route(tmp_path, monkeypatch):
+    store = store_for(tmp_path)
+    entry = ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
+    expected_command = ["ip", "-j", "-4", "route", "get", "fibmatch"]
+
+    def less_specific_route(command, check=True):
+        assert command[:-1] == expected_command
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout='[{"dst":"10.0.0.0/16","dev":"eth0"}]',
+            stderr="",
+        )
+
+    monkeypatch.setattr(agentless_net_state, "_run", less_specific_route)
     agentless_net_state._assert_transit_route_available(entry)
 
 
@@ -185,7 +252,7 @@ def test_stalled_provider_work_does_not_block_another_uid_allocation(tmp_path, m
         agentless_net_state,
         "_run",
         lambda command, check=True: subprocess.CompletedProcess(
-            command, 0, stdout="[]", stderr=""
+            command, 0, stdout='[{"dst":"default","dev":"eth0"}]', stderr=""
         ),
     )
 
@@ -199,7 +266,7 @@ def test_stalled_provider_work_does_not_block_another_uid_allocation(tmp_path, m
 
     def create_first():
         try:
-            store.ensure_and_reconcile_virtual_network(UID_ONE, "10.0.0.0/16")
+            ensure_and_reconcile_virtual_network(store, UID_ONE, "10.0.0.0/16")
         except Exception as error:  # surfaced in the main test thread
             provider_errors.append(error)
 
@@ -207,9 +274,9 @@ def test_stalled_provider_work_does_not_block_another_uid_allocation(tmp_path, m
     first_thread.start()
     assert provider_started.wait(2)
 
-    second = store.ensure_virtual_network(UID_TWO, "10.0.0.0/16")
+    second = ensure_virtual_network(store, UID_TWO, "10.0.0.0/16")
     assert second["uid"] == UID_TWO
-    assert store.get_virtual_network(UID_ONE) is not None
+    assert get_virtual_network(store, UID_ONE) is not None
 
     finish_provider.set()
     first_thread.join(5)
@@ -229,7 +296,7 @@ def test_same_uid_delete_waits_for_ensure_provider_work(tmp_path, monkeypatch):
         agentless_net_state,
         "_run",
         lambda command, check=True: subprocess.CompletedProcess(
-            command, 0, stdout="[]", stderr=""
+            command, 0, stdout='[{"dst":"default","dev":"eth0"}]', stderr=""
         ),
     )
 
@@ -247,14 +314,14 @@ def test_same_uid_delete_waits_for_ensure_provider_work(tmp_path, monkeypatch):
 
     def create_first():
         try:
-            store.ensure_and_reconcile_virtual_network(UID_ONE, "10.0.0.0/16")
+            ensure_and_reconcile_virtual_network(store, UID_ONE, "10.0.0.0/16")
         except Exception as error:
             failures.append(error)
 
     def delete_first():
         delete_started.set()
         try:
-            store.delete_and_remove_virtual_network(UID_ONE)
+            delete_virtual_network(store, UID_ONE)
         except Exception as error:
             failures.append(error)
         finally:
@@ -274,11 +341,11 @@ def test_same_uid_delete_waits_for_ensure_provider_work(tmp_path, monkeypatch):
     assert not create_thread.is_alive()
     assert not delete_thread.is_alive()
     assert failures == []
-    assert store.get_virtual_network(UID_ONE) is None
+    assert get_virtual_network(store, UID_ONE) is None
 
 
 def test_conntrack_insert_uses_chain_before_position(tmp_path, monkeypatch):
-    entry = store_for(tmp_path).ensure_virtual_network(UID_ONE, "10.0.0.0/16")
+    entry = ensure_virtual_network(store_for(tmp_path), UID_ONE, "10.0.0.0/16")
     commands = []
 
     monkeypatch.setattr(agentless_net_state, "ensure_veth_pair", lambda *args, **kwargs: False)
@@ -391,6 +458,21 @@ def test_shared_host_forwarding_rules_remain_until_last_agentless_veth_is_delete
     assert rules == []
 
 
+def test_shared_host_forwarding_rules_skip_link_scan_while_vns_remain(monkeypatch):
+    monkeypatch.setattr(
+        agentless_net_state,
+        "_agentless_host_veth_present",
+        lambda: pytest.fail("active state should avoid listing all host links"),
+    )
+
+    assert (
+        agentless_net_state._remove_host_forwarding_isolation(
+            remaining_virtual_network=True
+        )
+        is False
+    )
+
+
 def test_create_and_retry_run_provider_outside_state_lock_and_preserve_allocation(
     tmp_path, monkeypatch
 ):
@@ -400,7 +482,7 @@ def test_create_and_retry_run_provider_outside_state_lock_and_preserve_allocatio
         agentless_net_state,
         "_run",
         lambda command, check=True: subprocess.CompletedProcess(
-            command, 0, stdout="[]", stderr=""
+            command, 0, stdout='[{"dst":"default","dev":"eth0"}]', stderr=""
         ),
     )
 
@@ -413,11 +495,12 @@ def test_create_and_retry_run_provider_outside_state_lock_and_preserve_allocatio
 
     monkeypatch.setattr(agentless_net_state, "reconcile_virtual_network", reconcile)
     with pytest.raises(StateError, match="injected provider setup failure"):
-        store.ensure_and_reconcile_virtual_network(UID_ONE, "10.0.0.0/16")
+        ensure_and_reconcile_virtual_network(store, UID_ONE, "10.0.0.0/16")
 
-    saved = store.get_virtual_network(UID_ONE)
+    saved = get_virtual_network(store, UID_ONE)
     assert saved == calls[0]
-    retry, state_changed, network_changed = store.ensure_and_reconcile_virtual_network(
+    retry, state_changed, network_changed = ensure_and_reconcile_virtual_network(
+        store,
         UID_ONE, "10.0.0.0/16"
     )
     assert retry == saved
@@ -438,30 +521,36 @@ def test_command_timeout_returns_error_and_keeps_create_retryable(tmp_path, monk
         agentless_net_network.run_command(["ip", "-j", "route"])
 
     with pytest.raises(StateError, match="timed out"):
-        store.ensure_and_reconcile_virtual_network(UID_ONE, "10.0.0.0/16")
-    first = store.get_virtual_network(UID_ONE)
+        ensure_and_reconcile_virtual_network(store, UID_ONE, "10.0.0.0/16")
+    first = get_virtual_network(store, UID_ONE)
     assert first is not None
 
     monkeypatch.setattr(
         agentless_net_network.subprocess,
         "run",
-        lambda command, **kwargs: subprocess.CompletedProcess(command, 0, stdout="[]", stderr=""),
+        lambda command, **kwargs: subprocess.CompletedProcess(
+            command,
+            0,
+            stdout='[{"dst":"default","dev":"eth0"}]',
+            stderr="",
+        ),
     )
     monkeypatch.setattr(agentless_net_state, "reconcile_virtual_network", lambda *args, **kwargs: False)
-    retry, state_changed, _ = store.ensure_and_reconcile_virtual_network(UID_ONE, "10.0.0.0/16")
+    retry, state_changed, _ = ensure_and_reconcile_virtual_network(store, UID_ONE, "10.0.0.0/16")
     assert retry == first
     assert state_changed is False
 
 
 def test_delete_keeps_state_until_provider_cleanup_and_preserves_peer(tmp_path, monkeypatch):
     store = store_for(tmp_path)
-    first = store.ensure_virtual_network(UID_ONE, "10.0.0.0/16")
-    second = store.ensure_virtual_network(UID_TWO, "10.0.0.0/16")
+    first = ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
+    second = ensure_virtual_network(store, UID_TWO, "10.0.0.0/16")
     deleted = []
 
     def delete_from_node(entry, **kwargs):
         assert_store_lock_is_free(store)
         assert entry == first
+        assert kwargs["remaining_virtual_network"] is True
         current = store.snapshot()
         assert first in current["virtual_networks"]
         assert second in current["virtual_networks"]
@@ -469,19 +558,19 @@ def test_delete_keeps_state_until_provider_cleanup_and_preserves_peer(tmp_path, 
         return True
 
     monkeypatch.setattr(agentless_net_state, "delete_virtual_network", delete_from_node)
-    assert store.delete_and_remove_virtual_network(UID_ONE) is True
+    assert delete_virtual_network(store, UID_ONE) is True
     assert deleted == [first]
-    assert store.get_virtual_network(UID_ONE) is None
-    assert store.get_virtual_network(UID_TWO) == second
+    assert get_virtual_network(store, UID_ONE) is None
+    assert get_virtual_network(store, UID_TWO) == second
 
-    replacement = store.ensure_virtual_network(UID_ONE, "10.0.0.0/16")
+    replacement = ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
     assert replacement["transit"]["cidr"] == first["transit"]["cidr"]
 
 
 def test_failed_delete_preserves_its_entry_and_peer(tmp_path, monkeypatch):
     store = store_for(tmp_path)
-    first = store.ensure_virtual_network(UID_ONE, "10.0.0.0/16")
-    second = store.ensure_virtual_network(UID_TWO, "10.0.0.0/16")
+    first = ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
+    second = ensure_virtual_network(store, UID_TWO, "10.0.0.0/16")
 
     def failed_cleanup(entry, **kwargs):
         assert_store_lock_is_free(store)
@@ -490,10 +579,10 @@ def test_failed_delete_preserves_its_entry_and_peer(tmp_path, monkeypatch):
 
     monkeypatch.setattr(agentless_net_state, "delete_virtual_network", failed_cleanup)
     with pytest.raises(StateError, match="injected cleanup failure"):
-        store.delete_and_remove_virtual_network(UID_ONE)
+        delete_virtual_network(store, UID_ONE)
 
-    assert store.get_virtual_network(UID_ONE) == first
-    assert store.get_virtual_network(UID_TWO) == second
+    assert get_virtual_network(store, UID_ONE) == first
+    assert get_virtual_network(store, UID_TWO) == second
 
 
 def test_delete_cleans_deterministic_residue_even_when_state_entry_is_absent(
@@ -510,7 +599,7 @@ def test_delete_cleans_deterministic_residue_even_when_state_entry_is_absent(
         return True
 
     monkeypatch.setattr(agentless_net_state, "delete_virtual_network", cleanup_residue)
-    assert store.delete_and_remove_virtual_network(UID_THREE) is True
+    assert delete_virtual_network(store, UID_THREE) is True
     assert len(observed) == 1
     assert not store.path.exists()
 
@@ -519,12 +608,12 @@ def test_absent_state_entry_without_provider_residue_is_idempotent(tmp_path, mon
     store = store_for(tmp_path)
     monkeypatch.setattr(agentless_net_state, "delete_virtual_network", lambda *args, **kwargs: False)
 
-    assert store.delete_and_remove_virtual_network(UID_THREE) is False
+    assert delete_virtual_network(store, UID_THREE) is False
 
 
 def test_unknown_database_schema_fails_before_provider_cleanup(tmp_path, monkeypatch):
     store = store_for(tmp_path)
-    store.ensure_virtual_network(UID_ONE, "10.0.0.0/16")
+    ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
     with sqlite3.connect(store.path) as connection:
         connection.execute("PRAGMA user_version = 99")
     cleanup_called = False
@@ -536,26 +625,26 @@ def test_unknown_database_schema_fails_before_provider_cleanup(tmp_path, monkeyp
 
     monkeypatch.setattr(agentless_net_state, "delete_virtual_network", cleanup)
     with pytest.raises(StateCorrupt, match="unsupported state schema: 99"):
-        store.delete_and_remove_virtual_network(UID_ONE)
+        delete_virtual_network(store, UID_ONE)
     assert cleanup_called is False
 
 
 def test_state_database_rejects_unsafe_mode_and_corrupt_payload(tmp_path):
     store = store_for(tmp_path)
-    store.ensure_virtual_network(UID_ONE, "10.0.0.0/16")
+    ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
     store.path.chmod(0o644)
     with pytest.raises(StateCorrupt, match="unsafe owner or mode"):
-        store.get_virtual_network(UID_ONE)
+        get_virtual_network(store, UID_ONE)
 
     store.path.chmod(0o600)
     with sqlite3.connect(store.path) as connection:
         connection.execute("UPDATE virtual_networks SET payload = ? WHERE uid = ?", ("{", UID_ONE))
     with pytest.raises(StateCorrupt, match="malformed VirtualNetwork state payload"):
-        store.get_virtual_network(UID_ONE)
+        get_virtual_network(store, UID_ONE)
 
 
 def test_smallest_virtual_network_cidr_allocates_one_transit_link(tmp_path):
-    entry = store_for(tmp_path).ensure_virtual_network(UID_ONE, "10.0.0.0/31")
+    entry = ensure_virtual_network(store_for(tmp_path), UID_ONE, "10.0.0.0/31")
     assert entry["transit"]["cidr"] == "10.0.0.0/31"
     assert entry["transit"]["host_ip"] == "10.0.0.0/31"
     assert entry["transit"]["namespace_ip"] == "10.0.0.1/31"
@@ -564,13 +653,13 @@ def test_smallest_virtual_network_cidr_allocates_one_transit_link(tmp_path):
 def test_virtual_network_cidr_smaller_than_transit_link_fails_without_state(tmp_path):
     store = store_for(tmp_path)
     with pytest.raises(StateError, match="too small for a /31"):
-        store.ensure_virtual_network(UID_ONE, "10.0.0.0/32")
+        ensure_virtual_network(store, UID_ONE, "10.0.0.0/32")
     assert not store.path.exists()
 
 
 def test_schema_rejects_non_slash_31_transit_and_noncanonical_cidr(tmp_path):
     store = store_for(tmp_path)
-    entry = store.ensure_virtual_network(UID_ONE, "10.0.0.0/16")
+    entry = ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
     entry["transit"] = {
         "cidr": "10.0.0.0/30",
         "namespace_ip": "10.0.0.1/30",
@@ -583,7 +672,7 @@ def test_schema_rejects_non_slash_31_transit_and_noncanonical_cidr(tmp_path):
             (json.dumps(entry), UID_ONE),
         )
     with pytest.raises(StateCorrupt, match="transit CIDR must be an IPv4 /31"):
-        store.get_virtual_network(UID_ONE)
+        get_virtual_network(store, UID_ONE)
 
     entry["transit"] = {
         "cidr": "10.0.0.0/31",
@@ -603,13 +692,18 @@ def test_schema_rejects_non_slash_31_transit_and_noncanonical_cidr(tmp_path):
             ),
         )
     with pytest.raises(StateCorrupt, match="VirtualNetwork CIDR must be canonical"):
-        store.get_virtual_network(UID_ONE)
+        get_virtual_network(store, UID_ONE)
 
 
 def test_state_database_keeps_schema_v1_and_indexes_uid_and_transit(tmp_path):
     store = store_for(tmp_path)
     for uid_number in range(1, 129):
-        store.ensure_virtual_network(str(uuid.UUID(int=uid_number)), "10.0.0.0/16")
+        ensure_virtual_network(
+            store,
+            str(uuid.UUID(int=uid_number)),
+            "10.0.0.0/16",
+            tenant_id=f"tenant-{uid_number}",
+        )
 
     with sqlite3.connect(store.path) as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
@@ -632,3 +726,87 @@ def test_state_database_keeps_schema_v1_and_indexes_uid_and_transit(tmp_path):
     assert "INDEX" in uid_plan.upper()
     assert "INDEX" in transit_plan.upper()
     assert len(store.snapshot()["virtual_networks"]) == 128
+
+
+def test_virtual_network_quota_is_per_tenant_and_node_capacity_is_shared(tmp_path):
+    store = store_for(tmp_path)
+    for uid_number in range(1, MAX_VNS_PER_TENANT + 1):
+        ensure_virtual_network(
+            store,
+            str(uuid.UUID(int=uid_number)),
+            "10.0.0.0/16",
+            max_per_tenant=MAX_VNS_PER_TENANT,
+            max_per_node=MAX_VNS_PER_NODE,
+        )
+
+    with pytest.raises(StateError, match="tenant VirtualNetwork quota is exhausted"):
+        ensure_virtual_network(
+            store,
+            str(uuid.UUID(int=MAX_VNS_PER_TENANT + 1)),
+            "10.0.0.0/16",
+            max_per_tenant=MAX_VNS_PER_TENANT,
+            max_per_node=MAX_VNS_PER_NODE,
+        )
+
+    another_tenant = ensure_virtual_network(
+        store,
+        str(uuid.UUID(int=MAX_VNS_PER_TENANT + 1)),
+        "10.0.0.0/16",
+        tenant_id=TENANT_TWO,
+        max_per_tenant=MAX_VNS_PER_TENANT,
+        max_per_node=MAX_VNS_PER_NODE,
+    )
+    assert another_tenant["tenant_id"] == TENANT_TWO
+
+    with pytest.raises(StateError, match="network-node VirtualNetwork capacity is exhausted"):
+        ensure_virtual_network(
+            store,
+            str(uuid.UUID(int=MAX_VNS_PER_TENANT + 2)),
+            "10.0.0.0/16",
+            tenant_id=TENANT_TWO,
+            max_per_tenant=MAX_VNS_PER_TENANT,
+            max_per_node=MAX_VNS_PER_TENANT + 1,
+        )
+
+
+def test_tenant_identity_is_checked_on_retry_read_and_delete(tmp_path, monkeypatch):
+    store = store_for(tmp_path)
+    ensure_virtual_network(store, UID_ONE, "10.0.0.0/16", tenant_id=TENANT_ONE)
+
+    with pytest.raises(StateError, match="tenant does not match"):
+        ensure_virtual_network(store, UID_ONE, "10.0.0.0/16", tenant_id=TENANT_TWO)
+    with pytest.raises(StateError, match="tenant does not match"):
+        get_virtual_network(store, UID_ONE, tenant_id=TENANT_TWO)
+    monkeypatch.setattr(
+        agentless_net_state,
+        "delete_virtual_network",
+        lambda *args, **kwargs: pytest.fail("wrong tenant must not reach provider cleanup"),
+    )
+    with pytest.raises(StateError, match="tenant does not match"):
+        delete_virtual_network(store, UID_ONE, tenant_id=TENANT_TWO)
+
+
+def test_deleted_virtual_network_releases_tenant_and_node_capacity(tmp_path, monkeypatch):
+    store = store_for(tmp_path)
+    ensure_virtual_network(
+        store,
+        UID_ONE,
+        "10.0.0.0/16",
+        max_per_tenant=1,
+        max_per_node=1,
+    )
+    monkeypatch.setattr(
+        agentless_net_state,
+        "delete_virtual_network",
+        lambda entry, **kwargs: True,
+    )
+
+    assert delete_virtual_network(store, UID_ONE) is True
+    replacement = ensure_virtual_network(
+        store,
+        UID_TWO,
+        "10.0.0.0/16",
+        max_per_tenant=1,
+        max_per_node=1,
+    )
+    assert replacement["uid"] == UID_TWO

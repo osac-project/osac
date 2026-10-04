@@ -67,6 +67,12 @@ Host uplink names use the reserved `osacvn` prefix. Two shared host `FORWARD`
 rules isolate all such interfaces, keeping firewall rule count independent of
 the number of VirtualNetworks.
 
+Admission defaults to 16 active VirtualNetworks per tenant and 256 per
+network node. Set `AGENTLESS_NET_MAX_VNS_PER_TENANT` and
+`AGENTLESS_NET_MAX_VNS_PER_NODE` to tune those limits for the network node's
+capacity. Quotas are checked transactionally before a new provider mapping is
+reserved; retries and deletions remain available at the limit.
+
 The state-file flock protects short SQLite transactions. A bounded 256-file
 lock pool serializes operations for each resource UID while provider commands
 run; hash collisions can serialize unrelated UIDs. A short firewall lock

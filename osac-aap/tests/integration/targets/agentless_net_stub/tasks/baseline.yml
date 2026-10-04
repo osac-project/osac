@@ -33,6 +33,7 @@
             name: agentless-net-stub-test
             namespace: default
             annotations:
+              osac.openshift.io/tenant: tenant-a
               osac.openshift.io/implementation-strategy: agentless_net
   tasks:
     - name: Validate the AgentlessNet VirtualNetwork lifecycle playbooks

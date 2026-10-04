@@ -16,10 +16,11 @@ DOCUMENTATION = r"""
 module: agentless_net_state
 short_description: Provision or remove an AgentlessNet VirtualNetwork
 description:
-  - Reserves the UID-keyed VirtualNetwork mapping before applying network state.
-  - Uses a short state-file transaction lock and a per-UID operation lock so
+  - Reserves a tenant-owned UID-keyed VirtualNetwork mapping before applying network state.
+  - Enforces per-tenant and per-node VirtualNetwork limits in the same transaction.
+  - Uses SQLite indexes and a per-UID operation lock so
     provider commands do not block unrelated state updates.
-  - Writes state atomically and retains an allocation until provider cleanup has completed.
+  - Retains an allocation until provider cleanup has completed.
 options:
   action:
     description: State operation to perform.
@@ -34,9 +35,19 @@ options:
     description: Stable VirtualNetwork UID.
     type: str
     required: true
+  tenant_id:
+    description: Tenant name from the VirtualNetwork tenant annotation.
+    type: str
+    required: true
   virtual_network_cidr:
     description: VirtualNetwork IPv4 supernet.
     type: str
+  max_per_tenant:
+    description: Maximum active AgentlessNet VirtualNetworks for this tenant.
+    type: int
+  max_per_node:
+    description: Maximum active AgentlessNet VirtualNetworks on this network node.
+    type: int
 author:
   - OSAC project
 version_added: "1.0.0"
@@ -48,6 +59,9 @@ EXAMPLES = r"""
     action: ensure_virtual_network
     state_file: /etc/osac/agentless_network_state.sqlite3
     uid: 01234567-89ab-cdef-0123-456789abcdef
+    tenant_id: tenant-a
+    max_per_tenant: 16
+    max_per_node: 256
     virtual_network_cidr: 10.20.0.0/16
 """
 
@@ -69,13 +83,16 @@ def main() -> None:
             },
             "state_file": {"type": "path", "required": True},
             "uid": {"type": "str", "required": True},
+            "tenant_id": {"type": "str", "required": True},
             "virtual_network_cidr": {"type": "str"},
+            "max_per_tenant": {"type": "int"},
+            "max_per_node": {"type": "int"},
         },
         required_if=[
             (
                 "action",
                 "ensure_virtual_network",
-                ["virtual_network_cidr"],
+                ["virtual_network_cidr", "max_per_tenant", "max_per_node"],
             )
         ],
         supports_check_mode=True,
@@ -86,7 +103,9 @@ def main() -> None:
     try:
         if params["action"] == "ensure_virtual_network":
             if module.check_mode:
-                existing = store.get_virtual_network(params["uid"])
+                existing = store.get_virtual_network(
+                    params["uid"], params["tenant_id"]
+                )
                 module.exit_json(
                     changed=existing is None,
                     backend_network_id=params["uid"],
@@ -94,6 +113,9 @@ def main() -> None:
             _, state_changed, network_changed = store.ensure_and_reconcile_virtual_network(
                 params["uid"],
                 params["virtual_network_cidr"],
+                params["tenant_id"],
+                params["max_per_tenant"],
+                params["max_per_node"],
             )
             module.exit_json(
                 changed=state_changed or network_changed,
@@ -101,9 +123,16 @@ def main() -> None:
             )
 
         if module.check_mode:
-            module.exit_json(changed=store.get_virtual_network(params["uid"]) is not None)
+            module.exit_json(
+                changed=(
+                    store.get_virtual_network(params["uid"], params["tenant_id"])
+                    is not None
+                )
+            )
         module.exit_json(
-            changed=store.delete_and_remove_virtual_network(params["uid"])
+            changed=store.delete_and_remove_virtual_network(
+                params["uid"], params["tenant_id"]
+            )
         )
     except StateError as error:
         module.fail_json(msg=str(error))

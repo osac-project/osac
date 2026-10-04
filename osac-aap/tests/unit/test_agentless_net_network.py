@@ -163,8 +163,8 @@ def test_ensure_veth_pair_sets_uid_ownership_alias(monkeypatch):
 
     def run(command, check=True):
         commands.append(command)
-        if command == ["ip", "netns", "list"]:
-            return completed(command, "")
+        if command == ["ip", "netns", "exec", "vn-test", "true"]:
+            return completed(command, returncode=1)
         if command[:4] == ["ip", "-o", "link", "show"]:
             return completed(command, returncode=1)
         if command[:5] == ["ip", "netns", "exec", "vn-test", "ip"]:
@@ -178,6 +178,7 @@ def test_ensure_veth_pair_sets_uid_ownership_alias(monkeypatch):
 
     assert ["ip", "link", "add", "vn-host", "type", "veth", "peer", "name", "vn-ns"] in commands
     assert ["ip", "link", "set", "vn-ns", "netns", "vn-test"] in commands
+    assert ["ip", "netns", "add", "vn-test"] in commands
     assert [
         "ip",
         "link",
@@ -191,8 +192,8 @@ def test_ensure_veth_pair_sets_uid_ownership_alias(monkeypatch):
 
 def test_ensure_veth_pair_rejects_foreign_host_interface(monkeypatch):
     def run(command, check=True):
-        if command == ["ip", "netns", "list"]:
-            return completed(command, "vn-test\n")
+        if command == ["ip", "netns", "exec", "vn-test", "true"]:
+            return completed(command)
         if command[:4] == ["ip", "-o", "link", "show"]:
             return completed(command)
         if command[:5] == ["ip", "netns", "exec", "vn-test", "ip"]:
@@ -232,8 +233,6 @@ def test_run_command_bounds_subprocess_and_reports_timeout(monkeypatch):
 
 def test_delete_uplink_is_idempotent_when_already_absent(monkeypatch):
     def run(command, check=True):
-        if command == ["ip", "netns", "list"]:
-            return completed(command, "")
         return completed(command, returncode=1)
 
     monkeypatch.setattr(agentless_net_network, "run_command", run)

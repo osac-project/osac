@@ -7,21 +7,26 @@
     - name: Read VirtualNetwork provider settings
       ansible.builtin.set_fact:
         agentless_net_vn_uid: "{{ virtual_network.metadata.uid | default('') }}"
+        agentless_net_vn_tenant_id: "{{ virtual_network.metadata.annotations['osac.openshift.io/tenant'] | default('') }}"
         agentless_net_vn_cidr: "{{ virtual_network.spec.ipv4Cidr | default('') }}"
 
     - name: Validate VirtualNetwork provisioning inputs
       ansible.builtin.assert:
         that:
           - agentless_net_vn_uid | length > 0
+          - agentless_net_vn_tenant_id | length > 0
           - agentless_net_vn_cidr | length > 0
         fail_msg: >-
-          AgentlessNet requires a VirtualNetwork UID and IPv4 CIDR.
+          AgentlessNet requires a VirtualNetwork UID, tenant annotation, and IPv4 CIDR.
 
     - name: Reconcile the VirtualNetwork namespace and forwarding baseline
       osac.templates.agentless_net_state:
         action: ensure_virtual_network
         state_file: "{{ agentless_net_network_state_file }}"
         uid: "{{ agentless_net_vn_uid }}"
+        tenant_id: "{{ agentless_net_vn_tenant_id }}"
+        max_per_tenant: "{{ agentless_net_max_vns_per_tenant }}"
+        max_per_node: "{{ agentless_net_max_vns_per_network_node }}"
         virtual_network_cidr: "{{ agentless_net_vn_cidr }}"
       delegate_to: "{{ groups['agentless_net_vn_network_node'][0] }}"
       become: true

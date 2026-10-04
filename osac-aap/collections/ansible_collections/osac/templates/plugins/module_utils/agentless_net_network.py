@@ -120,9 +120,14 @@ def _default_route_present(namespace: str, gateway: str, interface: str) -> bool
     )
 
 
+def namespace_exists(namespace: str) -> bool:
+    return run_command(
+        ["ip", "netns", "exec", namespace, "true"], check=False
+    ).returncode == 0
+
+
 def ensure_namespace(namespace: str) -> bool:
-    namespaces = run_command(["ip", "netns", "list"]).stdout.splitlines()
-    if namespace in {line.split()[0] for line in namespaces if line.split()}:
+    if namespace_exists(namespace):
         return False
     run_command(["ip", "netns", "add", namespace])
     return True
@@ -298,8 +303,7 @@ def ensure_ipv4_forwarding(namespace: str) -> bool:
 
 def delete_uplink(namespace: str, host_interface: str) -> bool:
     changed = False
-    namespaces = run_command(["ip", "netns", "list"]).stdout.splitlines()
-    if namespace in {line.split()[0] for line in namespaces if line.split()}:
+    if namespace_exists(namespace):
         run_command(["ip", "netns", "delete", namespace])
         changed = True
 
@@ -310,10 +314,9 @@ def delete_uplink(namespace: str, host_interface: str) -> bool:
         run_command(["ip", "link", "delete", "dev", host_interface])
         changed = True
 
-    namespaces = run_command(["ip", "netns", "list"]).stdout.splitlines()
     host_link = run_command(
         ["ip", "-o", "link", "show", "dev", host_interface], check=False
     )
-    if namespace in {line.split()[0] for line in namespaces if line.split()} or host_link.returncode == 0:
+    if namespace_exists(namespace) or host_link.returncode == 0:
         raise NetworkCommandError("network namespace or host uplink remains after deletion")
     return changed

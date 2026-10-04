@@ -25,7 +25,7 @@ require (
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
 	github.com/onsi/ginkgo/v2 v2.32.2 // indirect
 	github.com/onsi/gomega v1.42.1 // indirect
-	github.com/rogpeppe/go-internal v1.15.0 // indirect
+	github.com/rogpeppe/go-internal v1.16.0 // indirect
 	github.com/stretchr/testify v1.12.1 // indirect
 	go.uber.org/mock v0.6.0 // indirect
 	golang.org/x/mod v0.39.0 // indirect

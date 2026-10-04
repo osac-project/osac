@@ -63,7 +63,6 @@ def test_virtual_network_retry_reuses_uid_mapping_and_canonical_slash_31(tmp_pat
     assert first["transit"]["host_ip"] == f"{transit.network_address}/31"
     assert first["transit"]["gateway"] == str(transit.network_address)
     assert first["virtual_network_cidr"] == "10.0.0.0/16"
-    assert first["default_forward_policy"] == "permit_all"
     assert json.loads(store.path.read_text())["schema_version"] == 1
     assert store.path.stat().st_mode & 0o777 == 0o600
     assert store.lock_path.exists()

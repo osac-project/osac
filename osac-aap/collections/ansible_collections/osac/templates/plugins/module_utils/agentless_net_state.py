@@ -38,7 +38,6 @@ VIRTUAL_NETWORK_KEYS = {
     "namespace_name",
     "uplink",
     "transit",
-    "default_forward_policy",
 }
 TRANSIT_KEYS = {"cidr", "namespace_ip", "host_ip", "gateway"}
 
@@ -183,8 +182,7 @@ class StateStore:
         self._validate(state)
         return state, previous
 
-    @staticmethod
-    def _validate(state: Any) -> None:
+    def _validate(self, state: Any) -> None:
         if not isinstance(state, dict):
             raise StateCorrupt("state root must be an object")
         schema_version = state.get("schema_version")
@@ -211,10 +209,10 @@ class StateStore:
                 raise StateCorrupt("duplicate or empty VirtualNetwork UID")
             if not _is_canonical_uuid(uid):
                 raise StateCorrupt("VirtualNetwork UID must be a canonical UUID")
+            identity = self._identity_entry(uid)
             if not isinstance(namespace, str) or not namespace or namespace in seen_namespaces:
                 raise StateCorrupt("duplicate or invalid namespace name")
-            digest = hashlib.sha256(uid.encode()).hexdigest()
-            if namespace != f"n{digest[:14]}":
+            if namespace != identity["namespace_name"]:
                 raise StateCorrupt("VirtualNetwork namespace does not match its UID")
             if (
                 not isinstance(uplink, dict)
@@ -222,10 +220,7 @@ class StateStore:
                 or not all(isinstance(name, str) and name for name in uplink.values())
             ):
                 raise StateCorrupt("VirtualNetwork uplink state is invalid")
-            if uplink != {
-                "namespace_interface": f"v{digest[:11]}n",
-                "host_interface": f"v{digest[:11]}h",
-            }:
+            if uplink != identity["uplink"]:
                 raise StateCorrupt("VirtualNetwork uplink does not match its UID")
             if not isinstance(transit, dict) or set(transit) != TRANSIT_KEYS:
                 raise StateCorrupt("VirtualNetwork transit state is invalid")
@@ -268,9 +263,6 @@ class StateStore:
                 raise StateCorrupt("VirtualNetwork namespace IP is invalid")
             if transit["host_ip"] != f"{transit_cidr.network_address}/{transit_cidr.prefixlen}":
                 raise StateCorrupt("VirtualNetwork host IP is invalid")
-            if entry["default_forward_policy"] != "permit_all":
-                raise StateCorrupt("VirtualNetwork forwarding policy is invalid")
-
             seen_uids.add(uid)
             seen_namespaces.add(namespace)
             seen_interfaces.update(uplink.values())
@@ -374,7 +366,6 @@ class StateStore:
                             "host_ip": f"{host_ip}/{transit_network.prefixlen}",
                             "gateway": str(host_ip),
                         },
-                        "default_forward_policy": "permit_all",
                     }
                     state["virtual_networks"].append(entry)
                     self._write_locked(state, previous)

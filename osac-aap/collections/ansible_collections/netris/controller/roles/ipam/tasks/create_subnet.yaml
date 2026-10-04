@@ -30,6 +30,25 @@
     ipam_already_existed: true
   when: _existing_ipam_subnet is not none
 
+- name: Fail when existing IPAM subnet has immutable field mismatch
+  when:
+    - _existing_ipam_subnet is not none
+    - ipam_cidr is defined
+  block:
+    - name: Compute IPAM subnet immutable mismatches
+      ansible.builtin.set_fact:
+        _ipam_subnet_mismatches: >-
+          {{ _existing_ipam_subnet | netris.controller.netris_immutable_mismatch({
+               'prefix': ipam_cidr
+             }) }}
+
+    - name: Fail on IPAM subnet immutable mismatch
+      ansible.builtin.fail:
+        msg: >-
+          {{ 'IPAM subnet' | netris.controller.format_immutable_mismatch_message(
+               ipam_name, _ipam_subnet_mismatches) }}
+      when: (_ipam_subnet_mismatches | default([]) | length) > 0
+
 - name: Create IPAM subnet
   ansible.builtin.uri:
     url: "{{ netris_controller_url }}/api/v2/ipam/subnet"

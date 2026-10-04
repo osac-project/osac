@@ -28,6 +28,26 @@
     vpc_already_existed: true
   when: _existing_vpc is defined and _existing_vpc is not none
 
+- name: Fail when existing VPC has immutable field mismatch
+  when:
+    - _existing_vpc is defined
+    - _existing_vpc is not none
+    - vpc_tenant_id is defined
+  block:
+    - name: Compute VPC immutable mismatches
+      ansible.builtin.set_fact:
+        _vpc_mismatches: >-
+          {{ _existing_vpc | netris.controller.netris_immutable_mismatch({
+               'adminTenant.id': vpc_tenant_id
+             }) }}
+
+    - name: Fail on VPC immutable mismatch
+      ansible.builtin.fail:
+        msg: >-
+          {{ 'VPC' | netris.controller.format_immutable_mismatch_message(
+               vpc_name, _vpc_mismatches) }}
+      when: (_vpc_mismatches | default([]) | length) > 0
+
 - name: Create VPC
   ansible.builtin.uri:
     url: "{{ netris_controller_url }}/api/v2/vpc"

@@ -1,0 +1,211 @@
+---
+# OSAC-4923: Netris idempotency helpers — default refuse, immutable mismatch
+# messaging, and move membership post-condition filters.
+# Does not call live Netris; SG ACL prune coverage is OSAC-4888.
+
+- name: "Netris idempotency - default refuse and mismatch helpers"
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../common_vars.yml
+
+  tasks:
+    - name: Refuse delete of default VirtualNetwork
+      block:
+        - name: Include refuse helper for default VN
+          ansible.builtin.include_role:
+            name: osac.templates.netris
+            tasks_from: _refuse_if_default
+          vars:
+            _default_refuse_resource:
+              metadata:
+                name: default-vn
+                labels:
+                  osac.openshift.io/default: "true"
+            _default_refuse_kind: VirtualNetwork
+            _default_refuse_name: default-vn
+
+        - name: Fail when default VirtualNetwork delete was not refused
+          ansible.builtin.fail:
+            msg: "UNEXPECTED: default VirtualNetwork delete was not refused"
+      rescue:
+        - name: Capture VN refuse failure
+          ansible.builtin.set_fact:
+            _refuse_msg: "{{ ansible_failed_result.msg | default('') }}"
+
+        - name: Assert default VirtualNetwork delete was refused
+          ansible.builtin.assert:
+            that:
+              - "'Refusing to delete default VirtualNetwork' in _refuse_msg"
+            fail_msg: "Expected refuse of default VirtualNetwork delete; got: {{ _refuse_msg }}"
+            success_msg: "Default VirtualNetwork delete refused"
+
+    - name: Refuse delete of default Subnet
+      block:
+        - name: Include refuse helper for default Subnet
+          ansible.builtin.include_role:
+            name: osac.templates.netris
+            tasks_from: _refuse_if_default
+          vars:
+            _default_refuse_resource:
+              metadata:
+                name: default-subnet
+                labels:
+                  osac.openshift.io/default: "true"
+            _default_refuse_kind: Subnet
+            _default_refuse_name: default-subnet
+
+        - name: Fail when default Subnet delete was not refused
+          ansible.builtin.fail:
+            msg: "UNEXPECTED: default Subnet delete was not refused"
+      rescue:
+        - name: Capture Subnet refuse failure
+          ansible.builtin.set_fact:
+            _refuse_msg: "{{ ansible_failed_result.msg | default('') }}"
+
+        - name: Assert default Subnet delete was refused
+          ansible.builtin.assert:
+            that:
+              - "'Refusing to delete default Subnet' in _refuse_msg"
+            fail_msg: "Expected refuse of default Subnet delete; got: {{ _refuse_msg }}"
+            success_msg: "Default Subnet delete refused"
+
+    - name: Refuse delete of default SecurityGroup
+      block:
+        - name: Include refuse helper for default SecurityGroup
+          ansible.builtin.include_role:
+            name: osac.templates.netris
+            tasks_from: _refuse_if_default
+          vars:
+            _default_refuse_resource:
+              metadata:
+                name: default-sg
+                labels:
+                  osac.openshift.io/default: "true"
+            _default_refuse_kind: SecurityGroup
+            _default_refuse_name: default-sg
+
+        - name: Fail when default SecurityGroup delete was not refused
+          ansible.builtin.fail:
+            msg: "UNEXPECTED: default SecurityGroup delete was not refused"
+      rescue:
+        - name: Capture SecurityGroup refuse failure
+          ansible.builtin.set_fact:
+            _refuse_msg: "{{ ansible_failed_result.msg | default('') }}"
+
+        - name: Assert default SecurityGroup delete was refused
+          ansible.builtin.assert:
+            that:
+              - "'Refusing to delete default SecurityGroup' in _refuse_msg"
+            fail_msg: "Expected refuse of default SecurityGroup delete; got: {{ _refuse_msg }}"
+            success_msg: "Default SecurityGroup delete refused"
+
+    - name: Refuse delete of default NATGateway
+      block:
+        - name: Include refuse helper for default NATGateway
+          ansible.builtin.include_role:
+            name: osac.templates.netris
+            tasks_from: _refuse_if_default
+          vars:
+            _default_refuse_resource:
+              metadata:
+                name: default-nat
+                labels:
+                  osac.openshift.io/default: "true"
+            _default_refuse_kind: NATGateway
+            _default_refuse_name: default-nat
+
+        - name: Fail when default NATGateway delete was not refused
+          ansible.builtin.fail:
+            msg: "UNEXPECTED: default NATGateway delete was not refused"
+      rescue:
+        - name: Capture NATGateway refuse failure
+          ansible.builtin.set_fact:
+            _refuse_msg: "{{ ansible_failed_result.msg | default('') }}"
+
+        - name: Assert default NATGateway delete was refused
+          ansible.builtin.assert:
+            that:
+              - "'Refusing to delete default NATGateway' in _refuse_msg"
+            fail_msg: "Expected refuse of default NATGateway delete; got: {{ _refuse_msg }}"
+            success_msg: "Default NATGateway delete refused"
+
+    - name: Allow privileged delete of default resource
+      ansible.builtin.include_role:
+        name: osac.templates.netris
+        tasks_from: _refuse_if_default
+      vars:
+        osac_allow_default_resource_delete: true
+        _default_refuse_resource:
+          metadata:
+            name: default-vn
+            labels:
+              osac.openshift.io/default: "true"
+        _default_refuse_kind: VirtualNetwork
+        _default_refuse_name: default-vn
+
+    - name: Non-default resource is not refused
+      ansible.builtin.include_role:
+        name: osac.templates.netris
+        tasks_from: _refuse_if_default
+      vars:
+        _default_refuse_resource:
+          metadata:
+            name: tenant-vn
+            labels: {}
+        _default_refuse_kind: VirtualNetwork
+        _default_refuse_name: tenant-vn
+
+    - name: Detect IPAM prefix immutable mismatch via filter
+      ansible.builtin.set_fact:
+        _mismatch: >-
+          {{
+            {'name': 'alloc1', 'prefix': '10.0.0.0/16'}
+            | netris.controller.netris_immutable_mismatch({'prefix': '10.1.0.0/16'})
+          }}
+        _msg: >-
+          {{ 'IPAM allocation' | netris.controller.format_immutable_mismatch_message(
+               'alloc1',
+               [{'field': 'prefix', 'expected': '10.1.0.0/16', 'actual': '10.0.0.0/16'}]
+             ) }}
+
+    - name: Assert mismatch detected and message is actionable
+      ansible.builtin.assert:
+        that:
+          - (_mismatch | length) == 1
+          - _mismatch[0].field == 'prefix'
+          - "'Refusing delete-and-recreate' in _msg"
+          - "'expected=10.1.0.0/16' in _msg"
+        fail_msg: "Immutable mismatch helper failed"
+        success_msg: "Immutable mismatch helper OK"
+
+    - name: Assert matching fields produce no mismatch (no-op create path)
+      ansible.builtin.set_fact:
+        _ok: >-
+          {{
+            {'name': 'alloc1', 'prefix': '10.0.0.0/16'}
+            | netris.controller.netris_immutable_mismatch({'prefix': '10.0.0.0/16'})
+          }}
+
+    - name: Assert no-op match
+      ansible.builtin.assert:
+        that:
+          - (_ok | length) == 0
+        success_msg: "Matching immutable fields → no-op"
+
+    - name: Assert move post-condition port membership filter
+      ansible.builtin.set_fact:
+        _port_present: "{{ {'ports': [{'id': 5}, {'id': 9}]} | netris.controller.netris_port_on_vnet(9) }}"
+        _port_absent: "{{ {'ports': [{'id': 5}]} | netris.controller.netris_port_on_vnet(9) }}"
+        _port_present_str: "{{ {'ports': [{'id': 5}, {'id': 9}]} | netris.controller.netris_port_on_vnet('9') }}"
+        _ports_after_exclude: "{{ [{'id': 5}, {'id': 9}] | netris.controller.netris_ports_excluding('9') }}"
+
+    - name: Assert move membership and detach exclusion results
+      ansible.builtin.assert:
+        that:
+          - _port_present | bool
+          - _port_present_str | bool
+          - not (_port_absent | bool)
+          - (_ports_after_exclude | length) == 1
+          - _ports_after_exclude[0].id == 5
+        success_msg: "Move port membership / exclude filters OK"

@@ -263,7 +263,7 @@ Touched-area requirements: [component guide](../osac-aap/AGENTS.md#integration-t
 | Component integration (focused) | A target under `tests/integration/targets/`; run the corresponding playbook from `tests/integration/` | The specific role workflow and its documented fixtures | Only the dependencies declared by that target; inspect its setup and overrides before claiming a real boundary. |
 | Contract | No dedicated contract suite; use the qualifying [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) task for AAP/provider coverage | No AAP or provider endpoint is exercised as a contract | The Kind API, mock VMS server, and fixture-driven provider behavior do not prove an AAP or provider contract. |
 | E2E | Cross-component OSAC E2E suites | Complete fulfillment and provisioning flows | Depends on the deployed AAP and provider environment. |
-| E2E (manual existing lab) | Repository-root `./vlan-test-deploy.sh`; owned by [OSAC-5529](https://redhat.atlassian.net/browse/OSAC-5529) | Fulfillment API/DB, generated CR, operator, AAP worker, SSH, and isolated Linux namespace provider | Uses the existing lab and a disposable isolated network node; it is not a CI suite. |
+| E2E (manual existing lab) | Repository-root `./vlan-e2e.sh`; owned by [OSAC-5529](https://redhat.atlassian.net/browse/OSAC-5529) | Fulfillment API/DB, generated CR, operator, AAP worker, SSH, and isolated Linux namespace provider | Uses the existing lab and a disposable isolated network node; it is not a CI suite. |
 
 ### Build/package validation
 

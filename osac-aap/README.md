@@ -62,6 +62,10 @@ allocator must exclude this transit block. Its connected route is intended to
 take precedence over the host's default route; existing more-specific host
 routes that overlap the transit block are rejected.
 
+Host uplink names use the reserved `osacvn` prefix. Two shared host `FORWARD`
+rules isolate all such interfaces, keeping firewall rule count independent of
+the number of VirtualNetworks.
+
 The state-file flock is held only while reading, allocating, or committing the
 atomic JSON snapshot and backup. A bounded 256-file lock pool serializes
 operations for each resource UID while provider commands run; hash collisions
@@ -72,11 +76,6 @@ have been removed and verified. The module rejects a missing
 state file when a backup exists, malformed JSON, unsupported versions, and
 unsafe owner or file modes; do not delete the state file or backup to clear an
 error.
-
-The single-node AgentlessNet backend supports at most 64 active VirtualNetworks.
-Each VN has two host forwarding-isolation rules, so this cap bounds the host
-`FORWARD` chain's rule scan cost. Requests beyond the limit fail before provider
-state is added.
 
 Each selected AgentlessNet VirtualNetwork job requires the optional
 `agentless-net-inventory` ConfigMap mounted at

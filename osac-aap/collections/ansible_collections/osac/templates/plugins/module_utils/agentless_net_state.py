@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from ansible_collections.osac.templates.plugins.module_utils.agentless_net_network import (
+    AGENTLESS_NET_HOST_INTERFACE_PREFIX,
     configure_uplink,
     delete_uplink,
     ensure_ipv4_forwarding,
@@ -31,7 +32,6 @@ SCHEMA_VERSION = 1
 LOCK_WAIT_SECONDS = 60
 LOCK_POLL_SECONDS = 0.05
 MAX_RULE_DELETIONS = 64
-MAX_VIRTUAL_NETWORKS = 64
 RESOURCE_LOCK_SHARDS = 256
 STATE_KEYS = {"schema_version", "virtual_networks"}
 VIRTUAL_NETWORK_KEYS = {
@@ -297,8 +297,8 @@ class StateStore:
             "uid": uid,
             "namespace_name": f"n{digest[:14]}",
             "uplink": {
-                "namespace_interface": f"v{digest[:11]}n",
-                "host_interface": f"v{digest[:11]}h",
+                "namespace_interface": f"{AGENTLESS_NET_HOST_INTERFACE_PREFIX}{digest[:8]}n",
+                "host_interface": f"{AGENTLESS_NET_HOST_INTERFACE_PREFIX}{digest[:8]}h",
             },
         }
 
@@ -328,11 +328,6 @@ class StateStore:
                         raise StateError("VirtualNetwork CIDR does not match saved state")
                     state_changed = False
                 else:
-                    if len(state["virtual_networks"]) >= MAX_VIRTUAL_NETWORKS:
-                        raise StateError(
-                            "AgentlessNet supports at most "
-                            f"{MAX_VIRTUAL_NETWORKS} active VirtualNetworks per network node"
-                        )
                     identity = self._identity_entry(uid)
                     if any(
                         item["namespace_name"] == identity["namespace_name"]
@@ -512,10 +507,15 @@ def _is_unconditional_forward_drop(rule: str) -> bool:
     )
 
 
-def _verify_host_forwarding_isolation(host_interface: str) -> None:
+def _host_forwarding_isolation_rule(direction: str) -> str:
+    interface_pattern = f"{AGENTLESS_NET_HOST_INTERFACE_PREFIX}+"
+    return f"-A FORWARD {direction} {interface_pattern} -j DROP"
+
+
+def _verify_host_forwarding_isolation() -> None:
     rules = _host_forwarding_rules()
     for direction in ("-i", "-o"):
-        expected = f"-A FORWARD {direction} {host_interface} -j DROP"
+        expected = _host_forwarding_isolation_rule(direction)
         try:
             index = rules.index(expected)
         except ValueError as error:
@@ -524,12 +524,12 @@ def _verify_host_forwarding_isolation(host_interface: str) -> None:
             raise StateError("host VirtualNetwork forwarding isolation rule is below an allow rule")
 
 
-def _ensure_host_forwarding_isolation(host_interface: str) -> bool:
+def _ensure_host_forwarding_isolation() -> bool:
     changed = False
     rules = _host_forwarding_rules()
     for direction in ("-i", "-o"):
-        expected = f"-A FORWARD {direction} {host_interface} -j DROP"
-        needs_reorder = expected not in rules
+        expected = _host_forwarding_isolation_rule(direction)
+        needs_reorder = expected not in rules or rules.count(expected) > 1
         if not needs_reorder:
             index = rules.index(expected)
             needs_reorder = any(
@@ -544,7 +544,7 @@ def _ensure_host_forwarding_isolation(host_interface: str) -> bool:
                 "-C",
                 "FORWARD",
                 direction,
-                host_interface,
+                f"{AGENTLESS_NET_HOST_INTERFACE_PREFIX}+",
                 "-j",
                 "DROP",
             ]
@@ -565,7 +565,7 @@ def _ensure_host_forwarding_isolation(host_interface: str) -> bool:
                 "FORWARD",
                 "1",
                 direction,
-                host_interface,
+                f"{AGENTLESS_NET_HOST_INTERFACE_PREFIX}+",
                 "-j",
                 "DROP",
             ]
@@ -573,11 +573,26 @@ def _ensure_host_forwarding_isolation(host_interface: str) -> bool:
             changed = True
             rules = [rule for rule in rules if rule != expected]
             rules.insert(0, expected)
-    _verify_host_forwarding_isolation(host_interface)
+    _verify_host_forwarding_isolation()
     return changed
 
 
-def _remove_host_forwarding_isolation(host_interface: str) -> bool:
+def _agentless_host_veth_present() -> bool:
+    links = parse_json_object_list(
+        _run(["ip", "-j", "link", "show"]).stdout,
+        description="network-node link",
+    )
+    return any(
+        isinstance(link.get("ifname"), str)
+        and link["ifname"].startswith(AGENTLESS_NET_HOST_INTERFACE_PREFIX)
+        for link in links
+    )
+
+
+def _remove_host_forwarding_isolation() -> bool:
+    if _agentless_host_veth_present():
+        return False
+
     changed = False
     for direction in ("-i", "-o"):
         check_rule = [
@@ -588,22 +603,12 @@ def _remove_host_forwarding_isolation(host_interface: str) -> bool:
             "-C",
             "FORWARD",
             direction,
-            host_interface,
+            f"{AGENTLESS_NET_HOST_INTERFACE_PREFIX}+",
             "-j",
             "DROP",
         ]
-        delete_rule = [
-            "iptables",
-            "-w",
-            "-t",
-            "filter",
-            "-D",
-            "FORWARD",
-            direction,
-            host_interface,
-            "-j",
-            "DROP",
-        ]
+        delete_rule = check_rule.copy()
+        delete_rule[4] = "-D"
         deletions = 0
         while _run(check_rule, check=False).returncode == 0:
             if deletions >= MAX_RULE_DELETIONS:
@@ -626,19 +631,26 @@ def reconcile_virtual_network(
     host_interface = entry["uplink"]["host_interface"]
     transit = entry["transit"]
     try:
-        changed = ensure_veth_pair(
-            namespace,
-            namespace_interface,
-            host_interface,
-            owner_alias=f"osac-vn:{entry['uid']}",
-        )
+        with _with_firewall_lock(firewall_lock_path):
+            changed = _ensure_host_forwarding_isolation()
+            try:
+                changed = (
+                    ensure_veth_pair(
+                        namespace,
+                        namespace_interface,
+                        host_interface,
+                        owner_alias=f"osac-vn:{entry['uid']}",
+                    )
+                    or changed
+                )
+            except NetworkCommandError:
+                _remove_host_forwarding_isolation()
+                raise
     except NetworkCommandError as error:
         raise StateError(str(error)) from error
 
     # Keep this namespace isolated even when the node already has forwarding
     # enabled for other workloads. Do not change the host-wide forwarding sysctl.
-    with _with_firewall_lock(firewall_lock_path):
-        changed = _ensure_host_forwarding_isolation(host_interface) or changed
     try:
         changed = (
             configure_uplink(
@@ -751,7 +763,7 @@ def _verify_virtual_network(entry: dict[str, Any]) -> None:
     )
     if rule.returncode != 0:
         raise StateError("VirtualNetwork established/related forwarding rule is absent")
-    _verify_host_forwarding_isolation(host_interface)
+    _verify_host_forwarding_isolation()
 
 
 def delete_virtual_network(
@@ -764,16 +776,16 @@ def delete_virtual_network(
     host_interface = entry["uplink"]["host_interface"]
     owner_alias = f"osac-vn:{entry['uid']}"
     try:
-        host_link = link_details(None, host_interface)
-        if host_link is not None:
-            if host_link.get("linkinfo", {}).get("info_kind") != "veth":
-                raise StateError("deterministic host uplink exists but is not a veth")
-            alias = host_link.get("ifalias", "")
-            if alias != owner_alias and (require_alias or alias):
-                raise StateError("deterministic host uplink is not owned by this VirtualNetwork UID")
-        uplink_changed = delete_uplink(namespace, host_interface)
+        with _with_firewall_lock(firewall_lock_path):
+            host_link = link_details(None, host_interface)
+            if host_link is not None:
+                if host_link.get("linkinfo", {}).get("info_kind") != "veth":
+                    raise StateError("deterministic host uplink exists but is not a veth")
+                alias = host_link.get("ifalias", "")
+                if alias != owner_alias and (require_alias or alias):
+                    raise StateError("deterministic host uplink is not owned by this VirtualNetwork UID")
+            uplink_changed = delete_uplink(namespace, host_interface)
+            firewall_changed = _remove_host_forwarding_isolation()
     except NetworkCommandError as error:
         raise StateError(str(error)) from error
-    with _with_firewall_lock(firewall_lock_path):
-        firewall_changed = _remove_host_forwarding_isolation(host_interface)
     return uplink_changed or firewall_changed

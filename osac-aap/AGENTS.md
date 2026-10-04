@@ -50,7 +50,7 @@ See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#osac-aap
 | Execution-environment definition or dependency inputs | Build/package validation plus applicable integration tests | `make execution-environment-build`, then `make test` |
 | AAP, OpenStack, KubeVirt/RHACM, or provider provisioning | Contract or real-provider integration | Use the qualifying [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) suite |
 | Storage-provider behavior | Component integration (focused) plus real-provider coverage when required | Tenant target-routing runs in `make test`; provider tests require `STORAGE_TESTS_ENABLED=true make test` (or the relevant storage target and provider suite) |
-| AgentlessNet Fulfillment-to-AAP-to-network-node lifecycle | Manual E2E on an existing lab | `./vlan-test-deploy.sh` from the monorepo root; requires deployed OSAC/AAP and one isolated SSH network node |
+| AgentlessNet Fulfillment-to-AAP-to-network-node lifecycle | Manual E2E on an existing lab | `./vlan-e2e.sh` from the monorepo root; requires deployed OSAC/AAP and one isolated SSH network node |
 
 Storage integration requires `STORAGE_TESTS_ENABLED=true`; image builds are separate build/package validation.
 

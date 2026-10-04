@@ -63,7 +63,7 @@ def test_virtual_network_retry_reuses_uid_mapping_and_canonical_slash_31(tmp_pat
     assert first["transit"]["host_ip"] == f"{transit.network_address}/31"
     assert first["transit"]["gateway"] == str(transit.network_address)
     assert first["virtual_network_cidr"] == "10.0.0.0/16"
-    assert json.loads(store.path.read_text())["schema_version"] == 1
+    assert json.loads(store.path.read_text())["schema_version"] == agentless_net_state.SCHEMA_VERSION
     assert store.path.stat().st_mode & 0o777 == 0o600
     assert store.lock_path.exists()
 
@@ -78,24 +78,6 @@ def test_resource_lock_file_pool_is_bounded(tmp_path):
 
     resource_locks = list(tmp_path.glob(f"{store.path.name}.uid-lock-*.lock"))
     assert len(resource_locks) <= agentless_net_state.RESOURCE_LOCK_SHARDS
-
-
-def test_virtual_network_capacity_is_enforced_without_blocking_retries(tmp_path):
-    store = store_for(tmp_path)
-    first_uid = str(uuid.UUID(int=1))
-
-    for uid_number in range(1, agentless_net_state.MAX_VIRTUAL_NETWORKS + 1):
-        store.ensure_virtual_network(str(uuid.UUID(int=uid_number)), "10.0.0.0/16")
-
-    assert store.ensure_virtual_network(first_uid, "10.0.0.0/16")["uid"] == first_uid
-    with pytest.raises(StateError, match="at most 64 active VirtualNetworks"):
-        store.ensure_virtual_network(
-            str(uuid.UUID(int=agentless_net_state.MAX_VIRTUAL_NETWORKS + 1)),
-            "10.0.0.0/16",
-        )
-
-    state = json.loads(store.path.read_text())
-    assert len(state["virtual_networks"]) == agentless_net_state.MAX_VIRTUAL_NETWORKS
 
 
 def test_overlapping_virtual_networks_get_independent_names_and_transit(tmp_path):
@@ -347,6 +329,7 @@ def test_conntrack_insert_uses_chain_before_position(tmp_path, monkeypatch):
 def test_host_forwarding_drop_insertion_has_valid_iptables_argument_order(monkeypatch):
     commands = []
     rules = []
+    interface_pattern = f"{agentless_net_state.AGENTLESS_NET_HOST_INTERFACE_PREFIX}+"
 
     def iptables(command, check=True):
         commands.append(command)
@@ -354,27 +337,62 @@ def test_host_forwarding_drop_insertion_has_valid_iptables_argument_order(monkey
             output = "-P FORWARD ACCEPT\n" + "".join(f"{rule}\n" for rule in rules)
             return subprocess.CompletedProcess(command, 0, stdout=output, stderr="")
         direction = next((part for part in ("-i", "-o") if part in command), None)
-        expected = f"-A FORWARD {direction} vnet-host -j DROP"
+        interface_pattern = command[command.index(direction) + 1]
+        expected = f"-A FORWARD {direction} {interface_pattern} -j DROP"
         if "-C" in command:
             return subprocess.CompletedProcess(
                 command, 0 if expected in rules else 1, stdout="", stderr=""
             )
         if "-I" in command:
             rules.insert(0, expected)
+        elif "-D" in command:
+            rules.remove(expected)
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
     monkeypatch.setattr(agentless_net_state, "_run", iptables)
-    assert agentless_net_state._ensure_host_forwarding_isolation("vnet-host") is True
+    assert agentless_net_state._ensure_host_forwarding_isolation() is True
+    assert agentless_net_state._ensure_host_forwarding_isolation() is False
 
     insertions = [command for command in commands if "-I" in command]
     assert rules == [
-        "-A FORWARD -o vnet-host -j DROP",
-        "-A FORWARD -i vnet-host -j DROP",
+        f"-A FORWARD -o {interface_pattern} -j DROP",
+        f"-A FORWARD -i {interface_pattern} -j DROP",
     ]
     assert [command[4:] for command in insertions] == [
-        ["-I", "FORWARD", "1", "-i", "vnet-host", "-j", "DROP"],
-        ["-I", "FORWARD", "1", "-o", "vnet-host", "-j", "DROP"],
+        ["-I", "FORWARD", "1", "-i", interface_pattern, "-j", "DROP"],
+        ["-I", "FORWARD", "1", "-o", interface_pattern, "-j", "DROP"],
     ]
+
+
+def test_shared_host_forwarding_rules_remain_until_last_agentless_veth_is_deleted(monkeypatch):
+    interface_prefix = agentless_net_state.AGENTLESS_NET_HOST_INTERFACE_PREFIX
+    rules = [
+        f"-A FORWARD -i {interface_prefix}+ -j DROP",
+        f"-A FORWARD -o {interface_prefix}+ -j DROP",
+    ]
+    links = [{"ifname": f"{interface_prefix}12345678h"}]
+
+    def command_runner(command, check=True):
+        if command == ["ip", "-j", "link", "show"]:
+            return subprocess.CompletedProcess(command, 0, stdout=json.dumps(links), stderr="")
+        direction = next((part for part in ("-i", "-o") if part in command), None)
+        interface_pattern = command[command.index(direction) + 1]
+        expected = f"-A FORWARD {direction} {interface_pattern} -j DROP"
+        if "-C" in command:
+            return subprocess.CompletedProcess(
+                command, 0 if expected in rules else 1, stdout="", stderr=""
+            )
+        if "-D" in command:
+            rules.remove(expected)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(agentless_net_state, "_run", command_runner)
+    assert agentless_net_state._remove_host_forwarding_isolation() is False
+    assert len(rules) == 2
+
+    links.clear()
+    assert agentless_net_state._remove_host_forwarding_isolation() is True
+    assert rules == []
 
 
 def test_create_and_retry_run_provider_outside_state_lock_and_preserve_allocation(

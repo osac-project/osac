@@ -13,6 +13,7 @@ class NetworkCommandError(Exception):
 
 
 COMMAND_TIMEOUT_SECONDS = 30
+AGENTLESS_NET_HOST_INTERFACE_PREFIX = "osacvn"
 
 
 def run_command(command: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:

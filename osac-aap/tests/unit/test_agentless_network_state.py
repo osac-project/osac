@@ -1,4 +1,5 @@
 import fcntl
+import importlib
 import ipaddress
 import json
 import os
@@ -8,6 +9,8 @@ import sys
 import threading
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -32,48 +35,19 @@ UID_TWO = "22222222-2222-4222-8222-222222222222"
 UID_THREE = "33333333-3333-4333-8333-333333333333"
 TENANT_ONE = "tenant-one"
 TENANT_TWO = "tenant-two"
-MAX_VNS_PER_TENANT = 16
-MAX_VNS_PER_NODE = 256
 
 
 def store_for(tmp_path):
     return StateStore(tmp_path / "agentless_network_state.sqlite3")
 
 
-def ensure_virtual_network(
-    store,
-    uid,
-    cidr,
-    tenant_id=TENANT_ONE,
-    *,
-    max_per_tenant=MAX_VNS_PER_TENANT,
-    max_per_node=MAX_VNS_PER_NODE,
-):
-    return store.ensure_virtual_network(
-        uid,
-        cidr,
-        tenant_id,
-        max_per_tenant,
-        max_per_node,
-    )
+def ensure_virtual_network(store, uid, cidr, tenant_id=TENANT_ONE):
+    entry, _, _ = store._ensure_virtual_network(uid, cidr, tenant_id, reconcile=False)
+    return entry
 
 
-def ensure_and_reconcile_virtual_network(
-    store,
-    uid,
-    cidr,
-    tenant_id=TENANT_ONE,
-    *,
-    max_per_tenant=MAX_VNS_PER_TENANT,
-    max_per_node=MAX_VNS_PER_NODE,
-):
-    return store.ensure_and_reconcile_virtual_network(
-        uid,
-        cidr,
-        tenant_id,
-        max_per_tenant,
-        max_per_node,
-    )
+def ensure_and_reconcile_virtual_network(store, uid, cidr, tenant_id=TENANT_ONE):
+    return store.ensure_and_reconcile_virtual_network(uid, cidr, tenant_id)
 
 
 def get_virtual_network(store, uid, tenant_id=TENANT_ONE):
@@ -93,6 +67,98 @@ def assert_store_lock_is_free(store):
         os.close(lock_fd)
 
 
+@pytest.fixture
+def observed_virtual_network(tmp_path, monkeypatch):
+    store = store_for(tmp_path)
+    entry = ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
+    namespace = entry["namespace_name"]
+    host = entry["uplink"]["host_interface"]
+    peer = entry["uplink"]["namespace_interface"]
+    transit = entry["transit"]
+    prefix = ("ip", "netns", "exec", namespace)
+    observations = {
+        (*prefix, "true"): "",
+        ("ip", "-o", "link", "show", "dev", host): "",
+        (*prefix, "ip", "-o", "link", "show", "dev", peer): "",
+        ("iptables", "-w", "-t", "filter", "-S", "FORWARD"): (
+            "-P FORWARD ACCEPT\n-A FORWARD -i osacvn+ -j DROP\n"
+            "-A FORWARD -o osacvn+ -j DROP\n-A FORWARD -j ACCEPT\n"
+        ),
+        (*prefix, "iptables", "-w", "-t", "filter", "-S", "FORWARD"): "-P FORWARD ACCEPT\n",
+        (*prefix, "iptables", "-w", "-t", "filter", "-C", "FORWARD",
+         "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"): "",
+        (*prefix, "sysctl", "-n", "net.ipv4.ip_forward"): "1\n",
+        (*prefix, "ip", "-j", "-4", "route", "show", "default"): json.dumps([
+            {"dst": "default", "gateway": transit["gateway"], "dev": peer}
+        ]),
+    }
+    for interface, address, command_prefix in (
+        (host, transit["host_ip"], ()),
+        (peer, transit["namespace_ip"], prefix),
+    ):
+        observations[(*command_prefix, "ip", "-j", "-d", "link", "show", "dev", interface)] = json.dumps([
+            {"ifname": interface, "flags": ["UP"], "linkinfo": {"info_kind": "veth"},
+             "ifalias": f"osac-vn:{entry['uid']}" if interface == host else ""}
+        ])
+        observations[(*command_prefix, "ip", "-j", "-4", "address", "show", "dev", interface)] = json.dumps([
+            {"ifname": interface, "addr_info": [
+                {"family": "inet", "local": address.split("/")[0], "prefixlen": 31}
+            ]}
+        ])
+        observations[("ip", "-j", "-4", "route", "get", "fibmatch", address.split("/")[0])] = '[{"dst":"default","dev":"eth0"}]'
+    mutations = {
+        ("ip", "address", "replace", transit["host_ip"], "dev", host),
+        ("ip", "link", "set", "dev", host, "up"),
+        (*prefix, "ip", "link", "set", "dev", "lo", "up"),
+        (*prefix, "ip", "address", "replace", transit["namespace_ip"], "dev", peer),
+        (*prefix, "ip", "link", "set", "dev", peer, "up"),
+        (*prefix, "ip", "route", "replace", "default", "via", transit["gateway"], "dev", peer),
+        (*prefix, "iptables", "-w", "-t", "filter", "-P", "FORWARD", "ACCEPT"),
+    }
+
+    def run(command, check=True):
+        key = tuple(command)
+        if key in observations:
+            return subprocess.CompletedProcess(command, 0, stdout=observations[key], stderr="")
+        assert key in mutations, f"Unexpected Linux command: {command!r}"
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    network = importlib.import_module(
+        "ansible_collections.osac.templates.plugins.module_utils.agentless_net_network"
+    )
+    monkeypatch.setattr(network, "run_command", run)
+    monkeypatch.setattr(agentless_net_state, "run_command", run)
+    return store, entry, observations
+
+
+def test_real_reconciliation_verifies_observed_namespace_and_uplink(observed_virtual_network):
+    store, entry, _ = observed_virtual_network
+    retry, state_changed, network_changed = ensure_and_reconcile_virtual_network(
+        store, UID_ONE, "10.0.0.0/16"
+    )
+    assert retry == entry
+    assert state_changed is False
+    assert network_changed is False
+
+
+@pytest.mark.parametrize("incorrect_observation", ["address", "route"])
+def test_real_verification_rejects_unconverged_state_and_keeps_reservation(
+    observed_virtual_network, incorrect_observation
+):
+    store, entry, observations = observed_virtual_network
+    if incorrect_observation == "address":
+        key = ("ip", "-j", "-4", "address", "show", "dev", entry["uplink"]["host_interface"])
+        observations[key] = "[]"
+        message = "host uplink address did not converge"
+    else:
+        key = ("ip", "netns", "exec", entry["namespace_name"], "ip", "-j", "-4", "route", "show", "default")
+        observations[key] = "[]"
+        message = "default route did not converge"
+    with pytest.raises(StateError, match=message):
+        ensure_and_reconcile_virtual_network(store, UID_ONE, "10.0.0.0/16")
+    assert get_virtual_network(StateStore(store.path), UID_ONE) == entry
+
+
 def test_virtual_network_retry_reuses_uid_mapping_and_canonical_slash_31(tmp_path):
     store = store_for(tmp_path)
     first = ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
@@ -107,7 +173,7 @@ def test_virtual_network_retry_reuses_uid_mapping_and_canonical_slash_31(tmp_pat
     assert first["transit"]["host_ip"] == f"{transit.network_address}/31"
     assert first["transit"]["gateway"] == str(transit.network_address)
     assert first["virtual_network_cidr"] == "10.0.0.0/16"
-    assert store.snapshot()["schema_version"] == agentless_net_state.SCHEMA_VERSION
+    assert get_virtual_network(StateStore(store.path), UID_ONE) == first
     assert store.path.stat().st_mode & 0o777 == 0o600
     assert store.lock_path.exists()
 
@@ -551,9 +617,8 @@ def test_delete_keeps_state_until_provider_cleanup_and_preserves_peer(tmp_path, 
         assert_store_lock_is_free(store)
         assert entry == first
         assert kwargs["remaining_virtual_network"] is True
-        current = store.snapshot()
-        assert first in current["virtual_networks"]
-        assert second in current["virtual_networks"]
+        assert get_virtual_network(store, UID_ONE) == first
+        assert get_virtual_network(store, UID_TWO) == second
         deleted.append(entry)
         return True
 
@@ -574,7 +639,7 @@ def test_failed_delete_preserves_its_entry_and_peer(tmp_path, monkeypatch):
 
     def failed_cleanup(entry, **kwargs):
         assert_store_lock_is_free(store)
-        assert first in store.snapshot()["virtual_networks"]
+        assert get_virtual_network(store, UID_ONE) == first
         raise StateError("injected cleanup failure")
 
     monkeypatch.setattr(agentless_net_state, "delete_virtual_network", failed_cleanup)
@@ -697,76 +762,73 @@ def test_schema_rejects_non_slash_31_transit_and_noncanonical_cidr(tmp_path):
 
 def test_state_database_keeps_schema_v1_and_indexes_uid_and_transit(tmp_path):
     store = store_for(tmp_path)
-    for uid_number in range(1, 129):
-        ensure_virtual_network(
-            store,
-            str(uuid.UUID(int=uid_number)),
-            "10.0.0.0/16",
-            tenant_id=f"tenant-{uid_number}",
-        )
+    first = ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
+    second = ensure_virtual_network(store, UID_TWO, "10.0.0.0/16")
 
     with sqlite3.connect(store.path) as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
-        uid_plan = " ".join(
-            str(part)
-            for row in connection.execute(
-                "EXPLAIN QUERY PLAN SELECT payload FROM virtual_networks WHERE uid = ?",
-                (UID_ONE,),
-            )
-            for part in row
-        )
-        transit_plan = " ".join(
-            str(part)
-            for row in connection.execute(
-                "EXPLAIN QUERY PLAN SELECT 1 FROM virtual_networks WHERE transit_start = ?",
-                (0,),
-            )
-            for part in row
-        )
-    assert "INDEX" in uid_plan.upper()
-    assert "INDEX" in transit_plan.upper()
-    assert len(store.snapshot()["virtual_networks"]) == 128
+        assert connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall() == [("virtual_networks",)]
+        assert connection.execute("SELECT count(*) FROM virtual_networks").fetchone()[0] == 2
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute("INSERT INTO virtual_networks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                               store._row_for_entry(first))
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute("UPDATE virtual_networks SET transit_start = ? WHERE uid = ?",
+                               (int(ipaddress.ip_network(first["transit"]["cidr"]).network_address), UID_TWO))
+
+    reopened = StateStore(store.path)
+    assert get_virtual_network(reopened, UID_ONE) == first
+    assert get_virtual_network(reopened, UID_TWO) == second
 
 
-def test_virtual_network_quota_is_per_tenant_and_node_capacity_is_shared(tmp_path):
+def test_transit_address_exhaustion_preserves_existing_reservation(tmp_path):
     store = store_for(tmp_path)
-    for uid_number in range(1, MAX_VNS_PER_TENANT + 1):
-        ensure_virtual_network(
-            store,
-            str(uuid.UUID(int=uid_number)),
-            "10.0.0.0/16",
-            max_per_tenant=MAX_VNS_PER_TENANT,
-            max_per_node=MAX_VNS_PER_NODE,
-        )
+    first = ensure_virtual_network(store, UID_ONE, "10.0.0.0/31")
+    with pytest.raises(StateError, match="no free /31 transit block"):
+        ensure_virtual_network(store, UID_TWO, "10.0.0.0/31")
+    assert get_virtual_network(store, UID_ONE) == first
+    assert get_virtual_network(store, UID_TWO) is None
 
-    with pytest.raises(StateError, match="tenant VirtualNetwork quota is exhausted"):
-        ensure_virtual_network(
-            store,
-            str(uuid.UUID(int=MAX_VNS_PER_TENANT + 1)),
-            "10.0.0.0/16",
-            max_per_tenant=MAX_VNS_PER_TENANT,
-            max_per_node=MAX_VNS_PER_NODE,
-        )
 
-    another_tenant = ensure_virtual_network(
-        store,
-        str(uuid.UUID(int=MAX_VNS_PER_TENANT + 1)),
-        "10.0.0.0/16",
-        tenant_id=TENANT_TWO,
-        max_per_tenant=MAX_VNS_PER_TENANT,
-        max_per_node=MAX_VNS_PER_NODE,
+def test_extra_development_schema_fails_before_provider_cleanup(tmp_path, monkeypatch):
+    store = store_for(tmp_path)
+    ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
+    with sqlite3.connect(store.path) as connection:
+        connection.execute("CREATE TABLE obsolete_development_state (id INTEGER)")
+    monkeypatch.setattr(agentless_net_state, "delete_virtual_network",
+                        lambda *args, **kwargs: pytest.fail("invalid schema must not reach provider cleanup"))
+    with pytest.raises(StateCorrupt, match="invalid schema"):
+        delete_virtual_network(store, UID_ONE)
+    assert store.path.exists()
+
+
+@pytest.mark.parametrize("action", ["ensure_virtual_network", "delete_virtual_network"])
+def test_module_failure_does_not_disclose_state_values(monkeypatch, action):
+    module = importlib.import_module(
+        "ansible_collections.osac.templates.plugins.modules.agentless_net_state"
     )
-    assert another_tenant["tenant_id"] == TENANT_TWO
+    sensitive = "dummy-sensitive-marker 10.20.0.0/16 inventory-value"
+    ansible_module = SimpleNamespace(
+        params={"action": action, "state_file": "/unused", "uid": UID_ONE,
+                "tenant_id": TENANT_ONE, "virtual_network_cidr": "10.20.0.0/16"},
+        check_mode=False,
+        fail_json=Mock(),
+        exit_json=lambda **kwargs: pytest.fail("failed provider work must not succeed"),
+    )
+    monkeypatch.setattr(module, "AnsibleModule", lambda **kwargs: ansible_module)
+    store = Mock()
+    store.ensure_and_reconcile_virtual_network.side_effect = module.StateError(sensitive)
+    store.delete_and_remove_virtual_network.side_effect = module.StateError(sensitive)
+    monkeypatch.setattr(module, "StateStore", lambda path: store)
 
-    with pytest.raises(StateError, match="network-node VirtualNetwork capacity is exhausted"):
-        ensure_virtual_network(
-            store,
-            str(uuid.UUID(int=MAX_VNS_PER_TENANT + 2)),
-            "10.0.0.0/16",
-            tenant_id=TENANT_TWO,
-            max_per_tenant=MAX_VNS_PER_TENANT,
-            max_per_node=MAX_VNS_PER_TENANT + 1,
-        )
+    module.main()
+
+    ansible_module.fail_json.assert_called_once_with(
+        msg="AgentlessNet VirtualNetwork operation failed; inspect the network node and retry."
+    )
+    assert sensitive not in str(ansible_module.fail_json.call_args)
 
 
 def test_tenant_identity_is_checked_on_retry_read_and_delete(tmp_path, monkeypatch):
@@ -784,29 +846,3 @@ def test_tenant_identity_is_checked_on_retry_read_and_delete(tmp_path, monkeypat
     )
     with pytest.raises(StateError, match="tenant does not match"):
         delete_virtual_network(store, UID_ONE, tenant_id=TENANT_TWO)
-
-
-def test_deleted_virtual_network_releases_tenant_and_node_capacity(tmp_path, monkeypatch):
-    store = store_for(tmp_path)
-    ensure_virtual_network(
-        store,
-        UID_ONE,
-        "10.0.0.0/16",
-        max_per_tenant=1,
-        max_per_node=1,
-    )
-    monkeypatch.setattr(
-        agentless_net_state,
-        "delete_virtual_network",
-        lambda entry, **kwargs: True,
-    )
-
-    assert delete_virtual_network(store, UID_ONE) is True
-    replacement = ensure_virtual_network(
-        store,
-        UID_TWO,
-        "10.0.0.0/16",
-        max_per_tenant=1,
-        max_per_node=1,
-    )
-    assert replacement["uid"] == UID_TWO

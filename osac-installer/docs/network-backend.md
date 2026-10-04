@@ -94,17 +94,30 @@ global:
 ```
 
 Use `fabricManager: agentless_net` and `k8sManager: ""` to select the
-AgentlessNet fabric manager. The `agentless-net-vn-smoke` installer overlay
+AgentlessNet fabric manager. The `values/agentless-net-stub.yaml` installer overlay
 sets this profile and clears AAP expert overrides so the selected backend
 reaches the fulfillment instance group. An AgentlessNet VirtualNetwork job
-requires the optional `agentless-net-inventory` ConfigMap to describe exactly
-one authoritative network node, plus SSH access through an AAP machine
+reads serialized YAML/JSON in `AGENTLESS_NET_VN_INVENTORY` from the existing
+`network-fulfillment-ig` ConfigMap. It describes exactly one authoritative host
+under `all.children.net_nodes.hosts`, with `ansible_host`, `ansible_user`, and
+an optional `ansible_port`. The networking worker already imports this
+ConfigMap and its Secret through `envFrom`; no additional VN volume is needed.
+Configure SSH access through an AAP machine
 credential or the `AGENTLESS_NET_SSH_PRIVATE_KEY` value supplied by the
 `network-fulfillment-ig` Secret. Credentials are not stored in the inventory.
 
 The VirtualNetwork job establishes only the namespace, transit link, and
 forwarding baseline. Its Ready state does not claim Subnet, VLAN, DHCP, BGP,
-NAT, workload attachment, or external connectivity.
+NAT, workload attachment, or external connectivity, and does not satisfy tenant
+`DefaultNetworkingReady`. Manager replacement requires draining and replacing
+resources; switching the backend of an existing VN is unsupported.
+
+Use the existing `aap.instanceGroups.networkFulfillment.config` mapping to
+supply `AGENTLESS_NET_VN_INVENTORY`; see the
+[inventory shape](../../osac-aap/README.md#networking). Keep credentials in the
+existing Secret or AAP machine credential. The VN path retains `/31` transit
+links from the CR CIDR and SQLite state; future Subnet work must reconcile these
+with the accepted provider-pool `/30` and JSON-state design.
 
 ## Expert overrides
 

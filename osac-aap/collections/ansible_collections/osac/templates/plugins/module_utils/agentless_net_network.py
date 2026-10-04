@@ -30,10 +30,9 @@ def run_command(command: list[str], check: bool = True) -> subprocess.CompletedP
             f"{command[0]} timed out after {COMMAND_TIMEOUT_SECONDS:g} seconds"
         ) from error
     except OSError as error:
-        raise NetworkCommandError(f"{command[0]} could not run: {error}") from error
+        raise NetworkCommandError(f"{command[0]} could not run") from error
     if check and result.returncode != 0:
-        message = result.stderr.strip() or result.stdout.strip() or "command failed"
-        raise NetworkCommandError(f"{command[0]} failed: {message}")
+        raise NetworkCommandError(f"{command[0]} failed (exit status {result.returncode})")
     return result
 
 
@@ -131,20 +130,6 @@ def ensure_namespace(namespace: str) -> bool:
         return False
     run_command(["ip", "netns", "add", namespace])
     return True
-
-
-def ensure_uplink(
-    namespace: str,
-    namespace_interface: str,
-    host_interface: str,
-    namespace_ip: str,
-    host_ip: str,
-    gateway: str,
-) -> bool:
-    changed = ensure_veth_pair(namespace, namespace_interface, host_interface)
-    return configure_uplink(
-        namespace, namespace_interface, host_interface, namespace_ip, host_ip, gateway
-    ) or changed
 
 
 def _ensure_host_veth_owner_alias(host_interface: str, owner_alias: str) -> bool:

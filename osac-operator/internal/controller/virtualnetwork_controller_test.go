@@ -358,6 +358,11 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 		})
 
 		It("should set phase to Failed when job fails", func() {
+			vnet.UID = types.UID("virtual-network-uid")
+			vnet.Annotations = map[string]string{
+				osacImplementationStrategyAnnotation: "agentless_net",
+			}
+			vnet.Status.BackendNetworkID = "saved-provider-id"
 			vnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
 				{
 					JobID:     "failed-job-202",
@@ -380,6 +385,7 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(0 * time.Second))
 			Expect(vnet.Status.Phase).To(Equal(osacv1alpha1.VirtualNetworkPhaseFailed))
+			Expect(vnet.Status.BackendNetworkID).To(Equal("saved-provider-id"))
 		})
 
 		It("should set Ready=False condition with error message when job fails", func() {
@@ -411,6 +417,10 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 		})
 
 		It("should set Ready=True condition when job succeeds", func() {
+			vnet.Annotations = map[string]string{
+				osacImplementationStrategyAnnotation: "netris",
+			}
+			vnet.Status.BackendNetworkID = "provider-owned-id"
 			vnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
 				{
 					JobID:     "success-job-cond",
@@ -434,6 +444,7 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			Expect(cond).NotTo(BeNil())
 			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
 			Expect(cond.Reason).To(Equal(osacv1alpha1.ReasonAsExpected))
+			Expect(vnet.Status.BackendNetworkID).To(Equal("provider-owned-id"))
 		})
 
 		It("should clear stale Ready=False condition on provisioning recovery", func() {
@@ -852,7 +863,12 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("netris"))
 		})
 
-		It("records the AgentlessNet stub failure through the normal reconcile status path", func() {
+		DescribeTable("records AgentlessNet completion through the normal reconcile status path", func(
+			jobState osacv1alpha1.JobState,
+			expectedPhase osacv1alpha1.VirtualNetworkPhaseType,
+			expectedReady metav1.ConditionStatus,
+			expectedReason string,
+		) {
 			Expect(fakeDiscoveryClient.Create(ctx, newFabricManagerConfigMap("fm-agentless-net", "osac", "agentless_net"))).To(Succeed())
 			disc, err := networkmanager.NewDiscovery(fakeDiscoveryClient, "osac")
 			Expect(err).NotTo(HaveOccurred())
@@ -872,9 +888,8 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			}
 			mockProvider.getProvisionStatusFunc = func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatus, error) {
 				return provisioning.ProvisionStatus{
-					JobID:   jobID,
-					State:   osacv1alpha1.JobStateFailed,
-					Message: "failed",
+					JobID: jobID,
+					State: jobState,
 				}, nil
 			}
 
@@ -893,13 +908,25 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 
 			updated := &osacv1alpha1.VirtualNetwork{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: vnet.Name, Namespace: vnet.Namespace}, updated)).To(Succeed())
-			Expect(updated.Status.Phase).To(Equal(osacv1alpha1.VirtualNetworkPhaseFailed))
+			Expect(updated.Status.Phase).To(Equal(expectedPhase))
 			cond := apimeta.FindStatusCondition(updated.Status.Conditions, osacv1alpha1.ConditionReady)
 			Expect(cond).NotTo(BeNil())
-			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
-			Expect(cond.Reason).To(Equal(osacv1alpha1.ReasonProvisioningFailed))
+			Expect(cond.Status).To(Equal(expectedReady))
+			Expect(cond.Reason).To(Equal(expectedReason))
+			if jobState == osacv1alpha1.JobStateSucceeded {
+				Expect(updated.Status.BackendNetworkID).To(Equal(string(updated.UID)))
+			} else {
+				Expect(updated.Status.BackendNetworkID).To(BeEmpty())
+			}
 			Expect(provisioning.FindJobByID(updated.Status.ProvisioningJobs, "agentless-stub-job")).NotTo(BeNil())
-		})
+		},
+			Entry("failed job leaves the VN non-ready without a backend ID",
+				osacv1alpha1.JobStateFailed, osacv1alpha1.VirtualNetworkPhaseFailed,
+				metav1.ConditionFalse, osacv1alpha1.ReasonProvisioningFailed),
+			Entry("successful job publishes the VN UID and Ready condition",
+				osacv1alpha1.JobStateSucceeded, osacv1alpha1.VirtualNetworkPhaseReady,
+				metav1.ConditionTrue, osacv1alpha1.ReasonAsExpected),
+		)
 
 		It("requeues and sets a blocked condition when the NetworkClass has no manager configured (no legacy fallback)", func() {
 			disc, err := networkmanager.NewDiscovery(fakeDiscoveryClient, "osac")

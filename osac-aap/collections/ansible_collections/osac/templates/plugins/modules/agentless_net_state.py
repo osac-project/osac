@@ -17,7 +17,6 @@ module: agentless_net_state
 short_description: Provision or remove an AgentlessNet VirtualNetwork
 description:
   - Reserves a tenant-owned UID-keyed VirtualNetwork mapping before applying network state.
-  - Enforces per-tenant and per-node VirtualNetwork limits in the same transaction.
   - Uses SQLite indexes and a per-UID operation lock so
     provider commands do not block unrelated state updates.
   - Retains an allocation until provider cleanup has completed.
@@ -42,12 +41,6 @@ options:
   virtual_network_cidr:
     description: VirtualNetwork IPv4 supernet.
     type: str
-  max_per_tenant:
-    description: Maximum active AgentlessNet VirtualNetworks for this tenant.
-    type: int
-  max_per_node:
-    description: Maximum active AgentlessNet VirtualNetworks on this network node.
-    type: int
 author:
   - OSAC project
 version_added: "1.0.0"
@@ -60,8 +53,6 @@ EXAMPLES = r"""
     state_file: /etc/osac/agentless_network_state.sqlite3
     uid: 01234567-89ab-cdef-0123-456789abcdef
     tenant_id: tenant-a
-    max_per_tenant: 16
-    max_per_node: 256
     virtual_network_cidr: 10.20.0.0/16
 """
 
@@ -85,14 +76,12 @@ def main() -> None:
             "uid": {"type": "str", "required": True},
             "tenant_id": {"type": "str", "required": True},
             "virtual_network_cidr": {"type": "str"},
-            "max_per_tenant": {"type": "int"},
-            "max_per_node": {"type": "int"},
         },
         required_if=[
             (
                 "action",
                 "ensure_virtual_network",
-                ["virtual_network_cidr", "max_per_tenant", "max_per_node"],
+                ["virtual_network_cidr"],
             )
         ],
         supports_check_mode=True,
@@ -114,8 +103,6 @@ def main() -> None:
                 params["uid"],
                 params["virtual_network_cidr"],
                 params["tenant_id"],
-                params["max_per_tenant"],
-                params["max_per_node"],
             )
             module.exit_json(
                 changed=state_changed or network_changed,
@@ -134,8 +121,10 @@ def main() -> None:
                 params["uid"], params["tenant_id"]
             )
         )
-    except StateError as error:
-        module.fail_json(msg=str(error))
+    except StateError:
+        module.fail_json(
+            msg="AgentlessNet VirtualNetwork operation failed; inspect the network node and retry."
+        )
 
 
 if __name__ == "__main__":

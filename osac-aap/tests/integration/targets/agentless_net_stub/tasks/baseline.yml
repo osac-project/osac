@@ -35,6 +35,41 @@
             annotations:
               osac.openshift.io/tenant: tenant-a
               osac.openshift.io/implementation-strategy: agentless_net
+    vn_valid_inventory:
+      all:
+        children:
+          net_nodes:
+            hosts:
+              network-node:
+                ansible_host: 192.0.2.10
+                ansible_user: example-user
+    vn_password_aliases:
+      - ansible_password
+      - ansible_ssh_pass
+      - ansible_ssh_password
+      - ansible_become_pass
+      - ansible_become_password
+      - ansible_sudo_pass
+      - ansible_sudo_password
+    vn_invalid_inventories:
+      - name: empty
+        inventory: ""
+      - name: malformed
+        inventory: "[dummy-sensitive-marker"
+      - name: nonmapping
+        inventory: '["dummy-sensitive-marker"]'
+      - name: multiple-nodes
+        inventory: >-
+          {{ vn_valid_inventory | combine({'all': {'children': {'net_nodes': {'hosts': {
+          'other-node': {'ansible_host': '192.0.2.11', 'ansible_user': 'example-user'}}}}}}, recursive=true) | to_json }}
+      - name: missing-host
+        inventory: >-
+          {{ vn_valid_inventory | combine({'all': {'children': {'net_nodes': {'hosts': {
+          'network-node': {'ansible_host': ''}}}}}}, recursive=true) | to_json }}
+      - name: invalid-port
+        inventory: >-
+          {{ vn_valid_inventory | combine({'all': {'children': {'net_nodes': {'hosts': {
+          'network-node': {'ansible_port': 65536}}}}}}, recursive=true) | to_json }}
   tasks:
     - name: Validate the AgentlessNet VirtualNetwork lifecycle playbooks
       ansible.builtin.command:
@@ -63,6 +98,80 @@
           {{ item.item }} failed syntax validation:
           {{ item.stdout + item.stderr }}
       loop: "{{ virtual_network_syntax_result.results }}"
+
+    - name: Load a valid VirtualNetwork inventory in a fresh Ansible process
+      ansible.builtin.command:
+        argv:
+          - ansible-playbook
+          - --inventory
+          - localhost,
+          - "{{ playbook_dir }}/../files/validate_vn_inventory.yml"
+        chdir: "{{ playbook_dir }}/../../../../../"
+      environment:
+        AGENTLESS_NET_VN_INVENTORY: "{{ vn_valid_inventory | to_json }}"
+        AGENTLESS_NET_SSH_PRIVATE_KEY: ""
+      changed_when: false
+
+    - name: Reject invalid VirtualNetwork inventories in fresh Ansible processes
+      ansible.builtin.command:
+        argv:
+          - ansible-playbook
+          - --inventory
+          - localhost,
+          - "{{ playbook_dir }}/../files/validate_vn_inventory.yml"
+        chdir: "{{ playbook_dir }}/../../../../../"
+      environment:
+        AGENTLESS_NET_VN_INVENTORY: "{{ item.inventory }}"
+        AGENTLESS_NET_SSH_PRIVATE_KEY: ""
+      register: vn_invalid_inventory_result
+      changed_when: false
+      failed_when: false
+      loop: "{{ vn_invalid_inventories }}"
+      loop_control:
+        label: "{{ item.name }}"
+      no_log: true
+
+    - name: Verify invalid inventory failures are censored before host registration
+      ansible.builtin.assert:
+        that:
+          - item.rc != 0
+          - "'censored' in item.stdout"
+          - "'dummy-sensitive-marker' not in (item.stdout + item.stderr)"
+          - "'Register the authoritative AgentlessNet network node' not in item.stdout"
+      loop: "{{ vn_invalid_inventory_result.results }}"
+      no_log: true
+
+    - name: Reject every password alias including group variables
+      ansible.builtin.command:
+        argv:
+          - ansible-playbook
+          - --inventory
+          - localhost,
+          - "{{ playbook_dir }}/../files/validate_vn_inventory.yml"
+        chdir: "{{ playbook_dir }}/../../../../../"
+      environment:
+        AGENTLESS_NET_VN_INVENTORY: >-
+          {{ vn_valid_inventory
+          | combine({'all': {'vars': {item: 'dummy-sensitive-marker'}}}, recursive=true)
+          | to_json }}
+        AGENTLESS_NET_SSH_PRIVATE_KEY: ""
+      register: vn_password_inventory_result
+      changed_when: false
+      failed_when: false
+      loop: "{{ vn_password_aliases }}"
+      loop_control:
+        label: "{{ item }}"
+      no_log: true
+
+    - name: Verify password inventory failures are censored before host registration
+      ansible.builtin.assert:
+        that:
+          - item.rc != 0
+          - "'censored' in item.stdout"
+          - "'dummy-sensitive-marker' not in (item.stdout + item.stderr)"
+          - "'Register the authoritative AgentlessNet network node' not in item.stdout"
+      loop: "{{ vn_password_inventory_result.results }}"
+      no_log: true
 
     - name: Invoke every AgentlessNet resource-operation entrypoint
       ansible.builtin.include_tasks: ../expect_failure.yaml

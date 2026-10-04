@@ -1,22 +1,21 @@
 ---
-- name: Check for AgentlessNet network-node inventory
-  ansible.builtin.stat:
-    path: "{{ agentless_net_inventory_file }}"
-  register: _agentless_net_inventory_file_stat
+- name: Read AgentlessNet VirtualNetwork inventory from the worker environment
+  ansible.builtin.set_fact:
+    _agentless_net_inventory_input: "{{ lookup('ansible.builtin.env', 'AGENTLESS_NET_VN_INVENTORY') }}"
+  no_log: true
 
 - name: Require AgentlessNet network-node inventory for provider operations
   ansible.builtin.assert:
     that:
-      - _agentless_net_inventory_file_stat.stat.exists | default(false)
-      - _agentless_net_inventory_file_stat.stat.isreg | default(false)
+      - _agentless_net_inventory_input | trim | length > 0
     fail_msg: >-
-      AgentlessNet provider operations require the inventory file configured by
-      agentless_net_inventory_file to be mounted in the AAP worker.
+      AgentlessNet VirtualNetwork operations require AGENTLESS_NET_VN_INVENTORY
+      in the network-fulfillment-ig ConfigMap.
+  no_log: true
 
 - name: Load AgentlessNet network-node inventory
-  ansible.builtin.include_vars:
-    file: "{{ agentless_net_inventory_file }}"
-    name: _agentless_net_inventory
+  ansible.builtin.set_fact:
+    _agentless_net_inventory: "{{ _agentless_net_inventory_input | from_yaml }}"
   no_log: true
 
 - name: Normalize AgentlessNet inventory sections
@@ -31,9 +30,17 @@
       {{ (_agentless_net_inventory.get('all', {}).get('children', {}))
          if _agentless_net_inventory is mapping
          and _agentless_net_inventory.get('all', {}) is mapping else {} }}
+  no_log: true
+
+- name: Normalize the AgentlessNet network-node section
+  ansible.builtin.set_fact:
     _agentless_net_inventory_net_nodes: >-
       {{ _agentless_net_inventory_children.get('net_nodes', {})
          if _agentless_net_inventory_children is mapping else {} }}
+  no_log: true
+
+- name: Normalize AgentlessNet network-node hosts and variables
+  ansible.builtin.set_fact:
     _agentless_net_inventory_net_node_hosts: >-
       {{ _agentless_net_inventory_net_nodes.get('hosts', {})
          if _agentless_net_inventory_net_nodes is mapping else {} }}
@@ -55,7 +62,7 @@
       - _agentless_net_inventory_net_node_vars is mapping
       - >-
         (_agentless_net_inventory | to_json |
-        regex_search('"(ansible_password|ansible_ssh_pass|ansible_become_password|ansible_sudo_pass)"\\s*:')) is none
+        regex_search('"(ansible_password|ansible_ssh_pass(word)?|ansible_become_pass(word)?|ansible_sudo_pass(word)?)"\\s*:')) is none
     fail_msg: >-
       AgentlessNet VirtualNetwork operations require exactly one host under
       all.children.net_nodes.hosts in the provider inventory.

@@ -9,6 +9,7 @@
         agentless_net_vn_uid: "{{ virtual_network.metadata.uid | default('') }}"
         agentless_net_vn_tenant_id: "{{ virtual_network.metadata.annotations['osac.openshift.io/tenant'] | default('') }}"
         agentless_net_vn_cidr: "{{ virtual_network.spec.ipv4Cidr | default('') }}"
+      no_log: true
 
     - name: Validate VirtualNetwork provisioning inputs
       ansible.builtin.assert:
@@ -18,6 +19,7 @@
           - agentless_net_vn_cidr | length > 0
         fail_msg: >-
           AgentlessNet requires a VirtualNetwork UID, tenant annotation, and IPv4 CIDR.
+      no_log: true
 
     - name: Reconcile the VirtualNetwork namespace and forwarding baseline
       osac.templates.agentless_net_state:
@@ -25,11 +27,10 @@
         state_file: "{{ agentless_net_network_state_file }}"
         uid: "{{ agentless_net_vn_uid }}"
         tenant_id: "{{ agentless_net_vn_tenant_id }}"
-        max_per_tenant: "{{ agentless_net_max_vns_per_tenant }}"
-        max_per_node: "{{ agentless_net_max_vns_per_network_node }}"
         virtual_network_cidr: "{{ agentless_net_vn_cidr }}"
       delegate_to: "{{ groups['agentless_net_vn_network_node'][0] }}"
       become: true
+      no_log: true
   always:
     - name: Remove the temporary AgentlessNet SSH key file
       ansible.builtin.include_tasks: _cleanup_network_node_inventory.yaml

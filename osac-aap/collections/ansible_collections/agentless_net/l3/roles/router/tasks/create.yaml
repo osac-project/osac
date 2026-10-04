@@ -23,11 +23,16 @@
     router_veth_ns: "v{{ router_name | hash('md5') | truncate(11, True, '') }}i"
     router_veth_host: "v{{ router_name | hash('md5') | truncate(11, True, '') }}o"
 
-- name: Ensure router network namespace
-  osac.templates.agentless_net_network:
-    action: ensure_namespace
-    namespace: "{{ router_name }}"
-  become: true
+- name: Check if namespace exists
+  ansible.builtin.raw: ip netns list | grep -qw '{{ router_name }}'
+  register: router_ns_exists
+  changed_when: false
+  failed_when: false
+
+- name: Create namespace {{ router_name }}
+  ansible.builtin.raw: ip netns add {{ router_name }}
+  when: router_ns_exists.rc != 0
+  changed_when: true
 
 - name: Check if VLAN sub-interface exists on host
   ansible.builtin.raw: ip link show {{ router_trunk_interface }}.{{ router_vlan_id }} 2>/dev/null
@@ -68,14 +73,40 @@
       dev {{ router_trunk_interface }}.{{ router_vlan_id }}
   changed_when: true
 
-- name: Ensure router veth uplink and namespace forwarding
-  osac.templates.agentless_net_network:
-    action: ensure_uplink
-    namespace: "{{ router_name }}"
-    namespace_interface: "{{ router_veth_ns }}"
-    host_interface: "{{ router_veth_host }}"
-    namespace_ip: "{{ router_external_ip }}"
-    host_ip: "{{ router_external_peer_ip }}"
-    gateway: "{{ router_external_gateway }}"
-    enable_namespace_forwarding: true
-  become: true
+- name: Check if veth pair exists
+  ansible.builtin.raw: ip link show {{ router_veth_host }} 2>/dev/null
+  register: router_veth_exists
+  changed_when: false
+  failed_when: false
+
+- name: Create veth pair for external connectivity
+  ansible.builtin.raw: |
+    ip link add {{ router_veth_ns }} type veth peer name {{ router_veth_host }}
+    ip link set {{ router_veth_ns }} netns {{ router_name }}
+  when: router_veth_exists.rc != 0
+  changed_when: true
+
+- name: Configure host-side veth endpoint
+  ansible.builtin.raw: |
+    ip addr replace {{ router_external_peer_ip }} dev {{ router_veth_host }}
+    ip link set {{ router_veth_host }} up
+  changed_when: true
+
+- name: Configure namespace-side veth endpoint and default route
+  ansible.builtin.raw: |
+    ip netns exec {{ router_name }} ip addr replace {{ router_external_ip }} dev {{ router_veth_ns }}
+    ip netns exec {{ router_name }} ip link set {{ router_veth_ns }} up
+    ip netns exec {{ router_name }} ip route replace default via {{ router_external_gateway }}
+  changed_when: true
+
+# ansible.posix.sysctl cannot target network namespaces.
+# Non-persistent is fine since the namespace itself is ephemeral.
+- name: Check IP forwarding inside namespace
+  ansible.builtin.raw: ip netns exec {{ router_name }} sysctl -n net.ipv4.ip_forward
+  register: router_ns_fwd_check
+  changed_when: false
+
+- name: Enable IP forwarding inside namespace
+  ansible.builtin.raw: ip netns exec {{ router_name }} sysctl -w net.ipv4.ip_forward=1
+  when: router_ns_fwd_check.stdout | trim != '1'
+  changed_when: true

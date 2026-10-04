@@ -259,11 +259,11 @@ Touched-area requirements: [component guide](../osac-aap/AGENTS.md#integration-t
 |---|---|---|---|
 | Unit | `tests/unit/`; `uv run pytest tests/unit` | Filter and isolated plugin behavior | Kubernetes, AAP, cloud, and storage services are mocked or fixture-driven. |
 | Component integration | `tests/integration/`; `make test` (creates Kind, runs playbooks, and tears it down) | Ansible roles/playbooks against real Kind APIs, including a second isolated API for storage target routing, plus CRDs, leases, finalizers, and test-runner pod | AAP, OpenStack, KubeVirt/RHACM, and other provider APIs are not generally real; the VMS storage target uses a mock server. |
-| Unit | `tests/unit/test_agentless_network_state.py`, `tests/unit/test_agentless_net_network.py`; included by `uv run pytest tests/unit` | Tenant/node quota admission, UID/CIDR allocation, transactional indexed state, per-UID operations, parsed Linux state, and bounded command failures | `ip`, `iptables`, the network namespace, and AAP are mocked; this does not prove provider execution. |
+| Unit | `tests/unit/test_agentless_network_state.py`, `tests/unit/test_agentless_net_network.py`; included by `uv run pytest tests/unit` | UID/CIDR allocation, locked SQLite state, per-UID operations, real reconciliation/verification, and safe command/module failures | `ip`, `iptables`, the network namespace, and AAP are mocked; this does not prove provider execution. |
+| Contract | `tests/integration/targets/agentless_net_stub/tasks/baseline.yml`; from `tests/integration/` run `ansible-playbook targets/agentless_net_stub/tasks/baseline.yml -e '@common_vars.yml'` | Fresh Ansible processes run `files/validate_vn_inventory.yml`: real environment lookup, YAML parsing, password rejection, and host registration | AAP, SSH, and Linux provider operations are omitted. |
 | Component integration (focused) | A target under `tests/integration/targets/`; run the corresponding playbook from `tests/integration/` | The specific role workflow and its documented fixtures | Only the dependencies declared by that target; inspect its setup and overrides before claiming a real boundary. |
 | Contract | No dedicated contract suite; use the qualifying [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) task for AAP/provider coverage | No AAP or provider endpoint is exercised as a contract | The Kind API, mock VMS server, and fixture-driven provider behavior do not prove an AAP or provider contract. |
 | E2E | Cross-component OSAC E2E suites | Complete fulfillment and provisioning flows | Depends on the deployed AAP and provider environment. |
-| E2E (manual existing lab) | Repository-root `./vlan-test-deploy.sh`; owned by [OSAC-5529](https://redhat.atlassian.net/browse/OSAC-5529) | Fulfillment API/DB, generated CR, operator, AAP worker, SSH, and isolated Linux namespace provider | Uses the existing lab and a disposable isolated network node; it is not a CI suite. |
 
 ### Build/package validation
 
@@ -274,7 +274,7 @@ applicable integration tests separately to validate workflow behavior.
 ### Coverage notes
 
 - **Filters, variable transforms, and isolated plugin logic:** Include invalid input and default handling.
-- **AgentlessNet provider state and command helpers:** Unit coverage proves allocation, locking, retry retention, and command construction; run the manual existing-lab E2E to verify the AAP/SSH/Linux boundary.
+- **AgentlessNet provider state and command helpers:** Unit coverage proves allocation, locking, retry retention, reconciliation/verification with mocked Linux commands, and worker template rendering. The real Ansible inventory contract covers the input boundary; neither suite proves deployed AAP/SSH networking or packet isolation.
 - **Ansible roles, workflow tasks, hooks, leases, finalizers, or Kubernetes resources:** The test must exercise the role/playbook through Ansible against Kind.
 - **Template publishing TLS:** The `test_cert_validation` play in `collections/ansible_collections/osac/service/roles/publish_templates/tests/test.yml` runs the real role against an untrusted local HTTPS endpoint and asserts certificate rejection before any authenticated HTTP request. The endpoint is a test double; it does not prove a deployed AAP or fulfillment boundary.
 - **Execution-environment definition or dependency inputs:** Image success does not prove the workflow boundary.
@@ -283,6 +283,15 @@ applicable integration tests separately to validate workflow behavior.
 - **Split-cluster Tenant StorageClass routing:** The storage target-routing integration test exercises the Tenant create/delete playbooks against separate management and workload Kind APIs. It does not verify Tenant status resolution or a deployed AAP/provider lifecycle; that cross-component journey remains QE coverage tracked by [OSAC-4850](https://redhat.atlassian.net/browse/OSAC-4850).
 
 ### Coverage gaps
+
+AgentlessNet VN create/retry/delete through deployed AAP/SSH and isolation of
+overlapping VNs remain QE coverage gaps. No qualifying VN runner is committed;
+the user-run deployed checks remain deferred. Unit, Envtest, and inventory
+Contract cases belong to [DEV OSAC-5529](https://redhat.atlassian.net/browse/OSAC-5529).
+The specific VN QE owner remains unresolved under
+[Feature OSAC-3664](https://redhat.atlassian.net/browse/OSAC-3664); track provider
+coverage through [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) /
+[OSAC-4850](https://redhat.atlassian.net/browse/OSAC-4850).
 
 The integration harness still has provider-dependent scenarios that cannot run
 without AAP or additional infrastructure. Changes to provisioning behavior

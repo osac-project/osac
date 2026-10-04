@@ -44,19 +44,25 @@ See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#osac-aap
 | Touched area | Required validation | Command / follow-up |
 |---|---|---|
 | Filters, variable transforms, and isolated plugin logic | Unit | `uv run pytest tests/unit` |
+<<<<<<< HEAD
 | Template publishing certificate validation | Local protocol integration | Run the `test_cert_validation` play in `collections/ansible_collections/osac/service/roles/publish_templates/tests/test.yml` with `uv run ansible-playbook`; the mock HTTPS server tests the client transport only |
-| AgentlessNet VirtualNetwork allocation, tenant/node quotas, SQLite state, and Linux command helpers | Unit | `tests/unit/test_agentless_network_state.py` and `tests/unit/test_agentless_net_network.py`; run `uv run pytest tests/unit` |
+| AgentlessNet VirtualNetwork allocation, locked SQLite state, and Linux command helpers | Unit | `tests/unit/test_agentless_network_state.py` and `tests/unit/test_agentless_net_network.py`; run `uv run pytest tests/unit` |
+| AgentlessNet VN environment inventory, host registration, and password rejection | Contract | `agentless_net_stub` baseline target runs `files/validate_vn_inventory.yml` in fresh Ansible processes; no SSH/provider commands |
 | Ansible roles, workflow tasks, hooks, leases, finalizers, or Kubernetes resources | Component integration | `make test` or the focused target command |
 | Execution-environment definition or dependency inputs | Build/package validation plus applicable integration tests | `make execution-environment-build`, then `make test` |
 | AAP, OpenStack, KubeVirt/RHACM, or provider provisioning | Contract or real-provider integration | Use the qualifying [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) suite |
 | Storage-provider behavior | Component integration (focused) plus real-provider coverage when required | Tenant target-routing runs in `make test`; provider tests require `STORAGE_TESTS_ENABLED=true make test` (or the relevant storage target and provider suite) |
-| AgentlessNet Fulfillment-to-AAP-to-network-node lifecycle | Manual E2E on an existing lab | `./vlan-test-deploy.sh` from the monorepo root; requires deployed OSAC/AAP and one isolated SSH network node |
 
 Storage integration requires `STORAGE_TESTS_ENABLED=true`; image builds are separate build/package validation.
 
-The AgentlessNet unit tests mock `ip`, `iptables`, and the remote node. The
-manual E2E runner covers the real Fulfillment, Kubernetes CR, operator, AAP
-worker, SSH, and namespace-provider boundary for [OSAC-5529](https://redhat.atlassian.net/browse/OSAC-5529); it is not a CI suite.
+AgentlessNet unit tests use real allocation/locked state and Linux helpers with
+mocked `ip`/`iptables` commands, including real reconciliation and verification.
+The inventory contract tests run real Ansible parsing and `add_host` without
+contacting AAP or the selected node. Deployed VN retry/delete and packet
+isolation coverage remains a QE gap under
+[OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) /
+[OSAC-4850](https://redhat.atlassian.net/browse/OSAC-4850); no qualifying VN
+runner is tracked here.
 
 ## Generated and vendored files
 

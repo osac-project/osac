@@ -8,8 +8,6 @@ agentless_net_collections_path: "{{ lookup('env', 'ANSIBLE_COLLECTIONS_PATH') }}
 agentless_net_roles_path: "{{ lookup('env', 'ANSIBLE_ROLES_PATH') }}"
 agentless_net_net_node_ipam_state_file: "{{ lookup('env', 'AGENTLESS_NET_IPAM_STATE_FILE', default='/etc/osac/network_state.json') }}"
 agentless_net_network_state_file: "{{ lookup('env', 'AGENTLESS_NET_STATE_FILE', default='/etc/osac/agentless_network_state.sqlite3') }}"
-agentless_net_max_vns_per_tenant: "{{ lookup('env', 'AGENTLESS_NET_MAX_VNS_PER_TENANT', default='16') | int }}"
-agentless_net_max_vns_per_network_node: "{{ lookup('env', 'AGENTLESS_NET_MAX_VNS_PER_NODE', default='256') | int }}"
 
 # cluster_infra role
 agentless_net_vlan_pool_start: "{{ lookup('env', 'AGENTLESS_NET_VLAN_POOL_START', default='100') | int }}"

@@ -8,6 +8,7 @@
       ansible.builtin.set_fact:
         agentless_net_vn_uid: "{{ virtual_network.metadata.uid | default('') }}"
         agentless_net_vn_tenant_id: "{{ virtual_network.metadata.annotations['osac.openshift.io/tenant'] | default('') }}"
+      no_log: true
 
     - name: Validate VirtualNetwork deletion input
       ansible.builtin.assert:
@@ -15,6 +16,7 @@
           - agentless_net_vn_uid | length > 0
           - agentless_net_vn_tenant_id | length > 0
         fail_msg: AgentlessNet VirtualNetwork deletion requires its UID and tenant annotation.
+      no_log: true
 
     - name: Remove the VirtualNetwork namespace and release its saved transit state
       osac.templates.agentless_net_state:
@@ -24,6 +26,7 @@
         tenant_id: "{{ agentless_net_vn_tenant_id }}"
       delegate_to: "{{ groups['agentless_net_vn_network_node'][0] }}"
       become: true
+      no_log: true
   always:
     - name: Remove the temporary AgentlessNet SSH key file
       ansible.builtin.include_tasks: _cleanup_network_node_inventory.yaml

@@ -52,26 +52,21 @@ reachability.
 
 VirtualNetwork provider state uses schema v1 in a SQLite database at
 `AGENTLESS_NET_STATE_FILE` (default `/etc/osac/agentless_network_state.sqlite3`).
-Nothing using this state format is in production yet. SQLite transactions and
-UID/transit indexes keep lookups and allocation independent of the total
-number of VirtualNetworks. The database stores each VirtualNetwork's
-immutable CR CIDR and one UID-keyed `/31` transit link carved from that CIDR.
+The database stores each VirtualNetwork's immutable CR CIDR and one UID-keyed
+`/31` transit link carved from that CIDR.
 Both addresses are endpoints: the host uses the base address and acts as the
 namespace default gateway; the namespace uses the next address. The `/31` link
-reserves no network or broadcast address and is not an OSAC Subnet. A future
-Subnet allocator must exclude this transit block. Its connected route is
+reserves no network or broadcast address and is not an OSAC Subnet. This VN-only implementation differs from the
+[accepted AgentlessNet design](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-3664-agentless-vlan-fabric-manager/design.md),
+which specifies provider-pool `/30` links and versioned JSON state. Future
+Subnet work must reconcile transit reservations with that provider-pool
+contract before claiming full backend support. Its connected route is
 intended to take precedence over the host's default route; existing
 more-specific host routes that overlap the transit block are rejected.
 
 Host uplink names use the reserved `osacvn` prefix. Two shared host `FORWARD`
 rules isolate all such interfaces, keeping firewall rule count independent of
 the number of VirtualNetworks.
-
-Admission defaults to 16 active VirtualNetworks per tenant and 256 per
-network node. Set `AGENTLESS_NET_MAX_VNS_PER_TENANT` and
-`AGENTLESS_NET_MAX_VNS_PER_NODE` to tune those limits for the network node's
-capacity. Quotas are checked transactionally before a new provider mapping is
-reserved; retries and deletions remain available at the limit.
 
 The state-file flock protects short SQLite transactions. A bounded 256-file
 lock pool serializes operations for each resource UID while provider commands
@@ -80,28 +75,52 @@ protects the shared host `FORWARD` rules. Failed creates retain their
 allocation for retry. Deletes retain the entry until the UID-owned namespace,
 uplink, and host isolation rules have been removed and verified. The module
 rejects unsupported database versions, corrupt state, and unsafe owner or file
-modes; do not delete the state database to clear an error.
+modes; do not delete the state database to clear an error. Earlier development
+schema-v1 databases with capacity tables are incompatible with this reduced
+schema and fail closed; there is no automatic migration. Preserve existing
+lab state and arrange explicit cleanup before changing its state format.
 
-Each selected AgentlessNet VirtualNetwork job requires the optional
-`agentless-net-inventory` ConfigMap mounted at
-`/var/config/agentless-net/inventory.yml`. It must describe exactly one
-authoritative host under `all.children.net_nodes.hosts`, with `ansible_host`
-and `ansible_user`, plus an optional numeric `ansible_port` (default `22`). Do
-not put password fields anywhere in the ConfigMap. Configure SSH
-with an AAP machine credential or the `AGENTLESS_NET_SSH_PRIVATE_KEY` value
-from the `network-fulfillment-ig` Secret. When the Secret key is used, the role
-writes it to a mode-0600 temporary file on the AAP worker and removes that file
-after the provider operation.
-The ConfigMap mount remains optional so unrelated AAP jobs can start; an
-AgentlessNet VirtualNetwork job fails before mutation when the file, host, or
-connection data is missing or invalid.
+Each AgentlessNet VirtualNetwork job reads serialized YAML or JSON from
+`AGENTLESS_NET_VN_INVENTORY` in the existing `network-fulfillment-ig` ConfigMap,
+which the networking worker imports through `envFrom`. It must describe
+exactly one authoritative host under `all.children.net_nodes.hosts`, with
+`ansible_host` and `ansible_user`, plus an optional port (default `22`). Do not
+put password fields anywhere in the ConfigMap. For example:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: network-fulfillment-ig
+  namespace: <aap-worker-namespace>
+data:
+  AGENTLESS_NET_VN_INVENTORY: |
+    all:
+      children:
+        net_nodes:
+          hosts:
+            network-node:
+              ansible_host: <ssh-host>
+              ansible_user: <ssh-user>
+              ansible_port: 22
+```
+
+Configure SSH with an AAP machine credential, a mounted private-key path, or
+`AGENTLESS_NET_SSH_PRIVATE_KEY` from the existing `network-fulfillment-ig`
+Secret. When the Secret key is used, the role writes it to a mode-0600
+temporary file on the worker and removes it after the operation, including
+failures. Missing or invalid inventory fails before provider mutation.
+Configure nonsecret values through the existing
+[AAP instance-group configuration](../osac-installer/docs/network-backend.md#agentlessnet-virtualnetwork-baseline).
 
 The managed node must be reachable by SSH and provide Python 3, `iproute2`,
 `iptables` with conntrack support, and privilege escalation. The role enables
 IPv4 forwarding and a permit-all `FORWARD` policy inside the namespace. It
 does not change the host forwarding sysctl; interface-scoped host drops keep
 traffic isolated between VirtualNetworks. BGP, Subnet/VLAN/DHCP, NAT, and full
-external connectivity remain separate work.
+external connectivity remain separate work. VN readiness alone cannot make
+`DefaultNetworkingReady` true. Replacing a networking manager requires draining
+and replacing its resources; changing an existing VN's backend is unsupported.
 
 The older `AGENTLESS_NET_IPAM_STATE_FILE` and
 `AGENTLESS_NET_EXTERNAL_INTERFACE` settings remain separate for embedded CaaS

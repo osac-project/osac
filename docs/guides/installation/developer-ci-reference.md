@@ -59,14 +59,16 @@ make install-osac \
   PLATFORM=openshift \
   PROFILE=bmaas-ci \
   NS=<disposable-osac-namespace> \
-  EXTRA_HELM_ARGS="-f values/agentless-net-vn-smoke.yaml"
+  EXTRA_HELM_ARGS="-f values/agentless-net-stub.yaml"
 ```
 
 The overlay selects `agentless_net` through `global.networking`, which registers
 the fabric manager and creates a default NetworkClass that selects it. It also
 allows the facade to derive the AAP backend for profiles that preserve their
 existing AAP settings by default. A VirtualNetwork job requires one
-authoritative network node in the `agentless-net-inventory` ConfigMap and SSH
+authoritative network node under `all.children.net_nodes.hosts` in serialized
+`AGENTLESS_NET_VN_INVENTORY` YAML/JSON from the existing `network-fulfillment-ig`
+ConfigMap. The networking worker imports it through `envFrom`. Supply SSH
 access through an AAP credential or `AGENTLESS_NET_SSH_PRIVATE_KEY` from the
 `network-fulfillment-ig` Secret. The role creates the namespace, `/31` transit
 link, and forwarding baseline.
@@ -74,7 +76,11 @@ link, and forwarding baseline.
 Subnet, SecurityGroup, ExternalIPPool, ExternalIP, ExternalIPAttachment, and
 NATGateway operations remain unsupported. The namespace profile does not
 provide physical attachment, DHCP lease discovery, BGP, NAT, or external
-connectivity. Existing inline CaaS workflows using `agentless_net.steps` are
+connectivity or tenant `DefaultNetworkingReady`. Manager changes require draining
+and replacing resources. Inventory configuration and the retained `/31`/SQLite
+design differences are documented in the
+[network backend guide](../../../osac-installer/docs/network-backend.md#agentlessnet-virtualnetwork-baseline).
+Existing inline CaaS workflows using `agentless_net.steps` are
 unchanged. AAP must run the project content and execution environment
 containing the AgentlessNet role.
 

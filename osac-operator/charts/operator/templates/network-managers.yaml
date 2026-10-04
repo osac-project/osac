@@ -41,7 +41,7 @@ Accepts either a string (legacy) or an array of capability tokens.
 {{- $k8sManager = "k8s_only" -}}
 {{- end -}}
 {{- $netrisEnabled := eq $fabricManager "netris" -}}
-{{- $agentlessFabricEnabled := eq $fabricManager "agentless_net" -}}
+{{- $agentlessStubEnabled := eq $fabricManager "agentless_net" -}}
 {{- $agentlessEnabled := eq $k8sManager "k8s_only" -}}
 {{- $netExpert := false -}}
 {{- if and .Values.global .Values.global.expertOverrides }}
@@ -52,7 +52,7 @@ Accepts either a string (legacy) or an array of capability tokens.
 {{- if and (not $netExpert) $netrisEnabled (eq $name "netris") }}
 {{- $mgrEnabled = true -}}
 {{- end }}
-{{- if and (not $netExpert) $agentlessFabricEnabled (eq $name "agentless_net") }}
+{{- if and (not $netExpert) $agentlessStubEnabled (eq $name "agentless_net") }}
 {{- $mgrEnabled = true -}}
 {{- end }}
 {{- if $mgrEnabled }}

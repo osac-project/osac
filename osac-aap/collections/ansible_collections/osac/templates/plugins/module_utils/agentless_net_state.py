@@ -17,6 +17,8 @@ from typing import Any
 
 from ansible_collections.osac.templates.plugins.module_utils.agentless_net_network import (
     AGENTLESS_NET_HOST_INTERFACE_PREFIX,
+    _address_present,
+    _default_route_present,
     configure_uplink,
     delete_uplink,
     ensure_ipv4_forwarding,
@@ -189,52 +191,15 @@ class StateStore:
                         transit_start INTEGER NOT NULL UNIQUE,
                         payload TEXT NOT NULL
                     );
-                    CREATE TABLE node_capacity (
-                        id INTEGER PRIMARY KEY CHECK (id = 1),
-                        active_virtual_networks INTEGER NOT NULL
-                            CHECK (active_virtual_networks >= 0)
-                    );
-                    INSERT INTO node_capacity (id, active_virtual_networks)
-                        VALUES (1, 0);
-                    CREATE TABLE tenant_capacity (
-                        tenant_id TEXT PRIMARY KEY,
-                        active_virtual_networks INTEGER NOT NULL
-                            CHECK (active_virtual_networks > 0)
-                    );
-                    CREATE TRIGGER virtual_networks_after_insert
-                    AFTER INSERT ON virtual_networks
-                    BEGIN
-                        UPDATE node_capacity
-                            SET active_virtual_networks = active_virtual_networks + 1
-                            WHERE id = 1;
-                        INSERT INTO tenant_capacity (
-                            tenant_id, active_virtual_networks
-                        ) VALUES (NEW.tenant_id, 1)
-                        ON CONFLICT (tenant_id) DO UPDATE SET
-                            active_virtual_networks = active_virtual_networks + 1;
-                    END;
-                    CREATE TRIGGER virtual_networks_after_delete
-                    AFTER DELETE ON virtual_networks
-                    BEGIN
-                        UPDATE node_capacity
-                            SET active_virtual_networks = active_virtual_networks - 1
-                            WHERE id = 1;
-                        DELETE FROM tenant_capacity
-                            WHERE tenant_id = OLD.tenant_id
-                              AND active_virtual_networks = 1;
-                        UPDATE tenant_capacity
-                            SET active_virtual_networks = active_virtual_networks - 1
-                            WHERE tenant_id = OLD.tenant_id;
-                    END;
                     PRAGMA user_version = 1;
                     COMMIT;
                     """
                 )
-                tables = {"virtual_networks", "node_capacity", "tenant_capacity"}
+                tables = {"virtual_networks"}
                 version = SCHEMA_VERSION
             if version != SCHEMA_VERSION:
                 raise StateCorrupt(f"unsupported state schema: {version!r}")
-            if tables != {"virtual_networks", "node_capacity", "tenant_capacity"}:
+            if tables != {"virtual_networks"}:
                 raise StateCorrupt("AgentlessNet state database has an invalid schema")
             columns = {
                 row[1]
@@ -252,17 +217,6 @@ class StateStore:
                 "payload",
             }
             if columns != expected_columns:
-                raise StateCorrupt("AgentlessNet state database has an invalid schema")
-            triggers = {
-                row[0]
-                for row in connection.execute(
-                    "SELECT name FROM sqlite_master WHERE type = 'trigger'"
-                )
-            }
-            if triggers != {
-                "virtual_networks_after_insert",
-                "virtual_networks_after_delete",
-            }:
                 raise StateCorrupt("AgentlessNet state database has an invalid schema")
             return connection
         except (sqlite3.DatabaseError, OSError) as error:
@@ -363,16 +317,6 @@ class StateStore:
             raise StateCorrupt("VirtualNetwork indexed state does not match its payload")
         return entry
 
-    def _snapshot_locked(self, connection: sqlite3.Connection | None):
-        if connection is None:
-            entries = []
-        else:
-            rows = connection.execute(
-                "SELECT uid FROM virtual_networks ORDER BY uid"
-            ).fetchall()
-            entries = [self._entry_for_uid(connection, row[0]) for row in rows]
-        return {"schema_version": SCHEMA_VERSION, "virtual_networks": entries}
-
     @staticmethod
     def _validate_uid(uid: str) -> None:
         if not _is_canonical_uuid(uid):
@@ -407,17 +351,11 @@ class StateStore:
         uid: str,
         virtual_network_cidr: str,
         tenant_id: str,
-        max_per_tenant: int,
-        max_per_node: int,
         *,
         reconcile: bool = False,
     ) -> tuple[dict[str, Any], bool, bool]:
         self._validate_uid(uid)
         self._validate_tenant_id(tenant_id)
-        if type(max_per_tenant) is not int or max_per_tenant < 1:
-            raise StateError("AgentlessNet per-tenant VirtualNetwork limit must be positive")
-        if type(max_per_node) is not int or max_per_node < 1:
-            raise StateError("AgentlessNet network-node VirtualNetwork limit must be positive")
         try:
             network = _parse_canonical_ipv4_network(virtual_network_cidr)
         except (TypeError, ValueError) as error:
@@ -438,23 +376,6 @@ class StateStore:
                             raise StateError("VirtualNetwork CIDR does not match saved state")
                         state_changed = False
                     else:
-                        node_capacity = connection.execute(
-                            "SELECT active_virtual_networks FROM node_capacity WHERE id = 1"
-                        ).fetchone()
-                        tenant_capacity = connection.execute(
-                            """
-                            SELECT active_virtual_networks FROM tenant_capacity
-                            WHERE tenant_id = ?
-                            """,
-                            (tenant_id,),
-                        ).fetchone()
-                        if node_capacity is None:
-                            raise StateCorrupt("AgentlessNet node capacity state is missing")
-                        if (tenant_capacity[0] if tenant_capacity else 0) >= max_per_tenant:
-                            raise StateError("AgentlessNet tenant VirtualNetwork quota is exhausted")
-                        if node_capacity[0] >= max_per_node:
-                            raise StateError("AgentlessNet network-node VirtualNetwork capacity is exhausted")
-
                         identity = self._identity_entry(uid)
                         collision = connection.execute(
                             """
@@ -528,7 +449,7 @@ class StateStore:
             network_changed = False
             if reconcile:
                 # Reserve first so a route or provider failure is retryable with the
-                # same UID-to-/31 mapping. No provider command runs under the JSON lock.
+                # same UID-to-/31 mapping. No provider command runs under the database state lock.
                 _assert_transit_route_available(entry)
                 network_changed = reconcile_virtual_network(
                     entry,
@@ -536,37 +457,16 @@ class StateStore:
                 )
             return entry, state_changed, network_changed
 
-    def ensure_virtual_network(
-        self,
-        uid: str,
-        virtual_network_cidr: str,
-        tenant_id: str,
-        max_per_tenant: int,
-        max_per_node: int,
-    ) -> dict[str, Any]:
-        entry, _, _ = self._ensure_virtual_network(
-            uid,
-            virtual_network_cidr,
-            tenant_id,
-            max_per_tenant,
-            max_per_node,
-        )
-        return entry
-
     def ensure_and_reconcile_virtual_network(
         self,
         uid: str,
         virtual_network_cidr: str,
         tenant_id: str,
-        max_per_tenant: int,
-        max_per_node: int,
     ) -> tuple[dict[str, Any], bool, bool]:
         return self._ensure_virtual_network(
             uid,
             virtual_network_cidr,
             tenant_id,
-            max_per_tenant,
-            max_per_node,
             reconcile=True,
         )
 
@@ -579,10 +479,6 @@ class StateStore:
             entry = self._entry_for_uid(connection, uid)
             self._require_tenant_ownership(entry, tenant_id)
             return entry
-
-    def snapshot(self) -> dict[str, Any]:
-        with self._locked_database(create=False) as connection:
-            return self._snapshot_locked(connection)
 
     def delete_and_remove_virtual_network(self, uid: str, tenant_id: str) -> bool:
         self._validate_uid(uid)

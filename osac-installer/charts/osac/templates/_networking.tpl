@@ -10,7 +10,7 @@ Setting fabricManager to netris without an explicit k8sManager leaves k8sManager
 
 Validated combinations:
   - fabricManager=netris + k8sManager="" → netris AAP + NetworkClass fabricManager=netris
-  - fabricManager=agentless_net + k8sManager="" → AgentlessNet VirtualNetwork baseline + NetworkClass fabricManager=agentless_net
+  - fabricManager=agentless_net + k8sManager="" → AgentlessNet stub + NetworkClass fabricManager=agentless_net
   - fabricManager="" + k8sManager=k8s_only → agentless AAP + NetworkClass k8sManager=k8s_only
   - fabricManager="" + k8sManager="" → expert empty profile; networkClass must supply a manager
 

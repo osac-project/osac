@@ -4,6 +4,8 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
+from jinja2 import Environment, StrictUndefined
 
 MODULE_UTILS = (
     Path(__file__).resolve().parents[2]
@@ -237,3 +239,38 @@ def test_delete_uplink_is_idempotent_when_already_absent(monkeypatch):
 
     monkeypatch.setattr(agentless_net_network, "run_command", run)
     assert agentless_net_network.delete_uplink("vn-test", "vn-host") is False
+
+
+@pytest.mark.parametrize("failure", ["exit", "oserror"])
+def test_command_failure_does_not_disclose_output_or_arguments(monkeypatch, failure):
+    sensitive = "dummy-sensitive-marker 10.20.0.0/16 inventory-value"
+    command = ["ip", "address", "replace", sensitive]
+
+    def run(command, **kwargs):
+        if failure == "oserror":
+            raise OSError(sensitive)
+        return subprocess.CompletedProcess(command, 2, stdout=sensitive, stderr=sensitive)
+
+    monkeypatch.setattr(agentless_net_network.subprocess, "run", run)
+    with pytest.raises(agentless_net_network.NetworkCommandError) as result:
+        agentless_net_network.run_command(command)
+    expected = "ip could not run" if failure == "oserror" else "ip failed (exit status 2)"
+    assert str(result.value) == expected
+    assert all(value not in str(result.value) for value in sensitive.split())
+
+
+@pytest.mark.parametrize("remote_secret", ["", "remote-kubeconfig"])
+def test_network_worker_reuses_config_and_secret_environment(remote_secret):
+    template_path = (MODULE_UTILS.parents[2] / "config_as_code" / "roles" / "aap"
+                     / "templates" / "networking-operations-ig.j2")
+    template = Environment(undefined=StrictUndefined).from_string(template_path.read_text())
+    pod = yaml.safe_load(template.render(
+        aap_ee_image="example.invalid/osac-ee:test",
+        remote_cluster_kubeconfig_secret_name=remote_secret,
+        remote_cluster_kubeconfig_secret_key="kubeconfig",
+    ))
+    worker = pod["spec"]["containers"][0]
+    assert {"configMapRef": {"name": "network-fulfillment-ig", "optional": True}} in worker["envFrom"]
+    assert {"secretRef": {"name": "network-fulfillment-ig"}} in worker["envFrom"]
+    assert all(volume["name"] != "agentless-net-inventory" for volume in pod["spec"]["volumes"])
+    assert all(mount["name"] != "agentless-net-inventory" for mount in worker["volumeMounts"])

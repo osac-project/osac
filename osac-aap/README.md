@@ -50,32 +50,31 @@ operations still fail fast. A successful VirtualNetwork means this namespace
 baseline was verified; it does not mean that tenant traffic has external
 reachability.
 
-VirtualNetwork provider state uses schema v1 at
-`AGENTLESS_NET_STATE_FILE` (default `/etc/osac/agentless_network_state.json`).
-This is the first deployed format, so unsupported versions fail closed rather
-than migrating. The state file stores the immutable VirtualNetwork CR CIDR and
-one UID-keyed `/31` transit link carved from that CIDR. Both addresses are
-endpoints: the host uses the base address and acts as the namespace default
-gateway; the namespace uses the next address. The `/31` link reserves no
-network or broadcast address and is not an OSAC Subnet. A future Subnet
-allocator must exclude this transit block. Its connected route is intended to
-take precedence over the host's default route; existing more-specific host
-routes that overlap the transit block are rejected.
+VirtualNetwork provider state uses schema v1 in a SQLite database at
+`AGENTLESS_NET_STATE_FILE` (default `/etc/osac/agentless_network_state.sqlite3`).
+Nothing using this state format is in production yet. SQLite transactions and
+UID/transit indexes keep lookups and allocation independent of the total
+number of VirtualNetworks. The database stores each VirtualNetwork's
+immutable CR CIDR and one UID-keyed `/31` transit link carved from that CIDR.
+Both addresses are endpoints: the host uses the base address and acts as the
+namespace default gateway; the namespace uses the next address. The `/31` link
+reserves no network or broadcast address and is not an OSAC Subnet. A future
+Subnet allocator must exclude this transit block. Its connected route is
+intended to take precedence over the host's default route; existing
+more-specific host routes that overlap the transit block are rejected.
 
 Host uplink names use the reserved `osacvn` prefix. Two shared host `FORWARD`
 rules isolate all such interfaces, keeping firewall rule count independent of
 the number of VirtualNetworks.
 
-The state-file flock is held only while reading, allocating, or committing the
-atomic JSON snapshot and backup. A bounded 256-file lock pool serializes
-operations for each resource UID while provider commands run; hash collisions
-can serialize unrelated UIDs. A short firewall lock protects the shared host
-`FORWARD` rules. Failed creates retain their allocation for retry. Deletes
-retain the entry until the UID-owned namespace, uplink, and host isolation rules
-have been removed and verified. The module rejects a missing
-state file when a backup exists, malformed JSON, unsupported versions, and
-unsafe owner or file modes; do not delete the state file or backup to clear an
-error.
+The state-file flock protects short SQLite transactions. A bounded 256-file
+lock pool serializes operations for each resource UID while provider commands
+run; hash collisions can serialize unrelated UIDs. A short firewall lock
+protects the shared host `FORWARD` rules. Failed creates retain their
+allocation for retry. Deletes retain the entry until the UID-owned namespace,
+uplink, and host isolation rules have been removed and verified. The module
+rejects unsupported database versions, corrupt state, and unsafe owner or file
+modes; do not delete the state database to clear an error.
 
 Each selected AgentlessNet VirtualNetwork job requires the optional
 `agentless-net-inventory` ConfigMap mounted at

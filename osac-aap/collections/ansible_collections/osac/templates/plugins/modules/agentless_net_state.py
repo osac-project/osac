@@ -46,7 +46,7 @@ EXAMPLES = r"""
 - name: Provision a VirtualNetwork
   osac.templates.agentless_net_state:
     action: ensure_virtual_network
-    state_file: /etc/osac/agentless_network_state.json
+    state_file: /etc/osac/agentless_network_state.sqlite3
     uid: 01234567-89ab-cdef-0123-456789abcdef
     virtual_network_cidr: 10.20.0.0/16
 """

@@ -2,6 +2,7 @@ import fcntl
 import ipaddress
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -32,7 +33,7 @@ UID_THREE = "33333333-3333-4333-8333-333333333333"
 
 
 def store_for(tmp_path):
-    return StateStore(tmp_path / "agentless_network_state.json")
+    return StateStore(tmp_path / "agentless_network_state.sqlite3")
 
 
 def assert_store_lock_is_free(store):
@@ -42,11 +43,6 @@ def assert_store_lock_is_free(store):
         fcntl.flock(lock_fd, fcntl.LOCK_UN)
     finally:
         os.close(lock_fd)
-
-
-def write_state(path, state):
-    path.write_text(json.dumps(state))
-    path.chmod(0o600)
 
 
 def test_virtual_network_retry_reuses_uid_mapping_and_canonical_slash_31(tmp_path):
@@ -63,7 +59,7 @@ def test_virtual_network_retry_reuses_uid_mapping_and_canonical_slash_31(tmp_pat
     assert first["transit"]["host_ip"] == f"{transit.network_address}/31"
     assert first["transit"]["gateway"] == str(transit.network_address)
     assert first["virtual_network_cidr"] == "10.0.0.0/16"
-    assert json.loads(store.path.read_text())["schema_version"] == agentless_net_state.SCHEMA_VERSION
+    assert store.snapshot()["schema_version"] == agentless_net_state.SCHEMA_VERSION
     assert store.path.stat().st_mode & 0o777 == 0o600
     assert store.lock_path.exists()
 
@@ -466,7 +462,7 @@ def test_delete_keeps_state_until_provider_cleanup_and_preserves_peer(tmp_path, 
     def delete_from_node(entry, **kwargs):
         assert_store_lock_is_free(store)
         assert entry == first
-        current = json.loads(store.path.read_text())
+        current = store.snapshot()
         assert first in current["virtual_networks"]
         assert second in current["virtual_networks"]
         deleted.append(entry)
@@ -489,7 +485,7 @@ def test_failed_delete_preserves_its_entry_and_peer(tmp_path, monkeypatch):
 
     def failed_cleanup(entry, **kwargs):
         assert_store_lock_is_free(store)
-        assert first in json.loads(store.path.read_text())["virtual_networks"]
+        assert first in store.snapshot()["virtual_networks"]
         raise StateError("injected cleanup failure")
 
     monkeypatch.setattr(agentless_net_state, "delete_virtual_network", failed_cleanup)
@@ -526,9 +522,11 @@ def test_absent_state_entry_without_provider_residue_is_idempotent(tmp_path, mon
     assert store.delete_and_remove_virtual_network(UID_THREE) is False
 
 
-def test_corrupt_state_or_surviving_backup_fails_before_provider_cleanup(tmp_path, monkeypatch):
+def test_unknown_database_schema_fails_before_provider_cleanup(tmp_path, monkeypatch):
     store = store_for(tmp_path)
-    write_state(store.path, {"schema_version": 99, "virtual_networks": []})
+    store.ensure_virtual_network(UID_ONE, "10.0.0.0/16")
+    with sqlite3.connect(store.path) as connection:
+        connection.execute("PRAGMA user_version = 99")
     cleanup_called = False
 
     def cleanup(entry, **kwargs):
@@ -537,19 +535,12 @@ def test_corrupt_state_or_surviving_backup_fails_before_provider_cleanup(tmp_pat
         return True
 
     monkeypatch.setattr(agentless_net_state, "delete_virtual_network", cleanup)
-    with pytest.raises(StateCorrupt, match="unsupported state schema"):
-        store.delete_and_remove_virtual_network(UID_ONE)
-    assert cleanup_called is False
-
-    store.path.unlink()
-    store.backup_path.write_text("{}")
-    store.backup_path.chmod(0o600)
-    with pytest.raises(StateCorrupt, match="backup exists"):
+    with pytest.raises(StateCorrupt, match="unsupported state schema: 99"):
         store.delete_and_remove_virtual_network(UID_ONE)
     assert cleanup_called is False
 
 
-def test_state_file_rejects_unsafe_mode_and_unknown_schema(tmp_path):
+def test_state_database_rejects_unsafe_mode_and_corrupt_payload(tmp_path):
     store = store_for(tmp_path)
     store.ensure_virtual_network(UID_ONE, "10.0.0.0/16")
     store.path.chmod(0o644)
@@ -557,8 +548,9 @@ def test_state_file_rejects_unsafe_mode_and_unknown_schema(tmp_path):
         store.get_virtual_network(UID_ONE)
 
     store.path.chmod(0o600)
-    write_state(store.path, {"schema_version": 2, "virtual_networks": []})
-    with pytest.raises(StateCorrupt, match="unsupported state schema: 2"):
+    with sqlite3.connect(store.path) as connection:
+        connection.execute("UPDATE virtual_networks SET payload = ? WHERE uid = ?", ("{", UID_ONE))
+    with pytest.raises(StateCorrupt, match="malformed VirtualNetwork state payload"):
         store.get_virtual_network(UID_ONE)
 
 
@@ -578,16 +570,18 @@ def test_virtual_network_cidr_smaller_than_transit_link_fails_without_state(tmp_
 
 def test_schema_rejects_non_slash_31_transit_and_noncanonical_cidr(tmp_path):
     store = store_for(tmp_path)
-    store.ensure_virtual_network(UID_ONE, "10.0.0.0/16")
-    state = json.loads(store.path.read_text())
-    entry = state["virtual_networks"][0]
+    entry = store.ensure_virtual_network(UID_ONE, "10.0.0.0/16")
     entry["transit"] = {
         "cidr": "10.0.0.0/30",
         "namespace_ip": "10.0.0.1/30",
         "host_ip": "10.0.0.0/30",
         "gateway": "10.0.0.0",
     }
-    write_state(store.path, state)
+    with sqlite3.connect(store.path) as connection:
+        connection.execute(
+            "UPDATE virtual_networks SET payload = ? WHERE uid = ?",
+            (json.dumps(entry), UID_ONE),
+        )
     with pytest.raises(StateCorrupt, match="transit CIDR must be an IPv4 /31"):
         store.get_virtual_network(UID_ONE)
 
@@ -598,16 +592,43 @@ def test_schema_rejects_non_slash_31_transit_and_noncanonical_cidr(tmp_path):
         "gateway": "10.0.0.0",
     }
     entry["virtual_network_cidr"] = "10.0.0.0/016"
-    write_state(store.path, state)
+    with sqlite3.connect(store.path) as connection:
+        connection.execute(
+            "UPDATE virtual_networks SET payload = ?, transit_cidr = ?, transit_start = ? WHERE uid = ?",
+            (
+                json.dumps(entry),
+                entry["transit"]["cidr"],
+                int(ipaddress.ip_network(entry["transit"]["cidr"]).network_address),
+                UID_ONE,
+            ),
+        )
     with pytest.raises(StateCorrupt, match="VirtualNetwork CIDR must be canonical"):
         store.get_virtual_network(UID_ONE)
 
 
-def test_successful_write_keeps_last_valid_backup(tmp_path):
+def test_state_database_keeps_schema_v1_and_indexes_uid_and_transit(tmp_path):
     store = store_for(tmp_path)
-    store.ensure_virtual_network(UID_ONE, "10.0.0.0/16")
-    previous = json.loads(store.path.read_text())
-    store.ensure_virtual_network(UID_TWO, "10.0.0.0/16")
+    for uid_number in range(1, 129):
+        store.ensure_virtual_network(str(uuid.UUID(int=uid_number)), "10.0.0.0/16")
 
-    assert json.loads(store.backup_path.read_text()) == previous
-    assert store.backup_path.stat().st_mode & 0o777 == 0o600
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+        uid_plan = " ".join(
+            str(part)
+            for row in connection.execute(
+                "EXPLAIN QUERY PLAN SELECT payload FROM virtual_networks WHERE uid = ?",
+                (UID_ONE,),
+            )
+            for part in row
+        )
+        transit_plan = " ".join(
+            str(part)
+            for row in connection.execute(
+                "EXPLAIN QUERY PLAN SELECT 1 FROM virtual_networks WHERE transit_start = ?",
+                (0,),
+            )
+            for part in row
+        )
+    assert "INDEX" in uid_plan.upper()
+    assert "INDEX" in transit_plan.upper()
+    assert len(store.snapshot()["virtual_networks"]) == 128

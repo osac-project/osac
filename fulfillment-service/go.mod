@@ -32,6 +32,7 @@ require (
 	github.com/muesli/cancelreader v0.2.2
 	github.com/open-policy-agent/opa v1.18.2
 	github.com/osac-project/osac/bare-metal-fulfillment-operator v0.0.0-00010101000000-000000000000
+	github.com/osac-project/osac/osac-operator v0.0.14
 	github.com/osac-project/osac/osac-operator/api v0.0.7
 	github.com/osac-project/osac/proto v0.0.0-00010101000000-000000000000
 	github.com/prometheus/client_golang v1.24.1
@@ -120,7 +121,7 @@ require (
 	github.com/hashicorp/go-uuid v1.0.3 // indirect
 	github.com/hashicorp/hcl v1.0.1-vault-7 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
-	github.com/itchyny/timefmt-go v0.1.8 // indirect
+	github.com/itchyny/timefmt-go v0.1.9 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jcmturner/aescts/v2 v2.0.0 // indirect

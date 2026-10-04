@@ -11,7 +11,7 @@ require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/alecthomas/chroma/v2 v2.27.0
 	github.com/cenkalti/backoff/v4 v4.3.0
-	github.com/charmbracelet/ultraviolet v0.0.0-20260922123528-4e49372c11f9
+	github.com/charmbracelet/ultraviolet v0.0.0-20261001125412-878653296cfd
 	github.com/coder/websocket v1.8.15
 	github.com/dustin/go-humanize v1.0.1
 	github.com/go-logr/logr v1.4.4
@@ -32,6 +32,7 @@ require (
 	github.com/muesli/cancelreader v0.2.2
 	github.com/open-policy-agent/opa v1.18.2
 	github.com/osac-project/osac/bare-metal-fulfillment-operator v0.0.0-00010101000000-000000000000
+	github.com/osac-project/osac/osac-operator v0.0.14
 	github.com/osac-project/osac/osac-operator/api v0.0.7
 	github.com/osac-project/osac/proto v0.0.0-00010101000000-000000000000
 	github.com/prometheus/client_golang v1.24.1

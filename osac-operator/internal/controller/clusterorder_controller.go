@@ -285,7 +285,8 @@ func (r *ClusterOrderReconciler) recordTransitionEventsForStatus(instance *v1alp
 	// reason without an intervening change produces no patch and no repeat event.
 	for _, reasonEvent := range progressingReasonEvents {
 		if newProgressing == nil || newProgressing.Reason != reasonEvent.reason ||
-			(oldProgressing != nil && oldProgressing.Reason == reasonEvent.reason) {
+			(oldProgressing != nil && oldProgressing.Reason == reasonEvent.reason) ||
+			isRecoveredStallTransition(oldProgressing, newProgressing) {
 			continue
 		}
 		message := newProgressing.Message
@@ -328,6 +329,12 @@ func (r *ClusterOrderReconciler) recordTransitionEventsForStatus(instance *v1alp
 		r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, clusterOrderDeletingEventReason,
 			clusterOrderDeletingEventAction, "ClusterOrder entered deleting phase")
 	}
+}
+
+func isRecoveredStallTransition(oldProgressing, newProgressing *metav1.Condition) bool {
+	return oldProgressing != nil && newProgressing != nil &&
+		oldProgressing.Reason == v1alpha1.ReasonStageUnknown &&
+		newProgressing.Reason == v1alpha1.ReasonStalled
 }
 
 type statusTransition struct {

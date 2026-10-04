@@ -254,6 +254,18 @@ var _ = Describe("ClusterOrder transition events", func() {
 		)))
 	})
 
+	It("does not re-emit a stalled warning when signals recover after an outage", func() {
+		recorder := newRecorder()
+		reconciler := &ClusterOrderReconciler{Recorder: recorder}
+		instance := &v1alpha1.ClusterOrder{}
+		oldStatus := statusWithProgressingReason(v1alpha1.ReasonStageUnknown)
+		instance.Status = statusWithProgressingReason(v1alpha1.ReasonStalled)
+
+		reconciler.recordTransitionEventsForStatus(instance, &oldStatus, &instance.Status)
+
+		Consistently(recorder.Events, 200*time.Millisecond).ShouldNot(Receive())
+	})
+
 	It("records a Warning event when the provisioning stage becomes unknown", func() {
 		recorder := newRecorder()
 		reconciler := &ClusterOrderReconciler{Recorder: recorder}

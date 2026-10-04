@@ -162,6 +162,24 @@ def test_transit_route_conflict_keeps_saved_allocation_for_retry(tmp_path, monke
     assert network_changed is False
 
 
+def test_transit_route_may_override_host_default_route(tmp_path, monkeypatch):
+    store = store_for(tmp_path)
+    entry = store.ensure_virtual_network(UID_ONE, "1.1.1.0/31")
+    expected_command = ["ip", "-j", "-4", "route", "show", "table", "all"]
+
+    def default_route(command, check=True):
+        assert command == expected_command
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps([{"dst": "default", "gateway": "192.0.2.1", "dev": "eth0"}]),
+            stderr="",
+        )
+
+    monkeypatch.setattr(agentless_net_state, "_run", default_route)
+    agentless_net_state._assert_transit_route_available(entry)
+
+
 def test_stalled_provider_work_does_not_block_another_uid_allocation(tmp_path, monkeypatch):
     store = store_for(tmp_path)
     provider_started = threading.Event()

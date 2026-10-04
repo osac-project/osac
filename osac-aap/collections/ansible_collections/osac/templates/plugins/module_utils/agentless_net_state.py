@@ -478,6 +478,8 @@ def _assert_transit_route_available(entry: dict[str, Any]) -> None:
 
         destination = route.get("dst", "default")
         if destination in ("default", "0.0.0.0/0"):
+            # The VN-owned transit /31 intentionally takes precedence over the
+            # host's catch-all route. More-specific existing routes still conflict.
             continue
         try:
             route_network = ipaddress.ip_network(destination, strict=False)

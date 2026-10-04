@@ -58,7 +58,9 @@ one UID-keyed `/31` transit link carved from that CIDR. Both addresses are
 endpoints: the host uses the base address and acts as the namespace default
 gateway; the namespace uses the next address. The `/31` link reserves no
 network or broadcast address and is not an OSAC Subnet. A future Subnet
-allocator must exclude this transit block.
+allocator must exclude this transit block. Its connected route is intended to
+take precedence over the host's default route; existing more-specific host
+routes that overlap the transit block are rejected.
 
 The state-file flock is held only while reading, allocating, or committing the
 atomic JSON snapshot and backup. A bounded 256-file lock pool serializes

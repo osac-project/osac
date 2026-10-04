@@ -61,6 +61,10 @@ def _is_canonical_uuid(value: Any) -> bool:
         return False
 
 
+def _is_valid_tenant_id(value: Any) -> bool:
+    return isinstance(value, str) and bool(value) and value == value.strip()
+
+
 def _parse_canonical_ipv4_network(value: Any) -> ipaddress.IPv4Network:
     if not isinstance(value, str):
         raise TypeError("VirtualNetwork CIDR must be a string")
@@ -185,8 +189,6 @@ class StateStore:
                         transit_start INTEGER NOT NULL UNIQUE,
                         payload TEXT NOT NULL
                     );
-                    CREATE INDEX virtual_networks_tenant_id_idx
-                        ON virtual_networks(tenant_id);
                     CREATE TABLE node_capacity (
                         id INTEGER PRIMARY KEY CHECK (id = 1),
                         active_virtual_networks INTEGER NOT NULL
@@ -281,11 +283,7 @@ class StateStore:
         transit = entry["transit"]
         if not _is_canonical_uuid(uid):
             raise StateCorrupt("VirtualNetwork UID must be a canonical UUID")
-        if (
-            not isinstance(tenant_id, str)
-            or not tenant_id
-            or tenant_id != tenant_id.strip()
-        ):
+        if not _is_valid_tenant_id(tenant_id):
             raise StateCorrupt("VirtualNetwork tenant ID is invalid")
         identity = StateStore._identity_entry(uid)
         if namespace != identity["namespace_name"]:
@@ -382,11 +380,7 @@ class StateStore:
 
     @staticmethod
     def _validate_tenant_id(tenant_id: str) -> None:
-        if (
-            not isinstance(tenant_id, str)
-            or not tenant_id
-            or tenant_id != tenant_id.strip()
-        ):
+        if not _is_valid_tenant_id(tenant_id):
             raise StateError("VirtualNetwork tenant ID is required")
 
     @staticmethod

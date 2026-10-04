@@ -80,6 +80,24 @@ def test_resource_lock_file_pool_is_bounded(tmp_path):
     assert len(resource_locks) <= agentless_net_state.RESOURCE_LOCK_SHARDS
 
 
+def test_virtual_network_capacity_is_enforced_without_blocking_retries(tmp_path):
+    store = store_for(tmp_path)
+    first_uid = str(uuid.UUID(int=1))
+
+    for uid_number in range(1, agentless_net_state.MAX_VIRTUAL_NETWORKS + 1):
+        store.ensure_virtual_network(str(uuid.UUID(int=uid_number)), "10.0.0.0/16")
+
+    assert store.ensure_virtual_network(first_uid, "10.0.0.0/16")["uid"] == first_uid
+    with pytest.raises(StateError, match="at most 64 active VirtualNetworks"):
+        store.ensure_virtual_network(
+            str(uuid.UUID(int=agentless_net_state.MAX_VIRTUAL_NETWORKS + 1)),
+            "10.0.0.0/16",
+        )
+
+    state = json.loads(store.path.read_text())
+    assert len(state["virtual_networks"]) == agentless_net_state.MAX_VIRTUAL_NETWORKS
+
+
 def test_overlapping_virtual_networks_get_independent_names_and_transit(tmp_path):
     store = store_for(tmp_path)
     first = store.ensure_virtual_network(UID_ONE, "10.0.0.0/16")

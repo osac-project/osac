@@ -31,6 +31,7 @@ SCHEMA_VERSION = 1
 LOCK_WAIT_SECONDS = 60
 LOCK_POLL_SECONDS = 0.05
 MAX_RULE_DELETIONS = 64
+MAX_VIRTUAL_NETWORKS = 64
 RESOURCE_LOCK_SHARDS = 256
 STATE_KEYS = {"schema_version", "virtual_networks"}
 VIRTUAL_NETWORK_KEYS = {
@@ -327,6 +328,11 @@ class StateStore:
                         raise StateError("VirtualNetwork CIDR does not match saved state")
                     state_changed = False
                 else:
+                    if len(state["virtual_networks"]) >= MAX_VIRTUAL_NETWORKS:
+                        raise StateError(
+                            "AgentlessNet supports at most "
+                            f"{MAX_VIRTUAL_NETWORKS} active VirtualNetworks per network node"
+                        )
                     identity = self._identity_entry(uid)
                     if any(
                         item["namespace_name"] == identity["namespace_name"]

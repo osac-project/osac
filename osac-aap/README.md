@@ -73,6 +73,11 @@ state file when a backup exists, malformed JSON, unsupported versions, and
 unsafe owner or file modes; do not delete the state file or backup to clear an
 error.
 
+The single-node AgentlessNet backend supports at most 64 active VirtualNetworks.
+Each VN has two host forwarding-isolation rules, so this cap bounds the host
+`FORWARD` chain's rule scan cost. Requests beyond the limit fail before provider
+state is added.
+
 Each selected AgentlessNet VirtualNetwork job requires the optional
 `agentless-net-inventory` ConfigMap mounted at
 `/var/config/agentless-net/inventory.yml`. It must describe exactly one

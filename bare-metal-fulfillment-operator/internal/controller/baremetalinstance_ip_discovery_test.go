@@ -154,6 +154,81 @@ var _ = Describe("BareMetalInstance IP Discovery", func() {
 			})
 		})
 
+		Context("when resolving logical port MACs", func() {
+			var (
+				inventoryClient *mockInventoryClient
+				jobMACs         map[string]string
+				jobTriggered    bool
+			)
+
+			BeforeEach(func() {
+				bmi = bmiForIPDiscovery([]v1alpha1.BareMetalNetworkAttachment{
+					{SubnetRef: "subnet-1", Interface: "data-0", Primary: true},
+				})
+				Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
+				bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete, metav1.ConditionTrue, "Succeeded", "Handoff complete")
+				inventoryClient = &mockInventoryClient{}
+				jobMACs = nil
+				jobTriggered = false
+				reconciler = &BareMetalInstanceReconciler{
+					Client:          k8sClient,
+					InventoryClient: inventoryClient,
+					IPDiscoveryProvider: &mockProvisioningProvider{
+						triggerProvisionFunc: func(jobCtx context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
+							jobTriggered = true
+							jobMACs = provisioning.NetworkAttachmentMACsFromContext(jobCtx)
+							return &provisioning.ProvisionResult{JobID: "mac-lookup-job", InitialState: opv1alpha1.JobStatePending}, nil
+						},
+					},
+					ProvisionPollIntervalDuration: DefaultProvisionPollIntervalDuration,
+				}
+			})
+
+			AfterEach(func() {
+				Expect(k8sClient.Delete(ctx, bmi)).To(Succeed())
+			})
+
+			It("passes inventory logical port MACs to the DHCP job when management is unset", func() {
+				lookupCalled := false
+				inventoryClient.getHostLogicalPortMACsFunc = func(_ context.Context, hostID string) (map[string]string, error) {
+					lookupCalled = true
+					Expect(hostID).To(Equal(bmi.Spec.ExternalHostID))
+					return map[string]string{"data-0": "52:54:00:16:04:83"}, nil
+				}
+				_, err := reconciler.reconcileIPDiscovery(ctx, bmi)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(lookupCalled).To(BeTrue())
+				Expect(jobTriggered).To(BeTrue())
+				Expect(jobMACs).To(Equal(map[string]string{"subnet-1": "52:54:00:16:04:83"}))
+			})
+
+			DescribeTable("preserves name-based matching",
+				func(macs map[string]string, lookupErr error, noInventory, noHostID bool) {
+					lookupCalled := false
+					inventoryClient.getHostLogicalPortMACsFunc = func(_ context.Context, _ string) (map[string]string, error) {
+						lookupCalled = true
+						return macs, lookupErr
+					}
+					if noInventory {
+						reconciler.InventoryClient = nil
+					}
+					if noHostID {
+						bmi.Spec.ExternalHostID = ""
+					}
+					_, err := reconciler.reconcileIPDiscovery(ctx, bmi)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(lookupCalled).To(Equal(!noInventory && !noHostID))
+					Expect(jobTriggered).To(BeTrue())
+					Expect(jobMACs).To(BeEmpty())
+				},
+				Entry("when the mapping is empty", map[string]string{}, nil, false, false),
+				Entry("when the attachment has no mapped port", map[string]string{"other-port": "52:54:00:16:04:83"}, nil, false, false),
+				Entry("when inventory lookup fails", nil, fmt.Errorf("inventory unavailable"), false, false),
+				Entry("when inventory is unset", nil, nil, true, false),
+				Entry("when the host ID is unset", nil, nil, false, true),
+			)
+		})
+
 		Context("when IP discovery succeeds", func() {
 			var mockProvider *mockProvisioningProvider
 

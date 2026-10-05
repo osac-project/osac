@@ -297,6 +297,7 @@ func (i *GrpcAuthzInterceptor) authorizeWithToken(ctx context.Context, method st
 
 	// Store subject in context
 	result = ContextWithSubject(ctx, subject)
+	result = ContextWithAuthenticationMethod(result, authContext.AuthMethod)
 
 	logger.DebugContext(
 		result,

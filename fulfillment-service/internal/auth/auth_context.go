@@ -27,12 +27,27 @@ type contextKey int
 
 const (
 	subjectContextKey contextKey = iota
-	tokenContextKey   contextKey = iota
+	tokenContextKey
+	authenticationMethodContextKey
 )
 
 // ContextWithSubject creates a new context containing the given subject.
 func ContextWithSubject(parent context.Context, subject *Subject) context.Context {
 	return context.WithValue(parent, subjectContextKey, subject)
+}
+
+// ContextWithAuthenticationMethod records how the request was authenticated.
+func ContextWithAuthenticationMethod(parent context.Context, method string) context.Context {
+	return context.WithValue(parent, authenticationMethodContextKey, method)
+}
+
+// IsServiceAccount reports whether the authenticated caller is the named
+// Kubernetes service account. The authentication method check prevents a JWT
+// user with the same username from being treated as a service account.
+func IsServiceAccount(ctx context.Context, name string) bool {
+	subject, subjectOK := ctx.Value(subjectContextKey).(*Subject)
+	method, methodOK := ctx.Value(authenticationMethodContextKey).(string)
+	return subjectOK && methodOK && method == "serviceaccount" && subject.User == name
 }
 
 // SubjectFromContext extracts the subject from the context. Panics if there is no subject in the

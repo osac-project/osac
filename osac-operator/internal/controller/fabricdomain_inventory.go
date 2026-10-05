@@ -25,6 +25,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
@@ -194,6 +195,7 @@ func (r *FabricDomainReconciler) mapInventoryToFabricDomains(ctx context.Context
 	}
 	domains := &v1alpha1.FabricDomainList{}
 	if err := r.List(ctx, domains, client.InNamespace(obj.GetNamespace())); err != nil {
+		ctrllog.FromContext(ctx).Error(err, "listing FabricDomains for inventory change", "configMap", obj.GetName())
 		return nil
 	}
 	requests := make([]reconcile.Request, 0, len(domains.Items))

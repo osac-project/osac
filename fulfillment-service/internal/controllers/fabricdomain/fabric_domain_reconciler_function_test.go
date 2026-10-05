@@ -540,7 +540,7 @@ var _ = Describe("FabricDomain fulfillment reconciler", func() {
 		fn, err := NewFunction().SetLogger(r.logger).SetConnection(connection).SetHubCache(hubCache).Build()
 		Expect(err).NotTo(HaveOccurred())
 		_, err = controllers.NewReconciler[*privatev1.FabricDomain]().SetLogger(r.logger).
-			SetName("fabric_domain").SetClient(connection).SetFunction(fn).
+			SetName("fabric-domain").SetClient(connection).SetFunction(fn).
 			SetEventFilter("has(event.fabric_domain) || (has(event.virtual_network) && event.type == EVENT_TYPE_OBJECT_UPDATED) || (has(event.hub) && event.type == EVENT_TYPE_OBJECT_CREATED)").Build()
 		Expect(err).NotTo(HaveOccurred())
 	})

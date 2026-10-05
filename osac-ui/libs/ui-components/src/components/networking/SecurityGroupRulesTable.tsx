@@ -40,10 +40,7 @@ const formatPortRange = (portFrom?: number, portTo?: number): string => {
   return `${portFrom ?? '—'}-${portTo ?? '—'}`;
 };
 
-const formatCidr = (ipv4Cidr?: string, ipv6Cidr?: string): string => {
-  const cidrs = [ipv4Cidr, ipv6Cidr].filter(Boolean);
-  return cidrs.length > 0 ? cidrs.join(', ') : '—';
-};
+const formatCidr = (ipv4Cidr?: string): string => ipv4Cidr || '—';
 
 export const SecurityGroupRulesTable = ({
   rules,
@@ -90,7 +87,7 @@ export const SecurityGroupRulesTable = ({
             <Tr key={index}>
               <Td dataLabel={t('Protocol')}>{protocolToString(rule.protocol, t)}</Td>
               <Td dataLabel={t('Port Range')}>{formatPortRange(rule.portFrom, rule.portTo)}</Td>
-              <Td dataLabel={cidrLabel}>{formatCidr(rule.ipv4Cidr, rule.ipv6Cidr)}</Td>
+              <Td dataLabel={cidrLabel}>{formatCidr(rule.ipv4Cidr)}</Td>
               <Td dataLabel={t('Actions')}>
                 <Button variant="link" isInline onClick={() => onEditRule(index)}>
                   {t('Edit')}

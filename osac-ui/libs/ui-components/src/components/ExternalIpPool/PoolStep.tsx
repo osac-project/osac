@@ -6,7 +6,6 @@ import { FieldArray, useFormikContext } from 'formik';
 import NameField from '@osac/ui-components/components/catalogProvision/wizard/fields/NameField';
 import { InputField } from '@osac/ui-components/components/Form/InputField';
 import OsacForm from '@osac/ui-components/components/Form/OsacForm';
-import { RadioButtonField } from '@osac/ui-components/components/Form/RadioButtonField';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
 import type { ExternalIpPoolFormValues } from './values';
@@ -32,18 +31,7 @@ const PoolStep = () => {
       <StackItem>
         <OsacForm>
           <NameField isDisabled={false} />
-          <RadioButtonField
-            name="ipFamily"
-            label={t('IP family')}
-            fieldId="external-ip-pool-ip-family"
-            isRequired
-            isInline
-            options={[
-              { value: 'ipv4', label: 'ipv4' },
-              { value: 'ipv6', label: 'ipv6' },
-            ]}
-          />
-          <FormSection title={t('CIDRs')}>
+          <FormSection title={t('IPv4 CIDRs')}>
             <FieldArray name="cidrs">
               {(helpers) => (
                 <Stack hasGutter>
@@ -53,6 +41,7 @@ const PoolStep = () => {
                         name={`cidrs.${index}`}
                         label={t('CIDR {{number}}', { number: index + 1 })}
                         fieldId={`external-ip-pool-cidr-${index}`}
+                        placeholder="10.128.0.0/14"
                         isRequired
                       >
                         {values.cidrs.length > 1 && (

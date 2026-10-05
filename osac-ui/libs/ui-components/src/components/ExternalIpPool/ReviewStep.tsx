@@ -34,10 +34,6 @@ const ReviewStep = () => {
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
-            <DescriptionListTerm>{t('IP family')}</DescriptionListTerm>
-            <DescriptionListDescription>{displayValue(values.ipFamily)}</DescriptionListDescription>
-          </DescriptionListGroup>
-          <DescriptionListGroup>
             <DescriptionListTerm>{t('CIDRs')}</DescriptionListTerm>
             <DescriptionListDescription>
               {values.cidrs.filter((cidr) => cidr.trim()).join(', ') || displayValue()}

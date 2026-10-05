@@ -190,6 +190,25 @@ var _ = Describe("Private fabric domains server", func() {
 		Expect(updated.GetObject().GetStatus().GetMembers()).To(HaveLen(1))
 		Expect(updated.GetObject().GetStatus().GetConditions()).To(HaveLen(1))
 
+		operatorCtx := auth.ContextWithSubject(ctx, &auth.Subject{User: "osac-operator"})
+		operatorCtx = auth.ContextWithAuthenticationMethod(operatorCtx, "serviceaccount")
+		updated, err = server.Update(operatorCtx, privatev1.FabricDomainsUpdateRequest_builder{
+			Object: privatev1.FabricDomain_builder{
+				Id:     created.GetObject().GetId(),
+				Status: privatev1.FabricDomainStatus_builder{Hub: "hub-b"}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.hub"}},
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(updated.GetObject().GetStatus().GetHub()).To(Equal("hub-b"))
+
+		jwtOperatorCtx := auth.ContextWithSubject(ctx, &auth.Subject{User: "osac-operator"})
+		_, err = server.Update(jwtOperatorCtx, privatev1.FabricDomainsUpdateRequest_builder{
+			Object:     privatev1.FabricDomain_builder{Id: created.GetObject().GetId()}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.hub"}},
+		}.Build())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+
 		_, err = server.Update(controllerCtx, privatev1.FabricDomainsUpdateRequest_builder{
 			Object:     privatev1.FabricDomain_builder{Id: created.GetObject().GetId()}.Build(),
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status"}},

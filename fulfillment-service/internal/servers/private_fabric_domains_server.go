@@ -144,8 +144,8 @@ func (s *PrivateFabricDomainsServer) Update(ctx context.Context, request *privat
 	}
 	mask := request.GetUpdateMask()
 	if mask != nil && len(mask.GetPaths()) > 0 && updateIncludesField(mask, "status") {
-		if !auth.IsControllerServiceAccount(ctx) {
-			return nil, grpcstatus.Error(grpccodes.InvalidArgument, "status output fields can only be updated by the fulfillment controller")
+		if !auth.IsControllerServiceAccount(ctx) && !auth.IsServiceAccount(ctx, "osac-operator") {
+			return nil, grpcstatus.Error(grpccodes.InvalidArgument, "status output fields can only be updated by an authorized controller")
 		}
 		controllerStatusFields := map[string]struct{}{
 			"status.backend_id": {},

@@ -12,71 +12,17 @@ Manager (OLM). In a connected environment the phase 1a installs OLM `Subscriptio
 
 ### Before you start
 
-You must be aware about the [Disconnected Environment Terms](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/disconnected_environments/about-disconnected-environments).
+Prerequisites list
 
-This document is validated against a restricted environment.
+1. [ Openshift Disconnected Environment ](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/disconnected_environments/about-disconnected-environments). This document is validated against a restricted environment.
+2. A mirror registry that's already reachable from the cluster and populated with the images this guide requires (see Mirroring with oc-mirror below).
+3. Ansible Automation Platform subscription manifest(license.zip)
+4. A Red Hat pull secret for the mirror registry,
+5. OSAC's shared dependencies. See the sub-section 'Disconnected installation prerequisites: mirroring reference'
 
-OSAC installation is configurable to provide core components in conjunction with
-rest of the services like VMaaS,BMaaS,CaaS etc. Depending upon your choice of
-services, toggling and customization of Helm values must be done.
+OSAC installation is configurable to provide core components in conjunction with the rest of the services, like VMaaS, BMaaS, or CaaS. Depending on which services you enable, you'll need to toggle and customize the corresponding Helm values.
 
-For Ansible Automation Platform, obtain a subscription manifest in the
-Subscription Allocations section of Red Hat Subscription Management.  This
-document will refer to it by license.zip file.
-
-Even for a disconnected OpenShift installation, you must obtain and use
-a pull secret from Red Hat Cloud along with the pull secret to pull from the
-openshift mirror registry.
-
-#### Example networking setup
-
-```mermaid
-flowchart TB
-    subgraph HOST["HOST: sno.on.baremetal.redhat.com (10.6.76.15)"]
-        direction TB
-        OCP_LABEL["OCP 4.22 Single-Node OpenShift Host"]
-
-        subgraph BRIDGE["Linux Bridge: br-sno (192.168.100.1/24)<br/><i>Software-only — NO physical NIC slaved</i>"]
-            direction LR
-
-            subgraph BASTION["bastion-vm"]
-                direction TB
-                B_ETH1["eth1: 192.168.100.2<br/>(bridge: br-sno)"]
-                B_ETH0["eth0: 10.0.2.x<br/>(masq/NAT)"]
-            end
-
-            subgraph REGISTRY["registry-vm"]
-                direction TB
-                R_ETH1["eth1: 192.168.100.3<br/>(bridge: br-sno)"]
-                R_ETH0["eth0: 10.0.2.x<br/>(masq/NAT)"]
-            end
-
-            subgraph OSAC["osac-sno-vm"]
-                direction TB
-                O_ETH0["eth0: 192.168.100.10<br/>MAC: 52:54:00:10:09:83<br/>(bridge: br-sno)"]
-                O_NOTE["[ Single NIC Only ]"]
-            end
-        end
-
-        subgraph K8S_NET["Cluster & Virtualization Networking Overview"]
-            direction LR
-            NAD["<b>NAD: br-lab-nad</b><br/>Bridge CNI on br-sno<br/><code>macspoofchk: false</code> | <code>promiscMode: true</code>"]
-            OVN["<b>OVN Pod Network</b><br/>10.128.0.0/14<br/>(virt-launcher pods)"]
-            SVC["<b>ClusterIP Network</b><br/>172.30.0.0/16<br/>(K8s Services)"]
-        end
-    end
-
-    %% Styling
-    style HOST fill:#1e1e2e,stroke:#89b4fa,stroke-width:2px,color:#cdd6f4
-    style BRIDGE fill:#313244,stroke:#a6adc8,stroke-width:1px,color:#cdd6f4
-    style BASTION fill:#45475a,stroke:#f9e2af,stroke-width:1px,color:#cdd6f4
-    style REGISTRY fill:#45475a,stroke:#f9e2af,stroke-width:1px,color:#cdd6f4
-    style OSAC fill:#45475a,stroke:#a6e3a1,stroke-width:1px,color:#cdd6f4
-    style K8S_NET fill:#313244,stroke:#cba6f7,stroke-width:1px,color:#cdd6f4
-    style OCP_LABEL fill:none,stroke:none,color:#94e2d5
-```
-
-In a disconnected environment , these mandatory checks must pass
+In a disconnected environment , these mandatory checks must pass:
 
 1. Successfully mirror all the container images.
 2. CRIO daemon and kubelet on the osac vm must be able to resolve the openshift mirror registry.
@@ -137,8 +83,8 @@ Metering and CSI-driver-related images, including the listed CSI sidecars, are i
 
 ### Mirroring with oc-mirror
 
-Use `oc-mirror` to build a mirror of the required Openshift catalogs,
-Red Hat container images & non Red Hat Container images as well as
+Use `oc-mirror` to build a mirror of the required OpenShift catalogs,
+Red Hat container images & non Red Hat container images as well as
 OSAC container images.
 Note: At the time of testing, at least 400GiB storage space is required
 Below is a working  `ImageSetConfiguration` tested in a
@@ -248,7 +194,7 @@ oc create -f /home/cloud-user/oc-mirror-workspace/working-dir/cluster-resources/
 ### clustercatalog.olm.operatorframework.io/cc-redhat-operator-index-v4-22 created
 
 # ImageDigestMirrorSet
-oc create --server-side -f /home/cloud-user/oc-mirror-workspace/working-dir/cluster-resources/idms-oc-mirror.yaml
+oc create -f /home/cloud-user/oc-mirror-workspace/working-dir/cluster-resources/idms-oc-mirror.yaml
 ## Expected Output. The count is driven by the mirrored image categories and references
 ### imagedigestmirrorset.config.openshift.io/idms-release-0 created
 ### imagedigestmirrorset.config.openshift.io/idms-operator-0 created
@@ -302,7 +248,7 @@ flowchart TB
             I_KC["keycloak:26.6.4"]:::imgStyle
             I_PG["postgresql-18-c10s"]:::imgStyle
             I_OB["openbao:2.6.2"]:::imgStyle
-            I_CL["origin-cli:4.22"]:::imgStyle
+            I_CL["origin-cli:4.20"]:::imgStyle
         end
         subgraph CIMGS["OSAC Core"]
             I_OP["osac-operator:0.0.18"]:::imgStyle
@@ -456,6 +402,7 @@ Pass the overrides directly:
 
 ```bash
 helm upgrade --install osac-deps osac-installer/charts/osac-deps \
+--namespace osac-deps --create-namespace \
 --set catalogSource=my-mirror-catalog \
 --set catalogSourceNamespace=openshift-marketplace
 ```

@@ -363,6 +363,32 @@ var _ = Describe("NetworkClassCapabilitiesReconciler", func() {
 		Expect(updates).To(BeEmpty())
 	})
 
+	It("does not apply the Ethernet disable mask to a k8s-only NetworkClass", func() {
+		k8sCM := newK8sManagerConfigMap("k8s-only-ew-mask", namespace, "k8s-only-ew-mask", "ipv4")
+		Expect(k8sClient.Create(ctx, k8sCM)).To(Succeed())
+		defer func() { _ = k8sClient.Delete(ctx, k8sCM) }()
+
+		disc, err := networkmanager.NewDiscovery(k8sClient, namespace)
+		Expect(err).NotTo(HaveOccurred())
+
+		nc := &privatev1.NetworkClass{
+			Id:         "nc-caps-k8s-only-ew-mask",
+			K8SManager: ptr.To("k8s-only-ew-mask"),
+			Spec: &privatev1.NetworkClassSpec{DisableCapabilities: &privatev1.NetworkClassCapabilities{
+				SupportsEastWestEthernet: true,
+			}},
+		}
+		var updates []*privatev1.NetworkClass
+		stubClient := newListingNetworkClassClient([]*privatev1.NetworkClass{nc}, &updates)
+		resolver := dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(stubClient), disc)
+		reconciler := NewNetworkClassCapabilitiesReconciler(stubClient, resolver, namespace)
+
+		_, err = reconciler.Reconcile(ctx, ctrl.Request{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(nc.GetCapabilities()).To(BeNil())
+		Expect(updates).To(HaveLen(1))
+	})
+
 	It("marks a NetworkClass referencing an unregistered fabric manager as failed", func() {
 		disc, err := networkmanager.NewDiscovery(k8sClient, namespace)
 		Expect(err).NotTo(HaveOccurred())

@@ -205,6 +205,8 @@ type runnerContext struct {
 	client *grpc.ClientConn
 }
 
+const fabricDomainEventFilter = "has(event.fabric_domain) || (has(event.virtual_network) && event.type == EVENT_TYPE_OBJECT_UPDATED && ((has(event.virtual_network.status) && event.virtual_network.status.hub != '') || (has(event.virtual_network.metadata) && has(event.virtual_network.metadata.deletion_timestamp))))"
+
 // run runs the `start controllers` command.
 func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:gocyclo
 	var err error
@@ -686,7 +688,7 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		SetName("fabric-domain").
 		SetClient(r.client).
 		SetFunction(fabricDomainReconcilerFunction).
-		SetEventFilter("has(event.fabric_domain) || (has(event.virtual_network) && event.type == EVENT_TYPE_OBJECT_UPDATED) || (has(event.hub) && event.type == EVENT_TYPE_OBJECT_CREATED)").
+		SetEventFilter(fabricDomainEventFilter).
 		SetHealthReporter(healthAggregator).
 		Build()
 	if err != nil {

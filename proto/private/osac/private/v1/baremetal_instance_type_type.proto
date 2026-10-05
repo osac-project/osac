@@ -60,9 +60,9 @@ message BareMetalFabricBindings {
   option (cleanapi.message).private = true;
 
   // Opaque Ethernet east-west profile references keyed by fabric-manager name.
-  // For Netris, the value is a Server Cluster Template ID. The matching
-  // NetworkClass selects the fabric manager; this hardware profile is
-  // independent of NetworkClass.
+  // Each manager interprets its own value; for example, the Netris integration
+  // uses a Server Cluster Template ID. The type owns these hardware profiles,
+  // while NetworkClass selects the manager for a workload.
   map<string, string> ethernet_ew = 1 [(buf.validate.field).map = {
     keys: {
       string: {

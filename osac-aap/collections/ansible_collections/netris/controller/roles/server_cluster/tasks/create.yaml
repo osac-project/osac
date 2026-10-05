@@ -197,3 +197,9 @@
     _server_cluster_confirmed_vpc_name: >-
       {{ (_state_resp.json.data | default({})).vpc.name | default('', true) | string }}
   when: _state_resp.json is mapping
+
+- name: Publish the confirmed ServerCluster VPC for downstream role callers
+  ansible.builtin.set_fact:
+    server_cluster_vpc_id: "{{ _server_cluster_confirmed_vpc_id }}"
+    server_cluster_vpc_name: "{{ _server_cluster_confirmed_vpc_name }}"
+  when: _state_resp.json is mapping

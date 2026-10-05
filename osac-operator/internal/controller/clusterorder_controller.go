@@ -345,7 +345,8 @@ func (r *ClusterOrderReconciler) patchStatusWithRetry(ctx context.Context, key c
 		// Leave them from the fresh read so a concurrent worker status update is preserved.
 		for _, c := range computed.Conditions {
 			if c.Type == v1alpha1.ConditionWorkersFailed ||
-				(terminalPhase && c.Type == v1alpha1.ConditionProgressing) {
+				(terminalPhase && c.Type == v1alpha1.ConditionProgressing) ||
+				c.Type == string(v1alpha1.ClusterOrderConditionAddOnOperatorsReady) {
 				continue
 			}
 			apimeta.SetStatusCondition(&latest.Status.Conditions, c)
@@ -1034,6 +1035,12 @@ func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ reconcile.R
 	instance.Status.Phase = v1alpha1.ClusterOrderPhaseDeleting
 	instance.SetStatusCondition(v1alpha1.ConditionDeleting, metav1.ConditionTrue,
 		"ClusterOrder is being deleted", v1alpha1.ReasonDeleting)
+
+	// Add-on AAP jobs use the hosted cluster kubeconfig. Do not tear down the
+	// cluster while the add-on controller is canceling or polling those jobs.
+	if controllerutil.ContainsFinalizer(instance, osacAddOnOperatorFinalizer) || hasNonTerminalAddOnOperatorJob(instance.Status.AddOnOperatorJobs) {
+		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+	}
 
 	// Delete auto-provisioned ExternalIPAttachments then ExternalIPs before deprovisioning.
 	done, cleanupResult, err := r.reconcileAutoExternalIPCleanup(ctx, instance)

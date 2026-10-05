@@ -177,6 +177,21 @@ var _ = Describe("Client", func() {
 				Expect(err).NotTo(HaveOccurred())
 				Expect(resp.JobID).To(Equal(456))
 			})
+
+			It("does not return a sensitive response body", func() {
+				server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					defer GinkgoRecover()
+					w.WriteHeader(http.StatusBadRequest)
+					_, err := w.Write([]byte("workflow response: confidential-response"))
+					Expect(err).NotTo(HaveOccurred())
+				})
+				_, err := client.LaunchWorkflowTemplate(ctx, aap.LaunchWorkflowTemplateRequest{
+					TemplateName: "test-workflow",
+					Sensitive:    true,
+				})
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).NotTo(ContainSubstring("confidential-response"))
+			})
 		})
 	})
 

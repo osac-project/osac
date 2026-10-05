@@ -29,13 +29,19 @@ import (
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 
+	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/internal/controller"
+	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/rest"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/cluster"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 	"sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 )
@@ -245,6 +251,46 @@ var _ = Describe("tenant CSI fulfillment configuration", func() {
 		endpoint, issuerURL := fulfillmentConfigFromEnv()
 		Expect(endpoint).To(Equal("fulfillment-api.example.com:443"))
 		Expect(issuerURL).To(Equal("https://keycloak.example.com/realms/osac"))
+	})
+})
+
+var _ = Describe("setupAddOnOperatorController", func() {
+	It("registers the add-on operator controller with the manager", func() {
+		scheme := runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+
+		localManager, err := ctrl.NewManager(&rest.Config{Host: "https://127.0.0.1"}, ctrl.Options{
+			Scheme:  scheme,
+			Metrics: metricsserver.Options{BindAddress: "0"},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		manager, err := mcmanager.WithMultiCluster(localManager, nil)
+		Expect(err).NotTo(HaveOccurred())
+
+		variables := []string{envAAPURL, envAAPToken, envAAPTemplatePrefix, envClusterOrderNamespace}
+		originalValues := make(map[string]struct {
+			value string
+			set   bool
+		}, len(variables))
+		for _, variable := range variables {
+			value, set := os.LookupEnv(variable)
+			originalValues[variable] = struct {
+				value string
+				set   bool
+			}{value: value, set: set}
+			Expect(os.Unsetenv(variable)).To(Succeed())
+		}
+		DeferCleanup(func() {
+			for variable, originalValue := range originalValues {
+				if originalValue.set {
+					Expect(os.Setenv(variable, originalValue.value)).To(Succeed())
+					continue
+				}
+				Expect(os.Unsetenv(variable)).To(Succeed())
+			}
+		})
+
+		Expect(setupAddOnOperatorController(manager, provisioning.DefaultMaxJobHistory)).To(Succeed())
 	})
 })
 

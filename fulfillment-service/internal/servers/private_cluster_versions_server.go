@@ -289,20 +289,14 @@ func (s *PrivateClusterVersionsServer) unsetPreviousDefaultClusterVersion(ctx co
 		cv.GetSpec().SetIsDefault(false)
 		_, err = s.generic.dao.Update().SetObject(cv).Do(ctx)
 		if err != nil {
+			// Special case: skip already-deleted ClusterVersions during default clear
 			if _, ok := errors.AsType[*dao.ErrNotFound](err); ok {
 				s.logger.DebugContext(ctx, "Skipping deleted ClusterVersion during default clear",
 					slog.String("cluster_version_id", cv.GetId()),
 				)
 				continue
 			}
-			if _, ok := errors.AsType[*dao.ErrDeadlock](err); ok {
-				return grpcstatus.Errorf(grpccodes.Aborted, "concurrent modification detected, please retry")
-			}
-			s.logger.ErrorContext(ctx, "Failed to clear default on ClusterVersion",
-				slog.String("cluster_version_id", cv.GetId()),
-				slog.Any("error", err),
-			)
-			return grpcstatus.Errorf(grpccodes.Internal, "failed to clear existing default ClusterVersions")
+			return ConvertDAOErrorToGRPC(err, "update", cv.GetId())
 		}
 	}
 	return nil

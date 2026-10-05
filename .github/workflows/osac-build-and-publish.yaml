@@ -1441,6 +1441,39 @@ jobs:
         git push origin "${TAG}"
         echo "Tagged: ${TAG}"
 
+    # Dedicated release-only marker tag. The umbrella tag above (osac/v*)
+    # fires on both nightly and release runs -- only its message differs --
+    # so it can't be used as a trigger for anything that should fire on
+    # real releases only. This tag exists purely so Konflux's
+    # Pipelines-as-Code can distinguish the two (see .tekton/*-release.yaml,
+    # which trigger on refs/tags/osac-release/*). Not consumed by anything
+    # in this repo itself.
+    - name: Create release-only marker tag
+      if: inputs.mode == 'release'
+      run: |
+        set -euo pipefail
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        TAG="osac-release/v${VERSION}"
+        COMMIT_SHA=$(git rev-parse HEAD)
+
+        if git fetch origin "refs/tags/${TAG}:refs/tags/${TAG}" 2>/dev/null; then
+          EXISTING_SHA=$(git rev-parse "${TAG}^{commit}")
+          if [[ "${EXISTING_SHA}" == "${COMMIT_SHA}" ]]; then
+            echo "Tag ${TAG} already exists at ${COMMIT_SHA}; skipping create/push"
+            exit 0
+          fi
+          safe_tag=$(_gha_sanitize_for_message "${TAG}")
+          safe_existing=$(_gha_sanitize_for_message "${EXISTING_SHA}")
+          safe_commit=$(_gha_sanitize_for_message "${COMMIT_SHA}")
+          echo "::error::Tag ${safe_tag} already exists at ${safe_existing}, expected ${safe_commit}; refusing to move tag"
+          exit 1
+        fi
+
+        git tag "${TAG}" -m "Release ${VERSION}"
+        git push origin "${TAG}"
+        echo "Tagged: ${TAG}"
+
     # Real, permanent per-component tags -- only in release mode, only for
     # components that actually needed a real build this run (prepare's
     # components-to-tag; empty in nightly mode and in a release that isn't

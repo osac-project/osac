@@ -666,8 +666,8 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 
 			Expect(k8sClient.Delete(ctx, childSubnet)).To(Succeed())
 			gateVnet.Finalizers = nil
-			_ = k8sClient.Update(ctx, gateVnet)
-			_ = k8sClient.Delete(ctx, gateVnet)
+			Expect(k8sClient.Update(ctx, gateVnet)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, gateVnet)).To(Succeed())
 		})
 
 		It("should wait for child SecurityGroup before deprovisioning", func() {
@@ -698,8 +698,8 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 
 			Expect(k8sClient.Delete(ctx, childSG)).To(Succeed())
 			gateVnet.Finalizers = nil
-			_ = k8sClient.Update(ctx, gateVnet)
-			_ = k8sClient.Delete(ctx, gateVnet)
+			Expect(k8sClient.Update(ctx, gateVnet)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, gateVnet)).To(Succeed())
 		})
 
 		It("should wait for child NATGateway before deprovisioning", func() {
@@ -730,8 +730,8 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 
 			Expect(k8sClient.Delete(ctx, childNATGW)).To(Succeed())
 			gateVnet.Finalizers = nil
-			_ = k8sClient.Update(ctx, gateVnet)
-			_ = k8sClient.Delete(ctx, gateVnet)
+			Expect(k8sClient.Update(ctx, gateVnet)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, gateVnet)).To(Succeed())
 		})
 
 		It("should wait for FabricDomain protection to be released before deprovisioning", func() {

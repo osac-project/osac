@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
 	grpccodes "google.golang.org/grpc/codes"
@@ -143,7 +144,24 @@ func (s *PrivateFabricDomainsServer) Update(ctx context.Context, request *privat
 	}
 	mask := request.GetUpdateMask()
 	if mask != nil && len(mask.GetPaths()) > 0 && updateIncludesField(mask, "status") {
-		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "status output fields cannot be updated")
+		if !auth.IsControllerServiceAccount(ctx) {
+			return nil, grpcstatus.Error(grpccodes.InvalidArgument, "status output fields can only be updated by the fulfillment controller")
+		}
+		controllerStatusFields := map[string]struct{}{
+			"status.backend_id": {},
+			"status.vpc_id":     {},
+			"status.members":    {},
+			"status.hub":        {},
+			"status.conditions": {},
+		}
+		for _, path := range mask.GetPaths() {
+			if path == "status" || strings.HasPrefix(path, "status.") {
+				if _, allowed := controllerStatusFields[path]; allowed {
+					continue
+				}
+				return nil, grpcstatus.Error(grpccodes.InvalidArgument, "status field is not writable by the fulfillment controller")
+			}
+		}
 	}
 	getRequest := &privatev1.FabricDomainsGetRequest{}
 	getRequest.SetId(request.GetObject().GetId())

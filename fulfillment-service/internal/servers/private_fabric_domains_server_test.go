@@ -147,6 +147,56 @@ var _ = Describe("Private fabric domains server", func() {
 		Entry("servers", "spec.servers"),
 		Entry("status", "status"),
 	)
+
+	It("allows the fulfillment controller to update FabricDomain-owned status", func() {
+		seedNetwork("netris", true, nil)
+		created, err := server.Create(ctx, privatev1.FabricDomainsCreateRequest_builder{Object: object}.Build())
+		Expect(err).NotTo(HaveOccurred())
+
+		controllerCtx := auth.ContextWithSubject(ctx, &auth.Subject{User: "service-account-osac-controller"})
+		updated, err := server.Update(controllerCtx, privatev1.FabricDomainsUpdateRequest_builder{
+			Object: privatev1.FabricDomain_builder{
+				Id:     created.GetObject().GetId(),
+				Status: privatev1.FabricDomainStatus_builder{Hub: "hub-a"}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.hub"}},
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(updated.GetObject().GetStatus().GetHub()).To(Equal("hub-a"))
+
+		updated, err = server.Update(controllerCtx, privatev1.FabricDomainsUpdateRequest_builder{
+			Object: privatev1.FabricDomain_builder{
+				Id: created.GetObject().GetId(),
+				Status: privatev1.FabricDomainStatus_builder{
+					BackendId: "cluster-42",
+					VpcId:     "vpc-7",
+					Members: []*privatev1.FabricDomainMemberStatus{privatev1.FabricDomainMemberStatus_builder{
+						Server: "server-a",
+						State:  privatev1.FabricDomainMemberState_FABRIC_DOMAIN_MEMBER_STATE_ACTIVE,
+					}.Build()},
+					Conditions: []*privatev1.FabricDomainCondition{privatev1.FabricDomainCondition_builder{
+						Type:   privatev1.FabricDomainConditionType_FABRIC_DOMAIN_CONDITION_TYPE_READY,
+						Status: privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+					}.Build()},
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+				"status.backend_id", "status.vpc_id", "status.members", "status.conditions",
+			}},
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(updated.GetObject().GetStatus().GetBackendId()).To(Equal("cluster-42"))
+		Expect(updated.GetObject().GetStatus().GetVpcId()).To(Equal("vpc-7"))
+		Expect(updated.GetObject().GetStatus().GetMembers()).To(HaveLen(1))
+		Expect(updated.GetObject().GetStatus().GetConditions()).To(HaveLen(1))
+
+		_, err = server.Update(controllerCtx, privatev1.FabricDomainsUpdateRequest_builder{
+			Object:     privatev1.FabricDomain_builder{Id: created.GetObject().GetId()}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status"}},
+		}.Build())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+	})
+
 	Describe("VirtualNetwork lifecycle", func() {
 		var vnServer *PrivateVirtualNetworksServer
 		BeforeEach(func() {

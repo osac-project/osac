@@ -191,8 +191,9 @@
 
 - name: Set server_cluster_vpc_id from server cluster
   ansible.builtin.set_fact:
-    server_cluster_vpc_id: "{{ (_state_resp.json.data | default({})).vpc.id | default((_state_resp.json.data | default({})).vpcId) }}"
-    server_cluster_vpc_name: "{{ (_state_resp.json.data | default({})).vpc.name | default('') }}"
-  when:
-    - _state_resp.json is mapping
-    - (_state_resp.json.data | default({})).vpc is defined or (_state_resp.json.data | default({})).vpcId is defined
+    _server_cluster_confirmed_vpc_id: >-
+      {{ (_state_resp.json.data | default({})).vpc.id
+         | default((_state_resp.json.data | default({})).vpcId | default(''), true) | string }}
+    _server_cluster_confirmed_vpc_name: >-
+      {{ (_state_resp.json.data | default({})).vpc.name | default('', true) | string }}
+  when: _state_resp.json is mapping

@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -41,6 +42,19 @@ import (
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
+
+var _ = Describe("outputString", func() {
+	DescribeTable("normalizes AAP identifier values",
+		func(value any, expected string) {
+			Expect(outputString(map[string]any{"id": value}, "id")).To(Equal(expected))
+		},
+		Entry("keeps strings", "123", "123"),
+		Entry("formats integral JSON float IDs in decimal", float64(1_000_000), "1000000"),
+		Entry("formats integral JSON number IDs in decimal", json.Number("1e6"), "1000000"),
+		Entry("rejects fractional IDs", float64(1.5), ""),
+		Entry("rejects unsafe JSON float IDs", float64(1<<53), ""),
+	)
+})
 
 var _ = Describe("FabricDomainReconciler", func() {
 	const (

@@ -18,7 +18,9 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"time"
 
@@ -748,10 +750,34 @@ func fabricDomainAAPExtraVars(domain *v1alpha1.FabricDomain, vnet *v1alpha1.Virt
 func outputString(outputs map[string]any, keys ...string) string {
 	for _, key := range keys {
 		if value, ok := outputs[key]; ok && value != nil {
-			return fmt.Sprint(value)
+			switch value := value.(type) {
+			case json.Number:
+				if integer, err := value.Int64(); err == nil {
+					return strconv.FormatInt(integer, 10)
+				}
+				parsed, err := value.Float64()
+				if err == nil {
+					return formatAAPNumericID(parsed)
+				}
+				return ""
+			case float64:
+				return formatAAPNumericID(value)
+			case float32:
+				return formatAAPNumericID(float64(value))
+			default:
+				return fmt.Sprint(value)
+			}
 		}
 	}
 	return ""
+}
+
+func formatAAPNumericID(value float64) string {
+	const maxSafeInteger = 1<<53 - 1
+	if math.Trunc(value) != value || math.Abs(value) > maxSafeInteger {
+		return ""
+	}
+	return strconv.FormatInt(int64(value), 10)
 }
 
 func pendingFabricDomainMembers(servers []string) []v1alpha1.FabricDomainMemberStatus {

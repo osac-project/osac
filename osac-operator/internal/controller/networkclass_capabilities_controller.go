@@ -186,9 +186,6 @@ func (r *NetworkClassCapabilitiesReconciler) syncOne(ctx context.Context, nc *pr
 		}
 		newCaps = computeCapabilities(resolved, disabled)
 	}
-	if capabilitiesEqual(newCaps, nc.GetCapabilities()) && networkClassManagerStatusEqual(newStatus, nc.GetStatus()) {
-		return nil
-	}
 	if nc.GetSpec().GetDisableCapabilities().GetSupportsEastWestEthernet() {
 		newCaps.SetSupportsEastWestEthernet(false)
 	}

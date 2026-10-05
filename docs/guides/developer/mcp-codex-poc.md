@@ -62,25 +62,56 @@ bundle setting and also applies to its HTTPS and OAuth traffic; set it in the
 environment that launches Codex. If the system already trusts both endpoints,
 omit the CA export and the `--cacert` options. Do not disable TLS verification.
 
+For the Kind `PROFILE=dev` installation, set
+`service.mcp.externalHostname=mcp.osac.localhost` and
+`service.mcp.externalPort=8443`. Its MCP URL is
+`https://mcp.osac.localhost:8443`. The Keycloak issuer is
+`https://keycloak.keycloak.svc.cluster.local:8443/realms/osac`; on the
+workstation, map `keycloak.keycloak.svc.cluster.local` to `127.0.0.1` in
+`/etc/hosts` so Codex and the browser can reach that issuer through the Kind
+gateway. The browser must also trust the development CA. The `PROFILE=dev-full`
+values instead configure a browser-facing `keycloak.osac.localhost` issuer.
+
 ## Register the callback and sign in
 
-The development Keycloak client has redirect URIs from the original PoC
-script. Current Codex may use a different callback. Add the MCP server with
-the public client ID and copy the **exact callback URL printed by Codex**:
+For the Kind development installation, the `osac-mcp-client` fixture already
+allows `http://localhost:8091/callback`. Configure Codex with that fixed
+callback in `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.osac]
+url = "https://mcp.osac.localhost:8443"
+default_tools_approval_mode = "writes"
+
+[mcp_servers.osac.oauth]
+client_id = "osac-mcp-client"
+callback_url = "http://localhost:8091/callback"
+callback_port = 8091
+```
+
+If `codex mcp add` already created these tables, edit the existing entries
+instead of adding duplicate tables. Both callback settings matter: the port
+in `callback_url` does not configure Codex's local listener. Keycloak must
+accept the exact callback Codex sends. The development client uses
+authorization code with PKCE and has no client secret.
+
+For another development deployment, `codex mcp add` can set the public client
+ID, but it has no dedicated callback URL or port flags:
 
 ```bash
 codex mcp add osac --url "$OSAC_MCP_URL" \
   --oauth-client-id osac-mcp-client
 ```
 
-In the development Keycloak realm, register that exact callback as an allowed
-redirect URI for `osac-mcp-client` before login. Keep the client public with
-authorization code + PKCE; do not add a client secret or a wildcard redirect.
-If you use a different client, substitute its ID above. Codex can choose a
-server-specific callback path when the issuer does not advertise issuer-bound
-responses. If you need a fixed local callback port, configure both the
-callback URL and `oauth.callback_port` as described in the
-[Codex MCP documentation](https://developers.openai.com/codex/mcp).
+Replace `osac-mcp-client` if the deployment uses a different public client.
+Register the **exact callback URL printed by Codex** as an allowed redirect
+URI for that client's Keycloak registration before login; the fixture's 8091
+entry does not automatically cover a different Codex callback. Do not add a
+wildcard redirect. The CLI's `-c` options override configuration for that
+invocation and do not persist a server-specific callback port; use
+`config.toml` for a repeatable fixed callback. See the
+[Codex MCP documentation](https://developers.openai.com/codex/mcp) for callback
+selection and issuer support.
 
 Then authenticate as the intended OSAC caller:
 
@@ -89,14 +120,10 @@ codex mcp login osac
 codex mcp list
 ```
 
-In `~/.codex/config.toml`, add this key to the **existing** `[mcp_servers.osac]`
-table created by `codex mcp add`:
-
-```toml
-default_tools_approval_mode = "writes"
-```
-
-This makes Codex ask before invoking tools that are not marked read-only.
+Set `default_tools_approval_mode = "writes"` in the existing
+`[mcp_servers.osac]` table if you used `codex mcp add`; it is included in the
+Kind example above. This makes Codex ask before invoking tools that are not
+marked read-only.
 Restart Codex, use `/mcp` to confirm the connection and four available tools,
 and try a read request first. For a VM create or delete, inspect the target and
 check that Codex presents a separate approval prompt for the write call. A
@@ -109,9 +136,11 @@ authorizes each call as the signed-in user through the public Fulfillment API.
   covered by the CA bundle available to the Codex process. Check both `curl`
   requests above and the process environment. A desktop app launched outside
   the shell may not inherit a shell export.
-- A redirect mismatch means the URI accepted by Keycloak differs from the
-  callback Codex printed or the active listener port. Compare the exact URI;
-  avoid a broad redirect wildcard.
+- An `Invalid parameter: redirect_uri` page means Keycloak rejected the
+  callback Codex sent. The Kind development client already allows
+  `http://localhost:8091/callback`; configure both `callback_url` and
+  `callback_port` as shown above, or register the exact callback printed by
+  `codex mcp add`. Avoid a broad redirect wildcard.
 - A successful login with denied tools means the caller lacks the required
   tenant or resource authorization. Use an appropriately authorized account;
   do not replace the caller with a privileged service token.

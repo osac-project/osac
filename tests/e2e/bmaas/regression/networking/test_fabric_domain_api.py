@@ -56,7 +56,7 @@ def _assert_rejected(client: GRPCClient, *, data: dict, code: str) -> None:
 def _delete_fabric_domain(client: GRPCClient, fabric_domain_id: str) -> None:
     output, rc = client.call_unchecked(service=f"{_FABRIC_DOMAINS}/Delete", data={"id": fabric_domain_id})
     if rc != 0 and "Code: NotFound" not in output:
-        raise AssertionError(f"Failed to delete FabricDomain {fabric_domain_id}: {output}")
+        raise AssertionError(f"Failed to delete FabricDomain {fabric_domain_id} (grpcurl exit code {rc})")
     poll_until(
         fn=lambda: fabric_domain_id not in _list_ids(client, service=_FABRIC_DOMAINS),
         until=lambda absent: absent is True,
@@ -71,7 +71,7 @@ def _delete_virtual_network(
 ) -> None:
     output, rc = client.call_unchecked(service=f"{_VIRTUAL_NETWORKS}/Delete", data={"id": virtual_network_id})
     if rc != 0 and "Code: NotFound" not in output:
-        raise AssertionError(f"Failed to delete VirtualNetwork {virtual_network_id}: {output}")
+        raise AssertionError(f"Failed to delete VirtualNetwork {virtual_network_id} (grpcurl exit code {rc})")
     if cr_name is not None:
         wait_for_virtual_network_deletion(k8s=k8s, name=cr_name)
     poll_until(
@@ -92,19 +92,19 @@ def fabric_domain_resources(
 ) -> Iterator[FabricDomainResources]:
     """Create tenant-owned VirtualNetworks on an Ethernet east-west capable class."""
     # Public VirtualNetwork creation cannot select a NetworkClass; it uses the default.
-    default_network_class = next(
+    network_class = next(
         (
-            network_class
-            for network_class in private_grpc.list_network_classes()
-            if network_class.get("isDefault") and not network_class.get("metadata", {}).get("deletionTimestamp")
+            item
+            for item in private_grpc.list_network_classes()
+            if not item.get("metadata", {}).get("deletionTimestamp")
         ),
         None,
     )
-    if not default_network_class or not (
-        default_network_class.get("status", {}).get("state") == "NETWORK_CLASS_STATE_READY"
-        and default_network_class.get("capabilities", {}).get("supportsEastWestEthernet")
+    if not network_class or not (
+        network_class.get("status", {}).get("state") == "NETWORK_CLASS_STATE_READY"
+        and network_class.get("capabilities", {}).get("supportsEastWestEthernet")
     ):
-        pytest.skip("FabricDomain E2E requires a ready default NetworkClass with Ethernet east-west support")
+        pytest.skip("FabricDomain E2E requires a ready NetworkClass with Ethernet east-west support")
 
     resources = FabricDomainResources(clients={"tenant1": jwt_grpc_tenant1_admin, "tenant2": jwt_grpc_tenant2})
     octet = int(uuid4().hex[:2], 16)

@@ -150,9 +150,20 @@ authorizes each call as the signed-in user through the public Fulfillment API.
   covered by the CA bundle available to the Codex process. Check both `curl`
   requests above and the process environment. A desktop app launched outside
   the shell may not inherit a shell export. The Codex CLI may also reuse a
-  background app server started before `CODEX_CA_CERTIFICATE` was set. To use
-  the current shell's CA setting without that daemon, exit Codex and run
-  `codex --no-daemon resume --last`, then check `/mcp` again.
+  background app server started before `CODEX_CA_CERTIFICATE` was set. After
+  exiting active Codex sessions, stop that daemon and start it from a shell
+  with the CA variable set:
+
+  ```bash
+  export CODEX_CA_CERTIFICATE="$HOME/.config/osac/ca-bundle.pem"
+  codex app-server daemon stop
+  codex app-server daemon start
+  codex resume --last
+  ```
+
+  Stopping the daemon disconnects other active Codex sessions. To test the
+  current shell without restarting the shared daemon, use
+  `codex --no-daemon resume --last` instead. Check `/mcp` after reconnecting.
 - An `Invalid parameter: redirect_uri` page means Keycloak rejected the
   callback Codex sent. The Kind development client already allows
   `http://localhost:8091/callback`; configure both `callback_url` and

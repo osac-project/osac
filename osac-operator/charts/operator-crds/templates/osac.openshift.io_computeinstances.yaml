@@ -173,6 +173,11 @@ spec:
                 x-kubernetes-validations:
                 - message: image is immutable
                   rule: self == oldSelf
+              instanceType:
+                description: |-
+                  InstanceType is the requested instance type name resolved by fulfillment.
+                  The status records it only after the corresponding configuration is applied.
+                type: string
               memoryGiB:
                 description: MemoryGiB is the memory in gibibytes
                 format: int32
@@ -378,6 +383,16 @@ spec:
                   ExternalIPAddress is the external IP address attached to this instance via an ExternalIPAttachment.
                   Populated when an ExternalIPAttachment in state "Ready" references this ComputeInstance.
                 type: string
+              instanceType:
+                description: |-
+                  InstanceType is the type whose configuration has been applied to the VM.
+                  It is not updated while the requested type is still being applied.
+                type: string
+              instanceTypeTransitionTime:
+                description: InstanceTypeTransitionTime records when the applied instance
+                  type changed.
+                format: date-time
+                type: string
               ipAddress:
                 description: |-
                   IPAddress is the primary IP address of the running instance, taken from the KubeVirt VirtualMachineInstance.
@@ -467,6 +482,11 @@ spec:
                   - type
                   type: object
                 type: array
+              stateTransitionTime:
+                description: StateTransitionTime records when Phase entered its current
+                  value.
+                format: date-time
+                type: string
               tenantReference:
                 description: Reference to the tenant that contains the ComputeInstance
                   resources

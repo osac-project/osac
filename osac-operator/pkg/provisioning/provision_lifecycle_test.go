@@ -124,13 +124,13 @@ var _ = ginkgo.Describe("EvaluateAction", func() {
 			Trigger,
 		),
 
-		ginkgo.Entry("terminal job without config version, succeeded -> skip (legacy)",
+		ginkgo.Entry("terminal job without config version, succeeded -> trigger",
 			[]v1alpha1.JobStatus{
 				{JobID: "100", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateSucceeded, Timestamp: metav1.NewTime(time.Now())},
 			},
 			"v1",
 			noAPIServerJob,
-			Skip,
+			Trigger,
 		),
 
 		ginkgo.Entry("terminal job without config version, failed -> trigger",
@@ -1468,11 +1468,18 @@ var _ = ginkgo.Describe("IsConfigApplied", func() {
 		Expect(IsConfigApplied(&jobs, "v2")).To(BeFalse())
 	})
 
-	ginkgo.It("returns true for legacy provision job with empty config version", func() {
+	ginkgo.It("returns false for a successful provision job with an empty config version", func() {
 		jobs := []v1alpha1.JobStatus{
 			{JobID: "1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateSucceeded, ConfigVersion: ""},
 		}
-		Expect(IsConfigApplied(&jobs, "v1")).To(BeTrue())
+		Expect(IsConfigApplied(&jobs, "v1")).To(BeFalse())
+	})
+
+	ginkgo.It("returns false when the desired config version is empty", func() {
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateSucceeded, ConfigVersion: ""},
+		}
+		Expect(IsConfigApplied(&jobs, "")).To(BeFalse())
 	})
 
 	ginkgo.It("returns false when spec reverts to a previously applied config version (A-B-A)", func() {

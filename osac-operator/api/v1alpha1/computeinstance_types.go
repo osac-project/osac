@@ -122,6 +122,11 @@ type ComputeInstanceSpec struct {
 	// +kubebuilder:validation:Optional
 	TemplateParameters string `json:"templateParameters,omitempty"`
 
+	// InstanceType is the requested instance type name resolved by fulfillment.
+	// The status records it only after the corresponding configuration is applied.
+	// +kubebuilder:validation:Optional
+	InstanceType string `json:"instanceType,omitempty"`
+
 	// Image defines the VM image configuration
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="image is immutable"
@@ -292,6 +297,23 @@ type ComputeInstanceStatus struct {
 	// +kubebuilder:validation:Type=string
 	// +kubebuilder:validation:Enum=Starting;Running;Failed;Deleting;Stopping;Stopped;Paused
 	Phase ComputeInstancePhaseType `json:"phase,omitempty"`
+
+	// StateTransitionTime records when Phase entered its current value.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:Format=date-time
+	StateTransitionTime *metav1.Time `json:"stateTransitionTime,omitempty"`
+
+	// InstanceType is the type whose configuration has been applied to the VM.
+	// It is not updated while the requested type is still being applied.
+	// +kubebuilder:validation:Optional
+	InstanceType string `json:"instanceType,omitempty"`
+
+	// InstanceTypeTransitionTime records when the applied instance type changed.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:Format=date-time
+	InstanceTypeTransitionTime *metav1.Time `json:"instanceTypeTransitionTime,omitempty"`
 
 	// Conditions holds an array of metav1.Condition that describe the state of the ComputeInstance
 	// +kubebuilder:validation:Optional

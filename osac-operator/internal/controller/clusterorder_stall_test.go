@@ -209,8 +209,8 @@ var _ = Describe("ClusterOrder stall detection", func() {
 	It("uses the longest applicable host-type override while workers join", func() {
 		order := newOrder(v1alpha1.ReasonWorkersJoining, baseTime)
 		order.Spec.NodeRequests = []v1alpha1.NodeRequest{
-			{ResourceClass: "fast", NumberOfNodes: 1},
-			{ResourceClass: "slow", NumberOfNodes: 1},
+			{NodeSetID: "fast", ResourceClass: "fast", NumberOfNodes: 1},
+			{NodeSetID: "slow", ResourceClass: "slow", NumberOfNodes: 1},
 		}
 		reconciler := newReconciler(baseTime.Add(25 * time.Minute))
 		reconciler.StallThresholds.WorkersJoiningByHostType = map[string]time.Duration{
@@ -226,7 +226,7 @@ var _ = Describe("ClusterOrder stall detection", func() {
 
 	It("honors a shorter worker-join override for a single host type", func() {
 		order := newOrder(v1alpha1.ReasonWorkersJoining, baseTime)
-		order.Spec.NodeRequests = []v1alpha1.NodeRequest{{ResourceClass: "fast", NumberOfNodes: 1}}
+		order.Spec.NodeRequests = []v1alpha1.NodeRequest{{NodeSetID: "fast", ResourceClass: "fast", NumberOfNodes: 1}}
 		reconciler := newReconciler(baseTime.Add(10 * time.Minute))
 		reconciler.StallThresholds.WorkersJoiningByHostType = map[string]time.Duration{
 			"fast": 5 * time.Minute,
@@ -278,14 +278,14 @@ var _ = Describe("ClusterOrder stall detection", func() {
 	It("uses the base worker-join threshold without an override for the host type", func() {
 		thresholds := ClusterOrderStallThresholds{WorkersJoining: workersJoiningThreshold}
 
-		Expect(thresholds.workersJoiningThreshold([]v1alpha1.NodeRequest{{ResourceClass: "standard"}})).
+		Expect(thresholds.workersJoiningThreshold([]v1alpha1.NodeRequest{{NodeSetID: "standard", ResourceClass: "standard"}})).
 			To(Equal(workersJoiningThreshold))
 	})
 
 	It("uses the default worker-join threshold when no base value is configured", func() {
 		thresholds := ClusterOrderStallThresholds{}
 
-		Expect(thresholds.workersJoiningThreshold([]v1alpha1.NodeRequest{{ResourceClass: "standard"}})).
+		Expect(thresholds.workersJoiningThreshold([]v1alpha1.NodeRequest{{NodeSetID: "standard", ResourceClass: "standard"}})).
 			To(Equal(defaultWorkersJoiningStallThreshold))
 	})
 })

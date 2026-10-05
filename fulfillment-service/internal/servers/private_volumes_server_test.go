@@ -16,6 +16,7 @@ package servers
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
@@ -512,6 +513,7 @@ var _ = Describe("Private volumes server", func() {
 		})
 
 		It("Create always sets state to CREATING regardless of caller-provided state", func() {
+			createStartedAt := time.Now().UTC()
 			response, err := server.Create(ctx, privatev1.VolumesCreateRequest_builder{
 				Object: privatev1.Volume_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -530,6 +532,9 @@ var _ = Describe("Private volumes server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(response.GetObject().GetStatus().GetState()).To(Equal(
 				privatev1.VolumeState_VOLUME_STATE_CREATING))
+			Expect(response.GetObject().GetStatus().GetStateTransitionTime()).NotTo(BeNil())
+			Expect(response.GetObject().GetStatus().GetStateTransitionTime().AsTime()).To(
+				BeTemporally("~", createStartedAt, time.Second))
 		})
 
 		Describe("Validation", func() {

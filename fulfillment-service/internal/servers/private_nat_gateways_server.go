@@ -22,6 +22,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
@@ -231,6 +232,7 @@ func (s *PrivateNATGatewaysServer) Create(ctx context.Context,
 	} else {
 		natGateway.GetStatus().SetState(privatev1.NATGatewayState_NAT_GATEWAY_STATE_PENDING)
 	}
+	natGateway.GetStatus().SetStateTransitionTime(timestamppb.Now())
 
 	err = s.generic.Create(ctx, request, &response)
 	if err != nil {

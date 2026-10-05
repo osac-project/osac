@@ -359,7 +359,7 @@ func (r *ComputeInstanceReconciler) handleProvisioning(ctx context.Context, inst
 				// If the VM already exists (re-provisioning failure), the phase is driven by KubeVirt
 				// PrintableStatus and the failed job is visible in status.provisioningJobs.
 				if instance.Status.VirtualMachineReference == nil {
-					instance.Status.Phase = v1alpha1.ComputeInstancePhaseFailed
+					setComputeInstancePhase(instance, v1alpha1.ComputeInstancePhaseFailed)
 				}
 				instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, message, v1alpha1.ReasonProvisioningFailed)
 			},
@@ -509,7 +509,7 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 	// Initialize phase to Starting for brand-new CIs (Phase is empty until first set).
 	// Overridden by determinePhaseFromPrintableStatus() once a KubeVirt VM exists.
 	if instance.Status.Phase == "" {
-		instance.Status.Phase = v1alpha1.ComputeInstancePhaseStarting
+		setComputeInstancePhase(instance, v1alpha1.ComputeInstancePhaseStarting)
 	}
 
 	// Get the tenant (on local cluster)
@@ -551,10 +551,10 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 		if err := r.handleKubeVirtVM(ctx, targetClient, instance, kv); err != nil {
 			return ctrl.Result{}, err
 		}
-		instance.Status.Phase = determinePhaseFromPrintableStatus(ctx, kv, instance.Status.Phase)
+		setComputeInstancePhase(instance, determinePhaseFromPrintableStatus(ctx, kv, instance.Status.Phase))
 	} else {
 		// No KubeVirt VM exists yet: infrastructure is being provisioned.
-		instance.Status.Phase = v1alpha1.ComputeInstancePhaseStarting
+		setComputeInstancePhase(instance, v1alpha1.ComputeInstancePhaseStarting)
 		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, "VirtualMachine not yet created, waiting for provisioning", v1alpha1.ReasonWaitingForVM)
 		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionReady, metav1.ConditionFalse, "", v1alpha1.ReasonAsExpected)
 		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionRestartRequired, metav1.ConditionFalse, "", v1alpha1.ReasonAsExpected)
@@ -564,8 +564,10 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 		return ctrl.Result{}, err
 	}
 
-	if provisioning.IsConfigApplied(&instance.Status.ProvisioningJobs, instance.Status.DesiredConfigVersion) {
+	configurationApplied := provisioning.IsConfigApplied(&instance.Status.ProvisioningJobs, instance.Status.DesiredConfigVersion)
+	if configurationApplied {
 		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionConfigurationApplied, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
+		syncAppliedInstanceType(instance)
 
 		// Update lastRestartedAt when a restart was requested and provisioning has reconciled it.
 		if instance.Spec.RestartRequestedAt != nil {
@@ -633,7 +635,7 @@ func (r *ComputeInstanceReconciler) handleDelete(ctx context.Context, _ reconcil
 	log := ctrllog.FromContext(ctx)
 	log.Info("deleting compute instance")
 
-	instance.Status.Phase = v1alpha1.ComputeInstancePhaseDeleting
+	setComputeInstancePhase(instance, v1alpha1.ComputeInstancePhaseDeleting)
 
 	// Base finalizer has already been removed, cleanup complete
 	if !controllerutil.ContainsFinalizer(instance, osacComputeInstanceFinalizer) {
@@ -660,6 +662,26 @@ func (r *ComputeInstanceReconciler) handleDelete(ctx context.Context, _ reconcil
 	}
 
 	return ctrl.Result{}, nil
+}
+
+func setComputeInstancePhase(instance *v1alpha1.ComputeInstance, phase v1alpha1.ComputeInstancePhaseType) {
+	setState(&instance.Status.Phase, &instance.Status.StateTransitionTime, phase, metav1.Now())
+}
+
+func syncAppliedInstanceType(instance *v1alpha1.ComputeInstance) {
+	configurationApplied := instance.GetStatusCondition(v1alpha1.ComputeInstanceConditionConfigurationApplied)
+	restartRequired := instance.GetStatusCondition(v1alpha1.ComputeInstanceConditionRestartRequired)
+	if configurationApplied == nil || configurationApplied.Status != metav1.ConditionTrue ||
+		restartRequired == nil || restartRequired.Status != metav1.ConditionFalse || instance.Spec.InstanceType == "" ||
+		instance.Status.InstanceType == instance.Spec.InstanceType {
+		return
+	}
+	instance.Status.InstanceType = instance.Spec.InstanceType
+	transitionTime := configurationApplied.LastTransitionTime
+	if restartRequired.LastTransitionTime.After(transitionTime.Time) {
+		transitionTime = restartRequired.LastTransitionTime
+	}
+	instance.Status.InstanceTypeTransitionTime = &transitionTime
 }
 
 // initializeStatusConditions initializes the conditions that haven't already been initialized.

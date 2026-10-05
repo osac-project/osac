@@ -13,4 +13,5 @@ spec:
     }
   nodeRequests:
     - resourceClass: test-class
+      nodeSetID: workers
       numberOfNodes: 1

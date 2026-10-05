@@ -17,11 +17,13 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -395,6 +397,48 @@ var _ = Describe("setDefaults", func() {
 		Expect(t.natGateway.GetStatus().GetState()).To(
 			Equal(privatev1.NATGatewayState_NAT_GATEWAY_STATE_PENDING),
 		)
+	})
+})
+
+var _ = Describe("fallback state timestamps", func() {
+	It("timestamps the initial pending default and preserves same-state time", func() {
+		t := &task{natGateway: privatev1.NATGateway_builder{Id: "nat-state-time"}.Build()}
+		before := time.Now().UTC()
+
+		t.setDefaults()
+		pendingAt := t.natGateway.GetStatus().GetStateTransitionTime().AsTime()
+		Expect(t.natGateway.GetStatus().GetState()).To(Equal(privatev1.NATGatewayState_NAT_GATEWAY_STATE_PENDING))
+		Expect(pendingAt).To(BeTemporally(">=", before))
+
+		t.setDefaults()
+		Expect(t.natGateway.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(pendingAt))
+	})
+
+	It("timestamps fallback pending and failure transitions without resetting repeated states", func() {
+		oldTime := timestamppb.New(time.Date(2026, time.January, 1, 9, 0, 0, 0, time.UTC))
+		t := &task{natGateway: privatev1.NATGateway_builder{
+			Id: "nat-fallback-failure-time",
+			Status: privatev1.NATGatewayStatus_builder{
+				State:               privatev1.NATGatewayState_NAT_GATEWAY_STATE_READY,
+				StateTransitionTime: oldTime,
+			}.Build(),
+		}.Build()}
+
+		beforePending := time.Now().UTC()
+		t.setPending(errors.New("temporary reconciliation error"))
+		pendingAt := t.natGateway.GetStatus().GetStateTransitionTime().AsTime()
+		Expect(t.natGateway.GetStatus().GetState()).To(Equal(privatev1.NATGatewayState_NAT_GATEWAY_STATE_PENDING))
+		Expect(pendingAt).To(BeTemporally(">=", beforePending))
+		t.setPending(errors.New("still pending"))
+		Expect(t.natGateway.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(pendingAt))
+
+		beforeFailure := time.Now().UTC()
+		t.setFailed(errors.New("permanent reconciliation error"))
+		failedAt := t.natGateway.GetStatus().GetStateTransitionTime().AsTime()
+		Expect(t.natGateway.GetStatus().GetState()).To(Equal(privatev1.NATGatewayState_NAT_GATEWAY_STATE_FAILED))
+		Expect(failedAt).To(BeTemporally(">=", beforeFailure))
+		t.setFailed(errors.New("still failed"))
+		Expect(t.natGateway.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(failedAt))
 	})
 })
 

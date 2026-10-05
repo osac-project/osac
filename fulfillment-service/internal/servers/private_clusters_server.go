@@ -434,6 +434,12 @@ func (s *PrivateClustersServer) Update(ctx context.Context,
 	}
 
 	err = s.generic.UpdateWithCandidatePreparation(ctx, request, &response, func(ctx context.Context, current *privatev1.Cluster, candidate *privatev1.Cluster) error {
+		if updateIncludesField(request.GetUpdateMask(), "spec.node_sets") {
+			preserveNodeSetHardwareReferences(current.GetSpec().GetNodeSets(), candidate.GetSpec().GetNodeSets())
+			if err := s.validateNodeSetHostTypeImmutability(current.GetSpec().GetNodeSets(), candidate.GetSpec().GetNodeSets()); err != nil {
+				return err
+			}
+		}
 		if err := validateClusterEndpointAddresses(candidate.GetStatus(), request.GetUpdateMask()); err != nil {
 			return err
 		}
@@ -691,17 +697,6 @@ func (s *PrivateClustersServer) validateNodeSetsUpdate(ctx context.Context,
 		return nil
 	}
 
-	// Fetch the existing cluster from the database:
-	existingCluster, found, err := s.getExistingCluster(ctx, request)
-	if err != nil {
-		return err
-	}
-	if !found {
-		return nil
-	}
-
-	// Get the node sets from both clusters:
-	existingNodeSets := existingCluster.GetSpec().GetNodeSets()
 	newNodeSets := request.GetObject().GetSpec().GetNodeSets()
 
 	// Run specific validations:
@@ -711,10 +706,6 @@ func (s *PrivateClustersServer) validateNodeSetsUpdate(ctx context.Context,
 	if err := validateNodeSetNames(newNodeSets); err != nil {
 		return err
 	}
-	if err := s.validateNodeSetHostTypeImmutability(existingNodeSets, newNodeSets); err != nil {
-		return err
-	}
-
 	return nil
 }
 
@@ -846,8 +837,27 @@ func validateNodeSetNames[V any](nodeSets map[string]V) error {
 	return nil
 }
 
-// validateNodeSetHostTypeImmutability ensures that the baremetal_instance_type field of existing node sets
-// cannot be changed. This is an existing documented restriction in the API specification.
+// preserveNodeSetHardwareReferences carries omitted references from existing
+// node sets into the merged update candidate before immutability validation.
+func preserveNodeSetHardwareReferences(
+	existingNodeSets map[string]*privatev1.ClusterNodeSet,
+	candidateNodeSets map[string]*privatev1.ClusterNodeSet,
+) {
+	for nodeSetName, existingNodeSet := range existingNodeSets {
+		candidateNodeSet, exists := candidateNodeSets[nodeSetName]
+		if !exists || existingNodeSet == nil || candidateNodeSet == nil {
+			continue
+		}
+		if candidateNodeSet.GetBaremetalInstanceType() == nil && existingNodeSet.GetBaremetalInstanceType() != nil {
+			candidateNodeSet.SetBaremetalInstanceType(proto.Clone(existingNodeSet.GetBaremetalInstanceType()).(*privatev1.BareMetalInstanceTypeLocalReference))
+		}
+		if candidateNodeSet.GetHostType() == nil && existingNodeSet.GetHostType() != nil {
+			candidateNodeSet.SetHostType(proto.Clone(existingNodeSet.GetHostType()).(*privatev1.HostTypeReference))
+		}
+	}
+}
+
+// validateNodeSetHostTypeImmutability checks each hardware reference independently.
 func (s *PrivateClustersServer) validateNodeSetHostTypeImmutability(
 	existingNodeSets map[string]*privatev1.ClusterNodeSet,
 	newNodeSets map[string]*privatev1.ClusterNodeSet) error {
@@ -857,15 +867,25 @@ func (s *PrivateClustersServer) validateNodeSetHostTypeImmutability(
 			// Node set is being removed, which is allowed (if at least one remains)
 			continue
 		}
-		existingBMIT := existingNodeSet.GetBaremetalInstanceType()
-		newBMIT := newNodeSet.GetBaremetalInstanceType()
-		if refKey(existingBMIT) != refKey(newBMIT) {
+		if existingNodeSet == nil || newNodeSet == nil {
+			continue
+		}
+		if oldType, newType := refKey(existingNodeSet.GetBaremetalInstanceType()), refKey(newNodeSet.GetBaremetalInstanceType()); oldType != newType {
 			return grpcstatus.Errorf(
 				grpccodes.InvalidArgument,
 				"cannot change baremetal_instance_type for node set '%s' from '%s' to '%s': baremetal_instance_type is immutable",
 				nodeSetName,
-				refKey(existingBMIT),
-				refKey(newBMIT),
+				oldType,
+				newType,
+			)
+		}
+		if oldType, newType := refKey(existingNodeSet.GetHostType()), refKey(newNodeSet.GetHostType()); oldType != newType {
+			return grpcstatus.Errorf(
+				grpccodes.InvalidArgument,
+				"cannot change host_type for node set '%s' from '%s' to '%s': host_type is immutable",
+				nodeSetName,
+				oldType,
+				newType,
 			)
 		}
 	}

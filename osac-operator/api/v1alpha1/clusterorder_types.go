@@ -41,6 +41,8 @@ type ClusterOrderSpec struct {
 	// to build the cluster. This value is optional and if not provided will be filled in with template-provided
 	// defaults. The selected template may limit what node types you can request.
 	// +kubebuilder:validation:Optional
+	// +listType=map
+	// +listMapKey=nodeSetID
 	NodeRequests []NodeRequest `json:"nodeRequests,omitempty"`
 	// AddOnOperators lists the stable names of operators requested for the cluster.
 	// +kubebuilder:validation:Optional
@@ -113,6 +115,15 @@ type ClusterNetworkAttachment struct {
 }
 
 type NodeRequest struct {
+	// NodeSetID is the stable key of this node set in the Fulfillment Cluster spec.
+	// It keeps observed size history attached to the node-set identity when two
+	// sets use the same resource class or a set is re-keyed.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`
+	NodeSetID string `json:"nodeSetID"`
+
 	// ResourceClass describes the type of node you are requesting
 	// +kubebuilder:validation:Required
 	ResourceClass string `json:"resourceClass"`
@@ -127,6 +138,25 @@ type NodeRequest struct {
 	// expansion; may also be set explicitly.
 	// +kubebuilder:validation:Optional
 	FabricInterface string `json:"fabricInterface,omitempty"`
+}
+
+// NodeRequestStatus records the observed NodePool associated with a node set.
+type NodeRequestStatus struct {
+	// NodeSetID is the stable key of the node set in the Fulfillment Cluster spec.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`
+	NodeSetID string `json:"nodeSetID"`
+
+	// ResourceClass is the node type reported by the observed NodePool.
+	// +kubebuilder:validation:Required
+	ResourceClass string `json:"resourceClass"`
+
+	// NumberOfNodes is the observed replica count; zero is valid during removal.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Minimum=0
+	NumberOfNodes int `json:"numberOfNodes"`
 }
 
 // ClusterOrderPhaseType is a valid value for .status.phase
@@ -255,6 +285,23 @@ type ClusterOrderStatus struct {
 	// +kubebuilder:validation:Enum=Progressing;Failed;Ready;Deleting
 	Phase ClusterOrderPhaseType `json:"phase,omitempty"`
 
+	// StateTransitionTime records when Phase entered its current value.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:Format=date-time
+	StateTransitionTime *metav1.Time `json:"stateTransitionTime,omitempty"`
+
+	// ReleaseImage is the release image confirmed applied by the HostedCluster.
+	// It is not copied from spec.releaseImage while an upgrade is in progress.
+	// +kubebuilder:validation:Optional
+	ReleaseImage string `json:"releaseImage,omitempty"`
+
+	// ReleaseImageTransitionTime records when the applied release image changed.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:Format=date-time
+	ReleaseImageTransitionTime *metav1.Time `json:"releaseImageTransitionTime,omitempty"`
+
 	// Conditions holds an array of metav1.Condition that describe the state of the ClusterOrder
 	// +kubebuilder:validation:Optional
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,1,rep,name=conditions"`
@@ -263,8 +310,11 @@ type ClusterOrderStatus struct {
 	// +kubebuilder:validation:Optional
 	ClusterReference *ClusterOrderClusterReferenceType `json:"clusterReference,omitempty"`
 
-	// NodeRequests reflects how many nodes are currently associated with the ClusterOrder
-	NodeRequests []NodeRequest `json:"nodeRequests,omitempty"`
+	// NodeRequests records the observed NodePools and their stable node-set identities.
+	// +kubebuilder:validation:Optional
+	// +listType=map
+	// +listMapKey=nodeSetID
+	NodeRequests []NodeRequestStatus `json:"nodeRequests,omitempty"`
 
 	// ProvisioningJobs tracks the history of provision and deprovision operations
 	// Ordered chronologically, with latest operations at the end
@@ -320,6 +370,17 @@ type NodeSetStatus struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
+
+	// Size is the observed replica count for this node set.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Minimum=0
+	Size int32 `json:"size,omitempty"`
+
+	// SizeTransitionTime records when the observed replica count changed.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:Format=date-time
+	SizeTransitionTime *metav1.Time `json:"sizeTransitionTime,omitempty"`
 
 	// FabricInterface is the host NIC used for tenant network traffic,
 	// resolved from the node set's HostType NetworkInterface list.

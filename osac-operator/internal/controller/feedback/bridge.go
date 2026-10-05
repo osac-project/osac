@@ -16,6 +16,7 @@ package feedback
 
 import (
 	"context"
+	"errors"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -51,6 +52,14 @@ type Bridge[O clnt.Object, R proto.Message] struct {
 	// Save persists an updated remote record. Called only when the record
 	// has changed (the Bridge does the proto.Equal comparison).
 	Save func(ctx context.Context, remote R) error
+
+	// SaveWithExcludedPaths persists an updated record while omitting selected
+	// field-mask paths. It is required when SyncUpdate reports FieldIssues.
+	SaveWithExcludedPaths func(ctx context.Context, remote R, excludedPaths []string) error
+
+	// NotifyFieldIssue receives non-fatal field-sync issues. When nil, the
+	// Bridge logs each issue and continues saving unrelated feedback.
+	NotifyFieldIssue func(ctx context.Context, kind, id string, issue FieldIssue)
 
 	// Signal notifies the fulfillment service after the last finalizer is
 	// removed. Errors are logged but do not fail the reconcile.
@@ -128,6 +137,8 @@ func (b *Bridge[O, R]) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Re
 
 	// Clone the remote record so we can detect changes after sync.
 	before := proto.Clone(remote).(R)
+	var excludedPaths []string
+	var syncErr error
 
 	// Sync CR state to the remote record.
 	if object.GetDeletionTimestamp().IsZero() {
@@ -136,19 +147,38 @@ func (b *Bridge[O, R]) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Re
 				return result, err
 			}
 		}
-		if err := b.SyncUpdate(ctx, object, remote); err != nil {
-			return result, err
-		}
+		syncErr = b.SyncUpdate(ctx, object, remote)
 	} else {
-		if err := b.SyncDelete(ctx, object, remote); err != nil {
-			return result, err
+		syncErr = b.SyncDelete(ctx, object, remote)
+	}
+	if syncErr != nil {
+		issues, ok := AsFieldIssues(syncErr)
+		if !ok {
+			return result, syncErr
+		}
+		if b.SaveWithExcludedPaths == nil {
+			return result, errors.New("field-sync issues require SaveWithExcludedPaths")
+		}
+		for _, issue := range issues {
+			excludedPaths = append(excludedPaths, issue.Paths...)
+			if b.NotifyFieldIssue != nil {
+				b.NotifyFieldIssue(ctx, b.Kind, id, issue)
+			} else {
+				log.Error(issue.Err, "Skipping invalid feedback fields", "kind", b.Kind, b.IDKey, id, "fields", issue.Paths)
+			}
 		}
 	}
 
 	// Persist changes only if the remote record was modified.
 	if !proto.Equal(before, remote) {
 		log.Info("Updating remote record", "kind", b.Kind, b.IDKey, id)
-		if err := b.Save(ctx, remote); err != nil {
+		var err error
+		if len(excludedPaths) > 0 {
+			err = b.SaveWithExcludedPaths(ctx, remote, excludedPaths)
+		} else {
+			err = b.Save(ctx, remote)
+		}
+		if err != nil {
 			return result, err
 		}
 	}

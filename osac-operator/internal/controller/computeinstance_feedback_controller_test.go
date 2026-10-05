@@ -26,6 +26,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -34,6 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/internal/controller/feedback"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -221,7 +223,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 
 			// Set the phase to Deleting (as the main controller would do in handleDelete)
 			Expect(k8sClient.Get(ctx, typeNamespacedName, vm)).To(Succeed())
-			vm.Status.Phase = osacv1alpha1.ComputeInstancePhaseDeleting
+			setComputeInstancePhase(vm, osacv1alpha1.ComputeInstancePhaseDeleting)
 			Expect(k8sClient.Status().Update(ctx, vm)).To(Succeed())
 
 			// Delete the CR (sets DeletionTimestamp, CR stays because of finalizer)
@@ -322,7 +324,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			Expect(k8sClient.Create(ctx, vm)).To(Succeed())
 
 			Expect(k8sClient.Get(ctx, deletingNamespacedName, vm)).To(Succeed())
-			vm.Status.Phase = osacv1alpha1.ComputeInstancePhaseDeleting
+			setComputeInstancePhase(vm, osacv1alpha1.ComputeInstancePhaseDeleting)
 			Expect(k8sClient.Status().Update(ctx, vm)).To(Succeed())
 
 			Expect(k8sClient.Get(ctx, deletingNamespacedName, vm)).To(Succeed())
@@ -392,7 +394,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			Expect(k8sClient.Create(ctx, vm)).To(Succeed())
 
 			Expect(k8sClient.Get(ctx, deletingNamespacedName, vm)).To(Succeed())
-			vm.Status.Phase = osacv1alpha1.ComputeInstancePhaseDeleting
+			setComputeInstancePhase(vm, osacv1alpha1.ComputeInstancePhaseDeleting)
 			Expect(k8sClient.Status().Update(ctx, vm)).To(Succeed())
 
 			Expect(k8sClient.Get(ctx, deletingNamespacedName, vm)).To(Succeed())
@@ -452,7 +454,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			Expect(k8sClient.Create(ctx, vm)).To(Succeed())
 
 			Expect(k8sClient.Get(ctx, typeNamespacedName, vm)).To(Succeed())
-			vm.Status.Phase = osacv1alpha1.ComputeInstancePhaseDeleting
+			setComputeInstancePhase(vm, osacv1alpha1.ComputeInstancePhaseDeleting)
 			Expect(k8sClient.Status().Update(ctx, vm)).To(Succeed())
 
 			Expect(k8sClient.Get(ctx, typeNamespacedName, vm)).To(Succeed())
@@ -544,7 +546,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			// Update status separately since Status is a subresource - need to get fresh copy
 			err := k8sClient.Get(ctx, typeNamespacedName, vm)
 			Expect(err).NotTo(HaveOccurred())
-			vm.Status.Phase = osacv1alpha1.ComputeInstancePhaseRunning
+			setComputeInstancePhase(vm, osacv1alpha1.ComputeInstancePhaseRunning)
 			vm.Status.Conditions = []metav1.Condition{
 				{
 					Type:               string(osacv1alpha1.ComputeInstanceConditionConfigurationApplied),
@@ -631,7 +633,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 		It("should sync Starting phase", func() {
 			vm := &osacv1alpha1.ComputeInstance{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, vm)).To(Succeed())
-			vm.Status.Phase = osacv1alpha1.ComputeInstancePhaseStarting
+			setComputeInstancePhase(vm, osacv1alpha1.ComputeInstancePhaseStarting)
 			Expect(k8sClient.Status().Update(ctx, vm)).To(Succeed())
 
 			request := reconcile.Request{
@@ -646,7 +648,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 		It("should sync Failed phase", func() {
 			vm := &osacv1alpha1.ComputeInstance{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, vm)).To(Succeed())
-			vm.Status.Phase = osacv1alpha1.ComputeInstancePhaseFailed
+			setComputeInstancePhase(vm, osacv1alpha1.ComputeInstancePhaseFailed)
 			Expect(k8sClient.Status().Update(ctx, vm)).To(Succeed())
 
 			request := reconcile.Request{
@@ -661,7 +663,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 		It("should sync Deleting phase", func() {
 			vm := &osacv1alpha1.ComputeInstance{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, vm)).To(Succeed())
-			vm.Status.Phase = osacv1alpha1.ComputeInstancePhaseDeleting
+			setComputeInstancePhase(vm, osacv1alpha1.ComputeInstancePhaseDeleting)
 			Expect(k8sClient.Status().Update(ctx, vm)).To(Succeed())
 
 			request := reconcile.Request{
@@ -818,7 +820,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 		It("should sync Stopping phase", func() {
 			vm := &osacv1alpha1.ComputeInstance{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, vm)).To(Succeed())
-			vm.Status.Phase = osacv1alpha1.ComputeInstancePhaseStopping
+			setComputeInstancePhase(vm, osacv1alpha1.ComputeInstancePhaseStopping)
 			Expect(k8sClient.Status().Update(ctx, vm)).To(Succeed())
 
 			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
@@ -830,7 +832,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 		It("should sync Stopped phase", func() {
 			vm := &osacv1alpha1.ComputeInstance{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, vm)).To(Succeed())
-			vm.Status.Phase = osacv1alpha1.ComputeInstancePhaseStopped
+			setComputeInstancePhase(vm, osacv1alpha1.ComputeInstancePhaseStopped)
 			Expect(k8sClient.Status().Update(ctx, vm)).To(Succeed())
 
 			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
@@ -842,7 +844,7 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 		It("should sync Paused phase", func() {
 			vm := &osacv1alpha1.ComputeInstance{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, vm)).To(Succeed())
-			vm.Status.Phase = osacv1alpha1.ComputeInstancePhasePaused
+			setComputeInstancePhase(vm, osacv1alpha1.ComputeInstancePhasePaused)
 			Expect(k8sClient.Status().Update(ctx, vm)).To(Succeed())
 
 			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
@@ -1107,5 +1109,71 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(mockClient.updateCalled).To(BeTrue())
 		})
+	})
+})
+
+var _ = Describe("ComputeInstance billing feedback", func() {
+	It("syncs state and conditions while excluding an invalid applied type", func() {
+		transitionTime := metav1.NewTime(time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC))
+		obj := &osacv1alpha1.ComputeInstance{Status: osacv1alpha1.ComputeInstanceStatus{
+			Phase:               osacv1alpha1.ComputeInstancePhaseRunning,
+			StateTransitionTime: &transitionTime,
+			InstanceType:        "large",
+			Conditions: []metav1.Condition{{
+				Type:               string(osacv1alpha1.ComputeInstanceConditionConfigurationApplied),
+				Status:             metav1.ConditionTrue,
+				LastTransitionTime: transitionTime,
+			}},
+		}}
+		remote := privatev1.ComputeInstance_builder{Status: privatev1.ComputeInstanceStatus_builder{
+			State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPED,
+		}.Build()}.Build()
+
+		err := syncComputeInstanceUpdate(context.Background(), obj, remote)
+		issues, ok := feedback.AsFieldIssues(err)
+		Expect(ok).To(BeTrue())
+		Expect(issues).To(HaveLen(1))
+		Expect(issues[0].Paths).To(ConsistOf("status.instance_type", "status.instance_type_transition_time"))
+		Expect(remote.GetStatus().GetState()).To(Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING))
+		Expect(remote.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(transitionTime.Time))
+		condition := findComputeInstanceCondition(remote, privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_CONFIGURATION_APPLIED)
+		Expect(condition.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+		Expect(remote.GetStatus().GetInstanceType()).To(BeEmpty())
+	})
+
+	It("copies the CRD failure boundary rather than the earlier RUNNING time", func() {
+		runningSince := time.Date(2026, time.January, 1, 9, 0, 0, 0, time.UTC)
+		failedAt := time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
+		obj := &osacv1alpha1.ComputeInstance{Status: osacv1alpha1.ComputeInstanceStatus{
+			Phase:               osacv1alpha1.ComputeInstancePhaseFailed,
+			StateTransitionTime: &metav1.Time{Time: failedAt},
+		}}
+		remote := privatev1.ComputeInstance_builder{
+			Status: privatev1.ComputeInstanceStatus_builder{
+				State:               privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
+				StateTransitionTime: timestamppb.New(runningSince),
+			}.Build(),
+		}.Build()
+
+		Expect(syncCIPhase(context.Background(), obj, remote)).To(Succeed())
+		Expect(remote.GetStatus().GetState()).To(Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED))
+		Expect(remote.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(failedAt))
+
+		Expect(syncCIPhase(context.Background(), obj, remote)).To(Succeed())
+		Expect(remote.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(failedAt))
+	})
+
+	It("copies only the applied instance type and its transition time", func() {
+		appliedAt := time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
+		obj := &osacv1alpha1.ComputeInstance{Status: osacv1alpha1.ComputeInstanceStatus{
+			InstanceType:               "large",
+			InstanceTypeTransitionTime: &metav1.Time{Time: appliedAt},
+		}}
+		remote := privatev1.ComputeInstance_builder{Status: &privatev1.ComputeInstanceStatus{}}.Build()
+
+		Expect(syncCIAppliedInstanceType(obj, remote)).To(Succeed())
+
+		Expect(remote.GetStatus().GetInstanceType()).To(Equal("large"))
+		Expect(remote.GetStatus().GetInstanceTypeTransitionTime().AsTime()).To(Equal(appliedAt))
 	})
 })

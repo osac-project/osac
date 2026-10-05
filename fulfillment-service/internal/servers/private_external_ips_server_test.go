@@ -16,6 +16,7 @@ package servers
 import (
 	"context"
 	"fmt"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -158,6 +159,7 @@ var _ = Describe("Private external IPs server", func() {
 		})
 
 		It("creates ExternalIP with PENDING initial state", func() {
+			createStartedAt := time.Now().UTC()
 			response, err := externalIPsServer.Create(ctx, privatev1.ExternalIPsCreateRequest_builder{
 				Object: privatev1.ExternalIP_builder{
 					Metadata: privatev1.Metadata_builder{Name: "test-eip", Tenant: testTenant}.Build(),
@@ -167,6 +169,9 @@ var _ = Describe("Private external IPs server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(response.GetObject().GetStatus().GetState()).To(
 				Equal(privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING))
+			Expect(response.GetObject().GetStatus().GetStateTransitionTime()).NotTo(BeNil())
+			Expect(response.GetObject().GetStatus().GetStateTransitionTime().AsTime()).To(
+				BeTemporally("~", createStartedAt, time.Second))
 		})
 
 		It("rejects caller-supplied output status on Create", func() {

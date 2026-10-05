@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -199,13 +200,17 @@ var _ = Describe("buildSpec", func() {
 
 var _ = Describe("setDefaults", func() {
 	It("sets CREATING state when status is unspecified", func() {
+		createdAt := time.Date(2026, time.January, 1, 9, 0, 0, 0, time.UTC)
 		t := &task{
 			volume: privatev1.Volume_builder{
 				Id: "vol-defaults-1",
+				Metadata: privatev1.Metadata_builder{
+					CreationTimestamp: timestamppb.New(createdAt),
+				}.Build(),
 			}.Build(),
 		}
 
-		t.setDefaults()
+		Expect(t.setDefaults()).To(Succeed())
 
 		Expect(t.volume.GetStatus().GetState()).To(
 			Equal(privatev1.VolumeState_VOLUME_STATE_CREATING),
@@ -222,7 +227,7 @@ var _ = Describe("setDefaults", func() {
 			}.Build(),
 		}
 
-		t.setDefaults()
+		Expect(t.setDefaults()).To(Succeed())
 
 		Expect(t.volume.GetStatus().GetState()).To(
 			Equal(privatev1.VolumeState_VOLUME_STATE_AVAILABLE),
@@ -230,20 +235,62 @@ var _ = Describe("setDefaults", func() {
 	})
 
 	It("creates status if it doesn't exist", func() {
+		createdAt := time.Date(2026, time.January, 1, 9, 0, 0, 0, time.UTC)
 		t := &task{
 			volume: privatev1.Volume_builder{
 				Id: "vol-defaults-no-status",
+				Metadata: privatev1.Metadata_builder{
+					CreationTimestamp: timestamppb.New(createdAt),
+				}.Build(),
 			}.Build(),
 		}
 
 		Expect(t.volume.HasStatus()).To(BeFalse())
 
-		t.setDefaults()
+		Expect(t.setDefaults()).To(Succeed())
 
 		Expect(t.volume.HasStatus()).To(BeTrue())
 		Expect(t.volume.GetStatus().GetState()).To(
 			Equal(privatev1.VolumeState_VOLUME_STATE_CREATING),
 		)
+	})
+})
+
+var _ = Describe("fallback state timestamps", func() {
+	It("uses the creation timestamp for the initial CREATING default", func() {
+		createdAt := time.Date(2026, time.January, 1, 9, 0, 0, 0, time.UTC)
+		t := &task{volume: privatev1.Volume_builder{
+			Id: "vol-state-time",
+			Metadata: privatev1.Metadata_builder{
+				CreationTimestamp: timestamppb.New(createdAt),
+			}.Build(),
+		}.Build()}
+
+		Expect(t.setDefaults()).To(Succeed())
+
+		Expect(t.volume.GetStatus().GetState()).To(Equal(privatev1.VolumeState_VOLUME_STATE_CREATING))
+		Expect(t.volume.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(createdAt))
+	})
+
+	It("timestamps provisioning failure and preserves repeated failure time", func() {
+		createdAt := time.Date(2026, time.January, 1, 9, 0, 0, 0, time.UTC)
+		t := &task{volume: privatev1.Volume_builder{
+			Id: "vol-provisioning-failure-time",
+			Status: privatev1.VolumeStatus_builder{
+				State:               privatev1.VolumeState_VOLUME_STATE_CREATING,
+				StateTransitionTime: timestamppb.New(createdAt),
+			}.Build(),
+		}.Build()}
+
+		failureObservedAt := time.Now().UTC()
+		t.setFailed(errors.New("vendor provisioning failed"))
+		failedAt := t.volume.GetStatus().GetStateTransitionTime().AsTime()
+		Expect(t.volume.GetStatus().GetState()).To(Equal(privatev1.VolumeState_VOLUME_STATE_FAILED))
+		Expect(failedAt).To(BeTemporally(">=", failureObservedAt))
+		Expect(failedAt).To(BeTemporally(">", createdAt))
+
+		t.setFailed(errors.New("still failed"))
+		Expect(t.volume.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(failedAt))
 	})
 })
 

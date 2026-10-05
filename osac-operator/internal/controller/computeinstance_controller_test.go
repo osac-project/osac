@@ -3249,3 +3249,232 @@ var _ = Describe("ComputeInstance Controller", func() {
 	})
 
 })
+
+var _ = Describe("ComputeInstance billing status sources", func() {
+	It("records the FAILED boundary instead of retaining the RUNNING start time", func() {
+		runningSince := time.Date(2026, time.January, 1, 9, 0, 0, 0, time.UTC)
+		instance := &osacv1alpha1.ComputeInstance{Status: osacv1alpha1.ComputeInstanceStatus{
+			Phase:               osacv1alpha1.ComputeInstancePhaseRunning,
+			StateTransitionTime: &metav1.Time{Time: runningSince},
+		}}
+
+		failureObservedAt := time.Now().UTC()
+		setComputeInstancePhase(instance, osacv1alpha1.ComputeInstancePhaseFailed)
+		failedAt := instance.Status.StateTransitionTime.Time
+		Expect(instance.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseFailed))
+		Expect(failedAt).To(BeTemporally(">=", failureObservedAt))
+		Expect(failedAt).To(BeTemporally(">", runningSince))
+
+		setComputeInstancePhase(instance, osacv1alpha1.ComputeInstancePhaseFailed)
+		Expect(instance.Status.StateTransitionTime.Time).To(Equal(failedAt))
+	})
+
+	It("publishes instance type only after configuration and any required restart complete", func() {
+		instance := &osacv1alpha1.ComputeInstance{
+			Spec: osacv1alpha1.ComputeInstanceSpec{InstanceType: "small"},
+			Status: osacv1alpha1.ComputeInstanceStatus{
+				Conditions: []metav1.Condition{
+					{
+						Type:               string(osacv1alpha1.ComputeInstanceConditionConfigurationApplied),
+						Status:             metav1.ConditionFalse,
+						LastTransitionTime: metav1.NewTime(time.Date(2026, time.January, 1, 9, 0, 0, 0, time.UTC)),
+					},
+					{
+						Type:               string(osacv1alpha1.ComputeInstanceConditionRestartRequired),
+						Status:             metav1.ConditionFalse,
+						LastTransitionTime: metav1.NewTime(time.Date(2026, time.January, 1, 9, 30, 0, 0, time.UTC)),
+					},
+				},
+			},
+		}
+
+		syncAppliedInstanceType(instance)
+		Expect(instance.Status.InstanceType).To(BeEmpty())
+		Expect(instance.Status.InstanceTypeTransitionTime).To(BeNil())
+
+		appliedAt := metav1.NewTime(time.Date(2026, time.January, 1, 10, 0, 0, 0, time.UTC))
+		instance.SetStatusCondition(osacv1alpha1.ComputeInstanceConditionConfigurationApplied,
+			metav1.ConditionTrue, "", osacv1alpha1.ReasonAsExpected)
+		condition := instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionConfigurationApplied)
+		condition.LastTransitionTime = appliedAt
+		restartClearedAt := metav1.NewTime(time.Date(2026, time.January, 1, 10, 30, 0, 0, time.UTC))
+		restartCondition := instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionRestartRequired)
+		restartCondition.LastTransitionTime = restartClearedAt
+		syncAppliedInstanceType(instance)
+		firstTransition := instance.Status.InstanceTypeTransitionTime.DeepCopy()
+		Expect(instance.Status.InstanceType).To(Equal("small"))
+		Expect(firstTransition).NotTo(BeNil())
+		Expect(firstTransition).To(Equal(&restartClearedAt))
+
+		instance.Spec.InstanceType = "large"
+		instance.SetStatusCondition(osacv1alpha1.ComputeInstanceConditionConfigurationApplied,
+			metav1.ConditionFalse, "Applying configuration", osacv1alpha1.ReasonAsExpected)
+		instance.SetStatusCondition(osacv1alpha1.ComputeInstanceConditionRestartRequired,
+			metav1.ConditionTrue, "Restart required", osacv1alpha1.ReasonAsExpected)
+		syncAppliedInstanceType(instance)
+		Expect(instance.Status.InstanceType).To(Equal("small"))
+		Expect(instance.Status.InstanceTypeTransitionTime).To(Equal(firstTransition))
+
+		secondAppliedAt := metav1.NewTime(time.Date(2026, time.January, 1, 11, 0, 0, 0, time.UTC))
+		instance.SetStatusCondition(osacv1alpha1.ComputeInstanceConditionConfigurationApplied,
+			metav1.ConditionTrue, "", osacv1alpha1.ReasonAsExpected)
+		condition = instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionConfigurationApplied)
+		condition.LastTransitionTime = secondAppliedAt
+		syncAppliedInstanceType(instance)
+		Expect(instance.Status.InstanceType).To(Equal("small"), "the applied type must wait for a required restart")
+
+		restartClearedAt = metav1.NewTime(time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC))
+		instance.SetStatusCondition(osacv1alpha1.ComputeInstanceConditionRestartRequired,
+			metav1.ConditionFalse, "", osacv1alpha1.ReasonAsExpected)
+		restartCondition = instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionRestartRequired)
+		restartCondition.LastTransitionTime = restartClearedAt
+		syncAppliedInstanceType(instance)
+		Expect(instance.Status.InstanceType).To(Equal("large"))
+		Expect(instance.Status.InstanceTypeTransitionTime).To(Equal(&restartClearedAt))
+	})
+
+	It("rejects an empty-version job after a resize, then records the matching job boundary", func() {
+		ctx := context.Background()
+		const namespace = "default"
+		const name = "unversioned-resize-billing-source"
+		const tenantName = "unversioned-resize-billing-tenant"
+		createReadyTenant(ctx, namespace, tenantName)
+		DeferCleanup(func() {
+			ci := &osacv1alpha1.ComputeInstance{}
+			key := types.NamespacedName{Name: name, Namespace: namespace}
+			if err := k8sClient.Get(ctx, key, ci); err == nil {
+				ci.Finalizers = nil
+				_ = k8sClient.Update(ctx, ci)
+				_ = k8sClient.Delete(ctx, ci)
+			}
+			deleteTenantInNamespace(ctx, namespace, tenantName)
+		})
+
+		key := types.NamespacedName{Name: name, Namespace: namespace}
+		oldSpec := newTestComputeInstanceSpec("test_template")
+		oldSpec.InstanceType = "small"
+		instance := &osacv1alpha1.ComputeInstance{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: name, Namespace: namespace,
+				Annotations: map[string]string{osacTenantKey: tenantName},
+			},
+			Spec: oldSpec,
+		}
+		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+
+		oldVersion, err := provisioning.ComputeDesiredConfigVersion(oldSpec)
+		Expect(err).NotTo(HaveOccurred())
+		oldAppliedAt := metav1.NewTime(time.Date(2026, time.January, 1, 9, 0, 0, 0, time.UTC))
+		instance.Status.DesiredConfigVersion = oldVersion
+		instance.Status.InstanceType = "small"
+		instance.Status.InstanceTypeTransitionTime = oldAppliedAt.DeepCopy()
+		instance.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{{
+			JobID: "unversioned-job", Type: osacv1alpha1.JobTypeProvision,
+			State: osacv1alpha1.JobStateSucceeded, Timestamp: oldAppliedAt,
+		}}
+		instance.Status.Conditions = []metav1.Condition{{
+			Type:   string(osacv1alpha1.ComputeInstanceConditionConfigurationApplied),
+			Status: metav1.ConditionTrue, Reason: osacv1alpha1.ReasonAsExpected,
+			LastTransitionTime: oldAppliedAt,
+		}}
+		Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+
+		instance.Spec.InstanceType = "large"
+		Expect(k8sClient.Update(ctx, instance)).To(Succeed())
+
+		provider := &mockProvisioningProvider{name: "aap"}
+		reconciler := NewComputeInstanceReconciler(testMcManager, "", namespace, "", provider, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+		Eventually(func(g Gomega) {
+			cached := &osacv1alpha1.ComputeInstance{}
+			g.Expect(reconciler.Client.Get(ctx, key, cached)).To(Succeed())
+			g.Expect(cached.Spec.InstanceType).To(Equal("large"))
+		}).Should(Succeed())
+		reconcileRequest := mcreconcile.Request{Request: reconcile.Request{NamespacedName: key}}
+
+		_, err = reconciler.Reconcile(ctx, reconcileRequest)
+		Expect(err).NotTo(HaveOccurred())
+		desiredVersion, err := provisioning.ComputeDesiredConfigVersion(instance.Spec)
+		Expect(err).NotTo(HaveOccurred())
+		current := &osacv1alpha1.ComputeInstance{}
+		Eventually(func(g Gomega) {
+			g.Expect(k8sClient.Get(ctx, key, current)).To(Succeed())
+			latest := provisioning.FindLatestJobByType(current.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision)
+			g.Expect(latest).NotTo(BeNil())
+			g.Expect(latest.ConfigVersion).To(Equal(desiredVersion))
+			g.Expect(latest.State).NotTo(Equal(osacv1alpha1.JobStateSucceeded))
+			g.Expect(current.Status.InstanceType).To(Equal("small"))
+			g.Expect(current.Status.InstanceTypeTransitionTime.Time).To(BeTemporally("==", oldAppliedAt.Time))
+			g.Expect(current.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionConfigurationApplied).Status).To(Equal(metav1.ConditionFalse))
+		}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
+
+		_, err = reconciler.Reconcile(ctx, reconcileRequest)
+		Expect(err).NotTo(HaveOccurred())
+		Eventually(func(g Gomega) {
+			g.Expect(k8sClient.Get(ctx, key, current)).To(Succeed())
+			latest := provisioning.FindLatestJobByType(current.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision)
+			g.Expect(latest).NotTo(BeNil())
+			g.Expect(latest.State).To(Equal(osacv1alpha1.JobStateSucceeded))
+			g.Expect(current.Status.InstanceType).To(Equal("small"))
+			g.Expect(current.Status.InstanceTypeTransitionTime.Time).To(BeTemporally("==", oldAppliedAt.Time))
+		}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
+
+		_, err = reconciler.Reconcile(ctx, reconcileRequest)
+		Expect(err).NotTo(HaveOccurred())
+		Eventually(func(g Gomega) {
+			g.Expect(k8sClient.Get(ctx, key, current)).To(Succeed())
+			g.Expect(current.Status.InstanceType).To(Equal("large"))
+			condition := current.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionConfigurationApplied)
+			g.Expect(condition).NotTo(BeNil())
+			g.Expect(condition.Status).To(Equal(metav1.ConditionTrue))
+			g.Expect(current.Status.InstanceTypeTransitionTime).To(Equal(&condition.LastTransitionTime))
+			g.Expect(current.Status.InstanceTypeTransitionTime.Time).To(BeTemporally(">", oldAppliedAt.Time))
+		}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
+	})
+
+	It("records the desired config version on the initial provisioning job", func() {
+		ctx := context.Background()
+		const namespace = "default"
+		const name = "initial-config-version-billing-source"
+		const tenantName = "initial-config-version-billing-tenant"
+		createReadyTenant(ctx, namespace, tenantName)
+		DeferCleanup(func() {
+			ci := &osacv1alpha1.ComputeInstance{}
+			key := types.NamespacedName{Name: name, Namespace: namespace}
+			if err := k8sClient.Get(ctx, key, ci); err == nil {
+				ci.Finalizers = nil
+				_ = k8sClient.Update(ctx, ci)
+				_ = k8sClient.Delete(ctx, ci)
+			}
+			deleteTenantInNamespace(ctx, namespace, tenantName)
+		})
+
+		spec := newTestComputeInstanceSpec("test_template")
+		spec.InstanceType = "small"
+		instance := &osacv1alpha1.ComputeInstance{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: name, Namespace: namespace,
+				Annotations: map[string]string{osacTenantKey: tenantName},
+			},
+			Spec: spec,
+		}
+		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+
+		key := types.NamespacedName{Name: name, Namespace: namespace}
+		provider := &mockProvisioningProvider{name: "aap"}
+		reconciler := NewComputeInstanceReconciler(testMcManager, "", namespace, "", provider, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+		Eventually(func() error { return reconciler.Client.Get(ctx, key, &osacv1alpha1.ComputeInstance{}) }).Should(Succeed())
+		_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: key}})
+		Expect(err).NotTo(HaveOccurred())
+
+		desiredVersion, err := provisioning.ComputeDesiredConfigVersion(spec)
+		Expect(err).NotTo(HaveOccurred())
+		current := &osacv1alpha1.ComputeInstance{}
+		Eventually(func(g Gomega) {
+			g.Expect(k8sClient.Get(ctx, key, current)).To(Succeed())
+			latest := provisioning.FindLatestJobByType(current.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision)
+			g.Expect(latest).NotTo(BeNil())
+			g.Expect(latest.ConfigVersion).NotTo(BeEmpty())
+			g.Expect(latest.ConfigVersion).To(Equal(desiredVersion))
+		}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
+	})
+})

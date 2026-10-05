@@ -123,6 +123,15 @@ spec:
                         Resolved from the host type's NetworkInterface list during template
                         expansion; may also be set explicitly.
                       type: string
+                    nodeSetID:
+                      description: |-
+                        NodeSetID is the stable key of this node set in the Fulfillment Cluster spec.
+                        It keeps observed size history attached to the node-set identity when two
+                        sets use the same resource class or a set is re-keyed.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
+                      type: string
                     numberOfNodes:
                       description: NumberOfNodes describes the number of nodes you
                         want of the given resource class
@@ -133,10 +142,14 @@ spec:
                         requesting
                       type: string
                   required:
+                  - nodeSetID
                   - numberOfNodes
                   - resourceClass
                   type: object
                 type: array
+                x-kubernetes-list-map-keys:
+                - nodeSetID
+                x-kubernetes-list-type: map
               pullSecret:
                 description: |-
                   PullSecret contains credentials for authenticating to container image repositories.
@@ -406,32 +419,37 @@ spec:
                   Written by the CaaS template after VIP discovery.
                 type: string
               nodeRequests:
-                description: NodeRequests reflects how many nodes are currently associated
-                  with the ClusterOrder
+                description: NodeRequests records the observed NodePools and their
+                  stable node-set identities.
                 items:
+                  description: NodeRequestStatus records the observed NodePool associated
+                    with a node set.
                   properties:
-                    fabricInterface:
-                      description: |-
-                        FabricInterface is the host NIC name used for tenant network traffic.
-                        When set, IP discovery filters Agent inventory interfaces by this name,
-                        preventing the provisioning NIC address from being returned.
-                        Resolved from the host type's NetworkInterface list during template
-                        expansion; may also be set explicitly.
+                    nodeSetID:
+                      description: NodeSetID is the stable key of the node set in
+                        the Fulfillment Cluster spec.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$
                       type: string
                     numberOfNodes:
-                      description: NumberOfNodes describes the number of nodes you
-                        want of the given resource class
-                      minimum: 1
+                      description: NumberOfNodes is the observed replica count; zero
+                        is valid during removal.
+                      minimum: 0
                       type: integer
                     resourceClass:
-                      description: ResourceClass describes the type of node you are
-                        requesting
+                      description: ResourceClass is the node type reported by the
+                        observed NodePool.
                       type: string
                   required:
+                  - nodeSetID
                   - numberOfNodes
                   - resourceClass
                   type: object
                 type: array
+                x-kubernetes-list-map-keys:
+                - nodeSetID
+                x-kubernetes-list-type: map
               nodeSets:
                 description: |-
                   NodeSets holds per-node-set networking status, populated by the
@@ -483,6 +501,17 @@ spec:
                       description: Name is the node set identifier (matches the ClusterNodeSet
                         key).
                       minLength: 1
+                      type: string
+                    size:
+                      description: Size is the observed replica count for this node
+                        set.
+                      format: int32
+                      minimum: 0
+                      type: integer
+                    sizeTransitionTime:
+                      description: SizeTransitionTime records when the observed replica
+                        count changed.
+                      format: date-time
                       type: string
                   required:
                   - name
@@ -564,6 +593,21 @@ spec:
                   - type
                   type: object
                 type: array
+              releaseImage:
+                description: |-
+                  ReleaseImage is the release image confirmed applied by the HostedCluster.
+                  It is not copied from spec.releaseImage while an upgrade is in progress.
+                type: string
+              releaseImageTransitionTime:
+                description: ReleaseImageTransitionTime records when the applied release
+                  image changed.
+                format: date-time
+                type: string
+              stateTransitionTime:
+                description: StateTransitionTime records when Phase entered its current
+                  value.
+                format: date-time
+                type: string
               workers:
                 description: |-
                   Workers tracks per-worker provisioning state for failure handling and retry.

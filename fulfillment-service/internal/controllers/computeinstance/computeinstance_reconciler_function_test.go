@@ -156,7 +156,8 @@ var _ = Describe("buildSpec", func() {
 				Get(gomock.Any(), gomock.Any()).
 				Return(privatev1.InstanceTypesGetResponse_builder{
 					Object: privatev1.InstanceType_builder{
-						Id: "standard-4-8",
+						Id:       "instance-type-id",
+						Metadata: privatev1.Metadata_builder{Name: "standard-4-8"}.Build(),
 						Spec: privatev1.InstanceTypeSpec_builder{
 							Vcpus:     4,
 							MemoryGib: 8,
@@ -232,6 +233,7 @@ var _ = Describe("buildSpec", func() {
 
 			Expect(spec.VCPUs).To(Equal(int32(4)))
 			Expect(spec.MemoryGiB).To(Equal(int32(8)))
+			Expect(spec.InstanceType).To(Equal("standard-4-8"))
 			Expect(spec.RunStrategy).To(Equal(osacv1alpha1.RunStrategyType("Always")))
 			Expect(spec.SSHKey).To(Equal("ssh-rsa AAAA..."))
 
@@ -1558,7 +1560,7 @@ var _ = Describe("setReconciliationFailed", func() {
 		Expect(ci.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(originalTime.AsTime()))
 	})
 
-	It("should backfill state_transition_time when FAILED status has nil timestamp", func() {
+	It("should not invent a transition time for a repeated FAILED state", func() {
 		ci := privatev1.ComputeInstance_builder{
 			Id: "test-ci-failed-nil-timestamp",
 			Status: privatev1.ComputeInstanceStatus_builder{
@@ -1574,8 +1576,44 @@ var _ = Describe("setReconciliationFailed", func() {
 		t.setReconciliationFailed(errors.New("failing again"))
 
 		Expect(ci.GetStatus().GetState()).To(Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED))
-		Expect(ci.GetStatus().GetStateTransitionTime()).ToNot(BeNil())
-		Expect(ci.GetStatus().GetStateTransitionTime().AsTime()).To(BeTemporally("~", time.Now(), time.Second))
+		Expect(ci.GetStatus().GetStateTransitionTime()).To(BeNil())
+	})
+
+	It("should stamp the failure boundary when a running instance enters FAILED", func() {
+		runningSince := time.Date(2026, time.January, 1, 9, 0, 0, 0, time.UTC)
+		ci := privatev1.ComputeInstance_builder{
+			Id: "test-ci-running-to-failed",
+			Status: privatev1.ComputeInstanceStatus_builder{
+				State:               privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
+				StateTransitionTime: timestamppb.New(runningSince),
+			}.Build(),
+		}.Build()
+		t := &task{r: &function{logger: logger}, computeInstance: ci}
+
+		failureObservedAt := time.Now().UTC()
+		t.setFailed(errors.New("VM failed"))
+		failedAt := ci.GetStatus().GetStateTransitionTime().AsTime()
+
+		Expect(ci.GetStatus().GetState()).To(Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED))
+		Expect(failedAt).To(BeTemporally(">=", failureObservedAt))
+		Expect(failedAt).To(BeTemporally(">", runningSince))
+
+		t.setFailed(errors.New("still failed"))
+		Expect(ci.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(failedAt))
+	})
+
+	It("should timestamp the initial STARTING state and preserve it on defaults", func() {
+		ci := privatev1.ComputeInstance_builder{Id: "test-ci-starting-time"}.Build()
+		t := &task{computeInstance: ci}
+		before := time.Now().UTC()
+
+		t.setDefaults()
+		startedAt := ci.GetStatus().GetStateTransitionTime().AsTime()
+		Expect(ci.GetStatus().GetState()).To(Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING))
+		Expect(startedAt).To(BeTemporally(">=", before))
+
+		t.setDefaults()
+		Expect(ci.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(startedAt))
 	})
 
 	It("should update existing PROVISIONED condition rather than creating duplicate", func() {

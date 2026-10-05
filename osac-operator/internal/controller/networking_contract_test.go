@@ -89,6 +89,30 @@ func TestExternalIPDeleteRecordsTransitionTime(t *testing.T) {
 	}
 }
 
+func TestSetStateTransitionTimeIsStrictlyMonotonic(t *testing.T) {
+	first := metav1.NewTime(time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC))
+	state := "READY"
+	transitionTime := first.DeepCopy()
+
+	if !setState(&state, &transitionTime, "FAILED", metav1.NewTime(first.Add(-time.Hour))) {
+		t.Fatal("expected a state change")
+	}
+	if state != "FAILED" {
+		t.Fatalf("state = %q, want FAILED", state)
+	}
+	want := first.Add(time.Microsecond)
+	if !transitionTime.Time.Equal(want) {
+		t.Fatalf("transition time = %s, want %s", transitionTime.Time, want)
+	}
+
+	if setState(&state, &transitionTime, "FAILED", metav1.NewTime(first.Add(-2*time.Hour))) {
+		t.Fatal("same-state observation must not create another transition")
+	}
+	if !transitionTime.Time.Equal(want) {
+		t.Fatalf("same-state observation changed time to %s, want %s", transitionTime.Time, want)
+	}
+}
+
 func assertTransitionTime(t *testing.T, got *timestamppb.Timestamp, want time.Time) {
 	t.Helper()
 	if got == nil {

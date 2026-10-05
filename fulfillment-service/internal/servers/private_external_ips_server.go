@@ -23,6 +23,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
@@ -235,6 +236,7 @@ func (s *PrivateExternalIPsServer) Create(ctx context.Context,
 	} else {
 		externalIP.GetStatus().SetState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING)
 	}
+	externalIP.GetStatus().SetStateTransitionTime(timestamppb.Now())
 
 	err = s.generic.Create(ctx, request, &response)
 	if err != nil {

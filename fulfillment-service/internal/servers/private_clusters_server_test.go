@@ -110,6 +110,51 @@ func expectAddOnOperatorFieldViolation(err error, field string) {
 
 var _ = Describe("Private clusters server", func() {
 	Describe("node-set validation", func() {
+		It("keeps legacy host_type immutable on existing node sets", func() {
+			err := (&PrivateClustersServer{}).validateNodeSetHostTypeImmutability(
+				map[string]*privatev1.ClusterNodeSet{
+					"workers": privatev1.ClusterNodeSet_builder{
+						HostType: privatev1.HostTypeReference_builder{Id: "host-a"}.Build(),
+					}.Build(),
+				},
+				map[string]*privatev1.ClusterNodeSet{
+					"workers": privatev1.ClusterNodeSet_builder{
+						HostType: privatev1.HostTypeReference_builder{Id: "host-b"}.Build(),
+					}.Build(),
+				},
+			)
+
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err.Error()).To(ContainSubstring("host_type is immutable"))
+		})
+
+		It("preserves omitted hardware references and checks each reference independently", func() {
+			existing := map[string]*privatev1.ClusterNodeSet{
+				"workers": privatev1.ClusterNodeSet_builder{
+					BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Id: "bmit-a"}.Build(),
+					HostType:              privatev1.HostTypeReference_builder{Id: "host-a"}.Build(),
+				}.Build(),
+			}
+			candidate := map[string]*privatev1.ClusterNodeSet{
+				"workers": privatev1.ClusterNodeSet_builder{}.Build(),
+			}
+			preserveNodeSetHardwareReferences(existing, candidate)
+			Expect(proto.Equal(candidate["workers"].GetBaremetalInstanceType(), existing["workers"].GetBaremetalInstanceType())).To(BeTrue())
+			Expect(proto.Equal(candidate["workers"].GetHostType(), existing["workers"].GetHostType())).To(BeTrue())
+			Expect((&PrivateClustersServer{}).validateNodeSetHostTypeImmutability(existing, candidate)).To(Succeed())
+
+			candidate["workers"].SetHostType(privatev1.HostTypeReference_builder{Id: "host-b"}.Build())
+			err := (&PrivateClustersServer{}).validateNodeSetHostTypeImmutability(existing, candidate)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err.Error()).To(ContainSubstring("host_type is immutable"))
+
+			candidate["workers"].SetHostType(proto.Clone(existing["workers"].GetHostType()).(*privatev1.HostTypeReference))
+			candidate["workers"].SetBaremetalInstanceType(privatev1.BareMetalInstanceTypeLocalReference_builder{Id: "bmit-b"}.Build())
+			err = (&PrivateClustersServer{}).validateNodeSetHostTypeImmutability(existing, candidate)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err.Error()).To(ContainSubstring("baremetal_instance_type is immutable"))
+		})
+
 		It("validates the resolved node-set map", func() {
 			size := int32(2)
 			valid := map[string]*privatev1.ClusterNodeSet{

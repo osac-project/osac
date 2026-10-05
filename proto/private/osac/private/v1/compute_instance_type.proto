@@ -260,6 +260,17 @@ message ComputeInstanceStatus {
 
   // Identifier of the hub that was selected for this compute instance.
   string hub = 7 [(cleanapi.field).private = true];
+  // The instance type whose configuration has been applied to the VM.
+  string instance_type = 8 [
+    (cleanapi.field).private = true,
+    (google.api.field_behavior) = OUTPUT_ONLY
+  ];
+
+  // Time at which the applied instance type changed.
+  optional google.protobuf.Timestamp instance_type_transition_time = 9 [
+    (cleanapi.field).private = true,
+    (google.api.field_behavior) = OUTPUT_ONLY
+  ];
 }
 
 // Represents the overall state of a compute instance.

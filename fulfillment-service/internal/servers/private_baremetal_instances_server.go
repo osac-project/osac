@@ -779,14 +779,14 @@ func (s *PrivateBareMetalInstancesServer) applyBareMetalTemplate(bmi *privatev1.
 	return nil
 }
 
-// validateBareMetalImmutability ensures template, catalog_item, disk_image, ssh_public_key, user_data, template_parameters,
-// auto_external_ip_attachment, and network_attachments cannot be changed after creation.
+// validateBareMetalImmutability ensures billing and provisioning dimensions cannot be changed after creation.
 func validateBareMetalImmutability(
 	current, candidate *privatev1.BareMetalInstance,
 	mask *fieldmaskpb.FieldMask,
 ) error {
 	updatingTemplate := updateIncludesField(mask, "spec.template")
 	updatingCatalogItem := updateIncludesField(mask, "spec.catalog_item")
+	updatingInstanceType := updateIncludesField(mask, "spec.instance_type")
 	updatingDiskImage := updateIncludesField(mask, "spec.disk_image")
 	updatingSshKey := updateIncludesField(mask, "spec.ssh_public_key")
 	updatingUserData := updateIncludesField(mask, "spec.user_data")
@@ -805,6 +805,11 @@ func validateBareMetalImmutability(
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"cannot change spec.template from '%s' to '%s': template is immutable",
 			refKey(existingSpec.GetTemplate()), refKey(newSpec.GetTemplate()))
+	}
+	if updatingInstanceType && refKey(existingSpec.GetInstanceType()) != refKey(newSpec.GetInstanceType()) {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"cannot change spec.instance_type from '%s' to '%s': instance_type is immutable",
+			refKey(existingSpec.GetInstanceType()), refKey(newSpec.GetInstanceType()))
 	}
 
 	if updatingCatalogItem {

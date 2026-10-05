@@ -330,8 +330,7 @@ func (t *task) setDefaults() {
 		t.cluster.SetStatus(&privatev1.ClusterStatus{})
 	}
 	if t.cluster.GetStatus().GetState() == privatev1.ClusterState_CLUSTER_STATE_UNSPECIFIED {
-		t.cluster.GetStatus().SetState(privatev1.ClusterState_CLUSTER_STATE_PROGRESSING)
-		t.cluster.GetStatus().SetStateTransitionTime(timestamppb.Now())
+		t.setState(privatev1.ClusterState_CLUSTER_STATE_PROGRESSING)
 	}
 	for value := range privatev1.ClusterConditionType_name {
 		if value != 0 {
@@ -504,12 +503,12 @@ func (t *task) prepareNodeRequests() []osacv1alpha1.NodeRequest {
 
 	nodeRequests := make([]osacv1alpha1.NodeRequest, 0, len(keys))
 	for _, key := range keys {
-		nodeRequests = append(nodeRequests, t.prepareNodeRequest(nodeSets[key]))
+		nodeRequests = append(nodeRequests, t.prepareNodeRequest(key, nodeSets[key]))
 	}
 	return nodeRequests
 }
 
-func (t *task) prepareNodeRequest(nodeSet *privatev1.ClusterNodeSet) osacv1alpha1.NodeRequest {
+func (t *task) prepareNodeRequest(nodeSetID string, nodeSet *privatev1.ClusterNodeSet) osacv1alpha1.NodeRequest {
 	// Prefer BareMetalInstanceType; fall back to the deprecated HostType so that
 	// clusters that pre-date BMIT still get a valid ResourceClass.
 	rc := ""
@@ -522,6 +521,7 @@ func (t *task) prepareNodeRequest(nodeSet *privatev1.ClusterNodeSet) osacv1alpha
 		}
 	}
 	return osacv1alpha1.NodeRequest{
+		NodeSetID:     nodeSetID,
 		ResourceClass: rc,
 		NumberOfNodes: int(nodeSet.GetSize()),
 	}
@@ -649,13 +649,22 @@ func (t *task) setFailed(err error) {
 	if !t.cluster.HasStatus() {
 		t.cluster.SetStatus(&privatev1.ClusterStatus{})
 	}
-	t.cluster.GetStatus().SetState(privatev1.ClusterState_CLUSTER_STATE_FAILED)
+	t.setState(privatev1.ClusterState_CLUSTER_STATE_FAILED)
 	t.updateCondition(
 		privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_PROGRESSING,
 		privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
 		"ValidationFailed",
 		err.Error(),
 	)
+}
+
+func (t *task) setState(state privatev1.ClusterState) {
+	status := t.cluster.GetStatus()
+	if status.GetState() == state {
+		return
+	}
+	status.SetState(state)
+	status.SetStateTransitionTime(timestamppb.Now())
 }
 
 // updateCondition updates or creates a condition with the specified type, status, reason, and message.

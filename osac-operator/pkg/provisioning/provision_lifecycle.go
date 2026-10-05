@@ -70,9 +70,6 @@ func evaluateActionForTarget(provState *State, target string, checkAPIServer fun
 			return Skip, latestJob
 		}
 		return Backoff, latestJob
-	} else if latestJob.ConfigVersion == "" && latestJob.State == v1alpha1.JobStateSucceeded {
-		// Legacy job without ConfigVersion that succeeded — skip
-		return Skip, latestJob
 	}
 
 	if checkAPIServer() {
@@ -440,18 +437,17 @@ func backfillLegacyJobTargets(jobs *[]v1alpha1.JobStatus, owner string) {
 // IsConfigApplied returns true if the current spec has been successfully applied.
 // Only the latest provision job is considered to avoid false positives when a spec
 // reverts to a previously applied value (A-B-A problem).
-// Also returns true for legacy provision jobs (empty ConfigVersion) that succeeded,
-// to avoid re-triggering provisioning for resources provisioned before ConfigVersion
-// tracking was introduced.
+// Jobs without a ConfigVersion, or with a different ConfigVersion, do not prove
+// that the current spec has been applied.
 func IsConfigApplied(jobs *[]v1alpha1.JobStatus, desiredConfigVersion string) bool {
+	if desiredConfigVersion == "" {
+		return false
+	}
 	latest := FindLatestJobByType(*jobs, v1alpha1.JobTypeProvision)
 	if latest == nil {
 		return false
 	}
-	if latest.State == v1alpha1.JobStateSucceeded && latest.ConfigVersion == desiredConfigVersion {
-		return true
-	}
-	return latest.State == v1alpha1.JobStateSucceeded && latest.ConfigVersion == ""
+	return latest.State == v1alpha1.JobStateSucceeded && latest.ConfigVersion != "" && latest.ConfigVersion == desiredConfigVersion
 }
 
 // ComputeDesiredConfigVersion computes a hash of the spec and returns it.

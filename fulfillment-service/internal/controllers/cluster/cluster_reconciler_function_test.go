@@ -15,8 +15,10 @@ package cluster
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -25,6 +27,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -88,6 +91,44 @@ var _ = Describe("validateTenant", func() {
 	})
 })
 
+var _ = Describe("cluster state transition timestamps", func() {
+	It("timestamps initial PROGRESSING and preserves it on same-state defaults", func() {
+		cluster := privatev1.Cluster_builder{Id: "cluster-default-transition-time"}.Build()
+		t := &task{cluster: cluster}
+		before := time.Now().UTC()
+
+		t.setDefaults()
+		progressingAt := cluster.GetStatus().GetStateTransitionTime().AsTime()
+		Expect(cluster.GetStatus().GetState()).To(Equal(privatev1.ClusterState_CLUSTER_STATE_PROGRESSING))
+		Expect(progressingAt).To(BeTemporally(">=", before))
+
+		t.setDefaults()
+		Expect(cluster.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(progressingAt))
+	})
+
+	It("stamps FAILED when the state changes and preserves the failure boundary", func() {
+		startedAt := time.Date(2026, time.January, 1, 9, 0, 0, 0, time.UTC)
+		cluster := privatev1.Cluster_builder{
+			Id: "cluster-failed-transition-time",
+			Status: privatev1.ClusterStatus_builder{
+				State:               privatev1.ClusterState_CLUSTER_STATE_PROGRESSING,
+				StateTransitionTime: timestamppb.New(startedAt),
+			}.Build(),
+		}.Build()
+		t := &task{cluster: cluster}
+
+		failureObservedAt := time.Now().UTC()
+		t.setFailed(errors.New("cluster provisioning failed"))
+		failedAt := cluster.GetStatus().GetStateTransitionTime().AsTime()
+		Expect(cluster.GetStatus().GetState()).To(Equal(privatev1.ClusterState_CLUSTER_STATE_FAILED))
+		Expect(failedAt).To(BeTemporally(">=", failureObservedAt))
+		Expect(failedAt).To(BeTemporally(">", startedAt))
+
+		t.setFailed(errors.New("still failed"))
+		Expect(cluster.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(failedAt))
+	})
+})
+
 var _ = Describe("prepareNodeRequest", func() {
 	It("uses BareMetalInstanceType name as ResourceClass when present", func() {
 		t := &task{}
@@ -95,7 +136,8 @@ var _ = Describe("prepareNodeRequest", func() {
 			BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Name: "gpu.gb200"}.Build(),
 			Size:                  proto.Int32(3),
 		}.Build()
-		nr := t.prepareNodeRequest(nodeSet)
+		nr := t.prepareNodeRequest("gpu-gb200", nodeSet)
+		Expect(nr.NodeSetID).To(Equal("gpu-gb200"))
 		Expect(nr.ResourceClass).To(Equal("gpu.gb200"))
 		Expect(nr.NumberOfNodes).To(Equal(3))
 	})
@@ -106,7 +148,8 @@ var _ = Describe("prepareNodeRequest", func() {
 			HostType: privatev1.HostTypeReference_builder{Name: "legacy-host"}.Build(),
 			Size:     proto.Int32(5),
 		}.Build()
-		nr := t.prepareNodeRequest(nodeSet)
+		nr := t.prepareNodeRequest("workers", nodeSet)
+		Expect(nr.NodeSetID).To(Equal("workers"))
 		Expect(nr.ResourceClass).To(Equal("legacy-host"))
 		Expect(nr.NumberOfNodes).To(Equal(5))
 	})
@@ -118,7 +161,8 @@ var _ = Describe("prepareNodeRequest", func() {
 			HostType:              privatev1.HostTypeReference_builder{Name: "old-host"}.Build(),
 			Size:                  proto.Int32(2),
 		}.Build()
-		nr := t.prepareNodeRequest(nodeSet)
+		nr := t.prepareNodeRequest("workers", nodeSet)
+		Expect(nr.NodeSetID).To(Equal("workers"))
 		Expect(nr.ResourceClass).To(Equal("new-bmit"))
 		Expect(nr.NumberOfNodes).To(Equal(2))
 	})
@@ -128,7 +172,8 @@ var _ = Describe("prepareNodeRequest", func() {
 		nodeSet := privatev1.ClusterNodeSet_builder{
 			Size: proto.Int32(1),
 		}.Build()
-		nr := t.prepareNodeRequest(nodeSet)
+		nr := t.prepareNodeRequest("untyped", nodeSet)
+		Expect(nr.NodeSetID).To(Equal("untyped"))
 		Expect(nr.ResourceClass).To(BeEmpty())
 		Expect(nr.NumberOfNodes).To(Equal(1))
 	})
@@ -230,6 +275,7 @@ var _ = Describe("update tenant annotation", func() {
 				TemplateID: "test-template",
 				NodeRequests: []osacv1alpha1.NodeRequest{
 					{
+						NodeSetID:     "gpu-gb200",
 						ResourceClass: "gpu.gb200",
 						NumberOfNodes: 3,
 					},
@@ -295,6 +341,7 @@ var _ = Describe("update tenant annotation", func() {
 
 		updatedCR := list.Items[0]
 		Expect(updatedCR.Spec.NodeRequests).To(HaveLen(1))
+		Expect(updatedCR.Spec.NodeRequests[0].NodeSetID).To(Equal("gpu-gb200"))
 		Expect(updatedCR.Spec.NodeRequests[0].ResourceClass).To(Equal("gpu.gb200"))
 		Expect(updatedCR.Spec.NodeRequests[0].NumberOfNodes).To(Equal(5))
 	})
@@ -316,6 +363,7 @@ var _ = Describe("update tenant annotation", func() {
 				TemplateID: "test-template",
 				NodeRequests: []osacv1alpha1.NodeRequest{
 					{
+						NodeSetID:     "gpu-gb200",
 						ResourceClass: "gpu.gb200",
 						NumberOfNodes: 3,
 					},
@@ -381,6 +429,7 @@ var _ = Describe("update tenant annotation", func() {
 
 		updatedCR := list.Items[0]
 		Expect(updatedCR.Spec.NodeRequests).To(HaveLen(1))
+		Expect(updatedCR.Spec.NodeRequests[0].NodeSetID).To(Equal("gpu-gb200"))
 		Expect(updatedCR.Spec.NodeRequests[0].ResourceClass).To(Equal("gpu.gb200"))
 		Expect(updatedCR.Spec.NodeRequests[0].NumberOfNodes).To(Equal(5))
 	})
@@ -402,6 +451,7 @@ var _ = Describe("update tenant annotation", func() {
 				TemplateID: "test-template",
 				NodeRequests: []osacv1alpha1.NodeRequest{
 					{
+						NodeSetID:     "gpu-gb200",
 						ResourceClass: "gpu.gb200",
 						NumberOfNodes: 3,
 					},
@@ -637,6 +687,7 @@ var _ = Describe("update tenant annotation", func() {
 				ReleaseImage: resolvedImage,
 				NodeRequests: []osacv1alpha1.NodeRequest{
 					{
+						NodeSetID:     "gpu-gb200",
 						ResourceClass: "gpu.gb200",
 						NumberOfNodes: 3,
 					},
@@ -744,6 +795,7 @@ var _ = Describe("update tenant annotation", func() {
 				ReleaseImage: oldImage,
 				NodeRequests: []osacv1alpha1.NodeRequest{
 					{
+						NodeSetID:     "gpu-gb200",
 						ResourceClass: "gpu.gb200",
 						NumberOfNodes: 3,
 					},

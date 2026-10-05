@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -181,6 +182,8 @@ var _ = Describe("VolumeReconciler", func() {
 		Expect(k8sClient.Get(testCtx, types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace}, updated)).To(Succeed())
 		Expect(updated.Status.Phase).To(Equal(osacv1alpha1.VolumePhaseFailed))
 		Expect(updated.Status.VendorVolumeID).To(BeEmpty())
+		Expect(updated.Status.ProvisionedSizeGiB).To(BeZero())
+		Expect(updated.Status.StateTransitionTime).NotTo(BeNil())
 		Expect(updated.Status.Conditions[0].Message).To(ContainSubstring(message))
 	},
 		Entry("empty ID", VendorCreateVolumeResponse{Protocol: "Block"}, "empty volume ID"),
@@ -255,6 +258,8 @@ var _ = Describe("VolumeReconciler", func() {
 		Expect(updated.Status.VendorVolumeID).To(HavePrefix("mock-"))
 		Expect(updated.Status.Provider).To(Equal("vast-primary"))
 		Expect(updated.Status.Protocol).To(Equal(osacv1alpha1.VolumeProtocolBlock))
+		Expect(updated.Status.ProvisionedSizeGiB).To(Equal(vol.Spec.SizeGiB))
+		Expect(updated.Status.StateTransitionTime).NotTo(BeNil())
 		Expect(mockProv.CreateCallCount()).To(BeNumerically(">=", 1))
 
 		cond := apimeta.FindStatusCondition(updated.Status.Conditions, string(osacv1alpha1.VolumeConditionVendorProvisioned))
@@ -676,6 +681,7 @@ var _ = Describe("VolumeReconciler", func() {
 		stamped.Status.Provider = "netapp"
 		Expect(k8sClient.Status().Update(testCtx, stamped)).To(Succeed())
 
+		providerFailureObservedAt := time.Now().UTC()
 		_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{
 			Request: reconcile.Request{
 				NamespacedName: types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace},
@@ -686,11 +692,23 @@ var _ = Describe("VolumeReconciler", func() {
 		updated := &osacv1alpha1.Volume{}
 		Expect(k8sClient.Get(testCtx, types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace}, updated)).To(Succeed())
 		Expect(updated.Status.Phase).To(Equal(osacv1alpha1.VolumePhaseFailed))
+		Expect(updated.Status.StateTransitionTime).NotTo(BeNil())
+		Expect(updated.Status.StateTransitionTime.Time).To(BeTemporally("~", providerFailureObservedAt, time.Second))
 		condition := apimeta.FindStatusCondition(updated.Status.Conditions, string(osacv1alpha1.VolumeConditionVendorProvisioned))
 		Expect(condition).ToNot(BeNil())
 		Expect(condition.Reason).To(Equal("ProviderNotImplemented"))
 		Expect(condition.Message).To(ContainSubstring(`provider "netapp" is not implemented`))
 		Expect(mockProv.CreateCallCount()).To(Equal(int64(0)))
+
+		firstFailureTime := updated.Status.StateTransitionTime.DeepCopy()
+		_, err = reconciler.Reconcile(testCtx, mcreconcile.Request{
+			Request: reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace},
+			},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(k8sClient.Get(testCtx, types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace}, updated)).To(Succeed())
+		Expect(updated.Status.StateTransitionTime).To(Equal(firstFailureTime), "unchanged Failed phase must not reset its transition time")
 	})
 
 	It("should stay in Progressing (not crash) when no VendorProvisioner is configured", func() {

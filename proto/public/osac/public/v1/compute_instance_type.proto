@@ -253,6 +253,7 @@ message ComputeInstanceStatus {
   //
   // This will be empty if no state transition has been reported yet.
   optional google.protobuf.Timestamp state_transition_time = 6;
+
 }
 
 // Represents the overall state of a compute instance.

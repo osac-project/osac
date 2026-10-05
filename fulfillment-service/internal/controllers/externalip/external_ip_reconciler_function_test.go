@@ -17,11 +17,13 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -406,6 +408,48 @@ var _ = Describe("setDefaults", func() {
 
 		Expect(t.externalIP.HasStatus()).To(BeTrue())
 		Expect(t.externalIP.GetStatus().GetState()).To(Equal(privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING))
+	})
+})
+
+var _ = Describe("fallback state timestamps", func() {
+	It("timestamps the initial pending default and preserves same-state time", func() {
+		t := &task{externalIP: privatev1.ExternalIP_builder{Id: "eip-state-time"}.Build()}
+		before := time.Now().UTC()
+
+		t.setDefaults()
+		pendingAt := t.externalIP.GetStatus().GetStateTransitionTime().AsTime()
+		Expect(t.externalIP.GetStatus().GetState()).To(Equal(privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING))
+		Expect(pendingAt).To(BeTemporally(">=", before))
+
+		t.setDefaults()
+		Expect(t.externalIP.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(pendingAt))
+	})
+
+	It("timestamps fallback pending and failure transitions without resetting repeated states", func() {
+		oldTime := timestamppb.New(time.Date(2026, time.January, 1, 9, 0, 0, 0, time.UTC))
+		t := &task{externalIP: privatev1.ExternalIP_builder{
+			Id: "eip-fallback-failure-time",
+			Status: privatev1.ExternalIPStatus_builder{
+				State:               privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED,
+				StateTransitionTime: oldTime,
+			}.Build(),
+		}.Build()}
+
+		beforePending := time.Now().UTC()
+		t.setPending(errors.New("temporary reconciliation error"))
+		pendingAt := t.externalIP.GetStatus().GetStateTransitionTime().AsTime()
+		Expect(t.externalIP.GetStatus().GetState()).To(Equal(privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING))
+		Expect(pendingAt).To(BeTemporally(">=", beforePending))
+		t.setPending(errors.New("still pending"))
+		Expect(t.externalIP.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(pendingAt))
+
+		beforeFailure := time.Now().UTC()
+		t.setFailed(errors.New("permanent reconciliation error"))
+		failedAt := t.externalIP.GetStatus().GetStateTransitionTime().AsTime()
+		Expect(t.externalIP.GetStatus().GetState()).To(Equal(privatev1.ExternalIPState_EXTERNAL_IP_STATE_FAILED))
+		Expect(failedAt).To(BeTemporally(">=", beforeFailure))
+		t.setFailed(errors.New("still failed"))
+		Expect(t.externalIP.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(failedAt))
 	})
 })
 

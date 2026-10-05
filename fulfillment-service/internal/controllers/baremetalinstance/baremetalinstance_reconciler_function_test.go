@@ -1584,6 +1584,22 @@ var _ = Describe("syncStatus", func() {
 			Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_PROVISIONING))
 	})
 
+	It("timestamps the initial PROVISIONING state in defaults and preserves it", func() {
+		t := &task{
+			r:                 &function{logger: logger},
+			bareMetalInstance: privatev1.BareMetalInstance_builder{Id: "bmi-initial-state-time"}.Build(),
+		}
+		before := time.Now().UTC()
+		t.setDefaults()
+		firstTransition := t.bareMetalInstance.GetStatus().GetStateTransitionTime()
+		Expect(t.bareMetalInstance.GetStatus().GetState()).To(Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_PROVISIONING))
+		Expect(firstTransition).NotTo(BeNil())
+		Expect(firstTransition.AsTime()).To(BeTemporally(">=", before))
+
+		t.setDefaults()
+		Expect(t.bareMetalInstance.GetStatus().GetStateTransitionTime()).To(Equal(firstTransition))
+	})
+
 	It("should not change state when phase is empty", func() {
 		t := newTask(0)
 		object := &bmfov1alpha1.BareMetalInstance{}
@@ -1707,6 +1723,26 @@ var _ = Describe("syncStatus", func() {
 		t.syncStatus(object)
 
 		Expect(t.bareMetalInstance.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(transitionTime.AsTime()))
+	})
+
+	It("should advance state_transition_time when the observed state changes", func() {
+		runningSince := time.Date(2026, time.January, 1, 9, 0, 0, 0, time.UTC)
+		stoppedAt := time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
+		t := &task{
+			r: &function{logger: logger},
+			bareMetalInstance: privatev1.BareMetalInstance_builder{
+				Id: "bmi-changed-state-time",
+				Status: privatev1.BareMetalInstanceStatus_builder{
+					State:               privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING,
+					StateTransitionTime: timestamppb.New(runningSince),
+				}.Build(),
+			}.Build(),
+		}
+		transition := metav1.NewTime(stoppedAt)
+
+		t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_STOPPED, &transition)
+		Expect(t.bareMetalInstance.GetStatus().GetState()).To(Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_STOPPED))
+		Expect(t.bareMetalInstance.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(stoppedAt))
 	})
 
 	It("should map Ready phase with PowerOff condition to STOPPED state", func() {

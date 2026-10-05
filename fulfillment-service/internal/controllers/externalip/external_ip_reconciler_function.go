@@ -24,6 +24,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -246,7 +247,7 @@ func (t *task) setDefaults() {
 		t.externalIP.SetStatus(&privatev1.ExternalIPStatus{})
 	}
 	if t.externalIP.GetStatus().GetState() == privatev1.ExternalIPState_EXTERNAL_IP_STATE_UNSPECIFIED {
-		t.externalIP.GetStatus().SetState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING)
+		t.setState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING)
 	}
 }
 
@@ -404,7 +405,7 @@ func (t *task) setPending(err error) {
 	if !t.externalIP.HasStatus() {
 		t.externalIP.SetStatus(&privatev1.ExternalIPStatus{})
 	}
-	t.externalIP.GetStatus().SetState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING)
+	t.setState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING)
 	t.externalIP.GetStatus().SetMessage(err.Error())
 }
 
@@ -412,8 +413,17 @@ func (t *task) setFailed(err error) {
 	if !t.externalIP.HasStatus() {
 		t.externalIP.SetStatus(&privatev1.ExternalIPStatus{})
 	}
-	t.externalIP.GetStatus().SetState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_FAILED)
+	t.setState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_FAILED)
 	t.externalIP.GetStatus().SetMessage(err.Error())
+}
+
+func (t *task) setState(state privatev1.ExternalIPState) {
+	status := t.externalIP.GetStatus()
+	if status.GetState() == state {
+		return
+	}
+	status.SetState(state)
+	status.SetStateTransitionTime(timestamppb.Now())
 }
 
 // buildSpec constructs the spec map for the Kubernetes ExternalIP object based on the

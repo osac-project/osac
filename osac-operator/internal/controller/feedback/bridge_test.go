@@ -142,6 +142,16 @@ func newRequest() reconcile.Request {
 	}
 }
 
+var _ = Describe("field issues", func() {
+	It("excludes only the invalid update-mask paths", func() {
+		paths := ExcludeUpdateMaskPaths(
+			[]string{"status.conditions", "status.instance_type", "status.instance_type_transition_time", "status.state"},
+			[]string{"status.instance_type", "status.instance_type_transition_time"},
+		)
+		Expect(paths).To(Equal([]string{"status.conditions", "status.state"}))
+	})
+})
+
 var _ = Describe("Bridge", func() {
 	var (
 		ctx context.Context
@@ -471,6 +481,48 @@ var _ = Describe("Bridge", func() {
 	})
 
 	Context("error propagation", func() {
+		It("saves unrelated feedback and notifies when source fields are invalid", func() {
+			cr := &v1alpha1.Subnet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       testName,
+					Namespace:  testNamespace,
+					Labels:     map[string]string{testIDLabel: testID},
+					Finalizers: []string{testFinalizer},
+				},
+			}
+			trk := newTracker()
+			trk.syncUpdateFn = func(_ context.Context, _ *v1alpha1.Subnet, remote *privatev1.Subnet) error {
+				remote.GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_READY)
+				remote.GetStatus().SetMessage("state synced")
+				return FieldIssues{{
+					Paths: []string{"status.state_transition_time"},
+					Err:   errors.New("missing transition time"),
+				}}
+			}
+			k8sClient := newFakeClient(cr)
+			bridge := newBridge(k8sClient, trk)
+			var excluded []string
+			bridge.SaveWithExcludedPaths = func(ctx context.Context, remote *privatev1.Subnet, paths []string) error {
+				excluded = paths
+				return trk.save(ctx, remote)
+			}
+			notifications := 0
+			bridge.NotifyFieldIssue = func(_ context.Context, kind, id string, issue FieldIssue) {
+				Expect(kind).To(Equal("Subnet"))
+				Expect(id).To(Equal(testID))
+				Expect(issue.Err).To(MatchError("missing transition time"))
+				notifications++
+			}
+
+			_, err := bridge.Reconcile(ctx, newRequest())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(trk.saveCalls).To(Equal(1))
+			Expect(trk.savedRemote.GetStatus().GetState()).To(Equal(privatev1.SubnetState_SUBNET_STATE_READY))
+			Expect(trk.savedRemote.GetStatus().GetMessage()).To(Equal("state synced"))
+			Expect(excluded).To(ConsistOf("status.state_transition_time"))
+			Expect(notifications).To(Equal(1))
+		})
+
 		It("should propagate Save errors and skip Signal", func() {
 			cr := &v1alpha1.Subnet{
 				ObjectMeta: metav1.ObjectMeta{

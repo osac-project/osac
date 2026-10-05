@@ -318,8 +318,7 @@ func (t *task) setDefaults() {
 		t.computeInstance.SetStatus(&privatev1.ComputeInstanceStatus{})
 	}
 	if t.computeInstance.GetStatus().GetState() == privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_UNSPECIFIED {
-		t.computeInstance.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING)
-		t.computeInstance.GetStatus().SetStateTransitionTime(timestamppb.Now())
+		t.setState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING)
 	}
 	for value := range privatev1.ComputeInstanceConditionType_name {
 		if value != 0 {
@@ -562,13 +561,22 @@ func (t *task) setFailed(err error) {
 	if !t.computeInstance.HasStatus() {
 		t.computeInstance.SetStatus(&privatev1.ComputeInstanceStatus{})
 	}
-	t.computeInstance.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED)
+	t.setState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED)
 	t.updateCondition(
 		privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_CONFIGURATION_APPLIED,
 		privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
 		"ValidationFailed",
 		err.Error(),
 	)
+}
+
+func (t *task) setState(state privatev1.ComputeInstanceState) {
+	status := t.computeInstance.GetStatus()
+	if status.GetState() == state {
+		return
+	}
+	status.SetState(state)
+	status.SetStateTransitionTime(timestamppb.Now())
 }
 
 // updateCondition updates or creates a condition with the specified type, status, reason, and message.
@@ -607,11 +615,7 @@ func (t *task) setReconciliationFailedWithReason(err error, reason string) {
 	if !t.computeInstance.HasStatus() {
 		t.computeInstance.SetStatus(&privatev1.ComputeInstanceStatus{})
 	}
-	if t.computeInstance.GetStatus().GetState() != privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED ||
-		t.computeInstance.GetStatus().GetStateTransitionTime() == nil {
-		t.computeInstance.GetStatus().SetStateTransitionTime(timestamppb.Now())
-	}
-	t.computeInstance.GetStatus().SetState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED)
+	t.setState(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED)
 	t.updateCondition(
 		privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_PROVISIONED,
 		privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
@@ -743,6 +747,7 @@ func (t *task) addExplicitFields(ctx context.Context, spec *osacv1alpha1.Compute
 		return fmt.Errorf("failed to resolve instance type '%s': %w", instanceTypeKey, err)
 	}
 	itSpec := response.GetObject().GetSpec()
+	spec.InstanceType = response.GetObject().GetMetadata().GetName()
 	spec.VCPUs = itSpec.GetVcpus()
 	spec.MemoryGiB = itSpec.GetMemoryGib()
 	if gpu := itSpec.GetGpu(); gpu != nil {

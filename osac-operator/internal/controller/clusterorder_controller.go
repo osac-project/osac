@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	configv1 "github.com/openshift/api/config/v1"
 	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -328,7 +329,11 @@ func (r *ClusterOrderReconciler) patchStatusWithRetry(ctx context.Context, key c
 			return err
 		}
 		base := latest.DeepCopy()
-		latest.Status.Phase = computed.Phase
+		transitionTime := metav1.Now()
+		if computed.Phase == v1alpha1.ClusterOrderPhaseDeleting && latest.DeletionTimestamp != nil {
+			transitionTime = *latest.DeletionTimestamp.DeepCopy()
+		}
+		setState(&latest.Status.Phase, &latest.Status.StateTransitionTime, computed.Phase, transitionTime)
 		latest.Status.ClusterReference = computed.ClusterReference
 		latest.Status.NodeRequests = computed.NodeRequests
 		latest.Status.NodeSets = computed.NodeSets
@@ -336,6 +341,8 @@ func (r *ClusterOrderReconciler) patchStatusWithRetry(ctx context.Context, key c
 		latest.Status.DesiredConfigVersion = computed.DesiredConfigVersion
 		latest.Status.ApiEndpoint = computed.ApiEndpoint
 		latest.Status.IngressEndpoint = computed.IngressEndpoint
+		latest.Status.ReleaseImage = computed.ReleaseImage
+		latest.Status.ReleaseImageTransitionTime = computed.ReleaseImageTransitionTime
 		latest.Status.Workers = computed.Workers
 		for _, c := range computed.Conditions {
 			apimeta.SetStatusCondition(&latest.Status.Conditions, c)
@@ -558,6 +565,7 @@ func (r *ClusterOrderReconciler) handleHostedCluster(ctx context.Context, instan
 
 	name := hc.GetName()
 	instance.SetClusterReferenceHostedClusterName(name)
+	updateAppliedReleaseImage(instance, hc)
 	instance.SetStatusCondition(v1alpha1.ConditionControlPlaneCreated, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
 
 	if instance.Status.Phase == v1alpha1.ClusterOrderPhaseProgressing {
@@ -581,10 +589,16 @@ func (r *ClusterOrderReconciler) handleHostedCluster(ctx context.Context, instan
 
 	// Fetch the node pools and handle them:
 	nodePools := &hypershiftv1beta1.NodePoolList{}
-	if err := r.List(ctx, nodePools, client.InNamespace(hc.Namespace), labelSelectorFromInstance(instance)); err != nil {
+	if r.apiReader == nil {
+		return fmt.Errorf("API reader is not configured; cannot confirm node-pool observations")
+	}
+	if err := r.apiReader.List(ctx, nodePools, client.InNamespace(hc.Namespace), labelSelectorFromInstance(instance)); err != nil {
 		return err
 	}
 	if err := r.handleNodePools(ctx, instance, nodePools); err != nil {
+		return err
+	}
+	if err := recordRemovedNodeSetSizes(instance, nodePools.Items); err != nil {
 		return err
 	}
 	// A successful provisioning job only means that the infrastructure request
@@ -742,20 +756,36 @@ func (r *ClusterOrderReconciler) handleNodePool(ctx context.Context, instance *v
 		return nil
 	}
 
-	// Find the matching item inside the `nodeRequests` field of the status, or create a new one if there is no
-	// matching item yet.
-	var nodeRequestStatus *v1alpha1.NodeRequest
+	// Prefer the current spec identity. A re-key with the same resource class
+	// belongs to the new node set, not the historical status entry.
+	nodeSetID, err := nodeSetIDForResourceClass(instance.Spec.NodeRequests, resourceClass)
+	if err != nil {
+		return err
+	}
+	if nodeSetID == "" {
+		nodeSetID = latestNodeSetIDForResourceClass(instance.Status.NodeRequests, resourceClass)
+	}
+	if nodeSetID == "" {
+		log.Info("node pool has no matching current or observed node-set identity", "resource_class", resourceClass)
+		return nil
+	}
+
+	// Find the status request by stable node-set identity, not resource class.
+	var nodeRequestStatus *v1alpha1.NodeRequestStatus
 	for i, nodeRequestsItem := range instance.Status.NodeRequests {
-		log.Info("looking for resource class", "want", resourceClass, "have", nodeRequestsItem.ResourceClass)
-		if nodeRequestsItem.ResourceClass == resourceClass {
+		if nodeRequestsItem.NodeSetID == nodeSetID {
 			nodeRequestStatus = &instance.Status.NodeRequests[i]
+			break
 		}
 	}
 	if nodeRequestStatus == nil {
-		instance.Status.NodeRequests = append(instance.Status.NodeRequests, v1alpha1.NodeRequest{
+		instance.Status.NodeRequests = append(instance.Status.NodeRequests, v1alpha1.NodeRequestStatus{
+			NodeSetID:     nodeSetID,
 			ResourceClass: resourceClass,
 		})
 		nodeRequestStatus = &instance.Status.NodeRequests[len(instance.Status.NodeRequests)-1]
+	} else if nodeRequestStatus.ResourceClass != resourceClass {
+		return fmt.Errorf("node set %q changed resource class from %q to %q", nodeSetID, nodeRequestStatus.ResourceClass, resourceClass)
 	}
 
 	// Update the selected `nodeRequests` item:
@@ -771,8 +801,125 @@ func (r *ClusterOrderReconciler) handleNodePool(ctx context.Context, instance *v
 		)
 		nodeRequestStatus.NumberOfNodes = newValue
 	}
+	updateObservedNodeSetSize(instance, nodeSetID, nodePool.Status.Replicas)
 
 	return nil
+}
+
+func updateObservedNodeSetSize(instance *v1alpha1.ClusterOrder, nodeSetID string, replicas int32) {
+	for i := range instance.Status.NodeSets {
+		nodeSet := &instance.Status.NodeSets[i]
+		if nodeSet.Name != nodeSetID {
+			continue
+		}
+		if nodeSet.Size == replicas && nodeSet.SizeTransitionTime != nil {
+			return
+		}
+		nodeSet.Size = replicas
+		transitionTime := metav1.NewTime(time.Now().UTC())
+		nodeSet.SizeTransitionTime = &transitionTime
+		return
+	}
+	transitionTime := metav1.NewTime(time.Now().UTC())
+	instance.Status.NodeSets = append(instance.Status.NodeSets, v1alpha1.NodeSetStatus{
+		Name:               nodeSetID,
+		Size:               replicas,
+		SizeTransitionTime: &transitionTime,
+	})
+}
+
+// recordRemovedNodeSetSizes treats a missing NodePool as confirmed removal, so
+// callers must pass the authoritative APIReader list, never the manager cache.
+func recordRemovedNodeSetSizes(instance *v1alpha1.ClusterOrder, nodePools []hypershiftv1beta1.NodePool) error {
+	requested := make(map[string]struct{}, len(instance.Spec.NodeRequests))
+	for _, request := range instance.Spec.NodeRequests {
+		if request.NodeSetID == "" {
+			return fmt.Errorf("node request for resource class %q has no nodeSetID", request.ResourceClass)
+		}
+		requested[request.NodeSetID] = struct{}{}
+	}
+
+	live := make(map[string]struct{}, len(nodePools))
+	for i := range nodePools {
+		resourceClass, ok := nodePoolResourceClass(&nodePools[i])
+		if !ok {
+			continue
+		}
+		nodeSetID, err := nodeSetIDForResourceClass(instance.Spec.NodeRequests, resourceClass)
+		if err != nil {
+			return err
+		}
+		if nodeSetID == "" {
+			nodeSetID = latestNodeSetIDForResourceClass(instance.Status.NodeRequests, resourceClass)
+		}
+		if nodeSetID != "" {
+			live[nodeSetID] = struct{}{}
+		}
+	}
+	for i := range instance.Status.NodeRequests {
+		request := &instance.Status.NodeRequests[i]
+		if request.NodeSetID == "" {
+			return fmt.Errorf("observed node request for resource class %q has no nodeSetID", request.ResourceClass)
+		}
+		if _, stillRequested := requested[request.NodeSetID]; stillRequested {
+			continue
+		}
+		if _, stillPresent := live[request.NodeSetID]; stillPresent {
+			continue
+		}
+		request.NumberOfNodes = 0
+		updateObservedNodeSetSize(instance, request.NodeSetID, 0)
+	}
+
+	return nil
+}
+
+func nodeSetIDForResourceClass(requests []v1alpha1.NodeRequest, resourceClass string) (string, error) {
+	var nodeSetID string
+	for _, request := range requests {
+		if request.ResourceClass != resourceClass {
+			continue
+		}
+		if request.NodeSetID == "" {
+			return "", fmt.Errorf("node request for resource class %q has no nodeSetID", resourceClass)
+		}
+		if nodeSetID != "" && nodeSetID != request.NodeSetID {
+			return "", fmt.Errorf("multiple desired node sets use resource class %q", resourceClass)
+		}
+		nodeSetID = request.NodeSetID
+	}
+	return nodeSetID, nil
+}
+
+func latestNodeSetIDForResourceClass(requests []v1alpha1.NodeRequestStatus, resourceClass string) string {
+	for i := len(requests) - 1; i >= 0; i-- {
+		if requests[i].ResourceClass == resourceClass {
+			return requests[i].NodeSetID
+		}
+	}
+	return ""
+}
+
+func updateAppliedReleaseImage(instance *v1alpha1.ClusterOrder, hostedCluster *hypershiftv1beta1.HostedCluster) {
+	if hostedCluster.Status.Version == nil {
+		return
+	}
+	var latestImage string
+	var latestCompletionTime *metav1.Time
+	for _, update := range hostedCluster.Status.Version.History {
+		if update.State != configv1.CompletedUpdate || update.Image == "" || update.CompletionTime == nil {
+			continue
+		}
+		if latestCompletionTime == nil || update.CompletionTime.After(latestCompletionTime.Time) {
+			latestImage = update.Image
+			latestCompletionTime = update.CompletionTime
+		}
+	}
+	if latestCompletionTime == nil || instance.Status.ReleaseImage == latestImage {
+		return
+	}
+	instance.Status.ReleaseImage = latestImage
+	instance.Status.ReleaseImageTransitionTime = latestCompletionTime.DeepCopy()
 }
 
 func hostedClusterControlPlaneIsAvailable(hc *hypershiftv1beta1.HostedCluster) bool {

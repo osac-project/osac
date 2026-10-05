@@ -273,13 +273,8 @@ func (r *VolumeReconciler) handleUpdate(ctx context.Context, vol *v1alpha1.Volum
 		return ctrl.Result{RequeueAfter: statusStampPollInterval}, nil
 	}
 
-	previousPhase := vol.Status.Phase
 	if vol.Status.Phase == "" {
-		vol.Status.Phase = v1alpha1.VolumePhaseProgressing
-	}
-	if vol.Status.Phase != previousPhase {
-		now := metav1.Now()
-		vol.Status.StateTransitionTime = &now
+		setVolumePhase(vol, v1alpha1.VolumePhaseProgressing)
 	}
 
 	if vol.Status.Phase == v1alpha1.VolumePhaseReady {
@@ -316,7 +311,7 @@ func (r *VolumeReconciler) handleProvisioning(ctx context.Context, vol *v1alpha1
 	// vendor controller is configured.
 	if len(r.VendorProvisioners) == 0 {
 		log.Info("no vendor provisioner configured; leaving volume in Progressing (provisioning skipped)")
-		vol.Status.Phase = v1alpha1.VolumePhaseProgressing
+		setVolumePhase(vol, v1alpha1.VolumePhaseProgressing)
 		return ctrl.Result{}, nil
 	}
 
@@ -324,7 +319,7 @@ func (r *VolumeReconciler) handleProvisioning(ctx context.Context, vol *v1alpha1
 	provisioner, err := r.VendorProvisioners.Lookup(provider)
 	if err != nil {
 		log.Error(err, "volume provider is not implemented", "provider", provider)
-		vol.Status.Phase = v1alpha1.VolumePhaseFailed
+		setVolumePhase(vol, v1alpha1.VolumePhaseFailed)
 		setVendorProvisionedCondition(&vol.Status.Conditions, metav1.ConditionFalse, "ProviderNotImplemented", err.Error())
 		return ctrl.Result{}, nil
 	}
@@ -343,15 +338,13 @@ func (r *VolumeReconciler) handleProvisioning(ctx context.Context, vol *v1alpha1
 	})
 	if err != nil {
 		log.Error(err, "vendor provisioning failed")
-		vol.Status.Phase = v1alpha1.VolumePhaseFailed
-		now := metav1.Now()
-		vol.Status.StateTransitionTime = &now
+		setVolumePhase(vol, v1alpha1.VolumePhaseFailed)
 		setVendorProvisionedCondition(&vol.Status.Conditions, metav1.ConditionFalse, "ProvisioningFailed", err.Error())
 		return ctrl.Result{}, nil
 	}
 	vol.Status.VendorContext = resp.VendorContext
 	if resp.Pending {
-		vol.Status.Phase = v1alpha1.VolumePhaseProgressing
+		setVolumePhase(vol, v1alpha1.VolumePhaseProgressing)
 		return ctrl.Result{}, nil
 	}
 	if resp.VendorVolumeID == "" {
@@ -364,9 +357,7 @@ func (r *VolumeReconciler) handleProvisioning(ctx context.Context, vol *v1alpha1
 	vol.Status.VendorVolumeID = resp.VendorVolumeID
 	vol.Status.Protocol = v1alpha1.VolumeProtocol(resp.Protocol)
 	vol.Status.ProvisionedSizeGiB = vol.Spec.SizeGiB
-	vol.Status.Phase = v1alpha1.VolumePhaseReady
-	now := metav1.Now()
-	vol.Status.StateTransitionTime = &now
+	setVolumePhase(vol, v1alpha1.VolumePhaseReady)
 	setVendorProvisionedCondition(&vol.Status.Conditions, metav1.ConditionTrue, "Provisioned", "Volume provisioned on vendor storage array")
 
 	log.Info("vendor provisioning succeeded",
@@ -379,11 +370,13 @@ func (r *VolumeReconciler) handleProvisioning(ctx context.Context, vol *v1alpha1
 }
 
 func (r *VolumeReconciler) failProvisioning(vol *v1alpha1.Volume, message string) (ctrl.Result, error) {
-	vol.Status.Phase = v1alpha1.VolumePhaseFailed
-	now := metav1.Now()
-	vol.Status.StateTransitionTime = &now
+	setVolumePhase(vol, v1alpha1.VolumePhaseFailed)
 	setVendorProvisionedCondition(&vol.Status.Conditions, metav1.ConditionFalse, "ProvisioningFailed", message)
 	return ctrl.Result{}, nil
+}
+
+func setVolumePhase(vol *v1alpha1.Volume, phase v1alpha1.VolumePhaseType) {
+	setState(&vol.Status.Phase, &vol.Status.StateTransitionTime, phase, metav1.Now())
 }
 
 // handleDelete runs when the Volume CR has a deletion timestamp. It calls the
@@ -403,11 +396,8 @@ func (r *VolumeReconciler) handleDelete(ctx context.Context, vol *v1alpha1.Volum
 		return ctrl.Result{}, nil
 	}
 
-	phaseChanged := vol.Status.Phase != v1alpha1.VolumePhaseDeleting
-	if phaseChanged {
-		vol.Status.Phase = v1alpha1.VolumePhaseDeleting
-		now := metav1.Now()
-		vol.Status.StateTransitionTime = &now
+	if vol.Status.Phase != v1alpha1.VolumePhaseDeleting {
+		setVolumePhase(vol, v1alpha1.VolumePhaseDeleting)
 		return ctrl.Result{}, nil
 	}
 
@@ -448,9 +438,7 @@ func (r *VolumeReconciler) handleDelete(ctx context.Context, vol *v1alpha1.Volum
 		log.Info("vendor deprovisioning succeeded", "vendorVolumeID", vol.Status.VendorVolumeID)
 	}
 
-	vol.Status.Phase = v1alpha1.VolumePhaseDeleted
-	now := metav1.Now()
-	vol.Status.StateTransitionTime = &now
+	setVolumePhase(vol, v1alpha1.VolumePhaseDeleted)
 
 	return ctrl.Result{}, nil
 }

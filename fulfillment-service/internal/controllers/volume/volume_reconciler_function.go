@@ -26,6 +26,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
@@ -158,7 +159,9 @@ func (t *task) update(ctx context.Context) error {
 		return nil
 	}
 
-	t.setDefaults()
+	if err := t.setDefaults(); err != nil {
+		return err
+	}
 
 	if err := t.validateTenant(); err != nil {
 		t.setFailed(err)
@@ -235,13 +238,18 @@ func (t *task) update(ctx context.Context) error {
 	return nil
 }
 
-func (t *task) setDefaults() {
+func (t *task) setDefaults() error {
 	if !t.volume.HasStatus() {
 		t.volume.SetStatus(&privatev1.VolumeStatus{})
 	}
 	if t.volume.GetStatus().GetState() == privatev1.VolumeState_VOLUME_STATE_UNSPECIFIED {
-		t.volume.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_CREATING)
+		creationTime := t.volume.GetMetadata().GetCreationTimestamp()
+		if creationTime == nil {
+			return errors.New("volume creation timestamp is missing")
+		}
+		t.setState(privatev1.VolumeState_VOLUME_STATE_CREATING, creationTime)
 	}
+	return nil
 }
 
 func (t *task) validateTenant() error {
@@ -406,8 +414,17 @@ func (t *task) setFailed(err error) {
 	if !t.volume.HasStatus() {
 		t.volume.SetStatus(&privatev1.VolumeStatus{})
 	}
-	t.volume.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_FAILED)
+	t.setState(privatev1.VolumeState_VOLUME_STATE_FAILED, timestamppb.Now())
 	t.volume.GetStatus().SetMessage(err.Error())
+}
+
+func (t *task) setState(state privatev1.VolumeState, transitionTime *timestamppb.Timestamp) {
+	status := t.volume.GetStatus()
+	if status.GetState() == state {
+		return
+	}
+	status.SetState(state)
+	status.SetStateTransitionTime(proto.Clone(transitionTime).(*timestamppb.Timestamp))
 }
 
 // buildSpec maps the proto VolumeSpec to the osac-operator CRD VolumeSpec.

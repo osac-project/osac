@@ -286,7 +286,7 @@ message ClusterStatus {
   // is in progress, or if the system can't apply the changes requested by the user.
   //
   // The key of the map is the unique identifier of the node set for this cluster.
-  map<string, ClusterNodeSet> node_sets = 5 [(buf.validate.field).map.keys.string = {
+  map<string, ClusterNodeSetStatus> node_sets = 5 [(buf.validate.field).map.keys.string = {
     min_len: 1,
     max_len: 63,
     pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
@@ -331,6 +331,17 @@ message ClusterStatus {
   // Per-operator installation state, synced from the ClusterOrder's
   // AddOnOperatorJobs via the feedback controller.
   repeated AddOnOperatorStatus add_on_operators = 12;
+  // The release image currently applied to the cluster.
+  string release_image = 13 [
+    (cleanapi.field).private = true,
+    (google.api.field_behavior) = OUTPUT_ONLY
+  ];
+
+  // Time at which the applied release image changed.
+  optional google.protobuf.Timestamp release_image_transition_time = 14 [
+    (cleanapi.field).private = true,
+    (google.api.field_behavior) = OUTPUT_ONLY
+  ];
 }
 
 // Represents the overall state of a cluster.
@@ -433,6 +444,27 @@ message ClusterNodeSet {
   // Set by the system when the cluster is initially created, according to the template selected
   // by the user. The user will not have permission to change this field.
   BareMetalInstanceTypeLocalReference baremetal_instance_type = 4;
+}
+
+// Defines the observed state of a cluster node set.
+message ClusterNodeSetStatus {
+  // Identifier of the type of hosts that are part of the set.
+  HostTypeReference host_type = 1 [deprecated = true];
+
+  // Number of nodes currently observed in the set. Zero means the set has been removed.
+  optional int32 size = 2 [(buf.validate.field).int32.gte = 0];
+
+  // Name of the network port used for tenant fabric traffic.
+  string fabric_interface = 3 [(cleanapi.field).private = true];
+
+  // Reference to the BareMetalInstanceType observed for nodes in this set.
+  BareMetalInstanceTypeLocalReference baremetal_instance_type = 4;
+
+  // Time at which the observed node-set size changed.
+  optional google.protobuf.Timestamp size_transition_time = 5 [
+    (cleanapi.field).private = true,
+    (google.api.field_behavior) = OUTPUT_ONLY
+  ];
 }
 
 // Local reference to a Cluster resource.

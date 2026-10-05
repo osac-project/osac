@@ -331,4 +331,22 @@ var _ = Describe("User data secret validation", func() {
 			created.GetObject(), candidate, request.GetUpdateMask(),
 		)).To(Succeed())
 	})
+
+	It("rejects changing the BareMetal instance type after creation", func() {
+		current := privatev1.BareMetalInstance_builder{
+			Spec: privatev1.BareMetalInstanceSpec_builder{
+				InstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "type-a"}.Build(),
+			}.Build(),
+		}.Build()
+		candidate := proto.Clone(current).(*privatev1.BareMetalInstance)
+		candidate.GetSpec().SetInstanceType(
+			privatev1.BareMetalInstanceTypeReference_builder{Id: "type-b"}.Build(),
+		)
+
+		err := validateBareMetalImmutability(current, candidate,
+			&fieldmaskpb.FieldMask{Paths: []string{"spec.instance_type"}})
+
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		Expect(err.Error()).To(ContainSubstring("instance_type is immutable"))
+	})
 })

@@ -23,42 +23,19 @@ import (
 )
 
 func setExternalIPState(status *v1alpha1.ExternalIPStatus, state v1alpha1.ExternalIPStateType) {
-	if status.State == state {
-		return
-	}
-	status.State = state
-	now := metav1.Now()
-	status.StateTransitionTime = &now
+	setState(&status.State, &status.StateTransitionTime, state, metav1.Now())
 }
 
 func setExternalIPDeleting(status *v1alpha1.ExternalIPStatus) bool {
-	if status.Phase == v1alpha1.ExternalIPPhaseDeleting {
-		return false
-	}
-	status.Phase = v1alpha1.ExternalIPPhaseDeleting
-	now := metav1.Now()
-	status.StateTransitionTime = &now
-	return true
+	return setState(&status.Phase, &status.StateTransitionTime, v1alpha1.ExternalIPPhaseDeleting, metav1.Now())
 }
 
 func setExternalIPAttachmentPhase(status *v1alpha1.ExternalIPAttachmentStatus, phase v1alpha1.ExternalIPAttachmentPhaseType) bool {
-	if status.Phase == phase {
-		return false
-	}
-	status.Phase = phase
-	now := metav1.Now()
-	status.StateTransitionTime = &now
-	return true
+	return setState(&status.Phase, &status.StateTransitionTime, phase, metav1.Now())
 }
 
 func setNATGatewayPhase(status *v1alpha1.NATGatewayStatus, phase v1alpha1.NATGatewayPhaseType) bool {
-	if status.Phase == phase {
-		return false
-	}
-	status.Phase = phase
-	now := metav1.Now()
-	status.StateTransitionTime = &now
-	return true
+	return setState(&status.Phase, &status.StateTransitionTime, phase, metav1.Now())
 }
 
 // backfillAttachmentStateTransitionTime stamps a first-observed time on

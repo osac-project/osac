@@ -24,6 +24,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -181,6 +182,7 @@ func (s *PrivateVolumesServer) Create(ctx context.Context,
 	// populated only by the operator feedback path after vendor provisioning.
 	vol.GetStatus().SetVendorContext(nil)
 	vol.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_CREATING)
+	vol.GetStatus().SetStateTransitionTime(timestamppb.Now())
 	vol.GetStatus().SetProvider(resolved.Provider)
 	vol.GetStatus().SetProtocol(resolved.Protocol)
 

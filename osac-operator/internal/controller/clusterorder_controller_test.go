@@ -23,6 +23,7 @@ import (
 	"github.com/go-logr/logr"
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
+	configv1 "github.com/openshift/api/config/v1"
 	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -569,7 +570,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 				},
 				Spec: v1alpha1.ClusterOrderSpec{
 					AddOnOperators: []string{"operator-one"},
-					NodeRequests:   []v1alpha1.NodeRequest{{ResourceClass: "worker", NumberOfNodes: 1}},
+					NodeRequests:   []v1alpha1.NodeRequest{{NodeSetID: "workers", ResourceClass: "worker", NumberOfNodes: 1}},
 				},
 			}
 			hc := &hypershiftv1beta1.HostedCluster{Status: hypershiftv1beta1.HostedClusterStatus{Conditions: []metav1.Condition{
@@ -602,7 +603,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 					}},
 				},
 				Spec: v1alpha1.ClusterOrderSpec{
-					NodeRequests: []v1alpha1.NodeRequest{{ResourceClass: "worker", NumberOfNodes: 1}},
+					NodeRequests: []v1alpha1.NodeRequest{{NodeSetID: "workers", ResourceClass: "worker", NumberOfNodes: 1}},
 				},
 			}
 			hc := &hypershiftv1beta1.HostedCluster{
@@ -623,10 +624,12 @@ var _ = Describe("ClusterOrder Controller", func() {
 					agentResourceClassLabel:   "worker",
 				},
 			}
-			reconciler.Client = fake.NewClientBuilder().
+			testClient := fake.NewClientBuilder().
 				WithScheme(k8sClient.Scheme()).
 				WithObjects(&nodePool).
 				Build()
+			reconciler.Client = testClient
+			reconciler.apiReader = testClient
 
 			Expect(reconciler.handleHostedCluster(ctx, instance, hc)).To(Succeed())
 			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseReady))
@@ -640,31 +643,31 @@ var _ = Describe("ClusterOrder Controller", func() {
 				Expect(nodePoolsMatchRequests(requests, nodePools)).To(Equal(expected))
 			},
 			Entry("all pools match", []v1alpha1.NodeRequest{
-				{ResourceClass: "gpu", NumberOfNodes: 2},
-				{ResourceClass: "worker", NumberOfNodes: 3},
+				{NodeSetID: "gpu", ResourceClass: "gpu", NumberOfNodes: 2},
+				{NodeSetID: "workers", ResourceClass: "worker", NumberOfNodes: 3},
 			}, []hypershiftv1beta1.NodePool{
 				readyClusterOrderNodePool("gpu", 2), readyClusterOrderNodePool("worker", 3),
 			}, true),
 			Entry("one pool is under capacity", []v1alpha1.NodeRequest{
-				{ResourceClass: "gpu", NumberOfNodes: 2},
-				{ResourceClass: "worker", NumberOfNodes: 3},
+				{NodeSetID: "gpu", ResourceClass: "gpu", NumberOfNodes: 2},
+				{NodeSetID: "workers", ResourceClass: "worker", NumberOfNodes: 3},
 			}, []hypershiftv1beta1.NodePool{
 				readyClusterOrderNodePool("gpu", 1), readyClusterOrderNodePool("worker", 3),
 			}, false),
 			Entry("one pool is over capacity", []v1alpha1.NodeRequest{
-				{ResourceClass: "gpu", NumberOfNodes: 2},
-				{ResourceClass: "worker", NumberOfNodes: 3},
+				{NodeSetID: "gpu", ResourceClass: "gpu", NumberOfNodes: 2},
+				{NodeSetID: "workers", ResourceClass: "worker", NumberOfNodes: 3},
 			}, []hypershiftv1beta1.NodePool{
 				readyClusterOrderNodePool("gpu", 3), readyClusterOrderNodePool("worker", 3),
 			}, false),
 			Entry("duplicate resource classes do not collapse", []v1alpha1.NodeRequest{
-				{ResourceClass: "worker", NumberOfNodes: 1},
-				{ResourceClass: "worker", NumberOfNodes: 5},
+				{NodeSetID: "worker-a", ResourceClass: "worker", NumberOfNodes: 1},
+				{NodeSetID: "worker-b", ResourceClass: "worker", NumberOfNodes: 5},
 			}, []hypershiftv1beta1.NodePool{
 				readyClusterOrderNodePool("worker", 5),
 			}, false),
 			Entry("duplicate node pool resource classes do not match", []v1alpha1.NodeRequest{
-				{ResourceClass: "worker", NumberOfNodes: 1},
+				{NodeSetID: "workers", ResourceClass: "worker", NumberOfNodes: 1},
 			}, []hypershiftv1beta1.NodePool{
 				readyClusterOrderNodePool("worker", 1), readyClusterOrderNodePool("worker", 1),
 			}, false),
@@ -1027,7 +1030,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 			instance := &v1alpha1.ClusterOrder{
 				Spec: v1alpha1.ClusterOrderSpec{
 					NodeRequests: []v1alpha1.NodeRequest{
-						{ResourceClass: "m1.large", NumberOfNodes: 3},
+						{NodeSetID: "large", ResourceClass: "m1.large", NumberOfNodes: 3},
 					},
 				},
 			}
@@ -1049,21 +1052,249 @@ var _ = Describe("ClusterOrder Controller", func() {
 
 			Expect(instance.Status.NodeRequests).To(HaveLen(1),
 				"status.nodeRequests should have exactly one entry")
+			Expect(instance.Status.NodeRequests[0].NodeSetID).To(Equal("large"))
 			Expect(instance.Status.NodeRequests[0].ResourceClass).To(Equal("m1.large"))
 			Expect(instance.Status.NodeRequests[0].NumberOfNodes).To(Equal(5),
 				"status.nodeRequests[0].numberOfNodes should reflect observed replicas")
+		})
+
+		It("records an actual node-set resize time and preserves it when replicas are unchanged", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{NodeRequests: []v1alpha1.NodeRequest{{
+					NodeSetID: "large", ResourceClass: "m1.large", NumberOfNodes: 5,
+				}}},
+				Status: v1alpha1.ClusterOrderStatus{
+					NodeSets: []v1alpha1.NodeSetStatus{{Name: "large"}},
+				},
+			}
+			nodePool := &hypershiftv1beta1.NodePool{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{agentResourceClassLabel: "m1.large"}},
+				Status:     hypershiftv1beta1.NodePoolStatus{Replicas: 5},
+			}
+
+			before := time.Now().UTC()
+			Expect(reconciler.handleNodePool(ctx, instance, nodePool)).To(Succeed())
+			firstTransition := instance.Status.NodeSets[0].SizeTransitionTime.DeepCopy()
+			Expect(instance.Status.NodeSets[0].Size).To(Equal(int32(5)))
+			Expect(firstTransition.Time).To(BeTemporally(">=", before))
+
+			Expect(reconciler.handleNodePool(ctx, instance, nodePool)).To(Succeed())
+			Expect(instance.Status.NodeSets[0].SizeTransitionTime).To(Equal(firstTransition))
+
+			nodePool.Status.Replicas = 2
+			Expect(reconciler.handleNodePool(ctx, instance, nodePool)).To(Succeed())
+			Expect(instance.Status.NodeSets[0].Size).To(Equal(int32(2)))
+			Expect(instance.Status.NodeSets[0].SizeTransitionTime.Time).To(BeTemporally(">", firstTransition.Time))
+		})
+
+		It("records a zero-size boundary after a removed node pool disappears", func() {
+			previousTransition := metav1.NewTime(time.Date(2026, time.January, 1, 10, 0, 0, 0, time.UTC))
+			instance := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{NodeRequests: []v1alpha1.NodeRequest{
+					{NodeSetID: "small", ResourceClass: "m1.small", NumberOfNodes: 2},
+				}},
+				Status: v1alpha1.ClusterOrderStatus{
+					NodeRequests: []v1alpha1.NodeRequestStatus{{NodeSetID: "large", ResourceClass: "m1.large", NumberOfNodes: 3}, {NodeSetID: "small", ResourceClass: "m1.small", NumberOfNodes: 2}},
+					NodeSets: []v1alpha1.NodeSetStatus{
+						{Name: "large", Size: 3, SizeTransitionTime: &previousTransition},
+						{Name: "small", Size: 2, SizeTransitionTime: &previousTransition},
+					}},
+			}
+			remainingPool := hypershiftv1beta1.NodePool{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{agentResourceClassLabel: "m1.small"}},
+				Status:     hypershiftv1beta1.NodePoolStatus{Replicas: 2},
+			}
+
+			before := time.Now().UTC()
+			Expect(recordRemovedNodeSetSizes(instance, []hypershiftv1beta1.NodePool{remainingPool})).To(Succeed())
+			Expect(instance.Status.NodeSets[0].Size).To(BeZero())
+			removalTime := instance.Status.NodeSets[0].SizeTransitionTime.DeepCopy()
+			Expect(removalTime.Time).To(BeTemporally(">=", before))
+			Expect(instance.Status.NodeSets[1].Size).To(Equal(int32(2)))
+			Expect(instance.Status.NodeSets[1].SizeTransitionTime).To(Equal(&previousTransition))
+			Expect(instance.Status.NodeRequests[0].NumberOfNodes).To(BeZero())
+
+			Expect(recordRemovedNodeSetSizes(instance, []hypershiftv1beta1.NodePool{remainingPool})).To(Succeed())
+			Expect(instance.Status.NodeSets[0].SizeTransitionTime).To(Equal(removalTime), "a repeated observation must not move the removal boundary")
+		})
+
+		It("separates old and new identities when a node set is re-keyed with the same class", func() {
+			previousTransition := metav1.NewTime(time.Date(2026, time.January, 1, 10, 0, 0, 0, time.UTC))
+			instance := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{NodeRequests: []v1alpha1.NodeRequest{{
+					NodeSetID: "workers-new", ResourceClass: "fc430", NumberOfNodes: 2,
+				}}},
+				Status: v1alpha1.ClusterOrderStatus{
+					NodeRequests: []v1alpha1.NodeRequestStatus{{
+						NodeSetID: "workers-old", ResourceClass: "fc430", NumberOfNodes: 2,
+					}},
+					NodeSets: []v1alpha1.NodeSetStatus{{
+						Name: "workers-old", Size: 2, SizeTransitionTime: &previousTransition,
+					}},
+				},
+			}
+			nodePool := &hypershiftv1beta1.NodePool{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{agentResourceClassLabel: "fc430"}},
+				Status:     hypershiftv1beta1.NodePoolStatus{Replicas: 3},
+			}
+
+			before := time.Now().UTC()
+			Expect(reconciler.handleNodePool(ctx, instance, nodePool)).To(Succeed())
+			Expect(recordRemovedNodeSetSizes(instance, []hypershiftv1beta1.NodePool{*nodePool})).To(Succeed())
+
+			Expect(instance.Status.NodeSets).To(HaveLen(2))
+			Expect(instance.Status.NodeSets[0].Name).To(Equal("workers-old"))
+			Expect(instance.Status.NodeSets[0].Size).To(BeZero())
+			Expect(instance.Status.NodeSets[0].SizeTransitionTime.Time).To(BeTemporally(">=", before))
+			Expect(instance.Status.NodeSets[1].Name).To(Equal("workers-new"))
+			Expect(instance.Status.NodeSets[1].Size).To(Equal(int32(3)))
+			Expect(instance.Status.NodeSets[1].SizeTransitionTime.Time).To(BeTemporally(">=", before))
+			Expect(instance.Status.NodeRequests[0].NumberOfNodes).To(BeZero())
+			Expect(instance.Status.NodeRequests[1].NumberOfNodes).To(Equal(3))
+		})
+
+		It("waits for the authoritative NodePool list before recording removal", func() {
+			const clusterOrderName = "stale-nodepool-removal"
+			instance := &v1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{Name: clusterOrderName, Namespace: "default"},
+				Spec: v1alpha1.ClusterOrderSpec{NodeRequests: []v1alpha1.NodeRequest{
+					{NodeSetID: "workers-new", ResourceClass: "m1.small", NumberOfNodes: 2},
+				}},
+				Status: v1alpha1.ClusterOrderStatus{NodeRequests: []v1alpha1.NodeRequestStatus{
+					{NodeSetID: "workers-old", ResourceClass: "m1.large", NumberOfNodes: 3},
+				}},
+			}
+			oldPool := &hypershiftv1beta1.NodePool{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "old-workers",
+					Namespace: "default",
+					Labels: map[string]string{
+						osacClusterOrderNameLabel: clusterOrderName,
+						agentResourceClassLabel:   "m1.large",
+					},
+				},
+				Status: hypershiftv1beta1.NodePoolStatus{Replicas: 3},
+			}
+			currentPool := &hypershiftv1beta1.NodePool{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "current-workers",
+					Namespace: "default",
+					Labels: map[string]string{
+						osacClusterOrderNameLabel: clusterOrderName,
+						agentResourceClassLabel:   "m1.small",
+					},
+				},
+				Status: hypershiftv1beta1.NodePoolStatus{Replicas: 2},
+			}
+			cacheClient := fake.NewClientBuilder().
+				WithScheme(k8sClient.Scheme()).
+				WithObjects(currentPool).
+				Build()
+			authoritativeReader := fake.NewClientBuilder().
+				WithScheme(k8sClient.Scheme()).
+				WithObjects(oldPool, currentPool).
+				Build()
+			reconciler.Client = cacheClient
+			reconciler.apiReader = authoritativeReader
+			hostedCluster := &hypershiftv1beta1.HostedCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: clusterOrderName, Namespace: "default"},
+			}
+			findNodeSet := func(id string) *v1alpha1.NodeSetStatus {
+				for i := range instance.Status.NodeSets {
+					if instance.Status.NodeSets[i].Name == id {
+						return &instance.Status.NodeSets[i]
+					}
+				}
+				return nil
+			}
+
+			beforeFirstObservation := time.Now().UTC()
+			Expect(reconciler.handleHostedCluster(ctx, instance, hostedCluster)).To(Succeed())
+			oldObserved := findNodeSet("workers-old")
+			Expect(oldObserved).NotTo(BeNil())
+			Expect(oldObserved.Size).To(Equal(int32(3)), "a stale cache omission must not close the old worker meter")
+			Expect(oldObserved.SizeTransitionTime.Time).To(BeTemporally(">=", beforeFirstObservation))
+			oldObservedAt := oldObserved.SizeTransitionTime.DeepCopy()
+			currentObserved := findNodeSet("workers-new")
+			Expect(currentObserved).NotTo(BeNil())
+			Expect(currentObserved.Size).To(Equal(int32(2)))
+			currentObservedAt := currentObserved.SizeTransitionTime.DeepCopy()
+
+			Expect(authoritativeReader.Delete(ctx, oldPool)).To(Succeed())
+			beforeRemovalConfirmed := time.Now().UTC()
+			Expect(reconciler.handleHostedCluster(ctx, instance, hostedCluster)).To(Succeed())
+			oldObserved = findNodeSet("workers-old")
+			Expect(oldObserved.Size).To(BeZero())
+			Expect(oldObserved.SizeTransitionTime.Time).To(BeTemporally(">=", beforeRemovalConfirmed))
+			Expect(oldObserved.SizeTransitionTime.Time).To(BeTemporally(">", oldObservedAt.Time))
+			currentObserved = findNodeSet("workers-new")
+			Expect(currentObserved.Size).To(Equal(int32(2)))
+			Expect(currentObserved.SizeTransitionTime).To(Equal(currentObservedAt))
+
+			confirmedRemovalAt := oldObserved.SizeTransitionTime.DeepCopy()
+			Expect(reconciler.handleHostedCluster(ctx, instance, hostedCluster)).To(Succeed())
+			Expect(findNodeSet("workers-old").SizeTransitionTime).To(Equal(confirmedRemovalAt), "repeated authoritative absence must be a no-op")
+			Expect(findNodeSet("workers-new").SizeTransitionTime).To(Equal(currentObservedAt))
+		})
+
+		It("does not reset an existing boundary when a cached list omits a live pool", func() {
+			const clusterOrderName = "cached-nodepool-omission"
+			observedAt := metav1.NewTime(time.Date(2026, time.January, 1, 10, 0, 0, 0, time.UTC))
+			instance := &v1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{Name: clusterOrderName, Namespace: "default"},
+				Spec: v1alpha1.ClusterOrderSpec{NodeRequests: []v1alpha1.NodeRequest{{
+					NodeSetID: "workers-new", ResourceClass: "m1.small", NumberOfNodes: 2,
+				}}},
+				Status: v1alpha1.ClusterOrderStatus{
+					NodeRequests: []v1alpha1.NodeRequestStatus{
+						{NodeSetID: "workers-old", ResourceClass: "m1.large", NumberOfNodes: 3},
+						{NodeSetID: "workers-new", ResourceClass: "m1.small", NumberOfNodes: 2},
+					},
+					NodeSets: []v1alpha1.NodeSetStatus{
+						{Name: "workers-old", Size: 3, SizeTransitionTime: &observedAt},
+						{Name: "workers-new", Size: 2, SizeTransitionTime: &observedAt},
+					},
+				},
+			}
+			oldPool := &hypershiftv1beta1.NodePool{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "old-workers", Namespace: "default",
+					Labels: map[string]string{osacClusterOrderNameLabel: clusterOrderName, agentResourceClassLabel: "m1.large"},
+				},
+				Status: hypershiftv1beta1.NodePoolStatus{Replicas: 3},
+			}
+			currentPool := &hypershiftv1beta1.NodePool{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "current-workers", Namespace: "default",
+					Labels: map[string]string{osacClusterOrderNameLabel: clusterOrderName, agentResourceClassLabel: "m1.small"},
+				},
+				Status: hypershiftv1beta1.NodePoolStatus{Replicas: 2},
+			}
+			cachedClient := fake.NewClientBuilder().WithScheme(k8sClient.Scheme()).WithObjects(currentPool).Build()
+			authoritativeReader := fake.NewClientBuilder().WithScheme(k8sClient.Scheme()).WithObjects(oldPool, currentPool).Build()
+			reconciler.Client = cachedClient
+			reconciler.apiReader = authoritativeReader
+
+			Expect(reconciler.handleHostedCluster(ctx, instance, &hypershiftv1beta1.HostedCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: clusterOrderName, Namespace: "default"},
+			})).To(Succeed())
+
+			Expect(instance.Status.NodeSets[0].Size).To(Equal(int32(3)))
+			Expect(instance.Status.NodeSets[0].SizeTransitionTime).To(Equal(&observedAt))
+			Expect(instance.Status.NodeSets[1].Size).To(Equal(int32(2)))
+			Expect(instance.Status.NodeSets[1].SizeTransitionTime).To(Equal(&observedAt))
 		})
 
 		It("should update existing status entry instead of appending", func() {
 			instance := &v1alpha1.ClusterOrder{
 				Spec: v1alpha1.ClusterOrderSpec{
 					NodeRequests: []v1alpha1.NodeRequest{
-						{ResourceClass: "m1.large", NumberOfNodes: 3},
+						{NodeSetID: "large", ResourceClass: "m1.large", NumberOfNodes: 3},
 					},
 				},
 				Status: v1alpha1.ClusterOrderStatus{
-					NodeRequests: []v1alpha1.NodeRequest{
-						{ResourceClass: "m1.large", NumberOfNodes: 2},
+					NodeRequests: []v1alpha1.NodeRequestStatus{
+						{NodeSetID: "large", ResourceClass: "m1.large", NumberOfNodes: 2},
 					},
 				},
 			}
@@ -1088,8 +1319,8 @@ var _ = Describe("ClusterOrder Controller", func() {
 			instance := &v1alpha1.ClusterOrder{
 				Spec: v1alpha1.ClusterOrderSpec{
 					NodeRequests: []v1alpha1.NodeRequest{
-						{ResourceClass: "m1.large", NumberOfNodes: 3},
-						{ResourceClass: "m1.small", NumberOfNodes: 1},
+						{NodeSetID: "large", ResourceClass: "m1.large", NumberOfNodes: 3},
+						{NodeSetID: "small", ResourceClass: "m1.small", NumberOfNodes: 1},
 					},
 				},
 			}
@@ -1108,9 +1339,9 @@ var _ = Describe("ClusterOrder Controller", func() {
 					},
 				},
 			}}
-			status := []v1alpha1.NodeRequest{
-				{ResourceClass: "m1.large", NumberOfNodes: 0},
-				{ResourceClass: "m1.small", NumberOfNodes: 0},
+			status := []v1alpha1.NodeRequestStatus{
+				{NodeSetID: "large", ResourceClass: "m1.large", NumberOfNodes: 0},
+				{NodeSetID: "small", ResourceClass: "m1.small", NumberOfNodes: 0},
 			}
 			instance.Status.NodeRequests = status
 
@@ -1118,8 +1349,8 @@ var _ = Describe("ClusterOrder Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			Expect(instance.Status.NodeRequests).To(ConsistOf(
-				v1alpha1.NodeRequest{ResourceClass: "m1.large", NumberOfNodes: 4},
-				v1alpha1.NodeRequest{ResourceClass: "m1.small", NumberOfNodes: 2},
+				v1alpha1.NodeRequestStatus{NodeSetID: "large", ResourceClass: "m1.large", NumberOfNodes: 4},
+				v1alpha1.NodeRequestStatus{NodeSetID: "small", ResourceClass: "m1.small", NumberOfNodes: 2},
 			))
 		})
 
@@ -1127,12 +1358,12 @@ var _ = Describe("ClusterOrder Controller", func() {
 			instance := &v1alpha1.ClusterOrder{
 				Spec: v1alpha1.ClusterOrderSpec{
 					NodeRequests: []v1alpha1.NodeRequest{
-						{ResourceClass: "m1.large", NumberOfNodes: 3},
+						{NodeSetID: "large", ResourceClass: "m1.large", NumberOfNodes: 3},
 					},
 				},
 				Status: v1alpha1.ClusterOrderStatus{
-					NodeRequests: []v1alpha1.NodeRequest{
-						{ResourceClass: "m1.large", NumberOfNodes: 5},
+					NodeRequests: []v1alpha1.NodeRequestStatus{
+						{NodeSetID: "large", ResourceClass: "m1.large", NumberOfNodes: 5},
 					},
 				},
 			}
@@ -1268,7 +1499,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 			instance := &v1alpha1.ClusterOrder{
 				Spec: v1alpha1.ClusterOrderSpec{
 					NodeRequests: []v1alpha1.NodeRequest{
-						{ResourceClass: "m1.large", NumberOfNodes: 3},
+						{NodeSetID: "large", ResourceClass: "m1.large", NumberOfNodes: 3},
 					},
 				},
 			}
@@ -1299,12 +1530,12 @@ var _ = Describe("ClusterOrder Controller", func() {
 			instance := &v1alpha1.ClusterOrder{
 				Spec: v1alpha1.ClusterOrderSpec{
 					NodeRequests: []v1alpha1.NodeRequest{
-						{ResourceClass: "m1.large", NumberOfNodes: 3},
+						{NodeSetID: "large", ResourceClass: "m1.large", NumberOfNodes: 3},
 					},
 				},
 				Status: v1alpha1.ClusterOrderStatus{
-					NodeRequests: []v1alpha1.NodeRequest{
-						{ResourceClass: "m1.large", NumberOfNodes: 2},
+					NodeRequests: []v1alpha1.NodeRequestStatus{
+						{NodeSetID: "large", ResourceClass: "m1.large", NumberOfNodes: 2},
 					},
 				},
 			}
@@ -1329,8 +1560,8 @@ var _ = Describe("ClusterOrder Controller", func() {
 			instance := &v1alpha1.ClusterOrder{
 				Spec: v1alpha1.ClusterOrderSpec{
 					NodeRequests: []v1alpha1.NodeRequest{
-						{ResourceClass: "m1.large", NumberOfNodes: 3},
-						{ResourceClass: "m1.small", NumberOfNodes: 1},
+						{NodeSetID: "large", ResourceClass: "m1.large", NumberOfNodes: 3},
+						{NodeSetID: "small", ResourceClass: "m1.small", NumberOfNodes: 1},
 					},
 				},
 			}
@@ -1341,17 +1572,17 @@ var _ = Describe("ClusterOrder Controller", func() {
 					Replicas: 2,
 				},
 			}
-			instance.Status.NodeRequests = []v1alpha1.NodeRequest{
-				{ResourceClass: "m1.large", NumberOfNodes: 0},
-				{ResourceClass: "m1.small", NumberOfNodes: 0},
+			instance.Status.NodeRequests = []v1alpha1.NodeRequestStatus{
+				{NodeSetID: "large", ResourceClass: "m1.large", NumberOfNodes: 0},
+				{NodeSetID: "small", ResourceClass: "m1.small", NumberOfNodes: 0},
 			}
 
 			err := reconciler.handleNodePool(ctx, instance, nodePool)
 			Expect(err).NotTo(HaveOccurred())
 
 			Expect(instance.Status.NodeRequests).To(ConsistOf(
-				v1alpha1.NodeRequest{ResourceClass: "m1.large", NumberOfNodes: 0},
-				v1alpha1.NodeRequest{ResourceClass: "m1.small", NumberOfNodes: 2},
+				v1alpha1.NodeRequestStatus{NodeSetID: "large", ResourceClass: "m1.large", NumberOfNodes: 0},
+				v1alpha1.NodeRequestStatus{NodeSetID: "small", ResourceClass: "m1.small", NumberOfNodes: 2},
 			))
 		})
 
@@ -1359,12 +1590,12 @@ var _ = Describe("ClusterOrder Controller", func() {
 			instance := &v1alpha1.ClusterOrder{
 				Spec: v1alpha1.ClusterOrderSpec{
 					NodeRequests: []v1alpha1.NodeRequest{
-						{ResourceClass: "m1.large", NumberOfNodes: 3},
+						{NodeSetID: "large", ResourceClass: "m1.large", NumberOfNodes: 3},
 					},
 				},
 				Status: v1alpha1.ClusterOrderStatus{
-					NodeRequests: []v1alpha1.NodeRequest{
-						{ResourceClass: "m1.large", NumberOfNodes: 5},
+					NodeRequests: []v1alpha1.NodeRequestStatus{
+						{NodeSetID: "large", ResourceClass: "m1.large", NumberOfNodes: 5},
 					},
 				},
 			}
@@ -1457,7 +1688,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 				ObjectMeta: metav1.ObjectMeta{Name: "test-cluster"},
 				Spec: v1alpha1.ClusterOrderSpec{
 					NodeRequests: []v1alpha1.NodeRequest{
-						{ResourceClass: "fc430", NumberOfNodes: 2},
+						{NodeSetID: "fc430-workers", ResourceClass: "fc430", NumberOfNodes: 2},
 					},
 				},
 			}
@@ -1467,7 +1698,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 			Expect(result.RequeueAfter).To(BeZero())
 
 			Expect(instance.Status.NodeSets).To(HaveLen(1))
-			Expect(instance.Status.NodeSets[0].Name).To(Equal("fc430"))
+			Expect(instance.Status.NodeSets[0].Name).To(Equal("fc430-workers"))
 			Expect(instance.Status.NodeSets[0].Agents).To(HaveLen(2))
 
 			// Verify labels were set
@@ -1488,7 +1719,7 @@ var _ = Describe("ClusterOrder Controller", func() {
 				ObjectMeta: metav1.ObjectMeta{Name: "test-cluster"},
 				Spec: v1alpha1.ClusterOrderSpec{
 					NodeRequests: []v1alpha1.NodeRequest{
-						{ResourceClass: "fc430", NumberOfNodes: 3},
+						{NodeSetID: "fc430-workers", ResourceClass: "fc430", NumberOfNodes: 3},
 					},
 				},
 			}
@@ -1504,12 +1735,12 @@ var _ = Describe("ClusterOrder Controller", func() {
 				ObjectMeta: metav1.ObjectMeta{Name: "test-cluster"},
 				Spec: v1alpha1.ClusterOrderSpec{
 					NodeRequests: []v1alpha1.NodeRequest{
-						{ResourceClass: "fc430", NumberOfNodes: 1},
+						{NodeSetID: "fc430-workers", ResourceClass: "fc430", NumberOfNodes: 1},
 					},
 				},
 				Status: v1alpha1.ClusterOrderStatus{
 					NodeSets: []v1alpha1.NodeSetStatus{
-						{Name: "fc430", Agents: []v1alpha1.AgentStatus{
+						{Name: "fc430-workers", Agents: []v1alpha1.AgentStatus{
 							{AgentName: "agent-1", HostName: "server-01"},
 						}},
 					},
@@ -1568,4 +1799,105 @@ var _ = Describe("ClusterOrder Controller", func() {
 		})
 	})
 
+})
+
+var _ = Describe("applied cluster release image", func() {
+	It("waits for a completed HostedCluster update and uses its actual image and completion time", func() {
+		requestedAt := metav1.NewTime(time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC))
+		appliedAt := metav1.NewTime(time.Date(2026, time.January, 1, 12, 30, 0, 0, time.UTC))
+		instance := &v1alpha1.ClusterOrder{}
+		hostedCluster := &hypershiftv1beta1.HostedCluster{
+			Status: hypershiftv1beta1.HostedClusterStatus{
+				Version: &hypershiftv1beta1.ClusterVersionStatus{
+					History: []configv1.UpdateHistory{{
+						State:       configv1.PartialUpdate,
+						Image:       "quay.io/release:requested",
+						StartedTime: requestedAt,
+					}},
+				},
+			},
+		}
+
+		updateAppliedReleaseImage(instance, hostedCluster)
+		Expect(instance.Status.ReleaseImage).To(BeEmpty(), "a requested or partial image is not yet applied")
+		Expect(instance.Status.ReleaseImageTransitionTime).To(BeNil())
+
+		hostedCluster.Status.Version.History = append([]configv1.UpdateHistory{{
+			State:          configv1.CompletedUpdate,
+			Image:          "quay.io/release:applied",
+			StartedTime:    requestedAt,
+			CompletionTime: &appliedAt,
+		}}, hostedCluster.Status.Version.History...)
+		updateAppliedReleaseImage(instance, hostedCluster)
+
+		Expect(instance.Status.ReleaseImage).To(Equal("quay.io/release:applied"))
+		Expect(instance.Status.ReleaseImageTransitionTime).To(Equal(&appliedAt))
+
+		updateAppliedReleaseImage(instance, hostedCluster)
+		Expect(instance.Status.ReleaseImage).To(Equal("quay.io/release:applied"))
+		Expect(instance.Status.ReleaseImageTransitionTime).To(Equal(&appliedAt), "repeated observation must not reset the applied boundary")
+
+		// HyperShift uses Partial for both an in-progress rollout and an
+		// interrupted/failed update, so neither is an applied-image boundary.
+		for _, incompleteImage := range []string{"quay.io/release:in-progress", "quay.io/release:failed"} {
+			hostedCluster.Status.Version.History = []configv1.UpdateHistory{
+				{State: configv1.PartialUpdate, Image: incompleteImage, StartedTime: requestedAt},
+				{State: configv1.CompletedUpdate, Image: "quay.io/release:applied", StartedTime: requestedAt, CompletionTime: &appliedAt},
+			}
+			updateAppliedReleaseImage(instance, hostedCluster)
+			Expect(instance.Status.ReleaseImage).To(Equal("quay.io/release:applied"))
+			Expect(instance.Status.ReleaseImageTransitionTime).To(Equal(&appliedAt))
+		}
+
+		upgradedAt := metav1.NewTime(time.Date(2026, time.January, 1, 14, 0, 0, 0, time.UTC))
+		hostedCluster.Status.Version.History = []configv1.UpdateHistory{
+			{State: configv1.CompletedUpdate, Image: "quay.io/release:applied", StartedTime: requestedAt, CompletionTime: &appliedAt},
+			{State: configv1.CompletedUpdate, Image: "quay.io/release:upgraded", StartedTime: requestedAt, CompletionTime: &upgradedAt},
+		}
+		updateAppliedReleaseImage(instance, hostedCluster)
+		Expect(instance.Status.ReleaseImage).To(Equal("quay.io/release:upgraded"))
+		Expect(instance.Status.ReleaseImageTransitionTime).To(Equal(&upgradedAt))
+	})
+})
+
+var _ = Describe("ClusterOrder phase timestamps", func() {
+	It("advances once for each phase transition and stays fixed on a same-phase patch", func() {
+		ctx := context.Background()
+		order := &v1alpha1.ClusterOrder{
+			ObjectMeta: metav1.ObjectMeta{Name: "phase-time-test", Namespace: "default"},
+			Status:     v1alpha1.ClusterOrderStatus{Phase: v1alpha1.ClusterOrderPhaseProgressing},
+		}
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(k8sClient.Scheme()).
+			WithStatusSubresource(&v1alpha1.ClusterOrder{}).
+			WithObjects(order).
+			Build()
+		reconciler := &ClusterOrderReconciler{Client: fakeClient, apiReader: fakeClient}
+		key := client.ObjectKeyFromObject(order)
+
+		for _, phase := range []v1alpha1.ClusterOrderPhaseType{
+			v1alpha1.ClusterOrderPhaseReady,
+			v1alpha1.ClusterOrderPhaseFailed,
+			v1alpha1.ClusterOrderPhaseDeleting,
+		} {
+			computed := order.Status
+			computed.Phase = phase
+			before := time.Now().UTC()
+			transition, err := reconciler.patchStatusWithRetry(ctx, key, computed)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(transition).NotTo(BeNil())
+			transitionTime := transition.newStatus.StateTransitionTime
+			Expect(transitionTime).NotTo(BeNil())
+			Expect(transitionTime.Time).To(BeTemporally("~", before, time.Second))
+
+			order.Status = transition.newStatus
+			samePhase, err := reconciler.patchStatusWithRetry(ctx, key, order.Status)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(samePhase).To(BeNil())
+			latest := &v1alpha1.ClusterOrder{}
+			Expect(fakeClient.Get(ctx, key, latest)).To(Succeed())
+			Expect(latest.Status.StateTransitionTime).To(Equal(transitionTime))
+			order.Status = latest.Status
+		}
+	})
 })

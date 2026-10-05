@@ -15,6 +15,7 @@ package servers
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
@@ -220,6 +221,7 @@ var _ = Describe("Private NAT gateways server", func() {
 
 		It("creates NATGateway with PENDING initial state", func() {
 			eip := createAllocatedExternalIP()
+			createStartedAt := time.Now().UTC()
 			response, err := natGatewaysServer.Create(ctx, privatev1.NATGatewaysCreateRequest_builder{
 				Object: privatev1.NATGateway_builder{
 					Metadata: privatev1.Metadata_builder{Name: "test-nat-gateway", Tenant: testTenant}.Build(),
@@ -232,6 +234,9 @@ var _ = Describe("Private NAT gateways server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(response.GetObject().GetStatus().GetState()).To(
 				Equal(privatev1.NATGatewayState_NAT_GATEWAY_STATE_PENDING))
+			Expect(response.GetObject().GetStatus().GetStateTransitionTime()).NotTo(BeNil())
+			Expect(response.GetObject().GetStatus().GetStateTransitionTime().AsTime()).To(
+				BeTemporally("~", createStartedAt, time.Second))
 		})
 
 		It("rejects client-provided output status on Create", func() {

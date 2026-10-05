@@ -58,33 +58,31 @@ func (r *ClusterOrderReconciler) reconcileAgentSelection(
 		return ctrl.Result{}, nil
 	}
 
-	// Check if agents are already selected
-	if len(instance.Status.NodeSets) > 0 {
-		// Backfill FabricInterface from spec into existing NodeSetStatus
-		// entries that don't have it yet (e.g. created before the field
-		// was added to NodeRequest).
-		for i := range instance.Status.NodeSets {
-			if instance.Status.NodeSets[i].FabricInterface != "" {
-				continue
-			}
-			for _, nr := range instance.Spec.NodeRequests {
-				if nr.ResourceClass == instance.Status.NodeSets[i].Name && nr.FabricInterface != "" {
-					instance.Status.NodeSets[i].FabricInterface = nr.FabricInterface
-					break
-				}
-			}
-		}
-		return ctrl.Result{}, nil
-	}
-
 	agentNamespace := r.AgentNamespace
 	if agentNamespace == "" {
 		agentNamespace = defaultAgentNamespace
 	}
 
-	var nodeSets []v1alpha1.NodeSetStatus
+	nodeSets := instance.Status.NodeSets
 
 	for _, nodeReq := range instance.Spec.NodeRequests {
+		if nodeReq.NodeSetID == "" {
+			return ctrl.Result{}, fmt.Errorf("node request for resource class %q has no nodeSetID", nodeReq.ResourceClass)
+		}
+		var existing *v1alpha1.NodeSetStatus
+		for i := range nodeSets {
+			if nodeSets[i].Name == nodeReq.NodeSetID {
+				existing = &nodeSets[i]
+				break
+			}
+		}
+		if existing != nil {
+			if existing.FabricInterface == "" {
+				existing.FabricInterface = nodeReq.FabricInterface
+			}
+			continue
+		}
+
 		agents, err := r.selectAgents(ctx, agentNamespace, instance.Name, nodeReq.ResourceClass, nodeReq.NumberOfNodes)
 		if err != nil {
 			return ctrl.Result{}, err
@@ -116,7 +114,7 @@ func (r *ClusterOrderReconciler) reconcileAgentSelection(
 		}
 
 		nodeSets = append(nodeSets, v1alpha1.NodeSetStatus{
-			Name:            nodeReq.ResourceClass,
+			Name:            nodeReq.NodeSetID,
 			FabricInterface: nodeReq.FabricInterface,
 			Agents:          agentStatuses,
 		})

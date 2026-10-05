@@ -149,7 +149,10 @@ authorizes each call as the signed-in user through the public Fulfillment API.
 - A certificate error usually means the MCP route or OAuth issuer is not
   covered by the CA bundle available to the Codex process. Check both `curl`
   requests above and the process environment. A desktop app launched outside
-  the shell may not inherit a shell export.
+  the shell may not inherit a shell export. The Codex CLI may also reuse a
+  background app server started before `CODEX_CA_CERTIFICATE` was set. To use
+  the current shell's CA setting without that daemon, exit Codex and run
+  `codex --no-daemon resume --last`, then check `/mcp` again.
 - An `Invalid parameter: redirect_uri` page means Keycloak rejected the
   callback Codex sent. The Kind development client already allows
   `http://localhost:8091/callback`; configure both `callback_url` and

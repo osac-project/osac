@@ -439,6 +439,7 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 
 		It("should set Ready=True condition when job succeeds", func() {
 			vnet.Annotations = map[string]string{osacImplementationStrategyAnnotation: "cudn-net"}
+			vnet.Status.BackendNetworkID = "provider-owned-id"
 			vnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
 				{
 					JobID:     "success-job-cond",

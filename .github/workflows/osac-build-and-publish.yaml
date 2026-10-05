@@ -1839,10 +1839,12 @@ jobs:
     needs: [prepare, tag]
     if: inputs.mode == 'release' && needs.tag.result == 'success'
     runs-on: osac-ci
-    # Generous timeout: this polls real Konflux builds (8 components) plus
-    # the resulting override Snapshot's own integration test, neither of
-    # which this workflow controls the pace of.
-    timeout-minutes: 90
+    # Must exceed the sum of the script's own three poll phases (build
+    # poll + override-snapshot-test poll + Release-completion poll, each
+    # up to 80min = 240min), not just one of them -- otherwise GitHub
+    # cancels the job mid-phase with no ::error:: message, silently
+    # producing neither a release nor a clear failure reason.
+    timeout-minutes: 260
     permissions:
       contents: read
     env:
@@ -1878,6 +1880,7 @@ jobs:
     - name: Assemble override Snapshot and create staging Release
       env:
         COMMIT_SHA: ${{ steps.commit.outputs.sha }}
+        RUN_ATTEMPT: ${{ github.run_attempt }}
       run: |
         set -euo pipefail
         python3 - <<'PYEOF'
@@ -1889,6 +1892,7 @@ jobs:
 
         COMMIT_SHA = os.environ["COMMIT_SHA"]
         VERSION = os.environ["VERSION"]
+        RUN_ATTEMPT = os.environ["RUN_ATTEMPT"]
         NAMESPACE = "osac-tenant"
         COMPONENTS = [
             "fulfillment-service",
@@ -1903,19 +1907,19 @@ jobs:
         POLL_INTERVAL_SECONDS = 30
         TIMEOUT_SECONDS = 80 * 60
 
-        def tests_passed(conditions):
+        def condition_true(conditions, cond_type):
             return any(
-                c.get("type") == "AppStudioTestSucceeded" and c.get("status") == "True"
+                c.get("type") == cond_type and c.get("status") == "True"
                 for c in conditions
             )
 
-        def tests_failed(conditions):
+        def condition_false(conditions, cond_type):
             return any(
-                c.get("type") == "AppStudioTestSucceeded" and c.get("status") == "False"
+                c.get("type") == cond_type and c.get("status") == "False"
                 for c in conditions
             )
 
-        def find_component_digests():
+        def find_components():
             out = subprocess.run(
                 ["oc", "get", "snapshots", "-n", NAMESPACE, "-o", "json"],
                 capture_output=True, text=True, check=True,
@@ -1926,19 +1930,26 @@ jobs:
                 if ann.get("build.appstudio.redhat.com/commit_sha") != COMMIT_SHA:
                     continue
                 comps = item["spec"].get("components", [])
+                # Every real push-triggered build Snapshot observed on this
+                # cluster is single-component (verified empirically: 506/506,
+                # zero exceptions) -- Konflux's app-wide component-build
+                # Snapshot shape is a documented *possibility*, not what this
+                # repo's pipelines actually produce. If that ever changes,
+                # this filter would need revisiting.
                 if len(comps) != 1:
-                    continue  # only single-component (per-build) snapshots
-                name = comps[0]["name"]
+                    continue
+                component = comps[0]
+                name = component["name"]
                 if name not in COMPONENTS or name in found:
                     continue
-                if tests_passed(item.get("status", {}).get("conditions", [])):
-                    found[name] = comps[0]["containerImage"]
+                if condition_true(item.get("status", {}).get("conditions", []), "AppStudioTestSucceeded"):
+                    found[name] = component  # keep full entry, incl. source
             return found
 
         deadline = time.time() + TIMEOUT_SECONDS
         found = {}
         while time.time() < deadline:
-            found = find_component_digests()
+            found = find_components()
             missing = [c for c in COMPONENTS if c not in found]
             if not missing:
                 break
@@ -1950,54 +1961,102 @@ jobs:
             sys.exit(1)
 
         print("All 8 components built and passed tests:")
-        for name, image in found.items():
-            print(f"  {name}: {image}")
+        for name, component in found.items():
+            print(f"  {name}: {component['containerImage']}")
 
-        snapshot_name = f"osac-release-v{VERSION}"
+        # Suffixed with the run attempt so a GitHub "Re-run failed jobs"
+        # creates fresh resources instead of colliding with an immutable
+        # Snapshot spec from a prior attempt, or silently no-op'ing against
+        # an already-existing Release.
+        resource_name = f"osac-release-v{VERSION}-attempt{RUN_ATTEMPT}"
         snapshot = {
             "apiVersion": "appstudio.redhat.com/v1alpha1",
             "kind": "Snapshot",
-            "metadata": {"name": snapshot_name, "namespace": NAMESPACE},
+            "metadata": {
+                "name": resource_name,
+                "namespace": NAMESPACE,
+                # Required for Konflux's Integration Service to process this
+                # as an override Snapshot at all -- without it, the wait
+                # below would hang until TIMEOUT_SECONDS with no test ever
+                # having run.
+                "labels": {"test.appstudio.openshift.io/type": "override"},
+            },
             "spec": {
                 "application": "osac",
                 "components": [
-                    {"name": n, "containerImage": img} for n, img in found.items()
+                    {
+                        "name": n,
+                        "containerImage": component["containerImage"],
+                        # Every real component entry on this cluster carries
+                        # a source block (verified: 612/612); Konflux's own
+                        # docs warn an incorrect or missing one can fail a
+                        # Conforma check, so pass through whatever the
+                        # originating build Snapshot provided.
+                        **({"source": component["source"]} if "source" in component else {}),
+                    }
+                    for n, component in found.items()
                 ],
             },
         }
         with open("/tmp/snapshot.json", "w") as f:
             json.dump(snapshot, f)
         subprocess.run(["oc", "apply", "-f", "/tmp/snapshot.json"], check=True)
-        print(f"Created override Snapshot {snapshot_name}")
+        print(f"Created override Snapshot {resource_name}")
 
         deadline = time.time() + TIMEOUT_SECONDS
         while time.time() < deadline:
             out = subprocess.run(
-                ["oc", "get", "snapshot", snapshot_name, "-n", NAMESPACE, "-o", "json"],
+                ["oc", "get", "snapshot", resource_name, "-n", NAMESPACE, "-o", "json"],
                 capture_output=True, text=True, check=True,
             )
             conditions = json.loads(out.stdout).get("status", {}).get("conditions", [])
-            if tests_passed(conditions):
+            if condition_true(conditions, "AppStudioTestSucceeded"):
                 break
-            if tests_failed(conditions):
-                print(f"::error::Override snapshot {snapshot_name} failed its integration tests")
+            if condition_false(conditions, "AppStudioTestSucceeded"):
+                print(f"::error::Override snapshot {resource_name} failed its integration tests")
                 sys.exit(1)
-            print(f"Waiting on {snapshot_name}'s integration tests...", flush=True)
+            print(f"Waiting on {resource_name}'s integration tests...", flush=True)
             time.sleep(POLL_INTERVAL_SECONDS)
         else:
-            print(f"::error::Timed out waiting for {snapshot_name}'s integration tests")
+            print(f"::error::Timed out waiting for {resource_name}'s integration tests")
             sys.exit(1)
 
         release = {
             "apiVersion": "appstudio.redhat.com/v1alpha1",
             "kind": "Release",
-            "metadata": {"name": snapshot_name, "namespace": NAMESPACE},
-            "spec": {"releasePlan": "cloud-extensions-stage", "snapshot": snapshot_name},
+            "metadata": {"name": resource_name, "namespace": NAMESPACE},
+            "spec": {"releasePlan": "cloud-extensions-stage", "snapshot": resource_name},
         }
         with open("/tmp/release.json", "w") as f:
             json.dump(release, f)
         subprocess.run(["oc", "apply", "-f", "/tmp/release.json"], check=True)
-        print(f"::notice::Konflux staging release triggered: {snapshot_name}")
+        print(f"Created Release {resource_name}, waiting for it to complete")
+
+        # Real condition type/reason values confirmed against
+        # release_conditions.go in konflux-ci/release-service: type
+        # "Released", reason "Succeeded"/"Failed"/"Progressing". Applying
+        # the Release object succeeding says nothing about whether Konflux
+        # actually released it -- only this confirms that.
+        deadline = time.time() + TIMEOUT_SECONDS
+        while time.time() < deadline:
+            out = subprocess.run(
+                ["oc", "get", "release", resource_name, "-n", NAMESPACE, "-o", "json"],
+                capture_output=True, text=True, check=True,
+            )
+            conditions = json.loads(out.stdout).get("status", {}).get("conditions", [])
+            if condition_true(conditions, "Released"):
+                print(f"::notice::Konflux staging release succeeded: {resource_name}")
+                break
+            if condition_false(conditions, "Released") and any(
+                c.get("type") == "Released" and c.get("reason") == "Failed" for c in conditions
+            ):
+                print(f"::error::Konflux staging release failed: {resource_name}")
+                sys.exit(1)
+            print(f"Waiting on {resource_name}'s release to complete...", flush=True)
+            time.sleep(POLL_INTERVAL_SECONDS)
+        else:
+            print(f"::error::Timed out waiting for {resource_name}'s release to complete")
+            sys.exit(1)
         PYEOF
 
   cleanup:

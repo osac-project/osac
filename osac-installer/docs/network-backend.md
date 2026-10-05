@@ -32,6 +32,8 @@ When `global.networking.fabricManager` is `netris`, Helm automatically:
 - Enables `operator.networkManagers.fabricManagers.netris`
 - Sets `NETWORK_CLASS`, `NETWORK_STEPS_COLLECTION`, and shared `NETRIS_*` fields on
   both AAP instance groups when they are enabled (no manual duplication)
+- Sets `NETRIS_VALIDATE_CERTS` on both AAP instance groups from
+  `global.networking.netris.validateCerts`
 - Points the generated NetworkClass at `fabricManager: netris`
 
 When `fabricManager` is empty and `k8sManager` is `k8s_only`, Helm enables
@@ -64,6 +66,7 @@ global:
       credentials:
         username: "netris"
         externalSecret: true
+      validateCerts: true
       siteId: "5"
       tenantId: "1"
       tenantName: "Admin"
@@ -80,6 +83,10 @@ When Netris is selected, the schema requires `controllerUrl` (HTTPS), credential
 `siteId`, `tenantId`, and `tenantName`. Credentials may contain either a direct
 password or `externalSecret: true` when the `netris-credentials` Secret is
 managed outside Helm.
+
+TLS certificate verification defaults to `true`. Set
+`global.networking.netris.validateCerts: false` only for a trusted,
+non-production Netris endpoint using a self-signed certificate.
 
 ## Agentless example
 
@@ -128,6 +135,7 @@ Prefer the facade above. When not using it, set variables on
 | Variable | Description |
 |----------|-------------|
 | `NETRIS_CONTROLLER_URL` | Netris controller API URL |
+| `NETRIS_VALIDATE_CERTS` | Verify the Netris HTTPS certificate (`"true"` by default; use `"false"` only for trusted non-production endpoints) |
 | `NETRIS_USERNAME` | Netris API username |
 | `NETRIS_SITE_ID` | Netris site ID (integer) |
 | `NETRIS_TENANT_ID` | Netris tenant ID (integer) |

@@ -43,7 +43,9 @@ spec:
   selector:
     app: fulfillment-mcp-server
   ports:
-  - name: mcp
+  # Keep names distinct when a Helm upgrade changes externalPort. Kubernetes
+  # may temporarily merge the old and new Service ports in one patch.
+  - name: mcp-{{ .Values.mcp.externalPort }}
     port: {{ .Values.mcp.externalPort }}
     targetPort: mcp
 {{- end }}

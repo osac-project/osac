@@ -1452,6 +1452,7 @@ jobs:
       if: inputs.mode == 'release'
       run: |
         set -euo pipefail
+        source osac-installer/scripts/nightly-charts.sh
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
         TAG="osac-release/v${VERSION}"
@@ -1490,6 +1491,7 @@ jobs:
         COMPONENTS_TO_TAG: ${{ needs.prepare.outputs.components-to-tag }}
       run: |
         set -euo pipefail
+        source osac-installer/scripts/nightly-charts.sh
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
 

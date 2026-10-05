@@ -7,7 +7,7 @@ access to the default Red Hat operator catalogs is unavailable.
 ## Overview
 
 OSAC depends on several operators delivered through the Operator Lifecycle
-Manager (OLM). In a connected environment the `osac-deps` Helm chart installs OLM `Subscription` resources. These OLM `Subscription` resources reference the default
+Manager (OLM). In a connected environment the phase 1a installs OLM `Subscription` resources. These OLM `Subscription` resources reference the default
 `redhat-operators` CatalogSource in the `openshift-marketplace` namespace.
 
 ### Before you start
@@ -81,32 +81,68 @@ In a disconnected environment , these mandatory checks must pass
 1. Successfully mirror all the container images.
 2. CRIO daemon and kubelet on the osac vm must be able to resolve the openshift mirror registry.
 
-## Required Operator Packages
+#### Disconnected installation prerequisites: mirroring reference
 
-The following operator packages must be available in the mirrored catalog:
+These tables summarize the supplied image set configuration for a disconnected installation. They describe mirroring selections, not a supported-version or production-support matrix.
 
-| Operator | Package Name | Default Channel |
-| ---------- | ------------- | ----------------- |
-| Ansible Automation Platform | `ansible-automation-platform-operator` | `stable-2.6-cluster-scoped` |
-| AMQ Streams (Kafka) | `amq-streams` | `stable` |
-| cert-manager | `openshift-cert-manager-operator` | `stable-v1` |
-| OpenShift Virtualization (CNV) | `kubevirt-hyperconverged` | `stable` |
-| LVM Storage | `lvms-operator` | `stable-4.22` |
-| Multicluster Engine | `multicluster-engine` | `stable-2.17` |
-| MetalLB | `metallb-operator` | `stable` |
+Image tags and digests are intentionally omitted from image repository references. Use the versioned image set configuration for the exact images to mirror.
 
-> **Note:** Not every operator is required for every deployment. Only the
-> operators enabled in your `values.yaml` need to be present in the
-> mirrored catalog.
+##### Platform
 
-## Mirroring with oc-mirror
+| Architecture | Release channel | Minimum version to mirror | Maximum version to mirror |
+| --- | --- | --- | --- |
+| `amd64` | `stable-4.22` | `4.22.6` | `4.22.6` |
+
+##### Operators
+
+Catalog repository: `registry.redhat.io/redhat/redhat-operator-index`.
+
+| Operator package | Mirroring channel | Default channel override | Maximum version to mirror |
+| --- | --- | --- | --- |
+| `ansible-automation-platform-operator` | `stable-2.6-cluster-scoped` | `stable-2.6-cluster-scoped` | `2.6.0+0.1787258256` |
+| `openshift-cert-manager-operator` | `stable-v1` | Not specified | Not specified |
+| `amq-streams` | `stable` | Not specified | Not specified |
+| `kubevirt-hyperconverged` | `stable` | Not specified | Not specified |
+| `lvms-operator` | `stable-4.22` | Not specified | Not specified |
+| `metallb-operator` | `stable` | Not specified | Not specified |
+| `multicluster-engine` | `stable-2.17` | Not specified | Not specified |
+
+`Not specified` means that the field is not explicitly set in the image set configuration. A value in the maximum-version column is an upper bound for mirroring, not an exact required installed version.
+
+##### Additional images
+
+Metering and CSI-driver-related images, including the listed CSI sidecars, are included conditionally on the feature settings shown below.
+
+| Image repository | Group | Purpose / applicability |
+| --- | --- | --- |
+| `quay.io/jetstack/trust-manager` | Dependencies | Trust-manager dependency. |
+| `quay.io/jetstack/trust-pkg-debian-bookworm` | Dependencies | Trust-manager dependency. |
+| `quay.io/keycloak/keycloak` | Dependencies | Keycloak dependency. |
+| `quay.io/openshift/origin-cli` | Dependencies | Consumed by dependency components. |
+| `quay.io/sclorg/postgresql-18-c10s` | Dependencies | Bundled PostgreSQL dependency. |
+| `ghcr.io/osac-project/osac-operator` | Core components | Core component image. |
+| `ghcr.io/osac-project/fulfillment-service` | Core components | Core component image. |
+| `ghcr.io/osac-project/envoy` | Core components | Core component image. |
+| `ghcr.io/osac-project/osac-aap` | Core components | Core component image. |
+| `ghcr.io/osac-project/osac-ui` | Core components | Core component image. |
+| `ghcr.io/osac-project/bare-metal-fulfillment-operator` | Core components | Core component image. |
+| `ghcr.io/osac-project/metering-service` | Metering | Conditional: `metering.enabled`. |
+| `ghcr.io/osac-project/metering-echo-adapter` | Metering | Conditional: `metering.enabled`. |
+| `ghcr.io/osac-project/metering-m360-adapter` | Metering | Conditional: `metering.enabled`. |
+| `ghcr.io/osac-project/osac-csi-driver` | CSI driver | Conditional: `csiDriver.enabled`. |
+| `registry.k8s.io/sig-storage/csi-provisioner` | CSI sidecars | Conditional: `csiDriver.enabled`. |
+| `registry.k8s.io/sig-storage/csi-attacher` | CSI sidecars | Conditional: `csiDriver.enabled`. |
+| `registry.k8s.io/sig-storage/csi-node-driver-registrar` | CSI sidecars | Conditional: `csiDriver.enabled`. |
+
+
+### Mirroring with oc-mirror
 
 Use `oc-mirror` to build a mirror of the required Openshift catalogs,
 Red Hat container images & non Red Hat Container images as well as
-OSAC container images . Below is a working  `ImageSetConfiguration` tested in a
+OSAC container images.
+Note: At the time of testing, at least 400GiB storage space is required
+Below is a working  `ImageSetConfiguration` tested in a
 disconnected environment.
->**Note**:At the time of testing, at the least 400GiB storage space is required
->for this mirrored registry.
 
 ```yaml
 apiVersion: mirror.openshift.io/v2alpha1
@@ -148,13 +184,14 @@ mirror:
           channels:
             - name: stable-2.17
   additionalImages:
-    # --- osac-deps and osac-infra. ---
-    - name: ghcr.io/openbao/openbao:2.6.2 # Bundled OpenBao (Vault-compatible) secret store for dev/CI environments.
-    - name: quay.io/jetstack/trust-manager:v0.20.0 # Helm chart osac-deps trust-manager
-    - name: quay.io/jetstack/trust-pkg-debian-bookworm:20230311-deb12u1.1 # Helm chart osac-deps trust-manager
-    - name: quay.io/keycloak/keycloak:26.6.4 # Helm chart osac-deps keycloak
-    - name: quay.io/openshift/origin-cli:4.22 # Consumed by OSAC dependencies
-    - name: quay.io/sclorg/postgresql-18-c10s@sha256:6be2c9d855f06fb665257a6b0911676a38d740be7022cc61acee1c99a832b1b2 # Helm osac-deps bundled-postgres
+    # --- Phase 1(Prerequisites). ---
+    - name: ghcr.io/openbao/openbao:2.6.2 # fulfillment-service — per-tenant secret storage (Vault-compatible); hard runtime dependency. Replace with Vault-compatible operator
+    - name: quay.io/jetstack/trust-manager:v0.20.0 # All OSAC services — distributes CA bundles across keycloak, osac, and postgres namespaces for TLS trust
+    - name: quay.io/jetstack/trust-pkg-debian-bookworm:20230311-deb12u1.1 # trust-manager — base trust-store package consumed by the trust-manager operator itself
+    - name: quay.io/keycloak/keycloak:26.6.4 # fulfillment-service / osac-operator — identity provider; issues JWTs used for authentication across all OSAC services
+    - name: quay.io/openshift/origin-cli:4.20 # osac-installer (osac-infra hook jobs) / osac-aap — used for Helm hook jobs during installation and for building the Ansible Execution Environment image
+    - name: quay.io/sclorg/postgresql-18-c10s@sha256:6be2c9d855f06fb665257a6b0911676a38d740be7022cc61acee1c99a832b1b2 # fulfillment-service — primary relational database for resource lifecycle, Volume API, StorageBackend, and StorageTier data
+    
     # --- OSAC core components ---
     - name: ghcr.io/osac-project/osac-operator:0.0.18
     - name: ghcr.io/osac-project/fulfillment-service:0.0.111
@@ -182,49 +219,55 @@ oc-mirror --v2 --config=imageset-config.yaml --workspace \
 file://$(pwd)/oc-mirror-workspace docker://registry.example.com:8443/
 ```
 
->**Tip**: In dev setup, using `-dest-tls-verify=false   --parallel-images 1   --parallel-layers 1`
+>**Tip**: In dev setup, using `--dest-tls-verify=false   --parallel-images 1   --parallel-layers 1`
 > avoids TLS certification and registry db lockup issues.
 
 Expected Result:
 
 ```bash
 ....
-481 / 481 (1h7m41s) [====================================================] 100 %
-2026/10/01 01:53:58  [INFO]   : === Results ===
-2026/10/01 01:53:58  [INFO]   :  ✓  192 / 192 release images mirrored successfully
-2026/10/01 01:53:58  [INFO]   :  ✓  266 / 266 operator images mirrored successfully
-2026/10/01 01:53:58  [INFO]   :  ✓  23 / 23 additional images mirrored:
-2026/10/01 01:53:58  [INFO]   : Generating pinned configurations
-2026/10/01 01:53:58  [INFO]   : Pinned ISC written to: $(pwd)/oc-mirror-workspace/working-dir/isc_pinned_2026-10-01T05:53:58Z.yaml
-2026/10/01 01:53:58  [INFO]   : Pinned DISC written to: $(pwd)/oc-mirror-workspace/working-dir/disc_pinned_2026-10-01T05:53:58Z.yaml
 2026/10/01 01:53:58  [INFO]   : Generating cluster resources
-2026/10/01 01:53:58  [INFO]   : Generating IDMS file
-2026/10/01 01:53:58  [INFO]   : $(pwd)/oc-mirror-workspace/working-dir/cluster-resources/idms-oc-mirror.yaml file created
-2026/10/01 01:53:58  [INFO]   : Generating ITMS file
-2026/10/01 01:53:58  [INFO]   : $(pwd)/oc-mirror-workspace/working-dir/cluster-resources/itms-oc-mirror.yaml file created
-2026/10/01 01:53:58  [INFO]   : Pinned DISC written to: $(pwd)/oc-mirror-workspace/working-dir/disc_pinned_2026-10-01T05:53:58Z.yaml
-2026/10/01 01:53:58  [INFO]   : 📄 Generating cluster resources...
-2026/10/01 01:53:58  [INFO]   : 📄 Generating IDMS file...
-2026/10/01 01:53:58  [INFO]   : $(pwd)/oc-mirror-workspace/working-dir/cluster-resources/idms-oc-mirror.yaml file created
-2026/10/01 01:53:58  [INFO]   : 📄 Generating ITMS file...
-2026/10/01 01:53:58  [INFO]   : $(pwd)/oc-mirror-workspace/working-dir/cluster-resources/itms-oc-mirror.yaml file created
-2026/10/01 01:53:58  [INFO]   : 📄 Generating CatalogSource file...
-2026/10/01 01:53:58  [INFO]   : $(pwd)/oc-mirror-workspace/working-dir/cluster-resources/cs-redhat-operator-index-v4-22.yaml file created
-2026/10/01 01:53:58  [INFO]   : 📄 Generating ClusterCatalog file...
-2026/10/01 01:53:58  [INFO]   : $(pwd)/oc-mirror-workspace/working-dir/cluster-resources/cc-redhat-operator-index-v4-22.yaml file created
-2026/10/01 01:53:58  [INFO]   : 📄 Generating Signature Configmap...
-2026/10/01 01:53:58  [INFO]   : $(pwd)/oc-mirror-workspace/working-dir/cluster-resources/signature-configmap.json file created
-2026/10/01 01:53:58  [INFO]   : $(pwd)/oc-mirror-workspace/working-dir/cluster-resources/signature-configmap.yaml file created
-2026/10/01 01:53:58  [INFO]   : mirror time     : 1h8m8.261079897s
-2026/10/01 01:53:58  [INFO]   : 👋 Goodbye, thank you for using oc-mirror
-
+...
 ```
+
+The executor of the `oc-mirror` command  shall share the the generated kubernetes resources defintion with the OSAC CSA.
 
 As a OSAC CSA, you must be **authorized** to apply the generated IDMS
 `ImageDigestMirrorSet` file, ITMS(`ImageTagMirrorSet`) file, `CatalogSource` file,
-`ClusterCatalog` file and Signature Configmap.
+`ClusterCatalog` file and Signature Configmap within the openshift cluster meant to host the OSAC cluster.
 
-Dependency relationship between ImageSetConfiguration, OSAC Deps,OSAC Infra & OSAC.
+```bash
+# CatalogSource file
+oc create  -f /home/cloud-user/oc-mirror-workspace/working-dir/cluster-resources/cs-redhat-operator-index-v4-22.yaml
+## Expected Output
+### catalogsource.operators.coreos.com/cs-redhat-operator-index-v4-22
+
+# ClusterCatalog file
+oc create -f /home/cloud-user/oc-mirror-workspace/working-dir/cluster-resources/cc-redhat-operator-index-v4-22.yaml
+## Expected Output
+### clustercatalog.olm.operatorframework.io/cc-redhat-operator-index-v4-22 created
+
+# ImageDigestMirrorSet
+oc create --server-side -f /home/cloud-user/oc-mirror-workspace/working-dir/cluster-resources/idms-oc-mirror.yaml
+## Expected Output. The count is driven by the mirrored image categories and references
+### imagedigestmirrorset.config.openshift.io/idms-release-0 created
+### imagedigestmirrorset.config.openshift.io/idms-operator-0 created
+### imagedigestmirrorset.config.openshift.io/idms-generic-0 created
+
+# ImageTagMirrorSet
+oc create -f /home/cloud-user/oc-mirror-workspace/working-dir/cluster-resources/itms-oc-mirror.yaml
+## Expected Output. The count is driven by the mirrored image categories and references
+### imagetagmirrorset.config.openshift.io/itms-release-0 created
+### imagetagmirrorset.config.openshift.io/itms-operator-0 created
+### imagetagmirrorset.config.openshift.io/itms-generic-0 created
+
+# Signature Configmap
+ oc create -f /home/cloud-user/oc-mirror-workspace/working-dir/cluster-resources/signature-configmap.yaml
+## Expected Output
+### configmap/mirrored-release-signatures configured
+```
+
+Dependency relationship between ImageSetConfiguration, Phase 1A,Phase 1B & OSAC.
 Assuming OSAC v0.0.21.
 
 ```mermaid
@@ -254,7 +297,7 @@ flowchart TB
     ISC -->|"additionalImages"| ADDIMG
 
     subgraph ADDIMG["Additional Images"]
-        subgraph DIMGS["osac-deps / osac-infra"]
+        subgraph DIMGS["phase 1a / phase 1b"]
             I_TM["trust-manager:v0.20.0<br/>+ trust-pkg-debian-bookworm"]:::imgStyle
             I_KC["keycloak:26.6.4"]:::imgStyle
             I_PG["postgresql-18-c10s"]:::imgStyle
@@ -279,7 +322,7 @@ flowchart TB
     I_TM -->|"vendored chart image"| DEPS
     I_CL -->|"hook jobs"| DEPS
 
-    subgraph DEPS["osac-deps — Phase 1a: Install Operators & Register CRDs"]
+    subgraph DEPS["Phase 1a: Install Operators & Register CRDs"]
         D_CM["cert-manager Operator<br/>→ Certificate, ClusterIssuer CRDs"]:::depsStyle
         D_AAP["AAP Operator<br/>→ AutomationController CRDs"]:::depsStyle
         D_LVMS["LVMS Operator<br/>→ LVMCluster CRD"]:::depsStyle
@@ -341,8 +384,13 @@ subgraph INFRA["osac-infra — Phase 1b: Create CRD Instances & Shared Services"
 ```
 
 ### Helm Charts
+The open source github based OSAC project utilizes the helm chart, named  osac-deps & osac-infra for the Phase 1( OSAC prerequisites ) solely for the project development purpose.
+Interested can look in the  docs/guides/installation/helm-deployment-guide.md for details.
 
-The helm charts osac-infra & osac-deps helm chart are helper charts.
+Within the Phase 2 ( OSAC installation ), *osac* helm chart is configured and installed.
+
+>**TBD** : Remove the  helm-deployment-guide created for phase 1a from the osac/docs directory.
+
 The `osac` helm chart must be pinned to specific release tag( for eg, 0.0.21 )
 > [!IMPORTANT]
 > Existing version of oc-mirror does not support mirroring of the
@@ -381,16 +429,6 @@ flowchart LR
     WS ==>|" SSH Tunnel / sshuttle VPN "| BM
     BM ==>|" Internal Network "| OCP
     OCP -.->|" Pulls images "| REG
-
-    %% Styling
-    classDef default fill:#f9f9f9,stroke:#333,stroke-width:1px;
-    classDef workstation fill:#e1f5fe,stroke:#0288d1,stroke-width:2px;
-    classDef bastion fill:#fff3e0,stroke:#f57c00,stroke-width:2px;
-    classDef cluster fill:#e8f5e9,stroke:#388e3c,stroke-width:2px;
-
-    class WS,WS_CLI,WS_HELM workstation;
-    class BM bastion;
-    class OCP,REG cluster;
 ```
 
 #### Disconnected Installation specific values
@@ -399,8 +437,7 @@ The customer guide and the helm deployment guide in this repository provides
 helm commands  to discover the helm values. This document will provide information on
 distinct Helm values making disconnected installation smoother.
 In both the connected and disconnected environments, the following shell variables
-are essential. At the time of writing, `DOMAIN`, `OCP_VERSION` and `KC_HOSTNAME`
-must exist.
+are essential. At the time of writing, `DOMAIN` and `OCP_VERSION` must exist.
 
 #### Overriding
 
@@ -424,7 +461,7 @@ helm upgrade --install osac-deps osac-installer/charts/osac-deps \
 ```
 
 ##### Values file
-
+See the docs/guides/installation/customer-install-guide.md situated within this repo explaining the procedure to create a values file.
 Alternatively, create a custom values file:
 
 ```yaml
@@ -444,11 +481,13 @@ For first time experience of installation, I recommend manual installation over
 helm based installation. It becomes easier to determine the root cause of errors.
 Order of installation is determined based upon the Helm weight and type.
 osac-deps. Use the following comand to discover the Kubernetes resources
+values.yaml
 
-```bash
+``` bash
 helm template osac-deps ./osac-installer/charts/osac-deps -n osac-deps -f ./osac-installer/values/disconnected-dev/infra.yaml --set lvms.channel="stable-$OCP_VERSION"
 ```
 
+<summary>
 Ordered checklist of osac-deps
 
 <details>
@@ -522,7 +561,7 @@ Post-install / post-upgrade hooks:
     - [ ] osac-deps-approve-aap-installplan            osac-deps
         → Job runs approve-aap-installplan.sh:
         1. Finds InstallPlan for pinned CSV aap-operator.v2.6.0-0.1787258256
-        2. Approves the InstallPlan (OSAC-5621 workaround)
+        2. Approves the InstallPlan
 - [ ] Helm Weight 15 — wait-aap (gated on aapOperator.enabled)
   - [ ] ServiceAccount
     - [ ] osac-deps-wait-aap                          osac-deps
@@ -571,10 +610,10 @@ helm template --validate render osac-installer/charts/osac-infra   --namespace o
 
 
 
-##### Ordered check list for osac-deps helm chart
+##### Ordered check list for osac-infra helm chart
 
 <summary>
-[[osac-infra helm chart creation]]
+osac-infra helm chart creation
 <details>
 
 - [ ] Weight 10: configure-lvms (gated on lvms.enabled) →
@@ -790,7 +829,7 @@ oc get clusteroperators
 
 ##### CaaS Cluster Considerations
 
-Check with the CaaS team.
+> **TBD**
 
 ## Troubleshooting
 
@@ -829,4 +868,4 @@ oc debug node/<node-name> -- chroot /host podman pull <image>
 #### Footnotes
 
 [^1]: [RFE-8713 — “oc-mirror fails to render Helm charts containing required values during image discovery”](https://redhat.atlassian.net/browse/RFE-8713)
-  [^2]: [RFE-8748: Support for Helm mirroring avilable in OCI Compliant registries](https://redhat.atlassian.net/browse/RFE-8748)
+[^2]: [RFE-8748: Support for Helm mirroring available in OCI-compliant registries](https://redhat.atlassian.net/browse/RFE-8748)

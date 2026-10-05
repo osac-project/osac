@@ -153,6 +153,25 @@ var _ = Describe("AAPProvider", func() {
 			})
 		})
 
+		It("marks workflow launches sensitive when admin kubeconfig is present", func() {
+			provider = provisioning.NewAAPProvider(aapClient, "provision-workflow", "deprovision-workflow")
+			aapClient.getTemplateFunc = func(ctx context.Context, templateName string) (*aap.Template, error) {
+				return &aap.Template{ID: 2, Name: templateName, Type: aap.TemplateTypeWorkflow}, nil
+			}
+			kubeconfig := "apiVersion: v1\nclusters: []\n"
+			ctx = provisioning.WithAdminKubeconfig(ctx, kubeconfig)
+			aapClient.launchWorkflowTemplateFunc = func(ctx context.Context, req aap.LaunchWorkflowTemplateRequest) (*aap.LaunchWorkflowTemplateResponse, error) {
+				Expect(req.Sensitive).To(BeTrue())
+				return &aap.LaunchWorkflowTemplateResponse{JobID: 457}, nil
+			}
+
+			instance := &v1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-resource", Namespace: "default"},
+			}
+			_, err := provider.TriggerProvision(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+		})
+
 		Context("with tenant storage classes in context", func() {
 			BeforeEach(func() {
 				provider = provisioning.NewAAPProvider(aapClient, "provision-job", "deprovision-job")
@@ -310,6 +329,49 @@ var _ = Describe("AAPProvider", func() {
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(launchedExtraVars).To(HaveKeyWithValue("osac_job_vars", inherited["osac_job_vars"]))
+			Expect(inherited).To(Equal(map[string]any{"osac_job_vars": map[string]any{"source": "fabric"}}))
+		})
+	})
+
+	Describe("TriggerProvision for add-on operators", func() {
+		It("launches the dedicated template with the operator and admin kubeconfig", func() {
+			provider = provisioning.NewAAPProvider(aapClient, "osac-install-addon-operator", "")
+			ctx = provisioning.WithAdminKubeconfig(ctx, "apiVersion: v1\nclusters: []\n")
+			ctx = provisioning.WithAddOnOperatorName(ctx, "cert-manager")
+			aapClient.getTemplateFunc = func(ctx context.Context, templateName string) (*aap.Template, error) {
+				Expect(templateName).To(Equal("osac-install-addon-operator"))
+				return &aap.Template{ID: 7, Name: templateName, Type: aap.TemplateTypeJob}, nil
+			}
+			aapClient.launchJobTemplateFunc = func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
+				Expect(req.TemplateName).To(Equal("osac-install-addon-operator"))
+				jobVars := req.ExtraVars["osac_job_vars"].(map[string]any)
+				Expect(jobVars).To(HaveKeyWithValue("addon_operator_name", "cert_manager"))
+				Expect(jobVars).To(HaveKeyWithValue("admin_kubeconfig", "apiVersion: v1\nclusters: []\n"))
+				resource := jobVars["resource"].(map[string]any)
+				Expect(resource["metadata"].(map[string]any)).To(HaveKeyWithValue("name", "test-order"))
+				return &aap.LaunchJobTemplateResponse{JobID: 707}, nil
+			}
+
+			order := &v1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-order", Namespace: "default"},
+			}
+			result, err := provider.TriggerProvision(ctx, order)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.JobID).To(Equal("707"))
+			Expect(result.InitialState).To(Equal(v1alpha1.JobStatePending))
+			Expect(result.Message).To(Equal("Provisioning job triggered"))
+		})
+
+		It("rejects an invalid operator name before launching AAP", func() {
+			provider = provisioning.NewAAPProvider(aapClient, "osac-install-addon-operator", "")
+			ctx = provisioning.WithAddOnOperatorName(ctx, "cert_manager")
+
+			order := &v1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-order", Namespace: "default"},
+			}
+			_, err := provider.TriggerProvision(ctx, order)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("invalid add-on operator name"))
 		})
 	})
 
@@ -922,6 +984,7 @@ var _ = Describe("AAPProvider", func() {
 			aapClient.launchJobTemplateFunc = func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
 				jobVars := req.ExtraVars["osac_job_vars"].(map[string]any)
 				Expect(jobVars).To(HaveKeyWithValue("admin_kubeconfig", kubeconfig))
+				Expect(req.Sensitive).To(BeTrue())
 				return &aap.LaunchJobTemplateResponse{JobID: 100}, nil
 			}
 

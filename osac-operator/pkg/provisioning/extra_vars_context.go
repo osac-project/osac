@@ -31,6 +31,7 @@ const (
 	storageBackendConnectionsKey
 	networkAttachmentMACsKey
 	subnetParentVirtualNetworkKey
+	addOnOperatorNameKey
 )
 
 // TierDefinition is the flat, AAP-schema-shaped representation of a storage tier
@@ -109,6 +110,19 @@ func WithAdminKubeconfig(ctx context.Context, kubeconfig string) context.Context
 func AdminKubeconfigFromContext(ctx context.Context) string {
 	kc, _ := ctx.Value(adminKubeconfigKey).(string)
 	return kc
+}
+
+// WithAddOnOperatorName returns a context carrying the operator role name for
+// an add-on installation AAP job.
+func WithAddOnOperatorName(ctx context.Context, name string) context.Context {
+	return context.WithValue(ctx, addOnOperatorNameKey, name)
+}
+
+// AddOnOperatorNameFromContext retrieves the operator role name for an
+// add-on installation AAP job, or an empty string if it is not set.
+func AddOnOperatorNameFromContext(ctx context.Context) string {
+	name, _ := ctx.Value(addOnOperatorNameKey).(string)
+	return name
 }
 
 // WithStorageTierDefinitions returns a context carrying the resolved storage tier

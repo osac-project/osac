@@ -1164,6 +1164,89 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 			Expect(mockClient.lastUpdate.GetStatus().GetConditions()).To(BeEmpty())
 		})
 
+		It("should map failed add-on operators to public degradation", func() {
+			setCRCondition(string(osacv1alpha1.ClusterOrderConditionAddOnOperatorsReady), metav1.ConditionFalse,
+				"AddOnOperatorsFailed", "Add-on operator installation failed: gpu-operator")
+
+			reconcileOnce()
+
+			degraded := findRemoteCondition(privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_DEGRADED)
+			Expect(degraded).NotTo(BeNil())
+			Expect(degraded.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+			Expect(degraded.GetReason()).To(Equal("AddOnOperatorsFailed"))
+			Expect(degraded.GetMessage()).To(Equal("Add-on operator installation failed: gpu-operator"))
+		})
+
+		It("should clear add-on-owned degradation after all operators recover", func() {
+			setCRCondition(string(osacv1alpha1.ClusterOrderConditionAddOnOperatorsReady), metav1.ConditionFalse,
+				"AddOnOperatorsFailed", "Add-on operator installation failed: gpu-operator")
+			reconcileOnce()
+
+			setCRCondition(string(osacv1alpha1.ClusterOrderConditionAddOnOperatorsReady), metav1.ConditionTrue,
+				"AddOnOperatorsReady", "All add-on operators installed")
+			reconcileOnce()
+
+			degraded := findRemoteCondition(privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_DEGRADED)
+			Expect(degraded).NotTo(BeNil())
+			Expect(degraded.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+			Expect(degraded.GetReason()).To(Equal("AddOnOperatorsRecovered"))
+		})
+
+		It("should preserve an unrelated degradation when add-on installation also fails", func() {
+			degraded := &privatev1.ClusterCondition{
+				Type:   privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_DEGRADED,
+				Status: privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+			}
+			degraded.SetReason("NodePoolDegraded")
+			degraded.SetMessage("node pool is unhealthy")
+			mockClient.getResponse.GetObject().GetStatus().SetConditions([]*privatev1.ClusterCondition{degraded})
+			setCRCondition(string(osacv1alpha1.ClusterOrderConditionAddOnOperatorsReady), metav1.ConditionFalse,
+				"AddOnOperatorsFailed", "Add-on operator installation failed: gpu-operator")
+
+			reconcileOnce()
+
+			degraded = mockClient.getResponse.GetObject().GetStatus().GetConditions()[0]
+			Expect(degraded.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+			Expect(degraded.GetReason()).To(Equal("NodePoolDegraded"))
+			Expect(degraded.GetMessage()).To(Equal("node pool is unhealthy"))
+		})
+
+		It("should preserve unrelated degradation when add-on operators are ready", func() {
+			degraded := &privatev1.ClusterCondition{
+				Type:   privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_DEGRADED,
+				Status: privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+			}
+			degraded.SetReason("NodePoolDegraded")
+			degraded.SetMessage("node pool is unhealthy")
+			mockClient.getResponse.GetObject().GetStatus().SetConditions([]*privatev1.ClusterCondition{degraded})
+			setCRCondition(string(osacv1alpha1.ClusterOrderConditionAddOnOperatorsReady), metav1.ConditionTrue,
+				"AddOnOperatorsReady", "All add-on operators installed")
+
+			reconcileOnce()
+
+			degraded = mockClient.getResponse.GetObject().GetStatus().GetConditions()[0]
+			Expect(degraded).NotTo(BeNil())
+			Expect(degraded.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+			Expect(degraded.GetReason()).To(Equal("NodePoolDegraded"))
+		})
+
+		It("should preserve unrelated degradation when the add-on condition is absent", func() {
+			degraded := &privatev1.ClusterCondition{
+				Type:   privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_DEGRADED,
+				Status: privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+			}
+			degraded.SetReason("HyperShiftDegraded")
+			degraded.SetMessage("control plane is unhealthy")
+			mockClient.getResponse.GetObject().GetStatus().SetConditions([]*privatev1.ClusterCondition{degraded})
+
+			reconcileOnce()
+
+			degraded = mockClient.getResponse.GetObject().GetStatus().GetConditions()[0]
+			Expect(degraded).NotTo(BeNil())
+			Expect(degraded.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+			Expect(degraded.GetReason()).To(Equal("HyperShiftDegraded"))
+		})
+
 		It("should fill PROGRESSING from Progressing regardless of condition order and not invert once the cluster is available", func() {
 			// A finished cluster: Progressing is False, every installation step is True, and
 			// the cluster is Available. PROGRESSING must follow Progressing (False) - a
@@ -1227,11 +1310,11 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 	})
 
 	Context("ClusterOrder condition mapping completeness", func() {
-		// Tripwire: every ClusterOrder condition must be handled by exactly one of the three
+		// Tripwire: every ClusterOrder condition must be handled by exactly one of the four
 		// dispositions in feedback_controller.go - mapped to a fulfillment condition, listed
 		// as a provisioning stage (refines PROGRESSING's reason/message), or explicitly
-		// unsurfaced. When a new ClusterOrder condition is added to the API, add it here and
-		// wire it into one of the three - otherwise this test fails, instead of the condition
+		// degraded, or unsurfaced. When a new ClusterOrder condition is added to the API, add it here and
+		// wire it into one of the four - otherwise this test fails, instead of the condition
 		// being silently dropped at runtime.
 		knownClusterOrderConditions := []string{
 			osacv1alpha1.ConditionAccepted,
@@ -1250,16 +1333,17 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 			for _, condition := range knownClusterOrderConditions {
 				_, mapped := clusterOrderConditionMappings[condition]
 				stage := slices.Contains(clusterOrderProvisioningStages, condition)
+				_, degraded := clusterOrderDegradedConditionSources[condition]
 				_, unsurfaced := clusterOrderUnsurfacedConditions[condition]
 
 				handledCount := 0
-				for _, handled := range []bool{mapped, stage, unsurfaced} {
+				for _, handled := range []bool{mapped, stage, degraded, unsurfaced} {
 					if handled {
 						handledCount++
 					}
 				}
 				Expect(handledCount).To(Equal(1),
-					"condition %q must be handled by exactly one of: mapping, provisioning stage, unsurfaced (got %d)",
+					"condition %q must be handled by exactly one of: mapping, provisioning stage, degraded, unsurfaced (got %d)",
 					condition, handledCount)
 			}
 		})
@@ -1287,6 +1371,10 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 				_, ok := known[condition]
 				Expect(ok).To(BeTrue(), "provisioning-stage condition %q is not a known ClusterOrder condition", condition)
 			}
+			for condition := range clusterOrderDegradedConditionSources {
+				_, ok := known[condition]
+				Expect(ok).To(BeTrue(), "degraded condition %q is not a known ClusterOrder condition", condition)
+			}
 			for condition := range clusterOrderUnsurfacedConditions {
 				_, ok := known[condition]
 				Expect(ok).To(BeTrue(), "unsurfaced condition %q is not a known ClusterOrder condition", condition)
@@ -1307,7 +1395,7 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 				},
 				Spec: osacv1alpha1.ClusterOrderSpec{
 					TemplateID:     "test_template",
-					AddOnOperators: []string{"pending", "running", "installed", "failed", "not-started"},
+					AddOnOperators: []string{"pending", "running", "installed", "failed", "unknown", "not-started"},
 					NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "workers",
 						NumberOfNodes: 3,
 						BareMetal:     &osacv1alpha1.BareMetalNodeSpec{InstanceType: "m5.xlarge"},
@@ -1413,6 +1501,7 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 				{Name: "running", JobStatus: osacv1alpha1.JobStatus{Type: osacv1alpha1.JobTypeProvision, Timestamp: metav1.NewTime(now), State: osacv1alpha1.JobStateRunning}},
 				{Name: "installed", JobStatus: osacv1alpha1.JobStatus{Type: osacv1alpha1.JobTypeProvision, Timestamp: metav1.NewTime(now), State: osacv1alpha1.JobStateSucceeded}},
 				{Name: "failed", JobStatus: osacv1alpha1.JobStatus{Type: osacv1alpha1.JobTypeProvision, Timestamp: metav1.NewTime(now), State: osacv1alpha1.JobStateFailed, Message: "installation failed"}},
+				{Name: "unknown", JobStatus: osacv1alpha1.JobStatus{Type: osacv1alpha1.JobTypeProvision, Timestamp: metav1.NewTime(now), State: osacv1alpha1.JobStateUnknown, Message: "provider state not recognized"}},
 			}
 			Expect(k8sClient.Status().Update(testCtx, clusterOrder)).To(Succeed())
 
@@ -1421,14 +1510,16 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 			Expect(result.IsZero()).To(BeTrue())
 			Expect(mockClient.updateCalled).To(BeTrue())
 			statuses := mockClient.lastUpdate.GetStatus().GetAddOnOperators()
-			Expect(statuses).To(HaveLen(5))
+			Expect(statuses).To(HaveLen(6))
 			Expect(statuses[0].GetState()).To(Equal(privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_INSTALLING))
 			Expect(statuses[1].GetState()).To(Equal(privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_INSTALLING))
 			Expect(statuses[2].GetState()).To(Equal(privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_INSTALLED))
 			Expect(statuses[3].GetState()).To(Equal(privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_FAILED))
 			Expect(statuses[3].GetMessage()).To(Equal("installation failed"))
-			Expect(statuses[4].GetName()).To(Equal("not-started"))
-			Expect(statuses[4].GetState()).To(Equal(privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_PENDING))
+			Expect(statuses[4].GetState()).To(Equal(privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_INSTALLING))
+			Expect(statuses[4].GetMessage()).To(Equal("provider state not recognized"))
+			Expect(statuses[5].GetName()).To(Equal("not-started"))
+			Expect(statuses[5].GetState()).To(Equal(privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_PENDING))
 
 			hasAddOnOperatorsPath := false
 			for _, path := range mockClient.lastUpdateMask.GetPaths() {

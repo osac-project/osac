@@ -11,11 +11,86 @@
     - name: Set add-on operator job variables
       ansible.builtin.set_fact:
         osac_job_vars:
-          name: cert_manager
+          addon_operator_name: cert_manager
           admin_kubeconfig: >-
             {{ lookup('file', lookup('env', 'KUBECONFIG') | default(lookup('env', 'HOME') + '/.kube/config', true)) }}
           resource: "{{ addon_operator_resource }}"
       no_log: true
+
+    - name: Install minimal CSV CRD for the OLM readiness fixture
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: apiextensions.k8s.io/v1
+          kind: CustomResourceDefinition
+          metadata:
+            name: clusterserviceversions.operators.coreos.com
+          spec:
+            group: operators.coreos.com
+            names:
+              kind: ClusterServiceVersion
+              listKind: ClusterServiceVersionList
+              plural: clusterserviceversions
+              singular: clusterserviceversion
+            scope: Namespaced
+            versions:
+              - name: v1alpha1
+                served: true
+                storage: true
+                schema:
+                  openAPIV3Schema:
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
+                subresources:
+                  status: {}
+
+    - name: Wait for CSV CRD to be established
+      kubernetes.core.k8s_info:
+        api_version: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        name: clusterserviceversions.operators.coreos.com
+      register: csv_crd
+      retries: 30
+      delay: 1
+      until:
+        - csv_crd.resources | length == 1
+        - >-
+          csv_crd.resources[0].status.conditions |
+          selectattr('type', 'equalto', 'Established') |
+          selectattr('status', 'equalto', 'True') |
+          list | length > 0
+
+    - name: Start OLM readiness fixture
+      ansible.builtin.shell: |
+        set -euo pipefail
+        for _ in $(seq 1 120); do
+          if kubectl get subscription cert-manager -n openshift-operators >/dev/null 2>&1; then
+            break
+          fi
+          sleep 1
+        done
+        kubectl get subscription cert-manager -n openshift-operators >/dev/null
+        kubectl apply -f - <<'EOF'
+        apiVersion: operators.coreos.com/v1alpha1
+        kind: ClusterServiceVersion
+        metadata:
+          name: cert-manager.v1.0.0
+          namespace: openshift-operators
+        spec:
+          displayName: cert-manager
+          version: 1.0.0
+        EOF
+        kubectl patch clusterserviceversions.operators.coreos.com cert-manager.v1.0.0 \
+          -n openshift-operators --subresource=status --type=merge \
+          -p '{"status":{"phase":"Succeeded"}}'
+        kubectl patch subscription cert-manager -n openshift-operators \
+          --subresource=status --type=merge \
+          -p '{"status":{"installedCSV":"cert-manager.v1.0.0","lastUpdated":"2026-01-01T00:00:00Z"}}'
+      args:
+        executable: /bin/bash
+      changed_when: false
+      async: 180
+      poll: 0
 
 - name: Import add-on operator installation playbook
   ansible.builtin.import_playbook: ../../../../../playbook_osac_install_addon_operator.yml
@@ -28,7 +103,7 @@
     failure_cases:
       - name: unknown_operator_role
         extra_vars:
-          name: missing_addon_operator
+          addon_operator_name: missing_addon_operator
           admin_kubeconfig: |
             apiVersion: v1
             kind: Config
@@ -39,7 +114,7 @@
         extra_vars:
           osac_job_vars:
             resource: "{{ lookup('file', '../../../fixtures/clusterorder-test.yaml') | from_yaml }}"
-        expected_error: "name, osac_job_vars.resource, and admin_kubeconfig are required"
+        expected_error: "addon_operator_name, osac_job_vars.resource, and admin_kubeconfig are required"
 
   tasks:
     - name: Read operator namespace
@@ -57,11 +132,19 @@
         namespace: openshift-operators
       register: addon_operator_subscription
 
+    - name: Read cert-manager CSV
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: ClusterServiceVersion
+        name: "{{ addon_operator_subscription.resources[0].status.installedCSV }}"
+        namespace: openshift-operators
+      register: addon_operator_csv
+
     - name: Verify the one-operator launch contract
       ansible.builtin.assert:
         that:
           - osac_job_vars.resource.metadata.name == "test-cluster"
-          - osac_job_vars.name == "cert_manager"
+          - osac_job_vars.addon_operator_name == "cert_manager"
           - osac_job_vars.admin_kubeconfig | length > 0
           - addon_operator_namespace.resources | length == 1
           - addon_operator_subscription.resources | length == 1
@@ -70,6 +153,9 @@
           - addon_operator_subscription.resources[0].spec.name == "cert-manager"
           - addon_operator_subscription.resources[0].spec.source == "community-operators"
           - addon_operator_subscription.resources[0].spec.sourceNamespace == "openshift-marketplace"
+          - addon_operator_subscription.resources[0].status.installedCSV is defined
+          - addon_operator_csv.resources | length == 1
+          - addon_operator_csv.resources[0].status.phase == "Succeeded"
         fail_msg: "The add-on operator playbook did not install the expected cert-manager Subscription"
 
     - name: Run the playbook for each expected failure case

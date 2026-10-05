@@ -6,8 +6,8 @@
 
   vars:
     cluster_order: "{{ osac_job_vars.resource }}"
-    addon_operator_name: >-
-      {{ name | default((osac_job_vars | default({})).get('name', ''), true) }}
+    addon_operator_role_name: >-
+      {{ addon_operator_name | default((osac_job_vars | default({})).get('addon_operator_name', ''), true) }}
     addon_operator_kubeconfig: >-
       {{ admin_kubeconfig | default((osac_job_vars | default({})).get('admin_kubeconfig', ''), true) }}
 
@@ -17,9 +17,9 @@
         that:
           - osac_job_vars is defined
           - osac_job_vars.resource is defined
-          - addon_operator_name | length > 0
+          - addon_operator_role_name | length > 0
           - addon_operator_kubeconfig | length > 0
-        fail_msg: "name, osac_job_vars.resource, and admin_kubeconfig are required"
+        fail_msg: "addon_operator_name, osac_job_vars.resource, and admin_kubeconfig are required"
 
     - name: Materialize target cluster kubeconfig
       ansible.builtin.set_fact:
@@ -29,7 +29,7 @@
   tasks:
     - name: Install requested add-on operator
       ansible.builtin.include_role:
-        name: "osac.templates.{{ addon_operator_name }}"
+        name: "osac.templates.{{ addon_operator_role_name }}"
         tasks_from: install
         apply:
           environment:

@@ -450,6 +450,45 @@ var _ = Describe("ClusterOrder Controller", func() {
 		})
 	})
 
+	Context("patchStatusWithRetry add-on ownership", func() {
+		It("preserves a newer AddOnOperatorsReady condition", func() {
+			const name = "stale-addon-condition"
+			instance := &v1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+				Spec:       v1alpha1.ClusterOrderSpec{TemplateID: "test.template"},
+			}
+			Expect(k8sClient.Create(context.Background(), instance)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(context.Background(), instance) })
+			Expect(k8sClient.Get(context.Background(), client.ObjectKeyFromObject(instance), instance)).To(Succeed())
+			instance.Status.AddOnOperatorJobs = []v1alpha1.AddOnOperatorJobStatus{{
+				Name: "operator-one",
+				JobStatus: v1alpha1.JobStatus{
+					JobID: "addon-job-1", Type: v1alpha1.JobTypeProvision,
+					State: v1alpha1.JobStateSucceeded, Timestamp: metav1.Now(),
+				},
+			}}
+			instance.SetStatusCondition(string(v1alpha1.ClusterOrderConditionAddOnOperatorsReady), metav1.ConditionTrue,
+				"All add-on operators installed", "AddOnOperatorsReady")
+			Expect(k8sClient.Status().Update(context.Background(), instance)).To(Succeed())
+
+			stale := instance.Status
+			stale.Conditions = []metav1.Condition{{
+				Type:   string(v1alpha1.ClusterOrderConditionAddOnOperatorsReady),
+				Status: metav1.ConditionFalse, Reason: "Stale", Message: "stale status",
+			}}
+			reconciler := &ClusterOrderReconciler{Client: k8sClient, apiReader: k8sClient}
+			_, err := reconciler.patchStatusWithRetry(context.Background(), client.ObjectKeyFromObject(instance), stale)
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &v1alpha1.ClusterOrder{}
+			Expect(k8sClient.Get(context.Background(), client.ObjectKeyFromObject(instance), updated)).To(Succeed())
+			condition := apimeta.FindStatusCondition(updated.Status.Conditions, string(v1alpha1.ClusterOrderConditionAddOnOperatorsReady))
+			Expect(condition).NotTo(BeNil())
+			Expect(condition.Status).To(Equal(metav1.ConditionTrue))
+			Expect(updated.Status.AddOnOperatorJobs).To(HaveLen(1))
+		})
+	})
+
 	Context("handleDesiredConfigVersion", func() {
 		It("should produce consistent hash for same spec", func() {
 			reconciler := &ClusterOrderReconciler{}
@@ -521,6 +560,33 @@ var _ = Describe("ClusterOrder Controller", func() {
 			Eventually(func() bool {
 				return errors.IsNotFound(k8sClient.Get(ctx, key, &v1alpha1.ClusterOrder{}))
 			}, 5*time.Second, 100*time.Millisecond).Should(BeTrue())
+		})
+
+		It("waits for add-on jobs before starting cluster teardown", func() {
+			deletionTimestamp := metav1.Now()
+			instance := &v1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "delete-with-addon-job",
+					Namespace:         "default",
+					DeletionTimestamp: &deletionTimestamp,
+					Finalizers:        []string{osacFinalizer, osacAddOnOperatorFinalizer},
+				},
+				Status: v1alpha1.ClusterOrderStatus{
+					AddOnOperatorJobs: []v1alpha1.AddOnOperatorJobStatus{{
+						Name: "cert-manager",
+						JobStatus: v1alpha1.JobStatus{
+							JobID: "active-addon-job",
+							State: v1alpha1.JobStateRunning,
+						},
+					}},
+				},
+			}
+			reconciler := &ClusterOrderReconciler{StatusPollInterval: time.Minute}
+
+			result, err := reconciler.handleDelete(context.Background(), reconcile.Request{}, instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(time.Minute))
+			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseDeleting))
 		})
 	})
 

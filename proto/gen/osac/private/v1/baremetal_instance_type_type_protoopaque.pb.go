@@ -365,9 +365,9 @@ type BareMetalFabricBindings_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
 	// Opaque Ethernet east-west profile references keyed by fabric-manager name.
-	// For Netris, the value is a Server Cluster Template ID. The matching
-	// NetworkClass selects the fabric manager; this hardware profile is
-	// independent of NetworkClass.
+	// Each manager interprets its own value; for example, the Netris integration
+	// uses a Server Cluster Template ID. The type owns these hardware profiles,
+	// while NetworkClass selects the manager for a workload.
 	EthernetEw map[string]string
 }
 

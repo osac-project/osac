@@ -34,7 +34,12 @@ def omit_vpc_from_state_response():
 
 
 @pytest.fixture
-def netris_server(inventory, request_bodies, read_requests, omit_vpc_from_state_response):
+def created_vpc():
+    return {}
+
+
+@pytest.fixture
+def netris_server(inventory, request_bodies, read_requests, omit_vpc_from_state_response, created_vpc):
     clusters = []
     writes = []
 
@@ -82,6 +87,8 @@ def netris_server(inventory, request_bodies, read_requests, omit_vpc_from_state_
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             request_bodies.append(body)
             found = {**body, "id": 23}
+            if created_vpc and body.get("vpc", {}).get("id") == 0:
+                found["vpc"] = created_vpc
             clusters.append(found)
             self.respond(found, status=201)
 
@@ -120,10 +127,20 @@ def run_role(tmp_path, url, tasks_from, role_name="netris.controller.server_clus
             },
             "vars": call_vars,
         } for call_vars in (role_calls if role_calls is not None else [{}])],
-        "post_tasks": ([{
-            "name": "Report confirmed ServerCluster VPC for test assertions",
-            "ansible.builtin.debug": {"var": "_server_cluster_confirmed_vpc_id"},
-        }] if report_confirmed_vpc else []),
+        "post_tasks": ([
+            {
+                "name": "Report confirmed ServerCluster VPC for test assertions",
+                "ansible.builtin.debug": {"var": "_server_cluster_confirmed_vpc_id"},
+            },
+            {
+                "name": "Report public ServerCluster VPC facts for test assertions",
+                "ansible.builtin.debug": {"var": "server_cluster_vpc_id"},
+            },
+            {
+                "name": "Report public ServerCluster VPC name for test assertions",
+                "ansible.builtin.debug": {"var": "server_cluster_vpc_name"},
+            },
+        ] if report_confirmed_vpc else []),
     }]
     playbook_file = tmp_path / "server_cluster.yml"
     playbook_file.write_text(json.dumps(playbook))
@@ -232,6 +249,39 @@ def test_create_new_vpc_does_not_reuse_same_name_cluster(tmp_path, netris_server
     assert writes == [("POST", "/api/v2/server-cluster")]
     assert len(clusters) == 2
     assert request_bodies[0]["vpc"] == {"id": 0, "name": "Create New"}
+
+
+def test_create_publishes_confirmed_vpc_facts_for_downstream_callers(
+    tmp_path, netris_server, request_bodies, created_vpc,
+):
+    url, _clusters, writes = netris_server
+    created_vpc.update({"id": 7, "name": "created-vpc"})
+
+    result = run_role(
+        tmp_path, url, "create", server_cluster_servers=[], report_confirmed_vpc=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert writes == [("POST", "/api/v2/server-cluster")]
+    assert request_bodies[0]["vpc"] == {"id": 0, "name": "Create New"}
+    assert '"server_cluster_vpc_id": "7"' in result.stdout
+    assert '"server_cluster_vpc_name": "created-vpc"' in result.stdout
+
+
+@pytest.mark.parametrize("omit_vpc_from_state_response", [True])
+def test_create_publishes_empty_vpc_facts_when_netris_does_not_confirm_vpc(
+    tmp_path, netris_server, omit_vpc_from_state_response,
+):
+    url, _clusters, writes = netris_server
+
+    result = run_role(
+        tmp_path, url, "create", server_cluster_servers=[], report_confirmed_vpc=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert writes == [("POST", "/api/v2/server-cluster")]
+    assert '"server_cluster_vpc_id": ""' in result.stdout
+    assert '"server_cluster_vpc_name": ""' in result.stdout
 
 
 def test_fabric_domain_delete_uses_virtual_network_region_site(tmp_path, netris_server):

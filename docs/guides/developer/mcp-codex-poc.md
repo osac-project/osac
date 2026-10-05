@@ -41,21 +41,27 @@ oc -n <osac-namespace> get configmap ca-bundle \
 ```
 
 For the local Kind `PROFILE=dev` installation, use this copyable path outside
-the repository:
+the repository and verify both HTTPS endpoints:
 
 ```bash
 export KUBECONFIG="$HOME/.kube/osac-dev-kind.kubeconfig"
+export OSAC_MCP_URL='https://mcp.osac.localhost:8443'
+export OSAC_ISSUER_URL='https://keycloak.keycloak.svc.cluster.local:8443/realms/osac'
 mkdir -p "$HOME/.config/osac"
 kubectl -n osac get configmap ca-bundle \
   -o go-template='{{ index .data "bundle.pem" }}' \
   > "$HOME/.config/osac/ca-bundle.pem"
 export CODEX_CA_CERTIFICATE="$HOME/.config/osac/ca-bundle.pem"
+openssl x509 -in "$CODEX_CA_CERTIFICATE" -noout -subject
+curl --fail --show-error --cacert "$CODEX_CA_CERTIFICATE" \
+  "$OSAC_MCP_URL/.well-known/oauth-protected-resource"
+curl --fail --show-error --cacert "$CODEX_CA_CERTIFICATE" \
+  "$OSAC_ISSUER_URL/.well-known/openid-configuration"
 ```
 
 Launch Codex from a shell with that environment variable set.
 
-Verify TLS and the MCP discovery document before configuring Codex. Replace
-the placeholders with the values for your deployment:
+For another deployment, replace these placeholders and verify its endpoints:
 
 ```bash
 export OSAC_MCP_URL='https://<mcp-host>'
@@ -144,26 +150,61 @@ check that Codex presents a separate approval prompt for the write call. A
 conversation request alone is not the host approval step. OSAC still
 authorizes each call as the signed-in user through the public Fulfillment API.
 
+## Explore with MCP Inspector
+
+The earlier OSAC-4388 PoC launched Inspector with `NODE_EXTRA_CA_CERTS`
+pointing at the same public Kind `ca-bundle` ConfigMap used for Codex. Node
+does not use `curl --cacert` or `CODEX_CA_CERTIFICATE`. For this `PROFILE=dev`
+installation, use the variables and CA file from the Kind commands above.
+This creates only a temporary Inspector configuration containing the public
+client ID and MCP URL:
+
+```bash
+INSPECTOR_DIR="$(mktemp -d "${TMPDIR:-/tmp}/osac-mcp-inspector.XXXXXX")"
+jq -n --arg url "$OSAC_MCP_URL" \
+  '{mcpServers:{osac:{type:"http",url:$url,oauth:{clientId:"osac-mcp-client"}}}}' \
+  > "$INSPECTOR_DIR/inspector-osac.config.json"
+NODE_EXTRA_CA_CERTS="$CODEX_CA_CERTIFICATE" \
+  npx --yes @modelcontextprotocol/inspector@2.6.0 \
+    --config "$INSPECTOR_DIR/inspector-osac.config.json" --server osac
+```
+
+In the Inspector web UI, connect to `osac`, leave **OAuth Client Metadata
+Document** empty, and complete Keycloak login. Its browser callback is
+`http://localhost:6274/oauth/callback`, which the development client allows.
+The Tools tab should list the four PoC tools after login.
+The browser must trust the Kind CA separately; `NODE_EXTRA_CA_CERTS` applies
+to the Node process. The older `PROFILE=dev-full` PoC used
+`keycloak.osac.localhost` as its issuer, whereas this `PROFILE=dev` installation
+uses `keycloak.keycloak.svc.cluster.local` as shown above.
+
 ## When the connection fails
 
 - A certificate error usually means the MCP route or OAuth issuer is not
   covered by the CA bundle available to the Codex process. Check both `curl`
-  requests above and the process environment. A desktop app launched outside
-  the shell may not inherit a shell export. The Codex CLI may also reuse a
-  background app server started before `CODEX_CA_CERTIFICATE` was set. After
-  exiting active Codex sessions, stop that daemon and start it from a shell
-  with the CA variable set:
+  requests above and the process environment. A successful `codex mcp login`
+  does not prove the shared app server can use the same CA. A desktop app
+  launched outside the shell may not inherit a shell export. The Codex CLI
+  may also reuse a background app server started before
+  `CODEX_CA_CERTIFICATE` was set. On macOS, `launchctl setenv` makes the CA
+  setting available to future GUI-launched processes, but does not change an
+  already running daemon. To isolate daemon inheritance, run
+  `codex --no-daemon resume --last` from the shell with the CA export. If that
+  works, exit active Codex sessions and restart the shared daemon from an
+  ordinary macOS Terminal:
 
   ```bash
   export CODEX_CA_CERTIFICATE="$HOME/.config/osac/ca-bundle.pem"
+  launchctl setenv CODEX_CA_CERTIFICATE "$CODEX_CA_CERTIFICATE"
   codex app-server daemon stop
   codex app-server daemon start
   codex resume --last
   ```
 
-  Stopping the daemon disconnects other active Codex sessions. To test the
-  current shell without restarting the shared daemon, use
-  `codex --no-daemon resume --last` instead. Check `/mcp` after reconnecting.
+  Stopping the daemon disconnects other active Codex sessions. If `/mcp` still
+  reports zero tools, check that `stop` and `start` succeeded and that the
+  previous daemon process exited; the Codex CLI can otherwise reconnect to
+  that old process.
 - An `Invalid parameter: redirect_uri` page means Keycloak rejected the
   callback Codex sent. The Kind development client already allows
   `http://localhost:8091/callback`; configure both `callback_url` and

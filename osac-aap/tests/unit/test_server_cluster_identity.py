@@ -29,7 +29,12 @@ def read_requests():
 
 
 @pytest.fixture
-def netris_server(inventory, request_bodies, read_requests):
+def omit_vpc_from_state_response():
+    return False
+
+
+@pytest.fixture
+def netris_server(inventory, request_bodies, read_requests, omit_vpc_from_state_response):
     clusters = []
     writes = []
 
@@ -53,7 +58,11 @@ def netris_server(inventory, request_bodies, read_requests):
                 if found is None:
                     self.send_error(404)
                 else:
-                    self.respond({**found, "status": {"label": "Active"}})
+                    state = {**found, "status": {"label": "Active"}}
+                    if omit_vpc_from_state_response:
+                        state.pop("vpc", None)
+                        state.pop("vpcId", None)
+                    self.respond(state)
 
         def do_DELETE(self):
             writes.append(("DELETE", self.path))
@@ -90,7 +99,8 @@ def netris_server(inventory, request_bodies, read_requests):
         server.server_close()
 
 
-def run_role(tmp_path, url, tasks_from, role_name="netris.controller.server_cluster", role_calls=None, **variables):
+def run_role(tmp_path, url, tasks_from, role_name="netris.controller.server_cluster", role_calls=None,
+             report_confirmed_vpc=False, **variables):
     playbook = [{
         "hosts": "localhost",
         "connection": "local",
@@ -110,6 +120,10 @@ def run_role(tmp_path, url, tasks_from, role_name="netris.controller.server_clus
             },
             "vars": call_vars,
         } for call_vars in (role_calls if role_calls is not None else [{}])],
+        "post_tasks": ([{
+            "name": "Report confirmed ServerCluster VPC for test assertions",
+            "ansible.builtin.debug": {"var": "_server_cluster_confirmed_vpc_id"},
+        }] if report_confirmed_vpc else []),
     }]
     playbook_file = tmp_path / "server_cluster.yml"
     playbook_file.write_text(json.dumps(playbook))
@@ -199,6 +213,24 @@ def test_create_without_vpc_is_allowed_when_no_name_match_exists(tmp_path, netri
     assert result.returncode == 0, result.stdout + result.stderr
     assert clusters == [request_bodies[0] | {"id": 23}]
     assert writes == [("POST", "/api/v2/server-cluster")]
+    assert request_bodies[0]["vpc"] == {"id": 0, "name": "Create New"}
+
+
+def test_create_new_vpc_does_not_reuse_same_name_cluster(tmp_path, netris_server, request_bodies):
+    url, clusters, writes = netris_server
+    clusters.append(cluster(21, 1, 7))
+
+    result = run_role(
+        tmp_path,
+        url,
+        "create",
+        server_cluster_vpc_id=0,
+        server_cluster_servers=[],
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert writes == [("POST", "/api/v2/server-cluster")]
+    assert len(clusters) == 2
     assert request_bodies[0]["vpc"] == {"id": 0, "name": "Create New"}
 
 
@@ -351,7 +383,8 @@ def test_all_requested_hosts_are_sent(tmp_path, netris_server, inventory, reques
                       server_cluster_servers=["server-a", "server-b"], server_cluster_tags=["phase1"])
     assert result.returncode == 0, result.stdout + result.stderr
     expected_write = ("PUT", "/api/v2/server-cluster/23") if existing else ("POST", "/api/v2/server-cluster")
-    assert writes == [expected_write]
+    api_writes = [write for write in writes if write[1].startswith("/api/")]
+    assert api_writes == [expected_write]
     assert request_bodies[0]["servers"] == [{"id": 1, "name": "server-a"}, {"id": 2, "name": "server-b"}]
     assert request_bodies[0]["tags"] == ["phase1"]
     if not existing:
@@ -417,3 +450,23 @@ def test_fabric_domain_wrapper_resolves_region_and_full_membership(tmp_path, net
         assert writes == [("POST", "/api/v2/server-cluster")]
         assert request_bodies[0]["site"] == {"id": 2}
         assert request_bodies[0]["servers"] == [{"id": 1, "name": "server-a"}, {"id": 2, "name": "server-b"}]
+
+
+@pytest.mark.parametrize("omit_vpc_from_state_response", [True])
+def test_fabric_domain_artifact_does_not_fallback_to_requested_vpc(
+    tmp_path, netris_server, inventory, omit_vpc_from_state_response,
+):
+    url, _clusters, writes = netris_server
+    inventory.append(server(1, site_id=2))
+    resource = {
+        "metadata": {"name": "shared-name"},
+        "spec": {"servers": ["server-a"], "templateId": "42", "vpcId": "7", "region": "region-b"},
+    }
+    result = run_role(
+        tmp_path, url, "create_server_cluster", role_name="osac.templates.netris",
+        server_cluster=resource, netris_region_site_map={"region-b": 2}, netris_site_id=1,
+        report_confirmed_vpc=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert writes == [("POST", "/api/v2/server-cluster")]
+    assert '"_server_cluster_confirmed_vpc_id": ""' in result.stdout

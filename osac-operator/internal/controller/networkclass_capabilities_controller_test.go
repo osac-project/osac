@@ -207,6 +207,9 @@ var _ = Describe("NetworkClassCapabilitiesReconciler", func() {
 				Id:            "nc-caps-ew",
 				FabricManager: ptr.To("netris-ew"),
 				K8SManager:    ptr.To("k8s-ew"),
+				Status: &privatev1.NetworkClassStatus{
+					ManagerState: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+				},
 				Capabilities: &privatev1.NetworkClassCapabilities{
 					SupportsIpv4:             true,
 					SupportsEastWestEthernet: previousEW,

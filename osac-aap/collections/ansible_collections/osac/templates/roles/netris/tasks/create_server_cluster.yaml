@@ -28,5 +28,5 @@
   ansible.builtin.set_stats:
     data:
       server_cluster_id: "{{ server_cluster_id | default('') | string }}"
-      server_cluster_vpc_id: "{{ server_cluster_vpc_id | default(server_cluster.spec.vpcId) | string }}"
+      server_cluster_vpc_id: "{{ _server_cluster_confirmed_vpc_id | default('') | string }}"
     per_host: false

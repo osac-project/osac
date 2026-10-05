@@ -686,7 +686,7 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		SetName("fabric_domain").
 		SetClient(r.client).
 		SetFunction(fabricDomainReconcilerFunction).
-		SetEventFilter("has(event.fabric_domain) || has(event.virtual_network) || has(event.hub)").
+		SetEventFilter("has(event.fabric_domain) || (has(event.virtual_network) && event.type == EVENT_TYPE_OBJECT_UPDATED) || (has(event.hub) && event.type == EVENT_TYPE_OBJECT_CREATED)").
 		SetHealthReporter(healthAggregator).
 		Build()
 	if err != nil {

@@ -2,9 +2,10 @@
 
 `test_fabric_domain_api.py` adapts the OSAC-4782 API regression cases from PR1272.
 It exercises the public API, authorization, database tenancy filtering, and
-resource cleanup through the deployed stack. Despite its location in the E2E
-runner, this is **API/component-integration coverage**, not evidence of a working
-Netris ServerCluster lifecycle.
+resource cleanup through the deployed stack. The BMaaS networking suite is the
+right service tier for the FabricDomain journey, while this particular test is
+**API/component-integration coverage**, not evidence of a working Netris
+ServerCluster lifecycle.
 
 The auth unit matrix in
 `fulfillment-service/internal/auth/grpc_authz_interceptor_test.go` is DEV-owned.
@@ -36,7 +37,7 @@ each test. It never patches or disables a shared deployment for the caller.
 ```bash
 export OSAC_FABRIC_DOMAIN_API_ONLY=true
 export OSAC_FABRIC_DOMAIN_OPERATOR_DEPLOYMENT=<operator-deployment-name>
-uv run pytest -n 0 tests/e2e/vmaas/regression/test_fabric_domain_api.py
+uv run pytest -n 0 tests/e2e/bmaas/regression/networking/test_fabric_domain_api.py
 ```
 
 The operator deployment must be in the configured hub client's `OSAC_NAMESPACE`.
@@ -50,9 +51,9 @@ Local validation without a deployed environment:
 
 ```bash
 uv run pytest -n 0 tests/unit
-uv run pytest -n 0 --collect-only tests/e2e/vmaas/regression/test_fabric_domain_api.py
-uv run ruff check tests/e2e/vmaas/regression/test_fabric_domain_api.py
-uv run ruff format --check tests/e2e/vmaas/regression/test_fabric_domain_api.py
+uv run pytest -n 0 --collect-only tests/e2e/bmaas/regression/networking/test_fabric_domain_api.py
+uv run ruff check tests/e2e/bmaas/regression/networking/test_fabric_domain_api.py
+uv run ruff format --check tests/e2e/bmaas/regression/networking/test_fabric_domain_api.py
 ```
 
 Collection and unit success do not establish deployed API or lifecycle success.

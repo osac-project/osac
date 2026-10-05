@@ -74,6 +74,16 @@ ginkgo run --timeout 20m -r internal # All unit suites. Slow, run only when nece
 
 Integration tests run in a local Kind Kubernetes cluster; the installer builds and deploys current images.
 
+See the [fulfillment-service test tiers and coverage notes](../docs/INTEGRATION-TESTING.md#fulfillment-service).
+
+FabricDomain API authorization, tenant filtering, CRUD persistence, and cleanup
+are component-integration coverage in
+[`it/it_fabric_domain_tenant_api_test.go`](it/it_fabric_domain_tenant_api_test.go).
+Run it through the `SUITE=fulfillment` installer target; that stage deploys the
+service and database with the operator disabled, so it does not exercise Netris
+or AAP. The complete provider lifecycle belongs to the BMaaS E2E coverage in
+OSAC-4786.
+
 ```bash
 export KUBECONFIG="$HOME/.kube/osac-dev-kind.kubeconfig"
 make -C ../osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac

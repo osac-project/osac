@@ -142,7 +142,7 @@ var _ = Describe("FabricDomainReconciler", func() {
 			Capabilities:  privatev1.NetworkClassCapabilities_builder{SupportsEastWestEthernet: true}.Build(),
 		}.Build()
 		instanceTypes = map[string]*privatev1.BareMetalInstanceType{
-			"gpu-type": fabricDomainTestInstanceType("gpu-type", "nc-1", "42"),
+			"gpu-type": fabricDomainTestInstanceType("gpu-type", netrisFabricManager, "42"),
 		}
 		Expect(k8sClient.Create(ctx, &corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{Name: fabricDomainInventoryName, Namespace: namespace},
@@ -279,26 +279,25 @@ var _ = Describe("FabricDomainReconciler", func() {
 	})
 
 	DescribeTable("rejects invalid instance type bindings without launching AAP",
-		func(classID, templateID string) {
-			instanceTypes["gpu-type"] = fabricDomainTestInstanceType("gpu-type", classID, templateID)
+		func(manager, profileRef string) {
+			instanceTypes["gpu-type"] = fabricDomainTestInstanceType("gpu-type", manager, profileRef)
 			updated := reconcileTimes(3)
 			Expect(triggerCount).To(BeZero())
 			Expect(apimeta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionReady).Reason).To(Equal("InvalidHardwareBinding"))
 		},
-		Entry("another NetworkClass", "another-class", "42"),
-		Entry("no NetworkClass", "", "42"),
-		Entry("zero template", "nc-1", "0"),
-		Entry("non-numeric template", "nc-1", "template-42"),
-		Entry("non-canonical template", "nc-1", "042"),
-		Entry("missing template", "nc-1", ""),
+		Entry("missing manager binding", "other-manager", "42"),
+		Entry("missing profile reference", netrisFabricManager, ""),
+		Entry("zero Netris template", netrisFabricManager, "0"),
+		Entry("non-numeric Netris template", netrisFabricManager, "template-42"),
+		Entry("non-canonical Netris template", netrisFabricManager, "042"),
 	)
 
-	It("accepts different hardware types using the same scoped template", func() {
+	It("accepts different hardware types with the same manager profile", func() {
 		inventory := &corev1.ConfigMap{}
 		Expect(k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: fabricDomainInventoryName}, inventory)).To(Succeed())
 		inventory.Data["server-b"] = "other-gpu-type"
 		Expect(k8sClient.Update(ctx, inventory)).To(Succeed())
-		instanceTypes["other-gpu-type"] = fabricDomainTestInstanceType("other-gpu-type", "nc-1", "42")
+		instanceTypes["other-gpu-type"] = fabricDomainTestInstanceType("other-gpu-type", netrisFabricManager, "42")
 		updated := reconcileTimes(4)
 		Expect(triggerCount).To(Equal(1))
 		Expect(updated.Status.Phase).To(Equal(v1alpha1.FabricDomainPhaseReady))
@@ -309,9 +308,9 @@ var _ = Describe("FabricDomainReconciler", func() {
 		Expect(k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: fabricDomainInventoryName}, inventory)).To(Succeed())
 		inventory.Data["server-b"] = "other-gpu-type"
 		Expect(k8sClient.Update(ctx, inventory)).To(Succeed())
-		instanceTypes["other-gpu-type"] = fabricDomainTestInstanceType("other-gpu-type", "nc-1", "42")
+		instanceTypes["other-gpu-type"] = fabricDomainTestInstanceType("other-gpu-type", netrisFabricManager, "42")
 
-		templateID, err := reconciler.resolveFabricDomainHardware(ctx, domain, "nc-1")
+		templateID, err := reconciler.resolveFabricDomainHardware(ctx, domain, netrisFabricManager)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(templateID).To(Equal("42"))
 		Expect(instanceTypeListCalls).To(Equal(1))
@@ -319,16 +318,24 @@ var _ = Describe("FabricDomainReconciler", func() {
 		Expect(lastInstanceTypeFilter).To(ContainSubstring(`"other-gpu-type"`))
 	})
 
-	It("rejects mixed templates rather than selecting the first member", func() {
+	It("keeps non-Netris Ethernet profile references opaque", func() {
+		instanceTypes["gpu-type"] = fabricDomainTestInstanceType("gpu-type", "other-manager", "profile/hgx-v1")
+
+		profileRef, err := reconciler.resolveFabricDomainHardware(ctx, domain, "other-manager")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(profileRef).To(Equal("profile/hgx-v1"))
+	})
+
+	It("rejects mixed manager profiles rather than selecting the first member", func() {
 		inventory := &corev1.ConfigMap{}
 		Expect(k8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: fabricDomainInventoryName}, inventory)).To(Succeed())
 		inventory.Data["server-b"] = "other-gpu-type"
 		Expect(k8sClient.Update(ctx, inventory)).To(Succeed())
-		instanceTypes["other-gpu-type"] = fabricDomainTestInstanceType("other-gpu-type", "nc-1", "43")
+		instanceTypes["other-gpu-type"] = fabricDomainTestInstanceType("other-gpu-type", netrisFabricManager, "43")
 		updated := reconcileTimes(3)
 		Expect(triggerCount).To(BeZero())
 		condition := apimeta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionReady)
-		Expect(condition.Message).NotTo(ContainSubstring("incompatible Ethernet templates"))
+		Expect(condition.Message).NotTo(ContainSubstring("incompatible Ethernet east-west profiles"))
 		Expect(condition.Message).To(ContainSubstring("consult administrator logs"))
 	})
 
@@ -337,12 +344,12 @@ var _ = Describe("FabricDomainReconciler", func() {
 		Expect(updated.Status.ProvisioningConfig).To(Equal(&v1alpha1.FabricDomainProvisioningConfig{
 			NetworkClass: "nc-1", TemplateID: "42", VPCID: "7", Region: "region-a",
 		}))
-		instanceTypes["gpu-type"] = fabricDomainTestInstanceType("gpu-type", "nc-1", "43")
+		instanceTypes["gpu-type"] = fabricDomainTestInstanceType("gpu-type", netrisFabricManager, "43")
 		updated = reconcileTimes(1)
 		Expect(triggerCount).To(Equal(1))
 		Expect(apimeta.FindStatusCondition(updated.Status.Conditions, v1alpha1.ConditionReady).Reason).To(Equal("BackendBindingChanged"))
 		Expect(updated.Status.ProvisioningConfig.TemplateID).To(Equal("42"))
-		instanceTypes["gpu-type"] = fabricDomainTestInstanceType("gpu-type", "nc-1", "42")
+		instanceTypes["gpu-type"] = fabricDomainTestInstanceType("gpu-type", netrisFabricManager, "42")
 		updated = reconcileTimes(1)
 		Expect(updated.Status.Phase).To(Equal(v1alpha1.FabricDomainPhaseReady))
 		Expect(triggerCount).To(Equal(1))
@@ -417,11 +424,11 @@ var _ = Describe("FabricDomainReconciler", func() {
 			typeID := fmt.Sprintf("type-%03d", i)
 			domain.Spec.Servers[i] = serverName
 			inventory.Data[serverName] = typeID
-			instanceTypes[typeID] = fabricDomainTestInstanceType(typeID, "nc-1", "42")
+			instanceTypes[typeID] = fabricDomainTestInstanceType(typeID, netrisFabricManager, "42")
 		}
 		Expect(k8sClient.Update(ctx, inventory)).To(Succeed())
 
-		templateID, err := reconciler.resolveFabricDomainHardware(ctx, domain, "nc-1")
+		templateID, err := reconciler.resolveFabricDomainHardware(ctx, domain, netrisFabricManager)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(templateID).To(Equal("42"))
 		Expect(instanceTypeListCalls).To(Equal(4))
@@ -678,7 +685,7 @@ var _ = Describe("FabricDomainReconciler", func() {
 	})
 
 	It("does not expose a Netris template identifier in hardware binding conditions", func() {
-		instanceTypes["gpu-type"] = fabricDomainTestInstanceType("gpu-type", "nc-1", "template-secret")
+		instanceTypes["gpu-type"] = fabricDomainTestInstanceType("gpu-type", netrisFabricManager, "template-secret")
 		for i := 0; i < 3; i++ {
 			_, err := reconciler.Reconcile(ctx, request())
 			Expect(err).NotTo(HaveOccurred())
@@ -853,15 +860,13 @@ func (s *stubFabricDomainInstanceTypesClient) List(ctx context.Context, request 
 	return s.listFunc(ctx, request, options...)
 }
 
-func fabricDomainTestInstanceType(id, networkClass, templateID string) *privatev1.BareMetalInstanceType {
+func fabricDomainTestInstanceType(id, fabricManager, profileRef string) *privatev1.BareMetalInstanceType {
 	return privatev1.BareMetalInstanceType_builder{
 		Id:       id,
 		Metadata: privatev1.Metadata_builder{Tenant: "shared"}.Build(),
 		Spec: privatev1.BareMetalInstanceTypeSpec_builder{
 			FabricBindings: privatev1.BareMetalFabricBindings_builder{
-				EthernetEw: privatev1.BareMetalEthernetFabricBinding_builder{
-					Netris: privatev1.BareMetalNetrisFabricBinding_builder{NetworkClass: networkClass, TemplateId: templateID}.Build(),
-				}.Build(),
+				EthernetEw: map[string]string{fabricManager: profileRef},
 			}.Build(),
 		}.Build(),
 	}.Build()

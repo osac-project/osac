@@ -135,7 +135,7 @@ func (p *AAPProvider) GetProvisionStatusWithExtraVars(ctx context.Context, resou
 		return ProvisionStatusWithExtraVars{}, fmt.Errorf("failed to get job: %w", err)
 	}
 
-	status := ProvisionStatusWithExtraVars{ProvisionStatus: provisionStatusFromAAPJob(jobID, job)}
+	status := ProvisionStatusWithExtraVars{ProvisionStatus: provisionStatusFromAAPJob(ctx, jobID, job)}
 	if status.State != v1alpha1.JobStateSucceeded || len(job.Artifacts) == 0 {
 		return status, nil
 	}
@@ -354,10 +354,10 @@ func (p *AAPProvider) getJobStatus(ctx context.Context, jobID string) (Provision
 		return ProvisionStatus{}, fmt.Errorf("failed to get job: %w", err)
 	}
 
-	return provisionStatusFromAAPJob(jobID, job), nil
+	return provisionStatusFromAAPJob(ctx, jobID, job), nil
 }
 
-func provisionStatusFromAAPJob(jobID string, job *aap.Job) ProvisionStatus {
+func provisionStatusFromAAPJob(ctx context.Context, jobID string, job *aap.Job) ProvisionStatus {
 	status := ProvisionStatus{
 		JobID:     jobID,
 		State:     mapAAPStatusToJobState(job.Status),

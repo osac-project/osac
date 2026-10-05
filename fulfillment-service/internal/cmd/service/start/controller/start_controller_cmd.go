@@ -683,7 +683,7 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	}
 	fabricDomainReconciler, err := controllers.NewReconciler[*privatev1.FabricDomain]().
 		SetLogger(r.logger).
-		SetName("fabric_domain").
+		SetName("fabric-domain").
 		SetClient(r.client).
 		SetFunction(fabricDomainReconcilerFunction).
 		SetEventFilter("has(event.fabric_domain) || (has(event.virtual_network) && event.type == EVENT_TYPE_OBJECT_UPDATED) || (has(event.hub) && event.type == EVENT_TYPE_OBJECT_CREATED)").

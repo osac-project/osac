@@ -44,7 +44,9 @@ type FabricDomainFeedbackReconciler struct {
 }
 
 // NewFabricDomainFeedbackReconciler creates the fulfillment-service feedback reconciler.
-func NewFabricDomainFeedbackReconciler(hubClient clnt.Client, grpcConn *grpc.ClientConn, networkingNamespace string) *FabricDomainFeedbackReconciler {
+func NewFabricDomainFeedbackReconciler(
+	hubClient clnt.Client, grpcConn grpc.ClientConnInterface, networkingNamespace string,
+) *FabricDomainFeedbackReconciler {
 	domainClient := privatev1.NewFabricDomainsClient(grpcConn)
 	r := &FabricDomainFeedbackReconciler{networkingNamespace: networkingNamespace}
 	r.bridge = &feedback.Bridge[*v1alpha1.FabricDomain, *privatev1.FabricDomain]{

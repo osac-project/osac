@@ -42,6 +42,28 @@ additional_build_steps:
     - COPY _build/vendor /usr/share/ansible/collections
     - RUN dnf install -y git  # required to pull non-versioned git collections specified in collections/requirements.yaml
   append_final:
-    - COPY --from=quay.io/openshift/origin-cli:4.19 /usr/bin/oc /usr/local/bin/
-    - COPY --from=quay.io/openshift/origin-cli:4.19 /usr/bin/kubectl /usr/local/bin/
-    - RUN curl -fsSL -o /tmp/helm.tar.gz https://get.helm.sh/helm-v3.21.4-linux-amd64.tar.gz && echo "61f88ab166748cb19604d7884cb100ae9ccb13804ddeb98e08af167eacbb6a14  /tmp/helm.tar.gz" | sha256sum -c - && tar -zxf /tmp/helm.tar.gz -C /tmp linux-amd64/helm && mv /tmp/linux-amd64/helm /usr/local/bin/helm && chmod 0755 /usr/local/bin/helm && rm -rf /tmp/helm.tar.gz /tmp/linux-amd64
+    - COPY --from=quay.io/openshift/origin-cli:4.20.0 /usr/bin/oc /usr/local/bin/
+    - COPY --from=quay.io/openshift/origin-cli:4.20.0 /usr/bin/kubectl /usr/local/bin/
+    - |-
+      RUN set -eux; \
+          case "$(uname -m)" in \
+            x86_64) \
+              helm_arch=amd64; \
+              helm_sha256=61f88ab166748cb19604d7884cb100ae9ccb13804ddeb98e08af167eacbb6a14; \
+              ;; \
+            aarch64|arm64) \
+              helm_arch=arm64; \
+              helm_sha256=b54c04b4e0b2540bbdc08c17a121dab70e9a2ed0de5705528fec68a5fd3b85a7; \
+              ;; \
+            *) \
+              echo "Unsupported architecture: $(uname -m)" >&2; \
+              exit 1; \
+              ;; \
+          esac; \
+          archive=/tmp/helm.tar.gz; \
+          curl -fsSL -o "${archive}" "https://get.helm.sh/helm-v3.21.4-linux-${helm_arch}.tar.gz"; \
+          echo "${helm_sha256}  ${archive}" | sha256sum -c -; \
+          tar -zxf "${archive}" -C /tmp "linux-${helm_arch}/helm"; \
+          mv "/tmp/linux-${helm_arch}/helm" /usr/local/bin/helm; \
+          chmod 0755 /usr/local/bin/helm; \
+          rm -rf "${archive}" "/tmp/linux-${helm_arch}"

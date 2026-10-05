@@ -18,6 +18,9 @@ virt:
 # simplicity - the operator watches its own namespace by default.
 awx:
   enabled: true
+  # Development-only override for local VAST appliances with self-signed TLS.
+  # Production AAP leaves this unset and keeps certificate validation enabled.
+  vastValidateCerts: false
   operatorChart: awx-operator/awx-operator
   operatorVersion: ""  # Empty = latest
   instance:

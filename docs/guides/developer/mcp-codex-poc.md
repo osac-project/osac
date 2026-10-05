@@ -40,6 +40,20 @@ oc -n <osac-namespace> get configmap ca-bundle \
   -o go-template='{{ index .data "bundle.pem" }}' > /path/to/osac-ca-bundle.pem
 ```
 
+For the local Kind `PROFILE=dev` installation, use this copyable path outside
+the repository:
+
+```bash
+export KUBECONFIG="$HOME/.kube/osac-dev-kind.kubeconfig"
+mkdir -p "$HOME/.config/osac"
+kubectl -n osac get configmap ca-bundle \
+  -o go-template='{{ index .data "bundle.pem" }}' \
+  > "$HOME/.config/osac/ca-bundle.pem"
+export CODEX_CA_CERTIFICATE="$HOME/.config/osac/ca-bundle.pem"
+```
+
+Launch Codex from a shell with that environment variable set.
+
 Verify TLS and the MCP discovery document before configuring Codex. Replace
 the placeholders with the values for your deployment:
 

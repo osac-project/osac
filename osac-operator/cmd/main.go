@@ -1010,7 +1010,7 @@ func setupVirtualNetworkControllers(
 }
 
 func setupFabricDomainControllers(
-	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn *grpc.ClientConn,
+	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn grpc.ClientConnInterface,
 	networkingNamespace string, provider provisioning.ProvisioningProvider,
 	networkClassesClient privatev1.NetworkClassesClient,
 	statusPollInterval time.Duration, maxJobHistory int,

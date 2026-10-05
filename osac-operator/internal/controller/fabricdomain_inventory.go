@@ -45,7 +45,7 @@ type resolvedFabricDomainConfig struct {
 // resolveFabricDomainHardware deliberately does not infer a type from label selectors:
 // more than one catalog type can match a host, and an unallocated host has no BMI yet.
 func (r *FabricDomainReconciler) resolveFabricDomainHardware(
-	ctx context.Context, domain *v1alpha1.FabricDomain, networkClassID string,
+	ctx context.Context, domain *v1alpha1.FabricDomain, fabricManager string,
 ) (string, error) {
 	if r.BareMetalInstanceTypesClient == nil {
 		return "", fmt.Errorf("the private BareMetalInstanceTypes client is not configured")
@@ -102,7 +102,7 @@ func (r *FabricDomainReconciler) resolveFabricDomainHardware(
 		}
 	}
 
-	templates := make(map[string]string, len(typeIDs))
+	profiles := make(map[string]string, len(typeIDs))
 	for _, typeID := range typeIDs {
 		instanceType := instancesByID[typeID]
 		if instanceType == nil || instanceType.GetMetadata().GetDeletionTimestamp() != nil {
@@ -111,26 +111,25 @@ func (r *FabricDomainReconciler) resolveFabricDomainHardware(
 		if instanceType.GetMetadata().GetTenant() != "shared" {
 			return "", fmt.Errorf("instance type %q must belong to the shared catalog", typeID)
 		}
-		binding := instanceType.GetSpec().GetFabricBindings().GetEthernetEw().GetNetris()
-		if binding == nil || binding.GetNetworkClass() != networkClassID {
-			return "", fmt.Errorf("instance type %q has no Netris Ethernet binding for NetworkClass %q", typeID, networkClassID)
+		profileRef, found := instanceType.GetSpec().GetFabricBindings().GetEthernetEw()[fabricManager]
+		if !found || profileRef == "" {
+			return "", fmt.Errorf("instance type %q has no Ethernet east-west profile for fabric manager %q", typeID, fabricManager)
 		}
-		templateID := binding.GetTemplateId()
-		if !validNetrisID(templateID) {
-			return "", fmt.Errorf("instance type %q has invalid Netris template ID %q", typeID, templateID)
+		if fabricManager == netrisFabricManager && !validNetrisID(profileRef) {
+			return "", fmt.Errorf("instance type %q has invalid Netris Server Cluster template ID %q", typeID, profileRef)
 		}
-		templates[typeID] = templateID
+		profiles[typeID] = profileRef
 	}
 
-	var selectedTemplate string
+	var selectedProfile string
 	for _, server := range domain.Spec.Servers {
-		templateID := templates[memberTypes[server]]
-		if selectedTemplate != "" && selectedTemplate != templateID {
-			return "", fmt.Errorf("incompatible Ethernet templates: server %q resolves to %q, other members resolve to %q", server, templateID, selectedTemplate)
+		profileRef := profiles[memberTypes[server]]
+		if selectedProfile != "" && selectedProfile != profileRef {
+			return "", fmt.Errorf("incompatible Ethernet east-west profiles: server %q resolves to %q, other members resolve to %q", server, profileRef, selectedProfile)
 		}
-		selectedTemplate = templateID
+		selectedProfile = profileRef
 	}
-	return selectedTemplate, nil
+	return selectedProfile, nil
 }
 
 func (r *FabricDomainReconciler) listFabricDomainInstanceTypes(ctx context.Context, typeIDs []string) ([]*privatev1.BareMetalInstanceType, error) {

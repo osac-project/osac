@@ -3,7 +3,9 @@
 Phase 1 provisions administrator-selected physical servers through Netris Server
 Clusters. An administrator supplies exact Netris inventory hostnames and one
 VirtualNetwork. OSAC resolves each host's BareMetalInstanceType, selects its
-private Ethernet template binding, and provisions the domain in the VN's VPC.
+private Ethernet profile for the NetworkClass's fabric manager, and provisions
+the domain in the VN's VPC. For Netris, that profile is a Server Cluster
+template ID.
 
 This guide describes the development API. InfiniBand, NVLink, automatic workload
 membership, VM device attachment, and automatic template generation are not
@@ -56,15 +58,15 @@ private API. Add this fragment to each applicable type's `spec`:
 ```yaml
 fabric_bindings:
   ethernet_ew:
-    netris:
-      network_class: "<network-class-id>"
-      template_id: "42"
+    netris: "42"  # opaque manager profile reference; Netris uses a template ID
 ```
 
-Use the actual NetworkClass ID and a canonical positive decimal template ID.
-The NetworkClass ID scopes the backend identifier to this deployment's class.
-Different instance types may use the same template. All members of one
-FabricDomain must resolve to the same scoped template.
+The keys are fabric-manager names and values are manager-specific profile
+references. For Netris, use the canonical positive decimal Server Cluster
+template ID. NetworkClass selects the manager; the profile is stored on the
+instance type and is independent of NetworkClass. Different instance types may
+use the same profile. All members of one FabricDomain must resolve to the same
+profile because one Server Cluster uses one template.
 
 No `instance_type` or template ID is added to FabricDomain. Tenant-facing catalog
 responses do not expose the private hardware bindings. NIC roles are hardware
@@ -92,7 +94,7 @@ see [installer onboarding](../../../osac-installer/README.md#fabricdomain-admin-
 The operator reads this map on reconciliation and watches it for changes. It
 does not reverse-match `host_label_selector`, infer a type from a hostname, or
 fall back to a NetworkClass template. Missing inventory, missing/deleting types,
-wrong NetworkClass bindings, and incompatible templates block provisioning.
+missing manager profiles, and incompatible profiles block provisioning.
 The AAP role independently verifies that every requested server resolves
 unambiguously in the Netris inventory before changing membership.
 
@@ -187,7 +189,7 @@ kubectl -n osac get events --field-selector involvedObject.kind=FabricDomain
 | No hub CR yet | Check the fulfillment controller, VN hub assignment, and API tenant metadata. |
 | `VirtualNetworkNotReady` | Restore the VN's provisioning and numeric VPC identity. |
 | `UnsupportedNetworkClass` | Check Netris manager registration and Ethernet EW capability. |
-| `InvalidHardwareBinding` | Correct the exact hostname map, shared instance type, class scope, or template compatibility. |
+| `InvalidHardwareBinding` | Correct the exact hostname map, shared instance type, manager profile, or profile compatibility. |
 | `BackendBindingChanged` | Restore the recorded binding or plan domain recreation. |
 | `TenantMismatch` | Correct the administrative request; the domain and VN must belong to the same tenant. |
 | `ProvisioningDisabled` | Enable networking provisioning and configure AAP access. |

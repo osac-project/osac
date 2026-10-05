@@ -77,6 +77,14 @@ deployed service. Catalog Item API behavior, CLI creation, and the ClusterOrder
 release image written by Fulfillment are checked in `it/`. Keep cross-component
 provisioning journeys under `tests/e2e/`.
 
+FabricDomain API authorization, tenant filtering, CRUD persistence, and cleanup
+are component-integration coverage in
+[`it/it_fabric_domain_tenant_api_test.go`](it/it_fabric_domain_tenant_api_test.go).
+Run it through the `SUITE=fulfillment` installer target; that stage deploys the
+service and database with the operator disabled, so it does not exercise Netris
+or AAP. The complete provider lifecycle belongs to the BMaaS E2E coverage in
+OSAC-4786.
+
 To prepare a fresh environment, recreate the dedicated `osac-dev` Kind
 cluster. Collect useful diagnostics before deleting it.
 

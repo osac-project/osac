@@ -20,54 +20,32 @@ import (
 )
 
 var _ = Describe("Bare metal fabric bindings contract", func() {
-	DescribeTable("validates canonical positive uint64 template IDs", func(id string, valid bool) {
-		binding := privatev1.BareMetalNetrisFabricBinding_builder{
-			NetworkClass: "network-class-id", TemplateId: id,
+	DescribeTable("validates generic Ethernet east-west profile references", func(manager, profile string, valid bool) {
+		bindings := privatev1.BareMetalFabricBindings_builder{
+			EthernetEw: map[string]string{manager: profile},
 		}.Build()
-		err := protovalidate.Validate(binding)
+		err := protovalidate.Validate(bindings)
 		if valid {
 			Expect(err).ToNot(HaveOccurred())
 		} else {
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("template_id"))
+			Expect(err.Error()).To(ContainSubstring("ethernet_ew"))
 		}
 	},
-		Entry("minimum", "1", true),
-		Entry("typical", "12345", true),
-		Entry("above signed range", "9223372036854775808", true),
-		Entry("uint64 maximum", "18446744073709551615", true),
-		Entry("missing", "", false),
-		Entry("zero", "0", false),
-		Entry("leading zero", "01", false),
-		Entry("negative", "-1", false),
-		Entry("plus sign", "+1", false),
-		Entry("space", " 1", false),
-		Entry("trailing space", "1 ", false),
-		Entry("decimal", "1.0", false),
-		Entry("hexadecimal", "0x1", false),
-		Entry("exponent", "1e3", false),
-		Entry("name", "gpu-template", false),
-		Entry("unicode digits", "１２", false),
-		Entry("uint64 overflow", "18446744073709551616", false),
-		Entry("too long", "100000000000000000000", false),
+		Entry("Netris template ID", "netris", "1", true),
+		Entry("opaque profile reference", "other-manager", "profile/hgx-v1", true),
+		Entry("empty manager name", "", "profile", false),
+		Entry("empty profile reference", "netris", "", false),
 	)
 
-	It("requires a NetworkClass ID when a Netris binding is present", func() {
-		err := protovalidate.Validate(privatev1.BareMetalNetrisFabricBinding_builder{TemplateId: "1"}.Build())
-		Expect(err).To(MatchError(ContainSubstring("network_class")))
-	})
-
-	It("allows cleared optional binding messages", func() {
+	It("allows no configured Ethernet manager profiles", func() {
 		Expect(protovalidate.Validate(&privatev1.BareMetalFabricBindings{})).To(Succeed())
-		Expect(protovalidate.Validate(privatev1.BareMetalFabricBindings_builder{
-			EthernetEw: &privatev1.BareMetalEthernetFabricBinding{},
-		}.Build())).To(Succeed())
 	})
 
 	It("keeps bindings and their messages out of the public schema", func() {
 		spec := (&publicv1.BareMetalInstanceTypeSpec{}).ProtoReflect().Descriptor()
 		Expect(spec.Fields().ByName("fabric_bindings")).To(BeNil())
-		for _, name := range []protoreflect.Name{"BareMetalFabricBindings", "BareMetalEthernetFabricBinding", "BareMetalNetrisFabricBinding"} {
+		for _, name := range []protoreflect.Name{"BareMetalFabricBindings"} {
 			Expect(spec.ParentFile().Messages().ByName(name)).To(BeNil())
 		}
 		privateSpec := (&privatev1.BareMetalInstanceTypeSpec{}).ProtoReflect().Descriptor()

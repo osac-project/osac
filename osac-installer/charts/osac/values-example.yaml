@@ -53,8 +53,8 @@ operator:
   # Admin onboarding inventory for Phase 1 Netris Ethernet east-west domains.
   # Keys must exactly match Netris hostnames; values are BareMetalInstanceType
   # IDs from the private API. Empty means no inventory ConfigMap is created.
-  # Configure spec.fabric_bindings.ethernet_ew.netris on each referenced type
-  # through the private API (network_class: NC ID, template_id: "42").
+  # Configure spec.fabric_bindings.ethernet_ew on each referenced type through
+  # the private API (for example, netris: "42" for a Netris template ID).
   fabricDomainInventory: {}
   # fabricDomainInventory:
   #   gpu-01.example.com: "gpu-bmit-id"

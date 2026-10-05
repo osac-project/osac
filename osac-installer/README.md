@@ -362,9 +362,7 @@ backend binding there. This fragment belongs to the instance type, not Helm:
 spec:
   fabric_bindings:
     ethernet_ew:
-      netris:
-        network_class: "netris-network-class-id"
-        template_id: "42"
+      netris: "42" # opaque Ethernet profile reference; Netris uses a Server Cluster Template ID
 ```
 
 Then map every participating server's **exact Netris hostname** to its
@@ -385,11 +383,15 @@ hostname-to-ID map; hostname spelling and case are preserved. The default `{}`
 does not create the ConfigMap. Keep this inventory current during onboarding
 and update it through your Helm values.
 
-The binding's `network_class` must match the NetworkClass of the domain's
-VirtualNetwork. NetworkClass no longer accepts `template_id`, and FabricDomain
-has no `instance_type` field: the operator resolves the binding through the
-server inventory and instance types. Keep Netris credentials in the existing
-AAP Secret configuration; the inventory contains only hostnames and catalog IDs.
+The NetworkClass of the domain's VirtualNetwork selects the fabric manager; the
+manager name must have a corresponding entry in the instance type's
+`fabric_bindings.ethernet_ew` map. For Netris, that entry is the Server Cluster
+Template ID. The profile belongs to the hardware type and is not scoped to a
+NetworkClass. NetworkClass no longer accepts `template_id`, and FabricDomain
+has no `instance_type` field: the operator resolves the manager-specific profile
+through the server inventory and instance types. Keep Netris credentials in
+the existing AAP Secret configuration; the inventory contains only hostnames
+and catalog IDs.
 The FabricDomain CRD is included when `operatorCrds.install` is enabled.
 
 #### DNS Backend Configuration (CaaS)

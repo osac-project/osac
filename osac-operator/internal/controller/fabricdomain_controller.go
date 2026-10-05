@@ -391,7 +391,7 @@ func (r *FabricDomainReconciler) resolveFabricDomainProvisioningConfig(
 			fmt.Sprintf("NetworkClass %q must be active and advertise Netris Ethernet east-west support", networkClassID))
 		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
-	templateID, err := r.resolveFabricDomainHardware(ctx, domain, networkClassID)
+	templateID, err := r.resolveFabricDomainHardware(ctx, domain, networkClass.GetFabricManager())
 	if err != nil {
 		ctrllog.FromContext(ctx).Error(err, "failed to resolve FabricDomain hardware binding", "fabricDomain", client.ObjectKeyFromObject(domain))
 		domain.Status.Phase = v1alpha1.FabricDomainPhaseFailed

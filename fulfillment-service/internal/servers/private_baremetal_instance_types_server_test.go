@@ -77,13 +77,9 @@ var _ = Describe("Private bare metal instance types server", func() {
 		})
 
 		Describe("Fabric bindings", func() {
-			newBinding := func(templateID string) *privatev1.BareMetalFabricBindings {
+			newBinding := func(profileRef string) *privatev1.BareMetalFabricBindings {
 				return privatev1.BareMetalFabricBindings_builder{
-					EthernetEw: privatev1.BareMetalEthernetFabricBinding_builder{
-						Netris: privatev1.BareMetalNetrisFabricBinding_builder{
-							NetworkClass: "network-class-id", TemplateId: templateID,
-						}.Build(),
-					}.Build(),
+					EthernetEw: map[string]string{"netris": profileRef},
 				}.Build()
 			}
 			create := func() *privatev1.BareMetalInstanceType {
@@ -117,11 +113,9 @@ var _ = Describe("Private bare metal instance types server", func() {
 
 			DescribeTable("updates masked binding paths", func(path string) {
 				object := create()
-				binding := newBinding("18446744073709551615")
-				if path == "spec.fabric_bindings.ethernet_ew.netris.template_id" {
-					// A leaf update must use the stored NetworkClass, not validate the partial request.
-					binding.GetEthernetEw().GetNetris().SetNetworkClass("")
-				}
+				binding := privatev1.BareMetalFabricBindings_builder{
+					EthernetEw: map[string]string{"netris": "server-cluster-template-42", "other-manager": "profile/hgx-v1"},
+				}.Build()
 				response, err := server.Update(ctx, privatev1.BareMetalInstanceTypesUpdateRequest_builder{
 					Object: privatev1.BareMetalInstanceType_builder{
 						Id:   object.GetId(),
@@ -131,15 +125,14 @@ var _ = Describe("Private bare metal instance types server", func() {
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 				updated := response.GetObject()
-				Expect(updated.GetSpec().GetFabricBindings().GetEthernetEw().GetNetris().GetTemplateId()).To(Equal("18446744073709551615"))
-				Expect(updated.GetSpec().GetFabricBindings().GetEthernetEw().GetNetris().GetNetworkClass()).To(Equal("network-class-id"))
+				Expect(updated.GetSpec().GetFabricBindings().GetEthernetEw()).To(Equal(map[string]string{
+					"netris": "server-cluster-template-42", "other-manager": "profile/hgx-v1",
+				}))
 				Expect(updated.GetSpec().GetDescription()).To(Equal("Original description"))
 				Expect(proto.Equal(updated.GetSpec().GetHardware(), object.GetSpec().GetHardware())).To(BeTrue())
 			},
 				Entry("bindings", "spec.fabric_bindings"),
 				Entry("Ethernet", "spec.fabric_bindings.ethernet_ew"),
-				Entry("Netris", "spec.fabric_bindings.ethernet_ew.netris"),
-				Entry("template", "spec.fabric_bindings.ethernet_ew.netris.template_id"),
 			)
 
 			DescribeTable("clears optional nested binding paths", func(path string) {
@@ -149,45 +142,30 @@ var _ = Describe("Private bare metal instance types server", func() {
 					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{path}},
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
-				Expect(response.GetObject().GetSpec().GetFabricBindings().GetEthernetEw().GetNetris()).To(BeNil())
+				Expect(response.GetObject().GetSpec().GetFabricBindings().GetEthernetEw()).To(BeEmpty())
 				stored, err := server.Get(ctx, privatev1.BareMetalInstanceTypesGetRequest_builder{Id: object.GetId()}.Build())
 				Expect(err).ToNot(HaveOccurred())
-				Expect(stored.GetObject().GetSpec().GetFabricBindings().GetEthernetEw().GetNetris()).To(BeNil())
+				Expect(stored.GetObject().GetSpec().GetFabricBindings().GetEthernetEw()).To(BeEmpty())
 			},
 				Entry("bindings", "spec.fabric_bindings"),
 				Entry("Ethernet", "spec.fabric_bindings.ethernet_ew"),
-				Entry("Netris", "spec.fabric_bindings.ethernet_ew.netris"),
 			)
 
-			DescribeTable("rejects clearing required binding leaves", func(path string) {
-				object := create()
-				_, err := server.Update(ctx, privatev1.BareMetalInstanceTypesUpdateRequest_builder{
-					Object:     privatev1.BareMetalInstanceType_builder{Id: object.GetId()}.Build(),
-					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{path}},
-				}.Build())
-				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-				stored, err := server.Get(ctx, privatev1.BareMetalInstanceTypesGetRequest_builder{Id: object.GetId()}.Build())
-				Expect(err).ToNot(HaveOccurred())
-				Expect(proto.Equal(stored.GetObject().GetSpec().GetFabricBindings(), newBinding("42"))).To(BeTrue())
-			},
-				Entry("template", "spec.fabric_bindings.ethernet_ew.netris.template_id"),
-				Entry("NetworkClass", "spec.fabric_bindings.ethernet_ew.netris.network_class"),
-			)
-
-			DescribeTable("rejects invalid template updates", func(templateID string) {
+			DescribeTable("rejects invalid manager profile references", func(profiles map[string]string) {
 				object := create()
 				_, err := server.Update(ctx, privatev1.BareMetalInstanceTypesUpdateRequest_builder{
 					Object: privatev1.BareMetalInstanceType_builder{
-						Id:   object.GetId(),
-						Spec: privatev1.BareMetalInstanceTypeSpec_builder{FabricBindings: newBinding(templateID)}.Build(),
+						Id: object.GetId(),
+						Spec: privatev1.BareMetalInstanceTypeSpec_builder{FabricBindings: privatev1.BareMetalFabricBindings_builder{
+							EthernetEw: profiles,
+						}.Build()}.Build(),
 					}.Build(),
-					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.fabric_bindings.ethernet_ew.netris.template_id"}},
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.fabric_bindings.ethernet_ew"}},
 				}.Build())
 				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
 			},
-				Entry("zero", "0"),
-				Entry("leading zero", "042"),
-				Entry("overflow", "18446744073709551616"),
+				Entry("empty manager", map[string]string{"": "profile"}),
+				Entry("empty profile", map[string]string{"netris": ""}),
 			)
 
 			It("ignores unmasked invalid bindings", func() {
@@ -200,7 +178,7 @@ var _ = Describe("Private bare metal instance types server", func() {
 					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.description"}},
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
-				Expect(response.GetObject().GetSpec().GetFabricBindings().GetEthernetEw().GetNetris().GetTemplateId()).To(Equal("42"))
+				Expect(response.GetObject().GetSpec().GetFabricBindings().GetEthernetEw()).To(Equal(map[string]string{"netris": "42"}))
 			})
 
 			It("hides bindings in public get and list responses", func() {

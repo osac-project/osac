@@ -1,4 +1,4 @@
-# Connect Codex to the experimental OSAC MCP endpoint
+# Connect Codex and MCP Inspector to a local OSAC MCP endpoint
 
 This guide applies to the opt-in MCP development endpoint introduced by
 [OSAC-5841](https://redhat.atlassian.net/browse/OSAC-5841). It currently
@@ -152,7 +152,7 @@ authorizes each call as the signed-in user through the public Fulfillment API.
 
 ## Explore with MCP Inspector
 
-The earlier OSAC-4388 PoC launched Inspector with `NODE_EXTRA_CA_CERTS`
+The earlier OSAC-4388 prototype launched Inspector with `NODE_EXTRA_CA_CERTS`
 pointing at the same public Kind `ca-bundle` ConfigMap used for Codex. Node
 does not use `curl --cacert` or `CODEX_CA_CERTIFICATE`. For this `PROFILE=dev`
 installation, use the variables and CA file from the Kind commands above.
@@ -172,9 +172,9 @@ NODE_EXTRA_CA_CERTS="$CODEX_CA_CERTIFICATE" \
 In the Inspector web UI, connect to `osac`, leave **OAuth Client Metadata
 Document** empty, and complete Keycloak login. Its browser callback is
 `http://localhost:6274/oauth/callback`, which the development client allows.
-The Tools tab should list the four PoC tools after login.
+The Tools tab should list the four available tools after login.
 The browser must trust the Kind CA separately; `NODE_EXTRA_CA_CERTS` applies
-to the Node process. The older `PROFILE=dev-full` PoC used
+to the Node process. The older `PROFILE=dev-full` setup used
 `keycloak.osac.localhost` as its issuer, whereas this `PROFILE=dev` installation
 uses `keycloak.keycloak.svc.cluster.local` as shown above.
 

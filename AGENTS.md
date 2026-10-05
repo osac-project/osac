@@ -60,8 +60,8 @@ that tenant request. This routing rule does not restrict the local `osac` CLI,
 API calls, `oc`, `kubectl`, or Kubernetes inspection for implementation,
 testing, debugging, and cluster troubleshooting.
 
-See the [experimental Codex connection
-guide](docs/guides/developer/mcp-codex-poc.md) for the current development
+See the [local MCP client
+guide](docs/guides/developer/mcp-local-clients.md) for the current development
 tool surface and setup; later MCP epics own the supported host setup surface.
 
 ## Components

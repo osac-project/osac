@@ -129,7 +129,7 @@ at the start of a session rather than discovering missing authorization
 mid-task.
 
 For the opt-in OSAC MCP development endpoint, follow the
-[experimental Codex connection guide](guides/developer/mcp-codex-poc.md) for
+[local MCP client guide](guides/developer/mcp-local-clients.md) for
 OAuth client registration, private CA trust, and write approvals.
 
 ## Per-worktree Jira context (`.ai-context/jira.md`)

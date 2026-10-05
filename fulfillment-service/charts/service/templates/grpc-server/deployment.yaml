@@ -18,6 +18,8 @@ specific language governing permissions and limitations under the License.
 {{- $vaultCredentials := required "vault.credentials is required" .Values.vault.credentials }}
 {{- $vaultIssuerURL := tpl (required "vault.keycloakIssuerUrl is required" .Values.vault.keycloakIssuerUrl) . }}
 {{- $vaultClientID := required "vault.keycloakClientId is required" .Values.vault.keycloakClientId }}
+{{- $globalValues := index .Values "global" | default dict }}
+{{- $networkingValues := index $globalValues "networking" | default dict }}
 
 apiVersion: apps/v1
 kind: Deployment

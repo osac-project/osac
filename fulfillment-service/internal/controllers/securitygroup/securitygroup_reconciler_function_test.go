@@ -15,7 +15,9 @@ package securitygroup
 
 import (
 	"context"
+	"errors"
 	"slices"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -227,6 +229,15 @@ var _ = Describe("protocolToString", func() {
 // hasFinalizer checks if the fulfillment-controller finalizer is present on the security group.
 func hasFinalizer(sg *privatev1.SecurityGroup) bool {
 	return slices.Contains(sg.GetMetadata().GetFinalizers(), finalizers.Controller)
+}
+
+func expectDeletionRetry(err error) {
+	var retryable interface{ RequeueAfter() time.Duration }
+	Expect(errors.As(err, &retryable)).To(BeTrue())
+	Expect(retryable.RequeueAfter()).To(Equal(time.Second))
+	var backoff interface{ UseExponentialBackoff() bool }
+	Expect(errors.As(err, &backoff)).To(BeTrue())
+	Expect(backoff.UseExponentialBackoff()).To(BeFalse())
 }
 
 var _ = Describe("validateTenant", func() {
@@ -492,7 +503,8 @@ var _ = Describe("delete", func() {
 		}
 		t := &task{r: f, securityGroup: sg}
 
-		Expect(t.delete(ctx)).To(Succeed())
+		err := t.delete(ctx)
+		expectDeletionRetry(err)
 		Expect(resolver.calls).To(BeZero())
 
 		remaining := &osacv1alpha1.SecurityGroupList{}

@@ -15,13 +15,102 @@ package it
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
+
+func cleanupNetworkFixtureResource(
+	ctx context.Context,
+	deleteResource func(context.Context) error,
+	getMetadata func(context.Context) (*privatev1.Metadata, error),
+	clearFinalizers func(context.Context) error,
+) error {
+	if err := deleteResource(ctx); err != nil && grpcstatus.Code(err) != grpccodes.NotFound {
+		return err
+	}
+	metadata, err := getMetadata(ctx)
+	if grpcstatus.Code(err) == grpccodes.NotFound {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !metadata.HasDeletionTimestamp() || len(metadata.GetFinalizers()) == 0 {
+		return nil
+	}
+	if err := clearFinalizers(ctx); err != nil {
+		return err
+	}
+	if _, err := getMetadata(ctx); grpcstatus.Code(err) != grpccodes.NotFound {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("resource remains after clearing fixture finalizers")
+	}
+	return nil
+}
+
+func cleanupNetworkClassFixture(ctx context.Context, client privatev1.NetworkClassesClient, id string) error {
+	return cleanupNetworkFixtureResource(ctx,
+		func(ctx context.Context) error {
+			_, err := client.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{Id: id}.Build())
+			return err
+		},
+		func(ctx context.Context) (*privatev1.Metadata, error) {
+			response, err := client.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: id}.Build())
+			if err != nil {
+				return nil, err
+			}
+			return response.GetObject().GetMetadata(), nil
+		},
+		func(ctx context.Context) error {
+			response, err := client.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: id}.Build())
+			if err != nil {
+				return err
+			}
+			object := response.GetObject()
+			object.GetMetadata().SetFinalizers(nil)
+			_, err = client.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
+				Object: object, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.finalizers"}}, Lock: true,
+			}.Build())
+			return err
+		})
+}
+
+func cleanupVirtualNetworkFixture(ctx context.Context, client privatev1.VirtualNetworksClient, id string) error {
+	return cleanupNetworkFixtureResource(ctx,
+		func(ctx context.Context) error {
+			_, err := client.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{Id: id}.Build())
+			return err
+		},
+		func(ctx context.Context) (*privatev1.Metadata, error) {
+			response, err := client.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: id}.Build())
+			if err != nil {
+				return nil, err
+			}
+			return response.GetObject().GetMetadata(), nil
+		},
+		func(ctx context.Context) error {
+			response, err := client.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: id}.Build())
+			if err != nil {
+				return err
+			}
+			object := response.GetObject()
+			object.GetMetadata().SetFinalizers(nil)
+			_, err = client.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
+				Object: object, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.finalizers"}}, Lock: true,
+			}.Build())
+			return err
+		})
+}
 
 func waitForNetworkClassReady(
 	ctx context.Context,

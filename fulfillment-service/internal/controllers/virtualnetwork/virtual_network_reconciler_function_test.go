@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -159,6 +160,15 @@ func newVirtualNetworkCR(id, namespace, name string, deletionTimestamp *metav1.T
 // hasFinalizer checks if the fulfillment-controller finalizer is present on the virtual network.
 func hasFinalizer(virtualNetwork *privatev1.VirtualNetwork) bool {
 	return slices.Contains(virtualNetwork.GetMetadata().GetFinalizers(), finalizers.Controller)
+}
+
+func expectDeletionRetry(err error) {
+	var retryable interface{ RequeueAfter() time.Duration }
+	Expect(errors.As(err, &retryable)).To(BeTrue())
+	Expect(retryable.RequeueAfter()).To(Equal(time.Second))
+	var backoff interface{ UseExponentialBackoff() bool }
+	Expect(errors.As(err, &backoff)).To(BeTrue())
+	Expect(backoff.UseExponentialBackoff()).To(BeFalse())
 }
 
 // newTaskForDelete creates a task configured for testing delete() with hub-dependent paths.
@@ -321,7 +331,7 @@ var _ = Describe("delete", func() {
 
 			err := task.delete(ctx)
 
-			Expect(err).ToNot(HaveOccurred())
+			expectDeletionRetry(err)
 			Expect(deleteCalled).To(BeTrue(), "Delete should have been called")
 			Expect(hasFinalizer(task.virtualNetwork)).To(BeTrue(), "finalizer should remain until K8s object is fully deleted")
 		})
@@ -347,7 +357,7 @@ var _ = Describe("delete", func() {
 
 			err := task.delete(ctx)
 
-			Expect(err).ToNot(HaveOccurred())
+			expectDeletionRetry(err)
 			Expect(hasFinalizer(task.virtualNetwork)).To(BeTrue(), "finalizer should remain while K8s finalizers process")
 		})
 	})
@@ -680,6 +690,9 @@ var _ = Describe("hub persistence", func() {
 		Expect(vn.GetStatus().GetState()).To(Equal(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING))
 		Expect(vn.GetStatus().GetHub()).To(BeEmpty())
 		Expect(vn.GetStatus().GetMessage()).To(ContainSubstring(controllers.ErrNoNetworkingHubs.Error()))
+		var retryable interface{ RequeueAfter() time.Duration }
+		Expect(errors.As(err, &retryable)).To(BeTrue())
+		Expect(retryable.RequeueAfter()).To(Equal(hubResolutionRetryDelay))
 
 		list := &osacv1alpha1.VirtualNetworkList{}
 		err = fakeClient.List(ctx, list)

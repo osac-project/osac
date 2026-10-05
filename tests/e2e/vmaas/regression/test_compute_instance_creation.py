@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import os
-
 import pytest
 
-from tests.e2e.core.fulfillment_trust import assert_management_tls
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import (
     unique_name,
@@ -35,46 +32,31 @@ def test_compute_instance_lifecycle(
     uuid: str = cli.create_compute_instance(
         name=name, template=vm_template, network_attachments=[{"subnet": default_subnet}]
     )
-    ci_name: str | None = None
+    metering.expect("osac.resource.created.v1", resource_id=uuid)
 
-    def cleanup() -> None:
-        cli.delete_compute_instance(uuid=uuid)
-        if ci_name is not None:
-            wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
-        wait_for_grpc_removal(grpc=grpc, uuid=uuid)
+    assert uuid in grpc.list_compute_instance_ids()
 
-    try:
-        metering.expect("osac.resource.created.v1", resource_id=uuid)
+    ci_name: str = wait_for_cr(k8s=k8s_hub_client, uuid=uuid)
+    wait_for_provision(k8s=k8s_hub_client, name=ci_name)
+    wait_for_running(k8s=k8s_hub_client, name=ci_name)
 
-        assert uuid in grpc.list_compute_instance_ids()
+    metering.expect("osac.resource.started.v1", resource_id=uuid)
+    metering.verify()
 
-        ci_name = wait_for_cr(k8s=k8s_hub_client, uuid=uuid)
-        wait_for_provision(k8s=k8s_hub_client, name=ci_name)
-        wait_for_running(k8s=k8s_hub_client, name=ci_name)
-        if os.environ.get("OSAC_FULFILLMENT_TRUST_E2E") == "true":
-            assert_management_tls(k8s_hub_client)
+    # Verify billing dimensions values match the created resource
+    created_event = metering.get_event("osac.resource.created.v1", resource_id=uuid)
+    bd = created_event.get("data", {}).get("billing_dimensions", {})
+    assert bd.get("instance_type") == cli.default_instance_type, (
+        f"billing_dimensions.instance_type mismatch: {bd.get('instance_type')!r} != {cli.default_instance_type!r}"
+    )
 
-        metering.expect("osac.resource.started.v1", resource_id=uuid)
-        metering.verify()
+    # Verify VM exists on virt cluster
+    vmi_ns: str = k8s_hub_client.get_compute_instance_vm_namespace(name=ci_name)
+    vmi_ts: str = k8s_virt_client.get_vmi_creation_timestamp(vmi_namespace=vmi_ns, compute_instance_name=ci_name)
+    assert vmi_ts != "", f"No VMI found on virt cluster for {ci_name}"
 
-        # Verify billing dimensions values match the created resource
-        created_event = metering.get_event("osac.resource.created.v1", resource_id=uuid)
-        bd = created_event.get("data", {}).get("billing_dimensions", {})
-        assert bd.get("instance_type") == cli.default_instance_type, (
-            f"billing_dimensions.instance_type mismatch: {bd.get('instance_type')!r} != {cli.default_instance_type!r}"
-        )
-
-        # Verify VM exists on virt cluster
-        vmi_ns: str = k8s_hub_client.get_compute_instance_vm_namespace(name=ci_name)
-        vmi_ts: str = k8s_virt_client.get_vmi_creation_timestamp(vmi_namespace=vmi_ns, compute_instance_name=ci_name)
-        assert vmi_ts != "", f"No VMI found on virt cluster for {ci_name}"
-    except BaseException:
-        try:
-            cleanup()
-        except Exception:
-            pass
-        raise
-    else:
-        cleanup()
-
+    cli.delete_compute_instance(uuid=uuid)
     metering.expect("osac.resource.deleted.v1", resource_id=uuid)
+
+    wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
+    wait_for_grpc_removal(grpc=grpc, uuid=uuid)

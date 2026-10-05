@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -79,6 +80,15 @@ func newNATGatewayCR(id, namespace, name string, deletionTimestamp *metav1.Time)
 // hasFinalizer checks if the fulfillment-controller finalizer is present on the NAT gateway.
 func hasFinalizer(natGateway *privatev1.NATGateway) bool {
 	return slices.Contains(natGateway.GetMetadata().GetFinalizers(), finalizers.Controller)
+}
+
+func expectDeletionRetry(err error) {
+	var retryable interface{ RequeueAfter() time.Duration }
+	Expect(errors.As(err, &retryable)).To(BeTrue())
+	Expect(retryable.RequeueAfter()).To(Equal(time.Second))
+	var backoff interface{ UseExponentialBackoff() bool }
+	Expect(errors.As(err, &backoff)).To(BeTrue())
+	Expect(backoff.UseExponentialBackoff()).To(BeFalse())
 }
 
 // newTaskForDelete creates a task configured for testing delete() with hub-dependent paths.
@@ -215,7 +225,7 @@ var _ = Describe("delete", func() {
 		t := newTaskForDelete(gatewayID, hubID, hubCache)
 
 		err := t.delete(ctx)
-		Expect(err).ToNot(HaveOccurred())
+		expectDeletionRetry(err)
 		Expect(deleteCalled).To(BeTrue())
 		Expect(hasFinalizer(t.natGateway)).To(BeTrue())
 	})
@@ -250,7 +260,7 @@ var _ = Describe("delete", func() {
 		t := newTaskForDelete(gatewayID, hubID, hubCache)
 
 		err := t.delete(ctx)
-		Expect(err).ToNot(HaveOccurred())
+		expectDeletionRetry(err)
 		Expect(deleteCalled).To(BeFalse())
 		Expect(hasFinalizer(t.natGateway)).To(BeTrue())
 	})

@@ -50,10 +50,16 @@ respective areas.
 
 ## Validation
 
+From the repository root, load the shared yamllint config so Helm templates
+are excluded and regular YAML is checked with the repository rules:
+
+```bash
+yamllint --strict -c .yamllint.yaml osac-installer/
+```
+
 From `osac-installer/`:
 
 ```bash
-yamllint --strict .
 make helm-validate
 pre-commit run --all-files
 make fulfillment-trust-render-test

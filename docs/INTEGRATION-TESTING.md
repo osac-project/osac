@@ -37,6 +37,50 @@ with their Jira URLs.
 Build/package validation checks image assembly and dependencies. It is separate
 from the test tiers and does not replace the applicable integration tests.
 
+### Parallel local runs on Kind
+
+When multiple agents or sessions run integration tests on the same host, each
+run must create and use its own Kind cluster. Worktrees share the host's Kind
+runtime, and the installer defaults `KIND_CLUSTER_NAME` to `osac-dev`; the
+default kubeconfig is also derived from the cluster name. Reusing a name can
+make one run use or delete another run's cluster, or overwrite its kubeconfig.
+
+Choose a unique `KIND_CLUSTER_NAME` for each concurrent run and keep it set for
+cluster setup, test, and cleanup commands. For example:
+
+```bash
+export KIND_CLUSTER_NAME="osac-it-$(date +%s)-$$"
+
+# Set these when using Podman as the Kind provider and image tool.
+export KIND_EXPERIMENTAL_PROVIDER=podman
+export CONTAINER_TOOL=podman
+
+make -C osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac
+make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment
+make -C osac-installer uninstall-infra PLATFORM=kind PROFILE=dev NS=osac
+```
+
+For parallel local runs, provide a dedicated Kind config through `KIND_CONFIG`.
+Keep the cluster name and ingress host ports unique from other local Kind
+suites. The HTTPS host port must match `FULFILLMENT_IT_HTTPS_PORT`. Kind configs
+are environment-specific and are not checked in with this change.
+
+```bash
+export KIND_CLUSTER_NAME=osac-5744-fulfillment
+export KIND_CONFIG="$HOME/.config/kind/osac-5744-fulfillment.yaml" # local config mapping HTTPS 58443 and HTTP 58080
+export FULFILLMENT_IT_HTTPS_PORT=58443
+
+KUBECONFIG= make -C osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac
+KUBECONFIG= make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment
+KUBECONFIG= make -C osac-installer uninstall PLATFORM=kind PROFILE=dev NS=osac
+```
+
+The installer passes the cluster name and HTTPS port to the Fulfillment test
+process.
+
+Use a different cluster name for each parallel run. Separate CI jobs already
+run on isolated hosted runners and can use the workflow's default name.
+
 ### Work ownership
 
 Use the test tier to route implementation work. Unit, Envtest,
@@ -136,10 +180,12 @@ Touched-area requirements: [component guide](../fulfillment-service/AGENTS.md#in
 ### Coverage notes
 
 - **CLI commands that only call Fulfillment APIs:** Cover them in `fulfillment-service/it/`.
-- **Canonical networking Hub routing:** [`fulfillment-service/it/it_networking_hub_placement_test.go`](../fulfillment-service/it/it_networking_hub_placement_test.go) covers VirtualNetwork, Subnet, SecurityGroup, ExternalIPPool, ExternalIP, ExternalIPAttachment, and NATGateway CR placement on the NetworkClass canonical Hub and absence on a valid alternate Hub. It also verifies that SecurityGroup retains its stored Hub assignment and does not create a duplicate CR when the canonical Hub changes. The fixture uses distinct Hub entries and namespaces on the service Kind cluster; it tests Hub entry and namespace routing, not isolation across separate Kubernetes clusters. The unavailable-canonical/no-fallback case remains controller unit coverage because this deployed-service harness cannot isolate or reset the reconcilers' cached Hub resolution between cases.
+- **Networking readiness gates and active-reference deletion guards:** `fulfillment-service/it/it_ipv4_networking_contract_test.go` exercises deployed Fulfillment gRPC handlers and the real database for NetworkClass/VirtualNetwork/Subnet sequencing and parent deletion rejection. Resource statuses are driven through the private API; networking providers and the OSAC networking operator feedback loop are not part of this suite. Component-integration work belongs to the [OSAC-5745](https://redhat.atlassian.net/browse/OSAC-5745) and [OSAC-5746](https://redhat.atlassian.net/browse/OSAC-5746) DEV stories.
+- **Canonical networking Hub routing:** [`fulfillment-service/it/it_networking_hub_placement_test.go`](../fulfillment-service/it/it_networking_hub_placement_test.go) covers VirtualNetwork, Subnet, SecurityGroup, ExternalIPPool, ExternalIP, ExternalIPAttachment, and NATGateway CR placement on the NetworkClass canonical Hub and absence on a valid alternate Hub. It verifies that an existing Tenant is synchronized to the alternate Hub, and that SecurityGroup retains its stored Hub assignment without creating a duplicate CR when the canonical Hub changes. The fixture uses distinct Hub entries and namespaces on the service Kind cluster; it tests Hub entry and namespace routing, not isolation across separate Kubernetes clusters. The unavailable-canonical/no-fallback case remains controller unit coverage because this deployed-service harness cannot isolate or reset the reconcilers' cached Hub resolution between cases.
 - **NetworkClass manager registration and capability propagation:** `it_networkclass_manager_capabilities_test.go` creates the NetworkClass first, then adds fabric and Kubernetes manager registrations and verifies the deployed operator persists their capability intersection. The installer target runs this spec separately with the local operator image so the rest of the service-only suite remains isolated from operator reconciliation.
 - **NetworkClass manager readiness:** `it_networkclass_manager_readiness_test.go` covers `PENDING → FAILED` while a manager is missing, recovery to `READY` after its ConfigMap registration appears, and the persisted capability intersection.
 - **Provisioning journeys that cross into operators or providers:** Keep them in `tests/e2e/` and exercise those boundaries explicitly.
+- **Provider-backed networking lifecycle journeys:** Deployed CaaS, VM, and BM checks for attachment readiness and cleanup are QE-owned under [OSAC-5750](https://redhat.atlassian.net/browse/OSAC-5750). They require real workload provisioning and configured network providers, beyond the component-integration coverage described below.
 - **Catalog Items:** `it/` checks creation and update behavior, publication visibility, CLI creation, and the ClusterOrder release image written by Fulfillment. Catalog-backed provisioning journeys that exercise other components remain in the CaaS, VMaaS, BMaaS, and reference E2E suites.
 
 ## osac-installer
@@ -212,6 +258,36 @@ Touched-area requirements: [component guide](../osac-operator/AGENTS.md#integrat
 - **AAP, dispatcher, provisioning-provider, KubeVirt, or fulfillment boundary:** A controllable provider in envtest is not coverage of the real provider boundary.
 - **Generated CRDs or manifests:** Do not hand-edit generated output.
 
+### NET-CLEAN-07: Deployed OSAC cleanup
+
+Kind component integration, owned by DEV: `test/integration/networking_cleanup_test.go`
+uses the installed controller manager and Kubernetes API to delete
+ClusterOrder, ComputeInstance, and BareMetalInstance resources. It covers
+current and legacy ownership markers, EIA-before-EIP deletion, workload
+finalizer retention while test finalizers hold either child, and preservation
+of manual and foreign resources. For BareMetalInstance, it also verifies the
+operator arms its cleanup finalizer before any network child is projected.
+Test finalizers simulate provider cleanup; the suite does not call reconciler
+methods directly or exercise a real provider.
+Broader deployed user journeys are QE-owned under
+[OSAC-5750](https://redhat.atlassian.net/browse/OSAC-5750); real-provider
+behavior remains under [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843).
+
+Run this sequence from the repository root in its own terminal. Set
+`KIND_CONFIG` to a local config for the dedicated `osac-5749-operator` cluster,
+with HTTP/HTTPS host ports `38080`/`38443`. The config is environment-specific
+and is not checked in. The empty `KUBECONFIG=` assignment makes the installer
+derive a separate kubeconfig from the cluster name. Run NET-CLEAN-08 in parallel
+in another terminal using its own cluster, config, and kubeconfig.
+
+```bash
+export KIND_CLUSTER_NAME=osac-5749-operator
+export KIND_CONFIG="$HOME/.config/kind/osac-5749-operator.yaml"
+KUBECONFIG= make -C osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac
+KUBECONFIG= make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=operator KIND_CLUSTER_NAME=osac-5749-operator
+KUBECONFIG= make -C osac-installer uninstall PLATFORM=kind PROFILE=dev NS=osac KIND_CLUSTER_NAME=osac-5749-operator
+```
+
 ### Coverage gaps
 
 The current component integration suite does not exercise real AAP,
@@ -241,6 +317,35 @@ Touched-area requirements: [component guide](../bare-metal-fulfillment-operator/
 - **Controller deployment, CRDs, pool flows, or Kubernetes wiring:** Envtest alone does not prove the deployed controller path.
 - **Metal3, BCM, Ironic, BMC, power, or hardware semantics:** Static CRDs and HTTP test doubles do not satisfy a real-boundary requirement.
 - **Generated CRDs or Helm CRDs:** Keep generated artifacts synchronized.
+
+### NET-CLEAN-08: Deployed BMF ownership boundary
+
+Kind component integration, owned by DEV: `test/integration/networking_cleanup_test.go`
+uses the installed BMF controller and Kubernetes API to verify a deleting
+BareMetalInstance holds its assigned, powered-on host while the OSAC networking
+finalizer remains. The test then simulates OSAC completing cleanup by removing
+that finalizer and verifies BMF completes host teardown without changing the
+manual ExternalIP or ExternalIPAttachment fixtures. The OSAC finalizer and
+network resources are test fixtures; Metal3 hardware status is simulated, and
+this suite does not run the OSAC cleanup controller or real provider behavior.
+Broader deployed user journeys are QE-owned under
+[OSAC-5750](https://redhat.atlassian.net/browse/OSAC-5750); real-provider
+behavior remains under [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843).
+
+Run this sequence from the repository root in a separate terminal from
+NET-CLEAN-07. Set `KIND_CONFIG` to a local config for the dedicated
+`osac-5749-bmf` cluster, with HTTP/HTTPS host ports `28080`/`28443`. The config
+is environment-specific and is not checked in. The empty `KUBECONFIG=`
+assignment makes the installer derive a separate kubeconfig from this cluster
+name.
+
+```bash
+export KIND_CLUSTER_NAME=osac-5749-bmf
+export KIND_CONFIG="$HOME/.config/kind/osac-5749-bmf.yaml"
+KUBECONFIG= make -C osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac
+KUBECONFIG= make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=bmf KIND_CLUSTER_NAME=osac-5749-bmf
+KUBECONFIG= make -C osac-installer uninstall PLATFORM=kind PROFILE=dev NS=osac KIND_CLUSTER_NAME=osac-5749-bmf
+```
 
 ### Coverage gaps
 

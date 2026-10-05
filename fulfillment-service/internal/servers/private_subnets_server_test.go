@@ -1354,6 +1354,40 @@ var _ = Describe("Private subnets server", func() {
 				Expect(status.Message()).To(ContainSubstring("compute instance"))
 			})
 
+			It("rejects deletion while a referencing compute instance is still being deleted", func() {
+				vn := createVirtualNetwork(ctx, "10.0.0.0/16", "")
+				createdSubnet, err := server.Create(ctx, privatev1.SubnetsCreateRequest_builder{
+					Object: privatev1.Subnet_builder{
+						Metadata: privatev1.Metadata_builder{Name: "subnet-with-deleting-dependent", Tenant: testTenant}.Build(),
+						Spec: privatev1.SubnetSpec_builder{
+							Ipv4Cidr:       new("10.0.1.0/24"),
+							VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vn.GetId()}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+
+				createdInstance, err := computeInstancesDao.Create().SetObject(privatev1.ComputeInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Tenant: testTenant, Name: "instance-being-deleted", Finalizers: []string{"test-cleanup"},
+					}.Build(),
+					Spec: privatev1.ComputeInstanceSpec_builder{
+						NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+							privatev1.ComputeNetworkAttachment_builder{
+								Subnet: privatev1.SubnetLocalReference_builder{Id: createdSubnet.GetObject().GetId()}.Build(),
+							}.Build(),
+						},
+					}.Build(),
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				_, err = computeInstancesDao.Delete().SetId(createdInstance.GetObject().GetId()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+
+				_, err = server.Delete(ctx, privatev1.SubnetsDeleteRequest_builder{Id: createdSubnet.GetObject().GetId()}.Build())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+				Expect(err.Error()).To(ContainSubstring("compute instance"))
+			})
+
 			It("allows deletion when no compute instances use the subnet", func() {
 				vn := createVirtualNetwork(ctx, "10.0.0.0/16", "")
 

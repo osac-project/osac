@@ -32,6 +32,18 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
+const (
+	systemCreator               = "system"
+	autoCreatedLabel            = "osac.openshift.io/auto-created"
+	autoCreatedForLabel         = "osac.openshift.io/auto-created-for"
+	autoProvisionedLabel        = "osac.openshift.io/auto-provisioned"
+	autoProvisionedForLabel     = "osac.openshift.io/auto-provisioned-for"
+	autoAttachmentDeferredLabel = "osac.openshift.io/auto-attachment-deferred"
+	autoCreatedKindLabel        = "osac.openshift.io/auto-created-kind"
+	autoCreatedEndpointLabel    = "osac.openshift.io/auto-created-endpoint"
+	tenantAnnotation            = "osac.openshift.io/tenant"
+)
+
 var validExternalIPAttachmentTransitions = map[privatev1.ExternalIPAttachmentState][]privatev1.ExternalIPAttachmentState{
 	privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_PENDING: {
 		privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_READY,
@@ -178,39 +190,6 @@ func (l *externalIPLifecycle) lockAttachmentTarget(ctx context.Context, attachme
 	}
 }
 
-func (l *externalIPLifecycle) lockNewAttachmentReferences(ctx context.Context, externalIPID string, targetID string, targetDAO *dao.GenericDAO[*privatev1.ComputeInstance]) error {
-	if _, err := l.externalIPDao.Get().SetId(externalIPID).SetLock(true).Do(ctx); err != nil {
-		return err
-	}
-	if targetDAO == nil {
-		return errors.New("attachment target DAO is not configured")
-	}
-	_, err := targetDAO.Get().SetId(targetID).SetLock(true).Do(ctx)
-	return err
-}
-
-func (l *externalIPLifecycle) lockNewClusterAttachmentReferences(ctx context.Context, externalIPID, targetID string) error {
-	if _, err := l.externalIPDao.Get().SetId(externalIPID).SetLock(true).Do(ctx); err != nil {
-		return err
-	}
-	if l.clusterDao == nil {
-		return errors.New("cluster DAO is not configured")
-	}
-	_, err := l.clusterDao.Get().SetId(targetID).SetLock(true).Do(ctx)
-	return err
-}
-
-func (l *externalIPLifecycle) lockNewBareMetalAttachmentReferences(ctx context.Context, externalIPID, targetID string) error {
-	if _, err := l.externalIPDao.Get().SetId(externalIPID).SetLock(true).Do(ctx); err != nil {
-		return err
-	}
-	if l.bareMetalInstanceDao == nil {
-		return errors.New("bare metal instance DAO is not configured")
-	}
-	_, err := l.bareMetalInstanceDao.Get().SetId(targetID).SetLock(true).Do(ctx)
-	return err
-}
-
 func (l *externalIPLifecycle) lockNATGateway(ctx context.Context, id string) (*privatev1.ExternalIP, *privatev1.NATGateway, error) {
 	initialResponse, err := l.natGatewayDao.Get().SetId(id).Do(ctx)
 	if err != nil {
@@ -244,17 +223,16 @@ func (l *externalIPLifecycle) lockNATGateway(ctx context.Context, id string) (*p
 	return parentResponse.GetObject(), natGateway, nil
 }
 
-func (l *externalIPLifecycle) lockExternalIPConsumers(ctx context.Context, externalIPID string) error {
+func (l *externalIPLifecycle) lockExternalIPConsumers(ctx context.Context, externalIP *privatev1.ExternalIP) error {
+	externalIPID := externalIP.GetId()
+	filter := externalIPConsumerFilter(externalIPID, externalIP.GetMetadata().GetName())
 	if l.externalIPAttachmentDao != nil {
-		response, err := l.externalIPAttachmentDao.List().SetFilter(fmt.Sprintf(
-			"(this.spec.external_ip.id == %s || this.spec.external_ip.name == %s) && !has(this.metadata.deletion_timestamp)",
-			strconv.Quote(externalIPID), strconv.Quote(externalIPID),
-		)).SetLimit(1000).Do(ctx)
-		if response.GetTotal() > 1000 {
-			return fmt.Errorf("ExternalIP %s has more than 1000 live consumers", externalIPID)
-		}
+		response, err := l.externalIPAttachmentDao.List().SetFilter(filter).SetLimit(1000).Do(ctx)
 		if err != nil {
 			return err
+		}
+		if response.GetTotal() > 1000 {
+			return fmt.Errorf("ExternalIP %s has more than 1000 live consumers", externalIPID)
 		}
 		ids := make([]string, 0, len(response.GetItems()))
 		for _, attachment := range response.GetItems() {
@@ -265,27 +243,15 @@ func (l *externalIPLifecycle) lockExternalIPConsumers(ctx context.Context, exter
 			if _, err = l.externalIPAttachmentDao.Lock().AddIds(ids...).Do(ctx); err != nil {
 				return err
 			}
-			for _, id := range ids {
-				attachmentResponse, getErr := l.externalIPAttachmentDao.Get().SetId(id).SetLock(true).Do(ctx)
-				if getErr != nil {
-					return getErr
-				}
-				if err = l.lockAttachmentTarget(ctx, attachmentResponse.GetObject()); err != nil {
-					return err
-				}
-			}
 		}
 	}
 	if l.natGatewayDao != nil {
-		response, err := l.natGatewayDao.List().SetFilter(fmt.Sprintf(
-			"(this.spec.external_ip.id == %s || this.spec.external_ip.name == %s) && !has(this.metadata.deletion_timestamp)",
-			strconv.Quote(externalIPID), strconv.Quote(externalIPID),
-		)).SetLimit(1000).Do(ctx)
-		if response.GetTotal() > 1000 {
-			return fmt.Errorf("ExternalIP %s has more than 1000 live consumers", externalIPID)
-		}
+		response, err := l.natGatewayDao.List().SetFilter(filter).SetLimit(1000).Do(ctx)
 		if err != nil {
 			return err
+		}
+		if response.GetTotal() > 1000 {
+			return fmt.Errorf("ExternalIP %s has more than 1000 live consumers", externalIPID)
 		}
 		ids := make([]string, 0, len(response.GetItems()))
 		for _, gateway := range response.GetItems() {
@@ -296,40 +262,39 @@ func (l *externalIPLifecycle) lockExternalIPConsumers(ctx context.Context, exter
 			if _, err = l.natGatewayDao.Lock().AddIds(ids...).Do(ctx); err != nil {
 				return err
 			}
-			for _, id := range ids {
-				gatewayResponse, getErr := l.natGatewayDao.Get().SetId(id).SetLock(true).Do(ctx)
-				if getErr != nil {
-					return getErr
-				}
-				gateway := gatewayResponse.GetObject()
-				if l.virtualNetworkDao == nil {
-					return errors.New("virtual network DAO is not configured")
-				}
-				if _, getErr = l.virtualNetworkDao.Get().SetId(refKey(gateway.GetSpec().GetVirtualNetwork())).SetLock(true).Do(ctx); getErr != nil {
-					return getErr
-				}
-			}
 		}
 	}
 	return nil
 }
 
-func (l *externalIPLifecycle) ensureExternalIPAvailable(ctx context.Context, externalIPID string) error {
-	filter := fmt.Sprintf(
-		"(this.spec.external_ip.id == %s || this.spec.external_ip.name == %s) && !has(this.metadata.deletion_timestamp)",
-		strconv.Quote(externalIPID), strconv.Quote(externalIPID),
-	)
+func (l *externalIPLifecycle) ensureExternalIPAvailable(ctx context.Context, externalIPID, externalIPName string) error {
+	return l.ensureExternalIPAvailableExcept(ctx, externalIPID, externalIPName, "")
+}
+
+func (l *externalIPLifecycle) ensureExternalIPAvailableExcept(
+	ctx context.Context,
+	externalIPID string,
+	externalIPName string,
+	exceptAttachmentID string,
+) error {
+	filter := externalIPConsumerFilter(externalIPID, externalIPName)
 	if l.externalIPAttachmentDao != nil {
-		response, err := l.externalIPAttachmentDao.List().SetFilter(filter).SetLimit(1).Do(ctx)
+		response, err := l.externalIPAttachmentDao.List().SetFilter(filter).SetLimit(1000).Do(ctx)
 		if err != nil {
 			return err
 		}
-		if response.GetTotal() > 0 {
-			return grpcstatus.Errorf(grpccodes.FailedPrecondition, "ExternalIP '%s' is already in use by an ExternalIPAttachment", externalIPID)
+		if response.GetTotal() > 1000 {
+			return fmt.Errorf("ExternalIP %s has more than 1000 live consumers", externalIPID)
+		}
+		for _, attachment := range response.GetItems() {
+			if attachment.GetId() != exceptAttachmentID {
+				return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+					"ExternalIP '%s' is already in use by an ExternalIPAttachment", externalIPID)
+			}
 		}
 	}
 	if l.natGatewayDao != nil {
-		response, err := l.natGatewayDao.List().SetFilter(filter).SetLimit(1).Do(ctx)
+		response, err := l.natGatewayDao.List().SetFilter(filter).SetLimit(1000).Do(ctx)
 		if err != nil {
 			return err
 		}
@@ -338,6 +303,21 @@ func (l *externalIPLifecycle) ensureExternalIPAvailable(ctx context.Context, ext
 		}
 	}
 	return nil
+}
+
+func externalIPConsumerFilter(externalIPID, externalIPName string) string {
+	keys := []string{externalIPID}
+	if externalIPName != "" && externalIPName != externalIPID {
+		keys = append(keys, externalIPName)
+	}
+	conditions := make([]string, 0, len(keys)*2)
+	for _, key := range keys {
+		quotedKey := strconv.Quote(key)
+		conditions = append(conditions,
+			"this.spec.external_ip.id == "+quotedKey,
+			"this.spec.external_ip.name == "+quotedKey)
+	}
+	return "(" + strings.Join(conditions, " || ") + ")"
 }
 
 func (l *externalIPLifecycle) settleAttachmentParent(
@@ -464,7 +444,86 @@ func (l *externalIPLifecycle) deleteAttachmentAndExternalIP(ctx context.Context,
 	if _, err = l.externalIPAttachmentDao.Delete().SetId(attachmentID).Do(ctx); err != nil {
 		return err
 	}
+	if err = l.lockExternalIPConsumers(ctx, parent); err != nil {
+		return err
+	}
+	if err = l.ensureExternalIPAvailableExcept(
+		ctx, parent.GetId(), parent.GetMetadata().GetName(), attachmentID,
+	); err != nil {
+		return err
+	}
 	return l.deleteLockedExternalIP(ctx, parent)
+}
+
+func (l *externalIPLifecycle) deleteAutoCreatedExternalIPs(ctx context.Context, ownerID string) error {
+	filter := autoCreatedExternalIPFilter(ownerID)
+	eipList, err := l.externalIPDao.List().SetFilter(filter).Do(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list ExternalIPs: %w", err)
+	}
+	for _, externalIP := range eipList.GetItems() {
+		// Only the workload servers create automatic ExternalIPs with the system
+		// creator. Ignore tenant-created objects that copy the owner labels.
+		if externalIP.GetMetadata().GetCreator() != systemCreator {
+			continue
+		}
+		// The paired auto-created attachment path may already have started deleting this EIP.
+		// Its finalizer keeps it visible until the operator completes cleanup.
+		if externalIP.GetMetadata().HasDeletionTimestamp() {
+			continue
+		}
+		if err := l.deleteExternalIP(ctx, externalIP.GetId()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func autoCreatedExternalIPFilter(ownerID string) string {
+	return fmt.Sprintf(
+		"(this.metadata.labels['%s'] == 'true' && this.metadata.labels['%s'] == %s) || "+
+			"(this.metadata.labels['%s'] == 'true' && this.metadata.labels['%s'] == %s)",
+		autoCreatedLabel, autoCreatedForLabel, strconv.Quote(ownerID),
+		autoProvisionedLabel, autoProvisionedForLabel, strconv.Quote(ownerID),
+	)
+}
+
+func autoCreatedExternalIPAttachmentFilter(ownerID string) string {
+	return fmt.Sprintf(
+		"(this.metadata.labels['%s'] == 'true' && this.metadata.labels['%s'] == %s) || "+
+			"(this.metadata.labels['%s'] == 'true' && this.metadata.labels['%s'] == %s)",
+		autoCreatedLabel, autoCreatedForLabel, strconv.Quote(ownerID),
+		autoProvisionedLabel, autoProvisionedForLabel, strconv.Quote(ownerID),
+	)
+}
+
+func (l *externalIPLifecycle) rejectManualAttachmentDelete(
+	ctx context.Context,
+	targetKind string,
+	targetID string,
+	targetMetadata *privatev1.Metadata,
+) error {
+	return rejectDeleteIfReferenced(ctx, nil, l.externalIPAttachmentDao, "ExternalIPAttachment", targetKind, targetID,
+		targetMetadata, func(attachment *privatev1.ExternalIPAttachment) bool {
+			spec := attachment.GetSpec()
+			var referenced bool
+			switch targetKind {
+			case "ComputeInstance":
+				referenced = referenceMatches(spec.GetComputeInstance(), targetID, targetMetadata)
+			case "Cluster":
+				referenced = referenceMatches(spec.GetCluster(), targetID, targetMetadata)
+			case "BareMetalInstance":
+				referenced = referenceMatches(spec.GetBaremetalInstance(), targetID, targetMetadata)
+			}
+			if !referenced {
+				return false
+			}
+			metadata := attachment.GetMetadata()
+			labels := metadata.GetLabels()
+			isCurrent := labels[autoCreatedLabel] == "true" && labels[autoCreatedForLabel] == targetID
+			isLegacy := labels[autoProvisionedLabel] == "true" && labels[autoProvisionedForLabel] == targetID
+			return metadata.GetCreator() != systemCreator || (!isCurrent && !isLegacy)
+		})
 }
 
 func (l *externalIPLifecycle) deleteExternalIP(ctx context.Context, id string) error {
@@ -472,10 +531,14 @@ func (l *externalIPLifecycle) deleteExternalIP(ctx context.Context, id string) e
 	if err != nil {
 		return err
 	}
-	if err = l.lockExternalIPConsumers(ctx, id); err != nil {
+	if err = l.lockExternalIPConsumers(ctx, parentResponse.GetObject()); err != nil {
 		return err
 	}
-	return l.deleteLockedExternalIP(ctx, parentResponse.GetObject())
+	externalIP := parentResponse.GetObject()
+	if err = l.ensureExternalIPAvailable(ctx, id, externalIP.GetMetadata().GetName()); err != nil {
+		return err
+	}
+	return l.deleteLockedExternalIP(ctx, externalIP)
 }
 
 func (l *externalIPLifecycle) deleteLockedExternalIP(ctx context.Context, externalIP *privatev1.ExternalIP) error {

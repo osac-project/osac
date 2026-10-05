@@ -24,6 +24,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -40,8 +41,9 @@ var _ privatev1.ExternalIPPoolsServer = (*PrivateExternalIPPoolsServer)(nil)
 type PrivateExternalIPPoolsServer struct {
 	privatev1.UnimplementedExternalIPPoolsServer
 
-	logger  *slog.Logger
-	generic *GenericServer[*privatev1.ExternalIPPool]
+	logger        *slog.Logger
+	generic       *GenericServer[*privatev1.ExternalIPPool]
+	externalIPDao *dao.GenericDAO[*privatev1.ExternalIP]
 }
 
 func NewPrivateExternalIPPoolsServer() *PrivateExternalIPPoolsServerBuilder {
@@ -85,6 +87,15 @@ func (b *PrivateExternalIPPoolsServerBuilder) Build() (result *PrivateExternalIP
 		return
 	}
 
+	externalIPDao, err := dao.NewGenericDAO[*privatev1.ExternalIP]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
 	generic, err := NewGenericServer[*privatev1.ExternalIPPool]().
 		SetLogger(b.logger).
 		SetService(privatev1.ExternalIPPools_ServiceDesc.ServiceName).
@@ -99,8 +110,9 @@ func (b *PrivateExternalIPPoolsServerBuilder) Build() (result *PrivateExternalIP
 	}
 
 	result = &PrivateExternalIPPoolsServer{
-		logger:  b.logger,
-		generic: generic,
+		logger:        b.logger,
+		generic:       generic,
+		externalIPDao: externalIPDao,
 	}
 	return
 }
@@ -270,19 +282,22 @@ func (s *PrivateExternalIPPoolsServer) validateNoExternalIPPoolCIDROverlap(ctx c
 
 func (s *PrivateExternalIPPoolsServer) Delete(ctx context.Context,
 	request *privatev1.ExternalIPPoolsDeleteRequest) (response *privatev1.ExternalIPPoolsDeleteResponse, err error) {
-	var getResponse *privatev1.ExternalIPPoolsGetResponse
-	err = s.generic.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{
-		Id: request.GetId(),
-	}.Build(), &getResponse)
+	pool, err := lockLifecycleResource(ctx, s.generic.dao, request.GetId(), "external IP pool")
 	if err != nil {
 		return
 	}
-	if allocated := getResponse.GetObject().GetStatus().GetAllocated(); allocated > 0 {
+	if allocated := pool.GetStatus().GetAllocated(); allocated > 0 {
 		err = grpcstatus.Errorf(
 			grpccodes.FailedPrecondition,
 			"cannot delete external IP pool '%s': %d external IP(s) are still allocated from it",
-			request.GetId(), allocated,
+			pool.GetMetadata().GetName(), allocated,
 		)
+		return
+	}
+	if err = rejectDeleteIfReferenced(ctx, s.logger, s.externalIPDao, "external IP", "external IP pool",
+		pool.GetId(), pool.GetMetadata(), func(externalIP *privatev1.ExternalIP) bool {
+			return referenceMatches(externalIP.GetSpec().GetPool(), pool.GetId(), pool.GetMetadata())
+		}); err != nil {
 		return
 	}
 	err = s.generic.Delete(ctx, request, &response)

@@ -41,10 +41,13 @@ var _ privatev1.SecurityGroupsServer = (*PrivateSecurityGroupsServer)(nil)
 type PrivateSecurityGroupsServer struct {
 	privatev1.UnimplementedSecurityGroupsServer
 
-	logger            *slog.Logger
-	tenancyLogic      auth.TenancyLogic
-	generic           *GenericServer[*privatev1.SecurityGroup]
-	virtualNetworkDao *dao.GenericDAO[*privatev1.VirtualNetwork]
+	logger               *slog.Logger
+	tenancyLogic         auth.TenancyLogic
+	generic              *GenericServer[*privatev1.SecurityGroup]
+	virtualNetworkDao    *dao.GenericDAO[*privatev1.VirtualNetwork]
+	computeInstanceDao   *dao.GenericDAO[*privatev1.ComputeInstance]
+	clusterDao           *dao.GenericDAO[*privatev1.Cluster]
+	bareMetalInstanceDao *dao.GenericDAO[*privatev1.BareMetalInstance]
 }
 
 func NewPrivateSecurityGroupsServer() *PrivateSecurityGroupsServerBuilder {
@@ -104,6 +107,21 @@ func (b *PrivateSecurityGroupsServerBuilder) Build() (result *PrivateSecurityGro
 	if err != nil {
 		return
 	}
+	computeInstanceDao, err := dao.NewGenericDAO[*privatev1.ComputeInstance]().
+		SetLogger(b.logger).SetTenancyLogic(b.tenancyLogic).SetMetricsRegisterer(b.metricsRegisterer).Build()
+	if err != nil {
+		return
+	}
+	clusterDao, err := dao.NewGenericDAO[*privatev1.Cluster]().
+		SetLogger(b.logger).SetTenancyLogic(b.tenancyLogic).SetMetricsRegisterer(b.metricsRegisterer).Build()
+	if err != nil {
+		return
+	}
+	bareMetalInstanceDao, err := dao.NewGenericDAO[*privatev1.BareMetalInstance]().
+		SetLogger(b.logger).SetTenancyLogic(b.tenancyLogic).SetMetricsRegisterer(b.metricsRegisterer).Build()
+	if err != nil {
+		return
+	}
 
 	// Create the generic server:
 	generic, err := NewGenericServer[*privatev1.SecurityGroup]().
@@ -120,10 +138,13 @@ func (b *PrivateSecurityGroupsServerBuilder) Build() (result *PrivateSecurityGro
 
 	// Create and populate the object:
 	result = &PrivateSecurityGroupsServer{
-		logger:            b.logger,
-		tenancyLogic:      b.tenancyLogic,
-		generic:           generic,
-		virtualNetworkDao: virtualNetworkDao,
+		logger:               b.logger,
+		tenancyLogic:         b.tenancyLogic,
+		generic:              generic,
+		virtualNetworkDao:    virtualNetworkDao,
+		computeInstanceDao:   computeInstanceDao,
+		clusterDao:           clusterDao,
+		bareMetalInstanceDao: bareMetalInstanceDao,
 	}
 	return
 }
@@ -175,15 +196,57 @@ func (s *PrivateSecurityGroupsServer) Update(ctx context.Context,
 
 func (s *PrivateSecurityGroupsServer) Delete(ctx context.Context,
 	request *privatev1.SecurityGroupsDeleteRequest) (response *privatev1.SecurityGroupsDeleteResponse, err error) {
-	getRequest := &privatev1.SecurityGroupsGetRequest{}
-	getRequest.SetId(request.GetId())
-	var getResponse *privatev1.SecurityGroupsGetResponse
-	err = s.generic.Get(ctx, getRequest, &getResponse)
+	securityGroup, err := lockLifecycleResource(ctx, s.generic.dao, request.GetId(), "security group")
 	if err != nil {
 		return
 	}
-	if err = validateNotDefault(ctx, getResponse.GetObject().GetMetadata().GetLabels(), "security group"); err != nil {
+	if err = validateNotDefault(ctx, securityGroup.GetMetadata().GetLabels(), "security group"); err != nil {
 		return
+	}
+	groupID := securityGroup.GetId()
+	checks := []func() error{
+		func() error {
+			return rejectDeleteIfReferenced(ctx, s.logger, s.computeInstanceDao, "compute instance", "security group", groupID,
+				securityGroup.GetMetadata(), func(instance *privatev1.ComputeInstance) bool {
+					for _, attachment := range instance.GetSpec().GetNetworkAttachments() {
+						for _, reference := range attachment.GetSecurityGroups() {
+							if referenceMatches(reference, groupID, securityGroup.GetMetadata()) {
+								return true
+							}
+						}
+					}
+					return false
+				})
+		},
+		func() error {
+			return rejectDeleteIfReferenced(ctx, s.logger, s.clusterDao, "cluster", "security group", groupID,
+				securityGroup.GetMetadata(), func(cluster *privatev1.Cluster) bool {
+					for _, reference := range cluster.GetSpec().GetNetworkAttachment().GetSecurityGroups() {
+						if referenceMatches(reference, groupID, securityGroup.GetMetadata()) {
+							return true
+						}
+					}
+					return false
+				})
+		},
+		func() error {
+			return rejectDeleteIfReferenced(ctx, s.logger, s.bareMetalInstanceDao, "bare metal instance", "security group", groupID,
+				securityGroup.GetMetadata(), func(instance *privatev1.BareMetalInstance) bool {
+					for _, attachment := range instance.GetSpec().GetNetworkAttachments() {
+						for _, reference := range attachment.GetSecurityGroups() {
+							if referenceMatches(reference, groupID, securityGroup.GetMetadata()) {
+								return true
+							}
+						}
+					}
+					return false
+				})
+		},
+	}
+	for _, check := range checks {
+		if err = check(); err != nil {
+			return
+		}
 	}
 	err = s.generic.Delete(ctx, request, &response)
 	return
@@ -254,6 +317,7 @@ func (s *PrivateSecurityGroupsServer) validateVirtualNetworkReference(ctx contex
 	// Get parent VirtualNetwork by ID
 	getResponse, err := s.virtualNetworkDao.Get().
 		SetId(virtualNetworkKey).
+		SetLock(true).
 		Do(ctx)
 	if err != nil {
 		var notFoundErr *dao.ErrNotFound
@@ -268,6 +332,10 @@ func (s *PrivateSecurityGroupsServer) validateVirtualNetworkReference(ctx contex
 	}
 
 	virtualNetwork := getResponse.GetObject()
+	if virtualNetwork.GetMetadata().HasDeletionTimestamp() {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"parent VirtualNetwork '%s' is being deleted", virtualNetworkKey)
+	}
 	securityGroupTenant, err := resolveObjectTenant(ctx, securityGroup.GetMetadata(), s.tenancyLogic)
 	if err != nil {
 		return err

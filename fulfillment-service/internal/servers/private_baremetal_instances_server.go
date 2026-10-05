@@ -356,7 +356,7 @@ func (s *PrivateBareMetalInstancesServer) prepareCreate(ctx context.Context, can
 	}
 	for i, attachment := range candidate.GetSpec().GetNetworkAttachments() {
 		source := fmt.Sprintf(" in spec.network_attachments[%d]", i)
-		subnet, resolveErr := resolveAndCanonicalizeReference(ctx, s.subnetsDao, candidate.GetMetadata(), attachment.GetSubnet(), "subnet", grpccodes.InvalidArgument)
+		subnet, resolveErr := resolveAndCanonicalizeLockedReference(ctx, s.subnetsDao, candidate.GetMetadata(), attachment.GetSubnet(), "subnet", grpccodes.InvalidArgument)
 		if resolveErr != nil {
 			return nil, resolveErr
 		}
@@ -364,7 +364,7 @@ func (s *PrivateBareMetalInstancesServer) prepareCreate(ctx context.Context, can
 			return
 		}
 		for _, ref := range attachment.GetSecurityGroups() {
-			group, resolveErr := resolveAndCanonicalizeReference(ctx, s.securityGroupsDao, candidate.GetMetadata(), ref, "security group", grpccodes.InvalidArgument)
+			group, resolveErr := resolveAndCanonicalizeLockedReference(ctx, s.securityGroupsDao, candidate.GetMetadata(), ref, "security group", grpccodes.InvalidArgument)
 			if resolveErr != nil {
 				return nil, resolveErr
 			}
@@ -456,28 +456,24 @@ func (s *PrivateBareMetalInstancesServer) validateAndResolveUserDataSecret(
 func (s *PrivateBareMetalInstancesServer) Delete(ctx context.Context,
 	request *privatev1.BareMetalInstancesDeleteRequest) (response *privatev1.BareMetalInstancesDeleteResponse, err error) {
 	id := request.GetId()
-	if id != "" {
-		getResponse, getErr := s.generic.dao.Get().SetId(id).Do(ctx)
-		if getErr != nil {
-			var notFoundErr *dao.ErrNotFound
-			if !errors.As(getErr, &notFoundErr) {
-				err = getErr
-				return
-			}
-			s.logger.DebugContext(ctx, "BMI not found during delete, skipping auto-EIP cleanup",
-				slog.String("bmi_id", id))
-		} else if getResponse.GetObject().GetSpec().GetAutoExternalIpAttachment() {
-			s.logger.InfoContext(ctx, "BMI has auto_external_ip_attachment, running cascade cleanup",
-				slog.String("bmi_id", id))
-			err = s.autoCleanupExternalIP(ctx, id)
-			if err != nil {
-				s.logger.ErrorContext(ctx, "Auto-EIP cascade cleanup failed",
-					slog.String("bmi_id", id), slog.Any("error", err))
-				return
-			}
-		} else {
-			s.logger.DebugContext(ctx, "BMI does not have auto_external_ip_attachment",
-				slog.String("bmi_id", id))
+	if id == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "identifier is mandatory")
+	}
+	instance, err := lockLifecycleResource(ctx, s.generic.dao, id, "BareMetalInstance")
+	if err != nil {
+		return
+	}
+	if err = s.lifecycle.rejectManualAttachmentDelete(ctx, "BareMetalInstance", id, instance.GetMetadata()); err != nil {
+		return
+	}
+	if instance.GetSpec().GetAutoExternalIpAttachment() {
+		s.logger.InfoContext(ctx, "BMI has auto_external_ip_attachment, running cascade cleanup",
+			slog.String("bmi_id", id))
+		err = s.autoCleanupExternalIP(ctx, id)
+		if err != nil {
+			s.logger.ErrorContext(ctx, "Auto-EIP cascade cleanup failed",
+				slog.String("bmi_id", id), slog.Any("error", err))
+			return
 		}
 	}
 	err = s.generic.Delete(ctx, request, &response)
@@ -485,10 +481,7 @@ func (s *PrivateBareMetalInstancesServer) Delete(ctx context.Context,
 }
 
 func (s *PrivateBareMetalInstancesServer) autoCleanupExternalIP(ctx context.Context, bmiID string) error {
-	filter := fmt.Sprintf(
-		"this.metadata.labels['%s'] == '%s'",
-		autoCreatedForLabel, bmiID,
-	)
+	filter := autoCreatedExternalIPAttachmentFilter(bmiID)
 	s.logger.InfoContext(ctx, "Auto-EIP cleanup: listing attachments",
 		slog.String("bmi_id", bmiID), slog.String("filter", filter))
 
@@ -522,9 +515,8 @@ func (s *PrivateBareMetalInstancesServer) autoCleanupExternalIP(ctx context.Cont
 		}
 	}
 
-	if len(items) == 0 {
-		s.logger.WarnContext(ctx, "Auto-EIP cleanup: no attachments found for BMI",
-			slog.String("bmi_id", bmiID), slog.String("label", autoCreatedForLabel))
+	if err := s.lifecycle.deleteAutoCreatedExternalIPs(ctx, bmiID); err != nil {
+		return fmt.Errorf("auto_external_ip_attachment cleanup: %w", err)
 	}
 
 	return nil
@@ -1086,18 +1078,21 @@ func (s *PrivateBareMetalInstancesServer) autoProvisionExternalIP(
 		shortID = shortID[:8]
 	}
 
+	eipLabels := map[string]string{
+		autoCreatedLabel:     "true",
+		autoCreatedForLabel:  bmiID,
+		autoCreatedKindLabel: "bare_metal_instance",
+	}
 	eip := privatev1.ExternalIP_builder{
 		Metadata: privatev1.Metadata_builder{
 			Name:   fmt.Sprintf("auto-eip-%s", shortID),
 			Tenant: tenant,
-			Labels: map[string]string{
-				autoCreatedLabel:    "true",
-				autoCreatedForLabel: bmiID,
-			},
+			Labels: eipLabels,
 			Annotations: map[string]string{
+				tenantAnnotation:         tenant,
 				ownerReferenceAnnotation: bmiID,
 			},
-			Creator: "system",
+			Creator: systemCreator,
 		}.Build(),
 		Spec: privatev1.ExternalIPSpec_builder{
 			Pool: privatev1.ExternalIPPoolReference_builder{Id: pool.GetId()}.Build(),
@@ -1107,47 +1102,14 @@ func (s *PrivateBareMetalInstancesServer) autoProvisionExternalIP(
 		}.Build(),
 	}.Build()
 
-	eipResp, err := s.externalIPDao.Create().SetObject(eip).Do(ctx)
+	_, err = s.externalIPDao.Create().SetObject(eip).Do(ctx)
 	if err != nil {
 		return fmt.Errorf("auto_external_ip_attachment: failed to create ExternalIP: %w", err)
-	}
-	eipID := eipResp.GetObject().GetId()
-
-	err = s.lifecycle.lockNewBareMetalAttachmentReferences(ctx, eipID, bmiID)
-	if err != nil {
-		return fmt.Errorf("auto_external_ip_attachment: failed to lock attachment references: %w", err)
 	}
 
 	err = UpdatePoolCapacity(ctx, s.externalIPPoolDao, pool.GetId(), 1)
 	if err != nil {
 		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "auto_external_ip_attachment: %s", err)
-	}
-
-	attachment := privatev1.ExternalIPAttachment_builder{
-		Metadata: privatev1.Metadata_builder{
-			Name:   fmt.Sprintf("auto-eipa-%s", shortID),
-			Tenant: tenant,
-			Labels: map[string]string{
-				autoCreatedLabel:    "true",
-				autoCreatedForLabel: bmiID,
-			},
-			Annotations: map[string]string{
-				ownerReferenceAnnotation: bmiID,
-			},
-			Creator: "system",
-		}.Build(),
-		Spec: privatev1.ExternalIPAttachmentSpec_builder{
-			ExternalIp:        privatev1.ExternalIPLocalReference_builder{Id: eipID}.Build(),
-			BaremetalInstance: privatev1.BareMetalInstanceLocalReference_builder{Id: bmiID}.Build(),
-		}.Build(),
-		Status: privatev1.ExternalIPAttachmentStatus_builder{
-			State: privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_PENDING,
-		}.Build(),
-	}.Build()
-
-	_, err = s.externalIPAttachmentDao.Create().SetObject(attachment).Do(ctx)
-	if err != nil {
-		return fmt.Errorf("auto_external_ip_attachment: failed to create ExternalIPAttachment: %w", err)
 	}
 
 	return nil

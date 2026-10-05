@@ -43,10 +43,13 @@ var _ privatev1.SubnetsServer = (*PrivateSubnetsServer)(nil)
 type PrivateSubnetsServer struct {
 	privatev1.UnimplementedSubnetsServer
 
-	logger            *slog.Logger
-	tenancyLogic      auth.TenancyLogic
-	generic           *GenericServer[*privatev1.Subnet]
-	virtualNetworkDao *dao.GenericDAO[*privatev1.VirtualNetwork]
+	logger               *slog.Logger
+	tenancyLogic         auth.TenancyLogic
+	generic              *GenericServer[*privatev1.Subnet]
+	virtualNetworkDao    *dao.GenericDAO[*privatev1.VirtualNetwork]
+	computeInstanceDao   *dao.GenericDAO[*privatev1.ComputeInstance]
+	clusterDao           *dao.GenericDAO[*privatev1.Cluster]
+	bareMetalInstanceDao *dao.GenericDAO[*privatev1.BareMetalInstance]
 }
 
 func NewPrivateSubnetsServer() *PrivateSubnetsServerBuilder {
@@ -102,6 +105,21 @@ func (b *PrivateSubnetsServerBuilder) Build() (result *PrivateSubnetsServer, err
 	if err != nil {
 		return
 	}
+	computeInstanceDao, err := dao.NewGenericDAO[*privatev1.ComputeInstance]().
+		SetLogger(b.logger).SetTenancyLogic(b.tenancyLogic).SetMetricsRegisterer(b.metricsRegisterer).Build()
+	if err != nil {
+		return
+	}
+	clusterDao, err := dao.NewGenericDAO[*privatev1.Cluster]().
+		SetLogger(b.logger).SetTenancyLogic(b.tenancyLogic).SetMetricsRegisterer(b.metricsRegisterer).Build()
+	if err != nil {
+		return
+	}
+	bareMetalInstanceDao, err := dao.NewGenericDAO[*privatev1.BareMetalInstance]().
+		SetLogger(b.logger).SetTenancyLogic(b.tenancyLogic).SetMetricsRegisterer(b.metricsRegisterer).Build()
+	if err != nil {
+		return
+	}
 
 	// Create the generic server:
 	generic, err := NewGenericServer[*privatev1.Subnet]().
@@ -118,10 +136,13 @@ func (b *PrivateSubnetsServerBuilder) Build() (result *PrivateSubnetsServer, err
 
 	// Create and populate the object:
 	result = &PrivateSubnetsServer{
-		logger:            b.logger,
-		tenancyLogic:      b.tenancyLogic,
-		generic:           generic,
-		virtualNetworkDao: virtualNetworkDao,
+		logger:               b.logger,
+		tenancyLogic:         b.tenancyLogic,
+		generic:              generic,
+		virtualNetworkDao:    virtualNetworkDao,
+		computeInstanceDao:   computeInstanceDao,
+		clusterDao:           clusterDao,
+		bareMetalInstanceDao: bareMetalInstanceDao,
 	}
 	return
 }
@@ -175,15 +196,47 @@ func (s *PrivateSubnetsServer) Update(ctx context.Context,
 
 func (s *PrivateSubnetsServer) Delete(ctx context.Context,
 	request *privatev1.SubnetsDeleteRequest) (response *privatev1.SubnetsDeleteResponse, err error) {
-	getRequest := &privatev1.SubnetsGetRequest{}
-	getRequest.SetId(request.GetId())
-	var getResponse *privatev1.SubnetsGetResponse
-	err = s.generic.Get(ctx, getRequest, &getResponse)
+	subnet, err := lockLifecycleResource(ctx, s.generic.dao, request.GetId(), "subnet")
 	if err != nil {
 		return
 	}
-	if err = validateNotDefault(ctx, getResponse.GetObject().GetMetadata().GetLabels(), "subnet"); err != nil {
+	if err = validateNotDefault(ctx, subnet.GetMetadata().GetLabels(), "subnet"); err != nil {
 		return
+	}
+	subnetID := subnet.GetId()
+	for _, check := range []func() error{
+		func() error {
+			return rejectDeleteIfReferenced(ctx, s.logger, s.computeInstanceDao, "compute instance", "subnet", subnetID,
+				subnet.GetMetadata(), func(instance *privatev1.ComputeInstance) bool {
+					for _, attachment := range instance.GetSpec().GetNetworkAttachments() {
+						if referenceMatches(attachment.GetSubnet(), subnetID, subnet.GetMetadata()) {
+							return true
+						}
+					}
+					return false
+				})
+		},
+		func() error {
+			return rejectDeleteIfReferenced(ctx, s.logger, s.clusterDao, "cluster", "subnet", subnetID,
+				subnet.GetMetadata(), func(cluster *privatev1.Cluster) bool {
+					return referenceMatches(cluster.GetSpec().GetNetworkAttachment().GetSubnet(), subnetID, subnet.GetMetadata())
+				})
+		},
+		func() error {
+			return rejectDeleteIfReferenced(ctx, s.logger, s.bareMetalInstanceDao, "bare metal instance", "subnet", subnetID,
+				subnet.GetMetadata(), func(instance *privatev1.BareMetalInstance) bool {
+					for _, attachment := range instance.GetSpec().GetNetworkAttachments() {
+						if referenceMatches(attachment.GetSubnet(), subnetID, subnet.GetMetadata()) {
+							return true
+						}
+					}
+					return false
+				})
+		},
+	} {
+		if err = check(); err != nil {
+			return
+		}
 	}
 	err = s.generic.Delete(ctx, request, &response)
 	return
@@ -302,6 +355,7 @@ func (s *PrivateSubnetsServer) validateVirtualNetworkReference(ctx context.Conte
 	// SUB-VAL-04: Get parent VirtualNetwork by ID
 	getResponse, err := s.virtualNetworkDao.Get().
 		SetId(refKey(virtualNetworkID)).
+		SetLock(true).
 		Do(ctx)
 	if err != nil {
 		var notFoundErr *dao.ErrNotFound
@@ -316,6 +370,10 @@ func (s *PrivateSubnetsServer) validateVirtualNetworkReference(ctx context.Conte
 	}
 
 	virtualNetwork := getResponse.GetObject()
+	if virtualNetwork.GetMetadata().HasDeletionTimestamp() {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"parent VirtualNetwork '%s' is being deleted", refKey(virtualNetworkID))
+	}
 	subnetTenant, err := resolveObjectTenant(ctx, subnet.GetMetadata(), s.tenancyLogic)
 	if err != nil {
 		return err

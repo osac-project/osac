@@ -50,3 +50,27 @@ var _ = Describe("Resolved ClusterVersion lifecycle validation", func() {
 		}.Build(), "obsolete"),
 	)
 })
+
+var _ = Describe("Resolved networking lifecycle validation", func() {
+	It("rejects a READY subnet that is being deleted", func() {
+		subnet := privatev1.Subnet_builder{
+			Metadata: privatev1.Metadata_builder{DeletionTimestamp: timestamppb.Now()}.Build(),
+			Status:   privatev1.SubnetStatus_builder{State: privatev1.SubnetState_SUBNET_STATE_READY}.Build(),
+		}.Build()
+
+		err := validateResolvedSubnetReady(subnet, "subnet-1", " in network_attachments[0]")
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+		Expect(err.Error()).To(ContainSubstring("being deleted"))
+	})
+
+	It("rejects a READY security group that is being deleted", func() {
+		group := privatev1.SecurityGroup_builder{
+			Metadata: privatev1.Metadata_builder{DeletionTimestamp: timestamppb.Now()}.Build(),
+			Status:   privatev1.SecurityGroupStatus_builder{State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY}.Build(),
+		}.Build()
+
+		err := validateResolvedSecurityGroup(group, "security-group-1", " in network_attachments[0]", "")
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+		Expect(err.Error()).To(ContainSubstring("being deleted"))
+	})
+})

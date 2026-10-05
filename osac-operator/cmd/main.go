@@ -395,6 +395,10 @@ func setupClusterControllers(
 			reconciler.StallThresholds = clusterOrderStallThresholdsFromEnv()
 			reconciler.Recorder = localMgr.GetEventRecorder(controller.ClusterOrderControllerName)
 			reconciler.WorkerReconciler = controller.NewBareMetalWorkerReconciler(nil, nil)
+			if grpcConn != nil {
+				reconciler.ClustersClient = privatev1.NewClustersClient(grpcConn)
+				reconciler.ExternalIPAttachmentsClient = privatev1.NewExternalIPAttachmentsClient(grpcConn)
+			}
 			return reconciler.SetupWithManager(mgr)
 		},
 	)
@@ -576,6 +580,11 @@ func setupControllers(
 	mgr mcmanager.Manager, grpcConn grpc.ClientConnInterface,
 	flags *controllerFlags, maxJobHistory int, fulfillmentTrustSourceName string,
 ) error {
+	if flags.Cluster || flags.ComputeInstance || flags.BareMetalInstance {
+		if err := controller.RegisterAutoExternalIPAttachmentOwnerIndex(mgr.GetLocalManager().GetFieldIndexer()); err != nil {
+			return fmt.Errorf("register ExternalIPAttachment owner index: %w", err)
+		}
+	}
 	if flags.Cluster {
 		if err := setupClusterControllers(mgr, grpcConn, maxJobHistory); err != nil {
 			return fmt.Errorf("cluster controllers: %w", err)
@@ -1098,8 +1107,7 @@ func setupNATGatewayControllers(
 	return nil
 }
 
-// setupBareMetalInstanceControllers registers the BareMetalInstance feedback controller
-// when a gRPC connection to the fulfillment service is available.
+// setupBareMetalInstanceControllers registers BareMetalInstance controllers.
 func setupBareMetalInstanceControllers(
 	mgr mcmanager.Manager,
 	grpcConn grpc.ClientConnInterface,
@@ -1108,6 +1116,16 @@ func setupBareMetalInstanceControllers(
 	bareMetalInstanceNamespace := os.Getenv(envBareMetalInstanceNamespace)
 	if bareMetalInstanceNamespace == "" {
 		bareMetalInstanceNamespace = controller.DefaultBareMetalInstanceNamespace
+	}
+	reconciler := controller.NewBareMetalInstanceCleanupReconciler(
+		localMgr.GetClient(), bareMetalInstanceNamespace, os.Getenv(envNetworkingNamespace),
+	)
+	if grpcConn != nil {
+		reconciler.BareMetalInstancesClient = privatev1.NewBareMetalInstancesClient(grpcConn)
+		reconciler.ExternalIPAttachmentsClient = privatev1.NewExternalIPAttachmentsClient(grpcConn)
+	}
+	if err := reconciler.SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("baremetalinstance cleanup controller: %w", err)
 	}
 
 	if grpcConn != nil {

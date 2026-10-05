@@ -1795,12 +1795,21 @@ var hubNamespace = "osac"
 // userAgent is the user agent string for the integration test tool.
 const userAgent = "fulfillment-it-tool"
 
-// Service host name and address (host-side, via Kind port mapping):
-const (
-	keycloakAddr        = "keycloak.keycloak.svc.cluster.local:8443"
-	externalServiceAddr = "fulfillment-api.osac.svc.cluster.local:8443"
-	internalServiceAddr = "fulfillment-internal-api.osac.svc.cluster.local:8443"
+// Service addresses route through the host-side Kind ingress port. A dedicated
+// port lets concurrent integration runs use separate clusters on the same host.
+var (
+	keycloakAddr        = integrationServiceAddress("keycloak.keycloak.svc.cluster.local")
+	externalServiceAddr = integrationServiceAddress("fulfillment-api.osac.svc.cluster.local")
+	internalServiceAddr = integrationServiceAddress("fulfillment-internal-api.osac.svc.cluster.local")
 )
+
+func integrationServiceAddress(host string) string {
+	port := os.Getenv("IT_HTTPS_PORT")
+	if port == "" {
+		port = "8443"
+	}
+	return net.JoinHostPort(host, port)
+}
 
 // Namespace, name and key of the Kubernetes secret that contains the random secret used for passwords and credentials.
 const (

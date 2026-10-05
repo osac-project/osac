@@ -640,9 +640,15 @@ func (r *ComputeInstanceReconciler) handleDelete(ctx context.Context, _ reconcil
 		return ctrl.Result{}, nil
 	}
 
+	done, result, err := reconcileAutoExternalIPCleanup(ctx, r.Client, r.NetworkingNamespace,
+		autoExternalIPOwner{kind: computeInstanceOwner, id: instance.Labels[osacComputeInstanceIDLabel]}, r.StatusPollInterval)
+	if err != nil || !done {
+		return result, err
+	}
+
 	// Handle deprovisioning - provider decides internally if needed
 	log.Info("handling deletion")
-	result, err := r.handleDeprovisioning(ctx, instance)
+	result, err = r.handleDeprovisioning(ctx, instance)
 	if err != nil {
 		return result, err
 	}

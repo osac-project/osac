@@ -20,8 +20,6 @@ import (
 	"fmt"
 	"time"
 
-	"k8s.io/apimachinery/pkg/runtime/schema"
-
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/shared"
@@ -46,10 +44,6 @@ const (
 	// DefaultHostReadinessPollIntervalDuration is the default interval to poll a reserved
 	// inventory host's readiness for provisioning (see inventory.Host.Ready).
 	DefaultHostReadinessPollIntervalDuration = 30 * time.Second
-
-	autoCreatedLabel         = shared.OsacPrefix + "/auto-created"
-	autoCreatedForLabel      = shared.OsacPrefix + "/auto-created-for"
-	bareMetalInstanceIDLabel = shared.OsacPrefix + "/baremetalinstance-uuid"
 )
 
 var (
@@ -61,14 +55,8 @@ var (
 
 	// BareMetalInstanceNetworkingFinalizer is the finalizer for network attachment cleanup
 	BareMetalInstanceNetworkingFinalizer string = fmt.Sprintf("%s/baremetalinstance-networking", shared.OsacPrefix)
-
-	// BareMetalInstanceCleanupFinalizer is the finalizer for auto-provisioned ExternalIP cleanup
-	BareMetalInstanceCleanupFinalizer string = fmt.Sprintf("%s/baremetalinstance-cleanup", shared.OsacPrefix)
-
-	externalIPAttachmentGVK = schema.GroupVersionKind{
-		Group: "osac.openshift.io", Version: "v1alpha1", Kind: "ExternalIPAttachment",
-	}
-	externalIPGVK = schema.GroupVersionKind{
-		Group: "osac.openshift.io", Version: "v1alpha1", Kind: "ExternalIP",
-	}
 )
+
+// bareMetalInstanceOSACNetworkingFinalizer is owned and removed by osac-operator.
+// BMF observes it only to keep host teardown behind external network detachment.
+const bareMetalInstanceOSACNetworkingFinalizer = "osac.openshift.io/baremetalinstance-cleanup"

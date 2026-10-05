@@ -72,8 +72,15 @@ var _ = Describe("Networking tenant isolation", func() {
 
 		tenantAName = fmt.Sprintf("net-iso-a-%s", uuid.New()[24:32])
 		tenantBName = fmt.Sprintf("net-iso-b-%s", uuid.New()[24:32])
-		_ = createTenant(ctx, tenantsClient, tenantAName)
-		_ = createTenant(ctx, tenantsClient, tenantBName)
+		tenantAID := createTenant(ctx, tenantsClient, tenantAName)
+		tenantBID := createTenant(ctx, tenantsClient, tenantBName)
+		waitForTenantSynced(ctx, tenantsClient, tenantAID)
+		waitForTenantSynced(ctx, tenantsClient, tenantBID)
+		projectsClient := privatev1.NewProjectsClient(tool.InternalView().AdminConn())
+		DeferCleanup(func(cleanupCtx context.Context) {
+			deleteTenant(cleanupCtx, tenantsClient, projectsClient, tenantBID, tenantBName)
+			deleteTenant(cleanupCtx, tenantsClient, projectsClient, tenantAID, tenantAName)
+		})
 
 		ncResp, err := networkClassesClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 			Object: privatev1.NetworkClass_builder{
@@ -84,10 +91,19 @@ var _ = Describe("Networking tenant isolation", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		networkClassId = ncResp.GetObject().GetId()
-		DeferCleanup(func() {
-			_, _ = networkClassesClient.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{
-				Id: networkClassId,
-			}.Build())
+		networkClass := ncResp.GetObject()
+		networkClass.SetStatus(privatev1.NetworkClassStatus_builder{
+			State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+			Hub:   hubId,
+		}.Build())
+		_, err = networkClassesClient.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
+			Object:     networkClass,
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state", "status.hub"}},
+			Lock:       true,
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func(cleanupCtx context.Context) {
+			Expect(cleanupNetworkClassFixture(cleanupCtx, networkClassesClient, networkClassId)).To(Succeed())
 		})
 	})
 
@@ -108,10 +124,8 @@ var _ = Describe("Networking tenant isolation", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		DeferCleanup(func() {
-			_, _ = virtualNetworksClient.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{
-				Id: vnID,
-			}.Build())
+		DeferCleanup(func(cleanupCtx context.Context) {
+			Expect(cleanupVirtualNetworkFixture(cleanupCtx, virtualNetworksClient, vnID)).To(Succeed())
 		})
 
 		Eventually(func(g Gomega) {
@@ -428,8 +442,22 @@ var _ = Describe("Networking tenant isolation", func() {
 		eipID := createExternalIP(tenantAName, poolID)
 		promoteExternalIPAllocated(eipID)
 		clusterID := createCluster(tenantAName)
+		clusterResponse, err := clustersClient.Get(ctx, privatev1.ClustersGetRequest_builder{Id: clusterID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		cluster := clusterResponse.GetObject()
+		cluster.SetStatus(privatev1.ClusterStatus_builder{
+			State:       privatev1.ClusterState_CLUSTER_STATE_READY,
+			ApiEndpoint: "198.51.100.10",
+		}.Build())
+		_, err = clustersClient.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+			Object: cluster,
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+				"status.state", "status.api_endpoint",
+			}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
 
-		_, err := attachmentsClient.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
+		_, err = attachmentsClient.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
 			Object: privatev1.ExternalIPAttachment_builder{
 				Metadata: privatev1.Metadata_builder{
 					Name:   fmt.Sprintf("att-%s", uuid.New()[24:32]),

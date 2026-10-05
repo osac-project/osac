@@ -72,6 +72,11 @@ func createClusterInState(
 			Spec: privatev1.ClusterSpec_builder{
 				Template: privatev1.ClusterTemplateReference_builder{Id: "ocp_small"}.Build(),
 			}.Build(),
+			Status: privatev1.ClusterStatus_builder{
+				State:           privatev1.ClusterState_CLUSTER_STATE_READY,
+				ApiEndpoint:     "10.0.0.20",
+				IngressEndpoint: "10.0.0.21",
+			}.Build(),
 		}.Build(),
 	).Do(ctx)
 	ExpectWithOffset(1, err).ToNot(HaveOccurred())
@@ -90,6 +95,17 @@ func createBareMetalInstanceInState(
 			}.Build(),
 			Spec: privatev1.BareMetalInstanceSpec_builder{
 				CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: "bcm_h100"}.Build(),
+			}.Build(),
+			Status: privatev1.BareMetalInstanceStatus_builder{
+				State: privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING,
+				Conditions: []*privatev1.BareMetalInstanceCondition{privatev1.BareMetalInstanceCondition_builder{
+					Type:   privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
+					Status: privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+				}.Build()},
+				NetworkAttachmentStatuses: []*privatev1.BareMetalNetworkAttachmentStatus{privatev1.BareMetalNetworkAttachmentStatus_builder{
+					IpAddress: "10.0.0.30",
+					Primary:   true,
+				}.Build()},
 			}.Build(),
 		}.Build(),
 	).Do(ctx)
@@ -890,6 +906,25 @@ var _ = Describe("Private external IP attachments server", func() {
 	})
 
 	Describe("Target reference validation", func() {
+		It("rejects an ExternalIPAttachment until its ComputeInstance is ready", func() {
+			eip := createExternalIPInState(ctx, externalIPDao, sharedPool.GetId(),
+				privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED, false)
+			ci := createComputeInstanceInState(ctx, computeInstanceDao,
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING)
+
+			_, err := server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
+				Object: privatev1.ExternalIPAttachment_builder{
+					Metadata: privatev1.Metadata_builder{Name: "attachment-before-ready"}.Build(),
+					Spec: privatev1.ExternalIPAttachmentSpec_builder{
+						ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+						ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: ci.GetId()}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+			Expect(err.Error()).To(ContainSubstring("must be READY"))
+		})
+
 		It("Rejects Create when ComputeInstance does not exist", func() {
 			eip := createExternalIPInState(ctx, externalIPDao, sharedPool.GetId(),
 				privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED, false)

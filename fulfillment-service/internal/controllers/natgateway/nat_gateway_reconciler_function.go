@@ -291,7 +291,7 @@ func (t *task) delete(ctx context.Context) (err error) {
 		)
 	}
 
-	return
+	return controllers.RequeueAfterKubernetesDeletion("NAT gateway")
 }
 
 func (t *task) selectHub(ctx context.Context) error {

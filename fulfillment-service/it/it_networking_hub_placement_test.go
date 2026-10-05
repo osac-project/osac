@@ -53,6 +53,7 @@ var _ = Describe("Canonical networking Hub cache-entry routing", func() {
 		Expect(hubANamespace).ToNot(BeEmpty())
 
 		hubBID, hubBNamespace := createValidRoutingHub(ctx, hubsClient, hubANamespace)
+		By("synchronizing existing tenants to the alternate Hub")
 		tenantsClient := privatev1.NewTenantsClient(tool.InternalView().AdminConn())
 		expectTenantSyncedToHubNamespace(ctx, tenantsClient, hubBNamespace)
 
@@ -430,6 +431,7 @@ func createValidRoutingHub(ctx context.Context, hubsClient privatev1.HubsClient,
 		Rules: []rbacv1.PolicyRule{{
 			APIGroups: []string{osacv1alpha1.GroupVersion.Group},
 			Resources: []string{
+				"tenants",
 				"virtualnetworks",
 				"subnets",
 				"securitygroups",

@@ -25,18 +25,22 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/defaultnetworking"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/idp"
 	"github.com/osac-project/osac/fulfillment-service/internal/masks"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
+
+const defaultNetworkingDeleteRetryDelay = time.Second
 
 // FunctionBuilder contains the data needed to build instances of the reconciler function.
 type FunctionBuilder struct {
@@ -154,9 +158,22 @@ func (r *function) Run(ctx context.Context, project *privatev1.Project) error {
 			Object:     project,
 			UpdateMask: updateMask,
 		}.Build())
+		if err != nil {
+			return err
+		}
 	}
 
-	return err
+	// Updating a deleting project with no finalizers archives it. Signal the
+	// tenant only after that update succeeds so tenant deletion waits until the
+	// project's tenant foreign-key reference is gone.
+	if oldProject.HasMetadata() &&
+		oldProject.GetMetadata().HasDeletionTimestamp() &&
+		slices.Contains(oldProject.GetMetadata().GetFinalizers(), finalizers.Controller) &&
+		!slices.Contains(project.GetMetadata().GetFinalizers(), finalizers.Controller) {
+		task.signalTenant(ctx)
+	}
+
+	return nil
 }
 
 // task contains the data needed to reconcile a single project.
@@ -399,7 +416,11 @@ func (t *task) delete(ctx context.Context) error {
 	// ordinary API callers remain blocked by the system-managed protection.
 	if t.project.GetMetadata().GetName() == "" && t.r.defaultNetwork != nil {
 		if err := t.r.defaultNetwork.Delete(ctx, t.project.GetMetadata().GetTenant()); err != nil {
-			return fmt.Errorf("failed to delete default networking resources: %w", err)
+			wrapped := fmt.Errorf("failed to delete default networking resources: %w", err)
+			if errors.Is(err, defaultnetworking.ErrResourcesDeleting) {
+				return controllers.RequeueAtInterval(wrapped, defaultNetworkingDeleteRetryDelay)
+			}
+			return wrapped
 		}
 	}
 
@@ -418,13 +439,6 @@ func (t *task) delete(ctx context.Context) error {
 	}
 
 	t.removeFinalizer()
-
-	// When the root project (empty name) is deleted, signal the parent tenant
-	// so it re-reconciles and can proceed with its own deletion.
-	if t.project.GetMetadata().GetName() == "" {
-		t.signalTenant(ctx)
-	}
-
 	return nil
 }
 
@@ -538,8 +552,7 @@ func (t *task) removeFinalizer() {
 }
 
 // signalTenant looks up the parent tenant by name and signals it so that the
-// tenant reconciler re-runs. This is used when the root project is deleted to
-// unblock the tenant's own deletion.
+// tenant reconciler re-runs after this project has been archived.
 func (t *task) signalTenant(ctx context.Context) {
 	tenantName := t.project.GetMetadata().GetTenant()
 	listResp, err := t.r.tenantsClient.List(ctx, privatev1.TenantsListRequest_builder{
@@ -561,7 +574,7 @@ func (t *task) signalTenant(ctx context.Context) {
 		Id: items[0].GetId(),
 	}.Build())
 	if err != nil {
-		t.r.logger.WarnContext(ctx, "Failed to signal tenant after root project deletion",
+		t.r.logger.WarnContext(ctx, "Failed to signal tenant after project deletion",
 			slog.String("tenant_id", items[0].GetId()),
 			slog.Any("error", err),
 		)

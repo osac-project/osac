@@ -39,6 +39,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/autoexternalipattachment"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/baremetalinstance"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/cluster"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/computeinstance"
@@ -765,6 +766,35 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 				"External IP reconciler failed",
 				slog.Any("error", err),
 			)
+		}
+	}()
+
+	r.logger.InfoContext(ctx, "Creating deferred automatic ExternalIP attachment reconciler")
+	autoAttachmentFunction, buildErr := autoexternalipattachment.NewFunction().
+		SetLogger(r.logger).
+		SetConnection(r.client).
+		Build()
+	if buildErr != nil {
+		return fmt.Errorf("failed to create deferred automatic ExternalIP attachment reconciler function: %w", buildErr)
+	}
+	autoAttachmentReconciler, buildErr := controllers.NewReconciler[*privatev1.ExternalIP]().
+		SetLogger(r.logger).
+		SetName("deferred_auto_external_ip_attachment").
+		SetClient(r.client).
+		SetFunction(autoAttachmentFunction).
+		SetEventFilter("has(event.external_ip) || has(event.compute_instance) || has(event.cluster) || has(event.bare_metal_instance) || (has(event.hub) && event.type == EVENT_TYPE_OBJECT_CREATED)").
+		SetHealthReporter(healthAggregator).
+		Build()
+	if buildErr != nil {
+		return fmt.Errorf("failed to create deferred automatic ExternalIP attachment reconciler: %w", buildErr)
+	}
+	r.logger.InfoContext(ctx, "Starting deferred automatic ExternalIP attachment reconciler")
+	go func() {
+		err := autoAttachmentReconciler.Start(ctx)
+		if err == nil || errors.Is(err, context.Canceled) {
+			r.logger.InfoContext(ctx, "Deferred automatic ExternalIP attachment reconciler finished")
+		} else {
+			r.logger.ErrorContext(ctx, "Deferred automatic ExternalIP attachment reconciler failed", slog.Any("error", err))
 		}
 	}()
 

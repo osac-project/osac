@@ -395,6 +395,32 @@ var _ = Describe("NetworkingHubReader", func() {
 		Expect(networkClasses.updates).To(BeEmpty())
 		Expect(cache.calls).To(BeEmpty())
 	})
+
+	It("uses the current canonical reference after it changes", func() {
+		networkClass := testNetworkClass("nc-a", "hub-a", privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY, "")
+		networkClasses := &fakeNetworkClassesClient{objects: []*privatev1.NetworkClass{networkClass}}
+		cache := &fakeNetworkingHubCache{
+			entries: map[string]*HubEntry{
+				"hub-a": {Namespace: "networking", Client: nil},
+			},
+			errors: map[string]error{"missing-hub": ErrHubNotFound},
+		}
+
+		reader := mustBuildNetworkingHubReader(networkClasses, cache)
+
+		first, err := reader.Resolve(context.Background())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(first.ID).To(Equal("hub-a"))
+
+		networkClass.GetStatus().SetHub("missing-hub")
+		second, err := reader.Resolve(context.Background())
+
+		Expect(errors.Is(err, ErrCanonicalHubNotFound)).To(BeTrue())
+		Expect(second.HubID).To(Equal("missing-hub"))
+		Expect(second.State).To(Equal(privatev1.NetworkClassState_NETWORK_CLASS_STATE_FAILED))
+		Expect(networkClasses.listCalls).To(Equal(2))
+		Expect(cache.calls).To(Equal([]string{"hub-a", "missing-hub"}))
+	})
 })
 
 var _ = Describe("ResolveResourceNetworkingHub", func() {

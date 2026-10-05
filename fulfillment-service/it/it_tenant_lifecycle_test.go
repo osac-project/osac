@@ -45,15 +45,15 @@ func createTenant(ctx context.Context, client privatev1.TenantsClient, name stri
 	}.Build())
 	Expect(err).ToNot(HaveOccurred())
 	id := createResponse.GetObject().GetId()
-	DeferCleanup(func() {
-		_, _ = client.Delete(ctx, privatev1.TenantsDeleteRequest_builder{
+	DeferCleanup(func(cleanupCtx context.Context) {
+		_, deleteErr := client.Delete(cleanupCtx, privatev1.TenantsDeleteRequest_builder{
 			Id: id,
 		}.Build())
-		status, ok := grpcstatus.FromError(err)
+		status, ok := grpcstatus.FromError(deleteErr)
 		if ok && status.Code() == grpccodes.NotFound {
 			return
 		}
-		Expect(err).ToNot(HaveOccurred())
+		Expect(deleteErr).ToNot(HaveOccurred())
 	})
 	return id
 }

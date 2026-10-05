@@ -468,6 +468,43 @@ var _ = Describe("SecurityGroups server", func() {
 			Expect(getResponse.GetObject().GetMetadata().GetLabels()).To(HaveKeyWithValue("osac.openshift.io/default", "true"))
 		})
 
+		It("rejects deletion while a referencing compute instance is being deleted", func() {
+			created, err := privateServer.Create(ctx, privatev1.SecurityGroupsCreateRequest_builder{
+				Object: privatev1.SecurityGroup_builder{
+					Metadata: privatev1.Metadata_builder{Tenant: testTenant, Name: "group-with-active-dependent"}.Build(),
+					Spec: privatev1.SecurityGroupSpec_builder{
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			computeInstances, err := dao.NewGenericDAO[*privatev1.ComputeInstance]().
+				SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			instance, err := computeInstances.Create().SetObject(privatev1.ComputeInstance_builder{
+				Metadata: privatev1.Metadata_builder{
+					Tenant: testTenant, Name: "instance-with-deleting-group-ref", Finalizers: []string{"test-cleanup"},
+				}.Build(),
+				Spec: privatev1.ComputeInstanceSpec_builder{
+					NetworkAttachments: []*privatev1.ComputeNetworkAttachment{privatev1.ComputeNetworkAttachment_builder{
+						SecurityGroups: []*privatev1.SecurityGroupLocalReference{
+							privatev1.SecurityGroupLocalReference_builder{Id: created.GetObject().GetId()}.Build(),
+						},
+					}.Build()},
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = computeInstances.Delete().SetId(instance.GetObject().GetId()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = privateServer.Delete(ctx, privatev1.SecurityGroupsDeleteRequest_builder{
+				Id: created.GetObject().GetId(),
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+			Expect(err.Error()).To(ContainSubstring("compute instance"))
+		})
+
 		It("rejects security group with different tenant than parent VirtualNetwork", func() {
 			securityGroup := privatev1.SecurityGroup_builder{
 				Metadata: privatev1.Metadata_builder{Tenant: "different-tenant"}.Build(),

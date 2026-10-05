@@ -24,6 +24,8 @@ import (
 
 	"github.com/go-logr/logr"
 	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -45,6 +47,7 @@ import (
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 // NewComponentFn is the type of a function that creates a required component
@@ -72,17 +75,19 @@ func (r *ClusterOrderReconciler) components() []component {
 // ClusterOrderReconciler reconciles a ClusterOrder object
 type ClusterOrderReconciler struct {
 	client.Client
-	apiReader             client.Reader
-	Scheme                *runtime.Scheme
-	ClusterOrderNamespace string
-	AgentNamespace        string
-	NetworkingNamespace   string
-	ProvisioningProvider  provisioning.ProvisioningProvider
-	StatusPollInterval    time.Duration
-	MaxJobHistory         int
-	StallThresholds       ClusterOrderStallThresholds
-	Recorder              events.EventRecorder
-	now                   func() time.Time
+	apiReader                   client.Reader
+	Scheme                      *runtime.Scheme
+	ClusterOrderNamespace       string
+	AgentNamespace              string
+	NetworkingNamespace         string
+	ClustersClient              automaticClustersGetter
+	ExternalIPAttachmentsClient automaticExternalIPAttachmentsClient
+	ProvisioningProvider        provisioning.ProvisioningProvider
+	StatusPollInterval          time.Duration
+	MaxJobHistory               int
+	StallThresholds             ClusterOrderStallThresholds
+	Recorder                    events.EventRecorder
+	now                         func() time.Time
 
 	// WorkerReconciler handles bare-metal worker failure detection,
 	// BMI replacement with escalating backoff, and terminal failure
@@ -204,6 +209,13 @@ func (r *ClusterOrderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		if err := r.persistStatusAndRecordTransitionEvents(ctx, req.NamespacedName, instance, oldstatus); err != nil {
 			return res, err
 		}
+	}
+	if err == nil && instance.DeletionTimestamp.IsZero() {
+		autoAttachmentResult, autoAttachmentErr := r.reconcileAutomaticExternalIPAttachments(ctx, instance)
+		if autoAttachmentErr != nil {
+			return res, autoAttachmentErr
+		}
+		res = mergeReconcileResult(res, autoAttachmentResult)
 	}
 
 	log.Info("end reconcile")
@@ -1013,74 +1025,54 @@ func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ reconcile.R
 	return ctrl.Result{}, nil
 }
 
-// reconcileAutoExternalIPCleanup deletes auto-provisioned ExternalIPAttachments and
+// reconcileAutoExternalIPCleanup deletes automatically created ExternalIPAttachments and
 // ExternalIPs for this ClusterOrder in phase order: EIAs first, then EIPs. Returns
 // (done=true) when cleanup is complete or not applicable, (done=false) with a requeue
 // result when resources still exist.
 func (r *ClusterOrderReconciler) reconcileAutoExternalIPCleanup(ctx context.Context, instance *v1alpha1.ClusterOrder) (bool, ctrl.Result, error) {
-	if r.NetworkingNamespace == "" {
-		return true, ctrl.Result{}, nil
+	return reconcileAutoExternalIPCleanup(ctx, r.Client, r.NetworkingNamespace, autoExternalIPOwner{
+		kind: clusterOrderOwner,
+		id:   instance.GetLabels()[osacClusterOrderIDLabel],
+	}, r.StatusPollInterval)
+}
+
+func (r *ClusterOrderReconciler) reconcileAutomaticExternalIPAttachments(
+	ctx context.Context,
+	instance *v1alpha1.ClusterOrder,
+) (ctrl.Result, error) {
+	if instance.Status.Phase != v1alpha1.ClusterOrderPhaseReady || r.ClustersClient == nil ||
+		r.ExternalIPAttachmentsClient == nil || r.NetworkingNamespace == "" {
+		return ctrl.Result{}, nil
 	}
-	clusterUUID, exists := instance.GetLabels()[osacClusterOrderIDLabel]
-	if !exists || clusterUUID == "" {
-		return true, ctrl.Result{}, nil
+	clusterID := instance.Labels[osacClusterOrderIDLabel]
+	if clusterID == "" {
+		return ctrl.Result{}, nil
+	}
+	response, err := r.ClustersClient.Get(ctx, privatev1.ClustersGetRequest_builder{Id: clusterID}.Build())
+	if status.Code(err) == codes.NotFound {
+		return ctrl.Result{}, nil
+	}
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("get Fulfillment Cluster %q for automatic ExternalIPAttachment: %w", clusterID, err)
+	}
+	cluster := response.GetObject()
+	if cluster == nil || !cluster.GetSpec().GetAutoExternalIpAttachment() {
+		return ctrl.Result{}, nil
 	}
 
-	log := ctrllog.FromContext(ctx)
-
-	// Phase 1: ExternalIPAttachments targeting this cluster, labeled auto-provisioned.
-	eiaList := &v1alpha1.ExternalIPAttachmentList{}
-	if err := r.List(ctx, eiaList,
-		client.InNamespace(r.NetworkingNamespace),
-		client.MatchingLabels{osacAutoProvisionedLabel: labelValueTrue},
-	); err != nil {
-		return false, ctrl.Result{}, err
-	}
-	var pendingEIAs int
-	for i := range eiaList.Items {
-		eia := &eiaList.Items[i]
-		if eia.Spec.Cluster == nil || *eia.Spec.Cluster != clusterUUID {
-			continue
-		}
-		pendingEIAs++
-		if eia.DeletionTimestamp.IsZero() {
-			log.Info("deleting auto-provisioned ExternalIPAttachment", "name", eia.Name)
-			if err := client.IgnoreNotFound(r.Delete(ctx, eia)); err != nil {
-				return false, ctrl.Result{}, err
-			}
-		}
-	}
-	if pendingEIAs > 0 {
-		return false, ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-	}
-
-	// Phase 2: ExternalIPs labeled auto-provisioned-for this cluster.
-	eipList := &v1alpha1.ExternalIPList{}
-	if err := r.List(ctx, eipList,
-		client.InNamespace(r.NetworkingNamespace),
-		client.MatchingLabels{
-			osacAutoProvisionedLabel:    labelValueTrue,
-			osacAutoProvisionedForLabel: clusterUUID,
+	target := automaticExternalIPAttachmentTarget{
+		owner:     autoExternalIPOwner{kind: clusterOrderOwner, id: clusterID},
+		kind:      clusterOrderOwner,
+		kindLabel: autoExternalIPKindLabel(clusterOrderOwner),
+		tenant:    cluster.GetMetadata().GetTenant(),
+		endpoints: []string{autoCreatedEndpointAPI, autoCreatedEndpointIngress},
+		availableEndpoints: map[string]bool{
+			autoCreatedEndpointAPI:     instance.Status.ApiEndpoint != "",
+			autoCreatedEndpointIngress: instance.Status.IngressEndpoint != "",
 		},
-	); err != nil {
-		return false, ctrl.Result{}, err
 	}
-	var pendingEIPs int
-	for i := range eipList.Items {
-		eip := &eipList.Items[i]
-		pendingEIPs++
-		if eip.DeletionTimestamp.IsZero() {
-			log.Info("deleting auto-provisioned ExternalIP", "name", eip.Name)
-			if err := client.IgnoreNotFound(r.Delete(ctx, eip)); err != nil {
-				return false, ctrl.Result{}, err
-			}
-		}
-	}
-	if pendingEIPs > 0 {
-		return false, ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-	}
-
-	return true, ctrl.Result{}, nil
+	return reconcileAutomaticExternalIPAttachments(ctx, r.Client, r.NetworkingNamespace,
+		r.ExternalIPAttachmentsClient, r.StatusPollInterval, target)
 }
 
 func (r *ClusterOrderReconciler) provisionState(instance *v1alpha1.ClusterOrder) *provisioning.State {

@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -147,6 +148,15 @@ func hasFinalizer(subnet *privatev1.Subnet) bool {
 	return slices.Contains(subnet.GetMetadata().GetFinalizers(), finalizers.Controller)
 }
 
+func expectDeletionRetry(err error) {
+	var retryable interface{ RequeueAfter() time.Duration }
+	Expect(errors.As(err, &retryable)).To(BeTrue())
+	Expect(retryable.RequeueAfter()).To(Equal(time.Second))
+	var backoff interface{ UseExponentialBackoff() bool }
+	Expect(errors.As(err, &backoff)).To(BeTrue())
+	Expect(backoff.UseExponentialBackoff()).To(BeFalse())
+}
+
 // newTaskForDelete creates a task configured for testing delete() with hub-dependent paths.
 func newTaskForDelete(subnetID, hubID string, hubCache controllers.HubCache) *task {
 	subnet := privatev1.Subnet_builder{
@@ -241,7 +251,7 @@ var _ = Describe("delete", func() {
 		t := newTaskForDelete(subnetID, hubID, hubCache)
 
 		err := t.delete(ctx)
-		Expect(err).ToNot(HaveOccurred())
+		expectDeletionRetry(err)
 		Expect(deleteCalled).To(BeTrue())
 		// Finalizer should NOT be removed — K8s object still exists
 		Expect(hasFinalizer(t.subnet)).To(BeTrue())
@@ -277,7 +287,7 @@ var _ = Describe("delete", func() {
 		t := newTaskForDelete(subnetID, hubID, hubCache)
 
 		err := t.delete(ctx)
-		Expect(err).ToNot(HaveOccurred())
+		expectDeletionRetry(err)
 		Expect(deleteCalled).To(BeFalse())
 		// Finalizer should NOT be removed — K8s object still being deleted
 		Expect(hasFinalizer(t.subnet)).To(BeTrue())

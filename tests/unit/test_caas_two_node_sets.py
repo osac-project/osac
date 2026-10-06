@@ -6,6 +6,7 @@ from unittest.mock import Mock, call
 
 import pytest
 
+from tests.e2e.caas.regression import test_cluster_node_sets as regression
 from tests.e2e.caas.sanity import test_cluster_create as scenario
 from tests.e2e.core import helpers, runner
 from tests.e2e.core.k8s_client import K8sClient
@@ -115,7 +116,7 @@ def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
     monkeypatch.setattr(scenario, "snapshot_cluster_deletion", Mock(return_value=[]))
     monkeypatch.setattr(runner.time, "sleep", Mock())
     monkeypatch.setattr(
-        scenario,
+        helpers,
         "wait_for_cluster_deletion",
         Mock(side_effect=AssertionError("Two-node-set teardown must not use forced cleanup")),
     )
@@ -123,7 +124,7 @@ def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
 
 
 def _run_scenario(clients: dict[str, Mock]) -> None:
-    scenario.test_cluster_create_with_two_node_sets(
+    regression.test_cluster_create_with_two_node_sets(
         **clients, cluster_template="template", pull_secret_name="pull-secret", ssh_public_key_path="/tmp/key.pub"
     )
 
@@ -152,7 +153,7 @@ def test_two_node_set_scenario_uses_same_natural_teardown_budgets(
     ]
     # The remaining GPU BMI must cause a retry, not early parent deletion checks.
     assert runner.time.sleep.call_args_list == [call(5), call(10), call(5)]
-    scenario.wait_for_cluster_deletion.assert_not_called()
+    helpers.wait_for_cluster_deletion.assert_not_called()
     scenario.wait_for_cluster_grpc_removal.assert_called_once_with(grpc=two_node_set_clients["grpc"], uuid="cluster-id")
     two_node_set_clients["cli"].delete_cluster.assert_has_calls([call(uuid="cluster-id"), call(uuid="cluster-id")])
     for name in ("patch", "apply", "delete"):
@@ -171,5 +172,5 @@ def test_two_node_set_scenario_rejects_foreign_worker_before_teardown(two_node_s
     # Only best-effort finally cleanup is allowed after an ownership failure.
     two_node_set_clients["cli"].delete_cluster.assert_called_once_with(uuid="cluster-id")
     scenario.wait_for_cluster_deleting.assert_not_called()
-    scenario.wait_for_cluster_deletion.assert_not_called()
+    helpers.wait_for_cluster_deletion.assert_not_called()
     two_node_set_clients["k8s_hub_client"].is_absent.assert_not_called()

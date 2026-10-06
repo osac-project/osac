@@ -15,7 +15,7 @@ package baremetalworker
 
 import (
 	"context"
-	"testing"
+
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -28,8 +28,8 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
-func TestR03FailedReservationRecoversBeforeRetry(t *testing.T) {
-	r, base, co := workerReadHarness(t)
+var _ = It("recovers a failed reservation's identity before retrying", func() {
+	r, base, co := workerReadHarness()
 	fc := &teardownReadClient{workerReadClient: base}
 	r.fulfillment = fc
 	w := &co.Status.Workers[0]
@@ -37,56 +37,45 @@ func TestR03FailedReservationRecoversBeforeRetry(t *testing.T) {
 	base.listed = []*privatev1.BareMetalInstance{fc.returned}
 	w.Phase = workerPhaseFailed
 	w.BareMetalInstance.ID = ""
-	if err := r.Status().Update(context.Background(), co); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.handleFailedWorkers(context.Background(), co); err != nil {
-		t.Fatal(err)
-	}
+	Expect(r.Status().Update(context.Background(), co)).To(Succeed())
+	Expect(r.handleFailedWorkers(context.Background(), co)).To(Succeed())
 	got := co.Status.Workers[0] // Status().Update can replace the slice; do not assert through its old pointer.
-	if got.BareMetalInstance.ID != fc.returned.GetId() || got.NextRetryTime != nil || got.AttemptCount != 0 || fc.deletes != 0 {
-		t.Fatalf("failed reservation bypassed recovery: %+v deletes=%d", got, fc.deletes)
-	}
-}
+	Expect(got.BareMetalInstance.ID).To(Equal(fc.returned.GetId()), "failed reservation bypassed recovery: %+v deletes=%d", got, fc.deletes)
+	Expect(got.NextRetryTime).To(BeNil(), "failed reservation bypassed recovery: %+v deletes=%d", got, fc.deletes)
+	Expect(got.AttemptCount).To(Equal(int32(0)), "failed reservation bypassed recovery: %+v deletes=%d", got, fc.deletes)
+	Expect(fc.deletes).To(Equal(0), "failed reservation bypassed recovery: %+v deletes=%d", got, fc.deletes)
+})
 
-func TestR03RetryKeepsIDUntilAbsent(t *testing.T) {
-	r, base, co := workerReadHarness(t)
+var _ = It("keeps the old BMI ID until authoritative absence is confirmed", func() {
+	r, base, co := workerReadHarness()
 	fc := &teardownReadClient{workerReadClient: base}
 	r.fulfillment = fc
 	co.Status.Workers[0].Phase = workerPhaseFailed
-	if err := r.Status().Update(context.Background(), co); err != nil {
-		t.Fatal(err)
-	}
+	Expect(r.Status().Update(context.Background(), co)).To(Succeed())
 	w := co.Status.Workers[0]
 	fc.returned = ownedBMIFixture(co, w.BareMetalInstance.Name, w.BareMetalInstance.ID)
 	for range 2 {
-		if err := r.handleFailedWorkers(context.Background(), co); err != nil {
-			t.Fatal(err)
-		}
+		Expect(r.handleFailedWorkers(context.Background(), co)).To(Succeed())
 		got := co.Status.Workers[0]
-		if got.BareMetalInstance.ID != w.BareMetalInstance.ID || got.AttemptCount != 0 || got.NextRetryTime != nil {
-			t.Fatalf("released retry identity before absence: %+v", got)
-		}
+		Expect(got.BareMetalInstance.ID).To(Equal(w.BareMetalInstance.ID), "released retry identity before absence: %+v", got)
+		Expect(got.AttemptCount).To(Equal(int32(0)), "released retry identity before absence: %+v", got)
+		Expect(got.NextRetryTime).To(BeNil(), "released retry identity before absence: %+v", got)
 	}
 	fc.returned = nil
 	base.getErr = status.Error(codes.NotFound, "confirmed archived")
-	if err := r.handleFailedWorkers(context.Background(), co); err != nil {
-		t.Fatal(err)
-	}
+	Expect(r.handleFailedWorkers(context.Background(), co)).To(Succeed())
 	got := co.Status.Workers[0]
-	if got.BareMetalInstance.ID != "" || got.AttemptCount != 1 || got.NextRetryTime == nil || got.ReadySince != nil {
-		t.Fatalf("retry checkpoint: %+v", got)
-	}
+	Expect(got.BareMetalInstance.ID).To(Equal(""), "retry checkpoint: %+v", got)
+	Expect(got.AttemptCount).To(Equal(int32(1)), "retry checkpoint: %+v", got)
+	Expect(got.NextRetryTime).NotTo(BeNil(), "retry checkpoint: %+v", got)
+	Expect(got.ReadySince).To(BeNil(), "retry checkpoint: %+v", got)
 	deadline := got.NextRetryTime.DeepCopy()
-	if err := r.handleFailedWorkers(context.Background(), co); err != nil {
-		t.Fatal(err)
-	}
-	if co.Status.Workers[0].AttemptCount != 1 || !co.Status.Workers[0].NextRetryTime.Equal(deadline) {
-		t.Fatal("retry checkpoint scheduled twice")
-	}
-}
+	Expect(r.handleFailedWorkers(context.Background(), co)).To(Succeed())
+	Expect(co.Status.Workers[0].AttemptCount).To(Equal(int32(1)), "retry checkpoint scheduled twice")
+	Expect(co.Status.Workers[0].NextRetryTime.Equal(deadline)).To(BeTrue(), "retry checkpoint scheduled twice")
+})
 
-func TestR04WorkerRecheckDeadline(t *testing.T) {
+var _ = It("schedules worker rechecks at the earliest pending deadline", func() {
 	r := &Reconciler{}
 	now := time.Now()
 	future := metav1.NewTime(now.Add(2 * time.Minute))
@@ -118,20 +107,18 @@ func TestR04WorkerRecheckDeadline(t *testing.T) {
 		{"shortest positive deadline wins", []v1alpha1.WorkerStatus{futureRetry, bmi("a", "", workerPhaseProvisioning), pendingCleanup}, agentRequeueInterval, agentRequeueInterval},
 	}
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+		By(tt.name)
+		func() {
 			got := r.workerRecheckDeadline(tt.workers, now)
 			if tt.want == 0 {
-				if !got.IsZero() {
-					t.Fatalf("stable workers must rely on watches, got %+v", got)
-				}
+				Expect(got.IsZero()).To(BeTrue(), "stable workers must rely on watches, got %+v", got)
 				return
 			}
-			if got.RequeueAfter < tt.want || got.RequeueAfter > tt.max {
-				t.Fatalf("deadline=%v, want within [%v, %v]", got.RequeueAfter, tt.want, tt.max)
-			}
-		})
+			Expect(got.RequeueAfter < tt.want).To(BeFalse(), "deadline=%v, want within [%v, %v]", got.RequeueAfter, tt.want, tt.max)
+			Expect(got.RequeueAfter > tt.max).To(BeFalse(), "deadline=%v, want within [%v, %v]", got.RequeueAfter, tt.want, tt.max)
+		}()
 	}
-}
+})
 
 var _ = Describe("ClassifyFailure", func() {
 	DescribeTable("maps failure reasons to categories",

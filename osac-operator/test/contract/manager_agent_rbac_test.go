@@ -20,24 +20,20 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"testing"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 
 	"gopkg.in/yaml.v3"
 )
 
-func TestManagerClusterRoleAllowsWorkerLifecycle(t *testing.T) {
+var _ = It("grants the manager ClusterRole the permissions required for worker lifecycle", func() {
 	path := filepath.Join(repoRoot(), "osac-operator/charts/operator/templates/clusterrole.yaml")
 	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	Expect(err).NotTo(HaveOccurred())
 	var role clusterRole
-	if err := yaml.Unmarshal(templateDirectiveRe.ReplaceAll(raw, nil), &role); err != nil {
-		t.Fatal(err)
-	}
-	if role.Kind != "ClusterRole" {
-		t.Fatalf("expected manager ClusterRole, got %q", role.Kind)
-	}
+	Expect(yaml.Unmarshal(templateDirectiveRe.ReplaceAll(raw, nil), &role)).To(Succeed())
+	Expect(role.Kind).To(Equal("ClusterRole"), "expected manager ClusterRole, got %q", role.Kind)
 
 	tests := []struct {
 		group    string
@@ -52,7 +48,8 @@ func TestManagerClusterRoleAllowsWorkerLifecycle(t *testing.T) {
 		{group: "", resource: "secrets", verbs: []string{"create", "get"}},
 	}
 	for _, tt := range tests {
-		t.Run(tt.resource, func(t *testing.T) {
+		By(tt.resource)
+		func() {
 			for _, verb := range tt.verbs {
 				allowed := false
 				for _, rule := range role.Rules {
@@ -62,10 +59,8 @@ func TestManagerClusterRoleAllowsWorkerLifecycle(t *testing.T) {
 						break
 					}
 				}
-				if !allowed {
-					t.Errorf("manager ClusterRole lacks %s on %s.%s", verb, tt.resource, tt.group)
-				}
+				Expect(allowed).To(BeTrue(), "manager ClusterRole lacks %s on %s.%s", verb, tt.resource, tt.group)
 			}
-		})
+		}()
 	}
-}
+})

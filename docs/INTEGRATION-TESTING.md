@@ -229,8 +229,9 @@ Touched-area requirements: [component guide](../osac-operator/AGENTS.md#integrat
 
 ### Bare-metal worker coverage ([DEV])
 
-All worker persistence specs share `internal/controller/suite_test.go` with the
-other operator tests. They are `internal/controller/baremetalworker_*_test.go`,
+Worker Unit specs use the Ginkgo BareMetalWorker Suite and descriptive behavior
+names; RBAC Contract specs use the Operator Contract Suite. All worker persistence
+specs share `internal/controller/suite_test.go` with the other operator tests. They are `internal/controller/baremetalworker_*_test.go`,
 labelled `baremetalworker`; there is no separate acceptance suite or reusable
 external-environment framework. The fulfillment/ignition doubles are private to
 that test binary. Explicit CR fixtures write only the evidence the worker reads.
@@ -258,8 +259,6 @@ go test ./internal/controller/baremetalworker -count=1
 go test -race ./internal/controller/baremetalworker -count=1
 KUBEBUILDER_ASSETS="$PWD/bin/k8s/1.31.0-linux-amd64" \
   go test ./internal/controller -count=1 -ginkgo.label-filter=baremetalworker
-KUBEBUILDER_ASSETS="$PWD/bin/k8s/1.31.0-linux-amd64" \
-  go test ./internal/controller -count=1 -ginkgo.focus='R0[1-9]-|R10-'
 ```
 
 The focused commands use existing Kubernetes 1.31.0 binaries; `make test`
@@ -272,8 +271,8 @@ termination bound, not a production latency SLA. Retry deadlines advance in the
 test instead of sleeping, and protected workers cannot be resurrected by an
 Installed Agent. Fulfillment dependency state remains isolated per test.
 
-R03-E7 in `baremetalworker_convergence_test.go` exercises early deletion after
-reservation persistence, both sides of the real optimistic Create-intent race,
+Reservation cleanup specs in `baremetalworker_convergence_test.go` exercise early
+deletion after reservation persistence, both sides of the real optimistic Create-intent race,
 restart after intent persistence before the external call, legacy ID-less
 retention, and lost acknowledgement cleanup with delayed List visibility.
 `reservation_cleanup_test.go` adds Unit checks for the same safety boundaries
@@ -466,13 +465,19 @@ coverage is tracked under
 
 ### Focused CaaS natural-teardown boundary
 
+CaaS sanity retains the single-nodepool lifecycle and fast deletion feedback
+scenario. Two-node-set isolation runs in
+`caas/regression/test_cluster_node_sets.py`; explicit version resolution and
+invalid-version rejection are consolidated in
+`caas/regression/test_cluster_version.py`.
+
 Both `test_cluster_create` and `test_cluster_create_with_two_node_sets` use the
 same natural teardown assertions. The two-node-set scenario additionally
 checks ready worker aggregates, installed Agents, and per-NodeSet
 NodePool isolation. Unit regressions additionally cover distinct NodeSets
 sharing one BMIT; that same-profile case is not exercised by this deployed
 scenario. Run that [QE] E2E with
-`uv run pytest -n 0 tests/e2e/caas/sanity/test_cluster_create.py::test_cluster_create_with_two_node_sets`;
+`uv run pytest -n 0 tests/e2e/caas/regression/test_cluster_node_sets.py::test_cluster_create_with_two_node_sets`;
 it requires the same source-pinned environment described below and enough
 available BMHs for both worker sets.
 

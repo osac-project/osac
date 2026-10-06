@@ -21,7 +21,6 @@ _INFRAENV = "infraenv.agent-install.openshift.io"
 def forbid_cleanup(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     guards = []
     for module, name in (
-        (scenario, "wait_for_cluster_deletion"),
         (helpers, "wait_for_cluster_deletion"),
         (helpers, "_force_cleanup_agentcluster_finalizers"),
         (helpers, "_force_cleanup_agent_labels"),

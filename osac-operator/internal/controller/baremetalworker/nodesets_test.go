@@ -18,10 +18,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
 	"slices"
 	"strings"
-	"testing"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -75,12 +77,10 @@ func (f *nodeSetClient) CreateBareMetalInstance(ctx context.Context, bmi *privat
 	return bmi, nil
 }
 
-func nodeSetHarness(t *testing.T, name string, requests ...v1alpha1.NodeRequest) (*Reconciler, *nodeSetClient, *v1alpha1.ClusterOrder) {
-	t.Helper()
+func nodeSetHarness(name string, requests ...v1alpha1.NodeRequest) (*Reconciler, *nodeSetClient, *v1alpha1.ClusterOrder) {
+	GinkgoHelper()
 	scheme := runtime.NewScheme()
-	if err := v1alpha1.AddToScheme(scheme); err != nil {
-		t.Fatal(err)
-	}
+	Expect(v1alpha1.AddToScheme(scheme)).To(Succeed())
 	co := &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "test"}, Spec: v1alpha1.ClusterOrderSpec{NodeRequests: requests}}
 	kube := clientfake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(co).WithObjects(co).Build()
 	fc := &nodeSetClient{kube: kube, order: client.ObjectKeyFromObject(co)}
@@ -93,12 +93,10 @@ func nodeRequest(instanceType string, count int) v1alpha1.NodeRequest {
 
 // capacityObservation lists the provider's current BMIs into the invocation-local
 // observation that production lifecycle/creation stages receive explicitly.
-func capacityObservation(t *testing.T, fc FulfillmentClient) *workerObservation {
-	t.Helper()
+func capacityObservation(fc FulfillmentClient) *workerObservation {
+	GinkgoHelper()
 	bmis, err := fc.ListBareMetalInstances(context.Background(), "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	Expect(err).NotTo(HaveOccurred())
 	return indexWorkerBMIs(bmis)
 }
 
@@ -106,9 +104,9 @@ func capacityObservation(t *testing.T, fc FulfillmentClient) *workerObservation 
 // reservation/create stage with unit-test inputs (no resolved image or
 // ignition). Prerequisite resolution and its deferral are covered by the public
 // Reconcile specs; unit fixtures keep asserting durable checkpoints.
-func runWorkerCapacityStage(t *testing.T, r *Reconciler, co *v1alpha1.ClusterOrder) (ctrl.Result, error) {
-	t.Helper()
-	observed := capacityObservation(t, r.fulfillment)
+func runWorkerCapacityStage(r *Reconciler, co *v1alpha1.ClusterOrder) (ctrl.Result, error) {
+	GinkgoHelper()
+	observed := capacityObservation(r.fulfillment)
 	res, err := r.reconcileWorkerLifecycle(context.Background(), co, "tenant")
 	if err != nil || !res.IsZero() {
 		return res, err
@@ -117,32 +115,26 @@ func runWorkerCapacityStage(t *testing.T, r *Reconciler, co *v1alpha1.ClusterOrd
 	return res, err
 }
 
-func reconcileNodeSetTest(t *testing.T, r *Reconciler, co *v1alpha1.ClusterOrder) {
-	t.Helper()
+func reconcileNodeSetTest(r *Reconciler, co *v1alpha1.ClusterOrder) {
+	GinkgoHelper()
 	n := len(co.Status.Workers)
 	for _, nr := range co.Spec.NodeRequests {
 		n += nr.NumberOfNodes
 	}
 	for range 16 + 8*n {
 		before := co.DeepCopy()
-		res, err := runWorkerCapacityStage(t, r, co)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := r.apiReader.Get(context.Background(), client.ObjectKeyFromObject(co), co); err != nil {
-			t.Fatal(err)
-		}
+		res, err := runWorkerCapacityStage(r, co)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(r.apiReader.Get(context.Background(), client.ObjectKeyFromObject(co), co)).To(Succeed())
 		if res.RequeueAfter != time.Second {
 			return
 		}
-		if reflect.DeepEqual(before.Status.Workers, co.Status.Workers) {
-			t.Fatal("boundary requeue without persisted progress")
-		}
+		Expect(before.Status.Workers).NotTo(Equal(co.Status.Workers), "boundary requeue without persisted progress")
 	}
-	t.Fatal("capacity fixture exceeded finite reconciliation bound")
+	Fail("capacity fixture exceeded finite reconciliation bound")
 }
 
-func TestValidateBareMetalNodeSets(t *testing.T) {
+var _ = Describe("Bare-metal NodeSet validation", func() {
 	tests := []struct {
 		name     string
 		requests []v1alpha1.NodeRequest
@@ -176,125 +168,95 @@ func TestValidateBareMetalNodeSets(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+		It(tt.name, func() {
 			co := &v1alpha1.ClusterOrder{Spec: v1alpha1.ClusterOrderSpec{NodeRequests: tt.requests}}
 			err := validateBareMetalNodeSets(co)
 			if tt.wantErr == "" {
-				if err != nil {
-					t.Fatalf("unexpected validation error: %v", err)
-				}
+				Expect(err).ToNot(HaveOccurred(), "unexpected validation error: %v", err)
 				return
 			}
-			if err == nil || err.Error() != tt.wantErr {
-				t.Fatalf("validation error = %v, want %q", err, tt.wantErr)
-			}
+			Expect(err).To(HaveOccurred(), "validation error = %v, want %q", err, tt.wantErr)
+			Expect(err.Error()).To(Equal(tt.wantErr), "validation error = %v, want %q", err, tt.wantErr)
 		})
 	}
-}
+})
 
-func TestReconcileIgnoresNonBareMetalOrder(t *testing.T) {
-	r, fc, co := nodeSetHarness(t, "non-bm", v1alpha1.NodeRequest{NodeSet: "other"})
+var _ = It("ignores ClusterOrders without bare-metal requests", func() {
+	r, fc, co := nodeSetHarness("non-bm", v1alpha1.NodeRequest{NodeSet: "other"})
 	before := co.DeepCopy()
 	result, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(co)})
-	if err != nil {
-		t.Fatalf("unexpected reconcile error: %v", err)
-	}
-	if !result.IsZero() {
-		t.Fatalf("result = %+v, want no requeue", result)
-	}
-	if err := r.Get(context.Background(), client.ObjectKeyFromObject(co), co); err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(co, before) {
-		t.Error("reconciliation mutated a non-BM ClusterOrder")
-	}
-	if len(fc.names) != 0 {
-		t.Errorf("created BMI names = %v, want none", fc.names)
-	}
-}
+	Expect(err).ToNot(HaveOccurred(), "unexpected reconcile error: %v", err)
+	Expect(result.IsZero()).To(BeTrue(), "result = %+v, want no requeue", result)
+	Expect(r.Get(context.Background(), client.ObjectKeyFromObject(co), co)).To(Succeed())
+	Expect(co).To(Equal(before), "reconciliation mutated a non-BM ClusterOrder")
+	Expect(fc.names).To(BeEmpty(), "created BMI names = %v, want none", fc.names)
+})
 
-func TestNewWorkerStatusUsesRequestedPhase(t *testing.T) {
+var _ = Describe("New worker status uses the requested phase", func() {
 	for _, phase := range []string{workerPhaseProvisioning, workerPhaseWaitingForAgent} {
-		t.Run(phase, func(t *testing.T) {
+		It(phase, func() {
 			w := newWorkerStatus("compute", "standard", "bmi-name", "bmi-id", phase)
-			if w.Phase != phase {
-				t.Fatalf("phase = %q, want %q", w.Phase, phase)
-			}
-			if w.NodeSet != "compute" || w.InstanceType != "standard" || w.Name != "bmi-name" || w.Kind != workerKindBMI ||
-				w.BareMetalInstance != (v1alpha1.BareMetalInstanceReference{Name: "bmi-name", ID: "bmi-id"}) || w.CreationTimestamp.IsZero() {
-				t.Fatalf("incorrect worker identity or creation timestamp: %+v", w)
-			}
+			Expect(w.Phase).To(Equal(phase), "phase = %q, want %q", w.Phase, phase)
+			Expect(w.NodeSet).To(Equal("compute"), "incorrect worker identity or creation timestamp: %+v", w)
+			Expect(w.InstanceType).To(Equal("standard"), "incorrect worker identity or creation timestamp: %+v", w)
+			Expect(w.Name).To(Equal("bmi-name"), "incorrect worker identity or creation timestamp: %+v", w)
+			Expect(w.Kind).To(Equal(workerKindBMI), "incorrect worker identity or creation timestamp: %+v", w)
+			Expect(w.BareMetalInstance).To(Equal((v1alpha1.BareMetalInstanceReference{Name: "bmi-name", ID: "bmi-id"})), "incorrect worker identity or creation timestamp: %+v", w)
+			Expect(w.CreationTimestamp.IsZero()).To(BeFalse(), "incorrect worker identity or creation timestamp: %+v", w)
 		})
 	}
-}
+})
 
-func TestNodeSetNamesAreBoundedAndReserved(t *testing.T) {
-	r, fc, co := nodeSetHarness(t, strings.Repeat("a", 63), nodeRequest("standard", 2))
-	reconcileNodeSetTest(t, r, co)
-	if len(fc.names) != 2 {
-		t.Fatalf("created %d BMIs, want 2", len(fc.names))
-	}
+var _ = It("persists bounded worker names before allocating NodeSet capacity", func() {
+	r, fc, co := nodeSetHarness(strings.Repeat("a", 63), nodeRequest("standard", 2))
+	reconcileNodeSetTest(r, co)
+	Expect(fc.names).To(HaveLen(2), "created %d BMIs, want 2", len(fc.names))
 	for _, name := range fc.names {
-		if len(name) > 63 || strings.Contains(name, co.Name) {
-			t.Errorf("BMI name depends on order name or exceeds label limit: %q", name)
-		}
+		Expect(len(name)).ToNot(BeNumerically(">", 63), "BMI name depends on order name or exceeds label limit: %q", name)
+		Expect(strings.Contains(name, co.Name)).To(BeFalse(), "BMI name depends on order name or exceeds label limit: %q", name)
 	}
-	if fc.reservationMissing {
-		t.Error("BMI created before its name was persisted in status")
-	}
+	Expect(fc.reservationMissing).To(BeFalse(), "BMI created before its name was persisted in status")
 	for _, w := range co.Status.Workers {
-		if w.BareMetalInstance.Name != w.Name || w.BareMetalInstance.ID == "" {
-			t.Fatalf("missing explicit BMI identity: %+v", w)
-		}
+		Expect(w.BareMetalInstance.Name).To(Equal(w.Name), "missing explicit BMI identity: %+v", w)
+		Expect(w.BareMetalInstance.ID).NotTo(Equal(""), "missing explicit BMI identity: %+v", w)
 		raw, err := json.Marshal(w)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if strings.Contains(string(raw), "resourceID") || !strings.Contains(string(raw), "bareMetalInstance") {
-			t.Fatalf("incorrect reference JSON: %s", raw)
-		}
+		Expect(err).NotTo(HaveOccurred())
+		Expect(strings.Contains(string(raw), "resourceID")).To(BeFalse(), "incorrect reference JSON: %s", raw)
+		Expect(strings.Contains(string(raw), "bareMetalInstance")).To(BeTrue(), "incorrect reference JSON: %s", raw)
 	}
 	first := append([]string(nil), fc.names...)
-	reconcileNodeSetTest(t, r, co)
-	if len(fc.names) != len(first) {
-		t.Error("repeated reconciliation created new BMIs")
-	}
-}
+	reconcileNodeSetTest(r, co)
+	Expect(fc.names).To(HaveLen(len(first)), "repeated reconciliation created new BMIs")
+})
 
-func TestNodeSetRejectsMissingRecordedBMIName(t *testing.T) {
+var _ = Describe("NodeSet validation rejects missing recorded BMI names", func() {
 	for _, id := range []string{"", "known-bmi-id"} {
-		t.Run("id="+id, func(t *testing.T) {
-			r, fc, co := nodeSetHarness(t, "missing-reference", nodeRequest("standard", 2))
+		It("id="+id, func() {
+			r, fc, co := nodeSetHarness("missing-reference", nodeRequest("standard", 2))
 			co.Status.Workers = []v1alpha1.WorkerStatus{{
 				Name: "worker-slot", Kind: workerKindBMI, NodeSet: "standard", InstanceType: "standard",
 				Phase: workerPhaseProvisioning, BareMetalInstance: v1alpha1.BareMetalInstanceReference{ID: id},
 			}}
-			if err := r.Status().Update(context.Background(), co); err != nil {
-				t.Fatal(err)
-			}
-			_, err := runWorkerCapacityStage(t, r, co)
-			if err == nil || !strings.Contains(err.Error(), "bareMetalInstance.name") {
-				t.Fatalf("expected a missing-reference error, got %v", err)
-			}
-			if err := r.Get(context.Background(), client.ObjectKeyFromObject(co), co); err != nil {
-				t.Fatal(err)
-			}
-			if len(fc.names) != 0 || len(co.Status.Workers) != 1 || co.Status.Workers[0].BareMetalInstance.Name != "" || co.Status.Workers[0].BareMetalInstance.ID != id {
-				t.Fatalf("incomplete reference was guessed or provisioning continued: creates=%v workers=%+v", fc.names, co.Status.Workers)
-			}
+			Expect(r.Status().Update(context.Background(), co)).To(Succeed())
+			_, err := runWorkerCapacityStage(r, co)
+			Expect(err).To(HaveOccurred(), "expected a missing-reference error, got %v", err)
+			Expect(strings.Contains(err.Error(), "bareMetalInstance.name")).To(BeTrue(), "expected a missing-reference error, got %v", err)
+			Expect(r.Get(context.Background(), client.ObjectKeyFromObject(co), co)).To(Succeed())
+			Expect(fc.names).To(BeEmpty(), "incomplete reference was guessed or provisioning continued: creates=%v workers=%+v", fc.names, co.Status.Workers)
+			Expect(co.Status.Workers).To(HaveLen(1), "incomplete reference was guessed or provisioning continued: creates=%v workers=%+v", fc.names, co.Status.Workers)
+			Expect(co.Status.Workers[0].BareMetalInstance.Name).To(Equal(""), "incomplete reference was guessed or provisioning continued: creates=%v workers=%+v", fc.names, co.Status.Workers)
+			Expect(co.Status.Workers[0].BareMetalInstance.ID).To(Equal(id), "incomplete reference was guessed or provisioning continued: creates=%v workers=%+v", fc.names, co.Status.Workers)
 		})
 	}
-}
+})
 
-func TestPendingBMIRecoveryRejectsMissingRecordedName(t *testing.T) {
-	r, fc, co := nodeSetHarness(t, "missing-reference", nodeRequest("standard", 1))
+var _ = It("rejects pending BMI recovery without a recorded name", func() {
+	r, fc, co := nodeSetHarness("missing-reference", nodeRequest("standard", 1))
 	co.Status.Workers = []v1alpha1.WorkerStatus{{
 		Name: "worker-slot", Kind: workerKindBMI, NodeSet: "standard", InstanceType: "standard",
 		Phase: workerPhaseProvisioning,
 	}}
-	if err := r.Status().Update(context.Background(), co); err != nil {
-		t.Fatal(err)
-	}
+	Expect(r.Status().Update(context.Background(), co)).To(Succeed())
 	// Ownership by the cluster does not prove that this BMI belongs to this slot.
 	fc.bmis = []*privatev1.BareMetalInstance{privatev1.BareMetalInstance_builder{
 		Id: "unrelated-bmi", Metadata: privatev1.Metadata_builder{
@@ -304,25 +266,19 @@ func TestPendingBMIRecoveryRejectsMissingRecordedName(t *testing.T) {
 		}.Build(),
 	}.Build()}
 	if err := runDeletionBMIStage(context.Background(), r, co); err == nil || !strings.Contains(err.Error(), "bareMetalInstance.name") {
-		t.Fatalf("expected a missing-reference error, got %v", err)
+		Fail(fmt.Sprintf("expected a missing-reference error, got %v", err))
 	}
-	if err := r.Get(context.Background(), client.ObjectKeyFromObject(co), co); err != nil {
-		t.Fatal(err)
-	}
-	if co.Status.Workers[0].BareMetalInstance != (v1alpha1.BareMetalInstanceReference{}) {
-		t.Fatalf("guessed a BMI reference from the slot name: %+v", co.Status.Workers[0])
-	}
-}
+	Expect(r.Get(context.Background(), client.ObjectKeyFromObject(co), co)).To(Succeed())
+	Expect(co.Status.Workers[0].BareMetalInstance).To(Equal((v1alpha1.BareMetalInstanceReference{})), "guessed a BMI reference from the slot name: %+v", co.Status.Workers[0])
+})
 
-func TestPendingBMIRecoveryUsesRecordedNameNotWorkerName(t *testing.T) {
-	r, fc, co := nodeSetHarness(t, "recorded-reference", nodeRequest("standard", 1))
+var _ = It("uses the recorded BMI name rather than the worker name for recovery", func() {
+	r, fc, co := nodeSetHarness("recorded-reference", nodeRequest("standard", 1))
 	co.Status.Workers = []v1alpha1.WorkerStatus{{
 		Name: "worker-slot", Kind: workerKindBMI, NodeSet: "standard", InstanceType: "standard",
 		Phase: workerPhaseProvisioning, BareMetalInstance: v1alpha1.BareMetalInstanceReference{Name: "actual-bmi"},
 	}}
-	if err := r.Status().Update(context.Background(), co); err != nil {
-		t.Fatal(err)
-	}
+	Expect(r.Status().Update(context.Background(), co)).To(Succeed())
 	fc.bmis = []*privatev1.BareMetalInstance{privatev1.BareMetalInstance_builder{
 		Id: "recorded-id", Metadata: privatev1.Metadata_builder{
 			Name: "actual-bmi", Tenant: "tenant",
@@ -331,39 +287,35 @@ func TestPendingBMIRecoveryUsesRecordedNameNotWorkerName(t *testing.T) {
 		}.Build(),
 	}.Build()}
 	if _, err := r.reserveWorkerSlots(context.Background(), co); err != nil {
-		t.Fatal(err)
+		Expect(err).NotTo(HaveOccurred())
 	}
 	if err := runDeletionBMIStage(context.Background(), r, co); !errors.Is(err, errWorkerObservationChanged) {
-		t.Fatalf("first deletion observation error=%v, want boundary", err)
+		Fail(fmt.Sprintf("first deletion observation error=%v, want boundary", err))
 	}
-	if err := r.Get(context.Background(), client.ObjectKeyFromObject(co), co); err != nil {
-		t.Fatal(err)
-	}
+	Expect(r.Get(context.Background(), client.ObjectKeyFromObject(co), co)).To(Succeed())
 	w := co.Status.Workers[0]
-	if len(co.Status.Workers) != 1 || w.Name != "worker-slot" || w.BareMetalInstance.Name != "actual-bmi" || w.BareMetalInstance.ID != "recorded-id" {
-		t.Fatalf("did not preserve the recorded BMI identity: %+v", co.Status.Workers)
-	}
-}
+	Expect(co.Status.Workers).To(HaveLen(1), "did not preserve the recorded BMI identity: %+v", co.Status.Workers)
+	Expect(w.Name).To(Equal("worker-slot"), "did not preserve the recorded BMI identity: %+v", co.Status.Workers)
+	Expect(w.BareMetalInstance.Name).To(Equal("actual-bmi"), "did not preserve the recorded BMI identity: %+v", co.Status.Workers)
+	Expect(w.BareMetalInstance.ID).To(Equal("recorded-id"), "did not preserve the recorded BMI identity: %+v", co.Status.Workers)
+})
 
-func TestNodeSetStaleSnapshotConflictsInsteadOfRebasing(t *testing.T) {
-	r, _, co := nodeSetHarness(t, "stale-order", nodeRequest("standard", 2))
+var _ = It("rejects a stale NodeSet snapshot rather than rebasing it", func() {
+	r, _, co := nodeSetHarness("stale-order", nodeRequest("standard", 2))
 	stale := co.DeepCopy()
 	if _, err := r.reserveWorkerSlots(context.Background(), co); err != nil {
-		t.Fatal(err)
+		Expect(err).NotTo(HaveOccurred())
 	}
 	latest := &v1alpha1.ClusterOrder{}
-	if err := r.Get(context.Background(), client.ObjectKeyFromObject(co), latest); err != nil {
-		t.Fatal(err)
-	}
+	Expect(r.Get(context.Background(), client.ObjectKeyFromObject(co), latest)).To(Succeed())
 	if _, err := r.reserveWorkerSlots(context.Background(), stale); !errors.Is(err, errWorkerObservationChanged) {
-		t.Fatalf("error=%v, want stale-observation interruption", err)
+		Fail(fmt.Sprintf("error=%v, want stale-observation interruption", err))
 	}
-	if len(latest.Status.Workers) != 2 || len(stale.Status.Workers) != 0 {
-		t.Fatalf("unexpected reservations after stale conflict: latest=%+v stale=%+v", latest.Status.Workers, stale.Status.Workers)
-	}
-}
+	Expect(latest.Status.Workers).To(HaveLen(2), "unexpected reservations after stale conflict: latest=%+v stale=%+v", latest.Status.Workers, stale.Status.Workers)
+	Expect(stale.Status.Workers).To(BeEmpty(), "unexpected reservations after stale conflict: latest=%+v stale=%+v", latest.Status.Workers, stale.Status.Workers)
+})
 
-func TestIsExcessWorkerSlot(t *testing.T) {
+var _ = Describe("Excess worker slot classification", func() {
 	tests := []struct {
 		name      string
 		kind      string
@@ -380,16 +332,16 @@ func TestIsExcessWorkerSlot(t *testing.T) {
 		{name: "other resource kind", kind: "Other", phase: workerPhaseReady, remaining: 1, want: true},
 	}
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+		It(tt.name, func() {
 			w := v1alpha1.WorkerStatus{Kind: tt.kind, Phase: tt.phase}
 			if got := isExcessWorkerSlot(w, tt.remaining); got != tt.want {
-				t.Errorf("isExcessWorkerSlot() = %v, want %v", got, tt.want)
+				Fail(fmt.Sprintf("isExcessWorkerSlot() = %v, want %v", got, tt.want))
 			}
 		})
 	}
-}
+})
 
-func TestPlanWorkerSlots(t *testing.T) {
+var _ = It("plans worker slots independently for each NodeSet", func() {
 	compute := nodeRequest("standard", 2)
 	compute.NodeSet = "compute"
 	batch := nodeRequest("standard", 1)
@@ -483,27 +435,24 @@ func TestPlanWorkerSlots(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+		By(tt.name)
+		func() {
 			co := &v1alpha1.ClusterOrder{
 				Spec:   v1alpha1.ClusterOrderSpec{NodeRequests: tt.requests},
 				Status: v1alpha1.ClusterOrderStatus{Workers: tt.workers},
 			}
 			before := co.DeepCopy()
 			plan := planWorkerSlots(co)
-			assertWorkerSlotNames(t, "selected", plan.selected, tt.selected)
-			assertWorkerSlotNames(t, "excess", plan.excess, tt.excess)
-			if !reflect.DeepEqual(plan.missingByNodeSet, tt.missing) {
-				t.Errorf("missing = %v, want %v", plan.missingByNodeSet, tt.missing)
-			}
-			if !reflect.DeepEqual(co, before) {
-				t.Error("planning mutated the ClusterOrder")
-			}
-		})
+			assertWorkerSlotNames("selected", plan.selected, tt.selected)
+			assertWorkerSlotNames("excess", plan.excess, tt.excess)
+			Expect(plan.missingByNodeSet).To(Equal(tt.missing), "missing = %v, want %v", plan.missingByNodeSet, tt.missing)
+			Expect(co).To(Equal(before), "planning mutated the ClusterOrder")
+		}()
 	}
-}
+})
 
-func assertWorkerSlotNames(t *testing.T, partition string, workers []v1alpha1.WorkerStatus, want []string) {
-	t.Helper()
+func assertWorkerSlotNames(partition string, workers []v1alpha1.WorkerStatus, want []string) {
+	GinkgoHelper()
 	names := make([]string, 0, len(workers))
 	for _, w := range workers {
 		names = append(names, w.Name)
@@ -511,12 +460,10 @@ func assertWorkerSlotNames(t *testing.T, partition string, workers []v1alpha1.Wo
 	want = slices.Clone(want)
 	slices.Sort(names)
 	slices.Sort(want)
-	if !slices.Equal(names, want) {
-		t.Errorf("%s = %v, want %v", partition, names, want)
-	}
+	Expect(slices.Equal(names, want)).To(BeTrue(), "%s = %v, want %v", partition, names, want)
 }
 
-func TestAllocateMissingWorkerSlotsUsesPlan(t *testing.T) {
+var _ = It("allocates missing worker slots from the capacity plan", func() {
 	compute, batch := nodeRequest("standard", 2), nodeRequest("standard", 1)
 	compute.NodeSet, batch.NodeSet = "compute", "batch"
 	co := &v1alpha1.ClusterOrder{
@@ -529,35 +476,25 @@ func TestAllocateMissingWorkerSlotsUsesPlan(t *testing.T) {
 		}},
 	}
 	before := co.DeepCopy()
-	if err := allocateMissingWorkerSlots(co); err != nil {
-		t.Fatal(err)
-	}
-	if len(co.Status.Workers) != len(before.Status.Workers)+1 {
-		t.Fatalf("allocated %d slots, want 1", len(co.Status.Workers)-len(before.Status.Workers))
-	}
-	if !reflect.DeepEqual(co.Status.Workers[:len(before.Status.Workers)], before.Status.Workers) {
-		t.Fatal("allocation changed existing worker identities or lifecycle state")
-	}
+	Expect(allocateMissingWorkerSlots(co)).To(Succeed())
+	Expect(co.Status.Workers).To(HaveLen(len(before.Status.Workers)+1), "allocated %d slots, want 1", len(co.Status.Workers)-len(before.Status.Workers))
+	Expect(co.Status.Workers[:len(before.Status.Workers)]).To(Equal(before.Status.Workers), "allocation changed existing worker identities or lifecycle state")
 	reserved := co.Status.Workers[len(before.Status.Workers)]
-	if reserved.NodeSet != "compute" || reserved.InstanceType != "standard" || reserved.Phase != workerPhaseProvisioning ||
-		reserved.Name == "" || reserved.BareMetalInstance.Name != reserved.Name {
-		t.Fatalf("incorrect scale-up reservation: %+v", reserved)
-	}
+	Expect(reserved.NodeSet).To(Equal("compute"), "incorrect scale-up reservation: %+v", reserved)
+	Expect(reserved.InstanceType).To(Equal("standard"), "incorrect scale-up reservation: %+v", reserved)
+	Expect(reserved.Phase).To(Equal(workerPhaseProvisioning), "incorrect scale-up reservation: %+v", reserved)
+	Expect(reserved.Name).NotTo(Equal(""), "incorrect scale-up reservation: %+v", reserved)
+	Expect(reserved.BareMetalInstance.Name).To(Equal(reserved.Name), "incorrect scale-up reservation: %+v", reserved)
 	plan := planWorkerSlots(co)
-	if plan.missingByNodeSet["compute"] != 0 || plan.missingByNodeSet["batch"] != 0 {
-		t.Fatalf("incorrect post-allocation plan: %+v", plan)
-	}
-	assertWorkerSlotNames(t, "excess", plan.excess, []string{"compute-deleting", "batch-failed"})
+	Expect(plan.missingByNodeSet["compute"]).To(Equal(0), "incorrect post-allocation plan: %+v", plan)
+	Expect(plan.missingByNodeSet["batch"]).To(Equal(0), "incorrect post-allocation plan: %+v", plan)
+	assertWorkerSlotNames("excess", plan.excess, []string{"compute-deleting", "batch-failed"})
 	after := co.DeepCopy()
-	if err := allocateMissingWorkerSlots(co); err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(co, after) {
-		t.Fatal("repeated allocation changed reserved slots")
-	}
-}
+	Expect(allocateMissingWorkerSlots(co)).To(Succeed())
+	Expect(co).To(Equal(after), "repeated allocation changed reserved slots")
+})
 
-func TestNodeSetScaleDownPrefersHealthyOlderWorkers(t *testing.T) {
+var _ = It("retains healthy older workers during NodeSet scale-down", func() {
 	old := metav1.NewTime(metav1.Now().Add(-time.Hour))
 	co := &v1alpha1.ClusterOrder{Spec: v1alpha1.ClusterOrderSpec{NodeRequests: []v1alpha1.NodeRequest{nodeRequest("standard", 1)}}, Status: v1alpha1.ClusterOrderStatus{Workers: []v1alpha1.WorkerStatus{
 		{NodeSet: "standard", Name: "failed", Kind: workerKindBMI, InstanceType: "standard", Phase: workerPhaseFailed, CreationTimestamp: old},
@@ -566,95 +503,77 @@ func TestNodeSetScaleDownPrefersHealthyOlderWorkers(t *testing.T) {
 		{NodeSet: "standard", Name: "deleting", Kind: workerKindBMI, InstanceType: "standard", Phase: workerPhaseDeleting, CreationTimestamp: old},
 	}}}
 	plan := planWorkerSlots(co)
-	if len(plan.selected) != 1 || plan.selected[0].Name != "old-ready" || len(plan.excess) != 3 {
-		t.Fatalf("incorrect scale-down selection: selected=%+v excess=%+v", plan.selected, plan.excess)
-	}
-}
+	Expect(plan.selected).To(HaveLen(1), "incorrect scale-down selection: selected=%+v excess=%+v", plan.selected, plan.excess)
+	Expect(plan.selected[0].Name).To(Equal("old-ready"), "incorrect scale-down selection: selected=%+v excess=%+v", plan.selected, plan.excess)
+	Expect(plan.excess).To(HaveLen(3), "incorrect scale-down selection: selected=%+v excess=%+v", plan.selected, plan.excess)
+})
 
-func TestNodeSetInterruptedCreateReusesReservation(t *testing.T) {
-	r, fc, co := nodeSetHarness(t, "order", nodeRequest("standard", 1))
+var _ = It("reuses the NodeSet reservation after an interrupted Create", func() {
+	r, fc, co := nodeSetHarness("order", nodeRequest("standard", 1))
 	fc.failCreate = true
 	if _, err := r.reserveWorkerSlots(context.Background(), co); err != nil {
-		t.Fatal(err)
+		Expect(err).NotTo(HaveOccurred())
 	}
-	if err := r.apiReader.Get(context.Background(), client.ObjectKeyFromObject(co), co); err != nil {
-		t.Fatal(err)
+	Expect(r.apiReader.Get(context.Background(), client.ObjectKeyFromObject(co), co)).To(Succeed())
+	if _, err := runWorkerCapacityStage(r, co); err == nil {
+		Fail("expected interrupted create")
 	}
-	if _, err := runWorkerCapacityStage(t, r, co); err == nil {
-		t.Fatal("expected interrupted create")
-	}
-	if err := r.Get(context.Background(), client.ObjectKeyFromObject(co), co); err != nil {
-		t.Fatal(err)
-	}
-	if len(co.Status.Workers) != 1 {
-		t.Fatalf("lost pending worker reservation: %+v", co.Status.Workers)
-	}
+	Expect(r.Get(context.Background(), client.ObjectKeyFromObject(co), co)).To(Succeed())
+	Expect(co.Status.Workers).To(HaveLen(1), "lost pending worker reservation: %+v", co.Status.Workers)
 	reserved := co.Status.Workers[0].BareMetalInstance.Name
 	fc.failCreate = false
-	reconcileNodeSetTest(t, r, co)
-	if len(fc.names) != 2 || fc.names[0] != reserved || fc.names[1] != reserved {
-		t.Fatalf("create retries changed identity: %v", fc.names)
-	}
-}
+	reconcileNodeSetTest(r, co)
+	Expect(fc.names).To(HaveLen(2), "create retries changed identity: %v", fc.names)
+	Expect(fc.names[0]).To(Equal(reserved), "create retries changed identity: %v", fc.names)
+	Expect(fc.names[1]).To(Equal(reserved), "create retries changed identity: %v", fc.names)
+})
 
-func TestNodeSetBackoffDoesNotReadoptDeletedBMI(t *testing.T) {
-	r, _, co := nodeSetHarness(t, "backoff-order", nodeRequest("standard", 1))
-	reconcileNodeSetTest(t, r, co)
+var _ = It("does not readopt a deleted BMI during NodeSet retry backoff", func() {
+	r, _, co := nodeSetHarness("backoff-order", nodeRequest("standard", 1))
+	reconcileNodeSetTest(r, co)
 	next := metav1.NewTime(time.Now().Add(time.Hour))
 	co.Status.Workers[0].Phase = workerPhaseFailed
 	co.Status.Workers[0].BareMetalInstance.ID = ""
 	co.Status.Workers[0].NextRetryTime = &next
-	if err := r.Status().Update(context.Background(), co); err != nil {
-		t.Fatal(err)
-	}
+	Expect(r.Status().Update(context.Background(), co)).To(Succeed())
 	// A deletion can be asynchronous: the old BMI still appears in List. It must
 	// not be re-adopted into the failed slot while its retry backoff is pending.
-	reconcileNodeSetTest(t, r, co)
-	if co.Status.Workers[0].BareMetalInstance.ID != "" {
-		t.Fatal("re-adopted BMI during retry backoff")
-	}
-}
+	reconcileNodeSetTest(r, co)
+	Expect(co.Status.Workers[0].BareMetalInstance.ID).To(Equal(""), "re-adopted BMI during retry backoff")
+})
 
-func TestNodeSetsSharingHardwareScaleIndependently(t *testing.T) {
+var _ = It("scales NodeSets independently when they share an instance type", func() {
 	compute, batch := nodeRequest("standard", 1), nodeRequest("standard", 2)
 	compute.NodeSet, batch.NodeSet = "compute", "batch"
-	r, fc, co := nodeSetHarness(t, "same-hardware", compute, batch)
-	reconcileNodeSetTest(t, r, co)
+	r, fc, co := nodeSetHarness("same-hardware", compute, batch)
+	reconcileNodeSetTest(r, co)
 	batchWorkers := make(map[string]bool)
 	for _, w := range co.Status.Workers {
 		if w.NodeSet == "batch" {
 			batchWorkers[w.Name] = true
 		}
 	}
-	if len(batchWorkers) != 2 {
-		t.Fatalf("lost batch membership: %+v", co.Status.Workers)
-	}
+	Expect(batchWorkers).To(HaveLen(2), "lost batch membership: %+v", co.Status.Workers)
 	co.Spec.NodeRequests[0].NumberOfNodes = 3
-	if err := r.Update(context.Background(), co); err != nil {
-		t.Fatal(err)
-	}
-	reconcileNodeSetTest(t, r, co)
+	Expect(r.Update(context.Background(), co)).To(Succeed())
+	reconcileNodeSetTest(r, co)
 	counts := map[string]int{}
 	for _, w := range co.Status.Workers {
 		counts[w.NodeSet]++
-		if batchWorkers[w.Name] && w.NodeSet != "batch" {
-			t.Fatal("reassigned a batch worker to compute")
-		}
+		Expect(batchWorkers[w.Name] && w.NodeSet != "batch").To(BeFalse(), "reassigned a batch worker to compute")
 	}
-	if counts["compute"] != 3 || counts["batch"] != 2 || len(fc.bmis) != 5 {
-		t.Fatalf("incorrect independent capacities: %v, %d BMIs", counts, len(fc.bmis))
-	}
-}
+	Expect(counts["compute"]).To(Equal(3), "incorrect independent capacities: %v, %d BMIs", counts, len(fc.bmis))
+	Expect(counts["batch"]).To(Equal(2), "incorrect independent capacities: %v, %d BMIs", counts, len(fc.bmis))
+	Expect(fc.bmis).To(HaveLen(5), "incorrect independent capacities: %v, %d BMIs", counts, len(fc.bmis))
+})
 
-func TestNodeSetScalingPreservesOtherMembership(t *testing.T) {
-	r, fc, co := nodeSetHarness(t, "order", nodeRequest("standard", 1), nodeRequest("gpu", 1))
-	reconcileNodeSetTest(t, r, co)
+var _ = It("preserves other NodeSet memberships during scaling", func() {
+	r, fc, co := nodeSetHarness("order", nodeRequest("standard", 1), nodeRequest("gpu", 1))
+	reconcileNodeSetTest(r, co)
 	gpu := co.Status.Workers[1]
 	co.Spec.NodeRequests[0].NumberOfNodes = 2
-	if err := r.Update(context.Background(), co); err != nil {
-		t.Fatal(err)
-	}
-	reconcileNodeSetTest(t, r, co)
+	Expect(r.Update(context.Background(), co)).To(Succeed())
+	reconcileNodeSetTest(r, co)
 	var retained bool
 	counts := map[string]int{}
 	for _, w := range co.Status.Workers {
@@ -663,10 +582,8 @@ func TestNodeSetScalingPreservesOtherMembership(t *testing.T) {
 			retained = true
 		}
 	}
-	if !retained || counts["standard"] != 2 || counts["gpu"] != 1 {
-		t.Fatalf("scaling changed worker membership: %+v", co.Status.Workers)
-	}
-	if len(fc.bmis) != 3 {
-		t.Fatalf("got %d BMIs, want 3", len(fc.bmis))
-	}
-}
+	Expect(retained).To(BeTrue(), "scaling changed worker membership: %+v", co.Status.Workers)
+	Expect(counts["standard"]).To(Equal(2), "scaling changed worker membership: %+v", co.Status.Workers)
+	Expect(counts["gpu"]).To(Equal(1), "scaling changed worker membership: %+v", co.Status.Workers)
+	Expect(fc.bmis).To(HaveLen(3), "got %d BMIs, want 3", len(fc.bmis))
+})

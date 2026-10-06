@@ -15,7 +15,9 @@ package controller
 
 import (
 	"context"
-	"testing"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 
 	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	"google.golang.org/protobuf/proto"
@@ -24,7 +26,7 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
-func TestNodePoolsSharingHardwareHaveIndependentCapacity(t *testing.T) {
+var _ = It("tracks independent NodePool capacity when NodeSets share hardware", func() {
 	requests := []v1alpha1.NodeRequest{
 		{NodeSet: "compute", NumberOfNodes: 2, BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "bm.large"}},
 		{NodeSet: "batch", NumberOfNodes: 3, BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "bm.large"}},
@@ -32,20 +34,14 @@ func TestNodePoolsSharingHardwareHaveIndependentCapacity(t *testing.T) {
 	compute, batch := readyClusterOrderNodePool("compute", 2), readyClusterOrderNodePool("batch", 3)
 	compute.Labels[agentInstanceTypeLabel], batch.Labels[agentInstanceTypeLabel] = "bm.large", "bm.large"
 	pools := []hypershiftv1beta1.NodePool{compute, batch}
-	if !nodePoolsMatchRequests(requests, pools) {
-		t.Fatal("same hardware must not collapse distinct NodeSets")
-	}
+	Expect(nodePoolsMatchRequests(requests, pools)).To(BeTrue(), "same hardware must not collapse distinct NodeSets")
 	pools[0].Status.Replicas = 3
-	if nodePoolsMatchRequests(requests, pools) {
-		t.Fatal("batch capacity must not mask compute's incorrect capacity")
-	}
+	Expect(nodePoolsMatchRequests(requests, pools)).To(BeFalse(), "batch capacity must not mask compute's incorrect capacity")
 	delete(compute.Labels, agentNodeSetLabel)
-	if nodePoolsMatchRequests(requests, []hypershiftv1beta1.NodePool{compute, batch}) {
-		t.Fatal("instance type must not be used as a fallback NodeSet marker")
-	}
-}
+	Expect(nodePoolsMatchRequests(requests, []hypershiftv1beta1.NodePool{compute, batch})).To(BeFalse(), "instance type must not be used as a fallback NodeSet marker")
+})
 
-func TestNodeSetFeedbackDoesNotChooseFirstMatchingHardware(t *testing.T) {
+var _ = It("synchronizes feedback by NodeSet rather than the first matching instance type", func() {
 	remote := privatev1.Cluster_builder{Spec: privatev1.ClusterSpec_builder{NodeSets: map[string]*privatev1.ClusterNodeSet{
 		"compute": privatev1.ClusterNodeSet_builder{Size: proto.Int32(2), BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Name: "bm.large"}.Build()}.Build(),
 		"batch":   privatev1.ClusterNodeSet_builder{Size: proto.Int32(3), BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Name: "bm.large"}.Build()}.Build(),
@@ -56,7 +52,6 @@ func TestNodeSetFeedbackDoesNotChooseFirstMatchingHardware(t *testing.T) {
 	}}}
 	syncClusterOrderNodeRequests(context.Background(), co, remote)
 	sets := remote.GetStatus().GetNodeSets()
-	if sets["compute"].GetSize() != 1 || sets["batch"].GetSize() != 3 {
-		t.Fatalf("feedback mixed independent groups: %v", sets)
-	}
-}
+	Expect(sets["compute"].GetSize()).To(Equal(int32(1)), "feedback mixed independent groups: %v", sets)
+	Expect(sets["batch"].GetSize()).To(Equal(int32(3)), "feedback mixed independent groups: %v", sets)
+})

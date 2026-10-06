@@ -27,7 +27,7 @@ import (
 
 func p32(i int32) *int32 { return &i }
 
-var _ = Describe("ClusterOrder worker status contract (OSAC-4147)", func() {
+var _ = Describe("ClusterOrder worker status contract", func() {
 	ctx := context.Background()
 
 	It("DeepCopy round-trips a populated WorkerStatus and is independent of the original", func() {

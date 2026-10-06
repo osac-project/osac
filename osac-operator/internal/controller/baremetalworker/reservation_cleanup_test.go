@@ -6,7 +6,10 @@ package baremetalworker
 import (
 	"context"
 	"errors"
-	"testing"
+	"fmt"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -61,45 +64,33 @@ func (w *reservationStatusWriter) Patch(ctx context.Context, obj client.Object, 
 	return nil
 }
 
-func reserveCleanupSlot(t *testing.T, r *Reconciler, co *v1alpha1.ClusterOrder) {
-	t.Helper()
+func reserveCleanupSlot(r *Reconciler, co *v1alpha1.ClusterOrder) {
+	GinkgoHelper()
 	ctx := context.Background()
 	co.Status.Workers = nil
-	if err := r.Status().Update(ctx, co); err != nil {
-		t.Fatal(err)
-	}
+	Expect(r.Status().Update(ctx, co)).To(Succeed())
 	if added, err := r.reserveWorkerSlots(ctx, co); err != nil || !added {
-		t.Fatalf("reserve: added=%v err=%v", added, err)
+		Fail(fmt.Sprintf("reserve: added=%v err=%v", added, err))
 	}
-	if err := r.apiReader.Get(ctx, client.ObjectKeyFromObject(co), co); err != nil {
-		t.Fatal(err)
-	}
+	Expect(r.apiReader.Get(ctx, client.ObjectKeyFromObject(co), co)).To(Succeed())
 }
 
-func TestDeletionCancelsNeverAttemptedReservation(t *testing.T) {
-	r, fc, co := workerReadHarness(t)
+var _ = It("cancels a never-attempted reservation during deletion", func() {
+	r, fc, co := workerReadHarness()
 	ctx := context.Background()
 	co.Status.Workers = nil
-	if err := r.Status().Update(ctx, co); err != nil {
-		t.Fatal(err)
-	}
+	Expect(r.Status().Update(ctx, co)).To(Succeed())
 	if added, err := r.reserveWorkerSlots(ctx, co); err != nil || !added {
-		t.Fatalf("reserve: added=%v err=%v", added, err)
+		Fail(fmt.Sprintf("reserve: added=%v err=%v", added, err))
 	}
 	key := client.ObjectKeyFromObject(co)
-	if err := r.apiReader.Get(ctx, key, co); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.Delete(ctx, co); err != nil {
-		t.Fatal(err)
-	}
+	Expect(r.apiReader.Get(ctx, key, co)).To(Succeed())
+	Expect(r.Delete(ctx, co)).To(Succeed())
 	// Re-read each durable boundary, just as a restarted reconciler would.
 	for range 3 {
-		if err := r.apiReader.Get(ctx, key, co); err != nil {
-			t.Fatal(err)
-		}
+		Expect(r.apiReader.Get(ctx, key, co)).To(Succeed())
 		if _, err := r.handleClusterDeletion(ctx, co); err != nil {
-			t.Fatal(err)
+			Expect(err).NotTo(HaveOccurred())
 		}
 		if apierrors.IsNotFound(r.apiReader.Get(ctx, key, &v1alpha1.ClusterOrder{})) {
 			break
@@ -107,132 +98,94 @@ func TestDeletionCancelsNeverAttemptedReservation(t *testing.T) {
 	}
 	latest := &v1alpha1.ClusterOrder{}
 	err := r.apiReader.Get(ctx, key, latest)
-	if !apierrors.IsNotFound(err) {
-		t.Fatalf("reservation blocked finalization: workers=%+v finalizers=%v err=%v", latest.Status.Workers, latest.Finalizers, err)
-	}
-	if len(fc.names) != 0 || fc.gets != 0 || fc.lists != 0 {
-		t.Fatalf("never-attempted cancellation called provider: creates=%v gets=%d lists=%d", fc.names, fc.gets, fc.lists)
-	}
-}
+	Expect(apierrors.IsNotFound(err)).To(BeTrue(), "reservation blocked finalization: workers=%+v finalizers=%v err=%v", latest.Status.Workers, latest.Finalizers, err)
+	Expect(fc.names).To(BeEmpty(), "never-attempted cancellation called provider: creates=%v gets=%d lists=%d", fc.names, fc.gets, fc.lists)
+	Expect(fc.gets).To(Equal(0), "never-attempted cancellation called provider: creates=%v gets=%d lists=%d", fc.names, fc.gets, fc.lists)
+	Expect(fc.lists).To(Equal(0), "never-attempted cancellation called provider: creates=%v gets=%d lists=%d", fc.names, fc.gets, fc.lists)
+})
 
-func TestCancellationWinsCreateAttemptRace(t *testing.T) {
-	r, fc, co := workerReadHarness(t)
+var _ = It("rejects a stale Create when cancellation wins the intent race", func() {
+	r, fc, co := workerReadHarness()
 	ctx := context.Background()
 	co.Finalizers = append(co.Finalizers, "test.osac.openshift.io/hold")
-	if err := r.Update(ctx, co); err != nil {
-		t.Fatal(err)
-	}
-	reserveCleanupSlot(t, r, co)
+	Expect(r.Update(ctx, co)).To(Succeed())
+	reserveCleanupSlot(r, co)
 	kube := r.Client
 	cleanup := *r
 	r.Client = &reservationStatusClient{Client: kube, before: func() {
 		latest := &v1alpha1.ClusterOrder{}
 		key := client.ObjectKeyFromObject(co)
-		if err := kube.Get(ctx, key, latest); err != nil {
-			t.Fatal(err)
-		}
-		if err := kube.Delete(ctx, latest); err != nil {
-			t.Fatal(err)
-		}
+		Expect(kube.Get(ctx, key, latest)).To(Succeed())
+		Expect(kube.Delete(ctx, latest)).To(Succeed())
 		for range 2 {
-			if err := kube.Get(ctx, key, latest); err != nil {
-				t.Fatal(err)
-			}
+			Expect(kube.Get(ctx, key, latest)).To(Succeed())
 			if _, err := cleanup.handleClusterDeletion(ctx, latest); err != nil {
-				t.Fatal(err)
+				Expect(err).NotTo(HaveOccurred())
 			}
 		}
 	}}
-	_, err := runWorkerCapacityStage(t, r, co)
-	if !apierrors.IsConflict(err) {
-		t.Fatalf("attempt did not lose optimistic race: %v", err)
-	}
-	if len(fc.names) != 0 {
-		t.Fatalf("stale invocation created after cancellation: %v", fc.names)
-	}
+	_, err := runWorkerCapacityStage(r, co)
+	Expect(apierrors.IsConflict(err)).To(BeTrue(), "attempt did not lose optimistic race: %v", err)
+	Expect(fc.names).To(BeEmpty(), "stale invocation created after cancellation: %v", fc.names)
 	latest := &v1alpha1.ClusterOrder{}
-	if err := kube.Get(ctx, client.ObjectKeyFromObject(co), latest); err != nil {
-		t.Fatal(err)
-	}
-	if len(latest.Status.Workers) != 0 {
-		t.Fatalf("cancelled reservation resurrected: %+v", latest.Status.Workers)
-	}
-}
+	Expect(kube.Get(ctx, client.ObjectKeyFromObject(co), latest)).To(Succeed())
+	Expect(latest.Status.Workers).To(BeEmpty(), "cancelled reservation resurrected: %+v", latest.Status.Workers)
+})
 
-func TestAttemptWinsCancellationRace(t *testing.T) {
-	r, fc, co := workerReadHarness(t)
-	reserveCleanupSlot(t, r, co)
+var _ = It("retains the reservation when Create intent wins the cancellation race", func() {
+	r, fc, co := workerReadHarness()
+	reserveCleanupSlot(r, co)
 	ctx := context.Background()
 	kube := r.Client
 	cleanup := *r
 	r.Client = &reservationStatusClient{Client: kube, after: func() {
 		latest := &v1alpha1.ClusterOrder{}
 		key := client.ObjectKeyFromObject(co)
-		if err := kube.Get(ctx, key, latest); err != nil {
-			t.Fatal(err)
-		}
-		if latest.Status.Workers[0].BMICreateState != v1alpha1.WorkerBMICreateStateAttempted {
-			t.Fatal("attempt not durable before Create")
-		}
-		if err := kube.Delete(ctx, latest); err != nil {
-			t.Fatal(err)
-		}
+		Expect(kube.Get(ctx, key, latest)).To(Succeed())
+		Expect(latest.Status.Workers[0].BMICreateState).To(Equal(v1alpha1.WorkerBMICreateStateAttempted), "attempt not durable before Create")
+		Expect(kube.Delete(ctx, latest)).To(Succeed())
 		for range 2 {
-			if err := kube.Get(ctx, key, latest); err != nil {
-				t.Fatal(err)
-			}
+			Expect(kube.Get(ctx, key, latest)).To(Succeed())
 			if _, err := cleanup.handleClusterDeletion(ctx, latest); err != nil {
-				t.Fatal(err)
+				Expect(err).NotTo(HaveOccurred())
 			}
 		}
-		if err := kube.Get(ctx, key, latest); err != nil {
-			t.Fatal(err)
-		}
-		if len(latest.Status.Workers) != 1 {
-			t.Fatal("attempted reservation released before Create")
-		}
+		Expect(kube.Get(ctx, key, latest)).To(Succeed())
+		Expect(latest.Status.Workers).To(HaveLen(1), "attempted reservation released before Create")
 	}}
-	_, err := runWorkerCapacityStage(t, r, co)
-	if !apierrors.IsConflict(err) {
-		t.Fatalf("identity write after retirement should conflict: %v", err)
-	}
-	if len(fc.names) != 1 || len(fc.bmis) != 1 {
-		t.Fatalf("creates=%v bmis=%v", fc.names, fc.bmis)
-	}
-	if err := kube.Get(ctx, client.ObjectKeyFromObject(co), co); err != nil {
-		t.Fatal(err)
-	}
+	_, err := runWorkerCapacityStage(r, co)
+	Expect(apierrors.IsConflict(err)).To(BeTrue(), "identity write after retirement should conflict: %v", err)
+	Expect(fc.names).To(HaveLen(1), "creates=%v bmis=%v", fc.names, fc.bmis)
+	Expect(fc.bmis).To(HaveLen(1), "creates=%v bmis=%v", fc.names, fc.bmis)
+	Expect(kube.Get(ctx, client.ObjectKeyFromObject(co), co)).To(Succeed())
 	fc.listed = fc.bmis
 	w := co.Status.Workers[0]
 	gone, err := cleanup.cleanupWorker(ctx, co, &w)
-	if err != nil || gone || w.BareMetalInstance.ID != fc.bmis[0].GetId() {
-		t.Fatalf("lost identity not recovered: worker=%+v gone=%v err=%v", w, gone, err)
-	}
-}
+	Expect(err).NotTo(HaveOccurred(), "lost identity not recovered: worker=%+v gone=%v err=%v", w, gone, err)
+	Expect(gone).To(BeFalse(), "lost identity not recovered: worker=%+v gone=%v err=%v", w, gone, err)
+	Expect(w.BareMetalInstance.ID).To(Equal(fc.bmis[0].GetId()), "lost identity not recovered: worker=%+v gone=%v err=%v", w, gone, err)
+})
 
-func TestIDLessCleanupStateIsConservative(t *testing.T) {
+var _ = Describe("Conservative cleanup of ID-less workers", func() {
 	for _, state := range []string{"", v1alpha1.WorkerBMICreateStateAttempted, "unknown"} {
-		t.Run("state="+state, func(t *testing.T) {
-			r, fc, co := workerReadHarness(t)
+		It("state="+state, func() {
+			r, fc, co := workerReadHarness()
 			co.Status.Workers[0].BareMetalInstance.ID = ""
 			co.Status.Workers[0].BMICreateState = state
 			co.Status.Workers[0].Phase = workerPhaseUnbinding
-			if err := r.Status().Update(context.Background(), co); err != nil {
-				t.Fatal(err)
-			}
+			Expect(r.Status().Update(context.Background(), co)).To(Succeed())
 			w := co.Status.Workers[0]
 			for range 2 {
 				gone, err := r.cleanupWorker(context.Background(), co, &w)
-				if err == nil || gone || w.BareMetalInstance.ID != "" {
-					t.Fatalf("empty List released unknown outcome: gone=%v err=%v worker=%+v", gone, err, w)
-				}
+				Expect(err).To(HaveOccurred(), "empty List released unknown outcome: gone=%v err=%v worker=%+v", gone, err, w)
+				Expect(gone).To(BeFalse(), "empty List released unknown outcome: gone=%v err=%v worker=%+v", gone, err, w)
+				Expect(w.BareMetalInstance.ID).To(Equal(""), "empty List released unknown outcome: gone=%v err=%v worker=%+v", gone, err, w)
 			}
-			if fc.lists != 2 || len(fc.names) != 0 {
-				t.Fatalf("lists=%d creates=%v", fc.lists, fc.names)
-			}
+			Expect(fc.lists).To(Equal(2), "lists=%d creates=%v", fc.lists, fc.names)
+			Expect(fc.names).To(BeEmpty(), "lists=%d creates=%v", fc.lists, fc.names)
 		})
 	}
-}
+})
 
 type lostReservationCreateClient struct{ *workerReadClient }
 
@@ -250,63 +203,51 @@ func (f *lostReservationCreateClient) CreateBareMetalInstance(ctx context.Contex
 	return nil, errors.New("lost successful Create acknowledgement")
 }
 
-func TestAttemptedLostCreateAcknowledgementRetainsAndRecoversIdentity(t *testing.T) {
-	r, fc, co := workerReadHarness(t)
-	reserveCleanupSlot(t, r, co)
+var _ = It("retains and recovers identity after a lost Create acknowledgement", func() {
+	r, fc, co := workerReadHarness()
+	reserveCleanupSlot(r, co)
 	r.fulfillment = &lostReservationCreateClient{workerReadClient: fc}
 	ctx := context.Background()
-	if _, err := runWorkerCapacityStage(t, r, co); err == nil {
-		t.Fatal("expected lost acknowledgement")
+	if _, err := runWorkerCapacityStage(r, co); err == nil {
+		Fail("expected lost acknowledgement")
 	}
-	if err := r.apiReader.Get(ctx, client.ObjectKeyFromObject(co), co); err != nil {
-		t.Fatal(err)
-	}
+	Expect(r.apiReader.Get(ctx, client.ObjectKeyFromObject(co), co)).To(Succeed())
 	w := co.Status.Workers[0]
-	if w.BMICreateState != v1alpha1.WorkerBMICreateStateAttempted || w.BareMetalInstance.ID != "" {
-		t.Fatalf("missing durable unknown outcome: %+v", w)
-	}
+	Expect(w.BMICreateState).To(Equal(v1alpha1.WorkerBMICreateStateAttempted), "missing durable unknown outcome: %+v", w)
+	Expect(w.BareMetalInstance.ID).To(Equal(""), "missing durable unknown outcome: %+v", w)
 	// Restart after a lost response; delayed visibility cannot authorize release.
 	for range 2 {
 		gone, err := r.cleanupWorker(ctx, co, &w)
-		if err == nil || gone {
-			t.Fatalf("delayed List released attempt: gone=%v err=%v", gone, err)
-		}
+		Expect(err).To(HaveOccurred(), "delayed List released attempt: gone=%v err=%v", gone, err)
+		Expect(gone).To(BeFalse(), "delayed List released attempt: gone=%v err=%v", gone, err)
 	}
 	fc.listed = fc.bmis
 	gone, err := r.cleanupWorker(ctx, co, &w)
-	if err != nil || gone || w.BareMetalInstance.ID != fc.bmis[0].GetId() {
-		t.Fatalf("owned recovery: gone=%v err=%v worker=%+v", gone, err, w)
-	}
-	if len(fc.names) != 1 {
-		t.Fatalf("cleanup created another incarnation: %v", fc.names)
-	}
-}
+	Expect(err).NotTo(HaveOccurred(), "owned recovery: gone=%v err=%v worker=%+v", gone, err, w)
+	Expect(gone).To(BeFalse(), "owned recovery: gone=%v err=%v worker=%+v", gone, err, w)
+	Expect(w.BareMetalInstance.ID).To(Equal(fc.bmis[0].GetId()), "owned recovery: gone=%v err=%v worker=%+v", gone, err, w)
+	Expect(fc.names).To(HaveLen(1), "cleanup created another incarnation: %v", fc.names)
+})
 
-func TestCreateRequiresPersistedIntentInPatchResponse(t *testing.T) {
-	r, fc, co := workerReadHarness(t)
-	reserveCleanupSlot(t, r, co)
+var _ = It("requires persisted Create intent in the status patch response", func() {
+	r, fc, co := workerReadHarness()
+	reserveCleanupSlot(r, co)
 	r.Client = &reservationStatusClient{Client: r.Client, stripState: true}
-	if _, err := runWorkerCapacityStage(t, r, co); err == nil {
-		t.Fatal("Create accepted a pruned intent write")
+	if _, err := runWorkerCapacityStage(r, co); err == nil {
+		Fail("Create accepted a pruned intent write")
 	}
-	if len(fc.names) != 0 {
-		t.Fatalf("Create issued without durable intent: %v", fc.names)
-	}
-}
+	Expect(fc.names).To(BeEmpty(), "Create issued without durable intent: %v", fc.names)
+})
 
-func TestRetryCleanupResetsCreateAuthorization(t *testing.T) {
-	r, fc, co := workerReadHarness(t)
+var _ = It("resets Create authorization only after retry cleanup confirms absence", func() {
+	r, fc, co := workerReadHarness()
 	co.Status.Workers[0].BMICreateState = v1alpha1.WorkerBMICreateStateAttempted
 	co.Status.Workers[0].Phase = workerPhaseFailed
-	if err := r.Status().Update(context.Background(), co); err != nil {
-		t.Fatal(err)
-	}
+	Expect(r.Status().Update(context.Background(), co)).To(Succeed())
 	fc.getErr = status.Error(codes.NotFound, "old incarnation gone")
-	if err := r.handleFailedWorkers(context.Background(), co); err != nil {
-		t.Fatal(err)
-	}
+	Expect(r.handleFailedWorkers(context.Background(), co)).To(Succeed())
 	w := co.Status.Workers[0]
-	if w.BMICreateState != v1alpha1.WorkerBMICreateStateReserved || w.BareMetalInstance.ID != "" || w.NextRetryTime == nil {
-		t.Fatalf("retry not safely reserved: %+v", w)
-	}
-}
+	Expect(w.BMICreateState).To(Equal(v1alpha1.WorkerBMICreateStateReserved), "retry not safely reserved: %+v", w)
+	Expect(w.BareMetalInstance.ID).To(Equal(""), "retry not safely reserved: %+v", w)
+	Expect(w.NextRetryTime).NotTo(BeNil(), "retry not safely reserved: %+v", w)
+})

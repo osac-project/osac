@@ -34,35 +34,39 @@ does not seed a tenant or any of the nine MCP resource types, so empty lists
 are expected on a fresh installation.
 
 MCP runs from the **Fulfillment service image**; it has no separate image to
-build or push. For a fresh cluster with a local source build, create the Kind
-infrastructure first, then build and load the image before installing OSAC.
-Use the same container runtime throughout (see the [installer's local-image
-instructions](../../../osac-installer/README.md#full-local-dev-environment-profiledev-full-kind-only)):
+build or push. To update an existing `dev-full` Kind installation with current
+MCP source, run these commands from the repository root. Use the same container
+runtime as Kind (see the [installer's local-image instructions](../../../osac-installer/README.md#full-local-dev-environment-profiledev-full-kind-only)):
 
 ```bash
 export PROFILE=dev-full
 export KUBECONFIG="$HOME/.kube/osac-dev-kind-root.kubeconfig"
-export CONTAINER_TOOL=docker  # Or podman, if that is your Kind runtime.
-export KIND_EXPERIMENTAL_PROVIDER="$CONTAINER_TOOL"
-make -C osac-installer install-infra \
-  PLATFORM=kind PROFILE="$PROFILE" NS=osac
+export FULFILLMENT_IMAGE_TAG=mcp-dev
 make -C fulfillment-service image-build \
-  IMG=localhost/fulfillment-service:osac-5841 CONTAINER_TOOL="$CONTAINER_TOOL"
+  IMG="localhost/fulfillment-service:$FULFILLMENT_IMAGE_TAG"
 make -C fulfillment-service kind-load-image \
-  IMG=localhost/fulfillment-service:osac-5841 CONTAINER_TOOL="$CONTAINER_TOOL"
+  IMG="localhost/fulfillment-service:$FULFILLMENT_IMAGE_TAG" NS=osac
 make -C osac-installer install-osac \
   PLATFORM=kind PROFILE="$PROFILE" NS=osac \
-  EXTRA_HELM_ARGS='--set service.mcp.enabled=true --set-string service.mcp.externalHostname=mcp.osac.localhost --set service.mcp.externalPort=8443 --set-string service.images.service.repository=localhost/fulfillment-service --set-string service.images.service.tag=osac-5841 --set service.images.service.pullPolicy=Never'
-make -C osac-installer install-devstack \
-  PLATFORM=kind PROFILE="$PROFILE" NS=osac
+  EXTRA_HELM_ARGS="--set service.mcp.enabled=true --set-string service.mcp.externalHostname=mcp.osac.localhost --set service.mcp.externalPort=8443 --set-string service.images.service.repository=localhost/fulfillment-service --set-string service.images.service.tag=$FULFILLMENT_IMAGE_TAG --set service.images.service.pullPolicy=Never"
 ```
 
-On an existing `dev-full` cluster, skip `install-infra` and `install-devstack`
-if they are already installed. After rebuilding, `kind-load-image` restarts
-workloads that already use the same image tag; run `install-osac` to apply a
-new image tag or MCP values. The image override applies to both the
-Fulfillment API and MCP server. A `localhost/` image with `pullPolicy=Never`
-must be loaded into Kind; no registry push is needed.
+On a fresh cluster, run
+`make -C osac-installer install-infra PLATFORM=kind PROFILE=dev-full NS=osac`
+before `image-build`, and run
+`make -C osac-installer install-devstack PLATFORM=kind PROFILE=dev-full NS=osac`
+after `install-osac`.
+Passing `PROFILE=dev-full` to `install-osac` applies the dev-full OSAC values
+but does **not** install the `osac-devstack` Helm release or seed `tenant1` and
+the catalog. If that release is missing from `helm list -n osac`, run the
+`install-devstack` command above. After it finishes, sign in again as
+`tenant1_user` or `tenant1_admin` so the new token includes tenant membership.
+The cluster must exist before `kind-load-image` runs. Loading a rebuilt image
+restarts workloads already using that tag; `install-osac` also applies a new
+image tag or MCP values. The override applies to both the Fulfillment API and
+MCP server. A `localhost/` image with `pullPolicy=Never` must be loaded into
+Kind; no registry push is needed. Keep `EXTRA_HELM_ARGS` on the `install-osac`
+invocation so it does not affect unrelated Helm installs.
 
 ## Get connection values
 

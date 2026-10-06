@@ -20,6 +20,7 @@ import (
 	. "github.com/onsi/gomega"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
@@ -51,12 +52,28 @@ var _ = Describe("Public cluster versions server", func() {
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 
+			// These visibility tests use valid versions with a common available disk image.
+			diskImagesDao, err := dao.NewGenericDAO[*privatev1.DiskImage]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			diskImage, err := diskImagesDao.Create().SetObject(privatev1.DiskImage_builder{
+				Metadata: privatev1.Metadata_builder{Name: "public-cluster-version-image", Tenant: testTenant}.Build(),
+				Spec: privatev1.DiskImageSpec_builder{
+					Lifecycle: privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE,
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			diskImageRef := privatev1.DiskImageReference_builder{Id: diskImage.GetObject().GetId()}.Build()
+
 			// Helper to create a cluster version via the private server.
 			createClusterVersion = func(name string, version string,
 				opts ...func(*privatev1.ClusterVersionSpec_builder)) *privatev1.ClusterVersion {
 				spec := privatev1.ClusterVersionSpec_builder{
-					Version: version,
-					Image:   "quay.io/ocp:" + version,
+					Version:   version,
+					Image:     "quay.io/ocp:" + version,
+					DiskImage: diskImageRef,
 				}
 				for _, opt := range opts {
 					opt(&spec)

@@ -207,9 +207,10 @@ func (s *PrivateClusterVersionsServer) Update(ctx context.Context,
 		return nil, err
 	}
 
-	// Reject explicit is_default=true on ineligible versions (OBSOLETE or disabled).
-	// The auto-clear path in applyClusterVersionStateEffects handles the transition case
-	// where is_default is not in the mask.
+	// Reject explicit is_default=true on disabled or obsolete versions. The candidate
+	// validation below also checks the resolved disk image after the update mask applies.
+	// The auto-clear path in applyClusterVersionStateEffects handles transitions where
+	// is_default is not in the mask.
 	if updateIncludesField(request.GetUpdateMask(), "spec.is_default") &&
 		request.GetObject().GetSpec().GetIsDefault() {
 		if !resolveEnabled(existing, request) {
@@ -244,6 +245,9 @@ func (s *PrivateClusterVersionsServer) Update(ctx context.Context,
 				}
 			}
 			if candidate.GetSpec().GetIsDefault() {
+				if err := validateIsDefaultEligibility(candidate); err != nil {
+					return err
+				}
 				return s.unsetPreviousDefaultClusterVersion(ctx, id)
 			}
 			return nil
@@ -391,7 +395,7 @@ func resolveEnabled(existing *privatev1.ClusterVersion,
 	return true
 }
 
-// validateIsDefaultEligibility rejects is_default on disabled or obsolete versions.
+// validateIsDefaultEligibility rejects is_default on disabled, obsolete, or unusable versions.
 func validateIsDefaultEligibility(cv *privatev1.ClusterVersion) error {
 	if !cv.GetSpec().GetEnabled() {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
@@ -400,6 +404,10 @@ func validateIsDefaultEligibility(cv *privatev1.ClusterVersion) error {
 	if cv.GetSpec().GetState() == privatev1.ClusterVersionState_CLUSTER_VERSION_STATE_OBSOLETE {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"cannot set 'is_default' on an obsolete cluster version")
+	}
+	if refKey(cv.GetSpec().GetDiskImage()) == "" {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"cannot set 'is_default' on a cluster version without a disk image")
 	}
 	return nil
 }

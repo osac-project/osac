@@ -205,8 +205,7 @@ func (s *PrivateClusterTemplatesServer) validateSpecDefaultsVersion(
 	if versionRef == nil || versionRef.GetName() == "" {
 		return nil
 	}
-	_, err := lookupAndValidateClusterVersion(ctx, s.logger, s.clusterVersionsDao, versionRef.GetName())
-	return err
+	return lookupAndValidateClusterVersion(ctx, s.logger, s.clusterVersionsDao, versionRef.GetName())
 }
 
 func (s *PrivateClusterTemplatesServer) Delete(ctx context.Context,

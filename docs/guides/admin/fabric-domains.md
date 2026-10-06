@@ -125,10 +125,10 @@ Feedback copies the conditions and backend/member status to the API.
 
 `Ready=True` means the requested Server Cluster job succeeded with a valid
 backend ID, AAP confirmed a non-empty VPC ID matching the requested VirtualNetwork,
-and the latest completed job's non-empty config version matches the current
-desired configuration. Phase 1 member states follow the whole job; they do not
-independently verify NIC connectivity, RoCE performance, or per-server attachment
-health.
+and, when the latest completed job returns a non-empty config version, it matches
+the current desired configuration. Phase 1 member states follow the whole job;
+they do not independently verify NIC connectivity, RoCE performance, or
+per-server attachment health.
 Disabled networking provisioning is not reported as a provisioned domain.
 
 ## Observe provisioning

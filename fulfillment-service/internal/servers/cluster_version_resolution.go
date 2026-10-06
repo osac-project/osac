@@ -76,15 +76,12 @@ func lookupAndValidateClusterVersion(
 	logger *slog.Logger,
 	clusterVersionsDao *dao.GenericDAO[*privatev1.ClusterVersion],
 	versionName string,
-) (*privatev1.ClusterVersion, error) {
+) error {
 	cv, err := lookupClusterVersionByName(ctx, logger, clusterVersionsDao, versionName)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if err := validateResolvedClusterVersion(cv, versionName, ""); err != nil {
-		return nil, err
-	}
-	return cv, nil
+	return validateResolvedClusterVersion(cv, versionName, "")
 }
 
 // buildClusterVersionReference creates a ClusterVersionReference from a ClusterVersion.

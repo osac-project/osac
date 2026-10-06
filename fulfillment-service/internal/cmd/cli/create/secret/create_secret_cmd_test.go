@@ -36,6 +36,7 @@ var _ = Describe("parseSecretType", func() {
 		Entry("kubeconfig", "kubeconfig", publicv1.SecretType_SECRET_TYPE_KUBECONFIG),
 		Entry("user data", "user-data", publicv1.SecretType_SECRET_TYPE_USER_DATA),
 		Entry("value", "value", publicv1.SecretType_SECRET_TYPE_VALUE),
+		Entry("ssh public key", "ssh-public-key", publicv1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY),
 	)
 
 	It("rejects an unknown type", func() {

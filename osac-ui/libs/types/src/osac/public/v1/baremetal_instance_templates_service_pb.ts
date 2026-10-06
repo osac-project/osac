@@ -285,3 +285,4 @@ export const BareMetalInstanceTemplates: GenService<{
   },
 }> = /*@__PURE__*/
   serviceDesc(file_osac_public_v1_baremetal_instance_templates_service, 0);
+

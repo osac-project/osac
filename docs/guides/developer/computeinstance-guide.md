@@ -5,6 +5,7 @@ or the gRPC / REST API.
 It assumes you already have a Tenant in `Ready` state (see [Tenant Setup Guide](tenant-setup.md))
 and networking resources set up (see [Networking Guide](networking-guide.md)).
 For per-disk storage tier selection, see [Storage tier selection](#storage-tier-selection).
+To change a VM's InstanceType after creation, see [Resizing a VM](computeinstance-resize-guide.md).
 
 ## Contents
 
@@ -12,6 +13,7 @@ For per-disk storage tier selection, see [Storage tier selection](#storage-tier-
 - [Storage tier selection](#storage-tier-selection)
 - [Step 1: Find a Compute Instance Catalog Item](#step-1-find-a-compute-instance-catalog-item)
 - [Step 2: Choose an instance type](#step-2-choose-an-instance-type)
+- [Register an SSH key](#register-an-ssh-key)
 - [Step 3: Create the ComputeInstance](#step-3-create-the-computeinstance)
 - [Step 4: Monitor the instance](#step-4-monitor-the-instance)
 - [Step 5: Access the console](#step-5-access-the-console)
@@ -323,6 +325,31 @@ For details on instance type lifecycle and management, see
 
 ---
 
+## Register an SSH key
+
+ComputeInstances can use a registered SSH public key stored in a tenant-scoped Secret. Create the
+Secret before creating the VM:
+
+```bash
+osac create secret \
+  --name <ssh-key-name> \
+  --type ssh-public-key \
+  --from-file public_key=$HOME/.ssh/id_ed25519.pub
+```
+
+The Secret must contain the OpenSSH public key under the `public_key` data entry. List Secrets with
+`osac get secrets`, inspect one with `osac get secret <name-or-id> -o yaml`, and delete one you no
+longer need with `osac delete secret <name-or-id>`. API clients manage the same Secret through
+`osac.public.v1.Secrets` or `POST /api/fulfillment/v1/secrets`, using type
+`SECRET_TYPE_SSH_PUBLIC_KEY` and the `public_key` data entry.
+
+The SSH key is optional. When used, OSAC configures it on the VM's first boot through cloud-init.
+Use it with cloud-init-compatible images; it is not supported with Windows disk images or
+ignition-based user data. The `ssh_key` reference cannot be changed after the ComputeInstance is
+created. API requests can refer to the Secret by name or ID.
+
+---
+
 ## Step 3: Create the ComputeInstance
 
 Create the ComputeInstance using the CLI or API. Use the catalog item and specify
@@ -342,7 +369,7 @@ osac create computeinstance \
   --catalog-item <catalog-item-name-or-id> \
   --instance-type <instance-type-name> \
   --image quay.io/containerdisks/fedora:latest \
-  --ssh-public-key "$(cat ~/.ssh/id_ed25519.pub)" \
+  --ssh-key <ssh-key-name> \
   --boot-disk-size 10 \
   --boot-disk-storage-tier <boot-tier> \
   --additional-disk size=50,storage-tier=<data-tier> \
@@ -370,7 +397,7 @@ grpcurl $GRPCURL_FLAGS -H "Authorization: Bearer $TOKEN" -d '{
         "source_type": "registry",
         "source_ref": "quay.io/containerdisks/fedora:latest"
       },
-      "ssh_public_key": "<ssh-public-key>",
+      "ssh_key": {"name": "<ssh-key-name>"},
       "boot_disk": {
         "size_gib": 10,
         "storage_tier": {"name": "<boot-tier>"}
@@ -403,7 +430,7 @@ curl -fsS $CURL_FLAGS -X POST -H "Authorization: Bearer $TOKEN" \
       "source_type": "registry",
       "source_ref": "quay.io/containerdisks/fedora:latest"
     },
-    "ssh_public_key": "<ssh-public-key>",
+    "ssh_key": {"name": "<ssh-key-name>"},
     "boot_disk": {
       "size_gib": 10,
       "storage_tier": {"name": "<boot-tier>"}
@@ -420,8 +447,8 @@ curl -fsS $CURL_FLAGS -X POST -H "Authorization: Bearer $TOKEN" \
 }' "https://$OSAC_API/api/fulfillment/v1/compute_instances"
 ```
 
-> **Note:** The `--ssh-public-key` flag installs your SSH public key on the VM, enabling SSH access
-> once the instance is running. The `--user-data` field uses cloud-init format. The example
+> **Note:** The `--ssh-key` flag refers to a registered SSH public key Secret by name. The
+> `--user-data` field uses cloud-init format. The example
 > above creates a user and disables password expiry, allowing you to log in via the VM
 > console. Adjust the username and password as needed.
 >
@@ -459,7 +486,8 @@ spec:
   image:
     source_ref: quay.io/containerdisks/fedora:latest
     source_type: registry
-  ssh_public_key: <ssh-public-key>
+  ssh_key:
+    name: <ssh-key-name>
   boot_disk:
     size_gib: 10
     storage_tier:

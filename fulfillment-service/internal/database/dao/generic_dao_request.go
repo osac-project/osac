@@ -324,17 +324,6 @@ func (r *request[O]) unmarshalData(data []byte, object O) error {
 	return r.dao.unmarshalOptions.Unmarshal(data, object)
 }
 
-func (r *request[O]) fireEvent(ctx context.Context, event Event) error {
-	event.Table = r.dao.table
-	for _, eventCallback := range r.dao.eventCallbacks {
-		err := eventCallback(ctx, event)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (r *request[O]) getFinalizers(metadata metadataIface) []string {
 	if metadata == nil {
 		return []string{}
@@ -385,7 +374,7 @@ func (r *request[O]) queryRow(ctx context.Context, op opType, sql string, args .
 			"Running SQL operation",
 			slog.String("type", string(op)),
 			slog.String("sql", r.cleanSQL(sql)),
-			slog.Any("parameters", args),
+			slog.Int("parameter_count", len(args)),
 		)
 	}
 	return r.tx.QueryRow(ctx, sql, args...)
@@ -400,7 +389,7 @@ func (r *request[O]) query(ctx context.Context, op opType, sql string, args ...a
 			"Running SQL operation",
 			slog.String("type", string(op)),
 			slog.String("sql", r.cleanSQL(sql)),
-			slog.Any("parameters", args),
+			slog.Int("parameter_count", len(args)),
 		)
 	}
 	rows, err = r.tx.Query(ctx, sql, args...)
@@ -416,7 +405,7 @@ func (r *request[O]) exec(ctx context.Context, op opType, sql string, args ...an
 			"Running SQL operation",
 			slog.String("type", string(op)),
 			slog.String("sql", r.cleanSQL(sql)),
-			slog.Any("parameters", args),
+			slog.Int("parameter_count", len(args)),
 		)
 	}
 	start := time.Now()

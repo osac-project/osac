@@ -1,0 +1,13 @@
+.catalog-item-icon {
+  border-radius: var(--pf-t--global--border--radius--medium);
+  background-color: var(--pf-t--global--background--color--secondary--default);
+  width: 2.75rem;
+  height: 2.75rem;
+  justify-content: center;
+  align-items: center;
+  display: inline-flex;
+}
+
+.catalog-item-icon .pf-v6-svg {
+  color: var(--pf-t--color--red--50);
+}

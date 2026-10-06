@@ -19,6 +19,8 @@ func TestSchemaSQLIncludesNormalizedBMaaSMeterStateTable(t *testing.T) {
 		"CREATE TABLE IF NOT EXISTS metering_resource_meter_state",
 		"PRIMARY KEY (resource_id, meter_type)",
 		"REFERENCES metering_resource_state(resource_id) ON DELETE CASCADE",
+		"deleted_at        TIMESTAMPTZ",
+		"ALTER TABLE metering_resource_state ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ",
 	} {
 		if !strings.Contains(schemaSQL, statement) {
 			t.Errorf("schemaSQL does not contain %q", statement)

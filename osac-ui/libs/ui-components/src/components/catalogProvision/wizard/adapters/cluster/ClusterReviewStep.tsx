@@ -8,6 +8,7 @@ import {
   Spinner,
   Stack,
   StackItem,
+  Title,
 } from '@patternfly/react-core';
 import { useFormikContext } from 'formik';
 
@@ -30,6 +31,7 @@ import { ClusterWizardValues } from './fields';
 import { findVersionByName, versionDisplayName } from './versionUtils';
 import { useTranslation } from '../../../../../hooks/useTranslation';
 import { formatReviewScalar } from '../../catalogOverlay';
+import { NetworkAttachmentReviewFields } from '../NetworkAttachmentReviewFields';
 
 const formatNodeSetsForReview = (
   hostTypes: HostType[],
@@ -74,6 +76,8 @@ export const ClusterReviewStep = ({ catalogItem }: Props) => {
     isLoading: projectsLoading,
     error: projectsError,
   } = useProjects({ filter: fullProjectPathToQueryFilter(values.metadata.project) });
+
+  const isCustomNetwork = !values.spec.useDefaultNetwork;
 
   const versionDisplay = versionDisplayName(
     findVersionByName(versions, values.spec.versionName),
@@ -154,7 +158,43 @@ export const ClusterReviewStep = ({ catalogItem }: Props) => {
               {formatNodeSetsForReview(data, values.spec.nodeSetRows)}
             </DescriptionListDescription>
           </DescriptionListGroup>
+        </DescriptionList>
+      </StackItem>
 
+      <StackItem>
+        <Title headingLevel="h3">{t('Infrastructure Networking')}</Title>
+      </StackItem>
+      <StackItem>
+        <DescriptionList isHorizontal isCompact>
+          <DescriptionListGroup>
+            <DescriptionListTerm>{t('Network')}</DescriptionListTerm>
+            <DescriptionListDescription>
+              {isCustomNetwork ? t('Custom') : t('Tenant default')}
+            </DescriptionListDescription>
+          </DescriptionListGroup>
+
+          {isCustomNetwork && (
+            <NetworkAttachmentReviewFields
+              virtualNetwork={values.spec.networkAttachment.virtualNetwork}
+              subnet={values.spec.networkAttachment.subnet}
+              securityGroups={values.spec.networkAttachment.securityGroups}
+            />
+          )}
+
+          <DescriptionListGroup>
+            <DescriptionListTerm>{t('Auto attach external IP')}</DescriptionListTerm>
+            <DescriptionListDescription>
+              {values.spec.autoExternalIpAttachment ? t('Yes') : t('No')}
+            </DescriptionListDescription>
+          </DescriptionListGroup>
+        </DescriptionList>
+      </StackItem>
+
+      <StackItem>
+        <Title headingLevel="h3">{t('Cluster Networking')}</Title>
+      </StackItem>
+      <StackItem>
+        <DescriptionList isHorizontal isCompact>
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Pod CIDR')}</DescriptionListTerm>
             <DescriptionListDescription>

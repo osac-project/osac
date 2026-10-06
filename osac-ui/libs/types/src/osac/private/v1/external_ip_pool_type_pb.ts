@@ -18,6 +18,7 @@
 import type { GenEnum, GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import { enumDesc, fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
 import { file_cleanapi_cleanapi } from "../../../cleanapi/cleanapi_pb";
+import { file_buf_validate_validate } from "../../../buf/validate/validate_pb";
 import { file_google_api_field_behavior } from "../../../google/api/field_behavior_pb";
 import type { IPFamily } from "./ip_family_type_pb";
 import { file_osac_private_v1_ip_family_type } from "./ip_family_type_pb";
@@ -29,13 +30,13 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/private/v1/external_ip_pool_type.proto.
  */
 export const file_osac_private_v1_external_ip_pool_type: GenFile = /*@__PURE__*/
-  fileDesc("Citvc2FjL3ByaXZhdGUvdjEvZXh0ZXJuYWxfaXBfcG9vbF90eXBlLnByb3RvEg9vc2FjLnByaXZhdGUudjEiswEKDkV4dGVybmFsSVBQb29sEgoKAmlkGAEgASgJEisKCG1ldGFkYXRhGAIgASgLMhkub3NhYy5wcml2YXRlLnYxLk1ldGFkYXRhEjEKBHNwZWMYAyABKAsyIy5vc2FjLnByaXZhdGUudjEuRXh0ZXJuYWxJUFBvb2xTcGVjEjUKBnN0YXR1cxgEIAEoCzIlLm9zYWMucHJpdmF0ZS52MS5FeHRlcm5hbElQUG9vbFN0YXR1cyKWAQoSRXh0ZXJuYWxJUFBvb2xTcGVjEhsKBWNpZHJzGAIgAygJQgzgQQLgQQWKtRgCCAESNAoJaXBfZmFtaWx5GAMgASgOMhkub3NhYy5wcml2YXRlLnYxLklQRmFtaWx5QgbgQQLgQQUSLQoXaW1wbGVtZW50YXRpb25fc3RyYXRlZ3kYBCABKAlCDOBBA+BBBYq1GAIIASLrAQoURXh0ZXJuYWxJUFBvb2xTdGF0dXMSPgoFc3RhdGUYASABKA4yJC5vc2FjLnByaXZhdGUudjEuRXh0ZXJuYWxJUFBvb2xTdGF0ZUIJ4EEDirUYAggBEh8KB21lc3NhZ2UYAiABKAlCCeBBA4q1GAIIAUgAiAEBEhYKA2h1YhgDIAEoCUIJ4EEDirUYAggBEhgKBXRvdGFsGAQgASgDQgngQQOKtRgCCAESHAoJYWxsb2NhdGVkGAUgASgDQgngQQOKtRgCCAESFgoJYXZhaWxhYmxlGAYgASgDQgPgQQNCCgoIX21lc3NhZ2UiVAoXRXh0ZXJuYWxJUFBvb2xSZWZlcmVuY2USCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCRIPCgdwcm9qZWN0GAMgASgJEg4KBnNoYXJlZBgEIAEoCCr9AQoTRXh0ZXJuYWxJUFBvb2xTdGF0ZRImCiJFWFRFUk5BTF9JUF9QT09MX1NUQVRFX1VOU1BFQ0lGSUVEEAASIgoeRVhURVJOQUxfSVBfUE9PTF9TVEFURV9QRU5ESU5HEAESIAocRVhURVJOQUxfSVBfUE9PTF9TVEFURV9SRUFEWRACEiEKHUVYVEVSTkFMX0lQX1BPT0xfU1RBVEVfRkFJTEVEEAMSIwofRVhURVJOQUxfSVBfUE9PTF9TVEFURV9ERUxFVElORxAEEigKJEVYVEVSTkFMX0lQX1BPT0xfU1RBVEVfREVMRVRFX0ZBSUxFRBAFGgaKtRgCCAFCFIq1GBASDm9zYWMucHVibGljLnYxYgZwcm90bzM", [file_cleanapi_cleanapi, file_google_api_field_behavior, file_osac_private_v1_ip_family_type, file_osac_private_v1_metadata_type]);
+  fileDesc("Citvc2FjL3ByaXZhdGUvdjEvZXh0ZXJuYWxfaXBfcG9vbF90eXBlLnByb3RvEg9vc2FjLnByaXZhdGUudjEiswEKDkV4dGVybmFsSVBQb29sEgoKAmlkGAEgASgJEisKCG1ldGFkYXRhGAIgASgLMhkub3NhYy5wcml2YXRlLnYxLk1ldGFkYXRhEjEKBHNwZWMYAyABKAsyIy5vc2FjLnByaXZhdGUudjEuRXh0ZXJuYWxJUFBvb2xTcGVjEjUKBnN0YXR1cxgEIAEoCzIlLm9zYWMucHJpdmF0ZS52MS5FeHRlcm5hbElQUG9vbFN0YXR1cyKDAgoSRXh0ZXJuYWxJUFBvb2xTcGVjEnwKBWNpZHJzGAIgAygJQm3gQQLgQQW6SF6SAVsIARABIlW6AU4KE2Nhbm9uaWNhbF9pcHY0X2NpZHISHW11c3QgYmUgYSBjYW5vbmljYWwgSVB2NCBDSURSGhh0aGlzLmlzSXBQcmVmaXgoNCwgdHJ1ZSlyAhABirUYAggBEkAKCWlwX2ZhbWlseRgDIAEoDjIZLm9zYWMucHJpdmF0ZS52MS5JUEZhbWlseUIS4EEC4EEFukgJggEGEAEgACACEi0KF2ltcGxlbWVudGF0aW9uX3N0cmF0ZWd5GAQgASgJQgzgQQPgQQWKtRgCCAEi6wEKFEV4dGVybmFsSVBQb29sU3RhdHVzEj4KBXN0YXRlGAEgASgOMiQub3NhYy5wcml2YXRlLnYxLkV4dGVybmFsSVBQb29sU3RhdGVCCeBBA4q1GAIIARIfCgdtZXNzYWdlGAIgASgJQgngQQOKtRgCCAFIAIgBARIWCgNodWIYAyABKAlCCeBBA4q1GAIIARIYCgV0b3RhbBgEIAEoA0IJ4EEDirUYAggBEhwKCWFsbG9jYXRlZBgFIAEoA0IJ4EEDirUYAggBEhYKCWF2YWlsYWJsZRgGIAEoA0ID4EEDQgoKCF9tZXNzYWdlIlQKF0V4dGVybmFsSVBQb29sUmVmZXJlbmNlEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSDwoHcHJvamVjdBgDIAEoCRIOCgZzaGFyZWQYBCABKAgq/QEKE0V4dGVybmFsSVBQb29sU3RhdGUSJgoiRVhURVJOQUxfSVBfUE9PTF9TVEFURV9VTlNQRUNJRklFRBAAEiIKHkVYVEVSTkFMX0lQX1BPT0xfU1RBVEVfUEVORElORxABEiAKHEVYVEVSTkFMX0lQX1BPT0xfU1RBVEVfUkVBRFkQAhIhCh1FWFRFUk5BTF9JUF9QT09MX1NUQVRFX0ZBSUxFRBADEiMKH0VYVEVSTkFMX0lQX1BPT0xfU1RBVEVfREVMRVRJTkcQBBIoCiRFWFRFUk5BTF9JUF9QT09MX1NUQVRFX0RFTEVURV9GQUlMRUQQBRoGirUYAggBQhSKtRgQEg5vc2FjLnB1YmxpYy52MWIGcHJvdG8z", [file_cleanapi_cleanapi, file_buf_validate_validate, file_google_api_field_behavior, file_osac_private_v1_ip_family_type, file_osac_private_v1_metadata_type]);
 
 /**
  * Represents a pool of external IP addresses available for allocation.
  *
- * Each ExternalIPPool supports a single IP family (IPv4 or IPv6). The pool contains one or more CIDR
- * ranges from which individual ExternalIP addresses are allocated. Pools are provider-managed
+ * Each ExternalIPPool currently supports one canonical IPv4 CIDR from which individual ExternalIP addresses are
+ * allocated. Pools are provider-managed
  * resources created by administrators through the private API.
  *
  * "External" means external to the VirtualNetwork. The addresses may be internet-routable or
@@ -96,13 +97,12 @@ export const ExternalIPPoolSchema: GenMessage<ExternalIPPool> = /*@__PURE__*/
  */
 export type ExternalIPPoolSpec = Message<"osac.private.v1.ExternalIPPoolSpec"> & {
   /**
-   * CIDR ranges for this pool. Required and immutable after creation.
+   * The single canonical IPv4 CIDR for this pool. Required and immutable after creation.
    *
-   * Each entry must be valid CIDR notation matching the declared ip_family. All CIDRs must be
-   * the same IP family. CIDRs must not overlap with CIDRs in other pools.
+   * The CIDR must use canonical network notation with no host bits set. It must not overlap with
+   * CIDRs in other pools.
    *
-   * Example (IPv4): ["192.168.1.0/24", "10.0.5.0/28"]
-   * Example (IPv6): ["2001:db8::/64"]
+   * Example: ["192.168.1.0/24"]
    *
    * @generated from field: repeated string cidrs = 2;
    */
@@ -111,8 +111,7 @@ export type ExternalIPPoolSpec = Message<"osac.private.v1.ExternalIPPoolSpec"> &
   /**
    * IP address family for this pool. Required and immutable after creation.
    *
-   * Determines whether the CIDRs in this pool are IPv4 or IPv6. All CIDRs must match this
-   * family. A single pool cannot mix IPv4 and IPv6 ranges.
+   * The only supported family is IP_FAMILY_IPV4. IPv6 and unspecified-family pools are rejected.
    *
    * @generated from field: osac.private.v1.IPFamily ip_family = 3;
    */
@@ -320,3 +319,4 @@ export enum ExternalIPPoolState {
  */
 export const ExternalIPPoolStateSchema: GenEnum<ExternalIPPoolState> = /*@__PURE__*/
   enumDesc(file_osac_private_v1_external_ip_pool_type, 0);
+

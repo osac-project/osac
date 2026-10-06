@@ -193,6 +193,18 @@ def pytest_generate_tests(metafunc):
 
 class TestRealTemplateMetadata:
 
+    def test_removed_cluster_node_defaults_are_not_metadata_fields(self):
+        metadata = Metadata.model_validate(
+            {
+                "title": "Cluster",
+                "default_node_request": [{"resourceClass": "fc430", "numberOfNodes": 3}],
+                "allowed_resource_classes": ["fc430"],
+            }
+        )
+
+        assert "default_node_request" not in metadata.model_dump()
+        assert "allowed_resource_classes" not in metadata.model_dump()
+
     def test_roles_dir_exists(self, roles_dir):
         assert roles_dir.exists(), f"Template roles directory not found: {roles_dir}"
 
@@ -222,6 +234,25 @@ class TestRealTemplateMetadata:
                 dumped = param.default.model_dump(by_alias=True)
                 assert "@type" in dumped
                 assert "value" in dumped
+
+    def test_accepts_east_west_ethernet_capability(self):
+        metadata = Metadata.model_validate(
+            {
+                "title": "Netris",
+                "template_type": "network",
+                "capabilities": {
+                    "supports_east_west_ethernet": True,
+                },
+            }
+        )
+
+        assert metadata.capabilities == {"supports_east_west_ethernet": True}
+
+    def test_netris_metadata_contains_east_west_ethernet_capability(self):
+        metadata = _load_metadata(_roles_dir_path(), "netris")
+
+        assert metadata.capabilities["supports_east_west_ethernet"] is True
+        assert "supports_east_west" not in metadata.capabilities
 
 
 # ---------------------------------------------------------------------------
@@ -257,6 +288,7 @@ class TestMetadataTemplateTypes:
             ("ocp_small", TemplateTypeEnum.cluster),
             ("ocp_virt_vm", TemplateTypeEnum.compute_instance),
             ("cudn_net", TemplateTypeEnum.network),
+            ("agentless_net", TemplateTypeEnum.network),
             ("bm_host_agent_provisioning", TemplateTypeEnum.bare_metal_instance),
             ("vast_storage", TemplateTypeEnum.storage_provider),
             ("cert_manager", TemplateTypeEnum.addon_operator),
@@ -361,8 +393,6 @@ class TestAddOnOperatorTemplate:
             title="OpenShift Small Cluster",
             description="A cluster.",
             parameters=[],
-            default_node_request=[],
-            allowed_resource_classes=[],
         )
         monkeypatch.setattr(
             filter_plugin,

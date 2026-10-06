@@ -1,5 +1,5 @@
 import { type MessageInitShape } from '@bufbuild/protobuf';
-import { useMutation } from '@tanstack/react-query';
+import { keepPreviousData, useMutation } from '@tanstack/react-query';
 
 import {
   Architecture,
@@ -132,6 +132,7 @@ export const useDiskImages = (
   return useApiQuery({
     queryKey: apiQueryKey('v1/disk_images', undefined, effectiveParams),
     queryFn: () => client.list(effectiveParams),
+    placeholderData: keepPreviousData,
     select: (data) => data.items,
     enabled: options.enabled ?? true,
   });

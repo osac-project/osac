@@ -63,7 +63,9 @@ export const VmCreatePage = () => {
                 {t('Virtual Machines')}
               </Button>
             </BreadcrumbItem>
-            <BreadcrumbItem isActive>{t('catalogProvision.vm.breadcrumbCreate')}</BreadcrumbItem>
+            <BreadcrumbItem isActive>
+              {t('catalogProvision.vm.breadcrumbLaunchInstance')}
+            </BreadcrumbItem>
           </Breadcrumb>
           <Title headingLevel="h1" size="3xl">
             {t('catalogProvision.vm.wizardTitle')}

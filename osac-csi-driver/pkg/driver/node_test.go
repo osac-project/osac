@@ -16,11 +16,16 @@ import (
 
 type fakeNodePlugin struct {
 	csi.UnimplementedNodeServer
-	stageCalled     bool
-	unstageCalled   bool
-	publishCalled   bool
-	unpublishCalled bool
-	statsCalled     bool
+	stageCalled       bool
+	unstageCalled     bool
+	publishCalled     bool
+	unpublishCalled   bool
+	statsCalled       bool
+	stageVolumeID     string
+	unstageVolumeID   string
+	publishVolumeID   string
+	unpublishVolumeID string
+	statsVolumeID     string
 
 	stageErr     error
 	unstageErr   error
@@ -30,40 +35,45 @@ type fakeNodePlugin struct {
 	statsErr     error
 }
 
-func (f *fakeNodePlugin) NodeStageVolume(_ context.Context, _ *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
+func (f *fakeNodePlugin) NodeStageVolume(_ context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
 	f.stageCalled = true
+	f.stageVolumeID = req.GetVolumeId()
 	if f.stageErr != nil {
 		return nil, f.stageErr
 	}
 	return &csi.NodeStageVolumeResponse{}, nil
 }
 
-func (f *fakeNodePlugin) NodeUnstageVolume(_ context.Context, _ *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error) {
+func (f *fakeNodePlugin) NodeUnstageVolume(_ context.Context, req *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error) {
 	f.unstageCalled = true
+	f.unstageVolumeID = req.GetVolumeId()
 	if f.unstageErr != nil {
 		return nil, f.unstageErr
 	}
 	return &csi.NodeUnstageVolumeResponse{}, nil
 }
 
-func (f *fakeNodePlugin) NodePublishVolume(_ context.Context, _ *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
+func (f *fakeNodePlugin) NodePublishVolume(_ context.Context, req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
 	f.publishCalled = true
+	f.publishVolumeID = req.GetVolumeId()
 	if f.publishErr != nil {
 		return nil, f.publishErr
 	}
 	return &csi.NodePublishVolumeResponse{}, nil
 }
 
-func (f *fakeNodePlugin) NodeUnpublishVolume(_ context.Context, _ *csi.NodeUnpublishVolumeRequest) (*csi.NodeUnpublishVolumeResponse, error) {
+func (f *fakeNodePlugin) NodeUnpublishVolume(_ context.Context, req *csi.NodeUnpublishVolumeRequest) (*csi.NodeUnpublishVolumeResponse, error) {
 	f.unpublishCalled = true
+	f.unpublishVolumeID = req.GetVolumeId()
 	if f.unpublishErr != nil {
 		return nil, f.unpublishErr
 	}
 	return &csi.NodeUnpublishVolumeResponse{}, nil
 }
 
-func (f *fakeNodePlugin) NodeGetVolumeStats(_ context.Context, _ *csi.NodeGetVolumeStatsRequest) (*csi.NodeGetVolumeStatsResponse, error) {
+func (f *fakeNodePlugin) NodeGetVolumeStats(_ context.Context, req *csi.NodeGetVolumeStatsRequest) (*csi.NodeGetVolumeStatsResponse, error) {
 	f.statsCalled = true
+	f.statsVolumeID = req.GetVolumeId()
 	if f.statsErr != nil {
 		return nil, f.statsErr
 	}
@@ -577,10 +587,79 @@ func TestNodeGetVolumeStats(t *testing.T) {
 	})
 }
 
+func TestNodeServerUsesVendorVolumeID(t *testing.T) {
+	ctx := context.Background()
+	sock, plugin, cleanup := startFakeNodePlugin(t)
+	defer cleanup()
+	ns := newTestNodeServer(t, "vendor-a", sock)
+	volumeContext := map[string]string{
+		"osac.backend":            "vendor-a",
+		"osac.volume-id":          "generic-vendor-id",
+		topolvmVolumeIDContextKey: "topolvm-vendor-id",
+	}
+
+	_, err := ns.NodeStageVolume(ctx, &csi.NodeStageVolumeRequest{
+		VolumeId:          "fulfillment-volume-id",
+		StagingTargetPath: "/staging/volume",
+		VolumeCapability:  blockCap(),
+		VolumeContext:     volumeContext,
+	})
+	if err != nil {
+		t.Fatalf("stage: %v", err)
+	}
+
+	_, err = ns.NodePublishVolume(ctx, &csi.NodePublishVolumeRequest{
+		VolumeId:         "fulfillment-volume-id",
+		TargetPath:       "/target/volume",
+		VolumeCapability: blockCap(),
+		VolumeContext:    volumeContext,
+	})
+	if err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	_, err = ns.NodeGetVolumeStats(ctx, &csi.NodeGetVolumeStatsRequest{
+		VolumeId:   "fulfillment-volume-id",
+		VolumePath: "/target/volume",
+	})
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+
+	_, err = ns.NodeUnpublishVolume(ctx, &csi.NodeUnpublishVolumeRequest{
+		VolumeId:   "fulfillment-volume-id",
+		TargetPath: "/target/volume",
+	})
+	if err != nil {
+		t.Fatalf("unpublish: %v", err)
+	}
+
+	_, err = ns.NodeUnstageVolume(ctx, &csi.NodeUnstageVolumeRequest{
+		VolumeId:          "fulfillment-volume-id",
+		StagingTargetPath: "/staging/volume",
+	})
+	if err != nil {
+		t.Fatalf("unstage: %v", err)
+	}
+
+	for operation, got := range map[string]string{
+		"stage":     plugin.stageVolumeID,
+		"publish":   plugin.publishVolumeID,
+		"stats":     plugin.statsVolumeID,
+		"unpublish": plugin.unpublishVolumeID,
+		"unstage":   plugin.unstageVolumeID,
+	} {
+		if got != "topolvm-vendor-id" {
+			t.Errorf("%s forwarded volume ID = %q, want topolvm-vendor-id", operation, got)
+		}
+	}
+}
+
 // --- NodeGetInfo / NodeGetCapabilities ---
 
 func TestNodeGetInfo(t *testing.T) {
-	ns := NewNodeServer("my-node-42", proxy.NewManager(nil), nil)
+	t.Setenv(nodeNameEnv, "my-node-42")
+	ns := NewNodeServer("constructor-node-must-not-be-used", proxy.NewManager(nil), nil)
 	resp, err := ns.NodeGetInfo(context.Background(), &csi.NodeGetInfoRequest{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -588,6 +667,63 @@ func TestNodeGetInfo(t *testing.T) {
 	if resp.GetNodeId() != "my-node-42" {
 		t.Errorf("expected nodeId my-node-42, got %s", resp.GetNodeId())
 	}
+	if got := resp.GetAccessibleTopology().GetSegments()[volumeNodeTopologyKey]; got != "my-node-42" {
+		t.Errorf("topology node = %q, want my-node-42", got)
+	}
+}
+
+func TestNodeGetInfoMissingNodeName(t *testing.T) {
+	t.Setenv(nodeNameEnv, "")
+	ns := NewNodeServer("constructor-node-must-not-be-used", proxy.NewManager(nil), nil)
+
+	_, err := ns.NodeGetInfo(context.Background(), &csi.NodeGetInfoRequest{})
+	assertGRPCCode(t, err, codes.FailedPrecondition)
+}
+
+func TestNewNodeServerResolvesLVMSSocket(t *testing.T) {
+	t.Run("environment override", func(t *testing.T) {
+		t.Setenv(lvmsNodeSocketEnv, "/run/custom/topolvm.sock")
+		ns := NewNodeServer("node", proxy.NewManager(nil), map[string]string{lvmsProvider: "/run/other/topolvm.sock"})
+
+		got, err := ns.resolveVendorSocket(map[string]string{"osac.backend": lvmsProvider})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "/run/custom/topolvm.sock" {
+			t.Errorf("LVMS socket = %q, want /run/custom/topolvm.sock", got)
+		}
+	})
+
+	t.Run("configured vendor socket without environment override", func(t *testing.T) {
+		t.Setenv(lvmsNodeSocketEnv, "")
+		socketPath, plugin, cleanup := startFakeNodePlugin(t)
+		defer cleanup()
+		ns := newTestNodeServer(t, lvmsProvider, socketPath)
+		_, err := ns.NodePublishVolume(context.Background(), &csi.NodePublishVolumeRequest{
+			VolumeId: "osac-volume", TargetPath: "/target",
+			VolumeCapability: blockCap(),
+			VolumeContext:    map[string]string{"osac.backend": lvmsProvider, topolvmVolumeIDContextKey: "vendor-volume"},
+		})
+		if err != nil {
+			t.Fatalf("custom LVMS socket was not used: %v", err)
+		}
+		if !plugin.publishCalled || plugin.publishVolumeID != "vendor-volume" {
+			t.Fatalf("publish did not reach the configured LVMS socket: %+v", plugin)
+		}
+	})
+
+	t.Run("default", func(t *testing.T) {
+		t.Setenv(lvmsNodeSocketEnv, "")
+		ns := NewNodeServer("node", proxy.NewManager(nil), nil)
+
+		got, err := ns.resolveVendorSocket(map[string]string{"osac.backend": lvmsProvider})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != defaultLVMSNodeSocket {
+			t.Errorf("LVMS socket = %q, want %q", got, defaultLVMSNodeSocket)
+		}
+	})
 }
 
 func TestNodeGetCapabilities(t *testing.T) {

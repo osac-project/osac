@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/osac-project/osac-metering/schema"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -71,6 +72,10 @@ func (m *bareMetalInstanceMapper) IsBillable() bool {
 
 func (m *bareMetalInstanceMapper) BillingDimensionsMap() (map[string]any, error) {
 	return BareMetalInstanceBillingDimensions(m.instance)
+}
+
+func (m *bareMetalInstanceMapper) Usage(string, *time.Time, time.Time, map[string]any) (*schema.Usage, error) {
+	return nil, nil
 }
 
 func BareMetalInstanceBillingDimensions(bmi *privatev1.BareMetalInstance) (map[string]any, error) {

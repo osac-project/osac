@@ -86,9 +86,12 @@ on relevant `main` changes, and by manual dispatch. It uses every
 artifact.
 
 Enable GitHub Pages on `osac-project/osac`, select **GitHub Actions** as the
-source, restrict the `github-pages` environment to `main`, and configure the
-least-privilege `OSAC_BOT_PAT` repository secret. The primary dashboard is
-published at `https://osac-project.github.io/osac/pr-dashboard/`.
+source, and restrict the `github-pages` environment to `main`. The workflow
+uses the built-in GitHub Actions token to read the public monitored
+repositories. The provider follows GitHub GraphQL cursors so the generated
+snapshot includes every configured PR, label, review, review request, and
+check context. The primary dashboard is published at
+`https://osac-project.github.io/osac/pr-dashboard/`.
 
 ## Tests
 

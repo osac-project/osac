@@ -16,12 +16,14 @@ from __future__ import annotations
 
 import contextlib
 import json
-import textwrap
-from pathlib import Path
+import logging
+import os
 from uuid import uuid4
 
-from tests.e2e.catalog.conftest import unique_name
+from tests.e2e.core.fulfillment_trust import assert_cluster_trust
+from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import (
+    unique_name,
     wait_for_cluster_deletion,
     wait_for_cluster_order_condition,
     wait_for_cluster_order_cr,
@@ -35,27 +37,26 @@ from tests.e2e.core.helpers import (
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until
+from tests.e2e.storage.conftest import NAMESPACE_MANIFEST, TENANT_MANIFEST
 
-_NAMESPACE_MANIFEST = textwrap.dedent("""\
-    apiVersion: v1
-    kind: Namespace
-    metadata:
-      name: {name}
-""")
-
-_TENANT_MANIFEST = textwrap.dedent("""\
-    apiVersion: osac.openshift.io/v1alpha1
-    kind: Tenant
-    metadata:
-      name: {name}
-      namespace: {namespace}
-    spec: {{}}
-""")
+logger = logging.getLogger(__name__)
 
 
 def test_caas_cluster_storage_lifecycle(
-    k8s_hub_client: K8sClient, cli: OsacCLI, cluster_template: str, pull_secret_path: str, ssh_public_key_path: str
+    k8s_hub_client: K8sClient,
+    cli: OsacCLI,
+    private_grpc: GRPCClient,
+    cluster_template: str,
+    pull_secret_name: str,
+    ssh_public_key_path: str,
 ) -> None:
+    """Verify the CaaS cluster storage provisioning and teardown lifecycle.
+
+    Creates a Tenant, provisions a CaaS cluster with storage, verifies the
+    storage controller adds the cluster-storage finalizer and sets conditions,
+    then validates that teardown correctly removes the finalizer and cluster
+    storage entries.
+    """
     tenant_name: str = f"test-caas-storage-{uuid4().hex[:8]}"
     namespace: str = k8s_hub_client.namespace
     co_name: str | None = None
@@ -63,20 +64,24 @@ def test_caas_cluster_storage_lifecycle(
 
     try:
         # --- Setup: create Tenant and its namespace ---
-        k8s_hub_client.apply(manifest=_NAMESPACE_MANIFEST.format(name=tenant_name))
-        k8s_hub_client.apply(manifest=_TENANT_MANIFEST.format(name=tenant_name, namespace=namespace))
+        k8s_hub_client.apply(manifest=NAMESPACE_MANIFEST.format(name=tenant_name))
+        k8s_hub_client.apply(manifest=TENANT_MANIFEST.format(name=tenant_name, namespace=namespace))
         wait_for_tenant_cr(k8s=k8s_hub_client, name=tenant_name)
 
         # --- VMaaS storage stages must complete before CaaS path runs ---
         wait_for_tenant_condition(k8s=k8s_hub_client, name=tenant_name, condition_type="StorageBackendReady")
 
         # --- Create ClusterOrder and associate with our Tenant ---
+        private_grpc.ensure_bare_metal_instance_type(
+            name="ci-worker-bm", host_label_selector={"osac.openshift.io/host-type": "default"}
+        )
         name = unique_name("e2e-cluster")
         cluster_uuid = cli.create_cluster(
             name=name,
             template=cluster_template,
-            template_parameter_files={"pull_secret": pull_secret_path},
-            template_parameters={"ssh_public_key": Path(ssh_public_key_path).read_text().strip()},
+            node_sets={"workers": {"size": 1, "baremetal_instance_type": {"name": "ci-worker-bm"}}},
+            pull_secret=pull_secret_name,
+            ssh_public_key_file=ssh_public_key_path,
         )
         co_name = wait_for_cluster_order_cr(k8s=k8s_hub_client, uuid=cluster_uuid)
 
@@ -92,24 +97,50 @@ def test_caas_cluster_storage_lifecycle(
 
         # --- Verify CaaS storage provisioning ---
         _verify_provisioning(k8s=k8s_hub_client, tenant_name=tenant_name, co_name=co_name)
+        if os.environ.get("OSAC_FULFILLMENT_TRUST_E2E") == "true":
+            assert_cluster_trust(k8s_hub_client, co_name, require_csi=True)
 
     finally:
         # --- Teardown: delete ClusterOrder and verify storage cleanup ---
+        # Each teardown step is wrapped individually so that a failure in one
+        # step does not prevent subsequent cleanup from running.  Assertion
+        # errors from verification are collected and re-raised after all
+        # cleanup completes so they can fail the test.
+        teardown_assertion_error: AssertionError | None = None
+
         if cluster_uuid is not None:
             with contextlib.suppress(Exception):
                 cli.delete_cluster(uuid=cluster_uuid)
-        if co_name is not None and k8s_hub_client.is_present(resource="clusterorder", name=co_name):
-            _verify_teardown(k8s=k8s_hub_client, tenant_name=tenant_name, co_name=co_name)
 
-        if k8s_hub_client.is_present(resource="tenant", name=tenant_name):
-            k8s_hub_client.delete(resource="tenant", name=tenant_name, wait=False)
-            wait_for_tenant_deletion(k8s=k8s_hub_client, name=tenant_name)
+        # Always verify cluster removal when co_name is known, even when the
+        # ClusterOrder CR has already been removed by a fast deletion path.
+        if co_name is not None:
+            try:
+                _verify_teardown(k8s=k8s_hub_client, tenant_name=tenant_name, co_name=co_name)
+            except AssertionError as exc:
+                teardown_assertion_error = exc
+            except Exception:
+                logger.warning("ClusterOrder teardown verification failed")
 
-        if k8s_hub_client.is_present(resource="namespace", name=tenant_name):
-            k8s_hub_client.delete(resource="namespace", name=tenant_name, wait=False)
+        try:
+            if k8s_hub_client.is_present(resource="tenant", name=tenant_name):
+                k8s_hub_client.delete(resource="tenant", name=tenant_name, wait=False)
+                wait_for_tenant_deletion(k8s=k8s_hub_client, name=tenant_name)
+        except Exception:
+            logger.warning("Tenant teardown failed")
+
+        try:
+            if k8s_hub_client.is_present(resource="namespace", name=tenant_name):
+                k8s_hub_client.delete(resource="namespace", name=tenant_name, wait=False)
+        except Exception:
+            logger.warning("Namespace teardown failed")
+
+        if teardown_assertion_error is not None:
+            raise teardown_assertion_error
 
 
 def _verify_provisioning(*, k8s: K8sClient, tenant_name: str, co_name: str) -> None:
+    """Verify CaaS storage provisioning: finalizer, condition, and tenant entry."""
     # --- cluster-storage finalizer added to ClusterOrder ---
     poll_until(
         fn=lambda: "osac.openshift.io/cluster-storage" in k8s.get_cluster_order_finalizers(name=co_name, checked=False),
@@ -128,6 +159,7 @@ def _verify_provisioning(*, k8s: K8sClient, tenant_name: str, co_name: str) -> N
 
 
 def _verify_teardown(*, k8s: K8sClient, tenant_name: str, co_name: str) -> None:
+    """Verify storage teardown: ClusterOrder removal and tenant entry cleanup."""
     # --- ClusterOrder fully deleted (storage finalizer released) ---
     wait_for_cluster_deletion(k8s=k8s, name=co_name)
 

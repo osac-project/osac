@@ -335,3 +335,4 @@ export const HostTypes: GenService<{
   },
 }> = /*@__PURE__*/
   serviceDesc(file_osac_public_v1_host_types_service, 0);
+

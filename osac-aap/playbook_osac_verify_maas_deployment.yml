@@ -1,0 +1,39 @@
+---
+# Playbook: verify a MaaS deployment (RHOAI 3.5 GA) — SEPARATE from the deploy
+# flow. Runs the 4-layer verification against an already-deployed cluster and
+# deploys nothing (only ephemeral API keys + SA tokens).
+#
+# Layers: L1 control-plane readiness, L2 dataplane smoke (401->201->200),
+#         L3 dataplane deep (free-tier -> 429), L4 cross-tenant isolation (403).
+#
+# Usage:
+#   # Verify whatever is deployed (auto-resolves the tenant set):
+#   ansible-playbook playbook_osac_verify_maas_deployment.yml -v
+#
+#   # Verify a specific single tenant deployment:
+#   ansible-playbook playbook_osac_verify_maas_deployment.yml -v \
+#     -e ocp_4_20_ai_maas_tenant_name=novatech
+#
+#   # Verify a multi-tenant deployment (must match how it was deployed):
+#   ansible-playbook playbook_osac_verify_maas_deployment.yml -v \
+#     -e '{"ocp_4_20_ai_maas_tenants":[{"name":"novatech"},{"name":"globex"}]}'
+#
+#   # Depth / scope knobs:
+#   -e ocp_4_20_ai_maas_verify_depth=smoke|standard|full
+#   -e ocp_4_20_ai_maas_verify_tenants='["novatech"]'
+#   -e ocp_4_20_ai_maas_verify_representative=globex
+#   -e ocp_4_20_ai_maas_verify_skip_isolation=true
+
+- name: Verify MaaS deployment on RHOAI 3.5 GA
+  hosts: localhost
+  gather_facts: false
+  connection: local
+
+  vars:
+    admin_kubeconfig: "{{ lookup('env', 'KUBECONFIG') | default('~/.kube/config', true) }}"
+
+  tasks:
+    - name: Run MaaS verification (Layers 1-4)
+      ansible.builtin.include_role:
+        name: osac.templates.ocp_4_20_ai_maas
+        tasks_from: verify.yaml

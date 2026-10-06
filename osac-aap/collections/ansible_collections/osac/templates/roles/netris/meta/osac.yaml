@@ -14,3 +14,4 @@ capabilities:
   supports_ipv4: true
   supports_ipv6: false
   supports_dual_stack: false
+  supports_east_west_ethernet: true

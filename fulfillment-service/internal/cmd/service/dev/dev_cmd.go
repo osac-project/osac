@@ -16,7 +16,6 @@ package dev
 import (
 	"github.com/spf13/cobra"
 
-	"github.com/osac-project/osac/fulfillment-service/internal/cmd/service/dev/listen"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/service/dev/watch"
 )
 
@@ -28,7 +27,6 @@ func Cmd() *cobra.Command {
 		DisableFlagsInUseLine: true,
 		Args:                  cobra.NoArgs,
 	}
-	result.AddCommand(listen.Cmd())
 	result.AddCommand(watch.Cmd())
 	return result
 }

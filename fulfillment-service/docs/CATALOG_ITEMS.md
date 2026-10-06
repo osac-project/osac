@@ -9,11 +9,11 @@ Template → Catalog Item → Resource
 Template ───────────────→ Resource (direct API creation)
 ```
 
-**Templates** describe how OSAC provisions a cluster, virtual machine (VM), or bare metal instance. For
-example, a template can specify the number and type of machines in a cluster, a VM's boot-disk size,
-or the hardware type for a bare metal instance. Templates can also define inputs that users provide
-when creating a resource; these are called template parameters. Users can list and inspect the
-templates available to them.
+**Templates** describe how OSAC provisions a cluster, virtual machine (VM), or bare metal instance. Cluster
+templates define provisioning behavior and parameters, not worker node sets or hardware. Other template
+types may specify VM boot-disk sizes or bare-metal hardware types. Templates can also define inputs
+that users provide when creating a resource; these are called template parameters. Users can list
+and inspect the templates available to them.
 
 **Catalog items** are curated offerings for creating resources. Each references a template and can
 fix selected inputs or provide defaults that users may change. Policies for these inputs appear in
@@ -50,14 +50,15 @@ Ansible job; you can list the ones available in your environment:
 ```bash
 osac get clustertemplates
 osac get clustertemplates <id> -o yaml
-osac get hosttypes
+osac get baremetalinstancetypes
 osac get clusterversions
 ```
 
 For the cluster example below, assume the administrator has installed a `sandbox` template and
-its provisioning workflow. It defines optional `vpc_id` and `vlan` parameters with defaults. Its
-`fc430` HostType (hardware type) must already exist in the shared tenant. A node set groups machines
-of the same hardware type; the `workers` node set below starts with one `fc430` machine:
+its provisioning workflow. It defines optional `vpc_id` and `vlan` parameters with defaults. The
+`fc430` BareMetalInstanceType (hardware profile) used by the catalog policy below must already exist
+in the shared tenant. A node set groups machines of the same hardware type; the catalog policy
+supplies a `workers` set starting with one `fc430` machine:
 
 ```yaml
 '@type': type.googleapis.com/osac.private.v1.ClusterTemplate
@@ -67,12 +68,6 @@ metadata:
   tenant: shared
 title: Sandbox Cluster
 description: Small sandbox cluster template with networking parameters.
-node_sets:
-  workers:
-    host_type:
-      name: fc430
-      shared: true
-    size: 1
 parameters:
   - name: vpc_id
     title: VPC ID
@@ -118,7 +113,7 @@ fields:
       default_value:
         items:
           workers:
-            host_type:
+            baremetal_instance_type:
               name: fc430
               shared: true
             size: 1
@@ -250,6 +245,11 @@ subnet/security-group attachments, and Bare Metal instance types.
 A shared catalog cannot lock or default local references. Use `editable: {}` to let each tenant
 supply its own value. StorageTier references use the platform scope.
 
+For ComputeInstance catalog items, `ssh_key` is an optional reference to an SSH public key Secret.
+A shared item can leave it editable with no default so each tenant can supply its own key. A
+tenant-scoped item can default or lock a key from its own scope. Omitting the key is valid; it only
+means SSH public-key access is not configured by the catalog item.
+
 ## Field Policies
 
 Each policy selects exactly one behavior. Reference policies carry typed reference objects, as
@@ -284,7 +284,7 @@ fields; in YAML, write them as nested mappings.
 | `version` | `--version` | ClusterVersion reference for the OpenShift release |
 | `network.pod_cidr` | `--pod-cidr` | Pod network CIDR (system default: `10.128.0.0/14`) |
 | `network.service_cidr` | `--service-cidr` | Service network CIDR (system default: `172.30.0.0/16`) |
-| `node_sets` | — | Policy for the complete node-set map, including sizes and HostType references |
+| `node_sets` | — | Policy for the complete node-set map, including sizes and BareMetalInstanceType references |
 | `network_attachment` | — | Subnet and security-group attachment |
 | `auto_external_ip_attachment` | — | Whether to provision external IP attachments automatically |
 
@@ -292,7 +292,7 @@ fields; in YAML, write them as nested mappings.
 
 | Field | Description |
 |-------|-------------|
-| `ssh_public_key` | SSH public key |
+| `ssh_key` | Optional reference to an SSH public key Secret |
 | `instance_type` | InstanceType reference defining CPU cores, memory, and optional GPUs |
 | `run_strategy` | VM run strategy (`COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS`, `COMPUTE_INSTANCE_RUN_STRATEGY_HALTED`) |
 | `user_data` | Cloud-init or ignition user data |
@@ -314,6 +314,27 @@ fields; in YAML, write them as nested mappings.
 | `run_strategy` | Bare metal run strategy |
 | `network_attachments` | Policy for the complete list of network attachments |
 | `auto_external_ip_attachment` | Whether to provision an external IP attachment automatically |
+
+#### BareMetalInstance DiskImage policy validation
+
+The current API names the policy container `fields` (the older
+`field_definitions` name is not accepted). `fields.disk_image` takes a typed
+`DiskImageReference` in either `locked` or `editable.default_value`. The
+catalog service resolves and canonicalizes that reference when the CatalogItem
+is created or when its `fields` are updated.
+
+At BareMetalInstance creation, a locked value is applied, or an editable
+default is applied when the caller omitted `spec.disk_image`, before normal BMI
+DiskImage validation. A caller-provided value overrides an editable default.
+
+The referenced DiskImage must belong to the CatalogItem's tenant or the shared
+tenant. A cross-tenant reference is rejected with `InvalidArgument` when it
+resolves; a reference that cannot be resolved returns `NotFound`. An `OBSOLETE`
+image is rejected. A `DEPRECATED` image is accepted but emits a warning from
+the gRPC CatalogItem Create response or an Update that revalidates the policy,
+including one that changes `fields` or publishes the CatalogItem. REST Create
+and Update responses return only the CatalogItem object, so they do not include
+those warnings.
 
 ### List and node-set policies
 
@@ -340,15 +361,17 @@ resource behavior applies, including compute default-network selection.
 A catalog cannot set an empty locked or default network-attachment list. The `items` wrapper is
 only for policies; resource lists do not use it.
 
-Cluster `node_sets` policies apply to the complete map, also under `items`. If the user supplies a
-nonempty map, omitted template node sets are not added. Each supplied node set needs a positive size.
+Cluster `node_sets` policies apply to the complete map, also under `items`. A locked map rejects an
+explicit user map; a nonempty user map replaces an editable default in full. Every node set must
+have a positive size and a resolvable BareMetalInstanceType reference. Catalog node-set hardware references and the effective Cluster map are both resolved from
+**shared** BareMetalInstanceTypes after applying policies; a tenant-owned catalog item does not
+make a tenant-only hardware type selectable for CaaS. Tenant-scoped hardware types remain valid
+for non-CaaS BMIs, and CaaS tenant/shared precedence is not defined. A concrete catalog network-attachment policy also requires a fabric
+port on every catalog-selected BareMetalInstanceType. For a request-supplied network attachment,
+fulfillment checks the effective types for fabric ports during cluster creation.
 
-For a node set that exists in the template, users can omit the HostType to inherit it. They cannot
-choose a different HostType for that node set. New node sets are allowed if they specify a valid
-HostType.
-
-When the user omits the map or supplies an empty one, the catalog's locked map or default is used.
-If neither is set, the template's node sets are used.
+When the user omits the map or supplies an empty one, the catalog's locked map or editable default
+is used. Without a catalog value, creation fails: cluster templates never supply node sets.
 
 ### Template parameter policies
 
@@ -415,7 +438,7 @@ osac create computeinstance --catalog-item <standard-vm-id> \
 For the cluster example, supply a pull secret and SSH key and optionally override the pod CIDR:
 
 ```bash
-osac create secret --name cluster-pull-secret \
+osac create secret --name cluster-pull-secret --type=pull-secret \
   --from-file=.dockerconfigjson=pull-secret.json
 
 osac create cluster --catalog-item sandbox \
@@ -456,7 +479,7 @@ Platform administrators can create a Vault-backed pull Secret in the `shared` te
 it from a shared cluster template:
 
 ```bash
-osac --tenant shared create secret --name shared-pull-secret \
+osac --tenant shared create secret --name shared-pull-secret --type=pull-secret \
   --from-file=.dockerconfigjson=pull-secret.json
 ```
 
@@ -495,9 +518,15 @@ template creation uses normal validation and skips catalog policies. The cluster
 commands support `--template`, though the option currently emits a deprecation warning:
 
 ```bash
-osac create cluster --template sandbox
+osac create cluster --template sandbox \
+  --node-set name=workers,size=1,baremetal-instance-type=<shared-bmit-name>
 osac create computeinstance --template osac.templates.ocp_virt_vm
 ```
+
+For Cluster creation (including direct-template creation), select a shared BareMetalInstanceType
+by name. The shared `fc430` reference above belongs to the catalog policy, not the template.
+The private CaaS worker BMI path uses the fixed shared `osac.templates.bm_host_provisioning`
+template directly, not an unrestricted `system` passthrough catalog item.
 
 The bare metal CLI subcommand requires `--catalog-item`. To create directly from a template, use
 the API or `osac create -f` with `spec.template`.

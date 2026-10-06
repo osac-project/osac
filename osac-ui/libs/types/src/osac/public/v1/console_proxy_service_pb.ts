@@ -101,3 +101,4 @@ export const ConsoleProxy: GenService<{
   },
 }> = /*@__PURE__*/
   serviceDesc(file_osac_public_v1_console_proxy_service, 0);
+

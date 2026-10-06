@@ -85,6 +85,7 @@ message ExternalIPAttachmentsCreateResponse {
 }
 
 message ExternalIPAttachmentsUpdateRequest {
+  option (cleanapi.message).private = true;
   ExternalIPAttachment object = 1;
   google.protobuf.FieldMask update_mask = 2;
 
@@ -95,6 +96,7 @@ message ExternalIPAttachmentsUpdateRequest {
 }
 
 message ExternalIPAttachmentsUpdateResponse {
+  option (cleanapi.message).private = true;
   ExternalIPAttachment object = 1;
 }
 
@@ -138,6 +140,7 @@ service ExternalIPAttachments {
 
   // Updates an existing external IP attachment. Allows modifying metadata (labels, annotations).
   rpc Update(ExternalIPAttachmentsUpdateRequest) returns (ExternalIPAttachmentsUpdateResponse) {
+    option (cleanapi.method).private = true;
     option (google.api.http) = {
       patch: "/api/private/v1/external_ip_attachments/{object.id}"
       body: "object"

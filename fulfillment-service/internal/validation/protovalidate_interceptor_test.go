@@ -343,6 +343,45 @@ var _ = Describe("Protovalidate interceptor", func() {
 			Expect(response).To(Equal("response"))
 		})
 
+		It("reports an invalid ExternalIPAttachment target at the target field", func() {
+			request := publicv1.ExternalIPAttachmentsCreateRequest_builder{
+				Object: publicv1.ExternalIPAttachment_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "ref-att-bad",
+					}.Build(),
+					Spec: publicv1.ExternalIPAttachmentSpec_builder{
+						ExternalIp: publicv1.ExternalIPLocalReference_builder{
+							Id: "fake-eip-id",
+						}.Build(),
+						ComputeInstance: publicv1.ComputeInstanceLocalReference_builder{
+							Name: "nonexistent-ci",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build()
+
+			handler := func(ctx context.Context, req any) (any, error) {
+				Fail("handler should not be called for an invalid request")
+				return nil, nil
+			}
+
+			_, err := interceptor.UnaryServer(
+				context.Background(),
+				request,
+				&grpc.UnaryServerInfo{
+					FullMethod: "/osac.public.v1.ExternalIPAttachments/Create",
+				},
+				handler,
+			)
+
+			Expect(err).To(HaveOccurred())
+
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(ContainSubstring("object.spec.compute_instance"))
+		})
+
 		DescribeTable("Accepts display_name and description within length limits",
 			func(msg proto.Message) {
 				handlerCalled := false
@@ -956,6 +995,68 @@ var _ = Describe("Protovalidate interceptor", func() {
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 		})
+
+		DescribeTable("Validates event subscription group names", func(group *string, valid bool) {
+			request := privatev1.EventsWatchRequest_builder{Group: group}.Build()
+			mockStream := &mockServerStream{
+				recvFunc: func(message any) error {
+					proto.Merge(message.(proto.Message), request)
+					return nil
+				},
+			}
+			processed := false
+			err := interceptor.StreamServer(
+				nil, mockStream,
+				&grpc.StreamServerInfo{FullMethod: privatev1.Events_Watch_FullMethodName, IsServerStream: true},
+				func(_ any, stream grpc.ServerStream) error {
+					message := &privatev1.EventsWatchRequest{}
+					if err := stream.RecvMsg(message); err != nil {
+						return err
+					}
+					processed = true
+					Expect(proto.Equal(message, request)).To(BeTrue())
+					return nil
+				},
+			)
+			Expect(processed).To(Equal(valid))
+			if valid {
+				Expect(err).ToNot(HaveOccurred())
+			} else {
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("group"))
+			}
+		},
+			Entry("Omitted", nil, true),
+			Entry("Empty", new(""), true),
+			Entry("Single letter", new("a"), true),
+			Entry("Single digit", new("0"), true),
+			Entry("Starts with digit", new("1-controller"), true),
+			Entry("Letters digits and hyphens", new("osac-controller-1"), true),
+			Entry("Consecutive hyphens", new("a--b"), true),
+			Entry("Maximum length (63 characters)", new(strings.Repeat("a", 63)), true),
+			Entry("Over maximum length (64 characters)", new(strings.Repeat("a", 64)), false),
+			Entry("Uppercase", new("Controller"), false),
+			Entry("Underscore", new("compute_instance"), false),
+			Entry("Controller group", new("compute-instance-reconciler"), true),
+			Entry("Dot-separated labels", new("controller.example"), false),
+			Entry("Dotted controller group", new("osac.controllers.compute-instance"), false),
+			Entry("Single-character labels", new("a.0.b"), false),
+			Entry("Dotted maximum length (63 characters)", new("osac.controllers."+strings.Repeat("a", 46)), false),
+			Entry("Dotted over maximum length (64 characters)", new("osac.controllers."+strings.Repeat("a", 47)), false),
+			Entry("Leading dot", new(".controller"), false),
+			Entry("Trailing dot", new("controller."), false),
+			Entry("Consecutive dots", new("osac..controller"), false),
+			Entry("Label with leading hyphen", new("osac.-controller"), false),
+			Entry("Label with trailing hyphen", new("osac-.controller"), false),
+			Entry("Leading hyphen", new("-controller"), false),
+			Entry("Trailing hyphen", new("controller-"), false),
+			Entry("Only hyphen", new("-"), false),
+			Entry("Space", new("controller group"), false),
+			Entry("Leading space", new(" controller"), false),
+			Entry("Trailing space", new("controller "), false),
+			Entry("Newline", new("controller\n"), false),
+			Entry("Non-ASCII", new("contrôleur"), false),
+		)
 
 		It("Validates messages received from stream", func() {
 			// Create a mock stream:

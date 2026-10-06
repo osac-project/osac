@@ -15,6 +15,7 @@ syntax = "proto3";
 
 package osac.private.v1;
 
+import "buf/validate/validate.proto";
 import "cleanapi/cleanapi.proto";
 import "google/api/annotations.proto";
 import "osac/private/v1/event_type.proto";
@@ -37,6 +38,29 @@ message EventsWatchRequest {
   // If this isn't provided, or if the value is empty, then all the events that the user has permission to see will be
   // sent by the server.
   optional string filter = 1;
+
+  // Name of the subscription group.
+  //
+  // When non-empty, must be a valid RFC 1123 DNS label:
+  //
+  // - Must be between 1 and 63 characters long.
+  // - Must only contain lowercase letters (a-z), digits (0-9) and hyphens (-).
+  // - Must start and end with an alphanumeric character.
+  //
+  // Subscriptions with the same non-empty group share event delivery, allowing multiple clients to divide the work.
+  // Use the same filter for all subscriptions in a group: an event rejected by its assigned subscription isn't sent
+  // to another subscription in that group. Different groups receive events independently.
+  //
+  // Grouped subscriptions may receive past events, including events produced while clients were disconnected.
+  // Clients must tolerate repeated events. Delivery does not acknowledge that the client has processed the event.
+  // If absent or empty, the subscription independently watches new events without joining a group.
+  optional string group = 2 [
+    (cleanapi.field).private = true,
+    (buf.validate.field).string = {
+      max_len: 63,
+      pattern: "^$|^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+    }
+  ];
 }
 
 message EventsWatchResponse {

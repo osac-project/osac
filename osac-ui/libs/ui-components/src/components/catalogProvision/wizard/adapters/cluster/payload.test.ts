@@ -30,15 +30,6 @@ const clusterCatalogItem: ClusterCatalogItem = {
     shared: false,
   },
   published: true,
-  fieldDefinitions: [
-    {
-      $typeName: 'osac.public.v1.FieldDefinition',
-      path: 'version',
-      displayName: 'Version',
-      editable: true,
-      validationSchema: '',
-    },
-  ],
   templateParameters: {},
 };
 
@@ -157,6 +148,107 @@ describe('buildClusterCreatePayload', () => {
     const nodeSets = buildClusterCreatePayload(values, clusterCatalogItem).spec?.nodeSets;
     expect(Object.keys(nodeSets ?? {})).toContain('__proto__');
     expect(nodeSets?.['__proto__']).toEqual({ hostType: { id: 'acme_1tb' }, size: 3 });
+  });
+
+  it('omits networkAttachment when useDefaultNetwork is true', () => {
+    const values = {
+      ...createEmptyClusterValues(),
+      catalogItemId: clusterCatalogItem.id,
+      metadata: { name: 'my-cluster', project: '' },
+      spec: {
+        ...createEmptyClusterValues().spec,
+        pullSecretSecret: { name: 'secret' },
+        useDefaultNetwork: true,
+        networkAttachment: {
+          virtualNetwork: { id: 'vn-1', name: 'vn-1' },
+          subnet: { id: 'subnet-1', name: 'subnet-1' },
+          securityGroups: [{ id: 'sg-1', name: 'sg-1' }],
+        },
+      },
+    };
+
+    const payload = buildClusterCreatePayload(values, clusterCatalogItem);
+    expect(payload.spec).not.toHaveProperty('networkAttachment');
+  });
+
+  it('omits networkAttachment when useDefaultNetwork is false but pickers are empty', () => {
+    const values = {
+      ...createEmptyClusterValues(),
+      catalogItemId: clusterCatalogItem.id,
+      metadata: { name: 'my-cluster', project: '' },
+      spec: {
+        ...createEmptyClusterValues().spec,
+        pullSecretSecret: { name: 'secret' },
+        useDefaultNetwork: false,
+        networkAttachment: {
+          virtualNetwork: { id: '', name: '' },
+          subnet: { id: '', name: '' },
+          securityGroups: [],
+        },
+      },
+    };
+
+    const payload = buildClusterCreatePayload(values, clusterCatalogItem);
+    expect(payload.spec).not.toHaveProperty('networkAttachment');
+  });
+
+  it('includes networkAttachment with subnet and security groups when pickers have values', () => {
+    const values = {
+      ...createEmptyClusterValues(),
+      catalogItemId: clusterCatalogItem.id,
+      metadata: { name: 'my-cluster', project: '' },
+      spec: {
+        ...createEmptyClusterValues().spec,
+        pullSecretSecret: { name: 'secret' },
+        useDefaultNetwork: false,
+        networkAttachment: {
+          virtualNetwork: { id: 'vn-1', name: 'tenant-vn' },
+          subnet: { id: 'my-subnet', name: 'tenant-subnet' },
+          securityGroups: [
+            { id: 'sg-1', name: 'default-sg-1' },
+            { id: 'sg-2', name: 'default-sg-2' },
+          ],
+        },
+      },
+    };
+
+    const payload = buildClusterCreatePayload(values, clusterCatalogItem);
+    expect(payload.spec?.networkAttachment).toEqual({
+      subnet: { id: 'my-subnet' },
+      securityGroups: [{ id: 'sg-1' }, { id: 'sg-2' }],
+    });
+  });
+
+  it('includes autoExternalIpAttachment only when true', () => {
+    const values = {
+      ...createEmptyClusterValues(),
+      catalogItemId: clusterCatalogItem.id,
+      metadata: { name: 'my-cluster', project: '' },
+      spec: {
+        ...createEmptyClusterValues().spec,
+        pullSecretSecret: { name: 'secret' },
+        autoExternalIpAttachment: true,
+      },
+    };
+
+    const payload = buildClusterCreatePayload(values, clusterCatalogItem);
+    expect(payload.spec?.autoExternalIpAttachment).toBe(true);
+  });
+
+  it('omits autoExternalIpAttachment when false', () => {
+    const values = {
+      ...createEmptyClusterValues(),
+      catalogItemId: clusterCatalogItem.id,
+      metadata: { name: 'my-cluster', project: '' },
+      spec: {
+        ...createEmptyClusterValues().spec,
+        pullSecretSecret: { name: 'secret' },
+        autoExternalIpAttachment: false,
+      },
+    };
+
+    const payload = buildClusterCreatePayload(values, clusterCatalogItem);
+    expect(payload.spec).not.toHaveProperty('autoExternalIpAttachment');
   });
 
   it.each([

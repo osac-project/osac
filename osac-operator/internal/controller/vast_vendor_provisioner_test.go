@@ -67,7 +67,7 @@ func newProvisioner(t *testing.T, csiCli *fakeCSIClient, secret *corev1.Secret) 
 	return &VastVendorProvisioner{
 		reader:          builder.Build(),
 		configNamespace: "osac-system",
-		endpoints:       map[string]string{"vast-backend": "vast-csi-controller.osac-csi-backends.svc:50051"},
+		endpoints:       map[string]string{"vast": "vast-csi-controller.osac-csi-backends.svc:50051"},
 		dial: func(_ context.Context, _ string) (vendorCSIClient, func() error, error) {
 			return dialed, func() error { return nil }, nil
 		},
@@ -91,7 +91,7 @@ func fullSecret() *corev1.Secret {
 func blockCreateReq() VendorCreateVolumeRequest {
 	return VendorCreateVolumeRequest{
 		Name:       "pvc-1",
-		Backend:    "vast-backend",
+		Provider:   "vast",
 		Tenant:     "acme",
 		Tier:       "gold",
 		SizeGiB:    10,
@@ -111,8 +111,8 @@ func TestCreateVolumeBlockSuccess(t *testing.T) {
 	if resp.VendorVolumeID != "vendor-vol-1" {
 		t.Errorf("VendorVolumeID = %q, want vendor-vol-1", resp.VendorVolumeID)
 	}
-	if resp.Backend != "vast-backend" || resp.Protocol != "Block" {
-		t.Errorf("resp backend/protocol = %q/%q", resp.Backend, resp.Protocol)
+	if resp.Protocol != "Block" {
+		t.Errorf("resp protocol = %q, want Block", resp.Protocol)
 	}
 
 	req := cli.createReq
@@ -184,12 +184,12 @@ func TestCreateVolumeMissingVipPool(t *testing.T) {
 	}
 }
 
-func TestCreateVolumeUnknownBackend(t *testing.T) {
+func TestCreateVolumeUnknownProvider(t *testing.T) {
 	p, _ := newProvisioner(t, &fakeCSIClient{}, fullSecret())
 	req := blockCreateReq()
-	req.Backend = "nope"
+	req.Provider = "nope"
 	if _, err := p.CreateVolume(context.Background(), req); err == nil {
-		t.Fatalf("expected error for unknown backend, got nil")
+		t.Fatalf("expected error for unknown provider, got nil")
 	}
 }
 
@@ -203,7 +203,7 @@ func TestCreateVolumeVendorError(t *testing.T) {
 func TestDeleteVolumeSuccess(t *testing.T) {
 	p, cli := newProvisioner(t, &fakeCSIClient{}, fullSecret())
 	err := p.DeleteVolume(context.Background(), VendorDeleteVolumeRequest{
-		VendorVolumeID: "vendor-vol-1", Backend: "vast-backend", Tenant: "acme",
+		VendorVolumeID: "vendor-vol-1", Provider: "vast", Tenant: "acme",
 	})
 	if err != nil {
 		t.Fatalf("DeleteVolume error: %v", err)
@@ -222,7 +222,7 @@ func TestDeleteVolumeSuccess(t *testing.T) {
 func TestDeleteVolumeNotFoundIsSuccess(t *testing.T) {
 	p, _ := newProvisioner(t, &fakeCSIClient{deleteErr: grpcstatus.Error(codes.NotFound, "gone")}, fullSecret())
 	if err := p.DeleteVolume(context.Background(), VendorDeleteVolumeRequest{
-		VendorVolumeID: "vendor-vol-1", Backend: "vast-backend", Tenant: "acme",
+		VendorVolumeID: "vendor-vol-1", Provider: "vast", Tenant: "acme",
 	}); err != nil {
 		t.Fatalf("NotFound should be treated as success, got %v", err)
 	}
@@ -231,7 +231,7 @@ func TestDeleteVolumeNotFoundIsSuccess(t *testing.T) {
 func TestDeleteVolumeVendorError(t *testing.T) {
 	p, _ := newProvisioner(t, &fakeCSIClient{deleteErr: grpcstatus.Error(codes.Internal, "boom")}, fullSecret())
 	if err := p.DeleteVolume(context.Background(), VendorDeleteVolumeRequest{
-		VendorVolumeID: "vendor-vol-1", Backend: "vast-backend", Tenant: "acme",
+		VendorVolumeID: "vendor-vol-1", Provider: "vast", Tenant: "acme",
 	}); err == nil {
 		t.Fatalf("expected vendor error to propagate, got nil")
 	}

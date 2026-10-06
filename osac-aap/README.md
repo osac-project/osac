@@ -40,7 +40,91 @@ pluggable backends:
 |----------------|------|---------|
 | `cudn_net` | ClusterUserDefinedNetwork (CUDN) on OpenShift | OVN-Kubernetes |
 | `netris` | Netris Controller API | Netris |
+| `agentless_net` | UID-keyed VirtualNetwork namespace, transit uplink, and forwarding baseline | AgentlessNet |
 | `openstack` | OpenStack Neutron | Neutron |
+
+The current `agentless_net` unified-resource path provisions and removes the
+VirtualNetwork namespace, transit uplink, and forwarding baseline. Subnet,
+SecurityGroup, ExternalIPPool, ExternalIP, ExternalIPAttachment, and NATGateway
+operations still fail fast. A successful VirtualNetwork means this namespace
+baseline was verified; it does not mean that tenant traffic has external
+reachability.
+
+VirtualNetwork provider state uses schema v1 in a SQLite database at
+`AGENTLESS_NET_STATE_FILE` (default `/etc/osac/agentless_network_state.sqlite3`).
+The database stores each VirtualNetwork's immutable CR CIDR and one UID-keyed
+`/31` transit link carved from that CIDR.
+Both addresses are endpoints: the host uses the base address and acts as the
+namespace default gateway; the namespace uses the next address. The `/31` link
+reserves no network or broadcast address and is not an OSAC Subnet. This VN-only implementation differs from the
+[accepted AgentlessNet design](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-3664-agentless-vlan-fabric-manager/design.md),
+which specifies provider-pool `/30` links and versioned JSON state. Future
+Subnet work must reconcile transit reservations with that provider-pool
+contract before claiming full backend support. Its connected route is
+intended to take precedence over the host's default route; existing
+more-specific host routes that overlap the transit block are rejected.
+
+Host uplink names use the reserved `osacvn` prefix. Two shared host `FORWARD`
+rules isolate all such interfaces, keeping firewall rule count independent of
+the number of VirtualNetworks.
+
+The state-file flock protects short SQLite transactions. A bounded 256-file
+lock pool serializes operations for each resource UID while provider commands
+run; hash collisions can serialize unrelated UIDs. A short firewall lock
+protects the shared host `FORWARD` rules. Failed creates retain their
+allocation for retry. Deletes retain the entry until the UID-owned namespace,
+uplink, and host isolation rules have been removed and verified. The module
+rejects unsupported database versions, corrupt state, and unsafe owner or file
+modes; do not delete the state database to clear an error. Earlier development
+schema-v1 databases with capacity tables are incompatible with this reduced
+schema and fail closed; there is no automatic migration. Preserve existing
+lab state and arrange explicit cleanup before changing its state format.
+
+Each AgentlessNet VirtualNetwork job reads serialized YAML or JSON from
+`AGENTLESS_NET_VN_INVENTORY` in the existing `network-fulfillment-ig` ConfigMap,
+which the networking worker imports through `envFrom`. It must describe
+exactly one authoritative host under `all.children.net_nodes.hosts`, with
+`ansible_host` and `ansible_user`, plus an optional port (default `22`). Do not
+put password fields anywhere in the ConfigMap. For example:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: network-fulfillment-ig
+  namespace: <aap-worker-namespace>
+data:
+  AGENTLESS_NET_VN_INVENTORY: |
+    all:
+      children:
+        net_nodes:
+          hosts:
+            network-node:
+              ansible_host: <ssh-host>
+              ansible_user: <ssh-user>
+              ansible_port: 22
+```
+
+Configure SSH with an AAP machine credential, a mounted private-key path, or
+`AGENTLESS_NET_SSH_PRIVATE_KEY` from the existing `network-fulfillment-ig`
+Secret. When the Secret key is used, the role writes it to a mode-0600
+temporary file on the worker and removes it after the operation, including
+failures. Missing or invalid inventory fails before provider mutation.
+Configure nonsecret values through the existing
+[AAP instance-group configuration](../osac-installer/docs/network-backend.md#agentlessnet-virtualnetwork-baseline).
+
+The managed node must be reachable by SSH and provide Python 3, `iproute2`,
+`iptables` with conntrack support, and privilege escalation. The role enables
+IPv4 forwarding and a permit-all `FORWARD` policy inside the namespace. It
+does not change the host forwarding sysctl; interface-scoped host drops keep
+traffic isolated between VirtualNetworks. BGP, Subnet/VLAN/DHCP, NAT, and full
+external connectivity remain separate work. VN readiness alone cannot make
+`DefaultNetworkingReady` true. Replacing a networking manager requires draining
+and replacing its resources; changing an existing VN's backend is unsupported.
+
+The older `AGENTLESS_NET_IPAM_STATE_FILE` and
+`AGENTLESS_NET_EXTERNAL_INTERFACE` settings remain separate for embedded CaaS
+step workflows; they do not configure VirtualNetwork transit links.
 
 Plus MetalLB-based ExternalIPPool / ExternalIP management (`metallb_l2`).
 
@@ -55,16 +139,31 @@ Plus MetalLB-based ExternalIPPool / ExternalIP management (`metallb_l2`).
   bare-metal host lifecycle.
 - **`bm_private_network` / `bm_host_private_network`** — Private network
   attachment for bare-metal hosts.
-- Host lease management and the
-  [ESI (Elastic Secure Infrastructure)](https://esi.readthedocs.org) collection
-  (`massopencloud.esi`) for bare-metal provisioning via OpenStack Ironic.
+- Host lease management and bare-metal provisioning integrations.
 
 ### Clusters
 
 - **`ocp_small`**, **`ocp_4_20_ai_maas`**, **`ocp_ci_small`** — OpenShift cluster
   templates with different sizes, authentication methods, and infrastructure
-  backends (ESI, NICo).
+  backends (Netris, agentless_net).
 - Multi-step workflow playbooks for hosted cluster create / delete / post-install.
+
+### Local LVMS CSI StorageClasses
+
+Single-node VMaaS development/CI deployments can opt in with
+`csi_driver_install_lvms_storage_class_enabled: true`. Tenant Stage 2 creates
+`osac-<tenant>-<tier>` using the OSAC CSI provisioner. The default remains
+`false`, preserving direct TopoLVM classes; ClusterOrder/CaaS stays on its
+legacy storage path.
+
+The selector does not migrate existing classes or volumes. If a same-name
+class already exists with incompatible provisioner, parameters, reclaim policy
+or binding mode, the role fails before modifying any local classes and explains
+the prerequisite. Kubernetes makes these fields immutable. For an existing
+development installation, check its PVC/PV dependencies and explicitly remove
+and recreate the class before opting in, or keep the legacy selector setting.
+The role never deletes a class automatically; existing compatible CSI classes
+remain idempotent.
 
 ## Architecture
 
@@ -77,7 +176,7 @@ osac-aap/
 │   │   ├── templates/                      # Pluggable infrastructure roles with meta/osac.yaml
 │   │   ├── workflows/                      # Multi-step orchestration (cluster, compute_instance)
 │   │   └── config_as_code/                 # AAP configuration (job templates, inventories, credentials)
-│   ├── massopencloud/                      # ESI bare-metal + MOC workflow steps
+│   ├── massopencloud/                      # Bare-metal + MOC workflow steps
 │   ├── netris/                             # Netris network backend steps
 │   ├── nico/                               # NVIDIA NICo bare-metal backend steps
 │   ├── dns/                                # DNS management
@@ -103,9 +202,11 @@ capabilities:
   supports_dual_stack: true
 ```
 
-Running `playbook_osac_config_as_code.yml` publishes these as NetworkClasses /
-ComputeClasses that the fulfillment-service auto-discovers, making the system
-pluggable — new backends can be added without changing the operator or API.
+Network roles declare their dispatcher identity for the operator. The installer
+owns NetworkClass creation; `agentless_net` is selected through the installer
+[overlay instructions](../osac-installer/docs/network-backend.md#agentlessnet-virtualnetwork-baseline)
+and is not published as a ComputeClass. The generic
+resource playbooks then include the selected role without changing the API.
 
 ## Pre-requisites
 

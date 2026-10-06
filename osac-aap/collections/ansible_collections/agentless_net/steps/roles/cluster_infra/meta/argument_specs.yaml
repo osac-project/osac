@@ -13,9 +13,13 @@ argument_specs:
         elements: dict
         default: []
         options:
-          resourceClass:
-            type: str
+          bareMetal:
+            type: dict
             required: true
+            options:
+              instanceType:
+                type: str
+                required: true
           numberOfNodes:
             type: int
             required: true
@@ -28,7 +32,7 @@ argument_specs:
       cluster_order_label:
         type: str
         required: true
-      agent_resource_class_label:
+      agent_instance_type_label:
         type: str
         required: true
       default_agent_namespace:

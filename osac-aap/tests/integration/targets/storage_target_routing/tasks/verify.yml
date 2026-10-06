@@ -1,0 +1,39 @@
+---
+- name: Verify tenant StorageClass placement across management and workload APIs
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Read StorageClass from the management API
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "{{ routing_test_storage_class_name }}"
+      register: _routing_management_sc
+
+    - name: Read StorageClass from the workload API
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ routing_test_kubeconfig_path }}"
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "{{ routing_test_storage_class_name }}"
+      register: _routing_workload_sc
+
+    - name: Assert StorageClass placement
+      ansible.builtin.assert:
+        that:
+          - _routing_management_sc.resources | length == (routing_test_management_count | int)
+          - _routing_workload_sc.resources | length == (routing_test_workload_count | int)
+        fail_msg: >-
+          Expected {{ routing_test_storage_class_name }} counts management/workload=
+          {{ routing_test_management_count }}/{{ routing_test_workload_count }}, observed
+          {{ _routing_management_sc.resources | length }}/{{ _routing_workload_sc.resources | length }}.
+
+    - name: Assert present StorageClasses retain tenant ownership labels
+      ansible.builtin.assert:
+        that:
+          - item.metadata.labels['osac.openshift.io/tenant'] == routing_test_tenant_name
+          - item.metadata.labels['app.kubernetes.io/managed-by'] == 'osac-aap'
+        fail_msg: "StorageClass {{ item.metadata.name }} is missing its tenant ownership labels"
+      loop: >-
+        {{ _routing_management_sc.resources + _routing_workload_sc.resources }}

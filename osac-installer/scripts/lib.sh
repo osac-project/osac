@@ -34,8 +34,25 @@ wait_for_namespace_cleanup() {
     if oc get namespace "${namespace}" &>/dev/null && \
        [[ "$(oc get namespace "${namespace}" -o jsonpath='{.status.phase}')" == "Terminating" ]]; then
         echo "Waiting for namespace ${namespace} to finish terminating..."
-        oc wait --for=delete "namespace/${namespace}" --timeout="${timeout}s" || {
-            echo "ERROR: namespace ${namespace} stuck in Terminating state. You may need to manually remove finalizers."
+        local wait_output wait_status
+        if wait_output=$(oc wait --for=delete "namespace/${namespace}" --timeout="${timeout}s" 2>&1); then
+            return 0
+        else
+            wait_status=$?
+        fi
+
+        # Finalizers can run resource cleanup, so do not remove them for API or auth errors.
+        if [[ "${wait_output}" != *"timed out waiting for the condition"* ]]; then
+            echo "ERROR: failed while waiting for namespace ${namespace}: ${wait_output}" >&2
+            return "${wait_status}"
+        fi
+
+        echo "WARNING: namespace ${namespace} stuck in Terminating state, removing finalizers..."
+        oc get namespace "${namespace}" -o json \
+            | python3 -c "import json,sys; ns=json.load(sys.stdin); ns['spec']['finalizers']=[]; json.dump(ns,sys.stdout)" \
+            | oc replace --raw "/api/v1/namespaces/${namespace}/finalize" -f - >/dev/null 2>&1 || true
+        oc wait --for=delete "namespace/${namespace}" --timeout=60s 2>/dev/null || {
+            echo "ERROR: namespace ${namespace} still exists after finalizer removal."
             exit 1
         }
     fi

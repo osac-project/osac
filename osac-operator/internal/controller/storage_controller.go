@@ -122,7 +122,7 @@ type StorageReconciler struct {
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=tenants/finalizers,verbs=update
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=clusterorders,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
-// +kubebuilder:rbac:groups=hypershift.openshift.io,resources=hostedcontrolplanes,verbs=get
+// +kubebuilder:rbac:groups=hypershift.openshift.io,resources=hostedcontrolplanes,verbs=get;list;watch
 // +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 
@@ -241,8 +241,14 @@ func (r *StorageReconciler) patchClusterOrderStorageStatus(ctx context.Context, 
 //   - result: ctrl.Result to return when stop is true
 //   - stop: when true, the caller should return (result, err) immediately
 //   - error: any unexpected failure
-func (r *StorageReconciler) handleBackendReadiness(ctx context.Context, instance *v1alpha1.Tenant, tenantName string) (hubSecretReady bool, result ctrl.Result, stop bool, err error) {
-	hubSecretReady, err = r.hubSecretExists(ctx, tenantName, "")
+//
+// tierDefinitions carries the resolved tier catalog from the Tier API. When
+// non-empty, the check requires hub Secrets for ALL dispatched providers (one
+// per unique TierDefinition.Provider) before declaring StorageBackendReady.
+// When nil or empty (no Tier API configured), it falls back to checking for
+// any hub Secret regardless of provider — preserving backward compatibility.
+func (r *StorageReconciler) handleBackendReadiness(ctx context.Context, instance *v1alpha1.Tenant, tenantName string, tierDefinitions []provisioning.TierDefinition) (hubSecretReady bool, result ctrl.Result, stop bool, err error) {
+	hubSecretReady, err = r.allBackendHubSecretsExist(ctx, tenantName, tierDefinitions)
 	if err != nil {
 		return false, ctrl.Result{}, true, err
 	}
@@ -337,7 +343,7 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1
 
 	// Stage 1: check hub Secret and route provisioning based on backend registration.
 	// stop is always true when err is non-nil (handleBackendReadiness invariant).
-	hubSecretReady, stageResult, stop, err := r.handleBackendReadiness(ctx, instance, tenantName)
+	hubSecretReady, stageResult, stop, err := r.handleBackendReadiness(ctx, instance, tenantName, tierDefinitions)
 	if stop {
 		return stageResult, err
 	}
@@ -350,6 +356,12 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1
 	}
 
 	clusterName := string(r.targetCluster)
+
+	// hasMissingTiers is set when some defined tiers still lack a
+	// StorageClass. The provisioning retry is deferred past Stage 3
+	// (handleCaaSUpdate) so that CaaS cluster lifecycle management
+	// (finalizer addition/removal, CaaS provisioning) is never blocked.
+	var hasMissingTiers bool
 
 	if r.ClusterStorageProvider != nil {
 		scResult, err := r.resolveTenantSpecificStorageClasses(ctx, targetClient, tenantName)
@@ -394,13 +406,31 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1
 			condMsg = condMsg + "; " + strings.Join(scResult.duplicateMessages, "; ")
 		}
 		condMsg = r.appendMissingTierWarnings(instance, tierDefinitions, scResult.resolved, scResult.ambiguousTiers, condMsg)
-		instance.SetStatusCondition(v1alpha1.TenantConditionClusterStorageReady,
-			metav1.ConditionTrue,
-			v1alpha1.TenantReasonFound,
-			condMsg)
+
+		// Detect tiers that still lack a StorageClass. The hasMissingTiers
+		// flag drives the Stage 4 retry (handleClusterStorageProvisioning).
+		// When tiers are still missing, ClusterStorageReady stays False so
+		// handleCaaSUpdate (Stage 3) does not attempt to provision
+		// cluster-side storage with an incomplete tier set. This is safe
+		// because handleCaaSDelete runs BEFORE this point (line ~339),
+		// so finalizer removal on deleting ClusterOrders is never blocked.
+		missing := missingTierNames(tierDefinitions, scResult.resolved, scResult.ambiguousTiers)
+		hasMissingTiers = len(missing) > 0 && len(tierDefinitions) > 0
+
+		if hasMissingTiers {
+			instance.SetStatusCondition(v1alpha1.TenantConditionClusterStorageReady,
+				metav1.ConditionFalse,
+				v1alpha1.TenantReasonNotFound,
+				condMsg)
+		} else {
+			instance.SetStatusCondition(v1alpha1.TenantConditionClusterStorageReady,
+				metav1.ConditionTrue,
+				v1alpha1.TenantReasonFound,
+				condMsg)
+		}
 		instance.Status.StorageClasses = scResult.resolved
 		instance.Status.ClusterStorage = []v1alpha1.ClusterStorageStatus{
-			{ClusterName: clusterName, Ready: true, Reason: v1alpha1.TenantReasonFound},
+			{ClusterName: clusterName, Ready: !hasMissingTiers, Reason: v1alpha1.TenantReasonFound},
 		}
 	} else {
 		// When no provisioning provider is configured, resolve StorageClasses
@@ -444,14 +474,6 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1
 		}
 	}
 
-	// Poll any non-terminal class provision job to update its status
-	latestClassJob := provisioning.FindLatestJobByType(instance.Status.ClusterStorageJobs, v1alpha1.JobTypeProvision)
-	if latestClassJob != nil && !latestClassJob.State.IsTerminal() && r.ClusterStorageProvider != nil {
-		return provisioning.PollJob(ctx, r.ClusterStorageProvider, instance,
-			&provisioning.State{Jobs: &instance.Status.ClusterStorageJobs},
-			latestClassJob, r.StatusPollInterval, nil)
-	}
-
 	// Stage 3: provision cluster-side storage on CaaS clusters owned by this tenant.
 	// Runs after VMaaS (Stage 2) because CaaS requires StorageBackendReady (Stage 1)
 	// to have completed during tenant onboarding before cluster-side resources can
@@ -461,6 +483,22 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1
 		if caasErr != nil || caasResult.RequeueAfter > 0 {
 			return caasResult, caasErr
 		}
+	}
+
+	// Poll any non-terminal class provision job to update its status.
+	// This runs after handleCaaSUpdate (Stage 3) so that CaaS cluster
+	// lifecycle management is never blocked by VMaaS job polling.
+	latestClassJob := provisioning.FindLatestJobByType(instance.Status.ClusterStorageJobs, v1alpha1.JobTypeProvision)
+	if latestClassJob != nil && !latestClassJob.State.IsTerminal() && r.ClusterStorageProvider != nil {
+		return provisioning.PollJob(ctx, r.ClusterStorageProvider, instance,
+			&provisioning.State{Jobs: &instance.Status.ClusterStorageJobs},
+			latestClassJob, r.StatusPollInterval, nil)
+	}
+
+	// Stage 4: Retry provisioning for any storage tiers that failed to resolve.
+	// This runs after handleCaaSUpdate to avoid blocking cluster lifecycle.
+	if hasMissingTiers {
+		return r.handleClusterStorageProvisioning(ctx, instance, hubSecretReady)
 	}
 
 	return ctrl.Result{}, nil
@@ -833,6 +871,18 @@ func (r *StorageReconciler) handleCaaSDelete(ctx context.Context, instance *v1al
 			// without attempting cleanup (OSAC-4340).
 			log.Info("no cluster storage provider configured, skipping CaaS cluster-side cleanup",
 				"clusterOrder", co.Name, "tenant", tenantName)
+		} else if len(provisioning.StorageBackendConnectionsFromContext(ctx)) == 0 {
+			// Backend connections are unavailable (fulfillment service down,
+			// tier resolution failed, or clients not configured). The AAP
+			// deprovisioning job would receive no credentials and fail, and
+			// BlockDeletionOnFailure would prevent finalizer removal,
+			// leaving the ClusterOrder stuck in Deleting. Skip the job and
+			// fall through to finalizer removal — the CaaS cluster is being
+			// torn down anyway (OSAC-4855).
+			log.Info("backend connections unavailable during CaaS teardown, skipping deprovisioning job",
+				"clusterOrder", co.Name, "tenant", tenantName)
+			r.Recorder.Eventf(co, nil, corev1.EventTypeWarning, "BackendConnectionsUnavailable", "Teardown",
+				"Storage backend connections could not be resolved during teardown, skipping deprovisioning job")
 		} else {
 			provCtx := provisioning.WithAdminKubeconfig(ctx, string(kubeconfig))
 
@@ -925,6 +975,45 @@ func (r *StorageReconciler) handleBackendDeprovisioning(ctx context.Context, ins
 }
 
 // --- Helpers ---
+
+// uniqueProviders extracts the sorted, deduplicated provider names from tier
+// definitions. An empty or nil input returns an empty slice (no providers known).
+func uniqueProviders(tierDefinitions []provisioning.TierDefinition) []string {
+	seen := make(map[string]struct{})
+	var providers []string
+	for _, td := range tierDefinitions {
+		if td.Provider != "" {
+			if _, ok := seen[td.Provider]; !ok {
+				seen[td.Provider] = struct{}{}
+				providers = append(providers, td.Provider)
+			}
+		}
+	}
+	sort.Strings(providers)
+	return providers
+}
+
+// allBackendHubSecretsExist checks whether hub Secrets exist for every unique
+// provider in tierDefinitions. When tierDefinitions is nil or empty, or when no
+// provider names can be extracted, it falls back to checking for any hub Secret
+// regardless of provider — preserving backward compatibility with environments
+// that run without a Tier API connection.
+func (r *StorageReconciler) allBackendHubSecretsExist(ctx context.Context, tenantName string, tierDefinitions []provisioning.TierDefinition) (bool, error) {
+	providers := uniqueProviders(tierDefinitions)
+	if len(providers) == 0 {
+		return r.hubSecretExists(ctx, tenantName, "")
+	}
+	for _, provider := range providers {
+		exists, err := r.hubSecretExists(ctx, tenantName, provider)
+		if err != nil {
+			return false, err
+		}
+		if !exists {
+			return false, nil
+		}
+	}
+	return true, nil
+}
 
 func (r *StorageReconciler) hubSecretExists(ctx context.Context, tenantName string, provider string) (bool, error) {
 	labels := map[string]string{osacTenantKey: tenantName}

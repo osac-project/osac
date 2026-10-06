@@ -15,7 +15,6 @@ package network
 
 import (
 	"context"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -36,6 +35,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 	"github.com/osac-project/osac/fulfillment-service/internal/metrics"
 	"github.com/osac-project/osac/fulfillment-service/internal/tlsconfig"
+	"github.com/osac-project/osac/fulfillment-service/internal/trust"
 )
 
 // GrpcClientBuilder contains the data and logic needed to create a gRPC client. Don't create instances of this object
@@ -48,7 +48,7 @@ type GrpcClientBuilder struct {
 	host               string
 	plaintext          bool
 	insecure           bool
-	caPool             *x509.CertPool
+	caPool             *trust.CertPool
 	tokenSource        auth.TokenSource
 	keepAlive          time.Duration
 	keepAliveTimeout   time.Duration
@@ -179,7 +179,7 @@ func (b *GrpcClientBuilder) SetInsecure(value bool) *GrpcClientBuilder {
 // SetCaPool sets the certificate pool that contains the certificates of the certificate authorities that are trusted
 // when connecting using TLS. This is optional, and the default is to use trust the certificate authorities trusted by
 // the operating system.
-func (b *GrpcClientBuilder) SetCaPool(value *x509.CertPool) *GrpcClientBuilder {
+func (b *GrpcClientBuilder) SetCaPool(value *trust.CertPool) *GrpcClientBuilder {
 	b.caPool = value
 	return b
 }
@@ -289,7 +289,7 @@ func (b *GrpcClientBuilder) Build() (result *grpc.ClientConn, err error) {
 	// Set the default CA pool:
 	caPool := b.caPool
 	if caPool == nil {
-		caPool, err = NewCertPool().
+		caPool, err = trust.NewCertPool().
 			SetLogger(b.logger).
 			AddSystemFiles(true).
 			AddKubernetesFiles(true).
@@ -313,7 +313,7 @@ func (b *GrpcClientBuilder) Build() (result *grpc.ClientConn, err error) {
 		if b.host != "" {
 			tlsConfig.ServerName = b.host
 		}
-		tlsConfig.RootCAs = caPool
+		tlsConfig.RootCAs = caPool.Pool()
 
 		// TODO: This should have been the non-experimental package, but we need to use this one because
 		// currently the OpenShift router doesn't seem to support ALPN, and the regular credentials package

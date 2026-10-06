@@ -68,38 +68,6 @@ var _ = Describe("CEL filter utilities", func() {
 		})
 	})
 
-	Describe("filterReferencesAnyField", func() {
-		DescribeTable("detects field references",
-			func(filter string, expected bool, prefixes ...string) {
-				found, err := filterReferencesAnyField(filter, prefixes...)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(found).To(Equal(expected))
-			},
-			Entry("exact field reference",
-				"this.spec.state == 1", true, "this.spec.state"),
-			Entry("child field via prefix",
-				"this.spec.deprecation.deprecation_timestamp != null", true, "this.spec.deprecation"),
-			Entry("sibling field with shared prefix does not match",
-				"this.spec.state_machine == true", false, "this.spec.state"),
-			Entry("unrelated field does not match",
-				"this.spec.enabled == false", false, "this.spec.state"),
-			Entry("one of multiple prefixes matches",
-				"this.spec.enabled == false", true, "this.spec.state", "this.spec.enabled", "this.spec.is_default"),
-			Entry("field in compound expression",
-				"this.metadata.name == 'test' && this.spec.state == 1", true, "this.spec.state"),
-			Entry("no prefix matches",
-				"this.metadata.name == 'test'", false, "this.spec.state"),
-			Entry("disjunction with repeated field",
-				"this.spec.state == 1 || this.spec.state == 2", true, "this.spec.state"),
-		)
-
-		It("returns error for invalid syntax", func() {
-			_, err := filterReferencesAnyField("true) || (true", "this.spec.state")
-			Expect(err).To(HaveOccurred())
-		})
-
-	})
-
 	Describe("composeFilterDefaults", func() {
 		defaults := []filterDefault{
 			{field: "this.spec.state", predicate: "(this.spec.state == 1 || this.spec.state == 2)"},

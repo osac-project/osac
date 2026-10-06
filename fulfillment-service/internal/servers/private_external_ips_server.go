@@ -26,7 +26,6 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -38,7 +37,6 @@ var validExternalIPTransitions = map[privatev1.ExternalIPState][]privatev1.Exter
 
 type PrivateExternalIPsServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -51,6 +49,7 @@ type PrivateExternalIPsServer struct {
 	privatev1.UnimplementedExternalIPsServer
 
 	logger            *slog.Logger
+	tenancyLogic      auth.TenancyLogic
 	generic           *GenericServer[*privatev1.ExternalIP]
 	externalIPPoolDao *dao.GenericDAO[*privatev1.ExternalIPPool]
 	lifecycle         *externalIPLifecycle
@@ -62,11 +61,6 @@ func NewPrivateExternalIPsServer() *PrivateExternalIPsServerBuilder {
 
 func (b *PrivateExternalIPsServerBuilder) SetLogger(value *slog.Logger) *PrivateExternalIPsServerBuilder {
 	b.logger = value
-	return b
-}
-
-func (b *PrivateExternalIPsServerBuilder) SetNotifier(value events.Notifier) *PrivateExternalIPsServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -110,7 +104,6 @@ func (b *PrivateExternalIPsServerBuilder) Build() (result *PrivateExternalIPsSer
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer)
-	addDAOEventCallback(externalIPPoolDaoBuilder, b.notifier)
 	externalIPPoolDao, err := externalIPPoolDaoBuilder.Build()
 	if err != nil {
 		return
@@ -168,7 +161,6 @@ func (b *PrivateExternalIPsServerBuilder) Build() (result *PrivateExternalIPsSer
 	generic, err := NewGenericServer[*privatev1.ExternalIP]().
 		SetLogger(b.logger).
 		SetService(privatev1.ExternalIPs_ServiceDesc.ServiceName).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
@@ -180,6 +172,7 @@ func (b *PrivateExternalIPsServerBuilder) Build() (result *PrivateExternalIPsSer
 
 	result = &PrivateExternalIPsServer{
 		logger:            b.logger,
+		tenancyLogic:      b.tenancyLogic,
 		generic:           generic,
 		externalIPPoolDao: externalIPPoolDao,
 	}
@@ -221,8 +214,17 @@ func (s *PrivateExternalIPsServer) Create(ctx context.Context,
 	}
 
 	poolKey := refKey(externalIP.GetSpec().GetPool())
-	err = s.validatePoolReference(ctx, poolKey)
-	if err != nil {
+	pool, poolErr := s.validatePoolReference(ctx, poolKey)
+	if poolErr != nil {
+		err = poolErr
+		return
+	}
+	externalIPTenant, tenantErr := resolveObjectTenant(ctx, externalIP.GetMetadata(), s.tenancyLogic)
+	if tenantErr != nil {
+		err = tenantErr
+		return
+	}
+	if err = validateTenantOrShared(externalIPTenant, pool, "ExternalIPPool", poolKey, auth.SharedTenant); err != nil {
 		return
 	}
 
@@ -305,7 +307,7 @@ func (s *PrivateExternalIPsServer) Delete(ctx context.Context,
 
 	existingExternalIP := getResponse.GetObject()
 
-	if err = validateNotDefault(existingExternalIP.GetMetadata().GetLabels(), "external IP"); err != nil {
+	if err = validateNotDefault(ctx, existingExternalIP.GetMetadata().GetLabels(), "external IP"); err != nil {
 		return
 	}
 	if existingExternalIP.GetMetadata().GetDeletionTimestamp() != nil {
@@ -352,36 +354,36 @@ func (s *PrivateExternalIPsServer) validateExternalIP(ctx context.Context,
 	return nil
 }
 
-func (s *PrivateExternalIPsServer) validatePoolReference(ctx context.Context, poolID string) error {
+func (s *PrivateExternalIPsServer) validatePoolReference(ctx context.Context, poolID string) (*privatev1.ExternalIPPool, error) {
 	getResponse, err := s.externalIPPoolDao.Get().
 		SetId(poolID).
 		Do(ctx)
 	if err != nil {
 		var notFoundErr *dao.ErrNotFound
 		if errors.As(err, &notFoundErr) {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"pool '%s' does not exist", poolID)
 		}
 		s.logger.ErrorContext(ctx, "Failed to query ExternalIPPool",
 			slog.String("pool_id", poolID),
 			slog.Any("error", err))
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to validate pool")
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to validate pool")
 	}
 
 	pool := getResponse.GetObject()
 
 	if pool.GetStatus().GetState() != privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY {
-		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+		return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition,
 			"pool '%s' is not in READY state (current state: %s)",
 			poolID, pool.GetStatus().GetState().String())
 	}
 
 	if pool.GetStatus().GetAvailable() <= 0 {
-		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+		return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition,
 			"pool '%s' has no available capacity", poolID)
 	}
 
-	return nil
+	return pool, nil
 }
 
 func (s *PrivateExternalIPsServer) updatePoolCapacity(ctx context.Context, poolID string, delta int64) error {

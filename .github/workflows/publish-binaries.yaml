@@ -14,10 +14,28 @@
 
 name: Publish binaries
 
+# Only ever called directly by osac-build-and-publish.yaml, right after it
+# pushes fulfillment-service's real tag -- never triggered by the tag push
+# itself. osac-build-and-publish.yaml is the sole source of truth for
+# producing anything under a real fulfillment-service/vX.Y.Z version; this
+# used to be push:tags-triggered independently of that pipeline, which meant
+# the binaries it released were a second, independent build of the same
+# commit rather than the exact one that pipeline already built and tested.
 on:
-  push:
-    tags:
-    - 'fulfillment-service/v*'
+  workflow_call:
+    inputs:
+      version:
+        description: Bare, semver-parseable version with its leading "v" (e.g. "v0.0.109").
+        required: true
+        type: string
+      tag:
+        description: The already-pushed, component-scoped git tag (e.g. "fulfillment-service/v0.0.109").
+        required: true
+        type: string
+      ref:
+        description: Commit or branch to check out and release from.
+        required: true
+        type: string
 
 jobs:
 
@@ -27,12 +45,14 @@ jobs:
     permissions:
       contents: write
       # cosign's keyless binary signing below (via goreleaser's `signs:`) --
-      # safe directly on this job, no pull_request exposure: this workflow
-      # only ever runs on push of a fulfillment-service/vX.Y.Z tag.
+      # safe directly on this job: it's only ever called by
+      # osac-build-and-publish.yaml after tests already passed, never
+      # exposed to pull_request-controlled content.
       id-token: write
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       with:
+        ref: ${{ inputs.ref }}
         fetch-depth: 0
         persist-credentials: false
     - uses: ./.github/actions/setup-go
@@ -46,10 +66,6 @@ jobs:
         # v3's --bundle-based sign-blob output -- an installer default that
         # silently moved to a pre-v3 cosign would break that config.
         cosign-release: 'v3.0.6'
-    - name: Compute release version
-      # Strip this component's tag prefix (see the `tags:` trigger above) --
-      # goreleaser expects a bare vX.Y.Z, not the scoped git tag.
-      run: echo "RELEASE_VERSION=${GITHUB_REF_NAME#fulfillment-service/}" >> "$GITHUB_ENV"
     - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94  # v7
       with:
         workdir: fulfillment-service
@@ -59,31 +75,32 @@ jobs:
         version: v2.18.0
         # goreleaser's own git-state pipe additionally requires a real git tag
         # named by the value of GORELEASER_CURRENT_TAG to exist at HEAD, separate
-        # from (and not satisfied by) the env var override above -- our actual pushed
-        # tag is scoped (fulfillment-service/vX.Y.Z), so that check always fails.
-        # --skip=validate disables just that check (plus an irrelevant-in-CI
-        # dirty-worktree check); it doesn't affect anything else in the release.
+        # from (and not satisfied by) the env var override above -- our actual
+        # pushed tag is scoped (fulfillment-service/vX.Y.Z), so that check
+        # always fails. --skip=validate disables just that check (plus an
+        # irrelevant-in-CI dirty-worktree check); it doesn't affect anything
+        # else in the release.
         args: release --clean --skip=validate
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        GORELEASER_CURRENT_TAG: ${{ env.RELEASE_VERSION }}
+        GORELEASER_CURRENT_TAG: ${{ inputs.version }}
     - name: Point release at the scoped trigger tag
       # GORELEASER_CURRENT_TAG must be a bare, semver-parseable value (see
       # above), so the release -- and an accompanying lightweight git tag --
       # that goreleaser's own `gh release create` produces is necessarily
-      # named after that bare version, not the scoped tag that actually
-      # triggered this workflow (decoupling the two is a goreleaser Pro-only
-      # feature, confirmed via https://goreleaser.com/customization/monorepo/).
+      # named after that bare version, not the scoped tag this run actually
+      # released (decoupling the two is a goreleaser Pro-only feature,
+      # confirmed via https://goreleaser.com/customization/monorepo/).
       # Re-point the release at the real scoped tag for consistency with the
-      # other 3 components' releases (OSAC-3467) -- verified this works
+      # other components' releases (OSAC-3467) -- verified this works
       # correctly for slash-containing tags (GitHub's own generated
       # browser_download_url uses the literal, non-percent-encoded tag) --
       # then remove the now-orphaned bare tag goreleaser left behind.
       run: |
-        gh release edit "${RELEASE_VERSION}" \
-          --tag "${GITHUB_REF_NAME}" \
-          --title "fulfillment-service ${RELEASE_VERSION}" \
+        gh release edit "${{ inputs.version }}" \
+          --tag "${{ inputs.tag }}" \
+          --title "fulfillment-service ${{ inputs.version }}" \
           --verify-tag
-        gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/${RELEASE_VERSION}"
+        gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/${{ inputs.version }}"
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

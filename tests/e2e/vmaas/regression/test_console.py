@@ -16,10 +16,10 @@ from typing import Any
 import pytest
 import websocket
 
-from tests.e2e.catalog.conftest import unique_name
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import (
     assert_grpc_rejected,
+    unique_name,
     wait_for_cr,
     wait_for_deletion,
     wait_for_provision,
@@ -54,20 +54,20 @@ def console_vm(
     ci_name: str | None = None
     try:
         ci_name = wait_for_cr(k8s=k8s_hub_client, uuid=uuid)
-        print(f"Waiting for {ci_name} to provision and reach Running...")
+        print("Waiting for console test VM to provision and reach Running...")
         wait_for_provision(k8s=k8s_hub_client, name=ci_name)
         wait_for_running(k8s=k8s_hub_client, name=ci_name)
-        print(f"Console test VM {ci_name} is Running")
+        print("Console test VM is Running")
 
         yield {"uuid": uuid, "name": ci_name}
     finally:
-        print(f"\nCleaning up console test VM {uuid}...")
+        print("\nCleaning up console test VM...")
         try:
             cli.delete_compute_instance(uuid=uuid)
             if ci_name is not None:
                 wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
-        except Exception as e:
-            print(f"WARNING: Failed to cleanup console VM {uuid}: {e}")
+        except Exception:
+            print("WARNING: Failed to cleanup console VM")
 
 
 # ---------------------------------------------------------------------------
@@ -397,7 +397,7 @@ def test_console_expired_ticket_rejected(
 
     expires_at = datetime.fromisoformat(expires_at_str.replace("Z", "+00:00"))
     seconds_until_expiry: float = (expires_at - datetime.now(tz=UTC)).total_seconds()
-    wait_seconds: float = min(60.0, max(0.0, seconds_until_expiry) + 15.0)
+    wait_seconds: float = max(0.0, seconds_until_expiry) + 15.0
 
     logger.info("Ticket expires at %s, waiting %.0fs past expiry", expires_at_str, wait_seconds)
     time.sleep(wait_seconds)

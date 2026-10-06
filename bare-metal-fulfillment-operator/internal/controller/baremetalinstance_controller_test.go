@@ -1631,10 +1631,54 @@ var _ = Describe("BareMetalInstance Controller", func() {
 					Expect(err).NotTo(HaveOccurred())
 					Expect(result.RequeueAfter).To(Equal(reconciler.ManagementRecheckIntervalDuration))
 
+					// Benign backpressure (host busy, nothing triggered yet): the condition
+					// reports PowerSyncRequired — a benign in-progress reason that is NOT a
+					// failure and, unlike Progressing, does not mark a restart as already in
+					// flight (so the next reconcile re-triggers rather than polling).
 					condition := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionPowerSynced)
 					Expect(condition).NotTo(BeNil())
 					Expect(condition.Status).To(Equal(metav1.ConditionFalse))
-					Expect(condition.Reason).To(Equal(v1alpha1.HostConditionReasonPowerSyncFailed))
+					Expect(condition.Reason).To(Equal(v1alpha1.HostConditionReasonPowerSyncRequired))
+				})
+
+				It("should re-trigger (not poll) on the reconcile after transitioning backpressure", func() {
+					// Regression guard for the benign-backpressure state machine: after a
+					// transitioning error stamps PowerSyncRequired, the *next* reconcile must
+					// re-enter the trigger path (guard keys on Progressing, not
+					// PowerSyncRequired) rather than adopting a possibly-unrelated transition
+					// via IsRestartComplete. A mistaken switch back to Progressing here would
+					// route reconcile #2 into the poll branch and silently skip the restart.
+					triggerCalls := 0
+					mockMgmtClient.triggerRestartFunc = func(ctx context.Context, hostID string) error {
+						triggerCalls++
+						if triggerCalls == 1 {
+							return management.ErrTransitioning // host busy, nothing triggered
+						}
+						return nil // host idle now, restart actually initiated
+					}
+					pollCalled := false
+					mockMgmtClient.isRestartCompleteFunc = func(ctx context.Context, hostID string) (bool, error) {
+						pollCalled = true
+						return true, nil
+					}
+
+					// Reconcile #1: transitioning backpressure.
+					_, err := reconciler.reconcileRestartTrigger(ctx, bareMetalInstance)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionPowerSynced).Reason).
+						To(Equal(v1alpha1.HostConditionReasonPowerSyncRequired))
+
+					// Reconcile #2: must re-trigger (not poll for completion).
+					result, err := reconciler.reconcileRestartTrigger(ctx, bareMetalInstance)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(result.RequeueAfter).To(Equal(reconciler.ManagementRecheckIntervalDuration))
+					Expect(triggerCalls).To(Equal(2), "reconcile #2 should re-trigger the restart")
+					Expect(pollCalled).To(BeFalse(), "reconcile #2 must not poll IsRestartComplete")
+
+					// The restart is now genuinely in flight → Progressing.
+					condition := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionPowerSynced)
+					Expect(condition.Status).To(Equal(metav1.ConditionFalse))
+					Expect(condition.Reason).To(Equal(v1alpha1.HostConditionReasonProgressing))
 				})
 			})
 

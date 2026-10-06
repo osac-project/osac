@@ -40,7 +40,7 @@ type NATGatewayFeedbackReconciler struct {
 
 // NewNATGatewayFeedbackReconciler creates a reconciler that sends to the fulfillment service
 // updates about NAT gateways.
-func NewNATGatewayFeedbackReconciler(hubClient clnt.Client, grpcConn *grpc.ClientConn, networkingNamespace string) *NATGatewayFeedbackReconciler {
+func NewNATGatewayFeedbackReconciler(hubClient clnt.Client, grpcConn grpc.ClientConnInterface, networkingNamespace string) *NATGatewayFeedbackReconciler {
 	ngClient := privatev1.NewNATGatewaysClient(grpcConn)
 	r := &NATGatewayFeedbackReconciler{networkingNamespace: networkingNamespace}
 	r.bridge = &feedback.Bridge[*v1alpha1.NATGateway, *privatev1.NATGateway]{

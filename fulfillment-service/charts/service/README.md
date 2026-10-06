@@ -13,7 +13,7 @@ This Helm chart deploys the complete fulfillment service.
 To install the chart with the release name `fulfillment-service`:
 
 ```bash
-$ helm install fulfillment-service ./charts/service -n osac --create-namespace
+$ helm install fulfillment-service ./charts/service -n osac --create-namespace -f values.yaml
 ```
 
 ## Configuration
@@ -32,19 +32,34 @@ The following table lists the configurable parameters of the chart and their def
 | `log.level`                | Log level for all components (debug, info, warn, error)                           | `info`                                                         |
 | `log.headers`              | Enable logging of HTTP/gRPC headers                                               | `false`                                                        |
 | `log.bodies`               | Enable logging of HTTP/gRPC request and response bodies                           | `false`                                                        |
-| `images.service`           | Fulfillment service container image                                               | `ghcr.io/osac/fulfillment-service:main`                        |
-| `images.envoy`             | Envoy proxy container image                                                       | `docker.io/envoyproxy/envoy:v1.37.1`                           |
+| `images.service.repository` | Fulfillment service container image repository                                   | `ghcr.io/osac-project/fulfillment-service`                     |
+| `images.service.tag`       | Fulfillment service container image tag                                            | `latest`                                                       |
+| `images.service.pullPolicy` | Fulfillment service image pull policy                                             | `Always`                                                       |
+| `images.envoy.repository`  | Envoy proxy container image repository                                             | `docker.io/envoyproxy/envoy`                                   |
+| `images.envoy.tag`         | Envoy proxy container image tag                                                    | `v1.37.1`                                                      |
+| `images.envoy.pullPolicy`  | Envoy proxy image pull policy                                                      | `IfNotPresent`                                                 |
+| `eventPublisher.enabled`   | Deploy the Kafka-backed event publisher                                           | `true`                                                         |
+| `database.connection`      | List of sources for database connection parameters (see below)                    | `[]` (must be configured)                                      |
+| `kafka.connection`         | List of sources for Kafka connection parameters (see below)                       | `[]` (must be configured when the event publisher is enabled)  |
 | `ingressProxy.concurrency` | Number of worker threads for the fulfillment ingress proxy                       | `4`                                                            |
-| `database.connection`      | List of sources for database connection parameters (see below)                    | `[]`                                                           |
+
+
+Connection details are provided via `kafka.connection`, a list of ConfigMap and Secret sources that
+provide the connection parameters. When `eventPublisher.enabled` is true, the sources must provide
+`brokers`, which is required for the publisher to start. Set `eventPublisher.enabled: false` for an
+API-only deployment that deliberately omits Kafka. Each entry maps keys from a ConfigMap or Secret to Kafka configuration properties
+named `brokers`, `user` and `password`. SASL is optional: omit `user` and `password` when the cluster
+does not require it. TLS trust uses `certs.caBundle`; include the broker CA in that ConfigMap when it
+is not already trusted.
 
 **Note on hostnames:** Both `externalHostname` and `internalHostname` are required because TLS
 certificates must be generated with the correct host names.
 
 The recommended deployment uses two networks. The external network is intended for regular users and
 only gives access to the public API via `externalHostname`. The internal network gives access to
-both the public and private APIs via `internalHostname`. The internal network should be restricted so
-that only the administrators of the system can access it. In a typical environment this would be a
-network confined to the physical infrastructure of the cloud provider, while the external network
+both the public and private APIs via `internalHostname`. The internal network should be restricted
+so that only the administrators of the system can access it. In a typical environment this would be
+a network confined to the physical infrastructure of the cloud provider, while the external network
 would be publicly reachable. Restricting access to the internal network is not strictly required
 because the private API is protected by authentication and authorization, but it is good practice to
 add network-level isolation as an additional layer of defense.
@@ -75,7 +90,10 @@ log:
   bodies: true
 
 images:
-  service: ghcr.io/osac/fulfillment-service:v1.0.0
+  service:
+    repository: ghcr.io/osac-project/fulfillment-service
+    tag: v1.0.0
+    pullPolicy: Always
 
 database:
   connection:
@@ -93,6 +111,21 @@ database:
         param: sslkey
       - key: ca.crt
         param: sslrootcert
+
+kafka:
+  connection:
+  - configMap:
+      name: fulfillment-service-kafka-config
+      items:
+      - key: bootstrap.servers
+        param: brokers
+      - key: username
+        param: user
+  - secret:
+      name: fulfillment-service-kafka
+      items:
+      - key: password
+        param: password
 ```
 
 Then install with:
@@ -125,10 +158,3 @@ To uninstall the chart:
 ```bash
 helm uninstall fulfillment-service -n osac
 ```
-
-## Database
-
-The chart expects an external PostgreSQL database to be available. The database
-connection details are provided via `database.connection`, a list of ConfigMap
-and Secret sources that provide the connection parameters. Each entry maps keys
-from a ConfigMap or Secret to connection parameters.

@@ -1,0 +1,87 @@
+suite: node fulfillment trust
+templates:
+  - templates/node-daemonset.yaml
+tests:
+  - it: verifies fulfillment with the projected tenant CA when trust is enabled
+    set:
+      namespace: osac-csi
+      global.fulfillmentTrust.enabled: true
+      global.fulfillmentTrust.tenantNamespace: osac-csi
+      controller.fulfillment.endpoint: fulfillment-api.example.com:443
+      controller.fulfillment.issuerUrl: https://keycloak.example.com/realms/osac
+      controller.fulfillment.credentials.secretName: osac-csi-credentials
+      controller.fulfillment.tls.caBundle.configMap: osac-fulfillment-ca
+      controller.fulfillment.tls.caBundle.key: bundle.pem
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--fulfillment-ca-file=/etc/osac-csi/fulfillment-ca/bundle.pem"
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: "--grpc-insecure"
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: "--allow-stub"
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: fulfillment-ca
+            mountPath: /etc/osac-csi/fulfillment-ca
+            readOnly: true
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: fulfillment-ca
+            configMap:
+              name: osac-fulfillment-ca
+              items:
+                - key: bundle.pem
+                  path: bundle.pem
+
+  - it: rejects enabled trust without fulfillment configuration
+    set:
+      namespace: osac-csi
+      global.fulfillmentTrust.enabled: true
+      global.fulfillmentTrust.tenantNamespace: osac-csi
+    asserts:
+      - failedTemplate:
+          errorMessage: fulfillment configuration is required when global.fulfillmentTrust.enabled is true
+
+  - it: rejects enabled trust with insecure TLS verification
+    set:
+      namespace: osac-csi
+      global.fulfillmentTrust.enabled: true
+      global.fulfillmentTrust.tenantNamespace: osac-csi
+      controller.fulfillment.endpoint: fulfillment-api.example.com:443
+      controller.fulfillment.issuerUrl: https://keycloak.example.com/realms/osac
+      controller.fulfillment.tls.insecureSkipVerify: true
+      controller.fulfillment.tls.caBundle.configMap: osac-fulfillment-ca
+      controller.fulfillment.tls.caBundle.key: bundle.pem
+    asserts:
+      - failedTemplate:
+          errorMessage: controller.fulfillment.tls.insecureSkipVerify cannot be true when global.fulfillmentTrust.enabled is true
+
+  - it: rejects enabled trust without a CA bundle key
+    set:
+      namespace: osac-csi
+      global.fulfillmentTrust.enabled: true
+      global.fulfillmentTrust.tenantNamespace: osac-csi
+      controller.fulfillment.endpoint: fulfillment-api.example.com:443
+      controller.fulfillment.issuerUrl: https://keycloak.example.com/realms/osac
+      controller.fulfillment.tls.caBundle.key: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: controller.fulfillment.tls.caBundle.configMap and key are required when global.fulfillmentTrust.enabled is true
+
+  - it: rejects enabled trust when the trust namespace differs from the CSI namespace
+    set:
+      namespace: osac-csi
+      global.fulfillmentTrust.enabled: true
+      global.fulfillmentTrust.tenantNamespace: another-namespace
+      controller.fulfillment.endpoint: fulfillment-api.example.com:443
+      controller.fulfillment.issuerUrl: https://keycloak.example.com/realms/osac
+      controller.fulfillment.tls.caBundle.configMap: osac-fulfillment-ca
+      controller.fulfillment.tls.caBundle.key: bundle.pem
+    asserts:
+      - failedTemplate:
+          errorMessage: global.fulfillmentTrust.tenantNamespace must equal the CSI driver namespace when fulfillment trust is enabled

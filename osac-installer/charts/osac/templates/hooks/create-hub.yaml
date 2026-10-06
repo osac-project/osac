@@ -115,7 +115,7 @@ spec:
             FULFILLMENT_URL="https://fulfillment-internal-api:8001"
 
             echo "Checking if hub 'hub' already exists..."
-            HTTP_CODE=$(curl -sk --connect-timeout 5 --max-time 30 \
+            HTTP_CODE=$(curl -s {{ include "osac.fulfillmentCurlTLS" . }} --connect-timeout 5 --max-time 30 \
               -o /tmp/hub-response.json -w '%{http_code}' \
               -H "Authorization: Bearer ${AUTH_TOKEN}" \
               "${FULFILLMENT_URL}/api/private/v1/hubs/hub")
@@ -123,7 +123,7 @@ spec:
 
             if [[ "${HTTP_CODE}" == "200" ]]; then
               echo "Hub exists, updating..."
-              HTTP_CODE=$(curl -sk --connect-timeout 5 --max-time 30 \
+              HTTP_CODE=$(curl -s {{ include "osac.fulfillmentCurlTLS" . }} --connect-timeout 5 --max-time 30 \
                 -o /tmp/hub-update.json -w '%{http_code}' \
                 -X PATCH \
                 -H "Authorization: Bearer ${AUTH_TOKEN}" \
@@ -135,7 +135,7 @@ spec:
               echo "Hub updated."
             else
               echo "Creating hub..."
-              HTTP_CODE=$(curl -sk --connect-timeout 5 --max-time 30 \
+              HTTP_CODE=$(curl -s {{ include "osac.fulfillmentCurlTLS" . }} --connect-timeout 5 --max-time 30 \
                 -o /tmp/hub-create.json -w '%{http_code}' \
                 -X POST \
                 -H "Authorization: Bearer ${AUTH_TOKEN}" \
@@ -152,6 +152,9 @@ spec:
         volumeMounts:
         - name: tmp
           mountPath: /tmp
+        - name: ca-bundle
+          mountPath: /etc/ca-bundle
+          readOnly: true
         resources:
           requests:
             cpu: 50m
@@ -167,5 +170,11 @@ spec:
       volumes:
       - name: tmp
         emptyDir: {}
+      - name: ca-bundle
+        configMap:
+          name: {{ .Values.service.certs.caBundle.configMap | required "service.certs.caBundle.configMap is required" }}
+          items:
+          - key: bundle.pem
+            path: bundle.pem
       restartPolicy: OnFailure
 {{- end }}

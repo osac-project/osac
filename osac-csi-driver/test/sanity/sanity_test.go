@@ -40,6 +40,7 @@ func TestSanity(t *testing.T) {
 	driverSocket := filepath.Join(tmpDir, "driver.sock")
 	nodeID := "test-node-1"
 	backendName := "fake"
+	t.Setenv("NODE_NAME", nodeID)
 
 	vendorSrv, _, err := startFakeVendor(vendorSocket, nodeID)
 	if err != nil {
@@ -93,8 +94,8 @@ func TestSanity(t *testing.T) {
 	config.Address = driverSocket
 	config.SecretsFile = secretsFile
 	config.TestVolumeParameters = map[string]string{
-		"tier":   "default",
-		"tenant": "test-tenant",
+		"osac.tier": "default",
+		"tenant":    "test-tenant",
 	}
 	config.TargetPath = filepath.Join(tmpDir, "target")
 	config.StagingPath = filepath.Join(tmpDir, "staging")

@@ -53,6 +53,11 @@ linters:
       - linters:
           - errcheck
         path: ".*_test.go$"
+      # host_type is proto-deprecated in favour of baremetal_instance_type but
+      # still read by the operator as a ResourceClass fallback.
+      - linters:
+          - staticcheck
+        text: HostType.*deprecated
     paths:
       - third_party$
       - builtin$

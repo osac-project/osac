@@ -21,7 +21,6 @@ import (
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
@@ -238,66 +237,6 @@ var _ = Describe("Public NAT gateways server", func() {
 			listResp, err := publicServer.List(ctx, publicv1.NATGatewaysListRequest_builder{}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(listResp.GetItems()).To(HaveLen(3))
-		})
-
-		It("updates a NATGateway", func() {
-			vnID := createVirtualNetwork()
-			eip := createAllocatedExternalIP()
-			createResp, err := publicServer.Create(ctx, publicv1.NATGatewaysCreateRequest_builder{
-				Object: publicv1.NATGateway_builder{
-					Metadata: publicv1.Metadata_builder{
-						Tenant: testTenant,
-						Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
-					}.Build(),
-					Spec: publicv1.NATGatewaySpec_builder{
-						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
-						ExternalIp:     publicv1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-
-			object := createResp.GetObject()
-			object.GetMetadata().SetLabels(map[string]string{"env": "test"})
-			updateResp, err := publicServer.Update(ctx, publicv1.NATGatewaysUpdateRequest_builder{
-				Object: object,
-				UpdateMask: &fieldmaskpb.FieldMask{
-					Paths: []string{"metadata.labels"},
-				},
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Expect(updateResp.GetObject().GetMetadata().GetLabels()).To(HaveKeyWithValue("env", "test"))
-		})
-
-		It("rejects output-only status updates with nil and explicit masks", func() {
-			vnID := createVirtualNetwork()
-			eip := createAllocatedExternalIP()
-			createResp, err := publicServer.Create(ctx, publicv1.NATGatewaysCreateRequest_builder{
-				Object: publicv1.NATGateway_builder{
-					Metadata: publicv1.Metadata_builder{
-						Tenant: testTenant,
-						Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
-					}.Build(),
-					Spec: publicv1.NATGatewaySpec_builder{
-						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
-						ExternalIp:     publicv1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-
-			_, err = publicServer.Update(ctx, publicv1.NATGatewaysUpdateRequest_builder{
-				Object: createResp.GetObject(),
-			}.Build())
-			Expect(grpcstatus.Code(err)).To(Equal(codes.InvalidArgument))
-
-			_, err = publicServer.Update(ctx, publicv1.NATGatewaysUpdateRequest_builder{
-				Object: publicv1.NATGateway_builder{Id: createResp.GetObject().GetId()}.Build(),
-				UpdateMask: &fieldmaskpb.FieldMask{
-					Paths: []string{"status.state"},
-				},
-			}.Build())
-			Expect(grpcstatus.Code(err)).To(Equal(codes.InvalidArgument))
 		})
 
 		It("deletes a NATGateway", func() {

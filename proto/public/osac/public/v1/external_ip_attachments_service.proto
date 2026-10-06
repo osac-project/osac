@@ -16,7 +16,6 @@ syntax = "proto3";
 package osac.public.v1;
 
 import "google/api/annotations.proto";
-import "google/protobuf/field_mask.proto";
 import "osac/public/v1/external_ip_attachment_type.proto";
 
 message ExternalIPAttachmentsListRequest {
@@ -80,20 +79,6 @@ message ExternalIPAttachmentsCreateResponse {
   ExternalIPAttachment object = 1;
 }
 
-message ExternalIPAttachmentsUpdateRequest {
-  ExternalIPAttachment object = 1;
-  google.protobuf.FieldMask update_mask = 2;
-
-  // Lock enables optimistic locking. When set to true, the server verifies that the current version of the object
-  // matches the value of the metadata.version field of the submitted object. If they differ the update will be
-  // rejected. This is useful to prevent lost updates when multiple clients are modifying the same object concurrently.
-  bool lock = 3;
-}
-
-message ExternalIPAttachmentsUpdateResponse {
-  ExternalIPAttachment object = 1;
-}
-
 message ExternalIPAttachmentsDeleteRequest {
   string id = 1;
 }
@@ -118,15 +103,6 @@ service ExternalIPAttachments {
   rpc Create(ExternalIPAttachmentsCreateRequest) returns (ExternalIPAttachmentsCreateResponse) {
     option (google.api.http) = {
       post: "/api/fulfillment/v1/external_ip_attachments"
-      body: "object"
-      response_body: "object"
-    };
-  }
-
-  // Updates an existing external IP attachment. Allows modifying metadata (labels, annotations).
-  rpc Update(ExternalIPAttachmentsUpdateRequest) returns (ExternalIPAttachmentsUpdateResponse) {
-    option (google.api.http) = {
-      patch: "/api/fulfillment/v1/external_ip_attachments/{object.id}"
       body: "object"
       response_body: "object"
     };

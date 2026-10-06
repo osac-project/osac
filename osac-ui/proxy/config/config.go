@@ -18,6 +18,14 @@ var (
 	FulfillmentTlsInsecure = getEnvVar("FULFILLMENT_TLS_INSECURE", "") == "1"
 	// OIDCClientID is the client_id registered in the IdP for this UI application.
 	OIDCClientID = getEnvVar("OIDC_CLIENT_ID", "osac-ui")
+	// OIDCIssuerURL is the OIDC issuer URL (e.g. https://keycloak.example.com/realms/osac).
+	// Required when OIDC_SERVICE_CLIENT_ID / OIDC_SERVICE_CLIENT_SECRET are set.
+	OIDCIssuerURL = getEnvVar("OIDC_ISSUER_URL", "")
+	// OIDCServiceClientID is the Keycloak client_id for the proxy's own service account,
+	// used to authenticate backend calls such as gRPC reflection at startup.
+	OIDCServiceClientID = getEnvVar("OIDC_SERVICE_CLIENT_ID", "")
+	// OIDCServiceClientSecret is the Keycloak client_secret for the proxy's service account.
+	OIDCServiceClientSecret = getEnvVar("OIDC_SERVICE_CLIENT_SECRET", "")
 	// OIDCTlsCaFile CA file for the OIDC IdP (discovery, token exchange, refresh).
 	OIDCTlsCaFile = getEnvVar("OIDC_TLS_CA_FILE", "")
 	// OIDCTlsInsecure disables TLS certificate verification when contacting the OIDC IdP

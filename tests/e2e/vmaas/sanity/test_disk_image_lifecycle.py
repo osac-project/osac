@@ -1,20 +1,15 @@
 from __future__ import annotations
 
 import subprocess
-from uuid import uuid4
 
 import pytest
 
 from tests.e2e.core.grpc_client import GRPCClient
-from tests.e2e.core.helpers import assert_grpc_rejected
+from tests.e2e.core.helpers import assert_grpc_rejected, unique_name
 
 pytestmark = pytest.mark.sanity
 
 SOURCE_REF = "quay.io/containerdisks/fedora:41"
-
-
-def _unique_name(prefix: str = "e2e-di") -> str:
-    return f"{prefix}-{uuid4().hex[:8]}"
 
 
 def test_disk_image_crud_provider_admin(grpc: GRPCClient) -> None:
@@ -24,7 +19,7 @@ def test_disk_image_crud_provider_admin(grpc: GRPCClient) -> None:
 
     try:
         di_id = grpc.create_disk_image(
-            name=_unique_name(),
+            name=unique_name("e2e-di"),
             source_ref=SOURCE_REF,
             guest_os_family="GUEST_OS_FAMILY_LINUX",
             architecture=["ARCHITECTURE_AMD64"],
@@ -58,7 +53,7 @@ def test_disk_image_tenant_admin(jwt_grpc_tenant1_admin: GRPCClient) -> None:
 
     try:
         di_id = jwt_grpc_tenant1_admin.create_disk_image(
-            name=_unique_name(), source_ref=SOURCE_REF, architecture=["ARCHITECTURE_AMD64"]
+            name=unique_name("e2e-di"), source_ref=SOURCE_REF, architecture=["ARCHITECTURE_AMD64"]
         )
         assert di_id, "Tenant Admin should be able to create a tenant-scoped DiskImage"
 
@@ -80,7 +75,7 @@ def test_disk_image_tenant_user(jwt_grpc_tenant1: GRPCClient) -> None:
 
     try:
         di_id = jwt_grpc_tenant1.create_disk_image(
-            name=_unique_name(), source_ref=SOURCE_REF, architecture=["ARCHITECTURE_AMD64"]
+            name=unique_name("e2e-di"), source_ref=SOURCE_REF, architecture=["ARCHITECTURE_AMD64"]
         )
         assert di_id, "Tenant User should be able to create a tenant-scoped DiskImage"
 
@@ -97,7 +92,7 @@ def test_disk_image_deprecation_lifecycle(grpc: GRPCClient) -> None:
     di_id: str | None = None
 
     try:
-        di_id = grpc.create_disk_image(name=_unique_name(), source_ref=SOURCE_REF)
+        di_id = grpc.create_disk_image(name=unique_name("e2e-di"), source_ref=SOURCE_REF)
 
         # Deprecate
         grpc.update_disk_image_lifecycle(disk_image_id=di_id, lifecycle="DISK_IMAGE_LIFECYCLE_DEPRECATED")
@@ -132,7 +127,7 @@ def test_disk_image_reactivation(grpc: GRPCClient) -> None:
     di_id: str | None = None
 
     try:
-        di_id = grpc.create_disk_image(name=_unique_name(), source_ref=SOURCE_REF)
+        di_id = grpc.create_disk_image(name=unique_name("e2e-di"), source_ref=SOURCE_REF)
 
         # Drive to OBSOLETE
         grpc.update_disk_image_lifecycle(disk_image_id=di_id, lifecycle="DISK_IMAGE_LIFECYCLE_DEPRECATED")
@@ -160,7 +155,7 @@ def test_disk_image_tenant_isolation(jwt_grpc_tenant1: GRPCClient, jwt_grpc_tena
     di_id: str | None = None
 
     try:
-        di_id = jwt_grpc_tenant1.create_disk_image(name=_unique_name(), source_ref=SOURCE_REF)
+        di_id = jwt_grpc_tenant1.create_disk_image(name=unique_name("e2e-di"), source_ref=SOURCE_REF)
 
         # Tenant 1 can see it
         assert di_id in jwt_grpc_tenant1.list_disk_image_ids(), "Tenant 1 should see its own DiskImage"
@@ -185,8 +180,8 @@ def test_disk_image_obsolete_filtered_list(grpc: GRPCClient) -> None:
     di_obsolete_id: str | None = None
 
     try:
-        di_available_id = grpc.create_disk_image(name=_unique_name("e2e-di-avail"), source_ref=SOURCE_REF)
-        di_obsolete_id = grpc.create_disk_image(name=_unique_name("e2e-di-obs"), source_ref=SOURCE_REF)
+        di_available_id = grpc.create_disk_image(name=unique_name("e2e-di-avail"), source_ref=SOURCE_REF)
+        di_obsolete_id = grpc.create_disk_image(name=unique_name("e2e-di-obs"), source_ref=SOURCE_REF)
 
         grpc.update_disk_image_lifecycle(disk_image_id=di_obsolete_id, lifecycle="DISK_IMAGE_LIFECYCLE_DEPRECATED")
         grpc.update_disk_image_lifecycle(disk_image_id=di_obsolete_id, lifecycle="DISK_IMAGE_LIFECYCLE_OBSOLETE")

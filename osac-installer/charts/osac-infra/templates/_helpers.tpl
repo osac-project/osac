@@ -28,3 +28,23 @@ app.kubernetes.io/name: {{ include "osac-infra.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
+
+{{/*
+Pod security context shared by the credential-generation Jobs. The explicit
+runAsNonRoot requirement applies to both the default OpenShift path and the
+numeric security context used by Kind profiles.
+*/}}
+{{- define "osac-infra.cliJobPodSecurityContext" -}}
+runAsNonRoot: true
+{{- with .Values.cliJobPodSecurityContext }}
+{{- with .runAsUser }}
+runAsUser: {{ . }}
+{{- end }}
+{{- with .runAsGroup }}
+runAsGroup: {{ . }}
+{{- end }}
+{{- with .fsGroup }}
+fsGroup: {{ . }}
+{{- end }}
+{{- end }}
+{{- end }}

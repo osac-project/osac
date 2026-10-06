@@ -60,18 +60,6 @@ export const ClusterConfigurationCard = ({ cluster }: ClusterConfigurationCardPr
           </DescriptionListGroup>
 
           <DescriptionListGroup>
-            <DescriptionListTerm>Pod CIDR</DescriptionListTerm>
-            <DescriptionListDescription>
-              {displayValue(cluster.spec?.network?.podCidr)}
-            </DescriptionListDescription>
-          </DescriptionListGroup>
-          <DescriptionListGroup>
-            <DescriptionListTerm>Service CIDR</DescriptionListTerm>
-            <DescriptionListDescription>
-              {displayValue(cluster.spec?.network?.serviceCidr)}
-            </DescriptionListDescription>
-          </DescriptionListGroup>
-          <DescriptionListGroup>
             <DescriptionListTerm>Created</DescriptionListTerm>
             <DescriptionListDescription>
               <Timestamp value={cluster.metadata?.creationTimestamp} />

@@ -15,6 +15,8 @@ package servers
 
 import (
 	"fmt"
+
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 
 	"github.com/google/uuid"
@@ -34,7 +36,7 @@ var _ = Describe("Bare metal instances server", func() {
 		Expect(err).ToNot(HaveOccurred())
 		_, err = types.Create().SetObject(privatev1.BareMetalInstanceType_builder{
 			Id:       "default-type",
-			Metadata: privatev1.Metadata_builder{Name: "default-type", Tenant: testTenant}.Build(),
+			Metadata: privatev1.Metadata_builder{Name: "default-type", Tenant: auth.SharedTenant}.Build(),
 			Spec:     privatev1.BareMetalInstanceTypeSpec_builder{}.Build(),
 		}.Build()).Do(ctx)
 		Expect(err).ToNot(HaveOccurred())
@@ -210,7 +212,7 @@ var _ = Describe("Bare metal instances server", func() {
 					Spec: publicv1.BareMetalInstanceSpec_builder{
 						DiskImage:    publicv1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
 						CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						InstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: "default-type"}.Build(),
+						InstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "default-type", Shared: true}.Build(),
 						RunStrategy:  new(publicv1.BareMetalInstanceRunStrategy_BARE_METAL_INSTANCE_RUN_STRATEGY_ALWAYS),
 						SshPublicKey: new(testSSHPublicKey),
 					}.Build(),

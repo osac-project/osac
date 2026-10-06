@@ -1,3 +1,6 @@
+# Agentic-CI sandbox toolchain directory (downloaded by .agentic-ci/config.yml setup)
+.agentic-ci-tools/
+
 # AI workflows and skills (installed by tools/bootstrap.sh)
 skills/
 .ai-workflows/
@@ -100,6 +103,7 @@ Thumbs.db
 *.crt
 
 # Local dev artifacts
+.worktrees/
 .artifacts
 .artifacts/
 __pycache__

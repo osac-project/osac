@@ -1,75 +1,120 @@
 ---
-# OCP release image
-ocp_4_20_ai_maas_ocp_release_image: quay.io/openshift-release-dev/ocp-release:4.20.0-multi
+# ocp_4_20_ai_maas — RHOAI 3.5 GA on OpenShift 4.21.x
+# Multi-tenant (0..n) MaaS. No Keycloak: identity via external OIDC issuer
+# (optional, wired onto AITenant.spec.oidc) + K8s ServiceAccount/TokenReview.
+#
+# PARAMETER CONTRACT: every var below is settable on the LOCAL path (-e /
+# playbook_osac_create_maas_deployment.yml) and validated by meta/argument_specs.yaml
+# (1:1 with this file). Under AAP only the 10 params exposed in meta/osac.yaml are
+# settable — enable_maas, oidc_issuer, oidc_client_id, tenant_name,
+# tenant_admin_group, tenants, enable_observability, enable_dashboard,
+# hardware_profiles, external_models — mapped by the tasks/install.yaml bridge.
+# All OTHER vars here are internal: under AAP they use these defaults only (not
+# settable via the fulfillment form). Expose a new one by adding it to meta/osac.yaml
+# + the install.yaml bridge + argument_specs.yaml (see those files' contract notes).
 
-# Feature flags
+
+# --- Feature flags ---
 ocp_4_20_ai_maas_enable_maas: true
-ocp_4_20_ai_maas_enable_keycloak: true
-ocp_4_20_ai_maas_oidc_issuer: ""
-ocp_4_20_ai_maas_oidc_client_id: ""
 ocp_4_20_ai_maas_enable_observability: true
 ocp_4_20_ai_maas_enable_dashboard: true
+# Consumed by playbook_osac_create_maas_deployment.yml (inline verify hook), not by
+# the role's tasks/templates. Kept here so it is settable/validated on the local path.
 ocp_4_20_ai_maas_run_verify: true
+
+# --- Identity (no Keycloak) ---
+# External OIDC issuer/client. Optional — when set they are written to
+# AITenant.spec.oidc. When empty, tenants authenticate via K8s TokenReview
+# (ServiceAccount tokens) only.
+ocp_4_20_ai_maas_oidc_issuer: ""
+ocp_4_20_ai_maas_oidc_client_id: ""
+
+# --- Tenancy (0..n tenants) ---
+# Plural list wins when non-empty. Each entry:
+#   {name, admin_group (optional), tiers: [{name, group, token_limit, window, priority}]}
+ocp_4_20_ai_maas_tenants: []
+# Singular fallback (used when the plural list is empty). When BOTH the list is
+# empty AND tenant_name is empty, the deployment is "no custom tenant" — the
+# operator-created default tenant (models-as-a-service / maas-default-gateway) is
+# configured instead.
+ocp_4_20_ai_maas_tenant_name: ""
+ocp_4_20_ai_maas_tenant_admin_group: ""
+
+# --- Verification (consumed by playbook_osac_verify_maas_deployment.yml) ---
+# Depth: smoke = L1+L2 for every in-scope tenant;
+#        standard = smoke-all + L3 (429) on representative + L4 isolation on one pair;
+#        full = L3 for every tenant too.
+ocp_4_20_ai_maas_verify_depth: standard
+ocp_4_20_ai_maas_verify_tenants: []            # [] = all in-scope
+ocp_4_20_ai_maas_verify_representative: ""      # "" = first in-scope
+ocp_4_20_ai_maas_verify_skip_isolation: false
+# Deploy-time: create per-tier test ServiceAccounts and wire them into
+# MaaSAuthPolicy.subjects.users so the verify playbook can mint SA tokens.
+ocp_4_20_ai_maas_provision_test_identities: true
 
 # Hardware profiles (empty = no profiles created; override per environment)
 ocp_4_20_ai_maas_hardware_profiles: []
 
-# External models (cross-cluster access via ExternalModel CRD)
+# External models (cross-cluster access via inference.opendatahub.io ExternalModel +
+# ExternalProvider with the `path` field — no maas-proxy in RHOAI 3.5 GA)
+#
+# Two distinct model identities per entry:
+#   model_id        -> targetModel, the PROVIDER-side id (what the upstream serves).
+#   client_model_id -> spec.modelName, the CLIENT-facing id (request body `model`,
+#                      and what GET /maas-api/v1/models advertises).
+#                      Optional; defaults to model_id (backward compat with 3.5.0).
+#
+# On RHOAI 3.5.1+ (current GA), the IPP matches the generated HTTPRoute's
+# X-Gateway-Model-Name against the ExternalModel CR name (metadata.name), so
+# client_model_id MUST equal this entry's `name` — otherwise inference returns 404
+# after the post-processing ext-proc rewrites the path and triggers ClearRouteCache.
+# Always set client_model_id explicitly on 3.5.1+.
 ocp_4_20_ai_maas_external_models: []
-ocp_4_20_ai_maas_proxy_image: "quay.io/mpaulgreen/maas-proxy:latest"
-ocp_4_20_ai_maas_proxy_namespace: "maas-proxies"
 ocp_4_20_ai_maas_external_model_namespace: "external-models"
 
-# --- Platform Operators ---
+# --- Platform Operators (RHOAI 3.5 GA BOM — 8 operators) ---
 
 # cert-manager
 ocp_4_20_ai_maas_cert_manager_channel: stable-v1.18
 ocp_4_20_ai_maas_cert_manager_source: redhat-operators
 
-# Service Mesh (must install BEFORE RHCL)
-ocp_4_20_ai_maas_sm_channel: stable-3.2
-ocp_4_20_ai_maas_sm_starting_csv: servicemeshoperator3.v3.2.8
-ocp_4_20_ai_maas_sm_source: redhat-operators
-
-# RHCL sub-operators (pre-create to prevent OLM auto-upgrade to v1.4.x)
-ocp_4_20_ai_maas_authorino_starting_csv: authorino-operator.v1.3.3
-ocp_4_20_ai_maas_limitador_starting_csv: limitador-operator.v1.3.2
-ocp_4_20_ai_maas_dns_starting_csv: dns-operator.v1.3.2
-
-# RHCL operator
-ocp_4_20_ai_maas_rhcl_starting_csv: rhcl-operator.v1.3.6
+# Red Hat Connectivity Link (RHCL 1.4.x). Authorino/Limitador/DNS install as OLM
+# dependencies of RHCL — no separate subscriptions or version pinning on 3.5 GA.
+ocp_4_20_ai_maas_rhcl_channel: stable
 ocp_4_20_ai_maas_rhcl_source: redhat-operators
-
-# Version to reject/accept in install plans
-ocp_4_20_ai_maas_reject_version: "v1.4"
-ocp_4_20_ai_maas_accept_version: "v1.3"
-
-# Observability operators (COO + OTel, installed in isolated namespaces)
-ocp_4_20_ai_maas_coo_starting_csv: cluster-observability-operator.v1.4.0
-ocp_4_20_ai_maas_coo_source: redhat-operators
-ocp_4_20_ai_maas_otel_package: opentelemetry-product
-ocp_4_20_ai_maas_otel_source: redhat-operators
-ocp_4_20_ai_maas_dsci_metrics_replicas: 1
-ocp_4_20_ai_maas_dsci_metrics_retention: 7d
-ocp_4_20_ai_maas_dsci_metrics_storage: 10Gi
 
 # Leader Worker Set
 ocp_4_20_ai_maas_lws_channel: stable-v1.0
 ocp_4_20_ai_maas_lws_source: redhat-operators
 
 # RHOAI
-ocp_4_20_ai_maas_rhoai_channel: stable-3.4
+ocp_4_20_ai_maas_rhoai_channel: stable-3.5
 ocp_4_20_ai_maas_rhoai_source: redhat-operators
 
-# --- DSC ---
+# Observability operators (COO + OTel, installed in isolated namespaces).
+# COO is unpinned — installed from the 'stable' channel (Automatic). COO 1.5.x
+# is compatible with RHOAI 3.5 observability (the old v1.4.0 pin was 3.4-tied).
+ocp_4_20_ai_maas_coo_channel: stable
+ocp_4_20_ai_maas_coo_source: redhat-operators
+ocp_4_20_ai_maas_otel_package: opentelemetry-product
+ocp_4_20_ai_maas_otel_channel: stable
+ocp_4_20_ai_maas_otel_source: redhat-operators
+ocp_4_20_ai_maas_dsci_metrics_replicas: 1
+ocp_4_20_ai_maas_dsci_metrics_retention: 7d
+ocp_4_20_ai_maas_dsci_metrics_storage: 10Gi
+
+# --- DSC (v2) ---
+# Base components created by install_operators.yaml. aigateway starts Removed;
+# MaaS is enabled later (aigateway + modelsAsAService -> Managed) by
+# configure_maas_cluster.yaml AFTER gateways + DB exist, so the operator-created
+# default tenant cascades straight to Active.
 
 ocp_4_20_ai_maas_dsc_components:
-  codeflare: Removed
   dashboard: Managed
-  datasciencepipelines: Removed
   kserve: Managed
+  aigateway: Removed
+  aipipelines: Removed
   kueue: Removed
-  modelmeshserving: Removed
   ray: Removed
   trainingoperator: Removed
   trustyai: Removed
@@ -82,45 +127,37 @@ ocp_4_20_ai_maas_gateway_hostname: maas
 ocp_4_20_ai_maas_gateway_memory_limit: 2Gi
 ocp_4_20_ai_maas_gateway_cert_name: router-certs
 
-# PostgreSQL
+# PostgreSQL (in-cluster POC DB; maas-api reads maas-db-config at startup)
 ocp_4_20_ai_maas_db_image: registry.redhat.io/rhel9/postgresql-16:latest
 ocp_4_20_ai_maas_db_user: maas
 # DEV ONLY — override all credential defaults in production deployments
 ocp_4_20_ai_maas_db_password: maas-db-password
 ocp_4_20_ai_maas_db_name: maas
 ocp_4_20_ai_maas_db_storage: 5Gi
+# maas-api reads DB_CONNECTION_URL from this secret via the K8s API at startup.
+ocp_4_20_ai_maas_db_secret_namespace: redhat-ai-gateway-infra
 
-# Keycloak
-ocp_4_20_ai_maas_keycloak_namespace: keycloak-maas
-ocp_4_20_ai_maas_keycloak_channel: stable-v26.4
-ocp_4_20_ai_maas_keycloak_instances: 1
-ocp_4_20_ai_maas_keycloak_db_password: keycloak-db-password
-ocp_4_20_ai_maas_keycloak_db_storage: 5Gi
-ocp_4_20_ai_maas_keycloak_realm: maas
-ocp_4_20_ai_maas_keycloak_client_id: maas-client
-ocp_4_20_ai_maas_keycloak_client_secret: maas-client-secret-value
-ocp_4_20_ai_maas_keycloak_test_password: password123
-
-# Tenant
-ocp_4_20_ai_maas_tenant_name: default-tenant
+# Tenant runtime config (MaasTenantConfig)
 ocp_4_20_ai_maas_api_key_max_expiration_days: 90
 
-# Tenant telemetry (captureUser defaults to true for Usage tab; privacy-sensitive)
+# Tenant telemetry (captureUser/captureGroup default false for prod — privacy)
 ocp_4_20_ai_maas_telemetry_enabled: true
 ocp_4_20_ai_maas_telemetry_capture_user: true
 ocp_4_20_ai_maas_telemetry_capture_group: true
 ocp_4_20_ai_maas_telemetry_capture_organization: true
 ocp_4_20_ai_maas_telemetry_capture_model_usage: true
 
-# Model
-ocp_4_20_ai_maas_model_name: facebook-opt-125m-simulated
+# Model (CPU simulator — one LLMInferenceService per tenant:
+# {model_name_base}-{tenant}, default tenant uses {model_name_base}-simulated)
+# This model is used for smoke testing of deployments
+ocp_4_20_ai_maas_model_name_base: facebook-opt-125m
 ocp_4_20_ai_maas_model_id: facebook/opt-125m
 ocp_4_20_ai_maas_model_namespace: llm
 ocp_4_20_ai_maas_model_replicas: 1
 ocp_4_20_ai_maas_model_image: ghcr.io/llm-d/llm-d-inference-sim:v0.7.1
 ocp_4_20_ai_maas_model_uri: hf://sshleifer/tiny-gpt2
 
-# Subscription tiers
+# Subscription tiers (default set; override per-tenant via ocp_4_20_ai_maas_tenants[].tiers)
 ocp_4_20_ai_maas_tiers:
   - name: free-subscription
     group: tier-free-users

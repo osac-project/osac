@@ -19,13 +19,14 @@ import "buf/validate/validate.proto";
 import "google/api/field_behavior.proto";
 import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
+import "osac/public/v1/add_on_operator_type.proto";
+import "osac/public/v1/baremetal_instance_type_type.proto";
 import "osac/public/v1/cluster_catalog_item_type.proto";
 import "osac/public/v1/cluster_common_type.proto";
 import "osac/public/v1/cluster_template_type.proto";
 import "osac/public/v1/cluster_version_type.proto";
 import "osac/public/v1/condition_status_type.proto";
 import "osac/public/v1/metadata_type.proto";
-import "osac/public/v1/host_type_type.proto";
 import "osac/public/v1/secret_type.proto";
 
 // Contains the details of the cluster.
@@ -94,13 +95,13 @@ message ClusterSpec {
 
   // Desired node sets of the cluster.
   //
-  // This will be automatically set by the system when the cluster is initially created, according to the template
-  // selected by the user, and can be later modified to change the size.
+  // At creation, supply at least one node set with a positive size and a BareMetalInstanceType reference,
+  // or select a catalog item whose node-set policy supplies the map. Templates do not select hardware.
+  // Users may later change the size of an existing node set.
   //
   // The key of the map is the unique identifier of the node set for this cluster.
   //
-  // For example, a cluster created with two different node sets, one for nodes without GPUs and another for nodes with
-  // GPUs could be represented like this:
+  // For example, a cluster with CPU and GPU node sets could be represented like this:
   //
   // ```json
   // {
@@ -108,11 +109,11 @@ message ClusterSpec {
   //   "spec": {
   //     "node_sets": {
   //       "compute": {
-  //         "host_type": "acme_1tb",
+  //         "baremetal_instance_type": {"name": "acme-1tb"},
   //         "size": 3
   //       },
   //       "gpu": {
-  //         "host_type": "acme_1tb_h100",
+  //         "baremetal_instance_type": {"name": "acme-1tb-h100"},
   //         "size": 3
   //       }
   //     }
@@ -121,11 +122,11 @@ message ClusterSpec {
   //     "state": "CLUSTER_STATE_READY",
   //     "node_sets": {
   //       "compute": {
-  //         "host_type": "acme_1tb",
+  //         "baremetal_instance_type": {"name": "acme-1tb"},
   //         "size": 3
   //       },
   //       "gpu": {
-  //         "host_type": "acme_1tb_h100",
+  //         "baremetal_instance_type": {"name": "acme-1tb-h100"},
   //         "size": 3
   //       }
   //     }
@@ -133,7 +134,7 @@ message ClusterSpec {
   // }
   // ```
   //
-  // The user will not be allowed to change the `host_type` field.
+  // The user cannot change `baremetal_instance_type` on an existing node set.
   //
   // The user will be allowed to add new node sets.
   //
@@ -145,7 +146,11 @@ message ClusterSpec {
   // If at any time the system can't allocate the number of nodes requested by the user, because of permissions, quota,
   // availability of resources or system errors, the cluster will be marked as degraded, and the details will be in the
   // `DEGRADED` condition.
-  map<string, ClusterNodeSet> node_sets = 3;
+  map<string, ClusterNodeSet> node_sets = 3 [(buf.validate.field).map.keys.string = {
+    min_len: 1,
+    max_len: 63,
+    pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+  }];
 
   // SSH public key installed into the `authorized_keys` file on cluster worker nodes.
   //
@@ -178,8 +183,8 @@ message ClusterSpec {
   // When not provided, the system will populate this field with the tenant's default subnet and security groups during
   // cluster creation.
   //
-  // The `subnet` field is immutable after creation. The `security_groups` field can be updated.
-  ClusterNetworkAttachment network_attachment = 9;
+  // The complete attachment, including subnet and security group references, is immutable after creation.
+  ClusterNetworkAttachment network_attachment = 9 [(google.api.field_behavior) = IMMUTABLE];
 
   // When true, the system automatically creates two ExternalIPs and two ExternalIPAttachments
   // (one for the API server endpoint, one for the ingress endpoint) during cluster creation.
@@ -194,6 +199,28 @@ message ClusterSpec {
   // must exist in the same tenant. When unset, a shared Secret may be inherited if the shared template provides it as
   // the default pull secret.
   SecretLocalReference pull_secret_secret = 11;
+
+  // Add-on operators requested for the cluster. The field is immutable after creation.
+  repeated AddOnOperatorReference add_on_operators = 12 [
+    (google.api.field_behavior) = IMMUTABLE,
+    (buf.validate.field).repeated.max_items = 32
+  ];
+}
+
+// The per-operator status contains the installation state of one add-on operator.
+message AddOnOperatorStatus {
+  string name = 1;
+  AddOnOperatorInstallState state = 2;
+  string message = 3;  // Empty on success; bounded error summary on failure.
+}
+
+// States used to describe add-on operator installation.
+enum AddOnOperatorInstallState {
+  ADD_ON_OPERATOR_INSTALL_STATE_UNSPECIFIED = 0;
+  ADD_ON_OPERATOR_INSTALL_STATE_PENDING = 1;
+  ADD_ON_OPERATOR_INSTALL_STATE_INSTALLING = 2;
+  ADD_ON_OPERATOR_INSTALL_STATE_INSTALLED = 3;
+  ADD_ON_OPERATOR_INSTALL_STATE_FAILED = 4;
 }
 
 // The status contains the details of the cluster provided by the system.
@@ -255,7 +282,11 @@ message ClusterStatus {
   // is in progress, or if the system can't apply the changes requested by the user.
   //
   // The key of the map is the unique identifier of the node set for this cluster.
-  map<string, ClusterNodeSet> node_sets = 5;
+  map<string, ClusterNodeSet> node_sets = 5 [(buf.validate.field).map.keys.string = {
+    min_len: 1,
+    max_len: 63,
+    pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+  }];
 
   // Internal API server VIP allocated by MetalLB for the cluster.
   //
@@ -289,6 +320,10 @@ message ClusterStatus {
   //
   // System-populated after cluster provisioning.
   SecretLocalReference password_secret = 10;
+
+  // Per-operator installation state, synced from the ClusterOrder's
+  // AddOnOperatorJobs via the feedback controller.
+  repeated AddOnOperatorStatus add_on_operators = 12;
 }
 
 // Represents the overall state of a cluster.
@@ -363,37 +398,22 @@ enum ClusterConditionType {
 
   // Indicates that the cluster is degraded.
   CLUSTER_CONDITION_TYPE_DEGRADED = 4;
+  CLUSTER_CONDITION_TYPE_WORKER_PROVISIONING_FAILED = 5;
+  CLUSTER_CONDITION_TYPE_WORKER_PROVISIONING_BLOCKED = 6;
 }
 
-// Defines a set of nodes that are part of the cluster, all of them of the same type of host.
+// Defines a set of cluster nodes sharing the same bare metal instance type.
 message ClusterNodeSet {
-  // Identifier of the type of hosts that are part of the set.
-  //
-  // The details of the host type can be obtained using the `List` and `Get` method of the `HostTypes` service. For
-  // example, to get the details of the `acme_1tb` host type using the HTTP+JSON version of the API:
-  //
-  // ```http
-  // GET /api/fulfillment/v1/host_types/acme_1tb
-  // ```
-  //
-  // Which will return something like this:
-  //
-  // ```json
-  // {
-  //   "id": "acme_1tb",
-  //   "title": "ACME server with 1 TiB of RAM and no GPU",
-  //   "description": "ACME server model XYZ with 1 TiB of RAM, 2 Xeon 6 CPUS and no GPU."
-  // }
-  // ```
-  //
-  // This will be set by the system when the cluster is initially created, according to the template selected by the
-  // user.
-  //
-  // The user will not have permission to change this field.
-  HostTypeReference host_type = 1;
+  reserved 1;
+  reserved "host_type";
 
   // Number of nodes of the set.
   optional int32 size = 2 [(buf.validate.field).int32.gt = 0];
+
+  // BareMetalInstanceType (hardware profile) for the nodes in this set.
+  //
+  // Immutable after creation.
+  BareMetalInstanceTypeReference baremetal_instance_type = 4 [(google.api.field_behavior) = IMMUTABLE];
 }
 
 // Local reference to a Cluster resource.

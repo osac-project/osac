@@ -32,19 +32,6 @@ const vmCatalogItem: ComputeInstanceCatalogItem = {
     name: 'tpl-rhel-9',
   }),
   published: true,
-  fieldDefinitions: [
-    {
-      $typeName: 'osac.public.v1.FieldDefinition',
-      path: 'spec.image.source_ref',
-      displayName: 'VM image',
-      editable: true,
-      validationSchema: '',
-      default: {
-        $typeName: 'google.protobuf.Value',
-        kind: { case: 'stringValue', value: 'quay.io/example/rhel9' },
-      },
-    },
-  ],
   templateParameters: {},
 };
 
@@ -52,15 +39,17 @@ const emptyValues: ComputeInstanceWizardValues = {
   catalogItemId: '',
   metadata: { name: '', project: '' },
   spec: {
-    sshPublicKey: '',
+    sshKey: { name: '' },
     instanceType: '',
     userData: '',
     bootDisk: { sizeGib: '', storageTier: emptyResourceSelectValue() },
     additionalDisks: [],
     networking: {
-      virtualNetwork: '',
-      subnet: '',
+      useDefaultNetwork: true,
+      virtualNetwork: emptyResourceSelectValue(),
+      subnet: emptyResourceSelectValue(),
       securityGroups: [],
+      autoExternalIpAttachment: false,
     },
   },
 };
@@ -138,6 +127,15 @@ describe('buildComputeInstanceStepSchema', () => {
     expect(errors).toEqual({});
   });
 
+  it('does not require an SSH key on general step', async () => {
+    const errors = await validateStep('general', {
+      ...emptyValues,
+      catalogItemId: vmCatalogItem.id,
+      metadata: { name: 'my-vm', project: '' },
+    });
+    expect(errors).toEqual({});
+  });
+
   it('validates boot disk as numeric on storage step', async () => {
     const errors = await validateStep(
       'storage',
@@ -192,7 +190,7 @@ describe('buildComputeInstanceStepSchema', () => {
     expect(errors).toEqual({});
   });
 
-  it('requires networking pickers on networking step', async () => {
+  it('does not require networking pickers on networking step', async () => {
     const errors = await validateStep(
       'networking',
       {
@@ -205,15 +203,7 @@ describe('buildComputeInstanceStepSchema', () => {
       },
       vmCatalogItem,
     );
-    expect(errors).toEqual({
-      spec: {
-        networking: {
-          virtualNetwork: 'catalogProvision.validation.virtualNetworkRequired',
-          subnet: 'catalogProvision.validation.subnetRequired',
-          securityGroups: 'catalogProvision.validation.securityGroupRequired',
-        },
-      },
-    });
+    expect(errors).toEqual({});
   });
 
   it('requires instance type on configuration step', async () => {
@@ -393,30 +383,80 @@ describe('buildComputeInstanceStepSchema', () => {
     expect(errors).toEqual({});
   });
 
-  it('requires ssh key on general step when defined in catalog field_definitions', async () => {
-    const catalogItem = {
-      ...vmCatalogItem,
-      fieldDefinitions: [
-        ...(vmCatalogItem.fieldDefinitions ?? []),
-        {
-          path: 'ssh_public_key',
-          displayName: 'SSH key',
-          editable: true,
-        },
-      ],
-    };
+  it('does not require networking pickers when useDefaultNetwork is true', async () => {
     const errors = await validateStep(
-      'general',
+      'networking',
       {
         ...emptyValues,
         catalogItemId: vmCatalogItem.id,
         metadata: { name: 'web-01', project: '' },
+        spec: {
+          ...emptyValues.spec,
+          networking: {
+            useDefaultNetwork: true,
+            virtualNetwork: emptyResourceSelectValue(),
+            subnet: emptyResourceSelectValue(),
+            securityGroups: [],
+            autoExternalIpAttachment: false,
+          },
+        },
       },
-      catalogItem,
+      vmCatalogItem,
+    );
+    expect(errors).toEqual({});
+  });
+
+  it('requires virtual network and subnet when useDefaultNetwork is false', async () => {
+    const errors = await validateStep(
+      'networking',
+      {
+        ...emptyValues,
+        catalogItemId: vmCatalogItem.id,
+        metadata: { name: 'web-01', project: '' },
+        spec: {
+          ...emptyValues.spec,
+          networking: {
+            useDefaultNetwork: false,
+            virtualNetwork: emptyResourceSelectValue(),
+            subnet: emptyResourceSelectValue(),
+            securityGroups: [],
+            autoExternalIpAttachment: false,
+          },
+        },
+      },
+      vmCatalogItem,
     );
     expect(errors).toEqual({
-      spec: { sshPublicKey: 'catalogProvision.validation.required' },
+      spec: {
+        networking: {
+          virtualNetwork: { id: 'Virtual network is required' },
+          subnet: { id: 'Subnet is required' },
+        },
+      },
     });
+  });
+
+  it('accepts valid custom networking when useDefaultNetwork is false', async () => {
+    const errors = await validateStep(
+      'networking',
+      {
+        ...emptyValues,
+        catalogItemId: vmCatalogItem.id,
+        metadata: { name: 'web-01', project: '' },
+        spec: {
+          ...emptyValues.spec,
+          networking: {
+            useDefaultNetwork: false,
+            virtualNetwork: { id: 'vn-1', name: 'vn-1' },
+            subnet: { id: 'subnet-1', name: 'subnet-1' },
+            securityGroups: [],
+            autoExternalIpAttachment: false,
+          },
+        },
+      },
+      vmCatalogItem,
+    );
+    expect(errors).toEqual({});
   });
 
   it('returns undefined for review step', () => {

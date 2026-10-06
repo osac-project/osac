@@ -7,7 +7,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   type ExternalIPPoolsCreateRequest,
   ExternalIPPoolsCreateResponseSchema,
-  IPFamily,
   type Tenant,
   TenantState,
 } from '@osac/types/private';
@@ -54,7 +53,6 @@ const clickNext = async (user: UserEvent) => {
 
 const fillPoolStep = async (user: UserEvent, name: string, cidr: string) => {
   await user.type(screen.getByRole('textbox', { name: 'Name' }), name);
-  await user.click(screen.getByRole('radio', { name: 'ipv4' }));
   await user.type(screen.getByRole('textbox', { name: 'CIDR 1' }), cidr);
 };
 
@@ -111,7 +109,6 @@ describe('ExternalIpPoolWizardPage', () => {
       await fillValidWizard(user);
 
       expect(screen.getByText('prod-v4')).toBeInTheDocument();
-      expect(screen.getByText('ipv4')).toBeInTheDocument();
       expect(screen.getByText('192.168.1.0/24')).toBeInTheDocument();
       expect(screen.getByText('acme')).toBeInTheDocument();
 
@@ -123,7 +120,6 @@ describe('ExternalIpPoolWizardPage', () => {
 
       expect(capturedRequest?.object?.metadata?.name).toBe('prod-v4');
       expect(capturedRequest?.object?.metadata?.tenant).toBe('t-1');
-      expect(capturedRequest?.object?.spec?.ipFamily).toBe(IPFamily.IP_FAMILY_IPV4);
       expect(capturedRequest?.object?.spec?.cidrs).toEqual(['192.168.1.0/24']);
     }, 15000);
 
@@ -202,13 +198,6 @@ describe('ExternalIpPoolWizardPage', () => {
       expect(screen.queryByRole('textbox', { name: 'CIDR 2' })).not.toBeInTheDocument();
     });
 
-    it('renders the IP family radios for ipv4 and ipv6', () => {
-      renderCreatePage();
-
-      expect(screen.getByRole('radio', { name: 'ipv4' })).toBeInTheDocument();
-      expect(screen.getByRole('radio', { name: 'ipv6' })).toBeInTheDocument();
-    });
-
     it('blocks advancing past External IP pool for a malformed CIDR', async () => {
       const onExternalIPPoolCreate = vi.fn();
       const { user } = renderCreatePage({ onExternalIPPoolCreate });
@@ -217,29 +206,6 @@ describe('ExternalIpPoolWizardPage', () => {
       await clickNext(user);
 
       expect(await screen.findByText('Invalid IPv4 CIDR notation')).toBeInTheDocument();
-      expect(onExternalIPPoolCreate).not.toHaveBeenCalled();
-    });
-
-    it('rejects a CIDR that does not match the selected IP family', async () => {
-      const onExternalIPPoolCreate = vi.fn();
-      const { user } = renderCreatePage({ onExternalIPPoolCreate });
-
-      await fillPoolStep(user, 'prod-v4', '2001:db8::/32');
-      await clickNext(user);
-
-      expect(await screen.findByText('Invalid IPv4 CIDR notation')).toBeInTheDocument();
-      expect(onExternalIPPoolCreate).not.toHaveBeenCalled();
-    });
-
-    it('requires an IP family selection before leaving External IP pool', async () => {
-      const onExternalIPPoolCreate = vi.fn();
-      const { user } = renderCreatePage({ onExternalIPPoolCreate });
-
-      await user.type(screen.getByRole('textbox', { name: 'Name' }), 'prod-v4');
-      await user.type(screen.getByRole('textbox', { name: 'CIDR 1' }), '192.168.1.0/24');
-      await clickNext(user);
-
-      expect(await screen.findByText('IP family is required')).toBeInTheDocument();
       expect(onExternalIPPoolCreate).not.toHaveBeenCalled();
     });
 

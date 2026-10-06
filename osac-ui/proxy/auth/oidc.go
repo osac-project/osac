@@ -3,8 +3,10 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -42,6 +44,41 @@ type oidcCacheEntry struct {
 	expires time.Time
 }
 
+// sanitizedNetErr wraps a network cause with a hostname-free Error() string
+// while preserving the original cause through Unwrap() for errors.Is/As.
+type sanitizedNetErr struct {
+	op  string
+	err error
+}
+
+func (e *sanitizedNetErr) Error() string { return e.op + ": " + sanitizeErrMsg(e.err) }
+func (e *sanitizedNetErr) Unwrap() error { return e.err }
+
+// sanitizeErrMsg returns a description of err with hostnames and server addresses
+// removed. It recurses through *net.OpError and extracts only the reason from
+// *net.DNSError, which never includes the queried host or resolver address.
+func sanitizeErrMsg(err error) string {
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return "DNS lookup: " + dnsErr.Err
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return opErr.Op + ": " + sanitizeErrMsg(opErr.Err)
+	}
+	return "network request failed"
+}
+
+// sanitizeNetErr strips the request URL from *url.Error so that internal
+// endpoint hostnames never appear in returned errors or log messages.
+func sanitizeNetErr(err error) error {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return &sanitizedNetErr{op: urlErr.Op, err: urlErr.Err}
+	}
+	return err
+}
+
 // FetchOIDCConfig returns the OIDC discovery document, using a per-issuer 5-minute cache.
 // If httpClient is nil, http.DefaultClient is used.
 func FetchOIDCConfig(issuerURL string, httpClient *http.Client) (*OIDCConfig, error) {
@@ -63,11 +100,11 @@ func FetchOIDCConfig(issuerURL string, httpClient *http.Client) (*OIDCConfig, er
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, discoveryURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("build OIDC discovery request: %w", err)
+		return nil, fmt.Errorf("build OIDC discovery request: %w", sanitizeNetErr(err))
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("fetch OIDC discovery %s: %w", discoveryURL, err)
+		return nil, fmt.Errorf("OIDC discovery request: %w", sanitizeNetErr(err))
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
@@ -76,7 +113,7 @@ func FetchOIDCConfig(issuerURL string, httpClient *http.Client) (*OIDCConfig, er
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("OIDC discovery %s returned HTTP %d", discoveryURL, resp.StatusCode)
+		return nil, fmt.Errorf("OIDC discovery returned HTTP %d", resp.StatusCode)
 	}
 	var cfg OIDCConfig
 	if err := json.NewDecoder(resp.Body).Decode(&cfg); err != nil {
@@ -163,6 +200,21 @@ func EndSession(cfg *OIDCConfig, clientID, refreshToken, idToken string, httpCli
 	return nil
 }
 
+// ClientCredentialsToken fetches a service account access token using the OAuth2
+// client_credentials grant. Use for backend-to-backend calls where no user is involved.
+// If httpClient is nil, http.DefaultClient is used.
+func ClientCredentialsToken(issuerURL, clientID, clientSecret string, httpClient *http.Client) (*TokenResponse, error) {
+	cfg, err := FetchOIDCConfig(issuerURL, httpClient)
+	if err != nil {
+		return nil, fmt.Errorf("OIDC discovery: %w", err)
+	}
+	params := url.Values{}
+	params.Set("grant_type", "client_credentials")
+	params.Set("client_id", clientID)
+	params.Set("client_secret", clientSecret)
+	return postTokenEndpoint(cfg.TokenEndpoint, params, httpClient)
+}
+
 // RefreshTokens exchanges a refresh token for new tokens at the IdP token endpoint.
 // If httpClient is nil, http.DefaultClient is used.
 func RefreshTokens(cfg *OIDCConfig, clientID, refreshToken string, httpClient *http.Client) (*TokenResponse, error) {
@@ -185,13 +237,13 @@ func postTokenEndpoint(endpoint string, params url.Values, httpClient *http.Clie
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint,
 		strings.NewReader(params.Encode()))
 	if err != nil {
-		return nil, fmt.Errorf("build token request: %w", err)
+		return nil, fmt.Errorf("build token request: %w", sanitizeNetErr(err))
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("token endpoint request: %w", err)
+		return nil, fmt.Errorf("token endpoint request: %w", sanitizeNetErr(err))
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {

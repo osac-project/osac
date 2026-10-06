@@ -18,12 +18,14 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/baremetalinstance"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/baremetalinstancetype"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/catalogitem"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/cluster"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/clusterversion"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/computeinstance"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/diskimage"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/externalip"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/externalipattachment"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/fabricdomain"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/instancetype"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/natgateway"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/secret"
@@ -42,6 +44,9 @@ func Cmd() *cobra.Command {
 		Long:  longHelp,
 	}
 	result.AddCommand(baremetalinstance.Cmd())
+	result.AddCommand(catalogitem.BareMetalCmd())
+	result.AddCommand(catalogitem.ClusterCmd())
+	result.AddCommand(catalogitem.ComputeCmd())
 	result.AddCommand(baremetalinstancetype.Cmd())
 	result.AddCommand(cluster.Cmd())
 	result.AddCommand(clusterversion.Cmd())
@@ -49,6 +54,7 @@ func Cmd() *cobra.Command {
 	result.AddCommand(diskimage.Cmd())
 	result.AddCommand(externalip.Cmd())
 	result.AddCommand(externalipattachment.Cmd())
+	result.AddCommand(fabricdomain.Cmd())
 	result.AddCommand(instancetype.Cmd())
 	result.AddCommand(natgateway.Cmd())
 	result.AddCommand(virtualnetwork.Cmd())

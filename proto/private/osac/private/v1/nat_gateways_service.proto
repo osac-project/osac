@@ -89,6 +89,7 @@ message NATGatewaysCreateResponse {
 }
 
 message NATGatewaysUpdateRequest {
+  option (cleanapi.message).private = true;
   NATGateway object = 1;
   google.protobuf.FieldMask update_mask = 2;
 
@@ -99,6 +100,7 @@ message NATGatewaysUpdateRequest {
 }
 
 message NATGatewaysUpdateResponse {
+  option (cleanapi.message).private = true;
   NATGateway object = 1;
 }
 
@@ -142,6 +144,7 @@ service NATGateways {
 
   // Updates an existing NAT gateway. The spec fields are immutable; only metadata (labels, annotations) can be changed.
   rpc Update(NATGatewaysUpdateRequest) returns (NATGatewaysUpdateResponse) {
+    option (cleanapi.method).private = true;
     option (google.api.http) = {
       patch: "/api/private/v1/nat_gateways/{object.id}"
       body: "object"

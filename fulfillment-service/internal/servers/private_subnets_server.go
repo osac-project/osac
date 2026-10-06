@@ -27,13 +27,11 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 type PrivateSubnetsServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -46,6 +44,7 @@ type PrivateSubnetsServer struct {
 	privatev1.UnimplementedSubnetsServer
 
 	logger            *slog.Logger
+	tenancyLogic      auth.TenancyLogic
 	generic           *GenericServer[*privatev1.Subnet]
 	virtualNetworkDao *dao.GenericDAO[*privatev1.VirtualNetwork]
 }
@@ -56,11 +55,6 @@ func NewPrivateSubnetsServer() *PrivateSubnetsServerBuilder {
 
 func (b *PrivateSubnetsServerBuilder) SetLogger(value *slog.Logger) *PrivateSubnetsServerBuilder {
 	b.logger = value
-	return b
-}
-
-func (b *PrivateSubnetsServerBuilder) SetNotifier(value events.Notifier) *PrivateSubnetsServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -113,7 +107,6 @@ func (b *PrivateSubnetsServerBuilder) Build() (result *PrivateSubnetsServer, err
 	generic, err := NewGenericServer[*privatev1.Subnet]().
 		SetLogger(b.logger).
 		SetService(privatev1.Subnets_ServiceDesc.ServiceName).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
@@ -126,6 +119,7 @@ func (b *PrivateSubnetsServerBuilder) Build() (result *PrivateSubnetsServer, err
 	// Create and populate the object:
 	result = &PrivateSubnetsServer{
 		logger:            b.logger,
+		tenancyLogic:      b.tenancyLogic,
 		generic:           generic,
 		virtualNetworkDao: virtualNetworkDao,
 	}
@@ -171,30 +165,11 @@ func (s *PrivateSubnetsServer) Create(ctx context.Context,
 // SUB-SVC-04: Update updates an existing Subnet with validation
 func (s *PrivateSubnetsServer) Update(ctx context.Context,
 	request *privatev1.SubnetsUpdateRequest) (response *privatev1.SubnetsUpdateResponse, err error) {
-	// Get existing object for immutability validation:
-	id := request.GetObject().GetId()
-	if id == "" {
+	if request.GetObject().GetId() == "" {
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object identifier is mandatory")
 		return
 	}
-
-	getRequest := &privatev1.SubnetsGetRequest{}
-	getRequest.SetId(id)
-	var getResponse *privatev1.SubnetsGetResponse
-	err = s.generic.Get(ctx, getRequest, &getResponse)
-	if err != nil {
-		return
-	}
-
-	existingSubnet := getResponse.GetObject()
-
-	// Validate with existing object context:
-	err = s.validateSubnet(ctx, request.GetObject(), existingSubnet)
-	if err != nil {
-		return
-	}
-
-	err = s.generic.Update(ctx, request, &response)
+	err = s.generic.UpdateWithValidation(ctx, request, &response, s.validateSubnet)
 	return
 }
 
@@ -207,7 +182,7 @@ func (s *PrivateSubnetsServer) Delete(ctx context.Context,
 	if err != nil {
 		return
 	}
-	if err = validateNotDefault(getResponse.GetObject().GetMetadata().GetLabels(), "subnet"); err != nil {
+	if err = validateNotDefault(ctx, getResponse.GetObject().GetMetadata().GetLabels(), "subnet"); err != nil {
 		return
 	}
 	err = s.generic.Delete(ctx, request, &response)
@@ -228,37 +203,49 @@ func (s *PrivateSubnetsServer) validateSubnet(ctx context.Context,
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "subnet is mandatory")
 	}
 
+	if existingSubnet != nil {
+		if err := validateDefaultLabelUpdate(
+			existingSubnet.GetMetadata().GetLabels(),
+			newSubnet.GetMetadata().GetLabels(),
+			nil,
+			"subnet",
+		); err != nil {
+			return err
+		}
+	}
+
 	spec := newSubnet.GetSpec()
 	if spec == nil {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "subnet spec is mandatory")
 	}
 
+	if spec.GetIpv6Cidr() != "" {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'spec.ipv6_cidr': IPv6 and dual-stack networking are not supported")
+	}
+
 	// SUB-VAL-11, SUB-VAL-14, SUB-VAL-15: Check immutable fields (only on Update).
-	// Run before SUB-VAL-03 so that explicit-empty-string attempts to clear an immutable CIDR
-	// return "field is immutable" rather than "at least one CIDR required".
+	// Run after rejecting non-empty legacy IPv6 values so every attempted IPv6 or dual-stack
+	// request receives the same clear unsupported-networking error.
 	if err := validateImmutableFieldsSubnet(newSubnet, existingSubnet); err != nil {
 		return err
 	}
 
-	// SUB-VAL-03: At least one CIDR must be provided
-	if spec.GetIpv4Cidr() == "" && spec.GetIpv6Cidr() == "" {
+	if spec.GetIpv4Cidr() == "" {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"at least one of 'spec.ipv4_cidr' or 'spec.ipv6_cidr' must be provided")
+			"field 'spec.ipv4_cidr' is required and must be a canonical IPv4 CIDR")
 	}
-
-	// SUB-VAL-01, SUB-VAL-02: Validate and canonicalize CIDRs
-	if err := canonicalizeDualStackCIDRs(
-		spec.GetIpv4Cidr, spec.SetIpv4Cidr,
-		spec.GetIpv6Cidr, spec.SetIpv6Cidr,
-	); err != nil {
+	if canonical, err := parseAndValidateCanonicalCIDR(spec.GetIpv4Cidr(), cidrIPv4); err != nil {
 		return err
+	} else {
+		spec.SetIpv4Cidr(canonical)
 	}
 
 	// SUB-VAL-04, SUB-VAL-05, SUB-VAL-06, SUB-VAL-07, SUB-VAL-08: Validate parent VirtualNetwork
 	// Only on Create (existingSubnet == nil) or if virtual_network differs (SUB-VAL-11 above prevents
 	// VN changes on Update, so the second branch is effectively dead but kept for safety).
 	if existingSubnet == nil || refKey(spec.GetVirtualNetwork()) != refKey(existingSubnet.GetSpec().GetVirtualNetwork()) {
-		if err := s.validateVirtualNetworkReference(ctx, spec); err != nil {
+		if err := s.validateVirtualNetworkReference(ctx, newSubnet); err != nil {
 			return err
 		}
 	}
@@ -304,7 +291,8 @@ func validateCIDRSubset(subnetCIDR string, parentCIDR string, ipVersion string) 
 // validateVirtualNetworkReference validates that the referenced VirtualNetwork exists, is in READY state,
 // and has matching IP families.
 func (s *PrivateSubnetsServer) validateVirtualNetworkReference(ctx context.Context,
-	spec *privatev1.SubnetSpec) error {
+	subnet *privatev1.Subnet) error {
+	spec := subnet.GetSpec()
 
 	virtualNetworkID := spec.GetVirtualNetwork()
 	if virtualNetworkID == nil {
@@ -328,6 +316,13 @@ func (s *PrivateSubnetsServer) validateVirtualNetworkReference(ctx context.Conte
 	}
 
 	virtualNetwork := getResponse.GetObject()
+	subnetTenant, err := resolveObjectTenant(ctx, subnet.GetMetadata(), s.tenancyLogic)
+	if err != nil {
+		return err
+	}
+	if err := validateTenantMatch(subnetTenant, virtualNetwork, "VirtualNetwork", refKey(virtualNetworkID)); err != nil {
+		return err
+	}
 
 	// SUB-VAL-05: Check parent VirtualNetwork is READY
 	if virtualNetwork.GetStatus().GetState() != privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY {

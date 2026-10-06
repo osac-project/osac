@@ -231,29 +231,7 @@ var _ = Describe("lookupDefaultNetworkClassID", func() {
 		Expect(id).To(BeEmpty())
 	})
 
-	It("returns the NetworkClass marked is_default", func() {
-		stub := newListingNetworkClassClient([]*privatev1.NetworkClass{
-			{Id: "nc-other"},
-			{Id: "nc-default", IsDefault: ptr.To(true)},
-		}, &[]*privatev1.NetworkClass{})
-		id, err := lookupDefaultNetworkClassID(ctx, stub)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(id).To(Equal("nc-default"))
-	})
-
-	It("returns the first default in list order when multiple live NetworkClasses are marked default", func() {
-		// fulfillment-service enforces at most one active default via a unique partial index;
-		// this documents operator behavior if that invariant is ever violated.
-		stub := newListingNetworkClassClient([]*privatev1.NetworkClass{
-			{Id: "nc-default-a", IsDefault: ptr.To(true)},
-			{Id: "nc-default-b", IsDefault: ptr.To(true)},
-		}, &[]*privatev1.NetworkClass{})
-		id, err := lookupDefaultNetworkClassID(ctx, stub)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(id).To(Equal("nc-default-a"))
-	})
-
-	It("returns the only live NetworkClass when none is marked default", func() {
+	It("returns the only live NetworkClass", func() {
 		stub := newListingNetworkClassClient([]*privatev1.NetworkClass{
 			{Id: "nc-singleton"},
 		}, &[]*privatev1.NetworkClass{})
@@ -262,11 +240,20 @@ var _ = Describe("lookupDefaultNetworkClassID", func() {
 		Expect(id).To(Equal("nc-singleton"))
 	})
 
-	It("skips soft-deleted NetworkClasses when selecting the default", func() {
+	It("returns an empty ID when multiple live NetworkClasses exist", func() {
+		stub := newListingNetworkClassClient([]*privatev1.NetworkClass{
+			{Id: "nc-a"},
+			{Id: "nc-b"},
+		}, &[]*privatev1.NetworkClass{})
+		id, err := lookupDefaultNetworkClassID(ctx, stub)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(id).To(BeEmpty())
+	})
+
+	It("skips soft-deleted NetworkClasses when selecting the singleton", func() {
 		deleted := &privatev1.NetworkClass{
-			Id:        "nc-deleted-default",
-			IsDefault: ptr.To(true),
-			Metadata:  &privatev1.Metadata{DeletionTimestamp: timestamppb.Now()},
+			Id:       "nc-deleted",
+			Metadata: &privatev1.Metadata{DeletionTimestamp: timestamppb.Now()},
 		}
 		stub := newListingNetworkClassClient([]*privatev1.NetworkClass{
 			deleted,
@@ -275,16 +262,6 @@ var _ = Describe("lookupDefaultNetworkClassID", func() {
 		id, err := lookupDefaultNetworkClassID(ctx, stub)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(id).To(Equal("nc-live"))
-	})
-
-	It("returns an empty ID when multiple live NetworkClasses exist and none is default", func() {
-		stub := newListingNetworkClassClient([]*privatev1.NetworkClass{
-			{Id: "nc-a"},
-			{Id: "nc-b"},
-		}, &[]*privatev1.NetworkClass{})
-		id, err := lookupDefaultNetworkClassID(ctx, stub)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(id).To(BeEmpty())
 	})
 
 	It("returns a reconcile error when List fails", func() {
@@ -301,7 +278,7 @@ var _ = Describe("lookupDefaultNetworkClassID", func() {
 	It("pages through List results until every NetworkClass is considered", func() {
 		all := []*privatev1.NetworkClass{
 			{Id: "nc-page-1"}, {Id: "nc-page-2"}, {Id: "nc-page-3"},
-			{Id: "nc-page-4", IsDefault: ptr.To(true)}, {Id: "nc-page-5"},
+			{Id: "nc-page-4"}, {Id: "nc-page-5"},
 		}
 		var offsetsSeen []int32
 		pageSize := 2
@@ -321,7 +298,7 @@ var _ = Describe("lookupDefaultNetworkClassID", func() {
 
 		id, err := lookupDefaultNetworkClassID(ctx, stub)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(id).To(Equal("nc-page-4"))
+		Expect(id).To(BeEmpty())
 		Expect(offsetsSeen).To(Equal([]int32{0, 2, 4}))
 	})
 })
@@ -359,6 +336,41 @@ var _ = Describe("dispatchTargetProvider", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(seenAnnotation).To(Equal("cudn_net"))
 		Expect(resource.Annotations[osacImplementationStrategyAnnotation]).To(Equal("original-value"))
+	})
+
+	It("overrides strategy and forwards inherited vars when triggering provision with extra vars", func() {
+		var seenAnnotation string
+		var seenExtraVars map[string]any
+		mock := &mockSubnetProvider{
+			triggerProvisionWithExtraVarsFunc: func(_ context.Context, r client.Object, extraVars map[string]any) (*provisioning.ProvisionResult, error) {
+				seenAnnotation = r.GetAnnotations()[osacImplementationStrategyAnnotation]
+				seenExtraVars = extraVars
+				return &provisioning.ProvisionResult{JobID: "job-1"}, nil
+			},
+		}
+		provider := newDispatchTargetProvider(mock, "cudn_net")
+		inherited := map[string]any{"l2_vni": 14}
+
+		result, err := provider.TriggerProvisionWithExtraVars(ctx, resource, inherited)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.JobID).To(Equal("job-1"))
+		Expect(seenAnnotation).To(Equal("cudn_net"))
+		Expect(seenExtraVars).To(Equal(inherited))
+		Expect(resource.Annotations[osacImplementationStrategyAnnotation]).To(Equal("original-value"))
+	})
+
+	It("returns capability errors when the base provider lacks optional output methods", func() {
+		base := struct {
+			provisioning.ProvisioningProvider
+		}{ProvisioningProvider: &mockSubnetProvider{}}
+		provider := newDispatchTargetProvider(base, "cudn_net")
+
+		_, triggerErr := provider.TriggerProvisionWithExtraVars(ctx, resource, map[string]any{"l2_vni": 14})
+		_, statusErr := provider.GetProvisionStatusWithExtraVars(ctx, resource, "job-1")
+
+		Expect(triggerErr).To(MatchError(ContainSubstring("does not support inherited extra vars")))
+		Expect(statusErr).To(MatchError(ContainSubstring("does not expose provisioning outputs")))
 	})
 
 	It("overrides the implementation-strategy annotation on the resource seen by TriggerDeprovision, without mutating the caller's original", func() {
@@ -407,6 +419,26 @@ var _ = Describe("dispatchTargetProvider", func() {
 		_, err := provider.GetProvisionStatus(ctx, resource, "job-1")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(seenResource).To(BeIdenticalTo(resource))
+	})
+
+	It("delegates provisioning output status with the exact same resource passed in", func() {
+		var seenResource client.Object
+		mock := &mockSubnetProvider{
+			getProvisionStatusWithExtraVarsFunc: func(_ context.Context, r client.Object, jobID string) (provisioning.ProvisionStatusWithExtraVars, error) {
+				seenResource = r
+				return provisioning.ProvisionStatusWithExtraVars{
+					ProvisionStatus: provisioning.ProvisionStatus{JobID: jobID, State: osacv1alpha1.JobStateSucceeded},
+					ExtraVars:       map[string]any{"l2_vni": 14},
+				}, nil
+			},
+		}
+		provider := newDispatchTargetProvider(mock, "netris")
+
+		status, err := provider.GetProvisionStatusWithExtraVars(ctx, resource, "job-1")
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(seenResource).To(BeIdenticalTo(resource))
+		Expect(status.ExtraVars).To(HaveKeyWithValue("l2_vni", 14))
 	})
 
 	It("delegates GetDeprovisionStatus with the exact same resource passed in, unmodified", func() {

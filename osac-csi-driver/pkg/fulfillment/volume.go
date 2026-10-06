@@ -15,10 +15,16 @@ const (
 
 // VolumeInfo describes a volume managed by the fulfillment service.
 type VolumeInfo struct {
-	ID             string
-	Name           string
-	State          VolumeState
-	Backend        string
+	ID    string
+	Name  string
+	State VolumeState
+	// Provider is the provider selected by server-side StorageTier resolution.
+	// Backend is the provider alias used by the osac.backend CSI routing key.
+	Provider string
+	Backend  string
+	// Message contains the detailed fulfillment/operator failure reason, when
+	// the volume is in the error state.
+	Message        string
 	VendorVolumeID string
 	Protocol       string
 	CapacityBytes  int64
@@ -28,6 +34,11 @@ type VolumeInfo struct {
 	// this driver: set by the osac-operator at provisioning time and merged unchanged into
 	// CreateVolume's CSI VolumeContext response so Kubernetes replays it on later attach calls.
 	VendorContext map[string]string
+}
+
+// VolumeTopology carries CSI-style placement segments for a volume request.
+type VolumeTopology struct {
+	Segments map[string]string
 }
 
 // CreateVolumeParams are the parameters for creating a volume through the
@@ -40,6 +51,7 @@ type CreateVolumeParams struct {
 	AccessMode string
 	ClusterID  string
 	PVCRef     string
+	Topology   *VolumeTopology
 }
 
 // ListVolumesParams are the filter parameters for listing volumes. Non-nil

@@ -25,6 +25,8 @@ keycloak:
   # suite logs in as these accounts by password.
   devFixtures:
     enabled: true
+kafka:
+  enabled: true
 
 # --- Bundled PostgreSQL ---
 # Single-pod ephemeral database for testing.

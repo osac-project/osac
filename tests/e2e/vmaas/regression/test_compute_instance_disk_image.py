@@ -8,6 +8,7 @@ import pytest
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import (
     assert_grpc_rejected,
+    unique_name,
     wait_for_cr,
     wait_for_deletion,
     wait_for_grpc_removal,
@@ -21,10 +22,6 @@ pytestmark = pytest.mark.regression
 SOURCE_REF = "quay.io/containerdisks/fedora:41"
 
 
-def _unique_name(prefix: str = "e2e-cidi") -> str:
-    return f"{prefix}-{uuid4().hex[:8]}"
-
-
 def test_compute_instance_with_disk_image(
     grpc: GRPCClient,
     vm_template: str,
@@ -34,7 +31,7 @@ def test_compute_instance_with_disk_image(
     default_storage_tier: str,
 ) -> None:
     """AC-1 / TC-FR7-01: Create CI with DiskImage reference, verify VM runs with correct image."""
-    di_name = _unique_name("e2e-di")
+    di_name = unique_name("e2e-di")
     di_id: str | None = None
     ci_id: str | None = None
     ci_name: str | None = None
@@ -53,7 +50,7 @@ def test_compute_instance_with_disk_image(
             disk_image_name=di_name,
             subnet_ids=[default_subnet],
             instance_type=default_instance_type,
-            name=_unique_name("e2e-ci"),
+            name=unique_name("e2e-ci"),
             boot_disk_storage_tier=default_storage_tier,
         )
         ci_id = response["object"]["id"]
@@ -89,8 +86,9 @@ def test_obsolete_disk_image_blocks_creation(
     grpc: GRPCClient, vm_template: str, default_subnet: str, default_instance_type: str, default_storage_tier: str
 ) -> None:
     """AC-2 / TC-FR7-04: OBSOLETE DiskImage blocks ComputeInstance creation."""
-    di_name = _unique_name("e2e-di")
+    di_name = unique_name("e2e-di")
     di_id: str | None = None
+    ci_id: str | None = None
 
     try:
         di_id = grpc.create_disk_image(name=di_name, source_ref=SOURCE_REF)
@@ -99,16 +97,19 @@ def test_obsolete_disk_image_blocks_creation(
         grpc.update_disk_image_lifecycle(disk_image_id=di_id, lifecycle="DISK_IMAGE_LIFECYCLE_OBSOLETE")
 
         with pytest.raises(subprocess.CalledProcessError) as exc_info:
-            grpc.create_compute_instance_with_disk_image(
+            response = grpc.create_compute_instance_with_disk_image(
                 template=vm_template,
                 disk_image_name=di_name,
                 subnet_ids=[default_subnet],
                 instance_type=default_instance_type,
-                name=_unique_name("e2e-ci-obsolete"),
+                name=unique_name("e2e-ci-obsolete"),
                 boot_disk_storage_tier=default_storage_tier,
             )
+            ci_id = response["object"]["id"]
         assert_grpc_rejected(exc_info, "FailedPrecondition")
     finally:
+        if ci_id is not None:
+            grpc.delete_compute_instance(ci_id=ci_id)
         if di_id is not None:
             grpc.delete_disk_image(disk_image_id=di_id)
 
@@ -126,7 +127,7 @@ def test_template_disk_image_default(grpc: GRPCClient, private_grpc: GRPCClient)
     it before storage. Provisioning a VM from a custom template default is not e2e-testable until
     the backend supports provisionable custom templates.
     """
-    di_name = _unique_name("e2e-di")
+    di_name = unique_name("e2e-di")
     di_id: str | None = None
     template_id: str | None = None
 
@@ -139,7 +140,7 @@ def test_template_disk_image_default(grpc: GRPCClient, private_grpc: GRPCClient)
         template_ref_id = f"e2e.templates.di_default_{uuid4().hex[:8]}"
         template_id = private_grpc.create_compute_instance_template(
             template_id=template_ref_id,
-            name=_unique_name("e2e-tmpl"),
+            name=unique_name("e2e-tmpl"),
             title="E2E DiskImage default test",
             description="Template with disk_image in spec_defaults",
             spec_defaults={"disk_image": {"name": di_name}},
@@ -166,7 +167,7 @@ def test_disk_image_deletion_protection(
     default_storage_tier: str,
 ) -> None:
     """AC-5 / TC-FR12-01 + TC-FR12-04: Deletion protection lifecycle."""
-    di_name = _unique_name("e2e-di")
+    di_name = unique_name("e2e-di")
     di_id: str | None = None
     ci_id: str | None = None
     ci_name: str | None = None
@@ -179,7 +180,7 @@ def test_disk_image_deletion_protection(
             disk_image_name=di_name,
             subnet_ids=[default_subnet],
             instance_type=default_instance_type,
-            name=_unique_name("e2e-ci"),
+            name=unique_name("e2e-ci"),
             boot_disk_storage_tier=default_storage_tier,
         )
         ci_id = response["object"]["id"]
@@ -213,7 +214,7 @@ def test_disk_image_deletion_protection(
 
 def test_disk_image_deletion_protection_template(grpc: GRPCClient, private_grpc: GRPCClient) -> None:
     """TC-FR12-02: Cannot delete a DiskImage referenced by a ComputeInstanceTemplate."""
-    di_name = _unique_name("e2e-di")
+    di_name = unique_name("e2e-di")
     di_id: str | None = None
     template_id: str | None = None
 
@@ -226,7 +227,7 @@ def test_disk_image_deletion_protection_template(grpc: GRPCClient, private_grpc:
         # id is never resolved as an AAP role.
         template_id = private_grpc.create_compute_instance_template(
             template_id=f"e2e.templates.di_protect_{uuid4().hex[:8]}",
-            name=_unique_name("e2e-tmpl"),
+            name=unique_name("e2e-tmpl"),
             title="E2E DiskImage deletion protection test",
             description="Template referencing a disk_image via spec_defaults",
             spec_defaults={"disk_image": {"name": di_name}},

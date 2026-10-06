@@ -71,9 +71,51 @@ identity changes across upgrades and reinstall attempts.
 {{- end -}}
 
 {{/*
+True when this release should create a Strimzi KafkaUser for the fulfillment
+service. That is only when the in-cluster Kafka named by kafka.clusterName is
+enabled. An external cluster requires kafka.enabled=false and is configured
+through service.kafka.connection.
+*/}}
+{{- define "osac.provisionFulfillmentKafkaUser" -}}
+{{- if and .Values.kafka.enabled .Values.service.enabled }}
+true
+{{- end }}
+{{- end }}
+
+{{/*
+Name of the Strimzi KafkaUser (and of the Secret it creates in the Kafka
+namespace) used by the fulfillment service.
+*/}}
+{{- define "osac.fulfillmentKafkaUserName" -}}
+fulfillment-service
+{{- end }}
+
+{{/*
+Name of the Secret in the release namespace that holds the fulfillment Kafka
+connection properties (brokers, user, and password).
+*/}}
+{{- define "osac.fulfillmentKafkaSecretName" -}}
+fulfillment-service-kafka
+{{- end }}
+
+{{/*
+Bootstrap servers for the in-cluster Kafka named by kafka.clusterName in
+kafka.clusterNamespace.
+*/}}
+{{- define "osac.fulfillmentKafkaBrokers" -}}
+{{- $ns := .Values.kafka.clusterNamespace | default "osac-kafka" }}
+{{- $name := .Values.kafka.clusterName | default "osac-kafka" }}
+{{- printf "%s-kafka-bootstrap.%s.svc:9093" $name $ns }}
+{{- end }}
+
+{{/*
 Wait-for-fulfillment init container.
 Uses .Values.cliImage for the container image.
 */}}
+{{- define "osac.fulfillmentCurlTLS" -}}
+--cacert /etc/ca-bundle/bundle.pem
+{{- end -}}
+
 {{- define "osac.waitForFulfillment" -}}
 {{- $url := "https://fulfillment-rest-gateway:8000/healthz" -}}
 - name: wait-for-fulfillment
@@ -87,7 +129,7 @@ Uses .Values.cliImage for the container image.
       echo "Waiting for fulfillment REST gateway..."
       for i in $(seq 1 60); do
         echo "Attempt ${i}: checking {{ $url }}"
-        if curl -skf --connect-timeout 5 --max-time 30 {{ $url }}; then
+        if curl -sf {{ include "osac.fulfillmentCurlTLS" . }} --connect-timeout 5 --max-time 30 {{ $url }}; then
           echo ""
           echo "Fulfillment service is ready."
           exit 0
@@ -102,6 +144,9 @@ Uses .Values.cliImage for the container image.
   volumeMounts:
   - name: tmp
     mountPath: /tmp
+  - name: ca-bundle
+    mountPath: /etc/ca-bundle
+    readOnly: true
   resources:
     requests:
       cpu: 50m
@@ -115,3 +160,192 @@ Uses .Values.cliImage for the container image.
     capabilities:
       drop: ["ALL"]
 {{- end }}
+
+{{/*
+The umbrella chart validates the values before rendering the AAP subchart.
+Keep this chart-local adapter because Helm subcharts cannot call templates
+defined by their parent chart; the AAP chart has the corresponding helper for
+its two instance-group manifests.
+*/}}
+{{- define "osac.netrisConfig" -}}
+{{- $netris := .netris | default dict -}}
+{{- $creds := $netris.credentials | default dict -}}
+{{- $derived := dict
+  "NETRIS_CONTROLLER_URL" ($netris.controllerUrl | default "")
+  "NETRIS_USERNAME" ($creds.username | default "")
+  "NETRIS_SITE_ID" ($netris.siteId | default "" | toString)
+  "NETRIS_TENANT_ID" ($netris.tenantId | default "" | toString)
+  "NETRIS_TENANT_NAME" ($netris.tenantName | default "")
+-}}
+{{- if .cluster -}}
+{{- $_ := set $derived "NETWORK_CLASS" "netris" -}}
+{{- $_ := set $derived "NETWORK_STEPS_COLLECTION" "netris.steps" -}}
+{{- $_ := set $derived "NETRIS_MGMT_VPC_ID" ($netris.mgmtVpcId | default "" | toString) -}}
+{{- $_ := set $derived "NETRIS_MGMT_VPC_NAME" ($netris.mgmtVpcName | default "") -}}
+{{- $_ := set $derived "NETRIS_RESOURCE_CLASS_MAP" ($netris.resourceClassMap | default "") -}}
+{{- end -}}
+{{- $derived | toYaml -}}
+{{- end }}
+
+{{/*
+Fail helm template when networking values are inconsistent. Schema validates
+individual fields; this enforces cross-field invariants that JSON Schema
+cannot express (duplicated Netris config, inverted port ranges, networking
+facade vs low-level surface mismatches).
+*/}}
+{{- define "osac.validateValues" -}}
+{{- $networking := include "osac.networking.effective" . | fromYaml -}}
+{{- $expert := .Values.global.expertOverrides | default dict -}}
+{{- $netris := $networking.netris | default dict -}}
+{{- $netrisEnabled := eq $networking.fabricManager "netris" -}}
+{{- $agentlessEnabled := or (eq $networking.k8sManager "k8s_only") (eq $networking.fabricManager "agentless_net") -}}
+{{- $agentlessStubEnabled := eq $networking.fabricManager "agentless_net" -}}
+{{- $cudnEnabled := eq $networking.fabricManager "cudn_net" -}}
+{{- $netExpertAap := $expert.aap | default false -}}
+{{- $netExpertNetworkClass := $expert.networkClass | default false -}}
+{{- $netExpertNetworkManagers := $expert.networkManagers | default false -}}
+{{- $cf := .Values.aap.instanceGroups.clusterFulfillment | default dict -}}
+{{- $nf := .Values.aap.instanceGroups.networkFulfillment | default dict -}}
+{{- $cfCfg := $cf.config | default dict -}}
+{{- $nfCfg := $nf.config | default dict -}}
+{{- $cfSec := $cf.secret | default dict -}}
+{{- $nfSec := $nf.secret | default dict -}}
+{{- if not $netExpertAap -}}
+{{- if $netrisEnabled -}}
+{{- $creds := $netris.credentials | default dict -}}
+{{- $derived := include "osac.netrisConfig" (dict "netris" $netris "cluster" true) | fromYaml -}}
+{{- $cfCfg = merge $derived $cfCfg -}}
+{{- $nfDerived := include "osac.netrisConfig" (dict "netris" $netris "cluster" false) | fromYaml -}}
+{{- $nfCfg = merge $nfDerived $nfCfg -}}
+{{- if $creds.password }}
+{{- $cfSec = merge (dict "NETRIS_PASSWORD" $creds.password) $cfSec -}}
+{{- $nfSec = merge (dict "NETRIS_PASSWORD" $creds.password) $nfSec -}}
+{{- end }}
+{{- else if $agentlessEnabled -}}
+{{- $derived := dict "NETWORK_CLASS" "agentless_net" "NETWORK_STEPS_COLLECTION" "agentless_net.steps" -}}
+{{- $cfCfg = merge $derived $cfCfg -}}
+{{- end }}
+{{- end }}
+{{- $netrisConfigFields := list
+  "NETRIS_CONTROLLER_URL"
+  "NETRIS_USERNAME"
+  "NETRIS_SITE_ID"
+  "NETRIS_TENANT_ID"
+  "NETRIS_TENANT_NAME"
+-}}
+{{- range $netrisConfigFields }}
+  {{- $cfVal := index $cfCfg . | default "" | toString -}}
+  {{- $nfVal := index $nfCfg . | default "" | toString -}}
+  {{- if ne $cfVal $nfVal }}
+    {{- fail (printf "aap.instanceGroups.clusterFulfillment.config.%s and networkFulfillment.config.%s must match" . .) }}
+  {{- end }}
+{{- end }}
+{{- $cfPwd := $cfSec.NETRIS_PASSWORD | default "" | toString -}}
+{{- $nfPwd := $nfSec.NETRIS_PASSWORD | default "" | toString -}}
+{{- if ne $cfPwd $nfPwd }}
+  {{- fail "aap.instanceGroups.clusterFulfillment.secret.NETRIS_PASSWORD and networkFulfillment.secret.NETRIS_PASSWORD must match" }}
+{{- end }}
+{{- $networkClass := $networking.networkClass | default dict -}}
+{{- if $netExpertNetworkClass -}}
+{{- $networkClass = .Values.networkClass | default dict -}}
+{{- end }}
+{{- $fabricManager := $networkClass.fabricManager | default "" -}}
+{{- $k8sManager := $networkClass.k8sManager | default "" -}}
+{{- if $networkClass.enabled -}}
+  {{- range $networkClass.defaults.egressRules | default list }}
+    {{- if and .portFrom .portTo (gt (int .portFrom) (int .portTo)) }}
+      {{- fail (printf "networkClass.defaults.egressRules: portFrom (%v) must be <= portTo (%v)" .portFrom .portTo) }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+{{- $nm := .Values.operator.networkManagers | default dict -}}
+{{- $networkManagersEnabled := $nm.enabled | default false -}}
+{{- $fabricManagers := $nm.fabricManagers | default dict -}}
+{{- $k8sManagers := $nm.k8sManagers | default dict -}}
+{{- if and (not $netExpertNetworkManagers) (or $netrisEnabled $agentlessEnabled $cudnEnabled) (not $networkManagersEnabled) }}
+  {{- fail "global.networking requires operator.networkManagers.enabled=true" }}
+{{- end }}
+{{- if $cudnEnabled -}}
+  {{- if not (and .Values.global.services.caas.enabled .Values.global.services.bmaas.enabled) -}}
+    {{- fail "fabricManager=cudn_net requires CaaS and BMaaS services" -}}
+  {{- end -}}
+  {{- if or (ne $fabricManager "cudn_net") (ne $k8sManager "") (not $networkClass.enabled) (not $networkClass.isDefault) -}}
+    {{- fail "fabricManager=cudn_net requires an enabled default CUDN-only NetworkClass" -}}
+  {{- end -}}
+  {{- $cudnMgr := index $fabricManagers "cudn_net" | default dict -}}
+  {{- if not ($cudnMgr.enabled | default false) -}}
+    {{- fail "fabricManager=cudn_net requires registered operator.networkManagers.fabricManagers.cudn_net.enabled=true" -}}
+  {{- end -}}
+  {{- if .Values.operator.enabled -}}
+    {{- if not (and $netExpertAap .Values.aap.aap.instance.enabled .Values.aap.bootstrap.enabled $cf.enabled $nf.enabled) -}}
+      {{- fail "fabricManager=cudn_net requires expert ci.steps AAP with both instance groups" -}}
+    {{- end -}}
+    {{- if or (ne (index $cfCfg "NETWORK_CLASS" | default "") "ci") (ne (index $cfCfg "NETWORK_STEPS_COLLECTION" | default "") "ci.steps") -}}
+      {{- fail "fabricManager=cudn_net requires NETWORK_CLASS=ci and NETWORK_STEPS_COLLECTION=ci.steps" -}}
+    {{- end -}}
+  {{- else -}}
+    {{- fail "fabricManager=cudn_net requires an enabled operator" -}}
+  {{- end -}}
+{{- end -}}
+{{- $netClass := index $cfCfg "NETWORK_CLASS" | default "" | toString -}}
+{{- $netSteps := index $cfCfg "NETWORK_STEPS_COLLECTION" | default "" | toString -}}
+{{- if eq $netClass "netris" -}}
+{{- if ne $netSteps "netris.steps" }}
+  {{- fail (printf "NETWORK_CLASS=netris requires NETWORK_STEPS_COLLECTION=netris.steps (got %q)" $netSteps) }}
+{{- end }}
+{{- $netrisMgr := index $fabricManagers "netris" | default dict -}}
+{{- $netrisRegistered := $netrisMgr.enabled | default false -}}
+{{- if and (not $netExpertNetworkManagers) $netrisEnabled }}
+{{- $netrisRegistered = true -}}
+{{- end }}
+{{- if not $netrisRegistered }}
+  {{- fail "NETWORK_CLASS=netris requires operator.networkManagers.fabricManagers.netris.enabled=true" }}
+{{- end }}
+{{- if eq (index $cfCfg "NETRIS_CONTROLLER_URL" | default "" | toString) "" }}
+  {{- fail "NETWORK_CLASS=netris requires NETRIS_CONTROLLER_URL on clusterFulfillment" }}
+{{- end }}
+{{- if and $fabricManager (ne $fabricManager "netris") }}
+  {{- fail (printf "NETWORK_CLASS=netris conflicts with networkClass.fabricManager=%q" $fabricManager) }}
+{{- end }}
+{{- end }}
+{{- if eq $netClass "agentless_net" -}}
+{{- if ne $netSteps "agentless_net.steps" }}
+  {{- fail (printf "NETWORK_CLASS=agentless_net requires NETWORK_STEPS_COLLECTION=agentless_net.steps (got %q)" $netSteps) }}
+{{- end }}
+{{- if and $agentlessStubEnabled (ne $fabricManager "agentless_net") }}
+  {{- fail "AgentlessNet stub requires NetworkClass fabricManager=agentless_net" }}
+{{- else if and (not $agentlessStubEnabled) (ne $fabricManager "") }}
+  {{- fail "agentless_net.steps with the k8s_only manager requires networkClass.fabricManager to be empty" }}
+{{- end }}
+{{- end }}
+{{- if and $networkClass.enabled $fabricManager -}}
+{{- $mgr := index $fabricManagers $fabricManager | default dict -}}
+{{- $mgrEnabled := $mgr.enabled | default false -}}
+{{- if and (not $netExpertNetworkManagers) $netrisEnabled (eq $fabricManager "netris") }}
+{{- $mgrEnabled = true -}}
+{{- end }}
+{{- if and (not $netExpertNetworkManagers) $agentlessStubEnabled (eq $fabricManager "agentless_net") }}
+{{- $mgrEnabled = true -}}
+{{- end }}
+{{- if not $mgrEnabled }}
+  {{- fail (printf "networkClass.fabricManager=%q requires operator.networkManagers.fabricManagers.%s.enabled=true" $fabricManager $fabricManager) }}
+{{- end }}
+{{- end }}
+{{- if and $networkClass.enabled $k8sManager -}}
+{{- $mgr := index $k8sManagers $k8sManager | default dict -}}
+{{- $mgrEnabled := $mgr.enabled | default false -}}
+{{- if and (not $netExpertNetworkManagers) $agentlessEnabled (eq $k8sManager "k8s_only") }}
+{{- $mgrEnabled = true -}}
+{{- end }}
+{{- if not $mgrEnabled }}
+  {{- fail (printf "networkClass.k8sManager=%q requires operator.networkManagers.k8sManagers.%s.enabled=true" $k8sManager $k8sManager) }}
+{{- end }}
+{{- end }}
+{{- if and $networkClass.enabled (eq $k8sManager "k8s_only") (ne $fabricManager "") }}
+  {{- fail "networkClass.k8sManager=k8s_only requires networkClass.fabricManager to be empty" }}
+{{- end }}
+{{- $syncInterval := $nm.capabilitiesSyncInterval | default "5m" -}}
+{{- if not (regexMatch "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$" ($syncInterval | toString)) }}
+  {{- fail (printf "operator.networkManagers.capabilitiesSyncInterval must be a valid Go duration (got %q)" $syncInterval) }}
+{{- end }}
+{{- end -}}

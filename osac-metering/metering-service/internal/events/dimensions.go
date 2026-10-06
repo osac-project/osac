@@ -9,7 +9,21 @@ in compliance with the License. You may obtain a copy of the License at
 
 package events
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/osac-project/osac-metering/schema"
+)
+
+// ValidateBillingDimensions rejects incomplete billing dimensions before an
+// event reaches Kafka. An empty project_id identifies the tenant default
+// project; all other string dimensions must be non-empty.
+func ValidateBillingDimensions(resourceType string, dimensions map[string]any) error {
+	if resourceType == schema.ResourceTypeVolume {
+		return validateVolumeBillingDimensions(dimensions)
+	}
+	return validateNetworkingBillingDimensions(resourceType, dimensions)
+}
 
 // DimensionsEqual compares two billing dimension maps for equality.
 // Numeric values are compared as float64 to handle type differences

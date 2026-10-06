@@ -6,7 +6,7 @@ metadata:
   name: {{ .Values.awx.instance.name }}
   namespace: {{ .Values.osacNamespace }}
   labels:
-    {{- include "osac-devstack.labels" . | nindent 4 }}
+    {{- include "osac-devstack.selectorLabels" . | nindent 4 }}
 spec:
   service_type: {{ .Values.awx.instance.serviceType }}
   postgres_storage_class: {{ .Values.awx.instance.postgresStorageClass }}

@@ -22,6 +22,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/annotate"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/color"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/console"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/delete"
@@ -35,6 +36,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/scale"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/tenant"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/version"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/volumes"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/whoami"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
@@ -76,6 +78,7 @@ func Root() (result *cobra.Command, err error) {
 	// Add flags:
 	flags := result.PersistentFlags()
 	logging.AddFlags(flags)
+	color.AddFlag(result)
 	flags.StringVar(
 		&runner.args.configDir,
 		configFlag,
@@ -109,6 +112,7 @@ func Root() (result *cobra.Command, err error) {
 	result.AddCommand(scale.Cmd())
 	result.AddCommand(tenant.Cmd())
 	result.AddCommand(version.Cmd())
+	result.AddCommand(volumes.Cmd())
 	result.AddCommand(whoami.Cmd())
 
 	// Configure the root command, and therefore all its subcommands, to use Markdown for their help output:
@@ -202,9 +206,10 @@ func (c *runnerContext) persistentPreRun(cmd *cobra.Command, args []string) erro
 		return fmt.Errorf("failed to load settings: %w", err)
 	}
 
-	// Create the console:
+	// Apply the command's color preference to Console's standard output.
 	console, err := terminal.NewConsole().
 		SetLogger(logger).
+		SetColorEnabled(color.Enabled(cmd, os.Stdout)).
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create console: %w", err)

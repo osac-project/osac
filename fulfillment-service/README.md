@@ -9,8 +9,8 @@ mechanism, and the end-to-end path from a `Create` call to a Kubernetes custom r
 The API is defined using protocol buffers in the [`proto`](proto) directory. An OpenAPI
 specification is generated automatically from those definitions and published as raw YAML at
 [openapi/v3/public.yaml](https://osac-project.github.io/osac/openapi/v3/public.yaml).
-The same documentation is also available with a more convenient UI at
-[osac-project.github.io/osac](https://osac-project.github.io/osac/).
+The same documentation is also available with a more convenient Swagger UI at
+[osac-project.github.io/osac/openapi](https://osac-project.github.io/osac/openapi/).
 
 ## Required development tools
 
@@ -134,7 +134,8 @@ To run the the gRPC server use a command like this:
     --log-headers=true \
     --log-bodies=true \
     --grpc-listener-address=localhost:8000 \
-    --db-url=postgres://user:pass@localhost:5432/db
+    --db-url=postgres://user:pass@localhost:5432/db \
+    --kafka-properties-file=/path/to/kafka/properties
 
 To run the the REST gateway use a command like this:
 
@@ -146,7 +147,8 @@ To run the the REST gateway use a command like this:
     --grpc-server-address=localhost:8000 \
     --grpc-server-plaintext
 
-You may need to adjust the commands to use your database details.
+You may need to adjust the commands to use your database and Kafka details. The Kafka properties
+file can also be a directory containing `brokers`, `user`, and `password` files.
 
 To verify that the gRPC server is working use `grpcurl`. For example, to list the available gRPC services:
 

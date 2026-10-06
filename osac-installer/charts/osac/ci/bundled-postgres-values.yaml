@@ -10,6 +10,7 @@ ui:
         caBundle:
           configMap: ca-bundle
   auth:
+    oidcIssuerURL: https://keycloak.example.com/realms/osac
     certs:
       caBundle:
         configMap: ca-bundle
@@ -49,3 +50,14 @@ service:
           param: sslkey
         - key: ca.crt
           param: sslrootcert
+  vault:
+    endpoint: https://vault.example.com
+    lifecycleRole: vault-lifecycle
+    keycloakClientId: vault-client
+    keycloakIssuerUrl: https://keycloak.example.com/realms/osac
+    credentials:
+    - secret:
+        name: vault-credentials
+        items:
+        - key: client-secret
+          param: client-secret

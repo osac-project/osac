@@ -201,8 +201,12 @@ A name remains reserved while the object exists, including while deletion is pen
 
 #### Immutability
 
-Once an object is created, its `metadata.name` cannot be changed. Updates that include
-`metadata.name` in the field mask are accepted only if the value is identical to the existing name.
+Once an object is created, its `metadata.name` cannot be changed. For services that expose `Update`,
+requests that include `metadata.name` in the field mask are accepted only if the value is identical
+to the existing name. The public networking services `VirtualNetworks`, `Subnets`, `SecurityGroups`,
+`ExternalIPs`, `ExternalIPAttachments`, and `NATGateways` are intentionally create/read/delete-only:
+their public APIs do not declare `Update` or a REST `PATCH` route. Their private counterparts retain
+`Update` for controller status and feedback.
 
 #### Error responses
 
@@ -211,7 +215,8 @@ Once an object is created, its `metadata.name` cannot be changed. Updates that i
 | Name missing or empty on create | `InvalidArgument` | Validation error on `metadata.name` (protovalidate) |
 | Name fails RFC 1123 format | `InvalidArgument` | Validation error on `metadata.name` (protovalidate) |
 | Name already taken in scope | `AlreadyExists` | `virtual network 'prod-net' already exists` |
-| Update attempts to change name | `InvalidArgument` | `field 'metadata.name' is immutable` |
+| Update attempts to change name on an update-capable service | `InvalidArgument` | `field 'metadata.name' is immutable` |
+| Update attempt on a public networking service | `Unimplemented` | The public service has no `Update` method |
 | Singleton or single-default invariant (for example a second non-deleted `NetworkClass`) | `FailedPrecondition` | `only one NetworkClass per deployment is allowed (existing NetworkClass id '...')` |
 
 Not every unique-index violation is `AlreadyExists`. Ordinary per-object name uniqueness stays
@@ -264,8 +269,8 @@ invalid requests with `InvalidArgument` errors that include field-level violatio
 ### Validation flow
 
 - **Create requests**: Validated by protovalidate interceptor before reaching server handlers
-- **Update requests**: Server validates the merged object after applying `update_mask`
-  - Protovalidate interceptor skips validation to avoid false errors on partial objects
+- **Update requests on update-capable services**: Server validates the merged object after applying `update_mask`
+  - Interceptor skips validation to avoid false errors on partial objects
   - Server merges request fields (per mask) with database object
   - Server validates the complete merged result with protovalidate
 
@@ -408,17 +413,17 @@ for `BareMetalInstance` is `BareMetalInstances`.
 
 ### Standard methods
 
-Services of the public API must always declare the following five methods, even if some of them are
-not yet implemented in the backend (in which case the documentation should explain this). The
-reason is that the CLI currently depends on all these methods being declared. This restriction may
-be lifted in the future.
+Most services of the public API declare the following five methods. Immutable networking services
+are the intentional exception: they expose the four CRUD methods that do not mutate an existing
+object (`Create`, `List`, `Get`, and `Delete`) and omit `Update` entirely. The private versions of
+those services still expose `Update` for controller status and feedback.
 
 | Method   | Purpose                            |
 |----------|------------------------------------|
 | `Create` | Creates a new object.              |
 | `List`   | Returns a filtered list of objects. |
 | `Get`    | Returns a single object by `id`.   |
-| `Update` | Partially updates an object.       |
+| `Update` | Partially updates an object when the service supports mutation. |
 | `Delete` | Deletes an object by `id`.         |
 
 Services of the private API must additionally declare a `Signal` method. This method must never
@@ -512,7 +517,7 @@ message ThingsGetResponse {
 }
 ```
 
-### Update
+### Update (when supported)
 
 The request contains `object`, `update_mask`, and `lock`. The response contains the updated
 `object`.

@@ -261,3 +261,4 @@ export type ComputeInstanceTemplateReference = Message<"osac.private.v1.ComputeI
  */
 export const ComputeInstanceTemplateReferenceSchema: GenMessage<ComputeInstanceTemplateReference> = /*@__PURE__*/
   messageDesc(file_osac_private_v1_compute_instance_template_type, 3);
+

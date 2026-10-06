@@ -125,9 +125,6 @@ var _ = Describe("Public storage tiers", func() {
 		Expect(object.GetId()).To(Equal(id))
 		Expect(object.GetSpec().GetDescription()).To(Equal("Public IT test storage tier."))
 		Expect(object.GetSpec().GetProtocol()).To(Equal(publicv1.StorageProtocol_STORAGE_PROTOCOL_NFS))
-		Expect(object.GetSpec().GetMaxReadBandwidthMbs()).To(Equal(int32(1000)))
-		Expect(object.GetSpec().GetMaxWriteBandwidthMbs()).To(Equal(int32(500)))
-		Expect(object.GetSpec().GetEncryptionEnabled()).To(BeTrue())
 		Expect(object.GetStatus().GetState()).To(Equal(publicv1.StorageTierState_STORAGE_TIER_STATE_ACTIVE))
 	})
 
@@ -202,8 +199,8 @@ var _ = Describe("Public storage tiers", func() {
 		Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 	})
 
-	It("Rejects a filter referencing a field at a private-mismatched path", func() {
-		createViaPrivate("mismatch", privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS)
+	It("Rejects a filter referencing a removed field", func() {
+		createViaPrivate("removed", privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS)
 
 		filter := "this.spec.max_read_bandwidth_mbs == 1000"
 		_, err := publicClient.List(ctx, publicv1.StorageTiersListRequest_builder{

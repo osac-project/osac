@@ -13,6 +13,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/IBM/sarama"
 	"github.com/IBM/sarama/mocks"
@@ -20,8 +22,89 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/osac-project/osac-metering/internal/events"
 	"github.com/osac-project/osac-metering/internal/kafka"
+	"github.com/osac-project/osac-metering/schema"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
+
+type bmaasTestMapper struct {
+	currentState string
+}
+
+func (m *bmaasTestMapper) ResourceType() string { return schema.ResourceTypeBareMetalInstance }
+func (m *bmaasTestMapper) ResourceID() string   { return "bmi-001" }
+func (m *bmaasTestMapper) TenantID() string     { return "tenant-1" }
+func (m *bmaasTestMapper) ProjectID() *string {
+	projectID := "project-1"
+	return &projectID
+}
+func (m *bmaasTestMapper) CatalogItemID() *string {
+	catalogItemID := "bmi-gpu-workstation"
+	return &catalogItemID
+}
+func (m *bmaasTestMapper) TemplateID() *string {
+	templateID := "tmpl-bmaas"
+	return &templateID
+}
+func (m *bmaasTestMapper) CurrentState() string      { return m.currentState }
+func (m *bmaasTestMapper) FulfillmentVersion() int32 { return 1 }
+func (m *bmaasTestMapper) IsBillable() bool          { return true }
+func (m *bmaasTestMapper) BillingDimensionsMap() (map[string]any, error) {
+	return map[string]any{
+		"bm_instance_type": "bmi-type-gpu-large",
+		"catalog_item":     "bmi-gpu-workstation",
+	}, nil
+}
+func (*bmaasTestMapper) Usage(string, *time.Time, time.Time, map[string]any) (*schema.Usage, error) {
+	return nil, nil
+}
+func (m *bmaasTestMapper) TransitionTime(_ *privatev1.Event, _ string) (time.Time, error) {
+	return time.Time{}, nil
+}
+func (m *bmaasTestMapper) CloudEventType(privatev1.EventType, string) (string, error) {
+	return events.EventStarted, nil
+}
+
+func capturePublishedMessage(mockProducer *mocks.SyncProducer, pub *kafka.Publisher, ctx context.Context, event cloudevents.Event) *sarama.ProducerMessage {
+	var capturedMsg *sarama.ProducerMessage
+	mockProducer.ExpectSendMessageWithMessageCheckerFunctionAndSucceed(
+		func(msg *sarama.ProducerMessage) error {
+			capturedMsg = msg
+			return nil
+		},
+	)
+
+	Expect(pub.Publish(ctx, event)).NotTo(HaveOccurred())
+	return capturedMsg
+}
+
+func assertPublishedBMaaSEnvelope(msg *sarama.ProducerMessage, topic, eventType, meterType, idSuffix string) {
+	Expect(msg.Topic).To(Equal(topic))
+	keyBytes, err := msg.Key.Encode()
+	Expect(err).NotTo(HaveOccurred())
+	Expect(string(keyBytes)).To(Equal("bmi-001"))
+
+	valueBytes, err := msg.Value.Encode()
+	Expect(err).NotTo(HaveOccurred())
+	var decoded cloudevents.Event
+	Expect(json.Unmarshal(valueBytes, &decoded)).To(Succeed())
+	Expect(decoded.SpecVersion()).To(Equal("1.0"))
+	Expect(decoded.Type()).To(Equal(eventType))
+	Expect(decoded.Source()).NotTo(BeEmpty())
+	Expect(decoded.Time()).NotTo(BeZero())
+	Expect(decoded.ID()).To(ContainSubstring(idSuffix))
+	Expect(decoded.Extensions()).To(HaveKeyWithValue(schema.ExtResourceType, schema.ResourceTypeBareMetalInstance))
+	Expect(decoded.Extensions()).NotTo(HaveKey("meter_type"))
+
+	var data map[string]any
+	Expect(json.Unmarshal(decoded.Data(), &data)).To(Succeed())
+	Expect(data["resource_type"]).To(Equal(schema.ResourceTypeBareMetalInstance))
+	billingDimensions, ok := data["billing_dimensions"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	Expect(billingDimensions).To(HaveKeyWithValue("meter_type", meterType))
+	Expect(billingDimensions).To(HaveKeyWithValue("bm_instance_type", "bmi-type-gpu-large"))
+}
 
 var _ = Describe("Publisher", func() {
 	var (
@@ -87,6 +170,97 @@ var _ = Describe("Publisher", func() {
 			err := pub.Publish(ctx, testEvent)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(capturedMsg.Topic).To(Equal(kafka.TopicCorrections))
+		})
+
+		It("routes producer-shaped BMaaS events through the existing shared topics", func() {
+			mapper := &bmaasTestMapper{currentState: "RUNNING"}
+			transitionTime := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
+			allocationSince := time.Date(2026, 9, 14, 11, 0, 0, 0, time.UTC)
+			consumptionSince := time.Date(2026, 9, 14, 11, 30, 0, 0, time.UTC)
+			dims, err := mapper.BillingDimensionsMap()
+			Expect(err).NotTo(HaveOccurred())
+
+			built, err := events.DecomposeBMIEvents(
+				dims,
+				"evt-bmaas-1",
+				transitionTime,
+				events.BMaaSMeterIntervals{
+					AllocationSince:  &allocationSince,
+					ConsumptionSince: &consumptionSince,
+				},
+				func(request events.BMaaSEventBuildRequest) (cloudevents.Event, error) {
+					return events.BuildLifecycleEvent(
+						request.EventID,
+						request.EventType,
+						mapper,
+						request.BillingDims,
+						"PROVISIONING",
+						request.DurationSeconds,
+						nil,
+						transitionTime,
+					)
+				},
+				events.EventStarted,
+				events.EventStarted,
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(built).To(HaveLen(2))
+
+			for _, event := range built {
+				meterType := "allocation"
+				if strings.Contains(event.ID(), "/consumption") {
+					meterType = "consumption"
+				}
+				assertPublishedBMaaSEnvelope(
+					capturePublishedMessage(mockProducer, pub, ctx, event),
+					kafka.TopicLifecycle,
+					events.EventStarted,
+					meterType,
+					"/"+meterType,
+				)
+			}
+
+			heartbeat := cloudevents.NewEvent()
+			heartbeat.SetID("hb/bmi-001/1726315200/allocation")
+			heartbeat.SetSource("osac-metering")
+			heartbeat.SetType(events.EventHeartbeat)
+			heartbeat.SetTime(transitionTime)
+			events.SetOSACExtensions(&heartbeat, "bmi-001", schema.ResourceTypeBareMetalInstance, "tenant-1", "project-1")
+			Expect(heartbeat.SetData(cloudevents.ApplicationJSON, map[string]any{
+				"resource_id": "bmi-001", "resource_type": schema.ResourceTypeBareMetalInstance,
+				"tenant_id": "tenant-1", "project_id": "project-1", "current_state": "STOPPED",
+				"duration_seconds": 3600.0, "billing_dimensions": map[string]any{
+					"meter_type": "allocation", "bm_instance_type": "bmi-type-gpu-large",
+				}, "schema_version": schema.SchemaVersion,
+			})).To(Succeed())
+			assertPublishedBMaaSEnvelope(
+				capturePublishedMessage(mockProducer, pub, ctx, heartbeat),
+				kafka.TopicHeartbeat,
+				events.EventHeartbeat,
+				"allocation",
+				"/allocation",
+			)
+
+			correction := cloudevents.NewEvent()
+			correction.SetID("correction/bmi-001/allocation")
+			correction.SetSource("osac-metering/reconciler")
+			correction.SetType(events.EventCorrection)
+			correction.SetTime(transitionTime)
+			events.SetOSACExtensions(&correction, "bmi-001", schema.ResourceTypeBareMetalInstance, "tenant-1", "project-1")
+			Expect(correction.SetData(cloudevents.ApplicationJSON, map[string]any{
+				"resource_id": "bmi-001", "resource_type": schema.ResourceTypeBareMetalInstance,
+				"tenant_id": "tenant-1", "project_id": "project-1", "reason": "state_drift",
+				"billing_dimensions": map[string]any{
+					"meter_type": "allocation", "bm_instance_type": "bmi-type-gpu-large",
+				}, "schema_version": schema.SchemaVersion,
+			})).To(Succeed())
+			assertPublishedBMaaSEnvelope(
+				capturePublishedMessage(mockProducer, pub, ctx, correction),
+				kafka.TopicCorrections,
+				events.EventCorrection,
+				"allocation",
+				"/allocation",
+			)
 		})
 
 		It("routes all lifecycle event types to the lifecycle topic", func() {

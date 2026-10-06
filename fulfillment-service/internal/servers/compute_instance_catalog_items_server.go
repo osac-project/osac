@@ -23,14 +23,12 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 type ComputeInstanceCatalogItemsServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -53,11 +51,6 @@ func NewComputeInstanceCatalogItemsServer() *ComputeInstanceCatalogItemsServerBu
 
 func (b *ComputeInstanceCatalogItemsServerBuilder) SetLogger(value *slog.Logger) *ComputeInstanceCatalogItemsServerBuilder {
 	b.logger = value
-	return b
-}
-
-func (b *ComputeInstanceCatalogItemsServerBuilder) SetNotifier(value events.Notifier) *ComputeInstanceCatalogItemsServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -103,7 +96,6 @@ func (b *ComputeInstanceCatalogItemsServerBuilder) Build() (result *ComputeInsta
 
 	delegate, err := NewPrivateComputeInstanceCatalogItemsServer().
 		SetLogger(b.logger).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).

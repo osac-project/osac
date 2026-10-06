@@ -2,7 +2,7 @@ import { screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Project } from '@osac/types';
-import { ProjectState } from '@osac/types';
+import { ProjectState, ServiceTier } from '@osac/types';
 
 import ProjectListPage from './ProjectListPage';
 import { renderWithProviders } from '../../test-utils/TestProviders';
@@ -12,6 +12,7 @@ vi.mock('../../hooks/use-session', () => ({
     role: 'tenant-admin',
     username: 'testuser',
     tenantId: 'tenant-1',
+    enabledServices: [ServiceTier.CAAS, ServiceTier.VMAAS, ServiceTier.BMAAS],
   })),
 }));
 
@@ -44,6 +45,7 @@ describe('ProjectListPage', () => {
       role: 'tenant-admin',
       username: 'testuser',
       tenantId: 'tenant-1',
+      enabledServices: [ServiceTier.CAAS, ServiceTier.VMAAS, ServiceTier.BMAAS],
       userTheme: 'system',
       resolvedTheme: 'light',
       setUserTheme: vi.fn(),
@@ -91,6 +93,7 @@ describe('ProjectListPage', () => {
       role: 'tenant-user',
       username: 'testuser',
       tenantId: 'tenant-1',
+      enabledServices: [ServiceTier.CAAS, ServiceTier.VMAAS, ServiceTier.BMAAS],
       userTheme: 'system',
       resolvedTheme: 'light',
       setUserTheme: vi.fn(),

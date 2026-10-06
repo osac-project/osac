@@ -25,13 +25,11 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 type PrivateNATGatewaysServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -44,6 +42,7 @@ type PrivateNATGatewaysServer struct {
 	privatev1.UnimplementedNATGatewaysServer
 
 	logger             *slog.Logger
+	tenancyLogic       auth.TenancyLogic
 	generic            *GenericServer[*privatev1.NATGateway]
 	externalIPDao      *dao.GenericDAO[*privatev1.ExternalIP]
 	virtualNetworksDao *dao.GenericDAO[*privatev1.VirtualNetwork]
@@ -57,11 +56,6 @@ func NewPrivateNATGatewaysServer() *PrivateNATGatewaysServerBuilder {
 
 func (b *PrivateNATGatewaysServerBuilder) SetLogger(value *slog.Logger) *PrivateNATGatewaysServerBuilder {
 	b.logger = value
-	return b
-}
-
-func (b *PrivateNATGatewaysServerBuilder) SetNotifier(value events.Notifier) *PrivateNATGatewaysServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -139,7 +133,6 @@ func (b *PrivateNATGatewaysServerBuilder) Build() (result *PrivateNATGatewaysSer
 	generic, err := NewGenericServer[*privatev1.NATGateway]().
 		SetLogger(b.logger).
 		SetService(privatev1.NATGateways_ServiceDesc.ServiceName).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
@@ -151,6 +144,7 @@ func (b *PrivateNATGatewaysServerBuilder) Build() (result *PrivateNATGatewaysSer
 
 	result = &PrivateNATGatewaysServer{
 		logger:             b.logger,
+		tenancyLogic:       b.tenancyLogic,
 		generic:            generic,
 		externalIPDao:      externalIPDao,
 		virtualNetworksDao: virtualNetworksDao,
@@ -192,7 +186,28 @@ func (s *PrivateNATGatewaysServer) Create(ctx context.Context,
 	if err != nil {
 		return
 	}
-
+	natTenant, tenantErr := resolveObjectTenant(ctx, natGateway.GetMetadata(), s.tenancyLogic)
+	if tenantErr != nil {
+		err = tenantErr
+		return
+	}
+	virtualNetworkKey := refKey(natGateway.GetSpec().GetVirtualNetwork())
+	virtualNetworkResponse, getErr := s.virtualNetworksDao.Get().SetId(virtualNetworkKey).Do(ctx)
+	if getErr != nil {
+		var notFoundErr *dao.ErrNotFound
+		if errors.As(getErr, &notFoundErr) {
+			err = grpcstatus.Errorf(grpccodes.InvalidArgument, "virtual network '%s' does not exist", virtualNetworkKey)
+		} else {
+			s.logger.ErrorContext(ctx, "Failed to query VirtualNetwork",
+				slog.String("virtual_network_id", virtualNetworkKey),
+				slog.Any("error", getErr))
+			err = grpcstatus.Errorf(grpccodes.Internal, "failed to validate virtual_network")
+		}
+		return
+	}
+	if err = validateTenantMatch(natTenant, virtualNetworkResponse.GetObject(), "VirtualNetwork", virtualNetworkKey); err != nil {
+		return
+	}
 	err = s.validateNetworkClassHasFabricManager(ctx, refKey(natGateway.GetSpec().GetVirtualNetwork()))
 	if err != nil {
 		return
@@ -200,8 +215,12 @@ func (s *PrivateNATGatewaysServer) Create(ctx context.Context,
 
 	externalIPKey := refKey(natGateway.GetSpec().GetExternalIp())
 
-	err = s.validateExternalIPReference(ctx, externalIPKey)
+	var externalIP *privatev1.ExternalIP
+	externalIP, err = s.validateExternalIPReference(ctx, externalIPKey)
 	if err != nil {
+		return
+	}
+	if err = validateTenantMatch(natTenant, externalIP, "ExternalIP", externalIPKey); err != nil {
 		return
 	}
 
@@ -240,6 +259,14 @@ func (s *PrivateNATGatewaysServer) Update(ctx context.Context,
 		err = translateLifecycleError(lockErr)
 		return
 	}
+	if err = validateDefaultLabelUpdate(
+		existingGateway.GetMetadata().GetLabels(),
+		request.GetObject().GetMetadata().GetLabels(),
+		mask,
+		"NAT gateway",
+	); err != nil {
+		return
+	}
 	if updateIncludesField(mask, "spec.virtual_network", "spec.external_ip") {
 		err = validateImmutableFieldsNATGateway(request.GetObject(), existingGateway)
 		if err != nil {
@@ -264,7 +291,7 @@ func (s *PrivateNATGatewaysServer) Delete(ctx context.Context,
 		err = translateLifecycleError(err)
 		return
 	}
-	if err = validateNotDefault(natGateway.GetMetadata().GetLabels(), "NAT gateway"); err != nil {
+	if err = validateNotDefault(ctx, natGateway.GetMetadata().GetLabels(), "NAT gateway"); err != nil {
 		return
 	}
 	if natGateway.GetMetadata().GetDeletionTimestamp() != nil {
@@ -324,7 +351,7 @@ func validateImmutableFieldsNATGateway(
 }
 
 func (s *PrivateNATGatewaysServer) validateExternalIPReference(
-	ctx context.Context, externalIPID string) error {
+	ctx context.Context, externalIPID string) (*privatev1.ExternalIP, error) {
 	getResponse, err := s.externalIPDao.Get().
 		SetId(externalIPID).
 		SetLock(true).
@@ -332,27 +359,27 @@ func (s *PrivateNATGatewaysServer) validateExternalIPReference(
 	if err != nil {
 		var notFoundErr *dao.ErrNotFound
 		if errors.As(err, &notFoundErr) {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"ExternalIP '%s' does not exist", externalIPID)
 		}
 		s.logger.ErrorContext(ctx, "Failed to query ExternalIP",
 			slog.String("external_ip_id", externalIPID),
 			slog.Any("error", err))
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to validate external_ip")
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to validate external_ip")
 	}
 
 	externalIP := getResponse.GetObject()
 
 	if externalIP.GetStatus().GetState() != privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED {
-		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+		return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition,
 			"ExternalIP '%s' is not in ALLOCATED state (current state: %s)",
 			externalIPID, externalIP.GetStatus().GetState().String())
 	}
 	if err := s.lifecycle.ensureExternalIPAvailable(ctx, externalIPID); err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	return externalIP, nil
 }
 
 // validateNetworkClassHasFabricManager resolves the VirtualNetwork referenced by virtualNetworkID to its

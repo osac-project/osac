@@ -52,7 +52,7 @@
   vars:
     manage_agents_cluster_order_name: "{{ cluster_infra_name }}"
     manage_agents_desired_count: "{{ item.numberOfNodes | int }}"
-    manage_agents_resource_class: "{{ item.resourceClass }}"
+    manage_agents_instance_type: "{{ item.bareMetal.instanceType }}"
   loop: "{{ cluster_infra_node_requests }}"
 
 - name: Get agents allocated to this cluster

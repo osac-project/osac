@@ -68,7 +68,7 @@ message BareMetalInstanceCatalogItemFields {
   BareMetalNetworkAttachmentListFieldPolicy network_attachments = 5;
   BoolFieldPolicy auto_external_ip_attachment = 6;
   // Policy for the bare metal instance type selected for host placement.
-  BareMetalInstanceTypeLocalReferenceFieldPolicy instance_type = 7;
+  BareMetalInstanceTypeReferenceFieldPolicy instance_type = 7;
   // Policy for the DiskImage used to provision the instance.
   DiskImageReferenceFieldPolicy disk_image = 8;
 }

@@ -331,6 +331,7 @@
                 namespace: "{{ vast_storage_config_namespace }}"
                 labels:
                   app.kubernetes.io/managed-by: osac-aap
+                  osac.openshift.io/storage-provider: vast
                   osac.openshift.io/tenant: "{{ tenant_name }}"
               type: Opaque
               stringData:

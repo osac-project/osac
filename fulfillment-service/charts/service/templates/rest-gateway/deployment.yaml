@@ -39,8 +39,8 @@ spec:
           secretName: fulfillment-rest-gateway-tls
       containers:
       - name: rest-gateway
-        image: {{ .Values.images.service }}
-        imagePullPolicy: {{ .Values.images.pullPolicy }}
+        image: {{ .Values.images.service.repository }}:{{ .Values.images.service.tag }}
+        imagePullPolicy: {{ .Values.images.service.pullPolicy }}
         volumeMounts:
         - name: cas
           mountPath: /etc/fulfillment-rest-gateway/tls/cas
@@ -69,6 +69,10 @@ spec:
         - --http-listener-address=0.0.0.0:8000
         - --http-listener-tls-crt=/etc/fulfillment-rest-gateway/tls/tls.crt
         - --http-listener-tls-key=/etc/fulfillment-rest-gateway/tls/tls.key
+        - --http-cors-allowed-origins=https://{{ include "fulfillment-api.hostname" . }}
+        {{- range .Values.httpCorsAllowedOrigins }}
+        - --http-cors-allowed-origins={{ . }}
+        {{- end }}
         - --grpc-server-address=fulfillment-internal-api:8001
         - --grpc-keep-alive=5m
         - --metrics-listener-address=0.0.0.0:8002

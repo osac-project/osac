@@ -14,9 +14,11 @@ language governing permissions and limitations under the License.
 package terminal
 
 import (
+	"bytes"
 	"os"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
+	. "github.com/onsi/ginkgo/v2/dsl/table"
 	. "github.com/onsi/gomega"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/text"
@@ -38,6 +40,49 @@ var _ = Describe("Console", func() {
 			Expect(err).To(MatchError("logger is mandatory"))
 			Expect(console).To(BeNil())
 		})
+	})
+
+	Describe("Structured output color", func() {
+		It("can force color to a redirected file", func() {
+			file, err := os.CreateTemp(GinkgoT().TempDir(), "output")
+			Expect(err).NotTo(HaveOccurred())
+			console, err := NewConsole().SetLogger(logger).SetStdout(file).SetColorEnabled(true).Build()
+			Expect(err).NotTo(HaveOccurred())
+			console.RenderJson(ctx, map[string]string{"name": "test"})
+			Expect(file.Close()).To(Succeed())
+			content, err := os.ReadFile(file.Name())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(content)).To(ContainSubstring("\x1b["))
+		})
+
+		DescribeTable("respects the color decision",
+			func(format string, override *bool, colored bool) {
+				var output bytes.Buffer
+				builder := NewConsole().SetLogger(logger).SetStdout(&output)
+				if override != nil {
+					builder.SetColorEnabled(*override)
+				}
+				console, err := builder.Build()
+				Expect(err).NotTo(HaveOccurred())
+				if format == "json" {
+					console.RenderJson(ctx, map[string]string{"name": "test"})
+				} else {
+					console.RenderYaml(ctx, map[string]string{"name": "test"})
+				}
+				if colored {
+					Expect(output.String()).To(ContainSubstring("\x1b["))
+				} else {
+					Expect(output.String()).NotTo(ContainSubstring("\x1b["))
+				}
+				Expect(output.String()).To(ContainSubstring("test"))
+			},
+			Entry("JSON without override", "json", nil, false),
+			Entry("JSON with color enabled", "json", new(true), true),
+			Entry("JSON with color disabled", "json", new(false), false),
+			Entry("YAML without override", "yaml", nil, false),
+			Entry("YAML with color enabled", "yaml", new(true), true),
+			Entry("YAML with color disabled", "yaml", new(false), false),
+		)
 	})
 
 	Describe("Render YAML", func() {

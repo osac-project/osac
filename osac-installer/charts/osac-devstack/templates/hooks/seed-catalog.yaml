@@ -59,6 +59,9 @@ spec:
           mountPath: /scripts
         - name: catalog-config
           mountPath: /config
+        - name: ca-bundle
+          mountPath: /etc/ca-bundle
+          readOnly: true
       volumes:
       - name: scripts
         configMap:
@@ -67,4 +70,10 @@ spec:
       - name: catalog-config
         configMap:
           name: {{ include "osac-devstack.fullname" . }}-catalog-seed
+      - name: ca-bundle
+        configMap:
+          name: ca-bundle
+          items:
+          - key: bundle.pem
+            path: bundle.pem
 {{- end }}

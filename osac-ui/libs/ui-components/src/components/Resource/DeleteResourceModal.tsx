@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import {
   Alert,
   Button,
@@ -21,7 +22,7 @@ interface DeleteMutation<TVariables> {
 
 interface DeleteResourceModalProps<TVariables> {
   resourceName: string;
-  label: string;
+  label: ReactNode;
   errorLabel: string;
   onClose: () => void;
   onSuccess?: () => void;

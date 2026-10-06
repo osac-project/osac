@@ -1,0 +1,49 @@
+---
+argument_specs:
+  main:
+    short_description: OSAC CSI driver Helm chart install
+    description: >
+      Optionally installs the OSAC CSI driver Helm chart for supported network
+      providers and creates local LVMS StorageClasses when explicitly enabled.
+      The Helm install is a no-op when disabled or when no supported network
+      provider is dispatched. Called from hub-targeting storage dispatch points,
+      deliberately not from osac.service.storage_provider's own dispatcher, to
+      keep storage_provider/tests/test.yml's zero-live-I/O validation
+      guarantee intact.
+    options:
+      csi_driver_install_enabled:
+        type: bool
+        required: false
+        default: false
+        description: >
+          Whether to install or upgrade the OSAC CSI driver Helm release on
+          the hub cluster. Defaults to false so standard clusters where the
+          osac-installer umbrella chart deploys the driver do not encounter
+          Helm ownership collisions or VM-creation lock contention.
+      csi_driver_install_lvms_storage_class_enabled:
+        type: bool
+        required: false
+        default: false
+        description: >
+          Whether to create OSAC CSI StorageClasses for local LVMS tiers in
+          this dispatch. Independent of csi_driver_install_enabled; defaults
+          to false to preserve the direct TopoLVM StorageClass path.
+      csi_driver_install_skip_lvms_storage_class:
+        type: bool
+        required: false
+        default: false
+        description: >
+          Internal caller control that suppresses local LVMS StorageClass
+          creation for dispatches that only prepare storage backends.
+      csi_driver_install_tiers:
+        type: list
+        required: true
+        description: >
+          The tier list for this dispatch (osac_job_vars.storage_tier_definitions).
+          Only the provider field is read — untouched by
+          storage_provider's own qos_policy derivation, so the raw,
+          pre-derivation list is equivalent for this role's purposes. Unique
+          providers are derived from this list internally, the same way
+          storage_provider/tasks/main.yaml's own "Extract unique providers
+          from tier list" step does — callers do not compute or pass that
+          separately.

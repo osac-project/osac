@@ -452,29 +452,27 @@ func protoAccessModeToCRD(mode privatev1.VolumeAccessMode) osacv1alpha1.VolumeAc
 // controller-runtime requeue.
 const statusStampMaxAttempts = 4
 
-// stampStatus ensures the resolved backend, provider, and protocol on the hub
+// stampStatus ensures the resolved provider and protocol on the hub
 // Volume CR match the values in the private Volume proto. It is called on both
 // the create and patch-spec branches so that a stamp lost to a concurrent
 // operator write (resourceVersion conflict) is recovered on the next reconcile.
 // On conflict the method re-fetches the CR and retries, avoiding a full
 // reconcile round-trip.
 func (t *task) stampStatus(ctx context.Context, object *osacv1alpha1.Volume) error {
-	backend := t.volume.GetStatus().GetBackend()
 	provider := t.volume.GetStatus().GetProvider()
 	protocol := protoProtocolToCRD(t.volume.GetStatus().GetProtocol())
 
-	if backend == "" || protocol == "" {
-		t.r.logger.WarnContext(ctx, "backend or protocol is empty in proto source, skipping status stamp (incomplete tier resolution)")
+	if provider == "" || protocol == "" {
+		t.r.logger.WarnContext(ctx, "provider or protocol is empty in proto source, skipping status stamp (incomplete tier resolution)")
 		return nil
 	}
 
-	if object.Status.Backend == backend && object.Status.Provider == provider && object.Status.Protocol == protocol {
+	if object.Status.Provider == provider && object.Status.Protocol == protocol {
 		return nil
 	}
 
 	var lastErr error
 	for attempt := range statusStampMaxAttempts {
-		object.Status.Backend = backend
 		object.Status.Provider = provider
 		object.Status.Protocol = protocol
 		lastErr = t.hubClient.Status().Update(ctx, object)

@@ -14,21 +14,17 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -517,56 +513,6 @@ var _ = Describe("Private storage backends server", func() {
 		})
 	})
 
-	It("Redacts event payload", func() {
-		// Create a mock notifier that captures the event:
-		var event *privatev1.Event
-		notifier := events.NewMockNotifier(ctrl)
-		notifier.EXPECT().
-			Notify(gomock.Any(), gomock.Any()).
-			DoAndReturn(
-				func(ctx context.Context, payload proto.Message) error {
-					event = payload.(*privatev1.Event)
-					return nil
-				},
-			)
-
-		// Create the server configured with the mock notifier:
-		server, err := NewPrivateStorageBackendsServer().
-			SetLogger(logger).
-			SetAttributionLogic(attribution).
-			SetTenancyLogic(tenancy).
-			SetNotifier(notifier).
-			Build()
-		Expect(err).ToNot(HaveOccurred())
-
-		// Create the object:
-		_, err = server.Create(
-			ctx,
-			privatev1.StorageBackendsCreateRequest_builder{
-				Object: privatev1.StorageBackend_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: "my-backend",
-					}.Build(),
-					Spec: privatev1.StorageBackendSpec_builder{
-						Provider: "ceph",
-						Endpoint: "https://other.example.com:8443",
-						Credentials: privatev1.StorageBackendCredentials_builder{
-							Username: "admin",
-							Password: testPassword,
-						}.Build(),
-					}.Build(),
-				}.Build(),
-			}.Build(),
-		)
-		Expect(err).ToNot(HaveOccurred())
-
-		// Verify the event:
-		Expect(event).ToNot(BeNil())
-		Expect(event.GetType()).To(Equal(privatev1.EventType_EVENT_TYPE_OBJECT_CREATED))
-		object := event.GetStorageBackend()
-		Expect(object).ToNot(BeNil())
-		Expect(object.GetSpec().GetCredentials().GetPassword()).To(BeEmpty())
-	})
 })
 
 var _ = Describe("Password secret reference", func() {

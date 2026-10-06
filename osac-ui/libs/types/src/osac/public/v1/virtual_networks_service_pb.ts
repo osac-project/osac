@@ -18,8 +18,6 @@
 import type { GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv2";
 import { fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2";
 import { file_google_api_annotations } from "../../../google/api/annotations_pb";
-import type { FieldMask } from "../../../google/protobuf/field_mask_pb";
-import { file_google_protobuf_field_mask } from "../../../google/protobuf/field_mask_pb";
 import type { VirtualNetwork } from "./virtual_network_type_pb";
 import { file_osac_public_v1_virtual_network_type } from "./virtual_network_type_pb";
 import type { Message } from "@bufbuild/protobuf";
@@ -28,7 +26,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/public/v1/virtual_networks_service.proto.
  */
 export const file_osac_public_v1_virtual_networks_service: GenFile = /*@__PURE__*/
-  fileDesc("Ci1vc2FjL3B1YmxpYy92MS92aXJ0dWFsX25ldHdvcmtzX3NlcnZpY2UucHJvdG8SDm9zYWMucHVibGljLnYxIpgBChpWaXJ0dWFsTmV0d29ya3NMaXN0UmVxdWVzdBITCgZvZmZzZXQYASABKAVIAIgBARISCgVsaW1pdBgCIAEoBUgBiAEBEhMKBmZpbHRlchgDIAEoCUgCiAEBEhIKBW9yZGVyGAQgASgJSAOIAQFCCQoHX29mZnNldEIICgZfbGltaXRCCQoHX2ZpbHRlckIICgZfb3JkZXIiaQobVmlydHVhbE5ldHdvcmtzTGlzdFJlc3BvbnNlEgwKBHNpemUYASABKAUSDQoFdG90YWwYAiABKAUSLQoFaXRlbXMYAyADKAsyHi5vc2FjLnB1YmxpYy52MS5WaXJ0dWFsTmV0d29yayInChlWaXJ0dWFsTmV0d29ya3NHZXRSZXF1ZXN0EgoKAmlkGAEgASgJIkwKGlZpcnR1YWxOZXR3b3Jrc0dldFJlc3BvbnNlEi4KBm9iamVjdBgBIAEoCzIeLm9zYWMucHVibGljLnYxLlZpcnR1YWxOZXR3b3JrIk4KHFZpcnR1YWxOZXR3b3Jrc0NyZWF0ZVJlcXVlc3QSLgoGb2JqZWN0GAEgASgLMh4ub3NhYy5wdWJsaWMudjEuVmlydHVhbE5ldHdvcmsiTwodVmlydHVhbE5ldHdvcmtzQ3JlYXRlUmVzcG9uc2USLgoGb2JqZWN0GAEgASgLMh4ub3NhYy5wdWJsaWMudjEuVmlydHVhbE5ldHdvcmsijQEKHFZpcnR1YWxOZXR3b3Jrc1VwZGF0ZVJlcXVlc3QSLgoGb2JqZWN0GAEgASgLMh4ub3NhYy5wdWJsaWMudjEuVmlydHVhbE5ldHdvcmsSLwoLdXBkYXRlX21hc2sYAiABKAsyGi5nb29nbGUucHJvdG9idWYuRmllbGRNYXNrEgwKBGxvY2sYAyABKAgiTwodVmlydHVhbE5ldHdvcmtzVXBkYXRlUmVzcG9uc2USLgoGb2JqZWN0GAEgASgLMh4ub3NhYy5wdWJsaWMudjEuVmlydHVhbE5ldHdvcmsiKgocVmlydHVhbE5ldHdvcmtzRGVsZXRlUmVxdWVzdBIKCgJpZBgBIAEoCSIfCh1WaXJ0dWFsTmV0d29ya3NEZWxldGVSZXNwb25zZTKuBgoPVmlydHVhbE5ldHdvcmtzEo0BCgRMaXN0Eioub3NhYy5wdWJsaWMudjEuVmlydHVhbE5ldHdvcmtzTGlzdFJlcXVlc3QaKy5vc2FjLnB1YmxpYy52MS5WaXJ0dWFsTmV0d29ya3NMaXN0UmVzcG9uc2UiLILT5JMCJhIkL2FwaS9mdWxmaWxsbWVudC92MS92aXJ0dWFsX25ldHdvcmtzEpcBCgNHZXQSKS5vc2FjLnB1YmxpYy52MS5WaXJ0dWFsTmV0d29ya3NHZXRSZXF1ZXN0Gioub3NhYy5wdWJsaWMudjEuVmlydHVhbE5ldHdvcmtzR2V0UmVzcG9uc2UiOYLT5JMCM2IGb2JqZWN0EikvYXBpL2Z1bGZpbGxtZW50L3YxL3ZpcnR1YWxfbmV0d29ya3Mve2lkfRKjAQoGQ3JlYXRlEiwub3NhYy5wdWJsaWMudjEuVmlydHVhbE5ldHdvcmtzQ3JlYXRlUmVxdWVzdBotLm9zYWMucHVibGljLnYxLlZpcnR1YWxOZXR3b3Jrc0NyZWF0ZVJlc3BvbnNlIjyC0+STAjY6Bm9iamVjdGIGb2JqZWN0IiQvYXBpL2Z1bGZpbGxtZW50L3YxL3ZpcnR1YWxfbmV0d29ya3MSrwEKBlVwZGF0ZRIsLm9zYWMucHVibGljLnYxLlZpcnR1YWxOZXR3b3Jrc1VwZGF0ZVJlcXVlc3QaLS5vc2FjLnB1YmxpYy52MS5WaXJ0dWFsTmV0d29ya3NVcGRhdGVSZXNwb25zZSJIgtPkkwJCOgZvYmplY3RiBm9iamVjdDIwL2FwaS9mdWxmaWxsbWVudC92MS92aXJ0dWFsX25ldHdvcmtzL3tvYmplY3QuaWR9EpgBCgZEZWxldGUSLC5vc2FjLnB1YmxpYy52MS5WaXJ0dWFsTmV0d29ya3NEZWxldGVSZXF1ZXN0Gi0ub3NhYy5wdWJsaWMudjEuVmlydHVhbE5ldHdvcmtzRGVsZXRlUmVzcG9uc2UiMYLT5JMCKyopL2FwaS9mdWxmaWxsbWVudC92MS92aXJ0dWFsX25ldHdvcmtzL3tpZH1iBnByb3RvMw", [file_google_api_annotations, file_google_protobuf_field_mask, file_osac_public_v1_virtual_network_type]);
+  fileDesc("Ci1vc2FjL3B1YmxpYy92MS92aXJ0dWFsX25ldHdvcmtzX3NlcnZpY2UucHJvdG8SDm9zYWMucHVibGljLnYxIpgBChpWaXJ0dWFsTmV0d29ya3NMaXN0UmVxdWVzdBITCgZvZmZzZXQYASABKAVIAIgBARISCgVsaW1pdBgCIAEoBUgBiAEBEhMKBmZpbHRlchgDIAEoCUgCiAEBEhIKBW9yZGVyGAQgASgJSAOIAQFCCQoHX29mZnNldEIICgZfbGltaXRCCQoHX2ZpbHRlckIICgZfb3JkZXIiaQobVmlydHVhbE5ldHdvcmtzTGlzdFJlc3BvbnNlEgwKBHNpemUYASABKAUSDQoFdG90YWwYAiABKAUSLQoFaXRlbXMYAyADKAsyHi5vc2FjLnB1YmxpYy52MS5WaXJ0dWFsTmV0d29yayInChlWaXJ0dWFsTmV0d29ya3NHZXRSZXF1ZXN0EgoKAmlkGAEgASgJIkwKGlZpcnR1YWxOZXR3b3Jrc0dldFJlc3BvbnNlEi4KBm9iamVjdBgBIAEoCzIeLm9zYWMucHVibGljLnYxLlZpcnR1YWxOZXR3b3JrIk4KHFZpcnR1YWxOZXR3b3Jrc0NyZWF0ZVJlcXVlc3QSLgoGb2JqZWN0GAEgASgLMh4ub3NhYy5wdWJsaWMudjEuVmlydHVhbE5ldHdvcmsiTwodVmlydHVhbE5ldHdvcmtzQ3JlYXRlUmVzcG9uc2USLgoGb2JqZWN0GAEgASgLMh4ub3NhYy5wdWJsaWMudjEuVmlydHVhbE5ldHdvcmsiKgocVmlydHVhbE5ldHdvcmtzRGVsZXRlUmVxdWVzdBIKCgJpZBgBIAEoCSIfCh1WaXJ0dWFsTmV0d29ya3NEZWxldGVSZXNwb25zZTL8BAoPVmlydHVhbE5ldHdvcmtzEo0BCgRMaXN0Eioub3NhYy5wdWJsaWMudjEuVmlydHVhbE5ldHdvcmtzTGlzdFJlcXVlc3QaKy5vc2FjLnB1YmxpYy52MS5WaXJ0dWFsTmV0d29ya3NMaXN0UmVzcG9uc2UiLILT5JMCJhIkL2FwaS9mdWxmaWxsbWVudC92MS92aXJ0dWFsX25ldHdvcmtzEpcBCgNHZXQSKS5vc2FjLnB1YmxpYy52MS5WaXJ0dWFsTmV0d29ya3NHZXRSZXF1ZXN0Gioub3NhYy5wdWJsaWMudjEuVmlydHVhbE5ldHdvcmtzR2V0UmVzcG9uc2UiOYLT5JMCM2IGb2JqZWN0EikvYXBpL2Z1bGZpbGxtZW50L3YxL3ZpcnR1YWxfbmV0d29ya3Mve2lkfRKjAQoGQ3JlYXRlEiwub3NhYy5wdWJsaWMudjEuVmlydHVhbE5ldHdvcmtzQ3JlYXRlUmVxdWVzdBotLm9zYWMucHVibGljLnYxLlZpcnR1YWxOZXR3b3Jrc0NyZWF0ZVJlc3BvbnNlIjyC0+STAjY6Bm9iamVjdGIGb2JqZWN0IiQvYXBpL2Z1bGZpbGxtZW50L3YxL3ZpcnR1YWxfbmV0d29ya3MSmAEKBkRlbGV0ZRIsLm9zYWMucHVibGljLnYxLlZpcnR1YWxOZXR3b3Jrc0RlbGV0ZVJlcXVlc3QaLS5vc2FjLnB1YmxpYy52MS5WaXJ0dWFsTmV0d29ya3NEZWxldGVSZXNwb25zZSIxgtPkkwIrKikvYXBpL2Z1bGZpbGxtZW50L3YxL3ZpcnR1YWxfbmV0d29ya3Mve2lkfWIGcHJvdG8z", [file_google_api_annotations, file_osac_public_v1_virtual_network_type]);
 
 /**
  * @generated from message osac.public.v1.VirtualNetworksListRequest
@@ -196,54 +194,6 @@ export const VirtualNetworksCreateResponseSchema: GenMessage<VirtualNetworksCrea
   messageDesc(file_osac_public_v1_virtual_networks_service, 5);
 
 /**
- * @generated from message osac.public.v1.VirtualNetworksUpdateRequest
- */
-export type VirtualNetworksUpdateRequest = Message<"osac.public.v1.VirtualNetworksUpdateRequest"> & {
-  /**
-   * @generated from field: osac.public.v1.VirtualNetwork object = 1;
-   */
-  object?: VirtualNetwork | undefined;
-
-  /**
-   * @generated from field: google.protobuf.FieldMask update_mask = 2;
-   */
-  updateMask?: FieldMask | undefined;
-
-  /**
-   * Lock enables optimistic locking. When set to true, the server verifies that the current version of the object
-   * matches the value of the metadata.version field of the submitted object. If they differ the update will be
-   * rejected. This is useful to prevent lost updates when multiple clients are modifying the same object concurrently.
-   *
-   * @generated from field: bool lock = 3;
-   */
-  lock: boolean;
-};
-
-/**
- * Describes the message osac.public.v1.VirtualNetworksUpdateRequest.
- * Use `create(VirtualNetworksUpdateRequestSchema)` to create a new message.
- */
-export const VirtualNetworksUpdateRequestSchema: GenMessage<VirtualNetworksUpdateRequest> = /*@__PURE__*/
-  messageDesc(file_osac_public_v1_virtual_networks_service, 6);
-
-/**
- * @generated from message osac.public.v1.VirtualNetworksUpdateResponse
- */
-export type VirtualNetworksUpdateResponse = Message<"osac.public.v1.VirtualNetworksUpdateResponse"> & {
-  /**
-   * @generated from field: osac.public.v1.VirtualNetwork object = 1;
-   */
-  object?: VirtualNetwork | undefined;
-};
-
-/**
- * Describes the message osac.public.v1.VirtualNetworksUpdateResponse.
- * Use `create(VirtualNetworksUpdateResponseSchema)` to create a new message.
- */
-export const VirtualNetworksUpdateResponseSchema: GenMessage<VirtualNetworksUpdateResponse> = /*@__PURE__*/
-  messageDesc(file_osac_public_v1_virtual_networks_service, 7);
-
-/**
  * @generated from message osac.public.v1.VirtualNetworksDeleteRequest
  */
 export type VirtualNetworksDeleteRequest = Message<"osac.public.v1.VirtualNetworksDeleteRequest"> & {
@@ -258,7 +208,7 @@ export type VirtualNetworksDeleteRequest = Message<"osac.public.v1.VirtualNetwor
  * Use `create(VirtualNetworksDeleteRequestSchema)` to create a new message.
  */
 export const VirtualNetworksDeleteRequestSchema: GenMessage<VirtualNetworksDeleteRequest> = /*@__PURE__*/
-  messageDesc(file_osac_public_v1_virtual_networks_service, 8);
+  messageDesc(file_osac_public_v1_virtual_networks_service, 6);
 
 /**
  * @generated from message osac.public.v1.VirtualNetworksDeleteResponse
@@ -271,7 +221,7 @@ export type VirtualNetworksDeleteResponse = Message<"osac.public.v1.VirtualNetwo
  * Use `create(VirtualNetworksDeleteResponseSchema)` to create a new message.
  */
 export const VirtualNetworksDeleteResponseSchema: GenMessage<VirtualNetworksDeleteResponse> = /*@__PURE__*/
-  messageDesc(file_osac_public_v1_virtual_networks_service, 9);
+  messageDesc(file_osac_public_v1_virtual_networks_service, 7);
 
 /**
  * @generated from service osac.public.v1.VirtualNetworks
@@ -308,16 +258,6 @@ export const VirtualNetworks: GenService<{
     output: typeof VirtualNetworksCreateResponseSchema;
   },
   /**
-   * Updates an existing virtual network.
-   *
-   * @generated from rpc osac.public.v1.VirtualNetworks.Update
-   */
-  update: {
-    methodKind: "unary";
-    input: typeof VirtualNetworksUpdateRequestSchema;
-    output: typeof VirtualNetworksUpdateResponseSchema;
-  },
-  /**
    * Deletes a virtual network.
    *
    * @generated from rpc osac.public.v1.VirtualNetworks.Delete
@@ -329,3 +269,4 @@ export const VirtualNetworks: GenService<{
   },
 }> = /*@__PURE__*/
   serviceDesc(file_osac_public_v1_virtual_networks_service, 0);
+

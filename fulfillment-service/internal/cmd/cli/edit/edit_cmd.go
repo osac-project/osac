@@ -31,9 +31,9 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"gopkg.in/yaml.v3"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/updatable"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
-	"github.com/osac-project/osac/fulfillment-service/internal/packages"
 	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -141,6 +141,9 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 			"Object": args[0],
 		})
 		return nil
+	}
+	if err := updatable.Ensure(c.helper); err != nil {
+		return err
 	}
 
 	// Check the flags:
@@ -294,9 +297,17 @@ func (c *runnerContext) fetchObject(ctx context.Context, key string) (proto.Mess
 	return object, nil
 }
 
-func (c *runnerContext) update(ctx context.Context, object proto.Message) (result proto.Message, err error) {
-	result, err = c.helper.Update(ctx, object)
-	return
+func (c *runnerContext) update(ctx context.Context, object proto.Message) (proto.Message, error) {
+	result, err := c.helper.Update(ctx, object)
+	if err != nil {
+		return nil, err
+	}
+	for _, warning := range result.Warnings {
+		if _, err := fmt.Fprintf(c.console.Stderr(), "Warning: %s\n", warning); err != nil {
+			return result.Object, fmt.Errorf("update succeeded, but failed to write warning to stderr: %w", err)
+		}
+	}
+	return result.Object, nil
 }
 
 func (c *runnerContext) isWatchable() bool {
@@ -390,7 +401,11 @@ func completeObjectTypes(cmd *cobra.Command, args []string, toComplete string) (
 	if len(args) != 0 {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
-	return reflection.ObjectTypeNames(packages.Public...), cobra.ShellCompDirectiveNoFileComp
+	var ctx context.Context
+	if cmd != nil {
+		ctx = cmd.Context()
+	}
+	return reflection.UpdatableObjectTypeNames(config.PackageNamesFromContext(ctx)...), cobra.ShellCompDirectiveNoFileComp
 }
 
 const shortHelp = `Edit objects`

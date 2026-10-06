@@ -345,6 +345,27 @@ var _ = Describe("Metrics", func() {
 				},
 			),
 			Entry(
+				"Signal",
+				"signal",
+				func() {
+					response, err := dao.Create().
+						SetObject(
+							testsv1.Object_builder{
+								Metadata: testsv1.Metadata_builder{
+									Tenant: "my-tenant",
+									Name:   "my-object",
+								}.Build(),
+							}.Build(),
+						).
+						Do(ctx)
+					Expect(err).ToNot(HaveOccurred())
+					_, err = dao.Signal().
+						SetId(response.GetObject().GetId()).
+						Do(ctx)
+					Expect(err).ToNot(HaveOccurred())
+				},
+			),
+			Entry(
 				"Archive",
 				"archive",
 				func() {

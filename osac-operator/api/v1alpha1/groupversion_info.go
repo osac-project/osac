@@ -58,6 +58,8 @@ func addKnownTypes(s *runtime.Scheme) error {
 		&ExternalIPAttachmentList{},
 		&NATGateway{},
 		&NATGatewayList{},
+		&FabricDomain{},
+		&FabricDomainList{},
 		&Volume{},
 		&VolumeList{},
 	)

@@ -1,6 +1,16 @@
-{{- if .Values.networkClass.enabled }}
+{{- $networking := include "osac.networking.effective" . | fromYaml -}}
+{{- $networkClass := $networking.networkClass -}}
+{{- $expert := .Values.global.expertOverrides | default dict -}}
+{{- $netExpertNetworkClass := $expert.networkClass | default false -}}
+{{- if $netExpertNetworkClass -}}
+{{- $networkClass = .Values.networkClass | default dict -}}
+{{- end }}
+{{- if $networkClass.enabled }}
+{{- $fabricManager := $networkClass.fabricManager | default "" -}}
+{{- $k8sManager := $networkClass.k8sManager | default "" -}}
+{{- $title := $networkClass.title -}}
 {{- $egressRules := list -}}
-{{- range .Values.networkClass.defaults.egressRules }}
+{{- range $networkClass.defaults.egressRules }}
 {{- $rule := dict "protocol" .protocol -}}
 {{- if .ipv4Cidr }}{{ $_ := set $rule "ipv4_cidr" .ipv4Cidr }}{{ end -}}
 {{- if .ipv6Cidr }}{{ $_ := set $rule "ipv6_cidr" .ipv6Cidr }}{{ end -}}
@@ -8,20 +18,19 @@
 {{- if .portTo }}{{ $_ := set $rule "port_to" .portTo }}{{ end -}}
 {{- $egressRules = append $egressRules $rule -}}
 {{- end }}
-{{- $identity := .Values.networkClass.fabricManager | default .Values.networkClass.k8sManager -}}
+{{- $identity := $fabricManager | default $k8sManager -}}
 {{- $body := dict
-      "title" (required "networkClass.title is required when networkClass.enabled is true" .Values.networkClass.title)
-      "is_default" .Values.networkClass.isDefault
+      "title" (required "networkClass.title is required when networkClass.enabled is true" $title)
       "spec" (dict "defaults" (dict
-        "virtual_network_ipv4_cidr" .Values.networkClass.defaults.virtualNetworkIPv4CIDR
-        "subnet_ipv4_cidr" .Values.networkClass.defaults.subnetIPv4CIDR
-        "enable_nat_gateway" .Values.networkClass.defaults.enableNatGateway
+        "virtual_network_ipv4_cidr" $networkClass.defaults.virtualNetworkIPv4CIDR
+        "subnet_ipv4_cidr" $networkClass.defaults.subnetIPv4CIDR
+        "enable_nat_gateway" $networkClass.defaults.enableNatGateway
         "egress_rules" $egressRules
       ))
     -}}
-{{- if .Values.networkClass.description }}{{ $_ := set $body "description" .Values.networkClass.description }}{{ end -}}
-{{- if .Values.networkClass.k8sManager }}{{ $_ := set $body "k8s_manager" .Values.networkClass.k8sManager }}{{ end -}}
-{{- if .Values.networkClass.fabricManager }}{{ $_ := set $body "fabric_manager" .Values.networkClass.fabricManager }}{{ end -}}
+{{- if $networkClass.description }}{{ $_ := set $body "description" $networkClass.description }}{{ end -}}
+{{- if $k8sManager }}{{ $_ := set $body "k8s_manager" $k8sManager }}{{ end -}}
+{{- if $fabricManager }}{{ $_ := set $body "fabric_manager" $fabricManager }}{{ end -}}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -65,14 +74,10 @@ spec:
             # fabric_manager/k8s_manager when not set explicitly (see
             # PrivateNetworkClassesServer.Create), so POSTing the same body again
             # on every install/upgrade hits a name collision on the second run.
-            # That collision surfaces as a misleading FailedPrecondition/HTTP 400
-            # ("concurrent default NetworkClass change detected") rather than a
-            # plain 409, since the server's is_default default-swap logic assumes
-            # any AlreadyExists there is a concurrent race, not a repeat create.
             # Check for an existing NetworkClass for this identity first instead
             # of relying on the create call's error code, and PATCH it if found so
             # values.yaml changes are applied on upgrade instead of silently ignored.
-            EXISTING=$(curl -skS --connect-timeout 5 --max-time 30 \
+            EXISTING=$(curl -sS {{ include "osac.fulfillmentCurlTLS" . }} --connect-timeout 5 --max-time 30 \
               -H "Authorization: Bearer ${AUTH_TOKEN}" \
               "${API}")
             EXISTING_ID=$(echo "${EXISTING}" | python3 -c "
@@ -92,13 +97,13 @@ spec:
               URL="${API}"
             fi
 
-            CODE=$(curl -skS \
+            CODE=$(curl -sS {{ include "osac.fulfillmentCurlTLS" . }} \
               --connect-timeout 5 --max-time 30 \
               -o "${RESPONSE}" -w '%{http_code}' \
               -X "${METHOD}" "${URL}" \
               -H "Authorization: Bearer ${AUTH_TOKEN}" \
               -H "Content-Type: application/json" \
-              --data-binary {{ $body | toJson | quote }})
+              --data-binary "${NETWORK_CLASS_BODY}")
 
             case "${CODE}" in
               2??)
@@ -120,11 +125,16 @@ spec:
         env:
         - name: HOME
           value: /tmp
+        - name: NETWORK_CLASS_BODY
+          value: {{ $body | toJson | quote }}
         - name: NC_IDENTITY
           value: {{ required "networkClass.fabricManager or networkClass.k8sManager is required when networkClass.enabled is true" $identity | quote }}
         volumeMounts:
         - name: tmp
           mountPath: /tmp
+        - name: ca-bundle
+          mountPath: /etc/ca-bundle
+          readOnly: true
         resources:
           requests:
             cpu: 50m
@@ -140,5 +150,11 @@ spec:
       volumes:
       - name: tmp
         emptyDir: {}
+      - name: ca-bundle
+        configMap:
+          name: {{ .Values.service.certs.caBundle.configMap | required "service.certs.caBundle.configMap is required" }}
+          items:
+          - key: bundle.pem
+            path: bundle.pem
       restartPolicy: OnFailure
 {{- end }}

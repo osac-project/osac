@@ -15,7 +15,6 @@ package vault
 
 import (
 	"context"
-	"crypto/x509"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -25,6 +24,8 @@ import (
 	"regexp"
 
 	vaultapi "github.com/hashicorp/vault/api"
+
+	"github.com/osac-project/osac/fulfillment-service/internal/trust"
 )
 
 // SecretStore defines the interface for storing and retrieving secret data from a Vault-compatible
@@ -43,7 +44,7 @@ type VaultSecretStoreBuilder struct {
 	tokenSource     TenantTokenSource
 	parentNamespace string
 	kvMountPath     string
-	caPool          *x509.CertPool
+	caPool          *trust.CertPool
 }
 
 type VaultSecretStore struct {
@@ -85,7 +86,7 @@ func (b *VaultSecretStoreBuilder) SetKVMountPath(value string) *VaultSecretStore
 	return b
 }
 
-func (b *VaultSecretStoreBuilder) SetCaPool(value *x509.CertPool) *VaultSecretStoreBuilder {
+func (b *VaultSecretStoreBuilder) SetCaPool(value *trust.CertPool) *VaultSecretStoreBuilder {
 	b.caPool = value
 	return b
 }
@@ -118,7 +119,7 @@ func (b *VaultSecretStoreBuilder) Build() (result *VaultSecretStore, err error) 
 			return
 		}
 		cloned := transport.Clone()
-		cloned.TLSClientConfig.RootCAs = b.caPool
+		cloned.TLSClientConfig.RootCAs = b.caPool.Pool()
 		config.HttpClient.Transport = cloned
 	}
 

@@ -29,7 +29,8 @@ spec:
         args:
           - --leader-elect
           - --health-probe-bind-address=:8081
-          - --grpc-insecure
+          - --metrics-bind-address=:8443
+          - --fulfillment-ca-file=/etc/ca-bundle/bundle.pem
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         envFrom:
@@ -74,9 +75,9 @@ spec:
           - name: OSAC_CLUSTER_WORKERS_JOINING_STALL_THRESHOLD
             value: {{ .Values.stall.workersJoiningThreshold | quote }}
           {{- end }}
-          {{- if .Values.stall.workersJoiningByHostType }}
+          {{- if .Values.stall.workersJoiningByInstanceType }}
           - name: OSAC_CLUSTER_WORKERS_JOINING_STALL_THRESHOLD_OVERRIDES
-            value: {{ .Values.stall.workersJoiningByHostType | toJson | quote }}
+            value: {{ .Values.stall.workersJoiningByInstanceType | toJson | quote }}
           {{- end }}
           {{- if .Values.networkManagers.capabilitiesSyncInterval }}
           - name: OSAC_NETWORK_CLASS_SYNC_INTERVAL
@@ -99,6 +100,10 @@ spec:
                 name: {{ .Values.fulfillment.configMap.name }}
                 key: OSAC_FULFILLMENT_ISSUER_URL
                 optional: {{ .Values.fulfillment.configMap.optional }}
+          {{- end }}
+          {{- if .Values.ignition.trustIngressCA }}
+          - name: OSAC_IGNITION_TRUST_INGRESS_CA
+            value: "true"
           {{- end }}
           - name: OSAC_CLUSTER_ORDER_NAMESPACE
             valueFrom:
@@ -130,6 +135,10 @@ spec:
                 fieldPath: metadata.namespace
           - name: OSAC_ENABLE_CLUSTER_CONTROLLER
             value: {{ include "osac-operator.controllerEnabled" (list . "clusterOrder" "caas") | quote }}
+          - name: OSAC_ENABLE_FULFILLMENT_TRUST_RECONCILER
+            value: {{ .Values.global.fulfillmentTrust.enabled | default false | quote }}
+          - name: OSAC_FULFILLMENT_TRUST_TENANT_NAMESPACE
+            value: {{ .Values.global.fulfillmentTrust.tenantNamespace | quote }}
           - name: OSAC_ENABLE_COMPUTE_INSTANCE_CONTROLLER
             value: {{ include "osac-operator.controllerEnabled" (list . "computeInstance" "vmaas") | quote }}
           - name: OSAC_ENABLE_TENANT_CONTROLLER
@@ -172,5 +181,16 @@ spec:
           periodSeconds: 10
         resources:
           {{- toYaml .Values.resources | nindent 10 }}
+        volumeMounts:
+          - name: fulfillment-ca-bundle
+            mountPath: /etc/ca-bundle
+            readOnly: true
+      volumes:
+        - name: fulfillment-ca-bundle
+          configMap:
+            name: {{ .Values.fulfillment.tls.caBundle.configMap | required "fulfillment.tls.caBundle.configMap is required" }}
+            items:
+              - key: {{ .Values.fulfillment.tls.caBundle.key | required "fulfillment.tls.caBundle.key is required" }}
+                path: bundle.pem
       serviceAccountName: {{ include "osac-operator.serviceAccountName" . }}
       terminationGracePeriodSeconds: 10

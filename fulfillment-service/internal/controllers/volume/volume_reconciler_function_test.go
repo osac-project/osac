@@ -280,7 +280,7 @@ var _ = Describe("update", func() {
 			Status: privatev1.VolumeStatus_builder{
 				State:    privatev1.VolumeState_VOLUME_STATE_CREATING,
 				Hub:      "hub-1",
-				Backend:  "test-backend",
+				Provider: "test-provider",
 				Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
 			}.Build(),
 		}.Build()
@@ -345,7 +345,7 @@ var _ = Describe("update", func() {
 			Status: privatev1.VolumeStatus_builder{
 				State:    privatev1.VolumeState_VOLUME_STATE_CREATING,
 				Hub:      "hub-1",
-				Backend:  "test-backend",
+				Provider: "test-provider",
 				Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
 			}.Build(),
 		}.Build()
@@ -1059,7 +1059,7 @@ var _ = Describe("Kubernetes validation error handling", func() {
 })
 
 var _ = Describe("create status population", func() {
-	It("populates status.backend and protocol from the resolved private volume", func() {
+	It("populates status.provider and protocol from the resolved private volume", func() {
 		ctx := context.Background()
 		ctrl := gomock.NewController(GinkgoT())
 		DeferCleanup(ctrl.Finish)
@@ -1109,7 +1109,6 @@ var _ = Describe("create status population", func() {
 			Status: privatev1.VolumeStatus_builder{
 				State:    privatev1.VolumeState_VOLUME_STATE_CREATING,
 				Hub:      "hub-1",
-				Backend:  "vast",
 				Provider: "vast",
 				Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
 			}.Build(),
@@ -1124,7 +1123,6 @@ var _ = Describe("create status population", func() {
 
 		Expect(f.run(ctx, volume)).To(Succeed())
 		Expect(capturedStatus).ToNot(BeNil())
-		Expect(capturedStatus.Status.Backend).To(Equal("vast"))
 		Expect(capturedStatus.Status.Provider).To(Equal("vast"))
 		Expect(capturedStatus.Status.Protocol).To(Equal(osacv1alpha1.VolumeProtocolBlock))
 	})
@@ -1188,7 +1186,6 @@ var _ = Describe("create status population", func() {
 			Status: privatev1.VolumeStatus_builder{
 				State:    privatev1.VolumeState_VOLUME_STATE_CREATING,
 				Hub:      "hub-1",
-				Backend:  "vast",
 				Provider: "vast",
 				Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
 			}.Build(),
@@ -1204,12 +1201,11 @@ var _ = Describe("create status population", func() {
 		Expect(f.run(ctx, volume)).To(Succeed())
 		Expect(conflictCount).To(Equal(3))
 		Expect(capturedStatus).ToNot(BeNil())
-		Expect(capturedStatus.Status.Backend).To(Equal("vast"))
 		Expect(capturedStatus.Status.Provider).To(Equal("vast"))
 		Expect(capturedStatus.Status.Protocol).To(Equal(osacv1alpha1.VolumeProtocolBlock))
 	})
 
-	It("re-stamps status on patch-spec branch when CR exists without backend/protocol", func() {
+	It("re-stamps status on patch-spec branch when CR exists without provider/protocol", func() {
 		ctx := context.Background()
 		ctrl := gomock.NewController(GinkgoT())
 		DeferCleanup(ctrl.Finish)
@@ -1275,7 +1271,6 @@ var _ = Describe("create status population", func() {
 			Status: privatev1.VolumeStatus_builder{
 				State:    privatev1.VolumeState_VOLUME_STATE_CREATING,
 				Hub:      "hub-1",
-				Backend:  "vast",
 				Provider: "vast",
 				Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
 			}.Build(),
@@ -1290,12 +1285,11 @@ var _ = Describe("create status population", func() {
 
 		Expect(f.run(ctx, volume)).To(Succeed())
 		Expect(capturedStatus).ToNot(BeNil())
-		Expect(capturedStatus.Status.Backend).To(Equal("vast"))
 		Expect(capturedStatus.Status.Provider).To(Equal("vast"))
 		Expect(capturedStatus.Status.Protocol).To(Equal(osacv1alpha1.VolumeProtocolBlock))
 	})
 
-	It("skips status stamp when backend and protocol already match", func() {
+	It("skips status stamp when provider and protocol already match", func() {
 		ctx := context.Background()
 		ctrl := gomock.NewController(GinkgoT())
 		DeferCleanup(ctrl.Finish)
@@ -1317,7 +1311,7 @@ var _ = Describe("create status population", func() {
 				AccessMode:  osacv1alpha1.VolumeAccessModeReadWriteOnce,
 			},
 			Status: osacv1alpha1.VolumeStatus{
-				Backend:  "vast",
+				Provider: "vast",
 				Protocol: osacv1alpha1.VolumeProtocolBlock,
 			},
 		}
@@ -1363,7 +1357,7 @@ var _ = Describe("create status population", func() {
 			Status: privatev1.VolumeStatus_builder{
 				State:    privatev1.VolumeState_VOLUME_STATE_CREATING,
 				Hub:      "hub-1",
-				Backend:  "vast",
+				Provider: "vast",
 				Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
 			}.Build(),
 		}.Build()

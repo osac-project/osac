@@ -208,6 +208,9 @@ func (p *Path[M]) Clear(message M) {
 				mapItems.Clear(mapKey)
 			} else {
 				currentValue = mapItems.Get(mapKey)
+				if !currentValue.IsValid() {
+					return
+				}
 			}
 		}
 	}

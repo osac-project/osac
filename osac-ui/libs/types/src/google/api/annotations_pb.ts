@@ -36,3 +36,4 @@ export const file_google_api_annotations: GenFile = /*@__PURE__*/
  */
 export const http: GenExtension<MethodOptions, HttpRule> = /*@__PURE__*/
   extDesc(file_google_api_annotations, 0);
+

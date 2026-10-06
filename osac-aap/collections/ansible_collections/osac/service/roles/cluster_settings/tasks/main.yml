@@ -99,19 +99,3 @@
       }, recursive=true)
       }}
   no_log: true
-
-- name: Set default nodeRequests
-  when: >-
-    not cluster_order.spec.nodeRequests|default([])
-  ansible.builtin.set_fact:
-    cluster_order: >-
-      {{
-      cluster_order | combine({
-        "spec": {
-          "nodeRequests": [
-            {"numberOfNodes": 2, "resourceClass": "fc430"}
-          ]
-        }
-      }, recursive=true)
-      }}
-  no_log: true

@@ -97,7 +97,8 @@
     retrieve_kubeconfig_namespace: "{{ cluster_working_namespace }}"
     retrieve_kubeconfig_cluster_name: "{{ cluster_order.metadata.name }}"
 
-- name: Wait for cluster to become ready
+- name: Wait for cluster network operator to become ready
+  when: not (external_access_skip_network_operator_wait | default(false))
   ansible.builtin.include_role:
     name: osac.service.wait_for
     tasks_from: wait_for_network_cluster_operator

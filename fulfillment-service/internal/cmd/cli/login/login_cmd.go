@@ -15,7 +15,6 @@ package login
 
 import (
 	"context"
-	"crypto/x509"
 	"embed"
 	"fmt"
 	"log/slog"
@@ -37,6 +36,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/network"
 	"github.com/osac-project/osac/fulfillment-service/internal/oauth"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
+	"github.com/osac-project/osac/fulfillment-service/internal/trust"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
@@ -244,7 +244,7 @@ type runnerContext struct {
 	flags      *pflag.FlagSet
 	address    string
 	plaintext  bool
-	caPool     *x509.CertPool
+	caPool     *trust.CertPool
 	tokenStore auth.TokenStore
 	args       struct {
 		plaintext        bool
@@ -348,7 +348,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	}
 
 	// Create the CA pool:
-	c.caPool, err = network.NewCertPool().
+	c.caPool, err = trust.NewCertPool().
 		SetLogger(c.logger).
 		AddSystemFiles(true).
 		AddKubernetesFiles(true).

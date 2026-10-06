@@ -8,7 +8,7 @@ metadata:
   name: "{{ profile.name }}"
   namespace: redhat-ods-applications
   annotations:
-    opendatahub.io/display-name: "{{ profile.display_name }}"
+    opendatahub.io/display-name: "{{ profile.display_name | default(profile.name) }}"
     opendatahub.io/description: "{{ profile.description | default('') }}"
     opendatahub.io/disabled: "{{ (not (profile.enabled | default(true))) | lower }}"
 spec:
@@ -26,7 +26,7 @@ spec:
       minCount: {{ profile.memory_min }}
       maxCount: {{ profile.memory_max }}
 {% if profile.accelerator_id is defined %}
-    - displayName: "{{ profile.accelerator_name }}"
+    - displayName: "{{ profile.accelerator_name | default(profile.accelerator_id) }}"
       identifier: {{ profile.accelerator_id }}
       resourceType: Accelerator
       defaultCount: {{ profile.gpu_count | default(1) }}

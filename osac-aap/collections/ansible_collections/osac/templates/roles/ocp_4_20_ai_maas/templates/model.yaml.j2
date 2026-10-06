@@ -1,7 +1,7 @@
 apiVersion: serving.kserve.io/v1alpha2
 kind: LLMInferenceService
 metadata:
-  name: "{{ ocp_4_20_ai_maas_model_name }}"
+  name: "{{ _t_model }}"
   namespace: "{{ ocp_4_20_ai_maas_model_namespace }}"
 spec:
   model:
@@ -14,13 +14,13 @@ spec:
     route: {}
     gateway:
       refs:
-        - name: maas-default-gateway
+        - name: "{{ _t_gateway }}"
           namespace: openshift-ingress
   template:
     containers:
     - name: main
       image: "{{ ocp_4_20_ai_maas_model_image }}"
-      imagePullPolicy: Always
+      imagePullPolicy: IfNotPresent
       command: ["/app/llm-d-inference-sim"]
       args:
       - --port
@@ -65,7 +65,3 @@ spec:
         limits:
           cpu: 500m
           memory: 512Mi
-      volumeMounts:
-      - mountPath: /var/run/kserve/tls
-        name: tls-certs
-        readOnly: true

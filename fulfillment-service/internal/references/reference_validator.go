@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
@@ -30,6 +31,7 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
 )
@@ -178,12 +180,15 @@ func (v *ReferenceValidator) UnaryServer(ctx context.Context, request any, info 
 	if !isCreateOrUpdate(info.FullMethod) {
 		return handler(ctx, request)
 	}
-
-	if isObjectBeingDeleted(request) {
+	if err := validateCanonicalUpdateMask(request); err != nil {
+		return nil, err
+	}
+	if strings.HasSuffix(info.FullMethod, "/Update") && isMetadataOnlyUpdate(request) {
 		return handler(ctx, request)
 	}
 
-	err = v.validate(ctx, request, v.excludedReferencePathsByMethod[info.FullMethod])
+	excluded := v.excludedReferencePathsByMethod[info.FullMethod]
+	err = v.validate(ctx, request, excluded)
 	if err != nil {
 		return
 	}
@@ -234,6 +239,111 @@ func (v *ReferenceValidator) validate(ctx context.Context, request any, excluded
 	}
 
 	return nil
+}
+
+func validateCanonicalUpdateMask(request any) error {
+	message, ok := request.(proto.Message)
+	if !ok {
+		return nil
+	}
+	mask, ok := updateMaskFromMessage(message)
+	if !ok {
+		return nil
+	}
+	if !isCanonicalUpdateMask(mask, updateObjectDescriptor(message.ProtoReflect().Descriptor())) {
+		return grpcstatus.Error(grpccodes.InvalidArgument, "update mask contains a non-canonical path")
+	}
+	return nil
+}
+
+func updateMaskFromMessage(message proto.Message) (*fieldmaskpb.FieldMask, bool) {
+	request := message.ProtoReflect()
+	field := request.Descriptor().Fields().ByName("update_mask")
+	if field == nil || !request.Has(field) || field.Kind() != protoreflect.MessageKind {
+		return nil, false
+	}
+	mask, ok := request.Get(field).Message().Interface().(*fieldmaskpb.FieldMask)
+	return mask, ok
+}
+
+func updateObjectDescriptor(request protoreflect.MessageDescriptor) protoreflect.MessageDescriptor {
+	field := request.Fields().ByName("object")
+	if field == nil || field.Kind() != protoreflect.MessageKind {
+		return nil
+	}
+	return field.Message()
+}
+
+func isCanonicalFieldMaskPath(path string, descriptor protoreflect.MessageDescriptor) bool {
+	if path == "" || path != strings.TrimSpace(path) || strings.IndexFunc(path, unicode.IsSpace) >= 0 {
+		return false
+	}
+	mapKey := false
+	terminal := false
+	for _, segment := range strings.Split(path, ".") {
+		if segment == "" {
+			return false
+		}
+		if terminal {
+			return false
+		}
+		if mapKey {
+			mapKey = false
+			terminal = descriptor == nil
+			continue
+		}
+		if !isCanonicalFieldMaskSegment(segment) {
+			return false
+		}
+		if descriptor == nil {
+			continue
+		}
+		field := descriptor.Fields().ByName(protoreflect.Name(segment))
+		if field == nil {
+			descriptor = nil
+			continue
+		}
+		if field.IsMap() {
+			mapKey = true
+			if field.MapValue().Kind() == protoreflect.MessageKind {
+				descriptor = field.MapValue().Message()
+			} else {
+				descriptor = nil
+			}
+		} else if field.IsList() {
+			descriptor = nil
+			terminal = true
+		} else if field.Kind() == protoreflect.MessageKind {
+			descriptor = field.Message()
+		} else {
+			descriptor = nil
+			terminal = true
+		}
+	}
+	return true
+}
+
+func isCanonicalFieldMaskSegment(segment string) bool {
+	for i, character := range segment {
+		validStart := unicode.IsLetter(character) || character == '_'
+		validPart := validStart || unicode.IsDigit(character)
+		if (i == 0 && !validStart) || (i > 0 && !validPart) {
+			return false
+		}
+	}
+	return true
+}
+
+func isCanonicalUpdateMask(mask *fieldmaskpb.FieldMask, descriptor protoreflect.MessageDescriptor) bool {
+	if mask == nil {
+		return true
+	}
+	for _, path := range mask.GetPaths() {
+		if !isCanonicalFieldMaskPath(path, descriptor) {
+			return false
+		}
+	}
+	return true
 }
 
 // walkMessage recursively walks a protoreflect.Message, discovering and validating reference-typed
@@ -496,24 +606,25 @@ func isCreateOrUpdate(method string) bool {
 	return strings.HasSuffix(method, "/Create") || strings.HasSuffix(method, "/Update")
 }
 
-func isObjectBeingDeleted(request any) bool {
+func isMetadataOnlyUpdate(request any) bool {
 	message, ok := request.(proto.Message)
 	if !ok {
 		return false
 	}
-	msg := message.ProtoReflect()
-	for _, name := range []protoreflect.Name{"object", "metadata"} {
-		fd := msg.Descriptor().Fields().ByName(name)
-		if fd == nil || fd.Kind() != protoreflect.MessageKind {
-			return false
-		}
-		msg = msg.Get(fd).Message()
-	}
-	fd := msg.Descriptor().Fields().ByName("deletion_timestamp")
-	if fd == nil {
+	mask, ok := updateMaskFromMessage(message)
+	if !ok {
 		return false
 	}
-	return msg.Has(fd)
+	paths := mask.GetPaths()
+	if len(paths) == 0 {
+		return false
+	}
+	for _, path := range paths {
+		if path != "metadata" && !strings.HasPrefix(path, "metadata.") {
+			return false
+		}
+	}
+	return true
 }
 
 // isNotFoundErr checks whether an error represents a "not found" condition.

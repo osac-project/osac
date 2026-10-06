@@ -15,7 +15,6 @@ package oauth
 
 import (
 	"context"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,8 +24,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/osac-project/osac/fulfillment-service/internal/network"
 	"github.com/osac-project/osac/fulfillment-service/internal/tlsconfig"
+	"github.com/osac-project/osac/fulfillment-service/internal/trust"
 )
 
 // ServerMetadata represents the authorization server metadata structure as defined in RFC 8414 for OAuth 2.0 or in the
@@ -46,7 +45,7 @@ type DiscoveryToolBuilder struct {
 	logger   *slog.Logger
 	issuer   string
 	insecure bool
-	caPool   *x509.CertPool
+	caPool   *trust.CertPool
 }
 
 // DiscoveryTool contains the logic needed to discover OAuth endpoints from an issuer URL.
@@ -82,7 +81,7 @@ func (b *DiscoveryToolBuilder) SetInsecure(value bool) *DiscoveryToolBuilder {
 // SetCaPool sets the certificate pool that contains the certificates of the certificate authorities that are trusted
 // when connecting using TLS. This is optional, and the default is to use trust the certificate authorities trusted by
 // the operating system.
-func (b *DiscoveryToolBuilder) SetCaPool(value *x509.CertPool) *DiscoveryToolBuilder {
+func (b *DiscoveryToolBuilder) SetCaPool(value *trust.CertPool) *DiscoveryToolBuilder {
 	b.caPool = value
 	return b
 }
@@ -108,7 +107,7 @@ func (b *DiscoveryToolBuilder) Build() (result *DiscoveryTool, err error) {
 	// Set the default CA pool if needed:
 	caPool := b.caPool
 	if caPool == nil {
-		caPool, err = network.NewCertPool().
+		caPool, err = trust.NewCertPool().
 			SetLogger(b.logger).
 			AddSystemFiles(true).
 			AddKubernetesFiles(true).
@@ -123,7 +122,7 @@ func (b *DiscoveryToolBuilder) Build() (result *DiscoveryTool, err error) {
 		Timeout: 30 * time.Second,
 	}
 	tlsConfig := tlsconfig.NewClientTLSConfig()
-	tlsConfig.RootCAs = caPool
+	tlsConfig.RootCAs = caPool.Pool()
 	if b.insecure {
 		tlsConfig.InsecureSkipVerify = true
 	}

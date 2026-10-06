@@ -45,7 +45,7 @@ ui:
   image:
     repository: ghcr.io/osac-project/osac-ui
     tag: latest  # DEV_FLOATING -- intentionally unpinned for local dev
-    pullPolicy: Always
+    pullPolicy: IfNotPresent
   replicas: 1
   resources:
     requests: {cpu: 100m, memory: 128Mi}
@@ -55,7 +55,7 @@ ui:
     fulfillmentApiUrl: "https://fulfillment-api.osac.localhost:8000"
     oidcClientId: osac-ui
     oidcIssuerUrl: "https://keycloak.osac.localhost:8443/realms/osac"
-    tlsInsecure: "1"
+    tlsInsecure: "0"
 
 # --- Catalog Seeding ---
 catalog:

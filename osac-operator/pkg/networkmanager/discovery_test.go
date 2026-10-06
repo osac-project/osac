@@ -24,6 +24,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/osac-project/osac/osac-operator/pkg/networkmanager"
@@ -221,29 +222,126 @@ var _ = Describe("Discovery", func() {
 	})
 
 	Describe("ListK8sManagers", func() {
-		It("returns all k8s managers in the namespace", func() {
-			cudnLocalnet := &corev1.ConfigMap{
+		It("loads cudn_evpn from the current registration contract", func() {
+			cudnEVPN := &corev1.ConfigMap{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      "osac-network-k8s-manager-cudn-localnet",
+					Name:      "osac-network-k8s-manager-cudn-evpn",
 					Namespace: "osac",
 					Labels:    map[string]string{networkmanager.LabelK8sManager: "true"},
 				},
 				Data: map[string]string{
-					"name":         "cudn_localnet",
-					"description":  "CUDN LocalNet bridge",
-					"capabilities": "ipv4,ipv6,dualStack",
+					"name":         "cudn_evpn",
+					"description":  "CUDN EVPN bridge",
+					"capabilities": "ipv4",
 				},
 			}
 
-			cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cudnLocalnet).Build()
+			cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cudnEVPN).Build()
 			disc, err := networkmanager.NewDiscovery(cl, "osac")
 			Expect(err).NotTo(HaveOccurred())
 
 			managers, err := disc.ListK8sManagers(ctx)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(managers).To(HaveLen(1))
-			Expect(managers[0].Name).To(Equal("cudn_localnet"))
+			Expect(managers[0].Name).To(Equal("cudn_evpn"))
+			Expect(managers[0].Description).To(Equal("CUDN EVPN bridge"))
 			Expect(managers[0].Type).To(Equal(networkmanager.K8sManager))
+			Expect(managers[0].ConfigMapRef).To(Equal(types.NamespacedName{
+				Namespace: "osac",
+				Name:      "osac-network-k8s-manager-cudn-evpn",
+			}))
+			Expect(managers[0].HasCapability(networkmanager.CapabilityIPv4)).To(BeTrue())
+			Expect(managers[0].HasCapability(networkmanager.CapabilityIPv6)).To(BeFalse())
+		})
+
+		It("ignores ConfigMaps in other namespaces", func() {
+			cm := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "osac-network-k8s-manager-cudn-evpn",
+					Namespace: "other-namespace",
+					Labels:    map[string]string{networkmanager.LabelK8sManager: "true"},
+				},
+				Data: map[string]string{
+					"name":         "cudn_evpn",
+					"capabilities": "ipv4",
+				},
+			}
+
+			cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cm).Build()
+			disc, err := networkmanager.NewDiscovery(cl, "osac")
+			Expect(err).NotTo(HaveOccurred())
+
+			managers, err := disc.ListK8sManagers(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(managers).To(BeEmpty())
+		})
+
+		It("ignores ConfigMaps without the current k8s-manager label", func() {
+			cm := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "osac-network-k8s-manager-cudn-evpn",
+					Namespace: "osac",
+					Labels:    map[string]string{"osac.openshift.io/k8s-manager": "true"},
+				},
+				Data: map[string]string{
+					"manager":      "cudn_evpn",
+					"capabilities": "ipv4",
+				},
+			}
+
+			cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cm).Build()
+			disc, err := networkmanager.NewDiscovery(cl, "osac")
+			Expect(err).NotTo(HaveOccurred())
+
+			managers, err := disc.ListK8sManagers(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(managers).To(BeEmpty())
+		})
+
+		It("returns an error for a current-label ConfigMap with invalid data", func() {
+			cm := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "osac-network-k8s-manager-invalid",
+					Namespace: "osac",
+					Labels:    map[string]string{networkmanager.LabelK8sManager: "true"},
+				},
+				Data: map[string]string{
+					"manager":      "cudn_evpn",
+					"capabilities": "ipv4",
+				},
+			}
+
+			cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cm).Build()
+			disc, err := networkmanager.NewDiscovery(cl, "osac")
+			Expect(err).NotTo(HaveOccurred())
+
+			_, err = disc.ListK8sManagers(ctx)
+			Expect(err).To(MatchError(ContainSubstring("missing or empty required field data.name")))
+		})
+
+		It("returns an error when two ConfigMaps register the same k8s manager name", func() {
+			cm1 := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "osac-network-k8s-manager-cudn-evpn-a",
+					Namespace: "osac",
+					Labels:    map[string]string{networkmanager.LabelK8sManager: "true"},
+				},
+				Data: map[string]string{
+					"name":         "cudn_evpn",
+					"capabilities": "ipv4",
+				},
+			}
+			cm2 := cm1.DeepCopy()
+			cm2.Name = "osac-network-k8s-manager-cudn-evpn-b"
+
+			cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cm1, cm2).Build()
+			disc, err := networkmanager.NewDiscovery(cl, "osac")
+			Expect(err).NotTo(HaveOccurred())
+
+			_, err = disc.ListK8sManagers(ctx)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("duplicate"))
+			Expect(err.Error()).To(ContainSubstring("cudn_evpn"))
 		})
 
 		It("does not return fabric managers", func() {
@@ -325,13 +423,13 @@ var _ = Describe("Discovery", func() {
 		It("returns the manager matching the name", func() {
 			cm := &corev1.ConfigMap{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      "osac-network-k8s-manager-cudn-localnet",
+					Name:      "osac-network-k8s-manager-cudn-evpn",
 					Namespace: "osac",
 					Labels:    map[string]string{networkmanager.LabelK8sManager: "true"},
 				},
 				Data: map[string]string{
-					"name":         "cudn_localnet",
-					"capabilities": "ipv4,ipv6,dualStack",
+					"name":         "cudn_evpn",
+					"capabilities": "ipv4",
 				},
 			}
 
@@ -339,10 +437,12 @@ var _ = Describe("Discovery", func() {
 			disc, err := networkmanager.NewDiscovery(cl, "osac")
 			Expect(err).NotTo(HaveOccurred())
 
-			mgr, err := disc.GetK8sManager(ctx, "cudn_localnet")
+			mgr, err := disc.GetK8sManager(ctx, "cudn_evpn")
 			Expect(err).NotTo(HaveOccurred())
-			Expect(mgr.Name).To(Equal("cudn_localnet"))
+			Expect(mgr.Name).To(Equal("cudn_evpn"))
 			Expect(mgr.Type).To(Equal(networkmanager.K8sManager))
+			Expect(mgr.HasCapability(networkmanager.CapabilityIPv4)).To(BeTrue())
+			Expect(mgr.HasCapability(networkmanager.CapabilityIPv6)).To(BeFalse())
 		})
 
 		It("returns ManagerNotFoundError when manager does not exist", func() {

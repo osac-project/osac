@@ -31,7 +31,7 @@ var _ = Describe("Private volumes server", func() {
 	Describe("Creation", func() {
 		stubResolver := TierResolverFunc(func(_ context.Context, _ string) (*TierResolution, error) {
 			return &TierResolution{
-				Backend:  "test-backend",
+				Provider: "test-provider",
 				Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
 			}, nil
 		})
@@ -110,7 +110,6 @@ var _ = Describe("Private volumes server", func() {
 				SetTenancyLogic(tenancy).
 				SetTierResolver(func(_ context.Context, _ string) (*TierResolution, error) {
 					return &TierResolution{
-						Backend:  "test-backend",
 						Provider: "test-provider",
 						Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
 					}, nil
@@ -247,6 +246,82 @@ var _ = Describe("Private volumes server", func() {
 			}))
 		})
 
+		It("rejects a node-local volume without a node topology segment", func() {
+			server.tierResolver = func(_ context.Context, _ string) (*TierResolution, error) {
+				return &TierResolution{
+					Provider: "lvms",
+					Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
+				}, nil
+			}
+
+			_, err := server.Create(ctx, privatev1.VolumesCreateRequest_builder{
+				Object: privatev1.Volume_builder{
+					Metadata: privatev1.Metadata_builder{Name: "missing-node"}.Build(),
+					Spec: privatev1.VolumeSpec_builder{
+						StorageTier: "local",
+						SizeGib:     100,
+						AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
+			Expect(err).To(MatchError(ContainSubstring(`topology.segments["osac.io/node"]`)))
+
+			listResponse, listErr := server.List(ctx, privatev1.VolumesListRequest_builder{}.Build())
+			Expect(listErr).ToNot(HaveOccurred())
+			Expect(listResponse.GetItems()).To(BeEmpty())
+		})
+
+		It("accepts a node-local volume and preserves all topology segments", func() {
+			server.tierResolver = func(_ context.Context, _ string) (*TierResolution, error) {
+				return &TierResolution{
+					Provider: "lvms",
+					Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
+				}, nil
+			}
+
+			segments := map[string]string{
+				"osac.io/node":                "worker-1",
+				"topology.kubernetes.io/zone": "zone-a",
+			}
+			response, err := server.Create(ctx, privatev1.VolumesCreateRequest_builder{
+				Object: privatev1.Volume_builder{
+					Metadata: privatev1.Metadata_builder{Name: "node-local"}.Build(),
+					Spec: privatev1.VolumeSpec_builder{
+						StorageTier: "local",
+						SizeGib:     100,
+						AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+						Topology:    privatev1.VolumeTopology_builder{Segments: segments}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetObject().GetStatus().GetProvider()).To(Equal("lvms"))
+			Expect(response.GetObject().GetSpec().GetTopology().GetSegments()).To(Equal(segments))
+		})
+
+		It("allows a network volume without a node topology segment", func() {
+			server.tierResolver = func(_ context.Context, _ string) (*TierResolution, error) {
+				return &TierResolution{
+					Provider: "vast",
+					Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
+				}, nil
+			}
+
+			response, err := server.Create(ctx, privatev1.VolumesCreateRequest_builder{
+				Object: privatev1.Volume_builder{
+					Metadata: privatev1.Metadata_builder{Name: "network-volume"}.Build(),
+					Spec: privatev1.VolumeSpec_builder{
+						StorageTier: "network",
+						SizeGib:     100,
+						AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetObject().GetStatus().GetProvider()).To(Equal("vast"))
+		})
+
 		It("List volumes", func() {
 			const count = 5
 			for i := range count {
@@ -311,14 +386,14 @@ var _ = Describe("Private volumes server", func() {
 					Status: privatev1.VolumeStatus_builder{
 						State:          privatev1.VolumeState_VOLUME_STATE_AVAILABLE,
 						VendorVolumeId: "vast-vol-123",
-						Backend:        "vast-1",
+						Provider:       "test-provider",
 						Protocol:       privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
 					}.Build(),
 				}.Build(),
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
 					"status.state",
 					"status.vendor_volume_id",
-					"status.backend",
+					"status.provider",
 					"status.protocol",
 				}},
 			}.Build())
@@ -326,10 +401,30 @@ var _ = Describe("Private volumes server", func() {
 			Expect(updateResponse.GetObject().GetStatus().GetState()).To(Equal(
 				privatev1.VolumeState_VOLUME_STATE_AVAILABLE))
 			Expect(updateResponse.GetObject().GetStatus().GetVendorVolumeId()).To(Equal("vast-vol-123"))
-			Expect(updateResponse.GetObject().GetStatus().GetBackend()).To(Equal("vast-1"))
+			Expect(updateResponse.GetObject().GetStatus().GetProvider()).To(Equal("test-provider"))
 			Expect(updateResponse.GetObject().GetStatus().GetProtocol()).To(Equal(
 				privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK))
 			Expect(updateResponse.GetObject().GetSpec().GetStorageTier()).To(Equal("gold"))
+		})
+
+		It("Rejects updates that change the provider", func() {
+			created := createVolume()
+
+			_, err := server.Update(ctx, privatev1.VolumesUpdateRequest_builder{
+				Object: privatev1.Volume_builder{
+					Id: created.GetId(),
+					Status: privatev1.VolumeStatus_builder{
+						Provider: "vast-1",
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.provider"}},
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			st, ok := status.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(st.Code()).To(Equal(codes.InvalidArgument))
+			Expect(st.Message()).To(ContainSubstring("status.provider"))
+			Expect(st.Message()).To(ContainSubstring("immutable"))
 		})
 
 		It("Rejects updates that change the protocol", func() {
@@ -359,6 +454,19 @@ var _ = Describe("Private volumes server", func() {
 			merged := privatev1.Volume_builder{
 				Status: privatev1.VolumeStatus_builder{
 					Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
+				}.Build(),
+			}.Build()
+
+			Expect(validateVolumeImmutability(merged, existing)).To(Succeed())
+		})
+
+		It("Allows the first provider assignment from empty", func() {
+			existing := privatev1.Volume_builder{
+				Status: privatev1.VolumeStatus_builder{}.Build(),
+			}.Build()
+			merged := privatev1.Volume_builder{
+				Status: privatev1.VolumeStatus_builder{
+					Provider: "test-provider",
 				}.Build(),
 			}.Build()
 

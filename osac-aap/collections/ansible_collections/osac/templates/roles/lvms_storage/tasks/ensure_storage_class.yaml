@@ -6,7 +6,7 @@
 #
 # CaaS path (_remote_kubeconfig defined): targets a HCP guest cluster. Installs the
 # LVMS operator via OLM, creates an LVMCluster that auto-discovers the second data
-# disk (added to the agent VM by setup-caas-agents.sh via AGENT_VM_DATA_DISK_SIZE),
+# disk attached by the BMaaS worker provisioning environment,
 # then creates per-tenant StorageClasses on the guest cluster.
 #
 # Both paths are idempotent.
@@ -194,8 +194,8 @@
 
 - name: Check existing tenant StorageClasses
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ _remote_kubeconfig | default(omit) }}"
-    validate_certs: "{{ not (_remote_kubeconfig_insecure | default(false)) }}"
+    kubeconfig: "{{ storage_provider_target_kubeconfig | default(omit) }}"
+    validate_certs: "{{ false if (storage_provider_target_kubeconfig_insecure | default(false) | bool) else omit }}"
     api_version: storage.k8s.io/v1
     kind: StorageClass
     label_selectors:
@@ -212,8 +212,8 @@
 
 - name: Create missing per-tenant StorageClasses
   kubernetes.core.k8s:
-    kubeconfig: "{{ _remote_kubeconfig | default(omit) }}"
-    validate_certs: "{{ not (_remote_kubeconfig_insecure | default(false)) }}"
+    kubeconfig: "{{ storage_provider_target_kubeconfig | default(omit) }}"
+    validate_certs: "{{ false if (storage_provider_target_kubeconfig_insecure | default(false) | bool) else omit }}"
     state: present
     definition:
       apiVersion: storage.k8s.io/v1

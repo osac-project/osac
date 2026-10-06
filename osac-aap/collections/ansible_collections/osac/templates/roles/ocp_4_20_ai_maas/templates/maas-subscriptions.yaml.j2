@@ -1,4 +1,4 @@
-{% for tier in ocp_4_20_ai_maas_tiers %}
+{% for tier in _t_tiers %}
 {% if not loop.first %}
 ---
 {% endif %}
@@ -6,13 +6,19 @@ apiVersion: maas.opendatahub.io/v1alpha1
 kind: MaaSSubscription
 metadata:
   name: "{{ tier.name }}"
-  namespace: models-as-a-service
+  namespace: "{{ _t_govns }}"
 spec:
   owner:
+{% if tier.group | default('', true) | length > 0 %}
     groups:
     - name: "{{ tier.group }}"
+{% endif %}
+{% if ocp_4_20_ai_maas_provision_test_identities | bool %}
+    users:
+    - "system:serviceaccount:{{ _t_govns }}:testuser-{{ tier.name | regex_replace('-subscription$', '') }}"
+{% endif %}
   modelRefs:
-  - name: "{{ ocp_4_20_ai_maas_model_name }}"
+  - name: "{{ _t_model }}"
     namespace: "{{ ocp_4_20_ai_maas_model_namespace }}"
     tokenRateLimits:
     - limit: {{ tier.token_limit }}

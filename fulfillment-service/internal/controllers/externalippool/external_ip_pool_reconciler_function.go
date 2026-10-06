@@ -20,7 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/rand/v2"
 	"slices"
 
 	"google.golang.org/grpc"
@@ -46,7 +45,6 @@ var (
 	errUnsupportedIPFamily     = errors.New("unsupported or unspecified IP family")
 	errInvalidTenantCount      = errors.New("external IP pool must have a tenant assigned")
 	errDuplicateExternalIPPool = errors.New("expected at most one external IP pool with identifier")
-	errNoHubsFound             = errors.New("no available hubs found")
 
 	// Build() errors:
 	errNoLogger     = errors.New("logger is mandatory")
@@ -65,7 +63,7 @@ type function struct {
 	logger                *slog.Logger
 	hubCache              controllers.HubCache
 	externalIPPoolsClient privatev1.ExternalIPPoolsClient
-	hubsClient            privatev1.HubsClient
+	networkingHubReader   controllers.NetworkingHubReader
 	maskCalculator        *masks.Calculator
 }
 
@@ -112,10 +110,18 @@ func (b *FunctionBuilder) Build() (controllers.ReconcilerFunction[*privatev1.Ext
 		return nil, errNoHubCache
 	}
 
+	networkingHubReader, err := controllers.NewNetworkingHubReader().
+		SetNetworkClassesClient(privatev1.NewNetworkClassesClient(b.connection)).
+		SetHubCache(b.hubCache).
+		Build()
+	if err != nil {
+		return nil, err
+	}
+
 	object := &function{
 		logger:                b.logger,
 		externalIPPoolsClient: privatev1.NewExternalIPPoolsClient(b.connection),
-		hubsClient:            privatev1.NewHubsClient(b.connection),
+		networkingHubReader:   networkingHubReader,
 		hubCache:              b.hubCache,
 		maskCalculator:        masks.NewCalculator().Build(),
 	}
@@ -135,6 +141,16 @@ func (r *function) run(ctx context.Context, externalIPPool *privatev1.ExternalIP
 	} else {
 		err = t.update(ctx)
 	}
+	var hubResolutionRetryErr error
+	if err != nil {
+		handled, retry := controllers.HandleResourceNetworkingHubResolutionError(err, t.setPending, t.setFailed)
+		if handled {
+			if retry {
+				hubResolutionRetryErr = err
+			}
+			err = nil
+		}
+	}
 	if err != nil {
 		return err
 	}
@@ -145,7 +161,10 @@ func (r *function) run(ctx context.Context, externalIPPool *privatev1.ExternalIP
 		UpdateMask: updateMask,
 	}.Build())
 
-	return err
+	if err != nil {
+		return err
+	}
+	return hubResolutionRetryErr
 }
 
 func (t *task) update(ctx context.Context) error {
@@ -304,28 +323,18 @@ func (t *task) delete(ctx context.Context) error {
 }
 
 func (t *task) selectHub(ctx context.Context) error {
-	t.hubId = t.externalIPPool.GetStatus().GetHub()
-	if t.hubId == "" {
-		response, err := t.r.hubsClient.List(ctx, privatev1.HubsListRequest_builder{}.Build())
-		if err != nil {
-			return err
-		}
-		if len(response.Items) == 0 {
-			return errNoHubsFound
-		}
-		t.hubId = response.Items[rand.IntN(len(response.Items))].GetId()
-	}
-	t.r.logger.DebugContext(
-		ctx,
-		"Selected hub",
-		slog.String("id", t.hubId),
-	)
-	hubEntry, err := t.r.hubCache.Get(ctx, t.hubId)
+	resolution, err := controllers.ResolveResourceNetworkingHub(ctx, t.r.networkingHubReader, t.externalIPPool.GetStatus().GetHub())
 	if err != nil {
 		return err
 	}
-	t.hubNamespace = hubEntry.Namespace
-	t.hubClient = hubEntry.Client
+	t.hubId = resolution.HubID
+	t.r.logger.DebugContext(
+		ctx,
+		"Resolved canonical networking hub",
+		slog.String("id", t.hubId),
+	)
+	t.hubNamespace = resolution.Namespace
+	t.hubClient = resolution.Client
 	return nil
 }
 
@@ -388,6 +397,14 @@ func (t *task) removeFinalizer() {
 		})
 		t.externalIPPool.GetMetadata().SetFinalizers(list)
 	}
+}
+
+func (t *task) setPending(err error) {
+	if !t.externalIPPool.HasStatus() {
+		t.externalIPPool.SetStatus(&privatev1.ExternalIPPoolStatus{})
+	}
+	t.externalIPPool.GetStatus().SetState(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_PENDING)
+	t.externalIPPool.GetStatus().SetMessage(err.Error())
 }
 
 func (t *task) setFailed(err error) {

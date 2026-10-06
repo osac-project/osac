@@ -38,6 +38,25 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
+type fakeNetworkingHubReader struct {
+	result controllers.NetworkingHubResolution
+	err    error
+	calls  int
+}
+
+func (f *fakeNetworkingHubReader) Resolve(context.Context) (controllers.NetworkingHubResolution, error) {
+	f.calls++
+	return f.result, f.err
+}
+
+func readyNetworkingHubReader(id, namespace string, client clnt.Client) *fakeNetworkingHubReader {
+	return &fakeNetworkingHubReader{result: controllers.NetworkingHubResolution{
+		NetworkingHub: controllers.NetworkingHub{ID: id, Namespace: namespace, Client: client},
+		HubID:         id,
+		State:         privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+	}}
+}
+
 var _ = Describe("buildSpec", func() {
 	It("Includes pool in spec", func() {
 		t := &task{
@@ -507,148 +526,44 @@ var _ = Describe("removeFinalizer", func() {
 })
 
 var _ = Describe("selectHub", func() {
-	var (
-		ctx  context.Context
-		ctrl *gomock.Controller
-	)
-
-	BeforeEach(func() {
-		ctx = context.Background()
-		ctrl = gomock.NewController(GinkgoT())
-		DeferCleanup(ctrl.Finish)
-	})
-
-	It("should use existing hub from status", func() {
-		hubCache := controllers.NewMockHubCache(ctrl)
-		hubCache.EXPECT().
-			Get(gomock.Any(), "hub-1").
-			Return(&controllers.HubEntry{
-				Namespace: "hub-ns",
-				Client:    fake.NewClientBuilder().Build(),
-			}, nil)
-
-		externalIP := privatev1.ExternalIP_builder{
-			Id: "eip-existing-hub",
-			Spec: privatev1.ExternalIPSpec_builder{
-				Pool: privatev1.ExternalIPPoolReference_builder{Id: "pool-1"}.Build(),
-			}.Build(),
-			Status: privatev1.ExternalIPStatus_builder{
-				Hub: "hub-1",
-			}.Build(),
-		}.Build()
-
-		f := &function{
-			logger:   logger,
-			hubCache: hubCache,
+	It("uses the canonical Hub for empty and sticky assignments and never falls back", func() {
+		ctx := context.Background()
+		kubeClient := fake.NewClientBuilder().Build()
+		resolver := readyNetworkingHubReader("hub-a", "hub-a-ns", kubeClient)
+		f := &function{logger: logger, networkingHubReader: resolver}
+		newExternalIP := func(hubID string) *privatev1.ExternalIP {
+			return privatev1.ExternalIP_builder{
+				Id: "eip-canonical-hub",
+				Spec: privatev1.ExternalIPSpec_builder{
+					Pool: privatev1.ExternalIPPoolReference_builder{Id: "pool-1"}.Build(),
+				}.Build(),
+				Status: privatev1.ExternalIPStatus_builder{Hub: hubID}.Build(),
+			}.Build()
 		}
 
-		t := &task{
-			r:          f,
-			externalIP: externalIP,
+		for _, assignedHubID := range []string{"", "hub-a"} {
+			t := &task{r: f, externalIP: newExternalIP(assignedHubID)}
+			Expect(t.selectHub(ctx)).To(Succeed())
+			Expect(t.hubId).To(Equal("hub-a"))
+			Expect(t.hubNamespace).To(Equal("hub-a-ns"))
+			Expect(t.hubClient).To(BeIdenticalTo(kubeClient))
 		}
+		Expect(resolver.calls).To(Equal(2), "existing assignments must be checked against the canonical Hub")
 
-		err := t.selectHub(ctx)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(t.hubId).To(Equal("hub-1"))
-		Expect(t.hubNamespace).To(Equal("hub-ns"))
-	})
+		conflict := &task{r: f, externalIP: newExternalIP("hub-b")}
+		Expect(conflict.selectHub(ctx)).To(MatchError(ContainSubstring(controllers.ErrResourceHubConflict.Error())))
+		Expect(conflict.hubClient).To(BeNil())
 
-	It("should select hub randomly when status hub is empty", func() {
-		hubsClient := controllers.NewMockHubsClient(ctrl)
-		hubsClient.EXPECT().
-			List(gomock.Any(), gomock.Any()).
-			Return(&privatev1.HubsListResponse{
-				Items: []*privatev1.Hub{privatev1.Hub_builder{Id: "random-hub-1"}.Build()},
-			}, nil)
-
-		hubCache := controllers.NewMockHubCache(ctrl)
-		hubCache.EXPECT().
-			Get(gomock.Any(), "random-hub-1").
-			Return(&controllers.HubEntry{
-				Namespace: "random-hub-ns",
-				Client:    fake.NewClientBuilder().Build(),
-			}, nil)
-
-		externalIP := privatev1.ExternalIP_builder{
-			Id: "eip-derive-hub",
-			Spec: privatev1.ExternalIPSpec_builder{
-				Pool: privatev1.ExternalIPPoolReference_builder{Id: "pool-1"}.Build(),
-			}.Build(),
-		}.Build()
-
-		f := &function{
-			logger:     logger,
-			hubCache:   hubCache,
-			hubsClient: hubsClient,
+		for _, resolutionErr := range []error{
+			controllers.ErrNoNetworkingHubs,
+			controllers.ErrMultipleNetworkingHubs,
+			controllers.ErrCanonicalHubUnavailable,
+		} {
+			resolver.err = resolutionErr
+			t := &task{r: f, externalIP: newExternalIP("hub-a")}
+			Expect(t.selectHub(ctx)).To(MatchError(resolutionErr))
+			Expect(t.hubClient).To(BeNil())
 		}
-
-		t := &task{
-			r:          f,
-			externalIP: externalIP,
-		}
-
-		err := t.selectHub(ctx)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(t.hubId).To(Equal("random-hub-1"))
-		Expect(t.hubNamespace).To(Equal("random-hub-ns"))
-	})
-
-	It("should return error when no hubs available", func() {
-		hubsClient := controllers.NewMockHubsClient(ctrl)
-		hubsClient.EXPECT().
-			List(gomock.Any(), gomock.Any()).
-			Return(&privatev1.HubsListResponse{
-				Items: []*privatev1.Hub{},
-			}, nil)
-
-		externalIP := privatev1.ExternalIP_builder{
-			Id: "eip-no-hubs",
-			Spec: privatev1.ExternalIPSpec_builder{
-				Pool: privatev1.ExternalIPPoolReference_builder{Id: "pool-1"}.Build(),
-			}.Build(),
-		}.Build()
-
-		f := &function{
-			logger:     logger,
-			hubsClient: hubsClient,
-		}
-
-		t := &task{
-			r:          f,
-			externalIP: externalIP,
-		}
-
-		err := t.selectHub(ctx)
-		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("there are no hubs"))
-	})
-
-	It("should return error when hub list fails", func() {
-		hubsClient := controllers.NewMockHubsClient(ctrl)
-		hubsClient.EXPECT().
-			List(gomock.Any(), gomock.Any()).
-			Return(nil, errors.New("hub list failed"))
-
-		externalIP := privatev1.ExternalIP_builder{
-			Id: "eip-hub-error",
-			Spec: privatev1.ExternalIPSpec_builder{
-				Pool: privatev1.ExternalIPPoolReference_builder{Id: "pool-1"}.Build(),
-			}.Build(),
-		}.Build()
-
-		f := &function{
-			logger:     logger,
-			hubsClient: hubsClient,
-		}
-
-		t := &task{
-			r:          f,
-			externalIP: externalIP,
-		}
-
-		err := t.selectHub(ctx)
-		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("hub list failed"))
 	})
 })
 
@@ -678,18 +593,7 @@ var _ = Describe("hub persistence", func() {
 
 		fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
 
-		hubCache := controllers.NewMockHubCache(ctrl)
-		hubCache.EXPECT().
-			Get(gomock.Any(), hubID).
-			Return(&controllers.HubEntry{Namespace: hubNamespace, Client: fakeClient}, nil).
-			AnyTimes()
-
-		hubsClient := controllers.NewMockHubsClient(ctrl)
-		hubsClient.EXPECT().
-			List(gomock.Any(), gomock.Any()).
-			Return(&privatev1.HubsListResponse{
-				Items: []*privatev1.Hub{privatev1.Hub_builder{Id: hubID}.Build()},
-			}, nil)
+		resolver := readyNetworkingHubReader(hubID, hubNamespace, fakeClient)
 
 		externalIPsClient := NewMockExternalIPsClient(ctrl)
 		externalIPsClient.EXPECT().
@@ -714,11 +618,10 @@ var _ = Describe("hub persistence", func() {
 		}.Build()
 
 		f := &function{
-			logger:            logger,
-			hubCache:          hubCache,
-			externalIPsClient: externalIPsClient,
-			hubsClient:        hubsClient,
-			maskCalculator:    nil,
+			logger:              logger,
+			externalIPsClient:   externalIPsClient,
+			networkingHubReader: resolver,
+			maskCalculator:      nil,
 		}
 
 		err := f.run(ctx, externalIP)
@@ -737,12 +640,13 @@ var _ = Describe("hub persistence", func() {
 
 		fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
 
-		hubsClient := controllers.NewMockHubsClient(ctrl)
-		hubsClient.EXPECT().
-			List(gomock.Any(), gomock.Any()).
-			Return(&privatev1.HubsListResponse{
-				Items: []*privatev1.Hub{},
-			}, nil)
+		resolver := &fakeNetworkingHubReader{err: controllers.ErrNoNetworkingHubs}
+		externalIPsClient := NewMockExternalIPsClient(ctrl)
+		externalIPsClient.EXPECT().
+			Update(gomock.Any(), gomock.Any(), gomock.Any()).
+			DoAndReturn(func(ctx context.Context, req *privatev1.ExternalIPsUpdateRequest, opts ...grpc.CallOption) (*privatev1.ExternalIPsUpdateResponse, error) {
+				return &privatev1.ExternalIPsUpdateResponse{Object: req.GetObject()}, nil
+			})
 
 		externalIP := privatev1.ExternalIP_builder{
 			Id: externalIPID,
@@ -760,14 +664,17 @@ var _ = Describe("hub persistence", func() {
 		}.Build()
 
 		f := &function{
-			logger:         logger,
-			hubsClient:     hubsClient,
-			maskCalculator: nil,
+			logger:              logger,
+			externalIPsClient:   externalIPsClient,
+			networkingHubReader: resolver,
+			maskCalculator:      nil,
 		}
 
 		err := f.run(ctx, externalIP)
-		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("there are no hubs"))
+		Expect(errors.Is(err, controllers.ErrNoNetworkingHubs)).To(BeTrue())
+		Expect(externalIP.GetStatus().GetState()).To(Equal(privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING))
+		Expect(externalIP.GetStatus().GetHub()).To(BeEmpty())
+		Expect(externalIP.GetStatus().GetMessage()).To(ContainSubstring(controllers.ErrNoNetworkingHubs.Error()))
 
 		list := &osacv1alpha1.ExternalIPList{}
 		err = fakeClient.List(ctx, list)
@@ -781,11 +688,7 @@ var _ = Describe("hub persistence", func() {
 
 		fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
 
-		hubCache := controllers.NewMockHubCache(ctrl)
-		hubCache.EXPECT().
-			Get(gomock.Any(), hubID).
-			Return(&controllers.HubEntry{Namespace: hubNamespace, Client: fakeClient}, nil).
-			AnyTimes()
+		resolver := readyNetworkingHubReader(hubID, hubNamespace, fakeClient)
 
 		externalIPsClient := NewMockExternalIPsClient(ctrl)
 		externalIPsClient.EXPECT().
@@ -811,14 +714,15 @@ var _ = Describe("hub persistence", func() {
 		}.Build()
 
 		f := &function{
-			logger:            logger,
-			hubCache:          hubCache,
-			externalIPsClient: externalIPsClient,
-			maskCalculator:    nil,
+			logger:              logger,
+			externalIPsClient:   externalIPsClient,
+			networkingHubReader: resolver,
+			maskCalculator:      nil,
 		}
 
 		err := f.run(ctx, externalIP)
 		Expect(err).ToNot(HaveOccurred())
+		Expect(resolver.calls).To(Equal(1), "existing assignments must be checked against the canonical Hub")
 
 		list := &osacv1alpha1.ExternalIPList{}
 		err = fakeClient.List(ctx, list)
@@ -833,18 +737,7 @@ var _ = Describe("hub persistence", func() {
 
 		fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
 
-		hubCache := controllers.NewMockHubCache(ctrl)
-		hubCache.EXPECT().
-			Get(gomock.Any(), hubID).
-			Return(&controllers.HubEntry{Namespace: hubNamespace, Client: fakeClient}, nil).
-			AnyTimes()
-
-		hubsClient := controllers.NewMockHubsClient(ctrl)
-		hubsClient.EXPECT().
-			List(gomock.Any(), gomock.Any()).
-			Return(&privatev1.HubsListResponse{
-				Items: []*privatev1.Hub{privatev1.Hub_builder{Id: hubID}.Build()},
-			}, nil)
+		resolver := readyNetworkingHubReader(hubID, hubNamespace, fakeClient)
 
 		externalIPsClient := NewMockExternalIPsClient(ctrl)
 
@@ -872,11 +765,10 @@ var _ = Describe("hub persistence", func() {
 		}.Build()
 
 		f := &function{
-			logger:            logger,
-			hubCache:          hubCache,
-			externalIPsClient: externalIPsClient,
-			hubsClient:        hubsClient,
-			maskCalculator:    nil,
+			logger:              logger,
+			externalIPsClient:   externalIPsClient,
+			networkingHubReader: resolver,
+			maskCalculator:      nil,
 		}
 
 		// First reconcile: hub="" -> selects hub, returns early, no CR
@@ -897,6 +789,7 @@ var _ = Describe("hub persistence", func() {
 
 		err = f.run(ctx, externalIP)
 		Expect(err).ToNot(HaveOccurred())
+		Expect(resolver.calls).To(Equal(2), "each reconciliation must revalidate the stored Hub assignment")
 
 		err = fakeClient.List(ctx, list)
 		Expect(err).ToNot(HaveOccurred())
@@ -929,11 +822,7 @@ var _ = Describe("Kubernetes validation error handling", func() {
 			}).
 			Build()
 
-		hubCache := controllers.NewMockHubCache(ctrl)
-		hubCache.EXPECT().
-			Get(gomock.Any(), "hub-validation").
-			Return(&controllers.HubEntry{Namespace: "hub-ns", Client: fakeClient}, nil).
-			AnyTimes()
+		resolver := readyNetworkingHubReader("hub-validation", "hub-ns", fakeClient)
 
 		externalIPsClient := NewMockExternalIPsClient(ctrl)
 		externalIPsClient.EXPECT().
@@ -959,10 +848,10 @@ var _ = Describe("Kubernetes validation error handling", func() {
 		}.Build()
 
 		f := &function{
-			logger:            logger,
-			hubCache:          hubCache,
-			externalIPsClient: externalIPsClient,
-			maskCalculator:    nil,
+			logger:              logger,
+			externalIPsClient:   externalIPsClient,
+			networkingHubReader: resolver,
+			maskCalculator:      nil,
 		}
 
 		err := f.run(ctx, externalIP)

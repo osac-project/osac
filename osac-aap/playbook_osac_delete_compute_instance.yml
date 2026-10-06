@@ -8,17 +8,11 @@
     compute_instance_name: "{{ osac_job_vars.resource.metadata.name }}"
     template_id: "{{ osac_job_vars.resource.spec.templateID }}"
 
-  pre_tasks:
-    - name: Determine tenant target namespace
-      ansible.builtin.include_role:
-        name: osac.service.tenant_target_namespace
-
   tasks:
     - name: Display compute instance deletion information
       ansible.builtin.debug:
         msg:
           - "Deleting compute instance: {{ compute_instance_name }}"
-          - "Tenant target namespace: {{ tenant_target_namespace }}"
           - "Template ID: {{ template_id }}"
 
     - name: Call the selected compute instance template for deletion

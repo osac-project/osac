@@ -226,15 +226,21 @@ func (r *VirtualNetworkReconciler) handleProvisioning(ctx context.Context, vnet 
 		return ctrl.Result{}, nil
 	}
 
+	onProvisioningFailure := func(message string) {
+		vnet.Status.Phase = v1alpha1.VirtualNetworkPhaseFailed
+		setReadyConditionFailed(&vnet.Status.Conditions, message)
+	}
+
 	return provisioning.RunProvisioningLifecycle(ctx, r.ProvisioningProvider, vnet,
 		&provisioning.State{Jobs: &vnet.Status.ProvisioningJobs, DesiredConfigVersion: vnet.Status.DesiredConfigVersion},
 		r.MaxJobHistory, r.StatusPollInterval,
 		&provisioning.PollCallbacks{
-			OnFailed: func(message string) {
-				vnet.Status.Phase = v1alpha1.VirtualNetworkPhaseFailed
-				setReadyConditionFailed(&vnet.Status.Conditions, message)
-			},
+			OnFailed:      onProvisioningFailure,
+			OnOutputError: onProvisioningFailure,
 			OnSuccess: func(_ provisioning.ProvisionStatus) {
+				if vnet.Annotations[osacImplementationStrategyAnnotation] == "agentless_net" {
+					vnet.Status.BackendNetworkID = string(vnet.UID)
+				}
 				vnet.Status.Phase = v1alpha1.VirtualNetworkPhaseReady
 				setReadyConditionTrue(&vnet.Status.Conditions)
 			},

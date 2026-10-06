@@ -2,7 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Role, RoleBinding, User } from '@osac/types';
-import { RoleBindingState } from '@osac/types';
+import { RoleBindingState, ServiceTier } from '@osac/types';
 
 import RoleBindingsPage from './RoleBindingsPage';
 import { renderWithProviders } from '../../test-utils/TestProviders';
@@ -12,6 +12,7 @@ vi.mock('../../hooks/use-session', () => ({
     role: 'tenant-admin',
     username: 'testuser',
     tenantId: 'tenant-1',
+    enabledServices: [ServiceTier.CAAS, ServiceTier.VMAAS, ServiceTier.BMAAS],
   })),
 }));
 
@@ -91,6 +92,7 @@ describe('RoleBindingsPage', () => {
       role: 'tenant-admin',
       username: 'testuser',
       tenantId: 'tenant-1',
+      enabledServices: [ServiceTier.CAAS, ServiceTier.VMAAS, ServiceTier.BMAAS],
       userTheme: 'system',
       resolvedTheme: 'light',
       setUserTheme: vi.fn(),

@@ -15,15 +15,19 @@
 #   _cluster_name                        — optional target cluster name override (for volume
 #                                          naming); ensure_storage_class self-discovers it from
 #                                          the target cluster's Infrastructure object when unset
-#   _remote_kubeconfig_insecure          — set true by the caller when _remote_kubeconfig's
-#                                          serving cert can't be validated against its bundled
-#                                          CA (e.g. HCP guest clusters reached via an external
-#                                          Route); TLS verification stays on otherwise
+#   storage_provider_target_kubeconfig  — optional kubeconfig for provider-managed
+#                                          cluster-side resources; omit to use the worker's
+#                                          default context
+#   storage_provider_target_kubeconfig_insecure — disable TLS verification for the target
+#                                          kubeconfig when the guest API certificate does not
+#                                          match its bundled CA
+#   _remote_kubeconfig_insecure          — remains the LVMS CaaS-install signal used by its
+#                                          direct OLM and LVMCluster operations
 
 - name: "Compute filtered tiers for current provider"
   ansible.builtin.set_fact:
     _computed_provider_tiers: >-
-      {{ _storage_provider_tiers | selectattr('provider', 'equalto', _current_provider) | list }}
+      {{ _storage_provider_tiers | selectattr('provider', 'in', [_current_provider, _current_provider | replace('_', '-')]) | list }}
 
 - name: "Compute filtered backend connections for current provider's dispatched tiers"
   ansible.builtin.set_fact:
@@ -47,15 +51,17 @@
 - name: "Dispatch provider storage action with remote kubeconfig routing"
   module_defaults:
     kubernetes.core.k8s:
-      kubeconfig: "{{ _remote_kubeconfig | default(omit) }}"
-      validate_certs: "{{ false if (_remote_kubeconfig_insecure | default(false) | bool) else omit }}"
+      kubeconfig: "{{ storage_provider_target_kubeconfig | default(omit) }}"
+      validate_certs: "{{ false if (storage_provider_target_kubeconfig_insecure | default(false) | bool) else omit }}"
     kubernetes.core.k8s_info:
-      kubeconfig: "{{ _remote_kubeconfig | default(omit) }}"
-      validate_certs: "{{ false if (_remote_kubeconfig_insecure | default(false) | bool) else omit }}"
+      kubeconfig: "{{ storage_provider_target_kubeconfig | default(omit) }}"
+      validate_certs: "{{ false if (storage_provider_target_kubeconfig_insecure | default(false) | bool) else omit }}"
   block:
     - name: "Include provider storage role"
       ansible.builtin.include_role:
-        name: "osac.templates.{{ _current_provider }}_storage"
+        name: >-
+          {% set _clean = _current_provider | replace('-', '_') -%}
+          osac.templates.{{ _clean if _clean.endswith('_storage') else (_clean ~ '_storage') }}
         tasks_from: "{{ _dispatch_action }}"
         public: true
       vars:

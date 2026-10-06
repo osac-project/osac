@@ -11,6 +11,10 @@ data:
     kind: AgentServiceConfig
     metadata:
       name: agent
+{{- if not .Values.mce.imageService.enabled }}
+      annotations:
+        agent-install.openshift.io/enable-image-service: "false"
+{{- end }}
     spec:
       databaseStorage:
         accessModes:

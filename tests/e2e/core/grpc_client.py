@@ -70,6 +70,15 @@ class GRPCClient:
             },
         )
 
+    def update_compute_instance_instance_type(self, *, ci_id: str, instance_type: str) -> dict[str, Any]:
+        return self.call(
+            service=f"{PUBLIC_API}.ComputeInstances/Update",
+            data={
+                "object": {"id": ci_id, "spec": {"instance_type": {"id": instance_type}}},
+                "updateMask": {"paths": ["spec.instance_type"]},
+            },
+        )
+
     def delete_compute_instance(self, *, ci_id: str) -> None:
         self.call(service=f"{PUBLIC_API}.ComputeInstances/Delete", data={"id": ci_id})
 
@@ -147,6 +156,14 @@ class GRPCClient:
     def get_cluster(self, *, cluster_id: str) -> dict[str, Any]:
         return self.call(service=f"{PUBLIC_API}.Clusters/Get", data={"id": cluster_id})
 
+    def get_cluster_condition_status(self, *, cluster_id: str, condition_type: str) -> str:
+        cluster = self.get_cluster(cluster_id=cluster_id)
+        conditions: list[dict[str, Any]] = cluster.get("object", {}).get("status", {}).get("conditions", [])
+        for condition in conditions:
+            if condition.get("type") == condition_type:
+                return condition.get("status", "")
+        return ""
+
     # SecurityGroup operations
 
     def create_security_group(self, *, name: str, virtual_network: str) -> str:
@@ -183,22 +200,6 @@ class GRPCClient:
             service=f"{PUBLIC_API}.SecurityGroups/Create", data={"object": {"metadata": {"name": name}, "spec": spec}}
         )
         return response["object"]["id"]
-
-    def update_security_group_rules(
-        self, *, sg_id: str, ingress: list[dict[str, Any]] | None = None, egress: list[dict[str, Any]] | None = None
-    ) -> None:
-        spec: dict[str, Any] = {}
-        paths: list[str] = []
-        if ingress is not None:
-            spec["ingress"] = ingress
-            paths.append("spec.ingress")
-        if egress is not None:
-            spec["egress"] = egress
-            paths.append("spec.egress")
-        self.call(
-            service=f"{PUBLIC_API}.SecurityGroups/Update",
-            data={"object": {"id": sg_id, "spec": spec}, "updateMask": {"paths": paths}},
-        )
 
     # Console operations
 
@@ -425,8 +426,16 @@ class GRPCClient:
         return self.call(service=f"{PRIVATE_API}.InstanceTypes/Get", data={"id": name})
 
     def list_instance_type_names(self) -> list[str]:
-        response: dict[str, Any] = self.call(service=f"{PRIVATE_API}.InstanceTypes/List")
-        return [item["metadata"]["name"] for item in response.get("items", [])]
+        names: list[str] = []
+        page_token: str = ""
+        while True:
+            data: dict[str, Any] | None = {"pageToken": page_token} if page_token else None
+            response: dict[str, Any] = self.call(service=f"{PRIVATE_API}.InstanceTypes/List", data=data)
+            names.extend(item["metadata"]["name"] for item in response.get("items", []))
+            page_token = response.get("nextPageToken", "")
+            if not page_token:
+                break
+        return names
 
     def update_instance_type(self, *, name: str, state: str) -> dict[str, Any]:
         return self.call(
@@ -444,23 +453,22 @@ class GRPCClient:
         *,
         version: str,
         image: str,
+        disk_image: str | None = None,
         enabled: bool = True,
         is_default: bool = False,
         state: str = "CLUSTER_VERSION_STATE_ACTIVE",
     ) -> dict[str, str]:
+        spec: dict[str, Any] = {
+            "version": version,
+            "image": image,
+            "enabled": enabled,
+            "is_default": is_default,
+            "state": state,
+        }
+        if disk_image is not None:
+            spec["disk_image"] = {"id": disk_image}
         response: dict[str, Any] = self.call(
-            service=f"{PRIVATE_API}.ClusterVersions/Create",
-            data={
-                "object": {
-                    "spec": {
-                        "version": version,
-                        "image": image,
-                        "enabled": enabled,
-                        "is_default": is_default,
-                        "state": state,
-                    }
-                }
-            },
+            service=f"{PRIVATE_API}.ClusterVersions/Create", data={"object": {"spec": spec}}
         )
         cluster_version: dict[str, Any] = response["object"]
         return {"id": cluster_version["id"], "name": cluster_version["metadata"]["name"]}
@@ -486,12 +494,12 @@ class GRPCClient:
     def delete_cluster_version(self, *, version_id: str) -> None:
         self.call(service=f"{PRIVATE_API}.ClusterVersions/Delete", data={"id": version_id})
 
-    def ensure_cluster_version(self, *, version: str, image: str) -> dict[str, str]:
+    def ensure_cluster_version(self, *, version: str, image: str, disk_image: str | None = None) -> dict[str, str]:
         """Create a ClusterVersion, tolerating AlreadyExists left behind by a prior failed run.
 
         Returns {"id": ..., "name": ...} for the resolved ClusterVersion."""
         try:
-            return self.create_cluster_version(version=version, image=image)
+            return self.create_cluster_version(version=version, image=image, disk_image=disk_image)
         except subprocess.CalledProcessError as e:
             output = (e.stdout or "") + (e.stderr or "")
             if not re.search(r"Code:\s*AlreadyExists", output):
@@ -499,13 +507,104 @@ class GRPCClient:
         response: dict[str, Any] = self.call(service=f"{PRIVATE_API}.ClusterVersions/List")
         for item in response.get("items", []):
             if item.get("spec", {}).get("version") == version:
+                existing_disk_image = item.get("spec", {}).get("diskImage") or {}
+                if disk_image is not None and not (existing_disk_image.get("id") or existing_disk_image.get("name")):
+                    self.update_cluster_version(version_id=item["id"], disk_image={"id": disk_image})
                 return {"id": item["id"], "name": item["metadata"]["name"]}
         raise RuntimeError(f"Cluster version '{version}' reported AlreadyExists but not found in list")
 
+    def ensure_disk_image(self, *, name: str, source_ref: str) -> str:
+        """Create a DiskImage, tolerating AlreadyExists left behind by a prior run."""
+        try:
+            return self.create_disk_image(name=name, source_ref=source_ref)
+        except subprocess.CalledProcessError as e:
+            output = (e.stdout or "") + (e.stderr or "")
+            if not re.search(r"Code:\s*AlreadyExists", output):
+                raise RuntimeError(f"Failed to create disk image '{name}': {output}") from e
+        response: dict[str, Any] = self.call(service=f"{PRIVATE_API}.DiskImages/List")
+        for item in response.get("items", []):
+            if item.get("metadata", {}).get("name") == name:
+                return item["id"]
+        raise RuntimeError(f"DiskImage '{name}' reported AlreadyExists but not found in list")
+
+    # BareMetalInstanceType operations (private API)
+    def create_bare_metal_instance_type(
+        self,
+        *,
+        name: str,
+        cores: int = 4,
+        threads_per_core: int = 1,
+        memory_gb: int = 16,
+        architecture: str = "ARCHITECTURE_AMD64",
+        network_ports: list[dict[str, Any]] | None = None,
+        host_label_selector: dict[str, str] | None = None,
+        description: str = "CI bare-metal worker profile",
+        tenant: str = "shared",
+    ) -> str:
+        """Create a BareMetalInstanceType via the private API."""
+        selector = host_label_selector or {"osac.openshift.io/host-type": "default"}
+        ports = network_ports or [
+            {"name": "ens5", "role": "fabric", "type": "Ethernet", "speed": "10Gbps"},
+            {"name": "ens4", "role": "management", "type": "Ethernet", "speed": "10Gbps"},
+        ]
+        obj: dict[str, Any] = {
+            "metadata": {"name": name, "tenant": tenant},
+            "spec": {
+                "hardware": {
+                    "cpu": {"cores": cores, "threads_per_core": threads_per_core, "architecture": architecture},
+                    "memory": {"total_gb": memory_gb},
+                    "network_ports": ports,
+                },
+                "description": description,
+                "host_label_selector": {"match_labels": selector},
+            },
+        }
+        response: dict[str, Any] = self.call(
+            service=f"{PRIVATE_API}.BareMetalInstanceTypes/Create", data={"object": obj}
+        )
+        return response["object"]["id"]
+
+    def ensure_bare_metal_instance_type(
+        self,
+        *,
+        name: str,
+        cores: int = 4,
+        threads_per_core: int = 1,
+        memory_gb: int = 16,
+        architecture: str = "ARCHITECTURE_AMD64",
+        network_ports: list[dict[str, Any]] | None = None,
+        host_label_selector: dict[str, str] | None = None,
+        description: str = "CI bare-metal worker profile",
+        tenant: str = "shared",
+    ) -> str:
+        """Create a BareMetalInstanceType, tolerating AlreadyExists left behind by a prior run."""
+        try:
+            return self.create_bare_metal_instance_type(
+                name=name,
+                cores=cores,
+                threads_per_core=threads_per_core,
+                memory_gb=memory_gb,
+                architecture=architecture,
+                network_ports=network_ports,
+                host_label_selector=host_label_selector,
+                description=description,
+                tenant=tenant,
+            )
+        except subprocess.CalledProcessError as e:
+            output = (e.stdout or "") + (e.stderr or "")
+            if not re.search(r"Code:\s*AlreadyExists", output):
+                raise RuntimeError(f"Failed to create bare metal instance type '{name}': {output}") from e
+        response: dict[str, Any] = self.call(service=f"{PRIVATE_API}.BareMetalInstanceTypes/List")
+        for item in response.get("items", []):
+            if item.get("metadata", {}).get("name") == name:
+                return item["id"]
+        raise RuntimeError(f"BareMetalInstanceType '{name}' reported AlreadyExists but not found in list")
+
     # BareMetalInstance operations (public API)
 
-    def list_baremetal_instance_ids(self) -> list[str]:
-        response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.BareMetalInstances/List")
+    def list_baremetal_instance_ids(self, *, filter_expr: str | None = None) -> list[str]:
+        data: dict[str, Any] | None = {"filter": filter_expr} if filter_expr else None
+        response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.BareMetalInstances/List", data=data)
         return [item["id"] for item in response.get("items", [])]
 
     def get_baremetal_instance(self, *, bmi_id: str) -> dict[str, Any]:
@@ -570,7 +669,7 @@ class GRPCClient:
     def delete_baremetal_instance_catalog_item(self, *, item_id: str, api: str = PUBLIC_API) -> None:
         self.call(service=f"{api}.BareMetalInstanceCatalogItems/Delete", data={"id": item_id})
 
-    # DiskImage operations (public API)
+    # DiskImage operations
 
     def create_disk_image(
         self,
@@ -580,6 +679,7 @@ class GRPCClient:
         source_type: str = "SOURCE_TYPE_REGISTRY",
         guest_os_family: str = "GUEST_OS_FAMILY_LINUX",
         name: str | None = None,
+        api: str = PUBLIC_API,
     ) -> str:
         spec: dict[str, Any] = {
             "source_type": source_type,
@@ -590,7 +690,7 @@ class GRPCClient:
         obj: dict[str, Any] = {"spec": spec}
         if name is not None:
             obj["metadata"] = {"name": name}
-        response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.DiskImages/Create", data={"object": obj})
+        response: dict[str, Any] = self.call(service=f"{api}.DiskImages/Create", data={"object": obj})
         return response["object"]["id"]
 
     def get_disk_image(self, *, disk_image_id: str) -> dict[str, Any]:
@@ -601,17 +701,19 @@ class GRPCClient:
         response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.DiskImages/List", data=data)
         return [item["id"] for item in response.get("items", [])]
 
-    def update_disk_image_lifecycle(self, *, disk_image_id: str, lifecycle: str) -> dict[str, Any]:
+    def update_disk_image_lifecycle(
+        self, *, disk_image_id: str, lifecycle: str, api: str = PUBLIC_API
+    ) -> dict[str, Any]:
         return self.call(
-            service=f"{PUBLIC_API}.DiskImages/Update",
+            service=f"{api}.DiskImages/Update",
             data={
                 "object": {"id": disk_image_id, "spec": {"lifecycle": lifecycle}},
                 "updateMask": {"paths": ["spec.lifecycle"]},
             },
         )
 
-    def delete_disk_image(self, *, disk_image_id: str) -> None:
-        self.call(service=f"{PUBLIC_API}.DiskImages/Delete", data={"id": disk_image_id})
+    def delete_disk_image(self, *, disk_image_id: str, api: str = PUBLIC_API) -> None:
+        self.call(service=f"{api}.DiskImages/Delete", data={"id": disk_image_id})
 
     # ComputeInstance creation with explicit DiskImage (public API)
 

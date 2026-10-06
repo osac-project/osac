@@ -50,8 +50,8 @@ spec:
             path: tls.key
       containers:
       - name: console-proxy
-        image: {{ .Values.images.service }}
-        imagePullPolicy: {{ .Values.images.pullPolicy }}
+        image: {{ .Values.images.service.repository }}:{{ .Values.images.service.tag }}
+        imagePullPolicy: {{ .Values.images.service.pullPolicy }}
         securityContext:
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true
@@ -81,6 +81,9 @@ spec:
         - --console-listener-tls-crt=/etc/fulfillment-console-proxy/tls/tls.crt
         - --console-listener-tls-key=/etc/fulfillment-console-proxy/tls/tls.key
         - --console-cors-allowed-origins=https://{{ include "fulfillment-api.hostname" . }}
+        {{- range .Values.httpCorsAllowedOrigins }}
+        - --console-cors-allowed-origins={{ . }}
+        {{- end }}
         - --metrics-listener-address=0.0.0.0:8002
         ports:
         - name: grpc

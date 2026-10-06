@@ -64,6 +64,27 @@
         # serving cert doesn't match the CA bundled in the admin kubeconfig.
         _remote_kubeconfig_insecure: true
 
+    - name: Use the ClusterOrder admin kubeconfig for storage class operations
+      ansible.builtin.set_fact:
+        _storage_target_kubeconfig: "{{ _remote_kubeconfig }}"
+        _storage_target_kubeconfig_insecure: true
+      when:
+        - osac_job_vars.resource.kind == 'ClusterOrder'
+        - _remote_kubeconfig is defined
+
+    - name: Get configured remote cluster kubeconfig for Tenant storage
+      ansible.builtin.include_role:
+        name: osac.service.common
+        tasks_from: get_remote_cluster_kubeconfig.yaml
+      when: osac_job_vars.resource.kind == 'Tenant'
+
+    - name: Set Tenant storage target kubeconfig when configured
+      ansible.builtin.set_fact:
+        _storage_target_kubeconfig: "{{ remote_cluster_kubeconfig }}"
+      when:
+        - osac_job_vars.resource.kind == 'Tenant'
+        - remote_cluster_kubeconfig is defined
+
     - name: Fail when guest-cluster teardown is requested without admin_kubeconfig
       ansible.builtin.fail:
         msg: >-
@@ -81,3 +102,5 @@
       vars:
         storage_provider_action: teardown_cluster_storage
         storage_provider_tiers: "{{ osac_job_vars.storage_tier_definitions }}"
+        storage_provider_target_kubeconfig: "{{ _storage_target_kubeconfig | default(omit) }}"
+        storage_provider_target_kubeconfig_insecure: "{{ _storage_target_kubeconfig_insecure | default(false) }}"

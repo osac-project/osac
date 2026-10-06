@@ -29,18 +29,18 @@ import (
 )
 
 var _ = Describe("Public volumes server", func() {
-	// stubResolver stamps a backend and protocol on created volumes so we can verify these
+	// stubResolver stamps a provider and protocol on created volumes so we can verify these
 	// internal fields are NOT exposed through the public API.
 	stubResolver := TierResolverFunc(func(_ context.Context, _ string) (*TierResolution, error) {
 		return &TierResolution{
-			Backend:  "internal-backend",
+			Provider: "internal-provider",
 			Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
 		}, nil
 	})
 
 	nfsResolver := TierResolverFunc(func(_ context.Context, _ string) (*TierResolution, error) {
 		return &TierResolution{
-			Backend:  "nfs-backend",
+			Provider: "nfs-provider",
 			Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS,
 		}, nil
 	})
@@ -155,6 +155,10 @@ var _ = Describe("Public volumes server", func() {
 			// Status state is visible; the private server stamped CREATING.
 			Expect(object.GetStatus().GetState()).
 				To(Equal(publicv1.VolumeState_VOLUME_STATE_CREATING))
+
+			// The internal routing fields (provider, protocol, hub, vendor_volume_id) are not part of
+			// the public Volume type at all, so they cannot leak. This is enforced at compile time by
+			// publicv1.VolumeStatus only exposing state and message.
 		})
 
 		It("Returns an error getting a volume that does not exist", func() {
@@ -191,8 +195,11 @@ var _ = Describe("Public volumes server", func() {
 		It("Rejects a CEL filter that references a private-only field", func() {
 			createVolumeViaPrivate("filter-private-vol")
 
+			// status.provider exists on the private Volume but not the public one; SetFilterDesc
+			// restricts the public filter surface to public fields, so this must be rejected rather
+			// than silently ignored (which would let callers probe hidden fields).
 			listRequest := &publicv1.VolumesListRequest{}
-			listRequest.SetFilter(`this.status.backend == "internal-backend"`)
+			listRequest.SetFilter(`this.status.provider == "internal-provider"`)
 			_, err := publicServer.List(ctx, listRequest)
 			Expect(err).To(HaveOccurred())
 		})

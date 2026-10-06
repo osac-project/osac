@@ -17,6 +17,7 @@ import { type NavLink, isNavSection, navRowsForRole } from './shellNav';
 const ShellNavItem = ({ item }: { item: NavLink }) => {
   const location = useLocation();
   const navigate = useNavigate();
+
   return (
     <NavItem
       itemId={item.id}
@@ -33,10 +34,13 @@ const ShellNavItem = ({ item }: { item: NavLink }) => {
 };
 
 export const ShellSidebar = () => {
-  const { role } = useSession();
+  const { role, enabledServices } = useSession();
   const { t } = useTranslation();
 
-  const navRows = React.useMemo(() => navRowsForRole(role, t), [role, t]);
+  const navRows = React.useMemo(
+    () => navRowsForRole(role, t, enabledServices),
+    [role, t, enabledServices],
+  );
 
   return (
     <PageSidebar>

@@ -141,7 +141,7 @@ jobs:
       if: steps.should-run.outputs.run
       uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
       with:
-        version: v3.22.0
+        version: v4.3.0
 
     - name: Lint chart
       if: steps.should-run.outputs.run
@@ -210,7 +210,7 @@ jobs:
       if: steps.should-run.outputs.run
       uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
       with:
-        version: v3.22.0
+        version: v4.3.0
 
     - name: Set up chart-testing
       if: steps.should-run.outputs.run

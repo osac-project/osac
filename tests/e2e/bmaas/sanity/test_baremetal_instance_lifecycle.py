@@ -149,6 +149,9 @@ def test_baremetal_instance_lifecycle(
         )
         instance: dict[str, Any] = jwt_grpc_tenant1.get_baremetal_instance(bmi_id=bmi_id)
         ready_condition: dict[str, Any] = _find_condition(instance, _READY)
+        assert ready_condition.get("status") == _CONDITION_STATUS_TRUE, (
+            f"READY condition should be True at the terminal stage, got {ready_condition.get('status')!r}"
+        )
         assert ready_condition.get("reason") == _READY_REASON, (
             f"READY condition reason {ready_condition.get('reason')!r}, expected {_READY_REASON!r}"
         )

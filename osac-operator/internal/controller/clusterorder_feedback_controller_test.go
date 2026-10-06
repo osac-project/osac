@@ -636,7 +636,7 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 			Expect(mockClient.lastUpdate.GetStatus().GetIngressEndpoint()).To(BeEmpty())
 		})
 
-		It("should translate WorkersFailed=True to WORKER_PROVISIONING_FAILED with count-only message", func() {
+		It("should include retry details when all failed workers have pending retries", func() {
 			co := &osacv1alpha1.ClusterOrder{}
 			Expect(k8sClient.Get(testCtx, typeNamespacedName, co)).To(Succeed())
 			co.Status.Phase = osacv1alpha1.ClusterOrderPhaseProgressing
@@ -662,7 +662,8 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 			cond := findProtoCondition(mockClient.lastUpdate, privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_WORKER_PROVISIONING_FAILED)
 			Expect(cond).NotTo(BeNil())
 			Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
-			Expect(cond.GetMessage()).To(ContainSubstring("2 of 5"))
+			Expect(cond.GetMessage()).To(Equal(
+				"2 of 5 worker nodes failed to provision; retry 1: attempt 2, next retry pending; retry 2: attempt 1, next retry pending"))
 			Expect(cond.GetMessage()).NotTo(ContainSubstring("bm-w-3"))
 			Expect(cond.GetMessage()).NotTo(ContainSubstring("bm-w-4"))
 			Expect(cond.GetMessage()).NotTo(ContainSubstring("AgentRegistrationTimeout"))

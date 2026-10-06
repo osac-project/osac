@@ -177,8 +177,14 @@ const (
 	// Currently there are no `reason` values defined.
 	ClusterConditionType_CLUSTER_CONDITION_TYPE_FAILED ClusterConditionType = 3
 	// Indicates that the cluster is degraded.
-	ClusterConditionType_CLUSTER_CONDITION_TYPE_DEGRADED                    ClusterConditionType = 4
-	ClusterConditionType_CLUSTER_CONDITION_TYPE_WORKER_PROVISIONING_FAILED  ClusterConditionType = 5
+	ClusterConditionType_CLUSTER_CONDITION_TYPE_DEGRADED ClusterConditionType = 4
+	// Indicates that provisioning of one or more worker nodes has failed. Automatic retries may still be in progress;
+	// this does not imply that the cluster as a whole is unusable. The message contains the number of failed workers
+	// and, when available, retry attempt counts and next retry times, without infrastructure identifiers or backend errors.
+	ClusterConditionType_CLUSTER_CONDITION_TYPE_WORKER_PROVISIONING_FAILED ClusterConditionType = 5
+	// Indicates that worker provisioning cannot proceed because an infrastructure prerequisite is not ready, such as
+	// the provisioning environment or the required RHCOS image. Cloud Infrastructure Admin intervention is required.
+	// The message provides a generic explanation without exposing infrastructure details.
 	ClusterConditionType_CLUSTER_CONDITION_TYPE_WORKER_PROVISIONING_BLOCKED ClusterConditionType = 6
 )
 

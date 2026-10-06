@@ -155,18 +155,22 @@ authorizes each call as the signed-in user through the public Fulfillment API.
 The earlier OSAC-4388 prototype launched Inspector with `NODE_EXTRA_CA_CERTS`
 pointing at the same public Kind `ca-bundle` ConfigMap used for Codex. Node
 does not use `curl --cacert` or `CODEX_CA_CERTIFICATE`. For this `PROFILE=dev`
-installation, use the variables and CA file from the Kind commands above.
-This creates only a temporary Inspector configuration containing the public
-client ID and MCP URL. A separate temporary storage directory prevents an
-earlier Inspector login from reusing cached OAuth discovery for a different
-Kind profile:
+installation, use the CA file extracted above. The commands set their own
+MCP URL and CA path so they also work in a new shell. They create only a
+temporary Inspector configuration containing the public client ID and MCP
+URL. A separate temporary storage directory prevents an earlier Inspector
+login from reusing cached OAuth discovery for a different Kind profile:
 
 ```bash
+export OSAC_MCP_URL='https://mcp.osac.localhost:8443'
+export CODEX_CA_CERTIFICATE="$HOME/.config/osac/ca-bundle.pem"
+openssl x509 -in "$CODEX_CA_CERTIFICATE" -noout -subject
 INSPECTOR_DIR="$(mktemp -d "${TMPDIR:-/tmp}/osac-mcp-inspector.XXXXXX")"
 mkdir -p "$INSPECTOR_DIR/storage"
 jq -n --arg url "$OSAC_MCP_URL" \
   '{mcpServers:{osac:{type:"http",url:$url,oauth:{clientId:"osac-mcp-client"}}}}' \
   > "$INSPECTOR_DIR/inspector-osac.config.json"
+jq -e '.mcpServers.osac.url != ""' "$INSPECTOR_DIR/inspector-osac.config.json"
 MCP_STORAGE_DIR="$INSPECTOR_DIR/storage" \
   NODE_EXTRA_CA_CERTS="$CODEX_CA_CERTIFICATE" \
   npx --yes @modelcontextprotocol/inspector@2.6.0 \
@@ -215,6 +219,10 @@ uses `keycloak.keycloak.svc.cluster.local` as shown above.
   the temporary `MCP_STORAGE_DIR` above for a fresh login, or choose **Clear
   OAuth state and disconnect** under **Server Settings → Authorization** for
   that server. Clearing the stored state requires a new login.
+- If Inspector reports `Failed to create transport: Invalid URL`, inspect
+  `.mcpServers.osac.url` in the temporary config. An empty value means
+  `OSAC_MCP_URL` was unset when `jq` created it; rerun the complete Inspector
+  block above.
 - An `Invalid parameter: redirect_uri` page means Keycloak rejected the
   callback Codex sent. The Kind development client already allows
   `http://localhost:8091/callback`; configure both `callback_url` and

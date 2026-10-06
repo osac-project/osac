@@ -242,17 +242,15 @@ const (
 	clusterOrderFailedEventAction       = "Failed"
 )
 
-var clusterOrderProvisioningEventReasons = map[string]struct{}{
-	v1alpha1.ReasonPreparingInfrastructure: {},
-	v1alpha1.ReasonControlPlaneStarting:    {},
-	v1alpha1.ReasonWorkersJoining:          {},
-	v1alpha1.ReasonStageUnknown:            {},
-	v1alpha1.ReasonStalled:                 {},
-}
-
-var clusterOrderWarningEventReasons = map[string]struct{}{
-	v1alpha1.ReasonStageUnknown: {},
-	v1alpha1.ReasonStalled:      {},
+// progressingReasonEvents are the Progressing reasons that warrant a Warning event in their
+// own right. Unlike the provisioning milestones they have no backing condition, so they are
+// detected by a change of reason on the persisted Progressing condition.
+var progressingReasonEvents = []struct {
+	reason         string
+	defaultMessage string
+}{
+	{v1alpha1.ReasonStalled, "ClusterOrder provisioning stalled"},
+	{v1alpha1.ReasonStageUnknown, stageUnknownMessage},
 }
 
 func (r *ClusterOrderReconciler) recordTransitionEventsForStatus(instance *v1alpha1.ClusterOrder,
@@ -269,16 +267,34 @@ func (r *ClusterOrderReconciler) recordTransitionEventsForStatus(instance *v1alp
 			clusterOrderCreatedEventAction, "ClusterOrder created")
 	}
 
-	if newProgressing != nil && (oldProgressing == nil || oldProgressing.Reason != newProgressing.Reason) {
-		if _, shouldRecord := clusterOrderProvisioningEventReasons[newProgressing.Reason]; shouldRecord {
-			eventType := corev1.EventTypeNormal
-			if _, shouldWarn := clusterOrderWarningEventReasons[newProgressing.Reason]; shouldWarn {
-				eventType = corev1.EventTypeWarning
-			}
-			r.Recorder.Eventf(instance, nil, eventType, newProgressing.Reason,
-				clusterOrderProvisioningEventAction, "ClusterOrder entered provisioning stage %s",
-				humanizeConditionName(newProgressing.Reason))
+	// Each provisioning stage condition emits exactly one event, on the status patch that
+	// first persists it as True. The persisted condition is the dedup key: a later reconcile
+	// that recomputes the same status produces no patch, so no transition and no event.
+	for _, stage := range provisioningStageConditions {
+		if apimeta.IsStatusConditionTrue(newStatus.Conditions, stage) &&
+			!apimeta.IsStatusConditionTrue(oldStatus.Conditions, stage) {
+			r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, stage,
+				clusterOrderProvisioningEventAction, "ClusterOrder reached %s",
+				humanizeConditionName(stage))
 		}
+	}
+
+	// Stalled and StageUnknown have no condition of their own -- each is surfaced only as the
+	// Progressing condition's reason -- so they are detected by reason change rather than by
+	// the stage diff above. The persisted reason is the dedup key, so re-entering the same
+	// reason without an intervening change produces no patch and no repeat event.
+	for _, reasonEvent := range progressingReasonEvents {
+		if newProgressing == nil || newProgressing.Reason != reasonEvent.reason ||
+			(oldProgressing != nil && oldProgressing.Reason == reasonEvent.reason) ||
+			isRecoveredStallTransition(oldProgressing, newProgressing) {
+			continue
+		}
+		message := newProgressing.Message
+		if message == "" {
+			message = reasonEvent.defaultMessage
+		}
+		r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, reasonEvent.reason,
+			clusterOrderProvisioningEventAction, "%s", message)
 	}
 
 	if oldStatus.Phase != v1alpha1.ClusterOrderPhaseFailed &&
@@ -313,6 +329,12 @@ func (r *ClusterOrderReconciler) recordTransitionEventsForStatus(instance *v1alp
 		r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, clusterOrderDeletingEventReason,
 			clusterOrderDeletingEventAction, "ClusterOrder entered deleting phase")
 	}
+}
+
+func isRecoveredStallTransition(oldProgressing, newProgressing *metav1.Condition) bool {
+	return oldProgressing != nil && newProgressing != nil &&
+		oldProgressing.Reason == v1alpha1.ReasonStageUnknown &&
+		newProgressing.Reason == v1alpha1.ReasonStalled
 }
 
 type statusTransition struct {
@@ -560,18 +582,20 @@ func (r *ClusterOrderReconciler) handleHostedCluster(ctx context.Context, instan
 	instance.SetClusterReferenceHostedClusterName(name)
 	instance.SetStatusCondition(v1alpha1.ConditionControlPlaneCreated, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
 
-	if instance.Status.Phase == v1alpha1.ClusterOrderPhaseProgressing {
-		subStage := deriveProvisioningSubStage(hc)
-		r.setProgressingStage(instance, subStage)
-	}
-
 	if hostedClusterControlPlaneIsAvailable(hc) {
 		log.Info("hosted control plane is available", "clusterorder", instance.GetName())
 		instance.SetStatusCondition(v1alpha1.ConditionControlPlaneAvailable, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
+	}
 
-		if hostedClusterIsReady(hc) {
-			log.Info("hosted cluster is ready", "clusterorder", instance.GetName())
-			instance.SetStatusCondition(v1alpha1.ConditionClusterAvailable, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
+	if instance.Status.Phase == v1alpha1.ClusterOrderPhaseProgressing {
+		// The milestone conditions above are sticky, so they keep describing the furthest
+		// point ever observed. The Progressing reason is deliberately not sticky: when the
+		// HostedCluster reports nothing we cannot claim any stage is in flight, so the
+		// reason reports StageUnknown until a signal comes back.
+		if hostedClusterSignalsAreUnavailable(hc) {
+			r.setProgressingStageUnknown(instance)
+		} else {
+			r.advanceProgressingStage(instance)
 		}
 	}
 
@@ -602,7 +626,50 @@ func (r *ClusterOrderReconciler) setProgressingStage(instance *v1alpha1.ClusterO
 func (r *ClusterOrderReconciler) initializeProgressingStage(instance *v1alpha1.ClusterOrder) {
 	progressing := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
 	if progressing == nil || progressing.Reason == "" || progressing.Reason == v1alpha1.ReasonProgressing {
-		r.setProgressingStage(instance, v1alpha1.ReasonPreparingInfrastructure)
+		r.setProgressingStage(instance, v1alpha1.ConditionAccepted)
+	}
+}
+
+// provisioningStageConditions are the ClusterOrder conditions that each mark a provisioning
+// milestone, in the order they are reached. They double as the provisioning event vocabulary:
+// reaching one emits a single event named after the condition.
+var provisioningStageConditions = []string{
+	v1alpha1.ConditionAccepted,
+	v1alpha1.ConditionControlPlaneCreated,
+	v1alpha1.ConditionControlPlaneAvailable,
+	v1alpha1.ConditionClusterAvailable,
+}
+
+// stageUnknownMessage explains why no provisioning stage can be named. It is the
+// Progressing condition message and the body of the StageUnknown event.
+const stageUnknownMessage = "Provisioning stage unknown: HostedCluster signals are unavailable"
+
+// hostedClusterSignalsAreUnavailable reports whether the HostedCluster carries no status
+// signal at all, which happens while the management cluster is unreachable or before
+// HyperShift has published any condition. An empty condition set is not evidence that
+// provisioning is at an early stage -- it is evidence that the stage cannot be read.
+func hostedClusterSignalsAreUnavailable(hc *hypershiftv1beta1.HostedCluster) bool {
+	return len(hc.Status.Conditions) == 0
+}
+
+// setProgressingStageUnknown overrides the current stage reason while the provider signals
+// are unreadable. It overrides rather than preserves the prior stage so an observability
+// outage is never reported as continued progress; recovery happens on the next reconcile
+// that sees signals, when advanceProgressingStage restores the furthest milestone.
+func (r *ClusterOrderReconciler) setProgressingStageUnknown(instance *v1alpha1.ClusterOrder) {
+	instance.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionTrue,
+		stageUnknownMessage, v1alpha1.ReasonStageUnknown)
+}
+
+func (r *ClusterOrderReconciler) advanceProgressingStage(instance *v1alpha1.ClusterOrder) {
+	furthest := ""
+	for _, cond := range provisioningStageConditions {
+		if apimeta.IsStatusConditionTrue(instance.Status.Conditions, cond) {
+			furthest = cond
+		}
+	}
+	if furthest != "" {
+		r.setProgressingStage(instance, furthest)
 	}
 }
 
@@ -658,16 +725,24 @@ func (r *ClusterOrderReconciler) provisioningStageTiming(instance *v1alpha1.Clus
 		thresholds.WorkersJoining = defaultWorkersJoiningStallThreshold
 	}
 
+	// A stage names the milestone reached; the condition below names the milestone the
+	// clock starts from. They are usually the same, but not always -- see the shared
+	// case for the workers-joining window.
 	conditionType := ""
 	threshold := time.Duration(0)
 	switch stage {
-	case v1alpha1.ReasonPreparingInfrastructure:
+	case v1alpha1.ConditionAccepted:
 		conditionType = v1alpha1.ConditionAccepted
 		threshold = thresholds.PreparingInfrastructure
-	case v1alpha1.ReasonControlPlaneStarting:
+	case v1alpha1.ConditionControlPlaneCreated:
 		conditionType = v1alpha1.ConditionControlPlaneCreated
 		threshold = thresholds.ControlPlaneStarting
-	case v1alpha1.ReasonWorkersJoining:
+	case v1alpha1.ConditionControlPlaneAvailable, v1alpha1.ConditionClusterAvailable:
+		// Both stages cover the same in-flight work: workers joining. That work starts
+		// when the API server becomes reachable (ControlPlaneAvailable), so the clock is
+		// anchored there for both. ClusterAvailable is the control plane's own version
+		// rollout completing -- a milestone on a parallel axis that restarts nothing, so
+		// it must not restart the budget either.
 		conditionType = v1alpha1.ConditionControlPlaneAvailable
 		threshold = thresholds.workersJoiningThreshold(instance.Spec.NodeRequests)
 	default:
@@ -739,6 +814,14 @@ func (r *ClusterOrderReconciler) handleNodePool(ctx context.Context, instance *v
 	resourceClass, ok := nodePoolResourceClass(nodePool)
 	if !ok {
 		log.Info("node pool has no resource class label, will ignore it", "node_pool", nodePool.Name)
+		return nil
+	}
+
+	// HyperShift creates the NodePool before it reports any replicas. Do not
+	// publish that transient zero into status: the CRD requires
+	// status.nodeRequests[].numberOfNodes to be at least one, and an invalid
+	// status update would prevent the ClusterOrder from progressing.
+	if nodePool.Status.Replicas < 1 {
 		return nil
 	}
 
@@ -885,27 +968,13 @@ func finalizeReadyIfProvisioned(log logr.Logger, instance *v1alpha1.ClusterOrder
 		return false
 	}
 
+	// ClusterAvailable is the full-cluster milestone. Do not derive it from
+	// HostedCluster control-plane/version conditions alone because workers may
+	// still be joining at that point.
+	instance.SetStatusCondition(v1alpha1.ConditionClusterAvailable, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
 	instance.Status.Phase = v1alpha1.ClusterOrderPhaseReady
 	instance.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionFalse, "", v1alpha1.ReasonAsExpected)
 	return true
-}
-
-// deriveProvisioningSubStage returns a live sub-stage reason reflecting the current HC condition
-// snapshot. It is intentionally non-monotonic: if conditions transiently disappear the reason can
-// regress (e.g. WorkersJoining back to StageUnknown). The coarse stage conditions
-// (ControlPlaneCreated, ControlPlaneAvailable) remain sticky-True and provide monotonic progress.
-func deriveProvisioningSubStage(hc *hypershiftv1beta1.HostedCluster) string {
-	if len(hc.Status.Conditions) == 0 {
-		return v1alpha1.ReasonStageUnknown
-	}
-	if !apimeta.IsStatusConditionTrue(hc.Status.Conditions, string(hypershiftv1beta1.InfrastructureReady)) {
-		return v1alpha1.ReasonPreparingInfrastructure
-	}
-	if apimeta.IsStatusConditionTrue(hc.Status.Conditions, string(hypershiftv1beta1.KubeAPIServerAvailable)) &&
-		apimeta.IsStatusConditionTrue(hc.Status.Conditions, string(hypershiftv1beta1.HostedClusterAvailable)) {
-		return v1alpha1.ReasonWorkersJoining
-	}
-	return v1alpha1.ReasonControlPlaneStarting
 }
 
 func (r *ClusterOrderReconciler) findHostedCluster(ctx context.Context, instance *v1alpha1.ClusterOrder, nsName string) (*hypershiftv1beta1.HostedCluster, error) {

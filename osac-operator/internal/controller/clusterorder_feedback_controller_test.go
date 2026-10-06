@@ -732,7 +732,7 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 			setCRCondition(osacv1alpha1.ConditionAccepted, metav1.ConditionTrue,
 				osacv1alpha1.ReasonInitialized, "order accepted")
 			setCRCondition(osacv1alpha1.ConditionProgressing, metav1.ConditionTrue,
-				osacv1alpha1.ReasonPreparingInfrastructure, "Preparing Infrastructure")
+				osacv1alpha1.ConditionAccepted, "Accepted")
 
 			reconcileOnce()
 			Expect(mockClient.updateCalled).To(BeTrue())
@@ -740,8 +740,8 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 			progressing := findRemoteCondition(privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_PROGRESSING)
 			Expect(progressing).NotTo(BeNil())
 			Expect(progressing.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
-			Expect(progressing.GetReason()).To(Equal(osacv1alpha1.ReasonPreparingInfrastructure))
-			Expect(progressing.GetMessage()).To(Equal("Preparing Infrastructure"))
+			Expect(progressing.GetReason()).To(Equal(osacv1alpha1.ConditionAccepted))
+			Expect(progressing.GetMessage()).To(Equal("Accepted"))
 			// Only PROGRESSING is produced; Accepted does not become its own condition.
 			Expect(mockClient.lastUpdate.GetStatus().GetConditions()).To(HaveLen(1))
 		})
@@ -766,7 +766,7 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 			// feedback controller forwards the Progressing condition's sub-stage reason to
 			// the proto. The stage conditions must not become their own fulfillment conditions.
 			setCRCondition(osacv1alpha1.ConditionProgressing, metav1.ConditionTrue,
-				osacv1alpha1.ReasonWorkersJoining, "Workers Joining")
+				osacv1alpha1.ConditionControlPlaneAvailable, "Control Plane Available")
 			setCRCondition(osacv1alpha1.ConditionControlPlaneCreated, metav1.ConditionTrue,
 				osacv1alpha1.ReasonAsExpected, "control plane created")
 			setCRCondition(string(osacv1alpha1.ClusterOrderConditionClusterStorageReady), metav1.ConditionTrue,
@@ -778,8 +778,8 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 			progressing := findRemoteCondition(privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_PROGRESSING)
 			Expect(progressing).NotTo(BeNil())
 			Expect(progressing.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
-			Expect(progressing.GetReason()).To(Equal(osacv1alpha1.ReasonWorkersJoining))
-			Expect(progressing.GetMessage()).To(Equal("Workers Joining"))
+			Expect(progressing.GetReason()).To(Equal(osacv1alpha1.ConditionControlPlaneAvailable))
+			Expect(progressing.GetMessage()).To(Equal("Control Plane Available"))
 			// Only PROGRESSING is produced; the installation steps do not add their own conditions.
 			Expect(mockClient.lastUpdate.GetStatus().GetConditions()).To(HaveLen(1))
 		})
@@ -789,7 +789,7 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 			// reason on the Progressing condition (set by the resource controller) is what
 			// drives the proto reason, not the stage condition ordering.
 			setCRCondition(osacv1alpha1.ConditionProgressing, metav1.ConditionTrue,
-				osacv1alpha1.ReasonControlPlaneStarting, "Control Plane Starting")
+				osacv1alpha1.ConditionControlPlaneCreated, "Control Plane Created")
 			setCRCondition(osacv1alpha1.ConditionControlPlaneCreated, metav1.ConditionTrue,
 				osacv1alpha1.ReasonAsExpected, "control plane created")
 			setCRCondition(osacv1alpha1.ConditionAccepted, metav1.ConditionTrue,
@@ -799,15 +799,36 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 
 			progressing := findRemoteCondition(privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_PROGRESSING)
 			Expect(progressing).NotTo(BeNil())
-			Expect(progressing.GetReason()).To(Equal(osacv1alpha1.ReasonControlPlaneStarting))
-			Expect(progressing.GetMessage()).To(Equal("Control Plane Starting"))
+			Expect(progressing.GetReason()).To(Equal(osacv1alpha1.ConditionControlPlaneCreated))
+			Expect(progressing.GetMessage()).To(Equal("Control Plane Created"))
 		})
 
-		It("should forward StageUnknown reason from Progressing CR condition to proto", func() {
+		It("should forward Stalled reason from Progressing CR condition to proto", func() {
 			setCRCondition(osacv1alpha1.ConditionAccepted, metav1.ConditionTrue,
 				osacv1alpha1.ReasonInitialized, "order accepted")
 			setCRCondition(osacv1alpha1.ConditionProgressing, metav1.ConditionTrue,
-				osacv1alpha1.ReasonStageUnknown, "Stage Unknown")
+				osacv1alpha1.ReasonStalled, "Stalled at Accepted")
+
+			reconcileOnce()
+			Expect(mockClient.updateCalled).To(BeTrue())
+
+			progressing := findRemoteCondition(privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_PROGRESSING)
+			Expect(progressing).NotTo(BeNil())
+			Expect(progressing.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+			Expect(progressing.GetReason()).To(Equal(osacv1alpha1.ReasonStalled))
+			Expect(progressing.GetMessage()).To(Equal("Stalled at Accepted"))
+		})
+
+		It("should forward StageUnknown reason from Progressing CR condition to proto", func() {
+			// A tenant must be able to tell "we cannot read the stage" apart from a healthy
+			// in-flight stage, so StageUnknown has to survive the overlay rather than be
+			// replaced by the furthest sticky milestone.
+			setCRCondition(osacv1alpha1.ConditionAccepted, metav1.ConditionTrue,
+				osacv1alpha1.ReasonInitialized, "order accepted")
+			setCRCondition(osacv1alpha1.ConditionControlPlaneCreated, metav1.ConditionTrue,
+				osacv1alpha1.ReasonAsExpected, "")
+			setCRCondition(osacv1alpha1.ConditionProgressing, metav1.ConditionTrue,
+				osacv1alpha1.ReasonStageUnknown, "Provisioning stage unknown: HostedCluster signals are unavailable")
 
 			reconcileOnce()
 			Expect(mockClient.updateCalled).To(BeTrue())
@@ -816,7 +837,7 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 			Expect(progressing).NotTo(BeNil())
 			Expect(progressing.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
 			Expect(progressing.GetReason()).To(Equal(osacv1alpha1.ReasonStageUnknown))
-			Expect(progressing.GetMessage()).To(Equal("Stage Unknown"))
+			Expect(progressing.GetMessage()).To(ContainSubstring("signals are unavailable"))
 		})
 
 		It("should keep PROGRESSING's own reason/message when it is True but no installation stage is reached yet", func() {

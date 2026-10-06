@@ -24,6 +24,7 @@ import (
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 	corev1 "k8s.io/api/core/v1"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/events"
@@ -53,27 +54,167 @@ var _ = Describe("ClusterOrder transition events", func() {
 		}
 	}
 
-	It("records a Normal event when the provisioning sub-stage changes", func() {
+	withStages := func(status v1alpha1.ClusterOrderStatus, stages ...string) v1alpha1.ClusterOrderStatus {
+		out := *status.DeepCopy()
+		for _, stage := range stages {
+			apimeta.SetStatusCondition(&out.Conditions, metav1.Condition{
+				Type: stage, Status: metav1.ConditionTrue, Reason: v1alpha1.ReasonAsExpected,
+			})
+		}
+		return out
+	}
+
+	drain := func(recorder *events.FakeRecorder) []string {
+		var got []string
+		for {
+			select {
+			case e := <-recorder.Events:
+				got = append(got, e)
+			default:
+				return got
+			}
+		}
+	}
+
+	It("records a Normal event when a provisioning stage condition first becomes True", func() {
 		recorder := newRecorder()
 		reconciler := &ClusterOrderReconciler{Recorder: recorder}
 		instance := &v1alpha1.ClusterOrder{}
-		oldStatus := statusWithProgressingReason(v1alpha1.ReasonPreparingInfrastructure)
-		instance.Status = statusWithProgressingReason(v1alpha1.ReasonControlPlaneStarting)
+		oldStatus := withStages(statusWithProgressingReason(v1alpha1.ConditionAccepted),
+			v1alpha1.ConditionAccepted)
+		instance.Status = withStages(statusWithProgressingReason(v1alpha1.ConditionControlPlaneCreated),
+			v1alpha1.ConditionAccepted, v1alpha1.ConditionControlPlaneCreated)
 
 		reconciler.recordTransitionEventsForStatus(instance, &oldStatus, &instance.Status)
 
 		Eventually(recorder.Events).Should(Receive(And(
 			ContainSubstring(corev1.EventTypeNormal),
-			ContainSubstring(v1alpha1.ReasonControlPlaneStarting),
-			ContainSubstring("entered provisioning stage"),
+			ContainSubstring(v1alpha1.ConditionControlPlaneCreated),
+			ContainSubstring("ClusterOrder reached Control Plane Created"),
 		)))
+	})
+
+	It("records exactly one event per provisioning milestone", func() {
+		recorder := newRecorder()
+		scheme := runtime.NewScheme()
+		Expect(v1alpha1.AddToScheme(scheme)).To(Succeed())
+		instance := &v1alpha1.ClusterOrder{
+			ObjectMeta: metav1.ObjectMeta{Name: "order", Namespace: "default"},
+			Status: withStages(statusWithProgressingReason(v1alpha1.ConditionAccepted),
+				v1alpha1.ConditionAccepted),
+		}
+		reader := fake.NewClientBuilder().WithScheme(scheme).
+			WithStatusSubresource(&v1alpha1.ClusterOrder{}).
+			WithObjects(instance.DeepCopy()).Build()
+		reconciler := &ClusterOrderReconciler{Client: reader, apiReader: reader, Recorder: recorder}
+
+		oldStatus := *instance.Status.DeepCopy()
+		// Mirror the handleHostedCluster milestone path: set the condition, then let the
+		// Progressing reason follow the furthest condition reached.
+		instance.SetStatusCondition(v1alpha1.ConditionControlPlaneCreated, metav1.ConditionTrue,
+			"", v1alpha1.ReasonAsExpected)
+		reconciler.advanceProgressingStage(instance)
+
+		Expect(reconciler.persistStatusAndRecordTransitionEvents(
+			context.Background(), client.ObjectKeyFromObject(instance), instance, &oldStatus,
+		)).To(Succeed())
+
+		Expect(drain(recorder)).To(ConsistOf(
+			ContainSubstring("ClusterOrder reached Control Plane Created"),
+		))
+	})
+
+	It("does not re-emit a milestone event once the condition is persisted", func() {
+		recorder := newRecorder()
+		scheme := runtime.NewScheme()
+		Expect(v1alpha1.AddToScheme(scheme)).To(Succeed())
+		instance := &v1alpha1.ClusterOrder{
+			ObjectMeta: metav1.ObjectMeta{Name: "order", Namespace: "default"},
+			Status: withStages(statusWithProgressingReason(v1alpha1.ConditionAccepted),
+				v1alpha1.ConditionAccepted),
+		}
+		reader := fake.NewClientBuilder().WithScheme(scheme).
+			WithStatusSubresource(&v1alpha1.ClusterOrder{}).
+			WithObjects(instance.DeepCopy()).Build()
+		reconciler := &ClusterOrderReconciler{Client: reader, apiReader: reader, Recorder: recorder}
+
+		oldStatus := *instance.Status.DeepCopy()
+		instance.SetStatusCondition(v1alpha1.ConditionControlPlaneCreated, metav1.ConditionTrue,
+			"", v1alpha1.ReasonAsExpected)
+		reconciler.advanceProgressingStage(instance)
+
+		Expect(reconciler.persistStatusAndRecordTransitionEvents(
+			context.Background(), client.ObjectKeyFromObject(instance), instance, &oldStatus,
+		)).To(Succeed())
+		Expect(recorder.Events).To(Receive(ContainSubstring("ClusterOrder reached Control Plane Created")))
+
+		// A second reconcile recomputes the same milestone from a stale local copy of the
+		// pre-milestone status. The persisted condition must suppress the duplicate.
+		Expect(reconciler.persistStatusAndRecordTransitionEvents(
+			context.Background(), client.ObjectKeyFromObject(instance), instance, &oldStatus,
+		)).To(Succeed())
+		Consistently(recorder.Events, 200*time.Millisecond).ShouldNot(Receive())
+	})
+
+	It("does not emit a milestone event when the status patch fails", func() {
+		recorder := newRecorder()
+		scheme := runtime.NewScheme()
+		Expect(v1alpha1.AddToScheme(scheme)).To(Succeed())
+		instance := &v1alpha1.ClusterOrder{
+			ObjectMeta: metav1.ObjectMeta{Name: "order", Namespace: "default"},
+			Status: withStages(statusWithProgressingReason(v1alpha1.ConditionAccepted),
+				v1alpha1.ConditionAccepted),
+		}
+		reader := fake.NewClientBuilder().WithScheme(scheme).
+			WithStatusSubresource(&v1alpha1.ClusterOrder{}).
+			WithObjects(instance.DeepCopy()).Build()
+		patchErr := errors.New("status patch failed")
+		reconciler := &ClusterOrderReconciler{
+			Client: interceptor.NewClient(reader, interceptor.Funcs{
+				SubResourcePatch: func(_ context.Context, _ client.Client, _ string,
+					_ client.Object, _ client.Patch, _ ...client.SubResourcePatchOption) error {
+					return patchErr
+				},
+			}),
+			apiReader: reader,
+			Recorder:  recorder,
+		}
+
+		oldStatus := *instance.Status.DeepCopy()
+		instance.SetStatusCondition(v1alpha1.ConditionControlPlaneCreated, metav1.ConditionTrue,
+			"", v1alpha1.ReasonAsExpected)
+		reconciler.advanceProgressingStage(instance)
+
+		Expect(reconciler.persistStatusAndRecordTransitionEvents(
+			context.Background(), client.ObjectKeyFromObject(instance), instance, &oldStatus,
+		)).To(MatchError(patchErr))
+		Consistently(recorder.Events, 200*time.Millisecond).ShouldNot(Receive())
+	})
+
+	It("records a milestone event for each stage reached in a single patch", func() {
+		recorder := newRecorder()
+		reconciler := &ClusterOrderReconciler{Recorder: recorder}
+		instance := &v1alpha1.ClusterOrder{}
+		oldStatus := withStages(statusWithProgressingReason(v1alpha1.ConditionAccepted),
+			v1alpha1.ConditionAccepted)
+		instance.Status = withStages(statusWithProgressingReason(v1alpha1.ConditionClusterAvailable),
+			v1alpha1.ConditionAccepted, v1alpha1.ConditionControlPlaneCreated,
+			v1alpha1.ConditionControlPlaneAvailable, v1alpha1.ConditionClusterAvailable)
+
+		reconciler.recordTransitionEventsForStatus(instance, &oldStatus, &instance.Status)
+
+		Expect(drain(recorder)).To(ConsistOf(
+			ContainSubstring("ClusterOrder reached Control Plane Created"),
+			ContainSubstring("ClusterOrder reached Control Plane Available"),
+			ContainSubstring("ClusterOrder reached Cluster Available"),
+		))
 	})
 
 	It("records a Normal event when a ClusterOrder is first created", func() {
 		recorder := newRecorder()
 		reconciler := &ClusterOrderReconciler{Recorder: recorder}
 		instance := &v1alpha1.ClusterOrder{}
-		instance.Status = statusWithProgressingReason(v1alpha1.ReasonPreparingInfrastructure)
+		instance.Status = statusWithProgressingReason(v1alpha1.ConditionAccepted)
 
 		reconciler.recordTransitionEventsForStatus(instance, &v1alpha1.ClusterOrderStatus{}, &instance.Status)
 
@@ -84,12 +225,14 @@ var _ = Describe("ClusterOrder transition events", func() {
 		)))
 	})
 
-	It("does not record an event when the provisioning sub-stage is unchanged", func() {
+	It("does not record an event when no provisioning stage condition changed", func() {
 		recorder := newRecorder()
 		reconciler := &ClusterOrderReconciler{Recorder: recorder}
 		instance := &v1alpha1.ClusterOrder{}
-		oldStatus := statusWithProgressingReason(v1alpha1.ReasonWorkersJoining)
-		instance.Status = statusWithProgressingReason(v1alpha1.ReasonWorkersJoining)
+		stages := []string{v1alpha1.ConditionAccepted, v1alpha1.ConditionControlPlaneCreated,
+			v1alpha1.ConditionControlPlaneAvailable}
+		oldStatus := withStages(statusWithProgressingReason(v1alpha1.ConditionControlPlaneAvailable), stages...)
+		instance.Status = withStages(statusWithProgressingReason(v1alpha1.ConditionControlPlaneAvailable), stages...)
 
 		reconciler.recordTransitionEventsForStatus(instance, &oldStatus, &instance.Status)
 
@@ -100,7 +243,7 @@ var _ = Describe("ClusterOrder transition events", func() {
 		recorder := newRecorder()
 		reconciler := &ClusterOrderReconciler{Recorder: recorder}
 		instance := &v1alpha1.ClusterOrder{}
-		oldStatus := statusWithProgressingReason(v1alpha1.ReasonWorkersJoining)
+		oldStatus := statusWithProgressingReason(v1alpha1.ConditionControlPlaneAvailable)
 		instance.Status = statusWithProgressingReason(v1alpha1.ReasonStalled)
 
 		reconciler.recordTransitionEventsForStatus(instance, &oldStatus, &instance.Status)
@@ -111,27 +254,70 @@ var _ = Describe("ClusterOrder transition events", func() {
 		)))
 	})
 
+	It("does not re-emit a stalled warning when signals recover after an outage", func() {
+		recorder := newRecorder()
+		reconciler := &ClusterOrderReconciler{Recorder: recorder}
+		instance := &v1alpha1.ClusterOrder{}
+		oldStatus := statusWithProgressingReason(v1alpha1.ReasonStageUnknown)
+		instance.Status = statusWithProgressingReason(v1alpha1.ReasonStalled)
+
+		reconciler.recordTransitionEventsForStatus(instance, &oldStatus, &instance.Status)
+
+		Consistently(recorder.Events, 200*time.Millisecond).ShouldNot(Receive())
+	})
+
 	It("records a Warning event when the provisioning stage becomes unknown", func() {
 		recorder := newRecorder()
 		reconciler := &ClusterOrderReconciler{Recorder: recorder}
 		instance := &v1alpha1.ClusterOrder{}
-		oldStatus := statusWithProgressingReason(v1alpha1.ReasonWorkersJoining)
+		oldStatus := statusWithProgressingReason(v1alpha1.ConditionControlPlaneAvailable)
 		instance.Status = statusWithProgressingReason(v1alpha1.ReasonStageUnknown)
+		instance.Status.Conditions[0].Message = stageUnknownMessage
 
 		reconciler.recordTransitionEventsForStatus(instance, &oldStatus, &instance.Status)
 
 		Eventually(recorder.Events).Should(Receive(And(
 			ContainSubstring(corev1.EventTypeWarning),
 			ContainSubstring(v1alpha1.ReasonStageUnknown),
-			ContainSubstring("entered provisioning stage"),
+			ContainSubstring("signals are unavailable"),
 		)))
+	})
+
+	It("emits StageUnknown only for the status patch that persists it", func() {
+		recorder := newRecorder()
+		scheme := runtime.NewScheme()
+		Expect(v1alpha1.AddToScheme(scheme)).To(Succeed())
+		instance := &v1alpha1.ClusterOrder{
+			ObjectMeta: metav1.ObjectMeta{Name: "order", Namespace: "default"},
+			Status: withStages(statusWithProgressingReason(v1alpha1.ConditionControlPlaneCreated),
+				v1alpha1.ConditionAccepted, v1alpha1.ConditionControlPlaneCreated),
+		}
+		reader := fake.NewClientBuilder().WithScheme(scheme).
+			WithStatusSubresource(&v1alpha1.ClusterOrder{}).
+			WithObjects(instance.DeepCopy()).Build()
+		reconciler := &ClusterOrderReconciler{Client: reader, apiReader: reader, Recorder: recorder}
+
+		oldStatus := *instance.Status.DeepCopy()
+		reconciler.setProgressingStageUnknown(instance)
+
+		Expect(reconciler.persistStatusAndRecordTransitionEvents(
+			context.Background(), client.ObjectKeyFromObject(instance), instance, &oldStatus,
+		)).To(Succeed())
+		Expect(drain(recorder)).To(ConsistOf(ContainSubstring(v1alpha1.ReasonStageUnknown)))
+
+		// A second reconcile with signals still missing recomputes the same reason. The
+		// persisted reason suppresses the duplicate.
+		Expect(reconciler.persistStatusAndRecordTransitionEvents(
+			context.Background(), client.ObjectKeyFromObject(instance), instance, &oldStatus,
+		)).To(Succeed())
+		Consistently(recorder.Events, 200*time.Millisecond).ShouldNot(Receive())
 	})
 
 	It("records a Normal event when the ClusterOrder enters Deleting", func() {
 		recorder := newRecorder()
 		reconciler := &ClusterOrderReconciler{Recorder: recorder}
 		instance := &v1alpha1.ClusterOrder{}
-		oldStatus := statusWithProgressingReason(v1alpha1.ReasonWorkersJoining)
+		oldStatus := statusWithProgressingReason(v1alpha1.ConditionControlPlaneAvailable)
 		instance.Status = oldStatus
 		instance.Status.Phase = v1alpha1.ClusterOrderPhaseDeleting
 		instance.SetStatusCondition(v1alpha1.ConditionDeleting, metav1.ConditionTrue,
@@ -149,7 +335,7 @@ var _ = Describe("ClusterOrder transition events", func() {
 	It("does not duplicate the Deleting event on repeated reconciliation", func() {
 		recorder := newRecorder()
 		reconciler := &ClusterOrderReconciler{Recorder: recorder}
-		oldStatus := statusWithProgressingReason(v1alpha1.ReasonWorkersJoining)
+		oldStatus := statusWithProgressingReason(v1alpha1.ConditionControlPlaneAvailable)
 		instance := &v1alpha1.ClusterOrder{Status: oldStatus}
 		instance.Status.Phase = v1alpha1.ClusterOrderPhaseDeleting
 		instance.SetStatusCondition(v1alpha1.ConditionDeleting, metav1.ConditionTrue,
@@ -169,7 +355,7 @@ var _ = Describe("ClusterOrder transition events", func() {
 		Expect(v1alpha1.AddToScheme(scheme)).To(Succeed())
 		instance := &v1alpha1.ClusterOrder{
 			ObjectMeta: metav1.ObjectMeta{Name: "order", Namespace: "default"},
-			Status:     statusWithProgressingReason(v1alpha1.ReasonWorkersJoining),
+			Status:     statusWithProgressingReason(v1alpha1.ConditionControlPlaneAvailable),
 		}
 		reader := fake.NewClientBuilder().WithScheme(scheme).
 			WithStatusSubresource(&v1alpha1.ClusterOrder{}).
@@ -178,7 +364,7 @@ var _ = Describe("ClusterOrder transition events", func() {
 		instance.Status.Phase = v1alpha1.ClusterOrderPhaseDeleting
 		instance.SetStatusCondition(v1alpha1.ConditionDeleting, metav1.ConditionTrue,
 			"ClusterOrder is being deleted", v1alpha1.ReasonDeleting)
-		oldStatus := statusWithProgressingReason(v1alpha1.ReasonWorkersJoining)
+		oldStatus := statusWithProgressingReason(v1alpha1.ConditionControlPlaneAvailable)
 
 		Expect(reconciler.persistStatusAndRecordTransitionEvents(
 			context.Background(), client.ObjectKeyFromObject(instance), instance, &oldStatus,
@@ -197,7 +383,7 @@ var _ = Describe("ClusterOrder transition events", func() {
 		recorder := newRecorder()
 		reconciler := &ClusterOrderReconciler{Recorder: recorder}
 		instance := &v1alpha1.ClusterOrder{}
-		oldStatus := statusWithProgressingReason(v1alpha1.ReasonWorkersJoining)
+		oldStatus := statusWithProgressingReason(v1alpha1.ConditionControlPlaneAvailable)
 		instance.Status = statusWithProgressingReason(v1alpha1.ReasonProvisioningFailed)
 		instance.Status.Phase = v1alpha1.ClusterOrderPhaseFailed
 		instance.Status.Conditions[0].Message = "No agents available"
@@ -217,7 +403,7 @@ var _ = Describe("ClusterOrder transition events", func() {
 		instance := &v1alpha1.ClusterOrder{Status: v1alpha1.ClusterOrderStatus{
 			Phase: v1alpha1.ClusterOrderPhaseFailed,
 		}}
-		oldStatus := statusWithProgressingReason(v1alpha1.ReasonWorkersJoining)
+		oldStatus := statusWithProgressingReason(v1alpha1.ConditionControlPlaneAvailable)
 
 		reconciler.recordTransitionEventsForStatus(instance, &oldStatus, &instance.Status)
 
@@ -232,7 +418,7 @@ var _ = Describe("ClusterOrder transition events", func() {
 		recorder := newRecorder()
 		reconciler := &ClusterOrderReconciler{Recorder: recorder}
 		instance := &v1alpha1.ClusterOrder{}
-		oldStatus := statusWithProgressingReason(v1alpha1.ReasonWorkersJoining)
+		oldStatus := statusWithProgressingReason(v1alpha1.ConditionControlPlaneAvailable)
 		instance.Status = v1alpha1.ClusterOrderStatus{
 			Phase: v1alpha1.ClusterOrderPhaseReady,
 			Conditions: []metav1.Condition{{
@@ -263,7 +449,7 @@ var _ = Describe("ClusterOrder transition events", func() {
 			}},
 		}}
 
-		oldStatus := statusWithProgressingReason(v1alpha1.ReasonWorkersJoining)
+		oldStatus := statusWithProgressingReason(v1alpha1.ConditionControlPlaneAvailable)
 		reconciler.recordTransitionEventsForStatus(instance, &oldStatus, &instance.Status)
 
 		Consistently(recorder.Events, 200*time.Millisecond).ShouldNot(Receive())
@@ -276,7 +462,7 @@ var _ = Describe("ClusterOrder transition events", func() {
 			Phase: v1alpha1.ClusterOrderPhaseReady,
 		}}
 
-		oldStatus := statusWithProgressingReason(v1alpha1.ReasonWorkersJoining)
+		oldStatus := statusWithProgressingReason(v1alpha1.ConditionControlPlaneAvailable)
 		reconciler.recordTransitionEventsForStatus(instance, &oldStatus, &instance.Status)
 
 		Consistently(recorder.Events, 200*time.Millisecond).ShouldNot(Receive())
@@ -319,7 +505,7 @@ var _ = Describe("ClusterOrder transition events", func() {
 			apiReader: reader,
 			Recorder:  recorder,
 		}
-		instance.Status = statusWithProgressingReason(v1alpha1.ReasonControlPlaneStarting)
+		instance.Status = statusWithProgressingReason(v1alpha1.ConditionControlPlaneCreated)
 
 		err := reconciler.persistStatusAndRecordTransitionEvents(
 			context.Background(), client.ObjectKeyFromObject(instance), instance,
@@ -333,7 +519,7 @@ var _ = Describe("ClusterOrder transition events", func() {
 	It("does not panic when no event recorder is configured", func() {
 		reconciler := &ClusterOrderReconciler{}
 		instance := &v1alpha1.ClusterOrder{}
-		instance.Status = statusWithProgressingReason(v1alpha1.ReasonControlPlaneStarting)
+		instance.Status = statusWithProgressingReason(v1alpha1.ConditionControlPlaneCreated)
 
 		Expect(func() {
 			reconciler.recordTransitionEventsForStatus(instance, &v1alpha1.ClusterOrderStatus{}, &instance.Status)

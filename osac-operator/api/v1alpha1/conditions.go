@@ -91,16 +91,12 @@ const (
 	ReasonProvisioningFailed = "ProvisioningFailed"
 	// ReasonNoManagerConfigured indicates no network manager is configured.
 	ReasonNoManagerConfigured = "NoManagerConfigured"
-	// ReasonPreparingInfrastructure indicates infrastructure preparation is in progress.
-	ReasonPreparingInfrastructure = "PreparingInfrastructure"
-	// ReasonControlPlaneStarting indicates the hosted control plane is starting up.
-	ReasonControlPlaneStarting = "ControlPlaneStarting"
-	// ReasonWorkersJoining indicates worker nodes are joining the cluster.
-	ReasonWorkersJoining = "WorkersJoining"
-	// ReasonStageUnknown indicates the provisioning stage could not be determined.
-	ReasonStageUnknown = "StageUnknown"
 	// ReasonStalled indicates the resource has not progressed within the expected threshold.
 	ReasonStalled = "Stalled"
+	// ReasonStageUnknown indicates the provisioning stage could not be determined because the
+	// underlying provider signals are unavailable. It is distinct from ReasonStalled, which
+	// means a known stage is not advancing.
+	ReasonStageUnknown = "StageUnknown"
 )
 
 // Worker failure reason constants

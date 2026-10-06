@@ -180,6 +180,16 @@ def test_delete_with_backend_id_uses_exact_lookup(tmp_path, netris_server, read_
     assert read_requests == ["/api/v2/server-cluster/22"]
 
 
+@pytest.mark.parametrize("backend_id", ["abc", "0", "-1", "1.2", " 22"])
+def test_delete_rejects_malformed_backend_id_before_lookup(tmp_path, netris_server, read_requests, backend_id):
+    url, _, writes = netris_server
+    result = run_role(tmp_path, url, "delete", server_cluster_backend_id=backend_id)
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "server_cluster_backend_id must be a positive integer" in result.stdout
+    assert read_requests == []
+    assert writes == []
+
+
 @pytest.mark.parametrize("tasks_from,site_id,vpc_id", [
     ("delete", 2, 7),
     ("delete", 1, 8),

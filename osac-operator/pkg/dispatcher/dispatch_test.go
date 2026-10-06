@@ -344,7 +344,7 @@ var _ = Describe("Dispatcher", func() {
 	It("dispatches Subnet to exactly one k8s target when no fabric manager is set (dedupe)", func() {
 		stub := newStubWithManagers("", "cudn_localnet")
 		cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
-				newK8sManagerConfigMap("km-cudn", "cudn_localnet", "ipv4"),
+			newK8sManagerConfigMap("km-cudn", "cudn_localnet", "ipv4"),
 		).Build()
 
 		disc, err := networkmanager.NewDiscovery(cl, "osac")
@@ -362,7 +362,7 @@ var _ = Describe("Dispatcher", func() {
 	It("returns an error dispatching NATGateway when no fabric manager is set (no fallback)", func() {
 		stub := newStubWithManagers("", "cudn_localnet")
 		cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
-				newK8sManagerConfigMap("km-cudn", "cudn_localnet", "ipv4"),
+			newK8sManagerConfigMap("km-cudn", "cudn_localnet", "ipv4"),
 		).Build()
 
 		disc, err := networkmanager.NewDiscovery(cl, "osac")

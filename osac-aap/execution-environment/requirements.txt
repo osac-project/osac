@@ -123,7 +123,7 @@ lockfile==0.12.2
     # via python-daemon
 markdown-it-py==4.0.0
     # via rich
-markupsafe==3.0.3
+markupsafe==3.0.4
     # via jinja2
 mdurl==0.1.2
     # via markdown-it-py

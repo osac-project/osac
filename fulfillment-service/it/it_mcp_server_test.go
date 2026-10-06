@@ -546,8 +546,9 @@ var _ = Describe("MCP server", func() {
 			},
 		)
 		Expect(err).To(MatchError(And(
-			ContainSubstring("network_attachments[0]: subnet"),
-			ContainSubstring("does not exist"),
+			ContainSubstring("network_attachments[0].subnet: Subnet"),
+			ContainSubstring("network_attachments[0].security_groups[0]: SecurityGroup"),
+			ContainSubstring("not found"),
 		)))
 		adminInstances := privatev1.NewComputeInstancesClient(tool.InternalView().AdminConn())
 		for _, name := range []string{invalidName, deniedName} {

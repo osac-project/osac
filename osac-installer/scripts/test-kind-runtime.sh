@@ -46,5 +46,6 @@ fi
 KIND_MODE=ready
 create_cluster osac-dev unused-config "${kubeconfig}" 2> "${test_dir}/success"
 [[ "$(cat "${kubeconfig}")" == 'new kubeconfig' ]]
+[[ "$(find "${kubeconfig}" -perm 0600 -print)" == "${kubeconfig}" ]]
 
 echo 'Kind runtime kubeconfig tests passed'

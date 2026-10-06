@@ -1,4 +1,13 @@
 ---
+- name: Validate ServerCluster backend ID format
+  ansible.builtin.assert:
+    that:
+      - server_cluster_backend_id | string is match('^[1-9][0-9]*$')
+    fail_msg: "server_cluster_backend_id must be a positive integer"
+  when:
+    - server_cluster_backend_id is defined
+    - server_cluster_backend_id | string | length > 0
+
 - name: Reset shared ServerCluster lookup results
   ansible.builtin.set_fact:
     _existing_server_cluster: null

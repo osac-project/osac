@@ -6,6 +6,7 @@ package baremetalworker
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/google/uuid"
@@ -286,6 +287,9 @@ func (r *Reconciler) createSelectedWorker(
 		}
 		return workerBoundaryRequeue(), nil
 	}
+	if err := r.recordBMICreateAttempt(ctx, co, prev); err != nil {
+		return ctrl.Result{}, err
+	}
 	if prev.Phase == workerPhaseFailed {
 		res, err = r.retryFailedWorker(ctx, co, tenant, nr, prev, inputs.image, string(inputs.ignition), filter, fabricInterface)
 	} else {
@@ -304,6 +308,36 @@ func (r *Reconciler) createSelectedWorker(
 	}
 	// Observe the external action next time, even if its response was a no-op.
 	return workerBoundaryRequeue(), nil
+}
+
+// recordBMICreateAttempt fences Create against cancellation on the same
+// resourceVersion. If cancellation/retirement wins, this invocation must not
+// issue Create. If intent wins, cleanup retains the possibly accepted BMI.
+// A crash after the write but before the API call remains an unknown outcome;
+// absence cannot be inferred locally, even when a later List is empty.
+func (r *Reconciler) recordBMICreateAttempt(ctx context.Context, co *v1alpha1.ClusterOrder, worker *v1alpha1.WorkerStatus) error {
+	if worker.BMICreateState == v1alpha1.WorkerBMICreateStateAttempted {
+		return nil
+	}
+	next := co.DeepCopy()
+	recorded := workerByName(next.Status.Workers, worker.Name)
+	if recorded == nil || !reflect.DeepEqual(*recorded, *worker) {
+		return errWorkerObservationChanged
+	}
+	recorded.BMICreateState = v1alpha1.WorkerBMICreateStateAttempted
+	if err := r.patchStatusFromBase(ctx, co, next); err != nil {
+		return err
+	}
+	// Require the API response to retain intent: an older CRD may prune the
+	// field. A successful HTTP status alone cannot authorize external Create.
+	persisted := workerByName(next.Status.Workers, worker.Name)
+	if persisted == nil || persisted.BMICreateState != v1alpha1.WorkerBMICreateStateAttempted {
+		return fmt.Errorf("BMI Create intent was not persisted for worker %s", worker.Name)
+	}
+	// Use the patch response, not a new snapshot that could hide retirement.
+	*co = *next
+	*worker = *persisted
+	return nil
 }
 
 // writeSelectedWorker persists one selected slot's status from the invocation's
@@ -359,7 +393,9 @@ func allocateMissingWorkerSlots(co *v1alpha1.ClusterOrder) error {
 			name := uuid.NewString()
 			// newWorkerStatus seeds the attempt origin, so the reservation write
 			// records the registration clock before any external Create.
-			co.Status.Workers = append(co.Status.Workers, newWorkerStatus(nr.NodeSet, nr.BareMetal.InstanceType, name, "", workerPhaseProvisioning))
+			worker := newWorkerStatus(nr.NodeSet, nr.BareMetal.InstanceType, name, "", workerPhaseProvisioning)
+			worker.BMICreateState = v1alpha1.WorkerBMICreateStateReserved
+			co.Status.Workers = append(co.Status.Workers, worker)
 		}
 	}
 	return nil

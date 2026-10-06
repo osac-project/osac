@@ -28,6 +28,17 @@ func (r *Reconciler) cleanupWorker(ctx context.Context, co *v1alpha1.ClusterOrde
 		return false, err
 	}
 	if w.BareMetalInstance.ID == "" {
+		if w.BMICreateState == v1alpha1.WorkerBMICreateStateReserved {
+			// Only the authoritative journal can prove no Create was authorized.
+			// The caller's optimistic removal competes with the Attempted write;
+			// a conflict retains the reservation and ends the invocation.
+			recorded := workerByName(co.Status.Workers, w.Name)
+			if recorded == nil || recorded.BMICreateState != v1alpha1.WorkerBMICreateStateReserved ||
+				recorded.BareMetalInstance != w.BareMetalInstance || w.BareMetalInstance.Name == "" {
+				return false, errWorkerObservationChanged
+			}
+			return true, nil
+		}
 		return false, r.recoverCleanupBMI(ctx, co, tenant, w)
 	}
 	state, err := r.readCleanupBMI(ctx, co, tenant, *w)

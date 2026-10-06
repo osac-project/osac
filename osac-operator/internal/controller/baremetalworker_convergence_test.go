@@ -54,6 +54,44 @@ func (w *workerStatusFaultWriter) Patch(ctx context.Context, obj client.Object, 
 	return w.SubResourceWriter.Patch(ctx, obj, p, opts...)
 }
 
+// workerAttemptRaceClient places interruption/competing writes around the real
+// apiserver's optimistic create-intent patch. It never intercepts provider calls.
+type workerAttemptRaceClient struct {
+	client.Client
+	before func()
+	after  func() error
+}
+
+func (c *workerAttemptRaceClient) Status() client.SubResourceWriter {
+	return &workerAttemptRaceWriter{SubResourceWriter: c.Client.Status(), c: c}
+}
+
+type workerAttemptRaceWriter struct {
+	client.SubResourceWriter
+	c *workerAttemptRaceClient
+}
+
+func (w *workerAttemptRaceWriter) Patch(ctx context.Context, obj client.Object, p client.Patch, opts ...client.SubResourcePatchOption) error {
+	order, ok := obj.(*api.ClusterOrder)
+	if !ok || len(order.Status.Workers) != 1 || order.Status.Workers[0].BMICreateState != api.WorkerBMICreateStateAttempted {
+		return w.SubResourceWriter.Patch(ctx, obj, p, opts...)
+	}
+	if w.c.before != nil {
+		hook := w.c.before
+		w.c.before = nil
+		hook()
+	}
+	if err := w.SubResourceWriter.Patch(ctx, obj, p, opts...); err != nil {
+		return err
+	}
+	if w.c.after != nil {
+		hook := w.c.after
+		w.c.after = nil
+		return hook()
+	}
+	return nil
+}
+
 // agentPatchFaultClient runs beforeAgentPatch immediately before an Agent patch
 // reaches the real apiserver. It lets a test inject a competing writer after the
 // reconciler's fresh Agent read but before its optimistic Patch, without any
@@ -307,6 +345,144 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		}
 		Expect(fc.CreateCalls()).To(HaveLen(2))
 	}, Entry("failed scale-down", false), Entry("parent deletion", true))
+
+	It("R03-E7 cancels a Reserved worker after restart before any Create and clears the finalizer", func() {
+		ready()
+		step() // Durable reservation, no external Create.
+		reserved := getOrder().Status.Workers[0]
+		Expect(reserved.BMICreateState).To(Equal(api.WorkerBMICreateStateReserved))
+		Expect(reserved.BareMetalInstance.ID).To(BeEmpty())
+		Expect(fc.CreateCalls()).To(BeEmpty())
+		Expect(k8sClient.Delete(ctx, getOrder())).To(Succeed())
+		Expect(k8sClient.Delete(ctx, newInfraEnv(co.Name+"-infraenv"))).To(Succeed())
+		r = buildReconciler(k8sClient)
+		step() // Persist retirement.
+		Expect(getOrder().Status.Workers[0].BMICreateState).To(Equal(api.WorkerBMICreateStateReserved))
+		r = buildReconciler(k8sClient)
+		step() // Cancel and finalize without creation prerequisites.
+		Expect(apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKeyFromObject(co), &api.ClusterOrder{}))).To(BeTrue())
+		Expect(fc.CreateCalls()).To(BeEmpty())
+		Expect(fc.DeleteCalls()).To(BeEmpty())
+	})
+
+	It("R03-E7 rejects a stale Create when cancellation wins the intent patch race", func() {
+		ready()
+		step()
+		latest := getOrder()
+		latest.Finalizers = append(latest.Finalizers, "test.osac.openshift.io/hold")
+		Expect(k8sClient.Update(ctx, latest)).To(Succeed())
+		cancel := buildReconciler(k8sClient)
+		r = buildReconciler(&workerAttemptRaceClient{Client: k8sClient, before: func() {
+			Expect(k8sClient.Delete(ctx, getOrder())).To(Succeed())
+			for range 2 {
+				_, err := cancel.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(co)})
+				Expect(err).NotTo(HaveOccurred())
+			}
+			Expect(getOrder().Status.Workers).To(BeEmpty())
+			Expect(getOrder().Finalizers).NotTo(ContainElement("osac.openshift.io/baremetalworker-finalizer"))
+		}})
+		_, err := run()
+		Expect(apierrors.IsConflict(err)).To(BeTrue(), "real resourceVersion must fence stale Create")
+		Expect(fc.CreateCalls()).To(BeEmpty())
+		Expect(getOrder().Status.Workers).To(BeEmpty())
+	})
+
+	It("R03-E7 retains a winning intent through deletion racing before the external Create", func() {
+		ready()
+		step()
+		cancel := buildReconciler(k8sClient)
+		r = buildReconciler(&workerAttemptRaceClient{Client: k8sClient, after: func() error {
+			Expect(getOrder().Status.Workers[0].BMICreateState).To(Equal(api.WorkerBMICreateStateAttempted))
+			Expect(fc.CreateCalls()).To(BeEmpty())
+			Expect(k8sClient.Delete(ctx, getOrder())).To(Succeed())
+			for range 2 {
+				_, err := cancel.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(co)})
+				Expect(err).NotTo(HaveOccurred())
+			}
+			Expect(getOrder().Status.Workers).To(HaveLen(1))
+			Expect(getOrder().Finalizers).To(ContainElement("osac.openshift.io/baremetalworker-finalizer"))
+			return nil
+		}})
+		_, err := run()
+		Expect(apierrors.IsConflict(err)).To(BeTrue(), "retirement must reject the delayed identity write")
+		Expect(fc.CreateCalls()).To(HaveLen(1))
+		r = buildReconciler(k8sClient)
+		step() // Owned name recovery.
+		Expect(getOrder().Status.Workers[0].BareMetalInstance.ID).NotTo(BeEmpty())
+		step() // Request BMI deletion.
+		step() // Confirm absence and finalize.
+		Expect(apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKeyFromObject(co), &api.ClusterOrder{}))).To(BeTrue())
+		Expect(fc.CreateCalls()).To(HaveLen(1))
+		Expect(fc.DeleteCalls()).To(HaveLen(1))
+	})
+
+	It("R03-E7 retains persisted intent interrupted before the API call across restart", func() {
+		ready()
+		step()
+		interrupted := errors.New("interrupted after intent persistence")
+		r = buildReconciler(&workerAttemptRaceClient{Client: k8sClient, after: func() error { return interrupted }})
+		_, err := run()
+		Expect(err).To(MatchError(interrupted))
+		Expect(getOrder().Status.Workers[0].BMICreateState).To(Equal(api.WorkerBMICreateStateAttempted))
+		Expect(fc.CreateCalls()).To(BeEmpty())
+		Expect(k8sClient.Delete(ctx, getOrder())).To(Succeed())
+		for range 3 {
+			r = buildReconciler(k8sClient)
+			step()
+			Expect(getOrder().Status.Workers).To(HaveLen(1))
+			Expect(getOrder().Finalizers).To(ContainElement("osac.openshift.io/baremetalworker-finalizer"))
+		}
+		Expect(fc.CreateCalls()).To(BeEmpty())
+		Expect(fc.DeleteCalls()).To(BeEmpty())
+	})
+
+	It("R03-E7 retains legacy ID-less state without inferring safety from its timestamp", func() {
+		ready()
+		step()
+		latest := getOrder()
+		latest.Status.Workers[0].BMICreateState = ""
+		Expect(latest.Status.Workers[0].AttemptStartedAt).NotTo(BeNil())
+		Expect(k8sClient.Status().Update(ctx, latest)).To(Succeed())
+		Expect(k8sClient.Delete(ctx, getOrder())).To(Succeed())
+		for range 3 {
+			r = buildReconciler(k8sClient)
+			step()
+			Expect(getOrder().Status.Workers).To(HaveLen(1))
+			Expect(getOrder().Status.Workers[0].BMICreateState).To(BeEmpty())
+			Expect(getOrder().Finalizers).To(ContainElement("osac.openshift.io/baremetalworker-finalizer"))
+		}
+		Expect(fc.CreateCalls()).To(BeEmpty())
+	})
+
+	It("R03-E7 recovers a lost Create acknowledgement during deletion only after delayed visibility", func() {
+		ready()
+		step()
+		provider = &lostWorkerResponseClient{FulfillmentClient: fc}
+		r = buildReconciler(k8sClient)
+		_, err := run()
+		Expect(err).To(MatchError(ContainSubstring("lost successful Create acknowledgement")))
+		attempted := getOrder().Status.Workers[0]
+		Expect(attempted.BMICreateState).To(Equal(api.WorkerBMICreateStateAttempted))
+		Expect(attempted.BareMetalInstance.ID).To(BeEmpty())
+		Expect(k8sClient.Delete(ctx, getOrder())).To(Succeed())
+		fc.SetListEmptyCalls(10) // Both observation and fresh cleanup may list.
+		r = buildReconciler(k8sClient)
+		for range 3 {
+			step()
+			Expect(getOrder().Status.Workers[0].BareMetalInstance.ID).To(BeEmpty())
+			Expect(getOrder().Finalizers).To(ContainElement("osac.openshift.io/baremetalworker-finalizer"))
+		}
+		Expect(fc.DeleteCalls()).To(BeEmpty())
+		fc.SetListEmptyCalls(0)
+		step() // Recover the same owned BMI.
+		Expect(getOrder().Status.Workers[0].BareMetalInstance.Name).To(Equal(attempted.BareMetalInstance.Name))
+		Expect(getOrder().Status.Workers[0].BareMetalInstance.ID).NotTo(BeEmpty())
+		step() // Delete request.
+		step() // Authoritative absence.
+		Expect(apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKeyFromObject(co), &api.ClusterOrder{}))).To(BeTrue())
+		Expect(fc.CreateCalls()).To(HaveLen(1))
+		Expect(fc.DeleteCalls()).To(HaveLen(1))
+	})
 
 	It("R03-E3 recovers an interrupted provisioning ID during deletion without creating", func() {
 		ready()
@@ -562,6 +738,9 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		r = buildReconciler(k8sClient)
 		_, err = run()
 		Expect(err).To(MatchError(ContainSubstring("lost successful Create acknowledgement")))
+		// Only the selected slot advances to durable Create intent; its identity
+		// and attempt clock remain unchanged across the lost response.
+		reserved[0].BMICreateState = api.WorkerBMICreateStateAttempted
 		Expect(getOrder().Status.Workers).To(Equal(reserved))
 		Expect(fault.successful).To(Equal(1))
 		stored, err := fc.ListBareMetalInstances(ctx, "")
@@ -599,7 +778,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		}
 	})
 
-	DescribeTable("R01-E2 refuses unsafe recovery candidates without changing reservations", func(kind string, visibleInitially bool) {
+	DescribeTable("R01-E2 refuses unsafe recovery candidates without adopting identities", func(kind string, visibleInitially bool) {
 		ready()
 		_, err := run()
 		Expect(err).NotTo(HaveOccurred())
@@ -635,6 +814,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		} else {
 			Expect(fault.creates).To(Equal(1))
 			Expect(fault.lists).To(Equal(2), "must exercise the AlreadyExists re-list")
+			reserved[0].BMICreateState = api.WorkerBMICreateStateAttempted
 		}
 		Expect(getOrder().Status.Workers).To(Equal(reserved))
 		Expect(fc.DeleteCalls()).To(BeEmpty())

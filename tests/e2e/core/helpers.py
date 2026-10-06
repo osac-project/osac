@@ -477,14 +477,12 @@ def assert_cluster_order_deleting_event(*, k8s: K8sClient, name: str) -> None:
 
 
 def wait_for_cluster_ready(*, k8s: K8sClient, name: str) -> None:
-    # Must stay safely above osac-aap's own wait_for_clusteroperators_retries
-    # budget (60 min) plus earlier steps in the same AAP job (create hosted
-    # cluster, retrieve kubeconfig, etc.), or this times out first with a
-    # less useful error while the ClusterOrder is still legitimately Progressing.
+    # Cap cluster creation at 60 minutes. Callers must clean up the ClusterOrder
+    # on TimeoutError so a stuck provisioning attempt cannot poison the next run.
     poll_until(
         fn=lambda: k8s.get_cluster_order_phase(name=name, checked=False),
         until=lambda v: v == "Ready",
-        retries=480,
+        retries=241,
         delay=15,
         description=f"{name} ClusterOrder Ready",
     )

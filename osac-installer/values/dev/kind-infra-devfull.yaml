@@ -15,6 +15,55 @@
 csiDriver:
   enabled: true
 
+# TopoLVM provides the CSI driver and a non-default base StorageClass. The AAP
+# storage provider creates tenant-labeled classes for the registered local tier.
+# The external lvmd service and vg1 are prepared by kind-runtime.sh.
+topolvm:
+  enabled: true
+  controller:
+    replicaCount: 1
+    tolerations:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
+  node:
+    tolerations:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
+  lvmd:
+    managed: false
+    socketName: /run/topolvm/lvmd.sock
+    deviceClasses:
+      - name: vg1
+        volume-group: vg1
+        default: true
+        spare-gb: 1
+  storageClasses:
+    - name: topolvm-provisioner
+      storageClass:
+        fsType: xfs
+        isDefaultClass: false
+        volumeBindingMode: WaitForFirstConsumer
+        allowVolumeExpansion: true
+        additionalParameters:
+          topolvm.io/device-class: vg1
+  webhook:
+    certManager: true
+    existingCertManagerIssuer:
+      group: cert-manager.io
+      kind: ClusterIssuer
+      name: default-ca
+    podMutatingWebhook:
+      # The extender scheduler is disabled for this single-node Kind setup.
+      enabled: false
+      ignoreNamespaces:
+        - kube-system
+        - topolvm-system
+        - osac-infra
+  "cert-manager":
+    enabled: false
+
 keycloak:
   # KC_HOSTNAME / OIDC issuer (full URL with scheme + port).
   hostname: "https://keycloak.osac.localhost:8443"

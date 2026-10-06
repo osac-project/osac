@@ -7,8 +7,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
+KIND_PROFILE="${KIND_PROFILE:-dev-full}"
 # shellcheck source=./kind-runtime.sh
 source "${SCRIPT_DIR}/kind-runtime.sh"
+if [[ "$KIND_PROVIDER" == "podman" ]]; then
+  detect_podman_mode
+fi
 
 CLUSTER_NAME="${1:-${KIND_CLUSTER_NAME:-osac-dev}}"
 BRIDGE_CNI_VERSION="${BRIDGE_CNI_VERSION:-v1.6.2}"

@@ -17,6 +17,11 @@ operator:
     storage: true
     volume: true
 
+# Reuse the local storage registration hook so tenant onboarding provisions a
+# tenant-labeled TopoLVM StorageClass for the existing "local" storage tier.
+lvms:
+  enabled: true
+
 # --- CSI Driver & Backends ---
 # Enable the OSAC CSI driver for persistent volume provisioning via storage tiers.
 # The hub runtime ConfigMap and shared credential Secret configure fulfillment;
@@ -49,6 +54,11 @@ csiBackends: {}
 # left as-is — only in-cluster controllers use it, never the browser.
 service:
   externalHostname: fulfillment-api.osac.localhost
+  images:
+    service:
+      pullPolicy: IfNotPresent
+    envoy:
+      pullPolicy: IfNotPresent
   auth:
     issuerUrl: https://keycloak.osac.localhost:8443/realms/osac
   idp:

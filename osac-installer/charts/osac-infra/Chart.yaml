@@ -3,3 +3,9 @@ name: osac-infra
 description: OSAC shared infrastructure - CA chain, Keycloak, Gateway, trust-manager, shared PostgreSQL, CRD instances
 type: application
 version: 0.0.1
+
+dependencies:
+  - name: topolvm
+    version: 17.2.0
+    repository: https://topolvm.github.io/topolvm
+    condition: topolvm.enabled

@@ -9,6 +9,7 @@ NS ?= osac
 
 define kind-load-image
 	NS="$(NS)" \
+	KIND_PROFILE="$(or $(PROFILE),dev-full)" \
 	KIND_CLUSTER_NAME="$(KIND_CLUSTER_NAME)" KUBECONFIG="$(KUBECONFIG)" \
 	CONTAINER_TOOL="$(CONTAINER_TOOL)" "$(KIND_LOAD_IMAGE_SCRIPT)" "$(1)"
 endef

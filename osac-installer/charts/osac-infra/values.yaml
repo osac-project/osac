@@ -70,6 +70,10 @@ lvms:
   enabled: false
   channel: "stable-4.22"
 
+# Optional local LVM CSI provisioning for the Kind dev-full profile.
+topolvm:
+  enabled: false
+
 metallb:
   enabled: false
   channel: "stable"

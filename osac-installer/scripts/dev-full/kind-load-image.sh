@@ -9,6 +9,9 @@ IMAGE="${1:?usage: kind-load-image.sh IMAGE}"
 NS="${NS:?NS is required}"
 KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-osac-dev}"
 CONTAINER_TOOL="${CONTAINER_TOOL:-podman}"
+# Component image-load targets default to the rootful dev-full cluster.
+export KIND_PROFILE="${KIND_PROFILE:-dev-full}"
+export KIND_EXPERIMENTAL_PROVIDER="${KIND_EXPERIMENTAL_PROVIDER:-${CONTAINER_TOOL##*/}}"
 INSTALLER_DIR="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")/../.." >/dev/null && pwd)"
 KIND_RUNTIME="${INSTALLER_DIR}/scripts/dev-full/kind-runtime.sh"
 
@@ -17,8 +20,19 @@ if [[ -z "${KUBECONFIG:-}" ]]; then
   export KUBECONFIG
 fi
 
-"${KIND_RUNTIME}" check
-if ! nodes="$("${KIND_RUNTIME}" get nodes --name "${KIND_CLUSTER_NAME}" 2>/dev/null)" || [[ -z "${nodes}" ]]; then
+# Loading an image into an existing cluster needs no virtualization preflight.
+# The runtime wrapper selects and authenticates the engine during node lookup.
+for cmd in kind "${CONTAINER_TOOL}" "${KIND_EXPERIMENTAL_PROVIDER}" kubectl jq; do
+  if ! command -v "${cmd}" >/dev/null 2>&1; then
+    echo "ERROR: Missing required tool: ${cmd}" >&2
+    exit 1
+  fi
+done
+if ! nodes="$("${KIND_RUNTIME}" get nodes --name "${KIND_CLUSTER_NAME}")"; then
+  echo "ERROR: Could not check Kind cluster '${KIND_CLUSTER_NAME}'; image loading stopped" >&2
+  exit 1
+fi
+if [[ -z "${nodes}" ]]; then
   echo "ERROR: Kind cluster '${KIND_CLUSTER_NAME}' does not exist; run make install-infra first" >&2
   exit 1
 fi

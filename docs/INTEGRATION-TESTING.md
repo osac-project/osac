@@ -146,6 +146,14 @@ Touched-area requirements: [component guide](../fulfillment-service/AGENTS.md#in
 
 Touched-area requirements: [component guide](../osac-installer/AGENTS.md#integration-testing).
 
+The `make -C osac-installer kind-runtime-test` unit suite is owned by installer
+implementation work. It uses command stubs to check runtime selection, sudo
+authentication and credential expiry, Makefile/host setup routing, safe
+credential reset, image loading without virtualization prerequisites, and
+cleanup capabilities and ordering without running a container engine or
+modifying host privileges. It does not exercise real password entry, TopoLVM
+devices, or a deployed KubeVirt installation.
+
 The `make fulfillment-trust-render-test` Helm contract renders the production
 umbrella chart with trust enabled and disabled. It asserts the operator trust
 reconciler gate and checks that CA mounts and verified

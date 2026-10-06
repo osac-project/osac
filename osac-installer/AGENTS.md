@@ -45,6 +45,7 @@ respective areas.
 
 | Touched area | Required validation | Command / follow-up |
 |---|---|---|
+| Kind runtime selection, sudo authentication, image loading, or cluster/storage lifecycle | Unit with command stubs | `make kind-runtime-test` |
 | Fulfillment hook commands, CA mounts, or gate rendering | Helm contract | `make fulfillment-trust-render-test` |
 | Deployed hooks or cross-component startup | Component integration | `make test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment` with a deployed Kind environment; see [suite boundaries](../docs/INTEGRATION-TESTING.md#osac-installer) |
 

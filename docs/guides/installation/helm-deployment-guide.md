@@ -260,6 +260,7 @@ Disable these for any real deployment.
 |-------|---------|-------------|
 | `bundledPostgres.enabled` | `false` | Deploys a single-pod ephemeral PostgreSQL. Uses `fsync=off` and `emptyDir` — data lost on restart. Not for production. |
 | `bundledVault.enabled` | `true` | Deploys a single-pod ephemeral OpenBao secret store in the `osac-infra` namespace. Dev mode — data is lost on restart. Set to `false` for production and follow the [secrets management configuration guide](secrets-management-configuration.md). |
+| `topolvm.enabled` | `false` | Installs the pinned TopoLVM CSI chart for Kind `dev-full`. It uses an external `lvmd` service and disposable `vg1`; the profile exposes the non-default `topolvm-provisioner` StorageClass. |
 
 ### Instance chart (`osac`) values
 

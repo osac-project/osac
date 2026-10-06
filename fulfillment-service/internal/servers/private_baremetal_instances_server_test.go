@@ -189,6 +189,25 @@ var _ = Describe("Private bare metal instances server", func() {
 			return catalogResp.GetObject().GetId()
 		}
 
+		It("Rejects bare metal instance creation in the system tenant", func() {
+			response, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:   "system-bmi",
+						Tenant: auth.SystemTenant,
+					}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						DiskImage:    privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						SshPublicKey: new(testSSHPublicKey),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(response).To(BeNil())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied))
+			Expect(grpcstatus.Convert(err).Message()).To(Equal("objects cannot be placed in the 'system' tenant"))
+		})
+
 		Describe("DiskImage validation", func() {
 			It("Rejects creation without an effective disk_image", func() {
 				catalogResponse, err := catalogServer.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{

@@ -344,6 +344,7 @@ var _ = Describe("MCP server", func() {
 			SetLogger(logger).
 			SetJwksCache(jwksCache).
 			SetExpirationLeeway(5 * time.Second).
+			AddAudience(auth.Audience).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 

@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"time"
@@ -30,6 +31,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	testutils "github.com/osac-project/osac/fulfillment-service/internal/testing"
 )
 
 var _ = Describe("Cmd", func() {
@@ -376,6 +378,35 @@ var _ = Describe("NewHandler", func() {
 	BeforeEach(func() {
 		ctrl = gomock.NewController(GinkgoT())
 		DeferCleanup(ctrl.Finish)
+	})
+
+	It("accepts API-audience tokens and rejects tokens for another resource at HTTP ingress", func() {
+		const issuer = "https://issuer.example.com"
+		jwksCache := auth.NewMockJwksCache(ctrl)
+		jwksCache.EXPECT().Get(gomock.Any(), issuer, "123").Return(testutils.JwtPublicKey(), nil).AnyTimes()
+		validator, err := newMCPJWTValidator(slog.Default(), jwksCache)
+		Expect(err).ToNot(HaveOccurred())
+		handler, err := NewHandler(ServerDeps{}, validator, "", "")
+		Expect(err).ToNot(HaveOccurred())
+
+		for _, tc := range []struct {
+			audience string
+			accepted bool
+		}{
+			{audience: auth.Audience, accepted: true},
+			{audience: "another-resource", accepted: false},
+		} {
+			token := testutils.MakeTokenObject(nil, jwt.MapClaims{"iss": issuer, "aud": tc.audience})
+			request := httptest.NewRequest(http.MethodPost, "/", nil)
+			request.Header.Set("Authorization", "Bearer "+token.Raw)
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, request)
+			if tc.accepted {
+				Expect(recorder.Code).ToNot(Equal(http.StatusUnauthorized))
+			} else {
+				Expect(recorder.Code).To(Equal(http.StatusUnauthorized))
+			}
+		}
 	})
 
 	It("Rejects an unauthenticated request with no resource_metadata hint when OAuth discovery is unconfigured", func() {

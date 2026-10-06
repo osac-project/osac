@@ -194,11 +194,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error {
 		return fmt.Errorf("failed to create JWKS cache: %w", err)
 	}
 	c.logger.InfoContext(ctx, "Creating JWT validator")
-	jwtValidator, err := auth.NewJwtValidator().
-		SetLogger(c.logger).
-		SetJwksCache(jwksCache).
-		SetExpirationLeeway(tokenExpirationLeeway).
-		Build()
+	jwtValidator, err := newMCPJWTValidator(c.logger, jwksCache)
 	if err != nil {
 		return fmt.Errorf("failed to create JWT validator: %w", err)
 	}
@@ -268,6 +264,15 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error {
 	// Keep running till the shutdown sequence completes:
 	c.logger.InfoContext(ctx, "Waiting for shutdown sequence to complete")
 	return shutdown.Wait()
+}
+
+func newMCPJWTValidator(logger *slog.Logger, jwksCache auth.JwksCache) (auth.JwtValidator, error) {
+	return auth.NewJwtValidator().
+		SetLogger(logger).
+		SetJwksCache(jwksCache).
+		SetExpirationLeeway(tokenExpirationLeeway).
+		AddAudience(auth.Audience).
+		Build()
 }
 
 // newServer creates the MCP server and registers its tools.

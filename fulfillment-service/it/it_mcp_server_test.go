@@ -100,7 +100,7 @@ var _ = Describe("MCP server", func() {
 					Endpoint:    "https://test-backend.example.com",
 					Credentials: privatev1.StorageBackendCredentials_builder{
 						Username: "test-user",
-						Password: "test-credential", //nolint:goconst // test-only fake provider credential
+						Password: uuid.New(),
 					}.Build(),
 				}.Build(),
 			}.Build(),

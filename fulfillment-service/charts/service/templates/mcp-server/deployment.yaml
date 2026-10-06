@@ -66,8 +66,9 @@ spec:
         - start
         - mcp-server
         - --log-level={{ .Values.log.level }}
-        - --log-headers={{ .Values.log.headers }}
-        - --log-bodies={{ .Values.log.bodies }}
+        # MCP forwards caller tokens and tenant resource data to Fulfillment.
+        - --log-headers=false
+        - --log-bodies=false
         - --ca-file=/etc/fulfillment-mcp-server/tls/cas
         - --http-listener-address=0.0.0.0:8000
         - --http-listener-tls-crt=/etc/fulfillment-mcp-server/tls/tls.crt

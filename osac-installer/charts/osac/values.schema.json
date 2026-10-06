@@ -688,6 +688,32 @@
               "minimum": 1,
               "maximum": 65535,
               "default": 443
+            },
+            "resources": {
+              "type": "object",
+              "description": "CPU and memory resources for the MCP server container",
+              "required": ["requests", "limits"],
+              "properties": {
+                "requests": {
+                  "type": "object",
+                  "required": ["cpu", "memory"],
+                  "properties": {
+                    "cpu": {"type": "string", "minLength": 1, "default": "50m"},
+                    "memory": {"type": "string", "minLength": 1, "default": "128Mi"}
+                  },
+                  "additionalProperties": false
+                },
+                "limits": {
+                  "type": "object",
+                  "required": ["cpu", "memory"],
+                  "properties": {
+                    "cpu": {"type": "string", "minLength": 1, "default": "500m"},
+                    "memory": {"type": "string", "minLength": 1, "default": "512Mi"}
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
             }
           },
           "allOf": [{

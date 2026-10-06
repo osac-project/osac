@@ -75,6 +75,11 @@ var _ = Describe("MCP server", func() {
 
 	BeforeEach(func() {
 		ctx = context.Background()
+		catalogItemID, computeInstanceID, otherComputeInstanceID = "", "", ""
+		templateID, diskImageID, instanceTypeID = "", "", ""
+		storageBackendID, storageTierID, subnetID = "", "", ""
+		virtualNetworkID, networkClassID, securityGroupID = "", "", ""
+		mcpGrpcConn, mcpHTTPServer, mcpClient = nil, nil, nil
 		adminConn := tool.InternalView().AdminConn()
 		catalogItemsClient = privatev1.NewComputeInstanceCatalogItemsClient(adminConn)
 		computeInstanceTemplatesClient = privatev1.NewComputeInstanceTemplatesClient(adminConn)
@@ -104,6 +109,10 @@ var _ = Describe("MCP server", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		storageBackendID = storageBackendResponse.GetObject().GetId()
+		DeferCleanup(func() {
+			_, err := storageBackendsClient.Delete(ctx, privatev1.StorageBackendsDeleteRequest_builder{Id: storageBackendID}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		})
 
 		storageTierResponse, err := storageTiersClient.Create(ctx, privatev1.StorageTiersCreateRequest_builder{
 			Object: privatev1.StorageTier_builder{
@@ -119,6 +128,10 @@ var _ = Describe("MCP server", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		storageTierID = storageTierResponse.GetObject().GetId()
+		DeferCleanup(func() {
+			_, err := storageTiersClient.Delete(ctx, privatev1.StorageTiersDeleteRequest_builder{Id: storageTierID}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		})
 
 		instanceTypeResponse, err := instanceTypesClient.Create(ctx, privatev1.InstanceTypesCreateRequest_builder{
 			Object: privatev1.InstanceType_builder{
@@ -128,6 +141,10 @@ var _ = Describe("MCP server", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		instanceTypeID = instanceTypeResponse.GetObject().GetId()
+		DeferCleanup(func() {
+			_, err := instanceTypesClient.Delete(ctx, privatev1.InstanceTypesDeleteRequest_builder{Id: instanceTypeID}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		})
 
 		diskImageResponse, err := diskImagesClient.Create(ctx, privatev1.DiskImagesCreateRequest_builder{
 			Object: privatev1.DiskImage_builder{
@@ -142,6 +159,10 @@ var _ = Describe("MCP server", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		diskImageID = diskImageResponse.GetObject().GetId()
+		DeferCleanup(func() {
+			_, err := diskImagesClient.Delete(ctx, privatev1.DiskImagesDeleteRequest_builder{Id: diskImageID}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		})
 
 		templateID = fmt.Sprintf("mcp-compute-template-%s", uuid.New())
 		_, err = computeInstanceTemplatesClient.Create(ctx, privatev1.ComputeInstanceTemplatesCreateRequest_builder{
@@ -162,6 +183,10 @@ var _ = Describe("MCP server", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func() {
+			_, err := computeInstanceTemplatesClient.Delete(ctx, privatev1.ComputeInstanceTemplatesDeleteRequest_builder{Id: templateID}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		})
 
 		networkClassResponse, err := networkClassesClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 			Object: privatev1.NetworkClass_builder{
@@ -172,6 +197,10 @@ var _ = Describe("MCP server", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		networkClassID = networkClassResponse.GetObject().GetId()
+		DeferCleanup(func() {
+			_, err := networkClassesClient.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{Id: networkClassID}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		})
 
 		virtualNetworkID = fmt.Sprintf("mcp-virtual-network-%s", uuid.New())
 		_, err = virtualNetworksClient.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
@@ -189,6 +218,10 @@ var _ = Describe("MCP server", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func() {
+			_, err := virtualNetworksClient.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{Id: virtualNetworkID}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		})
 		Eventually(func(g Gomega) {
 			response, err := virtualNetworksClient.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: virtualNetworkID}.Build())
 			g.Expect(err).ToNot(HaveOccurred())
@@ -220,6 +253,21 @@ var _ = Describe("MCP server", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func() {
+			subnetResponse, err := subnetsClient.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: subnetID}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			subnet := subnetResponse.GetObject()
+			labels := subnet.GetMetadata().GetLabels()
+			delete(labels, defaultNetworkLabel)
+			subnet.GetMetadata().SetLabels(labels)
+			_, err = subnetsClient.Update(ctx, privatev1.SubnetsUpdateRequest_builder{
+				Object:     subnet,
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			_, err = subnetsClient.Delete(ctx, privatev1.SubnetsDeleteRequest_builder{Id: subnetID}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		})
 		Eventually(func(g Gomega) {
 			response, err := subnetsClient.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: subnetID}.Build())
 			g.Expect(err).ToNot(HaveOccurred())
@@ -248,6 +296,10 @@ var _ = Describe("MCP server", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		securityGroupID = securityGroupResponse.GetObject().GetId()
+		DeferCleanup(func() {
+			_, err := securityGroupsClient.Delete(ctx, privatev1.SecurityGroupsDeleteRequest_builder{Id: securityGroupID}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		})
 		Eventually(func(g Gomega) {
 			response, err := securityGroupsClient.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: securityGroupID}.Build())
 			g.Expect(err).ToNot(HaveOccurred())
@@ -291,6 +343,10 @@ var _ = Describe("MCP server", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func() {
+			_, err := catalogItemsClient.Delete(ctx, privatev1.ComputeInstanceCatalogItemsDeleteRequest_builder{Id: catalogItemID}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		})
 
 		jwksCache, err := auth.NewJwksCache().
 			SetLogger(logger).
@@ -312,9 +368,11 @@ var _ = Describe("MCP server", func() {
 			SetUserAgent("fulfillment-mcp-server-it").
 			Build()
 		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func() { Expect(mcpGrpcConn.Close()).To(Succeed()) })
 		handler, err := mcpserver.NewHandler(mcpserver.NewServerDeps(mcpGrpcConn), jwtValidator, "", "")
 		Expect(err).ToNot(HaveOccurred())
 		mcpHTTPServer = httptest.NewServer(handler)
+		DeferCleanup(mcpHTTPServer.Close)
 		mcpClient = &http.Client{
 			Transport: ghttp.RoundTripperFunc(func(request *http.Request) (*http.Response, error) {
 				token, err := tool.UserTokenSource().Token(request.Context())
@@ -324,82 +382,6 @@ var _ = Describe("MCP server", func() {
 				request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token.Access))
 				return http.DefaultTransport.RoundTrip(request)
 			}),
-		}
-	})
-
-	AfterEach(func() {
-		if mcpHTTPServer != nil {
-			mcpHTTPServer.Close()
-		}
-		if mcpGrpcConn != nil {
-			Expect(mcpGrpcConn.Close()).ToNot(HaveOccurred())
-		}
-		if computeInstanceID != "" {
-			_, err := computeInstancesClient.Delete(ctx, publicv1.ComputeInstancesDeleteRequest_builder{Id: computeInstanceID}.Build())
-			if status.Code(err) != codes.NotFound {
-				Expect(err).ToNot(HaveOccurred())
-			}
-			waitForMCPComputeInstanceDeletion(ctx, computeInstanceID)
-		}
-		if otherComputeInstanceID != "" {
-			_, err := privatev1.NewComputeInstancesClient(tool.InternalView().AdminConn()).Delete(
-				ctx, privatev1.ComputeInstancesDeleteRequest_builder{Id: otherComputeInstanceID}.Build(),
-			)
-			if status.Code(err) != codes.NotFound {
-				Expect(err).ToNot(HaveOccurred())
-			}
-			waitForMCPComputeInstanceDeletion(ctx, otherComputeInstanceID)
-		}
-		if securityGroupID != "" {
-			_, err := securityGroupsClient.Delete(ctx, privatev1.SecurityGroupsDeleteRequest_builder{Id: securityGroupID}.Build())
-			Expect(err).ToNot(HaveOccurred())
-		}
-		if subnetID != "" {
-			subnetResponse, err := subnetsClient.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: subnetID}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			subnet := subnetResponse.GetObject()
-			labels := subnet.GetMetadata().GetLabels()
-			delete(labels, defaultNetworkLabel)
-			subnet.GetMetadata().SetLabels(labels)
-			_, err = subnetsClient.Update(ctx, privatev1.SubnetsUpdateRequest_builder{
-				Object:     subnet,
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			_, err = subnetsClient.Delete(ctx, privatev1.SubnetsDeleteRequest_builder{Id: subnetID}.Build())
-			Expect(err).ToNot(HaveOccurred())
-		}
-		if virtualNetworkID != "" {
-			_, err := virtualNetworksClient.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{Id: virtualNetworkID}.Build())
-			Expect(err).ToNot(HaveOccurred())
-		}
-		if networkClassID != "" {
-			_, err := networkClassesClient.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{Id: networkClassID}.Build())
-			Expect(err).ToNot(HaveOccurred())
-		}
-		if catalogItemID != "" {
-			_, err := catalogItemsClient.Delete(ctx, privatev1.ComputeInstanceCatalogItemsDeleteRequest_builder{Id: catalogItemID}.Build())
-			Expect(err).ToNot(HaveOccurred())
-		}
-		if templateID != "" {
-			_, err := computeInstanceTemplatesClient.Delete(ctx, privatev1.ComputeInstanceTemplatesDeleteRequest_builder{Id: templateID}.Build())
-			Expect(err).ToNot(HaveOccurred())
-		}
-		if instanceTypeID != "" {
-			_, err := instanceTypesClient.Delete(ctx, privatev1.InstanceTypesDeleteRequest_builder{Id: instanceTypeID}.Build())
-			Expect(err).ToNot(HaveOccurred())
-		}
-		if storageTierID != "" {
-			_, err := storageTiersClient.Delete(ctx, privatev1.StorageTiersDeleteRequest_builder{Id: storageTierID}.Build())
-			Expect(err).ToNot(HaveOccurred())
-		}
-		if storageBackendID != "" {
-			_, err := storageBackendsClient.Delete(ctx, privatev1.StorageBackendsDeleteRequest_builder{Id: storageBackendID}.Build())
-			Expect(err).ToNot(HaveOccurred())
-		}
-		if diskImageID != "" {
-			_, err := diskImagesClient.Delete(ctx, privatev1.DiskImagesDeleteRequest_builder{Id: diskImageID}.Build())
-			Expect(err).ToNot(HaveOccurred())
 		}
 	})
 
@@ -482,6 +464,16 @@ var _ = Describe("MCP server", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(created.ID).ToNot(BeEmpty())
 		computeInstanceID = created.ID
+		DeferCleanup(func() {
+			if computeInstanceID == "" {
+				return
+			}
+			_, err := computeInstancesClient.Delete(ctx, publicv1.ComputeInstancesDeleteRequest_builder{Id: computeInstanceID}.Build())
+			if status.Code(err) != codes.NotFound {
+				Expect(err).ToNot(HaveOccurred())
+			}
+			waitForMCPComputeInstanceDeletion(ctx, computeInstanceID)
+		})
 
 		createdList, err := callMCPTool[mcpserver.ListResourcesOutput](ctx, session, "list_resources", mcpserver.ListResourcesInput{
 			ResourceType: mcpserver.ResourceTypeComputeInstance,
@@ -518,7 +510,17 @@ var _ = Describe("MCP server", func() {
 			},
 		)
 		Expect(err).ToNot(HaveOccurred())
+		Expect(otherCreated.ID).ToNot(BeEmpty())
 		otherComputeInstanceID = otherCreated.ID
+		DeferCleanup(func() {
+			_, err := privatev1.NewComputeInstancesClient(tool.InternalView().AdminConn()).Delete(
+				ctx, privatev1.ComputeInstancesDeleteRequest_builder{Id: otherComputeInstanceID}.Build(),
+			)
+			if status.Code(err) != codes.NotFound {
+				Expect(err).ToNot(HaveOccurred())
+			}
+			waitForMCPComputeInstanceDeletion(ctx, otherComputeInstanceID)
+		})
 
 		hiddenList, err := callMCPTool[mcpserver.ListResourcesOutput](ctx, session, "list_resources", mcpserver.ListResourcesInput{
 			ResourceType: mcpserver.ResourceTypeComputeInstance,
@@ -531,6 +533,8 @@ var _ = Describe("MCP server", func() {
 			ctx, otherSession, "delete_compute_instance", mcpserver.DeleteComputeInstanceInput{ID: computeInstanceID},
 		)
 		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("tool \"delete_compute_instance\" returned an error result"))
+		Expect(err.Error()).To(MatchRegexp(`(?i)(not.?found|permission.?denied)`))
 		stillPresent, err := computeInstancesClient.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: computeInstanceID}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(stillPresent.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeFalse())
@@ -544,7 +548,7 @@ var _ = Describe("MCP server", func() {
 				},
 			},
 		)
-		Expect(err).To(HaveOccurred())
+		Expect(err).To(MatchError(ContainSubstring("network_attachments must contain at most one attachment")))
 		deniedName := fmt.Sprintf("mcp-denied-compute-%s", uuid.New()[24:32])
 		_, err = callMCPTool[mcpserver.CreateComputeInstanceOutput](
 			ctx, session, "create_compute_instance", mcpserver.CreateComputeInstanceInput{
@@ -554,7 +558,10 @@ var _ = Describe("MCP server", func() {
 				}},
 			},
 		)
-		Expect(err).To(HaveOccurred())
+		Expect(err).To(MatchError(And(
+			ContainSubstring("network_attachments[0]: subnet"),
+			ContainSubstring("does not exist"),
+		)))
 		adminInstances := privatev1.NewComputeInstancesClient(tool.InternalView().AdminConn())
 		for _, name := range []string{invalidName, deniedName} {
 			invalidList, e := adminInstances.List(ctx, privatev1.ComputeInstancesListRequest_builder{

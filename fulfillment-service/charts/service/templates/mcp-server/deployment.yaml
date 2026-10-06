@@ -32,6 +32,7 @@ spec:
       labels:
         app: fulfillment-mcp-server
     spec:
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         seccompProfile:
@@ -53,6 +54,8 @@ spec:
           capabilities:
             drop:
             - ALL
+        resources:
+          {{- toYaml .Values.mcp.resources | nindent 10 }}
         volumeMounts:
         - name: cas
           mountPath: /etc/fulfillment-mcp-server/tls/cas

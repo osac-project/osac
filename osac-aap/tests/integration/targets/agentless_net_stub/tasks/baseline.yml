@@ -5,8 +5,6 @@
   vars:
     expected_error: "NotImplemented: agentless_net resource operations are not implemented."
     agentless_operations:
-      - create_subnet
-      - delete_subnet
       - create_security_group
       - delete_security_group
       - create_external_ip_pool
@@ -16,8 +14,6 @@
       - create_nat_gateway
       - delete_nat_gateway
     resource_playbooks:
-      - playbook_osac_create_subnet.yml
-      - playbook_osac_delete_subnet.yml
       - playbook_osac_create_security_group.yml
       - playbook_osac_delete_security_group.yml
       - playbook_osac_create_external_ip_pool.yml
@@ -26,6 +22,9 @@
       - playbook_osac_delete_external_ip.yml
       - playbook_osac_create_nat_gateway.yml
       - playbook_osac_delete_nat_gateway.yml
+    subnet_playbooks:
+      - playbook_osac_create_subnet.yml
+      - playbook_osac_delete_subnet.yml
     resource_extra_vars:
       osac_job_vars:
         resource:
@@ -43,6 +42,23 @@
               network-node:
                 ansible_host: 192.0.2.10
                 ansible_user: example-user
+    subnet_valid_inventory:
+      all:
+        vars:
+          ansible_ssh_common_args: -o StrictHostKeyChecking=accept-new
+        children:
+          net_nodes:
+            hosts:
+              network-node:
+                ansible_host: 192.0.2.10
+                ansible_user: example-user
+          switches:
+            hosts:
+              leaf-1:
+                ansible_host: 192.0.2.11
+                ansible_user: cumulus
+                ansible_network_os: cumulus
+                trunk_ports: [swp1, swp3]
     vn_password_aliases:
       - ansible_password
       - ansible_ssh_pass
@@ -70,8 +86,31 @@
         inventory: >-
           {{ vn_valid_inventory | combine({'all': {'children': {'net_nodes': {'hosts': {
           'network-node': {'ansible_port': 65536}}}}}}, recursive=true) | to_json }}
+    subnet_invalid_inventories:
+      - name: missing-switches
+        inventory: "{{ vn_valid_inventory | to_json }}"
+      - name: wrong-provider
+        inventory: >-
+          {{ subnet_valid_inventory
+          | combine({'all': {'children': {'switches': {'hosts': {'leaf-1': {
+          'ansible_network_os': 'eos'}}}}}}, recursive=true) | to_json }}
+      - name: empty-trunks
+        inventory: >-
+          {{ subnet_valid_inventory
+          | combine({'all': {'children': {'switches': {'hosts': {'leaf-1': {
+          'trunk_ports': []}}}}}}, recursive=true) | to_json }}
+      - name: unsafe-trunk-name
+        inventory: >-
+          {{ subnet_valid_inventory
+          | combine({'all': {'children': {'switches': {'hosts': {'leaf-1': {
+          'trunk_ports': ['swp1;touch']}}}}}}, recursive=true) | to_json }}
+      - name: invalid-switch-port
+        inventory: >-
+          {{ subnet_valid_inventory
+          | combine({'all': {'children': {'switches': {'hosts': {'leaf-1': {
+          'ansible_port': 65536}}}}}}, recursive=true) | to_json }}
   tasks:
-    - name: Validate the AgentlessNet VirtualNetwork lifecycle playbooks
+    - name: Validate AgentlessNet VirtualNetwork and Subnet lifecycle playbooks
       ansible.builtin.command:
         argv:
           - ansible-playbook
@@ -87,6 +126,8 @@
       loop:
         - playbook_osac_create_virtual_network.yml
         - playbook_osac_delete_virtual_network.yml
+        - playbook_osac_create_subnet.yml
+        - playbook_osac_delete_subnet.yml
       loop_control:
         label: "{{ item }}"
 
@@ -109,6 +150,21 @@
         chdir: "{{ playbook_dir }}/../../../../../"
       environment:
         AGENTLESS_NET_VN_INVENTORY: "{{ vn_valid_inventory | to_json }}"
+        AGENTLESS_NET_SSH_PRIVATE_KEY: ""
+      changed_when: false
+
+    - name: Load and register a valid Cumulus switch inventory without SSH
+      ansible.builtin.command:
+        argv:
+          - ansible-playbook
+          - --inventory
+          - localhost,
+          - "{{ playbook_dir }}/../files/validate_vn_inventory.yml"
+          - -e
+          - '{{ {"require_switches": true, "expected_switches": ["leaf-1"]} | to_json }}'
+        chdir: "{{ playbook_dir }}/../../../../../"
+      environment:
+        AGENTLESS_NET_VN_INVENTORY: "{{ subnet_valid_inventory | to_json }}"
         AGENTLESS_NET_SSH_PRIVATE_KEY: ""
       changed_when: false
 
@@ -141,6 +197,36 @@
       loop: "{{ vn_invalid_inventory_result.results }}"
       no_log: true
 
+    - name: Reject invalid Cumulus switch inventories in fresh Ansible processes
+      ansible.builtin.command:
+        argv:
+          - ansible-playbook
+          - --inventory
+          - localhost,
+          - "{{ playbook_dir }}/../files/validate_vn_inventory.yml"
+          - -e
+          - '{"require_switches":true,"expected_switches":[]}'
+        chdir: "{{ playbook_dir }}/../../../../../"
+      environment:
+        AGENTLESS_NET_VN_INVENTORY: "{{ item.inventory }}"
+        AGENTLESS_NET_SSH_PRIVATE_KEY: ""
+      register: subnet_invalid_inventory_result
+      changed_when: false
+      failed_when: false
+      loop: "{{ subnet_invalid_inventories }}"
+      loop_control:
+        label: "{{ item.name }}"
+      no_log: true
+
+    - name: Verify invalid switch inventories fail before switch registration
+      ansible.builtin.assert:
+        that:
+          - item.rc != 0
+          - "'censored' in item.stdout"
+          - "'Register validated AgentlessNet Cumulus switches' not in item.stdout"
+      loop: "{{ subnet_invalid_inventory_result.results }}"
+      no_log: true
+
     - name: Reject every password alias including group variables
       ansible.builtin.command:
         argv:
@@ -148,11 +234,13 @@
           - --inventory
           - localhost,
           - "{{ playbook_dir }}/../files/validate_vn_inventory.yml"
+          - -e
+          - '{"require_switches":true,"expected_switches":[]}'
         chdir: "{{ playbook_dir }}/../../../../../"
       environment:
         AGENTLESS_NET_VN_INVENTORY: >-
-          {{ vn_valid_inventory
-          | combine({'all': {'vars': {item: 'dummy-sensitive-marker'}}}, recursive=true)
+          {{ subnet_valid_inventory
+          | combine({'all': {'children': {'switches': {'hosts': {'leaf-1': {item: 'dummy-sensitive-marker'}}}}}}, recursive=true)
           | to_json }}
         AGENTLESS_NET_SSH_PRIVATE_KEY: ""
       register: vn_password_inventory_result

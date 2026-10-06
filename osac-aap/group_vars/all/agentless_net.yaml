@@ -13,6 +13,7 @@ agentless_net_network_state_file: "{{ lookup('env', 'AGENTLESS_NET_STATE_FILE', 
 agentless_net_vlan_pool_start: "{{ lookup('env', 'AGENTLESS_NET_VLAN_POOL_START', default='100') | int }}"
 agentless_net_vlan_pool_end: "{{ lookup('env', 'AGENTLESS_NET_VLAN_POOL_END', default='199') | int }}"
 agentless_net_trunk_interface: "{{ lookup('env', 'AGENTLESS_NET_TRUNK_INTERFACE', default='eth1') }}"
+agentless_net_dhcp_supervisor: "{{ lookup('env', 'AGENTLESS_NET_DHCP_SUPERVISOR', default='systemd') }}"
 agentless_net_external_interface: "{{ lookup('env', 'AGENTLESS_NET_EXTERNAL_INTERFACE', default='eth0') }}"
 agentless_net_external_gateway: "{{ lookup('env', 'AGENTLESS_NET_EXTERNAL_GATEWAY', default='') }}"
 agentless_net_subnet_cidr: "{{ lookup('env', 'AGENTLESS_NET_SUBNET_CIDR', default='') }}"

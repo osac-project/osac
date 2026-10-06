@@ -7,6 +7,7 @@ import sqlite3
 import subprocess
 import sys
 import threading
+import time
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -56,6 +57,46 @@ def get_virtual_network(store, uid, tenant_id=TENANT_ONE):
 
 def delete_virtual_network(store, uid, tenant_id=TENANT_ONE):
     return store.delete_and_remove_virtual_network(uid, tenant_id)
+
+
+def available_subnet_cidr(parent, *, prefix=24, exclude=()):
+    parent_network = ipaddress.ip_network(parent["virtual_network_cidr"])
+    transit = ipaddress.ip_network(parent["transit"]["cidr"])
+    excluded = [ipaddress.ip_network(cidr) for cidr in exclude]
+    for candidate in parent_network.subnets(new_prefix=prefix):
+        if candidate.overlaps(transit) or any(candidate.overlaps(item) for item in excluded):
+            continue
+        return str(candidate)
+    raise AssertionError("test VirtualNetwork has no free Subnet candidate")
+
+
+def reserve_subnet(
+    store,
+    uid=UID_TWO,
+    parent_uid=UID_ONE,
+    *,
+    tenant_id=TENANT_ONE,
+    cidr=None,
+    trunk="eth1",
+    vlan_start=100,
+    vlan_end=199,
+    vip="",
+    check_mode=False,
+):
+    parent = store.get_virtual_network(parent_uid, tenant_id)
+    if cidr is None:
+        cidr = available_subnet_cidr(parent)
+    return store.reserve_subnet(
+        uid,
+        parent_uid,
+        tenant_id,
+        cidr,
+        trunk,
+        vlan_start,
+        vlan_end,
+        vip,
+        check_mode=check_mode,
+    )
 
 
 def assert_store_lock_is_free(store):
@@ -760,16 +801,16 @@ def test_schema_rejects_non_slash_31_transit_and_noncanonical_cidr(tmp_path):
         get_virtual_network(store, UID_ONE)
 
 
-def test_state_database_keeps_schema_v1_and_indexes_uid_and_transit(tmp_path):
+def test_state_database_uses_schema_v2_and_preserves_uid_and_transit_indexes(tmp_path):
     store = store_for(tmp_path)
     first = ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
     second = ensure_virtual_network(store, UID_TWO, "10.0.0.0/16")
 
     with sqlite3.connect(store.path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
         assert connection.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table'"
-        ).fetchall() == [("virtual_networks",)]
+        ).fetchall() == [("virtual_networks",), ("subnets",)]
         assert connection.execute("SELECT count(*) FROM virtual_networks").fetchone()[0] == 2
         with pytest.raises(sqlite3.IntegrityError):
             connection.execute("INSERT INTO virtual_networks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -781,6 +822,220 @@ def test_state_database_keeps_schema_v1_and_indexes_uid_and_transit(tmp_path):
     reopened = StateStore(store.path)
     assert get_virtual_network(reopened, UID_ONE) == first
     assert get_virtual_network(reopened, UID_TWO) == second
+
+
+def test_schema_v1_migrates_additively_and_check_mode_reads_without_migration(tmp_path):
+    store = store_for(tmp_path)
+    original = ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
+    with sqlite3.connect(store.path) as connection:
+        connection.execute("DROP TABLE subnets")
+        connection.execute("PRAGMA user_version = 1")
+
+    assert store.get_virtual_network(UID_ONE, TENANT_ONE, check_mode=True) == original
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall() == [("virtual_networks",)]
+
+    assert get_virtual_network(store, UID_ONE) == original
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert connection.execute(
+            "SELECT count(*) FROM subnets"
+        ).fetchone()[0] == 0
+    assert get_virtual_network(store, UID_ONE) == original
+
+
+def test_check_mode_subnet_reservation_does_not_create_a_row(tmp_path):
+    store = store_for(tmp_path)
+    parent = ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
+    cidr = available_subnet_cidr(parent, prefix=30)
+
+    proposed, changed = reserve_subnet(
+        store, cidr=cidr, check_mode=True, vlan_start=321, vlan_end=321
+    )
+
+    assert changed is True
+    assert proposed["vlan_id"] == 321
+    assert proposed["gateway_ipv4"] == str(ipaddress.ip_network(cidr).network_address + 1)
+    assert store.get_subnet(UID_TWO, TENANT_ONE) is None
+
+
+def test_subnet_reservation_is_idempotent_and_vlan_ids_are_global(tmp_path):
+    store = store_for(tmp_path)
+    parent_one = ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
+    parent_two = ensure_virtual_network(store, UID_TWO, "10.0.0.0/16")
+    cidr = available_subnet_cidr(parent_one)
+
+    first, changed = reserve_subnet(store, uid=UID_THREE, cidr=cidr)
+    retry, retry_changed = reserve_subnet(store, uid=UID_THREE, cidr=cidr)
+    peer, peer_changed = reserve_subnet(
+        store,
+        uid=UID_TWO,
+        parent_uid=UID_TWO,
+        cidr=cidr,
+    )
+
+    assert changed is True
+    assert retry_changed is False
+    assert retry == first
+    assert peer_changed is True
+    assert first["vlan_id"] == 100
+    assert peer["vlan_id"] == 101
+    assert peer["virtual_network_uid"] == parent_two["uid"]
+    assert first["vlan_interface"].startswith("s")
+    assert len(first["vlan_interface"]) <= 15
+
+
+def test_subnet_retry_rejects_changed_parent_cidr_trunk_or_vip(tmp_path):
+    store = store_for(tmp_path)
+    parent = ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
+    other_parent = ensure_virtual_network(store, UID_THREE, "10.0.0.0/16")
+    other_transit = ipaddress.ip_network(other_parent["transit"]["cidr"])
+    cidr = next(
+        str(candidate)
+        for candidate in ipaddress.ip_network(parent["virtual_network_cidr"]).subnets(
+            new_prefix=24
+        )
+        if not candidate.overlaps(ipaddress.ip_network(parent["transit"]["cidr"]))
+        and not candidate.overlaps(other_transit)
+    )
+    subnet_uid = "44444444-4444-4444-8444-444444444444"
+    reserve_subnet(store, uid=subnet_uid, cidr=cidr)
+
+    with pytest.raises(StateError, match="does not match its saved allocation"):
+        reserve_subnet(store, uid=subnet_uid, parent_uid=other_parent["uid"], cidr=cidr)
+    with pytest.raises(StateError, match="does not match its saved allocation"):
+        reserve_subnet(
+            store,
+            uid=subnet_uid,
+            cidr=available_subnet_cidr(parent, exclude=(cidr,)),
+        )
+    with pytest.raises(StateError, match="does not match its saved allocation"):
+        reserve_subnet(store, uid=subnet_uid, cidr=cidr, trunk="eth2")
+    with pytest.raises(StateError, match="does not match its saved allocation"):
+        reserve_subnet(
+            store,
+            uid=subnet_uid,
+            cidr=cidr,
+            vip=f"{ipaddress.ip_network(cidr).broadcast_address}/32",
+        )
+
+
+def test_subnet_reservation_checks_parent_tenant_transit_and_siblings(tmp_path):
+    store = store_for(tmp_path)
+    parent = ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
+    cidr = available_subnet_cidr(parent)
+    reserve_subnet(store, uid=UID_TWO, cidr=cidr)
+
+    with pytest.raises(StateError, match="saved sibling"):
+        reserve_subnet(store, uid=UID_THREE, cidr=cidr)
+    with pytest.raises(StateError, match="tenant does not match"):
+        reserve_subnet(store, uid=UID_THREE, cidr=available_subnet_cidr(parent), tenant_id=TENANT_TWO)
+    transit_supernet = ipaddress.ip_network(parent["transit"]["cidr"]).supernet(new_prefix=30)
+    with pytest.raises(StateError, match="overlaps its parent VirtualNetwork transit"):
+        reserve_subnet(store, uid=UID_THREE, cidr=str(transit_supernet))
+
+
+def test_subnet_reservation_validates_pool_exhaustion_and_vip_host_space(tmp_path):
+    store = store_for(tmp_path)
+    parent = ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
+    cidr = available_subnet_cidr(parent)
+    reserve_subnet(store, uid=UID_TWO, cidr=cidr, vlan_start=4094, vlan_end=4094)
+    with pytest.raises(StateError, match="VLAN pool is exhausted"):
+        reserve_subnet(
+            store,
+            uid=UID_THREE,
+            cidr=available_subnet_cidr(parent, exclude=(cidr,)),
+            vlan_start=4094,
+            vlan_end=4094,
+        )
+
+    small_cidr = available_subnet_cidr(parent, prefix=30)
+    network = ipaddress.ip_network(small_cidr)
+    with pytest.raises(StateError, match="leaves no DHCP address"):
+        reserve_subnet(
+            store,
+            uid="44444444-4444-4444-8444-444444444444",
+            cidr=small_cidr,
+            vip=f"{network.network_address + 2}/31",
+        )
+
+
+def test_subnet_delete_retains_vlan_until_release_and_blocks_parent_delete(tmp_path, monkeypatch):
+    store = store_for(tmp_path)
+    ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
+    subnet, _ = reserve_subnet(store, uid=UID_TWO)
+    monkeypatch.setattr(
+        agentless_net_state,
+        "prepare_subnet_delete_data_plane",
+        lambda *args: False,
+    )
+    monkeypatch.setattr(
+        agentless_net_state,
+        "cleanup_virtual_network_dhcp",
+        lambda *args, **kwargs: False,
+    )
+    monkeypatch.setattr(
+        agentless_net_state,
+        "delete_virtual_network",
+        lambda *args, **kwargs: False,
+    )
+
+    deleting, changed = store.prepare_delete_subnet(UID_TWO, TENANT_ONE, "systemd")
+    assert changed is True
+    assert deleting["phase"] == "deleting"
+    with pytest.raises(StateError, match="already deleting"):
+        reserve_subnet(store, uid=UID_TWO, cidr=subnet["ipv4_cidr"])
+    with pytest.raises(StateError, match="saved Subnets remain"):
+        store.delete_and_remove_virtual_network(UID_ONE, TENANT_ONE)
+
+    released, release_changed = store.release_subnet(UID_TWO, TENANT_ONE)
+    assert release_changed is True
+    assert released["vlan_id"] == subnet["vlan_id"]
+    assert store.get_subnet(UID_TWO, TENANT_ONE) is None
+    assert store.delete_and_remove_virtual_network(UID_ONE, TENANT_ONE) is True
+
+
+def test_sibling_subnet_provider_operations_share_parent_resource_lock(tmp_path, monkeypatch):
+    store = store_for(tmp_path)
+    parent = ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
+    first_cidr = available_subnet_cidr(parent)
+    second_cidr = available_subnet_cidr(parent, exclude=(first_cidr,))
+    reserve_subnet(store, uid=UID_TWO, cidr=first_cidr)
+    reserve_subnet(store, uid=UID_THREE, cidr=second_cidr)
+    monkeypatch.setattr(agentless_net_state, "reconcile_virtual_network", lambda *args, **kwargs: False)
+
+    active = 0
+    maximum_active = 0
+    guard = threading.Lock()
+
+    def reconcile_subnets(*args):
+        nonlocal active, maximum_active
+        with guard:
+            active += 1
+            maximum_active = max(maximum_active, active)
+        time.sleep(0.08)
+        with guard:
+            active -= 1
+        return False
+
+    monkeypatch.setattr(agentless_net_state, "ensure_subnet_data_plane", reconcile_subnets)
+    threads = [
+        threading.Thread(
+            target=store.ensure_and_reconcile_subnet,
+            args=(uid, TENANT_ONE, "systemd"),
+        )
+        for uid in (UID_TWO, UID_THREE)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=2)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert maximum_active == 1
 
 
 def test_transit_address_exhaustion_preserves_existing_reservation(tmp_path):
@@ -812,7 +1067,8 @@ def test_module_failure_does_not_disclose_state_values(monkeypatch, action):
     sensitive = "dummy-sensitive-marker 10.20.0.0/16 inventory-value"
     ansible_module = SimpleNamespace(
         params={"action": action, "state_file": "/unused", "uid": UID_ONE,
-                "tenant_id": TENANT_ONE, "virtual_network_cidr": "10.20.0.0/16"},
+                "tenant_id": TENANT_ONE, "virtual_network_cidr": "10.20.0.0/16",
+                "dhcp_supervisor": "systemd"},
         check_mode=False,
         fail_json=Mock(),
         exit_json=lambda **kwargs: pytest.fail("failed provider work must not succeed"),

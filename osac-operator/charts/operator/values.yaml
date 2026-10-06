@@ -132,9 +132,10 @@ networkManagers:
     agentless_net:
       enabled: false
       description: >-
-        AgentlessNet VirtualNetwork baseline. Implements UID-keyed namespaces,
-        /31 transit links, and the namespace forwarding policy. Other
-        networking resource operations return NotImplemented.
+        AgentlessNet VirtualNetwork and Subnet baseline. Implements UID-keyed
+        namespaces, /31 transit links, Cumulus trunk VLANs, Subnet gateways,
+        and per-VirtualNetwork DHCP. SecurityGroups, NAT, workload attachment,
+        BGP, and external access remain unsupported.
       capabilities:
       - ipv4
   k8sManagers:

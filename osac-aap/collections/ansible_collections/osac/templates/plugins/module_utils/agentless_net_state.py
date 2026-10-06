@@ -8,6 +8,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import re
 import sqlite3
 import stat
 import time
@@ -29,8 +30,14 @@ from ansible_collections.osac.templates.plugins.module_utils.agentless_net_netwo
     parse_json_object_list,
     run_command,
 )
+from ansible_collections.osac.templates.plugins.module_utils.agentless_net_subnet import (
+    SubnetProviderError,
+    cleanup_virtual_network_dhcp,
+    ensure_subnet_data_plane,
+    prepare_subnet_delete_data_plane,
+)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 LOCK_WAIT_SECONDS = 60
 LOCK_POLL_SECONDS = 0.05
 MAX_RULE_DELETIONS = 64
@@ -44,6 +51,22 @@ VIRTUAL_NETWORK_KEYS = {
     "transit",
 }
 TRANSIT_KEYS = {"cidr", "namespace_ip", "host_ip", "gateway"}
+SUBNET_KEYS = {
+    "uid",
+    "virtual_network_uid",
+    "tenant_id",
+    "ipv4_cidr",
+    "vlan_id",
+    "vlan_interface",
+    "trunk_interface",
+    "gateway_ipv4",
+    "dhcp_range_start",
+    "dhcp_range_end",
+    "vip_cidr",
+    "phase",
+}
+SAFE_INTERFACE_NAME = re.compile(r"^[A-Za-z0-9_.-]{1,15}$")
+SUBNET_PHASES = {"provisioning", "ready", "deleting"}
 
 
 class StateError(Exception):
@@ -76,6 +99,84 @@ def _parse_canonical_ipv4_network(value: Any) -> ipaddress.IPv4Network:
     if str(network) != value:
         raise ValueError("VirtualNetwork CIDR must be canonical")
     return network
+
+
+def _validate_dhcp_supervisor(value: Any) -> str:
+    if not isinstance(value, str) or value not in {"systemd", "supervisor"}:
+        raise StateError("AgentlessNet DHCP supervisor must be systemd or supervisor")
+    return value
+
+
+def _subnet_payload(
+    uid: str,
+    virtual_network_uid: str,
+    tenant_id: str,
+    cidr: str,
+    trunk_interface: str,
+    vlan_id: int,
+    vip_cidr: str,
+) -> dict[str, Any]:
+    if not _is_canonical_uuid(uid):
+        raise StateError("Subnet UID must be a canonical UUID")
+    if not _is_canonical_uuid(virtual_network_uid):
+        raise StateError("Subnet parent UID must be a canonical UUID")
+    if not _is_valid_tenant_id(tenant_id):
+        raise StateError("Subnet tenant ID is required")
+    try:
+        network = ipaddress.ip_network(cidr, strict=True)
+    except (TypeError, ValueError) as error:
+        raise StateError(
+            "Subnet CIDR must be a canonical IPv4 prefix of /30 or shorter for gateway and DHCP support"
+        ) from error
+    if (
+        not isinstance(network, ipaddress.IPv4Network)
+        or network.prefixlen > 30
+        or str(network) != cidr
+    ):
+        raise StateError(
+            "Subnet CIDR must be a canonical IPv4 prefix of /30 or shorter for gateway and DHCP support"
+        )
+    if not isinstance(trunk_interface, str) or not SAFE_INTERFACE_NAME.fullmatch(
+        trunk_interface
+    ):
+        raise StateError("Subnet trunk interface name is invalid")
+    if isinstance(vlan_id, bool) or not isinstance(vlan_id, int) or not 1 <= vlan_id <= 4094:
+        raise StateError("Subnet VLAN ID is outside the supported range")
+
+    gateway = network.network_address + 1
+    dhcp_start = network.network_address + 2
+    dhcp_end = network.broadcast_address - 1
+    if vip_cidr:
+        try:
+            vip_network = ipaddress.ip_network(vip_cidr, strict=True)
+        except (TypeError, ValueError) as error:
+            raise StateError("Subnet VIP CIDR must be a canonical upper-end IPv4 block") from error
+        if (
+            not isinstance(vip_network, ipaddress.IPv4Network)
+            or str(vip_network) != vip_cidr
+            or vip_network.prefixlen <= network.prefixlen
+            or not vip_network.subnet_of(network)
+            or vip_network.broadcast_address != network.broadcast_address
+        ):
+            raise StateError("Subnet VIP CIDR must be a canonical upper-end IPv4 block")
+        dhcp_end = vip_network.network_address - 1
+    if dhcp_start > dhcp_end:
+        raise StateError("Subnet VIP reservation leaves no DHCP address")
+
+    return {
+        "uid": uid,
+        "virtual_network_uid": virtual_network_uid,
+        "tenant_id": tenant_id,
+        "ipv4_cidr": str(network),
+        "vlan_id": vlan_id,
+        "vlan_interface": f"s{hashlib.sha256(uid.encode()).hexdigest()[:12]}",
+        "trunk_interface": trunk_interface,
+        "gateway_ipv4": str(gateway),
+        "dhcp_range_start": str(dhcp_start),
+        "dhcp_range_end": str(dhcp_end),
+        "vip_cidr": vip_cidr,
+        "phase": "provisioning",
+    }
 
 
 @contextlib.contextmanager
@@ -119,14 +220,34 @@ class StateStore:
         self.firewall_lock_path = Path(f"{self.path}.firewall.lock")
 
     @contextlib.contextmanager
-    def _locked_database(self, *, create: bool):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with _locked_path(self.lock_path):
-            connection = self._open_database(create=create)
+    def _locked_database(
+        self, *, create: bool, migrate: bool = True, read_only: bool = False
+    ):
+        if create:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+        if read_only:
+            connection = self._open_database(
+                create=False, migrate=False, read_only=True
+            )
             try:
                 yield connection
             except sqlite3.DatabaseError as error:
-                raise StateCorrupt(f"AgentlessNet state database is corrupt: {error}") from error
+                raise StateCorrupt(
+                    f"AgentlessNet state database is corrupt: {error}"
+                ) from error
+            finally:
+                if connection is not None:
+                    connection.close()
+            return
+
+        with _locked_path(self.lock_path):
+            connection = self._open_database(create=create, migrate=migrate)
+            try:
+                yield connection
+            except sqlite3.DatabaseError as error:
+                raise StateCorrupt(
+                    f"AgentlessNet state database is corrupt: {error}"
+                ) from error
             finally:
                 if connection is not None:
                     connection.close()
@@ -139,10 +260,14 @@ class StateStore:
         with _locked_path(resource_lock_path):
             yield
 
-    def _open_database(self, *, create: bool) -> sqlite3.Connection | None:
+    def _open_database(
+        self, *, create: bool, migrate: bool = True, read_only: bool = False
+    ) -> sqlite3.Connection | None:
         if not create and not self.path.exists():
             return None
-        flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+        flags = (os.O_RDONLY if read_only else os.O_RDWR) | getattr(
+            os, "O_NOFOLLOW", 0
+        )
         if create:
             flags |= os.O_CREAT
         try:
@@ -158,17 +283,26 @@ class StateStore:
                 raise StateCorrupt("AgentlessNet state path is not a regular file")
             if file_stat.st_uid != os.geteuid() or file_stat.st_mode & 0o077:
                 raise StateCorrupt("AgentlessNet state file has unsafe owner or mode")
-            connection = sqlite3.connect(
-                self.path,
-                timeout=LOCK_WAIT_SECONDS,
-                isolation_level=None,
-            )
+            if read_only:
+                connection = sqlite3.connect(
+                    f"{self.path.resolve().as_uri()}?mode=ro",
+                    uri=True,
+                    timeout=LOCK_WAIT_SECONDS,
+                    isolation_level=None,
+                )
+            else:
+                connection = sqlite3.connect(
+                    self.path,
+                    timeout=LOCK_WAIT_SECONDS,
+                    isolation_level=None,
+                )
         except sqlite3.DatabaseError as error:
             raise StateCorrupt(f"AgentlessNet state database is corrupt: {error}") from error
         finally:
             os.close(state_fd)
 
         try:
+            connection.execute("PRAGMA foreign_keys = ON")
             tables = {
                 row[0]
                 for row in connection.execute(
@@ -177,10 +311,10 @@ class StateStore:
             }
             version = connection.execute("PRAGMA user_version").fetchone()[0]
             if not tables and version == 0 and create:
-                connection.executescript(
-                    """
-                    BEGIN IMMEDIATE;
-                    CREATE TABLE virtual_networks (
+                connection.execute("BEGIN IMMEDIATE")
+                try:
+                    connection.execute(
+                        """CREATE TABLE virtual_networks (
                         uid TEXT PRIMARY KEY,
                         tenant_id TEXT NOT NULL,
                         virtual_network_cidr TEXT NOT NULL,
@@ -190,34 +324,42 @@ class StateStore:
                         transit_cidr TEXT NOT NULL,
                         transit_start INTEGER NOT NULL UNIQUE,
                         payload TEXT NOT NULL
-                    );
-                    PRAGMA user_version = 1;
-                    COMMIT;
-                    """
-                )
-                tables = {"virtual_networks"}
+                    )"""
+                    )
+                    self._create_subnet_schema(connection)
+                    connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+                    connection.commit()
+                except BaseException:
+                    connection.rollback()
+                    raise
+                tables = {"virtual_networks", "subnets"}
                 version = SCHEMA_VERSION
+
+            if version == 1:
+                if tables != {"virtual_networks"}:
+                    raise StateCorrupt(
+                        "AgentlessNet schema-v1 database has an invalid table set"
+                    )
+                self._validate_virtual_network_table(connection)
+                if not migrate or read_only:
+                    return connection
+                connection.execute("BEGIN IMMEDIATE")
+                try:
+                    self._create_subnet_schema(connection)
+                    connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+                    connection.commit()
+                except BaseException:
+                    connection.rollback()
+                    raise
+                tables = {"virtual_networks", "subnets"}
+                version = SCHEMA_VERSION
+
             if version != SCHEMA_VERSION:
                 raise StateCorrupt(f"unsupported state schema: {version!r}")
-            if tables != {"virtual_networks"}:
+            if tables != {"virtual_networks", "subnets"}:
                 raise StateCorrupt("AgentlessNet state database has an invalid schema")
-            columns = {
-                row[1]
-                for row in connection.execute("PRAGMA table_info(virtual_networks)")
-            }
-            expected_columns = {
-                "uid",
-                "tenant_id",
-                "virtual_network_cidr",
-                "namespace_name",
-                "namespace_interface",
-                "host_interface",
-                "transit_cidr",
-                "transit_start",
-                "payload",
-            }
-            if columns != expected_columns:
-                raise StateCorrupt("AgentlessNet state database has an invalid schema")
+            self._validate_virtual_network_table(connection)
+            self._validate_subnet_table(connection)
             return connection
         except (sqlite3.DatabaseError, OSError) as error:
             connection.close()
@@ -225,6 +367,119 @@ class StateStore:
         except BaseException:
             connection.close()
             raise
+
+    @staticmethod
+    def _create_subnet_schema(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """CREATE TABLE subnets (
+                uid TEXT PRIMARY KEY,
+                virtual_network_uid TEXT NOT NULL
+                    REFERENCES virtual_networks(uid),
+                tenant_id TEXT NOT NULL,
+                vlan_id INTEGER NOT NULL UNIQUE,
+                vlan_interface TEXT NOT NULL UNIQUE,
+                ipv4_cidr TEXT NOT NULL,
+                phase TEXT NOT NULL,
+                payload TEXT NOT NULL
+            )"""
+        )
+        connection.execute(
+            "CREATE INDEX subnets_by_vn ON subnets(virtual_network_uid)"
+        )
+
+    @staticmethod
+    def _validate_virtual_network_table(connection: sqlite3.Connection) -> None:
+        column_info = {
+            row[1]: row
+            for row in connection.execute("PRAGMA table_info(virtual_networks)")
+        }
+        columns = set(column_info)
+        expected_columns = {
+            "uid",
+            "tenant_id",
+            "virtual_network_cidr",
+            "namespace_name",
+            "namespace_interface",
+            "host_interface",
+            "transit_cidr",
+            "transit_start",
+            "payload",
+        }
+        if columns != expected_columns:
+            raise StateCorrupt("AgentlessNet state database has an invalid schema")
+        if column_info["uid"][5] != 1 or any(
+            column_info[name][3] != 1
+            for name in expected_columns - {"uid"}
+        ):
+            raise StateCorrupt("AgentlessNet VirtualNetwork constraints are missing")
+        unique_columns = set()
+        for index_row in connection.execute("PRAGMA index_list(virtual_networks)"):
+            if index_row[2]:
+                index_info = connection.execute(
+                    f"PRAGMA index_info('{index_row[1]}')"
+                ).fetchone()
+                if index_info is not None:
+                    unique_columns.add(index_info[2])
+        if not {
+            "uid",
+            "namespace_name",
+            "namespace_interface",
+            "host_interface",
+            "transit_start",
+        }.issubset(unique_columns):
+            raise StateCorrupt("AgentlessNet VirtualNetwork uniqueness constraints are missing")
+
+    @staticmethod
+    def _validate_subnet_table(connection: sqlite3.Connection) -> None:
+        column_info = {
+            row[1]: row for row in connection.execute("PRAGMA table_info(subnets)")
+        }
+        columns = set(column_info)
+        if columns != {
+            "uid",
+            "virtual_network_uid",
+            "tenant_id",
+            "vlan_id",
+            "vlan_interface",
+            "ipv4_cidr",
+            "phase",
+            "payload",
+        }:
+            raise StateCorrupt("AgentlessNet Subnet table has an invalid schema")
+        if column_info["uid"][5] != 1 or any(
+            column_info[name][3] != 1
+            for name in columns - {"uid"}
+        ):
+            raise StateCorrupt("AgentlessNet Subnet constraints are missing")
+        index = connection.execute(
+            """SELECT sql FROM sqlite_master
+               WHERE type = 'index' AND name = 'subnets_by_vn'"""
+        ).fetchone()
+        if index is None or connection.execute(
+            "PRAGMA index_info(subnets_by_vn)"
+        ).fetchall() != [(0, 1, "virtual_network_uid")]:
+            raise StateCorrupt("AgentlessNet Subnet index has an invalid schema")
+        foreign_keys = connection.execute(
+            "PRAGMA foreign_key_list(subnets)"
+        ).fetchall()
+        if not any(
+            row[2] == "virtual_networks"
+            and row[3] == "virtual_network_uid"
+            and row[4] == "uid"
+            and row[6] == "NO ACTION"
+            for row in foreign_keys
+        ):
+            raise StateCorrupt("AgentlessNet Subnet parent constraint is missing")
+        unique_columns = set()
+        for index_row in connection.execute("PRAGMA index_list(subnets)"):
+            if index_row[2]:
+                index_info = connection.execute(
+                    f"PRAGMA index_info('{index_row[1]}')"
+                ).fetchone()
+                if index_info is not None:
+                    unique_columns.add(index_info[2])
+        if not {"uid", "vlan_id", "vlan_interface"}.issubset(unique_columns):
+            raise StateCorrupt("AgentlessNet Subnet uniqueness constraints are missing")
 
     @staticmethod
     def _validate_entry(entry: Any) -> None:
@@ -282,6 +537,70 @@ class StateStore:
             raise StateCorrupt("VirtualNetwork host IP is invalid")
 
     @staticmethod
+    def _validate_subnet_entry(entry: Any) -> None:
+        if not isinstance(entry, dict) or set(entry) != SUBNET_KEYS:
+            raise StateCorrupt("Subnet state entry has an invalid shape")
+        if not _is_canonical_uuid(entry["uid"]):
+            raise StateCorrupt("Subnet UID must be a canonical UUID")
+        if not _is_canonical_uuid(entry["virtual_network_uid"]):
+            raise StateCorrupt("Subnet parent UID must be a canonical UUID")
+        if not _is_valid_tenant_id(entry["tenant_id"]):
+            raise StateCorrupt("Subnet tenant ID is invalid")
+        try:
+            network = ipaddress.ip_network(entry["ipv4_cidr"], strict=True)
+        except (TypeError, ValueError) as error:
+            raise StateCorrupt("Subnet IPv4 CIDR is invalid") from error
+        if (
+            not isinstance(network, ipaddress.IPv4Network)
+            or network.prefixlen > 30
+            or str(network) != entry["ipv4_cidr"]
+        ):
+            raise StateCorrupt("Subnet IPv4 CIDR must be canonical and no smaller than /30")
+        if isinstance(entry["vlan_id"], bool) or not isinstance(entry["vlan_id"], int):
+            raise StateCorrupt("Subnet VLAN ID is invalid")
+        if not 1 <= entry["vlan_id"] <= 4094:
+            raise StateCorrupt("Subnet VLAN ID is outside the supported range")
+        expected_interface = f"s{hashlib.sha256(entry['uid'].encode()).hexdigest()[:12]}"
+        if entry["vlan_interface"] != expected_interface:
+            raise StateCorrupt("Subnet VLAN interface does not match its UID")
+        if not isinstance(entry["trunk_interface"], str) or not SAFE_INTERFACE_NAME.fullmatch(
+            entry["trunk_interface"]
+        ):
+            raise StateCorrupt("Subnet trunk interface is invalid")
+        if not isinstance(entry["phase"], str) or entry["phase"] not in SUBNET_PHASES:
+            raise StateCorrupt("Subnet provider phase is invalid")
+
+        gateway = network.network_address + 1
+        dhcp_start = network.network_address + 2
+        dhcp_end = network.broadcast_address - 1
+        vip_cidr = entry["vip_cidr"]
+        if not isinstance(vip_cidr, str):
+            raise StateCorrupt("Subnet VIP CIDR is invalid")
+        if vip_cidr:
+            try:
+                vip_network = ipaddress.ip_network(vip_cidr, strict=True)
+            except (TypeError, ValueError) as error:
+                raise StateCorrupt("Subnet VIP CIDR is invalid") from error
+            if (
+                not isinstance(vip_network, ipaddress.IPv4Network)
+                or str(vip_network) != vip_cidr
+                or vip_network.prefixlen <= network.prefixlen
+                or not vip_network.subnet_of(network)
+                or vip_network.broadcast_address != network.broadcast_address
+            ):
+                raise StateCorrupt("Subnet VIP CIDR must be a canonical upper-end block")
+            dhcp_end = vip_network.network_address - 1
+        if dhcp_start > dhcp_end:
+            raise StateCorrupt("Subnet VIP reservation leaves no DHCP address")
+        expected = {
+            "gateway_ipv4": str(gateway),
+            "dhcp_range_start": str(dhcp_start),
+            "dhcp_range_end": str(dhcp_end),
+        }
+        if any(entry[key] != value for key, value in expected.items()):
+            raise StateCorrupt("Subnet gateway or DHCP range does not match its CIDR")
+
+    @staticmethod
     def _row_for_entry(entry: dict[str, Any]) -> tuple[Any, ...]:
         transit = entry["transit"]
         return (
@@ -293,6 +612,19 @@ class StateStore:
             entry["uplink"]["host_interface"],
             transit["cidr"],
             int(ipaddress.ip_network(transit["cidr"]).network_address),
+            json.dumps(entry, sort_keys=True, separators=(",", ":")),
+        )
+
+    @staticmethod
+    def _row_for_subnet_entry(entry: dict[str, Any]) -> tuple[Any, ...]:
+        return (
+            entry["uid"],
+            entry["virtual_network_uid"],
+            entry["tenant_id"],
+            entry["vlan_id"],
+            entry["vlan_interface"],
+            entry["ipv4_cidr"],
+            entry["phase"],
             json.dumps(entry, sort_keys=True, separators=(",", ":")),
         )
 
@@ -316,6 +648,403 @@ class StateStore:
         if row[:8] != self._row_for_entry(entry)[:8] or entry["uid"] != uid:
             raise StateCorrupt("VirtualNetwork indexed state does not match its payload")
         return entry
+
+    def _subnet_for_uid(self, connection: sqlite3.Connection, uid: str):
+        row = connection.execute(
+            """SELECT uid, virtual_network_uid, tenant_id, vlan_id,
+                      vlan_interface, ipv4_cidr, phase, payload
+               FROM subnets WHERE uid = ?""",
+            (uid,),
+        ).fetchone()
+        if row is None:
+            return None
+        try:
+            entry = json.loads(row[7])
+        except (json.JSONDecodeError, TypeError) as error:
+            raise StateCorrupt("malformed Subnet state payload") from error
+        self._validate_subnet_entry(entry)
+        if row != self._row_for_subnet_entry(entry) or entry["uid"] != uid:
+            raise StateCorrupt("Subnet indexed state does not match its payload")
+        return entry
+
+    def _subnets_for_virtual_network(
+        self, connection: sqlite3.Connection, virtual_network_uid: str
+    ) -> list[dict[str, Any]]:
+        rows = connection.execute(
+            "SELECT uid FROM subnets WHERE virtual_network_uid = ? ORDER BY uid",
+            (virtual_network_uid,),
+        ).fetchall()
+        entries = [self._subnet_for_uid(connection, row[0]) for row in rows]
+        return [entry for entry in entries if entry is not None]
+
+    def _parent_uid_for_subnet(
+        self, uid: str, tenant_id: str, *, check_mode: bool = False
+    ) -> str | None:
+        if not _is_canonical_uuid(uid):
+            raise StateError("Subnet UID must be a canonical UUID")
+        if not _is_valid_tenant_id(tenant_id):
+            raise StateError("Subnet tenant ID is required")
+        with self._locked_database(
+            create=False,
+            migrate=False,
+            read_only=True,
+        ) as connection:
+            if connection is None:
+                return None
+            version = connection.execute("PRAGMA user_version").fetchone()[0]
+            if version < 2:
+                return None
+            row = connection.execute(
+                "SELECT virtual_network_uid, tenant_id FROM subnets WHERE uid = ?",
+                (uid,),
+            ).fetchone()
+            if row is None:
+                return None
+            if row[1] != tenant_id:
+                raise StateError("Subnet tenant does not match saved state")
+            return row[0]
+
+    def get_subnet(
+        self, uid: str, tenant_id: str, *, check_mode: bool = False
+    ) -> dict[str, Any] | None:
+        if not _is_canonical_uuid(uid):
+            raise StateError("Subnet UID must be a canonical UUID")
+        if not _is_valid_tenant_id(tenant_id):
+            raise StateError("Subnet tenant ID is required")
+        with self._locked_database(
+            create=False,
+            migrate=False,
+            read_only=True,
+        ) as connection:
+            if connection is None:
+                return None
+            if connection.execute("PRAGMA user_version").fetchone()[0] < 2:
+                return None
+            entry = self._subnet_for_uid(connection, uid)
+            if entry is not None and entry["tenant_id"] != tenant_id:
+                raise StateError("Subnet tenant does not match saved state")
+            return entry
+
+    def reserve_subnet(
+        self,
+        uid: str,
+        virtual_network_uid: str,
+        tenant_id: str,
+        subnet_cidr: str,
+        trunk_interface: str,
+        vlan_pool_start: int,
+        vlan_pool_end: int,
+        vip_cidr: str = "",
+        *,
+        check_mode: bool = False,
+    ) -> tuple[dict[str, Any], bool]:
+        if isinstance(vlan_pool_start, bool) or not isinstance(vlan_pool_start, int):
+            raise StateError("AgentlessNet VLAN pool bounds must be integers from 1 to 4094")
+        if isinstance(vlan_pool_end, bool) or not isinstance(vlan_pool_end, int):
+            raise StateError("AgentlessNet VLAN pool bounds must be integers from 1 to 4094")
+        if not 1 <= vlan_pool_start <= vlan_pool_end <= 4094:
+            raise StateError("AgentlessNet VLAN pool bounds must be within 1 to 4094")
+        if not isinstance(vip_cidr, str):
+            raise StateError("Subnet VIP CIDR must be text")
+        # Validate all caller-controlled fields before opening state.
+        requested = _subnet_payload(
+            uid,
+            virtual_network_uid,
+            tenant_id,
+            subnet_cidr,
+            trunk_interface,
+            vlan_pool_start,
+            vip_cidr,
+        )
+        operation_lock = (
+            contextlib.nullcontext()
+            if check_mode
+            else self._resource_locked(virtual_network_uid)
+        )
+        with operation_lock:
+            with self._locked_database(
+                create=not check_mode,
+                migrate=not check_mode,
+                read_only=check_mode,
+            ) as connection:
+                if connection is None:
+                    raise StateError("AgentlessNet parent VirtualNetwork state is missing")
+                parent = self._entry_for_uid(connection, virtual_network_uid)
+                if parent is None:
+                    raise StateError("AgentlessNet parent VirtualNetwork state is missing")
+                if parent["tenant_id"] != tenant_id:
+                    raise StateError("Subnet tenant does not match saved VirtualNetwork state")
+                try:
+                    parent_network = _parse_canonical_ipv4_network(
+                        parent["virtual_network_cidr"]
+                    )
+                    subnet_network = ipaddress.ip_network(subnet_cidr, strict=True)
+                    transit_network = ipaddress.ip_network(parent["transit"]["cidr"])
+                except (TypeError, ValueError) as error:
+                    raise StateCorrupt("saved VirtualNetwork CIDR state is invalid") from error
+                if not subnet_network.subnet_of(parent_network):
+                    raise StateError("Subnet CIDR must be contained by its parent VirtualNetwork")
+                if subnet_network.overlaps(transit_network):
+                    raise StateError("Subnet CIDR overlaps its parent VirtualNetwork transit link")
+
+                current = None
+                existing_subnets: list[dict[str, Any]] = []
+                if connection.execute("PRAGMA user_version").fetchone()[0] >= 2:
+                    current = self._subnet_for_uid(connection, uid)
+                    existing_subnets = self._subnets_for_virtual_network(
+                        connection, virtual_network_uid
+                    )
+                if current is not None:
+                    if current["phase"] == "deleting":
+                        raise StateError("Subnet is already deleting and cannot be recreated")
+                    immutable = (
+                        "virtual_network_uid",
+                        "tenant_id",
+                        "ipv4_cidr",
+                        "trunk_interface",
+                        "vip_cidr",
+                    )
+                    if any(current[key] != requested[key] for key in immutable):
+                        raise StateError("Subnet request does not match its saved allocation")
+                    return current, False
+
+                for sibling in existing_subnets:
+                    if ipaddress.ip_network(sibling["ipv4_cidr"]).overlaps(subnet_network):
+                        raise StateError("Subnet CIDR overlaps a saved sibling Subnet")
+                used_vlans = {
+                    row[0]
+                    for row in connection.execute("SELECT vlan_id FROM subnets")
+                } if connection.execute("PRAGMA user_version").fetchone()[0] >= 2 else set()
+                vlan_id = next(
+                    (
+                        candidate
+                        for candidate in range(vlan_pool_start, vlan_pool_end + 1)
+                        if candidate not in used_vlans
+                    ),
+                    None,
+                )
+                if vlan_id is None:
+                    raise StateError("AgentlessNet Subnet VLAN pool is exhausted")
+                entry = _subnet_payload(
+                    uid,
+                    virtual_network_uid,
+                    tenant_id,
+                    subnet_cidr,
+                    trunk_interface,
+                    vlan_id,
+                    vip_cidr,
+                )
+                self._validate_subnet_entry(entry)
+                if check_mode:
+                    return entry, True
+
+                connection.execute("BEGIN IMMEDIATE")
+                try:
+                    connection.execute(
+                        """INSERT INTO subnets (
+                            uid, virtual_network_uid, tenant_id, vlan_id,
+                            vlan_interface, ipv4_cidr, phase, payload
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                        self._row_for_subnet_entry(entry),
+                    )
+                    connection.commit()
+                except sqlite3.IntegrityError as error:
+                    connection.rollback()
+                    raise StateError(
+                        "AgentlessNet Subnet VLAN allocation conflicts with saved state"
+                    ) from error
+                except BaseException:
+                    connection.rollback()
+                    raise
+                return entry, True
+
+    def ensure_and_reconcile_subnet(
+        self,
+        uid: str,
+        tenant_id: str,
+        dhcp_supervisor: str,
+        *,
+        check_mode: bool = False,
+    ) -> tuple[dict[str, Any], bool, bool]:
+        _validate_dhcp_supervisor(dhcp_supervisor)
+        if check_mode:
+            entry = self.get_subnet(uid, tenant_id, check_mode=True)
+            if entry is None:
+                raise StateError("AgentlessNet Subnet reservation is missing")
+            if entry["phase"] == "deleting":
+                raise StateError("AgentlessNet Subnet is deleting and cannot be ensured")
+            return entry, entry["phase"] != "ready", False
+
+        virtual_network_uid = self._parent_uid_for_subnet(uid, tenant_id)
+        if virtual_network_uid is None:
+            raise StateError("AgentlessNet Subnet reservation is missing")
+        with self._resource_locked(virtual_network_uid):
+            with self._locked_database(create=False) as connection:
+                if connection is None:
+                    raise StateCorrupt("AgentlessNet Subnet state database disappeared")
+                entry = self._subnet_for_uid(connection, uid)
+                if entry is None:
+                    raise StateError("AgentlessNet Subnet reservation is missing")
+                if entry["tenant_id"] != tenant_id:
+                    raise StateError("Subnet tenant does not match saved state")
+                if entry["phase"] == "deleting":
+                    raise StateError("AgentlessNet Subnet is deleting and cannot be ensured")
+                parent = self._entry_for_uid(connection, virtual_network_uid)
+                if parent is None or parent["tenant_id"] != tenant_id:
+                    raise StateError("AgentlessNet Subnet parent state does not match its reservation")
+                siblings = self._subnets_for_virtual_network(
+                    connection, virtual_network_uid
+                )
+                active_subnets = [
+                    child for child in siblings if child["phase"] != "deleting"
+                ]
+
+            try:
+                parent_changed = reconcile_virtual_network(
+                    parent, firewall_lock_path=self.firewall_lock_path
+                )
+                subnet_changed = ensure_subnet_data_plane(
+                    parent, active_subnets, dhcp_supervisor
+                )
+            except (SubnetProviderError, NetworkCommandError) as error:
+                raise StateError(str(error)) from error
+
+            state_changed = False
+            if entry["phase"] != "ready":
+                ready_entry = {**entry, "phase": "ready"}
+                with self._locked_database(create=False) as connection:
+                    if connection is None:
+                        raise StateCorrupt("AgentlessNet Subnet state database disappeared")
+                    connection.execute("BEGIN IMMEDIATE")
+                    try:
+                        current = self._subnet_for_uid(connection, uid)
+                        if current != entry:
+                            raise StateError(
+                                "Subnet state changed while provider reconciliation was running"
+                            )
+                        connection.execute(
+                            "UPDATE subnets SET phase = ?, payload = ? WHERE uid = ?",
+                            (
+                                ready_entry["phase"],
+                                json.dumps(ready_entry, sort_keys=True, separators=(",", ":")),
+                                uid,
+                            ),
+                        )
+                        connection.commit()
+                    except BaseException:
+                        connection.rollback()
+                        raise
+                entry = ready_entry
+                state_changed = True
+            return entry, state_changed, parent_changed or subnet_changed
+
+    def prepare_delete_subnet(
+        self,
+        uid: str,
+        tenant_id: str,
+        dhcp_supervisor: str,
+        *,
+        check_mode: bool = False,
+    ) -> tuple[dict[str, Any] | None, bool]:
+        _validate_dhcp_supervisor(dhcp_supervisor)
+        virtual_network_uid = self._parent_uid_for_subnet(
+            uid, tenant_id, check_mode=check_mode
+        )
+        if virtual_network_uid is None:
+            return None, False
+        if check_mode:
+            entry = self.get_subnet(uid, tenant_id, check_mode=True)
+            if entry is None:
+                return None, False
+            if entry["phase"] != "deleting":
+                entry = {**entry, "phase": "deleting"}
+            return entry, True
+
+        with self._resource_locked(virtual_network_uid):
+            with self._locked_database(create=False) as connection:
+                if connection is None:
+                    return None, False
+                entry = self._subnet_for_uid(connection, uid)
+                if entry is None:
+                    return None, False
+                if entry["tenant_id"] != tenant_id:
+                    raise StateError("Subnet tenant does not match saved state")
+                parent = self._entry_for_uid(connection, virtual_network_uid)
+                if parent is None or parent["tenant_id"] != tenant_id:
+                    raise StateError("AgentlessNet Subnet parent state does not match its reservation")
+                state_changed = entry["phase"] != "deleting"
+                deleting_entry = {**entry, "phase": "deleting"}
+                if state_changed:
+                    connection.execute("BEGIN IMMEDIATE")
+                    try:
+                        connection.execute(
+                            "UPDATE subnets SET phase = ?, payload = ? WHERE uid = ?",
+                            (
+                                deleting_entry["phase"],
+                                json.dumps(
+                                    deleting_entry,
+                                    sort_keys=True,
+                                    separators=(",", ":"),
+                                ),
+                                uid,
+                            ),
+                        )
+                        connection.commit()
+                    except BaseException:
+                        connection.rollback()
+                        raise
+                siblings = self._subnets_for_virtual_network(
+                    connection, virtual_network_uid
+                )
+                remaining = [
+                    child
+                    for child in siblings
+                    if child["uid"] != uid and child["phase"] != "deleting"
+                ]
+
+            try:
+                provider_changed = prepare_subnet_delete_data_plane(
+                    parent, deleting_entry, remaining, dhcp_supervisor
+                )
+            except (SubnetProviderError, NetworkCommandError) as error:
+                raise StateError(str(error)) from error
+            return deleting_entry, state_changed or provider_changed
+
+    def release_subnet(
+        self, uid: str, tenant_id: str, *, check_mode: bool = False
+    ) -> tuple[dict[str, Any] | None, bool]:
+        virtual_network_uid = self._parent_uid_for_subnet(
+            uid, tenant_id, check_mode=check_mode
+        )
+        if virtual_network_uid is None:
+            return None, False
+        if check_mode:
+            entry = self.get_subnet(uid, tenant_id, check_mode=True)
+            if entry is None:
+                return None, False
+            if entry["phase"] != "deleting":
+                raise StateError("AgentlessNet Subnet must be deleting before VLAN release")
+            return entry, True
+
+        with self._resource_locked(virtual_network_uid):
+            with self._locked_database(create=False) as connection:
+                if connection is None:
+                    return None, False
+                entry = self._subnet_for_uid(connection, uid)
+                if entry is None:
+                    return None, False
+                if entry["tenant_id"] != tenant_id:
+                    raise StateError("Subnet tenant does not match saved state")
+                if entry["phase"] != "deleting":
+                    raise StateError("AgentlessNet Subnet must be deleting before VLAN release")
+                connection.execute("BEGIN IMMEDIATE")
+                try:
+                    connection.execute("DELETE FROM subnets WHERE uid = ?", (uid,))
+                    connection.commit()
+                except BaseException:
+                    connection.rollback()
+                    raise
+                return entry, True
 
     @staticmethod
     def _validate_uid(uid: str) -> None:
@@ -470,19 +1199,28 @@ class StateStore:
             reconcile=True,
         )
 
-    def get_virtual_network(self, uid: str, tenant_id: str) -> dict[str, Any] | None:
+    def get_virtual_network(
+        self, uid: str, tenant_id: str, *, check_mode: bool = False
+    ) -> dict[str, Any] | None:
         self._validate_uid(uid)
         self._validate_tenant_id(tenant_id)
-        with self._locked_database(create=False) as connection:
+        with self._locked_database(
+            create=False,
+            migrate=not check_mode,
+            read_only=check_mode,
+        ) as connection:
             if connection is None:
                 return None
             entry = self._entry_for_uid(connection, uid)
             self._require_tenant_ownership(entry, tenant_id)
             return entry
 
-    def delete_and_remove_virtual_network(self, uid: str, tenant_id: str) -> bool:
+    def delete_and_remove_virtual_network(
+        self, uid: str, tenant_id: str, dhcp_supervisor: str = "systemd"
+    ) -> bool:
         self._validate_uid(uid)
         self._validate_tenant_id(tenant_id)
+        _validate_dhcp_supervisor(dhcp_supervisor)
         with self._resource_locked(uid):
             with self._locked_database(create=False) as connection:
                 entry = (
@@ -491,6 +1229,17 @@ class StateStore:
                     else None
                 )
                 self._require_tenant_ownership(entry, tenant_id)
+                if connection is not None and connection.execute(
+                    "PRAGMA user_version"
+                ).fetchone()[0] >= 2:
+                    has_children = connection.execute(
+                        "SELECT 1 FROM subnets WHERE virtual_network_uid = ? LIMIT 1",
+                        (uid,),
+                    ).fetchone()
+                    if has_children is not None:
+                        raise StateError(
+                            "VirtualNetwork cannot be deleted while saved Subnets remain"
+                        )
                 provider_entry = (
                     entry if entry is not None else self._identity_entry(uid)
                 )
@@ -504,6 +1253,16 @@ class StateStore:
                         is not None
                     )
 
+            try:
+                dhcp_changed = cleanup_virtual_network_dhcp(
+                    uid,
+                    provider_entry["namespace_name"],
+                    dhcp_supervisor,
+                    remove_leases=True,
+                )
+            except SubnetProviderError as error:
+                raise StateError(str(error)) from error
+
             provider_changed = delete_virtual_network(
                 provider_entry,
                 firewall_lock_path=self.firewall_lock_path,
@@ -511,7 +1270,7 @@ class StateStore:
                 remaining_virtual_network=remaining_virtual_network,
             )
             if entry is None:
-                return provider_changed
+                return dhcp_changed or provider_changed
 
             with self._locked_database(create=False) as connection:
                 if connection is None:

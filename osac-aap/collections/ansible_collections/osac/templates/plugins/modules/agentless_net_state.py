@@ -1,5 +1,5 @@
 #!/usr/bin/python
-"""Provision and remove AgentlessNet VirtualNetwork state."""
+"""Provision and remove AgentlessNet VirtualNetwork and Subnet state."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ options:
     description: State operation to perform.
     type: str
     required: true
-    choices: [ensure_virtual_network, delete_virtual_network]
+    choices: [ensure_virtual_network, delete_virtual_network, reserve_subnet, ensure_subnet, prepare_delete_subnet, release_subnet]
   state_file:
     description: Path to the AgentlessNet API state file on the managed node.
     type: path
@@ -41,6 +41,28 @@ options:
   virtual_network_cidr:
     description: VirtualNetwork IPv4 supernet.
     type: str
+  virtual_network_uid:
+    description: Stable Kubernetes UID of the parent VirtualNetwork.
+    type: str
+  subnet_cidr:
+    description: Canonical IPv4 CIDR requested for this Subnet.
+    type: str
+  trunk_interface:
+    description: Managed-node trunk interface used by the saved Subnet VLAN.
+    type: str
+  vlan_pool_start:
+    description: Inclusive first VLAN ID available to unified Subnet allocations.
+    type: int
+  vlan_pool_end:
+    description: Inclusive final VLAN ID available to unified Subnet allocations.
+    type: int
+  vip_cidr:
+    description: Optional upper-end VIP block excluded from the DHCP range.
+    type: str
+  dhcp_supervisor:
+    description: Per-VirtualNetwork DHCP service manager.
+    type: str
+    choices: [systemd, supervisor]
 author:
   - OSAC project
 version_added: "1.0.0"
@@ -61,6 +83,14 @@ backend_network_id:
   description: Stable provider identifier, equal to the OSAC resource UID.
   returned: when action is ensure_virtual_network
   type: str
+found:
+  description: Whether a saved Subnet reservation was found.
+  returned: for Subnet actions
+  type: bool
+subnet:
+  description: Validated Subnet provider state when found.
+  returned: for Subnet actions when found
+  type: dict
 """
 
 
@@ -70,19 +100,50 @@ def main() -> None:
             "action": {
                 "type": "str",
                 "required": True,
-                "choices": ["ensure_virtual_network", "delete_virtual_network"],
+            "choices": [
+                "ensure_virtual_network",
+                "delete_virtual_network",
+                "reserve_subnet",
+                "ensure_subnet",
+                "prepare_delete_subnet",
+                "release_subnet",
+            ],
             },
             "state_file": {"type": "path", "required": True},
             "uid": {"type": "str", "required": True},
             "tenant_id": {"type": "str", "required": True},
             "virtual_network_cidr": {"type": "str"},
+            "virtual_network_uid": {"type": "str"},
+            "subnet_cidr": {"type": "str"},
+            "trunk_interface": {"type": "str"},
+            "vlan_pool_start": {"type": "int"},
+            "vlan_pool_end": {"type": "int"},
+            "vip_cidr": {"type": "str", "default": ""},
+            "dhcp_supervisor": {
+                "type": "str",
+                "choices": ["systemd", "supervisor"],
+                "default": "systemd",
+            },
         },
         required_if=[
             (
                 "action",
                 "ensure_virtual_network",
                 ["virtual_network_cidr"],
-            )
+            ),
+            (
+                "action",
+                "reserve_subnet",
+                [
+                    "virtual_network_uid",
+                    "subnet_cidr",
+                    "trunk_interface",
+                    "vlan_pool_start",
+                    "vlan_pool_end",
+                ],
+            ),
+            ("action", "ensure_subnet", ["dhcp_supervisor"]),
+            ("action", "prepare_delete_subnet", ["dhcp_supervisor"]),
         ],
         supports_check_mode=True,
     )
@@ -93,7 +154,7 @@ def main() -> None:
         if params["action"] == "ensure_virtual_network":
             if module.check_mode:
                 existing = store.get_virtual_network(
-                    params["uid"], params["tenant_id"]
+                    params["uid"], params["tenant_id"], check_mode=True
                 )
                 module.exit_json(
                     changed=existing is None,
@@ -109,19 +170,78 @@ def main() -> None:
                 backend_network_id=params["uid"],
             )
 
-        if module.check_mode:
-            module.exit_json(
-                changed=(
-                    store.get_virtual_network(params["uid"], params["tenant_id"])
-                    is not None
-                )
+        if params["action"] == "reserve_subnet":
+            subnet, changed = store.reserve_subnet(
+                params["uid"],
+                params["virtual_network_uid"],
+                params["tenant_id"],
+                params["subnet_cidr"],
+                params["trunk_interface"],
+                params["vlan_pool_start"],
+                params["vlan_pool_end"],
+                params["vip_cidr"],
+                check_mode=module.check_mode,
             )
+            module.exit_json(changed=changed, found=True, subnet=subnet)
+
+        if params["action"] == "ensure_subnet":
+            subnet, state_changed, provider_changed = store.ensure_and_reconcile_subnet(
+                params["uid"],
+                params["tenant_id"],
+                params["dhcp_supervisor"],
+                check_mode=module.check_mode,
+            )
+            module.exit_json(
+                changed=state_changed or provider_changed,
+                found=True,
+                subnet=subnet,
+            )
+
+        if params["action"] == "prepare_delete_subnet":
+            subnet, changed = store.prepare_delete_subnet(
+                params["uid"],
+                params["tenant_id"],
+                params["dhcp_supervisor"],
+                check_mode=module.check_mode,
+            )
+            module.exit_json(
+                changed=changed,
+                found=subnet is not None,
+                subnet=subnet,
+            )
+
+        if params["action"] == "release_subnet":
+            subnet, changed = store.release_subnet(
+                params["uid"],
+                params["tenant_id"],
+                check_mode=module.check_mode,
+            )
+            module.exit_json(
+                changed=changed,
+                found=subnet is not None,
+                subnet=subnet,
+            )
+
+        if module.check_mode:
+            existing = store.get_virtual_network(
+                params["uid"], params["tenant_id"], check_mode=True
+            )
+            module.exit_json(changed=existing is not None)
         module.exit_json(
             changed=store.delete_and_remove_virtual_network(
-                params["uid"], params["tenant_id"]
+                params["uid"],
+                params["tenant_id"],
+                params["dhcp_supervisor"],
             )
         )
-    except StateError:
+    except StateError as error:
+        if params["action"] in {
+            "reserve_subnet",
+            "ensure_subnet",
+            "prepare_delete_subnet",
+            "release_subnet",
+        }:
+            module.fail_json(msg=str(error))
         module.fail_json(
             msg="AgentlessNet VirtualNetwork operation failed; inspect the network node and retry."
         )

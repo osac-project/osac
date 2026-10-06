@@ -1,0 +1,152 @@
+---
+- name: Inspect Cumulus VLAN membership for trunk {{ _agentless_net_subnet_port }}
+  ansible.builtin.command:
+    argv: [bridge, -j, vlan, show]
+  delegate_to: "{{ _agentless_net_switch_name }}"
+  become: true
+  vars:
+    ansible_connection: ssh
+    ansible_host: "{{ hostvars[_agentless_net_switch_name].ansible_host }}"
+    ansible_user: "{{ hostvars[_agentless_net_switch_name].ansible_user }}"
+    ansible_port: "{{ hostvars[_agentless_net_switch_name].ansible_port }}"
+    ansible_network_os: cumulus
+  register: _agentless_net_trunk_bridge_before
+  changed_when: false
+  no_log: true
+
+- name: Parse switch VLAN state for trunk {{ _agentless_net_subnet_port }}
+  ansible.builtin.set_fact:
+    _agentless_net_bridge_state: "{{ _agentless_net_trunk_bridge_before.stdout | from_json }}"
+    _agentless_net_current_port_entries: >-
+      {{ (_agentless_net_trunk_bridge_before.stdout | from_json
+          | selectattr('ifname', 'equalto', _agentless_net_subnet_port)
+          | map(attribute='vlans') | first) | default([]) }}
+    _agentless_net_port_present: >-
+      {{ (_agentless_net_trunk_bridge_before.stdout | from_json
+          | selectattr('ifname', 'equalto', _agentless_net_subnet_port)
+          | list | length) > 0 }}
+    _agentless_net_target_vlan_present: false
+  no_log: true
+
+- name: Detect the saved VLAN ID, including bridge vlan show ranges
+  ansible.builtin.set_fact:
+    _agentless_net_target_vlan_present: true
+  loop: "{{ _agentless_net_current_port_entries }}"
+  when:
+    - item.vlan is defined
+    - item.vlan | int <= _agentless_net_subnet.vlan_id | int
+    - item.vlanEnd | default(item.vlan) | int >= _agentless_net_subnet.vlan_id | int
+  no_log: true
+
+- name: Configure the declared trunk in the Cumulus bridge domain
+  ansible.builtin.include_role:
+    name: ansible_network.network_runner.switch
+    tasks_from: conf_trunk_port
+    apply:
+      delegate_to: "{{ _agentless_net_switch_name }}"
+      become: true
+  vars:
+    ansible_connection: ssh
+    ansible_host: "{{ hostvars[_agentless_net_switch_name].ansible_host }}"
+    ansible_user: "{{ hostvars[_agentless_net_switch_name].ansible_user }}"
+    ansible_port: "{{ hostvars[_agentless_net_switch_name].ansible_port }}"
+    ansible_network_os: cumulus
+    port_name: "{{ _agentless_net_subnet_port }}"
+    port_description: "OSAC Subnet {{ _agentless_net_subnet.uid[:12] }}"
+    vlan_id: "{{ _agentless_net_subnet.vlan_id }}"
+    vlan_name: "{{ _agentless_net_subnet_vlan_name }}"
+  when:
+    - _agentless_net_subnet_action == 'create'
+    - not _agentless_net_port_present | bool
+  no_log: true
+
+- name: Add the saved VLAN to the declared Cumulus trunk
+  ansible.builtin.include_role:
+    name: ansible_network.network_runner.switch
+    tasks_from: add_trunk_vlan
+    apply:
+      delegate_to: "{{ _agentless_net_switch_name }}"
+      become: true
+  vars:
+    ansible_connection: ssh
+    ansible_host: "{{ hostvars[_agentless_net_switch_name].ansible_host }}"
+    ansible_user: "{{ hostvars[_agentless_net_switch_name].ansible_user }}"
+    ansible_port: "{{ hostvars[_agentless_net_switch_name].ansible_port }}"
+    ansible_network_os: cumulus
+    port_name: "{{ _agentless_net_subnet_port }}"
+    port_description: "OSAC Subnet {{ _agentless_net_subnet.uid[:12] }}"
+    vlan_id: "{{ _agentless_net_subnet.vlan_id }}"
+    vlan_name: "{{ _agentless_net_subnet_vlan_name }}"
+  when:
+    - _agentless_net_subnet_action == 'create'
+    - not _agentless_net_target_vlan_present | bool
+  no_log: true
+
+- name: Remove only the saved VLAN membership from the declared trunk
+  ansible.builtin.include_role:
+    name: ansible_network.network_runner.switch
+    tasks_from: delete_trunk_vlan
+    apply:
+      delegate_to: "{{ _agentless_net_switch_name }}"
+      become: true
+  vars:
+    ansible_connection: ssh
+    ansible_host: "{{ hostvars[_agentless_net_switch_name].ansible_host }}"
+    ansible_user: "{{ hostvars[_agentless_net_switch_name].ansible_user }}"
+    ansible_port: "{{ hostvars[_agentless_net_switch_name].ansible_port }}"
+    ansible_network_os: cumulus
+    port_name: "{{ _agentless_net_subnet_port }}"
+    port_description: "OSAC Subnet {{ _agentless_net_subnet.uid[:12] }}"
+    vlan_id: "{{ _agentless_net_subnet.vlan_id }}"
+    vlan_name: "{{ _agentless_net_subnet_vlan_name }}"
+  when:
+    - _agentless_net_subnet_action == 'delete'
+    - _agentless_net_target_vlan_present | bool
+  no_log: true
+
+- name: Verify saved VLAN membership on trunk {{ _agentless_net_subnet_port }}
+  ansible.builtin.command:
+    argv: [bridge, -j, vlan, show]
+  delegate_to: "{{ _agentless_net_switch_name }}"
+  become: true
+  vars:
+    ansible_connection: ssh
+    ansible_host: "{{ hostvars[_agentless_net_switch_name].ansible_host }}"
+    ansible_user: "{{ hostvars[_agentless_net_switch_name].ansible_user }}"
+    ansible_port: "{{ hostvars[_agentless_net_switch_name].ansible_port }}"
+    ansible_network_os: cumulus
+  register: _agentless_net_trunk_bridge_after
+  changed_when: false
+  no_log: true
+
+- name: Parse verified trunk VLAN state
+  ansible.builtin.set_fact:
+    _agentless_net_current_port_entries: >-
+      {{ (_agentless_net_trunk_bridge_after.stdout | from_json
+          | selectattr('ifname', 'equalto', _agentless_net_subnet_port)
+          | map(attribute='vlans') | first) | default([]) }}
+    _agentless_net_target_vlan_present: false
+  no_log: true
+
+- name: Detect saved VLAN membership after switch convergence
+  ansible.builtin.set_fact:
+    _agentless_net_target_vlan_present: true
+  loop: "{{ _agentless_net_current_port_entries }}"
+  when:
+    - item.vlan is defined
+    - item.vlan | int <= _agentless_net_subnet.vlan_id | int
+    - item.vlanEnd | default(item.vlan) | int >= _agentless_net_subnet.vlan_id | int
+  no_log: true
+
+- name: Confirm requested VLAN membership converged on trunk {{ _agentless_net_subnet_port }}
+  ansible.builtin.assert:
+    that:
+      - >-
+        (_agentless_net_subnet_action == 'create'
+        and _agentless_net_target_vlan_present | bool)
+        or (_agentless_net_subnet_action == 'delete'
+        and not _agentless_net_target_vlan_present | bool)
+    fail_msg: >-
+      AgentlessNet could not verify the requested Subnet VLAN membership on a
+      configured Cumulus trunk; the saved VLAN reservation is retained.
+  no_log: true

@@ -24,6 +24,7 @@
         state_file: "{{ agentless_net_network_state_file }}"
         uid: "{{ agentless_net_vn_uid }}"
         tenant_id: "{{ agentless_net_vn_tenant_id }}"
+        dhcp_supervisor: "{{ agentless_net_dhcp_supervisor }}"
       delegate_to: "{{ groups['agentless_net_vn_network_node'][0] }}"
       become: true
       no_log: true

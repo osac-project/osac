@@ -1,4 +1,58 @@
 ---
-- name: Report unimplemented AgentlessNet operation
-  ansible.builtin.fail:
-    msg: "NotImplemented: agentless_net resource operations are not implemented."
+- name: Provision AgentlessNet Subnet VLAN and DHCP state
+  block:
+    - name: Load the AgentlessNet node and required Cumulus switch inventory
+      ansible.builtin.include_tasks: _load_network_node_inventory.yaml
+      vars:
+        agentless_net_require_switches: true
+
+    - name: Validate the configured AgentlessNet DHCP supervisor
+      ansible.builtin.assert:
+        that:
+          - agentless_net_dhcp_supervisor in ['systemd', 'supervisor']
+        fail_msg: AGENTLESS_NET_DHCP_SUPERVISOR must be systemd or supervisor.
+      no_log: true
+
+    - name: Resolve the Ready parent VirtualNetwork by Fulfillment UUID
+      ansible.builtin.include_tasks: _resolve_subnet_parent.yaml
+
+    - name: Reserve the stable Subnet VLAN before provider mutation
+      osac.templates.agentless_net_state:
+        action: reserve_subnet
+        state_file: "{{ agentless_net_network_state_file }}"
+        uid: "{{ _agentless_net_subnet_uid }}"
+        tenant_id: "{{ _agentless_net_subnet_tenant_id }}"
+        virtual_network_uid: "{{ _agentless_net_subnet_parent_uid }}"
+        subnet_cidr: "{{ _agentless_net_subnet_cidr }}"
+        trunk_interface: "{{ agentless_net_trunk_interface }}"
+        vlan_pool_start: "{{ agentless_net_vlan_pool_start }}"
+        vlan_pool_end: "{{ agentless_net_vlan_pool_end }}"
+        vip_cidr: "{{ _agentless_net_subnet_vip_cidr }}"
+      delegate_to: "{{ groups['agentless_net_vn_network_node'][0] }}"
+      become: true
+      register: _agentless_net_subnet_reservation
+      no_log: true
+
+    - name: Reconcile the reserved VLAN and every declared trunk on each switch
+      ansible.builtin.include_tasks: _reconcile_subnet_switch.yaml
+      loop: "{{ groups['agentless_net_subnet_switches'] }}"
+      loop_control:
+        loop_var: _agentless_net_switch_name
+        label: "{{ _agentless_net_switch_name }}"
+      vars:
+        _agentless_net_subnet: "{{ _agentless_net_subnet_reservation.subnet }}"
+        _agentless_net_subnet_action: create
+
+    - name: Reconcile parent namespace interfaces and supervised DHCP scopes
+      osac.templates.agentless_net_state:
+        action: ensure_subnet
+        state_file: "{{ agentless_net_network_state_file }}"
+        uid: "{{ _agentless_net_subnet_uid }}"
+        tenant_id: "{{ _agentless_net_subnet_tenant_id }}"
+        dhcp_supervisor: "{{ agentless_net_dhcp_supervisor }}"
+      delegate_to: "{{ groups['agentless_net_vn_network_node'][0] }}"
+      become: true
+      no_log: true
+  always:
+    - name: Remove the temporary AgentlessNet SSH key file
+      ansible.builtin.include_tasks: _cleanup_network_node_inventory.yaml

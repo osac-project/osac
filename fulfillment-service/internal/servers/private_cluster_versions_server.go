@@ -149,27 +149,26 @@ func (s *PrivateClusterVersionsServer) Create(ctx context.Context,
 
 	applyClusterVersionDefaults(cv)
 
-	if err := s.resolveClusterVersionDiskImage(ctx, cv); err != nil {
-		return nil, err
-	}
-
 	// Clear caller-provided ID so the DAO always generates a UUID:
 	cv.SetId("")
 
-	// Safe to clear existing defaults before Create: the gRPC interceptor wraps the entire
-	// RPC in a single transaction, so the clear and Insert commit together — other connections
-	// never see a state with zero defaults.
-	if cv.GetSpec().GetIsDefault() {
-		if err := validateIsDefaultEligibility(cv); err != nil {
-			return nil, err
-		}
-		if err := s.unsetPreviousDefaultClusterVersion(ctx, cv.GetId()); err != nil {
-			return nil, err
-		}
-	}
-
 	var response *privatev1.ClusterVersionsCreateResponse
-	err = s.generic.Create(ctx, request, &response)
+	err = s.generic.CreateWithCandidatePreparation(ctx, request, &response,
+		func(ctx context.Context, _, candidate *privatev1.ClusterVersion) error {
+			if err := s.resolveClusterVersionDiskImage(ctx, candidate); err != nil {
+				return err
+			}
+			// Safe to clear existing defaults before Create: the gRPC interceptor wraps the entire
+			// RPC in a single transaction, so the clear and Insert commit together — other connections
+			// never see a state with zero defaults.
+			if candidate.GetSpec().GetIsDefault() {
+				if err := validateIsDefaultEligibility(candidate); err != nil {
+					return err
+				}
+				return s.unsetPreviousDefaultClusterVersion(ctx, candidate.GetId())
+			}
+			return nil
+		})
 	return response, err
 }
 
@@ -196,12 +195,6 @@ func (s *PrivateClusterVersionsServer) Update(ctx context.Context,
 		return nil, err
 	}
 
-	if updateIncludesField(request.GetUpdateMask(), "spec.disk_image") {
-		if err := s.resolveClusterVersionDiskImage(ctx, request.GetObject()); err != nil {
-			return nil, err
-		}
-	}
-
 	// Reject explicit is_default=true on ineligible versions (OBSOLETE or disabled).
 	// The auto-clear path in applyClusterVersionStateEffects handles the transition case
 	// where is_default is not in the mask.
@@ -221,14 +214,19 @@ func (s *PrivateClusterVersionsServer) Update(ctx context.Context,
 		return nil, err
 	}
 
-	if resolveIsDefault(existing, request) {
-		if err := s.unsetPreviousDefaultClusterVersion(ctx, id); err != nil {
-			return nil, err
-		}
-	}
-
 	var response *privatev1.ClusterVersionsUpdateResponse
-	err = s.generic.Update(ctx, request, &response)
+	err = s.generic.UpdateWithCandidatePreparation(ctx, request, &response,
+		func(ctx context.Context, _, candidate *privatev1.ClusterVersion) error {
+			if updateIncludesField(request.GetUpdateMask(), "spec.disk_image") {
+				if err := s.resolveClusterVersionDiskImage(ctx, candidate); err != nil {
+					return err
+				}
+			}
+			if candidate.GetSpec().GetIsDefault() {
+				return s.unsetPreviousDefaultClusterVersion(ctx, id)
+			}
+			return nil
+		})
 	if err != nil {
 		// Concurrent default-swap: remap AlreadyExists to FailedPrecondition.
 		if request.GetObject().GetSpec().GetIsDefault() {
@@ -578,15 +576,15 @@ func (s *PrivateClusterVersionsServer) resolveClusterVersionDiskImage(
 		return nil
 	}
 
-	diskImage, _, err := validateDiskImageState(ctx, s.diskImagesDao, key, "", "")
+	scope := referenceScope{tenant: cv.GetMetadata().GetTenant(), project: cv.GetMetadata().GetProject()}
+	resolved, err := resolveLockedDiskImageReference(ctx, s.diskImagesDao, scope, ref, "")
 	if err != nil {
 		return err
 	}
-
-	ref.Id = diskImage.GetId()
-	ref.Name = diskImage.GetMetadata().GetName()
-	ref.Shared = diskImage.GetMetadata().GetTenant() == auth.SharedTenant
-
+	if _, err := validateResolvedDiskImage(resolved, key, ""); err != nil {
+		return err
+	}
+	cv.GetSpec().SetDiskImage(canonicalDiskImageReference(resolved))
 	return nil
 }
 

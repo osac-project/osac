@@ -1,18 +1,14 @@
 # Connect Codex and MCP Inspector to a local OSAC MCP endpoint
 
-This guide applies to the opt-in MCP development endpoint introduced by
-[OSAC-5841](https://redhat.atlassian.net/browse/OSAC-5841). It currently
-offers `list_resources`, `get_resource`, `create_compute_instance`, and
-`delete_compute_instance`. The write tools are experimental; use a development
-deployment and an account authorized for the intended tenant. The endpoint is
-disabled by default.
+This guide covers the opt-in MCP endpoint in a local OSAC development
+deployment. It offers `list_resources`, `get_resource`,
+`create_compute_instance`, and `delete_compute_instance`. The write tools are
+experimental; use a development deployment and an account authorized for the
+intended tenant. The endpoint is disabled by default.
 
-The [MCP design](https://github.com/osac-project/enhancement-proposals/pull/341)
-assigns the supported deployment contract, separate OAuth clients for each
-host, and the `/connect/mcp` setup page to later work, including
-[OSAC-5845](https://redhat.atlassian.net/browse/OSAC-5845). This guide takes
-its connection values from a running development deployment and does not
-define those future interfaces.
+The examples use development settings and a shared Keycloak client fixture.
+For another deployment, obtain its connection values and public OAuth client
+registration from the deployment operator.
 
 ## Install the Kind development endpoint
 
@@ -209,12 +205,12 @@ authorizes each call as the signed-in user through the public Fulfillment API.
 
 ## Explore with MCP Inspector
 
-The earlier OSAC-4388 prototype launched Inspector with `NODE_EXTRA_CA_CERTS`
-pointing at the same public Kind `ca-bundle` ConfigMap used for Codex. Node
-does not use `curl --cacert` or `CODEX_CA_CERTIFICATE`. For either Kind profile,
-use the CA file extracted above. The commands set their own
-MCP URL and CA path so they also work in a new shell. They create only a
-temporary Inspector configuration containing the public client ID and MCP
+Inspector uses `NODE_EXTRA_CA_CERTS` to trust the public CA bundle extracted
+from Kind's `ca-bundle` ConfigMap. Supply that same PEM file to Codex through
+`CODEX_CA_CERTIFICATE`; Node does not use Codex's setting or `curl --cacert`.
+For either Kind profile, use the CA file extracted above. The commands set
+the MCP URL and CA path explicitly so they also work in a new shell. They
+create a temporary Inspector configuration with the public client ID and MCP
 URL. A separate temporary storage directory prevents an earlier Inspector
 login from reusing cached OAuth discovery for a different Kind profile:
 

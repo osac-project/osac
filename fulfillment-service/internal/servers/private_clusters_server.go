@@ -630,31 +630,11 @@ func (s *PrivateClustersServer) validatePullSecretSecret(
 		privatev1.SecretType_SECRET_TYPE_PULL_SECRET)
 }
 
-// clusterUsesBareMetalWorkers reports whether the effective Cluster spec selects a bare-metal instance type.
-func clusterUsesBareMetalWorkers(cluster *privatev1.Cluster) bool {
-	for _, nodeSet := range cluster.GetSpec().GetNodeSets() {
-		if nodeSet != nil && refKey(nodeSet.GetBaremetalInstanceType()) != "" {
-			return true
-		}
-	}
-	return false
-}
-
-func validateClusterVersionDiskImageForBareMetal(version *privatev1.ClusterVersion) error {
-	if refKey(version.GetSpec().GetDiskImage()) == "" {
-		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
-			"cluster version '%s' does not have a disk image attached, which is required for bare-metal workers",
-			version.GetMetadata().GetName())
-	}
-	return nil
-}
-
 // ensureClusterVersion makes sure the cluster spec has a usable version reference: if the user didn't provide one, it
-// resolves the system default. BM clusters require the selected ClusterVersion to reference a DiskImage.
+// resolves the system default.
 func (s *PrivateClustersServer) ensureClusterVersion(
 	ctx context.Context,
 	cluster *privatev1.Cluster,
-	requireDiskImage bool,
 ) (*privatev1.ClusterVersion, error) {
 	versionRef := cluster.GetSpec().GetVersion()
 	if versionRef != nil {
@@ -665,14 +645,9 @@ func (s *PrivateClustersServer) ensureClusterVersion(
 		if err := validateResolvedClusterVersion(version, version.GetMetadata().GetName(), ""); err != nil {
 			return nil, err
 		}
-		if requireDiskImage {
-			if err := validateClusterVersionDiskImageForBareMetal(version); err != nil {
-				return nil, err
-			}
-		}
 		return version, nil
 	}
-	version, err := resolveDefaultClusterVersion(ctx, s.logger, s.clusterVersionsDao, requireDiskImage)
+	version, err := resolveDefaultClusterVersion(ctx, s.logger, s.clusterVersionsDao)
 	if err != nil {
 		return nil, err
 	}
@@ -1333,7 +1308,7 @@ func (s *PrivateClustersServer) applyClusterTemplate(
 		return nil, err
 	}
 
-	clusterVersion, err := s.ensureClusterVersion(ctx, cluster, clusterUsesBareMetalWorkers(cluster))
+	clusterVersion, err := s.ensureClusterVersion(ctx, cluster)
 	if err != nil {
 		return nil, err
 	}

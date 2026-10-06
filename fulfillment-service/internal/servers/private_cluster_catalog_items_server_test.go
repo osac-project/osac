@@ -840,6 +840,30 @@ var _ = Describe("Private cluster catalog items server", func() {
 				Expect(err).ToNot(HaveOccurred())
 			})
 
+			It("Rejects create with a version default without a disk image", func() {
+				seedClusterVersionWithoutDiskImage(ctx, privatev1.ClusterVersion_builder{
+					Metadata: privatev1.Metadata_builder{Name: "version-without-disk-image", Tenant: testTenant}.Build(),
+					Spec:     privatev1.ClusterVersionSpec_builder{Version: "4.20.0", Image: "quay.io/ocp:4.20.0", Enabled: proto.Bool(true)}.Build(),
+				}.Build())
+				_, err := validatedServer.Create(ctx, privatev1.ClusterCatalogItemsCreateRequest_builder{
+					Object: privatev1.ClusterCatalogItem_builder{
+						Metadata: privatev1.Metadata_builder{Name: "catalog-without-disk-image"}.Build(),
+						Title:    "Catalog item without a disk image",
+						Template: &privatev1.ClusterTemplateReference{Id: "my-template-id"},
+						Fields: privatev1.ClusterCatalogItemFields_builder{
+							Version: privatev1.ClusterVersionReferenceFieldPolicy_builder{
+								Editable: privatev1.EditableClusterVersionReferenceField_builder{
+									DefaultValue: &privatev1.ClusterVersionReference{Name: "version-without-disk-image"},
+								}.Build(),
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring(" in fields.version"))
+				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("disk image"))
+			})
+
 			It("Rejects create with non-existent version default in fields", func() {
 				_, err := validatedServer.Create(ctx, privatev1.ClusterCatalogItemsCreateRequest_builder{
 					Object: privatev1.ClusterCatalogItem_builder{

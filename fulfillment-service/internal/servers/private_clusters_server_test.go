@@ -3424,6 +3424,30 @@ var _ = Describe("Private clusters server", func() {
 				validatedServer = &clusterCreationFixture{PrivateClustersServer: privateServer}
 			})
 
+			It("Rejects updating a cluster to a ClusterVersion without a disk image", func() {
+				seedClusterVersionWithoutDiskImage(ctx, privatev1.ClusterVersion_builder{
+					Metadata: privatev1.Metadata_builder{Name: "version-without-disk-image", Tenant: testTenant}.Build(),
+					Spec:     privatev1.ClusterVersionSpec_builder{Version: "4.20.0", Image: "quay.io/ocp:4.20.0", Enabled: proto.Bool(true)}.Build(),
+				}.Build())
+				created, err := validatedServer.Create(ctx, privatev1.ClustersCreateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{Name: "cluster-version-update"}.Build(),
+						Spec:     privatev1.ClusterSpec_builder{Template: &privatev1.ClusterTemplateReference{Id: "my-template-id"}}.Build(),
+						Status:   privatev1.ClusterStatus_builder{Hub: "my-hub-id"}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				_, err = validatedServer.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Id:   created.GetObject().GetId(),
+						Spec: privatev1.ClusterSpec_builder{Version: &privatev1.ClusterVersionReference{Name: "version-without-disk-image"}}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.version"}},
+				}.Build())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("disk image"))
+			})
+
 			It("Rejects a BM cluster when the explicitly selected ClusterVersion has no DiskImage", func() {
 				seedClusterVersionWithoutDiskImage(ctx, privatev1.ClusterVersion_builder{
 					Id: uuid.New(),

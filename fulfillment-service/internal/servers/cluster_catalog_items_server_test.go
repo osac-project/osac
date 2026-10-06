@@ -478,10 +478,11 @@ var _ = Describe("Catalog publication and references", func() {
 	It("Cluster: unpublishes unusable offerings and validates republishing", func() {
 		Expect(seedClusterCatalogItemTemplate(ctx, auth.SharedTenant, "", "template-id")).To(Succeed())
 		Expect(seedClusterCatalogItemTemplate(ctx, testTenant, "", "own-template-id")).To(Succeed())
+		createDiskImageWithLifecycle("dependency-disk-image", privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE, nil)
 		dependencyDAO, err := dao.NewGenericDAO[*privatev1.ClusterVersion]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
 		Expect(err).ToNot(HaveOccurred())
 		dependencyResponse, err := dependencyDAO.Create().SetObject(privatev1.ClusterVersion_builder{
-			Metadata: privatev1.Metadata_builder{Name: "dependency", Tenant: auth.SharedTenant}.Build(), Spec: privatev1.ClusterVersionSpec_builder{Version: "4.20", Image: "quay.io/test/release", Enabled: new(true)}.Build(),
+			Metadata: privatev1.Metadata_builder{Name: "dependency", Tenant: auth.SharedTenant}.Build(), Spec: privatev1.ClusterVersionSpec_builder{Version: "4.20", Image: "quay.io/test/release", Enabled: new(true), DiskImage: &privatev1.DiskImageReference{Id: "dependency-disk-image"}}.Build(),
 		}.Build()).Do(ctx)
 		Expect(err).ToNot(HaveOccurred())
 		dependency := dependencyResponse.GetObject()

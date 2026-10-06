@@ -75,8 +75,8 @@ Ask the deployment operator for:
 - The HTTPS OAuth issuer URL reachable from both Codex and the browser.
 - A public OAuth client ID. The development Keycloak fixture provides
   `osac-mcp-client` when `devFixtures.enabled` is set. That shared fixture is
-  for development only; a later installer story will provide host-specific
-  clients.
+  for development only. For another deployment, use the client ID registered
+  for your host.
 - The CA bundle that signs the MCP and issuer certificates, if your
   workstation does not already trust them. For the development installation,
   the operator can obtain the public CA bundle from the `ca-bundle` ConfigMap

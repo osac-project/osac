@@ -14,6 +14,7 @@ specific language governing permissions and limitations under the License.
 {{- if .Values.mcp.enabled }}
 {{- $caBundleConfigMap := required "certs.caBundle.configMap is required" .Values.certs.caBundle.configMap }}
 {{- $hostname := include "fulfillment-mcp-server.hostname" . }}
+{{- $externalPort := include "fulfillment-mcp-server.externalPort" . | int }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -68,11 +69,11 @@ spec:
         - --http-listener-address=0.0.0.0:8000
         - --http-listener-tls-crt=/etc/fulfillment-mcp-server/tls/tls.crt
         - --http-listener-tls-key=/etc/fulfillment-mcp-server/tls/tls.key
-        - --http-cors-allowed-origins=https://{{ $hostname }}{{ if ne (int .Values.mcp.externalPort) 443 }}:{{ .Values.mcp.externalPort }}{{ end }}
+        - --http-cors-allowed-origins=https://{{ $hostname }}{{ if ne $externalPort 443 }}:{{ $externalPort }}{{ end }}
         - --grpc-server-address=fulfillment-internal-api:8001
         - --grpc-authn-trusted-token-issuers={{ tpl (required "auth.issuerUrl is required" .Values.auth.issuerUrl) . }}
         - --oauth-authorization-server={{ tpl (required "auth.issuerUrl is required" .Values.auth.issuerUrl) . }}
-        - --oauth-resource-url=https://{{ $hostname }}{{ if ne (int .Values.mcp.externalPort) 443 }}:{{ .Values.mcp.externalPort }}{{ end }}
+        - --oauth-resource-url=https://{{ $hostname }}{{ if ne $externalPort 443 }}:{{ $externalPort }}{{ end }}
         ports:
         - name: mcp
           containerPort: 8000

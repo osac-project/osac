@@ -684,7 +684,7 @@
             },
             "externalPort": {
               "type": "integer",
-              "description": "Externally reachable TLS port for the MCP server",
+              "description": "Externally reachable TLS port for the MCP server; OpenShift Routes require 443",
               "minimum": 1,
               "maximum": 65535,
               "default": 443
@@ -992,6 +992,27 @@
           "description": "Helm-injected global values (passed automatically to subcharts)"
         }
       },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "variant": {"const": "openshift"},
+              "mcp": {
+                "properties": {"enabled": {"const": true}},
+                "required": ["enabled"]
+              }
+            },
+            "required": ["variant", "mcp"]
+          },
+          "then": {
+            "properties": {
+              "mcp": {
+                "properties": {"externalPort": {"const": 443}}
+              }
+            }
+          }
+        }
+      ],
       "additionalProperties": false
     },
     "aap": {

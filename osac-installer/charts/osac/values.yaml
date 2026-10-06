@@ -158,6 +158,7 @@ service:
   mcp:
     enabled: false
     externalHostname: ""
+    # OpenShift Routes use HTTPS port 443; custom external ports are supported on Kind.
     externalPort: 443
   images:
     service:

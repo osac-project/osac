@@ -61,16 +61,14 @@
 - name: Select the local kubeconfig or mounted AAP service-account context
   ansible.builtin.set_fact:
     _agentless_net_parent_in_cluster: >-
-      {{ _agentless_net_parent_k8s_host | length > 0
-         and (_agentless_net_parent_token_stat.stat.exists | default(false))
+      {{ (_agentless_net_parent_token_stat.stat.exists | default(false))
          and (_agentless_net_parent_ca_stat.stat.exists | default(false)) }}
     _agentless_net_parent_kubeconfig: >-
       {{ _agentless_net_parent_kubeconfig_candidate
          if _agentless_net_parent_kubeconfig_candidate | length > 0
          and (_agentless_net_parent_kubeconfig_stat.stat.exists | default(false))
          and (_agentless_net_parent_kubeconfig_stat.stat.isreg | default(false))
-         and not (_agentless_net_parent_k8s_host | length > 0
-                  and (_agentless_net_parent_token_stat.stat.exists | default(false))
+         and not ((_agentless_net_parent_token_stat.stat.exists | default(false))
                   and (_agentless_net_parent_ca_stat.stat.exists | default(false)))
          else '' }}
   no_log: true
@@ -93,7 +91,9 @@
     # when this job is using the explicit in-cluster host and service-account token.
     kubeconfig: "{{ _agentless_net_parent_kubeconfig }}"
     host: >-
-      {{ 'https://' ~ _agentless_net_parent_k8s_host ~ ':' ~ _agentless_net_parent_k8s_port
+      {{ ('https://' ~ _agentless_net_parent_k8s_host ~ ':' ~ _agentless_net_parent_k8s_port
+          if _agentless_net_parent_k8s_host | length > 0
+          else 'https://kubernetes.default.svc:443')
          if _agentless_net_parent_in_cluster
          else omit }}
     api_key: >-

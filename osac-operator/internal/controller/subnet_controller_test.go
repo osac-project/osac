@@ -971,6 +971,45 @@ var _ = Describe("SubnetReconciler", func() {
 		})
 	})
 
+	Context("AgentlessNet parent VirtualNetwork context", func() {
+		It("passes the resolved parent identity to the Subnet provisioning job", func() {
+			vnet.Annotations[osacImplementationStrategyAnnotation] = "agentless_net"
+			vnet.Annotations[osacTenantKey] = "tenant-a"
+			Expect(k8sClient.Update(ctx, vnet)).To(Succeed())
+			vnet.Status.Phase = osacv1alpha1.VirtualNetworkPhaseReady
+			Expect(k8sClient.Status().Update(ctx, vnet)).To(Succeed())
+
+			subnet.Annotations = map[string]string{
+				osacTenantKey: "tenant-a",
+			}
+			Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
+
+			mockProvider.triggerProvisionFunc = func(_ context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
+				return &provisioning.ProvisionResult{
+					JobID:        "agentless-subnet-job",
+					InitialState: osacv1alpha1.JobStatePending,
+					Message:      "Provisioning triggered",
+				}, nil
+			}
+
+			request := mcreconcile.Request{Request: reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: subnet.Name, Namespace: subnet.Namespace},
+			}}
+			_, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+
+			result, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(1 * time.Second))
+			Expect(mockProvider.parentVirtualNetwork).To(Equal(provisioning.SubnetParentVirtualNetwork{
+				FulfillmentID: "test-vnet-uuid",
+				KubernetesUID: string(vnet.UID),
+				TenantID:      "tenant-a",
+				Phase:         string(osacv1alpha1.VirtualNetworkPhaseReady),
+			}))
+		})
+	})
+
 	Context("handleProvisioning", func() {
 		BeforeEach(func() {
 			subnet.Status.Phase = osacv1alpha1.SubnetPhaseProgressing
@@ -1659,9 +1698,11 @@ type mockSubnetProvider struct {
 	getProvisionStatusWithExtraVarsFunc func(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatusWithExtraVars, error)
 	triggerDeprovisionFunc              func(ctx context.Context, resource client.Object, provisionJobs []osacv1alpha1.JobStatus) (*provisioning.DeprovisionResult, error)
 	getDeprovisionStatusFunc            func(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatus, error)
+	parentVirtualNetwork                provisioning.SubnetParentVirtualNetwork
 }
 
 func (m *mockSubnetProvider) TriggerProvision(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+	m.parentVirtualNetwork = provisioning.SubnetParentVirtualNetworkFromContext(ctx)
 	if m.triggerProvisionFunc != nil {
 		return m.triggerProvisionFunc(ctx, resource)
 	}
@@ -1673,6 +1714,7 @@ func (m *mockSubnetProvider) TriggerProvision(ctx context.Context, resource clie
 }
 
 func (m *mockSubnetProvider) TriggerProvisionWithExtraVars(ctx context.Context, resource client.Object, extraVars map[string]any) (*provisioning.ProvisionResult, error) {
+	m.parentVirtualNetwork = provisioning.SubnetParentVirtualNetworkFromContext(ctx)
 	if m.triggerProvisionWithExtraVarsFunc != nil {
 		return m.triggerProvisionWithExtraVarsFunc(ctx, resource, extraVars)
 	}

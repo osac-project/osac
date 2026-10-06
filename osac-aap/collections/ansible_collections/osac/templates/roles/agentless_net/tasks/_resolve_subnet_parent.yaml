@@ -26,107 +26,29 @@
       annotation, canonical parent VirtualNetwork UUID, and IPv4 CIDR.
   no_log: true
 
-# OSAC-5530: AAP jobs use their projected service-account token; local runs use KUBECONFIG.
-- name: Read the Kubernetes API authentication context for the parent lookup
+- name: Read the parent VirtualNetwork context resolved by osac-operator
   ansible.builtin.set_fact:
-    _agentless_net_parent_kubeconfig_candidate: >-
-      {{ lookup('ansible.builtin.env', 'K8S_AUTH_KUBECONFIG')
-         | default(lookup('ansible.builtin.env', 'KUBECONFIG'), true) }}
-    _agentless_net_parent_k8s_host: "{{ lookup('ansible.builtin.env', 'KUBERNETES_SERVICE_HOST') }}"
-    _agentless_net_parent_k8s_port: >-
-      {{ lookup('ansible.builtin.env', 'KUBERNETES_SERVICE_PORT_HTTPS')
-         | default(lookup('ansible.builtin.env', 'KUBERNETES_SERVICE_PORT')
-         | default('443', true), true) }}
+    _agentless_net_parent_virtual_network: >-
+      {{ (osac_job_vars | default({})).get('parent_virtual_network', {}) }}
   no_log: true
 
-- name: Check whether the configured kubeconfig file exists
-  ansible.builtin.stat:
-    path: "{{ _agentless_net_parent_kubeconfig_candidate }}"
-  register: _agentless_net_parent_kubeconfig_stat
-  when: _agentless_net_parent_kubeconfig_candidate | length > 0
-  no_log: true
-
-- name: Check whether the AAP service-account token is mounted
-  ansible.builtin.stat:
-    path: /var/run/secrets/kubernetes.io/serviceaccount/token
-  register: _agentless_net_parent_token_stat
-  no_log: true
-
-- name: Check whether the AAP service-account CA is mounted
-  ansible.builtin.stat:
-    path: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
-  register: _agentless_net_parent_ca_stat
-  no_log: true
-
-- name: Select the local kubeconfig or mounted AAP service-account context
-  ansible.builtin.set_fact:
-    _agentless_net_parent_in_cluster: >-
-      {{ (_agentless_net_parent_token_stat.stat.exists | default(false))
-         and (_agentless_net_parent_ca_stat.stat.exists | default(false)) }}
-    _agentless_net_parent_kubeconfig: >-
-      {{ _agentless_net_parent_kubeconfig_candidate
-         if _agentless_net_parent_kubeconfig_candidate | length > 0
-         and (_agentless_net_parent_kubeconfig_stat.stat.exists | default(false))
-         and (_agentless_net_parent_kubeconfig_stat.stat.isreg | default(false))
-         and not ((_agentless_net_parent_token_stat.stat.exists | default(false))
-                  and (_agentless_net_parent_ca_stat.stat.exists | default(false)))
-         else '' }}
-  no_log: true
-
-- name: Require kubeconfig or the mounted AAP service-account context
+- name: Validate the Ready parent VirtualNetwork context and tenant ownership
   ansible.builtin.assert:
     that:
-      - _agentless_net_parent_kubeconfig | length > 0 or _agentless_net_parent_in_cluster
+      - _agentless_net_parent_virtual_network is mapping
+      - _agentless_net_parent_virtual_network.fulfillment_id is string
+      - _agentless_net_parent_virtual_network.fulfillment_id == _agentless_net_subnet_parent_ref
+      - _agentless_net_parent_virtual_network.kubernetes_uid is string
+      - _agentless_net_parent_virtual_network.kubernetes_uid | length > 0
+      - _agentless_net_parent_virtual_network.tenant_id is string
+      - _agentless_net_parent_virtual_network.tenant_id == _agentless_net_subnet_tenant_id
+      - _agentless_net_parent_virtual_network.phase == 'Ready'
     fail_msg: >-
-      AgentlessNet Subnet parent lookup requires a usable KUBECONFIG or a
-      complete mounted in-cluster service-account context.
-  no_log: true
-
-- name: Look up the parent VirtualNetwork by Fulfillment UUID label
-  kubernetes.core.k8s_info:
-    api_version: osac.openshift.io/v1alpha1
-    kind: VirtualNetwork
-    namespace: "{{ subnet.metadata.namespace }}"
-    # Pass an empty value to suppress K8S_AUTH_KUBECONFIG/KUBECONFIG env fallback
-    # when this job is using the explicit in-cluster host and service-account token.
-    kubeconfig: "{{ _agentless_net_parent_kubeconfig }}"
-    host: >-
-      {{ ('https://' ~ _agentless_net_parent_k8s_host ~ ':' ~ _agentless_net_parent_k8s_port
-          if _agentless_net_parent_k8s_host | length > 0
-          else 'https://kubernetes.default.svc:443')
-         if _agentless_net_parent_in_cluster
-         else omit }}
-    api_key: >-
-      {{ lookup('ansible.builtin.file', '/var/run/secrets/kubernetes.io/serviceaccount/token')
-         if _agentless_net_parent_in_cluster
-         else omit }}
-    ca_cert: >-
-      {{ '/var/run/secrets/kubernetes.io/serviceaccount/ca.crt'
-         if _agentless_net_parent_in_cluster
-         else omit }}
-    validate_certs: true
-    label_selectors:
-      - "osac.openshift.io/virtualnetwork-uuid={{ _agentless_net_subnet_parent_ref }}"
-  register: _agentless_net_subnet_parent_lookup
-  no_log: true
-
-- name: Require exactly one matching Ready parent owned by the same tenant
-  ansible.builtin.assert:
-    that:
-      - _agentless_net_subnet_parent_lookup.resources | length == 1
-      - _agentless_net_subnet_parent_lookup.resources[0].metadata.uid is string
-      - _agentless_net_subnet_parent_lookup.resources[0].metadata.uid | length > 0
-      - >-
-        _agentless_net_subnet_parent_lookup.resources[0].metadata.annotations.get(
-        'osac.openshift.io/tenant', '') == _agentless_net_subnet_tenant_id
-      - _agentless_net_subnet_parent_lookup.resources[0].status.phase == 'Ready'
-    fail_msg: >-
-      AgentlessNet Subnet requires exactly one Ready parent VirtualNetwork with
-      the requested Fulfillment UUID and matching tenant.
+      AgentlessNet Subnet requires a Ready parent VirtualNetwork context from
+      osac-operator with the requested Fulfillment UUID and matching tenant.
   no_log: true
 
 - name: Save the parent Kubernetes UID for AgentlessNet provider state
   ansible.builtin.set_fact:
-    _agentless_net_subnet_parent_uid: >-
-      {{ _agentless_net_subnet_parent_lookup.resources[0].metadata.uid }}
+    _agentless_net_subnet_parent_uid: "{{ _agentless_net_parent_virtual_network.kubernetes_uid }}"
   no_log: true

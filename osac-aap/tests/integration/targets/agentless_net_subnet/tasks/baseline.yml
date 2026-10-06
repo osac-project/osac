@@ -72,6 +72,15 @@
             name: "{{ vnet_name }}"
           register: fixture_parent
 
+        - name: Prepare the parent context supplied by the Subnet operator
+          ansible.builtin.set_fact:
+            osac_job_vars:
+              parent_virtual_network:
+                fulfillment_id: "{{ fulfillment_vnet_uuid }}"
+                kubernetes_uid: "{{ fixture_parent.resources[0].metadata.uid }}"
+                tenant_id: "{{ fixture_parent.resources[0].metadata.annotations['osac.openshift.io/tenant'] }}"
+                phase: "{{ fixture_parent.resources[0].status.phase }}"
+
         - name: Confirm Kubernetes assigned a UID distinct from the Fulfillment UUID
           ansible.builtin.assert:
             that:
@@ -91,31 +100,35 @@
               - _agentless_net_subnet_parent_uid != fulfillment_vnet_uuid
               - _agentless_net_subnet_tenant_id == tenant_id
 
-        - name: Confirm the helper rejects a missing Fulfillment parent UUID
+        - name: Confirm the helper rejects a mismatched Fulfillment parent UUID
           block:
             - name: Set a missing parent UUID on the in-memory Subnet request
               ansible.builtin.set_fact:
-                subnet: >-
-                  {{ subnet | combine({'spec': {'virtualNetwork': missing_fulfillment_vnet_uuid}}, recursive=true) }}
+                osac_job_vars: >-
+                  {{ osac_job_vars | combine(
+                    {'parent_virtual_network': {'fulfillment_id': missing_fulfillment_vnet_uuid}},
+                    recursive=true) }}
 
-            - name: Run the parent lookup for the missing reference
+            - name: Run the parent context validation for the mismatched reference
               ansible.builtin.include_role:
                 name: osac.templates.agentless_net
                 tasks_from: _resolve_subnet_parent
           rescue:
-            - name: Record the expected missing-parent rejection
+            - name: Record the expected mismatched-parent rejection
               ansible.builtin.set_fact:
                 missing_parent_rejected: true
 
         - name: Restore the valid reference and confirm tenant mismatch rejection
           block:
-            - name: Restore the Fulfillment UUID and change the request tenant
+            - name: Restore the Fulfillment UUID and change the parent tenant
               ansible.builtin.set_fact:
-                subnet: >-
-                  {{ subnet | combine({'metadata': {'annotations': {'osac.openshift.io/tenant': 'wrong-tenant'}},
-                                       'spec': {'virtualNetwork': fulfillment_vnet_uuid}}, recursive=true) }}
+                osac_job_vars: >-
+                  {{ osac_job_vars | combine(
+                    {'parent_virtual_network': {'fulfillment_id': fulfillment_vnet_uuid,
+                                                'tenant_id': 'wrong-tenant'}},
+                    recursive=true) }}
 
-            - name: Run the parent lookup for the wrong tenant
+            - name: Run the parent context validation for the wrong tenant
               ansible.builtin.include_role:
                 name: osac.templates.agentless_net
                 tasks_from: _resolve_subnet_parent
@@ -124,11 +137,30 @@
               ansible.builtin.set_fact:
                 wrong_tenant_rejected: true
 
-        - name: Verify both invalid parent requests were rejected
+        - name: Restore tenant context and confirm non-Ready parent rejection
+          block:
+            - name: Mark the parent context Progressing
+              ansible.builtin.set_fact:
+                osac_job_vars: >-
+                  {{ osac_job_vars | combine(
+                    {'parent_virtual_network': {'tenant_id': tenant_id, 'phase': 'Progressing'}},
+                    recursive=true) }}
+
+            - name: Run the parent context validation for a non-Ready parent
+              ansible.builtin.include_role:
+                name: osac.templates.agentless_net
+                tasks_from: _resolve_subnet_parent
+          rescue:
+            - name: Record the expected non-Ready parent rejection
+              ansible.builtin.set_fact:
+                non_ready_parent_rejected: true
+
+        - name: Verify invalid parent contexts were rejected
           ansible.builtin.assert:
             that:
               - missing_parent_rejected | default(false)
               - wrong_tenant_rejected | default(false)
+              - non_ready_parent_rejected | default(false)
       always:
         - name: Delete only the dedicated fixture namespace
           kubernetes.core.k8s:

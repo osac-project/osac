@@ -270,7 +270,7 @@ func (r *SubnetReconciler) handleUpdate(ctx context.Context, subnet *v1alpha1.Su
 		log.Info("implementation strategy not set on parent VirtualNetwork, requeueing", "virtualNetwork", vnet.Name)
 		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
-	if implementationStrategy == "agentless_net" && !isSupportedAgentlessSubnetPrefix(subnet.Spec.IPv4CIDR) {
+	if implementationStrategy == agentlessNetImplementationStrategy && !isSupportedAgentlessSubnetPrefix(subnet.Spec.IPv4CIDR) {
 		subnet.Status.Phase = v1alpha1.SubnetPhaseFailed
 		setReadyConditionFailed(
 			&subnet.Status.Conditions,
@@ -341,6 +341,15 @@ func (r *SubnetReconciler) handleUpdate(ctx context.Context, subnet *v1alpha1.Su
 	if subnet.Status.Phase == "" ||
 		(subnet.Status.Phase == v1alpha1.SubnetPhaseReady && !isSubnetConfigApplied(subnet.Status.ProvisioningJobs, subnet.Status.DesiredConfigVersion, plan)) {
 		subnet.Status.Phase = v1alpha1.SubnetPhaseProgressing
+	}
+
+	if implementationStrategy == agentlessNetImplementationStrategy {
+		ctx = provisioning.WithSubnetParentVirtualNetwork(ctx, provisioning.SubnetParentVirtualNetwork{
+			FulfillmentID: vnet.Labels[osacVirtualNetworkIDLabel],
+			KubernetesUID: string(vnet.UID),
+			TenantID:      vnet.Annotations[osacTenantKey],
+			Phase:         string(vnet.Status.Phase),
+		})
 	}
 
 	// Handle provisioning

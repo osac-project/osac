@@ -30,6 +30,8 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
+const agentlessNetImplementationStrategy = "agentless_net"
+
 // networkClassListPageSize is the page size used to list NetworkClasses. It matches
 // the fulfillment-service's maximum allowed limit, so listing every NetworkClass
 // takes the fewest possible round trips.

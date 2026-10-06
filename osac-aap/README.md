@@ -60,6 +60,12 @@ stores each Kubernetes Subnet UID, its parent Kubernetes UID and tenant, the
 global VLAN ID, and the saved gateway/DHCP state. Exact schema-v1 VirtualNetwork
 databases migrate additively under the state lock; incompatible development
 schemas with extra tables still fail closed.
+For Subnet provisioning, osac-operator resolves the parent VirtualNetwork by its
+Fulfillment UUID label in the Subnet namespace and sends its Fulfillment UUID,
+Kubernetes UID, tenant, and phase in `osac_job_vars.parent_virtual_network`.
+AgentlessNet validates that context against the Subnet before changing provider
+state, so its AAP job does not need separate Kubernetes API credentials for the
+parent UID lookup.
 Both addresses are endpoints: the host uses the base address and acts as the
 namespace default gateway; the namespace uses the next address. The `/31` link
 reserves no network or broadcast address and is not an OSAC Subnet. This

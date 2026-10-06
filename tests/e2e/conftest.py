@@ -305,7 +305,7 @@ _K8S_ONLY_NETWORK_MANAGER_CONFIGMAP = textwrap.dedent("""\
     data:
       name: k8s_only
       description: "Composite k8s-only manager (CUDN + NetworkPolicy + MetalLB), no separate physical fabric"
-      capabilities: "ipv4,ipv6,dualStack"
+      capabilities: "ipv4"
 """)
 
 

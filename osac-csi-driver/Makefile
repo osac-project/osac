@@ -79,6 +79,11 @@ image-build: ## Build the container image.
 image-push: ## Push the container image.
 	$(CONTAINER_TOOL) push $(IMG)
 
+.PHONY: kind-load-image
+kind-load-image: ## Load the built image into the dev-full Kind cluster.
+	$(call kind-load-image,$(IMG))
+
 ##@ Dependencies
 
 include $(shell git rev-parse --show-toplevel)/tools/golangci-lint.mk
+include $(shell git rev-parse --show-toplevel)/osac-installer/scripts/dev-full/kind-load-image.mk

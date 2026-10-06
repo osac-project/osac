@@ -4,7 +4,7 @@ import { screen, waitFor } from '@testing-library/react';
 import { Formik } from 'formik';
 import { describe, expect, it } from 'vitest';
 
-import { StorageTierSchema, StorageTierState } from '@osac/types';
+import { StorageProtocol, StorageTierSchema, StorageTierState } from '@osac/types';
 
 import { type ResourceSelectValue, emptyResourceSelectValue } from './resourceSelectValue';
 import { StorageTierSelectField } from './StorageTierSelectField';
@@ -15,11 +15,12 @@ const makeTier = (
   displayName: string,
   description: string,
   state: StorageTierState = StorageTierState.ACTIVE,
+  protocol: StorageProtocol = StorageProtocol.NFS,
 ) =>
   create(StorageTierSchema, {
     id: `id-${name}`,
     metadata: { name, displayName },
-    spec: { description },
+    spec: { description, protocol },
     status: { state },
   });
 
@@ -27,6 +28,7 @@ const renderField = (
   options: Parameters<typeof renderWithProviders>[1],
   initialTier: ResourceSelectValue = emptyResourceSelectValue(),
   isLocked = false,
+  protocol?: StorageProtocol,
 ) =>
   renderWithProviders(
     <Formik initialValues={{ tier: initialTier, other: 'keep-me' }} onSubmit={() => undefined}>
@@ -37,6 +39,7 @@ const renderField = (
             label="Storage tier"
             fieldId="tier"
             isLocked={isLocked}
+            protocol={protocol}
           />
           <output aria-label="selected-tier">{JSON.stringify(values.tier)}</output>
           <output data-other>{values.other}</output>
@@ -86,6 +89,87 @@ describe('StorageTierSelectField', () => {
     expect(options).toHaveLength(2);
     expect(screen.getByRole('option', { name: 'fast' })).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: 'gone' })).not.toBeInTheDocument();
+  });
+
+  it('requests active tiers for the requested storage protocol', async () => {
+    let capturedFilter: string | undefined;
+    const blockTier = makeTier(
+      'block',
+      'Block',
+      'block storage',
+      StorageTierState.ACTIVE,
+      StorageProtocol.BLOCK,
+    );
+    const nfsTier = makeTier(
+      'nfs',
+      'NFS',
+      'file storage',
+      StorageTierState.ACTIVE,
+      StorageProtocol.NFS,
+    );
+
+    renderWithProviders(
+      <Formik initialValues={{ tier: emptyResourceSelectValue() }} onSubmit={() => undefined}>
+        <StorageTierSelectField
+          name="tier"
+          label="Storage tier"
+          fieldId="tier"
+          protocol={StorageProtocol.BLOCK}
+        />
+      </Formik>,
+      {
+        transportOverrides: {
+          onPublicStorageTierList: (request) => {
+            capturedFilter = request.filter;
+            return { items: [blockTier, nfsTier] };
+          },
+        },
+      },
+    );
+
+    await screen.findByLabelText(/^Storage tier/);
+    await waitFor(() => expect(capturedFilter).toBeDefined());
+    expect(capturedFilter).toContain(`this.status.state == ${StorageTierState.ACTIVE}`);
+    expect(capturedFilter).toContain(`this.spec.protocol == ${StorageProtocol.BLOCK}`);
+  });
+
+  it('lists only active tiers for the requested storage protocol', async () => {
+    const blockTier = makeTier(
+      'block',
+      'Block',
+      'block storage',
+      StorageTierState.ACTIVE,
+      StorageProtocol.BLOCK,
+    );
+    const nfsTier = makeTier(
+      'nfs',
+      'NFS',
+      'file storage',
+      StorageTierState.ACTIVE,
+      StorageProtocol.NFS,
+    );
+    const retiredBlockTier = makeTier(
+      'retired-block',
+      'Retired block',
+      'retired block storage',
+      StorageTierState.UNSPECIFIED,
+      StorageProtocol.BLOCK,
+    );
+    const { user } = renderField(
+      {
+        apiFixtures: { publicStorageTiers: [blockTier, nfsTier, retiredBlockTier] },
+      },
+      emptyResourceSelectValue(),
+      false,
+      StorageProtocol.BLOCK,
+    );
+
+    const toggle = await screen.findByLabelText(/^Storage tier/);
+    await user.click(toggle);
+
+    expect(screen.getByRole('option', { name: 'block' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'nfs' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'retired-block' })).not.toBeInTheDocument();
   });
 
   it('shows an empty warning when no tiers are available', async () => {

@@ -499,6 +499,7 @@ func (c *Container) Stop(ctx context.Context) error {
 type InstanceBuilder struct {
 	container *Container
 	version   *uint
+	source    *Instance
 }
 
 // Instance is a PostgreSQL database created inside a Container. It delegates user credentials to the container's
@@ -507,6 +508,7 @@ type Instance struct {
 	container *Container
 	name      string
 	version   *uint
+	source    *Instance
 	url       string
 	lock      *sync.Mutex
 }
@@ -526,14 +528,25 @@ func (b *InstanceBuilder) SetVersion(value uint) *InstanceBuilder {
 	return b
 }
 
+// SetSource sets a source database instance to clone from instead of running migrations from scratch. The source
+// instance must already be initialized (e.g. by calling Url or Connection on it). The new database is created as a
+// copy of the source using PostgreSQL's CREATE DATABASE ... TEMPLATE statement. This is significantly faster than
+// running all migrations from scratch when many specs need a database at the same migration version. The source
+// instance must have no active connections at the time the new instance is initialized.
+func (b *InstanceBuilder) SetSource(value *Instance) *InstanceBuilder {
+	b.source = value
+	return b
+}
+
 // Build uses the information stored in the builder to create the database instance. When no version has been set
 // the database is cloned from the pre-migrated template, which is significantly faster than running all migrations.
-// When a specific version has been set the database is created from scratch and only the requested migrations are
-// applied.
+// When a source instance has been set the database is cloned from that source. When a specific version has been set
+// the database is created from scratch and only the requested migrations are applied.
 func (b *InstanceBuilder) Build() (result *Instance, err error) {
 	result = &Instance{
 		container: b.container,
 		version:   b.version,
+		source:    b.source,
 		lock:      &sync.Mutex{},
 	}
 	b.container.instances = append(b.container.instances, result)
@@ -550,6 +563,20 @@ func (i *Instance) initIfNeeded(ctx context.Context) error {
 }
 
 func (i *Instance) init(ctx context.Context) error {
+	// Validate the source before assigning the target name, so that a failed clone leaves the
+	// instance uninitialized and Url/Pool/Connection cannot return a URL for a database that was
+	// never created.
+	if i.source != nil {
+		if i.source.name == "" {
+			return fmt.Errorf("source database hasn't been initialized yet")
+		}
+		if i.source.container != i.container {
+			return fmt.Errorf(
+				"source database belongs to a different container",
+			)
+		}
+	}
+
 	// Calculate the name:
 	i.container.count++
 	i.name = fmt.Sprintf("%s%d", containerTemplateDatabase, i.container.count)
@@ -560,8 +587,12 @@ func (i *Instance) init(ctx context.Context) error {
 		containerTemplateUser, i.container.sharedPassword, i.container.host, i.container.port, i.name,
 	)
 
-	// If a version has been set, we need to create a blank database and run migrations up to the requested version,
-	// otherwise we can clone the template database, which already has all migrations applied.
+	// If a source instance has been set, clone from it. If a version has been set, create a blank database and run
+	// migrations up to the requested version. Otherwise clone the template database, which already has all migrations
+	// applied.
+	if i.source != nil {
+		return i.initFromSource(ctx)
+	}
 	if i.version != nil {
 		return i.initFromScratch(ctx)
 	}
@@ -578,6 +609,20 @@ func (i *Instance) initFromTemplate(ctx context.Context) error {
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create database '%s' from template: %w", i.name, err)
+	}
+	return nil
+}
+
+func (i *Instance) initFromSource(ctx context.Context) error {
+	_, err := i.container.adminConn.Exec(
+		ctx,
+		fmt.Sprintf(
+			"create database %s template %s owner %s",
+			i.name, i.source.name, containerTemplateUser,
+		),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create database '%s' from source '%s': %w", i.name, i.source.name, err)
 	}
 	return nil
 }

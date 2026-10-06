@@ -16,6 +16,28 @@
 #
 # =============================================================================
 
+global:
+  networking:
+    # Supported facade profiles today:
+    #   - fabricManager: netris, k8sManager: ""     → fabricManager netris
+    #   - fabricManager: "", k8sManager: k8s_only   → k8sManager k8s_only
+    # Reserved fabric managers (cudn_net, vlan) fail during render.
+    fabricManager: ""
+    k8sManager: k8s_only
+    netris:
+      controllerUrl: ""
+      credentials:
+        username: ""
+        externalSecret: true
+      siteId: ""
+      tenantId: ""
+      tenantName: ""
+      mgmtVpcId: ""
+      mgmtVpcName: ""
+      resourceClassMap: ""
+    # Empty means Helm generates the manager-specific default NetworkClass.
+    networkClass: {}
+
 # ---------------------
 # Operator CRDs
 # ---------------------
@@ -88,6 +110,10 @@ operator:
     tenant: true
     networking: true
 
+  # Provider-to-endpoint map for the operator Volume controller. Node-local
+  # LVMS provisioning uses "none" because it has no vendor gRPC endpoint.
+  vendorControllers: {}
+
   # Secret containing operator configuration overrides. Mounted as
   # environment variables. Created by create-api-token Helm hook.
   configSecret:
@@ -117,8 +143,19 @@ service:
   images:
     # Production: pin to a specific SHA tag.
     # Development: use "latest".
-    service: ghcr.io/osac-project/fulfillment-service:latest
-    envoy: ghcr.io/osac-project/envoy:v1.33.0
+    service:
+      repository: ghcr.io/osac-project/fulfillment-service
+      tag: latest
+      pullPolicy: Always
+    envoy:
+      repository: ghcr.io/osac-project/envoy
+      tag: v1.33.0
+      pullPolicy: IfNotPresent
+
+  # The Kafka-backed event publisher is enabled by default. Disable it only
+  # for API-only environments that do not provision or connect to Kafka.
+  eventPublisher:
+    enabled: true
 
   # TLS certificate configuration. All service components use cert-manager
   # to generate certificates signed by this issuer.
@@ -198,6 +235,27 @@ service:
   #       - key: url
   #         param: url
 
+  # Kafka used by the fulfillment service. Omit this block to use the chart
+  # defaults (the in-cluster cluster named by kafka.clusterName). To use a
+  # pre-existing external Kafka cluster, set the top-level kafka.enabled to
+  # false and set service.kafka.connection to ConfigMap and Secret sources that
+  # provide the brokers, user, and password properties. Include the broker CA
+  # in service.certs.caBundle when it is not already trusted.
+  # kafka:
+  #   connection:
+  #   - configMap:
+  #       name: fulfillment-service-kafka-config
+  #       items:
+  #       - key: bootstrap.servers
+  #         param: brokers
+  #       - key: username
+  #         param: user
+  #   - secret:
+  #       name: fulfillment-service-kafka
+  #       items:
+  #       - key: password
+  #         param: password
+
   # Logging configuration.
   log:
     # Log level: debug, info, warn, error
@@ -254,48 +312,41 @@ aap:
     # Helm mode; see docs/helm-deployment-guide.md for manual creation.
     manifestSecret: "config-as-code-manifest-ig"
     secret: "config-as-code-ig"
-    # Enable ConfigMap-based bare metal agent import. Sets
-    # OSAC_IMPORT_AGENTS_ENABLED=true in the config-as-code-ig Secret
-    # and gates the import-agents-inventory ConfigMap.
-    importAgentsEnabled: false
-    # Enable BCM (NVIDIA Base Command Manager) inventory backend. Sets
-    # OSAC_IMPORT_BCM_AGENTS_ENABLED=true in the config-as-code-ig Secret
-    # and gates the bcm-certs Secret.
-    importBcmAgentsEnabled: false
-
-  # Server inventory for bare metal agent import.
-  # Each entry provisions a BareMetalHost CR via the import-agents playbook.
-  # The playbook auto-creates a BMC Secret named {name}-bmc-secret for each server.
-  # See osac-aap/docs/import-agents.md for the server inventory format.
-  importAgents:
-    servers: []
-    # Example:
-    # servers:
-    #   - name: node001
-    #     bmc_url: "redfish-virtualmedia+https://192.168.1.21:8000/redfish/v1/Systems/<uuid>"
-    #     bmc_username: "<BMC_USERNAME>"
-    #     bmc_password: "<BMC_PASSWORD>"
-    #     boot_mac: "AA:BB:CC:DD:EE:01"
-    #     netris_server_name: "server-01"
-    #     resource_class: "fc430"
-    #   - name: node002
-    #     bmc_url: "redfish-virtualmedia+https://192.168.1.22:8000/redfish/v1/Systems/<uuid>"
-    #     bmc_username: "<BMC_USERNAME>"
-    #     bmc_password: "<BMC_PASSWORD>"
-    #     boot_mac: "AA:BB:CC:DD:EE:02"
-    #     netris_server_name: "server-02"
-    #     resource_class: "fc430"
-    #     disable_bmc_cert_verification: false
-
-  # BCM (NVIDIA Base Command Manager) mTLS client credentials.
-  # When importBcmAgentsEnabled is true, these are written to the bcm-certs Secret.
-  # BCM API connection settings are configured in clusterFulfillment.config below.
-  # See osac-aap/docs/bcm-inventory-integration.md for setup details.
-  importBcmAgents:
-    # PEM-encoded client certificate for BCM mTLS authentication.
-    cert: ""
-    # PEM-encoded client private key for BCM mTLS authentication.
-    key: ""
+  # AAP instance groups. The global.networking facade supplies the network
+  # fields; use these blocks for enablement and expert-only overrides.
+  instanceGroups:
+    clusterFulfillment:
+      enabled: false
+      config:
+        DNS_CLASS: ""
+        DNS_ZONE: ""
+        SERVER_SSH_BASTION_HOST: ""
+        SERVER_SSH_BASTION_USER: ""
+        SERVER_SSH_USER: ""
+        SERVER_MGMT_ROUTE_DESTINATION: ""
+        SERVER_MGMT_ROUTE_GATEWAY: ""
+        EXTERNAL_ACCESS_BASE_DOMAIN: ""
+        EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS: ""
+        EXTERNAL_ACCESS_API_INTERNAL_NETWORK: ""
+        HOSTED_CLUSTER_BASE_DOMAIN: ""
+        HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY: ""
+        HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: ""
+      secret:
+        NETRIS_PASSWORD: ""
+        AWS_ACCESS_KEY_ID: ""
+        AWS_SECRET_ACCESS_KEY: ""
+        SERVER_SSH_KEY: ""
+        SERVER_SSH_BASTION_KEY: ""
+    networkFulfillment:
+      enabled: false
+      config: {}
+      secret:
+        NETRIS_PASSWORD: ""
+    publishTemplates:
+      enabled: true
+      config:
+        OSAC_TEMPLATE_COLLECTIONS: "osac.templates"
+        OSAC_FULFILLMENT_SERVICE_URI: "https://fulfillment-internal-api:8001"
 
 # ---------------------
 # Bare Metal Fulfillment Operator — BCM Backend
@@ -366,118 +417,24 @@ hubAccess:
   enabled: true
 
 # ---------------------
-# Publish Templates
+# Networking (user-facing facade)
 # ---------------------
-publishTemplates:
-  # Create the publish-templates-ig ConfigMap consumed by the AAP template
-  # publishing instance group. Controls which Ansible collections are scanned
-  # and where templates are registered.
-  enabled: true
-  # Comma-separated list of Ansible collections containing OSAC templates.
-  templateCollections: "osac.templates"
-  # Internal URI of the fulfillment service API for template registration.
-  fulfillmentServiceUri: "https://fulfillment-internal-api:8001"
-
-# ---------------------
-# Cluster Fulfillment Instance Group
-# ---------------------
-# ConfigMap and Secret for the AAP cluster-fulfillment instance group.
-# Carries network backend selection, Netris credentials, SSH config,
-# external-access domains, hosted-cluster defaults, and DNS backend config.
+# Preferred API: global.networking (see network-backend.md).
+# Low-level AAP blocks are under aap.instanceGroups and are expert overrides
+# when global.expertOverrides.aap is true.
 #
-# The config keys become environment variables in the AAP instance group.
-# See osac-aap/group_vars/all/configuration.yaml for how they are consumed.
-clusterFulfillment:
-  enabled: false
-  config:
-    # --- Network Backend ---
-    # Network implementation class (e.g., "netris", "esi").
-    NETWORK_CLASS: ""
-    # Ansible collection providing network-class-specific steps.
-    NETWORK_STEPS_COLLECTION: ""
-
-    # --- DNS Backend ---
-    # Fully-qualified Ansible role name of the DNS driver to use.
-    # Examples: "dns.route53.dns", "dns.cloudflare.dns"
-    # Default (when empty): "dns.route53.dns"
-    DNS_CLASS: ""
-    # DNS zone to operate in (e.g., "example.com").
-    # Default (when empty): value of EXTERNAL_ACCESS_BASE_DOMAIN.
-    DNS_ZONE: ""
-
-    # --- Netris Controller ---
-    NETRIS_CONTROLLER_URL: ""
-    NETRIS_USERNAME: ""
-    NETRIS_SITE_ID: ""
-    NETRIS_TENANT_ID: ""
-    NETRIS_TENANT_NAME: ""
-    NETRIS_MGMT_VPC_ID: ""
-    NETRIS_MGMT_VPC_NAME: ""
-    NETRIS_RESOURCE_CLASS_MAP: ""
-
-    # --- SSH Access ---
-    SERVER_SSH_BASTION_HOST: ""
-    SERVER_SSH_BASTION_USER: ""
-    SERVER_SSH_USER: ""
-    SERVER_MGMT_ROUTE_DESTINATION: ""
-    SERVER_MGMT_ROUTE_GATEWAY: ""
-
-    # --- External Access ---
-    EXTERNAL_ACCESS_BASE_DOMAIN: ""
-    EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS: ""
-    EXTERNAL_ACCESS_API_INTERNAL_NETWORK: ""
-
-    # --- Hosted Cluster ---
-    HOSTED_CLUSTER_BASE_DOMAIN: ""
-    HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY: ""
-    HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: ""
-
-    # --- Import Agents ---
-    # Playbook variables for ConfigMap-based agent import.
-    # These override the playbook defaults when non-empty.
-    # Effective default: "hardware-inventory"
-    IMPORT_AGENTS_NAMESPACE: ""
-    # Effective default: "infraenv"
-    IMPORT_AGENTS_INFRAENV_NAME: ""
-    # Effective default: "pull-secret"
-    IMPORT_AGENTS_PULL_SECRET_NAME: ""
-    # Effective default: "true"
-    IMPORT_AGENTS_DISABLE_BMC_CERT_VERIFICATION: ""
-
-    # --- BCM Inventory ---
-    # Playbook variables for BCM-based agent import.
-    # These override the playbook defaults when non-empty.
-    # BCM head node API endpoint (e.g., https://bcm-head:8081).
-    BCM_API_URL: ""
-    # Verify BCM TLS certificates. Set to "false" for lab environments
-    # with self-signed certificates. Effective default: "true" (production).
-    BCM_VALIDATE_CERTS: "true"
-    # Skip BMC TLS certificate verification during system discovery.
-    # Effective default: "false".
-    BCM_DISABLE_BMC_CERT_VERIFICATION: "false"
-  secret:
-    NETRIS_PASSWORD: ""
-    # AWS credentials (used by the Route 53 DNS backend).
-    AWS_ACCESS_KEY_ID: ""
-    AWS_SECRET_ACCESS_KEY: ""
-    SERVER_SSH_KEY: ""
-    SERVER_SSH_BASTION_KEY: ""
-
-# ---------------------
-# Network Fulfillment Instance Group
-# ---------------------
-# ConfigMap and Secret for the AAP networking-operations instance group.
-# Carries Netris controller credentials for network resource lifecycle.
-networkFulfillment:
-  enabled: false
-  config:
-    NETRIS_CONTROLLER_URL: ""
-    NETRIS_USERNAME: ""
-    NETRIS_SITE_ID: ""
-    NETRIS_TENANT_ID: ""
-    NETRIS_TENANT_NAME: ""
-  secret:
-    NETRIS_PASSWORD: ""
+# global:
+#   networking:
+#     fabricManager: netris
+#     k8sManager: ""
+#     netris:
+#       controllerUrl: "https://redhat-ctl.netris.io"
+#       credentials:
+#         username: "netris"
+#         externalSecret: true
+#       siteId: "5"
+#       tenantId: "1"
+#       tenantName: "Admin"
 
 # ---------------------
 # Pre-install Validation

@@ -1,0 +1,14 @@
+osac_job_vars:
+  resource:
+    apiVersion: osac.openshift.io/v1alpha1
+    kind: Tenant
+    metadata:
+      name: "{{ routing_test_tenant_name }}"
+      namespace: osac-system
+      uid: tenant-storage-routing-test
+    spec: {}
+  storage_tier_definitions:
+    - name: fast
+      protocol: block
+      provider: lvms
+  storage_backend_connections: {}

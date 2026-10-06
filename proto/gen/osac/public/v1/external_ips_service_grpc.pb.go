@@ -35,7 +35,6 @@ const (
 	ExternalIPs_List_FullMethodName   = "/osac.public.v1.ExternalIPs/List"
 	ExternalIPs_Get_FullMethodName    = "/osac.public.v1.ExternalIPs/Get"
 	ExternalIPs_Create_FullMethodName = "/osac.public.v1.ExternalIPs/Create"
-	ExternalIPs_Update_FullMethodName = "/osac.public.v1.ExternalIPs/Update"
 	ExternalIPs_Delete_FullMethodName = "/osac.public.v1.ExternalIPs/Delete"
 )
 
@@ -49,8 +48,6 @@ type ExternalIPsClient interface {
 	Get(ctx context.Context, in *ExternalIPsGetRequest, opts ...grpc.CallOption) (*ExternalIPsGetResponse, error)
 	// Creates a new external IP. The spec.pool field determines which ExternalIPPool the address is allocated from.
 	Create(ctx context.Context, in *ExternalIPsCreateRequest, opts ...grpc.CallOption) (*ExternalIPsCreateResponse, error)
-	// Updates an existing external IP. Allows modifying metadata (labels, annotations). The spec.pool field is immutable.
-	Update(ctx context.Context, in *ExternalIPsUpdateRequest, opts ...grpc.CallOption) (*ExternalIPsUpdateResponse, error)
 	// Deletes an external IP. The allocated address is returned to the parent pool's available capacity.
 	Delete(ctx context.Context, in *ExternalIPsDeleteRequest, opts ...grpc.CallOption) (*ExternalIPsDeleteResponse, error)
 }
@@ -93,16 +90,6 @@ func (c *externalIPsClient) Create(ctx context.Context, in *ExternalIPsCreateReq
 	return out, nil
 }
 
-func (c *externalIPsClient) Update(ctx context.Context, in *ExternalIPsUpdateRequest, opts ...grpc.CallOption) (*ExternalIPsUpdateResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ExternalIPsUpdateResponse)
-	err := c.cc.Invoke(ctx, ExternalIPs_Update_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *externalIPsClient) Delete(ctx context.Context, in *ExternalIPsDeleteRequest, opts ...grpc.CallOption) (*ExternalIPsDeleteResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ExternalIPsDeleteResponse)
@@ -123,8 +110,6 @@ type ExternalIPsServer interface {
 	Get(context.Context, *ExternalIPsGetRequest) (*ExternalIPsGetResponse, error)
 	// Creates a new external IP. The spec.pool field determines which ExternalIPPool the address is allocated from.
 	Create(context.Context, *ExternalIPsCreateRequest) (*ExternalIPsCreateResponse, error)
-	// Updates an existing external IP. Allows modifying metadata (labels, annotations). The spec.pool field is immutable.
-	Update(context.Context, *ExternalIPsUpdateRequest) (*ExternalIPsUpdateResponse, error)
 	// Deletes an external IP. The allocated address is returned to the parent pool's available capacity.
 	Delete(context.Context, *ExternalIPsDeleteRequest) (*ExternalIPsDeleteResponse, error)
 	mustEmbedUnimplementedExternalIPsServer()
@@ -145,9 +130,6 @@ func (UnimplementedExternalIPsServer) Get(context.Context, *ExternalIPsGetReques
 }
 func (UnimplementedExternalIPsServer) Create(context.Context, *ExternalIPsCreateRequest) (*ExternalIPsCreateResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Create not implemented")
-}
-func (UnimplementedExternalIPsServer) Update(context.Context, *ExternalIPsUpdateRequest) (*ExternalIPsUpdateResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Update not implemented")
 }
 func (UnimplementedExternalIPsServer) Delete(context.Context, *ExternalIPsDeleteRequest) (*ExternalIPsDeleteResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
@@ -227,24 +209,6 @@ func _ExternalIPs_Create_Handler(srv interface{}, ctx context.Context, dec func(
 	return interceptor(ctx, in, info, handler)
 }
 
-func _ExternalIPs_Update_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ExternalIPsUpdateRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ExternalIPsServer).Update(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: ExternalIPs_Update_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ExternalIPsServer).Update(ctx, req.(*ExternalIPsUpdateRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _ExternalIPs_Delete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ExternalIPsDeleteRequest)
 	if err := dec(in); err != nil {
@@ -281,10 +245,6 @@ var ExternalIPs_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Create",
 			Handler:    _ExternalIPs_Create_Handler,
-		},
-		{
-			MethodName: "Update",
-			Handler:    _ExternalIPs_Update_Handler,
 		},
 		{
 			MethodName: "Delete",

@@ -7,9 +7,10 @@ from uuid import uuid4
 
 import pytest
 
-from tests.e2e.catalog.conftest import unique_name
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import (
+    allocate_worker_subnet,
+    unique_name,
     wait_for_cr,
     wait_for_deletion,
     wait_for_external_ip_attachment_deletion,
@@ -22,7 +23,7 @@ from tests.e2e.core.helpers import (
 )
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
-from tests.e2e.vmaas.regression.external_ip.helpers import allocate_worker_subnet, create_ip
+from tests.e2e.vmaas.regression.external_ip.helpers import create_ip
 
 logger = logging.getLogger(__name__)
 

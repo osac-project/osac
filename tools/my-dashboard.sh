@@ -185,9 +185,14 @@ section_header "📋" "$POSSESSIVE Sprint Tasks"
 
 if $HAS_JIRA; then
     # Get sprint metadata via Jira REST API (jira CLI doesn't support --board on sprint list)
-    SPRINT_DATA=$(curl -sn "${JIRA_URL}/rest/agile/1.0/board/${JIRA_BOARD_ID}/sprint?state=active" 2>/dev/null \
-        | jq '[.values // [] | .[] | select(.state=="active")] | sort_by(.startDate) | last // {}')
-    SPRINT_NAME=$(echo "$SPRINT_DATA" | jq -r '.name//"Unknown"')
+    # The board API may require separate .netrc credentials even when jira CLI works.
+    # Keep the Jira tasks and remaining dashboard available when it cannot be read.
+    if ! SPRINT_DATA=$(curl -fsS --netrc-optional \
+        "${JIRA_URL}/rest/agile/1.0/board/${JIRA_BOARD_ID}/sprint?state=active" 2>/dev/null \
+        | jq '[.values // [] | .[] | select(.state=="active")] | sort_by(.startDate) | last // {}' 2>/dev/null); then
+        SPRINT_DATA='{}'
+    fi
+    SPRINT_NAME=$(echo "$SPRINT_DATA" | jq -r '.name//"Current sprint"')
     SPRINT_START=$(echo "$SPRINT_DATA" | jq -r '.startDate//""' | cut -dT -f1)
     SPRINT_END=$(echo "$SPRINT_DATA" | jq -r '.endDate//""' | cut -dT -f1)
 
@@ -233,9 +238,13 @@ if $HAS_JIRA; then
     echo -e "  ${BOLD}$SPRINT_NAME${NC}"
     if [ -n "$SPRINT_START" ] && [ -n "$SPRINT_END" ]; then
         echo -e "  ${DIM}$SPRINT_START → $SPRINT_END${NC}"
+    else
+        echo -e "  ${DIM}Sprint dates unavailable from Jira board API.${NC}"
     fi
     echo ""
-    printf "  Sprint timeline  "; render_bar "$S_PCT"; printf "  %3d%%  (day %d/%d)\n" "$S_PCT" "$S_ELAPSED" "$S_TOTAL"
+    if [ -n "$SPRINT_START" ] && [ -n "$SPRINT_END" ]; then
+        printf "  Sprint timeline  "; render_bar "$S_PCT"; printf "  %3d%%  (day %d/%d)\n" "$S_PCT" "$S_ELAPSED" "$S_TOTAL"
+    fi
     printf "  Tasks progress   "; render_bar "$T_PCT"; printf "  %3d%%  (%d done, %d review, %d wip, %d todo)\n" "$T_PCT" "$DONE" "$IN_REVIEW" "$IN_PROGRESS" "$TODO"
     echo ""
 

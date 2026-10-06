@@ -28,8 +28,14 @@ import (
 var _ = Describe("GrpcExternalAuthInterceptor project metadata authorization", func() {
 	Describe("Projects Get operation", func() {
 		It("Should fetch metadata from database and include in context extensions", func(ctx context.Context) {
+			evaluator, err := NewEvaluator().
+				AddEmergencyServiceAccounts([]string{"admin"}).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
 			interceptor, err := NewGrpcAuthzInterceptor().
 				SetLogger(logger).
+				SetEvaluator(evaluator).
 				SetMetadataFetcher(func(ctx context.Context, id string) *ObjectMetadata {
 					return &ObjectMetadata{Tenant: "authoritative-tenant", Name: "authoritative-project"}
 				}).
@@ -67,8 +73,14 @@ var _ = Describe("GrpcExternalAuthInterceptor project metadata authorization", f
 
 	Describe("Projects Delete operation", func() {
 		It("Should fetch metadata from database and include in context extensions", func(ctx context.Context) {
+			evaluator, err := NewEvaluator().
+				AddEmergencyServiceAccounts([]string{"admin"}).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
 			interceptor, err := NewGrpcAuthzInterceptor().
 				SetLogger(logger).
+				SetEvaluator(evaluator).
 				SetMetadataFetcher(func(ctx context.Context, id string) *ObjectMetadata {
 					return &ObjectMetadata{Tenant: "authoritative-tenant", Name: "authoritative-project"}
 				}).
@@ -106,8 +118,14 @@ var _ = Describe("GrpcExternalAuthInterceptor project metadata authorization", f
 
 	Describe("Projects Update operation", func() {
 		It("Should fetch metadata from database and include in context extensions", func(ctx context.Context) {
+			evaluator, err := NewEvaluator().
+				AddEmergencyServiceAccounts([]string{"admin"}).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
 			interceptor, err := NewGrpcAuthzInterceptor().
 				SetLogger(logger).
+				SetEvaluator(evaluator).
 				SetMetadataFetcher(func(ctx context.Context, id string) *ObjectMetadata {
 					return &ObjectMetadata{Tenant: "authoritative-tenant", Name: "authoritative-project"}
 				}).
@@ -150,8 +168,14 @@ var _ = Describe("GrpcExternalAuthInterceptor project metadata authorization", f
 		})
 
 		It("Should ignore client-provided metadata values and use authoritative database values", func(ctx context.Context) {
+			evaluator, err := NewEvaluator().
+				AddEmergencyServiceAccounts([]string{"admin"}).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
 			interceptor, err := NewGrpcAuthzInterceptor().
 				SetLogger(logger).
+				SetEvaluator(evaluator).
 				SetMetadataFetcher(func(ctx context.Context, id string) *ObjectMetadata {
 					return &ObjectMetadata{Tenant: "authoritative-tenant", Name: "authoritative-project"}
 				}).
@@ -197,8 +221,14 @@ var _ = Describe("GrpcExternalAuthInterceptor project metadata authorization", f
 
 	Describe("Projects List operation", func() {
 		It("Should not fetch metadata for list operations", func(ctx context.Context) {
+			evaluator, err := NewEvaluator().
+				AddEmergencyServiceAccounts([]string{"admin"}).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
 			interceptor, err := NewGrpcAuthzInterceptor().
 				SetLogger(logger).
+				SetEvaluator(evaluator).
 				SetMetadataFetcher(func(ctx context.Context, id string) *ObjectMetadata {
 					Fail("metadata fetcher should not be called for list operations")
 					return nil
@@ -234,8 +264,14 @@ var _ = Describe("GrpcExternalAuthInterceptor project metadata authorization", f
 
 	Describe("ProjectMemberships Get operation", func() {
 		It("Should fetch project membership metadata and include in context extensions", func(ctx context.Context) {
+			evaluator, err := NewEvaluator().
+				AddEmergencyServiceAccounts([]string{"admin"}).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
 			interceptor, err := NewGrpcAuthzInterceptor().
 				SetLogger(logger).
+				SetEvaluator(evaluator).
 				SetProjectMembershipMetadataFetcher(func(ctx context.Context, id string) *ObjectMetadata {
 					Expect(id).To(Equal("pm-123"))
 					return &ObjectMetadata{Tenant: "authoritative-tenant", Project: "authoritative-project"}
@@ -274,8 +310,14 @@ var _ = Describe("GrpcExternalAuthInterceptor project metadata authorization", f
 
 	Describe("ProjectMemberships Delete operation", func() {
 		It("Should fetch project membership metadata and include in context extensions", func(ctx context.Context) {
+			evaluator, err := NewEvaluator().
+				AddEmergencyServiceAccounts([]string{"admin"}).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
 			interceptor, err := NewGrpcAuthzInterceptor().
 				SetLogger(logger).
+				SetEvaluator(evaluator).
 				SetProjectMembershipMetadataFetcher(func(ctx context.Context, id string) *ObjectMetadata {
 					return &ObjectMetadata{Tenant: "authoritative-tenant", Project: "authoritative-project"}
 				}).
@@ -313,8 +355,14 @@ var _ = Describe("GrpcExternalAuthInterceptor project metadata authorization", f
 
 	Describe("ProjectMemberships Create operation", func() {
 		It("Should extract project name from request body and include in context extensions", func(ctx context.Context) {
+			evaluator, err := NewEvaluator().
+				AddEmergencyServiceAccounts([]string{"admin"}).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
 			interceptor, err := NewGrpcAuthzInterceptor().
 				SetLogger(logger).
+				SetEvaluator(evaluator).
 				SetProjectMembershipMetadataFetcher(func(ctx context.Context, id string) *ObjectMetadata {
 					Fail("project membership metadata fetcher should not be called for Create")
 					return nil
@@ -357,8 +405,14 @@ var _ = Describe("GrpcExternalAuthInterceptor project metadata authorization", f
 
 	Describe("ProjectMemberships List operation", func() {
 		It("Should not fetch metadata for list operations", func(ctx context.Context) {
+			evaluator, err := NewEvaluator().
+				AddEmergencyServiceAccounts([]string{"admin"}).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
 			interceptor, err := NewGrpcAuthzInterceptor().
 				SetLogger(logger).
+				SetEvaluator(evaluator).
 				SetProjectMembershipMetadataFetcher(func(ctx context.Context, id string) *ObjectMetadata {
 					Fail("project membership metadata fetcher should not be called for List")
 					return nil
@@ -394,8 +448,14 @@ var _ = Describe("GrpcExternalAuthInterceptor project metadata authorization", f
 
 	Describe("Other resource operations", func() {
 		It("Should not fetch project metadata for Clusters operations", func(ctx context.Context) {
+			evaluator, err := NewEvaluator().
+				AddEmergencyServiceAccounts([]string{"admin"}).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
 			interceptor, err := NewGrpcAuthzInterceptor().
 				SetLogger(logger).
+				SetEvaluator(evaluator).
 				SetMetadataFetcher(func(ctx context.Context, id string) *ObjectMetadata {
 					Fail("metadata fetcher should not be called for non-Projects resources")
 					return nil

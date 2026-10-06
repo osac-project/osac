@@ -31,10 +31,10 @@ Next steps:
 
 1. Extract the CA bundle:
    kubectl -n {{ .Values.osacNamespace }} get configmap ca-bundle \
-     -o jsonpath='{.data.ca-bundle\.crt}' > /tmp/osac-ca-bundle.pem
+     -o jsonpath='{.data.bundle\.pem}' > /tmp/osac-ca-bundle.pem
 
 2. Get the admin client secret:
-   OSAC_ADMIN_SECRET=$(kubectl -n {{ .Values.tenant.keycloak.namespace }} get secret keycloak-clients \
+   OSAC_ADMIN_SECRET=$(kubectl -n {{ .Values.tenant.keycloak.namespace }} get secret keycloak-client-secrets \
      -o jsonpath='{.data.osac-admin}' | base64 -d)
 
 3. Login with the osac CLI:
@@ -42,12 +42,12 @@ Next steps:
      --flow credentials \
      --client-id osac-admin \
      --client-secret "${OSAC_ADMIN_SECRET}" \
-     --private \
      https://fulfillment-api.osac.localhost:8443
 
 4. Verify access:
+   osac get projects
    osac get clusters
-   osac get compute-instances
+   osac get computeinstances
 
 For more CLI commands, see: osac --help
 
@@ -60,6 +60,6 @@ Check component status:
   kubectl -n kubevirt get kubevirt                       # KubeVirt
 
 Check seeded resources:
-  osac get disk-images
-  osac get instance-types
-  osac get catalog-items
+  osac get diskimages
+  osac get instancetypes
+  osac get computeinstancecatalogitems

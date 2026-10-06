@@ -53,15 +53,73 @@
   until: _r is not failed
   when: ocp_4_20_ai_maas_enable_observability | bool
 
+# --- data-science-gateway-class GatewayClass ---
+# Every gateway in this role (openshift-ai-inference + the maas gateways) references
+# gatewayClassName: data-science-gateway-class. RHOAI's GatewayConfig only creates
+# that class when the dashboard component is Managed — it does an unconditional
+# `GET Dashboard`, so with dashboard=Removed (and the dashboards CRD absent)
+# GatewayConfig goes Ready=False and never creates the class, breaking inference-only
+# UCs (KServe model → "GatewayClass data-science-gateway-class not found").
+# The class is actually reconciled by the OpenShift ingress-operator (Sail Library)
+# keyed on controllerName openshift.io/gateway-controller/v1, so we create it
+# directly when absent. Idempotent: in dashboard-Managed / MaaS UCs the class already
+# exists (RHOAI made it) → no-op. Must run BEFORE the gateway that references it.
+
+- name: Check for data-science-gateway-class GatewayClass
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: gateway.networking.k8s.io/v1
+    kind: GatewayClass
+    name: data-science-gateway-class
+  register: _dsgc
+
+- name: Ensure data-science-gateway-class GatewayClass exists
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: gateway.networking.k8s.io/v1
+      kind: GatewayClass
+      metadata:
+        name: data-science-gateway-class
+      spec:
+        controllerName: openshift.io/gateway-controller/v1
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+  when: _dsgc.resources | length == 0
+
+- name: Wait for data-science-gateway-class Accepted
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: gateway.networking.k8s.io/v1
+    kind: GatewayClass
+    name: data-science-gateway-class
+  register: _dsgc_wait
+  retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+  until:
+    - _dsgc_wait.resources is defined
+    - _dsgc_wait.resources | length > 0
+    - >-
+      _dsgc_wait.resources[0].status.conditions | default([])
+      | selectattr('type', 'equalto', 'Accepted')
+      | selectattr('status', 'equalto', 'True')
+      | list | length > 0
+
 # --- openshift-ai-inference gateway ---
-# TEMPORARY WORKAROUND: RHOAI operator does not create openshift-ai-inference
-# gateway. Dashboard-deployed LLMInferenceService models need it. See: RHOAIENG-38214
+# TEMPORARY WORKAROUND (RHOAIENG-38214): RHOAI still does not create the
+# openshift-ai-inference gateway on 3.5 GA, but KServe's inferenceservice-config
+# sets kserveIngressGateway=openshift-ingress/openshift-ai-inference. MaaS models
+# use their own maas-* gateways, but inference-only models (enable_maas=false,
+# dashboard-deployed) need this. Created unconditionally (runs for every UC).
 
 - name: Create openshift-ai-inference gateway
   kubernetes.core.k8s:
     kubeconfig: "{{ admin_kubeconfig }}"
     state: present
-    template: openshift-ai-inference-gateway.yaml.j2
+    definition: "{{ lookup('ansible.builtin.template', 'openshift-ai-inference-gateway.yaml.j2') | from_yaml }}"
   register: _r
   retries: 5
   delay: 10
@@ -99,6 +157,42 @@
        | selectattr('type', 'equalto', 'Programmed')
        | selectattr('status', 'equalto', 'True')
        | list | length == 0)
+
+
+- name: Verify gateway TLS cert was rendered (not raw Jinja2)
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: gateway.networking.k8s.io/v1
+    kind: Gateway
+    name: openshift-ai-inference
+    namespace: openshift-ingress
+  register: _ai_gw_cert_check
+
+- name: Assert gateway cert name matches expected value
+  vars:
+    _ai_gw_cert_actual: >-
+      {{ _ai_gw_cert_check.resources[0].spec.listeners[0]
+         .tls.certificateRefs[0].name | trim }}
+  ansible.builtin.assert:
+    that:
+      - _ai_gw_cert_actual == _cert_name
+    fail_msg: >-
+      openshift-ai-inference gateway certificateRefs[0].name is
+      '{{ _ai_gw_cert_actual }}' but expected '{{ _cert_name }}'.
+      If it contains raw Jinja2 the template was NOT rendered by Ansible —
+      someone applied the .j2 file directly (oc apply -f). Fix:
+      oc patch gateway openshift-ai-inference -n openshift-ingress
+      --type=json -p '[{"op":"replace","path":"/spec/listeners/0/tls/certificateRefs/0/name","value":"{{ _cert_name }}"}]'
+
+# --- Connectivity-link (auth) substrate ---
+# Kuadrant CR + Authorino runtime, applied for EVERY use case (MaaS or plain
+# inference). Required so KServe's openshift-ai-inference AuthPolicy reaches
+# Enforced=True; without it a model behind that gateway is served OPEN (or, if the
+# CRD is missing, cannot reach Ready at all). The RHCL operator + CRD are installed
+# by install_operators.yaml before the DSC. Idempotent (guarded on Kuadrant Ready).
+
+- name: Configure connectivity-link auth substrate (Kuadrant + Authorino)
+  ansible.builtin.include_tasks: configure_connectivity_link.yaml
 
 # --- Hardware Profiles ---
 

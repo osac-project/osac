@@ -1,6 +1,13 @@
 # TEMPORARY WORKAROUND: RHOAI operator does not create openshift-ai-inference
 # gateway. The inferenceservice-config ConfigMap references it but GatewayConfig
 # only creates data-science-gateway. See: RHOAIENG-38214
+#
+# TLS cert: use {{ _cert_name }} (the cluster ingress default, normally router-certs)
+# — the SAME cert the MaaS gateways use (gateway.yaml.j2). The dashboard/GatewayConfig
+# path mints data-science-gateway-service-tls, but that secret does NOT exist in
+# inference-only UCs (dashboard=Removed → GatewayConfig Ready=False), which left this
+# gateway's HTTPS listener ResolvedRefs=False/Programmed=False → HTTP 000. router-certs
+# always exists, so the listener programs regardless of dashboard/GatewayConfig state.
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
@@ -20,4 +27,4 @@ spec:
       tls:
         mode: Terminate
         certificateRefs:
-          - name: data-science-gateway-service-tls
+          - name: "{{ _cert_name | default(ocp_4_20_ai_maas_gateway_cert_name) | default('router-certs') }}"

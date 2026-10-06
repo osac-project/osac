@@ -27,13 +27,11 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 type PrivateInstanceTypesServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -55,11 +53,6 @@ func NewPrivateInstanceTypesServer() *PrivateInstanceTypesServerBuilder {
 
 func (b *PrivateInstanceTypesServerBuilder) SetLogger(value *slog.Logger) *PrivateInstanceTypesServerBuilder {
 	b.logger = value
-	return b
-}
-
-func (b *PrivateInstanceTypesServerBuilder) SetNotifier(value events.Notifier) *PrivateInstanceTypesServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -102,7 +95,6 @@ func (b *PrivateInstanceTypesServerBuilder) Build() (result *PrivateInstanceType
 	generic, err := NewGenericServer[*privatev1.InstanceType]().
 		SetLogger(b.logger).
 		SetService(privatev1.InstanceTypes_ServiceDesc.ServiceName).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).

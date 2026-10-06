@@ -38,7 +38,7 @@ type SecurityGroupFeedbackReconciler struct {
 }
 
 // NewSecurityGroupFeedbackReconciler creates a reconciler that sends to the fulfillment service updates about security groups.
-func NewSecurityGroupFeedbackReconciler(hubClient clnt.Client, grpcConn *grpc.ClientConn, networkingNamespace string) *SecurityGroupFeedbackReconciler {
+func NewSecurityGroupFeedbackReconciler(hubClient clnt.Client, grpcConn grpc.ClientConnInterface, networkingNamespace string) *SecurityGroupFeedbackReconciler {
 	sgClient := privatev1.NewSecurityGroupsClient(grpcConn)
 	r := &SecurityGroupFeedbackReconciler{networkingNamespace: networkingNamespace}
 	r.bridge = &feedback.Bridge[*v1alpha1.SecurityGroup, *privatev1.SecurityGroup]{

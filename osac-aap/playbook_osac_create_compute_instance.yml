@@ -9,17 +9,18 @@
     template_id: "{{ osac_job_vars.resource.spec.templateID }}"
     template_parameters: {}
     tenant_storage_classes: "{{ osac_job_vars.tenant_storage_classes | default([]) }}"
+    # Overridable so tests can stub out the real Helm install while still
+    # exercising this playbook's own when: gate and vars: mapping, matching
+    # the pattern osac.templates.ocp_virt_vm already uses for its
+    # create_step_* hooks.
+    csi_driver_install_default:
+      name: osac.service.csi_driver_install
+      tasks_from: main.yaml
 
   pre_tasks:
     - name: Show resource metadata
       ansible.builtin.debug:
         var: osac_job_vars.resource.metadata
-
-    - name: Determine tenant target namespace
-      # Brings in variables:
-      # tenant_target_namespace
-      ansible.builtin.include_role:
-        name: osac.service.tenant_target_namespace
 
     - name: Set tenant identity from ComputeInstance tenant reference
       ansible.builtin.set_fact:
@@ -107,7 +108,6 @@
       ansible.builtin.debug:
         msg:
           - "Compute instance name: {{ compute_instance_name }}"
-          - "Tenant target namespace: {{ tenant_target_namespace }}"
           - "Template ID: {{ template_id }}"
           - "Template parameters: {{ template_parameters }}"
 

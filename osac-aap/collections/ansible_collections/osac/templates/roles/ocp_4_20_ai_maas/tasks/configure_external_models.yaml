@@ -1,16 +1,12 @@
 ---
 # Phase 5: External model access (Path A/B/C).
-# Creates proxy infrastructure (secured only), ExternalModel CRs, and MaaS governance.
-# Runs after local MaaS setup (configure_maas.yaml) is complete.
+# Creates inference.opendatahub.io ExternalProvider + ExternalModel (with `path`) and
+# MaaS governance CRs. The `path` field replaces the old maas-proxy prefix hack — no
+# proxy Deployment is created. Runs after local MaaS setup (configure_maas.yaml).
 
-- name: Validate external models require MaaS
-  ansible.builtin.assert:
-    that:
-      - ocp_4_20_ai_maas_enable_maas | bool
-    fail_msg: >-
-      External models require MaaS (enable_maas=true). ExternalModel CRs route
-      through maas-default-gateway which only exists when MaaS is enabled.
-  when: ocp_4_20_ai_maas_external_models | length > 0
+- name: Validate role inputs (CR-grounded, run-once; covers --tags external subset runs)
+  ansible.builtin.include_tasks: validate_inputs.yaml
+  when: not (_maas_inputs_validated | default(false))
 
 # --- Clean up leftover resources from prior failed runs (idempotent retry support) ---
 
@@ -56,7 +52,7 @@
   ignore_errors: true
   when: ocp_4_20_ai_maas_external_models | length > 0
 
-- name: Clean up leftover external models
+- name: Clean up leftover external models (legacy maas.opendatahub.io group)
   kubernetes.core.k8s:
     kubeconfig: "{{ admin_kubeconfig }}"
     state: absent
@@ -67,6 +63,34 @@
   loop: "{{ ocp_4_20_ai_maas_external_models }}"
   loop_control:
     label: "{{ item.name }}"
+  ignore_errors: true
+  when: ocp_4_20_ai_maas_external_models | length > 0
+
+- name: Clean up leftover external models (inference.opendatahub.io group)
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: absent
+    api_version: inference.opendatahub.io/v1alpha1
+    kind: ExternalModel
+    name: "{{ item.name }}"
+    namespace: "{{ ocp_4_20_ai_maas_external_model_namespace }}"
+  loop: "{{ ocp_4_20_ai_maas_external_models }}"
+  loop_control:
+    label: "{{ item.name }}"
+  ignore_errors: true
+  when: ocp_4_20_ai_maas_external_models | length > 0
+
+- name: Clean up leftover external providers (inference.opendatahub.io group)
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: absent
+    api_version: inference.opendatahub.io/v1alpha1
+    kind: ExternalProvider
+    name: "{{ item.name }}-provider"
+    namespace: "{{ ocp_4_20_ai_maas_external_model_namespace }}"
+  loop: "{{ ocp_4_20_ai_maas_external_models }}"
+  loop_control:
+    label: "{{ item.name }}-provider"
   ignore_errors: true
   when: ocp_4_20_ai_maas_external_models | length > 0
 
@@ -103,44 +127,28 @@
     seconds: 10
   when: ocp_4_20_ai_maas_external_models | length > 0
 
-# --- Proxy infrastructure (namespaces + Deployments + Services) ---
+# --- External models namespace (gateway-access labelled; was created by the proxy
+#     template before the maas-proxy was removed) ---
 
-- name: Apply proxy infrastructure
+- name: Create external models namespace
   kubernetes.core.k8s:
     kubeconfig: "{{ admin_kubeconfig }}"
     state: present
-    definition: "{{ item }}"
-  loop: >-
-    {{ lookup('ansible.builtin.template', 'external-model-proxy.yaml.j2')
-       | from_yaml_all | list }}
-  loop_control:
-    label: "{{ item.kind }}/{{ item.metadata.name }}"
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ ocp_4_20_ai_maas_external_model_namespace }}"
+        labels:
+          opendatahub.io/generated-namespace: "true"
+          maas.opendatahub.io/gateway-access: "true"
   register: _r
   retries: 5
   delay: 10
   until: _r is not failed
   when: ocp_4_20_ai_maas_external_models | length > 0
 
-- name: Wait for proxy Deployments ready
-  kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
-    api_version: apps/v1
-    kind: Deployment
-    namespace: "{{ ocp_4_20_ai_maas_proxy_namespace }}"
-  register: _proxy_deps
-  retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
-  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
-  until: >-
-    _proxy_deps.resources | length == 0
-    or (_proxy_deps.resources
-        | selectattr('status.availableReplicas', 'defined')
-        | selectattr('status.availableReplicas', 'greaterthan', 0)
-        | list | length == _proxy_deps.resources | length)
-  when:
-    - ocp_4_20_ai_maas_external_models | length > 0
-    - ocp_4_20_ai_maas_external_models | selectattr('secured', 'defined') | selectattr('secured') | list | length > 0
-
-# --- MaaS resources (Secret, ExternalModel, ModelRef, AuthPolicy, Subscription) ---
+# --- MaaS resources (Secret, ExternalProvider, ExternalModel, ModelRef, AuthPolicy, Subscription) ---
 
 - name: Apply ExternalModel resources
   kubernetes.core.k8s:

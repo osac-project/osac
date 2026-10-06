@@ -1,0 +1,102 @@
+---
+- name: Add-on operator install - setup
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Read ClusterOrder fixture
+      ansible.builtin.set_fact:
+        addon_operator_resource: "{{ lookup('file', '../../../fixtures/clusterorder-test.yaml') | from_yaml }}"
+
+    - name: Set add-on operator job variables
+      ansible.builtin.set_fact:
+        osac_job_vars:
+          name: cert_manager
+          admin_kubeconfig: >-
+            {{ lookup('file', lookup('env', 'KUBECONFIG') | default(lookup('env', 'HOME') + '/.kube/config', true)) }}
+          resource: "{{ addon_operator_resource }}"
+      no_log: true
+
+- name: Import add-on operator installation playbook
+  ansible.builtin.import_playbook: ../../../../../playbook_osac_install_addon_operator.yml
+
+- name: Add-on operator install - verify
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    failure_cases:
+      - name: unknown_operator_role
+        extra_vars:
+          name: missing_addon_operator
+          admin_kubeconfig: |
+            apiVersion: v1
+            kind: Config
+          osac_job_vars:
+            resource: "{{ lookup('file', '../../../fixtures/clusterorder-test.yaml') | from_yaml }}"
+        expected_error: "the role 'osac.templates.missing_addon_operator' was not found"
+      - name: missing_operator_inputs
+        extra_vars:
+          osac_job_vars:
+            resource: "{{ lookup('file', '../../../fixtures/clusterorder-test.yaml') | from_yaml }}"
+        expected_error: "name, osac_job_vars.resource, and admin_kubeconfig are required"
+
+  tasks:
+    - name: Read operator namespace
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: openshift-operators
+      register: addon_operator_namespace
+
+    - name: Read cert-manager Subscription
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        name: cert-manager
+        namespace: openshift-operators
+      register: addon_operator_subscription
+
+    - name: Verify the one-operator launch contract
+      ansible.builtin.assert:
+        that:
+          - osac_job_vars.resource.metadata.name == "test-cluster"
+          - osac_job_vars.name == "cert_manager"
+          - osac_job_vars.admin_kubeconfig | length > 0
+          - addon_operator_namespace.resources | length == 1
+          - addon_operator_subscription.resources | length == 1
+          - addon_operator_subscription.resources[0].spec.channel == "stable"
+          - addon_operator_subscription.resources[0].spec.installPlanApproval == "Automatic"
+          - addon_operator_subscription.resources[0].spec.name == "cert-manager"
+          - addon_operator_subscription.resources[0].spec.source == "community-operators"
+          - addon_operator_subscription.resources[0].spec.sourceNamespace == "openshift-marketplace"
+        fail_msg: "The add-on operator playbook did not install the expected cert-manager Subscription"
+
+    - name: Run the playbook for each expected failure case
+      ansible.builtin.command:
+        argv:
+          - uv
+          - run
+          - ansible-playbook
+          - "{{ playbook_dir }}/../../../../../playbook_osac_install_addon_operator.yml"
+          - --extra-vars
+          - "{{ item.extra_vars | to_json }}"
+      loop: "{{ failure_cases }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: addon_operator_failures
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: Verify each expected failure case
+      ansible.builtin.assert:
+        that:
+          - item.rc != 0
+          - item.item.expected_error in (item.stdout + item.stderr)
+        fail_msg: >-
+          {{ item.item.name }} did not fail with the expected error:
+          {{ item.stdout + item.stderr }}
+      loop: "{{ addon_operator_failures.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"

@@ -21,13 +21,13 @@ hosted_cluster_base_domain: "{{ lookup('env', 'HOSTED_CLUSTER_BASE_DOMAIN', defa
 hosted_cluster_controller_availability_policy: "{{ lookup('env', 'HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY', default='HighlyAvailable') }}"
 hosted_cluster_infrastructure_availability_policy: "{{ lookup('env', 'HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY', default='HighlyAvailable') }}"
 
-# Network class to use (netris/esi)
-network_class: "{{ lookup('env', 'NETWORK_CLASS', default='esi') }}"
+# Network class to use (netris or agentless_net).
+network_class: "{{ lookup('env', 'NETWORK_CLASS', default='') }}"
 
 # Ansible collection that provides the network-class-specific steps
 # (cluster_infra and external_access roles). Override this to use a
 # different network backend without changing osac.service.
-network_steps_collection: "{{ lookup('env', 'NETWORK_STEPS_COLLECTION', default='osac.steps') }}"
+network_steps_collection: "{{ lookup('env', 'NETWORK_STEPS_COLLECTION', default='') }}"
 
 # Netris controller connection
 netris_controller_url: "{{ lookup('env', 'NETRIS_CONTROLLER_URL') }}"

@@ -621,7 +621,7 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("cudn-net"))
 		})
 
-		It("triggers both fabric and k8s provisioning jobs and persists both implementation-strategy annotations when the NetworkClass has both managers", func() {
+		It("triggers fabric first and starts k8s only after fabric outputs are available", func() {
 			scheme := runtime.NewScheme()
 			Expect(corev1.AddToScheme(scheme)).To(Succeed())
 			dualDiscoveryClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
@@ -680,8 +680,34 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(afterAnnotations.Annotations[osacK8sImplementationStrategyAnnotation]).To(Equal("cudn_net"))
 			Expect(triggerCount).To(Equal(0))
 
-			// Second reconcile: annotations already match, proceeds to trigger
-			// both targets' provision jobs in the same call.
+			// Second reconcile triggers fabric. The k8s target remains gated until
+			// fabric succeeds and exposes the required output variables.
+			_, err = reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(triggerCount).To(Equal(1))
+			Expect(seenAnnotations).To(ConsistOf("netris"))
+
+			fabricJob := &osacv1alpha1.Subnet{}
+			Expect(k8sClient.Get(ctx, key, fabricJob)).To(Succeed())
+			Expect(provisioning.FindLatestJobByTypeAndTarget(fabricJob.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision, string(dispatcher.ManagerRoleFabric))).NotTo(BeNil())
+			Expect(provisioning.FindLatestJobByTypeAndTarget(fabricJob.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision, string(dispatcher.ManagerRoleK8s))).To(BeNil())
+
+			fabricOutput := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "subnet-" + dualSubnet.Name + "-fabric-output",
+					Namespace: dualSubnet.Namespace,
+				},
+				Data: map[string]string{
+					"l2_vni":                "14",
+					"l3_vni":                "11",
+					"fabric_reserved_range": "192.0.2.0/26",
+				},
+			}
+			Expect(k8sClient.Create(ctx, fabricOutput)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, fabricOutput) })
+
+			// Third reconcile observes fabric success and launches the dependent k8s job.
 			_, err = reconciler.Reconcile(ctx, req)
 			Expect(err).NotTo(HaveOccurred())
 
@@ -1000,6 +1026,46 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(cond.Reason).To(Equal(osacv1alpha1.ReasonAsExpected))
 		})
 
+		It("does not persist a legacy AAP VNI output", func() {
+			subnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{{
+				JobID:     "vni-job",
+				Type:      osacv1alpha1.JobTypeProvision,
+				State:     osacv1alpha1.JobStateRunning,
+				Timestamp: metav1.NewTime(time.Now().UTC()),
+			}}
+			mockProvider.getProvisionStatusWithExtraVarsFunc = func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatusWithExtraVars, error) {
+				return provisioning.ProvisionStatusWithExtraVars{
+					ProvisionStatus: provisioning.ProvisionStatus{JobID: jobID, State: osacv1alpha1.JobStateSucceeded},
+					ExtraVars:       map[string]any{"l2_vni": float64(4096), "l3_vni": float64(8192)},
+				}, nil
+			}
+
+			_, err := reconciler.handleProvisioning(ctx, subnet, nil)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(subnet.Status.Phase).To(Equal(osacv1alpha1.SubnetPhaseReady))
+		})
+
+		It("completes provisioning when the AAP job has no VNI output", func() {
+			subnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{{
+				JobID:     "vni-job-without-output",
+				Type:      osacv1alpha1.JobTypeProvision,
+				State:     osacv1alpha1.JobStateRunning,
+				Timestamp: metav1.NewTime(time.Now().UTC()),
+			}}
+			mockProvider.getProvisionStatusWithExtraVarsFunc = func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatusWithExtraVars, error) {
+				return provisioning.ProvisionStatusWithExtraVars{
+					ProvisionStatus: provisioning.ProvisionStatus{JobID: jobID, State: osacv1alpha1.JobStateSucceeded},
+					ExtraVars:       map[string]any{},
+				}, nil
+			}
+
+			_, err := reconciler.handleProvisioning(ctx, subnet, nil)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(subnet.Status.Phase).To(Equal(osacv1alpha1.SubnetPhaseReady))
+		})
+
 		It("should clear stale Ready=False condition on provisioning recovery", func() {
 			subnet.Status.Conditions = []metav1.Condition{
 				{
@@ -1051,7 +1117,7 @@ var _ = Describe("SubnetReconciler", func() {
 			}
 		})
 
-		It("triggers both fabric and k8s jobs in parallel when no job history exists", func() {
+		It("waits for fabric before triggering k8s when no job history exists", func() {
 			var seenAnnotations []string
 			triggerCount := 0
 			mockProvider.triggerProvisionFunc = func(_ context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
@@ -1063,9 +1129,63 @@ var _ = Describe("SubnetReconciler", func() {
 			_, err := reconciler.handleProvisioning(ctx, subnet, dualPlan)
 			Expect(err).NotTo(HaveOccurred())
 
-			Expect(triggerCount).To(Equal(2))
-			Expect(seenAnnotations).To(ConsistOf("netris", "cudn_net"))
+			Expect(triggerCount).To(Equal(1))
+			Expect(seenAnnotations).To(ConsistOf("netris"))
 			Expect(provisioning.FindLatestJobByTypeAndTarget(subnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision, string(dispatcher.ManagerRoleFabric))).NotTo(BeNil())
+			Expect(provisioning.FindLatestJobByTypeAndTarget(subnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision, string(dispatcher.ManagerRoleK8s))).To(BeNil())
+		})
+
+		It("forwards ConfigMap fabric outputs from the Subnet namespace to the k8s manager", func() {
+			subnet.Status.DesiredConfigVersion = testConfigVersion
+			subnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{{
+				JobID: "fabric-1", Type: osacv1alpha1.JobTypeProvision, Target: string(dispatcher.ManagerRoleFabric),
+				State: osacv1alpha1.JobStateRunning, ConfigVersion: testConfigVersion, Timestamp: metav1.NewTime(time.Now().UTC()),
+			}}
+			fabricOutput := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "subnet-" + subnet.Name + "-fabric-output",
+					Namespace: subnet.Namespace,
+				},
+				Data: map[string]string{
+					"l2_vni":                "14",
+					"l3_vni":                "11",
+					"fabric_reserved_range": "192.0.2.0/26",
+				},
+			}
+			Expect(k8sClient.Create(ctx, fabricOutput)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, fabricOutput) })
+
+			decoyNamespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{GenerateName: "fabric-output-decoy-"}}
+			Expect(k8sClient.Create(ctx, decoyNamespace)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, decoyNamespace) })
+			decoyOutput := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{Name: fabricOutput.Name, Namespace: decoyNamespace.Name},
+				Data: map[string]string{
+					"l2_vni":                "99",
+					"l3_vni":                "98",
+					"fabric_reserved_range": "198.51.100.0/24",
+				},
+			}
+			Expect(k8sClient.Create(ctx, decoyOutput)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, decoyOutput) })
+
+			var seenAnnotation string
+			var seenExtraVars map[string]any
+			mockProvider.triggerProvisionWithExtraVarsFunc = func(_ context.Context, resource client.Object, extraVars map[string]any) (*provisioning.ProvisionResult, error) {
+				seenAnnotation = resource.GetAnnotations()[osacImplementationStrategyAnnotation]
+				seenExtraVars = extraVars
+				return &provisioning.ProvisionResult{JobID: "k8s-1", InitialState: osacv1alpha1.JobStatePending}, nil
+			}
+
+			_, err := reconciler.handleProvisioning(ctx, subnet, dualPlan)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(seenAnnotation).To(Equal("cudn_net"))
+			Expect(seenExtraVars).To(Equal(map[string]any{
+				"l2_vni":                int32(14),
+				"l3_vni":                int32(11),
+				"fabric_reserved_range": "192.0.2.0/26",
+			}))
 			Expect(provisioning.FindLatestJobByTypeAndTarget(subnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision, string(dispatcher.ManagerRoleK8s))).NotTo(BeNil())
 		})
 
@@ -1402,10 +1522,12 @@ func deleteObjectWithClearedFinalizers(ctx context.Context, obj client.Object) {
 
 // mockSubnetProvider implements the ProvisioningProvider interface for Subnet testing
 type mockSubnetProvider struct {
-	triggerProvisionFunc     func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error)
-	getProvisionStatusFunc   func(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatus, error)
-	triggerDeprovisionFunc   func(ctx context.Context, resource client.Object, provisionJobs []osacv1alpha1.JobStatus) (*provisioning.DeprovisionResult, error)
-	getDeprovisionStatusFunc func(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatus, error)
+	triggerProvisionFunc                func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error)
+	triggerProvisionWithExtraVarsFunc   func(ctx context.Context, resource client.Object, extraVars map[string]any) (*provisioning.ProvisionResult, error)
+	getProvisionStatusFunc              func(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatus, error)
+	getProvisionStatusWithExtraVarsFunc func(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatusWithExtraVars, error)
+	triggerDeprovisionFunc              func(ctx context.Context, resource client.Object, provisionJobs []osacv1alpha1.JobStatus) (*provisioning.DeprovisionResult, error)
+	getDeprovisionStatusFunc            func(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatus, error)
 }
 
 func (m *mockSubnetProvider) TriggerProvision(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
@@ -1419,6 +1541,13 @@ func (m *mockSubnetProvider) TriggerProvision(ctx context.Context, resource clie
 	}, nil
 }
 
+func (m *mockSubnetProvider) TriggerProvisionWithExtraVars(ctx context.Context, resource client.Object, extraVars map[string]any) (*provisioning.ProvisionResult, error) {
+	if m.triggerProvisionWithExtraVarsFunc != nil {
+		return m.triggerProvisionWithExtraVarsFunc(ctx, resource, extraVars)
+	}
+	return m.TriggerProvision(ctx, resource)
+}
+
 func (m *mockSubnetProvider) GetProvisionStatus(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatus, error) {
 	if m.getProvisionStatusFunc != nil {
 		return m.getProvisionStatusFunc(ctx, resource, jobID)
@@ -1428,6 +1557,14 @@ func (m *mockSubnetProvider) GetProvisionStatus(ctx context.Context, resource cl
 		State:   osacv1alpha1.JobStateSucceeded,
 		Message: "Job completed successfully",
 	}, nil
+}
+
+func (m *mockSubnetProvider) GetProvisionStatusWithExtraVars(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatusWithExtraVars, error) {
+	if m.getProvisionStatusWithExtraVarsFunc != nil {
+		return m.getProvisionStatusWithExtraVarsFunc(ctx, resource, jobID)
+	}
+	status, err := m.GetProvisionStatus(ctx, resource, jobID)
+	return provisioning.ProvisionStatusWithExtraVars{ProvisionStatus: status}, err
 }
 
 func (m *mockSubnetProvider) TriggerDeprovision(ctx context.Context, resource client.Object, provisionJobs []osacv1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {

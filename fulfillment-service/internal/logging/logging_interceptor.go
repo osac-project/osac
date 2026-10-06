@@ -31,6 +31,7 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 // InterceptorBuilder contains the data and logic needed to build an interceptor that writes to the log the details of
@@ -429,6 +430,9 @@ func (i *Interceptor) messageLogFields(ctx context.Context, logger *slog.Logger,
 func (i *Interceptor) dumpMessage(ctx context.Context, key string, value any) (field any, ok bool) {
 	switch message := value.(type) {
 	case proto.Message:
+		if i.redact {
+			message = redactProtoMessage(message)
+		}
 		bytes, err := protojson.Marshal(message)
 		if err != nil {
 			i.logger.ErrorContext(
@@ -458,6 +462,60 @@ func (i *Interceptor) dumpMessage(ctx context.Context, key string, value any) (f
 		)
 	}
 	return
+}
+
+const (
+	publicSecretMessage  = protoreflect.FullName("osac.public.v1.Secret")
+	privateSecretMessage = protoreflect.FullName("osac.private.v1.Secret")
+)
+
+// redactProtoMessage returns a copy of the message with Secret data replaced by the standard log redaction marker.
+// The copy ensures that logging never changes the message sent through gRPC.
+func redactProtoMessage(message proto.Message) proto.Message {
+	result := proto.Clone(message)
+	redactProtoMessageFields(result.ProtoReflect())
+	return result
+}
+
+func redactProtoMessageFields(message protoreflect.Message) {
+	fields := message.Descriptor().Fields()
+	for index := 0; index < fields.Len(); index++ {
+		field := fields.Get(index)
+		if field.IsMap() {
+			if field.Name() == "data" && isSecret(field.ContainingMessage()) {
+				values := message.Mutable(field).Map()
+				values.Range(func(key protoreflect.MapKey, _ protoreflect.Value) bool {
+					values.Set(key, protoreflect.ValueOfBytes([]byte(redactMark)))
+					return true
+				})
+				continue
+			}
+			if field.MapValue().Kind() == protoreflect.MessageKind || field.MapValue().Kind() == protoreflect.GroupKind {
+				message.Get(field).Map().Range(func(_ protoreflect.MapKey, value protoreflect.Value) bool {
+					redactProtoMessageFields(value.Message())
+					return true
+				})
+			}
+			continue
+		}
+		if field.IsList() {
+			if field.Kind() == protoreflect.MessageKind || field.Kind() == protoreflect.GroupKind {
+				list := message.Get(field).List()
+				for index := 0; index < list.Len(); index++ {
+					redactProtoMessageFields(list.Get(index).Message())
+				}
+			}
+			continue
+		}
+		if (field.Kind() == protoreflect.MessageKind || field.Kind() == protoreflect.GroupKind) && message.Has(field) {
+			redactProtoMessageFields(message.Get(field).Message())
+		}
+	}
+}
+
+func isSecret(message protoreflect.MessageDescriptor) bool {
+	name := message.FullName()
+	return name == publicSecretMessage || name == privateSecretMessage
 }
 
 type interceptorServerStream struct {

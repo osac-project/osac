@@ -39,25 +39,101 @@ KC_REALM="${KC_REALM:-osac}"
 INTERNAL_SVC="${INTERNAL_SVC:-fulfillment-internal-api}"
 INTERNAL_PORT="${INTERNAL_PORT:-8001}"
 GRPCURL_IMAGE="${GRPCURL_IMAGE:-docker.io/fullstorydev/grpcurl:latest}"
+CA_FILE="${CA_FILE:-}"
+TEMP_CA_FILE=""
+PF_PID=""
+POD_NAME=""
+TOKEN_SECRET_NAME=""
 
 log()  { echo "[+] $*"; }
 warn() { echo "[!] $*" >&2; }
+
+cleanup() {
+  if [[ -n "${POD_NAME}" ]]; then
+    kubectl -n "${NS}" delete pod "${POD_NAME}" --ignore-not-found >/dev/null 2>&1 || true
+  fi
+  if [[ -n "${TOKEN_SECRET_NAME}" ]]; then
+    kubectl -n "${NS}" delete secret "${TOKEN_SECRET_NAME}" --ignore-not-found >/dev/null 2>&1 || true
+  fi
+  if [[ -n "${PF_PID}" ]]; then
+    kill "${PF_PID}" 2>/dev/null || true
+    wait "${PF_PID}" 2>/dev/null || true
+  fi
+  if [[ -n "${TEMP_CA_FILE}" ]]; then
+    rm -f "${TEMP_CA_FILE}"
+  fi
+}
+trap cleanup EXIT
+
+# The chart hook mounts this ConfigMap. The standalone dev-full script runs on
+# the host, so fetch the same public CA bundle into a temporary file there.
+if [[ ! -r "${CA_FILE}" ]]; then
+  TEMP_CA_FILE=$(mktemp)
+  CA_FILE="${TEMP_CA_FILE}"
+  kubectl -n "${NS}" get configmap ca-bundle \
+    -o jsonpath='{.data.bundle\.pem}' > "${CA_FILE}"
+  [[ -s "${CA_FILE}" ]] || { warn "ca-bundle ConfigMap in ${NS} has no bundle.pem"; exit 1; }
+fi
 
 log "Provisioning tenant '${TENANT}' in namespace '${NS}'..."
 
 # ── 1. Create the DB tenant via the private gRPC Tenants API ────────────────────
 # Tenants is gRPC-only. Run grpcurl in-cluster as the 'admin' SA (an emergency
-# service account) so no host grpcurl is required. The admin token is minted
-# host-side and passed as a request header argument; -insecure skips TLS verify
-# against the internal CA. AlreadyExists is treated as success (re-run friendly).
+# service account) so no host grpcurl is required. The short-lived admin token is
+# stored in a temporary Secret and exposed to the Pod through an environment
+# reference, not embedded in its spec. grpcurl verifies the internal service
+# certificate against the mounted CA bundle and its service DNS name.
+# AlreadyExists is treated as success (re-run friendly).
 admin_token=$(kubectl -n "${NS}" create token admin)
 pod="osac-provision-tenant-$$"
+POD_NAME="${pod}"
+TOKEN_SECRET_NAME="osac-provision-tenant-token-$$"
 kubectl -n "${NS}" delete pod "${pod}" --ignore-not-found >/dev/null 2>&1 || true
-kubectl -n "${NS}" run "${pod}" --restart=Never --image="${GRPCURL_IMAGE}" \
-  --command -- grpcurl -insecure \
-    -H "authorization: Bearer ${admin_token}" \
-    -d "{\"object\":{\"metadata\":{\"name\":\"${TENANT}\"}}}" \
-    "${INTERNAL_SVC}:${INTERNAL_PORT}" osac.private.v1.Tenants/Create >/dev/null
+kubectl -n "${NS}" delete secret "${TOKEN_SECRET_NAME}" --ignore-not-found >/dev/null 2>&1 || true
+printf '%s' "${admin_token}" \
+  | kubectl -n "${NS}" create secret generic "${TOKEN_SECRET_NAME}" \
+      --from-file=token=/dev/stdin --dry-run=client -o yaml \
+  | kubectl -n "${NS}" apply -f - >/dev/null
+unset admin_token
+export POD_NAME="${pod}" TOKEN_SECRET_NAME GRPCURL_IMAGE NS TENANT INTERNAL_SVC INTERNAL_PORT CA_FILE
+pod_manifest=$(python3 - <<'PY'
+import json
+import os
+
+namespace = os.environ["NS"]
+pod_name = os.environ["POD_NAME"]
+payload = {"object": {"metadata": {"name": os.environ["TENANT"]}}}
+container_args = [
+    "-cacert", "/etc/ca-bundle/bundle.pem",
+    "-H", "authorization: Bearer $(ADMIN_TOKEN)",
+    "-d", json.dumps(payload),
+    f"{os.environ['INTERNAL_SVC']}.{namespace}.svc.cluster.local:{os.environ['INTERNAL_PORT']}",
+    "osac.private.v1.Tenants/Create",
+]
+manifest = {
+    "apiVersion": "v1",
+    "kind": "Pod",
+    "metadata": {"name": pod_name, "namespace": namespace},
+    "spec": {
+        "restartPolicy": "Never",
+        "automountServiceAccountToken": False,
+        "containers": [{
+            "name": "grpcurl",
+            "image": os.environ["GRPCURL_IMAGE"],
+            "command": ["grpcurl"],
+            "args": container_args,
+            "env": [{"name": "ADMIN_TOKEN", "valueFrom": {
+                "secretKeyRef": {"name": os.environ["TOKEN_SECRET_NAME"], "key": "token"},
+            }}],
+            "volumeMounts": [{"name": "ca-bundle", "mountPath": "/etc/ca-bundle", "readOnly": True}],
+        }],
+        "volumes": [{"name": "ca-bundle", "configMap": {"name": "ca-bundle", "items": [{"key": "bundle.pem", "path": "bundle.pem"}]}}],
+    },
+}
+print(json.dumps(manifest))
+PY
+)
+printf '%s\n' "${pod_manifest}" | kubectl -n "${NS}" apply -f - >/dev/null
 
 # Wait for the one-shot pod to finish (Succeeded or Failed), then read its output.
 phase=""
@@ -68,6 +144,8 @@ for _ in $(seq 1 60); do
 done
 out=$(kubectl -n "${NS}" logs "${pod}" 2>/dev/null || true)
 kubectl -n "${NS}" delete pod "${pod}" --ignore-not-found >/dev/null 2>&1 || true
+kubectl -n "${NS}" delete secret "${TOKEN_SECRET_NAME}" --ignore-not-found >/dev/null 2>&1 || true
+TOKEN_SECRET_NAME=""
 
 if [[ "${phase}" == "Succeeded" ]]; then
   log "  tenant '${TENANT}' created (default network auto-provisioned)"
@@ -119,22 +197,41 @@ fi
 
 # ── 2 & 3. Keycloak organization + membership ───────────────────────────────────
 # Port-forward Keycloak and drive its admin API to create an enabled organization
-# matching the tenant and add the dev users as members.
+# matching the tenant and add the dev users as members. Use the service DNS name
+# for SNI/hostname verification while the connection is forwarded to localhost.
 admin_pw=$(kubectl -n "${KC_NS}" get secret keycloak-admin-credentials \
   -o jsonpath='{.data.admin-password}' | base64 -d)
 
 kubectl -n "${KC_NS}" port-forward svc/keycloak 18443:443 >/dev/null 2>&1 &
-pf_pid=$!
-trap 'kill "${pf_pid}" 2>/dev/null || true; wait "${pf_pid}" 2>/dev/null || true' EXIT
-sleep 3
+PF_PID=$!
 
-KC="https://localhost:18443"
-kc_token=$(curl -sk -X POST "${KC}/realms/master/protocol/openid-connect/token" \
+KC_HOST="keycloak.${KC_NS}.svc.cluster.local"
+KC="https://${KC_HOST}:18443"
+CURL_RESOLVE=(--resolve "${KC_HOST}:18443:127.0.0.1" --cacert "${CA_FILE}" --noproxy "${KC_HOST}")
+KC_READY=false
+for _ in $(seq 1 30); do
+  if ! kill -0 "${PF_PID}" 2>/dev/null; then
+    echo 'Keycloak port-forward exited before becoming ready' >&2
+    exit 1
+  fi
+  if curl -fsS --connect-timeout 1 --max-time 5 "${CURL_RESOLVE[@]}" \
+    -o /dev/null "${KC}/realms/master/.well-known/openid-configuration"; then
+    KC_READY=true
+    break
+  fi
+  sleep 2
+done
+if [[ "${KC_READY}" != true ]]; then
+  echo 'Timed out waiting for Keycloak port-forward to become ready' >&2
+  exit 1
+fi
+
+kc_token=$(curl -fsS "${CURL_RESOLVE[@]}" -X POST "${KC}/realms/master/protocol/openid-connect/token" \
   -d client_id=admin-cli -d username=admin -d "password=${admin_pw}" \
   -d grant_type=password \
   | python3 -c "import json,sys; print(json.load(sys.stdin)['access_token'])")
 
-KCURL=(curl -skS -H "Authorization: Bearer ${kc_token}" -H "Content-Type: application/json")
+KCURL=(curl -sS "${CURL_RESOLVE[@]}" -H "Authorization: Bearer ${kc_token}" -H "Content-Type: application/json")
 
 # find_org_id <name> — prints the organization id, or '' if absent.
 find_org_id() {

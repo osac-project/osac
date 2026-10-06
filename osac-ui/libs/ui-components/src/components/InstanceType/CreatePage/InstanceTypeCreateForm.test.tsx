@@ -25,12 +25,14 @@ const renderForm = (overrides?: MockTransportOverrides) =>
     transportOverrides: overrides,
   });
 
+const getNumericInput = (name: string) => screen.getByRole('spinbutton', { name });
+
 const fillValidForm = async (user: ReturnType<typeof renderForm>['user']) => {
   await user.type(screen.getByRole('textbox', { name: 'Name' }), 'gp-small');
-  fireEvent.change(screen.getByRole('spinbutton', { name: 'CPU cores' }), {
+  fireEvent.change(getNumericInput('vCPUs'), {
     target: { value: '4' },
   });
-  fireEvent.change(screen.getByRole('spinbutton', { name: 'Memory (GiB)' }), {
+  fireEvent.change(getNumericInput('Memory (GiB)'), {
     target: { value: '16' },
   });
 };
@@ -45,12 +47,14 @@ describe('InstanceTypeCreateForm', () => {
 
     expect(screen.getByRole('textbox', { name: 'Name' })).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Description' })).toBeInTheDocument();
-    expect(screen.getByRole('spinbutton', { name: 'CPU cores' })).toBeInTheDocument();
-    expect(screen.getByRole('spinbutton', { name: 'Memory (GiB)' })).toBeInTheDocument();
+    expect(getNumericInput('vCPUs')).toHaveAttribute('type', 'number');
+    expect(getNumericInput('Memory (GiB)')).toHaveAttribute('type', 'number');
     expect(screen.getByText('GPU')).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'PCI device selector' })).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Resource name' })).toBeInTheDocument();
-    expect(screen.getByRole('spinbutton', { name: 'GPU count' })).toBeInTheDocument();
+    expect(getNumericInput('GPU count')).toHaveAttribute('type', 'number');
+    expect(screen.getAllByRole('button', { name: 'Minus' })).toHaveLength(3);
+    expect(screen.getAllByRole('button', { name: 'Plus' })).toHaveLength(3);
     expect(screen.getByRole('button', { name: 'Create' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
   });
@@ -73,18 +77,18 @@ describe('InstanceTypeCreateForm', () => {
   });
 
   it.each([
-    ['blank', '', 'Cores are required'],
+    ['blank', '', 'vCPUs are required'],
     ['decimal', '1.5', 'Must be a whole number'],
     ['zero', '0', 'Must be greater than zero'],
     ['negative', '-1', 'Must be greater than zero'],
-  ])('shows a validation error for %s CPU cores', async (_label, cores, expectedMessage) => {
+  ])('shows a validation error for %s vcpus', async (_label, vcpus, expectedMessage) => {
     const { user } = renderForm();
 
     await user.type(screen.getByRole('textbox', { name: 'Name' }), 'gp-small');
-    fireEvent.change(screen.getByRole('spinbutton', { name: 'CPU cores' }), {
-      target: { value: cores },
+    fireEvent.change(getNumericInput('vCPUs'), {
+      target: { value: vcpus },
     });
-    fireEvent.change(screen.getByRole('spinbutton', { name: 'Memory (GiB)' }), {
+    fireEvent.change(getNumericInput('Memory (GiB)'), {
       target: { value: '16' },
     });
     await user.click(screen.getByRole('button', { name: 'Create' }));
@@ -103,10 +107,10 @@ describe('InstanceTypeCreateForm', () => {
     const { user } = renderForm();
 
     await user.type(screen.getByRole('textbox', { name: 'Name' }), 'gp-small');
-    fireEvent.change(screen.getByRole('spinbutton', { name: 'CPU cores' }), {
+    fireEvent.change(getNumericInput('vCPUs'), {
       target: { value: '4' },
     });
-    fireEvent.change(screen.getByRole('spinbutton', { name: 'Memory (GiB)' }), {
+    fireEvent.change(getNumericInput('Memory (GiB)'), {
       target: { value: memoryGib },
     });
     await user.click(screen.getByRole('button', { name: 'Create' }));
@@ -115,6 +119,60 @@ describe('InstanceTypeCreateForm', () => {
       expect(screen.getByText(expectedMessage)).toBeInTheDocument();
     });
   });
+
+  it.each([
+    ['blank', '', 'Required when configuring a GPU'],
+    ['decimal', '1.5', 'Must be a whole number'],
+    ['zero', '0', 'Must be greater than zero'],
+    ['negative', '-1', 'Must be greater than zero'],
+  ])('shows a validation error for %s GPU count', async (_label, count, expectedMessage) => {
+    const { user } = renderForm();
+
+    await fillValidForm(user);
+    await user.type(screen.getByRole('textbox', { name: 'PCI device selector' }), '10DE:20B0');
+    await user.type(screen.getByRole('textbox', { name: 'Resource name' }), 'nvidia.com/A100');
+    fireEvent.change(getNumericInput('GPU count'), {
+      target: { value: count },
+    });
+    await user.click(screen.getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => {
+      expect(screen.getByText(expectedMessage)).toBeInTheDocument();
+    });
+  });
+
+  it.each(['vCPUs', 'Memory (GiB)', 'GPU count'])(
+    'ignores non-numeric input for %s',
+    async (fieldLabel) => {
+      const { user } = renderForm();
+
+      const input = getNumericInput(fieldLabel);
+      await user.type(input, 'test');
+
+      expect(input).toHaveValue(null);
+    },
+  );
+
+  it.each([
+    ['GPU count', 'PCI device selector', '10DE:20B0'],
+    ['Resource name', 'PCI device selector', '10DE:20B0'],
+    ['PCI device selector', 'Resource name', 'nvidia.com/A100'],
+  ])(
+    'shows required validation for touched blank GPU field %s',
+    async (touchedField, configuredField, configuredValue) => {
+      const { user } = renderForm();
+
+      await user.type(screen.getByRole('textbox', { name: configuredField }), configuredValue);
+      const touchedInput =
+        touchedField === 'GPU count'
+          ? getNumericInput(touchedField)
+          : screen.getByRole('textbox', { name: touchedField });
+      await user.click(touchedInput);
+      await user.tab();
+
+      expect(await screen.findByText('Required when configuring a GPU')).toBeInTheDocument();
+    },
+  );
 
   it('navigates back to the instance type list on cancel', async () => {
     const { user } = renderForm();
@@ -127,7 +185,7 @@ describe('InstanceTypeCreateForm', () => {
   describe('submission', () => {
     const CREATED_ID = 'instance-type-created-1';
 
-    it('creates the instance type with integer-converted cores/memory and navigates to its detail page', async () => {
+    it('creates the instance type with integer-converted vcpus/memory and navigates to its detail page', async () => {
       let captured: Record<string, unknown> | undefined;
       const { user } = renderForm({
         onInstanceTypeCreate: (req) => {
@@ -144,8 +202,8 @@ describe('InstanceTypeCreateForm', () => {
       await waitFor(() => {
         expect(mockNavigate).toHaveBeenCalledWith(`${LIST_ROUTE}/${CREATED_ID}`);
       });
-      const spec = (captured?.object as { spec?: { cores?: number; memoryGib?: number } })?.spec;
-      expect(spec?.cores).toBe(4);
+      const spec = (captured?.object as { spec?: { vcpus?: number; memoryGib?: number } })?.spec;
+      expect(spec?.vcpus).toBe(4);
       expect(spec?.memoryGib).toBe(16);
     });
 
@@ -184,7 +242,7 @@ describe('InstanceTypeCreateForm', () => {
       await fillValidForm(user);
       await user.type(screen.getByRole('textbox', { name: 'PCI device selector' }), '10DE:20B0');
       await user.type(screen.getByRole('textbox', { name: 'Resource name' }), 'nvidia.com/A100');
-      fireEvent.change(screen.getByRole('spinbutton', { name: 'GPU count' }), {
+      fireEvent.change(getNumericInput('GPU count'), {
         target: { value: '2' },
       });
       await user.click(screen.getByRole('button', { name: 'Create' }));
@@ -220,7 +278,7 @@ describe('InstanceTypeCreateForm', () => {
       const { user } = renderForm({
         onInstanceTypeCreate: () => {
           throw new ConnectError(
-            "field 'spec.cores' must be greater than zero",
+            "field 'spec.vcpus' must be greater than zero",
             Code.InvalidArgument,
           );
         },
@@ -232,7 +290,7 @@ describe('InstanceTypeCreateForm', () => {
       await waitFor(() => {
         expect(screen.getByText('Failed to create instance type')).toBeInTheDocument();
       });
-      expect(screen.getByText("field 'spec.cores' must be greater than zero")).toBeInTheDocument();
+      expect(screen.getByText("field 'spec.vcpus' must be greater than zero")).toBeInTheDocument();
     });
   });
 });

@@ -1,8 +1,14 @@
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
-  name: maas-default-gateway
+  name: "{{ _gw_name }}"
   namespace: openshift-ingress
+  labels:
+    app.kubernetes.io/component: gateway
+    app.kubernetes.io/instance: "{{ _gw_name }}"
+    app.kubernetes.io/name: maas
+    kuadrant.io/gateway: "true"
+    opendatahub.io/managed: "false"
   annotations:
     opendatahub.io/managed: "false"
     security.opendatahub.io/authorino-tls-bootstrap: "true"
@@ -12,17 +18,17 @@ spec:
     parametersRef:
       group: ""
       kind: ConfigMap
-      name: maas-gateway-options
+      name: "{{ _gw_name }}-options"
   listeners:
   - name: http
-    hostname: "{{ ocp_4_20_ai_maas_gateway_hostname }}.{{ _cluster_domain }}"
+    hostname: "{{ _gw_host }}"
     port: 80
     protocol: HTTP
     allowedRoutes:
       namespaces:
         from: All
   - name: https
-    hostname: "{{ ocp_4_20_ai_maas_gateway_hostname }}.{{ _cluster_domain }}"
+    hostname: "{{ _gw_host }}"
     port: 443
     protocol: HTTPS
     allowedRoutes:
@@ -32,5 +38,5 @@ spec:
       certificateRefs:
       - group: ""
         kind: Secret
-        name: "{{ _cert_name }}"
+        name: "{{ _cert_name | default(ocp_4_20_ai_maas_gateway_cert_name) | default('router-certs') }}"
       mode: Terminate

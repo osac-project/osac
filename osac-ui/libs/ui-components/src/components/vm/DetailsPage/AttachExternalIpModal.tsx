@@ -1,24 +1,23 @@
-import {
-  Alert,
-  Button,
-  Modal,
-  ModalBody,
-  ModalFooter,
-  ModalHeader,
-  Stack,
-  StackItem,
-} from '@patternfly/react-core';
+import { useRef } from 'react';
+import { Alert, Button, Modal, ModalBody, ModalFooter, ModalHeader } from '@patternfly/react-core';
 import { Formik } from 'formik';
 import type { TFunction } from 'i18next';
 import * as Yup from 'yup';
 
-import type { ComputeInstance } from '@osac/types';
+import { type ComputeInstance, ExternalIPAttachments, ExternalIPs } from '@osac/types';
 
-import { useAttachExternalIp, useExternalIPPools } from '../../../api/v1/external-ip';
+import { useApiQueryClient } from '../../../api/use-api-query';
+import { useCreateResource, useInvalidateServiceQueries } from '../../../api/use-resource';
+import { invalidateComputeInstancesQueries } from '../../../api/v1/compute-instance';
+import { unallocatedExternalIpFilter } from '../../../api/v1/networking';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { getErrorMessage } from '../../../utils/error';
 import OsacForm from '../../Form/OsacForm';
-import { SelectField } from '../../Form/SelectField';
+import {
+  ResourceSelectField,
+  type ResourceSelectValue,
+  emptyResourceSelectValue,
+} from '../../Form/ResourceSelectField';
 
 interface AttachExternalIpModalProps {
   vm: ComputeInstance;
@@ -27,42 +26,58 @@ interface AttachExternalIpModalProps {
 }
 
 interface FormValues {
-  pool: string;
+  externalIp: ResourceSelectValue;
 }
+
+const generateExternalIpAttachmentName = (): string => `eipa-${crypto.randomUUID()}`;
 
 const validationSchema = (t: TFunction) =>
   Yup.object({
-    pool: Yup.string().required(t('An external IP pool is required')),
+    externalIp: Yup.object({
+      id: Yup.string().required(t('An external IP is required')),
+    }),
   });
 
 const AttachExternalIpModal = ({ vm, onClose, onSuccess }: AttachExternalIpModalProps) => {
   const { t } = useTranslation();
-  const attachExternalIp = useAttachExternalIp();
-  const { data: pools = [], isLoading, error: poolsError } = useExternalIPPools();
-
-  const poolOptions = pools.map((pool) => ({
-    value: pool.id,
-    label: `${pool.metadata?.name ?? pool.id} (${pool.status?.available ?? 0} available)`,
-  }));
-  const noPoolsAvailable = !isLoading && !poolsError && poolOptions.length === 0;
+  const submittingRef = useRef(false);
+  const queryClient = useApiQueryClient();
+  const invalidateService = useInvalidateServiceQueries();
+  const createAttachment = useCreateResource(ExternalIPAttachments, {
+    onSuccess: async () => {
+      await invalidateService(ExternalIPs);
+      await invalidateComputeInstancesQueries(queryClient);
+    },
+  });
 
   return (
     <Formik<FormValues>
-      initialValues={{ pool: '' }}
+      initialValues={{ externalIp: emptyResourceSelectValue() }}
       validationSchema={validationSchema(t)}
       onSubmit={async (values) => {
+        if (submittingRef.current) {
+          return;
+        }
+        submittingRef.current = true;
         try {
-          await attachExternalIp.mutateAsync({
-            computeInstanceId: vm.id,
-            pool: values.pool,
+          await createAttachment.mutateAsync({
+            object: {
+              metadata: { name: generateExternalIpAttachmentName() },
+              spec: {
+                externalIp: { id: values.externalIp.id },
+                target: { case: 'computeInstance', value: { id: vm.id } },
+              },
+            },
           });
           onSuccess();
         } catch {
-          // surfaced via attachExternalIp.error below
+          // surfaced via createAttachment.error below
+        } finally {
+          submittingRef.current = false;
         }
       }}
     >
-      {({ submitForm, isSubmitting, isValid }) => (
+      {({ submitForm, isSubmitting, values }) => (
         <Modal
           variant="small"
           isOpen
@@ -71,44 +86,28 @@ const AttachExternalIpModal = ({ vm, onClose, onSuccess }: AttachExternalIpModal
         >
           <ModalHeader title={t('Attach external IP')} labelId="attach-external-ip-modal-title" />
           <ModalBody>
-            <Stack hasGutter>
-              {noPoolsAvailable && (
-                <StackItem>
-                  <Alert variant="warning" title={t('No external IP pools available')} isInline>
-                    {t('Contact your administrator to have an external IP pool provisioned.')}
-                  </Alert>
-                </StackItem>
-              )}
-              {!!poolsError && (
-                <StackItem>
-                  <Alert variant="danger" title={t('Error loading external IP pools')} isInline>
-                    {getErrorMessage(poolsError)}
-                  </Alert>
-                </StackItem>
-              )}
-              <StackItem>
-                <OsacForm>
-                  <SelectField
-                    name="pool"
-                    label={t('External IP pool')}
-                    fieldId="attach-external-ip-pool"
-                    isRequired
-                    isLoading={isLoading}
-                    isDisabled={noPoolsAvailable}
-                    placeholder={t('Select an external IP pool')}
-                    options={poolOptions}
-                    autoSelectSingleOption
-                  />
-                </OsacForm>
-              </StackItem>
-              {attachExternalIp.error && (
-                <StackItem>
-                  <Alert variant="danger" title={t('Failed to attach external IP')} isInline>
-                    {getErrorMessage(attachExternalIp.error)}
-                  </Alert>
-                </StackItem>
-              )}
-            </Stack>
+            <OsacForm>
+              <ResourceSelectField
+                name="externalIp"
+                label={t('External IP')}
+                fieldId="attach-external-ip"
+                service={ExternalIPs}
+                request={{ filter: unallocatedExternalIpFilter() }}
+                isRequired
+                autoSelectSingleOption
+                placeholder={t('Select an external IP')}
+                loadErrorTitle={t('Error loading external IPs')}
+                emptyTitle={t('No unattached external IPs available')}
+                emptyDescription={t(
+                  'Create an external IP first, then attach it to this virtual machine.',
+                )}
+              />
+            </OsacForm>
+            {createAttachment.error ? (
+              <Alert variant="danger" title={t('Failed to attach external IP')} isInline>
+                {getErrorMessage(createAttachment.error)}
+              </Alert>
+            ) : null}
           </ModalBody>
           <ModalFooter>
             <Button variant="link" onClick={onClose} isDisabled={isSubmitting}>
@@ -117,7 +116,7 @@ const AttachExternalIpModal = ({ vm, onClose, onSuccess }: AttachExternalIpModal
             <Button
               variant="primary"
               onClick={submitForm}
-              isDisabled={isSubmitting || noPoolsAvailable || !isValid}
+              isDisabled={isSubmitting || !values.externalIp.id}
               isLoading={isSubmitting}
             >
               {t('Attach')}

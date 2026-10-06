@@ -17,6 +17,7 @@
 
 import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import { fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
+import { file_buf_validate_validate } from "../../../buf/validate/validate_pb";
 import { file_google_api_field_behavior } from "../../../google/api/field_behavior_pb";
 import type { IPFamily } from "./ip_family_type_pb";
 import { file_osac_public_v1_ip_family_type } from "./ip_family_type_pb";
@@ -28,13 +29,13 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/public/v1/external_ip_pool_type.proto.
  */
 export const file_osac_public_v1_external_ip_pool_type: GenFile = /*@__PURE__*/
-  fileDesc("Cipvc2FjL3B1YmxpYy92MS9leHRlcm5hbF9pcF9wb29sX3R5cGUucHJvdG8SDm9zYWMucHVibGljLnYxIrABCg5FeHRlcm5hbElQUG9vbBIKCgJpZBgBIAEoCRIqCghtZXRhZGF0YRgCIAEoCzIYLm9zYWMucHVibGljLnYxLk1ldGFkYXRhEjAKBHNwZWMYAyABKAsyIi5vc2FjLnB1YmxpYy52MS5FeHRlcm5hbElQUG9vbFNwZWMSNAoGc3RhdHVzGAQgASgLMiQub3NhYy5wdWJsaWMudjEuRXh0ZXJuYWxJUFBvb2xTdGF0dXMiSQoSRXh0ZXJuYWxJUFBvb2xTcGVjEjMKCWlwX2ZhbWlseRgDIAEoDjIYLm9zYWMucHVibGljLnYxLklQRmFtaWx5QgbgQQLgQQUiLgoURXh0ZXJuYWxJUFBvb2xTdGF0dXMSFgoJYXZhaWxhYmxlGAYgASgDQgPgQQMiVAoXRXh0ZXJuYWxJUFBvb2xSZWZlcmVuY2USCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCRIPCgdwcm9qZWN0GAMgASgJEg4KBnNoYXJlZBgEIAEoCGIGcHJvdG8z", [file_google_api_field_behavior, file_osac_public_v1_ip_family_type, file_osac_public_v1_metadata_type]);
+  fileDesc("Cipvc2FjL3B1YmxpYy92MS9leHRlcm5hbF9pcF9wb29sX3R5cGUucHJvdG8SDm9zYWMucHVibGljLnYxIrABCg5FeHRlcm5hbElQUG9vbBIKCgJpZBgBIAEoCRIqCghtZXRhZGF0YRgCIAEoCzIYLm9zYWMucHVibGljLnYxLk1ldGFkYXRhEjAKBHNwZWMYAyABKAsyIi5vc2FjLnB1YmxpYy52MS5FeHRlcm5hbElQUG9vbFNwZWMSNAoGc3RhdHVzGAQgASgLMiQub3NhYy5wdWJsaWMudjEuRXh0ZXJuYWxJUFBvb2xTdGF0dXMiVQoSRXh0ZXJuYWxJUFBvb2xTcGVjEj8KCWlwX2ZhbWlseRgDIAEoDjIYLm9zYWMucHVibGljLnYxLklQRmFtaWx5QhLgQQLgQQW6SAmCAQYQASAAIAIiLgoURXh0ZXJuYWxJUFBvb2xTdGF0dXMSFgoJYXZhaWxhYmxlGAYgASgDQgPgQQMiVAoXRXh0ZXJuYWxJUFBvb2xSZWZlcmVuY2USCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCRIPCgdwcm9qZWN0GAMgASgJEg4KBnNoYXJlZBgEIAEoCGIGcHJvdG8z", [file_buf_validate_validate, file_google_api_field_behavior, file_osac_public_v1_ip_family_type, file_osac_public_v1_metadata_type]);
 
 /**
  * Represents a pool of external IP addresses available for allocation.
  *
- * Each ExternalIPPool supports a single IP family (IPv4 or IPv6). The pool contains one or more CIDR
- * ranges from which individual ExternalIP addresses are allocated. Pools are provider-managed
+ * Each ExternalIPPool currently supports one canonical IPv4 CIDR from which individual ExternalIP addresses are
+ * allocated. Pools are provider-managed
  * resources created by administrators through the private API.
  *
  * "External" means external to the VirtualNetwork. The addresses may be internet-routable or
@@ -97,8 +98,7 @@ export type ExternalIPPoolSpec = Message<"osac.public.v1.ExternalIPPoolSpec"> & 
   /**
    * IP address family for this pool. Required and immutable after creation.
    *
-   * Determines whether the CIDRs in this pool are IPv4 or IPv6. All CIDRs must match this
-   * family. A single pool cannot mix IPv4 and IPv6 ranges.
+   * The only supported family is IP_FAMILY_IPV4. IPv6 and unspecified-family pools are rejected.
    *
    * @generated from field: osac.public.v1.IPFamily ip_family = 3;
    */
@@ -171,3 +171,4 @@ export type ExternalIPPoolReference = Message<"osac.public.v1.ExternalIPPoolRefe
  */
 export const ExternalIPPoolReferenceSchema: GenMessage<ExternalIPPoolReference> = /*@__PURE__*/
   messageDesc(file_osac_public_v1_external_ip_pool_type, 3);
+

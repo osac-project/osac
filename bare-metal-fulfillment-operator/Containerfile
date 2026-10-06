@@ -21,6 +21,7 @@ COPY --chown=1001:1001 osac-metering/schema/go.mod osac-metering/schema/go.sum o
 COPY --chown=1001:1001 osac-metering/metering-service/go.mod osac-metering/metering-service/go.sum osac-metering/metering-service/
 COPY --chown=1001:1001 osac-metering/adapters/go.mod osac-metering/adapters/go.sum osac-metering/adapters/
 COPY --chown=1001:1001 osac-ui/proxy/go.mod osac-ui/proxy/go.sum osac-ui/proxy/
+ARG GODEBUG
 RUN cd bare-metal-fulfillment-operator && go mod download
 
 COPY --chown=1001:1001 proto/ proto/
@@ -30,7 +31,8 @@ COPY --chown=1001:1001 osac-operator/ osac-operator/
 WORKDIR /opt/app-root/src/bare-metal-fulfillment-operator
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o manager cmd/main.go
 
-FROM registry.access.redhat.com/ubi10-minimal:10.2-1789456728
+FROM registry.access.redhat.com/ubi10-minimal:10.2-1790075626
+LABEL name="cloud-extensions/bare-metal-fulfillment-operator-rhel10"
 WORKDIR /
 COPY --from=builder /opt/app-root/src/bare-metal-fulfillment-operator/manager /usr/local/bin/
 USER 1001

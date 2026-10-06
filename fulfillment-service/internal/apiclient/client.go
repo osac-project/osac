@@ -16,7 +16,6 @@ package apiclient
 import (
 	"bytes"
 	"context"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,6 +25,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/tlsconfig"
+	"github.com/osac-project/osac/fulfillment-service/internal/trust"
 )
 
 // APIError represents an HTTP API error with status code and response body.
@@ -52,7 +52,7 @@ type Client struct {
 type ClientBuilder struct {
 	baseURL     string
 	tokenSource auth.TokenSource
-	caPool      *x509.CertPool
+	caPool      *trust.CertPool
 	httpClient  *http.Client
 	logger      *slog.Logger
 }
@@ -81,7 +81,7 @@ func (b *ClientBuilder) SetTokenSource(value auth.TokenSource) *ClientBuilder {
 }
 
 // SetCaPool sets a custom CA pool for TLS verification.
-func (b *ClientBuilder) SetCaPool(value *x509.CertPool) *ClientBuilder {
+func (b *ClientBuilder) SetCaPool(value *trust.CertPool) *ClientBuilder {
 	b.caPool = value
 	return b
 }
@@ -112,7 +112,7 @@ func (b *ClientBuilder) Build() (result *Client, err error) {
 		transport := http.DefaultTransport.(*http.Transport).Clone()
 		transport.TLSClientConfig = tlsconfig.NewClientTLSConfig()
 		if b.caPool != nil {
-			transport.TLSClientConfig.RootCAs = b.caPool
+			transport.TLSClientConfig.RootCAs = b.caPool.Pool()
 		}
 		httpClient = &http.Client{
 			Transport: transport,

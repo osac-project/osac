@@ -1,9 +1,12 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: maas-gateway-options
+  name: "{{ _gw_name }}-options"
   namespace: openshift-ingress
 data:
+  # Istio Gateway-infrastructure schema: a top-level `deployment` key holding a
+  # strategic-merge overlay of the istio-proxy container. The single-tenant /
+  # default gateway is the sole enforcer and OOMKills at 1Gi — needs 2Gi.
   deployment: |
     spec:
       template:
@@ -12,8 +15,6 @@ data:
           - name: istio-proxy
             resources:
               requests:
-                cpu: 100m
-                memory: 256Mi
+                memory: 512Mi
               limits:
-                cpu: "2"
                 memory: "{{ ocp_4_20_ai_maas_gateway_memory_limit }}"

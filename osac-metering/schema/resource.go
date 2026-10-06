@@ -16,4 +16,5 @@ const (
 	ResourceTypeExternalIP        = "external_ip"
 	ResourceTypeNATGateway        = "nat_gateway"
 	ResourceTypeBareMetalInstance = "bare_metal_instance"
+	ResourceTypeVolume            = "volume"
 )

@@ -1,12 +1,14 @@
 ---
 name: ocp-4-20-ai-maas
-title: OpenShift AI 4.20 Cluster with MaaS
+title: OpenShift AI Cluster with MaaS (RHOAI 3.5 GA)
 description: >
-  Builds an OpenShift 4.20 cluster with RHOAI 3.4, Models-as-a-Service (GA),
-  Keycloak SSO, and observability (COO + OTel). Supports both GPU deployments
-  and CPU-only simulator mode for testing. Includes RHCL 1.3 version pinning
-  for auth enforcement compatibility with Service Mesh 3.2. Single-tenant
-  deployment — one organization per cluster.
+  Builds an OpenShift 4.21 cluster with Red Hat OpenShift AI 3.5,
+  Models-as-a-Service (GA), and observability (COO + OTel). Supports 0..n
+  tenants, each with a dedicated per-tenant gateway, model, and subscription
+  tiers. No Keycloak — identity is via an external OIDC issuer (optional) plus
+  K8s ServiceAccount/TokenReview. Uses a CPU inference simulator by default
+  (no GPU). Verification is a separate playbook
+  (playbook_osac_verify_maas_deployment.yml).
 template_type: cluster
 implementation_strategy: ocp_4_20_ai_maas
 default_node_request:
@@ -15,71 +17,104 @@ default_node_request:
 allowed_resource_classes: []
 
 spec_defaults:
-  version_name: "4.20.0"
+  version_name: "4.21.0"
 
+# PARAMETER CONTRACT (keep in sync): the parameters below are the ONLY AAP-settable
+# inputs (short names). Each MUST have a matching line in the role's tasks/install.yaml
+# "Bridge templateParameters to role variables" set_fact and a prefixed
+# ocp_4_20_ai_maas_* entry in both meta/argument_specs.yaml and defaults/main.yaml.
+# The role has more variables than these — everything not listed here is internal and
+# uses its defaults/main.yaml value under AAP (not settable via the fulfillment form),
+# by design (operator channels, DB, timeouts, model image, telemetry, tiers, verify...).
+# To expose a new one, add it here AND in the install.yaml bridge AND in
+# argument_specs.yaml + defaults/main.yaml.
 parameters:
   - name: enable_maas
     title: Enable MaaS Gateway
     description: >
-      Install MaaS governance layer (auth, rate limiting, API keys).
+      Install the MaaS governance layer (auth, rate limiting, API keys).
       Set to false for inference-only shared clusters.
-    type: boolean
-    required: false
-    default: true
-  - name: enable_keycloak
-    title: Enable Managed Keycloak
-    description: >
-      Deploy per-cluster Keycloak for MaaS identity management.
-      Set to false when using shared OSAC Keycloak or BYOIDP.
-      When false and enable_maas is true, oidc_issuer must be provided.
     type: boolean
     required: false
     default: true
   - name: oidc_issuer
     title: External OIDC Issuer URL
     description: >
-      OIDC issuer URL for external identity provider (e.g., shared OSAC Keycloak
-      or customer IdP). Kuadrant AuthPolicy auto-discovers JWKS via OIDC discovery
-      ({issuerUrl}/.well-known/openid-configuration -> jwks_uri).
-      Required when enable_maas is true and enable_keycloak is false.
+      OIDC issuer URL for an external identity provider. Optional — when set it
+      is written to AITenant.spec.oidc. When empty, tenants authenticate via K8s
+      ServiceAccount tokens (TokenReview) only. No Keycloak is deployed.
     type: string
     required: false
+    default: ""
+    validation:
+      # AITenant.spec.oidc.issuerUrl is ^https://\S+$; allow empty (SA-only).
+      pattern: '^(https://\S+)?$'
   - name: oidc_client_id
     title: External OIDC Client ID
     description: >
-      OIDC client ID registered in the external identity provider.
-      Required when enable_maas is true and enable_keycloak is false.
+      OIDC client ID registered in the external identity provider. Required
+      together with oidc_issuer (both or neither).
     type: string
     required: false
+    default: ""
+  - name: tenant_name
+    title: Tenant Name (single-tenant)
+    description: >
+      Single-tenant convenience input. Creates one custom tenant with this name
+      (gateway maas-{name}-gateway, host {name}-maas.{domain}). Leave empty for a
+      no-custom-tenant deployment (configures the operator-created default
+      tenant). Ignored when the tenants list is provided.
+    type: string
+    required: false
+    default: ""
+    validation:
+      # AITenant.metadata.name is a DNS-1123 label (<=41, enforced in the role);
+      # allow empty (no-custom-tenant deployment).
+      pattern: '^([a-z0-9]([-a-z0-9]*[a-z0-9])?)?$'
+  - name: tenant_admin_group
+    title: Tenant Admin Group (single-tenant)
+    description: >
+      OpenShift group granted tenant-admin RBAC via AITenant.spec.rbac.admins.
+      Applies to the single tenant named by tenant_name.
+    type: string
+    required: false
+    default: ""
+  - name: tenants
+    title: Tenants (multi-tenant)
+    description: >
+      List of tenants to onboard. Each entry: {name, admin_group (optional),
+      tiers: [{name, group, token_limit, window, priority}]}. When non-empty this
+      wins over tenant_name/tenant_admin_group.
+    type: list
+    required: false
+    default: []
   - name: enable_observability
     title: Enable Observability Stack
     description: >
-      Install COO v1.4, OTel, and Perses dashboards for model monitoring.
+      Install COO (stable channel), OTel, and Perses dashboards for model monitoring.
     type: boolean
     required: false
     default: true
   - name: enable_dashboard
     title: Enable OpenShift AI Dashboard
     description: >
-      Deploy the RHOAI web console for model management and monitoring.
-      Set to false for headless inference clusters managed via API only.
+      Deploy the RHOAI web console. Set to false for headless clusters managed
+      via API only.
     type: boolean
     required: false
     default: true
   - name: hardware_profiles
     title: Hardware Profiles
     description: >
-      List of HardwareProfile CRs to create. Each entry defines a GPU/accelerator
-      profile with CPU, memory, and optional accelerator constraints.
+      List of HardwareProfile CRs to create.
     type: list
     required: false
     default: []
   - name: external_models
     title: External Models
     description: >
-      List of external models to access from upstream clusters. Each entry creates
-      an ExternalModel CR with MaaS governance. When secured=true, a maas-proxy
-      is deployed. Requires enable_maas=true.
+      List of external models to access from upstream clusters (ExternalModel
+      CRs). Requires enable_maas=true.
     type: list
     required: false
     default: []

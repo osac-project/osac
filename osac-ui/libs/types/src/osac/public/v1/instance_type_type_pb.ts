@@ -28,7 +28,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/public/v1/instance_type_type.proto.
  */
 export const file_osac_public_v1_instance_type_type: GenFile = /*@__PURE__*/
-  fileDesc("Cidvc2FjL3B1YmxpYy92MS9pbnN0YW5jZV90eXBlX3R5cGUucHJvdG8SDm9zYWMucHVibGljLnYxIoMCChdJbnN0YW5jZVR5cGVEZXByZWNhdGlvbhIwCgVzdGF0ZRgBIAEoDjIhLm9zYWMucHVibGljLnYxLkluc3RhbmNlVHlwZVN0YXRlEj8KC3JlcGxhY2VtZW50GAIgASgLMioub3NhYy5wdWJsaWMudjEuSW5zdGFuY2VUeXBlTG9jYWxSZWZlcmVuY2USOQoVZGVwcmVjYXRpb25fdGltZXN0YW1wGAMgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBI6ChZvYnNvbGVzY2VuY2VfdGltZXN0YW1wGAQgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCKqAQoMSW5zdGFuY2VUeXBlEgoKAmlkGAEgASgJEioKCG1ldGFkYXRhGAIgASgLMhgub3NhYy5wdWJsaWMudjEuTWV0YWRhdGESLgoEc3BlYxgDIAEoCzIgLm9zYWMucHVibGljLnYxLkluc3RhbmNlVHlwZVNwZWMSMgoGc3RhdHVzGAQgASgLMiIub3NhYy5wdWJsaWMudjEuSW5zdGFuY2VUeXBlU3RhdHVzImkKB0dwdVNwZWMSJAoTcGNpX2RldmljZV9zZWxlY3RvchgBIAEoCUIHukgEcgIQARIeCg1yZXNvdXJjZV9uYW1lGAIgASgJQge6SARyAhABEhgKBWNvdW50GAMgASgFQgm6SAYaBBgQKAEi/wEKEEluc3RhbmNlVHlwZVNwZWMSFgoFY29yZXMYASABKAVCB7pIBBoCIAASGwoKbWVtb3J5X2dpYhgCIAEoBUIHukgEGgIgABITCgtkZXNjcmlwdGlvbhgDIAEoCRIwCgVzdGF0ZRgEIAEoDjIhLm9zYWMucHVibGljLnYxLkluc3RhbmNlVHlwZVN0YXRlEjwKC2RlcHJlY2F0aW9uGAUgASgLMicub3NhYy5wdWJsaWMudjEuSW5zdGFuY2VUeXBlRGVwcmVjYXRpb24SKQoDZ3B1GAYgASgLMhcub3NhYy5wdWJsaWMudjEuR3B1U3BlY0gAiAEBQgYKBF9ncHUiFAoSSW5zdGFuY2VUeXBlU3RhdHVzIlIKFUluc3RhbmNlVHlwZVJlZmVyZW5jZRIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJEg8KB3Byb2plY3QYAyABKAkSDgoGc2hhcmVkGAQgASgIIjYKGkluc3RhbmNlVHlwZUxvY2FsUmVmZXJlbmNlEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkqngEKEUluc3RhbmNlVHlwZVN0YXRlEiMKH0lOU1RBTkNFX1RZUEVfU1RBVEVfVU5TUEVDSUZJRUQQABIeChpJTlNUQU5DRV9UWVBFX1NUQVRFX0FDVElWRRABEiIKHklOU1RBTkNFX1RZUEVfU1RBVEVfREVQUkVDQVRFRBACEiAKHElOU1RBTkNFX1RZUEVfU1RBVEVfT0JTT0xFVEUQA2IGcHJvdG8z", [file_buf_validate_validate, file_google_protobuf_timestamp, file_osac_public_v1_metadata_type]);
+  fileDesc("Cidvc2FjL3B1YmxpYy92MS9pbnN0YW5jZV90eXBlX3R5cGUucHJvdG8SDm9zYWMucHVibGljLnYxIoMCChdJbnN0YW5jZVR5cGVEZXByZWNhdGlvbhIwCgVzdGF0ZRgBIAEoDjIhLm9zYWMucHVibGljLnYxLkluc3RhbmNlVHlwZVN0YXRlEj8KC3JlcGxhY2VtZW50GAIgASgLMioub3NhYy5wdWJsaWMudjEuSW5zdGFuY2VUeXBlTG9jYWxSZWZlcmVuY2USOQoVZGVwcmVjYXRpb25fdGltZXN0YW1wGAMgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBI6ChZvYnNvbGVzY2VuY2VfdGltZXN0YW1wGAQgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCKqAQoMSW5zdGFuY2VUeXBlEgoKAmlkGAEgASgJEioKCG1ldGFkYXRhGAIgASgLMhgub3NhYy5wdWJsaWMudjEuTWV0YWRhdGESLgoEc3BlYxgDIAEoCzIgLm9zYWMucHVibGljLnYxLkluc3RhbmNlVHlwZVNwZWMSMgoGc3RhdHVzGAQgASgLMiIub3NhYy5wdWJsaWMudjEuSW5zdGFuY2VUeXBlU3RhdHVzImkKB0dwdVNwZWMSJAoTcGNpX2RldmljZV9zZWxlY3RvchgBIAEoCUIHukgEcgIQARIeCg1yZXNvdXJjZV9uYW1lGAIgASgJQge6SARyAhABEhgKBWNvdW50GAMgASgFQgm6SAYaBBgQKAEi/wEKEEluc3RhbmNlVHlwZVNwZWMSFgoFdmNwdXMYASABKAVCB7pIBBoCIAASGwoKbWVtb3J5X2dpYhgCIAEoBUIHukgEGgIgABITCgtkZXNjcmlwdGlvbhgDIAEoCRIwCgVzdGF0ZRgEIAEoDjIhLm9zYWMucHVibGljLnYxLkluc3RhbmNlVHlwZVN0YXRlEjwKC2RlcHJlY2F0aW9uGAUgASgLMicub3NhYy5wdWJsaWMudjEuSW5zdGFuY2VUeXBlRGVwcmVjYXRpb24SKQoDZ3B1GAYgASgLMhcub3NhYy5wdWJsaWMudjEuR3B1U3BlY0gAiAEBQgYKBF9ncHUiFAoSSW5zdGFuY2VUeXBlU3RhdHVzIlIKFUluc3RhbmNlVHlwZVJlZmVyZW5jZRIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJEg8KB3Byb2plY3QYAyABKAkSDgoGc2hhcmVkGAQgASgIIjYKGkluc3RhbmNlVHlwZUxvY2FsUmVmZXJlbmNlEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkqngEKEUluc3RhbmNlVHlwZVN0YXRlEiMKH0lOU1RBTkNFX1RZUEVfU1RBVEVfVU5TUEVDSUZJRUQQABIeChpJTlNUQU5DRV9UWVBFX1NUQVRFX0FDVElWRRABEiIKHklOU1RBTkNFX1RZUEVfU1RBVEVfREVQUkVDQVRFRBACEiAKHElOU1RBTkNFX1RZUEVfU1RBVEVfT0JTT0xFVEUQA2IGcHJvdG8z", [file_buf_validate_validate, file_google_protobuf_timestamp, file_osac_public_v1_metadata_type]);
 
 /**
  * Contains deprecation details for an instance type.
@@ -77,7 +77,7 @@ export const InstanceTypeDeprecationSchema: GenMessage<InstanceTypeDeprecation> 
   messageDesc(file_osac_public_v1_instance_type_type, 0);
 
 /**
- * Describes a pre-configured compute bundle (cores, memory) that can be referenced by name when creating VMs.
+ * Describes a pre-configured compute bundle (vCPUs, memory) that can be referenced by name when creating VMs.
  *
  * Instance types are admin-managed catalog resources. Tenant users select an instance type by name instead
  * of specifying raw compute resources. Cloud Provider Admins control the available configurations through
@@ -166,7 +166,7 @@ export const GpuSpecSchema: GenMessage<GpuSpec> = /*@__PURE__*/
 /**
  * Defines the desired configuration for an InstanceType.
  *
- * The spec contains admin-specified parameters that define the compute bundle. The `cores` and `memory_gib`
+ * The spec contains admin-specified parameters that define the compute bundle. The `vcpus` and `memory_gib`
  * fields are immutable after creation. The `description`, `state`, and `deprecation` fields may be updated
  * to manage the instance type lifecycle.
  *
@@ -174,11 +174,11 @@ export const GpuSpecSchema: GenMessage<GpuSpec> = /*@__PURE__*/
  */
 export type InstanceTypeSpec = Message<"osac.public.v1.InstanceTypeSpec"> & {
   /**
-   * Number of CPU cores. Immutable after creation.
+   * Number of virtual CPUs. Immutable after creation.
    *
-   * @generated from field: int32 cores = 1;
+   * @generated from field: int32 vcpus = 1;
    */
-  cores: number;
+  vcpus: number;
 
   /**
    * Amount of memory in GiB. Immutable after creation.
@@ -338,3 +338,4 @@ export enum InstanceTypeState {
  */
 export const InstanceTypeStateSchema: GenEnum<InstanceTypeState> = /*@__PURE__*/
   enumDesc(file_osac_public_v1_instance_type_type, 0);
+

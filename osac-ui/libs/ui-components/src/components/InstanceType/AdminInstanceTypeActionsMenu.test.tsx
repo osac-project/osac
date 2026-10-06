@@ -18,7 +18,7 @@ const makeInstanceType = (state: InstanceTypeState): PrivateInstanceType =>
   create(InstanceTypeSchema, {
     id: 'it-1',
     metadata: { name: 'general-4-16' },
-    spec: { cores: 4, memoryGib: 16, description: '', state },
+    spec: { vcpus: 4, memoryGib: 16, description: '', state },
   });
 
 const renderMenu = (

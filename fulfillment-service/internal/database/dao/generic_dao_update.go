@@ -189,17 +189,7 @@ func (r *UpdateRequest[O]) do(ctx context.Context) (response *UpdateResponse[O],
 	object.SetId(id)
 	r.setMetadata(object, metadata)
 
-	// Fire the event:
-	err = r.fireEvent(ctx, Event{
-		Type:   EventTypeUpdated,
-		Object: object,
-	})
-	if err != nil {
-		return
-	}
-
-	// If the object has been deleted and there are no finalizers we can now archive the object and fire the
-	// delete event:
+	// If the object has been deleted and there are no finalizers we can now archive the object:
 	if deletionTs.Unix() != 0 && len(finalizers) == 0 {
 		err = r.archive(ctx, archiveArgs{
 			id:              id,
@@ -213,13 +203,6 @@ func (r *UpdateRequest[O]) do(ctx context.Context) (response *UpdateResponse[O],
 			annotationsData: annotationsData,
 			version:         version,
 			data:            data,
-		})
-		if err != nil {
-			return
-		}
-		err = r.fireEvent(ctx, Event{
-			Type:   EventTypeDeleted,
-			Object: object,
 		})
 		if err != nil {
 			return

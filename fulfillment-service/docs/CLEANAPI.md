@@ -82,6 +82,33 @@ message BareMetalInstancesSignalResponse {
 }
 ```
 
+The same annotations can be used when a service must remain mutable for controllers but immutable
+for public callers. For example, networking services keep their private `Update` request, response,
+and RPC while omitting all three from the generated public API:
+
+```protobuf
+message VirtualNetworksUpdateRequest {
+  option (cleanapi.message).private = true;
+  VirtualNetwork object = 1;
+  google.protobuf.FieldMask update_mask = 2;
+  bool lock = 3;
+}
+
+message VirtualNetworksUpdateResponse {
+  option (cleanapi.message).private = true;
+  VirtualNetwork object = 1;
+}
+
+service VirtualNetworks {
+  rpc Update(VirtualNetworksUpdateRequest) returns (VirtualNetworksUpdateResponse) {
+    option (cleanapi.method).private = true;
+  }
+}
+```
+
+Mark both messages and the method private. This preserves the internal status/feedback contract,
+while public gRPC clients and REST callers receive no `Update` method or `PATCH` binding.
+
 ### File-Level Annotations
 
 ```protobuf
@@ -101,7 +128,7 @@ See [API.md](API.md#public-and-private-apis) for full details:
 
 1. **Field numbering**: Private fields must be placed at the end of the message
 2. **Comments**: All comments are copied to public protos - write for public API consumers
-3. **Private methods**: Use `option (cleanapi.method).private = true` for controller-only RPCs (e.g., Signal)
+3. **Private methods**: Use `option (cleanapi.method).private = true` for controller-only RPCs (e.g., Signal or a private-only Update)
 4. **Private files**: Use `option (cleanapi.file).private = true` for entire proto files that should never be public
 5. **Route mapping**: Use `http_route_prefix_map = "private:fulfillment"` to rewrite HTTP routes in the public API
 

@@ -28,7 +28,6 @@ type VirtualNetworkCreateFormValues = {
     project: string;
   };
   ipv4Cidr: string;
-  ipv6Cidr: string;
 };
 
 const VirtualNetworkCreateForm = () => {
@@ -42,13 +41,7 @@ const VirtualNetworkCreateForm = () => {
         name="ipv4Cidr"
         label={t('IPv4 CIDR')}
         fieldId="vn-ipv4-cidr"
-        helperText={t('Example: 10.0.0.0/16')}
-      />
-      <InputField
-        name="ipv6Cidr"
-        label={t('IPv6 CIDR (Optional)')}
-        fieldId="vn-ipv6-cidr"
-        helperText={t('Example: 2001:db8::/32')}
+        placeholder="10.0.0.0/16"
       />
     </OsacForm>
   );
@@ -69,11 +62,8 @@ export const VirtualNetworkCreateModal = ({ onClose }: VirtualNetworkCreateModal
         metadata: Yup.object({
           name: Yup.string().required(t('Name is required')),
         }),
-        ipv4Cidr: buildCidrSchema(t, 'ipv4'),
-        ipv6Cidr: buildCidrSchema(t, 'ipv6'),
-      }).test('at-least-one-cidr', t('At least one CIDR (IPv4 or IPv6) is required'), (values) =>
-        Boolean(values.ipv4Cidr || values.ipv6Cidr),
-      ),
+        ipv4Cidr: buildCidrSchema(t, 'ipv4').required(t('IPv4 CIDR is required')),
+      }),
     [t],
   );
 
@@ -82,7 +72,6 @@ export const VirtualNetworkCreateModal = ({ onClose }: VirtualNetworkCreateModal
       initialValues={{
         metadata: { name: '', project: '' },
         ipv4Cidr: '',
-        ipv6Cidr: '',
       }}
       validationSchema={validationSchema}
       onSubmit={async (values) => {
@@ -91,7 +80,6 @@ export const VirtualNetworkCreateModal = ({ onClose }: VirtualNetworkCreateModal
             metadata: values.metadata,
             spec: {
               ipv4Cidr: values.ipv4Cidr || undefined,
-              ipv6Cidr: values.ipv6Cidr || undefined,
             },
           });
           navigate(`/networking/virtual-networks/${result.id}`);

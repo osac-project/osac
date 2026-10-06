@@ -37,11 +37,8 @@ var _ = Describe("Rendering tests", func() {
 				Name: "gold",
 			}.Build(),
 			Spec: publicv1.StorageTierSpec_builder{
-				Description:          "High-performance tier",
-				Protocol:             publicv1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
-				MaxReadBandwidthMbs:  1000,
-				MaxWriteBandwidthMbs: 500,
-				EncryptionEnabled:    true,
+				Description: "High-performance tier",
+				Protocol:    publicv1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
 			}.Build(),
 			Status: publicv1.StorageTierStatus_builder{
 				State:   publicv1.StorageTierState_STORAGE_TIER_STATE_ACTIVE,
@@ -55,9 +52,6 @@ var _ = Describe("Rendering tests", func() {
 		Expect(output).To(ContainSubstring("High-performance tier"))
 		Expect(output).To(ContainSubstring("BLOCK"))
 		Expect(output).NotTo(ContainSubstring("STORAGE_PROTOCOL_"))
-		Expect(output).To(MatchRegexp(`Max Read BW \(MB/s\):\s+1000`))
-		Expect(output).To(MatchRegexp(`Max Write BW \(MB/s\):\s+500`))
-		Expect(output).To(MatchRegexp(`Encryption Enabled:\s+true`))
 		Expect(output).To(ContainSubstring("ACTIVE"))
 		Expect(output).NotTo(ContainSubstring("STORAGE_TIER_STATE_"))
 		Expect(output).To(ContainSubstring("All backends healthy"))

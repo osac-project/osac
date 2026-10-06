@@ -34,7 +34,6 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/computeinstancespec"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	"github.com/osac-project/osac/fulfillment-service/internal/utils"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -42,7 +41,6 @@ import (
 
 type PrivateComputeInstancesServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -56,7 +54,6 @@ type PrivateComputeInstancesServer struct {
 	privatev1.UnimplementedComputeInstancesServer
 
 	logger                  *slog.Logger
-	notifier                events.Notifier
 	tenancyLogic            auth.TenancyLogic
 	generic                 *GenericServer[*privatev1.ComputeInstance]
 	templatesDao            *dao.GenericDAO[*privatev1.ComputeInstanceTemplate]
@@ -80,11 +77,6 @@ func NewPrivateComputeInstancesServer() *PrivateComputeInstancesServerBuilder {
 
 func (b *PrivateComputeInstancesServerBuilder) SetLogger(value *slog.Logger) *PrivateComputeInstancesServerBuilder {
 	b.logger = value
-	return b
-}
-
-func (b *PrivateComputeInstancesServerBuilder) SetNotifier(value events.Notifier) *PrivateComputeInstancesServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -192,7 +184,6 @@ func (b *PrivateComputeInstancesServerBuilder) Build() (result *PrivateComputeIn
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer)
-	addDAOEventCallback(externalIPPoolDaoBuilder, b.notifier)
 	externalIPPoolDao, err := externalIPPoolDaoBuilder.Build()
 	if err != nil {
 		return
@@ -202,7 +193,6 @@ func (b *PrivateComputeInstancesServerBuilder) Build() (result *PrivateComputeIn
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer)
-	addDAOEventCallback(externalIPDaoBuilder, b.notifier)
 	externalIPDao, err := externalIPDaoBuilder.Build()
 	if err != nil {
 		return
@@ -212,7 +202,6 @@ func (b *PrivateComputeInstancesServerBuilder) Build() (result *PrivateComputeIn
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer)
-	addDAOEventCallback(externalIPAttachmentDaoBuilder, b.notifier)
 	externalIPAttachmentDao, err := externalIPAttachmentDaoBuilder.Build()
 	if err != nil {
 		return
@@ -231,7 +220,6 @@ func (b *PrivateComputeInstancesServerBuilder) Build() (result *PrivateComputeIn
 	generic, err := NewGenericServer[*privatev1.ComputeInstance]().
 		SetLogger(b.logger).
 		SetService(privatev1.ComputeInstances_ServiceDesc.ServiceName).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
@@ -249,7 +237,6 @@ func (b *PrivateComputeInstancesServerBuilder) Build() (result *PrivateComputeIn
 	result = &PrivateComputeInstancesServer{
 		storageTiersDao:         storageTiersDao,
 		logger:                  b.logger,
-		notifier:                b.notifier,
 		tenancyLogic:            b.tenancyLogic,
 		generic:                 generic,
 		templatesDao:            templatesDao,
@@ -397,12 +384,14 @@ func (s *PrivateComputeInstancesServer) prepareCreate(ctx context.Context, candi
 	if err != nil {
 		return
 	}
-	var diskImageWarnings []string
-	diskImageWarnings, err = s.validateDiskImage(ctx, candidate)
+	diskImage, diskImageWarnings, err := s.validateDiskImage(ctx, candidate)
 	if err != nil {
 		return
 	}
 	warnings = append(warnings, diskImageWarnings...)
+	if err = s.validateSshPublicKey(ctx, candidate, diskImage); err != nil {
+		return
+	}
 	err = s.validateStorageTiers(ctx, candidate)
 	return
 }
@@ -452,7 +441,29 @@ func (s *PrivateComputeInstancesServer) resolveCreationSource(ctx context.Contex
 
 func (s *PrivateComputeInstancesServer) Update(ctx context.Context,
 	request *privatev1.ComputeInstancesUpdateRequest) (response *privatev1.ComputeInstancesUpdateResponse, err error) {
+	computeInstance := request.GetObject()
+	if computeInstance == nil {
+		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "compute instance is mandatory")
+		return
+	}
+	if computeInstance.GetId() == "" {
+		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "compute instance id is mandatory")
+		return
+	}
+
+	var warnings []string
+	var resizeNoOp bool
 	err = s.generic.UpdateWithCandidatePreparation(ctx, request, &response, func(ctx context.Context, current, candidate *privatev1.ComputeInstance) error {
+		if updateIncludesField(request.GetUpdateMask(), "spec.instance_type") {
+			warnings, resizeNoOp, err = s.validateInstanceTypeResize(ctx, current, candidate)
+			if err != nil {
+				return err
+			}
+		}
+		if resizeNoOp && onlyInstanceTypeMask(request.GetUpdateMask()) {
+			candidate.GetSpec().SetInstanceType(current.GetSpec().GetInstanceType())
+			return nil
+		}
 		if err := validateComputeInstanceImmutability(current, candidate, request.GetUpdateMask()); err != nil {
 			return err
 		}
@@ -473,7 +484,26 @@ func (s *PrivateComputeInstancesServer) Update(ctx context.Context,
 		}
 		return nil
 	})
+	if err != nil {
+		return
+	}
+	if len(warnings) > 0 {
+		response.SetWarnings(warnings)
+	}
 	return
+}
+
+func onlyInstanceTypeMask(mask *fieldmaskpb.FieldMask) bool {
+	paths := mask.GetPaths()
+	if len(paths) == 0 {
+		return false
+	}
+	for _, path := range paths {
+		if path != "spec.instance_type" {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *PrivateComputeInstancesServer) validateAndResolveUserDataSecret(
@@ -577,34 +607,164 @@ func (s *PrivateComputeInstancesServer) validateInstanceType(
 	return validateResolvedInstanceType(resolved, identifier, "")
 }
 
+func (s *PrivateComputeInstancesServer) validateInstanceTypeResize(
+	ctx context.Context,
+	current, candidate *privatev1.ComputeInstance,
+) (warnings []string, noOp bool, err error) {
+	currentRef := current.GetSpec().GetInstanceType()
+	targetRef := candidate.GetSpec().GetInstanceType()
+	if currentRef == nil || targetRef == nil {
+		return nil, false, grpcstatus.Errorf(grpccodes.InvalidArgument, "instance type is mandatory")
+	}
+	targetName := refKey(targetRef)
+	currentType, err := resolveAndCanonicalizeReference(
+		ctx, s.instanceTypesDao, current.GetMetadata(), currentRef, "instance type", grpccodes.NotFound,
+	)
+	if err != nil {
+		return nil, false, err
+	}
+	targetType, err := resolveAndCanonicalizeReference(
+		ctx, s.instanceTypesDao, current.GetMetadata(), targetRef, "instance type", grpccodes.NotFound,
+	)
+	if err != nil {
+		if grpcstatus.Code(err) == grpccodes.NotFound {
+			return nil, false, grpcstatus.Errorf(
+				grpccodes.InvalidArgument,
+				"instance type '%s' not found",
+				targetName,
+			)
+		}
+		return nil, false, err
+	}
+	if currentType.GetId() == targetType.GetId() {
+		return nil, true, nil
+	}
+
+	targetName = targetType.GetMetadata().GetName()
+	warnings, err = validateResolvedInstanceType(targetType, targetName, "")
+	if err != nil {
+		return nil, false, err
+	}
+	if !proto.Equal(
+		currentType.GetSpec().GetGpu(),
+		targetType.GetSpec().GetGpu(),
+	) {
+		return nil, false, grpcstatus.Errorf(
+			grpccodes.FailedPrecondition,
+			"cannot change GPU configuration when resizing from instance type '%s' to '%s'",
+			currentType.GetMetadata().GetName(),
+			targetName,
+		)
+	}
+
+	return warnings, false, nil
+}
+
 // validateDiskImage checks the image selected by the caller, Catalog policy, or Template and
 // stores its actual ID/name/scope. Deprecated images produce a warning; obsolete ones fail.
 func (s *PrivateComputeInstancesServer) validateDiskImage(
 	ctx context.Context,
 	ci *privatev1.ComputeInstance,
-) ([]string, error) {
+) (*privatev1.DiskImage, []string, error) {
 	spec := ci.GetSpec()
 	diskImageRef := spec.GetDiskImage()
 	if diskImageRef == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	key := refKey(diskImageRef)
 	if key == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	diskImage, err := resolveDiskImageReference(ctx, s.diskImagesDao, referenceScope{tenant: ci.GetMetadata().GetTenant(), project: ci.GetMetadata().GetProject()}, diskImageRef, "")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	warnings, err := validateResolvedDiskImage(diskImage, key, "")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	spec.SetDiskImage(canonicalDiskImageReference(diskImage))
 
-	return warnings, nil
+	return diskImage, warnings, nil
+}
+
+// validateSshPublicKey resolves the tenant-scoped Secret reference and checks that the
+// selected guest can consume the key through cloud-init.
+func (s *PrivateComputeInstancesServer) validateSshPublicKey(
+	ctx context.Context,
+	ci *privatev1.ComputeInstance,
+	diskImage *privatev1.DiskImage,
+) error {
+	spec := ci.GetSpec()
+	ref := spec.GetSshKey()
+	if ref == nil {
+		return nil
+	}
+	metadata := ci.GetMetadata()
+	if metadata == nil {
+		return grpcstatus.Error(grpccodes.InvalidArgument, "cannot resolve ssh key reference without instance metadata")
+	}
+
+	secret, err := resolveResourceInScope(
+		ctx,
+		s.secretsDao,
+		referenceScope{tenant: metadata.GetTenant()},
+		ref.GetId(),
+		ref.GetName(),
+		"secret",
+		"",
+		grpccodes.NotFound,
+	)
+	if err != nil {
+		return err
+	}
+
+	if secret.GetType() != privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY {
+		return grpcstatus.Errorf(
+			grpccodes.InvalidArgument,
+			"secret '%s' referenced by ssh_key has type %s; expected %s",
+			refKey(ref),
+			secret.GetType(),
+			privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+		)
+	}
+	data := secret.GetData()
+	if len(data) == 0 && secret.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT {
+		if s.secretStore == nil {
+			s.logger.ErrorContext(ctx, "Failed to load SSH key Secret: secret store isn't configured")
+			return grpcstatus.Errorf(grpccodes.Internal, "failed to resolve ssh key reference")
+		}
+		secretMetadata := secret.GetMetadata()
+		data, err = s.secretStore.Fetch(
+			ctx,
+			secretMetadata.GetTenant(),
+			secretMetadata.GetProject(),
+			secretMetadata.GetName(),
+		)
+		if err != nil {
+			s.logger.ErrorContext(ctx, "Failed to load SSH key Secret from store", "error", err)
+			return grpcstatus.Errorf(grpccodes.Internal, "failed to resolve ssh key reference")
+		}
+	}
+	if len(data["public_key"]) == 0 {
+		return grpcstatus.Errorf(
+			grpccodes.InvalidArgument,
+			"secret '%s' referenced by ssh_key must contain a non-empty 'public_key' entry",
+			refKey(ref),
+		)
+	}
+
+	spec.SetSshKey(privatev1.SecretLocalReference_builder{
+		Id:   secret.GetId(),
+		Name: secret.GetMetadata().GetName(),
+	}.Build())
+
+	if diskImage != nil && diskImage.GetSpec().GetGuestOsFamily() == privatev1.GuestOSFamily_GUEST_OS_FAMILY_WINDOWS {
+		return grpcstatus.Error(grpccodes.InvalidArgument, "SSH key injection is not supported for Windows instances")
+	}
+	return nil
 }
 
 func validateComputeInstanceImmutability(
@@ -628,13 +788,13 @@ func validateComputeTemplateImmutability(
 	updatingTemplate := updateIncludesField(updateMask, "spec.template")
 	updatingTemplateParams := updateIncludesField(updateMask, "spec.template_parameters")
 	updatingCatalogItem := updateIncludesField(updateMask, "spec.catalog_item")
-	updatingInstanceType := updateIncludesField(updateMask, "spec.instance_type")
 	updatingDiskImage := updateIncludesField(updateMask, "spec.disk_image")
+	updatingSshKey := updateIncludesField(updateMask, "spec.ssh_key")
 	updatingAutoExternalIP := updateIncludesField(updateMask, "spec.auto_external_ip_attachment")
 	updatingUserDataSecret := updateIncludesField(updateMask, "spec.user_data_secret")
 
-	if !updatingTemplate && !updatingTemplateParams && !updatingCatalogItem && !updatingInstanceType &&
-		!updatingDiskImage && !updatingAutoExternalIP && !updatingUserDataSecret {
+	if !updatingTemplate && !updatingTemplateParams && !updatingCatalogItem &&
+		!updatingDiskImage && !updatingSshKey && !updatingAutoExternalIP && !updatingUserDataSecret {
 		return nil
 	}
 
@@ -670,15 +830,6 @@ func validateComputeTemplateImmutability(
 		newSpec.SetCatalogItem(ref)
 	}
 
-	if updatingInstanceType && refKey(existingSpec.GetInstanceType()) != refKey(newSpec.GetInstanceType()) {
-		return grpcstatus.Errorf(
-			grpccodes.InvalidArgument,
-			"cannot change spec.instance_type from '%s' to '%s': instance type is immutable",
-			refKey(existingSpec.GetInstanceType()),
-			refKey(newSpec.GetInstanceType()),
-		)
-	}
-
 	if updatingDiskImage && refKey(existingSpec.GetDiskImage()) != refKey(newSpec.GetDiskImage()) {
 		return grpcstatus.Errorf(
 			grpccodes.InvalidArgument,
@@ -686,6 +837,29 @@ func validateComputeTemplateImmutability(
 			refKey(existingSpec.GetDiskImage()),
 			refKey(newSpec.GetDiskImage()),
 		)
+	}
+
+	if updatingSshKey {
+		existingKey := existingSpec.GetSshKey()
+		newKey := newSpec.GetSshKey()
+		sameKey := proto.Equal(existingKey, newKey)
+		if existingKey != nil && newKey != nil {
+			if newKey.GetId() != "" {
+				sameKey = existingKey.GetId() == newKey.GetId()
+			} else {
+				sameKey = existingKey.GetName() == newKey.GetName()
+			}
+		}
+		if !sameKey {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"cannot change spec.ssh_key: ssh_key is immutable after creation")
+		}
+		if existingKey != nil {
+			newSpec.SetSshKey(privatev1.SecretLocalReference_builder{
+				Id:   existingKey.GetId(),
+				Name: existingKey.GetName(),
+			}.Build())
+		}
 	}
 
 	if updatingAutoExternalIP && existingSpec.GetAutoExternalIpAttachment() != newSpec.GetAutoExternalIpAttachment() {
@@ -705,8 +879,8 @@ func validateComputeTemplateImmutability(
 	return nil
 }
 
-// validateComputeNetworkAttachmentsImmutability ensures subnet references cannot be changed
-// in networkAttachments array after creation. Security groups can be modified.
+// validateComputeNetworkAttachmentsImmutability rejects changes to the complete
+// network attachment spec after creation.
 func validateComputeNetworkAttachmentsImmutability(
 	current, candidate *privatev1.ComputeInstance,
 	updateMask *fieldmaskpb.FieldMask,
@@ -737,8 +911,6 @@ func validateComputeNetworkAttachmentsImmutability(
 		)
 	}
 
-	// Check that subnet references haven't changed within each attachment
-	// Security groups can change freely (no validation)
 	for i := range existingAttachments {
 		existingSubnet := existingAttachments[i].GetSubnet()
 		newSubnet := newAttachments[i].GetSubnet()
@@ -748,6 +920,13 @@ func validateComputeNetworkAttachmentsImmutability(
 				"cannot change network_attachments[%d].subnet from '%s' to '%s': subnet is immutable",
 				i, refKey(existingSubnet), refKey(newSubnet),
 			)
+		}
+		if err := validateImmutableSecurityGroups(
+			existingAttachments[i].GetSecurityGroups(),
+			newAttachments[i].GetSecurityGroups(),
+			fmt.Sprintf("network_attachments[%d].security_groups", i),
+		); err != nil {
+			return err
 		}
 	}
 
@@ -969,15 +1148,15 @@ func (s *PrivateComputeInstancesServer) validateNetworkReferencesState(
 			return err
 		}
 
+		source := fmt.Sprintf(" in network_attachments[%d]", i)
 		// VAL-02: Validate READY state
-		if subnet.GetStatus().GetState() != privatev1.SubnetState_SUBNET_STATE_READY {
-			return grpcstatus.Errorf(grpccodes.FailedPrecondition,
-				"network_attachments[%d]: subnet '%s' is not in READY state (current state: %s)",
-				i, subnetKey, subnet.GetStatus().GetState().String())
+		if err := validateResolvedSubnetReady(subnet, subnetKey, source); err != nil {
+			return err
 		}
 
 		virtualNetworkID := refKey(subnet.GetSpec().GetVirtualNetwork())
 
+		// Use the subnet's VirtualNetwork as the expected owner for every SecurityGroup.
 		for _, sgRef := range securityGroupRefs {
 			if sgRef == nil {
 				continue
@@ -995,20 +1174,9 @@ func (s *PrivateComputeInstancesServer) validateNetworkReferencesState(
 			}
 
 			// VAL-02: Validate READY state
-			if sg.GetStatus().GetState() != privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY {
-				return grpcstatus.Errorf(grpccodes.FailedPrecondition,
-					"network_attachments[%d]: security group '%s' is not in READY state (current state: %s)",
-					i, sgKey, sg.GetStatus().GetState().String())
-			}
-
 			// VAL-03: Validate SecurityGroup belongs to same VirtualNetwork as Subnet
-			if virtualNetworkID != "" {
-				sgVirtualNetworkID := refKey(sg.GetSpec().GetVirtualNetwork())
-				if sgVirtualNetworkID != virtualNetworkID {
-					return grpcstatus.Errorf(grpccodes.InvalidArgument,
-						"network_attachments[%d]: security group '%s' belongs to VirtualNetwork '%s', but subnet '%s' belongs to VirtualNetwork '%s'",
-						i, sgKey, sgVirtualNetworkID, subnetKey, virtualNetworkID)
-				}
+			if err := validateResolvedSecurityGroup(sg, sgKey, source, virtualNetworkID); err != nil {
+				return err
 			}
 		}
 	}

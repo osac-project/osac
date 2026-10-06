@@ -14,6 +14,8 @@ specific language governing permissions and limitations under the License.
 package servers
 
 import (
+	"strings"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/protobuf/proto"
@@ -21,8 +23,7 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
-func policyTestString(value string) *string { return &value }
-func policyTestInt32(value int32) *int32    { return &value }
+func policyTestInt32(value int32) *int32 { return &value }
 
 func policyTestSubnet(name string) *privatev1.SubnetLocalReference {
 	return privatev1.SubnetLocalReference_builder{Name: name}.Build()
@@ -33,6 +34,25 @@ func policyTestSecurityGroup(name string) *privatev1.SecurityGroupLocalReference
 }
 
 var _ = Describe("Shared typed-policy helper", func() {
+	Describe("Cluster CIDR policies", func() {
+		It("canonicalizes IPv6 defaults", func() {
+			value := "2001:db8:1::1/48"
+			policy := privatev1.StringFieldPolicy_builder{
+				Editable: privatev1.EditableStringField_builder{DefaultValue: &value}.Build(),
+			}.Build()
+			Expect(canonicalizeCatalogItemCIDRPolicy(policy, "fields.network.pod_cidr")).To(Succeed())
+			Expect(policy.GetEditable().GetDefaultValue()).To(Equal("2001:db8:1::/48"))
+		})
+
+		It("qualifies invalid values once", func() {
+			value := "invalid"
+			policy := privatev1.StringFieldPolicy_builder{Locked: &value}.Build()
+			err := canonicalizeCatalogItemCIDRPolicy(policy, "fields.network.pod_cidr")
+			Expect(err).To(HaveOccurred())
+			Expect(strings.Count(err.Error(), "fields.network.pod_cidr")).To(Equal(1))
+		})
+	})
+
 	It("applies scalar precedence", func() {
 		locked := "locked"
 		got := ""
@@ -45,7 +65,7 @@ var _ = Describe("Shared typed-policy helper", func() {
 
 	It("leaves specs unchanged when no typed policies are present", func() {
 		empty := "existing"
-		spec := privatev1.ComputeInstanceSpec_builder{SshPublicKey: &empty}.Build()
+		spec := privatev1.ComputeInstanceSpec_builder{UserData: &empty}.Build()
 		before := proto.Clone(spec)
 		item := privatev1.ComputeInstanceCatalogItem_builder{
 			Fields: privatev1.ComputeInstanceCatalogItemFields_builder{}.Build(),
@@ -80,8 +100,8 @@ var _ = Describe("Shared typed-policy helper", func() {
 			}.Build(),
 			NodeSets: privatev1.ClusterNodeSetMapPolicy_builder{
 				Editable: privatev1.EditableClusterNodeSetMap_builder{
-					DefaultValue: privatev1.ClusterNodeSetMap_builder{Items: map[string]*privatev1.ClusterTemplateNodeSet{
-						"workers": privatev1.ClusterTemplateNodeSet_builder{Size: 3}.Build(),
+					DefaultValue: privatev1.ClusterNodeSetMap_builder{Items: map[string]*privatev1.ClusterCatalogNodeSet{
+						"workers": privatev1.ClusterCatalogNodeSet_builder{Size: 3}.Build(),
 					}}.Build(),
 				}.Build(),
 			}.Build(),
@@ -129,19 +149,6 @@ var _ = Describe("Shared typed-policy helper", func() {
 	})
 
 	It("rejects explicit false, zero, and empty string values for locked policies", func() {
-		By("rejecting an explicitly empty SSH key")
-		empty := ""
-		stringSpec := &privatev1.ComputeInstanceSpec{}
-		stringSpec.SetSshPublicKey(empty)
-		stringItem := privatev1.ComputeInstanceCatalogItem_builder{
-			Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
-				SshPublicKey: privatev1.StringFieldPolicy_builder{Locked: policyTestString("locked")}.Build(),
-			}.Build(),
-		}.Build()
-		Expect(applyComputeInstanceCatalogItemPolicies(stringSpec, stringItem.GetFields())).To(MatchError(ContainSubstring("field is not editable")))
-		Expect(stringSpec.HasSshPublicKey()).To(BeTrue())
-		Expect(stringSpec.GetSshPublicKey()).To(Equal(empty))
-
 		By("rejecting an explicitly false external-IP setting")
 		falseValue := false
 		boolSpec := &privatev1.ComputeInstanceSpec{}
@@ -196,7 +203,7 @@ var _ = Describe("Shared typed-policy helper", func() {
 		clusterSpec.SetNodeSets(map[string]*privatev1.ClusterNodeSet{})
 		clusterFields := privatev1.ClusterCatalogItemFields_builder{
 			NodeSets: privatev1.ClusterNodeSetMapPolicy_builder{
-				Locked: privatev1.ClusterNodeSetMap_builder{Items: map[string]*privatev1.ClusterTemplateNodeSet{"workers": privatev1.ClusterTemplateNodeSet_builder{Size: clusterSize}.Build()}}.Build(),
+				Locked: privatev1.ClusterNodeSetMap_builder{Items: map[string]*privatev1.ClusterCatalogNodeSet{"workers": privatev1.ClusterCatalogNodeSet_builder{Size: clusterSize}.Build()}}.Build(),
 			}.Build(),
 		}.Build()
 		Expect(applyClusterCatalogItemPolicies(clusterSpec, privatev1.ClusterCatalogItem_builder{Fields: clusterFields}.Build().GetFields())).To(Succeed())

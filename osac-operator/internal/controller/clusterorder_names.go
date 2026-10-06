@@ -24,6 +24,8 @@ const (
 )
 
 var (
+	agentInstanceTypeLabel            string = "osac.openshift.io/instance_type"
+	agentNodeSetLabel                 string = "osac.openshift.io/node-set"
 	osacClusterOrderNameLabel         string = fmt.Sprintf("%s/clusterorder", osacPrefix)
 	osacClusterOrderIDLabel           string = fmt.Sprintf("%s/clusterorder-uuid", osacPrefix)
 	osacFinalizer                     string = fmt.Sprintf("%s/finalizer", osacPrefix)

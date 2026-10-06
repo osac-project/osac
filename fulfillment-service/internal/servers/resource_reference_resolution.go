@@ -19,6 +19,7 @@ import (
 
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
@@ -54,6 +55,35 @@ type fullResourceReference interface {
 	GetProject() string
 	SetShared(bool)
 	SetProject(string)
+}
+
+func canonicalizeResourceReference(reference resourceReference, object referenceResource) {
+	reference.SetId(object.GetId())
+	reference.SetName(object.GetMetadata().GetName())
+	if fullReference, ok := reference.(fullResourceReference); ok {
+		fullReference.SetProject(object.GetMetadata().GetProject())
+		fullReference.SetShared(object.GetMetadata().GetTenant() == auth.SharedTenant)
+	}
+}
+
+func validateImmutableReferenceIdentity[T interface {
+	fullResourceReference
+	proto.Message
+}](current, candidate T, path, label string, allowMissingID bool) error {
+	identityChanged := candidate.GetId() != current.GetId()
+	if allowMissingID && candidate.GetId() == "" {
+		identityChanged = candidate.GetName() != current.GetName()
+	}
+	if !current.ProtoReflect().IsValid() || !candidate.ProtoReflect().IsValid() ||
+		identityChanged ||
+		(candidate.GetName() != "" && candidate.GetName() != current.GetName()) ||
+		(candidate.GetProject() != "" && candidate.GetProject() != current.GetProject()) ||
+		(candidate.GetShared() && !current.GetShared()) {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"cannot change %s from '%s' to '%s': %s is immutable",
+			path, refKey(current), refKey(candidate), label)
+	}
+	return nil
 }
 
 type referenceGetFunc[O dao.Object] func(context.Context, *dao.GenericDAO[O], string) (O, error)
@@ -143,12 +173,7 @@ func resolveAndCanonicalizeReferenceWithGet[O referenceResource](
 		return object, err
 	}
 
-	reference.SetId(object.GetId())
-	reference.SetName(object.GetMetadata().GetName())
-	if fullReference, ok := reference.(fullResourceReference); ok {
-		fullReference.SetProject(object.GetMetadata().GetProject())
-		fullReference.SetShared(object.GetMetadata().GetTenant() == auth.SharedTenant)
-	}
+	canonicalizeResourceReference(reference, object)
 	return object, nil
 }
 
@@ -276,6 +301,19 @@ func resolveLockedResourceInScope[O referenceResource](
 	return resolveResourceInScopeWithGet(ctx, resourceDao, scope, id, name, kind, source, notFoundCode, getLockedReferenceResource[O])
 }
 
+// resolveLockedPlatformResource resolves a reference to a platform-scoped resource, i.e. one that
+// always lives in the shared tenant. The shared scope is fixed here so callers cannot accidentally
+// resolve a platform resource in a tenant scope. Like resolveLockedResourceInScope it holds an
+// exclusive lock on the target until the request transaction ends.
+func resolveLockedPlatformResource[O referenceResource](
+	ctx context.Context,
+	resourceDao *dao.GenericDAO[O],
+	id, name, kind, source string,
+	notFoundCode grpccodes.Code,
+) (O, error) {
+	return resolveLockedResourceInScope(ctx, resourceDao, referenceScope{tenant: auth.SharedTenant}, id, name, kind, source, notFoundCode)
+}
+
 func resolveResourceInScopeWithGet[O referenceResource](
 	ctx context.Context,
 	resourceDao *dao.GenericDAO[O],
@@ -365,6 +403,21 @@ func inheritReferenceScope(ref interface {
 func validateDependencyOwnerScope(owner referenceScope, target *privatev1.Metadata, kind, source string) error {
 	if target.GetTenant() != auth.SharedTenant && target.GetTenant() != owner.tenant {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "%s reference%s must belong to the owning tenant or shared tenant", kind, source)
+	}
+	return nil
+}
+
+// validatePlatformReference rejects a reference to a platform-scoped resource that does not
+// target the shared tenant. Platform-scoped resources (for example bare metal instance types)
+// always live in the shared tenant, so callers must set shared=true and must not set a project;
+// the reference then resolves against the shared scope through the generic resolver.
+// kind names the referenced type in errors; source adds the referencing field, or is empty.
+func validatePlatformReference(reference fullResourceReference, kind, source string) error {
+	if !reference.GetShared() {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "%s reference%s must set shared=true", kind, source)
+	}
+	if reference.GetProject() != "" {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "%s reference%s must not set project", kind, source)
 	}
 	return nil
 }
@@ -495,10 +548,15 @@ func canonicalSecretLocalReference(resolved *privatev1.Secret) *privatev1.Secret
 	return privatev1.SecretLocalReference_builder{Id: resolved.GetId(), Name: resolved.GetMetadata().GetName()}.Build()
 }
 
-// canonicalBareMetalInstanceTypeLocalReference copies the resolved object's ID and name
-// into a new local reference.
-func canonicalBareMetalInstanceTypeLocalReference(resolved *privatev1.BareMetalInstanceType) *privatev1.BareMetalInstanceTypeLocalReference {
-	return privatev1.BareMetalInstanceTypeLocalReference_builder{Id: resolved.GetId(), Name: resolved.GetMetadata().GetName()}.Build()
+// canonicalBareMetalInstanceTypeReference copies the resolved object's ID, name, project,
+// and shared-tenant selector into a new reference.
+func canonicalBareMetalInstanceTypeReference(resolved *privatev1.BareMetalInstanceType) *privatev1.BareMetalInstanceTypeReference {
+	return privatev1.BareMetalInstanceTypeReference_builder{
+		Id:      resolved.GetId(),
+		Name:    resolved.GetMetadata().GetName(),
+		Project: resolved.GetMetadata().GetProject(),
+		Shared:  resolved.GetMetadata().GetTenant() == auth.SharedTenant,
+	}.Build()
 }
 
 // canonicalSubnetLocalReference copies the resolved object's ID and name into a new local reference.

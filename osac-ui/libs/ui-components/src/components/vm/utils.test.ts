@@ -12,7 +12,7 @@ const makeInstanceType = (overrides: Partial<InstanceType> = {}): InstanceType =
   ({
     id: 'standard-4-8',
     metadata: { name: 'Standard 4 vCPU / 8 GiB' },
-    spec: { cores: 4, memoryGib: 8, state: InstanceTypeState.ACTIVE },
+    spec: { vcpus: 4, memoryGib: 8, state: InstanceTypeState.ACTIVE },
     ...overrides,
   }) as InstanceType;
 
@@ -35,7 +35,7 @@ describe('formatInstanceTypeDisplayName', () => {
     const instanceType = makeInstanceType({
       spec: {
         $typeName: 'osac.public.v1.InstanceTypeSpec',
-        cores: 4,
+        vcpus: 4,
         memoryGib: 8,
         state: InstanceTypeState.DEPRECATED,
         description: '',
@@ -55,7 +55,7 @@ describe('formatInstanceTypeReviewLabelFromType', () => {
 
   it('includes sizing in review label', () => {
     expect(formatInstanceTypeReviewLabelFromType(makeInstanceType())).toBe(
-      'Standard 4 vCPU / 8 GiB — 4 vCPU, 8 GiB',
+      'Standard 4 vCPU / 8 GiB — 4 vCPUs, 8 GiB',
     );
   });
 

@@ -19,6 +19,8 @@ import type { GenEnum, GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2"
 import { enumDesc, fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
 import { file_cleanapi_cleanapi } from "../../../cleanapi/cleanapi_pb";
 import { file_google_api_field_behavior } from "../../../google/api/field_behavior_pb";
+import type { Timestamp } from "../../../google/protobuf/timestamp_pb";
+import { file_google_protobuf_timestamp } from "../../../google/protobuf/timestamp_pb";
 import type { Metadata } from "./metadata_type_pb";
 import { file_osac_private_v1_metadata_type } from "./metadata_type_pb";
 import type { ExternalIPLocalReference } from "./external_ip_type_pb";
@@ -31,7 +33,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/private/v1/nat_gateway_type.proto.
  */
 export const file_osac_private_v1_nat_gateway_type: GenFile = /*@__PURE__*/
-  fileDesc("CiZvc2FjL3ByaXZhdGUvdjEvbmF0X2dhdGV3YXlfdHlwZS5wcm90bxIPb3NhYy5wcml2YXRlLnYxIqcBCgpOQVRHYXRld2F5EgoKAmlkGAEgASgJEisKCG1ldGFkYXRhGAIgASgLMhkub3NhYy5wcml2YXRlLnYxLk1ldGFkYXRhEi0KBHNwZWMYAyABKAsyHy5vc2FjLnByaXZhdGUudjEuTkFUR2F0ZXdheVNwZWMSMQoGc3RhdHVzGAQgASgLMiEub3NhYy5wcml2YXRlLnYxLk5BVEdhdGV3YXlTdGF0dXMiqAEKDk5BVEdhdGV3YXlTcGVjEk4KD3ZpcnR1YWxfbmV0d29yaxgBIAEoCzItLm9zYWMucHJpdmF0ZS52MS5WaXJ0dWFsTmV0d29ya0xvY2FsUmVmZXJlbmNlQgbgQQLgQQUSRgoLZXh0ZXJuYWxfaXAYAiABKAsyKS5vc2FjLnByaXZhdGUudjEuRXh0ZXJuYWxJUExvY2FsUmVmZXJlbmNlQgbgQQLgQQUihwEKEE5BVEdhdGV3YXlTdGF0dXMSNAoFc3RhdGUYASABKA4yIC5vc2FjLnByaXZhdGUudjEuTkFUR2F0ZXdheVN0YXRlQgPgQQMSGQoHbWVzc2FnZRgCIAEoCUID4EEDSACIAQESFgoDaHViGAMgASgJQgngQQOKtRgCCAFCCgoIX21lc3NhZ2UqrgEKD05BVEdhdGV3YXlTdGF0ZRIhCh1OQVRfR0FURVdBWV9TVEFURV9VTlNQRUNJRklFRBAAEh0KGU5BVF9HQVRFV0FZX1NUQVRFX1BFTkRJTkcQARIbChdOQVRfR0FURVdBWV9TVEFURV9SRUFEWRACEhwKGE5BVF9HQVRFV0FZX1NUQVRFX0ZBSUxFRBADEh4KGk5BVF9HQVRFV0FZX1NUQVRFX0RFTEVUSU5HEARCFIq1GBASDm9zYWMucHVibGljLnYxYgZwcm90bzM", [file_cleanapi_cleanapi, file_google_api_field_behavior, file_osac_private_v1_metadata_type, file_osac_private_v1_external_ip_type, file_osac_private_v1_virtual_network_type]);
+  fileDesc("CiZvc2FjL3ByaXZhdGUvdjEvbmF0X2dhdGV3YXlfdHlwZS5wcm90bxIPb3NhYy5wcml2YXRlLnYxIqcBCgpOQVRHYXRld2F5EgoKAmlkGAEgASgJEisKCG1ldGFkYXRhGAIgASgLMhkub3NhYy5wcml2YXRlLnYxLk1ldGFkYXRhEi0KBHNwZWMYAyABKAsyHy5vc2FjLnByaXZhdGUudjEuTkFUR2F0ZXdheVNwZWMSMQoGc3RhdHVzGAQgASgLMiEub3NhYy5wcml2YXRlLnYxLk5BVEdhdGV3YXlTdGF0dXMiqAEKDk5BVEdhdGV3YXlTcGVjEk4KD3ZpcnR1YWxfbmV0d29yaxgBIAEoCzItLm9zYWMucHJpdmF0ZS52MS5WaXJ0dWFsTmV0d29ya0xvY2FsUmVmZXJlbmNlQgbgQQLgQQUSRgoLZXh0ZXJuYWxfaXAYAiABKAsyKS5vc2FjLnByaXZhdGUudjEuRXh0ZXJuYWxJUExvY2FsUmVmZXJlbmNlQgbgQQLgQQUi7AEKEE5BVEdhdGV3YXlTdGF0dXMSNAoFc3RhdGUYASABKA4yIC5vc2FjLnByaXZhdGUudjEuTkFUR2F0ZXdheVN0YXRlQgPgQQMSGQoHbWVzc2FnZRgCIAEoCUID4EEDSACIAQESFgoDaHViGAMgASgJQgngQQOKtRgCCAESSQoVc3RhdGVfdHJhbnNpdGlvbl90aW1lGAQgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcEIJ4EEDirUYAggBSAGIAQFCCgoIX21lc3NhZ2VCGAoWX3N0YXRlX3RyYW5zaXRpb25fdGltZSquAQoPTkFUR2F0ZXdheVN0YXRlEiEKHU5BVF9HQVRFV0FZX1NUQVRFX1VOU1BFQ0lGSUVEEAASHQoZTkFUX0dBVEVXQVlfU1RBVEVfUEVORElORxABEhsKF05BVF9HQVRFV0FZX1NUQVRFX1JFQURZEAISHAoYTkFUX0dBVEVXQVlfU1RBVEVfRkFJTEVEEAMSHgoaTkFUX0dBVEVXQVlfU1RBVEVfREVMRVRJTkcQBEIUirUYEBIOb3NhYy5wdWJsaWMudjFiBnByb3RvMw", [file_cleanapi_cleanapi, file_google_api_field_behavior, file_google_protobuf_timestamp, file_osac_private_v1_metadata_type, file_osac_private_v1_external_ip_type, file_osac_private_v1_virtual_network_type]);
 
 /**
  * Represents a NAT gateway for outbound traffic (SNAT) from a VirtualNetwork.
@@ -165,6 +167,13 @@ export type NATGatewayStatus = Message<"osac.private.v1.NATGatewayStatus"> & {
    * @generated from field: string hub = 3;
    */
   hub: string;
+
+  /**
+   * Time at which the NAT gateway entered its current state, as reported by the operator.
+   *
+   * @generated from field: optional google.protobuf.Timestamp state_transition_time = 4;
+   */
+  stateTransitionTime?: Timestamp | undefined;
 };
 
 /**
@@ -238,3 +247,4 @@ export enum NATGatewayState {
  */
 export const NATGatewayStateSchema: GenEnum<NATGatewayState> = /*@__PURE__*/
   enumDesc(file_osac_private_v1_nat_gateway_type, 0);
+

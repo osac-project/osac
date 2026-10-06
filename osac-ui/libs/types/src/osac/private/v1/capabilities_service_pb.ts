@@ -15,8 +15,8 @@
 // @generated from file osac/private/v1/capabilities_service.proto (package osac.private.v1, syntax proto3)
 /* eslint-disable */
 
-import type { GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv2";
-import { fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2";
+import type { GenEnum, GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv2";
+import { enumDesc, fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2";
 import { file_cleanapi_cleanapi } from "../../../cleanapi/cleanapi_pb";
 import { file_google_api_annotations } from "../../../google/api/annotations_pb";
 import type { AuthnCapabilities } from "./authn_capabilities_type_pb";
@@ -27,7 +27,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/private/v1/capabilities_service.proto.
  */
 export const file_osac_private_v1_capabilities_service: GenFile = /*@__PURE__*/
-  fileDesc("Cipvc2FjL3ByaXZhdGUvdjEvY2FwYWJpbGl0aWVzX3NlcnZpY2UucHJvdG8SD29zYWMucHJpdmF0ZS52MSIYChZDYXBhYmlsaXRpZXNHZXRSZXF1ZXN0IkwKF0NhcGFiaWxpdGllc0dldFJlc3BvbnNlEjEKBWF1dGhuGAEgASgLMiIub3NhYy5wcml2YXRlLnYxLkF1dGhuQ2FwYWJpbGl0aWVzMo4BCgxDYXBhYmlsaXRpZXMSfgoDR2V0Eicub3NhYy5wcml2YXRlLnYxLkNhcGFiaWxpdGllc0dldFJlcXVlc3QaKC5vc2FjLnByaXZhdGUudjEuQ2FwYWJpbGl0aWVzR2V0UmVzcG9uc2UiJILT5JMCHhIcL2FwaS9wcml2YXRlL3YxL2NhcGFiaWxpdGllc0IpirUYJRIOb3NhYy5wdWJsaWMudjEiE3ByaXZhdGU6ZnVsZmlsbG1lbnRiBnByb3RvMw", [file_cleanapi_cleanapi, file_google_api_annotations, file_osac_private_v1_authn_capabilities_type]);
+  fileDesc("Cipvc2FjL3ByaXZhdGUvdjEvY2FwYWJpbGl0aWVzX3NlcnZpY2UucHJvdG8SD29zYWMucHJpdmF0ZS52MSIYChZDYXBhYmlsaXRpZXNHZXRSZXF1ZXN0IoQBChdDYXBhYmlsaXRpZXNHZXRSZXNwb25zZRIxCgVhdXRobhgBIAEoCzIiLm9zYWMucHJpdmF0ZS52MS5BdXRobkNhcGFiaWxpdGllcxI2ChBlbmFibGVkX3NlcnZpY2VzGAIgAygOMhwub3NhYy5wcml2YXRlLnYxLlNlcnZpY2VUaWVyKokBCgtTZXJ2aWNlVGllchIcChhTRVJWSUNFX1RJRVJfVU5TUEVDSUZJRUQQABIVChFTRVJWSUNFX1RJRVJfQ0FBUxABEhYKElNFUlZJQ0VfVElFUl9WTUFBUxACEhYKElNFUlZJQ0VfVElFUl9CTUFBUxADEhUKEVNFUlZJQ0VfVElFUl9NQUFTEAQyjgEKDENhcGFiaWxpdGllcxJ+CgNHZXQSJy5vc2FjLnByaXZhdGUudjEuQ2FwYWJpbGl0aWVzR2V0UmVxdWVzdBooLm9zYWMucHJpdmF0ZS52MS5DYXBhYmlsaXRpZXNHZXRSZXNwb25zZSIkgtPkkwIeEhwvYXBpL3ByaXZhdGUvdjEvY2FwYWJpbGl0aWVzQimKtRglEg5vc2FjLnB1YmxpYy52MSITcHJpdmF0ZTpmdWxmaWxsbWVudGIGcHJvdG8z", [file_cleanapi_cleanapi, file_google_api_annotations, file_osac_private_v1_authn_capabilities_type]);
 
 /**
  * Request message for the `Get` method of the `Capabilities` service.
@@ -56,6 +56,13 @@ export type CapabilitiesGetResponse = Message<"osac.private.v1.CapabilitiesGetRe
    * @generated from field: osac.private.v1.AuthnCapabilities authn = 1;
    */
   authn?: AuthnCapabilities | undefined;
+
+  /**
+   * Service tiers enabled in this deployment.
+   *
+   * @generated from field: repeated osac.private.v1.ServiceTier enabled_services = 2;
+   */
+  enabledServices: ServiceTier[];
 };
 
 /**
@@ -64,6 +71,54 @@ export type CapabilitiesGetResponse = Message<"osac.private.v1.CapabilitiesGetRe
  */
 export const CapabilitiesGetResponseSchema: GenMessage<CapabilitiesGetResponse> = /*@__PURE__*/
   messageDesc(file_osac_private_v1_capabilities_service, 1);
+
+/**
+ * Service tiers that can be enabled in an OSAC deployment.
+ *
+ * @generated from enum osac.private.v1.ServiceTier
+ */
+export enum ServiceTier {
+  /**
+   * Service tier is unknown or has not been specified.
+   *
+   * @generated from enum value: SERVICE_TIER_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * Container as a Service.
+   *
+   * @generated from enum value: SERVICE_TIER_CAAS = 1;
+   */
+  CAAS = 1,
+
+  /**
+   * Virtual Machine as a Service.
+   *
+   * @generated from enum value: SERVICE_TIER_VMAAS = 2;
+   */
+  VMAAS = 2,
+
+  /**
+   * Bare Metal as a Service.
+   *
+   * @generated from enum value: SERVICE_TIER_BMAAS = 3;
+   */
+  BMAAS = 3,
+
+  /**
+   * Metal as a Service.
+   *
+   * @generated from enum value: SERVICE_TIER_MAAS = 4;
+   */
+  MAAS = 4,
+}
+
+/**
+ * Describes the enum osac.private.v1.ServiceTier.
+ */
+export const ServiceTierSchema: GenEnum<ServiceTier> = /*@__PURE__*/
+  enumDesc(file_osac_private_v1_capabilities_service, 0);
 
 /**
  * Provides information about the capabilities of the server, such as the list of trusted token issuers for
@@ -85,3 +140,4 @@ export const Capabilities: GenService<{
   },
 }> = /*@__PURE__*/
   serviceDesc(file_osac_private_v1_capabilities_service, 0);
+

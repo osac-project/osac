@@ -32,6 +32,7 @@ func Cmd() *cobra.Command {
 	runner := &runnerContext{}
 	result := &cobra.Command{
 		Use:                   "externalipattachment [FLAG...]",
+		Aliases:               []string{string(proto.MessageName((*publicv1.ExternalIPAttachment)(nil)))},
 		Short:                 shortHelp,
 		Long:                  longHelp,
 		DisableFlagsInUseLine: true,

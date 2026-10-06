@@ -1,43 +1,87 @@
+{# RHOAI 3.5 GA external models — inference.opendatahub.io ExternalProvider +      #}
+{# ExternalModel with the `path` field. Replaces the old maas.opendatahub.io flat   #}
+{# ExternalModel + maas-proxy prefix hack: `path` prepends the upstream prefix, so  #}
+{# `endpoint` points at the REAL upstream and no proxy Deployment is needed.        #}
+{# MaaSModelRef/MaaSAuthPolicy/MaaSSubscription bind the new group (maascontroller   #}
+{# externalModelHandler resolves inference.opendatahub.io first — verified).         #}
+{#                                                                                   #}
+{# IMPORTANT — external models are DEFAULT-TENANT / DEFAULT-GATEWAY only in GA 3.5.  #}
+{# The external-model reconciler runs ONLY on the default IPP (per-tenant IPPs set   #}
+{# DISABLE_EXTERNAL_MODEL_CONTROLLER=true to avoid HTTPRoute flapping — RHOAIENG-     #}
+{# 79526), so the ExternalModel HTTPRoute is always parented to maas-default-gateway #}
+{# and MaaSModelRef.tenantRef is ignored for ExternalModel. A tenant-scoped          #}
+{# MaaSSubscription would fail ("model not attached to tenant gateway"). So govern    #}
+{# in models-as-a-service (default tenant) and use system:authenticated + an SA      #}
+{# token at the default gateway (consumable without per-tenant OIDC; 429 still        #}
+{# enforced). Per-tenant external models are a documented, planned upstream gap.      #}
 {% for model in ocp_4_20_ai_maas_external_models %}
 {% if not loop.first %}
 ---
 {% endif %}
+{# --- Upstream credential Secret (data key api-key) ---                              #}
+{# The apikey-injection plugin's credential store ONLY loads Secrets labelled          #}
+{# inference.llm-d.ai/ipp-managed=true (ai-gateway-payload-processing reconciler.go     #}
+{# hasManagedLabel); without it the upstream call fails "authType 'apikey' credentials  #}
+{# not found" → HTTP 500 (proven on osacmaas 2026-08-29). The legacy bbr-managed label  #}
+{# is kept for back-compat with any body-based-routing consumer.                        #}
 apiVersion: v1
 kind: Secret
 metadata:
   name: {{ model.name }}-key
   namespace: {{ ocp_4_20_ai_maas_external_model_namespace }}
   labels:
+    inference.llm-d.ai/ipp-managed: "true"
     inference.networking.k8s.io/bbr-managed: "true"
 type: Opaque
 stringData:
   api-key: "{{ model.upstream_credential }}"
 ---
-apiVersion: maas.opendatahub.io/v1alpha1
+{# --- ExternalProvider: the REAL upstream endpoint (no proxy) --- #}
+{# spec.auth is REQUIRED by the GA CRD (type + secretRef; Secret needs an api-key   #}
+{# data key in the same namespace) — the bbr-managed Secret above provides it.      #}
+apiVersion: inference.opendatahub.io/v1alpha1
+kind: ExternalProvider
+metadata:
+  name: {{ model.name }}-provider
+  namespace: {{ ocp_4_20_ai_maas_external_model_namespace }}
+spec:
+  provider: openai
+  endpoint: {{ model.upstream_endpoint }}
+  auth:
+    type: apikey
+    secretRef:
+      name: {{ model.name }}-key
+---
+{# --- ExternalModel: `path` replaces the proxy's prefix job --- #}
+apiVersion: inference.opendatahub.io/v1alpha1
 kind: ExternalModel
 metadata:
   name: {{ model.name }}
   namespace: {{ ocp_4_20_ai_maas_external_model_namespace }}
-  annotations:
-{% if model.secured | default(false) %}
-    maas.opendatahub.io/tls: "false"
-    maas.opendatahub.io/port: "80"
-{% else %}
-    maas.opendatahub.io/tls: "true"
-    maas.opendatahub.io/port: "443"
-{% endif %}
 spec:
-  provider: openai
+{# modelName is the CLIENT-facing id (request body `model`, GET /v1/models); targetModel  #}
+{# is the PROVIDER-side id. On RHOAI 3.5.1+ (current GA), the IPP matches the HTTPRoute  #}
+{# on the CR name, so client_model_id MUST equal this entry's `name` — otherwise          #}
+{# inference returns 404. The default (model_id) is backward compat with 3.5.0 only.     #}
+  modelName: "{{ model.client_model_id | default(model.model_id) }}"
+  externalProviderRefs:
+  - ref:
+      name: {{ model.name }}-provider
+    apiFormat: openai-chat
+    targetModel: "{{ model.model_id }}"
 {% if model.secured | default(false) %}
-  endpoint: >-
-    {{ (model.upstream_model_ns + '--' + model.upstream_model_name)[:63] | regex_replace('-$', '') }}.{{ ocp_4_20_ai_maas_proxy_namespace }}.svc.cluster.local
+    path: /{{ model.upstream_model_ns }}/{{ model.upstream_model_name }}/v1/chat/completions
 {% else %}
-  endpoint: {{ model.upstream_endpoint }}
+    path: /v1/chat/completions
 {% endif %}
-  targetModel: "{{ model.model_id }}"
-  credentialRef:
-    name: {{ model.name }}-key
+    auth:
+      type: apikey
+      secretRef:
+        name: {{ model.name }}-key
 ---
+{# --- Governance CRs (default tenant / default gateway; NO tenantRef — see header). #}
+{# system:authenticated so a default-gateway SA-token key can consume it; the        #}
+{# per-model token_limit still enforces 429 at the default gateway.                  #}
 apiVersion: maas.opendatahub.io/v1alpha1
 kind: MaaSModelRef
 metadata:
@@ -59,9 +103,7 @@ spec:
     namespace: {{ ocp_4_20_ai_maas_external_model_namespace }}
   subjects:
     groups:
-{% for tier in ocp_4_20_ai_maas_tiers %}
-    - name: "{{ tier.group }}"
-{% endfor %}
+    - name: system:authenticated
 ---
 apiVersion: maas.opendatahub.io/v1alpha1
 kind: MaaSSubscription
@@ -71,7 +113,7 @@ metadata:
 spec:
   owner:
     groups:
-    - name: "{{ (ocp_4_20_ai_maas_tiers | selectattr('priority', 'greaterthan', 0) | first | default(ocp_4_20_ai_maas_tiers | first)).group }}"
+    - name: system:authenticated
   modelRefs:
   - name: {{ model.name }}
     namespace: {{ ocp_4_20_ai_maas_external_model_namespace }}

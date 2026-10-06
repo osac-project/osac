@@ -1,7 +1,10 @@
 package auth
 
 import (
+	"errors"
+	"net"
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -63,6 +66,29 @@ func TestBuildAuthorizeURL_SetsAllRequiredParams(t *testing.T) {
 		if got := q.Get(param); got != want {
 			t.Errorf("param %q = %q, want %q", param, got, want)
 		}
+	}
+}
+
+func TestSanitizeNetErr_DNSFailureOmitsHostname(t *testing.T) {
+	const hostname = "keycloak-keycloak.internal.example.com"
+	dnsErr := &net.DNSError{
+		Err:  "no such host",
+		Name: hostname,
+	}
+	wrapped := &url.Error{
+		Op:  "Get",
+		URL: "https://" + hostname + "/.well-known/openid-configuration",
+		Err: &net.OpError{Op: "dial", Net: "tcp", Err: dnsErr},
+	}
+
+	sanitized := sanitizeNetErr(wrapped)
+
+	if strings.Contains(sanitized.Error(), hostname) {
+		t.Errorf("sanitized error contains hostname %q: %s", hostname, sanitized.Error())
+	}
+	// Unwrap must preserve the cause so errors.Is/As still work.
+	if !errors.Is(sanitized, dnsErr) {
+		t.Error("sanitized error does not preserve DNS cause via Unwrap")
 	}
 }
 

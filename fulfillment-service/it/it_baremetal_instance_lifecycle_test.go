@@ -24,10 +24,12 @@ import (
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	bmfov1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -133,7 +135,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 			Object: privatev1.BareMetalInstanceType_builder{
 				Metadata: privatev1.Metadata_builder{
 					Name:   fmt.Sprintf("test-instance-type-%s", uuid.New()[24:32]),
-					Tenant: usersGroup,
+					Tenant: auth.SharedTenant,
 				}.Build(),
 				Spec: privatev1.BareMetalInstanceTypeSpec_builder{
 					Hardware: privatev1.BareMetalHardwareSpec_builder{
@@ -145,6 +147,14 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 						Memory: privatev1.BareMetalMemorySpec_builder{
 							TotalGb: 16,
 						}.Build(),
+						NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
+							privatev1.BareMetalNetworkPortSpec_builder{
+								Name:  "data-0",
+								Role:  "fabric",
+								Type:  "Ethernet",
+								Speed: "25Gbps",
+							}.Build(),
+						},
 					}.Build(),
 					HostLabelSelector: privatev1.BareMetalLabelSelector_builder{
 						MatchLabels: map[string]string{
@@ -174,7 +184,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
-					InstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: instanceTypeId}.Build(),
+					InstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
 					SshPublicKey: new(bmiTestSSHPublicKey),
 					DiskImage:    publicv1.DiskImageReference_builder{Id: defaultDiskImageId}.Build(),
 				}.Build(),
@@ -246,7 +256,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: "non-existent-catalog-item"}.Build(),
-					InstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: instanceTypeId}.Build(),
+					InstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
 					SshPublicKey: new(bmiTestSSHPublicKey),
 				}.Build(),
 			}.Build(),
@@ -255,6 +265,61 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		status, ok := grpcstatus.FromError(err)
 		Expect(ok).To(BeTrue())
 		Expect(status.Code()).To(Equal(grpccodes.NotFound))
+	})
+
+	It("rejects public updates that change network attachments", func(ctx context.Context) {
+		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
+		createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
+			Object: publicv1.BareMetalInstance_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
+				}.Build(),
+				Spec: publicv1.BareMetalInstanceSpec_builder{
+					CatalogItem:        publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
+					InstanceType:       publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
+					SshPublicKey:       new(bmiTestSSHPublicKey),
+					DiskImage:          publicv1.DiskImageReference_builder{Id: defaultDiskImageId}.Build(),
+					NetworkAttachments: []*publicv1.BareMetalNetworkAttachment{network.bareMetalInstanceAttachment()},
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		object := createResp.GetObject()
+		bareMetalInstanceId := object.GetId()
+		DeferCleanup(func(ctx context.Context) {
+			_, err := privateBareMetalInstancesClient.Delete(ctx, privatev1.BareMetalInstancesDeleteRequest_builder{
+				Id: bareMetalInstanceId,
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Eventually(func(g Gomega) {
+				_, err := privateBareMetalInstancesClient.Get(ctx, privatev1.BareMetalInstancesGetRequest_builder{
+					Id: bareMetalInstanceId,
+				}.Build())
+				g.Expect(err).To(HaveOccurred())
+				g.Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
+			}, 2*time.Minute, time.Second).Should(Succeed())
+		})
+
+		originalAttachment := proto.Clone(object.GetSpec().GetNetworkAttachments()[0]).(*publicv1.BareMetalNetworkAttachment)
+		changed := proto.Clone(originalAttachment).(*publicv1.BareMetalNetworkAttachment)
+		changed.SetSecurityGroups(nil)
+		candidate := proto.Clone(object).(*publicv1.BareMetalInstance)
+		candidate.GetSpec().SetNetworkAttachments([]*publicv1.BareMetalNetworkAttachment{changed})
+		mask := catalogItemUpdateMask("spec.network_attachments")
+		_, err = bareMetalInstancesClient.Update(ctx, publicv1.BareMetalInstancesUpdateRequest_builder{
+			Object: candidate, UpdateMask: mask,
+		}.Build())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+
+		persisted, err := bareMetalInstancesClient.Get(ctx, publicv1.BareMetalInstancesGetRequest_builder{Id: bareMetalInstanceId}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(proto.Equal(persisted.GetObject().GetSpec().GetNetworkAttachments()[0], originalAttachment)).To(BeTrue())
+
+		_, err = bareMetalInstancesClient.Update(ctx, publicv1.BareMetalInstancesUpdateRequest_builder{
+			Object:     persisted.GetObject(),
+			UpdateMask: mask,
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
 	})
 
 	It("Rejects Create with network_attachments when the Subnet's NetworkClass has no fabric_manager", func(ctx context.Context) {
@@ -276,6 +341,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 		})
+		waitForNetworkClassReady(ctx, networkClassesClient, networkClassId)
 
 		virtualNetworkId := fmt.Sprintf("test-vnet-%s", uuid.New())
 		_, err = virtualNetworksClient.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
@@ -356,7 +422,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
-					InstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: instanceTypeId}.Build(),
+					InstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
 					SshPublicKey: new(bmiTestSSHPublicKey),
 					NetworkAttachments: []*publicv1.BareMetalNetworkAttachment{
 						publicv1.BareMetalNetworkAttachment_builder{
@@ -402,7 +468,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
-					InstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: instanceTypeId}.Build(),
+					InstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
 					SshPublicKey: new(bmiTestSSHPublicKey),
 					DiskImage:    publicv1.DiskImageReference_builder{Id: diskImageId}.Build(),
 				}.Build(),
@@ -486,7 +552,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
-					InstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: instanceTypeId}.Build(),
+					InstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
 					SshPublicKey: new(bmiTestSSHPublicKey),
 				}.Build(),
 			}.Build(),
@@ -503,7 +569,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
-					InstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: instanceTypeId}.Build(),
+					InstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
 					SshPublicKey: new(bmiTestSSHPublicKey),
 					DiskImage:    publicv1.DiskImageReference_builder{Id: defaultDiskImageId}.Build(),
 				}.Build(),
@@ -567,7 +633,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem:    publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
-					InstanceType:   publicv1.BareMetalInstanceTypeLocalReference_builder{Id: instanceTypeId}.Build(),
+					InstanceType:   publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
 					RestartTrigger: 1,
 				}.Build(),
 			}.Build(),
@@ -825,7 +891,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 					}.Build(),
 					Spec: publicv1.BareMetalInstanceSpec_builder{
 						Template:     publicv1.BareMetalInstanceTemplateReference_builder{Id: directTemplateId}.Build(),
-						InstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: instanceTypeId}.Build(),
+						InstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
 						SshPublicKey: new(bmiTestSSHPublicKey),
 						DiskImage:    publicv1.DiskImageReference_builder{Id: diskImageId}.Build(),
 					}.Build(),

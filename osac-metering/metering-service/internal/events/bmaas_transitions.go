@@ -20,7 +20,10 @@ const (
 	BMaaSEffectSkip    = "skip"
 )
 
-var ErrInvalidBMaaSTransition = errors.New("invalid BMaaS state transition")
+var (
+	ErrInvalidBMaaSTransition = errors.New("invalid BMaaS state transition")
+	ErrUnknownBMaaSEffect     = errors.New("unknown BMaaS transition effect")
+)
 
 const (
 	bmaasStateProvisioning = "BARE_METAL_INSTANCE_STATE_PROVISIONING"
@@ -140,6 +143,26 @@ func ResolveConsumptionTransition(from, to string) (string, error) {
 	return effects.consumption, nil
 }
 
+// BMaaSEffectEventType converts a meter transition effect into its lifecycle
+// event type. The everStarted flag distinguishes a first allocation from a
+// later reactivation, including when the transition table calls the effect a
+// resume. BMaaSEffectSkip maps to an empty type; unknown effects return
+// ErrUnknownBMaaSEffect.
+func BMaaSEffectEventType(effect string, everStarted bool) (string, error) {
+	switch effect {
+	case BMaaSEffectStart:
+		return ResolveLifecycleStartEvent(everStarted), nil
+	case BMaaSEffectResume:
+		return ResolveLifecycleStartEvent(everStarted), nil
+	case BMaaSEffectSuspend:
+		return EventSuspended, nil
+	case BMaaSEffectSkip:
+		return "", nil
+	default:
+		return "", fmt.Errorf("%w: %q", ErrUnknownBMaaSEffect, effect)
+	}
+}
+
 type BMaaSMeterIntervals struct {
 	AllocationSince  *time.Time
 	ConsumptionSince *time.Time
@@ -173,7 +196,7 @@ func DecomposeBMIEvents(
 			return
 		}
 		var duration *float64
-		if since != nil {
+		if since != nil && eventType == EventSuspended {
 			seconds := transitionTime.Sub(*since).Seconds()
 			duration = &seconds
 		}

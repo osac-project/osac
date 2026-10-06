@@ -25,6 +25,32 @@ _BOT_AUTHORS = frozenset(
     }
 )
 
+# These are required repository-policy checks, not build or test CI. Keep them
+# in the dashboard's check list, but do not let them alone classify a PR as
+# CI-failing.
+_NON_CI_CHECK_NAMES = frozenset(
+    {
+        "check-labels",
+        "label-gate / check-labels",
+        "label-gate / check-labels (pull_request)",
+    }
+)
+_NON_FAILING_CHECK_CONCLUSIONS = frozenset({None, "SUCCESS", "NEUTRAL", "SKIPPED"})
+
+
+def _has_failing_ci(pr: PRData) -> bool:
+    """Return whether a PR has a failing check other than label policy."""
+    if not pr.check_runs:
+        # Preserve the aggregate-status fallback for callers that do not
+        # provide individual check contexts.
+        return pr.ci_status in ("FAILURE", "ERROR")
+
+    return any(
+        (check.name or "").strip().casefold() not in _NON_CI_CHECK_NAMES
+        and check.conclusion not in _NON_FAILING_CHECK_CONCLUSIONS
+        for check in pr.check_runs
+    )
+
 
 def _parse_iso_date(date_str: str) -> datetime | None:
     """Parse ISO 8601 date string (GitHub format ending with Z)."""
@@ -74,7 +100,7 @@ def _classify_single(pr: PRData) -> ClassifiedPR:
         return ClassifiedPR(pr=pr, status=PRStatus.CONFLICTS, age_days=age_days)
 
     # Priority 3: CI failing overrides review state.
-    if pr.ci_status in ("FAILURE", "ERROR"):
+    if _has_failing_ci(pr):
         return ClassifiedPR(pr=pr, status=PRStatus.CI_FAILING, age_days=age_days)
 
     latest_reviews = _latest_review_per_author(pr.reviews)

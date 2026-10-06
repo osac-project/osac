@@ -1,0 +1,9 @@
+---
+- name: Synchronize the approved fulfillment trust bundle to a tenant cluster
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Synchronize tenant fulfillment trust
+      ansible.builtin.include_role:
+        name: osac.service.fulfillment_trust_sync

@@ -90,10 +90,3 @@ export * from './osac/private/v1/tenant_type_pb.js'
 export * from './osac/private/v1/tenants_service_pb.js'
 
 export * from './osac/private/v1/break_glass_credentials_type_pb.js'
-
-export * from './osac/private/v1/public_ip_pool_type_pb.js'
-export * from './osac/private/v1/public_ip_pools_service_pb.js'
-export * from './osac/private/v1/public_ip_type_pb.js'
-export * from './osac/private/v1/public_ips_service_pb.js'
-export * from './osac/private/v1/public_ip_attachment_type_pb.js'
-export * from './osac/private/v1/public_ip_attachments_service_pb.js'

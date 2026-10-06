@@ -11,7 +11,9 @@ metadata:
 data:
   LOG_LEVEL: {{ .Values.ui.config.logLevel | quote }}
   FULFILLMENT_API_URL: {{ .Values.ui.config.fulfillmentApiUrl | quote }}
+  FULFILLMENT_TLS_CA_FILE: "/etc/ca-bundle/bundle.pem"
   FULFILLMENT_TLS_INSECURE: {{ .Values.ui.config.tlsInsecure | quote }}
+  OIDC_TLS_CA_FILE: "/etc/ca-bundle/bundle.pem"
   OIDC_TLS_INSECURE: {{ .Values.ui.config.tlsInsecure | quote }}
   OIDC_CLIENT_ID: {{ .Values.ui.config.oidcClientId | quote }}
   OIDC_ISSUER_URL: {{ .Values.ui.config.oidcIssuerUrl | quote }}
@@ -34,6 +36,53 @@ spec:
       labels:
         app: osac-ui
     spec:
+      automountServiceAccountToken: false
+      volumes:
+      - name: ui-backend-credentials
+        secret:
+          secretName: osac-ui-backend-credentials
+      - name: ca-bundle
+        configMap:
+          name: ca-bundle
+          items:
+          - key: bundle.pem
+            path: bundle.pem
+      - name: tmp
+        emptyDir: {}
+      initContainers:
+      - name: wait-for-credentials
+        image: {{ .Values.cliImage }}
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -euo pipefail
+          echo "Waiting for osac-ui-backend client-secret to be populated..."
+          until [[ "$(cat /credentials/client-secret)" != "pending" ]]; do
+            echo "client-secret is still pending, retrying in 5s..."
+            sleep 5
+          done
+          echo "client-secret ready"
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - "ALL"
+        volumeMounts:
+        - name: ui-backend-credentials
+          mountPath: /credentials
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
       containers:
       - name: osac-ui
         image: "{{ .Values.ui.image.repository }}:{{ .Values.ui.image.tag }}"
@@ -45,6 +94,16 @@ spec:
         envFrom:
         - configMapRef:
             name: osac-ui
+        env:
+        - name: OIDC_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: osac-ui-backend-credentials
+              key: client-secret
+        volumeMounts:
+        - name: ca-bundle
+          mountPath: /etc/ca-bundle
+          readOnly: true
         readinessProbe:
           httpGet:
             path: /health

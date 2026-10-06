@@ -14,9 +14,10 @@ language governing permissions and limitations under the License.
 package vault
 
 import (
-	"crypto/x509"
 	"fmt"
 	"log/slog"
+
+	"github.com/osac-project/osac/fulfillment-service/internal/trust"
 )
 
 // NewServiceTenantTokenSourceFromConfig creates a TenantTokenSource that
@@ -26,9 +27,9 @@ import (
 func NewServiceTenantTokenSourceFromConfig(
 	logger *slog.Logger,
 	base BaseConfig,
-	caPool *x509.CertPool,
+	caPool *trust.CertPool,
 ) (TenantTokenSource, error) {
-	if err := ValidateBaseKeycloakConfig(base); err != nil {
+	if err := ValidateBaseConfig(base); err != nil {
 		return nil, err
 	}
 

@@ -26,7 +26,7 @@ var _ = Describe("Users Server", func() {
 	BeforeEach(func() {
 		var err error
 
-		// Create server (without notifier for testing):
+		// Create server:
 		privateServer, err = NewPrivateUsersServer().
 			SetLogger(logger).
 			SetAttributionLogic(attribution).

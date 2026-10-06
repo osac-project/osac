@@ -31,10 +31,8 @@ import {
 } from '../../api/v1/private/storage-tiers';
 import { useTranslation } from '../../hooks/useTranslation';
 import { getErrorMessage } from '../../utils/error';
-import { positiveIntegerSchema } from '../../validation/positive-integer';
 import { resourceNameSchema } from '../../validation/resource-name';
 import NameField from '../catalogProvision/wizard/fields/NameField';
-import { CheckboxField } from '../Form/CheckboxField';
 import { InputField } from '../Form/InputField';
 import LeaveFormConfirmation from '../Form/LeaveFormConfirmation';
 import OsacForm from '../Form/OsacForm';
@@ -54,27 +52,11 @@ const VALUE_BY_PROTOCOL: Partial<Record<StorageProtocol, 'NFS' | 'BLOCK'>> = {
   [StorageProtocol.BLOCK]: 'BLOCK',
 };
 
-type QosFieldKey =
-  | 'protocol'
-  | 'maxReadBandwidthMbs'
-  | 'maxWriteBandwidthMbs'
-  | 'encryptionEnabled';
-
-const QOS_FIELD_KEYS: QosFieldKey[] = [
-  'protocol',
-  'maxReadBandwidthMbs',
-  'maxWriteBandwidthMbs',
-  'encryptionEnabled',
-];
-
 interface StorageTierFormValues {
   metadata: { name: string };
   description: string;
   backendId: string;
   protocol: '' | 'NFS' | 'BLOCK';
-  maxReadBandwidthMbs: string;
-  maxWriteBandwidthMbs: string;
-  encryptionEnabled: boolean;
 }
 
 const getInitialValues = (tier?: StorageTier): StorageTierFormValues => {
@@ -84,9 +66,6 @@ const getInitialValues = (tier?: StorageTier): StorageTierFormValues => {
     description: tier?.spec?.description ?? '',
     backendId: backend?.backendId ?? '',
     protocol: tier?.spec ? (VALUE_BY_PROTOCOL[tier.spec.protocol] ?? '') : '',
-    maxReadBandwidthMbs: tier?.spec ? String(tier.spec.maxReadBandwidthMbs) : '',
-    maxWriteBandwidthMbs: tier?.spec ? String(tier.spec.maxWriteBandwidthMbs) : '',
-    encryptionEnabled: tier?.spec?.encryptionEnabled ?? false,
   };
 };
 
@@ -98,9 +77,6 @@ const getStorageTierSchema = (t: TFunction) =>
     protocol: Yup.string()
       .oneOf(['NFS', 'BLOCK'], t('Protocol is required'))
       .required(t('Protocol is required')),
-    maxReadBandwidthMbs: positiveIntegerSchema(t).required(t('Max read bandwidth is required')),
-    maxWriteBandwidthMbs: positiveIntegerSchema(t).required(t('Max write bandwidth is required')),
-    encryptionEnabled: Yup.boolean().required(),
   });
 
 interface StorageTierFormProps {
@@ -123,29 +99,18 @@ const StorageTierForm = ({ tier, backendOptions, backendsLoading }: StorageTierF
   const onSubmit = async (values: StorageTierFormValues) => {
     try {
       const protocol = PROTOCOL_BY_VALUE[values.protocol as 'NFS' | 'BLOCK'];
-      const maxReadBandwidthMbs = Number(values.maxReadBandwidthMbs);
-      const maxWriteBandwidthMbs = Number(values.maxWriteBandwidthMbs);
       const backendPayload = {
         backendId: values.backendId,
-        maxReadBandwidthMbs,
-        maxWriteBandwidthMbs,
-        encryptionEnabled: values.encryptionEnabled,
       };
 
       if (tier) {
         const descriptionChanged = values.description !== initialValues.description;
         const spec: {
           protocol: StorageProtocol;
-          maxReadBandwidthMbs: number;
-          maxWriteBandwidthMbs: number;
-          encryptionEnabled: boolean;
           backends: [Record<string, unknown>];
           description?: string;
         } = {
           protocol,
-          maxReadBandwidthMbs,
-          maxWriteBandwidthMbs,
-          encryptionEnabled: values.encryptionEnabled,
           backends: [backendPayload],
         };
         if (descriptionChanged) {
@@ -159,9 +124,6 @@ const StorageTierForm = ({ tier, backendOptions, backendsLoading }: StorageTierF
           spec: {
             description: values.description,
             protocol,
-            maxReadBandwidthMbs,
-            maxWriteBandwidthMbs,
-            encryptionEnabled: values.encryptionEnabled,
             backends: [backendPayload],
           },
         });
@@ -196,8 +158,7 @@ const StorageTierForm = ({ tier, backendOptions, backendsLoading }: StorageTierF
           onSubmit={onSubmit}
         >
           {({ values, submitForm, isSubmitting }) => {
-            const qosChanged =
-              isEdit && QOS_FIELD_KEYS.some((key) => values[key] !== initialValues[key]);
+            const qosChanged = isEdit && values.protocol !== initialValues.protocol;
 
             return (
               <Stack hasGutter>
@@ -230,25 +191,6 @@ const StorageTierForm = ({ tier, backendOptions, backendsLoading }: StorageTierF
                         { value: 'BLOCK', label: t('Block') },
                       ]}
                     />
-                    <InputField
-                      name="maxReadBandwidthMbs"
-                      label={t('Max read bandwidth (MB/s)')}
-                      fieldId="tier-max-read-bandwidth"
-                      type="number"
-                      isRequired
-                    />
-                    <InputField
-                      name="maxWriteBandwidthMbs"
-                      label={t('Max write bandwidth (MB/s)')}
-                      fieldId="tier-max-write-bandwidth"
-                      type="number"
-                      isRequired
-                    />
-                    <CheckboxField
-                      name="encryptionEnabled"
-                      label={t('Encryption enabled')}
-                      fieldId="tier-encryption-enabled"
-                    />
                   </OsacForm>
                 </StackItem>
 
@@ -256,7 +198,7 @@ const StorageTierForm = ({ tier, backendOptions, backendsLoading }: StorageTierF
                   <StackItem>
                     <Alert variant="info" isInline title={t('QoS settings changed')}>
                       {t(
-                        'Bandwidth changes take effect immediately for existing and new volumes. Changes to encryption or protocol require the associated StorageClass to be recreated before new volumes pick them up; existing volumes are unaffected.',
+                        'Protocol changes require the associated StorageClass to be recreated before new volumes pick them up; existing volumes are unaffected.',
                       )}
                     </Alert>
                   </StackItem>

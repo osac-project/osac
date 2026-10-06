@@ -86,6 +86,17 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
+		It("rejects system-tenant catalog items while allowing shared offerings", func() {
+			_, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
+				Object: privatev1.BareMetalInstanceCatalogItem_builder{
+					Metadata: privatev1.Metadata_builder{Name: "system-bmi-offering", Tenant: auth.SystemTenant}.Build(),
+					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-shared-template-id", Shared: true}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied))
+			Expect(err).To(MatchError(ContainSubstring("objects cannot be placed in the 'system' tenant")))
+		})
+
 		It("Creates object", func() {
 			response, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
@@ -457,7 +468,7 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 
 var _ = Describe("Bare Metal Instance Catalog Item policy application", func() {
 	It("applies every Bare Metal policy and deep-clones lists and messages", func() {
-		instanceType := privatev1.BareMetalInstanceTypeLocalReference_builder{Id: "host-id", Name: "host"}.Build()
+		instanceType := privatev1.BareMetalInstanceTypeReference_builder{Id: "host-id", Name: "host", Shared: true}.Build()
 		diskImage := privatev1.DiskImageReference_builder{Id: "image-id", Name: "disk-image"}.Build()
 		attachment := privatev1.BareMetalNetworkAttachment_builder{
 			Subnet:         policyTestSubnet("bare-metal-subnet"),
@@ -476,7 +487,7 @@ var _ = Describe("Bare Metal Instance Catalog Item policy application", func() {
 				Locked: privatev1.BareMetalNetworkAttachmentList_builder{Items: []*privatev1.BareMetalNetworkAttachment{nil, attachment}}.Build(),
 			}.Build(),
 			AutoExternalIpAttachment: privatev1.BoolFieldPolicy_builder{Locked: &autoExternalIP}.Build(),
-			InstanceType:             privatev1.BareMetalInstanceTypeLocalReferenceFieldPolicy_builder{Locked: instanceType}.Build(),
+			InstanceType:             privatev1.BareMetalInstanceTypeReferenceFieldPolicy_builder{Locked: instanceType}.Build(),
 			DiskImage:                privatev1.DiskImageReferenceFieldPolicy_builder{Locked: diskImage}.Build(),
 		}.Build()
 		item := privatev1.BareMetalInstanceCatalogItem_builder{Fields: fields}.Build()
@@ -491,6 +502,8 @@ var _ = Describe("Bare Metal Instance Catalog Item policy application", func() {
 		Expect(spec.GetNetworkAttachments()[1]).NotTo(BeIdenticalTo(attachment))
 		Expect(spec.GetAutoExternalIpAttachment()).To(BeFalse())
 		Expect(spec.GetInstanceType()).NotTo(BeIdenticalTo(instanceType))
+		Expect(spec.GetInstanceType().GetName()).To(Equal(instanceType.GetName()))
+		Expect(spec.GetInstanceType().GetShared()).To(BeTrue())
 		Expect(spec.GetDiskImage()).NotTo(BeIdenticalTo(diskImage))
 
 		spec.GetNetworkAttachments()[1].GetSubnet().SetName("changed")

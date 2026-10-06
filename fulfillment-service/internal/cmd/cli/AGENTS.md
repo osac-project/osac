@@ -1,14 +1,9 @@
 # OSAC CLI
 
 This directory is part of the fulfillment-service component, not an isolated
-project. Read [`../../../../AGENTS.md`](../../../../AGENTS.md),
-[`../../../AGENTS.md`](../../../AGENTS.md), and
-[`.claude/rules/cli-ux.md`](.claude/rules/cli-ux.md).
-
-The CLI is tenant-facing, not a Kubernetes administration interface. Users
-must not need Kubernetes knowledge. Follow kubectl conventions by default;
-consult comparable cloud CLIs when kubectl has no equivalent. Keep commands
-non-interactive and scriptable.
+project. Read [`../../../../AGENTS.md`](../../../../AGENTS.md) and
+[`../../../AGENTS.md`](../../../AGENTS.md). When designing or changing commands,
+read the [CLI UX guidelines](CLI_UX.md).
 
 - Write command and flag help using Markdown.
 - Use `{{ bt }}` for inline code and `{{ bt 3 }}` for fenced code blocks.

@@ -227,3 +227,4 @@ export enum NATGatewayState {
  */
 export const NATGatewayStateSchema: GenEnum<NATGatewayState> = /*@__PURE__*/
   enumDesc(file_osac_public_v1_nat_gateway_type, 0);
+

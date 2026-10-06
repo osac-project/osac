@@ -302,3 +302,4 @@ export type ClusterTemplateReference = Message<"osac.public.v1.ClusterTemplateRe
  */
 export const ClusterTemplateReferenceSchema: GenMessage<ClusterTemplateReference> = /*@__PURE__*/
   messageDesc(file_osac_public_v1_cluster_template_type, 4);
+

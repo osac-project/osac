@@ -47,6 +47,39 @@ describe('InputField', () => {
     expect(input).not.toHaveAttribute('step');
   });
 
+  it('forwards inputMode to the input', () => {
+    renderInput({ inputMode: 'numeric' });
+
+    expect(screen.getByRole('spinbutton', { name: 'Size (GiB)' })).toHaveAttribute(
+      'inputmode',
+      'numeric',
+    );
+  });
+
+  it('provides PatternFly number controls that update the field', async () => {
+    const user = userEvent.setup();
+
+    renderInput();
+
+    await user.click(screen.getByRole('button', { name: 'Plus' }));
+    expect(screen.getByRole('spinbutton', { name: 'Size (GiB)' })).toHaveValue(31);
+
+    await user.click(screen.getByRole('button', { name: 'Minus' }));
+    expect(screen.getByRole('spinbutton', { name: 'Size (GiB)' })).toHaveValue(30);
+  });
+
+  it('keeps an empty number field empty when it loses focus', async () => {
+    const user = userEvent.setup();
+
+    renderInput({}, { sizeGib: '' });
+
+    const input = screen.getByRole('spinbutton', { name: 'Size (GiB)' });
+    await user.click(input);
+    await user.tab();
+
+    expect(input).toHaveValue(null);
+  });
+
   it('trims free-text values on blur', async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();

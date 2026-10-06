@@ -47,6 +47,7 @@ var _ = Describe("User data secret validation", func() {
 		name := fmt.Sprintf("userdata-%s", uuid.NewString()[:8])
 		response, err := secretsDao.Create().SetObject(privatev1.Secret_builder{
 			Metadata: privatev1.Metadata_builder{Name: name, Tenant: testTenant}.Build(),
+			Type:     privatev1.SecretType_SECRET_TYPE_USER_DATA,
 			Data:     data,
 		}.Build()).Do(ctx)
 		Expect(err).ToNot(HaveOccurred())
@@ -64,6 +65,21 @@ var _ = Describe("User data secret validation", func() {
 			Expect(resolved.GetId()).To(Equal(secret.GetId()))
 			Expect(resolved.GetName()).To(Equal(secret.GetMetadata().GetName()))
 		}
+	})
+
+	It("rejects a Secret that is not explicitly typed as user data", func() {
+		name := fmt.Sprintf("opaque-%s", uuid.NewString()[:8])
+		created, err := secretsDao.Create().SetObject(privatev1.Secret_builder{
+			Metadata: privatev1.Metadata_builder{Name: name, Tenant: testTenant}.Build(),
+			Type:     privatev1.SecretType_SECRET_TYPE_OPAQUE,
+			Data:     map[string][]byte{userDataSecretDataKey: []byte("#cloud-config")},
+		}.Build()).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+
+		_, err = validateUserDataSecret(ctx, logger, secretsDao, nil,
+			privatev1.SecretLocalReference_builder{Id: created.GetObject().GetId()}.Build())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		Expect(err.Error()).To(ContainSubstring("expected SECRET_TYPE_USER_DATA"))
 	})
 
 	It("rejects a Secret without a non-empty userdata entry", func() {
@@ -96,6 +112,7 @@ var _ = Describe("User data secret validation", func() {
 		name := fmt.Sprintf("shared-userdata-%s", uuid.NewString()[:8])
 		created, err := secretsDao.Create().SetObject(privatev1.Secret_builder{
 			Metadata: privatev1.Metadata_builder{Name: name, Tenant: auth.SharedTenant}.Build(),
+			Type:     privatev1.SecretType_SECRET_TYPE_USER_DATA,
 			Data:     map[string][]byte{userDataSecretDataKey: []byte("#cloud-config")},
 		}.Build()).Do(ctx)
 		Expect(err).ToNot(HaveOccurred())
@@ -127,6 +144,7 @@ var _ = Describe("User data secret validation", func() {
 				Name:   fmt.Sprintf("other-userdata-%s", uuid.NewString()[:8]),
 				Tenant: otherTenant,
 			}.Build(),
+			Type: privatev1.SecretType_SECRET_TYPE_USER_DATA,
 			Data: map[string][]byte{userDataSecretDataKey: []byte("#cloud-config")},
 		}.Build()).Do(ctx)
 		Expect(err).ToNot(HaveOccurred())
@@ -157,6 +175,7 @@ var _ = Describe("User data secret validation", func() {
 				Tenant: testTenant,
 			}.Build(),
 			Backend: privatev1.SecretBackend_SECRET_BACKEND_VAULT,
+			Type:    privatev1.SecretType_SECRET_TYPE_USER_DATA,
 		}.Build()).Do(ctx)
 		Expect(err).ToNot(HaveOccurred())
 

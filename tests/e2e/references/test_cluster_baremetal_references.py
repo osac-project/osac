@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import pytest
 
+from tests.e2e.core.caas_versions import ensure_caas_disk_image_version
 from tests.e2e.core.grpc_client import PRIVATE_API, PUBLIC_API, GRPCClient
 from tests.e2e.core.helpers import assert_grpc_field_violation
 from tests.e2e.core.runner import env
@@ -25,7 +26,7 @@ _TEST_SSH_PUBLIC_KEY = (
 )
 
 
-def _create_cluster_or_skip(grpc: GRPCClient, *, catalog_item: str, name: str, version: str) -> str:
+def _create_cluster_or_skip(grpc: GRPCClient, *, catalog_item: str, name: str, version: str, hardware_type: str) -> str:
     try:
         response = grpc.call(
             service=f"{PUBLIC_API}.Clusters/Create",
@@ -35,6 +36,7 @@ def _create_cluster_or_skip(grpc: GRPCClient, *, catalog_item: str, name: str, v
                     "spec": {
                         "catalog_item": {"name": catalog_item, "shared": True},
                         "version": {"name": version, "shared": True},
+                        "node_sets": {"workers": {"size": 1, "baremetal_instance_type": {"name": hardware_type}}},
                     },
                 }
             },
@@ -70,38 +72,21 @@ def cluster_template(private_grpc: GRPCClient) -> str:
 
 
 @pytest.fixture(scope="module")
-def cluster_version(grpc: GRPCClient, private_grpc: GRPCClient) -> Generator[str, None, None]:
-    configured = env("OSAC_CLUSTER_VERSION", "")
-    if configured:
-        yield configured
-        return
-    response: dict[str, Any] = grpc.call(service=f"{PUBLIC_API}.ClusterVersions/List")
-    items = response.get("items", [])
-    if items:
-        yield items[0]["metadata"]["name"]
-        return
-    tag = uuid4().hex[:8]
-    name = f"ref-cv-{tag}"
-    cv_response: dict[str, Any] = private_grpc.call(
-        service=f"{PRIVATE_API}.ClusterVersions/Create",
-        data={
-            "object": {
-                "metadata": {"name": name},
-                "spec": {
-                    "version": f"4.17.{int(tag, 16) % 10000}",
-                    "image": "quay.io/openshift-release-dev/ocp-release:4.17.0-multi",
-                },
-            }
-        },
-    )
-    cv_id = cv_response["object"]["id"]
+def cluster_version(private_grpc: GRPCClient) -> str:
+    return ensure_caas_disk_image_version(private_grpc)
+
+
+@pytest.fixture(scope="module")
+def shared_cluster_bmit(private_grpc: GRPCClient) -> Generator[str, None, None]:
+    name = f"ref-worker-{uuid4().hex[:8]}"
+    bmi_type_id = private_grpc.ensure_bare_metal_instance_type(name=name, tenant="shared")
     try:
         yield name
     finally:
         try:
-            private_grpc.call(service=f"{PRIVATE_API}.ClusterVersions/Delete", data={"id": cv_id})
+            private_grpc.call(service=f"{PRIVATE_API}.BareMetalInstanceTypes/Delete", data={"id": bmi_type_id})
         except subprocess.CalledProcessError:
-            logger.warning("Failed to cleanup ClusterVersion %s", cv_id)
+            logger.warning("Failed to cleanup shared BMIT %s", bmi_type_id)
 
 
 @pytest.fixture(scope="module")
@@ -134,7 +119,12 @@ class TestClusterBareMetalReferences:
 
     @pytest.mark.requires_caas
     def test_cluster_provisioning_chain_by_name(
-        self, private_grpc: GRPCClient, grpc: GRPCClient, cluster_template: str, cluster_version: str
+        self,
+        private_grpc: GRPCClient,
+        grpc: GRPCClient,
+        cluster_template: str,
+        cluster_version: str,
+        shared_cluster_bmit: str,
     ):
         tag = uuid4().hex[:8]
         cat_name = f"ref-cl-cat-{tag}"
@@ -148,7 +138,11 @@ class TestClusterBareMetalReferences:
             assert tmpl_ref.get("id"), "template.id should be auto-populated in catalog item"
 
             cluster_id = _create_cluster_or_skip(
-                grpc, catalog_item=cat_name, name=f"ref-cl-{tag}", version=cluster_version
+                grpc,
+                catalog_item=cat_name,
+                name=f"ref-cl-{tag}",
+                version=cluster_version,
+                hardware_type=shared_cluster_bmit,
             )
             cluster = grpc.get_cluster(cluster_id=cluster_id)
             spec = cluster["object"]["spec"]
@@ -216,7 +210,12 @@ class TestClusterBareMetalReferences:
 
     @pytest.mark.requires_caas
     def test_cross_tenant_cluster_template_reference(
-        self, private_grpc: GRPCClient, jwt_grpc_tenant1: GRPCClient, cluster_template: str, cluster_version: str
+        self,
+        private_grpc: GRPCClient,
+        jwt_grpc_tenant1: GRPCClient,
+        cluster_template: str,
+        cluster_version: str,
+        shared_cluster_bmit: str,
     ):
         tag = uuid4().hex[:8]
         cat_name = f"ref-xt-cl-cat-{tag}"
@@ -225,7 +224,11 @@ class TestClusterBareMetalReferences:
         cluster_id: str | None = None
         try:
             cluster_id = _create_cluster_or_skip(
-                jwt_grpc_tenant1, catalog_item=cat_name, name=f"ref-xt-cl-{tag}", version=cluster_version
+                jwt_grpc_tenant1,
+                catalog_item=cat_name,
+                name=f"ref-xt-cl-{tag}",
+                version=cluster_version,
+                hardware_type=shared_cluster_bmit,
             )
             cluster = jwt_grpc_tenant1.get_cluster(cluster_id=cluster_id)
             spec = cluster["object"]["spec"]
@@ -242,6 +245,48 @@ class TestClusterBareMetalReferences:
                 private_grpc.delete_cluster_catalog_item(catalog_item_id=cat_id, api=PRIVATE_API)
             except subprocess.CalledProcessError:
                 logger.warning("Failed to cleanup cross-tenant catalog item %s", cat_id)
+
+    @pytest.mark.requires_caas
+    def test_non_shared_hardware_type_creation_is_rejected(self, private_grpc: GRPCClient):
+        bmit_id: str | None = None
+        try:
+            with pytest.raises(subprocess.CalledProcessError) as exc_info:
+                bmit_id = private_grpc.create_bare_metal_instance_type(
+                    name=f"ref-tenant2-worker-{uuid4().hex[:8]}", tenant="tenant2"
+                )
+            assert_grpc_field_violation(exc_info, field_path="metadata.tenant")
+        finally:
+            if bmit_id:
+                private_grpc.call(service=f"{PRIVATE_API}.BareMetalInstanceTypes/Delete", data={"id": bmit_id})
+
+    @pytest.mark.requires_caas
+    def test_unknown_shared_hardware_type_is_not_selectable_for_caas(
+        self, jwt_grpc_tenant1: GRPCClient, cluster_template: str, cluster_version: str
+    ):
+        tag = uuid4().hex[:8]
+        type_name = f"ref-missing-worker-{tag}"
+        cluster_id: str | None = None
+        try:
+            # A direct tenant request must resolve hardware in shared; a missing type is invalid.
+            with pytest.raises(subprocess.CalledProcessError) as exc_info:
+                response = jwt_grpc_tenant1.call(
+                    service=f"{PUBLIC_API}.Clusters/Create",
+                    data={
+                        "object": {
+                            "metadata": {"name": f"ref-tenant2-cl-{tag}"},
+                            "spec": {
+                                "template": {"name": cluster_template, "shared": True},
+                                "version": {"name": cluster_version, "shared": True},
+                                "node_sets": {"workers": {"size": 1, "baremetal_instance_type": {"name": type_name}}},
+                            },
+                        }
+                    },
+                )
+                cluster_id = response["object"]["id"]
+            assert_grpc_field_violation(exc_info, field_path="node_sets.workers.baremetal_instance_type")
+        finally:
+            if cluster_id:
+                jwt_grpc_tenant1.call(service=f"{PUBLIC_API}.Clusters/Delete", data={"id": cluster_id})
 
     @pytest.mark.requires_caas
     def test_invalid_cluster_template_name_returns_error(self, private_grpc: GRPCClient):

@@ -1,11 +1,8 @@
-import { useNavigate } from 'react-router-dom';
 import {
-  Button,
   Card,
   CardBody,
   CardHeader,
   CardTitle,
-  Content,
   Divider,
   Flex,
   FlexItem,
@@ -13,17 +10,20 @@ import {
   Stack,
   StackItem,
 } from '@patternfly/react-core';
-import RocketIcon from '@patternfly/react-icons/dist/esm/icons/rocket-icon';
 
-import { CatalogItem, getCatalogCreateAction } from './catalogItemDisplay';
+import CatalogItemCardFooter from '@osac/ui-components/components/catalog/CatalogItemCardFooter';
+import type { CatalogItemResourceLookups } from '@osac/ui-components/components/catalog/catalogItemResourceLookups';
+import CatalogItemResources from '@osac/ui-components/components/catalog/CatalogItemResources';
+import ResourceNameField from '@osac/ui-components/components/Resource/ResourceNameField';
+import { useSession } from '@osac/ui-components/hooks/use-session';
+
+import CatalogItemActionsMenu from './CatalogItemActionsMenu';
+import { CatalogItem, catalogItemDetailsPath } from './catalogItemDisplay';
 import { catalogItemTypeBadgeLabel } from './catalogItemDisplay';
-import {
-  catalogItemMetadataLabelEntries,
-  catalogItemResourceParts,
-  catalogItemSubtitle,
-} from './catalogItemDisplay';
 import { useTranslation } from '../../hooks/useTranslation';
 import { CatalogItemIcon } from '../../icons';
+
+import './CatalogItemCard.css';
 
 export interface CatalogItemCardSelection {
   selected: boolean;
@@ -33,37 +33,46 @@ export interface CatalogItemCardSelection {
 interface CatalogItemCardProps {
   item: CatalogItem;
   selection?: CatalogItemCardSelection;
-  onOpenDetails?: () => void;
+  resourceLookups: CatalogItemResourceLookups;
 }
 
-const CatalogItemCard = ({ item, selection, onOpenDetails }: CatalogItemCardProps) => {
+const CatalogItemCard = ({ item, selection, resourceLookups }: CatalogItemCardProps) => {
   const { t } = useTranslation();
-  const navigate = useNavigate();
-  const resources = catalogItemResourceParts(item);
-  const metadataLabels = catalogItemMetadataLabelEntries(item);
-  const subtitle = catalogItemSubtitle(item);
-  const isBrowseMode = Boolean(onOpenDetails && !selection);
+  const { role } = useSession();
   const isWizardMode = Boolean(selection);
   const cardId = `catalog-item-card-${item.id}`;
   const titleId = `${cardId}-title`;
-
-  const createAction = getCatalogCreateAction(item, t);
 
   return (
     <Card
       id={cardId}
       ouiaId={`catalog-item-option-${item.id}`}
       isSelectable={isWizardMode}
-      isClickable={isBrowseMode}
       isSelected={selection?.selected}
       isFullHeight
+      isDisabled={!item.published}
     >
       <CardHeader
+        className="catalog-item-card-header"
         actions={{
           actions: !isWizardMode ? (
-            <Label color="blue" isCompact>
-              {catalogItemTypeBadgeLabel(item, t)}
-            </Label>
+            <Flex flexWrap={{ default: 'nowrap' }} spaceItems={{ default: 'spaceItemsSm' }}>
+              <FlexItem>
+                <Label color="blue">{catalogItemTypeBadgeLabel(item, t)}</Label>
+              </FlexItem>
+              <FlexItem>
+                {item.published ? (
+                  <Label color="green">{t('Live')}</Label>
+                ) : (
+                  <Label>{t('Unpublished')}</Label>
+                )}
+              </FlexItem>
+              {!isWizardMode ? (
+                <FlexItem>
+                  <CatalogItemActionsMenu item={item} role={role} />
+                </FlexItem>
+              ) : null}
+            </Flex>
           ) : null,
         }}
         selectableActions={
@@ -72,89 +81,33 @@ const CatalogItemCard = ({ item, selection, onOpenDetails }: CatalogItemCardProp
                 variant: 'single',
                 name: 'selectedCatalogItem',
                 selectableActionId: `selectedCatalogItem-${item.id}`,
-                selectableActionAriaLabel: item.title,
+                selectableActionAriaLabel: item.metadata?.name,
                 hasNoOffset: true,
                 onChange: () => {
                   selection.onSelect();
                 },
               }
-            : isBrowseMode
-              ? {
-                  selectableActionAriaLabel: t('Open catalog item details for {{title}}', {
-                    title: item.title,
-                  }),
-                  onClickAction: () => {
-                    onOpenDetails?.();
-                  },
-                }
-              : undefined
+            : undefined
         }
       >
-        <Flex alignItems={{ default: 'alignItemsFlexStart' }} gap={{ default: 'gapSm' }}>
-          <FlexItem>
-            <CatalogItemIcon kind={item.$typeName} />
-          </FlexItem>
-          <FlexItem flex={{ default: 'flex_1' }}>
-            <CardTitle id={titleId}>{item.title}</CardTitle>
-          </FlexItem>
-        </Flex>
+        <CatalogItemIcon kind={item.$typeName} />
       </CardHeader>
+      <CardTitle id={titleId}>
+        <ResourceNameField
+          resource={item}
+          detailsUrl={isWizardMode ? undefined : catalogItemDetailsPath(item)}
+        />
+      </CardTitle>
       <Divider />
       <CardBody>
         <Stack hasGutter>
           <StackItem>
-            <Content component="small" className="pf-v6-u-color-text-subtle">
-              {subtitle}
-            </Content>
+            <CatalogItemResources catalogItem={item} resourceLookups={resourceLookups} />
           </StackItem>
-          {resources.length > 0 ? (
-            <StackItem>
-              <Flex flexWrap={{ default: 'wrap' }} gap={{ default: 'gapSm' }}>
-                {resources.map((resource, index) => (
-                  <FlexItem key={`${item.id}-resource-${index}`}>
-                    <Label variant="outline" color="blue" isCompact>
-                      {resource}
-                    </Label>
-                  </FlexItem>
-                ))}
-              </Flex>
-            </StackItem>
-          ) : null}
-          <StackItem>
-            <Divider />
-          </StackItem>
-          {metadataLabels.length > 0 ? (
-            <StackItem>
-              <Flex flexWrap={{ default: 'wrap' }} gap={{ default: 'gapSm' }}>
-                {metadataLabels.map(({ key, value }) => (
-                  <FlexItem key={`${item.id}-label-${key}`}>
-                    <Label variant="outline" color="grey" isCompact>
-                      <b>{key}</b>
-                      {': '}
-                      {value}
-                    </Label>
-                  </FlexItem>
-                ))}
-              </Flex>
-            </StackItem>
-          ) : null}
-          {!isWizardMode && (
-            <StackItem>
-              <Button
-                variant="primary"
-                isBlock
-                icon={<RocketIcon />}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  navigate(createAction.path);
-                }}
-              >
-                {createAction.label}
-              </Button>
-            </StackItem>
-          )}
         </Stack>
       </CardBody>
+      <Divider />
+      <CatalogItemCardFooter catalogItem={item} role={role} isWizardMode={isWizardMode} />
     </Card>
   );
 };

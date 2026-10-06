@@ -26,13 +26,11 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 type PrivateBareMetalInstanceTypesServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -54,11 +52,6 @@ func NewPrivateBareMetalInstanceTypesServer() *PrivateBareMetalInstanceTypesServ
 
 func (b *PrivateBareMetalInstanceTypesServerBuilder) SetLogger(value *slog.Logger) *PrivateBareMetalInstanceTypesServerBuilder {
 	b.logger = value
-	return b
-}
-
-func (b *PrivateBareMetalInstanceTypesServerBuilder) SetNotifier(value events.Notifier) *PrivateBareMetalInstanceTypesServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -101,12 +94,11 @@ func (b *PrivateBareMetalInstanceTypesServerBuilder) Build() (result *PrivateBar
 	generic, err := NewGenericServer[*privatev1.BareMetalInstanceType]().
 		SetLogger(b.logger).
 		SetService(privatev1.BareMetalInstanceTypes_ServiceDesc.ServiceName).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
 		SetFilterDesc(b.filterDesc).
-		AddAllowedTenants(auth.SharedTenant).
+		SetAllowedTenants(auth.SharedTenant).
 		Build()
 	if err != nil {
 		return
@@ -134,7 +126,29 @@ func (s *PrivateBareMetalInstanceTypesServer) Get(ctx context.Context,
 
 func (s *PrivateBareMetalInstanceTypesServer) Create(ctx context.Context,
 	request *privatev1.BareMetalInstanceTypesCreateRequest) (response *privatev1.BareMetalInstanceTypesCreateResponse, err error) {
-	request.GetObject().SetId(request.GetObject().GetMetadata().GetName())
+	if tenant := request.GetObject().GetMetadata().GetTenant(); tenant != "" && tenant != auth.SharedTenant {
+		err = grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'metadata.tenant' must be '%s' or empty for bare metal instance types",
+			auth.SharedTenant)
+		return
+	}
+	if project := request.GetObject().GetMetadata().GetProject(); project != "" {
+		err = grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'metadata.project' must be empty for bare metal instance types")
+		return
+	}
+	// BareMetalInstanceType is platform-scoped and always lives in the shared tenant. The generic
+	// layer does not default to shared on its own: an omitted tenant falls back to the caller's
+	// default tenant, which the allowed-tenants check then rejects. Force it to shared here, the same
+	// way PrivateStorageTiersServer does for its platform-scoped objects. Any explicit non-shared
+	// tenant was already rejected above.
+	metadata := request.GetObject().GetMetadata()
+	if metadata == nil {
+		metadata = &privatev1.Metadata{}
+		request.GetObject().SetMetadata(metadata)
+	}
+	metadata.SetTenant(auth.SharedTenant)
+	request.GetObject().SetId(metadata.GetName())
 	err = s.generic.Create(ctx, request, &response)
 	return
 }
@@ -169,8 +183,14 @@ func (s *PrivateBareMetalInstanceTypesServer) Update(ctx context.Context,
 		return
 	}
 
-	// Set the merged spec back into the request for the generic update:
-	request.GetObject().SetSpec(merged.GetSpec())
+	// Set the merged object back into the request for the generic update. Feeding the merged
+	// metadata (rather than the caller's partial metadata) lets the generic update preserve
+	// unspecified fields and lets the database check_immutable_columns trigger reject changes to
+	// immutable columns such as tenant and project. Preserve the caller's version for the
+	// optimistic concurrency check.
+	clientVersion := request.GetObject().GetMetadata().GetVersion()
+	request.SetObject(merged)
+	request.GetObject().GetMetadata().SetVersion(clientVersion)
 
 	err = s.generic.Update(ctx, request, &response)
 	return
@@ -219,6 +239,9 @@ func applyBareMetalInstanceTypeUpdate(base, update *privatev1.BareMetalInstanceT
 // validateBareMetalInstanceTypeImmutability checks that immutable fields have not been changed.
 // Core hardware specifications (CPU cores, memory total_gb) are immutable after creation
 // following the same pattern as PrivateInstanceTypesServer for consistency.
+//
+// Immutability of metadata.tenant and metadata.project is enforced at the database level by the
+// check_immutable_columns trigger, so they are not re-checked here.
 func validateBareMetalInstanceTypeImmutability(merged, existing *privatev1.BareMetalInstanceType) error {
 	// Validate immutable metadata fields:
 	if merged.GetMetadata().GetName() != existing.GetMetadata().GetName() {

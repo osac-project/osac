@@ -16,6 +16,7 @@ syntax = "proto3";
 package osac.private.v1;
 
 import "cleanapi/cleanapi.proto";
+import "buf/validate/validate.proto";
 import "google/api/field_behavior.proto";
 import "osac/private/v1/metadata_type.proto";
 import "osac/private/v1/virtual_network_type.proto";
@@ -29,10 +30,8 @@ option (cleanapi.file).package = "osac.public.v1";
 // VirtualNetwork and Subnet (one subnet per network), but the schema is designed to support multiple subnets per
 // VirtualNetwork in the future.
 //
-// Subnets support flexible IP addressing to match the parent VirtualNetwork's capabilities:
-// - IPv4-only: Set ipv4_cidr, leave ipv6_cidr empty
-// - IPv6-only: Set ipv6_cidr, leave ipv4_cidr empty
-// - Dual-stack: Set both ipv4_cidr and ipv6_cidr
+// Subnets currently support canonical IPv4 addressing only. The legacy ipv6_cidr field remains in the wire
+// contract for compatibility, but non-empty IPv6 and dual-stack requests are rejected.
 //
 // The parent VirtualNetwork relationship should be specified via metadata.annotations using the 'osac.openshift.io/owner-reference'
 // key with the VirtualNetwork ID as the value. This establishes resource hierarchy for garbage collection, ensuring
@@ -78,25 +77,35 @@ message SubnetSpec {
     (google.api.field_behavior) = IMMUTABLE
   ];
 
-  // IPv4 CIDR block for this subnet. Optional for IPv6-only subnets. Immutable after creation.
+  // Canonical IPv4 CIDR block for this subnet. Required and immutable after creation.
   //
-  // Must be valid CIDR notation and a subset of the parent VirtualNetwork.spec.ipv4_cidr. Validation enforced
+  // Must be canonical IPv4 CIDR notation with no host bits set and a subset of the parent
+  // VirtualNetwork.spec.ipv4_cidr. Validation enforced
   // at service layer. The CIDR block must not overlap with other Subnets within the same VirtualNetwork.
   //
   // Example: "10.0.1.0/24", "192.168.100.0/24"
   //
-  // Leave empty for IPv6-only subnets.
-  optional string ipv4_cidr = 2 [(google.api.field_behavior) = IMMUTABLE];
+  optional string ipv4_cidr = 2 [
+    (google.api.field_behavior) = IMMUTABLE,
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "canonical_ipv4_cidr"
+      message: "must be a canonical IPv4 CIDR"
+      expression: "this.isIpPrefix(4, true)"
+    }
+  ];
 
-  // IPv6 CIDR block for this subnet. Optional for IPv4-only subnets. Immutable after creation.
+  // Legacy IPv6 CIDR field. IPv6 and dual-stack networking are not supported; non-empty values are rejected.
   //
-  // Must be valid CIDR notation and a subset of the parent VirtualNetwork.spec.ipv6_cidr. Validation enforced
-  // at service layer. The CIDR block must not overlap with other Subnets within the same VirtualNetwork.
-  //
-  // Example: "2001:db8::/64", "fd00:1234::/64"
-  //
-  // Leave empty for IPv4-only subnets.
-  optional string ipv6_cidr = 3 [(google.api.field_behavior) = IMMUTABLE];
+  optional string ipv6_cidr = 3 [
+    (google.api.field_behavior) = IMMUTABLE,
+    (buf.validate.field).cel = {
+      id: "ipv6_cidr_not_supported"
+      message: "IPv6 and dual-stack networking are not supported"
+      expression: "this == ''"
+    }
+  ];
 }
 
 // Represents the current operational state of a Subnet.

@@ -23,14 +23,12 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 type ExternalIPAttachmentsServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -53,11 +51,6 @@ func NewExternalIPAttachmentsServer() *ExternalIPAttachmentsServerBuilder {
 
 func (b *ExternalIPAttachmentsServerBuilder) SetLogger(value *slog.Logger) *ExternalIPAttachmentsServerBuilder {
 	b.logger = value
-	return b
-}
-
-func (b *ExternalIPAttachmentsServerBuilder) SetNotifier(value events.Notifier) *ExternalIPAttachmentsServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -107,7 +100,6 @@ func (b *ExternalIPAttachmentsServerBuilder) Build() (result *ExternalIPAttachme
 
 	delegate, err := NewPrivateExternalIPAttachmentsServer().
 		SetLogger(b.logger).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
@@ -232,52 +224,6 @@ func (s *ExternalIPAttachmentsServer) Create(ctx context.Context,
 
 	response := &publicv1.ExternalIPAttachmentsCreateResponse{}
 	response.SetObject(createdPublicAttachment)
-	return response, nil
-}
-
-func (s *ExternalIPAttachmentsServer) Update(ctx context.Context,
-	request *publicv1.ExternalIPAttachmentsUpdateRequest) (*publicv1.ExternalIPAttachmentsUpdateResponse, error) {
-	publicAttachment := request.GetObject()
-	if publicAttachment == nil {
-		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "object is mandatory")
-	}
-	if err := validatePublicMetadataUpdateMask(request.GetUpdateMask()); err != nil {
-		return nil, err
-	}
-	privateAttachment := &privatev1.ExternalIPAttachment{}
-	err := s.inMapper.Copy(ctx, publicAttachment, privateAttachment)
-	if err != nil {
-		s.logger.ErrorContext(
-			ctx,
-			"Failed to map public external IP attachment to private",
-			slog.Any("error", err),
-		)
-		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process external IP attachment")
-	}
-
-	privateRequest := &privatev1.ExternalIPAttachmentsUpdateRequest{}
-	privateRequest.SetObject(privateAttachment)
-	privateRequest.SetUpdateMask(request.GetUpdateMask())
-	privateRequest.SetLock(request.GetLock())
-	privateResponse, err := s.delegate.Update(ctx, privateRequest)
-	if err != nil {
-		return nil, err
-	}
-
-	updatedPrivateAttachment := privateResponse.GetObject()
-	updatedPublicAttachment := &publicv1.ExternalIPAttachment{}
-	err = s.outMapper.Copy(ctx, updatedPrivateAttachment, updatedPublicAttachment)
-	if err != nil {
-		s.logger.ErrorContext(
-			ctx,
-			"Failed to map private external IP attachment to public",
-			slog.Any("error", err),
-		)
-		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process external IP attachment")
-	}
-
-	response := &publicv1.ExternalIPAttachmentsUpdateResponse{}
-	response.SetObject(updatedPublicAttachment)
 	return response, nil
 }
 

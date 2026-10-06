@@ -121,3 +121,19 @@
               deviceName: "{{ compute_instance.spec.gpu.resourceName }}"
   loop: "{{ range(compute_instance.spec.gpu.count | int) | list }}"
   when: compute_instance.spec.gpu is defined
+
+# Large GPU PCI BARs need UEFI (OVMF) to map; SeaBIOS hangs at boot. Windows
+# already sets EFI above, so scope to Linux.
+- name: Boot Linux GPU VMs with UEFI
+  ansible.builtin.set_fact:
+    vm_template_spec: "{{ vm_template_spec | combine(efi_patch, recursive=True) }}"
+  vars:
+    efi_patch:
+      domain:
+        firmware:
+          bootloader:
+            efi:
+              secureBoot: false
+  when:
+    - compute_instance.spec.gpu is defined
+    - guest_os_family != 'windows'

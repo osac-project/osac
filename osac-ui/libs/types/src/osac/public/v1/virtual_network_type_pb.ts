@@ -17,6 +17,7 @@
 
 import type { GenEnum, GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import { enumDesc, fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
+import { file_buf_validate_validate } from "../../../buf/validate/validate_pb";
 import { file_google_api_field_behavior } from "../../../google/api/field_behavior_pb";
 import type { Metadata } from "./metadata_type_pb";
 import { file_osac_public_v1_metadata_type } from "./metadata_type_pb";
@@ -26,7 +27,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/public/v1/virtual_network_type.proto.
  */
 export const file_osac_public_v1_virtual_network_type: GenFile = /*@__PURE__*/
-  fileDesc("Cilvc2FjL3B1YmxpYy92MS92aXJ0dWFsX25ldHdvcmtfdHlwZS5wcm90bxIOb3NhYy5wdWJsaWMudjEisAEKDlZpcnR1YWxOZXR3b3JrEgoKAmlkGAEgASgJEioKCG1ldGFkYXRhGAIgASgLMhgub3NhYy5wdWJsaWMudjEuTWV0YWRhdGESMAoEc3BlYxgDIAEoCzIiLm9zYWMucHVibGljLnYxLlZpcnR1YWxOZXR3b3JrU3BlYxI0CgZzdGF0dXMYBCABKAsyJC5vc2FjLnB1YmxpYy52MS5WaXJ0dWFsTmV0d29ya1N0YXR1cyJqChJWaXJ0dWFsTmV0d29ya1NwZWMSGwoJaXB2NF9jaWRyGAEgASgJQgPgQQVIAIgBARIbCglpcHY2X2NpZHIYAiABKAlCA+BBBUgBiAEBQgwKCl9pcHY0X2NpZHJCDAoKX2lwdjZfY2lkciJsChRWaXJ0dWFsTmV0d29ya1N0YXR1cxIyCgVzdGF0ZRgBIAEoDjIjLm9zYWMucHVibGljLnYxLlZpcnR1YWxOZXR3b3JrU3RhdGUSFAoHbWVzc2FnZRgCIAEoCUgAiAEBQgoKCF9tZXNzYWdlIjgKHFZpcnR1YWxOZXR3b3JrTG9jYWxSZWZlcmVuY2USCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCSqiAQoTVmlydHVhbE5ldHdvcmtTdGF0ZRIlCiFWSVJUVUFMX05FVFdPUktfU1RBVEVfVU5TUEVDSUZJRUQQABIhCh1WSVJUVUFMX05FVFdPUktfU1RBVEVfUEVORElORxABEh8KG1ZJUlRVQUxfTkVUV09SS19TVEFURV9SRUFEWRACEiAKHFZJUlRVQUxfTkVUV09SS19TVEFURV9GQUlMRUQQA2IGcHJvdG8z", [file_google_api_field_behavior, file_osac_public_v1_metadata_type]);
+  fileDesc("Cilvc2FjL3B1YmxpYy92MS92aXJ0dWFsX25ldHdvcmtfdHlwZS5wcm90bxIOb3NhYy5wdWJsaWMudjEisAEKDlZpcnR1YWxOZXR3b3JrEgoKAmlkGAEgASgJEioKCG1ldGFkYXRhGAIgASgLMhgub3NhYy5wdWJsaWMudjEuTWV0YWRhdGESMAoEc3BlYxgDIAEoCzIiLm9zYWMucHVibGljLnYxLlZpcnR1YWxOZXR3b3JrU3BlYxI0CgZzdGF0dXMYBCABKAsyJC5vc2FjLnB1YmxpYy52MS5WaXJ0dWFsTmV0d29ya1N0YXR1cyKiAgoSVmlydHVhbE5ldHdvcmtTcGVjEnYKCWlwdjRfY2lkchgBIAEoCUJe4EEFukhYugFOChNjYW5vbmljYWxfaXB2NF9jaWRyEh1tdXN0IGJlIGEgY2Fub25pY2FsIElQdjQgQ0lEUhoYdGhpcy5pc0lwUHJlZml4KDQsIHRydWUpyAEBcgIQAUgAiAEBEngKCWlwdjZfY2lkchgCIAEoCUJg4EEFukhaugFXChdpcHY2X2NpZHJfbm90X3N1cHBvcnRlZBIwSVB2NiBhbmQgZHVhbC1zdGFjayBuZXR3b3JraW5nIGFyZSBub3Qgc3VwcG9ydGVkGgp0aGlzID09ICcnSAGIAQFCDAoKX2lwdjRfY2lkckIMCgpfaXB2Nl9jaWRyImwKFFZpcnR1YWxOZXR3b3JrU3RhdHVzEjIKBXN0YXRlGAEgASgOMiMub3NhYy5wdWJsaWMudjEuVmlydHVhbE5ldHdvcmtTdGF0ZRIUCgdtZXNzYWdlGAIgASgJSACIAQFCCgoIX21lc3NhZ2UiOAocVmlydHVhbE5ldHdvcmtMb2NhbFJlZmVyZW5jZRIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJKqIBChNWaXJ0dWFsTmV0d29ya1N0YXRlEiUKIVZJUlRVQUxfTkVUV09SS19TVEFURV9VTlNQRUNJRklFRBAAEiEKHVZJUlRVQUxfTkVUV09SS19TVEFURV9QRU5ESU5HEAESHwobVklSVFVBTF9ORVRXT1JLX1NUQVRFX1JFQURZEAISIAocVklSVFVBTF9ORVRXT1JLX1NUQVRFX0ZBSUxFRBADYgZwcm90bzM", [file_buf_validate_validate, file_google_api_field_behavior, file_osac_public_v1_metadata_type]);
 
 /**
  * Represents a tenant-isolated virtual network.
@@ -35,12 +36,8 @@ export const file_osac_public_v1_virtual_network_type: GenFile = /*@__PURE__*/
  * by a specific NetworkClass implementation strategy (e.g., "udn-net" for User-Defined Networks, "phys-net" for
  * physical network infrastructure).
  *
- * VirtualNetworks support flexible IP addressing:
- * - IPv4-only: Set ipv4_cidr, leave ipv6_cidr empty
- * - IPv6-only: Set ipv6_cidr, leave ipv4_cidr empty
- * - Dual-stack: Set both ipv4_cidr and ipv6_cidr
- *
- * The selected NetworkClass must support the requested IP addressing mode via its capabilities.
+ * VirtualNetworks currently support canonical IPv4 addressing only. The legacy ipv6_cidr field remains in the
+ * wire contract for compatibility, but non-empty IPv6 and dual-stack requests are rejected.
  *
  * Tenant isolation is enforced via the standard Metadata tenant field. VirtualNetworks are scoped to
  * a single region and cannot span multiple regions.
@@ -94,28 +91,21 @@ export const VirtualNetworkSchema: GenMessage<VirtualNetwork> = /*@__PURE__*/
  */
 export type VirtualNetworkSpec = Message<"osac.public.v1.VirtualNetworkSpec"> & {
   /**
-   * IPv4 CIDR block for this network. Optional for IPv6-only networks. Immutable after creation.
+   * Canonical IPv4 CIDR block for this network. Required and immutable after creation.
    *
-   * Must be valid CIDR notation. Validation enforced at service layer.
+   * Must be canonical IPv4 CIDR notation with no host bits set.
    * The CIDR block should be appropriately sized for the expected number of compute instances.
    *
    * Example: "10.0.0.0/16", "192.168.0.0/24"
    *
-   * Leave empty when creating an IPv6-only network.
    *
    * @generated from field: optional string ipv4_cidr = 1;
    */
   ipv4Cidr?: string | undefined;
 
   /**
-   * IPv6 CIDR block for this network. Optional for IPv4-only networks. Immutable after creation.
+   * Legacy IPv6 CIDR field. IPv6 and dual-stack networking are not supported; non-empty values are rejected.
    *
-   * Must be valid CIDR notation. Validation enforced at service layer.
-   * IPv6 addresses should follow standard allocation practices for tenant networks.
-   *
-   * Example: "2001:db8::/48", "fd00::/64"
-   *
-   * Leave empty when creating an IPv4-only network.
    *
    * @generated from field: optional string ipv6_cidr = 2;
    */
@@ -259,3 +249,4 @@ export enum VirtualNetworkState {
  */
 export const VirtualNetworkStateSchema: GenEnum<VirtualNetworkState> = /*@__PURE__*/
   enumDesc(file_osac_public_v1_virtual_network_type, 0);
+

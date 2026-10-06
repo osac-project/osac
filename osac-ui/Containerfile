@@ -4,7 +4,7 @@
 #   podman run --rm -p 8080:8080 -e FULFILLMENT_API_URL=https://fulfillment.example.com osac:latest
 
 # ── Stage 1: install SPA workspace dependencies ───────────────────────────
-FROM registry.access.redhat.com/ubi9/nodejs-22-minimal:9.8-1789639077 AS deps
+FROM registry.access.redhat.com/ubi9/nodejs-22-minimal:9.8-1791224529 AS deps
 USER root
 WORKDIR /app
 
@@ -41,6 +41,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o osac-proxy .
 
 # ── Stage 4: production image ──────────────────────────────────────────────
 FROM registry.access.redhat.com/ubi9/ubi-minimal:9.5 AS production
+LABEL name="cloud-extensions/osac-ui-rhel10"
 WORKDIR /app
 
 ENV PORT=8080

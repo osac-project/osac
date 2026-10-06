@@ -27,14 +27,12 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	"github.com/osac-project/osac/fulfillment-service/internal/utils"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 type PrivateComputeInstanceCatalogItemsServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -49,6 +47,7 @@ type PrivateComputeInstanceCatalogItemsServer struct {
 	templatesDao      *dao.GenericDAO[*privatev1.ComputeInstanceTemplate]
 	instanceTypesDao  *dao.GenericDAO[*privatev1.InstanceType]
 	diskImagesDao     *dao.GenericDAO[*privatev1.DiskImage]
+	secretsDao        *dao.GenericDAO[*privatev1.Secret]
 	storageTiersDao   *dao.GenericDAO[*privatev1.StorageTier]
 	subnetsDao        *dao.GenericDAO[*privatev1.Subnet]
 	securityGroupsDao *dao.GenericDAO[*privatev1.SecurityGroup]
@@ -60,12 +59,6 @@ func NewPrivateComputeInstanceCatalogItemsServer() *PrivateComputeInstanceCatalo
 
 func (b *PrivateComputeInstanceCatalogItemsServerBuilder) SetLogger(value *slog.Logger) *PrivateComputeInstanceCatalogItemsServerBuilder {
 	b.logger = value
-	return b
-}
-
-func (b *PrivateComputeInstanceCatalogItemsServerBuilder) SetNotifier(
-	value events.Notifier) *PrivateComputeInstanceCatalogItemsServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -127,6 +120,15 @@ func (b *PrivateComputeInstanceCatalogItemsServerBuilder) Build() (result *Priva
 		return
 	}
 
+	secretsDao, err := dao.NewGenericDAO[*privatev1.Secret]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
 	storageTiersDao, err := dao.NewGenericDAO[*privatev1.StorageTier]().
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
@@ -157,7 +159,6 @@ func (b *PrivateComputeInstanceCatalogItemsServerBuilder) Build() (result *Priva
 	generic, err := NewGenericServer[*privatev1.ComputeInstanceCatalogItem]().
 		SetLogger(b.logger).
 		SetService(privatev1.ComputeInstanceCatalogItems_ServiceDesc.ServiceName).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
@@ -173,6 +174,7 @@ func (b *PrivateComputeInstanceCatalogItemsServerBuilder) Build() (result *Priva
 		templatesDao:      templatesDao,
 		instanceTypesDao:  instanceTypesDao,
 		diskImagesDao:     diskImagesDao,
+		secretsDao:        secretsDao,
 		storageTiersDao:   storageTiersDao,
 		subnetsDao:        subnetsDao,
 		securityGroupsDao: securityGroupsDao,
@@ -246,7 +248,7 @@ func (s *PrivateComputeInstanceCatalogItemsServer) prepareCatalogItemCandidate(
 		return nil, err
 	}
 	return validateAndCanonicalizeComputeInstanceCatalogItemPolicies(
-		ctx, candidate, s.instanceTypesDao, s.diskImagesDao, s.storageTiersDao, s.subnetsDao, s.securityGroupsDao,
+		ctx, candidate, s.instanceTypesDao, s.diskImagesDao, s.secretsDao, s.storageTiersDao, s.subnetsDao, s.securityGroupsDao,
 	)
 }
 

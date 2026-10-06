@@ -148,8 +148,7 @@ export type StorageBackendCredentials = Message<"osac.private.v1.StorageBackendC
    * Reference to a Secret resource containing the storage management API password.
    *
    * Mutually exclusive with `password`. When set, the system resolves the referenced Secret to obtain the
-   * password value. The referenced Secret must exist in the same tenant. The secret data must contain a
-   * `password` entry.
+   * password value. The referenced Secret must exist in the same tenant. The secret must be of type `VALUE`.
    *
    * @generated from field: osac.private.v1.SecretLocalReference password_secret = 3;
    */
@@ -217,3 +216,4 @@ export enum StorageBackendState {
  */
 export const StorageBackendStateSchema: GenEnum<StorageBackendState> = /*@__PURE__*/
   enumDesc(file_osac_private_v1_storage_backend_type, 0);
+

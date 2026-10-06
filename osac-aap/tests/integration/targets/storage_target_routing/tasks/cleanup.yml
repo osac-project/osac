@@ -1,0 +1,31 @@
+---
+- name: Clean up routing-test StorageClasses on both APIs
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Delete management StorageClass fixture
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "{{ routing_test_storage_class_name }}"
+      failed_when: false
+
+    - name: Delete workload StorageClass fixture
+      kubernetes.core.k8s:
+        kubeconfig: "{{ routing_test_kubeconfig_path }}"
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "{{ routing_test_storage_class_name }}"
+      failed_when: false
+
+    - name: Delete workload API marker namespace
+      kubernetes.core.k8s:
+        kubeconfig: "{{ routing_test_kubeconfig_path }}"
+        state: absent
+        api_version: v1
+        kind: Namespace
+        name: "{{ routing_test_marker_namespace }}"
+      failed_when: false

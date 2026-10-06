@@ -2,8 +2,10 @@ import { type ReactNode } from 'react';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { Page, SkipToContent } from '@patternfly/react-core';
 
+import { ServiceTier } from '@osac/types';
 import { CatalogItemDetailPage } from '@osac/ui-components/components/catalog/details/CatalogItemDetailPage.tsx';
 import ErrorBoundary from '@osac/ui-components/components/ErrorBoundary/ErrorBoundary';
+import ExternalIpRoutes from '@osac/ui-components/components/ExternalIp/ExternalIpRoutes';
 import { ExternalIpPoolRoutes } from '@osac/ui-components/components/ExternalIpPool/ExternalIpPoolRoutes';
 import IdentityProviderRoutes from '@osac/ui-components/components/IdentityProvider/IdentityProviderRoutes';
 import ProjectRoutes from '@osac/ui-components/components/Project/ProjectRoutes';
@@ -21,10 +23,12 @@ import { BareMetalRoutes } from '@osac/ui-components/pages/tenant/BareMetalRoute
 import CatalogPage from '@osac/ui-components/pages/tenant/CatalogPage';
 import { ClusterRoutes } from '@osac/ui-components/pages/tenant/ClusterRoutes';
 import { VmRoutes } from '@osac/ui-components/pages/tenant/VmRoutes';
+import { VolumeRoutes } from '@osac/ui-components/pages/tenant/VolumeRoutes';
 
 import { BareMetalInstanceTypeRoutes } from './BareMetalInstanceTypeRoutes';
 import { DiskImageRoutes } from './DiskImageRoutes';
 import { InstanceTypeRoutes } from './InstanceTypeRoutes';
+import { ServiceRoute } from './ServiceRoute';
 import { ShellMasthead } from './ShellMasthead';
 import { defaultRouteForRole } from './shellRoutes';
 import { ShellSidebar } from './ShellSidebar';
@@ -108,7 +112,9 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
           path="/admin/infrastructure/instance-types/*"
           element={
             <ShellRoute>
-              <InstanceTypeRoutes />
+              <ServiceRoute service={ServiceTier.VMAAS}>
+                <InstanceTypeRoutes />
+              </ServiceRoute>
             </ShellRoute>
           }
         />
@@ -116,7 +122,9 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
           path="/admin/infrastructure/baremetal-instance-types/*"
           element={
             <ShellRoute>
-              <BareMetalInstanceTypeRoutes />
+              <ServiceRoute service={ServiceTier.BMAAS}>
+                <BareMetalInstanceTypeRoutes />
+              </ServiceRoute>
             </ShellRoute>
           }
         />
@@ -158,7 +166,9 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
               path="/vms/*"
               element={
                 <ShellRoute>
-                  <VmRoutes />
+                  <ServiceRoute service={ServiceTier.VMAAS}>
+                    <VmRoutes />
+                  </ServiceRoute>
                 </ShellRoute>
               }
             />
@@ -166,7 +176,9 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
               path="/clusters/*"
               element={
                 <ShellRoute>
-                  <ClusterRoutes />
+                  <ServiceRoute service={ServiceTier.CAAS}>
+                    <ClusterRoutes />
+                  </ServiceRoute>
                 </ShellRoute>
               }
             />
@@ -174,7 +186,17 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
               path="/bare-metal/*"
               element={
                 <ShellRoute>
-                  <BareMetalRoutes />
+                  <ServiceRoute service={ServiceTier.BMAAS}>
+                    <BareMetalRoutes />
+                  </ServiceRoute>
+                </ShellRoute>
+              }
+            />
+            <Route
+              path="/storage/volumes/*"
+              element={
+                <ShellRoute>
+                  <VolumeRoutes />
                 </ShellRoute>
               }
             />
@@ -217,6 +239,14 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
           element={
             <ShellRoute>
               <SecurityGroupDetailPage />
+            </ShellRoute>
+          }
+        />
+        <Route
+          path="/networking/external-ips/*"
+          element={
+            <ShellRoute>
+              <ExternalIpRoutes />
             </ShellRoute>
           }
         />

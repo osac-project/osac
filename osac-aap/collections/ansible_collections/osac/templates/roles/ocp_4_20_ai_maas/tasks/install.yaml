@@ -7,12 +7,23 @@
 # (prefixed names). Only runs when called via the OSAC pipeline where
 # cluster_settings has parsed spec.templateParameters into template_parameters dict.
 # When running standalone with -e, template_parameters is not defined — skipped.
+#
+# PARAMETER CONTRACT (keep in sync): these bridged keys are the AAP-settable surface
+# and MUST stay 1:1 with meta/osac.yaml `parameters` (short names) and
+# meta/argument_specs.yaml + defaults/main.yaml (the ocp_4_20_ai_maas_* prefixed names).
+# To expose a NEW param to AAP, add it in ALL of: (1) meta/osac.yaml parameters,
+# (2) this bridge, (3) argument_specs.yaml + defaults/main.yaml. Any prefixed var NOT
+# listed here is internal and uses its defaults/main.yaml value under AAP (not settable
+# via the fulfillment form) — that is by design; do not add operator channels, DB
+# credentials, or timeouts here.
 - name: Bridge templateParameters to role variables
   ansible.builtin.set_fact:
     ocp_4_20_ai_maas_enable_maas: "{{ template_parameters.enable_maas | default(true) | bool }}"
-    ocp_4_20_ai_maas_enable_keycloak: "{{ (template_parameters.enable_keycloak | default(true) | bool) and (template_parameters.enable_maas | default(true) | bool) }}"
     ocp_4_20_ai_maas_oidc_issuer: "{{ template_parameters.oidc_issuer | default('') }}"
     ocp_4_20_ai_maas_oidc_client_id: "{{ template_parameters.oidc_client_id | default('') }}"
+    ocp_4_20_ai_maas_tenants: "{{ template_parameters.tenants | default(ocp_4_20_ai_maas_tenants) }}"
+    ocp_4_20_ai_maas_tenant_name: "{{ template_parameters.tenant_name | default(ocp_4_20_ai_maas_tenant_name) }}"
+    ocp_4_20_ai_maas_tenant_admin_group: "{{ template_parameters.tenant_admin_group | default(ocp_4_20_ai_maas_tenant_admin_group) }}"
     ocp_4_20_ai_maas_enable_observability: "{{ template_parameters.enable_observability | default(true) | bool }}"
     ocp_4_20_ai_maas_enable_dashboard: "{{ template_parameters.enable_dashboard | default(true) | bool }}"
     ocp_4_20_ai_maas_hardware_profiles: "{{ template_parameters.hardware_profiles | default(ocp_4_20_ai_maas_hardware_profiles) }}"
@@ -24,7 +35,6 @@
     name: osac.templates.ocp_small
     tasks_from: install
   vars:
-    ocp_release_image: "{{ ocp_4_20_ai_maas_ocp_release_image }}"
     install_step_post_install_hook_override:
       name: osac.templates.ocp_4_20_ai_maas
       tasks_from: post_install.yaml

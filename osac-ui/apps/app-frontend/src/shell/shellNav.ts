@@ -1,12 +1,19 @@
 /** Role-based sidebar navigation (sectioned NavGroup layout). Nav icons: shellNavIcon in @osac/ui-components/icons */
 import type { TFunction } from 'i18next';
 
+import { ServiceTier } from '@osac/types';
 import type { UserRole } from '@osac/ui-components/shellTypes';
 
 export const isNavSection = (row: NavRow): row is NavSection => row.kind === 'section';
 export const isNavLink = (row: NavRow): row is NavLink => row.kind === 'link';
 
-export type NavLink = { kind: 'link'; id: string; label: string; path: string };
+export type NavLink = {
+  kind: 'link';
+  id: string;
+  label: string;
+  path: string;
+  service?: ServiceTier;
+};
 
 export type NavSection = {
   kind: 'section';
@@ -15,7 +22,22 @@ export type NavSection = {
   children: NavLink[];
 };
 
-type NavRow = NavSection | NavLink;
+export type NavRow = NavSection | NavLink;
+
+export const filterNavRowsByServices = (
+  rows: NavRow[],
+  enabledServices: readonly ServiceTier[],
+): NavRow[] =>
+  rows.flatMap((row): NavRow[] => {
+    if (!isNavSection(row)) {
+      return row.service && !enabledServices.includes(row.service) ? [] : [row];
+    }
+
+    const children = row.children.filter(
+      (child) => !child.service || enabledServices.includes(child.service),
+    );
+    return children.length > 0 ? [{ ...row, children }] : [];
+  });
 
 const getIdpLinks = (t: TFunction): NavRow[] => [
   { kind: 'link', id: 'idp', label: t('Identity providers'), path: '/tenant/identity-provider' },
@@ -49,6 +71,7 @@ const getAdminNav = (t: TFunction): NavRow[] => [
         id: 'instance-types',
         label: t('Instance types'),
         path: '/admin/infrastructure/instance-types',
+        service: ServiceTier.VMAAS,
       },
       {
         kind: 'link',
@@ -61,6 +84,7 @@ const getAdminNav = (t: TFunction): NavRow[] => [
         id: 'baremetal-instance-types',
         label: t('Bare metal instance types'),
         path: '/admin/infrastructure/baremetal-instance-types',
+        service: ServiceTier.BMAAS,
       },
       {
         kind: 'link',
@@ -100,9 +124,27 @@ const getServicesNav = (t: TFunction): NavRow => ({
   id: 'nav-tenant-services',
   label: t('Services'),
   children: [
-    { kind: 'link', id: 'bare-metal', label: t('Bare Metal'), path: '/bare-metal' },
-    { kind: 'link', id: 'clusters', label: t('Clusters'), path: '/clusters' },
-    { kind: 'link', id: 'compute-vms', label: t('Virtual Machines'), path: '/vms' },
+    {
+      kind: 'link',
+      id: 'bare-metal',
+      label: t('Bare Metal'),
+      path: '/bare-metal',
+      service: ServiceTier.BMAAS,
+    },
+    {
+      kind: 'link',
+      id: 'clusters',
+      label: t('Clusters'),
+      path: '/clusters',
+      service: ServiceTier.CAAS,
+    },
+    {
+      kind: 'link',
+      id: 'compute-vms',
+      label: t('Virtual Machines'),
+      path: '/vms',
+      service: ServiceTier.VMAAS,
+    },
   ],
 });
 
@@ -111,6 +153,13 @@ const getProjectsNav = (t: TFunction): NavRow => ({
   id: 'projects',
   label: t('Projects'),
   path: '/projects',
+});
+
+const getStorageNav = (t: TFunction): NavRow => ({
+  kind: 'section',
+  id: 'nav-tenant-storage',
+  label: t('Storage'),
+  children: [{ kind: 'link', id: 'volumes', label: t('Volumes'), path: '/storage/volumes' }],
 });
 
 const getNetworkNav = (t: TFunction): NavRow => ({
@@ -130,28 +179,39 @@ const getNetworkNav = (t: TFunction): NavRow => ({
       label: t('Security groups'),
       path: '/networking/security-groups',
     },
+    {
+      kind: 'link',
+      id: 'external-ips',
+      label: t('External IPs'),
+      path: '/networking/external-ips',
+    },
   ],
 });
 
 const getBaseNav = (t: TFunction): NavRow[] => [
   getCatalogNav(t),
   getServicesNav(t),
+  getStorageNav(t),
   getProjectsNav(t),
 ];
 
-export const navRowsForRole = (role: UserRole, t: TFunction): NavRow[] => {
+export const navRowsForRole = (
+  role: UserRole,
+  t: TFunction,
+  enabledServices: readonly ServiceTier[],
+): NavRow[] => {
+  let rows: NavRow[];
+
   if (role === 'admin') {
-    return getAdminNav(t);
+    rows = getAdminNav(t);
+  } else if (role === 'tenant-idp-manager') {
+    rows = getIdpManagerNav(t);
+  } else if (role === 'tenant-admin') {
+    rows = getTenantAdminNav(t);
+  } else {
+    // 'tenant-user'
+    rows = [...getBaseNav(t), getNetworkNav(t), getSecretsNav(t)];
   }
 
-  if (role === 'tenant-idp-manager') {
-    return getIdpManagerNav(t);
-  }
-
-  if (role === 'tenant-admin') {
-    return getTenantAdminNav(t);
-  }
-
-  // 'tenant-user'
-  return [...getBaseNav(t), getNetworkNav(t), getSecretsNav(t)];
+  return filterNavRowsByServices(rows, enabledServices);
 };

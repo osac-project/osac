@@ -56,3 +56,4 @@ export enum ConditionStatus {
  */
 export const ConditionStatusSchema: GenEnum<ConditionStatus> = /*@__PURE__*/
   enumDesc(file_osac_private_v1_condition_status_type, 0);
+

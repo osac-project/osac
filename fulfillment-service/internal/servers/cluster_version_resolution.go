@@ -76,12 +76,15 @@ func lookupAndValidateClusterVersion(
 	logger *slog.Logger,
 	clusterVersionsDao *dao.GenericDAO[*privatev1.ClusterVersion],
 	versionName string,
-) error {
+) (*privatev1.ClusterVersion, error) {
 	cv, err := lookupClusterVersionByName(ctx, logger, clusterVersionsDao, versionName)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return validateResolvedClusterVersion(cv, versionName, "")
+	if err := validateResolvedClusterVersion(cv, versionName, ""); err != nil {
+		return nil, err
+	}
+	return cv, nil
 }
 
 // buildClusterVersionReference creates a ClusterVersionReference from a ClusterVersion.
@@ -95,14 +98,20 @@ func buildClusterVersionReference(cv *privatev1.ClusterVersion) *privatev1.Clust
 }
 
 // resolveDefaultClusterVersion looks up the system default ClusterVersion (spec.is_default == true),
-// validates it is usable, and returns a ClusterVersionReference.
+// validates it is usable, and returns it. When disk images are required, defaults without a non-empty
+// DiskImage reference are excluded before selection.
 func resolveDefaultClusterVersion(
 	ctx context.Context,
 	logger *slog.Logger,
 	clusterVersionsDao *dao.GenericDAO[*privatev1.ClusterVersion],
-) (*privatev1.ClusterVersionReference, error) {
+	requireDiskImage bool,
+) (*privatev1.ClusterVersion, error) {
+	filter := "this.spec.is_default == true && !has(this.metadata.deletion_timestamp)"
+	if requireDiskImage {
+		filter += ` && has(this.spec.disk_image) && (this.spec.disk_image.id != "" || this.spec.disk_image.name != "")`
+	}
 	response, err := clusterVersionsDao.List().
-		SetFilter("this.spec.is_default == true && !has(this.metadata.deletion_timestamp)").
+		SetFilter(filter).
 		SetLimit(1).
 		Do(ctx)
 	if err != nil {
@@ -113,6 +122,10 @@ func resolveDefaultClusterVersion(
 			"failed to look up default cluster version")
 	}
 	if len(response.GetItems()) == 0 {
+		if requireDiskImage {
+			return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition,
+				"no version specified and no system default cluster version with a disk image is configured for bare-metal workers")
+		}
 		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"no version specified and no system default version is configured")
 	}
@@ -126,5 +139,5 @@ func resolveDefaultClusterVersion(
 	if err := validateResolvedClusterVersion(cv, versionName, ""); err != nil {
 		return nil, err
 	}
-	return buildClusterVersionReference(cv), nil
+	return cv, nil
 }

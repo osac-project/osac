@@ -11,3 +11,4 @@ data:
   FULFILLMENT_TLS_CA_FILE: "/etc/osac-ui/tls/api/bundle.pem"
   OIDC_TLS_CA_FILE: "/etc/osac-ui/tls/auth/bundle.pem"
   OIDC_CLIENT_ID: {{ .Values.auth.oidcClientId | quote }}
+  OIDC_ISSUER_URL: {{ required "auth.oidcIssuerURL is required" .Values.auth.oidcIssuerURL | quote }}

@@ -60,7 +60,12 @@ spec:
                     destinationCidr:
                       description: DestinationCIDR specifies the destination CIDR
                         block for this rule
+                      maxLength: 18
                       type: string
+                      x-kubernetes-validations:
+                      - message: destinationCidr must be a canonical IPv4 CIDR
+                        rule: self == '' || (string(cidr(self).masked()) == self &&
+                          !self.contains(':'))
                     portFrom:
                       description: PortFrom specifies the start of the port range
                       format: int32
@@ -90,11 +95,21 @@ spec:
                     sourceCidr:
                       description: SourceCIDR specifies the source CIDR block for
                         this rule
+                      maxLength: 18
                       type: string
+                      x-kubernetes-validations:
+                      - message: sourceCidr must be a canonical IPv4 CIDR
+                        rule: self == '' || (string(cidr(self).masked()) == self &&
+                          !self.contains(':'))
                   required:
                   - protocol
                   type: object
+                maxItems: 100
                 type: array
+                x-kubernetes-validations:
+                - message: egress rules must contain only a destination CIDR
+                  rule: self.all(r, r.destinationCidr != '' && (!has(r.sourceCidr)
+                    || r.sourceCidr == ''))
               ingressRules:
                 description: IngressRules defines the ingress security rules
                 items:
@@ -104,7 +119,12 @@ spec:
                     destinationCidr:
                       description: DestinationCIDR specifies the destination CIDR
                         block for this rule
+                      maxLength: 18
                       type: string
+                      x-kubernetes-validations:
+                      - message: destinationCidr must be a canonical IPv4 CIDR
+                        rule: self == '' || (string(cidr(self).masked()) == self &&
+                          !self.contains(':'))
                     portFrom:
                       description: PortFrom specifies the start of the port range
                       format: int32
@@ -134,11 +154,21 @@ spec:
                     sourceCidr:
                       description: SourceCIDR specifies the source CIDR block for
                         this rule
+                      maxLength: 18
                       type: string
+                      x-kubernetes-validations:
+                      - message: sourceCidr must be a canonical IPv4 CIDR
+                        rule: self == '' || (string(cidr(self).masked()) == self &&
+                          !self.contains(':'))
                   required:
                   - protocol
                   type: object
+                maxItems: 100
                 type: array
+                x-kubernetes-validations:
+                - message: ingress rules must contain only a source CIDR
+                  rule: self.all(r, r.sourceCidr != '' && (!has(r.destinationCidr)
+                    || r.destinationCidr == ''))
               virtualNetwork:
                 description: VirtualNetwork is the ID of the parent VirtualNetwork
                 type: string

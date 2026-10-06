@@ -733,6 +733,16 @@
               Expected hostDevices[0] name='gpu-0' deviceName='nvidia.com/GB100',
               got {{ vm_template_spec.domain.devices.hostDevices[0] }}
 
+        - name: Verify Linux GPU VM boots UEFI (large PCI BARs need OVMF, not BIOS)
+          ansible.builtin.assert:
+            that:
+              - vm_template_spec.domain.firmware is defined
+              - vm_template_spec.domain.firmware.bootloader.efi is defined
+              - vm_template_spec.domain.firmware.bootloader.efi.secureBoot == false
+            fail_msg: >-
+              Expected Linux GPU VM to set firmware.bootloader.efi (secureBoot=false),
+              got {{ vm_template_spec.domain.firmware | default('(no firmware key)') }}
+
 # ──────────────────────────────────────────────────────────────
 # Test 14: GPU with count=3 produces three hostDevices entries
 # Expected: vm_template_spec.domain.devices.hostDevices has 3 entries
@@ -830,6 +840,14 @@
             fail_msg: >-
               Expected no hostDevices when spec.gpu is absent, but found
               {{ vm_template_spec.domain.devices.hostDevices | default('(key not present)') }}
+
+        - name: Verify non-GPU Linux VM keeps the BIOS default (no UEFI firmware)
+          ansible.builtin.assert:
+            that:
+              - vm_template_spec.domain.firmware is not defined
+            fail_msg: >-
+              Expected no firmware block for a non-GPU Linux VM, but found
+              {{ vm_template_spec.domain.firmware | default('(key not present)') }}
 
 # ──────────────────────────────────────────────────────────────
 # Test 16: Windows password extracted from #cloud-config user-data

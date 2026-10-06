@@ -35,7 +35,6 @@ const (
 	VirtualNetworks_List_FullMethodName   = "/osac.public.v1.VirtualNetworks/List"
 	VirtualNetworks_Get_FullMethodName    = "/osac.public.v1.VirtualNetworks/Get"
 	VirtualNetworks_Create_FullMethodName = "/osac.public.v1.VirtualNetworks/Create"
-	VirtualNetworks_Update_FullMethodName = "/osac.public.v1.VirtualNetworks/Update"
 	VirtualNetworks_Delete_FullMethodName = "/osac.public.v1.VirtualNetworks/Delete"
 )
 
@@ -49,8 +48,6 @@ type VirtualNetworksClient interface {
 	Get(ctx context.Context, in *VirtualNetworksGetRequest, opts ...grpc.CallOption) (*VirtualNetworksGetResponse, error)
 	// Creates a new virtual network.
 	Create(ctx context.Context, in *VirtualNetworksCreateRequest, opts ...grpc.CallOption) (*VirtualNetworksCreateResponse, error)
-	// Updates an existing virtual network.
-	Update(ctx context.Context, in *VirtualNetworksUpdateRequest, opts ...grpc.CallOption) (*VirtualNetworksUpdateResponse, error)
 	// Deletes a virtual network.
 	Delete(ctx context.Context, in *VirtualNetworksDeleteRequest, opts ...grpc.CallOption) (*VirtualNetworksDeleteResponse, error)
 }
@@ -93,16 +90,6 @@ func (c *virtualNetworksClient) Create(ctx context.Context, in *VirtualNetworksC
 	return out, nil
 }
 
-func (c *virtualNetworksClient) Update(ctx context.Context, in *VirtualNetworksUpdateRequest, opts ...grpc.CallOption) (*VirtualNetworksUpdateResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(VirtualNetworksUpdateResponse)
-	err := c.cc.Invoke(ctx, VirtualNetworks_Update_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *virtualNetworksClient) Delete(ctx context.Context, in *VirtualNetworksDeleteRequest, opts ...grpc.CallOption) (*VirtualNetworksDeleteResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(VirtualNetworksDeleteResponse)
@@ -123,8 +110,6 @@ type VirtualNetworksServer interface {
 	Get(context.Context, *VirtualNetworksGetRequest) (*VirtualNetworksGetResponse, error)
 	// Creates a new virtual network.
 	Create(context.Context, *VirtualNetworksCreateRequest) (*VirtualNetworksCreateResponse, error)
-	// Updates an existing virtual network.
-	Update(context.Context, *VirtualNetworksUpdateRequest) (*VirtualNetworksUpdateResponse, error)
 	// Deletes a virtual network.
 	Delete(context.Context, *VirtualNetworksDeleteRequest) (*VirtualNetworksDeleteResponse, error)
 	mustEmbedUnimplementedVirtualNetworksServer()
@@ -145,9 +130,6 @@ func (UnimplementedVirtualNetworksServer) Get(context.Context, *VirtualNetworksG
 }
 func (UnimplementedVirtualNetworksServer) Create(context.Context, *VirtualNetworksCreateRequest) (*VirtualNetworksCreateResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Create not implemented")
-}
-func (UnimplementedVirtualNetworksServer) Update(context.Context, *VirtualNetworksUpdateRequest) (*VirtualNetworksUpdateResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Update not implemented")
 }
 func (UnimplementedVirtualNetworksServer) Delete(context.Context, *VirtualNetworksDeleteRequest) (*VirtualNetworksDeleteResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
@@ -227,24 +209,6 @@ func _VirtualNetworks_Create_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
-func _VirtualNetworks_Update_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(VirtualNetworksUpdateRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(VirtualNetworksServer).Update(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: VirtualNetworks_Update_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(VirtualNetworksServer).Update(ctx, req.(*VirtualNetworksUpdateRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _VirtualNetworks_Delete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(VirtualNetworksDeleteRequest)
 	if err := dec(in); err != nil {
@@ -281,10 +245,6 @@ var VirtualNetworks_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Create",
 			Handler:    _VirtualNetworks_Create_Handler,
-		},
-		{
-			MethodName: "Update",
-			Handler:    _VirtualNetworks_Update_Handler,
 		},
 		{
 			MethodName: "Delete",

@@ -29,7 +29,7 @@ type VolumeTopology struct {
 
 // VolumeSpec defines the desired state of Volume.
 type VolumeSpec struct {
-	// StorageTier is the name of the StorageTier that determines which backend
+	// StorageTier is the name of the StorageTier that determines which provider
 	// and protocol serve this volume.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
@@ -95,6 +95,7 @@ const (
 	VolumePhaseReady       VolumePhaseType = "Ready"
 	VolumePhaseFailed      VolumePhaseType = "Failed"
 	VolumePhaseDeleting    VolumePhaseType = "Deleting"
+	VolumePhaseDeleted     VolumePhaseType = "Deleted"
 )
 
 // VolumeConditionType is a valid value for .status.conditions.type
@@ -110,7 +111,7 @@ const (
 type VolumeStatus struct {
 	// Phase provides a single-value overview of the state of the Volume.
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:Enum=Progressing;Ready;Failed;Deleting
+	// +kubebuilder:validation:Enum=Progressing;Ready;Failed;Deleting;Deleted
 	Phase VolumePhaseType `json:"phase,omitempty"`
 
 	// Conditions holds an array of metav1.Condition that describe the state of the Volume.
@@ -125,11 +126,6 @@ type VolumeStatus struct {
 	// Set by the Volume controller after vendor CSI CreateVolume succeeds.
 	// +kubebuilder:validation:Optional
 	VendorVolumeID string `json:"vendorVolumeID,omitempty"`
-
-	// Backend is the name of the StorageBackend that serves this volume.
-	// Resolved during tier resolution at creation time.
-	// +kubebuilder:validation:Optional
-	Backend string `json:"backend,omitempty"`
 
 	// Provider identifies the registered VendorProvisioner implementation selected for this volume.
 	// Resolved during tier resolution at creation time.
@@ -149,6 +145,15 @@ type VolumeStatus struct {
 	// osac-csi-driver to the vendor CSI controller's ControllerPublishVolume.
 	// +kubebuilder:validation:Optional
 	VendorContext map[string]string `json:"vendorContext,omitempty"`
+
+	// StateTransitionTime is the authoritative time at which the lifecycle
+	// phase last changed.
+	// +kubebuilder:validation:Optional
+	StateTransitionTime *metav1.Time `json:"stateTransitionTime,omitempty"`
+
+	// ProvisionedSizeGiB is the capacity last committed on the vendor array.
+	// +kubebuilder:validation:Optional
+	ProvisionedSizeGiB int64 `json:"provisionedSizeGiB,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -158,7 +163,7 @@ type VolumeStatus struct {
 // +kubebuilder:printcolumn:name="Size",type=integer,JSONPath=`.spec.sizeGiB`
 // +kubebuilder:printcolumn:name="Access",type=string,JSONPath=`.spec.accessMode`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
-// +kubebuilder:printcolumn:name="Backend",type=string,JSONPath=`.status.backend`,priority=1
+// +kubebuilder:printcolumn:name="Provider",type=string,JSONPath=`.status.provider`,priority=1
 // +kubebuilder:printcolumn:name="VendorID",type=string,JSONPath=`.status.vendorVolumeID`,priority=1
 
 // Volume is the Schema for the volumes API.

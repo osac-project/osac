@@ -213,6 +213,20 @@ func (mr *MockObjectHelperMockRecorder) IsTenantScoped() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsTenantScoped", reflect.TypeOf((*MockObjectHelper)(nil).IsTenantScoped))
 }
 
+// IsUpdatable mocks base method.
+func (m *MockObjectHelper) IsUpdatable() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsUpdatable")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// IsUpdatable indicates an expected call of IsUpdatable.
+func (mr *MockObjectHelperMockRecorder) IsUpdatable() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsUpdatable", reflect.TypeOf((*MockObjectHelper)(nil).IsUpdatable))
+}
+
 // List mocks base method.
 func (m *MockObjectHelper) List(ctx context.Context, options ListOptions) (ListResult, error) {
 	m.ctrl.T.Helper()
@@ -283,10 +297,10 @@ func (mr *MockObjectHelperMockRecorder) String() *gomock.Call {
 }
 
 // Update mocks base method.
-func (m *MockObjectHelper) Update(ctx context.Context, object proto.Message) (proto.Message, error) {
+func (m *MockObjectHelper) Update(ctx context.Context, object proto.Message) (UpdateResult, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Update", ctx, object)
-	ret0, _ := ret[0].(proto.Message)
+	ret0, _ := ret[0].(UpdateResult)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

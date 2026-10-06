@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import subprocess
 from typing import Any
 from uuid import uuid4
 
 import pytest
 
 from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
+from tests.e2e.core.helpers import delete_instance_type_if_present
 from tests.e2e.core.osac_cli import OsacCLI
 
 pytestmark = pytest.mark.sanity
@@ -75,12 +75,7 @@ def test_instance_type_lifecycle(cli: OsacCLI, private_grpc: GRPCClient) -> None
         )
 
     finally:
-        try:
-            private_grpc.delete_instance_type(name=it_name)
-        except subprocess.CalledProcessError as e:
-            output = ((e.stdout or "") + (e.stderr or "")).lower()
-            if "not found" not in output:
-                raise
+        delete_instance_type_if_present(grpc=private_grpc, name=it_name)
 
 
 def test_create_instance_type_via_cli(private_cli: OsacCLI, private_grpc: GRPCClient) -> None:
@@ -114,12 +109,7 @@ def test_create_instance_type_via_cli(private_cli: OsacCLI, private_grpc: GRPCCl
         assert gpu["count"] == TEST_GPU["count"], f"gpu.count mismatch: {gpu['count']} != {TEST_GPU['count']}"
 
     finally:
-        try:
-            private_grpc.delete_instance_type(name=it_name)
-        except subprocess.CalledProcessError as e:
-            output = ((e.stdout or "") + (e.stderr or "")).lower()
-            if "not found" not in output:
-                raise
+        delete_instance_type_if_present(grpc=private_grpc, name=it_name)
 
 
 def test_gpu_instance_type(private_grpc: GRPCClient) -> None:
@@ -183,9 +173,4 @@ def test_gpu_instance_type(private_grpc: GRPCClient) -> None:
 
     finally:
         for name in (gpu_name, nogpu_name):
-            try:
-                private_grpc.delete_instance_type(name=name)
-            except subprocess.CalledProcessError as e:
-                output = ((e.stdout or "") + (e.stderr or "")).lower()
-                if "not found" not in output:
-                    raise
+            delete_instance_type_if_present(grpc=private_grpc, name=name)

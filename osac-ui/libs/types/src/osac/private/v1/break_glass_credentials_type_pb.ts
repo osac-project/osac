@@ -59,3 +59,4 @@ export type BreakGlassCredentials = Message<"osac.private.v1.BreakGlassCredentia
  */
 export const BreakGlassCredentialsSchema: GenMessage<BreakGlassCredentials> = /*@__PURE__*/
   messageDesc(file_osac_private_v1_break_glass_credentials_type, 0);
+

@@ -17,6 +17,7 @@
 
 import type { GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv2";
 import { fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2";
+import { file_buf_validate_validate } from "../../../buf/validate/validate_pb";
 import { file_cleanapi_cleanapi } from "../../../cleanapi/cleanapi_pb";
 import { file_google_api_annotations } from "../../../google/api/annotations_pb";
 import type { Event } from "./event_type_pb";
@@ -27,7 +28,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/private/v1/events_service.proto.
  */
 export const file_osac_private_v1_events_service: GenFile = /*@__PURE__*/
-  fileDesc("CiRvc2FjL3ByaXZhdGUvdjEvZXZlbnRzX3NlcnZpY2UucHJvdG8SD29zYWMucHJpdmF0ZS52MSI0ChJFdmVudHNXYXRjaFJlcXVlc3QSEwoGZmlsdGVyGAEgASgJSACIAQFCCQoHX2ZpbHRlciI8ChNFdmVudHNXYXRjaFJlc3BvbnNlEiUKBWV2ZW50GAEgASgLMhYub3NhYy5wcml2YXRlLnYxLkV2ZW50MoQBCgZFdmVudHMSegoFV2F0Y2gSIy5vc2FjLnByaXZhdGUudjEuRXZlbnRzV2F0Y2hSZXF1ZXN0GiQub3NhYy5wcml2YXRlLnYxLkV2ZW50c1dhdGNoUmVzcG9uc2UiJILT5JMCHhIcL2FwaS9wcml2YXRlL3YxL2V2ZW50cy93YXRjaDABQiSKtRggEg5vc2FjLnB1YmxpYy52MSIOcHJpdmF0ZTpldmVudHNiBnByb3RvMw", [file_cleanapi_cleanapi, file_google_api_annotations, file_osac_private_v1_event_type]);
+  fileDesc("CiRvc2FjL3ByaXZhdGUvdjEvZXZlbnRzX3NlcnZpY2UucHJvdG8SD29zYWMucHJpdmF0ZS52MSKKAQoSRXZlbnRzV2F0Y2hSZXF1ZXN0EhMKBmZpbHRlchgBIAEoCUgAiAEBEkoKBWdyb3VwGAIgASgJQja6SC1yKxg/MideJHxeW2EtejAtOV0oW2EtejAtOS1dezAsNjF9W2EtejAtOV0pPySKtRgCCAFIAYgBAUIJCgdfZmlsdGVyQggKBl9ncm91cCI8ChNFdmVudHNXYXRjaFJlc3BvbnNlEiUKBWV2ZW50GAEgASgLMhYub3NhYy5wcml2YXRlLnYxLkV2ZW50MoQBCgZFdmVudHMSegoFV2F0Y2gSIy5vc2FjLnByaXZhdGUudjEuRXZlbnRzV2F0Y2hSZXF1ZXN0GiQub3NhYy5wcml2YXRlLnYxLkV2ZW50c1dhdGNoUmVzcG9uc2UiJILT5JMCHhIcL2FwaS9wcml2YXRlL3YxL2V2ZW50cy93YXRjaDABQiSKtRggEg5vc2FjLnB1YmxpYy52MSIOcHJpdmF0ZTpldmVudHNiBnByb3RvMw", [file_buf_validate_validate, file_cleanapi_cleanapi, file_google_api_annotations, file_osac_private_v1_event_type]);
 
 /**
  * @generated from message osac.private.v1.EventsWatchRequest
@@ -51,6 +52,27 @@ export type EventsWatchRequest = Message<"osac.private.v1.EventsWatchRequest"> &
    * @generated from field: optional string filter = 1;
    */
   filter?: string | undefined;
+
+  /**
+   * Name of the subscription group.
+   *
+   * When non-empty, must be a valid RFC 1123 DNS label:
+   *
+   * - Must be between 1 and 63 characters long.
+   * - Must only contain lowercase letters (a-z), digits (0-9) and hyphens (-).
+   * - Must start and end with an alphanumeric character.
+   *
+   * Subscriptions with the same non-empty group share event delivery, allowing multiple clients to divide the work.
+   * Use the same filter for all subscriptions in a group: an event rejected by its assigned subscription isn't sent
+   * to another subscription in that group. Different groups receive events independently.
+   *
+   * Grouped subscriptions may receive past events, including events produced while clients were disconnected.
+   * Clients must tolerate repeated events. Delivery does not acknowledge that the client has processed the event.
+   * If absent or empty, the subscription independently watches new events without joining a group.
+   *
+   * @generated from field: optional string group = 2;
+   */
+  group?: string | undefined;
 };
 
 /**
@@ -98,3 +120,4 @@ export const Events: GenService<{
   },
 }> = /*@__PURE__*/
   serviceDesc(file_osac_private_v1_events_service, 0);
+

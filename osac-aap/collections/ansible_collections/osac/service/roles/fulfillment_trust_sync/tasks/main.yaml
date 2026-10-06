@@ -1,0 +1,104 @@
+---
+- name: Validate protected trust-sync launch input
+  ansible.builtin.assert:
+    that:
+      - osac_job_vars is mapping
+      - osac_job_vars.admin_kubeconfig is not defined
+      - osac_job_vars.trust_kubeconfig_credential_ref is defined
+      - osac_job_vars.trust_kubeconfig_credential_ref is string
+      - osac_job_vars.trust_kubeconfig_credential_ref is match('^[A-Za-z0-9][A-Za-z0-9._:/-]*$')
+      - osac_job_vars.resource is mapping
+      - osac_job_vars.resource.metadata is mapping
+      - osac_job_vars.resource.metadata.uid is defined
+      - osac_job_vars.resource.metadata.uid | length > 0
+      - osac_job_vars.resource.metadata.annotations is mapping
+      - osac_job_vars.resource.metadata.annotations['osac.openshift.io/tenant'] is defined
+      - osac_job_vars.resource.metadata.annotations['osac.openshift.io/tenant'] | length > 0
+      - osac_job_vars.fulfillment_trust is mapping
+      - osac_job_vars.fulfillment_trust.tenant_namespace is defined
+      - osac_job_vars.fulfillment_trust.tenant_namespace is match('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')
+      - osac_job_vars.fulfillment_trust.config_map_name == fulfillment_trust_sync_config_map_name
+      - osac_job_vars.fulfillment_trust.bundle_pem is defined
+      - osac_job_vars.fulfillment_trust.bundle_pem | length > 0
+      - osac_job_vars.fulfillment_trust.bundle_sha256 is match('^[a-f0-9]{64}$')
+      - osac_job_vars.fulfillment_trust.bundle_pem | hash('sha256') == osac_job_vars.fulfillment_trust.bundle_sha256
+      - lookup('ansible.builtin.env', 'K8S_AUTH_KUBECONFIG') | length > 0
+      - lookup('ansible.builtin.env', 'K8S_AUTH_KUBECONFIG') is file
+    fail_msg: >-
+      Trust synchronization requires a valid ClusterOrder, approved bundle, and
+      protected runtime-injected Kubernetes credential.
+  no_log: true
+
+- name: Apply the approved fulfillment CA ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    server_side_apply:
+      field_manager: "{{ fulfillment_trust_sync_field_manager }}"
+      force_conflicts: false
+    kubeconfig: "{{ lookup('ansible.builtin.env', 'K8S_AUTH_KUBECONFIG') }}"
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: "{{ fulfillment_trust_sync_config_map_name }}"
+        namespace: "{{ osac_job_vars.fulfillment_trust.tenant_namespace }}"
+        annotations:
+          osac.openshift.io/tenant: "{{ osac_job_vars.resource.metadata.annotations['osac.openshift.io/tenant'] }}"
+          osac.openshift.io/owner-reference: "{{ osac_job_vars.resource.metadata.uid }}"
+          osac.openshift.io/fulfillment-ca-sha256: "{{ osac_job_vars.fulfillment_trust.bundle_sha256 }}"
+      data:
+        bundle.pem: "{{ osac_job_vars.fulfillment_trust.bundle_pem }}"
+  no_log: true
+
+- name: Verify the approved fulfillment CA ConfigMap
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: ConfigMap
+    namespace: "{{ osac_job_vars.fulfillment_trust.tenant_namespace }}"
+    name: "{{ fulfillment_trust_sync_config_map_name }}"
+    kubeconfig: "{{ lookup('ansible.builtin.env', 'K8S_AUTH_KUBECONFIG') }}"
+  register: _fulfillment_trust_config_map
+  no_log: true
+
+- name: Assert the fulfillment CA ConfigMap has only approved content
+  vars:
+    _fulfillment_trust_expected_annotations:
+      osac.openshift.io/tenant: "{{ osac_job_vars.resource.metadata.annotations['osac.openshift.io/tenant'] }}"
+      osac.openshift.io/owner-reference: "{{ osac_job_vars.resource.metadata.uid }}"
+      osac.openshift.io/fulfillment-ca-sha256: "{{ osac_job_vars.fulfillment_trust.bundle_sha256 }}"
+  ansible.builtin.assert:
+    that:
+      - _fulfillment_trust_config_map.resources | length == 1
+      - _fulfillment_trust_config_map.resources[0].data == {fulfillment_trust_sync_bundle_data_key: osac_job_vars.fulfillment_trust.bundle_pem}
+      - _fulfillment_trust_config_map.resources[0].metadata.annotations == _fulfillment_trust_expected_annotations
+  no_log: true
+
+- name: Find CSI controller Deployment candidates
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    namespace: "{{ osac_job_vars.fulfillment_trust.tenant_namespace }}"
+    kubeconfig: "{{ lookup('ansible.builtin.env', 'K8S_AUTH_KUBECONFIG') }}"
+    label_selectors:
+      - app.kubernetes.io/name in (csi-driver,csiDriver)
+      - app.kubernetes.io/component=controller
+  register: _fulfillment_trust_csi_candidates
+  no_log: true
+
+- name: Select trust-enabled CSI controller Deployments
+  ansible.builtin.set_fact:
+    _fulfillment_trust_csi_deployments: []
+
+- name: Accumulate trust-enabled CSI controller Deployments
+  ansible.builtin.set_fact:
+    _fulfillment_trust_csi_deployments: "{{ _fulfillment_trust_csi_deployments | default([]) + [item] }}"
+  loop: "{{ _fulfillment_trust_csi_candidates.resources }}"
+  when: item.metadata.labels['osac.openshift.io/fulfillment-trust-client'] | default('') == 'true'
+  no_log: true
+
+- name: Update the fulfillment CA hash on selected CSI controller Deployments
+  ansible.builtin.include_tasks: rollout.yaml
+  loop: "{{ _fulfillment_trust_csi_deployments | default([]) }}"
+  loop_control:
+    loop_var: _fulfillment_trust_deployment

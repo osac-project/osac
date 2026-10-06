@@ -4,6 +4,7 @@ import { type ClusterCatalogItem, ClusterSchema } from '@osac/types';
 
 import type { ClusterWizardValues } from './fields';
 import { createEmptyNodeSetRow } from './fields';
+import { emptyResourceSelectValue } from '../../../../Form/resourceSelectValue';
 
 export const createEmptyClusterValues = (): ClusterWizardValues => ({
   catalogItemId: '',
@@ -19,6 +20,13 @@ export const createEmptyClusterValues = (): ClusterWizardValues => ({
       podCidr: '',
       serviceCidr: '',
     },
+    useDefaultNetwork: true,
+    networkAttachment: {
+      virtualNetwork: emptyResourceSelectValue(),
+      subnet: emptyResourceSelectValue(),
+      securityGroups: [],
+    },
+    autoExternalIpAttachment: false,
   },
 });
 
@@ -68,6 +76,22 @@ export const buildClusterCreatePayload = (
       ...(podCidr ? { podCidr } : {}),
       ...(serviceCidr ? { serviceCidr } : {}),
     };
+  }
+
+  if (!values.spec.useDefaultNetwork) {
+    const subnetId = values.spec.networkAttachment.subnet.id.trim();
+    if (subnetId) {
+      spec.networkAttachment = {
+        subnet: { id: subnetId },
+        securityGroups: values.spec.networkAttachment.securityGroups
+          .filter((sg) => sg.id.trim())
+          .map((sg) => ({ id: sg.id })),
+      };
+    }
+  }
+
+  if (values.spec.autoExternalIpAttachment) {
+    spec.autoExternalIpAttachment = true;
   }
 
   return {

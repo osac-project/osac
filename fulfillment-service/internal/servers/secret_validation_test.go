@@ -38,9 +38,14 @@ func TestValidateSecretData(t *testing.T) {
 			data: map[string][]byte{"userdata": []byte("#cloud-config")}},
 		{name: "value", secretType: privatev1.SecretType_SECRET_TYPE_VALUE,
 			data: map[string][]byte{"value": []byte("secret")}},
+		{name: "ssh public key", secretType: privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+			data: map[string][]byte{"public_key": []byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG8K1ZuSC7tmzxD5LJJXwkCfStVEjzXWYCFhJaLBxWAn test@example.com")}},
 		{name: "missing pull secret key", secretType: privatev1.SecretType_SECRET_TYPE_PULL_SECRET, wantError: true},
 		{name: "empty value", secretType: privatev1.SecretType_SECRET_TYPE_VALUE,
 			data: map[string][]byte{"value": {}}, wantError: true},
+		{name: "missing ssh public key", secretType: privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY, wantError: true},
+		{name: "invalid ssh public key", secretType: privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+			data: map[string][]byte{"public_key": []byte("not-an-ssh-key")}, wantError: true},
 	}
 
 	for _, tt := range tests {

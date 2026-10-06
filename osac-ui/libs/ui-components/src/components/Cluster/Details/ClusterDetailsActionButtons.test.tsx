@@ -42,6 +42,7 @@ const mockCluster = (state: ClusterState): Cluster => ({
     $typeName: 'osac.public.v1.ClusterStatus',
     state,
     conditions: [],
+    addOnOperators: [],
     apiUrl: '',
     consoleUrl: '',
     nodeSets: {},
@@ -64,6 +65,7 @@ const mockCluster = (state: ClusterState): Cluster => ({
     templateParameters: {},
     nodeSets: {},
     catalogItem: create(ClusterCatalogItemReferenceSchema, { id: '' }),
+    addOnOperators: [],
   },
 });
 

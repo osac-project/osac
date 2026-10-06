@@ -26,6 +26,8 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	testsv1 "github.com/osac-project/osac/proto/gen/osac/tests/v1"
@@ -49,6 +51,34 @@ var _ = Describe("Reference validator", func() {
 			Expect(err).To(HaveOccurred())
 			Expect(err).To(MatchError("logger is mandatory"))
 			Expect(result).To(BeNil())
+		})
+
+		It("rejects non-canonical update mask paths", func() {
+			for _, test := range []struct {
+				path  string
+				valid bool
+			}{
+				{path: "spec.add_on_operators", valid: true},
+				{path: "spec.node_sets.control-plane.size", valid: true},
+				{path: "metadata.labels.control-plane", valid: true},
+				{path: "spec .add_on_operators", valid: false},
+				{path: "spec.add_on_operators.-1", valid: false},
+				{path: "spec.add_on_operators.id", valid: false},
+				{path: "spec.node_sets.control-plane.invalid-field", valid: false},
+				{path: "spec.node_sets.control-plane.size.host_type", valid: false},
+				{path: "metadata.labels.control-plane.name", valid: false},
+				{path: "spec..add_on_operators", valid: false},
+			} {
+				request := privatev1.ClustersUpdateRequest_builder{
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{test.path}},
+				}.Build()
+				err := validateCanonicalUpdateMask(request)
+				if test.valid {
+					Expect(err).ToNot(HaveOccurred())
+				} else {
+					Expect(err).To(HaveOccurred())
+				}
+			}
 		})
 	})
 
@@ -167,6 +197,37 @@ var _ = Describe("Reference validator", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(handlerCalled).To(BeTrue())
 			Expect(response).To(Equal("response"))
+		})
+
+		It("Does not skip Create reference validation for a deletion timestamp", func() {
+			validator.Register("osac.tests.v1.TestTargetReference", func(
+				ctx context.Context, tenant, project, id, name string,
+			) (*ResolvedRef, error) {
+				return nil, &errRefNotFound{identifier: name}
+			})
+			request := testsv1.CreateTestResourceWithRefsRequest_builder{
+				Object: testsv1.TestResourceWithRefs_builder{
+					Metadata: testsv1.Metadata_builder{
+						Tenant:            "tenant-a",
+						DeletionTimestamp: timestamppb.Now(),
+					}.Build(),
+					Spec: testsv1.TestRefSpec_builder{
+						Target: testsv1.TestTargetReference_builder{Name: "unpublished"}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build()
+
+			handlerCalled := false
+			_, err := validator.UnaryServer(
+				context.Background(), request,
+				&grpc.UnaryServerInfo{FullMethod: "/osac.tests.v1.TestService/Create"},
+				func(ctx context.Context, req any) (any, error) {
+					handlerCalled = true
+					return nil, nil
+				},
+			)
+			Expect(err).To(HaveOccurred())
+			Expect(handlerCalled).To(BeFalse())
 		})
 
 		It("Validates Update requests", func() {

@@ -3,6 +3,8 @@
 # --- Service Enablement ---
 global:
   osacDeploymentId: "ci/osac"
+  fulfillmentTrust:
+    enabled: false
   services:
     caas:
       enabled: false
@@ -12,6 +14,19 @@ global:
       enabled: true
     maas:
       enabled: false
+  networking:
+    fabricManager: netris
+    k8sManager: ""
+    netris:
+      controllerUrl: "https://test-ctl.netris.io"
+      credentials:
+        username: "netris"
+        # NETRIS_PASSWORD is supplied by the externally managed Secret
+        # netris-credentials in the AAP namespace.
+        externalSecret: true
+      siteId: "1"
+      tenantId: "1"
+      tenantName: "Admin"
 
 # --- Operator ---
 operator:
@@ -46,8 +61,14 @@ service:
   internalHostname: ""  # Set dynamically by make install-osac
   variant: openshift
   images:
-    service: ghcr.io/osac-project/fulfillment-service:main
-    envoy: ghcr.io/osac-project/envoy:v1.33.0
+    service:
+      repository: ghcr.io/osac-project/fulfillment-service
+      tag: latest
+      pullPolicy: Always
+    envoy:
+      repository: ghcr.io/osac-project/envoy
+      tag: v1.33.0
+      pullPolicy: IfNotPresent
   certs:
     issuerRef:
       kind: ClusterIssuer
@@ -132,6 +153,8 @@ ui:
         caBundle:
           configMap: ca-bundle
   auth:
+    # oidcIssuerURL defaults to match service.auth.issuerUrl -- set automatically
+    # by install-osac via --set ui.auth.oidcIssuerURL when global.clusterDomain is set.
     certs:
       caBundle:
         configMap: ca-bundle
@@ -158,6 +181,11 @@ aap:
     eeImage: "ghcr.io/osac-project/osac-aap:latest"
     projectGitUri: "https://github.com/osac-project/osac"
     projectGitBranch: "main"
+  instanceGroups:
+    clusterFulfillment:
+      enabled: true
+    networkFulfillment:
+      enabled: true
 
 # --- Validation ---
 validation:
@@ -181,12 +209,6 @@ bmf:
 # --- Hub Access ---
 hubAccess:
   enabled: true
-
-networkManagers:
-  - name: netris
-    role: fabric
-    description: "Netris SDN fabric manager"
-    capabilities: "ipv4"
 
 # --- LVMS StorageBackend registration ---
 lvms:

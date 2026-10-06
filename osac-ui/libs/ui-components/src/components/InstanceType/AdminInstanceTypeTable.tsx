@@ -32,7 +32,7 @@ const AdminInstanceTypeTable = ({ instanceTypes }: AdminInstanceTypeTableProps) 
         <Tr>
           <Th width={NAME_COLUMN_WIDTH}>{t('Name')}</Th>
           <Th width={LIFECYCLE_STATE_COLUMN_WIDTH}>{t('Lifecycle state')}</Th>
-          <Th width={CPU_CORES_COLUMN_WIDTH}>{t('CPU cores')}</Th>
+          <Th width={CPU_CORES_COLUMN_WIDTH}>{t('vCPUs')}</Th>
           <Th width={MEMORY_COLUMN_WIDTH}>{t('Memory (GiB)')}</Th>
           <Th width={GPU_COLUMN_WIDTH}>{t('GPUs')}</Th>
           <Th width={CREATED_COLUMN_WIDTH}>{t('Created')}</Th>
@@ -72,8 +72,8 @@ const AdminInstanceTypeTable = ({ instanceTypes }: AdminInstanceTypeTableProps) 
                 <Td dataLabel={t('Lifecycle state')} width={LIFECYCLE_STATE_COLUMN_WIDTH}>
                   <InstanceTypeLifecycleLabel state={instanceType.spec?.state} />
                 </Td>
-                <Td dataLabel={t('CPU cores')} width={CPU_CORES_COLUMN_WIDTH}>
-                  {instanceType.spec?.cores ?? '—'}
+                <Td dataLabel={t('vCPUs')} width={CPU_CORES_COLUMN_WIDTH}>
+                  {instanceType.spec?.vcpus ?? '—'}
                 </Td>
                 <Td dataLabel={t('Memory (GiB)')} width={MEMORY_COLUMN_WIDTH}>
                   {instanceType.spec?.memoryGib ?? '—'}

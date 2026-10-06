@@ -17,7 +17,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"slices"
 	"strings"
 
 	"github.com/gobuffalo/flect"
@@ -44,7 +43,6 @@ type GenericDAOBuilder[O Object] struct {
 	table             string
 	defaultLimit      int32
 	maxLimit          int32
-	eventCallbacks    []EventCallback
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
 	filterDesc        protoreflect.MessageDescriptor
@@ -75,7 +73,6 @@ type GenericDAO[O Object] struct {
 	defaultLimit     int32
 	maxLimit         int32
 	timestampDesc    protoreflect.MessageDescriptor
-	eventCallbacks   []EventCallback
 	objectTemplate   protoreflect.Message
 	metadataField    protoreflect.FieldDescriptor
 	metadataTemplate protoreflect.Message
@@ -140,16 +137,6 @@ func (b *GenericDAOBuilder[O]) SetMaxLimit(value int) *GenericDAOBuilder[O] {
 	return b
 }
 
-// AddEventCallback adds a function that will be called to process events when the DAO creates, updates or deletes
-// an object.
-//
-// The functions are called synchronously, in the same order they were added, and with the same context used by the
-// DAO for its operations. If any of them returns an error the transaction will be rolled back.
-func (b *GenericDAOBuilder[O]) AddEventCallback(value EventCallback) *GenericDAOBuilder[O] {
-	b.eventCallbacks = append(b.eventCallbacks, value)
-	return b
-}
-
 // SetTenancyLogic sets the tenancy logic. This is mandatory.
 func (b *GenericDAOBuilder[O]) SetTenancyLogic(value auth.TenancyLogic) *GenericDAOBuilder[O] {
 	b.tenancyLogic = value
@@ -170,7 +157,7 @@ func (b *GenericDAOBuilder[O]) SetTenancyLogic(value auth.TenancyLogic) *Generic
 //	  when the operation succeeds.
 //	table - Name of the database table, for example `clusters` or `hosts`.
 //	type - Name of the DAO operation, for example `create`, `get`, `list`, `update`, `delete`,
-//	  `exists`, `lock`, `count` or `archive`.
+//	  `exists`, `lock`, `count`, `archive` or `signal`.
 //
 // To calculate the average duration for create operations on the clusters table during the last 10 minutes,
 // for example, use a Prometheus expression like this:
@@ -314,7 +301,6 @@ func (b *GenericDAOBuilder[O]) Build() (result *GenericDAO[O], err error) {
 		defaultLimit:     b.defaultLimit,
 		maxLimit:         b.maxLimit,
 		timestampDesc:    timestampDesc,
-		eventCallbacks:   slices.Clone(b.eventCallbacks),
 		objectTemplate:   objectTemplate,
 		metadataField:    metadataField,
 		metadataTemplate: metadataTemplate,
@@ -431,6 +417,7 @@ const (
 	getOpType     opType = "get"
 	listOpType    opType = "list"
 	lockOpType    opType = "lock"
+	signalOpType  opType = "signal"
 	updateOpType  opType = "update"
 )
 

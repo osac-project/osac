@@ -381,6 +381,7 @@ var _ = Describe("Private compute instances server", func() {
 					Name:   fmt.Sprintf("userdata-%s", uuid.NewString()[:8]),
 					Tenant: testTenant,
 				}.Build(),
+				Type: privatev1.SecretType_SECRET_TYPE_USER_DATA,
 				Data: map[string][]byte{userDataSecretDataKey: []byte("#cloud-config")},
 			}.Build()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
@@ -1653,90 +1654,6 @@ var _ = Describe("Private compute instances server", func() {
 				Expect(status.Message()).To(Equal("catalog_item and template are mutually exclusive"))
 			})
 
-			It("Rejects user value for non-editable field", func() {
-				createCICatalogItem("ci-cat-nonedit", true, privatev1.ComputeInstanceCatalogItemFields_builder{SshPublicKey: privatev1.StringFieldPolicy_builder{Locked: proto.String("forced-key")}.Build(), NetworkAttachments: privatev1.ComputeNetworkAttachmentListFieldPolicy_builder{Editable: &privatev1.EditableComputeNetworkAttachmentList{}}.Build()}.Build())
-
-				_, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
-					Object: privatev1.ComputeInstance_builder{
-						Metadata: privatev1.Metadata_builder{
-							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
-						}.Build(),
-						Spec: privatev1.ComputeInstanceSpec_builder{
-							CatalogItem:  privatev1.ComputeInstanceCatalogItemReference_builder{Id: "ci-cat-nonedit"}.Build(),
-							SshPublicKey: new("user-key"),
-							NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
-								privatev1.ComputeNetworkAttachment_builder{
-									Subnet: privatev1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
-								}.Build(),
-							},
-						}.Build(),
-					}.Build(),
-				}.Build())
-				Expect(err).To(HaveOccurred())
-				status, ok := grpcstatus.FromError(err)
-				Expect(ok).To(BeTrue())
-				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-				Expect(status.Message()).To(ContainSubstring("not editable"))
-			})
-
-			DescribeTable("accepts editable values without legacy JSON Schema constraints",
-				func(catID string, value string, expectError bool) {
-					createCICatalogItem(catID, true, privatev1.ComputeInstanceCatalogItemFields_builder{SshPublicKey: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build(), NetworkAttachments: privatev1.ComputeNetworkAttachmentListFieldPolicy_builder{Editable: &privatev1.EditableComputeNetworkAttachmentList{}}.Build()}.Build())
-
-					response, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
-						Object: privatev1.ComputeInstance_builder{
-							Metadata: privatev1.Metadata_builder{
-								Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
-							}.Build(),
-							Spec: privatev1.ComputeInstanceSpec_builder{
-								CatalogItem:  privatev1.ComputeInstanceCatalogItemReference_builder{Id: catID}.Build(),
-								SshPublicKey: new(value),
-								NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
-									privatev1.ComputeNetworkAttachment_builder{
-										Subnet: privatev1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
-									}.Build(),
-								},
-							}.Build(),
-						}.Build(),
-					}.Build())
-					if expectError {
-						Expect(err).To(HaveOccurred())
-						status, ok := grpcstatus.FromError(err)
-						Expect(ok).To(BeTrue())
-						Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-						Expect(status.Message()).To(ContainSubstring("validation failed for field 'ssh_public_key'"))
-					} else {
-						Expect(err).ToNot(HaveOccurred())
-						Expect(response.GetObject().GetSpec().GetSshPublicKey()).To(Equal(value))
-					}
-				},
-				Entry("accepts a short value", "ci-cat-schema-reject", "short-val", false),
-				Entry("accepts value meeting minLength", "ci-cat-schema-accept", "long-enough-key", false),
-			)
-
-			It("Applies default for editable field when not provided", func() {
-				createCICatalogItem("ci-cat-dflt", true, privatev1.ComputeInstanceCatalogItemFields_builder{SshPublicKey: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{DefaultValue: proto.String("default-key")}.Build()}.Build(), NetworkAttachments: privatev1.ComputeNetworkAttachmentListFieldPolicy_builder{Editable: &privatev1.EditableComputeNetworkAttachmentList{}}.Build()}.Build())
-
-				response, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
-					Object: privatev1.ComputeInstance_builder{
-						Metadata: privatev1.Metadata_builder{
-							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
-						}.Build(),
-						Spec: privatev1.ComputeInstanceSpec_builder{
-							CatalogItem: privatev1.ComputeInstanceCatalogItemReference_builder{Id: "ci-cat-dflt"}.Build(),
-							NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
-								privatev1.ComputeNetworkAttachment_builder{
-									Subnet: privatev1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
-								}.Build(),
-							},
-						}.Build(),
-					}.Build(),
-				}.Build())
-				Expect(err).ToNot(HaveOccurred())
-				object := response.GetObject()
-				Expect(object.GetSpec().GetSshPublicKey()).To(Equal("default-key"))
-			})
-
 			It("Rejects changing catalog_item on update", func() {
 				createCICatalogItem("ci-cat-immut", true, nil)
 
@@ -2487,7 +2404,7 @@ var _ = Describe("Private compute instances server", func() {
 				Expect(ok).To(BeTrue())
 				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 				Expect(status.Message()).To(ContainSubstring("security group"))
-				Expect(status.Message()).To(ContainSubstring("belongs to VirtualNetwork"))
+				Expect(status.Message()).To(ContainSubstring("belongs to a different virtual network"))
 			})
 
 			It("Should allow empty security_groups in network_attachments", func() {
@@ -2575,6 +2492,7 @@ var _ = Describe("Private compute instances server", func() {
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 				created := createResponse.GetObject()
+				originalAttachment := proto.Clone(created.GetSpec().GetNetworkAttachments()[0]).(*privatev1.ComputeNetworkAttachment)
 
 				// Update subnet to non-READY state (simulate resource being deleted/modified)
 				subnet.GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_PENDING)
@@ -2590,14 +2508,7 @@ var _ = Describe("Private compute instances server", func() {
 				deletionTime := timestamppb.Now()
 				created.GetMetadata().SetDeletionTimestamp(deletionTime)
 
-				// Try to update security groups while subnet is PENDING
-				// A live object must still pass readiness validation.
-				created.GetSpec().SetNetworkAttachments([]*privatev1.ComputeNetworkAttachment{
-					privatev1.ComputeNetworkAttachment_builder{
-						Subnet:         privatev1.SubnetLocalReference_builder{Id: subnet.GetId()}.Build(),
-						SecurityGroups: []*privatev1.SecurityGroupLocalReference{}, // Change security groups (allowed)
-					}.Build(),
-				})
+				// An unchanged attachment still goes through readiness validation while the instance is live.
 				updateRequest := &privatev1.ComputeInstancesUpdateRequest{}
 				updateRequest.SetObject(created)
 				updateRequest.SetUpdateMask(&fieldmaskpb.FieldMask{Paths: []string{"spec.network_attachments"}})
@@ -2623,13 +2534,27 @@ var _ = Describe("Private compute instances server", func() {
 				Expect(err).NotTo(HaveOccurred())
 				_, err = server.Delete(ctx, privatev1.ComputeInstancesDeleteRequest_builder{Id: created.GetId()}.Build())
 				Expect(err).NotTo(HaveOccurred())
+
+				// Deletion permits readiness checks to tolerate the pending subnet, but does not make the attachment mutable.
+				deletingObject := proto.Clone(created).(*privatev1.ComputeInstance)
+				deletingObject.GetSpec().GetNetworkAttachments()[0].SetSecurityGroups(nil)
+				updateRequest.SetObject(deletingObject)
 				updateRequest.SetUpdateMask(&fieldmaskpb.FieldMask{Paths: []string{"spec.network_attachments"}})
+				_, err = server.Update(ctx, updateRequest)
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				stored, err = server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: created.GetId()}.Build())
+				Expect(err).NotTo(HaveOccurred())
+				Expect(stored.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeTrue())
+				Expect(stored.GetObject().GetSpec().GetNetworkAttachments()[0].GetSecurityGroups()).To(HaveLen(1))
+
+				// An unchanged attachment update is still accepted for a deleting instance.
+				deletingObject.GetSpec().SetNetworkAttachments([]*privatev1.ComputeNetworkAttachment{originalAttachment})
+				updateRequest.SetObject(deletingObject)
 				_, err = server.Update(ctx, updateRequest)
 				Expect(err).NotTo(HaveOccurred())
 				stored, err = server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: created.GetId()}.Build())
 				Expect(err).NotTo(HaveOccurred())
-				Expect(stored.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeTrue())
-				Expect(stored.GetObject().GetSpec().GetNetworkAttachments()[0].GetSecurityGroups()).To(BeEmpty())
+				Expect(proto.Equal(stored.GetObject().GetSpec().GetNetworkAttachments()[0], originalAttachment)).To(BeTrue())
 
 			})
 		})
@@ -2696,9 +2621,12 @@ var _ = Describe("Private compute instances server", func() {
 				Expect(ok).To(BeTrue())
 				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 				Expect(status.Message()).To(ContainSubstring("subnet is immutable"))
+				stored, err := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(proto.Equal(stored.GetObject().GetSpec(), createResponse.GetObject().GetSpec())).To(BeTrue())
 			})
 
-			It("Allows changing security groups in network_attachments", func() {
+			It("Rejects changing security groups in network_attachments", func() {
 				// Create a ComputeInstance with networkAttachments
 				createResponse, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
 					Object: privatev1.ComputeInstance_builder{
@@ -2721,7 +2649,7 @@ var _ = Describe("Private compute instances server", func() {
 
 				id := createResponse.GetObject().GetId()
 
-				// Change security groups (should succeed)
+				// Change only security groups.
 				updateResponse, err := server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
 					Object: privatev1.ComputeInstance_builder{
 						Id: id,
@@ -2739,12 +2667,96 @@ var _ = Describe("Private compute instances server", func() {
 						Paths: []string{"spec.network_attachments"},
 					},
 				}.Build())
+				Expect(updateResponse).To(BeNil())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				stored, err := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
 				Expect(err).ToNot(HaveOccurred())
-				Expect(updateResponse).ToNot(BeNil())
-				sgs := updateResponse.GetObject().GetSpec().GetNetworkAttachments()[0].GetSecurityGroups()
-				Expect(sgs).To(HaveLen(2))
-				Expect(sgs[0].GetId()).To(Equal(sg1.GetId()))
-				Expect(sgs[1].GetId()).To(Equal(sg2.GetId()))
+				attachments := stored.GetObject().GetSpec().GetNetworkAttachments()
+				Expect(attachments).To(HaveLen(1))
+				Expect(attachments[0].GetSubnet().GetId()).To(Equal(subnet1.GetId()))
+				Expect(attachments[0].GetSecurityGroups()).To(HaveLen(1))
+				Expect(attachments[0].GetSecurityGroups()[0].GetId()).To(Equal(sg1.GetId()))
+			})
+
+			It("Accepts an identical network attachment", func() {
+				created, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
+					Object: privatev1.ComputeInstance_builder{
+						Metadata: privatev1.Metadata_builder{Name: "test-compute-instance"}.Build(),
+						Spec: privatev1.ComputeInstanceSpec_builder{
+							Template: privatev1.ComputeInstanceTemplateReference_builder{Id: template.GetId()}.Build(),
+							NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+								privatev1.ComputeNetworkAttachment_builder{
+									Subnet: privatev1.SubnetLocalReference_builder{Id: subnet1.GetId()}.Build(),
+									SecurityGroups: []*privatev1.SecurityGroupLocalReference{
+										privatev1.SecurityGroupLocalReference_builder{Id: sg1.GetId()}.Build(),
+									},
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				id := created.GetObject().GetId()
+				updated, err := server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+					Object: privatev1.ComputeInstance_builder{
+						Id: id,
+						Spec: privatev1.ComputeInstanceSpec_builder{
+							NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+								privatev1.ComputeNetworkAttachment_builder{
+									Subnet: privatev1.SubnetLocalReference_builder{Id: subnet1.GetId()}.Build(),
+									SecurityGroups: []*privatev1.SecurityGroupLocalReference{
+										privatev1.SecurityGroupLocalReference_builder{Id: sg1.GetId()}.Build(),
+									},
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.network_attachments"}},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(updated.GetObject().GetSpec().GetNetworkAttachments()).To(HaveLen(1))
+				Expect(updated.GetObject().GetSpec().GetNetworkAttachments()[0].GetSecurityGroups()[0].GetId()).To(Equal(sg1.GetId()))
+			})
+
+			It("Rejects reordering network attachments", func() {
+				first := privatev1.ComputeNetworkAttachment_builder{
+					Subnet: privatev1.SubnetLocalReference_builder{Id: subnet1.GetId()}.Build(),
+				}.Build()
+				second := privatev1.ComputeNetworkAttachment_builder{
+					Subnet: privatev1.SubnetLocalReference_builder{Id: subnet2.GetId()}.Build(),
+				}.Build()
+				created, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
+					Object: privatev1.ComputeInstance_builder{
+						Metadata: privatev1.Metadata_builder{Name: "test-compute-instance"}.Build(),
+						Spec: privatev1.ComputeInstanceSpec_builder{
+							Template:           privatev1.ComputeInstanceTemplateReference_builder{Id: template.GetId()}.Build(),
+							NetworkAttachments: []*privatev1.ComputeNetworkAttachment{first, second},
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				id := created.GetObject().GetId()
+				response, err := server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+					Object: privatev1.ComputeInstance_builder{
+						Id: id,
+						Spec: privatev1.ComputeInstanceSpec_builder{
+							NetworkAttachments: []*privatev1.ComputeNetworkAttachment{second, first},
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.network_attachments"}},
+				}.Build())
+				Expect(response).To(BeNil())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				stored, err := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				attachments := stored.GetObject().GetSpec().GetNetworkAttachments()
+				Expect(attachments).To(HaveLen(2))
+				Expect(attachments[0].GetSubnet().GetId()).To(Equal(subnet1.GetId()))
+				Expect(attachments[1].GetSubnet().GetId()).To(Equal(subnet2.GetId()))
+				original := created.GetObject().GetSpec().GetNetworkAttachments()
+				Expect(original).To(HaveLen(2))
+				Expect(proto.Equal(attachments[0], original[0])).To(BeTrue())
+				Expect(proto.Equal(attachments[1], original[1])).To(BeTrue())
 			})
 
 			It("Rejects adding network attachments", func() {
@@ -2795,6 +2807,9 @@ var _ = Describe("Private compute instances server", func() {
 				Expect(ok).To(BeTrue())
 				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 				Expect(status.Message()).To(ContainSubstring("cannot change number"))
+				stored, err := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(proto.Equal(stored.GetObject().GetSpec(), createResponse.GetObject().GetSpec())).To(BeTrue())
 			})
 
 			It("Rejects removing network attachments", func() {
@@ -2845,6 +2860,9 @@ var _ = Describe("Private compute instances server", func() {
 				Expect(ok).To(BeTrue())
 				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 				Expect(status.Message()).To(ContainSubstring("cannot change number"))
+				stored, err := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(proto.Equal(stored.GetObject().GetSpec(), createResponse.GetObject().GetSpec())).To(BeTrue())
 			})
 		})
 
@@ -3092,6 +3110,51 @@ var _ = Describe("Private compute instances server", func() {
 				Expect(err).ToNot(HaveOccurred())
 			}
 
+			createInstanceTypeWithIdentity := func(id, name string, state privatev1.InstanceTypeState, vcpus, memoryGib int32, gpu *privatev1.GpuSpec, deprecation *privatev1.InstanceTypeDeprecation) {
+				instanceTypesDao, err := dao.NewGenericDAO[*privatev1.InstanceType]().
+					SetLogger(logger).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+
+				_, err = instanceTypesDao.Create().SetObject(
+					privatev1.InstanceType_builder{
+						Id: id,
+						Metadata: privatev1.Metadata_builder{
+							Name:   name,
+							Tenant: testTenant,
+						}.Build(),
+						Spec: privatev1.InstanceTypeSpec_builder{
+							Vcpus:       vcpus,
+							MemoryGib:   memoryGib,
+							State:       state,
+							Gpu:         gpu,
+							Deprecation: deprecation,
+						}.Build(),
+					}.Build(),
+				).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+			}
+
+			createInstanceTypeWithSpec := func(name string, state privatev1.InstanceTypeState, vcpus, memoryGib int32, gpu *privatev1.GpuSpec, deprecation *privatev1.InstanceTypeDeprecation) {
+				createInstanceTypeWithIdentity(name, name, state, vcpus, memoryGib, gpu, deprecation)
+			}
+
+			setInstanceTypeState := func(instanceTypeName string, state privatev1.InstanceTypeState) {
+				instanceTypesDao, err := dao.NewGenericDAO[*privatev1.InstanceType]().
+					SetLogger(logger).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+
+				getResponse, err := instanceTypesDao.Get().SetId(instanceTypeName).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				instanceType := getResponse.GetObject()
+				instanceType.GetSpec().SetState(state)
+				_, err = instanceTypesDao.Update().SetObject(instanceType).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+			}
+
 			// Helper to build a full ComputeInstance create request with all required fields.
 			createRequestWithInstanceType := func(instanceTypeName string) *privatev1.ComputeInstancesCreateRequest {
 				// Use a bare template without spec defaults so the instance_type
@@ -3140,6 +3203,12 @@ var _ = Describe("Private compute instances server", func() {
 				}.Build()
 			}
 
+			createComputeInstanceWithType := func(instanceTypeName string) string {
+				response, err := server.Create(ctx, createRequestWithInstanceType(instanceTypeName))
+				Expect(err).ToNot(HaveOccurred())
+				return response.GetObject().GetId()
+			}
+
 			It("Rejects creation when instance_type references a non-existent instance type", func() {
 				request := createRequestWithInstanceType("nonexistent-type")
 				response, err := server.Create(ctx, request)
@@ -3186,6 +3255,212 @@ var _ = Describe("Private compute instances server", func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(response).ToNot(BeNil())
 				Expect(response.GetWarnings()).To(BeEmpty())
+			})
+
+			It("Allows InstanceType changes with more or fewer vCPUs and memory", func() {
+				createInstanceTypeWithSpec("resize-current", privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_ACTIVE, 4, 16, nil, nil)
+				createInstanceTypeWithSpec("resize-large", privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_ACTIVE, 8, 32, nil, nil)
+				createInstanceTypeWithSpec("resize-small", privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_ACTIVE, 2, 8, nil, nil)
+				id := createComputeInstanceWithType("resize-current")
+
+				update := func(instanceTypeName string) *privatev1.ComputeInstancesUpdateResponse {
+					response, err := server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+						Object: privatev1.ComputeInstance_builder{
+							Id: id,
+							Spec: privatev1.ComputeInstanceSpec_builder{
+								InstanceType: privatev1.InstanceTypeReference_builder{Id: instanceTypeName}.Build(),
+							}.Build(),
+						}.Build(),
+						UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.instance_type"}},
+					}.Build())
+					Expect(err).ToNot(HaveOccurred())
+					return response
+				}
+
+				Expect(update("resize-large").GetObject().GetSpec().GetInstanceType().GetId()).To(Equal("resize-large"))
+				Expect(update("resize-small").GetObject().GetSpec().GetInstanceType().GetId()).To(Equal("resize-small"))
+			})
+
+			It("Resolves name-only current and target InstanceType references before comparison", func() {
+				createInstanceTypeWithIdentity("resize-current-id", "resize-current", privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_ACTIVE, 4, 16, nil, nil)
+				createInstanceTypeWithIdentity("resize-target-id", "resize-target", privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_ACTIVE, 8, 32, nil, nil)
+				id := createComputeInstanceWithType("resize-current-id")
+
+				stored, err := server.generic.dao.Get().SetId(id).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				stored.GetObject().GetSpec().SetInstanceType(
+					privatev1.InstanceTypeReference_builder{Name: "resize-current"}.Build(),
+				)
+				_, err = server.generic.dao.Update().SetObject(stored.GetObject()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+
+				response, err := server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+					Object: privatev1.ComputeInstance_builder{
+						Id: id,
+						Spec: privatev1.ComputeInstanceSpec_builder{
+							InstanceType: privatev1.InstanceTypeReference_builder{Name: "resize-target"}.Build(),
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.instance_type"}},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetSpec().GetInstanceType().GetId()).To(Equal("resize-target-id"))
+			})
+
+			It("Returns a warning when resizing to a DEPRECATED InstanceType", func() {
+				createInstanceTypeWithSpec("resize-current", privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_ACTIVE, 4, 16, nil, nil)
+				createInstanceTypeWithSpec("resize-deprecated", privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_DEPRECATED, 8, 32, nil,
+					privatev1.InstanceTypeDeprecation_builder{
+						Replacement:           privatev1.InstanceTypeLocalReference_builder{Id: "resize-replacement"}.Build(),
+						ObsolescenceTimestamp: timestamppb.New(time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)),
+					}.Build())
+				id := createComputeInstanceWithType("resize-current")
+
+				response, err := server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+					Object: privatev1.ComputeInstance_builder{
+						Id: id,
+						Spec: privatev1.ComputeInstanceSpec_builder{
+							InstanceType: privatev1.InstanceTypeReference_builder{Id: "resize-deprecated"}.Build(),
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.instance_type"}},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetWarnings()).To(HaveLen(1))
+				Expect(response.GetWarnings()[0]).To(ContainSubstring("resize-replacement"))
+				Expect(response.GetWarnings()[0]).To(ContainSubstring("2027"))
+			})
+
+			It("Rejects OBSOLETE and missing resize targets before persistence", func() {
+				createInstanceTypeWithSpec("resize-current", privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_ACTIVE, 4, 16, nil, nil)
+				createInstanceTypeWithSpec("resize-obsolete", privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_OBSOLETE, 8, 32, nil, nil)
+				id := createComputeInstanceWithType("resize-current")
+
+				for _, target := range []struct {
+					name string
+					code grpccodes.Code
+				}{
+					{name: "resize-obsolete", code: grpccodes.FailedPrecondition},
+					{name: "resize-missing", code: grpccodes.InvalidArgument},
+				} {
+					response, err := server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+						Object: privatev1.ComputeInstance_builder{
+							Id: id,
+							Spec: privatev1.ComputeInstanceSpec_builder{
+								InstanceType: privatev1.InstanceTypeReference_builder{Id: target.name}.Build(),
+							}.Build(),
+						}.Build(),
+						UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.instance_type"}},
+					}.Build())
+					Expect(response).To(BeNil())
+					status, ok := grpcstatus.FromError(err)
+					Expect(ok).To(BeTrue())
+					Expect(status.Code()).To(Equal(target.code))
+
+					getResponse, getErr := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+					Expect(getErr).ToNot(HaveOccurred())
+					Expect(getResponse.GetObject().GetSpec().GetInstanceType().GetId()).To(Equal("resize-current"))
+				}
+			})
+
+			It("Rejects a resize with a different GPU and accepts the same GPU", func() {
+				currentGPU := privatev1.GpuSpec_builder{
+					PciDeviceSelector: "10DE:20B0",
+					ResourceName:      "nvidia.com/A100",
+					Count:             1,
+				}.Build()
+				otherGPU := privatev1.GpuSpec_builder{
+					PciDeviceSelector: "10DE:1EB8",
+					ResourceName:      "nvidia.com/V100",
+					Count:             1,
+				}.Build()
+				createInstanceTypeWithSpec("resize-gpu-current", privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_ACTIVE, 4, 16, currentGPU, nil)
+				createInstanceTypeWithSpec("resize-gpu-compatible", privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_ACTIVE, 8, 32, currentGPU, nil)
+				createInstanceTypeWithSpec("resize-gpu-incompatible", privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_ACTIVE, 8, 32, otherGPU, nil)
+				id := createComputeInstanceWithType("resize-gpu-current")
+
+				response, err := server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+					Object: privatev1.ComputeInstance_builder{
+						Id: id,
+						Spec: privatev1.ComputeInstanceSpec_builder{
+							InstanceType: privatev1.InstanceTypeReference_builder{Id: "resize-gpu-compatible"}.Build(),
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.instance_type"}},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetSpec().GetInstanceType().GetId()).To(Equal("resize-gpu-compatible"))
+
+				response, err = server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+					Object: privatev1.ComputeInstance_builder{
+						Id: id,
+						Spec: privatev1.ComputeInstanceSpec_builder{
+							InstanceType: privatev1.InstanceTypeReference_builder{Id: "resize-gpu-incompatible"}.Build(),
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.instance_type"}},
+				}.Build())
+				Expect(response).To(BeNil())
+				status, ok := grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+			})
+
+			It("Treats the current OBSOLETE InstanceType as a no-op", func() {
+				createInstanceTypeWithSpec("resize-current", privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_DEPRECATED, 4, 16, nil, nil)
+				id := createComputeInstanceWithType("resize-current")
+				setInstanceTypeState("resize-current", privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_OBSOLETE)
+
+				response, err := server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+					Object: privatev1.ComputeInstance_builder{
+						Id: id,
+						Spec: privatev1.ComputeInstanceSpec_builder{
+							InstanceType: privatev1.InstanceTypeReference_builder{Id: "resize-current"}.Build(),
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.instance_type"}},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetWarnings()).To(BeEmpty())
+				Expect(response.GetObject().GetSpec().GetInstanceType().GetId()).To(Equal("resize-current"))
+			})
+
+			It("Rejects a stale optimistic-lock no-op update", func() {
+				createInstanceTypeWithSpec("resize-current", privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_ACTIVE, 4, 16, nil, nil)
+				id := createComputeInstanceWithType("resize-current")
+				getResponse, err := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+				Expect(err).ToNot(HaveOccurred())
+
+				staleVersion := getResponse.GetObject().GetMetadata().GetVersion() - 1
+				response, err := server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+					Object: privatev1.ComputeInstance_builder{
+						Id:       id,
+						Metadata: privatev1.Metadata_builder{Version: staleVersion}.Build(),
+						Spec: privatev1.ComputeInstanceSpec_builder{
+							InstanceType: privatev1.InstanceTypeReference_builder{Id: "resize-current"}.Build(),
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.instance_type"}},
+					Lock:       true,
+				}.Build())
+				Expect(response).To(BeNil())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.Aborted))
+			})
+
+			It("Does not treat a parent spec mask as an InstanceType-only no-op", func() {
+				createInstanceTypeWithSpec("resize-current", privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_ACTIVE, 4, 16, nil, nil)
+				id := createComputeInstanceWithType("resize-current")
+				getResponse, err := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				spec := getResponse.GetObject().GetSpec()
+				spec.SetRunStrategy(privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_HALTED)
+
+				response, err := server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+					Object:     privatev1.ComputeInstance_builder{Id: id, Spec: spec}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec"}},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetSpec().GetRunStrategy()).To(Equal(privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_HALTED))
 			})
 		})
 

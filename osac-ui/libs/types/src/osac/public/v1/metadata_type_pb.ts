@@ -156,3 +156,4 @@ export type Metadata = Message<"osac.public.v1.Metadata"> & {
  */
 export const MetadataSchema: GenMessage<Metadata> = /*@__PURE__*/
   messageDesc(file_osac_public_v1_metadata_type, 0);
+

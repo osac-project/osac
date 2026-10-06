@@ -267,9 +267,7 @@ var _ = Describe("Tenant deletion with projects", func() {
 		deleteProject(ctx, projectsClient, projectId)
 
 		By("Deleting all remaining projects for the tenant (including auto-created root)")
-		listFilter := fmt.Sprintf(
-			"this.metadata.tenant == %q && !has(this.metadata.deletion_timestamp)", name,
-		)
+		listFilter := fmt.Sprintf("this.metadata.tenant == %q", name)
 		for {
 			listResp, listErr := projectsClient.List(ctx, privatev1.ProjectsListRequest_builder{
 				Filter: &listFilter,
@@ -287,7 +285,9 @@ var _ = Describe("Tenant deletion with projects", func() {
 		_, err = tenantsClient.Signal(ctx, privatev1.TenantsSignalRequest_builder{
 			Id: id,
 		}.Build())
-		Expect(err).ToNot(HaveOccurred())
+		if err != nil {
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
+		}
 
 		By("Verifying the tenant is eventually fully deleted")
 		Eventually(

@@ -8,8 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from tests.e2e.core.grpc_client import GRPCClient
+from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
 from tests.e2e.core.runner import env
+
+BMI_DISK_IMAGE_SOURCE_REF = "oci://quay.io/osac-project/fedora-cloud-bmi:44"
 
 
 @pytest.fixture(scope="session")
@@ -40,15 +42,15 @@ def ssh_public_key() -> Generator[str, None, None]:
 
 
 @pytest.fixture(scope="session")
-def bmi_disk_image(grpc: GRPCClient, test_run_id: str) -> Generator[str, None, None]:
+def bmi_disk_image(private_grpc: GRPCClient, test_run_id: str) -> Generator[str, None, None]:
     """Create a default DiskImage for BMaaS E2E tests and clean it up afterward."""
     di_name = f"e2e-bmi-di-{test_run_id}"
-    di_id = grpc.create_disk_image(name=di_name, source_ref="oci://quay.io/osac-project/fedora-cloud-bmi:44")
+    di_id = private_grpc.create_disk_image(name=di_name, source_ref=BMI_DISK_IMAGE_SOURCE_REF, api=PRIVATE_API)
 
     yield di_name
 
     try:
-        grpc.delete_disk_image(disk_image_id=di_id)
+        private_grpc.delete_disk_image(disk_image_id=di_id, api=PRIVATE_API)
     except Exception as e:
         print(f"WARNING: Failed to delete disk image {di_id}: {e}")
 

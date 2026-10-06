@@ -89,15 +89,33 @@ func (b *PrivateCapabilitiesServerBuilder) Build() (result *PrivateCapabilitiesS
 // Get is the implementation of the method that returns the capabilities of the server.
 func (s *PrivateCapabilitiesServer) Get(ctx context.Context,
 	request *privatev1.CapabilitiesGetRequest) (response *privatev1.CapabilitiesGetResponse, err error) {
-	var enabledServices []string
-	if s.serviceFlags != nil {
-		enabledServices = s.serviceFlags.EnabledServices()
-	}
 	response = privatev1.CapabilitiesGetResponse_builder{
 		Authn: &privatev1.AuthnCapabilities{
 			TrustedTokenIssuers: s.authnTrustedTokenIssuers,
 		},
-		EnabledServices: enabledServices,
+		EnabledServices: enabledPrivateServiceTiers(s.serviceFlags),
 	}.Build()
 	return response, nil
+}
+
+func enabledPrivateServiceTiers(flags *services.Flags) []privatev1.ServiceTier {
+	if flags == nil {
+		return nil
+	}
+
+	serviceNames := flags.EnabledServices()
+	result := make([]privatev1.ServiceTier, 0, len(serviceNames))
+	for _, serviceName := range serviceNames {
+		switch serviceName {
+		case "caas":
+			result = append(result, privatev1.ServiceTier_SERVICE_TIER_CAAS)
+		case "vmaas":
+			result = append(result, privatev1.ServiceTier_SERVICE_TIER_VMAAS)
+		case "bmaas":
+			result = append(result, privatev1.ServiceTier_SERVICE_TIER_BMAAS)
+		case "maas":
+			result = append(result, privatev1.ServiceTier_SERVICE_TIER_MAAS)
+		}
+	}
+	return result
 }

@@ -8,8 +8,8 @@ plugins:
     include_wkt: true
 inputs:
   - git_repo: https://github.com/osac-project/osac.git
-    branch: main
-    subdir: fulfillment-service/proto/public
+    branch: stable
+    subdir: proto/public
   - git_repo: https://github.com/osac-project/osac.git
-    branch: main
-    subdir: fulfillment-service/proto/private
+    branch: stable
+    subdir: proto/private

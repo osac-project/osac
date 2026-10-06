@@ -31,6 +31,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/defaultnetworking"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/idp"
 	"github.com/osac-project/osac/fulfillment-service/internal/masks"
@@ -43,6 +44,7 @@ type FunctionBuilder struct {
 	connection          *grpc.ClientConn
 	projectGroupManager *idp.ProjectGroupManager
 	usersClient         privatev1.UsersClient
+	defaultNetwork      defaultnetworking.Manager
 }
 
 // NewFunction creates a builder that can be used to configure and create reconciler functions.
@@ -74,6 +76,13 @@ func (b *FunctionBuilder) SetUsersClient(value privatev1.UsersClient) *FunctionB
 	return b
 }
 
+// SetDefaultNetworking sets the controller-owned manager used to clean up
+// system-created networking when a tenant root project is deleted.
+func (b *FunctionBuilder) SetDefaultNetworking(value defaultnetworking.Manager) *FunctionBuilder {
+	b.defaultNetwork = value
+	return b
+}
+
 // Build uses the data stored in the builder to create and configure a new reconciler function.
 func (b *FunctionBuilder) Build() (result *function, err error) {
 	if b.logger == nil {
@@ -101,6 +110,7 @@ func (b *FunctionBuilder) Build() (result *function, err error) {
 		usersClient:              usersClient,
 		projectMembershipsClient: privatev1.NewProjectMembershipsClient(b.connection),
 		projectGroupManager:      b.projectGroupManager,
+		defaultNetwork:           b.defaultNetwork,
 		maskCalculator:           masks.NewCalculator().Build(),
 	}
 	return
@@ -114,6 +124,7 @@ type function struct {
 	usersClient              privatev1.UsersClient
 	projectMembershipsClient privatev1.ProjectMembershipsClient
 	projectGroupManager      *idp.ProjectGroupManager
+	defaultNetwork           defaultnetworking.Manager
 	maskCalculator           *masks.Calculator
 }
 
@@ -381,6 +392,15 @@ func (t *task) delete(ctx context.Context) error {
 		t.project.GetStatus().SetState(privatev1.ProjectState_PROJECT_STATE_DELETING)
 		t.project.GetStatus().SetMessage("Pending ProjectMembership deletion prior to project deletion")
 		return nil
+	}
+
+	// Default networking belongs to the tenant root project. The controller
+	// removes those resources through the authenticated controller identity;
+	// ordinary API callers remain blocked by the system-managed protection.
+	if t.project.GetMetadata().GetName() == "" && t.r.defaultNetwork != nil {
+		if err := t.r.defaultNetwork.Delete(ctx, t.project.GetMetadata().GetTenant()); err != nil {
+			return fmt.Errorf("failed to delete default networking resources: %w", err)
+		}
 	}
 
 	// Clean up Keycloak groups

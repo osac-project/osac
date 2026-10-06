@@ -51,6 +51,7 @@ if [[ -n "${RELEASE_NAMESPACE}" ]]; then
 fi
 try_delete delete clusterrole,clusterrolebinding "osac-infra-apply-ca-bundle" --ignore-not-found
 try_delete delete role,rolebinding "osac-infra-apply-ca-bundle" -n cert-manager --ignore-not-found
+try_delete delete secret ingress-ca -n cert-manager --ignore-not-found
 
 if [[ "${cleanup_failed}" -ne 0 ]]; then
   echo "ERROR: CA Bundle cleanup incomplete" >&2

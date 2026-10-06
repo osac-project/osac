@@ -16,8 +16,11 @@ import {
   type BareMetalInstanceCatalogItem,
   BareMetalInstanceType,
   BareMetalInstanceTypes,
+  DiskImages,
 } from '@osac/types';
 import { useListResource } from '@osac/ui-components/api/use-resource';
+import { DISK_IMAGE_NON_OBSOLETE_FILTER } from '@osac/ui-components/api/v1/disk-image';
+import { ResourceSelectField } from '@osac/ui-components/components/Form/ResourceSelectField';
 import { SelectField } from '@osac/ui-components/components/Form/SelectField';
 import { getErrorMessage } from '@osac/ui-components/utils/error';
 
@@ -27,7 +30,6 @@ import {
   BM_USER_DATA_WIRE_PATH,
   BareMetalInstanceWizardValues,
 } from './fields';
-import { getDiskImageName } from './utils';
 import { useTranslation } from '../../../../../hooks/useTranslation';
 import OsacForm from '../../../../Form/OsacForm';
 import { getCatalogFieldOverlay, readCatalogFieldDefinitions } from '../../catalogOverlay';
@@ -41,7 +43,7 @@ const InstanceTypeDescription = ({ instanceType }: { instanceType: BareMetalInst
   const disks = instanceType.spec?.hardware?.disks.map((a) => `${a.type} (${a.capacityGb})`);
 
   return (
-    <>
+    <Gallery hasGutter>
       <GalleryItem>
         <Card variant="secondary" isFullHeight>
           <CardTitle>{t('CPU')}</CardTitle>
@@ -106,7 +108,7 @@ const InstanceTypeDescription = ({ instanceType }: { instanceType: BareMetalInst
           </CardBody>
         </Card>
       </GalleryItem>
-    </>
+    </Gallery>
   );
 };
 
@@ -152,7 +154,6 @@ const BareMetalConfigurationStep = ({ catalogItem }: Props) => {
             name="spec.instanceType.name"
             label={t('Instance type')}
             fieldId="instance-type"
-            isRequired
             isLoading={isLoading}
             isDisabled={!instanceTypeOverlay.editable || !!error}
             placeholder={t('Select an instance type')}
@@ -164,19 +165,25 @@ const BareMetalConfigurationStep = ({ catalogItem }: Props) => {
           />
         </OsacForm>
       </StackItem>
-      <StackItem>
-        <Gallery hasGutter>
-          {currentInstanceType && <InstanceTypeDescription instanceType={currentInstanceType} />}
-          <GalleryItem>
-            <Card variant="secondary" isFullHeight>
-              <CardTitle>{t('Disk image')}</CardTitle>
-              <CardBody>{getDiskImageName(catalogItem) || '-'}</CardBody>
-            </Card>
-          </GalleryItem>
-        </Gallery>
-      </StackItem>
+      {currentInstanceType && (
+        <StackItem>
+          <InstanceTypeDescription instanceType={currentInstanceType} />
+        </StackItem>
+      )}
       <StackItem>
         <OsacForm>
+          <ResourceSelectField
+            name="spec.diskImage"
+            label={t('Disk image')}
+            fieldId="disk-image"
+            service={DiskImages}
+            request={{ filter: DISK_IMAGE_NON_OBSOLETE_FILTER }}
+            isRequired
+            placeholder={t('Select a disk image')}
+            loadErrorTitle={t('Could not load disk images')}
+            emptyTitle={t('No disk images available')}
+            emptyDescription={t('Contact your administrator to have a disk image provisioned.')}
+          />
           <UserDataField
             catalogItem={catalogItem}
             name={BM_USER_DATA_FORM_PATH}

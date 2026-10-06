@@ -1,3 +1,5 @@
+import type { ResourceSelectValue } from '../../../../Form/resourceSelectValue';
+
 export interface ClusterNodeSetRow {
   rowId: string;
   name: string;
@@ -23,6 +25,13 @@ export interface ClusterWizardValues {
       podCidr: string;
       serviceCidr: string;
     };
+    useDefaultNetwork: boolean;
+    networkAttachment: {
+      virtualNetwork: ResourceSelectValue;
+      subnet: ResourceSelectValue;
+      securityGroups: ResourceSelectValue[];
+    };
+    autoExternalIpAttachment: boolean;
   };
 }
 

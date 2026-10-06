@@ -30,6 +30,7 @@
         namespace: "{{ lvms_storage_config_namespace }}"
         labels:
           osac.openshift.io/tenant: "{{ tenant_name }}"
+          osac.openshift.io/storage-provider: lvms
           app.kubernetes.io/managed-by: osac-aap
       stringData:
         provider: lvms

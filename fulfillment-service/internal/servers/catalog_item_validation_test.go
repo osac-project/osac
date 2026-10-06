@@ -23,9 +23,33 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
-func catalogPolicyStringPtr(value string) *string { return &value }
-
 var _ = Describe("Catalog Item typed field policies", func() {
+	DescribeTable("validates concrete SSH policy values",
+		func(validate func(*privatev1.StringFieldPolicy) error) {
+			empty := ""
+			malformed := "not-an-openssh-key"
+			valid := testSSHPublicKey
+
+			Expect(validate(privatev1.StringFieldPolicy_builder{Locked: &empty}.Build())).To(HaveOccurred())
+			Expect(validate(privatev1.StringFieldPolicy_builder{
+				Editable: privatev1.EditableStringField_builder{DefaultValue: &empty}.Build(),
+			}.Build())).To(HaveOccurred())
+			Expect(validate(privatev1.StringFieldPolicy_builder{Locked: &malformed}.Build())).To(HaveOccurred())
+			Expect(validate(privatev1.StringFieldPolicy_builder{Locked: &valid}.Build())).To(Succeed())
+			Expect(validate(privatev1.StringFieldPolicy_builder{
+				Editable: privatev1.EditableStringField_builder{}.Build(),
+			}.Build())).To(Succeed())
+		},
+		Entry("for Cluster Catalog Items", func(policy *privatev1.StringFieldPolicy) error {
+			return validateClusterCatalogItemScalarPolicies(
+				privatev1.ClusterCatalogItemFields_builder{SshPublicKey: policy}.Build())
+		}),
+		Entry("for BareMetalInstance Catalog Items", func(policy *privatev1.StringFieldPolicy) error {
+			return validateBareMetalInstanceCatalogItemScalarPolicies(
+				privatev1.BareMetalInstanceCatalogItemFields_builder{SshPublicKey: policy}.Build())
+		}),
+	)
+
 	It("applies compute defaults without aliasing the Catalog Item", func() {
 		defaultImage := privatev1.DiskImageReference_builder{Name: "default-image"}.Build()
 		spec := &privatev1.ComputeInstanceSpec{}
@@ -34,25 +58,22 @@ var _ = Describe("Catalog Item typed field policies", func() {
 				DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{
 					Editable: privatev1.EditableDiskImageReferenceField_builder{DefaultValue: defaultImage}.Build(),
 				}.Build(),
-				SshPublicKey: privatev1.StringFieldPolicy_builder{
-					Editable: privatev1.EditableStringField_builder{DefaultValue: catalogPolicyStringPtr("ssh-ed25519 default")}.Build(),
-				}.Build(),
 			}.Build(),
 		}.Build()
 
 		Expect(applyComputeInstanceCatalogItemPolicies(spec, item.GetFields())).To(Succeed())
 		Expect(spec.GetDiskImage().GetName()).To(Equal("default-image"))
-		Expect(spec.GetSshPublicKey()).To(Equal("ssh-ed25519 default"))
 		spec.GetDiskImage().SetName("mutated")
 		Expect(item.GetFields().GetDiskImage().GetEditable().GetDefaultValue().GetName()).To(Equal("default-image"))
 	})
 
 	It("rejects supplied values for locked compute fields", func() {
-		locked := "ssh-ed25519 catalog"
-		spec := privatev1.ComputeInstanceSpec_builder{SshPublicKey: catalogPolicyStringPtr("ssh-ed25519 user")}.Build()
+		locked := privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS
+		spec := privatev1.ComputeInstanceSpec_builder{RunStrategy: &locked}.Build()
+		lockedPolicy := locked
 		item := privatev1.ComputeInstanceCatalogItem_builder{
 			Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
-				SshPublicKey: privatev1.StringFieldPolicy_builder{Locked: &locked}.Build(),
+				RunStrategy: privatev1.ComputeInstanceRunStrategyFieldPolicy_builder{Locked: &lockedPolicy}.Build(),
 			}.Build(),
 		}.Build()
 
@@ -75,8 +96,8 @@ var _ = Describe("Catalog Item typed field policies", func() {
 	It("treats locked Cluster node sets as a whole map", func() {
 		size := int32(3)
 		nodeSets := privatev1.ClusterNodeSetMap_builder{
-			Items: map[string]*privatev1.ClusterTemplateNodeSet{
-				"workers": privatev1.ClusterTemplateNodeSet_builder{Size: size}.Build(),
+			Items: map[string]*privatev1.ClusterCatalogNodeSet{
+				"workers": privatev1.ClusterCatalogNodeSet_builder{Size: size}.Build(),
 			},
 		}.Build()
 		item := privatev1.ClusterCatalogItem_builder{
@@ -132,15 +153,6 @@ var _ = Describe("Catalog Item typed field policies", func() {
 		Expect(validateCatalogItemNetworkAttachmentsNotEmpty("fields.network_attachments", bareMetalDefault)).To(MatchError(ContainSubstring("field 'fields.network_attachments': locked/default network attachments must not be empty")))
 	})
 
-	It("validates atomic Cluster node-set map values", func() {
-		size := int32(2)
-		valid := map[string]*privatev1.ClusterNodeSet{"workers": privatev1.ClusterNodeSet_builder{Size: &size}.Build()}
-		Expect(validateClusterCatalogItemNodeSetMap("fields.node_sets", valid)).To(Succeed())
-		Expect(validateClusterCatalogItemNodeSetMap("fields.node_sets", map[string]*privatev1.ClusterNodeSet{"workers": nil})).To(MatchError(ContainSubstring("field 'fields.node_sets': node set 'workers' must not be null")))
-		zero := int32(0)
-		Expect(validateClusterCatalogItemNodeSetMap("fields.node_sets", map[string]*privatev1.ClusterNodeSet{"workers": privatev1.ClusterNodeSet_builder{Size: &zero}.Build()})).To(MatchError(ContainSubstring("field 'fields.node_sets': node set 'workers' size must be greater than zero")))
-	})
-
 	It("allows shared local policies only when editable without a default", func() {
 		scope := referenceScope{tenant: auth.SharedTenant, project: ""}
 		Expect(validateSharedCatalogItemLocalReferencePolicy(scope, "fields.pull_secret_secret", false, false)).To(Succeed())
@@ -162,7 +174,7 @@ var _ = Describe("Catalog Item typed field policies", func() {
 		Expect(localSecret.GetId()).To(Equal("secret-id"))
 		Expect(localSecret.GetName()).To(Equal("secret-name"))
 
-		localBareMetal := canonicalBareMetalInstanceTypeLocalReference(privatev1.BareMetalInstanceType_builder{Id: "bmi-type-id", Metadata: privatev1.Metadata_builder{Name: "bmi-type-name"}.Build()}.Build())
+		localBareMetal := canonicalBareMetalInstanceTypeReference(privatev1.BareMetalInstanceType_builder{Id: "bmi-type-id", Metadata: privatev1.Metadata_builder{Name: "bmi-type-name"}.Build()}.Build())
 		Expect(localBareMetal.GetId()).To(Equal("bmi-type-id"))
 		Expect(localBareMetal.GetName()).To(Equal("bmi-type-name"))
 

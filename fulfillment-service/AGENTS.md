@@ -16,6 +16,10 @@ below, then read and follow them. These documents are authoritative for their
 respective areas.
 
 - API or proto work: [`docs/API.md`](docs/API.md) and [`docs/CLEANAPI.md`](docs/CLEANAPI.md)
+- API or CLI request input changes:
+  [`docs/REQUEST_PATH_TRACING.md`](docs/REQUEST_PATH_TRACING.md). Trace the path
+  from the user-facing entry point through routing, filtering, and
+  transformation layers to the handler.
 - Authentication/authorization: [`docs/AUTH.md`](docs/AUTH.md)
 - Database or request lifecycle: [`docs/CODEWALK.md`](docs/CODEWALK.md)
 - Deployment and local setup: [`docs/INSTALL.md`](docs/INSTALL.md) and [`README.md`](README.md)
@@ -60,10 +64,18 @@ server run, use `ginkgo run internal/servers`.
 
 ### Integration tests
 
+See the [fulfillment-service test tiers and coverage notes](../docs/INTEGRATION-TESTING.md#fulfillment-service).
+
 The installer test target builds, loads, and deploys the current service image.
 It reuses the existing cluster and database. For a full suite run, use a fresh
 environment unless the user agrees to reuse the database. See `README.md` for
 prerequisites and host entries.
+
+The `it/` suite includes CLI workflows that exercise only Fulfillment Service
+APIs. Its harness builds the CLI from this checkout and runs it against the
+deployed service. Catalog Item API behavior, CLI creation, and the ClusterOrder
+release image written by Fulfillment are checked in `it/`. Keep cross-component
+provisioning journeys under `tests/e2e/`.
 
 To prepare a fresh environment, recreate the dedicated `osac-dev` Kind
 cluster. Collect useful diagnostics before deleting it.

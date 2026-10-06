@@ -106,3 +106,24 @@
     msg: >-
       V-Net '{{ subnet_name }}' {{ (vnet_already_existed | default(false)) | ternary('already exists', 'created successfully') }}
       (ID: {{ vnet_id | default('unknown') }})
+
+- name: Read V-Net fabric outputs
+  ansible.builtin.include_role:
+    name: netris.controller.vnet
+    tasks_from: read_by_id
+  vars:
+    vnet_id: "{{ vnet_id }}"
+
+- name: Publish fabric outputs for the k8s manager
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: "subnet-{{ subnet_name }}-fabric-output"
+        namespace: "{{ subnet.metadata.namespace }}"
+      data:
+        l2_vni: "{{ netris_vnet_detail.l2_vni | string }}"
+        l3_vni: "{{ _parent_vpc.l3_vni | string }}"
+        fabric_reserved_range: "{{ netris_vnet_detail.gateway_range }}"

@@ -1,0 +1,368 @@
+---
+# Per-tenant verification (loop_var: _t). Layer 1 (control-plane readiness),
+# Layer 2 (dataplane smoke), Layer 3 (dataplane deep, representative only).
+
+- name: "{{ _t.name }} | Set verify facts"
+  ansible.builtin.set_fact:
+    _t_name: "{{ _t.name }}"
+    _t_is_default: "{{ _t.is_default }}"
+    _t_gateway: "{{ _t.gateway }}"
+    _t_host: "{{ _t.host }}"
+    _t_govns: "{{ _t.govns }}"
+    _t_model: "{{ _t.model }}"
+    _t_tiers: "{{ _t.tiers }}"
+    _maas_url: "https://{{ _t.host }}"
+    _deep: >-
+      {{ (ocp_4_20_ai_maas_verify_depth == 'full')
+         or (ocp_4_20_ai_maas_verify_depth == 'standard' and _t.name == _representative) }}
+
+- name: "{{ _t.name }} | Derive smoke (non-free) and free test tiers"
+  ansible.builtin.set_fact:
+    _smoke_tier: "{{ (_t_tiers | json_query('[?to_number(to_string(priority)) > `0`]') | first) | default(_t_tiers[0]) }}"
+    _free_tier: "{{ (_t_tiers | json_query('[?to_number(to_string(priority)) == `0`]') | first) | default(_t_tiers[0]) }}"
+
+# =====================================================================
+# Layer 1 — control-plane readiness (cheap k8s_info; no HTTP)
+# =====================================================================
+
+- name: "{{ _t.name }} | L1 AITenant Active"
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: maas.opendatahub.io/v1alpha1
+    kind: AITenant
+    name: "{{ _t_name }}"
+    namespace: ai-tenants
+  register: _l1_ait
+
+- name: "{{ _t.name }} | L1 Gateway Programmed"
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: gateway.networking.k8s.io/v1
+    kind: Gateway
+    name: "{{ _t_gateway }}"
+    namespace: openshift-ingress
+  register: _l1_gw
+
+- name: "{{ _t.name }} | L1 MaaSModelRef Ready"
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: maas.opendatahub.io/v1alpha1
+    kind: MaaSModelRef
+    name: "{{ _t_model }}"
+    namespace: "{{ ocp_4_20_ai_maas_model_namespace }}"
+  register: _l1_modelref
+
+- name: "{{ _t.name }} | L1 MaaSSubscriptions Active"
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: maas.opendatahub.io/v1alpha1
+    kind: MaaSSubscription
+    namespace: "{{ _t_govns }}"
+  register: _l1_subs
+
+- name: "{{ _t.name }} | L1 assert control-plane ready"
+  ansible.builtin.assert:
+    that:
+      - _l1_ait.resources | length > 0
+      - _l1_ait.resources[0].status.phase | default('') == 'Active'
+      - _l1_gw.resources | length > 0
+      - >-
+        _l1_gw.resources[0].status.conditions | default([])
+        | selectattr('type', 'equalto', 'Programmed')
+        | selectattr('status', 'equalto', 'True') | list | length > 0
+      - _l1_modelref.resources | length > 0
+      - _l1_modelref.resources[0].status.phase | default('') == 'Ready'
+      # Auth + rate-limit attachment is checked via the gateway's own status
+      # conditions (naming-independent: the auto-gen AuthPolicy is named
+      # `maas-gateway-auth` for the default gateway but `maas-{name}-gateway-maas-auth`
+      # for custom tenants).
+      - >-
+        _l1_gw.resources[0].status.conditions | default([])
+        | selectattr('type', 'equalto', 'kuadrant.io/AuthPolicyAffected')
+        | selectattr('status', 'equalto', 'True') | list | length > 0
+      - >-
+        _l1_gw.resources[0].status.conditions | default([])
+        | selectattr('type', 'equalto', 'kuadrant.io/TokenRateLimitPolicyAffected')
+        | selectattr('status', 'equalto', 'True') | list | length > 0
+      - _l1_subs.resources | length > 0
+      - >-
+        _l1_subs.resources
+        | selectattr('status.phase', 'defined')
+        | selectattr('status.phase', 'equalto', 'Active')
+        | list | length == _l1_subs.resources | length
+    fail_msg: "L1 control-plane NOT ready for tenant {{ _t_name }}"
+    success_msg: "L1 OK: AITenant Active, gateway Programmed + AuthPolicy/TRLP attached, MaaSModelRef Ready, {{ _l1_subs.resources | length }} subscriptions Active"
+
+# Cross-injection canary: each gateway pod must carry exactly ONE auth wasm
+# filter. Best-effort (needs the Envoy admin config_dump) — warn, don't fail.
+- name: "{{ _t.name }} | L1 wasm-filter-count canary (best effort)"
+  environment:
+    KUBECONFIG: "{{ admin_kubeconfig | expanduser }}"
+  ansible.builtin.shell: |
+    set -o pipefail
+    POD=$(oc get pods -n openshift-ingress \
+      -l gateway.networking.k8s.io/gateway-name={{ _t_gateway }} \
+      -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    [ -z "$POD" ] && echo "no-pod" && exit 0
+    CNT=$(oc exec -n openshift-ingress "$POD" -c istio-proxy -- \
+      curl -s localhost:15000/config_dump 2>/dev/null \
+      | grep -c 'envoy.filters.http.wasm' || true)
+    echo "$CNT"
+  args:
+    executable: /bin/bash
+  register: _l1_wasm
+  changed_when: false
+  ignore_errors: true
+
+- name: "{{ _t.name }} | L1 wasm canary result"
+  ansible.builtin.debug:
+    msg: >-
+      wasm auth filters on {{ _t_gateway }} pod: {{ _l1_wasm.stdout | default('unknown') | trim }}
+      {{ '(expected >=1; cross-injection if a NEWER gateway shows more than its own)' }}
+
+# =====================================================================
+# Layer 1b — tenant-admin RBAC (only when the tenant has an admin group)
+# The operator creates the tenant-admin/object-admin Roles but NOT their bindings
+# (spec.rbac.admins is deprecated/no-op on GA), so the role wires them. Verify the
+# bindings/Role exist and that the group has the intended effective access.
+# =====================================================================
+
+- name: "{{ _t.name }} | L1b resolve admin group (descriptor, else live AITenant)"
+  ansible.builtin.set_fact:
+    _t_rbac_group: >-
+      {{ _t.admin_group
+         if (_t.admin_group | default('', true) | length > 0)
+         else ((_l1_ait.resources[0].spec.rbac.admins | default([])
+                | selectattr('kind', 'equalto', 'Group')
+                | map(attribute='name') | list | first) | default('')) }}
+
+- name: "{{ _t.name }} | L1b tenant-admin RBAC checks"
+  when: _t_rbac_group | length > 0
+  block:
+    - name: "{{ _t.name }} | L1b Fetch RoleBindings in {{ _t_govns }}"
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ admin_kubeconfig }}"
+        api_version: rbac.authorization.k8s.io/v1
+        kind: RoleBinding
+        namespace: "{{ _t_govns }}"
+      register: _l1b_gov_rb
+
+    - name: "{{ _t.name }} | L1b Fetch object-admin RoleBinding in ai-tenants"
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ admin_kubeconfig }}"
+        api_version: rbac.authorization.k8s.io/v1
+        kind: RoleBinding
+        name: "{{ _t_name }}-object-admin-binding"
+        namespace: ai-tenants
+      register: _l1b_obj_rb
+
+    - name: "{{ _t.name }} | L1b Fetch model-admin Role in {{ _t_govns }}"
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ admin_kubeconfig }}"
+        api_version: rbac.authorization.k8s.io/v1
+        kind: Role
+        name: "{{ _t_name }}-model-admin"
+        namespace: "{{ _t_govns }}"
+      register: _l1b_model_role
+
+    - name: "{{ _t.name }} | L1b assert RBAC objects exist"
+      ansible.builtin.assert:
+        that:
+          - >-
+            [_t_name ~ '-admins-binding', _t_name ~ '-namespace-admin-binding',
+             _t_name ~ '-model-admin-binding']
+            | difference(_l1b_gov_rb.resources | map(attribute='metadata.name') | list)
+            | length == 0
+          - _l1b_obj_rb.resources | length > 0
+          - _l1b_model_role.resources | length > 0
+        fail_msg: "L1b RBAC objects missing for {{ _t_name }} (admin group {{ _t_rbac_group }})"
+        success_msg: "L1b RBAC objects present for {{ _t_name }}"
+
+    - name: "{{ _t.name }} | L1b Effective access for group {{ _t_rbac_group }}"
+      environment:
+        KUBECONFIG: "{{ admin_kubeconfig | expanduser }}"
+      ansible.builtin.command:
+        cmd: >-
+          oc auth can-i {{ item.verb }} {{ item.resource }}
+          -n {{ item.ns }} --as=maas-verify --as-group={{ _t_rbac_group }}
+      # The object-admin Role is resourceName-scoped to this tenant's own AITenant,
+      # so the check must use the resource/name (slash) form — a general
+      # `can-i get aitenants` is (correctly) denied.
+      loop:
+        - { verb: create, resource: maassubscriptions.maas.opendatahub.io, ns: "{{ _t_govns }}" }
+        - { verb: create, resource: llminferenceservices.serving.kserve.io, ns: "{{ _t_govns }}" }
+        - { verb: get, resource: "aitenants.maas.opendatahub.io/{{ _t_name }}", ns: ai-tenants }
+      loop_control:
+        label: "{{ item.verb }} {{ item.resource }} -n {{ item.ns }}"
+      register: _l1b_cani
+      changed_when: false
+      failed_when: false
+
+    - name: "{{ _t.name }} | L1b assert effective access granted"
+      ansible.builtin.assert:
+        that:
+          - _l1b_cani.results | selectattr('stdout', 'equalto', 'yes') | list | length
+            == _l1b_cani.results | length
+        fail_msg: >-
+          L1b RBAC effective-access FAILED for group {{ _t_rbac_group }}:
+          {{ _l1b_cani.results | map(attribute='item.resource') | zip(_l1b_cani.results | map(attribute='stdout')) | list }}
+        success_msg: "L1b RBAC OK: group {{ _t_rbac_group }} can self-service subscriptions/models + read AITenant"
+
+# =====================================================================
+# Layer 2 — dataplane smoke (HTTP): 401 -> 201 -> 200
+# =====================================================================
+
+- name: "{{ _t.name }} | L2 unauthenticated inference (expect 401/403)"
+  ansible.builtin.uri:
+    url: "{{ _maas_url }}/llm/{{ _t_model }}/v1/chat/completions"
+    method: POST
+    body_format: json
+    body:
+      model: "{{ ocp_4_20_ai_maas_model_id }}"
+      messages:
+        - role: user
+          content: "Hello"
+      max_tokens: 10
+    status_code: [401, 403]
+    validate_certs: false
+  register: _l2_unauth
+  retries: 12
+  delay: 10
+  until: _l2_unauth.status in [401, 403]
+
+- name: "{{ _t.name }} | L2 mint SA token (smoke tier)"
+  environment:
+    KUBECONFIG: "{{ admin_kubeconfig | expanduser }}"
+  ansible.builtin.shell: >-
+    oc create token testuser-{{ _smoke_tier.name | regex_replace('-subscription$', '') }}
+    -n {{ _t_govns }} --duration=1h
+  args:
+    executable: /bin/bash
+  register: _l2_token
+  changed_when: false
+  no_log: true
+
+- name: "{{ _t.name }} | L2 create API key (expect 201)"
+  ansible.builtin.uri:
+    url: "{{ _maas_url }}/maas-api/v1/api-keys"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ _l2_token.stdout | trim }}"
+    body_format: json
+    body:
+      name: "verify-{{ _t_name }}"
+      description: Automated verification
+    status_code: 201
+    validate_certs: false
+  register: _l2_key
+  retries: 12
+  delay: 10
+  until: _l2_key is not failed
+  no_log: true
+
+- name: "{{ _t.name }} | L2 inference with API key (expect 200)"
+  ansible.builtin.uri:
+    url: "{{ _maas_url }}/llm/{{ _t_model }}/v1/chat/completions"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ _l2_key.json.key }}"
+    body_format: json
+    body:
+      model: "{{ ocp_4_20_ai_maas_model_id }}"
+      messages:
+        - role: user
+          content: "Hello"
+      max_tokens: 10
+    status_code: 200
+    validate_certs: false
+  register: _l2_inf
+  retries: 12
+  delay: 10
+  until: _l2_inf.status == 200
+  no_log: true
+
+- name: "{{ _t.name }} | L2 record result context"
+  ansible.builtin.set_fact:
+    _verify_ctx: >-
+      {{ _verify_ctx | combine({
+           _t_name: {'host': _t_host, 'model': _t_model, 'key': _l2_key.json.key}
+         }) }}
+  no_log: true
+
+- name: "{{ _t.name }} | L2 smoke PASS"
+  ansible.builtin.debug:
+    msg: "L2 OK: unauth {{ _l2_unauth.status }}, api-key 201, inference 200"
+
+# =====================================================================
+# Layer 3 — dataplane deep (representative only): free-tier -> 429
+# =====================================================================
+
+- name: "{{ _t.name }} | L3 deep rate-limit check ({{ 'RUN' if _deep | bool else 'skip' }})"
+  when: _deep | bool
+  block:
+    - name: "{{ _t.name }} | L3 mint free-tier SA token"
+      environment:
+        KUBECONFIG: "{{ admin_kubeconfig | expanduser }}"
+      ansible.builtin.shell: >-
+        oc create token testuser-{{ _free_tier.name | regex_replace('-subscription$', '') }}
+        -n {{ _t_govns }} --duration=1h
+      args:
+        executable: /bin/bash
+      register: _l3_token
+      changed_when: false
+      no_log: true
+
+    - name: "{{ _t.name }} | L3 create free-tier API key"
+      ansible.builtin.uri:
+        url: "{{ _maas_url }}/maas-api/v1/api-keys"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ _l3_token.stdout | trim }}"
+        body_format: json
+        body:
+          name: "verify-free-{{ _t_name }}"
+          description: Rate-limit verification
+        status_code: 201
+        validate_certs: false
+      register: _l3_key
+      retries: 12
+      delay: 10
+      until: _l3_key is not failed
+      no_log: true
+
+    - name: "{{ _t.name }} | L3 exhaust free tier ({{ _free_tier.token_limit }} tokens/{{ _free_tier.window }})"
+      ansible.builtin.uri:
+        url: "{{ _maas_url }}/llm/{{ _t_model }}/v1/chat/completions"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ _l3_key.json.key }}"
+        body_format: json
+        body:
+          model: "{{ ocp_4_20_ai_maas_model_id }}"
+          messages:
+            - role: user
+              content: "Tell me a long story about dragons and knights in a faraway kingdom"
+          max_tokens: 50
+        status_code: [200, 429]
+        validate_certs: false
+      register: _l3_loop
+      # Tolerate a transient non-200/429 on a single request (e.g. a momentary 5xx /
+      # connection blip at the 200->429 boundary under rapid fire) — the assert below
+      # (>=1 x 429) is the real gate, so one flaky request must not fail the whole run.
+      failed_when: false
+      loop: "{{ range(1, 11) | list }}"
+      loop_control:
+        label: "request {{ item }}"
+      no_log: true
+
+    - name: "{{ _t.name }} | L3 assert rate limiting enforced (>=1 x 429)"
+      ansible.builtin.assert:
+        that:
+          - _l3_loop.results | selectattr('status', 'equalto', 429) | list | length > 0
+        fail_msg: >-
+          L3 rate limiting NOT enforced for {{ _t_name }} — no 429 in 10 requests.
+          Statuses seen: {{ _l3_loop.results | map(attribute='status', default='ERR') | list }}
+        success_msg: >-
+          L3 OK: rate limiting enforced —
+          {{ _l3_loop.results | selectattr('status', 'equalto', 429) | list | length }}/10 returned 429
+          (statuses: {{ _l3_loop.results | map(attribute='status', default='ERR') | list }})

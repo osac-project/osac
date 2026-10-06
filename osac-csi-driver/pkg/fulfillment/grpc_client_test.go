@@ -60,14 +60,14 @@ func (f *fakeVolumesClient) Signal(_ context.Context, _ *privatev1.VolumesSignal
 }
 
 // newTestVolume builds a proto Volume with the given fields for response fixtures.
-func newTestVolume(id, name string, state privatev1.VolumeState, backend, vendorID string, proto privatev1.StorageProtocol, sizeGiB int64) *privatev1.Volume {
+func newTestVolume(id, name string, state privatev1.VolumeState, provider, vendorID string, proto privatev1.StorageProtocol, sizeGiB int64) *privatev1.Volume {
 	md := &privatev1.Metadata{}
 	md.SetName(name)
 	spec := &privatev1.VolumeSpec{}
 	spec.SetSizeGib(sizeGiB)
 	st := &privatev1.VolumeStatus{}
 	st.SetState(state)
-	st.SetBackend(backend)
+	st.SetProvider(provider)
 	st.SetVendorVolumeId(vendorID)
 	st.SetProtocol(proto)
 	v := &privatev1.Volume{}
@@ -81,7 +81,8 @@ func newTestVolume(id, name string, state privatev1.VolumeState, backend, vendor
 func TestCreateVolumeMapsRequestAndResponse(t *testing.T) {
 	resp := &privatev1.VolumesCreateResponse{}
 	resp.SetObject(newTestVolume("vol-1", "pvc-abc", privatev1.VolumeState_VOLUME_STATE_CREATING,
-		"vast-backend", "", privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS, 5))
+		"vast", "", privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS, 5))
+	resp.GetObject().GetStatus().SetMessage("insufficient vg1 capacity")
 	fake := &fakeVolumesClient{createResp: resp}
 	c := &grpcVolumeClient{client: fake}
 
@@ -92,6 +93,10 @@ func TestCreateVolumeMapsRequestAndResponse(t *testing.T) {
 		SizeBytes:  5 * bytesPerGiB,
 		AccessMode: "SINGLE_NODE_WRITER",
 		PVCRef:     "pvc-abc",
+		Topology: &VolumeTopology{Segments: map[string]string{
+			"osac.io/node":                "worker-1",
+			"topology.kubernetes.io/zone": "zone-a",
+		}},
 	})
 	if err != nil {
 		t.Fatalf("CreateVolume returned error: %v", err)
@@ -117,6 +122,11 @@ func TestCreateVolumeMapsRequestAndResponse(t *testing.T) {
 	if got := gotObj.GetSpec().GetAccessMode(); got != privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE {
 		t.Errorf("spec.access_mode = %v, want READ_WRITE_ONCE", got)
 	}
+	if got := gotObj.GetSpec().GetTopology().GetSegments(); len(got) != 2 ||
+		got["osac.io/node"] != "worker-1" ||
+		got["topology.kubernetes.io/zone"] != "zone-a" {
+		t.Errorf("spec.topology.segments = %#v, want node and zone segments", got)
+	}
 
 	// Response mapping.
 	if info.ID != "vol-1" || info.Name != "pvc-abc" {
@@ -125,11 +135,17 @@ func TestCreateVolumeMapsRequestAndResponse(t *testing.T) {
 	if info.State != VolumeStateCreating {
 		t.Errorf("info.State = %q, want CREATING", info.State)
 	}
-	if info.Backend != "vast-backend" {
-		t.Errorf("info.Backend = %q, want vast-backend", info.Backend)
+	if info.Backend != "vast" {
+		t.Errorf("info.Backend = %q, want vast", info.Backend)
+	}
+	if info.Provider != "vast" {
+		t.Errorf("info.Provider = %q, want vast", info.Provider)
 	}
 	if info.CapacityBytes != 5*bytesPerGiB {
 		t.Errorf("info.CapacityBytes = %d, want %d", info.CapacityBytes, 5*bytesPerGiB)
+	}
+	if info.Message != "insufficient vg1 capacity" {
+		t.Errorf("info.Message = %q, want insufficient vg1 capacity", info.Message)
 	}
 }
 
@@ -147,7 +163,7 @@ func TestListVolumesBuildsNameFilter(t *testing.T) {
 	resp := &privatev1.VolumesListResponse{}
 	resp.SetItems([]*privatev1.Volume{
 		newTestVolume("vol-1", "pvc-abc", privatev1.VolumeState_VOLUME_STATE_AVAILABLE,
-			"vast-backend", "vendor-9", privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK, 2),
+			"vast", "vendor-9", privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK, 2),
 	})
 	fake := &fakeVolumesClient{listResp: resp}
 	c := &grpcVolumeClient{client: fake}

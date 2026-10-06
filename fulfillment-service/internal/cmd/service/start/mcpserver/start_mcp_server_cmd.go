@@ -249,6 +249,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error {
 		Protocols:         &protocols,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+	shutdown.AddHttpServer(network.HttpListenerName, 0, httpServer)
 	go func() {
 		err := httpServer.Serve(listener)
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -257,9 +258,9 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error {
 				"MCP server failed",
 				slog.Any("error", err),
 			)
+			shutdown.Start(1)
 		}
 	}()
-	shutdown.AddHttpServer(network.HttpListenerName, 0, httpServer)
 
 	// Keep running till the shutdown sequence completes:
 	c.logger.InfoContext(ctx, "Waiting for shutdown sequence to complete")

@@ -14,6 +14,56 @@ host, and the `/connect/mcp` setup page to later work, including
 its connection values from a running development deployment and does not
 define those future interfaces.
 
+## Install the Kind development endpoint
+
+From the repository root, a fresh `dev-full` installation with MCP enabled is
+one Make command:
+
+```bash
+export PROFILE=dev-full
+export KUBECONFIG="$HOME/.kube/osac-dev-kind-root.kubeconfig"
+make -C osac-installer install \
+  PLATFORM=kind PROFILE="$PROFILE" NS=osac \
+  EXTRA_HELM_ARGS='--set service.mcp.enabled=true --set-string service.mcp.externalHostname=mcp.osac.localhost --set service.mcp.externalPort=8443'
+```
+
+This profile also installs the local VM stack, seeds a sample catalog, and
+onboards `tenant1`; sign in as `tenant1_user` or `tenant1_admin` to see its
+resources. The smaller `PROFILE=dev` profile installs the control plane but
+does not seed a tenant or any of the nine MCP resource types, so empty lists
+are expected on a fresh installation.
+
+MCP runs from the **Fulfillment service image**; it has no separate image to
+build or push. For a fresh cluster with a local source build, create the Kind
+infrastructure first, then build and load the image before installing OSAC.
+Use the same container runtime throughout (see the [installer's local-image
+instructions](../../../osac-installer/README.md#full-local-dev-environment-profiledev-full-kind-only)):
+
+```bash
+export PROFILE=dev-full
+export KUBECONFIG="$HOME/.kube/osac-dev-kind-root.kubeconfig"
+export CONTAINER_TOOL=docker  # Or podman, if that is your Kind runtime.
+export KIND_EXPERIMENTAL_PROVIDER="$CONTAINER_TOOL"
+make -C osac-installer install-infra \
+  PLATFORM=kind PROFILE="$PROFILE" NS=osac
+make -C fulfillment-service image-build \
+  IMG=localhost/fulfillment-service:osac-5841 CONTAINER_TOOL="$CONTAINER_TOOL"
+make -C fulfillment-service kind-load-image \
+  IMG=localhost/fulfillment-service:osac-5841 CONTAINER_TOOL="$CONTAINER_TOOL"
+make -C osac-installer install-osac \
+  PLATFORM=kind PROFILE="$PROFILE" NS=osac \
+  EXTRA_HELM_ARGS='--set service.mcp.enabled=true --set-string service.mcp.externalHostname=mcp.osac.localhost --set service.mcp.externalPort=8443 --set-string service.images.service.repository=localhost/fulfillment-service --set-string service.images.service.tag=osac-5841 --set service.images.service.pullPolicy=Never'
+make -C osac-installer install-devstack \
+  PLATFORM=kind PROFILE="$PROFILE" NS=osac
+```
+
+On an existing `dev-full` cluster, skip `install-infra` and `install-devstack`
+if they are already installed. After rebuilding, `kind-load-image` restarts
+workloads that already use the same image tag; run `install-osac` to apply a
+new image tag or MCP values. The image override applies to both the
+Fulfillment API and MCP server. A `localhost/` image with `pullPolicy=Never`
+must be loaded into Kind; no registry push is needed.
+
 ## Get connection values
 
 Ask the deployment operator for:
@@ -40,13 +90,13 @@ oc -n <osac-namespace> get configmap ca-bundle \
   -o go-template='{{ index .data "bundle.pem" }}' > /path/to/osac-ca-bundle.pem
 ```
 
-For the local Kind `PROFILE=dev` installation, use this copyable path outside
-the repository and verify both HTTPS endpoints:
+For the local Kind `PROFILE=dev-full` installation, use this copyable path
+outside the repository and verify both HTTPS endpoints:
 
 ```bash
-export KUBECONFIG="$HOME/.kube/osac-dev-kind.kubeconfig"
+export KUBECONFIG="$HOME/.kube/osac-dev-kind-root.kubeconfig"
 export OSAC_MCP_URL='https://mcp.osac.localhost:8443'
-export OSAC_ISSUER_URL='https://keycloak.keycloak.svc.cluster.local:8443/realms/osac'
+export OSAC_ISSUER_URL='https://keycloak.osac.localhost:8443/realms/osac'
 mkdir -p "$HOME/.config/osac"
 kubectl -n osac get configmap ca-bundle \
   -o go-template='{{ index .data "bundle.pem" }}' \
@@ -60,6 +110,11 @@ curl --fail --show-error --cacert "$CODEX_CA_CERTIFICATE" \
 ```
 
 Launch Codex from a shell with that environment variable set.
+
+For `PROFILE=dev`, use `$HOME/.kube/osac-dev-kind.kubeconfig` and
+`https://keycloak.keycloak.svc.cluster.local:8443/realms/osac` instead. That
+issuer's hostname needs a workstation `/etc/hosts` entry mapping it to
+`127.0.0.1`; `dev-full` uses `keycloak.osac.localhost` and needs no such entry.
 
 For another deployment, replace these placeholders and verify its endpoints:
 
@@ -82,15 +137,13 @@ bundle setting and also applies to its HTTPS and OAuth traffic; set it in the
 environment that launches Codex. If the system already trusts both endpoints,
 omit the CA export and the `--cacert` options. Do not disable TLS verification.
 
-For the Kind `PROFILE=dev` installation, set
+For either Kind profile, set
 `service.mcp.externalHostname=mcp.osac.localhost` and
 `service.mcp.externalPort=8443`. Its MCP URL is
-`https://mcp.osac.localhost:8443`. The Keycloak issuer is
-`https://keycloak.keycloak.svc.cluster.local:8443/realms/osac`; on the
-workstation, map `keycloak.keycloak.svc.cluster.local` to `127.0.0.1` in
-`/etc/hosts` so Codex and the browser can reach that issuer through the Kind
-gateway. The browser must also trust the development CA. The `PROFILE=dev-full`
-values instead configure a browser-facing `keycloak.osac.localhost` issuer.
+`https://mcp.osac.localhost:8443`. The `dev-full` issuer is
+`https://keycloak.osac.localhost:8443/realms/osac`; the plain `dev` issuer and
+its host mapping are noted above. The browser must also trust the development
+CA.
 
 ## Register the callback and sign in
 
@@ -154,8 +207,8 @@ authorizes each call as the signed-in user through the public Fulfillment API.
 
 The earlier OSAC-4388 prototype launched Inspector with `NODE_EXTRA_CA_CERTS`
 pointing at the same public Kind `ca-bundle` ConfigMap used for Codex. Node
-does not use `curl --cacert` or `CODEX_CA_CERTIFICATE`. For this `PROFILE=dev`
-installation, use the CA file extracted above. The commands set their own
+does not use `curl --cacert` or `CODEX_CA_CERTIFICATE`. For either Kind profile,
+use the CA file extracted above. The commands set their own
 MCP URL and CA path so they also work in a new shell. They create only a
 temporary Inspector configuration containing the public client ID and MCP
 URL. A separate temporary storage directory prevents an earlier Inspector
@@ -182,9 +235,8 @@ Document** empty, and complete Keycloak login. Its browser callback is
 `http://localhost:6274/oauth/callback`, which the development client allows.
 The Tools tab should list the four available tools after login.
 The browser must trust the Kind CA separately; `NODE_EXTRA_CA_CERTS` applies
-to the Node process. The older `PROFILE=dev-full` setup used
-`keycloak.osac.localhost` as its issuer, whereas this `PROFILE=dev` installation
-uses `keycloak.keycloak.svc.cluster.local` as shown above.
+to the Node process. `PROFILE=dev-full` uses `keycloak.osac.localhost` as its
+issuer, while `PROFILE=dev` uses `keycloak.keycloak.svc.cluster.local`.
 
 ## When the connection fails
 

@@ -149,27 +149,38 @@ func (s *PrivateClusterVersionsServer) Create(ctx context.Context,
 
 	applyClusterVersionDefaults(cv)
 
-	if err := s.resolveClusterVersionDiskImage(ctx, cv); err != nil {
-		return nil, err
-	}
-
 	// Clear caller-provided ID so the DAO always generates a UUID:
 	cv.SetId("")
 
-	// Safe to clear existing defaults before Create: the gRPC interceptor wraps the entire
-	// RPC in a single transaction, so the clear and Insert commit together — other connections
-	// never see a state with zero defaults.
-	if cv.GetSpec().GetIsDefault() {
-		if err := validateIsDefaultEligibility(cv); err != nil {
-			return nil, err
-		}
-		if err := s.unsetPreviousDefaultClusterVersion(ctx, cv.GetId()); err != nil {
-			return nil, err
-		}
-	}
-
 	var response *privatev1.ClusterVersionsCreateResponse
-	err = s.generic.Create(ctx, request, &response)
+	err = s.generic.CreateWithCandidatePreparation(ctx, request, &response,
+		func(ctx context.Context, _, candidate *privatev1.ClusterVersion) error {
+			if ref := candidate.GetSpec().GetDiskImage(); ref != nil {
+				// The reference interceptor resolves ID/name; validate the image under lock
+				// against the assigned owner, not just the caller's visibility.
+				image, err := getLockedReferenceResource(ctx, s.diskImagesDao, ref.GetId())
+				if err != nil {
+					return resourceLookupError(err, "disk image", ref.GetId(), "", grpccodes.NotFound)
+				}
+				if tenant := image.GetMetadata().GetTenant(); tenant != auth.SharedTenant && tenant != candidate.GetMetadata().GetTenant() {
+					return grpcstatus.Errorf(grpccodes.InvalidArgument,
+						"disk image reference must belong to the owning tenant or shared tenant")
+				}
+				if _, err := validateResolvedDiskImage(image, ref.GetId(), ""); err != nil {
+					return err
+				}
+			}
+			// Safe to clear existing defaults before Create: the gRPC interceptor wraps the entire
+			// RPC in a single transaction, so the clear and Insert commit together — other connections
+			// never see a state with zero defaults.
+			if candidate.GetSpec().GetIsDefault() {
+				if err := validateIsDefaultEligibility(candidate); err != nil {
+					return err
+				}
+				return s.unsetPreviousDefaultClusterVersion(ctx, candidate.GetId())
+			}
+			return nil
+		})
 	return response, err
 }
 
@@ -196,12 +207,6 @@ func (s *PrivateClusterVersionsServer) Update(ctx context.Context,
 		return nil, err
 	}
 
-	if updateIncludesField(request.GetUpdateMask(), "spec.disk_image") {
-		if err := s.resolveClusterVersionDiskImage(ctx, request.GetObject()); err != nil {
-			return nil, err
-		}
-	}
-
 	// Reject explicit is_default=true on ineligible versions (OBSOLETE or disabled).
 	// The auto-clear path in applyClusterVersionStateEffects handles the transition case
 	// where is_default is not in the mask.
@@ -221,14 +226,28 @@ func (s *PrivateClusterVersionsServer) Update(ctx context.Context,
 		return nil, err
 	}
 
-	if resolveIsDefault(existing, request) {
-		if err := s.unsetPreviousDefaultClusterVersion(ctx, id); err != nil {
-			return nil, err
-		}
-	}
-
 	var response *privatev1.ClusterVersionsUpdateResponse
-	err = s.generic.Update(ctx, request, &response)
+	err = s.generic.UpdateWithCandidatePreparation(ctx, request, &response,
+		func(ctx context.Context, _, candidate *privatev1.ClusterVersion) error {
+			if ref := candidate.GetSpec().GetDiskImage(); ref != nil && updateIncludesField(request.GetUpdateMask(), "spec.disk_image") {
+				// Validate the interceptor-resolved image against the merged candidate's owner.
+				image, err := getLockedReferenceResource(ctx, s.diskImagesDao, ref.GetId())
+				if err != nil {
+					return resourceLookupError(err, "disk image", ref.GetId(), "", grpccodes.NotFound)
+				}
+				if tenant := image.GetMetadata().GetTenant(); tenant != auth.SharedTenant && tenant != candidate.GetMetadata().GetTenant() {
+					return grpcstatus.Errorf(grpccodes.InvalidArgument,
+						"disk image reference must belong to the owning tenant or shared tenant")
+				}
+				if _, err := validateResolvedDiskImage(image, ref.GetId(), ""); err != nil {
+					return err
+				}
+			}
+			if candidate.GetSpec().GetIsDefault() {
+				return s.unsetPreviousDefaultClusterVersion(ctx, id)
+			}
+			return nil
+		})
 	if err != nil {
 		// Concurrent default-swap: remap AlreadyExists to FailedPrecondition.
 		if request.GetObject().GetSpec().GetIsDefault() {
@@ -562,32 +581,6 @@ func generateNameFromVersion(version string) string {
 	h := fnv.New32a()
 	h.Write([]byte(version))
 	return fmt.Sprintf("%s-%04x", result, h.Sum32()%0x10000)
-}
-
-func (s *PrivateClusterVersionsServer) resolveClusterVersionDiskImage(
-	ctx context.Context,
-	cv *privatev1.ClusterVersion,
-) error {
-	ref := cv.GetSpec().GetDiskImage()
-	if ref == nil {
-		return nil
-	}
-
-	key := refKey(ref)
-	if key == "" {
-		return nil
-	}
-
-	diskImage, _, err := validateDiskImageState(ctx, s.diskImagesDao, key, "", "")
-	if err != nil {
-		return err
-	}
-
-	ref.Id = diskImage.GetId()
-	ref.Name = diskImage.GetMetadata().GetName()
-	ref.Shared = diskImage.GetMetadata().GetTenant() == auth.SharedTenant
-
-	return nil
 }
 
 // listAllMatching returns all ClusterVersions matching the given CEL filter,

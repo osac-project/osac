@@ -26,11 +26,47 @@
       annotation, canonical parent VirtualNetwork UUID, and IPv4 CIDR.
   no_log: true
 
+# OSAC-5530: AAP jobs use their projected service-account token; local runs use KUBECONFIG.
+- name: Read the Kubernetes API authentication context for the parent lookup
+  ansible.builtin.set_fact:
+    _agentless_net_parent_kubeconfig: >-
+      {{ lookup('ansible.builtin.env', 'K8S_AUTH_KUBECONFIG')
+         | default(lookup('ansible.builtin.env', 'KUBECONFIG'), true) }}
+    _agentless_net_parent_k8s_host: "{{ lookup('ansible.builtin.env', 'KUBERNETES_SERVICE_HOST') }}"
+    _agentless_net_parent_k8s_port: >-
+      {{ lookup('ansible.builtin.env', 'KUBERNETES_SERVICE_PORT_HTTPS')
+         | default(lookup('ansible.builtin.env', 'KUBERNETES_SERVICE_PORT')
+         | default('443', true), true) }}
+  no_log: true
+
+- name: Require kubeconfig or the mounted AAP service-account context
+  ansible.builtin.assert:
+    that:
+      - _agentless_net_parent_kubeconfig | length > 0 or _agentless_net_parent_k8s_host | length > 0
+    fail_msg: >-
+      AgentlessNet Subnet parent lookup requires KUBECONFIG or the mounted
+      in-cluster service-account context.
+  no_log: true
+
 - name: Look up the parent VirtualNetwork by Fulfillment UUID label
   kubernetes.core.k8s_info:
     api_version: osac.openshift.io/v1alpha1
     kind: VirtualNetwork
     namespace: "{{ subnet.metadata.namespace }}"
+    kubeconfig: "{{ _agentless_net_parent_kubeconfig if _agentless_net_parent_kubeconfig | length > 0 else omit }}"
+    host: >-
+      {{ 'https://' ~ _agentless_net_parent_k8s_host ~ ':' ~ _agentless_net_parent_k8s_port
+         if _agentless_net_parent_kubeconfig | length == 0 and _agentless_net_parent_k8s_host | length > 0
+         else omit }}
+    api_key: >-
+      {{ lookup('ansible.builtin.file', '/var/run/secrets/kubernetes.io/serviceaccount/token')
+         if _agentless_net_parent_kubeconfig | length == 0 and _agentless_net_parent_k8s_host | length > 0
+         else omit }}
+    ca_cert: >-
+      {{ '/var/run/secrets/kubernetes.io/serviceaccount/ca.crt'
+         if _agentless_net_parent_kubeconfig | length == 0 and _agentless_net_parent_k8s_host | length > 0
+         else omit }}
+    validate_certs: true
     label_selectors:
       - "osac.openshift.io/virtualnetwork-uuid={{ _agentless_net_subnet_parent_ref }}"
   register: _agentless_net_subnet_parent_lookup

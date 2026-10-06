@@ -110,7 +110,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 						Locked: privatev1.ClusterNodeSetMap_builder{
 							Items: map[string]*privatev1.ClusterCatalogNodeSet{
 								"workers": privatev1.ClusterCatalogNodeSet_builder{
-									BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: instanceType.GetId()}.Build(), Size: 1,
+									BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: instanceType.GetId(), Shared: true}.Build(), Size: 1,
 								}.Build(),
 							},
 						}.Build(),
@@ -150,14 +150,14 @@ var _ = Describe("Private cluster catalog items server", func() {
 			Expect(err).To(MatchError(ContainSubstring("fields.node_sets.workers.baremetal_instance_type")))
 		})
 
-		It("resolves name-only BMIT references to shared for a tenant-owned catalog item", func() {
+		It("resolves name-only shared BMIT references for a tenant-owned catalog item", func() {
 			instanceType := privatev1.BareMetalInstanceType_builder{
 				Id:       "shared-policy-type",
 				Metadata: privatev1.Metadata_builder{Name: "shared-policy-type", Tenant: auth.SharedTenant}.Build(),
 			}.Build()
 			_, err := server.bareMetalInstanceTypesDao.Create().SetObject(instanceType).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
-			ref := privatev1.BareMetalInstanceTypeReference_builder{Name: "shared-policy-type", Shared: false}.Build()
+			ref := privatev1.BareMetalInstanceTypeReference_builder{Name: "shared-policy-type", Shared: true}.Build()
 			item := privatev1.ClusterCatalogItem_builder{
 				Metadata: privatev1.Metadata_builder{Tenant: testTenant}.Build(),
 				Fields: privatev1.ClusterCatalogItemFields_builder{
@@ -183,7 +183,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 			}.Build()
 			_, err := server.bareMetalInstanceTypesDao.Create().SetObject(instanceType).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
-			ref := privatev1.BareMetalInstanceTypeReference_builder{Name: "shared-default-policy-type", Shared: false}.Build()
+			ref := privatev1.BareMetalInstanceTypeReference_builder{Name: "shared-default-policy-type", Shared: true}.Build()
 			item := privatev1.ClusterCatalogItem_builder{
 				Metadata: privatev1.Metadata_builder{Tenant: testTenant}.Build(),
 				Fields: privatev1.ClusterCatalogItemFields_builder{
@@ -201,7 +201,34 @@ var _ = Describe("Private cluster catalog items server", func() {
 			Expect(ref.GetShared()).To(BeTrue())
 		})
 
-		It("rejects tenant-only hardware types in tenant-owned catalog item policies", func() {
+		DescribeTable("rejects NodeSet BMIT references without the platform scope", func(ref *privatev1.BareMetalInstanceTypeReference) {
+			instanceType := privatev1.BareMetalInstanceType_builder{
+				Id:       "shared-policy-type",
+				Metadata: privatev1.Metadata_builder{Name: "shared-policy-type", Tenant: auth.SharedTenant}.Build(),
+			}.Build()
+			_, err := server.bareMetalInstanceTypesDao.Create().SetObject(instanceType).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			item := privatev1.ClusterCatalogItem_builder{
+				Metadata: privatev1.Metadata_builder{Tenant: testTenant}.Build(),
+				Fields: privatev1.ClusterCatalogItemFields_builder{
+					NodeSets: privatev1.ClusterNodeSetMapPolicy_builder{
+						Locked: privatev1.ClusterNodeSetMap_builder{Items: map[string]*privatev1.ClusterCatalogNodeSet{
+							"workers": privatev1.ClusterCatalogNodeSet_builder{
+								Size: 2, BaremetalInstanceType: ref,
+							}.Build(),
+						}}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build()
+			err = validateClusterCatalogItemNodeSetPolicy(ctx, item, server.bareMetalInstanceTypesDao)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err).To(MatchError(ContainSubstring("fields.node_sets.workers.baremetal_instance_type")))
+		},
+			Entry("without shared=true", privatev1.BareMetalInstanceTypeReference_builder{Name: "shared-policy-type"}.Build()),
+			Entry("with a project", privatev1.BareMetalInstanceTypeReference_builder{Id: "shared-policy-type", Shared: true, Project: "other"}.Build()),
+		)
+
+		It("rejects tenant BMITs even when their reference claims shared scope", func() {
 			instanceType := privatev1.BareMetalInstanceType_builder{
 				Id:       "tenant-policy-type-id",
 				Metadata: privatev1.Metadata_builder{Name: "tenant-policy-type", Tenant: testTenant}.Build(),
@@ -214,7 +241,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 					NodeSets: privatev1.ClusterNodeSetMapPolicy_builder{
 						Locked: privatev1.ClusterNodeSetMap_builder{Items: map[string]*privatev1.ClusterCatalogNodeSet{
 							"workers": privatev1.ClusterCatalogNodeSet_builder{
-								Size: 2, BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Name: "tenant-policy-type", Shared: false}.Build(),
+								Size: 2, BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "tenant-policy-type-id", Shared: true}.Build(),
 							}.Build(),
 						}}.Build(),
 					}.Build(),

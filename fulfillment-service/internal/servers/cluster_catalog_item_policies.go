@@ -20,6 +20,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -333,13 +334,21 @@ func validateClusterCatalogItemNodeSetPolicy(
 		return catalogItemPolicyError("fields.node_sets", err.Error())
 	}
 	for name, node := range nodeMap.GetItems() {
+		field := "fields.node_sets." + name + ".baremetal_instance_type"
 		ref := node.GetBaremetalInstanceType()
-		resolved, err := resolveCaaSBareMetalInstanceType(ctx, instanceTypes, item.GetMetadata(), ref, "bare metal instance type", true)
+		if err := validatePlatformReference(ref, "bare metal instance type", ""); err != nil {
+			return catalogItemPolicyError(field, grpcstatus.Convert(err).Message())
+		}
+		resolved, err := resolveAndCanonicalizeLockedReference(ctx, instanceTypes, item.GetMetadata(), ref,
+			"bare metal instance type", grpccodes.InvalidArgument)
 		if err != nil {
 			if grpcstatus.Code(err) != grpccodes.InvalidArgument {
 				return err
 			}
-			return catalogItemPolicyError("fields.node_sets."+name+".baremetal_instance_type", grpcstatus.Convert(err).Message())
+			return catalogItemPolicyError(field, grpcstatus.Convert(err).Message())
+		}
+		if resolved.GetMetadata().GetTenant() != auth.SharedTenant {
+			return catalogItemPolicyError(field, "must reference a bare metal instance type in the shared tenant")
 		}
 		if requiresFabricInterface {
 			if _, err := selectClusterFabricInterface(resolved); err != nil {

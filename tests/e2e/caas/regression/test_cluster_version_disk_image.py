@@ -38,7 +38,10 @@ def test_cluster_create_rejected_without_disk_image_for_baremetal_workers(
         )
 
         assert rc != 0, f"Expected Cluster create to reject a ClusterVersion without a DiskImage, got: {output}"
-        assert "disk image" in output.lower(), f"Expected DiskImage validation error, got: {output}"
-        assert "bare-metal workers" in output.lower(), f"Expected BM-specific validation error, got: {output}"
+        assert "Code: FailedPrecondition" in output, f"Expected FailedPrecondition, got: {output}"
+        assert version["name"] in output, f"Expected error for the selected ClusterVersion, got: {output}"
+        assert "does not have a disk image attached" in output.lower(), (
+            f"Expected shared ClusterVersion DiskImage validation error, got: {output}"
+        )
     finally:
         private_grpc.call_unchecked(service="osac.private.v1.ClusterVersions/Delete", data={"id": version["id"]})

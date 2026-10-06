@@ -157,14 +157,18 @@ pointing at the same public Kind `ca-bundle` ConfigMap used for Codex. Node
 does not use `curl --cacert` or `CODEX_CA_CERTIFICATE`. For this `PROFILE=dev`
 installation, use the variables and CA file from the Kind commands above.
 This creates only a temporary Inspector configuration containing the public
-client ID and MCP URL:
+client ID and MCP URL. A separate temporary storage directory prevents an
+earlier Inspector login from reusing cached OAuth discovery for a different
+Kind profile:
 
 ```bash
 INSPECTOR_DIR="$(mktemp -d "${TMPDIR:-/tmp}/osac-mcp-inspector.XXXXXX")"
+mkdir -p "$INSPECTOR_DIR/storage"
 jq -n --arg url "$OSAC_MCP_URL" \
   '{mcpServers:{osac:{type:"http",url:$url,oauth:{clientId:"osac-mcp-client"}}}}' \
   > "$INSPECTOR_DIR/inspector-osac.config.json"
-NODE_EXTRA_CA_CERTS="$CODEX_CA_CERTIFICATE" \
+MCP_STORAGE_DIR="$INSPECTOR_DIR/storage" \
+  NODE_EXTRA_CA_CERTS="$CODEX_CA_CERTIFICATE" \
   npx --yes @modelcontextprotocol/inspector@2.6.0 \
     --config "$INSPECTOR_DIR/inspector-osac.config.json" --server osac
 ```
@@ -205,6 +209,12 @@ uses `keycloak.keycloak.svc.cluster.local` as shown above.
   reports zero tools, check that `stop` and `start` succeeded and that the
   previous daemon process exited; the Codex CLI can otherwise reconnect to
   that old process.
+- If Inspector opens the old `keycloak.osac.localhost` issuer after switching
+  to `PROFILE=dev`, compare the MCP protected-resource metadata with the
+  browser URL. Inspector caches OAuth discovery and tokens per MCP URL. Use
+  the temporary `MCP_STORAGE_DIR` above for a fresh login, or choose **Clear
+  OAuth state and disconnect** under **Server Settings → Authorization** for
+  that server. Clearing the stored state requires a new login.
 - An `Invalid parameter: redirect_uri` page means Keycloak rejected the
   callback Codex sent. The Kind development client already allows
   `http://localhost:8091/callback`; configure both `callback_url` and

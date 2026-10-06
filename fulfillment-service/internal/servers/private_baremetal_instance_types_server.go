@@ -226,7 +226,7 @@ func (s *PrivateBareMetalInstanceTypesServer) applyBareMetalInstanceTypeUpdate(b
 	}
 	paths, err := s.generic.compilePaths(mask.GetPaths())
 	if err != nil {
-		return err
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "invalid update mask: %v", err)
 	}
 	for _, path := range paths {
 		if value, ok := path.Get(update); ok {

@@ -6,9 +6,8 @@
         (server_cluster.spec.backendId | default('') | string is match('^[1-9][0-9]*$'))
         or
         (server_cluster.spec.backendId | default('') | string == ''
-        and server_cluster.spec.vpcId | default('') | string is match('^[1-9][0-9]*$')
-        and server_cluster.spec.region | default('') | string | length > 0)
-    fail_msg: "ServerCluster deletion requires a positive numeric backendId, or a VPC ID and region for scoped lookup"
+        and server_cluster.spec.vpcId | default('') | string is match('^[1-9][0-9]*$'))
+    fail_msg: "ServerCluster deletion requires a positive numeric backendId, or a VPC ID for scoped lookup"
 
 - name: Delete ServerCluster from Netris
   ansible.builtin.include_role:

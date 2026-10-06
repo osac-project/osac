@@ -39,8 +39,6 @@ import (
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
-const defaultNetworkLabel = "osac.openshift.io/default"
-
 var _ = Describe("MCP server", func() {
 	var (
 		ctx                            context.Context
@@ -244,7 +242,6 @@ var _ = Describe("MCP server", func() {
 				Metadata: privatev1.Metadata_builder{
 					Name:   fmt.Sprintf("mcp-subnet-%s", uuid.New()[24:32]),
 					Tenant: usersGroup,
-					Labels: map[string]string{defaultNetworkLabel: "true"},
 				}.Build(),
 				Spec: privatev1.SubnetSpec_builder{
 					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
@@ -254,18 +251,7 @@ var _ = Describe("MCP server", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func() {
-			subnetResponse, err := subnetsClient.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: subnetID}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			subnet := subnetResponse.GetObject()
-			labels := subnet.GetMetadata().GetLabels()
-			delete(labels, defaultNetworkLabel)
-			subnet.GetMetadata().SetLabels(labels)
-			_, err = subnetsClient.Update(ctx, privatev1.SubnetsUpdateRequest_builder{
-				Object:     subnet,
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			_, err = subnetsClient.Delete(ctx, privatev1.SubnetsDeleteRequest_builder{Id: subnetID}.Build())
+			_, err := subnetsClient.Delete(ctx, privatev1.SubnetsDeleteRequest_builder{Id: subnetID}.Build())
 			Expect(err).ToNot(HaveOccurred())
 		})
 		Eventually(func(g Gomega) {
@@ -640,7 +626,12 @@ func callMCPTool[Out any](ctx context.Context, session *mcp.ClientSession, name 
 		return output, fmt.Errorf("failed to call tool %q: %w", name, err)
 	}
 	if result.IsError {
-		return output, fmt.Errorf("tool %q returned an error result: %+v", name, result.Content)
+		for _, content := range result.Content {
+			if textContent, ok := content.(*mcp.TextContent); ok {
+				return output, fmt.Errorf("tool %q returned an error result: %s", name, textContent.Text)
+			}
+		}
+		return output, fmt.Errorf("tool %q returned an error result with no text content", name)
 	}
 	raw, err := json.Marshal(result.StructuredContent)
 	if err != nil {

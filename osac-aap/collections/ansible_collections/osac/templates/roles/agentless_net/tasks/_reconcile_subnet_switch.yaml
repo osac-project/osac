@@ -5,8 +5,9 @@
     _agentless_net_switch_trunk_ports: "{{ hostvars[_agentless_net_switch_name].trunk_ports }}"
 
 - name: Inspect Cumulus VLAN state before Subnet reconciliation
-  ansible.builtin.command:
-    argv: [bridge, -j, vlan, show]
+  # Cumulus 5.3 ships Python 3.7; use raw SSH because the EE's Ansible Core
+  # requires Python 3.9 or newer on Python-based target modules.
+  ansible.builtin.raw: bridge -j vlan show
   delegate_to: "{{ _agentless_net_switch_name }}"
   become: true
   vars:
@@ -65,8 +66,7 @@
     label: "{{ _agentless_net_subnet_port }}"
 
 - name: Inspect Cumulus VLAN state after Subnet trunk reconciliation
-  ansible.builtin.command:
-    argv: [bridge, -j, vlan, show]
+  ansible.builtin.raw: bridge -j vlan show
   delegate_to: "{{ _agentless_net_switch_name }}"
   become: true
   vars:
@@ -149,8 +149,7 @@
   no_log: true
 
 - name: Verify the saved VLAN is absent from this Cumulus switch
-  ansible.builtin.command:
-    argv: [bridge, -j, vlan, show]
+  ansible.builtin.raw: bridge -j vlan show
   delegate_to: "{{ _agentless_net_switch_name }}"
   become: true
   vars:

@@ -1,7 +1,6 @@
 ---
 - name: Inspect Cumulus VLAN membership for trunk {{ _agentless_net_subnet_port }}
-  ansible.builtin.command:
-    argv: [bridge, -j, vlan, show]
+  ansible.builtin.raw: bridge -j vlan show
   delegate_to: "{{ _agentless_net_switch_name }}"
   become: true
   vars:
@@ -105,8 +104,7 @@
   no_log: true
 
 - name: Verify saved VLAN membership on trunk {{ _agentless_net_subnet_port }}
-  ansible.builtin.command:
-    argv: [bridge, -j, vlan, show]
+  ansible.builtin.raw: bridge -j vlan show
   delegate_to: "{{ _agentless_net_switch_name }}"
   become: true
   vars:

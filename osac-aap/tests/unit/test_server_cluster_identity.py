@@ -279,7 +279,7 @@ def test_create_publishes_confirmed_vpc_facts_for_downstream_callers(
 
 
 @pytest.mark.parametrize("omit_vpc_from_state_response", [True])
-def test_create_publishes_empty_vpc_facts_when_netris_does_not_confirm_vpc(
+def test_create_does_not_publish_unconfirmed_vpc_facts(
     tmp_path, netris_server, omit_vpc_from_state_response,
 ):
     url, _clusters, writes = netris_server
@@ -290,8 +290,9 @@ def test_create_publishes_empty_vpc_facts_when_netris_does_not_confirm_vpc(
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert writes == [("POST", "/api/v2/server-cluster")]
-    assert '"server_cluster_vpc_id": ""' in result.stdout
-    assert '"server_cluster_vpc_name": ""' in result.stdout
+    assert '"_server_cluster_confirmed_vpc_id": ""' in result.stdout
+    assert '"server_cluster_vpc_id": "VARIABLE IS NOT DEFINED!"' in result.stdout
+    assert '"server_cluster_vpc_name": "VARIABLE IS NOT DEFINED!"' in result.stdout
 
 
 def test_fabric_domain_delete_uses_virtual_network_region_site(tmp_path, netris_server):
@@ -307,6 +308,21 @@ def test_fabric_domain_delete_uses_virtual_network_region_site(tmp_path, netris_
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert writes == [("DELETE", "/api/v2/server-cluster/22")]
+
+
+def test_fabric_domain_delete_uses_default_site_when_region_is_empty(tmp_path, netris_server):
+    url, clusters, writes = netris_server
+    clusters.append(cluster(23, 1, 7))
+    resource = {
+        "metadata": {"name": "shared-name"},
+        "spec": {"backendId": "", "vpcId": "7", "region": ""},
+    }
+    result = run_role(
+        tmp_path, url, "delete_server_cluster", role_name="osac.templates.netris",
+        server_cluster=resource, netris_site_id=1,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert writes == [("DELETE", "/api/v2/server-cluster/23")]
 
 
 def test_fabric_domain_delete_uses_backend_id_without_vpc(tmp_path, netris_server):

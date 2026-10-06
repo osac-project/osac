@@ -123,9 +123,12 @@ FabricDomain CR on the VN's hub. The operator waits for VN readiness, resolves
 hardware bindings, records the selected template/VPC/region, and launches AAP.
 Feedback copies the conditions and backend/member status to the API.
 
-`Ready=True` means the requested Server Cluster job succeeded with valid backend
-identity. Phase 1 member states follow the whole job; they do not independently
-verify NIC connectivity, RoCE performance, or per-server attachment health.
+`Ready=True` means the requested Server Cluster job succeeded with a valid
+backend ID, AAP confirmed a non-empty VPC ID matching the requested VirtualNetwork,
+and the latest completed job's non-empty config version matches the current
+desired configuration. Phase 1 member states follow the whole job; they do not
+independently verify NIC connectivity, RoCE performance, or per-server attachment
+health.
 Disabled networking provisioning is not reported as a provisioned domain.
 
 ## Observe provisioning

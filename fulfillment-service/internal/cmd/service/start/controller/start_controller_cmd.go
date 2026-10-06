@@ -686,6 +686,7 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	fabricDomainReconciler, err := controllers.NewReconciler[*privatev1.FabricDomain]().
 		SetLogger(r.logger).
 		SetName("fabric-domain").
+		SetSync(r.args.sync).
 		SetClient(r.client).
 		SetFunction(fabricDomainReconcilerFunction).
 		SetEventFilter(fabricDomainEventFilter).

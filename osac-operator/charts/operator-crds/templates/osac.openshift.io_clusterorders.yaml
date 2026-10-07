@@ -104,9 +104,6 @@ spec:
                     maxLength: 253
                     minLength: 1
                     type: string
-                    x-kubernetes-validations:
-                    - message: subnetRef is immutable
-                      rule: self == oldSelf
                 required:
                 - subnetRef
                 type: object
@@ -193,6 +190,9 @@ spec:
             - message: addOnOperators is immutable
               rule: has(self.addOnOperators) == has(oldSelf.addOnOperators) && (!has(self.addOnOperators)
                 || self.addOnOperators == oldSelf.addOnOperators)
+            - message: networkAttachment is immutable after creation
+              rule: has(self.networkAttachment) == has(oldSelf.networkAttachment)
+                && (!has(self.networkAttachment) || self.networkAttachment == oldSelf.networkAttachment)
           status:
             description: ClusterOrderStatus defines the observed state of ClusterOrder
             properties:

@@ -1116,16 +1116,15 @@ var _ = Describe("Private clusters server", func() {
 			))
 		})
 
-		DescribeTable("rejects CaaS NodeSet references without explicit platform scope without mutating them",
+		DescribeTable("resolves CaaS NodeSet hardware without validating reference selectors",
 			func(path string, shared bool, project string) {
 				ref := privatev1.BareMetalInstanceTypeReference_builder{
 					Id: "acme-bmit-id", Shared: shared, Project: project,
 				}.Build()
-				cluster := newCaaSNodeSetCreateRequest("invalid-platform-scope", map[string]*privatev1.ClusterNodeSet{
+				cluster := newCaaSNodeSetCreateRequest("reference-selectors", map[string]*privatev1.ClusterNodeSet{
 					"workers": privatev1.ClusterNodeSet_builder{Size: proto.Int32(2), BaremetalInstanceType: ref}.Build(),
 				}, nil).GetObject()
 				cluster.GetMetadata().SetTenant(testTenant)
-				original := proto.Clone(cluster)
 				var err error
 				switch path {
 				case "create":
@@ -1137,9 +1136,15 @@ var _ = Describe("Private clusters server", func() {
 				case "fabric":
 					err = server.resolveFabricInterfaces(ctx, cluster)
 				}
-				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-				Expect(err).To(MatchError(ContainSubstring("node_sets.workers.baremetal_instance_type")))
-				Expect(proto.Equal(cluster, original)).To(BeTrue())
+				Expect(err).ToNot(HaveOccurred())
+				if path == "fabric" {
+					Expect(cluster.GetSpec().GetNodeSets()["workers"].GetFabricInterface()).To(Equal("data-0"))
+					return
+				}
+				Expect(ref.GetId()).To(Equal("acme-bmit-id"))
+				Expect(ref.GetName()).To(Equal("acme-bmit-name"))
+				Expect(ref.GetShared()).To(BeTrue())
+				Expect(ref.GetProject()).To(BeEmpty())
 			},
 			Entry("create without shared=true", "create", false, ""),
 			Entry("update without shared=true", "update", false, ""),
@@ -1205,7 +1210,7 @@ var _ = Describe("Private clusters server", func() {
 			Expect(resolved.GetFabricInterface()).To(Equal("data-0"))
 		})
 
-		DescribeTable("rejects invalid hardware selections on update",
+		DescribeTable("preserves hardware immutability without validating reference selectors on update",
 			func(nodeSetName string, shared bool, project string) {
 				created, err := server.Create(ctx, newCaaSNodeSetCreateRequest("invalid-scope-update", map[string]*privatev1.ClusterNodeSet{
 					"compute": privatev1.ClusterNodeSet_builder{
@@ -1229,18 +1234,25 @@ var _ = Describe("Private clusters server", func() {
 					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.node_sets"}},
 				}.Build()
 				original := proto.Clone(request)
-				_, err = server.Update(ctx, request)
-				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				response, err := server.Update(ctx, request)
+				expectedSpec := created.GetObject().GetSpec()
 				if nodeSetName == "compute" {
 					// Existing hardware is immutable, so this fails before reference resolution.
+					Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
 					Expect(err).To(MatchError(ContainSubstring("baremetal_instance_type is immutable")))
 				} else {
-					Expect(err).To(MatchError(ContainSubstring("node_sets." + nodeSetName + ".baremetal_instance_type")))
+					Expect(err).ToNot(HaveOccurred())
+					expectedSpec = response.GetObject().GetSpec()
+					ref := expectedSpec.GetNodeSets()[nodeSetName].GetBaremetalInstanceType()
+					Expect(ref.GetId()).To(Equal("acme-gpu-bmit-id"))
+					Expect(ref.GetName()).To(Equal("acme-gpu-name"))
+					Expect(ref.GetShared()).To(BeTrue())
+					Expect(ref.GetProject()).To(BeEmpty())
 				}
 				Expect(proto.Equal(request, original)).To(BeTrue())
 				stored, err := server.Get(ctx, privatev1.ClustersGetRequest_builder{Id: created.GetObject().GetId()}.Build())
 				Expect(err).ToNot(HaveOccurred())
-				Expect(proto.Equal(stored.GetObject().GetSpec(), created.GetObject().GetSpec())).To(BeTrue())
+				Expect(proto.Equal(stored.GetObject().GetSpec(), expectedSpec)).To(BeTrue())
 			},
 			Entry("new NodeSet without shared=true", "gpu", false, ""),
 			Entry("changed NodeSet without shared=true", "compute", false, ""),
@@ -4510,6 +4522,35 @@ var _ = Describe("Private clusters server", func() {
 					[]*privatev1.BareMetalNetworkPortSpec{
 						privatev1.BareMetalNetworkPortSpec_builder{Name: "mgmt-0", Role: "management"}.Build(),
 					})
+			})
+
+			It("Loads fabric hardware by ID without revalidating the reference name", func() {
+				ref := privatev1.BareMetalInstanceTypeReference_builder{
+					Id: "bmit-fabric-id", Name: "bmit-no-fabric-name", Shared: true,
+				}.Build()
+				cluster := newCaaSNodeSetCreateRequest("fabric-by-id", map[string]*privatev1.ClusterNodeSet{
+					"compute": privatev1.ClusterNodeSet_builder{Size: proto.Int32(3), BaremetalInstanceType: ref}.Build(),
+				}, nil).GetObject()
+
+				err := server.resolveFabricInterfaces(ctx, cluster)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(cluster.GetSpec().GetNodeSets()["compute"].GetFabricInterface()).To(Equal("data-0"))
+				Expect(ref.GetName()).To(Equal("bmit-no-fabric-name"))
+			})
+
+			It("Does not resolve a name-only fabric hardware reference", func() {
+				cluster := newCaaSNodeSetCreateRequest("fabric-name-only", map[string]*privatev1.ClusterNodeSet{
+					"compute": privatev1.ClusterNodeSet_builder{
+						Size: proto.Int32(3),
+						BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{
+							Name: "bmit-fabric-name", Shared: true,
+						}.Build(),
+					}.Build(),
+				}, nil).GetObject()
+
+				err := server.resolveFabricInterfaces(ctx, cluster)
+				Expect(err).To(HaveOccurred())
+				Expect(cluster.GetSpec().GetNodeSets()["compute"].GetFabricInterface()).To(BeEmpty())
 			})
 
 			It("Populates fabric_interface from the first fabric port", func() {

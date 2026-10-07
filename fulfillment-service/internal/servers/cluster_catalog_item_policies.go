@@ -335,19 +335,13 @@ func validateClusterCatalogItemNodeSetPolicy(
 	for name, node := range nodeMap.GetItems() {
 		field := "fields.node_sets." + name + ".baremetal_instance_type"
 		ref := node.GetBaremetalInstanceType()
-		if err := validatePlatformReference(ref, "bare metal instance type", ""); err != nil {
-			return catalogItemPolicyError(field, grpcstatus.Convert(err).Message())
-		}
-		resolved, err := resolveLockedPlatformResource(ctx, instanceTypes, ref.GetId(), ref.GetName(),
-			"bare metal instance type", "", grpccodes.InvalidArgument)
+		resolved, err := resolveLockedFullResourceReference(ctx, instanceTypes, catalogItemScope(item), ref,
+			"bare metal instance type", " in "+field, grpccodes.InvalidArgument)
 		if err != nil {
-			if grpcstatus.Code(err) != grpccodes.InvalidArgument {
-				return err
-			}
-			return catalogItemPolicyError(field, grpcstatus.Convert(err).Message())
+			return err
 		}
-		if err := validateResourceNotDeleted("bare metal instance type", refKey(ref), "", resolved.GetMetadata()); err != nil {
-			return catalogItemPolicyError(field, grpcstatus.Convert(err).Message())
+		if err := validateResourceNotDeleted("bare metal instance type", refKey(ref), " in "+field, resolved.GetMetadata()); err != nil {
+			return err
 		}
 		canonicalizeResourceReference(ref, resolved)
 		if requiresFabricInterface {

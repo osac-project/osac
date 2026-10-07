@@ -182,7 +182,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 			err = validateClusterCatalogItemNodeSetPolicy(ctx, item, server.bareMetalInstanceTypesDao)
 			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
 			Expect(grpcstatus.Convert(err).Message()).To(Equal(
-				"field 'fields.node_sets.workers.baremetal_instance_type': bare metal instance type 'deleted-policy-type' has been deleted"))
+				"bare metal instance type 'deleted-policy-type' in fields.node_sets.workers.baremetal_instance_type has been deleted"))
 		})
 
 		It("resolves name-only shared BMIT references for a tenant-owned catalog item", func() {
@@ -234,57 +234,6 @@ var _ = Describe("Private cluster catalog items server", func() {
 			Expect(validateClusterCatalogItemNodeSetPolicy(ctx, item, server.bareMetalInstanceTypesDao)).To(Succeed())
 			Expect(ref.GetId()).To(Equal("shared-default-policy-type"))
 			Expect(ref.GetShared()).To(BeTrue())
-		})
-
-		DescribeTable("rejects NodeSet BMIT references without the platform scope", func(ref *privatev1.BareMetalInstanceTypeReference) {
-			instanceType := privatev1.BareMetalInstanceType_builder{
-				Id:       "shared-policy-type",
-				Metadata: privatev1.Metadata_builder{Name: "shared-policy-type", Tenant: auth.SharedTenant}.Build(),
-			}.Build()
-			_, err := server.bareMetalInstanceTypesDao.Create().SetObject(instanceType).Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-			item := privatev1.ClusterCatalogItem_builder{
-				Metadata: privatev1.Metadata_builder{Tenant: testTenant}.Build(),
-				Fields: privatev1.ClusterCatalogItemFields_builder{
-					NodeSets: privatev1.ClusterNodeSetMapPolicy_builder{
-						Locked: privatev1.ClusterNodeSetMap_builder{Items: map[string]*privatev1.ClusterCatalogNodeSet{
-							"workers": privatev1.ClusterCatalogNodeSet_builder{
-								Size: 2, BaremetalInstanceType: ref,
-							}.Build(),
-						}}.Build(),
-					}.Build(),
-				}.Build(),
-			}.Build()
-			err = validateClusterCatalogItemNodeSetPolicy(ctx, item, server.bareMetalInstanceTypesDao)
-			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-			Expect(err).To(MatchError(ContainSubstring("fields.node_sets.workers.baremetal_instance_type")))
-		},
-			Entry("without shared=true", privatev1.BareMetalInstanceTypeReference_builder{Name: "shared-policy-type"}.Build()),
-			Entry("with a project", privatev1.BareMetalInstanceTypeReference_builder{Id: "shared-policy-type", Shared: true, Project: "other"}.Build()),
-		)
-
-		It("rejects tenant BMITs even when their reference claims shared scope", func() {
-			instanceType := privatev1.BareMetalInstanceType_builder{
-				Id:       "tenant-policy-type-id",
-				Metadata: privatev1.Metadata_builder{Name: "tenant-policy-type", Tenant: testTenant}.Build(),
-			}.Build()
-			_, err := server.bareMetalInstanceTypesDao.Create().SetObject(instanceType).Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-			item := privatev1.ClusterCatalogItem_builder{
-				Metadata: privatev1.Metadata_builder{Tenant: testTenant}.Build(),
-				Fields: privatev1.ClusterCatalogItemFields_builder{
-					NodeSets: privatev1.ClusterNodeSetMapPolicy_builder{
-						Locked: privatev1.ClusterNodeSetMap_builder{Items: map[string]*privatev1.ClusterCatalogNodeSet{
-							"workers": privatev1.ClusterCatalogNodeSet_builder{
-								Size: 2, BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "tenant-policy-type-id", Shared: true}.Build(),
-							}.Build(),
-						}}.Build(),
-					}.Build(),
-				}.Build(),
-			}.Build()
-			err = validateClusterCatalogItemNodeSetPolicy(ctx, item, server.bareMetalInstanceTypesDao)
-			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-			Expect(err).To(MatchError(ContainSubstring("fields.node_sets.workers.baremetal_instance_type")))
 		})
 
 		It("does not take node sets from the referenced template", func() {

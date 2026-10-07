@@ -503,9 +503,6 @@ func (s *PrivateClustersServer) prepareUpdatedClusterNodeSets(
 			continue
 		}
 		kind := "node_sets." + name + ".baremetal_instance_type"
-		if err := validatePlatformReference(ref, kind, ""); err != nil {
-			return err
-		}
 		resolved, err := resolvePlatformResource(ctx, s.bareMetalInstanceTypesDao,
 			ref.GetId(), ref.GetName(), kind, "", grpccodes.InvalidArgument)
 		if err != nil {
@@ -1167,7 +1164,7 @@ func (s *PrivateClustersServer) validateAutoExternalIPImmutability(ctx context.C
 }
 
 // resolveFabricInterfaces populates fabric_interface on each node set by
-// resolving its canonical BareMetalInstanceType reference and selecting the first interface with role "fabric".
+// loading its BareMetalInstanceType by the already-resolved ID and selecting the first interface with role "fabric".
 func (s *PrivateClustersServer) resolveFabricInterfaces(ctx context.Context, cluster *privatev1.Cluster) error {
 	for name, nodeSet := range cluster.GetSpec().GetNodeSets() {
 		if refKey(nodeSet.GetBaremetalInstanceType()) == "" {
@@ -1175,13 +1172,9 @@ func (s *PrivateClustersServer) resolveFabricInterfaces(ctx context.Context, clu
 		}
 		ref := nodeSet.GetBaremetalInstanceType()
 		kind := "node_sets." + name + ".baremetal_instance_type"
-		if err := validatePlatformReference(ref, kind, ""); err != nil {
-			return err
-		}
-		bmit, err := resolvePlatformResource(ctx, s.bareMetalInstanceTypesDao,
-			ref.GetId(), ref.GetName(), kind, "", grpccodes.InvalidArgument)
+		bmit, err := getReferenceResource(ctx, s.bareMetalInstanceTypesDao, ref.GetId())
 		if err != nil {
-			return err
+			return resourceLookupError(err, kind, ref.GetId(), "", grpccodes.InvalidArgument)
 		}
 		if err := validateResourceNotDeleted(kind, refKey(ref), "", bmit.GetMetadata()); err != nil {
 			return err
@@ -1357,9 +1350,6 @@ func (s *PrivateClustersServer) resolveClusterNodeSets(ctx context.Context, clus
 	for name, nodeSet := range cluster.GetSpec().GetNodeSets() {
 		ref := nodeSet.GetBaremetalInstanceType()
 		kind := "node_sets." + name + ".baremetal_instance_type"
-		if err := validatePlatformReference(ref, kind, ""); err != nil {
-			return err
-		}
 		resolved, err := resolvePlatformResource(ctx, s.bareMetalInstanceTypesDao,
 			ref.GetId(), ref.GetName(), kind, "", grpccodes.InvalidArgument)
 		if err != nil {

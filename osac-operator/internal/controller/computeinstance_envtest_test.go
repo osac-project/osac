@@ -24,6 +24,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -168,6 +169,54 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 	})
 
 	Context("Provisioning workflow", func() {
+		It("does not submit another VM job after an attachment update is rejected and continues polling status", func() {
+			const instanceName = "test-immutable-network-attachment"
+			instance := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      instanceName,
+					Namespace: testNamespace,
+					Annotations: map[string]string{
+						osacTenantKey: "test-tenant",
+					},
+				},
+				Spec: newTestComputeInstanceSpec("test_template"),
+			}
+			instance.Spec.NetworkAttachments = []osacv1alpha1.ComputeNetworkAttachment{{
+				SubnetRef:         "subnet-a",
+				SecurityGroupRefs: []string{"sg-a"},
+			}}
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+			DeferCleanup(k8sClient.Delete, ctx, instance)
+
+			instance.Status.DesiredConfigVersion = testDesiredConfigVersion
+			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+			_, err := reconciler.handleProvisioning(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+
+			instance = &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: testNamespace}, instance)).To(Succeed())
+			instance.Spec.NetworkAttachments[0].SecurityGroupRefs = []string{"sg-b"}
+			err = k8sClient.Update(ctx, instance)
+			Expect(err).To(HaveOccurred())
+			Expect(apierrors.IsInvalid(err)).To(BeTrue())
+
+			instance = &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: testNamespace}, instance)).To(Succeed())
+			provider.setProvisionJobState(osacv1alpha1.JobStateRunning, "Job is running")
+			result, err := reconciler.handleProvisioning(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(100 * time.Millisecond))
+			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+
+			provider.mu.Lock()
+			provisionCalls := provider.provisionCallCount
+			provider.mu.Unlock()
+			Expect(provisionCalls).To(Equal(1))
+			job := provisioning.FindLatestJobByType(instance.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision)
+			Expect(job).NotTo(BeNil())
+			Expect(job.State).To(Equal(osacv1alpha1.JobStateRunning))
+		})
+
 		It("should provision a ComputeInstance successfully", func() {
 			instanceName := "test-provision-success"
 			instance := &osacv1alpha1.ComputeInstance{

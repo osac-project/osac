@@ -21,6 +21,7 @@
 #
 # Helm chart management (no parameters required):
 #   make helm-lint
+#   make mce-render-test
 #   make helm-validate
 
 SHELL := /usr/bin/env bash -o pipefail
@@ -556,12 +557,16 @@ csi-render-test: helm-deps ## Verify CSI and storage-provider chart rendering
 fulfillment-trust-render-test: helm-deps ## Check verified fulfillment transport renders
 	python3 scripts/test-fulfillment-trust-render.py
 
+.PHONY: mce-render-test
+mce-render-test: ## Check standalone MCE defaults, opt-outs, and CaaS inheritance
+	python3 scripts/test-mce-render.py
+
 .PHONY: dev-full-render-test
 dev-full-render-test: helm-deps ## Check dev-full TLS and Helm post-rendering
 	./scripts/test-dev-full-render.sh
 
 .PHONY: helm-validate
-helm-validate: helm-lint csi-render-test helm-networking-test fulfillment-trust-render-test dev-full-render-test ## Validate all charts (lint + template)
+helm-validate: helm-lint csi-render-test helm-networking-test fulfillment-trust-render-test mce-render-test dev-full-render-test ## Validate all charts (lint + template)
 	@for d in values/*/; do \
 		infra="$${d}infra.yaml"; \
 		[ -f "$$infra" ] && echo "Validating $$infra..." && \

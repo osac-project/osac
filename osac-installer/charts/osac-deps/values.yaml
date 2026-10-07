@@ -24,7 +24,9 @@ cnv:
   channel: "stable"
 
 mce:
-  enabled: false
+  # Install standalone MCE by default for CaaS. Disable this when RHACM or an
+  # existing MCE installation owns the multicluster engine lifecycle.
+  enabled: true
   channel: "stable-2.17"
 
 kafka:

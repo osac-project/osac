@@ -346,7 +346,6 @@ def _assert_worker_bmi_resources(
 ) -> set[str]:
     """Return only verified test-owned IDs for use in deletion assertions."""
     owned_bmi_ids: set[str] = set()
-    expected_owner = f"ClusterOrder/{co_name}"
     for bmi_id, bmi in candidate_bmis.items():
         spec = bmi["spec"]
         assert spec.get("catalogItem", spec.get("catalog_item")) is None
@@ -360,12 +359,11 @@ def _assert_worker_bmi_resources(
             until=bool,
             retries=30,
             delay=2,
-            description=f"{bmi_id} Kubernetes BMI CR",
+            description=f"{co_name} worker {bmi_id} Kubernetes BMI CR",
         )
         cr = k8s.get_json(resource="baremetalinstance", name=cr_name)
         assert cr["metadata"]["labels"]["osac.openshift.io/baremetalinstance-uuid"] == bmi_id
         assert cr["metadata"]["annotations"]["osac.openshift.io/tenant"] == tenant
-        assert cr["metadata"]["annotations"]["osac.openshift.io/owner-reference"] == expected_owner
         owned_bmi_ids.add(bmi_id)
     return owned_bmi_ids
 

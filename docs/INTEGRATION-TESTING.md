@@ -492,9 +492,11 @@ it requires the same source-pinned environment described below and enough
 available BMHs for both worker sets.
 
 The deletion request triggers the test-owned worker BMI wait (480 attempts at
-five-second intervals). Worker ownership is verified through both fulfillment
-and Kubernetes tenant/owner annotations before those IDs enter the deletion
-assertions. Only after all verified BMIs disappear does the
+five-second intervals). Worker ownership is verified through the fulfillment
+BMI's tenant, cluster-order label and owner-reference annotation, plus the
+Kubernetes CR's tenant annotation and BMI UUID label, before those IDs enter
+the deletion assertions. The API owner-reference annotation is not copied to
+the CR. Only after all verified BMIs disappear does the
 read-only parent wait observe the exact ClusterOrder NotFound (121 attempts at
 ten-second intervals); only after parent removal does the separate InfraEnv GC
 wait observe that exact InfraEnv NotFound in the same namespace (60 attempts at

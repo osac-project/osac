@@ -37,8 +37,10 @@ feedback test. Two-node-set isolation and explicit/invalid version cases belong
 in CaaS regression; version cases are consolidated in
 `regression/test_cluster_version.py` rather than duplicated in sanity.
 Other CaaS scenarios still using `wait_for_cluster_deletion` do not establish
-that boundary. Both scenarios verify tenant/owner annotations on their worker
-BMIs and wait for all verified workers to disappear (480 attempts at five-second
+that boundary. Both scenarios verify the API worker BMI's tenant, cluster-order
+label and owner-reference annotation, and the Kubernetes CR's tenant annotation
+and BMI UUID label. The API owner-reference annotation is not copied to the CR.
+They wait for all verified workers to disappear (480 attempts at five-second
 intervals). Only then does the parent wait start, with 121 attempts at
 ten-second intervals, followed by
 60 InfraEnv attempts at five-second intervals. These are separate polling

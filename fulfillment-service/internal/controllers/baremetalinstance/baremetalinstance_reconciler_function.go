@@ -49,8 +49,6 @@ import (
 
 const objectPrefix = "bmi-"
 
-const ownerReferenceAnnotation = "osac.openshift.io/owner-reference"
-
 // defaultHostType is a placeholder until host type is modeled in the template proto.
 const defaultHostType = "default"
 
@@ -739,7 +737,14 @@ func failureMessage(failure bmfov1alpha1.FailureClassification) string {
 // mutateBMI sets the fulfillment-service-owned metadata and spec fields, leaving
 // operator-managed fields (ExternalHostID, HostClass, etc.) untouched.
 func (t *task) mutateBMI(ctx context.Context, object *bmfov1alpha1.BareMetalInstance) error {
-	t.mutateBMIMetadata(object)
+	if object.Labels == nil {
+		object.Labels = make(map[string]string)
+	}
+	object.Labels[labels.BareMetalInstanceUuid] = t.bareMetalInstance.GetId()
+	if object.Annotations == nil {
+		object.Annotations = make(map[string]string)
+	}
+	object.Annotations[annotations.Tenant] = t.bareMetalInstance.GetMetadata().GetTenant()
 
 	// The API materializes the Template; the catalog reference is provenance only.
 	templateID := t.bareMetalInstance.GetSpec().GetTemplate().GetId()
@@ -870,20 +875,6 @@ func (t *task) mutateBMI(ctx context.Context, object *bmfov1alpha1.BareMetalInst
 	}
 
 	return nil
-}
-
-func (t *task) mutateBMIMetadata(object *bmfov1alpha1.BareMetalInstance) {
-	if object.Labels == nil {
-		object.Labels = make(map[string]string)
-	}
-	object.Labels[labels.BareMetalInstanceUuid] = t.bareMetalInstance.GetId()
-	if object.Annotations == nil {
-		object.Annotations = make(map[string]string)
-	}
-	object.Annotations[annotations.Tenant] = t.bareMetalInstance.GetMetadata().GetTenant()
-	if owner := t.bareMetalInstance.GetMetadata().GetAnnotations()[ownerReferenceAnnotation]; owner != "" {
-		object.Annotations[ownerReferenceAnnotation] = owner
-	}
 }
 
 // ensureUserDataSecret creates a Kubernetes Secret containing the cloud-init user data

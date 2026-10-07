@@ -101,15 +101,13 @@ mkdir -p "$HOME/.config/osac"
 kubectl -n osac get configmap ca-bundle \
   -o go-template='{{ index .data "bundle.pem" }}' \
   > "$HOME/.config/osac/ca-bundle.pem"
-export CODEX_CA_CERTIFICATE="$HOME/.config/osac/ca-bundle.pem"
-openssl x509 -in "$CODEX_CA_CERTIFICATE" -noout -subject
-curl --fail --show-error --cacert "$CODEX_CA_CERTIFICATE" \
+export OSAC_CA_CERTIFICATE="$HOME/.config/osac/ca-bundle.pem"
+openssl x509 -in "$OSAC_CA_CERTIFICATE" -noout -subject
+curl --fail --show-error --cacert "$OSAC_CA_CERTIFICATE" \
   "$OSAC_MCP_URL/.well-known/oauth-protected-resource"
-curl --fail --show-error --cacert "$CODEX_CA_CERTIFICATE" \
+curl --fail --show-error --cacert "$OSAC_CA_CERTIFICATE" \
   "$OSAC_ISSUER_URL/.well-known/openid-configuration"
 ```
-
-Launch Codex from a shell with that environment variable set.
 
 For `PROFILE=dev`, use `$HOME/.kube/osac-dev-kind.kubeconfig` and
 `https://keycloak.keycloak.svc.cluster.local:8443/realms/osac` instead. That
@@ -121,21 +119,54 @@ For another deployment, replace these placeholders and verify its endpoints:
 ```bash
 export OSAC_MCP_URL='https://<mcp-host>'
 export OSAC_ISSUER_URL='https://<issuer-host>/realms/osac'
-export CODEX_CA_CERTIFICATE='/path/to/osac-ca-bundle.pem'
+export OSAC_CA_CERTIFICATE='/path/to/osac-ca-bundle.pem'
 
-curl --fail --show-error --cacert "$CODEX_CA_CERTIFICATE" \
+curl --fail --show-error --cacert "$OSAC_CA_CERTIFICATE" \
   "$OSAC_MCP_URL/.well-known/oauth-protected-resource"
-curl --fail --show-error --cacert "$CODEX_CA_CERTIFICATE" \
+curl --fail --show-error --cacert "$OSAC_CA_CERTIFICATE" \
   "$OSAC_ISSUER_URL/.well-known/openid-configuration"
 ```
 
 The first response should identify the MCP resource and its authorization
 server. Use the actual issuer from the deployment rather than assuming the
 example realm path. If either request fails, resolve DNS, routing, or CA trust
-before starting OAuth. `CODEX_CA_CERTIFICATE` is Codex's documented PEM CA
-bundle setting and also applies to its HTTPS and OAuth traffic; set it in the
-environment that launches Codex. If the system already trusts both endpoints,
-omit the CA export and the `--cacert` options. Do not disable TLS verification.
+before starting OAuth. If the system already trusts both endpoints, omit the
+CA export and the `--cacert` options. Do not disable TLS verification.
+
+### Give Codex the OSAC CA without losing public roots
+
+`CODEX_CA_CERTIFICATE` applies to all of Codex's HTTPS, login, and WebSocket
+clients, not just the OSAC MCP server. Pointing it at the OSAC-only CA file can
+break Codex's other connections. Codex does not currently provide a CA setting
+for one HTTP MCP server. If both OSAC endpoints are already trusted by Codex,
+leave `CODEX_CA_CERTIFICATE` unset. See the [Codex environment variable
+reference](https://learn.chatgpt.com/docs/config-file/environment-variables)
+and [MCP configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference).
+
+This is not macOS-specific; the setting is process-wide on every platform.
+On macOS, `/etc/ssl/cert.pem` provides a PEM file of public roots. Append the
+OSAC CA to a copy of it, then check both public and OSAC HTTPS before using
+the new bundle:
+
+```bash
+codex_ca_bundle="$HOME/.config/osac/codex-ca-bundle.pem"
+cat /etc/ssl/cert.pem "$OSAC_CA_CERTIFICATE" > "$codex_ca_bundle" &&
+  curl --silent --show-error --head --output /dev/null \
+    --cacert "$codex_ca_bundle" https://api.openai.com/ &&
+  curl --silent --show-error --head --output /dev/null \
+    --cacert "$codex_ca_bundle" https://chatgpt.com/ &&
+  curl --fail --show-error --output /dev/null \
+    --cacert "$codex_ca_bundle" \
+    "$OSAC_MCP_URL/.well-known/oauth-protected-resource" &&
+  export CODEX_CA_CERTIFICATE="$codex_ca_bundle"
+```
+
+If a check fails, the command does not export the new Codex setting. On other
+operating systems, use that OS's trusted PEM CA bundle instead of
+`/etc/ssl/cert.pem`. The combined bundle trusts the OSAC CA for all Codex
+connections, so use only a CA from a development deployment you control.
+Rebuild it after the Kind CA changes. Launch Codex from the shell with the
+verified setting, or follow the desktop guidance below.
 
 For either Kind profile, set
 `service.mcp.externalHostname=mcp.osac.localhost` and
@@ -206,8 +237,8 @@ authorizes each call as the signed-in user through the public Fulfillment API.
 ## Explore with MCP Inspector
 
 Inspector uses `NODE_EXTRA_CA_CERTS` to trust the public CA bundle extracted
-from Kind's `ca-bundle` ConfigMap. Supply that same PEM file to Codex through
-`CODEX_CA_CERTIFICATE`; Node does not use Codex's setting or `curl --cacert`.
+from Kind's `ca-bundle` ConfigMap. Codex uses the separate combined bundle
+above; Node does not use Codex's setting or `curl --cacert`.
 For either Kind profile, use the CA file extracted above. The commands set
 the MCP URL and CA path explicitly so they also work in a new shell. They
 create a temporary Inspector configuration with the public client ID and MCP
@@ -216,8 +247,8 @@ login from reusing cached OAuth discovery for a different Kind profile:
 
 ```bash
 export OSAC_MCP_URL='https://mcp.osac.localhost:8443'
-export CODEX_CA_CERTIFICATE="$HOME/.config/osac/ca-bundle.pem"
-openssl x509 -in "$CODEX_CA_CERTIFICATE" -noout -subject
+export OSAC_CA_CERTIFICATE="$HOME/.config/osac/ca-bundle.pem"
+openssl x509 -in "$OSAC_CA_CERTIFICATE" -noout -subject
 INSPECTOR_DIR="$(mktemp -d "${TMPDIR:-/tmp}/osac-mcp-inspector.XXXXXX")"
 mkdir -p "$INSPECTOR_DIR/storage"
 jq -n --arg url "$OSAC_MCP_URL" \
@@ -225,7 +256,7 @@ jq -n --arg url "$OSAC_MCP_URL" \
   > "$INSPECTOR_DIR/inspector-osac.config.json"
 jq -e '.mcpServers.osac.url != ""' "$INSPECTOR_DIR/inspector-osac.config.json"
 MCP_STORAGE_DIR="$INSPECTOR_DIR/storage" \
-  NODE_EXTRA_CA_CERTS="$CODEX_CA_CERTIFICATE" \
+  NODE_EXTRA_CA_CERTS="$OSAC_CA_CERTIFICATE" \
   npx --yes @modelcontextprotocol/inspector@2.6.0 \
     --config "$INSPECTOR_DIR/inspector-osac.config.json" --server osac
 ```
@@ -246,23 +277,25 @@ issuer, while `PROFILE=dev` uses `keycloak.keycloak.svc.cluster.local`.
   does not prove the shared app server can use the same CA. A desktop app
   launched outside the shell may not inherit a shell export. The Codex CLI
   may also reuse a background app server started before
-  `CODEX_CA_CERTIFICATE` was set. On macOS, `launchctl setenv` makes the CA
-  setting available to future GUI-launched processes, but does not change an
-  already running daemon. To isolate daemon inheritance, run
-  `codex --no-daemon resume --last` from the shell with the CA export. If that
-  works, exit active Codex sessions and restart the shared daemon from an
-  ordinary macOS Terminal:
+  `CODEX_CA_CERTIFICATE` was set. Run `codex doctor` with the combined bundle
+  and check its Connectivity section before changing the shared daemon. On
+  macOS, `launchctl setenv` makes the setting available to future GUI-launched
+  processes, but does not change an already running daemon. Only after the
+  public and OSAC TLS checks above succeed, exit active Codex sessions and
+  restart the shared daemon from an ordinary macOS Terminal:
 
   ```bash
-  export CODEX_CA_CERTIFICATE="$HOME/.config/osac/ca-bundle.pem"
+  export CODEX_CA_CERTIFICATE="$HOME/.config/osac/codex-ca-bundle.pem"
   launchctl setenv CODEX_CA_CERTIFICATE "$CODEX_CA_CERTIFICATE"
   codex app-server daemon stop
   codex app-server daemon start
   codex resume --last
   ```
 
-  Stopping the daemon disconnects other active Codex sessions. If `/mcp` still
-  reports zero tools, check that `stop` and `start` succeeded and that the
+  Stopping the daemon disconnects other active Codex sessions. To undo this
+  setting, run `launchctl unsetenv CODEX_CA_CERTIFICATE`, run
+  `unset CODEX_CA_CERTIFICATE` in the shell, and restart Codex. If `/mcp`
+  still reports zero tools, check that `stop` and `start` succeeded and that the
   previous daemon process exited; the Codex CLI can otherwise reconnect to
   that old process.
 - If Inspector opens the old `keycloak.osac.localhost` issuer after switching
@@ -286,4 +319,4 @@ issuer, while `PROFILE=dev` uses `keycloak.keycloak.svc.cluster.local`.
 
 For current Codex OAuth and CA behavior, consult the official
 [MCP setup](https://developers.openai.com/codex/mcp) and
-[custom CA](https://learn.chatgpt.com/docs/auth#custom-ca-bundles) guidance.
+[CA environment variable](https://learn.chatgpt.com/docs/config-file/environment-variables) guidance.

@@ -180,6 +180,7 @@ var _ = Describe("ComputeInstance Integration Tests", func() {
 				},
 				Spec: newTestComputeInstanceSpec("test_template"),
 			}
+			instance.Spec.NetworkAttachments = []osacv1alpha1.ComputeNetworkAttachment{{SubnetRef: "subnet-a"}}
 
 			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
 			DeferCleanup(k8sClient.Delete, ctx, instance)

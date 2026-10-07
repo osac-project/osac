@@ -22,6 +22,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -73,6 +74,77 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 		}, instance)).To(Succeed())
 		return instance
 	}
+
+	It("rejects changes to the complete network attachment", func() {
+		const name = "cluster-order-immutable-network-attachment"
+		instance := newTestClusterOrder(name)
+		instance.Spec.NetworkAttachment = &osacv1alpha1.ClusterNetworkAttachment{
+			SubnetRef:         "subnet-a",
+			SecurityGroupRefs: []string{"sg-a"},
+		}
+		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, instance)).To(Succeed()) })
+
+		instance = getClusterOrder(name)
+		instance.Spec.NetworkAttachment.SecurityGroupRefs = []string{"sg-b"}
+		err := k8sClient.Update(ctx, instance)
+		Expect(err).To(HaveOccurred())
+		Expect(apierrors.IsInvalid(err)).To(BeTrue())
+		Expect(err.Error()).To(ContainSubstring("networkAttachment is immutable after creation"))
+
+		instance = getClusterOrder(name)
+		instance.Spec.NetworkAttachment.SubnetRef = "subnet-b"
+		err = k8sClient.Update(ctx, instance)
+		Expect(err).To(HaveOccurred())
+		Expect(apierrors.IsInvalid(err)).To(BeTrue())
+		Expect(err.Error()).To(ContainSubstring("networkAttachment is immutable after creation"))
+	})
+
+	It("rejects adding or removing the optional network attachment", func() {
+		const addName = "cluster-order-add-network-attachment"
+		withoutAttachment := newTestClusterOrder(addName)
+		Expect(k8sClient.Create(ctx, withoutAttachment)).To(Succeed())
+		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, withoutAttachment)).To(Succeed()) })
+
+		withoutAttachment = getClusterOrder(addName)
+		withoutAttachment.Spec.NetworkAttachment = &osacv1alpha1.ClusterNetworkAttachment{SubnetRef: "subnet-a"}
+		err := k8sClient.Update(ctx, withoutAttachment)
+		Expect(err).To(HaveOccurred())
+		Expect(apierrors.IsInvalid(err)).To(BeTrue())
+		Expect(err.Error()).To(ContainSubstring("networkAttachment is immutable after creation"))
+
+		const removeName = "cluster-order-remove-network-attachment"
+		withAttachment := newTestClusterOrder(removeName)
+		withAttachment.Spec.NetworkAttachment = &osacv1alpha1.ClusterNetworkAttachment{SubnetRef: "subnet-a"}
+		Expect(k8sClient.Create(ctx, withAttachment)).To(Succeed())
+		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, withAttachment)).To(Succeed()) })
+
+		withAttachment = getClusterOrder(removeName)
+		withAttachment.Spec.NetworkAttachment = nil
+		err = k8sClient.Update(ctx, withAttachment)
+		Expect(err).To(HaveOccurred())
+		Expect(apierrors.IsInvalid(err)).To(BeTrue())
+		Expect(err.Error()).To(ContainSubstring("networkAttachment is immutable after creation"))
+	})
+
+	It("allows unrelated worker and status updates with an unchanged network attachment", func() {
+		const name = "cluster-order-network-attachment-lifecycle-update"
+		instance := newTestClusterOrder(name)
+		instance.Spec.NetworkAttachment = &osacv1alpha1.ClusterNetworkAttachment{SubnetRef: "subnet-a"}
+		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, instance)).To(Succeed()) })
+
+		instance = getClusterOrder(name)
+		instance.Spec.NodeRequests = []osacv1alpha1.NodeRequest{{
+			NodeSet:       "worker",
+			NumberOfNodes: 1,
+			BareMetal:     &osacv1alpha1.BareMetalNodeSpec{InstanceType: "worker"},
+		}}
+		Expect(k8sClient.Update(ctx, instance)).To(Succeed())
+
+		instance.Status.DesiredConfigVersion = "lifecycle-update"
+		Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+	})
 
 	It("allows zero observed NodePool replicas while requiring a positive desired worker count", func() {
 		const name = "cluster-order-zero-observed-workers"

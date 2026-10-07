@@ -19,6 +19,8 @@ jobs:
        startsWith(github.event.comment.body, '/retest') ||
        startsWith(github.event.comment.body, '/cancel') ||
        startsWith(github.event.comment.body, '/ok-to-test') ||
-       startsWith(github.event.comment.body, '/e2e-ready'))
+       startsWith(github.event.comment.body, '/e2e-ready') ||
+       startsWith(github.event.comment.body, '/e2e-regression') ||
+       startsWith(github.event.comment.body, '/e2e-serial'))
     uses: osac-project/osac-test-infra/.github/workflows/slash-command-handler.yml@main
     secrets: inherit

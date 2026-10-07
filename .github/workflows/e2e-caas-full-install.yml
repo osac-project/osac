@@ -20,6 +20,38 @@ on:
     - cron: "38 0,2,5,7,10,12,14,17,19,22 * * *"
   workflow_dispatch:
     inputs:
+      # The slash-command handler sends these hints for correlation. The PR API
+      # response is authoritative; mismatched hints fail closed.
+      pr-number:
+        description: "PR number to test; all PR context is resolved server-side."
+        required: false
+        type: string
+        default: ""
+      pr-repository:
+        description: "Untrusted PR head repository hint from /test."
+        required: false
+        type: string
+        default: ""
+      pr-ref:
+        description: "Untrusted PR head ref hint from /test."
+        required: false
+        type: string
+        default: ""
+      pr-sha:
+        description: "Untrusted PR head SHA hint from /test."
+        required: false
+        type: string
+        default: ""
+      fork-pr-author:
+        description: "Untrusted PR author hint from /test."
+        required: false
+        type: string
+        default: ""
+      fork-pr-author-association:
+        description: "Untrusted PR author association hint from /test."
+        required: false
+        type: string
+        default: ""
       test-suite:
         description: "Suite relative to tests/e2e (caas/sanity, caas/regression, or caas for all). Default: caas/sanity"
         required: false
@@ -51,6 +83,139 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # workflow_dispatch accepts only a PR number as the identity key. Resolve
+  # every code-source and authorization field from the base repository API
+  # before the reusable workflow can access Vault or check out PR code.
+  resolve-dispatch:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      pr_number: ${{ steps.resolve.outputs.pr_number }}
+      head_repo: ${{ steps.resolve.outputs.head_repo }}
+      head_ref: ${{ steps.resolve.outputs.head_ref }}
+      head_sha: ${{ steps.resolve.outputs.head_sha }}
+      author: ${{ steps.resolve.outputs.author }}
+      author_association: ${{ steps.resolve.outputs.author_association }}
+      is_fork: ${{ steps.resolve.outputs.is_fork }}
+      test_suite: ${{ steps.resolve.outputs.test_suite }}
+    steps:
+      - name: Require workflow dispatches to use main
+        shell: bash
+        env:
+          DISPATCH_REF: ${{ github.ref }}
+        run: |
+          if [[ "${DISPATCH_REF}" != "refs/heads/main" ]]; then
+            echo "::error::Manual E2E dispatches must target the trusted main ref."
+            exit 1
+          fi
+
+      - name: Resolve PR context from the base repository
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+          INPUT_PR_REPOSITORY: ${{ inputs.pr-repository }}
+          INPUT_PR_REF: ${{ inputs.pr-ref }}
+          INPUT_PR_SHA: ${{ inputs.pr-sha }}
+          INPUT_FORK_PR_AUTHOR: ${{ inputs.fork-pr-author }}
+          INPUT_FORK_PR_ASSOCIATION: ${{ inputs.fork-pr-author-association }}
+          EXPLICIT_SUITE: ${{ inputs.test-suite || '' }}
+        run: |
+          set -euo pipefail
+
+          # Reject multiline/unsafe suite values before writing GITHUB_OUTPUT
+          # (a newline can inject extra head_repo=/head_sha= keys).
+          emit_suite() {
+            local suite=$1
+            if [[ ! "${suite}" =~ ^(caas|caas/(sanity|regression|serial))$ ]]; then
+              echo "::error::Unsupported or unsafe test-suite value."
+              exit 1
+            fi
+            printf 'test_suite=%s\n' "${suite}" >>"${GITHUB_OUTPUT}"
+          }
+
+          # PR-less dispatch on main: run against github.repository / github.sha
+          # (same as pre-resolve-dispatch). Hints require a PR number.
+          if [[ -z "${PR_NUMBER}" ]]; then
+            if [[ -n "${INPUT_PR_REPOSITORY}${INPUT_PR_REF}${INPUT_PR_SHA}${INPUT_FORK_PR_AUTHOR}${INPUT_FORK_PR_ASSOCIATION}" ]]; then
+              echo "::error::PR identity hints require pr-number."
+              exit 1
+            fi
+            emit_suite "${EXPLICIT_SUITE:-caas/sanity}"
+            exit 0
+          fi
+
+          if [[ ! "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::pr-number must be a positive integer."
+            exit 1
+          fi
+
+          pr_json=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")
+          if ! jq -e --arg base_repo "${GITHUB_REPOSITORY}" '
+            .base.repo.full_name == $base_repo and
+            (.head.repo.full_name | type == "string" and length > 0) and
+            (.head.ref | type == "string" and length > 0) and
+            (.head.sha | type == "string" and length == 40) and
+            (.head.repo.fork | type == "boolean") and
+            (.user.login | type == "string" and length > 0) and
+            (.author_association | type == "string" and length > 0)
+          ' <<<"${pr_json}" >/dev/null; then
+            echo "::error::GitHub returned incomplete PR context for #${PR_NUMBER}."
+            exit 1
+          fi
+
+          head_repo=$(jq -r '.head.repo.full_name' <<<"${pr_json}")
+          head_ref=$(jq -r '.head.ref' <<<"${pr_json}")
+          head_sha=$(jq -r '.head.sha' <<<"${pr_json}")
+          author=$(jq -r '.user.login' <<<"${pr_json}")
+          association=$(jq -r '.author_association' <<<"${pr_json}")
+          if [[ "${head_repo}" != "${GITHUB_REPOSITORY}" ]]; then
+            is_fork=true
+          else
+            is_fork=false
+          fi
+
+          assert_hint() {
+            local name="$1" provided="$2" resolved="$3"
+            if [[ -n "${provided}" && "${provided}" != "${resolved}" ]]; then
+              echo "::error::${name} does not match PR #${PR_NUMBER}; refusing dispatch."
+              exit 1
+            fi
+          }
+          assert_hint pr-repository "${INPUT_PR_REPOSITORY}" "${head_repo}"
+          assert_hint pr-ref "${INPUT_PR_REF}" "${head_ref}"
+          assert_hint pr-sha "${INPUT_PR_SHA}" "${head_sha}"
+          assert_hint fork-pr-author "${INPUT_FORK_PR_AUTHOR}" "${author}"
+          assert_hint fork-pr-author-association "${INPUT_FORK_PR_ASSOCIATION}" "${association}"
+
+          # Suite: e2e-serial / e2e-regression labels override the dispatch
+          # default (caas/sanity) so /e2e-regression then /test caas works.
+          # Unlabeled dispatch keeps the input default.
+          labels=$(jq -r '.labels[].name // empty' <<<"${pr_json}")
+          if printf '%s\n' "${labels}" | grep -Fxq e2e-serial; then
+            test_suite=caas/serial
+          elif printf '%s\n' "${labels}" | grep -Fxq e2e-regression; then
+            test_suite=caas/regression
+          elif [[ -n "${EXPLICIT_SUITE}" ]]; then
+            test_suite="${EXPLICIT_SUITE}"
+          else
+            test_suite=caas/sanity
+          fi
+
+          {
+            printf 'pr_number=%s\n' "${PR_NUMBER}"
+            printf 'head_repo=%s\n' "${head_repo}"
+            printf 'head_ref=%s\n' "${head_ref}"
+            printf 'head_sha=%s\n' "${head_sha}"
+            printf 'author=%s\n' "${author}"
+            printf 'author_association=%s\n' "${association}"
+            printf 'is_fork=%s\n' "${is_fork}"
+          } >>"${GITHUB_OUTPUT}"
+          emit_suite "${test_suite}"
+
   # merge_group only: cancel a superseded run for THIS PR's queue entry.
   #
   # GitHub tests queue entries speculatively in parallel and re-creates an
@@ -200,9 +365,12 @@ jobs:
   # built from source for consistency with the other components -- revisit
   # if caas ever needs BMF enabled.
   e2e-caas-full-install:
-    needs: [changes, e2e-readiness]
+    needs: [changes, e2e-readiness, resolve-dispatch]
     if: >-
       always()
+      && (needs.resolve-dispatch.result == 'success'
+          || (needs.resolve-dispatch.result == 'skipped'
+              && github.event_name != 'workflow_dispatch'))
       && needs.changes.result == 'success'
       && needs.changes.outputs.should-run == 'true'
       && needs.changes.outputs.caas-exclusive-skip != 'true'
@@ -214,12 +382,16 @@ jobs:
       id-token: write
     uses: osac-project/osac-test-infra/.github/workflows/e2e-caas-full-install.yml@main
     with:
-      # test-source=osac prefixes tests/e2e/. PR/merge_group: full caas suite
-      # (sanity + regression). Schedule: regression. workflow_dispatch: honor
-      # input, else sanity (caas for the full suite).
+      # Priority: workflow_dispatch (resolve-dispatch: labels > input default
+      # caas/sanity) > PR e2e-serial/e2e-regression labels > PR/merge_group
+      # full suite > schedule caas/regression > sanity.
+      # Note: caas/serial is empty scaffolding today; prefer regression until
+      # real serial tests land (empty tier falls back to the full suite).
       test-suite: >-
         ${{
-          inputs.test-suite != '' && inputs.test-suite ||
+          needs.resolve-dispatch.outputs.test_suite ||
+          github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'e2e-serial') && 'caas/serial' ||
+          github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'e2e-regression') && 'caas/regression' ||
           (github.event_name == 'pull_request' || github.event_name == 'merge_group') && 'caas' ||
           github.event_name == 'schedule' && 'caas/regression' ||
           'caas/sanity'
@@ -233,26 +405,26 @@ jobs:
       # osac-installer now lives as a subdirectory of this same monorepo checkout
       # (its Chart.yaml deps resolve fulfillment-service/osac-operator/osac-aap/BMF
       # as ../../../<name> siblings within it), so a PR touching those components
-      # must deploy from this PR's own fork/ref, not the reusable workflow's
+      # must deploy from this PR's own fork at the resolved SHA, not the reusable workflow's
       # standalone-repo default.
-      installer-repo: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
-      installer-ref: ${{ github.event.pull_request.head.ref || github.sha }}
-      # Build all component images from the PR's fork/branch (same monorepo checkout).
+      installer-repo: ${{ needs.resolve-dispatch.outputs.head_repo || github.event.pull_request.head.repo.full_name || github.repository }}
+      installer-ref: ${{ needs.resolve-dispatch.outputs.head_sha || github.event.pull_request.head.sha || github.sha }}
+      # Build all component images from the PR's fork at the resolved PR SHA.
       # osac-aap's execution-environment is built twice (aap.bootstrap.image and
       # aap.configAsCode.eeImage): the two are logically the same image but the
       # override mechanism keys strictly off imageKey, one build per key, so this
       # is the only way to get both fields covered without changing that mechanism
       # (which lives in osac-test-infra, not here). See OSAC-3546.
-      components: '[{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.sha }}","containerfile":"fulfillment-service/Containerfile","context":".","imageKey":"service.images.service.repository"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.sha }}","containerfile":"osac-operator/Containerfile","context":".","imageKey":"operator.image.repository"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.sha }}","containerfile":"osac-aap/execution-environment/execution-environment.yaml","imageKey":"aap.bootstrap.image","buildType":"ansible-builder"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.sha }}","containerfile":"osac-aap/execution-environment/execution-environment.yaml","imageKey":"aap.configAsCode.eeImage","buildType":"ansible-builder"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.sha }}","containerfile":"bare-metal-fulfillment-operator/Containerfile","context":".","imageKey":"bmf.image.repository"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.sha }}","containerfile":"osac-metering/metering-service/Containerfile","context":".","imageKey":"metering.image.repository"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.sha }}","containerfile":"osac-metering/adapters/Containerfile.echo-adapter","context":"osac-metering","imageKey":"metering.echoAdapter.image.repository"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.sha }}","containerfile":"osac-csi-driver/Containerfile","context":".","imageKey":"csiDriver.image.repository"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.sha }}","containerfile":"osac-ui/Containerfile","context":"osac-ui","imageKey":"ui.images.ui"}]'
+      components: '[{"repo":"${{ needs.resolve-dispatch.outputs.head_repo || github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ needs.resolve-dispatch.outputs.head_sha || github.event.pull_request.head.sha || github.sha }}","containerfile":"fulfillment-service/Containerfile","context":".","imageKey":"service.images.service.repository"},{"repo":"${{ needs.resolve-dispatch.outputs.head_repo || github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ needs.resolve-dispatch.outputs.head_sha || github.event.pull_request.head.sha || github.sha }}","containerfile":"osac-operator/Containerfile","context":".","imageKey":"operator.image.repository"},{"repo":"${{ needs.resolve-dispatch.outputs.head_repo || github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ needs.resolve-dispatch.outputs.head_sha || github.event.pull_request.head.sha || github.sha }}","containerfile":"osac-aap/execution-environment/execution-environment.yaml","imageKey":"aap.bootstrap.image","buildType":"ansible-builder"},{"repo":"${{ needs.resolve-dispatch.outputs.head_repo || github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ needs.resolve-dispatch.outputs.head_sha || github.event.pull_request.head.sha || github.sha }}","containerfile":"osac-aap/execution-environment/execution-environment.yaml","imageKey":"aap.configAsCode.eeImage","buildType":"ansible-builder"},{"repo":"${{ needs.resolve-dispatch.outputs.head_repo || github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ needs.resolve-dispatch.outputs.head_sha || github.event.pull_request.head.sha || github.sha }}","containerfile":"bare-metal-fulfillment-operator/Containerfile","context":".","imageKey":"bmf.image.repository"},{"repo":"${{ needs.resolve-dispatch.outputs.head_repo || github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ needs.resolve-dispatch.outputs.head_sha || github.event.pull_request.head.sha || github.sha }}","containerfile":"osac-metering/metering-service/Containerfile","context":".","imageKey":"metering.image.repository"},{"repo":"${{ needs.resolve-dispatch.outputs.head_repo || github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ needs.resolve-dispatch.outputs.head_sha || github.event.pull_request.head.sha || github.sha }}","containerfile":"osac-metering/adapters/Containerfile.echo-adapter","context":"osac-metering","imageKey":"metering.echoAdapter.image.repository"},{"repo":"${{ needs.resolve-dispatch.outputs.head_repo || github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ needs.resolve-dispatch.outputs.head_sha || github.event.pull_request.head.sha || github.sha }}","containerfile":"osac-csi-driver/Containerfile","context":".","imageKey":"csiDriver.image.repository"},{"repo":"${{ needs.resolve-dispatch.outputs.head_repo || github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ needs.resolve-dispatch.outputs.head_sha || github.event.pull_request.head.sha || github.sha }}","containerfile":"osac-ui/Containerfile","context":"osac-ui","imageKey":"ui.images.ui"}]'
       # Pass author_association for fork PR authorization (empty for non-fork PRs)
-      fork-pr-author-association: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.author_association || '' }}
-      fork-pr-author: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.user.login || '' }}
-      pr-number: ${{ github.event.pull_request.number }}
+      fork-pr-author-association: ${{ needs.resolve-dispatch.outputs.is_fork == 'true' && needs.resolve-dispatch.outputs.author_association || (github.event.pull_request.head.repo.fork && github.event.pull_request.author_association) || '' }}
+      fork-pr-author: ${{ needs.resolve-dispatch.outputs.is_fork == 'true' && needs.resolve-dispatch.outputs.author || (github.event.pull_request.head.repo.fork && github.event.pull_request.user.login) || '' }}
+      pr-number: ${{ needs.resolve-dispatch.outputs.pr_number || github.event.pull_request.number }}
       # Checkout upstream test-infra, defaulting to the reusable workflow's main branch.
       test-infra-repository: osac-project/osac-test-infra
       test-infra-ref: ${{ inputs.test-infra-ref || 'main' }}
-      test-repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
-      test-ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      test-repository: ${{ needs.resolve-dispatch.outputs.head_repo || github.event.pull_request.head.repo.full_name || github.repository }}
+      test-ref: ${{ needs.resolve-dispatch.outputs.head_sha || github.event.pull_request.head.sha || github.sha }}
       notify-on-failure: ${{ github.event_name == 'schedule' }}
       # CaaS-specific inputs (cluster-template, caas-domain, flavor-image,
       # flavor-name, namespace, etc.) are left at the reusable workflow's own
@@ -282,7 +454,7 @@ jobs:
           || needs.changes.outputs.should-run != 'true'
           || needs.e2e-readiness.result != 'success'
           || needs.e2e-readiness.outputs.ready == 'true')
-    needs: [changes, e2e-readiness, e2e-caas-full-install]
+    needs: [changes, e2e-readiness, resolve-dispatch, e2e-caas-full-install]
     runs-on: ubuntu-latest
     steps:
       - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
@@ -290,6 +462,7 @@ jobs:
           echo "Upstream job results:"
           echo "  changes: ${{ needs.changes.result }}"
           echo "  e2e-readiness: ${{ needs.e2e-readiness.result }}"
+          echo "  resolve-dispatch: ${{ needs.resolve-dispatch.result }}"
           echo "  e2e-caas-full-install: ${{ needs.e2e-caas-full-install.result }}"
           echo ""
           echo "One or more upstream jobs failed or were cancelled."

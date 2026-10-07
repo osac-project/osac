@@ -17,6 +17,8 @@ Cost unlock: any one of CR / `lgtm` / `/e2e-ready`. Fork secrets are a **separat
 | `/e2e-ready` | yes, this SHA. Cleanup strips on push. Must be `github-actions[bot]`; manual UI labels are rejected. | yes (`workflow_dispatch` of `e2e-on-label`). | no |
 | `/ok-to-test` | **no** | does not start Full Install once this gate skips unreadied jobs (skipped ≠ failed, so the old rerun-failed path does not spend runners). | **yes** (`authorize-fork-pr`) |
 | `/test e2e` / `/retest` | **no** | rerun only. Still waits if not unlocked. | no |
+| `/e2e-regression` (or `e2e-regression` label) | **no** | does not start e2e. On the **next** PR full-install run, each suite uses `*/regression` (same job). Immediate: `/test vmaas` / `caas` / `bmaas` after the label is set. | no |
+| `/e2e-serial` (or `e2e-serial` label) | **no** | does not start e2e. On the **next** PR full-install run, each suite uses `*/serial` (same job; wins over `e2e-regression` if both are set). Useful today for BMaaS (`bmaas/serial` has tests); VMaaS/CaaS serial dirs are still empty scaffolding. Immediate: `/test bmaas` (or `vmaas` / `caas`) after the label is set. | no |
 
 **Human `APPROVED` reviews do not unlock expensive e2e.** Present `lgtm` and bot `/e2e-ready` still override an outstanding human `CHANGES_REQUESTED`. Historical `lgtm` and CR APPROVED do not.
 

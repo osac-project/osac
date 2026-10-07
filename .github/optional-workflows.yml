@@ -8,3 +8,21 @@ workflows:
     trigger: label
     label: e2e-bmaas-netris
     retestable: true
+
+  - command: vmaas
+    workflow: e2e-vmaas-full-install.yml
+    name: E2E VMaaS Full Install
+    description: Dispatch the VMaaS full-install workflow (suite from PR labels)
+    retestable: false
+
+  - command: caas
+    workflow: e2e-caas-full-install.yml
+    name: E2E CaaS Full Install
+    description: Dispatch the CaaS full-install workflow (suite from PR labels)
+    retestable: false
+
+  - command: bmaas
+    workflow: e2e-bmaas-full-install.yml
+    name: E2E BMaaS Full Install
+    description: Dispatch the BMaaS full-install workflow (suite from PR labels)
+    retestable: false

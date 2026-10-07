@@ -734,7 +734,7 @@ var _ = Describe("IPv4-only controller endpoint gRPC contract", Label("ipv4-netw
 			NodeSets: map[string]*publicv1.ClusterNodeSet{
 				"workers": publicv1.ClusterNodeSet_builder{
 					Size:                  new(int32(1)),
-					BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit}.Build(),
+					BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit, Shared: true}.Build(),
 				}.Build(),
 			},
 			NetworkAttachment: network.clusterAttachment(),

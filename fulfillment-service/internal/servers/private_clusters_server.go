@@ -498,12 +498,23 @@ func (s *PrivateClustersServer) prepareUpdatedClusterNodeSets(
 			}
 			continue
 		}
-		if key := refKey(nodeSet.GetBaremetalInstanceType()); key != "" {
-			if _, err := resolveCaaSBareMetalInstanceType(ctx, s.bareMetalInstanceTypesDao, candidate.GetMetadata(),
-				nodeSet.GetBaremetalInstanceType(), "node_sets."+name+".baremetal_instance_type", false); err != nil {
-				return err
-			}
+		ref := nodeSet.GetBaremetalInstanceType()
+		if refKey(ref) == "" {
+			continue
 		}
+		kind := "node_sets." + name + ".baremetal_instance_type"
+		if err := validatePlatformReference(ref, kind, ""); err != nil {
+			return err
+		}
+		resolved, err := resolvePlatformResource(ctx, s.bareMetalInstanceTypesDao,
+			ref.GetId(), ref.GetName(), kind, "", grpccodes.InvalidArgument)
+		if err != nil {
+			return err
+		}
+		if err := validateResourceNotDeleted(kind, refKey(ref), "", resolved.GetMetadata()); err != nil {
+			return err
+		}
+		canonicalizeResourceReference(ref, resolved)
 	}
 	return nil
 }
@@ -1162,9 +1173,17 @@ func (s *PrivateClustersServer) resolveFabricInterfaces(ctx context.Context, clu
 		if refKey(nodeSet.GetBaremetalInstanceType()) == "" {
 			continue
 		}
-		bmit, err := resolveCaaSBareMetalInstanceType(ctx, s.bareMetalInstanceTypesDao, cluster.GetMetadata(),
-			nodeSet.GetBaremetalInstanceType(), "node_sets."+name+".baremetal_instance_type", false)
+		ref := nodeSet.GetBaremetalInstanceType()
+		kind := "node_sets." + name + ".baremetal_instance_type"
+		if err := validatePlatformReference(ref, kind, ""); err != nil {
+			return err
+		}
+		bmit, err := resolvePlatformResource(ctx, s.bareMetalInstanceTypesDao,
+			ref.GetId(), ref.GetName(), kind, "", grpccodes.InvalidArgument)
 		if err != nil {
+			return err
+		}
+		if err := validateResourceNotDeleted(kind, refKey(ref), "", bmit.GetMetadata()); err != nil {
 			return err
 		}
 		fabricInterface, err := selectClusterFabricInterface(bmit)
@@ -1336,10 +1355,20 @@ func (s *PrivateClustersServer) resolveClusterNodeSets(ctx context.Context, clus
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "node_sets: %s", err)
 	}
 	for name, nodeSet := range cluster.GetSpec().GetNodeSets() {
-		if _, err := resolveCaaSBareMetalInstanceType(ctx, s.bareMetalInstanceTypesDao, cluster.GetMetadata(),
-			nodeSet.GetBaremetalInstanceType(), "node_sets."+name+".baremetal_instance_type", false); err != nil {
+		ref := nodeSet.GetBaremetalInstanceType()
+		kind := "node_sets." + name + ".baremetal_instance_type"
+		if err := validatePlatformReference(ref, kind, ""); err != nil {
 			return err
 		}
+		resolved, err := resolvePlatformResource(ctx, s.bareMetalInstanceTypesDao,
+			ref.GetId(), ref.GetName(), kind, "", grpccodes.InvalidArgument)
+		if err != nil {
+			return err
+		}
+		if err := validateResourceNotDeleted(kind, refKey(ref), "", resolved.GetMetadata()); err != nil {
+			return err
+		}
+		canonicalizeResourceReference(ref, resolved)
 	}
 	return nil
 }
@@ -1347,40 +1376,6 @@ func (s *PrivateClustersServer) resolveClusterNodeSets(ctx context.Context, clus
 // resolveCatalogItem finds the Cluster's published Catalog Item in the selected tenant/project
 // or shared scope, then finds the item's Template under the item's ownership. It applies locked
 // and editable field and parameter rules and returns that Template for defaults.
-func resolveCaaSBareMetalInstanceType(
-	ctx context.Context,
-	instanceTypes *dao.GenericDAO[*privatev1.BareMetalInstanceType],
-	ownerMetadata *privatev1.Metadata,
-	ref *privatev1.BareMetalInstanceTypeReference,
-	kind string,
-	lockTarget bool,
-) (*privatev1.BareMetalInstanceType, error) {
-	if ref == nil {
-		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "%s reference is mandatory", kind)
-	}
-
-	// Cluster NodeSets and Catalog Item policies select hardware only; callers cannot
-	// select a tenant-scoped BMIT by omitting or changing the reference scope.
-	ref.SetShared(true)
-	var (
-		resolved *privatev1.BareMetalInstanceType
-		err      error
-	)
-	if lockTarget {
-		resolved, err = resolveAndCanonicalizeLockedReference(ctx, instanceTypes, ownerMetadata, ref, kind, grpccodes.InvalidArgument)
-	} else {
-		resolved, err = resolveAndCanonicalizeReference(ctx, instanceTypes, ownerMetadata, ref, kind, grpccodes.InvalidArgument)
-	}
-	if err != nil {
-		return nil, err
-	}
-	if resolved.GetMetadata().GetTenant() != auth.SharedTenant {
-		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"%s must reference a bare metal instance type in the shared tenant", kind)
-	}
-	return resolved, nil
-}
-
 func (s *PrivateClustersServer) resolveCatalogItem(ctx context.Context,
 	cluster *privatev1.Cluster) (*privatev1.ClusterTemplate, error) {
 	if cluster == nil {

@@ -97,7 +97,7 @@ var _ = Describe("Catalog Item CLI", Label("catalog-items", "cli"), func() {
 				NodeSets: publicv1.ClusterNodeSetMapPolicy_builder{Locked: publicv1.ClusterNodeSetMap_builder{
 					Items: map[string]*publicv1.ClusterCatalogNodeSet{
 						"workers": publicv1.ClusterCatalogNodeSet_builder{Size: 2,
-							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit}.Build(),
+							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit, Shared: true}.Build(),
 						}.Build(),
 					},
 				}.Build()}.Build(),

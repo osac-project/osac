@@ -21,6 +21,7 @@ import (
 )
 
 // SubnetSpec defines the desired state of Subnet
+// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="spec is immutable after creation"
 type SubnetSpec struct {
 	// VirtualNetwork is the ID of the parent VirtualNetwork
 	// +kubebuilder:validation:Required

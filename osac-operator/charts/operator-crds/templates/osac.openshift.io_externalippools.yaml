@@ -97,6 +97,9 @@ spec:
             - cidrs
             - ipFamily
             type: object
+            x-kubernetes-validations:
+            - message: spec is immutable after creation
+              rule: self == oldSelf
           status:
             description: status defines the observed state of ExternalIPPool
             properties:

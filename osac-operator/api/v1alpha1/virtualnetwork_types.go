@@ -21,6 +21,7 @@ import (
 )
 
 // VirtualNetworkSpec defines the desired state of VirtualNetwork
+// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="spec is immutable after creation"
 type VirtualNetworkSpec struct {
 	// Region is the cloud region where this VirtualNetwork will be provisioned
 	// +kubebuilder:validation:Required

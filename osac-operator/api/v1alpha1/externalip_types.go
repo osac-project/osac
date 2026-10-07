@@ -21,6 +21,7 @@ import (
 )
 
 // ExternalIPSpec defines the desired state of ExternalIP
+// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="spec is immutable after creation"
 type ExternalIPSpec struct {
 	// Pool is the name of the ExternalIPPool this IP is allocated from.
 	// This field is immutable after creation.

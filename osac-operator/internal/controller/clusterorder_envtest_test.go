@@ -253,6 +253,43 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 	}
 
 	Context("Provisioning workflow", func() {
+		It("does not submit another cluster job after an attachment update is rejected and continues polling status", func() {
+			const name = "cluster-order-immutable-network-attachment-job"
+			instance := newTestClusterOrder(name)
+			instance.Spec.NetworkAttachment = &osacv1alpha1.ClusterNetworkAttachment{
+				SubnetRef:         "subnet-a",
+				SecurityGroupRefs: []string{"sg-a"},
+			}
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+			DeferCleanup(func() { Expect(k8sClient.Delete(ctx, instance)).To(Succeed()) })
+
+			instance.Status.DesiredConfigVersion = "v1"
+			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+			_, err := reconciler.handleProvisioning(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+
+			instance = getClusterOrder(name)
+			instance.Spec.NetworkAttachment.SecurityGroupRefs = []string{"sg-b"}
+			err = k8sClient.Update(ctx, instance)
+			Expect(err).To(HaveOccurred())
+			Expect(apierrors.IsInvalid(err)).To(BeTrue())
+
+			instance = getClusterOrder(name)
+			provider.setProvisionJobState(osacv1alpha1.JobStateRunning, "Running")
+			result, err := reconciler.handleProvisioning(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(statusPollInterval))
+			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+
+			provider.mu.Lock()
+			provisionCalls := provider.provisionCallCount
+			provider.mu.Unlock()
+			Expect(provisionCalls).To(Equal(1))
+			job := provisioning.FindLatestJobByType(instance.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision)
+			Expect(job).NotTo(BeNil())
+			Expect(job.State).To(Equal(osacv1alpha1.JobStateRunning))
+		})
+
 		It("should provision through the full lifecycle: trigger, running, succeeded", func() {
 			const name = "cluster-order-provision-success"
 			instance := newTestClusterOrder(name)

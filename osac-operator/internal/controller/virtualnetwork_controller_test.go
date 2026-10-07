@@ -129,6 +129,69 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			Expect(updatedVnet.Finalizers).To(ContainElement(osacVirtualNetworkFinalizer))
 		})
 
+		It("does not resubmit provisioning after an immutable network update is rejected and continues polling and deletion", func() {
+			provisionCalls := 0
+			provisionPolls := 0
+			deprovisionCalls := 0
+			mockProvider.triggerProvisionFunc = func(_ context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
+				provisionCalls++
+				return &provisioning.ProvisionResult{
+					JobID:        "immutable-network-provision",
+					InitialState: osacv1alpha1.JobStatePending,
+					Message:      "Provisioning triggered",
+				}, nil
+			}
+			mockProvider.getProvisionStatusFunc = func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatus, error) {
+				provisionPolls++
+				return provisioning.ProvisionStatus{JobID: jobID, State: osacv1alpha1.JobStateSucceeded, Message: "Provisioning complete"}, nil
+			}
+			mockProvider.triggerDeprovisionFunc = func(_ context.Context, _ client.Object, _ []osacv1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {
+				deprovisionCalls++
+				return &provisioning.DeprovisionResult{
+					Action:                 provisioning.DeprovisionTriggered,
+					JobID:                  "immutable-network-deprovision",
+					BlockDeletionOnFailure: true,
+				}, nil
+			}
+
+			Expect(k8sClient.Create(ctx, vnet)).To(Succeed())
+			req := mcreconcile.Request{Request: reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: vnet.Name, Namespace: vnet.Namespace},
+			}}
+
+			_, err := reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			_, err = reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(provisionCalls).To(Equal(1))
+
+			stored := &osacv1alpha1.VirtualNetwork{}
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(vnet), stored)).To(Succeed())
+			stored.Spec.IPv4CIDR = "10.0.1.0/16"
+			err = k8sClient.Update(ctx, stored)
+			Expect(err).To(HaveOccurred())
+			Expect(errors.IsInvalid(err)).To(BeTrue())
+
+			_, err = reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(provisionCalls).To(Equal(1))
+			Expect(provisionPolls).To(BeNumerically(">", 0))
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(vnet), stored)).To(Succeed())
+			job := provisioning.FindLatestJobByType(stored.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision)
+			Expect(job).NotTo(BeNil())
+			Expect(job.State).To(Equal(osacv1alpha1.JobStateSucceeded))
+			Expect(stored.Status.Phase).To(Equal(osacv1alpha1.VirtualNetworkPhaseReady))
+
+			Expect(k8sClient.Delete(ctx, stored)).To(Succeed())
+			_, err = reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(deprovisionCalls).To(Equal(1))
+			_, err = reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			err = k8sClient.Get(ctx, client.ObjectKeyFromObject(vnet), stored)
+			Expect(errors.IsNotFound(err)).To(BeTrue())
+		})
+
 		It("should set phase to Progressing on first reconcile", func() {
 			Expect(k8sClient.Create(ctx, vnet)).To(Succeed())
 

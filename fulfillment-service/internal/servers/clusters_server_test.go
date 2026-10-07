@@ -1773,8 +1773,8 @@ var _ = Describe("Clusters server", func() {
 		})
 
 		Describe("BareMetalInstanceType", func() {
-			DescribeTable("requires explicit platform scope for public CaaS NodeSets",
-				func(id, name string, shared bool, project string, expectedCode grpccodes.Code) {
+			DescribeTable("resolves public CaaS NodeSet hardware without validating reference selectors",
+				func(id, name string, shared bool, project string) {
 					request := publicv1.ClustersCreateRequest_builder{
 						Object: publicv1.Cluster_builder{
 							Metadata: publicv1.Metadata_builder{Name: fmt.Sprintf("caas-shared-%s", uuid.NewString()[:8])}.Build(),
@@ -1794,22 +1794,17 @@ var _ = Describe("Clusters server", func() {
 					original := proto.Clone(request)
 					response, err := server.Create(ctx, request)
 					Expect(proto.Equal(request, original)).To(BeTrue())
-					Expect(grpcstatus.Code(err)).To(Equal(expectedCode))
-					if expectedCode != grpccodes.OK {
-						Expect(response).To(BeNil())
-						Expect(err).To(MatchError(ContainSubstring("node_sets.workers.baremetal_instance_type")))
-						return
-					}
+					Expect(err).ToNot(HaveOccurred())
 					ref := response.GetObject().GetSpec().GetNodeSets()["workers"].GetBaremetalInstanceType()
 					Expect(ref.GetId()).To(Equal("bmit_standard"))
 					Expect(ref.GetName()).To(Equal("test-bmit-standard"))
 					Expect(ref.GetShared()).To(BeTrue())
 				},
-				Entry("accepts an explicitly shared name", "", "test-bmit-standard", true, "", grpccodes.OK),
-				Entry("accepts an explicitly shared ID", "bmit_standard", "", true, "", grpccodes.OK),
-				Entry("rejects a name without shared=true", "", "test-bmit-standard", false, "", grpccodes.InvalidArgument),
-				Entry("rejects an ID without shared=true", "bmit_standard", "", false, "", grpccodes.InvalidArgument),
-				Entry("rejects a project", "bmit_standard", "", true, "other", grpccodes.InvalidArgument),
+				Entry("accepts an explicitly shared name", "", "test-bmit-standard", true, ""),
+				Entry("accepts an explicitly shared ID", "bmit_standard", "", true, ""),
+				Entry("resolves a name without shared=true", "", "test-bmit-standard", false, ""),
+				Entry("resolves an ID without shared=true", "bmit_standard", "", false, ""),
+				Entry("resolves an ID with a project selector", "bmit_standard", "", true, "other"),
 			)
 
 			It("rejects tenant-only BMIT IDs for public CaaS NodeSets", func() {

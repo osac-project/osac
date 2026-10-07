@@ -17,6 +17,7 @@ spec:
       labels:
         app: osac-ui
     spec:
+      automountServiceAccountToken: false
       volumes:
       - name: api-ca-bundle
         configMap:
@@ -27,6 +28,9 @@ spec:
       containers:
       - name: osac-ui
         image: {{ .Values.images.ui }}
+        {{ if ne .Values.images.pullPolicy "auto" }}
+        imagePullPolicy: {{ .Values.images.pullPolicy }}
+        {{ end }}
         ports:
         - name: http
           containerPort: 8080

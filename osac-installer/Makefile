@@ -395,12 +395,12 @@ uninstall-osac: ## Uninstall OSAC instance (PLATFORM= PROFILE= NS= required)
 ##@ Entity: Dev Stack (kind PROFILE=dev-full only)
 
 .PHONY: install-devstack
-install-devstack: helm-devstack-deps ## Install dev-full extras: KubeVirt/CDI/Multus + AWX + UI + seeded catalog
+install-devstack: helm-devstack-deps ## Install dev-full extras: KubeVirt/CDI/Multus + AWX + UI Gateway route + seeded catalog
 ifneq ($(PLATFORM)/$(PROFILE),kind/dev-full)
 	@echo "ERROR: install-devstack requires PLATFORM=kind PROFILE=dev-full" >&2; exit 1
 endif
 	@case "$(HELM_MAJOR)" in 3|4) ;; *) echo "ERROR: install-devstack requires Helm 3 or 4; could not detect a supported Helm version" >&2; exit 1;; esac
-	# Pre-install: node-level CNI setup (requires host container runtime access)
+  # Pre-install: node-level CNI setup (requires host container runtime access)
 	$(KIND_RUNTIME_ENV) scripts/dev-full/install-virt-node-setup.sh $(KIND_CLUSTER_NAME)
 ifeq ($(HELM_MAJOR),4)
 	@if helm plugin list | awk '$$1 == "osac-dev-full-awx-image" { found=1 } END { exit !found }'; then \
@@ -408,7 +408,7 @@ ifeq ($(HELM_MAJOR),4)
 	fi
 	helm plugin install scripts/dev-full/helm-post-renderer
 endif
-	# Helm install: operators + AWX + UI + seeding
+	# Helm install: operators + AWX + UI Gateway route + seeding
 	helm upgrade --install osac-devstack charts/osac-devstack \
 		-f $(INSTANCE_VALUES) $(INSTANCE_VALUES_EXTRA) \
 		--namespace $(NS) --create-namespace \

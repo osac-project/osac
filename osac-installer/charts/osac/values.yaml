@@ -366,6 +366,8 @@ aap:
 ui:
   enabled: true
   externalHostname: ""
+  route:
+    enabled: true
   api:
     fulfillment:
       url: https://fulfillment-internal-api:8001
@@ -385,6 +387,7 @@ ui:
     level: info
   images:
     ui: ghcr.io/osac-project/osac-ui:latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
+    pullPolicy: auto
 
 # --- Metering ---
 metering:

@@ -1616,6 +1616,18 @@
           "type": "string",
           "description": "Hostname for the OpenShift Route (auto-assigned if empty)"
         },
+        "route": {
+          "type": "object",
+          "description": "OpenShift Route configuration for the UI",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Create an OpenShift Route for the UI; disable when exposing it through another ingress, such as Gateway API",
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        },
         "api": {
           "type": "object",
           "description": "Backend API connection settings",
@@ -1712,6 +1724,17 @@
               "type": "string",
               "description": "UI container image",
               "default": "ghcr.io/osac-project/osac-ui:latest"
+            },
+            "pullPolicy": {
+              "type": "string",
+              "description": "Kubernetes image pull policy, or auto to use Kubernetes' tag-based default",
+              "enum": [
+                "auto",
+                "Always",
+                "IfNotPresent",
+                "Never"
+              ],
+              "default": "auto"
             }
           },
           "additionalProperties": false

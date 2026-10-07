@@ -59,23 +59,25 @@ awx:
         requests: {cpu: 100m, memory: 128Mi}
         limits: {cpu: "500m", memory: 1Gi}
 
-# --- OSAC UI ---
+# --- OSAC UI (shared osac-ui chart) ---
 ui:
   enabled: true
-  image:
-    repository: ghcr.io/osac-project/osac-ui
-    tag: latest  # DEV_FLOATING -- intentionally unpinned for local dev
+  route:
+    enabled: false  # Kind uses the Gateway API HTTPRoute in templates/ui.yaml.
+  api:
+    fulfillment:
+      url: "https://fulfillment-api.osac.localhost:8000"
+      certs:
+        caBundle:
+          configMap: ca-bundle
+  auth:
+    oidcIssuerURL: "https://keycloak.osac.localhost:8443/realms/osac"
+    certs:
+      caBundle:
+        configMap: ca-bundle
+  images:
+    ui: ghcr.io/osac-project/osac-ui:latest  # DEV_FLOATING -- intentionally unpinned for local dev
     pullPolicy: IfNotPresent
-  replicas: 1
-  resources:
-    requests: {cpu: 100m, memory: 128Mi}
-    limits: {cpu: 500m, memory: 512Mi}
-  config:
-    logLevel: info
-    fulfillmentApiUrl: "https://fulfillment-api.osac.localhost:8000"
-    oidcClientId: osac-ui
-    oidcIssuerUrl: "https://keycloak.osac.localhost:8443/realms/osac"
-    tlsInsecure: "0"
 
 # --- Catalog Seeding ---
 catalog:

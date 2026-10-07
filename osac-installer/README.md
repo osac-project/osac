@@ -279,8 +279,8 @@ make install PLATFORM=openshift PROFILE=cudn-evpn-netris-test NS=osac \
   INSTANCE_VALUES_EXTRA="-f cudn-evpn-netris-test-secrets.local.yaml"
 ```
 
-On top of `dev`, `dev-full` adds (via `scripts/dev-full/`, orchestrated by the
-`install-devstack` target):
+On top of `dev`, `dev-full` adds virtualization, AWX, and seeded test data using
+the `osac` and `osac-devstack` releases plus `scripts/dev-full/`:
 
 - **Virtualization** — Multus CNI + bridge plugin, KubeVirt (operator + CR, `l2bridge`
   binding), CDI
@@ -292,8 +292,9 @@ On top of `dev`, `dev-full` adds (via `scripts/dev-full/`, orchestrated by the
   That execution environment is built from `osac-aap/collections/requirements.yml`,
   including `vastdata.vms`; dev-full pulls `ghcr.io/osac-project/osac-aap:latest`
   unless a locally built image with that tag has been loaded into Kind.
-- **OSAC UI** — deployed directly (the chart's `ui.enabled` uses an OpenShift Route,
-  unusable on kind) and routed through the shared Envoy Gateway
+- **OSAC UI** — deployed by the tracked `osac-ui` chart dependency in the
+  `osac-devstack` release; the release adds a Kind-only Gateway API `HTTPRoute`
+  to the shared Envoy Gateway and disables the OpenShift Route.
 - **Seeded catalog** — a `fedora` disk image, `u1-small/medium/large` instance types,
   the `osac.templates.ocp_virt_vm` template, and a `linux-vm` catalog item (shared/global
   objects; networking is per-tenant and auto-provisioned, see below)

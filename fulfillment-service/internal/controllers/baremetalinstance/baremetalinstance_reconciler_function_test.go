@@ -14,9 +14,11 @@ language governing permissions and limitations under the License.
 package baremetalinstance
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"slices"
 	"time"
 
@@ -1119,11 +1121,21 @@ var _ = Describe("update", func() {
 				Labels: map[string]string{
 					labels.BareMetalInstanceUuid: bmiID,
 				},
+				Annotations: map[string]string{ownerReferenceAnnotation: "stored-owner-private"},
 			},
 			Spec: bmfov1alpha1.BareMetalInstanceSpec{
 				TemplateID:     "osac.templates.default",
 				ExternalHostID: "host-42",
 				HostClass:      "openstack",
+				RestartTrigger: 1,
+				NetworkAttachments: []bmfov1alpha1.BareMetalNetworkAttachment{{
+					SubnetRef: "stored-subnet-private", SecurityGroupRefs: []string{"stored-security-group-private"}, Primary: true,
+				}},
+			},
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				NetworkAttachmentStatuses: []bmfov1alpha1.BareMetalNetworkAttachmentStatus{{
+					Interface: "data-0", SubnetRef: "stored-subnet-private", IPAddress: "192.0.2.10", Primary: true,
+				}},
 			},
 		}
 
@@ -1141,9 +1153,10 @@ var _ = Describe("update", func() {
 				Client:    fakeClient,
 			}, nil)
 
+		var logOutput bytes.Buffer
 		t := &task{
 			r: &function{
-				logger:                       logger,
+				logger:                       slog.New(slog.NewTextHandler(&logOutput, nil)),
 				hubCache:                     hubCache,
 				bareMetalInstanceTypesClient: defaultFakeBareMetalInstanceTypesClient(),
 			},
@@ -1154,9 +1167,16 @@ var _ = Describe("update", func() {
 					Tenant:     "test-tenant",
 				}.Build(),
 				Spec: privatev1.BareMetalInstanceSpec_builder{
-					CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: "catalog-1"}.Build(),
-					Template:     privatev1.BareMetalInstanceTemplateReference_builder{Id: "osac.templates.default"}.Build(),
-					InstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "default-type", Shared: true}.Build(),
+					CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: "catalog-1"}.Build(),
+					Template:       privatev1.BareMetalInstanceTemplateReference_builder{Id: "osac.templates.default"}.Build(),
+					InstanceType:   privatev1.BareMetalInstanceTypeReference_builder{Id: "default-type", Shared: true}.Build(),
+					RestartTrigger: 42,
+					NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
+						privatev1.BareMetalNetworkAttachment_builder{
+							Subnet:         &privatev1.SubnetLocalReference{Name: "requested-subnet"},
+							SecurityGroups: []*privatev1.SecurityGroupLocalReference{{Name: "requested-security-group"}},
+						}.Build(),
+					},
 				}.Build(),
 				Status: privatev1.BareMetalInstanceStatus_builder{
 					Hub:   hubID,
@@ -1178,6 +1198,14 @@ var _ = Describe("update", func() {
 			"ExternalHostID must be preserved — it is managed by the bare-metal-fulfillment-operator")
 		Expect(updatedCR.Spec.HostClass).To(Equal("openstack"),
 			"HostClass must be preserved — it is managed by the bare-metal-fulfillment-operator")
+		Expect(updatedCR.Spec.RestartTrigger).To(Equal(int64(42)))
+		Expect(updatedCR.Spec.NetworkAttachments).To(Equal(existingCR.Spec.NetworkAttachments))
+		Expect(updatedCR.Annotations).To(HaveKeyWithValue(ownerReferenceAnnotation, "stored-owner-private"))
+		Expect(t.bareMetalInstance.GetStatus().GetNetworkAttachmentStatuses()).To(HaveLen(1))
+		Expect(t.bareMetalInstance.GetStatus().GetNetworkAttachmentStatuses()[0].GetIpAddress()).To(Equal("192.0.2.10"))
+		Expect(logOutput.String()).To(ContainSubstring("preserving stored network attachments"))
+		Expect(logOutput.String()).NotTo(ContainSubstring("stored-subnet-private"))
+		Expect(logOutput.String()).NotTo(ContainSubstring("stored-security-group-private"))
 	})
 })
 

@@ -32,6 +32,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	corev1 "k8s.io/api/core/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
@@ -250,7 +251,7 @@ func (t *task) update(ctx context.Context) error {
 	}
 
 	// Prepare the changes to the spec:
-	spec, err := t.buildSpec(ctx)
+	spec, err := t.buildSpecWithNetworkAttachments(ctx, object == nil)
 	if err != nil {
 		return err
 	}
@@ -288,6 +289,12 @@ func (t *task) update(ctx context.Context) error {
 			slog.String("name", object.GetName()),
 		)
 	} else {
+		var desiredNetworkSpec osacv1alpha1.ComputeInstanceSpec
+		if networkErr := t.buildSpecNetworkAttachments(ctx, &desiredNetworkSpec); networkErr != nil ||
+			!equalNetworkAttachments(object.Spec.NetworkAttachments, desiredNetworkSpec.NetworkAttachments) {
+			t.r.logger.WarnContext(ctx, "Private and stored network attachments differ; preserving stored network attachments on existing ComputeInstance")
+		}
+		spec.NetworkAttachments = object.Spec.NetworkAttachments
 		update := object.DeepCopy()
 		update.Spec = spec
 		err = t.hubClient.Patch(ctx, update, clnt.MergeFrom(object))
@@ -623,6 +630,10 @@ func (t *task) setReconciliationFailedWithReason(err error, reason string) {
 // buildSpec constructs the spec for the Kubernetes ComputeInstance object based on the
 // compute instance from the database.
 func (t *task) buildSpec(ctx context.Context) (osacv1alpha1.ComputeInstanceSpec, error) {
+	return t.buildSpecWithNetworkAttachments(ctx, true)
+}
+
+func (t *task) buildSpecWithNetworkAttachments(ctx context.Context, includeNetworkAttachments bool) (osacv1alpha1.ComputeInstanceSpec, error) {
 	templateParameters, err := utils.ConvertTemplateParametersToJSON(t.computeInstance.GetSpec().GetTemplateParameters())
 	if err != nil {
 		return osacv1alpha1.ComputeInstanceSpec{}, err
@@ -643,13 +654,22 @@ func (t *task) buildSpec(ctx context.Context) (osacv1alpha1.ComputeInstanceSpec,
 		return osacv1alpha1.ComputeInstanceSpec{}, err
 	}
 
-	// Handle network_attachments (required)
-	err = t.buildSpecNetworkAttachments(ctx, &spec)
-	if err != nil {
-		return osacv1alpha1.ComputeInstanceSpec{}, err
+	if includeNetworkAttachments {
+		// Handle network_attachments (required)
+		err = t.buildSpecNetworkAttachments(ctx, &spec)
+		if err != nil {
+			return osacv1alpha1.ComputeInstanceSpec{}, err
+		}
 	}
 
 	return spec, nil
+}
+
+func equalNetworkAttachments(left, right []osacv1alpha1.ComputeNetworkAttachment) bool {
+	if len(left) == 0 && len(right) == 0 {
+		return true
+	}
+	return apiequality.Semantic.DeepEqual(left, right)
 }
 
 // buildSpecNetworkAttachments handles the network_attachments field.

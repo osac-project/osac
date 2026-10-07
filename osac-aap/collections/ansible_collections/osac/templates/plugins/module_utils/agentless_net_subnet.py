@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-import ipaddress
 import hashlib
+import ipaddress
 import os
 import re
 import shutil
 import stat
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,8 @@ DHCP_LOG_ROOT = AGENTLESS_NET_LOG_ROOT / "dhcp"
 SYSTEMD_UNIT_ROOT = Path("/etc/systemd/system")
 SUPERVISOR_PROGRAM_ROOT = Path("/etc/agentless-net/supervisor.d")
 SUPERVISOR_BASE_CONFIG = Path("/etc/agentless-net/supervisord.conf")
+SUPERVISOR_START_TIMEOUT_SECONDS = 5.0
+SUPERVISOR_POLL_INTERVAL_SECONDS = 0.2
 DHCP_INTERFACE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,15}$")
 DHCP_MAC_RE = re.compile(r"^(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
 
@@ -527,6 +530,18 @@ def _supervisor_running(program: str) -> bool:
     return result.returncode == 0 and " RUNNING " in result.stdout
 
 
+def _wait_for_supervisor_running(program: str) -> bool:
+    """Wait through Supervisor's STARTING state after starting or updating a program."""
+    deadline = time.monotonic() + SUPERVISOR_START_TIMEOUT_SECONDS
+    while True:
+        if _supervisor_running(program):
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(SUPERVISOR_POLL_INTERVAL_SECONDS, remaining))
+
+
 def _ensure_dhcp_service(
     parent: dict[str, Any],
     entries: list[dict[str, Any]],
@@ -619,7 +634,7 @@ def _ensure_dhcp_service(
         elif not running:
             _run(["supervisorctl", "-c", str(SUPERVISOR_BASE_CONFIG), "start", program])
             changed = True
-        if not _supervisor_running(program):
+        if not _wait_for_supervisor_running(program):
             raise SubnetProviderError("AgentlessNet DHCP Supervisor program is not running")
     else:
         raise SubnetProviderError("AgentlessNet DHCP supervisor must be systemd or supervisor")

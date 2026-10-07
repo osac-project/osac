@@ -4,6 +4,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -101,6 +102,8 @@ def provider_testbed(monkeypatch, tmp_path, *, reject_dnsmasq=False):
         "restarts": 0,
         "supervisor_running": False,
         "supervisor_restarts": 0,
+        "supervisor_starting_statuses": 0,
+        "supervisor_stuck_starting": False,
     }
 
     def completed(command, *, stdout="", returncode=0, stderr=""):
@@ -131,6 +134,11 @@ def provider_testbed(monkeypatch, tmp_path, *, reject_dnsmasq=False):
             action = command[3]
             if action == "status":
                 if service["supervisor_running"]:
+                    if service["supervisor_stuck_starting"]:
+                        return completed(command, stdout=f"{command[4]} STARTING pid 123\n")
+                    if service["supervisor_starting_statuses"] > 0:
+                        service["supervisor_starting_statuses"] -= 1
+                        return completed(command, stdout=f"{command[4]} STARTING pid 123\n")
                     return completed(command, stdout=f"{command[4]} RUNNING pid 123\n")
                 return completed(command, returncode=1)
             if action == "start":
@@ -348,6 +356,64 @@ def test_supervisor_mode_restarts_only_the_changed_vn_program(monkeypatch, tmp_p
     assert service["supervisor_running"] is False
     assert not paths["supervisor"].joinpath(f"{VN_UID}.ini").exists()
     assert not paths["config"].joinpath(VN_UID, "dnsmasq.conf").exists()
+
+
+def test_supervisor_mode_waits_for_new_program_to_reach_running(monkeypatch, tmp_path):
+    _, commands, _, _, _, service = provider_testbed(monkeypatch, tmp_path)
+    first = subnet_entry(SUBNET_A_UID, "10.20.1.0/24", 100)
+    now = [0.0]
+
+    def sleep(seconds):
+        now[0] += seconds
+
+    monkeypatch.setattr(
+        agentless_net_subnet,
+        "time",
+        SimpleNamespace(monotonic=lambda: now[0], sleep=sleep),
+        raising=False,
+    )
+    service["supervisor_starting_statuses"] = 1
+
+    changed = agentless_net_subnet.ensure_subnet_data_plane(
+        parent_entry(), [first], "supervisor"
+    )
+
+    status_checks = [
+        command
+        for command in commands
+        if Path(command[0]).name == "supervisorctl" and command[3] == "status"
+    ]
+    assert changed is True
+    assert service["supervisor_running"] is True
+    assert len(status_checks) == 3
+    assert now[0] > 0
+
+
+def test_supervisor_mode_fails_if_program_never_reaches_running(monkeypatch, tmp_path):
+    _, _, _, _, _, service = provider_testbed(monkeypatch, tmp_path)
+    first = subnet_entry(SUBNET_A_UID, "10.20.1.0/24", 100)
+    now = [0.0]
+
+    def sleep(seconds):
+        now[0] += seconds
+
+    monkeypatch.setattr(
+        agentless_net_subnet,
+        "time",
+        SimpleNamespace(monotonic=lambda: now[0], sleep=sleep),
+        raising=False,
+    )
+    service["supervisor_stuck_starting"] = True
+
+    with pytest.raises(
+        agentless_net_subnet.SubnetProviderError,
+        match="AgentlessNet DHCP Supervisor program is not running",
+    ):
+        agentless_net_subnet.ensure_subnet_data_plane(
+            parent_entry(), [first], "supervisor"
+        )
+
+    assert now[0] == pytest.approx(5.0)
 
 
 def test_malformed_lease_state_fails_without_echoing_contents(tmp_path, monkeypatch):

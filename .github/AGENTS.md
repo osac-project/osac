@@ -16,7 +16,7 @@ Full-install e2e (`e2e-vmaas-full-install`, `e2e-bmaas-full-install`, `e2e-caas-
 
 Human GitHub `APPROVED` does **not** unlock. `/ok-to-test` is fork **secrets** only (`authorize-fork-pr`); it does not unlock the cost gate. Fork PRs need `/ok-to-test` (or org membership) **and** one of CR / `lgtm` / `/e2e-ready`.
 
-Cheap checks stay ungated. Schedules / `workflow_dispatch` / `merge_group` skip the readiness job.
+Cheap checks stay ungated. Schedules, `workflow_dispatch` without a PR target, and `merge_group` skip readiness. Recovery dispatches with a PR number and head SHA revalidate that PR before running.
 
 Path filter skips docs / unit-test-only PRs (`!**/tests/**` and friends). `tests/e2e/**` is the full-install suite and **must** still set `should-run` (`e2e-suite` filter). Do not fold `tests/e2e` back into the ignore list.
 

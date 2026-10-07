@@ -30,7 +30,17 @@ If that run is still queued (no runner yet), skip replay — the same run will
 evaluate current labels when it starts ([osac#538](https://github.com/osac-project/osac/pull/538)
 timed out after 3 minutes while `changes` waited 48 minutes).
 
-Non-`pull_request` events (schedule, `workflow_dispatch`, `merge_group`) skip the gate.
+If GitHub never creates a native `pull_request` run for the current head, the
+starter dispatches the full-install callers on `main` with the PR number and
+exact head SHA. Each caller resolves the live PR again, requires that SHA to
+match and the cost gate to remain open, then checks out the PR's repository at
+that SHA. After testing, the caller reports its completed `e2e-*-gate` result
+against the PR head. Older runs are never rerun as substitutes for the current
+commit.
+
+The readiness job runs on `pull_request` and on `workflow_dispatch` when a PR
+number and expected head SHA are supplied for recovery. Schedules, default
+`workflow_dispatch` runs without a PR target, and `merge_group` skip readiness.
 
 ## Author flow
 
@@ -47,6 +57,7 @@ Non-`pull_request` events (schedule, `workflow_dispatch`, `merge_group`) skip th
 - [ ] CodeRabbit `APPROVED` on exact head → e2e starts (same-repo: `e2e-on-approval`; fork: `e2e-on-approval-fork` after the handoff run completes).
 - [ ] Apply `lgtm` → `e2e-on-label` starts e2e.
 - [ ] `/e2e-ready` (bot-applied) unlocks **and** starts e2e (`e2e-on-label` run appears). A manual `e2e-ready` label does not.
+- [ ] If a native PR full-install run is missing at the current head, the starter dispatches a recovery run; it tests that exact SHA and reports the completed gate on the same SHA.
 - [ ] `/ok-to-test` alone does not unlock the cost gate. Fork still needs CR / `lgtm` / `/e2e-ready` as well.
 - [ ] Push a new commit → `e2e-ready` removed. If the PR had `lgtm` earlier and no human has outstanding `CHANGES_REQUESTED`, e2e still runs; otherwise gate pending again.
 - [ ] Optional: schedule / `workflow_dispatch` still runs without the label.

@@ -1,5 +1,6 @@
 ---
 name: E2E CaaS Full Install
+run-name: ${{ inputs.pr-number != '' && format('E2E CaaS recovery PR {0} @ {1}', inputs.pr-number, inputs.pr-sha) || github.event.pull_request.title || github.event_name }}
 
 permissions:
   contents: read
@@ -36,6 +37,12 @@ on:
         description: "Branch/ref of osac-test-infra"
         required: false
         default: "main"
+      pr-number:
+        description: "Optional PR number for a validated exact-head recovery run"
+        required: false
+      pr-sha:
+        description: "Expected exact PR head SHA for a recovery run"
+        required: false
 
 concurrency:
   # pull_request: one run per PR; a newer push cancels the older run.
@@ -47,7 +54,7 @@ concurrency:
   # with every entry stuck on AWAITING_CHECKS. Stale runs left behind by a
   # reshuffle are cancelled precisely, per queue entry, by the
   # cancel-stale-merge-queue job below -- not by collapsing this group.
-  group: e2e-caas-full-install-${{ github.event.pull_request.number || github.run_id }}
+  group: e2e-caas-full-install-${{ inputs.pr-number || github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -158,12 +165,48 @@ jobs:
   # OSAC-3370: cheap readiness gate before expensive runners.
   # Allow: lgtm (present or previously applied), e2e-ready by github-actions[bot], or
   # coderabbitai[bot] APPROVED on exact HEAD (blocked by human CHANGES_REQUESTED).
-  # Human APPROVED does not unlock. Non-PR events skip this job.
-  # Not ready: ready=false (wait). Do not fail this job.
+  # Human APPROVED does not unlock. Non-PR events without a PR target skip readiness.
+  # workflow_dispatch recovery: resolve an open PR's live head and require
+  # the SHA supplied by the trusted launcher to still match before testing it.
+  e2e-dispatch-pr-context:
+    if: github.event_name == 'workflow_dispatch' && (inputs.pr-number != '' || inputs.pr-sha != '')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      head-sha: ${{ steps.resolve.outputs.head-sha }}
+      head-repo: ${{ steps.resolve.outputs.head-repo }}
+      head-is-fork: ${{ steps.resolve.outputs.head-is-fork }}
+      head-ref: ${{ steps.resolve.outputs.head-ref }}
+      author: ${{ steps.resolve.outputs.author }}
+      author-association: ${{ steps.resolve.outputs.author-association }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Validate the live PR head
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+          EXPECTED_HEAD_SHA: ${{ inputs.pr-sha }}
+        run: bash .github/scripts/resolve-e2e-dispatch-pr.sh
+
   e2e-readiness:
     name: e2e-readiness (caas)
-    needs: changes
-    if: needs.changes.outputs.should-run == 'true' && github.event_name == 'pull_request'
+    # Not ready: ready=false (wait). Do not fail this job. Non-PR events
+    # without an explicit PR target skip readiness.
+    needs: [changes, e2e-dispatch-pr-context]
+    if: >-
+      always()
+      && needs.changes.outputs.should-run == 'true'
+      && (github.event_name == 'pull_request'
+          || (github.event_name == 'workflow_dispatch'
+              && inputs.pr-number != ''
+              && needs.e2e-dispatch-pr-context.result == 'success'))
     runs-on: ubuntu-latest
     permissions:
       issues: read
@@ -176,8 +219,8 @@ jobs:
         id: check
         uses: osac-project/osac-test-infra/.github/actions/check-e2e-readiness@main
         with:
-          pr-number: ${{ github.event.pull_request.number }}
-          head-sha: ${{ github.event.pull_request.head.sha }}
+          pr-number: ${{ inputs.pr-number || github.event.pull_request.number }}
+          head-sha: ${{ needs.e2e-dispatch-pr-context.outputs.head-sha || github.event.pull_request.head.sha }}
 
   # Builds fulfillment-service, osac-operator, osac-aap's execution
   # environment (twice -- once each for aap.bootstrap.image and
@@ -200,12 +243,15 @@ jobs:
   # built from source for consistency with the other components -- revisit
   # if caas ever needs BMF enabled.
   e2e-caas-full-install:
-    needs: [changes, e2e-readiness]
+    needs: [changes, e2e-readiness, e2e-dispatch-pr-context]
     if: >-
       always()
       && needs.changes.result == 'success'
       && needs.changes.outputs.should-run == 'true'
       && needs.changes.outputs.caas-exclusive-skip != 'true'
+      && (github.event_name != 'workflow_dispatch'
+          || (inputs.pr-number == '' && inputs.pr-sha == '')
+          || needs.e2e-dispatch-pr-context.result == 'success')
       && (needs.e2e-readiness.result == 'skipped'
           || needs.e2e-readiness.outputs.ready == 'true')
     permissions:
@@ -235,24 +281,24 @@ jobs:
       # as ../../../<name> siblings within it), so a PR touching those components
       # must deploy from this PR's own fork/ref, not the reusable workflow's
       # standalone-repo default.
-      installer-repo: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
-      installer-ref: ${{ github.event.pull_request.head.ref || github.sha }}
+      installer-repo: ${{ needs.e2e-dispatch-pr-context.outputs.head-repo || github.event.pull_request.head.repo.full_name || github.repository }}
+      installer-ref: ${{ needs.e2e-dispatch-pr-context.outputs.head-sha || github.event.pull_request.head.ref || github.sha }}
       # Build all component images from the PR's fork/branch (same monorepo checkout).
       # osac-aap's execution-environment is built twice (aap.bootstrap.image and
       # aap.configAsCode.eeImage): the two are logically the same image but the
       # override mechanism keys strictly off imageKey, one build per key, so this
       # is the only way to get both fields covered without changing that mechanism
       # (which lives in osac-test-infra, not here). See OSAC-3546.
-      components: '[{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.sha }}","containerfile":"fulfillment-service/Containerfile","context":".","imageKey":"service.images.service.repository"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.sha }}","containerfile":"osac-operator/Containerfile","context":".","imageKey":"operator.image.repository"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.sha }}","containerfile":"osac-aap/execution-environment/execution-environment.yaml","imageKey":"aap.bootstrap.image","buildType":"ansible-builder"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.sha }}","containerfile":"osac-aap/execution-environment/execution-environment.yaml","imageKey":"aap.configAsCode.eeImage","buildType":"ansible-builder"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.sha }}","containerfile":"bare-metal-fulfillment-operator/Containerfile","context":".","imageKey":"bmf.image.repository"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.sha }}","containerfile":"osac-metering/metering-service/Containerfile","context":".","imageKey":"metering.image.repository"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.sha }}","containerfile":"osac-metering/adapters/Containerfile.echo-adapter","context":"osac-metering","imageKey":"metering.echoAdapter.image.repository"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.sha }}","containerfile":"osac-csi-driver/Containerfile","context":".","imageKey":"csiDriver.image.repository"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.sha }}","containerfile":"osac-ui/Containerfile","context":"osac-ui","imageKey":"ui.images.ui"}]'
+      components: '[{"repo":"${{ needs.e2e-dispatch-pr-context.outputs.head-repo || github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ needs.e2e-dispatch-pr-context.outputs.head-sha || github.event.pull_request.head.ref || github.sha }}","containerfile":"fulfillment-service/Containerfile","context":".","imageKey":"service.images.service.repository"},{"repo":"${{ needs.e2e-dispatch-pr-context.outputs.head-repo || github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ needs.e2e-dispatch-pr-context.outputs.head-sha || github.event.pull_request.head.ref || github.sha }}","containerfile":"osac-operator/Containerfile","context":".","imageKey":"operator.image.repository"},{"repo":"${{ needs.e2e-dispatch-pr-context.outputs.head-repo || github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ needs.e2e-dispatch-pr-context.outputs.head-sha || github.event.pull_request.head.ref || github.sha }}","containerfile":"osac-aap/execution-environment/execution-environment.yaml","imageKey":"aap.bootstrap.image","buildType":"ansible-builder"},{"repo":"${{ needs.e2e-dispatch-pr-context.outputs.head-repo || github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ needs.e2e-dispatch-pr-context.outputs.head-sha || github.event.pull_request.head.ref || github.sha }}","containerfile":"osac-aap/execution-environment/execution-environment.yaml","imageKey":"aap.configAsCode.eeImage","buildType":"ansible-builder"},{"repo":"${{ needs.e2e-dispatch-pr-context.outputs.head-repo || github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ needs.e2e-dispatch-pr-context.outputs.head-sha || github.event.pull_request.head.ref || github.sha }}","containerfile":"bare-metal-fulfillment-operator/Containerfile","context":".","imageKey":"bmf.image.repository"},{"repo":"${{ needs.e2e-dispatch-pr-context.outputs.head-repo || github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ needs.e2e-dispatch-pr-context.outputs.head-sha || github.event.pull_request.head.ref || github.sha }}","containerfile":"osac-metering/metering-service/Containerfile","context":".","imageKey":"metering.image.repository"},{"repo":"${{ needs.e2e-dispatch-pr-context.outputs.head-repo || github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ needs.e2e-dispatch-pr-context.outputs.head-sha || github.event.pull_request.head.ref || github.sha }}","containerfile":"osac-metering/adapters/Containerfile.echo-adapter","context":"osac-metering","imageKey":"metering.echoAdapter.image.repository"},{"repo":"${{ needs.e2e-dispatch-pr-context.outputs.head-repo || github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ needs.e2e-dispatch-pr-context.outputs.head-sha || github.event.pull_request.head.ref || github.sha }}","containerfile":"osac-csi-driver/Containerfile","context":".","imageKey":"csiDriver.image.repository"},{"repo":"${{ needs.e2e-dispatch-pr-context.outputs.head-repo || github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ needs.e2e-dispatch-pr-context.outputs.head-sha || github.event.pull_request.head.ref || github.sha }}","containerfile":"osac-ui/Containerfile","context":"osac-ui","imageKey":"ui.images.ui"}]'
       # Pass author_association for fork PR authorization (empty for non-fork PRs)
-      fork-pr-author-association: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.author_association || '' }}
-      fork-pr-author: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.user.login || '' }}
-      pr-number: ${{ github.event.pull_request.number }}
+      fork-pr-author-association: ${{ (needs.e2e-dispatch-pr-context.outputs.head-is-fork == 'true' && needs.e2e-dispatch-pr-context.outputs.author-association) || (github.event.pull_request.head.repo.fork && github.event.pull_request.author_association) || '' }}
+      fork-pr-author: ${{ (needs.e2e-dispatch-pr-context.outputs.head-is-fork == 'true' && needs.e2e-dispatch-pr-context.outputs.author) || (github.event.pull_request.head.repo.fork && github.event.pull_request.user.login) || '' }}
+      pr-number: ${{ inputs.pr-number || github.event.pull_request.number }}
       # Checkout upstream test-infra, defaulting to the reusable workflow's main branch.
       test-infra-repository: osac-project/osac-test-infra
       test-infra-ref: ${{ inputs.test-infra-ref || 'main' }}
-      test-repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
-      test-ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      test-repository: ${{ needs.e2e-dispatch-pr-context.outputs.head-repo || github.event.pull_request.head.repo.full_name || github.repository }}
+      test-ref: ${{ needs.e2e-dispatch-pr-context.outputs.head-sha || github.event.pull_request.head.sha || github.sha }}
       notify-on-failure: ${{ github.event_name == 'schedule' }}
       # CaaS-specific inputs (cluster-template, caas-domain, flavor-image,
       # flavor-name, namespace, etc.) are left at the reusable workflow's own
@@ -270,11 +316,11 @@ jobs:
       # is fork-originated and gets no OIDC/WIF access at all by GitHub
       # Actions policy. merge_group is excluded the same way (its
       # github.ref is the readonly-queue ref).
-      enable-ai-diagnostic: ${{ github.ref == 'refs/heads/main' }}
+      enable-ai-diagnostic: ${{ github.ref == 'refs/heads/main' && inputs.pr-number == '' }}
 
   # Skip this required check on unreadiness so it stays pending (not red).
-  # workflow_dispatch may green this gate on a PR SHA. Merge requires all
-  # three suite gates on HEAD; unlock accepts them when already success.
+  # A recovery workflow_dispatch runs on main; e2e-dispatch-gate mirrors its
+  # completed result onto the validated PR head after the full install.
   e2e-caas-gate:
     if: >-
       always()
@@ -282,7 +328,7 @@ jobs:
           || needs.changes.outputs.should-run != 'true'
           || needs.e2e-readiness.result != 'success'
           || needs.e2e-readiness.outputs.ready == 'true')
-    needs: [changes, e2e-readiness, e2e-caas-full-install]
+    needs: [changes, e2e-readiness, e2e-dispatch-pr-context, e2e-caas-full-install]
     runs-on: ubuntu-latest
     steps:
       - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
@@ -303,6 +349,40 @@ jobs:
           else
             echo "e2e passed"
           fi
+
+  # A workflow_dispatch run belongs to main, so mirror only its completed
+  # native gate result onto the validated PR head for launcher recovery.
+  e2e-dispatch-gate:
+    if: >-
+      always()
+      && github.event_name == 'workflow_dispatch'
+      && inputs.pr-number != ''
+      && needs.e2e-dispatch-pr-context.result == 'success'
+      && needs.e2e-readiness.result == 'success'
+      && needs.e2e-readiness.outputs.ready == 'true'
+    needs: [e2e-dispatch-pr-context, e2e-readiness, e2e-caas-full-install, e2e-caas-gate]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      checks: write
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Report the completed recovery gate on the PR head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+          HEAD_SHA: ${{ needs.e2e-dispatch-pr-context.outputs.head-sha }}
+          GATE_NAME: e2e-caas-gate
+          GATE_RESULT: ${{ needs.e2e-caas-gate.result }}
+          WORKFLOW_FILE: e2e-caas-full-install.yml
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: bash .github/scripts/report-e2e-dispatch-gate.sh
 
   e2e-caas-complete-stale-gates:
     if: >-

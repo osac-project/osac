@@ -79,9 +79,8 @@ cnv:
   channel: "stable"
 
 mce:
-  # Configure standalone MCE by default for CaaS. Disable this when RHACM or
-  # an existing MCE installation owns the multicluster engine lifecycle.
-  enabled: true
+  # Opt in only when this installation owns the multicluster engine lifecycle.
+  enabled: false
   channel: "stable-2.17"
   imageService:
     # Keep enabled until the Assisted discovery-artifact fix is released and

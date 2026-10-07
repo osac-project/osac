@@ -147,10 +147,11 @@ Touched-area requirements: [component guide](../fulfillment-service/AGENTS.md#in
 Touched-area requirements: [component guide](../osac-installer/AGENTS.md#integration-testing).
 
 The `make mce-render-test` Helm contract renders the prerequisite charts from
-local sources. It asserts the standalone MCE subscription, configuration,
-Assisted image overrides, compatibility RBAC, disabled-state suppression,
-empty-override behavior, and CaaS inheritance. It does not install MCE or call
-an Operator catalog or cluster API.
+local sources. It asserts disabled defaults, explicit standalone MCE
+enablement, configuration, Assisted image overrides, compatibility RBAC,
+explicit disabled-state suppression, enabled empty-override behavior, and the
+CaaS profile's explicit enablement with inherited defaults. It does not install
+MCE or call an Operator catalog or cluster API.
 
 The `make fulfillment-trust-render-test` Helm contract renders the production
 umbrella chart with trust enabled and disabled. It asserts the operator trust

@@ -311,10 +311,11 @@ automatically by Phase 1. Each is gated by a values toggle (e.g.,
 `certManager.enabled: true`). See [prerequisites/README.md](prerequisites/README.md)
 for details on what each prerequisite provides.
 
-Standalone MCE is enabled by default for CaaS. Set `mce.enabled: false` in the
-infrastructure values when RHACM or an existing MCE installation owns the
-multicluster engine lifecycle; disabling it also suppresses the temporary
-Assisted image override resources.
+Standalone MCE is disabled by default. Set `mce.enabled: true` in the
+infrastructure values when this installation owns its lifecycle; the `caas-ci`
+profile does so explicitly. Leave it `false` when RHACM or an existing MCE
+installation owns the lifecycle. The disabled state also suppresses the
+temporary Assisted image override resources.
 
 #### AAP Configuration
 
@@ -407,7 +408,7 @@ make uninstall     PLATFORM=... PROFILE=... NS=...  # Full uninstall
 make test          PLATFORM=... PROFILE=... NS=... SUITE=...  # Integration tests
 make helm-lint                                       # Lint all charts
 make helm-template       # Dry-run render all templates
-make mce-render-test                                  # Verify standalone MCE defaults and opt-outs
+make mce-render-test                                  # Verify disabled MCE defaults and CaaS enablement
 make helm-validate                                   # Lint + template (full validation)
 make sync-charts         # Rebuild chart dependencies (legacy alias; runs helm dependency build)
 ```

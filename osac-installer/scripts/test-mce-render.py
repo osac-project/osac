@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Verify the Helm contract for the standalone MCE defaults and opt-outs."""
+"""Verify disabled MCE defaults and explicit CaaS enablement."""
 
 from __future__ import annotations
 
 import json
 import os
 import pathlib
+import shutil
 import subprocess
+import tempfile
 from typing import Any
 
 import yaml
@@ -34,32 +36,31 @@ INFRA_RESOURCES = (
     ("Job", "osac-infra-configure-mce"),
 )
 CONFIGURE_HOOK_RESOURCES = INFRA_RESOURCES[4:]
-EXPECTED_OVERRIDES = [
-    {
-        "image-name": "assisted-service",
-        "image-remote": "quay.io/edge-infrastructure",
-        "image-digest": "sha256:c007ecc530f4bb0a43814f4373bdec6e27d1fa3698554b0935a07c086802e479",
-        "image-key": "assisted_service_9",
-    },
-    {
-        "image-name": "assisted-installer-agent",
-        "image-remote": "quay.io/edge-infrastructure",
-        "image-digest": "sha256:0f4f6041821d1a03da280090cf8a857e6b081487301de7e37553b0398925b391",
-        "image-key": "assisted_installer_agent",
-    },
-    {
-        "image-name": "assisted-installer",
-        "image-remote": "quay.io/edge-infrastructure",
-        "image-digest": "sha256:04fe09dddf10be4fa7dfd91bde7b4c6addb60b3d1291596a9399fe057f5f1f3b",
-        "image-key": "assisted_installer",
-    },
-    {
-        "image-name": "assisted-installer-controller",
-        "image-remote": "quay.io/edge-infrastructure",
-        "image-digest": "sha256:54c095c08defc738558948ef1be52dd980642bf0020570435a68384d1d5177a3",
-        "image-key": "assisted_installer_controller",
-    },
-]
+
+
+def read_values(path: pathlib.Path) -> dict[str, Any]:
+    values = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    assert isinstance(values, dict), f"expected {path} to contain a values mapping"
+    return values
+
+
+def merged_values(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    result = base.copy()
+    for key, value in overlay.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = merged_values(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def configured_mce(chart: pathlib.Path, overlay: pathlib.Path | None = None) -> dict[str, Any]:
+    values = read_values(chart / "values.yaml")
+    if overlay is not None:
+        values = merged_values(values, read_values(overlay))
+    mce = values.get("mce") or {}
+    assert isinstance(mce, dict), f"expected effective mce values for {chart} to be a mapping"
+    return mce
 
 
 def render(release: str, chart: pathlib.Path, *args: str) -> list[dict[str, Any]]:
@@ -93,7 +94,7 @@ def assert_configuration_contract(infra: list[dict[str, Any]]) -> None:
     assert agent_service_config["metadata"]["name"] == "agent"
     assert "agent-install.openshift.io/enable-image-service" not in agent_service_config["metadata"].get(
         "annotations", {}
-    ), "MCE image service must remain enabled by default"
+    ), "MCE image service must remain enabled when MCE is enabled"
 
     selected(infra, CONFIGURE_HOOK_RESOURCES)
     job = resource(infra, "Job", "osac-infra-configure-mce")
@@ -106,21 +107,28 @@ def assert_configuration_contract(infra: list[dict[str, Any]]) -> None:
     assert container["command"] == ["/bin/bash", "/scripts/configure-mce.sh"]
 
 
-def check_defaults(deps: list[dict[str, Any]], infra: list[dict[str, Any]]) -> None:
+def assert_dependencies_contract(deps: list[dict[str, Any]], expected_mce: dict[str, Any]) -> None:
     namespace, operator_group, subscription = selected(deps, DEPS_RESOURCES)
     assert namespace["metadata"]["name"] == "multicluster-engine"
     assert operator_group["metadata"]["namespace"] == "multicluster-engine"
     assert operator_group["spec"]["targetNamespaces"] == ["multicluster-engine"]
     assert subscription["metadata"]["namespace"] == "multicluster-engine"
     assert subscription["spec"]["name"] == "multicluster-engine"
-    assert subscription["spec"]["channel"] == "stable-2.17"
+    assert subscription["spec"]["channel"] == expected_mce["channel"], (
+        "rendered MCE channel must match the effective configured channel"
+    )
 
-    assert_configuration_contract(infra)
+
+def assert_image_override_contract(infra: list[dict[str, Any]], expected_mce: dict[str, Any]) -> None:
+    expected_overrides = expected_mce.get("imageOverrides") or []
+    if not expected_overrides:
+        assert_absent(infra, INFRA_RESOURCES[1:4])
+        return
+
     overrides, role, binding = selected(infra, INFRA_RESOURCES[1:4])
-
     rendered_overrides = json.loads(overrides["data"]["manifest.json"])
-    assert rendered_overrides == EXPECTED_OVERRIDES, (
-        "default MCE render must contain the four pinned Assisted image overrides"
+    assert rendered_overrides == expected_overrides, (
+        "rendered image overrides must exactly match the effective configured list"
     )
     assert role["rules"] == [
         {"apiGroups": ["config.openshift.io"], "resources": ["apiservers"], "verbs": ["get", "list", "watch"]},
@@ -140,39 +148,115 @@ def check_defaults(deps: list[dict[str, Any]], infra: list[dict[str, Any]]) -> N
     ]
 
 
+def assert_infrastructure_contract(infra: list[dict[str, Any]], expected_mce: dict[str, Any]) -> None:
+    assert_configuration_contract(infra)
+    assert_image_override_contract(infra, expected_mce)
+
+
 def check_disabled() -> None:
+    deps_values = configured_mce(DEPS_CHART)
+    infra_values = configured_mce(INFRA_CHART)
+    assert deps_values.get("enabled") is False, "osac-deps must disable standalone MCE by default"
+    assert infra_values.get("enabled") is False, "osac-infra must disable standalone MCE by default"
+
+    default_deps = render("osac-deps", DEPS_CHART)
+    default_infra = render("osac-infra", INFRA_CHART)
+    assert_absent(default_deps, DEPS_RESOURCES)
+    assert_absent(default_infra, INFRA_RESOURCES)
+
     deps = render("osac-deps", DEPS_CHART, "--set", "mce.enabled=false")
     infra = render("osac-infra", INFRA_CHART, "--set", "mce.enabled=false")
     assert_absent(deps, DEPS_RESOURCES)
     assert_absent(infra, INFRA_RESOURCES)
 
 
+def check_configured_defaults() -> None:
+    deps_values = merged_values(configured_mce(DEPS_CHART), {"enabled": True})
+    infra_values = merged_values(configured_mce(INFRA_CHART), {"enabled": True})
+
+    deps = render("osac-deps", DEPS_CHART, "--set", "mce.enabled=true")
+    infra = render("osac-infra", INFRA_CHART, "--set", "mce.enabled=true")
+    assert_dependencies_contract(deps, deps_values)
+    assert_infrastructure_contract(infra, infra_values)
+
+
+def write_mce_fixture(path: pathlib.Path, mce: dict[str, Any]) -> None:
+    path.write_text(yaml.safe_dump({"mce": mce}, sort_keys=False), encoding="utf-8")
+
+
+def check_arbitrary_configured_values() -> None:
+    replacement_mce = {
+        "enabled": True,
+        "channel": "candidate-configured-channel",
+        "imageOverrides": [
+            {
+                "image-name": "configured-service",
+                "image-remote": "registry.example.test/team",
+                "image-digest": f"sha256:{'1' * 64}",
+                "image-key": "configured_service",
+            },
+            {
+                "image-name": "configured-agent",
+                "image-remote": "registry.example.test/other-team",
+                "image-digest": f"sha256:{'2' * 64}",
+                "image-key": "configured_agent",
+            },
+        ],
+    }
+    with tempfile.TemporaryDirectory(prefix="mce-values-") as temp_dir:
+        fixture = pathlib.Path(temp_dir) / "replacement.yaml"
+        write_mce_fixture(fixture, replacement_mce)
+        deps_values = configured_mce(DEPS_CHART, fixture)
+        infra_values = configured_mce(INFRA_CHART, fixture)
+        args = ("--values", str(fixture))
+        deps = render("osac-deps", DEPS_CHART, *args)
+        infra = render("osac-infra", INFRA_CHART, *args)
+        assert_dependencies_contract(deps, deps_values)
+        assert_infrastructure_contract(infra, infra_values)
+
+
 def check_empty_overrides() -> None:
-    infra = render("osac-infra", INFRA_CHART, "--set-json", "mce.imageOverrides=[]")
-    assert_configuration_contract(infra)
-    assert_absent(infra, INFRA_RESOURCES[1:4])
+    with tempfile.TemporaryDirectory(prefix="mce-values-") as temp_dir:
+        fixture = pathlib.Path(temp_dir) / "empty-overrides.yaml"
+        write_mce_fixture(fixture, {"enabled": True, "imageOverrides": []})
+        infra_values = configured_mce(INFRA_CHART, fixture)
+        infra = render("osac-infra", INFRA_CHART, "--values", str(fixture))
+        assert_infrastructure_contract(infra, infra_values)
 
 
-def check_caas_inherits_defaults(default_deps: list[dict[str, Any]], default_infra: list[dict[str, Any]]) -> None:
+def check_absent_overrides() -> None:
+    with tempfile.TemporaryDirectory(prefix="mce-chart-") as temp_dir:
+        chart = pathlib.Path(temp_dir) / "osac-infra"
+        shutil.copytree(INFRA_CHART, chart)
+        values_path = chart / "values.yaml"
+        values = read_values(values_path)
+        values["mce"].pop("imageOverrides", None)
+        values_path.write_text(yaml.safe_dump(values, sort_keys=False), encoding="utf-8")
+
+        infra_values = merged_values(configured_mce(chart), {"enabled": True})
+        infra = render("osac-infra", chart, "--set", "mce.enabled=true")
+        assert_infrastructure_contract(infra, infra_values)
+
+
+def check_caas_inherits_defaults() -> None:
     caas_values = yaml.safe_load(CAAS_VALUES.read_text(encoding="utf-8"))
-    assert "mce" not in caas_values, "CaaS must inherit MCE defaults without an overlay block"
+    assert caas_values["mce"] == {"enabled": True}, "CaaS must explicitly enable MCE without duplicating defaults"
 
     caas_args = ("--values", str(CAAS_VALUES))
     caas_deps = render("osac-deps", DEPS_CHART, *caas_args)
     caas_infra = render("osac-infra", INFRA_CHART, *caas_args)
-    assert selected(caas_deps, DEPS_RESOURCES) == selected(default_deps, DEPS_RESOURCES)
-    assert selected(caas_infra, INFRA_RESOURCES) == selected(default_infra, INFRA_RESOURCES)
-    assert_configuration_contract(caas_infra)
+    assert_dependencies_contract(caas_deps, configured_mce(DEPS_CHART, CAAS_VALUES))
+    assert_infrastructure_contract(caas_infra, configured_mce(INFRA_CHART, CAAS_VALUES))
 
 
 def main() -> None:
-    default_deps = render("osac-deps", DEPS_CHART)
-    default_infra = render("osac-infra", INFRA_CHART)
-    check_defaults(default_deps, default_infra)
     check_disabled()
+    check_configured_defaults()
+    check_arbitrary_configured_values()
     check_empty_overrides()
-    check_caas_inherits_defaults(default_deps, default_infra)
-    print("MCE default, opt-out, and CaaS inheritance render checks passed.")
+    check_absent_overrides()
+    check_caas_inherits_defaults()
+    print("MCE disabled-default, configured-value, no-override, and CaaS render checks passed.")
 
 
 if __name__ == "__main__":

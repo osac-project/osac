@@ -153,7 +153,7 @@ and `osac-infra`. Keys a chart doesn't recognize are ignored.
 | `lvms.channel` | Update channel for LVM Storage. Set it to `stable-<cluster_minor>` at installation. | `stable-4.22` |
 | `metallb.enabled` | Creates the MetalLB `Subscription`, the `caas-address-pool` `IPAddressPool`, and the `L2Advertisement`. | `false` |
 | `metallb.channel` | Update channel for MetalLB. | `stable` |
-| `mce.enabled` | Creates the standalone multicluster engine `Subscription`, agent configuration, and temporary Assisted image bridge. Required for CaaS unless RHACM or an existing MCE installation provides it. | `true` |
+| `mce.enabled` | Creates the standalone multicluster engine `Subscription`, agent configuration, and temporary Assisted image bridge. Enable it for CaaS unless RHACM or an existing MCE installation provides it. | `false` |
 | `mce.channel` | Update channel for multicluster engine. | `stable-2.17` |
 | `mce.imageService.enabled` | Creates and runs the Assisted Image Service. Keep enabled until the Assisted discovery-artifact fix is released and verified. | `true` |
 | `mce.imageOverrides` | Temporary four-image MCE 5.0 Assisted operand bridge used until a stable MCE 5.0 catalog is available. Rendered only when `mce.enabled` is `true`. | Four pinned Assisted image entries |
@@ -215,11 +215,12 @@ mce:          { enabled: false }
   `192.168.100.250`. If you already run the Operator, keep the toggle `false`
   and create your own operand. Edit the `IPAddressPool` after installation to
   use an address range that is valid for your network.
-- The default `mce.enabled: true` installs and configures standalone MCE for
-  CaaS. Set it to `false` when RHACM or an existing MCE installation owns that
-  lifecycle. Disabling MCE also suppresses the default Assisted image override
-  `ConfigMap` and its MCE 5.0 compatibility RBAC; the chart does not modify the
-  existing installation.
+- MCE is disabled by default. Set `mce.enabled: true` when the installation
+  owns standalone MCE; the `caas-ci` infrastructure profile enables it
+  explicitly. Leave it `false` when RHACM or an existing MCE installation owns
+  that lifecycle. The disabled state also suppresses the default Assisted image
+  override `ConfigMap` and its MCE 5.0 compatibility RBAC; the chart does not
+  modify the existing installation.
 - `caIssuer.enabled: false` requires you to provide a `ClusterIssuer` and set
   `service.certs.issuerRef` in the phase-2 `my-values.yaml`.
 - `keycloak.enabled: false` requires a pre-configured Keycloak with the `osac`

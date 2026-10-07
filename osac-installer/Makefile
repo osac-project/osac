@@ -558,8 +558,8 @@ fulfillment-trust-render-test: helm-deps ## Check verified fulfillment transport
 	python3 scripts/test-fulfillment-trust-render.py
 
 .PHONY: mce-render-test
-mce-render-test: ## Check standalone MCE defaults, opt-outs, and CaaS inheritance
-	python3 scripts/test-mce-render.py
+mce-render-test: ## Check disabled MCE defaults, explicit enablement, and CaaS inheritance
+	uv run --project .. python scripts/test-mce-render.py
 
 .PHONY: dev-full-render-test
 dev-full-render-test: helm-deps ## Check dev-full TLS and Helm post-rendering
